@@ -50,6 +50,11 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     connection: { filename: cfg.dataDir ? join(cfg.dataDir, 'automation.sqlite') : ':memory:' },
     useNullAsDefault: true
   })
+  // same contract records.sqlite gets in rtsupport — WAL so readers (outbox
+  // pump, watchers, HTTP) don't queue behind the writer; busy_timeout so a
+  // contended write retries instead of erroring. :memory: ignores both.
+  await kx.raw('PRAGMA journal_mode=WAL')
+  await kx.raw('PRAGMA busy_timeout=5000')
   const store = new AutomationStore(kx)
   await store.init()
   const key = mem.operatorKey()
@@ -104,6 +109,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
           const lp = cfg.dataDir ? join(cfg.dataDir, 'lanes.sqlite') : ':memory:'
           const lanesExisted = cfg.dataDir === undefined || existsSync(lp)
           kxLanes = knexFactory({ client: 'sqlite3', connection: { filename: lp }, useNullAsDefault: true })
+          await kxLanes.raw('PRAGMA journal_mode=WAL')
+          await kxLanes.raw('PRAGMA busy_timeout=5000')
           // seed a fresh lanes.sqlite by copying lane-table ROWS — a file copy
           // would drag every automation table in and miss WAL commits
           if (!lanesExisted && existsSync(join(cfg.dataDir!, 'automation.sqlite')))

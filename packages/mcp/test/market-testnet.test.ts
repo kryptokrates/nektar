@@ -260,6 +260,9 @@ const mkagent = async (
     },
     ai: new ScriptedExecutor(),
     publishFinger: true,
+    // in-flight mint ceiling — NEKTAR_TREE_MAX_UNPROVEN lets a run overfill
+    // the pipeline when the gate needs a lane refilled in one block-window
+    treeMaxUnproven: Number(process.env.NEKTAR_TREE_MAX_UNPROVEN ?? 0) || undefined,
     ...(watch !== undefined ? { watchHosts: [watch], watchPublic: watch } : {}),
     opts: { offerTtlBlocks: 48, ...opts }
   })

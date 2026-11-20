@@ -27,8 +27,11 @@ const REFUSED_ANCESTOR =
 
 export interface Refusals {
   /** feed a broadcast result's description — matches only refusal
-   *  shapes that name a dead ancestor; anything else is a no-op */
-  noteRefusal(description: string | undefined): void
+   *  shapes that name a dead ancestor; anything else is a no-op.
+   *  Returns the marks made so the caller can flag definitive-shaped
+   *  refusals whose wording named no ancestor (unrecognized wire text —
+   *  silence would look like the feature working) */
+  noteRefusal(description: string | undefined): number
   /** live-mark check — expired entries answer false */
   refused(txid: string): boolean
   /** the deadParents oracle entry: the subject's own mark first, then a
@@ -53,11 +56,16 @@ export const openRefusals = (p: {
   }
   return {
     noteRefusal(description) {
-      if (description === undefined) return
+      let n = 0
+      if (description === undefined) return n
       for (const m of description.matchAll(REFUSED_ANCESTOR)) {
         const id = m[1] ?? m[2] ?? m[3]
-        if (id !== undefined) marks.set(id.toLowerCase(), now())
+        if (id !== undefined) {
+          marks.set(id.toLowerCase(), now())
+          n++
+        }
       }
+      return n
     },
     refused,
     // a property-held arrow, not a method shorthand — the registry is

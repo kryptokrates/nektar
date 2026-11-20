@@ -178,13 +178,31 @@ export class AutomationStore {
       t.text('data').notNullable()
       t.bigInteger('due_at')
       t.integer('due_height')
+      // materialized out of the data JSON so the live-op probe seeks instead
+      // of parsing: proven_height IS NULL on a completion_submitted row is
+      // the hot-loop "still working" signal
+      t.integer('proven_height')
+      // probe metadata, NOT FSM state — reconcileGate stamps it directly so
+      // terminal-op scans skip rows still inside their probe cooldown
+      t.bigInteger('next_reconcile_at')
       t.text('last_error')
       t.bigInteger('created_at').notNullable()
       t.bigInteger('updated_at').notNullable()
     })
+    if (!(await this.kx.schema.hasColumn(T.ops, 'proven_height'))) await this.kx.schema.alterTable(T.ops, (t) => t.integer('proven_height'))
+    if (!(await this.kx.schema.hasColumn(T.ops, 'next_reconcile_at'))) await this.kx.schema.alterTable(T.ops, (t) => t.bigInteger('next_reconcile_at'))
+    // pre-column rows carry the value only inside data — backfill once so
+    // hasLiveOps never reads the JSON column
+    await this.kx(T.ops)
+      .where({ state: 'completion_submitted' })
+      .whereNull('proven_height')
+      .update({ proven_height: this.kx.raw("json_extract(data, '$.provenHeight')") })
     // the live-op scan (notStates/state IN) runs every hot tick — it must
     // seek, not table-scan, as terminal rows accumulate over an agent's life
     await this.kx.raw(`CREATE INDEX IF NOT EXISTS ${T.ops}_state_index ON ${T.ops} (state)`)
+    // height-due probes: hasDueAtHeight narrows on state then filters
+    // due_height — the composite turns the post-filter into a range seek
+    await this.kx.raw(`CREATE INDEX IF NOT EXISTS ${T.ops}_state_due_height ON ${T.ops} (state, due_height)`)
     await mk(T.events, (t) => {
       t.increments('seq')
       t.string('operation_id').notNullable().index()
@@ -206,6 +224,9 @@ export class AutomationStore {
       t.bigInteger('received_at').notNullable()
       t.primary(['source', 'message_id'])
     })
+    // pendingInbox is an every-tick scan over a table that accumulates
+    // done/dead rows forever — (status, received_at) keeps it O(pending)
+    await this.kx.raw(`CREATE INDEX IF NOT EXISTS ${T.inbox}_status_received ON ${T.inbox} (status, received_at)`)
     await mk(T.cursors, (t) => {
       t.string('source').primary()
       t.string('cursor').notNullable()
@@ -224,6 +245,9 @@ export class AutomationStore {
       t.text('last_error')
       t.text('defer_class')
     })
+    // dueOutbox/nextOutboxAt filter status='pending' and order/min on
+    // next_at — the composite turns both into a range seek
+    await this.kx.raw(`CREATE INDEX IF NOT EXISTS ${T.outbox}_status_next ON ${T.outbox} (status, next_at)`)
     if (!(await this.kx.schema.hasColumn(T.outbox, 'refs'))) await this.kx.schema.alterTable(T.outbox, (t) => t.text('refs'))
     if (!(await this.kx.schema.hasColumn(T.outbox, 'defer_class'))) {
       await this.kx.schema.alterTable(T.outbox, (t) => t.text('defer_class'))

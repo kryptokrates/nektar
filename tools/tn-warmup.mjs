@@ -127,6 +127,10 @@ const mkagent = async (wifName) => {
     // own finger lowWater (2) would prove one tree and stop short of the
     // floor forever; warm every lane to the suite's depth
     treeLowWater: FLOOR,
+    // in-flight mint ceiling — the suite's finger treadmill sits at the
+    // floor when heals/mints are capped at 2; more parallel mints refill a
+    // lane in one block-window. 0/unset → the runtime default (2)
+    treeMaxUnproven: Number(process.env.NEKTAR_TREE_MAX_UNPROVEN ?? 0) || undefined,
     opts: { offerTtlBlocks: 48 }
   })
   mem.automation = rt

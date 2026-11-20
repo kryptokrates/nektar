@@ -5,7 +5,7 @@
 import { P2PKH } from '@bsv/sdk'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
-import { signerAddress, BoundedMap } from '@nektar/core'
+import { signerAddress, BoundedMap, BoundedSet } from '@nektar/core'
 import { deadAncestry } from '@nektar/bstack'
 import { openRefusals } from './refusals.js'
 import type { SignedOffer, SignedWant } from '@nektar/bstack'
@@ -59,9 +59,17 @@ export function openUpkeep(rt: Rt): void {
   // in died() consults the same verdict before resurrecting an input.
   const refusals = openRefusals({ fetchTx: (txid) => mem.fetchTx(txid).catch(() => undefined) })
   mem.funds.deadParents?.push(refusals.parent)
+  // refusals whose wording the registry didn't recognize — logged once
+  // per distinct text so an unrecognized production shape is visible
+  // instead of looking like the parser is working
+  const unmatchedRefusals = new BoundedSet<string>(256)
   const broadcast = async (tx: import('@bsv/sdk').Transaction): Promise<import('@nektar/chain').BroadcastResult> => {
     const r = await mem.broadcastTx(tx)
-    if (r.status !== 'success') refusals.noteRefusal(r.description)
+    if (r.status === 'success') return r
+    if (refusals.noteRefusal(r.description) === 0 && BROADCAST_DEFINITIVE.test(r.description ?? '') && !unmatchedRefusals.has(r.description ?? '')) {
+      unmatchedRefusals.add(r.description ?? '')
+      log(`automation: definitive refusal named no ancestor — unrecognized wording: ${(r.description ?? '').slice(0, 200)}`)
+    }
     return r
   }
   const stuckMint = async (tree: import('@bsv/sdk').Transaction): Promise<'keep' | 'drop'> => {

@@ -72,6 +72,9 @@ export class SqlFunds extends FundsBase {
         t.primary(['txid', 'vout'])
       })
     }
+    // take()/refresh() filter by state — backstop for when the coin book
+    // outgrows the in-memory mirror's warm set
+    await knex.raw('CREATE INDEX IF NOT EXISTS utxos_state_index ON utxos (state)')
     const f = new SqlFunds(knex, txs, deps)
     await f.refresh()
     return f

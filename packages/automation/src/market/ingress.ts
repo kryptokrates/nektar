@@ -7,6 +7,7 @@ import { WAITS } from '../waits.js'
 import { deadline, stable01 } from '@nektar/core'
 import type { MarketMessage } from './types.js'
 import { executor, EXEC_SVC } from '../rt/exec.js'
+import { custodyResubmitPending } from '../rt/emit.js'
 
 /** pump fan-out: deliveries are independent and off the engine mutex, so a
  *  small pool overlaps legs instead of serializing the whole due batch
@@ -79,9 +80,10 @@ export abstract class IngressOps extends MarketBase {
       if (this.resubmitEvery < 0) this.resubmitEvery = WAITS.resubmitCadence.ms + Math.floor(stable01(this.me) * WAITS.resubmitJitter.ms)
       if (this.now() - this.lastResubmitAt >= this.resubmitEvery) {
         this.lastResubmitAt = this.now()
-        // direct wallet call — resubmitPending() queues on this.chain, which
-        // tick() already holds; the wrapper would deadlock on itself
-        await this.wallet?.resubmitPending().catch(() => undefined)
+        // the custody route — resubmitPending() queues on this.chain, which
+        // tick() already holds; under restate the custody object serializes
+        // it as a journaled invocation, local mode calls the wallet direct
+        if (this.wallet !== undefined) await custodyResubmitPending(executor(), this.wallet).catch(() => undefined)
       }
       // the per-op leg: local mode runs it inline behind the mutex; under
       // the restate executor each op's leg is a journaled invocation on the

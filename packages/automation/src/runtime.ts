@@ -23,7 +23,7 @@ import { openWatches } from './watches.js'
 import type { TxEffects } from './machines/effects.js'
 import { executor, EXEC_SVC } from './rt/exec.js'
 import { openEndpoint, type RtEndpoint } from './rt/endpoint.js'
-import { txObject, sweepService, dealObject } from './rt/services.js'
+import { txObject, sweepService, dealObject, custodyObject } from './rt/services.js'
 import type { Rt, LaneInfra, AutomationConfig } from './rtctx.js'
 import type { Automation } from './types.js'
 
@@ -446,7 +446,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // the per-op object — advance legs land on the op's own key, serialized
     // and journaled; the tick's NONTERMINAL loop fans out to it under restate
     const dealDef = await dealObject({ advanceOp: (operationId) => engine.advanceOp(operationId), log })
-    rtEndpoint = await openEndpoint([txDef, sweepDef, dealDef], process.env, log)
+    // the custody object — one fixed key serializes every wallet custody
+    // leg (broadcasts, dead-verdicts, the resubmit scan); the journaled
+    // successor of the run() chain for custody writes
+    const wallet = engine.walletCoordinator
+    const custodyDefs = wallet !== undefined ? [await custodyObject({ wallet, log })] : []
+    rtEndpoint = await openEndpoint([txDef, sweepDef, dealDef, ...custodyDefs], process.env, log)
     log(`automation: restate endpoint ${rtEndpoint.uri}`)
     // boot resubmit fans out through the sweep — each row's re-air is a
     // journaled invocation on its own tx object

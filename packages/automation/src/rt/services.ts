@@ -19,7 +19,7 @@ import type * as restate from '@restatedev/restate-sdk'
 import type { AutomationStore, TxState, WalletTx } from '../store.js'
 import { runTxIntents, type TxEffects } from '../machines/effects.js'
 import { CUSTODY_KEY, EXEC_SVC, inRtScope, type RtSend } from './exec.js'
-import type { TxObserve } from './emit.js'
+import type { CustodyLeg, TxObserve } from './emit.js'
 import type { WalletCoordinator } from '../wallet.js'
 
 export interface RtDeps {
@@ -201,14 +201,17 @@ export interface CustodyDeps {
 
 export const custodyObject = async (deps: CustodyDeps) => {
   const restate = await import('@restatedev/restate-sdk')
-  const scope = <T>(fn: () => Promise<T>): Promise<T> => inRtScope({ custodyKey: CUSTODY_KEY }, fn)
+  // the forwarded txScope re-establishes the caller's held tx key — a
+  // resubmit reaching us via tx.resubmit(A) emits A's events direct, not
+  // back through A's locked object (which this call chain now blocks on)
+  const scope = <T>(txScope: string | undefined, fn: () => Promise<T>): Promise<T> => inRtScope({ custodyKey: CUSTODY_KEY, txKey: txScope }, fn)
   return restate.object({
     name: EXEC_SVC.custody,
     handlers: {
-      submit: async (ctx: restate.ObjectContext, arg: { actionId: string }) => await scope(() => ctx.run('submit', () => deps.wallet.submit(arg.actionId))),
-      markRejected: async (ctx: restate.ObjectContext, arg: { actionId: string; observation: unknown }) =>
-        await scope(() => ctx.run('markRejected', () => deps.wallet.markRejectedById(arg.actionId, arg.observation))),
-      resubmitPending: async (ctx: restate.ObjectContext) => await scope(() => ctx.run('resubmit', () => deps.wallet.resubmitPending()))
+      submit: async (ctx: restate.ObjectContext, arg: CustodyLeg) => await scope(arg.txScope, () => ctx.run('submit', () => deps.wallet.submit(arg.actionId))),
+      markRejected: async (ctx: restate.ObjectContext, arg: CustodyLeg) =>
+        await scope(arg.txScope, () => ctx.run('markRejected', () => deps.wallet.markRejectedById(arg.actionId, arg.observation))),
+      resubmitPending: async (ctx: restate.ObjectContext) => await scope(undefined, () => ctx.run('resubmit', () => deps.wallet.resubmitPending()))
     }
   })
 }

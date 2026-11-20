@@ -168,12 +168,10 @@ export async function dashboardPage(mem: NektarMemory, ops: HttpOps | undefined,
     .join('')
   const cardUrl = `${base}/card`
   const shareEnabled = !/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1')
-  const agentsRows = `<div class="kv"><b>${esc(nektarEnv('NEKTAR_MODEL_ID') ?? 'this agent')}</b><span class="text-secondary">${esc(mem.operatorKey().toPublicKey().toString().slice(0, 16))}…</span></div>`
   const f = d.funding
   const bal = Number(f.balanceSats ?? f.satoshis ?? 0)
   const up = process.uptime()
   const upStr = up > 86400 ? `${Math.floor(up / 86400)}d` : up > 3600 ? `${Math.floor(up / 3600)}h` : `${Math.floor(up / 60)}m`
-  const badge = (on: boolean, yes: string, no: string) => `<span class="status ${on ? 'status-green' : ''}">${on ? yes : no}</span>`
   const au = mem.automation
   const pending = au ? await au.store.approvals('pending') : []
   const autoOps = au
@@ -234,9 +232,9 @@ ${autoOps.map((o) => `<div class="kv"><span class="text-secondary">${esc(o.role)
   }
   const navItem = (href: string, label: string, svg: string, active = false) =>
     `<li class="nav-item${active ? ' active' : ''}"><a class="nav-link" href="${href}"><span class="nav-link-icon">${icon(svg)}</span><span class="nav-link-title">${label}</span></a></li>`
-  const miniStat = (label: string, value: string, right: string, sub: string, svg: string, color: string) => `<div class="col-sm-6 col-xl-3"><div class="card"><div class="card-body">
+  const miniStat = (label: string, value: string, sub: string, svg: string, color: string, extra = '') => `<div class="col-sm-6 col-xl-3"><div class="card"><div class="card-body">
 <div class="d-flex align-items-center"><div class="subheader">${label}</div><div class="ms-auto"><span style="display:inline-flex;align-items:center;justify-content:center;width:2.4rem;height:2.4rem;border-radius:.55rem;background:${color}22;color:${color}">${icon(svg)}</span></div></div>
-<div class="h3 mb-1">${value}</div><div class="text-secondary small">${sub}</div>
+<div class="h3 mb-1">${value}</div><div class="text-secondary small">${sub}</div>${extra}
 </div></div></div>`
   return `<!doctype html><html data-bs-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>nektar — operator</title>
 ${cssLink}<style>${THEME}${kit ? '' : FALLBACK}</style></head><body><div class="page">
@@ -252,15 +250,13 @@ ${cssLink}<style>${THEME}${kit ? '' : FALLBACK}</style></head><body><div class="
 ${navItem('/dashboard', 'Overview', ICONS.overview, true)}
 ${navItem('#receipts', 'Receipts', ICONS.receipts)}
 ${navItem('#market', 'Market', ICONS.market)}
-${navItem('#agents', 'Agents', ICONS.agents)}
-${navItem('#log', 'Log', ICONS.log)}
 ${au ? navItem('#automation', 'Automation', ICONS.automation) : ''}
 <li class="nav-item ms-auto">${''}<a class="nav-link" href="/v1/openapi.json"><span class="nav-link-icon">${icon(ICONS.api)}</span><span class="nav-link-title">API</span></a></li>
 </ul></div></div>
 <div class="page-wrapper">
 <div class="page-header d-print-none"><div class="container-xl"><div class="d-flex align-items-center justify-content-between">
 <div><div class="page-pretitle">operator console</div><h2 class="page-title">Dashboard</h2></div>
-<div class="d-flex gap-2"><a class="btn" href="/v1/health">Health</a><a class="btn btn-primary" href="/.well-known/nektar">Discovery doc</a></div>
+<div class="d-flex gap-2"><a class="btn" href="/v1/health">Health</a><a class="btn" href="/.well-known/nektar">Discovery doc</a></div>
 </div></div></div>
 <div id="app" class="page-body"><div class="container-xl"><div class="row row-cards">
 <div class="col-xl-6"><div class="card h-100 card-hero"><div class="card-body d-flex py-4">
@@ -270,15 +266,8 @@ ${au ? navItem('#automation', 'Automation', ICONS.automation) : ''}
 <div class="text-secondary small">${doneCount}/${steps.length}</div></div>
 <div class="d-flex mt-3 mb-3">${stepper}</div>
 <div class="small mb-4">${esc(nextLine)}</div>
-${shareEnabled ? `<div class="mb-4"><button class="btn btn-primary" onclick="shareAgent(this)">share your agent ↗</button></div>` : ''}
-<div class="d-flex gap-5 mt-auto">
-<div><div class="subheader">Treasury</div><div class="h2 mb-1" style="color:var(--tblr-primary)">${bal.toLocaleString()} <span class="h4 text-secondary">sats</span></div>
-<div class="d-flex gap-2">${badge(!!f.funded, 'funded', 'unfunded')}${badge(d.payments === 'on', 'pay on', 'pay off')}</div>
-<div class="stream" data-ev="money"></div></div>
-<div><div class="subheader">Verifiability</div><div class="h2 mb-1">${coverage}%</div>
-<div class="progress progress-sm" style="width:8rem"><div class="progress-bar" style="width:${coverage}%"></div></div>
-<div class="text-secondary small mt-1">${d.anchoredRecords} of ${d.records} provable</div></div>
-</div></div>
+${shareEnabled ? `<button class="btn btn-primary" onclick="shareAgent(this)">share your agent ↗</button>` : ''}
+</div>
 <div class="ms-auto d-none d-lg-flex align-items-center glow">${logoSvg(96)}</div>
 </div></div></div>
 <div class="col-sm-6 col-xl-3"><div class="card h-100"><div class="card-body">
@@ -291,13 +280,14 @@ ${shareEnabled ? `<div class="mb-4"><button class="btn btn-primary" onclick="sha
 <div class="subheader">Anchored</div>
 <div class="d-flex align-items-baseline"><div class="h1 mb-0 me-2">${d.anchoredRecords}</div><div class="text-secondary">of ${d.records} records</div></div>
 <div class="d-flex justify-content-center mt-3">${donut(coverage / 100)}</div>
+${d.unprovenAnchors > 0 ? `<div class="status status-red mt-2">${d.unprovenAnchors} unproven</div>` : ''}
 </div></div></div>
 </div>
 <div class="row row-cards mt-3">
-${miniStat('Earned', `${earned.toLocaleString()} sats`, `${rrecs.length} receipts`, 'from verified answers', ICONS.earn, NEKTAR_AMBER)}
-${miniStat('For sale', `${cat.length} offers`, 'public shards', 'listed by domain', ICONS.market, '#4cc26b')}
-${miniStat('Utxos', `${esc(f.utxoCount ?? f.utxos ?? '—')}`, 'funding outputs', 'the coin book', ICONS.log, '#58a6ff')}
-${miniStat('Shards', `${d.shards}`, 'memory held', `prover: ${esc(d.prover)}`, ICONS.agent, '#b083f0')}
+${miniStat('Treasury', `${bal.toLocaleString()} sats`, `${f.funded ? 'funded' : 'unfunded'} · pay ${esc(d.payments)}`, ICONS.earn, NEKTAR_AMBER, '<div class="stream" data-ev="money"></div>')}
+${miniStat('Earned', `${earned.toLocaleString()} sats`, `${rrecs.length} receipts from verified answers`, ICONS.receipts, '#58a6ff')}
+${miniStat('For sale', `${cat.length} offers`, 'public shards listed by domain', ICONS.market, '#4cc26b')}
+${miniStat('Shards', `${d.shards}`, `memory held · prover: ${esc(d.prover)}`, ICONS.agent, '#b083f0')}
 </div>
 <div class="row row-cards mt-3">
 <div class="col-md-6" id="receipts"><div class="card">
@@ -311,21 +301,6 @@ ${receiptRows || '<div class="empty"><div class="empty-title">no receipts yet</d
 <div class="card-body">
 ${marketRows || '<div class="empty"><div class="empty-title">nothing for sale yet</div><div class="empty-subtitle text-secondary">describeShard a public shard to list it</div></div>'}
 <div class="stream" data-ev="market"></div>
-</div></div></div>
-<div class="col-md-6" id="agents"><div class="card">
-<div class="card-header"><h3 class="card-title">Agents</h3><div class="card-actions text-secondary small">${esc(nektarEnv('NEKTAR_MODEL_ID') ?? 'unattested')}</div></div>
-<div class="card-body">
-${agentsRows}
-<div class="stream" data-ev="agents"></div>
-</div></div></div>
-<div class="col-md-6" id="log"><div class="card">
-<div class="card-header"><h3 class="card-title">Log</h3><div class="card-actions text-secondary small">${esc(d.network)}</div></div>
-<div class="card-body">
-<div class="kv"><span>shards</span><b class="ms-auto">${d.shards}</b></div>
-<div class="kv"><span>records</span><b class="ms-auto">${d.records}</b></div>
-<div class="kv"><span>anchored</span><b class="ms-auto">${d.anchoredRecords}</b></div>
-<div class="kv"><span>unproven</span><b class="ms-auto">${d.unprovenAnchors}</b></div>
-<div class="kv"><span>prover</span><span class="ms-auto text-secondary">${esc(d.prover)}</span></div>
 </div></div></div>
 ${automationCard}
 </div></div></div>
@@ -356,7 +331,7 @@ const reload = async () => {
     if (m) document.getElementById('app').innerHTML = m[1]
   } catch {}
 }
-const PANEL = { remember: 'market', describeShard: 'market', groundedAnswer: 'receipts', commitReceipt: 'receipts', attestInference: 'receipts', recall: 'receipts', payInvoice: 'money', payQuote: 'money', sale: 'money', claim: 'money', fundingImport: 'money', importRecord: 'agents', importShard: 'agents' }
+const PANEL = { remember: 'market', describeShard: 'market', groundedAnswer: 'receipts', commitReceipt: 'receipts', attestInference: 'receipts', recall: 'receipts', payInvoice: 'money', payQuote: 'money', sale: 'money', claim: 'money', fundingImport: 'money', importRecord: 'market', importShard: 'market' }
 const stamp = e => '<div><span class="t">' + new Date().toLocaleTimeString() + '</span> ' + e + '</div>'
 const es = new EventSource('/dashboard/events')
 es.onmessage = m => {
@@ -561,6 +536,7 @@ export async function cardPage(mem: NektarMemory, host: string | undefined): Pro
 <meta name="twitter:card" content="summary">
 <style>body{font:15px/1.55 system-ui,sans-serif;background:${NEKTAR_DARK};color:#eae6e3;max-width:600px;margin:24px auto;padding:0 16px}
 h1{font-size:19px;margin-bottom:2px;display:flex;align-items:center;gap:10px}.net{color:#a2958a;font-size:12px;margin-bottom:14px;word-break:break-all}
+.mono{font-family:ui-monospace,monospace;font-size:11px}
 .lede{color:#a2958a;font-size:14px;margin:0 0 16px}
 .stat{background:#2c2624;border:1px solid #3a332f;border-radius:8px;padding:16px 18px;margin:0 0 18px}
 .stat b{color:${NEKTAR_AMBER};font-size:22px}.stat .dim{font-size:13px}

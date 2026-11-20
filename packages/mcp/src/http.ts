@@ -6,7 +6,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { MerklePath } from '@bsv/sdk'
 import type { NektarMemory } from './memory.js'
 import { TOOLS, visibleTools, callTool } from './server.js'
-import { badgeSvg, dashboardPage, tablerCss, verifyPage } from './pages.js'
+import { badgeSvg, cardPage, dashboardPage, tablerCss, verifyPage } from './pages.js'
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))
 
@@ -100,6 +100,12 @@ export const OPENAPI = {
       get: {
         summary: 'agent card — MCP/REST endpoints, auth requirement, capability + market flags (the join surface a foreign agent reads first)',
         responses: { 200: { description: 'agent card' } }
+      }
+    },
+    '/card': {
+      get: {
+        summary: 'the agent card as a human page — public storefront rendering the well-known doc (shards for sale, proof counts, verify + join paths). The dashboard share button produces this URL (NEKTAR_PACK_SHARE=0 disables)',
+        responses: { 200: { description: 'text/html agent card' }, 404: { description: 'pack sharing disabled' } }
       }
     },
     '/dashboard': {
@@ -356,6 +362,7 @@ export function createHttpApi(
           url.pathname === '/v1/automation/health' ||
           url.pathname === '/v1/verify' ||
           url.pathname === '/v1/badge' ||
+          url.pathname === '/card' ||
           url.pathname === '/.well-known/x402' ||
           url.pathname === '/.well-known/nektar' ||
           url.pathname === '/.well-known/agent.json' ||
@@ -656,6 +663,7 @@ export function createHttpApi(
               v: 1,
               kind: 'nektar-discovery',
               verifyBase: `${base}/v1/verify`,
+              card: `${base}/card`,
               logPublicKey: await mem.logPublicKey(),
               operatorPub: mem.operatorKey()?.toPublicKey().toString(),
               // self-describing market config — is this instance a quorum
@@ -687,6 +695,13 @@ export function createHttpApi(
                 })
               )
             })
+          }
+          // /card — the human twin of the discovery doc: the one URL the
+          // dashboard's share button produces. Public like the well-known
+          // doc it renders; same NEKTAR_PACK_SHARE gate.
+          if (req.method === 'GET' && url.pathname === '/card') {
+            if (/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
+            return send(200, await cardPage(mem, req.headers.host), 'text/html; charset=utf-8')
           }
           if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'pack' && p.length === 3) {
             if (/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })

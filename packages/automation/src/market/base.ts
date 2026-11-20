@@ -8,6 +8,8 @@ import { WalletCoordinator } from '../wallet.js'
 import type { AutomationPolicy } from '../policy.js'
 import { DEFAULTS, STATE_LIMITS } from './types.js'
 import { WAITS } from '../waits.js'
+import { executor } from '../rt/exec.js'
+import { custodyResubmitPending, custodySubmit } from '../rt/emit.js'
 import type { MarketDeps, MarketOptions } from './types.js'
 
 export abstract class MarketBase {
@@ -99,14 +101,20 @@ export abstract class MarketBase {
    *  is the intent and 'already known' answers settle rows that actually
    *  made the wire. Queued behind in-flight work, never racing a live deal */
   resubmitPending(): Promise<Array<{ actionId: string; state: import('../store.js').TxState }>> {
-    return this.run(async () => (await this.wallet?.resubmitPending()) ?? [], 'resubmit')
+    return this.run(async () => (this.wallet !== undefined ? await custodyResubmitPending(executor(), this.wallet) : []), 'resubmit')
   }
 
-  /** a single row's broadcast+verdict leg for the tx VO's resubmit handler —
-   *  the object's per-key serialization IS the mutex, so no run() chain is
-   *  taken (taking it would re-enter the chain from inside an invocation) */
+  /** a single row's broadcast+verdict leg — routed to the custody object
+   *  under restate (serialized + journaled there), the coordinator direct
+   *  locally. No run() chain: callers inside invocations can't re-enter it */
   submitTx(actionId: string): Promise<{ state: import('../store.js').TxState; txid: string; detail?: string } | undefined> {
-    return this.wallet?.submit(actionId) ?? Promise.resolve(undefined)
+    if (this.wallet === undefined) return Promise.resolve(undefined)
+    return custodySubmit(executor(), this.wallet, actionId)
+  }
+
+  /** the custody object's deps — the coordinator the VO serializes. */
+  get walletCoordinator(): WalletCoordinator | undefined {
+    return this.wallet
   }
 
   /** a pushed transaction status (broadcaster callback / node event) — only a

@@ -4,10 +4,11 @@ import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { nektarEnv } from '@nektar/core'
 import { AutomationStore } from '../src/store.js'
-import { RestateExecutor, EXEC_SVC } from '../src/rt/exec.js'
-import { txObject, sweepService, dealObject } from '../src/rt/services.js'
+import { WalletCoordinator } from '../src/wallet.js'
+import { RestateExecutor, EXEC_SVC, setExecutor } from '../src/rt/exec.js'
+import { txObject, sweepService, dealObject, custodyObject } from '../src/rt/services.js'
 import { openEndpoint } from '../src/rt/endpoint.js'
-import { txEmit } from '../src/rt/emit.js'
+import { custodySubmit, txEmit } from '../src/rt/emit.js'
 
 // rt-spike — the live proof: a tx leg end-to-end through a REAL restate
 // server. Gated on NEKTAR_RESTATE_URL (stack tier / `docker compose up
@@ -180,6 +181,46 @@ test(
       assert.deepEqual(ran, [operation.operationId])
       assert.equal((await store.operation(operation.operationId))!.lastError, 'spike leg ran')
     } finally {
+      await endpoint.close().catch(() => undefined)
+      await kx.destroy()
+    }
+  }
+)
+
+test(
+  'spike: custody.submit on the fixed key — broadcast leg journaled, emits route to the tx object',
+  { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
+  async () => {
+    const { kx, store } = await open()
+    const t = new Transaction()
+    t.addOutput({ satoshis: 1, lockingScript: new P2PKH().lock(key.toPublicKey().toHash()) })
+    await store.recordPrepared({
+      actionId: 'custody:1',
+      operationId: 'op:custody:1',
+      kind: 'escrow',
+      txid: t.id('hex'),
+      rawHex: t.toHex(),
+      parents: {},
+      feeSats: 1
+    })
+    const wallet = new WalletCoordinator(store, { broadcast: async (tx) => ({ status: 'success', txid: tx.id('hex') }) })
+    const txDef = await txObject({ store, fx: {}, log: () => {} })
+    const custodyDef = await custodyObject({ wallet, log: () => {} })
+    const endpoint = await openEndpoint([txDef, custodyDef], {
+      NEKTAR_RESTATE_ENDPOINT_URI: ENDPOINT_URI,
+      NEKTAR_RESTATE_ADMIN: ADMIN,
+      NEKTAR_RESTATE_ENDPOINT_PORT: ENDPOINT_PORT
+    })
+    const ex = new RestateExecutor(RESTATE_URL!)
+    try {
+      // the deployment topology: emits inside handlers route back through
+      // the ingress — custody.submit → wallet.submit → txEmit → tx.observe
+      setExecutor(ex)
+      const r = await custodySubmit(ex, wallet, 'custody:1')
+      assert.equal(r.state, 'submitted')
+      await until(async () => (await store.walletTx({ actionId: 'custody:1' }))?.state === 'submitted')
+    } finally {
+      setExecutor(undefined)
       await endpoint.close().catch(() => undefined)
       await kx.destroy()
     }

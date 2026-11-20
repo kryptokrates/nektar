@@ -43,6 +43,7 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
       '/.well-known/agent.json',
       '/.well-known/nektar',
       '/.well-known/x402',
+      '/card',
       '/dashboard',
       '/dashboard/tabler.css',
       '/mcp',
@@ -66,6 +67,10 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
       '/v1/zkproof/{commit}'
     ])
     assert.equal(((await (await fetch(`${base}/openapi.json`)).json()) as { openapi: string }).openapi, '3.1.0')
+    // the agent card is the one shareable artifact — public, self-contained HTML
+    const card = await (await fetch(`${base.replace(/\/v1$/, '')}/card`)).text()
+    assert.match(card, /nektar agent/)
+    assert.match(card, /records · /)
   } finally {
     srv.close()
   }

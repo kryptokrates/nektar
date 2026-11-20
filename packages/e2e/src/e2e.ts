@@ -146,7 +146,13 @@ console.log('— reorg —')
   const rc = new StackChain(stackCfg)
   const rf = await mkfunder(10)
   await rc.mine(1)
-  const rm = new NektarMemory(rc, rf, rf.keyPair, { batchPolicy: { maxLeaves: 1 } })
+  const rm = new NektarMemory(rc, rf, rf.keyPair, {
+    batchPolicy: { maxLeaves: 1 },
+    // the pull floor this lane needs: the re-broadcast can reseal after the
+    // 60s push-watch lapses — proofOf is the same strict observe the watch
+    // runs, lifted to a callable read
+    proofLookup: (t) => rc.proofOf(t)
+  })
   await rm.remember('reorg', 'to be reorged')
   await rm.anchorShard('reorg')
   await rc.mine(1)

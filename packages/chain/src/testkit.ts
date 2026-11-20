@@ -195,39 +195,45 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
       intervalMs: 500,
       ttlMs: WATCH_TTL_MS,
       height: () => this.tracker.currentHeight(),
-      observe: async (txid) => {
-        const auth = 'Basic ' + Buffer.from(`${this.cfg.rpcUser}:${this.cfg.rpcPass}`).toString('base64')
-        const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${txid}`, {
-          headers: { Authorization: auth },
-          signal: AbortSignal.timeout(4_000)
-        }).catch(() => null)
-        // "couldn't ask" ≠ "not proven": a dead or rate-limited host throws
-        // so the abandon clock can't count silence; a 404 is a real answer
-        if (r === null || r.status === 429 || r.status >= 500) throw new Error(`merkle_proof probe failed for ${txid}`)
-        if (!r.ok) return undefined
-        try {
-          const merklePath = MerklePath.fromBinary([...new Uint8Array(await r.arrayBuffer())])
-          // same gate regtestPort.observe runs: the served bytes are a claim
-          // until the computed root validates against our own headers — a
-          // path that can't recompute its txid's root is not a proof
-          let root: string
-          try {
-            root = merklePath.computeRoot(txid)
-          } catch {
-            return undefined // served path doesn't contain the txid
-          }
-          if (!(await this.tracker.isValidRootForHeight(root, merklePath.blockHeight))) return undefined
-          // attach the proof to the cached tx so the sync getTx view answers
-          // 'mined', not 'seen' — txFacts consumers rely on it
-          const cached = this.known.get(txid)
-          if (cached !== undefined) cached.merklePath = merklePath
-          if (dbgTimings()) dbgLog(`proof pushed for ${txid.slice(0, 12)}…`)
-          return { txid, status: 'mined', blockHeight: merklePath.blockHeight, merklePath }
-        } catch {
-          return undefined /* unparseable proof → keep watching */
-        }
-      }
+      observe: async (txid) => await this.probeMined(txid)
     })
+  }
+  /** strict mined read: the asset's served bytes are a claim until the
+   *  computed root validates against our own headers — a path that can't
+   *  recompute its txid's root is not a proof. Shared by the events watch
+   *  (push) and proofOf (pull). "Couldn't ask" throws (≠ "not proven") so
+   *  callers never count transport silence as a definitive answer. */
+  private async probeMined(txid: string): Promise<{ txid: string; status: 'mined'; blockHeight: number; merklePath: MerklePath } | undefined> {
+    const auth = 'Basic ' + Buffer.from(`${this.cfg.rpcUser}:${this.cfg.rpcPass}`).toString('base64')
+    const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${txid}`, {
+      headers: { Authorization: auth },
+      signal: AbortSignal.timeout(4_000)
+    }).catch(() => null)
+    if (r === null || r.status === 429 || r.status >= 500) throw new Error(`merkle_proof probe failed for ${txid}`)
+    if (!r.ok) return undefined
+    try {
+      const merklePath = MerklePath.fromBinary([...new Uint8Array(await r.arrayBuffer())])
+      let root: string
+      try {
+        root = merklePath.computeRoot(txid)
+      } catch {
+        return undefined // served path doesn't contain the txid
+      }
+      if (!(await this.tracker.isValidRootForHeight(root, merklePath.blockHeight))) return undefined
+      // attach the proof to the cached tx so the sync getTx view answers
+      // 'mined', not 'seen' — txFacts consumers rely on it
+      const cached = this.known.get(txid)
+      if (cached !== undefined) cached.merklePath = merklePath
+      if (dbgTimings()) dbgLog(`proof pushed for ${txid.slice(0, 12)}…`)
+      return { txid, status: 'mined', blockHeight: merklePath.blockHeight, merklePath }
+    } catch {
+      return undefined /* unparseable proof → keep watching */
+    }
+  }
+  /** the pull read the proofLookup seam needs — the events watch's strict
+   *  observe lifted to a public method. */
+  async proofOf(txid: string): Promise<MerklePath | undefined> {
+    return (await this.probeMined(txid))?.merklePath
   }
   /** broadcast; the txid joins the status watch so 'mined' + proof push on seal */
   async broadcast(tx: Transaction): Promise<BroadcastResult> {

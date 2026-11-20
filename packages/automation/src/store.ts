@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { randomUUID } from 'node:crypto'
 import { policyHash, policyError, canonicalJson, type AutomationPolicy, type ActionContext } from './policy.js'
 import { txStep } from './machines/tx.machine.js'
+import { opsFsmLegacy, opEdgeAgrees } from './machines/driver.js'
 
 const T = {
   ops: 'market_operations',
@@ -127,6 +128,12 @@ const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10)
 const sum = async (q: Knex.QueryBuilder, col: string): Promise<number> => Number((await q.sum({ s: col }).first())?.s ?? 0)
 
 export class RevisionConflict extends Error {}
+
+/** the ops.machine refused a transition() write — the cause resolved to
+ *  machine candidates but no declared edge carries (from,cause)→to. Throws
+ *  inside the write transaction: state, event row and outbox all roll back.
+ *  A spec gap, not a runtime error — fix the table or the caller. */
+export class MachineBlocked extends Error {}
 
 export class AutomationStore {
   /** wake fired after any transition/enqueue commits fresh outbox rows —
@@ -418,6 +425,17 @@ export class AutomationStore {
       const cur = await trx(T.ops).where({ operation_id: operationId }).first()
       if (!cur) throw new Error(`unknown operation ${operationId}`)
       if (cur.revision !== expectedRevision) throw new RevisionConflict(`operation ${operationId}: revision ${cur.revision} != expected ${expectedRevision}`)
+      // driver mode: the machine is the spec — a state-changing write must
+      // resolve to a declared edge that accepts from the persisted state and
+      // lands exactly on the caller's target. Data-stamp writes (same state)
+      // still validate; unmodeled causes pass — the census gate owns them.
+      if (!opsFsmLegacy()) {
+        const v = opEdgeAgrees(cur.state, to, change.cause)
+        if (!v.ok)
+          throw new MachineBlocked(
+            `operation ${operationId}: ${cur.state} --${change.cause}--> ${to} has no machine edge (${v.event ?? 'unmodeled'}${v.guard !== undefined ? ' @' + v.guard : ''} would land ${v.machine ?? '?'})`
+          )
+      }
       const now = this.now()
       // updated_at is the residence clock the stuck watchdog measures — only a
       // real state change resets it. Same-state writes (error labels, evidence,

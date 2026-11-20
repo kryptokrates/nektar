@@ -175,5 +175,12 @@ export const WAITS = {
   rpcIo: { ms: 15_000, class: 'io', durable: false, wake: 'floor-only' },
   preflightHostIo: { ms: 5_000, class: 'io', durable: false, wake: 'floor-only' },
   preflightChainIo: { ms: 3_000, class: 'io', durable: false, wake: 'floor-only' },
-  preflightStoreIo: { ms: 10_000, class: 'io', durable: false, wake: 'floor-only' }
+  preflightStoreIo: { ms: 10_000, class: 'io', durable: false, wake: 'floor-only' },
+  /** restate ingress send/call — the sidecar is local; a wedged one fails
+   *  fast rather than parking a durable send on a dead socket */
+  ingressIo: { ms: 10_000, class: 'io', durable: false, wake: 'floor-only' },
+  /** the deployment-registration POST to the admin API — boot-path io */
+  registerIo: { ms: 5_000, class: 'io', durable: false, wake: 'floor-only' },
+  /** nap between registration attempts while the server warms up */
+  registerRetry: { ms: 500, class: 'backoff', durable: false, wake: 'server answer' }
 } satisfies Record<string, WaitSpec>

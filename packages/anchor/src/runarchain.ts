@@ -550,6 +550,11 @@ export class AnchorChain {
     }
     for (const h of this.pendingHeads) {
       if (lostTxids.includes(h.tx.id('hex'))) {
+        // the orphaned block's BUMP is dead truth — a stale merklePath makes
+        // every later verify fail as BEEFInvalid (root not in the surviving
+        // chain). Same object lives in anchorTxs/txById/provider registries,
+        // so one delete covers all readers.
+        delete h.tx.merklePath
         const res = await (this.provider as any).broadcaster.broadcast(h.tx)
         if (res.status !== 'success') throw new Error(`re-anchor broadcast failed: ${res.description}`)
       }

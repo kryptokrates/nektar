@@ -29,6 +29,29 @@ test('regression: confirming a descendant never gives its BUMP to earlier pendin
   assert.equal(ac.getHead()!.data.n, 1)
 })
 
+test('handleReorg clears the orphaned block BUMP before re-broadcast — a stale proof must not survive the fork', async (t) => {
+  const s0 = await setup(t)
+  if (s0 === undefined) return
+  const { chain, ac } = s0
+  const g = await ac.anchor(1, dsha256(utf8('r0')))
+  await chain.mine(1)
+  const mp = (await chain.getTx(g.tx.id('hex')))!.merklePath
+  ac.confirm(g.tx.id('hex'), mp)
+  assert.equal(ac.getHead()!.tx.merklePath, mp, 'pre-reorg: head proven')
+  assert.equal(g.tx.merklePath, mp)
+  const broadcasts: number[] = []
+  const origB = (ac as any).provider.broadcaster.broadcast.bind((ac as any).provider.broadcaster)
+  ;(ac as any).provider.broadcaster.broadcast = async (tx: import('@bsv/sdk').Transaction) => {
+    broadcasts.push(1)
+    return await origB(tx)
+  }
+  await ac.handleReorg([g.tx.id('hex')])
+  assert.equal(g.tx.merklePath, undefined, 'dead-fork BUMP is cleared on the shared object')
+  assert.equal(broadcasts.length, 1, 'lost head re-broadcast once')
+  // the anchorTxs/txById registries hold the same object — cleared there too
+  assert.equal((ac as any).txById.get(g.tx.id('hex'))!.merklePath, undefined)
+})
+
 test('anchor: genesis then successor spends the head UTXO', async (t) => {
   const s0 = await setup(t)
   if (s0 === undefined) return

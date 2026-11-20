@@ -54,8 +54,9 @@ hub reads the whole network, not just its own lanes. A reverse proxy maps
   exp runs down (~one carrier every 3.5 days).
 - `NEKTAR_BFINGER_PUBLISH=1` — the counterparty record: hosts, office,
   stream, push endpoint.
-- `NEKTAR_SEED_DOMAINS=ops,teranode` — at boot, read the directory and
-  `importShard` every announced pack matching your domains; `*` takes all.
+- `NEKTAR_SEED_DOMAINS` — at boot, read the directory and `importShard`
+  every announced pack matching your domains. Defaults to `*` (all);
+  set a comma list to filter, or empty to keep a silo.
   Idempotent — already-imported shards skip.
 - `NEKTAR_PUSH_PUBLIC` — your public `https://hub.example` base so peers
   push carriers straight to `/v1/lane`.

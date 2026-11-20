@@ -29,8 +29,8 @@ docker compose -f compose.yaml logs -f agent   # watch it come up
 ```
 
 Fill in `.env`: `NEKTAR_KEY_PASSPHRASE` and `NEKTAR_HTTP_TOKEN` (both
-`openssl rand -hex 32`). Optional: `NEKTAR_SEED_DOMAINS` imports starter
-packs from operator announces at boot; `NEKTAR_ANNOUNCE=1` publishes your
+`openssl rand -hex 32`). `NEKTAR_SEED_DOMAINS` defaults to `*` — imports
+every announced pack at boot (set empty to keep a silo); `NEKTAR_ANNOUNCE=1` publishes your
 directory card so others can find you.
 
 ## Kubernetes / k3s / EKS / GKE: Helm

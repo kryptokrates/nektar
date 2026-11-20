@@ -173,13 +173,15 @@ const GATES = [
   },
   {
     name: 'live-dead-oracle-write',
-    re: /\.(liveCheck|liveSet|deadParent|hintSkip)\s*=[^=]/g,
+    re: /\.(liveCheck|liveSet|deadParents?|hintSkip)\s*=[^=]/g,
     scope: GATED,
     // the live/dead oracle family is late-bound wiring and every assignment
     // is a custody-semantics decision: liveCheck only where the port's
     // provesUnspent is true, deadParent only on first-party verdicts (a hint
     // must never heal), liveSet/hintSkip read-only bookkeeping. funds.ts is
     // the dep seam; custody.ts + runtime.ts are the sanctioned wirings.
+    // deadParents is the append seam — push() adds evidence; assignments
+    // still gated.
     allow: ['packages/chain/src/funds.ts', 'packages/mcp/src/custody.ts', 'packages/mcp/src/runtime.ts', 'packages/automation/test/toolbox-funder.test.ts']
   }
 ]

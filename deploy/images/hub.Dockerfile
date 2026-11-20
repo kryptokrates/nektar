@@ -35,6 +35,9 @@ WORKDIR /shim
 COPY deploy/bstack-sandbox/header-shim.mjs deploy/bstack-sandbox/watch-shim.mjs ./
 CMD ["node", "header-shim.mjs"]
 
-# overlay db — the schema init compose mounted from the checkout
-FROM mysql@sha256:df90258da46f6e7ff8574ff84f17618aba0765cac749928299c69fd4e7cb8ad8 AS hub-db
+# overlay db — the schema init compose mounted from the checkout. mariadb
+# over mysql: wire-identical for the knex/mysql2 surface the hosts use and
+# ~800 MB lighter on the cold pull — no mysql-shell/InnoDB cluster tooling
+# the schema init never touches.
+FROM mariadb@sha256:e1d5495f445654134f226f55a41ce0da227116f6f27f283101f405c794d841fc AS hub-db
 COPY deploy/bstack-sandbox/initdb /docker-entrypoint-initdb.d

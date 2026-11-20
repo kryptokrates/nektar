@@ -88,8 +88,8 @@ lane polls. If `NEKTAR_WAIT_FUNDING=1` is set, the agent first prints a QR
    instance here reads the directory, unions your hosts, and we confirm the
    union in our logs. That is the gate: independent operators found by the
    protocol, not by configuration.
-3. **(Optional) seed a pack.** Set `NEKTAR_SEED_DOMAINS=ops,teranode` — your
-   agent imports every announced pack in those domains at boot; a second
+3. **Seeded content.** `NEKTAR_SEED_DOMAINS` defaults to `*` — your
+   agent imports every announced pack at boot; a second
    fresh instance can then import them _from you_.
 
 ## Connect your AI client

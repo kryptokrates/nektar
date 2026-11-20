@@ -72,7 +72,10 @@ RUN mkdir -p /data && chown node:node /data
 USER node
 # NEKTAR_NETWORK=regtest (persistent in /data; needs NEKTAR_FUND_WIF +
 # NEKTAR_RPC_PASS, Teranode reachable via host.docker.internal) | ttn | main
-ENV NEKTAR_MODEL_ID=unspecified NEKTAR_BATCH=4 NEKTAR_NETWORK=regtest NEKTAR_DATA_DIR=/data NEKTAR_TOOL_PROFILE=operator
+# NEKTAR_SEED_DOMAINS=* — the boot seed imports every announced pack so a
+# fresh instance answers non-empty; run with -e NEKTAR_SEED_DOMAINS= to opt
+# out (a silo that announces nothing and imports nothing).
+ENV NEKTAR_MODEL_ID=unspecified NEKTAR_BATCH=4 NEKTAR_NETWORK=regtest NEKTAR_DATA_DIR=/data NEKTAR_TOOL_PROFILE=operator NEKTAR_SEED_DOMAINS=*
 VOLUME /data
 LABEL io.modelcontextprotocol.server.name="io.github.nedzof/nektar"
 # health = a full scripted MCP session against a fresh server process

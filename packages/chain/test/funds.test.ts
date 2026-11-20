@@ -93,3 +93,28 @@ test('funds: died() never resurrects an input whose parent is refusal-class dead
   await live.died(draft)
   assert.equal((await live.list()).length, 1, 'a live parent still heals the dead draft')
 })
+
+test('funds: a deadParents oracle answers dead — a later deadParent write cannot remove it', async () => {
+  const key = PrivateKey.fromRandom()
+  const addr = key.toAddress()
+  const deps = { pkhHex: Buffer.from(key.toPublicKey().toHash()).toString('hex') }
+  const lock = () => new P2PKH().lock(addr)
+  const parent = new Transaction()
+  parent.addOutput({ lockingScript: lock(), satoshis: 50_000 })
+  const draft = new Transaction()
+  draft.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  draft.addOutput({ lockingScript: lock(), satoshis: 30_000 })
+  await draft.sign()
+  const deadStore = listFundsStore()
+  const dead = new MemoryFunds(deadStore, deps)
+  // the append seam: a registered mark source answers before deadParent —
+  // and a later deadParent assignment (the clobber the seam exists for)
+  // cannot remove it
+  dead.deadParents.push(async (tx) => tx.id('hex') === parent.id('hex'))
+  dead.deadParent = async () => false
+  deadStore.add(parent, 0)
+  deadStore.drop(parent.id('hex'), 0)
+  await dead.died(draft)
+  assert.equal((await dead.list()).length, 0, 'the registered mark still vets the revive')
+  assert.equal(deadStore.tombstones.has(`${parent.id('hex')}:0`), true)
+})

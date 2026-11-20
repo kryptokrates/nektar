@@ -39,7 +39,7 @@ services:
       NEKTAR_PAID_DISCLOSURE: ${NEKTAR_PAID_DISCLOSURE:-}
       NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:?set the hosts' PUBLIC URLs — see .env}
       NEKTAR_ANNOUNCE: ${NEKTAR_ANNOUNCE:-1}
-      NEKTAR_SEED_DOMAINS: ${NEKTAR_SEED_DOMAINS:-}
+      NEKTAR_SEED_DOMAINS: ${NEKTAR_SEED_DOMAINS-*}
       NEKTAR_BFINGER_PUBLISH: ${NEKTAR_BFINGER_PUBLISH:-1}
       NEKTAR_PUSH_PUBLIC: ${NEKTAR_PUSH_PUBLIC:-}
       NEKTAR_WATCH_URLS: ${NEKTAR_WATCH_URLS:-}
@@ -62,13 +62,13 @@ services:
     # daemon restart leaves it dead while hosts crash-loop on ENOTFOUND db
     restart: unless-stopped
     environment:
-      MYSQL_DATABASE: overlay
-      MYSQL_USER: overlay
-      MYSQL_PASSWORD: ${OVERLAY_DB_PASSWORD:?set OVERLAY_DB_PASSWORD in .env}
-      MYSQL_RANDOM_ROOT_PASSWORD: 'yes'
+      MARIADB_DATABASE: overlay
+      MARIADB_USER: overlay
+      MARIADB_PASSWORD: ${OVERLAY_DB_PASSWORD:?set OVERLAY_DB_PASSWORD in .env}
+      MARIADB_RANDOM_ROOT_PASSWORD: 'yes'
     command: ['--innodb-buffer-pool-size=128M', '--performance-schema=OFF']
     healthcheck:
-      test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -uoverlay -p$${MYSQL_PASSWORD} --silent']
+      test: ['CMD-SHELL', 'mariadb-admin ping -h 127.0.0.1 -uoverlay -p$${MARIADB_PASSWORD} --silent']
       interval: 3s
       timeout: 2s
       retries: 40

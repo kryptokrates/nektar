@@ -51,8 +51,12 @@ const drive = async (rts: Automation[], chain: TestChain, n = 2) => {
     for (const rt of rts) await rt.cycle()
   }
 }
-const until = async (rts: Automation[], chain: TestChain, ok: () => Promise<boolean>, n = 80) => {
-  for (let i = 0; i < n; i++) {
+// wall-clock bound, not iteration-bound: under batch contention detached
+// passes hold `busy` and manual cycles join rather than progress — a fixed
+// iteration count exhausts before the deal converges; a deadline does not
+const until = async (rts: Automation[], chain: TestChain, ok: () => Promise<boolean>, ms = 120_000) => {
+  const at = Date.now() + ms
+  while (Date.now() < at) {
     await drive(rts, chain, 1)
     if (await ok()) return true
   }
@@ -184,7 +188,7 @@ test('profile: sell → want → deals drives a full deal; fund reports slot cou
     assert.equal(sr.policyHash, s.policyHash)
     // mint + prove the funding trees before slot bookkeeping
     assert.ok(
-      await until([bb.rt], chain, async () => ((await callTool(bb.mem, 'fund', {})) as { marketSlots: { market: number } }).marketSlots.market > 0, 30),
+      await until([bb.rt], chain, async () => ((await callTool(bb.mem, 'fund', {})) as { marketSlots: { market: number } }).marketSlots.market > 0, 30_000),
       'no market slots minted'
     )
     const used0 = await usedMarketSlots(bb.rt)

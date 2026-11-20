@@ -270,6 +270,26 @@ function printTable(rows) {
 }
 let hostDowned
 const docker = (args) => new Promise((res) => spawn('docker', args, { stdio: 'inherit' }).on('exit', res))
+// the durable-executor sidecar, one per agent — restate service names are
+// global to a server, so a shared instance would route every agent's journaled
+// work to whichever endpoint registered last. A dedicated container per
+// instance is also the production shape (compose: depends_on restate).
+const RESTATE_IMAGE = process.env.NEKTAR_RESTATE_IMAGE ?? 'docker.restate.dev/restatedev/restate:latest'
+async function bootRestate(a) {
+  const name = `nektar-rt-${a.name}`
+  await docker(['rm', '-f', name]) // stale containers carry wedged invocation queues
+  if ((await docker(['run', '-d', '--name', name, '--add-host', 'host.docker.internal:host-gateway', '-p', `${a.rtIngress}:8080`, '-p', `${a.rtAdmin}:9070`, RESTATE_IMAGE])) !== 0)
+    throw new Error(`restate ${name} did not start — is the image pulled? (docker pull ${RESTATE_IMAGE})`)
+  for (let i = 0; ; i++) {
+    try {
+      await fetch(`http://127.0.0.1:${a.rtAdmin}/deployments`, { signal: AbortSignal.timeout(1000) })
+      return
+    } catch (e) {
+      if (i >= 60) throw new Error(`restate ${name} admin :${a.rtAdmin} never came up`)
+      await delay(500)
+    }
+  }
+}
 async function injectFault({ verb, arg }) {
   if (verb === 'host-down' || verb === 'seller-dark') {
     hostDowned = HOST_CONTAINER[verb === 'seller-dark' ? 'b' : arg]
@@ -475,6 +495,12 @@ function spawnInstance(a) {
       NEKTAR_PUSH_PUBLIC: `http://127.0.0.1:${a.port}/v1/lane`,
       NEKTAR_TX_LOG: join(a.dataDir, 'tx-log.jsonl'),
       NODE_OPTIONS: `--report-on-fatalerror --report-directory=${a.dataDir}`,
+      // durable executor — this instance's own sidecar; the endpoint URI is
+      // how the container reaches back to this process (host-gateway)
+      NEKTAR_RESTATE_URL: `http://127.0.0.1:${a.rtIngress}`,
+      NEKTAR_RESTATE_ADMIN: `http://127.0.0.1:${a.rtAdmin}`,
+      NEKTAR_RESTATE_ENDPOINT_PORT: String(a.rtPort),
+      NEKTAR_RESTATE_ENDPOINT_URI: `http://host.docker.internal:${a.rtPort}`,
       NEKTAR_MARKET_HOSTS: a.hosts.join(','),
       // envelope receipts must reach every copy — the ack targets the sender's
       // record hosts, which only exist when records are published (LIVE sets
@@ -580,6 +606,10 @@ async function bootAgent(a, index) {
   a.url = `http://127.0.0.1:${port}`
   a.token = `real-${a.name}`
   a.port = port
+  a.rtPort = 19401 + index // in-process endpoint the server invokes over HTTP/2
+  a.rtIngress = 28411 + index
+  a.rtAdmin = 28421 + index
+  await bootRestate(a)
   a.restarts = 0
   await ensurePortFree(port, a.name)
   const p = spawnInstance(a)

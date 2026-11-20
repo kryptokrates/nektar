@@ -534,7 +534,8 @@ export function createHttpApi(
           if (req.method === 'POST' && url.pathname === '/v1/hosts') {
             const operator = nektarEnv('NEKTAR_OPERATOR_TOKEN')
             if (operator && req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required' })
-            const u0 = String(((await body(req).catch(() => ({}))) as { url?: unknown }).url ?? '').trim()
+            const bu = ((await body(req).catch(() => ({}))) as { url?: unknown }).url
+            const u0 = (typeof bu === 'string' ? bu : '').trim()
             if (u0 === '') return send(400, { error: 'url required' })
             let origin: string
             try {

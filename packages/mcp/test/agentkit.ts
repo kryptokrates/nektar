@@ -169,7 +169,10 @@ export const wireEngine = (ex: Dispatcher, engine: MarketEngine, store: Automati
     pendingInbox: () => engine.pendingInbox(),
     liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) })),
     reconcileOps: async () =>
-      (await store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: Date.now() })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) })),
+      (await store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: Date.now() })).map((o) => ({
+        operationId: o.operationId,
+        wantId: opWantId(o)
+      })),
     resubmitPending: () => engine.resubmitTick(),
     ceilingMs: () => 0,
     log

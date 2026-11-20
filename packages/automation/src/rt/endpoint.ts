@@ -39,7 +39,7 @@ export async function registerDeployment(admin: string, uri: string, log: (line:
 }
 
 export async function openEndpoint(services: unknown[], env: EnvSource = process.env, log: (line: string) => void = () => {}): Promise<RtEndpoint> {
-  // the SDK loads only on this path — local mode never pays its module cost
+  // the SDK loads only on this path — an injected Dispatcher never pays its module cost
   const restate = await import('@restatedev/restate-sdk')
   const port = nektarEnvNum('NEKTAR_RESTATE_ENDPOINT_PORT', env) ?? 9080
   const uri = nektarEnv('NEKTAR_RESTATE_ENDPOINT_URI', env) ?? `http://127.0.0.1:${port}`

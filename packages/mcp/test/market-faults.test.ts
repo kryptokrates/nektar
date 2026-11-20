@@ -8,8 +8,9 @@ import { testWorld, testChain, testFunder, type TestFunder } from '@nektar/chain
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { AutomationStore } from '@nektar/automation'
-import { MarketEngine, type MarketMessage } from '@nektar/automation'
+import { MarketEngine, Dispatcher, type MarketMessage, type WalletTx } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
+import { wireEngine } from './agentkit.js'
 import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
@@ -82,6 +83,7 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
           if (rand() > 0.85) pending.push({ to, from: pub, msg })
         }
       }
+      const ex = new Dispatcher()
       const engine = new MarketEngine({
         store,
         memory: mem,
@@ -95,7 +97,19 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
         settleEscrow: (tx) => mem.funds.spent(tx),
         transport,
         ai: new ScriptedExecutor(),
+        executor: ex,
         opts: { refundBlocks: 8 }
+      })
+      const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
+      wireEngine(ex, engine, store, {
+        fx: {
+          txDied: async (w) => {
+            await mem.funds.died(await rebuild(w))
+          },
+          txSpent: async (w) => {
+            await mem.funds.spent(await rebuild(w))
+          }
+        }
       })
       const a = { mem, store, engine, pub, policyHash, name }
       agents.set(name, a)

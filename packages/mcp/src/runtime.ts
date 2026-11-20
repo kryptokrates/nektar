@@ -579,7 +579,8 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     network: net,
     ops,
     /** host-composed endpoint defs + boot kicks — openAutomation registers
-     *  them on the shared restate endpoint; empty under local mode */
+     *  them on the shared restate endpoint; rejected under an injected
+     *  cfg.exec Dispatcher (the in-process test seam) */
     rtDefs,
     rtKicks,
     close: async () => {

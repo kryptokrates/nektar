@@ -4,7 +4,7 @@
     "packages/automation": 10,
     "packages/chain": 3,
     "packages/crypto": 3,
-    "packages/e2e": 18,
+    "packages/e2e": 21,
     "packages/identity": 12,
     "packages/mcp": 6,
     "packages/policy": 6

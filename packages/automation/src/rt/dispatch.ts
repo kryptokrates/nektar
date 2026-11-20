@@ -92,8 +92,12 @@ export class Dispatcher implements LocalDispatch {
     // when p does — with nothing catching it the cleanup itself becomes an
     // unhandledRejection
     void p.then(
-      () => { if (this.chains.get(scope) === p) this.chains.delete(scope) },
-      () => { if (this.chains.get(scope) === p) this.chains.delete(scope) }
+      () => {
+        if (this.chains.get(scope) === p) this.chains.delete(scope)
+      },
+      () => {
+        if (this.chains.get(scope) === p) this.chains.delete(scope)
+      }
     )
     return p
   }
@@ -312,7 +316,10 @@ export const wireEngine = (ex: LocalDispatch, engine: EngineSurface, d: WireEngi
   const liveOps = async () => (await d.store.operations({ states: NONTERMINAL })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) }))
   const reconcileOps = async () => {
     const now = Date.now()
-    return (await d.store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: now })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) }))
+    return (await d.store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: now })).map((o) => ({
+      operationId: o.operationId,
+      wantId: opWantId(o)
+    }))
   }
   wireRuntime(ex, {
     tx: { store: d.store, fx: d.fx ?? {}, log, submit: d.submit ?? ((actionId) => engine.submitTx(actionId)) },

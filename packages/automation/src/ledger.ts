@@ -103,10 +103,10 @@ export function wrapBroadcast(
 }
 
 /** the sweep's scan half: live+dead rows × observeFn → (row, observe)
- *  pairs — tickDriver emits them serially in local mode; the sweep
- *  service sends each to the row's own tx object (per-key serialized,
- *  journaled invocations). Release-lease bookkeeping rides the scan in
- *  both modes. */
+ *  pairs — tickDriver emits them serially in-process (driver mode: each
+ *  emit rides the caller's executor); the sweep service sends each to the
+ *  row's own tx object (per-key serialized, journaled invocations).
+ *  Release-lease bookkeeping rides the scan in both modes. */
 export async function* scanTxObservations(
   store: AutomationStore,
   observeFn: (txid: string) => Promise<TxObservationInput | undefined>,

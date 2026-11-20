@@ -79,8 +79,12 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
     const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
     wireEngine(ex, engine, store, {
       fx: {
-        txDied: async (w) => void (await mem.funds.died(await rebuild(w))),
-        txSpent: async (w) => void (await mem.funds.spent(await rebuild(w)))
+        txDied: async (w) => {
+          await mem.funds.died(await rebuild(w))
+        },
+        txSpent: async (w) => {
+          await mem.funds.spent(await rebuild(w))
+        }
       }
     })
     return engine

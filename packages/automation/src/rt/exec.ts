@@ -71,7 +71,13 @@ interface RtScope {
 
 const scope = new AsyncLocalStorage<RtScope>()
 
-export const inRtScope = <T>(s: RtScope, fn: () => T): T => scope.run(s, fn)
+// merge, not replace: a nested handler's scope must ACCUMULATE the keys the
+// call chain already holds — a tx handler inside a custody invocation still
+// holds CUSTODY_KEY, so its custody-side emits must go direct rather than
+// calling back into the locked object (the self-deadlock the scope exists
+// to prevent). An undefined field clears (a caller can deliberately drop a
+// held key); a defined field wins over the parent's.
+export const inRtScope = <T>(s: RtScope, fn: () => T): T => scope.run({ ...scope.getStore(), ...s }, fn)
 
 export const rtScopeKey = (): RtScope | undefined => scope.getStore()
 

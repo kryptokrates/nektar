@@ -450,6 +450,7 @@ test('settleDepth: a depth-1 proof parks completion_submitted, settles at depth'
     const store = new AutomationStore(kx, () => 1_800_000_000_000)
     await store.init()
     let height = 100
+    const ex = new Dispatcher()
     const engine = new MarketEngine({
       store,
       memory: { shardManifest: async () => undefined, records: async () => [] },
@@ -460,8 +461,10 @@ test('settleDepth: a depth-1 proof parks completion_submitted, settles at depth'
       fetchTx: async () => ({ merklePath: { blockHeight: 100 } }) as Transaction,
       transport: { publishWant: async () => {}, publishOffer: async () => {}, send: async () => {} },
       ai: new ScriptedExecutor(),
+      executor: ex,
       settleDepth: 3
     })
+    wireEngine(ex, engine, store)
     const { operation: op } = await store.createOperation({
       role: 'seller',
       kind: 'sale',

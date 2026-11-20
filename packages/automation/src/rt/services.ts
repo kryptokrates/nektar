@@ -426,7 +426,7 @@ export const dealEventKey = (i: DealEvent): string => {
  *  one (buyer purchase, seller sale), else its own operationId. Every
  *  deal.* send for the op MUST use this so events/advances/reconciles
  *  serialize on one object key instead of racing the op's revision CAS. */
-export const dealOpKey = (o: DealOpRef): string => `ev:${o.wantId ?? `op:${o.operationId}`}`
+export const dealOpKey = (o: DealOpRef): string => o.wantId !== undefined ? `ev:${o.wantId}` : o.operationId
 
 /** wantId out of an op row — `data.want` is the SignedWant on both buyer
  *  and seller ops; non-market ops have none */

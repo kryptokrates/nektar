@@ -85,7 +85,7 @@ export function openLanes(rt: Rt): void {
     if (watch === undefined) return
     // fire-and-forget spawn — detached(): the push is its own delivery
     // attempt, not leg work; it must not die when the queuing leg settles
-    detached(() =>
+    void detached(() =>
       fetch(`${watch.replace(/\/+$/, '')}/notify`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -104,7 +104,7 @@ export function openLanes(rt: Rt): void {
   const pushCarrier = (rec: { push?: string } | undefined, beef: number[]): void => {
     const push = rec?.push
     if (push === undefined || beef.length === 0) return
-    detached(() =>
+    void detached(() =>
       fetch(push, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

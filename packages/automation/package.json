@@ -19,6 +19,7 @@
     "@nektar/core": "workspace:*",
     "@nektar/identity": "workspace:*",
     "@nektar/store": "workspace:*",
+    "@restatedev/restate-sdk": "1.18.3",
     "knex": "^3.3.0",
     "sqlite3": "^5.1.7",
     "xstate": "6.0.0-beta.3"

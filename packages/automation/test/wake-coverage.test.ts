@@ -52,6 +52,8 @@ test('every wait primitive site is classified — the census sees all wait class
   const PRIMITIVES = /setTimeout\(|Promise\.race\(|AbortSignal\.timeout|[^a-zA-Z]sleep\(/
   const CLASSIFIED: Record<string, string> = {
     'automation/src/scheduler.ts': 'the wheel — the one setTimeout owner',
+    'automation/src/rt/exec.ts': 'LocalExecutor delay timer + ingress fetch io bound — test/dev executor; durable timers live server-side',
+    'automation/src/rt/endpoint.ts': 'deployment-registration fetch io bound + nap retry — boot path',
     'automation/src/watches.ts': 'watch-shim reconnect sleep — WAITS.watchBackoff*, jittered',
     'automation/src/lanes.ts': 'ioSignal() merges ambient leg + rt.signal — per-call io bound',
     'automation/src/toolbox-services.ts': 'WAITS.rpcIo io bound',

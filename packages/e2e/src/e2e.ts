@@ -4,7 +4,7 @@
 import { PrivateKey } from '@bsv/sdk'
 import { utf8, toHex, dsha256, hash160 } from '@nektar/core'
 const dsha256utf8 = (s: string) => dsha256(utf8(s))
-import { StackChain, StackFunder, stackTreasury, stackCfgFromEnv, stackUp, testTier, fundsOf } from '@nektar/chain'
+import { StackChain, StackFunder, stackTreasury, stackCfgFromEnv, stackUp, assetUp, testTier, fundsOf } from '@nektar/chain'
 import { NektarMemory } from '@nektar/mcp'
 
 if (testTier() === 'memory') {
@@ -25,6 +25,12 @@ if (stackCfg === undefined) {
 if (!(await stackUp(stackCfg, { attempts: 1, timeoutMs: 2_000 }))) {
   console.log('# SKIP regtest stack configured (NEKTAR_RPC_*) but unreachable — start it first')
   process.exit(0)
+}
+// the RPC can be green while the asset service is dead — every proof/tx read
+// delegates to it, so the whole run would produce NotMined noise. Name it.
+if (!(await assetUp(stackCfg, 3_000))) {
+  console.error('# FAIL regtest RPC answers but the asset API is down — all proof reads (merkle_proof/tx/utxo) will return NotMined. Restart the asset container.')
+  process.exit(1)
 }
 const treasury = await stackTreasury()
 const mkfunder = (n: number) => StackFunder.fund(treasury, n)

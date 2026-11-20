@@ -20,6 +20,10 @@ import { openOutbox } from './outbox.js'
 import { openUpkeep } from './upkeep.js'
 import { Scheduler } from './scheduler.js'
 import { openWatches } from './watches.js'
+import type { TxEffects } from './machines/effects.js'
+import { executor } from './rt/exec.js'
+import { openEndpoint, type RtEndpoint } from './rt/endpoint.js'
+import { txObject } from './rt/services.js'
 import type { Rt, LaneInfra, AutomationConfig } from './rtctx.js'
 import type { Automation } from './types.js'
 
@@ -360,6 +364,22 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     }
     return tx
   }
+  // machine mode: the same custody semantics as declared intents —
+  // the table decides WHICH fire, the effector just executes. The tx
+  // virtual object's ctx.run legs run these same impls when the executor
+  // is restate — one effect set, two dispatch paths.
+  const txFx: TxEffects = {
+    txDied: async (w) => {
+      await mem.funds.died(rebuildStored(w))
+    },
+    txSpent: async (w) => {
+      await mem.funds.spent(rebuildStored(w))
+      log(`automation: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
+    },
+    recordAired: (w) => {
+      mem.recordAired?.(rebuildStored(w))
+    }
+  }
   const ledgerWatcher = new TransactionWatcher(
     store,
     async (txid) => {
@@ -382,20 +402,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         mem.recordAired?.(tx)
         log(`automation: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
       },
-      // machine mode: the same custody semantics as declared intents —
-      // the table decides WHICH fire, the effector just executes
-      effects: {
-        txDied: async (w) => {
-          await mem.funds.died(rebuildStored(w))
-        },
-        txSpent: async (w) => {
-          await mem.funds.spent(rebuildStored(w))
-          log(`automation: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
-        },
-        recordAired: (w) => {
-          mem.recordAired?.(rebuildStored(w))
-        }
-      }
+      effects: txFx
     }
   )
   let lastLedgerSweep = 0
@@ -413,6 +420,14 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   openOutbox(rt)
   openUpkeep(rt)
   openWatches(rt)
+  // the Restate endpoint: NEKTAR_EXECUTOR=restate serves the virtual objects
+  // in-process and registers the deployment with the sidecar — durable
+  // sends/calls then land here journaled + serialized per key
+  let rtEndpoint: RtEndpoint | undefined
+  if (executor() !== undefined) {
+    rtEndpoint = await openEndpoint([txObject({ store, fx: txFx, log })], process.env, log)
+    log(`automation: restate endpoint ${rtEndpoint.uri}`)
+  }
   let again = false
   let running: Promise<void> | undefined
   // a phase that never settles parks EVERY later pass behind `running` —
@@ -578,32 +593,32 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // lands inside a leg must not hand that leg's deadline to the spawn
     const work = detached(() =>
       (async () => {
-      try {
-        if (lanes !== undefined) {
-          const unproven = await lanes.ledger.unproven()
-          if (rt.stopped) return
-          if (unproven.some((u) => u.txid === txid)) {
-            await lanes.ledger.markProven(txid, mp)
-            // a proven topup frees funding-tree slots — pull any
-            // slot-starved outbox item forward instead of letting it sit
-            // out the retry backoff (measured: a want stalled ~15s on this)
-            await store.unblockOutbox('funding-slot')
-            // carriers minted on this tree while it was unproven carry a
-            // 10-minute host eviction deadline that never clears on its own —
-            // queue a per-row re-announce with the parent's BUMP attached
-            await rt.queueRepublish(txid)
-          } else if (await lanes.ledger.attachParentPath(txid, mp)) {
-            // the proof was for a funding parent — stored tree beefs now
-            // carry anchored ancestry, so their slots serve immediately
-            await store.unblockOutbox('funding-slot')
+        try {
+          if (lanes !== undefined) {
+            const unproven = await lanes.ledger.unproven()
+            if (rt.stopped) return
+            if (unproven.some((u) => u.txid === txid)) {
+              await lanes.ledger.markProven(txid, mp)
+              // a proven topup frees funding-tree slots — pull any
+              // slot-starved outbox item forward instead of letting it sit
+              // out the retry backoff (measured: a want stalled ~15s on this)
+              await store.unblockOutbox('funding-slot')
+              // carriers minted on this tree while it was unproven carry a
+              // 10-minute host eviction deadline that never clears on its own —
+              // queue a per-row re-announce with the parent's BUMP attached
+              await rt.queueRepublish(txid)
+            } else if (await lanes.ledger.attachParentPath(txid, mp)) {
+              // the proof was for a funding parent — stored tree beefs now
+              // carry anchored ancestry, so their slots serve immediately
+              await store.unblockOutbox('funding-slot')
+            }
           }
+        } catch (e) {
+          log(`automation: txproof: ${(e as Error).message}`)
         }
-      } catch (e) {
-        log(`automation: txproof: ${(e as Error).message}`)
-      }
-      engine.hint(txid)
-      rt.countWake('txProof')
-      if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
+        engine.hint(txid)
+        rt.countWake('txProof')
+        if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
       })()
     )
     rt.inflight.add(work)
@@ -810,6 +825,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         await nap(WAITS.drainPoll.ms)
       }
       await engine.idle()
+      await rtEndpoint?.close().catch(() => undefined)
       await kxLanes?.destroy()
       await kx.destroy()
     }

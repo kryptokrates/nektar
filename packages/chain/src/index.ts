@@ -46,6 +46,7 @@ export {
   stackCfgFromEnv,
   stackTreasury,
   stackUp,
+  assetUp,
   stackWorld,
   stackChain,
   skipUnlessStack,

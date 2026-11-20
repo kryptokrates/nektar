@@ -11,6 +11,11 @@ services:
       - nektar-data:/data # claims registry + proof store shared with watcher
     environment:
       NEKTAR_MODEL_ID: ${NEKTAR_MODEL_ID:-unspecified}
+      # restate executor (NEKTAR_EXECUTOR=restate opts in; local is default)
+      NEKTAR_EXECUTOR: ${NEKTAR_EXECUTOR:-}
+      NEKTAR_RESTATE_URL: ${NEKTAR_RESTATE_URL:-http://restate:8080}
+      NEKTAR_RESTATE_ADMIN: ${NEKTAR_RESTATE_ADMIN:-http://restate:9070}
+      NEKTAR_RESTATE_ENDPOINT_URI: ${NEKTAR_RESTATE_ENDPOINT_URI:-http://nektar-mcp:9080}
   # the 1-of-N honest challenger: re-verifies each open claim's RISC Zero
   # receipt off-chain and broadcasts `challenge` on any mismatch. Watches
   # the SAME /data registry the MCP server writes via claimDeploy.
@@ -40,6 +45,20 @@ services:
     environment:
       NEKTAR_LLM_URL: ${NEKTAR_LLM_URL:-}
       NEKTAR_LLM_MODEL: ${NEKTAR_LLM_MODEL:-}
+  # the durable-execution sidecar — NEKTAR_EXECUTOR=restate routes
+  # automation's durable sends/calls through it (default off: local mode
+  # needs no sidecar). restate-data/ is the embedded persistent store.
+  restate:
+    image: docker.restate.dev/restatedev/restate:latest
+    ports:
+      - '8090:8080' # ingress (8080 is taken by nektar-http on this box)
+      - '9070:9070' # admin + UI
+      - '9071:9071' # node ctrl
+    volumes:
+      - restate-data:/restate-data
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
 
 volumes:
   nektar-data:
+  restate-data:

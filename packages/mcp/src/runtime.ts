@@ -339,9 +339,10 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       try {
         const hit = (await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])).find((w) => w.txid === txid)
         if (hit !== undefined) {
-          const { emitTxEvent, txFsmLegacy } = await import('@nektar/automation')
+          const { txEmit, executor, txFsmLegacy } = await import('@nektar/automation')
           if (!txFsmLegacy()) {
-            await emitTxEvent(
+            await txEmit(
+              executor(),
               ledger,
               hit,
               'abandon',

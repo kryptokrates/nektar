@@ -2,7 +2,9 @@ import { Transaction } from '@bsv/sdk'
 import type { BroadcastResult } from '@nektar/chain'
 import type { AutomationStore, WalletTx, TxState } from './store.js'
 import type { ActionContext } from './policy.js'
-import { emitTxEvent, replayTxEffects, type TxEffects } from './machines/effects.js'
+import { replayTxEffects, type TxEffects } from './machines/effects.js'
+import { executor } from './rt/exec.js'
+import { txEmit } from './rt/emit.js'
 import { obsEvent, txFsmLegacy } from './machines/driver.js'
 
 export interface WalletDeps {
@@ -142,15 +144,16 @@ export class WalletCoordinator {
       // 'broadcast' effect) — emit the verdict; the table carries custody
       const obs = { at: Date.now(), result: res }
       if (res.status === 'success' || ALREADY.test(detail)) {
-        await emitTxEvent(this.store, w, 'submit.success', { observation: obs, attempt: true }, this.fx())
+        await txEmit(executor(), this.store, w, 'submit.success', { observation: obs, attempt: true }, this.fx())
         return { state: 'submitted', txid: w.txid }
       }
       if (w.state === 'submitted') {
-        await emitTxEvent(this.store, w, 'resubmit', { observation: { ...obs, resubmission: true }, attempt: true }, this.fx())
+        await txEmit(executor(), this.store, w, 'resubmit', { observation: { ...obs, resubmission: true }, attempt: true }, this.fx())
         return { state: 'submitted', txid: w.txid, detail }
       }
       if (NEVER_LEFT.test(detail) || (DEFINITIVE.test(detail) && !detail.startsWith('transport:'))) {
-        const r = await emitTxEvent(
+        const r = await txEmit(
+          executor(),
           this.store,
           w,
           'submit.refused',
@@ -165,7 +168,7 @@ export class WalletCoordinator {
       }
       // 'submit.unknown' has no edge on an already-unknown row — a repeat
       // unknown is a 'resubmit' self-edge there (records the attempt)
-      const r = await emitTxEvent(this.store, w, w.state === 'prepared' ? 'submit.unknown' : 'resubmit', { observation: obs, attempt: true }, this.fx())
+      const r = await txEmit(executor(), this.store, w, w.state === 'prepared' ? 'submit.unknown' : 'resubmit', { observation: obs, attempt: true }, this.fx())
       return { state: r.next, txid: w.txid, detail }
     }
     if (res.status === 'success' || ALREADY.test(detail)) {
@@ -212,7 +215,7 @@ export class WalletCoordinator {
       // only ever emitted from verified sources (the watchers gate hints) —
       // a raw hint belongs in the observeFn, never in this call
       const { event, guard } = obsEvent(o)
-      const r = await emitTxEvent(this.store, w, event, { guard, observation: { at: Date.now(), ...o } }, this.fx())
+      const r = await txEmit(executor(), this.store, w, event, { guard, observation: { at: Date.now(), ...o } }, this.fx())
       return r.next
     }
     const next: TxState = o.status === 'proven' ? 'confirmed' : o.status === 'seen' ? (w.state === 'confirmed' ? 'confirmed' : 'observed') : o.status
@@ -243,7 +246,7 @@ export class WalletCoordinator {
    *  commit, never a bare setTxState that strands phantom adoption */
   async markRejected(w: WalletTx, observation: unknown): Promise<void> {
     if (!txFsmLegacy()) {
-      await emitTxEvent(this.store, w, 'obs.rejected', { guard: 'verified', observation }, this.fx())
+      await txEmit(executor(), this.store, w, 'obs.rejected', { guard: 'verified', observation }, this.fx())
       return
     }
     await this.store.setTxState(w.actionId, 'rejected', observation)

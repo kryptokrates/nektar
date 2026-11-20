@@ -143,6 +143,22 @@ export async function stackUp(
   return false
 }
 
+/** The proof-plane probe: getrawtransaction / merkle_proof / block_legacy /
+ *  utxo all delegate to the asset HTTP service — a stack whose RPC answers
+ *  but whose asset is down silently produces NotMined verdicts everywhere
+ *  (observed: asset exited on a boot race and every mined-dependent check
+ *  failed for ~2 days while "stackUp" stayed green). Any HTTP status —
+ *  including 401 auth-required — proves the service answers; only a
+ *  connection-level failure counts as down. */
+export async function assetUp(cfg: RegtestConfig, timeoutMs = 5_000): Promise<boolean> {
+  if (cfg.assetUrl === undefined) return false
+  const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
+  const res = await fetch(`${cfg.assetUrl}/health`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(timeoutMs) }).catch(
+    () => null
+  )
+  return res !== null
+}
+
 /** node:test gate — call first thing in a test that needs the real node.
  *  On the memory tier it skips before loading .env or probing the stack. */
 export async function skipUnlessStack(t: { skip: (msg?: string) => void }, cfg?: RegtestConfig): Promise<RegtestConfig | undefined> {

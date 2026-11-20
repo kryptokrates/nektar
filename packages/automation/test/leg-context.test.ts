@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import knexFactory from 'knex'
-import { currentSignal, deadline, detached, ioSignal, nap } from '@nektar/core'
+import { currentSignal, deadline, detached, nap } from '@nektar/core'
 import { AutomationStore } from '../src/store.js'
 import { Scheduler } from '../src/scheduler.js'
 
@@ -128,7 +128,7 @@ test('knex/sqlite round-trips keep the ambient — a store call inside a leg see
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   let afterDb: AbortSignal | undefined
-  const r = await deadline(async (signal) => {
+  const r = await deadline(async () => {
     await store.operations({ states: ['collecting'] })
     afterDb = currentSignal()
     return 'ok'

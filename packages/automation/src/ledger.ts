@@ -2,8 +2,10 @@ import { Transaction } from '@bsv/sdk'
 import type { BroadcastResult } from '@nektar/chain'
 import type { AutomationStore, TxState, WalletTx } from './store.js'
 import { WalletCoordinator } from './wallet.js'
-import { emitTxEvent, replayTxEffects, type TxEffects } from './machines/effects.js'
+import { replayTxEffects, type TxEffects } from './machines/effects.js'
 import { obsEvent, txFsmLegacy } from './machines/driver.js'
+import { executor } from './rt/exec.js'
+import { txEmit } from './rt/emit.js'
 import { WAITS } from './waits.js'
 
 export interface TxObservationInput {
@@ -63,7 +65,8 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
         if (!txFsmLegacy()) {
           const w = await store.walletTx({ actionId }).catch(() => undefined)
           if (w !== undefined)
-            await emitTxEvent(
+            await txEmit(
+              executor(),
               store,
               w,
               r.status === 'success' ? 'submit.success' : 'submit.unknown',
@@ -79,7 +82,7 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
         if (!txFsmLegacy()) {
           const w = await store.walletTx({ actionId }).catch(() => undefined)
           if (w !== undefined)
-            await emitTxEvent(store, w, 'submit.unknown', { observation: { at: Date.now(), error: (e as Error).message }, attempt: true }, {}).catch(() => {})
+            await txEmit(executor(), store, w, 'submit.unknown', { observation: { at: Date.now(), error: (e as Error).message }, attempt: true }, {}).catch(() => {})
         } else await store.setTxState(actionId, 'submission_unknown', { at: Date.now(), error: (e as Error).message }, true).catch(() => {})
       }
       throw e
@@ -209,12 +212,13 @@ export class TransactionWatcher {
         const o = await this.observeFn(w.txid)
         if (o !== undefined) {
           const { event, guard } = obsEvent(o)
-          const r = await emitTxEvent(this.store, w, event, { guard, observation: { at: Date.now(), ...o } }, fx)
+          const r = await txEmit(executor(), this.store, w, event, { guard, observation: { at: Date.now(), ...o } }, fx)
           if (r.next !== w.state) changed++
           continue
         }
         if (w.state === 'exported' && this.opts?.exportedTtlMs !== undefined && Date.now() - w.at >= this.opts.exportedTtlMs) {
-          const r = await emitTxEvent(
+          const r = await txEmit(
+            executor(),
             this.store,
             w,
             'export.ttl',

@@ -106,7 +106,7 @@ test('leg context: nap() with no explicit signal inside a leg dies with the leg'
   }, 25)
   assert.deepEqual(r, { outcome: 'timeout' })
   await nap(10) // the abandoned work's rejection lands after the race resolves
-  assert.equal(name, 'AbortError', 'timers/promises rejects AbortError regardless of the source signal\'s reason')
+  assert.equal(name, 'AbortError', "timers/promises rejects AbortError regardless of the source signal's reason")
 })
 
 test('leg context: detached() work runs outside the leg — a spawn survives the bound', async () => {
@@ -121,7 +121,7 @@ test('leg context: detached() work runs outside the leg — a spawn survives the
     return 'never'
   }, 30)
   assert.deepEqual(r, { outcome: 'timeout' })
-  assert.equal(spawned, undefined, 'spawned work sees no ambient — it is not the leg\'s child')
+  assert.equal(spawned, undefined, "spawned work sees no ambient — it is not the leg's child")
 })
 
 test('leg context: spawned async work launched via detached() is not aborted when the leg times out', async () => {
@@ -156,7 +156,7 @@ test('leg context: nested deadline() can only tighten — inner dies at the oute
   assert.equal(inner!.aborted, true, 'the inner leg cannot outlive the outer — one operation budget inward')
 })
 
-test('leg context: concurrent legs never see each other\'s signal', async () => {
+test("leg context: concurrent legs never see each other's signal", async () => {
   let sigA: AbortSignal | undefined
   let sigB: AbortSignal | undefined
   const [a, b] = await Promise.all([

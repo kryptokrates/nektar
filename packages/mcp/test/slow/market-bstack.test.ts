@@ -1248,10 +1248,11 @@ test('bstack T: refused refund retries on reconcile — succeeds after one refus
       const tShort = refundAfter - (await b.mem.chainHeight())
       if (tShort > 0) await chain.mine(tShort)
       if (refuse === 1) {
-        // the refund retry waits on the 30s reconcile gate — bump the virtual
-        // clock past it each round instead of paying 60 wallclock rounds
+        // the refund retry waits on the reconcile gate (30s + up to 30s
+        // per-op jitter) — bump the virtual clock past the WORST-case
+        // cooldown each round instead of paying wallclock rounds
         for (let i = 0; i < 12 && (await buyerOp(b))?.state !== 'refunded'; i++) {
-          clock += 31_000
+          clock += 61_000
           await b.rt.cycle()
           await chain.mine(1)
         }
@@ -1269,7 +1270,7 @@ test('bstack T: refused refund retries on reconcile — succeeds after one refus
       } else {
         assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'uncertain', 60), 'never uncertain | ' + logs.slice(-20).join(' | '))
         for (let i = 0; i < 7; i++) {
-          clock += 31_000
+          clock += 61_000
           await b.rt.cycle()
           await chain.mine(1)
         }

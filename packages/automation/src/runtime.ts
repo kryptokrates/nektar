@@ -74,7 +74,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // contended write retries instead of erroring. :memory: ignores both.
   await kx.raw('PRAGMA journal_mode=WAL')
   await kx.raw('PRAGMA busy_timeout=5000')
-  const store = new AutomationStore(kx)
+  // one clock domain: next_at/dueAt stamps and every engine-side due check
+  // compare against cfg.now — mixing the real clock into row stamps while the
+  // engine reads a virtual one makes fresh rows look not-yet-due forever
+  const store = new AutomationStore(kx, cfg.now)
   await store.init()
   const key = mem.operatorKey()
   const wallet = mem.operatorWallet()

@@ -65,7 +65,10 @@ const HOST_B = process.env.NEKTAR_TN_HOST_B ?? 'http://127.0.0.1:18292'
 // flag every sale#* op throws and offers never leave the seller
 process.env.NEKTAR_PAID_DISCLOSURE ??= '1'
 const ARC = 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
-const INDEX = 'https://test.bananablocks.com/api/v1'
+// the index dialect is picked from the URL (bananablocks default; WoC when
+// the primary rate-limits the suite's read volume — indexFor guesses the
+// dialect from the host)
+const INDEX = process.env.NEKTAR_TN_INDEX ?? 'https://test.bananablocks.com/api/v1'
 // happy path is unaffected — early-select fires at minCollectMs (1s) once an
 // offer lands; this ceiling only bounds the degraded path: a withholding
 // host leaves one carrier route, and single-host submit→collect→decode
@@ -428,8 +431,10 @@ const live = async (t: { skip: (m?: string) => void }): Promise<boolean> => {
       if (r.status >= 500) throw new Error(`${u} → http ${r.status}`)
       await r.arrayBuffer() // drain — any HTTP response proves liveness
     }
-    const h = await fetch(`${INDEX}/block/tip`, { signal: AbortSignal.timeout(8_000) })
-    if (!h.ok) throw new Error(`index → http ${h.status}`)
+    // dialect-agnostic liveness: the index client's own tip read — a raw
+    // /block/tip fetch is a bananablocks path and 404s on WoC
+    const tip = await indexFor({ url: INDEX }).tip()
+    if (tip === undefined) throw new Error('index → tip unreachable')
     return true
   } catch (e) {
     t.skip(`testnet stack unreachable: ${(e as Error).message}`)

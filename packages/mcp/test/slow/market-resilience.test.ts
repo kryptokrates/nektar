@@ -641,10 +641,12 @@ test('R7: late escrow rejection — funding_failed via txFacts verdict, budget r
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const f1 = await faulthost(h1.url)
+  const f2 = await faulthost(h2.url)
   let b!: A, s!: A
   try {
-    b = await mkagent('buyer', [h1.url, h2.url], chain, logs, dir)
-    s = await mkagent('seller', [h1.url, h2.url], chain, logs, dir)
+    b = await mkagent('buyer', [f1.url, f2.url], chain, logs, dir)
+    s = await mkagent('seller', [f1.url, f2.url], chain, logs, dir)
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
@@ -652,12 +654,23 @@ test('R7: late escrow rejection — funding_failed via txFacts verdict, budget r
       (await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
       'escrow never funded | ' + logs.slice(-15).join(' | ')
     )
+    // hold the delivery lane: while the op sits in awaiting_disclosure the
+    // delivered envelope can still arrive and win — then the dead verdict is
+    // never consulted. Hosts down = the rejection lands first, deterministically
+    f1.fault.down = true
+    f2.fault.down = true
     const escrowTxid = (await opFor(b, w.wantId))!.data.escrowTxid as string
     const orig = b.mem.txFacts.bind(b.mem)
     ;(b.mem as unknown as { txFacts: (txid: string) => Promise<import('@nektar/chain').TxFacts> }).txFacts = async (txid: string) =>
       txid === escrowTxid ? { verdict: 'dead', source: 'first-party' } : orig(txid)
+    // a real late rejection arrives as a status hint (double-spend event) —
+    // without it the engine only re-checks on the 30s reconcile cooldown and
+    // a healthy disclosure delivery wins the race first
+    ;(b.rt.engine as unknown as { hint: (txid: string) => void }).hint(escrowTxid)
     const rounds = await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'funding_failed')
     assert.ok(rounds > 0, 'rejected funding did not land funding_failed | ' + logs.slice(-20).join(' | '))
+    f1.fault.down = false
+    f2.fault.down = false
     const bo = (await opFor(b, w.wantId))!
     assert.equal(bo.state, 'funding_failed')
     const evts = await b.rt.store.events(bo.operationId)
@@ -666,10 +679,21 @@ test('R7: late escrow rejection — funding_failed via txFacts verdict, budget r
       `expected an escrow_rejected_late event, got: ${evts.map((e) => e.cause).join(', ')}`
     )
     b.mem.txFacts = orig as never
-    await drive([b.rt], chain, 4) // settled state must stick — no retry resurrection
-    assert.equal((await opFor(b, w.wantId))!.state, 'funding_failed', 'rejected funding retried itself back to life')
+    await drive([b.rt], chain, 4)
+    // the verdict was fake — the escrow is really live. The funding_failed
+    // rescan must not resurrect the deal (no re-funding, escrow txid
+    // unchanged); re-arming refund_pending to reclaim the locked covenant
+    // is the designed honest outcome, not a retry.
+    const settled = (await opFor(b, w.wantId))!
+    assert.ok(
+      settled.state === 'funding_failed' || settled.state === 'refund_pending' || settled.state === 'refunded',
+      `rejected funding retried itself back to life: ${settled.state}`
+    )
+    assert.equal(settled.data.escrowTxid, escrowTxid, 'rejection path re-broadcast the escrow')
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
+    await f1.close()
+    await f2.close()
     await h1.close()
     await h2.close()
   }

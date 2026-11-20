@@ -15,7 +15,8 @@ test('keystore: round trip / wrong passphrase / tampered ct', () => {
   assert.equal(readKeyFile(f, 'hunter2', true), '{"wif":"L5"}')
   assert.throws(() => readKeyFile(f, 'wrong', true), KeystoreError)
   const tampered = JSON.parse(readFileSync(f, 'utf8'))
-  tampered.ct = '00' + tampered.ct.slice(2)
+  // flip the first ct byte — a fixed '00' is a no-op 1-in-256 runs
+  tampered.ct = (parseInt(tampered.ct.slice(0, 2), 16) ^ 1).toString(16).padStart(2, '0') + tampered.ct.slice(2)
   const tf = path.join(dir, 't.json')
   writeFileSync(tf, JSON.stringify(tampered))
   assert.throws(() => readKeyFile(tf, 'hunter2', true), KeystoreError)

@@ -155,8 +155,10 @@ export class AutomationStore {
   /** a committed deadline — transition/createOperation dueAt values go to
    *  the scheduler's dueIn so a collect window or seize bound fires at its
    *   instant, not the next floor tick (the floor stays the missed-arm
-   *  backstop either way) */
-  dueAtArmed?: (at: number) => void
+   *  backstop either way). The op id rides along: under the restate
+   *  executor the arm is a durable delayed send to the op's own deal
+   *  object, not a shared wheel poke */
+  dueAtArmed?: (operationId: string, at: number) => void
 
   /** the residence-bound map — the engine injects STATE_LIMITS so a state
    *  change into a bounded state derives its stuck deadline at COMMIT and
@@ -443,7 +445,7 @@ export class AutomationStore {
     if (r.created) {
       detached(() => this.workReady?.())
       // armed = the persisted deadline — explicit dueAt or the stamped bound
-      if (r.operation.dueAt !== undefined) detached(() => this.dueAtArmed?.(r.operation.dueAt!))
+      if (r.operation.dueAt !== undefined) detached(() => this.dueAtArmed?.(r.operation.operationId, r.operation.dueAt!))
     }
     return r
   }
@@ -590,7 +592,7 @@ export class AutomationStore {
     if (fromState !== undefined && fromState !== op.state) detached(() => this.workReady?.())
     // arm whatever deadline persisted — explicit dueAt or the stamped
     // residence bound (re-arming an untouched due_at is idempotent)
-    if (op.dueAt !== undefined) detached(() => this.dueAtArmed?.(op.dueAt!))
+    if (op.dueAt !== undefined) detached(() => this.dueAtArmed?.(op.operationId, op.dueAt!))
     return op
   }
 

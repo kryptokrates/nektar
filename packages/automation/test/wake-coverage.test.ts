@@ -142,7 +142,7 @@ test('store.commit hooks fire exactly where work lands', async (t) => {
   let work = 0
   const armed: number[] = []
   store.workReady = () => work++
-  store.dueAtArmed = (at) => armed.push(at)
+  store.dueAtArmed = (_opId, at) => armed.push(at)
 
   await t.test('createOperation fires on created, not on a dedupe hit', async () => {
     const before = work

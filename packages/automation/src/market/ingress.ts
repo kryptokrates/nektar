@@ -6,6 +6,7 @@ import { NONTERMINAL } from './types.js'
 import { WAITS } from '../waits.js'
 import { deadline, stable01 } from '@nektar/core'
 import type { MarketMessage } from './types.js'
+import { executor, EXEC_SVC } from '../rt/exec.js'
 
 /** pump fan-out: deliveries are independent and off the engine mutex, so a
  *  small pool overlaps legs instead of serializing the whole due batch
@@ -82,14 +83,19 @@ export abstract class IngressOps extends MarketBase {
         // tick() already holds; the wrapper would deadlock on itself
         await this.wallet?.resubmitPending().catch(() => undefined)
       }
-      for (const op of await this.d.store.operations({ states: NONTERMINAL })) {
-        try {
-          await this.advance(op, height)
-        } catch (e) {
-          const cur = await this.d.store.operation(op.operationId)
-          if (cur)
-            await this.d.store.transition(cur.operationId, cur.revision, cur.state, { cause: 'tick_error', lastError: (e as Error).message.slice(0, 500) })
-        }
+      // the per-op leg: local mode runs it inline behind the mutex; under
+      // the restate executor each op's leg is a journaled invocation on the
+      // op's own deal object — fire-and-forget sends, the key is the
+      // serialization, CAS writes make a replayed leg resume-safe
+      const ops = await this.d.store.operations({ states: NONTERMINAL })
+      const exec = executor()
+      if (exec !== undefined) {
+        for (const op of ops)
+          void exec.send({ service: EXEC_SVC.deal, handler: 'advance', key: op.operationId }, {}).catch((e: unknown) => {
+            this.d.log?.(`market: deal advance send ${op.operationId}: ${(e as Error).message}`)
+          })
+      } else {
+        for (const op of ops) await this.advanceLeg(op, height)
       }
       // a refund accepted at submit then rejected by the network must not sit
       // in 'refunded' claiming the money came back — the outpoint went to the
@@ -158,6 +164,29 @@ export abstract class IngressOps extends MarketBase {
       if (this.d.store.outboxReady !== undefined) this.d.store.outboxReady()
       else await this.pumpOutbox()
     }, 'tick')
+  }
+
+  /** one op's advance leg — the try/stamp wrapper shared by the local tick
+   *  (inside run()) and the deal VO's per-key invocation. advance() writes
+   *  are revision-CAS: a restarted leg resumes from its committed prefix. */
+  protected async advanceLeg(op: Operation, height: number): Promise<void> {
+    try {
+      await this.advance(op, height)
+    } catch (e) {
+      const cur = await this.d.store.operation(op.operationId)
+      if (cur)
+        await this.d.store.transition(cur.operationId, cur.revision, cur.state, { cause: 'tick_error', lastError: (e as Error).message.slice(0, 500) })
+    }
+  }
+
+  /** the deal object's per-op entry — load + leg, no run() (the object's
+   *  key IS the serialization). Returns false when the op is gone or
+   *  terminal — the send's idempotent redelivery is then a no-op. */
+  async advanceOp(operationId: string): Promise<boolean> {
+    const op = await this.d.store.operation(operationId)
+    if (op === undefined || !NONTERMINAL.includes(op.state)) return false
+    await this.advanceLeg(op, await this.d.height())
+    return true
   }
 
   async pumpOutbox(): Promise<void> {

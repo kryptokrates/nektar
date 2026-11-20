@@ -142,6 +142,42 @@ export interface SweepObservation {
   observe: TxObserve
 }
 
+// ── the deal object ──────────────────────────────────────────────────────
+// one virtual object per operation (key = operationId): the op's advance
+// leg runs as a serialized, journaled invocation on its own object — the
+// per-key serialization replaces the run() chain for the deal legs the
+// tick used to run inline. Every write inside the leg is revision-CAS, so
+// a replayed leg resumes from its committed prefix — the journal doesn't
+// need per-transition steps here.
+
+export interface DealDeps {
+  /** load op by key + run its advance leg (load + height + the stamped
+   *  try/catch) — engine.advanceOp. Returns false when the op is gone or
+   *  terminal. */
+  advanceOp: (operationId: string) => Promise<boolean>
+  log: (line: string) => void
+}
+
+/** advance and due run the same leg — the op's advance() re-evaluates its
+ *  own dueAt/dueHeight conditions. The two handler names exist so the
+ *  journal/UI shows whether the wake was a tick fan-out or a deadline
+ *  arm firing. */
+export const dealAdvanceBody = (deps: DealDeps) => async (_: unknown, operationId: string): Promise<{ ran: boolean }> => {
+  return { ran: await deps.advanceOp(operationId) }
+}
+
+export const dealObject = async (deps: DealDeps) => {
+  const restate = await import('@restatedev/restate-sdk')
+  const leg = dealAdvanceBody(deps)
+  return restate.object({
+    name: EXEC_SVC.deal,
+    handlers: {
+      advance: async (ctx: restate.ObjectContext) => await ctx.run('advance', () => leg({}, ctx.key)),
+      due: async (ctx: restate.ObjectContext) => await ctx.run('advance', () => leg({}, ctx.key))
+    }
+  })
+}
+
 export interface SweepDeps {
   /** live+dead rows × observeFn → (key, observe) pairs (scanTxObservations) */
   scan: () => AsyncGenerator<SweepObservation>
@@ -218,6 +254,16 @@ export const registerTxHandlers = (
   ex.register(EXEC_SVC.tx, 'observe', (arg, key) => observe(arg as TxObserve, key ?? ''))
   ex.register(EXEC_SVC.tx, 'expire', (arg, key) => expire(arg, key ?? ''))
   ex.register(EXEC_SVC.tx, 'resubmit', (arg, key) => resubmit(arg, key ?? ''))
+}
+
+/** the deal bodies on a LocalExecutor — the local-mode wiring. */
+export const registerDealHandlers = (
+  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void },
+  deps: DealDeps
+): void => {
+  const leg = dealAdvanceBody(deps)
+  ex.register(EXEC_SVC.deal, 'advance', (arg, key) => leg(arg, key ?? ''))
+  ex.register(EXEC_SVC.deal, 'due', (arg, key) => leg(arg, key ?? ''))
 }
 
 export const registerSweepHandlers = (

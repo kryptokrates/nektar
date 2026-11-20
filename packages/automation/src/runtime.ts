@@ -23,7 +23,7 @@ import { openWatches } from './watches.js'
 import type { TxEffects } from './machines/effects.js'
 import { executor, EXEC_SVC } from './rt/exec.js'
 import { openEndpoint, type RtEndpoint } from './rt/endpoint.js'
-import { txObject, sweepService } from './rt/services.js'
+import { txObject, sweepService, dealObject } from './rt/services.js'
 import type { Rt, LaneInfra, AutomationConfig } from './rtctx.js'
 import type { Automation } from './types.js'
 
@@ -443,7 +443,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       },
       txDef
     )
-    rtEndpoint = await openEndpoint([txDef, sweepDef], process.env, log)
+    // the per-op object — advance legs land on the op's own key, serialized
+    // and journaled; the tick's NONTERMINAL loop fans out to it under restate
+    const dealDef = await dealObject({ advanceOp: (operationId) => engine.advanceOp(operationId), log })
+    rtEndpoint = await openEndpoint([txDef, sweepDef, dealDef], process.env, log)
     log(`automation: restate endpoint ${rtEndpoint.uri}`)
     // boot resubmit fans out through the sweep — each row's re-air is a
     // journaled invocation on its own tx object
@@ -544,10 +547,18 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     if (!rt.busy && !rt.stopped) void rt.deals().catch((e) => log(`automation: ${(e as Error).message}`))
   }
   // committed deadlines arm the wheel directly — a collect window or
-  // seize dueAt fires at its instant; the floor is the missed-arm backstop
-  store.dueAtArmed = (at) => {
+  // seize dueAt fires at its instant; the floor is the missed-arm backstop.
+  // Under restate the arm is a durable delayed send to the op's own deal
+  // object — the runtime owns the timer, a restart can't drop the arm.
+  store.dueAtArmed = (operationId, at) => {
     rt.countWake('dueAt')
-    if (!rt.stopped) rt.scheduler?.dueIn('deals', Math.max(0, at - Date.now()))
+    if (rt.stopped) return
+    const exec = executor()
+    if (exec !== undefined)
+      void exec
+        .send({ service: EXEC_SVC.deal, handler: 'due', key: operationId }, {}, { delayMs: Math.max(0, at - Date.now()) })
+        .catch((e) => log(`automation: deal due send ${operationId}: ${(e as Error).message}`))
+    else rt.scheduler?.dueIn('deals', Math.max(0, at - Date.now()))
   }
   /** one full pass: deals, then upkeep — what tests and push events drive */
   const cycle = async (): Promise<void> => {

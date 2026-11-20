@@ -40,6 +40,7 @@ export interface Executor {
 export const EXEC_SVC = {
   tx: 'nektar-tx',
   sweep: 'nektar-sweep',
+  deal: 'nektar-deal',
   transport: 'nektar-transport'
 } as const
 

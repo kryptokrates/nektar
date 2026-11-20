@@ -37,39 +37,55 @@ const esc = (s: unknown) =>
 // --tblr-* overrides replay logo.svg onto the kit — the only theme work done;
 // every class used below is the kit's own. .kv/.stream are the two bespoke
 // bits (record rows + the SSE event tail).
-const THEME = `:root,[data-bs-theme=dark]{--tblr-primary:${NEKTAR_AMBER};--tblr-primary-fg:${NEKTAR_DARK};--tblr-body-bg:${NEKTAR_DARK};
---tblr-bg-surface:#2c2624;--tblr-bg-surface-secondary:#262120;--tblr-bg-surface-tertiary:#332c29;
---tblr-body-color:#eae6e3;--tblr-secondary:#a2958a;--tblr-muted:#a2958a;
---tblr-border-color:#3a332f;--tblr-border-color-translucent:rgba(247,153,27,.14)}
+const THEME = `:root,[data-bs-theme=dark]{--tblr-primary:${NEKTAR_AMBER};--tblr-primary-fg:${NEKTAR_DARK};--tblr-body-bg:#1b1715;
+--tblr-bg-surface:#2b2421;--tblr-bg-surface-secondary:#241f1c;--tblr-bg-surface-tertiary:#382f2a;
+--tblr-body-color:#ece7e4;--tblr-secondary:#a89a8e;--tblr-muted:#a89a8e;
+--tblr-border-color:#413630;--tblr-border-color-translucent:rgba(247,153,27,.18)}
 a{color:var(--tblr-primary)}
-.kv{display:flex;align-items:center;gap:.75rem;padding:.5rem 0;border-bottom:1px solid var(--tblr-border-color-translucent);font-size:.875rem}
-.kv:last-child{border-bottom:none}
+.navbar{background:var(--tblr-bg-surface)}
+.card{box-shadow:0 .5rem 1.4rem rgba(0,0,0,.4)}
+.card-hero{background:linear-gradient(115deg,#2b2421 0%,#3a2c19 55%,#2b2421 100%)}
+.page-pretitle{color:var(--tblr-primary)}
+.kv{display:flex;align-items:center;gap:.75rem;padding:.55rem .4rem;border-bottom:1px solid var(--tblr-border-color-translucent);font-size:.875rem}
+.kv:last-child{border-bottom:none}.kv:hover{background:rgba(247,153,27,.05)}
 .stream{margin-top:.5rem;padding-top:.5rem;border-top:1px solid var(--tblr-border-color-translucent);font-size:11px;color:var(--tblr-secondary);min-height:1em;max-height:4.2em;overflow:hidden;font-family:var(--tblr-font-monospace)}
 .stream div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stream .t{color:var(--tblr-primary)}
-code{background:var(--tblr-bg-surface-tertiary);padding:1px 6px;border-radius:4px}`
+code{background:var(--tblr-bg-surface-tertiary);padding:1px 6px;border-radius:4px}
+.glow{position:relative}
+.glow::before{content:'';position:absolute;inset:-46px;background:radial-gradient(circle,rgba(247,153,27,.28),transparent 68%);pointer-events:none}
+.glow>*{position:relative}`
 
 // emitted only when tabler.min.css can't be resolved — keeps the page readable
 const FALLBACK = `body{background:${NEKTAR_DARK};color:#eae6e3;font-family:system-ui,sans-serif;margin:0}
-.page{display:flex}.navbar-vertical{width:15rem;min-height:100vh;padding:1rem;border-right:1px solid #3a332f;flex:none}
+.navbar{display:flex;align-items:center;padding:.6rem 1.5rem;border-bottom:1px solid #3a332f}
 .navbar-brand a{color:${NEKTAR_AMBER};font-weight:700;text-decoration:none;display:flex;gap:.5rem;align-items:center}
-.nav-link{display:flex;gap:.5rem;align-items:center;padding:.4rem .5rem;color:#eae6e3;text-decoration:none;border-radius:.4rem}
-.nav-link:hover{background:rgba(247,153,27,.08)}.nav-link-icon svg{width:20px;height:20px;vertical-align:middle}
-.page-wrapper{flex:1}.page-header{padding:1.5rem 2rem 0}.page-pretitle{font-size:.75rem;text-transform:uppercase;letter-spacing:.04em;color:#a2958a}
-.page-title{font-size:1.5rem;font-weight:700;margin:0}.page-body{padding:1.5rem 2rem}
-.row-cards{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.col-12{grid-column:1/-1}
-@media (max-width:768px){.page{flex-direction:column}.navbar-vertical{width:auto;min-height:0}.row-cards{grid-template-columns:1fr}}
+.navbar-nav{display:flex;list-style:none;gap:.25rem;padding:0;margin:0}
+.nav-link{display:flex;gap:.4rem;align-items:center;padding:.4rem .6rem;color:#eae6e3;text-decoration:none;border-radius:.4rem}
+.nav-link:hover,.nav-item.active .nav-link{background:rgba(247,153,27,.1);color:${NEKTAR_AMBER}}
+.page-wrapper{max-width:1200px;margin:0 auto}.page-header{padding:1.5rem 1.5rem 0}.page-body{padding:1rem 1.5rem 2rem}
+.page-pretitle{font-size:.75rem;text-transform:uppercase;letter-spacing:.04em;color:#a2958a}
+.page-title{font-size:1.5rem;font-weight:700;margin:0}
+.row-cards{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.col-xl-3,.col-sm-6{grid-column:span 1}.col-xl-6{grid-column:1/-1}.col-12{grid-column:1/-1}.col-md-6{grid-column:span 1}
+@media (max-width:768px){.row-cards{grid-template-columns:1fr}.col-xl-3{grid-column:1/-1}}
 .card{background:#2c2624;border:1px solid rgba(247,153,27,.14);border-radius:.5rem}
 .card-header{display:flex;justify-content:space-between;align-items:center;padding:.8rem 1.25rem;border-bottom:1px solid rgba(247,153,27,.14)}
-.card-title{font-size:1rem;font-weight:600;margin:0}.card-body{padding:1rem 1.25rem}
+.card-title{font-size:1rem;font-weight:600;margin:0}.card-body{padding:1rem 1.25rem}.h-100{height:100%}
 .status{display:inline-flex;align-items:center;gap:.4rem;padding:.2rem .6rem;border-radius:999px;font-size:.75rem;background:rgba(255,255,255,.06)}
 .status-green{color:#4cc26b}.status-red{color:#e5534b}.status-dot{display:inline-block;width:.5rem;height:.5rem;border-radius:50%;background:currentColor}
-.btn{display:inline-block;padding:.2rem .7rem;border-radius:.4rem;border:1px solid #3a332f;color:${NEKTAR_AMBER};background:transparent;font-size:.8rem;cursor:pointer;text-decoration:none}
+.btn{display:inline-block;padding:.35rem .8rem;border-radius:.4rem;border:1px solid #3a332f;color:#eae6e3;background:transparent;font-size:.8rem;cursor:pointer;text-decoration:none}
 .btn-primary{background:${NEKTAR_AMBER};color:${NEKTAR_DARK};border-color:transparent}.btn-sm{font-size:.75rem}
-.h1{font-size:2rem;font-weight:700;margin:0}.h4{font-size:1rem}.mb-1{margin-bottom:.25rem}.mb-0{margin-bottom:0}
+.h1{font-size:2rem;font-weight:700;margin:0}.h2{font-size:1.5rem;font-weight:700}.h3{font-size:1.25rem;font-weight:600}.h4{font-size:1rem}
 .subheader{font-size:.75rem;text-transform:uppercase;letter-spacing:.04em;color:#a2958a}
-.text-secondary{color:#a2958a}.small{font-size:.8rem}.py-2{padding:.5rem 0}.mt-4{margin-top:1.5rem}
-.d-flex{display:flex}.align-items-center{align-items:center}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.ms-auto{margin-left:auto}
-.container-xl{max-width:100%}.empty{padding:1.5rem;text-align:center;color:#a2958a}`
+.text-secondary{color:#a2958a}.small{font-size:.8rem}.empty{padding:1.5rem;text-align:center;color:#a2958a}
+.d-flex{display:flex}.flex-row{flex-direction:row}.flex-wrap{flex-wrap:wrap}.flex-grow-1{flex-grow:1}.d-none{display:none}
+.align-items-center{align-items:center}.align-items-baseline{align-items:baseline}.justify-content-center{justify-content:center}.justify-content-between{justify-content:space-between}
+.ms-auto{margin-left:auto}.me-2{margin-right:.5rem}.me-4{margin-right:1.5rem}.mt-auto{margin-top:auto}
+.mt-1{margin-top:.25rem}.mt-2{margin-top:.5rem}.mt-3{margin-top:1rem}.mb-0{margin-bottom:0}.mb-1{margin-bottom:.25rem}.mb-2{margin-bottom:.5rem}.mb-4{margin-bottom:1.5rem}
+.gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.gap-4{gap:1rem}.gap-5{gap:2rem}.w-100{width:100%}.py-2{padding:.5rem 0}
+.container-xl{width:100%}.pt-3{padding-top:1rem}.pb-3{padding-bottom:1rem}
+.progress{height:.5rem;background:#3a332f;border-radius:.25rem;overflow:hidden}.progress-bar{height:100%;background:${NEKTAR_AMBER}}
+.list-unstyled{list-style:none;padding:0}`
 
 // stroke icons in @tabler/icons style — hand-drawn so the icon pack stays out
 // of the dependency set
@@ -88,7 +104,7 @@ const ICONS = {
 const icon = (p: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`
 
-const LOGO_SVG = `<svg viewBox="0 0 400 400" width="38" height="38" style="border-radius:8px;flex:none"><rect width="400" height="400" fill="${NEKTAR_DARK}"/><path fill="${NEKTAR_AMBER}" d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z"/><circle cx="307" cy="78" r="38" fill="${NEKTAR_AMBER}"/><ellipse cx="163" cy="190" rx="20" ry="21" fill="${NEKTAR_DARK}"/><ellipse cx="231" cy="190" rx="20" ry="21" fill="${NEKTAR_DARK}"/><path d="M 150 265.5 C 161 279 176 287 196 288 C 216 287 230 278 243 265" fill="none" stroke="${NEKTAR_DARK}" stroke-width="24" stroke-linecap="round"/></svg>`
+const logoSvg = (px: number) => `<svg viewBox="0 0 400 400" width="${px}" height="${px}" style="border-radius:${Math.round(px / 5)}px;flex:none"><rect width="400" height="400" fill="${NEKTAR_DARK}"/><path fill="${NEKTAR_AMBER}" d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z"/><circle cx="307" cy="78" r="38" fill="${NEKTAR_AMBER}"/><ellipse cx="163" cy="190" rx="20" ry="21" fill="${NEKTAR_DARK}"/><ellipse cx="231" cy="190" rx="20" ry="21" fill="${NEKTAR_DARK}"/><path d="M 150 265.5 C 161 279 176 287 196 288 C 216 287 230 278 243 265" fill="none" stroke="${NEKTAR_DARK}" stroke-width="24" stroke-linecap="round"/></svg>`
 
 export interface HttpOps {
   wallet: () => Promise<unknown>
@@ -106,6 +122,7 @@ export async function dashboardPage(mem: NektarMemory, ops: HttpOps | undefined,
   const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${host ?? 'localhost'}`
   // receipts — newest last N
   const rrecs = (await mem.records('__receipts__').catch(() => [] as Array<{ seq: number; data?: string }>)) as Array<{ seq: number; data?: string }>
+  const amts: number[] = []
   const receiptRows = rrecs
     .slice(-10)
     .reverse()
@@ -120,6 +137,7 @@ export async function dashboardPage(mem: NektarMemory, ops: HttpOps | undefined,
           tool = String(j.tool ?? j.toolName ?? '')
         } catch {}
       }
+      amts.push(Number(amt) || 0)
       return `<div class="kv"><span class="text-secondary">#${r.seq}</span><span>${esc(tool || 'answer')}</span><span>${amt ? esc(amt) + ' sats' : ''}</span><a class="btn btn-sm ms-auto" href="${base}/v1/verify?s=${r.seq}&format=html">verify ↗</a></div>`
     })
     .join('')
@@ -156,44 +174,81 @@ ${autoOps.map((o) => `<div class="kv"><span class="text-secondary">${esc(o.role)
     : ''
   const kit = tablerCss() !== null
   const cssLink = kit ? `<link rel="stylesheet" href="/dashboard/tabler.css">` : ''
+  const coverage = d.records > 0 ? Math.round((d.anchoredRecords / d.records) * 100) : 100
+  const earned = amts.reduce((a, b) => a + b, 0)
+  // honest visuals only — the sparkline is real receipt amounts, the ring is
+  // the true anchored share; nothing decorative masquerading as data
+  const donut = (p: number) =>
+    `<svg width="76" height="76" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--tblr-bg-surface-tertiary)" stroke-width="3"/><circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--tblr-primary)" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(p * 0.9739 * 100).toFixed(1)} 200" transform="rotate(-90 18 18)"/><text x="18" y="21" text-anchor="middle" fill="var(--tblr-body-color)" font-size="8" font-weight="700">${Math.round(p * 100)}%</text></svg>`
+  const spark = (vals: number[]) => {
+    const v = [...vals].reverse().slice(-10)
+    const max = Math.max(1, ...v)
+    const bars = v.map((n, i) => `<rect x="${i * 10 + 2}" y="${28 - Math.round((n / max) * 24)}" width="6" height="${Math.max(2, Math.round((n / max) * 24))}" rx="1" fill="var(--tblr-primary)" opacity="${n > 0 ? 0.9 : 0.25}"/>`).join('')
+    return `<svg viewBox="0 0 ${v.length * 10} 28" class="w-100" height="28" preserveAspectRatio="none">${bars || '<rect x="0" y="26" width="100%" height="2" fill="var(--tblr-bg-surface-tertiary)"/>'}</svg>`
+  }
   const navItem = (href: string, label: string, svg: string, active = false) =>
-    `<li class="nav-item${active ? ' active' : ''}"><a class="nav-link${active ? ' active' : ''}" href="${href}"><span class="nav-link-icon">${icon(svg)}</span><span class="nav-link-title">${label}</span></a></li>`
-  // the stat row — the four motivations as numbers before any detail
-  const stat = (id: string, label: string, value: string, unit: string, sub: string, svg: string, extra = '') => `<div class="col-sm-6 col-xl-3" id="${id}"><div class="card">
-<div class="card-body">
-<div class="d-flex align-items-center"><div class="subheader">${label}</div><div class="ms-auto"><span style="display:inline-flex;padding:.55rem;border-radius:.5rem;background:rgba(247,153,27,.12);color:var(--tblr-primary)">${icon(svg)}</span></div></div>
-<div class="d-flex align-items-baseline"><div class="h1 mb-0 me-2">${value}</div><div class="text-secondary">${unit}</div></div>
-<div class="d-flex align-items-center gap-2 mt-2 flex-wrap">${sub}</div>
-${extra}
+    `<li class="nav-item${active ? ' active' : ''}"><a class="nav-link" href="${href}"><span class="nav-link-icon">${icon(svg)}</span><span class="nav-link-title">${label}</span></a></li>`
+  const miniStat = (label: string, value: string, right: string, sub: string, svg: string, color: string) => `<div class="col-sm-6 col-xl-3"><div class="card"><div class="card-body">
+<div class="d-flex align-items-center"><div class="subheader">${label}</div><div class="ms-auto"><span style="display:inline-flex;align-items:center;justify-content:center;width:2.4rem;height:2.4rem;border-radius:.55rem;background:${color}22;color:${color}">${icon(svg)}</span></div></div>
+<div class="h3 mb-1">${value}</div><div class="text-secondary small">${sub}</div>
 </div></div></div>`
   return `<!doctype html><html data-bs-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>nektar — operator</title>
 ${cssLink}<style>${THEME}${kit ? '' : FALLBACK}</style></head><body><div class="page">
-<aside class="navbar navbar-vertical navbar-expand-md" data-bs-theme="dark"><div class="container-fluid">
-<h1 class="navbar-brand"><a class="d-flex align-items-center gap-2" style="text-decoration:none" href="/dashboard">${LOGO_SVG}<span>nektar</span></a></h1>
-<ul class="navbar-nav pt-3">
+<header class="navbar navbar-expand-md" data-bs-theme="dark"><div class="container-xl">
+<h1 class="navbar-brand me-4"><a class="d-flex align-items-center gap-2" style="text-decoration:none" href="/dashboard">${logoSvg(30)}<span>nektar</span></a></h1>
+<div class="navbar-nav flex-row ms-auto align-items-center gap-3">
+<span class="status status-green" id="live"><span class="status-dot status-dot-animated"></span>live</span>
+<span class="text-secondary small">${esc(d.network)}</span>
+<span class="text-secondary small">pub <code>${esc(mem.operatorKey().toPublicKey().toString().slice(0, 24))}…</code></span>
+<span class="text-secondary small">up ${upStr}</span>
+</div></div></header>
+<div class="navbar navbar-expand-md" data-bs-theme="dark"><div class="container-xl"><ul class="navbar-nav">
 ${navItem('/dashboard', 'Overview', ICONS.overview, true)}
-${navItem('#earn', 'Treasury', ICONS.earn)}
 ${navItem('#receipts', 'Receipts', ICONS.receipts)}
 ${navItem('#market', 'Market', ICONS.market)}
 ${navItem('#agents', 'Agents', ICONS.agents)}
+${navItem('#log', 'Log', ICONS.log)}
 ${au ? navItem('#automation', 'Automation', ICONS.automation) : ''}
-</ul>
-<ul class="navbar-nav mt-auto pb-3">
-${navItem('/v1/openapi.json', 'API doc', ICONS.api)}
-${navItem('/v1/health', 'Health', ICONS.health)}
-${navItem('/.well-known/agent.json', 'Agent card', ICONS.agent)}
-</ul>
-</div></aside>
+<li class="nav-item ms-auto">${''}<a class="nav-link" href="/v1/openapi.json"><span class="nav-link-icon">${icon(ICONS.api)}</span><span class="nav-link-title">API</span></a></li>
+</ul></div></div>
 <div class="page-wrapper">
 <div class="page-header d-print-none"><div class="container-xl"><div class="d-flex align-items-center justify-content-between">
-<div><div class="page-pretitle">operator console</div><h2 class="page-title d-flex align-items-center gap-2">Dashboard<span class="status status-green" id="live"><span class="status-dot status-dot-animated"></span>live</span></h2></div>
-<div class="d-flex align-items-center gap-3"><div class="text-secondary small">${esc(d.network)} · pub <code>${esc(mem.operatorKey().toPublicKey().toString().slice(0, 24))}…</code> · up ${upStr}</div><a class="btn btn-sm" href="/v1/openapi.json">API</a></div>
+<div><div class="page-pretitle">operator console</div><h2 class="page-title">Dashboard</h2></div>
+<div class="d-flex gap-2"><a class="btn" href="/v1/health">Health</a><a class="btn btn-primary" href="/.well-known/nektar">Discovery doc</a></div>
 </div></div></div>
 <div id="app" class="page-body"><div class="container-xl"><div class="row row-cards">
-${stat('earn', 'Treasury', bal.toLocaleString(), 'sats', `${badge(!!f.funded, 'funded', 'unfunded')}${badge(d.payments === 'on', 'pay on', 'pay off')}<span class="text-secondary small">${esc(f.utxoCount ?? f.utxos ?? '—')} utxos</span>`, ICONS.earn, '<div class="stream" data-ev="money"></div>')}
-${stat('receipts-stat', 'Receipts', String(rrecs.length), 'total', '<span class="text-secondary small">verified answers — each carries a checkable link</span>', ICONS.receipts)}
-${stat('market-stat', 'For sale', String(cat.length), 'offers', '<span class="text-secondary small">public shards listed by domain</span>', ICONS.market)}
-${stat('log-stat', 'Anchored', String(d.anchoredRecords), `of ${d.records}`, `<span class="text-secondary small">prover: ${esc(d.prover)}</span>${d.unprovenAnchors ? `<span class="status status-red">${d.unprovenAnchors} unproven</span>` : ''}`, ICONS.log)}
+<div class="col-xl-6"><div class="card h-100 card-hero"><div class="card-body d-flex py-4">
+<div class="flex-grow-1">
+<div class="h2 mb-1">${esc(nektarEnv('NEKTAR_MODEL_ID') ?? 'operator')}</div>
+<div class="text-secondary mb-4">verifiable memory for AI agents — traded as a commodity on BSV</div>
+<div class="d-flex gap-5 mt-auto">
+<div><div class="subheader">Treasury</div><div class="h2 mb-1" style="color:var(--tblr-primary)">${bal.toLocaleString()} <span class="h4 text-secondary">sats</span></div>
+<div class="d-flex gap-2">${badge(!!f.funded, 'funded', 'unfunded')}${badge(d.payments === 'on', 'pay on', 'pay off')}</div>
+<div class="stream" data-ev="money"></div></div>
+<div><div class="subheader">Anchor coverage</div><div class="h2 mb-1">${coverage}%</div>
+<div class="progress progress-sm" style="width:8rem"><div class="progress-bar" style="width:${coverage}%"></div></div></div>
+</div></div>
+<div class="ms-auto d-none d-lg-flex align-items-center glow">${logoSvg(110)}</div>
+</div></div></div>
+<div class="col-sm-6 col-xl-3"><div class="card h-100"><div class="card-body">
+<div class="subheader">Receipts</div>
+<div class="d-flex align-items-baseline"><div class="h1 mb-0 me-2">${rrecs.length}</div><div class="text-secondary">verified answers</div></div>
+<div class="text-secondary small mt-1">${earned > 0 ? `${earned.toLocaleString()} sats earned — last ${Math.min(10, amts.length)}` : 'each carries a checkable link'}</div>
+<div class="mt-2">${spark(amts)}</div>
+</div></div></div>
+<div class="col-sm-6 col-xl-3"><div class="card h-100"><div class="card-body">
+<div class="subheader">Anchored</div>
+<div class="d-flex align-items-baseline"><div class="h1 mb-0 me-2">${d.anchoredRecords}</div><div class="text-secondary">of ${d.records} records</div></div>
+<div class="d-flex justify-content-center mt-3">${donut(coverage / 100)}</div>
+</div></div></div>
+</div>
+<div class="row row-cards mt-3">
+${miniStat('Earned', `${earned.toLocaleString()} sats`, `${rrecs.length} receipts`, 'from verified answers', ICONS.earn, NEKTAR_AMBER)}
+${miniStat('For sale', `${cat.length} offers`, 'public shards', 'listed by domain', ICONS.market, '#4cc26b')}
+${miniStat('Utxos', `${esc(f.utxoCount ?? f.utxos ?? '—')}`, 'funding outputs', 'the coin book', ICONS.log, '#58a6ff')}
+${miniStat('Shards', `${d.shards}`, 'memory held', `prover: ${esc(d.prover)}`, ICONS.agent, '#b083f0')}
+</div>
+<div class="row row-cards mt-3">
 <div class="col-md-6" id="receipts"><div class="card">
 <div class="card-header"><h3 class="card-title">Receipts</h3><div class="card-actions text-secondary small">${rrecs.length} total</div></div>
 <div class="card-body">

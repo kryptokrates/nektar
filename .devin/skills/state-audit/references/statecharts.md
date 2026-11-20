@@ -68,7 +68,7 @@ change to it.
   JSON-serializable: no `bigint` sats, Buffers, or class instances — the
   machines run `context: {}` today.
 - **`transition()`, not `getNextSnapshot()`.** `transition(machine,
-  snapshot, event)` (v5.19+) is the recommended pure next-state API;
+snapshot, event)` (v5.19+) is the recommended pure next-state API;
   `getNextSnapshot`/`getInitialSnapshot` are on the deprecation path. It
   returns `[nextSnapshot, actions]` — actions as data — the seam intents
   would ride if a table ever declares machine actions.

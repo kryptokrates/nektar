@@ -7,6 +7,7 @@
 // against witnessed headers; a spend claim is only believed when the named
 // spender's own bytes name the outpoint.
 import { withRetry, pacer } from './retry.js'
+import { BoundedMap } from '@nektar/core'
 import type { BlockHeader } from './interfaces.js'
 
 /** normalized tx view — the fields the money path reads off an index */
@@ -54,14 +55,80 @@ export interface IndexOpts {
   fetchImpl?: typeof fetch
   /** 'banana' | 'woc' — guessed from the URL when unset */
   kind?: IndexerKind
+  /** hint-cache TTL; undefined → default, 0 → disable (raw reads) */
+  cacheTtlMs?: number
 }
 
 export const guessIndexKind = (url: string): IndexerKind => (/whatsonchain/i.test(url) ? 'woc' : 'banana')
 
-/** the index picked for a url/kind pair — one client per dialect */
+/** the index picked for a url/kind pair — one client per dialect, behind the
+ *  shared hint cache unless cacheTtlMs:0 asks for raw reads */
 export function indexFor(o: IndexOpts): ChainIndex {
   const kind = o.kind ?? guessIndexKind(o.url)
-  return kind === 'woc' ? new WocIndex(o) : new BananaIndex(o)
+  const base = kind === 'woc' ? new WocIndex(o) : new BananaIndex(o)
+  return o.cacheTtlMs === 0 ? base : new CachingIndex(base, o.cacheTtlMs ?? 5_000)
+}
+
+// --- hint cache ---------------------------------------------------------------
+/** read-through memoization over any dialect. An upkeep pass asks the same
+ *  questions (tip, the same txids' hex/json/proof, an address' utxos) from
+ *  many call sites at once — without a shared promise each ask is a paced
+ *  upstream RTT, which is what makes a pass cost ~30s on a slow index.
+ *
+ *  Honesty: everything cached here is a HINT (see the file's truth rule) —
+ *  a miss expires on the TTL because the tx may arrive later, and served
+ *  proofs expire too because a reorg can kill a BUMP. Only txHex hits are
+ *  cached for the process lifetime: bytes either hash to the txid or they
+ *  were never served. Verdicts never come from this layer. */
+export class CachingIndex implements ChainIndex {
+  private hex = new BoundedMap<string, Promise<string | undefined>>(8192)
+  private timed = new BoundedMap<string, { at: number; p: Promise<unknown> }>(4096)
+  constructor(
+    private readonly inner: ChainIndex,
+    private readonly ttlMs = 5_000
+  ) {}
+  private within<T>(key: string, f: () => Promise<T>): Promise<T> {
+    const hit = this.timed.get(key)
+    if (hit !== undefined && Date.now() - hit.at < this.ttlMs) return hit.p as Promise<T>
+    const p = f().catch((e) => {
+      this.timed.delete(key) // a failed call must not poison the window
+      throw e
+    })
+    this.timed.set(key, { at: Date.now(), p })
+    return p
+  }
+  tip(): Promise<number | undefined> {
+    return this.within('tip', () => this.inner.tip())
+  }
+  /** deliberately NOT cached — header reads are the divergence-detection
+   *  substrate: refreshHeader + the admit linkage walk re-ask the source so
+   *  a stale answer can't masquerade as a chain split (mainnet.ts documents
+   *  "never cached" at this seam). Same-height repeats are already served by
+   *  the tracker's reorg-aware cache one layer up. */
+  header(height: number): Promise<BlockHeader | undefined> {
+    return this.inner.header(height)
+  }
+  txJson(txid: string): Promise<IndexTx | undefined> {
+    return this.within(`j:${txid}`, () => this.inner.txJson(txid))
+  }
+  txHex(txid: string): Promise<string | undefined> {
+    const hit = this.hex.get(txid)
+    if (hit !== undefined) return hit
+    // hits pin forever (immutable bytes); misses ride the short TTL so an
+    // arriving tx is seen on the next window
+    const live = this.within(`x:${txid}`, () => this.inner.txHex(txid))
+    const pinned = live.then((h) => (h === undefined ? undefined : h))
+    void pinned.then((h) => {
+      if (h !== undefined) this.hex.set(txid, Promise.resolve(h))
+    })
+    return pinned
+  }
+  proof(txid: string): Promise<IndexProof | undefined> {
+    return this.within(`p:${txid}`, () => this.inner.proof(txid))
+  }
+  utxos(address: string): Promise<IndexUtxo[] | undefined> {
+    return this.within(`u:${address}`, () => this.inner.utxos(address))
+  }
 }
 
 // --- shared plumbing ----------------------------------------------------------

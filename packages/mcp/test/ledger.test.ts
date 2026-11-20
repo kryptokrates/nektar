@@ -7,7 +7,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AutomationStore } from '@nektar/automation'
-import { wrapBroadcast, leasePredicate, TransactionWatcher } from '@nektar/automation'
+import { wrapBroadcast, leasePredicate, TransactionWatcher, Dispatcher, wireTx } from '@nektar/automation'
 import { NektarMemory } from '../src/memory.js'
 
 async function open() {
@@ -27,7 +27,12 @@ test('ledger: every owner broadcast is recorded with bytes before the outcome is
   // mem was constructed without a wrapped chain, so this is the owner-tool
   // control: nothing recorded yet. Now wrap and spend again.
   assert.equal((await store.walletTxs(['submitted'])).length, 0)
-  chain.broadcast = wrapBroadcast(store, chain.broadcast.bind(chain))
+  // the emit must land on a wired dispatcher — the ambient executor is the
+  // restate ingress, which would route this tx observe off the test's store
+  // (and its http socket would hold the process open past teardown)
+  const ex = new Dispatcher()
+  wireTx(ex, { store, fx: {}, log: () => {} })
+  chain.broadcast = wrapBroadcast(store, chain.broadcast.bind(chain), ex)
   const r2 = await mem.sendSats({ amount: 500, address: PrivateKey.fromRandom().toPublicKey().toAddress([0x6f]) })
   const rec = await store.walletTx({ txid: r2.txid })
   assert.ok(rec, 'owner spend landed in the ledger')
@@ -89,7 +94,9 @@ test('ledger: EF relay with sparse parent outputs — bookkeeping must not veto 
   stub.outputs = [null as any, null as any]
   tx.inputs[0].sourceTransaction = stub as any
   const inner = async () => ({ status: 'success' as const, txid: tx.id('hex'), description: 'ok' })
-  const wrapped = wrapBroadcast(store, inner)
+  const ex2 = new Dispatcher()
+  wireTx(ex2, { store, fx: {}, log: () => {} })
+  const wrapped = wrapBroadcast(store, inner, ex2)
   const r = await wrapped(tx)
   assert.equal(r.status, 'success', 'the broadcast result reaches the caller even though nothing was recordable')
   await kx.destroy()

@@ -418,22 +418,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // a phase that never settles parks EVERY later pass behind `running` —
   // bound each leg so the worst case is a logged timeout, not a silent
   // wedge (observed live: an unbounded leg froze the whole suite). The
-  // leg's deadline publishes on rt.activeSignal — inner IO that merges it
-  // dies with the leg (or at the successor leg's bound), instead of the
-  // abandoned promise finishing inside the next pass's world
+  // leg's deadline is ambient — deadline() runs work inside the ALS
+  // context, so inner IO merges it via ioSignal/nap and dies with the leg
+  // (or at the successor leg's bound) instead of the abandoned promise
+  // finishing inside the next pass's world
   const bound = async <T>(name: string, work: (signal: AbortSignal) => Promise<T>, ms = WAITS.dealsBound.ms): Promise<T | undefined> => {
-    let leg: AbortSignal | undefined
-    const r = await deadline(
-      (s) => {
-        leg = s
-        rt.activeSignal = s
-        return work(s)
-      },
-      ms,
-      { signal: rt.signal }
-    ).finally(() => {
-      if (rt.activeSignal === leg) rt.activeSignal = undefined
-    })
+    const r = await deadline(work, ms, { signal: rt.signal })
     if (r.outcome === 'settled') return r.value
     if (r.outcome === 'timeout') log(`automation: ${name} exceeded ${ms}ms — abandoning leg`)
     return undefined

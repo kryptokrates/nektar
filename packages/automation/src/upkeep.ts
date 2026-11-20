@@ -283,21 +283,10 @@ export function openUpkeep(rt: Rt): void {
   const bound = async <T>(work: (signal: AbortSignal) => Promise<T>, ms = WAITS.upkeepBound.ms): Promise<T | undefined> => {
     // a leg that never settles parks EVERY later upkeep on upkeepRun — a
     // logged abandon frees the single-flight; the section name tells us
-    // which call site swallowed the wait. rt.activeSignal carries the
-    // leg's deadline to inner IO so the abandoned pass's awaited fetches
-    // die at the SUCCESSOR's bound instead of double-running phases
-    let leg: AbortSignal | undefined
-    const r = await deadline(
-      (s) => {
-        leg = s
-        rt.activeSignal = s
-        return work(s)
-      },
-      ms,
-      { signal: rt.signal }
-    ).finally(() => {
-      if (rt.activeSignal === leg) rt.activeSignal = undefined
-    })
+    // which call site swallowed the wait. The leg's deadline is ambient —
+    // inner IO merging ioSignal/nap dies at the SUCCESSOR's bound instead
+    // of double-running phases
+    const r = await deadline(work, ms, { signal: rt.signal })
     if (r.outcome === 'settled') return r.value
     if (r.outcome === 'timeout') log(`automation: upkeep(${upkeepPhase}) exceeded ${ms}ms — abandoning`)
     return undefined

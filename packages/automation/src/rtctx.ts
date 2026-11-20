@@ -189,7 +189,6 @@ export interface Rt {
    *  leg that outlives its bound loses its awaited IO at the SUCCESSOR's
    *  deadline instead of lingering: one operation budget shared inward,
    *  not nested fresh bounds that sum. */
-  activeSignal?: AbortSignal
   /** the one timer wheel — every recurring job registers a name + ceiling
    *  here instead of owning a private interval (Stage 6) */
   scheduler?: import('./scheduler.js').Scheduler

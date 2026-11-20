@@ -351,4 +351,9 @@ test('the leg context is ambient — spawned work detaches, manual threading is 
   assert.match(sched, /detached\(\(\) => e\.job\.run\(\)\)/, 'timer-fired jobs run detached — a wheel armed inside a leg cannot leak it')
   const outbox = read(join(srcDir, 'outbox.ts'))
   assert.match(outbox, /detached\(\(\) =>\s*\n?\s*engine\s*\n?\s*\.pumpOutbox/, 'the pump spawn detaches — outboxReady fires mid-leg inside tick')
+  // the threaded field the ALS seam replaced is GONE — presence means a
+  // regression to manual threading (a leg's inner IO can forget the merge)
+  for (const name of ['runtime.ts', 'upkeep.ts', 'rtctx.ts']) {
+    assert.doesNotMatch(read(join(srcDir, name)), /activeSignal/, `${name}: the published-field era is over — the leg is ambient, there is nothing to thread`)
+  }
 })

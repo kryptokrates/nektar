@@ -33,11 +33,23 @@ test('store post-commit hooks fire detached — a workReady spawn survives the l
   t.after(() => kx.destroy())
   let ambientInHook: AbortSignal | undefined | 'unset' = 'unset'
   let spawnSettled = false
+  // detached dispatch is ASYNC by design — await the hook/spawn landing
+  // instead of racing it (a fixed sleep flakes under suite CPU contention)
+  let hookFired!: () => void
+  let spawnDone!: () => void
+  const fired = new Promise<void>((r) => {
+    hookFired = r
+  })
+  const settled = new Promise<void>((r) => {
+    spawnDone = r
+  })
   store.workReady = () => {
     ambientInHook = currentSignal()
+    hookFired()
     // what the runtime's hook does: launch a pass — it must outlive the leg
     void nap(30).then(() => {
       spawnSettled = true
+      spawnDone()
     })
   }
   const r = await deadline(async () => {
@@ -46,19 +58,25 @@ test('store post-commit hooks fire detached — a workReady spawn survives the l
     return 'never'
   }, 25)
   assert.deepEqual(r, { outcome: 'timeout' })
+  assert.equal((await deadline(() => fired, 5_000)).outcome, 'settled', 'the post-commit hook fired')
   assert.equal(ambientInHook, undefined, "the hook ran outside the committer's leg — a commit inside a leg must not hand its deadline to spawned work")
-  await nap(50)
-  assert.equal(spawnSettled, true, 'the spawned pass completed after the spawning leg died')
+  assert.equal((await deadline(() => settled, 5_000)).outcome, 'settled', 'the spawned pass completed after the spawning leg died')
+  assert.equal(spawnSettled, true)
 })
 
 test('scheduler job dispatch is detached — a wheel armed inside a leg cannot leak its context', async () => {
   const sched = new Scheduler()
   let ambientInJob: AbortSignal | undefined | 'unset' = 'unset'
+  let jobDone!: () => void
+  const ran = new Promise<void>((r) => {
+    jobDone = r
+  })
   sched.add({
     name: 'j',
     ceilingMs: () => 60_000,
     run: () => {
       ambientInJob = currentSignal()
+      jobDone()
     }
   })
   const r = await deadline(async () => {
@@ -67,7 +85,7 @@ test('scheduler job dispatch is detached — a wheel armed inside a leg cannot l
     return 'never'
   }, 30)
   assert.deepEqual(r, { outcome: 'timeout' })
-  await nap(20) // the wheel's 0ms fire already landed while the leg ran
+  assert.equal((await deadline(() => ran, 5_000)).outcome, 'settled', 'the wheel job dispatched')
   assert.equal(ambientInJob, undefined, 'timer-fired work is never the armer’s child — jobs run detached')
   await sched.stop()
 })

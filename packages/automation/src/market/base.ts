@@ -92,7 +92,7 @@ export abstract class MarketBase {
    *  is the intent and 'already known' answers settle rows that actually
    *  made the wire. Queued behind in-flight work, never racing a live deal */
   resubmitPending(): Promise<Array<{ actionId: string; state: import('../store.js').TxState }>> {
-    return this.run(async () => (await this.wallet?.resubmitPending()) ?? [])
+    return this.run(async () => (await this.wallet?.resubmitPending()) ?? [], 'resubmit')
   }
 
   /** a pushed transaction status (broadcaster callback / node event) — only a
@@ -216,7 +216,7 @@ export abstract class MarketBase {
         })
       }
       return { wantId: (operation.data.want as SignedWant).want.wantId, operationId: operation.operationId }
-    })
+    }, 'publishWant')
   }
 
   status(operationId: string): Promise<{ operation: Operation; events: Awaited<ReturnType<AutomationStore['events']>> } | undefined> {
@@ -226,7 +226,7 @@ export abstract class MarketBase {
       const data = { ...operation.data }
       if (operation.role === 'seller' && data.offer) data.offer = { ...data.offer, wrapped: '[sealed]' }
       return { operation: { ...operation, data }, events: await this.d.store.events(operationId) }
-    })
+    }, 'status')
   }
 
   markUsefulness(operationId: string, useful: boolean, evidence: unknown): Promise<void> {
@@ -238,7 +238,7 @@ export abstract class MarketBase {
         evidence,
         data: { usefulness: { useful, evidence } }
       })
-    })
+    }, 'markUsefulness')
   }
 
   watchBond(
@@ -300,7 +300,7 @@ export abstract class MarketBase {
         dueHeight: deadline
       })
       return { operationId: operation.operationId, deadline }
-    })
+    }, 'watchBond')
   }
 
   protected async seize(op: Operation): Promise<void> {

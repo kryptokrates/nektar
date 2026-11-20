@@ -183,6 +183,17 @@ const GATES = [
     // deadParents is the append seam — push() adds evidence; assignments
     // still gated.
     allow: ['packages/chain/src/funds.ts', 'packages/mcp/src/custody.ts', 'packages/mcp/src/runtime.ts', 'packages/automation/test/toolbox-funder.test.ts']
+  },
+  {
+    name: 'unstamped-log-sink',
+    re: /process\.(?:stderr|stdout)\.write|console\.(?:log|warn|error|info|debug|trace)\s*\(/g,
+    scope: /packages\/(?!e2e\/|watcher\/)[^/]+\/src\//,
+    // every diagnostic line goes through mkLog()/dbg()/writeErr() in
+    // @nektar/core/src/log.ts — ISO-8601 stamped at the sink, never ad-hoc.
+    // log.ts is the sink itself; init.ts is an interactive setup CLI whose
+    // console output IS the interface, not daemon logs. (Scope already
+    // excludes e2e/watcher harness tiers and test files are outside src/.)
+    allow: ['packages/core/src/log.ts', 'packages/mcp/src/init.ts']
   }
 ]
 

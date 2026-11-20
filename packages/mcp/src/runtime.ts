@@ -24,7 +24,7 @@ import {
   type TxStatusEvent
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
-import { nektarEnv, nektarEnvNum } from '@nektar/core'
+import { nektarEnv, nektarEnvNum, mkLog } from '@nektar/core'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
 import { passphraseFromEnv, KeystoreError } from './keystore.js'
@@ -196,6 +196,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     throw new Error('openRuntime: injected funds need an injected chain port — custody and chain answers must come from the same world')
   const injected = ports.funds !== undefined
   const net = ports.chain?.network ?? cfg.network
+  const nlog = mkLog(`nektar ${net}`)
   const live = net === 'main' || net === 'testnet'
   const mc = cfg.main
   const bondEpoch = nektarEnv('NEKTAR_BOND_EPOCH')
@@ -273,7 +274,8 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
           held: async (txid) => await memRef?.fetchTx(txid),
           note: (ev) => eventsRef?.note(ev),
           dataDir: cfg.dataDir,
-          log: (s) => process.stderr.write(s)
+          // the port's log lines carry their own `nektar <net>:` tag — bare stamp
+          log: mkLog('')
         }))
   // records db + tx store open before custody — SqlFunds binds the `utxos`
   // table on the same knex and rehydrates coins from tx_store
@@ -294,7 +296,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   // funding outs land in the parent graph like every other utxo
   if (!injected && port.network === 'regtest') {
     await regtestSeed({ rc: cfg.regtest!, port, funds: custody.funds, dataDir: cfg.dataDir })
-    process.stderr.write(`nektar regtest: coin book sqlite utxos — ${custody.funds.utxos?.length ?? 0} funding utxo(s)\n`)
+    nlog(`coin book sqlite utxos — ${custody.funds.utxos?.length ?? 0} funding utxo(s)`)
   }
   for (const u of await custody.funds.outs()) txStore.put(u.tx)
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
@@ -322,13 +324,13 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       }
       await custody.funds.died(tx)
     } catch (e) {
-      process.stderr.write(`nektar ${net}: ${tag} tx ${w.txid}: died() failed: ${(e as Error).message}\n`)
+      nlog(`${tag} tx ${w.txid}: died() failed: ${(e as Error).message}`)
     }
     await ledger.releaseLeases(w.actionId).catch(() => undefined)
     await (fundingRefresh?.() ?? custody.funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
   }
   events.on('abandoned', ({ txid, tip, seenAtHeight }) => {
-    process.stderr.write(`nektar ${net}: tx ${txid} not mined after abandon horizon — abandoned (tip ${tip}, watched since ${seenAtHeight})\n`)
+    nlog(`tx ${txid} not mined after abandon horizon — abandoned (tip ${tip}, watched since ${seenAtHeight})`)
     // repair-by-name: an ABSENCE verdict — mark 'abandoned' (never
     // 'conflicted': that label means a proven competing spend) — so the
     // trailing watch still catches a late landing, and run the custody
@@ -355,7 +357,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
         }
         memRef?.events.emit('txAbandoned', { txid, tip, seenAtHeight })
       } catch (e) {
-        process.stderr.write(`nektar ${net}: abandoned ${txid} mark failed: ${(e as Error).message}\n`)
+        nlog(`abandoned ${txid} mark failed: ${(e as Error).message}`)
       }
     })()
   })
@@ -478,7 +480,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     // idempotent but the log, the metric and the emit must not double-count
     if (from === lastReorgFrom) return
     lastReorgFrom = from
-    process.stderr.write(`nektar ${net}: header reorg — ${removed.length} stale header(s) from height ${from}, new tip ${newTip.height}\n`)
+    nlog(`header reorg — ${removed.length} stale header(s) from height ${from}, new tip ${newTip.height}`)
     mem.metrics.inc('nektar_reorgs_total', {}, 1, 'header-chain reorgs observed')
     for (const txid of txStore.clearProofsFrom(from)) events.watch(txid)
     mem.events.emit('reorg', { from, tip: newTip.height })
@@ -598,7 +600,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
               i.sourceTransaction = await resolveTx(i.sourceTXID)
             }
             const r = await chain.broadcast(tx)
-            if (r.status === 'success') process.stderr.write(`nektar ${net}: re-aired ${tx.id('hex')} — wire gap self-healed\n`)
+            if (r.status === 'success') nlog(`re-aired ${tx.id('hex')} — wire gap self-healed`)
           }
           const healWalk = async (tx: Transaction): Promise<void> => {
             for (const i of tx.inputs) {
@@ -638,11 +640,11 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
           proofPullAt = unproven.length > 0 ? (proofPullAt + 8) % unproven.length : 0
           for (const txid of pull) await mem.fetchTx(txid)
         }
-        if (waiting.length) process.stderr.write(`nektar confirmer(${net}): waiting=${waiting.length} (watched=${events.pending})\n`)
+        if (waiting.length) nlog(`confirmer: waiting=${waiting.length} (watched=${events.pending})`)
         await topUp?.()
         persistKeys()
       } catch (e) {
-        process.stderr.write(`nektar confirmer(${net}): ${(e as Error).message}\n`)
+        nlog(`confirmer: ${(e as Error).message}`)
       } finally {
         busy = false
         inflight = undefined
@@ -689,7 +691,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       .tick()
       // the only bare catch in the sweep chain: a failing tick stalls all
       // durable settlement — log it; the next event retries regardless
-      .catch((e) => process.stderr.write(`nektar ${net}: ledger watcher: ${(e as Error).message}\n`))
+      .catch((e) => nlog(`ledger watcher: ${(e as Error).message}`))
       .finally(() => {
         watching = false
         pruneJournal()
@@ -720,7 +722,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
           ),
           new Promise<'timeout'>((res) => setTimeout(() => res('timeout'), ms))
         ])
-        if (r === 'timeout') process.stderr.write(`nektar ${net}: close: ${what} exceeded ${ms}ms — proceeding\n`)
+        if (r === 'timeout') nlog(`close: ${what} exceeded ${ms}ms — proceeding`)
       }
       await bounded(inflight ?? Promise.resolve(), 15_000, 'inflight confirmer pass')
       await releaseLock()

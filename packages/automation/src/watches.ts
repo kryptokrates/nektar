@@ -44,6 +44,7 @@ export function openWatches(rt: Rt): void {
         backoff = WAITS.watchBackoffMin.ms
         if (j.changed === true && !rt.stopped) {
           rt.hotUntil = Date.now() + WAITS.hotWindow.ms
+          rt.countWake('watch')
           void rt.deals().catch((e) => log(`automation: watch: ${(e as Error).message}`))
         }
       } catch {

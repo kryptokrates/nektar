@@ -4,6 +4,7 @@ import { classifyDeliveryError, type InboxItem, type Operation, type OutboxItem 
 import { MarketBase } from './base.js'
 import { NONTERMINAL } from './types.js'
 import { WAITS } from '../waits.js'
+import { deadline, stable01 } from '@nektar/core'
 import type { MarketMessage } from './types.js'
 
 /** pump fan-out: deliveries are independent and off the engine mutex, so a
@@ -35,8 +36,10 @@ export abstract class IngressOps extends MarketBase {
   protected abstract advance(op: Operation, height: number): Promise<void>
 
   /** in-run resubmit cadence — boot replay is a start-up seam, not the
-   *  only owner of a dropped ledger write */
+   *  only owner of a dropped ledger write. stable01(me) spreads each
+   *  agent's cadence deterministically — restarts don't phase-align */
   private lastResubmitAt = -Infinity
+  private resubmitEvery = -1
 
   tick(): Promise<void> {
     return this.run(async () => {
@@ -72,7 +75,8 @@ export abstract class IngressOps extends MarketBase {
       // intents, not just boot leftovers — a dropped ledger write between
       // broadcast and mark must not wedge the inputs until the next restart.
       // Boot replay covers startup; this is the upkeep cadence.
-      if (this.now() - this.lastResubmitAt >= WAITS.resubmitCadence.ms) {
+      if (this.resubmitEvery < 0) this.resubmitEvery = WAITS.resubmitCadence.ms + Math.floor(stable01(this.me) * WAITS.resubmitJitter.ms)
+      if (this.now() - this.lastResubmitAt >= this.resubmitEvery) {
         this.lastResubmitAt = this.now()
         // direct wallet call — resubmitPending() queues on this.chain, which
         // tick() already holds; the wrapper would deadlock on itself
@@ -153,7 +157,7 @@ export abstract class IngressOps extends MarketBase {
       // flushes inline — tests drive tick() directly and rely on that
       if (this.d.store.outboxReady !== undefined) this.d.store.outboxReady()
       else await this.pumpOutbox()
-    })
+    }, 'tick')
   }
 
   async pumpOutbox(): Promise<void> {
@@ -216,19 +220,9 @@ export abstract class IngressOps extends MarketBase {
    *  recovered host pulls it forward with every other waiting row). The
    *  late-settling deliver's outcome is swallowed: the row already moved on. */
   private async deliverBounded(item: OutboxItem): Promise<void> {
-    const d = this.deliver(item)
-    d.catch(() => {})
-    let t: ReturnType<typeof setTimeout> | undefined
-    try {
-      await Promise.race([
-        d,
-        new Promise<never>((_res, rej) => {
-          t = setTimeout(() => rej(new Error(`deliver timed out (bound ${this.o.deliverBoundMs}ms)`)), this.o.deliverBoundMs)
-        })
-      ])
-    } finally {
-      clearTimeout(t)
-    }
+    const r = await deadline(async () => await this.deliver(item), this.o.deliverBoundMs)
+    if (r.outcome === 'timeout') throw new Error(`deliver timed out (bound ${this.o.deliverBoundMs}ms)`)
+    if (r.outcome === 'aborted') throw new Error('deliver aborted')
   }
 
   /** the wire a market message can lose without changing its meaning — every

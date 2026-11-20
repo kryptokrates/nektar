@@ -19,7 +19,7 @@
 //
 // Every check returns {check, pass, detail, fix} — doctor's shape — and the
 // report's verdict is deterministic: pass = every check green.
-import { nektarEnv } from '@nektar/core'
+import { nektarEnv, deadline } from '@nektar/core'
 import { WAITS } from './waits.js'
 import { Transaction, P2PKH, PrivateKey, UnlockingScript } from '@bsv/sdk'
 import { mkdirSync, readFileSync, writeFileSync, accessSync, constants } from 'node:fs'
@@ -74,8 +74,11 @@ export const WATCHDOG_CHECKS = CHEAP
 
 const ZERO = '00'.repeat(32)
 
-const bounded = async <T>(work: Promise<T>, ms: number, what: string): Promise<T> =>
-  await Promise.race([work, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${what} timed out (> ${ms}ms)`)), ms))])
+const bounded = async <T>(work: Promise<T>, ms: number, what: string): Promise<T> => {
+  const r = await deadline(async () => await work, ms)
+  if (r.outcome === 'settled') return r.value
+  throw new Error(`${what} timed out (> ${ms}ms)`)
+}
 
 export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport> {
   const { mem, store, cfg } = deps

@@ -11,7 +11,7 @@
 //   NEKTAR_REGTEST_WIF                                  — treasury key; without
 //     it a generated key is persisted to .state/testkit-treasury.json and the
 //     first stackFunder() generates ~120 blocks to it for mature coinbases
-import { nektarEnv, setNektarEnv } from '@nektar/core'
+import { nektarEnv, setNektarEnv, mkLog } from '@nektar/core'
 import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
 import { MemoryFunds, listFundsStore, type ListFundsStore } from './funds.js'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync, appendFileSync } from 'node:fs'
@@ -89,9 +89,7 @@ let rpcCounter = 0
  *  only prove once something mines, and tests often broadcast without mining. */
 const WATCH_TTL_MS = 60_000
 const dbgTimings = (): boolean => nektarEnv('NEKTAR_DEBUG_TIMING') === '1'
-const dbgLog = (m: string): void => {
-  process.stderr.write(`[testkit ${process.pid}] ${m}\n`)
-}
+const dbgLog = mkLog(`[testkit ${process.pid}]`)
 const dbg = { mineMs: 0, mineN: 0 }
 function dbgMine(ms: number): void {
   if (!dbgTimings()) return

@@ -50,8 +50,14 @@ export const WAITS = {
   drainPoll: { ms: 25, class: 'mechanism', durable: false, wake: 'flag clear', why: 'the bound (stopDrain) owns the exit; the tick is only a re-check interval inside it' },
   /** report a pass slower than this — diagnostic bound, not a wait */
   passReport: { ms: 2_000, class: 'budget', durable: false, wake: 'floor-only' },
+  /** wakeStats summary-log cadence — the runtime measurement of which
+   *  source (push vs floor) drove each pass */
+  wakeReport: { ms: 60_000, class: 'budget', durable: false, wake: 'floor-only' },
   /** the serialized-work mutex's held-too-long threshold (base.ts) */
   runHold: { ms: 60_000, class: 'budget', durable: false, wake: 'link settle', why: 'detect-only by design: custody serialization must not drop a wedged link' },
+  /** one whole deals pass (poll+tick+wtx share it) — a leg outliving the
+   *  shared budget abandons so a hung poll can't eat 3× leg bound */
+  passBound: { ms: 180_000, class: 'budget', durable: false, wake: 'deadline-abort' },
 
   // ── push-path evidence windows ──────────────────────────────────────
   /** how long recent work keeps the deals loop hot — evidence TTL, and
@@ -73,6 +79,15 @@ export const WAITS = {
   /** in-run resubmit cadence (ingress tick) — prepared/unknown rows are
    *  re-driven at most this often */
   resubmitCadence: { ms: 60_000, class: 'mechanism', durable: false, wake: 'tick-pass', why: 'the cadence IS the heal mechanism — a rate limit on replay writes, not a wake proxy' },
+  /** deterministic per-agent spread on the resubmit cadence — restarts
+   *  would otherwise phase-align every agent's heal pass to one tick */
+  resubmitJitter: { ms: 30_000, class: 'backoff', durable: false, wake: 'tick-pass' },
+  /** terminal-row reconcile probe cooldown (base.ts reconcileGate) —
+   *  a rate limit on indexer probes, not a wake proxy; persists via
+   *  markReconciled so restarts don't reset the probe rate */
+  reconcileGate: { ms: 30_000, class: 'mechanism', durable: true, wake: 'gate expiry', why: 'the cooldown IS the rate limit — terminal ops re-probe the indexer at most this often; faster would hammer the host for a row that only a reorg revives' },
+  /** deterministic per-op spread on the reconcile cooldown (stable01) */
+  reconcileJitter: { ms: 30_000, class: 'backoff', durable: true, wake: 'gate expiry' },
 
   // ── caches / marks (evidence TTLs) ──────────────────────────────────
   /** txFacts throttle for the mint-gate heal/reap read — ChainEvents
@@ -118,6 +133,8 @@ export const WAITS = {
    *  bound must exceed it or the long-poll becomes an error loop */
   watchFetchIo: { ms: 35_000, class: 'io', durable: false, wake: 'shim answer' },
   sandboxIo: { ms: 15_000, class: 'io', durable: false, wake: 'floor-only' },
+  /** toolbox WalletServices regtest RPC calls (header/height reads) */
+  rpcIo: { ms: 15_000, class: 'io', durable: false, wake: 'floor-only' },
   preflightHostIo: { ms: 5_000, class: 'io', durable: false, wake: 'floor-only' },
   preflightChainIo: { ms: 3_000, class: 'io', durable: false, wake: 'floor-only' },
   preflightStoreIo: { ms: 10_000, class: 'io', durable: false, wake: 'floor-only' }

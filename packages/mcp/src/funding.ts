@@ -9,7 +9,7 @@
 import { join } from 'node:path'
 import { existsSync, renameSync } from 'node:fs'
 import { PrivateKey, Transaction, WalletClient, ProtoWallet, PublicKey as SdkPublicKey } from '@bsv/sdk'
-import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvFlag, nektarEnvNum, type SignerWallet } from '@nektar/core'
+import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvFlag, nektarEnvNum, mkLog, writeErr, type LogLine, type SignerWallet } from '@nektar/core'
 import {
   bootstrapReserve,
   regtestRpc,
@@ -26,7 +26,7 @@ import { wireP2p, setupFeeVault } from './setup.js'
 import { acquireLock, keyLockFile, loadFeeKey } from './rtsupport.js'
 import { importable } from './txops.js'
 
-const log = (net: string) => (s: string) => process.stderr.write(`nektar ${net}: ${s}\n`)
+const log = (net: string): LogLine => mkLog(`nektar ${net}`)
 
 /** the coin book a custody path hands the runtime — `Funds` plus the fields
  *  the concrete impls happen to expose (a real wallet path always has all
@@ -94,7 +94,7 @@ export async function openCustody(
   let pkhHex: string
   let fundKey: PrivateKey | undefined
   if (externalWallet) {
-    if (mc.fundWif !== undefined) process.stderr.write(`nektar ${net}: NEKTAR_FUND_WIF ignored under NEKTAR_WALLET=client — the external wallet signs\n`)
+    if (mc.fundWif !== undefined) log(net)('NEKTAR_FUND_WIF ignored under NEKTAR_WALLET=client — the external wallet signs')
     clientWallet = new WalletClient('auto', 'nektar')
     // the reserve funds a stable self-derived wallet keyID (nektar-fund) —
     // createSignature under the same derivation produces the matching sig, so
@@ -105,7 +105,7 @@ export async function openCustody(
     const pk = SdkPublicKey.fromString(await fund.pubKeyHex())
     fundAddress = pk.toAddress(testNet ? [0x6f] : undefined)
     pkhHex = Buffer.from(pk.toHash()).toString('hex')
-    process.stderr.write(`nektar ${net}: NEKTAR_WALLET=client — signing via external wallet substrate (derived funding address ${fundAddress})\n`)
+    log(net)(`NEKTAR_WALLET=client — signing via external wallet substrate (derived funding address ${fundAddress})`)
   } else {
     fundKey = loadFeeKey(cfg.dataDir, mc.fundWif, pass, net === 'main')
     fundAddress = fundKey.toPublicKey().toAddress(testNet ? [0x6f] : undefined)
@@ -116,12 +116,12 @@ export async function openCustody(
   // co-run set NEKTAR_ALLOW_SHARED_KEY=1 (warned on stderr).
   let releaseKeyLock: (() => Promise<void>) | undefined
   if (nektarEnvFlag('NEKTAR_ALLOW_SHARED_KEY')) {
-    process.stderr.write(`nektar ${net}: NEKTAR_ALLOW_SHARED_KEY=1 — fund-key lock skipped; two processes may spend this reserve\n`)
+    log(net)('NEKTAR_ALLOW_SHARED_KEY=1 — fund-key lock skipped; two processes may spend this reserve')
   } else {
     releaseKeyLock = await acquireLock(keyLockFile(pkhHex), `fund key ${fundAddress}`)
   }
-  process.stderr.write(
-    `nektar ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)\n`
+  log(net)(
+    `operator fee key ${fundAddress} — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)`
   )
   // the one coin book for both custody modes — signing differs (held key via
   // ProtoWallet, external via WalletClient), coin state does not
@@ -130,7 +130,7 @@ export async function openCustody(
   if (!externalWallet && fundKey !== undefined) {
     await sweepBasket({ tb, dataDir: cfg.dataDir, chain: testNet ? 'test' : 'main', port, funds, log: log(net) })
   }
-  process.stderr.write(`nektar ${net}: coin book sqlite utxos (${funds.utxos.length} funding utxo(s), custody ${externalWallet ? 'client' : 'held key'})\n`)
+  log(net)(`coin book sqlite utxos (${funds.utxos.length} funding utxo(s), custody ${externalWallet ? 'client' : 'held key'})`)
   return { funds, wallet, fundKey, clientWallet, fundAddress, pkhHex, releaseKeyLock }
 }
 
@@ -323,7 +323,8 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
     pkhHex,
     reserve: funds,
     addIfNew,
-    log: (s) => process.stderr.write(s),
+    // wireP2p emits its own `nektar p2p:` tag — bare stamp at the sink
+    log: mkLog(''),
     spendStatus: (txid, vout) => port.spendStatus?.(txid, vout) ?? Promise.resolve('unknown' as const)
   })
   // NEKTAR_FEE_VAULT: anchor funding minted through the fee-vault covenant —
@@ -341,7 +342,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
       broadcast: deps.broadcast,
       currentHeight: async () => await port.tracker.currentHeight(),
       net,
-      log: (s) => process.stderr.write(s)
+      log: mkLog('')
     })
     funds.takeOverride = async (purpose) => (purpose === 'publish' ? await vaultTake() : undefined)
   }
@@ -381,7 +382,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
     if (funds.utxos.length > 0 || nektarEnv('NEKTAR_WAIT_FUNDING') !== '1') return
     try {
       const QR = await import('qrcode')
-      process.stderr.write('\n' + (await QR.toString(fundAddress, { type: 'terminal', small: true })) + '\n')
+      writeErr('\n' + (await QR.toString(fundAddress, { type: 'terminal', small: true })) + '\n')
     } catch {
       /* QR optional — the address prints either way */
     }

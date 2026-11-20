@@ -5,7 +5,7 @@
 // Funds impl is the custody view the runtime chose — file-backed reserve,
 // toolbox wallet, or the test-tier adapter.
 import { Transaction, LockingScript, MerklePath, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
-import { unlockP2PKH, signerAddress, type SignerLike } from '@nektar/core'
+import { unlockP2PKH, signerAddress, spread, type SignerLike } from '@nektar/core'
 import { hintRejected, hintSeen, type FundingOut, type Funds, type FundsPurpose } from '@nektar/chain'
 
 export interface CustodyOpsDeps {
@@ -99,15 +99,16 @@ export class CustodyOps {
   }
 
   /** Bounded submit confirmation, not a wait loop: up to 3 reads (now,
-   *  +700ms, +1500ms). A rejection-family answer is returned immediately, a
+   *  +~700ms, +~1500ms — spread() jitters so mass-submits don't probe in
+   *  phase). A rejection-family answer is returned immediately, a
    *  seen-family answer settles at once, anything else resolves after the
    *  third read. Without a facts dep the check is a no-op. */
   private async accepted(txid: string): Promise<string | undefined> {
     const facts = this.deps.facts
     if (facts === undefined) return undefined
     for (let i = 0; i < 3; i++) {
-      if (i === 1) await new Promise((r) => setTimeout(r, 700))
-      if (i === 2) await new Promise((r) => setTimeout(r, 1500))
+      if (i === 1) await new Promise((r) => setTimeout(r, spread(700)))
+      if (i === 2) await new Promise((r) => setTimeout(r, spread(1500)))
       let f: import('@nektar/chain').TxFacts | undefined
       try {
         f = await facts(txid)

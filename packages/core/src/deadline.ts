@@ -41,6 +41,9 @@ export const deadline = async <T>(work: (signal: AbortSignal) => Promise<T>, ms:
   })
   const r = await Promise.race([settled, fired])
   if (r !== 'fired') return r
+  // the abandoned leg lives on — swallow its late rejection: the caller
+  // already moved on, and an orphaned throw must not crash the process
+  void settled.catch(() => undefined)
   return own.aborted ? { outcome: 'timeout' } : { outcome: 'aborted' }
 }
 

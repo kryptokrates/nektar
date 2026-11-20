@@ -193,6 +193,13 @@ export interface Rt {
   /** the one timer wheel — every recurring job registers a name + ceiling
    *  here instead of owning a private interval (Stage 6) */
   scheduler?: import('./scheduler.js').Scheduler
+  /** pass counts by wake source (commit / pushed-verdict / height / ceiling
+   *  …) — the runtime witness for 'events drive': a source that never
+   *  counts is a dead push path degrading silently to floor speed */
+  wakeStats: Map<string, number>
+  /** bump a wakeStats source — every push path that drives a pass/cycle
+   *  tags itself so floor-vs-push is a number, not an assertion */
+  countWake: (src: string) => void
   inflight: Set<Promise<void>>
   downNow: Set<string>
   hotUntil: number

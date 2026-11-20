@@ -2,7 +2,7 @@
 // discovery, merkle paths) + the BSV Broadcaster client. NO spend happens
 // here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
 // in the runtime before any tx reaches it.
-import { nektarEnv } from '@nektar/core'
+import { nektarEnv, spread } from '@nektar/core'
 import { sleep, withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
@@ -244,7 +244,9 @@ export function statusStream(
       } catch (e) {
         if (closed) return
         opts.onError?.(e as Error)
-        await sleep(backoff)
+        // spread() on the sleep, not the curve — the doubling stays exact,
+        // the reconnect lands desynchronized across reconnecting agents
+        await sleep(spread(backoff))
         backoff = Math.min(maxB, backoff * 2)
       }
     }

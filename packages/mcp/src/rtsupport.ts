@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, rmSync, statSy
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PrivateKey, Transaction } from '@bsv/sdk'
-import { nektarEnv, nektarEnvNum } from '@nektar/core'
+import { nektarEnv, nektarEnvNum, mkLog } from '@nektar/core'
 import { TxStore, type ChainPort, type Funds, type TxStatusEvent } from '@nektar/chain'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { readKeyFile, writeKeyFile, fundKeyFromMnemonic } from './keystore.js'
@@ -191,6 +191,7 @@ export async function openRecordsDb(dataDir: string) {
  *  first-party refusal) flips the row back to 'confirmed' — those verdicts
  *  are ceilings, not truth. Errors log to stderr, never crash. */
 export function healLedgerOnProof(mem: NektarMemory, ledger: import('@nektar/automation').AutomationStore, tag: string): void {
+  const nlog = mkLog(`nektar ${tag}`)
   mem.onTxProof((txid) => {
     void (async () => {
       try {
@@ -203,10 +204,10 @@ export function healLedgerOnProof(mem: NektarMemory, ledger: import('@nektar/aut
             // commit uneffected and the next watcher sweep replays them
             await emitTxEvent(ledger, w, 'obs.proven', { guard: 'proof', observation: { at: Date.now(), healed: true } }, {})
           } else await ledger.setTxState(w.actionId, 'confirmed', { at: Date.now(), healed: true })
-          process.stderr.write(`nektar ${tag}: ${txid} proved after a terminal verdict — ledger healed to confirmed\n`)
+          nlog(`${txid} proved after a terminal verdict — ledger healed to confirmed`)
         }
       } catch (e) {
-        process.stderr.write(`nektar ${tag}: proof-heal ${txid}: ${(e as Error).message}\n`)
+        nlog(`proof-heal ${txid}: ${(e as Error).message}`)
       }
     })()
   })
@@ -268,6 +269,7 @@ export async function buildRecordsWatcher(d: {
 }): Promise<import('@nektar/automation').TransactionWatcher> {
   const { TransactionWatcher } = await import('@nektar/automation')
   const { ledger, statusOf, port, funds, fundingRefresh, diedFromRow, net } = d
+  const nlog = mkLog(`nektar ${net}`)
   const txFromRow = (w: { rawHex: string; parents: Record<string, string> }): Transaction => {
     const tx = Transaction.fromHex(w.rawHex)
     for (const inp of tx.inputs) {
@@ -298,10 +300,10 @@ export async function buildRecordsWatcher(d: {
         freed++
       }
     } catch (e) {
-      process.stderr.write(`nektar ${net}: expired export ${w.txid}: revive failed: ${(e as Error).message}\n`)
+      nlog(`expired export ${w.txid}: revive failed: ${(e as Error).message}`)
       return
     }
-    process.stderr.write(`nektar ${net}: export ${w.txid} expired unaired — ${freed}/${inputs} input(s) returned to custody\n`)
+    nlog(`export ${w.txid} expired unaired — ${freed}/${inputs} input(s) returned to custody`)
   }
   return new TransactionWatcher(
     ledger,
@@ -332,9 +334,9 @@ export async function buildRecordsWatcher(d: {
           // the refusal let the sats leave anyway — the day ledger must
           // count them or tomorrow's headroom is overstated
           port.guard?.recordAired(tx)
-          process.stderr.write(`nektar ${net}: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked\n`)
+          nlog(`${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
         } catch (e) {
-          process.stderr.write(`nektar ${net}: revived tx ${w.txid}: spent() failed: ${(e as Error).message}\n`)
+          nlog(`revived tx ${w.txid}: spent() failed: ${(e as Error).message}`)
         }
         await (fundingRefresh?.() ?? funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
       },
@@ -350,9 +352,9 @@ export async function buildRecordsWatcher(d: {
         txSpent: async (w) => {
           try {
             await funds.spent(txFromRow(w))
-            process.stderr.write(`nektar ${net}: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked\n`)
+            nlog(`${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
           } catch (e) {
-            process.stderr.write(`nektar ${net}: revived tx ${w.txid}: spent() failed: ${(e as Error).message}\n`)
+            nlog(`revived tx ${w.txid}: spent() failed: ${(e as Error).message}`)
           }
           await (fundingRefresh?.() ?? funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
         },

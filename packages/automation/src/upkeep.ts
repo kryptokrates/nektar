@@ -683,7 +683,7 @@ export function openUpkeep(rt: Rt): void {
     rt.upkeepRun = bound(() => runUpkeep()).finally(() => {
       rt.upkeepRun = undefined
       const ms = Date.now() - t0
-      if (ms > 2_000) log(`automation: upkeep ${ms}ms`)
+      if (ms > WAITS.passReport.ms) log(`automation: upkeep ${ms}ms`)
     })
     await rt.upkeepRun
   }

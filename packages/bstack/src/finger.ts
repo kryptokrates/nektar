@@ -6,7 +6,7 @@
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
 import { PublicKey, Transaction, P2PKH, Hash, Utils, type ChainTracker, type LockingScript } from '@bsv/sdk'
-import { toSigner, unlockP2PKH, signerAddress, nektarEnv, egressAllowed, type SignerLike } from '@nektar/core'
+import { toSigner, unlockP2PKH, signerAddress, egressAllowed, dbg, type SignerLike } from '@nektar/core'
 import {
   mintCarrier,
   fundingLock,
@@ -1027,7 +1027,7 @@ function parseBeef(beef: number[]): Transaction | undefined {
   try {
     return subjectTx(readWire(new Uint8Array(beef)))
   } catch (e) {
-    if (nektarEnv('NEKTAR_DEBUG_PARSEBEEF')) console.error(`parseBeef refused ${beef.length}B: ${(e as Error).message}`)
+    dbg('NEKTAR_DEBUG_PARSEBEEF', `parseBeef refused ${beef.length}B: ${(e as Error).message}`)
     return undefined
   }
 }

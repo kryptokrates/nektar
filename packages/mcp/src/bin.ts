@@ -4,7 +4,7 @@
 //   Streamable HTTP+REST:  NEKTAR_HTTP_PORT=8080 node dist/src/bin.js
 // Backend via NEKTAR_NETWORK=regtest (default, local Teranode stack) | testnet | main
 // (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
-import { nektarEnv, setNektarEnv, marketHostsFromEnv } from '@nektar/core'
+import { nektarEnv, setNektarEnv, marketHostsFromEnv, mkLog } from '@nektar/core'
 import { openRuntime, configFromEnv } from './runtime.js'
 import { serveStdio } from './mcp-server.js'
 import { createHttpApi } from './http.js'
@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from 'node:fs'
 
 // --env <regtest|testnet|main> + optional .env beside cwd → minimal-typing boot.
 // .env lines are applied only where the var isn't already set (shell wins).
+const nlog = mkLog('nektar')
 const argv = process.argv.slice(2)
 const envFlag = argv.includes('--env') ? argv[argv.indexOf('--env') + 1] : undefined
 if (existsSync('.env')) {
@@ -22,7 +23,7 @@ if (existsSync('.env')) {
 }
 if (envFlag) {
   if (!/^(regtest|testnet|main)$/.test(envFlag)) {
-    process.stderr.write(`nektar: --env must be regtest|testnet|main, got "${envFlag}"\n`)
+    nlog(`--env must be regtest|testnet|main, got "${envFlag}"`)
     process.exit(2)
   }
   setNektarEnv('NEKTAR_NETWORK', envFlag)
@@ -69,10 +70,10 @@ if (profile !== undefined) {
   const resolved = PROFILE_ALIASES[profile] ?? profile
   const defs = PROFILES[resolved]
   if (defs === undefined) {
-    process.stderr.write(`nektar: NEKTAR_PROFILE must be one of ${Object.keys(PROFILES).join('|')}, got "${profile}"\n`)
+    nlog(`NEKTAR_PROFILE must be one of ${Object.keys(PROFILES).join('|')}, got "${profile}"`)
     process.exit(2)
   }
-  if (resolved !== profile) process.stderr.write(`nektar: profile "${profile}" → "${resolved}"\n`)
+  if (resolved !== profile) nlog(`profile "${profile}" → "${resolved}"`)
   for (const [k, v] of Object.entries(defs)) if (nektarEnv(k) === undefined) setNektarEnv(k, v)
 }
 const portFlag = argv.includes('--port') ? argv[argv.indexOf('--port') + 1] : undefined
@@ -81,11 +82,11 @@ const hostFlag = argv.includes('--host') ? argv[argv.indexOf('--host') + 1] : un
 if (hostFlag) setNektarEnv('NEKTAR_HTTP_HOST', hostFlag)
 
 const rt = await openRuntime(configFromEnv())
-process.stderr.write(`nektar: network=${rt.network}\n`)
+nlog(`network=${rt.network}`)
 const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
 if (paymentsEnabled()) {
   requireOperatorWallet()
-  process.stderr.write('nektar: payments on\n')
+  nlog('payments on')
 }
 // the effective market-host set — NEKTAR_MARKET_HOSTS when set, else the
 // baked-in seed hosts for this network (the zero-config join's Layer 0)
@@ -109,14 +110,12 @@ if (seedDomains.length > 0 && mh.length > 0) {
     domains: seedDomains.filter((d) => d !== '*'),
     all: seedDomains.includes('*'),
     allowHttp: rt.network === 'regtest' || nektarEnv('NEKTAR_MARKET_LOCAL_HOSTS') === '1',
-    log: (line) => process.stderr.write(`nektar: ${line}\n`)
+    log: nlog
   })
     .then((r) =>
-      process.stderr.write(
-        `nektar: seed: ${r.imported} imported, ${r.skipped} already present, ${r.failed} failed from ${r.announces} announce(s) (+${r.hostsAdded} host(s))\n`
-      )
+      nlog(`seed: ${r.imported} imported, ${r.skipped} already present, ${r.failed} failed from ${r.announces} announce(s) (+${r.hostsAdded} host(s))`)
     )
-    .catch((e) => process.stderr.write(`nektar: seed: ${(e as Error).message}\n`))
+    .catch((e) => nlog(`seed: ${(e as Error).message}`))
 }
 if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
   const { openAutomation } = await import('@nektar/automation')
@@ -229,15 +228,10 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
       // `useful` without waiting on an operator markUsefulness call
       ...(nektarEnv('NEKTAR_AUTO_USEFUL') === '1' ? { autoUseful: true } : {})
     },
-    log: (line) =>
-      process.stderr.write(`nektar: ${line}
-`)
+    log: nlog
   })
-  process.stderr.write(`nektar: automation on — ${mh.length} market host(s); policies and approvals via 'pnpm automation'
-`)
-  if (mh.length === 0)
-    process.stderr.write(`nektar: automation: no market hosts (set NEKTAR_MARKET_HOSTS) — wants and offers cannot be published
-`)
+  nlog(`automation on — ${mh.length} market host(s); policies and approvals via 'pnpm automation'`)
+  if (mh.length === 0) nlog('automation: no market hosts (set NEKTAR_MARKET_HOSTS) — wants and offers cannot be published')
 }
 const port = nektarEnv('NEKTAR_HTTP_PORT')
 let srv: ReturnType<typeof createHttpApi> | undefined
@@ -265,7 +259,7 @@ if (port) {
       throw err
     }
   })
-  server.listen(Number(port), host, () => process.stderr.write(`nektar: HTTP + MCP on :${port} (/v1, /mcp)\n`))
+  server.listen(Number(port), host, () => nlog(`HTTP + MCP on :${port} (/v1, /mcp)`))
 }
 let stopping = false
 const stop = async () => {
@@ -276,7 +270,7 @@ const stop = async () => {
   // the respawned agent, and open sockets at process.exit trip the libuv
   // teardown assert (0xC0000409). Force-exit past the deadline.
   setTimeout(() => {
-    process.stderr.write('nektar: stop deadline exceeded — forcing exit\n')
+    nlog('stop deadline exceeded — forcing exit')
     process.exit(1)
   }, 20_000).unref()
   if (srv !== undefined) {

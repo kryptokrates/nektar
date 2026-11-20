@@ -2,6 +2,7 @@
 // (bounded attempts + caller-chosen delay curve), pacer (minimum-spacing
 // rate limiter). Replaces the hand-rolled backoff dialects that grew
 // site-by-site in mainnet.ts/regtest.ts — sites declare intent, not loops.
+import { spread } from '@nektar/core'
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -21,10 +22,12 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOpts<T>): Pr
     try {
       const r = await fn()
       if (i + 1 >= opts.attempts || !opts.retryIf(r)) return r
-      await sleep(opts.delay(i))
+      // spread() (0.5x..1.5x) on every caller curve — fixed curves
+      // phase-align every agent recovering from the same upstream outage
+      await sleep(spread(opts.delay(i)))
     } catch (e) {
       if (i + 1 >= opts.attempts || !(opts.retryErr?.(e) ?? false)) throw e
-      await sleep(opts.delay(i))
+      await sleep(spread(opts.delay(i)))
     }
   }
 }

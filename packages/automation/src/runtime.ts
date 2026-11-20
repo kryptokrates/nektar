@@ -210,6 +210,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     fanoutIo,
     stopped: false,
     signal: rtAbort.signal,
+    wakeStats: new Map<string, number>(),
     inflight: new Set<Promise<void>>(),
     downNow,
     hotUntil: 0,
@@ -225,6 +226,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // named jobs with their own ceilings; wakes (chain events, enqueues,
   // inbound items) pull a job to due-now instead of each job polling alone
   rt.scheduler = new Scheduler()
+  rt.countWake = (src) => {
+    rt.wakeStats.set(src, (rt.wakeStats.get(src) ?? 0) + 1)
+  }
   openLanes(rt)
   const transport: MarketTransport = {
     publishWant: async (sw: SignedWant) => {
@@ -395,6 +399,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     }
   )
   let lastLedgerSweep = 0
+  let lastWakeReport = 0
   // boot replay: 'prepared'/'submission_unknown' rows are signed intents a
   // crashed process never got a verdict for — re-air them from stored bytes
   // before the first deal tick. Fire-and-forget behind the engine's chain;
@@ -462,6 +467,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             rt.pushAcks()
             const t3 = Date.now()
             if (t3 - t0 > WAITS.passReport.ms) log(`automation: pass ${t3 - t0}ms (poll ${t1 - t0} tick ${t2 - t1} acks ${t3 - t2})`)
+            // the push-vs-floor witness: which sources actually fired passes.
+            // A path that never counts is dead push degrading to ceiling speed
+            if (t3 - lastWakeReport > WAITS.wakeReport.ms) {
+              lastWakeReport = t3
+              if (rt.wakeStats.size > 0)
+                log(`automation: wakes ${[...rt.wakeStats.entries()].map(([s, n]) => `${s}:${n}`).join(' ')}`)
+            }
             // a live deal keeps the loop hot — the 5s inbound window alone
             // would let a deal cool to idle cadence between hops. A settled
             // proof awaiting depth only waits on BLOCKS, so it is excluded —
@@ -490,11 +502,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // would set `again` on every engine transition (a per-pass retryer
   // would hot-spin instead of cooling to the ceiling).
   store.workReady = () => {
+    rt.countWake('commit')
     if (!rt.busy && !rt.stopped) void rt.deals().catch((e) => log(`automation: ${(e as Error).message}`))
   }
   // committed deadlines arm the wheel directly — a collect window or
   // seize dueAt fires at its instant; the floor is the missed-arm backstop
   store.dueAtArmed = (at) => {
+    rt.countWake('dueAt')
     if (!rt.stopped) rt.scheduler?.dueIn('deals', Math.max(0, at - Date.now()))
   }
   /** one full pass: deals, then upkeep — what tests and push events drive */
@@ -588,6 +602,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         log(`automation: txproof: ${(e as Error).message}`)
       }
       engine.hint(txid)
+      rt.countWake('txProof')
       if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
     })()
     rt.inflight.add(work)
@@ -601,6 +616,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     if (rt.stopped) return
     const work = (async () => {
       engine.hint(txid)
+      rt.countWake('txRejected')
       if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
     })()
     rt.inflight.add(work)
@@ -616,7 +632,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     void store
       .hasDueAtHeight(NONTERMINAL, tip)
       .then((due) => {
-        if (!rt.stopped && due) rt.scheduler?.wake('deals')
+        if (!rt.stopped && due) {
+          rt.countWake('height')
+          rt.scheduler?.wake('deals')
+        }
       })
       .catch(() => undefined)
   })
@@ -639,6 +658,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         if (reap.ghost && tx !== undefined) rt.ghostMint(tx)
         log(reap.ghost ? `automation: dropped abandoned funding mint ${txid}` : `automation: dropped abandoned provision tx ${txid}`)
         await store.unblockOutbox('funding-slot')
+        rt.countWake('txAbandoned')
         if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
       } catch (e) {
         log(`automation: txAbandoned: ${(e as Error).message}`)
@@ -663,7 +683,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     health: () => ({ pass: lastReport?.pass ?? false, report: lastReport }),
     bootstrap: () => (cfg.publishFinger === true && lanes !== undefined ? 'sealed' : 'unsealed'),
     /** the unioned wait read — scheduler witness + every unacked outbox row */
-    waits: async () => ({ schedule: rt.scheduler?.schedule() ?? {}, deferred: await store.waitingOn() }),
+    waits: async () => ({ schedule: rt.scheduler?.schedule() ?? {}, wakes: Object.fromEntries(rt.wakeStats), deferred: await store.waitingOn() }),
     /** re-run the full preflight now (automationDoctor) — refreshes the
      *  cached report and the seeded host-health set */
     preflight: async () => {

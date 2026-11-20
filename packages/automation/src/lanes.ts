@@ -123,6 +123,7 @@ export function openLanes(rt: Rt): void {
         rt.hotUntil = Date.now() + WAITS.hotWindow.ms
         await rt.engine.ingestMessage(env.from, msg, env.refs)
         log(`automation: push: ingested envelope ${env.txid.slice(0, 12)} from ${env.from.slice(0, 12)}`)
+        rt.countWake('push:envelope')
         void rt.deals().catch((e) => log(`automation: push: ${(e as Error).message}`))
         return 'envelope'
       }
@@ -145,6 +146,7 @@ export function openLanes(rt: Rt): void {
         rt.hotUntil = Date.now() + WAITS.hotWindow.ms
         await rt.engine.ingestEvents(`offers:${body.offer.wantId}`, [{ seq: chk.carrier.id('hex'), kind: 'offer', payload: p.body }], '')
         log(`automation: push: ingested offer ${chk.carrier.id('hex').slice(0, 12)}`)
+        rt.countWake('push:offer')
         void rt.deals().catch((e) => log(`automation: push: ${(e as Error).message}`))
         return 'artifact'
       }
@@ -464,6 +466,7 @@ export function openLanes(rt: Rt): void {
                 pendingLane.set(s.tag, [...(pendingLane.get(s.tag) ?? []), ...rest])
                 // staged items deserve the next pass NOW, not whenever the
                 // idle ceiling happens to fire — the same wake push uses
+                rt.countWake('lane:staged')
                 void rt.deals().catch(() => undefined)
               }
             })

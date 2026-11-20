@@ -137,8 +137,19 @@ export const anchoredTree = (tree: Transaction): boolean =>
  *  txids; the caller owns strike/eviction policy. Walks unproven ancestry
  *  only — a BUMP-anchored ancestor terminates the chain — and is bounded
  *  so a deep or cyclic graph can't spin the audit. */
-export const deadAncestry = async (tree: Transaction, resolveTx: (txid: string) => Promise<Transaction | undefined>, maxNodes = 32): Promise<string[]> => {
-  const dead = new Set<string>()
+/** the bounded unproven-ancestry BFS shared by the dead-ancestry audit and
+ *  the refused-ancestor membership check. `hit` names the txids the walk
+ *  stops on — membership decides on the txid alone, so a refused ancestor
+ *  never costs a fetch; unresolvable parents collect into `unresolved`
+ *  (the dead-ancestry verdict) but simply truncate the walk for a hit
+ *  check. A BUMP-carrying ancestor terminates its branch. */
+const ancestryWalk = async (
+  tree: Transaction,
+  resolveTx: (txid: string) => Promise<Transaction | undefined>,
+  hit: ((txid: string) => boolean) | undefined,
+  maxNodes: number
+): Promise<{ stopped: boolean; unresolved: string[] }> => {
+  const unresolved = new Set<string>()
   const seen = new Set<string>()
   try {
     seen.add(tree.id('hex'))
@@ -169,6 +180,7 @@ export const deadAncestry = async (tree: Transaction, resolveTx: (txid: string) 
         // push the walk past maxNodes in one pass
         if (seen.size >= maxNodes) continue
         seen.add(id)
+        if (hit?.(id) === true) return { stopped: true, unresolved: [...unresolved] }
         let p = i.sourceTransaction
         if (p !== undefined) {
           try {
@@ -201,13 +213,35 @@ export const deadAncestry = async (tree: Transaction, resolveTx: (txid: string) 
       const p = found[i]
       // unresolvable IS dead ancestry (it can neither prove nor anchor)
       if (p === undefined) {
-        dead.add(ids[i])
+        unresolved.add(ids[i])
         continue
       }
       if (p.merklePath === undefined) queue.push(p)
     }
   }
-  return [...dead]
+  return { stopped: false, unresolved: [...unresolved] }
+}
+
+export const deadAncestry = async (tree: Transaction, resolveTx: (txid: string) => Promise<Transaction | undefined>, maxNodes = 32): Promise<string[]> =>
+  (await ancestryWalk(tree, resolveTx, undefined, maxNodes)).unresolved
+
+/** a refused-ancestor membership check over the same bounded walk: the
+ *  network's "parent rejected (ancestor X)" is first-party evidence that X
+ *  is dead — every outpoint whose unproven ancestry contains it can never
+ *  air, whatever its own status word says. The subject's own txid counts
+ *  (a directly-refused parent is its own dead ancestor). */
+export const ancestryHit = async (
+  tree: Transaction,
+  refused: (txid: string) => boolean,
+  resolveTx: (txid: string) => Promise<Transaction | undefined>,
+  maxNodes = 32
+): Promise<boolean> => {
+  try {
+    if (refused(tree.id('hex'))) return true
+  } catch {
+    // a stand-in subject carries no id — its inputs still name the chain
+  }
+  return (await ancestryWalk(tree, resolveTx, refused, maxNodes)).stopped
 }
 
 // only the market lane tolerates unproven funding by default: the nektar

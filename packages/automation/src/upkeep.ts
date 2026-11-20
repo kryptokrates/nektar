@@ -6,7 +6,7 @@ import { P2PKH } from '@bsv/sdk'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
 import { signerAddress, BoundedMap } from '@nektar/core'
-import { deadAncestry } from '@nektar/bstack'
+import { ancestryHit, deadAncestry } from '@nektar/bstack'
 import type { SignedOffer, SignedWant } from '@nektar/bstack'
 import type { Rt } from './rtctx.js'
 
@@ -47,13 +47,41 @@ export function openUpkeep(rt: Rt): void {
   // whose parent was simply between propagation hops)
   const deadSuspects = new BoundedMap<string, number>(4096)
   const stuckMints = new BoundedMap<string, { first: number; tries: number }>(4096)
+  // refused-ancestor registry — a broadcaster's "parent rejected (ancestor
+  // X)" is first-party evidence that X is dead to this mempool: every
+  // outpoint whose unproven ancestry contains X can never air, whatever its
+  // own status word says. Composing the funding oracle below prices the
+  // mark into exactly the outpoints the ancestry walk can reach — a refused
+  // sibling never poisons a clean parent, and the revive path in died()
+  // consults the same verdict before resurrecting a consumed input.
+  const refusedAncestors = new BoundedMap<string, number>(4096)
+  const noteRefusal = (description: string | undefined): void => {
+    if (description === undefined) return
+    for (const m of description.matchAll(/ancestor\s*\(?\s*([0-9a-f]{64})\s*\)?/gi)) refusedAncestors.set(m[1].toLowerCase(), Date.now())
+  }
+  const broadcast = async (tx: import('@bsv/sdk').Transaction): Promise<import('@nektar/chain').BroadcastResult> => {
+    const r = await mem.broadcastTx(tx)
+    if (r.status !== 'success') noteRefusal(r.description)
+    return r
+  }
+  const innerDeadParent = mem.funds.deadParent
+  mem.funds.deadParent = async (tx) => {
+    if (tx.merklePath !== undefined) return false
+    try {
+      if (refusedAncestors.has(tx.id('hex'))) return true
+    } catch {
+      // a stand-in parent cannot serialize — its ancestry still answers
+    }
+    if (await ancestryHit(tx, (id: string) => refusedAncestors.has(id), (txid: string) => mem.fetchTx(txid).catch(() => undefined))) return true
+    return (await innerDeadParent?.(tx)) ?? false
+  }
   const stuckMint = async (tree: import('@bsv/sdk').Transaction): Promise<'keep' | 'drop'> => {
     const tid = tree.id('hex')
     const now = Date.now()
     const s = stuckMints.get(tid) ?? { first: now, tries: 0 }
     stuckMints.set(tid, s)
     if (now - s.first < 10 * 60_000) return 'keep'
-    const r = await mem.broadcastTx(tree).catch((e: unknown) => ({ status: 'error' as const, description: e instanceof Error ? e.message : String(e) }))
+    const r = await broadcast(tree).catch((e: unknown) => ({ status: 'error' as const, description: e instanceof Error ? e.message : String(e) }))
     s.first = now // one heal attempt per window
     if (r.status === 'success') {
       s.tries = 0
@@ -151,7 +179,7 @@ export function openUpkeep(rt: Rt): void {
           state: logState,
           hosts: marketHosts,
           stream: logStream,
-          broadcast: (tx) => mem.broadcastTx(tx),
+          broadcast: (tx) => broadcast(tx),
           fetchTx: (txid) => mem.fetchTx(txid),
           now: cfg.now,
           log: (line) => log(`automation: ${line}`)
@@ -297,7 +325,7 @@ export function openUpkeep(rt: Rt): void {
                     lock: new P2PKH().lock(await signerAddress(key)),
                     changeOutputs: cfg.changeFanout ?? 4
                   })
-                  const br = await mem.broadcastTx(dtx)
+                  const br = await broadcast(dtx)
                   if (br.status === 'success') {
                     await mem.funds.spent(dtx)
                     log(`automation: reserve: split ${src.satoshis} into ${wantOuts}x${outSats} medium outputs`)
@@ -377,10 +405,19 @@ export function openUpkeep(rt: Rt): void {
               satsPerOutput: spec.satsPerOutput,
               lock: kind === 'market' ? undefined : spec.lock,
               takeFunding: async (sats: number) => (await mem.fundingOuts(sats, 'upkeep'))[0],
-              broadcast: (tx) => mem.broadcastTx(tx),
+              broadcast: (tx) => broadcast(tx),
               fetchTx: (txid) => mem.fetchTx(txid),
               facts,
               onReject: (tree) => ghostMint(tree),
+              // a mint refused at broadcast: the refusal's ancestor already
+              // fed refusedAncestors through `broadcast`; a definitive
+              // refusal ghosts the take so the input's reservation frees
+              // and its dead-parent side stays quarantined. A maybe-aired
+              // (transport) failure keeps the reservation — a phantom
+              // reservation beats a double-spend of a mint that may land.
+              onRefused: (tree, r) => {
+                if (BROADCAST_DEFINITIVE.test(r.description ?? '')) ghostMint(tree)
+              },
               onStuck: (tree) => stuckMint(tree),
               onSpent: (tree) => void mem.funds.spent(tree)
             })
@@ -441,7 +478,7 @@ export function openUpkeep(rt: Rt): void {
             },
             refs: packsRef !== undefined ? [packsRef] : undefined,
             takeFunding: async (sats: number) => (await mem.fundingOuts(sats, 'upkeep'))[0],
-            broadcast: (tx) => mem.broadcastTx(tx),
+            broadcast: (tx) => broadcast(tx),
             fetchTx: (txid) => mem.fetchTx(txid),
             allowHttp: localNet,
             now: cfg.now,

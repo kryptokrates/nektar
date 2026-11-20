@@ -46,9 +46,21 @@ if (names.length === 0) {
   process.exit(1)
 }
 
+// mirrors anchoredKinds() in bstack/tree.ts and the suite gate in
+// market-testnet.test.ts — servable stock is proven + anchored, not
+// proven-only: an anchored tree already serves the lanes the host admits
+const ANCHORED_KINDS = new Set(
+  process.env.NEKTAR_ANCHORED_LANES === 'all' || process.env.NEKTAR_ANCHORED_LANES === '1'
+    ? ['bbox', 'log', 'finger']
+    : (process.env.NEKTAR_ANCHORED_LANES ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+)
+ANCHORED_KINDS.add('market')
 const treesReady = async (rt) => {
   const s = await rt.laneStock()
-  return ['market', 'bbox', 'finger'].every((k) => (s[k]?.proven ?? 0) >= FLOOR)
+  return ['market', 'bbox', 'finger'].every((k) => (s[k]?.proven ?? 0) + (ANCHORED_KINDS.has(k) ? (s[k]?.anchored ?? 0) : 0) >= FLOOR)
 }
 
 const mkagent = async (wifName) => {

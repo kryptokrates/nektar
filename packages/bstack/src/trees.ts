@@ -27,6 +27,12 @@ export async function ensureTrees(p: {
    *  caller mark its ghost inputs/outputs spent so funding never re-selects
    *  them (the change output would otherwise cascade parent-rejected mints) */
   onReject?: (tx: Transaction) => void | Promise<void>
+  /** a mint refused at broadcast — the tx never books a ledger row, so its
+   *  consumed funding needs the caller's heal before the pass fails: a
+   *  definitive refusal releases the reservation and quarantines the
+   *  poisoned input; a maybe-aired (transport) failure must not. Without
+   *  this the refused mint leaks its take reservation forever. */
+  onRefused?: (tx: Transaction, result: BroadcastResult) => void | Promise<void>
   /** fired for an unproven mint the chain observer cannot see ('unknown' /
    *  undecidable status — the silent-eviction case a rejection verdict never
    *  covers): 'keep' leaves the row, 'drop' reaps it like a rejection. The
@@ -97,7 +103,10 @@ export async function ensureTrees(p: {
     // would never reach its bound; treat a repeat as the bound itself
     if (minted.includes(tree.id('hex'))) break
     const r = await p.broadcast(tree)
-    if (r.status !== 'success') throw new Error(`ensureTrees: broadcast failed ${JSON.stringify(r).slice(0, 120)}`)
+    if (r.status !== 'success') {
+      if (p.onRefused !== undefined) await p.onRefused(tree, r)
+      throw new Error(`ensureTrees: broadcast failed ${JSON.stringify(r).slice(0, 120)}`)
+    }
     await p.ledger.add(tree, size, kind)
     minted.push(tree.id('hex'))
     if (p.onSpent !== undefined) await p.onSpent(tree)

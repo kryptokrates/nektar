@@ -440,7 +440,11 @@ export abstract class FundsBase implements Funds {
       if ((await this.store.has?.(pid, vout)) === true) continue
       if ((await this.store.tombstoned?.(pid, vout)) !== true) continue
       const parent = inp.sourceTransaction ?? (await this.txOf?.(pid))
-      if (parent === undefined || (await this.hintSkip?.(parent, vout)) === true) continue
+      // a refusal-class parent never revives: its out can sit 'unspent'
+      // forever while no child built on it can air — resurrecting the
+      // outpoint just re-poisons the next take. The hint check stays a
+      // pass-over; the deadParent check is the sealed verdict.
+      if (parent === undefined || (await this.deadParent?.(parent)) === true || (await this.hintSkip?.(parent, vout)) === true) continue
       if (this.store.revive !== undefined) await this.store.revive(parent, vout)
       else await this.store.add(parent, vout)
     }

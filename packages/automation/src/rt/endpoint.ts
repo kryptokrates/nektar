@@ -11,15 +11,17 @@ export interface RtEndpoint {
   close: () => Promise<void>
 }
 
-/** POST /deployments to the admin API — retries while the server warms up;
- *  a registered URI returns success on repeat calls (idempotent). */
+/** POST /deployments to the admin API — retries while the server warms up.
+ *  force: true re-discovers the manifest every boot — force:false + a known
+ *  URI returns the OLD deployment without looking at new services, which is
+ *  how a newly added handler can silently never register. */
 export async function registerDeployment(admin: string, uri: string, log: (line: string) => void): Promise<boolean> {
   for (let i = 0; i < 20; i++) {
     try {
       const r = await fetch(`${admin}/deployments`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ uri, force: false }),
+        body: JSON.stringify({ uri, force: true }),
         signal: AbortSignal.timeout(WAITS.registerIo.ms)
       })
       if (r.ok || r.status === 409) {

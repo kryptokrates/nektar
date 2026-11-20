@@ -25,6 +25,7 @@ module.exports = {
           '\\.runar\\.[cm]?[jt]s$',
           // library/CLI entrypoints invoked from outside this codebase
           'payclient\\.[cm]?[jt]s$', // standalone x402 payer client
+          'repro-.*\\.[cm]?[jt]s$', // standalone e2e repro scripts — invoked via node dist/, never imported
           '(^|/)tools/' // build/dev scripts — invoked, never imported
         ]
       },

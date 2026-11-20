@@ -29,7 +29,7 @@ export function tablerCss(): Buffer | null {
 }
 
 const esc = (s: unknown) =>
-  (s === null || s === undefined ? '' : typeof s === 'object' ? JSON.stringify(s) : String(s)).replace(
+  (s === null || s === undefined ? '' : typeof s === 'object' ? JSON.stringify(s) : String(s as string | number | boolean)).replace(
     /[&<>"]/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!
   )
@@ -42,7 +42,7 @@ const THEME = `:root,[data-bs-theme=dark]{--tblr-primary:${NEKTAR_AMBER};--tblr-
 --tblr-body-color:#eae6e3;--tblr-secondary:#a2958a;--tblr-muted:#a2958a;
 --tblr-border-color:#3a332f;--tblr-border-color-translucent:rgba(247,153,27,.14)}
 a{color:var(--tblr-primary)}
-.kv{display:flex;align-items:center;gap:.75rem;padding:.45rem 0;border-bottom:1px solid var(--tblr-border-color-translucent);font-size:.8125rem;font-family:var(--tblr-font-monospace)}
+.kv{display:flex;align-items:center;gap:.75rem;padding:.5rem 0;border-bottom:1px solid var(--tblr-border-color-translucent);font-size:.875rem}
 .kv:last-child{border-bottom:none}
 .stream{margin-top:.5rem;padding-top:.5rem;border-top:1px solid var(--tblr-border-color-translucent);font-size:11px;color:var(--tblr-secondary);min-height:1em;max-height:4.2em;overflow:hidden;font-family:var(--tblr-font-monospace)}
 .stream div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stream .t{color:var(--tblr-primary)}
@@ -74,6 +74,8 @@ const FALLBACK = `body{background:${NEKTAR_DARK};color:#eae6e3;font-family:syste
 // stroke icons in @tabler/icons style — hand-drawn so the icon pack stays out
 // of the dependency set
 const ICONS = {
+  overview: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
+  log: '<path d="M4 6a8 3 0 0 0 16 0a8 3 0 0 0-16 0"/><path d="M4 6v6a8 3 0 0 0 16 0V6"/><path d="M4 12v6a8 3 0 0 0 16 0v-6"/>',
   earn: '<circle cx="12" cy="12" r="9"/><path d="M14.8 9a2 2 0 0 0-1.8-1h-2a2 2 0 1 0 0 4h2a2 2 0 1 1 0 4h-2a2 2 0 0 1-1.8-1M12 7v10"/>',
   receipts: '<path d="M5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-3-2-2 2-2-2-2 2-2-2-3 2"/><path d="M9 7h6M9 11h6M9 15h4"/>',
   market: '<path d="M3 6v5.2a2 2 0 0 0 .6 1.4l7.7 7.7a2.4 2.4 0 0 0 3.4 0l5.6-5.6a2.4 2.4 0 0 0 0-3.4l-7.7-7.7A2 2 0 0 0 11.2 3H5a2 2 0 0 0-2 3z"/><circle cx="7.5" cy="7.5" r="1"/>',
@@ -154,14 +156,23 @@ ${autoOps.map((o) => `<div class="kv"><span class="text-secondary">${esc(o.role)
     : ''
   const kit = tablerCss() !== null
   const cssLink = kit ? `<link rel="stylesheet" href="/dashboard/tabler.css">` : ''
-  const navItem = (href: string, label: string, svg: string) =>
-    `<li class="nav-item"><a class="nav-link" href="${href}"><span class="nav-link-icon">${icon(svg)}</span><span class="nav-link-title">${label}</span></a></li>`
+  const navItem = (href: string, label: string, svg: string, active = false) =>
+    `<li class="nav-item${active ? ' active' : ''}"><a class="nav-link${active ? ' active' : ''}" href="${href}"><span class="nav-link-icon">${icon(svg)}</span><span class="nav-link-title">${label}</span></a></li>`
+  // the stat row — the four motivations as numbers before any detail
+  const stat = (id: string, label: string, value: string, unit: string, sub: string, svg: string, extra = '') => `<div class="col-sm-6 col-xl-3" id="${id}"><div class="card">
+<div class="card-body">
+<div class="d-flex align-items-center"><div class="subheader">${label}</div><div class="ms-auto"><span style="display:inline-flex;padding:.55rem;border-radius:.5rem;background:rgba(247,153,27,.12);color:var(--tblr-primary)">${icon(svg)}</span></div></div>
+<div class="d-flex align-items-baseline"><div class="h1 mb-0 me-2">${value}</div><div class="text-secondary">${unit}</div></div>
+<div class="d-flex align-items-center gap-2 mt-2 flex-wrap">${sub}</div>
+${extra}
+</div></div></div>`
   return `<!doctype html><html data-bs-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>nektar — operator</title>
 ${cssLink}<style>${THEME}${kit ? '' : FALLBACK}</style></head><body><div class="page">
 <aside class="navbar navbar-vertical navbar-expand-md" data-bs-theme="dark"><div class="container-fluid">
 <h1 class="navbar-brand"><a class="d-flex align-items-center gap-2" style="text-decoration:none" href="/dashboard">${LOGO_SVG}<span>nektar</span></a></h1>
 <ul class="navbar-nav pt-3">
-${navItem('#earn', 'Earn', ICONS.earn)}
+${navItem('/dashboard', 'Overview', ICONS.overview, true)}
+${navItem('#earn', 'Treasury', ICONS.earn)}
 ${navItem('#receipts', 'Receipts', ICONS.receipts)}
 ${navItem('#market', 'Market', ICONS.market)}
 ${navItem('#agents', 'Agents', ICONS.agents)}
@@ -176,16 +187,13 @@ ${navItem('/.well-known/agent.json', 'Agent card', ICONS.agent)}
 <div class="page-wrapper">
 <div class="page-header d-print-none"><div class="container-xl"><div class="d-flex align-items-center justify-content-between">
 <div><div class="page-pretitle">operator console</div><h2 class="page-title d-flex align-items-center gap-2">Dashboard<span class="status status-green" id="live"><span class="status-dot status-dot-animated"></span>live</span></h2></div>
-<div class="text-secondary small">${esc(d.network)} · pub <code>${esc(mem.operatorKey().toPublicKey().toString().slice(0, 24))}…</code> · up ${upStr}</div>
+<div class="d-flex align-items-center gap-3"><div class="text-secondary small">${esc(d.network)} · pub <code>${esc(mem.operatorKey().toPublicKey().toString().slice(0, 24))}…</code> · up ${upStr}</div><a class="btn btn-sm" href="/v1/openapi.json">API</a></div>
 </div></div></div>
 <div id="app" class="page-body"><div class="container-xl"><div class="row row-cards">
-<div class="col-md-6" id="earn"><div class="card">
-<div class="card-header"><h3 class="card-title">Earn</h3><div class="card-actions d-flex gap-2">${badge(!!f.funded, 'funded', 'unfunded')}${badge(d.payments === 'on', 'pay on', 'pay off')}</div></div>
-<div class="card-body">
-<div class="h1 mb-1" style="color:var(--tblr-primary)">${bal.toLocaleString()} <span class="h4 text-secondary">sats</span></div>
-<div class="text-secondary small">earn sats for verifiable answers · ${esc(f.utxoCount ?? f.utxos ?? '—')} utxos</div>
-<div class="stream" data-ev="money"></div>
-</div></div></div>
+${stat('earn', 'Treasury', bal.toLocaleString(), 'sats', `${badge(!!f.funded, 'funded', 'unfunded')}${badge(d.payments === 'on', 'pay on', 'pay off')}<span class="text-secondary small">${esc(f.utxoCount ?? f.utxos ?? '—')} utxos</span>`, ICONS.earn, '<div class="stream" data-ev="money"></div>')}
+${stat('receipts-stat', 'Receipts', String(rrecs.length), 'total', '<span class="text-secondary small">verified answers — each carries a checkable link</span>', ICONS.receipts)}
+${stat('market-stat', 'For sale', String(cat.length), 'offers', '<span class="text-secondary small">public shards listed by domain</span>', ICONS.market)}
+${stat('log-stat', 'Anchored', String(d.anchoredRecords), `of ${d.records}`, `<span class="text-secondary small">prover: ${esc(d.prover)}</span>${d.unprovenAnchors ? `<span class="status status-red">${d.unprovenAnchors} unproven</span>` : ''}`, ICONS.log)}
 <div class="col-md-6" id="receipts"><div class="card">
 <div class="card-header"><h3 class="card-title">Receipts</h3><div class="card-actions text-secondary small">${rrecs.length} total</div></div>
 <div class="card-body">
@@ -204,8 +212,17 @@ ${marketRows || '<div class="empty"><div class="empty-title">nothing for sale ye
 ${agentsRows}
 <div class="stream" data-ev="agents"></div>
 </div></div></div>
+<div class="col-md-6" id="log"><div class="card">
+<div class="card-header"><h3 class="card-title">Log</h3><div class="card-actions text-secondary small">${esc(d.network)}</div></div>
+<div class="card-body">
+<div class="kv"><span>shards</span><b class="ms-auto">${d.shards}</b></div>
+<div class="kv"><span>records</span><b class="ms-auto">${d.records}</b></div>
+<div class="kv"><span>anchored</span><b class="ms-auto">${d.anchoredRecords}</b></div>
+<div class="kv"><span>unproven</span><b class="ms-auto">${d.unprovenAnchors}</b></div>
+<div class="kv"><span>prover</span><span class="ms-auto text-secondary">${esc(d.prover)}</span></div>
+</div></div></div>
 ${automationCard}
-</div><footer class="text-secondary small mt-4">${d.shards} shards · ${d.records} records · ${d.anchoredRecords} anchored · ${d.unprovenAnchors} unproven · prover: ${esc(d.prover)}</footer></div></div>
+</div></div></div>
 <script>
 const decide = async (id, approve) => {
   const tok = sessionStorage.getItem('nektar-operator-token') ?? prompt('operator token (NEKTAR_OPERATOR_TOKEN — not the agent bearer)')

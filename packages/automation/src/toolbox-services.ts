@@ -27,6 +27,7 @@ import {
   type MainnetConfig,
   type RegtestConfig
 } from '@nektar/chain'
+import { ioSignal } from '@nektar/core'
 import { WAITS } from './waits.js'
 const NAME = 'teranode-regtest'
 const sdkc = createRequire(import.meta.url)('@bsv/sdk') as typeof import('@bsv/sdk')
@@ -126,7 +127,7 @@ export class RegtestWalletServices implements sdk.WalletServices {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: auth },
       body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }),
-      signal: AbortSignal.timeout(WAITS.rpcIo.ms)
+      signal: ioSignal(WAITS.rpcIo.ms)
     })
     const j = (await r.json()) as { result?: unknown; error?: { message?: string } }
     if (j.error !== undefined && j.error !== null) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)

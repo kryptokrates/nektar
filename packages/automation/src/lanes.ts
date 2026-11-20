@@ -81,11 +81,12 @@ export function openLanes(rt: Rt): void {
   // the fetch outliving the leg that asked for it
   const io = (ms: number): AbortSignal => ioSignal(ms, rt.signal)
   const notifyPeer = (rec: { watch?: string } | undefined, service: string, query?: unknown): void => {
-    if (rec?.watch === undefined) return
+    const watch = rec?.watch
+    if (watch === undefined) return
     // fire-and-forget spawn — detached(): the push is its own delivery
     // attempt, not leg work; it must not die when the queuing leg settles
     detached(() =>
-      fetch(`${rec.watch.replace(/\/+$/, '')}/notify`, {
+      fetch(`${watch.replace(/\/+$/, '')}/notify`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(query === undefined ? { service } : { service, query }),
@@ -101,16 +102,17 @@ export function openLanes(rt: Rt): void {
   // the durable copy already landed when this runs) — any failure just
   // means delivery happens on the ordinary read.
   const pushCarrier = (rec: { push?: string } | undefined, beef: number[]): void => {
-    if (rec?.push === undefined || beef.length === 0) return
+    const push = rec?.push
+    if (push === undefined || beef.length === 0) return
     detached(() =>
-      fetch(rec.push, {
+      fetch(push, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ beef: Buffer.from(beef).toString('hex') }),
         signal: io(WAITS.pushIo.ms)
       })
         .then((r) => {
-          if (!r.ok) log(`automation: push → ${rec.push}: ${r.status}`)
+          if (!r.ok) log(`automation: push → ${push}: ${r.status}`)
         })
         .catch(() => undefined)
     )

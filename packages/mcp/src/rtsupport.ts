@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, rmSync, statSy
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PrivateKey, Transaction } from '@bsv/sdk'
-import { nektarEnv, nektarEnvNum, mkLog } from '@nektar/core'
+import { detached, nektarEnv, nektarEnvNum, mkLog } from '@nektar/core'
 import { TxStore, type ChainPort, type Funds, type TxStatusEvent } from '@nektar/chain'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { readKeyFile, writeKeyFile, fundKeyFromMnemonic } from './keystore.js'
@@ -193,23 +193,27 @@ export async function openRecordsDb(dataDir: string) {
 export function healLedgerOnProof(mem: NektarMemory, ledger: import('@nektar/automation').AutomationStore, tag: string): void {
   const nlog = mkLog(`nektar ${tag}`)
   mem.onTxProof((txid) => {
-    void (async () => {
-      try {
-        const w = await ledger.walletTx({ txid })
-        if (w !== undefined && (w.state === 'conflicted' || w.state === 'rejected')) {
-          const { emitTxEvent, txFsmLegacy } = await import('@nektar/automation')
-          if (!txFsmLegacy()) {
-            // the machine owns the revive: obs.proven@proof carries tx-spent
-            // + leases->spent + record-aired; with no fx here the intents
-            // commit uneffected and the next watcher sweep replays them
-            await emitTxEvent(ledger, w, 'obs.proven', { guard: 'proof', observation: { at: Date.now(), healed: true } }, {})
-          } else await ledger.setTxState(w.actionId, 'confirmed', { at: Date.now(), healed: true })
-          nlog(`${txid} proved after a terminal verdict — ledger healed to confirmed`)
+    // detached(): the heal is spawned work — a proof emitted inside an
+    // automation leg must not hand that leg's deadline to the repair
+    void detached(() =>
+      (async () => {
+        try {
+          const w = await ledger.walletTx({ txid })
+          if (w !== undefined && (w.state === 'conflicted' || w.state === 'rejected')) {
+            const { emitTxEvent, txFsmLegacy } = await import('@nektar/automation')
+            if (!txFsmLegacy()) {
+              // the machine owns the revive: obs.proven@proof carries tx-spent
+              // + leases->spent + record-aired; with no fx here the intents
+              // commit uneffected and the next watcher sweep replays them
+              await emitTxEvent(ledger, w, 'obs.proven', { guard: 'proof', observation: { at: Date.now(), healed: true } }, {})
+            } else await ledger.setTxState(w.actionId, 'confirmed', { at: Date.now(), healed: true })
+            nlog(`${txid} proved after a terminal verdict — ledger healed to confirmed`)
+          }
+        } catch (e) {
+          nlog(`proof-heal ${txid}: ${(e as Error).message}`)
         }
-      } catch (e) {
-        nlog(`proof-heal ${txid}: ${(e as Error).message}`)
-      }
-    })()
+      })()
+    )
   })
 }
 

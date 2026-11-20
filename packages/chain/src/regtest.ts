@@ -2,7 +2,7 @@
 // Teranode JSON-RPC for headers. Compiled but only exercised on a live stack
 // (NEKTAR_NETWORK=regtest). No tests depend on these.
 import { Transaction, MerklePath } from '@bsv/sdk'
-import { dsha256 } from '@nektar/core'
+import { dsha256, ioSignal } from '@nektar/core'
 import { withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
 import { HeaderCache } from './headers.js'
@@ -24,7 +24,7 @@ export class TeranodeBroadcaster implements Broadcaster {
       method: 'POST',
       headers: { 'Content-Type': 'application/octet-stream' },
       body: Buffer.from(tx.toHex(), 'hex'),
-      signal: AbortSignal.timeout(30_000)
+      signal: ioSignal(30_000)
     })
     const text = await res.text()
     if (!res.ok) return { status: 'error', description: `${res.status}: ${text}` }

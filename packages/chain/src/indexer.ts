@@ -7,7 +7,7 @@
 // against witnessed headers; a spend claim is only believed when the named
 // spender's own bytes name the outpoint.
 import { withRetry, pacer } from './retry.js'
-import { BoundedMap } from '@nektar/core'
+import { BoundedMap, currentSignal } from '@nektar/core'
 import type { BlockHeader } from './interfaces.js'
 
 /** normalized tx view — the fields the money path reads off an index */
@@ -140,7 +140,8 @@ const mkreq = (o: IndexOpts) => {
     try {
       const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) }
       if (o.apiKey !== undefined) headers['woc-api-key'] = o.apiKey // harmless on bananablocks
-      return await f(`${o.url}${path}`, { ...init, headers, signal: ctl.signal })
+      const ambient = currentSignal()
+      return await f(`${o.url}${path}`, { ...init, headers, signal: ambient !== undefined ? AbortSignal.any([ctl.signal, ambient]) : ctl.signal })
     } finally {
       clearTimeout(t)
     }

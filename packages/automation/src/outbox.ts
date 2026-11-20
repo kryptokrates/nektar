@@ -13,11 +13,11 @@ export function openOutbox(rt: Rt): void {
   // the ack drain is spawned work — it must not die with the leg that
   // happened to poke it
   const pushAcks = (): void => {
-    if (rt.acking || rt.stopped || rt.msgs?.ack === undefined) return
+    const ack = rt.msgs?.ack
+    if (rt.acking || rt.stopped || ack === undefined) return
     rt.acking = true
     void detached(() =>
-      rt.msgs!
-        .ack()
+      ack()
         .catch((e) => log(`automation: box ack: ${(e as Error).message}`))
         .finally(() => {
           rt.acking = false

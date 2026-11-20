@@ -38,9 +38,11 @@ export interface WaitSpec {
 
 export const WAITS = {
   // ── pass/leg budgets ────────────────────────────────────────────────
-  /** one deals-pass leg (poll/tick/wtx) — publishes on rt.activeSignal */
+  /** one deals-pass leg (poll/tick/wtx) — rides the ambient leg context
+   *  (deadline() publishes it on AsyncLocalStorage; inner IO merges it via
+   *  ioSignal()/nap()/currentSignal() — no field to thread or forget) */
   dealsBound: { ms: 120_000, class: 'budget', durable: false, wake: 'deadline-abort' },
-  /** the whole upkeep pass — publishes on rt.activeSignal */
+  /** the whole upkeep pass — ambient leg context, same as dealsBound */
   upkeepBound: { ms: 300_000, class: 'budget', durable: false, wake: 'deadline-abort' },
   /** stop(): bounded inflight-settle before teardown proceeds */
   stopSettle: { ms: 15_000, class: 'budget', durable: false, wake: 'inflight settle' },

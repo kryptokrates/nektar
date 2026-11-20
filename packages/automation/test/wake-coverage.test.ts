@@ -53,7 +53,7 @@ test('every wait primitive site is classified — the census sees all wait class
   const CLASSIFIED: Record<string, string> = {
     'automation/src/scheduler.ts': 'the wheel — the one setTimeout owner',
     'automation/src/watches.ts': 'watch-shim reconnect sleep — WAITS.watchBackoff*, jittered',
-    'automation/src/lanes.ts': 'io() merges rt.activeSignal — per-call io bound',
+    'automation/src/lanes.ts': 'ioSignal() merges ambient leg + rt.signal — per-call io bound',
     'automation/src/toolbox-services.ts': 'WAITS.rpcIo io bound',
     'automation/src/ai.ts': 'AbortSignal.timeout — sandbox io bound (aborts INTO the work)',
     'core/src/deadline.ts': 'deadline()/nap()/spread()/stable01 — THE bound helper',
@@ -332,4 +332,23 @@ test('runtime wires the hooks with the busy gate and push clears the ledger thro
   assert.match(rt, /countWake\('commit'\)/, 'the commit wake must count itself in wakeStats')
   assert.match(rt, /passUntil.*WAITS\.passBound\.ms/s, 'the pass must share one budget across legs — stacked fresh bounds sum')
   assert.match(rt, /Math\.min\(WAITS\.dealsBound\.ms,\s*passUntil/, 'a leg bound is min(leg, pass-remaining), never a fresh budget')
+})
+
+test('the leg context is ambient — spawned work detaches, manual threading is gone', () => {
+  // the source contract for the AsyncLocalStorage seam: deadline() owns the
+  // ambient leg signal; inner IO reads it (ioSignal/nap/currentSignal);
+  // spawned fire-and-forget work (post-commit hooks, wheel jobs, emitter
+  // launches, fanout pushes) detaches. A regression to a threaded field is
+  // the stacked-deadline / missed-merge class returning by convention.
+  const core = read(join(pkgRoot, '..', 'core', 'src', 'deadline.ts'))
+  assert.match(core, /new AsyncLocalStorage/, 'deadline() must own the ambient leg context')
+  assert.match(core, /legCtx\s*\.run\(signal/, 'the leg publishes its merged signal on the context')
+  const lanes = read(join(srcDir, 'lanes.ts'))
+  assert.match(lanes, /ioSignal\(/, 'fetch-level IO merges the ambient context — no field to thread')
+  const store = read(join(srcDir, 'store.ts'))
+  assert.match(store, /detached\(\(\) => this\.workReady/, 'post-commit hooks fire detached — spawned work never inherits the committer leg')
+  const sched = read(join(srcDir, 'scheduler.ts'))
+  assert.match(sched, /detached\(\(\) => e\.job\.run\(\)\)/, 'timer-fired jobs run detached — a wheel armed inside a leg cannot leak it')
+  const outbox = read(join(srcDir, 'outbox.ts'))
+  assert.match(outbox, /detached\(\(\) =>\s*\n?\s*engine\s*\n?\s*\.pumpOutbox/, 'the pump spawn detaches — outboxReady fires mid-leg inside tick')
 })

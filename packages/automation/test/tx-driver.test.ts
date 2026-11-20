@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import knexFactory, { type Knex } from 'knex'
-import { setNektarEnv } from '@nektar/core'
+import { currentSignal, deadline, nap, setNektarEnv } from '@nektar/core'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
 import { WalletCoordinator, type WalletDeps } from '../src/wallet.js'
@@ -165,6 +165,32 @@ test('driver: transport failure → submission_unknown, never a verdict; replay 
     evs.map((e) => `${e.from}-${e.event}->${e.to}`),
     ['prepared-submit.unknown->submission_unknown', 'submission_unknown-submit.success->submitted']
   )
+})
+
+// the leg-context contract on the money path: an ambient abort that fires
+// after broadcast may have sent bytes is a TRANSPORT-class outcome —
+// submission_unknown, never rejected, and custody stays claimed (the bytes
+// may have aired; resubmitPending is the convergence path)
+test('driver: leg timeout mid-broadcast → submission_unknown, custody untouched', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const id = 'a5b'
+  await prepared(store, id)
+  const { w, calls } = wallet(store, {
+    broadcast: async () => {
+      // the wire call a signal-aware broadcaster makes — ioSignal()/ambient
+      // inside the submit fetch in production; the leg's bound must reach it
+      await nap(60_000, { signal: currentSignal() })
+      return { status: 'success' }
+    }
+  })
+  const leg = deadline(() => w.submit(id), 30)
+  assert.deepEqual(await leg, { outcome: 'timeout' }, 'the leg bound abandons the waiter — the orphan keeps running')
+  await nap(40) // the orphaned submit lands its classification
+  const wtx = (await store.walletTx({ actionId: id }))!
+  assert.equal(wtx.state, 'submission_unknown', 'an abort after possible send is never a verdict')
+  assert.equal(calls.txDied, 0, 'custody must not roll back — the bytes may have left')
+  assert.equal(await leaseState(kx, id), 'leased', 'the claim stays: the tx may be on the wire')
 })
 
 test('driver: impossible transitions write nothing — no state, no event row', async (t) => {

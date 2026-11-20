@@ -2,7 +2,7 @@
 // discovery, merkle paths) + the BSV Broadcaster client. NO spend happens
 // here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
 // in the runtime before any tx reaches it.
-import { nektarEnv, spread } from '@nektar/core'
+import { currentSignal, nektarEnv, spread } from '@nektar/core'
 import { sleep, withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
@@ -68,7 +68,12 @@ const req = async (c: ReturnType<typeof def>, url: string, init: RequestInit = {
   const ctl = new AbortController()
   const t = setTimeout(() => ctl.abort(), ms)
   try {
-    return await c.fetch(url, { ...init, signal: ctl.signal })
+    // the ambient leg context merges by construction — a submit/probe issued
+    // inside a deadline()-bound leg dies with the leg instead of lingering
+    // as an orphaned socket (an abort mid-submit classifies as
+    // submission_unknown upstream: bytes may have left, never a verdict)
+    const ambient = currentSignal()
+    return await c.fetch(url, { ...init, signal: ambient !== undefined ? AbortSignal.any([ctl.signal, ambient]) : ctl.signal })
   } finally {
     clearTimeout(t)
   }

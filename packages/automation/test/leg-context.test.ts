@@ -1,0 +1,132 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import knexFactory from 'knex'
+import { currentSignal, deadline, detached, ioSignal, nap } from '@nektar/core'
+import { AutomationStore } from '../src/store.js'
+import { Scheduler } from '../src/scheduler.js'
+
+// leg-context — the AsyncLocalStorage deadline contract at the automation
+// seams: post-commit hooks and spawned work run OUTSIDE the leg that
+// happened to commit/fire them; awaited IO inside a leg inherits the
+// operation deadline by construction. A regression here is the
+// abandon-holds-resource / stacked-deadline class returning silently.
+
+const open = async () => {
+  const kx = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  const store = new AutomationStore(kx)
+  await store.init()
+  return { kx, store }
+}
+
+const mkOp = {
+  role: 'buyer' as const,
+  kind: 'purchase',
+  dedupeKey: 'buyer:w1',
+  policyHash: 'h',
+  network: 'regtest',
+  state: 'collecting',
+  data: {}
+}
+
+test('store post-commit hooks fire detached — a workReady spawn survives the leg', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  let ambientInHook: AbortSignal | undefined | 'unset' = 'unset'
+  let spawnSettled = false
+  store.workReady = () => {
+    ambientInHook = currentSignal()
+    // what the runtime's hook does: launch a pass — it must outlive the leg
+    void nap(30).then(() => {
+      spawnSettled = true
+    })
+  }
+  const r = await deadline(async () => {
+    await store.createOperation(mkOp)
+    await nap(60_000)
+    return 'never'
+  }, 25)
+  assert.deepEqual(r, { outcome: 'timeout' })
+  assert.equal(ambientInHook, undefined, "the hook ran outside the committer's leg — a commit inside a leg must not hand its deadline to spawned work")
+  await nap(50)
+  assert.equal(spawnSettled, true, 'the spawned pass completed after the spawning leg died')
+})
+
+test('scheduler job dispatch is detached — a wheel armed inside a leg cannot leak its context', async () => {
+  const sched = new Scheduler()
+  let ambientInJob: AbortSignal | undefined | 'unset' = 'unset'
+  sched.add({
+    name: 'j',
+    ceilingMs: () => 60_000,
+    run: () => {
+      ambientInJob = currentSignal()
+    }
+  })
+  const r = await deadline(async () => {
+    sched.dueIn('j', 0) // armed inside the leg — timers capture context at creation
+    await nap(60_000)
+    return 'never'
+  }, 30)
+  assert.deepEqual(r, { outcome: 'timeout' })
+  await nap(20) // the wheel's 0ms fire already landed while the leg ran
+  assert.equal(ambientInJob, undefined, 'timer-fired work is never the armer’s child — jobs run detached')
+  await sched.stop()
+})
+
+test('the run() mutex shape: promise links keep their registrant’s context', async () => {
+  // base.ts serializes via `this.chain = link.then(fn)` — each link's
+  // context is captured at registration, so serialized legs stay isolated
+  let chain: Promise<void> = Promise.resolve()
+  let aSig: AbortSignal | undefined
+  let bSig: AbortSignal | undefined
+  const mkLink = (into: (s: AbortSignal | undefined) => void) => {
+    chain = chain.then(() => {
+      into(currentSignal())
+    })
+  }
+  const [a, b] = await Promise.all([
+    deadline(async () => {
+      mkLink((s) => {
+        aSig = s
+      })
+      await nap(10)
+      return 'a'
+    }, 5_000),
+    deadline(async () => {
+      mkLink((s) => {
+        bSig = s
+      })
+      await nap(60_000)
+      return 'b-never'
+    }, 25)
+  ])
+  await chain // both links ran
+  assert.deepEqual(a, { outcome: 'settled', value: 'a' })
+  assert.deepEqual(b, { outcome: 'timeout' })
+  assert.ok(aSig !== undefined && bSig !== undefined)
+  assert.notEqual(aSig, bSig, 'serialized links never see each other’s leg')
+})
+
+test('knex/sqlite round-trips keep the ambient — a store call inside a leg sees the context after IO', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  let afterDb: AbortSignal | undefined
+  const r = await deadline(async (signal) => {
+    await store.operations({ states: ['collecting'] })
+    afterDb = currentSignal()
+    return 'ok'
+  }, 5_000)
+  assert.deepEqual(r, { outcome: 'settled', value: 'ok' })
+  assert.ok(afterDb !== undefined, 'the leg context survives awaited knex/sqlite work')
+})
+
+test('detached() inside leg work yields context-free spawned work', async () => {
+  let spawnedAmbient: AbortSignal | undefined | 'unset' = 'unset'
+  const r = await deadline(async () => {
+    detached(() => {
+      spawnedAmbient = currentSignal()
+    })
+    return 'ok'
+  }, 5_000)
+  assert.deepEqual(r, { outcome: 'settled', value: 'ok' })
+  assert.equal(spawnedAmbient, undefined)
+})

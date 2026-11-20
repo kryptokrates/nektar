@@ -42,6 +42,7 @@ import {
 } from './services.js'
 import type { CustodyLeg, TxObserve } from './emit.js'
 import type { OutboxItem } from '../store.js'
+import { NONTERMINAL } from '../market.js'
 
 export type DispatchHandler = (arg: unknown, key?: string) => Promise<unknown>
 
@@ -50,8 +51,9 @@ export type DispatchHandler = (arg: unknown, key?: string) => Promise<unknown>
  *  (its handlers live on the endpoint instead) */
 export interface LocalDispatch extends Executor {
   register(service: string, handler: string, fn: DispatchHandler): void
-  /** cancel armed delayed sends — called on runtime stop */
-  close?(): void
+  /** cancel armed delayed sends + join in-flight work — called on runtime
+   *  stop before the stores close */
+  close?(): void | Promise<void>
 }
 
 export const isLocalDispatch = (e: Executor): e is LocalDispatch => typeof (e as LocalDispatch).register === 'function'
@@ -60,7 +62,9 @@ export class Dispatcher implements LocalDispatch {
   private readonly handlers = new Map<string, DispatchHandler>()
   private readonly timers = new Set<ReturnType<typeof setTimeout>>()
   private readonly pending = new Set<Promise<unknown>>()
+  private readonly chains = new Map<string, Promise<unknown>>()
   private inDispatch = 0
+  private closed = false
 
   constructor(private readonly log: (line: string) => void = () => {}) {}
 
@@ -74,20 +78,42 @@ export class Dispatcher implements LocalDispatch {
     return fn
   }
 
+  /** per-key mutual exclusion — the VO's exclusive lock, mirrored: two
+   *  invocations for the same object key run one-at-a-time in send order,
+   *  never concurrently. A failed leg doesn't poison the chain — the next
+   *  same-key invocation still runs (the runtime's retry discipline, not
+   *  the chain's, carries failures) */
+  private chain(scope: string, fn: () => Promise<unknown>): Promise<unknown> {
+    const prev = this.chains.get(scope) ?? Promise.resolve()
+    const p = prev.then(fn, fn)
+    this.chains.set(scope, p)
+    void p.finally(() => {
+      if (this.chains.get(scope) === p) this.chains.delete(scope)
+    })
+    return p
+  }
+
   send(target: InvokeTarget, arg: unknown, opts?: SendOpts): Promise<void> {
+    // a stopped executor accepts nothing — sends fired between close() and
+    // store teardown must not dispatch against a closing runtime (the
+    // post-teardown unhandledRejection class)
+    if (this.closed) return Promise.resolve()
     const fn = this.get(target)
     const run = (): void => {
+      if (this.closed) return
       // dispatched work exits the caller's leg — a send fired inside a
       // bound leg must not hand that deadline to the spawned invocation
       // (ALS propagates through queueMicrotask/setTimeout otherwise)
-      const p = detached(async () => {
-        this.inDispatch++
-        try {
-          await fn(arg, target.key)
-        } finally {
-          this.inDispatch--
-        }
-      })
+      const invoke = (): Promise<unknown> =>
+        detached(async () => {
+          this.inDispatch++
+          try {
+            await fn(arg, target.key)
+          } finally {
+            this.inDispatch--
+          }
+        })
+      const p = target.key === undefined ? invoke() : this.chain(`${target.service}/${target.key}`, invoke)
       this.pending.add(p)
       void p
         .catch((e: unknown) => {
@@ -113,17 +139,30 @@ export class Dispatcher implements LocalDispatch {
   }
 
   async call<T>(target: InvokeTarget, arg: unknown, _opts?: Pick<SendOpts, 'idempotencyKey'>): Promise<T> {
-    const r = (await this.get(target)(arg, target.key)) as T
-    // a call made INSIDE a dispatched send can't join — the pending set
-    // contains that very dispatch; the outer caller's drain covers it.
-    if (this.inDispatch === 0) await this.drain()
+    if (this.closed) throw new Error('executor: closed')
+    const fn = this.get(target)
+    // snapshot BEFORE the handler runs: a top-level call must join the sends
+    // its handler spawns — checking inDispatch after `r` resolves sees the
+    // spawned legs themselves and wrongly skips the join (the legs then run
+    // detached past the caller's boundary). A call made INSIDE a dispatched
+    // send can't join — pending contains that very dispatch and draining
+    // would deadlock on itself; the outer caller's drain covers it.
+    const inner = this.inDispatch > 0
+    const r = (await (target.key === undefined
+      ? fn(arg, target.key)
+      : this.chain(`${target.service}/${target.key}`, () => fn(arg, target.key)))) as T
+    if (!inner) await this.drain()
     return r
   }
 
-  /** flush pending delayed sends */
-  close(): void {
+  /** flush pending delayed sends, then join in-flight work — called on
+   *  runtime stop before the stores close; a queued dispatch that fires
+   *  after kx.destroy() is the post-teardown unhandledRejection class */
+  async close(): Promise<void> {
+    this.closed = true
     for (const t of this.timers) clearTimeout(t)
     this.timers.clear()
+    await this.drain()
   }
 }
 
@@ -200,6 +239,101 @@ export const wireNotify = (ex: LocalDispatch, deps: NotifyDeps): void => {
   ex.register(EXEC_SVC.notify, 'carrier', (arg) => {
     const a = arg as { push: string; beefHex: string }
     return deps.carrier(a.push, a.beefHex)
+  })
+}
+
+/** the full automation service set on one dispatcher — the wire-path twin
+ *  of the def list openEndpoint serves. runtime.ts calls this when cfg.exec
+ *  injects a LocalDispatch; tests call the pieces they need directly. */
+export interface WireAll {
+  tx: RtDeps
+  sweep: SweepDeps
+  deal: DealDeps
+  dealfan: DealfanDeps
+  transport: TransportDeps
+  custody?: CustodyDeps
+  wake: WakeDeps
+  /** cron services — [service, deps] pairs (upkeep/watchdog/watches) */
+  crons?: Array<[service: string, deps: CronDeps]>
+  notify?: NotifyDeps
+}
+
+export const wireRuntime = (ex: LocalDispatch, d: WireAll): void => {
+  wireTx(ex, d.tx)
+  wireSweep(ex, d.sweep)
+  wireDeal(ex, d.deal)
+  wireDealfan(ex, d.dealfan)
+  wireTransport(ex, d.transport)
+  if (d.custody !== undefined) wireCustody(ex, d.custody)
+  wireWake(ex, d.wake)
+  for (const [svc, deps] of d.crons ?? []) wireCron(ex, svc, deps)
+  if (d.notify !== undefined) wireNotify(ex, d.notify)
+}
+
+/** the subset a standalone MarketEngine needs — derived from the engine's
+ *  own surface the way runtime.ts builds them. Tests construct the engine
+ *  with `executor: ex` first (the dealfanDeps closures read it lazily), then
+ *  wireEngine(ex, engine, {store, fx, ...}) completes the service map. */
+export interface WireEngineDeps {
+  store: import('../store.js').AutomationStore
+  fx?: import('../machines/effects.js').TxEffects
+  submit?: RtDeps['submit']
+  scan?: SweepDeps['scan']
+  resubmitRows?: SweepDeps['resubmitRows']
+  wake?: WakeDeps
+  now?: () => number
+  ceilingMs?: () => number
+  log?: (line: string) => void
+}
+
+interface EngineSurface {
+  pendingInbox(): Promise<DealEvent[]>
+  resubmitTick(): Promise<void>
+  advanceOp(operationId: string): Promise<boolean>
+  dealEvent(i: DealEvent): Promise<void>
+  reconcileOp(operationId: string): Promise<void>
+  deliverOutboxItem(item: OutboxItem): Promise<'acked' | 'retried' | 'deferred' | 'skipped'>
+  submitTx(actionId: string): Promise<{ state: import('../store.js').TxState; txid: string; detail?: string } | undefined>
+  readonly walletCoordinator?: CustodyDeps['wallet']
+}
+
+export const wireEngine = (ex: LocalDispatch, engine: EngineSurface, d: WireEngineDeps): void => {
+  const log = d.log ?? (() => {})
+  const liveOps = async () => (await d.store.operations({ states: NONTERMINAL })).map((o) => o.operationId)
+  const reconcileOps = async () => {
+    const now = Date.now()
+    return (await d.store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: now })).map((o) => o.operationId)
+  }
+  wireRuntime(ex, {
+    tx: { store: d.store, fx: d.fx ?? {}, log, submit: d.submit ?? ((actionId) => engine.submitTx(actionId)) },
+    sweep: {
+      scan: d.scan ?? (async function* () {}),
+      resubmitRows: d.resubmitRows ?? (async () => []),
+      log
+    },
+    deal: {
+      advanceOp: (id) => engine.advanceOp(id),
+      inboxEvent: (i) => engine.dealEvent(i),
+      reconcileOp: (id) => engine.reconcileOp(id),
+      log
+    },
+    dealfan: {
+      pendingInbox: () => engine.pendingInbox(),
+      liveOps,
+      reconcileOps,
+      resubmitPending: () => engine.resubmitTick(),
+      ceilingMs: d.ceilingMs ?? (() => 0),
+      log
+    },
+    transport: {
+      dueRows: () => d.store.dueOutbox(),
+      nextAt: () => d.store.nextOutboxAt(),
+      deliverItem: (item) => engine.deliverOutboxItem(item),
+      now: d.now ?? (() => Date.now()),
+      log
+    },
+    custody: engine.walletCoordinator !== undefined ? { wallet: engine.walletCoordinator, log } : undefined,
+    wake: d.wake ?? { legs: {}, hint: () => {}, log }
   })
 }
 

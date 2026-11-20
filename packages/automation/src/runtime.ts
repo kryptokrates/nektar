@@ -22,18 +22,7 @@ import { openWatches } from './watches.js'
 import type { TxEffects } from './machines/effects.js'
 import { executor, EXEC_SVC } from './rt/exec.js'
 import { openEndpoint, type RtEndpoint } from './rt/endpoint.js'
-import {
-  isLocalDispatch,
-  wireTx,
-  wireSweep,
-  wireDeal,
-  wireDealfan,
-  wireCustody,
-  wireTransport,
-  wireWake,
-  wireCron,
-  wireNotify
-} from './rt/dispatch.js'
+import { isLocalDispatch, wireRuntime } from './rt/dispatch.js'
 import {
   txObject,
   sweepService,
@@ -520,7 +509,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         mem.recordAired?.(tx)
         log(`automation: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
       },
-      effects: txFx
+      effects: txFx,
+      exec
     }
   )
   let lastLedgerSweep = 0
@@ -605,17 +595,21 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // restate service objects, not bodies) — refuse loudly, not silently.
     if ((cfg.rtDefs ?? []).length !== 0)
       throw new Error('automation: cfg.rtDefs requires the restate endpoint — cfg.exec wiring serves automation services only')
-    wireTx(exec, txDeps)
-    wireSweep(exec, sweepDeps)
-    wireDeal(exec, dealDeps)
-    wireDealfan(exec, dealfanDeps)
-    wireTransport(exec, transportDeps)
-    if (custodyDeps !== undefined) wireCustody(exec, custodyDeps)
-    wireWake(exec, wakeDeps)
-    wireCron(exec, EXEC_SVC.upkeep, upkeepDeps)
-    if (watchdogDeps !== undefined) wireCron(exec, EXEC_SVC.watchdog, watchdogDeps)
-    if (watchesDeps !== undefined) wireCron(exec, EXEC_SVC.watches, watchesDeps)
-    if (notifyDeps !== undefined) wireNotify(exec, notifyDeps)
+    wireRuntime(exec, {
+      tx: txDeps,
+      sweep: sweepDeps,
+      deal: dealDeps,
+      dealfan: dealfanDeps,
+      transport: transportDeps,
+      custody: custodyDeps,
+      wake: wakeDeps,
+      crons: [
+        [EXEC_SVC.upkeep, upkeepDeps],
+        ...(watchdogDeps !== undefined ? ([[EXEC_SVC.watchdog, watchdogDeps]] as Array<[string, typeof watchdogDeps]>) : []),
+        ...(watchesDeps !== undefined ? ([[EXEC_SVC.watches, watchesDeps]] as Array<[string, typeof watchesDeps]>) : [])
+      ],
+      notify: notifyDeps
+    })
   } else {
     const txDef = await txObject(txDeps)
     const sweepDef = await sweepService(sweepDeps, txDef)
@@ -1001,9 +995,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       }
       await engine.idle()
       await rtEndpoint?.close().catch(() => undefined)
-      // an injected dispatcher owns armed delayed sends — flush them before
-      // the stores close or a post-stop dispatch hits a destroyed pool
-      ;(exec as { close?: () => void }).close?.()
+      // an injected dispatcher owns armed delayed sends + in-flight work —
+      // join it before the stores close or a post-stop dispatch hits a
+      // destroyed pool
+      await (exec as { close?: () => void | Promise<void> }).close?.()
       await kxLanes?.destroy()
       await kx.destroy()
     }

@@ -1,12 +1,15 @@
-import { test } from 'node:test'
+import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
-import { WalletCoordinator } from '../src/wallet.js'
+import { WalletCoordinator, type WalletDeps } from '../src/wallet.js'
 import { TransactionWatcher } from '../src/ledger.js'
 import { MarketEngine } from '../src/market.js'
 import { NONTERMINAL, STATE_LIMITS, TERMINAL, type MarketDeps } from '../src/market/types.js'
+import type { TxEffects } from '../src/machines/effects.js'
+import { Dispatcher, wireTx } from './rig.js'
+import { wireEngine } from '../src/rt/dispatch.js'
 import { policyError, type AutomationPolicy, type ActionContext } from '../src/policy.js'
 import { DEFAULT_SCORE_WEIGHTS } from '../src/scoring.js'
 
@@ -69,6 +72,40 @@ function oneOutputTx(payTo = key): Transaction {
   return tx
 }
 
+// the observe handler's intent set mirrors the coordinator's own fx(): an
+// emit routed through the Dispatcher lands on wireTx's handler, whose fx
+// must rebuild the stored bytes and call the same deps — the test-side twin
+// of wallet.ts's driver fx (runtime.ts does the same with txFx)
+const fxFor = (w: WalletCoordinator, deps: Pick<WalletDeps, 'txSpent' | 'txDied' | 'recordAired'>): TxEffects => ({
+  txSpent: deps.txSpent === undefined ? undefined : async (wt) => await deps.txSpent!(await w.rebuildTx(wt)),
+  txDied: deps.txDied === undefined ? undefined : async (wt) => await deps.txDied!(await w.rebuildTx(wt)),
+  recordAired: deps.recordAired === undefined ? undefined : async (wt) => await deps.recordAired!(await w.rebuildTx(wt))
+})
+
+// the engine-side twin: base.ts builds the coordinator's custody deps as
+// {txDied, txSpent: settleEscrow, recordAired} — the observe intents run
+// those same impls (rebuilt to a Transaction first, exactly like fx())
+const engineFx = (engine: MarketEngine, d: MarketDeps): TxEffects => {
+  const coord = engine.walletCoordinator
+  const fx: TxEffects = {}
+  if (coord === undefined) return fx
+  if (d.txDied !== undefined) fx.txDied = async (wt) => await d.txDied!(await coord.rebuildTx(wt))
+  if (d.settleEscrow !== undefined) fx.txSpent = async (wt) => await d.settleEscrow!(await coord.rebuildTx(wt))
+  if (d.recordAired !== undefined) fx.recordAired = async (wt) => await d.recordAired!(await coord.rebuildTx(wt))
+  return fx
+}
+
+// an engine whose durable legs run on an in-process Dispatcher — wireEngine
+// mirrors runtime.ts's service surface; the floor self-arm sits on a 60s
+// ceiling that close() clears in t.after (no leak, no hot re-fire)
+const mkEngine = (t: TestContext, d: MarketDeps): MarketEngine => {
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const engine = new MarketEngine({ ...d, executor: ex })
+  wireEngine(ex, engine, { store: d.store, fx: engineFx(engine, d), ceilingMs: () => 60_000, now: d.now ?? Date.now, log: () => {} })
+  return engine
+}
+
 test('F1: a poisoned op still reaches its declared stuck exit — error labels must not reset the watchdog clock', async (t) => {
   let now = 1_000_000
   const { kx, store } = await open(() => now)
@@ -84,7 +121,7 @@ test('F1: a poisoned op still reaches its declared stuck exit — error labels m
     state: 'selected',
     data: {} // no data.selected — fund() throws deterministically below
   })
-  const engine = new MarketEngine(deps(store, () => now))
+  const engine = mkEngine(t, deps(store, () => now))
   // 'selected' bound is 15 min, exit abort → 'canceled'. Six 5-minute ticks
   // is 30 min elapsed: today every tick's tick_error write refreshes
   // updatedAt — the clock the bound measures — so it never fires.
@@ -100,13 +137,20 @@ test('F2/F6: an abandoned verdict runs the custody rollback and labels the row a
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   let died = 0
-  const w = new WalletCoordinator(store, {
-    broadcast: async () => ({ status: 'success' }),
+  const hooks: Pick<WalletDeps, 'txSpent' | 'txDied'> = {
     txSpent: () => {},
     txDied: () => {
       died++
     }
+  }
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const w = new WalletCoordinator(store, {
+    broadcast: async () => ({ status: 'success' }),
+    ...hooks,
+    exec: ex
   })
+  wireTx(ex, { store, fx: fxFor(w, hooks), log: () => {} })
   const tx = oneOutputTx()
   const actionId = `owner:${tx.id('hex')}`
   await w.prepareOwner('upkeep', tx)
@@ -145,7 +189,7 @@ test('F3-regression: an uncertain op whose escrow never aired releases budget, l
     state: 'uncertain',
     data: { pendingApproval: { reason: 'unresolved_payment' }, escrowAction: actionId }
   })
-  const engine = new MarketEngine(deps(store, () => now, { txFacts: async () => ({ verdict: 'dead' }) as never }))
+  const engine = mkEngine(t, deps(store, () => now, { txFacts: async () => ({ verdict: 'dead' }) as never }))
   await engine.tick()
   const row = await store.walletTx({ actionId })
   const op = await store.operation(operation.operationId)
@@ -173,7 +217,8 @@ test('N1: reconcile-dead on a submission_unknown escrow runs the custody rollbac
     state: 'uncertain',
     data: { pendingApproval: { reason: 'unresolved_payment' }, escrowAction: actionId }
   })
-  const engine = new MarketEngine(
+  const engine = mkEngine(
+    t,
     deps(store, () => now, {
       broadcast: async () => ({ status: 'error', description: 'transport: down' }) as never,
       txFacts: async () => ({ verdict: 'dead' }) as never,
@@ -215,7 +260,7 @@ test('F7: a prepared row is resubmitted on the upkeep cadence — not only at bo
   const aired: Transaction[] = []
   const tx = oneOutputTx()
   await store.recordPrepared({ actionId: 'up:1', operationId: 'owner', kind: 'upkeep', txid: tx.id('hex'), rawHex: tx.toHex(), parents: {}, feeSats: 0 })
-  const engine = new MarketEngine(deps(store, Date.now, { broadcast: async (t: Transaction) => (aired.push(t), { status: 'success' }) as never }))
+  const engine = mkEngine(t, deps(store, Date.now, { broadcast: async (t: Transaction) => (aired.push(t), { status: 'success' }) as never }))
   await engine.tick()
   assert.ok(aired.length > 0, 'in-run prepared rows must reach the broadcaster without a restart')
 })
@@ -233,7 +278,7 @@ test('F8: a refund rejection surfacing after the 60-minute rescan still un-marks
     state: 'refunded',
     data: { refundTxid: 'aa'.repeat(32) }
   })
-  const engine = new MarketEngine(deps(store, () => now, { txFacts: async () => ({ verdict: 'dead' }) as never }))
+  const engine = mkEngine(t, deps(store, () => now, { txFacts: async () => ({ verdict: 'dead' }) as never }))
   now += 61 * 60_000
   await engine.tick()
   assert.equal((await store.operation(operation.operationId))!.state, 'uncertain', 'a dead refund must not stay refunded past the rescan window')

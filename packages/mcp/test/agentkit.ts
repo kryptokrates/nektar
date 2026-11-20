@@ -4,8 +4,18 @@
 // builder — this is the memory-tier one.
 import { join } from 'node:path'
 import { testFunder, memoryPort, type TestChain } from '@nektar/chain'
-import { openAutomation, ScriptedExecutor, DEFAULT_SCORE_WEIGHTS, Dispatcher } from '@nektar/automation'
-import type { Automation, AutomationPolicy, MarketOptions, MarketMessage } from '@nektar/automation'
+import {
+  openAutomation,
+  ScriptedExecutor,
+  DEFAULT_SCORE_WEIGHTS,
+  Dispatcher,
+  NONTERMINAL,
+  wireTx,
+  wireDeal,
+  wireDealfan,
+  wireCustody
+} from '@nektar/automation'
+import type { Automation, AutomationPolicy, AutomationStore, MarketEngine, MarketOptions, MarketMessage, TxEffects } from '@nektar/automation'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 
@@ -137,3 +147,36 @@ const wireAgent = async (name: string, mem: NektarMemory, o: TestAgentOpts): Pro
 /** restart on the SAME memory + dataDir — the killed-agent respawn: sqlite
  *  state survives, op records rebuild from automation.sqlite */
 export const respawnAgent = async (a: TestAgent, o: TestAgentOpts): Promise<TestAgent> => await wireAgent(a.name, a.mem, o)
+
+/** wire a bare MarketEngine onto an in-process Dispatcher — the same
+ *  deal-path bodies openAutomation registers for a runtime (tx
+ *  observe/expire/resubmit, deal advance/event/reconcile, the dealfan tick,
+ *  custody legs). Engine-level suites drive engine.tick() by hand, so the
+ *  dealfan's self-arming floor is off (ceilingMs 0 = event-driven only);
+ *  the outbox falls back to engine.pumpOutbox since store.outboxReady is a
+ *  runtime-installed hook. Mirrors runtime.ts's dep assembly. */
+export const wireEngine = (
+  ex: Dispatcher,
+  engine: MarketEngine,
+  store: AutomationStore,
+  opts: { fx?: TxEffects; log?: (line: string) => void } = {}
+): void => {
+  const log = opts.log ?? (() => {})
+  wireTx(ex, { store, fx: opts.fx ?? {}, log, submit: (actionId) => engine.submitTx(actionId) })
+  wireDeal(ex, {
+    advanceOp: (operationId) => engine.advanceOp(operationId),
+    inboxEvent: (item) => engine.dealEvent(item),
+    reconcileOp: (operationId) => engine.reconcileOp(operationId),
+    log
+  })
+  wireDealfan(ex, {
+    pendingInbox: () => engine.pendingInbox(),
+    liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => o.operationId),
+    reconcileOps: async () =>
+      (await store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: Date.now() })).map((o) => o.operationId),
+    resubmitPending: () => engine.resubmitTick(),
+    ceilingMs: () => 0,
+    log
+  })
+  if (engine.walletCoordinator !== undefined) wireCustody(ex, { wallet: engine.walletCoordinator, log })
+}

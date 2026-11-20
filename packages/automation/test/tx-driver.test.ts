@@ -7,6 +7,7 @@ import { AutomationStore } from '../src/store.js'
 import { WalletCoordinator, type WalletDeps } from '../src/wallet.js'
 import { TransactionWatcher } from '../src/ledger.js'
 import { emitTxEvent, replayTxEffects, type TxEffects } from '../src/machines/effects.js'
+import { Dispatcher, wireTx } from './rig.js'
 
 // Phase B — tx.machine as DRIVER: the table decides, store.applyTxEvent
 // commits state+event+in-tx intents atomically, emitTxEvent runs the
@@ -39,9 +40,9 @@ async function prepared(store: AutomationStore, actionId: string, leased = true)
   return t.id('hex')
 }
 
-function wallet(store: AutomationStore, over: Partial<WalletDeps> = {}) {
+function wallet(store: AutomationStore, over: Partial<WalletDeps> = {}, ex?: Dispatcher) {
   const calls = { broadcast: 0, txSpent: 0, txDied: 0, recordAired: 0 }
-  const w = new WalletCoordinator(store, {
+  const deps: WalletDeps = {
     broadcast:
       over.broadcast ??
       (async () => {
@@ -57,8 +58,23 @@ function wallet(store: AutomationStore, over: Partial<WalletDeps> = {}) {
     recordAired: () => {
       calls.recordAired++
     },
-    ...over
-  })
+    ...over,
+    ...(ex !== undefined ? { exec: ex } : {})
+  }
+  const w = new WalletCoordinator(store, deps)
+  if (ex !== undefined)
+    wireTx(ex, {
+      store,
+      // the observe handler's intents run this coordinator's own deps —
+      // wallet.fx()'s rebuild-then-call mapping, verbatim test-side
+      fx: {
+        txSpent: async (wt) => await deps.txSpent?.(await w.rebuildTx(wt)),
+        txDied: async (wt) => await deps.txDied?.(await w.rebuildTx(wt)),
+        recordAired: async (wt) => await deps.recordAired?.(await w.rebuildTx(wt))
+      },
+      log: () => {},
+      submit: (id) => w.submit(id)
+    })
   return { w, calls }
 }
 
@@ -72,7 +88,9 @@ test('driver: submit success → submitted, event row, lease released, tx-spent 
   t.after(() => kx.destroy())
   const id = 'a1'
   await prepared(store, id)
-  const { w, calls } = wallet(store)
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const { w, calls } = wallet(store, {}, ex)
   const r = await w.submit(id)
   assert.equal(r.state, 'submitted')
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'submitted')
@@ -89,7 +107,9 @@ test('driver: definitive refusal → rejected, tx-died fired, lease released', a
   t.after(() => kx.destroy())
   const id = 'a2'
   await prepared(store, id)
-  const { w, calls } = wallet(store, { broadcast: async () => ({ status: 'error', description: 'missing inputs' }) })
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const { w, calls } = wallet(store, { broadcast: async () => ({ status: 'error', description: 'missing inputs' }) }, ex)
   const r = await w.submit(id)
   assert.equal(r.state, 'rejected')
   assert.equal(calls.txDied, 1)
@@ -106,7 +126,9 @@ test('driver: refused-then-aired revive (3bb8271b fixture)', async (t) => {
   t.after(() => kx.destroy())
   const id = 'a3'
   const txid = await prepared(store, id)
-  const { w, calls } = wallet(store, { broadcast: async () => ({ status: 'error', description: 'missing inputs' }) })
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const { w, calls } = wallet(store, { broadcast: async () => ({ status: 'error', description: 'missing inputs' }) }, ex)
   await w.submit(id)
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'rejected')
   assert.equal(calls.txDied, 1)
@@ -129,7 +151,9 @@ test('driver: revive via seen-then-proven still counts the aired spend once', as
   t.after(() => kx.destroy())
   const id = 'a4'
   const txid = await prepared(store, id)
-  const { w, calls } = wallet(store, { broadcast: async () => ({ status: 'error', description: 'missing inputs' }) })
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const { w, calls } = wallet(store, { broadcast: async () => ({ status: 'error', description: 'missing inputs' }) }, ex)
   await w.submit(id)
   await w.observe(txid, SEEN)
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'observed')
@@ -146,17 +170,23 @@ test('driver: transport failure → submission_unknown, never a verdict; replay 
   t.after(() => kx.destroy())
   const id = 'a5'
   await prepared(store, id)
-  const first = wallet(store, {
-    broadcast: async () => {
-      throw new Error('connection refused')
-    }
-  })
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const first = wallet(
+    store,
+    {
+      broadcast: async () => {
+        throw new Error('connection refused')
+      }
+    },
+    ex
+  )
   const r = await first.w.submit(id)
   assert.equal(r.state, 'submission_unknown')
   assert.equal((await store.walletTx({ actionId: id }))!.attempts, 1)
 
   // "restart": a fresh coordinator over the same store — no in-memory state
-  const second = wallet(store)
+  const second = wallet(store, {}, ex)
   const rs = await second.w.resubmitPending()
   assert.equal(rs.find((x) => x.actionId === id)!.state, 'submitted')
   assert.equal(second.calls.txSpent, 1)
@@ -176,14 +206,20 @@ test('driver: leg timeout mid-broadcast → submission_unknown, custody untouche
   t.after(() => kx.destroy())
   const id = 'a5b'
   await prepared(store, id)
-  const { w, calls } = wallet(store, {
-    broadcast: async () => {
-      // the wire call a signal-aware broadcaster makes — ioSignal()/ambient
-      // inside the submit fetch in production; the leg's bound must reach it
-      await nap(60_000, { signal: currentSignal() })
-      return { status: 'success' }
-    }
-  })
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const { w, calls } = wallet(
+    store,
+    {
+      broadcast: async () => {
+        // the wire call a signal-aware broadcaster makes — ioSignal()/ambient
+        // inside the submit fetch in production; the leg's bound must reach it
+        await nap(60_000, { signal: currentSignal() })
+        return { status: 'success' }
+      }
+    },
+    ex
+  )
   const leg = deadline(() => w.submit(id), 30)
   assert.deepEqual(await leg, { outcome: 'timeout' }, 'the leg bound abandons the waiter — the orphan keeps running')
   await nap(40) // the orphaned submit lands its classification
@@ -204,7 +240,9 @@ test('driver: impossible transitions write nothing — no state, no event row', 
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'prepared')
   assert.equal((await store.walletTxEvents(id)).length, 0)
   // confirmed --obs.seen--> anything must not exist either
-  const { w } = wallet(store)
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const { w } = wallet(store, {}, ex)
   await w.submit(id)
   await w.observe(txid, PROVEN)
   const before = (await store.walletTxEvents(id)).length
@@ -218,7 +256,9 @@ test('driver: duplicate seen is harmless; proven-before-seen confirms', async (t
   t.after(() => kx.destroy())
   const id = 'a7'
   const txid = await prepared(store, id)
-  const { w } = wallet(store)
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const { w } = wallet(store, {}, ex)
   await w.submit(id)
   assert.equal(await w.observe(txid, SEEN), 'observed')
   assert.equal(await w.observe(txid, SEEN), 'observed') // dup: self-edge, still observed
@@ -226,7 +266,7 @@ test('driver: duplicate seen is harmless; proven-before-seen confirms', async (t
 
   const id2 = 'a8'
   const txid2 = await prepared(store, id2)
-  const { w: w2 } = wallet(store)
+  const { w: w2 } = wallet(store, {}, ex)
   await w2.submit(id2)
   assert.equal(await w2.observe(txid2, PROVEN), 'confirmed')
 })
@@ -281,23 +321,33 @@ test('driver: crash between act and record replays on resubmitPending', async (t
   await prepared(store, id)
   // act succeeded, "crash" before the coordinator's own custody act —
   // txSpent throws, leaving the committed submit.success event uneffected
-  const { w } = wallet(store, {
-    txSpent: () => {
-      throw new Error('crashed post-commit')
-    }
-  })
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const { w } = wallet(
+    store,
+    {
+      txSpent: () => {
+        throw new Error('crashed post-commit')
+      }
+    },
+    ex
+  )
   const r = await w.submit(id)
   assert.equal(r.state, 'submitted')
   assert.equal((await store.pendingTxEffects()).length, 1)
   // "restart": fresh coordinator, broadcast now answers already-known —
   // resubmitPending replays the pending custody intent
   let replayed = 0
-  const { w: w2 } = wallet(store, {
-    broadcast: async () => ({ status: 'error', description: 'txn-already-in-mempool' }),
-    txSpent: () => {
-      replayed++
-    }
-  })
+  const { w: w2 } = wallet(
+    store,
+    {
+      broadcast: async () => ({ status: 'error', description: 'txn-already-in-mempool' }),
+      txSpent: () => {
+        replayed++
+      }
+    },
+    ex
+  )
   await w2.resubmitPending()
   assert.equal(replayed, 1)
   assert.equal((await store.pendingTxEffects()).length, 0)
@@ -317,20 +367,22 @@ test('watcher driver: proven row confirms + spends leases through declared inten
   await prepared(store, id)
   await store.setTxState(id, 'submitted', {}, false)
   const calls = { spent: 0, aired: 0 }
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const effects: TxEffects = {
+    txSpent: () => {
+      calls.spent++
+    },
+    recordAired: () => {
+      calls.aired++
+    }
+  }
+  wireTx(ex, { store, fx: effects, log: () => {} })
   const wt = new TransactionWatcher(
     store,
     async () => ({ status: 'proven', source: 'chain' }),
     async () => {},
-    {
-      effects: {
-        txSpent: () => {
-          calls.spent++
-        },
-        recordAired: () => {
-          calls.aired++
-        }
-      }
-    }
+    { effects, exec: ex }
   )
   await wt.tick()
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'confirmed')
@@ -345,20 +397,22 @@ test('watcher driver: dead row revive fires tx-spent + record-aired', async (t) 
   await prepared(store, id)
   await store.setTxState(id, 'rejected', { reason: 'refused' }, false)
   const calls = { spent: 0, aired: 0 }
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const effects: TxEffects = {
+    txSpent: () => {
+      calls.spent++
+    },
+    recordAired: () => {
+      calls.aired++
+    }
+  }
+  wireTx(ex, { store, fx: effects, log: () => {} })
   const wt = new TransactionWatcher(
     store,
     async () => ({ status: 'proven', source: 'chain' }),
     async () => {},
-    {
-      effects: {
-        txSpent: () => {
-          calls.spent++
-        },
-        recordAired: () => {
-          calls.aired++
-        }
-      }
-    }
+    { effects, exec: ex }
   )
   await wt.tick()
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'confirmed')
@@ -378,18 +432,19 @@ test('watcher driver: exported row past TTL expires and fires export-expired', a
     .where({ action_id: id })
     .update({ at: Date.now() - 1000 })
   const calls = { expired: 0 }
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const effects: TxEffects = {
+    exportExpired: () => {
+      calls.expired++
+    }
+  }
+  wireTx(ex, { store, fx: effects, log: () => {} })
   const wt = new TransactionWatcher(
     store,
     async () => undefined,
     async () => {},
-    {
-      exportedTtlMs: 500,
-      effects: {
-        exportExpired: () => {
-          calls.expired++
-        }
-      }
-    }
+    { exportedTtlMs: 500, effects, exec: ex }
   )
   await wt.tick()
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'expired')
@@ -405,7 +460,9 @@ test('both ledgers: the same driver semantics on a second store instance', async
   for (const s of [store, store2]) {
     const id = `both:${s === store ? 'records' : 'automation'}`
     const txid = await prepared(s, id)
-    const { w, calls } = wallet(s, { broadcast: async () => ({ status: 'error', description: 'missing inputs' }) })
+    const ex = new Dispatcher()
+    t.after(() => ex.close())
+    const { w, calls } = wallet(s, { broadcast: async () => ({ status: 'error', description: 'missing inputs' }) }, ex)
     await w.submit(id)
     await w.observe(txid, PROVEN)
     assert.equal((await s.walletTx({ actionId: id }))!.state, 'confirmed')

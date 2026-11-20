@@ -30,6 +30,7 @@ export {
   type MarketOptions,
   type StuckExit,
   STATE_LIMITS,
+  NONTERMINAL,
   MarketEngine
 } from './market.js'
 export {

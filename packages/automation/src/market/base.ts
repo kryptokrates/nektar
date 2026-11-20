@@ -49,7 +49,7 @@ export abstract class MarketBase {
     // advance() scan stays the missed-arm floor)
     d.store.residenceBound = (s) => STATE_LIMITS[s]?.maxAgeMs
     if (d.broadcast)
-      this.wallet = new WalletCoordinator(d.store, { broadcast: d.broadcast, txDied: d.txDied, txSpent: d.settleEscrow, recordAired: d.recordAired })
+      this.wallet = new WalletCoordinator(d.store, { broadcast: d.broadcast, exec: d.executor, txDied: d.txDied, txSpent: d.settleEscrow, recordAired: d.recordAired })
   }
 
   get pub(): string {

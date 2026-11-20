@@ -7,7 +7,9 @@ import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
 import { testWorld, testChain, dryFunder, type TestFunder } from '@nektar/chain'
 import { AutomationStore, RevisionConflict, classifyDeliveryError } from '../src/store.js'
-import { WalletCoordinator } from '../src/wallet.js'
+import { WalletCoordinator, type WalletDeps } from '../src/wallet.js'
+import type { TxEffects } from '../src/machines/effects.js'
+import { Dispatcher, wireTx } from './rig.js'
 import { policyHash, policyError, decidePurchase, decideOffer, type AutomationPolicy, type ActionContext } from '../src/policy.js'
 import { DEFAULT_SCORE_WEIGHTS } from '../src/scoring.js'
 
@@ -249,6 +251,16 @@ async function payment(funder: TestFunder, sats = 500) {
   return tx
 }
 
+// the observe handler's intent set mirrors the coordinator's own fx(): an
+// emit routed through the Dispatcher lands on wireTx's handler, whose fx
+// must rebuild the stored bytes and call the same deps — the test-side twin
+// of wallet.ts's driver fx (runtime.ts does the same with txFx)
+const fxFor = (w: WalletCoordinator, deps: Pick<WalletDeps, 'txSpent' | 'txDied' | 'recordAired'>): TxEffects => ({
+  txSpent: deps.txSpent === undefined ? undefined : async (wt) => await deps.txSpent!(await w.rebuildTx(wt)),
+  txDied: deps.txDied === undefined ? undefined : async (wt) => await deps.txDied!(await w.rebuildTx(wt)),
+  recordAired: deps.recordAired === undefined ? undefined : async (wt) => await deps.recordAired!(await w.rebuildTx(wt))
+})
+
 test('wallet: bytes persisted before submission; a crash between prepare and submit resumes the SAME tx', async (t) => {
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-auto-')), 'a.sqlite')
   const w = await testWorld(t, 3)
@@ -257,11 +269,15 @@ test('wallet: bytes persisted before submission; a crash between prepare and sub
   const tx = await payment(funder)
   const a = await open(file)
   const seen: string[] = []
+  const ex1 = new Dispatcher()
+  t.after(() => ex1.close())
   const w1 = new WalletCoordinator(a.store, {
     broadcast: async () => {
       throw new Error('process died')
-    }
+    },
+    exec: ex1
   })
+  wireTx(ex1, { store: a.store, fx: {}, log: () => {}, submit: (id) => w1.submit(id) })
   const prepared = await w1.prepare(ctx('h', 'pay:1'), 'send', tx)
   assert.equal(prepared.state, 'prepared')
   assert.equal(prepared.feeSats, 50)
@@ -270,12 +286,16 @@ test('wallet: bytes persisted before submission; a crash between prepare and sub
   await a.kx.destroy()
   const b = await open(file)
   t.after(() => b.kx.destroy())
+  const ex2 = new Dispatcher()
+  t.after(() => ex2.close())
   const w2 = new WalletCoordinator(b.store, {
     broadcast: async (x) => {
       seen.push(x.id('hex'))
       return await chain.broadcast(x)
-    }
+    },
+    exec: ex2
   })
+  wireTx(ex2, { store: b.store, fx: {}, log: () => {}, submit: (id) => w2.submit(id) })
   assert.deepEqual(await w2.resubmitPending(), [{ actionId: 'pay:1', state: 'submitted' }])
   assert.deepEqual(seen, [tx.id('hex')], 'the recorded bytes were sent — nothing was rebuilt')
   assert.equal((await w2.submit('pay:1')).state, 'submitted', 'resubmitting an accepted tx is harmless')
@@ -303,7 +323,10 @@ test('wallet: one outpoint, one live action; guard refusal and network rejection
     return tx
   }
   let reply: import('@nektar/chain').BroadcastResult = { status: 'error', description: 'broadcaster: REJECTED — missing inputs' }
-  const w = new WalletCoordinator(store, { broadcast: async () => reply })
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const w = new WalletCoordinator(store, { broadcast: async () => reply, exec: ex })
+  wireTx(ex, { store, fx: {}, log: () => {}, submit: (id) => w.submit(id) })
   const t1 = await build(),
     t2 = await build()
   await w.prepare(ctx('h', 'a'), 'send', t1)
@@ -327,7 +350,10 @@ test('wallet: one outpoint, one live action; guard refusal and network rejection
   t.after(() => o2.kx.destroy())
   const store2 = o2.store
   reply = { status: 'error', description: 'SpendGuard refused: fee 5000 sats > maxFeePerTx 1000' }
-  const w2 = new WalletCoordinator(store2, { broadcast: async () => reply })
+  const ex2 = new Dispatcher()
+  t.after(() => ex2.close())
+  const w2 = new WalletCoordinator(store2, { broadcast: async () => reply, exec: ex2 })
+  wireTx(ex2, { store: store2, fx: {}, log: () => {}, submit: (id) => w2.submit(id) })
   await w2.prepare(ctx('h', 'a'), 'send', t1)
   assert.equal((await w2.submit('a')).state, 'rejected')
   assert.equal((await w2.prepare(ctx('h', 'b'), 'send', t2)).state, 'prepared', 'a tx that never left the process frees its inputs')
@@ -356,11 +382,20 @@ test('wallet: first-party deaths run custody hooks — txDied on refusal/rejecti
   // gate → txDied gets the rebuilt tx so custody drops its outputs
   const died: string[] = []
   const spent: string[] = []
-  const w = new WalletCoordinator(store, {
-    broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }),
+  const hooks: Pick<WalletDeps, 'txDied' | 'txSpent'> = {
     txDied: (tx) => void died.push(tx.id('hex')),
     txSpent: (tx) => void spent.push(tx.id('hex'))
+  }
+  // one dispatcher per store: the three coordinators below ride the same
+  // observe handler — their custody deps are identical by construction
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const w = new WalletCoordinator(store, {
+    broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }),
+    ...hooks,
+    exec: ex
   })
+  wireTx(ex, { store, fx: fxFor(w, hooks), log: () => {} })
   const t1 = await build()
   await w.prepare(ctx('h', 'a'), 'send', t1)
   assert.equal((await w.submit('a')).state, 'rejected')
@@ -371,8 +406,8 @@ test('wallet: first-party deaths run custody hooks — txDied on refusal/rejecti
     broadcast: async () => {
       throw new Error('socket died')
     },
-    txDied: (tx) => void died.push(tx.id('hex')),
-    txSpent: (tx) => void spent.push(tx.id('hex'))
+    ...hooks,
+    exec: ex
   })
   const t2 = await build()
   await w2.prepare(ctx('h', 'b'), 'send', t2)
@@ -381,8 +416,8 @@ test('wallet: first-party deaths run custody hooks — txDied on refusal/rejecti
   // a network-observed rejection/conflict is a death too
   const w3 = new WalletCoordinator(store, {
     broadcast: async () => ({ status: 'success' }),
-    txDied: (tx) => void died.push(tx.id('hex')),
-    txSpent: (tx) => void spent.push(tx.id('hex'))
+    ...hooks,
+    exec: ex
   })
   // t2's input stays leased to 'b' — submission_unknown is undecidable, so a
   // new attempt must draw on a different coin (exactly custody's contract)
@@ -411,11 +446,18 @@ test('wallet: a refused tx aired by the counterparty revives custody, not a doub
   await tx.sign()
   const died: string[] = []
   const spent: string[] = []
-  const w = new WalletCoordinator(store, {
-    broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }),
+  const hooks: Pick<WalletDeps, 'txDied' | 'txSpent'> = {
     txDied: (x) => void died.push(x.id('hex')),
     txSpent: (x) => void spent.push(x.id('hex'))
+  }
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const w = new WalletCoordinator(store, {
+    broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }),
+    ...hooks,
+    exec: ex
   })
+  wireTx(ex, { store, fx: fxFor(w, hooks), log: () => {} })
   await w.prepare(ctx('h', 'a'), 'send', tx)
   assert.equal((await w.submit('a')).state, 'rejected', 'our own broadcast never left')
   assert.deepEqual(died, [tx.id('hex')], 'the refusal freed custody')
@@ -440,7 +482,10 @@ test('watcher: recently-rejected rows still re-observe — the counterparty-air 
   tx.addOutput({ satoshis: 49_900, lockingScript: new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])) })
   await tx.sign()
   const revived: string[] = []
-  const w = new WalletCoordinator(store, { broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }) })
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const w = new WalletCoordinator(store, { broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }), exec: ex })
+  wireTx(ex, { store, fx: {}, log: () => {}, submit: (id) => w.submit(id) })
   await w.prepare(ctx('h', 'a'), 'send', tx)
   assert.equal((await w.submit('a')).state, 'rejected')
   const { TransactionWatcher } = await import('../src/ledger.js')

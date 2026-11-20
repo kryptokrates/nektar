@@ -9,10 +9,10 @@ import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nek
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { AutomationStore } from '@nektar/automation'
-import { MarketEngine, type MarketMessage } from '@nektar/automation'
+import { MarketEngine, Dispatcher, type MarketMessage, type WalletTx } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
-import { testPolicyFor } from './agentkit.js'
+import { testPolicyFor, wireEngine } from './agentkit.js'
 import { PrivateKey, Transaction } from '@bsv/sdk'
 
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
@@ -55,8 +55,11 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
     }
   })
   const hooks = { afterPrepare: undefined as undefined | ((actionId: string) => void) }
-  const engineFor = (mem: NektarMemory, store: AutomationStore) =>
-    new MarketEngine({
+  const engineFor = (mem: NektarMemory, store: AutomationStore) => {
+    // engine-level suite: no runtime, so the executor is an in-process
+    // dispatcher carrying the same deal-path bodies the endpoint would serve
+    const ex = new Dispatcher()
+    const engine = new MarketEngine({
       store,
       memory: mem,
       key: mem.operatorKey(),
@@ -70,8 +73,18 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
       broadcast: (tx) => mem.broadcastTx(tx),
       settleEscrow: (tx) => mem.funds.spent(tx),
       afterPrepare: (id) => hooks.afterPrepare?.(id),
+      executor: ex,
       opts: { refundBlocks: opts.refundBlocks ?? 144, ...(opts.wantExtendMs !== undefined ? { wantExtendMs: opts.wantExtendMs } : {}) }
     })
+    const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
+    wireEngine(ex, engine, store, {
+      fx: {
+        txDied: async (w) => void (await mem.funds.died(await rebuild(w))),
+        txSpent: async (w) => void (await mem.funds.spent(await rebuild(w)))
+      }
+    })
+    return engine
+  }
   const policyFor = (pub: string, extra: Partial<AutomationPolicy['limits']> = {}): AutomationPolicy => testPolicyFor(pub, { limits: extra })
   const add = async (name: string, limits: Partial<AutomationPolicy['limits']> = {}): Promise<Agent> => {
     // real funding: anchors, escrows and refunds all broadcast real txs — a

@@ -16,14 +16,14 @@ import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nek
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { AutomationStore } from '@nektar/automation'
-import { MarketEngine, STATE_LIMITS, type MarketMessage } from '@nektar/automation'
+import { MarketEngine, STATE_LIMITS, Dispatcher, wireTx, type MarketMessage, type WalletTx } from '@nektar/automation'
 import { WalletCoordinator } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
 import { killSwitchActive } from '@nektar/automation'
 import { requeueAckItems } from '@nektar/automation'
-import { testPolicyFor } from './agentkit.js'
+import { testPolicyFor, wireEngine } from './agentkit.js'
 import { runPreflight } from '@nektar/automation'
 import { issueToken, verifyToken, conformanceStatus, conformanceConfigHash, suiteDigest, TOKEN_TTL_MS } from '@nektar/automation'
 
@@ -125,11 +125,16 @@ test('D6 crash between broadcast and journal write: resubmit replays identical b
     tx.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScript: Script.fromHex('51') })
     tx.addOutput({ lockingScript: new P2PKH().lock(key.toPublicKey().toHash()), satoshis: 9_000 })
     const aired: string[] = []
+    // driver mode routes emits through the executor — a dispatcher carrying
+    // the tx object bodies, same as the endpoint serves
+    const ex = new Dispatcher()
+    wireTx(ex, { store, fx: {}, log: () => {} })
     const wallet = new WalletCoordinator(store, {
       broadcast: async (t) => {
         aired.push(t.id('hex'))
         return { status: 'success' }
-      }
+      },
+      exec: ex
     })
     const ctx = { operationId: 'op1', actionId: 'op1:escrow', policyHash: 'p', networkId: 'regtest' }
     await wallet.prepare(ctx, 'escrow', tx)
@@ -174,7 +179,7 @@ test('D6 crash between broadcast and journal write: resubmit replays identical b
     const tx2 = new Transaction()
     tx2.addInput({ sourceTransaction: parent2, sourceOutputIndex: 0, unlockingScript: Script.fromHex('51') })
     tx2.addOutput({ lockingScript: new P2PKH().lock(key.toPublicKey().toHash()), satoshis: 9_000 })
-    const wallet2 = new WalletCoordinator(store, { broadcast: async () => ({ status: 'error', description: 'txn-already-in-mempool' }) })
+    const wallet2 = new WalletCoordinator(store, { broadcast: async () => ({ status: 'error', description: 'txn-already-in-mempool' }), exec: ex })
     store.setTxState = orig
     const ctx2 = { ...ctx, actionId: 'op1:refund' }
     await wallet2.prepare(ctx2, 'refund', tx2)
@@ -233,6 +238,7 @@ const mkEngine = async (opts: { killed?: () => boolean; deaf?: () => boolean }) 
     } satisfies AutomationPolicy,
     'test'
   )
+  const ex = new Dispatcher()
   const engine = new MarketEngine({
     store,
     memory: {} as NektarMemory,
@@ -244,8 +250,10 @@ const mkEngine = async (opts: { killed?: () => boolean; deaf?: () => boolean }) 
     transport: { publishWant: async () => {}, publishOffer: async () => {}, send: async () => {} },
     ai: new ScriptedExecutor(),
     killed: opts.killed,
-    deaf: opts.deaf
+    deaf: opts.deaf,
+    executor: ex
   })
+  wireEngine(ex, engine, store)
   return { engine, store, kx, policyHash, key }
 }
 
@@ -326,8 +334,9 @@ async function world(
       await a.engine.ingestMessage(pub, msg)
     }
   })
-  const engineFor = (mem: NektarMemory, store: AutomationStore) =>
-    new MarketEngine({
+  const engineFor = (mem: NektarMemory, store: AutomationStore) => {
+    const ex = new Dispatcher()
+    const engine = new MarketEngine({
       store,
       memory: mem,
       key: mem.operatorKey(),
@@ -343,8 +352,18 @@ async function world(
       settleEscrow: (tx) => mem.funds.spent(tx),
       killed: opts.killed,
       deaf: opts.deaf,
+      executor: ex,
       opts: { refundBlocks: opts.refundBlocks ?? 144 }
     })
+    const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
+    wireEngine(ex, engine, store, {
+      fx: {
+        txDied: async (w) => void (await mem.funds.died(await rebuild(w))),
+        txSpent: async (w) => void (await mem.funds.spent(await rebuild(w)))
+      }
+    })
+    return engine
+  }
   const policyFor = (pub: string): AutomationPolicy => testPolicyFor(pub)
   const everyone: Agent[] = []
   const add = async (name: string): Promise<Agent> => {

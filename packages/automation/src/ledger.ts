@@ -4,7 +4,7 @@ import type { AutomationStore, TxState, WalletTx } from './store.js'
 import { WalletCoordinator } from './wallet.js'
 import { replayTxEffects, type TxEffects } from './machines/effects.js'
 import { obsEvent, txFsmLegacy } from './machines/driver.js'
-import { executor } from './rt/exec.js'
+import { executor, type Executor } from './rt/exec.js'
 import { txEmit } from './rt/emit.js'
 import { WAITS } from './waits.js'
 
@@ -16,8 +16,13 @@ export interface TxObservationInput {
   spentBy?: string
 }
 
-export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) => Promise<BroadcastResult>): (tx: Transaction) => Promise<BroadcastResult> {
-  const wallet = new WalletCoordinator(store, { broadcast: inner })
+export function wrapBroadcast(
+  store: AutomationStore,
+  inner: (tx: Transaction) => Promise<BroadcastResult>,
+  /** the caller's executor — absent = the ambient restate ingress */
+  exec?: Executor
+): (tx: Transaction) => Promise<BroadcastResult> {
+  const wallet = new WalletCoordinator(store, { broadcast: inner, exec })
   return async (tx) => {
     const txid = tx.id('hex')
     const actionId = `owner:${txid}`
@@ -66,7 +71,7 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
           const w = await store.walletTx({ actionId }).catch(() => undefined)
           if (w !== undefined)
             await txEmit(
-              executor(),
+              exec ?? executor(),
               store,
               w,
               r.status === 'success' ? 'submit.success' : 'submit.unknown',
@@ -82,7 +87,7 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
         if (!txFsmLegacy()) {
           const w = await store.walletTx({ actionId }).catch(() => undefined)
           if (w !== undefined)
-            await txEmit(executor(), store, w, 'submit.unknown', { observation: { at: Date.now(), error: (e as Error).message }, attempt: true }, {}).catch(
+            await txEmit(exec ?? executor(), store, w, 'submit.unknown', { observation: { at: Date.now(), error: (e as Error).message }, attempt: true }, {}).catch(
               () => {}
             )
         } else await store.setTxState(actionId, 'submission_unknown', { at: Date.now(), error: (e as Error).message }, true).catch(() => {})
@@ -173,6 +178,9 @@ export class TransactionWatcher {
        *  resolve to these post-commit calls. When set (and the legacy flag
        *  is off) the watcher is a pure effector: observe → emit → intents */
       effects?: TxEffects
+      /** the caller's executor — the driver's emits ride it (an injected
+       *  cfg.exec Dispatcher included); absent = the ambient restate ingress */
+      exec?: Executor
     }
   ) {}
 
@@ -240,7 +248,7 @@ export class TransactionWatcher {
     await replayTxEffects(this.store, fx).catch(() => 0)
     let changed = 0
     for await (const { w, observe } of scanTxObservations(this.store, this.observeFn, this.opts?.exportedTtlMs)) {
-      const r = await txEmit(executor(), this.store, w, observe.event, { guard: observe.guard, observation: observe.observation }, fx)
+      const r = await txEmit(this.opts?.exec ?? executor(), this.store, w, observe.event, { guard: observe.guard, observation: observe.observation }, fx)
       if (r.next !== w.state) changed++
     }
     return changed

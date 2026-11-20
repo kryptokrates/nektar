@@ -1,15 +1,15 @@
 {
   "packages": {
     "anchor": {
-      "loc": 1196,
+      "loc": 1201,
       "pkgFanout": 4,
       "edges": ["chain", "contracts", "core", "identity"],
-      "maxFileLoc": 619,
+      "maxFileLoc": 624,
       "maxFileFanout": 8,
       "instability": 0.4
     },
     "automation": {
-      "loc": 11234,
+      "loc": 11254,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1324,
@@ -33,10 +33,10 @@
       "instability": 0.5
     },
     "chain": {
-      "loc": 6732,
+      "loc": 6730,
       "pkgFanout": 1,
       "edges": ["core"],
-      "maxFileLoc": 945,
+      "maxFileLoc": 943,
       "maxFileFanout": 31,
       "instability": 0.091
     },
@@ -73,7 +73,7 @@
       "instability": 0.167
     },
     "e2e": {
-      "loc": 5914,
+      "loc": 5920,
       "pkgFanout": 14,
       "edges": ["anchor", "automaton", "chain", "contracts", "core", "datalog", "graph", "identity", "log", "mcp", "policy", "reasoning", "verify", "zk"],
       "maxFileLoc": 1021,
@@ -229,7 +229,7 @@
       "fanout": 31
     },
     "packages/chain/src/testkit.ts": {
-      "loc": 945,
+      "loc": 943,
       "fanout": 12
     },
     "packages/e2e/src/scenarios/real-stack.mjs": {

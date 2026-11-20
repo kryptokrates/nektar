@@ -34,17 +34,18 @@
     "@nektar/graph": "workspace:*",
     "@nektar/identity": "workspace:*",
     "@nektar/log": "workspace:*",
+    "@nektar/memory": "workspace:*",
     "@nektar/policy": "workspace:*",
     "@nektar/reasoning": "workspace:*",
     "@nektar/store": "workspace:*",
     "@nektar/verify": "workspace:*",
     "@nektar/zk": "workspace:*",
+    "@tabler/core": "^1.7.5",
     "knex": "^3.3.0",
     "qrcode": "1.5.4",
     "runar-sdk": "0.4.6",
     "sqlite3": "^5.1.7",
-    "zod": "^4.6.7",
-    "@nektar/memory": "workspace:*"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/qrcode": "^1.5.6"

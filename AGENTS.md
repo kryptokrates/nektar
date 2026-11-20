@@ -28,6 +28,7 @@ question that could come from memory:
 - Regtest e2e: `node packages/e2e/src/e2e-regtest.ts` and siblings (needs the local Teranode stack)
 - Groth16 spike: `tools/groth16-spike/README.md` (Python 3.12 venv inside the zkscript checkout; Rust circuit builds inside Docker on Windows)
 - Wait-site contract (event plane): every recurring wait names its producer signal — `scheduler.wake`/`dueIn`, `store.outboxReady`/`workReady`/`dueAtArmed`, `mem.onTx*`, `events.poke`/`note` — or is classified `probe-tier`/`floor-only` in `automation/test/wake-coverage.test.ts`; a raw `setInterval` outside the map fails CI. Ceilings stay as leak guards, never the mechanism.
+- Durable executor (Phase 0/1 landed): `automation/src/rt/` is the Restate execution plane — `exec.ts` (Executor seam + `NEKTAR_EXECUTOR=restate` switch + `executor()`/`setExecutor` process seam), `emit.ts` (`txEmit` routes every `emitTxEvent` call — no executor = verbatim local path), `services.ts` (tx virtual object per actionId; handler bodies exported plain so LocalExecutor runs the same code), `endpoint.ts` (in-process HTTP/2 endpoint + deployment auto-registration; the SDK lazy-imports so local mode never loads it). Every `emitTxEvent` call site goes through `txEmit(executor(), …)` — a new direct call bypasses the executor and breaks journal coverage.
 
 ## Key custody (`NEKTAR_WALLET`)
 

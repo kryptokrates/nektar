@@ -5,7 +5,7 @@
 // that pendingTxEffects/replayTxEffects covered by hand.
 import type { AutomationStore, WalletTx } from '../store.js'
 import { emitTxEvent, type EmitResult, type TxEffects } from '../machines/effects.js'
-import { EXEC_SVC, type Executor } from './exec.js'
+import { EXEC_SVC, rtScopeKey, type Executor } from './exec.js'
 
 export interface TxObserve {
   event: string
@@ -22,7 +22,9 @@ export async function txEmit(
   payload: { guard?: string; observation?: unknown; attempt?: boolean },
   fx: TxEffects
 ): Promise<EmitResult> {
-  if (exec === undefined) return await emitTxEvent(store, w, event, payload, fx)
+  // inside a handler for this same key, routing back through the object
+  // would self-deadlock — go direct (the handler is already serialized)
+  if (exec === undefined || rtScopeKey()?.txKey === w.actionId) return await emitTxEvent(store, w, event, payload, fx)
   const r = await exec.call<{ accepted: boolean; next?: EmitResult['next']; intents?: string[] }>(
     { service: EXEC_SVC.tx, handler: 'observe', key: w.actionId },
     { event, guard: payload.guard, observation: payload.observation, attempt: payload.attempt } satisfies TxObserve

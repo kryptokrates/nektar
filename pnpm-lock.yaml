@@ -433,6 +433,9 @@ importers:
       '@nektar/zk':
         specifier: workspace:*
         version: link:../zk
+      '@tabler/core':
+        specifier: ^1.7.5
+        version: 1.7.5
       knex:
         specifier: ^3.3.0
         version: 3.3.0(better-sqlite3@13.1.1)(mysql2@3.24.6(@types/node@24.19.2))(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
@@ -1312,11 +1315,23 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@popperjs/core@2.11.8':
+    resolution: {integrity: sha512-P1st0aksCrn9sGZhp8GMYwBnQsbvAWsZAX44oXNNvLHGqAOcoVxmjZiohstwQ7SqKnbR47akdNi+uleWD8+g6A==}
+
   '@restatedev/restate-sdk-core@1.18.3':
     resolution: {integrity: sha512-thrGdKckP+yD/oK5PHjGja0ZU87xBrKWzX+m/IL/7UFh/VCpuQ7Fx0ySa9DutWKT6CnQLtA8OybK7U53IMaHTw==}
 
   '@restatedev/restate-sdk@1.18.3':
     resolution: {integrity: sha512-1N3bt19vGSUknYFaxKDFaBNlQAG6RNSJRm7Q7toNpMpmlkLG4Di/qzXNos8FA+k+ap/etZv9beaExK1Npx1ylQ==}
+
+  '@tabler/core@1.7.5':
+    resolution: {integrity: sha512-lqR2kfrxvH6q0fESm4ABJk3lhUJGQ/tBtiNi4oSCvDgMNljStTLpY38F+e5EtaUqufpbZq8MIxN94QK8cTApAA==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      vanilla-calendar-pro: ^3.3.2
+    peerDependenciesMeta:
+      vanilla-calendar-pro:
+        optional: true
 
   '@tootallnate/once@1.1.2':
     resolution: {integrity: sha512-RbzJvlNzmRq5c3O09UipeuXno4tA1FE6ikOjxZK0tuxVv3412l64l5t1W5pj4+rJq9vpkm/kwiR07aZXnsKPxw==}
@@ -3418,11 +3433,17 @@ snapshots:
   '@oxlint/binding-win32-x64-msvc@1.93.0':
     optional: true
 
+  '@popperjs/core@2.11.8': {}
+
   '@restatedev/restate-sdk-core@1.18.3': {}
 
   '@restatedev/restate-sdk@1.18.3':
     dependencies:
       '@restatedev/restate-sdk-core': 1.18.3
+
+  '@tabler/core@1.7.5':
+    dependencies:
+      '@popperjs/core': 2.11.8
 
   '@tootallnate/once@1.1.2':
     optional: true

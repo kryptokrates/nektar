@@ -2,7 +2,6 @@
 // invokes them over HTTP/2) and register the deployment with the server's
 // admin API. Registration is idempotent — the server dedupes by URI.
 import { createServer, type Http2Server } from 'node:http2'
-import * as restate from '@restatedev/restate-sdk'
 import { nektarEnv, nektarEnvNum, nap, type EnvSource } from '@nektar/core'
 import { WAITS } from '../waits.js'
 
@@ -37,15 +36,13 @@ export async function registerDeployment(admin: string, uri: string, log: (line:
   return false
 }
 
-export async function openEndpoint(
-  services: Parameters<typeof restate.createEndpointHandler>[0]['services'],
-  env: EnvSource = process.env,
-  log: (line: string) => void = () => {}
-): Promise<RtEndpoint> {
+export async function openEndpoint(services: unknown[], env: EnvSource = process.env, log: (line: string) => void = () => {}): Promise<RtEndpoint> {
+  // the SDK loads only on this path — local mode never pays its module cost
+  const restate = await import('@restatedev/restate-sdk')
   const port = nektarEnvNum('NEKTAR_RESTATE_ENDPOINT_PORT', env) ?? 9080
   const uri = nektarEnv('NEKTAR_RESTATE_ENDPOINT_URI', env) ?? `http://127.0.0.1:${port}`
   const admin = nektarEnv('NEKTAR_RESTATE_ADMIN', env) ?? 'http://127.0.0.1:9070'
-  const handler = restate.createEndpointHandler({ services })
+  const handler = restate.createEndpointHandler({ services: services as never })
   const server: Http2Server = createServer(handler)
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)

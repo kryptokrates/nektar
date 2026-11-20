@@ -44,6 +44,7 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
       '/.well-known/nektar',
       '/.well-known/x402',
       '/dashboard',
+      '/dashboard/tabler.css',
       '/mcp',
       '/v1/automation/approvals/{id}',
       '/v1/automation/health',

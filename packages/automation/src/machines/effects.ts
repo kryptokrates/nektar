@@ -35,7 +35,7 @@ const IN_TX_INTENTS = new Set(['release-leases', 'leases->spent', 'watch', 'watc
 
 /** dispatch the post-commit intents; returns false if any effect threw
  *  (the event stays uneffected and replayTxEffects retries it) */
-async function runTxIntents(intents: string[], w: WalletTx, fx: TxEffects): Promise<boolean> {
+export async function runTxIntents(intents: string[], w: WalletTx, fx: TxEffects): Promise<boolean> {
   let ok = true
   for (const i of intents) {
     if (IN_TX_INTENTS.has(i)) continue

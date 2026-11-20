@@ -51,7 +51,7 @@ services:
   restate:
     image: docker.restate.dev/restatedev/restate:latest
     ports:
-      - '8090:8080' # ingress (8080 is taken by nektar-http on this box)
+      - '18080:8080' # ingress (8080 → nektar-http, 8090 → teranode asset on this box)
       - '9070:9070' # admin + UI
       - '9071:9071' # node ctrl
     volumes:

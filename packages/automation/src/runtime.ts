@@ -425,7 +425,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // sends/calls then land here journaled + serialized per key
   let rtEndpoint: RtEndpoint | undefined
   if (executor() !== undefined) {
-    rtEndpoint = await openEndpoint([txObject({ store, fx: txFx, log })], process.env, log)
+    rtEndpoint = await openEndpoint([await txObject({ store, fx: txFx, log })], process.env, log)
     log(`automation: restate endpoint ${rtEndpoint.uri}`)
   }
   let again = false

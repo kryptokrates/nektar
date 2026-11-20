@@ -9,6 +9,7 @@
 // The same handler bodies back both executors — services.ts wraps them for
 // the Restate endpoint, LocalExecutor dispatches to them directly — so
 // memory-tier tests exercise the exact code the server invokes.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { nektarEnv, type EnvSource } from '@nektar/core'
 import { WAITS } from '../waits.js'
 
@@ -38,8 +39,31 @@ export interface Executor {
 /** service/object names — keep in sync with services.ts */
 export const EXEC_SVC = {
   tx: 'nektar-tx',
+  sweep: 'nektar-sweep',
   transport: 'nektar-transport'
 } as const
+
+// the inside-handler scope: a VO handler for key K emitting for K must NOT
+// route back through the object — a same-key self-call deadlocks the
+// exclusive object (the running handler would wait on itself). Handler
+// bodies run inside this scope; emitters consult rtScopeKey() and go
+// direct on a same-key hit. Cross-key emits still route — different
+// object, no deadlock.
+interface RtScope {
+  txKey?: string
+}
+
+const scope = new AsyncLocalStorage<RtScope>()
+
+export const inRtScope = <T>(s: RtScope, fn: () => T): T => scope.run(s, fn)
+
+export const rtScopeKey = (): RtScope | undefined => scope.getStore()
+
+/** a journaled send inside a handler — restate backs it with
+ *  ctx.objectSendClient (journal-deduped on replay); LocalExecutor backs
+ *  it with ex.send. Callers never use the ingress inside a handler —
+ *  unjournaled egress would double-fire on replay. */
+export type RtSend = (target: { service: string; handler: string; key?: string }, arg: unknown, opts?: SendOpts) => Promise<unknown>
 
 type Handler = (arg: unknown, key?: string) => Promise<unknown>
 

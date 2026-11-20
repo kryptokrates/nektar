@@ -169,10 +169,14 @@ console.log('— reorg —')
     check((rm as any).anchors.get('reorg').getHead().tx.id('hex') === lostTxid, 'rollback kept head pending and re-broadcast')
     await rc.mine(1)
     const rh = rac.getHead()
-    // the re-broadcast reseals on the node's own cadence — the orphaned
-    // block's BUMP was cleared by handleReorg; wait for the surviving-chain
-    // proof so the verify below is real, not the 'broadcast' fast-path
-    for (let i = 0; i < 60 && rh.tx.merklePath === undefined; i++) await new Promise((r) => setTimeout(r, 2_000))
+    // the re-broadcast reseals on the node's own cadence (post-reset the
+    // assembler pauses ~2-3min) and the 60s push-watch may lapse first —
+    // fetchTx is the pull floor: it drives proofLookup→deliverTxProof so a
+    // late seal still reaches this anchor object
+    for (let i = 0; i < 60 && rh.tx.merklePath === undefined; i++) {
+      await rm.fetchTx(rh.tx.id('hex'))
+      if (rh.tx.merklePath === undefined) await new Promise((r) => setTimeout(r, 5_000))
+    }
     rac.confirm(rh.tx.id('hex'), rh.tx.merklePath)
     const { result: after } = await rm.prove('reorg', 0)
     check(after.ok === true && (after as { anchorState?: string }).anchorState === 'mined', 're-anchored proof verifies against new block')

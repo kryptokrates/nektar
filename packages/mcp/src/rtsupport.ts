@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PrivateKey, Transaction } from '@bsv/sdk'
 import { detached, nektarEnv, nektarEnvNum, mkLog } from '@nektar/core'
-import { TxStore, type ChainPort, type Funds, type TxStatusEvent } from '@nektar/chain'
+import { TxStore, type ChainPort, type Funds, type TxStatusEvent, type ChainEvents, type BroadcastResult } from '@nektar/chain'
+import { executor, cronObject, legObject, EXEC_SVC, type InvokeTarget } from '@nektar/automation'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { readKeyFile, writeKeyFile, fundKeyFromMnemonic } from './keystore.js'
 import { watcherObservation } from './txops.js'
@@ -375,4 +376,272 @@ export async function buildRecordsWatcher(d: {
       }
     }
   )
+}
+
+/** the confirmer + records-watcher plane: one ChainEvents substrate fans out
+ *  to (a) the confirmer pass — persist, flush, watch anchors+ledger txs,
+ *  bounded ancestry heal, proof pull, topUp — and (b) the event-driven
+ *  records watcher + journal prune. Under NEKTAR_EXECUTOR=restate both ride
+ *  as journaled objects on the shared endpoint (defs + boot kicks returned
+ *  for openAutomation to register); the local mode keeps the interval
+ *  wheel + inline ticks. Boot plumbing — lives here, not in runtime.ts. */
+export interface ConfirmerWatchDeps {
+  cfg: { confirmEveryMs?: number; autoMine?: boolean }
+  mem: NektarMemory
+  port: ChainPort
+  events: ChainEvents
+  ledger: import('@nektar/automation').AutomationStore
+  chain: { broadcast: (tx: Transaction) => Promise<BroadcastResult> }
+  txStore: TxStore
+  funds: Funds
+  fundingRefresh: (() => Promise<void>) | undefined
+  diedFromRow: (w: import('@nektar/automation').WalletTx, tag: string) => Promise<void>
+  net: string
+  nlog: (line: string) => void
+  persistKeys: () => void
+  topUp: (() => Promise<void>) | undefined
+}
+
+export async function openConfirmerWatch(
+  d: ConfirmerWatchDeps
+): Promise<{
+  rtDefs: unknown[]
+  rtKicks: InvokeTarget[]
+  /** final-flush seam for close() — one last confirmer pass */
+  tick: () => Promise<void>
+  /** the running pass's promise while one is in flight */
+  inflight: () => Promise<void> | undefined
+  close: () => void
+}> {
+  // confirmer: timed flush + optional auto-mine; proof attachment itself is
+  // push-shaped — this loop only registers interest with the events
+  // substrate, which delivers via d.chain.onStatus → d.mem.deliverTxProof.
+  // Parents of unproven anchors are watched too: a funding tree is
+  // ancestry-anchored the moment its own inputs prove. Height-gating lives
+  // inside the substrate — a static tip skips the batch entirely.
+  // under NEKTAR_EXECUTOR=restate the confirmer + records watcher run as
+  // journaled objects on the shared endpoint (defs/kicks returned to bin.ts
+  // and registered by openAutomation); the interval wheel stays local-mode
+  const durableExec = nektarEnv('NEKTAR_EXECUTOR') === 'restate'
+  const rtDefs: unknown[] = []
+  const rtKicks: InvokeTarget[] = []
+  let busy = false
+  let inflight: Promise<void> | undefined
+  let proofPullAt = 0
+  const tick = async () => {
+    if (busy) return await inflight
+    busy = true
+    inflight = (async () => {
+      try {
+        d.persistKeys()
+        await d.mem.flushDue()
+        const waiting = d.mem.unprovenAnchors()
+        if (waiting.length > 0 && d.cfg.autoMine) await d.port.mine?.()
+        for (const { txid } of waiting) {
+          d.events.watch(txid)
+          const tx = await d.mem.fetchTx(txid)
+          for (const i of tx?.inputs ?? []) {
+            const src = i.sourceTransaction
+            if (src !== undefined && src.merklePath === undefined) d.events.watch(src.id('hex'))
+          }
+        }
+        // ledger txs too: one shared probe per txid serves the watcher's
+        // statusOf short-circuit — no second fetch per inflight tx
+        for (const w of await d.ledger.walletTxs(['submitted', 'submission_unknown', 'observed'])) d.events.watch(w.txid)
+        // stalled-submission heal: a row parked missing-parent (or vanished
+        // after acceptance — clean 404) can never settle, and nothing else
+        // will put the absent ancestor on the wire. Walk stored ancestry —
+        // the row's parents first, deeper links via the instance tx graph
+        // and the ledger itself — and re-air every ancestor the network
+        // honestly answers "not found" for. A refused parent can never be a
+        // missing ancestor: died() tombstones its outputs so no child ever
+        // chains on it. Bounded per pass; deep chains heal one level a tick.
+        {
+          let healBudget = 8
+          const healSeen = new Set<string>()
+          const resolveTx = async (txid: string): Promise<Transaction | undefined> => {
+            const inGraph = d.txStore.get(txid)
+            if (inGraph !== undefined) return inGraph
+            const inLedger = (await d.ledger.walletTx({ txid }).catch(() => undefined))?.rawHex
+            if (inLedger !== undefined) return Transaction.fromHex(inLedger)
+            return await d.port.txLookup?.(txid).catch(() => undefined)
+          }
+          const hintOf = async (txid: string): Promise<{ status: string; answered: boolean } | undefined> => d.port.statusHint?.(txid).catch(() => undefined)
+          const reair = async (tx: Transaction): Promise<void> => {
+            for (const i of tx.inputs) {
+              if (i.sourceTransaction !== undefined || i.sourceTXID === undefined) continue
+              i.sourceTransaction = await resolveTx(i.sourceTXID)
+            }
+            const r = await d.chain.broadcast(tx)
+            if (r.status === 'success') d.nlog(`re-aired ${tx.id('hex')} — wire gap self-healed`)
+          }
+          const healWalk = async (tx: Transaction): Promise<void> => {
+            for (const i of tx.inputs) {
+              const pid = i.sourceTXID
+              if (pid === undefined || healSeen.has(pid) || healBudget <= 0) continue
+              healSeen.add(pid)
+              healBudget--
+              const parent = i.sourceTransaction ?? (await resolveTx(pid))
+              if (parent === undefined || parent.merklePath !== undefined) continue
+              const st = await hintOf(pid)
+              if (st?.answered === true && st.status === '') await reair(parent)
+              else if (st?.answered !== true || st.status !== '') await healWalk(parent) // parent on the wire (or unanswerable) — its own ancestry may still be parked
+            }
+          }
+          for (const w of await d.ledger.walletTxs(['submitted', 'submission_unknown'])) {
+            if (healBudget <= 0) break
+            const st = await hintOf(w.txid)
+            if (st?.answered !== true) continue
+            const parked = /PENDING|MISSING|RETRY/i.test(st.status)
+            if (!parked && st.status !== '') continue
+            const tx = Transaction.fromHex(w.rawHex)
+            for (const i of tx.inputs) {
+              if (i.sourceTransaction !== undefined || i.sourceTXID === undefined) continue
+              const hex = w.parents[i.sourceTXID]
+              if (hex !== undefined) i.sourceTransaction = Transaction.fromHex(hex)
+            }
+            await healWalk(tx)
+            if (st.status === '') await reair(tx) // the row itself vanished — re-air its own bytes
+          }
+          // anchors take the same heal: a broadcast the network dropped
+          // asynchronously can never prove — the watch alone waits forever.
+          // Probe the wire; 'absent' re-airs the same bytes (idempotent: a
+          // landed original dedupes, a truly-dropped one just needs airing).
+          for (const { txid } of waiting) {
+            if (healBudget <= 0) break
+            if (healSeen.has(txid)) continue
+            const st = await hintOf(txid)
+            if (st?.answered !== true || st.status !== '') continue
+            const tx = await d.mem.fetchTx(txid)
+            if (tx === undefined) continue
+            healSeen.add(txid)
+            healBudget--
+            await healWalk(tx)
+            await reair(tx)
+          }
+        }
+        // a bounded, rotating pull: each tick tries a few unproven txs so a
+        // long list can never serialize minutes of lookups inside one pass —
+        // push (callbacks/status stream) stays the primary proof channel
+        {
+          const unproven = d.txStore.unproven()
+          const pull = unproven.length <= 8 ? unproven : Array.from({ length: 8 }, (_, i) => unproven[(proofPullAt + i) % unproven.length])
+          proofPullAt = unproven.length > 0 ? (proofPullAt + 8) % unproven.length : 0
+          for (const txid of pull) await d.mem.fetchTx(txid)
+        }
+        if (waiting.length) d.nlog(`confirmer: waiting=${waiting.length} (watched=${d.events.pending})`)
+        await d.topUp?.()
+        d.persistKeys()
+      } catch (e) {
+        d.nlog(`confirmer: ${(e as Error).message}`)
+      } finally {
+        busy = false
+        inflight = undefined
+      }
+    })()
+    await inflight
+  }
+  let timer: NodeJS.Timeout | undefined
+  if (durableExec) {
+    // journaled self-arming cadence — the interval wheel's successor.
+    // AnchorQueued wakes become calls, not sends: at most one queued pass
+    // rides behind a running one (the busy flag's coalescing, kept)
+    rtDefs.push(await cronObject(EXEC_SVC.confirmer, { tick, ceilingMs: () => d.cfg.confirmEveryMs ?? 5000, log: d.nlog }))
+    rtKicks.push({ service: EXEC_SVC.confirmer, handler: 'tick', key: 'main' })
+    let anchorWake = false
+    d.mem.onAnchorQueued(() => {
+      if (anchorWake) return
+      anchorWake = true
+      void executor()
+        ?.call({ service: EXEC_SVC.confirmer, handler: 'tick', key: 'main' }, {})
+        .finally(() => {
+          anchorWake = false
+        })
+    })
+  } else {
+    timer = setInterval(() => {
+      void tick()
+    }, d.cfg.confirmEveryMs ?? 5000)
+    timer.unref()
+    // a fresh anchor is a producer event — rescan (watch + autoMine) now,
+    // not at the floor; the interval stays as the missed-wake backstop
+    d.mem.onAnchorQueued(() => void tick())
+  }
+  // the ledger watcher — event-driven off the shared substrate's sweeps,
+  // height advances and pushed broadcaster statuses; no private interval.
+  // Construction + custody effects live in rtsupport (boot plumbing)
+  const watcher = await buildRecordsWatcher({
+    ledger: d.ledger,
+    statusOf: (txid) => d.events.statusOf(txid),
+    port: d.port,
+    funds: d.funds,
+    fundingRefresh: d.fundingRefresh,
+    diedFromRow: d.diedFromRow,
+    net: d.net
+  })
+  let watching = false
+  // journal retention on the records ledger — 'confirmed' is the one tx
+  // state with no outgoing edge, so its event journal is complete and
+  // prunable past the window. Daily-gated: event bursts must not sweep
+  // per tick, and the records store's market tables stay empty anyway.
+  let lastPrune = 0
+  const pruneJournal = () => {
+    const now = Date.now()
+    if (now - lastPrune < 86_400_000) return
+    lastPrune = now
+    const retentionMs = (nektarEnvNum('NEKTAR_JOURNAL_RETENTION_DAYS') ?? 30) * 86_400_000
+    void d.ledger.prune(now - retentionMs, { ops: [], txs: ['confirmed'] }).catch(() => undefined)
+  }
+  const watchLeg = async () => {
+    await watcher.tick()
+    pruneJournal()
+  }
+  let watchOnce: () => void = () => undefined
+  if (durableExec) {
+    // the leg object serializes on 'main'; event wakes become calls so an
+    // event burst still coalesces to at most one queued pass
+    rtDefs.push(await legObject(EXEC_SVC.watcher, watchLeg))
+    watchOnce = () => {
+      if (watching) return
+      watching = true
+      void executor()
+        ?.call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})
+        .catch((e) => d.nlog(`ledger watcher: ${(e as Error).message}`))
+        .finally(() => {
+          watching = false
+        })
+    }
+  } else {
+    watchOnce = () => {
+      if (watching) return
+      watching = true
+      const settled = (): void => {
+        watching = false
+        pruneJournal()
+      }
+      void watcher
+        .tick()
+        // the only bare catch in the sweep chain: a failing tick stalls all
+        // durable settlement — log it; the next event retries regardless
+        .catch((e) => d.nlog(`ledger watcher: ${(e as Error).message}`))
+        .then(settled, settled)
+    }
+  }
+  d.events.on('tick', watchOnce)
+  d.events.on('height', watchOnce)
+  // relay tip advances onto the memory emitter the way txAbandoned/reorg
+  // already are — hosted automation wakes height-bounded work off it
+  d.events.on('height', (tip) => d.mem.events.emit('height', { tip }))
+  d.mem.events.on('broadcasterStatus', watchOnce)
+
+  return {
+    rtDefs,
+    rtKicks,
+    tick,
+    inflight: () => inflight,
+    close: () => {
+      d.mem.events.off('broadcasterStatus', watchOnce)
+      clearInterval(timer)
+    }
+  }
 }

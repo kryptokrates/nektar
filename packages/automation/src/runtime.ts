@@ -18,12 +18,31 @@ import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
 import { openLanes } from './lanes.js'
 import { openOutbox } from './outbox.js'
 import { openUpkeep } from './upkeep.js'
-import { Scheduler } from './scheduler.js'
 import { openWatches } from './watches.js'
 import type { TxEffects } from './machines/effects.js'
-import { executor, EXEC_SVC } from './rt/exec.js'
+import { executor, setExecutor, executorFromEnv, LocalExecutor, EXEC_SVC } from './rt/exec.js'
 import { openEndpoint, type RtEndpoint } from './rt/endpoint.js'
-import { txObject, sweepService, dealObject, custodyObject, dealfanService, transportObject, wakeService, type WakeLegs } from './rt/services.js'
+import {
+  txObject,
+  sweepService,
+  dealObject,
+  custodyObject,
+  dealfanService,
+  transportObject,
+  wakeService,
+  cronObject,
+  notifyObject,
+  registerTxHandlers,
+  registerSweepHandlers,
+  registerDealHandlers,
+  registerDealfanHandlers,
+  registerCustodyHandlers,
+  registerTransportHandlers,
+  registerWakeHandlers,
+  registerCronHandlers,
+  registerNotifyHandlers,
+  type WakeLegs
+} from './rt/services.js'
 import type { Rt, LaneInfra, AutomationConfig } from './rtctx.js'
 import type { Automation } from './types.js'
 
@@ -143,19 +162,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // proving pass re-anchors it (proven is otherwise sticky forever)
   if (lanes !== undefined)
     mem.onReorg?.((from) => {
-      const exec = executor()
-      // under restate the demotion leg is a durable wake invocation — a
-      // crash can no longer drop the reorg with the dead fork's proofs
-      // still marked proven; the send's idempotency key dedupes a repeat
-      // announce for the same horizon
-      if (exec !== undefined) {
-        void exec
-          .send({ service: EXEC_SVC.wake, handler: 'reorg' }, { from }, { idempotencyKey: `wake:reorg:${from}` })
-          .catch((e) => log(`automation: reorg send: ${(e as Error).message}`))
-        return
-      }
-      void lanes.journal.clearPaths?.(from).catch(() => undefined)
-      void lanes.ledger.unproveFrom?.(from).catch(() => undefined)
+      // the demotion leg is a durable wake invocation — a crash can no
+      // longer drop the reorg with the dead fork's proofs still marked
+      // proven; the send's idempotency key dedupes a repeat announce
+      void exec
+        .send({ service: EXEC_SVC.wake, handler: 'reorg' }, { from }, { idempotencyKey: `wake:reorg:${from}` })
+        .catch((e) => log(`automation: reorg send: ${(e as Error).message}`))
     })
   // restart continuity: pending provision rows keep their chain watch —
   // without it the abandon horizon never reaps a rejected provision tx
@@ -232,15 +244,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     busy: false,
     upkeepAt: 0,
     acking: false,
-    pumping: false,
-    pumpAgain: false,
     watchBases: (cfg.watchHosts ?? []).map((u) => u.replace(/\/+$/, '')),
     watches: new Map<string, AbortController>()
   } as unknown as Rt
-  // the one timer wheel — deals/outbox/upkeep/watches/watchdog register
-  // named jobs with their own ceilings; wakes (chain events, enqueues,
-  // inbound items) pull a job to due-now instead of each job polling alone
-  rt.scheduler = new Scheduler()
   rt.countWake = (src) => {
     rt.wakeStats.set(src, (rt.wakeStats.get(src) ?? 0) + 1)
   }
@@ -316,8 +322,17 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       if (r.submitted === true) log(`automation: republished carrier ${hash.slice(0, 12)} anchored by ${treeTxid.slice(0, 12)}`)
     }
   }
+  // every runtime owns its executor: a fresh LocalExecutor locally (two
+  // automations in one process each keep their own handler map — the global
+  // seam only serves callers with no runtime in scope, like the mcp watcher
+  // callbacks), the shared RestateExecutor under restate
+  const localExec = executorFromEnv() === undefined ? new LocalExecutor(log) : undefined
+  if (localExec !== undefined && executor() === undefined) setExecutor(localExec)
+  const exec = localExec ?? executor()!
+  rt.exec = exec
   const engine = new MarketEngine({
     store,
+    executor: exec,
     call: cfg.call,
     memory: mem,
     key,
@@ -427,6 +442,28 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // at block arrival rather than the next floor tick
     dueAtHeight: async (tip) => await store.hasDueAtHeight(NONTERMINAL, tip)
   }
+  // the watchdog pass — the cheap probe tier (chain/broadcaster/hosts/kill
+  // state) on a slow tick; host losses update the deaf flag the engine
+  // consults at every new-deal entry point. Shared by the local scheduler
+  // row and the nektar-watchdog object's journaled tick
+  const watchdogLeg = async (): Promise<void> => {
+    try {
+      const r = await runChecks([...WATCHDOG_CHECKS])
+      if (lastReport !== undefined) {
+        const byName = new Map(lastReport.checks.map((c) => [c.check, c]))
+        for (const c of r.checks) byName.set(c.check, c)
+        lastReport = { ...r, checks: [...byName.values()], pass: [...byName.values()].every((c) => c.pass) }
+      } else lastReport = r
+      for (const h of r.downHosts)
+        if (!downNow.has(h)) {
+          downNow.add(h)
+          log(`automation: watchdog: host down ${h}`)
+        }
+      for (const h of [...downNow]) if (marketHosts.includes(h) && !r.downHosts.includes(h)) await rt.hostBack(h)
+    } catch (e) {
+      log(`automation: watchdog: ${(e as Error).message}`)
+    }
+  }
   // the market wallet ledger gets the same dead-verdict rescan the mcp-side
   // ledger gets: a refused escrow can still air — the accept ships signed
   // bytes and the counterparty re-broadcasts them through its own guard.
@@ -489,61 +526,82 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   let lastLedgerSweep = 0
   let lastWakeReport = 0
   // boot replay: 'prepared'/'submission_unknown' rows are signed intents a
-  // crashed process never got a verdict for — re-air them from stored bytes
-  // before the first deal tick. Fire-and-forget behind the engine's chain;
-  // idempotent on the wire ('already known' → submitted). Under restate the
-  // sweep service owns the scan — a journaled, per-key fan-out instead.
-  if (executor() === undefined)
-    void engine
-      .resubmitPending()
-      .then((rs) => {
-        for (const r of rs) log(`automation: boot replay ${r.actionId} → ${r.state}`)
-      })
-      .catch((e) => log(`automation: boot replay failed: ${(e as Error).message}`))
+  // crashed process never got a verdict for. The sweep.boot kick below
+  // covers it in both modes — a journaled per-key fan-out under restate,
+  // the same handlers on the LocalExecutor otherwise.
   openOutbox(rt)
   openUpkeep(rt)
   openWatches(rt)
-  // the Restate endpoint: NEKTAR_EXECUTOR=restate serves the virtual objects
-  // in-process and registers the deployment with the sidecar — durable
-  // sends/calls then land here journaled + serialized per key
+  // the always-on executor: local mode gets an in-process LocalExecutor so
+  // every routing site takes the same send/call path — the register* bodies
+  // are the same impls the restate defs wrap. NEKTAR_EXECUTOR=restate swaps
+  // in the ingress client instead and serves the defs on the endpoint.
   let rtEndpoint: RtEndpoint | undefined
-  const exec = executor()
-  if (exec !== undefined) {
-    const txDef = await txObject({ store, fx: txFx, log, submit: (actionId) => engine.submitTx(actionId) })
-    const sweepDef = await sweepService(
-      {
-        scan: async function* () {
-          for await (const x of scanTxObservations(store, observeFn, undefined)) yield { actionId: x.w.actionId, observe: x.observe }
-        },
-        resubmitRows: () => store.walletTxs(['prepared', 'submission_unknown']),
-        log
-      },
-      txDef
-    )
-    // the per-op object — advance legs land on the op's own key, serialized
-    // and journaled; the tick's NONTERMINAL loop fans out to it under restate
-    const dealDef = await dealObject({
-      advanceOp: (operationId) => engine.advanceOp(operationId),
-      inboxEvent: (item) => engine.dealEvent(item),
-      reconcileOp: (operationId) => engine.reconcileOp(operationId),
+  const txDeps = { store, fx: txFx, log, submit: (actionId: string) => engine.submitTx(actionId) }
+  const sweepDeps = {
+    scan: async function* () {
+      for await (const x of scanTxObservations(store, observeFn, undefined)) yield { actionId: x.w.actionId, observe: x.observe }
+    },
+    resubmitRows: () => store.walletTxs(['prepared', 'submission_unknown']),
+    log
+  }
+  const dealDeps = {
+    advanceOp: (operationId: string) => engine.advanceOp(operationId),
+    inboxEvent: (item: Parameters<typeof engine.dealEvent>[0]) => engine.dealEvent(item),
+    reconcileOp: (operationId: string) => engine.reconcileOp(operationId),
+    log
+  }
+  // the deals floor cadence — hot while a live op is in flight (the old
+  // wheel row's adaptive ceiling, re-read on every arm)
+  const idleMs = cfg.intervalMs ?? 1000
+  const hotMs = cfg.hotMs ?? 250
+  const walletCoord = engine.walletCoordinator
+  const dealfanDeps = {
+    pendingInbox: () => engine.pendingInbox(),
+    liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => o.operationId),
+    reconcileOps: async () => {
+      const now = Date.now()
+      const rows = await store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: now })
+      return rows.map((o) => o.operationId)
+    },
+    // the resubmit cadence leg — 'prepared'/'submission_unknown' rows are
+    // signed intents; the floor re-airs them on the engine's jittered cadence
+    resubmitPending: () => engine.resubmitTick(),
+    ceilingMs: () => (Date.now() < rt.hotUntil ? Math.min(hotMs, idleMs) : idleMs),
+    log
+  }
+  if (localExec !== undefined) {
+    registerTxHandlers(localExec, txDeps)
+    registerSweepHandlers(localExec, sweepDeps)
+    registerDealHandlers(localExec, dealDeps)
+    registerDealfanHandlers(localExec, dealfanDeps)
+    const wallet = engine.walletCoordinator
+    if (wallet !== undefined) registerCustodyHandlers(localExec, { wallet, log })
+    registerWakeHandlers(localExec, { legs: wakeLegs, hint: (txid) => engine.hint(txid), log })
+    registerTransportHandlers(localExec, {
+      dueRows: () => store.dueOutbox(),
+      nextAt: () => store.nextOutboxAt(),
+      deliverItem: (item) => engine.deliverOutboxItem(item),
+      now: () => Date.now(),
       log
     })
+    registerCronHandlers(localExec, EXEC_SVC.upkeep, { tick: () => rt.upkeep(), ceilingMs: () => cfg.upkeepMs ?? WAITS.upkeepCadence.ms, log })
+    const watchdogMs0 = cfg.watchdogMs ?? WAITS.watchdogCadence.ms
+    if (watchdogMs0 > 0) registerCronHandlers(localExec, EXEC_SVC.watchdog, { tick: watchdogLeg, ceilingMs: () => watchdogMs0, log })
+    if (rt.watchBases.length !== 0)
+      registerCronHandlers(localExec, EXEC_SVC.watches, { tick: () => rt.refreshWatches(), ceilingMs: () => WAITS.watchRearm.ms, log })
+    if (rt.notifyLegs !== undefined) registerNotifyHandlers(localExec, { peer: rt.notifyLegs.peer, carrier: rt.notifyLegs.carrier, log })
+    rt.localExec = localExec
+  } else {
+    const txDef = await txObject(txDeps)
+    const sweepDef = await sweepService(sweepDeps, txDef)
+    // the per-op object — advance legs land on the op's own key, serialized
+    // and journaled; the tick's NONTERMINAL loop fans out to it under restate
+    const dealDef = await dealObject(dealDeps)
     // the dealfan service — the whole tick as one journaled invocation:
     // inbox items → deal.event per correlation key, ops → deal.advance,
     // due reconcile rows → deal.reconcile. Scans journal; sends dedupe.
-    const dealfanDef = await dealfanService(
-      {
-        pendingInbox: () => store.pendingInbox(),
-        liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => o.operationId),
-        reconcileOps: async () => {
-          const now = Date.now()
-          const rows = await store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: now })
-          return rows.map((o) => o.operationId)
-        },
-        log
-      },
-      dealDef
-    )
+    const dealfanDef = await dealfanService(dealfanDeps, dealDef)
     // the transport object — outbox delivery as journaled invocations:
     // drain scans due rows (journaled), fans deliver per destination key,
     // and self-schedules its ceiling at the earliest next_at
@@ -563,12 +621,50 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // durable invocations; the legs above run journaled, the cycle tail
     // leaves through journaled sends (dealfan.tick + transport.drain)
     const wakeDef = await wakeService({ legs: wakeLegs, hint: (txid) => engine.hint(txid), log })
-    rtEndpoint = await openEndpoint([txDef, sweepDef, dealDef, dealfanDef, transportDef, wakeDef, ...custodyDefs], process.env, log)
+    // the cadence objects — the scheduler wheel's periodic rows as durable,
+    // self-arming invocations. 'deals' stays on the local wheel (it's the
+    // correctness floor — wakes are hints, polls carry correctness); these
+    // three move their cadence into the journaled self-arm
+    const upkeepDef = await cronObject(EXEC_SVC.upkeep, { tick: () => rt.upkeep(), ceilingMs: () => cfg.upkeepMs ?? WAITS.upkeepCadence.ms, log })
+    const watchdogMs0 = cfg.watchdogMs ?? WAITS.watchdogCadence.ms
+    const watchdogDefs = watchdogMs0 > 0 ? [await cronObject(EXEC_SVC.watchdog, { tick: watchdogLeg, ceilingMs: () => watchdogMs0, log })] : []
+    const watchesDefs =
+      rt.watchBases.length !== 0 ? [await cronObject(EXEC_SVC.watches, { tick: () => rt.refreshWatches(), ceilingMs: () => WAITS.watchRearm.ms, log })] : []
+    // the notify object — notifyPeer/pushCarrier push legs as journaled,
+    // per-destination invocations (the legs lanes.ts exposes via rt.notifyLegs)
+    const notifyDefs = rt.notifyLegs !== undefined ? [await notifyObject({ peer: rt.notifyLegs.peer, carrier: rt.notifyLegs.carrier, log })] : []
+    rtEndpoint = await openEndpoint(
+      [
+        txDef,
+        sweepDef,
+        dealDef,
+        dealfanDef,
+        transportDef,
+        wakeDef,
+        upkeepDef,
+        ...watchdogDefs,
+        ...watchesDefs,
+        ...notifyDefs,
+        ...custodyDefs,
+        // host-composed defs (mcp's confirmer/watcher region) — same endpoint
+        ...(cfg.rtDefs ?? [])
+      ],
+      process.env,
+      log
+    )
     log(`automation: restate endpoint ${rtEndpoint.uri}`)
-    // boot resubmit fans out through the sweep — each row's re-air is a
-    // journaled invocation on its own tx object
-    void exec.send({ service: EXEC_SVC.sweep, handler: 'boot' }, {}).catch((e) => log(`automation: sweep boot send: ${(e as Error).message}`))
   }
+  // boot resubmit fans out through the sweep — each row's re-air is a
+  // journaled invocation on its own tx object (local: the same handler)
+  void exec.send({ service: EXEC_SVC.sweep, handler: 'boot' }, {}).catch((e) => log(`automation: sweep boot send: ${(e as Error).message}`))
+  // the floor + cadence chains boot-kick once — each tick self-arms the
+  // next. intervalMs===0 disables the deals floor entirely.
+  if (cfg.intervalMs !== 0)
+    void exec.send({ service: EXEC_SVC.dealfan, handler: 'tick' }, {}).catch((e) => log(`automation: dealfan kick: ${(e as Error).message}`))
+  const watchdogOn = (cfg.watchdogMs ?? WAITS.watchdogCadence.ms) > 0
+  for (const svc of [EXEC_SVC.upkeep, ...(watchdogOn ? [EXEC_SVC.watchdog] : []), ...(rt.watchBases.length > 0 ? [EXEC_SVC.watches] : [])])
+    void exec.send({ service: svc, handler: 'tick', key: 'main' }, {}).catch((e) => log(`automation: ${svc} kick: ${(e as Error).message}`))
+  for (const k of cfg.rtKicks ?? []) void exec.send(k, {}).catch((e) => log(`automation: ${k.service} kick: ${(e as Error).message}`))
   let again = false
   let running: Promise<void> | undefined
   // a phase that never settles parks EVERY later pass behind `running` —
@@ -614,14 +710,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // the deal loop's hot tick
             if (t2 - lastLedgerSweep > WAITS.ledgerSweep.ms) {
               lastLedgerSweep = t2
-              // under restate the scan is a journaled service invocation that
-              // sends each observation to its row's tx object — the pass
-              // doesn't block on it
-              if (executor() !== undefined)
-                void executor()!
-                  .send({ service: EXEC_SVC.sweep, handler: 'tick' }, {})
-                  .catch((e) => log(`automation: sweep tick send: ${(e as Error).message}`))
-              else await bound('wtx', () => ledgerWatcher.tick(), legMs())
+              // the scan is a journaled service invocation that sends each
+              // observation to its row's tx object — the pass doesn't block
+              // on it (local mode: the same body via the LocalExecutor)
+              void exec.send({ service: EXEC_SVC.sweep, handler: 'tick' }, {}).catch((e) => log(`automation: sweep tick send: ${(e as Error).message}`))
             }
             rt.pushAcks()
             const t3 = Date.now()
@@ -638,8 +730,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // holding the loop hot for it would burn cycles per confirmation
             if (await store.hasLiveOps(NONTERMINAL)) rt.hotUntil = Date.now() + WAITS.hotWindow.ms
             // new lanes appear as deals start — re-derive watch subs at the
-            // end of a pass so a fresh want is subscribed within one cycle
-            if (rt.watchBases.length > 0) void rt.refreshWatches().catch(() => undefined)
+            // end of a pass so a fresh want is subscribed within one cycle;
+            // under restate the object serializes it against a running tick
+            if (rt.watchBases.length > 0) void exec.send({ service: EXEC_SVC.watches, handler: 'tick', key: 'main' }, {}).catch(() => undefined)
           } catch (e) {
             log(`automation: ${(e as Error).message}`)
           }
@@ -663,19 +756,16 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     rt.countWake('commit')
     if (!rt.busy && !rt.stopped) void rt.deals().catch((e) => log(`automation: ${(e as Error).message}`))
   }
-  // committed deadlines arm the wheel directly — a collect window or
+  // committed deadlines arm the executor directly — a collect window or
   // seize dueAt fires at its instant; the floor is the missed-arm backstop.
   // Under restate the arm is a durable delayed send to the op's own deal
   // object — the runtime owns the timer, a restart can't drop the arm.
   store.dueAtArmed = (operationId, at) => {
     rt.countWake('dueAt')
     if (rt.stopped) return
-    const exec = executor()
-    if (exec !== undefined)
-      void exec
-        .send({ service: EXEC_SVC.deal, handler: 'due', key: operationId }, {}, { delayMs: Math.max(0, at - Date.now()) })
-        .catch((e) => log(`automation: deal due send ${operationId}: ${(e as Error).message}`))
-    else rt.scheduler?.dueIn('deals', Math.max(0, at - Date.now()))
+    void exec
+      .send({ service: EXEC_SVC.deal, handler: 'due', key: operationId }, {}, { delayMs: Math.max(0, at - Date.now()) })
+      .catch((e) => log(`automation: deal due send ${operationId}: ${(e as Error).message}`))
   }
   /** one full pass: deals, then upkeep — what tests and push events drive */
   const cycle = async (): Promise<void> => {
@@ -688,89 +778,26 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // join the detached drain only at the cycle boundary — a scheduled
     // deals pass must not serialize on delivery RTTs, but tests and
     // event-driven cycles keep "one call = all queued work attempted"
-    await rt.pumpDone
+    await rt.drainDone
   }
   rt.cycle = cycle
-  const upkeepMs = cfg.upkeepMs ?? 10_000
-  // A4 — while the loop is hot (recent inbound activity) the deals cadence
-  // floors at hotMs so an in-flight deal never waits a full interval for
-  // the next hop; the ceiling fn re-reads hotUntil on every fire.
-  const idleMs = cfg.intervalMs ?? 1000
-  const hotMs = cfg.hotMs ?? 250
-  if (cfg.intervalMs !== 0) {
-    rt.scheduler!.add({ name: 'deals', run: () => void deals(), ceilingMs: () => (Date.now() < rt.hotUntil ? Math.min(hotMs, idleMs) : idleMs) })
-    rt.scheduler!.add({ name: 'upkeep', run: () => rt.upkeep().catch(() => {}), ceilingMs: () => upkeepMs })
-  }
-  // A10 — the watchdog: the cheap probe tier (chain/broadcaster/hosts/kill
-  // state) re-runs on a slow tick; host losses update the deaf flag the
-  // engine consults at every new-deal entry point
-  const watchdogMs = cfg.watchdogMs ?? 60_000
-  if (watchdogMs > 0)
-    rt.scheduler!.add({
-      name: 'watchdog',
-      run: () => {
-        const work = (async () => {
-          try {
-            const r = await runChecks([...WATCHDOG_CHECKS])
-            if (lastReport !== undefined) {
-              const byName = new Map(lastReport.checks.map((c) => [c.check, c]))
-              for (const c of r.checks) byName.set(c.check, c)
-              lastReport = { ...r, checks: [...byName.values()], pass: [...byName.values()].every((c) => c.pass) }
-            } else lastReport = r
-            for (const h of r.downHosts)
-              if (!downNow.has(h)) {
-                downNow.add(h)
-                log(`automation: watchdog: host down ${h}`)
-              }
-            for (const h of [...downNow]) if (marketHosts.includes(h) && !r.downHosts.includes(h)) await rt.hostBack(h)
-          } catch (e) {
-            log(`automation: watchdog: ${(e as Error).message}`)
-          }
-        })()
-        rt.inflight.add(work)
-        const done = (): void => {
-          rt.inflight.delete(work)
-        }
-        void work.then(done, done)
-      },
-      ceilingMs: () => watchdogMs
-    })
-  // watch queries derive from the engine's live watch-list — re-derive on a
-  // slow tick plus after every deals pass so new wants appear in ≤1 cycle
-  if (rt.watchBases.length !== 0)
-    rt.scheduler!.add({ name: 'watches', run: () => rt.refreshWatches().catch(() => undefined), ceilingMs: () => WAITS.watchRearm.ms })
-  void rt.refreshWatches().catch(() => undefined)
+  // the cadence plane is fully executor-owned: dealfan self-arms the deals
+  // floor (adaptive hot/idle ceiling on every arm), the cron objects carry
+  // upkeep/watchdog/watches, and wakes are event sends. No wheel.
+  if (rt.watchBases.length !== 0) void exec.send({ service: EXEC_SVC.watches, handler: 'tick', key: 'main' }, {}).catch(() => undefined)
   // push-driven progress: a verified tx proof (broadcaster callback or the
   // chain's own mined event) may make a funding tree provable and advance
   // completion_submitted → settled — run a cycle now, not at the next interval
   mem.onTxProof((txid, mp) => {
     if (rt.stopped) return
-    const exec = executor()
-    // under restate the leg + cycle tail is a durable wake invocation —
-    // a crash between proof receipt and markProven can no longer drop
-    // the wake; the idempotency key dedupes a repeat announce for the
-    // same txid
-    if (exec !== undefined) {
-      rt.countWake('txProof')
-      void exec
-        .send({ service: EXEC_SVC.wake, handler: 'txProof' }, { txid, mpHex: mp.toHex() }, { idempotencyKey: `wake:txProof:${txid}` })
-        .catch((e) => log(`automation: txproof send: ${(e as Error).message}`))
-      return
-    }
-    // detached(): the handler launches a pass, not leg work — a proof that
-    // lands inside a leg must not hand that leg's deadline to the spawn
-    const work = detached(() =>
-      (async () => {
-        try {
-          await wakeLegs.txProof?.(txid, mp.toHex())
-        } catch (e) {
-          log(`automation: txproof: ${(e as Error).message}`)
-        }
-        engine.hint(txid)
-        rt.countWake('txProof')
-        if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
-      })()
-    )
+    rt.countWake('txProof')
+    // the leg + cycle tail is a durable wake invocation — a crash between
+    // proof receipt and markProven can no longer drop the wake; the
+    // idempotency key dedupes a repeat announce for the same txid. call()
+    // keeps the inflight join the detached() spawn used to give
+    const work = exec
+      .call<void>({ service: EXEC_SVC.wake, handler: 'txProof' }, { txid, mpHex: mp.toHex() }, { idempotencyKey: `wake:txProof:${txid}` })
+      .catch((e: unknown) => log(`automation: txproof: ${(e as Error).message}`))
     rt.inflight.add(work)
     const done = (): void => {
       rt.inflight.delete(work)
@@ -781,21 +808,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // affected operation and run a cycle — the engine consults txFacts itself
   mem.onTxRejected((txid: string) => {
     if (rt.stopped) return
-    const exec = executor()
-    if (exec !== undefined) {
-      rt.countWake('txRejected')
-      void exec
-        .send({ service: EXEC_SVC.wake, handler: 'txRejected' }, { txid }, { idempotencyKey: `wake:txRejected:${txid}` })
-        .catch((e) => log(`automation: txrejected send: ${(e as Error).message}`))
-      return
-    }
-    const work = detached(() =>
-      (async () => {
-        engine.hint(txid)
-        rt.countWake('txRejected')
-        if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
-      })()
-    )
+    rt.countWake('txRejected')
+    // a rejection callback is only a hint — the wake leg reconsults the
+    // ledger itself; the cycle tail runs inside the invocation
+    const work = exec
+      .call<void>({ service: EXEC_SVC.wake, handler: 'txRejected' }, { txid }, { idempotencyKey: `wake:txRejected:${txid}` })
+      .catch((e: unknown) => log(`automation: txrejected: ${(e as Error).message}`))
     rt.inflight.add(work)
     const done = (): void => {
       rt.inflight.delete(work)
@@ -807,50 +825,27 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // feed leave the floor as the only driver, same as today
   mem.onHeight?.((tip: number) => {
     if (rt.stopped) return
-    const exec = executor()
-    if (exec !== undefined) {
-      rt.countWake('height')
-      void exec
-        .send({ service: EXEC_SVC.wake, handler: 'height' }, { tip }, { idempotencyKey: `wake:height:${tip}` })
-        .catch((e) => log(`automation: height send: ${(e as Error).message}`))
-      return
+    rt.countWake('height')
+    // the due-gate lives inside the wake leg — a tip that frees no op
+    // costs one journaled probe, not a pass
+    const work = exec
+      .call<void>({ service: EXEC_SVC.wake, handler: 'height' }, { tip }, { idempotencyKey: `wake:height:${tip}` })
+      .catch((e: unknown) => log(`automation: height: ${(e as Error).message}`))
+    rt.inflight.add(work)
+    const done = (): void => {
+      rt.inflight.delete(work)
     }
-    void detached(() =>
-      store
-        .hasDueAtHeight(NONTERMINAL, tip)
-        .then((due) => {
-          if (!rt.stopped && due) {
-            rt.countWake('height')
-            rt.scheduler?.wake('deals')
-          }
-        })
-        .catch(() => undefined)
-    )
+    void work.then(done, done)
   })
   // the substrate's abandon horizon is the terminal verdict for a mint that
   // resubmitted but never mined — drop the row so the kind's mint gate
   // re-opens (same reap as a chain rejection, driven by the event)
   mem.onTxAbandoned((txid: string) => {
     if (rt.stopped || lanes === undefined) return
-    const exec = executor()
-    if (exec !== undefined) {
-      rt.countWake('txAbandoned')
-      void exec
-        .send({ service: EXEC_SVC.wake, handler: 'txAbandoned' }, { txid }, { idempotencyKey: `wake:txAbandoned:${txid}` })
-        .catch((e) => log(`automation: txabandoned send: ${(e as Error).message}`))
-      return
-    }
-    const work = detached(() =>
-      (async () => {
-        try {
-          await wakeLegs.txAbandoned?.(txid)
-          rt.countWake('txAbandoned')
-          if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
-        } catch (e) {
-          log(`automation: txAbandoned: ${(e as Error).message}`)
-        }
-      })()
-    )
+    rt.countWake('txAbandoned')
+    const work = exec
+      .call<void>({ service: EXEC_SVC.wake, handler: 'txAbandoned' }, { txid }, { idempotencyKey: `wake:txAbandoned:${txid}` })
+      .catch((e: unknown) => log(`automation: txAbandoned: ${(e as Error).message}`))
     rt.inflight.add(work)
     const done = (): void => {
       rt.inflight.delete(work)
@@ -869,9 +864,21 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     /** the latest full preflight report — health surfaces read this, the
      *  watchdog keeps its cheap tier fresh between full runs */
     health: () => ({ pass: lastReport?.pass ?? false, report: lastReport }),
+    // the join flow's hot path — the lanes/publish sites read this array live;
+    // a pushed host enters the next probe + fan-out pass without a restart
+    addHost: (u) => {
+      const n = u.replace(/\/+$/, '')
+      if (n !== '' && !marketHosts.includes(n)) marketHosts.push(n)
+    },
+    removeHost: (u) => {
+      const n = u.replace(/\/+$/, '')
+      const i = marketHosts.indexOf(n)
+      if (i >= 0) marketHosts.splice(i, 1)
+      downNow.add(n) // the watchdog's revive check requires list membership — a spliced host stays down this run
+    },
     bootstrap: () => (cfg.publishFinger === true && lanes !== undefined ? 'sealed' : 'unsealed'),
-    /** the unioned wait read — scheduler witness + every unacked outbox row */
-    waits: async () => ({ schedule: rt.scheduler?.schedule() ?? {}, wakes: Object.fromEntries(rt.wakeStats), deferred: await store.waitingOn() }),
+    /** the unioned wait read — wake witness counts + every unacked outbox row */
+    waits: async () => ({ wakes: Object.fromEntries(rt.wakeStats), deferred: await store.waitingOn() }),
     /** re-run the full preflight now (automationDoctor) — refreshes the
      *  cached report and the seeded host-health set */
     preflight: async () => {
@@ -966,7 +973,11 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     stop: async () => {
       rt.stopped = true
       rtAbort.abort()
-      if (rt.scheduler !== undefined) await rt.scheduler.stop()
+      rt.localExec?.close()
+      // release the process seam — a later openAutomation in this process
+      // must build its own executor, not dispatch through this runtime's
+      // (closing) handlers
+      if (localExec !== undefined && executor() === localExec) setExecutor(undefined)
       for (const ac of rt.watches.values()) ac.abort()
       rt.watches.clear()
       // bounded like the drain below — a wedged inflight item must not
@@ -978,11 +989,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       // drain in-flight work with a bound — a wedged producer must not hang
       // teardown forever (was an unbounded spin)
       const drainDeadline = Date.now() + WAITS.stopDrain.ms
-      while (rt.busy || rt.upkeepRun !== undefined || rt.acking || rt.pumping) {
+      while (rt.busy || rt.upkeepRun !== undefined || rt.acking) {
         if (Date.now() >= drainDeadline) {
-          log(
-            `automation: stop: drain deadline hit (busy=${rt.busy} upkeep=${rt.upkeepRun !== undefined} acking=${rt.acking} pumping=${rt.pumping}) — proceeding`
-          )
+          log(`automation: stop: drain deadline hit (busy=${rt.busy} upkeep=${rt.upkeepRun !== undefined} acking=${rt.acking}) — proceeding`)
           break
         }
         await nap(WAITS.drainPoll.ms)

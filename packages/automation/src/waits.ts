@@ -80,13 +80,16 @@ export const WAITS = {
   /** ledger-sweep throttle — a floor the push path clears (-Infinity) */
   ledgerSweep: { ms: 15_000, class: 'ceiling', durable: false, wake: 'push verdict → sweep now' },
 
-  // ── scheduler ceilings (floors under event wakes) ───────────────────
+  // ── periodic floors (backstops under event wakes) ──────────────────
   /** watches job re-arm — the watch list derives from live interest;
    *  a post-pass refresh is the wake, this is the missed-wake floor */
   watchRearm: { ms: 15_000, class: 'ceiling', durable: false, wake: 'post-pass refreshWatches + changed:self' },
-  /** outbox job backstop — enqueues arm via store.outboxReady and
-   *  dueIn(next_at) lands the exact fire; this only catches a missed arm */
-  outboxCeiling: { ms: 60_000, class: 'ceiling', durable: false, wake: 'outboxReady + dueIn(next_at) + end-of-tick poke' },
+  /** upkeep pass cadence — the upkeep object's journaled self-arm under
+   *  restate, the local executor's delay timer in dev/test mode */
+  upkeepCadence: { ms: 10_000, class: 'ceiling', durable: false, wake: 'cycle() push path + self-arm' },
+  /** watchdog probe cadence — the cheap tier only; the full preflight
+   *  stays operator-driven (automationDoctor) */
+  watchdogCadence: { ms: 60_000, class: 'ceiling', durable: false, wake: 'self-arm / local executor delay' },
   /** inbox-repair defer — the real wake is unblockOutbox on the freeing
    *  event; the re-check floor just covers a missed pull-forward */
   deferCheck: { ms: 2_000, class: 'ceiling', durable: true, wake: 'unblockOutbox / pullOutbox' },

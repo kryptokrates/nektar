@@ -15,6 +15,9 @@ import {
   transportObject,
   TRANSPORT_DRAIN_KEY,
   wakeService,
+  cronObject,
+  legObject,
+  CRON_KEY,
   type DealEvent
 } from '../src/rt/services.js'
 import { openEndpoint } from '../src/rt/endpoint.js'
@@ -262,7 +265,7 @@ test(
     })
     const items: DealEvent[] = [{ source: 'lane', messageId: 'fm1', kind: 'want', payload: { wantId: 'w-fan' } }]
     const dealfanDef = await dealfanService(
-      { pendingInbox: async () => items, liveOps: async () => [operation.operationId], reconcileOps: async () => [], log: () => {} },
+      { pendingInbox: async () => items, liveOps: async () => [operation.operationId], reconcileOps: async () => [], ceilingMs: () => 60_000, log: () => {} },
       dealDef
     )
     const endpoint = await openEndpoint([dealDef, dealfanDef], {
@@ -340,6 +343,7 @@ test(
         pendingInbox: async () => (fanned.push('inbox'), [] as DealEvent[]),
         liveOps: async () => (fanned.push('ops'), [] as string[]),
         reconcileOps: async () => (fanned.push('reconcile'), [] as string[]),
+        ceilingMs: () => 60_000,
         log: () => {}
       },
       undefined
@@ -367,6 +371,63 @@ test(
       assert.equal((await ex.call<{ due: boolean }>({ service: EXEC_SVC.wake, handler: 'height' }, { tip: 50 })).due, false)
       await new Promise((r) => setTimeout(r, 500))
       assert.equal(fanned.length, before)
+    } finally {
+      await endpoint.close().catch(() => undefined)
+      await kx.destroy()
+    }
+  }
+)
+
+test(
+  'spike: cron.tick journals the pass and self-arms — the durable cadence chain re-fires',
+  { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
+  async () => {
+    const { kx, store } = await open()
+    void store
+    const ticks: number[] = []
+    const upkeepDef = await cronObject(EXEC_SVC.upkeep, {
+      tick: async () => void ticks.push(Date.now()),
+      ceilingMs: () => 200,
+      log: () => {}
+    })
+    const endpoint = await openEndpoint([upkeepDef], {
+      NEKTAR_RESTATE_ENDPOINT_URI: ENDPOINT_URI,
+      NEKTAR_RESTATE_ADMIN: ADMIN,
+      NEKTAR_RESTATE_ENDPOINT_PORT: ENDPOINT_PORT
+    })
+    const ex = new RestateExecutor(RESTATE_URL!)
+    try {
+      await ex.call({ service: EXEC_SVC.upkeep, handler: 'tick', key: CRON_KEY }, {})
+      assert.equal(ticks.length, 1)
+      // the self-arm is a durable delayed send — the chain re-fires without
+      // any process-side timer owning it
+      await until(async () => ticks.length >= 2)
+    } finally {
+      await endpoint.close().catch(() => undefined)
+      await kx.destroy()
+    }
+  }
+)
+
+test(
+  'spike: leg object — the host event-sink runs journaled on its key through ingress calls',
+  { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
+  async () => {
+    const { kx, store } = await open()
+    void store
+    const legs: string[] = []
+    const watcherDef = await legObject(EXEC_SVC.watcher, async () => void legs.push(`t${legs.length}`))
+    const endpoint = await openEndpoint([watcherDef], {
+      NEKTAR_RESTATE_ENDPOINT_URI: ENDPOINT_URI,
+      NEKTAR_RESTATE_ADMIN: ADMIN,
+      NEKTAR_RESTATE_ENDPOINT_PORT: ENDPOINT_PORT
+    })
+    const ex = new RestateExecutor(RESTATE_URL!)
+    try {
+      // the event-plane wake shape: ingress call, completes when the leg does
+      await ex.call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})
+      await ex.call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})
+      assert.deepEqual(legs, ['t0', 't1'])
     } finally {
       await endpoint.close().catch(() => undefined)
       await kx.destroy()

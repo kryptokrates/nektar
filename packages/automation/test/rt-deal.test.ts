@@ -83,6 +83,7 @@ test('tick under an executor fans advance out per op key — the leg leaves the 
       pendingInbox: () => store.pendingInbox(),
       liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => o.operationId),
       reconcileOps: async () => [],
+      ceilingMs: () => 60_000,
       log: () => {}
     })
     const hash = await store.approvePolicy(policy(), 'test')

@@ -101,7 +101,7 @@ export abstract class MarketBase {
    *  is the intent and 'already known' answers settle rows that actually
    *  made the wire. Queued behind in-flight work, never racing a live deal */
   resubmitPending(): Promise<Array<{ actionId: string; state: import('../store.js').TxState }>> {
-    return this.run(async () => (this.wallet !== undefined ? await custodyResubmitPending(executor(), this.wallet) : []), 'resubmit')
+    return this.run(async () => (this.wallet !== undefined ? await custodyResubmitPending(this.d.executor ?? executor(), this.wallet) : []), 'resubmit')
   }
 
   /** a single row's broadcast+verdict leg — routed to the custody object
@@ -109,7 +109,7 @@ export abstract class MarketBase {
    *  locally. No run() chain: callers inside invocations can't re-enter it */
   submitTx(actionId: string): Promise<{ state: import('../store.js').TxState; txid: string; detail?: string } | undefined> {
     if (this.wallet === undefined) return Promise.resolve(undefined)
-    return custodySubmit(executor(), this.wallet, actionId)
+    return custodySubmit(this.d.executor ?? executor(), this.wallet, actionId)
   }
 
   /** the custody object's deps — the coordinator the VO serializes. */

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import knexFactory from 'knex'
 import { currentSignal, deadline, detached, nap } from '@nektar/core'
 import { AutomationStore } from '../src/store.js'
-import { Scheduler } from '../src/scheduler.js'
+import { LocalExecutor } from '../src/rt/exec.js'
 
 // leg-context — the AsyncLocalStorage deadline contract at the automation
 // seams: post-commit hooks and spawned work run OUTSIDE the leg that
@@ -64,30 +64,26 @@ test('store post-commit hooks fire detached — a workReady spawn survives the l
   assert.equal(spawnSettled, true)
 })
 
-test('scheduler job dispatch is detached — a wheel armed inside a leg cannot leak its context', async () => {
-  const sched = new Scheduler()
+test('executor send dispatch is detached — a send armed inside a leg cannot leak its context', async () => {
+  const ex = new LocalExecutor()
   let ambientInJob: AbortSignal | undefined | 'unset' = 'unset'
   let jobDone!: () => void
   const ran = new Promise<void>((r) => {
     jobDone = r
   })
-  sched.add({
-    name: 'j',
-    ceilingMs: () => 60_000,
-    run: () => {
-      ambientInJob = currentSignal()
-      jobDone()
-    }
+  ex.register('nektar-test', 'tick', async () => {
+    ambientInJob = currentSignal()
+    jobDone()
   })
   const r = await deadline(async () => {
-    sched.dueIn('j', 0) // armed inside the leg — timers capture context at creation
+    void ex.send({ service: 'nektar-test', handler: 'tick' }, {}, { delayMs: 1 }) // armed inside the leg — timers capture context at creation
     await nap(60_000)
     return 'never'
   }, 30)
   assert.deepEqual(r, { outcome: 'timeout' })
-  assert.equal((await deadline(() => ran, 5_000)).outcome, 'settled', 'the wheel job dispatched')
-  assert.equal(ambientInJob, undefined, 'timer-fired work is never the armer’s child — jobs run detached')
-  await sched.stop()
+  assert.equal((await deadline(() => ran, 5_000)).outcome, 'settled', 'the executor dispatched the send')
+  assert.equal(ambientInJob, undefined, 'timer-dispatched work is never the armer’s child — sends run detached')
+  ex.close()
 })
 
 test('the run() mutex shape: promise links keep their registrant’s context', async () => {

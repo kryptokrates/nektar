@@ -18,7 +18,22 @@
 import type * as restate from '@restatedev/restate-sdk'
 import type { AutomationStore, OutboxItem, TxState, WalletTx } from '../store.js'
 import { runTxIntents, type TxEffects } from '../machines/effects.js'
-import { CUSTODY_KEY, EXEC_SVC, inRtScope, type RtSend } from './exec.js'
+import { CUSTODY_KEY, EXEC_SVC, inRtScope, type Executor, type InvokeTarget, type RtSend } from './exec.js'
+
+/** the register-time executor shape — LocalExecutor satisfies it. */
+export type RegisterableExec = {
+  register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void
+  send: RtSend
+  call: Executor['call']
+}
+
+/** the local-mode send shim shared by every register* wiring — the same
+ *  fire-and-forget dispatch the Restate send clients give: delayed sends
+ *  arm a timer (the self-arm chains), immediate sends dispatch on the
+ *  microtask queue and are joined by call()/drain() — a call locally means
+ *  "the handler plus its dispatched sends have settled", which is what the
+ *  old inline tick guaranteed. */
+export const localSend = (ex: RegisterableExec): RtSend => ex.send.bind(ex)
 import type { CustodyLeg, TxObserve } from './emit.js'
 import type { WalletCoordinator } from '../wallet.js'
 
@@ -235,10 +250,7 @@ export const custodyObject = async (deps: CustodyDeps) => {
 }
 
 /** the custody bodies on a LocalExecutor — the local-mode wiring. */
-export const registerCustodyHandlers = (
-  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void },
-  deps: CustodyDeps
-): void => {
+export const registerCustodyHandlers = (ex: RegisterableExec, deps: CustodyDeps): void => {
   ex.register(EXEC_SVC.custody, 'submit', (arg) => deps.wallet.submit((arg as { actionId: string }).actionId))
   ex.register(EXEC_SVC.custody, 'markRejected', (arg) => {
     const a = arg as { actionId: string; observation: unknown }
@@ -321,13 +333,10 @@ export const transportObject = async (deps: TransportDeps) => {
 }
 
 /** the transport bodies on a LocalExecutor — the local-mode wiring. */
-export const registerTransportHandlers = (
-  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void } & { send: RtSend },
-  deps: TransportDeps
-): void => {
+export const registerTransportHandlers = (ex: RegisterableExec, deps: TransportDeps): void => {
   const drain = transportDrainBody(deps)
   ex.register(EXEC_SVC.transport, 'deliver', (arg) => deps.deliverItem(arg as OutboxItem))
-  ex.register(EXEC_SVC.transport, 'drain', () => drain((t, a, o) => ex.send(t, a, o)))
+  ex.register(EXEC_SVC.transport, 'drain', () => drain(localSend(ex)))
 }
 
 export interface SweepDeps {
@@ -396,10 +405,7 @@ export const sweepService = async (deps: SweepDeps, txDef: unknown) => {
 }
 
 /** register the same bodies on a LocalExecutor — the local-mode wiring. */
-export const registerTxHandlers = (
-  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void },
-  deps: RtDeps
-): void => {
+export const registerTxHandlers = (ex: RegisterableExec, deps: RtDeps): void => {
   const observe = txObserveBody(deps)
   const expire = txExpireBody(deps)
   const resubmit = txResubmitBody(deps)
@@ -409,10 +415,7 @@ export const registerTxHandlers = (
 }
 
 /** the deal bodies on a LocalExecutor — the local-mode wiring. */
-export const registerDealHandlers = (
-  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void },
-  deps: DealDeps
-): void => {
+export const registerDealHandlers = (ex: RegisterableExec, deps: DealDeps): void => {
   const leg = dealAdvanceBody(deps)
   ex.register(EXEC_SVC.deal, 'advance', (arg, key) => leg(arg, key ?? ''))
   ex.register(EXEC_SVC.deal, 'due', (arg, key) => leg(arg, key ?? ''))
@@ -434,6 +437,12 @@ export interface DealfanDeps {
   liveOps: () => Promise<string[]>
   /** funding_failed/refunded op ids past their reconcile cooldown */
   reconcileOps: () => Promise<string[]>
+  /** the resubmit cadence leg — a throttled custody.resubmitPending send;
+   *  the deals floor used to carry this inside engine.tick() */
+  resubmitPending?: () => Promise<void>
+  /** the floor cadence — re-read on every arm so the hot/idle adaptive
+   *  ceiling keeps working (the scheduler 'deals' row's successor) */
+  ceilingMs: () => number
   log: (line: string) => void
 }
 
@@ -455,6 +464,13 @@ export const dealfanTickBody =
     for (const id of ops) await send({ service: EXEC_SVC.deal, handler: 'advance', key: id }, {})
     const rec = await run('reconcile', () => deps.reconcileOps())
     for (const id of rec) await send({ service: EXEC_SVC.deal, handler: 'reconcile', key: id }, {})
+    if (deps.resubmitPending !== undefined) await run('resubmit', () => deps.resubmitPending!())
+    // the floor: every tick self-arms the next at the adaptive ceiling —
+    // durable delayed send under restate, executor timer under local.
+    // ceilingMs() <= 0 is the floor's off-switch (intervalMs:0 = event-driven
+    // only) — a zero-delay arm would hot-loop the tick forever.
+    const ceil = deps.ceilingMs()
+    if (ceil > 0) await send({ service: EXEC_SVC.dealfan, handler: 'tick' }, {}, { delayMs: ceil })
     return { events: inbox.length, advanced: ops.length, reconciled: rec.length }
   }
 
@@ -468,14 +484,18 @@ export const dealfanService = async (deps: DealfanDeps, dealDef: unknown) => {
         event: (o: DealEvent) => Promise<void>
         reconcile: (o: unknown) => Promise<void>
       }
-    return async (target, arg) => {
+    const self = ctx.serviceSendClient({ name: EXEC_SVC.dealfan } as never) as unknown as {
+      tick: (o: unknown, opts?: unknown) => Promise<void>
+    }
+    return async (target, arg, opts) => {
       if (target.service === EXEC_SVC.deal) {
         const c = deal(target.key ?? '')
         if (target.handler === 'advance') await c.advance(arg)
         else if (target.handler === 'event') await c.event(arg as DealEvent)
         else if (target.handler === 'reconcile') await c.reconcile(arg)
         else throw new Error(`dealfan send: no deal handler ${target.handler}`)
-      } else throw new Error(`dealfan send: no route for ${target.service}`)
+      } else if (target.service === EXEC_SVC.dealfan && target.handler === 'tick') await self.tick(arg, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0 }))
+      else throw new Error(`dealfan send: no route for ${target.service}`)
     }
   }
   return restate.service({
@@ -487,22 +507,16 @@ export const dealfanService = async (deps: DealfanDeps, dealDef: unknown) => {
 }
 
 /** the dealfan bodies on a LocalExecutor — the local-mode wiring. */
-export const registerDealfanHandlers = (
-  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void } & { send: RtSend },
-  deps: DealfanDeps
-): void => {
+export const registerDealfanHandlers = (ex: RegisterableExec, deps: DealfanDeps): void => {
   const tick = dealfanTickBody(deps)
-  ex.register(EXEC_SVC.dealfan, 'tick', () => tick((t, a, o) => ex.send(t, a, o)))
+  ex.register(EXEC_SVC.dealfan, 'tick', () => tick(localSend(ex)))
 }
 
-export const registerSweepHandlers = (
-  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void } & { send: RtSend },
-  deps: SweepDeps
-): void => {
+export const registerSweepHandlers = (ex: RegisterableExec, deps: SweepDeps): void => {
   const tick = sweepTickBody(deps)
   const boot = sweepBootBody(deps)
-  ex.register(EXEC_SVC.sweep, 'tick', () => tick((t, a, o) => ex.send(t, a, o)))
-  ex.register(EXEC_SVC.sweep, 'boot', () => boot((t, a, o) => ex.send(t, a, o)))
+  ex.register(EXEC_SVC.sweep, 'tick', () => tick(localSend(ex)))
+  ex.register(EXEC_SVC.sweep, 'boot', () => boot(localSend(ex)))
 }
 
 // ── the wake service ─────────────────────────────────────────────────────
@@ -619,11 +633,8 @@ export const wakeService = async (deps: WakeDeps) => {
 }
 
 /** the wake bodies on a LocalExecutor — the local-mode wiring. */
-export const registerWakeHandlers = (
-  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void } & { send: RtSend },
-  deps: WakeDeps
-): void => {
-  const s: RtSend = (t, a, o) => ex.send(t, a, o)
+export const registerWakeHandlers = (ex: RegisterableExec, deps: WakeDeps): void => {
+  const s: RtSend = localSend(ex)
   ex.register(EXEC_SVC.wake, 'txProof', (arg) => wakeTxProofBody(deps)(s, arg as { txid: string; mpHex: string }))
   ex.register(EXEC_SVC.wake, 'txRejected', (arg) => wakeTxRejectedBody(deps)(s, arg as { txid: string }))
   ex.register(EXEC_SVC.wake, 'txAbandoned', (arg) => wakeTxAbandonedBody(deps)(s, arg as { txid: string }))
@@ -656,7 +667,10 @@ export const cronTickBody =
   (service: string, deps: CronDeps) =>
   async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
     await run('tick', () => deps.tick())
-    await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: deps.ceilingMs() })
+    // ceilingMs() <= 0 is the cadence's off-switch — a zero-delay arm is a
+    // hot infinite loop, not a floor
+    const ceil = deps.ceilingMs()
+    if (ceil > 0) await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil })
     return { done: true }
   }
 
@@ -680,12 +694,29 @@ export const cronObject = async (service: string, deps: CronDeps) => {
 }
 
 /** the cron bodies on a LocalExecutor — the local-mode wiring. */
-export const registerCronHandlers = (
-  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void } & { send: RtSend },
-  service: string,
-  deps: CronDeps
-): void => {
-  ex.register(service, 'tick', () => cronTickBody(service, deps)((t, a, o) => ex.send(t, a, o)))
+export const registerCronHandlers = (ex: RegisterableExec, service: string, deps: CronDeps): void => {
+  ex.register(service, 'tick', () => cronTickBody(service, deps)(localSend(ex)))
+}
+
+/** a keyed event-sink object — one journaled ctx.run leg per 'tick'
+ *  invocation, no self-arm: the event plane's own signals are the cadence
+ *  (the journaled successor of a detached() listener body a crash dropped) */
+export const legObject = async (service: string, leg: () => Promise<void>) => {
+  const restate = await import('@restatedev/restate-sdk')
+  return restate.object({
+    name: service,
+    handlers: {
+      tick: async (ctx: restate.ObjectContext) => {
+        await ctx.run('tick', leg)
+        return { done: true }
+      }
+    }
+  })
+}
+
+/** the leg object on a LocalExecutor — the local-mode wiring. */
+export const registerLegHandler = (ex: RegisterableExec, service: string, leg: () => Promise<void>): void => {
+  ex.register(service, 'tick', () => leg())
 }
 
 // ── the notify object ────────────────────────────────────────────────────
@@ -714,17 +745,13 @@ export const notifyObject = async (deps: NotifyDeps) => {
     handlers: {
       peer: async (ctx: restate.ObjectContext, arg: { watch: string; service: string; query?: unknown }) =>
         await ctx.run('peer', () => deps.peer(arg.watch, arg.service, arg.query)),
-      carrier: async (ctx: restate.ObjectContext, arg: { push: string; beefHex: string }) =>
-        await ctx.run('carrier', () => deps.carrier(arg.push, arg.beefHex))
+      carrier: async (ctx: restate.ObjectContext, arg: { push: string; beefHex: string }) => await ctx.run('carrier', () => deps.carrier(arg.push, arg.beefHex))
     }
   })
 }
 
 /** the notify bodies on a LocalExecutor — the local-mode wiring. */
-export const registerNotifyHandlers = (
-  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void },
-  deps: NotifyDeps
-): void => {
+export const registerNotifyHandlers = (ex: RegisterableExec, deps: NotifyDeps): void => {
   ex.register(EXEC_SVC.notify, 'peer', (arg) => {
     const a = arg as { watch: string; service: string; query?: unknown }
     return deps.peer(a.watch, a.service, a.query)

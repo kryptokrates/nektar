@@ -72,6 +72,13 @@ export interface AutomationConfig {
   /** watchdog cadence — the cheap checks (chain/broadcaster/hosts) re-run on
    *  this tick (default 60s; 0 disables) */
   watchdogMs?: number
+  /** host-composed endpoint defs (mcp's watcher region) — registered on the
+   *  same restate endpoint, journaled alongside the automation services.
+   *  Ignored in local mode (the host runs its own loops there). */
+  rtDefs?: unknown[]
+  /** one-shot durable sends fired once the endpoint is up — e.g. the
+   *  boot kick that starts a host cron object's self-arm chain */
+  rtKicks?: import('./rt/exec.js').InvokeTarget[]
   /** watch-shim base URLs (NEKTAR_WATCH_URLS) — long-poll wake in front of
    *  ordinary BRC-24 hosts. Each subscription mirrors a query the poll loop
    *  already issues; a changed result-set runs deals() at once. Optional:
@@ -191,7 +198,14 @@ export interface Rt {
    *  not nested fresh bounds that sum. */
   /** the one timer wheel — every recurring job registers a name + ceiling
    *  here instead of owning a private interval (Stage 6) */
-  scheduler?: import('./scheduler.js').Scheduler
+  /** the in-process executor when NEKTAR_EXECUTOR isn't restate — its
+   *  timers own the self-arm chains; stop() flushes them */
+  localExec?: import('./rt/exec.js').LocalExecutor
+  exec?: import('./rt/exec.js').Executor
+  /** this runtime's executor — resolved at openAutomation (own LocalExecutor
+   *  locally, the shared RestateExecutor under restate). Ambient
+   *  executor() call sites must prefer this: two automations in one
+   *  process can't both own the global seam */
   /** pass counts by wake source (commit / pushed-verdict / height / ceiling
    *  …) — the runtime witness for 'events drive': a source that never
    *  counts is a dead push path degrading silently to floor speed */
@@ -206,9 +220,7 @@ export interface Rt {
   upkeepRun?: Promise<void>
   upkeepAt: number
   acking: boolean
-  pumping: boolean
-  pumpAgain: boolean
-  pumpDone?: Promise<void>
+  drainDone?: Promise<void>
   watchBases: string[]
   watches: Map<string, AbortController>
   // cross-region doors — assigned by the region openers (and the assembler

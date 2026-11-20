@@ -10,7 +10,7 @@
 // the Restate endpoint, LocalExecutor dispatches to them directly — so
 // memory-tier tests exercise the exact code the server invokes.
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { nektarEnv, type EnvSource } from '@nektar/core'
+import { nektarEnv, detached, type EnvSource } from '@nektar/core'
 import { WAITS } from '../waits.js'
 
 export interface InvokeTarget {
@@ -33,7 +33,7 @@ export interface Executor {
   /** durable one-way delivery — resolves once the runtime accepted it */
   send(target: InvokeTarget, arg: unknown, opts?: SendOpts): Promise<void>
   /** request-response — resolves with the handler's result */
-  call<T>(target: InvokeTarget, arg: unknown): Promise<T>
+  call<T>(target: InvokeTarget, arg: unknown, opts?: Pick<SendOpts, 'idempotencyKey'>): Promise<T>
 }
 
 /** service/object names — keep in sync with services.ts */
@@ -48,7 +48,11 @@ export const EXEC_SVC = {
   upkeep: 'nektar-upkeep',
   watchdog: 'nektar-watchdog',
   watches: 'nektar-watches',
-  notify: 'nektar-notify'
+  notify: 'nektar-notify',
+  /** host-side defs (mcp's watcher region) registered via cfg.rtDefs — same
+   *  endpoint, same server, journaled alongside the automation services */
+  confirmer: 'nektar-confirmer',
+  watcher: 'nektar-watcher'
 } as const
 
 /** the custody object's fixed key — every wallet custody leg serializes on
@@ -88,6 +92,7 @@ export class LocalExecutor implements Executor {
   private readonly handlers = new Map<string, Handler>()
   private readonly timers = new Set<ReturnType<typeof setTimeout>>()
   private readonly pending = new Set<Promise<unknown>>()
+  private inDispatch = 0
 
   constructor(private readonly log: (line: string) => void = () => {}) {}
 
@@ -104,7 +109,17 @@ export class LocalExecutor implements Executor {
   send(target: InvokeTarget, arg: unknown, opts?: SendOpts): Promise<void> {
     const fn = this.get(target)
     const run = (): void => {
-      const p = fn(arg, target.key)
+      // dispatched work exits the caller's leg — a send fired inside a
+      // bound leg must not hand that deadline to the spawned invocation
+      // (the ALS propagates through queueMicrotask/setTimeout otherwise)
+      const p = detached(async () => {
+        this.inDispatch++
+        try {
+          await fn(arg, target.key)
+        } finally {
+          this.inDispatch--
+        }
+      })
       this.pending.add(p)
       void p
         .catch((e: unknown) => {
@@ -130,8 +145,16 @@ export class LocalExecutor implements Executor {
     for (let i = 0; i < 50 && this.pending.size > 0; i++) await Promise.allSettled([...this.pending])
   }
 
-  async call<T>(target: InvokeTarget, arg: unknown): Promise<T> {
-    return (await this.get(target)(arg, target.key)) as T
+  async call<T>(target: InvokeTarget, arg: unknown, _opts?: Pick<SendOpts, 'idempotencyKey'>): Promise<T> {
+    const r = (await this.get(target)(arg, target.key)) as T
+    // local call = handler + its dispatched sends settled — Restate's call
+    // returns when the handler does, but the legs it sends would race the
+    // caller's next assert; joining them preserves the old inline tick's
+    // "one call = the whole pass" contract. A call made INSIDE a dispatched
+    // send can't join — the pending set contains that very dispatch and a
+    // join would wait on itself; the outer caller's drain covers the wake.
+    if (this.inDispatch === 0) await this.drain()
+    return r
   }
 
   /** flush pending delayed sends — test seam (stop() equivalent) */
@@ -173,8 +196,8 @@ export class RestateExecutor implements Executor {
     if (!r.ok) throw new Error(`restate send ${target.service}/${target.key ?? ''}/${target.handler}: ${r.status} ${await r.text().catch(() => '')}`)
   }
 
-  async call<T>(target: InvokeTarget, arg: unknown): Promise<T> {
-    const r = await this.post(this.url('call', target), arg)
+  async call<T>(target: InvokeTarget, arg: unknown, opts?: Pick<SendOpts, 'idempotencyKey'>): Promise<T> {
+    const r = await this.post(this.url('call', target), arg, opts?.idempotencyKey)
     if (!r.ok) throw new Error(`restate call ${target.service}/${target.key ?? ''}/${target.handler}: ${r.status} ${await r.text().catch(() => '')}`)
     return (await r.json()) as T
   }

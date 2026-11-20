@@ -109,7 +109,7 @@ export function openLanes(rt: Rt): void {
   const notifyPeer = (rec: { watch?: string } | undefined, service: string, query?: unknown): void => {
     const watch = rec?.watch
     if (watch === undefined) return
-    const exec = executor()
+    const exec = rt.exec ?? executor()
     // under restate the push is a durable invocation keyed by the peer's
     // watch endpoint — at-least-once delivery where the detached spawn was
     // lost on crash; the content key dedupes a repeat announce
@@ -137,7 +137,7 @@ export function openLanes(rt: Rt): void {
     const push = rec?.push
     if (push === undefined || beef.length === 0) return
     const beefHex = Buffer.from(beef).toString('hex')
-    const exec = executor()
+    const exec = rt.exec ?? executor()
     if (exec !== undefined) {
       const dedup = createHash('sha256').update(Buffer.from(beef)).digest('hex').slice(0, 16)
       void exec

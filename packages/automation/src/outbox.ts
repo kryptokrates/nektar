@@ -1,14 +1,17 @@
 // outbox.ts — the outbox drain: receipt pushes after a tick, and the
-// store-driven pump (wake on outboxReady + a bounded ceiling timer on the
-// next row's next_at) that keeps durable delivery off the poll cadence.
+// store-driven pump (outboxReady pokes the transport drain, whose journaled
+// scan → per-destination deliver invocations self-schedule the ceiling at
+// the earliest next_at). Rows stay the durable intent; scheduling lives on
+// the executor — the drain's delayed self-arm under restate, the
+// LocalExecutor's timers otherwise.
 import { detached } from '@nektar/core'
 import type { Rt } from './rtctx.js'
-import { WAITS } from './waits.js'
 import { executor, EXEC_SVC } from './rt/exec.js'
 import { TRANSPORT_DRAIN_KEY } from './rt/services.js'
 
 export function openOutbox(rt: Rt): void {
-  const { store, engine, log } = rt
+  const { store, log } = rt
+  const DRAIN = { service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY } as const
   // envelope receipts ride the journaled ack path — submitted AFTER the
   // engine's tick under their own busy guard, so a slow or dead host can
   // never delay the processing of messages that just arrived. detached():
@@ -28,66 +31,27 @@ export function openOutbox(rt: Rt): void {
     )
   }
   rt.pushAcks = pushAcks
-  const exec = executor()
-  if (exec !== undefined) {
-    // the restate topology: rows are still the durable intent, but delivery
-    // + scheduling live on the transport object — outboxReady pokes the
-    // drain (journaled scan → per-destination deliver invocations → the
-    // drain self-schedules its ceiling at the earliest next_at). No wheel
-    // job, no in-process pump; the boot send covers rows pending across a
-    // restart.
-    const poke = (): void => {
-      void exec.send({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {}).catch((e: unknown) => {
+  // rows are the durable intent; delivery + scheduling live on the
+  // transport object — outboxReady pokes the drain, deliver lands per
+  // destination key, the drain self-arms its ceiling at the earliest
+  // next_at. A boot poke covers rows pending across a restart.
+  // executor() resolves lazily at call time — the seam is installed after
+  // openOutbox runs (openAutomation creates the local executor next)
+  const poke = (): void => {
+    void (rt.exec ?? executor())
+      ?.send(DRAIN, {})
+      .catch((e: unknown) => {
         log(`automation: transport drain send: ${(e as Error).message}`)
       })
-    }
-    store.outboxReady = poke
-    poke()
-    return
   }
-  // outbox delivery is detached under its own busy guard — the store's
-  // outboxReady hook wakes it on every enqueue (so a want/accept/message
-  // hits the wire mid-tick, not at the next one), a next_at timer covers
-  // deferred rows exactly, and the end-of-tick poke is the correctness
-  // floor. Deliveries never touch op state — safe off the engine mutex.
-  // detached() at the spawn entry: the pump runs mid-tick inside the
-  // tick's leg — as spawned work it must not inherit (and die with) it
-  const armOutboxTimer = async (): Promise<void> => {
-    if (rt.stopped) return
-    try {
-      const nextAt = await store.nextOutboxAt()
-      if (nextAt === undefined || rt.stopped) return
-      // the shared wheel owns the ceiling — this arm is the exact next_at wake
-      rt.scheduler!.dueIn('outbox', Math.max(0, nextAt - Date.now()))
-    } catch {
-      /* the deals-pass floor covers a missed arm */
-    }
+  rt.pumpOutbox = () => {
+    rt.drainDone = (rt.exec ?? executor())
+      ?.call(DRAIN, {})
+      .then(() => undefined)
+      .catch((e: unknown) => {
+        log(`automation: outbox pump: ${(e as Error).message}`)
+      })
   }
-  rt.pumpOutbox = (): void => {
-    if (rt.stopped) return
-    if (rt.pumping) {
-      rt.pumpAgain = true
-      return
-    }
-    rt.pumping = true
-    rt.pumpDone = detached(() =>
-      engine
-        .pumpOutbox()
-        .catch((e) => log(`automation: outbox pump: ${(e as Error).message}`))
-        .finally(() => {
-          rt.pumping = false
-          if (rt.pumpAgain) {
-            rt.pumpAgain = false
-            rt.pumpOutbox()
-            return
-          }
-          void armOutboxTimer()
-        })
-    )
-  }
-  store.outboxReady = () => rt.pumpOutbox()
-  // register the job once — exact-at wakes come from dueIn() on each arm;
-  // the 60s ceiling is only the missed-wake backstop (the end-of-tick pump
-  // is already the correctness floor)
-  rt.scheduler!.add({ name: 'outbox', run: () => rt.pumpOutbox(), ceilingMs: () => WAITS.outboxCeiling.ms })
+  store.outboxReady = poke
+  poke()
 }

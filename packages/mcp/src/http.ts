@@ -1,6 +1,7 @@
 // API-001: minimal versioned HTTP API (node:http, no framework). Same tools
 // as MCP, plus public read endpoints. Every route is in OPENAPI (tested).
-import { nektarEnv, marketHostsFromEnv } from '@nektar/core'
+import { nektarEnv, deadline } from '@nektar/core'
+import { marketHosts, addSavedHost, removeSavedHost } from './hosts.js'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { MerklePath } from '@bsv/sdk'
@@ -27,6 +28,20 @@ export const OPENAPI = {
       delete: { summary: 'end an MCP session', responses: { 200: { description: 'closed' } } }
     },
     '/v1/health': { get: { summary: 'liveness', responses: { 200: { description: 'ok' } } } },
+    '/v1/hosts': {
+      post: {
+        summary:
+          'join a market host — {url} normalizes to an origin, GETs its /.well-known/nektar as the handshake, persists to hosts.json and hot-adds the running lanes (au.addHost). Returns the host\'s advertised peers so one paste can bootstrap the whole join. Operator-gated.',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } } },
+        responses: { 200: { description: 'joined host + discovered peers' }, 400: { description: 'bad url' }, 502: { description: 'no nektar there' } }
+      },
+      delete: {
+        summary:
+          'leave a market host — ?url= drops a saved join or blocks an env/seed host persistently (hosts.json), and splices the running lanes (au.removeHost). Operator-gated.',
+        parameters: [{ name: 'url', in: 'query', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'removed' }, 400: { description: 'url required' }, 404: { description: 'not a market host' } }
+      }
+    },
     '/v1/openapi.json': { get: { summary: 'this document', responses: { 200: { description: 'OpenAPI 3.1' } } } },
     '/v1/metrics': { get: { summary: 'Prometheus metrics (text/plain 0.0.4)', responses: { 200: { description: 'metrics' } } } },
     '/v1/tools': { get: { summary: 'list tools (same as MCP tools/list)', responses: { 200: { description: 'tool schemas' } } } },
@@ -510,6 +525,56 @@ export function createHttpApi(
             mem.events.emit('change', 'automation')
             return send(200, r)
           }
+          // /v1/hosts — the join flow. Paste-anything (bare host, host/path, a
+          // well-known URL) → origin; a bounded GET of its /.well-known/nektar
+          // proves a nektar answers there and returns its advertised peers,
+          // which is how one pasted host bootstraps the whole join. Persists
+          // to hosts.json (env ∪ file = marketHosts()) and hot-adds into the
+          // running lanes via au.addHost — no restart, no env edit.
+          if (req.method === 'POST' && url.pathname === '/v1/hosts') {
+            const operator = nektarEnv('NEKTAR_OPERATOR_TOKEN')
+            if (operator && req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required' })
+            const u0 = String((((await body(req).catch(() => ({}))) as { url?: unknown }).url ?? '')).trim()
+            if (u0 === '') return send(400, { error: 'url required' })
+            let origin: string
+            try {
+              const u = new URL(/^https?:\/\//i.test(u0) ? u0 : `https://${u0}`)
+              const local = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?)/.test(u.hostname)
+              if (u.protocol !== 'https:' && !local) throw new Error('https only')
+              origin = u.origin
+            } catch {
+              return send(400, { error: 'not a usable host URL (paste a nektar URL or origin)' })
+            }
+            const probe = await deadline(
+              (signal) => fetch(`${origin}/.well-known/nektar`, { signal }).then(async (r) => (r.ok ? ((await r.json()) as Record<string, unknown>) : undefined)),
+              4_000
+            ).catch(() => undefined)
+            const doc = probe?.outcome === 'settled' ? probe.value : undefined
+            if (doc === undefined) return send(502, { error: `nothing answered at ${origin}/.well-known/nektar` })
+            if (doc.kind !== 'nektar-discovery') return send(502, { error: `${origin} answers but is not a nektar` })
+            addSavedHost(origin)
+            mem.automation?.addHost?.(origin)
+            const known = new Set(marketHosts())
+            const discovered = (((doc.market as { hosts?: unknown[] })?.hosts ?? []) as unknown[])
+              .map((h) => String(h).replace(/\/+$/, ''))
+              .filter((h) => h !== '' && h !== origin && !known.has(h))
+            mem.events.emit('change', 'automation')
+            return send(200, { url: origin, pub: doc.operatorPub ?? null, discovered })
+          }
+          // DELETE /v1/hosts?url= — leave a host: a saved join is dropped; an
+          // env or seed host lands in `blocked` so the leave survives restart.
+          // au.removeHost splices the live lane array + marks it down now.
+          if (req.method === 'DELETE' && url.pathname === '/v1/hosts') {
+            const operator = nektarEnv('NEKTAR_OPERATOR_TOKEN')
+            if (operator && req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required' })
+            const u = (url.searchParams.get('url') ?? '').trim().replace(/\/+$/, '')
+            if (u === '') return send(400, { error: 'url required' })
+            if (!marketHosts().includes(u)) return send(404, { error: `${u} is not a market host` })
+            removeSavedHost(u)
+            mem.automation?.removeHost?.(u)
+            mem.events.emit('change', 'automation')
+            return send(200, { url: u, removed: true })
+          }
           if (req.method === 'GET' && url.pathname === '/v1/tools') return send(200, { tools: await visibleTools(mem) })
           if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {
             if (!(await visibleTools(mem)).some((t) => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
@@ -669,7 +734,7 @@ export function createHttpApi(
                 memory: true,
                 receipts: true,
                 market: mem.automation != null,
-                marketHosts: marketHostsFromEnv()
+                marketHosts: marketHosts()
               },
               join: {
                 mcp: 'any streamable-HTTP MCP client: url <mcp>, header Authorization: Bearer <token>',
@@ -697,7 +762,7 @@ export function createHttpApi(
                 automation: mem.automation != null,
                 // the effective set — env or baked-in seeds, same list the
                 // runtime reads through
-                hosts: marketHostsFromEnv(),
+                hosts: marketHosts(),
                 push: nektarEnv('NEKTAR_PUSH_PUBLIC') ?? null
               },
               publicShards: await Promise.all(

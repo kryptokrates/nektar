@@ -43,70 +43,54 @@ export abstract class IngressOps extends MarketBase {
   private lastResubmitAt = -Infinity
   private resubmitEvery = -1
 
+  /** the inbox scan with the self-note ordering — self-notes must restore
+   *  their operation before anything else in the batch runs (a want lane
+   *  event ingested ahead of the sellerNote would create a fresh sale op
+   *  with the same dedupe key and the note would dedupe away). The dealfan
+   *  service scans through this in both modes. */
+  async pendingInbox(): Promise<InboxItem[]> {
+    const inbox = await this.d.store.pendingInbox()
+    const selfNote = (i: InboxItem): boolean =>
+      i.kind === 'message' &&
+      (i.payload as { from?: string; msg?: { type?: string } }).from === this.me &&
+      ((i.payload as { msg?: { type?: string } }).msg?.type === 'note' || (i.payload as { msg?: { type?: string } }).msg?.type === 'sellerNote')
+    inbox.sort((a, b) => Number(selfNote(b)) - Number(selfNote(a)))
+    return inbox
+  }
+
+  /** the resubmit cadence leg — 'prepared'/'submission_unknown' rows are
+   *  signed intents, not just boot leftovers: a dropped ledger write
+   *  between broadcast and mark must not wedge the inputs until the next
+   *  restart. Boot replay covers startup; the dealfan floor carries this. */
+  async resubmitTick(): Promise<void> {
+    if (this.resubmitEvery < 0) this.resubmitEvery = WAITS.resubmitCadence.ms + Math.floor(stable01(this.me) * WAITS.resubmitJitter.ms)
+    if (this.now() - this.lastResubmitAt < this.resubmitEvery) return
+    this.lastResubmitAt = this.now()
+    if (this.wallet !== undefined) await custodyResubmitPending(this.d.executor ?? executor(), this.wallet).catch(() => undefined)
+  }
+
   tick(): Promise<void> {
     return this.run(async () => {
-      const exec = executor()
-      if (exec !== undefined) {
-        // the whole scan+fan-out leg is one journaled invocation on dealfan —
-        // the scans journal (replay re-sends the SAME snapshot), and every
-        // item/op/reconcile leg lands on its own serialized key
-        await exec.send({ service: EXEC_SVC.dealfan, handler: 'tick' }, {}).catch((e: unknown) => {
-          this.d.log?.(`market: dealfan tick send: ${(e as Error).message}`)
-        })
+      // the whole pass is one invocation on dealfan — the scans journal
+      // (replay re-sends the SAME snapshot), every leg lands on its own
+      // serialized key, and the tick self-arms the floor's next cadence.
+      // call() keeps "tick() = one complete pass" semantics in both modes.
+      const ex = this.d.executor ?? executor()
+      if (ex === undefined) {
+        // no executor (a bare engine outside openAutomation) — the same
+        // legs the dealfan invocation runs, inline
+        for (const item of await this.pendingInbox()) await this.dealEvent(item)
+        for (const op of await this.d.store.operations({ states: NONTERMINAL })) await this.advanceOp(op.operationId)
+        const due = await this.d.store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: Date.now() })
+        for (const op of due) await this.reconcileOp(op.operationId)
+        await this.resubmitTick()
       } else {
-        // self-notes must restore their operation before anything else in the
-        // batch runs — a want lane event ingested ahead of the sellerNote would
-        // otherwise create a fresh sale op with the same dedupe key and the note
-        // would be deduped away
-        const inbox = await this.d.store.pendingInbox()
-        const selfNote = (i: InboxItem): boolean =>
-          i.kind === 'message' &&
-          (i.payload as { from?: string; msg?: { type?: string } }).from === this.me &&
-          ((i.payload as { msg?: { type?: string } }).msg?.type === 'note' || (i.payload as { msg?: { type?: string } }).msg?.type === 'sellerNote')
-        inbox.sort((a, b) => Number(selfNote(b)) - Number(selfNote(a)))
-        for (const i of inbox) {
-          try {
-            // new-deal gates leave the item pending WITHOUT spending an
-            // attempt — a host flap must not dead-letter wants
-            if (i.kind === 'want') {
-              if (this.d.killed?.() || this.d.deaf?.()) continue
-              await this.onWant(i.payload as SignedWant)
-            } else if (i.kind === 'offer') await this.onOffer(i.payload as SignedOffer)
-            else {
-              const p = i.payload as { from: string; msg: MarketMessage; refs?: BoxRef[] }
-              await this.onMessage(p.from, p.msg, p.refs)
-            }
-            await this.d.store.completeInbox(i.source, i.messageId)
-          } catch (e) {
-            await this.d.store.failInbox(i.source, i.messageId, (e as Error).message)
-          }
-        }
+        await ex.call({ service: EXEC_SVC.dealfan, handler: 'tick' }, {}).catch((e: unknown) => {
+          this.d.log?.(`market: dealfan tick: ${(e as Error).message}`)
+        })
       }
-      const height = await this.d.height()
-      // in-run resubmit: 'prepared'/'submission_unknown' rows are signed
-      // intents, not just boot leftovers — a dropped ledger write between
-      // broadcast and mark must not wedge the inputs until the next restart.
-      // Boot replay covers startup; this is the upkeep cadence.
-      if (this.resubmitEvery < 0) this.resubmitEvery = WAITS.resubmitCadence.ms + Math.floor(stable01(this.me) * WAITS.resubmitJitter.ms)
-      if (this.now() - this.lastResubmitAt >= this.resubmitEvery) {
-        this.lastResubmitAt = this.now()
-        // the custody route — resubmitPending() queues on this.chain, which
-        // tick() already holds; under restate the custody object serializes
-        // it as a journaled invocation, local mode calls the wallet direct
-        if (this.wallet !== undefined) await custodyResubmitPending(executor(), this.wallet).catch(() => undefined)
-      }
-      // the per-op leg and the reconcile scans: local mode runs them inline
-      // behind the mutex; under restate the dealfan tick already fanned each
-      // row out to its own deal key — nothing inline here
-      if (exec === undefined) {
-        const ops = await this.d.store.operations({ states: NONTERMINAL })
-        for (const op of ops) await this.advanceLeg(op, height)
-        for (const op of await this.d.store.operations({ role: 'buyer', states: ['funding_failed'], reconcileDue: this.now() })) await this.reconcileRefused(op)
-        for (const op of await this.d.store.operations({ role: 'buyer', states: ['refunded'], reconcileDue: this.now() })) await this.reconcileRefundProof(op)
-      }
-      // with the runtime's detached pump wired, the end-of-tick pass is a
-      // poke (drain runs off the engine mutex); without it the engine
-      // flushes inline — tests drive tick() directly and rely on that
+      // with the runtime's pump wired, the end-of-tick pass is a poke
+      // (the drain runs off the engine mutex)
       if (this.d.store.outboxReady !== undefined) this.d.store.outboxReady()
       else await this.pumpOutbox()
     }, 'tick')

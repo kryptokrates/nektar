@@ -82,6 +82,7 @@ test('dealfan.tick: inbox → ev:<wantId>, ops → advance keys, reconcile rows 
       pendingInbox: async () => items,
       liveOps: async () => ['op:a', 'op:b'],
       reconcileOps: async () => ['op:r'],
+      ceilingMs: () => 60_000,
       log: () => {}
     })
     const r = await ex.call<{ events: number; advanced: number; reconciled: number }>({ service: EXEC_SVC.dealfan, handler: 'tick' }, {})

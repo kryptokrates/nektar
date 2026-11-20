@@ -6,8 +6,10 @@ description: >
   transitions, or recovery code. Trigger surfaces: "who owns this failure",
   stale status labels, two components disagreeing about the same fact,
   restart-durability questions, rollback/retry/reconcile correctness, or a
-  timeout being treated as a verdict. The deliverable is a machine-shaped
-  transition table (state × event → guard / effect / targets / owner) plus
+  timeout being treated as a verdict, replay/redelivery/orphaned-send
+  surfaces under a durable executor (Restate). The deliverable is a
+  machine-shaped transition table (state × event → guard / effect /
+  targets / owner / durability) plus
   ranked findings. For patch-level review use code-review; for whole-system
   runtime topology use arch-review; for wait-site/event design use
   event-arch; for what counts as believed use spv-strict; for the coin path
@@ -60,13 +62,22 @@ strongest fix often **deletes a stored truth**: compute the label from the
 ledger as a pure selector instead of reconciling two writes (the
 `deals`-label vs `walletTxs` pattern in `references/nektar.md`).
 
+Under the durable executor (Restate) every lifecycle spans **two records**:
+the domain row (SQLite — verdict truth) and the invocation journal (queued /
+running / suspended / completed — _delivery_ truth). The journal is not a
+projection of domain state and must never be read as one: a completed
+invocation proves the handler ran, not that the domain accepted the effect;
+a suspended invocation proves a leg is being retried, not that the row is
+stuck. The mapping journal→row is `data/hidden-source-of-truth` whenever a
+status, alert, or reconcile reads the wrong record.
+
 ### 2. Trace the lifecycle as a transition table
 
 One row per `(state, event)` — creation, reservation, submission,
 acceptance, confirmation, failure, cancellation, recovery, cleanup:
 
-| state | event | event source (who may emit) | guard (required evidence) | action/effect | target on success | target on failure / timeout | owner |
-| ----- | ----- | --------------------------- | ------------------------- | ------------- | ----------------- | --------------------------- | ----- |
+| state | event | event source (who may emit) | guard (required evidence) | action/effect | target on success | target on failure / timeout | owner | durability (where journaled) |
+| ----- | ----- | --------------------------- | ------------------------- | ------------- | ----------------- | --------------------------- | ----- | ---------------------------- |
 
 - An **empty cell is a finding** — a state with no row for `timeout`,
   `reject`, or `late-confirm` is an unmodelled reality.
@@ -77,7 +88,14 @@ acceptance, confirmation, failure, cancellation, recovery, cleanup:
 - **Outcome taxonomy**: expected / submitted / accepted / confirmed /
   failed / **unknown**. A timeout or lost response is `unknown`, never a
   verdict — `submission_unknown` in `automation/src/store.ts` is the
-  repo's canonical example (`ledger.ts` sets it on broadcast throw).
+  repo's canonical example (`ledger.ts` sets it on broadcast throw). A
+  failed `call` whose callee may already have committed is the same class:
+  the invocation outcome is unknown, the row decides.
+- **Redelivery and replay are events now.** Every handler row also needs an
+  answer for `redeliver` (the at-least-once send arrives a second time —
+  guard: row-state check / content key / ingress idempotency key → effect:
+  no-op) and `replay` (the invocation resumes after a crash mid-handler —
+  guard: steps journaled in `ctx.run`, everything outside re-runs).
 
 ### 3. Failure & recovery ownership
 
@@ -95,6 +113,11 @@ the bound.** Then:
   deliberately discarded** — and for each discard, the consequence. F12 in
   arch-review's failure-modes.md is the inventory format; this phase adds
   "who reconciles the divergence after boot."
+- **The owner differs by executor mode — name both.** A throwing handler
+  under Restate is retried durably (the suspended invocation IS the
+  resolver); the same leg on the local executor is a log-and-drop the floor
+  must re-cover. A failure-ownership row that only names one mode has a
+  hole in the other.
 
 ### 4. Dormant paths
 
@@ -150,6 +173,33 @@ integration emits the right events.
    never into `failed`.
 3. **Exhaustiveness.** Every non-terminal state handles every failure event
    or records why it can't occur. Cheap once the table exists.
+
+## Four durable-execution checks (run when the plane is Restate)
+
+1. **Replay boundary at the right grain.** Everything inside `ctx.run` is
+   journaled (executes once, replay returns the recorded result); everything
+   outside re-runs on replay. Scans/snapshots belong inside (replay re-sends
+   the SAME row set — a re-scanned store is a `data/ordering-scope` bug);
+   sends belong outside (they must re-fire). A side-effecting leg outside
+   `ctx.run` without dedup is a double-effect finding.
+2. **Redelivery is absorbed.** Every send is at-least-once — the second
+   delivery must be a no-op: row-state guard, content key, or ingress
+   `idempotency-key`. A handler that appends on redelivery is
+   `data/at-least-once-victim`.
+3. **Key = lock, nothing else.** Per-key serialization replaced the process
+   mutex — two different keys writing the same domain row is the old race
+   class in new clothes (e.g. `ev:<wantId>` event keys vs `<opId>` advance
+   keys both completing inbox rows — the row CAS is the guard, name it).
+   Conversely a broad fixed key re-serializes unrelated work — the old
+   global mutex surviving as `key: 'main'`.
+4. **Suspension, orphans, and kills.** A wedged `ctx.run` retries on the
+   key indefinitely — name what expires or reconciles it (suspended ≠
+   stuck row, but a poisoned leg wedges the key's queue). A forced
+   deployment replacement orphans armed delayed sends (RT0011 — the arm
+   lands on a deployment that no longer has the service); the floor must
+   re-arm what the journal lost. A domain kill/cancel must either kill the
+   queued invocations too or make their handlers no-op on the row state —
+   an armed send that outlives its kill is an unowned writer.
 
 ## Report format
 

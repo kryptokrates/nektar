@@ -4,7 +4,8 @@
 //   Streamable HTTP+REST:  NEKTAR_HTTP_PORT=8080 node dist/src/bin.js
 // Backend via NEKTAR_NETWORK=regtest (default, local Teranode stack) | testnet | main
 // (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
-import { nektarEnv, setNektarEnv, marketHostsFromEnv, mkLog } from '@nektar/core'
+import { nektarEnv, setNektarEnv, mkLog } from '@nektar/core'
+import { marketHosts } from './hosts.js'
 import { openRuntime, configFromEnv } from './runtime.js'
 import { serveStdio } from './mcp-server.js'
 import { createHttpApi } from './http.js'
@@ -88,9 +89,9 @@ if (paymentsEnabled()) {
   requireOperatorWallet()
   nlog('payments on')
 }
-// the effective market-host set — NEKTAR_MARKET_HOSTS when set, else the
-// baked-in seed hosts for this network (the zero-config join's Layer 0)
-const mh = marketHostsFromEnv()
+// the effective market-host set — NEKTAR_MARKET_HOSTS ∪ dashboard-saved
+// joins when set, else the baked-in seed hosts for this network
+const mh = marketHosts()
 const { callTool } = await import('./server.js')
 // zero-config join, Layer 2 — seed packs from operator announces on the
 // dir lane. Independent of NEKTAR_AUTOMATION: the path is host reads +
@@ -207,6 +208,10 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     // a settlement proof must sit this deep before a completion settles —
     // the same finality depth the memory applies to anchor queries
     settleDepth: rt.mem.finalityDepth,
+    // the watcher region's durable defs (confirmer cadence, records-watcher
+    // event sink) + the boot kicks that start the self-arm chains
+    rtDefs: rt.rtDefs,
+    rtKicks: rt.rtKicks,
     // chains without a status push (polled broadcasters) mark
     // funding trees proven only here — let ops tune the cadence
     upkeepMs: nektarEnv('NEKTAR_AUTOMATION_UPKEEP_MS') ? Number(nektarEnv('NEKTAR_AUTOMATION_UPKEEP_MS')) : undefined,

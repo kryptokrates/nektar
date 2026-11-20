@@ -20,8 +20,8 @@ export function fundsAsFunder(funds: Funds, purpose: FundPurpose): Funder & { fu
 }
 
 /** what the backend owes the shared semantics — four primitive verbs over
- *  the owned-outpoint set. Implementations: wallet basket (automation's
- *  WalletFunds), in-memory pool (MemoryFunds), test treasury (StackFunder). */
+ *  the owned-outpoint set. Implementations: SqlFunds (automation's store),
+ *  in-memory pool (MemoryFunds), test treasury (StackFunder). */
 export interface FundsStore {
   /** owned unspent candidates — the impl decides what 'unspent' means */
   list: () => Promise<FundingOut[]> | FundingOut[]

@@ -599,7 +599,7 @@ export abstract class BuyerOps extends SellerOps {
           await this.d.afterPrepare?.(ctx.actionId)
           // broadcast starts now; the accept flies while the RTT is out —
           // the verdict is joined after the awaiting_disclosure transition
-          pendingSubmit = custodySubmit(executor(), this.wallet, ctx.actionId)
+          pendingSubmit = custodySubmit(this.d.executor ?? executor(), this.wallet, ctx.actionId)
           await this.d.settleEscrow(tx)
           this.d.rememberTx?.(tx)
           pay = { accepted: true, txid: built.utxo.txid, utxo: built.utxo }
@@ -704,7 +704,7 @@ export abstract class BuyerOps extends SellerOps {
         await this.d.afterPrepare?.(ctx.actionId)
         // broadcast starts now; the accept flies while the RTT is out —
         // the verdict is joined after the awaiting_disclosure transition
-        pendingSubmit = custodySubmit(executor(), this.wallet, ctx.actionId)
+        pendingSubmit = custodySubmit(this.d.executor ?? executor(), this.wallet, ctx.actionId)
         await this.d.settleEscrow(tx)
         this.d.rememberTx?.(tx)
         r = { accepted: true, txid: built.utxo.txid, utxo: built.utxo, escrow: built.escrow }
@@ -857,7 +857,7 @@ export abstract class BuyerOps extends SellerOps {
         // its custody rollback — route through the coordinator so driver
         // mode journals the edge and both modes fire txDied
         if (wtx !== undefined && (wtx.state === 'prepared' || wtx.state === 'submission_unknown')) {
-          if (this.wallet !== undefined) await custodyMarkRejected(executor(), this.wallet, wtx.actionId, { cause: 'escrow_rejected' })
+          if (this.wallet !== undefined) await custodyMarkRejected(this.d.executor ?? executor(), this.wallet, wtx.actionId, { cause: 'escrow_rejected' })
           else {
             await this.d.store.setTxState(actionId, 'rejected', { cause: 'escrow_rejected' })
             await Promise.resolve(this.d.txDied?.(Transaction.fromHex(wtx.rawHex))).catch(() => undefined)
@@ -1080,7 +1080,7 @@ export abstract class BuyerOps extends SellerOps {
       if (op.state === 'funding' && !this.inflight.has(op.operationId)) {
         const pending = op.data.pendingEscrow as { cfg: any; utxo: any } | undefined
         if (pending && this.wallet && this.d.settleEscrow) {
-          const sub = await custodySubmit(executor(), this.wallet, op.data.escrowAction as string)
+          const sub = await custodySubmit(this.d.executor ?? executor(), this.wallet, op.data.escrowAction as string)
           if (sub.state === 'submitted' || sub.state === 'observed' || sub.state === 'confirmed') {
             const wtx = await this.d.store.walletTx({ actionId: op.data.escrowAction as string })
             if (wtx) await this.d.settleEscrow(Transaction.fromHex(wtx.rawHex))

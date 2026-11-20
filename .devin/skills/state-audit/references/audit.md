@@ -34,10 +34,19 @@ Fill the columns in this order — event enumeration is the hard part:
 2. **Events** — for each state, what can arrive: normal next-step, every
    refusal shape, timeout, duplicate, out-of-order sibling, late evidence
    contradicting a verdict, external signal (chain, host, counterparty).
+   Under the durable executor add `redeliver` (the same send delivered
+   again — at-least-once is the wire contract), `replay` (the invocation
+   resumed mid-handler after a crash — journaled steps skip, unjournaled
+   steps re-run), `orphan` (a delayed send whose deployment was replaced —
+   RT0011 lands as silence, the floor must cover), and `suspend` (the leg
+   parked in Restate retry — is there an expiry or a reconcile for the
+   row?).
 3. **Event source** — name the emitter class: own write, verified external
    evidence, hint (status word/indexer), timer, replay. Only evidence-class
    sources may fire verdict events — everything else fires `unknown`-ward
-   transitions or gets logged as a hint.
+   transitions or gets logged as a hint. An invocation journal entry is a
+   delivery-class source, never evidence-class: "the handler completed" is
+   not "the row accepted".
 4. **Guard → action → targets** — the required evidence, the effect, and
    both outcomes. `target on failure/timeout` left blank is the finding.
 
@@ -147,6 +156,24 @@ The six drills — pick per finding, don't run the whole set:
 6. **Refused-but-landed**: external system applies the effect despite the
    refusal/timeout (mined anyway, delivered anyway). Assert the late
    evidence revives or re-routes — never strands.
+
+Durable-executor drills — add when the resource rides Restate:
+
+7. **Mid-handler kill**: `kill -9` between a handler's journaled steps.
+   Restart → the invocation resumes from the journal: journaled steps do
+   not re-execute (no double ledger write), unjournaled sends re-fire
+   exactly once (idempotent target absorbs). On the local executor the
+   same kill = lost leg — the floor/floor-cadence must re-cover it.
+8. **Double delivery**: redeliver the same send (same idempotency key at
+   the ingress collapses it; without a key the handler sees it twice) —
+   assert the second landing is a no-op.
+9. **Orphaned arm**: force-replace the deployment while a delayed self-arm
+   is in flight → the arm lands RT0011. Assert the domain floor re-arms
+   the cadence/row rather than the cadence dying silently.
+10. **Poisoned leg**: make a leg throw deterministically → the invocation
+    suspends in retry on the key. Assert (a) the key's queue wedge is
+    visible (not silent), and (b) fixing the leg un-wedges it — or name the
+    kill/journal-reset path.
 
 Fixture rules (test-boundaries owns the details): fixtures obey domain
 invariants — no double-spends in arrange, real refusal shapes not invented

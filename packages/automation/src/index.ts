@@ -67,7 +67,6 @@ export {
   fundToolbox
 } from './toolbox.js'
 export { RegtestWalletServices, LiveWalletServices } from './toolbox-services.js'
-export { WalletFunds } from './wallettfunds.js'
 export { SqlFunds } from './sqlfunds.js'
 export { type PreflightDeps, WATCHDOG_CHECKS, runPreflight } from './preflight.js'
 export { type TradeEvidence, type RedactedTradeEvidence, redactTradeEvidence, collectTradeEvidence, verifyTradeEvidence } from './evidence.js'

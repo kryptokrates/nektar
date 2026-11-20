@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { WAITS } from '../src/waits.js'
 
 // waits-census — the wait-site inventory made executable. wake-coverage
-// enumerates the JOBS (every scheduler job names its wake source); this
+// enumerates the JOBS (every service/cadence names its wake source); this
 // enumerates the WAITS themselves: every wait primitive inside
 // automation/src lives on the sanctioned list, every duration literal at
 // a wait site is a named value (WAITS or an UPPER_SNAKE *_MS const), and
@@ -31,7 +31,6 @@ test('wait primitives only at sanctioned sites', () => {
   // wait nobody classified. deadline()/nap() in @nektar/core are the one
   // race+sleep dialect — a fresh Promise.race re-forks it.
   const SANCTIONED: Record<string, string> = {
-    'scheduler.ts': 'the wheel itself — the ONE timer',
     'watches.ts': 'the abortable nap impl + the io-bound watch fetch',
     'lanes.ts': 'the io() merge helper — signals meet at the socket',
     'ai.ts': 'per-job io bound on caller-supplied timeoutMs',

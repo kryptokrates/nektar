@@ -11,7 +11,7 @@ import { WAITS } from '../src/waits.js'
 import type { MarketDeps } from '../src/market/types.js'
 
 // wake-coverage — the poll-vs-push inventory made executable. Every
-// scheduler job, every package-level setInterval, and every commit site
+// service cadence, every package-level setInterval, and every commit site
 // that lands fresh work must appear in a classification map below. A new
 // wait site that arrives without a wake source or a floor/probe class
 // fails here — the event plane's coverage gate (event-arch P3/P7: wakes
@@ -26,20 +26,24 @@ const read = (f: string): string => readFileSync(f, 'utf8')
 const srcFiles = (dir = srcDir): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? srcFiles(join(dir, e.name)) : e.name.endsWith('.ts') ? [join(dir, e.name)] : []))
 
-test('every scheduler job declares its wake source', () => {
-  // the checked-in wake map — add a job's entry with the producer signal(s)
-  // that fire it, or classify it 'probe-tier'/'floor-only' deliberately
+test('every cadence service declares its wake source', () => {
+  // the checked-in wake map — the executor plane's recurring work. Each
+  // self-arming tick names the producer signal(s) that fire it early, or
+  // classifies 'probe-tier'/'floor-only' deliberately
   const WAKE_MAP: Record<string, string> = {
-    deals:
-      'wakes: watch changed:true, push: fast-leg, onTxProof/Rejected/Abandoned→cycle(), store.workReady commits, dueAtArmed→dueIn, onHeight dueHeight — floor: hot/idle ceiling',
-    upkeep: 'wakes: rides cycle() on every push — floor: upkeepMs ceiling',
-    watchdog: 'probe-tier: hosts cannot push; it IS the recovery producer (hostBack→unblockOutbox) — floor: watchdogMs',
-    watches: 'wakes: post-pass refreshWatches + changed:self — floor: 15s re-arm',
-    outbox: 'wakes: store.outboxReady on every enqueue + dueIn(next_at) exact — floor: 60s backstop + end-of-tick poke'
+    'nektar-dealfan':
+      'wakes: watch changed:true, push: fast-leg, onTxProof/Rejected/Abandoned→cycle(), store.workReady commits, dueAtArmed→deal.due send, onHeight dueHeight — floor: hot/idle ceiling self-arm',
+    'nektar-upkeep': 'wakes: rides cycle() on every push — floor: upkeepMs self-arm',
+    'nektar-watchdog': 'probe-tier: hosts cannot push; it IS the recovery producer (hostBack→unblockOutbox) — floor: watchdogMs self-arm',
+    'nektar-watches': 'wakes: post-pass watches.tick send + changed:self — floor: 15s re-arm self-arm',
+    'nektar-transport': 'wakes: store.outboxReady on every enqueue → drain send — floor: earliest next_at self-arm',
+    'nektar-confirmer': 'wakes: mem.onAnchorQueued call — floor: confirmEveryMs self-arm',
+    'nektar-watcher': 'event-sink: events tick/height/broadcasterStatus calls — no floor of its own (the substrate carries it)'
   }
   const found = new Set<string>()
-  for (const f of srcFiles()) for (const m of read(f).matchAll(/scheduler?!?\.add\(\{\s*name:\s*'([^']+)'/g)) found.add(m[1])
-  for (const name of found) assert.ok(WAKE_MAP[name] !== undefined, `scheduler job '${name}' has no wake-map entry — name its wake source or classify it`)
+  for (const f of srcFiles())
+    for (const m of read(f).matchAll(/cronObject\(\s*(?:EXEC_SVC\.(\w+)|'([^']+)')/g)) found.add(m[1] !== undefined ? `nektar-${m[1]}` : m[2]!)
+  for (const name of found) assert.ok(WAKE_MAP[name] !== undefined, `cadence service '${name}' has no wake-map entry — name its wake source or classify it`)
 })
 
 test('every wait primitive site is classified — the census sees all wait classes', () => {
@@ -47,11 +51,10 @@ test('every wait primitive site is classified — the census sees all wait class
   // see is a wait that lands undocumented: setTimeout sleeps, Promise.race
   // abandonments, AbortSignal.timeout dead-man switches, sleep() loops.
   // Every file holding one must be classified below — the helper itself
-  // (deadline/scheduler/retry), a named WAITS duration, an io bound, a
+  // (deadline/retry), a named WAITS duration, an io bound, a
   // deliberate mechanism, or a test-tier harness. ev/wait-class-blind.
   const PRIMITIVES = /setTimeout\(|Promise\.race\(|AbortSignal\.timeout|[^a-zA-Z]sleep\(/
   const CLASSIFIED: Record<string, string> = {
-    'automation/src/scheduler.ts': 'the wheel — the one setTimeout owner',
     'automation/src/rt/exec.ts': 'LocalExecutor delay timer + ingress fetch io bound — test/dev executor; durable timers live server-side',
     'automation/src/rt/endpoint.ts': 'deployment-registration fetch io bound + nap retry — boot path',
     'automation/src/watches.ts': 'watch-shim reconnect sleep — WAITS.watchBackoff*, jittered',
@@ -105,7 +108,7 @@ test('every wait primitive site is classified — the census sees all wait class
 test('no raw setInterval outside the classified floors', () => {
   // setInterval is the poll primitive — every site must be a named floor or
   // liveness mechanism. Recurring work that waits on a producer belongs on
-  // the Scheduler wheel (wake(name)/dueIn) or a push hook instead.
+  // an executor send/call (delayed self-arm or keyed invocation) or a push hook instead.
   const FLOORS = [
     'packages/chain/src/events.ts', // THE shared substrate floor — poke()-instrumented
     'packages/chain/src/p2p.ts', // rate-window reset — a throttle wheel, not a wait
@@ -321,14 +324,18 @@ test('a wedged run() link is detected and named — the bound resolves the wait,
 
 test('runtime wires the hooks with the busy gate and push clears the ledger throttle', () => {
   // source contract — the wiring is one function over two seams; the
-  // assertions pin the semantics the hooks exist for (no scheduler needed)
+  // assertions pin the semantics the hooks exist for (no wheel needed)
   const rt = read(join(srcDir, 'runtime.ts'))
   assert.match(
     rt,
     /store\.workReady\s*=\s*\(\)\s*=>\s*\{[^{]*if \(!rt\.busy && !rt\.stopped\)/,
     'workReady must gate on !rt.busy — mid-pass commits ride the pass, unconditional wakes hot-spin'
   )
-  assert.match(rt, /store\.dueAtArmed\s*=.*dueIn\('deals'/s, 'committed dueAt must arm the deals wheel')
+  assert.match(
+    rt,
+    /store\.dueAtArmed\s*=\s*\(operationId, at\)\s*=>[\s\S]*?EXEC_SVC\.deal[\s\S]*?handler:\s*'due'[\s\S]*?delayMs:\s*Math\.max\(0, at - Date\.now\(\)\)/,
+    'committed dueAt must arm a delayed deal.due send on the op key'
+  )
   assert.match(rt, /lastLedgerSweep\s*=\s*-Infinity/, 'the push path must clear the wtx throttle — a pushed verdict never waits out the cadence')
   assert.match(rt, /mem\.onHeight\?\.\(/, 'dueHeight wake must ride the host height hook')
   assert.match(rt, /rt\.countWake\s*=/, 'the runtime must expose the wake-source counter — unmeasured push paths degrade invisibly')
@@ -350,10 +357,8 @@ test('the leg context is ambient — spawned work detaches, manual threading is 
   assert.match(lanes, /ioSignal\(/, 'fetch-level IO merges the ambient context — no field to thread')
   const store = read(join(srcDir, 'store.ts'))
   assert.match(store, /detached\(\(\) => this\.workReady/, 'post-commit hooks fire detached — spawned work never inherits the committer leg')
-  const sched = read(join(srcDir, 'scheduler.ts'))
-  assert.match(sched, /detached\(\(\) => e\.job\.run\(\)\)/, 'timer-fired jobs run detached — a wheel armed inside a leg cannot leak it')
-  const outbox = read(join(srcDir, 'outbox.ts'))
-  assert.match(outbox, /detached\(\(\) =>\s*\n?\s*engine\s*\n?\s*\.pumpOutbox/, 'the pump spawn detaches — outboxReady fires mid-leg inside tick')
+  const exec = read(join(srcDir, 'rt', 'exec.ts'))
+  assert.match(exec, /detached\(\(\) => fn\(/, 'executor send dispatch exits the caller leg — a send armed inside a leg cannot leak it')
   // the threaded field the ALS seam replaced is GONE — presence means a
   // regression to manual threading (a leg's inner IO can forget the merge)
   for (const name of ['runtime.ts', 'upkeep.ts', 'rtctx.ts']) {
@@ -363,7 +368,7 @@ test('the leg context is ambient — spawned work detaches, manual threading is 
   // branch lands as an unhandledRejection even when the caller handled the
   // source (observed: assert.rejects passed but the dangling branch still
   // failed the test). Fire-and-forget cleanup attaches via then(both)
-  for (const name of ['runtime.ts', 'upkeep.ts', 'scheduler.ts', 'watches.ts', 'outbox.ts', 'market/base.ts', 'lanes.ts', 'store.ts']) {
+  for (const name of ['runtime.ts', 'upkeep.ts', 'watches.ts', 'outbox.ts', 'market/base.ts', 'lanes.ts', 'store.ts']) {
     const src = read(join(srcDir, ...name.split('/')))
     assert.doesNotMatch(src, /void\s+[^\n]*\.finally\(/, `${name}: void'd .finally creates an unhandledRejection branch — cleanup attaches via then(both)`)
   }

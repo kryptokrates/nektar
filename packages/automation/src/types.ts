@@ -60,12 +60,11 @@ export interface Automation {
   health: () => { pass: boolean; report: PreflightReport | undefined }
   /** re-run the full preflight now (the automationDoctor tool) */
   preflight: () => Promise<PreflightReport>
-  /** the unioned wait read — the scheduler's witness table (dueIn, running,
-   *  per-source fire counts: a job that only ever fires 'ceiling' is a poll
-   *  loop in disguise) plus every unacked outbox row with its named wait
-   *  reason — the 'what is this instance waiting on' answer, machine-shaped */
+  /** the unioned wait read — per-source wake counts (the push-vs-floor
+   *  witness) plus every unacked outbox row with its named wait reason —
+   *  the 'what is this instance waiting on' answer, machine-shaped */
   waits: () => Promise<{
-    schedule: Record<string, { dueIn: number; running: boolean; fires: { wake: number; dueIn: number; ceiling: number } }>
+    wakes: Record<string, number>
     deferred: Array<{
       actionId: string
       operationId: string
@@ -77,6 +76,13 @@ export interface Automation {
       attempts: number
     }>
   }>
+  /** adopt a market host mid-run — the join flow's hot path: the lanes and
+   *  probes read the host array live, so a pushed host joins on the next
+   *  pass (the dashboard shows it 'configured' until a probe lands) */
+  addHost?: (url: string) => void
+  /** leave a market host mid-run — splice the live array and mark it down so
+   *  the watchdog can't revive it this run (persistence is the hosts file) */
+  removeHost?: (url: string) => void
   /** B3 — 'sealed' = this agent publishes its bfinger record (publicly
    *  discoverable); 'unsealed' = it still requires configured hosts */
   bootstrap?: () => 'sealed' | 'unsealed'

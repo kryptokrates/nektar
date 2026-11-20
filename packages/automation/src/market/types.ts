@@ -3,6 +3,7 @@ import type { SignedOffer, SignedWant } from '@nektar/bstack'
 import type { Ingested } from '@nektar/chain'
 import type { AutomationStore, Operation } from '../store.js'
 import type { AIExecutor } from '../ai.js'
+import type { Executor } from '../rt/exec.js'
 
 export type MarketMessage =
   | { type: 'quote'; wantId: string; offerId: string; commitment: any; mode: string }
@@ -88,6 +89,9 @@ export interface MarketMemory {
 }
 
 export interface MarketDeps {
+  /** this runtime's executor — preferred over the ambient executor()
+   *  everywhere engine code runs: two automations in one process must not
+   *  dispatch through each other's handlers */
   store: AutomationStore
   call: (tool: string, args: any) => Promise<any>
   memory: MarketMemory
@@ -125,6 +129,7 @@ export interface MarketDeps {
   recordAired?: (tx: Transaction) => void | Promise<void>
   afterPrepare?: (actionId: string) => void | Promise<void>
   transport: MarketTransport
+  executor?: Executor
   ai: AIExecutor
   /** this agent's blogs deal-journal stream id; signed into wants/offers so
    *  the counterparty (and anyone holding the deal) can follow the journal */

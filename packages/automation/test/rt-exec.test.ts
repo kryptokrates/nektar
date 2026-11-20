@@ -3,15 +3,16 @@ import assert from 'node:assert/strict'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
-import { executor, executorFromEnv, LocalExecutor, RestateExecutor, setExecutor, EXEC_SVC } from '../src/rt/exec.js'
-import { registerTxHandlers } from '../src/rt/services.js'
+import { executor, RestateExecutor, setExecutor, EXEC_SVC } from '../src/rt/exec.js'
+import { emitTxEvent } from '../src/machines/effects.js'
 import { txEmit } from '../src/rt/emit.js'
+import { Dispatcher, wireTx } from './rig.js'
 
-// rt-exec — the executor seam itself: LocalExecutor dispatch, the
-// RestateExecutor wire format, txEmit routing (undefined executor =
-// emitTxEvent verbatim; executor = the call goes through the object),
-// and the NEKTAR_EXECUTOR env switch. Fakes sit at the seams — fetch for
-// the wire test, a registered handler for the dispatch test.
+// rt-exec — the executor seam itself: Dispatcher fan-out, the
+// RestateExecutor wire format, txEmit routing (same-key scope =
+// emitTxEvent verbatim; otherwise the call goes through the object),
+// and the ambient executor() singleton. Fakes sit at the seams — fetch
+// for the wire test, a registered handler for the dispatch test.
 
 const key = PrivateKey.fromRandom()
 let txSeq = 0
@@ -30,8 +31,8 @@ async function prepared(store: AutomationStore, actionId: string) {
   return (await store.walletTx({ actionId }))!
 }
 
-test('LocalExecutor: call dispatches to the registered handler; send fires it async', async () => {
-  const ex = new LocalExecutor()
+test('Dispatcher: call dispatches to the registered handler; send fires it async', async () => {
+  const ex = new Dispatcher()
   let sent: unknown
   ex.register('svc', 'call-me', async (arg, k) => ({ arg, k }))
   ex.register('svc', 'fire-me', async (arg) => {
@@ -67,20 +68,20 @@ test('RestateExecutor: wire format is /restate/{call,send}/ paths with delay + i
   }
 })
 
-test('txEmit: no executor is emitTxEvent verbatim; an executor routes through the nektar-tx object', async () => {
+test('txEmit: same-key scope is emitTxEvent verbatim; otherwise the call routes through the nektar-tx object', async () => {
   const { kx, store } = await open()
   try {
-    // no executor — the direct commit path, unchanged
+    // the verbatim commit path — what same-key emits inside a handler run
     const w = await prepared(store, 'a:local')
-    const direct = await txEmit(undefined, store, w, 'submit.success', { observation: { at: 1 }, attempt: true }, {})
+    const direct = await emitTxEvent(store, w, 'submit.success', { observation: { at: 1 }, attempt: true }, {})
     assert.equal(direct.accepted, true)
     assert.equal(direct.next, 'submitted')
 
-    // a LocalExecutor + the SAME handler bodies services.ts serves under
-    // restate — the routed emit runs the real leg one dispatch layer deep
+    // a Dispatcher + the SAME handler bodies services.ts serves on the
+    // endpoint — the routed emit runs the real leg one dispatch layer deep
     const w2 = await prepared(store, 'a:routed')
-    const ex = new LocalExecutor()
-    registerTxHandlers(ex, { store, fx: {}, log: () => {} })
+    const ex = new Dispatcher()
+    wireTx(ex, { store, fx: {}, log: () => {} })
     const routed = await txEmit(ex, store, w2, 'submit.success', { observation: { at: 2 }, attempt: true }, {})
     assert.equal(routed.accepted, true)
     assert.equal(routed.next, 'submitted')
@@ -91,16 +92,14 @@ test('txEmit: no executor is emitTxEvent verbatim; an executor routes through th
   }
 })
 
-test('NEKTAR_EXECUTOR: restate wires the RestateExecutor; anything else is local', () => {
-  assert.equal(executorFromEnv({}), undefined)
-  assert.equal(executorFromEnv({ NEKTAR_EXECUTOR: 'local' }), undefined)
-  const e = executorFromEnv({ NEKTAR_EXECUTOR: 'restate', NEKTAR_RESTATE_URL: 'http://x:1' })
+test('executor(): always the shared RestateExecutor; setExecutor repoints the ambient seam', () => {
+  const e = executor()
   assert.ok(e instanceof RestateExecutor)
-  // the singleton: setExecutor is the test seam, executor() the env default
-  const local = new LocalExecutor()
-  setExecutor(local)
+  // the singleton: setExecutor is the test seam, executor() the default
+  const dispatcher = new Dispatcher()
+  setExecutor(dispatcher)
   try {
-    assert.equal(executor(), local)
+    assert.equal(executor(), dispatcher)
   } finally {
     setExecutor(undefined)
   }

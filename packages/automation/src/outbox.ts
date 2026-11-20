@@ -2,8 +2,7 @@
 // store-driven pump (outboxReady pokes the transport drain, whose journaled
 // scan → per-destination deliver invocations self-schedule the ceiling at
 // the earliest next_at). Rows stay the durable intent; scheduling lives on
-// the executor — the drain's delayed self-arm under restate, the
-// LocalExecutor's timers otherwise.
+// the executor — the drain's delayed self-arm is a durable server timer.
 import { detached } from '@nektar/core'
 import type { Rt } from './rtctx.js'
 import { executor, EXEC_SVC } from './rt/exec.js'
@@ -35,18 +34,16 @@ export function openOutbox(rt: Rt): void {
   // transport object — outboxReady pokes the drain, deliver lands per
   // destination key, the drain self-arms its ceiling at the earliest
   // next_at. A boot poke covers rows pending across a restart.
-  // executor() resolves lazily at call time — the seam is installed after
-  // openOutbox runs (openAutomation creates the local executor next)
   const poke = (): void => {
     void (rt.exec ?? executor())
-      ?.send(DRAIN, {})
+      .send(DRAIN, {})
       .catch((e: unknown) => {
         log(`automation: transport drain send: ${(e as Error).message}`)
       })
   }
   rt.pumpOutbox = () => {
     rt.drainDone = (rt.exec ?? executor())
-      ?.call(DRAIN, {})
+      .call(DRAIN, {})
       .then(() => undefined)
       .catch((e: unknown) => {
         log(`automation: outbox pump: ${(e as Error).message}`)

@@ -1,16 +1,14 @@
 // exec.ts — the executor seam: who runs a durable call/send.
 //
-// NEKTAR_EXECUTOR = 'restate' routes every durable send/call through the
-// Restate sidecar — the server owns delivery, retries, journaling, timers
-// and wakes. Anything else (default) is the local path: today's in-process
-// dispatch with no sidecar required — identical semantics to the code this
-// plane replaces.
+// Restate is the only executor. Every durable send/call goes through the
+// Restate sidecar's ingress — the server owns delivery, retries, journaling,
+// timers and wakes. There is no local mode and no env opt-out: a nektar
+// deployment runs beside a restate server, period.
 //
-// The same handler bodies back both executors — services.ts wraps them for
-// the Restate endpoint, LocalExecutor dispatches to them directly — so
-// memory-tier tests exercise the exact code the server invokes.
+// The handler bodies back the endpoint's Restate handlers — services.ts
+// wraps them in ctx.run steps; tests invoke the same bodies directly.
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { nektarEnv, detached, type EnvSource } from '@nektar/core'
+import { nektarEnv } from '@nektar/core'
 import { WAITS } from '../waits.js'
 
 export interface InvokeTarget {
@@ -77,92 +75,10 @@ export const inRtScope = <T>(s: RtScope, fn: () => T): T => scope.run(s, fn)
 
 export const rtScopeKey = (): RtScope | undefined => scope.getStore()
 
-/** a journaled send inside a handler — restate backs it with
- *  ctx.objectSendClient (journal-deduped on replay); LocalExecutor backs
- *  it with ex.send. Callers never use the ingress inside a handler —
- *  unjournaled egress would double-fire on replay. */
+/** a journaled send inside a handler — backed by ctx.objectSendClient
+ *  (journal-deduped on replay). Callers never use the ingress inside a
+ *  handler — unjournaled egress would double-fire on replay. */
 export type RtSend = (target: { service: string; handler: string; key?: string }, arg: unknown, opts?: SendOpts) => Promise<unknown>
-
-type Handler = (arg: unknown, key?: string) => Promise<unknown>
-
-/** in-process dispatch — no sidecar. Delays are plain timers (the local
- *  executor is the test/dev path; the durable timer lives server-side in
- *  restate mode). */
-export class LocalExecutor implements Executor {
-  private readonly handlers = new Map<string, Handler>()
-  private readonly timers = new Set<ReturnType<typeof setTimeout>>()
-  private readonly pending = new Set<Promise<unknown>>()
-  private inDispatch = 0
-
-  constructor(private readonly log: (line: string) => void = () => {}) {}
-
-  register(service: string, handler: string, fn: Handler): void {
-    this.handlers.set(`${service}/${handler}`, fn)
-  }
-
-  private get(t: InvokeTarget): Handler {
-    const fn = this.handlers.get(`${t.service}/${t.handler}`)
-    if (fn === undefined) throw new Error(`executor: no handler ${t.service}/${t.handler}`)
-    return fn
-  }
-
-  send(target: InvokeTarget, arg: unknown, opts?: SendOpts): Promise<void> {
-    const fn = this.get(target)
-    const run = (): void => {
-      // dispatched work exits the caller's leg — a send fired inside a
-      // bound leg must not hand that deadline to the spawned invocation
-      // (the ALS propagates through queueMicrotask/setTimeout otherwise)
-      const p = detached(async () => {
-        this.inDispatch++
-        try {
-          await fn(arg, target.key)
-        } finally {
-          this.inDispatch--
-        }
-      })
-      this.pending.add(p)
-      void p
-        .catch((e: unknown) => {
-          this.log(`executor: ${target.service}/${target.handler}: ${(e as Error).message}`)
-        })
-        .finally(() => this.pending.delete(p))
-    }
-    if (opts?.delayMs !== undefined && opts.delayMs > 0) {
-      const t = setTimeout(() => {
-        this.timers.delete(t)
-        run()
-      }, opts.delayMs)
-      this.timers.add(t)
-    } else {
-      queueMicrotask(run)
-    }
-    return Promise.resolve()
-  }
-
-  /** await every fired send — the test seam that makes fan-out asserts
-   *  deterministic (fire-and-forget in prod, joined in tests). */
-  async drain(): Promise<void> {
-    for (let i = 0; i < 50 && this.pending.size > 0; i++) await Promise.allSettled([...this.pending])
-  }
-
-  async call<T>(target: InvokeTarget, arg: unknown, _opts?: Pick<SendOpts, 'idempotencyKey'>): Promise<T> {
-    const r = (await this.get(target)(arg, target.key)) as T
-    // local call = handler + its dispatched sends settled — Restate's call
-    // returns when the handler does, but the legs it sends would race the
-    // caller's next assert; joining them preserves the old inline tick's
-    // "one call = the whole pass" contract. A call made INSIDE a dispatched
-    // send can't join — the pending set contains that very dispatch and a
-    // join would wait on itself; the outer caller's drain covers the wake.
-    if (this.inDispatch === 0) await this.drain()
-    return r
-  }
-
-  /** flush pending delayed sends — test seam (stop() equivalent) */
-  close(): void {
-    for (const t of this.timers) clearTimeout(t)
-    this.timers.clear()
-  }
-}
 
 /** raw HTTP to the restate ingress — /restate/{call,send}/ paths per the
  *  server API; idempotency-key header carries the dedup discipline. */
@@ -203,18 +119,13 @@ export class RestateExecutor implements Executor {
   }
 }
 
-export function executorFromEnv(env: EnvSource = process.env, log?: (line: string) => void): Executor | undefined {
-  if (nektarEnv('NEKTAR_EXECUTOR', env) !== 'restate') return undefined
-  return new RestateExecutor(nektarEnv('NEKTAR_RESTATE_URL', env) ?? 'http://127.0.0.1:8080', log)
-}
-
-// process-wide seam — one executor per dock process, mirroring the
-// txFsmLegacy-style env switches. openAutomation populates it; tests
-// substitute via setExecutor.
+// process-wide seam — the shared ingress client for call sites with no
+// runtime in scope (wallet.ts, mcp's watcher region). Materializes on first
+// use from NEKTAR_RESTATE_URL; setExecutor repoints it in tests.
 let active: Executor | undefined
 
-export function executor(): Executor | undefined {
-  return (active ??= executorFromEnv())
+export function executor(): Executor {
+  return (active ??= new RestateExecutor(nektarEnv('NEKTAR_RESTATE_URL') ?? 'http://127.0.0.1:8080'))
 }
 
 export function setExecutor(e: Executor | undefined): void {

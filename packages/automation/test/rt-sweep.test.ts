@@ -3,11 +3,12 @@ import assert from 'node:assert/strict'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
-import { inRtScope, LocalExecutor, setExecutor, EXEC_SVC } from '../src/rt/exec.js'
-import { registerTxHandlers, registerSweepHandlers, type SweepDeps } from '../src/rt/services.js'
+import { inRtScope, setExecutor, EXEC_SVC } from '../src/rt/exec.js'
+import { type SweepDeps } from '../src/rt/services.js'
 import { txEmit } from '../src/rt/emit.js'
+import { Dispatcher, wireSweep, wireTx } from './rig.js'
 
-// rt-sweep — the Phase 2 legs through the LocalExecutor: sweep.tick fans
+// rt-sweep — the sweep legs through the test Dispatcher: sweep.tick fans
 // row observations out to per-key tx invocations, sweep.boot re-airs
 // prepared rows through tx.resubmit, and the rt scope keeps a handler's
 // same-key emit direct (the self-deadlock guard).
@@ -36,15 +37,15 @@ const scanOf = (obs: Array<{ actionId: string; event: string; guard?: string }>)
 
 test('sweep.tick: observations fan out to per-key tx invocations and commit', async () => {
   const { kx, store } = await open()
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   try {
     await prepared(store, 's:1')
-    registerTxHandlers(ex, { store, fx: {}, log: () => {} })
+    wireTx(ex, { store, fx: {}, log: () => {} })
     const stages: Array<Array<{ actionId: string; event: string; guard?: string }>> = [
       [{ actionId: 's:1', event: 'submit.unknown' }],
       [{ actionId: 's:1', event: 'obs.proven', guard: 'proof' }]
     ]
-    registerSweepHandlers(ex, {
+    wireSweep(ex, {
       scan: () => scanOf(stages.shift() ?? [])(),
       resubmitRows: async () => [],
       log: () => {}
@@ -67,11 +68,11 @@ test('sweep.tick: observations fan out to per-key tx invocations and commit', as
 
 test('sweep.boot: prepared rows re-air through tx.resubmit — the coordinator leg runs inside the object', async () => {
   const { kx, store } = await open()
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   const submits: string[] = []
   try {
     await prepared(store, 's:boot')
-    registerTxHandlers(ex, {
+    wireTx(ex, {
       store,
       fx: {},
       log: () => {},
@@ -80,7 +81,7 @@ test('sweep.boot: prepared rows re-air through tx.resubmit — the coordinator l
         return { state: 'submitted', txid: 'x' }
       }
     })
-    registerSweepHandlers(ex, {
+    wireSweep(ex, {
       scan: scanOf([]),
       resubmitRows: async () => [{ actionId: 's:boot' }],
       log: () => {}
@@ -97,7 +98,7 @@ test('sweep.boot: prepared rows re-air through tx.resubmit — the coordinator l
 
 test('rt scope: a same-key emit inside a handler goes direct — the self-deadlock guard', async () => {
   const { kx, store } = await open()
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   const routed: string[] = []
   try {
     const w = await prepared(store, 'a:same')

@@ -73,8 +73,7 @@ export interface AutomationConfig {
    *  this tick (default 60s; 0 disables) */
   watchdogMs?: number
   /** host-composed endpoint defs (mcp's watcher region) — registered on the
-   *  same restate endpoint, journaled alongside the automation services.
-   *  Ignored in local mode (the host runs its own loops there). */
+   *  same restate endpoint, journaled alongside the automation services. */
   rtDefs?: unknown[]
   /** one-shot durable sends fired once the endpoint is up — e.g. the
    *  boot kick that starts a host cron object's self-arm chain */
@@ -196,16 +195,10 @@ export interface Rt {
    *  leg that outlives its bound loses its awaited IO at the SUCCESSOR's
    *  deadline instead of lingering: one operation budget shared inward,
    *  not nested fresh bounds that sum. */
-  /** the one timer wheel — every recurring job registers a name + ceiling
-   *  here instead of owning a private interval (Stage 6) */
-  /** the in-process executor when NEKTAR_EXECUTOR isn't restate — its
-   *  timers own the self-arm chains; stop() flushes them */
-  localExec?: import('./rt/exec.js').LocalExecutor
   exec?: import('./rt/exec.js').Executor
-  /** this runtime's executor — resolved at openAutomation (own LocalExecutor
-   *  locally, the shared RestateExecutor under restate). Ambient
-   *  executor() call sites must prefer this: two automations in one
-   *  process can't both own the global seam */
+  /** this runtime's executor — the shared RestateExecutor from openAutomation.
+   *  Ambient executor() call sites must prefer this when a runtime is in
+   *  scope — the runtime's client is already resolved. */
   /** pass counts by wake source (commit / pushed-verdict / height / ceiling
    *  …) — the runtime witness for 'events drive': a source that never
    *  counts is a dead push path degrading silently to floor speed */
@@ -236,7 +229,7 @@ export interface Rt {
    *  the durable host copy is already submitted when this runs */
   pushCarrier?: (rec: { push?: string } | undefined, beef: number[]) => void
   /** the raw notify/carrier fetch legs — the nektar-notify object invokes
-   *  them journaled; local mode wraps them detached+swallow */
+   *  them journaled on the shared endpoint */
   notifyLegs?: { peer: (watch: string, service: string, query?: unknown) => Promise<void>; carrier: (push: string, beefHex: string) => Promise<void> }
   hostBack: (h: string) => Promise<void>
   queueRepublish: (treeTxid: string) => Promise<void>

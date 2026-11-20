@@ -7,12 +7,11 @@ services:
     build: .
     image: nektar:local
     stdin_open: true
+    depends_on: [restate] # the durable executor is required infrastructure
     volumes:
       - nektar-data:/data # claims registry + proof store shared with watcher
     environment:
       NEKTAR_MODEL_ID: ${NEKTAR_MODEL_ID:-unspecified}
-      # restate executor (NEKTAR_EXECUTOR=restate opts in; local is default)
-      NEKTAR_EXECUTOR: ${NEKTAR_EXECUTOR:-}
       NEKTAR_RESTATE_URL: ${NEKTAR_RESTATE_URL:-http://restate:8080}
       NEKTAR_RESTATE_ADMIN: ${NEKTAR_RESTATE_ADMIN:-http://restate:9070}
       NEKTAR_RESTATE_ENDPOINT_URI: ${NEKTAR_RESTATE_ENDPOINT_URI:-http://nektar-mcp:9080}
@@ -45,9 +44,9 @@ services:
     environment:
       NEKTAR_LLM_URL: ${NEKTAR_LLM_URL:-}
       NEKTAR_LLM_MODEL: ${NEKTAR_LLM_MODEL:-}
-  # the durable-execution sidecar — NEKTAR_EXECUTOR=restate routes
-  # automation's durable sends/calls through it (default off: local mode
-  # needs no sidecar). restate-data/ is the embedded persistent store.
+  # the durable-execution sidecar — every durable send/call routes through
+  # it (required, not optional). restate-data/ is the embedded persistent
+  # store — the second durable store beside records.sqlite.
   restate:
     image: docker.restate.dev/restatedev/restate:latest
     ports:

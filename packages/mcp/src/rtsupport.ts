@@ -381,10 +381,9 @@ export async function buildRecordsWatcher(d: {
 /** the confirmer + records-watcher plane: one ChainEvents substrate fans out
  *  to (a) the confirmer pass — persist, flush, watch anchors+ledger txs,
  *  bounded ancestry heal, proof pull, topUp — and (b) the event-driven
- *  records watcher + journal prune. Under NEKTAR_EXECUTOR=restate both ride
- *  as journaled objects on the shared endpoint (defs + boot kicks returned
- *  for openAutomation to register); the local mode keeps the interval
- *  wheel + inline ticks. Boot plumbing — lives here, not in runtime.ts. */
+ *  records watcher + journal prune. Both ride as journaled objects on the
+ *  shared restate endpoint (defs + boot kicks returned for openAutomation
+ *  to register). Boot plumbing — lives here, not in runtime.ts. */
 export interface ConfirmerWatchDeps {
   cfg: { confirmEveryMs?: number; autoMine?: boolean }
   mem: NektarMemory
@@ -419,10 +418,8 @@ export async function openConfirmerWatch(
   // Parents of unproven anchors are watched too: a funding tree is
   // ancestry-anchored the moment its own inputs prove. Height-gating lives
   // inside the substrate — a static tip skips the batch entirely.
-  // under NEKTAR_EXECUTOR=restate the confirmer + records watcher run as
-  // journaled objects on the shared endpoint (defs/kicks returned to bin.ts
-  // and registered by openAutomation); the interval wheel stays local-mode
-  const durableExec = nektarEnv('NEKTAR_EXECUTOR') === 'restate'
+  // both loops are journaled objects on the shared endpoint — defs/kicks
+  // returned to bin.ts and registered by openAutomation.
   const rtDefs: unknown[] = []
   const rtKicks: InvokeTarget[] = []
   let busy = false
@@ -541,32 +538,22 @@ export async function openConfirmerWatch(
     })()
     await inflight
   }
-  let timer: NodeJS.Timeout | undefined
-  if (durableExec) {
-    // journaled self-arming cadence — the interval wheel's successor.
-    // AnchorQueued wakes become calls, not sends: at most one queued pass
-    // rides behind a running one (the busy flag's coalescing, kept)
-    rtDefs.push(await cronObject(EXEC_SVC.confirmer, { tick, ceilingMs: () => d.cfg.confirmEveryMs ?? 5000, log: d.nlog }))
-    rtKicks.push({ service: EXEC_SVC.confirmer, handler: 'tick', key: 'main' })
-    let anchorWake = false
-    d.mem.onAnchorQueued(() => {
-      if (anchorWake) return
-      anchorWake = true
-      void executor()
-        ?.call({ service: EXEC_SVC.confirmer, handler: 'tick', key: 'main' }, {})
-        .finally(() => {
-          anchorWake = false
-        })
-    })
-  } else {
-    timer = setInterval(() => {
-      void tick()
-    }, d.cfg.confirmEveryMs ?? 5000)
-    timer.unref()
-    // a fresh anchor is a producer event — rescan (watch + autoMine) now,
-    // not at the floor; the interval stays as the missed-wake backstop
-    d.mem.onAnchorQueued(() => void tick())
-  }
+  // journaled self-arming cadence — AnchorQueued wakes become calls, not
+  // sends: at most one queued pass rides behind a running one (the busy
+  // flag's coalescing, kept)
+  rtDefs.push(await cronObject(EXEC_SVC.confirmer, { tick, ceilingMs: () => d.cfg.confirmEveryMs ?? 5000, log: d.nlog }))
+  rtKicks.push({ service: EXEC_SVC.confirmer, handler: 'tick', key: 'main' })
+  let anchorWake = false
+  d.mem.onAnchorQueued(() => {
+    if (anchorWake) return
+    anchorWake = true
+    void executor()
+      .call({ service: EXEC_SVC.confirmer, handler: 'tick', key: 'main' }, {})
+      .catch((e: unknown) => d.nlog(`confirmer wake: ${(e as Error).message}`))
+      .finally(() => {
+        anchorWake = false
+      })
+  })
   // the ledger watcher — event-driven off the shared substrate's sweeps,
   // height advances and pushed broadcaster statuses; no private interval.
   // Construction + custody effects live in rtsupport (boot plumbing)
@@ -596,36 +583,18 @@ export async function openConfirmerWatch(
     await watcher.tick()
     pruneJournal()
   }
-  let watchOnce: () => void = () => undefined
-  if (durableExec) {
-    // the leg object serializes on 'main'; event wakes become calls so an
-    // event burst still coalesces to at most one queued pass
-    rtDefs.push(await legObject(EXEC_SVC.watcher, watchLeg))
-    watchOnce = () => {
-      if (watching) return
-      watching = true
-      void executor()
-        ?.call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})
-        .catch((e) => d.nlog(`ledger watcher: ${(e as Error).message}`))
-        .finally(() => {
-          watching = false
-        })
-    }
-  } else {
-    watchOnce = () => {
-      if (watching) return
-      watching = true
-      const settled = (): void => {
+  // the leg object serializes on 'main'; event wakes become calls so an
+  // event burst still coalesces to at most one queued pass
+  rtDefs.push(await legObject(EXEC_SVC.watcher, watchLeg))
+  const watchOnce = (): void => {
+    if (watching) return
+    watching = true
+    void executor()
+      .call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})
+      .catch((e) => d.nlog(`ledger watcher: ${(e as Error).message}`))
+      .finally(() => {
         watching = false
-        pruneJournal()
-      }
-      void watcher
-        .tick()
-        // the only bare catch in the sweep chain: a failing tick stalls all
-        // durable settlement — log it; the next event retries regardless
-        .catch((e) => d.nlog(`ledger watcher: ${(e as Error).message}`))
-        .then(settled, settled)
-    }
+      })
   }
   d.events.on('tick', watchOnce)
   d.events.on('height', watchOnce)
@@ -641,7 +610,6 @@ export async function openConfirmerWatch(
     inflight: () => inflight,
     close: () => {
       d.mem.events.off('broadcasterStatus', watchOnce)
-      clearInterval(timer)
     }
   }
 }

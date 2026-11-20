@@ -6,8 +6,8 @@ import { AutomationStore } from '../src/store.js'
 import { MarketEngine } from '../src/market.js'
 import type { MarketDeps } from '../src/market/types.js'
 import { NONTERMINAL } from '../src/market/types.js'
-import { LocalExecutor, setExecutor, EXEC_SVC } from '../src/rt/exec.js'
-import { registerDealHandlers, registerDealfanHandlers } from '../src/rt/services.js'
+import { setExecutor, EXEC_SVC } from '../src/rt/exec.js'
+import { Dispatcher, wireDealfan, wireDeal } from './rig.js'
 import type { AutomationPolicy } from '../src/policy.js'
 import { DEFAULT_SCORE_WEIGHTS } from '../src/scoring.js'
 
@@ -69,17 +69,17 @@ const policy = (): AutomationPolicy => ({
 
 test('tick under an executor fans advance out per op key — the leg leaves the mutex', async () => {
   const { kx, store } = await open()
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   const ran: string[] = []
   try {
-    registerDealHandlers(ex, {
+    wireDeal(ex, {
       advanceOp: async (id) => (ran.push(id), true),
       inboxEvent: async () => {},
       reconcileOp: async () => {},
       log: () => {}
     })
     // the tick routes through dealfan — the fan-out lands on deal keys
-    registerDealfanHandlers(ex, {
+    wireDealfan(ex, {
       pendingInbox: () => store.pendingInbox(),
       liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => o.operationId),
       reconcileOps: async () => [],
@@ -142,7 +142,7 @@ test('advanceOp: terminal or missing ops are no-ops; a throwing leg stamps tick_
 })
 
 test('deal.advance + deal.due route their key to advanceOp — deadline arm and tick share one leg', async () => {
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   const calls: Array<{ handler: string; key: string }> = []
   try {
     const mk = (handler: string) =>

@@ -160,7 +160,7 @@ export interface Runtime {
   close: () => Promise<void>
   network: RuntimeConfig['network']
   /** host-composed endpoint defs + boot kicks for the shared restate
-   *  endpoint (NEKTAR_EXECUTOR=restate); empty under local mode */
+   *  endpoint — openAutomation registers and fires them */
   rtDefs: unknown[]
   rtKicks: InvokeTarget[]
   /** mainnet-only ops surface for /v1/wallet + /v1/costs */
@@ -553,10 +553,9 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       }
     if (changed) save()
   }
-  // confirmer + records watcher live in rtsupport (boot plumbing): under
-  // NEKTAR_EXECUTOR=restate they register as journaled objects on the shared
-  // endpoint — defs/kicks are composed here and openAutomation registers
-  // them; the interval wheel stays local-mode
+  // confirmer + records watcher live in rtsupport (boot plumbing): they
+  // register as journaled objects on the shared endpoint — defs/kicks are
+  // composed here and openAutomation registers + fires them
   const cw = await openConfirmerWatch({
     cfg: { confirmEveryMs: cfg.confirmEveryMs, autoMine: cfg.autoMine },
     mem,

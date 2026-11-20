@@ -74,21 +74,11 @@ export abstract class IngressOps extends MarketBase {
       // the whole pass is one invocation on dealfan — the scans journal
       // (replay re-sends the SAME snapshot), every leg lands on its own
       // serialized key, and the tick self-arms the floor's next cadence.
-      // call() keeps "tick() = one complete pass" semantics in both modes.
+      // call() keeps "tick() = one complete pass" semantics.
       const ex = this.d.executor ?? executor()
-      if (ex === undefined) {
-        // no executor (a bare engine outside openAutomation) — the same
-        // legs the dealfan invocation runs, inline
-        for (const item of await this.pendingInbox()) await this.dealEvent(item)
-        for (const op of await this.d.store.operations({ states: NONTERMINAL })) await this.advanceOp(op.operationId)
-        const due = await this.d.store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: Date.now() })
-        for (const op of due) await this.reconcileOp(op.operationId)
-        await this.resubmitTick()
-      } else {
-        await ex.call({ service: EXEC_SVC.dealfan, handler: 'tick' }, {}).catch((e: unknown) => {
-          this.d.log?.(`market: dealfan tick: ${(e as Error).message}`)
-        })
-      }
+      await ex.call({ service: EXEC_SVC.dealfan, handler: 'tick' }, {}).catch((e: unknown) => {
+        this.d.log?.(`market: dealfan tick: ${(e as Error).message}`)
+      })
       // with the runtime's pump wired, the end-of-tick pass is a poke
       // (the drain runs off the engine mutex)
       if (this.d.store.outboxReady !== undefined) this.d.store.outboxReady()

@@ -5,8 +5,9 @@ import { PrivateKey } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
 import { MarketEngine } from '../src/market.js'
 import type { MarketDeps } from '../src/market/types.js'
-import { LocalExecutor, setExecutor, EXEC_SVC } from '../src/rt/exec.js'
-import { registerDealfanHandlers, type DealEvent } from '../src/rt/services.js'
+import { EXEC_SVC } from '../src/rt/exec.js'
+import { type DealEvent } from '../src/rt/services.js'
+import { Dispatcher, wireDealfan } from './rig.js'
 import type { AutomationPolicy } from '../src/policy.js'
 import { DEFAULT_SCORE_WEIGHTS } from '../src/scoring.js'
 
@@ -68,7 +69,7 @@ const policy = (): AutomationPolicy => ({
 })
 
 test('dealfan.tick: inbox → ev:<wantId>, ops → advance keys, reconcile rows → reconcile keys', async () => {
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   const sent: Array<{ handler: string; key: string }> = []
   try {
     for (const h of ['advance', 'due', 'reconcile']) ex.register(EXEC_SVC.deal, h, async (_a, k) => void sent.push({ handler: h, key: k ?? '' }))
@@ -78,7 +79,7 @@ test('dealfan.tick: inbox → ev:<wantId>, ops → advance keys, reconcile rows 
       { source: 'msg:peer', messageId: 'm2', kind: 'message', payload: { from: 'pk', msg: { type: 'accept', wantId: 'w-msg' } } },
       { source: 'lane', messageId: 'm3', kind: 'offer', payload: { offerId: 'o-noWant' } }
     ]
-    registerDealfanHandlers(ex, {
+    wireDealfan(ex, {
       pendingInbox: async () => items,
       liveOps: async () => ['op:a', 'op:b'],
       reconcileOps: async () => ['op:r'],

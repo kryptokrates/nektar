@@ -59,6 +59,7 @@ const OPS_CAUSE_MAP: Record<string, Candidate[]> = {
   spend_guard_refused: [{ event: 'cap.refused', guards: ['policy.escalate', '!policy.escalate'] }],
   deferred_escrow_aired: [{ event: 'deferred.escrow_aired', guards: ['verified'] }],
   delivered_parked_while_deferred: [{ event: 'delivered.parked' }],
+  quote_parked_before_offer: [{ event: 'quote.parked' }],
   delivered_unresolvable: [{ event: 'delivered.parked' }],
   disclosure_verified: [{ event: 'disclosure.ok', guards: ['spv-verify'] }],
   payload_does_not_match_commitment: [{ event: 'disclosure.bad' }],

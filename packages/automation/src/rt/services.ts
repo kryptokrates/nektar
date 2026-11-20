@@ -15,6 +15,7 @@
 // — the Restate handlers are thin ctx.run wrappers around the same steps,
 // so tests invoke the exact code the server invokes.
 import type * as restate from '@restatedev/restate-sdk'
+import { WAITS } from '../waits.js'
 import type { AutomationStore, OutboxItem, TxState, WalletTx } from '../store.js'
 import { runTxIntents, type TxEffects } from '../machines/effects.js'
 import { CUSTODY_KEY, EXEC_SVC, inRtScope, type RtSend } from './exec.js'
@@ -403,6 +404,14 @@ export interface DealfanDeps {
   /** the floor cadence — re-read on every arm so the hot/idle adaptive
    *  ceiling keeps working (the scheduler 'deals' row's successor) */
   ceilingMs: () => number
+  /** in-flight send dedup — `id` was already dispatched within `ms` (domain
+   *  clock). A pending inbox row or live op is re-fanned every tick; under
+   *  restate each send is a durable queued invocation, so unthrottled
+   *  re-fanning piles hundreds of identical legs onto the same FIFO key
+   *  and starves the new work behind the backlog. True = skip this send;
+   *  the window is also the recovery bound for a send whose invocation was
+   *  dropped before running (killed/deaf want-gate early-returns ride it). */
+  sentRecently?: (id: string, ms: number) => boolean
   log: (line: string) => void
 }
 
@@ -437,12 +446,18 @@ export const opWantId = (o: { data: Record<string, unknown> }): string | undefin
 export const dealfanTickBody =
   (deps: DealfanDeps) =>
   async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
+    const dup = deps.sentRecently ?? (() => false)
     const inbox = await run('inbox', () => deps.pendingInbox())
-    for (const i of inbox) await send({ service: EXEC_SVC.deal, handler: 'event', key: dealEventKey(i) }, i)
+    for (const i of inbox)
+      if (!dup(`ev:${i.source}:${i.messageId}`, WAITS.fanEventResend.ms)) await send({ service: EXEC_SVC.deal, handler: 'event', key: dealEventKey(i) }, i)
     const ops = await run('ops', () => deps.liveOps())
-    for (const o of ops) await send({ service: EXEC_SVC.deal, handler: 'advance', key: dealOpKey(o) }, { op: o.operationId })
+    for (const o of ops)
+      if (!dup(`adv:${o.operationId}`, WAITS.fanAdvanceResend.ms))
+        await send({ service: EXEC_SVC.deal, handler: 'advance', key: dealOpKey(o) }, { op: o.operationId })
     const rec = await run('reconcile', () => deps.reconcileOps())
-    for (const o of rec) await send({ service: EXEC_SVC.deal, handler: 'reconcile', key: dealOpKey(o) }, { op: o.operationId })
+    for (const o of rec)
+      if (!dup(`rec:${o.operationId}`, WAITS.fanAdvanceResend.ms))
+        await send({ service: EXEC_SVC.deal, handler: 'reconcile', key: dealOpKey(o) }, { op: o.operationId })
     if (deps.resubmitPending !== undefined) await run('resubmit', () => deps.resubmitPending!())
     // the floor: every tick self-arms the next at the adaptive ceiling —
     // durable delayed send under restate, executor timer under local.

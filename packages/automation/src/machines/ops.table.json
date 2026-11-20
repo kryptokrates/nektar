@@ -86,6 +86,7 @@
     { "state": "collecting", "event": "want.republished", "intents": ["republish-want"], "target": "self" },
     { "state": "collecting", "event": "offer.recorded", "intents": ["record-offer"], "target": "self" },
     { "state": "collecting", "event": "offer.rejected", "intents": ["record-offer"], "target": "self" },
+    { "state": "collecting", "event": "quote.parked", "intents": ["park-quote"], "target": "self" },
     { "state": "selected", "event": "fund.approved", "guard": "policy+approval+cap", "intents": ["reserve-budget"], "target": "funding" },
     { "state": "selected", "event": "cap.refused", "guard": "policy.escalate", "intents": ["request-approval"], "target": "escalated" },
     { "state": "selected", "event": "cap.refused", "guard": "!policy.escalate", "intents": ["release-budget"], "target": "denied" },

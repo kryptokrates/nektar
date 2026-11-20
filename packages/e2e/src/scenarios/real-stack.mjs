@@ -644,7 +644,7 @@ async function bootAgent(a, index) {
       ? {
           perPurchaseSats: 500,
           dailyPurchaseSats: 50_000,
-          perTxFeeSats: 600,
+          perTxFeeSats: 1500,
           dailyFeeSats: 100_000,
           runTotalSats: 1_000_000,
           maxLockedSats: 5000,
@@ -654,7 +654,7 @@ async function bootAgent(a, index) {
       : {
           perPurchaseSats: 500,
           dailyPurchaseSats: 1500,
-          perTxFeeSats: 600,
+          perTxFeeSats: 1500,
           dailyFeeSats: 3000,
           runTotalSats: 6000,
           maxLockedSats: 1200,

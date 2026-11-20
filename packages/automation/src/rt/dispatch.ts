@@ -315,7 +315,9 @@ export const wireEngine = (ex: LocalDispatch, engine: EngineSurface, d: WireEngi
   const log = d.log ?? (() => {})
   const liveOps = async () => (await d.store.operations({ states: NONTERMINAL })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) }))
   const reconcileOps = async () => {
-    const now = Date.now()
+    // reconcile_at is stamped on the store's clock — compare on the caller's
+    // clock seam (d.now) so a virtual `now` selects due rows the same way
+    const now = (d.now ?? Date.now)()
     return (await d.store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: now })).map((o) => ({
       operationId: o.operationId,
       wantId: opWantId(o)

@@ -99,10 +99,19 @@ export abstract class BuyerOps extends SellerOps {
     if (prev && prev.so.offer.revision >= so.offer.revision) return
     if (!prev && Object.keys(offers).length >= 64) return
     const reject = this.offerReject(so, (op.data.want as SignedWant).want)
-    offers[key] = { so, ...(reject ? { reject } : {}), ...(prev?.commitment ? { commitment: prev.commitment, mode: prev.mode } : {}) }
+    // a quote can beat its offer across the two delivery planes (the box
+    // read is faster than the offers lane) — it parks on the op instead of
+    // retrying, and the commitment attaches with the offer's own commit
+    const pending = { ...(op.data.pendingQuotes as Record<string, { commitment?: StoredOffer['commitment']; mode?: StoredOffer['mode'] }> | undefined) }
+    const parked = pending[key]
+    if (parked !== undefined) delete pending[key]
+    // the parked quote attaches only if its commitment matches this offer —
+    // same leaf check onQuote applies on the live path
+    const qsrc = prev?.commitment !== undefined ? prev : parked?.commitment?.leaf === so.offer.leaf ? parked : undefined
+    offers[key] = { so, ...(reject ? { reject } : {}), ...(qsrc?.commitment !== undefined ? { commitment: qsrc.commitment, mode: qsrc.mode } : {}) }
     await this.d.store.transition(op.operationId, op.revision, 'collecting', {
       cause: reject ? 'offer_rejected' : 'offer_recorded',
-      data: { offers, lastOfferAt: this.now() },
+      data: { offers, lastOfferAt: this.now(), ...(parked !== undefined ? { pendingQuotes: pending } : {}) },
       evidence: { offerKey: key, ...(reject ? { reject } : {}) }
     })
   }
@@ -113,10 +122,17 @@ export abstract class BuyerOps extends SellerOps {
     const offers = { ...(op.data.offers as Record<string, StoredOffer>) }
     const key = `${from}:${m.offerId}`
     const cur = offers[key]
-    // before 'collecting' a quote may still beat its offer — retry then;
-    // afterwards the offer is guaranteed recorded (selection needs it)
     if (!cur) {
-      if (op.state === 'collecting') throw new Error('quote arrived before its offer')
+      // the quote beat its offer — same park convention as a delivered landing
+      // early: keep it on the op, no retry budget burned (the feed is slower
+      // than the box by construction, not by fault)
+      if (op.state === 'collecting') {
+        const pending = { ...(op.data.pendingQuotes as Record<string, { commitment?: StoredOffer['commitment']; mode?: StoredOffer['mode'] }> | undefined) }
+        if (Object.keys(pending).length < 64) {
+          pending[key] = { commitment: m.commitment, mode: m.mode }
+          await this.d.store.transition(op.operationId, op.revision, op.state, { cause: 'quote_parked_before_offer', data: { pendingQuotes: pending } })
+        }
+      }
       return
     }
     if (!m.commitment || m.commitment.leaf !== cur.so.offer.leaf) return

@@ -544,12 +544,21 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // wheel row's adaptive ceiling, re-read on every arm)
   const idleMs = cfg.intervalMs ?? 1000
   const hotMs = cfg.hotMs ?? 250
+  // fan-out dedup — the tick re-sends every pending row/live op each pass;
+  // under restate each send is a durable queued invocation, so the same
+  // send-identity is throttled to one per window (domain clock).
+  const sendDedup = new Map<string, number>()
+  // due-arm dedup — a transition re-arms its stamped due_at on every write;
+  // an identical (op, instant) delayed send is pure churn on the key's FIFO.
+  const armedDue = new Set<string>()
   const walletCoord = engine.walletCoordinator
   const dealfanDeps = {
     pendingInbox: () => engine.pendingInbox(),
     liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) })),
     reconcileOps: async () => {
-      const now = Date.now()
+      // reconcile_at is stamped on the store's clock — compare on the same
+      // clock (a virtual `now` ahead of Date.now() would select nothing)
+      const now = (cfg.now ?? Date.now)()
       const rows = await store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: now })
       return rows.map((o) => ({ operationId: o.operationId, wantId: opWantId(o) }))
     },
@@ -557,6 +566,19 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // signed intents; the floor re-airs them on the engine's jittered cadence
     resubmitPending: () => engine.resubmitTick(),
     ceilingMs: () => (Date.now() < rt.hotUntil ? Math.min(hotMs, idleMs) : idleMs),
+    // in-flight send dedup on the domain clock — virtual `now` in tests
+    // advances with drive(), so windows expire on the same clock the
+    // deadlines arm on. Restate makes every re-sent send a durable queued
+    // invocation; the map bounds per-row/per-op re-fan to one send per
+    // window instead of one per tick.
+    sentRecently: (id: string, ms: number) => {
+      const now = (cfg.now ?? Date.now)()
+      const last = sendDedup.get(id)
+      if (last !== undefined && now - last < ms) return true
+      if (sendDedup.size > 10_000) sendDedup.clear()
+      sendDedup.set(id, now)
+      return false
+    },
     log
   }
   // the transport deps — outbox delivery as journaled invocations:
@@ -566,7 +588,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     dueRows: () => store.dueOutbox(),
     nextAt: () => store.nextOutboxAt(),
     deliverItem: (item: OutboxItem) => engine.deliverOutboxItem(item),
-    now: () => Date.now(),
+    // next_at is stamped on the store's clock — the arm must subtract the
+    // SAME clock or every due-row arm lands early/late by the clock skew
+    // (a virtual `now` ahead of Date.now() would park due work indefinitely)
+    now: () => (cfg.now ?? Date.now)(),
     log
   }
   // the custody deps — one fixed key serializes every wallet custody
@@ -766,6 +791,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   store.dueAtArmed = (operationId, at) => {
     rt.countWake('dueAt')
     if (rt.stopped) return
+    const dueKey = `${operationId}:${at}`
+    if (armedDue.has(dueKey)) return
+    if (armedDue.size > 10_000) armedDue.clear()
+    armedDue.add(dueKey)
     void (async () => {
       // key by the want correlation id — the arm lands on the same deal
       // object as the want's events/advances, serializing with them
@@ -778,7 +807,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         // running ahead would push each due send past the deadline it arms)
         { delayMs: Math.max(0, at - (cfg.now ?? Date.now)()) }
       )
-    })().catch((e) => log(`automation: deal due send ${operationId}: ${(e as Error).message}`))
+    })().catch((e) => {
+      // the send never landed — release the dedup so the next arm retries
+      // (the tick's throttled advance floor still catches the deadline)
+      armedDue.delete(dueKey)
+      log(`automation: deal due send ${operationId}: ${(e as Error).message}`)
+    })
   }
   /** one full pass: deals, then upkeep — what tests and push events drive */
   const cycle = async (): Promise<void> => {

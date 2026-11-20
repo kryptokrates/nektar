@@ -105,6 +105,28 @@ export const WAITS = {
   /** deterministic per-agent spread on the resubmit cadence — restarts
    *  would otherwise phase-align every agent's heal pass to one tick */
   resubmitJitter: { ms: 30_000, class: 'backoff', durable: false, wake: 'tick-pass' },
+  /** dealfan event re-fan bound — a pending inbox row is re-sent at most
+   *  this often; under restate each send is a durable queued invocation so
+   *  per-tick re-fan piles identical legs onto the key's FIFO and starves
+   *  new work. The window doubles as the recovery bound for sends whose
+   *  invocation completed without resolving the row (killed/deaf want gate) */
+  fanEventResend: {
+    ms: 10_000,
+    class: 'mechanism',
+    durable: false,
+    wake: 'tick-pass',
+    why: 'a rate limit on identical durable sends — dedup cannot be an idempotency key (gated wants must re-fire after the flap ends)'
+  },
+  /** dealfan advance/reconcile re-fan bound — one send per live op per
+   *  window; early-select stays inside collectMs while the key's queue
+   *  drains instead of accumulating one advance per tick per op */
+  fanAdvanceResend: {
+    ms: 5_000,
+    class: 'mechanism',
+    durable: false,
+    wake: 'tick-pass',
+    why: 'a rate limit on identical durable sends — advance is a poke, not distinct work; the armed due send carries the exact deadline'
+  },
   /** terminal-row reconcile probe cooldown (base.ts reconcileGate) —
    *  a rate limit on indexer probes, not a wake proxy; persists via
    *  markReconciled so restarts don't reset the probe rate */

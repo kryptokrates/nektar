@@ -278,7 +278,21 @@ const RESTATE_IMAGE = process.env.NEKTAR_RESTATE_IMAGE ?? 'docker.restate.dev/re
 async function bootRestate(a) {
   const name = `nektar-rt-${a.name}`
   await docker(['rm', '-f', name]) // stale containers carry wedged invocation queues
-  if ((await docker(['run', '-d', '--name', name, '--add-host', 'host.docker.internal:host-gateway', '-p', `${a.rtIngress}:8080`, '-p', `${a.rtAdmin}:9070`, RESTATE_IMAGE])) !== 0)
+  if (
+    (await docker([
+      'run',
+      '-d',
+      '--name',
+      name,
+      '--add-host',
+      'host.docker.internal:host-gateway',
+      '-p',
+      `${a.rtIngress}:8080`,
+      '-p',
+      `${a.rtAdmin}:9070`,
+      RESTATE_IMAGE
+    ])) !== 0
+  )
     throw new Error(`restate ${name} did not start — is the image pulled? (docker pull ${RESTATE_IMAGE})`)
   for (let i = 0; ; i++) {
     try {

@@ -112,6 +112,7 @@
     { "state": "awaiting_disclosure", "event": "disclosure.ok", "guard": "spv-verify", "intents": ["settle"], "target": "disclosure_verified" },
     { "state": "awaiting_disclosure", "event": "disclosure.bad", "intents": ["flag-dispute"], "target": "disputed" },
     { "state": "awaiting_disclosure", "event": "escrow.died", "guard": "verified", "intents": ["refund"], "target": "refunding" },
+    { "state": "awaiting_disclosure", "event": "escrow.gone", "guard": "verdict=dead", "intents": [], "target": "funding_failed" },
     { "state": "awaiting_disclosure", "event": "refund.due", "intents": ["refund"], "target": "refunding" },
     { "state": "awaiting_disclosure", "event": "daily.cap", "intents": [], "target": "funding_deferred" },
     { "state": "awaiting_disclosure", "event": "stuck.timeout", "guard": "maxAgeMs", "intents": ["refund"], "target": "refunding" },
@@ -120,7 +121,7 @@
     { "state": "awaiting_disclosure", "event": "delivered.parked", "intents": ["park-delivery"], "target": "self" },
     { "state": "awaiting_disclosure", "event": "decline.received", "intents": ["record-decline"], "target": "self" },
     { "state": "awaiting_disclosure", "event": "restored", "intents": [], "target": "self" },
-    { "state": ["funding", "awaiting_disclosure"], "event": "needs.human", "guard": "unresolved", "intents": ["request-approval"], "target": "uncertain" },
+    { "state": ["funding", "awaiting_disclosure", "refunding"], "event": "needs.human", "guard": "unresolved", "intents": ["request-approval"], "target": "uncertain" },
     {
       "state": ["selected", "funding", "funding_deferred", "refund_pending", "refunding", "completing", "completion_submitted", "watching", "seizing"],
       "event": "needs.human",

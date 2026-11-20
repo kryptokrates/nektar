@@ -75,7 +75,7 @@ const OPS_CAUSE_MAP: Record<string, Candidate[]> = {
   refund_proven: [{ event: 'refund.proven', guards: ['proof'] }],
   refused_escrow_landed: [{ event: 'escrow.landed', guards: ['verdict=mined'] }],
   landed_escrow_gone: [{ event: 'escrow.gone', guards: ['verdict=dead'] }],
-  escrow_rejected_late: [{ event: 'escrow.died', guards: ['verified'] }],
+  escrow_rejected_late: [{ event: 'escrow.gone', guards: ['verdict=dead'] }],
   stuck_timeout: [{ event: 'stuck.timeout', guards: ['no-escrow', 'payment-final', 'maxAgeMs'] }],
   stuck_timeout_no_escrow: [{ event: 'stuck.timeout', guards: ['no-escrow'] }],
   stuck_timeout_payment_final: [{ event: 'stuck.timeout', guards: ['payment-final'] }],

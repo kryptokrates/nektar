@@ -1014,13 +1014,17 @@ export abstract class BuyerOps extends SellerOps {
     // pending approval; re-asserting would only spam events. Anything else
     // goes there now (a broadcast may have escaped — only a person closes it)
     if (op.state === 'uncertain' || op.state === 'escalated') return
+    // 'escalated', not 'uncertain' — a stuck_state_timeout cause maps to the
+    // unguarded needs.human edge whose declared target is 'escalated', and
+    // reconcileUncertain has no route for this reason anyway (it only serves
+    // unresolved_* waits). A blocked write here wedged the op silently.
     await this.escalate(
       op,
       'stuck_state_timeout',
       digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'stuck-exit', state: op.state }),
       0,
       { state: op.state, ageMs: this.now() - op.updatedAt },
-      'uncertain'
+      'escalated'
     )
   }
 

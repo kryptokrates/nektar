@@ -5,7 +5,7 @@
 import { P2PKH } from '@bsv/sdk'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
-import { signerAddress } from '@nektar/core'
+import { signerAddress, BoundedMap } from '@nektar/core'
 import { deadAncestry } from '@nektar/bstack'
 import type { SignedOffer, SignedWant } from '@nektar/bstack'
 import type { Rt } from './rtctx.js'
@@ -34,11 +34,10 @@ export function openUpkeep(rt: Rt): void {
   // txFacts is throttled: ChainEvents polls these txids on its own watch
   // floor and delivers rejections/proofs itself — this second read is only
   // the mint-gate's heal/reap input, so a short cache loses no signal
-  const statusCache = new Map<string, { at: number; f: import('@nektar/chain').TxFacts }>()
+  const statusCache = new BoundedMap<string, { at: number; f: import('@nektar/chain').TxFacts }>(4096)
   const facts = async (txid: string): Promise<import('@nektar/chain').TxFacts> => {
     const c = statusCache.get(txid)
     if (c !== undefined && Date.now() - c.at < 15_000) return c.f
-    if (statusCache.size > 4096) statusCache.clear()
     const f = await mem.txFacts(txid)
     statusCache.set(txid, { at: Date.now(), f })
     return f
@@ -46,12 +45,11 @@ export function openUpkeep(rt: Rt): void {
   // dead-ancestry strikes — treeTxid:parentTxid → first-seen; the same gap
   // on two upkeep passes evicts (a single fetch miss must not reap stock
   // whose parent was simply between propagation hops)
-  const deadSuspects = new Map<string, number>()
-  const stuckMints = new Map<string, { first: number; tries: number }>()
+  const deadSuspects = new BoundedMap<string, number>(4096)
+  const stuckMints = new BoundedMap<string, { first: number; tries: number }>(4096)
   const stuckMint = async (tree: import('@bsv/sdk').Transaction): Promise<'keep' | 'drop'> => {
     const tid = tree.id('hex')
     const now = Date.now()
-    if (stuckMints.size > 4096) stuckMints.clear()
     const s = stuckMints.get(tid) ?? { first: now, tries: 0 }
     stuckMints.set(tid, s)
     if (now - s.first < 10 * 60_000) return 'keep'
@@ -187,21 +185,27 @@ export function openUpkeep(rt: Rt): void {
       return
     }
     const { sha256, utf8, toHex } = await import('@nektar/core')
+    const t0 = Date.now()
+    // two set-shaped reads cover the whole batch — the per-row
+    // operation()+eventCount() pair was ~2 serial queries per event
+    const ids = [...new Set(rows.map((r) => r.operationId))]
+    const [ops, bases] = await Promise.all([store.opsByIds(ids), store.eventCountsByOp(ids, cursor)])
     const ns = new Map<string, number>()
     const lines: string[] = []
     let lastSeq = cursor
     for (const r of rows) {
-      const op = await store.operation(r.operationId)
+      const op = ops.get(r.operationId)
       if (op === undefined) {
         lastSeq = r.seq
         continue
       }
-      const n = (ns.get(op.operationId) ?? (await store.eventCount(op.operationId, cursor))) + 1
+      const n = (ns.get(op.operationId) ?? bases.get(op.operationId) ?? 0) + 1
       ns.set(op.operationId, n)
       const ev = r.evidence === undefined ? null : toHex(Uint8Array.from(sha256(utf8(lanes.mod.marketJson(r.evidence)))))
       lines.push(JSON.stringify({ v: 1, op: op.operationId, want: wantIdOf(op), role: op.role, n, state: r.to, cause: r.cause, t: r.at, ev }))
       lastSeq = r.seq
     }
+    if (rows.length > 100) log(`automation: log append ${rows.length} rows ${Date.now() - t0}ms`)
     try {
       if (lines.length > 0) {
         const r = await lanes.mod.appendLog({

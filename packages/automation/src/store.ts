@@ -533,6 +533,51 @@ export class AutomationStore {
     return Number(r?.c ?? 0)
   }
 
+  /** ops hydrated once for a known id set — replaces the per-row operation()
+   *  lookup inside batch loops (the journal assembler's N+1) */
+  async opsByIds(ids: string[]): Promise<Map<string, Operation>> {
+    if (ids.length === 0) return new Map()
+    const rows = await this.kx(T.ops).select('*').whereIn('operation_id', ids)
+    return new Map(rows.map((r) => [r.operation_id, this.op(r)]))
+  }
+
+  /** per-op event counts at-or-below a global seq — one GROUP BY for the whole
+   *  batch instead of an eventCount() per row */
+  async eventCountsByOp(ids: string[], atOrBelowSeq: number): Promise<Map<string, number>> {
+    if (ids.length === 0) return new Map()
+    const rows = await this.kx(T.events)
+      .select('operation_id')
+      .count('* as c')
+      .where('seq', '<=', atOrBelowSeq)
+      .whereIn('operation_id', ids)
+      .groupBy('operation_id')
+    return new Map(rows.map((r) => [r.operation_id as string, Number(r.c)]))
+  }
+
+  /** a live op exists — the hot-loop check as one LIMIT 1 row instead of
+   *  hydrating every nonterminal op per pass. The completion_submitted
+   *  carve-out mirrors the runtime rule: a settled proof awaiting block
+   *  depth is not live work. `provenHeight` lives in the JSON `data` column —
+   *  json_extract is sqlite-only, which the automation store is by
+   *  construction (migrateLaneTables runs on sqlite3 knex). */
+  async hasLiveOps(states: string[]): Promise<boolean> {
+    if (states.length === 0) return false
+    const r = await this.kx(T.ops)
+      .select(this.kx.raw('1'))
+      .whereIn('state', states)
+      .andWhere((b) => b.where('state', '<>', 'completion_submitted').orWhereRaw("json_extract(data, '$.provenHeight') IS NULL"))
+      .first()
+    return r !== undefined
+  }
+
+  /** a nonterminal op whose due_height is at/below tip — the onHeight wake as
+   *  one LIMIT 1 row instead of a full ops hydration per block */
+  async hasDueAtHeight(states: string[], tip: number): Promise<boolean> {
+    if (states.length === 0) return false
+    const r = await this.kx(T.ops).select(this.kx.raw('1')).whereIn('state', states).where('due_height', '<=', tip).first()
+    return r !== undefined
+  }
+
   // ── inbox + cursors ─────────────────────────────────────────────────────
   async cursor(source: string): Promise<string | undefined> {
     return (await this.kx(T.cursors).where({ source }).first())?.cursor

@@ -477,8 +477,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // A path that never counts is dead push degrading to ceiling speed
             if (t3 - lastWakeReport > WAITS.wakeReport.ms) {
               lastWakeReport = t3
-              if (rt.wakeStats.size > 0)
-                log(`automation: wakes ${[...rt.wakeStats.entries()].map(([s, n]) => `${s}:${n}`).join(' ')}`)
+              if (rt.wakeStats.size > 0) log(`automation: wakes ${[...rt.wakeStats.entries()].map(([s, n]) => `${s}:${n}`).join(' ')}`)
             }
             // a live deal keeps the loop hot — the 5s inbound window alone
             // would let a deal cool to idle cadence between hops. A settled
@@ -576,7 +575,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     })
   // watch queries derive from the engine's live watch-list — re-derive on a
   // slow tick plus after every deals pass so new wants appear in ≤1 cycle
-  if (rt.watchBases.length !== 0) rt.scheduler!.add({ name: 'watches', run: () => rt.refreshWatches().catch(() => undefined), ceilingMs: () => WAITS.watchRearm.ms })
+  if (rt.watchBases.length !== 0)
+    rt.scheduler!.add({ name: 'watches', run: () => rt.refreshWatches().catch(() => undefined), ceilingMs: () => WAITS.watchRearm.ms })
   void rt.refreshWatches().catch(() => undefined)
   // push-driven progress: a verified tx proof (broadcaster callback or the
   // chain's own mined event) may make a funding tree provable and advance

@@ -66,7 +66,16 @@ export interface Automation {
    *  reason — the 'what is this instance waiting on' answer, machine-shaped */
   waits: () => Promise<{
     schedule: Record<string, { dueIn: number; running: boolean; fires: { wake: number; dueIn: number; ceiling: number } }>
-    deferred: Array<{ actionId: string; operationId: string; kind: string; status: string; deferClass?: string; lastError?: string; nextAt: number; attempts: number }>
+    deferred: Array<{
+      actionId: string
+      operationId: string
+      kind: string
+      status: string
+      deferClass?: string
+      lastError?: string
+      nextAt: number
+      attempts: number
+    }>
   }>
   /** B3 — 'sealed' = this agent publishes its bfinger record (publicly
    *  discoverable); 'unsealed' = it still requires configured hosts */

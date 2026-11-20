@@ -38,7 +38,14 @@ export function openLanes(rt: Rt): void {
     if (c !== undefined && t - c.at < (c.rec === undefined ? (fresh ? 0 : WAITS.fingerNeg.ms) : WAITS.fingerPos.ms)) return c.rec
     let rec: FingerRec | undefined
     try {
-      const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: mem.sdkTracker(), allowHttp: rt.localNet, now: cfg.now, timeoutMs: WAITS.resolveFingerIo.ms })
+      const r = await lanes.mod.resolveFinger({
+        hosts: marketHosts,
+        pub,
+        tracker: mem.sdkTracker(),
+        allowHttp: rt.localNet,
+        now: cfg.now,
+        timeoutMs: WAITS.resolveFingerIo.ms
+      })
       if (r !== undefined && (r.body.nets.length === 0 || r.body.nets.includes(cfg.network))) {
         const hosts = r.body.hosts.filter((u) => lanes.mod.fingerHostAllowed(u, { allowHttp: rt.localNet, allowLocal: rt.localNet })).slice(0, 8)
         const push =

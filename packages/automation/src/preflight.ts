@@ -83,7 +83,11 @@ const bounded = async <T>(work: Promise<T>, ms: number, what: string): Promise<T
 export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport> {
   const { mem, store, cfg } = deps
   const now = cfg.now?.() ?? Date.now()
-  const ceil = { hostMs: deps.ceilings?.hostMs ?? WAITS.preflightHostIo.ms, chainMs: deps.ceilings?.chainMs ?? WAITS.preflightChainIo.ms, storeMs: deps.ceilings?.storeMs ?? WAITS.preflightStoreIo.ms }
+  const ceil = {
+    hostMs: deps.ceilings?.hostMs ?? WAITS.preflightHostIo.ms,
+    chainMs: deps.ceilings?.chainMs ?? WAITS.preflightChainIo.ms,
+    storeMs: deps.ceilings?.storeMs ?? WAITS.preflightStoreIo.ms
+  }
   const wanted = deps.only === undefined ? undefined : new Set(deps.only)
   const checks: PreflightCheck[] = []
   // the checks are independent — run them together inside one Promise.all;

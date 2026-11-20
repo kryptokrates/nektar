@@ -330,4 +330,6 @@ test('runtime wires the hooks with the busy gate and push clears the ledger thro
   assert.match(rt, /mem\.onHeight\?\.\(/, 'dueHeight wake must ride the host height hook')
   assert.match(rt, /rt\.countWake\s*=/, 'the runtime must expose the wake-source counter — unmeasured push paths degrade invisibly')
   assert.match(rt, /countWake\('commit'\)/, 'the commit wake must count itself in wakeStats')
+  assert.match(rt, /passUntil.*WAITS\.passBound\.ms/s, 'the pass must share one budget across legs — stacked fresh bounds sum')
+  assert.match(rt, /Math\.min\(WAITS\.dealsBound\.ms,\s*passUntil/, 'a leg bound is min(leg, pass-remaining), never a fresh budget')
 })

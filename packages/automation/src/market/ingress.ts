@@ -45,6 +45,15 @@ export abstract class IngressOps extends MarketBase {
 
   tick(): Promise<void> {
     return this.run(async () => {
+      const exec = executor()
+      if (exec !== undefined) {
+        // the whole scan+fan-out leg is one journaled invocation on dealfan —
+        // the scans journal (replay re-sends the SAME snapshot), and every
+        // item/op/reconcile leg lands on its own serialized key
+        await exec.send({ service: EXEC_SVC.dealfan, handler: 'tick' }, {}).catch((e: unknown) => {
+          this.d.log?.(`market: dealfan tick send: ${(e as Error).message}`)
+        })
+      } else {
       // self-notes must restore their operation before anything else in the
       // batch runs — a want lane event ingested ahead of the sellerNote would
       // otherwise create a fresh sale op with the same dedupe key and the note
@@ -72,6 +81,7 @@ export abstract class IngressOps extends MarketBase {
           await this.d.store.failInbox(i.source, i.messageId, (e as Error).message)
         }
       }
+      }
       const height = await this.d.height()
       // in-run resubmit: 'prepared'/'submission_unknown' rows are signed
       // intents, not just boot leftovers — a dropped ledger write between
@@ -85,80 +95,16 @@ export abstract class IngressOps extends MarketBase {
         // it as a journaled invocation, local mode calls the wallet direct
         if (this.wallet !== undefined) await custodyResubmitPending(executor(), this.wallet).catch(() => undefined)
       }
-      // the per-op leg: local mode runs it inline behind the mutex; under
-      // the restate executor each op's leg is a journaled invocation on the
-      // op's own deal object — fire-and-forget sends, the key is the
-      // serialization, CAS writes make a replayed leg resume-safe
-      const ops = await this.d.store.operations({ states: NONTERMINAL })
-      const exec = executor()
-      if (exec !== undefined) {
-        for (const op of ops)
-          void exec.send({ service: EXEC_SVC.deal, handler: 'advance', key: op.operationId }, {}).catch((e: unknown) => {
-            this.d.log?.(`market: deal advance send ${op.operationId}: ${(e as Error).message}`)
-          })
-      } else {
+      // the per-op leg and the reconcile scans: local mode runs them inline
+      // behind the mutex; under restate the dealfan tick already fanned each
+      // row out to its own deal key — nothing inline here
+      if (exec === undefined) {
+        const ops = await this.d.store.operations({ states: NONTERMINAL })
         for (const op of ops) await this.advanceLeg(op, height)
-      }
-      // a refund accepted at submit then rejected by the network must not sit
-      // in 'refunded' claiming the money came back — the outpoint went to the
-      // seller. escrow (advance) and collect (completion_submitted) already
-      // reconcile late rejections; this is the same watch for refundTxid —
-      // bounded by PROOF, not the clock: the rescan ends when the refund is
-      // proven mined (stamped refundProven), never when a timer runs out
-      // a refused escrow that lands anyway (manual reair, a peer that
-      // relayed it before the refusal returned) is a live covenant holding
-      // our sats — funding_failed is dead but the money is not. Arm the
-      // refund path at refundAfter; 'dead' verdicts leave the op alone.
-      // Direct rails are skipped: a landed P2PKH went to the seller —
-      // nothing locked on our side for refund() to reclaim.
-      for (const op of await this.d.store.operations({ role: 'buyer', states: ['funding_failed'], reconcileDue: this.now() })) {
-        try {
-          const pending = op.data.pendingEscrow as { cfg?: { direct?: boolean; refundAfter?: string | number }; utxo?: { txid?: string } } | undefined
-          const txid = (op.data.escrowTxid as string | undefined) ?? pending?.utxo?.txid
-          if (txid === undefined || this.d.txFacts === undefined || pending?.cfg?.direct === true) continue
-          if (!this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) continue
-          const facts = await this.d.txFacts(txid)
-          // proof in hand — the covenant provably exists. A seen-hint alone
-          // never arms: the tx can still die unconfirmed, and refund_pending
-          // claims locked sats a hint cannot establish
-          if (facts.verdict !== 'mined') continue
-          const cfg = (op.data.escrow as Record<string, unknown> | undefined) ?? pending?.cfg
-          const utxo = (op.data.utxo as Record<string, unknown> | undefined) ?? pending?.utxo
-          if (cfg === undefined || utxo === undefined) continue
-          const refundAfter = Number(cfg.refundAfter ?? 0)
-          await this.d.store.transition(op.operationId, op.revision, 'refund_pending', {
-            cause: 'refused_escrow_landed',
-            data: { escrow: cfg, utxo, escrowTxid: txid },
-            dueHeight: refundAfter > 0 ? refundAfter : null
-          })
-        } catch {
-          /* status probes must not stall the tick */
-        }
-      }
-      for (const op of await this.d.store.operations({ role: 'buyer', states: ['refunded'], reconcileDue: this.now() })) {
-        try {
-          const txid = op.data.refundTxid as string | undefined
-          // the rescan is bounded by PROOF, not the clock: 'refunded' is only
-          // truly terminal once the refund tx is proven mined. 'dead' un-marks
-          // it no matter when the rejection surfaces — a slow chain's late
-          // verdict must not leave a false money claim standing.
-          if (txid === undefined || this.d.txFacts === undefined || op.data.refundProven === true) continue
-          if (!this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) continue
-          const verdict = (await this.d.txFacts(txid)).verdict
-          if (verdict === 'dead')
-            await this.d.store.transition(op.operationId, op.revision, 'uncertain', {
-              cause: 'refund_rejected',
-              data: { refundTxid: txid },
-              dueHeight: null
-            })
-          else if (verdict === 'mined')
-            await this.d.store.transition(op.operationId, op.revision, 'refunded', {
-              cause: 'refund_proven',
-              data: { refundProven: true }
-            })
-        } catch {
-          /* status probes must not stall the tick */
-        }
+        for (const op of await this.d.store.operations({ role: 'buyer', states: ['funding_failed'], reconcileDue: this.now() }))
+          await this.reconcileRefused(op)
+        for (const op of await this.d.store.operations({ role: 'buyer', states: ['refunded'], reconcileDue: this.now() }))
+          await this.reconcileRefundProof(op)
       }
       // with the runtime's detached pump wired, the end-of-tick pass is a
       // poke (drain runs off the engine mutex); without it the engine
@@ -188,6 +134,96 @@ export abstract class IngressOps extends MarketBase {
     if (op === undefined || !NONTERMINAL.includes(op.state)) return false
     await this.advanceLeg(op, await this.d.height())
     return true
+  }
+
+  /** the deal object's per-event entry — one inbox item's domain leg keyed
+   *  by the deal's correlation id (wantId). No run(): the event key IS the
+   *  serialization; per-key FIFO gives the same ordering the batch's
+   *  self-note sort enforced. complete/fail rides inside the leg — an
+   *  unprocessable item fails here, not on a retrying fan-out. */
+  async dealEvent(i: { source: string; messageId: string; kind: string; payload: unknown }): Promise<void> {
+    try {
+      // new-deal gates leave the item pending WITHOUT spending an attempt —
+      // a host flap must not dead-letter wants (the next fan-out re-sends)
+      if (i.kind === 'want') {
+        if (this.d.killed?.() || this.d.deaf?.()) return
+        await this.onWant(i.payload as SignedWant)
+      } else if (i.kind === 'offer') await this.onOffer(i.payload as SignedOffer)
+      else {
+        const p = i.payload as { from: string; msg: MarketMessage; refs?: BoxRef[] }
+        await this.onMessage(p.from, p.msg, p.refs)
+      }
+      await this.d.store.completeInbox(i.source, i.messageId)
+    } catch (e) {
+      await this.d.store.failInbox(i.source, i.messageId, (e as Error).message)
+    }
+  }
+
+  /** the deal object's reconcile entry — the tick's two rescan legs for ONE
+   *  op: refused-escrow refund arming and the refunded rescan. */
+  async reconcileOp(operationId: string): Promise<void> {
+    const op = await this.d.store.operation(operationId)
+    if (op === undefined || op.role !== 'buyer') return
+    if (op.state === 'funding_failed') await this.reconcileRefused(op)
+    else if (op.state === 'refunded') await this.reconcileRefundProof(op)
+  }
+
+  /** a refused escrow that lands anyway (manual reair, a peer that relayed
+   *  it before the refusal returned) is a live covenant holding our sats —
+   *  funding_failed is dead but the money is not. Arm the refund path at
+   *  refundAfter; 'dead' verdicts leave the op alone. Direct rails are
+   *  skipped: a landed P2PKH went to the seller — nothing locked on our
+   *  side for refund() to reclaim. Proof-bound, not clock-bound: a
+   *  seen-hint alone never arms — the tx can still die unconfirmed, and
+   *  refund_pending claims locked sats a hint cannot establish. */
+  private async reconcileRefused(op: Operation): Promise<void> {
+    try {
+      const pending = op.data.pendingEscrow as { cfg?: { direct?: boolean; refundAfter?: string | number }; utxo?: { txid?: string } } | undefined
+      const txid = (op.data.escrowTxid as string | undefined) ?? pending?.utxo?.txid
+      if (txid === undefined || this.d.txFacts === undefined || pending?.cfg?.direct === true) return
+      if (!this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) return
+      const facts = await this.d.txFacts(txid)
+      if (facts.verdict !== 'mined') return
+      const cfg = (op.data.escrow as Record<string, unknown> | undefined) ?? pending?.cfg
+      const utxo = (op.data.utxo as Record<string, unknown> | undefined) ?? pending?.utxo
+      if (cfg === undefined || utxo === undefined) return
+      const refundAfter = Number(cfg.refundAfter ?? 0)
+      await this.d.store.transition(op.operationId, op.revision, 'refund_pending', {
+        cause: 'refused_escrow_landed',
+        data: { escrow: cfg, utxo, escrowTxid: txid },
+        dueHeight: refundAfter > 0 ? refundAfter : null
+      })
+    } catch {
+      /* status probes must not stall the tick */
+    }
+  }
+
+  /** a refund accepted at submit then rejected by the network must not sit
+   *  in 'refunded' claiming the money came back — the outpoint went to the
+   *  seller. Bounded by PROOF, not the clock: 'refunded' is only truly
+   *  terminal once the refund tx is proven mined; 'dead' un-marks it no
+   *  matter when the rejection surfaces — a slow chain's late verdict must
+   *  not leave a false money claim standing. */
+  private async reconcileRefundProof(op: Operation): Promise<void> {
+    try {
+      const txid = op.data.refundTxid as string | undefined
+      if (txid === undefined || this.d.txFacts === undefined || op.data.refundProven === true) return
+      if (!this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) return
+      const verdict = (await this.d.txFacts(txid)).verdict
+      if (verdict === 'dead')
+        await this.d.store.transition(op.operationId, op.revision, 'uncertain', {
+          cause: 'refund_rejected',
+          data: { refundTxid: txid },
+          dueHeight: null
+        })
+      else if (verdict === 'mined')
+        await this.d.store.transition(op.operationId, op.revision, 'refunded', {
+          cause: 'refund_proven',
+          data: { refundProven: true }
+        })
+    } catch {
+      /* status probes must not stall the tick */
+    }
   }
 
   async pumpOutbox(): Promise<void> {

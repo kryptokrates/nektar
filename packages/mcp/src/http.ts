@@ -3,12 +3,34 @@
 import { nektarEnv, marketHostsFromEnv } from '@nektar/core'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { MerklePath } from '@bsv/sdk'
 import type { NektarMemory } from './memory.js'
 import { TOOLS, visibleTools, callTool } from './server.js'
-import { badgeSvg, cardPage, dashboardPage, tablerCss, verifyPage } from './pages.js'
+import { badgeSvg, cardPage, dashboardState, verifyPage } from './pages.js'
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))
+
+// the compiled Svelte dashboard — vite emits dist/dashboard/; a missing
+// bundle degrades to a one-line notice, never a stack trace
+const DASH_DIR = fileURLToPath(new URL('../dashboard/', import.meta.url))
+const dashFile = (name: string): Buffer | null => {
+  try {
+    return readFileSync(join(DASH_DIR, name))
+  } catch {
+    return null
+  }
+}
+const DASH_MIME: Record<string, string> = {
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.map': 'application/json',
+  '.png': 'image/png',
+  '.woff2': 'font/woff2'
+}
 
 export const OPENAPI = {
   openapi: '3.1.0',
@@ -104,20 +126,28 @@ export const OPENAPI = {
     },
     '/card': {
       get: {
-        summary: 'the agent card as a human page — public storefront rendering the well-known doc (shards for sale, proof counts, verify + join paths). The dashboard share button produces this URL (NEKTAR_PACK_SHARE=0 disables)',
+        summary:
+          'the agent card as a human page — public storefront rendering the well-known doc (shards for sale, proof counts, verify + join paths). The dashboard share button produces this URL (NEKTAR_PACK_SHARE=0 disables)',
         responses: { 200: { description: 'text/html agent card' }, 404: { description: 'pack sharing disabled' } }
       }
     },
-    '/dashboard': {
+    '/': {
       get: {
-        summary: 'operator audit surface — one HTML page: identity, money, receipts, market. Token-gated (non-public route).',
+        summary: 'operator audit surface — the compiled Svelte app shell (dist/dashboard/index.html). Token-gated (non-public route).',
         responses: { 200: { description: 'text/html dashboard' } }
       }
     },
-    '/dashboard/tabler.css': {
+    '/state': {
       get: {
-        summary: 'the @tabler/core stylesheet the dashboard links to — served from the installed dependency, long-cached',
-        responses: { 200: { description: 'text/css' }, 404: { description: 'tabler assets missing' } }
+        summary: 'the JSON the dashboard renders — loop stage, treasury, receipts, market, network hosts + lane stock, automation queue',
+        responses: { 200: { description: 'dashboard state JSON' } }
+      }
+    },
+    '/assets/{file}': {
+      get: {
+        summary: 'the compiled dashboard bundle files (hashed, long-cached)',
+        parameters: [{ name: 'file', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'asset bytes' }, 404: { description: 'no such asset' } }
       }
     },
     '/v1/pay/quote': {
@@ -408,7 +438,7 @@ export function createHttpApi(
           }
           if (req.method === 'GET' && url.pathname === '/v1/openapi.json') return send(200, OPENAPI)
           if (req.method === 'GET' && url.pathname === '/v1/metrics') return send(200, mem.metrics.render(), 'text/plain; version=0.0.4')
-          if (req.method === 'GET' && url.pathname === '/dashboard/events') {
+          if (req.method === 'GET' && url.pathname === '/events') {
             // SSE — one line per state change; the page swaps its blocks on each
             if (sseClients >= SSE_MAX) return send(429, { error: 'too many dashboard subscribers' })
             sseClients++
@@ -432,14 +462,31 @@ export function createHttpApi(
             })
             return
           }
-          if (req.method === 'GET' && url.pathname === '/dashboard/tabler.css') {
-            const c = tablerCss()
-            if (!c) return send(404, { error: 'tabler assets missing' })
-            res.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=86400, immutable' })
-            return res.end(c)
+          if (req.method === 'GET' && url.pathname === '/state') {
+            return send(200, await dashboardState(mem, ops, req.headers.host))
+          }
+          if (req.method === 'GET' && url.pathname.startsWith('/assets/')) {
+            const name = url.pathname.slice('/assets/'.length)
+            if (!/^[\w.-]+$/.test(name)) return send(400, { error: 'bad asset name' })
+            const b = dashFile(`assets/${name}`)
+            if (!b) return send(404, { error: 'no such asset' })
+            res.writeHead(200, {
+              'content-type': DASH_MIME[name.slice(name.lastIndexOf('.'))] ?? 'application/octet-stream',
+              'cache-control': 'public, max-age=31536000, immutable'
+            })
+            return res.end(b)
           }
           if (req.method === 'GET' && url.pathname === '/dashboard') {
-            return send(200, await dashboardPage(mem, ops, req.headers.host), 'text/html; charset=utf-8')
+            res.writeHead(301, { location: '/' })
+            return res.end()
+          }
+          if (req.method === 'GET' && url.pathname === '/') {
+            const html = dashFile('index.html')
+            if (html) {
+              res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+              return res.end(html)
+            }
+            return send(200, '<!doctype html><html><body style="background:#221e1d;color:#eae6e3;font:15px system-ui;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0"><div>dashboard bundle missing — run <code>pnpm --filter @nektar/mcp build</code></div></body></html>', 'text/html; charset=utf-8')
           }
           // public surface: {pass} ONLY — reserves, hosts and policy details
           // never leave the unauthenticated path (preflight's full report is

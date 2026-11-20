@@ -1,14 +1,9 @@
-// pages.ts — the HTML pages of the HTTP surface. /dashboard is the operator
-// audit surface, skinned with the installed @tabler/core kit (served from
-// node_modules at /dashboard/tabler.css) and themed on the logo.svg palette:
-// amber #f7991b on dark #221e1d. The hero is the operator's cold-start loop —
-// identity → funded → memory → anchored → verified → earning — and every
-// public artifact (agent card, receipts, shard packs) carries a share button.
-// /v1/verify's check page + /v1/badge stay self-contained — a verifier must
-// work with zero external resources.
-import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import { nektarEnv } from '@nektar/core'
+// pages.ts — the HTML pages of the HTTP surface plus the dashboard's JSON
+// state. /dashboard itself is the compiled Svelte bundle (dashboard/ →
+// dist/dashboard); dashboardState() is the data it renders. The verify check
+// page, /v1/badge and /card stay self-contained — they must work with zero
+// external resources. Palette comes from logo.svg: amber #f7991b on dark.
+import { nektarEnv, marketHostsFromEnv } from '@nektar/core'
 import type { NektarMemory } from './memory.js'
 import { receiptToken } from './receipt.js'
 
@@ -16,163 +11,58 @@ import { receiptToken } from './receipt.js'
 const NEKTAR_AMBER = '#f7991b'
 const NEKTAR_DARK = '#221e1d'
 
-let tablerBuf: Buffer | null | undefined
-/** tabler.min.css via the declared dependency — resolved once, then cached */
-export function tablerCss(): Buffer | null {
-  if (tablerBuf === undefined) {
-    try {
-      tablerBuf = readFileSync(createRequire(import.meta.url).resolve('@tabler/core/dist/css/tabler.min.css'))
-    } catch {
-      tablerBuf = null
-    }
-  }
-  return tablerBuf
-}
-
 const esc = (s: unknown) =>
   (s === null || s === undefined ? '' : typeof s === 'object' ? JSON.stringify(s) : String(s as string | number | boolean)).replace(
     /[&<>"]/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!
   )
 
-// --tblr-* overrides replay logo.svg onto the kit — the only theme work done;
-// every class used below is the kit's own. .kv/.stream are the two bespoke
-// bits (record rows + the SSE event tail).
-const THEME = `:root,[data-bs-theme=dark]{--tblr-primary:${NEKTAR_AMBER};--tblr-primary-fg:${NEKTAR_DARK};--tblr-body-bg:#1b1715;
---tblr-bg-surface:#2b2421;--tblr-bg-surface-secondary:#241f1c;--tblr-bg-surface-tertiary:#382f2a;
---tblr-body-color:#ece7e4;--tblr-secondary:#a89a8e;--tblr-muted:#a89a8e;
---tblr-border-color:#413630;--tblr-border-color-translucent:rgba(247,153,27,.18)}
-a{color:var(--tblr-primary)}
-.navbar{background:var(--tblr-bg-surface)}
-.card{box-shadow:0 .5rem 1.4rem rgba(0,0,0,.4)}
-.card-hero{background:linear-gradient(115deg,#2b2421 0%,#3a2c19 55%,#2b2421 100%)}
-.page-pretitle{color:var(--tblr-primary)}
-.kv{display:flex;align-items:center;gap:.75rem;padding:.55rem .4rem;border-bottom:1px solid var(--tblr-border-color-translucent);font-size:.875rem}
-.kv:last-child{border-bottom:none}.kv:hover{background:rgba(247,153,27,.05)}
-.stream{margin-top:.5rem;padding-top:.5rem;border-top:1px solid var(--tblr-border-color-translucent);font-size:11px;color:var(--tblr-secondary);min-height:1em;max-height:4.2em;overflow:hidden;font-family:var(--tblr-font-monospace)}
-.stream div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stream .t{color:var(--tblr-primary)}
-code{background:var(--tblr-bg-surface-tertiary);padding:1px 6px;border-radius:4px}
-.glow{position:relative}
-.glow::before{content:'';position:absolute;inset:-46px;background:radial-gradient(circle,rgba(247,153,27,.28),transparent 68%);pointer-events:none}
-.glow>*{position:relative}
-.step{display:flex;flex-direction:column;align-items:center;gap:.35rem;flex:1;position:relative}
-.step::before{content:'';position:absolute;top:.55rem;left:-50%;width:100%;height:2px;background:var(--tblr-border-color)}
-.step:first-child::before{display:none}
-.step.done::before{background:var(--tblr-primary)}
-.step i{width:1.1rem;height:1.1rem;border-radius:50%;border:2px solid var(--tblr-border-color);background:var(--tblr-bg-surface);z-index:1;font-style:normal;font-size:.6rem;display:flex;align-items:center;justify-content:center;color:transparent}
-.step.done i{background:var(--tblr-primary);border-color:var(--tblr-primary);color:var(--tblr-primary-fg)}
-.step.next i{border-color:var(--tblr-primary);box-shadow:0 0 0 .3rem rgba(247,153,27,.15)}
-.step span{font-size:.62rem;color:var(--tblr-secondary);text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
-.step.done span{color:var(--tblr-body-color)}
-.step.next span{color:var(--tblr-primary)}`
-
-// emitted only when tabler.min.css can't be resolved — keeps the page readable
-const FALLBACK = `body{background:${NEKTAR_DARK};color:#eae6e3;font-family:system-ui,sans-serif;margin:0}
-.navbar{display:flex;align-items:center;padding:.6rem 1.5rem;border-bottom:1px solid #3a332f}
-.navbar-brand a{color:${NEKTAR_AMBER};font-weight:700;text-decoration:none;display:flex;gap:.5rem;align-items:center}
-.navbar-nav{display:flex;list-style:none;gap:.25rem;padding:0;margin:0}
-.nav-link{display:flex;gap:.4rem;align-items:center;padding:.4rem .6rem;color:#eae6e3;text-decoration:none;border-radius:.4rem}
-.nav-link:hover,.nav-item.active .nav-link{background:rgba(247,153,27,.1);color:${NEKTAR_AMBER}}
-.page-wrapper{max-width:1200px;margin:0 auto}.page-header{padding:1.5rem 1.5rem 0}.page-body{padding:1rem 1.5rem 2rem}
-.page-pretitle{font-size:.75rem;text-transform:uppercase;letter-spacing:.04em;color:#a2958a}
-.page-title{font-size:1.5rem;font-weight:700;margin:0}
-.row-cards{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-.col-xl-3,.col-sm-6{grid-column:span 1}.col-xl-6{grid-column:1/-1}.col-12{grid-column:1/-1}.col-md-6{grid-column:span 1}
-@media (max-width:768px){.row-cards{grid-template-columns:1fr}.col-xl-3{grid-column:1/-1}}
-.card{background:#2c2624;border:1px solid rgba(247,153,27,.14);border-radius:.5rem}
-.card-header{display:flex;justify-content:space-between;align-items:center;padding:.8rem 1.25rem;border-bottom:1px solid rgba(247,153,27,.14)}
-.card-title{font-size:1rem;font-weight:600;margin:0}.card-body{padding:1rem 1.25rem}.h-100{height:100%}
-.status{display:inline-flex;align-items:center;gap:.4rem;padding:.2rem .6rem;border-radius:999px;font-size:.75rem;background:rgba(255,255,255,.06)}
-.status-green{color:#4cc26b}.status-red{color:#e5534b}.status-dot{display:inline-block;width:.5rem;height:.5rem;border-radius:50%;background:currentColor}
-.btn{display:inline-block;padding:.35rem .8rem;border-radius:.4rem;border:1px solid #3a332f;color:#eae6e3;background:transparent;font-size:.8rem;cursor:pointer;text-decoration:none}
-.btn-primary{background:${NEKTAR_AMBER};color:${NEKTAR_DARK};border-color:transparent}.btn-sm{font-size:.75rem}
-.h1{font-size:2rem;font-weight:700;margin:0}.h2{font-size:1.5rem;font-weight:700}.h3{font-size:1.25rem;font-weight:600}.h4{font-size:1rem}
-.subheader{font-size:.75rem;text-transform:uppercase;letter-spacing:.04em;color:#a2958a}
-.text-secondary{color:#a2958a}.small{font-size:.8rem}.empty{padding:1.5rem;text-align:center;color:#a2958a}
-.d-flex{display:flex}.flex-row{flex-direction:row}.flex-wrap{flex-wrap:wrap}.flex-grow-1{flex-grow:1}.d-none{display:none}
-.align-items-center{align-items:center}.align-items-baseline{align-items:baseline}.justify-content-center{justify-content:center}.justify-content-between{justify-content:space-between}
-.ms-auto{margin-left:auto}.me-2{margin-right:.5rem}.me-4{margin-right:1.5rem}.mt-auto{margin-top:auto}
-.mt-1{margin-top:.25rem}.mt-2{margin-top:.5rem}.mt-3{margin-top:1rem}.mb-0{margin-bottom:0}.mb-1{margin-bottom:.25rem}.mb-2{margin-bottom:.5rem}.mb-4{margin-bottom:1.5rem}
-.gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.gap-4{gap:1rem}.gap-5{gap:2rem}.w-100{width:100%}.py-2{padding:.5rem 0}
-.container-xl{width:100%}.pt-3{padding-top:1rem}.pb-3{padding-bottom:1rem}
-.progress{height:.5rem;background:#3a332f;border-radius:.25rem;overflow:hidden}.progress-bar{height:100%;background:${NEKTAR_AMBER}}
-.step{display:flex;flex-direction:column;align-items:center;gap:.35rem;flex:1}
-.step i{width:1.1rem;height:1.1rem;border-radius:50%;border:2px solid #3a332f;font-style:normal;font-size:.6rem;display:flex;align-items:center;justify-content:center;color:transparent}
-.step.done i{background:${NEKTAR_AMBER};border-color:${NEKTAR_AMBER};color:${NEKTAR_DARK}}
-.step.next i{border-color:${NEKTAR_AMBER}}
-.step span{font-size:.62rem;color:#a2958a;text-transform:uppercase}
-.list-unstyled{list-style:none;padding:0}`
-
-// stroke icons in @tabler/icons style — hand-drawn so the icon pack stays out
-// of the dependency set
-const ICONS = {
-  overview: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
-  log: '<path d="M4 6a8 3 0 0 0 16 0a8 3 0 0 0-16 0"/><path d="M4 6v6a8 3 0 0 0 16 0V6"/><path d="M4 12v6a8 3 0 0 0 16 0v-6"/>',
-  earn: '<circle cx="12" cy="12" r="9"/><path d="M14.8 9a2 2 0 0 0-1.8-1h-2a2 2 0 1 0 0 4h2a2 2 0 1 1 0 4h-2a2 2 0 0 1-1.8-1M12 7v10"/>',
-  receipts: '<path d="M5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-3-2-2 2-2-2-2 2-2-2-3 2"/><path d="M9 7h6M9 11h6M9 15h4"/>',
-  market: '<path d="M3 6v5.2a2 2 0 0 0 .6 1.4l7.7 7.7a2.4 2.4 0 0 0 3.4 0l5.6-5.6a2.4 2.4 0 0 0 0-3.4l-7.7-7.7A2 2 0 0 0 11.2 3H5a2 2 0 0 0-2 3z"/><circle cx="7.5" cy="7.5" r="1"/>',
-  agents: '<circle cx="12" cy="8" r="4"/><path d="M5 21c0-3.9 3.1-7 7-7s7 3.1 7 7"/>',
-  automation: '<path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/>',
-  api: '<path d="M4 6h16M4 12h16M4 18h10"/>',
-  health: '<path d="M12 21c-4-3.5-8-6.5-8-10a4.5 4.5 0 0 1 8-3 4.5 4.5 0 0 1 8 3c0 3.5-4 6.5-8 10z"/>',
-  agent: '<rect x="5" y="8" width="14" height="10" rx="2"/><path d="M12 8V4M8 4h8M9 13h.01M15 13h.01"/>',
-  copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>'
-}
-const icon = (p: string) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`
-
-const logoSvg = (px: number) => `<svg viewBox="0 0 400 400" width="${px}" height="${px}" style="border-radius:${Math.round(px / 5)}px;flex:none"><rect width="400" height="400" fill="${NEKTAR_DARK}"/><path fill="${NEKTAR_AMBER}" d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z"/><circle cx="307" cy="78" r="38" fill="${NEKTAR_AMBER}"/><ellipse cx="163" cy="190" rx="20" ry="21" fill="${NEKTAR_DARK}"/><ellipse cx="231" cy="190" rx="20" ry="21" fill="${NEKTAR_DARK}"/><path d="M 150 265.5 C 161 279 176 287 196 288 C 216 287 230 278 243 265" fill="none" stroke="${NEKTAR_DARK}" stroke-width="24" stroke-linecap="round"/></svg>`
+const logoSvg = (px: number) =>
+  `<svg viewBox="0 0 400 400" width="${px}" height="${px}" style="border-radius:${Math.round(px / 5)}px;flex:none"><rect width="400" height="400" fill="${NEKTAR_DARK}"/><path fill="${NEKTAR_AMBER}" d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z"/><circle cx="307" cy="78" r="38" fill="${NEKTAR_AMBER}"/><ellipse cx="163" cy="190" rx="20" ry="21" fill="${NEKTAR_DARK}"/><ellipse cx="231" cy="190" rx="20" ry="21" fill="${NEKTAR_DARK}"/><path d="M 150 265.5 C 161 279 176 287 196 288 C 216 287 230 278 243 265" fill="none" stroke="${NEKTAR_DARK}" stroke-width="24" stroke-linecap="round"/></svg>`
 
 export interface HttpOps {
   wallet: () => Promise<unknown>
   costs: () => unknown
 }
 
-/** /dashboard — the operator audit surface. One page, live via SSE; every
- *  block degrades to an honest empty state. */
-export async function dashboardPage(mem: NektarMemory, ops: HttpOps | undefined, host: string | undefined): Promise<string> {
+/** /dashboard/state — the JSON the compiled Svelte dashboard renders. Same
+ *  data the old server-rendered page carried: honest counts, the cold-start
+ *  loop frontier, network position, the automation queue. */
+export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined, host: string | undefined): Promise<Record<string, unknown>> {
   const d = await mem.doctor()
   if (ops?.wallet) {
     const w = (await ops.wallet()) as Record<string, unknown>
     d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
   }
   const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${host ?? 'localhost'}`
-  // receipts — newest last N
   const rrecs = (await mem.records('__receipts__').catch(() => [] as Array<{ seq: number; data?: string }>)) as Array<{ seq: number; data?: string }>
-  const amts: number[] = []
-  const receiptRows = rrecs
+  const receipts = rrecs
     .slice(-10)
     .reverse()
     .map((r) => {
-      let amt = '',
+      let sats: number | null = null,
         tool = ''
       const m = r.data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
       if (m) {
         try {
           const j = JSON.parse(Buffer.from(m[1], 'base64url').toString())
-          amt = String(j.payment?.amountSats ?? j.payment?.amount ?? '')
+          sats = Number(j.payment?.amountSats ?? j.payment?.amount) || null
           tool = String(j.tool ?? j.toolName ?? '')
         } catch {}
       }
-      amts.push(Number(amt) || 0)
-      return `<div class="kv"><span class="text-secondary">#${r.seq}</span><span>${esc(tool || 'answer')}</span><span>${amt ? esc(amt) + ' sats' : ''}</span><a class="btn btn-sm ms-auto" href="${base}/v1/verify?s=${r.seq}&format=html">verify ↗</a></div>`
+      return { seq: r.seq, tool: tool || 'answer', sats, url: `${base}/v1/verify?s=${r.seq}&format=html` }
     })
-    .join('')
-  // market — offerable shards
+  const amounts = receipts.map((r) => r.sats ?? 0)
   const cat = await mem.shardCatalog().catch(() => [] as Array<{ shard: string; domains: string[]; offers?: Array<{ kind: string; priceSats: number }> }>)
-  const marketRows = cat
-    .map(
-      (m) =>
-        `<div class="kv"><b>${esc(m.shard)}</b><span class="text-secondary">${esc(m.domains.join(', '))}</span><span class="ms-auto">${esc(m.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? '')}</span></div>`
-    )
-    .join('')
-  const cardUrl = `${base}/card`
-  const shareEnabled = !/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1')
   const f = d.funding
   const bal = Number(f.balanceSats ?? f.satoshis ?? 0)
-  const up = process.uptime()
-  const upStr = up > 86400 ? `${Math.floor(up / 86400)}d` : up > 3600 ? `${Math.floor(up / 3600)}h` : `${Math.floor(up / 60)}m`
   const au = mem.automation
+  // network position — which market hosts this instance trades through and
+  // whether the last probe could reach them (up / down / configured)
+  const hosts = marketHostsFromEnv()
+  const downSet = new Set(typeof au?.health === 'function' ? (au.health().report?.downHosts ?? []) : [])
+  const slots = typeof au?.marketSlots === 'function' ? await au.marketSlots().catch(() => undefined) : undefined
+  const boot = typeof au?.bootstrap === 'function' ? au.bootstrap() : undefined
   const pending = au ? await au.store.approvals('pending') : []
   const autoOps = au
     ? (await au.store.operations())
@@ -180,19 +70,8 @@ export async function dashboardPage(mem: NektarMemory, ops: HttpOps | undefined,
         .slice(-8)
         .reverse()
     : []
-  const automationCard = au
-    ? `<div class="col-12" id="automation"><div class="card">
-<div class="card-header"><h3 class="card-title">Automation</h3><div class="card-actions text-secondary small">${pending.length} pending approval${pending.length === 1 ? '' : 's'}</div></div>
-<div class="card-body">
-${pending.length ? pending.map((a) => `<div class="kv"><div><b>${esc(a.reason)}</b><div class="text-secondary small">≤ ${a.maxExtraSats} sats · ${esc(a.operationId.slice(0, 8))}… · expires ${esc(new Date(a.expiresAt).toISOString())}</div></div><button class="btn btn-sm btn-primary ms-auto" onclick="decide('${esc(a.approvalId)}',true)">approve</button><button class="btn btn-sm" onclick="decide('${esc(a.approvalId)}',false)">deny</button></div>`).join('') : '<div class="text-secondary small py-2">no pending approvals — routine trades do not prompt</div>'}
-${autoOps.map((o) => `<div class="kv"><span class="text-secondary">${esc(o.role)} ${esc(o.kind)}</span><b class="ms-auto">${esc(o.state)}</b>${o.lastError ? `<span class="status status-red">${esc(o.lastError)}</span>` : ''}</div>`).join('')}
-<div class="stream" data-ev="automation"></div>
-</div></div></div>`
-    : ''
-  const kit = tablerCss() !== null
-  const cssLink = kit ? `<link rel="stylesheet" href="/dashboard/tabler.css">` : ''
   const coverage = d.records > 0 ? Math.round((d.anchoredRecords / d.records) * 100) : 100
-  const earned = amts.reduce((a, b) => a + b, 0)
+  const earned = amounts.reduce((a, b) => a + b, 0)
   // cold-start loop — the smallest self-sustaining earning network for one
   // operator; every step is derived from live state, the frontier is named
   const steps = [
@@ -204,7 +83,6 @@ ${autoOps.map((o) => `<div class="kv"><span class="text-secondary">${esc(o.role)
     { name: 'earning', done: earned > 0 || cat.length > 0 }
   ]
   const firstOpen = steps.findIndex((s) => !s.done)
-  const doneCount = steps.filter((s) => s.done).length
   const nextText: Record<string, string> = {
     funded: 'next: fund the treasury — anchors and payouts draw from this book',
     memory: 'next: remember something — the first shard starts sellable memory',
@@ -212,138 +90,41 @@ ${autoOps.map((o) => `<div class="kv"><span class="text-secondary">${esc(o.role)
     verified: 'next: answer verifiably — groundedAnswer issues the first checkable receipt',
     earning: 'next: list a shard for sale — describeShard puts memory on the market'
   }
-  const nextLine =
-    firstOpen === -1 ? 'the earning loop is live — every link below is checkable by a stranger' : (nextText[steps[firstOpen].name] ?? '')
-  const stepper = steps
-    .map(
-      (s, i) =>
-        `<div class="step${s.done ? ' done' : i === firstOpen ? ' next' : ''}"><i>${s.done ? '✓' : ''}</i><span>${s.name}</span></div>`
-    )
-    .join('')
-  // honest visuals only — the sparkline is real receipt amounts, the ring is
-  // the true anchored share; nothing decorative masquerading as data
-  const donut = (p: number) =>
-    `<svg width="76" height="76" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--tblr-bg-surface-tertiary)" stroke-width="3"/><circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--tblr-primary)" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(p * 0.9739 * 100).toFixed(1)} 200" transform="rotate(-90 18 18)"/><text x="18" y="21" text-anchor="middle" fill="var(--tblr-body-color)" font-size="8" font-weight="700">${Math.round(p * 100)}%</text></svg>`
-  const spark = (vals: number[]) => {
-    const v = [...vals].reverse().slice(-10)
-    const max = Math.max(1, ...v)
-    const bars = v.map((n, i) => `<rect x="${i * 10 + 2}" y="${28 - Math.round((n / max) * 24)}" width="6" height="${Math.max(2, Math.round((n / max) * 24))}" rx="1" fill="var(--tblr-primary)" opacity="${n > 0 ? 0.9 : 0.25}"/>`).join('')
-    return `<svg viewBox="0 0 ${v.length * 10} 28" class="w-100" height="28" preserveAspectRatio="none">${bars || '<rect x="0" y="26" width="100%" height="2" fill="var(--tblr-bg-surface-tertiary)"/>'}</svg>`
+  return {
+    network: d.network,
+    model: nektarEnv('NEKTAR_MODEL_ID') ?? 'operator',
+    pub: mem.operatorKey().toPublicKey().toString().slice(0, 24),
+    uptimeSec: Math.floor(process.uptime()),
+    loop: {
+      steps,
+      done: steps.filter((s) => s.done).length,
+      frontier: firstOpen === -1 ? 'loop live' : steps[firstOpen].name,
+      next: firstOpen === -1 ? 'the earning loop is live — every link below is checkable by a stranger' : (nextText[steps[firstOpen].name] ?? '')
+    },
+    treasury: { sats: bal, funded: !!f.funded, payments: d.payments },
+    receipts: { count: rrecs.length, earned, amounts, list: receipts },
+    memory: { shards: d.shards, records: d.records, anchored: d.anchoredRecords, unproven: d.unprovenAnchors, coverage, prover: d.prover },
+    market: cat.map((m) => ({ shard: m.shard, domains: m.domains, offers: m.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? '' })),
+    net: {
+      hosts: hosts.map((h) => ({ url: h, state: au === undefined ? 'configured' : downSet.has(h) ? 'down' : 'up' })),
+      slots: slots ?? null,
+      boot: boot ?? null,
+      push: nektarEnv('NEKTAR_PUSH_PUBLIC') ?? null
+    },
+    automation: au
+      ? {
+          pending: pending.map((a) => ({
+            id: a.approvalId,
+            reason: a.reason,
+            maxExtraSats: a.maxExtraSats,
+            operationId: a.operationId,
+            expiresAt: a.expiresAt
+          })),
+          ops: autoOps.map((o) => ({ role: o.role, kind: o.kind, state: o.state, lastError: o.lastError }))
+        }
+      : null,
+    share: { enabled: !/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1'), url: `${base}/card` }
   }
-  const navItem = (href: string, label: string, svg: string, active = false) =>
-    `<li class="nav-item${active ? ' active' : ''}"><a class="nav-link" href="${href}"><span class="nav-link-icon">${icon(svg)}</span><span class="nav-link-title">${label}</span></a></li>`
-  const miniStat = (label: string, value: string, sub: string, svg: string, color: string, extra = '') => `<div class="col-sm-6 col-xl-3"><div class="card"><div class="card-body">
-<div class="d-flex align-items-center"><div class="subheader">${label}</div><div class="ms-auto"><span style="display:inline-flex;align-items:center;justify-content:center;width:2.4rem;height:2.4rem;border-radius:.55rem;background:${color}22;color:${color}">${icon(svg)}</span></div></div>
-<div class="h3 mb-1">${value}</div><div class="text-secondary small">${sub}</div>${extra}
-</div></div></div>`
-  return `<!doctype html><html data-bs-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>nektar — operator</title>
-${cssLink}<style>${THEME}${kit ? '' : FALLBACK}</style></head><body><div class="page">
-<header class="navbar navbar-expand-md" data-bs-theme="dark"><div class="container-xl">
-<h1 class="navbar-brand me-4"><a class="d-flex align-items-center gap-2" style="text-decoration:none" href="/dashboard">${logoSvg(30)}<span>nektar</span></a></h1>
-<div class="navbar-nav flex-row ms-auto align-items-center gap-3">
-<span class="status status-green" id="live"><span class="status-dot status-dot-animated"></span>live</span>
-<span class="text-secondary small">${esc(d.network)}</span>
-<span class="text-secondary small">pub <code>${esc(mem.operatorKey().toPublicKey().toString().slice(0, 24))}…</code></span>
-<span class="text-secondary small">up ${upStr}</span>
-</div></div></header>
-<div class="navbar navbar-expand-md" data-bs-theme="dark"><div class="container-xl"><ul class="navbar-nav">
-${navItem('/dashboard', 'Overview', ICONS.overview, true)}
-${navItem('#receipts', 'Receipts', ICONS.receipts)}
-${navItem('#market', 'Market', ICONS.market)}
-${au ? navItem('#automation', 'Automation', ICONS.automation) : ''}
-<li class="nav-item ms-auto">${''}<a class="nav-link" href="/v1/openapi.json"><span class="nav-link-icon">${icon(ICONS.api)}</span><span class="nav-link-title">API</span></a></li>
-</ul></div></div>
-<div class="page-wrapper">
-<div class="page-header d-print-none"><div class="container-xl"><div class="d-flex align-items-center justify-content-between">
-<div><div class="page-pretitle">operator console</div><h2 class="page-title">Dashboard</h2></div>
-<div class="d-flex gap-2"><a class="btn" href="/v1/health">Health</a><a class="btn" href="/.well-known/nektar">Discovery doc</a></div>
-</div></div></div>
-<div id="app" class="page-body"><div class="container-xl"><div class="row row-cards">
-<div class="col-xl-6"><div class="card h-100 card-hero"><div class="card-body d-flex py-4">
-<div class="flex-grow-1">
-<div class="d-flex align-items-baseline gap-3 mb-1"><div class="h2 mb-0">${esc(nektarEnv('NEKTAR_MODEL_ID') ?? 'operator')}</div>
-<div class="h4 mb-0" style="color:var(--tblr-primary)">${firstOpen === -1 ? 'loop live' : steps[firstOpen].name}</div>
-<div class="text-secondary small">${doneCount}/${steps.length}</div></div>
-<div class="d-flex mt-3 mb-3">${stepper}</div>
-<div class="small mb-4">${esc(nextLine)}</div>
-${shareEnabled ? `<button class="btn btn-primary" onclick="shareAgent(this)">share your agent ↗</button>` : ''}
-</div>
-<div class="ms-auto d-none d-lg-flex align-items-center glow">${logoSvg(96)}</div>
-</div></div></div>
-<div class="col-sm-6 col-xl-3"><div class="card h-100"><div class="card-body">
-<div class="subheader">Receipts</div>
-<div class="d-flex align-items-baseline"><div class="h1 mb-0 me-2">${rrecs.length}</div><div class="text-secondary">verified answers</div></div>
-<div class="text-secondary small mt-1">${earned > 0 ? `${earned.toLocaleString()} sats earned — last ${Math.min(10, amts.length)}` : 'each carries a checkable link'}</div>
-<div class="mt-2">${spark(amts)}</div>
-</div></div></div>
-<div class="col-sm-6 col-xl-3"><div class="card h-100"><div class="card-body">
-<div class="subheader">Anchored</div>
-<div class="d-flex align-items-baseline"><div class="h1 mb-0 me-2">${d.anchoredRecords}</div><div class="text-secondary">of ${d.records} records</div></div>
-<div class="d-flex justify-content-center mt-3">${donut(coverage / 100)}</div>
-${d.unprovenAnchors > 0 ? `<div class="status status-red mt-2">${d.unprovenAnchors} unproven</div>` : ''}
-</div></div></div>
-</div>
-<div class="row row-cards mt-3">
-${miniStat('Treasury', `${bal.toLocaleString()} sats`, `${f.funded ? 'funded' : 'unfunded'} · pay ${esc(d.payments)}`, ICONS.earn, NEKTAR_AMBER, '<div class="stream" data-ev="money"></div>')}
-${miniStat('Earned', `${earned.toLocaleString()} sats`, `${rrecs.length} receipts from verified answers`, ICONS.receipts, '#58a6ff')}
-${miniStat('For sale', `${cat.length} offers`, 'public shards listed by domain', ICONS.market, '#4cc26b')}
-${miniStat('Shards', `${d.shards}`, `memory held · prover: ${esc(d.prover)}`, ICONS.agent, '#b083f0')}
-</div>
-<div class="row row-cards mt-3">
-<div class="col-md-6" id="receipts"><div class="card">
-<div class="card-header"><h3 class="card-title">Receipts</h3><div class="card-actions text-secondary small">${rrecs.length} total</div></div>
-<div class="card-body">
-${receiptRows || '<div class="empty"><div class="empty-title">no receipts yet</div><div class="empty-subtitle text-secondary">every verified answer lands here with a checkable link</div></div>'}
-<div class="stream" data-ev="receipts"></div>
-</div></div></div>
-<div class="col-md-6" id="market"><div class="card">
-<div class="card-header"><h3 class="card-title">Market</h3><div class="card-actions text-secondary small">${cat.length} for sale</div></div>
-<div class="card-body">
-${marketRows || '<div class="empty"><div class="empty-title">nothing for sale yet</div><div class="empty-subtitle text-secondary">describeShard a public shard to list it</div></div>'}
-<div class="stream" data-ev="market"></div>
-</div></div></div>
-${automationCard}
-</div></div></div>
-<script>
-const copyLink = async (btn, u) => {
-  try { await navigator.clipboard.writeText(u) } catch {
-    const t = document.createElement('textarea'); t.value = u; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove()
-  }
-  const s = btn.textContent; btn.textContent = '\\u2713 copied'; setTimeout(() => { btn.textContent = s }, 1600)
-}
-const shareAgent = async (btn) => {
-  const u = ${JSON.stringify(cardUrl)}
-  if (navigator.share) { try { await navigator.share({ title: 'nektar agent — verifiable memory', url: u }); return } catch (e) { if (e && e.name === 'AbortError') return } }
-  copyLink(btn, u)
-}
-const decide = async (id, approve) => {
-  const tok = sessionStorage.getItem('nektar-operator-token') ?? prompt('operator token (NEKTAR_OPERATOR_TOKEN — not the agent bearer)')
-  if (!tok) return
-  sessionStorage.setItem('nektar-operator-token', tok)
-  const r = await fetch('/v1/automation/approvals/' + id, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: JSON.stringify({ approve }) })
-  if (!r.ok) alert((await r.json()).error ?? r.status)
-  reload()
-}
-const reload = async () => {
-  try {
-    const t = await (await fetch(location.pathname, { cache: 'no-store' })).text()
-    const m = t.match(/<div id="app"[^>]*>([\\s\\S]*)<\\/div>\\s*<script>/)
-    if (m) document.getElementById('app').innerHTML = m[1]
-  } catch {}
-}
-const PANEL = { remember: 'market', describeShard: 'market', groundedAnswer: 'receipts', commitReceipt: 'receipts', attestInference: 'receipts', recall: 'receipts', payInvoice: 'money', payQuote: 'money', sale: 'money', claim: 'money', fundingImport: 'money', importRecord: 'market', importShard: 'market' }
-const stamp = e => '<div><span class="t">' + new Date().toLocaleTimeString() + '</span> ' + e + '</div>'
-const es = new EventSource('/dashboard/events')
-es.onmessage = m => {
-  const name = m.data || 'change', panel = PANEL[name.split('#')[0]] ?? 'market'
-  const s = document.querySelector('.stream[data-ev="' + panel + '"]')
-  if (s) { s.insertAdjacentHTML('afterbegin', stamp(name)); while (s.children.length > 4) s.lastChild.remove() }
-  reload()
-}
-es.onerror = () => { document.getElementById('live').className = 'status status-red' }
-es.onopen = () => { document.getElementById('live').className = 'status status-green' }
-</script>
-</div></div></body></html>`
 }
 
 /** shields-style badge — the always-visible verification label */

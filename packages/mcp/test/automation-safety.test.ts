@@ -133,20 +133,32 @@ test('D6 crash between broadcast and journal write: resubmit replays identical b
     })
     const ctx = { operationId: 'op1', actionId: 'op1:escrow', policyHash: 'p', networkId: 'regtest' }
     await wallet.prepare(ctx, 'escrow', tx)
-    // crash AFTER broadcast, BEFORE setTxState — the row stays 'prepared'
+    // crash AFTER broadcast, BEFORE the durable journal write — the row
+    // stays 'prepared'. Driver mode journals through applyTxEvent (state +
+    // event row in one commit), legacy through setTxState — inject at both
+    // seams so the crash window holds under either NEKTAR_TX_FSM value
     const orig = store.setTxState.bind(store)
+    const origApply = store.applyTxEvent.bind(store)
     let crashed = false
-    store.setTxState = async (...args: Parameters<typeof orig>) => {
+    const crash = (): void => {
       if (!crashed) {
         crashed = true
         throw new Error('simulated crash after broadcast')
       }
+    }
+    store.setTxState = async (...args: Parameters<typeof orig>) => {
+      crash()
       return await orig(...args)
+    }
+    store.applyTxEvent = async (...args: Parameters<typeof origApply>) => {
+      crash()
+      return await origApply(...args)
     }
     await assert.rejects(wallet.submit(ctx.actionId), /simulated crash/)
     assert.equal(aired.length, 1, 'broadcast escaped')
     assert.equal((await store.walletTx({ actionId: ctx.actionId }))!.state, 'prepared', 'journal write never landed')
     store.setTxState = orig
+    store.applyTxEvent = origApply
     // resume: the resubmission is the same tx — the network sees one txid, so
     // no second payment can exist even though broadcast ran twice
     const out = await wallet.resubmitPending()

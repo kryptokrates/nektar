@@ -48,10 +48,12 @@ Both fixed; the WIF step deleted entirely via auto-key + wait-funding).
 | pack import          | ~1 min | none (seed domains) | —         | keep — done |
 | `recall` answers     | —      | one call            | —         | keep        |
 
-**Score:** ~8/10 — zero-config discovery + seed import landed; the
-remaining question is _what packs ship_ and whether a stranger's domain
-list matches. If the first answer is "we ship nothing yet", the whole
-journey fails at the value moment regardless of speed.
+**Score:** ~8/10 for the operator path — but the front-door image
+(`docker run -e NEKTAR_NETWORK=testnet`, the README's first command)
+boots **empty**: `NEKTAR_SEED_DOMAINS` defaults unset, the seed pass
+never runs, first `recall` returns nothing. The value moment fails on
+the highest-traffic path — MOVE: ship a curated default (or a baked
+welcome pack) so the zero-config instance starts non-empty.
 
 ## J3 · External AI client → first tool call
 
@@ -99,12 +101,13 @@ named and bounded.
 error → legible cause in logs, instantly. **Artifact:** log surface +
 `doctor` + phase tagging.
 
-| Failure                | Before                            | Now                                      |
-| ---------------------- | --------------------------------- | ---------------------------------------- |
-| wedged upkeep          | silent `pumping` forever          | `upkeep(finger) exceeded …`              |
-| dead host stalls sends | serial pump wedged                | bounded delivery, transport-class retry  |
-| poisoned journal       | retries forever, 80 poisoned rows | dead-ancestry eviction + `beefGaps` skip |
-| suite quiet = wedge?   | indistinguishable                 | `[suite quiet <n>s] last: <line>`        |
+| Failure                | Before                            | Now                                                              |
+| ---------------------- | --------------------------------- | ---------------------------------------------------------------- |
+| wedged upkeep          | silent `pumping` forever          | `upkeep(finger) exceeded …`                                      |
+| dead host stalls sends | serial pump wedged                | bounded delivery, transport-class retry                          |
+| poisoned journal       | retries forever, 80 poisoned rows | dead-ancestry eviction + `beefGaps` skip                         |
+| suite quiet = wedge?   | indistinguishable                 | `[suite quiet <n>s] last: <line>`                                |
+| db dies, hosts loop    | `ENOTFOUND db` ×2,400 restarts    | `restart: unless-stopped` on `db` (was the only service without) |
 
 **Score:** ~8/10 (was ~7 — `doctor` now returns `hints[]`: each
 degraded check names its unblock command — unsealed → set

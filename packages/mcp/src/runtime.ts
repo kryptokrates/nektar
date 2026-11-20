@@ -24,7 +24,6 @@ import {
   type TxStatusEvent
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
-import { watcherObservation } from './txops.js'
 import { nektarEnv, nektarEnvNum } from '@nektar/core'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'

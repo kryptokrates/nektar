@@ -24,7 +24,8 @@ export interface CustodyOpsDeps {
           t: { txid: string; rawHex: string; parents: Record<string, string>; feeSats: number; outs: { txid: string; vout: number; satoshis: number }[] },
           actionId: string,
           operationId: string,
-          kind: string
+          kind: string,
+          state?: import('@nektar/automation').TxState
         ) => Promise<unknown>
         setTxState: (actionId: string, state: import('@nektar/automation').TxState, observation?: unknown, attempt?: boolean) => Promise<void>
       }

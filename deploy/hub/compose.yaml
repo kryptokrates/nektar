@@ -58,6 +58,9 @@ services:
         condition: service_started
   db:
     image: ghcr.io/kryptokrates/nektar-hub-db:${NEKTAR_IMAGE_TAG:-latest}
+    # every dependent has restart: unless-stopped — the db needs it too or a
+    # daemon restart leaves it dead while hosts crash-loop on ENOTFOUND db
+    restart: unless-stopped
     environment:
       MYSQL_DATABASE: overlay
       MYSQL_USER: overlay

@@ -184,6 +184,11 @@ or convention is an **unenforced guard** — that's the finding (S2-adjacent).
 - **Nektar**: subsidy collapse made funding-by-mining silently hopeless;
   `rpc_max_clients` was an unexamined default. Every duration constant on a
   money path: chosen, or inherited?
+- **Boundary**: F9 owns the economics-of-aging question only. Wait-
+  machinery internals — abandon-leaves-resource-held, cadence jitter,
+  deadline budgets, armed-vs-scanned deadlines, wait-class census
+  coverage, runtime wake measurement — live in `event-arch`'s `ev/*`
+  rules; flag here, route the finding there.
 
 ### F10. Idempotency & replay
 

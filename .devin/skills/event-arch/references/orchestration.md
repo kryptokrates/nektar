@@ -37,7 +37,10 @@ coverage claim.
 **Stage 2 — question families.** One auditor per family, each taking the
 full inventory plus source access:
 
-- `ev` — event-loop questions 1–10 from SKILL.md. Always runs.
+- `ev` — event-loop questions 1–10 plus the wait-hygiene rules
+  (`abandon-holds-resource`, `unmeasured-wake`, `phase-aligned-cadence`,
+  `stacked-deadline`, `unarmed-deadline`, `wait-class-blind`) and the
+  second-question lenses from SKILL.md. Always runs.
 - `fab` — fabric questions 11–20. Runs when the scope touches
   bstack/transport/delivery (lanes, finger, tree, journal, market-wire,
   watch-shim, host fanout, artifact publish/fetch).
@@ -86,7 +89,9 @@ Inventory agent — exactly one JSON object:
       "waits_on": "what event/state",
       "wakes_it": "producer signal | bounded poll | nothing",
       "proves_it": "verified read/proof | trusted hint | nothing",
-      "bounds_it": "ceiling value | unbounded"
+      "bounds_it": "ceiling value | unbounded | fires-and-abandons",
+      "holds_what": "mutex/queue/connection/lease held while waiting | nothing",
+      "measured_by": "runtime wake-source accounting | static registry only | nothing"
     }
   ],
   "uncovered_files": ["paths suspected but not confirmed event code"]
@@ -124,9 +129,10 @@ them and returns `stands`/`rejected` with evidence:
 1. Every BLOCKER (`ev/unverified-status` on money paths, custody-host
    claims).
 2. Every absence claim — "the producer does not signal on path X",
-   "no cursor resume exists", "no proof object is carried". Absence is
-   cheap to assert and expensive to be sure of; the verifier greps for
-   the mechanism before the finding stands.
+   "no cursor resume exists", "no proof object is carried", "no jitter
+   anywhere", "nothing holds a resource across this bound", "no runtime
+   wake accounting". Absence is cheap to assert and expensive to be sure
+   of; the verifier greps for the mechanism before the finding stands.
 
 Auditors never verify their own findings. Rejected candidates are
 dropped; the parent reports the count.

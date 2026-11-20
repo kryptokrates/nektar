@@ -5,6 +5,10 @@ description: >
   architecture — wait sites, subscriptions, outbox/inbox flows, watch/wake
   machinery, broadcaster status handling, overlay/topic wiring, lanes/
   transport/counterparty delivery, finger records, bstack plane code.
+  Also the wait-site hygiene audit: bounded-but-still-held resources,
+  wedged mutexes behind abandoned promises, unjittered cadences, stacked
+  deadlines, unarmed deadlines, unmeasured wake paths — "why is this
+  slow/wedged/starved" questions route here too.
   Suggests ranked fixes toward: as-realtime-as-possible (events drive,
   polls are ceilings), maximum interoperability + seamlessness (standard
   envelopes, content-addressed artifacts, conformance), no
@@ -40,6 +44,40 @@ architecture, per the BSV stack model:
   on-chain carries the commitment (`hash + url + expiry`), never the
   payload. Anyone holding `{endpoint, bucket, digest}` self-verifies.
 
+## The wait lifecycle — the audit's organizing model
+
+Every wait is a six-step lifecycle, not a front-half question. The four
+classification fields (waits-on / wakes-it / proves-it / bounds-it) cover
+steps 1–3; the failure modes that survive a clean-looking audit live in
+steps 4–6. Audit the whole arc:
+
+1. **arm** — when interest begins: is the deadline derived at commit
+   (`stamp + bound` stored, `dueAt`-style) or scanned later? Is the
+   cadence jittered, or do N restarted processes fire on the same tick?
+2. **wait** — what resource is held while waiting? (mutex link, queue
+   slot, connection, lease — the thing an orphan will still pin.)
+3. **fire** — what resolves it (signal / poll / ceiling)? If bounds
+   nest, do inner awaits share one operation deadline or each take a
+   fresh budget?
+4. **abandon** — the bound fires first: what does the still-running
+   promise still hold? `Promise.race` resolves the _waiter_; it never
+   cancels the work — whatever it held, it still holds.
+5. **detect** — who notices a wedge/orphan? A mutex poisoned by an
+   abandoned promise starves every later acquirer _silently_ — a log
+   line or acquire-bound is the difference between a wedge and an alert.
+6. **measure** — what records which source fired? A dead push path
+   degrades to ceiling speed — correct and invisible. "Events drive,
+   polls are ceilings" is an assertion until runtime can report it.
+
+The failure taxonomy this catches: the `bound()` in `runtime.ts` that
+abandons `engine.tick()` while the hung leg still owns `this.chain`
+(every later `run()` starves — abandon+detect), a wake registry that is
+a static contract with no runtime accounting (measure), fixed retry
+cadences with no jitter (arm), nested fresh bounds that sum instead of
+sharing a budget (fire), a computable stuck deadline scanned per pass
+(arm), and a coverage test that greps `setInterval` while `setTimeout`/
+`Promise.race` sites land unmapped (the census is blind to a wait class).
+
 ## Operating modes
 
 Audit runs **inline** by default — one pass over the scope's event
@@ -48,7 +86,9 @@ explicit full audits per
 [references/orchestration.md](references/orchestration.md): inventory
 agents enumerate the surface per slice, one auditor per question family
 (`ev`/`fab`/`spv`) walks the merged inventory, and fresh verifiers
-challenge every BLOCKER and every absence claim. Design mode never
+challenge every BLOCKER and every absence claim — including the
+lifecycle absence claims ("nothing holds a resource across this bound",
+"no jitter anywhere", "no runtime wake accounting"). Design mode never
 delegates — it is pre-writing reflection, not a review.
 
 ## Audit mode — process
@@ -72,7 +112,15 @@ touches. For each, classify:
 - **What proves it?** (verified read/proof vs. trusted hint — statuses
   from hosts/broadcasters are hints until `observe`-verified)
 - **What bounds it?** (ceiling is fine — ceiling AS the mechanism is
-  `ev/timeout-as-mechanism`)
+  `ev/timeout-as-mechanism`. On bound-fire: _cancels_, _abandons_, or
+  _just resolves_? `Promise.race` resolves the waiter — the work keeps
+  running and keeps its holds)
+- **What does it hold while waiting?** (mutex link, queue slot,
+  connection, lease — the resource an abandoned promise still pins. A
+  promise-chain `this.chain = p.then(fn)` is the serializing shape)
+- **What measures it?** (runtime accounting of which source fired — a
+  wake tag, a counter, nothing? A static registry is the contract; the
+  measure is the truth)
 
 ### 3. Walk the principle tables
 
@@ -108,6 +156,72 @@ For each wait/subscription/delivery — the event-loop questions:
    `ev/no-dedup`
 10. Is there a second scheduling substrate next to an existing one? →
     `ev/scheduler-sprawl`
+
+… and the wait-hygiene questions (the lifecycle's back half — the
+failures that survive a front-half-clean audit):
+
+- A bound fires — does the abandoned promise still hold a serialized
+  resource (mutex chain, queue slot, lease, connection) with nothing
+  detecting the orphan? → `ev/abandon-holds-resource` (**HIGH** when the
+  resource serializes work — `this.chain = p.then(fn)` in `base.ts` is
+  the live exemplar: a hung `engine.tick()` inside `bound()` starves
+  every later `run()` silently)
+- Do push paths exist but nothing records at runtime which source drove
+  work — a dead push degrades to ceiling speed invisibly? →
+  `ev/unmeasured-wake`
+- Is a retry/interval cadence a fixed literal with no jitter — N
+  processes restarted together fire on the same ticks? →
+  `ev/phase-aligned-cadence` (`watches.ts` `* (0.5 + Math.random())` is
+  the in-repo jitter precedent — today the only one)
+- Do nested bounds each take a fresh budget instead of sharing one
+  operation deadline — a leg can burn N× its intended cost? →
+  `ev/stacked-deadline`
+- Is a deadline derivable at commit (`stamp + bound` stored) scanned
+  per-pass instead of armed as a scheduled wake (`dueAt`/`dueAtArmed`
+  seam)? → `ev/unarmed-deadline` (latency finding, not correctness)
+- Does a coverage gate/registry enumerate only one wait primitive
+  (`setInterval`) while `setTimeout`/`Promise.race`/
+  `AbortSignal.timeout`/`sleep` sites exist unmapped? →
+  `ev/wait-class-blind`
+
+### The second question — the root-cause discipline
+
+After the surface classification, walk six follow-up lenses — this is
+what turns "is it bounded?" into "what is it really?":
+
+1. **Follow the resource** — the bound fires → what's still held?
+   Trace the abandoned promise's holds, not the waiter's resolution.
+2. **Follow the measurement** — the contract exists → how does runtime
+   prove it fired? A registry nobody reads at runtime is decoration.
+3. **Follow the deadline** — computable at commit → why is it scanned?
+   And nested bounds: one budget shared inward, or summed?
+4. **Follow the cadence** — a fixed interval → do N restarts fire it on
+   the same tick? (thundering herd: jitter is the fix, not a longer
+   interval)
+5. **Follow the registry** — a coverage gate → what wait class can't it
+   see? Enumerate every primitive: `setInterval`, `setTimeout`,
+   `Promise.race`, `AbortSignal.timeout`, `sleep`, deferred `dueAt`s.
+6. **Follow the silence** — the ceiling fires → who hears it? A silent
+   ceiling-hit is a degraded push path nobody sees.
+
+### Detection recipes
+
+- `Promise.race` / `setTimeout` bound / `AbortSignal.timeout` /
+  `sleep(` → for each site, trace what the abandoned arm still holds
+  (mutex links, leases, queue slots); a `.then` chain assigned back
+  (`this.chain = p.catch(...)`) is the serializing shape — check for an
+  acquire-bound or a held-too-long detector
+- retry/backoff literals (`* 2`, `\d+_000` near `next_at`/`backoff`/
+  `interval`) with no `Math.random` nearby → `ev/phase-aligned-cadence`
+- `now() - <stamp> > <bound>` inside a scan/advance loop →
+  `ev/unarmed-deadline` candidate — could the bound have been armed at
+  the write that set `stamp`?
+- a `bound(`/`deliverBounded`/timeout wrapper whose inner work itself
+  calls a fresh bound → `ev/stacked-deadline` — budgets sum; pass one
+  deadline in
+- coverage tests/registries that enumerate `setInterval` only →
+  `ev/wait-class-blind` — extend the primitive list or the gap is
+  declared
 
 … and the fabric questions (delivery/transport scope):
 
@@ -187,6 +301,11 @@ repair paths>
 - Wake coverage: N/M waits have a producer signal on all paths
 - Trust discipline: hints vs verified reads (any hint driving money?)
 - Fallbacks: every push path degrade to bounded poll? every poll bounded?
+- Wait hygiene: every bound names what it abandons + who detects the
+  orphan? every cadence jittered? nested bounds share one budget?
+  deadlines armed at commit or declared-as-scanned? every wait primitive
+  (`setInterval`/`setTimeout`/`Promise.race`/`AbortSignal`/`sleep`) inside
+  the census? does runtime record which source fired each pass?
 - Fabric (if in scope): every stream numbered/cursored? every gap
   repairable by name? subscriptions derived from live interest?
 - SPV (if in scope): every 'mined' claim path-anchored to OUR headers?
@@ -229,6 +348,20 @@ Before writing a wait/subscription/delivery:
 12. Name the EVIDENCE SHAPE — what the counterparty is handed:
     AtomicBEEF > BEEF > EF > raw+lookup > txid-alone. Every rung down
     moves work from sender-held proofs to receiver network queries.
+13. Name the ABANDONMENT — when the bound fires before the work settles,
+    what does the orphan still hold (mutex, lease, connection) and who
+    detects it? A race-swallowed promise that pins a serialized resource
+    is a silent wedge — bound the acquire, or detect the held-too-long.
+14. Name the BUDGET — one deadline per operation, passed inward. Nested
+    bounds that each take a fresh budget sum; a `deliver` containing
+    submit+lookup+fetch burns 3× what you wrote.
+15. Name the JITTER — a fixed retry cadence is a phase-aligned stampede
+    the day N processes restart together. `* (0.5 + Math.random())`
+    (watches.ts) is the in-repo shape.
+16. Name the WITNESS — what records at runtime which source fired the
+    wake? The registry is the contract; the counter is the truth. A push
+    path that dies degrades to ceiling speed — correct, and invisible
+    without the witness.
 
 ## nektar-specific calibration
 

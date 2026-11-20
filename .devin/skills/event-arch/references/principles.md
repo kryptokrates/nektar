@@ -141,6 +141,43 @@ Demands:
   a ceiling because "events cover it" re-introduces the hang the
   ceiling existed to kill.
 
+## P8 — The bound resolves the wait, not the work
+
+Standard distributed-systems hygiene (DDIA ch. 8's timeouts, SRE
+overload practice) applied to the event layer, and grounded in a live
+incident the repo already documents: `runtime.ts`'s `bound()` carries
+the comment _"a phase that never settles parks EVERY later pass behind
+`running` — bound each leg so the worst case is a logged timeout, not a
+silent wedge (observed live: an unbounded leg froze the whole suite)".
+The bound fixed the wait; the lifecycle questions below are what the fix
+couldn't reach.
+
+Demands:
+
+- A timeout that resolves a `Promise.race` but leaves the work holding a
+  mutex/lease **converts a hang into a silent starvation** — the worse
+  failure, because nothing looks broken. Every bound answers: what does
+  the abandoned arm still hold, and who detects it? (`ev/abandon-holds-resource`;
+  a promise-chain `this.chain = p.then(fn)` poisons every later acquirer
+  while the pass loop looks healthy.)
+- Cadences need **jitter** — a fixed retry interval is a phase-aligned
+  stampede when N processes restart together (`ev/phase-aligned-cadence`;
+  `watches.ts`'s `* (0.5 + Math.random())` is the shape).
+- Deadlines need **one budget per operation**, propagated inward — nested
+  fresh bounds sum (`ev/stacked-deadline`; a `deliver` containing
+  submit+lookup+fetch burns 3× its written bound).
+- A deadline derivable at commit gets **armed, not scanned** — `stamp +
+bound` stored and scheduled (the `dueAt`/`dueAtArmed` seam), not
+  `now() - stamp > bound` re-evaluated per pass (`ev/unarmed-deadline`).
+- Every wait **primitive** is inside the census — a coverage gate that
+  enumerates `setInterval` but not `setTimeout`/`Promise.race`/
+  `AbortSignal.timeout`/`sleep` has declared a blind spot
+  (`ev/wait-class-blind`).
+- The event plane must be **measurable**: "events drive, polls are
+  ceilings" is an assertion until runtime reports which source fired
+  each pass — a dead push path degrading to ceiling speed is correct and
+  invisible without the witness (`ev/unmeasured-wake`).
+
 ## Posture source — Wright's essays (singulargrit.substack.com)
 
 Craig's Substack is paywalled essays — legal/economic/institutional

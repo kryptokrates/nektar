@@ -10,6 +10,7 @@ import {
   DEFAULT_SCORE_WEIGHTS,
   Dispatcher,
   NONTERMINAL,
+  opWantId,
   wireTx,
   wireDeal,
   wireDealfan,
@@ -166,9 +167,9 @@ export const wireEngine = (ex: Dispatcher, engine: MarketEngine, store: Automati
   })
   wireDealfan(ex, {
     pendingInbox: () => engine.pendingInbox(),
-    liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => o.operationId),
+    liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) })),
     reconcileOps: async () =>
-      (await store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: Date.now() })).map((o) => o.operationId),
+      (await store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: Date.now() })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) })),
     resubmitPending: () => engine.resubmitTick(),
     ceilingMs: () => 0,
     log

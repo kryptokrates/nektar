@@ -265,7 +265,7 @@ test(
     })
     const items: DealEvent[] = [{ source: 'lane', messageId: 'fm1', kind: 'want', payload: { wantId: 'w-fan' } }]
     const dealfanDef = await dealfanService(
-      { pendingInbox: async () => items, liveOps: async () => [operation.operationId], reconcileOps: async () => [], ceilingMs: () => 60_000, log: () => {} },
+      { pendingInbox: async () => items, liveOps: async () => [{ operationId: operation.operationId }], reconcileOps: async () => [], ceilingMs: () => 60_000, log: () => {} },
       dealDef
     )
     const endpoint = await openEndpoint([dealDef, dealfanDef], {
@@ -341,8 +341,8 @@ test(
     const dealfanDef = await dealfanService(
       {
         pendingInbox: async () => (fanned.push('inbox'), [] as DealEvent[]),
-        liveOps: async () => (fanned.push('ops'), [] as string[]),
-        reconcileOps: async () => (fanned.push('reconcile'), [] as string[]),
+        liveOps: async () => (fanned.push('ops'), []),
+        reconcileOps: async () => (fanned.push('reconcile'), []),
         ceilingMs: () => 60_000,
         log: () => {}
       },

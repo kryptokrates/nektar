@@ -8,6 +8,7 @@ import type { MarketDeps } from '../src/market/types.js'
 import { NONTERMINAL } from '../src/market/types.js'
 import { setExecutor, EXEC_SVC } from '../src/rt/exec.js'
 import { Dispatcher, wireDealfan, wireDeal } from './rig.js'
+import { opWantId } from '../src/rt/services.js'
 import type { AutomationPolicy } from '../src/policy.js'
 import { DEFAULT_SCORE_WEIGHTS } from '../src/scoring.js'
 
@@ -81,7 +82,7 @@ test('tick under an executor fans advance out per op key — the leg leaves the 
     // the tick routes through dealfan — the fan-out lands on deal keys
     wireDealfan(ex, {
       pendingInbox: () => store.pendingInbox(),
-      liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => o.operationId),
+      liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) })),
       reconcileOps: async () => [],
       ceilingMs: () => 60_000,
       log: () => {}

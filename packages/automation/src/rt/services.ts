@@ -177,11 +177,13 @@ export interface DealDeps {
 /** advance and due run the same leg — the op's advance() re-evaluates its
  *  own dueAt/dueHeight conditions. The two handler names exist so the
  *  journal/UI shows whether the wake was a tick fan-out or a deadline
- *  arm firing. */
+ *  arm firing. The send's key is the want correlation id (a lock token);
+ *  the operationId rides in the arg — ctx.key stays the fallback for
+ *  sends armed before the arg existed. */
 export const dealAdvanceBody =
   (deps: DealDeps) =>
-  async (_: unknown, operationId: string): Promise<{ ran: boolean }> => {
-    return { ran: await deps.advanceOp(operationId) }
+  async (arg: { op?: string } | undefined, key = ''): Promise<{ ran: boolean }> => {
+    return { ran: await deps.advanceOp(arg?.op ?? key) }
   }
 
 export const dealObject = async (deps: DealDeps) => {
@@ -190,10 +192,10 @@ export const dealObject = async (deps: DealDeps) => {
   return restate.object({
     name: EXEC_SVC.deal,
     handlers: {
-      advance: async (ctx: restate.ObjectContext) => await ctx.run('advance', () => leg({}, ctx.key)),
-      due: async (ctx: restate.ObjectContext) => await ctx.run('advance', () => leg({}, ctx.key)),
+      advance: async (ctx: restate.ObjectContext, arg?: { op?: string }) => await ctx.run('advance', () => leg(arg, ctx.key)),
+      due: async (ctx: restate.ObjectContext, arg?: { op?: string }) => await ctx.run('advance', () => leg(arg, ctx.key)),
       event: async (ctx: restate.ObjectContext, item: DealEvent) => await ctx.run('event', () => deps.inboxEvent(item)),
-      reconcile: async (ctx: restate.ObjectContext) => await ctx.run('reconcile', () => deps.reconcileOp(ctx.key))
+      reconcile: async (ctx: restate.ObjectContext, arg?: { op?: string }) => await ctx.run('reconcile', () => deps.reconcileOp(arg?.op ?? ctx.key))
     }
   })
 }
@@ -379,12 +381,20 @@ export const sweepService = async (deps: SweepDeps, txDef: unknown) => {
 // row is re-scanned), and the sends go through ctx.objectSendClient so the
 // journal dedupes them.
 
+/** one live op's fan-out id: operationId addresses the leg, wantId is the
+ *  deal-object key — events and advances on the same want MUST share it,
+ *  distinct keys run concurrently and the op's revision CAS loses writes */
+export interface DealOpRef {
+  operationId: string
+  wantId?: string
+}
+
 export interface DealfanDeps {
   pendingInbox: () => Promise<DealEvent[]>
-  /** NONTERMINAL operation ids */
-  liveOps: () => Promise<string[]>
-  /** funding_failed/refunded op ids past their reconcile cooldown */
-  reconcileOps: () => Promise<string[]>
+  /** NONTERMINAL operations with their want correlation id */
+  liveOps: () => Promise<DealOpRef[]>
+  /** funding_failed/refunded ops past their reconcile cooldown */
+  reconcileOps: () => Promise<DealOpRef[]>
   /** the resubmit cadence leg — a throttled custody.resubmitPending send;
    *  the deals floor used to carry this inside engine.tick() */
   resubmitPending?: () => Promise<void>
@@ -412,15 +422,26 @@ export const dealEventKey = (i: DealEvent): string => {
   return `ev:${p?.msg?.wantId ?? p?.wantId ?? p?.offer?.wantId ?? p?.want?.wantId ?? p?.offer?.offerId ?? p?.offerId ?? i.messageId}`
 }
 
+/** the op's deal-object key — the want correlation id when the op carries
+ *  one (buyer purchase, seller sale), else its own operationId. Every
+ *  deal.* send for the op MUST use this so events/advances/reconciles
+ *  serialize on one object key instead of racing the op's revision CAS. */
+export const dealOpKey = (o: DealOpRef): string => `ev:${o.wantId ?? `op:${o.operationId}`}`
+
+/** wantId out of an op row — `data.want` is the SignedWant on both buyer
+ *  and seller ops; non-market ops have none */
+export const opWantId = (o: { data: Record<string, unknown> }): string | undefined =>
+  (o.data.want as { want?: { wantId?: string } } | undefined)?.want?.wantId
+
 export const dealfanTickBody =
   (deps: DealfanDeps) =>
   async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
     const inbox = await run('inbox', () => deps.pendingInbox())
     for (const i of inbox) await send({ service: EXEC_SVC.deal, handler: 'event', key: dealEventKey(i) }, i)
     const ops = await run('ops', () => deps.liveOps())
-    for (const id of ops) await send({ service: EXEC_SVC.deal, handler: 'advance', key: id }, {})
+    for (const o of ops) await send({ service: EXEC_SVC.deal, handler: 'advance', key: dealOpKey(o) }, { op: o.operationId })
     const rec = await run('reconcile', () => deps.reconcileOps())
-    for (const id of rec) await send({ service: EXEC_SVC.deal, handler: 'reconcile', key: id }, {})
+    for (const o of rec) await send({ service: EXEC_SVC.deal, handler: 'reconcile', key: dealOpKey(o) }, { op: o.operationId })
     if (deps.resubmitPending !== undefined) await run('resubmit', () => deps.resubmitPending!())
     // the floor: every tick self-arms the next at the adaptive ceiling —
     // durable delayed send under restate, executor timer under local.

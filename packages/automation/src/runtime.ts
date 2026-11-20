@@ -33,6 +33,8 @@ import {
   wakeService,
   cronObject,
   notifyObject,
+  dealOpKey,
+  opWantId,
   type WakeLegs
 } from './rt/services.js'
 import type { Rt, LaneInfra, AutomationConfig } from './rtctx.js'
@@ -545,11 +547,11 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   const walletCoord = engine.walletCoordinator
   const dealfanDeps = {
     pendingInbox: () => engine.pendingInbox(),
-    liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => o.operationId),
+    liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) })),
     reconcileOps: async () => {
       const now = Date.now()
       const rows = await store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: now })
-      return rows.map((o) => o.operationId)
+      return rows.map((o) => ({ operationId: o.operationId, wantId: opWantId(o) }))
     },
     // the resubmit cadence leg — 'prepared'/'submission_unknown' rows are
     // signed intents; the floor re-airs them on the engine's jittered cadence
@@ -764,9 +766,16 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   store.dueAtArmed = (operationId, at) => {
     rt.countWake('dueAt')
     if (rt.stopped) return
-    void exec
-      .send({ service: EXEC_SVC.deal, handler: 'due', key: operationId }, {}, { delayMs: Math.max(0, at - Date.now()) })
-      .catch((e) => log(`automation: deal due send ${operationId}: ${(e as Error).message}`))
+    void (async () => {
+      // key by the want correlation id — the arm lands on the same deal
+      // object as the want's events/advances, serializing with them
+      const op = await store.operation(operationId)
+      await exec.send(
+        { service: EXEC_SVC.deal, handler: 'due', key: dealOpKey({ operationId, wantId: op ? opWantId(op) : undefined }) },
+        { op: operationId },
+        { delayMs: Math.max(0, at - Date.now()) }
+      )
+    })().catch((e) => log(`automation: deal due send ${operationId}: ${(e as Error).message}`))
   }
   /** one full pass: deals, then upkeep — what tests and push events drive */
   const cycle = async (): Promise<void> => {

@@ -81,8 +81,8 @@ test('dealfan.tick: inbox → ev:<wantId>, ops → advance keys, reconcile rows 
     ]
     wireDealfan(ex, {
       pendingInbox: async () => items,
-      liveOps: async () => ['op:a', 'op:b'],
-      reconcileOps: async () => ['op:r'],
+      liveOps: async () => [{ operationId: 'op:a' }, { operationId: 'op:b' }],
+      reconcileOps: async () => [{ operationId: 'op:r' }],
       ceilingMs: () => 60_000,
       log: () => {}
     })

@@ -12,7 +12,7 @@
 // so fan-out asserts are deterministic.
 import { detached } from '@nektar/core'
 import type { Executor, InvokeTarget, SendOpts, RtSend } from './exec.js'
-import { EXEC_SVC } from './exec.js'
+import { EXEC_SVC, CUSTODY_KEY, inRtScope } from './exec.js'
 import {
   txObserveBody,
   txExpireBody,
@@ -29,6 +29,7 @@ import {
   wakeHeightBody,
   wakeReorgBody,
   TRANSPORT_DRAIN_KEY,
+  opWantId,
   type RtDeps,
   type SweepDeps,
   type DealDeps,
@@ -172,9 +173,12 @@ export const wireTx = (ex: LocalDispatch, deps: RtDeps): void => {
   const observe = txObserveBody(deps)
   const expire = txExpireBody(deps)
   const resubmit = txResubmitBody(deps)
-  ex.register(EXEC_SVC.tx, 'observe', (arg, key) => observe(arg as TxObserve, key ?? ''))
-  ex.register(EXEC_SVC.tx, 'expire', (arg, key) => expire(arg, key ?? ''))
-  ex.register(EXEC_SVC.tx, 'resubmit', (arg, key) => resubmit(arg, key ?? ''))
+  // inRtScope mirrors the VO handlers: same-key emits inside the handler
+  // must go direct — routing them back through exec.call would wait on
+  // this very invocation (the exclusive-key self-deadlock)
+  ex.register(EXEC_SVC.tx, 'observe', (arg, key) => inRtScope({ txKey: key ?? '' }, () => observe(arg as TxObserve, key ?? '')))
+  ex.register(EXEC_SVC.tx, 'expire', (arg, key) => inRtScope({ txKey: key ?? '' }, () => expire(arg, key ?? '')))
+  ex.register(EXEC_SVC.tx, 'resubmit', (arg, key) => inRtScope({ txKey: key ?? '' }, () => resubmit(arg, key ?? '')))
 }
 
 export const wireSweep = (ex: LocalDispatch, deps: SweepDeps): void => {
@@ -186,10 +190,10 @@ export const wireSweep = (ex: LocalDispatch, deps: SweepDeps): void => {
 
 export const wireDeal = (ex: LocalDispatch, deps: DealDeps): void => {
   const leg = dealAdvanceBody(deps)
-  ex.register(EXEC_SVC.deal, 'advance', (arg, key) => leg(arg, key ?? ''))
-  ex.register(EXEC_SVC.deal, 'due', (arg, key) => leg(arg, key ?? ''))
+  ex.register(EXEC_SVC.deal, 'advance', (arg, key) => leg(arg as { op?: string } | undefined, key ?? ''))
+  ex.register(EXEC_SVC.deal, 'due', (arg, key) => leg(arg as { op?: string } | undefined, key ?? ''))
   ex.register(EXEC_SVC.deal, 'event', (arg) => deps.inboxEvent(arg as DealEvent))
-  ex.register(EXEC_SVC.deal, 'reconcile', (arg, key) => deps.reconcileOp(key ?? ''))
+  ex.register(EXEC_SVC.deal, 'reconcile', (arg, key) => deps.reconcileOp((arg as { op?: string } | undefined)?.op ?? key ?? ''))
 }
 
 export const wireDealfan = (ex: LocalDispatch, deps: DealfanDeps): void => {
@@ -198,12 +202,16 @@ export const wireDealfan = (ex: LocalDispatch, deps: DealfanDeps): void => {
 }
 
 export const wireCustody = (ex: LocalDispatch, deps: CustodyDeps): void => {
-  ex.register(EXEC_SVC.custody, 'submit', (arg) => deps.wallet.submit((arg as CustodyLeg).actionId))
+  // same scope the VO sets: custodyKey makes nested custodySubmit legs go
+  // direct inside the handler; the forwarded txScope re-establishes the
+  // caller's held tx key so its emits skip the locked object
+  const scope = <T>(txScope: string | undefined, fn: () => Promise<T>): Promise<T> => inRtScope({ custodyKey: CUSTODY_KEY, txKey: txScope }, fn)
+  ex.register(EXEC_SVC.custody, 'submit', (arg) => scope((arg as CustodyLeg).txScope, () => deps.wallet.submit((arg as CustodyLeg).actionId)))
   ex.register(EXEC_SVC.custody, 'markRejected', (arg) => {
     const a = arg as CustodyLeg & { observation: unknown }
-    return deps.wallet.markRejectedById(a.actionId, a.observation)
+    return scope(a.txScope, () => deps.wallet.markRejectedById(a.actionId, a.observation))
   })
-  ex.register(EXEC_SVC.custody, 'resubmitPending', () => deps.wallet.resubmitPending())
+  ex.register(EXEC_SVC.custody, 'resubmitPending', (arg) => scope((arg as CustodyLeg | undefined)?.txScope, () => deps.wallet.resubmitPending()))
 }
 
 export const wireTransport = (ex: LocalDispatch, deps: TransportDeps): void => {
@@ -297,10 +305,10 @@ interface EngineSurface {
 
 export const wireEngine = (ex: LocalDispatch, engine: EngineSurface, d: WireEngineDeps): void => {
   const log = d.log ?? (() => {})
-  const liveOps = async () => (await d.store.operations({ states: NONTERMINAL })).map((o) => o.operationId)
+  const liveOps = async () => (await d.store.operations({ states: NONTERMINAL })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) }))
   const reconcileOps = async () => {
     const now = Date.now()
-    return (await d.store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: now })).map((o) => o.operationId)
+    return (await d.store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: now })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) }))
   }
   wireRuntime(ex, {
     tx: { store: d.store, fx: d.fx ?? {}, log, submit: d.submit ?? ((actionId) => engine.submitTx(actionId)) },

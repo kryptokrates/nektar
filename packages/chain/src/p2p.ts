@@ -11,6 +11,7 @@
 import { createConnection, type Socket } from 'node:net'
 import { EventEmitter } from 'node:events'
 import { Hash, Transaction } from '@bsv/sdk'
+import { spread } from '@nektar/core'
 
 interface P2PEvents {
   txid: (txid: string) => void // every announced txid (cheap)
@@ -175,7 +176,8 @@ export class P2PListener extends EventEmitter {
     sock.on('timeout', () => sock.destroy())
     sock.on('close', () => {
       this.emit('peer', `${host}:${port}`, false)
-      if (!this.closed) setTimeout(() => this.connect(), 5_000)
+      // spread() — a dropped peer set reconnects desynchronized, not on one tick
+      if (!this.closed) setTimeout(() => this.connect(), spread(5_000))
     })
     sock.on('error', (e) => this.emit('error', e))
     const onHandshake = () => {

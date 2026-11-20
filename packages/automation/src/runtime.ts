@@ -453,16 +453,22 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // phase timing: a pass that outruns the want collect window is a
             // silent deal killer — name the segment that ate it
             const t0 = Date.now()
-            await bound('poll', () => rt.poll())
+            // one operation budget: the three legs share passBound — a hung
+            // poll abandoning at its leg bound leaves the pass's remainder,
+            // not a fresh legMs for the next leg to burn (nested fresh
+            // bounds would let one pass eat 3x the budget)
+            const passUntil = t0 + WAITS.passBound.ms
+            const legMs = (): number => Math.max(1, Math.min(WAITS.dealsBound.ms, passUntil - Date.now()))
+            await bound('poll', () => rt.poll(), legMs())
             const t1 = Date.now()
-            await bound('tick', () => engine.tick())
+            await bound('tick', () => engine.tick(), legMs())
             const t2 = Date.now()
             // the ledger sweep rides the deals pass — serialized behind the
             // same busy flag, throttled to a chain-read cadence rather than
             // the deal loop's hot tick
             if (t2 - lastLedgerSweep > WAITS.ledgerSweep.ms) {
               lastLedgerSweep = t2
-              await bound('wtx', () => ledgerWatcher.tick())
+              await bound('wtx', () => ledgerWatcher.tick(), legMs())
             }
             rt.pushAcks()
             const t3 = Date.now()

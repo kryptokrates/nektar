@@ -14,19 +14,27 @@ test('deadline: settled work returns its value', async () => {
 })
 
 test('deadline: real work errors propagate, not eaten by the outcome type', async () => {
-  await assert.rejects(deadline(async () => { throw new Error('boom') }, 100), /boom/)
+  await assert.rejects(
+    deadline(async () => {
+      throw new Error('boom')
+    }, 100),
+    /boom/
+  )
 })
 
 test('deadline: a slow leg reports timeout AND receives the abort', async () => {
   let sawAbort: string | undefined
-  const r = await deadline(
-    async (signal) => {
-      signal.addEventListener('abort', () => { sawAbort = 'yes' }, { once: true })
-      await nap(60_000, { signal })
-      return 'never'
-    },
-    30
-  )
+  const r = await deadline(async (signal) => {
+    signal.addEventListener(
+      'abort',
+      () => {
+        sawAbort = 'yes'
+      },
+      { once: true }
+    )
+    await nap(60_000, { signal })
+    return 'never'
+  }, 30)
   assert.deepEqual(r, { outcome: 'timeout' })
   assert.equal(sawAbort, 'yes', 'the bound must reach the work — the race alone never cancels it')
 })
@@ -38,17 +46,14 @@ test('deadline: the caller signal names the outcome aborted, not timeout', async
   assert.deepEqual(await p, { outcome: 'aborted' }, 'a shutdown is not a slowness — do not log it as an overrun')
 })
 
-test('deadline: an abandoned leg\'s late rejection is swallowed', async () => {
+test("deadline: an abandoned leg's late rejection is swallowed", async () => {
   // regression: without the suppressor, the orphaned promise's throw lands
   // as an unhandled rejection AFTER the caller moved on
-  const r = await deadline(
-    async (signal) => {
-      if (signal.aborted) throw new Error('late reject')
-      await new Promise((res) => signal.addEventListener('abort', res, { once: true }))
-      throw new Error('late reject')
-    },
-    20
-  )
+  const r = await deadline(async (signal) => {
+    if (signal.aborted) throw new Error('late reject')
+    await new Promise((res) => signal.addEventListener('abort', res, { once: true }))
+    throw new Error('late reject')
+  }, 20)
   assert.deepEqual(r, { outcome: 'timeout' })
   await nap(10) // give the orphaned rejection a tick to surface if unswallowed
 })

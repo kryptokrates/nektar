@@ -43,7 +43,10 @@ test('wait primitives only at sanctioned sites', () => {
     const src = read(f)
     for (const m of src.matchAll(/setTimeout\(|setInterval\(|Promise\.race\(|AbortSignal\.timeout\(/g)) {
       const line = src.slice(0, m.index).split('\n').length
-      assert.ok(SANCTIONED[base] !== undefined, `${rel}:${line} — raw wait primitive outside the sanctioned list (classify it here or route through deadline()/nap()/WAITS)`)
+      assert.ok(
+        SANCTIONED[base] !== undefined,
+        `${rel}:${line} — raw wait primitive outside the sanctioned list (classify it here or route through deadline()/nap()/WAITS)`
+      )
       break // one finding per file is enough — the allowlist is per-file
     }
   }
@@ -56,7 +59,8 @@ test('every wait-site duration literal is named', () => {
   // maxAgeMs/DEFAULTS tables ARE that domain's registry. cfg/env-derived
   // fields name themselves (NEKTAR_*_MS / cfg.fooMs) and carry no
   // literal at the use site.
-  const WAIT_TOKEN = /timeout|Timeout|setTimeout|setInterval|race|deadline|Deadline|next_at|nextAt|dueIn|delay|Delay|backoff|attempt|attempts|ttl|Ttl|TTL|expir|Expir|until|Until|cooldown|held|Held|defer|Defer|interval|Interval|cadence|poll|Poll|retry|Retry|floor|rearm|throttle|Throttle|window|Window|since|Since|age|Age|sweep|Sweep|ceiling|Ceil|ceil|nap|sleep|ms\b/
+  const WAIT_TOKEN =
+    /timeout|Timeout|setTimeout|setInterval|race|deadline|Deadline|next_at|nextAt|dueIn|delay|Delay|backoff|attempt|attempts|ttl|Ttl|TTL|expir|Expir|until|Until|cooldown|held|Held|defer|Defer|interval|Interval|cadence|poll|Poll|retry|Retry|floor|rearm|throttle|Throttle|window|Window|since|Since|age|Age|sweep|Sweep|ceiling|Ceil|ceil|nap|sleep|ms\b/
   const LITERAL = /\d+_000\b|\b86_400_000\b|\b60_000\b/
   const EXEMPT_FILES = new Set(['waits.ts', 'market/types.ts', 'conformance.ts', 'policy.ts'])
   const NAMED = /WAITS\.\w+\.ms|const [A-Z][A-Z0-9_]*(_MS|Ms|_TTL)\b|exportedTtl|deliverBoundMs|timeoutMs|waitMs=|checkInMs|attempts\b/
@@ -80,6 +84,7 @@ test('the registry itself conforms — class, durable, wake; mechanism needs why
     assert.ok(typeof w.durable === 'boolean', `${name}: durable not declared`)
     assert.ok(typeof w.wake === 'string' && w.wake.length > 0, `${name}: wake not declared`)
     assert.ok(Number.isFinite(w.ms) && w.ms > 0, `${name}: ms must be a positive finite number`)
-    if (w.class === 'mechanism') assert.ok(w.why !== undefined && w.why.length > 0, `${name}: mechanism class needs a why — what makes the wait itself the trigger`)
+    if (w.class === 'mechanism')
+      assert.ok(w.why !== undefined && w.why.length > 0, `${name}: mechanism class needs a why — what makes the wait itself the trigger`)
   }
 })

@@ -6,7 +6,7 @@ import { stable01 } from '@nektar/core'
 import type { AutomationStore, Operation } from '../store.js'
 import { WalletCoordinator } from '../wallet.js'
 import type { AutomationPolicy } from '../policy.js'
-import { DEFAULTS } from './types.js'
+import { DEFAULTS, STATE_LIMITS } from './types.js'
 import { WAITS } from '../waits.js'
 import type { MarketDeps, MarketOptions } from './types.js'
 
@@ -42,6 +42,10 @@ export abstract class MarketBase {
     this.now = d.now ?? Date.now
     this.me = d.key.toPublicKey().toString()
     this.network = d.network
+    // the engine owns the state bounds; the store stamps a bounded state's
+    // stuck deadline at commit so the wheel wakes at its instant (the
+    // advance() scan stays the missed-arm floor)
+    d.store.residenceBound = (s) => STATE_LIMITS[s]?.maxAgeMs
     if (d.broadcast)
       this.wallet = new WalletCoordinator(d.store, { broadcast: d.broadcast, txDied: d.txDied, txSpent: d.settleEscrow, recordAired: d.recordAired })
   }

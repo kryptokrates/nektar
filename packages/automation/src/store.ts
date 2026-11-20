@@ -154,9 +154,15 @@ export class AutomationStore {
 
   /** a committed deadline — transition/createOperation dueAt values go to
    *  the scheduler's dueIn so a collect window or seize bound fires at its
-   *  instant, not the next floor tick (the floor stays the missed-arm
+   *   instant, not the next floor tick (the floor stays the missed-arm
    *  backstop either way) */
   dueAtArmed?: (at: number) => void
+
+  /** the residence-bound map — the engine injects STATE_LIMITS so a state
+   *  change into a bounded state derives its stuck deadline at COMMIT and
+   *  arms the wheel at its instant, rather than waiting for the next
+   *  advance() scan to notice the age (the scan stays the floor) */
+  residenceBound?: (state: string) => number | undefined
 
   constructor(
     private kx: Knex,
@@ -413,6 +419,7 @@ export class AutomationStore {
       const prev = await trx(T.ops).where({ dedupe_key: o.dedupeKey }).first()
       if (prev) return { operation: this.op(prev), created: false }
       const now = this.now()
+      const bound = o.dueAt === undefined ? this.residenceBound?.(o.state) : undefined
       const row = {
         operation_id: o.operationId ?? randomUUID(),
         role: o.role,
@@ -423,7 +430,7 @@ export class AutomationStore {
         state: o.state,
         revision: 1,
         data: canonicalJson(o.data),
-        due_at: o.dueAt ?? null,
+        due_at: o.dueAt ?? (bound !== undefined ? now + bound : null),
         due_height: o.dueHeight ?? null,
         proven_height: (o.data.provenHeight as number | undefined) ?? null,
         created_at: now,
@@ -435,7 +442,8 @@ export class AutomationStore {
     })
     if (r.created) {
       this.workReady?.()
-      if (o.dueAt !== undefined) this.dueAtArmed?.(o.dueAt)
+      // armed = the persisted deadline — explicit dueAt or the stamped bound
+      if (r.operation.dueAt !== undefined) this.dueAtArmed?.(r.operation.dueAt)
     }
     return r
   }
@@ -538,6 +546,15 @@ export class AutomationStore {
         patch.proven_height = (merged.provenHeight as number | undefined) ?? null
       }
       if (change.dueAt !== undefined) patch.due_at = change.dueAt
+      // derivable-at-commit deadline: entering a bounded state arms its
+      // stuck bound at write time instead of the next advance() scan
+      // noticing the age. An explicit dueAt wins (collect windows, deferral
+      // resumes); a null on a state change clears the OLD state's deadline
+      // and re-derives — the bound IS the new state's deadline
+      if (to !== cur.state && (change.dueAt === undefined || change.dueAt === null)) {
+        const bound = this.residenceBound?.(to)
+        if (bound !== undefined) patch.due_at = now + bound
+      }
       if (change.dueHeight !== undefined) patch.due_height = change.dueHeight
       if (change.lastError !== undefined) patch.last_error = change.lastError
       const n = await trx(T.ops).where({ operation_id: operationId, revision: expectedRevision }).update(patch)
@@ -571,7 +588,9 @@ export class AutomationStore {
     // a state change is work a later pass must see; same-state writes
     // (error labels, evidence, data merges) are not — they never fire
     if (fromState !== undefined && fromState !== op.state) this.workReady?.()
-    if (change.dueAt != null) this.dueAtArmed?.(change.dueAt)
+    // arm whatever deadline persisted — explicit dueAt or the stamped
+    // residence bound (re-arming an untouched due_at is idempotent)
+    if (op.dueAt !== undefined) this.dueAtArmed?.(op.dueAt)
     return op
   }
 

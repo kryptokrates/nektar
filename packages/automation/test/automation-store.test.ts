@@ -638,3 +638,60 @@ test('splitDailySpend: escrow/payment kinds are deal spend; the rest is upkeep',
   assert.equal(upkeep, 200)
   await kx.destroy()
 })
+
+// the set-shaped reads behind the hot loop + the journal batch — each must
+// agree with the per-row query it replaces
+test('aggregates: opsByIds, eventCountsByOp, hasLiveOps, hasDueAtHeight', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const mk = async (dedupeKey: string, extra: { state?: string; data?: Record<string, unknown>; dueHeight?: number } = {}) => {
+    const r = await store.createOperation({
+      role: 'buyer',
+      kind: 'purchase',
+      dedupeKey,
+      policyHash: 'h',
+      network: 'regtest',
+      state: extra.state ?? 'collecting',
+      data: extra.data ?? {},
+      ...(extra.dueHeight !== undefined ? { dueHeight: extra.dueHeight } : {})
+    })
+    return r!.operation.operationId
+  }
+  assert.equal(await store.hasLiveOps(['collecting']), false, 'empty store has no live ops')
+  assert.equal((await store.opsByIds([])).size, 0)
+  assert.equal((await store.eventCountsByOp([], 99)).size, 0)
+  assert.equal(await store.hasLiveOps([]), false)
+  assert.equal(await store.hasDueAtHeight([], 100), false)
+
+  const a = await mk('d:a', { dueHeight: 100 })
+  const b = await mk('d:b')
+  await store.transition(a, 1, 'ranked', { cause: 'x' })
+
+  const ops = await store.opsByIds([a, b, 'missing'])
+  assert.equal(ops.size, 2)
+  assert.equal(ops.get(a)?.state, 'ranked')
+  assert.equal(ops.get(b)?.data.wantId, undefined)
+
+  // agrees with per-row eventCount at every cursor boundary
+  for (const cursor of [0, 1, 2, 99]) {
+    const counts = await store.eventCountsByOp([a, b], cursor)
+    for (const id of [a, b]) assert.equal(counts.get(id) ?? 0, await store.eventCount(id, cursor), `cursor ${cursor} op ${id}`)
+  }
+
+  assert.equal(await store.hasLiveOps(['collecting', 'ranked']), true)
+  // a settled proof waiting only on block depth is not live work
+  const c = await mk('d:c', { state: 'completion_submitted', data: { provenHeight: 50 } })
+  assert.ok(c.length > 0)
+  assert.equal(await store.hasLiveOps(['completion_submitted']), false)
+  assert.equal(await store.hasLiveOps(['collecting', 'completion_submitted']), true, 'live ops elsewhere keep it true')
+  // the same state WITHOUT provenHeight is still live (proof not yet recorded)
+  await mk('d:d', { state: 'completion_submitted' })
+  assert.equal(await store.hasLiveOps(['completion_submitted']), true)
+  assert.equal(await store.hasLiveOps(['settled']), false, 'a terminal-only set is not live')
+
+  // due_height boundary: tip == due_height fires, tip below does not
+  assert.equal(await store.hasDueAtHeight(['collecting', 'ranked'], 99), false)
+  assert.equal(await store.hasDueAtHeight(['collecting', 'ranked'], 100), true)
+  assert.equal(await store.hasDueAtHeight(['expired'], 100), false, 'the state filter still applies')
+  void c
+})

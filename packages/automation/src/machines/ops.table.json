@@ -79,6 +79,7 @@
   "transitions": [
     { "state": "published", "event": "want.signed", "intents": ["publish-want"], "target": "collecting" },
     { "state": "published", "event": "stuck.timeout", "guard": "no-escrow", "intents": [], "target": "canceled" },
+    { "state": "published", "event": "restored", "intents": [], "target": "awaiting_disclosure" },
     { "state": "collecting", "event": "offers.select", "guard": "policy+budget", "intents": ["record-decision"], "target": "selected" },
     { "state": "collecting", "event": "collect.expired", "intents": [], "target": "expired" },
     { "state": "collecting", "event": "stuck.timeout", "guard": "no-escrow", "intents": [], "target": "expired" },
@@ -140,6 +141,9 @@
     { "state": "uncertain", "event": "reconciled.ok", "guard": "verified", "intents": [], "target": "awaiting_disclosure" },
     { "state": "uncertain", "event": "reconciled.dead", "guard": "verified", "intents": ["release-budget", "release-leases"], "target": "funding_failed" },
     { "state": "uncertain", "event": "reconcile.pending", "intents": ["reconcile-ping"], "target": "self" },
+    { "state": "uncertain", "event": "refund.retry", "intents": [], "target": "self" },
+    { "state": "uncertain", "event": "refund.dead", "guard": "verified", "intents": [], "target": "self" },
+    { "state": "uncertain", "event": "refund.sent", "intents": [], "target": "refunded" },
     { "state": "uncertain", "event": "stuck.timeout", "guard": "maxAgeMs", "intents": ["escalate-human"], "target": "escalated" },
 
     { "state": "preparing", "event": "offer.signed", "intents": [], "target": "quoted" },
@@ -148,6 +152,7 @@
     { "state": "quoted", "event": "escrow.verified", "guard": "spv-verify", "intents": [], "target": "completing" },
     { "state": "quoted", "event": "payment.verified", "guard": "spv-verify", "intents": ["adopt-payment"], "target": "completing" },
     { "state": "quoted", "event": "offer.declined", "intents": [], "target": "declined" },
+    { "state": "quoted", "event": "escrow.broadcast_refused", "intents": [], "target": "self" },
     { "state": "quoted", "event": "quote.expired", "intents": [], "target": "expired" },
     { "state": "quoted", "event": "restored", "intents": [], "target": "self" },
     { "state": "quoted", "event": "stuck.timeout", "guard": "maxAgeMs", "intents": ["abort"], "target": "canceled" },
@@ -160,6 +165,7 @@
     { "state": "completion_submitted", "event": "proof.depth", "intents": ["record-proven-height"], "target": "self" },
     { "state": "watching", "event": "escrow.deadline", "guard": "deadline-passed", "intents": [], "target": "seizing" },
     { "state": "watching", "event": "enabled", "intents": [], "target": "enabled" },
+    { "state": "enabled", "event": "enabled", "intents": [], "target": "enabled" },
     { "state": "seizing", "event": "seize.ok", "intents": [], "target": "seized" },
     { "state": "seizing", "event": "seize.failed", "intents": [], "target": "seize_failed" },
     { "state": "seizing", "event": "seize.not_yet", "intents": ["backoff"], "target": "watching" },

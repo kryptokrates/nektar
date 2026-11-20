@@ -23,10 +23,10 @@ description: >
 Advisory for businesses that connect two or more groups whose interaction
 creates the value — marketplaces, matchmakers, payment networks, developer
 ecosystems, app stores, sharing platforms. Three books, three lenses:
-**Platform Revolution** teaches the *design* (interaction, openness,
+**Platform Revolution** teaches the _design_ (interaction, openness,
 governance, metrics, monetization), **Matchmakers** teaches the
-*economics* (friction, ignition, price balancing, the bet checklist), and
-**Obviously Awesome** teaches the *positioning* (frame of reference that
+_economics_ (friction, ignition, price balancing, the bet checklist), and
+**Obviously Awesome** teaches the _positioning_ (frame of reference that
 makes value obvious). The books converge: a platform is not a product
 with users — it is an engine for interactions, and every design decision
 is judged by whether it increases valuable interactions per participant.
@@ -34,17 +34,17 @@ is judged by whether it increases valuable interactions per participant.
 ## Advisory process
 
 1. **Scope the ask.** Which lens is on the table?
-   - *Should this platform exist / will it work?* → section 8 (the
+   - _Should this platform exist / will it work?_ → section 8 (the
      sizzle/fizzle checklist) — score before anything else.
-   - *Design of a platform being built* → sections 1–2, 5–6 (interaction,
+   - _Design of a platform being built_ → sections 1–2, 5–6 (interaction,
      openness, governance).
-   - *Pricing / monetization* → section 4 (forms of value, subsidy vs
+   - _Pricing / monetization_ → section 4 (forms of value, subsidy vs
      money side).
-   - *Launch plan* → section 3 + the `cold-start` skill for the
+   - _Launch plan_ → section 3 + the `cold-start` skill for the
      network-sequencing detail.
-   - *Growth diagnosis / metrics* → section 7 (liquidity first, always).
-   - *Naming/positioning/"what do we call this"* → section 9 (Dunford).
-   - *Stalled/competitive pressure* → section 10 (envelopment,
+   - _Growth diagnosis / metrics_ → section 7 (liquidity first, always).
+   - _Naming/positioning/"what do we call this"_ → section 9 (Dunford).
+   - _Stalled/competitive pressure_ → section 10 (envelopment,
      cherry-picking, winner-take-all).
 2. **Score it.** Rate against the rubric. A plan that cannot answer "who
    is the subsidy side" or "what is the core interaction" scores ≤5.
@@ -78,7 +78,7 @@ is judged by whether it increases valuable interactions per participant.
 **Core concept (Revolution ch. 1–3):** A pipeline creates value in a
 linear sequence and pushes it to a consumer; a platform orchestrates
 interactions between participants and captures a cut of the value
-*exchanged*, not produced. The test is not "does it have users on both
+_exchanged_, not produced. The test is not "does it have users on both
 sides" — plenty of pipeline products do — but "would the product collapse
 if one side vanished" AND "is its unit of value the interaction itself."
 
@@ -104,7 +104,7 @@ feature lists dressed as strategy.
 
 **Key insights:**
 
-- More participants ≠ more value: value lives in *completed* core
+- More participants ≠ more value: value lives in _completed_ core
   interactions. Count those, not signups.
 - Network effects come in four flavors: same-side positive (more
   sellers → better sellers), same-side negative (more sellers →
@@ -119,11 +119,11 @@ feature lists dressed as strategy.
 
 **Applications:**
 
-| Context | Application | Example |
-|---|---|---|
-| New platform spec | Write the core interaction in one sentence: "[creator] exchanges [value unit] with [consumer] via [filter]" | "Hosts exchange stays with travelers via search+reviews" |
-| Weak growth diagnosis | Check the value unit before blaming acquisition — do completed interactions happen for users who DO match? | A dating app with signups but no messages has a unit problem |
-| Feature review | Score every feature on interactions-enabled-per-participant | A new seller tool that lifts listing quality lifts the filter |
+| Context               | Application                                                                                                 | Example                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| New platform spec     | Write the core interaction in one sentence: "[creator] exchanges [value unit] with [consumer] via [filter]" | "Hosts exchange stays with travelers via search+reviews"      |
+| Weak growth diagnosis | Check the value unit before blaming acquisition — do completed interactions happen for users who DO match?  | A dating app with signups but no messages has a unit problem  |
+| Feature review        | Score every feature on interactions-enabled-per-participant                                                 | A new seller tool that lifts listing quality lifts the filter |
 
 ### 2. Friction is the business — matchmakers create value by removing it
 
@@ -131,7 +131,7 @@ feature lists dressed as strategy.
 existence by finding and destroying transaction friction — search costs,
 trust costs, coordination costs, settlement costs — that its sides could
 not overcome alone. The platform's product is not the app; it is the
-*absence of the friction*. A new platform is viable only when the
+_absence of the friction_. A new platform is viable only when the
 friction it removes is large enough that participants will route through
 the platform rather than around it.
 
@@ -145,13 +145,13 @@ they route around the middleman. Platforms that solve large frictions
 - Rate the friction on three axes: how big, how frequent, who
   benefits when it's gone. All three must be real — friction that is
   huge but rare, or common but trivial, doesn't sustain a platform.
-- The strongest platforms attack *trust* friction: making an
+- The strongest platforms attack _trust_ friction: making an
   interaction safe that would otherwise be unsafe (escrow, identity,
   insurance, reputation). Trust friction is the hardest for
   participants to self-solve and the hardest for rivals to copy.
 - Beware disintermediation: once matched, can the sides deal directly
-  and cut you out? If yes, your design must keep the *settlement or
-  trust* leg on-platform (eBay's escrow, Airbnb's insurance) or accept
+  and cut you out? If yes, your design must keep the _settlement or
+  trust_ leg on-platform (eBay's escrow, Airbnb's insurance) or accept
   being a lead generator.
 - Creating a market that didn't exist is a different game than fixing a
   broken one — the first needs evangelism (prove the category
@@ -160,11 +160,11 @@ they route around the middleman. Platforms that solve large frictions
 
 **Applications:**
 
-| Context | Application | Example |
-|---|---|---|
-| Idea screening | Name the friction + who pays it today; if nobody pays it, there is no platform | "Agents can't hold money or prove memory" is a real friction; "users want another feed" is not |
-| Feature triage | Build trust-friction features before convenience features | Escrow before notifications |
-| Retention diagnosis | Users match once then leave? The platform solved the find but not the settle | Add dispute/escrow/quality layers |
+| Context             | Application                                                                    | Example                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| Idea screening      | Name the friction + who pays it today; if nobody pays it, there is no platform | "Agents can't hold money or prove memory" is a real friction; "users want another feed" is not |
+| Feature triage      | Build trust-friction features before convenience features                      | Escrow before notifications                                                                    |
+| Retention diagnosis | Users match once then leave? The platform solved the find but not the settle   | Add dispute/escrow/quality layers                                                              |
 
 ### 3. Launch — the eight strategies
 
@@ -206,11 +206,11 @@ in lockstep — YouTube alternated creator tools and viewer reach),
 
 **Applications:**
 
-| Context | Application | Example |
-|---|---|---|
-| Pre-launch | Pick ONE primary strategy + at most one supporting; name the self-supply inventory | "Single-side tool + seeding: ship the tool, run 3 house producers" |
-| Ignition stall | Add zigzag — stop pushing both sides simultaneously; alternate bursts per side per week | One week seller tooling, next week buyer acquisition |
-| Distribution | Prefer piggyback over advertising when a host platform already concentrates your users | A skill/plugin in the runtime your users already run |
+| Context        | Application                                                                             | Example                                                            |
+| -------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Pre-launch     | Pick ONE primary strategy + at most one supporting; name the self-supply inventory      | "Single-side tool + seeding: ship the tool, run 3 house producers" |
+| Ignition stall | Add zigzag — stop pushing both sides simultaneously; alternate bursts per side per week | One week seller tooling, next week buyer acquisition               |
+| Distribution   | Prefer piggyback over advertising when a host platform already concentrates your users  | A skill/plugin in the runtime your users already run               |
 
 **Ethical boundary:** Seeding means real work done manually — never
 fake users, fake activity, or fake scarcity. Users discover deception;
@@ -242,9 +242,9 @@ access — and each form punishes the wrong charge:
   audience you sell.
 - **Charge full freight to the least price-sensitive** — enterprises,
   professionals, whoever monetizes through the platform.
-- **Matchmakers' structure:** the subsidy side may pay *negative*
+- **Matchmakers' structure:** the subsidy side may pay _negative_
   price (you pay them — >100% of the money side's fee can fund the
-  subsidy). Price the *pair*, not each side independently: total price
+  subsidy). Price the _pair_, not each side independently: total price
   = what makes the network ignite and persist, allocated to the side
   that can bear it.
 - **Never charge for what makes the network valuable.** Charging for
@@ -253,11 +253,11 @@ access — and each form punishes the wrong charge:
 
 **Applications:**
 
-| Context | Application | Example |
-|---|---|---|
-| Pricing design | Name subsidy side + money side + the taper on any early subsidy | "Buyers free forever; sellers pay 3% of settlements; house demand tapers on a published schedule" |
-| New revenue idea | Check which form of access it taxes; reject any that taxes the scarce side | Charging consumers to browse = taxing demand |
-| Free-to-paid transition | Publish the taper before collecting the subsidy | "Zero fees until month 6, then 2%+, schedule in the docs" |
+| Context                 | Application                                                                | Example                                                                                           |
+| ----------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Pricing design          | Name subsidy side + money side + the taper on any early subsidy            | "Buyers free forever; sellers pay 3% of settlements; house demand tapers on a published schedule" |
+| New revenue idea        | Check which form of access it taxes; reject any that taxes the scarce side | Charging consumers to browse = taxing demand                                                      |
+| Free-to-paid transition | Publish the taper before collecting the subsidy                            | "Zero fees until month 6, then 2%+, schedule in the docs"                                         |
 
 **Ethical boundary:** Subsidies are temporary incentives — publish the
 taper before the subsidy, and never build livelihoods on terms you plan
@@ -316,7 +316,7 @@ faster than rules never written.
 
 **Core concept (Revolution ch. 9):** Pipeline metrics (signups, MAU,
 revenue totals) hide empty platforms. Platform health is measured by
-the *interaction*:
+the _interaction_:
 
 - **Liquidity** — the probability an intent to interact gets satisfied
   within reasonable time. THE early metric: % of listings purchased, %
@@ -376,7 +376,7 @@ compress to the decisions that matter:
   didn't exist? (Not your feature list — their actual behavior:
   spreadsheets, the incumbent, doing nothing.)
 - **Unique attributes** — what you have that the alternatives don't.
-- **Value** — what those attributes *enable* for the customer (not the
+- **Value** — what those attributes _enable_ for the customer (not the
   attribute itself — the outcome).
 - **Target segment** — who cares most about that specific value.
 - **Market frame** — pick the category deliberately; three options:
@@ -408,24 +408,24 @@ those, and bundling buys distribution but never devotion.
 
 ## Common Mistakes
 
-| Mistake | Why it fails | Fix |
-|---|---|---|
-| Charging everyone | Taxes the demand that producers pay to reach | Name subsidy vs money side; charge the side that benefits from the other's presence |
-| Launching to a market, not a micromarket | Scattered users, no density, empty rooms | Constrain until the core interaction self-sustains |
-| Openness as a value instead of a decision | Either leaks the capture surface or strangles supply | Decide per group: manager/sponsor, developer, provider, user |
-| Signup metrics | Vanity totals hide zero liquidity | Measure interaction success: fill rate, time-to-match, repeat-interaction rate |
-| Governance after the fraud | Quality collapse precedes the fix | Laws + norms + architecture designed pre-density |
-| Positioning as "better X" | Incumbent's network beats your features every time | Big-fish-small-pond or new-game frame where your attributes decide |
-| Ignoring the ecosystem dependency | The platform dies when a partner/infra you don't control does | Degradation strategy, not just dependency |
-| Subsidies without a published taper | Hard-side revolt when terms quietly degrade | Publish the taper with the subsidy |
+| Mistake                                   | Why it fails                                                  | Fix                                                                                 |
+| ----------------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Charging everyone                         | Taxes the demand that producers pay to reach                  | Name subsidy vs money side; charge the side that benefits from the other's presence |
+| Launching to a market, not a micromarket  | Scattered users, no density, empty rooms                      | Constrain until the core interaction self-sustains                                  |
+| Openness as a value instead of a decision | Either leaks the capture surface or strangles supply          | Decide per group: manager/sponsor, developer, provider, user                        |
+| Signup metrics                            | Vanity totals hide zero liquidity                             | Measure interaction success: fill rate, time-to-match, repeat-interaction rate      |
+| Governance after the fraud                | Quality collapse precedes the fix                             | Laws + norms + architecture designed pre-density                                    |
+| Positioning as "better X"                 | Incumbent's network beats your features every time            | Big-fish-small-pond or new-game frame where your attributes decide                  |
+| Ignoring the ecosystem dependency         | The platform dies when a partner/infra you don't control does | Degradation strategy, not just dependency                                           |
+| Subsidies without a published taper       | Hard-side revolt when terms quietly degrade                   | Publish the taper with the subsidy                                                  |
 
 ## Quick Diagnostic
 
-| Question | If no | Action |
-|---|---|---|
-| Can you state the core interaction in one sentence? | It's a product, not a platform | Write participants + value unit + filter first |
-| Can you name the subsidy side and money side? | Pricing is unpriced | Apply the whom-to-charge rules |
-| Is a liquidity metric instrumented? | You're flying on vanity metrics | Track fill rate + time-to-match before anything |
-| Does governance exist before the fraud does? | Retrofit will be too late | Laws, norms, architecture in the design |
-| Is the frame of reference chosen deliberately? | The market will choose it for you | Dunford's three options, picked on purpose |
-| Can the ecosystem kill you if it fails? | Name the degradation path | Fallbacks, not dependencies |
+| Question                                            | If no                             | Action                                          |
+| --------------------------------------------------- | --------------------------------- | ----------------------------------------------- |
+| Can you state the core interaction in one sentence? | It's a product, not a platform    | Write participants + value unit + filter first  |
+| Can you name the subsidy side and money side?       | Pricing is unpriced               | Apply the whom-to-charge rules                  |
+| Is a liquidity metric instrumented?                 | You're flying on vanity metrics   | Track fill rate + time-to-match before anything |
+| Does governance exist before the fraud does?        | Retrofit will be too late         | Laws, norms, architecture in the design         |
+| Is the frame of reference chosen deliberately?      | The market will choose it for you | Dunford's three options, picked on purpose      |
+| Can the ecosystem kill you if it fails?             | Name the degradation path         | Fallbacks, not dependencies                     |

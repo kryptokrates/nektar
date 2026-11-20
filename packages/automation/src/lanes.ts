@@ -301,6 +301,16 @@ export function openLanes(rt: Rt): void {
               // The full fan-out runs right behind it for completeness: an
               // envelope a missed submit left off that host still arrives
               // this cycle, and withheld/unreachable bookkeeping stays whole.
+              // pendingAcks is the seen-unacked set — merge, never overwrite:
+              // an item only on the SLOWER host would be dropped from `out`
+              // this cycle and, worse, ack()'d without delivery if the full
+              // read landed between collects. Union by txid:commitment keeps
+              // late-merged items deliverable on the next collect and lets
+              // ack() only release what was actually handed out.
+              const mergeAcks = (items: ReturnType<typeof listAcks>): void => {
+                const seen = new Set(pendingAcks.map((p) => `${p.txid}:${p.commitment}`))
+                for (const i of items) if (!seen.has(`${i.txid}:${i.commitment}`)) pendingAcks.push(i)
+              }
               const r =
                 marketHosts.length > 1
                   ? await (async () => {
@@ -309,14 +319,14 @@ export function openLanes(rt: Rt): void {
                         .readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, cache: boxCache })
                         .then((full) => {
                           laneNotes(full, full.answered)
-                          pendingAcks = listAcks(full.items)
+                          mergeAcks(listAcks(full.items))
                         })
                         .catch(() => undefined)
                       return fast
                     })()
                   : await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, cache: boxCache })
               laneNotes(r, r.answered)
-              pendingAcks = listAcks(r.items)
+              mergeAcks(listAcks(r.items))
               // self-notes restore lost operations — ingest them before any other message in the batch
               const selfNote = (p: { from: string; msg?: MarketMessage }) => p.from === rt.me && (p.msg?.type === 'note' || p.msg?.type === 'sellerNote')
               pendingAcks.sort((a, b) => Number(selfNote(b)) - Number(selfNote(a)))

@@ -630,3 +630,107 @@ export const registerWakeHandlers = (
   ex.register(EXEC_SVC.wake, 'height', (arg) => wakeHeightBody(deps)(s, arg as { tip: number }))
   ex.register(EXEC_SVC.wake, 'reorg', (arg) => wakeReorgBody(deps)(s, arg as { from: number }))
 }
+
+// ── the cadence objects ──────────────────────────────────────────────────
+// the periodic loops the scheduler wheel used to drive — one fixed-key
+// object per cadence: `tick` runs the whole pass inside one ctx.run (the
+// pass is already serialized and replay-idempotent — ensureTrees dedupes
+// on ledger state, evidence is keyed, the log cursor advances on quorum,
+// hostBack/unblock are row updates) and then SELF-ARMS via a journaled
+// delayed send — the durable successor of scheduler.add's ceiling row. If
+// the chain breaks the journal holds the suspended invocation — nothing
+// silently stops ticking. The object's single key replaces the
+// single-flight guards (upkeepRun/busy) with per-key serialization.
+
+export const CRON_KEY = 'main'
+
+export interface CronDeps {
+  /** the pass — journaled as one ctx.run */
+  tick: () => Promise<void>
+  /** the cadence — re-read on every arm so adaptive ceilings keep working */
+  ceilingMs: () => number
+  log: (line: string) => void
+}
+
+export const cronTickBody =
+  (service: string, deps: CronDeps) =>
+  async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
+    await run('tick', () => deps.tick())
+    await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: deps.ceilingMs() })
+    return { done: true }
+  }
+
+export const cronObject = async (service: string, deps: CronDeps) => {
+  const restate = await import('@restatedev/restate-sdk')
+  const tick = cronTickBody(service, deps)
+  return restate.object({
+    name: service,
+    handlers: {
+      tick: async (ctx: restate.ObjectContext) => {
+        const self = ctx.objectSendClient({ name: service } as never, CRON_KEY) as unknown as { tick: (o: unknown, opts?: unknown) => Promise<void> }
+        const send: RtSend = async (target, arg, opts) => {
+          if (target.service !== service || target.handler !== 'tick') throw new Error(`cron send: no route ${target.service}/${target.handler}`)
+          await self.tick(arg, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0 }))
+        }
+        // a self-SEND on the same key — one-way, no lock wait, no deadlock
+        return await tick(send, (n, fn) => ctx.run(n, fn))
+      }
+    }
+  })
+}
+
+/** the cron bodies on a LocalExecutor — the local-mode wiring. */
+export const registerCronHandlers = (
+  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void } & { send: RtSend },
+  service: string,
+  deps: CronDeps
+): void => {
+  ex.register(service, 'tick', () => cronTickBody(service, deps)((t, a, o) => ex.send(t, a, o)))
+}
+
+// ── the notify object ────────────────────────────────────────────────────
+// the counterparty push legs — notifyPeer's presence announce and
+// pushCarrier's direct beef POST — as durable invocations keyed by
+// destination host. Today each is a detached() fire-and-forget fetch a
+// crash silently drops (the peer just misses the hint until the next
+// announce). As journaled work the delivery is at-least-once: a leg
+// throws → the runtime retries; per-host keys keep the same ordering +
+// dead-host isolation the transport object's deliver keys give.
+
+export interface NotifyDeps {
+  /** notifyPeer's HTTP leg — POST {service, query?} to <watch>/notify.
+   *  Throws on failure → the handler propagates → the runtime retries. */
+  peer: (watch: string, service: string, query?: unknown) => Promise<void>
+  /** pushCarrier's HTTP leg — POST the carrier hex to the recipient's
+   *  /v1/lane push endpoint */
+  carrier: (push: string, beefHex: string) => Promise<void>
+  log: (line: string) => void
+}
+
+export const notifyObject = async (deps: NotifyDeps) => {
+  const restate = await import('@restatedev/restate-sdk')
+  return restate.object({
+    name: EXEC_SVC.notify,
+    handlers: {
+      peer: async (ctx: restate.ObjectContext, arg: { watch: string; service: string; query?: unknown }) =>
+        await ctx.run('peer', () => deps.peer(arg.watch, arg.service, arg.query)),
+      carrier: async (ctx: restate.ObjectContext, arg: { push: string; beefHex: string }) =>
+        await ctx.run('carrier', () => deps.carrier(arg.push, arg.beefHex))
+    }
+  })
+}
+
+/** the notify bodies on a LocalExecutor — the local-mode wiring. */
+export const registerNotifyHandlers = (
+  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void },
+  deps: NotifyDeps
+): void => {
+  ex.register(EXEC_SVC.notify, 'peer', (arg) => {
+    const a = arg as { watch: string; service: string; query?: unknown }
+    return deps.peer(a.watch, a.service, a.query)
+  })
+  ex.register(EXEC_SVC.notify, 'carrier', (arg) => {
+    const a = arg as { push: string; beefHex: string }
+    return deps.carrier(a.push, a.beefHex)
+  })
+}

@@ -44,7 +44,11 @@ export const EXEC_SVC = {
   dealfan: 'nektar-dealfan',
   custody: 'nektar-custody',
   transport: 'nektar-transport',
-  wake: 'nektar-wake'
+  wake: 'nektar-wake',
+  upkeep: 'nektar-upkeep',
+  watchdog: 'nektar-watchdog',
+  watches: 'nektar-watches',
+  notify: 'nektar-notify'
 } as const
 
 /** the custody object's fixed key — every wallet custody leg serializes on

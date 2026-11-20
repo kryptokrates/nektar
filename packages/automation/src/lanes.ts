@@ -1,8 +1,10 @@
 // lanes.ts — the lane layer: bfinger counterparty resolution + caching, the
 // inbox msgs surface (sendBox/readBox/ackBox), host-health notes, the
 // republish queue, and the want/offer/inbox poll passes.
+import { createHash } from 'node:crypto'
 import { BoundedMap, BoundedSet, detached, ioSignal } from '@nektar/core'
 import { WAITS } from './waits.js'
+import { EXEC_SVC, executor } from './rt/exec.js'
 import { requeueAckItems, trackFanout } from './fanout.js'
 import type { MarketMessage } from './market.js'
 import type { FingerRec, Rt } from './rtctx.js'
@@ -80,42 +82,70 @@ export function openLanes(rt: Rt): void {
   // bound — a leg's awaited IO dies at the operation deadline instead of
   // the fetch outliving the leg that asked for it
   const io = (ms: number): AbortSignal => ioSignal(ms, rt.signal)
+  // the notify/push fetch legs — raw HTTP throws on failure. Local mode
+  // wraps them detached+swallow (today's semantics); under restate they run
+  // as journaled nektar-notify invocations where the throw retries the
+  // delivery instead of dropping it
+  const peerLeg = async (watch: string, service: string, query?: unknown): Promise<void> => {
+    const r = await fetch(`${watch.replace(/\/+$/, '')}/notify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(query === undefined ? { service } : { service, query }),
+      signal: io(WAITS.pushIo.ms),
+      redirect: 'error' // a redirect into an unscreened host is still an egress bypass
+    })
+    if (!r.ok) throw new Error(`notify → ${watch}: ${r.status}`)
+  }
+  const carrierLeg = async (push: string, beefHex: string): Promise<void> => {
+    const r = await fetch(push, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ beef: beefHex }),
+      signal: io(WAITS.pushIo.ms)
+    })
+    if (!r.ok) throw new Error(`push → ${push}: ${r.status}`)
+  }
+  rt.notifyLegs = { peer: peerLeg, carrier: carrierLeg }
   const notifyPeer = (rec: { watch?: string } | undefined, service: string, query?: unknown): void => {
     const watch = rec?.watch
     if (watch === undefined) return
+    const exec = executor()
+    // under restate the push is a durable invocation keyed by the peer's
+    // watch endpoint — at-least-once delivery where the detached spawn was
+    // lost on crash; the content key dedupes a repeat announce
+    if (exec !== undefined) {
+      void exec
+        .send(
+          { service: EXEC_SVC.notify, handler: 'peer', key: watch },
+          { watch, service, query },
+          { idempotencyKey: `notify:peer:${watch}:${service}:${JSON.stringify(query) ?? ''}` }
+        )
+        .catch((e) => log(`automation: notify send: ${(e as Error).message}`))
+      return
+    }
     // fire-and-forget spawn — detached(): the push is its own delivery
     // attempt, not leg work; it must not die when the queuing leg settles
-    void detached(() =>
-      fetch(`${watch.replace(/\/+$/, '')}/notify`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(query === undefined ? { service } : { service, query }),
-        signal: io(WAITS.pushIo.ms),
-        redirect: 'error' // a redirect into an unscreened host is still an egress bypass
-      }).catch(() => undefined)
-    )
+    void detached(() => peerLeg(watch, service, query).catch(() => undefined))
   }
   // direct push: POST the journaled carrier BEEF to the recipient's own
   // /v1/lane — the same bytes the box/artifact submit carries, verified by
   // the same code on the far side (P2P for the present peer; the host copy
-  // stays the store-and-forward fallback). Fire-and-forget (detached —
-  // the durable copy already landed when this runs) — any failure just
-  // means delivery happens on the ordinary read.
+  // stays the store-and-forward fallback). Under restate the delivery is
+  // durable — the same crash that used to drop the spawn now retries the
+  // POST; the beef content-hash dedupes re-pushes of the same carrier.
   const pushCarrier = (rec: { push?: string } | undefined, beef: number[]): void => {
     const push = rec?.push
     if (push === undefined || beef.length === 0) return
-    void detached(() =>
-      fetch(push, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ beef: Buffer.from(beef).toString('hex') }),
-        signal: io(WAITS.pushIo.ms)
-      })
-        .then((r) => {
-          if (!r.ok) log(`automation: push → ${push}: ${r.status}`)
-        })
-        .catch(() => undefined)
-    )
+    const beefHex = Buffer.from(beef).toString('hex')
+    const exec = executor()
+    if (exec !== undefined) {
+      const dedup = createHash('sha256').update(Buffer.from(beef)).digest('hex').slice(0, 16)
+      void exec
+        .send({ service: EXEC_SVC.notify, handler: 'carrier', key: push }, { push, beefHex }, { idempotencyKey: `notify:carrier:${push}:${dedup}` })
+        .catch((e) => log(`automation: carrier send: ${(e as Error).message}`))
+      return
+    }
+    void detached(() => carrierLeg(push, beefHex).catch((e) => log(`automation: ${(e as Error).message}`)))
   }
   rt.pushCarrier = pushCarrier
   // a carrier pushed straight to us by its sender — verify + ingest exactly

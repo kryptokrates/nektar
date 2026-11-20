@@ -223,6 +223,9 @@ export interface Rt {
   /** fire-and-forget carrier push to a counterparty's advertised /v1/lane —
    *  the durable host copy is already submitted when this runs */
   pushCarrier?: (rec: { push?: string } | undefined, beef: number[]) => void
+  /** the raw notify/carrier fetch legs — the nektar-notify object invokes
+   *  them journaled; local mode wraps them detached+swallow */
+  notifyLegs?: { peer: (watch: string, service: string, query?: unknown) => Promise<void>; carrier: (push: string, beefHex: string) => Promise<void> }
   hostBack: (h: string) => Promise<void>
   queueRepublish: (treeTxid: string) => Promise<void>
   poll: () => Promise<void>

@@ -1,6 +1,7 @@
 // paid-disclosure sale ops — extracted verbatim from the server.ts dispatchTool switch
 import type { NektarMemory } from '../memory.js'
 import type { ToolHandler } from './shared.js'
+import { PublicKey } from '@bsv/sdk'
 
 const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund', 'claim'])
 
@@ -32,7 +33,10 @@ const escrow: ToolHandler = async (mem, args, _d, name) => {
   if (args.offer) {
     const { verifyOfferSig } = await import('@nektar/identity')
     const { reconstructRoot, toHex: th, fromHex: fh } = await import('@nektar/core')
-    const buyerPub = mem.operatorKey().toPublicKey().toString()
+    // operator pub via the signing surface — held-key returns the fund key's
+    // pub, external custody the wallet's identity pub; operatorKey() would
+    // throw under NEKTAR_WALLET=client
+    const buyerPub = PublicKey.fromString(await mem.operatorSigner().pubKeyHex()).toString()
     const leaf = args.offer.commitment?.leaf ?? ''
     // the sig binds whatever buyerPub the seller offered to — a public
     // offer signed with '' verifies against '', a private one against the
@@ -65,7 +69,10 @@ const escrow: ToolHandler = async (mem, args, _d, name) => {
     const future = ra < 500_000_000n ? ra > BigInt(await mem.chainHeight()) : ra > BigInt(Math.floor(Date.now() / 1000))
     if (!future) throw new Error('sale op=escrow: cfg.refundAfter is not in the future — the escrow would be instantly refundable')
   }
-  const depositorPkh = Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
+  // the depositor is the fund signer — held-key custody that's the operator
+  // key; external custody the wallet-derived fund key. Either way refunds
+  // must pay back to whoever controls the funding coins.
+  const depositorPkh = Buffer.from(PublicKey.fromString(await mem.fundSigner().pubKeyHex()).toHash()).toString('hex')
   const host = new DisclosureSaleHost({
     ...args.cfg,
     depositorPkh,
@@ -74,7 +81,7 @@ const escrow: ToolHandler = async (mem, args, _d, name) => {
     maxFee: BigInt(args.cfg.maxFee)
   })
   const funding = await mem.fundingOuts(args.amount + 500, 'deal')
-  const { tx, utxo, feeSats } = await host.buildEscrow(funding, mem.operatorKey(), args.amount, undefined, mem.feeRateSatPerKb)
+  const { tx, utxo, feeSats } = await host.buildEscrow(funding, mem.fundSigner(), args.amount, undefined, mem.feeRateSatPerKb)
   if (isBuild) return { tx, txHex: tx.toHex(), utxo: { ...utxo, txid: tx.id('hex') }, escrow: { ...args.cfg, depositorPkh }, feeSats }
   const r = await mem.broadcastTx(tx)
   if (r.status !== 'success') return { accepted: false, reason: r.description }
@@ -90,7 +97,7 @@ const payBuild: ToolHandler = async (mem, args, _d, name) => {
   const isBuild = name === 'sale#payBuild'
   if (args.offer) {
     const { verifyOfferSig } = await import('@nektar/identity')
-    const buyerPub = mem.operatorKey().toPublicKey().toString()
+    const buyerPub = PublicKey.fromString(await mem.operatorSigner().pubKeyHex()).toString()
     const leaf = args.offer.commitment?.leaf ?? ''
     if (
       !verifyOfferSig(
@@ -218,9 +225,12 @@ export const handlers: Record<string, ToolHandler> = {
   'sale#payBuild': payBuild,
   'sale#complete': async (mem, args) => {
     const { DisclosureSaleHost } = await import('@nektar/anchor')
-    // depositorPkh is always the LOCAL depositor (operator key) — the offer's
-    // cfg never carries it; fill it here so callers can pass the raw offer cfg.
-    const depositorPkh = args.cfg.depositorPkh ?? Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
+    // depositorPkh is always the LOCAL depositor (the fund signer — under
+    // external custody the wallet-derived key the escrow was funded by) —
+    // the offer's cfg never carries it; fill it here so callers can pass
+    // the raw offer cfg.
+    const depositorPkh =
+      args.cfg.depositorPkh ?? Buffer.from(PublicKey.fromString(await mem.fundSigner().pubKeyHex()).toHash()).toString('hex')
     const host = new DisclosureSaleHost({
       ...args.cfg,
       depositorPkh,
@@ -246,7 +256,8 @@ export const handlers: Record<string, ToolHandler> = {
   },
   'sale#refund': async (mem, args) => {
     const { DisclosureSaleHost } = await import('@nektar/anchor')
-    const depositorPkh = args.cfg.depositorPkh ?? Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
+    const depositorPkh =
+      args.cfg.depositorPkh ?? Buffer.from(PublicKey.fromString(await mem.fundSigner().pubKeyHex()).toHash()).toString('hex')
     const host = new DisclosureSaleHost({
       ...args.cfg,
       depositorPkh,
@@ -259,7 +270,7 @@ export const handlers: Record<string, ToolHandler> = {
     const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats) : BigInt(args.utxo.satoshis) - BigInt(Math.min(Number(args.cfg.maxFee), 10))
     const { tx } = await host.buildRefund(
       args.utxo,
-      mem.operatorKey(),
+      mem.fundSigner(),
       args.lockTime ?? Number(args.cfg.refundAfter),
       changeSats,
       await mem.fetchTx(args.utxo.txid)

@@ -5,7 +5,8 @@
 import { P2PKH } from '@bsv/sdk'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
-import { signerAddress, BoundedMap, BoundedSet, nektarEnvNum } from '@nektar/core'
+import { signerAddress, BoundedMap, BoundedSet, nektarEnvNum, deadline } from '@nektar/core'
+import { WAITS } from './waits.js'
 import { deadAncestry } from '@nektar/bstack'
 import { openRefusals } from './refusals.js'
 import { TERMINAL } from './market/types.js'
@@ -39,7 +40,7 @@ export function openUpkeep(rt: Rt): void {
   const statusCache = new BoundedMap<string, { at: number; f: import('@nektar/chain').TxFacts }>(4096)
   const facts = async (txid: string): Promise<import('@nektar/chain').TxFacts> => {
     const c = statusCache.get(txid)
-    if (c !== undefined && Date.now() - c.at < 15_000) return c.f
+    if (c !== undefined && Date.now() - c.at < WAITS.statusCache.ms) return c.f
     const f = await mem.txFacts(txid)
     statusCache.set(txid, { at: Date.now(), f })
     return f
@@ -78,7 +79,7 @@ export function openUpkeep(rt: Rt): void {
     const now = Date.now()
     const s = stuckMints.get(tid) ?? { first: now, tries: 0 }
     stuckMints.set(tid, s)
-    if (now - s.first < 10 * 60_000) return 'keep'
+    if (now - s.first < WAITS.mintHeal.ms) return 'keep'
     const r = await broadcast(tree).catch((e: unknown) => ({ status: 'error' as const, description: e instanceof Error ? e.message : String(e) }))
     s.first = now // one heal attempt per window
     if (r.status === 'success') {
@@ -279,22 +280,27 @@ export function openUpkeep(rt: Rt): void {
   let lastPruneAt = -Infinity
 
   let upkeepPhase = 'start'
-  const bound = async <T>(p: Promise<T>, ms = 300_000): Promise<T | undefined> => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = new Promise<undefined>((resolve) => {
-      timer = setTimeout(() => {
-        // a leg that never settles parks EVERY later upkeep on upkeepRun —
-        // a logged abandon frees the single-flight; the section name tells
-        // us which call site swallowed the wait
-        log(`automation: upkeep(${upkeepPhase}) exceeded ${ms}ms — abandoning`)
-        resolve(undefined)
-      }, ms)
+  const bound = async <T>(work: (signal: AbortSignal) => Promise<T>, ms = WAITS.upkeepBound.ms): Promise<T | undefined> => {
+    // a leg that never settles parks EVERY later upkeep on upkeepRun — a
+    // logged abandon frees the single-flight; the section name tells us
+    // which call site swallowed the wait. rt.activeSignal carries the
+    // leg's deadline to inner IO so the abandoned pass's awaited fetches
+    // die at the SUCCESSOR's bound instead of double-running phases
+    let leg: AbortSignal | undefined
+    const r = await deadline(
+      (s) => {
+        leg = s
+        rt.activeSignal = s
+        return work(s)
+      },
+      ms,
+      { signal: rt.signal }
+    ).finally(() => {
+      if (rt.activeSignal === leg) rt.activeSignal = undefined
     })
-    try {
-      return await Promise.race([p, timeout])
-    } finally {
-      clearTimeout(timer)
-    }
+    if (r.outcome === 'settled') return r.value
+    if (r.outcome === 'timeout') log(`automation: upkeep(${upkeepPhase}) exceeded ${ms}ms — abandoning`)
+    return undefined
   }
   const runUpkeep = async (): Promise<void> => {
     try {
@@ -601,9 +607,9 @@ export function openUpkeep(rt: Rt): void {
       // edge; rejected/abandoned can still legally revive and their journal
       // is the revive audit.
       const nowMs = cfg.now?.() ?? Date.now()
-      if (nowMs - lastPruneAt >= 86_400_000) {
+      if (nowMs - lastPruneAt >= WAITS.pruneInterval.ms) {
         lastPruneAt = nowMs
-        const retentionMs = (nektarEnvNum('NEKTAR_JOURNAL_RETENTION_DAYS') ?? 30) * 86_400_000
+        const retentionMs = (nektarEnvNum('NEKTAR_JOURNAL_RETENTION_DAYS') ?? 30) * WAITS.day.ms
         const n = await store.prune(nowMs - retentionMs, { ops: TERMINAL, txs: ['confirmed'] })
         const total = n.inbox + n.outbox + n.events + n.txEvents
         if (total > 0) log(`automation: pruned ${total} rows (inbox=${n.inbox} outbox=${n.outbox} events=${n.events} txEvents=${n.txEvents})`)
@@ -674,7 +680,7 @@ export function openUpkeep(rt: Rt): void {
     if (rt.stopped) return
     rt.upkeepAt = Date.now()
     const t0 = Date.now()
-    rt.upkeepRun = bound(runUpkeep()).finally(() => {
+    rt.upkeepRun = bound(() => runUpkeep()).finally(() => {
       rt.upkeepRun = undefined
       const ms = Date.now() - t0
       if (ms > 2_000) log(`automation: upkeep ${ms}ms`)

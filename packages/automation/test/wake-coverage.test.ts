@@ -185,7 +185,7 @@ test('store.commit hooks fire exactly where work lands', async (t) => {
     const bad = await store.applyTxEvent('a1', 'obs.proven', { guard: 'proof' })
     assert.equal(bad.accepted, false)
     assert.equal(work, before)
-    const ok = await store.applyTxEvent('a1', 'submit', { attempt: true })
+    const ok = await store.applyTxEvent('a1', 'submit', { attempt: true, guard: 'leases-held' })
     assert.equal(ok.accepted, true)
     assert.equal(work, before + 1)
   })

@@ -149,6 +149,11 @@ test('txMachine: crash/restart is identity — state lives in the row, not memor
   assert.equal(txStep('expired', 'obs.seen', { guard: 'verified' }).next, 'observed') // late landing revives
 })
 
+test('txMachine: unknown persisted state throws on hydrate — drift is loud', () => {
+  // resolveState rejects a value the table never declared (state renames surface immediately)
+  assert.throws(() => txStep('bogus', 'submit.success'), /bogus/)
+})
+
 // ---------- market_operations ----------
 
 tableTests('opsMachine', opsMachine, OPS_TABLE, (s, e, p) => opsStep(s, e, p))
@@ -163,6 +168,14 @@ test('opsMachine: revival edges are proof-gated', () => {
   assert.equal(opsStep('funding_failed', 'escrow.landed').accepted, false) // no verdict named
   assert.equal(opsStep('funding_failed', 'escrow.landed', { guard: 'verdict=mined' }).next, 'refund_pending')
   assert.equal(opsStep('refunded', 'refund.dead', { guard: 'verified' }).next, 'uncertain')
+})
+
+test('opsMachine: guarded self-rows refuse unasserted evidence — never absorbed', () => {
+  // v6 isUnhandled makes 'unasserted guard' a refusal, not a silent self-absorb
+  assert.equal(opsStep('refunded', 'refund.proven').accepted, false) // no proof named
+  assert.equal(opsStep('refunded', 'refund.proven', { guard: 'proof' }).next, 'refunded') // declared dup absorb
+  assert.equal(opsStep('uncertain', 'refund.dead').accepted, false) // no verdict named
+  assert.equal(opsStep('uncertain', 'refund.dead', { guard: 'verified' }).accepted, true)
 })
 
 test('opsMachine: crash/restart identity + guarded siblings disambiguate', () => {
@@ -189,6 +202,11 @@ test('inboxMachine: park is parent-op-guarded — delivered under funding_deferr
   assert.equal(inboxStep('pending', 'park').accepted, false) // no op state named → can't park
   assert.equal(inboxStep('parked', 'resume').next, 'pending')
   assert.equal(inboxStep('parked', 'process').next, 'done')
+})
+
+test('inboxMachine: a fail without an attempts verdict is refused, not absorbed', () => {
+  assert.equal(inboxStep('pending', 'fail').accepted, false)
+  assert.equal(inboxStep('pending', 'fail', { guard: 'attempts<max' }).next, 'pending') // retry declared → self
 })
 
 tableTests('outboxMachine', outboxMachine, OUTBOX_TABLE, (s, e, p) => outboxStep(s, e, p))

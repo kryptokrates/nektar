@@ -3,6 +3,7 @@ import { digestOf } from '../policy.js'
 import { classifyDeliveryError, type InboxItem, type Operation, type OutboxItem } from '../store.js'
 import { MarketBase } from './base.js'
 import { NONTERMINAL } from './types.js'
+import { WAITS } from '../waits.js'
 import type { MarketMessage } from './types.js'
 
 /** pump fan-out: deliveries are independent and off the engine mutex, so a
@@ -71,7 +72,7 @@ export abstract class IngressOps extends MarketBase {
       // intents, not just boot leftovers — a dropped ledger write between
       // broadcast and mark must not wedge the inputs until the next restart.
       // Boot replay covers startup; this is the upkeep cadence.
-      if (this.now() - this.lastResubmitAt >= 60_000) {
+      if (this.now() - this.lastResubmitAt >= WAITS.resubmitCadence.ms) {
         this.lastResubmitAt = this.now()
         // direct wallet call — resubmitPending() queues on this.chain, which
         // tick() already holds; the wrapper would deadlock on itself

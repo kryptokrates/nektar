@@ -6,6 +6,7 @@ import type { AutomationStore, Operation } from '../store.js'
 import { WalletCoordinator } from '../wallet.js'
 import type { AutomationPolicy } from '../policy.js'
 import { DEFAULTS } from './types.js'
+import { WAITS } from '../waits.js'
 import type { MarketDeps, MarketOptions } from './types.js'
 
 export abstract class MarketBase {
@@ -48,9 +49,33 @@ export abstract class MarketBase {
     return this.me
   }
 
+  // the serialized-work mutex: every run() queues behind the previous
+  // link on purpose — custody ordering over one coin book is deliberate,
+  // so the queue must not drop a wedged link. But a hung link wedges
+  // EVERY later run() silently — a bound() frees the caller's wait, never
+  // the chain, and the orphan keeps the link forever. Detect instead:
+  // when the head link outlives the hold bound, name it once per link —
+  // a wedge in the log beats a silent one.
+  private headSince = 0
+  private headWarned = false
+  private static readonly HOLD_MS = WAITS.runHold.ms
   protected run<T>(fn: () => Promise<T>): Promise<T> {
-    const p = this.chain.then(fn, fn)
+    const held = this.headSince === 0 ? 0 : this.now() - this.headSince
+    if (held > MarketBase.HOLD_MS && !this.headWarned) {
+      this.headWarned = true
+      this.d.log?.(`market: run() chain held ${held}ms — a queued link never settled; every later run() waits behind it`)
+    }
+    const mark = (): void => {
+      this.headSince = this.now()
+      this.headWarned = false
+    }
+    const p = this.chain.then(mark, mark).then(fn, fn)
     this.chain = p.catch(() => {})
+    // headSince belongs to the running link — clear on settle, strictly
+    // before the next link's mark can set its own
+    void p.finally(() => {
+      this.headSince = 0
+    })
     return p
   }
 

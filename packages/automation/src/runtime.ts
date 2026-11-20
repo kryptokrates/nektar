@@ -10,6 +10,8 @@ import { TransactionWatcher } from './ledger.js'
 import { MarketEngine, NONTERMINAL, type MarketTransport } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '@nektar/store'
+import { deadline, nap } from '@nektar/core'
+import { WAITS } from './waits.js'
 import { runPreflight, WATCHDOG_CHECKS, type PreflightReport } from './preflight.js'
 import { killSwitchActive } from './kill.js'
 import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
@@ -186,6 +188,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // poll, upkeep, ...) are assigned by the region openers and the deal loop
   // below; every call site reaches them lazily, so nothing can invoke a door
   // before assembly finishes
+  const rtAbort = new AbortController()
   const rt = {
     cfg,
     mem,
@@ -206,6 +209,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     me,
     fanoutIo,
     stopped: false,
+    signal: rtAbort.signal,
     inflight: new Set<Promise<void>>(),
     downNow,
     hotUntil: 0,
@@ -325,6 +329,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     },
     transport,
     ai: cfg.ai ?? aiFromEnv(),
+    log,
     killed: () => killSwitchActive(cfg.dataDir).killed,
     deaf: deafNow,
     opts: {
@@ -407,20 +412,26 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   let running: Promise<void> | undefined
   // a phase that never settles parks EVERY later pass behind `running` —
   // bound each leg so the worst case is a logged timeout, not a silent
-  // wedge (observed live: an unbounded leg froze the whole suite)
-  const bound = async <T>(name: string, p: Promise<T>, ms = 120_000): Promise<T | undefined> => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = new Promise<undefined>((resolve) => {
-      timer = setTimeout(() => {
-        log(`automation: ${name} exceeded ${ms}ms — abandoning leg`)
-        resolve(undefined)
-      }, ms)
+  // wedge (observed live: an unbounded leg froze the whole suite). The
+  // leg's deadline publishes on rt.activeSignal — inner IO that merges it
+  // dies with the leg (or at the successor leg's bound), instead of the
+  // abandoned promise finishing inside the next pass's world
+  const bound = async <T>(name: string, work: (signal: AbortSignal) => Promise<T>, ms = WAITS.dealsBound.ms): Promise<T | undefined> => {
+    let leg: AbortSignal | undefined
+    const r = await deadline(
+      (s) => {
+        leg = s
+        rt.activeSignal = s
+        return work(s)
+      },
+      ms,
+      { signal: rt.signal }
+    ).finally(() => {
+      if (rt.activeSignal === leg) rt.activeSignal = undefined
     })
-    try {
-      return await Promise.race([p, timeout])
-    } finally {
-      clearTimeout(timer)
-    }
+    if (r.outcome === 'settled') return r.value
+    if (r.outcome === 'timeout') log(`automation: ${name} exceeded ${ms}ms — abandoning leg`)
+    return undefined
   }
   const deals = async (): Promise<void> => {
     if (rt.busy) {
@@ -437,25 +448,25 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // phase timing: a pass that outruns the want collect window is a
             // silent deal killer — name the segment that ate it
             const t0 = Date.now()
-            await bound('poll', rt.poll())
+            await bound('poll', () => rt.poll())
             const t1 = Date.now()
-            await bound('tick', engine.tick())
+            await bound('tick', () => engine.tick())
             const t2 = Date.now()
             // the ledger sweep rides the deals pass — serialized behind the
             // same busy flag, throttled to a chain-read cadence rather than
             // the deal loop's hot tick
-            if (t2 - lastLedgerSweep > 15_000) {
+            if (t2 - lastLedgerSweep > WAITS.ledgerSweep.ms) {
               lastLedgerSweep = t2
-              await bound('wtx', ledgerWatcher.tick())
+              await bound('wtx', () => ledgerWatcher.tick())
             }
             rt.pushAcks()
             const t3 = Date.now()
-            if (t3 - t0 > 2_000) log(`automation: pass ${t3 - t0}ms (poll ${t1 - t0} tick ${t2 - t1} acks ${t3 - t2})`)
+            if (t3 - t0 > WAITS.passReport.ms) log(`automation: pass ${t3 - t0}ms (poll ${t1 - t0} tick ${t2 - t1} acks ${t3 - t2})`)
             // a live deal keeps the loop hot — the 5s inbound window alone
             // would let a deal cool to idle cadence between hops. A settled
             // proof awaiting depth only waits on BLOCKS, so it is excluded —
             // holding the loop hot for it would burn cycles per confirmation
-            if (await store.hasLiveOps(NONTERMINAL)) rt.hotUntil = Date.now() + 5_000
+            if (await store.hasLiveOps(NONTERMINAL)) rt.hotUntil = Date.now() + WAITS.hotWindow.ms
             // new lanes appear as deals start — re-derive watch subs at the
             // end of a pass so a fresh want is subscribed within one cycle
             if (rt.watchBases.length > 0) void rt.refreshWatches().catch(() => undefined)
@@ -545,7 +556,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     })
   // watch queries derive from the engine's live watch-list — re-derive on a
   // slow tick plus after every deals pass so new wants appear in ≤1 cycle
-  if (rt.watchBases.length !== 0) rt.scheduler!.add({ name: 'watches', run: () => rt.refreshWatches().catch(() => undefined), ceilingMs: () => 15_000 })
+  if (rt.watchBases.length !== 0) rt.scheduler!.add({ name: 'watches', run: () => rt.refreshWatches().catch(() => undefined), ceilingMs: () => WAITS.watchRearm.ms })
   void rt.refreshWatches().catch(() => undefined)
   // push-driven progress: a verified tx proof (broadcaster callback or the
   // chain's own mined event) may make a funding tree provable and advance
@@ -744,19 +755,19 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     },
     stop: async () => {
       rt.stopped = true
+      rtAbort.abort()
       if (rt.scheduler !== undefined) await rt.scheduler.stop()
       for (const ac of rt.watches.values()) ac.abort()
       rt.watches.clear()
       // bounded like the drain below — a wedged inflight item must not
       // stall teardown before the deadline loop even starts
       {
-        const settled = Promise.allSettled(rt.inflight).then(() => 'done' as const)
-        const r = await Promise.race([settled, new Promise<'timeout'>((res) => setTimeout(() => res('timeout'), 15_000))])
-        if (r === 'timeout') log(`automation: stop: inflight settle deadline hit (${rt.inflight.size} pending) — proceeding`)
+        const r = await deadline(() => Promise.allSettled(rt.inflight).then(() => 'done' as const), WAITS.stopSettle.ms)
+        if (r.outcome !== 'settled') log(`automation: stop: inflight settle deadline hit (${rt.inflight.size} pending) — proceeding`)
       }
       // drain in-flight work with a bound — a wedged producer must not hang
       // teardown forever (was an unbounded spin)
-      const drainDeadline = Date.now() + 30_000
+      const drainDeadline = Date.now() + WAITS.stopDrain.ms
       while (rt.busy || rt.upkeepRun !== undefined || rt.acking || rt.pumping) {
         if (Date.now() >= drainDeadline) {
           log(
@@ -764,7 +775,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
           )
           break
         }
-        await new Promise((r) => setTimeout(r, 25))
+        await nap(WAITS.drainPoll.ms)
       }
       await engine.idle()
       await kxLanes?.destroy()

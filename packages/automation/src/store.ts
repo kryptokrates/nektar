@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { randomUUID } from 'node:crypto'
+import { spread, stable01 } from '@nektar/core'
 import { policyHash, policyError, canonicalJson, type AutomationPolicy, type ActionContext } from './policy.js'
 import { txStep } from './machines/tx.machine.js'
 import { opsFsmLegacy, opEdgeAgrees } from './machines/driver.js'
@@ -811,7 +812,7 @@ export class AutomationStore {
    *  a delivery failure), so attempts are NOT consumed toward dead-letter.
    *  Short fixed re-check; the real wake-up is unblockOutbox on a freeing
    *  event (topup proven → slots appear). */
-  async deferOutbox(actionId: string, error: string, checkInMs = 2_000, cls: DeferClass = 'funding-slot'): Promise<void> {
+  async deferOutbox(actionId: string, error: string, checkInMs = WAITS.deferCheck.ms, cls: DeferClass = 'funding-slot'): Promise<void> {
     await this.kx(T.outbox)
       .where({ action_id: actionId, status: 'pending' })
       .update({ last_error: error.slice(0, 500), defer_class: cls, next_at: this.now() + checkInMs })
@@ -829,7 +830,10 @@ export class AutomationStore {
           last_error: error.slice(0, 500),
           defer_class: cls ?? null,
           status: attempts >= maxAttempts ? 'dead' : 'pending',
-          next_at: this.now() + Math.min(300_000, 1000 * 2 ** attempts)
+          // deterministic per-row jitter — N rows failing on the same host
+          // flap retry in lockstep without it (phase-aligned cadence);
+          // stable01 keeps the spread replayable and restart-stable
+          next_at: this.now() + spread(Math.min(WAITS.outboxRetryCap.ms, WAITS.outboxRetryBase.ms * 2 ** attempts), stable01(actionId))
         })
     })
   }

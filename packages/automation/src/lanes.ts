@@ -2,6 +2,7 @@
 // inbox msgs surface (sendBox/readBox/ackBox), host-health notes, the
 // republish queue, and the want/offer/inbox poll passes.
 import { BoundedMap, BoundedSet } from '@nektar/core'
+import { WAITS } from './waits.js'
 import { requeueAckItems, trackFanout } from './fanout.js'
 import type { MarketMessage } from './market.js'
 import type { FingerRec, Rt } from './rtctx.js'
@@ -34,10 +35,10 @@ export function openLanes(rt: Rt): void {
     const c = fingerCache.get(pub)
     // fresh callers (ack retries on deferred envelopes) bypass a cached miss —
     // a stale negative entry would otherwise strand receipts for a minute
-    if (c !== undefined && t - c.at < (c.rec === undefined ? (fresh ? 0 : 60_000) : 600_000)) return c.rec
+    if (c !== undefined && t - c.at < (c.rec === undefined ? (fresh ? 0 : WAITS.fingerNeg.ms) : WAITS.fingerPos.ms)) return c.rec
     let rec: FingerRec | undefined
     try {
-      const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: mem.sdkTracker(), allowHttp: rt.localNet, now: cfg.now, timeoutMs: 5_000 })
+      const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: mem.sdkTracker(), allowHttp: rt.localNet, now: cfg.now, timeoutMs: WAITS.resolveFingerIo.ms })
       if (r !== undefined && (r.body.nets.length === 0 || r.body.nets.includes(cfg.network))) {
         const hosts = r.body.hosts.filter((u) => lanes.mod.fingerHostAllowed(u, { allowHttp: rt.localNet, allowLocal: rt.localNet })).slice(0, 8)
         const push =
@@ -67,13 +68,22 @@ export function openLanes(rt: Rt): void {
   // a counterparty's advertised watch shim: POST {service,query} → the shim
   // wakes their long-polls early. Best-effort only — the shim re-verifies
   // real state and our own polling covers a miss, so it's fire-and-forget
+  // the runtime umbrella reaches fetch-level IO: the leg's bound signal
+  // (rt.activeSignal) or the runtime's (rt.signal) cancels an in-flight
+  // call instead of the fetch outliving the leg that asked for it — one
+  // operation deadline shared inward, not a fresh budget per hop
+  const io = (ms: number): AbortSignal => {
+    const own = AbortSignal.timeout(ms)
+    const up = rt.activeSignal ?? rt.signal
+    return up !== undefined ? AbortSignal.any([up, own]) : own
+  }
   const notifyPeer = (rec: { watch?: string } | undefined, service: string, query?: unknown): void => {
     if (rec?.watch === undefined) return
     fetch(`${rec.watch.replace(/\/+$/, '')}/notify`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(query === undefined ? { service } : { service, query }),
-      signal: AbortSignal.timeout(2_000),
+      signal: io(WAITS.pushIo.ms),
       redirect: 'error' // a redirect into an unscreened host is still an egress bypass
     }).catch(() => undefined)
   }
@@ -88,7 +98,7 @@ export function openLanes(rt: Rt): void {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ beef: Buffer.from(beef).toString('hex') }),
-      signal: AbortSignal.timeout(2_000)
+      signal: io(WAITS.pushIo.ms)
     })
       .then((r) => {
         if (!r.ok) log(`automation: push → ${rec.push}: ${r.status}`)
@@ -110,7 +120,7 @@ export function openLanes(rt: Rt): void {
     if (env !== undefined) {
       const msg = (env.body as { market?: MarketMessage }).market
       if (msg !== undefined && typeof msg === 'object') {
-        rt.hotUntil = Date.now() + 5_000
+        rt.hotUntil = Date.now() + WAITS.hotWindow.ms
         await rt.engine.ingestMessage(env.from, msg, env.refs)
         log(`automation: push: ingested envelope ${env.txid.slice(0, 12)} from ${env.from.slice(0, 12)}`)
         void rt.deals().catch((e) => log(`automation: push: ${(e as Error).message}`))
@@ -132,7 +142,7 @@ export function openLanes(rt: Rt): void {
         body.offer.net === cfg.network &&
         typeof body.offer.wantId === 'string'
       ) {
-        rt.hotUntil = Date.now() + 5_000
+        rt.hotUntil = Date.now() + WAITS.hotWindow.ms
         await rt.engine.ingestEvents(`offers:${body.offer.wantId}`, [{ seq: chk.carrier.id('hex'), kind: 'offer', payload: p.body }], '')
         log(`automation: push: ingested offer ${chk.carrier.id('hex').slice(0, 12)}`)
         void rt.deals().catch((e) => log(`automation: push: ${(e as Error).message}`))
@@ -398,7 +408,7 @@ export function openLanes(rt: Rt): void {
     const watch = await rt.engine.watchList()
     const tracker = mem.sdkTracker()
     const net = cfg.network
-    const timeoutMs = cfg.laneReadTimeoutMs ?? 5_000
+    const timeoutMs = cfg.laneReadTimeoutMs ?? WAITS.laneReadIo.ms
     // two-tier read, same shape as the inbox collect: quorum-1 returns the
     // fastest host's view so one slow host never gates the deal; the full
     // fan-out lands behind it for withheld/unreachable bookkeeping and for
@@ -462,7 +472,7 @@ export function openLanes(rt: Rt): void {
             log(`lanes: ${s.tag} items=${(fast.items as unknown[]).length} staged=${staged.length}`)
           const events = toEvents(fast.items as never)
           if (events.length > 0) {
-            rt.hotUntil = Date.now() + 5_000
+            rt.hotUntil = Date.now() + WAITS.hotWindow.ms
             await rt.engine.ingestEvents(s.tag, events, '')
           }
         } else {
@@ -470,7 +480,7 @@ export function openLanes(rt: Rt): void {
           laneNotes(r, Object.keys(r.perHost))
           const events = toEvents(r.items as never)
           if (events.length > 0) {
-            rt.hotUntil = Date.now() + 5_000
+            rt.hotUntil = Date.now() + WAITS.hotWindow.ms
             await rt.engine.ingestEvents(s.tag, events, '')
           }
         }
@@ -487,7 +497,7 @@ export function openLanes(rt: Rt): void {
         ? (async () => {
             try {
               const collected = await rt.msgs!.collect()
-              if (collected.length > 0) rt.hotUntil = Date.now() + 5_000
+              if (collected.length > 0) rt.hotUntil = Date.now() + WAITS.hotWindow.ms
               for (const m of collected) await rt.engine.ingestMessage(m.from, m.msg, m.refs)
             } catch (e) {
               log(`automation: messages: ${(e as Error).message}`)

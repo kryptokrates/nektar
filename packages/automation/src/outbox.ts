@@ -2,6 +2,7 @@
 // store-driven pump (wake on outboxReady + a bounded ceiling timer on the
 // next row's next_at) that keeps durable delivery off the poll cadence.
 import type { Rt } from './rtctx.js'
+import { WAITS } from './waits.js'
 
 export function openOutbox(rt: Rt): void {
   const { store, engine, log } = rt
@@ -58,6 +59,6 @@ export function openOutbox(rt: Rt): void {
   // register the job once — exact-at wakes come from dueIn() on each arm;
   // the 60s ceiling is only the missed-wake backstop (the end-of-tick pump
   // is already the correctness floor)
-  rt.scheduler!.add({ name: 'outbox', run: () => rt.pumpOutbox(), ceilingMs: () => 60_000 })
+  rt.scheduler!.add({ name: 'outbox', run: () => rt.pumpOutbox(), ceilingMs: () => WAITS.outboxCeiling.ms })
   rt.pushAcks = pushAcks
 }

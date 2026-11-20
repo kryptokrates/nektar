@@ -138,6 +138,10 @@ export interface MarketDeps {
   deaf?: () => boolean
   now?: () => number
   opts?: Partial<MarketOptions>
+  /** diagnostic surface for the serialized-work mutex — a hung run() link
+   *  wedges every later run() silently; the held-too-long check names it
+   *  here (optional: tests run without the runtime's log) */
+  log?: (line: string) => void
 }
 
 export interface MarketOptions {

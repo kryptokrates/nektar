@@ -2,6 +2,7 @@
 // the inbox ack path and the assembler's abandon-reap hook. Leaf module:
 // depends only on the store's OutboxItem shape.
 import type { OutboxItem } from './store.js'
+import { WAITS } from './waits.js'
 
 /** requeue envelope receipts after a failed ackBox push — the retry MUST
  *  keep `from`: the next ack() pass resolves the SENDER's finger record to
@@ -52,7 +53,7 @@ export async function trackFanout(
     r.hash,
     r.missed.map((m) => m.host)
   )
-  await queueRepairs(io, r.hash, r.pending, { delayMs: 20_000 })
+  await queueRepairs(io, r.hash, r.pending, { delayMs: WAITS.repairDelay.ms })
   void r.settled
     .then(async (s) => {
       for (const h of s.took) await io.ackOutbox(`repair:${r.hash}:${h}`).catch(() => {})

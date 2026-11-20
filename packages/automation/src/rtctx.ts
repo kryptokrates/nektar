@@ -180,6 +180,16 @@ export interface Rt {
   }
   // shared loop state — written by one region, read by others (and by stop)
   stopped: boolean
+  /** the runtime umbrella — aborted once in stop(); every long wait/IO
+   *  merges it (`AbortSignal.any`) so teardown cancels work, not just
+   *  flags it. Optional for tests that fabricate a bare Rt. */
+  signal?: AbortSignal
+  /** the currently-running bounded leg's deadline — bound() publishes it
+   *  for the leg's duration. Inner IO merges this ahead of `signal`, so a
+   *  leg that outlives its bound loses its awaited IO at the SUCCESSOR's
+   *  deadline instead of lingering: one operation budget shared inward,
+   *  not nested fresh bounds that sum. */
+  activeSignal?: AbortSignal
   /** the one timer wheel — every recurring job registers a name + ceiling
    *  here instead of owning a private interval (Stage 6) */
   scheduler?: import('./scheduler.js').Scheduler

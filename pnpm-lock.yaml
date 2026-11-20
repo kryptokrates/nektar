@@ -118,8 +118,8 @@ importers:
         specifier: ^5.1.7
         version: 5.1.7(bluebird@3.7.2)(supports-color@7.2.0)
       xstate:
-        specifier: 5.33.3
-        version: 5.33.3
+        specifier: 6.0.0-beta.3
+        version: 6.0.0-beta.3
 
   packages/automaton:
     dependencies:
@@ -2892,8 +2892,9 @@ packages:
       utf-8-validate:
         optional: true
 
-  xstate@5.33.3:
-    resolution: {integrity: sha512-AnDRjS/GyKHmbA1PyhVCYBqYsA7EGe3KGgeD0ht3NFsXzoz7leX/HQDFX9QlHFJ/ltLHPsgChJYwPzRvB/0b4g==}
+  xstate@6.0.0-beta.3:
+    resolution: {integrity: sha512-b6C6SQ9cern6sD531uHcwOH94lBL+701Jd/VRSkzT8oAV1AKTT9oXFZtvC5DajUU4+8gmTLBTMHjZjd0VrsmAg==}
+    hasBin: true
 
   y18n@4.0.3:
     resolution: {integrity: sha512-JKhqTOwSrqNA1NY5lSztJ1GrBiUodLMmIZuLiDaMRJ+itFd+ABVE8XBjOvIWL+rSqNDC74LCSFmlb/U4UZ4hJQ==}
@@ -5176,7 +5177,7 @@ snapshots:
 
   ws@8.22.2: {}
 
-  xstate@5.33.3: {}
+  xstate@6.0.0-beta.3: {}
 
   y18n@4.0.3: {}
 

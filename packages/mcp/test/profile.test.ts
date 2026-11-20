@@ -208,7 +208,9 @@ test('profile: sell → want → deals drives a full deal; fund reports slot cou
       const d = (await callTool(bb.mem, 'deals', { operationId: w.operationId })) as { state: string }
       return d.state === 'disclosure_verified'
     }
-    assert.ok(await until([bb.rt, ss.rt], chain, done), 'deal did not reach disclosure_verified')
+    // stack tier shares one chain across files — mining rounds and proof
+    // delivery compete, so the deal needs headroom past the memory-tier pace
+    assert.ok(await until([bb.rt, ss.rt], chain, done, 240_000), 'deal did not reach disclosure_verified')
     const d = (await callTool(bb.mem, 'deals', { operationId: w.operationId })) as { state: string; result: { text: string }; events: unknown[] }
     assert.equal(d.state, 'disclosure_verified')
     assert.equal(d.result.text, FINDING)

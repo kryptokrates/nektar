@@ -40,7 +40,11 @@ test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resourc
       NEKTAR_MODEL_ID: 'stdio-test',
       NEKTAR_BATCH: '2',
       NEKTAR_TOOL_PROFILE: 'operator',
-      NEKTAR_PAID_DISCLOSURE: '1'
+      NEKTAR_PAID_DISCLOSURE: '1',
+      // an ambient NEKTAR_HTTP_PORT in the parent env must not reach the
+      // spawn — bin.ts serves stdio only when the var is unset, and a shared
+      // port is an EADDRINUSE death rather than a test result
+      NEKTAR_HTTP_PORT: ''
     },
     stderr: 'ignore'
   })

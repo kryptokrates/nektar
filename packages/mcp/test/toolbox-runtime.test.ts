@@ -1,14 +1,15 @@
 // toolbox custody through the REAL production path: openRuntime boots with
-// NEKTAR_WALLET=toolbox → the BRC-100 wallet owns the funding-UTXO lifecycle
-// (reserve.json seeds once, then selection/spent/change live in wallet
-// storage) → mem.remember → mem.anchorShard broadcasts through
-// WalletFunds.take, not the file-backed ReserveFunder.
+// NEKTAR_WALLET=toolbox → SqlFunds owns the funding-UTXO lifecycle in
+// records.sqlite (treasury.json seeds once, then selection/spent/change live
+// in the utxos table) → mem.remember → mem.anchorShard broadcasts through
+// Funds.take, not the file-backed ReserveFunder.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH } from '@bsv/sdk'
 import { stackChain, skipUnlessStack, stackTreasury, StackFunder, stackOnly } from '@nektar/chain'
 import { openRuntime } from '../src/runtime.js'
-import { mkdtempSync, writeFileSync, readdirSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -48,12 +49,13 @@ test('toolbox custody: openRuntime defaults to the wallet — anchor spends thro
   const rt = await openRuntime({ network: 'regtest', dataDir: dd, regtest: { ...rc, fundWif: fundKey.toWif([0xef]) } })
   t.after(async () => await rt.close())
 
-  // the toolbox wallet backend materialized — wallet storage exists under
-  // the dataDir (not just reserve.json)
-  assert.ok(
-    readdirSync(dd).some((f) => f.includes('wallet')),
-    `toolbox mode must create wallet storage in the dataDir — saw: ${readdirSync(dd).join(', ')}`
-  )
+  // the toolbox custody book materialized — SqlFunds owns the utxos table in
+  // records.sqlite (wallet.sqlite is the legacy book — only swept when it
+  // pre-exists, never created on this path)
+  const book = new DatabaseSync(join(dd, 'records.sqlite'), { readOnly: true })
+  const utxoRows = (book.prepare('select count(*) as c from utxos').get() as { c: number }).c
+  book.close()
+  assert.ok(utxoRows > 0, `toolbox mode must internalize reserve utxos into records.sqlite — saw ${utxoRows}`)
 
   // the money path: remember → close batch → anchor broadcast — the anchor's
   // funding input is taken through WalletFunds.take (the wallet's own UTXO

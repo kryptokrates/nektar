@@ -4,6 +4,7 @@
 import { createServer, type Http2Server } from 'node:http2'
 import * as restate from '@restatedev/restate-sdk'
 import { nektarEnv, nektarEnvNum, nap, type EnvSource } from '@nektar/core'
+import { WAITS } from '../waits.js'
 
 export interface RtEndpoint {
   /** the URI the server invokes handlers at */
@@ -20,7 +21,7 @@ export async function registerDeployment(admin: string, uri: string, log: (line:
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ uri, force: false }),
-        signal: AbortSignal.timeout(5_000)
+        signal: AbortSignal.timeout(WAITS.registerIo.ms)
       })
       if (r.ok || r.status === 409) {
         log(`rt: restate deployment registered ${uri}`)
@@ -30,7 +31,7 @@ export async function registerDeployment(admin: string, uri: string, log: (line:
     } catch {
       // server still starting
     }
-    await nap(500)
+    await nap(WAITS.registerRetry.ms)
   }
   log(`rt: restate deployment registration failed ${uri} — invocations will not reach this endpoint`)
   return false

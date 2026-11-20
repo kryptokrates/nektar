@@ -30,9 +30,7 @@ export const txObject = (deps: RtDeps) =>
       observe: async (ctx: restate.ObjectContext, o: TxObserve) => {
         const w = await ctx.run('load', () => deps.store.walletTx({ actionId: ctx.key }))
         if (w === undefined) return { accepted: false }
-        const r = await ctx.run('emit', () =>
-          emitTxEvent(deps.store, w, o.event, { guard: o.guard, observation: o.observation, attempt: o.attempt }, deps.fx)
-        )
+        const r = await ctx.run('emit', () => emitTxEvent(deps.store, w, o.event, { guard: o.guard, observation: o.observation, attempt: o.attempt }, deps.fx))
         return { accepted: r.accepted, next: r.next, intents: r.intents }
       },
 

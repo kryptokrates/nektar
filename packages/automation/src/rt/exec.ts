@@ -10,6 +10,7 @@
 // the Restate endpoint, LocalExecutor dispatches to them directly — so
 // memory-tier tests exercise the exact code the server invokes.
 import { nektarEnv, type EnvSource } from '@nektar/core'
+import { WAITS } from '../waits.js'
 
 export interface InvokeTarget {
   /** restate service/object/workflow name */
@@ -114,7 +115,7 @@ export class RestateExecutor implements Executor {
       },
       body: JSON.stringify(arg ?? null),
       // the ingress is local — a dead/wedged one fails fast rather than parking a send
-      signal: AbortSignal.timeout(10_000)
+      signal: AbortSignal.timeout(WAITS.ingressIo.ms)
     })
   }
 
@@ -141,7 +142,7 @@ export function executorFromEnv(env: EnvSource = process.env, log?: (line: strin
 let active: Executor | undefined
 
 export function executor(): Executor | undefined {
-  return active ??= executorFromEnv()
+  return (active ??= executorFromEnv())
 }
 
 export function setExecutor(e: Executor | undefined): void {

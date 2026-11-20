@@ -153,9 +153,7 @@ export async function stackUp(
 export async function assetUp(cfg: RegtestConfig, timeoutMs = 5_000): Promise<boolean> {
   if (cfg.assetUrl === undefined) return false
   const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
-  const res = await fetch(`${cfg.assetUrl}/health`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(timeoutMs) }).catch(
-    () => null
-  )
+  const res = await fetch(`${cfg.assetUrl}/health`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(timeoutMs) }).catch(() => null)
   return res !== null
 }
 

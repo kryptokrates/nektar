@@ -82,7 +82,9 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
         if (!txFsmLegacy()) {
           const w = await store.walletTx({ actionId }).catch(() => undefined)
           if (w !== undefined)
-            await txEmit(executor(), store, w, 'submit.unknown', { observation: { at: Date.now(), error: (e as Error).message }, attempt: true }, {}).catch(() => {})
+            await txEmit(executor(), store, w, 'submit.unknown', { observation: { at: Date.now(), error: (e as Error).message }, attempt: true }, {}).catch(
+              () => {}
+            )
         } else await store.setTxState(actionId, 'submission_unknown', { at: Date.now(), error: (e as Error).message }, true).catch(() => {})
       }
       throw e

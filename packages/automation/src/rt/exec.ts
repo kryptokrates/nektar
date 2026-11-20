@@ -43,7 +43,8 @@ export const EXEC_SVC = {
   deal: 'nektar-deal',
   dealfan: 'nektar-dealfan',
   custody: 'nektar-custody',
-  transport: 'nektar-transport'
+  transport: 'nektar-transport',
+  wake: 'nektar-wake'
 } as const
 
 /** the custody object's fixed key — every wallet custody leg serializes on

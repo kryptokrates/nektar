@@ -847,7 +847,9 @@ export class AutomationStore {
    *  happens to contain the keyword can't pull an unrelated row forward.
    *  Attempts are untouched: this never hastens a dead-letter. */
   async unblockOutbox(cls: DeferClass): Promise<number> {
-    return await this.kx(T.outbox).where({ status: 'pending' }).where('defer_class', cls).where('next_at', '>', this.now()).update({ next_at: this.now() })
+    const n = await this.kx(T.outbox).where({ status: 'pending' }).where('defer_class', cls).where('next_at', '>', this.now()).update({ next_at: this.now() })
+    if (n > 0) detached(() => this.outboxReady?.())
+    return n
   }
 
   /** a resource-gated defer — the cause is starvation (a funding slot, not

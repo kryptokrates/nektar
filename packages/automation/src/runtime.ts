@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { Transaction } from '@bsv/sdk'
+import { Transaction, MerklePath } from '@bsv/sdk'
 import { hintSeen } from '@nektar/chain'
 import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
@@ -23,7 +23,7 @@ import { openWatches } from './watches.js'
 import type { TxEffects } from './machines/effects.js'
 import { executor, EXEC_SVC } from './rt/exec.js'
 import { openEndpoint, type RtEndpoint } from './rt/endpoint.js'
-import { txObject, sweepService, dealObject, custodyObject, dealfanService } from './rt/services.js'
+import { txObject, sweepService, dealObject, custodyObject, dealfanService, transportObject, wakeService, type WakeLegs } from './rt/services.js'
 import type { Rt, LaneInfra, AutomationConfig } from './rtctx.js'
 import type { Automation } from './types.js'
 
@@ -143,6 +143,17 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // proving pass re-anchors it (proven is otherwise sticky forever)
   if (lanes !== undefined)
     mem.onReorg?.((from) => {
+      const exec = executor()
+      // under restate the demotion leg is a durable wake invocation — a
+      // crash can no longer drop the reorg with the dead fork's proofs
+      // still marked proven; the send's idempotency key dedupes a repeat
+      // announce for the same horizon
+      if (exec !== undefined) {
+        void exec
+          .send({ service: EXEC_SVC.wake, handler: 'reorg' }, { from }, { idempotencyKey: `wake:reorg:${from}` })
+          .catch((e) => log(`automation: reorg send: ${(e as Error).message}`))
+        return
+      }
       void lanes.journal.clearPaths?.(from).catch(() => undefined)
       void lanes.ledger.unproveFrom?.(from).catch(() => undefined)
     })
@@ -350,6 +361,72 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     logStream
   })
   rt.engine = engine
+  // the wake legs — the domain half of each mem.onTx*/onHeight/onReorg
+  // callback, shared by the local spawns and the nektar-wake service's
+  // journaled handlers. Legs throw on failure: the local caller logs
+  // (today's log-and-drop), the wake service propagates so the runtime
+  // retries — the durable send is what a crash can no longer lose.
+  const wakeLegs: WakeLegs = {
+    // a verified proof (broadcaster callback or the chain's own mined
+    // event) may make a funding tree provable and advance
+    // completion_submitted → settled
+    txProof:
+      lanes === undefined
+        ? undefined
+        : async (txid, mpHex) => {
+            const mp = MerklePath.fromHex(mpHex)
+            const unproven = await lanes.ledger.unproven()
+            if (rt.stopped) return
+            if (unproven.some((u) => u.txid === txid)) {
+              await lanes.ledger.markProven(txid, mp)
+              // a proven topup frees funding-tree slots — pull any
+              // slot-starved outbox item forward instead of letting it sit
+              // out the retry backoff (measured: a want stalled ~15s on this)
+              await store.unblockOutbox('funding-slot')
+              // carriers minted on this tree while it was unproven carry a
+              // 10-minute host eviction deadline that never clears on its own —
+              // queue a per-row re-announce with the parent's BUMP attached
+              await rt.queueRepublish(txid)
+            } else if (await lanes.ledger.attachParentPath(txid, mp)) {
+              // the proof was for a funding parent — stored tree beefs now
+              // carry anchored ancestry, so their slots serve immediately
+              await store.unblockOutbox('funding-slot')
+            }
+          },
+    // the substrate's abandon horizon is the terminal verdict for a mint
+    // that resubmitted but never mined — drop the row so the kind's mint
+    // gate re-opens (same reap as a chain rejection, driven by the event)
+    txAbandoned:
+      lanes === undefined
+        ? undefined
+        : async (txid) => {
+            const unproven = await lanes.ledger.unproven()
+            const row = unproven.find((u) => u.txid === txid)
+            if (row === undefined) return
+            const tx = await mem.fetchTx(txid)
+            await lanes.ledger.drop(txid)
+            // carriers minted on the dead tree are unadmittable forever — reap
+            // their journal rows too, else the repair leg resubmits them endlessly
+            for (const j of (await lanes.journal.fundedBy?.(txid)) ?? []) await lanes.journal.del?.(j.hash)
+            const reap = abandonedReap(row.kind)
+            if (reap.ghost && tx !== undefined) rt.ghostMint(tx)
+            log(reap.ghost ? `automation: dropped abandoned funding mint ${txid}` : `automation: dropped abandoned provision tx ${txid}`)
+            await store.unblockOutbox('funding-slot')
+          },
+    // a reorg demotes every proof anchored at/above the fork horizon —
+    // journal paths clear so enrich re-attaches against the new headers,
+    // proven rows flip back to unproven so the proving pass re-anchors
+    reorg:
+      lanes === undefined
+        ? undefined
+        : async (from) => {
+            void lanes.journal.clearPaths?.(from).catch(() => undefined)
+            void lanes.ledger.unproveFrom?.(from).catch(() => undefined)
+          },
+    // a tip advance frees every height-bound op (seize/refund deadlines)
+    // at block arrival rather than the next floor tick
+    dueAtHeight: async (tip) => await store.hasDueAtHeight(NONTERMINAL, tip)
+  }
   // the market wallet ledger gets the same dead-verdict rescan the mcp-side
   // ledger gets: a refused escrow can still air — the accept ships signed
   // bytes and the counterparty re-broadcasts them through its own guard.
@@ -467,12 +544,26 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       },
       dealDef
     )
+    // the transport object — outbox delivery as journaled invocations:
+    // drain scans due rows (journaled), fans deliver per destination key,
+    // and self-schedules its ceiling at the earliest next_at
+    const transportDef = await transportObject({
+      dueRows: () => store.dueOutbox(),
+      nextAt: () => store.nextOutboxAt(),
+      deliverItem: (item) => engine.deliverOutboxItem(item),
+      now: () => Date.now(),
+      log
+    })
     // the custody object — one fixed key serializes every wallet custody
     // leg (broadcasts, dead-verdicts, the resubmit scan); the journaled
     // successor of the run() chain for custody writes
     const wallet = engine.walletCoordinator
     const custodyDefs = wallet !== undefined ? [await custodyObject({ wallet, log })] : []
-    rtEndpoint = await openEndpoint([txDef, sweepDef, dealDef, dealfanDef, ...custodyDefs], process.env, log)
+    // the wake service — mem.onTx*/onHeight/onReorg callbacks become
+    // durable invocations; the legs above run journaled, the cycle tail
+    // leaves through journaled sends (dealfan.tick + transport.drain)
+    const wakeDef = await wakeService({ legs: wakeLegs, hint: (txid) => engine.hint(txid), log })
+    rtEndpoint = await openEndpoint([txDef, sweepDef, dealDef, dealfanDef, transportDef, wakeDef, ...custodyDefs], process.env, log)
     log(`automation: restate endpoint ${rtEndpoint.uri}`)
     // boot resubmit fans out through the sweep — each row's re-air is a
     // journaled invocation on its own tx object
@@ -654,30 +745,24 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // completion_submitted → settled — run a cycle now, not at the next interval
   mem.onTxProof((txid, mp) => {
     if (rt.stopped) return
+    const exec = executor()
+    // under restate the leg + cycle tail is a durable wake invocation —
+    // a crash between proof receipt and markProven can no longer drop
+    // the wake; the idempotency key dedupes a repeat announce for the
+    // same txid
+    if (exec !== undefined) {
+      rt.countWake('txProof')
+      void exec
+        .send({ service: EXEC_SVC.wake, handler: 'txProof' }, { txid, mpHex: mp.toHex() }, { idempotencyKey: `wake:txProof:${txid}` })
+        .catch((e) => log(`automation: txproof send: ${(e as Error).message}`))
+      return
+    }
     // detached(): the handler launches a pass, not leg work — a proof that
     // lands inside a leg must not hand that leg's deadline to the spawn
     const work = detached(() =>
       (async () => {
         try {
-          if (lanes !== undefined) {
-            const unproven = await lanes.ledger.unproven()
-            if (rt.stopped) return
-            if (unproven.some((u) => u.txid === txid)) {
-              await lanes.ledger.markProven(txid, mp)
-              // a proven topup frees funding-tree slots — pull any
-              // slot-starved outbox item forward instead of letting it sit
-              // out the retry backoff (measured: a want stalled ~15s on this)
-              await store.unblockOutbox('funding-slot')
-              // carriers minted on this tree while it was unproven carry a
-              // 10-minute host eviction deadline that never clears on its own —
-              // queue a per-row re-announce with the parent's BUMP attached
-              await rt.queueRepublish(txid)
-            } else if (await lanes.ledger.attachParentPath(txid, mp)) {
-              // the proof was for a funding parent — stored tree beefs now
-              // carry anchored ancestry, so their slots serve immediately
-              await store.unblockOutbox('funding-slot')
-            }
-          }
+          await wakeLegs.txProof?.(txid, mp.toHex())
         } catch (e) {
           log(`automation: txproof: ${(e as Error).message}`)
         }
@@ -696,6 +781,14 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // affected operation and run a cycle — the engine consults txFacts itself
   mem.onTxRejected((txid: string) => {
     if (rt.stopped) return
+    const exec = executor()
+    if (exec !== undefined) {
+      rt.countWake('txRejected')
+      void exec
+        .send({ service: EXEC_SVC.wake, handler: 'txRejected' }, { txid }, { idempotencyKey: `wake:txRejected:${txid}` })
+        .catch((e) => log(`automation: txrejected send: ${(e as Error).message}`))
+      return
+    }
     const work = detached(() =>
       (async () => {
         engine.hint(txid)
@@ -714,6 +807,14 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // feed leave the floor as the only driver, same as today
   mem.onHeight?.((tip: number) => {
     if (rt.stopped) return
+    const exec = executor()
+    if (exec !== undefined) {
+      rt.countWake('height')
+      void exec
+        .send({ service: EXEC_SVC.wake, handler: 'height' }, { tip }, { idempotencyKey: `wake:height:${tip}` })
+        .catch((e) => log(`automation: height send: ${(e as Error).message}`))
+      return
+    }
     void detached(() =>
       store
         .hasDueAtHeight(NONTERMINAL, tip)
@@ -731,21 +832,18 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // re-opens (same reap as a chain rejection, driven by the event)
   mem.onTxAbandoned((txid: string) => {
     if (rt.stopped || lanes === undefined) return
+    const exec = executor()
+    if (exec !== undefined) {
+      rt.countWake('txAbandoned')
+      void exec
+        .send({ service: EXEC_SVC.wake, handler: 'txAbandoned' }, { txid }, { idempotencyKey: `wake:txAbandoned:${txid}` })
+        .catch((e) => log(`automation: txabandoned send: ${(e as Error).message}`))
+      return
+    }
     const work = detached(() =>
       (async () => {
         try {
-          const unproven = await lanes.ledger.unproven()
-          const row = unproven.find((u) => u.txid === txid)
-          if (row === undefined) return
-          const tx = await mem.fetchTx(txid)
-          await lanes.ledger.drop(txid)
-          // carriers minted on the dead tree are unadmittable forever — reap
-          // their journal rows too, else the repair leg resubmits them endlessly
-          for (const j of (await lanes.journal.fundedBy?.(txid)) ?? []) await lanes.journal.del?.(j.hash)
-          const reap = abandonedReap(row.kind)
-          if (reap.ghost && tx !== undefined) rt.ghostMint(tx)
-          log(reap.ghost ? `automation: dropped abandoned funding mint ${txid}` : `automation: dropped abandoned provision tx ${txid}`)
-          await store.unblockOutbox('funding-slot')
+          await wakeLegs.txAbandoned?.(txid)
           rt.countWake('txAbandoned')
           if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
         } catch (e) {

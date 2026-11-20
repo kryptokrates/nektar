@@ -6,7 +6,17 @@ import { nektarEnv } from '@nektar/core'
 import { AutomationStore } from '../src/store.js'
 import { WalletCoordinator } from '../src/wallet.js'
 import { RestateExecutor, EXEC_SVC, setExecutor } from '../src/rt/exec.js'
-import { txObject, sweepService, dealObject, custodyObject, dealfanService, type DealEvent } from '../src/rt/services.js'
+import {
+  txObject,
+  sweepService,
+  dealObject,
+  custodyObject,
+  dealfanService,
+  transportObject,
+  TRANSPORT_DRAIN_KEY,
+  wakeService,
+  type DealEvent
+} from '../src/rt/services.js'
 import { openEndpoint } from '../src/rt/endpoint.js'
 import { custodySubmit, txEmit } from '../src/rt/emit.js'
 
@@ -273,6 +283,90 @@ test(
           { handler: 'event', key: 'fm1' }
         ]
       )
+    } finally {
+      await endpoint.close().catch(() => undefined)
+      await kx.destroy()
+    }
+  }
+)
+
+test(
+  'spike: transport.drain journals the scan and lands deliver on the destination key',
+  { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
+  async () => {
+    const { kx, store } = await open()
+    void store
+    const delivered: string[] = []
+    // a fresh actionId per run — the deliver send dedupes on
+    // `deliver:${actionId}` at the journal; a stable id would dedupe
+    // against an earlier run's completed invocation (the dedup working)
+    const actionId = `tp:${Date.now()}`
+    const transportDef = await transportObject({
+      dueRows: async () => [{ actionId, operationId: `op:${actionId}`, kind: 'message', destination: 'host:live', payload: { type: 'decline' }, attempts: 0 }],
+      nextAt: async () => undefined,
+      deliverItem: async (item) => (delivered.push(`${item.actionId}@${item.destination}`), 'acked' as const),
+      now: () => Date.now(),
+      log: () => {}
+    })
+    const endpoint = await openEndpoint([transportDef], {
+      NEKTAR_RESTATE_ENDPOINT_URI: ENDPOINT_URI,
+      NEKTAR_RESTATE_ADMIN: ADMIN,
+      NEKTAR_RESTATE_ENDPOINT_PORT: ENDPOINT_PORT
+    })
+    const ex = new RestateExecutor(RESTATE_URL!)
+    try {
+      const r = await ex.call<{ sent: number }>({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {})
+      assert.equal(r.sent, 1)
+      await until(async () => delivered.length === 1)
+      assert.deepEqual(delivered, [`${actionId}@host:live`])
+    } finally {
+      await endpoint.close().catch(() => undefined)
+      await kx.destroy()
+    }
+  }
+)
+
+test(
+  'spike: wake.height journals the due probe and lands the dealfan tick via a journaled send',
+  { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
+  async () => {
+    const { kx, store } = await open()
+    void store
+    // the wake's ctx send targets nektar-dealfan — both services ride the
+    // same endpoint; the tick's scan deps record having run server-side
+    const fanned: string[] = []
+    const dealfanDef = await dealfanService(
+      {
+        pendingInbox: async () => (fanned.push('inbox'), [] as DealEvent[]),
+        liveOps: async () => (fanned.push('ops'), [] as string[]),
+        reconcileOps: async () => (fanned.push('reconcile'), [] as string[]),
+        log: () => {}
+      },
+      undefined
+    )
+    const wakeDef = await wakeService({
+      legs: { dueAtHeight: async (tip) => tip >= 100 },
+      hint: () => {},
+      log: () => {}
+    })
+    const endpoint = await openEndpoint([dealfanDef, wakeDef], {
+      NEKTAR_RESTATE_ENDPOINT_URI: ENDPOINT_URI,
+      NEKTAR_RESTATE_ADMIN: ADMIN,
+      NEKTAR_RESTATE_ENDPOINT_PORT: ENDPOINT_PORT
+    })
+    const ex = new RestateExecutor(RESTATE_URL!)
+    try {
+      const r = await ex.call<{ due: boolean }>({ service: EXEC_SVC.wake, handler: 'height' }, { tip: 150 })
+      assert.equal(r.due, true)
+      // the journaled send lands async — the dealfan tick running its three
+      // scans is the witness that the chain completed end-to-end
+      await until(async () => fanned.length === 3)
+      assert.deepEqual(fanned, ['inbox', 'ops', 'reconcile'])
+      // a below-tip wake gates out — no fan-out follows
+      const before = fanned.length
+      assert.equal((await ex.call<{ due: boolean }>({ service: EXEC_SVC.wake, handler: 'height' }, { tip: 50 })).due, false)
+      await new Promise((r) => setTimeout(r, 500))
+      assert.equal(fanned.length, before)
     } finally {
       await endpoint.close().catch(() => undefined)
       await kx.destroy()

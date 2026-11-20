@@ -57,24 +57,35 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
     d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
   }
   const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${host ?? 'localhost'}`
-  const rrecs = (await mem.records('__receipts__').catch(() => [] as Array<{ seq: number; data?: string }>)) as Array<{ seq: number; data?: string }>
-  const receipts = rrecs
-    .slice(-10)
-    .reverse()
-    .map((r) => {
-      let sats: number | null = null,
-        tool = ''
-      const m = r.data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
-      if (m) {
-        try {
-          const j = JSON.parse(Buffer.from(m[1], 'base64url').toString())
-          sats = Number(j.payment?.amountSats ?? j.payment?.amount) || null
-          tool = String(j.tool ?? j.toolName ?? '')
-        } catch {}
-      }
-      return { seq: r.seq, tool: tool || 'answer', sats, url: `${base}/v1/verify?s=${r.seq}&format=html` }
-    })
-  const amounts = receipts.map((r) => r.sats ?? 0)
+  // records + fragment.d — the writer-side plaintext: recall() withholds
+  // text until the anchor verifies, but the operator's own ledger is readable
+  const rrecs = (await mem.records('__receipts__').catch(() => [] as Array<{ seq: number; fragment: { d: Uint8Array } }>)) as Array<{
+    seq: number
+    fragment: { d: Uint8Array }
+  }>
+  const decoded = rrecs.map((r) => {
+    let sats: number | null = null,
+      tool = '',
+      shards: string[] = []
+    const m = Buffer.from(r.fragment.d).toString('utf8').match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
+    if (m) {
+      try {
+        const j = JSON.parse(Buffer.from(m[1], 'base64url').toString()) as {
+          tool?: string
+          toolName?: string
+          payment?: { amountSats?: number; amount?: number }
+          fragmentRefs?: Array<{ shard: string }>
+        }
+        sats = Number(j.payment?.amountSats ?? j.payment?.amount) || null
+        tool = String(j.tool ?? j.toolName ?? '')
+        // the receipt cites the fragments it answered from — works-per-domain
+        shards = (j.fragmentRefs ?? []).map((f) => f.shard)
+      } catch {}
+    }
+    return { seq: r.seq, tool: tool || 'answer', sats, shards }
+  })
+  const receipts = decoded.slice(-10).reverse().map((r) => ({ ...r, url: `${base}/v1/verify?s=${r.seq}&format=html` }))
+  const amounts = decoded.map((r) => r.sats ?? 0)
   const cat = await mem.shardCatalog().catch(() => [] as Array<{ shard: string; domains: string[]; offers?: Array<{ kind: string; priceSats: number }> }>)
   const f = d.funding
   const bal = Number(f.balanceSats ?? f.satoshis ?? 0)
@@ -86,14 +97,31 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
   const slots = typeof au?.marketSlots === 'function' ? await au.marketSlots().catch(() => undefined) : undefined
   const boot = typeof au?.bootstrap === 'function' ? au.bootstrap() : undefined
   const pending = au ? await au.store.approvals('pending') : []
-  const autoOps = au
-    ? (await au.store.operations())
-        .filter((o) => o.kind !== 'enable')
-        .slice(-8)
-        .reverse()
-    : []
+  const rawOps = au ? (await au.store.operations()).filter((o) => o.kind !== 'enable') : []
+  const autoOps = rawOps.slice(-8).reverse()
+  // the execution tail — Temporal's "pending first" view: non-acked outbox
+  // rows (what it's waiting on, attempt count, next retry), the armed drain
+  // time, and the newest journal events across the most recent ops
+  const waiting = typeof au?.store.waitingOn === 'function' ? await au.store.waitingOn().catch(() => []) : []
+  const nextAt = typeof au?.store.nextOutboxAt === 'function' ? await au.store.nextOutboxAt().catch(() => undefined) : undefined
+  const journal = (
+    await Promise.all(
+      rawOps.slice(-3).map(async (o) =>
+        (typeof au?.store.events === 'function' ? await au.store.events(o.operationId).catch(() => []) : []).map((e) => ({
+          op: o.operationId.slice(0, 8),
+          at: e.at,
+          to: e.to,
+          cause: e.cause
+        }))
+      )
+    )
+  )
+    .flat()
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 8)
   const coverage = d.records > 0 ? Math.round((d.anchoredRecords / d.records) * 100) : 100
   const earned = amounts.reduce((a, b) => a + b, 0)
+  const worksFor = (shard: string) => decoded.filter((r) => r.shards.includes(shard)).length
   // cold-start loop — the smallest self-sustaining earning network for one
   // operator; every step is derived from live state, the frontier is named
   const steps = [
@@ -133,6 +161,7 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
         shard: m.shard,
         domains: m.domains,
         records: (await mem.records(m.shard).catch(() => [])).length,
+        works: worksFor(m.shard),
         offers: m.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? ''
       }))
     ),
@@ -151,7 +180,22 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
             operationId: a.operationId,
             expiresAt: a.expiresAt
           })),
-          ops: autoOps.map((o) => ({ role: o.role, kind: o.kind, state: o.state, lastError: o.lastError }))
+          ops: autoOps.map((o) => ({ role: o.role, kind: o.kind, state: o.state, lastError: o.lastError })),
+          rt: {
+            executor: (au as { rt?: unknown }).rt === undefined ? 'local' : 'restate',
+            pending: waiting.slice(0, 6).map((w) => ({
+              actionId: w.actionId,
+              operationId: w.operationId,
+              kind: w.kind,
+              status: w.status,
+              deferClass: w.deferClass ?? null,
+              lastError: w.lastError ?? null,
+              attempts: w.attempts,
+              nextAt: w.nextAt
+            })),
+            nextAt: nextAt ?? null,
+            journal
+          }
         }
       : null,
     share: { enabled: !/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1'), url: `${base}/card` }

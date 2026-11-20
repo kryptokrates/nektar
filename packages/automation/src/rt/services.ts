@@ -282,11 +282,7 @@ export const transportDrainBody =
     // cross-host parallelism; idempotent on actionId so a replayed or raced
     // drain can't double-send
     for (const item of rows)
-      await send(
-        { service: EXEC_SVC.transport, handler: 'deliver', key: item.destination },
-        item,
-        { idempotencyKey: `deliver:${item.actionId}` }
-      )
+      await send({ service: EXEC_SVC.transport, handler: 'deliver', key: item.destination }, item, { idempotencyKey: `deliver:${item.actionId}` })
     // self-schedule the ceiling at the earliest pending wake — the durable
     // successor of armOutboxTimer; empty box leaves the loop asleep until
     // outboxReady pokes it
@@ -314,8 +310,8 @@ export const transportObject = async (deps: TransportDeps) => {
               ctx.objectSendClient({ name: EXEC_SVC.transport } as never, target.key ?? '') as unknown as {
                 deliver: (o: OutboxItem, opts?: unknown) => Promise<void>
               }
-            ).deliver(arg as OutboxItem, restate.rpc.opts.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey }))
-          else if (target.handler === 'drain') await transport.drain(arg, restate.rpc.opts.sendOpts({ delay: opts?.delayMs ?? 0 }))
+            ).deliver(arg as OutboxItem, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey }))
+          else if (target.handler === 'drain') await transport.drain(arg, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0 }))
           else throw new Error(`transport send: no handler ${target.handler}`)
         }
         return await drain(send, (n, fn) => ctx.run(n, fn))
@@ -507,4 +503,130 @@ export const registerSweepHandlers = (
   const boot = sweepBootBody(deps)
   ex.register(EXEC_SVC.sweep, 'tick', () => tick((t, a, o) => ex.send(t, a, o)))
   ex.register(EXEC_SVC.sweep, 'boot', () => boot((t, a, o) => ex.send(t, a, o)))
+}
+
+// ── the wake service ─────────────────────────────────────────────────────
+// the process-edge event legs (mem.onTxProof/onTxRejected/onTxAbandoned/
+// onHeight/onReorg) as durable invocations. Today each callback spawns a
+// detached promise: a crash mid-leg drops the wake and the floor has to
+// re-cover it. Under restate the callback is a durable send — the leg runs
+// inside ctx.run (journaled: replay doesn't re-fire the ledger mutation),
+// the cycle-equivalent goes out through ctx send clients (journaled, never
+// the ingress), and a leg error propagates so the runtime retries the wake
+// rather than log-and-drop it. The legs are naturally idempotent row-ops
+// (markProven touches only unproven rows; attachParentPath second-attach is
+// a no-op; demotions are range updates), and the ingress idempotency key
+// dedupes repeat callbacks for the same logical event. Wakes stay hints:
+// the scheduler floor still carries correctness — nothing here removes a
+// poll, it only makes the push path survive a crash.
+
+export interface WakeLegs {
+  /** txProof domain leg — tree-ledger markProven/attachParentPath + the
+   *  funding-slot unblock + queueRepublish. mp crosses the wire as hex
+   *  (MerklePath.fromHex inside the leg). */
+  txProof?: (txid: string, mpHex: string) => Promise<void>
+  /** txAbandoned domain leg — ledger drop + journal reap + ghost + unblock */
+  txAbandoned?: (txid: string) => Promise<void>
+  /** reorg demotion leg — journal clearPaths + ledger unproveFrom */
+  reorg?: (from: number) => Promise<void>
+  /** due-height probe — store.hasDueAtHeight; the handler sends dealfan
+   *  only when a row is actually due (matches the local wake gate) */
+  dueAtHeight?: (tip: number) => Promise<boolean>
+}
+
+export interface WakeDeps {
+  legs: WakeLegs
+  /** the volatile reconcile-hint set — engine.hint. Process-local by
+   *  design: it lives wherever reconcileGate runs, journaled replays re-
+   *  adding it are harmless (a Set insert). */
+  hint: (txid: string) => void
+  log: (line: string) => void
+}
+
+/** the cycle-equivalent through journaled sends — dealfan.tick is the
+ *  deals pass's scan+fan-out, transport.drain is the outbox poke. The
+ *  custody resubmit cadence stays on the floor where it belongs — wakes
+ *  drive work, not time gates. */
+const wakeCycle = async (send: RtSend): Promise<void> => {
+  await send({ service: EXEC_SVC.dealfan, handler: 'tick' }, {})
+  await send({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {})
+}
+
+export const wakeTxProofBody =
+  (deps: WakeDeps) =>
+  async (send: RtSend, arg: { txid: string; mpHex: string }, run: StepRun = (_n, fn) => fn()) => {
+    if (deps.legs.txProof !== undefined) await run('ledger', () => deps.legs.txProof!(arg.txid, arg.mpHex))
+    deps.hint(arg.txid)
+    await wakeCycle(send)
+    return { done: true }
+  }
+
+export const wakeTxRejectedBody = (deps: WakeDeps) => async (send: RtSend, arg: { txid: string }) => {
+  deps.hint(arg.txid)
+  await wakeCycle(send)
+  return { done: true }
+}
+
+export const wakeTxAbandonedBody =
+  (deps: WakeDeps) =>
+  async (send: RtSend, arg: { txid: string }, run: StepRun = (_n, fn) => fn()) => {
+    if (deps.legs.txAbandoned !== undefined) await run('ledger', () => deps.legs.txAbandoned!(arg.txid))
+    await wakeCycle(send)
+    return { done: true }
+  }
+
+export const wakeHeightBody =
+  (deps: WakeDeps) =>
+  async (send: RtSend, arg: { tip: number }, run: StepRun = (_n, fn) => fn()) => {
+    const due = deps.legs.dueAtHeight === undefined ? false : await run('due', () => deps.legs.dueAtHeight!(arg.tip))
+    if (due) await send({ service: EXEC_SVC.dealfan, handler: 'tick' }, {})
+    return { due }
+  }
+
+export const wakeReorgBody =
+  (deps: WakeDeps) =>
+  async (_send: RtSend, arg: { from: number }, run: StepRun = (_n, fn) => fn()) => {
+    if (deps.legs.reorg !== undefined) await run('reorg', () => deps.legs.reorg!(arg.from))
+    return { done: true }
+  }
+
+export const wakeService = async (deps: WakeDeps) => {
+  const restate = await import('@restatedev/restate-sdk')
+  const send = (ctx: restate.Context): RtSend => {
+    const dealfan = ctx.serviceSendClient({ name: EXEC_SVC.dealfan } as never) as unknown as { tick: (o: unknown) => Promise<void> }
+    const transport = ctx.objectSendClient({ name: EXEC_SVC.transport } as never, TRANSPORT_DRAIN_KEY) as unknown as { drain: (o: unknown) => Promise<void> }
+    return async (target, arg) => {
+      if (target.service === EXEC_SVC.dealfan && target.handler === 'tick') await dealfan.tick(arg)
+      else if (target.service === EXEC_SVC.transport && target.handler === 'drain') await transport.drain(arg)
+      else throw new Error(`wake send: no route for ${target.service}/${target.handler}`)
+    }
+  }
+  const proof = wakeTxProofBody(deps)
+  const rejected = wakeTxRejectedBody(deps)
+  const abandoned = wakeTxAbandonedBody(deps)
+  const height = wakeHeightBody(deps)
+  const reorg = wakeReorgBody(deps)
+  return restate.service({
+    name: EXEC_SVC.wake,
+    handlers: {
+      txProof: async (ctx: restate.Context, arg: { txid: string; mpHex: string }) => await proof(send(ctx), arg, (n, fn) => ctx.run(n, fn)),
+      txRejected: async (ctx: restate.Context, arg: { txid: string }) => await rejected(send(ctx), arg),
+      txAbandoned: async (ctx: restate.Context, arg: { txid: string }) => await abandoned(send(ctx), arg, (n, fn) => ctx.run(n, fn)),
+      height: async (ctx: restate.Context, arg: { tip: number }) => await height(send(ctx), arg, (n, fn) => ctx.run(n, fn)),
+      reorg: async (ctx: restate.Context, arg: { from: number }) => await reorg(send(ctx), arg, (n, fn) => ctx.run(n, fn))
+    }
+  })
+}
+
+/** the wake bodies on a LocalExecutor — the local-mode wiring. */
+export const registerWakeHandlers = (
+  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void } & { send: RtSend },
+  deps: WakeDeps
+): void => {
+  const s: RtSend = (t, a, o) => ex.send(t, a, o)
+  ex.register(EXEC_SVC.wake, 'txProof', (arg) => wakeTxProofBody(deps)(s, arg as { txid: string; mpHex: string }))
+  ex.register(EXEC_SVC.wake, 'txRejected', (arg) => wakeTxRejectedBody(deps)(s, arg as { txid: string }))
+  ex.register(EXEC_SVC.wake, 'txAbandoned', (arg) => wakeTxAbandonedBody(deps)(s, arg as { txid: string }))
+  ex.register(EXEC_SVC.wake, 'height', (arg) => wakeHeightBody(deps)(s, arg as { tip: number }))
+  ex.register(EXEC_SVC.wake, 'reorg', (arg) => wakeReorgBody(deps)(s, arg as { from: number }))
 }

@@ -1,6 +1,7 @@
 import { PublicKey, type PrivateKey, type Transaction } from '@bsv/sdk'
 import type { SignedOffer, SignedWant } from '@nektar/bstack'
 import type { Ingested } from '@nektar/chain'
+import type { SignerLike } from '@nektar/core'
 import type { AutomationStore, Operation } from '../store.js'
 import type { AIExecutor } from '../ai.js'
 import type { Executor } from '../rt/exec.js'
@@ -95,7 +96,14 @@ export interface MarketDeps {
   store: AutomationStore
   call: (tool: string, args: any) => Promise<any>
   memory: MarketMemory
-  key: PrivateKey
+  /** the operator identity — a SignerLike so external custody (BRC-100
+   *  substrate, NEKTAR_WALLET=client) drives the same engine; only pub and
+   *  envelope signatures were ever needed here, funding spends route
+   *  through `call` → the custody-aware sale ops */
+  key: SignerLike
+  /** operator pubkey hex — required when `key` is a DigestSigner
+   *  (pubKeyHex() is async); derived from the key itself for PrivateKey */
+  me?: string
   network: string
   height: () => Promise<number>
   tip?: () => Promise<{ tip: string; tipHeight: number } | undefined>

@@ -10,7 +10,7 @@ import { TransactionWatcher, scanTxObservations } from './ledger.js'
 import { MarketEngine, NONTERMINAL, type MarketTransport } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '@nektar/store'
-import { deadline, nap } from '@nektar/core'
+import { deadline, nap, signerPubHex, toSigner } from '@nektar/core'
 import { WAITS } from './waits.js'
 import { runPreflight, WATCHDOG_CHECKS, type PreflightReport } from './preflight.js'
 import { killSwitchActive } from './kill.js'
@@ -79,7 +79,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // engine reads a virtual one makes fresh rows look not-yet-due forever
   const store = new AutomationStore(kx, cfg.now)
   await store.init()
-  const key = mem.operatorKey()
+  const key = mem.operatorSigner?.() ?? toSigner(mem.operatorKey())
+  const me = await signerPubHex(key)
   const wallet = mem.operatorWallet()
   const objectStore = cfg.objectStore ?? objectStoreFromEnv()
   const marketHosts = (cfg.marketHosts ?? []).map((u) => u.replace(/\/+$/, ''))
@@ -207,7 +208,6 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // identity records may name http and loopback/private hosts on the test
   // lanes, and anywhere the operator runs its own hosts and says so
   const localNet = cfg.network === 'regtest' || cfg.localHosts === true
-  const me = key.toPublicKey().toString()
   // the shared context the regions meet through — door fields (resolveRecord,
   // poll, upkeep, ...) are assigned by the region openers and the deal loop
   // below; every call site reaches them lazily, so nothing can invoke a door
@@ -330,6 +330,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     call: cfg.call,
     memory: mem,
     key,
+    me,
     network: cfg.network,
     now: cfg.now,
     settleDepth: cfg.settleDepth,

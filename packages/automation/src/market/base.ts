@@ -1,4 +1,4 @@
-import { P2PKH, type Transaction } from '@bsv/sdk'
+import { P2PKH, PrivateKey, PublicKey, type Transaction } from '@bsv/sdk'
 import { signWant, type SignedWant } from '@nektar/bstack'
 import { CheckpointBond } from '@nektar/anchor'
 import { TxStore, type Ingested } from '@nektar/chain'
@@ -42,7 +42,13 @@ export abstract class MarketBase {
         `market: refundBlocks (${this.o.refundBlocks}) must exceed sellerSafetyBlocks (${this.o.sellerSafetyBlocks}) — the refund window sits inside the seller's safety margin`
       )
     this.now = d.now ?? Date.now
-    this.me = d.key.toPublicKey().toString()
+    this.me =
+      d.me ??
+      (d.key instanceof PrivateKey
+        ? d.key.toPublicKey().toString()
+        : (() => {
+            throw new Error('market: deps.me required when deps.key is a DigestSigner — resolve pubKeyHex() before construction')
+          })())
     this.network = d.network
     // the engine owns the state bounds; the store stamps a bounded state's
     // stuck deadline at commit so the wheel wakes at its instant (the
@@ -336,7 +342,7 @@ export abstract class MarketBase {
     const next = await this.d.store.transition(op.operationId, op.revision, 'seizing', { cause: 'deadline_reached' })
     try {
       const r = await this.d.call('bondSeize', {
-        payToScript: new P2PKH().lock(this.d.key.toPublicKey().toHash()).toHex(),
+        payToScript: new P2PKH().lock(PublicKey.fromString(this.me).toHash()).toHex(),
         bond: {
           cfg: { operatorPkh: c.operatorPkh, bondReleaseHeight: String(c.bondReleaseHeight), maxFee: String(c.maxFee), epochLen: String(c.epochLen) },
           utxo: op.data.utxo

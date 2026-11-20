@@ -167,7 +167,7 @@ test('client custody: sale offer → escrow → refund signs through the injecte
   // the escrow inputs demonstrably came from the shared book — they are
   // outpoints of the split tx the test seeded
   const escrowTx = (await chain.fetchTx(funded.txid!))!
-  const bookSpent = new Set(escrowTx.inputs.filter((i) => i.sourceTXID === ftxId).map((i) => i.sourceTxOutNum))
+  const bookSpent = new Set(escrowTx.inputs.filter((i) => i.sourceTXID === ftxId).map((i) => i.sourceOutputIndex))
   assert.ok(bookSpent.size > 0, 'escrow inputs came from the shared coin book')
   assert.ok(
     !remaining.some((u) => u.tx.id('hex') === ftxId && bookSpent.has(u.vout)),

@@ -50,6 +50,10 @@ export interface AutomationHost extends MarketMemory {
   recordAired?(tx: Transaction): void
   operatorKey(): PrivateKey
   operatorWallet(): OperatorWallet
+  /** the custody-agnostic operator identity — client-custody hosts hold no
+   *  private key and expose only this. Hosts without it are held-key by
+   *  definition: `toSigner(operatorKey())` is the identical fallback */
+  operatorSigner?(): import('@nektar/core').DigestSigner
   /** the one coin book — takes, spend/death/adoption bookkeeping route
    *  through it; callers never mark outpoints themselves */
   funds: Funds

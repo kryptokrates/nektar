@@ -5,6 +5,7 @@
 // the assembler fills the construction slots before opening the regions.
 import type { Knex } from 'knex'
 import type { PrivateKey } from '@bsv/sdk'
+import type { SignerLike } from '@nektar/core'
 import type { AutomationHost, OperatorWallet } from './host.js'
 import type { AutomationStore } from './store.js'
 import type { MarketEngine, MarketMessage, MarketOptions } from './market.js'
@@ -171,7 +172,7 @@ export interface Rt {
   kx: Knex
   kxLanes?: Knex
   store: AutomationStore
-  key: PrivateKey
+  key: SignerLike
   wallet: OperatorWallet
   objectStore: import('@nektar/store').S3ObjectStore | undefined
   marketHosts: string[]

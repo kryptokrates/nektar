@@ -80,6 +80,14 @@ export class DisclosureSaleHost {
     return new DisclosureSaleHost({ ...cfg, depositorPkh }).lockingScript()
   }
 
+  /** integrity check for spend paths: does `scriptHex` equal the escrow
+   *  script this host instance builds? A cfg whose params don't match the
+   *  on-chain utxo produces a tx the covenant always rejects — check it
+   *  once at build time rather than at broadcast. */
+  matchesScript(scriptHex: string): boolean {
+    return this.lockingScript() === scriptHex
+  }
+
   /** buyer-side: fund the escrow — signed P2PKH inputs paying `amount`
    *  into the escrow script, change back to the depositor. The deposit
    *  should be price + maxFee + a small change margin (the covenant

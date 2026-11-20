@@ -225,19 +225,22 @@ export const handlers: Record<string, ToolHandler> = {
   'sale#payBuild': payBuild,
   'sale#complete': async (mem, args) => {
     const { DisclosureSaleHost } = await import('@nektar/anchor')
-    // depositorPkh is always the LOCAL depositor (the fund signer — under
-    // external custody the wallet-derived key the escrow was funded by) —
-    // the offer's cfg never carries it; fill it here so callers can pass
-    // the raw offer cfg.
-    const depositorPkh =
-      args.cfg.depositorPkh ?? Buffer.from(PublicKey.fromString(await mem.fundSigner().pubKeyHex()).toHash()).toString('hex')
+    // depositorPkh must come from the escrow cfg (the escrow op returns it as
+    // cfg.depositorPkh; the market engine stores it from the accept message).
+    // The offer cfg does NOT carry it, and the caller is the SELLER — the
+    // old local-key fallback produced a covenant spend that always fails
+    // script eval (change paid to the wrong pkh → outputHash mismatch).
+    if (args.cfg.depositorPkh === undefined)
+      return { accepted: false, reason: 'sale op=complete: cfg.depositorPkh missing — pass the escrow result cfg, not the bare offer cfg' }
     const host = new DisclosureSaleHost({
       ...args.cfg,
-      depositorPkh,
+      depositorPkh: args.cfg.depositorPkh,
       price: BigInt(args.cfg.price),
       refundAfter: BigInt(args.cfg.refundAfter),
       maxFee: BigInt(args.cfg.maxFee)
     })
+    if (args.utxo?.script !== undefined && !host.matchesScript(args.utxo.script))
+      return { accepted: false, reason: 'sale op=complete: cfg does not match the escrow locking script — params disagree with the on-chain covenant' }
     // covenant bound: utxo − price − change ≤ maxFee → change ≥ utxo − price − maxFee.
     // Fee sized to the wrapped payload the unlocking script carries — a flat
     // ~350 overpays small spends and still starves big ones into
@@ -245,7 +248,7 @@ export const handlers: Record<string, ToolHandler> = {
     const changeSats =
       args.changeSats !== undefined
         ? BigInt(args.changeSats)
-        : BigInt(args.utxo.satoshis) - BigInt(args.cfg.price) - BigInt(Math.min(Number(args.cfg.maxFee) - 2, Math.max(10, relayNeed(args.wrapped.length / 2))))
+        : BigInt(args.utxo.satoshis) - host.params.price - BigInt(Math.min(Number(host.params.maxFee) - 2, Math.max(10, relayNeed(args.wrapped.length / 2))))
     // the remembered escrow is the reveal's real parent — with it attached
     // the tx broadcasts as proper EF and the buyer receives BEEF/EF, not a
     // synthetic stub that cannot carry ancestry
@@ -265,13 +268,15 @@ export const handlers: Record<string, ToolHandler> = {
       refundAfter: BigInt(args.cfg.refundAfter),
       maxFee: BigInt(args.cfg.maxFee)
     })
+    if (args.utxo?.script !== undefined && !host.matchesScript(args.utxo.script))
+      return { accepted: false, reason: 'sale op=refund: cfg does not match the escrow locking script — params disagree with the on-chain covenant' }
     // a refund carries no payload — ~2KB worst case; pay its real size, not
     // the covenant bound (which now scales with the payload it never had)
-    const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats) : BigInt(args.utxo.satoshis) - BigInt(Math.min(Number(args.cfg.maxFee), 10))
+    const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats) : BigInt(args.utxo.satoshis) - BigInt(Math.min(Number(host.params.maxFee), 10))
     const { tx } = await host.buildRefund(
       args.utxo,
       mem.fundSigner(),
-      args.lockTime ?? Number(args.cfg.refundAfter),
+      args.lockTime ?? Number(host.params.refundAfter),
       changeSats,
       await mem.fetchTx(args.utxo.txid)
     )

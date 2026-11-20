@@ -1,6 +1,7 @@
 // lanes.ts — the lane layer: bfinger counterparty resolution + caching, the
 // inbox msgs surface (sendBox/readBox/ackBox), host-health notes, the
 // republish queue, and the want/offer/inbox poll passes.
+import { BoundedMap, BoundedSet } from '@nektar/core'
 import { requeueAckItems, trackFanout } from './fanout.js'
 import type { MarketMessage } from './market.js'
 import type { FingerRec, Rt } from './rtctx.js'
@@ -26,7 +27,7 @@ export function openLanes(rt: Rt): void {
   // private or link-local literals (the SSRF guard for dynamic hosts).
   // identity records may name http and loopback/private hosts on the test
   // lanes, and anywhere the operator runs its own hosts and says so
-  const fingerCache = new Map<string, { at: number; rec?: FingerRec }>()
+  const fingerCache = new BoundedMap<string, { at: number; rec?: FingerRec }>(4096)
   const resolveRecord = async (pub: string, fresh = false): Promise<FingerRec | undefined> => {
     if (lanes === undefined) return undefined
     const t = cfg.now?.() ?? Date.now()
@@ -57,6 +58,11 @@ export function openLanes(rt: Rt): void {
     if (rec !== undefined && deferredAcks.some((d) => d.from === pub)) void rt.msgs?.ack?.().catch(() => undefined)
     return rec
   }
+  // all senders of a batch resolved together — N counterparty lookups cost
+  // ~1 host RTT instead of N×(up to 5s) serial; each leg keeps its own
+  // timeout + the shared cache
+  const resolveRecords = async (pubs: string[], freshFor?: (pub: string) => boolean): Promise<Map<string, FingerRec | undefined>> =>
+    new Map(await Promise.all(pubs.map(async (p) => [p, await resolveRecord(p, freshFor?.(p) ?? false).catch(() => undefined)] as const)))
   const hostsFor = async (pub: string): Promise<string[]> => [...new Set([...marketHosts, ...((await resolveRecord(pub))?.hosts ?? [])])]
   // a counterparty's advertised watch shim: POST {service,query} → the shim
   // wakes their long-polls early. Best-effort only — the shim re-verifies
@@ -151,7 +157,7 @@ export function openLanes(rt: Rt): void {
         payload: { treeTxid, hash: row.hash }
       })
   }
-  const withheldSeen = new Set<string>()
+  const withheldSeen = new BoundedSet<string>(8192)
   // a host's recovery frees every transport-deferred outbox item — the
   // backoff was waiting on reachability, not delivery logic, so pull it
   // forward instead of waiting it out. One helper: the watchdog's recovery
@@ -350,8 +356,10 @@ export function openLanes(rt: Rt): void {
               const priorUntil = new Map(deferredAcks.map((d) => [`${d.txid}:${d.commitment}`, d.until]))
               const retriedFrom = new Set(deferredAcks.map((d) => d.from))
               const retry: typeof deferredAcks = []
-              for (const f of [...new Set(items.map((i) => i.from).filter((f) => f !== rt.me))]) {
-                const rec = await resolveRecord(f, retriedFrom.has(f)).catch(() => undefined)
+              const froms = [...new Set(items.map((i) => i.from).filter((f) => f !== rt.me))]
+              const resolved = await resolveRecords(froms, (f) => retriedFrom.has(f))
+              for (const f of froms) {
+                const rec = resolved.get(f)
                 if (rec !== undefined) {
                   for (const h of rec.hosts) ackHosts.add(h)
                   continue

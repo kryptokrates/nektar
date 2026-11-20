@@ -254,6 +254,10 @@ async function body(req: IncomingMessage): Promise<unknown> {
       read += (c as Buffer).length
       bodyBytes += (c as Buffer).length
       if (read > BODY_MAX) throw new Error('body too large')
+      // aggregate bound mid-read — an undeclared-length body skipped the
+      // entry pre-check and only pays the aggregate here (still bounded by
+      // the in-flight cap)
+      if (bodyBytes > BODY_BYTES_MAX) throw new Error('server busy')
       chunks.push(c as Buffer)
     }
     return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}

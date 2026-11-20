@@ -448,11 +448,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // would let a deal cool to idle cadence between hops. A settled
             // proof awaiting depth only waits on BLOCKS, so it is excluded —
             // holding the loop hot for it would burn cycles per confirmation
-            if (
-              (await store.operations({ states: NONTERMINAL })).filter((o) => o.state !== 'completion_submitted' || o.data.provenHeight === undefined).length >
-              0
-            )
-              rt.hotUntil = Date.now() + 5_000
+            if (await store.hasLiveOps(NONTERMINAL)) rt.hotUntil = Date.now() + 5_000
             // new lanes appear as deals start — re-derive watch subs at the
             // end of a pass so a fresh want is subscribed within one cycle
             if (rt.watchBases.length > 0) void rt.refreshWatches().catch(() => undefined)
@@ -600,9 +596,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   mem.onHeight?.((tip: number) => {
     if (rt.stopped) return
     void store
-      .operations({ states: NONTERMINAL })
-      .then((ops) => {
-        if (!rt.stopped && ops.some((o) => o.dueHeight !== undefined && o.dueHeight <= tip)) rt.scheduler?.wake('deals')
+      .hasDueAtHeight(NONTERMINAL, tip)
+      .then((due) => {
+        if (!rt.stopped && due) rt.scheduler?.wake('deals')
       })
       .catch(() => undefined)
   })

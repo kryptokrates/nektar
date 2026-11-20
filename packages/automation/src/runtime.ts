@@ -23,7 +23,7 @@ import { openWatches } from './watches.js'
 import type { TxEffects } from './machines/effects.js'
 import { executor, EXEC_SVC } from './rt/exec.js'
 import { openEndpoint, type RtEndpoint } from './rt/endpoint.js'
-import { txObject, sweepService, dealObject, custodyObject } from './rt/services.js'
+import { txObject, sweepService, dealObject, custodyObject, dealfanService } from './rt/services.js'
 import type { Rt, LaneInfra, AutomationConfig } from './rtctx.js'
 import type { Automation } from './types.js'
 
@@ -445,13 +445,34 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     )
     // the per-op object — advance legs land on the op's own key, serialized
     // and journaled; the tick's NONTERMINAL loop fans out to it under restate
-    const dealDef = await dealObject({ advanceOp: (operationId) => engine.advanceOp(operationId), log })
+    const dealDef = await dealObject({
+      advanceOp: (operationId) => engine.advanceOp(operationId),
+      inboxEvent: (item) => engine.dealEvent(item),
+      reconcileOp: (operationId) => engine.reconcileOp(operationId),
+      log
+    })
+    // the dealfan service — the whole tick as one journaled invocation:
+    // inbox items → deal.event per correlation key, ops → deal.advance,
+    // due reconcile rows → deal.reconcile. Scans journal; sends dedupe.
+    const dealfanDef = await dealfanService(
+      {
+        pendingInbox: () => store.pendingInbox(),
+        liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => o.operationId),
+        reconcileOps: async () => {
+          const now = Date.now()
+          const rows = await store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: now })
+          return rows.map((o) => o.operationId)
+        },
+        log
+      },
+      dealDef
+    )
     // the custody object — one fixed key serializes every wallet custody
     // leg (broadcasts, dead-verdicts, the resubmit scan); the journaled
     // successor of the run() chain for custody writes
     const wallet = engine.walletCoordinator
     const custodyDefs = wallet !== undefined ? [await custodyObject({ wallet, log })] : []
-    rtEndpoint = await openEndpoint([txDef, sweepDef, dealDef, ...custodyDefs], process.env, log)
+    rtEndpoint = await openEndpoint([txDef, sweepDef, dealDef, dealfanDef, ...custodyDefs], process.env, log)
     log(`automation: restate endpoint ${rtEndpoint.uri}`)
     // boot resubmit fans out through the sweep — each row's re-air is a
     // journaled invocation on its own tx object

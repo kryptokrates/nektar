@@ -71,7 +71,12 @@ test('tick under an executor fans advance out per op key — the leg leaves the 
   const ex = new LocalExecutor()
   const ran: string[] = []
   try {
-    registerDealHandlers(ex, { advanceOp: async (id) => (ran.push(id), true), log: () => {} })
+    registerDealHandlers(ex, {
+      advanceOp: async (id) => (ran.push(id), true),
+      inboxEvent: async () => {},
+      reconcileOp: async () => {},
+      log: () => {}
+    })
     const hash = await store.approvePolicy(policy(), 'test')
     await store.createOperation({ role: 'buyer', kind: 'purchase', dedupeKey: 'd1', policyHash: hash, network: 'regtest', state: 'collecting', data: {} })
     await store.createOperation({ role: 'buyer', kind: 'purchase', dedupeKey: 'd2', policyHash: hash, network: 'regtest', state: 'selected', data: {} })

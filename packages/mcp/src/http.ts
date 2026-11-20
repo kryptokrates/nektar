@@ -3,34 +3,12 @@
 import { nektarEnv, marketHostsFromEnv } from '@nektar/core'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { MerklePath } from '@bsv/sdk'
 import type { NektarMemory } from './memory.js'
 import { TOOLS, visibleTools, callTool } from './server.js'
-import { badgeSvg, cardPage, dashboardState, verifyPage } from './pages.js'
+import { badgeSvg, cardPage, dashboardState, dashboardFile, verifyPage } from './pages.js'
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))
-
-// the compiled Svelte dashboard — vite emits dist/dashboard/; a missing
-// bundle degrades to a one-line notice, never a stack trace
-const DASH_DIR = fileURLToPath(new URL('../dashboard/', import.meta.url))
-const dashFile = (name: string): Buffer | null => {
-  try {
-    return readFileSync(join(DASH_DIR, name))
-  } catch {
-    return null
-  }
-}
-const DASH_MIME: Record<string, string> = {
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.map': 'application/json',
-  '.png': 'image/png',
-  '.woff2': 'font/woff2'
-}
 
 export const OPENAPI = {
   openapi: '3.1.0',
@@ -468,25 +446,26 @@ export function createHttpApi(
           if (req.method === 'GET' && url.pathname.startsWith('/assets/')) {
             const name = url.pathname.slice('/assets/'.length)
             if (!/^[\w.-]+$/.test(name)) return send(400, { error: 'bad asset name' })
-            const b = dashFile(`assets/${name}`)
-            if (!b) return send(404, { error: 'no such asset' })
-            res.writeHead(200, {
-              'content-type': DASH_MIME[name.slice(name.lastIndexOf('.'))] ?? 'application/octet-stream',
-              'cache-control': 'public, max-age=31536000, immutable'
-            })
-            return res.end(b)
+            const a = dashboardFile(`assets/${name}`)
+            if (!a) return send(404, { error: 'no such asset' })
+            res.writeHead(200, { 'content-type': a.type, 'cache-control': 'public, max-age=31536000, immutable' })
+            return res.end(a.body)
           }
           if (req.method === 'GET' && url.pathname === '/dashboard') {
             res.writeHead(301, { location: '/' })
             return res.end()
           }
           if (req.method === 'GET' && url.pathname === '/') {
-            const html = dashFile('index.html')
+            const html = dashboardFile('index.html')
             if (html) {
               res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-              return res.end(html)
+              return res.end(html.body)
             }
-            return send(200, '<!doctype html><html><body style="background:#221e1d;color:#eae6e3;font:15px system-ui;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0"><div>dashboard bundle missing — run <code>pnpm --filter @nektar/mcp build</code></div></body></html>', 'text/html; charset=utf-8')
+            return send(
+              200,
+              '<!doctype html><html><body style="background:#221e1d;color:#eae6e3;font:15px system-ui;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0"><div>dashboard bundle missing — run <code>pnpm --filter @nektar/mcp build</code></div></body></html>',
+              'text/html; charset=utf-8'
+            )
           }
           // public surface: {pass} ONLY — reserves, hosts and policy details
           // never leave the unauthenticated path (preflight's full report is

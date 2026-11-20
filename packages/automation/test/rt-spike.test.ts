@@ -6,7 +6,7 @@ import { nektarEnv } from '@nektar/core'
 import { AutomationStore } from '../src/store.js'
 import { WalletCoordinator } from '../src/wallet.js'
 import { RestateExecutor, EXEC_SVC, setExecutor } from '../src/rt/exec.js'
-import { txObject, sweepService, dealObject, custodyObject } from '../src/rt/services.js'
+import { txObject, sweepService, dealObject, custodyObject, dealfanService, type DealEvent } from '../src/rt/services.js'
 import { openEndpoint } from '../src/rt/endpoint.js'
 import { custodySubmit, txEmit } from '../src/rt/emit.js'
 
@@ -167,6 +167,8 @@ test(
         await store.transition(op.operationId, op.revision, op.state, { cause: 'tick_error', lastError: 'spike leg ran' })
         return true
       },
+      inboxEvent: async () => {},
+      reconcileOp: async () => {},
       log: () => {}
     })
     const endpoint = await openEndpoint([dealDef], {
@@ -221,6 +223,57 @@ test(
       await until(async () => (await store.walletTx({ actionId: 'custody:1' }))?.state === 'submitted')
     } finally {
       setExecutor(undefined)
+      await endpoint.close().catch(() => undefined)
+      await kx.destroy()
+    }
+  }
+)
+
+test(
+  'spike: dealfan.tick journals the scans and fans out to deal keys on the real server',
+  { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
+  async () => {
+    const { kx, store } = await open()
+    const { operation } = await store.createOperation({
+      role: 'buyer',
+      kind: 'purchase',
+      dedupeKey: 'fan:spike',
+      policyHash: 'p',
+      network: 'regtest',
+      state: 'collecting',
+      data: {}
+    })
+    const landed: Array<{ handler: string; key: string }> = []
+    const dealDef = await dealObject({
+      advanceOp: async (id) => (landed.push({ handler: 'advance', key: id }), true),
+      inboxEvent: async (item) => void landed.push({ handler: 'event', key: item.messageId }),
+      reconcileOp: async (id) => void landed.push({ handler: 'reconcile', key: id }),
+      log: () => {}
+    })
+    const items: DealEvent[] = [{ source: 'lane', messageId: 'fm1', kind: 'want', payload: { wantId: 'w-fan' } }]
+    const dealfanDef = await dealfanService(
+      { pendingInbox: async () => items, liveOps: async () => [operation.operationId], reconcileOps: async () => [], log: () => {} },
+      dealDef
+    )
+    const endpoint = await openEndpoint([dealDef, dealfanDef], {
+      NEKTAR_RESTATE_ENDPOINT_URI: ENDPOINT_URI,
+      NEKTAR_RESTATE_ADMIN: ADMIN,
+      NEKTAR_RESTATE_ENDPOINT_PORT: ENDPOINT_PORT
+    })
+    const ex = new RestateExecutor(RESTATE_URL!)
+    try {
+      const r = await ex.call<{ events: number; advanced: number; reconciled: number }>({ service: EXEC_SVC.dealfan, handler: 'tick' }, {})
+      assert.deepEqual(r, { events: 1, advanced: 1, reconciled: 0 })
+      // the sends are async — poll until both keyed invocations land
+      await until(async () => landed.length === 2)
+      assert.deepEqual(
+        [...landed].sort((a, b) => a.handler.localeCompare(b.handler)),
+        [
+          { handler: 'advance', key: operation.operationId },
+          { handler: 'event', key: 'fm1' }
+        ]
+      )
+    } finally {
       await endpoint.close().catch(() => undefined)
       await kx.destroy()
     }

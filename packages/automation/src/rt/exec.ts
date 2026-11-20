@@ -41,6 +41,7 @@ export const EXEC_SVC = {
   tx: 'nektar-tx',
   sweep: 'nektar-sweep',
   deal: 'nektar-deal',
+  dealfan: 'nektar-dealfan',
   custody: 'nektar-custody',
   transport: 'nektar-transport'
 } as const

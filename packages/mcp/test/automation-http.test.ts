@@ -49,7 +49,10 @@ test('dashboard automation inbox: agent bearer cannot approve; operator token ca
   assert.equal(ok.status, 200, await ok.text())
   assert.equal((await store.approvals('pending')).length, 0)
   assert.equal((await post('Bearer operator-token')).status, 400, 'already-decided approvals cannot be replayed')
-  const dash = await (await fetch(`${base}/dashboard`, { headers: { authorization: 'Bearer agent-token' } })).text()
-  assert.match(dash, /Automation/)
-  assert.match(dash, /no pending approvals/)
+  // the dashboard's JSON state carries the automation queue — the rendered
+  // shell is a compiled bundle, not server-side strings
+  const st = (await (await fetch(`${base}/state`, { headers: { authorization: 'Bearer agent-token' } })).json()) as {
+    automation: { pending: unknown[]; ops: unknown[] }
+  }
+  assert.equal(st.automation.pending.length, 0, 'decided approvals leave the queue')
 })

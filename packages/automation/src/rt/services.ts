@@ -151,11 +151,27 @@ export interface SweepObservation {
 // a replayed leg resumes from its committed prefix — the journal doesn't
 // need per-transition steps here.
 
+/** the inbox row as a wire arg — the deal.event handler re-runs the item's
+ *  own leg (dispatch + complete/fail) keyed by the deal's correlation id. */
+export interface DealEvent {
+  source: string
+  messageId: string
+  kind: string
+  payload: unknown
+}
+
 export interface DealDeps {
   /** load op by key + run its advance leg (load + height + the stamped
    *  try/catch) — engine.advanceOp. Returns false when the op is gone or
    *  terminal. */
   advanceOp: (operationId: string) => Promise<boolean>
+  /** one inbox item's leg — engine.dealEvent: kind dispatch + complete/fail
+   *  inside. Keyed ev:<wantId> — per-key FIFO gives the ordering the tick's
+   *  batch sort enforced. */
+  inboxEvent: (item: DealEvent) => Promise<void>
+  /** one op's reconcile legs — engine.reconcileOp (refused-escrow arm +
+   *  refunded rescan), keyed by operationId. */
+  reconcileOp: (operationId: string) => Promise<void>
   log: (line: string) => void
 }
 
@@ -176,7 +192,9 @@ export const dealObject = async (deps: DealDeps) => {
     name: EXEC_SVC.deal,
     handlers: {
       advance: async (ctx: restate.ObjectContext) => await ctx.run('advance', () => leg({}, ctx.key)),
-      due: async (ctx: restate.ObjectContext) => await ctx.run('advance', () => leg({}, ctx.key))
+      due: async (ctx: restate.ObjectContext) => await ctx.run('advance', () => leg({}, ctx.key)),
+      event: async (ctx: restate.ObjectContext, item: DealEvent) => await ctx.run('event', () => deps.inboxEvent(item)),
+      reconcile: async (ctx: restate.ObjectContext) => await ctx.run('reconcile', () => deps.reconcileOp(ctx.key))
     }
   })
 }
@@ -315,6 +333,83 @@ export const registerDealHandlers = (
   const leg = dealAdvanceBody(deps)
   ex.register(EXEC_SVC.deal, 'advance', (arg, key) => leg(arg, key ?? ''))
   ex.register(EXEC_SVC.deal, 'due', (arg, key) => leg(arg, key ?? ''))
+  ex.register(EXEC_SVC.deal, 'event', (arg) => deps.inboxEvent(arg as DealEvent))
+  ex.register(EXEC_SVC.deal, 'reconcile', (arg, key) => deps.reconcileOp(key ?? ''))
+}
+
+// ── the dealfan service ──────────────────────────────────────────────────
+// the tick's scan+fan-out legs as ONE journaled invocation: pending inbox
+// items → deal.event on the deal's correlation key, NONTERMINAL ops →
+// deal.advance per op key, due reconcile rows → deal.reconcile per op key.
+// Each scan runs inside ctx.run — a replay re-sends the SAME snapshot (no
+// row is re-scanned), and the sends go through ctx.objectSendClient so the
+// journal dedupes them.
+
+export interface DealfanDeps {
+  pendingInbox: () => Promise<DealEvent[]>
+  /** NONTERMINAL operation ids */
+  liveOps: () => Promise<string[]>
+  /** funding_failed/refunded op ids past their reconcile cooldown */
+  reconcileOps: () => Promise<string[]>
+  log: (line: string) => void
+}
+
+// the event key — the deal's correlation id. wantId is on every wire
+// shape; an offer without it falls back to its own offerId, and a shape
+// we can't read keys by its inbox row id (same FIFO guarantee, narrower
+// fan-in).
+export const dealEventKey = (i: DealEvent): string => {
+  const p = i.payload as { wantId?: string; offerId?: string; msg?: { wantId?: string } } | null
+  return `ev:${p?.msg?.wantId ?? p?.wantId ?? p?.offerId ?? i.messageId}`
+}
+
+export const dealfanTickBody =
+  (deps: DealfanDeps) =>
+  async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
+    const inbox = await run('inbox', () => deps.pendingInbox())
+    for (const i of inbox) await send({ service: EXEC_SVC.deal, handler: 'event', key: dealEventKey(i) }, i)
+    const ops = await run('ops', () => deps.liveOps())
+    for (const id of ops) await send({ service: EXEC_SVC.deal, handler: 'advance', key: id }, {})
+    const rec = await run('reconcile', () => deps.reconcileOps())
+    for (const id of rec) await send({ service: EXEC_SVC.deal, handler: 'reconcile', key: id }, {})
+    return { events: inbox.length, advanced: ops.length, reconciled: rec.length }
+  }
+
+export const dealfanService = async (deps: DealfanDeps, dealDef: unknown) => {
+  const restate = await import('@restatedev/restate-sdk')
+  const tick = dealfanTickBody(deps)
+  const send = (ctx: restate.Context): RtSend => {
+    const deal = (key: string) =>
+      ctx.objectSendClient(dealDef as never, key) as unknown as {
+        advance: (o: unknown) => Promise<void>
+        event: (o: DealEvent) => Promise<void>
+        reconcile: (o: unknown) => Promise<void>
+      }
+    return async (target, arg) => {
+      if (target.service === EXEC_SVC.deal) {
+        const c = deal(target.key ?? '')
+        if (target.handler === 'advance') await c.advance(arg)
+        else if (target.handler === 'event') await c.event(arg as DealEvent)
+        else if (target.handler === 'reconcile') await c.reconcile(arg)
+        else throw new Error(`dealfan send: no deal handler ${target.handler}`)
+      } else throw new Error(`dealfan send: no route for ${target.service}`)
+    }
+  }
+  return restate.service({
+    name: EXEC_SVC.dealfan,
+    handlers: {
+      tick: async (ctx: restate.Context) => await tick(send(ctx), (n, fn) => ctx.run(n, fn))
+    }
+  })
+}
+
+/** the dealfan bodies on a LocalExecutor — the local-mode wiring. */
+export const registerDealfanHandlers = (
+  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void } & { send: RtSend },
+  deps: DealfanDeps
+): void => {
+  const tick = dealfanTickBody(deps)
+  ex.register(EXEC_SVC.dealfan, 'tick', () => tick((t, a, o) => ex.send(t, a, o)))
 }
 
 export const registerSweepHandlers = (

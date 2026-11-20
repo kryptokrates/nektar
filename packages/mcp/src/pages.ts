@@ -3,9 +3,31 @@
 // dist/dashboard); dashboardState() is the data it renders. The verify check
 // page, /v1/badge and /card stay self-contained — they must work with zero
 // external resources. Palette comes from logo.svg: amber #f7991b on dark.
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { nektarEnv, marketHostsFromEnv } from '@nektar/core'
 import type { NektarMemory } from './memory.js'
 import { receiptToken } from './receipt.js'
+
+// the compiled Svelte dashboard — vite emits dist/dashboard/; a missing
+// bundle degrades to a one-line notice, never a stack trace
+const DASH_DIR = fileURLToPath(new URL('../dashboard/', import.meta.url))
+const DASH_MIME: Record<string, string> = {
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.map': 'application/json',
+  '.png': 'image/png',
+  '.woff2': 'font/woff2'
+}
+export const dashboardFile = (name: string): { body: Buffer; type: string } | null => {
+  try {
+    return { body: readFileSync(join(DASH_DIR, name)), type: DASH_MIME[name.slice(name.lastIndexOf('.'))] ?? 'application/octet-stream' }
+  } catch {
+    return null
+  }
+}
 
 // logo.svg — the amber drop on its dark field is the whole brand palette
 const NEKTAR_AMBER = '#f7991b'

@@ -12,7 +12,7 @@
     ".": "./dist/src/index.js"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && vite build",
     "test": "node --test --test-timeout=300000 --test-force-exit --test-concurrency=6 dist/test/*.test.js && node --test --test-timeout=1800000 --test-force-exit --test-concurrency=6 dist/test/slow/*.test.js",
     "test:stack": "NEKTAR_TEST_TIER=stack node --test --test-timeout=300000 --test-force-exit --test-concurrency=6 dist/test/*.test.js && node --test --test-timeout=1800000 --test-force-exit --test-concurrency=6 dist/test/slow/*.test.js",
     "prepublishOnly": "pnpm -r build"
@@ -40,7 +40,6 @@
     "@nektar/store": "workspace:*",
     "@nektar/verify": "workspace:*",
     "@nektar/zk": "workspace:*",
-    "@tabler/core": "^1.7.5",
     "knex": "^3.3.0",
     "qrcode": "1.5.4",
     "runar-sdk": "0.4.6",
@@ -48,7 +47,10 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/qrcode": "^1.5.6"
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@types/qrcode": "^1.5.6",
+    "svelte": "5.57.3",
+    "vite": "8.3.6"
   },
   "files": [
     "dist",

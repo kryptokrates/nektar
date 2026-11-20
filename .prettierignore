@@ -28,3 +28,6 @@ coverage
 deploy/agent/helm/templates/
 deploy/hub/helm/templates/
 deploy/bstack-sandbox/modules/
+
+# no svelte plugin — prettier cannot parse .svelte (same as *.runar.ts)
+**/*.svelte

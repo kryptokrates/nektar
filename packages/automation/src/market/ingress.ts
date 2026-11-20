@@ -54,33 +54,33 @@ export abstract class IngressOps extends MarketBase {
           this.d.log?.(`market: dealfan tick send: ${(e as Error).message}`)
         })
       } else {
-      // self-notes must restore their operation before anything else in the
-      // batch runs — a want lane event ingested ahead of the sellerNote would
-      // otherwise create a fresh sale op with the same dedupe key and the note
-      // would be deduped away
-      const inbox = await this.d.store.pendingInbox()
-      const selfNote = (i: InboxItem): boolean =>
-        i.kind === 'message' &&
-        (i.payload as { from?: string; msg?: { type?: string } }).from === this.me &&
-        ((i.payload as { msg?: { type?: string } }).msg?.type === 'note' || (i.payload as { msg?: { type?: string } }).msg?.type === 'sellerNote')
-      inbox.sort((a, b) => Number(selfNote(b)) - Number(selfNote(a)))
-      for (const i of inbox) {
-        try {
-          // new-deal gates leave the item pending WITHOUT spending an
-          // attempt — a host flap must not dead-letter wants
-          if (i.kind === 'want') {
-            if (this.d.killed?.() || this.d.deaf?.()) continue
-            await this.onWant(i.payload as SignedWant)
-          } else if (i.kind === 'offer') await this.onOffer(i.payload as SignedOffer)
-          else {
-            const p = i.payload as { from: string; msg: MarketMessage; refs?: BoxRef[] }
-            await this.onMessage(p.from, p.msg, p.refs)
+        // self-notes must restore their operation before anything else in the
+        // batch runs — a want lane event ingested ahead of the sellerNote would
+        // otherwise create a fresh sale op with the same dedupe key and the note
+        // would be deduped away
+        const inbox = await this.d.store.pendingInbox()
+        const selfNote = (i: InboxItem): boolean =>
+          i.kind === 'message' &&
+          (i.payload as { from?: string; msg?: { type?: string } }).from === this.me &&
+          ((i.payload as { msg?: { type?: string } }).msg?.type === 'note' || (i.payload as { msg?: { type?: string } }).msg?.type === 'sellerNote')
+        inbox.sort((a, b) => Number(selfNote(b)) - Number(selfNote(a)))
+        for (const i of inbox) {
+          try {
+            // new-deal gates leave the item pending WITHOUT spending an
+            // attempt — a host flap must not dead-letter wants
+            if (i.kind === 'want') {
+              if (this.d.killed?.() || this.d.deaf?.()) continue
+              await this.onWant(i.payload as SignedWant)
+            } else if (i.kind === 'offer') await this.onOffer(i.payload as SignedOffer)
+            else {
+              const p = i.payload as { from: string; msg: MarketMessage; refs?: BoxRef[] }
+              await this.onMessage(p.from, p.msg, p.refs)
+            }
+            await this.d.store.completeInbox(i.source, i.messageId)
+          } catch (e) {
+            await this.d.store.failInbox(i.source, i.messageId, (e as Error).message)
           }
-          await this.d.store.completeInbox(i.source, i.messageId)
-        } catch (e) {
-          await this.d.store.failInbox(i.source, i.messageId, (e as Error).message)
         }
-      }
       }
       const height = await this.d.height()
       // in-run resubmit: 'prepared'/'submission_unknown' rows are signed
@@ -101,10 +101,8 @@ export abstract class IngressOps extends MarketBase {
       if (exec === undefined) {
         const ops = await this.d.store.operations({ states: NONTERMINAL })
         for (const op of ops) await this.advanceLeg(op, height)
-        for (const op of await this.d.store.operations({ role: 'buyer', states: ['funding_failed'], reconcileDue: this.now() }))
-          await this.reconcileRefused(op)
-        for (const op of await this.d.store.operations({ role: 'buyer', states: ['refunded'], reconcileDue: this.now() }))
-          await this.reconcileRefundProof(op)
+        for (const op of await this.d.store.operations({ role: 'buyer', states: ['funding_failed'], reconcileDue: this.now() })) await this.reconcileRefused(op)
+        for (const op of await this.d.store.operations({ role: 'buyer', states: ['refunded'], reconcileDue: this.now() })) await this.reconcileRefundProof(op)
       }
       // with the runtime's detached pump wired, the end-of-tick pass is a
       // poke (drain runs off the engine mutex); without it the engine

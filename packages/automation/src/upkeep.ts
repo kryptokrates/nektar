@@ -6,7 +6,8 @@ import { P2PKH } from '@bsv/sdk'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
 import { signerAddress, BoundedMap } from '@nektar/core'
-import { ancestryHit, deadAncestry } from '@nektar/bstack'
+import { deadAncestry } from '@nektar/bstack'
+import { openRefusals } from './refusals.js'
 import type { SignedOffer, SignedWant } from '@nektar/bstack'
 import type { Rt } from './rtctx.js'
 
@@ -47,40 +48,21 @@ export function openUpkeep(rt: Rt): void {
   // whose parent was simply between propagation hops)
   const deadSuspects = new BoundedMap<string, number>(4096)
   const stuckMints = new BoundedMap<string, { first: number; tries: number }>(4096)
-  // refused-ancestor registry — a broadcaster's "parent rejected (ancestor
-  // X)" is first-party evidence that X is dead to this mempool: every
-  // outpoint whose unproven ancestry contains X can never air, whatever its
-  // own status word says. Composing the funding oracle below prices the
-  // mark into exactly the outpoints the ancestry walk can reach — a refused
-  // sibling never poisons a clean parent, and the revive path in died()
-  // consults the same verdict before resurrecting a consumed input.
-  const refusedAncestors = new BoundedMap<string, number>(4096)
-  const noteRefusal = (description: string | undefined): void => {
-    if (description === undefined) return
-    for (const m of description.matchAll(/ancestor\s*\(?\s*([0-9a-f]{64})\s*\)?/gi)) refusedAncestors.set(m[1].toLowerCase(), Date.now())
-  }
+  // refused-ancestor registry — a refusal that names its ancestor is
+  // first-party evidence the ancestor is dead to this mempool: every
+  // outpoint whose unproven ancestry contains it can never air, whatever
+  // its own status word says. Registered on funds' append-only
+  // deadParents seam (assigning deadParent would clobber custody's
+  // verdict oracle — and is what check:arch's oracle-write gate bans) —
+  // the mark prices exactly the outpoints the ancestry walk can reach:
+  // a refused sibling never poisons a clean parent, and the revive path
+  // in died() consults the same verdict before resurrecting an input.
+  const refusals = openRefusals({ fetchTx: (txid) => mem.fetchTx(txid).catch(() => undefined) })
+  mem.funds.deadParents?.push(refusals.parent)
   const broadcast = async (tx: import('@bsv/sdk').Transaction): Promise<import('@nektar/chain').BroadcastResult> => {
     const r = await mem.broadcastTx(tx)
-    if (r.status !== 'success') noteRefusal(r.description)
+    if (r.status !== 'success') refusals.noteRefusal(r.description)
     return r
-  }
-  const innerDeadParent = mem.funds.deadParent
-  mem.funds.deadParent = async (tx) => {
-    if (tx.merklePath !== undefined) return false
-    try {
-      if (refusedAncestors.has(tx.id('hex'))) return true
-    } catch {
-      // a stand-in parent cannot serialize — its ancestry still answers
-    }
-    if (
-      await ancestryHit(
-        tx,
-        (id: string) => refusedAncestors.has(id),
-        (txid: string) => mem.fetchTx(txid).catch(() => undefined)
-      )
-    )
-      return true
-    return (await innerDeadParent?.(tx)) ?? false
   }
   const stuckMint = async (tree: import('@bsv/sdk').Transaction): Promise<'keep' | 'drop'> => {
     const tid = tree.id('hex')

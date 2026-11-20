@@ -145,6 +145,10 @@ export interface Funds {
    *  Unlike hintSkip this seam DOES write (it heals), but only custody
    *  bookkeeping — never a chain verdict */
   deadParent?: (tx: Transaction) => Promise<boolean>
+  /** extra dead-parent oracles checked before `deadParent` — appended,
+   *  never assigned: a later `deadParent =` write can never remove a
+   *  registered evidence source. */
+  deadParents?: Array<(tx: Transaction) => Promise<boolean>>
   /** resolve a tx by id for died()'s input-revive walk — hex-stored drafts
    *  lose input sourceTransactions, so reviving a tombstoned input needs a
    *  lookup that can fetch the dead spend's parent (held store, index).

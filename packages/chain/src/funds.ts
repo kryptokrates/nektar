@@ -92,6 +92,11 @@ export interface FundsDeps {
    *  drop. Bookkeeping only — no chain verdict is written. Seeds the
    *  `deadParent` field. */
   deadParent?: (tx: Transaction) => Promise<boolean>
+  /** additional dead-parent oracles, checked BEFORE `deadParent` —
+   *  evidence registers by appending (never by assigning `deadParent`),
+   *  so a later wiring can't silently remove a mark source. Seeds the
+   *  `deadParents` field. */
+  deadParents?: Array<(tx: Transaction) => Promise<boolean>>
   /** a purpose's take served by a dedicated pool instead of the shared set —
    *  the fee-vault covenant mints capped outs for `publish` takes; it returns
    *  undefined when it has nothing to serve (fall through to the pool).
@@ -122,6 +127,12 @@ export abstract class FundsBase implements Funds {
   public leased?: (txid: string, vout: number) => Promise<boolean> | boolean
   public hintSkip?: (tx: Transaction, vout: number) => Promise<boolean>
   public deadParent?: (tx: Transaction) => Promise<boolean>
+  /** registered dead-parent oracles, checked before `deadParent` —
+   *  append-only: `deadParents.push(oracle)` adds evidence no later
+   *  `deadParent =` assignment can remove. Cheap marks (registries,
+   *  refusal caches) belong here; the sealed-verdict oracle stays on
+   *  `deadParent` and answers last */
+  public deadParents: Array<(tx: Transaction) => Promise<boolean>> = []
   public spendCheck?: (txid: string, vout: number) => Promise<boolean>
   public liveSet?: () => Promise<Set<string> | undefined>
   public liveCheck?: (txid: string, vout: number) => Promise<boolean>
@@ -139,12 +150,20 @@ export abstract class FundsBase implements Funds {
     this.leased = deps.leased
     this.hintSkip = deps.hintSkip
     this.deadParent = deps.deadParent
+    this.deadParents = [...(deps.deadParents ?? [])]
     this.spendCheck = deps.spendCheck
     this.liveSet = deps.liveSet
     this.liveCheck = deps.liveCheck
     this.txOf = deps.txOf
     this.takeOverride = deps.takeOverride
     this.dealFloor = deps.dealFloor
+  }
+
+  /** the dead-parent question over every registered oracle — cheap marks
+   *  first, the sealed-verdict oracle last; first true wins */
+  protected async parentDead(tx: Transaction): Promise<boolean> {
+    for (const o of this.deadParents) if (await o(tx)) return true
+    return (await this.deadParent?.(tx)) ?? false
   }
 
   /** the locking script that marks an output as ours (change, adoptions).
@@ -227,10 +246,10 @@ export abstract class FundsBase implements Funds {
       // parent over — a hint is not a verdict and writes nothing. The memo
       // dedupes across a draft's many outputs — a 250-entry file costs a probe
       // per distinct parent, not per outpoint
-      if (this.deadParent !== undefined) {
+      if (this.deadParent !== undefined || this.deadParents.length > 0) {
         let dead = deadMemo.get(id)
         if (dead === undefined) {
-          dead = await this.deadParent(u.tx)
+          dead = await this.parentDead(u.tx)
           deadMemo.set(id, dead)
         }
         if (dead) return 'dead'
@@ -444,7 +463,7 @@ export abstract class FundsBase implements Funds {
       // forever while no child built on it can air — resurrecting the
       // outpoint just re-poisons the next take. The hint check stays a
       // pass-over; the deadParent check is the sealed verdict.
-      if (parent === undefined || (await this.deadParent?.(parent)) === true || (await this.hintSkip?.(parent, vout)) === true) continue
+      if (parent === undefined || (await this.parentDead(parent)) === true || (await this.hintSkip?.(parent, vout)) === true) continue
       if (this.store.revive !== undefined) await this.store.revive(parent, vout)
       else await this.store.add(parent, vout)
     }

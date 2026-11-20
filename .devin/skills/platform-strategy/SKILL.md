@@ -2,19 +2,25 @@
 name: platform-strategy
 description: >
   Design, price, govern, position and evaluate multisided platforms and
-  marketplaces. Use when the user asks about "platform design", "marketplace
-  design", "which side to subsidize", "pricing a platform", "openness vs
-  control", "platform governance", "will this marketplace work",
-  "liquidity metrics", "subsidy side", "money side", "who should pay",
-  "market position", "category design", "frame of reference", "new
-  category vs subsegment", "ignition", "critical mass", "ecosystem risk",
-  or asks whether a platform/marketplace idea can succeed. Covers pipeline
-  vs platform, the core interaction, the 8 launch strategies, monetization
-  (the 4 forms of value), openness decisions, governance (laws/norms/
-  architecture), liquidity metrics, the sizzle/fizzle checklist, and
-  positioning frames. Grounded in Platform Revolution (Parker, Van
-  Alstyne, Choudary), Matchmakers (Evans & Schmalensee), and Obviously
-  Awesome (Dunford). For launch-sequencing and hard-side detail, use
+  marketplaces — including open-source products run as platforms. Use when
+  the user asks about "platform design", "marketplace design", "which side
+  to subsidize", "pricing a platform", "openness vs control", "platform
+  governance", "will this marketplace work", "liquidity metrics",
+  "subsidy side", "money side", "who should pay", "market position",
+  "category design", "frame of reference", "new category vs subsegment",
+  "ignition", "critical mass", "ecosystem risk", "open source strategy",
+  "open core", "open source business model", "license choice",
+  "cloud provider hosting our code", "community strategy", "contributor
+  funnel", "should we open source it", "fork risk", or asks whether a
+  platform/marketplace idea can succeed. Covers pipeline vs platform, the
+  core interaction, the 8 launch strategies, viral mechanics,
+  monetization (the 4 forms of value + access/usage levers), openness
+  decisions, governance (laws/norms/architecture + market failures),
+  liquidity metrics, the sizzle/fizzle checklist, positioning frames, and
+  the open-source sponsor-capture playbook. Grounded in Platform
+  Revolution (Parker, Van Alstyne, Choudary), Matchmakers (Evans &
+  Schmalensee), and Obviously Awesome (Dunford); deep case detail in
+  references/. For launch-sequencing and hard-side detail, use
   cold-start; for user-journey friction audits, use friction.
 ---
 
@@ -45,9 +51,13 @@ is judged by whether it increases valuable interactions per participant.
    - _Growth diagnosis / metrics_ → section 7 (liquidity first, always).
    - _Naming/positioning/"what do we call this"_ → section 9 (Dunford).
    - _Stalled/competitive pressure_ → section 10 (envelopment,
-     cherry-picking, winner-take-all).
+     multihoming defense, winner-take-all).
+   - _Open-source strategy — should we open, what stays closed, open-core
+     pricing, license/fork/community_ → section 11 first, then 4–6.
 2. **Score it.** Rate against the rubric. A plan that cannot answer "who
-   is the subsidy side" or "what is the core interaction" scores ≤5.
+   is the subsidy side" or "what is the core interaction" scores ≤5 —
+   an OSS plan that can't answer "what do we capture if the code is
+   free" scores ≤5 too.
 3. **Advise.** Report the score, then ranked changes to reach 10/10 —
    concrete (named sides, named subsidies, named metrics), never "grow
    the ecosystem."
@@ -62,7 +72,10 @@ is judged by whether it increases valuable interactions per participant.
   explicit subsidy/money sides with a rationale; ignition plan with
   self-supply or zigzag; openness decisions made deliberately per group;
   governance owns fakes/fraud/quality; liquidity metrics instrumented;
-  positioning frame chosen with named competitive alternative
+  positioning frame chosen with named competitive alternative. For an
+  open-source venture add: capture surface named and separate from the
+  code (host/network/registry), codebase modular enough for outsiders,
+  license/fork posture decided as a monetization choice
 - **7-8:** Sound on interaction + pricing, but openness or governance
   is assumed rather than decided, or metrics still track totals
 - **5-6:** Platform language without platform mechanics — sides named
@@ -203,6 +216,30 @@ in lockstep — YouTube alternated creator tools and viewer reach),
 — Levchin's track record, marquee commitments, published roadmaps),
 **exclusive supply** (content that exists only through you), and
 **subsidization** (pay the scarce side to exist early — PayPal's $10).
+Two refinements worth keeping: **go narrow/deep to manufacture
+thickness** — OpenTable abandoned 50 thin cities for 4 deep ones; a
+Seattle restaurant is worthless to an SF diner — and **critical mass is
+per-market, not global** (eBay China withdrew: scale elsewhere doesn't
+transfer). Matchmakers' three ignition strategies — zigzag, two-step
+(secure one side, sell access to it), commitment (guarantee the other
+side will exist before a side invests — Android's free license was a
+commitment device for OEMs).
+
+**Revolution adds the viral mechanics** — the four-element loop behind
+organic spread (ch.5): **sender** (a user spreading _their own_ value
+unit, not word-of-mouth about you) → **spreadable value unit** (the
+artifact must start an external interaction or complete an incomplete
+one — an unanswered question, a survey, a shared photo; confidential or
+inert artifacts can't travel) → **external network** (the existing
+medium it travels — Facebook for Instagram, eBay for PayPal; the host
+can later throttle you, so the loop must also feed your own graph) →
+**recipient** (converts if relevant, then becomes the next sender).
+Pull beats push: design the spread into the interaction itself —
+Instagram hit 100M users with zero marketing staff because _every use
+was an ad_. Inorganic spread incentives must not be cash (Dropbox gave
+storage, not dollars — cash drains at viral scale). And virality ≠
+network effects: virality _acquires_, network effects _retain_ — you
+need both, in that order.
 
 **Applications:**
 
@@ -246,10 +283,35 @@ access — and each form punishes the wrong charge:
   price (you pay them — >100% of the money side's fee can fund the
   subsidy). Price the _pair_, not each side independently: total price
   = what makes the network ignite and persist, allocated to the side
-  that can bear it.
+  that can bear it. Two decisions, not one — the **level**
+  (P_A + P_B) and the **structure** (each side's share; usually tilted,
+  e.g. WEX fleet cards' $1.50/$0.50 split).
 - **Never charge for what makes the network valuable.** Charging for
   consumption shrinks the audience producers pay to reach; charging
   for production shrinks what consumers come for.
+- **The side that controls whether the interaction happens gets priced
+  lowest** — cardholders decide the swipe (AmEx pays rewards), searchers
+  choose the engine (free), the fleet decides which card gets used.
+- **Access fees and usage fees are separate levers** — access monetizes
+  the option (membership, license); usage monetizes the interaction
+  (per-deal %). Pair high-access/zero-usage to maximize the activity
+  the other side pays for; never charge access to a side whose mere
+  presence creates positive indirect effects (merchants join AmEx free).
+- **Charge at deal completion, not at entry or listing** — entry fees
+  shrink supply _and_ the matching data you learn from; completion fees
+  skim a transaction already valued. (Alibaba couldn't track deals →
+  membership + ads; Ariba lived on one-sided software until it could
+  charge both sides ~2005.)
+- **Pricing is curation** — Meetup's $19 organizer fee killed 95% of
+  activity but lifted successful meetups from ~2% to ~50%. Ask whether a
+  price can strengthen positive network effects _and_ weed negative
+  ones.
+- **Free→fee transitions have rules** — never charge for what was free;
+  never reduce accustomed access; create _new_ value that justifies the
+  charge and control its quality. Architect for monetization
+  optionality from day one: transaction fees require transaction
+  capture, access fees require control of the flows. Openness choices
+  _are_ monetization choices — see §11.
 
 **Applications:**
 
@@ -306,6 +368,35 @@ spam producers. Governance runs on three tools:
   claims prevent fake listings; caps prevent spam). Enforcement that
   requires no judgment scales best.
 
+**What governance actually fights — the four market failures, each
+with its counter:**
+
+- **Information asymmetry** (fakes, lemons — counterfeits were a $350B
+  market, larger than the drug trade) → transparency, reputation,
+  quality signals, insurance.
+- **Externalities** (spam, contact-selling, one participant's behavior
+  taxing the rest) → behavioral rules, architecture that makes the
+  externality unprofitable, rewarding public-good creation.
+- **Monopoly power of a participant** (Zynga on Facebook, eBay power
+  sellers) → promote competitors; a single dominant participant can
+  hold the platform hostage.
+- **Risk** (participants eat the downside of bad interactions) →
+  insurance and risk-pooling. The recurring arc: platforms instinctively
+  shed participant risk early and adopt pooling later — Airbnb's $1M
+  host guarantee, card networks' fraud caps. **Pool risk for
+  participants; don't just minimize your own.**
+
+Community norms scale on **Ostrom's commons rules**: defined
+boundaries, channels for participants to influence decisions,
+accountable monitors, graduated sanctions, cheap dispute resolution,
+nested governance tiers as scale grows. Two enforcement subtleties
+from the book: give _fast, open feedback for good behavior_ but _slow,
+opaque feedback for bad_ (visible punishment teaches offenders to
+dodge it; trolls whose posts show only to themselves stop trolling) —
+and ejection is the ultimate sanction that must exist (OpenTable
+terminates at 4 no-shows/year; Facebook ran ~150 User Ops staff on
+real-name/conduct enforcement).
+
 **Matchmakers' warning:** fakes and fraudsters arrive with growth, not
 after it — the governance stack must be designed before the network is
 dense, not retrofitted after the scandal. And governance applies to
@@ -329,14 +420,31 @@ the _interaction_:
   churn attributed to bad actors, proportion of interactions needing
   intervention.
 - **Balance** — per-side health separately: producer active rate,
-  consumer return rate, cross-side ratio vs. the ratio at which
-  matching works.
+  consumer return rate, cross-side ratio among _active_ users (OkCupid
+  throttles overrepresented male visibility; Upwork balances
+  freelancers to postings), and **side-switching rate** — the share of
+  consumers who become producers (Airbnb's best host source is its
+  guests; a rising switch rate is the cheapest supply channel there is).
+- **Interaction failure %** — initiated interactions that fall
+  through: the most-overlooked metric. Retained users + falling
+  interaction-success rate = a serious problem that signup charts
+  will never show.
 
-**Lifecycle staging:** early = liquidity metrics only. Growth =
-per-network density metrics (weekly active networks, fill rate, time-
-to-match per market). Scale = per-side retention, take-rate
-sustainability, LTV of repeat producers. Match every metric to its
-lifecycle phase or you're optimizing the wrong thing.
+**Lifecycle staging:** early = liquidity metrics only (% of intents
+getting a successful interaction inside a window — track the illiquid
+cases too, the search that returns nothing). Growth = per-network
+density metrics (weekly active networks, fill rate, time-to-match per
+market) + balance ratios + failure %. Scale = per-side retention,
+take-rate sustainability, LTV of repeat producers. Match every metric
+to its lifecycle phase or you're optimizing the wrong thing.
+
+**Metric design rules:** prefer ratios over absolutes (active/total,
+interaction-success rate); keep the dashboard small — find the one or
+two metrics that prove participants love and use the platform; every
+metric must pass the **3-A test**: _actionable_ (guides a decision),
+_accessible_ (the people who gather it understand it), _auditable_
+(real, precisely defined data). Vanity metrics lie in a specific
+direction — totals keep rising while interactions flatten.
 
 ### 8. The sizzle/fizzle checklist — will this platform work?
 
@@ -365,6 +473,18 @@ committing:
 Score the venture against all six — one unanswered question is the
 fizzle path.
 
+**The countdown and the warning signs:** launch starts the clock —
+most platforms ignite within ~2 years or never (OpenTable needed ~3
+plus a wholesale strategy change). Below critical mass, the "dud"
+reputation compounds: users stop coming, investors thin out. The
+warning signs, in order: can't land even forgiving early adopters →
+marquee players won't sign (the tell that matters most) →
+participant/activity growth stops accelerating → early adopters
+defect → no takeoff inflection after a year or two → implosion or
+capital cutoff. Each sign has a different fix — early-adopter
+rejection is a design problem; marquee refusal is an expectations
+problem; stalled acceleration is a density problem.
+
 ### 9. Positioning — the frame that makes value obvious
 
 **Core concept (Dunford):** Positioning is context — the frame of
@@ -372,60 +492,235 @@ reference a customer uses to judge you. Get it wrong and your strengths
 are invisible; get it right and they explain themselves. The 10 steps
 compress to the decisions that matter:
 
-- **Competitive alternative** — what would customers use/do if you
-  didn't exist? (Not your feature list — their actual behavior:
-  spreadsheets, the incumbent, doing nothing.)
-- **Unique attributes** — what you have that the alternatives don't.
-- **Value** — what those attributes _enable_ for the customer (not the
-  attribute itself — the outcome).
-- **Target segment** — who cares most about that specific value.
+- **Start from best-fit customers, not the product** — survey only the
+  ecstatic minority (bought fast, refer you, act as references);
+  polling everyone yields mud. No happy customers yet? Keep it loose —
+  the fishing-net principle: position broadly, watch what you catch,
+  tighten when a pattern emerges.
+- **Competitive alternative** — ask best-fit customers what they'd do
+  if you didn't exist. The honest answers are rarely rival products:
+  they're "hire an intern", "script it ourselves", "the OSS thing plus
+  glue", "do nothing". Rank those, not the competitors _you_ track.
+- **Unique attributes** — what you have that the alternatives don't,
+  run through the **provability filter**: "easy to use" and "great
+  service" are opinions, not attributes — keep only what a third party,
+  a standard, or data can prove. Position on **consideration
+  attributes** (what wins the evaluation), not retention attributes
+  (what drives renewal — prospects never stay long enough to meet
+  them).
+- **Value** — what those attributes _enable_ for the customer; force
+  the feature→benefit→value chain ("so what?") until the output is a
+  customer goal, then cluster into 1–4 value themes.
+- **Target segment** — who cares _a lot_ about that value, described by
+  listable characteristics (you could build a named prospect list —
+  "small business" fails that test).
 - **Market frame** — pick the category deliberately; three options:
   - **Head-to-head** — win the existing market outright. Requires
-    beating the incumbent's network, not just features. Usually loses.
+    beating the incumbent's network, not just features. Usually loses —
+    use only when you _are_ the leader or the category has none.
   - **Big fish, small pond** — dominate a well-defined subsegment of an
     existing market whose requirements the leader doesn't serve.
-    Density first; expansion later.
+    Density first; expansion later. Beware the _fake subsegment_ — a
+    demographic is not an unmet need (Bic for Her).
   - **New game** — create and name a new category, prove it deserves
     to exist, define its parameters, default yourself leader. Highest
-    cost (evangelism burden), highest ceiling.
+    cost (evangelism burden — you teach the problem before you sell
+    the fix), highest ceiling; needs a real "why now" shift and
+    pockets deep enough to survive the fast-follower who steals the
+    category once it clicks.
 - **(+1) Trends** — layer a trend on top of the position for relevance;
-  never make the trend the position. Trends attract attention; the
-  position retains it.
+  never make the trend the position. Trend answers "why now", category
+  answers "what is it" — a pink couch is still a couch.
 
 **The tell:** lead with what you uniquely prove, not what you
 generally do. "Fast marketplace" is an adjective; "the market where
 every deal settles with proof" is a position.
 
+**Reposition triggers:** ~every 6 months or on a discontinuity — a
+credible competitor enters (via acquisition especially), a regulation
+or tech shift changes what's possible, buyer taste rotates. The
+diagnostic: ask prospects _and_ happy customers separately what you do
+— a disconnect is a positioning problem. Restart at the alternatives
+step, not at messaging.
+
 ### 10. Winning and losing — winner-take-all and envelopment
 
 **Core concept (Revolution ch. 10):** A market tips to one platform
-when (a) multi-homing costs are high, (b) network effects are strong
-AND one-directional, and (c) no strong differentiation niche survives.
-If any condition fails, multiple platforms coexist — and the strategy
-isn't "win the market" but "own the densest niche." Defend the
-hard side of your densest segments: challengers cherry-pick exactly
-those, and bundling buys distribution but never devotion.
+when **all four** forces align: supply economies of scale, strong
+network effects, high multihoming/switching costs, and no viable niche
+specialization. If any force fails, multiple platforms coexist — and
+the strategy isn't "win the market" but "own the densest niche." Defend
+the hard side of your densest segments: challengers cherry-pick
+exactly those, and bundling buys distribution but never devotion.
+
+Competition runs on three levels simultaneously — platform vs.
+platform (the better device lost to the better ecosystem: iPhone vs.
+PSP), platform vs. partner (you compete with your own extension
+developers — "delicate and dangerous"), partner vs. partner.
+
+**Envelopment** is the characteristic platform attack: an adjacent
+platform serving _your_ users adds your function — Microsoft bundled
+media streaming into Windows and enveloped Real Audio's 100% market.
+Defense options: match the feature (directly or via a partner),
+deepen your differentiating design (Vimeo survives YouTube on hosting
+quality), or retreat to the niche the bundler can't serve without
+self-harm.
+
+**Multihoming is the vulnerability attackers use and defenders plug:**
+low switching costs let Facebook unseat Myspace and LinkedIn unseat
+Monster. Defensive levers — raise the cost of carrying a second
+platform (exclusive supply, non-portable reputation, data lock-in the
+participants themselves want), or restrict the flows that would let a
+rival walk your users out (Apple banned Flash partly because Adobe's
+tools ported iOS apps to Android; Alibaba blocked Baidu's crawlers
+_while starving for traffic_ to keep ownership of its own ad revenue).
+Every openness decision has a multihoming cost attached — see §11.
+
+### 11. Open-source platform strategy — open the standard, keep the surface
+
+**Core concept (Revolution ch. 7 + ch. 8, 11):** Open source is the
+developer-participation openness decision taken to its limit — and the
+books' sharpest lesson is that _winning the standard and capturing its
+value are different contests_. JVC's licensing model won the format war
+(VHS beat technically-superior Betamax on volume → price → titles) and
+JVC itself earned only modest, non-lasting profits. Android/AOSP is the
+modern version: open multi-vendor code took ~80% smartphone share, but
+AOSP sends Google **zero** revenue or data — so Google recaptured value
+one layer _up_: proprietary apps, Play-license gating, the Open Handset
+Alliance. The rule: **when the code must stay open, capture value via
+the critical services, network, and trust layer built on top of it.**
+
+**Manager vs. sponsor** — two different roles, both must be decided:
+
+- The **manager** organizes day-to-day producer/consumer interaction —
+  sits closest to users and outside developers.
+- The **sponsor** controls the architecture, the underlying IP, and the
+  allocation of rights — holds the long-term leverage.
+- Four models: **proprietary** (one firm both — Apple), **licensing**
+  (one sponsor, many managers — Android+OEMs), **joint venture** (one
+  manager, many sponsors — Orbitz's airlines), **shared** (many of both
+  — Linux). Corporate-sponsored OSS is a licensing variant: your company
+  sponsors, users/forkers manage. Models migrate (Visa went proprietary
+  → joint venture → freestanding) — pick for the _next_ stage, and
+  remember the direction is one-way: proprietary can only become more
+  open; a fully shared platform can only become more closed. Choose the
+  starting point you can live with permanently.
+
+**The community is itself a multisided platform** — treat it like one:
+
+- Sides: contributors ↔ maintainers ↔ users. Its core interaction has a
+  value unit (a merged patch, an answered issue, a doc) and a filter
+  (review + CI). Run §1's design on it, not just on your product.
+- Its governance is §6's stack applied to the repo: laws (license,
+  CONTRIBUTING, code of conduct), norms (maintainer ladder, earned
+  review rights — iStockphoto's crowd-curation arc), architecture (CI
+  gates, required reviews — enforcement that needs no judgment scales).
+- Its ignition problem is the same chicken-egg: contributors come for
+  an active project; activity comes from contributors. Self-supply
+  (your own team is the first producer), marquee (known adopters), and
+  producer evangelism (contributors bring their users) all apply.
+
+**Ownership and absorption rules** — what to keep proprietary vs. open
+vs. upstream:
+
+- Own what is a **primary source of user value** or **could become a
+  competing platform** (Apple ate public humiliation to replace Google
+  Maps — a dependency that could siphon the monetization). For an OSS
+  product: the hosted service, the network/registry, and the trust
+  layer are the non-negotiable own-ables.
+- **Absorb** functionality once _multiple_ third parties have built and
+  adopted it (the Cisco AXP rule — absorb too early and you cannibalize
+  a partner's livelihood; too late and commoditization already took the
+  value). For OSS: upstream what the community has converged on; keep
+  product what only you can run.
+- Extension developers → your contributor ecosystem: too closed loses
+  their innovation; too open invites low-quality supply that tarnishes
+  the project and oversupply that kills incentive. The API/contribution
+  surface is the control point — tier it (the Guardian's Keyless /
+  Approved / Bespoke access model is the pattern).
+
+**Monetization for open source** maps onto §4's forms: the code is
+free → you sell _access to tools_ (developer/enterprise features),
+_access to the market_ (hosting, the network only you operate),
+_curation_ (verified/certified artifacts, support SLAs). The
+precondition is architectural: **open source requires modularity** —
+a codebase volunteers can maintain must be decomposable (MacCormack/
+Baldwin); an integral blob can't be opened, only abandoned. Architect
+for monetization optionality from day one — you can't retrofit
+transaction capture onto a design that never touched the transaction.
+
+**OSS-specific risks, named:**
+
+- **Envelopment-by-hosting** — a cloud provider wraps your open code in
+  their distribution and captures the service revenue (the AOSP pattern
+  run against you). Defenses are §10's: own the network/registry layer
+  the code can't function without, differentiate the managed service on
+  quality, or adjust the license boundary — knowing that a license
+  change is the sponsor's rent lever and the community will judge it as
+  governance, not pricing.
+- **Fork risk** is the collective-action problem: the ecosystem wants
+  one standard; each firm wants a variant. Android's answer was the
+  OHA + certification — a consortium structure with a compatibility
+  gate keeps the standard unified while the code stays forkable.
+- **Governance legitimacy is the moat** — open code is also open
+  _oversight_: anyone can inspect what it does (Stallman's point —
+  abuse gets exposed and corrected). For a product whose claim is
+  verifiability, openness-of-code is itself a positioning attribute,
+  not just a distribution choice.
+
+**Why open at all (the books' honest case):** openness multiplies
+value units and reach you could never fund; it recruits the
+hard side for free (users who can self-supply, self-host, and fix);
+it's a commitment device (Android's license told OEMs "invest without
+trusting us"); and inspectable code is governance evidence. The costs
+are real — fragmentation, weaker control, a capture surface you must
+design explicitly rather than own by default. The decision is per-group
+(§5), sequenced (§3), and one-directional: deliberate it like the
+monetization choice it is.
+
+## References
+
+Deep per-book notes with named cases — consult when a section needs
+evidence or a worked example:
+
+- `references/platform-revolution.md` — openness models (proprietary /
+  licensing / joint-venture / shared), manager vs. sponsor, the four
+  market failures, per-stage metrics, envelopment, launch cases.
+- `references/matchmakers.md` — friction taxonomy, critical-mass
+  frontier, ignition strategies (zigzag / two-step / commitment),
+  pricing level-vs-structure, ecosystem/beyond-the-walls, the full
+  six-question checklist + warning signs.
+- `references/obviously-awesome.md` — the full 10-step method, the
+  three market frames with use-when criteria, trends rules, the sales
+  narrative arc, reposition triggers, anti-pattern catalog.
 
 ## Common Mistakes
 
-| Mistake                                   | Why it fails                                                  | Fix                                                                                 |
-| ----------------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Charging everyone                         | Taxes the demand that producers pay to reach                  | Name subsidy vs money side; charge the side that benefits from the other's presence |
-| Launching to a market, not a micromarket  | Scattered users, no density, empty rooms                      | Constrain until the core interaction self-sustains                                  |
-| Openness as a value instead of a decision | Either leaks the capture surface or strangles supply          | Decide per group: manager/sponsor, developer, provider, user                        |
-| Signup metrics                            | Vanity totals hide zero liquidity                             | Measure interaction success: fill rate, time-to-match, repeat-interaction rate      |
-| Governance after the fraud                | Quality collapse precedes the fix                             | Laws + norms + architecture designed pre-density                                    |
-| Positioning as "better X"                 | Incumbent's network beats your features every time            | Big-fish-small-pond or new-game frame where your attributes decide                  |
-| Ignoring the ecosystem dependency         | The platform dies when a partner/infra you don't control does | Degradation strategy, not just dependency                                           |
-| Subsidies without a published taper       | Hard-side revolt when terms quietly degrade                   | Publish the taper with the subsidy                                                  |
+| Mistake                                   | Why it fails                                                   | Fix                                                                                 |
+| ----------------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Charging everyone                         | Taxes the demand that producers pay to reach                   | Name subsidy vs money side; charge the side that benefits from the other's presence |
+| Launching to a market, not a micromarket  | Scattered users, no density, empty rooms                       | Constrain until the core interaction self-sustains                                  |
+| Openness as a value instead of a decision | Either leaks the capture surface or strangles supply           | Decide per group: manager/sponsor, developer, provider, user                        |
+| Open sourcing without a capture surface   | You win the standard, someone else banks it (JVC/VHS, AOSP)    | Own the layer above: hosted service, network/registry, trust layer                  |
+| Charging for what was free                | The community reads it as a rule change, not a price change    | New value justifies the charge; publish it with the taper                           |
+| Opening an unmodular codebase             | Volunteers can't maintain an integral blob; "open" = abandoned | Decompose before releasing; modularity is the OSS precondition                      |
+| Signup metrics                            | Vanity totals hide zero liquidity                              | Measure interaction success: fill rate, time-to-match, repeat-interaction rate      |
+| Governance after the fraud                | Quality collapse precedes the fix                              | Laws + norms + architecture designed pre-density                                    |
+| Positioning as "better X"                 | Incumbent's network beats your features every time             | Big-fish-small-pond or new-game frame where your attributes decide                  |
+| Ignoring the ecosystem dependency         | The platform dies when a partner/infra you don't control does  | Degradation strategy, not just dependency                                           |
+| Subsidies without a published taper       | Hard-side revolt when terms quietly degrade                    | Publish the taper with the subsidy                                                  |
+| Charging at entry/listing, not completion | Shrinks supply _and_ the matching data you learn from          | Skim the transaction at deal completion                                             |
+| Positioning on unprovable attributes      | "Easy to use" is an opinion, not a differentiator              | Keep only attributes a third party, standard, or data can prove                     |
 
 ## Quick Diagnostic
 
-| Question                                            | If no                             | Action                                          |
-| --------------------------------------------------- | --------------------------------- | ----------------------------------------------- |
-| Can you state the core interaction in one sentence? | It's a product, not a platform    | Write participants + value unit + filter first  |
-| Can you name the subsidy side and money side?       | Pricing is unpriced               | Apply the whom-to-charge rules                  |
-| Is a liquidity metric instrumented?                 | You're flying on vanity metrics   | Track fill rate + time-to-match before anything |
-| Does governance exist before the fraud does?        | Retrofit will be too late         | Laws, norms, architecture in the design         |
-| Is the frame of reference chosen deliberately?      | The market will choose it for you | Dunford's three options, picked on purpose      |
-| Can the ecosystem kill you if it fails?             | Name the degradation path         | Fallbacks, not dependencies                     |
+| Question                                             | If no                             | Action                                          |
+| ---------------------------------------------------- | --------------------------------- | ----------------------------------------------- |
+| Can you state the core interaction in one sentence?  | It's a product, not a platform    | Write participants + value unit + filter first  |
+| Can you name the subsidy side and money side?        | Pricing is unpriced               | Apply the whom-to-charge rules                  |
+| Is a liquidity metric instrumented?                  | You're flying on vanity metrics   | Track fill rate + time-to-match before anything |
+| Does governance exist before the fraud does?         | Retrofit will be too late         | Laws, norms, architecture in the design         |
+| Is the frame of reference chosen deliberately?       | The market will choose it for you | Dunford's three options, picked on purpose      |
+| Can the ecosystem kill you if it fails?              | Name the degradation path         | Fallbacks, not dependencies                     |
+| (OSS) Is the capture surface separate from the code? | You donated the business          | Own the layer above: host, network, registry    |
+| (OSS) Is the codebase modular enough for outsiders?  | It can't be opened, only dumped   | Decompose first; modules before license         |

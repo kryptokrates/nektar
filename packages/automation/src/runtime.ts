@@ -773,7 +773,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       await exec.send(
         { service: EXEC_SVC.deal, handler: 'due', key: dealOpKey({ operationId, wantId: op ? opWantId(op) : undefined }) },
         { op: operationId },
-        { delayMs: Math.max(0, at - Date.now()) }
+        // the arm fires on the DOMAIN clock — `at` is a store.now() timestamp;
+        // mixing clocks under a virtual `now` skews every arm (a test clock
+        // running ahead would push each due send past the deadline it arms)
+        { delayMs: Math.max(0, at - (cfg.now ?? Date.now)()) }
       )
     })().catch((e) => log(`automation: deal due send ${operationId}: ${(e as Error).message}`))
   }

@@ -334,8 +334,8 @@ test('runtime wires the hooks with the busy gate and push clears the ledger thro
   )
   assert.match(
     rt,
-    /store\.dueAtArmed\s*=\s*\(operationId, at\)\s*=>[\s\S]*?EXEC_SVC\.deal[\s\S]*?handler:\s*'due'[\s\S]*?delayMs:\s*Math\.max\(0, at - Date\.now\(\)\)/,
-    'committed dueAt must arm a delayed deal.due send on the op key'
+    /store\.dueAtArmed\s*=\s*\(operationId, at\)\s*=>[\s\S]*?EXEC_SVC\.deal[\s\S]*?handler:\s*'due'[\s\S]*?delayMs:\s*Math\.max\(0, at - \(cfg\.now \?\? Date\.now\)\(\)\)/,
+    'committed dueAt must arm a delayed deal.due send on the op key, on the domain clock'
   )
   assert.match(rt, /lastLedgerSweep\s*=\s*-Infinity/, 'the push path must clear the wtx throttle — a pushed verdict never waits out the cadence')
   assert.match(rt, /mem\.onHeight\?\.\(/, 'dueHeight wake must ride the host height hook')

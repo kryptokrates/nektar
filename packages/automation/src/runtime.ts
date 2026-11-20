@@ -6,7 +6,7 @@ import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
 import type { AutomationHost } from './host.js'
 import { AutomationStore, type OutboxItem, type WalletTx } from './store.js'
-import { TransactionWatcher } from './ledger.js'
+import { TransactionWatcher, scanTxObservations } from './ledger.js'
 import { MarketEngine, NONTERMINAL, type MarketTransport } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '@nektar/store'
@@ -21,9 +21,9 @@ import { openUpkeep } from './upkeep.js'
 import { Scheduler } from './scheduler.js'
 import { openWatches } from './watches.js'
 import type { TxEffects } from './machines/effects.js'
-import { executor } from './rt/exec.js'
+import { executor, EXEC_SVC } from './rt/exec.js'
 import { openEndpoint, type RtEndpoint } from './rt/endpoint.js'
-import { txObject } from './rt/services.js'
+import { txObject, sweepService } from './rt/services.js'
 import type { Rt, LaneInfra, AutomationConfig } from './rtctx.js'
 import type { Automation } from './types.js'
 
@@ -380,14 +380,18 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       mem.recordAired?.(rebuildStored(w))
     }
   }
+  // the sweep's observeFn — shared by the watcher (local ticks) and the
+  // nektar-sweep service (restate mode sends each observation to the row's
+  // tx object)
+  const observeFn = async (txid: string) => {
+    const f = await mem.txFacts(txid)
+    if (f.verdict === 'mined') return { status: 'proven' as const, source: 'chain' }
+    if (f.verdict === 'dead') return { status: 'rejected' as const, source: f.source ?? 'chain', reason: 'dead' }
+    return hintSeen(f.hint) ? { status: 'seen' as const, source: 'broadcaster' } : undefined
+  }
   const ledgerWatcher = new TransactionWatcher(
     store,
-    async (txid) => {
-      const f = await mem.txFacts(txid)
-      if (f.verdict === 'mined') return { status: 'proven' as const, source: 'chain' }
-      if (f.verdict === 'dead') return { status: 'rejected' as const, source: f.source ?? 'chain', reason: 'dead' }
-      return hintSeen(f.hint) ? { status: 'seen' as const, source: 'broadcaster' } : undefined
-    },
+    observeFn,
     async (w) => {
       await mem.funds.died(rebuildStored(w))
     },
@@ -410,13 +414,15 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // boot replay: 'prepared'/'submission_unknown' rows are signed intents a
   // crashed process never got a verdict for — re-air them from stored bytes
   // before the first deal tick. Fire-and-forget behind the engine's chain;
-  // idempotent on the wire ('already known' → submitted)
-  void engine
-    .resubmitPending()
-    .then((rs) => {
-      for (const r of rs) log(`automation: boot replay ${r.actionId} → ${r.state}`)
-    })
-    .catch((e) => log(`automation: boot replay failed: ${(e as Error).message}`))
+  // idempotent on the wire ('already known' → submitted). Under restate the
+  // sweep service owns the scan — a journaled, per-key fan-out instead.
+  if (executor() === undefined)
+    void engine
+      .resubmitPending()
+      .then((rs) => {
+        for (const r of rs) log(`automation: boot replay ${r.actionId} → ${r.state}`)
+      })
+      .catch((e) => log(`automation: boot replay failed: ${(e as Error).message}`))
   openOutbox(rt)
   openUpkeep(rt)
   openWatches(rt)
@@ -424,9 +430,24 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // in-process and registers the deployment with the sidecar — durable
   // sends/calls then land here journaled + serialized per key
   let rtEndpoint: RtEndpoint | undefined
-  if (executor() !== undefined) {
-    rtEndpoint = await openEndpoint([await txObject({ store, fx: txFx, log })], process.env, log)
+  const exec = executor()
+  if (exec !== undefined) {
+    const txDef = await txObject({ store, fx: txFx, log, submit: (actionId) => engine.submitTx(actionId) })
+    const sweepDef = await sweepService(
+      {
+        scan: async function* () {
+          for await (const x of scanTxObservations(store, observeFn, undefined)) yield { actionId: x.w.actionId, observe: x.observe }
+        },
+        resubmitRows: () => store.walletTxs(['prepared', 'submission_unknown']),
+        log
+      },
+      txDef
+    )
+    rtEndpoint = await openEndpoint([txDef, sweepDef], process.env, log)
     log(`automation: restate endpoint ${rtEndpoint.uri}`)
+    // boot resubmit fans out through the sweep — each row's re-air is a
+    // journaled invocation on its own tx object
+    void exec.send({ service: EXEC_SVC.sweep, handler: 'boot' }, {}).catch((e) => log(`automation: sweep boot send: ${(e as Error).message}`))
   }
   let again = false
   let running: Promise<void> | undefined
@@ -473,7 +494,14 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // the deal loop's hot tick
             if (t2 - lastLedgerSweep > WAITS.ledgerSweep.ms) {
               lastLedgerSweep = t2
-              await bound('wtx', () => ledgerWatcher.tick(), legMs())
+              // under restate the scan is a journaled service invocation that
+              // sends each observation to its row's tx object — the pass
+              // doesn't block on it
+              if (executor() !== undefined)
+                void executor()!
+                  .send({ service: EXEC_SVC.sweep, handler: 'tick' }, {})
+                  .catch((e) => log(`automation: sweep tick send: ${(e as Error).message}`))
+              else await bound('wtx', () => ledgerWatcher.tick(), legMs())
             }
             rt.pushAcks()
             const t3 = Date.now()

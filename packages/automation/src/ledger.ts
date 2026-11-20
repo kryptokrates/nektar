@@ -92,6 +92,40 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
   }
 }
 
+/** the sweep's scan half: live+dead rows × observeFn → (row, observe)
+ *  pairs — tickDriver emits them serially in local mode; the sweep
+ *  service sends each to the row's own tx object (per-key serialized,
+ *  journaled invocations). Release-lease bookkeeping rides the scan in
+ *  both modes. */
+export async function* scanTxObservations(
+  store: AutomationStore,
+  observeFn: (txid: string) => Promise<TxObservationInput | undefined>,
+  exportedTtlMs: number | undefined
+): AsyncGenerator<{ w: WalletTx; observe: { event: string; guard?: string; observation: unknown } }> {
+  const ttl = exportedTtlMs ?? WAITS.exportedTtl.ms
+  const live = await store.walletTxs(['submitted', 'submission_unknown', 'observed', 'exported'])
+  const dead = (await store.walletTxs(['rejected', 'expired', 'abandoned'])).filter((w) => Date.now() - w.stateAt < ttl)
+  for (const w of [...live, ...dead]) {
+    try {
+      if (w.state === 'submitted' || w.state === 'observed') await store.releaseLeases(w.actionId)
+      const o = await observeFn(w.txid)
+      if (o !== undefined) {
+        const { event, guard } = obsEvent(o)
+        yield { w, observe: { event, guard, observation: { at: Date.now(), ...o } } }
+        continue
+      }
+      if (w.state === 'exported' && exportedTtlMs !== undefined && Date.now() - w.at >= exportedTtlMs) {
+        yield {
+          w,
+          observe: { event: 'export.ttl', observation: { at: Date.now(), reason: `exported tx unaired for ${Math.round((Date.now() - w.at) / 60000)}min` } }
+        }
+      }
+    } catch {
+      /* unknown, not failed — try again next tick */
+    }
+  }
+}
+
 export function leasePredicate(store: AutomationStore): (txid: string, vout: number) => Promise<boolean> {
   return (txid, vout) => store.leasedOutpoint(txid, vout)
 }
@@ -205,33 +239,9 @@ export class TransactionWatcher {
     // crash window between commit and effect dispatch self-heals here
     await replayTxEffects(this.store, fx).catch(() => 0)
     let changed = 0
-    const live = await this.store.walletTxs(['submitted', 'submission_unknown', 'observed', 'exported'])
-    const ttl = this.opts?.exportedTtlMs ?? WAITS.exportedTtl.ms
-    const dead = (await this.store.walletTxs(['rejected', 'expired', 'abandoned'])).filter((w) => Date.now() - w.stateAt < ttl)
-    for (const w of [...live, ...dead]) {
-      try {
-        if (w.state === 'submitted' || w.state === 'observed') await this.store.releaseLeases(w.actionId)
-        const o = await this.observeFn(w.txid)
-        if (o !== undefined) {
-          const { event, guard } = obsEvent(o)
-          const r = await txEmit(executor(), this.store, w, event, { guard, observation: { at: Date.now(), ...o } }, fx)
-          if (r.next !== w.state) changed++
-          continue
-        }
-        if (w.state === 'exported' && this.opts?.exportedTtlMs !== undefined && Date.now() - w.at >= this.opts.exportedTtlMs) {
-          const r = await txEmit(
-            executor(),
-            this.store,
-            w,
-            'export.ttl',
-            { observation: { at: Date.now(), reason: `exported tx unaired for ${Math.round((Date.now() - w.at) / 60000)}min` } },
-            fx
-          )
-          if (r.next !== w.state) changed++
-        }
-      } catch {
-        /* unknown, not failed — try again next tick */
-      }
+    for await (const { w, observe } of scanTxObservations(this.store, this.observeFn, this.opts?.exportedTtlMs)) {
+      const r = await txEmit(executor(), this.store, w, observe.event, { guard: observe.guard, observation: observe.observation }, fx)
+      if (r.next !== w.state) changed++
     }
     return changed
   }

@@ -102,6 +102,13 @@ export abstract class MarketBase {
     return this.run(async () => (await this.wallet?.resubmitPending()) ?? [], 'resubmit')
   }
 
+  /** a single row's broadcast+verdict leg for the tx VO's resubmit handler —
+   *  the object's per-key serialization IS the mutex, so no run() chain is
+   *  taken (taking it would re-enter the chain from inside an invocation) */
+  submitTx(actionId: string): Promise<{ state: import('../store.js').TxState; txid: string; detail?: string } | undefined> {
+    return this.wallet?.submit(actionId) ?? Promise.resolve(undefined)
+  }
+
   /** a pushed transaction status (broadcaster callback / node event) — only a
    *  hint: the next cycle runs the reconcile check immediately for operations
    *  watching this txid, and the engine still consults txFacts itself */

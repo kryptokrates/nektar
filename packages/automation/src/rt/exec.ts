@@ -73,6 +73,7 @@ type Handler = (arg: unknown, key?: string) => Promise<unknown>
 export class LocalExecutor implements Executor {
   private readonly handlers = new Map<string, Handler>()
   private readonly timers = new Set<ReturnType<typeof setTimeout>>()
+  private readonly pending = new Set<Promise<unknown>>()
 
   constructor(private readonly log: (line: string) => void = () => {}) {}
 
@@ -89,9 +90,13 @@ export class LocalExecutor implements Executor {
   send(target: InvokeTarget, arg: unknown, opts?: SendOpts): Promise<void> {
     const fn = this.get(target)
     const run = (): void => {
-      void fn(arg, target.key).catch((e: unknown) => {
-        this.log(`executor: ${target.service}/${target.handler}: ${(e as Error).message}`)
-      })
+      const p = fn(arg, target.key)
+      this.pending.add(p)
+      void p
+        .catch((e: unknown) => {
+          this.log(`executor: ${target.service}/${target.handler}: ${(e as Error).message}`)
+        })
+        .finally(() => this.pending.delete(p))
     }
     if (opts?.delayMs !== undefined && opts.delayMs > 0) {
       const t = setTimeout(() => {
@@ -103,6 +108,12 @@ export class LocalExecutor implements Executor {
       queueMicrotask(run)
     }
     return Promise.resolve()
+  }
+
+  /** await every fired send — the test seam that makes fan-out asserts
+   *  deterministic (fire-and-forget in prod, joined in tests). */
+  async drain(): Promise<void> {
+    for (let i = 0; i < 50 && this.pending.size > 0; i++) await Promise.allSettled([...this.pending])
   }
 
   async call<T>(target: InvokeTarget, arg: unknown): Promise<T> {

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import knexFactory, { type Knex } from 'knex'
+import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
 import { executor, executorFromEnv, LocalExecutor, RestateExecutor, setExecutor, EXEC_SVC } from '../src/rt/exec.js'

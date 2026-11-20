@@ -1,0 +1,25 @@
+{
+  "resource": "market_host_health",
+  "roots": ["up"],
+  "states": ["up", "suspect", "down", "deaf"],
+  "terminal": [],
+  "quiescent": ["up"],
+  "nonterminal": ["suspect", "down", "deaf"],
+  "notes": {
+    "up": "serving — the default between misses",
+    "suspect": "one miss — a single failure must not mark a host down",
+    "down": "repeated misses — repair/fanout rows target it",
+    "deaf": "reachable but not answering OUR topics — distinct from down: transport works, subscription doesn't",
+    "guards": "down requires the hysteresis count — a lone timeout is a suspect, never a verdict"
+  },
+  "transitions": [
+    { "state": "up", "event": "miss", "intents": [], "target": "suspect" },
+    { "state": "up", "event": "deaf", "guard": "answered-others", "intents": [], "target": "deaf" },
+    { "state": "suspect", "event": "miss", "guard": "repeat", "intents": ["mark-missed"], "target": "down" },
+    { "state": "suspect", "event": "ok", "intents": [], "target": "up" },
+    { "state": "down", "event": "ok", "intents": ["repair-missed"], "target": "up" },
+    { "state": "down", "event": "miss", "intents": [], "target": "self" },
+    { "state": "deaf", "event": "ok", "intents": [], "target": "up" },
+    { "state": "deaf", "event": "miss", "intents": [], "target": "down" }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "resource": "market_inbox",
+  "roots": ["pending", "duplicate"],
+  "states": ["pending", "parked", "done", "duplicate", "dead"],
+  "terminal": ["done", "duplicate", "dead"],
+  "nonterminal": ["pending", "parked"],
+  "notes": {
+    "pending": "consumable by the drain — bounded retries via attempts",
+    "parked": "the parent op cannot consume this item now (e.g. funding_deferred — a delivered offer would drop mid-deal); resume redrives it",
+    "duplicate": "artifact-hash dedup — ingested at creation, never consumed",
+    "guards": "the park edge is guarded by the PARENT OP state — inbox items are not free agents, their fate is the op's"
+  },
+  "transitions": [
+    { "state": "pending", "event": "process", "intents": [], "target": "done" },
+    { "state": "pending", "event": "fail", "guard": "attempts<max", "intents": [], "target": "self" },
+    { "state": "pending", "event": "exhaust", "guard": "attempts>=max", "intents": [], "target": "dead" },
+    { "state": "pending", "event": "park", "guard": "op-state=funding_deferred", "intents": [], "target": "parked" },
+    { "state": "parked", "event": "resume", "intents": ["redrive"], "target": "pending" },
+    { "state": "parked", "event": "process", "intents": [], "target": "done" },
+    { "state": "parked", "event": "expire", "intents": [], "target": "dead" }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "resource": "instance_lock",
+  "roots": ["free"],
+  "states": ["free", "held", "stale", "corrupt"],
+  "terminal": [],
+  "quiescent": ["free"],
+  "nonterminal": ["held", "stale", "corrupt"],
+  "notes": {
+    "held": "owner pid@host + heartbeat mtime; local-dead pid proves the holder gone at once, remote/live only yields on beat staleness",
+    "stale": "beat gap >20s — a takeover candidate, never an automatic take: a live local pid still vetoes",
+    "corrupt": "unparseable file — its mtime stands in for the beat; fix:true may remove it",
+    "guards": "takeover requires the evidence named: pid-dead (local probe) or beat-stale (clock), never a guess"
+  },
+  "transitions": [
+    { "state": "free", "event": "acquire", "intents": ["write-owner"], "target": "held" },
+    { "state": "held", "event": "beat", "intents": [], "target": "self" },
+    { "state": "held", "event": "release", "intents": ["unlink"], "target": "free" },
+    { "state": "held", "event": "stale", "guard": "beat-gap", "intents": [], "target": "stale" },
+    { "state": "held", "event": "corrupt", "guard": "unparseable", "intents": [], "target": "corrupt" },
+    { "state": "stale", "event": "takeover", "guard": "pid-dead|beat-dead", "intents": ["write-owner"], "target": "held" },
+    { "state": "stale", "event": "beat", "intents": [], "target": "held" },
+    { "state": "corrupt", "event": "repair", "guard": "operator-fix", "intents": ["unlink"], "target": "free" },
+    { "state": "corrupt", "event": "takeover", "guard": "pid-dead|beat-dead", "intents": ["write-owner"], "target": "held" }
+  ]
+}

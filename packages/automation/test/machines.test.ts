@@ -3,6 +3,13 @@ import assert from 'node:assert/strict'
 import { declaredTransitions, type AnyStateMachine, type TransitionTable } from '../src/machines/machine.js'
 import { OPS_TABLE, opsMachine, opsStep } from '../src/machines/ops.machine.js'
 import { TX_TABLE, txMachine, txStep } from '../src/machines/tx.machine.js'
+import { LEASE_TABLE, leaseMachine, leaseStep } from '../src/machines/lease.machine.js'
+import { INBOX_TABLE, inboxMachine, inboxStep } from '../src/machines/inbox.machine.js'
+import { OUTBOX_TABLE, outboxMachine, outboxStep } from '../src/machines/outbox.machine.js'
+import { LANE_TABLE, laneMachine, laneStep } from '../src/machines/lane.machine.js'
+import { SLOT_TABLE, slotMachine, slotStep } from '../src/machines/slot.machine.js'
+import { LOCK_TABLE, lockMachine, lockStep } from '../src/machines/lock.machine.js'
+import { HOST_TABLE, hostMachine, hostStep } from '../src/machines/host.machine.js'
 
 function bfs(table: TransitionTable): Map<string, { via: string; from: string }> {
   const seen = new Map<string, { via: string; from: string }>()
@@ -77,10 +84,13 @@ function tableTests(
 
   test(`${name}: every recovery state is reachable from a real event`, () => {
     const seen = bfs(table)
+    const incoming = new Set(declaredTransitions(table).map((t) => t.target))
     for (const s of [...(table.quiescent ?? []), 'refund_pending', 'funding_deferred', 'uncertain', 'escalated', 'abandoned', 'expired']) {
       if (!table.states.includes(s)) continue
       const reach = seen.get(s)
-      assert.ok(reach && reach.via !== 'root', `${s} only reachable as a root`)
+      // a root∩quiescent state (up, free) is an entry state — it must still
+      // have a real incoming edge or nothing can ever return to it
+      assert.ok(reach && (reach.via !== 'root' || incoming.has(s)), `${s} only reachable as a root`)
     }
   })
 
@@ -157,4 +167,65 @@ test('opsMachine: revival edges are proof-gated', () => {
 test('opsMachine: crash/restart identity + guarded siblings disambiguate', () => {
   assert.equal(opsStep('selected', 'cap.refused', { guard: 'policy.escalate' }).next, 'escalated')
   assert.equal(opsStep('selected', 'cap.refused', { guard: '!policy.escalate' }).next, 'denied')
+})
+
+// ---------- Phase D: small machines (spec + shadow period) ----------
+
+tableTests('leaseMachine', leaseMachine, LEASE_TABLE, (s, e, p) => leaseStep(s, e, p))
+
+test('leaseMachine: released→spent is declared — the counterparty-air edge', () => {
+  // 3bb8271b: a lease released on our refusal still spent — the revive path
+  assert.equal(leaseStep('released', 'spend', { guard: 'aired|proven' }).next, 'spent')
+  assert.equal(leaseStep('leased', 'spend', { guard: 'aired|proven' }).next, 'spent')
+  assert.equal(leaseStep('released', 'lease').next, 'leased') // a freed coin re-leases normally
+  assert.equal(leaseStep('spent', 'lease').accepted, false) // consumed stays consumed
+})
+
+tableTests('inboxMachine', inboxMachine, INBOX_TABLE, (s, e, p) => inboxStep(s, e, p))
+
+test('inboxMachine: park is parent-op-guarded — delivered under funding_deferred', () => {
+  assert.equal(inboxStep('pending', 'park', { guard: 'op-state=funding_deferred' }).next, 'parked')
+  assert.equal(inboxStep('pending', 'park').accepted, false) // no op state named → can't park
+  assert.equal(inboxStep('parked', 'resume').next, 'pending')
+  assert.equal(inboxStep('parked', 'process').next, 'done')
+})
+
+tableTests('outboxMachine', outboxMachine, OUTBOX_TABLE, (s, e, p) => outboxStep(s, e, p))
+
+test('outboxMachine: deferred unblocks on its class only', () => {
+  assert.equal(outboxStep('pending', 'defer').next, 'deferred')
+  assert.equal(outboxStep('deferred', 'unblock', { guard: 'same-class' }).next, 'pending')
+  assert.equal(outboxStep('deferred', 'unblock').accepted, false) // wrong class never wakes it
+})
+
+tableTests('laneMachine', laneMachine, LANE_TABLE, (s, e, p) => laneStep(s, e, p))
+
+test('laneMachine: proven is quiescent not final — reorg demotes', () => {
+  assert.equal(laneStep('proven', 'reorg', { guard: 'reheader' }).next, 'unproven')
+  assert.equal(laneStep('unproven', 'prove', { guard: 'bump' }).next, 'proven')
+  assert.equal(laneStep('unproven', 'prove').accepted, false) // no BUMP named → no proof
+})
+
+tableTests('slotMachine', slotMachine, SLOT_TABLE, (s, e, p) => slotStep(s, e, p))
+
+test('slotMachine: a dead mint returns the leaf — local refusal is not consumption', () => {
+  assert.equal(slotStep('taken', 'mint-died', { guard: 'verified' }).next, 'free')
+  assert.equal(slotStep('taken', 'mint-aired', { guard: 'aired|proven' }).next, 'spent')
+})
+
+tableTests('lockMachine', lockMachine, LOCK_TABLE, (s, e, p) => lockStep(s, e, p))
+
+test('lockMachine: takeover requires evidence — never a guess', () => {
+  assert.equal(lockStep('stale', 'takeover', { guard: 'pid-dead|beat-dead' }).next, 'held')
+  assert.equal(lockStep('stale', 'takeover').accepted, false)
+  assert.equal(lockStep('held', 'stale', { guard: 'beat-gap' }).next, 'stale')
+})
+
+tableTests('hostMachine', hostMachine, HOST_TABLE, (s, e, p) => hostStep(s, e, p))
+
+test('hostMachine: a single miss is a suspect, never a verdict', () => {
+  assert.equal(hostStep('up', 'miss').next, 'suspect')
+  assert.equal(hostStep('suspect', 'ok').next, 'up')
+  assert.equal(hostStep('suspect', 'miss', { guard: 'repeat' }).next, 'down')
+  assert.equal(hostStep('up', 'deaf', { guard: 'answered-others' }).next, 'deaf')
 })

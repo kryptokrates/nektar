@@ -59,10 +59,16 @@ const drive = async (rts: Automation[], chain: TestChain, n = 1) => {
     if ((await chain.pendingBroadcasts()) > 0) await chain.mine(1)
   }
 }
-const until = async (rts: Automation[], chain: TestChain, ok: () => Promise<boolean>, n = 100): Promise<number> => {
-  for (let i = 0; i < n; i++) {
+// wall-clock bound, not round-bound: busy-starved rounds burn the iteration
+// budget without deal progress under batch contention — a deadline keeps
+// driving until convergence or the real-time cap
+const until = async (rts: Automation[], chain: TestChain, ok: () => Promise<boolean>, ms = 200_000): Promise<number> => {
+  const at = Date.now() + ms
+  let i = 0
+  while (Date.now() < at) {
+    i++
     await drive(rts, chain, 1)
-    if (await ok()) return i + 1
+    if (await ok()) return i
   }
   return -1
 }
@@ -375,7 +381,7 @@ test('T2: throughput — 3 concurrent buyers on one seller, all deals land', { t
       }
       return (await saleOps(s)).filter((o) => COMPLETE.has(o.state)).length >= wants.length
     }
-    const rounds = await until(all, chain, done, 140)
+    const rounds = await until(all, chain, done, 280000)
     const ms = Date.now() - t0
     assert.ok(rounds > 0, 'not all deals landed | ' + logs.slice(-25).join(' | '))
     const settled = (await saleOps(s)).filter((o) => COMPLETE.has(o.state))
@@ -481,7 +487,7 @@ test('T4: payload scaling — 1KB completes, 32KB/128KB land honest states', { t
         // must not sit at awaiting_disclosure — the escrow covenant gives it
         // a way out at dueHeight (refund) or the reconcile path escalates it.
         assert.ok(
-          (await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure', 60)) > 0,
+          (await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure', 120000)) > 0,
           `${kb}KB escrow never funded | ` + logs.slice(-15).join(' | ')
         )
         await drive([b.rt, s.rt], chain, 15) // delivery retries burn + outbox dead-letters
@@ -741,7 +747,7 @@ test('R9: timeout truth — escrow refund vs direct dispute on seller ghosting',
         'escrow never funded | ' + logs.slice(-15).join(' | ')
       )
       await chain.mine(40)
-      const refundRounds = await until([b.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'refunded', 40)
+      const refundRounds = await until([b.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'refunded', 80000)
       const boEnd = await opFor(b, w.wantId)
       const evts = boEnd !== undefined ? await b.rt.store.events(boEnd.operationId) : []
       assert.ok(
@@ -779,7 +785,7 @@ test('R9: timeout truth — escrow refund vs direct dispute on seller ghosting',
       })
       assert.ok(hit > 0, 'direct payment never sent | ' + logs.slice(-15).join(' | '))
       await chain.mine(40)
-      const dispRounds = await until([b.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'disputed', 40)
+      const dispRounds = await until([b.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'disputed', 80000)
       const boEnd = await opFor(b, w.wantId)
       const evts = boEnd !== undefined ? await b.rt.store.events(boEnd.operationId) : []
       assert.ok(

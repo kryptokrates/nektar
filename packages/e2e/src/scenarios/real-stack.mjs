@@ -352,9 +352,13 @@ async function fundAgents() {
     if (!recovered) throw new Error('treasury outpoint already spent — re-run packages/e2e/src/scenarios/regtest-fund.mjs')
   }
   const sats = parent.outputs[tip.vout].satoshis ?? 0
-  const per = 5_000_000
+  // a run commits ~20-50K sats/agent (tree mints, offer ads, escrow) — 1M is
+  // 20x headroom; leftover change keeps the next run's tip splittable
+  const per = 1_000_000
   const change = sats - agents.length * per - 1000
-  if (sats < agents.length * 1_000_100 + 1_000_000) throw new Error(`treasury outpoint too small for ${agents.length} instances: ${sats}`)
+  // guard the real arithmetic: the split must leave >=1M change or the next
+  // run's treasury can't re-split — check `change`, not the input size
+  if (change < 1_000_000) throw new Error(`treasury outpoint too small for ${agents.length} instances: ${sats}`)
   // agent keys are generated and persisted before the split lands — a crash
   // between split-broadcast and treasury-write must not strand their outputs
   // under keys that only ever lived in the dead process's memory

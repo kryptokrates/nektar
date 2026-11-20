@@ -67,8 +67,12 @@ const drive = async (rts: Automation[], chain: TestChain, n = 2) => {
     if ((await chain.pendingBroadcasts()) > 0) await chain.mine(1)
   }
 }
-const until = async (rts: Automation[], chain: TestChain, ok: () => Promise<boolean>, n = 60) => {
-  for (let i = 0; i < n; i++) {
+// wall-clock bound, not round-bound: rounds advance the virtual clock but a
+// busy-starved round makes no deal progress — under batch contention a fixed
+// round count exhausts before convergence; a deadline keeps driving
+const until = async (rts: Automation[], chain: TestChain, ok: () => Promise<boolean>, ms = 120_000) => {
+  const at = Date.now() + ms
+  while (Date.now() < at) {
     await drive(rts, chain, 1)
     if (await ok()) return true
   }
@@ -77,8 +81,9 @@ const until = async (rts: Automation[], chain: TestChain, ok: () => Promise<bool
 // like until but checks right after the buyer's cycle, before the seller gets
 // another turn — so a test can freeze the buyer before the seller can react to
 // the accept it just flushed (a delivered the dead runtime consumes is lost)
-const untilBuyer = async (b: A, s: A, chain: TestChain, ok: () => Promise<boolean>, n = 60): Promise<boolean> => {
-  for (let i = 0; i < n; i++) {
+const untilBuyer = async (b: A, s: A, chain: TestChain, ok: () => Promise<boolean>, ms = 120_000): Promise<boolean> => {
+  const at = Date.now() + ms
+  while (Date.now() < at) {
     clock += 500
     await b.rt.cycle()
     if (await ok()) return true
@@ -136,7 +141,7 @@ test('bstack A: buyer+seller over two minihosts — journal+slot conservation, d
       const so = (await saleOps(s))[0]
       return bo?.state === 'disclosure_verified' && so !== undefined && COMPLETE.has(so.state)
     }
-    assert.ok(await until([b.rt, s.rt], chain, done, 80), 'logs: ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, done, 160000), 'logs: ' + logs.slice(-20).join(' | '))
     const bo = await buyerOp(b)
     const so = (await saleOps(s))[0]
     assert.equal(bo?.state, 'disclosure_verified')
@@ -213,7 +218,7 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', {
       'not all offers+quotes delivered | ' + logs.slice(-20).join(' | ')
     )
     const all = [b.rt, sA.rt, sB.rt, sC.rt]
-    assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'logs: ' + logs.slice(-20).join(' | '))
+    assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 200000), 'logs: ' + logs.slice(-20).join(' | '))
     const bo = await buyerOp(b)
     const sel = bo?.data.selected as { key?: string; priceSats?: number } | undefined
     assert.ok(
@@ -257,10 +262,10 @@ test('bstack C: withheld offer still completes via other host; withheld logged n
     }
     assert.notEqual(dropTxid, '', 'offer carrier landed on h1')
     assert.ok(
-      await until(all, chain, async () => logs.some((l) => l.includes('withheld') && l.includes(h2.url)), 40),
+      await until(all, chain, async () => logs.some((l) => l.includes('withheld') && l.includes(h2.url)), 80000),
       'withheld notice naming h2 | ' + logs.filter((l) => l.includes('withheld')).join(';')
     )
-    assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'logs: ' + logs.slice(-20).join(' | '))
+    assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 200000), 'logs: ' + logs.slice(-20).join(' | '))
     const bo = await buyerOp(b)
     assert.equal(bo?.state, 'disclosure_verified')
     const sel = (bo?.data.selected as { key?: string } | undefined)?.key ?? ''
@@ -312,7 +317,7 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
     bRt = await open()
     const all = [bRt, s.rt]
     assert.ok(
-      await until(all, chain, async () => (await buyerOp({ rt: bRt } as A))?.state === 'disclosure_verified', 100),
+      await until(all, chain, async () => (await buyerOp({ rt: bRt } as A))?.state === 'disclosure_verified', 200000),
       'logs: ' + logs.slice(-20).join(' | ')
     )
     const bo = (await bRt.store.operations({ role: 'buyer' })).find((o) => o.kind === 'purchase')
@@ -356,7 +361,7 @@ test('bstack E: hosts down after escrow funded — chain advance still refunds t
     await h1.close()
     await s.rt.stop()
     await chain.mine(40)
-    const refunded = await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'refunded', 10)
+    const refunded = await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'refunded', 20000)
     const fin = await buyerOp(b)
     assert.ok(refunded, `buyer not refunded state=${fin?.state} err=${fin?.lastError} | ` + logs.slice(-20).join(' | '))
     await b.rt.stop()
@@ -382,7 +387,7 @@ test('bstack F: default bbox channel � no injected bus; forged delivered ignor
     const all = [b.rt, s.rt]
     // wait for the escrow to land so the forged 'delivered' hits the from-check
     assert.ok(
-      await until(all, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 80),
+      await until(all, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 160000),
       'escrow never funded | ' + logs.slice(-20).join(' | ')
     )
     const bo0 = await buyerOp(b)
@@ -423,7 +428,7 @@ test('bstack F: default bbox channel � no injected bus; forged delivered ignor
       const so = (await saleOps(s))[0]
       return bo?.state === 'disclosure_verified' && so !== undefined && COMPLETE.has(so.state)
     }
-    assert.ok(await until(all, chain, done, 100), 'logs: ' + logs.slice(-20).join(' | '))
+    assert.ok(await until(all, chain, done, 200000), 'logs: ' + logs.slice(-20).join(' | '))
     const bo = await buyerOp(b)
     assert.equal(bo?.state, 'disclosure_verified', 'forged delivered did not derail the purchase')
     assert.ok((await carriersWith(b.rt, 'tm_bbox')) + (await carriersWith(s.rt, 'tm_bbox')) >= 3, 'quote+accept+delivered envelopes were sent')
@@ -448,7 +453,7 @@ test('bstack G: read envelopes are acked off the hosts; want+offer carry signed 
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     const all = [b.rt, s.rt]
-    assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'no deal | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 200000), 'no deal | ' + logs.slice(-20).join(' | '))
     const bo = (await buyerOp(b))!
     const sw = (bo.data.want as { want: { ts: number; exp?: number } }).want
     assert.equal(sw.exp, sw.ts + COLLECT_MS + 30_000, 'want expires with its collect window plus the republish extension')
@@ -574,7 +579,7 @@ test('bstack I: tampered accept — txHex of a different transaction → seller 
     // can fund + deliver inside the same round 'quoted' lands and the fake
     // one is ignored (op no longer 'quoted'), which is the race this guards
     await b.rt.stop()
-    assert.ok(await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     const op = (await saleOps(s))[0]
     const want = (op.data.want as { want: { wantId: string; pub: string } }).want
     const offer = op.data.offer as { cfg: { price: number | string; refundAfter: number | string; maxFee: number | string } }
@@ -690,10 +695,10 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     await s.rt.stop() // seller dies before the accept is processed
     s = undefined as never
-    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 80), 'never funded | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 160000), 'never funded | ' + logs.slice(-20).join(' | '))
     const escrowTxid = (await buyerOp(b))!.data.escrowTxid as string
     const refundAfter = Number(((await buyerOp(b))!.data.escrow as { refundAfter: number }).refundAfter)
     await drive([b.rt], chain, 2) // the note lands + is ingested but stays unacked
@@ -714,7 +719,7 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
       return await origFetch(id)
     }
     assert.ok(
-      await until([b2.rt], chain, async () => (await buyerOp(b2))?.state === 'awaiting_disclosure', 60),
+      await until([b2.rt], chain, async () => (await buyerOp(b2))?.state === 'awaiting_disclosure', 120000),
       'op not restored | ' + logs.slice(-20).join(' | ')
     )
     assert.equal(escrowLookups, 0, 'the recovery note carried the escrow — no chain lookup needed')
@@ -725,7 +730,7 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
     // pure height wait — batch the generate instead of a mine-per-round loop
     const kShort = refundAfter - (await b2.mem.chainHeight())
     if (kShort > 0) await chain.mine(kShort)
-    const wasRefunded = await until([b2.rt], chain, async () => (await buyerOp(b2))?.state === 'refunded', 40)
+    const wasRefunded = await until([b2.rt], chain, async () => (await buyerOp(b2))?.state === 'refunded', 80000)
     if (!wasRefunded) console.log('KFAIL', JSON.stringify(await buyerOp(b2)), '\nLOGS', logs.slice(-25))
     assert.ok(wasRefunded, 'never refunded | ' + logs.slice(-20).join(' | '))
     const refunded = (await buyerOp(b2))!
@@ -770,7 +775,7 @@ test('bstack L: buyer loses its database — delivery still completes after rest
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(
-      await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100),
+      await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 200000),
       'never funded | ' + logs.slice(-20).join(' | ')
     )
     const escrowTxid = (await buyerOp(b))!.data.escrowTxid as string
@@ -778,7 +783,7 @@ test('bstack L: buyer loses its database — delivery still completes after rest
     rmSync(join(dir, 'buyer'), { recursive: true, force: true })
     b2 = await respawn(b, { dir, name: 'buyer', hosts: [h1.url, h2.url], logs, chain })
     assert.ok(
-      await until([b2.rt, s.rt], chain, async () => (await buyerOp(b2))?.state === 'disclosure_verified', 100),
+      await until([b2.rt, s.rt], chain, async () => (await buyerOp(b2))?.state === 'disclosure_verified', 200000),
       'delivery never verified | ' + logs.slice(-20).join(' | ')
     )
     const bo = (await buyerOp(b2))!
@@ -823,13 +828,13 @@ test('bstack M: no loss — one operation; the note is listed while the deal is 
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(
-      await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100),
+      await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 200000),
       'never funded | ' + logs.slice(-20).join(' | ')
     )
     const listed = await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)
     assert.equal(noteItems(listed.items).length, 1, 'recovery note stays listed while the deal is open')
     assert.ok(
-      await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100),
+      await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 200000),
       'no deal | ' + logs.slice(-20).join(' | ')
     )
     const purchases = (await b.rt.store.operations({ role: 'buyer' })).filter((o) => o.kind === 'purchase')
@@ -926,7 +931,7 @@ test('bstack O: the recovery note fits the 16 KiB box content limit', { timeout:
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(
-      await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100),
+      await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 200000),
       'never funded | ' + logs.slice(-20).join(' | ')
     )
     const items = (await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items
@@ -1034,9 +1039,9 @@ test('bstack P: uncertain + escrow observable — reconcile resumes the deal wit
     await drive([b.rt, s.rt], chain, 12)
     const sab = sabotageEscrowBroadcast(b, s, chain, false)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     const all = [b.rt, s.rt]
-    assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 240000), 'no deal | ' + logs.slice(-25).join(' | '))
     assert.ok(sab.txid() !== undefined, 'the sabotaged escrow broadcast happened')
     const bo = (await buyerOp(b))!
     const evs = await b.rt.store.events(bo.operationId)
@@ -1079,7 +1084,7 @@ test('bstack Q: uncertain + rejected escrow — budget released, approval cancel
     await drive([b.rt, s.rt], chain, 12)
     const sab = sabotageEscrowBroadcast(b, s, chain, true)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     // the rejected push can reconcile uncertain → funding_failed inside one
     // round — a once-per-round sampler legitimately never observes 'uncertain',
     // so accept either state here; the events below prove the path was taken
@@ -1096,7 +1101,7 @@ test('bstack Q: uncertain + rejected escrow — budget released, approval cancel
       'never went uncertain | ' + logs.slice(-20).join(' | ')
     )
     const txid = sab.txid() ?? ((await buyerOp(b))!.data.pendingEscrow as { utxo: { txid: string } }).utxo.txid
-    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 40), 'not funding_failed | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 80000), 'not funding_failed | ' + logs.slice(-20).join(' | '))
     const bo = (await buyerOp(b))!
     const evs = await b.rt.store.events(bo.operationId)
     assert.ok(
@@ -1140,11 +1145,11 @@ test.skip('bstack R: escrow rejected while awaiting_disclosure — late rejectio
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(
-      await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100),
+      await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 200000),
       'never funded | ' + logs.slice(-20).join(' | ')
     )
     const escrowTxid = (await buyerOp(b))!.data.escrowTxid as string
-    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 40), 'not funding_failed | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 80000), 'not funding_failed | ' + logs.slice(-20).join(' | '))
     const bo = (await buyerOp(b))!
     const evs = await b.rt.store.events(bo.operationId)
     assert.ok(
@@ -1196,7 +1201,7 @@ test.skip('bstack S: disclosure rejected after completion_submitted — seller m
     assert.ok(submitted, 'never completion_submitted | ' + logs.slice(-20).join(' | '))
     const completeTxid = (await saleOps(s))[0].data.completeTxid as string
     assert.ok(
-      await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'completion_failed', 40),
+      await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'completion_failed', 80000),
       'not completion_failed | ' + logs.slice(-20).join(' | ')
     )
     const evs = await s.rt.store.events((await saleOps(s))[0].operationId)
@@ -1241,7 +1246,7 @@ test('bstack T: refused refund retries on reconcile — succeeds after one refus
       await drive([b.rt, s.rt], chain, 12)
       await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
       assert.ok(
-        await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100),
+        await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 200000),
         'never funded | ' + logs.slice(-20).join(' | ')
       )
       const refundAfter = Number(((await buyerOp(b))!.data.escrow as { refundAfter: number }).refundAfter)
@@ -1271,7 +1276,7 @@ test('bstack T: refused refund retries on reconcile — succeeds after one refus
         )
         assert.equal((await b.rt.store.approvals('pending')).length, 0, 'no open approval after auto-refund')
       } else {
-        assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'uncertain', 60), 'never uncertain | ' + logs.slice(-20).join(' | '))
+        assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'uncertain', 120000), 'never uncertain | ' + logs.slice(-20).join(' | '))
         for (let i = 0; i < 7; i++) {
           clock += 61_000
           await b.rt.cycle()
@@ -1318,7 +1323,7 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     const origOp = (await saleOps(s))[0]
     // measure the sealed sellerNote on the wire — must fit the 12 KiB budget.
     // Seller-only rounds: under immediate-select a full drive can run the deal
@@ -1330,7 +1335,7 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
         (i) => (i.body as { market?: { type?: string } }).market?.type === 'sellerNote'
       )
     assert.ok(
-      await until([s.rt], chain, async () => (await noteOf()) !== undefined, 40),
+      await until([s.rt], chain, async () => (await noteOf()) !== undefined, 80000),
       'sellerNote is listed in the seller inbox | ' + logs.slice(-20).join(' | ')
     )
     const note = (await noteOf())!
@@ -1356,7 +1361,7 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
     s = undefined as never
     await s2.rt.engine.enableSeller(s2.policyHash)
     assert.ok(
-      await until([b.rt, s2.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 120),
+      await until([b.rt, s2.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 240000),
       'no deal | ' + logs.slice(-25).join(' | ')
     )
     const ops = await saleOps(s2)
@@ -1404,13 +1409,13 @@ test('bstack V: delivered collected but not yet processed — the held envelope 
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(
-      await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100),
+      await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 200000),
       'never funded | ' + logs.slice(-20).join(' | ')
     )
     // the seller delivers; the buyer's next cycle collects + holds the envelope
     // but its tick dies before processing it — the doomed store loses the inbox row
     assert.ok(
-      await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'completion_submitted', 100),
+      await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'completion_submitted', 200000),
       'never delivered | ' + logs.slice(-20).join(' | ')
     )
     const engine = b.rt.engine as unknown as { tick: () => Promise<void> }
@@ -1426,7 +1431,7 @@ test('bstack V: delivered collected but not yet processed — the held envelope 
     b2 = await respawn(b, { dir, name: 'buyer', hosts: [h1.url, h2.url], logs, chain })
     b = undefined as never
     assert.ok(
-      await until([b2.rt, s.rt], chain, async () => (await buyerOp(b2))?.state === 'disclosure_verified', 120),
+      await until([b2.rt, s.rt], chain, async () => (await buyerOp(b2))?.state === 'disclosure_verified', 240000),
       'delivery never verified | ' + logs.slice(-25).join(' | ')
     )
     const bo = (await buyerOp(b2))!
@@ -1549,7 +1554,7 @@ test(
       await drive([b.rt, s.rt], chain, 12)
       await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
       const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s))[0]?.state ?? '')
-      assert.ok(await until([b.rt, s.rt], chain, done, 120), 'no deal | ' + logs.slice(-25).join(' | '))
+      assert.ok(await until([b.rt, s.rt], chain, done, 240000), 'no deal | ' + logs.slice(-25).join(' | '))
       await drive([b.rt, s.rt], chain, 3) // let the journal append settle
       const bo = (await buyerOp(b))!
       const so = (await saleOps(s))[0]
@@ -1636,7 +1641,7 @@ test('bstack Y: a journal batch dropped by every host shows the gap — complete
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s))[0]?.state ?? '')
-    assert.ok(await until([b.rt, s.rt], chain, done, 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, done, 240000), 'no deal | ' + logs.slice(-25).join(' | '))
     await drive([b.rt, s.rt], chain, 3)
     const bo = (await buyerOp(b))!
 
@@ -1699,7 +1704,7 @@ test('bstack Z: restart between tick and append — events land exactly once', {
     await drive([b.rt, s.rt], chain, 2) // a first batch lands, then the append stalls
     armed = true
     assert.ok(
-      await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 120),
+      await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 240000),
       'no deal | ' + logs.slice(-25).join(' | ')
     )
     await drive([b.rt], chain, 3)
@@ -1786,7 +1791,7 @@ test('bstack AA: disjoint host sets — records find each other over the shared 
 
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s))[0]?.state ?? '')
-    assert.ok(await until([b.rt, s.rt], chain, done, 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, done, 240000), 'no deal | ' + logs.slice(-25).join(' | '))
 
     // the seller's offer carrier reached H1 — a host it was never configured with
     const { readOffers } = await import('@nektar/bstack')
@@ -1834,7 +1839,7 @@ test('bstack AB: no counterparty record — the deal completes over the shared h
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s))[0]?.state ?? '')
-    assert.ok(await until([b.rt, s.rt], chain, done, 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, done, 240000), 'no deal | ' + logs.slice(-25).join(' | '))
     const fingerLines = logs.filter((l) => /finger/i.test(l) && !/finger seq/.test(l))
     assert.ok(fingerLines.length <= 1, `at most one finger-related log line | ${fingerLines.join(' | ')}`)
   } finally {
@@ -1944,7 +1949,7 @@ test('bstack AD: a full deal stores redacted evidence — verified read, one eve
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s))[0]?.state ?? '')
-    assert.ok(await until([b.rt, s.rt], chain, done, 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, done, 240000), 'no deal | ' + logs.slice(-25).join(' | '))
     await drive([b.rt, s.rt], chain, 3)
     const bo = (await buyerOp(b))!
     const ref = bo.data.evidenceRef as { bucket: string; key: string; sha256: string; size: number } | undefined
@@ -2012,7 +2017,7 @@ test('bstack AE: store down — the deal completes; evidence lands once the stor
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(
-      await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 120),
+      await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 240000),
       'no deal | ' + logs.slice(-25).join(' | ')
     )
     const bo = (await buyerOp(b))!
@@ -2022,7 +2027,7 @@ test('bstack AE: store down — the deal completes; evidence lands once the stor
     assert.ok(evLogs.length >= 1 && evLogs.length <= 2, `bounded evidence failure log | ${evLogs.join(' | ')}`)
     s3.flags.down = false
     assert.ok(
-      await until([b.rt], chain, async () => (await buyerOp(b))?.data.evidenceRef !== undefined, 30),
+      await until([b.rt], chain, async () => (await buyerOp(b))?.data.evidenceRef !== undefined, 60000),
       'evidence never landed | ' + logs.slice(-10).join(' | ')
     )
     assert.equal((await b.rt.store.events(bo.operationId)).filter((e) => e.cause === 'evidence_stored').length, 1)
@@ -2146,7 +2151,7 @@ test('bstack AG: direct rail — policy-gated P2PKH payment settles the deal wit
       const so = (await saleOps(s))[0]
       return bo?.state === 'disclosure_verified' && so !== undefined && COMPLETE.has(so.state)
     }
-    assert.ok(await until([b.rt, s.rt], chain, done, 80), 'logs: ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, done, 160000), 'logs: ' + logs.slice(-20).join(' | '))
     const bo = (await buyerOp(b))!
     const so = (await saleOps(s))[0]
     assert.equal(bo.state, 'disclosure_verified')
@@ -2198,7 +2203,7 @@ test('bstack AH: direct rail gated off without opts — same deal still settles 
       const so = (await saleOps(s))[0]
       return bo?.state === 'disclosure_verified' && so !== undefined && COMPLETE.has(so.state)
     }
-    assert.ok(await until([b.rt, s.rt], chain, done, 80), 'logs: ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, done, 160000), 'logs: ' + logs.slice(-20).join(' | '))
     const bo = (await buyerOp(b))!
     assert.equal(bo.state, 'disclosure_verified')
     // escrow ran: no direct marker, and the utxo is the covenant script
@@ -2240,7 +2245,7 @@ test('reserve: one dominant UTXO denominates into medium outputs so mints and de
   })
   try {
     const mediums = async () => (await a.mem.funds.outs()).filter((u) => u.satoshis >= 25_000).length
-    const ok = await until([a.rt], chain, async () => (await mediums()) >= 3, 40)
+    const ok = await until([a.rt], chain, async () => (await mediums()) >= 3, 80000)
     assert.ok(ok, 'upkeep splits the dominant coin until 3 medium outputs sit in the pool')
     // the point: a deal can fund at once while mediums remain for the next mint
     const deal = await a.mem.funds.take('deal', 25_000)

@@ -1384,8 +1384,18 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
     assert.equal(ops[0].operationId, origOp.operationId, 'restored with the original operationId')
     assert.equal(ops[0].data.restored, true)
     assert.ok(COMPLETE.has(ops[0].state), `restored sale reached ${ops[0].state}`)
-    await drive([b.rt, s2.rt], chain, 2)
-    assert.equal((await readBuyer(s2.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'seller inbox empty after settlement')
+    // the ack pass is async by design (collect → resolveRecords → ackBox on a
+    // freed bbox slot) — two fixed rounds starve it under file load; wait for
+    // the empty box on the drive cadence instead
+    assert.ok(
+      await until(
+        [b.rt, s2.rt],
+        chain,
+        async () => (await readBuyer(s2.mem.operatorKey(), [h1.url, h2.url], chain)).items.length === 0,
+        120000
+      ),
+      'seller inbox not empty after settlement | ' + logs.slice(-15).join(' | ')
+    )
     for (const r of [b.rt, s2.rt]) await r.stop()
   } finally {
     try {

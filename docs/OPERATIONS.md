@@ -201,6 +201,39 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
 
 `NEKTAR_TX_LOG=<path>` appends one JSON line per successful broadcast (all networks): `{t, txid, bytes, inSats, outSats, feeSats}` — `t` is a millisecond timestamp, `bytes` the raw transaction length, `inSats`/`outSats` the summed input/output values, `feeSats` their difference. `inSats`/`feeSats` are `null` when a source transaction is missing. Write failures are ignored; nothing else about broadcast behavior changes.
 
+## Operator drills
+
+### Kill-switch drill (new-spend stop)
+
+`automation/kill.ts` is the operator's hard stop for **new** spends. Either trigger works:
+
+- `NEKTAR_KILL=1` (or `true`/`yes`) in the environment
+- a `KILL` file at `<NEKTAR_DATA_DIR>/KILL` (or `NEKTAR_KILL_FILE=<path>`)
+
+The flag is consulted at every new-deal entry point — `publishWant`, `acceptOffer`, `enableSeller`, watch creation, and want/offer ingress — each throws `killed: operator stop flag is set`. It **fails closed**: a configured flag that cannot be read counts as stopped; only `ENOENT` is the running state. In-flight work is untouched: open escrows still settle, refund deadlines still fire, outbox retries keep draining — the stop never strands money.
+
+Drill:
+
+1. With the agent idle, `touch $NEKTAR_DATA_DIR/KILL` (or restart with `NEKTAR_KILL=1`).
+2. Try a new want — expect `killed: operator stop flag is set`. `enableSeller` refuses the same way. `/state` still serves; preflight reports the kill source.
+3. Fund a deal first, _then_ set the flag mid-flight — the escrow must still reach `completion_submitted`/`settled` or `refunded`. Nothing in the settle/refund path consults the flag.
+4. `rm $NEKTAR_DATA_DIR/KILL` — new wants are accepted on the next call; no restart needed (the flag is re-checked per entry point).
+
+### Fund-key + treasury handling
+
+- **The fund key is separate from every owner key.** It lives in `fee.key.json` under `NEKTAR_DATA_DIR` (scrypt + AES-GCM with `NEKTAR_KEY_PASSPHRASE`; plaintext keys are refused at boot). It pays anchor/deal fees only — shard ownership never depends on it, but losing it strands the funding float.
+- **`keyLockFile` per address.** `acquireLock(keyLockFile(pkh))` serializes every process that would spend from the same fund key — two nektar instances on one key refuse each other rather than racing spends. A dead owner's lock is displaced once its heartbeat goes stale (see instance.lock below).
+- **Top-up (`fundToolbox`).** When the funder reports `no spendable output >= N`, ingest foreign P2PKH outpoints with `fundToolbox(tb, [{txid, vout, tx}], srcKey)`: it builds the input BEEF from the source txs, calls the wallet's `createAction` with a `NEKTAR_BASKET` output, and broadcasts synchronously (`acceptDelayedBroadcast:false` — a queued wallet tx would hide the basket output). Precondition: every source tx must carry a merklePath (`trustSelf:'known'`).
+- **`.state` treasury files (test tooling):** `treasury.json` holds one outpoint, re-split into fresh outputs per run; `reserve.json`/`reserve-run.json` are the draw pool; `leases.json` is the cross-process lease table (5-minute TTL, deleted rows are expired, not stolen). `regtest-fund.mjs` output or swept agent leftovers (`sweep-agents.mjs`) keep it topped up — mining new treasury on an aged chain is hopeless once the subsidy collapses.
+- **The 1M bootstrap parent.** Preflight mints a 1,000,000-sat parent output (`preflight.ts`) so the very first tree/split has a spendable ancestor before any real funding exists — if preflight's funding check degrades, confirm that parent outpoint exists and is unspent.
+- **Rotation:** `init.js --force` rewrites `NEKTAR_REGTEST_WIF` (old-key UTXOs do **not** follow — rotate only on a quiet chain, then sweep). Fund-key rotation on live networks = create the new key, `NEKTAR_FUND_TXIDS` the sweep tx into it, repoint the passphrase-protected `fee.key.json`, verify `ops.fundingAddress()`/`GET /v1/wallet`, then retire the old key. Never rotate while a deal leg is mid-flight.
+
+### Restart under load
+
+- **`instance.lock`** in `NEKTAR_DATA_DIR` is a heartbeat lock — `{owner: "<pid>@<host>", beat: <ms>}`, rewritten on the live tick. A second process on the same data dir refuses while the owner pid is alive and the beat is <20s old. A dead local pid is displaced immediately; a remote/unverifiable owner (shared filesystem) is displaced only once the beat goes stale — never delete the file to force it, stop the owning process instead. The `ops` tool's `fix:true` repairs a corrupt or stale lock; a live lock is reported `refused`, not removed.
+- **WAL recovery is free.** `automation.sqlite`, `lanes.sqlite`, `records.sqlite` run WAL — a kill -9 mid-transaction rolls back cleanly on next open; no rebuild step.
+- **Lost wakes are recovered from persisted deadlines, not memory.** Every wait the process armed lives in the db (`due_at`, `next_at`, `next_reconcile_at`, journal/outbox rows). On boot the durable executor re-queues journaled invocations; the self-arming cadence legs (`dealfan.tick`, `transport.drain`, `upkeep`, `watchdog`, `watches`) re-arm at their ceilings; `reconcileOps` re-scans `funding_failed`/`refunded` ops past cooldown; `resubmitTick` re-airs `prepared`/`submission_unknown` intents. A restart can therefore only *delay* work by one cadence ceiling — a wake that a crash ate is re-derived from the store, never lost. If an op looks wedged after restart, read `waitingOn()` for its outbox rows (`deferClass`/`nextAt`/`lastError`) before assuming a lost wake — a deferred row names its own blocker.
+
 ## Troubleshooting
 
 | Symptom                                                          | Cause                                               | Fix                                                                                                                                                                                                                                        |

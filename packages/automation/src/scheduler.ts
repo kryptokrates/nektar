@@ -4,6 +4,13 @@
 // event sources calling wake(name) or dueIn(name, ms); the wheel itself is
 // a single setTimeout aimed at the earliest due job — no job owns a private
 // interval and no two jobs race a shared clock.
+//
+// Job bodies run detached(): Node timers capture the AsyncLocalStorage
+// context at creation, so a dueIn() armed inside a leg would otherwise run
+// the job inside THAT leg's context — the job's own bound() legs would
+// merge a dead deadline. Timer-fired work is never the armer's child.
+
+import { detached } from '@nektar/core'
 
 export interface SchedJob {
   name: string
@@ -81,7 +88,7 @@ export class Scheduler {
     // already ran independent of the pump); each job guards its own re-entry
     for (const e of due) {
       const work = Promise.resolve()
-        .then(() => e.job.run())
+        .then(() => detached(() => e.job.run()))
         .then(
           () => undefined,
           () => undefined

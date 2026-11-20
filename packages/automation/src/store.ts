@@ -1,6 +1,6 @@
 import type { Knex } from 'knex'
 import { randomUUID } from 'node:crypto'
-import { spread, stable01 } from '@nektar/core'
+import { detached, spread, stable01 } from '@nektar/core'
 import { policyHash, policyError, canonicalJson, type AutomationPolicy, type ActionContext } from './policy.js'
 import { WAITS } from './waits.js'
 import { txStep } from './machines/tx.machine.js'
@@ -441,9 +441,9 @@ export class AutomationStore {
       return { operation: this.op(row), created: true }
     })
     if (r.created) {
-      this.workReady?.()
+      detached(() => this.workReady?.())
       // armed = the persisted deadline — explicit dueAt or the stamped bound
-      if (r.operation.dueAt !== undefined) this.dueAtArmed?.(r.operation.dueAt)
+      if (r.operation.dueAt !== undefined) detached(() => this.dueAtArmed?.(r.operation.dueAt!))
     }
     return r
   }
@@ -584,13 +584,13 @@ export class AutomationStore {
       }
       return this.op({ ...cur, ...patch })
     })
-    if ((change.outbox?.length ?? 0) > 0) this.outboxReady?.()
+    if ((change.outbox?.length ?? 0) > 0) detached(() => this.outboxReady?.())
     // a state change is work a later pass must see; same-state writes
     // (error labels, evidence, data merges) are not — they never fire
-    if (fromState !== undefined && fromState !== op.state) this.workReady?.()
+    if (fromState !== undefined && fromState !== op.state) detached(() => this.workReady?.())
     // arm whatever deadline persisted — explicit dueAt or the stamped
     // residence bound (re-arming an untouched due_at is idempotent)
-    if (op.dueAt !== undefined) this.dueAtArmed?.(op.dueAt)
+    if (op.dueAt !== undefined) detached(() => this.dueAtArmed?.(op.dueAt!))
     return op
   }
 
@@ -710,7 +710,7 @@ export class AutomationStore {
       await trx(T.cursors).insert({ source, cursor, updated_at: now }).onConflict('source').merge()
       return { accepted, duplicates }
     })
-    if (r.accepted > 0) this.workReady?.()
+    if (r.accepted > 0) detached(() => this.workReady?.())
     return r
   }
 
@@ -765,7 +765,7 @@ export class AutomationStore {
       })
       return true
     })
-    if (added) this.outboxReady?.()
+    if (added) detached(() => this.outboxReady?.())
     return added
   }
 
@@ -827,7 +827,7 @@ export class AutomationStore {
    *  are untouched: this never hastens a dead-letter. */
   async pullOutbox(actionId: string): Promise<unknown> {
     const n = await this.kx(T.outbox).where({ action_id: actionId, status: 'pending' }).where('next_at', '>', this.now()).update({ next_at: this.now() })
-    if (n > 0) this.outboxReady?.()
+    if (n > 0) detached(() => this.outboxReady?.())
     return n
   }
 
@@ -1207,7 +1207,7 @@ export class AutomationStore {
     })
     // an accepted transition commits intents — the wtx leg's replay head
     // retries any that went uneffected; the wake makes that immediate
-    if (r.accepted) this.workReady?.()
+    if (r.accepted) detached(() => this.workReady?.())
     return r
   }
 

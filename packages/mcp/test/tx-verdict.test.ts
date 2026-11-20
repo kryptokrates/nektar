@@ -98,6 +98,36 @@ test('tx-verdict: abandon + ledger rows are terminal; a stored tx alone is not "
   assert.ok(hintSeen(f4.hint), 'a seen-family status word is the "seen" hint')
 })
 
+test('tx-verdict: a pull-found proof attaches to the anchor OBJECT, not just the store — push and pull share one seam', async () => {
+  // regression: fetchTx used to write pull-found proofs to txs() + the
+  // returned copy only — anchorTxs (the object unprovenAnchors /
+  // verifyMembership / timeBounds read) stayed unproven forever even with
+  // the proof in hand. Both proof sources must route through
+  // deliverTxProof → attachProof like the push path does.
+  for (const source of ['chain.getTx', 'proofLookup'] as const) {
+    const anchorTx = mkTx()
+    const txid = anchorTx.id('hex')
+    const mp = { blockHeight: 7 } as never as import('@bsv/sdk').MerklePath
+    const attachCalls: string[] = []
+    const provenCopy = mkTx()
+    provenCopy.merklePath = mp
+    const { ops } = mk({
+      anchorTxs: new Map([[txid, anchorTx]]),
+      txidShard: new Map([[txid, 's']]),
+      attachProof: (_s, t, m) => {
+        attachCalls.push(t)
+        anchorTx.merklePath = m as never // the real attachProof's write
+      },
+      chain: source === 'chain.getTx' ? { getTx: async () => provenCopy } : {},
+      proofLookup: () => (source === 'proofLookup' ? async () => mp : undefined)
+    })
+    const got = await ops.fetchTx(txid)
+    assert.deepEqual(attachCalls, [txid], `${source}: the proof must go through attachProof — the anchor's own object is the read site`)
+    assert.equal(anchorTx.merklePath, mp, `${source}: the anchor object carries the proof — no divergent representation`)
+    assert.equal(got?.merklePath, mp)
+  }
+})
+
 test('tx-verdict: watcherObservation — only verified terminal records land durable verdicts', () => {
   const ev = (status: TxStatusEvent['status'], verified: boolean) => ({ ev: { txid: 't', status }, verified })
   assert.equal(watcherObservation(ev('rejected', false), 'SEEN_ON_NETWORK'), undefined, 'a hinted rejection is never durable')

@@ -1,7 +1,7 @@
 // lanes.ts — the lane layer: bfinger counterparty resolution + caching, the
 // inbox msgs surface (sendBox/readBox/ackBox), host-health notes, the
 // republish queue, and the want/offer/inbox poll passes.
-import { BoundedMap, BoundedSet } from '@nektar/core'
+import { BoundedMap, BoundedSet, detached, ioSignal } from '@nektar/core'
 import { WAITS } from './waits.js'
 import { requeueAckItems, trackFanout } from './fanout.js'
 import type { MarketMessage } from './market.js'
@@ -75,42 +75,45 @@ export function openLanes(rt: Rt): void {
   // a counterparty's advertised watch shim: POST {service,query} → the shim
   // wakes their long-polls early. Best-effort only — the shim re-verifies
   // real state and our own polling covers a miss, so it's fire-and-forget
-  // the runtime umbrella reaches fetch-level IO: the leg's bound signal
-  // (rt.activeSignal) or the runtime's (rt.signal) cancels an in-flight
-  // call instead of the fetch outliving the leg that asked for it — one
-  // operation deadline shared inward, not a fresh budget per hop
-  const io = (ms: number): AbortSignal => {
-    const own = AbortSignal.timeout(ms)
-    const up = rt.activeSignal ?? rt.signal
-    return up !== undefined ? AbortSignal.any([up, own]) : own
-  }
+  // the runtime umbrella reaches fetch-level IO: ioSignal merges the
+  // runtime's (rt.signal) with the ambient leg context and the call's own
+  // bound — a leg's awaited IO dies at the operation deadline instead of
+  // the fetch outliving the leg that asked for it
+  const io = (ms: number): AbortSignal => ioSignal(ms, rt.signal)
   const notifyPeer = (rec: { watch?: string } | undefined, service: string, query?: unknown): void => {
     if (rec?.watch === undefined) return
-    fetch(`${rec.watch.replace(/\/+$/, '')}/notify`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(query === undefined ? { service } : { service, query }),
-      signal: io(WAITS.pushIo.ms),
-      redirect: 'error' // a redirect into an unscreened host is still an egress bypass
-    }).catch(() => undefined)
+    // fire-and-forget spawn — detached(): the push is its own delivery
+    // attempt, not leg work; it must not die when the queuing leg settles
+    detached(() =>
+      fetch(`${rec.watch.replace(/\/+$/, '')}/notify`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(query === undefined ? { service } : { service, query }),
+        signal: io(WAITS.pushIo.ms),
+        redirect: 'error' // a redirect into an unscreened host is still an egress bypass
+      }).catch(() => undefined)
+    )
   }
   // direct push: POST the journaled carrier BEEF to the recipient's own
   // /v1/lane — the same bytes the box/artifact submit carries, verified by
   // the same code on the far side (P2P for the present peer; the host copy
-  // stays the store-and-forward fallback). Fire-and-forget — any failure
-  // just means delivery happens on the ordinary read.
+  // stays the store-and-forward fallback). Fire-and-forget (detached —
+  // the durable copy already landed when this runs) — any failure just
+  // means delivery happens on the ordinary read.
   const pushCarrier = (rec: { push?: string } | undefined, beef: number[]): void => {
     if (rec?.push === undefined || beef.length === 0) return
-    fetch(rec.push, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ beef: Buffer.from(beef).toString('hex') }),
-      signal: io(WAITS.pushIo.ms)
-    })
-      .then((r) => {
-        if (!r.ok) log(`automation: push → ${rec.push}: ${r.status}`)
+    detached(() =>
+      fetch(rec.push, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ beef: Buffer.from(beef).toString('hex') }),
+        signal: io(WAITS.pushIo.ms)
       })
-      .catch(() => undefined)
+        .then((r) => {
+          if (!r.ok) log(`automation: push → ${rec.push}: ${r.status}`)
+        })
+        .catch(() => undefined)
+    )
   }
   rt.pushCarrier = pushCarrier
   // a carrier pushed straight to us by its sender — verify + ingest exactly

@@ -630,6 +630,22 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
             await healWalk(tx)
             if (st.status === '') await reair(tx) // the row itself vanished — re-air its own bytes
           }
+          // anchors take the same heal: a broadcast the network dropped
+          // asynchronously can never prove — the watch alone waits forever.
+          // Probe the wire; 'absent' re-airs the same bytes (idempotent: a
+          // landed original dedupes, a truly-dropped one just needs airing).
+          for (const { txid } of waiting) {
+            if (healBudget <= 0) break
+            if (healSeen.has(txid)) continue
+            const st = await hintOf(txid)
+            if (st?.answered !== true || st.status !== '') continue
+            const tx = await mem.fetchTx(txid)
+            if (tx === undefined) continue
+            healSeen.add(txid)
+            healBudget--
+            await healWalk(tx)
+            await reair(tx)
+          }
         }
         // a bounded, rotating pull: each tick tries a few unproven txs so a
         // long list can never serialize minutes of lookups inside one pass —

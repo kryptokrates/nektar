@@ -1,6 +1,7 @@
 // watches.ts — the watch-shim region: long-poll subscriptions that mirror
 // queries the poll loop already issues; a changed result-set wakes deals()
 // early. Every failure mode degrades to the ordinary poll path.
+import { detached } from '@nektar/core'
 import type { Rt } from './rtctx.js'
 import { WAITS } from './waits.js'
 
@@ -45,7 +46,10 @@ export function openWatches(rt: Rt): void {
         if (j.changed === true && !rt.stopped) {
           rt.hotUntil = Date.now() + WAITS.hotWindow.ms
           rt.countWake('watch')
-          void rt.deals().catch((e) => log(`automation: watch: ${(e as Error).message}`))
+          // a wake spawns a pass — spawned work never inherits the
+          // spawning chain's leg context (watch loops are context-free
+          // today; the rule stays explicit so a refactor can't regress it)
+          void detached(() => rt.deals().catch((e) => log(`automation: watch: ${(e as Error).message}`)))
         }
       } catch {
         if (signal.aborted || rt.stopped) return

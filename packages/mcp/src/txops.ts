@@ -89,7 +89,11 @@ export class TxOps {
       // regtest backends answer for any transaction on their chain, proof included
       const seen = await this.deps.chain.getTx?.(txid)
       if (seen?.merklePath !== undefined) {
-        this.deps.txs().setProof(txid, seen.merklePath)
+        // the ONE proof seam — attachProof reaches anchorTxs (the object
+        // unprovenAnchors/verifyMembership/timeBounds read), not just the
+        // store entry and the returned copy: a pull-found proof that only
+        // lands on txs() leaves the anchor's own object unproven forever
+        this.deliverTxProof(txid, seen.merklePath)
         tx = seen
       } else if (tx === undefined) tx = seen
     }
@@ -114,7 +118,7 @@ export class TxOps {
         mp = undefined
       }
       if (mp !== undefined) {
-        this.deps.txs().setProof(txid, mp)
+        this.deliverTxProof(txid, mp)
         tx.merklePath = mp
       }
     }

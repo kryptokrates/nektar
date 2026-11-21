@@ -94,11 +94,21 @@ journaled at the right grain.
    ctx op inside = `rt/nested-ctx`. Store scans belong inside (replay
    re-sends the same rows); sends belong outside (they re-fire — which is
    the point).
-2. **Redelivery absorbed.** Every send is at-least-once. The second
-   landing must no-op: row-state guard, content key, or ingress
-   `idempotency-key` (dedupes across independent invocations; within one
-   handler execution sends dedupe automatically). A handler that appends
-   on redelivery is `rt/at-least-once-victim`.
+2. **Redelivery absorbed — and only redelivery.** Every send is
+   at-least-once. The second landing must no-op: row-state guard,
+   content key, or ingress `idempotency-key` (dedupes across independent
+   invocations; within one handler execution sends dedupe
+   automatically). A handler that appends on redelivery is
+   `rt/at-least-once-victim`. The flip side is over-dedup: the key must
+   name the ATTEMPT/effect instance, not the row — a stable
+   `deliver:<rowId>` key dedupes the domain's own retry of that row
+   inside the 24h retention window (`rt/dedup-kills-retry` — outbox rows
+   dead-lettered having hit the wire once; shape is
+   `deliver:<rowId>:<attempt>`). Event-identity keys (`wake:<event>`)
+   suppress recurring evidence — a second reorg at the same height, a
+   resubmit→re-reject, a re-mine under a different path —
+   `rt/dedup-kills-event`; content-key the evidence (digest of the
+   payload) or drop dedup on idempotent legs.
 3. **Same-key discipline.** Map which keys write which rows. Cross-key
    writers of one row without CAS = `rt/key-collision`. A same-key
    request-response `call` (or A↔B cycle) without a scope escape =
@@ -140,10 +150,16 @@ journaled at the right grain.
    the store-computed `next_at` is the ceiling. `rt/poll-as-mechanism`
    when the mechanism is the interval rather than the event (the
    replacement table is in references/integration.md §3).
-9. **Ingress exposure is a boundary.** Internal objects
-   (`ingressPrivate: true`) never answer the public ingress; endpoint
-   `identityKeys` pin the caller to our Restate instance in production.
-   `rt/public-internal` / `rt/open-endpoint`.
+9. **Ingress exposure is a boundary — and registration is existence.**
+   Internal objects (`ingressPrivate: true`) never answer the public
+   ingress; endpoint `identityKeys` pin the caller to our Restate
+   instance in production. `rt/public-internal` / `rt/open-endpoint`.
+   A failed deployment registration must fail the boot — a runtime
+   whose sends 404 into an unregistered ingress is up-but-dead
+   (`rt/dead-executor`). Registering is a manifest compare: reuse the
+   deployment when the service+handler set is identical, force-register
+   only on drift — `force:true` per boot orphans every armed send per
+   restart (`rt/deployment-orphan`).
 
 ## The DB-boundary pattern (docs' own guidance — nektar's exact shape)
 
@@ -180,7 +196,7 @@ DB authoritative, use Restate's guarantees as the consistency helpers.
 | Delayed send             | due arms, drain self-arm at `nextOutboxAt`, dealfan/cron self-arms                      |
 | Send (detached)          | `rtSend`/`exec.send` — dealfan fan-outs, wake cycle-tails, boot pokes                   |
 | Same-key call deadlock   | `inRtScope`/`rtScopeKey` — ALS scope bypasses the object hop                            |
-| Ingress idempotency-key  | `sendOpts.idempotencyKey` / actionId-keyed row dedup                                    |
+| Ingress idempotency-key  | `sendOpts.idempotencyKey` — per-ATTEMPT (`deliver:<id>:<n>`), never per-row             |
 | Orphaned arm (RT0011)    | floor cadence re-arms — self-arm re-derives from the store each fire                    |
 | `Dispatcher` (test seam) | `cfg.exec` injection — must emulate: per-key serial, delay, at-least-once, close drains |
 | Awakeable/approval gate  | policy escalations, `funding_deferred` waits — resolve, don't poll                      |

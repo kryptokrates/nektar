@@ -19,6 +19,10 @@ One row per handler (object defs in `services.ts`, host defs via
   deterministic throw left on default policy is `rt/poisoned-leg`.
 - `rows written` — cross-check against the key→row map (worksheet 3):
   a handler writing a row whose key doesn't cover it needs the row CAS.
+- A handler with zero send/call sites arming it = `rt/dead-surface` —
+  registered but unreachable (the `tx/expire` class: the sweep emitted
+  the TTL observation instead and nothing armed the handler). Delete it
+  or name the armer.
 
 ## Worksheet 2 — send graph
 
@@ -35,7 +39,13 @@ One row per send site (grep seeds: `send(`, `Send(`, `objectSendClient`,
   candidate).
 - `absorbed by` — what makes the second delivery harmless: row-state
   guard, content key, ingress idempotency key, `dedup`. Blank =
-  `rt/at-least-once-victim`.
+  `rt/at-least-once-victim`. The reverse failure: a key naming the ROW
+  rather than the attempt suppresses the domain's own retry
+  (`rt/dedup-kills-retry` — key shape must be `<effect>:<id>:<attempt>`),
+  and an event-identity key suppresses recurring evidence
+  (`rt/dedup-kills-event` — a second reorg at the same height must
+  deliver). Event keys either digest the evidence payload or don't
+  dedup at all.
 - The graph's cycles are the deadlock map: any request-response `call`
   edge that can loop back to the emitter's own key = `rt/self-deadlock`
   (verify the `inRtScope` escape covers the exact key pair).

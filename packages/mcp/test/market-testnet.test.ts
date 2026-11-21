@@ -604,7 +604,7 @@ test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { time
   assert.ok(watched.notifies > 0, 'shim never notified — publish→wake path did not fire on testnet')
 })
 
-test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly', { timeout: 1_200_000 }, async (t) => {
+test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   for (const kb of [1, 32]) {
@@ -709,7 +709,7 @@ test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeou
     await sellerize(s, 200)
     await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
-    const ms = (await deal(b, s, logs, 200_000)).ms
+    const ms = (await deal(b, s, logs, 400_000)).ms
     console.log(`    deal under 3s-delayed host: ${ms}ms`)
   } finally {
     await STOP_ALL([b?.rt, s?.rt])

@@ -113,12 +113,19 @@ export class BsvBroadcaster implements Broadcaster {
     const payload = new Uint8Array(tx.inputs.every((i) => i.sourceTransaction !== undefined) ? tx.toEF() : tx.toBinary())
     const submit = async (base: string): Promise<BroadcastResult> => {
       try {
-        const post = () => req(this.cfg, `${base}/tx`, { method: 'POST', headers, body: payload })
+        // EF submits under load can queue past the default 20s window — the
+        // post is idempotent (same bytes, same txid), so a slow answer and a
+        // transport timeout both earn one retry rather than a starvation
+        // verdict for the caller
+        const post = () => req(this.cfg, `${base}/tx`, { method: 'POST', headers, body: payload }, 60_000)
         // 503 = backpressure, nothing queued — retry the same instance shortly
         const r = await withRetry(post, {
           attempts: 4,
           delay: (i) => 500 * 2 ** i,
           retryIf: (x) => x.status === 503
+        }).catch(async (e) => {
+          await new Promise((r2) => setTimeout(r2, 1_000))
+          return await post()
         })
         if (r.status >= 500) throw new Error(`broadcaster HTTP ${r.status}`)
         const body = await r.json().catch(() => ({}))

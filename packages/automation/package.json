@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc -b",
     "test": "node --test dist/test/*.test.js",
-    "test:stack": "NEKTAR_TEST_TIER=stack node --test dist/test/*.test.js"
+    "test:stack": "NEKTAR_TEST_TIER=stack node --test dist/test/*.test.js",
+    "test:rt-live": "node --test dist/test/rt-live.test.js dist/test/rt-spike.test.js"
   },
   "dependencies": {
     "@bsv/sdk": "4.0.1",

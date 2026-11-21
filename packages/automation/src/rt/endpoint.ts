@@ -1,7 +1,7 @@
 // endpoint.ts — serve the service handlers in-process (the restate server
 // invokes them over HTTP/2) and register the deployment with the server's
 // admin API. Registration is idempotent — the server dedupes by URI.
-import { createServer, type Http2Server } from 'node:http2'
+import { createServer, type Http2Server, type ServerHttp2Session } from 'node:http2'
 import { nektarEnv, nektarEnvNum, nap, type EnvSource } from '@nektar/core'
 import { WAITS } from '../waits.js'
 
@@ -105,6 +105,13 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
     .filter((k) => k.length > 0)
   const handler = restate.createEndpointHandler({ services: services as never, ...(identityKeys.length > 0 ? { identityKeys } : {}) })
   const server: Http2Server = createServer(handler)
+  // http2 has no closeAllConnections — track sessions so close() can force-
+  // destroy in-flight invocations (crash semantics: they retry server-side)
+  const sessions = new Set<ServerHttp2Session>()
+  server.on('session', (s) => {
+    sessions.add(s)
+    s.on('close', () => sessions.delete(s))
+  })
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
     server.listen(port, () => resolve())
@@ -122,6 +129,16 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
   }
   return {
     uri,
-    close: () => new Promise((resolve) => server.close(() => resolve()))
+    // crash semantics, not graceful drain: destroying sessions drops
+    // in-flight handler work on the spot — the invocations retry on the
+    // next endpoint and the journal guarantees no double effect. A
+    // graceful close() would wait on every session; a wedged leg could
+    // hang shutdown forever (the durable-execution model makes force-close
+    // the honest shutdown, not a risk).
+    close: () =>
+      new Promise((resolve) => {
+        for (const s of sessions) s.destroy()
+        server.close(() => resolve())
+      })
   }
 }

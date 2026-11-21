@@ -496,7 +496,7 @@ export const dealOpKey = (o: DealOpRef): string => (o.wantId !== undefined ? `ev
 export const opWantId = (o: { data: Record<string, unknown> }): string | undefined => (o.data.want as { want?: { wantId?: string } } | undefined)?.want?.wantId
 
 export const dealfanTickBody =
-  (deps: DealfanDeps) =>
+  (deps: DealfanDeps, service: string = EXEC_SVC.dealfan) =>
   async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
     const dup = deps.sentRecently ?? (() => false)
     // the fan keys carry the same window the in-memory sentRecently map
@@ -542,18 +542,14 @@ export const dealfanTickBody =
     const ceil = deps.ceilingMs()
     if (ceil > 0) {
       const now = (deps.now ?? Date.now)()
-      await send(
-        { service: EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY },
-        {},
-        { delayMs: ceil, idempotencyKey: `${EXEC_SVC.dealfan}:tick:${Math.floor(now / ceil) * ceil + ceil}` }
-      )
+      await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` })
     }
     return { events: inbox.length, advanced: ops.length, reconciled: rec.length }
   }
 
-export const dealfanObject = async (deps: DealfanDeps, dealDef: unknown, opts?: RtOpts) => {
+export const dealfanObject = async (deps: DealfanDeps, dealDef: unknown, opts?: RtOpts, service: string = EXEC_SVC.dealfan) => {
   const restate = await import('@restatedev/restate-sdk')
-  const tick = dealfanTickBody(deps)
+  const tick = dealfanTickBody(deps, service)
   const send = (ctx: restate.Context): RtSend => {
     const deal = (key: string) =>
       ctx.objectSendClient(dealDef as never, key) as unknown as {
@@ -561,7 +557,7 @@ export const dealfanObject = async (deps: DealfanDeps, dealDef: unknown, opts?: 
         event: (o: DealEvent, opts?: unknown) => Promise<void>
         reconcile: (o: unknown, opts?: unknown) => Promise<void>
       }
-    const self = ctx.objectSendClient({ name: EXEC_SVC.dealfan } as never, CRON_KEY) as unknown as {
+    const self = ctx.objectSendClient({ name: service } as never, CRON_KEY) as unknown as {
       tick: (o: unknown, opts?: unknown) => Promise<void>
     }
     return async (target, arg, opts) => {
@@ -572,7 +568,7 @@ export const dealfanObject = async (deps: DealfanDeps, dealDef: unknown, opts?: 
         else if (target.handler === 'event') await c.event(arg as DealEvent, o)
         else if (target.handler === 'reconcile') await c.reconcile(arg, o)
         else throw new Error(`dealfan send: no deal handler ${target.handler}`)
-      } else if (target.service === EXEC_SVC.dealfan && target.handler === 'tick') await self.tick(arg, o)
+      } else if (target.service === service && target.handler === 'tick') await self.tick(arg, o)
       else throw new Error(`dealfan send: no route for ${target.service}`)
     }
   }
@@ -582,7 +578,7 @@ export const dealfanObject = async (deps: DealfanDeps, dealDef: unknown, opts?: 
   // duplicate the pass AND multiply the self-arm backlog. The key's FIFO
   // is the durable successor of the tick mutex.
   return restate.object({
-    name: EXEC_SVC.dealfan,
+    name: service,
     options: { ...RT_OPTS_FLOOR, ...opts },
     handlers: {
       tick: async (ctx: restate.ObjectContext) => await tick(send(ctx), (n, fn) => ctx.run(n, fn))
@@ -627,6 +623,11 @@ export interface WakeDeps {
   hint: (txid: string) => void
   /** the domain clock — the cycle-tail coalesce bucket quantizes on it */
   now?: () => number
+  /** the dealfan service the cycle tails/hight pokes send to — overridable
+   *  so live tests can scope the pair off the shared service name (ghost
+   *  chains on 'nektar-dealfan/main' would otherwise queue the poke behind
+   *  their retries on the 'main' FIFO) */
+  fanSvc?: string
   log: (line: string) => void
 }
 
@@ -639,9 +640,9 @@ export interface WakeDeps {
  * coalesce on a 1s bucket: a chain-event burst queues ≤1 pass per target
  * per window instead of one full scan per event. Distinct from the
  * self-arm keys — pokes never collide with arms. */
-const wakeCycle = async (send: RtSend, now: () => number): Promise<void> => {
+const wakeCycle = async (send: RtSend, now: () => number, fanSvc: string): Promise<void> => {
   const b = Math.floor(now() / 1000)
-  await send({ service: EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY }, {}, { idempotencyKey: `dealfan:poke:${b}` })
+  await send({ service: fanSvc, handler: 'tick', key: CRON_KEY }, {}, { idempotencyKey: `dealfan:poke:${b}` })
   await send({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {}, { idempotencyKey: `drain:poke:${b}` })
 }
 
@@ -650,13 +651,13 @@ export const wakeTxProofBody =
   async (send: RtSend, arg: { txid: string; mpHex: string }, run: StepRun = (_n, fn) => fn()) => {
     if (deps.legs.txProof !== undefined) await run('ledger', () => deps.legs.txProof!(arg.txid, arg.mpHex))
     deps.hint(arg.txid)
-    await wakeCycle(send, deps.now ?? Date.now)
+    await wakeCycle(send, deps.now ?? Date.now, deps.fanSvc ?? EXEC_SVC.dealfan)
     return { done: true }
   }
 
 export const wakeTxRejectedBody = (deps: WakeDeps) => async (send: RtSend, arg: { txid: string }) => {
   deps.hint(arg.txid)
-  await wakeCycle(send, deps.now ?? Date.now)
+  await wakeCycle(send, deps.now ?? Date.now, deps.fanSvc ?? EXEC_SVC.dealfan)
   return { done: true }
 }
 
@@ -664,7 +665,7 @@ export const wakeTxAbandonedBody =
   (deps: WakeDeps) =>
   async (send: RtSend, arg: { txid: string }, run: StepRun = (_n, fn) => fn()) => {
     if (deps.legs.txAbandoned !== undefined) await run('ledger', () => deps.legs.txAbandoned!(arg.txid))
-    await wakeCycle(send, deps.now ?? Date.now)
+    await wakeCycle(send, deps.now ?? Date.now, deps.fanSvc ?? EXEC_SVC.dealfan)
     return { done: true }
   }
 
@@ -674,7 +675,7 @@ export const wakeHeightBody =
     const due = deps.legs.dueAtHeight === undefined ? false : await run('due', () => deps.legs.dueAtHeight!(arg.tip))
     if (due) {
       const b = Math.floor((deps.now ?? Date.now)() / 1000)
-      await send({ service: EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY }, {}, { idempotencyKey: `dealfan:poke:${b}` })
+      await send({ service: deps.fanSvc ?? EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY }, {}, { idempotencyKey: `dealfan:poke:${b}` })
     }
     return { due }
   }
@@ -688,8 +689,9 @@ export const wakeReorgBody =
 
 export const wakeService = async (deps: WakeDeps) => {
   const restate = await import('@restatedev/restate-sdk')
+  const fanSvc = deps.fanSvc ?? EXEC_SVC.dealfan
   const send = (ctx: restate.Context): RtSend => {
-    const dealfan = ctx.objectSendClient({ name: EXEC_SVC.dealfan } as never, CRON_KEY) as unknown as {
+    const dealfan = ctx.objectSendClient({ name: fanSvc } as never, CRON_KEY) as unknown as {
       tick: (o: unknown, opts?: unknown) => Promise<void>
     }
     const transport = ctx.objectSendClient({ name: EXEC_SVC.transport } as never, TRANSPORT_DRAIN_KEY) as unknown as {
@@ -697,7 +699,7 @@ export const wakeService = async (deps: WakeDeps) => {
     }
     return async (target, arg, opts) => {
       const o = restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey })
-      if (target.service === EXEC_SVC.dealfan && target.handler === 'tick') await dealfan.tick(arg, o)
+      if (target.service === fanSvc && target.handler === 'tick') await dealfan.tick(arg, o)
       else if (target.service === EXEC_SVC.transport && target.handler === 'drain') await transport.drain(arg, o)
       else throw new Error(`wake send: no route for ${target.service}/${target.handler}`)
     }

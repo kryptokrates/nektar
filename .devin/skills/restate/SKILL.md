@@ -121,6 +121,14 @@ journaled at the right grain.
    a bucketed ingress key (`fan:adv:<op>:<floor(now/ms)>`) — a
    post-restart re-fan dedupes against the still-pending leg instead
    of piling one fresh invocation per row (`rt/fan-dedup-restart-gap`).
+   And on a LIVE server the same durability applies to the TEST: a
+   consumed idempotency key is spent for ~24h and a leftover self-arm
+   chain keeps firing into any endpoint that registers its service
+   name — live tests asserting on shared names/keys inherit ghosts
+   from prior runs (queued deliveries on shared object keys, extra
+   ticks in counters). `rt/test-durable-state`: scope service names +
+   object keys + destinations with a per-run suffix, or the suite is
+   only green on a fresh container — found live in rt-spike.
 3. **Same-key discipline — both directions.** Map which keys write
    which rows. Cross-key writers of one row without CAS =
    `rt/key-collision`. A same-key request-response `call` (or A↔B
@@ -265,6 +273,13 @@ DB authoritative, use Restate's guarantees as the consistency helpers.
 | `@restatedev/xstate`     | machines-as-specs stay ours; the lib exists if a machine ever needs to BE the executor                                            |
 
 ## Drills (verification recipes)
+
+The live ones run in `test/rt-live.test.ts` + `rt-spike.test.ts` against a
+real server — `NEKTAR_RESTATE_URL`-gated, `pnpm test:rt-live` runs both
+(docker one-liner in the file headers). Endpoint loss is exercised by
+`RtEndpoint.close()` force-destroying sessions — crash semantics, in-flight
+work retries on the reopened endpoint. Ghost-isolation rule: per-run
+service names/keys (`rt/test-durable-state`).
 
 - **Mid-handler kill** — `kill -9` between journaled steps; restart →
   journaled steps skip (no double effect), unjournaled sends re-fire

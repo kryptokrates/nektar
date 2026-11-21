@@ -24,15 +24,28 @@ import { openEndpoint } from '../src/rt/endpoint.js'
 import { custodySubmit, txEmit } from '../src/rt/emit.js'
 
 // rt-spike — the live proof: a tx leg end-to-end through a REAL restate
-// server. Gated on NEKTAR_RESTATE_URL (stack tier / `docker compose up
-// restate`); skips otherwise. What it proves: the ingress round-trip
-// (call → server → endpoint → journaled ctx.run → emitTxEvent → SQLite
-// commit) works against the actual runtime, not just the seam's fakes.
+// server. Gated on NEKTAR_RESTATE_URL; skips otherwise. Stand a server up:
+//   docker run -d --name nektar-rt-test -p 28511:8080 -p 28521:9070 \
+//     docker.restate.dev/restatedev/restate:latest
+//   NEKTAR_RESTATE_URL=http://127.0.0.1:28511 \
+//   NEKTAR_RESTATE_ADMIN=http://127.0.0.1:28521 \
+//     pnpm --filter @nektar/automation test:rt-live
+// What it proves: the ingress round-trip (call → server → endpoint →
+// journaled ctx.run → emitTxEvent → SQLite commit) works against the
+// actual runtime, not just the seam's fakes. Server state is durable
+// across suite runs — leftover arm chains and consumed idempotency keys
+// keep firing — so self-arming services and shared keys carry a RUN suffix.
 
 const RESTATE_URL = nektarEnv('NEKTAR_RESTATE_URL')
 const ADMIN = nektarEnv('NEKTAR_RESTATE_ADMIN') ?? 'http://127.0.0.1:9070'
 const ENDPOINT_URI = nektarEnv('NEKTAR_RESTATE_ENDPOINT_URI') ?? 'http://host.docker.internal:9080'
 const ENDPOINT_PORT = nektarEnv('NEKTAR_RESTATE_ENDPOINT_PORT') ?? '9080'
+// restate server state is durable across suite runs — armed self-arm
+// chains from a previous run keep firing into any endpoint that registers
+// their service name. Services that self-arm get a per-run suffix; shared
+// fixed-name services use window-relative assertions (a tick's pushes are
+// contiguous under 'main'-key serialization).
+const RUN = `${process.pid}-${Date.now().toString(36)}`
 
 const key = PrivateKey.fromRandom()
 
@@ -264,6 +277,10 @@ test(
       log: () => {}
     })
     const items: DealEvent[] = [{ source: 'lane', messageId: 'fm1', kind: 'want', payload: { wantId: 'w-fan' } }]
+    // per-run service name — leftover arm chains on the durable server
+    // target 'nektar-dealfan/main' and would queue ahead of our tick on the
+    // 'main' key's FIFO
+    const fanSvc = `spike-dealfan-${RUN}`
     const dealfanDef = await dealfanObject(
       {
         pendingInbox: async () => items,
@@ -272,7 +289,9 @@ test(
         ceilingMs: () => 60_000,
         log: () => {}
       },
-      dealDef
+      dealDef,
+      undefined,
+      fanSvc
     )
     const endpoint = await openEndpoint([dealDef, dealfanDef], {
       NEKTAR_RESTATE_ENDPOINT_URI: ENDPOINT_URI,
@@ -281,7 +300,7 @@ test(
     })
     const ex = new RestateExecutor(RESTATE_URL!)
     try {
-      const r = await ex.call<{ events: number; advanced: number; reconciled: number }>({ service: EXEC_SVC.dealfan, handler: 'tick', key: 'main' }, {})
+      const r = await ex.call<{ events: number; advanced: number; reconciled: number }>({ service: fanSvc, handler: 'tick', key: 'main' }, {})
       assert.deepEqual(r, { events: 1, advanced: 1, reconciled: 0 })
       // the sends are async — poll until both keyed invocations land
       await until(async () => landed.length === 2)
@@ -311,8 +330,12 @@ test(
     // dedupe against an earlier run's completed invocation (the dedup
     // working — and why retries carry the attempt in the key)
     const actionId = `tp:${Date.now()}`
+    // per-run destination key: deliver serializes on `key: destination` —
+    // an unscoped key queues our invocation behind a still-retrying ghost
+    // deliver from a previous run on this durable server
+    const dest = `host:live-${RUN}`
     const transportDef = await transportObject({
-      dueRows: async () => [{ actionId, operationId: `op:${actionId}`, kind: 'message', destination: 'host:live', payload: { type: 'decline' }, attempts: 0 }],
+      dueRows: async () => [{ actionId, operationId: `op:${actionId}`, kind: 'message', destination: dest, payload: { type: 'decline' }, attempts: 0 }],
       nextAt: async () => undefined,
       deliverItem: async (item) => (delivered.push(`${item.actionId}@${item.destination}`), 'acked' as const),
       now: () => Date.now(),
@@ -328,7 +351,7 @@ test(
       const r = await ex.call<{ sent: number }>({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {})
       assert.equal(r.sent, 1)
       await until(async () => delivered.length === 1)
-      assert.deepEqual(delivered, [`${actionId}@host:live`])
+      assert.deepEqual(delivered, [`${actionId}@${dest}`])
     } finally {
       await endpoint.close().catch(() => undefined)
       await kx.destroy()
@@ -342,8 +365,11 @@ test(
   async () => {
     const { kx, store } = await open()
     void store
-    // the wake's ctx send targets nektar-dealfan — both services ride the
-    // same endpoint; the tick's scan deps record having run server-side
+    // the wake's ctx send targets its dealfan — both services ride the same
+    // endpoint and share the scoped service name: the durable server keeps
+    // leftover 'nektar-dealfan/main' arm chains retrying from prior runs,
+    // and on the real name our poke would queue behind them on 'main'
+    const fanSvc = `spike-wakefan-${RUN}`
     const fanned: string[] = []
     const dealfanDef = await dealfanObject(
       {
@@ -353,11 +379,14 @@ test(
         ceilingMs: () => 60_000,
         log: () => {}
       },
-      undefined
+      undefined,
+      undefined,
+      fanSvc
     )
     const wakeDef = await wakeService({
       legs: { dueAtHeight: async (tip) => tip >= 100 },
       hint: () => {},
+      fanSvc,
       log: () => {}
     })
     const endpoint = await openEndpoint([dealfanDef, wakeDef], {
@@ -392,7 +421,10 @@ test(
     const { kx, store } = await open()
     void store
     const ticks: number[] = []
-    const upkeepDef = await cronObject(EXEC_SVC.upkeep, {
+    // per-run service name — a leftover arm chain on the shared service
+    // name would keep ticking into this endpoint and inflate the count
+    const svc = `spike-upkeep-${RUN}`
+    const upkeepDef = await cronObject(svc, {
       tick: async () => void ticks.push(Date.now()),
       ceilingMs: () => 200,
       log: () => {}
@@ -404,7 +436,7 @@ test(
     })
     const ex = new RestateExecutor(RESTATE_URL!)
     try {
-      await ex.call({ service: EXEC_SVC.upkeep, handler: 'tick', key: CRON_KEY }, {})
+      await ex.call({ service: svc, handler: 'tick', key: CRON_KEY }, {})
       assert.equal(ticks.length, 1)
       // the self-arm is a durable delayed send — the chain re-fires without
       // any process-side timer owning it

@@ -69,6 +69,58 @@ export function indexFor(o: IndexOpts): ChainIndex {
   return o.cacheTtlMs === 0 ? base : new CachingIndex(base, o.cacheTtlMs ?? 5_000)
 }
 
+/** ordered fallback over independent index deployments — a rate-limited or
+ *  down primary (bananablocks 429s under suite load) must not read as "tip
+ *  unreachable". undefined counts as a miss worth asking the next index
+ *  about: a lagging primary genuinely may not have a tx the secondary has.
+ *  If every index throws, the LAST error propagates — callers still get an
+ *  honest "unreachable" instead of a silent undefined when all sources die. */
+export class FailoverIndex implements ChainIndex {
+  constructor(private readonly inner: ChainIndex[]) {}
+  private async ask<T>(f: (i: ChainIndex) => Promise<T | undefined>): Promise<T | undefined> {
+    let lastErr: unknown
+    for (const i of this.inner) {
+      try {
+        const v = await f(i)
+        if (v !== undefined) return v
+      } catch (e) {
+        lastErr = e
+      }
+    }
+    if (lastErr !== undefined) throw lastErr
+    return undefined
+  }
+  tip(): Promise<number | undefined> {
+    return this.ask((i) => i.tip())
+  }
+  header(height: number): Promise<BlockHeader | undefined> {
+    return this.ask((i) => i.header(height))
+  }
+  txJson(txid: string): Promise<IndexTx | undefined> {
+    return this.ask((i) => i.txJson(txid))
+  }
+  txHex(txid: string): Promise<string | undefined> {
+    return this.ask((i) => i.txHex(txid))
+  }
+  proof(txid: string): Promise<IndexProof | undefined> {
+    return this.ask((i) => i.proof(txid))
+  }
+  utxos(address: string): Promise<IndexUtxo[] | undefined> {
+    return this.ask((i) => i.utxos(address))
+  }
+}
+
+/** multi-url variant — one raw dialect per url (each dialect keeps its own
+ *  pacing), failover ordered, ONE hint cache on top. Single url ≡ indexFor. */
+export function indexFailover(urls: string[], o?: Omit<IndexOpts, 'url'>): ChainIndex {
+  const raw = urls.map((url) => {
+    const kind = o?.kind ?? guessIndexKind(url)
+    return kind === 'woc' ? new WocIndex({ ...o, url }) : new BananaIndex({ ...o, url })
+  })
+  const base: ChainIndex = raw.length === 1 ? raw[0]! : new FailoverIndex(raw)
+  return o?.cacheTtlMs === 0 ? base : new CachingIndex(base, o?.cacheTtlMs ?? 5_000)
+}
+
 // --- hint cache ---------------------------------------------------------------
 /** read-through memoization over any dialect. An upkeep pass asks the same
  *  questions (tip, the same txids' hex/json/proof, an address' utxos) from

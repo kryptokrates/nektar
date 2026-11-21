@@ -15,7 +15,7 @@ import {
   regtestPort,
   livePort,
   temporalSourcesFor,
-  indexFor,
+  indexFailover,
   ChainEvents,
   type ChainPort,
   type Funds,
@@ -140,6 +140,15 @@ export function configFromEnv(env = process.env): RuntimeConfig {
         .filter(Boolean),
       broadcasterApiKey: secret('NEKTAR_BROADCASTER_API_KEY'),
       indexerUrl: env.NEKTAR_INDEXER_URL ?? env.NEKTAR_WOC_URL ?? urls?.indexer,
+      // NEKTAR_INDEXER_URLS: comma-separated extra index bases — queried in
+      // order when the primary errors or misses. Testnet always appends the
+      // WoC mirror: a rate-limited banana must not read as chain-unreachable
+      indexerUrls: [
+        ...(env.NEKTAR_INDEXER_URLS?.split(',')
+          .map((s) => s.trim().replace(/\/+$/, ''))
+          .filter(Boolean) ?? []),
+        ...(network === 'testnet' ? ['https://api.whatsonchain.com/v1/bsv/test'] : [])
+      ],
       indexerApiKey: secret('NEKTAR_INDEXER_API_KEY') ?? secret('NEKTAR_WOC_API_KEY'),
       chaintracksUrl: env.NEKTAR_CHAINTRACKS_URL,
       // fee floor: 100 sat/kB main (GorillaPool policy), 1 sat/kB test nets
@@ -435,7 +444,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   // claim, not SPV — safe for self-bookkeeping: a falsely-revived mark
   // self-corrects at pick-time spendCheck or the broadcaster's reject
   if (live && mc?.indexerUrl !== undefined) {
-    const idx = indexFor({ url: mc.indexerUrl, apiKey: mc.indexerApiKey })
+    const idx = indexFailover([mc.indexerUrl, ...(mc.indexerUrls ?? [])], { apiKey: mc.indexerApiKey })
     custody.funds.liveSet = async () => {
       const listing = await idx.utxos(custody.fundAddress).catch(() => undefined)
       return listing === undefined ? undefined : new Set(listing.map((u) => `${u.txid}:${u.vout}`))

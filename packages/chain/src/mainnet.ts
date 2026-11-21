@@ -8,7 +8,7 @@ import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
 import { headerPowValid, HeaderCache } from './headers.js'
-import { indexFor, type ChainIndex, type IndexUtxo } from './indexer.js'
+import { indexFailover, indexFor, type ChainIndex, type IndexUtxo } from './indexer.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
 import type { StatusHint } from './txfacts.js'
 
@@ -25,6 +25,9 @@ export interface MainnetConfig {
   /** chain-index base (no trailing slash) — bananablocks /api/v1 is the
    *  default index on both live nets; kind is guessed from the URL */
   indexerUrl?: string
+  /** extra index bases, queried in order when the primary errors or misses —
+   *  one rate-limited index must not read as chain-unreachable */
+  indexerUrls?: string[]
   indexerApiKey?: string
   indexerKind?: 'banana' | 'woc'
   /** @deprecated use indexerUrl — honoured as an alias */
@@ -56,7 +59,11 @@ const def = (c?: MainnetConfig) => {
     callbackUrl: c?.callbackUrl ?? nektarEnv('NEKTAR_CALLBACK_URL'),
     callbackToken: c?.callbackToken ?? nektarEnv('NEKTAR_CALLBACK_TOKEN'),
     indexerUrl,
-    index: indexFor({ url: indexerUrl, apiKey: c?.indexerApiKey ?? c?.wocApiKey, kind: c?.indexerKind, fetchImpl: c?.fetchImpl }),
+    index: indexFailover([...new Set([indexerUrl, ...(c?.indexerUrls ?? [])])], {
+      apiKey: c?.indexerApiKey ?? c?.wocApiKey,
+      kind: c?.indexerKind,
+      fetchImpl: c?.fetchImpl
+    }),
     fetch: c?.fetchImpl ?? fetch,
     broadcasterApiKey: c?.broadcasterApiKey,
     indexerApiKey: c?.indexerApiKey ?? c?.wocApiKey,

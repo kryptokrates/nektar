@@ -30,7 +30,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { PrivateKey } from '@bsv/sdk'
 import {
-  indexFor,
+  indexFailover,
   livePort,
   reconcileLiveReserve,
   ReserveFunder,
@@ -69,6 +69,9 @@ const ARC = 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
 // the primary rate-limits the suite's read volume — indexFor guesses the
 // dialect from the host)
 const INDEX = process.env.NEKTAR_TN_INDEX ?? 'https://test.bananablocks.com/api/v1'
+// WoC testnet mirror — banana 429s under suite read volume; failover keeps a
+// throttled primary from reading as chain-unreachable (preflight + agents)
+const TN_INDEXES = [...new Set([INDEX, 'https://api.whatsonchain.com/v1/bsv/test'])]
 // happy path is unaffected — early-select fires at minCollectMs (1s) once an
 // offer lands; this ceiling only bounds the degraded path: a withholding
 // host leaves one carrier route, and single-host submit→collect→decode
@@ -145,7 +148,8 @@ const warmup = async (agents: A[], logs: string[], ms = Number(process.env.TN_WA
 
 const mcFor = (): MainnetConfig => ({
   broadcasterUrl: ARC,
-  indexerUrl: INDEX
+  indexerUrl: INDEX,
+  indexerUrls: TN_INDEXES.slice(1)
 })
 
 // liveness that survives TAP buffering: a long-running test writes nothing to
@@ -200,7 +204,7 @@ const mkagent = async (
   // broadcast) must never be handed out — that is exactly how the
   // UTXO_SPENT double-mint wedge happened
   await reconcileLiveReserve(reserve, addr, mc, spendStatus)
-  const index = indexFor({ url: mc.indexerUrl ?? '', apiKey: mc.indexerApiKey })
+  const index = indexFailover(TN_INDEXES, { apiKey: mc.indexerApiKey })
   const chain = {
     broadcast: port.broadcast,
     currentHeight: () => port.height(),
@@ -439,7 +443,7 @@ const live = async (t: { skip: (m?: string) => void }): Promise<boolean> => {
     }
     // dialect-agnostic liveness: the index client's own tip read — a raw
     // /block/tip fetch is a bananablocks path and 404s on WoC
-    const tip = await indexFor({ url: INDEX }).tip()
+    const tip = await indexFailover(TN_INDEXES).tip()
     if (tip === undefined) throw new Error('index → tip unreachable')
     return true
   } catch (e) {

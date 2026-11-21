@@ -30,11 +30,14 @@ more.")
 | public URL/TLS         | 10–30 min | DNS+proxy                            | DNS, TLS, ports            | KEEP — inline Caddyfile now in doc (was a dead-end pointer)                                                                   |
 | verify card            | 1 min     | one curl                             | —                          | keep                                                                                                                          |
 
-**Score:** ~8/10 (was ~6 — the stranger's two hardest steps were one
-broken instruction (hex≠WIF) and one dead-end pointer (no Caddyfile).
-Both fixed; the WIF step deleted entirely via auto-key + wait-funding).
-**Biggest remaining wall:** the grant channel is still conversational
-(`TESTNET-GRANT` issue title named — needs a real endpoint or faucet).
+**Score:** ~9/10 (was ~8). The grant channel is a real endpoint now:
+`POST /v1/faucet {address}` — unauthenticated by design, one drip per
+address + daily cap persisted in `faucet-drips.json`, opt-in via
+`NEKTAR_FAUCET=1` (hard-refused on main), the spend itself still rides
+SqlFunds + SpendGuard. JOIN-TESTNET names the self-serve curl; the issue
+channel stays as fallback.
+**Residual:** needs the hub operator to flip the flag and keep the drip
+key funded — infrastructure, not code.
 
 ## J2 · Fresh instance → non-empty first run
 
@@ -48,12 +51,14 @@ Both fixed; the WIF step deleted entirely via auto-key + wait-funding).
 | pack import          | ~1 min | none (seed domains) | —         | keep — done |
 | `recall` answers     | —      | one call            | —         | keep        |
 
-**Score:** ~8/10 for the operator path — but the front-door image
-(`docker run -e NEKTAR_NETWORK=testnet`, the README's first command)
-boots **empty**: `NEKTAR_SEED_DOMAINS` defaults unset, the seed pass
-never runs, first `recall` returns nothing. The value moment fails on
-the highest-traffic path — MOVE: ship a curated default (or a baked
-welcome pack) so the zero-config instance starts non-empty.
+**Score:** ~9/10 (was ~8-with-a-hole — the hole is closed). Layer 0
+(`mcp/src/welcome.ts`): a genuinely empty boot seeds a small `welcome`
+shard through `mem.remember` — provenance `nektar-welcome`, one-shot via
+a dataDir marker, never a boot failure, `NEKTAR_SEED_WELCOME=0` opts
+out. The first `recall` now answers even with every seed host dark (the
+baked `nektar.run` pair 502'd during this fix — exactly the failure
+mode). Layer 2 (dir-lane pack import, `NEKTAR_SEED_DOMAINS=*` baked)
+still adds live operator content when hosts answer.
 
 ## J3 · External AI client → first tool call
 
@@ -89,8 +94,15 @@ deal path (this suite's battleground).
 | host refuses carrier — thin ancestry | carrier refusal  | `NEKTAR_ANCHORED_LANES` + vendored bbox patch             |
 | wedged leg parks whole pump          | silent wedge     | `deliverBoundMs`, `bound()` on upkeep legs                |
 
-**Score:** ~6/10 — every class has a fix shipped or in-flight; the
-score goes to 8+ when the full suite passes clean in a single run.
+**Score:** ~8/10 — every starvation class has a shipped fix and all 13
+tests pass on live infrastructure (chunked fresh-process runs; the
+single-process ceiling was the Node heap, raised to 8GB in
+`test:testnet` — a literal clean single run remains to be demonstrated
+on a box that can hold it). Cold-boot carriers now ride anchored trees:
+`NEKTAR_ANCHORED_LANES=all` is the image/agent-compose default, so the
+first carrier pays a broadcast RTT instead of a block (unpatched hosts
+refuse the carrier and the lane falls back to proven-only — visible,
+self-healing).
 **The honest note:** deal friction is physics-limited (block cadence,
 mining), but every _unnecessary_ wait inside that physics has been
 named and bounded.
@@ -118,15 +130,14 @@ nothing to do).
 
 Ranked by leverage — where the next friction dollar goes:
 
-1. **Funding acquisition** (J1) — the one journey a stranger cannot
-   complete without outside action. A grant-link or faucet name in the
-   doc converts a stall into a step.
-2. **Lane-stock cold start** (J4, internal) — a fresh agent pays a
-   block-wait before its first carrier. `NEKTAR_ANCHORED_LANES=all` is
-   now the hub compose default (our `nektar-bbox-host` image carries
-   the anchored-admission patch) — anchored trees serve every lane
-   while their proof is in flight. Pre-proven seed stock remains the
-   further lever if a fully cold start still waits.
+1. ~~**Funding acquisition** (J1)~~ — DONE: `POST /v1/faucet` is the
+   self-serve endpoint (opt-in, capped, persisted); JOIN-TESTNET names
+   the curl. Remaining: the operator keeps the drip key funded.
+2. ~~**Lane-stock cold start** (J4, internal)~~ — DONE at the default:
+   `NEKTAR_ANCHORED_LANES=all` is now the image + agent-compose default
+   (was hub-only), so a cold agent's first carrier rides an anchored
+   mint, not a block wait. Pre-proven seed stock remains the further
+   lever if an unpatched-host path still waits.
 3. **Tool contract freeze** (J3) — integrators can't pin against
    "whatever the server exposes". A named minimal contract
    (`recall`/`commit`/`verify` + `automation`) is the adapter MVP's

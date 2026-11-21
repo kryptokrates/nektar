@@ -34,7 +34,7 @@ async function prepared(store: AutomationStore, actionId: string) {
 const coordinator = (store: AutomationStore, extra: { txDied?: (tx: Transaction) => void } = {}) =>
   new WalletCoordinator(store, { broadcast: async (tx) => ({ status: 'success', txid: tx.id('hex') }), ...extra })
 
-test('custody legs route to the fixed key — and a held tx key forwards as txScope', async () => {
+test('custody legs key per actionId — the scan stays on the fixed key, a held tx key forwards as txScope', async () => {
   const ex = new Dispatcher()
   const seen: Array<{ handler: string; key?: string; arg: Record<string, unknown> }> = []
   try {
@@ -53,10 +53,10 @@ test('custody legs route to the fixed key — and a held tx key forwards as txSc
     assert.deepEqual(
       seen.map((s) => ({ handler: s.handler, key: s.key, txScope: s.arg.txScope })),
       [
-        { handler: 'submit', key: CUSTODY_KEY, txScope: undefined },
-        { handler: 'markRejected', key: CUSTODY_KEY, txScope: undefined },
+        { handler: 'submit', key: 'a:1', txScope: undefined },
+        { handler: 'markRejected', key: 'a:1', txScope: undefined },
         { handler: 'resubmitPending', key: CUSTODY_KEY, txScope: undefined },
-        { handler: 'submit', key: CUSTODY_KEY, txScope: 'a:held' }
+        { handler: 'submit', key: 'a:held', txScope: 'a:held' }
       ]
     )
   } finally {

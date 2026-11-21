@@ -46,6 +46,30 @@ const RT_OPTS = {
   retryPolicy: { maxAttempts: 30, onMaxAttempts: 'pause' as const }
 }
 
+/** floor keys self-heal — the next arm/poke re-drives the work, so a
+ *  poisoned leg should pause fast and free the key's FIFO instead of
+ *  backing off through the full attempt budget (30 retries of exponential
+ *  backoff is minutes of key-wedge for a scan that redoes itself anyway).
+ *  Lifecycle/money objects keep the deep budget: their retries ARE the
+ *  recovery. */
+const RT_OPTS_FLOOR = {
+  ...RT_OPTS,
+  retryPolicy: { maxAttempts: 5, onMaxAttempts: 'pause' as const }
+}
+
+/** per-caller service options merged over the floor base — heavy cron
+ *  passes (confirmer/upkeep) raise the inactivity/abort bounds so a long
+ *  but healthy scan isn't suspended+replayed from zero forever. */
+type RtOpts = Partial<typeof RT_OPTS>
+
+/** heavy single-step scans (confirmer/upkeep/watcher passes) — a pass that
+ *  legitimately runs past the inactivity bound suspends mid-step and its
+ *  retry replays the WHOLE pass from zero; a scan that always exceeds
+ *  never completes and the key wedges on its own backlog. Raise the
+ *  bounds; if a pass still exceeds them the fix is sub-stepping the
+ *  journal, not a bigger number. */
+export const RT_OPTS_HEAVY: RtOpts = { inactivityTimeout: { minutes: 15 }, abortTimeout: { minutes: 30 } }
+
 export interface ObserveResult {
   accepted: boolean
   next?: string
@@ -220,18 +244,22 @@ export interface CustodyDeps {
 
 export const custodyObject = async (deps: CustodyDeps) => {
   const restate = await import('@restatedev/restate-sdk')
-  // the forwarded txScope re-establishes the caller's held tx key — a
-  // resubmit reaching us via tx.resubmit(A) emits A's events direct, not
-  // back through A's locked object (which this call chain now blocks on)
-  const scope = <T>(txScope: string | undefined, fn: () => Promise<T>): Promise<T> => inRtScope({ custodyKey: CUSTODY_KEY, txKey: txScope }, fn)
+  // the held key is per-leg (actionId for submit/markRejected, 'global'
+  // for the resubmit scan) — the scope records it so nested custody legs
+  // for the same id go direct instead of self-deadlocking. The forwarded
+  // txScope re-establishes the caller's held tx key — a resubmit reaching
+  // us via tx.resubmit(A) emits A's events direct, not back through A's
+  // locked object (which this call chain now blocks on)
+  const scope = <T>(key: string, txScope: string | undefined, fn: () => Promise<T>): Promise<T> => inRtScope({ custodyKey: key, txKey: txScope }, fn)
   return restate.object({
     name: EXEC_SVC.custody,
     options: RT_OPTS,
     handlers: {
-      submit: async (ctx: restate.ObjectContext, arg: CustodyLeg) => await scope(arg.txScope, () => ctx.run('submit', () => deps.wallet.submit(arg.actionId))),
+      submit: async (ctx: restate.ObjectContext, arg: CustodyLeg) =>
+        await scope(ctx.key, arg.txScope, () => ctx.run('submit', () => deps.wallet.submit(arg.actionId))),
       markRejected: async (ctx: restate.ObjectContext, arg: CustodyLeg) =>
-        await scope(arg.txScope, () => ctx.run('markRejected', () => deps.wallet.markRejectedById(arg.actionId, arg.observation))),
-      resubmitPending: async (ctx: restate.ObjectContext) => await scope(undefined, () => ctx.run('resubmit', () => deps.wallet.resubmitPending()))
+        await scope(ctx.key, arg.txScope, () => ctx.run('markRejected', () => deps.wallet.markRejectedById(arg.actionId, arg.observation))),
+      resubmitPending: async (ctx: restate.ObjectContext) => await scope(ctx.key, undefined, () => ctx.run('resubmit', () => deps.wallet.resubmitPending()))
     }
   })
 }
@@ -303,7 +331,7 @@ export const transportObject = async (deps: TransportDeps) => {
   const drain = transportDrainBody(deps)
   return restate.object({
     name: EXEC_SVC.transport,
-    options: RT_OPTS,
+    options: RT_OPTS_FLOOR,
     handlers: {
       deliver: async (ctx: restate.ObjectContext, item: OutboxItem) => await ctx.run('deliver', () => deps.deliverItem(item)),
       drain: async (ctx: restate.ObjectContext) => {
@@ -386,7 +414,7 @@ export const sweepService = async (deps: SweepDeps, txDef: unknown) => {
   }
   return restate.service({
     name: EXEC_SVC.sweep,
-    options: RT_OPTS,
+    options: RT_OPTS_FLOOR,
     handlers: {
       tick: async (ctx: restate.Context) => await tick(send(ctx), (n, fn) => ctx.run(n, fn)),
       boot: async (ctx: restate.Context) => await boot(send(ctx), (n, fn) => ctx.run(n, fn))
@@ -501,7 +529,7 @@ export const dealfanTickBody =
     return { events: inbox.length, advanced: ops.length, reconciled: rec.length }
   }
 
-export const dealfanObject = async (deps: DealfanDeps, dealDef: unknown) => {
+export const dealfanObject = async (deps: DealfanDeps, dealDef: unknown, opts?: RtOpts) => {
   const restate = await import('@restatedev/restate-sdk')
   const tick = dealfanTickBody(deps)
   const send = (ctx: restate.Context): RtSend => {
@@ -533,7 +561,7 @@ export const dealfanObject = async (deps: DealfanDeps, dealDef: unknown) => {
   // is the durable successor of the tick mutex.
   return restate.object({
     name: EXEC_SVC.dealfan,
-    options: RT_OPTS,
+    options: { ...RT_OPTS_FLOOR, ...opts },
     handlers: {
       tick: async (ctx: restate.ObjectContext) => await tick(send(ctx), (n, fn) => ctx.run(n, fn))
     }
@@ -575,16 +603,24 @@ export interface WakeDeps {
    *  design: it lives wherever reconcileGate runs, journaled replays re-
    *  adding it are harmless (a Set insert). */
   hint: (txid: string) => void
+  /** the domain clock — the cycle-tail coalesce bucket quantizes on it */
+  now?: () => number
   log: (line: string) => void
 }
 
 /** the cycle-equivalent through journaled sends — dealfan.tick is the
  *  deals pass's scan+fan-out, transport.drain is the outbox poke. The
  *  custody resubmit cadence stays on the floor where it belongs — wakes
- *  drive work, not time gates. */
-const wakeCycle = async (send: RtSend): Promise<void> => {
-  await send({ service: EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY }, {})
-  await send({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {})
+ *  drive work, not time gates.
+ * The tails are pure hints (the wake's own journaled leg already committed
+ * its row — a queued tick scans at run time and sees the work), so they
+ * coalesce on a 1s bucket: a chain-event burst queues ≤1 pass per target
+ * per window instead of one full scan per event. Distinct from the
+ * self-arm keys — pokes never collide with arms. */
+const wakeCycle = async (send: RtSend, now: () => number): Promise<void> => {
+  const b = Math.floor(now() / 1000)
+  await send({ service: EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY }, {}, { idempotencyKey: `dealfan:poke:${b}` })
+  await send({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {}, { idempotencyKey: `drain:poke:${b}` })
 }
 
 export const wakeTxProofBody =
@@ -592,13 +628,13 @@ export const wakeTxProofBody =
   async (send: RtSend, arg: { txid: string; mpHex: string }, run: StepRun = (_n, fn) => fn()) => {
     if (deps.legs.txProof !== undefined) await run('ledger', () => deps.legs.txProof!(arg.txid, arg.mpHex))
     deps.hint(arg.txid)
-    await wakeCycle(send)
+    await wakeCycle(send, deps.now ?? Date.now)
     return { done: true }
   }
 
 export const wakeTxRejectedBody = (deps: WakeDeps) => async (send: RtSend, arg: { txid: string }) => {
   deps.hint(arg.txid)
-  await wakeCycle(send)
+  await wakeCycle(send, deps.now ?? Date.now)
   return { done: true }
 }
 
@@ -606,7 +642,7 @@ export const wakeTxAbandonedBody =
   (deps: WakeDeps) =>
   async (send: RtSend, arg: { txid: string }, run: StepRun = (_n, fn) => fn()) => {
     if (deps.legs.txAbandoned !== undefined) await run('ledger', () => deps.legs.txAbandoned!(arg.txid))
-    await wakeCycle(send)
+    await wakeCycle(send, deps.now ?? Date.now)
     return { done: true }
   }
 
@@ -614,7 +650,10 @@ export const wakeHeightBody =
   (deps: WakeDeps) =>
   async (send: RtSend, arg: { tip: number }, run: StepRun = (_n, fn) => fn()) => {
     const due = deps.legs.dueAtHeight === undefined ? false : await run('due', () => deps.legs.dueAtHeight!(arg.tip))
-    if (due) await send({ service: EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY }, {})
+    if (due) {
+      const b = Math.floor((deps.now ?? Date.now)() / 1000)
+      await send({ service: EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY }, {}, { idempotencyKey: `dealfan:poke:${b}` })
+    }
     return { due }
   }
 
@@ -628,11 +667,16 @@ export const wakeReorgBody =
 export const wakeService = async (deps: WakeDeps) => {
   const restate = await import('@restatedev/restate-sdk')
   const send = (ctx: restate.Context): RtSend => {
-    const dealfan = ctx.objectSendClient({ name: EXEC_SVC.dealfan } as never, CRON_KEY) as unknown as { tick: (o: unknown) => Promise<void> }
-    const transport = ctx.objectSendClient({ name: EXEC_SVC.transport } as never, TRANSPORT_DRAIN_KEY) as unknown as { drain: (o: unknown) => Promise<void> }
-    return async (target, arg) => {
-      if (target.service === EXEC_SVC.dealfan && target.handler === 'tick') await dealfan.tick(arg)
-      else if (target.service === EXEC_SVC.transport && target.handler === 'drain') await transport.drain(arg)
+    const dealfan = ctx.objectSendClient({ name: EXEC_SVC.dealfan } as never, CRON_KEY) as unknown as {
+      tick: (o: unknown, opts?: unknown) => Promise<void>
+    }
+    const transport = ctx.objectSendClient({ name: EXEC_SVC.transport } as never, TRANSPORT_DRAIN_KEY) as unknown as {
+      drain: (o: unknown, opts?: unknown) => Promise<void>
+    }
+    return async (target, arg, opts) => {
+      const o = restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey })
+      if (target.service === EXEC_SVC.dealfan && target.handler === 'tick') await dealfan.tick(arg, o)
+      else if (target.service === EXEC_SVC.transport && target.handler === 'drain') await transport.drain(arg, o)
       else throw new Error(`wake send: no route for ${target.service}/${target.handler}`)
     }
   }
@@ -643,7 +687,7 @@ export const wakeService = async (deps: WakeDeps) => {
   const reorg = wakeReorgBody(deps)
   return restate.service({
     name: EXEC_SVC.wake,
-    options: RT_OPTS,
+    options: RT_OPTS_FLOOR,
     handlers: {
       txProof: async (ctx: restate.Context, arg: { txid: string; mpHex: string }) => await proof(send(ctx), arg, (n, fn) => ctx.run(n, fn)),
       txRejected: async (ctx: restate.Context, arg: { txid: string }) => await rejected(send(ctx), arg),
@@ -695,12 +739,12 @@ export const cronTickBody =
     return { done: true }
   }
 
-export const cronObject = async (service: string, deps: CronDeps) => {
+export const cronObject = async (service: string, deps: CronDeps, opts?: RtOpts) => {
   const restate = await import('@restatedev/restate-sdk')
   const tick = cronTickBody(service, deps)
   return restate.object({
     name: service,
-    options: RT_OPTS,
+    options: { ...RT_OPTS_FLOOR, ...opts },
     handlers: {
       tick: async (ctx: restate.ObjectContext) => {
         const self = ctx.objectSendClient({ name: service } as never, CRON_KEY) as unknown as { tick: (o: unknown, opts?: unknown) => Promise<void> }
@@ -718,11 +762,11 @@ export const cronObject = async (service: string, deps: CronDeps) => {
 /** a keyed event-sink object — one journaled ctx.run leg per 'tick'
  *  invocation, no self-arm: the event plane's own signals are the cadence
  *  (the journaled successor of a detached() listener body a crash dropped) */
-export const legObject = async (service: string, leg: () => Promise<void>) => {
+export const legObject = async (service: string, leg: () => Promise<void>, opts?: RtOpts) => {
   const restate = await import('@restatedev/restate-sdk')
   return restate.object({
     name: service,
-    options: RT_OPTS,
+    options: { ...RT_OPTS_FLOOR, ...opts },
     handlers: {
       tick: async (ctx: restate.ObjectContext) => {
         await ctx.run('tick', leg)

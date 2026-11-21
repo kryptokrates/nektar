@@ -34,17 +34,37 @@ export function openOutbox(rt: Rt): void {
   // transport object — outboxReady pokes the drain, deliver lands per
   // destination key, the drain self-arms its ceiling at the earliest
   // next_at. A boot poke covers rows pending across a restart.
+  // Pokes coalesce on a flag, not a bucket: every write used to enqueue a
+  // full drain, so a commit burst piled N scans on the key's FIFO. A call
+  // resolves at pass completion — pokes during flight set wantDrain and
+  // exactly one follow-up runs; nothing is ever lost to a time bucket.
+  let draining = false
+  let wantDrain = false
   const poke = (): void => {
     // a wake hint — it must never throw: at boot the executor may not have
     // its transport handlers wired yet (Dispatcher registers at the wire
     // step, which runs after openOutbox); the drain's self-armed ceiling
     // is the missed-wake backstop either way
+    if (rt.stopped) return
+    if (draining) {
+      wantDrain = true
+      return
+    }
+    draining = true
     try {
-      void (rt.exec ?? executor()).send(DRAIN, {}).catch((e: unknown) => {
-        log(`automation: transport drain send: ${(e as Error).message}`)
-      })
+      void (rt.exec ?? executor())
+        .call(DRAIN, {})
+        .catch((e: unknown) => log(`automation: transport drain: ${(e as Error).message}`))
+        .then(() => {
+          draining = false
+          if (wantDrain) {
+            wantDrain = false
+            poke()
+          }
+        })
     } catch (e) {
-      log(`automation: transport drain send: ${(e as Error).message}`)
+      draining = false
+      log(`automation: transport drain: ${(e as Error).message}`)
     }
   }
   rt.pumpOutbox = () => {

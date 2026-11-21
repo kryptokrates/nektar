@@ -112,14 +112,27 @@ journaled at the right grain.
    suppress recurring evidence — a second reorg at the same height, a
    resubmit→re-reject, a re-mine under a different path —
    `rt/dedup-kills-event`; content-key the evidence (digest of the
-   payload) or drop dedup on idempotent legs.
-3. **Same-key discipline.** Map which keys write which rows. Cross-key
-   writers of one row without CAS = `rt/key-collision`. A same-key
-   request-response `call` (or A↔B cycle) without a scope escape =
-   `rt/self-deadlock` — nektar's escape is `inRtScope`/`rtScopeKey`
-   (ALS-carried scope bypasses the object hop; the wire must merge not
-   replace nested scopes). `ctx.sleep` or a blocked `call` inside an
-   exclusive handler queues the whole key = `rt/sleep-blocks-key`.
+   payload) or drop dedup on idempotent legs. And the dedup store
+   itself: an in-memory Set/Map that `clear()`s at a cap re-fires every
+   pending send in one burst — evict-by-age (expired windows, fired
+   arms) and bound the map (`rt/dedup-map-reset`).
+3. **Same-key discipline — both directions.** Map which keys write
+   which rows. Cross-key writers of one row without CAS =
+   `rt/key-collision`. A same-key request-response `call` (or A↔B
+   cycle) without a scope escape = `rt/self-deadlock` — nektar's escape
+   is `inRtScope`/`rtScopeKey` (ALS-carried scope bypasses the object
+   hop; the wire must merge not replace nested scopes). `ctx.sleep` or
+   a blocked `call` inside an exclusive handler queues the whole key =
+   `rt/sleep-blocks-key`. And the inverse: a key serializing MORE than
+   one writer domain = `rt/global-lock` — found live: custody legs all
+   landed on `custody/'global'`, so every deal's funding serialized
+   behind every other deal's broadcast RTT and a resubmit scan blocked
+   new submissions. Key scope must match the lock domain the domain
+   actually needs — per-row legs get per-row keys
+   (`custody/<actionId>`), only genuinely-global scans keep the fixed
+   key. The parallelizability check is on the row's invariants (per-row
+   reads + CAS'd writes + idempotent broadcasts = parallel-safe), not
+   on habit.
 4. **Detached-send ownership.** Every `send`/delayed send outlives its
    originator's kill/cancel — name what absorbs it when the domain row
    has moved on (state guard, no-op handler). An arm that outlives its
@@ -134,7 +147,11 @@ journaled at the right grain.
    pokes + wake-cycle drains each added a chain). The fix is a
    content-derived arm key that converges chains to ≤1 pending arm:
    domain-derived wake (`drain:${nextAt}`) or cadence-quantized
-   (`tick:${floor(now/ceil)*ceil+ceil}`).
+   (`tick:${floor(now/ceil)*ceil+ceil}`). A process-local arm-dedup map
+   alone is not enough — it dies at restart while the delayed send
+   lives on; the arm send itself needs a content key
+   (`due:<op>:<at>`) so re-arms dedupe at the ingress against the
+   still-pending invocation (`rt/due-arm-restart-dup`).
 5. **Clock domain.** A delayed send's `delayMs` is computed at arm time
    against a clock — it must be the SAME clock that stamped the deadline
    (`next_at`, `dueAt`, `reconcile_at` all stamp on the domain `now`).
@@ -149,7 +166,13 @@ journaled at the right grain.
    domain records the terminal outcome itself), `RetryableError`
    (backoff-shaped), `PauseError` (operator gate). A deterministic throw
    left on default policy is a `rt/poisoned-leg` queue wedge — the key
-   serializes behind it forever.
+   serializes behind it forever. And the retry BUDGET must match the
+   key's temperature: a self-healing floor (drain/cron/dealfan — the
+   next arm or poke re-drives the work) should fail fast and release
+   the FIFO, not back off 30 times while every queued pass waits
+   (`rt/hot-key-poison-window` — `RT_OPTS_FLOOR` maxAttempts:5 on
+   floors, :30 on lifecycle/money objects whose retries ARE the
+   recovery).
 7. **Timeout is not a verdict.** `orTimeout`, inactivity suspend (>1min
    no new journal entries → suspend+retry; legs must fit under it or the
    service raises `options.inactivityTimeout`), and
@@ -157,14 +180,30 @@ journaled at the right grain.
    timed-out leg may have committed anyway (the old attempt runs to
    completion; its result is discarded, its effects are not).
    `submission_unknown` is the only honest row for it.
-   `rt/timeout-as-verdict` when code treats either as failure.
+   `rt/timeout-as-verdict` when code treats either as failure. A
+   monolithic `ctx.run` is the amplifier: a scan pass that legitimately
+   exceeds the inactivity bound suspends mid-step, and its retry
+   replays the WHOLE pass from zero — a scan that always exceeds never
+   completes and the key wedges on its own backlog
+   (`rt/heavy-pass-monolith`). Raise `options.inactivityTimeout`/
+   `abortTimeout` for the heavy pass (`RT_OPTS_HEAVY`); the real fix
+   when it still exceeds is sub-stepping the journal, not a bigger
+   number.
 8. **No wait is a poll.** Every recurring wait names its producer
    signal — a send, an awakeable/promise/signal, or a call's completion
    — with the self-arm as the bounded ceiling behind it. A cadence that
    fires "every N" to check for work is a poll; a cadence that fires at
    the store-computed `next_at` is the ceiling. `rt/poll-as-mechanism`
    when the mechanism is the interval rather than the event (the
-   replacement table is in references/integration.md §3).
+   replacement table is in references/integration.md §3). And the
+   producer side of every wake: a send per write/event piles one full
+   scan per poke on the key's FIFO — `rt/poke-storm`. Coalesce: a
+   flag+`call` for process-side producers (the call resolves at pass
+   completion; pokes in flight set wantMore — bounded, and no wake is
+   ever lost to a time bucket), or a short bucketed `idempotency-key`
+   for journaled hint sends inside handlers (safe only because the
+   hint's rows are already committed — a queued pass scans at RUN time
+   and sees them).
 9. **Ingress exposure is a boundary — and registration is existence.**
    Internal objects (`ingressPrivate: true`) never answer the public
    ingress; endpoint `identityKeys` pin the caller to our Restate
@@ -203,22 +242,22 @@ DB authoritative, use Restate's guarantees as the consistency helpers.
 
 ## Nektar's plane — the mapping
 
-| Restate concept          | nektar surface                                                                          |
-| ------------------------ | --------------------------------------------------------------------------------------- |
-| Virtual Object per key   | `EXEC_SVC` objects — tx/`actionId`, deal/want, custody/`CUSTODY_KEY`                    |
-| Fixed-key object         | `TRANSPORT_DRAIN_KEY`, `CRON_KEY`, upkeep/watchdog/watches keys                         |
-| `ctx.run` journaled step | handler bodies in `services.ts` — thin wrappers over domain code                        |
-| Delayed send             | due arms, drain self-arm at `nextOutboxAt`, dealfan/cron self-arms                      |
-| Send (detached)          | `rtSend`/`exec.send` — dealfan fan-outs, wake cycle-tails, boot pokes                   |
-| Same-key call deadlock   | `inRtScope`/`rtScopeKey` — ALS scope bypasses the object hop                            |
-| Ingress idempotency-key  | `sendOpts.idempotencyKey` — per-ATTEMPT (`deliver:<id>:<n>`), never per-row             |
-| Orphaned arm (RT0011)    | floor cadence re-arms — self-arm re-derives from the store each fire                    |
-| `Dispatcher` (test seam) | `cfg.exec` injection — must emulate: per-key serial, delay, at-least-once, close drains |
-| Awakeable/approval gate  | policy escalations, `funding_deferred` waits — resolve, don't poll                      |
-| Service `options:`       | retryPolicy / inactivityTimeout / journalRetention / ingressPrivate knobs               |
-| Flow-control scope       | `ctx.scope`/`limitKey` — bounds a class of invocations (e.g. broadcaster legs)          |
-| Testcontainers env       | `alwaysReplay`/`disableRetries` — the no-server alternative to `NEKTAR_RESTATE_URL`     |
-| `@restatedev/xstate`     | machines-as-specs stay ours; the lib exists if a machine ever needs to BE the executor  |
+| Restate concept          | nektar surface                                                                                                                    |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| Virtual Object per key   | `EXEC_SVC` objects — tx/`actionId`, deal/want, custody/`actionId` (legs)                                                          |
+| Fixed-key object         | `TRANSPORT_DRAIN_KEY`, `CRON_KEY`, `CUSTODY_KEY` (resubmit scan), upkeep/watchdog/watches                                         |
+| `ctx.run` journaled step | handler bodies in `services.ts` — thin wrappers over domain code                                                                  |
+| Delayed send             | due arms, drain self-arm at `nextOutboxAt`, dealfan/cron self-arms                                                                |
+| Send (detached)          | `rtSend`/`exec.send` — dealfan fan-outs, wake cycle-tails, boot pokes                                                             |
+| Same-key call deadlock   | `inRtScope`/`rtScopeKey` — ALS scope bypasses the object hop                                                                      |
+| Ingress idempotency-key  | `sendOpts.idempotencyKey` — per-ATTEMPT (`deliver:<id>:<n>`), per-INSTANT arms (`due:<op>:<at>`), poke buckets (`<svc>:poke:<b>`) |
+| Orphaned arm (RT0011)    | floor cadence re-arms — self-arm re-derives from the store each fire                                                              |
+| `Dispatcher` (test seam) | `cfg.exec` injection — must emulate: per-key serial, delay, at-least-once, close drains                                           |
+| Awakeable/approval gate  | policy escalations, `funding_deferred` waits — resolve, don't poll                                                                |
+| Service `options:`       | retryPolicy / inactivityTimeout / journalRetention / ingressPrivate knobs                                                         |
+| Flow-control scope       | `ctx.scope`/`limitKey` — bounds a class of invocations (e.g. broadcaster legs)                                                    |
+| Testcontainers env       | `alwaysReplay`/`disableRetries` — the no-server alternative to `NEKTAR_RESTATE_URL`                                               |
+| `@restatedev/xstate`     | machines-as-specs stay ours; the lib exists if a machine ever needs to BE the executor                                            |
 
 ## Drills (verification recipes)
 

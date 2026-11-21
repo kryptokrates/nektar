@@ -106,6 +106,50 @@ Per handler, list each statement as inside/outside `ctx.run`:
   needs an object on a fixed key.
 - `ctx.sleep` inside an exclusive handler = `rt/sleep-blocks-key`; the
   long-wait pattern is a delayed send to self, not a sleep.
+- Producer pokes need the same converging discipline as arms. Count who
+  pokes each floor key and at what rate — a send per write/event piles
+  one full scan per poke on the FIFO (`rt/poke-storm`). Two sound
+  coalescers, pick by where the producer lives:
+  - **process-side producer** (store callbacks, host event loops):
+    flag + `call` — in-flight flag sets `wantMore`, the call resolves at
+    pass completion, exactly one follow-up runs. No time bucket, no
+    lost wake, bounded at ≤1 queued + 1 running.
+  - **journaled hint inside a handler** (cycle tails, wake→scan sends):
+    a short bucketed `idempotency-key` (`<svc>:poke:<floor(now/bucket)>`)
+    in a DISTINCT namespace from arm keys. Safe only when the hint's
+    rows are already committed — a queued pass scans at run time and
+    sees the coalesced work. Never bucket a `call` whose result the
+    caller consumes: ingress dedup can't distinguish queued from
+    completed, so the caller could attach to a pass that ran before its
+    work existed.
+- And the arm's own dedup: a process-local Set dies at restart while
+  the delayed send lives on — the send needs a content key
+  (`due:<op>:<at>`) so re-arms dedupe at the ingress against the
+  still-pending invocation (`rt/due-arm-restart-dup`).
+
+## Worksheet 5b — key scope / serialization temperature
+
+| key | writer domain | is the domain per-row or genuinely global? | retry budget vs self-heal? |
+| --- | ------------- | ------------------------------------------ | -------------------------- |
+
+- A fixed key serializing per-row legs over-serializes — every
+  unrelated row's leg queues behind every other's I/O
+  (`rt/global-lock` — custody legs on `'global'` made every deal's
+  funding wait on every other deal's broadcast; per-actionId keys +
+  `'global'` only for the scan fixed it). The check: does the leg
+  share mutable in-memory state with other keys' work, or only CAS'd
+  rows + idempotent I/O? The latter parallelizes — key it per row.
+- Match `retryPolicy.maxAttempts` to the key's temperature: a
+  self-healing floor (the arm/poke re-drives the work) should pause
+  fast (`RT_OPTS_FLOOR` = 5) — 30 retries of backoff on a floor key is
+  minutes of wedge for a scan that redoes itself
+  (`rt/hot-key-poison-window`). Lifecycle/money objects keep the deep
+  budget — their retries ARE the recovery.
+- A monolithic `ctx.run` that can exceed `inactivityTimeout` suspends
+  and replays from zero on every retry — a scan that always exceeds
+  never completes (`rt/heavy-pass-monolith`). Raise the bounds for the
+  heavy pass (`RT_OPTS_HEAVY`); if it still exceeds, sub-step the
+  journal — don't keep raising numbers.
 
 ## Worksheet 6 — clock domain
 

@@ -203,7 +203,7 @@ test(
 )
 
 test(
-  'spike: custody.submit on the fixed key — broadcast leg journaled, emits route to the tx object',
+  'spike: custody.submit on the tx key — broadcast leg journaled, emits route to the tx object',
   { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
   async () => {
     const { kx, store } = await open()

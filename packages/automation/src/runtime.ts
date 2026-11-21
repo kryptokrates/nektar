@@ -36,6 +36,7 @@ import {
   notifyObject,
   dealOpKey,
   opWantId,
+  RT_OPTS_HEAVY,
   type WakeLegs
 } from './rt/services.js'
 import type { Rt, LaneInfra, AutomationConfig } from './rtctx.js'
@@ -554,10 +555,14 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // fan-out dedup — the tick re-sends every pending row/live op each pass;
   // under restate each send is a durable queued invocation, so the same
   // send-identity is throttled to one per window (domain clock).
-  const sendDedup = new Map<string, number>()
+  const sendDedup = new Map<string, { at: number; ms: number }>()
   // due-arm dedup — a transition re-arms its stamped due_at on every write;
-  // an identical (op, instant) delayed send is pure churn on the key's FIFO.
-  const armedDue = new Set<string>()
+  // an identical (op, instant) delayed send is pure churn on the key's
+  // FIFO. The ingress `due:` key is the durable dedup (it survives a
+  // restart against the still-pending arm); this map is only the cheap
+  // pre-filter — entries record the due instant so expired arms evict
+  // instead of clear()-bursting every pending send at the cap.
+  const armedDue = new Map<string, number>()
   const walletCoord = engine.walletCoordinator
   const dealfanDeps = {
     pendingInbox: () => engine.pendingInbox(),
@@ -584,9 +589,14 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     sentRecently: (id: string, ms: number) => {
       const now = (cfg.now ?? Date.now)()
       const last = sendDedup.get(id)
-      if (last !== undefined && now - last < ms) return true
-      if (sendDedup.size > 10_000) sendDedup.clear()
-      sendDedup.set(id, now)
+      if (last !== undefined && now - last.at < ms) return true
+      if (sendDedup.size > 10_000) {
+        // evict entries whose window already closed — a clear() would drop
+        // hot keys and re-fire every pending send in one burst
+        for (const [k, v] of sendDedup) if (now - v.at >= v.ms) sendDedup.delete(k)
+        if (sendDedup.size > 10_000) sendDedup.delete(sendDedup.keys().next().value!)
+      }
+      sendDedup.set(id, { at: now, ms })
       return false
     },
     log
@@ -611,7 +621,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // the wake deps — mem.onTx*/onHeight/onReorg callbacks become durable
   // invocations; the legs run journaled, the cycle tail leaves through
   // journaled sends (dealfan.tick + transport.drain)
-  const wakeDeps = { legs: wakeLegs, hint: (txid: string) => engine.hint(txid), log }
+  const wakeDeps = { legs: wakeLegs, hint: (txid: string) => engine.hint(txid), now: () => (cfg.now ?? Date.now)(), log }
   // the cadence deps — durable, self-arming invocations: each tick runs
   // the whole pass inside one journaled step then arms the next at its
   // ceiling. A throwing pass retries instead of silently stopping.
@@ -660,7 +670,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     const transportDef = await transportObject(transportDeps)
     const custodyDefs = custodyDeps !== undefined ? [await custodyObject(custodyDeps)] : []
     const wakeDef = await wakeService(wakeDeps)
-    const upkeepDef = await cronObject(EXEC_SVC.upkeep, upkeepDeps)
+    const upkeepDef = await cronObject(EXEC_SVC.upkeep, upkeepDeps, RT_OPTS_HEAVY)
     const watchdogDefs = watchdogDeps !== undefined ? [await cronObject(EXEC_SVC.watchdog, watchdogDeps)] : []
     const watchesDefs = watchesDeps !== undefined ? [await cronObject(EXEC_SVC.watches, watchesDeps)] : []
     const notifyDefs = notifyDeps !== undefined ? [await notifyObject(notifyDeps)] : []
@@ -777,7 +787,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // new lanes appear as deals start — re-derive watch subs at the
             // end of a pass so a fresh want is subscribed within one cycle;
             // under restate the object serializes it against a running tick
-            if (rt.watchBases.length > 0) void exec.send({ service: EXEC_SVC.watches, handler: 'tick', key: 'main' }, {}).catch(() => undefined)
+            // the re-derive poke is a hint — refreshWatches scans at run
+            // time — so a pass of commits coalesces to one queued tick per
+            // 5s bucket instead of one scan per pass
+            if (rt.watchBases.length > 0) {
+              const b = Math.floor((cfg.now ?? Date.now)() / 5000)
+              void exec.send({ service: EXEC_SVC.watches, handler: 'tick', key: 'main' }, {}, { idempotencyKey: `watches:poke:${b}` }).catch(() => undefined)
+            }
           } catch (e) {
             log(`automation: ${(e as Error).message}`)
           }
@@ -810,8 +826,14 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     if (rt.stopped) return
     const dueKey = `${operationId}:${at}`
     if (armedDue.has(dueKey)) return
-    if (armedDue.size > 10_000) armedDue.clear()
-    armedDue.add(dueKey)
+    if (armedDue.size > 10_000) {
+      // evict fired arms — their delayed sends already landed; the ingress
+      // `due:` key still dedupes any late re-arm against the pending arm
+      const now = (cfg.now ?? Date.now)()
+      for (const [k, at0] of armedDue) if (at0 < now) armedDue.delete(k)
+      if (armedDue.size > 10_000) armedDue.delete(armedDue.keys().next().value!)
+    }
+    armedDue.set(dueKey, at)
     void (async () => {
       // key by the want correlation id — the arm lands on the same deal
       // object as the want's events/advances, serializing with them
@@ -821,8 +843,11 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         { op: operationId },
         // the arm fires on the DOMAIN clock — `at` is a store.now() timestamp;
         // mixing clocks under a virtual `now` skews every arm (a test clock
-        // running ahead would push each due send past the deadline it arms)
-        { delayMs: Math.max(0, at - (cfg.now ?? Date.now)()) }
+        // running ahead would push each due send past the deadline it arms).
+        // The idempotency key makes the SAME (op, instant) arm dedupe across
+        // a restart — the pending delayed invocation outlives this process's
+        // memory, so the in-memory map alone can't see it.
+        { delayMs: Math.max(0, at - (cfg.now ?? Date.now)()), idempotencyKey: `due:${dueKey}` }
       )
     })().catch((e) => {
       // the send never landed — release the dedup so the next arm retries
@@ -848,7 +873,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // the cadence plane is fully executor-owned: dealfan self-arms the deals
   // floor (adaptive hot/idle ceiling on every arm), the cron objects carry
   // upkeep/watchdog/watches, and wakes are event sends. No wheel.
-  if (rt.watchBases.length !== 0) void exec.send({ service: EXEC_SVC.watches, handler: 'tick', key: 'main' }, {}).catch(() => undefined)
+  if (rt.watchBases.length !== 0) {
+    const b = Math.floor((cfg.now ?? Date.now)() / 5000)
+    void exec.send({ service: EXEC_SVC.watches, handler: 'tick', key: 'main' }, {}, { idempotencyKey: `watches:poke:${b}` }).catch(() => undefined)
+  }
   // push-driven progress: a verified tx proof (broadcaster callback or the
   // chain's own mined event) may make a funding tree provable and advance
   // completion_submitted → settled — run a cycle now, not at the next interval

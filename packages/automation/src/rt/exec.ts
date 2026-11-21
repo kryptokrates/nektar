@@ -53,8 +53,9 @@ export const EXEC_SVC = {
   watcher: 'nektar-watcher'
 } as const
 
-/** the custody object's fixed key — every wallet custody leg serializes on
- *  this one object (the durable successor of the run() promise chain). */
+/** the custody object's scan key — resubmitPending runs on this single
+ *  stream; per-tx legs (submit/markRejected) key on their actionId so one
+ *  deal's broadcast never serializes behind another's. */
 export const CUSTODY_KEY = 'global'
 
 // the inside-handler scope: a VO handler for key K emitting for K must NOT
@@ -73,10 +74,10 @@ const scope = new AsyncLocalStorage<RtScope>()
 
 // merge, not replace: a nested handler's scope must ACCUMULATE the keys the
 // call chain already holds — a tx handler inside a custody invocation still
-// holds CUSTODY_KEY, so its custody-side emits must go direct rather than
-// calling back into the locked object (the self-deadlock the scope exists
-// to prevent). An undefined field clears (a caller can deliberately drop a
-// held key); a defined field wins over the parent's.
+// holds that custody key, so its custody-side emits must go direct rather
+// than calling back into the locked object (the self-deadlock the scope
+// exists to prevent). An undefined field clears (a caller can deliberately
+// drop a held key); a defined field wins over the parent's.
 export const inRtScope = <T>(s: RtScope, fn: () => T): T => scope.run({ ...scope.getStore(), ...s }, fn)
 
 export const rtScopeKey = (): RtScope | undefined => scope.getStore()

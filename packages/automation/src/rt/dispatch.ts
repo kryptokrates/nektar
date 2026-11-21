@@ -12,7 +12,7 @@
 // so fan-out asserts are deterministic.
 import { detached } from '@nektar/core'
 import type { Executor, InvokeTarget, SendOpts, RtSend } from './exec.js'
-import { EXEC_SVC, CUSTODY_KEY, inRtScope } from './exec.js'
+import { EXEC_SVC, inRtScope } from './exec.js'
 import {
   txObserveBody,
   txResubmitBody,
@@ -255,16 +255,19 @@ export const wireDealfan = (ex: LocalDispatch, deps: DealfanDeps): void => {
 }
 
 export const wireCustody = (ex: LocalDispatch, deps: CustodyDeps): void => {
-  // same scope the VO sets: custodyKey makes nested custodySubmit legs go
-  // direct inside the handler; the forwarded txScope re-establishes the
+  // same scope the VO sets: custodyKey records the handler's held key
+  // (actionId per tx leg, 'global' for the scan) so nested custody legs
+  // for the same id go direct; the forwarded txScope re-establishes the
   // caller's held tx key so its emits skip the locked object
-  const scope = <T>(txScope: string | undefined, fn: () => Promise<T>): Promise<T> => inRtScope({ custodyKey: CUSTODY_KEY, txKey: txScope }, fn)
-  ex.register(EXEC_SVC.custody, 'submit', (arg) => scope((arg as CustodyLeg).txScope, () => deps.wallet.submit((arg as CustodyLeg).actionId)))
-  ex.register(EXEC_SVC.custody, 'markRejected', (arg) => {
+  const scope = <T>(key: string, txScope: string | undefined, fn: () => Promise<T>): Promise<T> => inRtScope({ custodyKey: key, txKey: txScope }, fn)
+  ex.register(EXEC_SVC.custody, 'submit', (arg, key) => scope(key ?? '', (arg as CustodyLeg).txScope, () => deps.wallet.submit((arg as CustodyLeg).actionId)))
+  ex.register(EXEC_SVC.custody, 'markRejected', (arg, key) => {
     const a = arg as CustodyLeg & { observation: unknown }
-    return scope(a.txScope, () => deps.wallet.markRejectedById(a.actionId, a.observation))
+    return scope(key ?? '', a.txScope, () => deps.wallet.markRejectedById(a.actionId, a.observation))
   })
-  ex.register(EXEC_SVC.custody, 'resubmitPending', (arg) => scope((arg as CustodyLeg | undefined)?.txScope, () => deps.wallet.resubmitPending()))
+  ex.register(EXEC_SVC.custody, 'resubmitPending', (arg, key) =>
+    scope(key ?? '', (arg as CustodyLeg | undefined)?.txScope, () => deps.wallet.resubmitPending())
+  )
 }
 
 export const wireTransport = (ex: LocalDispatch, deps: TransportDeps): void => {

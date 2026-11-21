@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { PrivateKey, Transaction } from '@bsv/sdk'
 import { detached, nektarEnv, nektarEnvNum, mkLog } from '@nektar/core'
 import { TxStore, type ChainPort, type Funds, type TxStatusEvent, type ChainEvents, type BroadcastResult } from '@nektar/chain'
-import { executor, cronObject, legObject, EXEC_SVC, type InvokeTarget } from '@nektar/automation'
+import { executor, cronObject, legObject, EXEC_SVC, RT_OPTS_HEAVY, type InvokeTarget } from '@nektar/automation'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { readKeyFile, writeKeyFile, fundKeyFromMnemonic } from './keystore.js'
 import { watcherObservation } from './txops.js'
@@ -539,7 +539,7 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
   // journaled self-arming cadence — AnchorQueued wakes become calls, not
   // sends: at most one queued pass rides behind a running one (the busy
   // flag's coalescing, kept)
-  rtDefs.push(await cronObject(EXEC_SVC.confirmer, { tick, ceilingMs: () => d.cfg.confirmEveryMs ?? 5000, log: d.nlog }))
+  rtDefs.push(await cronObject(EXEC_SVC.confirmer, { tick, ceilingMs: () => d.cfg.confirmEveryMs ?? 5000, log: d.nlog }, RT_OPTS_HEAVY))
   rtKicks.push({ service: EXEC_SVC.confirmer, handler: 'tick', key: 'main' })
   let anchorWake = false
   d.mem.onAnchorQueued(() => {
@@ -583,7 +583,7 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
   }
   // the leg object serializes on 'main'; event wakes become calls so an
   // event burst still coalesces to at most one queued pass
-  rtDefs.push(await legObject(EXEC_SVC.watcher, watchLeg))
+  rtDefs.push(await legObject(EXEC_SVC.watcher, watchLeg, RT_OPTS_HEAVY))
   const watchOnce = (): void => {
     if (watching) return
     watching = true

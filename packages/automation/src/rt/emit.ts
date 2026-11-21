@@ -53,24 +53,29 @@ export async function txEmit(
 }
 
 // ── custody legs ─────────────────────────────────────────────────────────
-// the coordinator's custody verbs route to the single-key custody object —
+// the coordinator's custody verbs route to the custody virtual object —
 // serialized + journaled, the durable successor of the run() promise chain
-// for custody writes. Inside a custody handler the legs call the
-// coordinator directly — the same body the object's handler invokes. A
-// broadcast leg mid-flight is journaled work the runtime resumes, not an
-// orphaned promise the resubmit scan has to rediscover.
+// for custody writes. Per-tx legs key on the actionId: one tx's submit +
+// markRejected serialize with each other while distinct txs broadcast in
+// parallel — a global key would make every deal's funding wait on every
+// other deal's broadcast RTT (and a resubmit scan re-airing rows would
+// block all new submissions). resubmitPending keeps the fixed 'global'
+// key: the scan is one stream by design. Inside a custody handler the
+// legs call the coordinator directly — the same body the object's handler
+// invokes. A broadcast leg mid-flight is journaled work the runtime
+// resumes, not an orphaned promise the resubmit scan has to rediscover.
 
 export async function custodySubmit(exec: Executor, wallet: CustodyWallet, actionId: string): Promise<{ state: TxState; txid: string; detail?: string }> {
-  if (rtScopeKey()?.custodyKey === CUSTODY_KEY) return await wallet.submit(actionId)
+  if (rtScopeKey()?.custodyKey === actionId) return await wallet.submit(actionId)
   // txScope forwards the caller's held tx key through the custody hop — a
   // resubmit arriving from tx.resubmit(A) already holds A's object lock, so
   // the emits inside wallet.submit must go direct, not re-enter the object
-  return await exec.call({ service: EXEC_SVC.custody, handler: 'submit', key: CUSTODY_KEY }, { actionId, txScope: rtScopeKey()?.txKey } satisfies CustodyLeg)
+  return await exec.call({ service: EXEC_SVC.custody, handler: 'submit', key: actionId }, { actionId, txScope: rtScopeKey()?.txKey } satisfies CustodyLeg)
 }
 
 export async function custodyMarkRejected(exec: Executor, wallet: CustodyWallet, actionId: string, observation: unknown): Promise<void> {
-  if (rtScopeKey()?.custodyKey === CUSTODY_KEY) return await wallet.markRejectedById(actionId, observation)
-  await exec.call({ service: EXEC_SVC.custody, handler: 'markRejected', key: CUSTODY_KEY }, {
+  if (rtScopeKey()?.custodyKey === actionId) return await wallet.markRejectedById(actionId, observation)
+  await exec.call({ service: EXEC_SVC.custody, handler: 'markRejected', key: actionId }, {
     actionId,
     observation,
     txScope: rtScopeKey()?.txKey

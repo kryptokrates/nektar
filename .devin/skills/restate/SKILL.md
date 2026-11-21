@@ -274,12 +274,19 @@ DB authoritative, use Restate's guarantees as the consistency helpers.
 
 ## Drills (verification recipes)
 
-The live ones run in `test/rt-live.test.ts` + `rt-spike.test.ts` against a
-real server — `NEKTAR_RESTATE_URL`-gated, `pnpm test:rt-live` runs both
-(docker one-liner in the file headers). Endpoint loss is exercised by
-`RtEndpoint.close()` force-destroying sessions — crash semantics, in-flight
-work retries on the reopened endpoint. Ghost-isolation rule: per-run
-service names/keys (`rt/test-durable-state`).
+The live ones run in `test/rt-live.test.ts` + `rt-spike.test.ts` +
+`rt-replay.test.ts` — `pnpm test:rt-live` runs all three (docker one-liner
+in the file headers). Endpoint loss is exercised by `RtEndpoint.close()`
+force-destroying sessions — crash semantics, in-flight work retries on the
+reopened endpoint. Ghost-isolation rule: per-run service names/keys
+(`rt/test-durable-state`). `rt-replay` runs `alwaysReplay`/
+`disableRetries` through `@restatedev/restate-sdk-testcontainers` —
+no `NEKTAR_RESTATE_URL` needed, each test spawns its own container.
+Note the mechanism: `alwaysReplay` is `INACTIVITY_TIMEOUT=0s` — replays
+engage only at real suspension points (`ctx.sleep`, awakeables, call
+responses). A suspension-free body (sends + ctx.run only, like our
+fan-out bodies) completes in one execution — the flag cannot exercise
+it; crash-replay coverage for those is the endpoint-loss drill.
 
 - **Mid-handler kill** — `kill -9` between journaled steps; restart →
   journaled steps skip (no double effect), unjournaled sends re-fire

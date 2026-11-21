@@ -412,12 +412,15 @@ export const sweepService = async (deps: SweepDeps, txDef: unknown) => {
       } else throw new Error(`sweep send: no route for ${target.service}`)
     }
   }
-  return restate.service({
+  // an OBJECT on one key, not a basic service: a service runs tick and
+  // boot CONCURRENTLY — two journaled scans each fanning the same rows.
+  // The fixed key's FIFO gives the floor's single-flight guarantee durably.
+  return restate.object({
     name: EXEC_SVC.sweep,
     options: RT_OPTS_FLOOR,
     handlers: {
-      tick: async (ctx: restate.Context) => await tick(send(ctx), (n, fn) => ctx.run(n, fn)),
-      boot: async (ctx: restate.Context) => await boot(send(ctx), (n, fn) => ctx.run(n, fn))
+      tick: async (ctx: restate.ObjectContext) => await tick(send(ctx), (n, fn) => ctx.run(n, fn)),
+      boot: async (ctx: restate.ObjectContext) => await boot(send(ctx), (n, fn) => ctx.run(n, fn))
     }
   })
 }
@@ -496,17 +499,36 @@ export const dealfanTickBody =
   (deps: DealfanDeps) =>
   async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
     const dup = deps.sentRecently ?? (() => false)
+    // the fan keys carry the same window the in-memory sentRecently map
+    // throttles on — but the map dies at restart while queued invocations
+    // live on. The bucketed ingress key is the durable layer: a post-restart
+    // re-fan dedupes against the still-pending leg instead of piling one
+    // fresh invocation per row on the key's FIFO (rt/fan-dedup-restart-gap).
+    const now0 = (deps.now ?? Date.now)()
+    const eb = Math.floor(now0 / WAITS.fanEventResend.ms)
+    const ab = Math.floor(now0 / WAITS.fanAdvanceResend.ms)
     const inbox = await run('inbox', () => deps.pendingInbox())
     for (const i of inbox)
-      if (!dup(`ev:${i.source}:${i.messageId}`, WAITS.fanEventResend.ms)) await send({ service: EXEC_SVC.deal, handler: 'event', key: dealEventKey(i) }, i)
+      if (!dup(`ev:${i.source}:${i.messageId}`, WAITS.fanEventResend.ms))
+        await send({ service: EXEC_SVC.deal, handler: 'event', key: dealEventKey(i) }, i, {
+          idempotencyKey: `fan:ev:${i.source}:${i.messageId}:${eb}`
+        })
     const ops = await run('ops', () => deps.liveOps())
     for (const o of ops)
       if (!dup(`adv:${o.operationId}`, WAITS.fanAdvanceResend.ms))
-        await send({ service: EXEC_SVC.deal, handler: 'advance', key: dealOpKey(o) }, { op: o.operationId })
+        await send(
+          { service: EXEC_SVC.deal, handler: 'advance', key: dealOpKey(o) },
+          { op: o.operationId },
+          { idempotencyKey: `fan:adv:${o.operationId}:${ab}` }
+        )
     const rec = await run('reconcile', () => deps.reconcileOps())
     for (const o of rec)
       if (!dup(`rec:${o.operationId}`, WAITS.fanAdvanceResend.ms))
-        await send({ service: EXEC_SVC.deal, handler: 'reconcile', key: dealOpKey(o) }, { op: o.operationId })
+        await send(
+          { service: EXEC_SVC.deal, handler: 'reconcile', key: dealOpKey(o) },
+          { op: o.operationId },
+          { idempotencyKey: `fan:rec:${o.operationId}:${ab}` }
+        )
     if (deps.resubmitPending !== undefined) await run('resubmit', () => deps.resubmitPending!())
     // the floor: every tick self-arms the next at the adaptive ceiling —
     // durable delayed send under restate, executor timer under local.
@@ -535,22 +557,22 @@ export const dealfanObject = async (deps: DealfanDeps, dealDef: unknown, opts?: 
   const send = (ctx: restate.Context): RtSend => {
     const deal = (key: string) =>
       ctx.objectSendClient(dealDef as never, key) as unknown as {
-        advance: (o: unknown) => Promise<void>
-        event: (o: DealEvent) => Promise<void>
-        reconcile: (o: unknown) => Promise<void>
+        advance: (o: unknown, opts?: unknown) => Promise<void>
+        event: (o: DealEvent, opts?: unknown) => Promise<void>
+        reconcile: (o: unknown, opts?: unknown) => Promise<void>
       }
     const self = ctx.objectSendClient({ name: EXEC_SVC.dealfan } as never, CRON_KEY) as unknown as {
       tick: (o: unknown, opts?: unknown) => Promise<void>
     }
     return async (target, arg, opts) => {
+      const o = restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey })
       if (target.service === EXEC_SVC.deal) {
         const c = deal(target.key ?? '')
-        if (target.handler === 'advance') await c.advance(arg)
-        else if (target.handler === 'event') await c.event(arg as DealEvent)
-        else if (target.handler === 'reconcile') await c.reconcile(arg)
+        if (target.handler === 'advance') await c.advance(arg, o)
+        else if (target.handler === 'event') await c.event(arg as DealEvent, o)
+        else if (target.handler === 'reconcile') await c.reconcile(arg, o)
         else throw new Error(`dealfan send: no deal handler ${target.handler}`)
-      } else if (target.service === EXEC_SVC.dealfan && target.handler === 'tick')
-        await self.tick(arg, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey }))
+      } else if (target.service === EXEC_SVC.dealfan && target.handler === 'tick') await self.tick(arg, o)
       else throw new Error(`dealfan send: no route for ${target.service}`)
     }
   }

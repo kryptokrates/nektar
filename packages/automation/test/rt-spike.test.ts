@@ -140,11 +140,11 @@ test(
     try {
       // tick 1: the scan result journals; the row's observe goes out as a
       // journaled send on its own object — async, so poll for the landing
-      const r1 = await ex.call<{ sent: number }>({ service: EXEC_SVC.sweep, handler: 'tick' }, {})
+      const r1 = await ex.call<{ sent: number }>({ service: EXEC_SVC.sweep, handler: 'tick', key: 'main' }, {})
       assert.equal(r1.sent, 1)
       await until(async () => (await store.walletTx({ actionId: 'sweep:1' }))?.state === 'submission_unknown')
 
-      const r2 = await ex.call<{ sent: number }>({ service: EXEC_SVC.sweep, handler: 'tick' }, {})
+      const r2 = await ex.call<{ sent: number }>({ service: EXEC_SVC.sweep, handler: 'tick', key: 'main' }, {})
       assert.equal(r2.sent, 1)
       await until(async () => (await store.walletTx({ actionId: 'sweep:1' }))?.state === 'confirmed')
       assert.equal((await store.walletTx({ actionId: 'sweep:1' }))!.state, 'confirmed')

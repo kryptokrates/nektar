@@ -103,7 +103,10 @@ Per handler, list each statement as inside/outside `ctx.run`:
   for cadences). Also check the arming body's service kind: a
   self-armer registered as a basic SERVICE runs concurrent invocations
   (no key FIFO) — concurrent ticks each arm, and single-flight intent
-  needs an object on a fixed key.
+  needs an object on a fixed key. The same rule covers ANY floor that
+  scans+fans: `sweep` ran as a service, so its boot scan and tick scan
+  could run concurrently, each journaling its own snapshot and
+  fanning the same rows — converted to an object on `'main'`.
 - `ctx.sleep` inside an exclusive handler = `rt/sleep-blocks-key`; the
   long-wait pattern is a delayed send to self, not a sleep.
 - Producer pokes need the same converging discipline as arms. Count who

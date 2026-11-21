@@ -711,7 +711,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   openOutbox(rt)
   // boot resubmit fans out through the sweep — each row's re-air is a
   // journaled invocation on its own tx object (local: the same handler)
-  void exec.send({ service: EXEC_SVC.sweep, handler: 'boot' }, {}).catch((e) => log(`automation: sweep boot send: ${(e as Error).message}`))
+  void exec.send({ service: EXEC_SVC.sweep, handler: 'boot', key: 'main' }, {}).catch((e) => log(`automation: sweep boot send: ${(e as Error).message}`))
   // the floor + cadence chains boot-kick once — each tick self-arms the
   // next. intervalMs===0 disables the deals floor entirely.
   if (cfg.intervalMs !== 0)
@@ -768,7 +768,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               // the scan is a journaled service invocation that sends each
               // observation to its row's tx object — the pass doesn't block
               // on it
-              void exec.send({ service: EXEC_SVC.sweep, handler: 'tick' }, {}).catch((e) => log(`automation: sweep tick send: ${(e as Error).message}`))
+              void exec
+                .send({ service: EXEC_SVC.sweep, handler: 'tick', key: 'main' }, {})
+                .catch((e) => log(`automation: sweep tick send: ${(e as Error).message}`))
             }
             rt.pushAcks()
             const t3 = Date.now()

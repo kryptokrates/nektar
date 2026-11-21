@@ -527,7 +527,7 @@ test('T1: deal latency distribution — 3 sequential live deals', { timeout: 1_8
   }
 })
 
-test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_200_000 }, async (t) => {
+test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -659,7 +659,7 @@ test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly
 
 // ───────────────────────────── resilience ─────────────────────────────
 
-test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 1_200_000 }, async (t) => {
+test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -694,7 +694,7 @@ test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 1_
   }
 })
 
-test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeout: 1_200_000 }, async (t) => {
+test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -718,7 +718,7 @@ test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeou
   }
 })
 
-test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (live)', { timeout: 1_200_000 }, async (t) => {
+test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -757,7 +757,7 @@ test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (
   }
 })
 
-test('R4: partition both hosts → deaf window → heal → completes, no double-broadcast (live)', { timeout: 1_200_000 }, async (t) => {
+test('R4: partition both hosts → deaf window → heal → completes, no double-broadcast (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -799,7 +799,7 @@ test('R4: partition both hosts → deaf window → heal → completes, no double
   }
 })
 
-test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)', { timeout: 1_200_000 }, async (t) => {
+test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -838,7 +838,7 @@ test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)',
   }
 })
 
-test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 1_200_000 }, async (t) => {
+test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -864,7 +864,7 @@ test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 1
   }
 })
 
-test('R7: late escrow rejection → funding_failed via txFacts verdict (live)', { timeout: 1_200_000 }, async (t) => {
+test('R7: late escrow rejection → funding_failed via txFacts verdict (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -905,7 +905,7 @@ test('R7: late escrow rejection → funding_failed via txFacts verdict (live)', 
   }
 })
 
-test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settlements (live)', { timeout: 1_200_000 }, async (t) => {
+test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settlements (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR

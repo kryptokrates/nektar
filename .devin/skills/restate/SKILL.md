@@ -115,7 +115,12 @@ journaled at the right grain.
    payload) or drop dedup on idempotent legs. And the dedup store
    itself: an in-memory Set/Map that `clear()`s at a cap re-fires every
    pending send in one burst — evict-by-age (expired windows, fired
-   arms) and bound the map (`rt/dedup-map-reset`).
+   arms) and bound the map (`rt/dedup-map-reset`). And the map is only
+   ever the cheap pre-filter: it dies at restart while queued
+   invocations live on, so the fan-out send carries the same window as
+   a bucketed ingress key (`fan:adv:<op>:<floor(now/ms)>`) — a
+   post-restart re-fan dedupes against the still-pending leg instead
+   of piling one fresh invocation per row (`rt/fan-dedup-restart-gap`).
 3. **Same-key discipline — both directions.** Map which keys write
    which rows. Cross-key writers of one row without CAS =
    `rt/key-collision`. A same-key request-response `call` (or A↔B
@@ -245,7 +250,7 @@ DB authoritative, use Restate's guarantees as the consistency helpers.
 | Restate concept          | nektar surface                                                                                                                    |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
 | Virtual Object per key   | `EXEC_SVC` objects — tx/`actionId`, deal/want, custody/`actionId` (legs)                                                          |
-| Fixed-key object         | `TRANSPORT_DRAIN_KEY`, `CRON_KEY`, `CUSTODY_KEY` (resubmit scan), upkeep/watchdog/watches                                         |
+| Fixed-key object         | `TRANSPORT_DRAIN_KEY`, `CRON_KEY`, `CUSTODY_KEY` (resubmit scan), sweep/`'main'`, upkeep/watchdog/watches                         |
 | `ctx.run` journaled step | handler bodies in `services.ts` — thin wrappers over domain code                                                                  |
 | Delayed send             | due arms, drain self-arm at `nextOutboxAt`, dealfan/cron self-arms                                                                |
 | Send (detached)          | `rtSend`/`exec.send` — dealfan fan-outs, wake cycle-tails, boot pokes                                                             |

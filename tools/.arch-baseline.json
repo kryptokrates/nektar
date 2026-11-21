@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 12770,
+      "loc": 12794,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1344,
@@ -213,11 +213,11 @@
       "fanout": 13
     },
     "packages/automation/src/rt/services.ts": {
-      "loc": 810,
+      "loc": 832,
       "fanout": 6
     },
     "packages/automation/src/runtime.ts": {
-      "loc": 1116,
+      "loc": 1118,
       "fanout": 29
     },
     "packages/automation/src/store.ts": {

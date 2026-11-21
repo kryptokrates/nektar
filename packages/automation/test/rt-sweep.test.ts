@@ -50,13 +50,13 @@ test('sweep.tick: observations fan out to per-key tx invocations and commit', as
       resubmitRows: async () => [],
       log: () => {}
     })
-    const r = await ex.call<{ sent: number }>({ service: EXEC_SVC.sweep, handler: 'tick' }, {})
+    const r = await ex.call<{ sent: number }>({ service: EXEC_SVC.sweep, handler: 'tick', key: 'main' }, {})
     assert.equal(r.sent, 1)
     await ex.drain()
     assert.equal((await store.walletTx({ actionId: 's:1' }))!.state, 'submission_unknown')
 
     // a second sweep delivering a verified proof revives through the same object
-    const r2 = await ex.call<{ sent: number }>({ service: EXEC_SVC.sweep, handler: 'tick' }, {})
+    const r2 = await ex.call<{ sent: number }>({ service: EXEC_SVC.sweep, handler: 'tick', key: 'main' }, {})
     assert.equal(r2.sent, 1)
     await ex.drain()
     assert.equal((await store.walletTx({ actionId: 's:1' }))!.state, 'confirmed')
@@ -86,7 +86,7 @@ test('sweep.boot: prepared rows re-air through tx.resubmit — the coordinator l
       resubmitRows: async () => [{ actionId: 's:boot' }],
       log: () => {}
     })
-    const r = await ex.call<{ sent: number }>({ service: EXEC_SVC.sweep, handler: 'boot' }, {})
+    const r = await ex.call<{ sent: number }>({ service: EXEC_SVC.sweep, handler: 'boot', key: 'main' }, {})
     assert.equal(r.sent, 1)
     await ex.drain()
     assert.deepEqual(submits, ['s:boot'])

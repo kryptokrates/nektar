@@ -28,6 +28,7 @@ import {
   fetchBroadcasterFeeRate,
   statusStream,
   utxoSpendStatus,
+  utxoSpender,
   type MainnetConfig
 } from './mainnet.js'
 import { TemporalSources, type TemporalSource } from './temporal.js'
@@ -65,6 +66,11 @@ export interface ChainPort {
    *  prove absence, so they answer 'spent' or 'unknown'. Callers burn on
    *  'spent' only; 'unknown' must never burn or block. */
   spendStatus?: (txid: string, vout: number) => Promise<'spent' | 'unspent' | 'unknown'>
+  /** the verified spender's txid for an outpoint — same evidence bar as
+   *  spendStatus ('spent' must name its tx: own utxo index, or an index
+   *  claim whose served bytes provably spend it). undefined = no provable
+   *  spender — the port either can't see one or doesn't carry the index */
+  spenderOf?: (txid: string, vout: number) => Promise<string | undefined>
   /** first-party utxo view — this port's spendStatus can answer 'unspent'
    *  honestly. Live indexes can never prove absence and leave it unset;
    *  consumers gate 'unspent'-oracles (Funds.liveCheck) on the flag instead
@@ -138,6 +144,7 @@ export function memoryPort(chain: TestChain): ChainPort {
       return undefined
     },
     spendStatus: (txid, vout) => chain.utxoStatus(txid, vout),
+    spenderOf: async (txid, vout) => await chain.spenderOf?.(txid, vout),
     provesUnspent: true,
     height: () => chain.currentHeight(),
     abandonAfterBlocks: 100,
@@ -275,6 +282,7 @@ export async function livePort(mc: MainnetConfig & { feeRateSatPerKb?: number },
       return undefined
     },
     spendStatus: (txid, vout) => utxoSpendStatus(mc, tracker, txid, vout),
+    spenderOf: (txid, vout) => utxoSpender(mc, tracker, txid, vout),
     height: () => tracker.currentHeight(),
     abandonAfterBlocks: Number(nektarEnv('NEKTAR_ABANDON_BLOCKS') ?? 6),
     openHintStream:

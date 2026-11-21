@@ -30,6 +30,7 @@ export {
   tscToMerklePath,
   discoverUtxos,
   utxoSpendStatus,
+  utxoSpender,
   importFundingTx,
   statusStream
 } from './mainnet.js'

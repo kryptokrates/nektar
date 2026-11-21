@@ -338,6 +338,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     tip: () => mem.tipRef(),
     fetchTx: (txid) => mem.fetchTx(txid),
     txFacts: (txid) => mem.txFacts(txid),
+    spenderOf: async (txid, vout) => await mem.spenderOf?.(txid, vout),
     broadcast: (tx) => mem.broadcastTx(tx),
     txWire: (txid, maxBytes) => mem.txWire(txid, maxBytes),
     readTx: (hex) => mem.readTxWire(hex),

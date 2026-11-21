@@ -2340,3 +2340,72 @@ test(
     }
   }
 )
+
+// P's file-run failure as a deterministic repro: the escrow observes on-chain
+// (sabotage error), the op resumes to awaiting_disclosure, the seller
+// completes anyway, the refundAfter deadline fires — the refund broadcast can
+// never land (UTXO_SPENT). The buyer must classify the spender (completion vs
+// own refund) and claim the disclosure from the completion tx itself —
+// a finished deal is 'disclosure_verified', not a stranded refund.
+test('bstack P3: refund deadline races a landed completion — chain evidence resolves the deal, no doomed retries', { timeout: 300_000 }, async (t) => {
+  const chain = (await testChain(t))!
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  let b!: A
+  let s!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url], chain, logs, dir, opts: { refundBlocks: 12 } })
+    s = await mkagent('seller', { hosts: [h1.url], chain, logs, dir, opts: { refundBlocks: 12 } })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    const sab = sabotageEscrowBroadcast(b, s, chain, false)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
+    assert.ok(
+      await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 240000),
+      'escrow never observed | ' + logs.slice(-25).join(' | ')
+    )
+    assert.ok(sab.txid() !== undefined, 'the sabotaged escrow broadcast happened')
+    // seller goes dark — the deadline must rescue the depositor
+    await s.rt.stop()
+    const ra = Number(((await buyerOp(b))!.data.escrow as { refundAfter: number | string }).refundAfter)
+    await chain.mine(Math.max(1, ra - (await b.mem.chainHeight()) + 1))
+    assert.ok(
+      await until([b.rt], chain, async () => {
+        const o = await buyerOp(b)
+        return o?.state === 'disclosure_verified' || o?.state === 'refunded' || Number(o?.data?.refundTries ?? 0) > 0
+      }, 120000),
+      'neither the claim nor the refund ever resolved | ' + logs.slice(-25).join(' | ')
+    )
+    const bo = (await buyerOp(b))!
+    const evs = await b.rt.store.events(bo.operationId)
+    // the completion landed first — the deal is CLAIMABLE, not refundable.
+    // The op must classify the spender and settle as a verified purchase.
+    assert.equal(
+      bo.state,
+      'disclosure_verified',
+      `expected disclosure_verified, got ${bo.state} — lastRefusalReason=${bo.data.lastRefusalReason} | ` + logs.slice(-25).join(' | ')
+    )
+    assert.ok(
+      evs.some((e) => e.cause === 'escrow_spent_by_completion'),
+      'the spent-escrow classification never ran: ' + evs.map((e) => e.cause).join(',')
+    )
+    assert.equal(bo.data.refundTries ?? 0, 0, 'no doomed refund retries burned')
+    const result = bo.data.result as { verified?: boolean } | undefined
+    assert.equal(result?.verified, true, 'the disclosure did not verify')
+    await b.rt.stop()
+  } finally {
+    try {
+      await b?.rt.stop()
+    } catch {
+      /* already stopped */
+    }
+    try {
+      await s?.rt.stop()
+    } catch {
+      /* already stopped */
+    }
+    await h1.close()
+  }
+})

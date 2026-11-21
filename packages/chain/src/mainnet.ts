@@ -770,29 +770,51 @@ export async function utxoSpendStatus(
   return await Promise.race([spendProbe(c, tracker, txid, vout), sleep(4_000).then(() => 'unknown' as const)])
 }
 
+/** same evidence bar as utxoSpendStatus, but answers with the verified
+ *  spender's txid — callers that need to classify WHO moved an outpoint
+ *  (refund-vs-completion) take the named tx, not just the verdict */
+export async function utxoSpender(
+  cfg: MainnetConfig | undefined,
+  tracker: Pick<ChainTracker, 'isValidRootForHeight'>,
+  txid: string,
+  vout: number
+): Promise<string | undefined> {
+  const c = def(cfg)
+  return await Promise.race([spenderProbe(c, tracker, txid, vout), sleep(4_000).then(() => undefined)])
+}
+
 async function spendProbe(
   c: ReturnType<typeof def>,
   tracker: Pick<ChainTracker, 'isValidRootForHeight'>,
   txid: string,
   vout: number
 ): Promise<'spent' | 'unknown'> {
+  return (await spenderProbe(c, tracker, txid, vout)) !== undefined ? 'spent' : 'unknown'
+}
+
+async function spenderProbe(
+  c: ReturnType<typeof def>,
+  tracker: Pick<ChainTracker, 'isValidRootForHeight'>,
+  txid: string,
+  vout: number
+): Promise<string | undefined> {
   try {
     const j = await c.index.txJson(txid)
-    if (j === undefined) return 'unknown'
+    if (j === undefined) return undefined
     const claim = j.outputs?.[vout]?.spentTxId
-    if (typeof claim !== 'string' || !/^[0-9a-fA-F]{64}$/.test(claim)) return 'unknown'
+    if (typeof claim !== 'string' || !/^[0-9a-fA-F]{64}$/.test(claim)) return undefined
     const spending = await fetchRawTx(c, claim)
-    if (spending === undefined) return 'unknown'
+    if (spending === undefined) return undefined
     // the spend claim is only evidence when the served bytes name OUR
     // outpoint as an input — anything else is the index's word, ignored
-    if (!spending.inputs.some((i) => String(i.sourceTXID).toLowerCase() === txid && i.sourceOutputIndex === vout)) return 'unknown'
+    if (!spending.inputs.some((i) => String(i.sourceTXID).toLowerCase() === txid && i.sourceOutputIndex === vout)) return undefined
     const proof = await merklePathMainnet(c, claim)
     if (proof !== undefined && proof !== null) {
       const root = proof.merklePath.computeRoot(claim)
-      if (!(await tracker.isValidRootForHeight(root, proof.merklePath.blockHeight))) return 'unknown'
+      if (!(await tracker.isValidRootForHeight(root, proof.merklePath.blockHeight))) return undefined
     }
-    return 'spent'
+    return claim
   } catch {
-    return 'unknown'
+    return undefined
   }
 }

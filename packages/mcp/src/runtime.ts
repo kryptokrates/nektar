@@ -405,6 +405,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     isValidRootForHeight: (r: string, h: number) => port.tracker.isValidRootForHeight(r, h),
     getTx: port.getTx,
     isRejected: port.isRejected,
+    spenderOf: port.spenderOf,
     headerAtHeight: (h: number) => temporal.headerAtHeight(h),
     tipHeight: async () => await port.height()
   }

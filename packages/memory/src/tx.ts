@@ -75,6 +75,13 @@ export abstract class MemTx extends MemKeys {
     return await this.txOps.txFacts(txid)
   }
 
+  /** the verified spender's txid for an outpoint — refund-vs-completion
+   *  evidence (ChainPort.spenderOf; the composed chain surface carries it
+   *  where the port can name one). undefined is 'unknown', never 'unspent' */
+  async spenderOf(txid: string, vout: number): Promise<string | undefined> {
+    return await (this.chain as { spenderOf?: (t: string, v: number) => Promise<string | undefined> }).spenderOf?.(txid, vout)
+  }
+
   /** any tx this instance broadcast and remembers — anchor or attestation
    *  (model-verifier deploy/spend land in attestationTxs too) */
   knownTx(txid: string) {

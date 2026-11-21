@@ -33,6 +33,8 @@ export interface TestChain extends ChainTracker, Broadcaster {
   fetchTx(txid: string): Promise<Transaction | undefined>
   merklePathOf(txid: string): Promise<MerklePath | undefined>
   utxoStatus(txid: string, vout: number): Promise<'unspent' | 'spent' | 'unknown'>
+  /** the txid that spent this outpoint — 'spent' names its spender */
+  spenderOf?(txid: string, vout: number): Promise<string | undefined>
   pendingBroadcasts(): Promise<number>
   mine(n?: number): Promise<void>
 }

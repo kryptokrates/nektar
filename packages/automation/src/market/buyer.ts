@@ -815,7 +815,62 @@ export abstract class BuyerOps extends SellerOps {
     }
   }
 
+  /** the covenant admits exactly two spenders: the seller's completion (the
+   *  disclosure rides THAT tx — the deal is claimable, not lost) and our own
+   *  refund (the money already came back). When chain evidence names the
+   *  spender, classify it: a completion replays through the verified
+   *  delivered path (spendValid + claim), a depositor spend is 'refunded'.
+   *  Returns true when the op was transitioned — no refund attempt needed. */
+  private async resolveSpentEscrow(op: Operation, utxo: { txid: string; vout: number }, pa?: { approvalId?: string }): Promise<boolean> {
+    if (this.d.spenderOf === undefined) return false
+    const spender = await this.d.spenderOf(utxo.txid, utxo.vout).catch(() => undefined)
+    if (spender === undefined) return false
+    const tx = await this.d.fetchTx(spender).catch(() => undefined)
+    if (tx === undefined) return false
+    const escrow = op.data.escrow as { sellerPkh?: string; depositorPkh?: string } | undefined
+    const out0 = tx.outputs[0]?.lockingScript.toHex()
+    const lock = (pkh: string | undefined) =>
+      pkh === undefined ? undefined : new P2PKH().lock(Array.from(fromHex(pkh))).toHex()
+    if (out0 !== undefined && out0 === lock(escrow?.depositorPkh)) {
+      // our earlier refund aired — the money already came back
+      if (pa?.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
+      await this.d.store.refundBudget(op.data.escrowAction as string)
+      await this.d.store.transition(op.operationId, op.revision, 'refunded', {
+        cause: 'refund_observed_on_chain',
+        data: { refundTxid: spender, refundSats: tx.outputs[0]!.satoshis, refundTries: 0 },
+        dueHeight: null,
+        evidence: { txid: spender }
+      })
+      return true
+    }
+    if (out0 !== undefined && out0 === lock(escrow?.sellerPkh)) {
+      // the seller completed — the disclosure preimage rides that exact tx.
+      // Replay it through the delivered path (re-runs spendValid + claim)
+      // instead of treating a finished deal as a stranded refund.
+      const sel = op.data.selected as { key: string }
+      const chosen = (op.data.offers as Record<string, StoredOffer>)[sel.key]
+      const w = (op.data.want as SignedWant).want
+      if (chosen === undefined) return false
+      if (pa?.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
+      await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
+        cause: 'escrow_spent_by_completion',
+        data: {
+          pendingDelivered: { from: chosen.so.offer.pub, m: { type: 'delivered', wantId: w.wantId, offerId: chosen.so.offer.offerId, txid: spender }, refs: undefined },
+          pendingApproval: null,
+          refundTries: 0
+        },
+        dueHeight: null
+      })
+      return true
+    }
+    return false
+  }
+
   private async refund(op: Operation): Promise<void> {
+    const utxo = op.data.utxo as { txid: string; vout: number } | undefined
+    // the deadline fired — but if chain evidence already names the escrow's
+    // spender, a refund broadcast can never land. Classify first.
+    if (utxo !== undefined && (await this.resolveSpentEscrow(op, utxo))) return
     const next = await this.d.store.transition(op.operationId, op.revision, 'refunding', { cause: 'refund_deadline_reached' })
     const r = await this.d.call('sale#refund', { cfg: op.data.escrow, utxo: op.data.utxo })
     if (r.accepted === true) {
@@ -975,6 +1030,11 @@ export abstract class BuyerOps extends SellerOps {
     }
     if (tries >= 5) return
     if (!this.reconcileGate(op.operationId, op.data.escrowTxid as string | undefined, op.nextReconcileAt)) return
+    // chain evidence first: if the outpoint is already spent, a refund
+    // broadcast can never land — classify the spender (completion vs our own
+    // earlier refund) instead of burning a try on a doomed tx
+    const utxo = op.data.utxo as { txid: string; vout: number } | undefined
+    if (utxo !== undefined && (await this.resolveSpentEscrow(op, utxo, pa))) return
     const r = await this.d.call('sale#refund', { cfg: op.data.escrow, utxo: op.data.utxo })
     if (r.accepted === true) {
       await this.d.store.refundBudget(op.data.escrowAction as string)
@@ -991,6 +1051,15 @@ export abstract class BuyerOps extends SellerOps {
         cause: 'refund_retry_immature',
         dueHeight: refundAfter > 0 ? refundAfter : null,
         data: { refundTries: 0 }
+      })
+    } else if (/spent|missing.*(input|utxo)|conflict|double/i.test(String((r as { reason?: string }).reason ?? ''))) {
+      // the broadcaster says the outpoint is already spent — that spend
+      // evidence classifies, never retries: the next reconcile's
+      // spenderOf probe names it (completion or our own refund)
+      const reason = String((r as { reason?: string }).reason ?? '').slice(0, 200)
+      await this.d.store.transition(op.operationId, op.revision, 'uncertain', {
+        cause: 'refund_retry_spent',
+        data: { lastRefusalReason: reason }
       })
     } else {
       // the refusal reason is the only evidence a stranded-funds postmortem
@@ -1212,16 +1281,18 @@ export abstract class BuyerOps extends SellerOps {
         // a late rejection beats the refund path: the escrow never settled, so
         // the locked amount never left — releaseBudget frees the committed row
         const txid = op.data.escrowTxid as string | undefined
-        if (
-          txid !== undefined &&
-          this.d.txFacts !== undefined &&
-          this.reconcileGate(op.operationId, txid, op.nextReconcileAt) &&
-          (await this.d.txFacts(txid)).verdict === 'dead'
-        ) {
-          await this.d.store.releaseBudget(op.data.escrowAction as string)
-          await this.d.store.releaseLeases(op.data.escrowAction as string)
-          await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected_late', dueHeight: null })
-          return
+        if (txid !== undefined && this.d.txFacts !== undefined && this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) {
+          // the escrow's own chain evidence can deliver what a starved note
+          // could not: a landed completion IS the disclosure — classify the
+          // spender before concluding anything about the escrow tx itself
+          const utxo = op.data.utxo as { txid: string; vout: number } | undefined
+          if (utxo !== undefined && (await this.resolveSpentEscrow(op, utxo))) return
+          if ((await this.d.txFacts(txid)).verdict === 'dead') {
+            await this.d.store.releaseBudget(op.data.escrowAction as string)
+            await this.d.store.releaseLeases(op.data.escrowAction as string)
+            await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected_late', dueHeight: null })
+            return
+          }
         }
         if (op.dueHeight !== undefined && height >= op.dueHeight) {
           // direct rail: the payment is final and the deliver-by lapsed —

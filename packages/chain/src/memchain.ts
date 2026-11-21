@@ -72,6 +72,8 @@ export class MemoryChain implements TestChain {
   /** outpoints consumed by accepted txs, mempool or mined */
   private spent = new Set<string>()
   private spentBy = new Map<string, string[]>()
+  /** outpoint → the txid that spends it — 'spent' names its spender */
+  private spentIdx = new Map<string, string>()
   /** coinbase txid → the height it was mined at (for the maturity rule) */
   private coinbases = new Map<string, number>()
   private rejectedSet = new Set<string>()
@@ -240,7 +242,11 @@ export class MemoryChain implements TestChain {
       }
     }
 
-    for (const inp of copy.inputs) this.spent.add(`${inp.sourceTXID}:${inp.sourceOutputIndex}`)
+    for (const inp of copy.inputs) {
+      const op = `${inp.sourceTXID}:${inp.sourceOutputIndex}`
+      this.spent.add(op)
+      this.spentIdx.set(op, txid)
+    }
     this.spentBy.set(
       txid,
       copy.inputs.map((i) => `${i.sourceTXID}:${i.sourceOutputIndex}`)
@@ -274,7 +280,10 @@ export class MemoryChain implements TestChain {
       this.mempool.delete(id)
       this.known.delete(id)
       this.rejectedSet.add(id)
-      for (const op of this.spentBy.get(id) ?? []) this.spent.delete(op)
+      for (const op of this.spentBy.get(id) ?? []) {
+        this.spent.delete(op)
+        this.spentIdx.delete(op)
+      }
       this.spentBy.delete(id)
       this.events.report({ txid: id, status: 'rejected' })
     }
@@ -451,6 +460,12 @@ export class MemoryChain implements TestChain {
     const rec = this.known.get(txid)
     if (rec === undefined || vout < 0 || vout >= rec.snapshot.outputs.length) return 'unknown'
     return this.spent.has(`${txid}:${vout}`) ? 'spent' : 'unspent'
+  }
+
+  /** the txid that spent this outpoint, when the chain's own record names
+   *  one — mempool spends count (they're signed, accepted, and will land) */
+  async spenderOf(txid: string, vout: number): Promise<string | undefined> {
+    return this.spentIdx.get(`${txid}:${vout}`)
   }
 
   async pendingBroadcasts(): Promise<number> {

@@ -43,6 +43,10 @@ export interface AutomationHost extends MarketMemory {
    *  its source, held bytes/proof/depth, and the outside hint in a separate
    *  field that can never be mistaken for the verdict */
   txFacts(txid: string): Promise<import('@nektar/chain').TxFacts>
+  /** the verified spender's txid for an outpoint — the refund-vs-completion
+   *  discriminator (ChainPort.spenderOf). Absent where the port can't name
+   *  one; callers treat undefined as 'unknown', never 'unspent' */
+  spenderOf?(txid: string, vout: number): Promise<string | undefined>
   broadcastTx(tx: Transaction): Promise<BroadcastResult>
   /** a tx our broadcast refused still aired — the counterparty re-broadcast
    *  the signed bytes it was handed. Retro-counts its spend in the guard's

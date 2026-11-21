@@ -73,6 +73,11 @@ const OPS_CAUSE_MAP: Record<string, Candidate[]> = {
   refund_retry_refused: [{ event: 'refund.dead', guards: ['verified'] }],
   refund_retry_immature: [{ event: 'refund.retry' }],
   refund_wait_height: [{ event: 'refund.retry' }],
+  refund_retry_spent: [{ event: 'refund.dead', guards: ['verified'] }],
+  // chain evidence that the escrow moved: a depositor spend is the refund
+  // that already landed; a seller spend parks the disclosure for replay
+  refund_observed_on_chain: [{ event: 'refund.sent' }],
+  escrow_spent_by_completion: [{ event: 'delivered.parked' }],
   refund_proven: [{ event: 'refund.proven', guards: ['proof'] }],
   refused_escrow_landed: [{ event: 'escrow.landed', guards: ['verdict=mined'] }],
   landed_escrow_gone: [{ event: 'escrow.gone', guards: ['verdict=dead'] }],

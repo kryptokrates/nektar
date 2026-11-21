@@ -1,4 +1,4 @@
-import { PublicKey, type PrivateKey, type Transaction } from '@bsv/sdk'
+import { PublicKey, type Transaction } from '@bsv/sdk'
 import type { SignedOffer, SignedWant } from '@nektar/bstack'
 import type { Ingested } from '@nektar/chain'
 import type { SignerLike } from '@nektar/core'
@@ -112,6 +112,10 @@ export interface MarketDeps {
    *  settlement states without waiting on block heights; money decisions
    *  read `verdict`, the outside word stays in `hint` */
   txFacts?: (txid: string) => Promise<import('@nektar/chain').TxFacts>
+  /** the verified spender's txid for an outpoint — the refund-vs-completion
+   *  discriminator. Absent where the host can't name one; undefined is
+   *  'unknown', never 'unspent' */
+  spenderOf?: (txid: string, vout: number) => Promise<string | undefined>
   /** confirmations a proof must carry before `completion_submitted` may
    *  settle — a depth-1 proof sits one reorg away from vanishing (default 1:
    *  settle on first sight, the regtest behaviour) */

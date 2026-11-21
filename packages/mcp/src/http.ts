@@ -48,7 +48,12 @@ export const OPENAPI = {
         summary:
           'self-serve testnet drip — {address} → {txid, sats}. Only when the operator opts in (NEKTAR_FAUCET=1, never on main); one drip per address, daily cap — see faucet-drips.json.',
         requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { address: { type: 'string' } }, required: ['address'] } } } },
-        responses: { 200: { description: 'dripped' }, 400: { description: 'bad/missing address' }, 404: { description: 'faucet not enabled' }, 429: { description: 'address already dripped or daily cap' } }
+        responses: {
+          200: { description: 'dripped' },
+          400: { description: 'bad/missing address' },
+          404: { description: 'faucet not enabled' },
+          429: { description: 'address already dripped or daily cap' }
+        }
       }
     },
     '/v1/openapi.json': { get: { summary: 'this document', responses: { 200: { description: 'OpenAPI 3.1' } } } },

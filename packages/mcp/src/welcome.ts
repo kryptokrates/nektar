@@ -44,7 +44,10 @@ export async function seedWelcome(p: {
     for (const d of RECORDS) {
       // a record that refuses (e.g. an instance opted into signed provenance)
       // must not take the rest of the welcome down with it — boot stays alive
-      await p.mem.remember(SHARD, d, { source: 'nektar-welcome' }).then(() => seeded++, (e) => log(`welcome: record refused: ${(e as Error).message.slice(0, 120)}`))
+      await p.mem.remember(SHARD, d, { source: 'nektar-welcome' }).then(
+        () => seeded++,
+        (e) => log(`welcome: record refused: ${(e as Error).message.slice(0, 120)}`)
+      )
     }
     writeFileSync(marker, `seeded:${seeded}`)
     if (seeded > 0) log(`welcome: seeded ${seeded} records into '${SHARD}'`)

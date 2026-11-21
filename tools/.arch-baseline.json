@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 10676,
+      "loc": 10863,
       "pkgFanout": 18,
       "edges": [
         "anchor",
@@ -127,7 +127,7 @@
         "verify",
         "zk"
       ],
-      "maxFileLoc": 858,
+      "maxFileLoc": 891,
       "maxFileFanout": 24,
       "instability": 0.947
     },
@@ -245,8 +245,8 @@
       "fanout": 6
     },
     "packages/mcp/src/http.ts": {
-      "loc": 858,
-      "fanout": 11
+      "loc": 891,
+      "fanout": 12
     },
     "packages/mcp/src/memory.ts": {
       "loc": 319,

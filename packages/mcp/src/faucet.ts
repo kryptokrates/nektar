@@ -6,7 +6,7 @@
 // whole extra defense: one drip per address, a daily sats ceiling, both in a
 // persisted ledger a restart can't reset, plus a single-flight lock so a
 // double-click can't race two drips onto one UTXO set.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { P2PKH } from '@bsv/sdk'
 import { nektarEnvFlag, nektarEnvNum, nektarEnv, type EnvSource } from '@nektar/core'
@@ -24,7 +24,7 @@ interface FaucetLedger {
 }
 
 export const FAUCET_DEFAULT_SATS = 250_000
-export const FAUCET_DEFAULT_DAILY_SATS = 5_000_000
+const FAUCET_DEFAULT_DAILY_SATS = 5_000_000
 
 /** the route gate, evaluated per request so env changes take effect live:
  *  opted in, and never on main — a faucet is a testnet artifact; a mainnet

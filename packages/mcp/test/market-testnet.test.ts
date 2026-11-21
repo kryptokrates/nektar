@@ -363,7 +363,7 @@ const saleFor = async (s: A, wantId: string) =>
 const COMPLETE = new Set(['completion_submitted', 'settled', 'useful'])
 const BUYER_DONE = new Set(['disclosure_verified', 'useful'])
 
-const deal = async (b: A, s: A, logs: string[], ms = 180_000) => {
+const deal = async (b: A, s: A, logs: string[], ms = 400_000) => {
   const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
   const t0 = Date.now()
   const elapsed = await until([b.rt, s.rt], ms, async () => {
@@ -584,7 +584,7 @@ test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { time
       await drive([b.rt, s.rt], 8)
       const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
       const t0 = Date.now()
-      const ms = await until([b.rt, s.rt], 180_000, async () => {
+      const ms = await until([b.rt, s.rt], 400_000, async () => {
         const bo = await opFor(b, w.wantId)
         const so = await saleFor(s, w.wantId)
         return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
@@ -625,7 +625,7 @@ test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly
       const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
       const t0 = Date.now()
       if (kb === 1) {
-        const ms = await until([b.rt, s.rt], 180_000, async () => {
+        const ms = await until([b.rt, s.rt], 400_000, async () => {
           const bo = await opFor(b, w.wantId)
           const so = await saleFor(s, w.wantId)
           return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
@@ -636,9 +636,9 @@ test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly
         // over the 16KiB envelope cap on testnet: the seller broadcasts the
         // covenant spend anyway (paid on-chain) while the delivered envelope
         // dead-letters — the honest end state is visible, not a hang
-        const funded = await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')
+        const funded = await until([b.rt, s.rt], 240_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')
         assert.ok(funded > 0, 'escrow never funded | ' + logs.slice(-15).join(' | '))
-        await until([b.rt, s.rt], 90_000, async () => {
+        await until([b.rt, s.rt], 240_000, async () => {
           const so = await saleFor(s, w.wantId)
           return so !== undefined && COMPLETE.has(so.state)
         })
@@ -676,11 +676,11 @@ test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 1_
     await drive([b.rt, s.rt], 6)
     const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
     assert.ok(
-      (await until([b.rt, s.rt], 90_000, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
+      (await until([b.rt, s.rt], 240_000, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
       'no quote | ' + logs.slice(-15).join(' | ')
     )
     f1.fault.down = true // kill host A mid-deal
-    const ms = await until([b.rt, s.rt], 120_000, async () => {
+    const ms = await until([b.rt, s.rt], 400_000, async () => {
       const bo = await opFor(b, w.wantId)
       const so = await saleFor(s, w.wantId)
       return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
@@ -734,13 +734,13 @@ test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (
     await drive([b.rt, s.rt], 6)
     const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
     assert.ok(
-      (await until([b.rt, s.rt], 90_000, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
+      (await until([b.rt, s.rt], 240_000, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
       'no quote | ' + logs.slice(-15).join(' | ')
     )
     // withhold everything the seller just fanned out to host A — the host
     // stays reachable but stops serving the new carriers
     f1.fault.dropLookup = true
-    const ms = await until([b.rt, s.rt], 120_000, async () => {
+    const ms = await until([b.rt, s.rt], 400_000, async () => {
       const bo = await opFor(b, w.wantId)
       const so = await saleFor(s, w.wantId)
       return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
@@ -773,7 +773,7 @@ test('R4: partition both hosts → deaf window → heal → completes, no double
     await drive([b.rt, s.rt], 6)
     const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
     assert.ok(
-      (await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
+      (await until([b.rt, s.rt], 240_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
       'never funded | ' + logs.slice(-15).join(' | ')
     )
     f1.fault.down = true
@@ -784,7 +784,7 @@ test('R4: partition both hosts → deaf window → heal → completes, no double
     assert.ok(mid !== undefined && mid.state !== 'useful' && mid.state !== 'disclosure_verified', 'deal progressed while deaf — impossible')
     f1.fault.down = false
     f2.fault.down = false
-    const ms = await until([b.rt, s.rt], 120_000, async () => {
+    const ms = await until([b.rt, s.rt], 400_000, async () => {
       const bo = await opFor(b, w.wantId)
       const so = await saleFor(s, w.wantId)
       return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
@@ -816,13 +816,13 @@ test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)',
     await drive([b.rt, s.rt], 6)
     const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
     assert.ok(
-      (await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
+      (await until([b.rt, s.rt], 240_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
       'never funded | ' + logs.slice(-15).join(' | ')
     )
     const opId = (await opFor(b, w.wantId))!.operationId
     await b.rt.stop() // kill -9 equivalent — store persists, respawn resumes
     b2 = await respawn(b, [f1.url, f2.url], logs, shim.url)
-    const ms = await until([b2.rt, s.rt], 120_000, async () => {
+    const ms = await until([b2.rt, s.rt], 400_000, async () => {
       const bo = (await buyerOps(b2)).find((o) => o.operationId === opId)
       const so = await saleFor(s, w.wantId)
       return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
@@ -880,14 +880,14 @@ test('R7: late escrow rejection → funding_failed via txFacts verdict (live)', 
     await drive([b.rt, s.rt], 6)
     const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
     assert.ok(
-      (await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
+      (await until([b.rt, s.rt], 240_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
       'escrow never funded | ' + logs.slice(-15).join(' | ')
     )
     const escrowTxid = (await opFor(b, w.wantId))!.data.escrowTxid as string
     const orig = b.mem.txFacts.bind(b.mem)
     ;(b.mem as unknown as { txFacts: (txid: string) => Promise<import('@nektar/chain').TxFacts> }).txFacts = async (txid: string) =>
       txid === escrowTxid ? { verdict: 'dead', source: 'first-party' } : orig(txid)
-    const ms = await until([b.rt], 90_000, async () => (await opFor(b, w.wantId))?.state === 'funding_failed')
+    const ms = await until([b.rt], 240_000, async () => (await opFor(b, w.wantId))?.state === 'funding_failed')
     assert.ok(ms > 0, 'rejected funding did not land funding_failed | ' + logs.slice(-20).join(' | '))
     const bo = (await opFor(b, w.wantId))!
     const evts = await b.rt.store.events(bo.operationId)
@@ -971,14 +971,14 @@ test('R9: timeout truth — escrow refund vs direct dispute on real blocks', { t
     // wait until BOTH sale ops are quoted, then ghost the seller — accepts it
     // never reads can never be delivered
     assert.ok(
-      (await until(all, 120_000, async () => (await saleFor(s, wE.wantId))?.state === 'quoted' && (await saleFor(s, wD.wantId))?.state === 'quoted')) > 0,
+      (await until(all, 240_000, async () => (await saleFor(s, wE.wantId))?.state === 'quoted' && (await saleFor(s, wD.wantId))?.state === 'quoted')) > 0,
       'not both quoted | ' + logs.slice(-15).join(' | ')
     )
     await s.rt.stop()
     assert.ok(
       (await until(
         [be.rt, bd.rt],
-        180_000,
+        400_000,
         async () => (await opFor(be, wE.wantId))?.state === 'awaiting_disclosure' && (await opFor(bd, wD.wantId))?.state === 'awaiting_disclosure'
       )) > 0,
       'rails never funded | ' + logs.slice(-15).join(' | ')

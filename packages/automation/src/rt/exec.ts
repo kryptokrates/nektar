@@ -100,7 +100,7 @@ export class RestateExecutor implements Executor {
     return `${this.ingress}/restate/${verb}/${segs}${q}`
   }
 
-  private async post(url: string, arg: unknown, idempotencyKey?: string): Promise<Response> {
+  private async post(url: string, arg: unknown, ioMs: number, idempotencyKey?: string): Promise<Response> {
     return await fetch(url, {
       method: 'POST',
       headers: {
@@ -109,17 +109,21 @@ export class RestateExecutor implements Executor {
       },
       body: JSON.stringify(arg ?? null),
       // the ingress is local — a dead/wedged one fails fast rather than parking a send
-      signal: AbortSignal.timeout(WAITS.ingressIo.ms)
+      signal: AbortSignal.timeout(ioMs)
     })
   }
 
   async send(target: InvokeTarget, arg: unknown, opts?: SendOpts): Promise<void> {
-    const r = await this.post(this.url('send', target, opts?.delayMs), arg, opts?.idempotencyKey)
+    const r = await this.post(this.url('send', target, opts?.delayMs), arg, WAITS.ingressIo.ms, opts?.idempotencyKey)
     if (!r.ok) throw new Error(`restate send ${target.service}/${target.key ?? ''}/${target.handler}: ${r.status} ${await r.text().catch(() => '')}`)
   }
 
   async call<T>(target: InvokeTarget, arg: unknown, opts?: Pick<SendOpts, 'idempotencyKey'>): Promise<T> {
-    const r = await this.post(this.url('call', target), arg, opts?.idempotencyKey)
+    // a call waits for the handler's whole key queue + leg — its abort must
+    // outlive the worst serialized leg, not just the socket. An aborted call
+    // does NOT cancel the invocation: it keeps running detached and its
+    // effect may still land — read abort as "unknown", never "failed"
+    const r = await this.post(this.url('call', target), arg, WAITS.callIo.ms, opts?.idempotencyKey)
     if (!r.ok) throw new Error(`restate call ${target.service}/${target.key ?? ''}/${target.handler}: ${r.status} ${await r.text().catch(() => '')}`)
     return (await r.json()) as T
   }

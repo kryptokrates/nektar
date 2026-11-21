@@ -15,7 +15,6 @@ import type { Executor, InvokeTarget, SendOpts, RtSend } from './exec.js'
 import { EXEC_SVC, CUSTODY_KEY, inRtScope } from './exec.js'
 import {
   txObserveBody,
-  txExpireBody,
   txResubmitBody,
   sweepTickBody,
   sweepBootBody,
@@ -64,6 +63,14 @@ export class Dispatcher implements LocalDispatch {
   private readonly timers = new Set<ReturnType<typeof setTimeout>>()
   private readonly pending = new Set<Promise<unknown>>()
   private readonly chains = new Map<string, Promise<unknown>>()
+  // ingress idempotency-key semantics, mirrored: the key maps to ONE
+  // invocation for the whole retention window — a re-sent send with the
+  // same key attaches to the original (no new dispatch), and so does a
+  // re-sent call (which resolves to the original's result, error included).
+  // The map never expires entries: tests don't outlive the window, and a
+  // completed invocation still dedupes later sends — that persistence is
+  // exactly the rt/dedup-kills-retry class this models.
+  private readonly idempotent = new Map<string, Promise<unknown>>()
   private inDispatch = 0
   private closed = false
 
@@ -102,12 +109,29 @@ export class Dispatcher implements LocalDispatch {
     return p
   }
 
+  private idemKey(t: InvokeTarget, k: string): string {
+    return `${t.service}/${t.key ?? ''}/${t.handler}#${k}`
+  }
+
   send(target: InvokeTarget, arg: unknown, opts?: SendOpts): Promise<void> {
     // a stopped executor accepts nothing — sends fired between close() and
     // store teardown must not dispatch against a closing runtime (the
     // post-teardown unhandledRejection class)
     if (this.closed) return Promise.resolve()
-    const fn = this.get(target)
+    const fn = this.get(target) // throws first — an unrouted send records no key
+    // ingress dedup — same key = the original invocation, nothing new runs.
+    // Recorded at accept-time: a delayed arm is already the invocation, so a
+    // dup arriving during the delay dedupes too
+    let idemResolve: ((v: unknown) => void) | undefined
+    if (opts?.idempotencyKey !== undefined) {
+      const k = this.idemKey(target, opts.idempotencyKey)
+      if (this.idempotent.has(k)) return Promise.resolve()
+      const tracked = new Promise<unknown>((res) => {
+        idemResolve = res
+      })
+      this.idempotent.set(k, tracked)
+      void tracked.catch(() => undefined) // the stored copy never surfaces as unhandled
+    }
     const run = (): void => {
       if (this.closed) return
       // dispatched work exits the caller's leg — a send fired inside a
@@ -123,6 +147,12 @@ export class Dispatcher implements LocalDispatch {
           }
         })
       const p = target.key === undefined ? invoke() : this.chain(`${target.service}/${target.key}`, invoke)
+      // the tracked dedup record settles with the invocation — a dup call
+      // on the same key attaches to this outcome
+      void p.then(
+        (v) => idemResolve?.(v),
+        () => idemResolve?.(undefined)
+      )
       this.pending.add(p)
       void p
         .catch((e: unknown) => {
@@ -147,9 +177,18 @@ export class Dispatcher implements LocalDispatch {
     for (let i = 0; i < 50 && this.pending.size > 0; i++) await Promise.allSettled(this.pending)
   }
 
-  async call<T>(target: InvokeTarget, arg: unknown, _opts?: Pick<SendOpts, 'idempotencyKey'>): Promise<T> {
+  async call<T>(target: InvokeTarget, arg: unknown, opts?: Pick<SendOpts, 'idempotencyKey'>): Promise<T> {
     if (this.closed) throw new Error('executor: closed')
     const fn = this.get(target)
+    // ingress dedup — a call with an existing key attaches to the original
+    // invocation and resolves to ITS result (error included), no new run
+    let idemSet: { key: string } | undefined
+    if (opts?.idempotencyKey !== undefined) {
+      const k = this.idemKey(target, opts.idempotencyKey)
+      const prior = this.idempotent.get(k)
+      if (prior !== undefined) return (await prior) as T
+      idemSet = { key: k }
+    }
     // snapshot BEFORE the handler runs: a top-level call must join the sends
     // its handler spawns — checking inDispatch after `r` resolves sees the
     // spawned legs themselves and wrongly skips the join (the legs then run
@@ -157,7 +196,14 @@ export class Dispatcher implements LocalDispatch {
     // send can't join — pending contains that very dispatch and draining
     // would deadlock on itself; the outer caller's drain covers it.
     const inner = this.inDispatch > 0
-    const r = (await (target.key === undefined ? fn(arg, target.key) : this.chain(`${target.service}/${target.key}`, () => fn(arg, target.key)))) as T
+    const p = target.key === undefined ? fn(arg, target.key) : this.chain(`${target.service}/${target.key}`, () => fn(arg, target.key))
+    // the record IS the invocation promise — a dup call attaches mid-flight
+    // and resolves to the same result, terminal error included
+    if (idemSet !== undefined) {
+      this.idempotent.set(idemSet.key, p)
+      void p.catch(() => undefined)
+    }
+    const r = (await p) as T
     if (!inner) await this.drain()
     return r
   }
@@ -169,6 +215,7 @@ export class Dispatcher implements LocalDispatch {
     this.closed = true
     for (const t of this.timers) clearTimeout(t)
     this.timers.clear()
+    this.idempotent.clear()
     await this.drain()
   }
 }
@@ -179,13 +226,11 @@ const rigSend = (ex: LocalDispatch): RtSend => ex.send.bind(ex)
 
 export const wireTx = (ex: LocalDispatch, deps: RtDeps): void => {
   const observe = txObserveBody(deps)
-  const expire = txExpireBody(deps)
   const resubmit = txResubmitBody(deps)
   // inRtScope mirrors the VO handlers: same-key emits inside the handler
   // must go direct — routing them back through exec.call would wait on
   // this very invocation (the exclusive-key self-deadlock)
   ex.register(EXEC_SVC.tx, 'observe', (arg, key) => inRtScope({ txKey: key ?? '' }, () => observe(arg as TxObserve, key ?? '')))
-  ex.register(EXEC_SVC.tx, 'expire', (arg, key) => inRtScope({ txKey: key ?? '' }, () => expire(arg, key ?? '')))
   ex.register(EXEC_SVC.tx, 'resubmit', (arg, key) => inRtScope({ txKey: key ?? '' }, () => resubmit(arg, key ?? '')))
 }
 

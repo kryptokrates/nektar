@@ -201,9 +201,18 @@ export const WAITS = {
   preflightHostIo: { ms: 5_000, class: 'io', durable: false, wake: 'floor-only' },
   preflightChainIo: { ms: 3_000, class: 'io', durable: false, wake: 'floor-only' },
   preflightStoreIo: { ms: 10_000, class: 'io', durable: false, wake: 'floor-only' },
-  /** restate ingress send/call — the sidecar is local; a wedged one fails
-   *  fast rather than parking a durable send on a dead socket */
+  /** restate ingress SEND — the sidecar is local; a wedged one fails fast
+   *  rather than parking a durable send on a dead socket. Calls get a
+   *  separate budget — see callIo */
   ingressIo: { ms: 10_000, class: 'io', durable: false, wake: 'floor-only' },
+  /** restate ingress CALL — a request-response call waits for the handler
+   *  to run on its key's queue (queue depth + leg time), so its abort must
+   *  outlive the worst serialized leg, not just the socket. An aborted call
+   *  does NOT cancel the invocation — it keeps running detached and its
+   *  effect may still land; the caller must read abort as "unknown", never
+   *  as "failed" (rt/timeout-as-verdict). Sized over the longest journaled
+   *  legs (deliverBoundMs 45s + queue) */
+  callIo: { ms: 120_000, class: 'io', durable: false, wake: 'floor-only' },
   /** the deployment-registration POST to the admin API — boot-path io */
   registerIo: { ms: 5_000, class: 'io', durable: false, wake: 'floor-only' },
   /** nap between registration attempts while the server warms up */

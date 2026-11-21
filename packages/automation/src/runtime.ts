@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { Transaction, MerklePath } from '@bsv/sdk'
 import { hintSeen } from '@nektar/chain'
 import type { Knex } from 'knex'
@@ -162,10 +163,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     mem.onReorg?.((from) => {
       // the demotion leg is a durable wake invocation — a crash can no
       // longer drop the reorg with the dead fork's proofs still marked
-      // proven; the send's idempotency key dedupes a repeat announce
-      void exec
-        .send({ service: EXEC_SVC.wake, handler: 'reorg' }, { from }, { idempotencyKey: `wake:reorg:${from}` })
-        .catch((e) => log(`automation: reorg send: ${(e as Error).message}`))
+      // proven. NO idempotency key: two distinct reorgs at the same fork
+      // height are different events — an event-identity key would drop the
+      // second demotion inside the retention window and leave that fork's
+      // dead proofs marked proven until the floor. The leg is a range
+      // update (unproveFrom/clearPaths), idempotent on a repeat announce.
+      void exec.send({ service: EXEC_SVC.wake, handler: 'reorg' }, { from }).catch((e) => log(`automation: reorg send: ${(e as Error).message}`))
     })
   // restart continuity: pending provision rows keep their chain watch —
   // without it the abandon horizon never reaps a rejected provision tx
@@ -850,10 +853,21 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     rt.countWake('txProof')
     // the leg + cycle tail is a durable wake invocation — a crash between
     // proof receipt and markProven can no longer drop the wake; the
-    // idempotency key dedupes a repeat announce for the same txid. call()
-    // keeps the inflight join the detached() spawn used to give
+    // idempotency key dedupes a repeat announce of the SAME proof. Keyed
+    // on the proof content, not the txid: a tx re-mined in a different
+    // block (post-reorg) carries a different path — deduping by txid would
+    // swallow the new path inside the retention window and the row would
+    // stay unproven until the floor. call() keeps the inflight join the
+    // detached() spawn used to give
+    const mpHex = mp.toHex()
     const work = exec
-      .call<void>({ service: EXEC_SVC.wake, handler: 'txProof' }, { txid, mpHex: mp.toHex() }, { idempotencyKey: `wake:txProof:${txid}` })
+      .call<void>(
+        { service: EXEC_SVC.wake, handler: 'txProof' },
+        { txid, mpHex },
+        {
+          idempotencyKey: `wake:txProof:${txid}:${createHash('sha256').update(mpHex).digest('hex').slice(0, 16)}`
+        }
+      )
       .catch((e: unknown) => log(`automation: txproof: ${(e as Error).message}`))
     rt.inflight.add(work)
     const done = (): void => {
@@ -867,9 +881,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     if (rt.stopped) return
     rt.countWake('txRejected')
     // a rejection callback is only a hint — the wake leg reconsults the
-    // ledger itself; the cycle tail runs inside the invocation
+    // ledger itself; the cycle tail runs inside the invocation. NO
+    // idempotency key: a resubmitted tx carries the same txid — deduping
+    // by txid would drop its second rejection inside the retention window
+    // (hint + cycle are trivially re-runnable; a repeat announce costs one
+    // journaled invocation, a dropped real rejection waits for the floor)
     const work = exec
-      .call<void>({ service: EXEC_SVC.wake, handler: 'txRejected' }, { txid }, { idempotencyKey: `wake:txRejected:${txid}` })
+      .call<void>({ service: EXEC_SVC.wake, handler: 'txRejected' }, { txid })
       .catch((e: unknown) => log(`automation: txrejected: ${(e as Error).message}`))
     rt.inflight.add(work)
     const done = (): void => {
@@ -900,8 +918,11 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   mem.onTxAbandoned((txid: string) => {
     if (rt.stopped || lanes === undefined) return
     rt.countWake('txAbandoned')
+    // NO idempotency key — same class as txRejected: a resubmit between
+    // two abandons can recreate reapable state; the reap is idempotent, a
+    // dropped second abandon is not
     const work = exec
-      .call<void>({ service: EXEC_SVC.wake, handler: 'txAbandoned' }, { txid }, { idempotencyKey: `wake:txAbandoned:${txid}` })
+      .call<void>({ service: EXEC_SVC.wake, handler: 'txAbandoned' }, { txid })
       .catch((e: unknown) => log(`automation: txAbandoned: ${(e as Error).message}`))
     rt.inflight.add(work)
     const done = (): void => {

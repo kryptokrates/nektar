@@ -307,8 +307,9 @@ test(
     void store
     const delivered: string[] = []
     // a fresh actionId per run — the deliver send dedupes on
-    // `deliver:${actionId}` at the journal; a stable id would dedupe
-    // against an earlier run's completed invocation (the dedup working)
+    // `deliver:${actionId}:${attempts}` at the journal; a stable id would
+    // dedupe against an earlier run's completed invocation (the dedup
+    // working — and why retries carry the attempt in the key)
     const actionId = `tp:${Date.now()}`
     const transportDef = await transportObject({
       dueRows: async () => [{ actionId, operationId: `op:${actionId}`, kind: 'message', destination: 'host:live', payload: { type: 'decline' }, attempts: 0 }],

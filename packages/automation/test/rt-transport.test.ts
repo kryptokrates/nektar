@@ -80,7 +80,9 @@ test('drain: due rows fan out per destination key, idempotent per actionId, ceil
     )
     assert.deepEqual(
       delivers.map((d) => d.opts?.idempotencyKey),
-      ['deliver:x1', 'deliver:x2', 'deliver:x3']
+      // the key versions by attempt — a retried row must dispatch again
+      // (actionId alone would dedupe the retry inside the retention window)
+      ['deliver:x1:0', 'deliver:x2:0', 'deliver:x3:0']
     )
     // the ceiling armed itself — a delayed drain send at next_at
     const arm = seen.find((s) => s.handler === 'drain')
@@ -96,6 +98,42 @@ test('drain: due rows fan out per destination key, idempotent per actionId, ceil
     assert.equal(seen.filter((s) => s.handler === 'drain').length, 0)
   } finally {
     ex.close()
+  }
+})
+
+test('drain: a retried row re-fans as a NEW invocation — dedup is per-attempt, not per-actionId', async () => {
+  const ex = new Dispatcher()
+  const delivered: number[] = []
+  try {
+    // the row re-fanned mid-retry keeps its attempt in the key — a re-drain
+    // of the same attempt dedupes; the next attempt is new work
+    const item: import('../src/store.js').OutboxItem = {
+      actionId: 'y1',
+      operationId: 'op:y1',
+      kind: 'message',
+      destination: 'host:c',
+      payload: {},
+      attempts: 1
+    }
+    wireTransport(ex, {
+      dueRows: async () => [item],
+      nextAt: async () => undefined,
+      deliverItem: async (i) => (delivered.push(i.attempts), 'acked' as const),
+      now: () => Date.now(),
+      log: () => {}
+    } satisfies TransportDeps)
+    const r = await ex.call<{ sent: number }>({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {})
+    assert.equal(r.sent, 1)
+    await ex.drain()
+    assert.deepEqual(delivered, [1])
+    // a SECOND drain of the same attempt sends but the ingress dedup drops it
+    // — the attempt's invocation is the dedup identity
+    const r2 = await ex.call<{ sent: number }>({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {})
+    assert.equal(r2.sent, 1)
+    await ex.drain()
+    assert.deepEqual(delivered, [1])
+  } finally {
+    await ex.close()
   }
 })
 

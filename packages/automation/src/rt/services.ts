@@ -18,7 +18,7 @@ import type * as restate from '@restatedev/restate-sdk'
 import { WAITS } from '../waits.js'
 import type { AutomationStore, OutboxItem, TxState, WalletTx } from '../store.js'
 import { runTxIntents, type TxEffects } from '../machines/effects.js'
-import { CUSTODY_KEY, EXEC_SVC, inRtScope, type RtSend } from './exec.js'
+import { EXEC_SVC, inRtScope, type RtSend } from './exec.js'
 import type { CustodyLeg, TxObserve } from './emit.js'
 import type { WalletCoordinator } from '../wallet.js'
 

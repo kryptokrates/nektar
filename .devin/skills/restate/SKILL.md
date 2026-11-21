@@ -42,6 +42,9 @@ journaled at the right grain.
   adds: new sends, new arms, new error paths, new keys.
 - `--drift` — audit the local `Dispatcher` against the Restate contract
   (the test seam must emulate the plane or tests prove nothing).
+- `--wire` — setup/topology audit: server, endpoint, registration, env
+  seams, public/private ingress — see
+  [references/integration.md](references/integration.md).
 
 ## The model — five load-bearing facts
 
@@ -83,7 +86,7 @@ journaled at the right grain.
    inside an existing `ctx.run` body. Stuck invocations migrate via
    `pause` → `resume --deployment`.
 
-## The audit — seven checks, run on every durable surface
+## The audit — the checks, run on every durable surface
 
 1. **Replay boundary at the right grain.** Walk each handler: what's
    inside `ctx.run` vs outside. Side-effect outside without dedup =
@@ -123,11 +126,24 @@ journaled at the right grain.
    left on default policy is a `rt/poisoned-leg` queue wedge — the key
    serializes behind it forever.
 7. **Timeout is not a verdict.** `orTimeout`, inactivity suspend (>1min
-   no new journal entries → suspend+retry), and `attemptCompletedSignal`
-   aborts are delivery-layer events — a timed-out leg may have committed
-   anyway (the old attempt runs to completion; its result is discarded,
-   its effects are not). `submission_unknown` is the only honest row for
-   it. `rt/timeout-as-verdict` when code treats either as failure.
+   no new journal entries → suspend+retry; legs must fit under it or the
+   service raises `options.inactivityTimeout`), and
+   `attemptCompletedSignal` aborts are delivery-layer events — a
+   timed-out leg may have committed anyway (the old attempt runs to
+   completion; its result is discarded, its effects are not).
+   `submission_unknown` is the only honest row for it.
+   `rt/timeout-as-verdict` when code treats either as failure.
+8. **No wait is a poll.** Every recurring wait names its producer
+   signal — a send, an awakeable/promise/signal, or a call's completion
+   — with the self-arm as the bounded ceiling behind it. A cadence that
+   fires "every N" to check for work is a poll; a cadence that fires at
+   the store-computed `next_at` is the ceiling. `rt/poll-as-mechanism`
+   when the mechanism is the interval rather than the event (the
+   replacement table is in references/integration.md §3).
+9. **Ingress exposure is a boundary.** Internal objects
+   (`ingressPrivate: true`) never answer the public ingress; endpoint
+   `identityKeys` pin the caller to our Restate instance in production.
+   `rt/public-internal` / `rt/open-endpoint`.
 
 ## The DB-boundary pattern (docs' own guidance — nektar's exact shape)
 
@@ -167,6 +183,11 @@ DB authoritative, use Restate's guarantees as the consistency helpers.
 | Ingress idempotency-key  | `sendOpts.idempotencyKey` / actionId-keyed row dedup                                    |
 | Orphaned arm (RT0011)    | floor cadence re-arms — self-arm re-derives from the store each fire                    |
 | `Dispatcher` (test seam) | `cfg.exec` injection — must emulate: per-key serial, delay, at-least-once, close drains |
+| Awakeable/approval gate  | policy escalations, `funding_deferred` waits — resolve, don't poll                      |
+| Service `options:`       | retryPolicy / inactivityTimeout / journalRetention / ingressPrivate knobs               |
+| Flow-control scope       | `ctx.scope`/`limitKey` — bounds a class of invocations (e.g. broadcaster legs)          |
+| Testcontainers env       | `alwaysReplay`/`disableRetries` — the no-server alternative to `NEKTAR_RESTATE_URL`     |
+| `@restatedev/xstate`     | machines-as-specs stay ours; the lib exists if a machine ever needs to BE the executor  |
 
 ## Drills (verification recipes)
 
@@ -220,9 +241,15 @@ without the kill drill (`nektar/fake-evidence` applies here too).
 docs.restate.dev — key-concepts, services, handlers, invocations,
 durable-steps, service-communication, durable-timers, error-handling,
 external-events, serving, versioning, managing-invocations, databases
-guide, cron guide. Pinned semantics: detached sends survive kill/cancel;
-inactivity timeout ~1min; immutable deployments; journal-mismatch RT0016;
-orphaned invocations RT0011; ctx ops illegal inside ctx.run.
+guide, cron guide, configuration, request-lifecycle, testing, flow-
+control, sagas, durable-agents, human-in-the-loop; github.com/restatedev
+(xstate, examples, ai-examples). Pinned semantics: detached sends survive
+kill/cancel; inactivity timeout 1min / abort 10min; immutable
+deployments; journal-mismatch RT0016; orphaned invocations RT0011; ctx
+ops illegal inside ctx.run; same-key calls deadlock; default retry ~70
+attempts→pause (`unlimited` opts out); K/V state per scope; limitKey
+re-orders across keys.
 
 Detailed procedures: [references/audit.md](references/audit.md) ·
-SDK semantics: [references/sdk.md](references/sdk.md)
+SDK semantics: [references/sdk.md](references/sdk.md) ·
+Setup/integration/no-polling: [references/integration.md](references/integration.md)

@@ -125,3 +125,54 @@ await ctx.date.now()                   // journaled wall clock
 - Within ONE handler execution, identical sends dedupe automatically; across independent invocations they do not.
 - `orTimeout` bounds a wait, not the work — the callee still runs.
 - Cancel surfaces at the next await point as `TerminalError`; sends already emitted still fire.
+- **Same-key request-response calls deadlock** — A↔B on the same keys, or A→B→C→A cycles, are the documented deadlock class. nektar's escape is `inRtScope`/`rtScopeKey` (ALS scope bypasses the object hop for the owning key).
+
+## Service-level configuration (`options:` on the service def)
+
+| option                                                                     | default                               | the audit question                                                                                                                          |
+| -------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `retryPolicy` `{initialInterval, maxInterval, maxAttempts, onMaxAttempts}` | ~`50ms → 60s`, ~70 attempts → `pause` | does the leg's failure deserve unbounded retry, a bounded pause, or a TerminalError verdict?                                                |
+| `inactivityTimeout`                                                        | **1 min**                             | any `ctx.run` leg or pre-journal stretch longer than this suspends mid-flight (LLM calls, lane fanouts, big scans — split legs or raise it) |
+| `abortTimeout`                                                             | 10 min                                | ceiling after inactivity before the attempt is killed                                                                                       |
+| `journalRetention`                                                         | 24 h                                  | how long completed journals stay inspectable — the audit/debug window                                                                       |
+| `idempotencyRetention`                                                     | 24 h                                  | dedup window for ingress keys — financial effects may need longer                                                                           |
+| `workflowRetention`                                                        | 24 h                                  | shared-handler/promise lifetime after `run` completes                                                                                       |
+| `ingressPrivate`                                                           | false (public)                        | internal objects must not answer the public ingress — set true on custody/tx/deal-class services                                            |
+| `enableLazyState`                                                          | false (eager)                         | lazy K/V loads per-key on read vs full snapshot per invocation                                                                              |
+
+Server-side knobs (`restate.toml` / env): `[invocation.default-retry-policy]` (incl. `on-max-attempts = "pause"|"kill"`, `max-attempts = "unlimited"` for true-forever), `worker.invoker.inactivity-timeout`, `default-journal-retention`.
+
+## Request lifecycle — what actually happens
+
+1. Ingress persists the request + creates the journal — durability starts BEFORE the handler runs.
+2. Server opens a bidi HTTP/2 stream to the endpoint; journal entries stream back per ctx op.
+3. Handler runs; each ctx op appends to the journal.
+4. Failure/retry: the server replays the journal to the service — journaled ops return recorded results, live execution resumes at the first gap.
+5. Inter-handler calls route THROUGH the server (not service-to-service) — end-to-end idempotency.
+6. **Non-bidi transports** (Lambda, request-response mode): the SDK runs to the first wait point, suspends, ships the journal, gets re-invoked with it — a replay per wait, visible latency per hop.
+
+## Testing surfaces
+
+`@restatedev/restate-sdk-testcontainers` — `RestateTestEnvironment.start({ services, alwaysReplay?, disableRetries? })`:
+
+- `alwaysReplay: true` — forces journal replay at EVERY suspension point; the non-determinism hunter (surfaces exactly the `rt/replay-fork`/`rt/non-determinism` classes)
+- `disableRetries: true` — failures surface immediately, no backoff hang (error-path tests)
+- `stateOf(obj, key)` — direct K/V read/mutate for arrange/assert
+- vs our `Dispatcher`: testcontainers exercises the REAL plane (journal, dedup, retry routing, suspend/resume); the Dispatcher models the subset it can (serialization, delay, sends). `rt/drift` claims a plane semantic — verify on one of these, not the emulator.
+
+## Flow control (scopes + limit keys — recent, moving)
+
+- `ctx.scope('name')` routes an invocation into a named concurrency scope; `rpc.opts({limitKey: 'l1/l2'})` subdivides it (two levels, all levels count simultaneously).
+- Scope = sharding + idempotency + object-key namespace: `Cart "a"` under scope `bob` ≠ under `joe`. A scope is one partition — low-cardinality scopes are hot spots.
+- Rule book (cluster-wide): `restate rules set "scope[/l1[/l2]]" --concurrency N`, wildcard `*` = per-scope default (NOT global).
+- Ordering caveat: same-object sends with the SAME limitKey keep arrival order; different limitKeys each queue independently — a held-back key lets a later send jump ahead.
+- Map: the `sentRecently`/`armedDue` dedup bounds identical-send churn inside one key's FIFO; scopes bound concurrency across a CLASS of invocations (per-tenant, per-downstream — e.g. a `broadcaster` scope capping chain-call legs).
+
+## Adjacent ecosystem (nektar-relevant)
+
+- **`restatedev/xstate`** (`@restatedev/xstate`) — runs XState machines as Virtual Objects: machine = object key, events = sends, transitions journaled. Our machines stay the spec/audit surface (SQLite authority + shadow replay); this is the library if a machine ever needs to BE the executor.
+- **`@restatedev/restate-sdk-tunnel`** — endpoint→Restate Cloud/BYOC outbound tunnel, no inbound port.
+- **Sagas** — the compensation-list pattern: push a `ctx.run` compensation before each step, run reversed on `TerminalError`. Our custody rollback (releaseBudget/leases, abandon-prepared) is the same shape, hand-rolled — the pattern validates the shape and names the rule: compensate only on terminal verdicts, never on retried transient throws.
+- **`durableCalls(ctx)` middleware** (`@restatedev/vercel-ai-middleware`) — journals LLM responses for agent replay; `AIExecutor` legs wrapped the same way.
+- **Awakeable approvals** — `ctx.awakeable` + `/restate/awakeables/<id>/resolve` over HTTP = the policy-escalation/approval-gate pattern with zero polling.
+- **Ingress auto-idempotency** (new clusters): the ingress assigns a random idempotency key to keyless calls so ITS retries don't double-execute — retention then governed by `idempotencyRetention`.

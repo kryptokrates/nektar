@@ -140,6 +140,16 @@ abnormally, which of its emissions still fire, and what absorbs them?"
    a test passing on the emulator proves nothing about a semantics gap
    the emulator doesn't model (journaling, dedup, terminal-error
    routing). `rt/drift` when a test's green depends on the gap.
+8. **`alwaysReplay` conformance** — `@restatedev/restate-sdk-testcontainers`
+   `RestateTestEnvironment.start({services, alwaysReplay: true})` forces
+   journal replay at every suspension point; non-determinism surfaces
+   without hand-crafting crashes. Pair with `disableRetries: true` to
+   see error paths immediately. This is the no-server path to the same
+   honesty `NEKTAR_RESTATE_URL` gates rt-spike on.
+9. **Wire audit** — registration landed (admin shows the deployment),
+   `identityKeys` set in production, internal objects `ingressPrivate`,
+   `inactivityTimeout` covers the longest leg, one endpoint per process.
+   See integration.md §1.
 
 ## Report footer
 

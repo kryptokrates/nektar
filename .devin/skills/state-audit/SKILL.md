@@ -223,15 +223,16 @@ evidence (`nektar/fake-evidence` applies to audit output too).
 
 ## Sibling skills — load, don't re-derive
 
-| Ask                                   | Skill                                         |
-| ------------------------------------- | --------------------------------------------- |
-| Rule IDs for a finding                | code-review/references (`data/*`, `nektar/*`) |
-| Whole-system runtime topology         | arch-review (F-catalog)                       |
-| Wait sites, pushes vs polls           | event-arch                                    |
-| What counts as believed (proof truth) | spv-strict — event-source guards plug in here |
-| Broadcast/status/coin mechanics       | bsv                                           |
-| Test-file purity, fixture invariants  | test-boundaries                               |
-| Module-shape smells found en route    | design-guardrails                             |
+| Ask                                                                  | Skill                                                  |
+| -------------------------------------------------------------------- | ------------------------------------------------------ |
+| Rule IDs for a finding                                               | code-review/references (`data/*`, `nektar/*`)          |
+| Durable-executor mechanics (journal, sends, keys, arms, deployments) | restate — supplies the `rt/*` findings and drills 7–10 |
+| Whole-system runtime topology                                        | arch-review (F-catalog)                                |
+| Wait sites, pushes vs polls                                          | event-arch                                             |
+| What counts as believed (proof truth)                                | spv-strict — event-source guards plug in here          |
+| Broadcast/status/coin mechanics                                      | bsv                                                    |
+| Test-file purity, fixture invariants                                 | test-boundaries                                        |
+| Module-shape smells found en route                                   | design-guardrails                                      |
 
 ## Sources
 

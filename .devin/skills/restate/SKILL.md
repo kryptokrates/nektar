@@ -1,0 +1,228 @@
+---
+name: restate
+description: >
+  Use when writing, reviewing, or debugging code on the durable execution
+  plane — Restate Virtual Objects, services, handlers, sends, delayed
+  sends, ctx.run journaling, retries, awakeables/signals, deployment
+  registration and versioning — or when answering "why is this invocation
+  suspended / wedged / orphaned / replaying". Trigger surfaces: a new
+  handler or send site, a delay/timer arm, an error path inside a handler,
+  a key choice, an idempotency question, a restart/deployment interaction,
+  or any place the journal and the domain row could disagree. Owns the
+  mechanics of the plane; the lifecycle correctness of what rides on it
+  belongs to state-audit (this skill's checks plug into its transition
+  table). For wait-site/event design use event-arch; for what counts as
+  believed use spv-strict; for money-path invariants use code-review.
+---
+
+# restate — the journal is the plane
+
+Restate splits every lifecycle into **two records**: the domain row
+(SQLite — verdict truth) and the invocation journal (queued / running /
+suspended / completed — _delivery_ truth). The single rule everything
+here derives from: **a completed invocation proves the handler ran, not
+that the domain accepted the effect; a suspended invocation proves a leg
+is being retried, not that the row is stuck.** Every bug class this skill
+hunts is a disagreement between those two records, or a property the code
+assumed the plane has that it doesn't.
+
+The docs' framing: durable execution = a journaled replay where completed
+steps skip and uncompleted steps re-run. The audit's job is checking that
+what must re-fire does (sends, probes), what must not re-fire can't
+(sends with dedup, idempotent effects), and what must survive a crash is
+journaled at the right grain.
+
+## Scope
+
+- `--handlers <path>` — enumerate handlers/sends under a path (one object
+  or a whole region).
+- `--service <name>` — one `EXEC_SVC` entry: its key shape, handler set,
+  send graph, error surface.
+- `--diff` / `--last [n]` — audit the durable-execution surface a diff
+  adds: new sends, new arms, new error paths, new keys.
+- `--drift` — audit the local `Dispatcher` against the Restate contract
+  (the test seam must emulate the plane or tests prove nothing).
+
+## The model — five load-bearing facts
+
+1. **`ctx.run` is the replay boundary.** Inside: executes once, result
+   journaled, replay returns the record. Outside: re-runs on every retry.
+   Reads that drive decisions belong inside (replay must see the SAME row
+   set — a re-scanned store can fork the replay); sends/side-effects that
+   must re-fire belong outside. `ctx` ops are illegal inside `ctx.run`
+   (no nested runs, no ctx.get/calls) — a nested op is a compile-visible
+   structure error, not a style choice.
+2. **A key is a lock, nothing else.** Exclusive handlers on one object
+   key run serially in arrival order; shared handlers run concurrently
+   against it. Two different keys writing the same domain row is the old
+   mutex race in new clothes — the row CAS (`revision`) is the guard.
+   A fixed key (`'main'`, `TRANSPORT_DRAIN_KEY`) re-serializes unrelated
+   work — name why the breadth is safe (drain scans everything anyway).
+3. **Sends are detached; calls are attached.** `send`/`genericSend`/
+   delayed send survive the originator's cancel AND kill — the docs are
+   explicit: detached sends "will be scheduled and execute fully even if
+   the originating invocation is cancelled." Killing an op does not kill
+   its armed sends — the row's state must absorb them or they're unowned
+   writers. `call` waits, is journaled, and dies with the caller —
+   request-response between exclusive handlers deadlocks (A↔B same keys,
+   or A→B→C→A cycle).
+4. **Errors are taxonomy, not control flow.** Default is infinite
+   exponential retry — an uncaught throw is a durable suspended retry on
+   the key, and it wedges every queued invocation behind it.
+   `TerminalError` is the only throw that stops (propagates code+metadata
+   to the caller — a _verdict_, not a failure). `RetryableError` carries
+   `retryAfter` (Rate-limit/`Retry-After` legs). `PauseError` inside
+   `ctx.run` parks the invocation for operator intervention. Per-run
+   retry policy bounds attempts/duration — an unbounded poisoned leg is
+   a key-queue DoS.
+5. **Deployments are immutable; invocations pin.** Retries land on the
+   deployment that started them. Force-replacing a registration orphans
+   armed delayed sends (they land as RT0011 silence — the domain floor
+   must re-arm). Code changes reorder/remove/add journal ops →
+   RT0016 non-determinism on replay; the only safe in-place edit is
+   inside an existing `ctx.run` body. Stuck invocations migrate via
+   `pause` → `resume --deployment`.
+
+## The audit — seven checks, run on every durable surface
+
+1. **Replay boundary at the right grain.** Walk each handler: what's
+   inside `ctx.run` vs outside. Side-effect outside without dedup =
+   `rt/double-effect`. Decision-driving read outside = `rt/replay-fork`.
+   ctx op inside = `rt/nested-ctx`. Store scans belong inside (replay
+   re-sends the same rows); sends belong outside (they re-fire — which is
+   the point).
+2. **Redelivery absorbed.** Every send is at-least-once. The second
+   landing must no-op: row-state guard, content key, or ingress
+   `idempotency-key` (dedupes across independent invocations; within one
+   handler execution sends dedupe automatically). A handler that appends
+   on redelivery is `rt/at-least-once-victim`.
+3. **Same-key discipline.** Map which keys write which rows. Cross-key
+   writers of one row without CAS = `rt/key-collision`. A same-key
+   request-response `call` (or A↔B cycle) without a scope escape =
+   `rt/self-deadlock` — nektar's escape is `inRtScope`/`rtScopeKey`
+   (ALS-carried scope bypasses the object hop; the wire must merge not
+   replace nested scopes). `ctx.sleep` or a blocked `call` inside an
+   exclusive handler queues the whole key = `rt/sleep-blocks-key`.
+4. **Detached-send ownership.** Every `send`/delayed send outlives its
+   originator's kill/cancel — name what absorbs it when the domain row
+   has moved on (state guard, no-op handler). An arm that outlives its
+   kill is `rt/orphaned-send`. A forced deployment replacement orphans
+   every armed send on it (`rt/deployment-orphan` — the floor cadence
+   must re-arm what the journal lost; we hit this class live).
+5. **Clock domain.** A delayed send's `delayMs` is computed at arm time
+   against a clock — it must be the SAME clock that stamped the deadline
+   (`next_at`, `dueAt`, `reconcile_at` all stamp on the domain `now`).
+   Real-clock arm vs virtual/domain stamp = every arm early or late by
+   the skew (we parked a `delivered` row pending exactly this way).
+   `rt/dual-clock`.
+6. **Error classification.** Every throw inside a handler: retried
+   forever (default — is that right? does the leg eventually succeed or
+   is it deterministically broken?), `TerminalError` (verdict — the
+   domain records the terminal outcome itself), `RetryableError`
+   (backoff-shaped), `PauseError` (operator gate). A deterministic throw
+   left on default policy is a `rt/poisoned-leg` queue wedge — the key
+   serializes behind it forever.
+7. **Timeout is not a verdict.** `orTimeout`, inactivity suspend (>1min
+   no new journal entries → suspend+retry), and `attemptCompletedSignal`
+   aborts are delivery-layer events — a timed-out leg may have committed
+   anyway (the old attempt runs to completion; its result is discarded,
+   its effects are not). `submission_unknown` is the only honest row for
+   it. `rt/timeout-as-verdict` when code treats either as failure.
+
+## The DB-boundary pattern (docs' own guidance — nektar's exact shape)
+
+The `guides/databases` page prescribes what we built: keep the external
+DB authoritative, use Restate's guarantees as the consistency helpers.
+
+- **VO key ↔ row PK.** Serialize a row's writers by routing them through
+  the object keyed on the row's identity (tx per `actionId`, deal per
+  want id, custody per `CUSTODY_KEY`). Single-writer-per-key replaces the
+  process mutex.
+- **`ctx.run` the reads that drive decisions.** The journaled value is
+  what every retry sees — consistent version/credits/row-set across
+  retries and zombies. Then **CAS on the journaled version** in the
+  update (`WHERE revision = <read>`) — the docs' "semantic lock" = our
+  `transition(op, revision, …)` exactly.
+- **Idempotency tokens in the same tx as the effect.** An actionId /
+  event row committed with the domain write is the DB-level dedup;
+  scheduled expiry is a delayed send (the docs expire theirs with one).
+- **Shared handlers for reads** — they run concurrently against the
+  exclusive queue; reads that don't need serialization should not queue.
+- **Restate K/V vs the DB**: K/V wins for state married to execution
+  (session, agent context, lock tokens); the DB wins for core domain
+  data, SQL access patterns, and anything other systems must read
+  without going through the object. nektar: journal ≠ domain — the ops/
+  inbox/outbox/utxo tables stay in SQLite.
+
+## Nektar's plane — the mapping
+
+| Restate concept          | nektar surface                                                                          |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| Virtual Object per key   | `EXEC_SVC` objects — tx/`actionId`, deal/want, custody/`CUSTODY_KEY`                    |
+| Fixed-key object         | `TRANSPORT_DRAIN_KEY`, `CRON_KEY`, upkeep/watchdog/watches keys                         |
+| `ctx.run` journaled step | handler bodies in `services.ts` — thin wrappers over domain code                        |
+| Delayed send             | due arms, drain self-arm at `nextOutboxAt`, dealfan/cron self-arms                      |
+| Send (detached)          | `rtSend`/`exec.send` — dealfan fan-outs, wake cycle-tails, boot pokes                   |
+| Same-key call deadlock   | `inRtScope`/`rtScopeKey` — ALS scope bypasses the object hop                            |
+| Ingress idempotency-key  | `sendOpts.idempotencyKey` / actionId-keyed row dedup                                    |
+| Orphaned arm (RT0011)    | floor cadence re-arms — self-arm re-derives from the store each fire                    |
+| `Dispatcher` (test seam) | `cfg.exec` injection — must emulate: per-key serial, delay, at-least-once, close drains |
+
+## Drills (verification recipes)
+
+- **Mid-handler kill** — `kill -9` between journaled steps; restart →
+  journaled steps skip (no double effect), unjournaled sends re-fire
+  once (target absorbs).
+- **Double delivery** — redeliver the same send; second landing no-ops.
+- **Orphaned arm** — force-replace the deployment mid-arm; assert the
+  domain floor re-arms rather than the cadence dying silently.
+- **Poisoned leg** — deterministic throw → invocation suspends; assert
+  the wedge is visible and fixable (pause/resume/kill path named).
+- **Stale-attempt zombie** — sever the journal mid-`ctx.run`; the old
+  attempt runs to completion — assert `attemptCompletedSignal` aborts
+  its side effects or its effects are idempotent.
+- **Deployment migration** — `pause` → `resume --deployment` a wedged
+  invocation; assert replay survives the code change (or the in-place
+  fix stayed inside `ctx.run`).
+
+## Report format
+
+Per surface: the send graph (emitter → target/key/delay/detached), the
+key→row map, then findings:
+
+```
+### <finding title>
+invariant: <what should hold>
+evidence:  file:line + the call path that reaches it
+sequence:  <the concrete interleaving that breaks it>
+impact:    <blast radius> — severity: BLOCKER | HIGH | MED
+owner:     <who detects/resolves today, or the gap>
+fix:       <correction> + <test that fails before it>
+status:    confirmed | plausible | lead
+```
+
+Footer mandatory: handlers/services reviewed, journal-vs-row coverage
+limits, assumptions, tests actually run — never claim replay-safety
+without the kill drill (`nektar/fake-evidence` applies here too).
+
+## Sibling skills — load, don't re-derive
+
+| Ask                                              | Skill                                           |
+| ------------------------------------------------ | ----------------------------------------------- |
+| Transition table, unknown-outcome, late evidence | state-audit — this skill's checks plug in there |
+| Wait-site/push-vs-poll/event-plane design        | event-arch                                      |
+| What counts as believed (proof truth)            | spv-strict                                      |
+| Money-path/custody invariants                    | code-review nektar rules                        |
+| Whole-system runtime topology                    | arch-review                                     |
+
+## Sources
+
+docs.restate.dev — key-concepts, services, handlers, invocations,
+durable-steps, service-communication, durable-timers, error-handling,
+external-events, serving, versioning, managing-invocations, databases
+guide, cron guide. Pinned semantics: detached sends survive kill/cancel;
+inactivity timeout ~1min; immutable deployments; journal-mismatch RT0016;
+orphaned invocations RT0011; ctx ops illegal inside ctx.run.
+
+Detailed procedures: [references/audit.md](references/audit.md) ·
+SDK semantics: [references/sdk.md](references/sdk.md)

@@ -169,9 +169,6 @@ test('client custody: sale offer → escrow → refund signs through the injecte
   const escrowTx = (await chain.fetchTx(funded.txid!))!
   const bookSpent = new Set(escrowTx.inputs.filter((i) => i.sourceTXID === ftxId).map((i) => i.sourceOutputIndex))
   assert.ok(bookSpent.size > 0, 'escrow inputs came from the shared coin book')
-  assert.ok(
-    !remaining.some((u) => u.tx.id('hex') === ftxId && bookSpent.has(u.vout)),
-    'consumed inputs left the spendable book'
-  )
+  assert.ok(!remaining.some((u) => u.tx.id('hex') === ftxId && bookSpent.has(u.vout)), 'consumed inputs left the spendable book')
   assert.equal(existsSync(join(dir, 'keys.json')), false, 'no keys.json written on the client path')
 })

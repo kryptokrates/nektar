@@ -259,8 +259,7 @@ export const handlers: Record<string, ToolHandler> = {
   },
   'sale#refund': async (mem, args) => {
     const { DisclosureSaleHost } = await import('@nektar/anchor')
-    const depositorPkh =
-      args.cfg.depositorPkh ?? Buffer.from(PublicKey.fromString(await mem.fundSigner().pubKeyHex()).toHash()).toString('hex')
+    const depositorPkh = args.cfg.depositorPkh ?? Buffer.from(PublicKey.fromString(await mem.fundSigner().pubKeyHex()).toHash()).toString('hex')
     const host = new DisclosureSaleHost({
       ...args.cfg,
       depositorPkh,

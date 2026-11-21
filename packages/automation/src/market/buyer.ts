@@ -829,8 +829,7 @@ export abstract class BuyerOps extends SellerOps {
     if (tx === undefined) return false
     const escrow = op.data.escrow as { sellerPkh?: string; depositorPkh?: string } | undefined
     const out0 = tx.outputs[0]?.lockingScript.toHex()
-    const lock = (pkh: string | undefined) =>
-      pkh === undefined ? undefined : new P2PKH().lock(Array.from(fromHex(pkh))).toHex()
+    const lock = (pkh: string | undefined) => (pkh === undefined ? undefined : new P2PKH().lock(Array.from(fromHex(pkh))).toHex())
     if (out0 !== undefined && out0 === lock(escrow?.depositorPkh)) {
       // our earlier refund aired — the money already came back
       if (pa?.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
@@ -855,7 +854,11 @@ export abstract class BuyerOps extends SellerOps {
       await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
         cause: 'escrow_spent_by_completion',
         data: {
-          pendingDelivered: { from: chosen.so.offer.pub, m: { type: 'delivered', wantId: w.wantId, offerId: chosen.so.offer.offerId, txid: spender }, refs: undefined },
+          pendingDelivered: {
+            from: chosen.so.offer.pub,
+            m: { type: 'delivered', wantId: w.wantId, offerId: chosen.so.offer.offerId, txid: spender },
+            refs: undefined
+          },
           pendingApproval: null,
           refundTries: 0
         },

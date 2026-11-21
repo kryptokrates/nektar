@@ -44,7 +44,7 @@ not trusted.
 - **No key to generate.** The agent creates its own persistent fee key on
   first boot and prints `operator fee key <address>` — send testnet sats
   to that address. Self-serve: `curl -X POST https://nektar.run/v1/faucet
-  -H 'content-type: application/json' -d '{"address":"<printed address>"}'`
+-H 'content-type: application/json' -d '{"address":"<printed address>"}'`
   (one drip per address; if it's out or down, any public testnet faucet
   works, or open a GitHub issue titled `TESTNET-GRANT` with your address).
   Set `NEKTAR_WAIT_FUNDING=1` +

@@ -99,8 +99,7 @@ test('CHN-006: pending → mined → final; requireFinal withholds until finalit
   // anchor past depth between mine() and this read
   assert.ok(st.confirmations >= 1, 'anchor is mined')
   assert.ok(st.state === 'mined' || st.state === 'final', `anchor mined or further — ${st.state}`)
-  if (st.state === 'mined')
-    assert.match((await mem.recall('s', { seq: 0, requireFinal: true })).items[0].reason!, /not final: \d+\/3 confirmations/)
+  if (st.state === 'mined') assert.match((await mem.recall('s', { seq: 0, requireFinal: true })).items[0].reason!, /not final: \d+\/3 confirmations/)
   await chain.mine(2)
   assert.equal((await mem.anchorStatus('s', 0)).state, 'final')
   assert.equal((await mem.recall('s', { seq: 0, requireFinal: true })).items[0].text, 'a')

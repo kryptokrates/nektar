@@ -843,12 +843,7 @@ test('bstack M: no loss — one operation; the note is listed while the deal is 
     // the sellerNote publish is an async outbox leg — under file load it
     // lands after the state transition; wait for it on the drive cadence
     assert.ok(
-      await until(
-        [b.rt, s.rt],
-        chain,
-        async () => noteItems((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items).length === 1,
-        120000
-      ),
+      await until([b.rt, s.rt], chain, async () => noteItems((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items).length === 1, 120000),
       'recovery note never listed while the deal is open | ' + logs.slice(-15).join(' | ')
     )
     assert.ok(
@@ -1397,12 +1392,7 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
     // freed bbox slot) — two fixed rounds starve it under file load; wait for
     // the empty box on the drive cadence instead
     assert.ok(
-      await until(
-        [b.rt, s2.rt],
-        chain,
-        async () => (await readBuyer(s2.mem.operatorKey(), [h1.url, h2.url], chain)).items.length === 0,
-        120000
-      ),
+      await until([b.rt, s2.rt], chain, async () => (await readBuyer(s2.mem.operatorKey(), [h1.url, h2.url], chain)).items.length === 0, 120000),
       'seller inbox not empty after settlement | ' + logs.slice(-15).join(' | ')
     )
     for (const r of [b.rt, s2.rt]) await r.stop()
@@ -2372,10 +2362,15 @@ test('bstack P3: refund deadline races a landed completion — chain evidence re
     const ra = Number(((await buyerOp(b))!.data.escrow as { refundAfter: number | string }).refundAfter)
     await chain.mine(Math.max(1, ra - (await b.mem.chainHeight()) + 1))
     assert.ok(
-      await until([b.rt], chain, async () => {
-        const o = await buyerOp(b)
-        return o?.state === 'disclosure_verified' || o?.state === 'refunded' || Number(o?.data?.refundTries ?? 0) > 0
-      }, 120000),
+      await until(
+        [b.rt],
+        chain,
+        async () => {
+          const o = await buyerOp(b)
+          return o?.state === 'disclosure_verified' || o?.state === 'refunded' || Number(o?.data?.refundTries ?? 0) > 0
+        },
+        120000
+      ),
       'neither the claim nor the refund ever resolved | ' + logs.slice(-25).join(' | ')
     )
     const bo = (await buyerOp(b))!

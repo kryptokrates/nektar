@@ -124,7 +124,7 @@ const treesReady = async (rt: Automation): Promise<boolean> => {
 /** cycle agents until every deal-path funding tree is proven — the one real
  *  block the suite pays. Persistent dirs make it a once-per-suite cost: a
  *  re-run with surviving lanes.sqlite skips it entirely. */
-const warmup = async (agents: A[], logs: string[], ms = 1_500_000): Promise<void> => {
+const warmup = async (agents: A[], logs: string[], ms = Number(process.env.TN_WARMUP_MS ?? 1_500_000)): Promise<void> => {
   const t0 = Date.now()
   while (Date.now() - t0 < ms) {
     const pending = [] as A[]
@@ -636,9 +636,9 @@ test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly
         // over the 16KiB envelope cap on testnet: the seller broadcasts the
         // covenant spend anyway (paid on-chain) while the delivered envelope
         // dead-letters — the honest end state is visible, not a hang
-        const funded = await until([b.rt, s.rt], 240_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')
+        const funded = await until([b.rt, s.rt], 400_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')
         assert.ok(funded > 0, 'escrow never funded | ' + logs.slice(-15).join(' | '))
-        await until([b.rt, s.rt], 240_000, async () => {
+        await until([b.rt, s.rt], 400_000, async () => {
           const so = await saleFor(s, w.wantId)
           return so !== undefined && COMPLETE.has(so.state)
         })

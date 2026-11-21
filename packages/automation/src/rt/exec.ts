@@ -96,7 +96,12 @@ export class RestateExecutor implements Executor {
 
   private url(verb: 'call' | 'send', t: InvokeTarget, delayMs?: number): string {
     const segs = t.key !== undefined ? `${t.service}/${encodeURIComponent(t.key)}/${t.handler}` : `${t.service}/${t.handler}`
-    const q = delayMs !== undefined && delayMs > 0 ? `?delay=${Math.max(1, Math.round(delayMs / 1000))}s` : ''
+    // sub-second delays stay ms — quantizing up to `1s` would inflate a
+    // near-term arm by orders of magnitude (a 250ms poke landing at 1s)
+    const q =
+      delayMs !== undefined && delayMs > 0
+        ? `?delay=${delayMs >= 1000 ? `${Math.max(1, Math.round(delayMs / 1000))}s` : `${Math.max(1, Math.round(delayMs))}ms`}`
+        : ''
     return `${this.ingress}/restate/${verb}/${segs}${q}`
   }
 

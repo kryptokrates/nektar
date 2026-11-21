@@ -111,13 +111,13 @@ export function openLanes(rt: Rt): void {
     const exec = rt.exec ?? executor()
     // the push is a durable invocation keyed by the peer's watch endpoint —
     // at-least-once delivery where a fire-and-forget spawn was lost on
-    // crash; the content key dedupes a repeat announce
+    // crash. NO ingress idempotency key: the announce is a wake HINT (the
+    // far shim re-checks real state, so a repeat costs one re-check) — a
+    // content key would dedupe distinct events for the same
+    // {watch,service,query} shape and let a real second send sleep through
+    // to the peer's poll (rt/dedup-kills-event)
     void exec
-      .send(
-        { service: EXEC_SVC.notify, handler: 'peer', key: watch },
-        { watch, service, query },
-        { idempotencyKey: `notify:peer:${watch}:${service}:${JSON.stringify(query) ?? ''}` }
-      )
+      .send({ service: EXEC_SVC.notify, handler: 'peer', key: watch }, { watch, service, query })
       .catch((e) => log(`automation: notify send: ${(e as Error).message}`))
   }
   // direct push: POST the journaled carrier BEEF to the recipient's own

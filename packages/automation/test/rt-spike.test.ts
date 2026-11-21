@@ -281,7 +281,7 @@ test(
     })
     const ex = new RestateExecutor(RESTATE_URL!)
     try {
-      const r = await ex.call<{ events: number; advanced: number; reconciled: number }>({ service: EXEC_SVC.dealfan, handler: 'tick' }, {})
+      const r = await ex.call<{ events: number; advanced: number; reconciled: number }>({ service: EXEC_SVC.dealfan, handler: 'tick', key: 'main' }, {})
       assert.deepEqual(r, { events: 1, advanced: 1, reconciled: 0 })
       // the sends are async — poll until both keyed invocations land
       await until(async () => landed.length === 2)

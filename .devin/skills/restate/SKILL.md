@@ -68,7 +68,11 @@ journaled at the right grain.
    its armed sends — the row's state must absorb them or they're unowned
    writers. `call` waits, is journaled, and dies with the caller —
    request-response between exclusive handlers deadlocks (A↔B same keys,
-   or A→B→C→A cycle).
+   or A→B→C→A cycle). A `call` whose result the producer DISCARDS is an
+   anti-pattern — it holds the caller's socket for the handler's whole
+   queue+duration when `send` resolves at acceptance and gives the same
+   delivery guarantee (`rt/call-holds-producer`; the exception is the
+   coalescing pattern where the call's completion bounds queue depth).
 4. **Errors are taxonomy, not control flow.** Default is infinite
    exponential retry — an uncaught throw is a durable suspended retry on
    the key, and it wedges every queued invocation behind it.
@@ -121,13 +125,24 @@ journaled at the right grain.
    has moved on (state guard, no-op handler). An arm that outlives its
    kill is `rt/orphaned-send`. A forced deployment replacement orphans
    every armed send on it (`rt/deployment-orphan` — the floor cadence
-   must re-arm what the journal lost; we hit this class live).
+   must re-arm what the journal lost; we hit this class live). And the
+   inverse failure: **every invocation that self-arms adds a chain.** A
+   tick/drain body that ends by arming its successor multiplies arms by
+   invocation count — every poke/boot/wake-path invocation adds one
+   permanent self-arming chain, and the key's delayed-send backlog grows
+   without bound (`rt/arm-multiplication` — found live: outboxReady
+   pokes + wake-cycle drains each added a chain). The fix is a
+   content-derived arm key that converges chains to ≤1 pending arm:
+   domain-derived wake (`drain:${nextAt}`) or cadence-quantized
+   (`tick:${floor(now/ceil)*ceil+ceil}`).
 5. **Clock domain.** A delayed send's `delayMs` is computed at arm time
    against a clock — it must be the SAME clock that stamped the deadline
    (`next_at`, `dueAt`, `reconcile_at` all stamp on the domain `now`).
    Real-clock arm vs virtual/domain stamp = every arm early or late by
    the skew (we parked a `delivered` row pending exactly this way).
-   `rt/dual-clock`.
+   `rt/dual-clock`. And precision: a wire format that floors delays at
+   whole seconds inflates every sub-second arm — `?delay=` accepts ms;
+   a 250ms arm encoded as `1s` lands 4× late (`rt/delay-quantization`).
 6. **Error classification.** Every throw inside a handler: retried
    forever (default — is that right? does the leg eventually succeed or
    is it deterministically broken?), `TerminalError` (verdict — the

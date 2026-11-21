@@ -573,6 +573,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // signed intents; the floor re-airs them on the engine's jittered cadence
     resubmitPending: () => engine.resubmitTick(),
     ceilingMs: () => (Date.now() < rt.hotUntil ? Math.min(hotMs, idleMs) : idleMs),
+    // the arm's idempotency window quantizes on the domain clock — a virtual
+    // now must quantize on itself or the arm keys wobble across drive()s
+    now: () => (cfg.now ?? Date.now)(),
     // in-flight send dedup on the domain clock — virtual `now` in tests
     // advances with drive(), so windows expire on the same clock the
     // deadlines arm on. Restate makes every re-sent send a durable queued
@@ -612,10 +615,11 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // the cadence deps — durable, self-arming invocations: each tick runs
   // the whole pass inside one journaled step then arms the next at its
   // ceiling. A throwing pass retries instead of silently stopping.
-  const upkeepDeps = { tick: () => rt.upkeep(), ceilingMs: () => cfg.upkeepMs ?? WAITS.upkeepCadence.ms, log }
+  const upkeepDeps = { tick: () => rt.upkeep(), ceilingMs: () => cfg.upkeepMs ?? WAITS.upkeepCadence.ms, now: () => (cfg.now ?? Date.now)(), log }
   const watchdogMs0 = cfg.watchdogMs ?? WAITS.watchdogCadence.ms
-  const watchdogDeps = watchdogMs0 > 0 ? { tick: watchdogLeg, ceilingMs: () => watchdogMs0, log } : undefined
-  const watchesDeps = rt.watchBases.length !== 0 ? { tick: () => rt.refreshWatches(), ceilingMs: () => WAITS.watchRearm.ms, log } : undefined
+  const watchdogDeps = watchdogMs0 > 0 ? { tick: watchdogLeg, ceilingMs: () => watchdogMs0, now: () => (cfg.now ?? Date.now)(), log } : undefined
+  const watchesDeps =
+    rt.watchBases.length !== 0 ? { tick: () => rt.refreshWatches(), ceilingMs: () => WAITS.watchRearm.ms, now: () => (cfg.now ?? Date.now)(), log } : undefined
   // the notify deps — notifyPeer/pushCarrier push legs as journaled,
   // per-destination invocations (the legs lanes.ts exposes via rt.notifyLegs)
   const notifyDeps = rt.notifyLegs !== undefined ? { peer: rt.notifyLegs.peer, carrier: rt.notifyLegs.carrier, log } : undefined
@@ -701,7 +705,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // the floor + cadence chains boot-kick once — each tick self-arms the
   // next. intervalMs===0 disables the deals floor entirely.
   if (cfg.intervalMs !== 0)
-    void exec.send({ service: EXEC_SVC.dealfan, handler: 'tick' }, {}).catch((e) => log(`automation: dealfan kick: ${(e as Error).message}`))
+    void exec.send({ service: EXEC_SVC.dealfan, handler: 'tick', key: 'main' }, {}).catch((e) => log(`automation: dealfan kick: ${(e as Error).message}`))
   const watchdogOn = (cfg.watchdogMs ?? WAITS.watchdogCadence.ms) > 0
   for (const svc of [EXEC_SVC.upkeep, ...(watchdogOn ? [EXEC_SVC.watchdog] : []), ...(rt.watchBases.length > 0 ? [EXEC_SVC.watches] : [])])
     void exec.send({ service: svc, handler: 'tick', key: 'main' }, {}).catch((e) => log(`automation: ${svc} kick: ${(e as Error).message}`))
@@ -857,11 +861,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // on the proof content, not the txid: a tx re-mined in a different
     // block (post-reorg) carries a different path — deduping by txid would
     // swallow the new path inside the retention window and the row would
-    // stay unproven until the floor. call() keeps the inflight join the
-    // detached() spawn used to give
+    // stay unproven until the floor. send() — the producer discards the
+    // result; the promise still joins at ACCEPTANCE (the leg is durably
+    // recorded) without holding the callback for the handler's duration
     const mpHex = mp.toHex()
     const work = exec
-      .call<void>(
+      .send(
         { service: EXEC_SVC.wake, handler: 'txProof' },
         { txid, mpHex },
         {
@@ -887,7 +892,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // (hint + cycle are trivially re-runnable; a repeat announce costs one
     // journaled invocation, a dropped real rejection waits for the floor)
     const work = exec
-      .call<void>({ service: EXEC_SVC.wake, handler: 'txRejected' }, { txid })
+      .send({ service: EXEC_SVC.wake, handler: 'txRejected' }, { txid })
       .catch((e: unknown) => log(`automation: txrejected: ${(e as Error).message}`))
     rt.inflight.add(work)
     const done = (): void => {
@@ -904,7 +909,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // the due-gate lives inside the wake leg — a tip that frees no op
     // costs one journaled probe, not a pass
     const work = exec
-      .call<void>({ service: EXEC_SVC.wake, handler: 'height' }, { tip }, { idempotencyKey: `wake:height:${tip}` })
+      .send({ service: EXEC_SVC.wake, handler: 'height' }, { tip }, { idempotencyKey: `wake:height:${tip}` })
       .catch((e: unknown) => log(`automation: height: ${(e as Error).message}`))
     rt.inflight.add(work)
     const done = (): void => {
@@ -922,7 +927,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // two abandons can recreate reapable state; the reap is idempotent, a
     // dropped second abandon is not
     const work = exec
-      .call<void>({ service: EXEC_SVC.wake, handler: 'txAbandoned' }, { txid })
+      .send({ service: EXEC_SVC.wake, handler: 'txAbandoned' }, { txid })
       .catch((e: unknown) => log(`automation: txAbandoned: ${(e as Error).message}`))
     rt.inflight.add(work)
     const done = (): void => {

@@ -284,7 +284,17 @@ export const transportDrainBody =
     // outboxReady pokes it
     const next = await run('next', () => deps.nextAt())
     if (next !== undefined)
-      await send({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {}, { delayMs: Math.max(0, next - deps.now()) })
+      // EVERY drain invocation arms a successor — outboxReady pokes and
+      // wake-cycle drains run this same body, so an unkeyed arm adds one
+      // permanent self-arming chain per poke and the delayed-send backlog
+      // grows forever (rt/arm-multiplication). Keying the arm on `next` —
+      // the domain-derived earliest wake — converges any number of
+      // concurrent chains to ≤1 pending arm per wake instant.
+      await send(
+        { service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY },
+        {},
+        { delayMs: Math.max(0, next - deps.now()), idempotencyKey: `drain:${next}` }
+      )
     return { sent: rows.length, nextAt: next }
   }
 
@@ -308,7 +318,8 @@ export const transportObject = async (deps: TransportDeps) => {
                 deliver: (o: OutboxItem, opts?: unknown) => Promise<void>
               }
             ).deliver(arg as OutboxItem, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey }))
-          else if (target.handler === 'drain') await transport.drain(arg, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0 }))
+          else if (target.handler === 'drain')
+            await transport.drain(arg, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey }))
           else throw new Error(`transport send: no handler ${target.handler}`)
         }
         return await drain(send, (n, fn) => ctx.run(n, fn))
@@ -411,6 +422,9 @@ export interface DealfanDeps {
   /** the floor cadence — re-read on every arm so the hot/idle adaptive
    *  ceiling keeps working (the scheduler 'deals' row's successor) */
   ceilingMs: () => number
+  /** the domain clock — the self-arm's idempotency window quantizes on
+   *  it (store-stamped times and arm math must share one clock) */
+  now?: () => number
   /** in-flight send dedup — `id` was already dispatched within `ms` (domain
    *  clock). A pending inbox row or live op is re-fanned every tick; under
    *  restate each send is a durable queued invocation, so unthrottled
@@ -470,8 +484,20 @@ export const dealfanTickBody =
     // durable delayed send under restate, executor timer under local.
     // ceilingMs() <= 0 is the floor's off-switch (intervalMs:0 = event-driven
     // only) — a zero-delay arm would hot-loop the tick forever.
+    // The arm is content-keyed on its cadence window: EVERY tick invocation
+    // arms (boot kick, wake-cycle sends, engine pokes all run this body),
+    // so an unkeyed arm adds a permanent parallel chain per extra tick and
+    // the delayed-send backlog grows without bound (rt/arm-multiplication).
+    // Quantizing on ceiling windows converges all chains to ≤1 pending arm.
     const ceil = deps.ceilingMs()
-    if (ceil > 0) await send({ service: EXEC_SVC.dealfan, handler: 'tick' }, {}, { delayMs: ceil })
+    if (ceil > 0) {
+      const now = (deps.now ?? Date.now)()
+      await send(
+        { service: EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY },
+        {},
+        { delayMs: ceil, idempotencyKey: `${EXEC_SVC.dealfan}:tick:${Math.floor(now / ceil) * ceil + ceil}` }
+      )
+    }
     return { events: inbox.length, advanced: ops.length, reconciled: rec.length }
   }
 
@@ -485,7 +511,7 @@ export const dealfanService = async (deps: DealfanDeps, dealDef: unknown) => {
         event: (o: DealEvent) => Promise<void>
         reconcile: (o: unknown) => Promise<void>
       }
-    const self = ctx.serviceSendClient({ name: EXEC_SVC.dealfan } as never) as unknown as {
+    const self = ctx.objectSendClient({ name: EXEC_SVC.dealfan } as never, CRON_KEY) as unknown as {
       tick: (o: unknown, opts?: unknown) => Promise<void>
     }
     return async (target, arg, opts) => {
@@ -495,15 +521,21 @@ export const dealfanService = async (deps: DealfanDeps, dealDef: unknown) => {
         else if (target.handler === 'event') await c.event(arg as DealEvent)
         else if (target.handler === 'reconcile') await c.reconcile(arg)
         else throw new Error(`dealfan send: no deal handler ${target.handler}`)
-      } else if (target.service === EXEC_SVC.dealfan && target.handler === 'tick') await self.tick(arg, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0 }))
+      } else if (target.service === EXEC_SVC.dealfan && target.handler === 'tick')
+        await self.tick(arg, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey }))
       else throw new Error(`dealfan send: no route for ${target.service}`)
     }
   }
-  return restate.service({
+  // an OBJECT on one key, not a basic service: the tick is the old run()
+  // pass — single-flight by design. A basic service runs concurrent ticks;
+  // each scans+fans+arms its own chain, so wake-cycle/boot/poke ticks both
+  // duplicate the pass AND multiply the self-arm backlog. The key's FIFO
+  // is the durable successor of the tick mutex.
+  return restate.object({
     name: EXEC_SVC.dealfan,
     options: RT_OPTS,
     handlers: {
-      tick: async (ctx: restate.Context) => await tick(send(ctx), (n, fn) => ctx.run(n, fn))
+      tick: async (ctx: restate.ObjectContext) => await tick(send(ctx), (n, fn) => ctx.run(n, fn))
     }
   })
 }
@@ -551,7 +583,7 @@ export interface WakeDeps {
  *  custody resubmit cadence stays on the floor where it belongs — wakes
  *  drive work, not time gates. */
 const wakeCycle = async (send: RtSend): Promise<void> => {
-  await send({ service: EXEC_SVC.dealfan, handler: 'tick' }, {})
+  await send({ service: EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY }, {})
   await send({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {})
 }
 
@@ -582,7 +614,7 @@ export const wakeHeightBody =
   (deps: WakeDeps) =>
   async (send: RtSend, arg: { tip: number }, run: StepRun = (_n, fn) => fn()) => {
     const due = deps.legs.dueAtHeight === undefined ? false : await run('due', () => deps.legs.dueAtHeight!(arg.tip))
-    if (due) await send({ service: EXEC_SVC.dealfan, handler: 'tick' }, {})
+    if (due) await send({ service: EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY }, {})
     return { due }
   }
 
@@ -596,7 +628,7 @@ export const wakeReorgBody =
 export const wakeService = async (deps: WakeDeps) => {
   const restate = await import('@restatedev/restate-sdk')
   const send = (ctx: restate.Context): RtSend => {
-    const dealfan = ctx.serviceSendClient({ name: EXEC_SVC.dealfan } as never) as unknown as { tick: (o: unknown) => Promise<void> }
+    const dealfan = ctx.objectSendClient({ name: EXEC_SVC.dealfan } as never, CRON_KEY) as unknown as { tick: (o: unknown) => Promise<void> }
     const transport = ctx.objectSendClient({ name: EXEC_SVC.transport } as never, TRANSPORT_DRAIN_KEY) as unknown as { drain: (o: unknown) => Promise<void> }
     return async (target, arg) => {
       if (target.service === EXEC_SVC.dealfan && target.handler === 'tick') await dealfan.tick(arg)
@@ -640,6 +672,8 @@ export interface CronDeps {
   tick: () => Promise<void>
   /** the cadence — re-read on every arm so adaptive ceilings keep working */
   ceilingMs: () => number
+  /** the domain clock — the self-arm's idempotency window quantizes on it */
+  now?: () => number
   log: (line: string) => void
 }
 
@@ -649,8 +683,15 @@ export const cronTickBody =
     await run('tick', () => deps.tick())
     // ceilingMs() <= 0 is the cadence's off-switch — a zero-delay arm is a
     // hot infinite loop, not a floor
+    // The arm is content-keyed on its cadence window — every tick invocation
+    // arms (boot kicks and event pokes run this same body), so unkeyed arms
+    // add one permanent parallel chain per poke (rt/arm-multiplication).
+    // The window converges all chains to ≤1 pending arm.
     const ceil = deps.ceilingMs()
-    if (ceil > 0) await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil })
+    if (ceil > 0) {
+      const now = (deps.now ?? Date.now)()
+      await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` })
+    }
     return { done: true }
   }
 
@@ -665,7 +706,7 @@ export const cronObject = async (service: string, deps: CronDeps) => {
         const self = ctx.objectSendClient({ name: service } as never, CRON_KEY) as unknown as { tick: (o: unknown, opts?: unknown) => Promise<void> }
         const send: RtSend = async (target, arg, opts) => {
           if (target.service !== service || target.handler !== 'tick') throw new Error(`cron send: no route ${target.service}/${target.handler}`)
-          await self.tick(arg, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0 }))
+          await self.tick(arg, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey }))
         }
         // a self-SEND on the same key — one-way, no lock wait, no deadlock
         return await tick(send, (n, fn) => ctx.run(n, fn))

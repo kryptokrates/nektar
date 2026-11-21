@@ -387,6 +387,7 @@ export const wireEngine = (ex: LocalDispatch, engine: EngineSurface, d: WireEngi
       reconcileOps,
       resubmitPending: () => engine.resubmitTick(),
       ceilingMs: d.ceilingMs ?? (() => 0),
+      now: d.now ?? (() => Date.now()),
       log
     },
     transport: {

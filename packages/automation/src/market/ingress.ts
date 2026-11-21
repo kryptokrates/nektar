@@ -76,7 +76,7 @@ export abstract class IngressOps extends MarketBase {
       // serialized key, and the tick self-arms the floor's next cadence.
       // call() keeps "tick() = one complete pass" semantics.
       const ex = this.d.executor ?? executor()
-      await ex.call({ service: EXEC_SVC.dealfan, handler: 'tick' }, {}).catch((e: unknown) => {
+      await ex.call({ service: EXEC_SVC.dealfan, handler: 'tick', key: 'main' }, {}).catch((e: unknown) => {
         this.d.log?.(`market: dealfan tick: ${(e as Error).message}`)
       })
       // with the runtime's pump wired, the end-of-tick pass is a poke

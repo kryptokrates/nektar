@@ -86,7 +86,7 @@ test('dealfan.tick: inbox → ev:<wantId>, ops → advance keys, reconcile rows 
       ceilingMs: () => 60_000,
       log: () => {}
     })
-    const r = await ex.call<{ events: number; advanced: number; reconciled: number }>({ service: EXEC_SVC.dealfan, handler: 'tick' }, {})
+    const r = await ex.call<{ events: number; advanced: number; reconciled: number }>({ service: EXEC_SVC.dealfan, handler: 'tick', key: 'main' }, {})
     assert.deepEqual(r, { events: 3, advanced: 2, reconciled: 1 })
     await ex.drain()
     assert.deepEqual(sent, [

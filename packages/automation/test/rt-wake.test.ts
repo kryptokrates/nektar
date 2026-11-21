@@ -43,7 +43,7 @@ test('wake.txProof: leg runs journaled, hint fires, cycle tail sends dealfan.tic
   assert.deepEqual(hinted, ['tx1'])
   assert.deepEqual(
     seen.map((s) => `${s.service}/${s.handler}:${s.key ?? '-'}`),
-    [`${EXEC_SVC.dealfan}/tick:-`, `${EXEC_SVC.transport}/drain:${TRANSPORT_DRAIN_KEY}`]
+    [`${EXEC_SVC.dealfan}/tick:main`, `${EXEC_SVC.transport}/drain:${TRANSPORT_DRAIN_KEY}`]
   )
   ex.close()
 })

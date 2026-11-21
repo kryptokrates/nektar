@@ -96,6 +96,14 @@ Per handler, list each statement as inside/outside `ctx.run`:
   each self-arming cadence (dealfan, drain, cron, watcher), name the
   re-arm path: the floor self-arm re-derives from the store each fire,
   or a boot poke re-covers it. Nothing named = `rt/deployment-orphan`.
+- Count who ELSE runs the arming body: a self-arming handler invoked
+  from pokes/boot/wake paths adds one permanent chain PER invocation —
+  `rt/arm-multiplication` unless the arm carries a converging content
+  key (`drain:${nextAt}` for domain wakes, `tick:${floor(now/ceil)*ceil+ceil}`
+  for cadences). Also check the arming body's service kind: a
+  self-armer registered as a basic SERVICE runs concurrent invocations
+  (no key FIFO) — concurrent ticks each arm, and single-flight intent
+  needs an object on a fixed key.
 - `ctx.sleep` inside an exclusive handler = `rt/sleep-blocks-key`; the
   long-wait pattern is a delayed send to self, not a sleep.
 

@@ -11,7 +11,7 @@ import {
   sweepService,
   dealObject,
   custodyObject,
-  dealfanService,
+  dealfanObject,
   transportObject,
   TRANSPORT_DRAIN_KEY,
   wakeService,
@@ -264,7 +264,7 @@ test(
       log: () => {}
     })
     const items: DealEvent[] = [{ source: 'lane', messageId: 'fm1', kind: 'want', payload: { wantId: 'w-fan' } }]
-    const dealfanDef = await dealfanService(
+    const dealfanDef = await dealfanObject(
       {
         pendingInbox: async () => items,
         liveOps: async () => [{ operationId: operation.operationId }],
@@ -345,7 +345,7 @@ test(
     // the wake's ctx send targets nektar-dealfan — both services ride the
     // same endpoint; the tick's scan deps record having run server-side
     const fanned: string[] = []
-    const dealfanDef = await dealfanService(
+    const dealfanDef = await dealfanObject(
       {
         pendingInbox: async () => (fanned.push('inbox'), [] as DealEvent[]),
         liveOps: async () => (fanned.push('ops'), []),

@@ -29,7 +29,7 @@ import {
   sweepService,
   dealObject,
   custodyObject,
-  dealfanService,
+  dealfanObject,
   transportObject,
   wakeService,
   cronObject,
@@ -656,7 +656,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // the dealfan service — the whole tick as one journaled invocation:
     // inbox items → deal.event per correlation key, ops → deal.advance,
     // due reconcile rows → deal.reconcile. Scans journal; sends dedupe.
-    const dealfanDef = await dealfanService(dealfanDeps, dealDef)
+    const dealfanDef = await dealfanObject(dealfanDeps, dealDef)
     const transportDef = await transportObject(transportDeps)
     const custodyDefs = custodyDeps !== undefined ? [await custodyObject(custodyDeps)] : []
     const wakeDef = await wakeService(wakeDeps)

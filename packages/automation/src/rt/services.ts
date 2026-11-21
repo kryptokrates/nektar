@@ -501,7 +501,7 @@ export const dealfanTickBody =
     return { events: inbox.length, advanced: ops.length, reconciled: rec.length }
   }
 
-export const dealfanService = async (deps: DealfanDeps, dealDef: unknown) => {
+export const dealfanObject = async (deps: DealfanDeps, dealDef: unknown) => {
   const restate = await import('@restatedev/restate-sdk')
   const tick = dealfanTickBody(deps)
   const send = (ctx: restate.Context): RtSend => {

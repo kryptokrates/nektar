@@ -1,7 +1,7 @@
 {
   "packages": {
     "anchor": {
-      "loc": 1201,
+      "loc": 1209,
       "pkgFanout": 4,
       "edges": ["chain", "contracts", "core", "identity"],
       "maxFileLoc": 624,
@@ -9,10 +9,10 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 12344,
+      "loc": 12457,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
-      "maxFileLoc": 1336,
+      "maxFileLoc": 1344,
       "maxFileFanout": 28,
       "instability": 0.75
     },
@@ -33,7 +33,7 @@
       "instability": 0.5
     },
     "chain": {
-      "loc": 6736,
+      "loc": 6784,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 949,
@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 10659,
+      "loc": 10676,
       "pkgFanout": 18,
       "edges": [
         "anchor",
@@ -132,7 +132,7 @@
       "instability": 0.947
     },
     "memory": {
-      "loc": 2440,
+      "loc": 2447,
       "pkgFanout": 14,
       "edges": [
         "anchor",
@@ -209,11 +209,11 @@
       "fanout": 22
     },
     "packages/automation/src/market/buyer.ts": {
-      "loc": 1267,
+      "loc": 1344,
       "fanout": 13
     },
     "packages/automation/src/runtime.ts": {
-      "loc": 1057,
+      "loc": 1062,
       "fanout": 28
     },
     "packages/automation/src/store.ts": {
@@ -225,8 +225,12 @@
       "fanout": 8
     },
     "packages/chain/src/index.ts": {
-      "loc": 88,
+      "loc": 89,
       "fanout": 31
+    },
+    "packages/chain/src/mainnet.ts": {
+      "loc": 821,
+      "fanout": 7
     },
     "packages/chain/src/testkit.ts": {
       "loc": 949,

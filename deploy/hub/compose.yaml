@@ -49,6 +49,11 @@ services:
       # fresh agent's first carrier doesn't wait on a block. Override to
       # 'market' or a comma-list against unpatched host software.
       NEKTAR_ANCHORED_LANES: ${NEKTAR_ANCHORED_LANES:-all}
+      # self-serve testnet drip: NEKTAR_FAUCET=1 opens POST /v1/faucet
+      # (unauthenticated — caps in faucet-drips.json are the defense)
+      NEKTAR_FAUCET: ${NEKTAR_FAUCET:-}
+      NEKTAR_FAUCET_SATS: ${NEKTAR_FAUCET_SATS:-}
+      NEKTAR_FAUCET_DAILY_SATS: ${NEKTAR_FAUCET_DAILY_SATS:-}
     volumes:
       - agent-data:/data
     depends_on:

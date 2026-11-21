@@ -43,9 +43,11 @@ not trusted.
 
 - **No key to generate.** The agent creates its own persistent fee key on
   first boot and prints `operator fee key <address>` — send testnet sats
-  to that address (a testnet faucet, or ask us for a ~500k-sat grant —
-  open a GitHub issue on `kryptokrates/nektar` titled `TESTNET-GRANT` with
-  your address). Set `NEKTAR_WAIT_FUNDING=1` +
+  to that address. Self-serve: `curl -X POST https://nektar.run/v1/faucet
+  -H 'content-type: application/json' -d '{"address":"<printed address>"}'`
+  (one drip per address; if it's out or down, any public testnet faucet
+  works, or open a GitHub issue titled `TESTNET-GRANT` with your address).
+  Set `NEKTAR_WAIT_FUNDING=1` +
   `NEKTAR_INDEXER_DISCOVERY=1` and the agent holds startup until the sats
   land — nothing else to do. (Bring-your-own-key operators can instead set
   `NEKTAR_FUND_WIF` to a base58check WIF — _not_ raw hex.)

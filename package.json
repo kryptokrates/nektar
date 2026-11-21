@@ -8,7 +8,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "test:stack": "pnpm -r --if-present test:stack",
-    "test:testnet": "NEKTAR_TEST_TIER=testnet NEKTAR_PAID_DISCLOSURE=1 node --test --test-timeout=1800000 packages/mcp/dist/test/market-testnet.test.js",
+    "test:testnet": "NEKTAR_TEST_TIER=testnet NEKTAR_PAID_DISCLOSURE=1 node --max-old-space-size=8192 --test --test-timeout=1800000 packages/mcp/dist/test/market-testnet.test.js",
     "test:smoke": "NEKTAR_TEST_TIER=stack node --test --test-timeout=300000 --test-force-exit packages/chain/dist/test/stackchain.test.js packages/anchor/dist/test/vault.test.js packages/anchor/dist/test/sale.test.js packages/anchor/dist/test/bond.test.js packages/mcp/dist/test/sale.test.js packages/mcp/dist/test/market-engine.test.js",
     "reproduce": "node packages/core/dist/test/vectors.js && node packages/zk/dist/test/pin.js",
     "e2e": "node packages/e2e/dist/src/e2e.js",

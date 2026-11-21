@@ -33,6 +33,11 @@ services:
       NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:-}
       NEKTAR_ANNOUNCE: ${NEKTAR_ANNOUNCE:-}
       NEKTAR_SEED_DOMAINS: ${NEKTAR_SEED_DOMAINS-*}
+      # an anchored (ancestry-proven, own proof in flight) tree may serve
+      # every lane — a cold agent's first carrier rides the mint broadcast,
+      # not a block wait. Hosts without the anchored-admission patch refuse
+      # the carrier; the lane then waits for the proof like before.
+      NEKTAR_ANCHORED_LANES: ${NEKTAR_ANCHORED_LANES:-all}
       NEKTAR_WATCH_URLS: ${NEKTAR_WATCH_URLS:-}
       NEKTAR_WATCH_PUBLIC: ${NEKTAR_WATCH_PUBLIC:-}
       NEKTAR_BFINGER_PUBLISH: ${NEKTAR_BFINGER_PUBLISH:-}

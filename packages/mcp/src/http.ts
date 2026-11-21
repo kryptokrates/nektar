@@ -2,6 +2,7 @@
 // as MCP, plus public read endpoints. Every route is in OPENAPI (tested).
 import { nektarEnv, deadline } from '@nektar/core'
 import { marketHosts, addSavedHost, removeSavedHost } from './hosts.js'
+import { faucetEnabled, faucetDrip } from './faucet.js'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { MerklePath } from '@bsv/sdk'
@@ -40,6 +41,14 @@ export const OPENAPI = {
           'leave a market host — ?url= drops a saved join or blocks an env/seed host persistently (hosts.json), and splices the running lanes (au.removeHost). Operator-gated.',
         parameters: [{ name: 'url', in: 'query', required: true, schema: { type: 'string' } }],
         responses: { 200: { description: 'removed' }, 400: { description: 'url required' }, 404: { description: 'not a market host' } }
+      }
+    },
+    '/v1/faucet': {
+      post: {
+        summary:
+          'self-serve testnet drip — {address} → {txid, sats}. Only when the operator opts in (NEKTAR_FAUCET=1, never on main); one drip per address, daily cap — see faucet-drips.json.',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { address: { type: 'string' } }, required: ['address'] } } } },
+        responses: { 200: { description: 'dripped' }, 400: { description: 'bad/missing address' }, 404: { description: 'faucet not enabled' }, 429: { description: 'address already dripped or daily cap' } }
       }
     },
     '/v1/openapi.json': { get: { summary: 'this document', responses: { 200: { description: 'OpenAPI 3.1' } } } },
@@ -397,7 +406,10 @@ export function createHttpApi(
           // counterparty push: the carrier's own signature/encryption is the
           // auth — a peer can't hold our bearer; verification is identical to
           // a host read, so no trust is added
-          url.pathname === '/v1/lane'
+          url.pathname === '/v1/lane' ||
+          // self-serve testnet drip — unauthenticated by design; the route
+          // itself refuses unless NEKTAR_FAUCET=1 and never on main
+          url.pathname === '/v1/faucet'
         const operatorApproval =
           url.pathname.startsWith('/v1/automation/approvals/') &&
           nektarEnv('NEKTAR_OPERATOR_TOKEN') &&
@@ -576,6 +588,22 @@ export function createHttpApi(
             mem.automation?.removeHost?.(u)
             mem.events.emit('change', 'automation')
             return send(200, { url: u, removed: true })
+          }
+          // POST /v1/faucet {address} — a self-serve testnet drip so a
+          // stranger's funding step stops being a conversation. The spend
+          // rides sendSats (SqlFunds + SpendGuard); faucet.ts owns the
+          // per-address/daily caps. Gate is evaluated per request.
+          if (req.method === 'POST' && url.pathname === '/v1/faucet') {
+            if (!faucetEnabled()) return send(404, { error: 'no faucet on this instance' })
+            const fa = ((await body(req).catch(() => ({}))) as { address?: unknown }).address
+            if (typeof fa !== 'string' || fa.trim() === '') return send(400, { error: 'address required' })
+            const r = await faucetDrip({ mem, address: fa, dataDir: nektarEnv('NEKTAR_DATA_DIR') ?? '.nektar' }).catch((e: Error) => ({
+              ok: false as const,
+              status: 502,
+              error: `drip failed: ${e.message.slice(0, 120)}`
+            }))
+            if (!r.ok) return send(r.status, { error: r.error })
+            return send(200, { txid: r.txid, sats: r.sats, network: nektarEnv('NEKTAR_NETWORK') ?? 'regtest' })
           }
           if (req.method === 'GET' && url.pathname === '/v1/tools') return send(200, { tools: await visibleTools(mem) })
           if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {

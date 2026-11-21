@@ -76,6 +76,10 @@ USER node
 # fresh instance answers non-empty; run with -e NEKTAR_SEED_DOMAINS= to opt
 # out (a silo that announces nothing and imports nothing).
 ENV NEKTAR_MODEL_ID=unspecified NEKTAR_BATCH=4 NEKTAR_NETWORK=regtest NEKTAR_DATA_DIR=/data NEKTAR_TOOL_PROFILE=operator NEKTAR_SEED_DOMAINS=*
+# cold-start lanes: anchored trees (ancestry-proven, own BUMP in flight)
+# serve every lane — a fresh instance's first carrier doesn't pay a block.
+# Unpatched hosts refuse such carriers; the lane falls back to proven-only.
+ENV NEKTAR_ANCHORED_LANES=all
 VOLUME /data
 LABEL io.modelcontextprotocol.server.name="io.github.nedzof/nektar"
 # health = a full scripted MCP session against a fresh server process

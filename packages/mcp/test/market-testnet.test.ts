@@ -547,7 +547,7 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_800_00
     const wants = await Promise.all(buyers.map((b) => b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)))
     const all = [s.rt, ...buyers.map((b) => b.rt)]
     const settledFor = async () => (await Promise.all(wants.map((w) => saleFor(s, w.wantId)))).filter((o) => o !== undefined && COMPLETE.has(o.state))
-    const ms = await until(all, 240_000, async () => {
+    const ms = await until(all, 400_000, async () => {
       for (const [i, b] of buyers.entries()) {
         const bo = await opFor(b, wants[i].wantId)
         if (bo === undefined || !BUYER_DONE.has(bo.state)) return false

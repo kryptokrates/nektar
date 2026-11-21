@@ -84,6 +84,15 @@ if (hostFlag) setNektarEnv('NEKTAR_HTTP_HOST', hostFlag)
 
 const rt = await openRuntime(configFromEnv())
 nlog(`network=${rt.network}`)
+// zero-config join, Layer 0 — a genuinely empty boot gets a small local
+// 'welcome' shard so the first recall answers even while every seed host is
+// dark. One-shot (dataDir marker), local writes only, NEKTAR_SEED_WELCOME=0
+// opts out. Runs before the dir-lane seed so the first answer never waits on
+// announces.
+if (!/^(0|false|no)$/i.test(nektarEnv('NEKTAR_SEED_WELCOME') ?? '')) {
+  const { seedWelcome } = await import('./welcome.js')
+  await seedWelcome({ mem: rt.mem, dataDir: nektarEnv('NEKTAR_DATA_DIR') ?? '.nektar', log: nlog })
+}
 const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
 if (paymentsEnabled()) {
   requireOperatorWallet()

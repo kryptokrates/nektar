@@ -135,28 +135,29 @@ export function configFromEnv(env = process.env): RuntimeConfig {
       broadcasterUrl: env.NEKTAR_BROADCASTER_URL ?? urls?.broadcaster,
       // NEKTAR_BROADCASTER_URLS: comma-separated extra routes — the same
       // tx is submitted to all endpoints concurrently, first acceptance wins.
-      // Testnet always fans out to TAAL + the EU bsvblockchain mirror so a
-      // strained or down endpoint can't stall the whole submit path — the
-      // same resilience shape as indexerUrls (TAAL needs an api key to
-      // accept; keyless it's a fast reject, never a blocker)
+      // Both live nets always fan out so a strained or down endpoint can't
+      // stall the whole submit path — the same resilience shape as
+      // indexerUrls (TAAL needs an api key to accept; keyless it's a fast
+      // reject, never a blocker). Endpoints validate inputs against their
+      // own chain's UTXO set — a wrong-scoped route can only reject.
       broadcasterUrls: [
         ...(env.NEKTAR_BROADCASTER_URLS?.split(',')
           .map((s) => s.trim().replace(/\/+$/, ''))
           .filter(Boolean) ?? []),
         ...(network === 'testnet'
           ? ['https://arc-test.taal.com', 'https://arcade-v2-testnet-eu-1.bsvblockchain.tech', 'https://testnet.arcade.gorillapool.io']
-          : [])
+          : ['https://arc.taal.com', 'https://arcade-v2-us-1.bsvblockchain.tech'])
       ],
       broadcasterApiKey: secret('NEKTAR_BROADCASTER_API_KEY'),
       indexerUrl: env.NEKTAR_INDEXER_URL ?? env.NEKTAR_WOC_URL ?? urls?.indexer,
       // NEKTAR_INDEXER_URLS: comma-separated extra index bases — queried in
-      // order when the primary errors or misses. Testnet always appends the
+      // order when the primary errors or misses. Both live nets append the
       // WoC mirror: a rate-limited banana must not read as chain-unreachable
       indexerUrls: [
         ...(env.NEKTAR_INDEXER_URLS?.split(',')
           .map((s) => s.trim().replace(/\/+$/, ''))
           .filter(Boolean) ?? []),
-        ...(network === 'testnet' ? ['https://api.whatsonchain.com/v1/bsv/test'] : [])
+        `https://api.whatsonchain.com/v1/bsv/${testNet ? 'test' : 'main'}`
       ],
       indexerApiKey: secret('NEKTAR_INDEXER_API_KEY') ?? secret('NEKTAR_WOC_API_KEY'),
       chaintracksUrl: env.NEKTAR_CHAINTRACKS_URL,

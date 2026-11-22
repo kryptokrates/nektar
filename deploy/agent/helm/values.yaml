@@ -72,3 +72,18 @@ resources: {}
   # requests:
   #   cpu: 250m
   #   memory: 512Mi
+
+# the Restate executor sidecar — required, runs in the same pod so loopback
+# URLs are correct. Journals get their own claim.
+restate:
+  image:
+    repository: docker.restate.dev/restatedev/restate
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources: {}
+    # requests:
+    #   cpu: 100m
+    #   memory: 256Mi
+  persistence:
+    size: 1Gi
+    storageClass: ''  # falls back to persistence.storageClass when empty

@@ -8,6 +8,26 @@ Three ways in — pick the one your platform speaks. (This directory also
 ships as the `nektar-agent-deploy.tar.gz` asset on every GitHub release —
 grab that instead of master if you want a pinned version.)
 
+## What lives where (mainnet)
+
+You host **one thing**; the rest is shared or public infrastructure you
+verify, never trust:
+
+| Piece | What it is | Hosted where | Released as |
+|---|---|---|---|
+| **Your agent** | identity, treasury, journals, HTTP/MCP surface | **your box** (VPS/laptop) | `ghcr.io/kryptokrates/nektar` image · `nektar-agent-deploy.tar.gz` |
+| **Executor** | Restate sidecar — required | same box/pod as the agent | `docker.restate.dev/restatedev/restate` (upstream) |
+| **Agent state** | keys, sqlite, lane stock | the `agent-data` volume/PVC | — (your backups) |
+| **Market hosts** | overlay envelope transport | shared/public hosts, or your own via `nektar-hub-deploy.tar.gz` | `ghcr.io/kryptokrates/nektar-{bbox-host,shim,hub-db}` |
+| **Chain truth** | indexers + broadcasters | public internet (WoC, banana, GorillaPool, TAAL) | — (SPV-verified, never trusted) |
+| **Restate journals** | durable executor state | the `restate-data` volume/PVC | — |
+
+Mainnet has **no baked seed hosts** (deliberately — a single-operator seed
+list is the centralization the design avoids): set `NEKTAR_MARKET_HOSTS` to
+a public pair, or run your own (`deploy/hub` ships as
+`nektar-hub-deploy.tar.gz` on each release). Without it the agent still
+does memory/anchors/receipts — it just has no market.
+
 ## Bare Linux box: one command
 
 ```bash
@@ -19,6 +39,14 @@ agent. No market config needed: unset `NEKTAR_MARKET_HOSTS` joins the
 baked-in seed hosts for the network (testnet → the public quorum). Set it
 only to pin your own host pair — any operator's hosts work, they're
 untrusted plumbing.
+
+Mainnet one-liner (real BSV — the confirm is required, the hosts are too):
+
+```bash
+NEKTAR_NETWORK=main NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND \
+NEKTAR_MARKET_HOSTS=http://host-a:8080,http://host-b:8080 \
+curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/agent/install.sh | bash
+```
 
 ## Docker Compose: three commands
 
@@ -44,6 +72,10 @@ helm install my-agent ./helm \
 
 (`marketHosts` is comma-separated — escape each comma or use `-f` with a
 values file; helm splits unescaped commas into separate keys.)
+
+The chart runs agent + Restate sidecar **in one pod** — loopback URIs are
+correct there (shared network namespace), which retires the whole
+container-DNS trap class. Each keeps its own PVC (`data`, `restate-data`).
 
 `helm/values.yaml` exposes everything — image tag, persistence
 (`StatefulSet` + PVC for `/data`), `secrets.existingSecret` for your own
@@ -90,5 +122,7 @@ deployments (what `nektar.run` runs) — use whichever your platform speaks.
   (compose: the `agent-data` volume; Helm: the PVC)
 - `NEKTAR_UNATTENDED=` / `unattended=false` means market approvals queue for
   an operator decision — recommended until you trust the policies
-- Testnet coins only. `NEKTAR_NETWORK=main` requires the mainnet descriptor
-  (`docker-mcp/nektar-main.yaml`) and deliberate key custody choices
+- `NEKTAR_NETWORK=main` works from this same compose/chart — it needs
+  `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND`, a `NEKTAR_MARKET_HOSTS` pair (no
+  baked seeds on main), and deliberate key custody. The toolkit-style
+  alternative is `docker-mcp/nektar-main.yaml`

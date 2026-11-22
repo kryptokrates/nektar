@@ -55,6 +55,15 @@ spec:
               value: {{ .Values.minCollectMs | quote }}
             - name: NEKTAR_COLLECT_QUIET_MS
               value: {{ .Values.collectQuietMs | quote }}
+            # the executor sidecar shares this pod's net namespace — loopback
+            # is CORRECT here (the one topology where it is): no DNS, no
+            # routing, no host-gateway to get wrong.
+            - name: NEKTAR_RESTATE_URL
+              value: "http://127.0.0.1:8080"
+            - name: NEKTAR_RESTATE_ADMIN
+              value: "http://127.0.0.1:9070"
+            - name: NEKTAR_RESTATE_ENDPOINT_URI
+              value: "http://127.0.0.1:9080"
             - name: NEKTAR_MAX_FEE_SATS_PER_TX
               value: {{ .Values.maxFeeSatsPerTx | quote }}
             - name: NEKTAR_MAX_SPEND_SATS_PER_DAY
@@ -80,7 +89,30 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+        # the durable executor is required infrastructure — same pod, its
+        # journals on their own claim so a data-volume snapshot/replace
+        # doesn't cross-pollinate the two durable stores
+        - name: restate
+          image: "{{ .Values.restate.image.repository }}:{{ .Values.restate.image.tag }}"
+          imagePullPolicy: {{ .Values.restate.image.pullPolicy }}
+          resources:
+            {{- toYaml .Values.restate.resources | nindent 12 }}
+          volumeMounts:
+            - name: restate-data
+              mountPath: /restate-data
   volumeClaimTemplates:
+    - metadata:
+        name: restate-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.restate.persistence.storageClass }}
+        storageClassName: {{ .Values.restate.persistence.storageClass | quote }}
+        {{- else if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.restate.persistence.size }}
     - metadata:
         name: data
       spec:

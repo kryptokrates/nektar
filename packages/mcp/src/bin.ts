@@ -16,24 +16,13 @@ import { existsSync, readFileSync } from 'node:fs'
 const nlog = mkLog('nektar')
 const argv = process.argv.slice(2)
 const envFlag = argv.includes('--env') ? argv[argv.indexOf('--env') + 1] : undefined
-if (existsSync('.env')) {
-  for (const line of readFileSync('.env', 'utf8').split(/\r?\n/)) {
-    const m = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
-    if (m && nektarEnv(m[1]) === undefined) setNektarEnv(m[1], m[2].trim())
-  }
-}
-if (envFlag) {
-  if (!/^(regtest|testnet|main)$/.test(envFlag)) {
-    nlog(`--env must be regtest|testnet|main, got "${envFlag}"`)
-    process.exit(2)
-  }
-  setNektarEnv('NEKTAR_NETWORK', envFlag)
-}
+// precedence: exports > --env > profile > .env. The profile is the explicit
+// role choice for THIS boot — a stale .env carrying NEKTAR_NETWORK must lose
+// to it, or 'mainnet' silently boots testnet (seen live). Exports always
+// win regardless of order: they're already set when we read.
 // NEKTAR_PROFILE — one name fills the conventional defaults for a role.
-// The profile only sets variables that are still unset: .env entries,
-// exported vars and the flags above always win. An unknown name is a
-// loud refusal — silently booting the wrong shape is how agents end up
-// on mainnet with regtest assumptions (or the reverse).
+// An unknown name is a loud refusal — silently booting the wrong shape is
+// how agents end up on mainnet with regtest assumptions (or the reverse).
 const PROFILES: Record<string, Record<string, string>> = {
   'regtest-dev': {
     NEKTAR_NETWORK: 'regtest',
@@ -76,6 +65,19 @@ if (profile !== undefined) {
   }
   if (resolved !== profile) nlog(`profile "${profile}" → "${resolved}"`)
   for (const [k, v] of Object.entries(defs)) if (nektarEnv(k) === undefined) setNektarEnv(k, v)
+}
+if (existsSync('.env')) {
+  for (const line of readFileSync('.env', 'utf8').split(/\r?\n/)) {
+    const m = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
+    if (m && nektarEnv(m[1]) === undefined) setNektarEnv(m[1], m[2].trim())
+  }
+}
+if (envFlag) {
+  if (!/^(regtest|testnet|main)$/.test(envFlag)) {
+    nlog(`--env must be regtest|testnet|main, got "${envFlag}"`)
+    process.exit(2)
+  }
+  setNektarEnv('NEKTAR_NETWORK', envFlag)
 }
 const portFlag = argv.includes('--port') ? argv[argv.indexOf('--port') + 1] : undefined
 if (portFlag) setNektarEnv('NEKTAR_HTTP_PORT', portFlag)

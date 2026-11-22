@@ -47,7 +47,7 @@ for (const d of diags) {
   } else if (code.includes('no-unused-vars')) {
     const at = span.offset
     const name = buf.subarray(at, at + span.length).toString()
-    // import specifier: bounded scan for enclosing braces
+    // an import specifier: bounded scan for enclosing braces
     const seg = buf.subarray(Math.max(0, at - 400), at + 400).toString()
     const rel = at - Math.max(0, at - 400)
     let open = -1

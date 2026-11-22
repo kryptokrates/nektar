@@ -89,8 +89,8 @@ const journalError = (j: unknown): string | null => {
 
 // `now` is injectable so signers/readers on one clock domain (automation's
 // engine clock) agree — signers pass the artifact's own ts
-const wantShapeError = (w: WantAd | null, allowExpired = false, now = Date.now()): string | null => {
-  if (w === null) return 'bad pub'
+const wantShapeError = (w: WantAd | null | undefined, allowExpired = false, now = Date.now()): string | null => {
+  if (w == null) return 'bad pub'
   if (typeof w.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(w.pub)) return 'bad pub'
   if (typeof w.wantId !== 'string' || !ARTIFACT_ID_RE.test(w.wantId)) return 'bad wantId'
   if (!Number.isSafeInteger(w.revision) || w.revision < 1) return 'bad revision'
@@ -242,8 +242,8 @@ export const publicQuoteError = (q: unknown): string | null => {
   return null
 }
 
-const offerShapeError = (o: OfferAd | null, allowExpired = false, now = Date.now()): string | null => {
-  if (o === null) return 'bad pub'
+const offerShapeError = (o: OfferAd | null | undefined, allowExpired = false, now = Date.now()): string | null => {
+  if (o == null) return 'bad pub'
   if (typeof o.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(o.pub)) return 'bad pub'
   if (typeof o.offerId !== 'string' || !ARTIFACT_ID_RE.test(o.offerId)) return 'bad offerId'
   if (!Number.isSafeInteger(o.revision) || o.revision < 1) return 'bad revision'
@@ -342,8 +342,8 @@ const packError = (p: unknown): string | null => {
   return null
 }
 
-const announceShapeError = (a: AnnounceAd | null, allowExpired = false, now = Date.now()): string | null => {
-  if (a === null) return 'bad pub'
+const announceShapeError = (a: AnnounceAd | null | undefined, allowExpired = false, now = Date.now()): string | null => {
+  if (a == null) return 'bad pub'
   if (typeof a.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(a.pub)) return 'bad pub'
   if (!Array.isArray(a.hosts) || a.hosts.length < 1 || a.hosts.length > 8 || !a.hosts.every((h) => typeof h === 'string' && URL_RE.test(h))) return 'bad hosts'
   if (a.packs !== undefined && (!Array.isArray(a.packs) || a.packs.length > 32 || a.packs.some((p) => packError(p) !== null))) return 'bad packs'

@@ -9,6 +9,7 @@ import type { LogRecord, ShardStore } from './store.js'
 const TABLE = 'nektar_log'
 
 export class KnexShardStore implements ShardStore {
+  private known = new Set<string>()
   constructor(private knex: Knex<any, any>) {}
 
   async init(): Promise<void> {
@@ -36,6 +37,14 @@ export class KnexShardStore implements ShardStore {
     }
     // hot scan: committedUnbatched runs on every remember + flush tick
     await this.knex.raw('CREATE INDEX IF NOT EXISTS nektar_log_pending_idx ON ?? (??, ??, ??)', [TABLE, 'shard', 'state', 'batch_index'])
+    // shard-name cache — restoreState names written shards from here so a
+    // restart can't orphan a shard that was never anchored (the snapshot's
+    // touched set only saves on chain-write ops; the log is the truth)
+    for (const r of await this.knex(TABLE).distinct('shard')) this.known.add(r.shard as string)
+  }
+
+  shardNames(): string[] {
+    return [...this.known]
   }
 
   private row(r: LogRecord) {
@@ -70,6 +79,7 @@ export class KnexShardStore implements ShardStore {
 
   async append(rec: LogRecord): Promise<void> {
     await this.knex(TABLE).insert(this.row(rec))
+    this.known.add(rec.shard)
   }
   async byIdentity(shard: string, hdpHex: string): Promise<LogRecord | undefined> {
     const row = await this.knex(TABLE)

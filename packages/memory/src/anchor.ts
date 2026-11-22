@@ -249,6 +249,11 @@ export abstract class MemAnchor extends MemTx {
     })
   }
   protected restoreState(): void {
+    // the durable truth is the log itself — a state snapshot can lag the
+    // last write (persistState only runs on chain-write ops), so written
+    // shards rejoin from the store's own name set whether or not a
+    // snapshot exists: a record that exists is a shard we own
+    for (const shard of this.store.shardNames?.() ?? []) this.touched.add(shard)
     const s = this.opts.stateStore?.load()
     if (!s) return
     for (const [shard, p] of Object.entries(s.shards)) {

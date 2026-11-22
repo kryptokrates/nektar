@@ -37,6 +37,10 @@ export interface ShardStore {
   markAnchored: (shard: string, batchIndex: number, txid: string) => Promise<void>
   all: (shard: string) => Promise<LogRecord[]>
   lastBatchIndex: (shard: string) => Promise<number>
+  /** names of every shard with at least one stored record — the durable
+   *  truth for "shards this instance has written"; memory's touched set is
+   *  a snapshot of this and a restart rebuilds from here, not from it */
+  shardNames?: () => string[]
 }
 
 export class MemoryShardStore implements ShardStore {
@@ -103,5 +107,8 @@ export class MemoryShardStore implements ShardStore {
     let max = -1
     for (const r of this.list(shard)) if (r.batchIndex !== undefined && r.batchIndex > max) max = r.batchIndex
     return max
+  }
+  shardNames(): string[] {
+    return [...this.recs.keys()]
   }
 }

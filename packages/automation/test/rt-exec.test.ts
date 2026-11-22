@@ -47,6 +47,21 @@ test('Dispatcher: call dispatches to the registered handler; send fires it async
   ex.close()
 })
 
+test('Dispatcher: delayMs past the int32 timer ceiling clamps, never fires early', async () => {
+  const ex = new Dispatcher()
+  let fired = false
+  ex.register('svc', 'due', async () => {
+    fired = true
+  })
+  // the refund_pending residence bound (180d) overflows setTimeout's int32
+  // delay to 1ms — the arm must clamp to the platform ceiling instead of
+  // dispatching immediately (the domain deadline, not the timer, is due)
+  await ex.send({ service: 'svc', handler: 'due' }, {}, { delayMs: 180 * 86_400_000 })
+  await new Promise((res) => setTimeout(res, 50))
+  assert.equal(fired, false)
+  ex.close()
+})
+
 test('RestateExecutor: wire format is /restate/{call,send}/ paths with delay + idempotency-key', async () => {
   const seen: Array<{ url: string; headers: Record<string, string>; body: string }> = []
   const realFetch = globalThis.fetch

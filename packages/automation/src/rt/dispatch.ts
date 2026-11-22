@@ -161,10 +161,18 @@ export class Dispatcher implements LocalDispatch {
         .finally(() => this.pending.delete(p))
     }
     if (opts?.delayMs !== undefined && opts.delayMs > 0) {
-      const t = setTimeout(() => {
-        this.timers.delete(t)
-        run()
-      }, opts.delayMs)
+      // setTimeout is int32 — a delayed send past ~24.8d (the 180-day
+      // refund_pending bound is the live case) overflows to 1ms and warns.
+      // Clamp to the platform ceiling: the fired handler re-checks the domain
+      // deadline, so an early arm is one wasted wake, never a verdict; the
+      // durable executor carries true horizons over the wire.
+      const t = setTimeout(
+        () => {
+          this.timers.delete(t)
+          run()
+        },
+        Math.min(opts.delayMs, 2 ** 31 - 1)
+      )
       this.timers.add(t)
     } else {
       queueMicrotask(run)

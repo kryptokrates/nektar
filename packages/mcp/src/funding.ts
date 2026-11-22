@@ -23,7 +23,7 @@ import {
   type Funds
 } from '@nektar/chain'
 import { wireP2p, setupFeeVault } from './setup.js'
-import { acquireLock, keyLockFile, loadFeeKey } from './rtsupport.js'
+import { acquireLock, keyLockFile, loadFeeKey, probeWalletSubstrate } from './rtsupport.js'
 import { importable } from './txops.js'
 
 const log = (net: string): LogLine => mkLog(`nektar ${net}`)
@@ -105,6 +105,12 @@ export async function openCustody(
   let fundKey: PrivateKey | undefined
   if (externalWallet) {
     if (mc.fundWif !== undefined) log(net)('NEKTAR_FUND_WIF ignored under NEKTAR_WALLET=client — the external wallet signs')
+    // the SDK's auto probe collapses every substrate failure into 'Install a
+    // BSV wallet today!' — a LOCKED vault gets that same message. Name the
+    // real state first; these are the two operator-visible cases.
+    const sub = await probeWalletSubstrate()
+    if (sub === 'locked') throw new Error('NEKTAR_WALLET=client: BSV Desktop is running but the vault is LOCKED — unlock it and restart')
+    if (sub === 'absent') throw new Error('NEKTAR_WALLET=client: no BRC-100 wallet substrate on localhost:3321 — start BSV Desktop unlocked')
     clientWallet = new WalletClient('auto', 'nektar')
     // the reserve funds a stable self-derived wallet keyID (nektar-fund) —
     // createSignature under the same derivation produces the matching sig, so

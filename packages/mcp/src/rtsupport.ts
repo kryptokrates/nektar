@@ -18,6 +18,28 @@ interface KeyFile {
   logKey: string
   shardKeys: Record<string, string>
 }
+
+/** state of the local BRC-100 substrate (BSV Desktop's JSON API on :3321).
+ *  WalletClient('auto') collapses locked-vault and no-service into the same
+ *  "Install a BSV wallet today!" error — custody setup probes here first so
+ *  the operator gets the true reason. 'live' = the API answered at all (a
+ *  locked vault answers 503 with code WALLET_LOCKED — that IS a live wallet). */
+export type SubstrateState = 'live' | 'locked' | 'absent'
+export async function probeWalletSubstrate(fetchImpl: typeof fetch = fetch): Promise<SubstrateState> {
+  try {
+    const r = await fetchImpl('http://localhost:3321/getVersion', {
+      method: 'POST',
+      // the JSON API refuses requests with no Origin header (HTTP 400)
+      headers: { 'content-type': 'application/json', origin: 'http://localhost' },
+      body: '{}'
+    })
+    const body = (await r.json().catch(() => ({}))) as { code?: string; description?: string }
+    if (body.code === 'WALLET_LOCKED' || (body.description ?? '').includes('locked')) return 'locked'
+    return 'live'
+  } catch {
+    return 'absent'
+  }
+}
 /** keys are generated once into the data dir (0600) unless supplied; never logged.
  *  Encrypted at rest when a passphrase is set; mandatory on main.
  *  `create=false` (external-wallet custody): an absent file is NOT generated —

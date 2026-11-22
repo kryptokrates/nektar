@@ -58,14 +58,14 @@ Containers in one pod share one localhost: any duplicate port across the
 pod's containers is a BLOCKER. `containerPort` is documentation only — the
 bind is what the process does, so image defaults and env vars count.
 
-| image | default binds |
-|---|---|
-| `restatedev/restate` | ingress 8080, admin 9070, node 5122 |
-| `postgres` | 5432 |
-| `redis`/`valkey` | 6379 |
-| `nginx`/`traefik`/`caddy` | 80, 443 |
-| `grafana`/`prometheus` | 3000 / 9090 |
-| nektar agent | `NEKTAR_HTTP_PORT` (default 8080), endpoint `NEKTAR_RESTATE_ENDPOINT_URI` port (9080) |
+| image                     | default binds                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------- |
+| `restatedev/restate`      | ingress 8080, admin 9070, node 5122                                                   |
+| `postgres`                | 5432                                                                                  |
+| `redis`/`valkey`          | 6379                                                                                  |
+| `nginx`/`traefik`/`caddy` | 80, 443                                                                               |
+| `grafana`/`prometheus`    | 3000 / 9090                                                                           |
+| nektar agent              | `NEKTAR_HTTP_PORT` (default 8080), endpoint `NEKTAR_RESTATE_ENDPOINT_URI` port (9080) |
 
 Compose is the mirror-image check: services get separate IPs so app-port
 duplicates are fine, but `ports:` host publishes share the host — flag
@@ -117,12 +117,30 @@ serving two journals. StatefulSet RWO claims → `local-path` on k3s,
   pin to a tested tag
 - chart `version`/`appVersion` bumped when templates change
 
-## Gate 7 — fail-fast & friction
+## Gate 7 — pod hardening (k8s surfaces)
 
-- every required var fails at render/boot with an actionable message,
-  not a stack trace (helm `required`, compose `:?`, install.sh checks)
-- one-command path exists and is the FIRST thing the README says
-- personas ↔ assets 1:1 (local = mcp-bundle, VPS = deploy bundle)
+Static YAML that renders clean still ships three runtime traps:
+
+- **probes must hit public-by-design paths** — httpGet can't carry a
+  secret, so a bearer-gated path fails 401 forever. Liveness/readiness
+  need a route that is unauthenticated ON PURPOSE (`/healthz`,
+  `/health`, well-known docs) — never probe a token-gated path
+- **`runAsNonRoot` needs a numeric uid** — `USER node` in the image is a
+  _name_; kubelet can't verify it and fails CreateContainerConfigError.
+  Pair with explicit `runAsUser`/`runAsGroup`
+- **fsGroup for non-root + provisioner volumes** — local-path/hostPath
+  volumes arrive root-owned; a non-root container can't write its own
+  claim without pod `securityContext.fsGroup`
+- every container needs startup/liveness probes (slow starters get
+  `startupProbe` first), resource requests, and
+  `automountServiceAccountToken: false` when nothing calls the API
+- CrashLoopBackOff on a _fresh deploy_ may be durable state, not the
+  chart: a PVC outlives re-renders, and app-level gates (e.g. a changed
+  keystore passphrase) refuse boot correctly — read the app log before
+  blaming the YAML
+
+Reference: `kubernetes-patterns` (installed skill) for probe math,
+resource sizing rules of thumb, and the full security checklist.
 
 ## Gate 8 — boot it
 

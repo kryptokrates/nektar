@@ -14,14 +14,14 @@ release tarball instead of master if you want a pinned version.)
 You host **one thing**; the rest is shared or public infrastructure you
 verify, never trust:
 
-| Piece | What it is | Hosted where | Released as |
-|---|---|---|---|
-| **Your agent** | identity, treasury, journals, HTTP/MCP surface | **your box** (VPS/laptop) | `ghcr.io/kryptokrates/nektar` image · `nektar-deploy.tar.gz` (`agent/`) |
-| **Executor** | Restate sidecar — required | same box/pod as the agent | `docker.restate.dev/restatedev/restate` (upstream) |
-| **Agent state** | keys, sqlite, lane stock | the `agent-data` volume/PVC | — (your backups) |
-| **Market hosts** | overlay envelope transport | shared/public hosts, or your own | `ghcr.io/kryptokrates/nektar-{bbox-host,shim,hub-db}` · `nektar-deploy.tar.gz` (`hub/`) |
-| **Chain truth** | indexers + broadcasters | public internet (WoC, banana, GorillaPool, TAAL) | — (SPV-verified, never trusted) |
-| **Restate journals** | durable executor state | the `restate-data` volume/PVC | — |
+| Piece                | What it is                                     | Hosted where                                     | Released as                                                                             |
+| -------------------- | ---------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| **Your agent**       | identity, treasury, journals, HTTP/MCP surface | **your box** (VPS/laptop)                        | `ghcr.io/kryptokrates/nektar` image · `nektar-deploy.tar.gz` (`agent/`)                 |
+| **Executor**         | Restate sidecar — required                     | same box/pod as the agent                        | `docker.restate.dev/restatedev/restate` (upstream)                                      |
+| **Agent state**      | keys, sqlite, lane stock                       | the `agent-data` volume/PVC                      | — (your backups)                                                                        |
+| **Market hosts**     | overlay envelope transport                     | shared/public hosts, or your own                 | `ghcr.io/kryptokrates/nektar-{bbox-host,shim,hub-db}` · `nektar-deploy.tar.gz` (`hub/`) |
+| **Chain truth**      | indexers + broadcasters                        | public internet (WoC, banana, GorillaPool, TAAL) | — (SPV-verified, never trusted)                                                         |
+| **Restate journals** | durable executor state                         | the `restate-data` volume/PVC                    | —                                                                                       |
 
 Mainnet has **no baked seed hosts** (deliberately — a single-operator seed
 list is the centralization the design avoids): set `NEKTAR_MARKET_HOSTS` to
@@ -77,6 +77,11 @@ values file; helm splits unescaped commas into separate keys.)
 The chart runs agent + Restate sidecar **in one pod** — loopback URIs are
 correct there (shared network namespace), which retires the whole
 container-DNS trap class. Each keeps its own PVC (`data`, `restate-data`).
+Ships hardened: startup/liveness/readiness probes (`/healthz` public by
+design, `/health` on the sidecar's admin port), non-root agent
+(uid 1000 + fsGroup so it can write its claims), no SA token mount,
+resource requests/limits — verified on k3s with the pod reaching 2/2
+behind real readiness gates.
 
 `helm/values.yaml` exposes everything — image tag, persistence
 (`StatefulSet` + PVC for `/data`), `secrets.existingSecret` for your own

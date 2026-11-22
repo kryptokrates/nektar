@@ -123,15 +123,10 @@ export const pausedInvocations = async (admin: string, ioMs = 3_000): Promise<nu
  *  continues. Both resume clean. A journaled leg with a domain/deterministic
  *  failure stays paused — that IS the breaker's job (the journaled error
  *  would replay identically anyway). */
-const TRANSPORT_PAUSE = /h2 pool|connection refused|network is unreachable|connection reset|econnrefused|timed out|cannot connect|temporarily unavailable|deployment.*(not found|unavailable)/i
+const TRANSPORT_PAUSE =
+  /h2 pool|connection refused|network is unreachable|connection reset|econnrefused|timed out|cannot connect|temporarily unavailable|deployment.*(not found|unavailable)/i
 
-export const healPausedInvocations = async (
-  admin: string,
-  uri: string,
-  log: (line: string) => void,
-  ioMs = 3_000,
-  cap = 32
-): Promise<number> => {
+export const healPausedInvocations = async (admin: string, uri: string, log: (line: string) => void, ioMs = 3_000, cap = 32): Promise<number> => {
   const a = admin.replace(/\/+$/, '')
   try {
     const r = await fetch(`${a}/query`, {
@@ -146,9 +141,7 @@ export const healPausedInvocations = async (
     const j = (await r.json()) as {
       rows?: Array<{ id?: string; target?: string; last_failure?: string; journal_size?: number | string }>
     }
-    const rows = (j.rows ?? [])
-      .filter((x) => x.id && (Number(x.journal_size ?? 0) <= 1 || TRANSPORT_PAUSE.test(x.last_failure ?? '')))
-      .slice(0, cap)
+    const rows = (j.rows ?? []).filter((x) => x.id && (Number(x.journal_size ?? 0) <= 1 || TRANSPORT_PAUSE.test(x.last_failure ?? ''))).slice(0, cap)
     if (rows.length === 0) return 0
     // our deployment id is the fallback rebind — a paused leg whose pinned
     // deployment was deleted can't plain-resume ('deployment id not pinned')
@@ -166,14 +159,20 @@ export const healPausedInvocations = async (
       let ok = false
       try {
         ok = (await fetch(`${a}/invocations/${id}/resume`, { method: 'PATCH', signal: AbortSignal.timeout(ioMs) })).ok
-      } catch { /* fall through to the rebind attempt */ }
+      } catch {
+        /* fall through to the rebind attempt */
+      }
       if (!ok && depId) {
         try {
-          ok = (await fetch(`${a}/invocations/${id}/resume?deployment=${depId}`, {
-            method: 'PATCH',
-            signal: AbortSignal.timeout(ioMs)
-          })).ok
-        } catch { /* next boot tries again */ }
+          ok = (
+            await fetch(`${a}/invocations/${id}/resume?deployment=${depId}`, {
+              method: 'PATCH',
+              signal: AbortSignal.timeout(ioMs)
+            })
+          ).ok
+        } catch {
+          /* next boot tries again */
+        }
       }
       if (ok) healed++
       else log(`rt: paused invocation ${x.id} (${x.target}) did not resume — inspect manually`)
@@ -223,7 +222,9 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
   // KUBERNETES_SERVICE_HOST is always set in a pod — there the sidecar is
   // same-pod and loopback is the correct address, so the warning is skipped.
   if (/^https?:\/\/(127\.|localhost|\[?::1\]?)/.test(uri) && !env.KUBERNETES_SERVICE_HOST)
-    log(`automation: endpoint URI ${uri} is loopback — a containerized sidecar cannot reach it; set NEKTAR_RESTATE_ENDPOINT_URI to a container-routable address (Docker Desktop: http://192.168.65.254:${port} — plain IP, not host.docker.internal, whose DNS can answer an unroutable IPv6)`)
+    log(
+      `automation: endpoint URI ${uri} is loopback — a containerized sidecar cannot reach it; set NEKTAR_RESTATE_ENDPOINT_URI to a container-routable address (Docker Desktop: http://192.168.65.254:${port} — plain IP, not host.docker.internal, whose DNS can answer an unroutable IPv6)`
+    )
   const expected = manifestOf(services) ?? []
   const force = expected.length === 0 || !(await manifestMatches(admin, uri, expected))
   if (!(await registerDeployment(admin, uri, log, force))) {
@@ -239,16 +240,13 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
   // restate-plane preflight keeps reporting them).
   await healPausedInvocations(admin, uri, log)
   let healing = false
-  const healFloor = setInterval(
-    () => {
-      if (healing) return
-      healing = true
-      void healPausedInvocations(admin, uri, log).finally(() => {
-        healing = false
-      })
-    },
-    WAITS.healPaused.ms
-  )
+  const healFloor = setInterval(() => {
+    if (healing) return
+    healing = true
+    void healPausedInvocations(admin, uri, log).finally(() => {
+      healing = false
+    })
+  }, WAITS.healPaused.ms)
   healFloor.unref()
   return {
     uri,

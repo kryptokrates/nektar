@@ -2,6 +2,7 @@
 // the proof-of-work check that makes a served header self-verifying, and the
 // witnessed tracker that makes two independent sources attest the same chain.
 import { Hash } from '@bsv/sdk'
+import { BoundedMap } from '@nektar/core'
 import type { BlockHeader, ChainTracker } from './interfaces.js'
 
 const HEX64 = /^[0-9a-fA-F]{64}$/
@@ -136,8 +137,12 @@ interface WitMark {
  *  to the reachable source and marks the height uncorroborated — re-asked at
  *  most once per `retryMs` until the witness lands an agreement. */
 export class WitnessedTracker implements ChainTracker {
-  private marks = new Map<number, WitMark>()
-  private asks = new Map<number, { at: number; p: Promise<BlockHeader | undefined> }>()
+  // one entry per distinct height queried — an unbounded Map leaks on a
+  // weeks-uptime process scanning many heights (the BoundedMap adoption
+  // rule). Evicted 'ok' marks just re-verify on next read — the witness
+  // round-trip returns, never a wrong verdict.
+  private marks = new BoundedMap<number, WitMark>(8192)
+  private asks = new BoundedMap<number, { at: number; p: Promise<BlockHeader | undefined> }>(8192)
 
   constructor(
     private primary: ChainTracker,

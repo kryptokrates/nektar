@@ -113,6 +113,7 @@ function versionPayload(selfPort = 0): Buffer {
 
 export class P2PListener extends EventEmitter {
   private sock?: Socket
+  private reconnectTimer?: NodeJS.Timeout
   private buf = Buffer.alloc(0)
   private peerIdx = 0
   private closed = false
@@ -177,7 +178,10 @@ export class P2PListener extends EventEmitter {
     sock.on('close', () => {
       this.emit('peer', `${host}:${port}`, false)
       // spread() — a dropped peer set reconnects desynchronized, not on one tick
-      if (!this.closed) setTimeout(() => this.connect(), spread(5_000))
+      if (!this.closed) {
+        this.reconnectTimer = setTimeout(() => this.connect(), spread(5_000))
+        this.reconnectTimer.unref()
+      }
     })
     sock.on('error', (e) => this.emit('error', e))
     const onHandshake = () => {
@@ -191,6 +195,7 @@ export class P2PListener extends EventEmitter {
 
   close(): void {
     this.closed = true
+    if (this.reconnectTimer !== undefined) clearTimeout(this.reconnectTimer)
     this.sock?.destroy()
   }
 

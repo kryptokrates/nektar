@@ -170,9 +170,12 @@ export class CachingIndex implements ChainIndex {
     // arriving tx is seen on the next window
     const live = this.within(`x:${txid}`, () => this.inner.txHex(txid))
     const pinned = live.then((h) => (h === undefined ? undefined : h))
-    void pinned.then((h) => {
-      if (h !== undefined) this.hex.set(txid, Promise.resolve(h))
-    })
+    void pinned.then(
+      (h) => {
+        if (h !== undefined) this.hex.set(txid, Promise.resolve(h))
+      },
+      () => undefined
+    )
     return pinned
   }
   proof(txid: string): Promise<IndexProof | undefined> {

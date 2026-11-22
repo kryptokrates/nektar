@@ -265,9 +265,14 @@ export class ChainEvents extends EventEmitter {
     if (this.busy) return
     this.busy = true
     try {
+      // a FAILED height read is not "tip unchanged" — couldn't-ask must not
+      // satisfy the proof-gate, or the observe batch starves on the stale
+      // tip while observe itself would have answered
+      let heightKnown = this.opts.height === undefined
       if (this.opts.height !== undefined) {
         const tip = await this.opts.height().catch(() => undefined)
-        if (tip !== undefined && tip !== this.tip) {
+        if (tip === undefined) heightKnown = false
+        else if (tip !== this.tip) {
           this.tip = tip
           this.emit('height', tip)
         }
@@ -292,7 +297,7 @@ export class ChainEvents extends EventEmitter {
       }
       // proof-gating: a static tip and no new watches make every observe a
       // guaranteed miss — skip the batch like the old proofScanTip gate did
-      const gated = this.opts.height !== undefined && this.tip === this.scannedAtTip && !this.dirty
+      const gated = this.opts.height !== undefined && heightKnown && this.tip === this.scannedAtTip && !this.dirty
       if (!gated && this.watched.size > 0) {
         const keys = [...this.watched.keys()]
         const n = Math.min(this.opts.maxPerTick ?? 8, keys.length)

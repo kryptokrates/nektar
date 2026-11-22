@@ -4,6 +4,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { Transaction } from '@bsv/sdk'
+import { nap } from '@nektar/core'
 import type { Broadcaster, BroadcastResult } from './interfaces.js'
 
 export interface SpendGuardOpts {
@@ -46,6 +47,14 @@ export class SpendGuard implements Broadcaster {
       maxPerDay: opts.maxPerDay ?? Number.MAX_SAFE_INTEGER,
       minIntervalMs: opts.minIntervalMs ?? 0
     }
+    // a cap is a guard rail — a non-finite value (unparseable env → NaN)
+    // compares false on every check and silently uncaps the money path.
+    // Refuse the config loudly instead of guarding nothing.
+    if (!Number.isFinite(this.opts.maxFeePerTx) || !Number.isFinite(this.opts.maxPerDay) || !Number.isFinite(this.opts.minIntervalMs))
+      throw new Error('SpendGuard: non-finite cap configured — check the NEKTAR_*_SATS/MS values for stray characters')
+    // setTimeout overflows int32 — a >24.8-day interval would fire instantly
+    // and silently disable the rate limit
+    this.opts.minIntervalMs = Math.min(this.opts.minIntervalMs, 2_147_483_647)
     this.ledgerFile = opts.ledgerFile
     this.ledger = this.unlimited ? { day: this.day(), spentSats: 0, lastBroadcastAt: 0, records: [] } : this.load()
   }
@@ -74,7 +83,23 @@ export class SpendGuard implements Broadcaster {
     return { status: 'error', description: `SpendGuard refused: ${reason}` }
   }
 
+  // the cap check and the ledger write are one serialized region — without
+  // the queue, concurrent broadcasts all read the same spentSats/
+  // lastBroadcastAt before any of them commits and the daily cap is overrun
+  // by the sum of the in-flight set (the interval collapses to a synced
+  // burst). One broadcast at a time makes the ledger honest.
+  private tail: Promise<void> = Promise.resolve()
+
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
+    const run = this.tail.then(() => this.guarded(tx))
+    this.tail = run.then(
+      () => undefined,
+      () => undefined
+    )
+    return run
+  }
+
+  private async guarded(tx: Transaction): Promise<BroadcastResult> {
     const s = this.spendOf(tx)
     if (s === undefined) return this.refuse('unknown input value — fee unresolvable (fail-closed)')
     if (s.fee < 0) return this.refuse(`negative fee ${s.fee} — resolved input values are wrong (fail-closed)`)
@@ -95,7 +120,10 @@ export class SpendGuard implements Broadcaster {
     if (wait > 0) {
       // rate limit = delay, not failure (bounded by minIntervalMs); opt out → refuse
       if (this.refuseOnInterval) return this.refuse(`min interval ${this.opts.minIntervalMs}ms not elapsed`)
-      await new Promise((r) => setTimeout(r, wait))
+      // nap merges the ambient leg signal — a deadline()-abandoned wait must
+      // NOT still broadcast afterwards (the caller reported a timeout while
+      // the 'dead' leg aired the tx — the orphan-write class)
+      await nap(wait)
     }
     const res = await this.inner.broadcast(tx)
     if (res.status === 'success') {

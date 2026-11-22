@@ -199,6 +199,7 @@ export function statusStream(
   let closed = false
   let lastId: string | undefined
   let abort: AbortController | undefined
+  let wake: (() => void) | undefined
   const ready = (async () => {
     lastId = await opts.cursor?.get()
   })()
@@ -264,8 +265,17 @@ export function statusStream(
         if (closed) return
         opts.onError?.(e as Error)
         // spread() on the sleep, not the curve — the doubling stays exact,
-        // the reconnect lands desynchronized across reconnecting agents
-        await sleep(spread(backoff))
+        // the reconnect lands desynchronized across reconnecting agents.
+        // close() must interrupt the backoff: an un-abortable ~30s sleep
+        // lingers past teardown (and pins the loop — unref'd or not)
+        await new Promise<void>((r) => {
+          const t = setTimeout(r, spread(backoff))
+          wake = () => {
+            clearTimeout(t)
+            r()
+          }
+        })
+        wake = undefined
         backoff = Math.min(maxB, backoff * 2)
       }
     }
@@ -275,6 +285,7 @@ export function statusStream(
     close: () => {
       closed = true
       abort?.abort()
+      wake?.()
       void p.catch(() => {})
     }
   }

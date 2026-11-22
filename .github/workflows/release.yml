@@ -58,6 +58,20 @@ jobs:
             console.log('smoke: ' + files.length + ' packaged modules resolve')
           "
         timeout-minutes: 3
+      - name: smoke — image boots with the bundled restate sidecar
+        run: |
+          img="ghcr.io/${{ github.repository_owner }}/nektar:${{ github.ref_type == 'tag' && 'latest' || 'edge' }}"
+          cid="$(docker run -d -e NEKTAR_NETWORK=testnet "$img")"
+          ok=0
+          for _ in $(seq 1 60); do
+            if docker exec "$cid" node -e "fetch('http://127.0.0.1:19070/version').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then ok=1; break; fi
+            sleep 2
+          done
+          docker logs --tail 15 "$cid" || true
+          docker rm -f "$cid" > /dev/null
+          [ "$ok" = 1 ] || { echo 'restate sidecar did not come up inside the image'; exit 1; }
+          echo 'restate sidecar up inside the pushed image'
+        timeout-minutes: 3
 
   # hub surfaces — derived images carrying the modules/shims/schema the
   # compose used to bind-mount. One Dockerfile, one target per image, same

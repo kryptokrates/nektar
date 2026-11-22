@@ -37,6 +37,12 @@ RUN cargo build --release -p nektar-stark \
  && cp ./target/release/nektar-stark /usr/local/bin/ && cp "$(readlink -f "$(which r0vm)")" /usr/local/bin/r0vm \
  && strip /usr/local/bin/nektar-stark /usr/local/bin/r0vm || true # symbols only — perf unchanged
 
+# restate-server sidecar — the same pin compose runs (deploy/agent/compose.yaml)
+# and pack-deploy bundles (tools/pack-deploy.mjs). musl-static: runs on this
+# debian kernel. Lifting the binary beats a curl+sha256 download because the
+# image digest IS the pin.
+FROM docker.restate.dev/restatedev/restate:1.8.1@sha256:6ed8ad9c7c09d64e7655c0debcb713e3cf5f875b26f700a74ad15640a72d6243 AS restate
+
 FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS build
 # sqlite3 falls back to node-gyp when prebuild-install can't fetch a binary;
 # slim has no toolchain and sqlite3's bundled node-gyp 8.x can't parse Node 24.
@@ -65,6 +71,13 @@ FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23f
 WORKDIR /app
 COPY --from=build /prod /app
 COPY --from=build /app/packages/mcp/demo /app/demo
+# /app/restate/restate-server is where restatesidecar.ts resolves the bundle
+# (dist/src/bin.js → ../../restate). One container = the whole plane: the
+# sidecar spawns on container loopback and calls the endpoint back on
+# 127.0.0.1:9080 — no WSL/gateway plumbing needed (same netns). An explicit
+# NEKTAR_RESTATE_URL still wins over the bundle (compose keeps its sidecar
+# service working unchanged).
+COPY --from=restate /usr/local/bin/restate-server /app/restate/restate-server
 COPY --from=stark /usr/local/bin/nektar-stark /usr/local/bin/r0vm /usr/local/bin/
 ENV NEKTAR_STARK_PROVER=/usr/local/bin/nektar-stark
 RUN mkdir -p /data && chown node:node /data

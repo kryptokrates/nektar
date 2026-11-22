@@ -108,6 +108,14 @@ question that could come from memory:
   — later `arr.push(...)` becomes a type error. Assert `arr.length === 0`.
 - **`rg --glob` and brace quoting differ from Unix** — prefer the built-in
   search tools / `fd` for file ops; keep shell greps simple and quoted.
+- **Bulk type-aware lint autofix is not semantics-safe** — `oxlint --fix` /
+  `--fix-suggestions` and regex/AST codemods over `require-await` removed
+  non-null assertions that `noUncheckedIndexedAccess` needs, stripped
+  `async` from Promise-required signatures without wrapping returns, and
+  garbled text on colliding edit offsets. The advisory warning classes
+  (`require-await`, `no-unnecessary-*`, `no-deprecated`) are advisory by
+  design — fix sites when already touching the file, never repo-wide
+  without a per-package `pnpm -r build` between every batch.
 
 Honesty rule: proofs establish recorded + unaltered + derivable — never
 that a memory's content is true, and the model manifest is _declared_, not

@@ -24,7 +24,7 @@ console.log(`isValidRootForHeight(own root): ${await tracker.isValidRootForHeigh
 const txid = process.argv[2]
 const mp = txid ? await merklePathMainnet(cfg, txid) : null
 if (mp) {
-  console.log(`merklePath: height=${mp.merklePath.blockHeight} status=${mp.status} verify=${mp.merklePath.verify(txid, tracker) ? 'PASS' : 'FAIL'}`)
+  console.log(`merklePath: height=${mp.merklePath.blockHeight} status=${mp.status} verify=${(await mp.merklePath.verify(txid, tracker)) ? 'PASS' : 'FAIL'}`)
 } else {
   console.log('no txid arg — skipping merkle-path check')
 }

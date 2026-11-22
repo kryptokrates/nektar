@@ -23,7 +23,7 @@ test('smt revocation: anchored root verifies a status proof; stale root fails', 
   assert.equal(verifyProof(p, { present: true, value: v }, h1.head.data.R), true, 'revoked-status vs anchored root')
   assert.equal(verifyProof(p, { present: true, value: v }, h0.head.data.R), false, 'vs stale anchored root')
   assert.equal(verifyProof(p, { present: false }, h1.head.data.R), false, 'revoked key non-inclusion rejected')
-  const h1m = (await chain.getTx(h1.tx.id('hex')))?.merklePath
+  const h1m = ( chain.getTx(h1.tx.id('hex')))?.merklePath
   assert.ok(h1m, 'anchor tx mined with BUMP')
   assert.equal(await chain.isValidRootForHeight(h1m.computeRoot(h1.tx.id('hex')), h1m.blockHeight), true)
 })

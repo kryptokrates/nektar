@@ -460,7 +460,7 @@ const stubShim = async () => {
   const waiters = new Map<string, Array<(v: object) => void>>()
   const seen: string[] = []
   let notifies = 0
-  const srv = http.createServer(async (req, res) => {
+  const srv = http.createServer((req, res) => void (async () => {
     const u = new URL(req.url ?? '/', 'http://x')
     seen.push(`${req.method} ${u.pathname}`)
     if (req.method === 'GET' && u.pathname === '/watch') {
@@ -495,7 +495,7 @@ const stubShim = async () => {
     }
     res.writeHead(404)
     res.end()
-  })
+  })())
   await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r))
   const { port } = srv.address() as AddressInfo
   return { url: `http://127.0.0.1:${port}`, notifies: () => notifies, seen: () => seen, close: () => new Promise<void>((r) => srv.close(() => r())) }

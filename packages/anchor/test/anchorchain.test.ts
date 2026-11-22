@@ -35,7 +35,7 @@ test('handleReorg clears the orphaned block BUMP before re-broadcast — a stale
   const { chain, ac } = s0
   const g = await ac.anchor(1, dsha256(utf8('r0')))
   await chain.mine(1)
-  const mp = (await chain.getTx(g.tx.id('hex')))!.merklePath
+  const mp = ( chain.getTx(g.tx.id('hex')))!.merklePath
   ac.confirm(g.tx.id('hex'), mp)
   assert.equal(ac.getHead()!.tx.merklePath, mp, 'pre-reorg: head proven')
   assert.equal(g.tx.merklePath, mp)

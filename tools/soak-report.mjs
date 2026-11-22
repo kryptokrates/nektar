@@ -157,5 +157,5 @@ console.log(
           .join(', ')
       : '')
 )
-for (const n of rec.notes) console.log(`  note: ${n}`)
+for (const n of rec.notes) console.log(`  note: ${JSON.stringify(n)}`)
 console.log(`  → ${out}`)

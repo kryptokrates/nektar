@@ -744,7 +744,7 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
     assert.ok(wasRefunded, 'never refunded | ' + logs.slice(-20).join(' | '))
     const refunded = (await buyerOp(b2))!
     const rtx = chain.getTx(refunded.data.refundTxid as string)
-    assert.equal((await rtx)?.inputs[0]?.sourceTXID, escrowTxid, 'refund tx spends the escrow output')
+    assert.equal(( rtx)?.inputs[0]?.sourceTXID, escrowTxid, 'refund tx spends the escrow output')
     await drive([b2.rt], chain, 2)
     assert.equal((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'note acked once the deal was finished')
   } finally {
@@ -2350,6 +2350,12 @@ test('bstack P3: refund deadline races a landed completion — chain evidence re
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     const sab = sabotageEscrowBroadcast(b, s, chain, false)
+    // suppress the seller's 'delivered' envelope so the completion can only
+    // arrive via the spent-escrow classification — else the buyer's normal
+    // delivered path races in first and the asserted cause never fires
+    const transport = (s.rt.engine as any).d.transport as { send: (to: string, m: MarketMessage, r?: unknown) => Promise<void> }
+    const origSend = transport.send.bind(transport)
+    transport.send = async (to, msg, refs) => (msg.type === 'delivered' ? undefined : await origSend(to, msg, refs))
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     assert.ok(

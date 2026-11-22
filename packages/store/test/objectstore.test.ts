@@ -18,7 +18,7 @@ const ACCESS = 'QUICKSTARTACCESSKEY'
 const REGION = 'us-east-1'
 
 const sha256Hex = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex')
-const hmac = (key: Buffer | string, data: string): Buffer => createHmac('sha256', key).update(data).digest()
+const hmac = (key: Uint8Array | string, data: string): Buffer => createHmac('sha256', key).update(data).digest()
 
 /** recompute the SigV4 signature an honest client should have produced for
  *  this request — the gateway's own check. Returns the expected Signature. */

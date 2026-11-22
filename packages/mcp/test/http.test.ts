@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { AddressInfo } from 'node:net'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld, type TestFunder } from '@nektar/chain'
 import { verifyCheckpoint } from '@nektar/log'
 import { NektarMemory, createHttpApi, OPENAPI } from '../src/index.js'
 

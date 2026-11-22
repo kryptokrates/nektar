@@ -1,18 +1,18 @@
 import { RunarContract, MockProvider, LocalSigner } from 'runar-sdk'
 import { readFileSync } from 'node:fs'
 const { Spend, Transaction } = await import('@bsv/sdk')
-const { rc, di } = JSON.parse(readFileSync('poseidon2-consts.json', 'utf8'))
+const { rc: _rc, di: _di } = JSON.parse(readFileSync('poseidon2-consts.json', 'utf8'))
 const art = JSON.parse(readFileSync('Poseidon2Stage.json', 'utf8'))
 const signer = new LocalSigner('11'.repeat(32))
 const prov = new MockProvider('testnet')
 await signer.getPublicKey()
-const P = 2013265921n,
+const _P = 2013265921n,
   C = 24
 let uid = 0
 async function run(method, round) {
   prov.addUtxo('1Q1pE5vPGEEMqRcVRMbtBK842Y6Pzo6nK9', { txid: (uid++).toString(16).padStart(64, '0'), outputIndex: 0, satoshis: 1e6, script: '' })
   const init = Array.from({ length: C }, (_, i) => BigInt(i))
-  const rcArgs = []
+  const _rcArgs = []
   const c = new RunarContract(art, [...init, BigInt(round)])
   c.connect(prov, signer)
   await c.deploy({ satoshis: 1 })

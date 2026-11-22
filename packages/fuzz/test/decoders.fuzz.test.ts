@@ -210,7 +210,7 @@ test('fuzz: L_pol parser throws only ParseError on garbage', () => {
   const src = '@id r1\nallowed(P, F) :- member(P, verified), fragment(F), not revoked(P).\nmember(a, verified).\nfragment(f1).'
   const alphabet = '()[],.:-_ "@\nabcXYZ019\\\'notNOT'
   for (let i = 0; i < N * 3; i++) {
-    const chars = [...src]
+    const chars = Array.from(src)
     for (let k = 0; k <= int(4); k++) chars.splice(int(chars.length + 1), int(3), alphabet[int(alphabet.length)])
     try {
       parseProgram(chars.join(''))

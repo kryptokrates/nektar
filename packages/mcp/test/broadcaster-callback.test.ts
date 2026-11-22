@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, type MerklePath } from '@bsv/sdk'
-import { buildBump, testWorld, testChain, type TestFunder, type TestChain } from '@nektar/chain'
+import { buildBump, testWorld, type TestFunder, type TestChain } from '@nektar/chain'
 import { NektarMemory, createHttpApi } from '../src/index.js'
 import type { Server } from 'node:http'
 
@@ -28,7 +28,7 @@ const minedTx = async (chain: TestChain, funder: TestFunder): Promise<{ txid: st
   await tx.sign()
   assert.equal((await chain.broadcast(tx)).status, 'success')
   await chain.mine(1)
-  const mp = (await chain.getTx(tx.id('hex')))!.merklePath
+  const mp = ( chain.getTx(tx.id('hex')))!.merklePath
   assert.ok(mp, 'mined spend carries the node BUMP')
   return { txid: tx.id('hex'), mp }
 }

@@ -88,7 +88,7 @@ function runProver(sub, body) {
   })
 }
 
-const server = createServer(async (req, res) => {
+const server = createServer((req, res) => {
   const reply = (code, obj) => {
     res.writeHead(code, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify(obj))
@@ -108,17 +108,19 @@ const server = createServer(async (req, res) => {
       req.destroy()
     }
   })
-  req.on('end', async () => {
-    try {
-      const out = await runProver(req.url.slice(1), body)
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(out)
-    } catch (e) {
-      reply(502, { error: e.message })
-    }
+  req.on('end', () => {
+    void (async () => {
+      try {
+        const out = await runProver(req.url.slice(1), body)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(out)
+      } catch (e) {
+        reply(502, { error: e.message })
+      }
+    })()
   })
 })
 
 server.listen(PORT, HOST, () =>
-  console.log(`nektar prover-server on ${HOST}:${PORT} (bin: ${proverCommand('prove')[0]}${TOKEN ? ', token auth on' : ', NO TOKEN'})`)
+  console.log(`nektar prover-server on ${HOST}:${PORT} (bin: ${String(proverCommand('prove')[0])}${TOKEN ? ', token auth on' : ', NO TOKEN'})`)
 )

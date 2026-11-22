@@ -16,12 +16,12 @@ const fundingTx = (sats: number): Transaction => {
   tx.addOutput({ lockingScript: new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toHash()), satoshis: sats })
   return tx
 }
-const mergedBeef = (...txs: Transaction[]): number[] => {
+const _mergedBeef = (...txs: Transaction[]): number[] => {
   const beef = new Beef()
   for (const tx of txs) beef.mergeTransaction(tx)
   return beef.toBinary()
 }
-const mkWallet = (outs: Out[], beef: number[]) => {
+const _mkWallet = (outs: Out[], beef: number[]) => {
   const relinquished: string[] = []
   const internalized: number[] = []
   return {

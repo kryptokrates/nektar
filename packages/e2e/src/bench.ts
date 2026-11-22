@@ -14,7 +14,7 @@ import { automatonCosts } from './automaton-costs.js'
 
 const rows: string[][] = []
 const ms = (t0: bigint) => Number(process.hrtime.bigint() - t0) / 1e6
-async function time(label: string, n: number, fn: (i: number) => Promise<unknown> | unknown, unit = 'ms/op'): Promise<number> {
+async function time(label: string, n: number, fn: (i: number) => unknown, unit = 'ms/op'): Promise<number> {
   const t0 = process.hrtime.bigint()
   for (let i = 0; i < n; i++) await fn(i)
   const per = ms(t0) / n

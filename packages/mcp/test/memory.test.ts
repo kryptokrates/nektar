@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld, type TestFunder } from '@nektar/chain'
 import { canonicalizePolicySet } from '@nektar/policy'
 import { signBinding, answerChallenge, issueChallenge, issueClearance, proveAccess, type ZkTranscript } from '@nektar/identity'
 import { NektarMemory, type NektarMemoryOptions, type ZkClearance } from '../src/memory.js'

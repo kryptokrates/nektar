@@ -431,7 +431,7 @@ deny(P, read, R) :- member(P, verified), fragment(R).`).rules
   check(vi.ok, `third-party instance verify (${vi.reason ?? 'ok'})`)
   check(!verifyInstance(g, inst, new Map(), { pub: dk.toPublicKey(), expiry, sig: dsig }).ok, 'unanchored member instance rejected')
 } catch (e) {
-  check(false, `v4 block: ${e instanceof Error ? e.message : e}`)
+  check(false, `v4 block: ${e instanceof Error ? e.message : String(e)}`)
 }
 
 // — P14 Merkle Automaton: full mode (Rúnar) + light mode (anchored trace) —
@@ -491,7 +491,7 @@ try {
   check(verifyTrace(def, events, (ev) => proven[events.indexOf(ev)] === true).ok, 'light-mode trace: every event anchored + chained + in δ')
   check(!verifyTrace(def, events, () => false).ok, 'light-mode trace: unproven events flagged (AUT-006)')
 } catch (e) {
-  check(false, `P14 block: ${e instanceof Error ? e.message : e}`)
+  check(false, `P14 block: ${e instanceof Error ? e.message : String(e)}`)
 }
 
 // — full paper scenario (every layer in one flow) —
@@ -519,7 +519,7 @@ try {
       .join(' ')}`
   )
 } catch (e) {
-  check(false, `full paper block: ${e instanceof Error ? e.stack?.split('\n').slice(0, 3).join(' | ') : e}`)
+  check(false, `full paper block: ${e instanceof Error ? e.stack?.split('\n').slice(0, 3).join(' | ') : String(e)}`)
 }
 // — GOAL-v4 production block —
 console.log('— v4 production block —')
@@ -549,7 +549,7 @@ try {
       .join(' ')}`
   )
 } catch (e) {
-  check(false, `v4 block: ${e instanceof Error ? e.stack?.split('\n').slice(0, 3).join(' | ') : e}`)
+  check(false, `v4 block: ${e instanceof Error ? e.stack?.split('\n').slice(0, 3).join(' | ') : String(e)}`)
 }
 
 console.log(failures === 0 ? '\nE2E PASS' : `\nE2E FAIL: ${failures} checks failed`)

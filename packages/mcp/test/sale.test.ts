@@ -74,7 +74,7 @@ test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claim
     assert.equal(done.accepted, true, `buy accepted: ${done.reason ?? ''}`)
     assert.equal(done.sellerSats, 3_000)
     // 4. buyer claims from the real buy tx
-    const tx = (await chain.getTx(done.txid))!
+    const tx = ( chain.getTx(done.txid))!
     const claim = await callTool(buyer, 'sale', { op: 'claim', txHex: tx.toHex(), hWrapped: offer.cfg.hWrapped, sellerPub })
     assert.equal(claim.mode, 'private')
     assert.equal(claim.valueHex, VALUE.toString('hex'), 'unwrapped payload round-trips')

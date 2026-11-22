@@ -214,7 +214,7 @@ while (Date.now() < deadline) {
         `  ${d.role}  ${d.state}  escrow ${d.escrowTxid ?? '-'}  disclosure ${d.disclosureTxid ?? d.completeTxid ?? '-'}  sats ${d.sellerSats ?? d.priceSats ?? '-'}`
       )
     console.log('\n# transition timeline (first-seen, ms-since-wants)')
-    const t0 = [...firstSeen.values()].sort()[0] ?? Date.now()
+    const t0 = [...firstSeen.values()].sort((a, b) => a - b)[0] ?? Date.now()
     for (const [k, t] of [...firstSeen.entries()].sort((a, b) => a[1] - b[1])) console.log(`  +${String(t - t0).padStart(6)}ms  ${k}`)
     console.log('\nagents still running:')
     console.log(`  sports    MCP ${sports.mcp}  bearer ${sports.bearer}  log ${sports.dataDir}\\agent.log`)
@@ -223,7 +223,7 @@ while (Date.now() < deadline) {
   }
   await new Promise((r) => setTimeout(r, 4000))
 }
-const t0 = [...firstSeen.values()].sort()[0] ?? Date.now()
+const t0 = [...firstSeen.values()].sort((a, b) => a - b)[0] ?? Date.now()
 console.error('\n# partial timeline at timeout (ms-since-wants)')
 for (const [k, t] of [...firstSeen.entries()].sort((a, b) => a[1] - b[1])) console.error(`  +${String(t - t0).padStart(6)}ms  ${k}`)
 die(`deals did not settle inside ${timeoutMs / 1000}s — agents still running, check deals on each instance`)

@@ -17,7 +17,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function stack(t: test.TestContext): Promise<{
   watch: (qs: string) => Promise<{ changed: boolean; cursor: string; tookMs?: number; backend?: string }>
-  postNotify: (body: unknown | string) => Promise<Response>
+  postNotify: (body: unknown) => Promise<Response>
   setOutputs: (o: unknown) => void
   setOutputsFor: (query: unknown, o: unknown) => void
   lookups: () => number
@@ -88,7 +88,7 @@ async function stack(t: test.TestContext): Promise<{
   const watch = (qs: string) => get(`/watch?${qs}`).then((r) => r.json() as Promise<{ changed: boolean; cursor: string; tookMs?: number; backend?: string }>)
   return {
     watch,
-    postNotify: (body: unknown | string) =>
+    postNotify: (body: unknown) =>
       fetch(`${url}/notify`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) }),
     setOutputs: (o) => {
       outputs = o

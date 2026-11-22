@@ -118,7 +118,7 @@ test('txMachine: confirmed only reachable via proof-bearing event', () => {
   // 'confirmed' is never a declared target of an unverified event
   for (const row of TX_TABLE.transitions) {
     const target = row.target === 'self' ? row.state : row.target
-    if (target === 'confirmed') assert.match(row.guard ?? '', /proof/, `unproven path to confirmed: ${row.state}+${row.event}`)
+    if (target === 'confirmed') assert.match(row.guard ?? '', /proof/, `unproven path to confirmed: ${String(row.state)}+${String(row.event)}`)
   }
   // and stepping without naming the satisfied guard is rejected — proof is caller-asserted
   assert.equal(txStep('prepared', 'obs.proven').accepted, false)

@@ -140,7 +140,7 @@ test('ai: provider-neutral HTTP adapter — same contract against two endpoints,
   const fake =
     (content: string, status = 200): typeof fetch =>
     async (url, init) => {
-      seen.push({ url: String(url), auth: (init!.headers as Record<string, string>).authorization, body: JSON.parse(String(init!.body)) })
+      seen.push({ url: url instanceof URL ? url.href : url instanceof Request ? url.url : String(url), auth: (init!.headers as Record<string, string>).authorization, body: JSON.parse(init!.body as string) })
       return new Response(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 9, completion_tokens: 3 } }), { status })
     }
   const one = new HttpChatExecutor({

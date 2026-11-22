@@ -334,7 +334,9 @@ export class RegtestWalletServices implements sdk.WalletServices {
  *  normalization + per-dialect pacing live in @nektar/chain's indexer */
 const indexOf = (mc: Pick<MainnetConfig, 'indexerUrl' | 'indexerApiKey' | 'indexerKind' | 'wocUrl' | 'wocApiKey' | 'fetchImpl'>): ChainIndex =>
   indexFor({
+    // eslint-disable-next-line typescript/no-deprecated -- wocUrl stays readable here; this IS the alias implementation
     url: mc.indexerUrl ?? mc.wocUrl ?? DEFAULT_INDEXER_URL,
+    // eslint-disable-next-line typescript/no-deprecated -- wocApiKey stays readable here; this IS the alias implementation
     apiKey: mc.indexerApiKey ?? mc.wocApiKey,
     kind: mc.indexerKind,
     fetchImpl: mc.fetchImpl

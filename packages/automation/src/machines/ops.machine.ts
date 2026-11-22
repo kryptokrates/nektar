@@ -1,4 +1,4 @@
-import { buildMachine, declaredTransitions, step, type StepResult, type TransitionTable } from './machine.js'
+import { buildMachine, step, type StepResult, type TransitionTable } from './machine.js'
 import table from './ops.table.json' with { type: 'json' }
 
 export const OPS_TABLE = table as TransitionTable

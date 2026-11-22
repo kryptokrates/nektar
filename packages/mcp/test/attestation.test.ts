@@ -40,7 +40,7 @@ test('anchorAttestation on the regtest stack: real signed spend, commitment extr
   const { txid, commitment } = await mem.anchorAttestation(pb)
   assert.equal(commitment, toHex(attestationCommitment(pb)))
   // the tx is a real signed P2PKH spend the node's script evaluation accepted
-  const tx = (await chain.getTx(txid))!
+  const tx = ( chain.getTx(txid))!
   assert.ok(tx, 'broadcast accepted into mempool')
   const atts = attestationsOf(tx)
   assert.equal(atts.length, 1)

@@ -131,7 +131,7 @@ export function opsCauseCandidates(cause: string): Candidate[] | undefined {
     // unresolved_payment / unresolved_settlement escalate to 'uncertain';
     // every other reason (cap codes, deny escalations, stuck_state_timeout)
     // targets 'escalated' — the guard picks the declared sibling.
-    const unresolved = /^needs_human:unresolved_/.test(cause)
+    const unresolved = cause.startsWith('needs_human:unresolved_')
     return unresolved ? [{ event: 'needs.human', guards: ['unresolved'] }] : [{ event: 'needs.human', guards: [undefined] }]
   }
   if (DENIED_CAUSE.test(cause)) return [{ event: 'policy.denied' }]

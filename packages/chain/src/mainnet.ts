@@ -66,12 +66,14 @@ export const PUBLIC_BROADCASTER_URLS = new Set([
  *  standalone probe — 'public' = explicit index URL, no broadcaster
  *  configured at all, or a baked-in public primary */
 const publicIndexOk = (c?: MainnetConfig): boolean => {
+  // eslint-disable-next-line typescript/no-deprecated -- wocUrl stays readable here; this IS the alias implementation
   if (c?.indexerUrl !== undefined || c?.wocUrl !== undefined) return true
   const primary = c?.broadcasterUrl ?? c?.broadcasterUrls?.[0]
   return primary === undefined || PUBLIC_BROADCASTER_URLS.has(primary)
 }
 
 const def = (c?: MainnetConfig) => {
+  // eslint-disable-next-line typescript/no-deprecated -- wocUrl stays readable here; this IS the alias implementation
   const indexerUrl = c?.indexerUrl ?? c?.wocUrl ?? DEFAULT_INDEXER_URL
   // primary = explicit broadcasterUrl, else the first listed extra, else
   // the GorillaPool default; extras append in order, deduped
@@ -84,12 +86,14 @@ const def = (c?: MainnetConfig) => {
     callbackToken: c?.callbackToken ?? nektarEnv('NEKTAR_CALLBACK_TOKEN'),
     indexerUrl,
     index: indexFailover([...new Set([indexerUrl, ...(c?.indexerUrls ?? [])])], {
+      // eslint-disable-next-line typescript/no-deprecated -- wocApiKey stays readable here; this IS the alias implementation
       apiKey: c?.indexerApiKey ?? c?.wocApiKey,
       kind: c?.indexerKind,
       fetchImpl: c?.fetchImpl
     }),
     fetch: c?.fetchImpl ?? fetch,
     broadcasterApiKey: c?.broadcasterApiKey,
+    // eslint-disable-next-line typescript/no-deprecated -- wocApiKey stays readable here; this IS the alias implementation
     indexerApiKey: c?.indexerApiKey ?? c?.wocApiKey,
     tipCacheMs: c?.tipCacheMs ?? Number(nektarEnv('NEKTAR_TIP_CACHE_MS') ?? 3_000)
   }

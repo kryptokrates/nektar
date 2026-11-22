@@ -63,7 +63,7 @@ process.on('SIGINT', () => process.exit(130))
 const keysFile = join(root, '.state', 'testnet-agents', 'agent-keys.json')
 if (!existsSync(keysFile)) die(`${keysFile} missing — no funded agent keys`)
 const keys = JSON.parse(readFileSync(keysFile, 'utf8'))
-if (!keys[SELLER] || !keys[BUYER]) die(`keys for ${SELLER}/${BUYER} not in agent-keys.json (${Object.keys(keys)})`)
+if (!keys[SELLER] || !keys[BUYER]) die(`keys for ${SELLER}/${BUYER} not in agent-keys.json (${Object.keys(keys).join(', ')})`)
 
 const requireMcp = createRequire(join(root, 'packages/mcp/package.json'))
 const { PrivateKey } = requireMcp('@bsv/sdk')

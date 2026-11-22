@@ -802,7 +802,7 @@ try {
           }
         })
       )
-      const same = (x, a) => x !== undefined && JSON.stringify([...x].sort()) === JSON.stringify([...a.hosts].sort())
+      const same = (x, a) => x !== undefined && JSON.stringify([...x].sort((p, q) => String(p).localeCompare(String(q)))) === JSON.stringify([...a.hosts].sort((p, q) => String(p).localeCompare(String(q))))
       if (agents.every((a, k) => same(recs[k], a))) {
         log(`bfinger records resolve for all four agents after ${((Date.now() - t0) / 1000).toFixed(1)}s`)
         break

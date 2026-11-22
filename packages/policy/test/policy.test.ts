@@ -18,7 +18,7 @@ permit(principal is Agent, action in [Action::"write", Action::"rotate", Action:
 when { resource.shard == "ops" };
 `
 
-test('POL-015: the policy proved by Cedar SymCC (tools/cedar-symcc) IS the policy under test', async (t) => {
+test('POL-015: the policy proved by Cedar SymCC (tools/cedar-symcc) IS the policy under test', async (_t) => {
   const { readFileSync } = await import('node:fs')
   const proved = readFileSync(new URL('../../../../tools/cedar-symcc/policies/instance.cedar', import.meta.url), 'utf8')
   assert.equal(canonicalizePolicySet('p', proved).hash, canonicalizePolicySet('p', POLICY).hash)

@@ -53,7 +53,7 @@ const startEnv = async (t: { skip: (m?: string) => void }, services: unknown[], 
   try {
     return await RestateTestEnvironment.start({ services: services as never[], ...opts } as never)
   } catch (e) {
-    t.skip(`restate test environment unavailable: ${e instanceof Error ? e.message : e}`)
+    t.skip(`restate test environment unavailable: ${e instanceof Error ? e.message : String(e)}`)
     return undefined
   }
 }

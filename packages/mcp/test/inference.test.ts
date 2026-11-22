@@ -6,7 +6,7 @@
 // other (input,output) is refused before it can enter a receipt.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld,  type TestFunder } from '@nektar/chain'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'

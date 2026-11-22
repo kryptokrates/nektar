@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld, type TestFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/index.js'
 import { AORGraph, GraphAnchor, PolicyDAG } from '@nektar/graph'
 import { parseProgram } from '@nektar/datalog'

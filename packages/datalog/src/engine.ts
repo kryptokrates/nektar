@@ -14,7 +14,7 @@ const key = (p: string, a: string[]) => `${p}(${a.join(',')})`
 export class Datalog {
   readonly rules: Rule[]
   readonly strata: Map<string, number>
-  constructor(rules: Rule[], edbPreds?: Set<string>) {
+  constructor(rules: Rule[], _edbPreds?: Set<string>) {
     this.rules = rules
     this.strata = this.stratify(rules)
     this.checkSafety(rules)

@@ -85,6 +85,7 @@ export function writeKeyFile(file: string, plain: string, pass: string | undefin
  *  custody-of-record — recoverable, one string to protect — while the derived
  *  key feeds the same keyDeriver the WIF path used. */
 export function fundKeyFromMnemonic(phrase: string): PrivateKey {
+  // eslint-disable-next-line typescript/no-deprecated -- HD is the SDK's only BIP-32 derivation; NEKTAR_FUND_MNEMONIC compat needs it (BRC-42 is not a mnemonic recovery path)
   const hd = HD.fromSeed(Mnemonic.fromString(phrase).toSeed())
   return hd.derive("m/44'/236'/0'/0/0").privKey
 }

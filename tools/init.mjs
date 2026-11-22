@@ -124,7 +124,7 @@ if (existsSync(envPath)) {
   const managed = ['NEKTAR_NETWORK', 'NEKTAR_DATA_DIR', 'NEKTAR_KEY_PASSPHRASE', 'NEKTAR_HTTP_PORT', 'NEKTAR_VERIFY_BASE', 'NEKTAR_MODEL_ID']
   const kept = old
     .split(/\r?\n/)
-    .filter((l) => !/^# nektar init/.test(l.trim()) && !managed.some((k) => new RegExp(`^\\s*${k}\\s*=`).test(l)))
+    .filter((l) => !l.trim().startsWith('# nektar init') && !managed.some((k) => new RegExp(`^\\s*${k}\\s*=`).test(l)))
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trimEnd()

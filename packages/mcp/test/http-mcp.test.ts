@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import type { AddressInfo } from 'node:net'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld, type TestFunder } from '@nektar/chain'
 import { NektarMemory, createHttpApi } from '../src/index.js'
 
 process.env.NEKTAR_TOOL_PROFILE = 'operator'

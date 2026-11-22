@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld, type TestFunder } from '@nektar/chain'
 import type { AddressInfo } from 'node:net'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -48,7 +48,7 @@ test('shard packs: export → import re-verifies every bundle; records provable 
   )
   assert.ok(pack.records.every((r) => typeof r.data === 'string' && typeof r.prov?.signature === 'string'))
 
-  const b = await peerOf(a)
+  const b =  peerOf(a)
   if (b === undefined) return
   const imp = await b.importShardPack(pack)
   assert.equal(imp.imported, 2)

@@ -37,17 +37,11 @@ RUN cargo build --release -p nektar-stark \
  && cp ./target/release/nektar-stark /usr/local/bin/ && cp "$(readlink -f "$(which r0vm)")" /usr/local/bin/r0vm \
  && strip /usr/local/bin/nektar-stark /usr/local/bin/r0vm || true # symbols only — perf unchanged
 
-# restate-server sidecar — the same pin compose runs (deploy/agent/compose.yaml)
-# and pack-deploy bundles (tools/pack-deploy.mjs). musl-static: runs on this
-# debian kernel. Lifting the binary beats a curl+sha256 download because the
-# image digest IS the pin.
-FROM docker.restate.dev/restatedev/restate:1.8.1@sha256:6ed8ad9c7c09d64e7655c0debcb713e3cf5f875b26f700a74ad15640a72d6243 AS restate
-
 FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS build
 # sqlite3 falls back to node-gyp when prebuild-install can't fetch a binary;
 # slim has no toolchain and sqlite3's bundled node-gyp 8.x can't parse Node 24.
 # hadolint ignore=DL3008
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ curl xz-utils \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g node-gyp@11.5.0
 ENV npm_config_node_gyp=/usr/local/lib/node_modules/node-gyp/bin/node-gyp.js
@@ -63,6 +57,24 @@ COPY vectors ./vectors
 COPY tools/cedar-symcc/policies ./tools/cedar-symcc/policies
 RUN pnpm install --frozen-lockfile && pnpm -r build && pnpm reproduce \
  && pnpm deploy --filter @nektar/mcp --prod /prod
+# restate-server sidecar — same version as compose (deploy/agent/compose.yaml)
+# and pack-deploy.mjs, fetched from the GitHub release with its own .sha256
+# (the restatedev IMAGE ships a glibc-dynamic build needing GLIBC_2.39 —
+# bookworm has 2.36 and exec fails silently; the release musl build is fully
+# static, verified end-to-end under this exact stage).
+ARG RESTATE_VERSION=1.8.1
+RUN arch="$(dpkg --print-architecture)" \
+ && case "$arch" in amd64) t=x86_64-unknown-linux-musl ;; arm64) t=aarch64-unknown-linux-musl ;; *) echo "no musl restate target for $arch"; exit 1 ;; esac \
+ && name="restate-server-$t.tar.xz" \
+ && base="https://github.com/restatedev/restate/releases/download/v$RESTATE_VERSION" \
+ && curl -fsSL "$base/$name" -o /tmp/rs.tar.xz \
+ && curl -fsSL "$base/$name.sha256" -o /tmp/rs.sha \
+ && echo "$(cut -d' ' -f1 /tmp/rs.sha)  /tmp/rs.tar.xz" | sha256sum -c - \
+ && tar -xJf /tmp/rs.tar.xz -C /tmp \
+ && mkdir -p /prod/restate \
+ && cp "/tmp/restate-server-$t/restate-server" /prod/restate/restate-server \
+ && chmod 755 /prod/restate/restate-server \
+ && rm -rf /tmp/rs.tar.xz /tmp/rs.sha "/tmp/restate-server-$t"
 
 # slim runtime — pnpm deploy output is the mcp package + runtime-only deps:
 # no devDependencies, no TypeScript, no tests, no source. The workspace's
@@ -71,13 +83,11 @@ FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23f
 WORKDIR /app
 COPY --from=build /prod /app
 COPY --from=build /app/packages/mcp/demo /app/demo
-# /app/restate/restate-server is where restatesidecar.ts resolves the bundle
-# (dist/src/bin.js → ../../restate). One container = the whole plane: the
-# sidecar spawns on container loopback and calls the endpoint back on
-# 127.0.0.1:9080 — no WSL/gateway plumbing needed (same netns). An explicit
-# NEKTAR_RESTATE_URL still wins over the bundle (compose keeps its sidecar
-# service working unchanged).
-COPY --from=restate /usr/local/bin/restate-server /app/restate/restate-server
+# /app/restate/restate-server arrived inside /prod — where restatesidecar.ts
+# resolves the bundle (dist/src/bin.js → ../../restate). One container = the
+# whole plane: the sidecar spawns on container loopback and calls the endpoint
+# back on 127.0.0.1:9080 — no WSL/gateway plumbing needed (same netns). An
+# explicit NEKTAR_RESTATE_URL still wins (compose keeps its sidecar service).
 COPY --from=stark /usr/local/bin/nektar-stark /usr/local/bin/r0vm /usr/local/bin/
 ENV NEKTAR_STARK_PROVER=/usr/local/bin/nektar-stark
 # the musl restate-server loads system root CAs via rustls-native-certs and

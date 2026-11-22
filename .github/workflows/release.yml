@@ -68,6 +68,9 @@ jobs:
             sleep 2
           done
           docker logs --tail 15 "$cid" || true
+          # the sidecar's own log holds the spawn detail the app log lacks —
+          # dump it before the container goes (debugged blind once already)
+          docker exec "$cid" cat /data/restate/restate.log 2>/dev/null | tail -20 || true
           docker rm -f "$cid" > /dev/null
           [ "$ok" = 1 ] || { echo 'restate sidecar did not come up inside the image'; exit 1; }
           echo 'restate sidecar up inside the pushed image'

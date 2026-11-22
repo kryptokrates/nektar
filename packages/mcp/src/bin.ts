@@ -6,9 +6,6 @@
 // (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
 import { nektarEnv, setNektarEnv, mkLog } from '@nektar/core'
 import { marketHosts } from './hosts.js'
-import { openRuntime, configFromEnv } from './runtime.js'
-import { serveStdio } from './mcp-server.js'
-import { createHttpApi } from './http.js'
 import { existsSync, readFileSync } from 'node:fs'
 
 // --env <regtest|testnet|main> + optional .env beside cwd → minimal-typing boot.
@@ -84,6 +81,12 @@ if (portFlag) setNektarEnv('NEKTAR_HTTP_PORT', portFlag)
 const hostFlag = argv.includes('--host') ? argv[argv.indexOf('--host') + 1] : undefined
 if (hostFlag) setNektarEnv('NEKTAR_HTTP_HOST', hostFlag)
 
+// runtime.js pulls @nektar/automation → wallet-toolbox, which dotenv-loads
+// the repo .env into process.env at import time. It must evaluate AFTER the
+// precedence block above — otherwise .env's NEKTAR_NETWORK lands before the
+// profile fill and 'mainnet' silently boots testnet (seen live). dotenv
+// never overrides set vars, so by the time it runs our values already hold.
+const { openRuntime, configFromEnv } = await import('./runtime.js')
 const rt = await openRuntime(configFromEnv())
 nlog(`network=${rt.network}`)
 // zero-config join, Layer 0 — a genuinely empty boot gets a small local
@@ -250,9 +253,9 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
   if (mh.length === 0) nlog('automation: no market hosts (set NEKTAR_MARKET_HOSTS) — wants and offers cannot be published')
 }
 const port = nektarEnv('NEKTAR_HTTP_PORT')
-let srv: ReturnType<typeof createHttpApi> | undefined
+let srv: ReturnType<typeof import('./http.js').createHttpApi> | undefined
 if (port) {
-  srv = createHttpApi(rt.mem, rt.ops)
+  srv = (await import('./http.js')).createHttpApi(rt.mem, rt.ops)
   const host = nektarEnv('NEKTAR_HTTP_HOST') ?? '127.0.0.1'
   // fail-closed: a non-loopback bind with no bearer exposes every tool and
   // operator route unauthenticated — refuse unless the operator explicitly
@@ -304,7 +307,7 @@ process.on('SIGTERM', () => {
   void stop()
 })
 if (!port) {
-  await serveStdio(rt.mem, rt.ops)
+  await (await import('./mcp-server.js')).serveStdio(rt.mem, rt.ops)
   // the MCP client went away → exit (otherwise `docker run -i` containers leak
   // and several instances end up sharing one data volume)
   process.stdin.on('end', () => {

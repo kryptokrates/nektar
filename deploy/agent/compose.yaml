@@ -65,7 +65,7 @@ services:
   # the agent's private executor plane — co-located, never published.
   # Its journals are the second durable store beside the data volume.
   restate:
-    image: docker.restate.dev/restatedev/restate:latest
+    image: docker.restate.dev/restatedev/restate:1.8.1
     restart: unless-stopped
     volumes:
       - restate-data:/restate-data

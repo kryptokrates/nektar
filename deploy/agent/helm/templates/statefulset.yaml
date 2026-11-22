@@ -59,7 +59,7 @@ spec:
             # is CORRECT here (the one topology where it is): no DNS, no
             # routing, no host-gateway to get wrong.
             - name: NEKTAR_RESTATE_URL
-              value: "http://127.0.0.1:8080"
+              value: "http://127.0.0.1:8111"
             - name: NEKTAR_RESTATE_ADMIN
               value: "http://127.0.0.1:9070"
             - name: NEKTAR_RESTATE_ENDPOINT_URI
@@ -95,6 +95,11 @@ spec:
         - name: restate
           image: "{{ .Values.restate.image.repository }}:{{ .Values.restate.image.tag }}"
           imagePullPolicy: {{ .Values.restate.image.pullPolicy }}
+          env:
+            # both containers share the pod's localhost — the agent's own
+            # HTTP server owns :8080, so the ingress moves off it
+            - name: RESTATE_INGRESS__BIND_PORT
+              value: "8111"
           resources:
             {{- toYaml .Values.restate.resources | nindent 12 }}
           volumeMounts:

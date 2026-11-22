@@ -18,7 +18,7 @@ include:
   - ../bstack-sandbox/compose.mainnet.yaml
 services:
   restate:
-    image: docker.restate.dev/restatedev/restate:latest
+    image: docker.restate.dev/restatedev/restate:1.8.1
     restart: unless-stopped
     volumes:
       - restate-seller-data:/restate-data
@@ -60,7 +60,7 @@ services:
     volumes:
       - ../../.nektar-main:/data
   restate-buyer:
-    image: docker.restate.dev/restatedev/restate:latest
+    image: docker.restate.dev/restatedev/restate:1.8.1
     restart: unless-stopped
     volumes:
       - restate-buyer-data:/restate-data

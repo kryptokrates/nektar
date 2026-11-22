@@ -220,7 +220,9 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
   // fatal for a containerized one — the URI resolves inside the container.
   // Registration itself may still succeed (the admin call works; delivery
   // retries are what die), so name the fix before the wedge forms.
-  if (/^https?:\/\/(127\.|localhost|\[?::1\]?)/.test(uri))
+  // KUBERNETES_SERVICE_HOST is always set in a pod — there the sidecar is
+  // same-pod and loopback is the correct address, so the warning is skipped.
+  if (/^https?:\/\/(127\.|localhost|\[?::1\]?)/.test(uri) && !env.KUBERNETES_SERVICE_HOST)
     log(`automation: endpoint URI ${uri} is loopback — a containerized sidecar cannot reach it; set NEKTAR_RESTATE_ENDPOINT_URI to a container-routable address (Docker Desktop: http://192.168.65.254:${port} — plain IP, not host.docker.internal, whose DNS can answer an unroutable IPv6)`)
   const expected = manifestOf(services) ?? []
   const force = expected.length === 0 || !(await manifestMatches(admin, uri, expected))

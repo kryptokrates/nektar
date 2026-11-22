@@ -1,5 +1,8 @@
 image:
   repository: ghcr.io/kryptokrates/nektar
+  # 'latest' = last tagged release — it may predate the deploy files'
+  # assumptions (e.g. the required rt sidecar). Pin a tag/digest that
+  # carries the features this chart wires.
   tag: latest
   # sha256:<hex> — when set, pulls repository@digest and ignores tag.
   # Recommended on any box holding real keys.
@@ -78,7 +81,9 @@ resources: {}
 restate:
   image:
     repository: docker.restate.dev/restatedev/restate
-    tag: latest
+    # pinned — the executor is required infrastructure; a silent major bump
+    # on 'latest' is not a deployable risk
+    tag: "1.8.1"
     pullPolicy: IfNotPresent
   resources: {}
     # requests:

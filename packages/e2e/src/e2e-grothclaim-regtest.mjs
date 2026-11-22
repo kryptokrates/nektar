@@ -211,7 +211,7 @@ console.log('── settleValid: claim + verifier co-spend ──')
     `settleValid broadcast (${tx.id('hex').slice(0, 12)}…${r.status !== 'success' ? ' ' + (r.description ?? '').slice(0, 80) : ''})`
   )
   if (r.status === 'success') {
-    void mprovider.markAccepted?.(tx)
+    void (/** @type {{ markAccepted?: (tx: unknown) => unknown }} */ (mprovider).markAccepted?.(tx))
     // the ClaimVerdict UTXO at out0 is the consensus-certified statement
     const vs = await utxoStatus(cfg, tx.id('hex'), 0).catch(() => 'unknown')
     console.log(`  verdict UTXO (${tx.id('hex').slice(0, 12)}…:0) status: ${vs}`)

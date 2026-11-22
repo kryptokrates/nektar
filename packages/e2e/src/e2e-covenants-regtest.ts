@@ -2,6 +2,7 @@
 // (NEKTAR_NETWORK=regtest): deploy each contract, spend through it, and let the
 // node refuse the negative cases (early close / wrong wrapped / early refund).
 import { PrivateKey, Transaction, LockingScript, P2PKH, Hash } from '@bsv/sdk'
+import { sparse } from '@nektar/core'
 import { buildP2PKHScript } from 'runar-sdk'
 import { CheckpointBond, DisclosureSaleHost } from '@nektar/anchor'
 import { TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve, type RegtestConfig } from '@nektar/chain'

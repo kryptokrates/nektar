@@ -3,7 +3,7 @@
 // the brief: broadcasts regtest txs only, never mainnet.
 //   node packages/e2e/dist/src/measure-costs.js
 import { PrivateKey, Transaction } from '@bsv/sdk'
-import { dsha256, utf8 } from '@nektar/core'
+import { dsha256, utf8, sparse } from '@nektar/core'
 import { AnchorChain } from '@nektar/anchor'
 import { ReserveFunder, ReserveFunds, TeranodeBroadcaster, bootstrapReserve, type RegtestConfig } from '@nektar/chain'
 import { existsSync, readFileSync, mkdirSync } from 'node:fs'

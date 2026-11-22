@@ -25,7 +25,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PrivateKey, ProtoWallet, PublicKey } from '@bsv/sdk'
 import { testChain, testFunder, listFundsStore, MemoryFunds, memoryTreasury, fundsAsFunder } from '@nektar/chain'
-import { walletSigner, FUND_SIGN_ARGS, heldRootKey, type SignerWallet } from '@nektar/core'
+import { walletSigner, FUND_SIGN_ARGS, heldRootKey, sparse, type SignerWallet } from '@nektar/core'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 

@@ -55,7 +55,7 @@ console.log(`funding address: ${addr}`)
 
 // --- funding ---------------------------------------------------------------
 const utxos = await discoverUtxos(cfg, addr)
-const fund = utxos.sort((a, b) => b.satoshis - a.satoshis)[0]
+const fund = utxos.sort((a, b) => b.satoshis - a.satoshis).at(0)
 check(!!fund, `testnet UTXO discovered (${utxos.length} found${fund ? `, largest ${fund.satoshis} sats` : ''})`)
 if (!fund) process.exit(1)
 
@@ -121,7 +121,7 @@ if (b2.ok) {
 }
 
 // --- settlement status (public testnet: we poll, we cannot mine) ------------
-if (b1.ok) {
+if (/** @type {boolean} */ (b1.ok)) {
   const deadline = Date.now() + Number(process.env.NEKTAR_CONFIRM_WAIT_MS ?? 120_000)
   let s1 = 'in mempool (unconfirmed)'
   while (Date.now() < deadline) {

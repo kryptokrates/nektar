@@ -111,7 +111,9 @@ const unprovenTrees = async (rt: Automation): Promise<number> => Object.values(a
 const buyerOp = async (b: A) => (await b.rt.store.operations({ role: 'buyer' })).find((o) => o.kind === 'purchase')
 const saleOps = async (s: A) => (await s.rt.store.operations({ role: 'seller' })).filter((o) => o.kind === 'sale')
 const COMPLETE = new Set(['completion_submitted', 'settled', 'useful'])
-const stopAgent = async (a: A | undefined): Promise<void> => { await a?.rt.stop() }
+const stopAgent = async (a: A | undefined): Promise<void> => {
+  await a?.rt.stop()
+}
 
 void test('bstack A: buyer+seller over two minihosts — journal+slot conservation, dedupe, both hosts hold', { timeout: 300_000 }, async (t) => {
   const chain = await testChain(t)
@@ -149,7 +151,8 @@ void test('bstack A: buyer+seller over two minihosts — journal+slot conservati
     const bo = await buyerOp(b)
     const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
     assert.equal(bo?.state, 'disclosure_verified')
-    assert.ok(so && COMPLETE.has(so.state), `seller op ${so.state}`)
+    assert.ok(so !== undefined, 'seller op missing')
+    assert.ok(COMPLETE.has(so.state), `seller op ${so.state}`)
     assert.ok(h2Failed, 'h2 received the 503-injected first submit')
     // both hosts hold the want carrier
     const wantTxid = [...h1.txids()].filter((t) => h2.has(t))
@@ -564,6 +567,7 @@ void test('bstack H: seller takes the escrow from the accept and broadcasts it i
     assert.ok(escrowBroadcasts >= 1, 'seller broadcast the escrow tx itself')
     assert.equal(escrowLookups, 0, 'seller never looked the escrow up')
     const sale: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
+    assert.ok(sale !== undefined, 'sale op missing')
     const verified = (await s.rt.store.events(sale.operationId)).find((e) => e.cause === 'escrow_verified')
     assert.deepEqual(
       verified?.evidence,
@@ -601,6 +605,7 @@ void test('bstack I: tampered accept — txHex of a different transaction → se
     await b.rt.stop()
     assert.ok(await until([s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     const op: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
+    assert.ok(op !== undefined, 'sale op missing')
     const want = (op.data.want as { want: { wantId: string; pub: string } }).want
     const offer = op.data.offer as { cfg: { price: number | string; refundAfter: number | string; maxFee: number | string } }
     const { PublicKey, Script, Transaction } = await import('@bsv/sdk')
@@ -623,6 +628,7 @@ void test('bstack I: tampered accept — txHex of a different transaction → se
     })
     await s.rt.cycle() // tick drains the inbox → onAccept
     const op2: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
+    assert.ok(op2 !== undefined, 'sale op missing')
     assert.equal(op2.state, 'quoted', 'tampered accept must not advance the sale')
     const evs = await s.rt.store.events(op.operationId)
     assert.ok(
@@ -1240,12 +1246,14 @@ void test.skip('bstack S: disclosure rejected after completion_submitted — sel
       if (!submitted) await chain.mine(1)
     }
     assert.ok(submitted, 'never completion_submitted | ' + logs.slice(-20).join(' | '))
-    const _completeTxid = (await saleOps(s)).at(0).data.completeTxid as string
+    const completeOp = (await saleOps(s)).at(0)
+    assert.ok(completeOp !== undefined, 'sale op missing')
+    const _completeTxid = completeOp.data.completeTxid as string
     assert.ok(
       await until([s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'completion_failed', 80000),
       'not completion_failed | ' + logs.slice(-20).join(' | ')
     )
-    const evs = await s.rt.store.events((await saleOps(s)).at(0).operationId)
+    const evs = await s.rt.store.events((await saleOps(s)).at(0)!.operationId)
     assert.ok(
       evs.some((e) => e.cause === 'disclosure_rejected_late'),
       'cause disclosure_rejected_late: ' + evs.map((e) => e.cause).join(',')
@@ -1270,7 +1278,7 @@ void test.skip('bstack S: disclosure rejected after completion_submitted — sel
 void test('bstack T: refused refund retries on reconcile — succeeds after one refusal; five refusals stay uncertain', { timeout: 300_000 }, async (t) => {
   for (const refuse of [1, 10]) {
     const chain = await testChain(t)
-  if (chain === undefined) return undefined
+    if (chain === undefined) return undefined
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
     const logs: string[] = []
     const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1368,6 +1376,7 @@ void test('bstack U: seller loses its database — the sellerNote rebuilds the q
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     const origOp = (await saleOps(s)).at(0)
+    assert.ok(origOp !== undefined, 'sale op missing')
     // measure the sealed sellerNote on the wire — must fit the 12 KiB budget.
     // Seller-only rounds: under immediate-select a full drive can run the deal
     // to settlement before the note is even listed, and a settled note acks —
@@ -1591,7 +1600,7 @@ void test(
   { timeout: 300_000 },
   async (t) => {
     const chain = await testChain(t)
-  if (chain === undefined) return undefined
+    if (chain === undefined) return undefined
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
     const logs: string[] = []
     const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM })
@@ -1609,6 +1618,7 @@ void test(
       await drive([b.rt, s.rt], chain, 3) // let the journal append settle
       const bo = (await buyerOp(b))!
       const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
+      assert.ok(so !== undefined, 'sale op missing')
 
       // the buyer sees the seller's stream for this deal: complete, with the
       // seller-side states
@@ -2323,7 +2333,7 @@ void test(
   { timeout: 300_000 },
   async (t) => {
     const chain = await testChain(t)
-  if (chain === undefined) return undefined
+    if (chain === undefined) return undefined
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-announce-'))
     const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
     const logs: string[] = []

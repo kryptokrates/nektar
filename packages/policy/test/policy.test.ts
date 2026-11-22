@@ -88,9 +88,5 @@ test('cedar: DENY-policy bypass attempt is refused', () => {
   // a bypass attempt would mint a forged Allow receipt — it still fails the
   // anchored-hash check when the policy hash is different OR decision forged:
   const bypassed = { ...r, decision: 'Allow' as const }
-  assert.equal(
-    receiptMatchesAnchor(bypassed, ps.hash),
-    true,
-    'hash matches but the DECISION itself came from Cedar DENY — caller must honor d.allow'
-  )
+  assert.equal(receiptMatchesAnchor(bypassed, ps.hash), true, 'hash matches but the DECISION itself came from Cedar DENY — caller must honor d.allow')
 })

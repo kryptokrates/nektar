@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey, ProtoWallet, Transaction, P2PKH, Utils } from '@bsv/sdk'
+import { sparse } from '@nektar/core'
 import { MemoryTreeLedger, mintTree } from '../src/tree.js'
 import { MemoryCarrierJournal } from '../src/journal.js'
 import {
@@ -387,7 +388,7 @@ test('finger: EF-stub ancestry is detached before the token beef serializes', as
     // ancestry — the detached input shows as sourceTXID-only instead
     const stx = Transaction.fromBEEF([...(await s.state.get())!.tokenBeef])
     const walk = (t: Transaction, seen = new Set<string>()): void => {
-      for (const o of t.outputs) assert.ok(o != null, `${t.id('hex').slice(0, 12)} has a null output`)
+      for (const o of t.outputs) assert.ok(sparse(o) != null, `${t.id('hex').slice(0, 12)} has a null output`)
       for (const i of t.inputs) {
         const src = i.sourceTransaction
         if (src === undefined || seen.has(src.id('hex'))) continue
@@ -397,7 +398,9 @@ test('finger: EF-stub ancestry is detached before the token beef serializes', as
     }
     walk(stx)
     const feeSrc = stx.inputs.find((i) => i.sourceTXID !== '00'.repeat(32))?.sourceTransaction
-    assert.ok(feeSrc === undefined || feeSrc.inputs.every((i) => i.sourceTransaction === undefined || i.sourceTransaction.outputs.every((o) => o != null)))
+    assert.ok(
+      feeSrc === undefined || feeSrc.inputs.every((i) => i.sourceTransaction === undefined || i.sourceTransaction.outputs.every((o) => sparse(o) != null))
+    )
   } finally {
     await s.h1.close()
     await s.h2.close()

@@ -122,7 +122,9 @@ for (const spec of (process.env.NEKTAR_SOAK_AGENTS ?? '')
   .filter(Boolean)) {
   const eq = spec.indexOf('=')
   const name = eq > 0 ? spec.slice(0, eq) : `agent${Object.keys(rec.agents).length}`
-  const parts = (eq > 0 ? spec.slice(eq + 1) : spec).split('@'); const url = parts.at(0) ?? ''; const token = parts.at(1)
+  const parts = (eq > 0 ? spec.slice(eq + 1) : spec).split('@')
+  const url = parts.at(0) ?? ''
+  const token = parts.at(1)
   const base = url.replace(/\/+$/, '')
   const h = token !== undefined ? { authorization: `Bearer ${token}` } : {}
   const slot = {}

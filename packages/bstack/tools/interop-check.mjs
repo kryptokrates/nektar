@@ -84,7 +84,7 @@ const NKT1 = new TextEncoder().encode('nkt1')
   const env = { office: 'nektar_abcdefghij', to, box: 'market', from, created, expires: created + 3600, content, extra: [] }
   const record = envelopeRecord(env)
   await check('stock envelope decode → open → parsePlaintext', async () => {
-    const e = decodeEnvelope(record)
+    const e = /** @type {ReturnType<typeof decodeEnvelope> | undefined} */ (decodeEnvelope(record))
     if (e === undefined) throw new Error('decodeEnvelope refused')
     const c = parseContent(e)
     const opened = await openPlaintext(new ProtoWallet(recip), c, new Uint8Array(e.from))
@@ -161,7 +161,7 @@ const NKT1 = new TextEncoder().encode('nkt1')
     for (const b of built.branches) store.set(hex(new Uint8Array(Hash.sha256(Array.from(b)))), b)
     for (const b of built.blobs ?? []) store.set(hex(new Uint8Array(Hash.sha256(Array.from(b)))), b)
     const c = await verifyClosure(built.rootHash, (h) => store.get(hex(h)))
-    if (!(c.blobs?.length >= 0)) throw new Error('closure empty')
+    if (!(/** @type {Child[] | undefined} */ (c.blobs)?.length) >= 0) throw new Error('closure empty')
   })
 }
 

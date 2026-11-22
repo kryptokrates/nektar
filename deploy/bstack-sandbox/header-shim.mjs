@@ -190,7 +190,7 @@ const json = (res, code, body) => {
 // cache hit never bypasses verification, it just isn't re-run per request.
 const TIP_TTL = 20_000
 const SPEND_TTL = 15_000
-const tipCache = { at: 0, height: undefined }
+const tipCache = /** @type {{at: number, height: number | undefined}} */ ({ at: 0, height: undefined })
 const rootCache = new Map() // height -> merkleRoot (immutable once corroborated)
 const proofCache = new Map() // txid -> Buffer (immutable once served)
 const spendCache = new Map() // txid -> { at, outs }

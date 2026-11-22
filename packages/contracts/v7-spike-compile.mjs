@@ -7,7 +7,7 @@ for (const name of process.argv.slice(2)) {
     console.log(JSON.stringify(r.diagnostics).slice(0, 3000))
     continue
   }
-  const a = r.artifact
+  const a = /** @type {{abi?: {methods?: {name: string}[]}, methods?: {name: string}[], script?: string}} */ (r.artifact)
   console.log('abi methods:', JSON.stringify((a.abi?.methods ?? a.methods ?? []).map((m) => m.name)))
   const script = a.script ?? ''
   console.log('script bytes ~', Math.floor(script.length / 2))

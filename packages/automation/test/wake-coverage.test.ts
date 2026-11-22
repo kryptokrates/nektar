@@ -47,8 +47,12 @@ void test('every cadence service declares its wake source', () => {
   }
   const found = new Set<string>()
   for (const f of srcFiles())
-    for (const m of read(f).matchAll(/cronObject\(\s*(?:EXEC_SVC\.(\w+)|'([^']+)')/g)) found.add(sparse(m[1]) !== undefined ? `nektar-${m[1]}` : m[2]!)
-  for (const name of found) assert.ok(sparse(WAKE_MAP[name]) !== undefined, `cadence service '${name}' has no wake-map entry — name its wake source or classify it`)
+    for (const m of read(f).matchAll(/cronObject\(\s*(?:EXEC_SVC\.(\w+)|'([^']+)')/g)) {
+      const svc = sparse(m[1]) !== undefined ? `nektar-${m[1]}` : sparse(m[2])
+      if (svc !== undefined) found.add(svc)
+    }
+  for (const name of found)
+    assert.ok(sparse(WAKE_MAP[name]) !== undefined, `cadence service '${name}' has no wake-map entry — name its wake source or classify it`)
 })
 
 void test('every wait primitive site is classified — the census sees all wait classes', () => {

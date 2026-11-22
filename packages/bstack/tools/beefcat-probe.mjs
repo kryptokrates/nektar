@@ -16,7 +16,8 @@ import { Transaction } from '@bsv/sdk'
 import { mineableRefusal, unlockingRefusal } from '@lightwebinc/bcommon'
 import { readFileSync } from 'node:fs'
 
-const file = process.argv.at(2); const base = process.argv.at(3)
+const file = process.argv.at(2)
+const base = process.argv.at(3)
 if (file === undefined || base === undefined) {
   console.error('usage: node beefcat-probe.mjs <stream.bcat> <headers-url>')
   process.exit(2)

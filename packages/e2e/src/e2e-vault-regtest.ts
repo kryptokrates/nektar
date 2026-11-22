@@ -3,6 +3,7 @@
 // negative: over-cap spend must be REFUSED by the node (real Teranode script
 // evaluation).
 import { PrivateKey, Transaction, LockingScript, P2PKH } from '@bsv/sdk'
+import { sparse } from '@nektar/core'
 import { buildP2PKHScript } from 'runar-sdk'
 import { FeeVault } from '@nektar/anchor'
 import { TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve, type RegtestConfig } from '@nektar/chain'

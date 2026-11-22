@@ -114,7 +114,7 @@ const watchShims = (
   .split(',')
   .map((x) => x.trim())
   .filter(Boolean)
-const shimFor = (host) => watchShims[HOSTS.indexOf(host)]
+const shimFor = (host) => watchShims.at(HOSTS.indexOf(host))
 const FINDING =
   'libfoo 3.0 renamed connect() to open(); callers must switch.\n```nektar-patch\n{"edits":[{"file":"src/app.js","find":"libfoo.connect(","replace":"libfoo.open("}]}\n```'
 const QUESTION = 'build fails after libfoo 3.0 upgrade: libfoo.connect is not a function'
@@ -217,7 +217,8 @@ const SPENT_FILE = join(root, '.state', 'testnet-treasury-spends.json')
 const FAULT = (() => {
   const i = process.argv.indexOf('--fault')
   if (i === -1) return undefined
-  const [trigger, verb, arg] = process.argv[i + 1].split(':')
+  const parts = (process.argv.at(i + 1) ?? '').split(':')
+  const [trigger, verb, arg] = [parts.at(0), parts.at(1), parts.at(2)]
   return { trigger, verb, arg }
 })()
 const EXPECT = process.argv.includes('--expect') ? process.argv[process.argv.indexOf('--expect') + 1] : 'verified'
@@ -235,6 +236,7 @@ const stepAt = (evs, cause, t0) => {
 // the covenant rail and `payment_verified` only on the direct-P2PKH rail —
 // the inapplicable row renders n/a (never a wait), `—` stays the "applicable
 // but never observed" signal.
+/** @type {ReadonlyArray<readonly [string, (b: any, s: any, t0: any) => number, string, ((op: any) => boolean)?]>} */
 const STEP_ROWS = [
   ['want signed', (b, s, t0) => stepAt(b, 'want_signed', t0), 'want tx build + broadcast'],
   ['seller prepared offer', (b, s, t0) => stepAt(s, 'offer_prepared', t0), 'want propagates to seller + offer build'],

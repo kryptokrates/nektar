@@ -69,7 +69,7 @@ try {
   console.log(`  ${link(a1?.txid)}`)
 
   // 4. owner rotation
-  const rot = await rt.mem.rotateShard(shard, PrivateKey.fromRandom())
+  const rot = /** @type {{txid: string, n: number} | undefined} */ (await rt.mem.rotateShard(shard, PrivateKey.fromRandom()))
   check(!!rot?.txid, 'owner rotation broadcast')
   console.log(`  ${link(rot?.txid)}`)
 

@@ -427,7 +427,10 @@ export async function cardPage(mem: NektarMemory, host: string | undefined): Pro
           .records(s)
           .then((r) => r.length)
           .catch(() => 0)
-        const offers = sparse(m?.offers)?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? ''
+        const offers =
+          sparse(m?.offers)
+            ?.map((o) => `${o.kind} ${o.priceSats}ⓢ`)
+            .join(' · ') ?? ''
         return `<div class=row><b>${esc(s)}</b><span class=dim>${esc((m?.domains ?? []).join(', '))}${m?.desc ? ` — ${esc(m.desc)}` : ''}</span><span class=dim>${n} records${offers ? ` · ${esc(offers)}` : ''}</span><a class=lnk href="${base}/v1/pack/${encodeURIComponent(s)}">pack ↗</a></div>`
       })
     )

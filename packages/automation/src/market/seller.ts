@@ -21,9 +21,7 @@ export abstract class SellerOps extends IngressOps {
     if (!sp || sw === undefined || !verifyWant(sw.want, sw.sig, { now: this.now() })) return
     const w = sw.want
     if (w.pub === this.me) {
-      this.d.log?.(
-        `market: want ${w.wantId} refused — self-published; a node does not answer its own wants (a self-deal canary needs a second agent identity)`
-      )
+      this.d.log?.(`market: want ${w.wantId} refused — self-published; a node does not answer its own wants (a self-deal canary needs a second agent identity)`)
       return
     }
     if (w.status !== 'open' || w.net !== this.d.network) return
@@ -222,8 +220,7 @@ export abstract class SellerOps extends IngressOps {
     } else tx = await this.d.fetchTx(utxo.txid)
     const out = tx?.outputs[utxo.vout]
     if (!tx || tx.id('hex') !== utxo.txid || !out) return await refuse('escrow transaction not observable yet')
-    if (out.lockingScript.toHex() !== utxo.script || out.satoshis !== utxo.satoshis)
-      return await refuse('on-chain escrow output differs from the claimed one')
+    if (out.lockingScript.toHex() !== utxo.script || out.satoshis !== utxo.satoshis) return await refuse('on-chain escrow output differs from the claimed one')
     // every escrow input whose parent we can resolve is evaluated locally —
     // a bogus or unsigned spend is refused before the network is even asked.
     // Parents the carry didn't include are fetched the same way readTx

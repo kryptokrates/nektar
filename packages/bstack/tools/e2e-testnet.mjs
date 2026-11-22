@@ -158,7 +158,7 @@ check(
 let wantBack
 for (let i = 0; i < 20 && wantBack === undefined; i++) {
   const r = await readWants(HOSTS, { net: NET, domain }, { tracker, net: NET })
-  wantBack = r.items.find((it) => it.payload?.body?.want?.wantId === sw.want.wantId)
+  wantBack = r.items.find((it) => /** @type {{ body?: { want?: { wantId?: string } } } | undefined} */ (it.payload)?.body?.want?.wantId === sw.want.wantId)
   if (wantBack === undefined) await sleep(5000)
 }
 check(wantBack !== undefined, `want readable back via ls_nektar (wantId ${sw.want.wantId.slice(0, 12)}…)`)
@@ -267,7 +267,7 @@ for (let i = 0; i < 20 && resolved === undefined; i++) {
   resolved = await resolveFinger({ hosts: HOSTS, pub: key.toPublicKey().toString(), tracker, allowHttp: true }).catch(() => undefined)
   if (resolved === undefined) await sleep(5000)
 }
-check(resolved !== undefined, `identity record resolvable via ls_finger (seq ${resolved?.seq}, answered by ${resolved?.hostsAnswered?.length ?? 0} hosts)`)
+check(resolved !== undefined, `identity record resolvable via ls_finger (seq ${resolved?.seq}, answered by ${resolved?.hostsAnswered.length ?? 0} hosts)`)
 if (resolved !== undefined) check(resolved.body.office === body.office && resolved.body.stream === body.stream, 'resolved body matches what we published')
 
 console.log(failures === 0 ? '\ntestnet smoke: all checks passed' : `\ntestnet smoke: ${failures} check(s) FAILED`)

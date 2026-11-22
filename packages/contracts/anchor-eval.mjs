@@ -1,5 +1,6 @@
 import { RunarContract, MockProvider, LocalSigner } from 'runar-sdk'
 import { readFileSync } from 'node:fs'
+import { sparse } from '@nektar/core'
 const { Spend, Transaction, Hash, PublicKey: _PublicKey } = await import('@bsv/sdk')
 const art = JSON.parse(readFileSync('NektarAnchor.json', 'utf8'))
 const signer = new LocalSigner('11'.repeat(32))
@@ -24,8 +25,8 @@ const spend = new Spend({
   outputs: spendTx.outputs,
   inputIndex: 0,
   unlockingScript: spendTx.inputs[0].unlockingScript,
-  inputSequence: spendTx.inputs[0].sequence ?? 0xffffffff,
-  lockTime: spendTx.lockTime ?? 0,
+  inputSequence: spendTx.inputs.at(0)?.sequence ?? 0xffffffff,
+  lockTime: sparse(spendTx.lockTime) ?? 0,
   isRelaxed: true
 })
 try {

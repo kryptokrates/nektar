@@ -440,7 +440,7 @@ console.log('— v2 scenario (regtest) —')
     C.toPublicKey().toString(),
     fld.length,
     fieldRoot(fld),
-    sparse(fp.siblings) ?? fp,
+    sparse(fp.siblings) ?? [],
     now,
     verifyAnchor
   )
@@ -451,7 +451,7 @@ console.log('— v2 scenario (regtest) —')
     C.toPublicKey().toString(),
     fld.length,
     fieldRoot(fld),
-    sparse(fp.siblings) ?? fp,
+    sparse(fp.siblings) ?? [],
     exp + 61,
     verifyAnchor
   )

@@ -1,5 +1,6 @@
 import { RunarContract, MockProvider, LocalSigner } from 'runar-sdk'
 import { readFileSync } from 'node:fs'
+import { sparse } from '@nektar/core'
 const { Spend, Transaction, Hash, Transaction: BsvTransaction, LockingScript, UnlockingScript } = await import('@bsv/sdk')
 const art = JSON.parse(readFileSync('NektarZkClaim.json', 'utf8'))
 const vArt = JSON.parse(readFileSync('ClaimVerdict.json', 'utf8'))
@@ -61,8 +62,8 @@ const evalSpend = (prov, tag, idx = 0, srcIdx = 1) => {
     outputs: st.outputs,
     inputIndex: idx,
     unlockingScript: st.inputs[idx].unlockingScript,
-    inputSequence: st.inputs[idx].sequence ?? 0xffffffff,
-    lockTime: st.lockTime ?? 0,
+    inputSequence: st.inputs.at(idx)?.sequence ?? 0xffffffff,
+    lockTime: sparse(st.lockTime) ?? 0,
     isRelaxed: true
   })
   try {
@@ -272,8 +273,8 @@ const callTerminal = async (c, method, args, prov, signer, outputs, changePkh) =
         outputs: st.outputs,
         inputIndex: 1,
         unlockingScript: st.inputs[1].unlockingScript,
-        inputSequence: st.inputs[1].sequence ?? 0xffffffff,
-        lockTime: st.lockTime ?? 0,
+        inputSequence: st.inputs.at(1)?.sequence ?? 0xffffffff,
+        lockTime: sparse(st.lockTime) ?? 0,
         isRelaxed: true
       })
       try {

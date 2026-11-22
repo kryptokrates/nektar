@@ -134,7 +134,8 @@ export function verifyTradeEvidence(e: TradeEvidence | RedactedTradeEvidence): {
     const disc = Transaction.fromHex(discHex)
     check(
       'disclosure spends the escrow output',
-      () => disc.id('hex') === e.disclosure.txid && disc.inputs[0].sourceTXID === e.escrow.txid && (sparse(disc.inputs[0].sourceOutputIndex) ?? 0) === e.escrow.vout
+      () =>
+        disc.id('hex') === e.disclosure.txid && disc.inputs[0].sourceTXID === e.escrow.txid && (sparse(disc.inputs[0].sourceOutputIndex) ?? 0) === e.escrow.vout
     )
     check(
       'disclosure pays the seller exactly the quoted price',

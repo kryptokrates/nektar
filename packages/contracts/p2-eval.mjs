@@ -1,5 +1,6 @@
 import { RunarContract, MockProvider, LocalSigner } from 'runar-sdk'
 import { readFileSync } from 'node:fs'
+import { sparse } from '@nektar/core'
 const { Spend, Transaction } = await import('@bsv/sdk')
 const { rc, di } = JSON.parse(readFileSync('poseidon2-consts.json', 'utf8'))
 const art = JSON.parse(readFileSync('Poseidon2Blocks.json', 'utf8'))
@@ -72,8 +73,8 @@ async function run(method, fn) {
     outputs: spendTx.outputs,
     inputIndex: 0,
     unlockingScript: spendTx.inputs[0].unlockingScript,
-    inputSequence: spendTx.inputs[0].sequence ?? 0xffffffff,
-    lockTime: spendTx.lockTime ?? 0,
+    inputSequence: spendTx.inputs.at(0)?.sequence ?? 0xffffffff,
+    lockTime: sparse(spendTx.lockTime) ?? 0,
     isRelaxed: true
   })
   try {

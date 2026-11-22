@@ -88,7 +88,6 @@ void test('the registry itself conforms — class, durable, wake; mechanism need
     assert.ok(typeof w.durable === 'boolean', `${name}: durable not declared`)
     assert.ok(typeof w.wake === 'string' && w.wake.length > 0, `${name}: wake not declared`)
     assert.ok(Number.isFinite(w.ms) && w.ms > 0, `${name}: ms must be a positive finite number`)
-    if (w.class === 'mechanism')
-      assert.ok(w.why.length > 0, `${name}: mechanism class needs a why — what makes the wait itself the trigger`)
+    if (w.class === 'mechanism') assert.ok(w.why.length > 0, `${name}: mechanism class needs a why — what makes the wait itself the trigger`)
   }
 })

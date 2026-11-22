@@ -103,7 +103,7 @@ async function complete() {
     signal: AbortSignal.timeout(Number(process.env.NEKTAR_CHAT_TIMEOUT_MS ?? 900_000))
   })
   if (!res.ok) throw new Error(`model endpoint ${LLM}: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`)
-  const msg = { role: 'assistant', content: '', /** @type {any[]} */ tool_calls: [] }
+  const msg = /** @type {{ role: string, content: string, tool_calls: any[] }} */ ({ role: 'assistant', content: '', tool_calls: [] })
   let buf = ''
   const dec = new TextDecoder()
   for await (const chunk of res.body) {

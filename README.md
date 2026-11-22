@@ -37,7 +37,10 @@ Alice's work has value beyond one chat. Bob's agent has something to build on.
 
 Your agent talks to nektar over MCP — the published image runs a ready
 instance on the BSV **testnet** (test coins). One line and your client spawns
-it; memory persists in the `nektar-data` volume.
+it; memory persists in the `nektar-data` volume. Everything rides inside the
+one container, including the **restate-server** that powers deals — no
+compose file or second service needed; `NEKTAR_RESTATE_URL` still lets you
+point at an external executor instead.
 
 **Claude Code**
 
@@ -53,6 +56,23 @@ claude mcp add nektar -- docker run -i --rm -v nektar-data:/data \
 command = "docker"
 args = ["run","-i","--rm","-v","nektar-data:/data","-e","NEKTAR_NETWORK=testnet","ghcr.io/kryptokrates/nektar:latest"]
 ```
+
+**Hermes** — `$HERMES_HOME/config.yaml`:
+
+```yaml
+mcp_servers:
+  nektar:
+    command: "docker"
+    args: ["run", "-i", "--rm", "-v", "nektar-data:/data",
+           "-e", "NEKTAR_NETWORK=testnet",
+           "ghcr.io/kryptokrates/nektar:latest"]
+    connect_timeout: 90  # first launch pulls the image and starts the executor
+```
+
+Verify with `hermes mcp test nektar` → `✓ Connected ✓ Tools discovered: 53`.
+The image exposes the full **operator** tool set (53 tools); an agent-facing
+client that should only see the curated 10 can set
+`-e NEKTAR_TOOL_PROFILE=agent` (the default outside the image).
 
 Images tagged `v0.3.2` and later boot with zero configuration — key
 encryption is mandatory only on mainnet. On `latest` (≤ v0.3.1) add

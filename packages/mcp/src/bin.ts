@@ -108,6 +108,11 @@ for (const [k, v] of Object.entries({ ...defs, ...dot }))
 // precedence block above — otherwise .env's NEKTAR_NETWORK lands before the
 // profile fill and 'mainnet' silently boots testnet (seen live). dotenv
 // never overrides set vars, so by the time it runs our values already hold.
+// executor plane before the runtime opens — NEKTAR_RESTATE_URL wins, a live
+// admin is adopted, else the bundled restate-server is spawned (release
+// artifacts only; dev boots degrade exactly as before)
+const { ensureRestate } = await import('./restatesidecar.js')
+await ensureRestate({ log: nlog, onChild: (c) => process.on('exit', () => c.kill()) })
 const { openRuntime, configFromEnv } = await import('./runtime.js')
 const rt = await openRuntime(configFromEnv())
 nlog(`network=${rt.network}`)

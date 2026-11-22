@@ -11,7 +11,7 @@
 //      without restate; the market plane logs what it needs.
 // The bundled ports are off nektar's own :8080 HTTP default — 18080/19070.
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { nektarEnv, setNektarEnv } from '@nektar/core'
@@ -140,6 +140,19 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
 `
     )
     logFd = openSync(join(work, 'restate.log'), 'a')
+    // inside a pkg single-exe the bundled binary sits on the /snapshot VFS —
+    // exec/wslpath need a real path, so copy it out next to the data dir.
+    // copyFileSync is NOT patched by the SEA VFS (readFileSync is) — probe-verified.
+    let spawnBin = bin
+    if (typeof (process as { pkg?: unknown }).pkg !== 'undefined') {
+      spawnBin = join(work, 'restate-server')
+      writeFileSync(spawnBin, readFileSync(bin))
+      try {
+        chmodSync(spawnBin, 0o755)
+      } catch {
+        /* windows */
+      }
+    }
     if (platform === 'win32') {
       const ws = wslStatus(spawnSyncImpl)
       if (ws !== 'ok') {
@@ -150,7 +163,7 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
         )
         return 'degraded'
       }
-      wslBin = wslpath(bin, spawnSyncImpl)
+      wslBin = wslpath(spawnBin, spawnSyncImpl)
       child = spawnImpl(
         'wsl.exe',
         [
@@ -180,7 +193,7 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
         }
       })
     } else {
-      child = spawnImpl(bin, ['--base-dir', join(work, 'restate-data'), '--listen-mode', 'tcp', '--config-file', toml, '--no-logo'], {
+      child = spawnImpl(spawnBin, ['--base-dir', join(work, 'restate-data'), '--listen-mode', 'tcp', '--config-file', toml, '--no-logo'], {
         stdio: ['ignore', logFd, logFd]
       })
       opts.onCleanup?.(() => {

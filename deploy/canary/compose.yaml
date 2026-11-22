@@ -1,0 +1,106 @@
+# The whole mainnet canary in one compose project — everything shares the
+# project network, so restate, the market hosts and the watch shims resolve
+# by service name. No host.docker.internal, no IPv6 DNS trap, no manual
+# start ordering beyond depends_on.
+#
+#   docker compose -f deploy/canary/compose.yaml up -d
+#
+# Layout: seller + buyer nektar nodes, each with its own Restate sidecar
+# (two nodes can NEVER share one — identical service names steal each
+# other's invocations), plus the bstack market-host stack pulled in via
+# include:. All durable state lives on the host or in named volumes:
+#   ../../.nektar-main  → seller identity + treasury + journals (bind mount)
+#   ../../.nektar-buyer → buyer identity + treasury + journals (bind mount)
+#   restate-seller-data / restate-buyer-data → executor journals
+# Backup the bind mounts with any file tool — they ARE the agents.
+name: nektar-main
+include:
+  - ../bstack-sandbox/compose.mainnet.yaml
+services:
+  restate:
+    image: docker.restate.dev/restatedev/restate:latest
+    restart: unless-stopped
+    volumes:
+      - restate-seller-data:/restate-data
+    ports:
+      - '127.0.0.1:29070:9070' # admin — operator introspection
+      - '127.0.0.1:28080:8080' # ingress
+  seller:
+    image: ${NEKTAR_IMAGE:-nektar:canary}
+    restart: unless-stopped
+    depends_on:
+      restate:
+        condition: service_started
+      host-a:
+        condition: service_started
+      host-b:
+        condition: service_started
+    environment:
+      NEKTAR_PROFILE: mainnet
+      NEKTAR_NETWORK: main
+      NEKTAR_MAINNET_CONFIRM: I_UNDERSTAND
+      NEKTAR_KEY_PASSPHRASE: ${NEKTAR_KEY_PASSPHRASE:?set NEKTAR_KEY_PASSPHRASE in deploy/canary/.env}
+      NEKTAR_DATA_DIR: /data
+      NEKTAR_HTTP_PORT: '8080'
+      NEKTAR_HTTP_HOST: 0.0.0.0
+      NEKTAR_HTTP_TOKEN: ${NEKTAR_HTTP_TOKEN:?set NEKTAR_HTTP_TOKEN in deploy/canary/.env}
+      NEKTAR_AUTOMATION_STRICT: '0'
+      NEKTAR_INDEXER_DISCOVERY: '1'
+      NEKTAR_PAID_DISCLOSURE: '1'
+      NEKTAR_MARKET_LOCAL_HOSTS: '1'
+      NEKTAR_MARKET_HOSTS: http://host-a:8080,http://host-b:8080
+      NEKTAR_WATCH_URLS: http://watch-a:8080,http://watch-b:8080
+      NEKTAR_ANCHORED_LANES: all
+      NEKTAR_FUND_TXIDS: ${NEKTAR_FUND_TXIDS:-ff583d6fd7607473caf0850c0a6f19ab9aadfa6da4ebb1d81905024a637d8f10}
+      NEKTAR_RESTATE_URL: http://restate:8080
+      NEKTAR_RESTATE_ADMIN: http://restate:9070
+      NEKTAR_RESTATE_ENDPOINT_URI: http://seller:9080
+    ports:
+      - '127.0.0.1:8080:8080'
+    volumes:
+      - ../../.nektar-main:/data
+  restate-buyer:
+    image: docker.restate.dev/restatedev/restate:latest
+    restart: unless-stopped
+    volumes:
+      - restate-buyer-data:/restate-data
+    ports:
+      - '127.0.0.1:29072:9070'
+      - '127.0.0.1:28081:8080'
+  buyer:
+    image: ${NEKTAR_IMAGE:-nektar:canary}
+    restart: unless-stopped
+    depends_on:
+      restate-buyer:
+        condition: service_started
+      host-a:
+        condition: service_started
+      host-b:
+        condition: service_started
+    environment:
+      NEKTAR_PROFILE: mainnet
+      NEKTAR_NETWORK: main
+      NEKTAR_MAINNET_CONFIRM: I_UNDERSTAND
+      NEKTAR_KEY_PASSPHRASE: ${NEKTAR_KEY_PASSPHRASE:?set NEKTAR_KEY_PASSPHRASE in deploy/canary/.env}
+      NEKTAR_DATA_DIR: /data
+      NEKTAR_HTTP_PORT: '8080'
+      NEKTAR_HTTP_HOST: 0.0.0.0
+      NEKTAR_HTTP_TOKEN: ${NEKTAR_BUYER_HTTP_TOKEN:?set NEKTAR_BUYER_HTTP_TOKEN in deploy/canary/.env}
+      NEKTAR_AUTOMATION_STRICT: '0'
+      NEKTAR_INDEXER_DISCOVERY: '1'
+      NEKTAR_PAID_DISCLOSURE: '1'
+      NEKTAR_MARKET_LOCAL_HOSTS: '1'
+      NEKTAR_MARKET_HOSTS: http://host-a:8080,http://host-b:8080
+      NEKTAR_WATCH_URLS: http://watch-a:8080,http://watch-b:8080
+      NEKTAR_ANCHORED_LANES: all
+      NEKTAR_FUND_TXIDS: ${NEKTAR_BUYER_FUND_TXIDS:-}
+      NEKTAR_RESTATE_URL: http://restate-buyer:8080
+      NEKTAR_RESTATE_ADMIN: http://restate-buyer:9070
+      NEKTAR_RESTATE_ENDPOINT_URI: http://buyer:9080
+    ports:
+      - '127.0.0.1:8081:8080'
+    volumes:
+      - ../../.nektar-buyer:/data
+volumes:
+  restate-seller-data: {}
+  restate-buyer-data: {}

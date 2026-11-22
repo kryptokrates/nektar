@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, rmSync, statSy
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PrivateKey, Transaction } from '@bsv/sdk'
-import { detached, nektarEnv, nektarEnvNum, mkLog } from '@nektar/core'
+import { detached, nektarEnv, nektarEnvNum, mkLog, nap } from '@nektar/core'
 import { TxStore, type ChainPort, type Funds, type TxStatusEvent, type ChainEvents, type BroadcastResult } from '@nektar/chain'
 import { executor, cronObject, legObject, EXEC_SVC, RT_OPTS_HEAVY, type InvokeTarget } from '@nektar/automation'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
@@ -137,11 +137,38 @@ export async function acquireLock(file: string, label: string): Promise<() => Pr
         refuse = false
       }
     }
-    if (refuse) throw inUse(owner)
-    try {
-      rmSync(file)
-    } catch {
-      /* a racing acquirer removed it first — the wx create below decides */
+    if (refuse) {
+      // a container recreate carries the old boot's lock file forward on
+      // the bind mount with a hostname the new boot can't pid-probe — the
+      // refuse path is then guaranteed to clear when the beat goes stale.
+      // Waiting it out here beats a crash-loop against the restart policy.
+      const until = Date.now() + 25_000
+      let cleared = false
+      while (Date.now() < until) {
+        await nap(1_000)
+        try {
+          const l2 = JSON.parse(readFileSync(file, 'utf8')) as { owner: string; beat: number }
+          if (Date.now() - l2.beat >= 20_000 || l2.owner === me || pidAlive(l2.owner) === false) {
+            cleared = true
+            break
+          }
+        } catch {
+          cleared = true // gone or corrupt — either way it yields below
+          break
+        }
+      }
+      if (!cleared) throw inUse(owner)
+      try {
+        rmSync(file)
+      } catch {
+        /* a racing acquirer removed it first — the wx create below decides */
+      }
+    } else {
+      try {
+        rmSync(file)
+      } catch {
+        /* a racing acquirer removed it first — the wx create below decides */
+      }
     }
   }
   const beat = () => writeFileSync(file, JSON.stringify({ owner: me, beat: Date.now() }))

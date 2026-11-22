@@ -43,7 +43,10 @@ const manifestMatches = async (admin: string, uri: string, expected: string[]): 
     if (!r.ok) return false
     const body = (await r.json()) as { deployments?: AdminDeployment[] } | AdminDeployment[]
     const list = Array.isArray(body) ? body : (body.deployments ?? [])
-    const mine = list.filter((d) => d.uri === uri)
+    // the admin normalizes the registered uri (trailing slash) — a strict
+    // compare never matches → force-register every boot → orphaned sends
+    const want = uri.replace(/\/+$/, '')
+    const mine = list.filter((d) => (d.uri ?? '').replace(/\/+$/, '') === want)
     if (mine.length === 0) return false
     let newest = mine[mine.length - 1]
     // the list response may carry services inline; fetch detail when not
@@ -112,13 +115,15 @@ export const pausedInvocations = async (admin: string, ioMs = 3_000): Promise<nu
   }
 }
 
-/** paused invocations whose last failure is delivery-shaped. A pause is a
- *  circuit breaker — but a restart gaps the endpoint for seconds while the
- *  server keeps retrying, and 'pause' after maxAttempts then wedges a whole
- *  key's FIFO on a fault the handler never saw. Those we resume: the pinned
- *  deployment is still ours and the journal replays clean. A deterministic
- *  failure (domain throw, RT0016) stays paused — it IS the breaker's job. */
-const TRANSPORT_PAUSE = /h2 pool|connection refused|network is unreachable|connection reset|econnrefused|timed out|cannot connect|temporarily unavailable/i
+/** paused invocations the handler never caused. A pause is a circuit
+ *  breaker — but two infrastructure shapes pause legs on a fault they never
+ *  saw: (a) journal_size <= 1 — paused at delivery/inbox before user code
+ *  ran (deployment gap, h2 refuse during restart); (b) a journaled leg
+ *  whose last failure is delivery-shaped — replay re-runs the journal and
+ *  continues. Both resume clean. A journaled leg with a domain/deterministic
+ *  failure stays paused — that IS the breaker's job (the journaled error
+ *  would replay identically anyway). */
+const TRANSPORT_PAUSE = /h2 pool|connection refused|network is unreachable|connection reset|econnrefused|timed out|cannot connect|temporarily unavailable|deployment.*(not found|unavailable)/i
 
 export const healPausedInvocations = async (
   admin: string,
@@ -133,13 +138,17 @@ export const healPausedInvocations = async (
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({
-        query: "select id, target, last_failure from sys_invocation where status = 'paused' limit 256"
+        query: "select id, target, last_failure, journal_size from sys_invocation where status = 'paused' limit 256"
       }),
       signal: AbortSignal.timeout(ioMs)
     })
     if (!r.ok) return 0
-    const j = (await r.json()) as { rows?: Array<{ id?: string; target?: string; last_failure?: string }> }
-    const rows = (j.rows ?? []).filter((x) => x.id && TRANSPORT_PAUSE.test(x.last_failure ?? '')).slice(0, cap)
+    const j = (await r.json()) as {
+      rows?: Array<{ id?: string; target?: string; last_failure?: string; journal_size?: number | string }>
+    }
+    const rows = (j.rows ?? [])
+      .filter((x) => x.id && (Number(x.journal_size ?? 0) <= 1 || TRANSPORT_PAUSE.test(x.last_failure ?? '')))
+      .slice(0, cap)
     if (rows.length === 0) return 0
     // our deployment id is the fallback rebind — a paused leg whose pinned
     // deployment was deleted can't plain-resume ('deployment id not pinned')
@@ -148,7 +157,8 @@ export const healPausedInvocations = async (
     if (dr.ok) {
       const body = (await dr.json()) as { deployments?: AdminDeployment[] } | AdminDeployment[]
       const list = Array.isArray(body) ? body : (body.deployments ?? [])
-      depId = [...list].reverse().find((d) => d.uri === uri)?.id
+      const want = uri.replace(/\/+$/, '')
+      depId = [...list].reverse().find((d) => (d.uri ?? '').replace(/\/+$/, '') === want)?.id
     }
     let healed = 0
     for (const x of rows) {

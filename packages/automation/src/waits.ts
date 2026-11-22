@@ -216,5 +216,9 @@ export const WAITS = {
   /** the deployment-registration POST to the admin API — boot-path io */
   registerIo: { ms: 5_000, class: 'io', durable: false, wake: 'floor-only' },
   /** nap between registration attempts while the server warms up */
-  registerRetry: { ms: 500, class: 'backoff', durable: false, wake: 'server answer' }
+  registerRetry: { ms: 500, class: 'backoff', durable: false, wake: 'server answer' },
+  /** the transport-paused self-heal floor — restate pushes no pause event;
+   *  the mechanism is 'don't pause' (endpoint reachable), this floor only
+   *  unpauses whatever slipped anyway. ceiling, sloppy is fine */
+  healPaused: { ms: 60_000, class: 'ceiling', durable: false, wake: 'floor-only' }
 } satisfies Record<string, WaitSpec>

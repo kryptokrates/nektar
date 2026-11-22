@@ -112,6 +112,69 @@ export const pausedInvocations = async (admin: string, ioMs = 3_000): Promise<nu
   }
 }
 
+/** paused invocations whose last failure is delivery-shaped. A pause is a
+ *  circuit breaker — but a restart gaps the endpoint for seconds while the
+ *  server keeps retrying, and 'pause' after maxAttempts then wedges a whole
+ *  key's FIFO on a fault the handler never saw. Those we resume: the pinned
+ *  deployment is still ours and the journal replays clean. A deterministic
+ *  failure (domain throw, RT0016) stays paused — it IS the breaker's job. */
+const TRANSPORT_PAUSE = /h2 pool|connection refused|network is unreachable|connection reset|econnrefused|timed out|cannot connect|temporarily unavailable/i
+
+export const healPausedInvocations = async (
+  admin: string,
+  uri: string,
+  log: (line: string) => void,
+  ioMs = 3_000,
+  cap = 32
+): Promise<number> => {
+  const a = admin.replace(/\/+$/, '')
+  try {
+    const r = await fetch(`${a}/query`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({
+        query: "select id, target, last_failure from sys_invocation where status = 'paused' limit 256"
+      }),
+      signal: AbortSignal.timeout(ioMs)
+    })
+    if (!r.ok) return 0
+    const j = (await r.json()) as { rows?: Array<{ id?: string; target?: string; last_failure?: string }> }
+    const rows = (j.rows ?? []).filter((x) => x.id && TRANSPORT_PAUSE.test(x.last_failure ?? '')).slice(0, cap)
+    if (rows.length === 0) return 0
+    // our deployment id is the fallback rebind — a paused leg whose pinned
+    // deployment was deleted can't plain-resume ('deployment id not pinned')
+    let depId: string | undefined
+    const dr = await fetch(`${a}/deployments`, { signal: AbortSignal.timeout(ioMs) })
+    if (dr.ok) {
+      const body = (await dr.json()) as { deployments?: AdminDeployment[] } | AdminDeployment[]
+      const list = Array.isArray(body) ? body : (body.deployments ?? [])
+      depId = [...list].reverse().find((d) => d.uri === uri)?.id
+    }
+    let healed = 0
+    for (const x of rows) {
+      const id = encodeURIComponent(x.id as string)
+      let ok = false
+      try {
+        ok = (await fetch(`${a}/invocations/${id}/resume`, { method: 'PATCH', signal: AbortSignal.timeout(ioMs) })).ok
+      } catch { /* fall through to the rebind attempt */ }
+      if (!ok && depId) {
+        try {
+          ok = (await fetch(`${a}/invocations/${id}/resume?deployment=${depId}`, {
+            method: 'PATCH',
+            signal: AbortSignal.timeout(ioMs)
+          })).ok
+        } catch { /* next boot tries again */ }
+      }
+      if (ok) healed++
+      else log(`rt: paused invocation ${x.id} (${x.target}) did not resume — inspect manually`)
+    }
+    if (healed > 0) log(`rt: resumed ${healed} transport-paused invocation(s) — restart-gap wedge cleared`)
+    return healed
+  } catch {
+    return 0
+  }
+}
+
 export async function openEndpoint(services: unknown[], env: EnvSource = process.env, log: (line: string) => void = () => {}): Promise<RtEndpoint> {
   // the SDK loads only on this path — an injected Dispatcher never pays its module cost
   const restate = await import('@restatedev/restate-sdk')
@@ -155,6 +218,26 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
     server.close()
     throw new Error(`automation: restate deployment registration failed ${uri} — the executor plane is required infrastructure, refusing to start without it`)
   }
+  // a restart gaps this endpoint for seconds; retry-policy 'pause' parks
+  // whatever the server was delivering then — wedging whole keys on a
+  // fault the handler never saw. Resume the transport-paused set now that
+  // delivery works again, then keep a floor cadence: pauses form whenever
+  // retries exhaust, which can be seconds after this pass (mid-run network
+  // flaps pause later still). Deterministic failures stay paused (the
+  // restate-plane preflight keeps reporting them).
+  await healPausedInvocations(admin, uri, log)
+  let healing = false
+  const healFloor = setInterval(
+    () => {
+      if (healing) return
+      healing = true
+      void healPausedInvocations(admin, uri, log).finally(() => {
+        healing = false
+      })
+    },
+    WAITS.healPaused.ms
+  )
+  healFloor.unref()
   return {
     uri,
     // crash semantics, not graceful drain: destroying sessions drops
@@ -165,6 +248,7 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
     // the honest shutdown, not a risk).
     close: () =>
       new Promise((resolve) => {
+        clearInterval(healFloor)
         for (const s of sessions) s.destroy()
         server.close(() => resolve())
       })

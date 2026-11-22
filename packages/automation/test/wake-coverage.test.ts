@@ -58,7 +58,7 @@ test('every wait primitive site is classified — the census sees all wait class
     'automation/src/rt/exec.ts': 'ingress fetch io bound — the only executor; durable timers live server-side',
     'automation/src/rt/dispatch.ts':
       'in-process test dispatcher — the delayed-send setTimeout is the local stand-in for restate durable timers; immediate dispatch rides queueMicrotask',
-    'automation/src/rt/endpoint.ts': 'deployment-registration fetch io bound + nap retry — boot path',
+    'automation/src/rt/endpoint.ts': 'deployment-registration fetch io bound + nap retry — boot path; transport-paused heal floor (ceiling, unrefs)',
     'automation/src/watches.ts': 'watch-shim reconnect sleep — WAITS.watchBackoff*, jittered',
     'automation/src/lanes.ts': 'ioSignal() merges ambient leg + rt.signal — per-call io bound',
     'automation/src/toolbox-services.ts': 'WAITS.rpcIo io bound',
@@ -115,7 +115,8 @@ test('no raw setInterval outside the classified floors', () => {
     'packages/chain/src/events.ts', // THE shared substrate floor — poke()-instrumented
     'packages/chain/src/p2p.ts', // rate-window reset — a throttle wheel, not a wait
     'packages/mcp/src/rtsupport.ts', // instance-lock heartbeat — liveness, not a wait
-    'packages/mcp/src/http.ts' // session reaper + SSE keepalive — TTL/transport liveness
+    'packages/mcp/src/http.ts', // session reaper + SSE keepalive — TTL/transport liveness
+    'packages/automation/src/rt/endpoint.ts' // transport-paused self-heal — restate pushes no pause event; ceiling, not mechanism
   ]
   const packagesDir = join(pkgRoot, '..')
   for (const pkg of readdirSync(packagesDir, { withFileTypes: true }))

@@ -220,7 +220,14 @@ export function statusStream(
 ): { close: () => void } {
   const c = def(cfg)
   const f = c.fetch
-  const url = `${c.broadcasterUrl}/events?callbackToken=${encodeURIComponent(c.callbackToken ?? '')}`
+  // every fanned submit carried our X-CallbackToken, so every endpoint can
+  // stream our statuses — rotate on auth refusal; a dead route must not
+  // pin the push path to the primary's 401 forever
+  const bases = c.broadcasterUrls.length > 0 ? c.broadcasterUrls : [c.broadcasterUrl]
+  let baseIdx = 0
+  const dead = new Set<string>()
+  let endpointFails = 0
+  const urlFor = (base: string): string => `${base}/events?callbackToken=${encodeURIComponent(c.callbackToken ?? '')}`
   const minB = opts.minBackoffMs ?? 1000,
     maxB = opts.maxBackoffMs ?? 30_000
   let closed = false as boolean
@@ -235,13 +242,33 @@ export function statusStream(
   const run = async (): Promise<void> => {
     await ready
     while (!closed) {
+      // skip endpoints marked dead this session; an all-dead set still
+      // cycles — the poll ceiling underneath keeps truth moving while the
+      // push path retries on the slow backoff
+      if (dead.size < bases.length) {
+        while (dead.has(bases[baseIdx % bases.length])) baseIdx++
+      }
+      const base = bases[baseIdx % bases.length]
       abort = new AbortController()
       try {
         const headers: Record<string, string> = { accept: 'text/event-stream' }
         if (lastId !== undefined) headers['Last-Event-ID'] = lastId
         if (c.broadcasterApiKey) headers.Authorization = `Bearer ${c.broadcasterApiKey}`
-        const res = await f(url, { headers, signal: abort.signal })
-        if (!res.ok || res.body === null) throw new Error(`events HTTP ${res.status}`)
+        const res = await f(urlFor(base), { headers, signal: abort.signal })
+        if (!res.ok || res.body === null) {
+          const err = new Error(`events HTTP ${res.status}`)
+          // auth refusals don't self-heal — mark the endpoint dead and
+          // rotate now; cursors are per-endpoint so Last-Event-ID resets
+          if (res.status === 401 || res.status === 403) {
+            dead.add(base)
+            baseIdx++
+            lastId = undefined
+            endpointFails = 0
+            throw Object.assign(err, { rotated: true })
+          }
+          throw err
+        }
+        endpointFails = 0
         backoff = minB
         const dec = new TextDecoder()
         const reader = res.body.getReader()
@@ -292,6 +319,14 @@ export function statusStream(
       } catch (e) {
         if (done()) return
         opts.onError?.(e as Error)
+        // non-auth failures count against this endpoint — a route that
+        // keeps failing (dead box, wedged stream) yields to the next one;
+        // auth refusals rotated above already zeroed the count
+        if (!(e as { rotated?: boolean }).rotated && ++endpointFails >= 3) {
+          baseIdx++
+          lastId = undefined
+          endpointFails = 0
+        }
         // spread() on the sleep, not the curve — the doubling stays exact,
         // the reconnect lands desynchronized across reconnecting agents.
         // close() must interrupt the backoff: an un-abortable ~30s sleep

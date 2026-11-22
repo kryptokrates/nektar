@@ -118,3 +118,35 @@ test('statusStream: cursor.get seeds the first Last-Event-ID', async () => {
   s.close()
   assert.equal(got, '42')
 })
+
+test('statusStream: a 401 endpoint rotates to the next broadcaster; the cursor resets on switch', async () => {
+  const seen: Array<{ id?: string }> = []
+  const calls: Array<{ url: string; lastEventId?: string }> = []
+  const fetchImpl = ((input: unknown, init?: RequestInit) => {
+    const url = String(input)
+    calls.push({ url, lastEventId: new Headers(init?.headers).get('Last-Event-ID') ?? undefined })
+    if (url.startsWith('https://a.test')) return new Response(null, { status: 401 })
+    return stream(['id: 5\ndata: {"ok":1}\n\n'], true)
+  }) as unknown as typeof fetch
+  const s = statusStream(
+    { broadcasterUrl: 'https://a.test', broadcasterUrls: ['https://a.test', 'https://b.test'], callbackToken: 'tok', fetchImpl },
+    (e) => {
+      seen.push(e)
+    },
+    { minBackoffMs: 10, cursor: { get: () => '99', set: () => {} } }
+  )
+  for (let i = 0; i < 100 && seen.length < 1; i++) await sleep(10)
+  s.close()
+  assert.equal(calls[0]?.url.startsWith('https://a.test'), true, 'primary endpoint is tried first')
+  assert.equal(
+    calls.some((c) => c.url.startsWith('https://b.test')),
+    true,
+    'a 401 rotates the stream to the next broadcaster — the push path survives a keyless primary'
+  )
+  const bCall = calls.find((c) => c.url.startsWith('https://b.test'))
+  assert.equal(bCall?.lastEventId, undefined, 'Last-Event-ID resets on endpoint switch — cursors are per-endpoint')
+  assert.deepEqual(
+    seen.map((e) => e.id),
+    ['5']
+  )
+})

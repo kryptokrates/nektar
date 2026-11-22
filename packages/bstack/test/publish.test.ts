@@ -9,6 +9,7 @@ import { MemoryTreeLedger } from '../src/tree.js'
 import { publishArtifact, republishProved, republishOne, resubmitCarrier, artifactHash } from '../src/publish.js'
 import { checkCarrier } from '../src/carrier.js'
 import { ensureTrees } from '../src/trees.js'
+import { FundsStarvedError } from '@nektar/chain'
 import { provenTree, anchoredTree, fund, prove } from './helpers.js'
 import { FakeTracker, minihost, faulthost } from '../src/testing.js'
 
@@ -140,6 +141,48 @@ test('ensureTrees: fills to the in-flight bound in one pass, then parks until pr
   assert.equal(r3.proven.length, 2)
   assert.equal(await ledger.remaining(), 8)
   assert.equal(r3.minted.length, 0, 'stock above low-water -> no mint')
+})
+
+test('ensureTrees: reserveSats sizes the take — a small treasury mints below the default floor', async () => {
+  const k = PrivateKey.fromRandom()
+  const ledger = new MemoryTreeLedger()
+  const takes: number[] = []
+  const mk = (reserveSats?: number) => ({
+    key: k,
+    ledger,
+    lowWater: 4,
+    size: 4,
+    satsPerOutput: 1,
+    ...(reserveSats !== undefined ? { reserveSats } : {}),
+    takeFunding: (s: number) => {
+      takes.push(s)
+      return Promise.resolve(fund(k, 1_000_000))
+    },
+    broadcast: (tx: Transaction) => Promise.resolve({ status: 'success' as const, txid: tx.id('hex') }),
+    fetchTx: () => Promise.resolve(undefined)
+  })
+  await ensureTrees(mk())
+  assert.deepEqual(takes, [2004], 'default: outputs + the 2000-sat change reserve')
+  takes.length = 0
+  // the first tree is unproven — a second ledger for the small-treasury mint
+  const ledger2 = new MemoryTreeLedger()
+  await ensureTrees({ ...mk(200), ledger: ledger2 })
+  assert.deepEqual(takes, [204], 'reserveSats lowers the take floor — a 2000-sat utxo covers it with change to spare')
+})
+
+test('ensureTrees: a starved take names the knob in its error', async () => {
+  const k = PrivateKey.fromRandom()
+  const p = {
+    key: k,
+    ledger: new MemoryTreeLedger(),
+    lowWater: 4,
+    size: 4,
+    reserveSats: 200,
+    takeFunding: () => Promise.reject(new FundsStarvedError('funds: no spendable output ≥ 204 sats')),
+    broadcast: () => Promise.reject(new Error('unreachable')),
+    fetchTx: () => Promise.resolve(undefined)
+  }
+  await assert.rejects(() => ensureTrees(p), /NEKTAR_TREE_RESERVE_SATS/)
 })
 
 test('ensureTrees: stuck mint — keep while healing, drop on definitive verdict, gate re-opens', async () => {

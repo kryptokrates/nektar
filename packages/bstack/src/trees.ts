@@ -2,10 +2,14 @@ import { Transaction } from '@bsv/sdk'
 import { mintTree, PROVISION_KIND, type TreeLedger } from './tree.js'
 import type { SigningWallet } from '@lightwebinc/bcommon'
 import type { SignerLike } from '@nektar/core'
-import { hintRejected, hintSilent, type FundingOut, type BroadcastResult } from '@nektar/chain'
+import { hintRejected, hintSilent, FundsStarvedError, type FundingOut, type BroadcastResult } from '@nektar/chain'
 
 /** outputs per funding tree unless the caller sizes it */
 export const TREE_SIZE = 64
+/** minimum change reserve each mint take must leave behind — not spent, the
+ *  take's utxo-selection floor so the mint's change stays a viable next take.
+ *  Lower for small treasuries; below ~fee+dust the change strands. */
+export const TREE_RESERVE_SATS = 2000
 
 export async function ensureTrees(p: {
   key: SignerLike
@@ -48,6 +52,10 @@ export async function ensureTrees(p: {
    *  spends draw distinct vouts off the SAME broadcast mint, keeping their
    *  unconfirmed ancestry one hop deep instead of chaining mint-to-mint */
   changeFanout?: number
+  /** extra sats the take's utxo must cover beyond the tree outputs — the
+   *  change the mint leaves for the NEXT take, not a cost. Small treasuries
+   *  lower it (NEKTAR_TREE_RESERVE_SATS); below ~fee+dust the change strands */
+  reserveSats?: number
 }): Promise<{ minted: string[]; proven: string[]; remaining: number }> {
   // Hosts admit a carrier only from a funding tree that is proven in a block,
   // so the stock is what keeps publishing free of block times: the next tree
@@ -96,7 +104,14 @@ export async function ensureTrees(p: {
   for (;;) {
     const unprovenKind = (await p.ledger.unproven()).filter((u) => u.kind === kind).length
     if ((await p.ledger.remaining(kind)) >= lowWater || unprovenKind >= (p.maxUnproven ?? 1)) break
-    const funding = await p.takeFunding(size * satsPerOutput + 2000)
+    const reserve = p.reserveSats ?? TREE_RESERVE_SATS
+    let funding: FundingOut
+    try {
+      funding = await p.takeFunding(size * satsPerOutput + reserve)
+    } catch (e) {
+      if (e instanceof FundsStarvedError) throw new Error(`${e.message} — the mint reserve is ${reserve} sats; lower NEKTAR_TREE_RESERVE_SATS or fund more`)
+      throw e
+    }
     const tree = await mintTree({ key: p.key, wallet: p.wallet, funding, n: size, satsPerOutput, lock: p.lock, changeOutputs: p.changeFanout ?? 4 })
     // a funder re-issuing the same UTXO mints the identical tree — the
     // ledger's idempotent add would leave unprovenKind flat and the loop

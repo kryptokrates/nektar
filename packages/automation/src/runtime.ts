@@ -829,6 +829,16 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     rt.countWake('commit')
     if (!rt.busy && !rt.stopped) void rt.deals().catch((e) => log(`automation: ${(e as Error).message}`))
   }
+  // funding adopt → upkeep send: a fresh utxo means tree stock can mint
+  // now instead of on the upkeep ceiling — the same wake every other
+  // producer (p2p 'pay', fundingImport, indexer discovery) shares through
+  // funds.adopt. The 5s bucket coalesces a multi-utxo import to one send.
+  mem.funds.onAdopted = () => {
+    rt.countWake('funded')
+    if (rt.stopped) return
+    const b = Math.floor((cfg.now ?? Date.now)() / 5000)
+    void exec.send({ service: EXEC_SVC.upkeep, handler: 'tick', key: 'main' }, {}, { idempotencyKey: `upkeep:funded:${b}` }).catch(() => undefined)
+  }
   // committed deadlines arm the executor directly — a collect window or
   // seize dueAt fires at its instant; the floor is the missed-arm backstop.
   // Under restate the arm is a durable delayed send to the op's own deal

@@ -222,7 +222,19 @@ async function admitBatch(beef: number[], o: { stream: string; producer: Uint8Ar
     const b = a.carrier.batch
     if (b.stream !== o.stream || !b.producer.every((x, i) => x === o.producer[i]) || b.seq !== o.seq) return undefined
     const parent = tx.inputs[0].sourceTransaction
-    if (parent?.merklePath === undefined || !(await parent.merklePath.verify(parent.id('hex'), o.tracker))) return undefined
+    if (parent === undefined) return undefined
+    if (parent.merklePath !== undefined) {
+      if (!(await parent.merklePath.verify(parent.id('hex'), o.tracker))) return undefined
+    } else {
+      // anchored ancestry — the funding tree's own block hasn't landed, but
+      // every one of its inputs steps back to a verified BUMP; the same rule
+      // anchoredTree applies on the mint side, verified here one hop deep
+      if (parent.inputs.length === 0) return undefined
+      for (const i of parent.inputs) {
+        const src = i.sourceTransaction
+        if (src?.merklePath === undefined || !(await src.merklePath.verify(src.id('hex'), o.tracker))) return undefined
+      }
+    }
     const lines =
       b.profile === ProfileFull && b.encoding === EncodingLines && b.content !== undefined
         ? new TextDecoder()

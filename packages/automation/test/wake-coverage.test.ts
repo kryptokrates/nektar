@@ -38,7 +38,7 @@ void test('every cadence service declares its wake source', () => {
   const WAKE_MAP: Record<string, string> = {
     'nektar-dealfan':
       'wakes: watch changed:true, push: fast-leg, onTxProof/Rejected/Abandoned→cycle(), store.workReady commits, dueAtArmed→deal.due send, onHeight dueHeight — floor: hot/idle ceiling self-arm',
-    'nektar-upkeep': 'wakes: rides cycle() on every push — floor: upkeepMs self-arm',
+    'nektar-upkeep': 'wakes: rides cycle() on every push, funds.adopted → tick send — floor: upkeepMs self-arm',
     'nektar-watchdog': 'probe-tier: hosts cannot push; it IS the recovery producer (hostBack→unblockOutbox) — floor: watchdogMs self-arm',
     'nektar-watches': 'wakes: post-pass watches.tick send + changed:self — floor: 15s re-arm self-arm',
     'nektar-transport': 'wakes: store.outboxReady on every enqueue → drain send — floor: earliest next_at self-arm',

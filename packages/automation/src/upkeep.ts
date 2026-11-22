@@ -415,6 +415,7 @@ export function openUpkeep(rt: Rt): void {
               changeFanout: cfg.changeFanout,
               size: spec.size,
               satsPerOutput: spec.satsPerOutput,
+              reserveSats: cfg.treeReserveSats,
               lock: kind === 'market' ? undefined : spec.lock,
               takeFunding: async (sats: number) => (await mem.fundingOuts(sats, 'upkeep'))[0],
               broadcast: (tx) => broadcast(tx),

@@ -113,6 +113,10 @@ export interface Funds {
   /** coins sent to us by someone else; refuses outpoints we already spent
    *  or tombstoned — returns false when the output was not adopted */
   adopt: (tx: Transaction, vout: number) => boolean | Promise<boolean>
+  /** producer signal fired when adopt() books a new utxo — the automation
+   *  runtime wires it to an upkeep send so stock mints on funding, not the
+   *  upkeep ceiling. Single-slot hook; callers set it post-construction. */
+  onAdopted?: () => void
   /** deliberately bring a tombstoned outpoint back — the caller verified it
    *  is live on-chain (reconcile), so the spend-mark is lifted */
   revive: (tx: Transaction, vout: number) => void | Promise<void>

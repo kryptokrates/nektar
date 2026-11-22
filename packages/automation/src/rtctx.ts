@@ -31,6 +31,10 @@ export interface AutomationConfig {
     ack?: () => Promise<void>
   }
   treeSize?: number
+  /** change reserve each mint take must leave (default 2000) — a utxo-size
+   *  floor, not a cost: lower it for small treasuries (env
+   *  NEKTAR_TREE_RESERVE_SATS), below ~fee+dust the change strands */
+  treeReserveSats?: number
   boxOffice?: string
   treeLowWater?: number
   /** unproven mints allowed in flight per kind — non-market lanes default 2

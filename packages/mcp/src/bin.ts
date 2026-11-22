@@ -189,6 +189,7 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     boxOffice: nektarEnv('NEKTAR_BBOX_OFFICE') ?? undefined,
     logStream: nektarEnv('NEKTAR_LOG_STREAM') ?? undefined,
     treeSize: nektarEnvNum('NEKTAR_TREE_SIZE'),
+    treeReserveSats: nektarEnvNum('NEKTAR_TREE_RESERVE_SATS'),
     strict,
     unattended,
     broadcasterProbe,

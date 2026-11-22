@@ -152,7 +152,7 @@ export function configFromEnv(env = process.env): RuntimeConfig {
           .filter(Boolean) ?? []),
         ...(network === 'testnet'
           ? ['https://arc-test.taal.com', 'https://arcade-v2-testnet-eu-1.bsvblockchain.tech', 'https://testnet.arcade.gorillapool.io']
-          : ['https://arc.taal.com', 'https://arcade-v2-us-1.bsvblockchain.tech'])
+          : ['https://arc.taal.com', 'https://arcade-v2-us-1.bsvblockchain.tech', 'https://arcade.gorillapool.io'])
       ],
       broadcasterApiKey: secret('NEKTAR_BROADCASTER_API_KEY'),
       indexerUrl: env.NEKTAR_INDEXER_URL ?? env.NEKTAR_WOC_URL ?? urls.indexer,

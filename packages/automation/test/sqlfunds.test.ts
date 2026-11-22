@@ -55,6 +55,30 @@ void test('SqlFunds: adopt adds live rows; refresh rebuilds the mirror', async (
   }
 })
 
+void test('SqlFunds: adopt fires onAdopted once per new utxo — the funding wake signal', async () => {
+  const db = mkDb()
+  try {
+    const f = await mkFunds(db)
+    let fired = 0
+    f.onAdopted = () => fired++
+    const a = fundingTx(1000)
+    assert.equal(await f.adopt(a, 0), true)
+    assert.equal(fired, 1)
+    assert.equal(await f.adopt(a, 0), false, 'dup adopt — no signal')
+    assert.equal(fired, 1)
+    const b = fundingTx(2000)
+    assert.equal(await f.adopt(b, 0), true)
+    assert.equal(fired, 2)
+    // a refused adopt never signals — the tombstoned outpoint stays silent
+    const c = fundingTx(500)
+    await f.burn(c.id('hex'), 0)
+    assert.equal(await f.adopt(c, 0), false)
+    assert.equal(fired, 2)
+  } finally {
+    await close(db)
+  }
+})
+
 void test('SqlFunds: take honors lease, hintSkip, sats bound and smallest-sufficient', async () => {
   const db = mkDb()
   try {

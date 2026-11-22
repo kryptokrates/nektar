@@ -142,6 +142,10 @@ export abstract class FundsBase implements Funds {
   /** sats kept affordable for one deal — non-deal takes never dip below;
    *  seeded from deps.dealFloor, re-tunable post-construction */
   public dealFloor?: number
+  /** producer signal: a new utxo just entered the book — the automation
+   *  runtime wires it to an upkeep send so tree stock mints on funding,
+   *  not on the upkeep ceiling. Single-slot, same contract as takeOverride. */
+  public onAdopted?: () => void
 
   /** deps holds construction-time config (identity, floor, tx view); the
    *  hook fields above are seeded from it but remain mutable — the
@@ -490,6 +494,7 @@ export abstract class FundsBase implements Funds {
     if ((await this.spendCheck?.(txid, vout)) === true) return false
     if ((await this.store.has?.(txid, vout)) === true) return false
     await this.store.add(tx, vout)
+    this.onAdopted?.()
     return true
   }
 }

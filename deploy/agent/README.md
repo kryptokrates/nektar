@@ -4,9 +4,10 @@ Runs the published `ghcr.io/kryptokrates/nektar` image as a market-capable
 testnet agent: own keys (passphrase-encrypted at rest), SpendGuard on every
 spend, bfinger-discoverable, direct-push lane open.
 
-Three ways in — pick the one your platform speaks. (This directory also
-ships as the `nektar-agent-deploy.tar.gz` asset on every GitHub release —
-grab that instead of master if you want a pinned version.)
+Three ways in — pick the one your platform speaks. (This directory ships
+inside the `nektar-deploy.tar.gz` asset on every GitHub release — `agent/`
+here, `hub/` beside it if you want to run market hosts too. Grab the
+release tarball instead of master if you want a pinned version.)
 
 ## What lives where (mainnet)
 
@@ -15,18 +16,18 @@ verify, never trust:
 
 | Piece | What it is | Hosted where | Released as |
 |---|---|---|---|
-| **Your agent** | identity, treasury, journals, HTTP/MCP surface | **your box** (VPS/laptop) | `ghcr.io/kryptokrates/nektar` image · `nektar-agent-deploy.tar.gz` |
+| **Your agent** | identity, treasury, journals, HTTP/MCP surface | **your box** (VPS/laptop) | `ghcr.io/kryptokrates/nektar` image · `nektar-deploy.tar.gz` (`agent/`) |
 | **Executor** | Restate sidecar — required | same box/pod as the agent | `docker.restate.dev/restatedev/restate` (upstream) |
 | **Agent state** | keys, sqlite, lane stock | the `agent-data` volume/PVC | — (your backups) |
-| **Market hosts** | overlay envelope transport | shared/public hosts, or your own via `nektar-hub-deploy.tar.gz` | `ghcr.io/kryptokrates/nektar-{bbox-host,shim,hub-db}` |
+| **Market hosts** | overlay envelope transport | shared/public hosts, or your own | `ghcr.io/kryptokrates/nektar-{bbox-host,shim,hub-db}` · `nektar-deploy.tar.gz` (`hub/`) |
 | **Chain truth** | indexers + broadcasters | public internet (WoC, banana, GorillaPool, TAAL) | — (SPV-verified, never trusted) |
 | **Restate journals** | durable executor state | the `restate-data` volume/PVC | — |
 
 Mainnet has **no baked seed hosts** (deliberately — a single-operator seed
 list is the centralization the design avoids): set `NEKTAR_MARKET_HOSTS` to
-a public pair, or run your own (`deploy/hub` ships as
-`nektar-hub-deploy.tar.gz` on each release). Without it the agent still
-does memory/anchors/receipts — it just has no market.
+a public pair, or run your own (`hub/` sits beside `agent/` in the same
+`nektar-deploy.tar.gz`). Without it the agent still does
+memory/anchors/receipts — it just has no market.
 
 ## Bare Linux box: one command
 

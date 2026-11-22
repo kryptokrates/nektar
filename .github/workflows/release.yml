@@ -129,18 +129,18 @@ jobs:
       - run: node tools/bundle-mcp.mjs
       - name: tar the self-contained bundle
         run: tar -czf nektar-mcp-bundle.tar.gz -C dist-bundle .
-      - name: tar the agent deployment bundle
-        run: tar -czf nektar-agent-deploy.tar.gz -C deploy/agent --exclude='.env' .
-      - name: tar the hub deployment bundle (compose + helm)
-        run: tar -czf nektar-hub-deploy.tar.gz -C deploy/hub --exclude='.env' .
+      # two personas → two assets: the local MCP bundle (agent docked to a
+      # desktop client) and one VPS deploy bundle (agent/ + hub/ — the
+      # README routes by intent)
+      - name: tar the deploy bundle (agent + hub — compose + helm + installer)
+        run: tar -czf nektar-deploy.tar.gz -C deploy --exclude='.env' --exclude='*/.env' agent hub
       - name: upload run artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nektar-bundles
           path: |
             nektar-mcp-bundle.tar.gz
-            nektar-agent-deploy.tar.gz
-            nektar-hub-deploy.tar.gz
+            nektar-deploy.tar.gz
           if-no-files-found: error
       - name: attach to the GitHub release (tags)
         if: startsWith(github.ref, 'refs/tags/')
@@ -149,7 +149,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
-          gh release upload "$TAG" nektar-mcp-bundle.tar.gz nektar-agent-deploy.tar.gz nektar-hub-deploy.tar.gz --clobber
+          gh release upload "$TAG" nektar-mcp-bundle.tar.gz nektar-deploy.tar.gz --clobber
 
       # npm-publish removed — the bundle ships as a release asset
       # (nektar-mcp-bundle.tar.gz) and via the GHCR image instead

@@ -69,11 +69,13 @@ void test('SqlFunds: adopt fires onAdopted once per new utxo — the funding wak
     const b = fundingTx(2000)
     assert.equal(await f.adopt(b, 0), true)
     assert.equal(fired, 2)
-    // a refused adopt never signals — the tombstoned outpoint stays silent
+    // a refused adopt never signals — a tombstoned outpoint stays silent
     const c = fundingTx(500)
+    assert.equal(await f.adopt(c, 0), true)
+    assert.equal(fired, 3)
     await f.burn(c.id('hex'), 0)
     assert.equal(await f.adopt(c, 0), false)
-    assert.equal(fired, 2)
+    assert.equal(fired, 3)
   } finally {
     await close(db)
   }

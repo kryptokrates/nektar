@@ -90,6 +90,7 @@ void test('every wait primitive site is classified — the census sees all wait 
     'mcp/src/bin.ts': 'startup probe io + teardown bound',
     'mcp/src/dispatch/memory.ts': 'pack fetch io bound',
     'mcp/src/pages.ts': 'client-side UI string — the setTimeout lives inside the served page, not the server event plane',
+    'mcp/src/restatesidecar.ts': 'sidecar supervisor — admin fetch io bound (AbortSignal.timeout) + version-probe retry nap',
     'store/src/objectstore.ts': 's3 fetch io bound',
     'anchor/src/runarchain.ts': 'heal broadcast retry — spread-jittered',
     'zk/src/stark/prove.ts': 'prover service io bound',

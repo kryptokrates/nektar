@@ -823,6 +823,7 @@
     display: flex;
     align-items: center;
     gap: 1rem;
+    flex-wrap: wrap;
     padding: 0.85rem 0.4rem;
     border-bottom: 1px solid rgb(247 153 27 / 8%);
     font-size: 0.9rem;
@@ -871,6 +872,10 @@
     border-collapse: collapse;
     font-size: 0.78rem;
     margin-top: 0.8rem;
+    /* display:block keeps the inner table grid but lets the frame scroll
+       horizontally — unbreakable hashes/URLs no longer blow out the card */
+    display: block;
+    overflow-x: auto;
   }
   .jt th {
     text-align: left;
@@ -893,6 +898,7 @@
     padding: 0.85rem;
     font-size: 0.72rem;
     line-height: 1.5;
+    overflow-x: auto;
     max-height: 420px;
     overflow: auto;
     margin: 0;
@@ -994,6 +1000,7 @@
   .subpills {
     display: flex;
     gap: 0.4rem;
+    flex-wrap: wrap;
     margin: -0.4rem 0 1rem;
   }
   .pill {
@@ -1035,9 +1042,24 @@
     font-size: 0.72rem;
     margin: 0.3rem 0 0;
   }
+  /* 1180–920: the fixed 360px rail would squeeze the feed below ~255px —
+     drop it under the feed and let its cards tile side-by-side */
+  @media (max-width: 1180px) {
+    .app {
+      grid-template-columns: 210px minmax(0, 1fr);
+    }
+    .rail {
+      grid-column: 1 / -1;
+      position: static;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      align-items: start;
+    }
+  }
   @media (max-width: 920px) {
     .app {
       grid-template-columns: 1fr;
+      padding: 0.9rem 0.8rem;
+      gap: 1rem;
     }
     .sidenav {
       position: static;
@@ -1056,6 +1078,10 @@
     }
     .rail {
       position: static;
+      grid-template-columns: 1fr;
+    }
+    .card {
+      padding: 1rem;
     }
     .herorow {
       flex-wrap: wrap;
@@ -1066,6 +1092,14 @@
     }
     .earn h1 {
       font-size: 3rem;
+    }
+    h2 {
+      flex-wrap: wrap;
+      row-gap: 0.2rem;
+    }
+    .jin {
+      min-width: 0;
+      flex-basis: 100%;
     }
   }
   h2 {
@@ -1106,12 +1140,15 @@
   .row:last-of-type {
     border-bottom: none;
   }
-  .row > :nth-child(2) {
+  .row > :first-child {
     flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .row > :nth-child(2) {
+    flex-shrink: 0;
   }
   .lrow a {
     color: var(--amber);

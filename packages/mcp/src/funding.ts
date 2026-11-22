@@ -75,6 +75,15 @@ export async function openCustody(
     const fundKey = PrivateKey.fromWif(rc.fundWif)
     const pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
     const fundAddress = fundKey.toPublicKey().toAddress([0x6f])
+    // one process per fund key — the lock lives in tmpdir keyed on the pkh,
+    // so it binds regtest treasuries exactly like live reserves: two booted
+    // instances on one WIF is the double-spend class this exists to refuse
+    let releaseKeyLock: (() => Promise<void>) | undefined
+    if (nektarEnvFlag('NEKTAR_ALLOW_SHARED_KEY')) {
+      log(net)('NEKTAR_ALLOW_SHARED_KEY=1 — fund-key lock skipped; two processes may spend this reserve')
+    } else {
+      releaseKeyLock = await acquireLock(keyLockFile(pkhHex), `fund key ${fundAddress}`)
+    }
     const funds = await tb.SqlFunds.open(knex, txStore, { log: log(net), dealFloor, pkhHex, address: fundAddress })
     await sweepBasket({ tb, dataDir: cfg.dataDir, chain: 'regtest', port, funds, log: log(net) })
     return {
@@ -82,7 +91,8 @@ export async function openCustody(
       wallet: new ProtoWallet(fundKey),
       fundKey,
       fundAddress,
-      pkhHex
+      pkhHex,
+      releaseKeyLock
     }
   }
   const mc = cfg.main!

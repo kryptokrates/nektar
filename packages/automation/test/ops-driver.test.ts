@@ -111,7 +111,7 @@ test('driver: same-state data-stamp causes validate through their self-edges', a
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const o = await op(store, 'awaiting_disclosure')
-  const next = await store.transition(o.operationId, o.revision, 'awaiting_disclosure', { cause: 'evidence_stored', data: { proofRef: 'x' } })
+  const next = await store.transition(o.operationId, o.revision, 'awaiting_disclosure', { cause: 'evidence_stored', data: { escrowTxid: 'x' } })
   assert.equal(next.state, 'awaiting_disclosure')
 })
 

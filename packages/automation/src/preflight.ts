@@ -116,8 +116,18 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
   // paused. unreachable admin = the plane is down entirely.
   push('restate-plane', async () => {
     const admin = nektarEnv('NEKTAR_RESTATE_ADMIN') ?? 'http://127.0.0.1:9070'
-    const paused = await bounded(pausedInvocations(admin).then((n) => n ?? -1), ceil.chainMs, 'restate admin probe')
-    if (paused < 0) return { check: 'restate-plane', pass: false, detail: `restate admin ${admin} unreachable — the executor plane is down`, fix: 'restart the restate sidecar; invocations resume when the deployment re-registers' }
+    const paused = await bounded(
+      pausedInvocations(admin).then((n) => n ?? -1),
+      ceil.chainMs,
+      'restate admin probe'
+    )
+    if (paused < 0)
+      return {
+        check: 'restate-plane',
+        pass: false,
+        detail: `restate admin ${admin} unreachable — the executor plane is down`,
+        fix: 'restart the restate sidecar; invocations resume when the deployment re-registers'
+      }
     if (paused > 0)
       return {
         check: 'restate-plane',
@@ -238,7 +248,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
     const refs: Array<{ ref: Record<string, unknown>; src: string }> = []
     if (store !== undefined)
       for (const op of await store.operations({ states: ['disclosure_verified', 'useful'] }))
-        if (op.data.evidenceRef !== undefined) refs.push({ ref: op.data.evidenceRef as Record<string, unknown>, src: `evidence ${op.operationId.slice(0, 8)}` })
+        if (op.data.evidenceRef !== undefined) refs.push({ ref: { ...op.data.evidenceRef }, src: `evidence ${op.operationId.slice(0, 8)}` })
     for (const s of mem.shards?.() ?? []) {
       const r = mem.packStoreRef?.(s)
       if (r !== undefined) refs.push({ ref: r as unknown as Record<string, unknown>, src: `pack ${s}` })

@@ -2,6 +2,9 @@
 // invokes them over HTTP/2) and register the deployment with the server's
 // admin API. Registration is idempotent — the server dedupes by URI.
 import { createServer, type Http2Server, type ServerHttp2Session } from 'node:http2'
+import { createHash } from 'node:crypto'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { nektarEnv, nektarEnvNum, nap, type EnvSource } from '@nektar/core'
 import { WAITS } from '../waits.js'
 
@@ -36,6 +39,44 @@ const svcManifest = (svc: unknown): string => {
 }
 
 const manifestOf = (services: unknown[] | undefined): string[] | undefined => services?.map(svcManifest).sort()
+
+/** the def's own service names — paused-invocation heal must scope to them:
+ *  on a shared restate server an unscoped resume wedges OTHER apps' legs
+ *  back into legs we never owned (and our deployment-rebind would re-pin
+ *  them onto us). */
+const svcName = (svc: unknown): string | undefined => {
+  const s = svc as { name?: string; definition?: { name?: string } }
+  return s.definition?.name ?? s.name
+}
+
+/** what we actually serve — service names + handler names + the handler
+ *  OPTIONS the def carries (RT_OPTS_* changes are a real manifest change:
+ *  a same-name re-register keeps the OLD options, and the admin manifest
+ *  doesn't reliably serve options back for a compare). The fingerprint is
+ *  stored next to the data dir after a successful registration and a drift
+ *  forces a re-register — comparing to our own record needs no admin schema. */
+const optionsFingerprint = (services: unknown[]): string => {
+  const seen = new Set<unknown>()
+  const stable = (v: unknown): string => {
+    if (v === null || typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') return JSON.stringify(v)
+    if (typeof v === 'function' || typeof v === 'symbol' || typeof v === 'bigint' || v === undefined) return '∅'
+    if (Array.isArray(v)) return `[${v.map(stable).join(',')}]`
+    if (typeof v === 'object') {
+      if (seen.has(v)) return '∅'
+      seen.add(v)
+      const o = v as Record<string, unknown>
+      // transport bits that exist on a def object but aren't part of the
+      // served contract are skipped — they're identity, not options
+      return `{${Object.keys(o)
+        .filter((k) => !['component', 'discovery', 'logger', 'set'].includes(k))
+        .sort()
+        .map((k) => `${JSON.stringify(k)}:${stable(o[k])}`)
+        .join(',')}}`
+    }
+    return '∅'
+  }
+  return createHash('sha256').update(services.map(stable).join('|')).digest('hex')
+}
 
 const manifestMatches = async (admin: string, uri: string, expected: string[]): Promise<boolean> => {
   try {
@@ -123,10 +164,27 @@ export const pausedInvocations = async (admin: string, ioMs = 3_000): Promise<nu
  *  continues. Both resume clean. A journaled leg with a domain/deterministic
  *  failure stays paused — that IS the breaker's job (the journaled error
  *  would replay identically anyway). */
-const TRANSPORT_PAUSE =
-  /h2 pool|connection refused|network is unreachable|connection reset|econnrefused|timed out|cannot connect|temporarily unavailable|deployment.*(not found|unavailable)/i
+/** unambiguous wire/deployment failure vocabulary — the ONLY failure text
+ *  allowed to defeat the breaker on a journaled leg. 'timed out' and
+ *  'temporarily unavailable' are deliberately absent: a handler-side
+ *  TimeoutError reads exactly like that, and resuming a domain failure
+ *  forever is the breaker never holding. journal_size <= 1 legs need no
+ *  text match at all — user code never ran, so no domain failure exists. */
+const DEPLOYMENT_PAUSE = /h2 pool|connection refused|network is unreachable|connection reset|econnrefused|cannot connect|deployment.*(not found|unavailable)/i
 
-export const healPausedInvocations = async (admin: string, uri: string, log: (line: string) => void, ioMs = 3_000, cap = 32): Promise<number> => {
+/** target's service name — sys_invocation.target is 'svc/handler' for
+ *  services and 'svc.key/handler' (or 'svc/key/handler') for objects; the
+ *  service segment is always first. */
+const targetService = (t: string): string => t.split('/')[0].split('.')[0]
+
+export const healPausedInvocations = async (
+  admin: string,
+  uri: string,
+  log: (line: string) => void,
+  ioMs = 3_000,
+  cap = 32,
+  ours?: ReadonlySet<string>
+): Promise<number> => {
   const a = admin.replace(/\/+$/, '')
   try {
     const r = await fetch(`${a}/query`, {
@@ -141,7 +199,14 @@ export const healPausedInvocations = async (admin: string, uri: string, log: (li
     const j = (await r.json()) as {
       rows?: Array<{ id?: string; target?: string; last_failure?: string; journal_size?: number | string }>
     }
-    const rows = (j.rows ?? []).filter((x) => x.id && (Number(x.journal_size ?? 0) <= 1 || TRANSPORT_PAUSE.test(x.last_failure ?? ''))).slice(0, cap)
+    const rows = (j.rows ?? [])
+      .filter(
+        (x) =>
+          x.id &&
+          (ours === undefined || (x.target !== undefined && ours.has(targetService(x.target)))) &&
+          (Number(x.journal_size ?? 0) <= 1 || DEPLOYMENT_PAUSE.test(x.last_failure ?? ''))
+      )
+      .slice(0, cap)
     if (rows.length === 0) return 0
     // our deployment id is the fallback rebind — a paused leg whose pinned
     // deployment was deleted can't plain-resume ('deployment id not pinned')
@@ -226,11 +291,31 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
       `automation: endpoint URI ${uri} is loopback — a containerized sidecar cannot reach it; set NEKTAR_RESTATE_ENDPOINT_URI to a container-routable address (Docker Desktop: http://192.168.65.254:${port} — plain IP, not host.docker.internal, whose DNS can answer an unroutable IPv6)`
     )
   const expected = manifestOf(services) ?? []
-  const force = expected.length === 0 || !(await manifestMatches(admin, uri, expected))
+  // the served-contract fingerprint includes handler options — a manifest
+  // name-match with changed options still forces (an RT_OPTS_* bump that
+  // never registered is the silent-stale-deployment class). Compares
+  // against our own record: the admin manifest needn't serve options back.
+  const fp = optionsFingerprint(services)
+  const fpFile = join(nektarEnv('NEKTAR_DATA_DIR', env) ?? process.cwd(), 'restate-deploy.json')
+  let lastFp: string | undefined
+  try {
+    lastFp = (JSON.parse(readFileSync(fpFile, 'utf8')) as { fp?: string }).fp
+  } catch {
+    /* no prior record — first boot or wiped dir */
+  }
+  const force = expected.length === 0 || !(await manifestMatches(admin, uri, expected)) || lastFp !== fp
   if (!(await registerDeployment(admin, uri, log, force))) {
     server.close()
     throw new Error(`automation: restate deployment registration failed ${uri} — the executor plane is required infrastructure, refusing to start without it`)
   }
+  try {
+    mkdirSync(join(fpFile, '..'), { recursive: true })
+    writeFileSync(fpFile, JSON.stringify({ fp, uri }))
+  } catch {
+    /* a lost record forces the next boot — fail-safe direction */
+  }
+  // heal scope: only OUR services' paused legs are ours to resume
+  const ourNames = new Set(services.map(svcName).filter((n): n is string => n !== undefined))
   // a restart gaps this endpoint for seconds; retry-policy 'pause' parks
   // whatever the server was delivering then — wedging whole keys on a
   // fault the handler never saw. Resume the transport-paused set now that
@@ -238,12 +323,12 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
   // retries exhaust, which can be seconds after this pass (mid-run network
   // flaps pause later still). Deterministic failures stay paused (the
   // restate-plane preflight keeps reporting them).
-  await healPausedInvocations(admin, uri, log)
+  await healPausedInvocations(admin, uri, log, 3_000, 32, ourNames)
   let healing = false
   const healFloor = setInterval(() => {
     if (healing) return
     healing = true
-    void healPausedInvocations(admin, uri, log).finally(() => {
+    void healPausedInvocations(admin, uri, log, 3_000, 32, ourNames).finally(() => {
       healing = false
     })
   }, WAITS.healPaused.ms)

@@ -51,13 +51,26 @@ export interface HttpOps {
 /** /dashboard/state — the JSON the compiled Svelte dashboard renders. Same
  *  data the old server-rendered page carried: honest counts, the cold-start
  *  loop frontier, network position, the automation queue. */
+/** the Host header is attacker-controlled — it lands in page HTML and
+ *  inline <script> JSON (which escapes quotes but NOT angle brackets), so
+ *  anything but RFC host[:port] characters is a reflected-XSS vector.
+ *  Deviations fall back to localhost rather than being escaped piecemeal. */
+const safeHost = (host: string | undefined): string =>
+  host !== undefined && /^[A-Za-z0-9.-]+(:\d{1,5})?$|^\[[0-9a-fA-F:]+\](:\d{1,5})?$/.test(host) ? host : 'localhost'
+export { safeHost }
+
+/** JSON inside inline <script>: JSON.stringify escapes quotes but leaves
+ *  '<'/'>' literal — '</script>' inside the payload breaks out of the
+ *  block. Encode the angle brackets so any string is safe to embed. */
+const jsStr = (v: string): string => JSON.stringify(v).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')
+
 export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined, host: string | undefined): Promise<Record<string, unknown>> {
   const d = await mem.doctor()
   if (ops?.wallet) {
     const w = (await ops.wallet()) as Record<string, unknown>
     d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
   }
-  const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${host ?? 'localhost'}`
+  const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${safeHost(host)}`
   // records + fragment.d — the writer-side plaintext: recall() withholds
   // text until the anchor verifies, but the operator's own ledger is readable
   const rrecs = (await mem.records('__receipts__').catch(() => [] as Array<{ seq: number; fragment: { d: Uint8Array } }>)) as Array<{
@@ -377,7 +390,7 @@ details{margin:16px 0;color:#a2958a}summary{cursor:pointer;font-size:13px}detail
   }</div>
 ${rec?.answer !== undefined ? `<div class=ans>${esc(rec.answer)}</div>` : ''}
 <button class=sharebtn id=sharebtn>Share this verification</button>
-<script>document.getElementById('sharebtn').onclick=async function(){var u=${JSON.stringify(pageUrl.replace('&format=html', ''))};this.className='sharebtn';if(navigator.share){try{await navigator.share({title:'verified answer — nektar',url:u});this.textContent='\\u2713 shared';this.className='sharebtn done';return}catch(e){if(e&&e.name==='AbortError')return}}try{await navigator.clipboard.writeText(u);this.textContent='\\u2713 link copied';this.className='sharebtn done'}catch(e){this.textContent=u}}</script>
+<script>document.getElementById('sharebtn').onclick=async function(){var u=${jsStr(pageUrl.replace('&format=html', ''))};this.className='sharebtn';if(navigator.share){try{await navigator.share({title:'verified answer — nektar',url:u});this.textContent='\\u2713 shared';this.className='sharebtn done';return}catch(e){if(e&&e.name==='AbortError')return}}try{await navigator.clipboard.writeText(u);this.textContent='\\u2713 link copied';this.className='sharebtn done'}catch(e){this.textContent=u}}</script>
 <img src="${qr}" alt="scan to re-verify"><div class=qrcap>scan to re-check</div>
 ${anchorUrl ? `<div class=qrcap><a href="${anchorUrl}" target=_blank rel=noopener>view the anchor transaction ↗</a></div>` : ''}
 <details${r.ok ? '' : ' open'}><summary>details · ${r.checks.filter((c) => c.ok === true).length}/${r.checks.filter((c) => c.ok !== 'info' && c.ok !== 'skip').length} checks</summary><div>
@@ -396,7 +409,7 @@ ${badgeMd ? `<code class=md>${esc(badgeMd)}</code>` : ''}
  *  public shards, offers, proof counts. Never treasury, automation
  *  internals, or private shards. */
 export async function cardPage(mem: NektarMemory, host: string | undefined): Promise<string> {
-  const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${host ?? 'localhost'}`
+  const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${safeHost(host)}`
   const pageUrl = `${base}/card`
   const d = await mem.doctor().catch(() => undefined)
   const pub = (await mem.publicShards().catch(() => [] as string[])).filter((s) => !s.startsWith('__'))
@@ -465,7 +478,7 @@ ${rows || '<div class=dim>nothing public for sale yet — memory warming up</div
 <code class=md>${esc(`${base}/.well-known/agent.json`)}</code>
 <code class=md>${esc('git clone https://github.com/kryptokrates/nektar && pnpm mcp:install')}</code>
 <button class=sharebtn id=sharebtn>Share this agent</button>
-<script>document.getElementById('sharebtn').onclick=async function(){var u=${JSON.stringify(pageUrl)};this.className='sharebtn';if(navigator.share){try{await navigator.share({title:'nektar agent — verifiable memory',url:u});this.textContent='\\u2713 shared';this.className='sharebtn done';return}catch(e){if(e&&e.name==='AbortError')return}}try{await navigator.clipboard.writeText(u);this.textContent='\\u2713 link copied';this.className='sharebtn done'}catch(e){this.textContent=u}}</script>
+<script>document.getElementById('sharebtn').onclick=async function(){var u=${jsStr(pageUrl)};this.className='sharebtn';if(navigator.share){try{await navigator.share({title:'nektar agent — verifiable memory',url:u});this.textContent='\\u2713 shared';this.className='sharebtn done';return}catch(e){if(e&&e.name==='AbortError')return}}try{await navigator.clipboard.writeText(u);this.textContent='\\u2713 link copied';this.className='sharebtn done'}catch(e){this.textContent=u}}</script>
 <img src="${qr}" alt="scan to open this card"><div class=qrcap>scan to open this card</div>
 </body></html>`
 }

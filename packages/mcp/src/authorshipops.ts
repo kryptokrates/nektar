@@ -2,8 +2,8 @@
 // NektarMemory: owner rotation (rotateShard), the cached author-chain
 // projection (genesis ownerPub + live certs), §19 authorship checks, and the
 // __identity__ cert-chain proof export.
-import type { Transaction } from '@bsv/sdk'
-import { toHex, signerPubHex, type Bytes, type SignerLike, type Provenance } from '@nektar/core'
+import { PrivateKey, type Transaction } from '@bsv/sdk'
+import { toHex, signerPubHex, heldRootKey, type Bytes, type SignerLike, type SignerWallet, type Provenance } from '@nektar/core'
 import * as idbind from '@nektar/identity'
 import type { AnchorChain } from '@nektar/anchor'
 import type { AnchorLink, ProofBundle, VerifyResult } from '@nektar/verify'
@@ -39,6 +39,19 @@ export class AuthorshipOps {
   constructor(private deps: AuthorshipOpsDeps) {}
 
   async rotateShard(shard: string, newKey: SignerLike): Promise<{ txid: string; n: number }> {
+    // custody gate at the rotation boundary: a raw key cannot be an owner
+    // under external custody — the zero-key model persists nothing
+    // (keys.json is legacy-read-only there) so the next boot re-derives the
+    // deterministic wallet keyID and resume fails 'head owner is not this
+    // shard key', AND where a legacy keys.json exists persistKeys would
+    // write the raw material into it. Held-key custody (toolbox, no wallet)
+    // persists WIFs via keys.json — that path is unaffected. Wallet-derived
+    // keyID signers are the supported external-custody contract.
+    const w = this.deps.opts.wallet as SignerWallet | undefined
+    if (newKey instanceof PrivateKey && w !== undefined && heldRootKey(w) === undefined)
+      throw new Error(
+        `rotate: a raw owner key cannot live under external wallet custody — nothing persists or re-derives it; use a wallet-derived keyID instead`
+      )
     const ac = this.deps.anchors.get(shard)
     if (!ac) throw new Error(`no anchor for shard ${shard}`)
     const r = await ac.rotate(newKey)

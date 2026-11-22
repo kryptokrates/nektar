@@ -185,7 +185,7 @@ export abstract class MarketBase {
 
   protected async sellerPolicy(): Promise<{ hash: string; policy: AutomationPolicy } | undefined> {
     const op = await this.d.store.operationByKey('seller-enabled')
-    const hash = op?.data.policyHash as string | undefined
+    const hash = op?.data.policyHash
     const policy = hash ? await this.d.store.activePolicy(hash) : undefined
     return hash && policy ? { hash, policy } : undefined
   }
@@ -198,7 +198,7 @@ export abstract class MarketBase {
       if (pr?.roles?.includes('seller') === true) sellerDomains.push(...(pr.domains ?? []))
     }
     const collecting = (await this.d.store.operations({ role: 'buyer', states: ['collecting'] }))
-      .map((o) => ({ wantId: (o.data.want as SignedWant | undefined)?.want?.wantId ?? '' }))
+      .map((o) => ({ wantId: o.data.want?.want?.wantId ?? '' }))
       .filter((x) => x.wantId !== '')
     return { sellerDomains, collecting }
   }
@@ -249,7 +249,7 @@ export abstract class MarketBase {
           outbox: [{ actionId: `${operation.operationId}:want`, kind: 'publish-want', destination: 'feed', payload: sw }]
         })
       }
-      return { wantId: (operation.data.want as SignedWant).want.wantId, operationId: operation.operationId }
+      return { wantId: operation.data.want!.want.wantId, operationId: operation.operationId }
     }, 'publishWant')
   }
 
@@ -338,7 +338,7 @@ export abstract class MarketBase {
   }
 
   protected async seize(op: Operation): Promise<void> {
-    const c = op.data.cfg as Record<string, string>
+    const c = op.data.cfg!
     const next = await this.d.store.transition(op.operationId, op.revision, 'seizing', { cause: 'deadline_reached' })
     try {
       const r = await this.d.call('bondSeize', {

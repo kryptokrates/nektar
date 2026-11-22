@@ -47,6 +47,30 @@ export const DEFAULT_BROADCASTER_URL = 'https://arcade.gorillapool.io'
  *  indexerUrl: 'https://test.bananablocks.com/api/v1' */
 export const DEFAULT_INDEXER_URL = 'https://bananablocks.com/api/v1'
 
+/** baked-in public ARC-family endpoints — the runtime's fan-out defaults
+ *  plus the GorillaPool primary. Membership = 'public-net config': the
+ *  index cross-check on status reads is safe to engage. A CUSTOM primary
+ *  (the only other case) is a private deployment — no public index can
+ *  vouch for its view, so the cross-check stays off there. */
+export const PUBLIC_BROADCASTER_URLS = new Set([
+  DEFAULT_BROADCASTER_URL,
+  'https://testnet.arcade.gorillapool.io',
+  'https://arc.taal.com',
+  'https://arc-test.taal.com',
+  'https://arcade-v2-us-1.bsvblockchain.tech',
+  'https://arcade-v2-testnet-us-1.bsvblockchain.tech',
+  'https://arcade-v2-testnet-eu-1.bsvblockchain.tech'
+])
+
+/** the index-cross-check predicate, shared by the constructor flag and the
+ *  standalone probe — 'public' = explicit index URL, no broadcaster
+ *  configured at all, or a baked-in public primary */
+const publicIndexOk = (c?: MainnetConfig): boolean => {
+  if (c?.indexerUrl !== undefined || c?.wocUrl !== undefined) return true
+  const primary = c?.broadcasterUrl ?? c?.broadcasterUrls?.[0]
+  return primary === undefined || PUBLIC_BROADCASTER_URLS.has(primary)
+}
+
 const def = (c?: MainnetConfig) => {
   const indexerUrl = c?.indexerUrl ?? c?.wocUrl ?? DEFAULT_INDEXER_URL
   // primary = explicit broadcasterUrl, else the first listed extra, else
@@ -100,10 +124,9 @@ export class BsvBroadcaster implements Broadcaster {
     this.cfg = def(c)
     // index cross-check on status reads engages for public-default configs or
     // an explicit index URL — a custom broadcaster alone isn't assumed public-net
-    // 'public-default' means the EFFECTIVE primary is the baked-in URL —
+    // 'public-default' means the EFFECTIVE primary is a baked-in URL —
     // a custom first entry in broadcasterUrls counts as a private config
-    const primary = c?.broadcasterUrl ?? c?.broadcasterUrls?.[0]
-    this.indexFallback = c?.indexerUrl !== undefined || c?.wocUrl !== undefined || primary === undefined || primary === DEFAULT_BROADCASTER_URL
+    this.indexFallback = publicIndexOk(c)
   }
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' }
@@ -354,13 +377,7 @@ export async function probeTxStatus(
   const verdict = answers.find((a) => a.answered && a.status !== '')
   if (verdict !== undefined) return verdict
   const answered = answers.some((a) => a.answered)
-  const indexOk =
-    opts?.indexerFallback ??
-    opts?.wocFallback ??
-    (cfg?.indexerUrl !== undefined ||
-      cfg?.wocUrl !== undefined ||
-      (cfg?.broadcasterUrl ?? cfg?.broadcasterUrls?.[0]) === undefined ||
-      (cfg?.broadcasterUrl ?? cfg?.broadcasterUrls?.[0]) === DEFAULT_BROADCASTER_URL)
+  const indexOk = opts?.indexerFallback ?? opts?.wocFallback ?? publicIndexOk(cfg)
   if (!indexOk) return { status: '', answered }
   try {
     const w = await c.index.txJson(txid)

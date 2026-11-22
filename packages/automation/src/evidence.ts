@@ -48,8 +48,8 @@ export async function collectTradeEvidence(
   op: Operation,
   fetchTx: (txid: string) => Promise<Transaction | undefined>
 ): Promise<TradeEvidence> {
-  const offers = Object.values(op.data.offers as Record<string, { so: SignedOffer }>).map((o) => o.so)
-  const utxo = op.data.utxo as { txid: string; vout: number }
+  const offers = Object.values(op.data.offers!).map((o) => o.so)
+  const utxo = op.data.utxo!
   const result = op.data.result as { disclosureTxid: string }
   const escrowTx = await fetchTx(utxo.txid)
   const discTx = await fetchTx(result.disclosureTxid)
@@ -57,11 +57,11 @@ export async function collectTradeEvidence(
   return {
     v: 1,
     network: op.network,
-    want: op.data.want as SignedWant,
+    want: op.data.want!,
     offers,
-    selectedOfferKey: (op.data.selected as { key: string }).key,
+    selectedOfferKey: op.data.selected!.key,
     ranking: op.data.ranking,
-    escrow: { txid: utxo.txid, txHex: escrowTx.toHex(), vout: utxo.vout, depositorPkh: (op.data.escrow as { depositorPkh: string }).depositorPkh },
+    escrow: { txid: utxo.txid, txHex: escrowTx.toHex(), vout: utxo.vout, depositorPkh: op.data.escrow!.depositorPkh! },
     disclosure: { txid: result.disclosureTxid, txHex: discTx.toHex() },
     buyerEvents: await store.events(op.operationId),
     claims: { confirmation: discTx.merklePath ? 'proven' : 'broadcast-accepted-not-proven', semantic: 'not_asserted' }

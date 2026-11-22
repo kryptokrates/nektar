@@ -68,6 +68,13 @@ interface RtScope {
   txKey?: string
   /** inside a custody handler — same-key custody calls go direct */
   custodyKey?: string
+  /** the 'service/key' scopes THIS invocation holds — accumulated as calls
+   *  nest (a custody call inside a tx handler holds both). The dispatcher's
+   *  re-entrancy guard reads it: a call on a scope this same invocation
+   *  already holds queues behind itself — a real deadlock to refuse loudly.
+   *  A scope held by a DIFFERENT leg is not here — that call just serializes
+   *  on the object's FIFO, the normal same-key ordering. */
+  held?: readonly string[]
 }
 
 const scope = new AsyncLocalStorage<RtScope>()

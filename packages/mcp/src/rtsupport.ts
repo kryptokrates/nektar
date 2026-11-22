@@ -98,93 +98,134 @@ export function txLogBroadcast<B extends (tx: Transaction) => Promise<import('@n
   }) as B
 }
 
-/** single holder per lock file: PID liveness proves a dead local holder at
- *  once (no 20s wait on a stale-looking beat); a live/unverifiable holder
- *  yields only when its heartbeat goes stale (>20s). A corrupt file's mtime
- *  stands in for the beat — a live process rewrites it every 5s. */
-export async function acquireLock(file: string, label: string): Promise<() => Promise<void>> {
+/** single holder per lock file. Acquisition has two shapes:
+ *  - free path: `wx` create — atomic, no delete involved.
+ *  - displacement path: a stale/dead holder's file is removed ONLY by the
+ *    process holding the `.breaking` sidecar token (itself wx-claimed) —
+ *    without it, two concurrent "remove the corpse, then create" runs
+ *    delete each other's fresh locks and BOTH end up believing they hold.
+ *  A torn mid-beat read never yields on its own: its mtime is the freshest
+ *  evidence the writer could leave, so only mtime staleness counts —
+ *  matching the conservative stance the old initial check took but the
+ *  wait-loop contradicted.
+ *  `opts.staleWaitMs`: how long to sit on a live-looking holder before
+ *  refusing. The fund-key lock leaves it 0 — custody fails closed NOW
+ *  rather than waiting out a maybe-live second writer. The instance lock
+ *  waits: a container recreate's bind mount carries the predecessor's
+ *  frozen file forward and waiting out its decay beats a crash-loop. */
+export async function acquireLock(file: string, label: string, opts?: { staleWaitMs?: number }): Promise<() => Promise<void>> {
   const host = (await import('node:os')).hostname()
   const me = `${process.pid}@${host}`
+  const breakFile = `${file}.breaking`
   /** true/false on this host (kill(pid,0)); undefined when the owner is
-   *  remote — a shared-fs lock has no probeable pid, the beat decides */
+   *  remote — a shared-fs lock has no probeable pid, the beat decides.
+   *  EPERM = alive but unsignalable by us (different uid/integrity level) —
+   *  only ESRCH proves the pid is gone. */
   const pidAlive = (owner: string): boolean | undefined => {
     const m = /^(\d+)@(.*)$/.exec(owner)
     if (m === null || m[2] !== host) return undefined
     try {
       process.kill(Number(m[1]), 0)
       return true
+    } catch (e) {
+      return (e as NodeJS.ErrnoException).code !== 'ESRCH'
+    }
+  }
+  const inUse = (owner: string) => new Error(`${label} is in use by another nektar process (${owner}) — stop it first`)
+  type Probe = { vanished: true } | { vanished?: false; owner?: string; beatAge: number }
+  const probe = (): Probe => {
+    try {
+      const l = JSON.parse(readFileSync(file, 'utf8')) as { owner?: string; beat?: number }
+      const beat = typeof l.beat === 'number' ? l.beat : statSync(file).mtimeMs
+      return { owner: l.owner, beatAge: Date.now() - beat }
+    } catch {
+      try {
+        return { beatAge: Date.now() - statSync(file).mtimeMs }
+      } catch {
+        return { vanished: true }
+      }
+    }
+  }
+  // displaceable = heartbeat silent past the bound, or a local owner pid
+  // PROVEN dead (ESRCH). A torn file answers only through its mtime.
+  const breakable = (p: Exclude<Probe, { vanished: true }>): boolean => p.beatAge >= 20_000 || (p.owner !== undefined && pidAlive(p.owner) === false)
+  const tryCreate = (): boolean => {
+    try {
+      writeFileSync(file, JSON.stringify({ owner: me, beat: Date.now() }), { flag: 'wx' })
+      return true
     } catch {
       return false
     }
   }
-  const inUse = (owner: string) => new Error(`${label} is in use by another nektar process (${owner}) — stop it first`)
-  if (existsSync(file)) {
-    let refuse = false
-    let owner = 'unknown'
+  // a live-looking holder refuses by default (staleWaitMs=0 — the custody
+  // lock must never wait on a second writer). Opt-in callers wait for the
+  // beat to decay instead of crash-looping.
+  const until = Date.now() + (opts?.staleWaitMs ?? 0)
+  for (;;) {
+    if (tryCreate()) break
+    const p = probe()
+    if (p.vanished === true) continue // vanished between create and probe — the create path decides next pass
+    if (p.owner === me) break // a recycled pid adopted our identity — beating rewrites it anyway
+    if (!breakable(p)) {
+      if (Date.now() >= until) throw inUse(p.owner ?? 'unknown')
+      await nap(1_000)
+      continue
+    }
+    // stale/dead — arbitrate the displacement through the breaker token so
+    // exactly one acquirer removes the corpse
     try {
-      const l = JSON.parse(readFileSync(file, 'utf8')) as { owner: string; beat: number }
-      owner = l.owner
-      // a dead local pid is displaced now; a live or unverifiable one only
-      // after the heartbeat went silent
-      refuse = l.owner !== me && pidAlive(l.owner) !== false && Date.now() - l.beat < 20_000
+      writeFileSync(breakFile, me, { flag: 'wx' })
     } catch {
-      // unreadable or corrupt — the file mtime is the freshest beat a live
-      // writer could have left; only an old corpse yields the lock. A file
-      // that vanished mid-check is no lock at all
-      try {
-        refuse = Date.now() - statSync(file).mtimeMs < 20_000
-      } catch {
-        refuse = false
-      }
+      await nap(300) // another breaker mid-displacement — its outcome lands first
+      continue
     }
-    if (refuse) {
-      // a container recreate carries the old boot's lock file forward on
-      // the bind mount with a hostname the new boot can't pid-probe — the
-      // refuse path is then guaranteed to clear when the beat goes stale.
-      // Waiting it out here beats a crash-loop against the restart policy.
-      const until = Date.now() + 25_000
-      let cleared = false
-      while (Date.now() < until) {
-        await nap(1_000)
-        try {
-          const l2 = JSON.parse(readFileSync(file, 'utf8')) as { owner: string; beat: number }
-          if (Date.now() - l2.beat >= 20_000 || l2.owner === me || pidAlive(l2.owner) === false) {
-            cleared = true
-            break
-          }
-        } catch {
-          cleared = true // gone or corrupt — either way it yields below
-          break
-        }
-      }
-      if (!cleared) throw inUse(owner)
+    try {
+      // re-probe inside arbitration: a heartbeat that just landed is a live
+      // holder — backing off here is the whole point of the second look
+      const p2 = probe()
+      if (p2.vanished !== true && !breakable(p2)) continue
       try {
         rmSync(file)
       } catch {
-        /* a racing acquirer removed it first — the wx create below decides */
+        /* the corpse vanished on its own — the wx create below decides */
       }
-    } else {
+      if (tryCreate()) break
+      // a fresh acquirer won the recreate race — fair, re-probe it
+      continue
+    } finally {
       try {
-        rmSync(file)
+        rmSync(breakFile)
       } catch {
-        /* a racing acquirer removed it first — the wx create below decides */
+        /* another breaker cleaned it */
       }
     }
   }
-  const beat = () => writeFileSync(file, JSON.stringify({ owner: me, beat: Date.now() }))
-  try {
-    writeFileSync(file, JSON.stringify({ owner: me, beat: Date.now() }), { flag: 'wx' })
-  } catch {
-    throw inUse('lock race')
-  }
-  const beatTimer = setInterval(beat, 5_000)
+  // every beat verifies ownership first: a DISPLACED owner that kept
+  // beating would overwrite the winner's file, and its release would then
+  // delete it. A lapsed owner stops writing and stops deleting.
+  let owned = true
+  const beatTimer = setInterval(() => {
+    try {
+      const l = JSON.parse(readFileSync(file, 'utf8')) as { owner?: string }
+      if (l.owner !== me) {
+        owned = false
+        clearInterval(beatTimer)
+        return
+      }
+      writeFileSync(file, JSON.stringify({ owner: me, beat: Date.now() }))
+    } catch {
+      /* torn or vanished — the next beat re-checks (or stops) */
+    }
+  }, 5_000)
   beatTimer.unref()
   return async () => {
     clearInterval(beatTimer)
+    if (!owned) return
     try {
-      rmSync(file)
+      const l = JSON.parse(readFileSync(file, 'utf8')) as { owner?: string }
+      if (l.owner === me) rmSync(file)
     } catch {
-      /* already gone */
+      /* already gone or torn — a corpse decays by mtime either way */
     }
   }
 }
@@ -194,7 +235,10 @@ export async function acquireLock(file: string, label: string): Promise<() => Pr
 export const keyLockFile = (pkhHex: string): string => join(tmpdir(), `nektar-key-${pkhHex}.lock`)
 
 export const acquireInstanceLock = async (dataDir: string): Promise<{ release: () => Promise<void> }> => ({
-  release: await acquireLock(join(dataDir, 'instance.lock'), `data dir ${dataDir}`)
+  // the data-dir lock is the one a container recreate collides on: a fast
+  // recreate reads the predecessor's not-yet-stale beat — waiting it out
+  // here beats crash-looping on the restart policy
+  release: await acquireLock(join(dataDir, 'instance.lock'), `data dir ${dataDir}`, { staleWaitMs: 30_000 })
 })
 
 /** records.sqlite + shard store + automation ledger — the one opener for the
@@ -218,9 +262,14 @@ export async function openRecordsDb(dataDir: string) {
  *  verdict ('conflicted' from the abandon horizon, 'rejected' from a
  *  first-party refusal) flips the row back to 'confirmed' — those verdicts
  *  are ceilings, not truth. Errors log to stderr, never crash. */
-export function healLedgerOnProof(mem: NektarMemory, ledger: import('@nektar/automation').AutomationStore, tag: string): void {
+export function healLedgerOnProof(mem: NektarMemory, ledger: import('@nektar/automation').AutomationStore, tag: string): () => void {
   const nlog = mkLog(`nektar ${tag}`)
+  // onTxProof has no removal API — the stop flag is the unsubscribe: a
+  // proof landing between close() and store teardown must not launch an
+  // ambient-executor leg against closing stores
+  let live = true
   mem.onTxProof((txid) => {
+    if (!live) return
     // detached(): the heal is spawned work — a proof emitted inside an
     // automation leg must not hand that leg's deadline to the repair
     void detached(() =>
@@ -243,6 +292,9 @@ export function healLedgerOnProof(mem: NektarMemory, ledger: import('@nektar/aut
       })()
     )
   })
+  return () => {
+    live = false
+  }
 }
 
 /** The instance's transaction graph — parents for spends, BEEF for
@@ -568,9 +620,13 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
   // flag's coalescing, kept)
   rtDefs.push(await cronObject(EXEC_SVC.confirmer, { tick, ceilingMs: () => d.cfg.confirmEveryMs ?? 5000, log: d.nlog }, RT_OPTS_HEAVY))
   rtKicks.push({ service: EXEC_SVC.confirmer, handler: 'tick', key: 'main' })
+  // every wake gates on `closed` — mem/ChainEvents emitters outlive this
+  // region's teardown and several of them expose no unsubscribe, so the
+  // flag is the only removal that works on every subscription shape
+  let closed = false
   let anchorWake = false
   d.mem.onAnchorQueued(() => {
-    if (anchorWake) return
+    if (anchorWake || closed) return
     anchorWake = true
     void executor()
       .call({ service: EXEC_SVC.confirmer, handler: 'tick', key: 'main' }, {})
@@ -612,7 +668,7 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
   // event burst still coalesces to at most one queued pass
   rtDefs.push(await legObject(EXEC_SVC.watcher, watchLeg, RT_OPTS_HEAVY))
   const watchOnce = (): void => {
-    if (watching) return
+    if (watching || closed) return
     watching = true
     void executor()
       .call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})
@@ -621,11 +677,14 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
         watching = false
       })
   }
+  const relayHeight = (tip: number) => {
+    if (!closed) d.mem.events.emit('height', { tip })
+  }
   d.events.on('tick', watchOnce)
   d.events.on('height', watchOnce)
   // relay tip advances onto the memory emitter the way txAbandoned/reorg
   // already are — hosted automation wakes height-bounded work off it
-  d.events.on('height', (tip) => d.mem.events.emit('height', { tip }))
+  d.events.on('height', relayHeight)
   d.mem.events.on('broadcasterStatus', watchOnce)
 
   return {
@@ -634,6 +693,12 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
     tick,
     inflight: () => inflight,
     close: () => {
+      closed = true
+      // every subscription we took out comes off — a leaked wake fires
+      // ambient-executor calls against torn-down stores after close()
+      d.events.off('tick', watchOnce)
+      d.events.off('height', watchOnce)
+      d.events.off('height', relayHeight)
       d.mem.events.off('broadcasterStatus', watchOnce)
     }
   }

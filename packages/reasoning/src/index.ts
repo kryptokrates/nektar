@@ -10,7 +10,7 @@
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync } from 'node:fs'
 import { PublicKey, Signature, PrivateKey, type Transaction } from '@bsv/sdk'
-import { dsha256, utf8, toHex, fromHex, concat, computeLeaf, TAG_PROMISE, TAG_DELEGATION, writeFileAtomic } from '@nektar/core'
+import { dsha256, utf8, toHex, fromHex, concat, computeLeaf, TAG_PROMISE, TAG_DELEGATION, writeFileAtomic, canonicalJson } from '@nektar/core'
 import { verifyCertChain, type RotationCert } from '@nektar/identity'
 import { Datalog, parseLiteral, parseProgram, ParseError, type Fact, type Rule } from '@nektar/datalog'
 import { verifyFragment, type ProofBundle } from '@nektar/verify'
@@ -21,18 +21,10 @@ export * from './temporal.js'
 
 export const TRUTH_NOTE = 'Proofs show a cited record was committed, is unaltered and existed by its block time; they do not show the record is true.'
 
-/** canonical JSON: sorted keys, no whitespace — the only form that is hashed */
-export function canonicalJson(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`
-  if (v && typeof v === 'object') {
-    return `{${Object.keys(v)
-      .sort()
-      .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
-      .map((k) => `${JSON.stringify(k)}:${canonicalJson((v as Record<string, unknown>)[k])}`)
-      .join(',')}}`
-  }
-  return JSON.stringify(v)
-}
+/** canonical JSON — the shared contract lives in @nektar/core (schema.ts):
+ *  sorted keys, no whitespace, undefined object values dropped, bigint→string;
+ *  re-exported for existing import sites */
+export { canonicalJson }
 export const hashOf = (v: unknown): string => toHex(dsha256(utf8(canonicalJson(v))))
 
 // ── AGT-003 grounding ─────────────────────────────────────────────────────

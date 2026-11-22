@@ -343,15 +343,11 @@ export abstract class FundsBase implements Funds {
           candidates.push(fo)
         }
       }
-      // the floor is checked against the coin the take actually REMOVES,
-      // not the requested amount — the pick is smallest-cover ≥ sats and
-      // can be arbitrarily larger; owned - sats ≥ floor while owned -
-      // pick.satoshis < floor would let a non-deal take drain the book's
-      // last big coin and starve the deal lane it exists to protect
-      let owned = 0
       if (purpose !== 'deal') {
+        let owned = 0
         const stock = healed ? await this.store.list() : all
         for (const u of stock) if (!this.reserved.has(op(u.tx.id('hex'), u.vout))) owned += u.satoshis
+        if (owned - sats < floor) throw new FundsStarvedError(`funds: ${purpose} take of ${sats} sats would leave ${owned - sats} < deal floor ${floor}`)
       }
       // proven parents first, then shallowest unconfirmed ancestry, then
       // smallest-cover — the toolbox planner's documented order (completed →
@@ -395,8 +391,6 @@ export abstract class FundsBase implements Funds {
           await this.burn(id, pick.vout)
           continue
         }
-        if (purpose !== 'deal' && owned - pick.satoshis < floor)
-          throw new FundsStarvedError(`funds: ${purpose} take would remove ${pick.satoshis} sats leaving ${owned - pick.satoshis} < deal floor ${floor}`)
         this.reserved.add(op(id, pick.vout))
         if (pick.tx.merklePath === undefined) await this.deps.proofOf?.(pick.tx)
         return pick

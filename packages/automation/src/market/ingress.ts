@@ -150,14 +150,14 @@ export abstract class IngressOps extends MarketBase {
    *  refund_pending claims locked sats a hint cannot establish. */
   private async reconcileRefused(op: Operation): Promise<void> {
     try {
-      const pending = op.data.pendingEscrow as { cfg?: { direct?: boolean; refundAfter?: string | number }; utxo?: { txid?: string } } | undefined
-      const txid = (op.data.escrowTxid as string | undefined) ?? pending?.utxo?.txid
+      const pending = op.data.pendingEscrow
+      const txid = op.data.escrowTxid ?? pending?.utxo?.txid
       if (txid === undefined || this.d.txFacts === undefined || pending?.cfg?.direct === true) return
       if (!this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) return
       const facts = await this.d.txFacts(txid)
       if (facts.verdict !== 'mined') return
-      const cfg = (op.data.escrow as Record<string, unknown> | undefined) ?? pending?.cfg
-      const utxo = (op.data.utxo as Record<string, unknown> | undefined) ?? pending?.utxo
+      const cfg = op.data.escrow ?? pending?.cfg
+      const utxo = op.data.utxo ?? pending?.utxo
       if (cfg === undefined || utxo === undefined) return
       const refundAfter = Number(cfg.refundAfter ?? 0)
       await this.d.store.transition(op.operationId, op.revision, 'refund_pending', {
@@ -178,7 +178,7 @@ export abstract class IngressOps extends MarketBase {
    *  not leave a false money claim standing. */
   private async reconcileRefundProof(op: Operation): Promise<void> {
     try {
-      const txid = op.data.refundTxid as string | undefined
+      const txid = op.data.refundTxid
       if (txid === undefined || this.d.txFacts === undefined || op.data.refundProven === true) return
       if (!this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) return
       const verdict = (await this.d.txFacts(txid)).verdict

@@ -15,6 +15,18 @@ interface GrantLedger {
   parents?: string[]
 }
 
+/** absent → undefined (first boot is fine); corrupt → throw (fail loud —
+ *  silently treating unreadable persisted money state as empty is the
+ *  absent-vs-corrupt conflation that un-revokes grants) */
+const loadJson = <T>(file: string): T | undefined => {
+  if (!fs.existsSync(file)) return undefined
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as T
+  } catch (e) {
+    throw new Error(`budget: unreadable persisted ledger ${file}: ${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
 export class BudgetAuthority {
   private file: string
   private ledger: Record<string, GrantLedger>
@@ -22,36 +34,35 @@ export class BudgetAuthority {
 
   constructor(dir: string) {
     this.file = path.join(dir, 'budget.json')
-    const revokedFile = `${this.file}.revoked`
-    try {
-      this.revoked = new Set(JSON.parse(fs.readFileSync(revokedFile, 'utf8')))
-    } catch {}
-    try {
-      this.ledger = JSON.parse(fs.readFileSync(this.file, 'utf8'))
-    } catch {
-      this.ledger = {}
+    // absent ≠ corrupt: a missing file is first boot, an unreadable one must
+    // stop boot — silently loading {} would un-revoke grants / wipe the caps
+    const revoked = loadJson<string[]>(this.revokedFile())
+    if (revoked !== undefined) {
+      if (!Array.isArray(revoked)) throw new Error(`budget: corrupt revoked ledger ${this.revokedFile()}`)
+      this.revoked = new Set(revoked)
     }
+    this.ledger = loadJson<Record<string, GrantLedger>>(this.file) ?? {}
   }
 
   private revokedFile(): string {
     return `${this.file}.revoked`
   }
 
-  /** atomic write — a torn save must never read back as an empty ledger (R2) */
+  /** atomic write — a torn save must never read back as an empty ledger (R2).
+   *  A FAILED save throws: in-memory state stays authoritative for this
+   *  process, but silently dropping the write would let a restart
+   *  under-count committed / re-open a revoked grant — overspend of the cap
+   *  this class exists to enforce. Callers see the throw (fail closed). */
   private save(): void {
-    try {
-      const tmp = `${this.file}.tmp`
-      fs.writeFileSync(tmp, JSON.stringify(this.ledger, null, 1))
-      fs.renameSync(tmp, this.file)
-    } catch {}
+    const tmp = `${this.file}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify(this.ledger, null, 1))
+    fs.renameSync(tmp, this.file)
   }
 
   private saveRevoked(): void {
-    try {
-      const tmp = `${this.revokedFile()}.tmp`
-      fs.writeFileSync(tmp, JSON.stringify([...this.revoked]))
-      fs.renameSync(tmp, this.revokedFile())
-    } catch {}
+    const tmp = `${this.revokedFile()}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify([...this.revoked]))
+    fs.renameSync(tmp, this.revokedFile())
   }
 
   /** declare a grant's lifetime cap + its ancestor chain */

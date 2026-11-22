@@ -23,7 +23,7 @@ import {
   type Ref,
   type SigningWallet
 } from '@lightwebinc/bcommon'
-import type { FundingOut } from '@nektar/chain'
+import { broadcastProvablyDead, type FundingOut } from '@nektar/chain'
 import {
   encodeRecord,
   validateRecord,
@@ -329,7 +329,7 @@ export async function publishFinger(p: {
    *  readers ignore them; new readers resolve stores through them. */
   refs?: Ref[]
   takeFunding: (sats: number) => Promise<FundingOut>
-  broadcast: (tx: Transaction) => Promise<{ status: string }>
+  broadcast: (tx: Transaction) => Promise<{ status: string; description?: string }>
   fetchTx: (txid: string) => Promise<Transaction | undefined>
   allowHttp?: boolean
   onSpent?: (tx: Transaction) => void | Promise<void>
@@ -586,7 +586,15 @@ export async function publishFinger(p: {
     // back — the newest token that still airs is the true head — delete
     // the forked rows and re-anchor the state there; the next pass mints
     // on live ground instead of re-serving the corpse below.
-    if (prev !== undefined && p.journal.del !== undefined) {
+    // ONLY a provably-dead verdict may enter this: 'error' with no wire
+    // verdict (transport failure, unverdicted description) is
+    // submission_unknown — the bytes may have aired, so tombstoning then
+    // forges a second token for the same seq — a real chain fork — and
+    // onDied would free a live input for a double-spend. Keep every row:
+    // the mint is deterministic, so the next pass re-broadcasts the same
+    // bytes idempotently. Same doctrine as funds.died's broadcastProvablyDead.
+    const dead = broadcastProvablyDead(br.description ?? JSON.stringify(br))
+    if (dead && prev !== undefined && p.journal.del !== undefined) {
       let head: { seq: number; tokenTxid: string; tokenBeef: number[] } | undefined
       // bounded walk: each probed-dead row is deleted as we go, so a fork
       // deeper than the cap converges across passes instead of one publish
@@ -596,7 +604,20 @@ export async function publishFinger(p: {
         const t = await p.journal.get(`finger:token:${n}`)
         if (t === undefined) continue
         const tx = Transaction.fromBEEF(t.beef)
-        if (tx.merklePath !== undefined || (await p.broadcast(tx).catch(() => ({ status: 'error' as const }))).status === 'success') {
+        const pr =
+          tx.merklePath !== undefined
+            ? { status: 'success' as const }
+            : await p
+                .broadcast(tx)
+                .catch((e: unknown) => ({ status: 'error' as const, description: `transport: ${e instanceof Error ? e.message : String(e)}` }))
+        if (pr.status === 'success') {
+          head = { seq: n, tokenTxid: t.txid, tokenBeef: t.beef }
+          break
+        }
+        if (!broadcastProvablyDead(pr.description ?? JSON.stringify(pr))) {
+          // not provably dead — submission_unknown: maybe-aired, so keep the
+          // row and re-anchor on it. If it truly is dead its own verdict
+          // settles DEFINITIVE on a later pass and the walk resumes.
           head = { seq: n, tokenTxid: t.txid, tokenBeef: t.beef }
           break
         }
@@ -629,7 +650,7 @@ export async function publishFinger(p: {
         await p.journal.del(`finger:token:${seq}`)
       }
     }
-    if (p.onDied !== undefined) await p.onDied(tokenTx)
+    if (dead && p.onDied !== undefined) await p.onDied(tokenTx)
     throw new Error(`publishFinger: token broadcast refused ${JSON.stringify(br).slice(0, 120)}`)
   }
   if (p.onSpent !== undefined) await p.onSpent(tokenTx)

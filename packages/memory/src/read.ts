@@ -4,23 +4,15 @@
 import { existsSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { PublicKey, Signature } from '@bsv/sdk'
-import { utf8, toHex, dsha256, concat, field, TAG_RECEIPT_SIG, toSigner, nektarEnv, type Bytes } from '@nektar/core'
+import { utf8, toHex, dsha256, concat, field, TAG_RECEIPT_SIG, toSigner, nektarEnv, canonicalJson, type Bytes } from '@nektar/core'
 import { verifyProvenance } from '@nektar/log'
 import { decryptFragment, shredKey } from '@nektar/crypto'
 import * as idbind from '@nektar/identity'
 import type { AnswerReceipt, CallerIdentity, ZkClearance } from './types.js'
 import { MemRecords } from './records.js'
 
-/** recursive canonical JSON (sorted keys) — same scheme as reasoning/canonicalJson
- *  so digest bindings are stable across verifiers. */
-function canonicalJson(v: unknown): string {
-  if (v === null || typeof v !== 'object') return JSON.stringify(v)
-  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`
-  return `{${Object.keys(v as Record<string, unknown>)
-    .sort()
-    .map((k) => `${JSON.stringify(k)}:${canonicalJson((v as Record<string, unknown>)[k])}`)
-    .join(',')}}`
-}
+// canonicalJson comes from @nektar/core (schema.ts) — the one shared
+// contract, so digest bindings are stable across verifiers
 
 /** §18: the signed receipt digest — every receipt field except signature.
  *  Explicit field order (no JSON ambiguity): answer, each ref

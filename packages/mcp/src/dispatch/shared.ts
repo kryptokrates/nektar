@@ -36,7 +36,9 @@ const paidSaleEnabled = () => /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAID_DISC
 /** the paid-sale authority: an explicit NEKTAR_PAID_DISCLOSURE decides
  *  (truthy on, any other set value a hard off that outranks policy); unset,
  *  an approved policy carrying `disclosure.paid` is the grant — `policy
- *  approve` arms paid deals with no env and no restart */
+ *  approve` arms paid deals with no env and no restart. Store failures fail
+ *  CLOSED (can't establish a grant → deny) — the same direction priced
+ *  content fails in dispatch/index.ts */
 export async function paidSaleAuthorized(au: NektarMemory['automation'] | undefined): Promise<boolean> {
   const env = nektarEnv('NEKTAR_PAID_DISCLOSURE')
   if (env !== undefined && env !== '') return paidSaleEnabled()

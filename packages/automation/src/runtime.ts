@@ -132,14 +132,15 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       : await (async () => {
           const mod = await import('@nektar/bstack')
           const lp = cfg.dataDir ? join(cfg.dataDir, 'lanes.sqlite') : ':memory:'
-          const lanesExisted = cfg.dataDir === undefined || existsSync(lp)
           kxLanes = knexFactory({ client: 'sqlite3', connection: { filename: lp }, useNullAsDefault: true })
           await kxLanes.raw('PRAGMA journal_mode=WAL')
           await kxLanes.raw('PRAGMA busy_timeout=5000')
           // seed a fresh lanes.sqlite by copying lane-table ROWS — a file copy
-          // would drag every automation table in and miss WAL commits
-          if (!lanesExisted && existsSync(join(cfg.dataDir!, 'automation.sqlite')))
-            await mod.migrateLaneTables(join(cfg.dataDir!, 'automation.sqlite'), kxLanes)
+          // would drag every automation table in and miss WAL commits. The
+          // call is unconditional: the sentinel inside migrateLaneTables
+          // decides (a mid-copy crash leaves the file behind; file existence
+          // is NOT the end state)
+          if (cfg.dataDir && existsSync(join(cfg.dataDir, 'automation.sqlite'))) await mod.migrateLaneTables(join(cfg.dataDir, 'automation.sqlite'), kxLanes)
           return {
             mod,
             ledger: new mod.KnexTreeLedger(kxLanes),
@@ -435,8 +436,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       lanes === undefined
         ? undefined
         : async (from) => {
-            void lanes.journal.clearPaths?.(from).catch(() => undefined)
-            void lanes.ledger.unproveFrom?.(from).catch(() => undefined)
+            // awaited, not void'd — this runs inside a journaled ctx.run:
+            // returning early would journal 'done' while the demotion is
+            // still in flight, and a crash or swallowed rejection drops it
+            // permanently (one-shot send, no re-fire). A throw retries the
+            // step — that's exactly what the journal is for.
+            await Promise.all([lanes.journal.clearPaths?.(from), lanes.ledger.unproveFrom?.(from)])
           },
     // a tip advance frees every height-bound op (seize/refund deadlines)
     // at block arrival rather than the next floor tick
@@ -563,6 +568,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // pre-filter — entries record the due instant so expired arms evict
   // instead of clear()-bursting every pending send at the cap.
   const armedDue = new Map<string, number>()
+  let fanSeq = 0
   const walletCoord = engine.walletCoordinator
   const dealfanDeps = {
     pendingInbox: () => engine.pendingInbox(),
@@ -599,6 +605,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       sendDedup.set(id, { at: now, ms })
       return false
     },
+    // distinct ticks are distinct pokes — sentRecently above bounds their
+    // rate, the seq keeps the durable key deduping replays, not cadence
+    tickSeq: () => ++fanSeq,
     log
   }
   // the transport deps — outbox delivery as journaled invocations:

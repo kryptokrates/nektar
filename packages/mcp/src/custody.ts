@@ -7,6 +7,7 @@
 import { Transaction, LockingScript, MerklePath, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import { unlockP2PKH, signerAddress, spread, type SignerLike } from '@nektar/core'
 import { hintRejected, hintSeen, type FundingOut, type Funds, type FundsPurpose } from '@nektar/chain'
+import { broadcastProvablyDead } from '@nektar/automation'
 
 export interface CustodyOpsDeps {
   funds: Funds
@@ -232,7 +233,12 @@ export class CustodyOps {
     }
     const br = await this.deps.broadcast(tx)
     if (br.status !== 'success') {
-      await this.deps.funds.died(tx)
+      // died() frees the spend's inputs — only a PROVABLY dead tx may die.
+      // A transport/'error' verdict is submission_unknown: the bytes may
+      // have aired, and freeing them is a double-spend. The reservation
+      // stays; the ledger's resubmit path settles the tx (re-air → spent,
+      // or definitive reject → the heal path marks it dead).
+      if (broadcastProvablyDead(br.description ?? '')) await this.deps.funds.died(tx)
       throw new Error(`sendSats broadcast failed: ${br.description ?? 'unknown'}`)
     }
     const rejected = await this.accepted(tx.id('hex'))
@@ -271,7 +277,7 @@ export class CustodyOps {
     await tx.sign()
     const br = await this.deps.broadcast(tx)
     if (br.status !== 'success') {
-      await this.deps.funds.died(tx)
+      if (broadcastProvablyDead(br.description ?? '')) await this.deps.funds.died(tx)
       throw new Error(`provisionPay broadcast failed: ${br.description ?? 'unknown'}`)
     }
     const rejected = await this.accepted(tx.id('hex'))

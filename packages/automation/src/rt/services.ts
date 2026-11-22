@@ -16,7 +16,7 @@
 // so tests invoke the exact code the server invokes.
 import type * as restate from '@restatedev/restate-sdk'
 import { WAITS } from '../waits.js'
-import type { AutomationStore, OutboxItem, TxState, WalletTx } from '../store.js'
+import type { AutomationStore, MarketOpData, OutboxItem, TxState, WalletTx } from '../store.js'
 import { runTxIntents, type TxEffects } from '../machines/effects.js'
 import { EXEC_SVC, inRtScope, type RtSend } from './exec.js'
 import type { CustodyLeg, TxObserve } from './emit.js'
@@ -464,6 +464,16 @@ export interface DealfanDeps {
    *  the window is also the recovery bound for a send whose invocation was
    *  dropped before running (killed/deaf want-gate early-returns ride it). */
   sentRecently?: (id: string, ms: number) => boolean
+  /** per-tick monotonic sequence — the durable advance/reconcile key carries
+   *  it so DISTINCT ticks are distinct sends: a windowed bucket collapses
+   *  every tick in one domain-time window into a single leg, starving ops
+   *  whose time/event gates matured between ticks. Journaled via run() so a
+   *  replay re-issues the same seq (deduped), while the next tick's sends
+   *  land fresh. sentRecently stays the frequency bound — the key dedups
+   *  replays, not cadence. In-memory across restarts: a reset seq collides
+   *  with a still-pending same-seq leg, which is harmless — the pending leg
+   *  IS the same poke. */
+  tickSeq?: () => number
   log: (line: string) => void
 }
 
@@ -493,29 +503,37 @@ export const dealOpKey = (o: DealOpRef): string => (o.wantId !== undefined ? `ev
 
 /** wantId out of an op row — `data.want` is the SignedWant on both buyer
  *  and seller ops; non-market ops have none */
-export const opWantId = (o: { data: Record<string, unknown> }): string | undefined => (o.data.want as { want?: { wantId?: string } } | undefined)?.want?.wantId
+export const opWantId = (o: { data: MarketOpData }): string | undefined => o.data.want?.want?.wantId
 
 export const dealfanTickBody =
   (deps: DealfanDeps, service: string = EXEC_SVC.dealfan) =>
   async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
     const dup = deps.sentRecently ?? (() => false)
-    // the fan keys carry the same window the in-memory sentRecently map
-    // throttles on — but the map dies at restart while queued invocations
-    // live on. The bucketed ingress key is the durable layer: a post-restart
-    // re-fan dedupes against the still-pending leg instead of piling one
-    // fresh invocation per row on the key's FIFO (rt/fan-dedup-restart-gap).
-    const now0 = (deps.now ?? Date.now)()
+    // the fan keys carry the durable dedup layer — sentRecently is the cheap
+    // in-memory pre-filter, the ingress key dedups the send that survives a
+    // restart (rt/fan-dedup-restart-gap). Event sends stay windowed on the
+    // domain clock: a pending inbox row is re-fanned every tick and the
+    // window is the right re-fire bound for a gated early-return. Advance/
+    // reconcile sends are per-TICK work pokes — a windowed key collapses
+    // distinct ticks into one leg and starves ops whose gates matured
+    // between ticks, so they carry the tickSeq when one is wired.
+    // EVERY decision input lives inside a journaled step: the sentRecently
+    // map, the time buckets, the seq, and ceilingMs() all differ across a
+    // replay — an unjournaled gate produces a different send stream on
+    // replay and the invocation dies JournalMismatchError instead of
+    // completing.
+    const now0 = await run('now', async () => (deps.now ?? Date.now)())
     const eb = Math.floor(now0 / WAITS.fanEventResend.ms)
-    const ab = Math.floor(now0 / WAITS.fanAdvanceResend.ms)
+    const ab = deps.tickSeq === undefined ? Math.floor(now0 / WAITS.fanAdvanceResend.ms) : await run('fanseq', async () => deps.tickSeq!())
     const inbox = await run('inbox', () => deps.pendingInbox())
     for (const i of inbox)
-      if (!dup(`ev:${i.source}:${i.messageId}`, WAITS.fanEventResend.ms))
+      if (!(await run(`dup:ev:${i.source}:${i.messageId}`, async () => dup(`ev:${i.source}:${i.messageId}`, WAITS.fanEventResend.ms))))
         await send({ service: EXEC_SVC.deal, handler: 'event', key: dealEventKey(i) }, i, {
           idempotencyKey: `fan:ev:${i.source}:${i.messageId}:${eb}`
         })
     const ops = await run('ops', () => deps.liveOps())
     for (const o of ops)
-      if (!dup(`adv:${o.operationId}`, WAITS.fanAdvanceResend.ms))
+      if (!(await run(`dup:adv:${o.operationId}`, async () => dup(`adv:${o.operationId}`, WAITS.fanAdvanceResend.ms))))
         await send(
           { service: EXEC_SVC.deal, handler: 'advance', key: dealOpKey(o) },
           { op: o.operationId },
@@ -523,7 +541,7 @@ export const dealfanTickBody =
         )
     const rec = await run('reconcile', () => deps.reconcileOps())
     for (const o of rec)
-      if (!dup(`rec:${o.operationId}`, WAITS.fanAdvanceResend.ms))
+      if (!(await run(`dup:rec:${o.operationId}`, async () => dup(`rec:${o.operationId}`, WAITS.fanAdvanceResend.ms))))
         await send(
           { service: EXEC_SVC.deal, handler: 'reconcile', key: dealOpKey(o) },
           { op: o.operationId },
@@ -539,9 +557,9 @@ export const dealfanTickBody =
     // so an unkeyed arm adds a permanent parallel chain per extra tick and
     // the delayed-send backlog grows without bound (rt/arm-multiplication).
     // Quantizing on ceiling windows converges all chains to ≤1 pending arm.
-    const ceil = deps.ceilingMs()
+    const ceil = await run('ceiling', async () => deps.ceilingMs())
     if (ceil > 0) {
-      const now = (deps.now ?? Date.now)()
+      const now = await run('armNow', async () => (deps.now ?? Date.now)())
       await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` })
     }
     return { events: inbox.length, advanced: ops.length, reconciled: rec.length }
@@ -754,10 +772,12 @@ export const cronTickBody =
     // The arm is content-keyed on its cadence window — every tick invocation
     // arms (boot kicks and event pokes run this same body), so unkeyed arms
     // add one permanent parallel chain per poke (rt/arm-multiplication).
-    // The window converges all chains to ≤1 pending arm.
-    const ceil = deps.ceilingMs()
+    // The window converges all chains to ≤1 pending arm. The ceiling and
+    // clock are journaled too — replaying a tick re-arms with the journaled
+    // values, not a different command stream.
+    const ceil = await run('ceiling', async () => deps.ceilingMs())
     if (ceil > 0) {
-      const now = (deps.now ?? Date.now)()
+      const now = await run('armNow', async () => (deps.now ?? Date.now)())
       await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` })
     }
     return { done: true }

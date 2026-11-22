@@ -19,6 +19,12 @@ export const handlers: Record<string, ToolHandler> = {
     const keyId = args.newOwnerKeyId === undefined ? undefined : String(args.newOwnerKeyId)
     const wif = args.newOwnerWif === undefined ? undefined : String(args.newOwnerWif)
     if ((keyId === undefined) === (wif === undefined)) throw new Error('rotate needs exactly one of newOwnerKeyId (wallet) or newOwnerWif (legacy)')
+    // owner keyIDs are never persisted — the resumed shard signer re-derives
+    // 'nektar-shard:<shard>' under wallet custody (or reads keys.json under
+    // held-key). Any other keyID can never be re-derived: the next boot's
+    // 'head owner is not this shard key' would brick the shard.
+    if (keyId !== undefined && keyId !== `nektar-shard:${String(args.shard)}`)
+      throw new Error(`rotate: keyID '${keyId}' cannot be re-derived after restart — only 'nektar-shard:<shard>' survives (owner keyIDs are not persisted)`)
     const { PrivateKey } = await import('@bsv/sdk')
     const newKey = keyId !== undefined ? mem.walletKeySigner(keyId) : PrivateKey.fromWif(wif!)
     const r = await mem.rotateShard(args.shard, newKey)

@@ -88,12 +88,8 @@ const SECRET = /WIF|PASS|KEY|TOKEN|SECRET/i
 const NETWORKS = ['regtest', 'testnet', 'main']
 
 const read = () => (existsSync(envPath) ? readFileSync(envPath, 'utf8') : '')
-const parse = (txt) =>
-  txt
-    .split(/\r?\n/)
-    .map((l) => l.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/))
-    .filter(Boolean)
-    .map((m) => ({ key: m[1], val: m[2].trim() }))
+const { parseDotEnv } = await import('./dotenv.mjs')
+const parse = (txt) => Object.entries(parseDotEnv(txt)).map(([key, val]) => ({ key, val }))
 const get = (key, env) => env.find((e) => e.key === key)?.val
 const mask = (key, val) => (SECRET.test(key) && val ? '***' : val)
 

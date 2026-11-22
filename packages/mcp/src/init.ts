@@ -19,7 +19,7 @@
 // The key never leaves the gitignored .env; only the ADDRESS is printed.
 // The AI user never sees any of this — the server is the wallet holder
 // (operator-pays model).
-import { nektarEnv } from '@nektar/core'
+import { nektarEnv, parseDotEnv } from '@nektar/core'
 import { PrivateKey } from '@bsv/sdk'
 import { existsSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -42,15 +42,7 @@ if (network !== undefined && network !== 'regtest') {
   process.exit(2)
 }
 
-function readEnv(p: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  if (!existsSync(p)) return out
-  for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
-    const m = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
-    if (m) out[m[1]] = m[2].trim()
-  }
-  return out
-}
+const readEnv = (p: string): Record<string, string> => (existsSync(p) ? parseDotEnv(readFileSync(p, 'utf8')) : {})
 function upsertEnv(p: string, key: string, value: string): void {
   const lines = existsSync(p) ? readFileSync(p, 'utf8').split(/\r?\n/) : []
   const re = new RegExp(`^${key}=`)

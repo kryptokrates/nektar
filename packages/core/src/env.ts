@@ -44,6 +44,33 @@ export function readNektarEnv(env: EnvSource = process.env): EnvSource {
   return out
 }
 
+/** THE .env reader — the one parser contract for every reader (bin, init,
+ *  watcher, tools/*). '#' starts a comment only after whitespace outside
+ *  quotes, surrounding quotes strip instead of becoming part of the value,
+ *  'export K=' is accepted, whitespace around '=' tolerated. A weak matcher
+ *  feeds "value" (quotes included) to RPC auth — this contract exists
+ *  because exactly that happened once. */
+export function parseDotEnv(text: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line === '' || line.startsWith('#')) continue
+    const m = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/)
+    if (!m) continue
+    let v = m[2].trim()
+    if (v.startsWith('"') || v.startsWith("'")) {
+      const q = v[0]
+      const end = v.indexOf(q, 1)
+      v = end === -1 ? v.slice(1) : v.slice(1, end)
+    } else {
+      const h = v.indexOf(' #')
+      if (h !== -1) v = v.slice(0, h).trim()
+    }
+    out[m[1]] = v
+  }
+  return out
+}
+
 /** baked-in bootstrap hosts — the plural Layer-0 entry points of a network
  *  whose lanes verify everything they serve (signature + SPV + funding
  *  binding), so a seed host is untrusted by design: the worst it does is

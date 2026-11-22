@@ -55,7 +55,7 @@ export {
   DEFAULT_SCORE_WEIGHTS,
   rankOffers
 } from './scoring.js'
-export { type WalletDeps, type TxObservation, WalletCoordinator } from './wallet.js'
+export { type WalletDeps, type TxObservation, WalletCoordinator, DEFINITIVE, NEVER_LEFT, broadcastProvablyDead } from './wallet.js'
 export {
   type ToolboxHandle,
   type ToolboxStoreHandle,

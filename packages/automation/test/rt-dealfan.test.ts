@@ -138,7 +138,7 @@ test('reconcileOp: a landed refused escrow arms refund_pending on the op key', a
       policyHash: hash,
       network: 'regtest',
       state: 'funding_failed',
-      data: { escrowTxid: 'tx-esc', pendingEscrow: { cfg: { refundAfter: 500 }, utxo: { txid: 'tx-esc' } } }
+      data: { escrowTxid: 'tx-esc', pendingEscrow: { cfg: { refundAfter: 500 }, utxo: { txid: 'tx-esc', vout: 0, satoshis: 1, script: 'aa' } } }
     })
     const engine = new MarketEngine(deps(store, { txFacts: async () => ({ verdict: 'mined' as const, txid: 'tx-esc' }) }))
     await engine.reconcileOp(operation.operationId)

@@ -8,7 +8,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { MerklePath } from '@bsv/sdk'
 import type { NektarMemory } from './memory.js'
 import { TOOLS, visibleTools, callTool } from './server.js'
-import { badgeSvg, cardPage, dashboardState, dashboardFile, verifyPage } from './pages.js'
+import { badgeSvg, cardPage, dashboardState, dashboardFile, verifyPage, safeHost } from './pages.js'
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))
 
@@ -414,7 +414,11 @@ export function createHttpApi(
           url.pathname === '/v1/lane' ||
           // self-serve testnet drip — unauthenticated by design; the route
           // itself refuses unless NEKTAR_FAUCET=1 and never on main
-          url.pathname === '/v1/faucet'
+          url.pathname === '/v1/faucet' ||
+          // x402 invoice discovery — a paying agent can't hold our bearer;
+          // the quote is price+invoice data, the same disclosure class as
+          // /.well-known/x402
+          url.pathname === '/v1/pay/quote'
         const operatorApproval =
           url.pathname.startsWith('/v1/automation/approvals/') &&
           nektarEnv('NEKTAR_OPERATOR_TOKEN') &&
@@ -550,7 +554,11 @@ export function createHttpApi(
           // running lanes via au.addHost — no restart, no env edit.
           if (req.method === 'POST' && url.pathname === '/v1/hosts') {
             const operator = nektarEnv('NEKTAR_OPERATOR_TOKEN')
-            if (operator && req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required' })
+            // hard gate like the approvals route: an unset token must REFUSE,
+            // not silently open the mutation to any agent-bearer holder —
+            // blocked/added hosts persist across restarts
+            if (!operator) return send(403, { error: 'host join/leave disabled — set NEKTAR_OPERATOR_TOKEN' })
+            if (req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required' })
             const bu = ((await body(req).catch(() => ({}))) as { url?: unknown }).url
             const u0 = (typeof bu === 'string' ? bu : '').trim()
             if (u0 === '') return send(400, { error: 'url required' })
@@ -585,7 +593,8 @@ export function createHttpApi(
           // au.removeHost splices the live lane array + marks it down now.
           if (req.method === 'DELETE' && url.pathname === '/v1/hosts') {
             const operator = nektarEnv('NEKTAR_OPERATOR_TOKEN')
-            if (operator && req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required' })
+            if (!operator) return send(403, { error: 'host join/leave disabled — set NEKTAR_OPERATOR_TOKEN' })
+            if (req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required' })
             const u = (url.searchParams.get('url') ?? '').trim().replace(/\/+$/, '')
             if (u === '') return send(400, { error: 'url required' })
             if (!marketHosts().includes(u)) return send(404, { error: `${u} is not a market host` })
@@ -654,7 +663,7 @@ export function createHttpApi(
               }
               const result = await verifyReceipt(mem, arg)
               if (url.searchParams.get('format') === 'html' || req.headers.accept?.includes('text/html')) {
-                const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${req.headers.host ?? 'localhost'}`
+                const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${safeHost(req.headers.host)}`
                 const q = tok ? `r=${tok}` : `s=${seq}`
                 mem.metrics.inc('nektar_verify_views_total', {}, 1, 'verify page views')
                 // viral edge: cited shards this operator offers publicly become

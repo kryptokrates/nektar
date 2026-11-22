@@ -64,7 +64,10 @@ if [ ! -f .env ]; then
 fi
 set_kv() { # set_kv KEY VALUE — replace the KEY=... line in .env
   if grep -q "^$1=" .env; then
-    sed -i "s|^$1=.*|$1=$2|" .env
+    # awk, not sed: the value is data — a sed replacement interprets '&'
+    # (the whole match) and '|' (the delimiter), so a URL carrying either
+    # corrupts the line into a malformed export
+    awk -v k="$1" -v v="$2" 'index($0, k "=") == 1 {print k "=" v; next} {print}' .env >.env.tmp && mv .env.tmp .env
   else
     printf "%s=%s\n" "$1" "$2" >>.env
   fi

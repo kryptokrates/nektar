@@ -172,3 +172,30 @@ test('client custody: sale offer → escrow → refund signs through the injecte
   assert.ok(!remaining.some((u) => u.tx.id('hex') === ftxId && bookSpent.has(u.vout)), 'consumed inputs left the spendable book')
   assert.equal(existsSync(join(dir, 'keys.json')), false, 'no keys.json written on the client path')
 })
+
+test('client custody: owner rotation refuses what restart cannot re-derive', async (t) => {
+  const chain = (await testChain(t))!
+  const calls: Calls = { createSignature: 0, getPublicKey: 0, createHmac: 0, sigArgs: [] }
+  const stub = stubSubstrate(new ProtoWallet(PrivateKey.fromRandom()), calls)
+  const funds = new MemoryFunds(listFundsStore(), { pkhHex: '00'.repeat(20) })
+  const mem = new NektarMemory(chain, fundsAsFunder(funds, 'deal'), undefined, {
+    funds,
+    wallet: stub,
+    batchPolicy: { maxLeaves: 1 },
+    modelId: 'test-model-1',
+    height: () => chain.currentHeight()
+  })
+  // the invariant boundary is AuthorshipOps.rotateShard — both entry paths
+  // hit the same gate. A raw key under external custody persists nothing:
+  // restart re-derives 'nektar-shard:<shard>' and resume bricks on 'head
+  // owner is not this shard key' — plus persistKeys would leak the material
+  // into any legacy keys.json.
+  await assert.rejects(mem.rotateShard('manual', PrivateKey.fromRandom()), /external wallet custody/)
+  await assert.rejects(callTool(mem, 'rotate', { shard: 'manual', newOwnerWif: PrivateKey.fromRandom().toWif() }), /external wallet custody/)
+  // a non-default keyID is the same brick under either custody — nothing
+  // persists it, and only 'nektar-shard:<shard>' re-derives at boot
+  await assert.rejects(callTool(mem, 'rotate', { shard: 'manual', newOwnerKeyId: 'custom:1' }), /cannot be re-derived/)
+  // the derivable keyID passes both gates — the failure is the anchor
+  // lookup, not the custody boundary
+  await assert.rejects(callTool(mem, 'rotate', { shard: 'manual', newOwnerKeyId: 'nektar-shard:manual' }), /no anchor/)
+})

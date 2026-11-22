@@ -65,9 +65,11 @@ export class CatalogOps {
   }
 
   /** the content price a manifest declares for `kind` ('pack' or 'read' via
-   *  'answer' offers) — 0 when free/undeclared. Drives the paid-content gate. */
+   *  'answer' offers) — 0 when free/undeclared. Drives the paid-content gate:
+   *  lookup failures PROPAGATE (a store we cannot ask cannot prove the shard
+   *  is free — the gate fails closed) */
   async contentPrice(shard: string, kind: 'read' | 'pack'): Promise<number> {
-    const m = await this.shardManifest(shard).catch(() => undefined)
+    const m = await this.shardManifest(shard)
     const match = m?.offers?.find((o) => (kind === 'read' ? o.kind === 'answer' : o.kind === 'pack') && Number.isSafeInteger(o.priceSats))
     return match?.priceSats ?? 0
   }

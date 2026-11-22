@@ -109,7 +109,8 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
           txSpent: async (w) => {
             await mem.funds.spent(await rebuild(w))
           }
-        }
+        },
+        now
       })
       const a = { mem, store, engine, pub, policyHash, name }
       agents.set(name, a)

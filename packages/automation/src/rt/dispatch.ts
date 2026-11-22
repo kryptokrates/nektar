@@ -12,7 +12,7 @@
 // so fan-out asserts are deterministic.
 import { detached } from '@nektar/core'
 import type { Executor, InvokeTarget, SendOpts, RtSend } from './exec.js'
-import { EXEC_SVC, inRtScope } from './exec.js'
+import { EXEC_SVC, inRtScope, rtScopeKey } from './exec.js'
 import {
   txObserveBody,
   txResubmitBody,
@@ -71,6 +71,15 @@ export class Dispatcher implements LocalDispatch {
   // completed invocation still dedupes later sends — that persistence is
   // exactly the rt/dedup-kills-retry class this models.
   private readonly idempotent = new Map<string, Promise<unknown>>()
+  private readonly idemResolve = new Map<string, { res: (v: unknown) => void; rej: (e: unknown) => void }>()
+  // the chain scope each pending invocation is queued on — work behind a
+  // call-held chain CANNOT run until that call's handler returns, so a
+  // drain() must not join it (waiting on work that waits on you is the
+  // deadlock this pair exists to refuse). callScopes marks scopes with an
+  // in-flight call — global, on purpose: the drain exclusion is about who
+  // CAN run, not who is asking.
+  private readonly pendingScopes = new Map<Promise<unknown>, string>()
+  private readonly callScopes = new Set<string>()
   private inDispatch = 0
   private closed = false
 
@@ -122,12 +131,11 @@ export class Dispatcher implements LocalDispatch {
     // ingress dedup — same key = the original invocation, nothing new runs.
     // Recorded at accept-time: a delayed arm is already the invocation, so a
     // dup arriving during the delay dedupes too
-    let idemResolve: ((v: unknown) => void) | undefined
     if (opts?.idempotencyKey !== undefined) {
       const k = this.idemKey(target, opts.idempotencyKey)
       if (this.idempotent.has(k)) return Promise.resolve()
-      const tracked = new Promise<unknown>((res) => {
-        idemResolve = res
+      const tracked = new Promise<unknown>((res, rej) => {
+        this.idemResolve.set(k, { res, rej })
       })
       this.idempotent.set(k, tracked)
       void tracked.catch(() => undefined) // the stored copy never surfaces as unhandled
@@ -136,29 +144,46 @@ export class Dispatcher implements LocalDispatch {
       if (this.closed) return
       // dispatched work exits the caller's leg — a send fired inside a
       // bound leg must not hand that deadline to the spawned invocation
-      // (ALS propagates through queueMicrotask/setTimeout otherwise)
+      // (ALS propagates through queueMicrotask/setTimeout otherwise). The rt
+      // scope exits too: a fresh invocation holds NO keys — inheriting the
+      // spawner's txKey/custodyKey would let it "go direct" past locks it
+      // never took, a scope real Restate can't produce.
+      const scope = target.key === undefined ? undefined : `${target.service}/${target.key}`
       const invoke = (): Promise<unknown> =>
-        detached(async () => {
-          this.inDispatch++
-          try {
-            await fn(arg, target.key)
-          } finally {
-            this.inDispatch--
-          }
-        })
-      const p = target.key === undefined ? invoke() : this.chain(`${target.service}/${target.key}`, invoke)
+        detached(async () =>
+          inRtScope({ txKey: undefined, custodyKey: undefined, held: scope !== undefined ? [scope] : [] }, async () => {
+            if (this.closed) return undefined // queued behind a call that outlived close()
+            this.inDispatch++
+            try {
+              return await fn(arg, target.key)
+            } finally {
+              this.inDispatch--
+            }
+          })
+        )
+      const p = scope === undefined ? invoke() : this.chain(scope, invoke)
       // the tracked dedup record settles with the invocation — a dup call
-      // on the same key attaches to this outcome
+      // on the same key attaches to this outcome, failure included (an
+      // attach that silently resolved undefined would hide a dead send)
+      const k = opts?.idempotencyKey !== undefined ? this.idemKey(target, opts.idempotencyKey) : undefined
       void p.then(
-        (v) => idemResolve?.(v),
-        () => idemResolve?.(undefined)
+        (v) => {
+          if (k !== undefined) this.idemResolve.get(k)?.res(v)
+        },
+        (e) => {
+          if (k !== undefined) this.idemResolve.get(k)?.rej(e)
+        }
       )
       this.pending.add(p)
+      if (scope !== undefined) this.pendingScopes.set(p, scope)
       void p
         .catch((e: unknown) => {
           this.log(`executor: ${target.service}/${target.handler}: ${(e as Error).message}`)
         })
-        .finally(() => this.pending.delete(p))
+        .finally(() => {
+          this.pending.delete(p)
+          this.pendingScopes.delete(p)
+        })
     }
     if (opts?.delayMs !== undefined && opts.delayMs > 0) {
       // setTimeout is int32 — a delayed send past ~24.8d (the 180-day
@@ -180,9 +205,21 @@ export class Dispatcher implements LocalDispatch {
     return Promise.resolve()
   }
 
-  /** await every fired send — makes fan-out asserts deterministic. */
+  /** await every fired send — makes fan-out asserts deterministic. Sends
+   *  queued behind a chain an in-flight call() still holds are excluded:
+   *  they cannot run until that call returns, so joining them from the call
+   *  itself is a deadlock by construction. The outer caller joins them once
+   *  the key releases (close()'s drain sees them unblocked). */
   async drain(): Promise<void> {
-    for (let i = 0; i < 50 && this.pending.size > 0; i++) await Promise.allSettled(this.pending)
+    for (let i = 0; i < 50; i++) {
+      const joinable = [...this.pending].filter((p) => {
+        const s = this.pendingScopes.get(p)
+        return s === undefined || !this.callScopes.has(s)
+      })
+      if (joinable.length === 0) return
+      await Promise.allSettled(joinable)
+      if (this.pending.size === 0) return
+    }
   }
 
   async call<T>(target: InvokeTarget, arg: unknown, opts?: Pick<SendOpts, 'idempotencyKey'>): Promise<T> {
@@ -204,16 +241,47 @@ export class Dispatcher implements LocalDispatch {
     // send can't join — pending contains that very dispatch and draining
     // would deadlock on itself; the outer caller's drain covers it.
     const inner = this.inDispatch > 0
-    const p = target.key === undefined ? fn(arg, target.key) : this.chain(`${target.service}/${target.key}`, () => fn(arg, target.key))
+    const scope = target.key === undefined ? undefined : `${target.service}/${target.key}`
+    // same-key self-call: THIS invocation already holds the chain, so
+    // queueing behind it hangs forever — the handler would wait on itself.
+    // 'held' is per-invocation (ALS): a scope some OTHER leg holds is not a
+    // deadlock, the call just serializes on the object's FIFO — the normal
+    // Restate same-key ordering (resubmit's emit + reconcile's markRejected
+    // racing one txid both land). Real Restate relies on rtScopeKey to route
+    // same-key work direct — a raw call here is a caller bug; a thrown error
+    // beats a silent hang.
+    if (scope !== undefined && rtScopeKey()?.held?.includes(scope))
+      throw new Error(`executor: re-entrant call on held key ${scope} — route same-key work through inRtScope`)
+    const p =
+      scope === undefined
+        ? fn(arg, target.key)
+        : this.chain(scope, () =>
+            // the handler runs holding this scope — nested calls see it in
+            // 'held' alongside whatever the caller already held
+            inRtScope({ held: [...(rtScopeKey()?.held ?? []), scope] }, () => fn(arg, target.key))
+          )
     // the record IS the invocation promise — a dup call attaches mid-flight
     // and resolves to the same result, terminal error included
     if (idemSet !== undefined) {
       this.idempotent.set(idemSet.key, p)
       void p.catch(() => undefined)
     }
-    const r = (await p) as T
-    if (!inner) await this.drain()
-    return r
+    // a call is in-flight work too — close() must join it, or a handler
+    // still running fires post-teardown sends against closing stores
+    this.pending.add(p)
+    if (scope !== undefined) {
+      this.pendingScopes.set(p, scope)
+      this.callScopes.add(scope)
+    }
+    try {
+      const r = (await p) as T
+      if (!inner) await this.drain()
+      return r
+    } finally {
+      this.pending.delete(p)
+      this.pendingScopes.delete(p)
+      if (scope !== undefined) this.callScopes.delete(scope)
+    }
   }
 
   /** flush pending delayed sends, then join in-flight work — called on
@@ -223,6 +291,10 @@ export class Dispatcher implements LocalDispatch {
     this.closed = true
     for (const t of this.timers) clearTimeout(t)
     this.timers.clear()
+    // a dup call attaching to a never-fired send must not hang on the
+    // tracked record after close — settle every outstanding record
+    for (const r of this.idemResolve.values()) r.res(undefined)
+    this.idemResolve.clear()
     this.idempotent.clear()
     await this.drain()
   }
@@ -369,6 +441,7 @@ interface EngineSurface {
 
 export const wireEngine = (ex: LocalDispatch, engine: EngineSurface, d: WireEngineDeps): void => {
   const log = d.log ?? (() => {})
+  let fanSeq = 0
   const liveOps = async () => (await d.store.operations({ states: NONTERMINAL })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) }))
   const reconcileOps = async () => {
     // reconcile_at is stamped on the store's clock — compare on the caller's
@@ -399,6 +472,7 @@ export const wireEngine = (ex: LocalDispatch, engine: EngineSurface, d: WireEngi
       resubmitPending: () => engine.resubmitTick(),
       ceilingMs: d.ceilingMs ?? (() => 0),
       now: d.now ?? (() => Date.now()),
+      tickSeq: () => ++fanSeq,
       log
     },
     transport: {

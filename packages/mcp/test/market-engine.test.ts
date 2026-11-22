@@ -85,7 +85,8 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
         txSpent: async (w) => {
           await mem.funds.spent(await rebuild(w))
         }
-      }
+      },
+      now
     })
     return engine
   }
@@ -527,5 +528,5 @@ test('want-TTL race: a live want republishes at the collection boundary instead 
   await w.round([bob])
   st = (await bob.engine.status(operationId))!.operation
   assert.equal(st.state, 'expired')
-  assert.equal(st.data.cause ?? (await bob.store.events(operationId)).at(-1)?.cause, 'no_qualifying_offer')
+  assert.equal((await bob.store.events(operationId)).at(-1)?.cause, 'no_qualifying_offer')
 })

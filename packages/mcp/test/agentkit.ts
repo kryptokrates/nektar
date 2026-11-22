@@ -156,8 +156,15 @@ export const respawnAgent = async (a: TestAgent, o: TestAgentOpts): Promise<Test
  *  dealfan's self-arming floor is off (ceilingMs 0 = event-driven only);
  *  the outbox falls back to engine.pumpOutbox since store.outboxReady is a
  *  runtime-installed hook. Mirrors runtime.ts's dep assembly. */
-export const wireEngine = (ex: Dispatcher, engine: MarketEngine, store: AutomationStore, opts: { fx?: TxEffects; log?: (line: string) => void } = {}): void => {
+export const wireEngine = (
+  ex: Dispatcher,
+  engine: MarketEngine,
+  store: AutomationStore,
+  opts: { fx?: TxEffects; log?: (line: string) => void; now?: () => number } = {}
+): void => {
   const log = opts.log ?? (() => {})
+  const now = opts.now ?? (() => Date.now())
+  let fanSeq = 0
   wireTx(ex, { store, fx: opts.fx ?? {}, log, submit: (actionId) => engine.submitTx(actionId) })
   wireDeal(ex, {
     advanceOp: (operationId) => engine.advanceOp(operationId),
@@ -168,13 +175,20 @@ export const wireEngine = (ex: Dispatcher, engine: MarketEngine, store: Automati
   wireDealfan(ex, {
     pendingInbox: () => engine.pendingInbox(),
     liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) })),
+    // reconcile_at is stamped on the store's clock — compare on the same
+    // clock (a virtual `now` ahead of Date.now() would select nothing)
     reconcileOps: async () =>
-      (await store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: Date.now() })).map((o) => ({
+      (await store.operations({ role: 'buyer', states: ['funding_failed', 'refunded'], reconcileDue: now() })).map((o) => ({
         operationId: o.operationId,
         wantId: opWantId(o)
       })),
     resubmitPending: () => engine.resubmitTick(),
     ceilingMs: () => 0,
+    now,
+    // every hand-driven tick is a distinct poke — the durable fan key's
+    // windowed bucket on the real clock would collapse a whole test into
+    // one advance leg per op
+    tickSeq: () => ++fanSeq,
     log
   })
   if (engine.walletCoordinator !== undefined) wireCustody(ex, { wallet: engine.walletCoordinator, log })

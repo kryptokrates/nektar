@@ -70,8 +70,9 @@ export class ChainEvents extends EventEmitter {
   constructor(private opts: ChainEventsOpts) {
     super()
     // shared by design: every consumer (memory, confirmer, ledger, tests
-    // with several memory instances on one chain) adds a 'tx' listener
-    this.setMaxListeners(64)
+    // with several memory instances on one chain) adds a 'tx' listener —
+    // the slow tiers run dozens of engines on one substrate
+    this.setMaxListeners(256)
   }
 
   /** register interest — idempotent; a txid already at a terminal status
@@ -268,11 +269,11 @@ export class ChainEvents extends EventEmitter {
       // a FAILED height read is not "tip unchanged" — couldn't-ask must not
       // satisfy the proof-gate, or the observe batch starves on the stale
       // tip while observe itself would have answered
-      let heightKnown = this.opts.height === undefined
+      let heightKnown = true
       if (this.opts.height !== undefined) {
         const tip = await this.opts.height().catch(() => undefined)
-        if (tip === undefined) heightKnown = false
-        else if (tip !== this.tip) {
+        heightKnown = tip !== undefined
+        if (tip !== undefined && tip !== this.tip) {
           this.tip = tip
           this.emit('height', tip)
         }

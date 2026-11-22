@@ -86,7 +86,7 @@ test('hot reads use their queue-head indexes', async (t) => {
   )
   // mirror of hasDueAtHeight()'s WHERE — composite (state, due_height)
   for (let i = 0; i < 60; i++) await op(store, 'settled', `t-${i}`)
-  const od = await op(store, 'watching', 'due-op', { escrow: 1 })
+  const od = await op(store, 'watching', 'due-op', { escrowTxid: 'x' })
   await kx('market_operations').where({ operation_id: od.operationId }).update({ due_height: 100 })
   const d = await plan(kx, `SELECT 1 FROM market_operations WHERE state IN ('watching', 'collecting') AND due_height <= ? LIMIT 1`, [200])
   seeks(d, 'market_operations_state_due_height')

@@ -1,5 +1,5 @@
 import { Transaction } from '@bsv/sdk'
-import type { BroadcastResult } from '@nektar/chain'
+import { ALREADY, broadcastProvablyDead, DEFINITIVE, NEVER_LEFT, type BroadcastResult } from '@nektar/chain'
 import type { AutomationStore, WalletTx, TxState } from './store.js'
 import type { ActionContext } from './policy.js'
 import { replayTxEffects, type TxEffects } from './machines/effects.js'
@@ -36,10 +36,10 @@ export type TxObservation =
   | { status: 'conflicted'; source: string; spentBy: string }
   | { status: 'abandoned'; source: string; reason?: string }
 
-const NEVER_LEFT = /SpendGuard refused/i
-export const DEFINITIVE =
-  /rejected|missing inputs|mempool-conflict|double.?spen|utxo already spent|bad-txns|non-mandatory|unlocking scripts invalid|fee too low/i
-const ALREADY = /already (known|in|mined|exists)|txn-already/i
+// the broadcast-verdict vocabulary lives in @nektar/chain (verdict.ts) — it
+// interprets what chain broadcasters emit and bstack's finger chain gates on
+// the same doctrine. Re-exported here for existing import sites.
+export { NEVER_LEFT, DEFINITIVE, broadcastProvablyDead }
 
 export class WalletCoordinator {
   constructor(

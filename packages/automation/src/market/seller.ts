@@ -21,7 +21,9 @@ export abstract class SellerOps extends IngressOps {
     if (!sp || !sw?.want || !verifyWant(sw.want, sw.sig, { now: this.now() })) return
     const w = sw.want
     if (w.pub === this.me) {
-      this.d.log?.(`market: want ${w.wantId ?? '?'} refused — self-published; a node does not answer its own wants (a self-deal canary needs a second agent identity)`)
+      this.d.log?.(
+        `market: want ${w.wantId ?? '?'} refused — self-published; a node does not answer its own wants (a self-deal canary needs a second agent identity)`
+      )
       return
     }
     if (w.status !== 'open' || w.net !== this.d.network) return
@@ -39,7 +41,7 @@ export abstract class SellerOps extends IngressOps {
           price: number
           manifest: NonNullable<Awaited<ReturnType<MarketMemory['shardManifest']>>>
           relevanceBps: number
-          model: unknown
+          model: { provider: string; modelId: string }
         }
       | undefined
     for (const shard of p.seller.sellableShards) {
@@ -167,8 +169,8 @@ export abstract class SellerOps extends IngressOps {
   protected async onAccept(from: string, m: Extract<MarketMessage, { type: 'accept' }>): Promise<void> {
     const op = await this.d.store.operation(m.offerId)
     if (!op || op.role !== 'seller' || op.state !== 'quoted') return
-    const w = (op.data.want as SignedWant).want
-    const offer = op.data.offer as any
+    const w = op.data.want!.want
+    const offer = op.data.offer!
     const refuse = async (reason: string) => {
       // a deterministic refusal must reach the buyer — 'quoted' alone leaves
       // them waiting for a delivery that can never come until refundAfter
@@ -280,15 +282,15 @@ export abstract class SellerOps extends IngressOps {
   }
 
   protected async complete(op: Operation): Promise<void> {
-    const e = op.data.escrow as any
-    const offer = op.data.offer as any
-    const w = (op.data.want as SignedWant).want
+    const e = op.data.escrow!
+    const offer = op.data.offer!
+    const w = op.data.want!.want
     // the direct rail: the payment is already a P2PKH output the seller owns —
     // no covenant to spend. Delivery hands `wrapped` over inside the envelope;
     // the payment txid stands in as the settlement reference the advance loop
     // watches for a merkle proof (rejected payment → completion_failed)
     if (op.data.direct === true) {
-      const p = op.data.utxo as { txid: string; vout: number; satoshis: number; script: string }
+      const p = op.data.utxo!
       await this.d.store.transition(op.operationId, op.revision, 'completion_submitted', {
         cause: 'direct_delivery',
         data: { completeTxid: p.txid, sellerSats: p.satoshis },

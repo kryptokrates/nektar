@@ -30,7 +30,7 @@ export abstract class BuyerOps extends SellerOps {
    *  bound starvation is terminal after all (nothing was broadcast — a
    *  failed deal is honest here, 'uncertain' is not). */
   private async starveBounce(op: Operation, e: unknown): Promise<void> {
-    const since = (op.data.fundingSince as number | undefined) ?? this.now()
+    const since = op.data.fundingSince ?? this.now()
     const exhausted = this.now() - since > STATE_LIMITS.funding.maxAgeMs
     await this.d.store.transition(op.operationId, op.revision, exhausted ? 'funding_failed' : 'selected', {
       cause: exhausted ? 'funding_starved_exhausted' : 'funding_starved',
@@ -93,16 +93,16 @@ export abstract class BuyerOps extends SellerOps {
     if (!so?.offer?.wantId || !verifyOffer(so.offer, so.sig, { now: this.now() })) return
     const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${so.offer.wantId}`)
     if (!op || op.state !== 'collecting') return
-    const offers = { ...(op.data.offers as Record<string, StoredOffer>) }
+    const offers = { ...op.data.offers }
     const key = `${so.offer.pub}:${so.offer.offerId}`
     const prev = offers[key]
     if (prev && prev.so.offer.revision >= so.offer.revision) return
     if (!prev && Object.keys(offers).length >= 64) return
-    const reject = this.offerReject(so, (op.data.want as SignedWant).want)
+    const reject = this.offerReject(so, op.data.want!.want)
     // a quote can beat its offer across the two delivery planes (the box
     // read is faster than the offers lane) — it parks on the op instead of
     // retrying, and the commitment attaches with the offer's own commit
-    const pending = { ...(op.data.pendingQuotes as Record<string, { commitment?: StoredOffer['commitment']; mode?: StoredOffer['mode'] }> | undefined) }
+    const pending = { ...op.data.pendingQuotes }
     const parked = pending[key]
     if (parked !== undefined) delete pending[key]
     // the parked quote attaches only if its commitment matches this offer —
@@ -119,7 +119,7 @@ export abstract class BuyerOps extends SellerOps {
   private async onQuote(from: string, m: Extract<MarketMessage, { type: 'quote' }>): Promise<void> {
     const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${m.wantId}`)
     if (!op || TERMINAL.includes(op.state)) return
-    const offers = { ...(op.data.offers as Record<string, StoredOffer>) }
+    const offers = { ...op.data.offers }
     const key = `${from}:${m.offerId}`
     const cur = offers[key]
     if (!cur) {
@@ -127,7 +127,7 @@ export abstract class BuyerOps extends SellerOps {
       // early: keep it on the op, no retry budget burned (the feed is slower
       // than the box by construction, not by fault)
       if (op.state === 'collecting') {
-        const pending = { ...(op.data.pendingQuotes as Record<string, { commitment?: StoredOffer['commitment']; mode?: StoredOffer['mode'] }> | undefined) }
+        const pending = { ...op.data.pendingQuotes }
         if (Object.keys(pending).length < 64) {
           pending[key] = { commitment: m.commitment, mode: m.mode }
           await this.d.store.transition(op.operationId, op.revision, op.state, { cause: 'quote_parked_before_offer', data: { pendingQuotes: pending } })
@@ -158,10 +158,10 @@ export abstract class BuyerOps extends SellerOps {
       return
     }
     if (!op || op.state !== 'awaiting_disclosure') return
-    const sel = op.data.selected as { key: string }
-    const chosen = (op.data.offers as Record<string, StoredOffer>)[sel.key]
+    const sel = op.data.selected!
+    const chosen = op.data.offers![sel.key]
     if (from !== chosen.so.offer.pub || m.offerId !== chosen.so.offer.offerId) return
-    const utxo = op.data.utxo as { txid: string; vout: number; satoshis: number; script: string }
+    const utxo = op.data.utxo!
     const q = chosen.so.offer.offer as any
     const direct = op.data.direct === true
     // quote-message mode wins (it was the authoritative channel); the signed
@@ -236,7 +236,7 @@ export abstract class BuyerOps extends SellerOps {
         commitment
       })
     }
-    await this.d.store.settleBudget(op.data.escrowAction as string)
+    await this.d.store.settleBudget(op.data.escrowAction!)
     let text: string | undefined
     try {
       const bytes = fromHex(claim.valueHex)
@@ -316,7 +316,7 @@ export abstract class BuyerOps extends SellerOps {
       offerId: s.so.offer.offerId,
       buyerOp: op.operationId,
       policyHash: op.policyHash,
-      want: op.data.want as SignedWant,
+      want: op.data.want!,
       offer: { so: s.so, ...(s.commitment !== undefined ? { commitment: s.commitment } : {}), ...(s.mode !== undefined ? { mode: s.mode } : {}) },
       escrow,
       utxo,
@@ -414,8 +414,8 @@ export abstract class BuyerOps extends SellerOps {
   private async onDecline(from: string, m: Extract<MarketMessage, { type: 'decline' }>): Promise<void> {
     const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${m.wantId}`)
     if (op === undefined || op.state !== 'awaiting_disclosure') return
-    const sel = op.data.selected as { key: string } | undefined
-    const s = sel === undefined ? undefined : (op.data.offers as Record<string, StoredOffer>)[sel.key]
+    const sel = op.data.selected
+    const s = sel === undefined ? undefined : op.data.offers![sel.key]
     if (s === undefined || s.so.offer.pub !== from || s.so.offer.offerId !== m.offerId) return
     await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
       cause: 'seller_declined',
@@ -456,7 +456,7 @@ export abstract class BuyerOps extends SellerOps {
       await this.d.store.transition(op.operationId, op.revision, 'denied', { cause: 'policy_revoked_or_expired' })
       return
     }
-    const offers = op.data.offers as Record<string, StoredOffer>
+    const offers = op.data.offers!
     const cands: ScoreCandidate[] = Object.entries(offers).map(([key, s]) => {
       const q = s.so.offer.offer as any
       const live = !s.reject && Number(q?.expiresAt ?? 0) !== 0 ? Number(q.expiresAt) > height : !s.reject
@@ -485,7 +485,7 @@ export abstract class BuyerOps extends SellerOps {
       // (unchanged revision, so arriving offers still match) and collect one
       // more window instead of expiring on a slow round. Only the want's own
       // exp ends the deal — the collection window is not the want's lifetime.
-      const w = (op.data.want as SignedWant | undefined)?.want
+      const w = op.data.want?.want
       if (opts?.expire === true && w?.exp !== undefined && w.exp > this.now()) {
         await this.d.store.transition(op.operationId, op.revision, 'collecting', {
           cause: 'want_republished',
@@ -514,17 +514,17 @@ export abstract class BuyerOps extends SellerOps {
     // a new escrow is a new spend — paused while stopped or deaf, retried on
     // the next tick (the op stays 'selected'/'escalated', it does not fail)
     if (this.d.killed?.() || this.d.deaf?.()) return
-    const sel = op.data.selected as { key: string }
-    const s = (op.data.offers as Record<string, StoredOffer>)[sel.key]
+    const sel = op.data.selected!
+    const s = op.data.offers![sel.key]
     const q = s.so.offer.offer as any
-    const w = (op.data.want as SignedWant).want
+    const w = op.data.want!.want
     const price = s.so.offer.priceSats,
       maxFee = Number(q.cfg.maxFee)
     const amounts = { purchaseSats: price, feeSats: maxFee + this.o.escrowFeeReserveSats, lockedSats: price + maxFee }
     const actionDigest = digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'escrow', offerKey: sel.key, cfg: q.cfg, amounts })
     const approved = op.state === 'escalated' && (await this.d.store.consumeApproval(op.operationId, actionDigest))
     if (op.state === 'escalated' && !approved) {
-      const a = (await this.d.store.approvals()).find((x) => x.approvalId === (op.data.pendingApproval as any)?.approvalId)
+      const a = (await this.d.store.approvals()).find((x) => x.approvalId === op.data.pendingApproval?.approvalId)
       if (a?.status === 'denied') await this.d.store.transition(op.operationId, op.revision, 'denied', { cause: 'human_denied' })
       else if (a && a.expiresAt <= this.now()) await this.d.store.transition(op.operationId, op.revision, 'expired', { cause: 'approval_expired' })
       return
@@ -549,7 +549,7 @@ export abstract class BuyerOps extends SellerOps {
     // a released action is a tombstone — a starvation retry must reserve a
     // fresh one, so the id carries the attempt number (released rows never
     // count against caps; data.escrowAction tracks the live attempt)
-    const tries = (op.data.fundingTries as number | undefined) ?? 0
+    const tries = op.data.fundingTries ?? 0
     const ctx: ActionContext = {
       operationId: op.operationId,
       actionId: `${op.operationId}:escrow:${tries}`,
@@ -564,7 +564,7 @@ export abstract class BuyerOps extends SellerOps {
     }
     const funding = await this.d.store.transition(op.operationId, op.revision, 'funding', {
       cause: approved ? 'human_approved' : 'policy_allowed',
-      data: { escrowAction: ctx.actionId, amounts, fundingTries: tries + 1, fundingSince: (op.data.fundingSince as number | undefined) ?? this.now() }
+      data: { escrowAction: ctx.actionId, amounts, fundingTries: tries + 1, fundingSince: op.data.fundingSince ?? this.now() }
     })
     this.inflight.add(op.operationId)
     try {
@@ -615,7 +615,7 @@ export abstract class BuyerOps extends SellerOps {
           await this.d.afterPrepare?.(ctx.actionId)
           // broadcast starts now; the accept flies while the RTT is out —
           // the verdict is joined after the awaiting_disclosure transition
-          pendingSubmit = custodySubmit(this.d.executor ?? executor(), this.wallet, ctx.actionId)
+          pendingSubmit = this.submitSettled(ctx)
           await this.d.settleEscrow(tx)
           this.d.rememberTx?.(tx)
           pay = { accepted: true, txid: built.utxo.txid, utxo: built.utxo }
@@ -720,7 +720,7 @@ export abstract class BuyerOps extends SellerOps {
         await this.d.afterPrepare?.(ctx.actionId)
         // broadcast starts now; the accept flies while the RTT is out —
         // the verdict is joined after the awaiting_disclosure transition
-        pendingSubmit = custodySubmit(this.d.executor ?? executor(), this.wallet, ctx.actionId)
+        pendingSubmit = this.submitSettled(ctx)
         await this.d.settleEscrow(tx)
         this.d.rememberTx?.(tx)
         r = { accepted: true, txid: built.utxo.txid, utxo: built.utxo, escrow: built.escrow }
@@ -821,19 +821,36 @@ export abstract class BuyerOps extends SellerOps {
    *  spender, classify it: a completion replays through the verified
    *  delivered path (spendValid + claim), a depositor spend is 'refunded'.
    *  Returns true when the op was transitioned — no refund attempt needed. */
+  /** the broadcast leg settles into a verdict, never a rejection — a
+   *  transport failure mid-call is submission_unknown: the bytes may have
+   *  aired, so the join escalates it 'uncertain' instead of dying on an
+   *  unhandled rejection when an exception lands before the join site. */
+  private submitSettled(ctx: { actionId: string }): Promise<{ state: string; txid: string; detail?: string }> {
+    return custodySubmit(this.d.executor ?? executor(), this.wallet!, ctx.actionId).then(
+      (v) => v,
+      (e) => ({ state: 'submission_unknown', txid: ctx.actionId, detail: (e as Error).message.slice(0, 300) })
+    )
+  }
+
   private async resolveSpentEscrow(op: Operation, utxo: { txid: string; vout: number }, pa?: { approvalId?: string }): Promise<boolean> {
+    // the two-spender covenant premise only holds on the covenant rail —
+    // a direct payment is a plain P2PKH the SELLER owns outright: any
+    // routine spend of it reads as 'completed' here and manufactures a
+    // bogus pendingDelivered. Nothing to classify; the caller's own
+    // direct-rail terminal handles it.
+    if (op.data.direct === true) return false
     if (this.d.spenderOf === undefined) return false
     const spender = await this.d.spenderOf(utxo.txid, utxo.vout).catch(() => undefined)
     if (spender === undefined) return false
     const tx = await this.d.fetchTx(spender).catch(() => undefined)
     if (tx === undefined) return false
-    const escrow = op.data.escrow as { sellerPkh?: string; depositorPkh?: string } | undefined
+    const escrow = op.data.escrow
     const out0 = tx.outputs[0]?.lockingScript.toHex()
     const lock = (pkh: string | undefined) => (pkh === undefined ? undefined : new P2PKH().lock(Array.from(fromHex(pkh))).toHex())
     if (out0 !== undefined && out0 === lock(escrow?.depositorPkh)) {
       // our earlier refund aired — the money already came back
       if (pa?.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
-      await this.d.store.refundBudget(op.data.escrowAction as string)
+      await this.d.store.refundBudget(op.data.escrowAction!)
       await this.d.store.transition(op.operationId, op.revision, 'refunded', {
         cause: 'refund_observed_on_chain',
         data: { refundTxid: spender, refundSats: tx.outputs[0]!.satoshis, refundTries: 0 },
@@ -846,9 +863,9 @@ export abstract class BuyerOps extends SellerOps {
       // the seller completed — the disclosure preimage rides that exact tx.
       // Replay it through the delivered path (re-runs spendValid + claim)
       // instead of treating a finished deal as a stranded refund.
-      const sel = op.data.selected as { key: string }
-      const chosen = (op.data.offers as Record<string, StoredOffer>)[sel.key]
-      const w = (op.data.want as SignedWant).want
+      const sel = op.data.selected!
+      const chosen = op.data.offers![sel.key]
+      const w = op.data.want!.want
       if (chosen === undefined) return false
       if (pa?.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
       await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
@@ -870,14 +887,14 @@ export abstract class BuyerOps extends SellerOps {
   }
 
   private async refund(op: Operation): Promise<void> {
-    const utxo = op.data.utxo as { txid: string; vout: number } | undefined
+    const utxo = op.data.utxo
     // the deadline fired — but if chain evidence already names the escrow's
     // spender, a refund broadcast can never land. Classify first.
     if (utxo !== undefined && (await this.resolveSpentEscrow(op, utxo))) return
     const next = await this.d.store.transition(op.operationId, op.revision, 'refunding', { cause: 'refund_deadline_reached' })
     const r = await this.d.call('sale#refund', { cfg: op.data.escrow, utxo: op.data.utxo })
     if (r.accepted === true) {
-      await this.d.store.refundBudget(op.data.escrowAction as string)
+      await this.d.store.refundBudget(op.data.escrowAction!)
       await this.d.store.transition(next.operationId, next.revision, 'refunded', {
         cause: 'refund_broadcast',
         data: { refundTxid: r.txid, refundSats: r.refundSats },
@@ -898,14 +915,14 @@ export abstract class BuyerOps extends SellerOps {
    *  escrow/disclosure transaction itself instead of waiting for a height or
    *  an operator decision. */
   private async reconcileUncertain(op: Operation): Promise<void> {
-    const pa = op.data.pendingApproval as { approvalId?: string; reason?: string } | undefined
+    const pa = op.data.pendingApproval
     if (pa?.reason === 'unresolved_settlement') return await this.reconcileRefund(op, pa)
     if (pa?.reason !== 'unresolved_payment') return
     const cancel = async () => {
       if (pa?.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
     }
-    const pending = op.data.pendingEscrow as { cfg?: any; utxo?: { txid?: string } } | undefined
-    const actionId = op.data.escrowAction as string | undefined
+    const pending = op.data.pendingEscrow
+    const actionId = op.data.escrowAction
     const wtx = actionId !== undefined ? await this.d.store.walletTx({ actionId }) : undefined
     const txid = pending?.utxo?.txid ?? wtx?.txid
     if (txid === undefined) {
@@ -949,10 +966,10 @@ export abstract class BuyerOps extends SellerOps {
     }
     // mined | held — the escrow is observable: commit and resume the normal
     // path (a broadcaster seen-hint is a wake signal, never escrow evidence)
-    const sel = op.data.selected as { key: string }
-    const s = (op.data.offers as Record<string, StoredOffer>)[sel.key]
+    const sel = op.data.selected!
+    const s = op.data.offers![sel.key]
     if (s === undefined) return
-    const w = (op.data.want as SignedWant).want
+    const w = op.data.want!.want
     let escrow: any = pending?.cfg
     let utxo: any = pending?.utxo
     if ((escrow === undefined || utxo === undefined) && wtx !== undefined) {
@@ -999,16 +1016,7 @@ export abstract class BuyerOps extends SellerOps {
           actionId: `${op.operationId}:note`,
           kind: 'message',
           destination: this.me,
-          payload: this.noteFor(
-            op,
-            w.wantId,
-            s,
-            escrow,
-            utxo,
-            actionId ?? `${op.operationId}:escrow`,
-            op.data.amounts as { purchaseSats: number; feeSats: number; lockedSats: number },
-            wtx?.rawHex
-          )
+          payload: this.noteFor(op, w.wantId, s, escrow, utxo, actionId ?? `${op.operationId}:escrow`, op.data.amounts!, wtx?.rawHex)
         }
       ]
     })
@@ -1020,8 +1028,8 @@ export abstract class BuyerOps extends SellerOps {
    *  refusal: park until the height and don't burn tries — nodes can only
    *  call it non-final below that height. */
   private async reconcileRefund(op: Operation, pa: { approvalId?: string }): Promise<void> {
-    const tries = Number(op.data.refundTries ?? 0)
-    const refundAfter = Number((op.data.escrow as { refundAfter?: string | number } | undefined)?.refundAfter ?? 0)
+    const tries = op.data.refundTries ?? 0
+    const refundAfter = Number(op.data.escrow?.refundAfter ?? 0)
     if (refundAfter > 0 && (await this.d.height()) < refundAfter) {
       if (op.dueHeight !== refundAfter || tries !== 0)
         await this.d.store.transition(op.operationId, op.revision, 'uncertain', {
@@ -1032,15 +1040,15 @@ export abstract class BuyerOps extends SellerOps {
       return
     }
     if (tries >= 5) return
-    if (!this.reconcileGate(op.operationId, op.data.escrowTxid as string | undefined, op.nextReconcileAt)) return
+    if (!this.reconcileGate(op.operationId, op.data.escrowTxid, op.nextReconcileAt)) return
     // chain evidence first: if the outpoint is already spent, a refund
     // broadcast can never land — classify the spender (completion vs our own
     // earlier refund) instead of burning a try on a doomed tx
-    const utxo = op.data.utxo as { txid: string; vout: number } | undefined
+    const utxo = op.data.utxo
     if (utxo !== undefined && (await this.resolveSpentEscrow(op, utxo, pa))) return
     const r = await this.d.call('sale#refund', { cfg: op.data.escrow, utxo: op.data.utxo })
     if (r.accepted === true) {
-      await this.d.store.refundBudget(op.data.escrowAction as string)
+      await this.d.store.refundBudget(op.data.escrowAction!)
       if (pa.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
       await this.d.store.transition(op.operationId, op.revision, 'refunded', {
         cause: 'refund_broadcast',
@@ -1083,7 +1091,7 @@ export abstract class BuyerOps extends SellerOps {
     if (lim.exit === 'abort') {
       // abort-eligible states never have a broadcast in flight — release any
       // reservation and leave by the terminal each state maps to
-      if (op.data.escrowAction !== undefined) await this.d.store.releaseBudget(op.data.escrowAction as string)
+      if (op.data.escrowAction !== undefined) await this.d.store.releaseBudget(op.data.escrowAction)
       const to = op.state === 'preparing' ? 'preparation_failed' : op.state === 'collecting' ? 'expired' : 'canceled'
       await this.d.store.transition(op.operationId, op.revision, to, {
         cause: 'stuck_timeout',
@@ -1102,7 +1110,7 @@ export abstract class BuyerOps extends SellerOps {
       }
       if (op.data.escrow !== undefined && op.data.utxo !== undefined) return await this.refund(op)
       // money never reached the escrow — abort is honest, 'refunded' is not
-      if (op.data.escrowAction !== undefined) await this.d.store.releaseBudget(op.data.escrowAction as string)
+      if (op.data.escrowAction !== undefined) await this.d.store.releaseBudget(op.data.escrowAction)
       await this.d.store.transition(op.operationId, op.revision, 'canceled', { cause: 'stuck_timeout_no_escrow', dueHeight: null })
       return
     }
@@ -1153,14 +1161,14 @@ export abstract class BuyerOps extends SellerOps {
         // minimum collect window has passed — a cheaper offer landing inside
         // it still wins; collectMs stays as the collection ceiling. Ops from
         // before collectingSince existed treat the window as already open.
-        const since = (op.data.collectingSince as number | undefined) ?? 0
+        const since = op.data.collectingSince ?? 0
         const windowOpen = this.now() - since >= this.o.minCollectMs
-        const hasOffers = Object.keys((op.data.offers as Record<string, StoredOffer> | undefined) ?? {}).length > 0
+        const hasOffers = Object.keys(op.data.offers ?? {}).length > 0
         // quiet window (opt-in): while offers keep arriving the window stays
         // open past minCollectMs; it closes collectQuietMs after the last
         // offer. collectMs remains the hard ceiling either way.
         const quiet = this.o.collectQuietMs
-        const quietDone = quiet > 0 && hasOffers && this.now() - ((op.data.lastOfferAt as number | undefined) ?? since) >= quiet
+        const quietDone = quiet > 0 && hasOffers && this.now() - (op.data.lastOfferAt ?? since) >= quiet
         if (due || (windowOpen && hasOffers && (quiet === 0 || quietDone))) return await this.select(op, height, { expire: due })
       }
       if (op.state === 'selected' || op.state === 'escalated') {
@@ -1172,21 +1180,21 @@ export abstract class BuyerOps extends SellerOps {
         return await this.fund(op, p)
       }
       if (op.state === 'funding' && !this.inflight.has(op.operationId)) {
-        const pending = op.data.pendingEscrow as { cfg: any; utxo: any } | undefined
+        const pending = op.data.pendingEscrow
         if (pending && this.wallet && this.d.settleEscrow) {
-          const sub = await custodySubmit(this.d.executor ?? executor(), this.wallet, op.data.escrowAction as string)
+          const sub = await custodySubmit(this.d.executor ?? executor(), this.wallet, op.data.escrowAction!)
           if (sub.state === 'submitted' || sub.state === 'observed' || sub.state === 'confirmed') {
-            const wtx = await this.d.store.walletTx({ actionId: op.data.escrowAction as string })
+            const wtx = await this.d.store.walletTx({ actionId: op.data.escrowAction! })
             if (wtx) await this.d.settleEscrow(Transaction.fromHex(wtx.rawHex))
-            await this.d.store.commitBudget(op.data.escrowAction as string)
-            const sel2 = op.data.selected as { key: string }
-            const s2 = (op.data.offers as Record<string, StoredOffer>)[sel2.key]
+            await this.d.store.commitBudget(op.data.escrowAction!)
+            const sel2 = op.data.selected!
+            const s2 = op.data.offers![sel2.key]
             const so2 = s2.so
-            const w2 = (op.data.want as SignedWant).want
+            const w2 = op.data.want!.want
             await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
               cause: 'escrow_resumed_same_bytes',
-              data: { escrow: pending.cfg, utxo: pending.utxo, escrowTxid: pending.utxo.txid, ...(pending.cfg.direct === true ? { direct: true } : {}) },
-              dueHeight: Number(pending.cfg.refundAfter),
+              data: { escrow: pending.cfg, utxo: pending.utxo, escrowTxid: pending.utxo!.txid, ...(pending.cfg?.direct === true ? { direct: true } : {}) },
+              dueHeight: Number(pending.cfg?.refundAfter),
               outbox: [
                 {
                   actionId: `${op.operationId}:accept`,
@@ -1197,24 +1205,15 @@ export abstract class BuyerOps extends SellerOps {
                     wantId: w2.wantId,
                     offerId: so2.offer.offerId,
                     utxo: pending.utxo,
-                    depositorPkh: pending.cfg.depositorPkh,
-                    ...this.escrowWire(pending.utxo.txid, wtx?.rawHex)
+                    depositorPkh: pending.cfg?.depositorPkh,
+                    ...this.escrowWire(pending.utxo!.txid, wtx?.rawHex)
                   }
                 },
                 {
                   actionId: `${op.operationId}:note`,
                   kind: 'message',
                   destination: this.me,
-                  payload: this.noteFor(
-                    op,
-                    w2.wantId,
-                    s2,
-                    pending.cfg,
-                    pending.utxo,
-                    op.data.escrowAction as string,
-                    op.data.amounts as { purchaseSats: number; feeSats: number; lockedSats: number },
-                    wtx?.rawHex
-                  )
+                  payload: this.noteFor(op, w2.wantId, s2, pending.cfg, pending.utxo, op.data.escrowAction!, op.data.amounts!, wtx?.rawHex)
                 }
               ]
             })
@@ -1239,7 +1238,7 @@ export abstract class BuyerOps extends SellerOps {
         // funded anyway and 'selected' would build a SECOND escrow (double
         // pay). 'dead'/absent means the refusal held; the deferred retry is
         // safe because nothing left.
-        const txid = op.data.escrowTxid as string | undefined
+        const txid = op.data.escrowTxid
         if (txid !== undefined && this.d.txFacts !== undefined && this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) {
           const v = (await this.d.txFacts(txid)).verdict
           if (v === 'mined' || v === 'pending') {
@@ -1261,7 +1260,7 @@ export abstract class BuyerOps extends SellerOps {
       if (op.state === 'refund_pending') {
         // armed by the funding_failed rescan — a covenant that vanished
         // after landing (reorg) has nothing left to reclaim
-        const txid = op.data.escrowTxid as string | undefined
+        const txid = op.data.escrowTxid
         if (
           txid !== undefined &&
           this.d.txFacts !== undefined &&
@@ -1278,21 +1277,20 @@ export abstract class BuyerOps extends SellerOps {
         // a pushed 'delivered' can outrun tx propagation — its parked copy
         // re-runs the same verification until it resolves or the deal
         // deadline (refund) closes the state
-        const pd = op.data.pendingDelivered as
-          { from: string; m: Extract<MarketMessage, { type: 'delivered' }>; refs?: import('@nektar/bstack').BoxRef[] } | null | undefined
-        if (pd != null) await this.onDelivered(pd.from, pd.m, pd.refs).catch(() => undefined)
+        const pd = op.data.pendingDelivered
+        if (pd != null) await this.onDelivered(pd.from, pd.m as Extract<MarketMessage, { type: 'delivered' }>, pd.refs).catch(() => undefined)
         // a late rejection beats the refund path: the escrow never settled, so
         // the locked amount never left — releaseBudget frees the committed row
-        const txid = op.data.escrowTxid as string | undefined
+        const txid = op.data.escrowTxid
         if (txid !== undefined && this.d.txFacts !== undefined && this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) {
           // the escrow's own chain evidence can deliver what a starved note
           // could not: a landed completion IS the disclosure — classify the
           // spender before concluding anything about the escrow tx itself
-          const utxo = op.data.utxo as { txid: string; vout: number } | undefined
+          const utxo = op.data.utxo
           if (utxo !== undefined && (await this.resolveSpentEscrow(op, utxo))) return
           if ((await this.d.txFacts(txid)).verdict === 'dead') {
-            await this.d.store.releaseBudget(op.data.escrowAction as string)
-            await this.d.store.releaseLeases(op.data.escrowAction as string)
+            await this.d.store.releaseBudget(op.data.escrowAction!)
+            await this.d.store.releaseLeases(op.data.escrowAction!)
             await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected_late', dueHeight: null })
             return
           }
@@ -1317,7 +1315,7 @@ export abstract class BuyerOps extends SellerOps {
       if (op.state === 'quoted' && op.dueHeight !== undefined && height >= op.dueHeight)
         await this.d.store.transition(op.operationId, op.revision, 'expired', { cause: 'quote_expired', dueHeight: null })
       if (op.state === 'completion_submitted') {
-        const tx = await this.d.fetchTx(op.data.completeTxid as string)
+        const tx = await this.d.fetchTx(op.data.completeTxid!)
         if (tx?.merklePath) {
           // settlement is money-final — a proof only counts once it sits
           // settleDepth blocks deep; shallower, the op parks and records the
@@ -1335,8 +1333,8 @@ export abstract class BuyerOps extends SellerOps {
             })
         } else if (
           this.d.txFacts !== undefined &&
-          this.reconcileGate(op.operationId, op.data.completeTxid as string, op.nextReconcileAt) &&
-          (await this.d.txFacts(op.data.completeTxid as string)).verdict === 'dead'
+          this.reconcileGate(op.operationId, op.data.completeTxid, op.nextReconcileAt) &&
+          (await this.d.txFacts(op.data.completeTxid!)).verdict === 'dead'
         ) {
           await this.d.store.transition(op.operationId, op.revision, 'completion_failed', { cause: 'disclosure_rejected_late' })
         }

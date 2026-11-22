@@ -84,12 +84,16 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
   // shards join the PAID_TOOLS gate with the manifest's amount.
   const pricedTool = async (): Promise<{ tool: string; amount: number } | undefined> => {
     if (!paymentsEnabled() || !ctx.external) return undefined
+    // degrade policy: priced content fails CLOSED — a catalog store that
+    // cannot answer cannot prove the shard is free, so a pricing failure
+    // propagates and refuses the external call (paidSaleAuthorized fails
+    // closed the same way). No catch → no silent free tier.
     if (name === 'recall' && args?.shard) {
-      const p = await mem.contentPrice(String(args.shard), 'read').catch(() => 0)
+      const p = await mem.contentPrice(String(args.shard), 'read')
       if (p > 0) return { tool: 'recall', amount: p }
     }
     if (name === 'exportShard' && args?.shard) {
-      const p = await mem.contentPrice(String(args.shard), 'pack').catch(() => 0)
+      const p = await mem.contentPrice(String(args.shard), 'pack')
       if (p > 0) return { tool: 'exportShard', amount: p }
     }
     return undefined

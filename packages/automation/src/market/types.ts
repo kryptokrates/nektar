@@ -234,7 +234,7 @@ const packBoxRef = (r: { sha256: string; size: number; endpoint?: string; bucket
  *  for the sold shard's stored pack so the buyer resolves evidence through
  *  bstore/CHIRP rather than the seller's origin */
 export const deliveredPackRefs = (d: MarketDeps, op: Operation): import('@nektar/bstack').BoxRef[] | undefined => {
-  const shard = (op.data as { shard?: string }).shard
+  const shard = op.data.shard
   const r = shard !== undefined ? d.memory.packStoreRef?.(shard) : undefined
   const ref = r !== undefined ? packBoxRef(r) : undefined
   return ref !== undefined ? [ref] : undefined
@@ -299,9 +299,7 @@ export const TERMINAL = [
  *  state union or the audit has an invisible class */
 export const PARKED = ['disclosure_verified']
 
-export interface StoredOffer {
-  so: SignedOffer
-  commitment?: any
-  mode?: string
-  reject?: string
-}
+// StoredOffer moved to ../store.js — it lives beside the op.data merge that
+// persists it (the MarketOpData schema); re-exported so engine code keeps
+// this import site
+export type { StoredOffer } from '../store.js'

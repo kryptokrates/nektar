@@ -6,7 +6,7 @@
 // whole extra defense: one drip per address, a daily sats ceiling, both in a
 // persisted ledger a restart can't reset, plus a single-flight lock so a
 // double-click can't race two drips onto one UTXO set.
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { P2PKH } from '@bsv/sdk'
 import { nektarEnvFlag, nektarEnvNum, nektarEnv, type EnvSource } from '@nektar/core'
@@ -23,7 +23,10 @@ interface FaucetLedger {
   drips: Drip[]
 }
 
-export const FAUCET_DEFAULT_SATS = 250_000
+// the drip rides sendSats → SpendGuard — the default must sit under the
+// guard's shipped daily cap (20_000) or the feature refuses by construction;
+// operators raising NEKTAR_MAX_SPEND_SATS_PER_DAY can raise this to match
+export const FAUCET_DEFAULT_SATS = 10_000
 const FAUCET_DEFAULT_DAILY_SATS = 5_000_000
 
 /** the route gate, evaluated per request so env changes take effect live:
@@ -43,7 +46,20 @@ const readLedger = (file: string): FaucetLedger => {
 
 const dayStart = (now: number): number => now - (now % 86_400_000)
 
-const inflight = new Set<string>()
+// drips serialize GLOBALLY, not per address: the check-spend-write sequence
+// is a read-modify-write on one shared ledger, and concurrent distinct-
+// address drips read the same stale ledger — caps bypassed, the last write
+// wins and forgets the other's record. Faucet volume is low by definition;
+// a queued drip costs a stranger nothing.
+let dripChain: Promise<unknown> = Promise.resolve()
+
+/** tmp+rename: a crash mid-writeFileSync must not leave a truncated ledger
+ *  that forgets every prior drip (and re-opens the addresses it covered). */
+const writeLedger = (file: string, ledger: FaucetLedger): void => {
+  const tmp = `${file}.${process.pid}.tmp`
+  writeFileSync(tmp, JSON.stringify(ledger, null, 2))
+  renameSync(tmp, file)
+}
 
 export async function faucetDrip(p: {
   mem: { sendSats(args: { amount: number; address: string }): Promise<{ txid: string }> }
@@ -61,22 +77,26 @@ export async function faucetDrip(p: {
   } catch {
     return { ok: false, status: 400, error: 'not a valid address' }
   }
-  const file = join(p.dataDir, 'faucet-drips.json')
-  const ledger = readLedger(file)
-  if (ledger.drips.some((d) => d.address === address)) return { ok: false, status: 429, error: 'address already received a drip' }
-  const sats = nektarEnvNum('NEKTAR_FAUCET_SATS', env) ?? FAUCET_DEFAULT_SATS
-  const dailyCap = nektarEnvNum('NEKTAR_FAUCET_DAILY_SATS', env) ?? FAUCET_DEFAULT_DAILY_SATS
-  const today = ledger.drips.filter((d) => d.ts >= dayStart(now)).reduce((a, d) => a + d.sats, 0)
-  if (today + sats > dailyCap) return { ok: false, status: 429, error: 'faucet daily limit reached — retry tomorrow' }
-  if (inflight.has(address)) return { ok: false, status: 409, error: 'drip already in flight for this address' }
-  inflight.add(address)
-  try {
+  const run = async (): Promise<{ ok: true; txid: string; sats: number } | { ok: false; status: number; error: string }> => {
+    const file = join(p.dataDir, 'faucet-drips.json')
+    const ledger = readLedger(file)
+    if (ledger.drips.some((d) => d.address === address)) return { ok: false, status: 429, error: 'address already received a drip' }
+    const sats = nektarEnvNum('NEKTAR_FAUCET_SATS', env) ?? FAUCET_DEFAULT_SATS
+    const dailyCap = nektarEnvNum('NEKTAR_FAUCET_DAILY_SATS', env) ?? FAUCET_DEFAULT_DAILY_SATS
+    const today = ledger.drips.filter((d) => d.ts >= dayStart(now)).reduce((a, d) => a + d.sats, 0)
+    if (today + sats > dailyCap) return { ok: false, status: 429, error: 'faucet daily limit reached — retry tomorrow' }
     const out = await p.mem.sendSats({ amount: sats, address })
     ledger.drips.push({ address, txid: out.txid, sats, ts: now })
     mkdirSync(p.dataDir, { recursive: true })
-    writeFileSync(file, JSON.stringify(ledger, null, 2))
+    writeLedger(file, ledger)
     return { ok: true, txid: out.txid, sats }
-  } finally {
-    inflight.delete(address)
   }
+  // the queued drip evaluates the ledger AFTER the in-flight one commits —
+  // same-address dedupe and the daily cap both see the freshest state
+  const r = dripChain.then(run, run)
+  dripChain = r.then(
+    () => undefined,
+    () => undefined
+  )
+  return await r
 }

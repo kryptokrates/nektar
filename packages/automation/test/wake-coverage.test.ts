@@ -23,8 +23,12 @@ const pkgRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..')
 const srcDir = join(pkgRoot, 'src')
 
 const read = (f: string): string => readFileSync(f, 'utf8')
+// .mjs too — the watcher daemon IS a wait-site owner; a .ts-only census was
+// the blind spot that let its tick/verifier/rpc waits land unregistered
 const srcFiles = (dir = srcDir): string[] =>
-  readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? srcFiles(join(dir, e.name)) : e.name.endsWith('.ts') ? [join(dir, e.name)] : []))
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? srcFiles(join(dir, e.name)) : e.name.endsWith('.ts') || e.name.endsWith('.mjs') ? [join(dir, e.name)] : []
+  )
 
 test('every cadence service declares its wake source', () => {
   // the checked-in wake map — the executor plane's recurring work. Each
@@ -84,11 +88,12 @@ test('every wait primitive site is classified — the census sees all wait class
     'store/src/objectstore.ts': 's3 fetch io bound',
     'anchor/src/runarchain.ts': 'heal broadcast retry — spread-jittered',
     'zk/src/stark/prove.ts': 'prover service io bound',
-    'zk/src/stark/datalog.ts': 'prover subprocess kill bound — dead-man switch'
+    'zk/src/stark/datalog.ts': 'prover subprocess kill bound — dead-man switch',
+    'watcher/src/watcher.mjs': 'standalone .mjs daemon — verify-worker kill bound + rpc io bound; the WATCH_MS tick is its own mechanism (a poll daemon polls)'
   }
   const packagesDir = join(pkgRoot, '..')
   for (const pkg of readdirSync(packagesDir, { withFileTypes: true }))
-    if (pkg.isDirectory() && pkg.name !== 'e2e' && pkg.name !== 'watcher') {
+    if (pkg.isDirectory() && pkg.name !== 'e2e') {
       const src = join(packagesDir, pkg.name, 'src')
       let files: string[] = []
       try {
@@ -116,7 +121,8 @@ test('no raw setInterval outside the classified floors', () => {
     'packages/chain/src/p2p.ts', // rate-window reset — a throttle wheel, not a wait
     'packages/mcp/src/rtsupport.ts', // instance-lock heartbeat — liveness, not a wait
     'packages/mcp/src/http.ts', // session reaper + SSE keepalive — TTL/transport liveness
-    'packages/automation/src/rt/endpoint.ts' // transport-paused self-heal — restate pushes no pause event; ceiling, not mechanism
+    'packages/automation/src/rt/endpoint.ts', // transport-paused self-heal — restate pushes no pause event; ceiling, not mechanism
+    'packages/watcher/src/watcher.mjs' // standalone poll daemon — the WATCH_MS tick IS its mechanism, not a wait on a producer
   ]
   const packagesDir = join(pkgRoot, '..')
   for (const pkg of readdirSync(packagesDir, { withFileTypes: true }))

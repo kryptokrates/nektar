@@ -1,5 +1,7 @@
 import type { Knex } from 'knex'
 import { randomUUID } from 'node:crypto'
+import type { SignedWant, SignedOffer, BoxRef } from '@nektar/bstack'
+import type { ObjectRef } from '@nektar/store'
 import { detached, spread, stable01 } from '@nektar/core'
 import { policyHash, policyError, canonicalJson, type AutomationPolicy, type ActionContext } from './policy.js'
 import { WAITS } from './waits.js'
@@ -37,6 +39,169 @@ export function classifyDeliveryError(msg: string): DeferClass | undefined {
   return undefined
 }
 
+/** the escrow cfg bag purchase/sale ops carry — the sale op's wire record;
+ *  known fields typed, the rest of the covenant params ride opaque */
+type EscrowCfg = {
+  sellerPkh?: string
+  depositorPkh?: string
+  refundAfter?: string | number
+  direct?: boolean
+} & Record<string, unknown>
+
+type UtxoRef = { txid: string; vout: number; satoshis: number; script: string }
+
+/** the quote's commitment bag — wire-supplied (types.ts keeps the wire side
+ *  opaque): the fields the engine scores/verifies are typed, extra wire
+ *  fields ride opaque */
+type QuoteCommitment = {
+  leaf?: string
+  batchR?: unknown
+  anchorTxid?: string
+  proof?: { path?: unknown }
+} & Record<string, unknown>
+
+/** StoredOffer — declared beside the merge that persists it (market/types
+ *  re-exports it so engine code keeps one import site) */
+export interface StoredOffer {
+  so: SignedOffer
+  commitment?: QuoteCommitment
+  mode?: string
+  reject?: string
+}
+
+/** the closed op.data schema — every field the FSM merge may carry. All
+ *  optional: data accumulates through the FSM, so readers presence-narrow
+ *  per state; `null` is the merge's universal clear-marker on writes
+ *  (pendingEscrow:null …). checkOpData enforces this field set + shapes on
+ *  every write — a typo'd or wrong-typed field fails the transition in the
+ *  transaction, not a downstream cast. */
+export interface MarketOpData {
+  // buyer purchase (escrow/utxo/direct also stamped on accept for sellers)
+  want?: SignedWant
+  offers?: Record<string, StoredOffer>
+  pendingQuotes?: Record<string, { commitment?: QuoteCommitment; mode?: string }>
+  selected?: { key: string; scoreBps?: number }
+  ranking?: { ranked?: unknown; rejected?: unknown }
+  collectingSince?: number
+  lastOfferAt?: number
+  pendingApproval?: { approvalId?: string; actionDigest?: string; reason?: string }
+  pendingEscrow?: { cfg?: EscrowCfg; utxo?: UtxoRef; feeSats?: number }
+  pendingDelivered?: { from: string; m: unknown; refs?: BoxRef[] }
+  /** buyer: the flat escrow cfg record (sale#escrow's return). Seller: the
+   *  nested {cfg, utxo} descriptor — EscrowCfg's index signature absorbs it
+   *  structurally; the seller reads .cfg/.utxo through it */
+  escrow?: EscrowCfg
+  utxo?: UtxoRef
+  escrowAction?: string
+  escrowTxid?: string
+  completeTxid?: string
+  refundTxid?: string
+  refundSats?: number
+  refundTries?: number
+  refundProven?: boolean
+  lastRefusalReason?: string
+  direct?: boolean
+  amounts?: BudgetAmounts
+  fundingTries?: number
+  fundingSince?: number
+  provenHeight?: number
+  reconcilePing?: boolean
+  usefulness?: { useful: boolean; evidence?: unknown }
+  result?: unknown
+  evidenceRef?: ObjectRef
+  restored?: boolean
+  // seller sale
+  shard?: string
+  seq?: number
+  priceSats?: number
+  ai?: { relevanceBps?: number; model?: { provider: string; modelId: string } }
+  /** the seller's quote bag — covenant params are the sale op's wire
+   *  contract (price/refundAfter/maxFee/sellerPkh…), validated there */
+  offer?: Record<string, any>
+  signedOffer?: SignedOffer
+  sellerSats?: number
+  // enable singleton
+  policyHash?: string
+  // observer bond-watch
+  cfg?: { operatorPkh?: string; bondReleaseHeight?: string; maxFee?: string; epochLen?: string }
+  n?: number
+  seizeTxid?: string
+}
+
+/** a transition's data merge — schema fields, plus `null` as the clear
+ *  marker the blind merge applies verbatim */
+export type OpDataPatch = { [K in keyof MarketOpData]?: MarketOpData[K] | null }
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const isStr = (v: unknown): v is string => typeof v === 'string'
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+const isBool = (v: unknown): v is boolean => typeof v === 'boolean'
+const isUtxo = (v: unknown): v is UtxoRef => isObj(v) && isStr(v.txid) && isNum(v.vout) && isNum(v.satoshis) && isStr(v.script)
+const isObjMap = (v: unknown): boolean => isObj(v) && Object.values(v).every(isObj)
+
+/** one predicate per declared field — Record<keyof MarketOpData> means the
+ *  table and the interface cannot drift: a new field without a check is a
+ *  type error, an undeclared key at write is a runtime throw. */
+const OPDATA_CHECKS: Record<keyof MarketOpData, (v: unknown) => boolean> = {
+  want: isObj,
+  offers: isObjMap,
+  pendingQuotes: isObjMap,
+  selected: (v) => isObj(v) && isStr(v.key) && (v.scoreBps === undefined || isNum(v.scoreBps)),
+  ranking: isObj,
+  collectingSince: isNum,
+  lastOfferAt: isNum,
+  pendingApproval: isObj,
+  pendingEscrow: (v) =>
+    isObj(v) && (v.cfg === undefined || isObj(v.cfg)) && (v.utxo === undefined || isUtxo(v.utxo)) && (v.feeSats === undefined || isNum(v.feeSats)),
+  pendingDelivered: (v) => isObj(v) && isStr(v.from) && isObj(v.m) && (v.refs === undefined || Array.isArray(v.refs)),
+  escrow: isObj,
+  utxo: isUtxo,
+  escrowAction: isStr,
+  escrowTxid: isStr,
+  completeTxid: isStr,
+  refundTxid: isStr,
+  refundSats: isNum,
+  refundTries: isNum,
+  refundProven: isBool,
+  lastRefusalReason: isStr,
+  direct: isBool,
+  amounts: (v) => isObj(v) && isNum(v.purchaseSats) && isNum(v.feeSats) && isNum(v.lockedSats),
+  fundingTries: isNum,
+  fundingSince: isNum,
+  provenHeight: isNum,
+  reconcilePing: isBool,
+  usefulness: (v) => isObj(v) && isBool(v.useful),
+  result: () => true,
+  evidenceRef: isObj,
+  restored: isBool,
+  shard: isStr,
+  seq: isNum,
+  priceSats: isNum,
+  ai: isObj,
+  offer: isObj,
+  signedOffer: isObj,
+  sellerSats: isNum,
+  policyHash: isStr,
+  cfg: isObj,
+  n: isNum,
+  seizeTxid: isStr
+}
+
+/** the write-side codec: rejects an undeclared key or a wrong-typed value
+ *  before it enters the merge. Runs on createOperation's data and on every
+ *  transition's merged bag — inside the write transaction, so a rejection
+ *  rolls back the event row and outbox intents with it. `null`/missing
+ *  fields pass: null is the merge's clear-marker and data accumulates. */
+function checkOpData(data: unknown): void {
+  if (!isObj(data)) throw new Error('op.data: not an object')
+  for (const [k, v] of Object.entries(data)) {
+    const chk = OPDATA_CHECKS[k as keyof MarketOpData]
+    if (chk === undefined) throw new Error(`op.data.${k}: undeclared field — the op.data schema is closed`)
+    if (v === null || v === undefined) continue
+    if (!chk(v)) throw new Error(`op.data.${k}: malformed value`)
+  }
+}
+
 export interface Operation {
   operationId: string
   role: 'buyer' | 'seller' | 'observer'
@@ -46,7 +211,9 @@ export interface Operation {
   network: string
   state: string
   revision: number
-  data: Record<string, unknown>
+  /** the accumulated FSM bag — typed by MarketOpData: every write passed
+   *  checkOpData, so the hydrated JSON's declared fields are its real ones */
+  data: MarketOpData
   dueAt?: number
   dueHeight?: number
   /** next allowed reconcile probe — a persisted throttle so terminal-op
@@ -395,7 +562,9 @@ export class AutomationStore {
       network: r.network,
       state: r.state,
       revision: r.revision,
-      data: JSON.parse(r.data),
+      // the one trusted decode: every write path ran checkOpData, so the
+      // persisted JSON's declared fields are MarketOpData's real fields
+      data: JSON.parse(r.data) as MarketOpData,
       ...(r.due_at != null ? { dueAt: Number(r.due_at) } : {}),
       ...(r.due_height != null ? { dueHeight: r.due_height } : {}),
       ...(r.next_reconcile_at != null ? { nextReconcileAt: Number(r.next_reconcile_at) } : {}),
@@ -412,11 +581,16 @@ export class AutomationStore {
     policyHash: string
     network: string
     state: string
-    data: Record<string, unknown>
+    data: MarketOpData
     dueAt?: number
     dueHeight?: number
     operationId?: string
   }): Promise<{ operation: Operation; created: boolean }> {
+    checkOpData(o.data)
+    // nulls strip here too — same contract as the transition merge: a null
+    // is a clear-marker, never a persisted literal (canonicalJson already
+    // drops undefined)
+    const data = Object.fromEntries(Object.entries(o.data).filter(([, v]) => v !== null))
     const r = await this.kx.transaction(async (trx) => {
       const prev = await trx(T.ops).where({ dedupe_key: o.dedupeKey }).first()
       if (prev) return { operation: this.op(prev), created: false }
@@ -431,10 +605,10 @@ export class AutomationStore {
         network: o.network,
         state: o.state,
         revision: 1,
-        data: canonicalJson(o.data),
+        data: canonicalJson(data),
         due_at: o.dueAt ?? (bound !== undefined ? now + bound : null),
         due_height: o.dueHeight ?? null,
-        proven_height: (o.data.provenHeight as number | undefined) ?? null,
+        proven_height: o.data.provenHeight ?? null,
         created_at: now,
         updated_at: now
       }
@@ -508,7 +682,7 @@ export class AutomationStore {
     expectedRevision: number,
     to: string,
     change: {
-      data?: Record<string, unknown>
+      data?: OpDataPatch
       dueAt?: number | null
       dueHeight?: number | null
       lastError?: string | null
@@ -541,7 +715,18 @@ export class AutomationStore {
       // state's bound or a poisoned op loops its own watchdog forever.
       const patch: Record<string, unknown> = { state: to, revision: expectedRevision + 1, updated_at: to === cur.state ? cur.updated_at : now }
       if (change.data !== undefined) {
-        const merged = { ...JSON.parse(cur.data), ...change.data }
+        const merged: Record<string, unknown> = { ...JSON.parse(cur.data) }
+        // null in a patch is the clear-marker — it deletes the key outright
+        // rather than persisting a literal null, so hydrated op.data fields
+        // are honestly T | undefined (never a live null under a typed read)
+        for (const [k, v] of Object.entries(change.data)) {
+          if (v === null) delete merged[k]
+          else merged[k] = v
+        }
+        // the codec gates the merged bag — an undeclared key or wrong-typed
+        // value throws inside this transaction: transition, event row and
+        // outbox intents roll back together
+        checkOpData(merged)
         patch.data = canonicalJson(merged)
         // the column shadows data.provenHeight so hasLiveOps seeks instead
         // of parsing JSON — written in the same transaction, never drifts

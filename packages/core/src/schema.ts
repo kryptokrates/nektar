@@ -33,6 +33,29 @@ export function field(b: Bytes): Bytes {
   return concat(u32le(b.length), b)
 }
 
+/** THE canonical JSON form — sorted object keys recursively, compact
+ *  separators, JSON.stringify semantics for values it cannot represent
+ *  (undefined/function/symbol object values dropped, array holes → null),
+ *  except bigint which serializes as its decimal string. One contract for
+ *  every digest/receipt/store layer so a third-party verifier re-derives
+ *  identical bytes; it replaced three divergent dialects whose
+ *  undefined/bigint edges emitted invalid JSON or threw. Inputs are
+ *  JSON-shaped values — exotic containers (Map, Uint8Array) degrade to
+ *  sorted-key objects, same as the dialect this consolidates. */
+export function canonicalJson(v: unknown): string {
+  return JSON.stringify(v, (_k, x) =>
+    typeof x === 'bigint'
+      ? x.toString()
+      : x !== null && typeof x === 'object' && !Array.isArray(x)
+        ? Object.fromEntries(
+            Object.keys(x as object)
+              .sort()
+              .map((k) => [k, (x as Record<string, unknown>)[k]])
+          )
+        : x
+  )
+}
+
 export function serializeProvenance(p: Provenance): Bytes {
   // modality is a TRAILING optional field: fragments without it serialize
   // byte-identically to the pre-modality layout, so existing hashes stand.

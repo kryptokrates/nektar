@@ -51,16 +51,11 @@ const args = process.argv.slice(2)
 if (args.includes('--regtest')) {
   // secrets from the gitignored env files → Docker MCP keychain via stdin (never printed)
   const { readFileSync, existsSync } = await import('node:fs')
-  const env = (p) =>
-    existsSync(p)
-      ? Object.fromEntries(
-          readFileSync(p, 'utf8')
-            .split(/\r?\n/)
-            .map((l) => l.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/))
-            .filter(Boolean)
-            .map((m) => [m[1], m[2].trim()])
-        )
-      : {}
+  const { parseDotEnv } = await import('./dotenv.mjs')
+  // the shared parser contract (tools/dotenv.mjs): quotes strip, '#'
+  // comments only after whitespace outside quotes, 'export K=' accepted —
+  // feeding a quoted value verbatim to the keychain stores the WRONG secret
+  const env = (p) => (existsSync(p) ? parseDotEnv(readFileSync(p, 'utf8')) : {})
   const local = env(fileURLToPath(new URL('../.env', import.meta.url)))
   const qs = env(fileURLToPath(new URL('../infra/teranode-quickstart/.env', import.meta.url)))
   const wif = process.env.NEKTAR_REGTEST_WIF ?? local.NEKTAR_REGTEST_WIF

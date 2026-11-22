@@ -11,6 +11,7 @@ import { deadAncestry } from '@nektar/bstack'
 import { openRefusals } from './refusals.js'
 import { TERMINAL } from './market/types.js'
 import type { SignedOffer, SignedWant } from '@nektar/bstack'
+import type { MarketOpData } from './store.js'
 import type { Rt } from './rtctx.js'
 
 export function openUpkeep(rt: Rt): void {
@@ -68,7 +69,12 @@ export function openUpkeep(rt: Rt): void {
   const broadcast = async (tx: import('@bsv/sdk').Transaction): Promise<import('@nektar/chain').BroadcastResult> => {
     const r = await mem.broadcastTx(tx)
     if (r.status === 'success') return r
-    if (refusals.noteRefusal(r.description) === 0 && BROADCAST_DEFINITIVE.test(r.description ?? '') && !unmatchedRefusals.has(r.description ?? '')) {
+    if (
+      refusals.noteRefusal(r.description) === 0 &&
+      BROADCAST_DEFINITIVE.test(r.description ?? '') &&
+      !(r.description ?? '').startsWith('transport:') &&
+      !unmatchedRefusals.has(r.description ?? '')
+    ) {
       unmatchedRefusals.add(r.description ?? '')
       log(`automation: definitive refusal named no ancestor — unrecognized wording: ${(r.description ?? '').slice(0, 200)}`)
     }
@@ -80,13 +86,18 @@ export function openUpkeep(rt: Rt): void {
     const s = stuckMints.get(tid) ?? { first: now, tries: 0 }
     stuckMints.set(tid, s)
     if (now - s.first < WAITS.mintHeal.ms) return 'keep'
-    const r = await broadcast(tree).catch((e: unknown) => ({ status: 'error' as const, description: e instanceof Error ? e.message : String(e) }))
+    const r = await broadcast(tree).catch((e: unknown) => ({
+      status: 'error' as const,
+      description: `transport: ${e instanceof Error ? e.message : String(e)}`
+    }))
     s.first = now // one heal attempt per window
     if (r.status === 'success') {
       s.tries = 0
       return 'keep'
     }
-    if (!BROADCAST_DEFINITIVE.test(r.description ?? '')) return 'keep'
+    // a thrown broadcast is transport (never reached the wire) — only a
+    // resolved DEFINITIVE verdict can retire the stuck mint
+    if (!BROADCAST_DEFINITIVE.test(r.description ?? '') || (r.description ?? '').startsWith('transport:')) return 'keep'
     s.tries++
     return s.tries >= 2 ? 'drop' : 'keep'
   }
@@ -164,7 +175,7 @@ export function openUpkeep(rt: Rt): void {
   const EV_CURSOR = 'log#events'
   let logError = ''
   let fingerError = ''
-  const wantIdOf = (op: { data: Record<string, unknown> }): string | null => (op.data.want as SignedWant | undefined)?.want?.wantId ?? null
+  const wantIdOf = (op: { data: MarketOpData }): string | null => op.data.want?.want?.wantId ?? null
   // anchors never block a cycle: they run on the inflight set like pushed work
   const maybeAnchor = async (): Promise<void> => {
     if (lanes === undefined || logState === undefined || logStream === undefined) return
@@ -326,7 +337,10 @@ export function openUpkeep(rt: Rt): void {
                   if (br.status === 'success') {
                     await mem.funds.spent(dtx)
                     log(`automation: reserve: split ${src.satoshis} into ${wantOuts}x${outSats} medium outputs`)
-                  } else {
+                  } else if (BROADCAST_DEFINITIVE.test(br.description ?? '') && !(br.description ?? '').startsWith('transport:')) {
+                    // only a provably-dead verdict frees the inputs — a
+                    // transport/'error' result may have aired; the phantom
+                    // reservation beats a double-spend of a split that lands
                     await mem.funds.died(dtx)
                   }
                 }
@@ -413,7 +427,7 @@ export function openUpkeep(rt: Rt): void {
               // (transport) failure keeps the reservation — a phantom
               // reservation beats a double-spend of a mint that may land.
               onRefused: (tree, r) => {
-                if (BROADCAST_DEFINITIVE.test(r.description ?? '')) ghostMint(tree)
+                if (BROADCAST_DEFINITIVE.test(r.description ?? '') && !(r.description ?? '').startsWith('transport:')) ghostMint(tree)
               },
               onStuck: (tree) => stuckMint(tree),
               onSpent: (tree) => void mem.funds.spent(tree)
@@ -619,12 +633,12 @@ export function openUpkeep(rt: Rt): void {
     const cp =
       op.role === 'buyer'
         ? (() => {
-            const sel = (op.data.selected as { key?: string } | undefined)?.key
-            const so = sel !== undefined ? (op.data.offers as Record<string, { so: SignedOffer }> | undefined)?.[sel]?.so : undefined
+            const sel = op.data.selected?.key
+            const so = sel !== undefined ? op.data.offers?.[sel]?.so : undefined
             return so?.offer.journal?.stream !== undefined && sel !== undefined ? { stream: so.offer.journal.stream, producer: sel.split(':')[0] } : undefined
           })()
         : (() => {
-            const w = op.data.want as SignedWant | undefined
+            const w = op.data.want
             return w?.want.journal?.stream !== undefined ? { stream: w.want.journal.stream, producer: w.want.pub } : undefined
           })()
     if (cp === undefined) return { own }

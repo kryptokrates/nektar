@@ -5,7 +5,7 @@
 //   node tools/init.mjs            interactive (@clack/prompts wizard)
 //   node tools/init.mjs --yes      accept all defaults (regtest, ./.nektar, stdio)
 //   node tools/init.mjs --env testnet --dir .testnet --port 8080
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes } from 'node:crypto'
@@ -30,16 +30,8 @@ const req = (v) => {
 // ─── existing config → reconfigure defaults (Hermes pattern: current values
 //     ride as prompt defaults so a re-run only changes what you touch) ───────
 const envPath = join(root, '.env')
-const readEnv = (p) =>
-  existsSync(p)
-    ? Object.fromEntries(
-        readFileSync(p, 'utf8')
-          .split(/\r?\n/)
-          .map((l) => l.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/))
-          .filter(Boolean)
-          .map((m) => [m[1], m[2].trim()])
-      )
-    : {}
+const { parseDotEnv } = await import('./dotenv.mjs')
+const readEnv = (p) => (existsSync(p) ? parseDotEnv(readFileSync(p, 'utf8')) : {})
 const prev = readEnv(envPath)
 const reconfigure = Boolean(prev.NEKTAR_NETWORK)
 
@@ -138,6 +130,13 @@ if (existsSync(envPath)) {
     .trimEnd()
   writeFileSync(envPath, (kept ? kept + '\n\n' : '') + body)
 } else writeFileSync(envPath, body)
+// 0600 — this file holds the passphrase that decrypts the 0600 keys; a
+// default-umask (0644) .env leaks the one secret those files exist to protect
+try {
+  chmodSync(envPath, 0o600)
+} catch {
+  /* Windows has no POSIX modes — the ACL inherits and NTFS keeps it private */
+}
 note(`wrote ${envPath}` + (generatedPass ? '\ngenerated NEKTAR_KEY_PASSPHRASE — .env + the data dir ARE the agent; back up both' : ''))
 
 // ─── next steps ─────────────────────────────────────────────────────────────

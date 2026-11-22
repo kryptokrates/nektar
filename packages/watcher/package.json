@@ -12,6 +12,7 @@
   "dependencies": {
     "@nektar/anchor": "workspace:*",
     "@nektar/chain": "workspace:*",
+    "@nektar/core": "workspace:*",
     "@nektar/zk": "workspace:*",
     "runar-sdk": "0.4.6"
   },

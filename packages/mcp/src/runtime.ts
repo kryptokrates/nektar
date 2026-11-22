@@ -98,7 +98,7 @@ export function configFromEnv(env = process.env): RuntimeConfig {
     autoMine: env.NEKTAR_AUTOMINE === '1',
     // regtest cadence (live nets override below). The confirmer's tip gate
     // makes an idle tick one height RPC — proofs surface ~1s after a block.
-    confirmEveryMs: Number(env.NEKTAR_CONFIRM_MS ?? 1000),
+    confirmEveryMs: nektarEnvNum('NEKTAR_CONFIRM_MS', env) ?? 1000,
     clearanceAuthorities: (env.NEKTAR_CLEARANCE_AUTHORITIES ?? '')
       .split(',')
       .map((s) => s.trim())
@@ -124,9 +124,14 @@ export function configFromEnv(env = process.env): RuntimeConfig {
     }
     // testNet = any test network (testnet encoding, test coins, low fee floor)
     const testNet = network !== 'main'
+    // both live nets need a working primary indexer — it wires the liveSet
+    // spent-oracle and the broadcaster index-fallback; undefined left mainnet
+    // without either (a resilience regression testnet never had)
     const urls =
-      network === 'testnet' ? { broadcaster: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', indexer: 'https://test.bananablocks.com/api/v1' } : undefined
-    cfg.confirmEveryMs = Number(env.NEKTAR_CONFIRM_MS ?? (testNet ? 30_000 : 60_000))
+      network === 'testnet'
+        ? { broadcaster: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', indexer: 'https://test.bananablocks.com/api/v1' }
+        : { broadcaster: undefined, indexer: 'https://bananablocks.com/api/v1' }
+    cfg.confirmEveryMs = nektarEnvNum('NEKTAR_CONFIRM_MS', env) ?? (testNet ? 30_000 : 60_000)
     cfg.main = {
       fundWif: secret('NEKTAR_FUND_WIF'),
       passphrase: secret('NEKTAR_KEY_PASSPHRASE'),
@@ -163,12 +168,14 @@ export function configFromEnv(env = process.env): RuntimeConfig {
       chaintracksUrl: env.NEKTAR_CHAINTRACKS_URL,
       // fee floor: 100 sat/kB main (GorillaPool policy), 1 sat/kB test nets
       // (a zero fee rate would produce free-of-fee txs miners may reject)
-      feeRateSatPerKb: env.NEKTAR_FEE_RATE_SAT_PER_KB ? Number(env.NEKTAR_FEE_RATE_SAT_PER_KB) : testNet ? 1 : undefined,
-      maxFeePerTx: Number(env.NEKTAR_MAX_FEE_SATS_PER_TX ?? 1000),
-      // 'unlimited' is the documented opt-out — Number('unlimited') is NaN,
-      // and NaN would silently disable EVERY cap (fee > NaN is false)
-      maxSpendPerDay: env.NEKTAR_MAX_SPEND_SATS_PER_DAY === 'unlimited' ? Number.MAX_SAFE_INTEGER : Number(env.NEKTAR_MAX_SPEND_SATS_PER_DAY ?? 20_000),
-      minBroadcastIntervalMs: Number(env.NEKTAR_MIN_BROADCAST_INTERVAL_MS ?? 250)
+      feeRateSatPerKb: nektarEnvNum('NEKTAR_FEE_RATE_SAT_PER_KB', env) ?? (testNet ? 1 : undefined),
+      maxFeePerTx: nektarEnvNum('NEKTAR_MAX_FEE_SATS_PER_TX', env) ?? 1000,
+      // 'unlimited' is the documented opt-out — a non-numeric value is a
+      // MISCONFIGURATION, never a wider cap: nektarEnvNum drops NaN and the
+      // shipped default binds instead (junk can only tighten, never loosen)
+      maxSpendPerDay:
+        env.NEKTAR_MAX_SPEND_SATS_PER_DAY === 'unlimited' ? Number.MAX_SAFE_INTEGER : (nektarEnvNum('NEKTAR_MAX_SPEND_SATS_PER_DAY', env) ?? 20_000),
+      minBroadcastIntervalMs: nektarEnvNum('NEKTAR_MIN_BROADCAST_INTERVAL_MS', env) ?? 250
     }
   }
   return cfg
@@ -235,7 +242,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     bond:
       bondEpoch || bondMaxFee
         ? {
-            epochBlocks: Number(bondEpoch ?? 144),
+            epochBlocks: nektarEnvNum('NEKTAR_BOND_EPOCH') ?? 144,
             ...(bondMaxFee !== undefined ? { maxFee: BigInt(bondMaxFee) } : {})
           }
         : undefined
@@ -275,13 +282,20 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
               // and only when EVERY set cap agrees (mixed signals never
               // silently un-guard the spend path)
               ...(() => {
-                const caps = [nektarEnv('NEKTAR_DAILY_CAP_SATS'), nektarEnv('NEKTAR_MAX_SPEND_SATS_PER_DAY')].filter((x) => x !== undefined)
-                const unlimited = caps.length > 0 && caps.every((x) => x === 'unlimited')
+                const raw = [nektarEnv('NEKTAR_DAILY_CAP_SATS'), nektarEnv('NEKTAR_MAX_SPEND_SATS_PER_DAY')].filter((x) => x !== undefined)
+                const unlimited = raw.length > 0 && raw.every((x) => x === 'unlimited')
+                // a non-numeric cap is a MISCONFIGURATION, not a value —
+                // Math.min(NaN, ...) is NaN and NaN silently un-caps the
+                // day; dropping it keeps every other explicit cap binding
+                const caps = raw
+                  .filter((x) => x !== 'unlimited')
+                  .map((x) => Number(x))
+                  .filter(Number.isFinite)
                 return {
                   unlimited,
-                  maxPerDay: unlimited ? Number.MAX_SAFE_INTEGER : Math.min(...caps.filter((x) => x !== 'unlimited').map((x) => Number(x)), 10_000),
-                  maxFeePerTx: Number(nektarEnv('NEKTAR_MAX_FEE_SATS_PER_TX') ?? 1_000),
-                  minIntervalMs: Number(nektarEnv('NEKTAR_MIN_BROADCAST_INTERVAL_MS') ?? 0)
+                  maxPerDay: unlimited ? Number.MAX_SAFE_INTEGER : Math.min(...caps, 10_000),
+                  maxFeePerTx: nektarEnvNum('NEKTAR_MAX_FEE_SATS_PER_TX') ?? 1_000,
+                  minIntervalMs: nektarEnvNum('NEKTAR_MIN_BROADCAST_INTERVAL_MS') ?? 0
                 }
               })(),
               ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
@@ -494,7 +508,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     store
   )
   memRef = mem
-  healLedgerOnProof(mem, ledger, net)
+  const stopProofHeal = healLedgerOnProof(mem, ledger, net)
   // a reorg invalidates cached proofs at/above the fork: clear them and
   // re-watch so the observe path re-fetches and re-verifies against the new
   // headers. Un-anchoring shard records stays out of scope — finalityDepth
@@ -606,6 +620,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     close: async () => {
       stream?.close()
       events.stop()
+      stopProofHeal()
       cw.close()
       // every teardown await carries a ceiling — a wedged chain/db call
       // must not hang the exit (bin.ts's hard deadline is the outer backstop)

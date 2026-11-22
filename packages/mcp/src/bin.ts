@@ -4,19 +4,36 @@
 //   Streamable HTTP+REST:  NEKTAR_HTTP_PORT=8080 node dist/src/bin.js
 // Backend via NEKTAR_NETWORK=regtest (default, local Teranode stack) | testnet | main
 // (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
-import { nektarEnv, setNektarEnv, mkLog } from '@nektar/core'
+import { nektarEnv, nektarEnvFlag, parseDotEnv, setNektarEnv, mkLog } from '@nektar/core'
 import { marketHosts } from './hosts.js'
 import { existsSync, readFileSync } from 'node:fs'
 
-// --env <regtest|testnet|main> + optional .env beside cwd → minimal-typing boot.
-// .env lines are applied only where the var isn't already set (shell wins).
+// --env <regtest|testnet|main> (or --env=x) + optional .env beside cwd →
+// minimal-typing boot. .env lines are applied only where the var isn't
+// already set (shell wins).
 const nlog = mkLog('nektar')
 const argv = process.argv.slice(2)
-const envFlag = argv.includes('--env') ? argv[argv.indexOf('--env') + 1] : undefined
-// precedence: exports > --env > profile > .env. The profile is the explicit
-// role choice for THIS boot — a stale .env carrying NEKTAR_NETWORK must lose
-// to it, or 'mainnet' silently boots testnet (seen live). Exports always
-// win regardless of order: they're already set when we read.
+/** --flag value and --flag=value both parse — silently ignoring the = form
+ *  booted the default network once already */
+const flagVal = (name: string): string | undefined => {
+  const i = argv.indexOf(name)
+  if (i !== -1) return argv[i + 1]
+  const eq = argv.find((a) => a.startsWith(`${name}=`))
+  return eq?.slice(name.length + 1)
+}
+const envFlag = flagVal('--env')
+// .env parsing is the shared contract in @nektar/core (env.ts parseDotEnv) —
+// the incident this parser was hardened for lives in its doc comment
+// .env parses FIRST into a record (not applied): NEKTAR_PROFILE inside .env
+// must expand like an exported one — an unexpanded profile in .env silently
+// booted the default network.
+const dot = existsSync('.env') ? parseDotEnv(readFileSync('.env', 'utf8')) : {}
+// precedence: exports > --env > profile > .env for the ROLE (NEKTAR_NETWORK) —
+// a stale .env carrying NEKTAR_NETWORK must lose to the explicit profile, or
+// 'mainnet' silently boots testnet (seen live). For every OTHER key the
+// profile only supplies defaults: an explicit .env value is more explicit
+// than a profile's convenience default (a .env NEKTAR_DATA_DIR losing to a
+// profile's '.nektar' boots a fresh empty identity — also seen live).
 // NEKTAR_PROFILE — one name fills the conventional defaults for a role.
 // An unknown name is a loud refusal — silently booting the wrong shape is
 // how agents end up on mainnet with regtest assumptions (or the reverse).
@@ -52,34 +69,39 @@ const PROFILE_ALIASES: Record<string, string> = {
   main: 'mainnet-agent',
   mainnet: 'mainnet-agent'
 }
-const profile = nektarEnv('NEKTAR_PROFILE')
+const profile = nektarEnv('NEKTAR_PROFILE') ?? dot['NEKTAR_PROFILE']
+let defs: Record<string, string> | undefined
 if (profile !== undefined) {
   const resolved = PROFILE_ALIASES[profile] ?? profile
-  const defs = PROFILES[resolved]
+  defs = PROFILES[resolved]
   if (defs === undefined) {
     nlog(`NEKTAR_PROFILE must be one of ${Object.keys(PROFILES).join('|')}, got "${profile}"`)
     process.exit(2)
   }
   if (resolved !== profile) nlog(`profile "${profile}" → "${resolved}"`)
-  for (const [k, v] of Object.entries(defs)) if (nektarEnv(k) === undefined) setNektarEnv(k, v)
+  setNektarEnv('NEKTAR_PROFILE', resolved)
 }
-if (existsSync('.env')) {
-  for (const line of readFileSync('.env', 'utf8').split(/\r?\n/)) {
-    const m = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
-    if (m && nektarEnv(m[1]) === undefined) setNektarEnv(m[1], m[2].trim())
-  }
+if (envFlag !== undefined && !/^(regtest|testnet|main)$/.test(envFlag)) {
+  nlog(`--env must be regtest|testnet|main, got "${envFlag}"`)
+  process.exit(2)
 }
-if (envFlag) {
-  if (!/^(regtest|testnet|main)$/.test(envFlag)) {
-    nlog(`--env must be regtest|testnet|main, got "${envFlag}"`)
-    process.exit(2)
-  }
-  setNektarEnv('NEKTAR_NETWORK', envFlag)
+// the strict chain for the role choice — .env is LAST here by design
+const network = nektarEnv('NEKTAR_NETWORK') ?? envFlag ?? defs?.NEKTAR_NETWORK ?? dot['NEKTAR_NETWORK']
+if (network !== undefined) setNektarEnv('NEKTAR_NETWORK', network)
+// every other key: export > flag > .env > profile default — flags fill only
+// unset values per the contract (an export is already set when we read, and
+// a flag that clobbered it would surprise the deployer who exported)
+const portFlag = flagVal('--port')
+const hostFlag = flagVal('--host')
+const fill = (k: string, v: string | undefined): void => {
+  if (v !== undefined && nektarEnv(k) === undefined) setNektarEnv(k, v)
 }
-const portFlag = argv.includes('--port') ? argv[argv.indexOf('--port') + 1] : undefined
-if (portFlag) setNektarEnv('NEKTAR_HTTP_PORT', portFlag)
-const hostFlag = argv.includes('--host') ? argv[argv.indexOf('--host') + 1] : undefined
-if (hostFlag) setNektarEnv('NEKTAR_HTTP_HOST', hostFlag)
+fill('NEKTAR_HTTP_PORT', portFlag ?? dot['NEKTAR_HTTP_PORT'] ?? defs?.NEKTAR_HTTP_PORT)
+fill('NEKTAR_HTTP_HOST', hostFlag ?? dot['NEKTAR_HTTP_HOST'] ?? defs?.NEKTAR_HTTP_HOST)
+// .env spreads over profile defaults — the strict order was for the role
+// choice only; deliberate .env config beats a profile's convenience default
+for (const [k, v] of Object.entries({ ...defs, ...dot }))
+  if (k !== 'NEKTAR_NETWORK' && k !== 'NEKTAR_PROFILE' && k !== 'NEKTAR_HTTP_PORT' && k !== 'NEKTAR_HTTP_HOST') fill(k, v)
 
 // runtime.js pulls @nektar/automation → wallet-toolbox, which dotenv-loads
 // the repo .env into process.env at import time. It must evaluate AFTER the
@@ -261,7 +283,7 @@ if (port) {
   // operator route unauthenticated — refuse unless the operator explicitly
   // opts into open serving
   const loopbackBind = host === '127.0.0.1' || host === 'localhost' || host === '::1'
-  if (!loopbackBind && nektarEnv('NEKTAR_HTTP_TOKEN') === undefined && !nektarEnv('NEKTAR_INSECURE_NO_AUTH'))
+  if (!loopbackBind && nektarEnv('NEKTAR_HTTP_TOKEN') === undefined && nektarEnvFlag('NEKTAR_INSECURE_NO_AUTH') !== true)
     throw new Error(
       `refusing to bind ${host}:${port} without NEKTAR_HTTP_TOKEN — the tool surface would be unauthenticated (set NEKTAR_INSECURE_NO_AUTH=1 to override)`
     )

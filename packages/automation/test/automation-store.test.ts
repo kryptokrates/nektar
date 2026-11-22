@@ -185,7 +185,7 @@ test('operations: idempotent creation, CAS transitions, transactional outbox, ev
       policyHash: 'h',
       network: 'regtest',
       state: 'published',
-      data: { wantId: 'w1' }
+      data: { escrowTxid: 'w1' }
     })
   const a = await mk()
   if (a === undefined) return
@@ -197,11 +197,11 @@ test('operations: idempotent creation, CAS transitions, transactional outbox, ev
   const id = a.operation.operationId
   const next = await store.transition(id, 1, 'collecting', {
     cause: 'want_published',
-    data: { offers: 0 },
+    data: { offers: {} },
     outbox: [{ actionId: `${id}:publish`, kind: 'want', destination: 'rv', payload: { x: 1 } }]
   })
   assert.equal(next.revision, 2)
-  assert.deepEqual(next.data, { offers: 0, wantId: 'w1' })
+  assert.deepEqual(next.data, { offers: {}, escrowTxid: 'w1' })
   await assert.rejects(store.transition(id, 1, 'ranked', { cause: 'stale' }), RevisionConflict)
   const racers = await Promise.allSettled([store.transition(id, 2, 'ranked', { cause: 'x' }), store.transition(id, 2, 'expired', { cause: 'y' })])
   assert.equal(racers.filter((r) => r.status === 'fulfilled').length, 1, 'exactly one of two racing transitions wins')
@@ -211,6 +211,55 @@ test('operations: idempotent creation, CAS transitions, transactional outbox, ev
   await store.retryOutbox(`${id}:publish`, 'net down')
   assert.equal((await store.dueOutbox()).length, 0, 'backoff defers the retry')
   await store.ackOutbox(`${id}:publish`)
+})
+
+test('op.data codec: closed schema rejects undeclared/malformed writes; null clears rather than persisting', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  await assert.rejects(
+    store.createOperation({
+      role: 'buyer',
+      kind: 'purchase',
+      dedupeKey: 'buyer:bad',
+      policyHash: 'h',
+      network: 'regtest',
+      state: 'published',
+      data: { typoField: 1 } as never
+    }),
+    /undeclared field/
+  )
+  await assert.rejects(
+    store.createOperation({
+      role: 'buyer',
+      kind: 'purchase',
+      dedupeKey: 'buyer:bad2',
+      policyHash: 'h',
+      network: 'regtest',
+      state: 'published',
+      data: { escrowTxid: 42 } as never
+    }),
+    /malformed value/
+  )
+  const a = await store.createOperation({
+    role: 'buyer',
+    kind: 'purchase',
+    dedupeKey: 'buyer:w2',
+    policyHash: 'h',
+    network: 'regtest',
+    state: 'published',
+    data: { escrowTxid: 'e1', fundingSince: 7 }
+  })
+  const id = a.operation.operationId
+  await assert.rejects(store.transition(id, 1, 'collecting', { cause: 'x', data: { mystery: true } as never }), /undeclared field/)
+  const still = await store.operation(id)
+  assert.equal(still?.state, 'published', 'a rejected transition leaves state untouched')
+  assert.equal(still?.revision, 1)
+  const cleared = await store.transition(id, 1, 'collecting', { cause: 'clear', data: { escrowTxid: null, fundingSince: null } })
+  assert.equal(cleared.data.escrowTxid, undefined)
+  assert.equal(cleared.data.fundingSince, undefined)
+  assert.equal('escrowTxid' in cleared.data, false, 'null deletes the key — no literal null persists under a typed read')
+  const row = await kx('market_operations').where({ operation_id: id }).first()
+  assert.equal(JSON.parse(row.data).escrowTxid, undefined, 'the persisted JSON carries no null literal either')
 })
 
 test('approvals: bound to the exact action digest, single use, expiry enforced', async (t) => {
@@ -717,7 +766,7 @@ test('aggregates: opsByIds, eventCountsByOp, hasLiveOps, hasDueAtHeight', async 
   const ops = await store.opsByIds([a, b, 'missing'])
   assert.equal(ops.size, 2)
   assert.equal(ops.get(a)?.state, 'ranked')
-  assert.equal(ops.get(b)?.data.wantId, undefined)
+  assert.equal(ops.get(b)?.data.escrowTxid, undefined)
 
   // agrees with per-row eventCount at every cursor boundary
   for (const cursor of [0, 1, 2, 99]) {

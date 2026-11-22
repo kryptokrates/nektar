@@ -364,7 +364,8 @@ async function world(
         txSpent: async (w) => {
           await mem.funds.spent(await rebuild(w))
         }
-      }
+      },
+      now
     })
     return engine
   }

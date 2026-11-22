@@ -15,6 +15,7 @@ import { RunarContract, LocalSigner, deserializeState } from 'runar-sdk'
 import { NektarProvider } from '@nektar/anchor'
 import { TeranodeBroadcaster, ReserveFunder, bootstrapReserve } from '@nektar/chain'
 import { loadClaims, proofFile, markClaimSpent, registerClaim } from '@nektar/chain'
+import { parseDotEnv } from '@nektar/core'
 import { existsSync, readFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -66,15 +67,7 @@ const ARG = (k, d = null) => {
 const ONCE = process.argv.includes('--once')
 const WATCH_MS = Number(ARG('watch-ms', '5000'))
 
-function readEnv(p) {
-  const out = {}
-  if (!existsSync(p)) return out
-  for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
-    const m = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
-    if (m) out[m[1]] = m[2].trim()
-  }
-  return out
-}
+const readEnv = (p) => (existsSync(p) ? parseDotEnv(readFileSync(p, 'utf8')) : {})
 const localEnv = { ...readEnv(new URL('../../.env', import.meta.url)), ...readEnv(new URL('../../../.env', import.meta.url)) }
 // quickstart creds: repo path locally, mounted file in containers (NEKTAR_QS_ENV)
 const qsEnv = readEnv(process.env.NEKTAR_QS_ENV ?? new URL('../../../infra/teranode-quickstart/.env', import.meta.url))

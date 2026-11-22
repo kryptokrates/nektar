@@ -604,6 +604,9 @@ importers:
       '@nektar/chain':
         specifier: workspace:*
         version: link:../chain
+      '@nektar/core':
+        specifier: workspace:*
+        version: link:../core
       '@nektar/zk':
         specifier: workspace:*
         version: link:../zk

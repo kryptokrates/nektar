@@ -1,4 +1,4 @@
-import { sha256, utf8, toHex } from '@nektar/core'
+import { sha256, utf8, toHex, canonicalJson } from '@nektar/core'
 import { SCORE_DIMENSIONS, type ScoreWeights } from './scoring.js'
 
 export interface ActionContext {
@@ -113,7 +113,8 @@ export function policyError(p: unknown): string | undefined {
 /** operator-safety rules applied at the approval boundary only — NOT inside
  *  policyError. Stored/test policies and legacy approvals keep validating
  *  structurally; this gate stops a human approving a production policy
- *  whose values hurt the engine it signs for. */
+ *  whose values hurt the engine it signs for.
+ *  @public consumed by tools/automation.mjs via the compiled dist module */
 export function policyApprovalError(p: unknown): string | undefined {
   const e = policyError(p)
   if (e) return e
@@ -125,18 +126,9 @@ export function policyApprovalError(p: unknown): string | undefined {
   return undefined
 }
 
-export const canonicalJson = (v: unknown): string =>
-  JSON.stringify(v, (_k, x) =>
-    typeof x === 'bigint'
-      ? x.toString()
-      : x !== null && typeof x === 'object' && !Array.isArray(x)
-        ? Object.fromEntries(
-            Object.keys(x as object)
-              .sort()
-              .map((k) => [k, (x as Record<string, unknown>)[k]])
-          )
-        : x
-  )
+// the canonical JSON contract lives in @nektar/core (schema.ts) — one form
+// for every digest/store layer; re-exported for existing import sites
+export { canonicalJson }
 
 export const digestOf = (domain: string, v: unknown): string => toHex(sha256(utf8(`${domain}\n${canonicalJson(v)}`)))
 

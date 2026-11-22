@@ -1,0 +1,14 @@
+# Patterns helm itself ships in `helm create` — keep to this set: helm v4
+# applies .helmignore at template load, and exotic patterns (negations,
+# broad globs) can exclude the chart out from under itself
+.git/
+*.swp
+*.swo
+*.bak
+*.orig
+*.project
+*.tmproj
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

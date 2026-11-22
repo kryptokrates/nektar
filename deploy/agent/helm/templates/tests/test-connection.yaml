@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "nektar-agent.fullname" . }}-test-connection"
+  labels:
+    {{- include "nektar-agent.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  restartPolicy: Never
+  containers:
+    - name: wget
+      # /healthz is public-by-design — the same path the probes use, so a
+      # green test proves the readiness gate, not just the socket
+      image: busybox:1.36
+      command: ['wget', '-q', '-O-', '--timeout=10', 'http://{{ include "nektar-agent.fullname" . }}:{{ .Values.service.port }}/healthz']

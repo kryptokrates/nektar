@@ -86,7 +86,12 @@ ENV NEKTAR_MODEL_ID=unspecified NEKTAR_BATCH=4 NEKTAR_DATA_DIR=/data NEKTAR_TOOL
 ENV NEKTAR_ANCHORED_LANES=all
 VOLUME /data
 LABEL io.modelcontextprotocol.server.name="io.github.nedzof/nektar"
-# health = a full scripted MCP session against a fresh server process
+# health = the live process answering its own port. The old probe spawned a
+# second bin.js over MCP stdio — the instance lock refuses a second process
+# on the data dir BY DESIGN, so it could only ever report unhealthy while
+# PID 1 lived. /v1/health is the public unauthenticated route (e2e uses it
+# as the up-check); stdio-only boots (no NEKTAR_HTTP_PORT) fall back to the
+# instance.lock heartbeat being fresher than its own 20s staleness bound.
 # hadolint ignore=DL3025
-HEALTHCHECK --interval=5m --timeout=60s CMD node demo/client.mjs > /dev/null || exit 1
+HEALTHCHECK --interval=5m --timeout=60s --start-period=30s CMD node -e "const fs=require('fs');const p=process.env.NEKTAR_HTTP_PORT;if(p){fetch('http://127.0.0.1:'+p+'/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))}else{try{const l=JSON.parse(fs.readFileSync((process.env.NEKTAR_DATA_DIR||'/data')+'/instance.lock','utf8'));process.exit(Date.now()-l.beat<20000?0:1)}catch{process.exit(1)}}"
 ENTRYPOINT ["node", "dist/src/bin.js"]

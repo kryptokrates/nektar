@@ -6,9 +6,12 @@ metadata:
     {{- include "nektar-agent.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
+  # ClusterIP, not headless: clusterIPs is immutable, so flipping an
+  # existing install to headless would fail upgrade mid-flight — and a
+  # single-replica HTTP service gains nothing from pod-DNS identity
   ports:
     - name: http
       port: {{ .Values.service.port }}
       targetPort: http
   selector:
-    {{- include "nektar-agent.labels" . | nindent 4 }}
+    {{- include "nektar-agent.selectorLabels" . | nindent 4 }}

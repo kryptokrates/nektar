@@ -68,10 +68,10 @@ if (!target) {
   if (got !== want) throw new Error(`restate-server sha256 mismatch: got ${got}, want ${want}`)
   const tmp = mkdtempSync(join(tmpdir(), 'restate-'))
   writeFileSync(join(tmp, name), txz)
-  // --force-local + posix paths: git-bash tar reads `C:\` as a remote host
-  // spec and its -C can't open backslashed windows dirs
-  const posix = (p) => p.replace(/\\/g, '/')
-  const x = spawnSync('tar', ['--force-local', '-xJf', posix(join(tmp, name)), '-C', posix(tmp)], { stdio: 'inherit' })
+  // extract in cwd with a bare filename — no absolute path reaches tar at
+  // all, so gnu tar's `C:` remote-host quirk and bsdtar's missing
+  // --force-local are both sidestepped (win32/macos runners ship bsdtar)
+  const x = spawnSync('tar', ['-xJf', name], { cwd: tmp, stdio: 'inherit' })
   if (x.status !== 0) throw new Error(`tar extract failed (${x.status}) — need bsdtar with xz support`)
   const src = join(tmp, `restate-server-${target}`, 'restate-server')
   const rd = join(out, 'restate')

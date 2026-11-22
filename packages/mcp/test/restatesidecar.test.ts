@@ -9,17 +9,22 @@ import { ensureRestate } from '../src/restatesidecar.js'
 // the sidecar's resolution order — every external seam (fetch, spawn, spawnSync,
 // platform, restateDir) is injected so the tests never touch a real restate
 
-const fakeChild = (): { c: ChildProcess; killed: boolean[] } => {
+const fakeChild = (): { c: ChildProcess; killed: boolean[]; fire: (ev: string, arg?: unknown) => void } => {
   const killed: boolean[] = []
+  const handlers = new Map<string, (arg?: unknown) => void>()
   const c = {
     kill: () => {
       killed.push(true)
       return true
     },
     unref: () => {},
-    on: () => c
+    on: () => c,
+    once: (ev: string, fn: (arg?: unknown) => void) => {
+      handlers.set(ev, fn)
+      return c
+    }
   } as unknown as ChildProcess
-  return { c, killed }
+  return { c, killed, fire: (ev, arg) => handlers.get(ev)?.(arg) }
 }
 
 const okFetch =
@@ -114,6 +119,32 @@ void test('sidecar: spawn failure degrades — memory plane still boots', async 
   })
   assert.equal(st, 'degraded')
   assert.ok(logs.some((m) => m.includes('spawn failed')))
+})
+
+void test('sidecar: child dying at exec degrades immediately — no 30s poll', async () => {
+  // the glibc-on-bookworm exec failure seen in the image smoke: the binary
+  // can't even start, admin never answers — the child's error/exit event must
+  // cut the wait short instead of polling a dead port for the full deadline
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-rs-'))
+  writeFileSync(join(dir, 'restate-server'), 'x')
+  const env: NodeJS.ProcessEnv = { NEKTAR_DATA_DIR: mkdtempSync(join(tmpdir(), 'nektar-dd-')) }
+  const logs: string[] = []
+  const { c, fire } = fakeChild()
+  const t0 = Date.now()
+  const st = await ensureRestate({
+    env,
+    log: (m) => logs.push(m),
+    platform: 'linux',
+    fetchImpl: deadFetch,
+    spawnImpl: () => {
+      setTimeout(() => fire('error', new Error('ENOENT: no such file or directory')), 0)
+      return c
+    },
+    restateDir: dir
+  })
+  assert.equal(st, 'degraded')
+  assert.ok(Date.now() - t0 < 5_000)
+  assert.ok(logs.some((m) => m.includes('sidecar died')))
 })
 
 void test('sidecar: native spawn + admin answers → spawned, cleanup kills the child', async () => {

@@ -220,9 +220,15 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
     return 'degraded'
   }
 
-  // restate takes a few seconds to provision a fresh cluster
+  // restate takes a few seconds to provision a fresh cluster — but a binary
+  // that can't exec (missing loader/libs) dies instantly, and polling the
+  // admin port for 30s would only delay the honest degrade (seen live: the
+  // glibc build on bookworm). Bail the moment the child errors or exits.
+  let childDied: string | undefined
+  child.once('error', (e) => (childDied = e.message))
+  child.once('exit', (code) => (childDied ??= `exit ${code}`))
   const deadline = Date.now() + 30_000
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && childDied === undefined) {
     if (await adminAlive(adminUrl, fetchImpl, 2000)) {
       setNektarEnv('NEKTAR_RESTATE_URL', ingressUrl, env)
       setNektarEnv('NEKTAR_RESTATE_ADMIN', adminUrl, env)
@@ -249,6 +255,8 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
       /* best effort */
     }
   }
-  log(`restate: sidecar did not come up within 30s — market plane disabled (see ${join(work, 'restate.log')})`)
+  log(
+    `restate: ${childDied !== undefined ? `sidecar died (${childDied})` : 'sidecar did not come up within 30s'} — market plane disabled (see ${join(work, 'restate.log')})`
+  )
   return 'degraded'
 }

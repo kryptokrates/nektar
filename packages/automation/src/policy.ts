@@ -87,10 +87,6 @@ export function policyError(p: unknown): string | undefined {
     SCORE_DIMENSIONS.reduce((s, k) => s + q.scoring.weights[k], 0) !== 10000
   )
     return 'scoring'
-  // a sub-5s window republishes the want at every boundary for its whole
-  // wantExtendMs life — ~120 outbox rows at 1s — drowning the drain behind
-  // envelopes that can never outlive an offer round-trip anyway
-  if (q.scoring.collectMs < 5_000) return 'scoring: collectMs under 5000 — the collection window must outlive one offer round-trip'
   if (
     !exact(q.seller, ['minPriceSats', 'maxPriceSats', 'maxPreparationsPerDay', 'sellableShards']) ||
     !nat(q.seller.minPriceSats) ||
@@ -111,6 +107,21 @@ export function policyError(p: unknown): string | undefined {
   )
     return 'ai'
   if (!exact(q.sandbox, ['mode']) || (q.sandbox.mode !== 'sandbox-only' && q.sandbox.mode !== 'never')) return 'sandbox'
+  return undefined
+}
+
+/** operator-safety rules applied at the approval boundary only — NOT inside
+ *  policyError. Stored/test policies and legacy approvals keep validating
+ *  structurally; this gate stops a human approving a production policy
+ *  whose values hurt the engine it signs for. */
+export function policyApprovalError(p: unknown): string | undefined {
+  const e = policyError(p)
+  if (e) return e
+  const q = p as AutomationPolicy
+  // a sub-5s window republishes the want at every boundary for its whole
+  // wantExtendMs life — ~120 outbox rows at 1s — drowning the drain behind
+  // envelopes that can never outlive an offer round-trip anyway
+  if (q.scoring.collectMs < 5_000) return 'scoring: collectMs under 5000 — the collection window must outlive one offer round-trip'
   return undefined
 }
 

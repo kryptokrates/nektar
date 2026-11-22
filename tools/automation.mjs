@@ -47,7 +47,7 @@ if (!existsSync(join(dist, 'store.js'))) {
   process.exit(1)
 }
 const { AutomationStore } = await import(pathToFileURL(join(dist, 'store.js')).href)
-const { policyHash, policyError } = await import(pathToFileURL(join(dist, 'policy.js')).href)
+const { policyHash, policyError, policyApprovalError } = await import(pathToFileURL(join(dist, 'policy.js')).href)
 const knexFactory = createRequire(join(root, 'packages/mcp/package.json'))('knex')
 
 const [cmd, a, b] = argv
@@ -59,7 +59,7 @@ const die = (m, code = 1) => {
 const loadPolicy = (f) => {
   if (!f || !existsSync(f)) die(`policy file not found: ${f}`)
   const p = JSON.parse(readFileSync(f, 'utf8'))
-  const e = policyError(p)
+  const e = policyApprovalError(p)
   if (e) die(`invalid policy — ${e}`)
   return p
 }

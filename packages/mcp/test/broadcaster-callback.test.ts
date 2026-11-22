@@ -28,7 +28,7 @@ const minedTx = async (chain: TestChain, funder: TestFunder): Promise<{ txid: st
   await tx.sign()
   assert.equal((await chain.broadcast(tx)).status, 'success')
   await chain.mine(1)
-  const mp = ( chain.getTx(tx.id('hex')))!.merklePath
+  const mp = chain.getTx(tx.id('hex'))!.merklePath
   assert.ok(mp, 'mined spend carries the node BUMP')
   return { txid: tx.id('hex'), mp }
 }
@@ -43,7 +43,7 @@ const bodyOf = (txid: string, mp?: { blockHeight: number; toHex: () => string })
   ...(mp ? { blockHeight: mp.blockHeight, merklePath: mp.toHex() } : {})
 })
 
-test('broadcaster callback: MINED with a valid BUMP delivers the proof once', async (t) => {
+void test('broadcaster callback: MINED with a valid BUMP delivers the proof once', async (t) => {
   const _w = await serve(t)
   if (_w === undefined) return
   const { chain, funder, mem, srv, base } = _w
@@ -64,7 +64,7 @@ test('broadcaster callback: MINED with a valid BUMP delivers the proof once', as
   }
 })
 
-test('broadcaster callback: BUMP for a different txid or an invalid root is ignored (still 200)', async (t) => {
+void test('broadcaster callback: BUMP for a different txid or an invalid root is ignored (still 200)', async (t) => {
   const _w = await serve(t)
   if (_w === undefined) return
   const { chain, funder, mem, srv, base } = _w
@@ -88,7 +88,7 @@ test('broadcaster callback: BUMP for a different txid or an invalid root is igno
   }
 })
 
-test('broadcaster callback: legacy /v1/arc-callback path still works', async (t) => {
+void test('broadcaster callback: legacy /v1/arc-callback path still works', async (t) => {
   const _w = await serve(t)
   if (_w === undefined) return
   const { chain, funder, mem, srv, base } = _w
@@ -106,7 +106,7 @@ test('broadcaster callback: legacy /v1/arc-callback path still works', async (t)
   }
 })
 
-test('broadcaster callback: REJECTED is a hint — wakes subscribers, txFacts verdict stays pending', async (t) => {
+void test('broadcaster callback: REJECTED is a hint — wakes subscribers, txFacts verdict stays pending', async (t) => {
   const _w = await serve(t)
   if (_w === undefined) return
   const { mem, srv, base } = _w
@@ -125,7 +125,7 @@ test('broadcaster callback: REJECTED is a hint — wakes subscribers, txFacts ve
   }
 })
 
-test('broadcaster callback: NEKTAR_CALLBACK_TOKEN gates the webhook (Authorization: Bearer)', async (t) => {
+void test('broadcaster callback: NEKTAR_CALLBACK_TOKEN gates the webhook (Authorization: Bearer)', async (t) => {
   const _w = await serve(t)
   if (_w === undefined) return
   const { chain, funder, mem, srv, base } = _w

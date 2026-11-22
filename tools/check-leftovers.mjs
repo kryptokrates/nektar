@@ -5,7 +5,7 @@
 // regenerates the baseline after a cleanup pass. Zero deps by design.
 import { execSync } from 'node:child_process'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { join, dirname, relative } from 'node:path'
+import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')

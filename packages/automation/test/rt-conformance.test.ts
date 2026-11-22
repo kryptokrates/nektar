@@ -336,7 +336,7 @@ const matrix: Scenario[] = [
   }
 ]
 
-test('executor matrix: the whole suite against the in-process Dispatcher', async () => {
+void test('executor matrix: the whole suite against the in-process Dispatcher', async () => {
   for (const s of matrix) {
     const ex = new Dispatcher()
     const svc = 'probe'
@@ -352,7 +352,7 @@ test('executor matrix: the whole suite against the in-process Dispatcher', async
   }
 })
 
-test(
+void test(
   'executor matrix (live restate): the match scenarios against the real ingress + endpoint',
   { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
   async () => {

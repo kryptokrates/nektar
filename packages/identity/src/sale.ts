@@ -7,7 +7,7 @@
 // Tx building/broadcast stays in @nektar/anchor's DisclosureSaleHost — this
 // package must not import @nektar/anchor (anchor already depends on us).
 import { PrivateKey, PublicKey, Signature, Transaction, Hash } from '@bsv/sdk'
-import { sha256, concat, toHex, fromHex, toSigner, custodySigner as coreCustodySigner, type Bytes, type DigestSigner, type SignerWallet } from '@nektar/core'
+import { sha256, concat, toHex, fromHex, toSigner, custodySigner as coreCustodySigner, type Bytes, type DigestSigner } from '@nektar/core'
 import { wrapForCustody, unwrapForCustody, type WrappedKey, type WrapCustody } from './disclosure.js'
 
 /** fixed wrap context — binds the ECDH pad to the sale channel. */
@@ -24,7 +24,7 @@ export const SALE_CTX = 'nektar:sale:v1'
  *  every custody: toolbox derives it locally, client custody derives it
  *  remotely, key custody signs with the raw key. */
 const custodySigner = (c: WrapCustody): DigestSigner =>
-  c instanceof PrivateKey ? toSigner(c) : coreCustodySigner(c as SignerWallet, { protocolID: [2, 'nektar sale'], keyID: 'sale', counterparty: 'self' })
+  c instanceof PrivateKey ? toSigner(c) : coreCustodySigner(c, { protocolID: [2, 'nektar sale'], keyID: 'sale', counterparty: 'self' })
 
 // --- seller side ----------------------------------------------------------
 

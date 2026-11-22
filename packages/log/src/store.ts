@@ -49,30 +49,33 @@ export class MemoryShardStore implements ShardStore {
     if (!this.recs.has(shard)) this.recs.set(shard, [])
     return this.recs.get(shard)!
   }
-  async append(rec: LogRecord): Promise<void> {
+  append(rec: LogRecord): Promise<void> {
     this.list(rec.shard).push(rec)
+    return Promise.resolve()
   }
-  async byIdentity(shard: string, hdpHex: string): Promise<LogRecord | undefined> {
-    return this.list(shard).find((r) => Buffer.from(r.hdp).toString('hex') === hdpHex)
+  byIdentity(shard: string, hdpHex: string): Promise<LogRecord | undefined> {
+    return Promise.resolve(this.list(shard).find((r) => Buffer.from(r.hdp).toString('hex') === hdpHex))
   }
-  async bySeq(shard: string, seq: number): Promise<LogRecord | undefined> {
-    return this.list(shard).find((r) => r.seq === seq)
+  bySeq(shard: string, seq: number): Promise<LogRecord | undefined> {
+    return Promise.resolve(this.list(shard).find((r) => r.seq === seq))
   }
-  async byBatch(shard: string, batchIndex: number): Promise<LogRecord[]> {
-    return this.list(shard)
-      .filter((r) => r.batchIndex === batchIndex)
-      .sort((a, b) => (a.leafIndex ?? 0) - (b.leafIndex ?? 0))
+  byBatch(shard: string, batchIndex: number): Promise<LogRecord[]> {
+    return Promise.resolve(
+      this.list(shard)
+        .filter((r) => r.batchIndex === batchIndex)
+        .sort((a, b) => (a.leafIndex ?? 0) - (b.leafIndex ?? 0))
+    )
   }
-  async nextSeq(shard: string): Promise<number> {
-    return this.list(shard).length
+  nextSeq(shard: string): Promise<number> {
+    return Promise.resolve(this.list(shard).length)
   }
-  async pending(shard: string): Promise<LogRecord[]> {
-    return this.list(shard).filter((r) => r.state === 'committed')
+  pending(shard: string): Promise<LogRecord[]> {
+    return Promise.resolve(this.list(shard).filter((r) => r.state === 'committed'))
   }
-  async committedUnbatched(shard: string): Promise<LogRecord[]> {
-    return this.list(shard).filter((r) => r.state === 'committed' && r.batchIndex === undefined)
+  committedUnbatched(shard: string): Promise<LogRecord[]> {
+    return Promise.resolve(this.list(shard).filter((r) => r.state === 'committed' && r.batchIndex === undefined))
   }
-  async resetUnanchored(shard: string): Promise<number> {
+  resetUnanchored(shard: string): Promise<number> {
     let n = 0
     for (const r of this.list(shard)) {
       if (r.state === 'committed' && r.batchIndex !== undefined) {
@@ -81,9 +84,9 @@ export class MemoryShardStore implements ShardStore {
         n++
       }
     }
-    return n
+    return Promise.resolve(n)
   }
-  async markBatched(shard: string, seqs: number[], batchIndex: number): Promise<void> {
+  markBatched(shard: string, seqs: number[], batchIndex: number): Promise<void> {
     const seqSet = new Set(seqs)
     for (const r of this.list(shard)) {
       if (seqSet.has(r.seq)) {
@@ -91,22 +94,24 @@ export class MemoryShardStore implements ShardStore {
         r.leafIndex = seqs.indexOf(r.seq)
       }
     }
+    return Promise.resolve()
   }
-  async markAnchored(shard: string, batchIndex: number, txid: string): Promise<void> {
+  markAnchored(shard: string, batchIndex: number, txid: string): Promise<void> {
     for (const r of this.list(shard)) {
       if (r.batchIndex === batchIndex) {
         r.state = 'anchored'
         r.anchorTxid = txid
       }
     }
+    return Promise.resolve()
   }
-  async all(shard: string): Promise<LogRecord[]> {
-    return this.list(shard).slice()
+  all(shard: string): Promise<LogRecord[]> {
+    return Promise.resolve(this.list(shard).slice())
   }
-  async lastBatchIndex(shard: string): Promise<number> {
+  lastBatchIndex(shard: string): Promise<number> {
     let max = -1
     for (const r of this.list(shard)) if (r.batchIndex !== undefined && r.batchIndex > max) max = r.batchIndex
-    return max
+    return Promise.resolve(max)
   }
   shardNames(): string[] {
     return [...this.recs.keys()]

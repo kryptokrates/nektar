@@ -88,8 +88,8 @@ if (network === 'regtest') {
   const qs = readEnv(QS_PATH)
   const cfg = {
     rpcUrl: nektarEnv('NEKTAR_RPC_URL') ?? 'http://localhost:9292/',
-    rpcUser: nektarEnv('NEKTAR_RPC_USER') ?? qs.rpc_user ?? 'teranode',
-    rpcPass: nektarEnv('NEKTAR_RPC_PASS') ?? qs.rpc_pass ?? '',
+    rpcUser: nektarEnv('NEKTAR_RPC_USER') ?? qs.rpc_user,
+    rpcPass: nektarEnv('NEKTAR_RPC_PASS') ?? qs.rpc_pass,
     propagationUrl: nektarEnv('NEKTAR_PROPAGATION_URL') ?? 'http://localhost:8833/tx',
     assetUrl: nektarEnv('NEKTAR_ASSET_URL') ?? 'http://localhost:8090/api/v1'
   }

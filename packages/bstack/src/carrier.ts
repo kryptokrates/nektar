@@ -76,7 +76,7 @@ export async function checkCarrier(beef: number[], o: { tracker: ChainTracker })
     if (tx.inputs.length !== 1 || tx.outputs.length !== 1) return { ok: false, reason: 'shape' }
     const parent = tx.inputs[0].sourceTransaction
     if (!parent) return { ok: false, reason: 'no-parent' }
-    const out = parent.outputs[tx.inputs[0].sourceOutputIndex]
+    const out = parent.outputs[tx.inputs[0].sourceOutputIndex ?? -1]
     const key = decodeFunding(out.lockingScript, Array.from(FUNDING_TAG))
     if (key === undefined) return { ok: false, reason: 'not-funding' }
     return {

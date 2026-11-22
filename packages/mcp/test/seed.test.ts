@@ -15,86 +15,90 @@ const item = (announce: Partial<AnnounceAd>, txid = `t${announce.streamSeq ?? 0}
 })
 const mem = { sdkTracker: () => ({}) as never }
 const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
-const call = async (tool: string, args: Record<string, unknown>) => {
+const call = (tool: string, args: Record<string, unknown>) => {
   calls.push({ tool, args })
-  return {}
+  return Promise.resolve({})
 }
 
-test('seed: domain filter + newest announce wins', async () => {
+void test('seed: domain filter + newest announce wins', async () => {
   calls.length = 0
-  const read: SeedRead = async () => ({
-    items: [
-      item({
-        streamSeq: 2,
-        ts: 2,
-        packs: [
-          { shard: 'ops1', domains: ['ops'], store: { key: 'k', sha256: 's' } },
-          { shard: 'x1', domains: ['x'], packUrl: 'https://p/x' }
-        ]
-      }),
-      item({ streamSeq: 1, ts: 1, packs: [{ shard: 'old', domains: ['ops'], store: { key: 'k2', sha256: 's2' } }] })
-    ]
-  })
+  const read: SeedRead = () =>
+    Promise.resolve({
+      items: [
+        item({
+          streamSeq: 2,
+          ts: 2,
+          packs: [
+            { shard: 'ops1', domains: ['ops'], store: { key: 'k', sha256: 's' } },
+            { shard: 'x1', domains: ['x'], packUrl: 'https://p/x' }
+          ]
+        }),
+        item({ streamSeq: 1, ts: 1, packs: [{ shard: 'old', domains: ['ops'], store: { key: 'k2', sha256: 's2' } }] })
+      ]
+    })
   const r = await seedFromDirectory({ mem, call, hosts: ['https://seed'], net: 'testnet', domains: ['ops'], read })
   assert.equal(r.imported, 1)
   assert.deepEqual(calls, [{ tool: 'importShard', args: { store: { key: 'k', sha256: 's' } } }])
 })
 
-test('seed: post-restart card (low seq, new ts) beats an unexpired stale card', async () => {
+void test('seed: post-restart card (low seq, new ts) beats an unexpired stale card', async () => {
   calls.length = 0
-  const read: SeedRead = async () => ({
-    items: [
-      // producer restarted: streamState reset → the fresh card carries seq 1
-      // while the pre-restart seq-9 card is still live on the lane
-      item({ streamSeq: 9, ts: 5, packs: [{ shard: 'stale', packUrl: 'https://p/stale' }] }),
-      item({ streamSeq: 1, ts: 9, packs: [{ shard: 'fresh', packUrl: 'https://p/fresh' }] })
-    ]
-  })
+  const read: SeedRead = () =>
+    Promise.resolve({
+      items: [
+        // producer restarted: streamState reset → the fresh card carries seq 1
+        // while the pre-restart seq-9 card is still live on the lane
+        item({ streamSeq: 9, ts: 5, packs: [{ shard: 'stale', packUrl: 'https://p/stale' }] }),
+        item({ streamSeq: 1, ts: 9, packs: [{ shard: 'fresh', packUrl: 'https://p/fresh' }] })
+      ]
+    })
   const r = await seedFromDirectory({ mem, call, hosts: ['https://seed'], net: 'testnet', domains: [], all: true, read })
   assert.equal(r.imported, 1)
   assert.deepEqual(calls, [{ tool: 'importShard', args: { packUrl: 'https://p/fresh' } }])
 })
 
-test('seed: wildcard imports everything; store beats packUrl; refless packs skip', async () => {
+void test('seed: wildcard imports everything; store beats packUrl; refless packs skip', async () => {
   calls.length = 0
-  const read: SeedRead = async () => ({
-    items: [item({ packs: [{ shard: 'a', store: { chirp: 'chirp://x' }, packUrl: 'https://p/a' }, { shard: 'b', packUrl: 'https://p/b' }, { shard: 'c' }] })]
-  })
+  const read: SeedRead = () =>
+    Promise.resolve({
+      items: [item({ packs: [{ shard: 'a', store: { chirp: 'chirp://x' }, packUrl: 'https://p/a' }, { shard: 'b', packUrl: 'https://p/b' }, { shard: 'c' }] })]
+    })
   const r = await seedFromDirectory({ mem, call, hosts: [], net: 'testnet', domains: [], all: true, read })
   assert.equal(r.imported, 2)
   assert.deepEqual(calls[0].args, { store: { chirp: 'chirp://x' } })
   assert.deepEqual(calls[1].args, { packUrl: 'https://p/b' })
 })
 
-test('seed: failures isolate; already-imported counts as skipped', async () => {
+void test('seed: failures isolate; already-imported counts as skipped', async () => {
   calls.length = 0
-  const failCall = async (_t: string, args: Record<string, unknown>) => {
+  const failCall = (_t: string, args: Record<string, unknown>) => {
     if (args.packUrl === 'https://p/dup') throw new Error('importShard: shard "dup" already has records — import needs an empty shard')
     if (args.packUrl === 'https://p/bad') throw new Error('importShard: fetch → 500')
-    return {}
+    return Promise.resolve({})
   }
-  const read: SeedRead = async () => ({
-    items: [
-      item({
-        packs: [
-          { shard: 'dup', packUrl: 'https://p/dup' },
-          { shard: 'bad', packUrl: 'https://p/bad' },
-          { shard: 'ok', packUrl: 'https://p/ok' }
-        ]
-      })
-    ]
-  })
+  const read: SeedRead = () =>
+    Promise.resolve({
+      items: [
+        item({
+          packs: [
+            { shard: 'dup', packUrl: 'https://p/dup' },
+            { shard: 'bad', packUrl: 'https://p/bad' },
+            { shard: 'ok', packUrl: 'https://p/ok' }
+          ]
+        })
+      ]
+    })
   const r = await seedFromDirectory({ mem, call: failCall, hosts: [], net: 'testnet', domains: [], all: true, read })
   assert.deepEqual({ imported: r.imported, skipped: r.skipped, failed: r.failed }, { imported: 1, skipped: 1, failed: 1 })
 })
 
-test('seed: announced hosts union into a second read (screened); a dead publisher still imports', async () => {
+void test('seed: announced hosts union into a second read (screened); a dead publisher still imports', async () => {
   calls.length = 0
   const seen: string[][] = []
-  const read: SeedRead = async (hosts) => {
+  const read: SeedRead = (hosts) => {
     seen.push(hosts)
     if (seen.length === 1)
-      return {
+      return Promise.resolve({
         items: [
           item({
             pub: 'b'.repeat(66),
@@ -103,8 +107,8 @@ test('seed: announced hosts union into a second read (screened); a dead publishe
           }),
           item({ pub: 'c'.repeat(66), hosts: [], packs: [] })
         ]
-      }
-    return { items: [item({ pub: 'd'.repeat(66), hosts: [], packs: [{ shard: 's2', packUrl: 'https://hub.example/v1/pack/s2' }] })] }
+      })
+    return Promise.resolve({ items: [item({ pub: 'd'.repeat(66), hosts: [], packs: [{ shard: 's2', packUrl: 'https://hub.example/v1/pack/s2' }] })] })
   }
   const r = await seedFromDirectory({ mem, call, hosts: ['https://seed'], net: 'testnet', domains: [], all: true, read })
   assert.equal(seen.length, 2)

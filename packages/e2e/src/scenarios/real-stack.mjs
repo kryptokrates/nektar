@@ -298,7 +298,7 @@ async function bootRestate(a) {
     try {
       await fetch(`http://127.0.0.1:${a.rtAdmin}/deployments`, { signal: AbortSignal.timeout(1000) })
       return
-    } catch (e) {
+    } catch (_e) {
       if (i >= 60) throw new Error(`restate ${name} admin :${a.rtAdmin} never came up`)
       await delay(500)
     }
@@ -575,7 +575,7 @@ function spawnInstance(a) {
       a.restarts++
       log(`${a.name} exited ${c ?? s} — restarting (${a.restarts}/3)`)
       // instance.lock stays 'live' for 20s after the last heartbeat
-      delay(25000).then(() => {
+      void delay(25000).then(() => {
         if (!stopping) a.proc = spawnInstance(a)
       })
     } else if (abnormal) log(`${a.name} exited ${c ?? s}`)
@@ -630,7 +630,7 @@ async function bootAgent(a, index) {
   await bootRestate(a)
   a.restarts = 0
   await ensurePortFree(port, a.name)
-  const p = spawnInstance(a)
+  const _p = spawnInstance(a)
   await up(`${a.url}/v1/health`, a.name)
   // the agent can crash (0xC0000409) between the healthcheck and this fetch —
   // retry the control-plane read on the same bounded ceiling `call` uses
@@ -802,7 +802,10 @@ try {
           }
         })
       )
-      const same = (x, a) => x !== undefined && JSON.stringify([...x].sort((p, q) => String(p).localeCompare(String(q)))) === JSON.stringify([...a.hosts].sort((p, q) => String(p).localeCompare(String(q))))
+      const same = (x, a) =>
+        x !== undefined &&
+        JSON.stringify([...x].sort((p, q) => String(p).localeCompare(String(q)))) ===
+          JSON.stringify([...a.hosts].sort((p, q) => String(p).localeCompare(String(q))))
       if (agents.every((a, k) => same(recs[k], a))) {
         log(`bfinger records resolve for all four agents after ${((Date.now() - t0) / 1000).toFixed(1)}s`)
         break

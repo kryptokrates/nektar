@@ -128,8 +128,8 @@ export class VaultFunder implements Funder {
     private height: () => Promise<number>,
     private feeSats: bigint = 2n
   ) {}
-  async address(): Promise<string> {
-    return this.vault.params.destPkh
+  address(): Promise<string> {
+    return Promise.resolve(this.vault.params.destPkh)
   }
   async take(satoshis: number): Promise<FundingOut> {
     const u = await this.current()

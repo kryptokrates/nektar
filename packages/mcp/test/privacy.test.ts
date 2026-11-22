@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
@@ -29,7 +29,7 @@ async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOption
   return { chain, mem, settle }
 }
 
-test('private shards: the flag is declared at write time and is monotone', async (t) => {
+void test('private shards: the flag is declared at write time and is monotone', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -46,7 +46,7 @@ test('private shards: the flag is declared at write time and is monotone', async
   assert.equal(mem.shardPrivate('pub'), false)
 })
 
-test('private flag persists across a restart (stateStore round-trip)', async (t) => {
+void test('private flag persists across a restart (stateStore round-trip)', async (t) => {
   let saved: any
   const store = {
     load: () => saved,
@@ -68,7 +68,7 @@ test('private flag persists across a restart (stateStore round-trip)', async (t)
   assert.equal(m3.shardPrivate('hr'), false)
 })
 
-test('private shards: recall reads them for the owner but marks the policy', async (t) => {
+void test('private shards: recall reads them for the owner but marks the policy', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -80,7 +80,7 @@ test('private shards: recall reads them for the owner but marks the policy', asy
   assert.equal(r.shardPrivate, true, 'the policy travels with the answer')
 })
 
-test('private shards: plain merkle citations are refused (prove)', async (t) => {
+void test('private shards: plain merkle citations are refused (prove)', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -108,7 +108,7 @@ function noProver(): () => void {
   }
 }
 
-test('private cites: groundedAnswer strips them when the proof cannot be produced — nothing leaks', async (t) => {
+void test('private cites: groundedAnswer strips them when the proof cannot be produced — nothing leaks', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -123,7 +123,7 @@ test('private cites: groundedAnswer strips them when the proof cannot be produce
   assert.match(r.flagged[0].reason, /private shard.*ZK membership proof/i)
 })
 
-test('private cites: AUTO-PROVE — groundedAnswer keeps a plain private cite when the prover runs', { timeout: 300_000 }, async (t) => {
+void test('private cites: AUTO-PROVE — groundedAnswer keeps a plain private cite when the prover runs', { timeout: 300_000 }, async (t) => {
   if (!process.env.NEKTAR_STARK_PROVE) {
     t.skip('set NEKTAR_STARK_PROVE=1 to run the real STARK prover')
     return
@@ -148,7 +148,7 @@ test('private cites: AUTO-PROVE — groundedAnswer keeps a plain private cite wh
   assert.equal(v.checks.find((c) => c.name === 'fragment (private)')?.ok, true)
 })
 
-test('private cites: a verified ZK proof keeps the claim; the shard name is redacted from the anchored receipt', async (t) => {
+void test('private cites: a verified ZK proof keeps the claim; the shard name is redacted from the anchored receipt', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -159,7 +159,7 @@ test('private cites: a verified ZK proof keeps the claim; the shard name is reda
   // zk-integration.test.ts; this test covers the privacy POLICY wiring.
   const orig = mem.verifyMembership.bind(mem)
   const origRv = mem.reverifyMembershipBytes.bind(mem)
-  ;(mem as any).verifyMembership = async () => ({ ok: true, statement: 'stub' })
+  ;(mem as any).verifyMembership = () => ({ ok: true, statement: 'stub' })
   const r = await callTool(mem, 'groundedAnswer', {
     claims: [{ text: 'salary band E5 = 120k', cites: [{ shard: 'hr', seq: 0, zk: { queryId: 'aa'.repeat(32), proof: 'deadbeef' } }] }]
   })
@@ -175,28 +175,28 @@ test('private cites: a verified ZK proof keeps the claim; the shard name is reda
   // the committed proof is stored + integrity-pinned by its sha256
   assert.deepEqual([...mem.getProof(ref.proofCommit)!], [...Buffer.from('deadbeef', 'hex')], 'proof fetchable by commit')
   // independent verify: the private cite is re-checked, not trusted
-  ;(mem as any).reverifyMembershipBytes = async () => ({ ok: true, anchorTxid: ref.anchorTxid })
+  ;(mem as any).reverifyMembershipBytes = () => ({ ok: true, anchorTxid: ref.anchorTxid })
   const v = await verifyReceipt(mem, { token: r.receiptToken })
   assert.equal(v.ok, true)
   const priv = v.checks.find((c) => c.name === 'fragment (private)')
   assert.equal(priv!.ok, true)
   assert.match(priv!.detail, /ZK proof re-verified.*shard withheld/)
   // a FAILED re-verify is reported failed — fail-closed, not a green label
-  ;(mem as any).reverifyMembershipBytes = async () => ({ ok: false, reason: 'stark invalid' })
+  ;(mem as any).reverifyMembershipBytes = () => ({ ok: false, reason: 'stark invalid' })
   const v2 = await verifyReceipt(mem, { token: r.receiptToken })
   assert.equal(v2.ok, false)
   assert.match(v2.checks.find((c) => c.name === 'fragment (private)')!.detail, /re-verify failed: stark invalid/)
   // a committed proof that is not fetchable fails closed too
   ;(mem as any).reverifyMembershipBytes = origRv
   const origFetch = mem.fetchProof.bind(mem)
-  ;(mem as any).fetchProof = async () => undefined
+  ;(mem as any).fetchProof = () => undefined
   const v3 = await verifyReceipt(mem, { token: r.receiptToken })
   assert.equal(v3.ok, false)
   assert.match(v3.checks.find((c) => c.name === 'fragment (private)')!.detail, /not fetchable.*cannot re-verify/)
   ;(mem as any).fetchProof = origFetch
 })
 
-test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', async (t) => {
+void test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -204,7 +204,7 @@ test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', asyn
   await mem.anchorShard('hr')
   await settle('hr')
   const orig = mem.verifyMembership.bind(mem)
-  ;(mem as any).verifyMembership = async () => ({ ok: false, reason: 'stark invalid', statement: 'stub' })
+  ;(mem as any).verifyMembership = () => ({ ok: false, reason: 'stark invalid', statement: 'stub' })
   const r = await callTool(mem, 'groundedAnswer', {
     claims: [{ text: 'salary band E5 = 120k', cites: [{ shard: 'hr', seq: 0, zk: { queryId: 'aa'.repeat(32), proof: 'deadbeef' } }] }]
   })
@@ -213,7 +213,7 @@ test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', asyn
   assert.match(r.flagged[0].reason, /private shard.*ZK membership proof/i)
 })
 
-test('private cites: commitReceipt redacts the shard name the same way — and demands the ZK proof', async (t) => {
+void test('private cites: commitReceipt redacts the shard name the same way — and demands the ZK proof', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -225,7 +225,7 @@ test('private cites: commitReceipt redacts the shard name the same way — and d
   await assert.rejects(() => callTool(mem, 'commitReceipt', { answer: 'x', fragmentRefs: [{ shard: 'hr', seq: 0 }] }), /auto-proven/)
   restore()
   const orig = mem.verifyMembership.bind(mem)
-  ;(mem as any).verifyMembership = async () => ({ ok: true, statement: 'stub' })
+  ;(mem as any).verifyMembership = () => ({ ok: true, statement: 'stub' })
   const r = await callTool(mem, 'commitReceipt', { answer: 'x', fragmentRefs: [{ shard: 'hr', seq: 0, zk: { queryId: 'aa'.repeat(32), proof: 'deadbeef' } }] })
   ;(mem as any).verifyMembership = orig
   const ref = r.receipt.fragmentRefs[0]
@@ -235,7 +235,7 @@ test('private cites: commitReceipt redacts the shard name the same way — and d
   assert.ok(!JSON.stringify(r.receipt).includes('"hr"'))
 })
 
-test('zk prover tools are priced when payments are on; the verify side stays free', async (t) => {
+void test('zk prover tools are priced when payments are on; the verify side stays free', async (t) => {
   _testReset()
   process.env.NEKTAR_PAYMENTS = '1'
   process.env.NEKTAR_OPERATOR_WIF = PrivateKey.fromRandom().toWif([0xef])
@@ -271,7 +271,7 @@ test('zk prover tools are priced when payments are on; the verify side stays fre
   }
 })
 
-test('private cites end-to-end: a REAL STARK keeps the private cite', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
+void test('private cites end-to-end: a REAL STARK keeps the private cite', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w

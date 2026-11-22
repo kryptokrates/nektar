@@ -159,7 +159,7 @@ export class AORGraph {
       if (v.context.some((c) => psi.includes(c))) out.add(v.h)
     }
     // closure: include ancestors of selected vertices
-    for (const h of [...out]) for (const a of this.ancestors(h)) out.add(a)
+    for (const h of Array.from(out)) for (const a of this.ancestors(h)) out.add(a)
     return out
   }
 

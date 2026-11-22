@@ -53,7 +53,7 @@ const until = async (what: () => Promise<boolean>, ms = 30_000): Promise<void> =
 const health = async (url: string): Promise<boolean> =>
   (await fetch(`${url}/restate/health`, { signal: AbortSignal.timeout(3000) }).catch(() => undefined))?.ok === true
 
-test('live: journal replay across endpoint loss — ctx.run steps never re-fire', { skip: GATE, timeout: 120_000 }, async () => {
+void test('live: journal replay across endpoint loss — ctx.run steps never re-fire', { skip: GATE, timeout: 120_000 }, async () => {
   const restate = await import('@restatedev/restate-sdk')
   const marks: string[] = []
   let executions = 0
@@ -78,23 +78,23 @@ test('live: journal replay across endpoint loss — ctx.run steps never re-fire'
     // the invocation is fire-and-watch: the call hangs at the gate; what
     // matters is the handler's marks
     void ex.call({ service: `live-probe-${RUN}`, handler: 'go', key: 'k' }, null).catch(() => undefined)
-    await until(async () => marks.includes('s1'))
+    await until(() => Promise.resolve(marks.includes('s1')))
     await ep.close()
     ep = undefined
     // the delivery died mid-invocation — the server retries on the same
     // deployment once a live endpoint exists again. The retry's delivery
     // backoff can stretch under suite load — give it a wide window
     ep = await openEndpoint([probe], env(), () => {})
-    await until(async () => marks.includes('s2'), 90_000)
+    await until(() => Promise.resolve(marks.includes('s2')), 90_000)
     assert.deepEqual(marks, ['s1', 's2'], 'the journaled step ran exactly once — replay skipped it')
   } finally {
     await ep?.close().catch(() => undefined)
   }
 })
 
-test('live: ingress idempotency-key dedups a repeat send to one invocation', { skip: GATE, timeout: 30_000 }, async () => {
+void test('live: ingress idempotency-key dedups a repeat send to one invocation', { skip: GATE, timeout: 30_000 }, async () => {
   let runs = 0
-  const def = await legObject(`live-idem-${RUN}`, async () => void runs++)
+  const def = await legObject(`live-idem-${RUN}`, () => Promise.resolve(void runs++))
   const ex = new RestateExecutor(RESTATE_URL!)
   let ep: RtEndpoint | undefined
   try {
@@ -102,19 +102,19 @@ test('live: ingress idempotency-key dedups a repeat send to one invocation', { s
     const t = { service: `live-idem-${RUN}`, handler: 'tick', key: 'main' } as const
     await ex.send(t, {}, { idempotencyKey: 'K1' })
     await ex.send(t, {}, { idempotencyKey: 'K1' })
-    await until(async () => runs >= 1)
+    await until(() => Promise.resolve(runs >= 1))
     await nap(1500)
     assert.equal(runs, 1, 'the repeat send attached to the same invocation — one execution')
     // a NEW key is a NEW invocation — dedup scopes to the key, not the body
     await ex.send(t, {}, { idempotencyKey: 'K2' })
-    await until(async () => runs >= 2)
+    await until(() => Promise.resolve(runs >= 2))
     assert.equal(runs, 2)
   } finally {
     await ep?.close().catch(() => undefined)
   }
 })
 
-test('live: per-key FIFO — same-key invocations serialize, cross-key runs concurrent', { skip: GATE, timeout: 60_000 }, async () => {
+void test('live: per-key FIFO — same-key invocations serialize, cross-key runs concurrent', { skip: GATE, timeout: 60_000 }, async () => {
   const restate = await import('@restatedev/restate-sdk')
   const order: string[] = []
   const probe = restate.object({
@@ -150,10 +150,10 @@ test('live: per-key FIFO — same-key invocations serialize, cross-key runs conc
   }
 })
 
-test('live: an armed delayed send outlives its origin invocation', { skip: GATE, timeout: 30_000 }, async () => {
+void test('live: an armed delayed send outlives its origin invocation', { skip: GATE, timeout: 30_000 }, async () => {
   const restate = await import('@restatedev/restate-sdk')
   let ledgerRuns = 0
-  const ledger = await legObject(`live-arm-ledger-${RUN}`, async () => void ledgerRuns++)
+  const ledger = await legObject(`live-arm-ledger-${RUN}`, () => Promise.resolve(void ledgerRuns++))
   const armer = restate.object({
     name: `live-armer-${RUN}`,
     handlers: {
@@ -173,14 +173,14 @@ test('live: an armed delayed send outlives its origin invocation', { skip: GATE,
     const r = await ex.call<{ armed: boolean }>({ service: `live-armer-${RUN}`, handler: 'go', key: 'k' }, null)
     assert.equal(r.armed, true)
     // the origin invocation is DONE — its detached delayed send still lands
-    await until(async () => ledgerRuns >= 1)
+    await until(() => Promise.resolve(ledgerRuns >= 1))
     assert.equal(ledgerRuns, 1)
   } finally {
     await ep?.close().catch(() => undefined)
   }
 })
 
-test('live: server restart — the armed delayed send survives the durable timer store', { skip: GATE, timeout: 90_000 }, async (t) => {
+void test('live: server restart — the armed delayed send survives the durable timer store', { skip: GATE, timeout: 90_000 }, async (t) => {
   // own container so the restart can't disturb the shared test server;
   // skips when docker isn't reachable
   const name = `nektar-rt-live-${process.pid}`
@@ -206,7 +206,7 @@ test('live: server restart — the armed delayed send survives the durable timer
     }
     const restate = await import('@restatedev/restate-sdk')
     let ledgerRuns = 0
-    const ledger = await legObject(`live-restart-ledger-${RUN}`, async () => void ledgerRuns++)
+    const ledger = await legObject(`live-restart-ledger-${RUN}`, () => Promise.resolve(void ledgerRuns++))
     const armer = restate.object({
       name: `live-restart-armer-${RUN}`,
       handlers: {
@@ -227,7 +227,7 @@ test('live: server restart — the armed delayed send survives the durable timer
       // restart the SERVER mid-timer — the armed send must survive
       await run('docker', ['restart', name])
       await until(async () => health(`http://127.0.0.1:${ingress}`), 30_000)
-      await until(async () => ledgerRuns >= 1, 30_000)
+      await until(() => Promise.resolve(ledgerRuns >= 1), 30_000)
       assert.equal(ledgerRuns, 1, 'the delayed send fired after the server restarted')
     } finally {
       await ep?.close().catch(() => undefined)

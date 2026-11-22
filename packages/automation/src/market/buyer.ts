@@ -460,7 +460,7 @@ export abstract class BuyerOps extends SellerOps {
     const cands: ScoreCandidate[] = Object.entries(offers).map(([key, s]) => {
       const q = s.so.offer.offer as any
       const live = !s.reject && Number(q?.expiresAt ?? 0) !== 0 ? Number(q.expiresAt) > height : !s.reject
-      const anchored = !!(s.commitment?.proof?.path && s.commitment?.batchR && s.commitment?.anchorTxid)
+      const anchored = !!(s.commitment?.proof?.path && s.commitment.batchR && s.commitment.anchorTxid)
       return {
         offerKey: key,
         eligible: live && Number(q?.cfg?.refundAfter ?? 0) > height + this.o.sellerSafetyBlocks,
@@ -853,7 +853,7 @@ export abstract class BuyerOps extends SellerOps {
       await this.d.store.refundBudget(op.data.escrowAction!)
       await this.d.store.transition(op.operationId, op.revision, 'refunded', {
         cause: 'refund_observed_on_chain',
-        data: { refundTxid: spender, refundSats: tx.outputs[0]!.satoshis, refundTries: 0 },
+        data: { refundTxid: spender, refundSats: tx.outputs[0].satoshis, refundTries: 0 },
         dueHeight: null,
         evidence: { txid: spender }
       })
@@ -1049,7 +1049,7 @@ export abstract class BuyerOps extends SellerOps {
     const r = await this.d.call('sale#refund', { cfg: op.data.escrow, utxo: op.data.utxo })
     if (r.accepted === true) {
       await this.d.store.refundBudget(op.data.escrowAction!)
-      if (pa.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
+      if (pa?.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
       await this.d.store.transition(op.operationId, op.revision, 'refunded', {
         cause: 'refund_broadcast',
         data: { refundTxid: r.txid, refundSats: r.refundSats },

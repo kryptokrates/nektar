@@ -46,8 +46,8 @@ spec(S,V) :- requires(P,V), applies(S,P).
 @id r2
 checked(S,V) :- spec(S,V).`).rules
   const g = new AORGraph(cat)
-  const e1 = g.append({ kind: 'episode', phi: 'requires(t, 45)', t: { logPos: 1 }, context: ['m'], sigma: [] }, [])
-  const e2 = g.append({ kind: 'episode', phi: 'applies(p4, t)', t: { logPos: 2 }, context: ['m'], sigma: [] }, [])
+  const _e1 = g.append({ kind: 'episode', phi: 'requires(t, 45)', t: { logPos: 1 }, context: ['m'], sigma: [] }, [])
+  const _e2 = g.append({ kind: 'episode', phi: 'applies(p4, t)', t: { logPos: 2 }, context: ['m'], sigma: [] }, [])
   const inst = instanceOf(g, ['m'])
   const full = entails(g, inst, 'spec(p4, 45)', new Set(['r1', 'r2']), cat)
   assert.ok(full.entailed, 'spec entailed under full R')

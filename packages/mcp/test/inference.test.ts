@@ -6,7 +6,7 @@
 // other (input,output) is refused before it can enter a receipt.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { testWorld,  type TestFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
@@ -31,25 +31,25 @@ async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOption
   return { chain, mem, settle }
 }
 
-test('attestation re-derives the shipped proof statement', () => {
+void test('attestation re-derives the shipped proof statement', () => {
   const att = demoAttestation()
   assert.equal(att.publicStatement, '0x' + AIINF_DEMO.publicStatement.toString(16).padStart(64, '0'))
   assert.equal(validateAttestation(att).ok, true)
 })
 
-test('non-demo input fails closed — no proof can be minted', () => {
+void test('non-demo input fails closed — no proof can be minted', () => {
   const bad: number[] = [...AIINF_DEMO.input]
   bad[0] = 1
   assert.throws(() => demoAttestation(bad), /no proof exists/)
 })
 
-test('tampered attestation fails validation', () => {
+void test('tampered attestation fails validation', () => {
   const att = demoAttestation()
   att.output = '4' // wrong argmax — statement no longer re-derives
   assert.equal(validateAttestation(att).ok, false)
 })
 
-test('attestInference: off-chain attestation when artifacts absent', async (t) => {
+void test('attestInference: off-chain attestation when artifacts absent', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -60,7 +60,7 @@ test('attestInference: off-chain attestation when artifacts absent', async (t) =
   assert.match(r.note ?? '', /artifacts absent/)
 })
 
-test('attestInference: non-demo input refused', async (t) => {
+void test('attestInference: non-demo input refused', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -69,7 +69,7 @@ test('attestInference: non-demo input refused', async (t) => {
   await assert.rejects(() => callTool(mem, 'attestInference', { input: bad }), /no proof exists/)
 })
 
-test('attestInference: DEFAULT path anchors sha256(proof) in one small tx', { timeout: 30_000 }, async (t) => {
+void test('attestInference: DEFAULT path anchors sha256(proof) in one small tx', { timeout: 30_000 }, async (t) => {
   delete process.env.NEKTAR_GROTH16_OUT
   const _w = await setup(t)
   if (_w === undefined) return
@@ -95,7 +95,7 @@ test('attestInference: DEFAULT path anchors sha256(proof) in one small tx', { ti
   process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 })
 
-test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 }, async (t) => {
+void test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 }, async (t) => {
   delete process.env.NEKTAR_GROTH16_OUT
   const _w = await setup(t)
   if (_w === undefined) return
@@ -120,7 +120,7 @@ test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 
   const v = await verifyReceipt(mem, { receiptHash: c.receiptHash })
   const model = v.checks.find((cc) => cc.name === 'model')
   assert.equal(model?.ok, true)
-  assert.match(model?.detail ?? '', /attested\+anchored/)
+  assert.match(model.detail, /attested\+anchored/)
   // a receipt whose anchored commitment does NOT bind the bytes fails closed
   const c2 = await callTool(mem, 'commitReceipt', {
     answer: 'ml ran 2',
@@ -133,7 +133,7 @@ test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 
   process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 })
 
-test('commitReceipt auto-attests in one call; exclusive with modelAttestation', async (t) => {
+void test('commitReceipt auto-attests in one call; exclusive with modelAttestation', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -150,7 +150,7 @@ test('commitReceipt auto-attests in one call; exclusive with modelAttestation', 
   const v = await verifyReceipt(mem, { receiptHash: r.receiptHash })
   const model = v.checks.find((c) => c.name === 'model')
   assert.equal(model?.ok, true)
-  assert.match(model?.detail ?? '', /statement re-derived/)
+  assert.match(model.detail, /statement re-derived/)
   await assert.rejects(
     () =>
       callTool(mem, 'commitReceipt', {
@@ -164,7 +164,7 @@ test('commitReceipt auto-attests in one call; exclusive with modelAttestation', 
   )
 })
 
-test('attestInference: on-chain when artifacts + funding exist (the node evaluates the 398KB verifier)', { timeout: 120_000 }, async (t) => {
+void test('attestInference: on-chain when artifacts + funding exist (the node evaluates the 398KB verifier)', { timeout: 120_000 }, async (t) => {
   delete process.env.NEKTAR_GROTH16_OUT
   const w = await testWorld(t, 5, 100_000)
   if (w === undefined) return
@@ -195,11 +195,11 @@ test('attestInference: on-chain when artifacts + funding exist (the node evaluat
   const v = await verifyReceipt(mem, { receiptHash: c.receiptHash })
   const model = v.checks.find((cc) => cc.name === 'model')
   assert.equal(model?.ok, true)
-  assert.match(model?.detail ?? '', /consensus-checked/)
+  assert.match(model.detail, /consensus-checked/)
   process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 })
 
-test('commitReceipt embeds a validated attestation; verify shows model check', async (t) => {
+void test('commitReceipt embeds a validated attestation; verify shows model check', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -224,7 +224,7 @@ test('commitReceipt embeds a validated attestation; verify shows model check', a
   assert.equal(v.ok, true)
 })
 
-test('commitReceipt refuses an attestation whose statement does not re-derive', async (t) => {
+void test('commitReceipt refuses an attestation whose statement does not re-derive', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -242,7 +242,7 @@ test('commitReceipt refuses an attestation whose statement does not re-derive', 
   )
 })
 
-test('a receipt without attestation shows declared model (info)', async (t) => {
+void test('a receipt without attestation shows declared model (info)', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w

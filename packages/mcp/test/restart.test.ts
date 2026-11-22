@@ -13,7 +13,7 @@ import { testWorld } from '@nektar/chain'
 import { KnexShardStore } from '@nektar/log'
 import { NektarMemory, FileStateStore } from '../src/index.js'
 
-test('restart: resume from persisted head, no fork, proofs + level gate survive', async (t) => {
+void test('restart: resume from persisted head, no fork, proofs + level gate survive', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-restart-'))
   const w = await testWorld(t, 20)
   if (w === undefined) return
@@ -57,7 +57,7 @@ test('restart: resume from persisted head, no fork, proofs + level gate survive'
   }
 })
 
-test('recovery: a failed anchor broadcast re-batches and anchors (at-least-once)', async (t) => {
+void test('recovery: a failed anchor broadcast re-batches and anchors (at-least-once)', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-recover-'))
   const w = await testWorld(t, 20)
   if (w === undefined) return

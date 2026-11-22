@@ -24,7 +24,7 @@ const read = (f: string): string => readFileSync(f, 'utf8')
 const srcFiles = (dir = srcDir): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? srcFiles(join(dir, e.name)) : e.name.endsWith('.ts') ? [join(dir, e.name)] : []))
 
-test('wait primitives only at sanctioned sites', () => {
+void test('wait primitives only at sanctioned sites', () => {
   // setTimeout/setInterval/Promise.race are the wait primitives — every
   // callsite must be a named implementation (the wheel, the abortable nap,
   // the io-merge helper) or a sanctioned io bound; a new raw site is a
@@ -55,7 +55,7 @@ test('wait primitives only at sanctioned sites', () => {
   }
 })
 
-test('every wait-site duration literal is named', () => {
+void test('every wait-site duration literal is named', () => {
   // a raw \d+_000-shaped literal on a wait-context line must resolve
   // through WAITS.<name>.ms or an UPPER_SNAKE const — the literal is the
   // wait's un-enumerated form. market/types.ts is exempt by FILE: its
@@ -81,7 +81,7 @@ test('every wait-site duration literal is named', () => {
   }
 })
 
-test('the registry itself conforms — class, durable, wake; mechanism needs why', () => {
+void test('the registry itself conforms — class, durable, wake; mechanism needs why', () => {
   for (const [name, w] of Object.entries(WAITS)) {
     assert.ok(['ceiling', 'ttl', 'mechanism', 'backoff', 'budget', 'io'].includes(w.class), `${name}: bad class`)
     assert.ok(typeof w.durable === 'boolean', `${name}: durable not declared`)

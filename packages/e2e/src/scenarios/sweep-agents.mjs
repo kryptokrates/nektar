@@ -14,7 +14,7 @@
 
 import { PrivateKey, Transaction, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { join, dirname, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { DatabaseSync } from 'node:sqlite'

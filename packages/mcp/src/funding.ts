@@ -136,7 +136,7 @@ export async function openCustody(
   // the one coin book for both custody modes — signing differs (held key via
   // ProtoWallet, external via WalletClient), coin state does not
   const funds = await tb.SqlFunds.open(knex, txStore, { log: log(net), dealFloor, pkhHex, address: fundAddress })
-  const wallet = externalWallet ? clientWallet! : new ProtoWallet(fundKey!)
+  const wallet = externalWallet ? clientWallet! : new ProtoWallet(fundKey)
   if (!externalWallet && fundKey !== undefined) {
     await sweepBasket({ tb, dataDir: cfg.dataDir, chain: testNet ? 'test' : 'main', port, funds, log: log(net) })
   }
@@ -440,11 +440,11 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
   await waitForFunding()
   await topUp()
   const ops = {
-    wallet: async () => {
+    wallet: () => {
       const balanceSats = funds.utxos.reduce((s, u) => s + u.satoshis, 0)
       const costs = port.guard?.costs() ?? []
       const avg = costs.length ? Math.round(costs.reduce((s, c) => s + c.fee, 0) / costs.length) : 0
-      return {
+      return Promise.resolve({
         address: fundAddress,
         balanceSats,
         utxos: funds.utxos.length,
@@ -452,7 +452,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
         caps: { maxFeePerTx: mc.maxFeePerTx!, maxPerDay: mc.maxSpendPerDay!, minIntervalMs: mc.minBroadcastIntervalMs! },
         avgFeePerAnchorSats: avg,
         runwayAnchors: avg > 0 ? Math.floor(balanceSats / avg) : null
-      }
+      })
     },
     costs: () => port.guard?.costs() ?? [],
     // fundingImport MCP tool: credit a tx paying the fee address into the

@@ -20,12 +20,12 @@ const engine = (
 ) =>
   new MarketEngine({
     store,
-    memory: { shardManifest: async () => undefined, records: async () => [] },
+    memory: { shardManifest: () => Promise.resolve(undefined), records: () => Promise.resolve([]) },
     key: PrivateKey.fromRandom(),
     network: 'testnet',
-    call: async () => ({}),
-    height: async () => 100,
-    fetchTx: async () => undefined,
+    call: () => Promise.resolve({}),
+    height: () => Promise.resolve(100),
+    fetchTx: () => Promise.resolve(undefined),
     transport: {
       publishWant: async () => {},
       publishOffer: async () => {},
@@ -36,13 +36,13 @@ const engine = (
     ...(opts !== undefined ? { opts } : {})
   })
 
-test('fanout repair: a repair-host row calls transport.repair(host, key); a failing one retries transport-classed alone', async () => {
+void test('fanout repair: a repair-host row calls transport.repair(host, key); a failing one retries transport-classed alone', async () => {
   let now = 1_000_000
   const { kx, store } = await open(() => now)
   try {
     const repairs: Array<[string, string]> = []
     const eng = engine(store, {
-      repair: async (host, key) => {
+      repair: (host, key) => {
         repairs.push([host, key])
         throw new Error('fetch failed')
       }
@@ -53,7 +53,7 @@ test('fanout repair: a repair-host row calls transport.repair(host, key); a fail
       operationId: 'lanes',
       kind: 'message',
       destination: 'pub',
-      payload: { type: 'accept' } as unknown as MarketMessage
+      payload: { type: 'accept' }
     })
     await eng.pumpOutbox()
     assert.deepEqual(repairs, [['h1', 'h']], 'the repair leg ran with the row destination + journal key')
@@ -76,7 +76,7 @@ test('fanout repair: a repair-host row calls transport.repair(host, key); a fail
   }
 })
 
-test('outbox pump: a wedged deliver cannot starve the rows behind it', async () => {
+void test('outbox pump: a wedged deliver cannot starve the rows behind it', async () => {
   let now = 1_000_000
   const { kx, store } = await open(() => now)
   try {
@@ -87,8 +87,9 @@ test('outbox pump: a wedged deliver cannot starve the rows behind it', async () 
     const eng = engine(
       store,
       {
-        send: async (to) => {
+        send: (to) => {
           sent.push(to)
+          return Promise.resolve()
         },
         repair: async () => {
           await never
@@ -102,7 +103,7 @@ test('outbox pump: a wedged deliver cannot starve the rows behind it', async () 
       operationId: 'op',
       kind: 'message',
       destination: 'seller',
-      payload: { type: 'accept' } as unknown as MarketMessage
+      payload: { type: 'accept' }
     })
     // serial drain would hang forever on the repair; pooled dispatch must
     // resolve once the accept lands and the wedged leg hits its bound
@@ -118,19 +119,20 @@ test('outbox pump: a wedged deliver cannot starve the rows behind it', async () 
   }
 })
 
-test('trackFanout: missed → immediate row, pending → delayed row, late success acks both', async () => {
+void test('trackFanout: missed → immediate row, pending → delayed row, late success acks both', async () => {
   const enqueued: Array<{ o: any; opts?: { delayMs?: number } }> = []
   const acked: string[] = []
   const settled = Promise.resolve({ took: ['h1', 'h2'], missed: [] })
   await trackFanout(
     { hash: 'h', missed: [{ host: 'h1', error: 'http 503' }], pending: ['h2'], settled },
     {
-      enqueue: async (o, opts) => {
+      enqueue: (o, opts) => {
         enqueued.push({ o, opts })
-        return true
+        return Promise.resolve(true)
       },
-      ackOutbox: async (id) => {
+      ackOutbox: (id) => {
         acked.push(id)
+        return Promise.resolve()
       }
     }
   )
@@ -149,7 +151,7 @@ test('trackFanout: missed → immediate row, pending → delayed row, late succe
   assert.deepEqual(acked.sort(), ['repair:h:h1', 'repair:h:h2'], 'a leg that landed after quorum cancels its own repair row')
 })
 
-test('republish repair: a missed host gets a :proved repair row that survives a terminal submit-fanout row', async () => {
+void test('republish repair: a missed host gets a :proved repair row that survives a terminal submit-fanout row', async () => {
   let now = 1_000_000
   const { kx, store } = await open(() => now)
   try {

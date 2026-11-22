@@ -50,7 +50,7 @@ async function open(file = ':memory:', now?: () => number) {
 }
 const ctx = (hash: string, actionId: string, operationId = 'op'): ActionContext => ({ operationId, actionId, policyHash: hash, networkId: 'regtest' })
 
-test('policy: strict shape, stable hash, unknown constraints rejected', () => {
+void test('policy: strict shape, stable hash, unknown constraints rejected', () => {
   const p = policy()
   assert.equal(policyError(p), undefined)
   assert.equal(policyHash(p), policyHash(JSON.parse(JSON.stringify(p))))
@@ -66,7 +66,7 @@ test('policy: strict shape, stable hash, unknown constraints rejected', () => {
   assert.ok(policyError({ ...p, disclosure: { allowPublic: false, paid: true, extra: 1 } as never }))
 })
 
-test('policy decisions: allow inside, escalate over a limit, deny wrong agent/network/role', () => {
+void test('policy decisions: allow inside, escalate over a limit, deny wrong agent/network/role', () => {
   const p = policy()
   const i = { network: 'regtest', agentPub: agent, domains: ['soccer'], priceSats: 200, feeSats: 50, lockedSats: 1000, now: 1000 }
   assert.deepEqual(decidePurchase(p, i), { kind: 'allow' })
@@ -82,7 +82,7 @@ test('policy decisions: allow inside, escalate over a limit, deny wrong agent/ne
   assert.deepEqual(decideOffer(p, { ...o, priceSats: 50 }), { kind: 'deny', code: 'price_outside_policy' })
 })
 
-test('budget: 20 concurrent purchases cannot exceed the aggregate daily cap', async (t) => {
+void test('budget: 20 concurrent purchases cannot exceed the aggregate daily cap', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const hash = await store.approvePolicy(policy(), 'test')
@@ -97,7 +97,7 @@ test('budget: 20 concurrent purchases cannot exceed the aggregate daily cap', as
   assert.equal(s.lockedSats, 3000)
 })
 
-test('budget: idempotent action ids, locked capital, release vs settle, revocation, day rollover', async (t) => {
+void test('budget: idempotent action ids, locked capital, release vs settle, revocation, day rollover', async (t) => {
   let now = Date.UTC(2026, 0, 1, 12)
   const { kx, store } = await open(':memory:', () => now)
   t.after(() => kx.destroy())
@@ -128,7 +128,7 @@ test('budget: idempotent action ids, locked capital, release vs settle, revocati
   assert.deepEqual(await store.reserveBudget(ctx(hash, 'g'), amt), { ok: false, code: 'policy_revoked' })
 })
 
-test('inbox: batch + cursor commit atomically; failed work stays pending; cross-source duplicates collapse', async (t) => {
+void test('inbox: batch + cursor commit atomically; failed work stays pending; cross-source duplicates collapse', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   assert.equal(await store.cursor('rv1'), undefined)
@@ -174,7 +174,7 @@ test('inbox: batch + cursor commit atomically; failed work stays pending; cross-
   assert.equal((await store.pendingInbox()).length, 0, 'dead-lettered after bounded attempts')
 })
 
-test('operations: idempotent creation, CAS transitions, transactional outbox, event trail', async (t) => {
+void test('operations: idempotent creation, CAS transitions, transactional outbox, event trail', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const mk = () =>
@@ -213,7 +213,7 @@ test('operations: idempotent creation, CAS transitions, transactional outbox, ev
   await store.ackOutbox(`${id}:publish`)
 })
 
-test('op.data codec: closed schema rejects undeclared/malformed writes; null clears rather than persisting', async (t) => {
+void test('op.data codec: closed schema rejects undeclared/malformed writes; null clears rather than persisting', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   await assert.rejects(
@@ -253,7 +253,7 @@ test('op.data codec: closed schema rejects undeclared/malformed writes; null cle
   await assert.rejects(store.transition(id, 1, 'collecting', { cause: 'x', data: { mystery: true } as never }), /undeclared field/)
   const still = await store.operation(id)
   assert.equal(still?.state, 'published', 'a rejected transition leaves state untouched')
-  assert.equal(still?.revision, 1)
+  assert.equal(still.revision, 1)
   const cleared = await store.transition(id, 1, 'collecting', { cause: 'clear', data: { escrowTxid: null, fundingSince: null } })
   assert.equal(cleared.data.escrowTxid, undefined)
   assert.equal(cleared.data.fundingSince, undefined)
@@ -262,7 +262,7 @@ test('op.data codec: closed schema rejects undeclared/malformed writes; null cle
   assert.equal(JSON.parse(row.data).escrowTxid, undefined, 'the persisted JSON carries no null literal either')
 })
 
-test('approvals: bound to the exact action digest, single use, expiry enforced', async (t) => {
+void test('approvals: bound to the exact action digest, single use, expiry enforced', async (t) => {
   let now = 1000
   const { kx, store } = await open(':memory:', () => now)
   t.after(() => kx.destroy())
@@ -310,7 +310,7 @@ const fxFor = (w: WalletCoordinator, deps: Pick<WalletDeps, 'txSpent' | 'txDied'
   recordAired: deps.recordAired === undefined ? undefined : async (wt) => await deps.recordAired!(await w.rebuildTx(wt))
 })
 
-test('wallet: bytes persisted before submission; a crash between prepare and submit resumes the SAME tx', async (t) => {
+void test('wallet: bytes persisted before submission; a crash between prepare and submit resumes the SAME tx', async (t) => {
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-auto-')), 'a.sqlite')
   const w = await testWorld(t, 3)
   if (w === undefined) return
@@ -321,7 +321,7 @@ test('wallet: bytes persisted before submission; a crash between prepare and sub
   const ex1 = new Dispatcher()
   t.after(() => ex1.close())
   const w1 = new WalletCoordinator(a.store, {
-    broadcast: async () => {
+    broadcast: () => {
       throw new Error('process died')
     },
     exec: ex1
@@ -354,7 +354,7 @@ test('wallet: bytes persisted before submission; a crash between prepare and sub
   assert.equal(await w2.observe('f'.repeat(64), { status: 'seen', source: 'arc' }), undefined, 'untracked txids change nothing')
 })
 
-test('wallet: one outpoint, one live action; guard refusal and network rejection both release', async (t) => {
+void test('wallet: one outpoint, one live action; guard refusal and network rejection both release', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const funder = dryFunder()
@@ -374,7 +374,7 @@ test('wallet: one outpoint, one live action; guard refusal and network rejection
   let reply: import('@nektar/chain').BroadcastResult = { status: 'error', description: 'broadcaster: REJECTED — missing inputs' }
   const ex = new Dispatcher()
   t.after(() => ex.close())
-  const w = new WalletCoordinator(store, { broadcast: async () => reply, exec: ex })
+  const w = new WalletCoordinator(store, { broadcast: () => Promise.resolve(reply), exec: ex })
   wireTx(ex, { store, fx: {}, log: () => {}, submit: (id) => w.submit(id) })
   const t1 = await build(),
     t2 = await build()
@@ -401,14 +401,14 @@ test('wallet: one outpoint, one live action; guard refusal and network rejection
   reply = { status: 'error', description: 'SpendGuard refused: fee 5000 sats > maxFeePerTx 1000' }
   const ex2 = new Dispatcher()
   t.after(() => ex2.close())
-  const w2 = new WalletCoordinator(store2, { broadcast: async () => reply, exec: ex2 })
+  const w2 = new WalletCoordinator(store2, { broadcast: () => Promise.resolve(reply), exec: ex2 })
   wireTx(ex2, { store: store2, fx: {}, log: () => {}, submit: (id) => w2.submit(id) })
   await w2.prepare(ctx('h', 'a'), 'send', t1)
   assert.equal((await w2.submit('a')).state, 'rejected')
   assert.equal((await w2.prepare(ctx('h', 'b'), 'send', t2)).state, 'prepared', 'a tx that never left the process frees its inputs')
 })
 
-test('wallet: first-party deaths run custody hooks — txDied on refusal/rejection, txSpent on air', async (t) => {
+void test('wallet: first-party deaths run custody hooks — txDied on refusal/rejection, txSpent on air', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const funder = dryFunder()
@@ -440,7 +440,7 @@ test('wallet: first-party deaths run custody hooks — txDied on refusal/rejecti
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const w = new WalletCoordinator(store, {
-    broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }),
+    broadcast: () => Promise.resolve({ status: 'error', description: 'SpendGuard refused: daily cap' }),
     ...hooks,
     exec: ex
   })
@@ -452,7 +452,7 @@ test('wallet: first-party deaths run custody hooks — txDied on refusal/rejecti
   assert.equal(spent.length, 0)
   // a transport failure is NOT a death — undecidable, no hooks
   const w2 = new WalletCoordinator(store, {
-    broadcast: async () => {
+    broadcast: () => {
       throw new Error('socket died')
     },
     ...hooks,
@@ -464,7 +464,7 @@ test('wallet: first-party deaths run custody hooks — txDied on refusal/rejecti
   assert.deepEqual(died, [t1.id('hex')], 'submission_unknown must not kill custody')
   // a network-observed rejection/conflict is a death too
   const w3 = new WalletCoordinator(store, {
-    broadcast: async () => ({ status: 'success' }),
+    broadcast: () => Promise.resolve({ status: 'success' }),
     ...hooks,
     exec: ex
   })
@@ -478,7 +478,7 @@ test('wallet: first-party deaths run custody hooks — txDied on refusal/rejecti
   assert.deepEqual(died, [t1.id('hex'), t3.id('hex')], 'a late chain rejection also returns custody')
 })
 
-test('wallet: a refused tx aired by the counterparty revives custody, not a double-take', async (t) => {
+void test('wallet: a refused tx aired by the counterparty revives custody, not a double-take', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const funder = dryFunder()
@@ -502,7 +502,7 @@ test('wallet: a refused tx aired by the counterparty revives custody, not a doub
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const w = new WalletCoordinator(store, {
-    broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }),
+    broadcast: () => Promise.resolve({ status: 'error', description: 'SpendGuard refused: daily cap' }),
     ...hooks,
     exec: ex
   })
@@ -519,7 +519,7 @@ test('wallet: a refused tx aired by the counterparty revives custody, not a doub
   assert.deepEqual(spent, [tx.id('hex')], 'a refused-but-aired tx re-marks custody — inputs are provably spent, change is ours')
 })
 
-test('watcher: recently-rejected rows still re-observe — the counterparty-air window', async (t) => {
+void test('watcher: recently-rejected rows still re-observe — the counterparty-air window', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const funder = dryFunder()
@@ -533,7 +533,7 @@ test('watcher: recently-rejected rows still re-observe — the counterparty-air 
   const revived: string[] = []
   const ex = new Dispatcher()
   t.after(() => ex.close())
-  const w = new WalletCoordinator(store, { broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }), exec: ex })
+  const w = new WalletCoordinator(store, { broadcast: () => Promise.resolve({ status: 'error', description: 'SpendGuard refused: daily cap' }), exec: ex })
   // driver mode: the dead→live revive fires the 'tx-spent' intent on the
   // rejected --obs.seen--> observed edge — the same custody re-mark the
   // legacy onRevived hook ran (the observe body runs it via wireTx's fx)
@@ -542,14 +542,14 @@ test('watcher: recently-rejected rows still re-observe — the counterparty-air 
   await w.prepare(ctx('h', 'a'), 'send', tx)
   assert.equal((await w.submit('a')).state, 'rejected')
   const { TransactionWatcher } = await import('../src/ledger.js')
-  const watcher = new TransactionWatcher(store, async () => ({ status: 'seen' as const, source: 't' }), undefined, { effects, exec: ex })
+  const watcher = new TransactionWatcher(store, () => Promise.resolve({ status: 'seen' as const, source: 't' }), undefined, { effects, exec: ex })
   assert.equal(await watcher.tick(), 1, 'the rejected row is inside its re-air window and must be re-observed')
   assert.deepEqual(revived, [tx.id('hex')])
   assert.equal((await store.walletTx({ actionId: 'a' }))?.state, 'observed')
   assert.equal(await watcher.tick(), 0, 'observed settles — no repeat revive')
 })
 
-test('wallet leases: a released row is dead to take() and prepare() readers alike', async (t) => {
+void test('wallet leases: a released row is dead to take() and prepare() readers alike', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const txid = (c: string) => c.repeat(64)
@@ -582,7 +582,7 @@ test('wallet leases: a released row is dead to take() and prepare() readers alik
   assert.equal(await store.leaseOutpoints('act-other', [{ txid: txid('d'), vout: 0, satoshis: 100 }]), false, 'a live lease still blocks prepare()')
 })
 
-test('wallet: lease+record are atomic — a lease conflict leaves no tx row behind', async (t) => {
+void test('wallet: lease+record are atomic — a lease conflict leaves no tx row behind', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const txid = (c: string) => c.repeat(64)
@@ -602,7 +602,7 @@ test('wallet: lease+record are atomic — a lease conflict leaves no tx row behi
   assert.equal((await store.leaseState(txid('a'), 0))?.actionId, 'act-a')
 })
 
-test('classifyDeliveryError: funding starvation vs transport vs unclassed', () => {
+void test('classifyDeliveryError: funding starvation vs transport vs unclassed', () => {
   assert.equal(classifyDeliveryError('no funding slot'), 'funding-slot')
   assert.equal(classifyDeliveryError('The operation was aborted due to timeout'), 'transport')
   assert.equal(classifyDeliveryError('fetch failed'), 'transport')
@@ -616,7 +616,7 @@ test('classifyDeliveryError: funding starvation vs transport vs unclassed', () =
   assert.equal(classifyDeliveryError('policy denied'), undefined)
 })
 
-test('outbox defer classes: unblockOutbox keys on the class, not the error text', async (t) => {
+void test('outbox defer classes: unblockOutbox keys on the class, not the error text', async (t) => {
   let now = 1_000
   const { kx, store } = await open(':memory:', () => now)
   t.after(() => kx.destroy())
@@ -641,7 +641,7 @@ test('outbox defer classes: unblockOutbox keys on the class, not the error text'
   )
 })
 
-test('enqueue delayMs: a delayed row is not due until the delay passes', async (t) => {
+void test('enqueue delayMs: a delayed row is not due until the delay passes', async (t) => {
   let now = 1_000
   const { kx, store } = await open(':memory:', () => now)
   t.after(() => kx.destroy())
@@ -658,17 +658,17 @@ test('enqueue delayMs: a delayed row is not due until the delay passes', async (
 
 // Batch H: the abandon reap drops every unproven row, but only self-minted
 // trees ghost-mint — a provision row's inputs are the payer's, not ours
-test('abandonedReap: provision rows drop without ghost-mint; self-minted kinds ghost', async () => {
+void test('abandonedReap: provision rows drop without ghost-mint; self-minted kinds ghost', async () => {
   const mod = (await import('../src/runtime.js')) as { abandonedReap?: (kind: string) => { drop: boolean; ghost: boolean } }
   assert.ok(mod.abandonedReap !== undefined, 'runtime must export abandonedReap')
-  assert.deepEqual(mod.abandonedReap!('provision'), { drop: true, ghost: false })
-  assert.deepEqual(mod.abandonedReap!('market'), { drop: true, ghost: true })
-  assert.deepEqual(mod.abandonedReap!('bbox'), { drop: true, ghost: true })
+  assert.deepEqual(mod.abandonedReap('provision'), { drop: true, ghost: false })
+  assert.deepEqual(mod.abandonedReap('market'), { drop: true, ghost: true })
+  assert.deepEqual(mod.abandonedReap('bbox'), { drop: true, ghost: true })
 })
 
 // Stage 7 gate — a silent wait must carry its reason: the deferred outbox
 // row is what 'deals {operationId}' renders as the waiting-on line
-test('waitingOn: deferred rows surface their class and plain reason', async () => {
+void test('waitingOn: deferred rows surface their class and plain reason', async () => {
   const { store, kx } = await open()
   await store.enqueue({ actionId: 'a1', operationId: 'op1', kind: 'offer', destination: 'host:x', payload: { hi: 1 } })
   await store.enqueue({ actionId: 'a2', operationId: 'op1', kind: 'pay', destination: 'host:y', payload: {} })
@@ -692,18 +692,18 @@ test('waitingOn: deferred rows surface their class and plain reason', async () =
   await kx.destroy()
 })
 
-test('market: refund window inside the seller safety margin refuses at construction', async () => {
+void test('market: refund window inside the seller safety margin refuses at construction', async () => {
   const { MarketEngine } = await import('../src/market.js')
   const { store, kx } = await open()
   const deps = (opts: { refundBlocks: number; sellerSafetyBlocks?: number }) =>
     ({
       store,
-      call: async () => ({}),
+      call: () => ({}),
       memory: {} as never,
       key: PrivateKey.fromRandom(),
       network: 'regtest',
-      height: async () => 1,
-      fetchTx: async () => undefined,
+      height: () => 1,
+      fetchTx: () => undefined,
       transport: {} as never,
       ai: {} as never,
       opts
@@ -714,7 +714,7 @@ test('market: refund window inside the seller safety margin refuses at construct
   await kx.destroy()
 })
 
-test('splitDailySpend: escrow/payment kinds are deal spend; the rest is upkeep', async () => {
+void test('splitDailySpend: escrow/payment kinds are deal spend; the rest is upkeep', async () => {
   const { splitDailySpend } = await import('../src/ledger.js')
   const { store, kx } = await open()
   const tx = (id: string) => ({ txid: id, rawHex: '00', parents: {}, feeSats: 10 })
@@ -737,7 +737,7 @@ test('splitDailySpend: escrow/payment kinds are deal spend; the rest is upkeep',
 
 // the set-shaped reads behind the hot loop + the journal batch — each must
 // agree with the per-row query it replaces
-test('aggregates: opsByIds, eventCountsByOp, hasLiveOps, hasDueAtHeight', async (t) => {
+void test('aggregates: opsByIds, eventCountsByOp, hasLiveOps, hasDueAtHeight', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const mk = async (dedupeKey: string, extra: { state?: string; data?: Record<string, unknown>; dueHeight?: number } = {}) => {
@@ -751,7 +751,7 @@ test('aggregates: opsByIds, eventCountsByOp, hasLiveOps, hasDueAtHeight', async 
       data: extra.data ?? {},
       ...(extra.dueHeight !== undefined ? { dueHeight: extra.dueHeight } : {})
     })
-    return r!.operation.operationId
+    return r.operation.operationId
   }
   assert.equal(await store.hasLiveOps(['collecting']), false, 'empty store has no live ops')
   assert.equal((await store.opsByIds([])).size, 0)

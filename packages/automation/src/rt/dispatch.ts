@@ -456,7 +456,7 @@ export const wireEngine = (ex: LocalDispatch, engine: EngineSurface, d: WireEngi
     tx: { store: d.store, fx: d.fx ?? {}, log, submit: d.submit ?? ((actionId) => engine.submitTx(actionId)) },
     sweep: {
       scan: d.scan ?? async function* () {},
-      resubmitRows: d.resubmitRows ?? (async () => []),
+      resubmitRows: d.resubmitRows ?? (() => Promise.resolve([])),
       log
     },
     deal: {

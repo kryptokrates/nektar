@@ -18,28 +18,28 @@ const KEY = PrivateKey.fromRandom()
 const LOCK = new P2PKH().lock(KEY.toPublicKey().toHash())
 
 const stubServices = {
-  getHeight: async () => 900000,
-  getHeaderForHeight: async () => [0],
-  getRawTx: async () => ({}),
-  getMerklePath: async () => ({}),
-  postBeef: async (beef: unknown, txids: string[]) => [
+  getHeight: () => 900000,
+  getHeaderForHeight: () => [0],
+  getRawTx: () => ({}),
+  getMerklePath: () => ({}),
+  postBeef: (beef: unknown, txids: string[]) => [
     { name: 'stub', status: 'success', txidResults: txids.map((txid) => ({ txid, status: 'success', alreadyKnown: false })) }
   ],
-  getUtxoStatus: async () => ({}),
-  getStatusForTxids: async () => ({}),
-  getScriptHashHistory: async () => ({ outputs: [] }),
-  getBsvExchangeRate: async () => 50,
-  getFiatExchangeRate: async () => 1,
-  nLockTimeIsFinal: async () => true,
-  getBeefForTxid: async () => {
+  getUtxoStatus: () => ({}),
+  getStatusForTxids: () => ({}),
+  getScriptHashHistory: () => ({ outputs: [] }),
+  getBsvExchangeRate: () => 50,
+  getFiatExchangeRate: () => 1,
+  nLockTimeIsFinal: () => true,
+  getBeefForTxid: () => {
     throw new Error('no beef')
   },
-  isValidRootForHeight: async () => true,
-  getChainTracker: async () => ({ currentHeight: async () => 900000, isValidRootForHeight: async () => true }) as never,
+  isValidRootForHeight: () => true,
+  getChainTracker: () => ({ currentHeight: () => 900000, isValidRootForHeight: () => true }) as never,
   chain: 'test',
   hashOutputScript: (script: string) => script,
-  isUtxo: async () => true,
-  hashToHeader: async () => ({}) as never,
+  isUtxo: () => true,
+  hashToHeader: () => ({}) as never,
   getServicesCallHistory: () => ({}) as never
 } as unknown as Parameters<typeof tb.openToolboxWallet>[0]['services']
 
@@ -52,7 +52,7 @@ const fund = (sats: number): Transaction => {
   return tx
 }
 
-test('basket sweep: real wallet.sqlite basket rows land in the utxos table; wallet renamed aside', async () => {
+void test('basket sweep: real wallet.sqlite basket rows land in the utxos table; wallet renamed aside', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-sweep-'))
   try {
     // write the basket the old code path wrote: two basket-inserted coins
@@ -75,7 +75,7 @@ test('basket sweep: real wallet.sqlite basket rows land in the utxos table; wall
       const funds = await tb.SqlFunds.open(db, txs, { pkhHex: Buffer.from(KEY.toPublicKey().toHash()).toString('hex'), log: () => {} })
       // storage-level sweep: no wallet, no services — getTx/txLookup absent
       // means the stored bytes resolve + a broadcast recovery airs them
-      const port = { tracker: {}, broadcast: async () => ({ status: 'success' }) } as unknown as ChainPort
+      const port = { tracker: {}, broadcast: () => ({ status: 'success' }) } as unknown as ChainPort
       await sweepBasket({ tb, dataDir: dir, chain: 'test', port, funds, log: () => {} })
       const ids = funds.utxos.map((u) => u.tx.id('hex')).sort()
       assert.deepEqual(ids, [a.id('hex'), b.id('hex')].sort())
@@ -93,7 +93,7 @@ test('basket sweep: real wallet.sqlite basket rows land in the utxos table; wall
   }
 })
 
-test('basket sweep: storage-level rows catch what listOutputs hides — stalled parents broadcast-recover, dead parents skip', async () => {
+void test('basket sweep: storage-level rows catch what listOutputs hides — stalled parents broadcast-recover, dead parents skip', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-sweep-hidden-'))
   try {
     // two basket coins, then tamper parent statuses into the states the doc
@@ -140,7 +140,7 @@ test('basket sweep: storage-level rows catch what listOutputs hides — stalled 
     const broadcast: string[] = []
     const port = {
       tracker: {},
-      broadcast: async (tx: Transaction) => {
+      broadcast: (tx: Transaction) => {
         broadcast.push(tx.id('hex'))
         return { status: 'success' as const }
       }
@@ -163,7 +163,7 @@ test('basket sweep: storage-level rows catch what listOutputs hides — stalled 
   }
 })
 
-test('signer parity: ProtoWallet and toolbox wallet interoperate on every method our surface calls', async () => {
+void test('signer parity: ProtoWallet and toolbox wallet interoperate on every method our surface calls', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-parity-'))
   try {
     const tbh = await tb.openToolboxWallet({ fundKey: KEY, dataDir: dir, chain: 'test', services: stubServices })
@@ -184,7 +184,7 @@ test('signer parity: ProtoWallet and toolbox wallet interoperate on every method
   }
 })
 
-test('client custody: the external substrate never sees our coins — it cannot double-spend them', async () => {
+void test('client custody: the external substrate never sees our coins — it cannot double-spend them', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-client-'))
   try {
     // stand-in external wallet: an empty toolbox instance on another key/data dir

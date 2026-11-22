@@ -40,7 +40,7 @@ const before = new Set(readdirSync(runDir).filter((d) => d.startsWith('run-real-
 const results = []
 for (let i = 0; i < N; i++) {
   console.log(`\n=== run ${i + 1}/${N} ===`)
-  const t0 = Date.now()
+  const _t0 = Date.now()
   const child = spawn(process.execPath, [scenario], { stdio: ['ignore', 'pipe', 'pipe'], env: process.env })
   let dirLine = ''
   let out = ''
@@ -61,9 +61,9 @@ for (let i = 0; i < N; i++) {
   try {
     const dir =
       dirLine ||
-      [...readdirSync(runDir).filter((d) => d.startsWith('run-real-') && !before.has(d))].sort(
-        (a, b) => statSync(join(runDir, b)).mtimeMs - statSync(join(runDir, a)).mtimeMs
-      )[0]
+      readdirSync(runDir)
+        .filter((d) => d.startsWith('run-real-') && !before.has(d))
+        .sort((a, b) => statSync(join(runDir, b)).mtimeMs - statSync(join(runDir, a)).mtimeMs)[0]
     summary = JSON.parse(readFileSync(join(dir, 'summary.json'), 'utf8'))
   } catch (e) {
     console.log(`  no summary.json (${e.message})`)
@@ -97,7 +97,7 @@ for (const name of stepNames) {
   perStep[name] = stats(xs)
 }
 const hops = {}
-for (const k of [...new Set(results.flatMap((r) => Object.keys(r.hopMs ?? {})))]) hops[k] = stats(pass.map((r) => r.hopMs[k]).filter((v) => v !== undefined))
+for (const k of new Set(results.flatMap((r) => Object.keys(r.hopMs ?? {})))) hops[k] = stats(pass.map((r) => r.hopMs[k]).filter((v) => v !== undefined))
 const total = stats(pass.map((r) => r.wallMs).filter((v) => v !== undefined))
 
 const crashes = results.reduce((a, r) => a + (r.crashes ?? 0), 0)

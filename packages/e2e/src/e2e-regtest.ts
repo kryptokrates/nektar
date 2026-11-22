@@ -207,7 +207,7 @@ const funder = {
   markSpent: (t: string, v: number) => reserve.markSpent(t, v),
   addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v)
 }
-const burstPool = reserve.utxos.slice(40) // own half of the pool
+const _burstPool = reserve.utxos.slice(40) // own half of the pool
 
 // real chain facade: broadcast→propagation, tracker→asset/rpc; stubs for the
 // in-memory bits NektarMemory may touch
@@ -324,7 +324,7 @@ console.log('— v2 scenario (regtest) —')
   const { canonicalizePolicySet } = await import('@nektar/policy')
   const {
     signBinding,
-    issueChallenge,
+    issueChallenge: _issueChallenge,
     answerChallenge,
     issueClearance,
     proveAccess,

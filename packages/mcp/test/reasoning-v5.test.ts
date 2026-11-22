@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { diff, apply, revert, decodeDelta, encodeDelta, DeltaError, utf8 } from '@nektar/core'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { signProvenance } from '@nektar/log'
 import { makeRotationCert, verifyAuthorship } from '@nektar/identity'
 import { always, eventually, obligation, causalClosure, type TimedFact } from '@nektar/reasoning'
@@ -24,7 +24,7 @@ async function world(t: { skip: (m?: string) => void }) {
   return { mem, settle }
 }
 
-test('§8 delta: deterministic, invertible, unicode-safe; tampered Δ rejected', () => {
+void test('§8 delta: deterministic, invertible, unicode-safe; tampered Δ rejected', () => {
   for (const [a, b] of [
     ['torque 45Nm', 'torque 55Nm'],
     ['', 'new'],
@@ -41,7 +41,7 @@ test('§8 delta: deterministic, invertible, unicode-safe; tampered Δ rejected',
   assert.throws(() => decodeDelta('[1,"x"]'), DeltaError)
 })
 
-test('§8 delta: revisions stored as Δ; every version materialises from proven links', async (t) => {
+void test('§8 delta: revisions stored as Δ; every version materialises from proven links', async (t) => {
   const _w = await world(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -73,7 +73,7 @@ test('§8 delta: revisions stored as Δ; every version materialises from proven 
   await assert.rejects(() => mem.materialize('man', 8), /not provable/, 'unproven link refused')
 })
 
-test('§12 temporal: □_t, ◇_(t1,t2), obligations with deadlines, causal closure', () => {
+void test('§12 temporal: □_t, ◇_(t1,t2), obligations with deadlines, causal closure', () => {
   const F: TimedFact[] = [
     { phi: 'incident(pump2)', t: 100 },
     { phi: 'repaired(pump2)', t: 160 },
@@ -113,7 +113,7 @@ test('§12 temporal: □_t, ◇_(t1,t2), obligations with deadlines, causal clos
   assert.match(causalClosure([{ conclusion: 'pump3 ok', t: 150, cites: [F[2]] }]).reason!, /cites "incident\(pump3\)" anchored at t=200/)
 })
 
-test('§19 epoch binding: authorship survives rotation; wrong epoch / after expiry refused', async (t) => {
+void test('§19 epoch binding: authorship survives rotation; wrong epoch / after expiry refused', async (t) => {
   const k0 = PrivateKey.fromRandom()
   const k1 = PrivateKey.fromRandom()
   const k2 = PrivateKey.fromRandom()
@@ -139,7 +139,7 @@ test('§19 epoch binding: authorship survives rotation; wrong epoch / after expi
   assert.match((await mem.authorship('a', 1, g, certs)).reason!, /no verified author epoch/)
 })
 
-test('§9 memory as law: anchored DL entailment, jurisdiction graphs, precedent', () => {
+void test('§9 memory as law: anchored DL entailment, jurisdiction graphs, precedent', () => {
   const ax: Axiom[] = [
     { kind: 'SubClassOf', sub: 'Cryptographer', sup: 'Scientist' },
     { kind: 'SubClassOf', sub: 'Scientist', sup: 'Professional' },
@@ -173,7 +173,7 @@ test('§9 memory as law: anchored DL entailment, jurisdiction graphs, precedent'
   assert.equal(validByPrecedent(precedent, 'case_2026_03', (h) => unanchoredPrecedent.has(h)).entailed, false, 'precedent must itself be anchored')
 })
 
-test('§16 delegation map: sub-decisions signed by delegating agents; tampering fails', async (t) => {
+void test('§16 delegation map: sub-decisions signed by delegating agents; tampering fails', async (t) => {
   const { makeDelegation, verifyReceiptDelegations, commitReceipt } = await import('@nektar/reasoning')
   const sub = PrivateKey.fromRandom()
   const answer = 'approved transfer of EUR 500'

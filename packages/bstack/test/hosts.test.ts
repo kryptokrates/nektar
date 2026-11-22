@@ -92,7 +92,7 @@ test('hosts: garbage beef in an answer is dropped, not thrown', async () => {
   const k = PrivateKey.fromRandom()
   const { beef } = await want(k)
   beef[10] = beef[10] ^ 0xff
-  const sub = await submitAll([a.url], beef, lanesFor(NET, ['compute']))
+  const _sub = await submitAll([a.url], beef, lanesFor(NET, ['compute']))
   const r2 = await readWants([a.url], { net: NET, domain: 'compute' }, { tracker: tr, net: NET })
   assert.equal(r2.items.length, 0)
   await a.close()

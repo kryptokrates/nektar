@@ -263,8 +263,8 @@ export interface PaymentRecord {
 
 /** verify + broadcast the caller's payment tx; returns the settlement record a receipt commits */
 export const settlePayment = async (mem: NektarMemory, tool: string, payment: { invoiceId?: string; transaction?: string }): Promise<PaymentRecord> => {
-  const inv = invoices.get(String(payment?.invoiceId ?? ''))
-  if (!inv || inv.tool !== tool) throw new Error(`unknown or wrong-tool invoiceId "${payment?.invoiceId}" — call payQuote for a fresh invoice`)
+  const inv = invoices.get(String(payment.invoiceId ?? ''))
+  if (!inv || inv.tool !== tool) throw new Error(`unknown or wrong-tool invoiceId "${payment.invoiceId}" — call payQuote for a fresh invoice`)
   if (Date.now() > inv.expires) {
     invoices.delete(inv.invoiceId)
     throw new Error('invoice expired — call payQuote for a fresh one')

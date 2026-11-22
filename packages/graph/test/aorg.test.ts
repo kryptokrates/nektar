@@ -27,7 +27,7 @@ test('AORG: episode → derived → refinement bi-temporal view', () => {
   // refinement revises the spec — old vertex invalidated, not deleted
   const e3 = ep(g, 'requires(torque, 55)', 4)
   const phi2 = 'spec(port4, 55)'
-  const rf = g.append(
+  const _rf = g.append(
     { kind: 'refinement', phi: phi2, t: t(5), context: ['manual'], sigma: [sig(phi2, t(5), ['manual'])], refines: d.h },
     [e3.h, e2.h],
     'r-spec'

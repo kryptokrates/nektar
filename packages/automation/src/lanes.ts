@@ -226,7 +226,7 @@ export function openLanes(rt: Rt): void {
       }
     // "back" means THIS READ got an answer — a quorum-short read that skipped
     // a host says nothing about it, so it stays down until a read reaches it
-    for (const h of [...rt.downNow]) if (answered.includes(h)) void hostBack(h)
+    for (const h of rt.downNow) if (answered.includes(h)) void hostBack(h)
   }
   let pendingAcks: Array<{
     txid: string
@@ -514,7 +514,7 @@ export function openLanes(rt: Rt): void {
             .catch(() => undefined)
           if ((fast.items as unknown[]).length > 0 || staged.length > 0)
             log(`lanes: ${s.tag} items=${(fast.items as unknown[]).length} staged=${staged.length}`)
-          const events = toEvents(fast.items as never)
+          const events = toEvents(fast.items)
           if (events.length > 0) {
             rt.hotUntil = Date.now() + WAITS.hotWindow.ms
             await rt.engine.ingestEvents(s.tag, events, '')
@@ -522,7 +522,7 @@ export function openLanes(rt: Rt): void {
         } else {
           const r = await s.call({ timeoutMs })
           laneNotes(r, Object.keys(r.perHost))
-          const events = toEvents(r.items as never)
+          const events = toEvents(r.items)
           if (events.length > 0) {
             rt.hotUntil = Date.now() + WAITS.hotWindow.ms
             await rt.engine.ingestEvents(s.tag, events, '')

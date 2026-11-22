@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert'
-import { testWorld, type TestFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { NektarMemory } from '../src/index.js'
 import { AORGraph, GraphAnchor, PolicyDAG } from '@nektar/graph'
 import { parseProgram } from '@nektar/datalog'
@@ -11,7 +11,7 @@ const rules = () =>
   parseProgram(`@id r1
 spec(S,V) :- requires(P,V), applies(S,P).`).rules
 
-test('AOR-006: GraphAnchor records + anchors vertex hashes; tamper detected', async (t) => {
+void test('AOR-006: GraphAnchor records + anchors vertex hashes; tamper detected', async (t) => {
   const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -28,7 +28,7 @@ test('AOR-006: GraphAnchor records + anchors vertex hashes; tamper detected', as
   assert.ok(anchorTx, 'anchored vertex exposes its anchor tx')
 })
 
-test('POL-016: policy DAG gates recall — ALLOW only when Cedar+DAG agree; conflict DENY; caller facts ignored', async (t) => {
+void test('POL-016: policy DAG gates recall — ALLOW only when Cedar+DAG agree; conflict DENY; caller facts ignored', async (t) => {
   const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -48,7 +48,7 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
   assert.ok(res.receipt.dag.policyRoot.length === 64, 'receipt carries policy root')
 })
 
-test('POL-016b: per-item DAG permit — mixed batch withholds only the unpermitted fragment', async (t) => {
+void test('POL-016b: per-item DAG permit — mixed batch withholds only the unpermitted fragment', async (t) => {
   const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -83,7 +83,7 @@ permit(P, read, 's/0') :- member(P, verified).`).rules
   assert.match(res.receipt.dag!.state, /dag-deny|dag-allow/, 'dag state reported')
 })
 
-test('POL-016c: anchoredPolicyRoot mismatch denies everything', async (t) => {
+void test('POL-016c: anchoredPolicyRoot mismatch denies everything', async (t) => {
   const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w

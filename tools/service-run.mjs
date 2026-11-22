@@ -55,7 +55,7 @@ if (autorespond && port) {
     process.on('SIGINT', () => loop.kill('SIGTERM'))
     process.on('SIGTERM', () => loop.kill('SIGTERM'))
   }
-  ready().then((ok) => {
+  void ready().then((ok) => {
     ok
       ? (console.log('service-run: instance healthy — starting autorespond'), startLoop())
       : console.error('service-run: instance never became healthy — autorespond skipped')

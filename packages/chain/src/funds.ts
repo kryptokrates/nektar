@@ -169,8 +169,8 @@ export abstract class FundsBase implements Funds {
   /** the locking script that marks an output as ours (change, adoptions).
    *  Deps-supplied lock or pkhHex-derived P2PKH; wallet impls override to
    *  derive it from the wallet itself. */
-  protected async ourLock(): Promise<string> {
-    return this.deps.lock ?? `76a914${this.deps.pkhHex}88ac`
+  protected ourLock(): Promise<string> {
+    return Promise.resolve(this.deps.lock ?? `76a914${this.deps.pkhHex}88ac`)
   }
 
   address(): Promise<string> | string {

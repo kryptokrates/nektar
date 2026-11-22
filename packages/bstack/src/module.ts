@@ -88,9 +88,9 @@ function makeTopicManager(
 ): TopicManager {
   const say = log ?? (() => {})
   return {
-    getDocumentation: async () => `nektar market lane ${lane}`,
-    getMetaData: async () => ({ name: lane, shortDescription: 'nektar market lane' }),
-    identifyNeededInputs: async () => [],
+    getDocumentation: () => Promise.resolve(`nektar market lane ${lane}`),
+    getMetaData: () => Promise.resolve({ name: lane, shortDescription: 'nektar market lane' }),
+    identifyNeededInputs: () => Promise.resolve([]),
     identifyAdmissibleOutputs: async (beef: number[]) => {
       const c = await checkCarrier(beef, { tracker })
       if (!c.ok) {
@@ -168,8 +168,8 @@ function makeLookup(
   return {
     admissionMode: 'whole-tx',
     spendNotificationMode: 'txid',
-    getDocumentation: async () => 'nektar market lookup',
-    getMetaData: async () => ({ name: LS_NAME, shortDescription: 'nektar market lookup' }),
+    getDocumentation: () => Promise.resolve('nektar market lookup'),
+    getMetaData: () => Promise.resolve({ name: LS_NAME, shortDescription: 'nektar market lookup' }),
     outputAdmittedByTopic: async (p: OutputAdmittedByTopic) => {
       const idx = idxOf(p.topic)
       if (idx === undefined || p.mode !== 'whole-tx') return
@@ -250,7 +250,7 @@ function makeLookup(
       }
       return restored
     },
-    lookup: async (q: LookupQuestion): Promise<LookupFormula> => {
+    lookup: (q: LookupQuestion): Promise<LookupFormula> => {
       if (q.service !== LS_NAME) throw new Error(`unknown service ${q.service}`)
       const query = q.query as Record<string, unknown>
       for (const k of Object.keys(query ?? {})) if (!['wants', 'offers', 'want', 'announces'].includes(k)) throw new Error(`unknown member ${k}`)
@@ -293,7 +293,7 @@ function makeLookup(
             (e.payload.body as { want: { wantId: string } }).want.wantId === w.wantId
         )
       }
-      return out
+      return Promise.resolve(out)
     }
   }
 }

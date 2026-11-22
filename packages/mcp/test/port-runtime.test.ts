@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { testWorld, memoryPort, fundsOf } from '@nektar/chain'
 import { openRuntime } from '../src/runtime.js'
 
-test('openRuntime: injected ChainPort + funds boot the whole spine on memory', async (t) => {
+void test('openRuntime: injected ChainPort + funds boot the whole spine on memory', async (t) => {
   const w = await testWorld(t, 8)
   if (w === undefined) return
   const dd = mkdtempSync(join(tmpdir(), 'nektar-port-'))
@@ -45,7 +45,7 @@ test('openRuntime: injected ChainPort + funds boot the whole spine on memory', a
   }
 })
 
-test('openRuntime: liveCheck wires only where the port proves unspent', async (t) => {
+void test('openRuntime: liveCheck wires only where the port proves unspent', async (t) => {
   const w = await testWorld(t, 8)
   if (w === undefined) return
   const cfg = (funder: typeof w.funder) => ({
@@ -79,7 +79,7 @@ test('openRuntime: liveCheck wires only where the port proves unspent', async (t
   }
 })
 
-test('openRuntime: injected funds without a chain port refuses to assemble', async () => {
+void test('openRuntime: injected funds without a chain port refuses to assemble', async () => {
   const f = await (await import('@nektar/chain')).testFunder(1)
   await assert.rejects(openRuntime({ network: 'regtest', dataDir: mkdtempSync(join(tmpdir(), 'nektar-port-')) }, { funds: fundsOf(f) }), /injected chain port/)
 })

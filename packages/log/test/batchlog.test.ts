@@ -13,7 +13,7 @@ const frag = (i: number) => ({
 })
 
 for (const [name, makeStore] of [
-  ['memory', async () => new MemoryShardStore()],
+  ['memory', () => new MemoryShardStore()],
   [
     'knex-sqlite',
     async () => {

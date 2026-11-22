@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory, { type Knex } from 'knex'
-import { testChain, testFunder, type TestFunder } from '@nektar/chain'
+import { testChain, testFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { AutomationStore } from '@nektar/automation'
@@ -25,7 +25,7 @@ function rng(seed: number) {
   }
 }
 
-test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes never double-pay or overrun the budget', async (t) => {
+void test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes never double-pay or overrun the budget', async (t) => {
   for (let seed = 1; seed <= 20; seed++) {
     const rand = rng(seed)
     const chain = (await testChain(t))!
@@ -70,17 +70,20 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
       }
       const policyHash = await store.approvePolicy(policy, 'test')
       const transport = {
-        publishWant: async (sw: SignedWant) => {
+        publishWant: (sw: SignedWant) => {
           if (rand() > 0.15) feed.push({ seq: feed.length + 1, kind: 'want', payload: sw })
           if (rand() > 0.8) feed.push({ seq: feed.length + 1, kind: 'want', payload: sw })
+          return Promise.resolve()
         },
-        publishOffer: async (so: SignedOffer) => {
+        publishOffer: (so: SignedOffer) => {
           if (rand() > 0.15) feed.push({ seq: feed.length + 1, kind: 'offer', payload: so })
           if (rand() > 0.8) feed.push({ seq: feed.length + 1, kind: 'offer', payload: so })
+          return Promise.resolve()
         },
-        send: async (to: string, msg: MarketMessage) => {
+        send: (to: string, msg: MarketMessage) => {
           if (rand() > 0.2) pending.push({ to, from: pub, msg })
           if (rand() > 0.85) pending.push({ to, from: pub, msg })
+          return Promise.resolve()
         }
       }
       const ex = new Dispatcher()

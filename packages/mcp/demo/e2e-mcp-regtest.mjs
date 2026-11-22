@@ -45,7 +45,7 @@ const serverEnv = {
   NEKTAR_DATA_DIR: dataDir,
   NEKTAR_FUND_WIF: local.NEKTAR_REGTEST_WIF,
   NEKTAR_RPC_PASS: qs.rpc_pass,
-  NEKTAR_RPC_USER: qs.rpc_user ?? 'teranode',
+  NEKTAR_RPC_USER: qs.rpc_user,
   NEKTAR_AUTOMINE: '1',
   NEKTAR_CONFIRM_MS: '1500',
   NEKTAR_BATCH: '4',
@@ -195,8 +195,8 @@ const watcherRun = () =>
         ...process.env,
         NEKTAR_WATCH_DEBUG: '1',
         NEKTAR_REGTEST_WIF: local.NEKTAR_REGTEST_WIF,
-        NEKTAR_RPC_USER: qs.rpc_user ?? 'teranode',
-        NEKTAR_RPC_PASS: qs.rpc_pass ?? ''
+        NEKTAR_RPC_USER: qs.rpc_user,
+        NEKTAR_RPC_PASS: qs.rpc_pass
       },
       encoding: 'utf8',
       timeout: 120_000

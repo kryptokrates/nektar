@@ -328,7 +328,7 @@ export function createHttpApi(
   const SESSION_MAX = 256
   const sessionReaper = setInterval(() => {
     const now = Date.now()
-    for (const [id, s] of sessions) if (now - s.lastSeen > SESSION_IDLE_MS) void s.t.close()
+    for (const [_id, s] of sessions) if (now - s.lastSeen > SESSION_IDLE_MS) void s.t.close()
   }, 60_000)
   sessionReaper.unref()
   // /v1/pack memoization — keyed on shard content (head+count); concurrent
@@ -582,7 +582,7 @@ export function createHttpApi(
             addSavedHost(origin)
             mem.automation?.addHost?.(origin)
             const known = new Set(marketHosts())
-            const discovered = (((doc.market as { hosts?: unknown[] })?.hosts ?? []) as unknown[])
+            const discovered = ((doc.market as { hosts?: unknown[] }).hosts ?? [])
               .map((h) => String(h).replace(/\/+$/, ''))
               .filter((h) => h !== '' && h !== origin && !known.has(h))
             mem.events.emit('change', 'automation')
@@ -657,7 +657,7 @@ export function createHttpApi(
               if (!tok) {
                 // ?s=N — human-readable form: the Nth record on __receipts__
                 const rec = (await mem.recall('__receipts__', { seq: Number(seq) })).items[0]
-                const h = rec?.text?.split(':')[1]
+                const h = rec.text?.split(':')[1]
                 if (!h) return send(404, { error: `no receipt at __receipts__ seq ${seq}` })
                 arg = { receiptHash: h }
               }
@@ -698,8 +698,8 @@ export function createHttpApi(
             try {
               const { verifyReceipt } = await import('./receipt.js')
               const result = await verifyReceipt(mem, { token: tok })
-              const pass = (result.checks ?? []).filter((c) => c.ok === true).length
-              const total = (result.checks ?? []).filter((c) => c.ok !== 'info' && c.ok !== 'skip').length
+              const pass = result.checks.filter((c) => c.ok === true).length
+              const total = result.checks.filter((c) => c.ok !== 'info' && c.ok !== 'skip').length
               const att = (result.receipt as { modelAttestation?: { verifierTxid?: string } } | undefined)?.modelAttestation
               const value = result.ok ? `verified ${pass}/${total}${att?.verifierTxid ? ' · model on-chain' : att ? ' · model attested' : ''}` : 'failed'
               return send(200, badgeSvg(value, result.ok ? '#2ea043' : '#e5534b'), 'image/svg+xml; charset=utf-8')
@@ -798,7 +798,7 @@ export function createHttpApi(
               verifyBase: `${base}/v1/verify`,
               card: `${base}/card`,
               logPublicKey: await mem.logPublicKey(),
-              operatorPub: mem.operatorKey()?.toPublicKey().toString(),
+              operatorPub: mem.operatorKey().toPublicKey().toString(),
               // self-describing market config — is this instance a quorum
               // participant, and through which hosts? Report the live engine
               // state (mem.automation) not just the env flag.

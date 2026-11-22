@@ -55,9 +55,9 @@ const RATE = Number(process.env.NEKTAR_FEE_RATE_SAT_PER_KB ?? 100)
 const chain = {
   broadcast: (tx: Transaction) => broadcaster.broadcast(tx),
   currentHeight: () => 0 as never,
-  isValidRootForHeight: async () => true,
-  headerAtHeight: async () => undefined as never,
-  tipHeight: async () => 0
+  isValidRootForHeight: () => true,
+  headerAtHeight: () => undefined as never,
+  tipHeight: () => 0
 }
 
 // known outpoint → satoshis, for fee computation (reserve + our own txs)

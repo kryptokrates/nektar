@@ -108,8 +108,8 @@ export class WalletCoordinator {
     )
   }
 
-  async rebuildTx(w: WalletTx): Promise<Transaction> {
-    return this.rebuild(w)
+  rebuildTx(w: WalletTx): Promise<Transaction> {
+    return Promise.resolve(this.rebuild(w))
   }
 
   private rebuild(w: WalletTx): Transaction {

@@ -65,9 +65,9 @@ export function isDigestSigner(x: unknown): x is DigestSigner {
 
 export function keySigner(key: PrivateKey): DigestSigner {
   return {
-    sign: async (d) => key.sign(Array.from(d)),
-    pubKeyHex: async () => key.toPublicKey().toString(),
-    deriveSecret: async (pre, post) => new Uint8Array(Hash.sha256(Utils.toArray(pre + key.toWif() + (post ?? ''), 'utf8')))
+    sign: (d) => Promise.resolve(key.sign(Array.from(d))),
+    pubKeyHex: () => Promise.resolve(key.toPublicKey().toString()),
+    deriveSecret: (pre, post) => Promise.resolve(new Uint8Array(Hash.sha256(Utils.toArray(pre + key.toWif() + (post ?? ''), 'utf8'))))
   }
 }
 
@@ -243,7 +243,7 @@ export function unlockP2PKH(
         { op: pubkeyForScript.length, data: pubkeyForScript }
       ])
     },
-    estimateLength: async () => 108
+    estimateLength: () => Promise.resolve(108)
   }
 }
 

@@ -23,15 +23,15 @@ async function aTx(): Promise<Transaction> {
 // the asset base answer the routed binary payloads (404 on misses)
 const stub =
   (rawHex: string | undefined, routes: Record<string, { status: number; body?: Uint8Array | number[] }> = {}): typeof fetch =>
-  async (input: unknown) => {
+  (input: unknown) => {
     const url = String(input)
     if (url === cfg.rpcUrl) {
       const error = rawHex === undefined ? { code: -5, message: 'No such mempool or blockchain transaction' } : null
-      return new Response(JSON.stringify({ jsonrpc: '1.0', id: 1, result: rawHex ?? null, error }), { status: 200 })
+      return Promise.resolve(new Response(JSON.stringify({ jsonrpc: '1.0', id: 1, result: rawHex ?? null, error }), { status: 200 }))
     }
     const hit = Object.keys(routes).find((k) => url === `${cfg.assetUrl}/${k}`)
     const r = hit !== undefined ? routes[hit] : { status: 404 }
-    return new Response(new Uint8Array(r.body ?? []), { status: r.status })
+    return Promise.resolve(new Response(new Uint8Array(r.body ?? []), { status: r.status }))
   }
 
 test('regtestTx: mined tx returns tx with attached MerklePath', async () => {
@@ -80,7 +80,7 @@ test('bootstrapReserve: a treasury file namespaced for another consumer is refus
       cfg,
       PrivateKey.fromRandom(),
       reserve,
-      async () => {
+      () => {
         throw new Error('rpc must not be reached')
       },
       { treasuryFile: file, namespace: 'real-stack' }
@@ -112,7 +112,7 @@ test('ReserveFunder.takeReserve: skip passes a candidate over for this call only
     min?: unknown,
     skip?: (tx: typeof a, vout: number) => Promise<boolean>
   ) => Promise<{ tx: typeof a } | null>
-  const u = await take(undefined, undefined, async (tx) => tx === a)
+  const u = await take(undefined, undefined, (tx) => Promise.resolve(tx === a))
   assert.equal(u?.tx, b)
   assert.equal((await take())?.tx, a, 'a skipped candidate is handed out later, not consumed')
 })

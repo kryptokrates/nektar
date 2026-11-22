@@ -29,7 +29,7 @@ const POLICY: TestPolicyOpts = {
   maxPreparationsPerDay: 50,
   limits: { dailyPurchaseSats: 50_000, dailyFeeSats: 50_000, runTotalSats: 500_000, maxLockedSats: 5000, maxUnconfirmedSats: 5000, maxUnconfirmedCount: 16 }
 }
-const policyFor = (pub: string): AutomationPolicy => testPolicyFor(pub, POLICY)
+const _policyFor = (pub: string): AutomationPolicy => testPolicyFor(pub, POLICY)
 
 type A = TestAgent
 const mkagent = async (
@@ -98,7 +98,7 @@ const deal = async (b: A, s: A, chain: TestChain, logs: string[], extraRts: Auto
   return { wantId: w.wantId, rounds, ms: Date.now() - t0 }
 }
 
-test('T1: deal latency distribution — 5 sequential deals, p50/p95 on rounds and wall ms', { timeout: 300_000 }, async (t) => {
+void test('T1: deal latency distribution — 5 sequential deals, p50/p95 on rounds and wall ms', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
@@ -123,9 +123,9 @@ test('T1: deal latency distribution — 5 sequential deals, p50/p95 on rounds an
     // 200 is far above that but still catches a hang-shaped regression
     assert.ok(Math.max(...rounds) < 200, `slowest deal took ${Math.max(...rounds)} rounds — latency regressed hard`)
   } finally {
-    for (const r of [b?.rt, s?.rt]) {
+    for (const r of [b.rt, s.rt]) {
       try {
-        await r?.stop()
+        await r.stop()
       } catch {
         /* */
       }
@@ -135,7 +135,7 @@ test('T1: deal latency distribution — 5 sequential deals, p50/p95 on rounds an
   }
 })
 
-test('R1: host dies mid-deal — fan-out still completes through the survivor', { timeout: 300_000 }, async (t) => {
+void test('R1: host dies mid-deal — fan-out still completes through the survivor', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
@@ -157,9 +157,9 @@ test('R1: host dies mid-deal — fan-out still completes through the survivor', 
     })
     assert.ok(rounds > 0, 'deal died with h1 | ' + logs.slice(-20).join(' | '))
   } finally {
-    for (const r of [b?.rt, s?.rt]) {
+    for (const r of [b.rt, s.rt]) {
       try {
-        await r?.stop()
+        await r.stop()
       } catch {
         /* */
       }
@@ -168,7 +168,7 @@ test('R1: host dies mid-deal — fan-out still completes through the survivor', 
   }
 })
 
-test('R2: one host delayed 1.5s — quorum-1 rides the fast host, deal does not stall', { timeout: 300_000 }, async (t) => {
+void test('R2: one host delayed 1.5s — quorum-1 rides the fast host, deal does not stall', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
@@ -188,9 +188,9 @@ test('R2: one host delayed 1.5s — quorum-1 rides the fast host, deal does not 
     // the slow host's records do land (delayed, not dropped) — completeness check
     assert.ok(h1.txids().length > 0, 'slow host stored nothing')
   } finally {
-    for (const r of [b?.rt, s?.rt]) {
+    for (const r of [b.rt, s.rt]) {
       try {
-        await r?.stop()
+        await r.stop()
       } catch {
         /* */
       }
@@ -201,7 +201,7 @@ test('R2: one host delayed 1.5s — quorum-1 rides the fast host, deal does not 
   }
 })
 
-test('R5: kill matrix — buyer respawn mid-deal from collecting / awaiting_disclosure reaches terminal state', { timeout: 300_000 }, async (t) => {
+void test('R5: kill matrix — buyer respawn mid-deal from collecting / awaiting_disclosure reaches terminal state', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   for (const checkpoint of ['collecting', 'awaiting_disclosure'] as const) {
     const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
@@ -242,9 +242,9 @@ test('R5: kill matrix — buyer respawn mid-deal from collecting / awaiting_disc
       await b2.rt.stop()
       await s.rt.stop()
     } finally {
-      for (const r of [b?.rt, s?.rt]) {
+      for (const r of [b.rt, s.rt]) {
         try {
-          await r?.stop()
+          await r.stop()
         } catch {
           /* */
         }
@@ -255,7 +255,7 @@ test('R5: kill matrix — buyer respawn mid-deal from collecting / awaiting_disc
   }
 })
 
-test('R5b: seller killed after quoting respawns and settles; withholding host cannot starve the deal', { timeout: 300_000 }, async (t) => {
+void test('R5b: seller killed after quoting respawns and settles; withholding host cannot starve the deal', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
@@ -284,9 +284,9 @@ test('R5b: seller killed after quoting respawns and settles; withholding host ca
     await b.rt.stop()
     await s2.rt.stop()
   } finally {
-    for (const r of [b?.rt, s?.rt]) {
+    for (const r of [b.rt, s.rt]) {
       try {
-        await r?.stop()
+        await r.stop()
       } catch {
         /* */
       }
@@ -304,42 +304,45 @@ const stubShim = async () => {
   const waiters = new Map<string, Array<(v: object) => void>>()
   const seen: string[] = []
   let notifies = 0
-  const srv = http.createServer((req, res) => void (async () => {
-    const u = new URL(req.url ?? '/', 'http://x')
-    seen.push(`${req.method} ${u.pathname}`)
-    if (req.method === 'GET' && u.pathname === '/watch') {
-      const service = u.searchParams.get('service') ?? ''
-      const waitMs = Number(u.searchParams.get('waitMs') ?? 25_000)
-      const v = await new Promise<object>((r) => {
-        const t = setTimeout(() => r({ changed: false }), Math.min(waitMs, 10_000))
-        const list = waiters.get(service) ?? []
-        waiters.set(service, [
-          ...list,
-          (x) => {
-            clearTimeout(t)
-            r(x)
-          }
-        ])
-      })
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify(v))
-      return
-    }
-    if (req.method === 'POST' && u.pathname === '/notify') {
-      const chunks: Buffer[] = []
-      req.on('data', (c) => chunks.push(c))
-      await new Promise((r) => req.on('end', r))
-      notifies++
-      const { service } = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
-      for (const w of waiters.get(service) ?? []) w({ changed: true })
-      waiters.delete(service)
-      res.writeHead(204)
-      res.end()
-      return
-    }
-    res.writeHead(404)
-    res.end()
-  })())
+  const srv = http.createServer(
+    (req, res) =>
+      void (async () => {
+        const u = new URL(req.url ?? '/', 'http://x')
+        seen.push(`${req.method} ${u.pathname}`)
+        if (req.method === 'GET' && u.pathname === '/watch') {
+          const service = u.searchParams.get('service') ?? ''
+          const waitMs = Number(u.searchParams.get('waitMs') ?? 25_000)
+          const v = await new Promise<object>((r) => {
+            const t = setTimeout(() => r({ changed: false }), Math.min(waitMs, 10_000))
+            const list = waiters.get(service) ?? []
+            waiters.set(service, [
+              ...list,
+              (x) => {
+                clearTimeout(t)
+                r(x)
+              }
+            ])
+          })
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(v))
+          return
+        }
+        if (req.method === 'POST' && u.pathname === '/notify') {
+          const chunks: Buffer[] = []
+          req.on('data', (c) => chunks.push(c))
+          await new Promise((r) => req.on('end', r))
+          notifies++
+          const { service } = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+          for (const w of waiters.get(service) ?? []) w({ changed: true })
+          waiters.delete(service)
+          res.writeHead(204)
+          res.end()
+          return
+        }
+        res.writeHead(404)
+        res.end()
+      })()
+  )
   await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r))
   const { port } = srv.address() as AddressInfo
   return { url: `http://127.0.0.1:${port}`, notifies: () => notifies, seen: () => seen, close: () => new Promise<void>((r) => srv.close(() => r())) }
@@ -356,7 +359,7 @@ const STOP_ALL = async (rts: Array<Automation | undefined>) => {
 }
 
 // T2 — throughput: K buyers race one seller's shard; every deal must land
-test('T2: throughput — 3 concurrent buyers on one seller, all deals land', { timeout: 300_000 }, async (t) => {
+void test('T2: throughput — 3 concurrent buyers on one seller, all deals land', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
@@ -388,7 +391,7 @@ test('T2: throughput — 3 concurrent buyers on one seller, all deals land', { t
     assert.equal(settled.length, wants.length, 'a sale op per want')
     console.log(`    throughput: ${wants.length} deals in ${rounds} rounds / ${ms}ms wall`)
   } finally {
-    await STOP_ALL([s?.rt, ...buyers.map((b) => b.rt)])
+    await STOP_ALL([s.rt, ...buyers.map((b) => b.rt)])
     await h1.close()
     await h2.close()
   }
@@ -396,7 +399,7 @@ test('T2: throughput — 3 concurrent buyers on one seller, all deals land', { t
 
 // T3 — watch vs poll A/B: the shim notify must fire and the deal must complete;
 // rounds are reported so the push layer's contribution is measurable.
-test('T3: watch-shim A/B — notify fires, deal completes at-or-below poll rounds', { timeout: 300_000 }, async (t) => {
+void test('T3: watch-shim A/B — notify fires, deal completes at-or-below poll rounds', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const run = async (watch: boolean) => {
     const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
@@ -423,12 +426,12 @@ test('T3: watch-shim A/B — notify fires, deal completes at-or-below poll round
       assert.ok(rounds > 0, 'deal never completed | ' + logs.slice(-20).join(' | '))
       if (shim !== undefined) {
         const { resolveFinger } = await import('@nektar/bstack')
-        const r = await resolveFinger({ hosts: [h1.url, h2.url], pub: b.pub, tracker: chain as never, allowHttp: true, timeoutMs: 5_000 })
+        const r = await resolveFinger({ hosts: [h1.url, h2.url], pub: b.pub, tracker: chain, allowHttp: true, timeoutMs: 5_000 })
         console.log(`    buyer finger after deal: ${r === undefined ? 'UNRESOLVED' : `seq=${r.seq} watch=${r.body.watch ?? 'absent'}`}`)
       }
       return { rounds, ms: Date.now() - t0, notifies: shim?.notifies() ?? 0, seen: shim?.seen() ?? [] }
     } finally {
-      await STOP_ALL([b?.rt, s?.rt])
+      await STOP_ALL([b.rt, s.rt])
       await shim?.close()
       await h1.close()
       await h2.close()
@@ -448,7 +451,7 @@ test('T3: watch-shim A/B — notify fires, deal completes at-or-below poll round
 // envelope — the honest contract: small deals complete, oversized ones leave
 // the buyer in a visible terminal/escalated state (refunded | uncertain |
 // verified) once the refund covenant gate lapses — NEVER a silent hang.
-test('T4: payload scaling — 1KB completes, 32KB/128KB land honest states', { timeout: 300_000 }, async (t) => {
+void test('T4: payload scaling — 1KB completes, 32KB/128KB land honest states', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   for (const kb of [1, 32, 128]) {
     const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
@@ -513,7 +516,7 @@ test('T4: payload scaling — 1KB completes, 32KB/128KB land honest states', { t
         )
       }
     } finally {
-      await STOP_ALL([b?.rt, s?.rt])
+      await STOP_ALL([b.rt, s.rt])
       await h1.close()
       await h2.close()
     }
@@ -522,7 +525,7 @@ test('T4: payload scaling — 1KB completes, 32KB/128KB land honest states', { t
 
 // R3 — host divergence: f1 withholds the offer record while accepting the
 // submit; quorum-1 reads h2, the withheld bookkeeping must surface it.
-test('R3: withholding host loses the offer — deal completes + withheld is logged', { timeout: 300_000 }, async (t) => {
+void test('R3: withholding host loses the offer — deal completes + withheld is logged', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
@@ -552,7 +555,7 @@ test('R3: withholding host loses the offer — deal completes + withheld is logg
       'withholding was never logged — bookkeeping is blind'
     )
   } finally {
-    await STOP_ALL([b?.rt, s?.rt])
+    await STOP_ALL([b.rt, s.rt])
     await f1.close()
     await h1.close()
     await h2.close()
@@ -561,7 +564,7 @@ test('R3: withholding host loses the offer — deal completes + withheld is logg
 
 // R4 — partition & heal: both hosts down mid-deal, ops pause not die, heal
 // completes it; exactly one funding tx ever broadcast.
-test('R4: partition heals — ops resume after deaf window, no double-broadcast', { timeout: 300_000 }, async (t) => {
+void test('R4: partition heals — ops resume after deaf window, no double-broadcast', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
@@ -596,7 +599,7 @@ test('R4: partition heals — ops resume after deaf window, no double-broadcast'
     const bo = await opFor(b, w.wantId)
     assert.equal((bo!.data as { escrowTxid?: string }).escrowTxid, (mid.data as { escrowTxid?: string }).escrowTxid, 'escrow was re-broadcast after heal')
   } finally {
-    await STOP_ALL([b?.rt, s?.rt])
+    await STOP_ALL([b.rt, s.rt])
     await f1.close()
     await f2.close()
     await h1.close()
@@ -606,7 +609,7 @@ test('R4: partition heals — ops resume after deaf window, no double-broadcast'
 
 // R6 — idempotent redelivery: a host that returns every output twice must not
 // double-ingest — one op, one claim, no double spend.
-test('R6: duplicate lookup outputs — deal completes once, no double-ingest', { timeout: 300_000 }, async (t) => {
+void test('R6: duplicate lookup outputs — deal completes once, no double-ingest', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
@@ -625,7 +628,7 @@ test('R6: duplicate lookup outputs — deal completes once, no double-ingest', {
     assert.equal((await buyerOps(b)).length, 1, 'duplicate outputs spawned extra ops')
     assert.ok(!logs.some((l) => /double|already.*claim|rejected/i.test(l)), 'duplicate delivery leaked into the op path | ' + logs.slice(-15).join(' | '))
   } finally {
-    await STOP_ALL([b?.rt, s?.rt])
+    await STOP_ALL([b.rt, s.rt])
     await f1.close()
     await h1.close()
     await h2.close()
@@ -635,7 +638,7 @@ test('R6: duplicate lookup outputs — deal completes once, no double-ingest', {
 // R7 — rejection honesty: the escrow broadcast was accepted at submit, then the
 // network rejects it (double-spend event). txFacts must drive the op to
 // funding_failed with the budget released — not uncertain, not silent, not retry.
-test('R7: late escrow rejection — funding_failed via txFacts verdict, budget released', { timeout: 300_000 }, async (t) => {
+void test('R7: late escrow rejection — funding_failed via txFacts verdict, budget released', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
@@ -678,7 +681,7 @@ test('R7: late escrow rejection — funding_failed via txFacts verdict, budget r
       evts.some((e) => e.cause === 'escrow_rejected_late'),
       `expected an escrow_rejected_late event, got: ${evts.map((e) => e.cause).join(', ')}`
     )
-    b.mem.txFacts = orig as never
+    b.mem.txFacts = orig
     await drive([b.rt], chain, 4)
     // the verdict was fake — the escrow is really live. The funding_failed
     // rescan must not resurrect the deal (no re-funding, escrow txid
@@ -691,7 +694,7 @@ test('R7: late escrow rejection — funding_failed via txFacts verdict, budget r
     )
     assert.equal(settled.data.escrowTxid, escrowTxid, 'rejection path re-broadcast the escrow')
   } finally {
-    await STOP_ALL([b?.rt, s?.rt])
+    await STOP_ALL([b.rt, s.rt])
     await f1.close()
     await f2.close()
     await h1.close()
@@ -701,7 +704,7 @@ test('R7: late escrow rejection — funding_failed via txFacts verdict, budget r
 
 // R8 — no-loss invariant: concurrent buyers race; every op ends in a valid
 // terminal state and no two settlement txids collide.
-test('R8: concurrency invariant — 3 buyers race, all terminal, settlement txids distinct', { timeout: 300_000 }, async (t) => {
+void test('R8: concurrency invariant — 3 buyers race, all terminal, settlement txids distinct', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
@@ -737,7 +740,7 @@ test('R8: concurrency invariant — 3 buyers race, all terminal, settlement txid
     assert.ok(won >= 1, 'no buyer completed — the race starved everyone')
     console.log(`    race: ${won}/${buyers.length} buyers completed, ${sales.length} seller settlements`)
   } finally {
-    await STOP_ALL([s?.rt, ...buyers.map((b) => b.rt)])
+    await STOP_ALL([s.rt, ...buyers.map((b) => b.rt)])
     await h1.close()
     await h2.close()
   }
@@ -745,7 +748,7 @@ test('R8: concurrency invariant — 3 buyers race, all terminal, settlement txid
 
 // R9 — timeout truth: seller takes the money and ghosts. Escrow rail refunds
 // the buyer; the direct rail disputes — payment-final is honest.
-test('R9: timeout truth — escrow refund vs direct dispute on seller ghosting', { timeout: 300_000 }, async (t) => {
+void test('R9: timeout truth — escrow refund vs direct dispute on seller ghosting', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   // (a) escrow rail → refunded
   {
@@ -780,7 +783,7 @@ test('R9: timeout truth — escrow refund vs direct dispute on seller ghosting',
           logs.slice(-15).join(' | ')
       )
     } finally {
-      await STOP_ALL([b?.rt, s?.rt])
+      await STOP_ALL([b.rt, s.rt])
       await h1.close()
       await h2.close()
     }
@@ -818,7 +821,7 @@ test('R9: timeout truth — escrow refund vs direct dispute on seller ghosting',
           logs.slice(-15).join(' | ')
       )
     } finally {
-      await STOP_ALL([b?.rt, s?.rt])
+      await STOP_ALL([b.rt, s.rt])
       await h1.close()
       await h2.close()
     }

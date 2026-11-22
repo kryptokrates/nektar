@@ -124,33 +124,32 @@ const fixArgs = (file: string, args: Record<string, unknown>): Record<string, un
     a.plaintext = a.data
     delete a.data
   }
-  for (const k of ['data', 'plaintext', 'ciphertext', 'hmac', 'signature'])
-    if (typeof a[k] === 'string') a[k] = Array.from(Utils.toArray(a[k] as string, 'utf8'))
+  for (const k of ['data', 'plaintext', 'ciphertext', 'hmac', 'signature']) if (typeof a[k] === 'string') a[k] = Array.from(Utils.toArray(a[k], 'utf8'))
   return a
 }
 
 const stubServices = (over: Record<string, unknown> = {}): sdk.WalletServices =>
   ({
-    getHeight: async () => 1,
-    getHeaderForHeight: async () => Array.from(Utils.toArray('0'.repeat(160), 'hex')),
-    getRawTx: async () => ({ name: 'stub', status: 'error' }),
-    getMerklePath: async () => ({ name: 'stub', status: 'error' }),
-    postBeef: async (_b: unknown, txids: string[]) => [{ name: 'stub', status: 'success', txidResults: txids.map((txid) => ({ txid, status: 'success' })) }],
-    getUtxoStatus: async () => ({ name: 'stub', status: 'success', isUtxo: false, details: [] }),
-    getStatusForTxids: async () => ({ name: 'stub', status: 'success', results: [] }),
-    getScriptHashHistory: async () => ({ name: 'stub', status: 'success', history: [] }),
-    getBsvExchangeRate: async () => 0,
-    getFiatExchangeRate: async () => 0,
-    nLockTimeIsFinal: async () => true,
-    getBeefForTxid: async () => {
+    getHeight: () => 1,
+    getHeaderForHeight: () => Array.from(Utils.toArray('0'.repeat(160), 'hex')),
+    getRawTx: () => ({ name: 'stub', status: 'error' }),
+    getMerklePath: () => ({ name: 'stub', status: 'error' }),
+    postBeef: (_b: unknown, txids: string[]) => [{ name: 'stub', status: 'success', txidResults: txids.map((txid) => ({ txid, status: 'success' })) }],
+    getUtxoStatus: () => ({ name: 'stub', status: 'success', isUtxo: false, details: [] }),
+    getStatusForTxids: () => ({ name: 'stub', status: 'success', results: [] }),
+    getScriptHashHistory: () => ({ name: 'stub', status: 'success', history: [] }),
+    getBsvExchangeRate: () => 0,
+    getFiatExchangeRate: () => 0,
+    nLockTimeIsFinal: () => true,
+    getBeefForTxid: () => {
       throw new Error('no beef')
     },
-    isValidRootForHeight: async () => true,
-    getChainTracker: async () => ({ currentHeight: async () => 1, isValidRootForHeight: async () => true }),
+    isValidRootForHeight: () => true,
+    getChainTracker: () => ({ currentHeight: () => 1, isValidRootForHeight: () => true }),
     chain: 'main',
     hashOutputScript: (s: string) => s,
-    isUtxo: async () => false,
-    hashToHeader: async () => {
+    isUtxo: () => false,
+    hashToHeader: () => {
       throw new Error('no hashToHeader')
     },
     getServicesCallHistory: () => ({}) as sdk.ServicesCallHistory,
@@ -158,12 +157,12 @@ const stubServices = (over: Record<string, unknown> = {}): sdk.WalletServices =>
   }) as unknown as sdk.WalletServices
 
 /** deterministic discovery: empty overlay answers for every lookup. */
-const emptyResolver = { query: async () => ({ type: 'lookupAnswer', result: [] }) }
+const emptyResolver = { query: () => Promise.resolve({ type: 'lookupAnswer', result: [] }) }
 
 type Call = (args: Record<string, unknown>, originator?: string) => Promise<Record<string, unknown>>
 const call = (w: WalletInterface, method: keyof WalletInterface): Call => {
   const fn = (w as unknown as Record<string, unknown>)[method]
-  return async (args, originator) => (await (fn as Call).call(w, args, originator)) as Record<string, unknown>
+  return async (args, originator) => await (fn as Call).call(w, args, originator)
 }
 
 /** recursive subset compare — expected ⊆ result. BRC-100 results are
@@ -250,7 +249,7 @@ const runVectors = async (
     const args = fixArgs(file, v.input.args)
     const scen = sessionScenario(file, v)
     try {
-      const result = (await h.invoke(args, v.input.originator)) as Record<string, unknown>
+      const result = await h.invoke(args, v.input.originator)
       if (scen) {
         out.skippedScenario.push(`${v.id}: scenario "${v.input._scenario}"`)
         continue
@@ -323,10 +322,10 @@ const files = readdirSync(DIR)
 
 // ── crypto files → ProtoWallet — our held-key signer; must pass all. ────
 for (const file of files.filter((f) => CRYPTO.has(f))) {
-  test(`brc100 ${file}: ProtoWallet passes every required vector`, async () => {
-    const out = await runVectors(file, load(file), async (v) => {
+  void test(`brc100 ${file}: ProtoWallet passes every required vector`, async () => {
+    const out = await runVectors(file, load(file), (v) => {
       const w = new ProtoWallet(PrivateKey.fromHex(v.input.root_key ?? KEY1)) as unknown as WalletInterface
-      return { invoke: call(w, METHOD[file]), wallet: w }
+      return Promise.resolve({ invoke: call(w, METHOD[file]), wallet: w })
     })
     assert.deepEqual(out.fails.slice(0, 8), [])
   })
@@ -334,7 +333,7 @@ for (const file of files.filter((f) => CRYPTO.has(f))) {
 
 // ── crypto files → toolbox Wallet with a PrivilegedKeyManager from the
 // vector root_key (the docs' own conformance recipe) — must pass all. ────
-test(`brc100 crypto files: toolbox wallet + PrivilegedKeyManager passes all`, async () => {
+void test(`brc100 crypto files: toolbox wallet + PrivilegedKeyManager passes all`, async () => {
   const handles: ToolboxHandle[] = []
   const dirs: string[] = []
   const wallets = new Map<string, WalletInterface>()
@@ -353,7 +352,7 @@ test(`brc100 crypto files: toolbox wallet + PrivilegedKeyManager passes all`, as
             dataDir: dir,
             chain: 'main',
             services: stubServices(),
-            privilegedKeyManager: new PrivilegedKeyManager(async () => privKey)
+            privilegedKeyManager: new PrivilegedKeyManager(() => Promise.resolve(privKey))
           })
           handles.push(tbh)
           w = tbh.wallet as unknown as WalletInterface
@@ -388,7 +387,7 @@ const seedOutputs = async (h: ToolboxHandle, basket: string, rows: SeedRow): Pro
   const { userId } = (await k('users').first('userId')) as { userId: number }
   let b = (await k('output_baskets').where({ userId, name: basket }).first('basketId')) as { basketId: number } | undefined
   if (b === undefined) {
-    const [basketId] = (await k('output_baskets').insert({ userId, name: basket })) as number[]
+    const [basketId] = await k('output_baskets').insert({ userId, name: basket })
     b = { basketId }
   }
   await k('proven_tx_reqs').insert({ txid: rows.txid, status: 'completed', rawTx: rows.rawTx, notified: true })
@@ -396,7 +395,7 @@ const seedOutputs = async (h: ToolboxHandle, basket: string, rows: SeedRow): Pro
     // labels join per-transaction — the transcript gives each output its
     // own label, so each output gets its own transactions row (txid is
     // not unique-constrained in the schema).
-    const [transactionId] = (await k('transactions').insert({
+    const [transactionId] = await k('transactions').insert({
       userId,
       status: 'completed',
       reference: `seed-${rows.txid.slice(0, 52)}-${o.vout}`,
@@ -405,14 +404,14 @@ const seedOutputs = async (h: ToolboxHandle, basket: string, rows: SeedRow): Pro
       description: 'frozen transcript fixture',
       txid: rows.txid,
       rawTx: rows.rawTx
-    })) as number[]
+    })
     const script = Buffer.from(o.lockingScriptHex, 'hex')
     // locate this output's script inside rawTx: u64-satoshis + varint-len
     // + script is an unambiguous needle for the transcript tx.
     const sats = Buffer.alloc(8)
     sats.writeBigUInt64LE(BigInt(o.satoshis))
     const idx = rows.rawTx.indexOf(Buffer.concat([sats, Buffer.from([script.length]), script]))
-    const [outputId] = (await k('outputs').insert({
+    const [outputId] = await k('outputs').insert({
       userId,
       transactionId,
       basketId: b.basketId,
@@ -429,26 +428,26 @@ const seedOutputs = async (h: ToolboxHandle, basket: string, rows: SeedRow): Pro
       scriptLength: script.length,
       scriptOffset: idx >= 0 ? idx + 8 + 1 : null,
       customInstructions: o.customInstructions ?? null
-    })) as number[]
+    })
     for (const label of o.labels ?? []) {
-      const [txLabelId] = (await k('tx_labels').insert({ userId, label })) as number[]
+      const [txLabelId] = await k('tx_labels').insert({ userId, label })
       await k('tx_labels_map').insert({ txLabelId, transactionId })
     }
     for (const tag of o.tags ?? []) {
-      const [outputTagId] = (await k('output_tags').insert({ userId, tag })) as number[]
+      const [outputTagId] = await k('output_tags').insert({ userId, tag })
       await k('output_tags_map').insert({ outputTagId, outputId })
     }
   }
 }
 
 /** the transcript tx the vectors froze: decode .146's expected BEEF. */
-const transcriptTx = async (): Promise<SeedRow> => {
+const transcriptTx = (): Promise<SeedRow> => {
   const v146 = load('listoutputs').find((v) => v.id.endsWith('.146'))
   const beef = sdkc.Beef.fromBinary(v146?.expected.BEEF as number[])
   const tx = beef.txs.find((t) => t.txid === '37f4ecf20254a1412db4417c18f3c8543a4020004136f982d1e2677a0ffe9bc5')?.tx
   assert.ok(tx !== undefined, 'transcript tx must decode from the vector BEEF')
   const exp = v146?.expected.outputs as { satoshis: number; lockingScript: string; customInstructions?: string; tags?: string[]; labels?: string[] }[]
-  return {
+  return Promise.resolve({
     txid: tx.id('hex'),
     rawTx: Buffer.from(tx.toBinary()),
     outputs: exp.map((o, vout) => ({
@@ -459,7 +458,7 @@ const transcriptTx = async (): Promise<SeedRow> => {
       tags: o.tags,
       labels: o.labels
     }))
-  }
+  })
 }
 
 // ── stateful + state files → real openToolboxWallet. ────────────────────
@@ -467,7 +466,7 @@ for (const file of files.filter((f) => !CRYPTO.has(f))) {
   const vectors = load(file)
   const required = vectors.filter((v) => v.parity_class !== 'intended')
   if (required.length === 0) continue
-  test(`brc100 ${file}: openToolboxWallet passes required vectors (${required.length})`, async () => {
+  void test(`brc100 ${file}: openToolboxWallet passes required vectors (${required.length})`, async () => {
     const dirs: string[] = []
     const handles: ToolboxHandle[] = []
     const wallets = new Map<string, ToolboxHandle>()
@@ -475,14 +474,13 @@ for (const file of files.filter((f) => !CRYPTO.has(f))) {
       const scen = v.input._scenario
       const chain = scen === 'mainnet wallet' ? 'main' : scen === 'testnet wallet' ? 'test' : 'main'
       const over: Record<string, unknown> = {}
-      if (file === 'getheight' && typeof v.expected.height === 'number') over.getHeight = async () => v.expected.height
+      if (file === 'getheight' && typeof v.expected.height === 'number') over.getHeight = () => v.expected.height
       if (file === 'getheaderforheight') {
         if (scen === 'height beyond current chain tip')
-          over.getHeaderForHeight = async () => {
+          over.getHeaderForHeight = () => {
             throw new Error('header height beyond chain tip')
           }
-        else if (typeof v.expected.header === 'string')
-          over.getHeaderForHeight = async () => Array.from(Utils.toArray(v.expected.header as unknown as string, 'hex'))
+        else if (typeof v.expected.header === 'string') over.getHeaderForHeight = () => Array.from(Utils.toArray(v.expected.header as string, 'hex'))
       }
       // per-vector overrides or fixture vectors can't share the cached
       // wallet — each gets its own sqlite instance.
@@ -497,7 +495,7 @@ for (const file of files.filter((f) => !CRYPTO.has(f))) {
           chain,
           services: stubServices(over),
           lookupResolver: emptyResolver,
-          privilegedKeyManager: new PrivilegedKeyManager(async () => sdkc.PrivateKey.fromHex(v.input.root_key ?? KEY1))
+          privilegedKeyManager: new PrivilegedKeyManager(() => Promise.resolve(sdkc.PrivateKey.fromHex(v.input.root_key ?? KEY1)))
         })
         handles.push(h)
         if (key !== undefined) wallets.set(key, h)
@@ -517,7 +515,7 @@ for (const file of files.filter((f) => !CRYPTO.has(f))) {
           const { userId } = (await k('users').first('userId')) as { userId: number }
           const CDCD = 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd'
           const ABAB = 'abababababababababababababababababababababababababababababababab'
-          const [parentId] = (await k('transactions').insert({
+          const [parentId] = await k('transactions').insert({
             userId,
             status: 'completed',
             reference: `seed-${CDCD.slice(0, 56)}`,
@@ -525,11 +523,11 @@ for (const file of files.filter((f) => !CRYPTO.has(f))) {
             satoshis: 10,
             description: '',
             txid: CDCD
-          })) as number[]
+          })
           const tx = new sdkc.Transaction()
-          tx.inputs.push({ sourceTXID: CDCD, sourceOutputIndex: 0, unlockingScript: sdkc.Script.fromHex('51'), sequence: 0xffffffff } as never)
-          tx.outputs.push({ satoshis: 9, lockingScript: sdkc.Script.fromHex('51'), change: false } as never)
-          const [actionId] = (await k('transactions').insert({
+          tx.inputs.push({ sourceTXID: CDCD, sourceOutputIndex: 0, unlockingScript: sdkc.Script.fromHex('51'), sequence: 0xffffffff })
+          tx.outputs.push({ satoshis: 9, lockingScript: sdkc.Script.fromHex('51'), change: false })
+          const [actionId] = await k('transactions').insert({
             userId,
             status: 'completed',
             reference: '',
@@ -540,7 +538,7 @@ for (const file of files.filter((f) => !CRYPTO.has(f))) {
             version: 1,
             lockTime: 0,
             rawTx: Buffer.from(tx.toBinary())
-          })) as number[]
+          })
           await k('proven_tx_reqs').insert({ txid: ABAB, status: 'completed', rawTx: Buffer.from(tx.toBinary()), notified: true })
           await k('outputs').insert({
             userId,
@@ -573,10 +571,11 @@ for (const file of files.filter((f) => !CRYPTO.has(f))) {
             txid: ABAB,
             lockingScript: Buffer.from('51', 'hex')
           })
-          const [labelId] = (await k('tx_labels').insert({ userId, label: 'history' })) as number[]
+          const [labelId] = await k('tx_labels').insert({ userId, label: 'history' })
           await k('tx_labels_map').insert({ txLabelId: labelId, transactionId: actionId })
         }
-        return { invoke: call(h.wallet as unknown as WalletInterface, METHOD[file]), wallet: h.wallet as unknown as WalletInterface }
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- h.wallet is unknown under tsc; the cast is required
+        return { invoke: call(h.wallet as WalletInterface, METHOD[file]), wallet: h.wallet as unknown as WalletInterface }
       })
       for (const n of out.skippedScenario) console.log(`  scenario-skip ${n}`)
       for (const n of out.codeNotes.slice(0, 4)) console.log(`  code-note ${n}`)

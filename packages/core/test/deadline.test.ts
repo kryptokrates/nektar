@@ -9,13 +9,13 @@ import { currentSignal, deadline, detached, ioSignal, nap, spread, stable01 } fr
 // cancellation as a throw.
 
 test('deadline: settled work returns its value', async () => {
-  const r = await deadline(async () => 42, 100)
+  const r = await deadline(() => Promise.resolve(42), 100)
   assert.deepEqual(r, { outcome: 'settled', value: 42 })
 })
 
 test('deadline: real work errors propagate, not eaten by the outcome type', async () => {
   await assert.rejects(
-    deadline(async () => {
+    deadline(() => {
       throw new Error('boom')
     }, 100),
     /boom/
@@ -73,9 +73,9 @@ test('nap: resolves on time; rejects AbortError on signal', async () => {
 test('leg context: currentSignal() is the work signal inside deadline(), undefined outside', async () => {
   assert.equal(currentSignal(), undefined)
   let inside: AbortSignal | undefined
-  const r = await deadline(async (signal) => {
+  const r = await deadline((_signal) => {
     inside = currentSignal()
-    return 'ok'
+    return Promise.resolve('ok')
   }, 100)
   assert.deepEqual(r, { outcome: 'settled', value: 'ok' })
   assert.ok(inside !== undefined, 'the leg must publish its signal on the ambient context')
@@ -160,12 +160,12 @@ test("leg context: concurrent legs never see each other's signal", async () => {
   let sigA: AbortSignal | undefined
   let sigB: AbortSignal | undefined
   const [a, b] = await Promise.all([
-    deadline(async (s) => {
+    deadline(async (_s) => {
       sigA = currentSignal()
       await nap(5)
       return 'a'
     }, 5_000),
-    deadline(async (s) => {
+    deadline(async (_s) => {
       sigB = currentSignal()
       await nap(60_000)
       return 'b-never'

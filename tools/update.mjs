@@ -41,7 +41,7 @@ const env = existsSync(join(root, '.env'))
         .map((m) => [m[1], m[2].trim()])
     )
   : {}
-const dataDir = resolve(process.env.NEKTAR_DATA_DIR ?? env.NEKTAR_DATA_DIR ?? join(root, '.nektar'))
+const dataDir = resolve(process.env.NEKTAR_DATA_DIR ?? env.NEKTAR_DATA_DIR)
 if (!existsSync(dataDir)) {
   mkdirSync(dataDir, { recursive: true })
   console.log(`  created ${dataDir}`)
@@ -50,7 +50,7 @@ let v = currentVersion(dataDir)
 const pending = MIGRATIONS.filter((m) => m.v > v)
 if (!pending.length) console.log(`  already current (v${v})`)
 for (const m of pending) {
-  const note = await m.run({ dataDir, env })
+  const note = m.run({ dataDir, env })
   v = m.v
   writeFileSync(join(dataDir, 'VERSION'), String(v))
   console.log(`  v${m.v} ${m.name}${note ? ` — ${note}` : ''}`)

@@ -8,7 +8,7 @@ import { EXEC_SVC } from '../src/rt/exec.js'
 import { CRON_KEY } from '../src/rt/services.js'
 import { Dispatcher, wireCron, wireLeg, wireNotify } from './rig.js'
 
-test('cron.tick: runs the pass then self-arms at ceilingMs — the chain re-fires', async () => {
+void test('cron.tick: runs the pass then self-arms at ceilingMs — the chain re-fires', async () => {
   const ex = new Dispatcher()
   const sent: Array<{ delayMs?: number; target: string }> = []
   const orig = ex.send.bind(ex)
@@ -18,8 +18,9 @@ test('cron.tick: runs the pass then self-arms at ceilingMs — the chain re-fire
   }
   let ticks = 0
   wireCron(ex, EXEC_SVC.upkeep, {
-    tick: async () => {
+    tick: () => {
       ticks++
+      return Promise.resolve()
     },
     ceilingMs: () => 5,
     log: () => {}
@@ -33,7 +34,7 @@ test('cron.tick: runs the pass then self-arms at ceilingMs — the chain re-fire
   await ex.close()
 })
 
-test('cron.tick: a failing pass propagates — under restate the retry IS the next attempt', async () => {
+void test('cron.tick: a failing pass propagates — under restate the retry IS the next attempt', async () => {
   const ex = new Dispatcher()
   const sent: number[] = []
   const orig = ex.send.bind(ex)
@@ -43,7 +44,7 @@ test('cron.tick: a failing pass propagates — under restate the retry IS the ne
   }
   let calls = 0
   wireCron(ex, EXEC_SVC.watchdog, {
-    tick: async () => {
+    tick: () => {
       calls++
       throw new Error('probe down')
     },
@@ -64,12 +65,12 @@ test('cron.tick: a failing pass propagates — under restate the retry IS the ne
   await ex.close()
 })
 
-test('notify: peer + carrier legs run keyed by destination', async () => {
+void test('notify: peer + carrier legs run keyed by destination', async () => {
   const ex = new Dispatcher()
   const legs: string[] = []
   wireNotify(ex, {
-    peer: async (watch, service, query) => void legs.push(`peer:${watch}:${service}:${JSON.stringify(query)}`),
-    carrier: async (push, beefHex) => void legs.push(`carrier:${push}:${beefHex.slice(0, 8)}`),
+    peer: (watch, service, query) => Promise.resolve(void legs.push(`peer:${watch}:${service}:${JSON.stringify(query)}`)),
+    carrier: (push, beefHex) => Promise.resolve(void legs.push(`carrier:${push}:${beefHex.slice(0, 8)}`)),
     log: () => {}
   })
   await ex.call({ service: EXEC_SVC.notify, handler: 'peer', key: 'https://a.example' }, { watch: 'https://a.example', service: 'ls_nektar' })
@@ -89,11 +90,12 @@ test('notify: peer + carrier legs run keyed by destination', async () => {
   await ex.close()
 })
 
-test('legObject: event-sink leg runs journaled on its key, no self-arm', async () => {
+void test('legObject: event-sink leg runs journaled on its key, no self-arm', async () => {
   const ex = new Dispatcher()
   let calls = 0
-  wireLeg(ex, EXEC_SVC.watcher, async () => {
+  wireLeg(ex, EXEC_SVC.watcher, () => {
     calls++
+    return Promise.resolve()
   })
   await ex.call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})
   await ex.call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})

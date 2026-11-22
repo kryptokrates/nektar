@@ -13,7 +13,7 @@ import { COVENANT_ID } from '@nektar/anchor'
 const hex = (s: string): Uint8Array => new Uint8Array(Buffer.from(s, 'hex'))
 const mv = JSON.parse(readFileSync(new URL('../../../bstack/test/vectors/market-v1.json', import.meta.url), 'utf8'))
 
-test('market wire — lanes, canonical artifacts, nkt1 payloads are byte-stable', async () => {
+void test('market wire — lanes, canonical artifacts, nkt1 payloads are byte-stable', async () => {
   const key = PrivateKey.fromHex(mv.privateKeyHex)
   // lane naming is part of the contract — a foreign impl must land on the
   // same topic for the same {net, domain}
@@ -64,7 +64,7 @@ test('market wire — lanes, canonical artifacts, nkt1 payloads are byte-stable'
   assert.ok(verifyOffer(dso.offer, dso.sig, { now: 1800000000000 }))
 })
 
-test('market wire — a malformed artifact field fails quote shape validation', async () => {
+void test('market wire — a malformed artifact field fails quote shape validation', async () => {
   const key = PrivateKey.fromHex(mv.privateKeyHex)
   const bad = { ...mv.saleQuote, artifact: { artifactId: 'DisclosureSale', scriptHash: 'zz'.repeat(32) } }
   await assert.rejects(() => signOffer(key, { ...mv.offer.offer, offer: bad }), /bad artifact\.scriptHash/)

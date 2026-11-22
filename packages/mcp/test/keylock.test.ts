@@ -12,7 +12,7 @@ const mod = async () =>
     keyLockFile?: (pkhHex: string) => string
   }
 
-test('key lock: a live holder refuses the second acquire; release frees it; a stale beat is taken over', async () => {
+void test('key lock: a live holder refuses the second acquire; release frees it; a stale beat is taken over', async () => {
   const { acquireLock, keyLockFile } = await mod()
   assert.ok(acquireLock !== undefined, 'runtime must export acquireLock')
   assert.ok(keyLockFile !== undefined, 'runtime must export keyLockFile')

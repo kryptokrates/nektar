@@ -419,11 +419,13 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
 
   // D2 — kill switch: report the current stop state (a stopped agent is not
   // safe to START; a running one passes).
-  push('killswitch', async () => {
+  push('killswitch', () => {
     const k = killSwitchActive(cfg.dataDir)
-    return k.killed
-      ? { check: 'killswitch', pass: false, detail: `stop flag set (${k.source}) — new deals blocked`, fix: 'remove the flag to resume' }
-      : { check: 'killswitch', pass: true, detail: 'no stop flag' }
+    return Promise.resolve(
+      k.killed
+        ? { check: 'killswitch', pass: false, detail: `stop flag set (${k.source}) — new deals blocked`, fix: 'remove the flag to resume' }
+        : { check: 'killswitch', pass: true, detail: 'no stop flag' }
+    )
   })
 
   // A11 — conformance: only REQUIRED under NEKTAR_UNATTENDED; otherwise it

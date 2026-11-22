@@ -24,7 +24,7 @@ test('statusStream: events in order, malformed skipped, reconnect sends Last-Eve
   const lastEventIds: Array<string | undefined> = []
   const persisted: string[] = []
   let call = 0
-  const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+  const fetchImpl = ((_input: unknown, init?: RequestInit) => {
     call++
     lastEventIds.push(new Headers(init?.headers).get('Last-Event-ID') ?? undefined)
     if (call === 1) {
@@ -72,7 +72,7 @@ test('statusStream: events in order, malformed skipped, reconnect sends Last-Eve
 test('statusStream: cursor advances only after onEvent resolves', async () => {
   const atDelivery: string[] = []
   const persisted: string[] = []
-  const fetchImpl = (async () => stream(['id: 1\ndata: {"a":1}\n\n', 'id: 2\ndata: {"b":2}\n\n'], true)) as unknown as typeof fetch
+  const fetchImpl = (() => stream(['id: 1\ndata: {"a":1}\n\n', 'id: 2\ndata: {"b":2}\n\n'], true)) as unknown as typeof fetch
   const s = statusStream(
     { broadcasterUrl: 'https://b.test', callbackToken: 'tok', fetchImpl },
     (e) => {
@@ -92,7 +92,7 @@ test('statusStream: a throwing onEvent reports via onError and the cursor still 
   const errors: Error[] = []
   const persisted: string[] = []
   const seen: string[] = []
-  const fetchImpl = (async () => stream(['id: 1\ndata: x\n\n', 'id: 2\ndata: y\n\n'], true)) as unknown as typeof fetch
+  const fetchImpl = (() => stream(['id: 1\ndata: x\n\n', 'id: 2\ndata: y\n\n'], true)) as unknown as typeof fetch
   const s = statusStream(
     { broadcasterUrl: 'https://b.test', callbackToken: 'tok', fetchImpl },
     (e) => {
@@ -109,7 +109,7 @@ test('statusStream: a throwing onEvent reports via onError and the cursor still 
 
 test('statusStream: cursor.get seeds the first Last-Event-ID', async () => {
   let got: string | undefined
-  const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+  const fetchImpl = ((_input: unknown, init?: RequestInit) => {
     got = new Headers(init?.headers).get('Last-Event-ID') ?? undefined
     return stream([], true)
   }) as unknown as typeof fetch

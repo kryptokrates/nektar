@@ -83,7 +83,7 @@ test('signer: unlockP2PKH(keySigner) emits a self-consistent unlocking script', 
   const key = new PrivateKey(42)
   const tx = await spendOf(keySigner(key), key)
   const chunks = tx.inputs[0].unlockingScript!.chunks
-  const sig = Signature.fromDER(chunks[0].data!.slice(0, -1) as number[])
+  const sig = Signature.fromDER(chunks[0].data!.slice(0, -1))
   const pub = PublicKey.fromString(Utils.toHex(chunks[1].data as number[]))
   const funding = tx.inputs[0].sourceTransaction!
   const sighash = Hash.sha256(tx.preimage(0, 0x41, funding.outputs[0].lockingScript))
@@ -99,9 +99,9 @@ test('signer: unlockP2PKH(walletSigner) rejects when the substrate lacks pub/sig
   const keyA = new PrivateKey(43)
   const keyB = new PrivateKey(44)
   const mismatched = {
-    getPublicKey: async () => ({ publicKey: keyA.toPublicKey().toString() }),
-    createSignature: async (a: { hashToDirectlySign: number[] }) => ({ signature: keyB.sign(a.hashToDirectlySign).toDER() }),
-    createHmac: async () => ({ hmac: [] })
+    getPublicKey: () => ({ publicKey: keyA.toPublicKey().toString() }),
+    createSignature: (a: { hashToDirectlySign: number[] }) => ({ signature: keyB.sign(a.hashToDirectlySign).toDER() }),
+    createHmac: () => ({ hmac: [] })
   }
   await assert.rejects(spendOf(walletSigner(mismatched as unknown as WalletClient, FUND_SIGN_ARGS), payTo), /does not verify under its public key/)
 })

@@ -7,11 +7,11 @@ export class FakeTracker implements ChainTracker {
   ok = true
   validRoots = new Set<string>()
   strict = false
-  async isValidRootForHeight(root: string): Promise<boolean> {
-    return this.ok && (!this.strict || this.validRoots.has(root))
+  isValidRootForHeight(root: string): Promise<boolean> {
+    return Promise.resolve(this.ok && (!this.strict || this.validRoots.has(root)))
   }
-  async currentHeight(): Promise<number> {
-    return 1
+  currentHeight(): Promise<number> {
+    return Promise.resolve(1)
   }
 }
 
@@ -167,7 +167,7 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
   const poisonOutputs = 'poisonOutputs' in opts ? (opts.poisonOutputs ?? false) : false
   const port = 'port' in opts ? opts.port : undefined
   const now = 'now' in opts ? opts.now : undefined
-  const host = { log: () => {}, chainTracker: tracker, engine: { submit: async () => ({}) } }
+  const host = { log: () => {}, chainTracker: tracker, engine: { submit: () => Promise.resolve({}) } }
   const { topics, lookups } = createNektarModule(host, nets, now !== undefined ? { now } : undefined)
   const stored = new Map<string, number[]>()
   // ls_bbox below is a spec-shaped double: it implements only {office,to} and

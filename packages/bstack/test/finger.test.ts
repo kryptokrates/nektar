@@ -93,9 +93,9 @@ async function rig(
     return f
   }
   const mempool = new Set<string>()
-  const broadcast = async (tx: Transaction): Promise<{ status: string }> => {
+  const broadcast = (tx: Transaction): Promise<{ status: string }> => {
     const refused = o.refuseBroadcast?.(tx)
-    if (refused !== undefined) return { status: 'error', description: refused } as { status: string }
+    if (refused !== undefined) return Promise.resolve({ status: 'error', description: refused } as { status: string })
     if (o.liveMempool === true) {
       // network model: an unmined input source must sit in mempool (or carry
       // a proof), else the broadcast refuses 'missing inputs' like the real
@@ -103,7 +103,7 @@ async function rig(
       for (const inp of tx.inputs) {
         const src = inp.sourceTransaction
         if (src !== undefined && src.merklePath === undefined && !mempool.has(src.id('hex'))) {
-          return { status: 'error', description: 'WoC HTTP 400: Missing inputs' } as { status: string }
+          return Promise.resolve({ status: 'error', description: 'WoC HTTP 400: Missing inputs' } as { status: string })
         }
       }
       mempool.add(tx.id('hex'))
@@ -113,9 +113,9 @@ async function rig(
       mined.set(tx.id('hex'), tx)
     }
     broadcasts.push(tx)
-    return { status: 'success' }
+    return Promise.resolve({ status: 'success' })
   }
-  const fetchTx = async (txid: string): Promise<Transaction | undefined> => mined.get(txid)
+  const fetchTx = (txid: string): Promise<Transaction | undefined> => Promise.resolve(mined.get(txid))
   const publish = async (body: FingerBody) => await publishFinger({ key, state, ledger, journal, hosts, body, takeFunding, broadcast, fetchTx })
   return { tracker, h1, h2, key, ledger, journal, state, kx, hosts, mined, broadcasts, publish, tree, mempool }
 }
@@ -375,12 +375,12 @@ test('finger: EF-stub ancestry is detached before the token beef serializes', as
       journal: s.journal,
       hosts: s.hosts,
       body: body1(),
-      takeFunding: async () => ({ tx: stubbedParent, vout: 0, satoshis: 100 }),
-      broadcast: async (tx: Transaction) => {
+      takeFunding: () => Promise.resolve({ tx: stubbedParent, vout: 0, satoshis: 100 }),
+      broadcast: (tx: Transaction) => {
         broadcasts.push(tx)
-        return { status: 'success' }
+        return Promise.resolve({ status: 'success' })
       },
-      fetchTx: async () => undefined
+      fetchTx: () => Promise.resolve(undefined)
     })
     assert.equal(r.changed, true)
     // the stored token beef parses and carries no stub anywhere in its
@@ -510,7 +510,7 @@ test('finger: a truncated journaled carrier re-mints instead of wedging', async 
   try {
     const r1 = await s.publish(body1())
     assert.equal(r1.seq, 1)
-    await s.journal.put('finger:carrier:2', { txid: 'f'.repeat(64), beef: [1, 1, 1, 1, 9, 9], topics: [] })
+    void s.journal.put('finger:carrier:2', { txid: 'f'.repeat(64), beef: [1, 1, 1, 1, 9, 9], topics: [] })
     const r2 = await s.publish(body1(['https://three.example.com']))
     assert.equal(r2.changed, true)
     assert.equal(r2.seq, 2)

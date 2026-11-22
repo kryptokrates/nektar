@@ -23,7 +23,7 @@ test('smt revocation: anchored root verifies a status proof; stale root fails', 
   assert.equal(verifyProof(p, { present: true, value: v }, h1.head.data.R), true, 'revoked-status vs anchored root')
   assert.equal(verifyProof(p, { present: true, value: v }, h0.head.data.R), false, 'vs stale anchored root')
   assert.equal(verifyProof(p, { present: false }, h1.head.data.R), false, 'revoked key non-inclusion rejected')
-  const h1m = ( chain.getTx(h1.tx.id('hex')))?.merklePath
+  const h1m = chain.getTx(h1.tx.id('hex'))?.merklePath
   assert.ok(h1m, 'anchor tx mined with BUMP')
   assert.equal(await chain.isValidRootForHeight(h1m.computeRoot(h1.tx.id('hex')), h1m.blockHeight), true)
 })
@@ -59,7 +59,7 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
   // anchor the batch root through the AnchorChain shard (mined, BUMP)
   const h = await ac.anchor(batch!.size, batch!.R)
   await chain.mine(1)
-  assert.ok((await chain.getTx(h.tx.id('hex')))?.merklePath)
+  assert.ok(chain.getTx(h.tx.id('hex'))?.merklePath)
   // inclusion check against the ANCHORED root
   const proof = log.batchProof(batch!, 0)
   const recomputed = reconstructRoot(batch!.leaves[0], proof)
@@ -73,7 +73,7 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
   assert.equal(verifyCertChain(k0.toPublicKey().toString(), [cert, { ...outsider, index: 1 }], { inclusionCheck: inLog }), null)
 })
 
-import { issueDisclosure, fieldPath, randSalt, fieldsCommitment, type FieldCommitment } from '@nektar/identity'
+import { issueDisclosure, randSalt, fieldsCommitment, type FieldCommitment } from '@nektar/identity'
 
 test('DIS-006: disclosure event logged as a leaf and anchored', async (t) => {
   const w = await testWorld(t, 6)
@@ -93,7 +93,7 @@ test('DIS-006: disclosure event logged as a leaf and anchored', async (t) => {
   const batch = await log.closeBatch('discl')
   const h = await ac.anchor(batch!.size, batch!.R)
   await chain.mine(1)
-  assert.ok((await chain.getTx(h.tx.id('hex')))?.merklePath)
+  assert.ok(chain.getTx(h.tx.id('hex'))?.merklePath)
   const recomputed = reconstructRoot(batch!.leaves[0], log.batchProof(batch!, 0))
   assert.equal(Buffer.from(recomputed).toString('hex'), Buffer.from(h.head.data.R).toString('hex'), 'disclosure event committed to anchored root')
   // and the field commitment binds count+root for the anchored fragment path

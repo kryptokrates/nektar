@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory, { type Knex } from 'knex'
-import { testChain, testFunder, type TestFunder } from '@nektar/chain'
+import { testChain, testFunder } from '@nektar/chain'
 import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/bstack'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -38,15 +38,17 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
   let clock = 1_800_000_000_000
   const now = () => clock
   const transportFor = (pub: string) => ({
-    publishWant: async (sw: SignedWant) => {
+    publishWant: (sw: SignedWant) => {
       assert.ok(verifyWant(sw.want, sw.sig))
       wire.push(JSON.stringify(sw))
       feed.push({ seq: feed.length + 1, kind: 'want', payload: sw })
+      return Promise.resolve()
     },
-    publishOffer: async (so: SignedOffer) => {
+    publishOffer: (so: SignedOffer) => {
       assert.ok(verifyOffer(so.offer, so.sig))
       wire.push(JSON.stringify(so))
       feed.push({ seq: feed.length + 1, kind: 'offer', payload: so })
+      return Promise.resolve()
     },
     send: async (to: string, msg: MarketMessage) => {
       const a = [...agents.values()].find((x) => x.pub === to)
@@ -157,7 +159,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
   }
 }
 
-test('S1 regtest: three sellers quote 450/300/200, buyer scores, pays the best, verifies the disclosure — no manual tool calls', async (t) => {
+void test('S1 regtest: three sellers quote 450/300/200, buyer scores, pays the best, verifies the disclosure — no manual tool calls', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   t.after(w.close)
@@ -212,7 +214,7 @@ test('S1 regtest: three sellers quote 450/300/200, buyer scores, pays the best, 
   assert.equal(((await c.engine.status(sale.operationId))!.operation.data.offer as any).wrapped, '[sealed]', 'status never echoes the sealed credential')
 })
 
-test('two wants from one buyer are answered and settled independently', async (t) => {
+void test('two wants from one buyer are answered and settled independently', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   t.after(w.close)
@@ -230,7 +232,7 @@ test('two wants from one buyer are answered and settled independently', async (t
   assert.equal((await bob.store.budgetStatus(bob.policyHash)).purchaseTodaySats, 400)
 })
 
-test('outside policy → paused for a human; approval is bound to the exact action; denial stops it', async (t) => {
+void test('outside policy → paused for a human; approval is bound to the exact action; denial stops it', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   t.after(w.close)
@@ -263,7 +265,7 @@ test('outside policy → paused for a human; approval is bound to the exact acti
   assert.equal((await bob.store.budgetStatus(bob.policyHash)).purchaseTodaySats, 200, 'only the approved purchase was spent')
 })
 
-test('seller goes dark after quoting → buyer refunds itself at the deadline; revoked policy stops new buying', async (t) => {
+void test('seller goes dark after quoting → buyer refunds itself at the deadline; revoked policy stops new buying', async (t) => {
   const w = await world(t, { refundBlocks: 6 })
   if (w === undefined) return
   t.after(w.close)
@@ -293,7 +295,7 @@ test('seller goes dark after quoting → buyer refunds itself at the deadline; r
   await assert.rejects(bob.engine.publishWant({ domains: ['libfoo'], maxSats: 300 }, bob.policyHash), /no active buyer policy/)
 })
 
-test('hostile offers are rejected with reasons and never funded', async (t) => {
+void test('hostile offers are rejected with reasons and never funded', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   t.after(w.close)
@@ -312,7 +314,7 @@ test('hostile offers are rejected with reasons and never funded', async (t) => {
   assert.equal((await bob.store.budgetStatus(bob.policyHash)).runTotalSats, 0)
 })
 
-test('crash between escrow prepare and submit: restart resubmits the SAME bytes, no second escrow, no operator prompt', async (t) => {
+void test('crash between escrow prepare and submit: restart resubmits the SAME bytes, no second escrow, no operator prompt', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   t.after(w.close)
@@ -344,7 +346,7 @@ test('crash between escrow prepare and submit: restart resubmits the SAME bytes,
   assert.equal((await bob.store.approvals()).length, 0, 'no human needed for a deterministic crash')
 })
 
-test('minCollectMs: a cheaper offer inside the window still wins; a lone offer before the window does not select', async (t) => {
+void test('minCollectMs: a cheaper offer inside the window still wins; a lone offer before the window does not select', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   t.after(w.close)
@@ -369,7 +371,7 @@ test('minCollectMs: a cheaper offer inside the window still wins; a lone offer b
   assert.equal((st.data.selected as any).key.split(':')[0], c.pub, 'the cheaper inside-window offer wins')
 })
 
-test('quote commitment attaches in every live state and is ignored once terminal', async (t) => {
+void test('quote commitment attaches in every live state and is ignored once terminal', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   t.after(w.close)
@@ -402,8 +404,8 @@ test('quote commitment attaches in every live state and is ignored once terminal
   const attached = (await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length
   // a byte-identical duplicate is deduped at ingest — the wake can repeat
   // without the op ever seeing it twice
-  const commitment = offersOf(st)[key]!.commitment as { leaf?: string }
-  const mode = offersOf(st)[key]!.mode
+  const commitment = offersOf(st)[key].commitment as { leaf?: string }
+  const mode = offersOf(st)[key].mode
   assert.ok(mode !== undefined, 'the attached quote carried its mode')
   await bob.engine.ingestMessage(c.pub, { type: 'quote', wantId, offerId: sale.operationId, commitment, mode })
   await w.round([bob])
@@ -449,7 +451,7 @@ test('quote commitment attaches in every live state and is ignored once terminal
 })
 
 // finding 6a: a shallow proof must not settle — the op parks until depth
-test('settleDepth: a depth-1 proof parks completion_submitted, settles at depth', async () => {
+void test('settleDepth: a depth-1 proof parks completion_submitted, settles at depth', async () => {
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
   try {
     const store = new AutomationStore(kx, () => 1_800_000_000_000)
@@ -458,12 +460,12 @@ test('settleDepth: a depth-1 proof parks completion_submitted, settles at depth'
     const ex = new Dispatcher()
     const engine = new MarketEngine({
       store,
-      memory: { shardManifest: async () => undefined, records: async () => [] },
+      memory: { shardManifest: () => Promise.resolve(undefined), records: () => Promise.resolve([]) },
       key: PrivateKey.fromRandom(),
       network: 'testnet',
-      call: async () => ({}),
-      height: async () => height,
-      fetchTx: async () => ({ merklePath: { blockHeight: 100 } }) as Transaction,
+      call: () => Promise.resolve({}),
+      height: () => Promise.resolve(height),
+      fetchTx: () => Promise.resolve({ merklePath: { blockHeight: 100 } } as Transaction),
       transport: { publishWant: async () => {}, publishOffer: async () => {}, send: async () => {} },
       ai: new ScriptedExecutor(),
       executor: ex,
@@ -497,7 +499,7 @@ test('settleDepth: a depth-1 proof parks completion_submitted, settles at depth'
   }
 })
 
-test('want-TTL race: a live want republishes at the collection boundary instead of expiring — only its own exp ends the deal', async (t) => {
+void test('want-TTL race: a live want republishes at the collection boundary instead of expiring — only its own exp ends the deal', async (t) => {
   const w = await world(t, { wantExtendMs: 3000 })
   if (w === undefined) return
   t.after(w.close)

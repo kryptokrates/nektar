@@ -2,7 +2,7 @@
 // sha256(proof) in a fee-key-funded data tx (unit codec + real-node spend).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { utf8, dsha256, toHex } from '@nektar/core'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -19,7 +19,7 @@ async function setup(t: { skip: (m?: string) => void }) {
   return { chain, funder, mem }
 }
 
-test('attestation script: encode/decode round-trip; non-attestation scripts → null', () => {
+void test('attestation script: encode/decode round-trip; non-attestation scripts → null', () => {
   const c = dsha256(utf8('commit'))
   const s = attestationScript(c)
   const d = decodeAttestationScript(s.toHex())!
@@ -32,7 +32,7 @@ test('attestation script: encode/decode round-trip; non-attestation scripts → 
   assert.throws(() => attestationScript(new Uint8Array(31)), /32 bytes/)
 })
 
-test('anchorAttestation on the regtest stack: real signed spend, commitment extractable, verifyAttestation round-trip', async (t) => {
+void test('anchorAttestation on the regtest stack: real signed spend, commitment extractable, verifyAttestation round-trip', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { chain, mem } = _w
@@ -40,7 +40,7 @@ test('anchorAttestation on the regtest stack: real signed spend, commitment extr
   const { txid, commitment } = await mem.anchorAttestation(pb)
   assert.equal(commitment, toHex(attestationCommitment(pb)))
   // the tx is a real signed P2PKH spend the node's script evaluation accepted
-  const tx = ( chain.getTx(txid))!
+  const tx = chain.getTx(txid)!
   assert.ok(tx, 'broadcast accepted into mempool')
   const atts = attestationsOf(tx)
   assert.equal(atts.length, 1)
@@ -55,7 +55,7 @@ test('anchorAttestation on the regtest stack: real signed spend, commitment extr
   assert.equal((await mem.verifyAttestation('ab'.repeat(32), pb)).ok, false)
 })
 
-test('MCP tools: attestMembership/verifyAttestation via callTool (anchorAttestation path)', async (t) => {
+void test('MCP tools: attestMembership/verifyAttestation via callTool (anchorAttestation path)', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w

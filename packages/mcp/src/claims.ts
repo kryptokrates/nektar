@@ -8,7 +8,7 @@ import { Transaction, Hash } from '@bsv/sdk'
 import { NektarProvider } from '@nektar/anchor'
 import { deployClaim, readClaimState, callTerminal, outpointOf, p2pkh, registerClaim, storeProof } from '@nektar/chain'
 import { verifyZkm2 } from '@nektar/zk'
-import { runarSigner, signerAddress, signerPubHex, type DigestSigner } from '@nektar/core'
+import { runarSigner, signerPubHex, type DigestSigner } from '@nektar/core'
 import type { Signer } from 'runar-sdk'
 import type { NektarMemory } from './memory.js'
 

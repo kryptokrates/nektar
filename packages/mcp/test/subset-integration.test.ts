@@ -4,7 +4,7 @@
 // and the NEKTAR_PROOF_SHARDING opt-out.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { testWorld, fundsOf, type TestChain } from '@nektar/chain'
+import { testWorld, fundsOf } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { decodeNektarAnchor } from '@nektar/contracts'
 import { dsha256, utf8, merkleRoot } from '@nektar/core'
@@ -28,7 +28,7 @@ async function anchoredBatch(t: { skip: (m?: string) => void }, R: Uint8Array, s
   return { chain, tx, shard: decodeNektarAnchor(tx.outputs[0].lockingScript.toHex())!.shard }
 }
 
-test('subset proof verifies against a real anchor whose R is the batch root (records across the shard boundary)', async (t) => {
+void test('subset proof verifies against a real anchor whose R is the batch root (records across the shard boundary)', async (t) => {
   const _w1 = await anchoredBatch(t, merkleRoot(leaves(70)), 70)
   if (_w1 === undefined) return
   const { chain, tx, shard } = _w1
@@ -38,7 +38,7 @@ test('subset proof verifies against a real anchor whose R is the batch root (rec
   assert.deepEqual(res.indices, [1, 63, 64, 69])
 })
 
-test('subset proof NEGATIVES (each check fails closed with a specific reason)', async (t) => {
+void test('subset proof NEGATIVES (each check fails closed with a specific reason)', async (t) => {
   const good = await anchoredBatch(t, merkleRoot(leaves(70)), 70)
   if (good === undefined) return
   const bytes = () => subsetBytes(70, [1, 63, 64])
@@ -78,7 +78,7 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
       // a second TestChain handle still answers against the SAME node's
       // headers — the BUMP root is genuinely valid there. The negative needs
       // a tracker whose header chain does NOT contain the root.
-      verifySubsetAnchored(bytes(), good.tx, { isValidRootForHeight: async () => false, currentHeight: async () => 0 }, { shard: good.shard }),
+      verifySubsetAnchored(bytes(), good.tx, { isValidRootForHeight: () => false, currentHeight: () => 0 }, { shard: good.shard }),
       /BEEFInvalid|NotMined/
     ],
     [
@@ -99,7 +99,7 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
   }
 })
 
-test('NektarMemory: proveSubset + verifySubset over its own anchored batch; NEKTAR_PROOF_SHARDING=0 → disabled', async (t) => {
+void test('NektarMemory: proveSubset + verifySubset over its own anchored batch; NEKTAR_PROOF_SHARDING=0 → disabled', async (t) => {
   const w = await testWorld(t, 20)
   if (w === undefined) return
   const { chain, funder: f } = w

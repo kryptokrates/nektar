@@ -15,9 +15,9 @@ test('withRetry jitters the caller curve — the sleep is the spread value, not 
   let tries = 0
   let value: string | undefined
   const done = withRetry(
-    async () => {
+    () => {
       tries += 1
-      return tries >= 2 ? 'ok' : 'again'
+      return Promise.resolve(tries >= 2 ? 'ok' : 'again')
     },
     { attempts: 3, delay: () => 1000, retryIf: (r) => r !== 'ok' }
   )

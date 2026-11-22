@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8, chainRp, eq } from '@nektar/core'
 import { decodeNektarAnchor } from '@nektar/contracts'
-import { testWorld, dryFunder, type TestFunder } from '@nektar/chain'
+import { testWorld, dryFunder } from '@nektar/chain'
 import { AnchorChain } from '../src/index.js'
 
 const setup = async (t: { skip: (m?: string) => void }, burstLimit = Infinity) => {
@@ -35,7 +35,7 @@ test('handleReorg clears the orphaned block BUMP before re-broadcast — a stale
   const { chain, ac } = s0
   const g = await ac.anchor(1, dsha256(utf8('r0')))
   await chain.mine(1)
-  const mp = ( chain.getTx(g.tx.id('hex')))!.merklePath
+  const mp = chain.getTx(g.tx.id('hex'))!.merklePath
   ac.confirm(g.tx.id('hex'), mp)
   assert.equal(ac.getHead()!.tx.merklePath, mp, 'pre-reorg: head proven')
   assert.equal(g.tx.merklePath, mp)
@@ -69,7 +69,7 @@ test('anchor: genesis then successor spends the head UTXO', async (t) => {
   assert.ok(eq(a1d!.Rp, chainRp(gd!.Rp, a1d!.R, 20)))
 
   await chain.mine(1)
-  ac.confirm(a1.tx.id('hex'), (await chain.getTx(a1.tx.id('hex')))!.merklePath)
+  ac.confirm(a1.tx.id('hex'), chain.getTx(a1.tx.id('hex'))!.merklePath)
   assert.equal(ac.getHead()!.data.n, 1)
   assert.ok(ac.headAtomicBEEF()!.length > 0)
 })
@@ -89,7 +89,7 @@ test('anchor: failed broadcast does not advance the head', async (t) => {
   }
   const ac = new AnchorChain('s1', PrivateKey.fromRandom(), funder, funder.keyPair, flaky)
   const R = (i: number) => dsha256(utf8(`rb${i}`))
-  const g = await ac.anchor(1, R(0))
+  const _g = await ac.anchor(1, R(0))
   const a1 = await ac.anchor(1, R(1))
   assert.equal(ac.getHead()!.data.n, 1)
   await assert.rejects(() => ac.anchor(1, R(2))) // the failed append
@@ -112,7 +112,7 @@ test('anchor: unconfirmed chain + burst back-pressure', async (t) => {
   await assert.rejects(() => ac.anchor(1, dsha256(utf8('x'))), /back-pressure/)
   await chain.mine(1)
   // confirm the whole chain (all mined in one block)
-  for (const h of [...(ac as any).pendingHeads]) ac.confirm(h.tx.id('hex'), (await chain.getTx(h.tx.id('hex')))!.merklePath)
+  for (const h of Array.from((ac as any).pendingHeads) as any[]) ac.confirm(h.tx.id('hex'), chain.getTx(h.tx.id('hex'))!.merklePath)
   await ac.anchor(1, dsha256(utf8('b3')))
   assert.equal(ac.getHead()!.data.n, 3)
 })
@@ -210,7 +210,7 @@ test('retry: UTXO_SPENT on head spent by our own attempt is adopted', async (t) 
       if (n === 2) {
         // "accepted but reported missing-parent": accept the tx, then tell the
         // caller it failed — the retry's REBUILT tx then double-spends the head
-        const res = await chain.broadcast(tx)
+        const _res = await chain.broadcast(tx)
         lostTxid = tx.id('hex')
         return { status: 'error', description: 'TX_MISSING_PARENT (34)' }
       }
@@ -235,9 +235,9 @@ test('anchorOnce fails fast on dry funding — never broadcasts a contract-only 
   const f = dryFunder()
   let calls = 0
   const probe = {
-    broadcast: async () => {
+    broadcast: () => {
       calls++
-      return { status: 'error' as const }
+      return Promise.resolve({ status: 'error' as const })
     }
   }
   const ac = new AnchorChain('d', f.keyPair, f, f.keyPair, probe)
@@ -286,7 +286,7 @@ test('NektarAnchor v3 + ANC-006: META flag leads the data payload; flag-absent s
   // a pre-flag (v3, flag-absent) anchor built by the legacy artifact still
   // decodes byte-for-byte (metanet=false)
   const { RunarContract } = await import('runar-sdk')
-  const { NEKTAR_ANCHOR_V3_ARTIFACT, META_FLAG_HEX } = await import('@nektar/contracts')
+  const { NEKTAR_ANCHOR_V3_ARTIFACT, META_FLAG_HEX: _META_FLAG_HEX } = await import('@nektar/contracts')
   const { PrivateKey } = await import('@bsv/sdk')
   const { hash160, toHex } = await import('@nektar/core')
   const pk = PrivateKey.fromRandom().toPublicKey().toString()

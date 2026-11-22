@@ -13,7 +13,7 @@ export const MIGRATIONS = [
   {
     v: 1,
     name: 'baseline — VERSION marker established',
-    run: async () => 'marker written'
+    run: () => 'marker written'
   }
 ]
 

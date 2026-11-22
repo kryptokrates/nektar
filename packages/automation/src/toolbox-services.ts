@@ -10,7 +10,7 @@
 // Dual-build boundary applies here too — see toolbox.ts's header.
 
 import { createRequire } from 'node:module'
-import { Hash, MerklePath, Transaction, Utils, type ChainTracker } from '@bsv/sdk'
+import { Hash, Transaction, Utils, type ChainTracker } from '@bsv/sdk'
 import { sdk } from '@bsv/wallet-toolbox'
 import {
   DEFAULT_INDEXER_URL,
@@ -157,15 +157,15 @@ export class RegtestWalletServices implements sdk.WalletServices {
     }
   }
 
-  getChainTracker = async (): Promise<ChainTracker> => this.tracker
+  getChainTracker = (): Promise<ChainTracker> => Promise.resolve(this.tracker)
   getHeight = async (): Promise<number> => ((await this.rpc('getblockchaininfo')) as { blocks: number }).blocks
   getHeaderForHeight = async (height: number): Promise<number[]> => {
     const h = (await this.rpc('getblockhash', height)) as string
     return Array.from(Utils.toArray((await this.rpc('getblockheader', h, false)) as string, 'hex'))
   }
   // regtest coins are valueless — the wallet only reads these for display
-  getBsvExchangeRate = async (): Promise<number> => 0
-  getFiatExchangeRate = async (): Promise<number> => 0
+  getBsvExchangeRate = (): Promise<number> => Promise.resolve(0)
+  getFiatExchangeRate = (): Promise<number> => Promise.resolve(0)
 
   /** txid → cjs tx from txStore (unmineable carriers, adopted ancestry —
    *  things the node never saw) */
@@ -274,7 +274,7 @@ export class RegtestWalletServices implements sdk.WalletServices {
 
   // no script-hash index on regtest — the wallet uses this only for sweep
   // recovery, which the automation ledger owns anyway
-  getScriptHashHistory = async (_hash: string): Promise<sdk.GetScriptHashHistoryResult> => ({ name: NAME, status: 'success', history: [] })
+  getScriptHashHistory = (_hash: string): Promise<sdk.GetScriptHashHistoryResult> => Promise.resolve({ name: NAME, status: 'success', history: [] })
   hashToHeader = async (hash: string): Promise<sdk.BlockHeader> => await this.headerOf(0, hash)
 
   /** nLockTime finality against the current tip — the honest check for an
@@ -407,11 +407,11 @@ export class LiveWalletServices implements sdk.WalletServices {
     return header
   }
 
-  getChainTracker = async (): Promise<ChainTracker> => this.opts.tracker as ChainTracker
+  getChainTracker = (): Promise<ChainTracker> => Promise.resolve(this.opts.tracker)
   getHeight = async (): Promise<number> => await this.opts.tracker.currentHeight()
-  getBsvExchangeRate = async (): Promise<number> => 0
-  getFiatExchangeRate = async (): Promise<number> => 0
-  getScriptHashHistory = async (_hash: string): Promise<sdk.GetScriptHashHistoryResult> => ({ name: 'woc-live', status: 'success', history: [] })
+  getBsvExchangeRate = (): Promise<number> => Promise.resolve(0)
+  getFiatExchangeRate = (): Promise<number> => Promise.resolve(0)
+  getScriptHashHistory = (_hash: string): Promise<sdk.GetScriptHashHistoryResult> => Promise.resolve({ name: 'woc-live', status: 'success', history: [] })
   hashToHeader = async (hash: string): Promise<sdk.BlockHeader> => {
     const served = this.servedHeaders.get(hash)
     if (served !== undefined) return served

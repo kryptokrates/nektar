@@ -2,8 +2,8 @@
 import type { ToolHandler } from './shared.js'
 
 export const handlers: Record<string, ToolHandler> = {
-  zkQuery: async (mem, args) => {
-    return { ...mem.issueZkQuery(args.verifierId), statement: 'single use, expires in 10 minutes; the holder binds queryId into its STARK' }
+  zkQuery: (mem, args) => {
+    return Promise.resolve({ ...mem.issueZkQuery(args.verifierId), statement: 'single use, expires in 10 minutes; the holder binds queryId into its STARK' })
   },
   proveMembership: async (mem, args) => {
     const { Buffer } = await import('node:buffer')

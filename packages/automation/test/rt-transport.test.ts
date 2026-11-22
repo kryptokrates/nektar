@@ -26,22 +26,22 @@ async function open() {
 function deps(store: AutomationStore, extra: Partial<MarketDeps> = {}): MarketDeps {
   return {
     store,
-    call: async () => ({}),
+    call: () => Promise.resolve({}),
     memory: {} as never,
     key,
     network: 'regtest',
-    height: async () => 1,
-    fetchTx: async () => undefined,
+    height: () => Promise.resolve(1),
+    fetchTx: () => Promise.resolve(undefined),
     transport: { send: async () => {} } as never,
     ai: {} as never,
     ...extra
-  } as MarketDeps
+  }
 }
 
 const enq = (store: AutomationStore, actionId: string, destination = 'host:a') =>
   store.enqueue({ actionId, operationId: `op:${actionId}`, kind: 'message', destination, payload: { type: 'decline', wantId: 'w', offerId: 'o' } })
 
-test('drain: due rows fan out per destination key, idempotent per actionId, ceiling self-scheduled', async () => {
+void test('drain: due rows fan out per destination key, idempotent per actionId, ceiling self-scheduled', async () => {
   const ex = new Dispatcher()
   const seen: Array<{ handler: string; key?: string; opts?: { delayMs?: number; idempotencyKey?: string } }> = []
   try {
@@ -61,9 +61,9 @@ test('drain: due rows fan out per destination key, idempotent per actionId, ceil
       []
     ]
     wireTransport(ex, {
-      dueRows: async () => stages.shift() ?? [],
-      nextAt: async () => next,
-      deliverItem: async () => 'acked',
+      dueRows: () => Promise.resolve(stages.shift() ?? []),
+      nextAt: () => Promise.resolve(next),
+      deliverItem: () => Promise.resolve('acked'),
       now: () => Date.now(),
       log: () => {}
     } satisfies TransportDeps)
@@ -87,7 +87,7 @@ test('drain: due rows fan out per destination key, idempotent per actionId, ceil
     // the ceiling armed itself — a delayed drain send at next_at
     const arm = seen.find((s) => s.handler === 'drain')
     assert.equal(arm?.key, TRANSPORT_DRAIN_KEY)
-    assert.ok((arm?.opts?.delayMs ?? 0) > 0)
+    assert.ok((arm.opts?.delayMs ?? 0) > 0)
 
     // empty box → no arm
     seen.length = 0
@@ -97,11 +97,11 @@ test('drain: due rows fan out per destination key, idempotent per actionId, ceil
     assert.equal(r2.nextAt, undefined)
     assert.equal(seen.filter((s) => s.handler === 'drain').length, 0)
   } finally {
-    ex.close()
+    void ex.close()
   }
 })
 
-test('drain: a retried row re-fans as a NEW invocation — dedup is per-attempt, not per-actionId', async () => {
+void test('drain: a retried row re-fans as a NEW invocation — dedup is per-attempt, not per-actionId', async () => {
   const ex = new Dispatcher()
   const delivered: number[] = []
   try {
@@ -116,9 +116,9 @@ test('drain: a retried row re-fans as a NEW invocation — dedup is per-attempt,
       attempts: 1
     }
     wireTransport(ex, {
-      dueRows: async () => [item],
-      nextAt: async () => undefined,
-      deliverItem: async (i) => (delivered.push(i.attempts), 'acked' as const),
+      dueRows: () => Promise.resolve([item]),
+      nextAt: () => Promise.resolve(undefined),
+      deliverItem: (i) => Promise.resolve((delivered.push(i.attempts), 'acked' as const)),
       now: () => Date.now(),
       log: () => {}
     } satisfies TransportDeps)
@@ -137,12 +137,12 @@ test('drain: a retried row re-fans as a NEW invocation — dedup is per-attempt,
   }
 })
 
-test('deliverOutboxItem: ack on success, defer on funding-slot, retry on fault, skip on moved row', async () => {
+void test('deliverOutboxItem: ack on success, defer on funding-slot, retry on fault, skip on moved row', async () => {
   const { kx, store } = await open()
   try {
     // ack path
     const sends: string[] = []
-    const engine = new MarketEngine(deps(store, { transport: { send: async (dest: string) => void sends.push(dest) } as never }))
+    const engine = new MarketEngine(deps(store, { transport: { send: (dest: string) => void sends.push(dest) } as never }))
     await enq(store, 'a:ok')
     assert.equal(await engine.deliverOutboxItem((await store.dueOutbox())[0]), 'acked')
     assert.deepEqual(sends, ['host:a'])

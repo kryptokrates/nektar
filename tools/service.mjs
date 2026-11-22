@@ -24,7 +24,7 @@ const logFile = join(dataDir, 'service.log')
 const os = platform() // linux | win32 | darwin
 const run = (c, a, quiet = false) => {
   const r = spawnSync(c, a, { stdio: quiet ? 'pipe' : 'inherit', encoding: 'utf8' })
-  return { ok: r.status === 0, out: (r.stdout ?? '') + (r.stderr ?? '') }
+  return { ok: r.status === 0, out: r.stdout + r.stderr }
 }
 const envExists = existsSync(join(root, '.env'))
 

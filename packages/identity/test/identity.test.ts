@@ -13,7 +13,7 @@ import {
   keyValidAt,
   type RotationCert
 } from '../src/index.js'
-import { Smt, hashLeaf, hashNode, emptyRoot, emptySubtree, verifyProof, EMPTY_LEAF } from '../src/smt.js'
+import { Smt, hashLeaf, hashNode, emptyRoot, emptySubtree, verifyProof } from '../src/smt.js'
 import { BatchLog, MemoryShardStore } from '@nektar/log'
 import { reconstructRoot } from '@nektar/core'
 import { concat, utf8 } from '@nektar/core'
@@ -141,7 +141,7 @@ test('rotation certs anchored: leaves in a batch log, root verified', async () =
   assert.ok(batch)
   const anchored = batch!.R
   // inclusion check a verifier runs against the anchored root
-  const inclusion = (c: RotationCert): boolean => {
+  const inclusion = (_c: RotationCert): boolean => {
     const l = batch!.leaves[0]
     const proof = log.batchProof(batch!, 0)
     const r = reconstructRoot(l, proof)
@@ -280,7 +280,7 @@ test('custody: 2-of-3 threshold signs; 1-of-3 cannot; reconstruction gives same 
   assert.ok(sig.length > 0)
   assert.throws(() => custodian.sign([shares[0]], msg), /reconstruct/)
   // lifecycle: rotate → old shares stop working, revoke → all signing stops
-  const old = custodian.publicKeyHex()
+  const _old = custodian.publicKeyHex()
   const newShares = custodian.rotate(2, 3, 2000n)
   assert.throws(() => custodian.sign(shares.slice(0, 2), msg), /reconstruct|current/)
   assert.equal(verifyLifecycle(custodian.lifecycle()), true)

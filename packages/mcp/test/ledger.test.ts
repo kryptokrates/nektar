@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction, Script } from '@bsv/sdk'
-import { ReserveFunder, testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { ReserveFunder, testWorld } from '@nektar/chain'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,13 +17,13 @@ async function open() {
   return { kx, store }
 }
 
-test('ledger: every owner broadcast is recorded with bytes before the outcome is known', async (t) => {
+void test('ledger: every owner broadcast is recorded with bytes before the outcome is known', async (t) => {
   const { kx, store } = await open()
   const w = await testWorld(t, 2)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
-  const r = await mem.sendSats({ amount: 500, address: PrivateKey.fromRandom().toPublicKey().toAddress([0x6f]) })
+  const _r = await mem.sendSats({ amount: 500, address: PrivateKey.fromRandom().toPublicKey().toAddress([0x6f]) })
   // mem was constructed without a wrapped chain, so this is the owner-tool
   // control: nothing recorded yet. Now wrap and spend again.
   assert.equal((await store.walletTxs(['submitted'])).length, 0)
@@ -42,7 +42,7 @@ test('ledger: every owner broadcast is recorded with bytes before the outcome is
   await kx.destroy()
 })
 
-test('ledger: payInvoice exports a signed tx whose input stays leased — no phantom change, no second spend of the same outpoint', async (t) => {
+void test('ledger: payInvoice exports a signed tx whose input stays leased — no phantom change, no second spend of the same outpoint', async (t) => {
   const { kx, store } = await open()
   const w = await testWorld(t, 1)
   if (w === undefined) return
@@ -66,7 +66,7 @@ test('ledger: payInvoice exports a signed tx whose input stays leased — no pha
   await kx.destroy()
 })
 
-test('ledger: reserve predicate skips leased outpoints; addOwned dedups', async (t) => {
+void test('ledger: reserve predicate skips leased outpoints; addOwned dedups', async (_t) => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-ledger-'))
   const { kx, store } = await open()
   const key = PrivateKey.fromRandom()
@@ -84,7 +84,7 @@ test('ledger: reserve predicate skips leased outpoints; addOwned dedups', async 
   await kx.destroy()
 })
 
-test('ledger: EF relay with sparse parent outputs — bookkeeping must not veto a broadcast it cannot record', async (t) => {
+void test('ledger: EF relay with sparse parent outputs — bookkeeping must not veto a broadcast it cannot record', async (_t) => {
   const { kx, store } = await open()
   const tx = new Transaction()
   tx.addInput({ sourceTXID: 'c'.repeat(64), sourceOutputIndex: 1, unlockingScript: Script.fromHex('51') })
@@ -93,7 +93,7 @@ test('ledger: EF relay with sparse parent outputs — bookkeeping must not veto 
   const stub = new Transaction()
   stub.outputs = [null as any, null as any]
   tx.inputs[0].sourceTransaction = stub as any
-  const inner = async () => ({ status: 'success' as const, txid: tx.id('hex'), description: 'ok' })
+  const inner = () => Promise.resolve({ status: 'success' as const, txid: tx.id('hex'), description: 'ok' })
   const ex2 = new Dispatcher()
   wireTx(ex2, { store, fx: {}, log: () => {} })
   const wrapped = wrapBroadcast(store, inner, ex2)
@@ -102,7 +102,7 @@ test('ledger: EF relay with sparse parent outputs — bookkeeping must not veto 
   await kx.destroy()
 })
 
-test('ledger: an exported row the counterparty aired settles; an unaired one expires and frees its input', async (t) => {
+void test('ledger: an exported row the counterparty aired settles; an unaired one expires and frees its input', async (_t) => {
   const { kx, store } = await open()
   const key = PrivateKey.fromRandom()
   let seed = 0
@@ -130,14 +130,14 @@ test('ledger: an exported row the counterparty aired settles; an unaired one exp
   }
   // an aired export settles like any broadcast — 'confirmed' burns its leases
   const airedParent = await mk('aired')
-  const settled = new TransactionWatcher(store, async () => ({ status: 'proven', source: 'test' }))
+  const settled = new TransactionWatcher(store, () => Promise.resolve({ status: 'proven', source: 'test' }))
   await settled.tick()
   assert.equal((await store.walletTx({ actionId: 'owner:aired' }))!.state, 'confirmed', 'a landed export confirms')
   assert.equal((await store.leaseState(airedParent, 0))!.state, 'spent')
   // an unaired export past its TTL releases the lease and fires the revive hook once
   const staleParent = await mk('stale')
   let revived = 0
-  const expiring = new TransactionWatcher(store, async () => undefined, undefined, {
+  const expiring = new TransactionWatcher(store, () => Promise.resolve(undefined), undefined, {
     exportedTtlMs: 0,
     onExportExpired: () => {
       revived++
@@ -152,7 +152,7 @@ test('ledger: an exported row the counterparty aired settles; an unaired one exp
   assert.equal(again, 0)
   // a fresh export inside its window is untouched
   await mk('fresh')
-  const waiting = new TransactionWatcher(store, async () => undefined, undefined, { exportedTtlMs: 60_000 })
+  const waiting = new TransactionWatcher(store, () => Promise.resolve(undefined), undefined, { exportedTtlMs: 60_000 })
   await waiting.tick()
   assert.equal((await store.walletTx({ actionId: 'owner:fresh' }))!.state, 'exported', 'inside the window the row waits')
   await kx.destroy()

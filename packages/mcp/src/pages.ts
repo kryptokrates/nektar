@@ -35,7 +35,8 @@ const NEKTAR_AMBER = '#f7991b'
 const NEKTAR_DARK = '#221e1d'
 
 const esc = (s: unknown) =>
-  (s === null || s === undefined ? '' : typeof s === 'object' ? JSON.stringify(s) : String(s as string | number | boolean)).replace(
+  (s === null || s === undefined ? '' : typeof s === 'object' ? JSON.stringify(s) : String(s as string | number | boolean | symbol | bigint)).replace(
+    // eslint-disable-line @typescript-eslint/no-unnecessary-type-assertion -- narrows unknown past the object guard; required by no-base-to-string
     /[&<>"]/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!
   )
@@ -443,7 +444,7 @@ export async function cardPage(mem: NektarMemory, host: string | undefined): Pro
           ? 'local Teranode regtest'
           : 'simulated chain — demo only'
   const coverage = d && d.records > 0 ? Math.round((d.anchoredRecords / d.records) * 100) : 0
-  const operator = mem.operatorKey()?.toPublicKey().toString() ?? ''
+  const operator = mem.operatorKey().toPublicKey().toString()
   const ogDesc = `${d?.records ?? 0} records · ${coverage}% anchored on-chain · ${receipts} receipts issued · ${pub.length} shards for sale`
   return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>nektar agent — verifiable memory</title>
 <meta property="og:title" content="nektar agent card — verifiable memory anchored on BSV">

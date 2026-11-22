@@ -7,9 +7,9 @@ import type { BlockHeader, ChainTracker } from '../src/interfaces.js'
 
 const hdr = (height: number, time: number): BlockHeader => ({ height, hash: `h${height}`, prevHash: 'p', merkleRoot: `r${height}`, time, bits: 0, nonce: 0 })
 const stub = (times: Record<number, number>, miss = false): ChainTracker => ({
-  currentHeight: async () => Math.max(...Object.keys(times).map(Number)),
-  isValidRootForHeight: async (root, h) => root === `r${h}`,
-  headerAtHeight: async (h) => (miss ? undefined : times[h] === undefined ? undefined : hdr(h, times[h]))
+  currentHeight: () => Promise.resolve(Math.max(...Object.keys(times).map(Number))),
+  isValidRootForHeight: (root, h) => Promise.resolve(root === `r${h}`),
+  headerAtHeight: (h) => Promise.resolve(miss ? undefined : times[h] === undefined ? undefined : hdr(h, times[h]))
 })
 
 test('medianTime: odd → middle; even → lower median (skewed-high can never push time up)', () => {
@@ -75,11 +75,13 @@ test('TemporalSources: a missing source abstains; hash/root stay on the primary 
 
 test('BTC source: a second IndexTracker pointed at /v1/btc/main (read-only stub fetch)', async () => {
   const calls: string[] = []
-  const fetchImpl: typeof fetch = async (input: any, init?: any) => {
+  const fetchImpl: typeof fetch = (input: any, init?: any) => {
     calls.push(`${init?.method ?? 'GET'} ${String(input)}`)
-    return new Response(JSON.stringify({ hash: 'x', previousblockhash: 'p', merkleroot: 'm', time: 1_600_000_000, bits: '1d00ffff', nonce: 1 }), {
-      status: 200
-    })
+    return Promise.resolve(
+      new Response(JSON.stringify({ hash: 'x', previousblockhash: 'p', merkleroot: 'm', time: 1_600_000_000, bits: '1d00ffff', nonce: 1 }), {
+        status: 200
+      })
+    )
   }
   const btc = new IndexTracker({ indexerUrl: 'https://api.whatsonchain.com/v1/btc/main', fetchImpl }, { requirePow: false }) // fixture headers carry no real PoW
   const h = await btc.headerAtHeight(700_000)
@@ -96,11 +98,11 @@ test('BTC source: a second IndexTracker pointed at /v1/btc/main (read-only stub 
 
 test('BTC source is only read when enabled: bsv-only sources never touch it', async () => {
   let calls = 0
-  const fetchImpl: typeof fetch = async () => {
+  const fetchImpl: typeof fetch = () => {
     calls++
-    return new Response('{}', { status: 404 })
+    return Promise.resolve(new Response('{}', { status: 404 }))
   }
-  const btc = new IndexTracker({ indexerUrl: 'https://api.whatsonchain.com/v1/btc/main', fetchImpl }, { requirePow: false }) // fixture headers carry no real PoW
+  const _btc = new IndexTracker({ indexerUrl: 'https://api.whatsonchain.com/v1/btc/main', fetchImpl }, { requirePow: false }) // fixture headers carry no real PoW
   const t = new TemporalSources([{ name: 'bsv', tracker: stub({ 3: 42 }) }])
   await t.headerAtHeight(3)
   assert.equal(calls, 0, 'no BTC fetch when btc is not configured')

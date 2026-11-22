@@ -126,7 +126,7 @@ async function complete() {
       }
     }
   }
-  if (!msg.tool_calls.length) delete msg.tool_calls
+  if (!msg.tool_calls?.length) delete msg.tool_calls
   return msg
 }
 for (let round = 0; round < 8; round++) {
@@ -134,7 +134,7 @@ for (let round = 0; round < 8; round++) {
   messages.push(msg)
   if (!msg.tool_calls?.length) {
     console.log(
-      `\n${MODEL}: ${String(msg.content ?? '')
+      `\n${MODEL}: ${String(msg.content)
         .replace(/<think>[\s\S]*?<\/think>/g, '')
         .trim()}`
     )

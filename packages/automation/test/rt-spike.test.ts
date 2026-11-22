@@ -65,7 +65,7 @@ const until = async (what: () => Promise<boolean>, ms = 10_000): Promise<void> =
   throw new Error('until: deadline')
 }
 
-test(
+void test(
   'spike: submission_unknown → submit.success → obs.proven end-to-end through a live restate server',
   { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
   async () => {
@@ -112,7 +112,7 @@ test(
   }
 )
 
-test(
+void test(
   'spike: sweep.tick fans observations out through journaled sends — ctx.objectSendClient on the real server',
   { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
   async () => {
@@ -136,10 +136,11 @@ test(
     const txDef = await txObject({ store, fx: {}, log: () => {} })
     const sweepDef = await sweepService(
       {
+        // eslint-disable-next-line @typescript-eslint/require-await -- the AsyncIterable contract needs `async`; the body yields, it never awaits
         scan: async function* () {
           for (const o of stages.shift() ?? []) yield o
         },
-        resubmitRows: async () => [],
+        resubmitRows: () => Promise.resolve([]),
         log: () => {}
       },
       txDef
@@ -168,7 +169,7 @@ test(
   }
 )
 
-test(
+void test(
   'spike: deal.advance lands journaled on the op key — the leg runs domain code in-process',
   { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
   async () => {
@@ -215,7 +216,7 @@ test(
   }
 )
 
-test(
+void test(
   'spike: custody.submit on the tx key — broadcast leg journaled, emits route to the tx object',
   { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
   async () => {
@@ -231,7 +232,7 @@ test(
       parents: {},
       feeSats: 1
     })
-    const wallet = new WalletCoordinator(store, { broadcast: async (tx) => ({ status: 'success', txid: tx.id('hex') }) })
+    const wallet = new WalletCoordinator(store, { broadcast: (tx) => Promise.resolve({ status: 'success', txid: tx.id('hex') }) })
     const txDef = await txObject({ store, fx: {}, log: () => {} })
     const custodyDef = await custodyObject({ wallet, log: () => {} })
     const endpoint = await openEndpoint([txDef, custodyDef], {
@@ -255,7 +256,7 @@ test(
   }
 )
 
-test(
+void test(
   'spike: dealfan.tick journals the scans and fans out to deal keys on the real server',
   { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
   async () => {
@@ -271,9 +272,9 @@ test(
     })
     const landed: Array<{ handler: string; key: string }> = []
     const dealDef = await dealObject({
-      advanceOp: async (id) => (landed.push({ handler: 'advance', key: id }), true),
-      inboxEvent: async (item) => void landed.push({ handler: 'event', key: item.messageId }),
-      reconcileOp: async (id) => void landed.push({ handler: 'reconcile', key: id }),
+      advanceOp: (id) => Promise.resolve((landed.push({ handler: 'advance', key: id }), true)),
+      inboxEvent: (item) => Promise.resolve(void landed.push({ handler: 'event', key: item.messageId })),
+      reconcileOp: (id) => Promise.resolve(void landed.push({ handler: 'reconcile', key: id })),
       log: () => {}
     })
     const items: DealEvent[] = [{ source: 'lane', messageId: 'fm1', kind: 'want', payload: { wantId: 'w-fan' } }]
@@ -283,9 +284,9 @@ test(
     const fanSvc = `spike-dealfan-${RUN}`
     const dealfanDef = await dealfanObject(
       {
-        pendingInbox: async () => items,
-        liveOps: async () => [{ operationId: operation.operationId }],
-        reconcileOps: async () => [],
+        pendingInbox: () => Promise.resolve(items),
+        liveOps: () => Promise.resolve([{ operationId: operation.operationId }]),
+        reconcileOps: () => Promise.resolve([]),
         ceilingMs: () => 60_000,
         log: () => {}
       },
@@ -303,7 +304,7 @@ test(
       const r = await ex.call<{ events: number; advanced: number; reconciled: number }>({ service: fanSvc, handler: 'tick', key: 'main' }, {})
       assert.deepEqual(r, { events: 1, advanced: 1, reconciled: 0 })
       // the sends are async — poll until both keyed invocations land
-      await until(async () => landed.length === 2)
+      await until(() => Promise.resolve(landed.length === 2))
       assert.deepEqual(
         [...landed].sort((a, b) => a.handler.localeCompare(b.handler)),
         [
@@ -318,7 +319,7 @@ test(
   }
 )
 
-test(
+void test(
   'spike: transport.drain journals the scan and lands deliver on the destination key',
   { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
   async () => {
@@ -335,9 +336,10 @@ test(
     // deliver from a previous run on this durable server
     const dest = `host:live-${RUN}`
     const transportDef = await transportObject({
-      dueRows: async () => [{ actionId, operationId: `op:${actionId}`, kind: 'message', destination: dest, payload: { type: 'decline' }, attempts: 0 }],
-      nextAt: async () => undefined,
-      deliverItem: async (item) => (delivered.push(`${item.actionId}@${item.destination}`), 'acked' as const),
+      dueRows: () =>
+        Promise.resolve([{ actionId, operationId: `op:${actionId}`, kind: 'message', destination: dest, payload: { type: 'decline' }, attempts: 0 }]),
+      nextAt: () => Promise.resolve(undefined),
+      deliverItem: (item) => Promise.resolve((delivered.push(`${item.actionId}@${item.destination}`), 'acked' as const)),
       now: () => Date.now(),
       log: () => {}
     })
@@ -350,7 +352,7 @@ test(
     try {
       const r = await ex.call<{ sent: number }>({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {})
       assert.equal(r.sent, 1)
-      await until(async () => delivered.length === 1)
+      await until(() => Promise.resolve(delivered.length === 1))
       assert.deepEqual(delivered, [`${actionId}@${dest}`])
     } finally {
       await endpoint.close().catch(() => undefined)
@@ -359,7 +361,7 @@ test(
   }
 )
 
-test(
+void test(
   'spike: wake.height journals the due probe and lands the dealfan tick via a journaled send',
   { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
   async () => {
@@ -373,9 +375,9 @@ test(
     const fanned: string[] = []
     const dealfanDef = await dealfanObject(
       {
-        pendingInbox: async () => (fanned.push('inbox'), [] as DealEvent[]),
-        liveOps: async () => (fanned.push('ops'), []),
-        reconcileOps: async () => (fanned.push('reconcile'), []),
+        pendingInbox: () => Promise.resolve((fanned.push('inbox'), [] as DealEvent[])),
+        liveOps: () => Promise.resolve((fanned.push('ops'), [])),
+        reconcileOps: () => Promise.resolve((fanned.push('reconcile'), [])),
         ceilingMs: () => 60_000,
         log: () => {}
       },
@@ -384,7 +386,7 @@ test(
       fanSvc
     )
     const wakeDef = await wakeService({
-      legs: { dueAtHeight: async (tip) => tip >= 100 },
+      legs: { dueAtHeight: (tip) => Promise.resolve(tip >= 100) },
       hint: () => {},
       fanSvc,
       log: () => {}
@@ -400,7 +402,7 @@ test(
       assert.equal(r.due, true)
       // the journaled send lands async — the dealfan tick running its three
       // scans is the witness that the chain completed end-to-end
-      await until(async () => fanned.length === 3)
+      await until(() => Promise.resolve(fanned.length === 3))
       assert.deepEqual(fanned, ['inbox', 'ops', 'reconcile'])
       // a below-tip wake gates out — no fan-out follows
       const before = fanned.length
@@ -414,7 +416,7 @@ test(
   }
 )
 
-test(
+void test(
   'spike: cron.tick journals the pass and self-arms — the durable cadence chain re-fires',
   { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
   async () => {
@@ -425,7 +427,7 @@ test(
     // name would keep ticking into this endpoint and inflate the count
     const svc = `spike-upkeep-${RUN}`
     const upkeepDef = await cronObject(svc, {
-      tick: async () => void ticks.push(Date.now()),
+      tick: () => Promise.resolve(void ticks.push(Date.now())),
       ceilingMs: () => 200,
       log: () => {}
     })
@@ -440,7 +442,7 @@ test(
       assert.equal(ticks.length, 1)
       // the self-arm is a durable delayed send — the chain re-fires without
       // any process-side timer owning it
-      await until(async () => ticks.length >= 2)
+      await until(() => Promise.resolve(ticks.length >= 2))
     } finally {
       await endpoint.close().catch(() => undefined)
       await kx.destroy()
@@ -448,14 +450,14 @@ test(
   }
 )
 
-test(
+void test(
   'spike: leg object — the host event-sink runs journaled on its key through ingress calls',
   { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
   async () => {
     const { kx, store } = await open()
     void store
     const legs: string[] = []
-    const watcherDef = await legObject(EXEC_SVC.watcher, async () => void legs.push(`t${legs.length}`))
+    const watcherDef = await legObject(EXEC_SVC.watcher, () => Promise.resolve(void legs.push(`t${legs.length}`)))
     const endpoint = await openEndpoint([watcherDef], {
       NEKTAR_RESTATE_ENDPOINT_URI: ENDPOINT_URI,
       NEKTAR_RESTATE_ADMIN: ADMIN,

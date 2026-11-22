@@ -13,7 +13,7 @@ import { EventEmitter } from 'node:events'
 import { Hash, Transaction } from '@bsv/sdk'
 import { spread } from '@nektar/core'
 
-interface P2PEvents {
+interface _P2PEvents {
   txid: (txid: string) => void // every announced txid (cheap)
   tx: (tx: Transaction) => void // a fetched tx that matched a watch set
   spend: (txid: string, vout: number, spentBy: string) => void // watched outpoint spent

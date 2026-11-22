@@ -19,20 +19,20 @@ const mk = (): { ops: CustodyOps; aired: () => Transaction | undefined } => {
   let aired: Transaction | undefined
   const store = listFundsStore()
   const coin = parent(1_000_000)
-  store.add(coin, 0)
+  void store.add(coin, 0)
   const ops = new CustodyOps({
     funds: new MemoryFunds(store, { pkhHex: Buffer.from(key.toPublicKey().toHash()).toString('hex') }),
     fundSigner: () => key,
-    broadcast: async (tx: Transaction) => {
+    broadcast: (tx: Transaction) => {
       aired = tx
-      return { status: 'success' }
+      return Promise.resolve({ status: 'success' })
     },
     txs: () => {}
   })
   return { ops, aired: () => aired }
 }
 
-test('provisionPay: plan bounds are enforced', async () => {
+void test('provisionPay: plan bounds are enforced', async () => {
   const { ops } = mk()
   const pay = ops.provisionPay.bind(ops)
   await assert.rejects(pay({ outputs: [] }), /at least one output/)
@@ -43,7 +43,7 @@ test('provisionPay: plan bounds are enforced', async () => {
   await assert.rejects(pay({ outputs: [{ satoshis: 100, scriptHex: laneLock() }], fundsSats: 545 }), /546/)
 })
 
-test('provisionPay: one tx carries every lane output plus the P2PKH funds leg and change', async () => {
+void test('provisionPay: one tx carries every lane output plus the P2PKH funds leg and change', async () => {
   const { ops, aired } = mk()
   const lockA = laneLock()
   const lockB = laneLock()

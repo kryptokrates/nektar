@@ -101,10 +101,10 @@ test('AUT-005: halt from non-final state fails; from final passes', async (t) =>
   await assert.rejects(() => ac.halt(), AutomatonError, 'halted: refused locally')
   ac.unguarded = true
   await assert.rejects(() => ac.halt(), SCRIPT_INVALID, 'halted: contract refuses a second halt')
-  const offPath = await pathOf(2, 0, 0)
+  const offPath = pathOf(2, 0, 0)
   await assert.rejects(() => ac.step(0, 1, OUT, { from: 2, ...offPath }), /TX_INVALID \(31\)|not in δ/, 'halted: no step')
 })
-const pathOf = async (f: number, s: number, t: number) => {
+const pathOf = (f: number, s: number, t: number) => {
   const d = deltaTable({ ...DEF, delta: [...DEF.delta, [f, s, t]] })
   const p = deltaPath(d, f, s, t)
   return { sibs: p.sibs.map(toHex), dir: p.dir }

@@ -3,18 +3,17 @@ import assert from 'node:assert/strict'
 import { verifyAnswerReceipt, verifyReceiptZk, IngestError } from '../src/index.js'
 import type { AnswerReceipt, MetricsPort } from '../src/index.js'
 
-const receipt = (over: Partial<AnswerReceipt> = {}): AnswerReceipt =>
-  ({
-    answer: 'a',
-    fragmentRefs: [],
-    checkResult: 'verified',
-    truthNote: '',
-    modelId: 'm',
-    timestamp: 1,
-    ...over
-  }) as AnswerReceipt
+const receipt = (over: Partial<AnswerReceipt> = {}): AnswerReceipt => ({
+  answer: 'a',
+  fragmentRefs: [],
+  checkResult: 'verified',
+  truthNote: '',
+  modelId: 'm',
+  timestamp: 1,
+  ...over
+})
 
-test('receipt: unsigned and malformed signatures fail closed', () => {
+void test('receipt: unsigned and malformed signatures fail closed', () => {
   assert.deepEqual(verifyAnswerReceipt(receipt()), { ok: false, reason: 'unsigned receipt' })
   assert.deepEqual(verifyAnswerReceipt(receipt({ signerPub: 'zz' })), { ok: false, reason: 'unsigned receipt' })
   const bad = verifyAnswerReceipt(receipt({ signature: 'beef', signerPub: '02' + '11'.repeat(32) }))
@@ -22,14 +21,14 @@ test('receipt: unsigned and malformed signatures fail closed', () => {
   assert.match(bad.reason ?? '', /malformed signature/)
 })
 
-test('receipt: zk artifact is re-verified, never trusted by presence', () => {
+void test('receipt: zk artifact is re-verified, never trusted by presence', () => {
   assert.deepEqual(verifyReceiptZk({}), { ok: false, reason: 'no zk artifact on receipt' })
   const bad = verifyReceiptZk({ zk: { garbage: true } as unknown as Pick<AnswerReceipt, 'zk'>['zk'] })
   assert.equal(bad.ok, false)
   assert.match(bad.reason ?? '', /malformed zk artifact/)
 })
 
-test('ingest: IngestError is a distinct refusal type', () => {
+void test('ingest: IngestError is a distinct refusal type', () => {
   const e = new IngestError('unsigned write')
   assert.ok(e instanceof Error)
   assert.equal(e.name, 'Error')

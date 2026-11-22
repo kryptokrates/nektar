@@ -125,7 +125,7 @@ const ctorFor = (deadline, window, stages = 4n, anchorOutpoint = '') => [
 const deployClaim = async (deadline, window, anchorOutpoint = '') => {
   const c = new RunarContract(art, ctorFor(deadline, window, 4n, anchorOutpoint))
   c.connect(provider, signer)
-  const d = await c.deploy({ satoshis: 5000 })
+  const _d = await c.deploy({ satoshis: 5000 })
   return c
 }
 const ourPrevouts = (c) => {
@@ -274,7 +274,7 @@ try {
     await stageTx.sign()
     const br = await broadcaster.broadcast(stageTx)
     if (br.status !== 'success') throw new Error('stage fund refused: ' + br.description)
-    provider.markAccepted(stageTx) // book-keep: input spent + change owned
+    void provider.markAccepted(stageTx) // book-keep: input spent + change owned
     const stageUtxo = { txid: stageTx.id('hex'), outputIndex: 0, satoshis: 200, script: stageScript }
 
     const ourOp = Buffer.concat([Buffer.from(claimUtxo.txid, 'hex').reverse(), Buffer.from([0, 0, 0, 0])]).toString('hex')
@@ -411,7 +411,7 @@ try {
       encNum(BigInt(aIdx))
   )
   const abr = await broadcaster.broadcast(tx)
-  provider.markAccepted(tx)
+  void provider.markAccepted(tx)
   check(abr.status === 'success', `anchored settle (${abr.txid?.slice(0, 12)}… — journalRoot==anchor.R consensus-enforced)`)
 } catch (e) {
   check(false, `anchored settle: ${e.message.slice(0, 90)}`)

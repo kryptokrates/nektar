@@ -96,7 +96,7 @@ export class PackWire {
    *  target shard must be empty (no mixing imported + native seqs). */
   async importShardPack(pack: unknown): Promise<{ imported: number; anchored: number; unverifiable: string[]; skipped: number }> {
     const p = pack as ShardPack
-    if (p?.v !== 1 || p?.kind !== 'nektar-shard-pack' || typeof p.shard !== 'string' || !Array.isArray(p.records)) {
+    if (p.v !== 1 || p.kind !== 'nektar-shard-pack' || typeof p.shard !== 'string' || !Array.isArray(p.records)) {
       throw new Error('importShard: malformed pack — expected {v:1, kind:"nektar-shard-pack", shard, records[]}')
     }
     // `__*` is the reserved system namespace — a pack carrying one would

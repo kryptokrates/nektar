@@ -57,11 +57,12 @@ export interface LogState {
 
 export class MemoryLogState implements LogState {
   private m = new Map<string, { seq: number; prev: string; extra?: Record<string, unknown> }>()
-  async get(s: string) {
-    return this.m.get(s)
+  get(s: string) {
+    return Promise.resolve(this.m.get(s))
   }
-  async set(s: string, v: { seq: number; prev: string; extra?: Record<string, unknown> }) {
+  set(s: string, v: { seq: number; prev: string; extra?: Record<string, unknown> }) {
     this.m.set(s, v)
+    return Promise.resolve()
   }
 }
 
@@ -185,7 +186,7 @@ export async function appendLog(p: {
     const held = await p.journal.get(`log:${p.stream}:${s}`)
     if (held === undefined || !Array.isArray(held.beef) || held.beef.length === 0) continue
     heals.push(
-      submitAll(p.hosts, held.beef, held.topics ?? topics, { retryWaits: [] })
+      submitAll(p.hosts, held.beef, held.topics, { retryWaits: [] })
         .then((rr) => {
           for (const m of rr.missed) healMissed.add(m.host)
         })

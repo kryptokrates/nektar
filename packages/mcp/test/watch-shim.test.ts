@@ -105,7 +105,7 @@ async function stack(t: test.TestContext): Promise<{
   }
 }
 
-test('watch-shim: no cursor answers immediately, matching cursor holds to waitMs, change releases', async (t) => {
+void test('watch-shim: no cursor answers immediately, matching cursor holds to waitMs, change releases', async (t) => {
   const { watch, setOutputs } = await stack(t)
   const boot = await watch('service=ls_x&query={}')
   assert.equal(boot.changed, false)
@@ -121,7 +121,7 @@ test('watch-shim: no cursor answers immediately, matching cursor holds to waitMs
   assert.ok(Date.now() - t1 < 5000, 'a fingerprint change releases the waiter well inside waitMs')
 })
 
-test('watch-shim: /notify wakes only the matching service waiters', async (t) => {
+void test('watch-shim: /notify wakes only the matching service waiters', async (t) => {
   const { watch, postNotify, setOutputs } = await stack(t)
   const q = encodeURIComponent('{}')
   const cur = (await watch(`service=ls_x&query=${q}`)).cursor
@@ -150,7 +150,7 @@ test('watch-shim: /notify wakes only the matching service waiters', async (t) =>
   assert.equal((await held2).changed, false, 'a wake with no change settles back to polling')
 })
 
-test('watch-shim: backend outage degrades — held watch returns changed:false, never hangs', async (t) => {
+void test('watch-shim: backend outage degrades — held watch returns changed:false, never hangs', async (t) => {
   const { watch, killBackend } = await stack(t)
   const q = encodeURIComponent('{}')
   const cur = (await watch(`service=ls_x&query=${q}`)).cursor
@@ -161,7 +161,7 @@ test('watch-shim: backend outage degrades — held watch returns changed:false, 
   assert.ok(Date.now() - t0 >= 700)
 })
 
-test('watch-shim: concurrent watchers on one key share one backend poller', async (t) => {
+void test('watch-shim: concurrent watchers on one key share one backend poller', async (t) => {
   const { watch, lookups } = await stack(t)
   const q = encodeURIComponent('{}')
   const cur = (await watch(`service=ls_x&query=${q}`)).cursor
@@ -177,7 +177,7 @@ test('watch-shim: concurrent watchers on one key share one backend poller', asyn
   assert.ok(n <= 10, `two watchers on one key share one poller — ${n} lookups in 300ms, a per-connection poller would double it`)
 })
 
-test('watch-shim: nested query members key independent watches', async (t) => {
+void test('watch-shim: nested query members key independent watches', async (t) => {
   const { watch, setOutputsFor } = await stack(t)
   // the old keyOf whitelisted top-level names at every depth, collapsing
   // {wants:{net,domain}} for different domains into ONE key — a domain-b
@@ -201,7 +201,7 @@ test('watch-shim: nested query members key independent watches', async (t) => {
   assert.equal(resB.changed, false, "the b waiter held — a different domain's change is not its change")
 })
 
-test('watch-shim: /notify requires service, bounded body, and a token bucket', async (t) => {
+void test('watch-shim: /notify requires service, bounded body, and a token bucket', async (t) => {
   const { postNotify } = await stack(t)
   assert.equal((await postNotify({})).status, 400, 'missing service → 400')
   assert.equal((await postNotify({ service: 42 })).status, 400, 'non-string service → 400')

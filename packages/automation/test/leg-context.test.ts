@@ -28,7 +28,7 @@ const mkOp = {
   data: {}
 }
 
-test('store post-commit hooks fire detached — a workReady spawn survives the leg', async (t) => {
+void test('store post-commit hooks fire detached — a workReady spawn survives the leg', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   let ambientInHook: AbortSignal | undefined | 'unset' = 'unset'
@@ -64,16 +64,17 @@ test('store post-commit hooks fire detached — a workReady spawn survives the l
   assert.equal(spawnSettled, true)
 })
 
-test('executor send dispatch is detached — a send armed inside a leg cannot leak its context', async () => {
+void test('executor send dispatch is detached — a send armed inside a leg cannot leak its context', async () => {
   const ex = new Dispatcher()
   let ambientInJob: AbortSignal | undefined | 'unset' = 'unset'
   let jobDone!: () => void
   const ran = new Promise<void>((r) => {
     jobDone = r
   })
-  ex.register('nektar-test', 'tick', async () => {
+  ex.register('nektar-test', 'tick', () => {
     ambientInJob = currentSignal()
     jobDone()
+    return Promise.resolve()
   })
   const r = await deadline(async () => {
     void ex.send({ service: 'nektar-test', handler: 'tick' }, {}, { delayMs: 1 }) // armed inside the leg — timers capture context at creation
@@ -83,10 +84,10 @@ test('executor send dispatch is detached — a send armed inside a leg cannot le
   assert.deepEqual(r, { outcome: 'timeout' })
   assert.equal((await deadline(() => ran, 5_000)).outcome, 'settled', 'the executor dispatched the send')
   assert.equal(ambientInJob, undefined, 'timer-dispatched work is never the armer’s child — sends run detached')
-  ex.close()
+  void ex.close()
 })
 
-test('the run() mutex shape: promise links keep their registrant’s context', async () => {
+void test('the run() mutex shape: promise links keep their registrant’s context', async () => {
   // base.ts serializes via `this.chain = link.then(fn)` — each link's
   // context is captured at registration, so serialized legs stay isolated
   let chain: Promise<void> = Promise.resolve()
@@ -120,7 +121,7 @@ test('the run() mutex shape: promise links keep their registrant’s context', a
   assert.notEqual(aSig, bSig, 'serialized links never see each other’s leg')
 })
 
-test('knex/sqlite round-trips keep the ambient — a store call inside a leg sees the context after IO', async (t) => {
+void test('knex/sqlite round-trips keep the ambient — a store call inside a leg sees the context after IO', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   let afterDb: AbortSignal | undefined
@@ -133,13 +134,13 @@ test('knex/sqlite round-trips keep the ambient — a store call inside a leg see
   assert.ok(afterDb !== undefined, 'the leg context survives awaited knex/sqlite work')
 })
 
-test('detached() inside leg work yields context-free spawned work', async () => {
+void test('detached() inside leg work yields context-free spawned work', async () => {
   let spawnedAmbient: AbortSignal | undefined | 'unset' = 'unset'
-  const r = await deadline(async () => {
+  const r = await deadline(() => {
     detached(() => {
       spawnedAmbient = currentSignal()
     })
-    return 'ok'
+    return Promise.resolve('ok')
   }, 5_000)
   assert.deepEqual(r, { outcome: 'settled', value: 'ok' })
   assert.equal(spawnedAmbient, undefined)

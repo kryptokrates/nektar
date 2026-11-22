@@ -39,7 +39,7 @@ const env = existsSync(join(root, '.env'))
         .map((m) => [m[1], m[2].trim()])
     )
   : {}
-const dataDir = resolve(flag('--data') ?? process.env.NEKTAR_DATA_DIR ?? env.NEKTAR_DATA_DIR ?? join(root, '.nektar'))
+const dataDir = resolve(flag('--data') ?? process.env.NEKTAR_DATA_DIR ?? env.NEKTAR_DATA_DIR)
 const json = argv.includes('--json') ? (argv.splice(argv.indexOf('--json'), 1), true) : false
 const dist = join(root, 'packages/automation/dist/src')
 if (!existsSync(join(dist, 'store.js'))) {
@@ -47,7 +47,7 @@ if (!existsSync(join(dist, 'store.js'))) {
   process.exit(1)
 }
 const { AutomationStore } = await import(pathToFileURL(join(dist, 'store.js')).href)
-const { policyHash, policyError, policyApprovalError } = await import(pathToFileURL(join(dist, 'policy.js')).href)
+const { policyHash, policyError: _policyError, policyApprovalError } = await import(pathToFileURL(join(dist, 'policy.js')).href)
 const knexFactory = createRequire(join(root, 'packages/mcp/package.json'))('knex')
 
 const [cmd, a, b] = argv

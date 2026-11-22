@@ -185,7 +185,7 @@ test('ZKS2 codec: every malformed input is refused with ZksCodecError', () => {
 })
 
 test('subset proof NEGATIVES (fails closed with a specific reason)', () => {
-  const L = leaves(70)
+  const _L = leaves(70)
   const ok = () => proofOf(70, [1, 63, 64, 69])
   const cases: Array<[string, () => { ok: boolean; reason?: string }]> = [
     [

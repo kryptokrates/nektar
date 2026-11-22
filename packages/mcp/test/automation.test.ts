@@ -3,7 +3,7 @@
 // one-call broadcast sends, and bond covenant spend serialization.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ReserveFunder, testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { ReserveFunder, testWorld } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { PrivateKey, Transaction, P2PKH, Script } from '@bsv/sdk'
 import { mkdtempSync } from 'node:fs'
@@ -21,7 +21,7 @@ const mkParent = (key: PrivateKey, satoshis: number, tag: number): Transaction =
   return t
 }
 
-test('takeReserve: smallest-sufficient pick — dust never selected for a big spend', async (t) => {
+void test('takeReserve: smallest-sufficient pick — dust never selected for a big spend', async (_t) => {
   const key = PrivateKey.fromRandom()
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-reserve-')), 'reserve.json')
   const r = new ReserveFunder(key, file)
@@ -34,7 +34,7 @@ test('takeReserve: smallest-sufficient pick — dust never selected for a big sp
   assert.equal(small?.satoshis, 500)
 })
 
-test('takeReserve: bare call never hands out sub-dust change entries', async (t) => {
+void test('takeReserve: bare call never hands out sub-dust change entries', async (_t) => {
   const key = PrivateKey.fromRandom()
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-reserve-')), 'reserve.json')
   const r = new ReserveFunder(key, file)
@@ -46,7 +46,7 @@ test('takeReserve: bare call never hands out sub-dust change entries', async (t)
   assert.equal(explicit?.satoshis, 1, 'an explicit minimum below the floor still works')
 })
 
-test('takeReserve: null when every entry is insufficient — no negative-fee tx', async (t) => {
+void test('takeReserve: null when every entry is insufficient — no negative-fee tx', async (_t) => {
   const key = PrivateKey.fromRandom()
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-reserve-')), 'reserve.json')
   const r = new ReserveFunder(key, file)
@@ -55,7 +55,7 @@ test('takeReserve: null when every entry is insufficient — no negative-fee tx'
   assert.equal(await r.takeReserve(undefined, 10_000), null)
 })
 
-test('takeReserve: spendCheck prunes chain-spent candidates and tries the next', async (t) => {
+void test('takeReserve: spendCheck prunes chain-spent candidates and tries the next', async (_t) => {
   const key = PrivateKey.fromRandom()
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-reserve-')), 'reserve.json')
   const r = new ReserveFunder(key, file)
@@ -64,32 +64,32 @@ test('takeReserve: spendCheck prunes chain-spent candidates and tries the next',
   r.addOwned(dead, 0)
   r.addOwned(live, 0)
   const deadOp = `${dead.id('hex')}:0`
-  const u = await r.takeReserve(async (t, v) => `${t}:${v}` === deadOp, 500)
+  const u = await r.takeReserve((t, v) => Promise.resolve(`${t}:${v}` === deadOp), 500)
   assert.equal(u?.tx.id('hex'), live.id('hex'), 'spent candidate pruned, next-smallest tried')
   assert.ok(r.isSpent(dead.id('hex'), 0), 'pruned candidate marked spent')
 })
 
-test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change', async (t) => {
+void test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change', async (t) => {
   const w = await testWorld(t, 3, 50_000)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const payee = PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])
   const r = await mem.sendSats({ amount: 5_000, address: payee })
-  const tx = ( chain.getTx(r.txid)) as Transaction
+  const tx = chain.getTx(r.txid) as Transaction
   assert.ok(tx, 'tx aired on the chain, not just returned as BEEF')
   assert.equal(tx.outputs[0].satoshis, 5_000)
   assert.equal(tx.outputs[0].lockingScript.toHex(), new P2PKH().lock(payee).toHex())
 })
 
-test('sendSats: scriptHex target + opReturn tag', async (t) => {
+void test('sendSats: scriptHex target + opReturn tag', async (t) => {
   const w = await testWorld(t, 1, 50_000)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const payeeScript = new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])).toHex()
   const r = await mem.sendSats({ amount: 1_000, scriptHex: payeeScript, opReturn: 'nektar-test' })
-  const tx = (await chain.getTx(r.txid)) as Transaction
+  const tx = chain.getTx(r.txid) as Transaction
   assert.ok(tx, 'tx aired on the chain')
   assert.ok(tx.outputs.some((o) => o.satoshis === 1_000 && o.lockingScript.toHex() === payeeScript))
   assert.ok(
@@ -98,7 +98,7 @@ test('sendSats: scriptHex target + opReturn tag', async (t) => {
   )
 })
 
-test('bond ops serialize: a second covenant spend while one is in flight throws', async (t) => {
+void test('bond ops serialize: a second covenant spend while one is in flight throws', async (t) => {
   const w = await testWorld(t, 5, 100_000)
   if (w === undefined) return
   const { chain, funder } = w

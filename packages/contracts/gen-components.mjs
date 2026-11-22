@@ -3,7 +3,7 @@
 // scheduler limit, giving exact per-component bytes/ops.
 import { readFileSync, writeFileSync } from 'node:fs'
 const { rc, di } = JSON.parse(readFileSync('poseidon2-consts.json', 'utf8'))
-const P = 2013265921n
+const _P = 2013265921n
 const M = ' % 2013265921n'
 const C = 24
 const v = (i) => `s${i}`

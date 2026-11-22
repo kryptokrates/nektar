@@ -6,11 +6,11 @@ import { AutomationStore } from '../src/store.js'
 import { WalletCoordinator, type WalletDeps } from '../src/wallet.js'
 import { TransactionWatcher } from '../src/ledger.js'
 import { MarketEngine } from '../src/market.js'
-import { NONTERMINAL, STATE_LIMITS, TERMINAL, type MarketDeps } from '../src/market/types.js'
+import { NONTERMINAL, TERMINAL, type MarketDeps } from '../src/market/types.js'
 import type { TxEffects } from '../src/machines/effects.js'
 import { Dispatcher, wireTx } from './rig.js'
 import { wireEngine } from '../src/rt/dispatch.js'
-import { policyError, type AutomationPolicy, type ActionContext } from '../src/policy.js'
+import { policyError, type AutomationPolicy } from '../src/policy.js'
 import { DEFAULT_SCORE_WEIGHTS } from '../src/scoring.js'
 
 // state-audit Phase 1 — each test reproduces one finding F1–F8 and must fail
@@ -53,17 +53,17 @@ async function open(now?: () => number) {
 function deps(store: AutomationStore, now: () => number, extra: Partial<MarketDeps> = {}): MarketDeps {
   return {
     store,
-    call: async () => ({}),
+    call: () => Promise.resolve({}),
     memory: {} as never,
     key,
     network: 'regtest',
-    height: async () => 1,
-    fetchTx: async () => undefined,
+    height: () => Promise.resolve(1),
+    fetchTx: () => Promise.resolve(undefined),
     transport: {} as never,
     ai: {} as never,
     now,
     ...extra
-  } as MarketDeps
+  }
 }
 
 function oneOutputTx(payTo = key): Transaction {
@@ -106,7 +106,7 @@ const mkEngine = (t: TestContext, d: MarketDeps): MarketEngine => {
   return engine
 }
 
-test('F1: a poisoned op still reaches its declared stuck exit — error labels must not reset the watchdog clock', async (t) => {
+void test('F1: a poisoned op still reaches its declared stuck exit — error labels must not reset the watchdog clock', async (t) => {
   let now = 1_000_000
   const { kx, store } = await open(() => now)
   t.after(() => kx.destroy())
@@ -136,7 +136,7 @@ test('F1: a poisoned op still reaches its declared stuck exit — error labels m
   assert.equal(cur?.state, 'canceled', 'a deterministically-throwing op must hit its declared exit')
 })
 
-test('F2/F6: an abandoned verdict runs the custody rollback and labels the row abandoned — never conflicted-on-absence', async (t) => {
+void test('F2/F6: an abandoned verdict runs the custody rollback and labels the row abandoned — never conflicted-on-absence', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   let died = 0
@@ -149,7 +149,7 @@ test('F2/F6: an abandoned verdict runs the custody rollback and labels the row a
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const w = new WalletCoordinator(store, {
-    broadcast: async () => ({ status: 'success' }),
+    broadcast: () => Promise.resolve({ status: 'success' }),
     ...hooks,
     exec: ex
   })
@@ -166,7 +166,7 @@ test('F2/F6: an abandoned verdict runs the custody rollback and labels the row a
   assert.equal(died, 1, 'every non-confirmed terminal verdict must run txDied — the phantom-parent rollback')
 })
 
-test('F3: releaseUnsigned is gone — the abandon-prepared semantic lives on the reconcile path', async (t) => {
+void test('F3: releaseUnsigned is gone — the abandon-prepared semantic lives on the reconcile path', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   // the inline equivalent already covers the semantic (reconcileUncertain
@@ -176,7 +176,7 @@ test('F3: releaseUnsigned is gone — the abandon-prepared semantic lives on the
   assert.equal(typeof (store as unknown as { releaseUnsigned?: unknown }).releaseUnsigned, 'undefined', 'releaseUnsigned is dead code — delete it')
 })
 
-test('F3-regression: an uncertain op whose escrow never aired releases budget, leases, and marks the row rejected', async (t) => {
+void test('F3-regression: an uncertain op whose escrow never aired releases budget, leases, and marks the row rejected', async (t) => {
   let now = 1_000_000
   const { kx, store } = await open(() => now)
   t.after(() => kx.destroy())
@@ -194,7 +194,7 @@ test('F3-regression: an uncertain op whose escrow never aired releases budget, l
   })
   const engine = mkEngine(
     t,
-    deps(store, () => now, { txFacts: async () => ({ verdict: 'dead' }) as never })
+    deps(store, () => now, { txFacts: () => ({ verdict: 'dead' }) as never })
   )
   await engine.tick()
   const row = await store.walletTx({ actionId })
@@ -203,7 +203,7 @@ test('F3-regression: an uncertain op whose escrow never aired releases budget, l
   assert.equal(op?.state, 'funding_failed')
 })
 
-test('N1: reconcile-dead on a submission_unknown escrow runs the custody rollback — the terminal write carries tx-died, not a bare setTxState', async (t) => {
+void test('N1: reconcile-dead on a submission_unknown escrow runs the custody rollback — the terminal write carries tx-died, not a bare setTxState', async (t) => {
   let now = 1_000_000
   const { kx, store } = await open(() => now)
   t.after(() => kx.destroy())
@@ -226,8 +226,8 @@ test('N1: reconcile-dead on a submission_unknown escrow runs the custody rollbac
   const engine = mkEngine(
     t,
     deps(store, () => now, {
-      broadcast: async () => ({ status: 'error', description: 'transport: down' }) as never,
-      txFacts: async () => ({ verdict: 'dead' }) as never,
+      broadcast: () => ({ status: 'error', description: 'transport: down' }) as never,
+      txFacts: () => ({ verdict: 'dead' }) as never,
       txDied: () => {
         died++
       }
@@ -241,37 +241,37 @@ test('N1: reconcile-dead on a submission_unknown escrow runs the custody rollbac
   assert.equal(died, 1, 'a dead verdict on submission_unknown must run txDied — the escape may have aired its change')
 })
 
-test('F4: every op state is classified — NONTERMINAL ∪ TERMINAL ∪ PARKED covers the union', async (t) => {
+void test('F4: every op state is classified — NONTERMINAL ∪ TERMINAL ∪ PARKED covers the union', async (_t) => {
   const mod = (await import('../src/market/types.js')) as unknown as { PARKED?: string[] }
   const classified = new Set([...NONTERMINAL, ...TERMINAL, ...(mod.PARKED ?? [])])
   for (const s of NONTERMINAL) assert.ok(!TERMINAL.includes(s), `${s} in both lists`)
   assert.ok(classified.has('disclosure_verified'), 'disclosure_verified parks on an external entry point — declare it')
 })
 
-test('F5: an expired export that lands late is observed, not stranded in a mislabeled row', async (t) => {
+void test('F5: an expired export that lands late is observed, not stranded in a mislabeled row', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const tx = oneOutputTx()
   const txid = tx.id('hex')
   await store.recordPrepared({ actionId: 'a1', operationId: 'op', kind: 'payment', txid, rawHex: tx.toHex(), parents: {}, feeSats: 0 })
   await store.setTxState('a1', 'expired', { reason: 'test expiry' })
-  const w = new TransactionWatcher(store, async () => ({ status: 'seen' as const, source: 't' }))
+  const w = new TransactionWatcher(store, () => Promise.resolve({ status: 'seen' as const, source: 't' }))
   await w.tick()
   assert.equal((await store.walletTx({ txid }))!.state, 'observed', 'a landed-late export must move to observed')
 })
 
-test('F7: a prepared row is resubmitted on the upkeep cadence — not only at boot', async (t) => {
+void test('F7: a prepared row is resubmitted on the upkeep cadence — not only at boot', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const aired: Transaction[] = []
   const tx = oneOutputTx()
   await store.recordPrepared({ actionId: 'up:1', operationId: 'owner', kind: 'upkeep', txid: tx.id('hex'), rawHex: tx.toHex(), parents: {}, feeSats: 0 })
-  const engine = mkEngine(t, deps(store, Date.now, { broadcast: async (t: Transaction) => (aired.push(t), { status: 'success' }) as never }))
+  const engine = mkEngine(t, deps(store, Date.now, { broadcast: (t: Transaction) => (aired.push(t), { status: 'success' }) as never }))
   await engine.tick()
   assert.ok(aired.length > 0, 'in-run prepared rows must reach the broadcaster without a restart')
 })
 
-test('F8: a refund rejection surfacing after the 60-minute rescan still un-marks refunded', async (t) => {
+void test('F8: a refund rejection surfacing after the 60-minute rescan still un-marks refunded', async (t) => {
   let now = 1_000_000
   const { kx, store } = await open(() => now)
   t.after(() => kx.destroy())
@@ -286,7 +286,7 @@ test('F8: a refund rejection surfacing after the 60-minute rescan still un-marks
   })
   const engine = mkEngine(
     t,
-    deps(store, () => now, { txFacts: async () => ({ verdict: 'dead' }) as never })
+    deps(store, () => now, { txFacts: () => ({ verdict: 'dead' }) as never })
   )
   now += 61 * 60_000
   await engine.tick()

@@ -16,7 +16,7 @@ const candidate = (offerKey: string, maxAllInSats: number, extra: Partial<ScoreC
   ...extra
 })
 
-test('scoring: equal-quality S1 offers prefer 200 over 300 and 450 with replayable exact scores', () => {
+void test('scoring: equal-quality S1 offers prefer 200 over 300 and 450 with replayable exact scores', () => {
   const result = rankOffers([candidate('seller:a', 450), candidate('seller:b', 300), candidate('seller:c', 200)], policy())
   assert.deepEqual(
     result.ranked.map((o) => [o.offerKey, o.scoreBps]),
@@ -33,7 +33,7 @@ test('scoring: equal-quality S1 offers prefer 200 over 300 and 450 with replayab
   }
 })
 
-test('scoring: stronger expensive offer wins; price never overrides eligibility', () => {
+void test('scoring: stronger expensive offer wins; price never overrides eligibility', () => {
   const cheap = candidate('cheap', 200, { features: { relevance: 4000, provenance: 10000, history: 10000, latency: 10000 } })
   const result = rankOffers([cheap, candidate('strong', 450), candidate('invalid', 0, { eligible: false })], policy())
   assert.deepEqual(
@@ -46,7 +46,7 @@ test('scoring: stronger expensive offer wins; price never overrides eligibility'
   assert.deepEqual(result.rejected, [{ offerKey: 'invalid', reason: 'ineligible' }])
 })
 
-test('scoring: bounds, threshold, and deterministic key tie-break', () => {
+void test('scoring: bounds, threshold, and deterministic key tie-break', () => {
   const result = rankOffers([candidate('z', 200), candidate('a', 200), candidate('over', 1001), candidate('low', 1000)], policy({ minimumScoreBps: 9000 }))
   assert.deepEqual(
     result.ranked.map((o) => o.offerKey),
@@ -60,7 +60,7 @@ test('scoring: bounds, threshold, and deterministic key tie-break', () => {
   assert.equal(rankOffers([candidate('free', 0)], policy()).ranked[0].scoreBps, 10000)
 })
 
-test('scoring: exact duplicate copies collapse; conflicting same-key copies fail closed regardless of order', () => {
+void test('scoring: exact duplicate copies collapse; conflicting same-key copies fail closed regardless of order', () => {
   const a = candidate('same', 200),
     b = candidate('same', 300)
   assert.equal(rankOffers([a, a], policy()).ranked.length, 1)
@@ -68,7 +68,7 @@ test('scoring: exact duplicate copies collapse; conflicting same-key copies fail
   assert.deepEqual(rankOffers([a, b], policy()).rejected, [{ offerKey: 'same', reason: 'conflicting_offer' }])
 })
 
-test('scoring: malicious numeric features and unknown policy constraints are rejected', () => {
+void test('scoring: malicious numeric features and unknown policy constraints are rejected', () => {
   for (const value of [NaN, Infinity, -1, 10001, 0.1]) {
     const item = candidate('bad', 100, { features: { relevance: value, provenance: 10000, history: 10000, latency: 10000 } })
     assert.deepEqual(rankOffers([item], policy()).rejected, [{ offerKey: 'bad', reason: 'invalid_offer' }])
@@ -83,7 +83,7 @@ test('scoring: malicious numeric features and unknown policy constraints are rej
   assert.equal(rankOffers([null as unknown as ScoreCandidate], policy()).rejected[0].reason, 'invalid_offer')
 })
 
-test('scoring: malformed duplicate cannot shadow a valid offer; result snapshots do not alias inputs', () => {
+void test('scoring: malformed duplicate cannot shadow a valid offer; result snapshots do not alias inputs', () => {
   const valid = candidate('same', 200)
   const bad = { ...valid, maxAllInSats: -1 }
   assert.deepEqual(rankOffers([valid, bad], policy()), rankOffers([bad, valid], policy()))
@@ -96,7 +96,7 @@ test('scoring: malformed duplicate cannot shadow a valid offer; result snapshots
   assert.equal(snapshot.weightsBps.relevance, 3000)
 })
 
-test('scoring: price normalization is exact at the maximum safe-integer amount', () => {
+void test('scoring: price normalization is exact at the maximum safe-integer amount', () => {
   const result = rankOffers([candidate('large', Number.MAX_SAFE_INTEGER - 1)], policy({ maxAllInSats: Number.MAX_SAFE_INTEGER }))
   assert.equal(result.ranked[0].featuresBps.price, 0)
   assert.equal(result.ranked[0].scoreBps, 8000)

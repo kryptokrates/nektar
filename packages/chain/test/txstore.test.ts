@@ -41,9 +41,10 @@ test('wire: an unproven fat EF falls back to the raw tx', async () => {
 test('TxStore.spender: indexes spent outpoints and rebuilds them on load', async () => {
   const rows: Array<{ txid: string; raw: string; proof?: string }> = []
   const persist = {
-    load: async () => rows,
-    put: async (r: { txid: string; raw: string; proof?: string }): Promise<void> => {
+    load: () => Promise.resolve(rows),
+    put: (r: { txid: string; raw: string; proof?: string }): Promise<void> => {
       rows.push(r)
+      return Promise.resolve()
     }
   }
   const store = new TxStore(persist)
@@ -54,15 +55,15 @@ test('TxStore.spender: indexes spent outpoints and rebuilds them on load', async
   await child.sign()
   store.put(parent)
   const s = store as TxStore & { spender?: (txid: string, vout: number) => string | undefined }
-  assert.equal(s.spender?.(parent.id('hex'), 0), undefined, 'nothing recorded spends it yet')
+  assert.equal(s.spender(parent.id('hex'), 0), undefined, 'nothing recorded spends it yet')
   store.put(child)
-  assert.equal(s.spender?.(parent.id('hex'), 0), child.id('hex'))
-  assert.equal(s.spender?.(parent.id('hex'), 1), undefined)
+  assert.equal(s.spender(parent.id('hex'), 0), child.id('hex'))
+  assert.equal(s.spender(parent.id('hex'), 1), undefined)
   await store.flushed()
   const reloaded = new TxStore(persist)
   await reloaded.load()
   const r2 = reloaded as TxStore & { spender?: (txid: string, vout: number) => string | undefined }
-  assert.equal(r2.spender?.(parent.id('hex'), 0), child.id('hex'), 'the index must rebuild from the stored raw txs')
+  assert.equal(r2.spender(parent.id('hex'), 0), child.id('hex'), 'the index must rebuild from the stored raw txs')
 })
 
 // A1: a counterparty-attached merkle path is evidence we must compute — read
@@ -77,8 +78,8 @@ const pathOn = (tx: Transaction, height: number): MerklePath =>
       { offset: 1, hash: tx.id('hex'), txid: true }
     ]
   ])
-const yesTracker = { isValidRootForHeight: async () => true, currentHeight: async () => 0 }
-const noTracker = { isValidRootForHeight: async () => false, currentHeight: async () => 0 }
+const yesTracker = { isValidRootForHeight: () => Promise.resolve(true), currentHeight: () => Promise.resolve(0) }
+const noTracker = { isValidRootForHeight: () => Promise.resolve(false), currentHeight: () => Promise.resolve(0) }
 
 test('TxStore.read: a forged merkle path is stripped at ingest, never adopted', async () => {
   const parent = coinbase(0)

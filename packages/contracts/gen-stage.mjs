@@ -3,7 +3,7 @@
 // performing ONE round per spend, emitting continuation state.
 import { readFileSync, writeFileSync } from 'node:fs'
 const { rc, di } = JSON.parse(readFileSync('poseidon2-consts.json', 'utf8'))
-const P = '2013265921n',
+const _P = '2013265921n',
   C = 24
 const v = (i) => `s${i}`,
   M = ' % 2013265921n'
@@ -43,8 +43,8 @@ function emitSboxAll(pre = 'this.') {
   }
 }
 const sargs = [...Array(C)].map((_, i) => `s${i}: bigint`).join(', ')
-const rcargs = [...Array(C)].map((_, i) => `rc${i}: bigint`).join(', ')
-const stateRefs = [...Array(C)].map((_, i) => `this.s${i}`).join(', ')
+const _rcargs = [...Array(C)].map((_, i) => `rc${i}: bigint`).join(', ')
+const _stateRefs = [...Array(C)].map((_, i) => `this.s${i}`).join(', ')
 L.push(`// Poseidon2Stage — GOAL-v9 Stage 0d: ONE round of poseidon2_mix as a`)
 L.push(`// stateful covenant step. 24 cells + round live in the UTXO (never the`)
 L.push(`// stack). Round constants are constructor-baked per stage instance.`)

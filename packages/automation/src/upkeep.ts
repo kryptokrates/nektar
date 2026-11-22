@@ -10,7 +10,7 @@ import { WAITS } from './waits.js'
 import { deadAncestry } from '@nektar/bstack'
 import { openRefusals } from './refusals.js'
 import { TERMINAL } from './market/types.js'
-import type { SignedOffer, SignedWant } from '@nektar/bstack'
+import type {} from '@nektar/bstack'
 import type { MarketOpData } from './store.js'
 import type { Rt } from './rtctx.js'
 
@@ -177,8 +177,8 @@ export function openUpkeep(rt: Rt): void {
   let fingerError = ''
   const wantIdOf = (op: { data: MarketOpData }): string | null => op.data.want?.want?.wantId ?? null
   // anchors never block a cycle: they run on the inflight set like pushed work
-  const maybeAnchor = async (): Promise<void> => {
-    if (lanes === undefined || logState === undefined || logStream === undefined) return
+  const maybeAnchor = (): Promise<void> => {
+    if (lanes === undefined || logState === undefined || logStream === undefined) return Promise.resolve()
     const work = (async () => {
       try {
         const r = await lanes.mod.anchorLog({
@@ -214,6 +214,7 @@ export function openUpkeep(rt: Rt): void {
       rt.inflight.delete(work)
     }
     void work.then(done, done)
+    return Promise.resolve()
   }
   const appendLogEvents = async (): Promise<void> => {
     if (lanes === undefined || logState === undefined || logStream === undefined) return
@@ -368,7 +369,7 @@ export function openUpkeep(rt: Rt): void {
             if (tree === undefined || tree.merklePath !== undefined) continue
             const gaps = await deadAncestry(tree, (txid) => mem.fetchTx(txid).catch(() => undefined))
             if (gaps.length === 0) {
-              for (const k2 of [...deadSuspects.keys()]) if (k2.startsWith(`${u.txid}:`)) deadSuspects.delete(k2)
+              for (const k2 of deadSuspects.keys()) if (k2.startsWith(`${u.txid}:`)) deadSuspects.delete(k2)
               continue
             }
             const struck = gaps.filter((g) => {

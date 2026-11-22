@@ -8,8 +8,8 @@ export type SmtKey = Bytes // 32 B — path from root to leaf, MSB-first
 export const SMT_DEPTH = 256
 export const EMPTY_LEAF: SmtHash = new Uint8Array(32)
 
-const LEAF_DOMAIN = Uint8Array.of(0x00)
-const NODE_DOMAIN = Uint8Array.of(0x01)
+const _LEAF_DOMAINLEAF_DOMAIN = Uint8Array.of(0x00)
+const _NODE_DOMAINNODE_DOMAIN = Uint8Array.of(0x01)
 const eqH = (a: Bytes, b: Bytes) => a.length === b.length && a.every((x, i) => x === b[i])
 
 export function hashLeaf(key: SmtKey, value: SmtHash): SmtHash {

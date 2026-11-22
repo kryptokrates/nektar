@@ -282,7 +282,7 @@ export abstract class MemRead extends MemRecords {
                 } else {
                   // COM-003 strict audit: re-verify the originator signature
                   // over the DECRYPTED plaintext (it was bound at ingest).
-                  if (r.authorPub && r.fragment.p.signature?.length && !verifyProvenance(r.authorPub, pt, r.fragment.p)) {
+                  if (r.authorPub && r.fragment.p.signature.length && !verifyProvenance(r.authorPub, pt, r.fragment.p)) {
                     item.unverifiable = true
                     item.reason = 'provenance sig invalid post-decrypt'
                   } else {
@@ -451,7 +451,7 @@ export abstract class MemRead extends MemRecords {
       if (live) refused.push(`instance.lock held by live instance ${l?.owner} — stop it first, do not delete`)
       else {
         rmSync(lock)
-        fixed.push(l === null ? 'removed corrupt instance.lock' : `removed stale instance.lock (beat ${Math.round((Date.now() - (l?.beat ?? 0)) / 1000)}s old)`)
+        fixed.push(l === null ? 'removed corrupt instance.lock' : `removed stale instance.lock (beat ${Math.round((Date.now() - (l.beat ?? 0)) / 1000)}s old)`)
       }
     }
     // data-dir VERSION marker — establishes the migration baseline (v1)

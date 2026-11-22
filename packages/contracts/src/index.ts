@@ -9,7 +9,7 @@
 // the pre-flag artifact (NektarAnchorV3.json) stay decodable byte-for-byte.
 import { createRequire } from 'node:module'
 import type { AnchorData, Bytes } from '@nektar/core'
-import { sha256, utf8, toHex, fromHex, chainRp, TAG_RPRIME as TAG_RPRIME_BYTES, hash160 } from '@nektar/core'
+import { sha256, toHex, fromHex, chainRp, TAG_RPRIME as TAG_RPRIME_BYTES, hash160 } from '@nektar/core'
 
 const require = createRequire(import.meta.url)
 export const NEKTAR_ANCHOR_ARTIFACT = require('../../NektarAnchor.json')

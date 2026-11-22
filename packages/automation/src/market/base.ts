@@ -1,5 +1,5 @@
 import { P2PKH, PrivateKey, PublicKey, type Transaction } from '@bsv/sdk'
-import { signWant, type SignedWant } from '@nektar/bstack'
+import { signWant } from '@nektar/bstack'
 import { CheckpointBond } from '@nektar/anchor'
 import { TxStore, type Ingested } from '@nektar/chain'
 import { stable01 } from '@nektar/core'

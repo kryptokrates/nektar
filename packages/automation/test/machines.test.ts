@@ -49,7 +49,7 @@ function tableTests(
   table: TransitionTable,
   stepFn: (s: string, e: string, p?: Record<string, unknown>) => { next: string; accepted: boolean }
 ) {
-  test(`${name}: every declared table row evaluates to its declared target`, () => {
+  void test(`${name}: every declared table row evaluates to its declared target`, () => {
     for (const row of table.transitions) {
       const rowSources = row.state === '*' ? table.states : ([] as string[]).concat(row.state)
       for (const src of rowSources) {
@@ -64,18 +64,18 @@ function tableTests(
     }
   })
 
-  test(`${name}: union is closed — every state is terminal | quiescent | parked | nonterminal`, () => {
+  void test(`${name}: union is closed — every state is terminal | quiescent | parked | nonterminal`, () => {
     const classified = new Set([...table.terminal, ...(table.quiescent ?? []), ...(table.parked ?? []), ...(table.nonterminal ?? [])])
     for (const s of table.states) assert.ok(classified.has(s), `${s} unclassified`)
     for (const s of classified) assert.ok(table.states.includes(s), `${s} classified but not a state`)
   })
 
-  test(`${name}: every state reachable from a root`, () => {
+  void test(`${name}: every state reachable from a root`, () => {
     const seen = bfs(table)
     for (const s of table.states) assert.ok(seen.has(s), `${s} unreachable`)
   })
 
-  test(`${name}: every non-terminal has a path to terminal or quiescent`, () => {
+  void test(`${name}: every non-terminal has a path to terminal or quiescent`, () => {
     const sinks = new Set([...table.terminal, ...(table.quiescent ?? [])])
     for (const s of table.states) {
       if (sinks.has(s)) continue
@@ -83,7 +83,7 @@ function tableTests(
     }
   })
 
-  test(`${name}: every recovery state is reachable from a real event`, () => {
+  void test(`${name}: every recovery state is reachable from a real event`, () => {
     const seen = bfs(table)
     const incoming = new Set(declaredTransitions(table).map((t) => t.target))
     for (const s of [...(table.quiescent ?? []), 'refund_pending', 'funding_deferred', 'uncertain', 'escalated', 'abandoned', 'expired']) {
@@ -95,7 +95,7 @@ function tableTests(
     }
   })
 
-  test(`${name}: impossible transitions are rejected, never silently applied`, () => {
+  void test(`${name}: impossible transitions are rejected, never silently applied`, () => {
     void machine
     // every (state, event) pair NOT in the table must leave the state unchanged
     const declared = new Set(declaredTransitions(table).map((t) => `${t.state}|${t.event}`))
@@ -114,7 +114,7 @@ function tableTests(
 
 tableTests('txMachine', txMachine, TX_TABLE, (s, e, p) => txStep(s, e, p))
 
-test('txMachine: confirmed only reachable via proof-bearing event', () => {
+void test('txMachine: confirmed only reachable via proof-bearing event', () => {
   // 'confirmed' is never a declared target of an unverified event
   for (const row of TX_TABLE.transitions) {
     const target = row.target === 'self' ? row.state : row.target
@@ -126,7 +126,7 @@ test('txMachine: confirmed only reachable via proof-bearing event', () => {
   assert.equal(txStep('submitted', 'obs.proven', { guard: 'proof' }).next, 'confirmed')
 })
 
-test('txMachine: timeout-without-verdict goes to unknown/quiescent, never failed', () => {
+void test('txMachine: timeout-without-verdict goes to unknown/quiescent, never failed', () => {
   const r = txStep('submitted', 'abandon')
   assert.equal(r.next, 'abandoned') // absence ≠ conflicted, ≠ rejected
   assert.ok(r.intents.includes('tx-died'))
@@ -136,7 +136,7 @@ test('txMachine: timeout-without-verdict goes to unknown/quiescent, never failed
   }
 })
 
-test('txMachine: crash/restart is identity — state lives in the row, not memory', () => {
+void test('txMachine: crash/restart is identity — state lives in the row, not memory', () => {
   // "restart" = resolve the persisted value again; the pure function is total
   for (const s of TX_TABLE.states) {
     const snap = txMachine.resolveState({ value: s, context: {} })
@@ -149,7 +149,7 @@ test('txMachine: crash/restart is identity — state lives in the row, not memor
   assert.equal(txStep('expired', 'obs.seen', { guard: 'verified' }).next, 'observed') // late landing revives
 })
 
-test('txMachine: unknown persisted state throws on hydrate — drift is loud', () => {
+void test('txMachine: unknown persisted state throws on hydrate — drift is loud', () => {
   // resolveState rejects a value the table never declared (state renames surface immediately)
   assert.throws(() => txStep('bogus', 'submit.success'), /bogus/)
 })
@@ -158,19 +158,19 @@ test('txMachine: unknown persisted state throws on hydrate — drift is loud', (
 
 tableTests('opsMachine', opsMachine, OPS_TABLE, (s, e, p) => opsStep(s, e, p))
 
-test('opsMachine: disclosure_verified is parked — money settled, external actor only', () => {
+void test('opsMachine: disclosure_verified is parked — money settled, external actor only', () => {
   assert.equal(opsStep('disclosure_verified', 'marked.useful').next, 'useful')
   assert.equal(opsStep('disclosure_verified', 'tick.error').next, 'disclosure_verified') // label ≠ transition
   assert.equal(opsStep('disclosure_verified', 'stuck.timeout').accepted, false) // no bound — parked
 })
 
-test('opsMachine: revival edges are proof-gated', () => {
+void test('opsMachine: revival edges are proof-gated', () => {
   assert.equal(opsStep('funding_failed', 'escrow.landed').accepted, false) // no verdict named
   assert.equal(opsStep('funding_failed', 'escrow.landed', { guard: 'verdict=mined' }).next, 'refund_pending')
   assert.equal(opsStep('refunded', 'refund.dead', { guard: 'verified' }).next, 'uncertain')
 })
 
-test('opsMachine: guarded self-rows refuse unasserted evidence — never absorbed', () => {
+void test('opsMachine: guarded self-rows refuse unasserted evidence — never absorbed', () => {
   // v6 isUnhandled makes 'unasserted guard' a refusal, not a silent self-absorb
   assert.equal(opsStep('refunded', 'refund.proven').accepted, false) // no proof named
   assert.equal(opsStep('refunded', 'refund.proven', { guard: 'proof' }).next, 'refunded') // declared dup absorb
@@ -178,7 +178,7 @@ test('opsMachine: guarded self-rows refuse unasserted evidence — never absorbe
   assert.equal(opsStep('uncertain', 'refund.dead', { guard: 'verified' }).accepted, true)
 })
 
-test('opsMachine: crash/restart identity + guarded siblings disambiguate', () => {
+void test('opsMachine: crash/restart identity + guarded siblings disambiguate', () => {
   assert.equal(opsStep('selected', 'cap.refused', { guard: 'policy.escalate' }).next, 'escalated')
   assert.equal(opsStep('selected', 'cap.refused', { guard: '!policy.escalate' }).next, 'denied')
 })
@@ -187,7 +187,7 @@ test('opsMachine: crash/restart identity + guarded siblings disambiguate', () =>
 
 tableTests('leaseMachine', leaseMachine, LEASE_TABLE, (s, e, p) => leaseStep(s, e, p))
 
-test('leaseMachine: released→spent is declared — the counterparty-air edge', () => {
+void test('leaseMachine: released→spent is declared — the counterparty-air edge', () => {
   // 3bb8271b: a lease released on our refusal still spent — the revive path
   assert.equal(leaseStep('released', 'spend', { guard: 'aired|proven' }).next, 'spent')
   assert.equal(leaseStep('leased', 'spend', { guard: 'aired|proven' }).next, 'spent')
@@ -197,21 +197,21 @@ test('leaseMachine: released→spent is declared — the counterparty-air edge',
 
 tableTests('inboxMachine', inboxMachine, INBOX_TABLE, (s, e, p) => inboxStep(s, e, p))
 
-test('inboxMachine: park is parent-op-guarded — delivered under funding_deferred', () => {
+void test('inboxMachine: park is parent-op-guarded — delivered under funding_deferred', () => {
   assert.equal(inboxStep('pending', 'park', { guard: 'op-state=funding_deferred' }).next, 'parked')
   assert.equal(inboxStep('pending', 'park').accepted, false) // no op state named → can't park
   assert.equal(inboxStep('parked', 'resume').next, 'pending')
   assert.equal(inboxStep('parked', 'process').next, 'done')
 })
 
-test('inboxMachine: a fail without an attempts verdict is refused, not absorbed', () => {
+void test('inboxMachine: a fail without an attempts verdict is refused, not absorbed', () => {
   assert.equal(inboxStep('pending', 'fail').accepted, false)
   assert.equal(inboxStep('pending', 'fail', { guard: 'attempts<max' }).next, 'pending') // retry declared → self
 })
 
 tableTests('outboxMachine', outboxMachine, OUTBOX_TABLE, (s, e, p) => outboxStep(s, e, p))
 
-test('outboxMachine: deferred unblocks on its class only', () => {
+void test('outboxMachine: deferred unblocks on its class only', () => {
   assert.equal(outboxStep('pending', 'defer').next, 'deferred')
   assert.equal(outboxStep('deferred', 'unblock', { guard: 'same-class' }).next, 'pending')
   assert.equal(outboxStep('deferred', 'unblock').accepted, false) // wrong class never wakes it
@@ -219,7 +219,7 @@ test('outboxMachine: deferred unblocks on its class only', () => {
 
 tableTests('laneMachine', laneMachine, LANE_TABLE, (s, e, p) => laneStep(s, e, p))
 
-test('laneMachine: proven is quiescent not final — reorg demotes', () => {
+void test('laneMachine: proven is quiescent not final — reorg demotes', () => {
   assert.equal(laneStep('proven', 'reorg', { guard: 'reheader' }).next, 'unproven')
   assert.equal(laneStep('unproven', 'prove', { guard: 'bump' }).next, 'proven')
   assert.equal(laneStep('unproven', 'prove').accepted, false) // no BUMP named → no proof
@@ -227,14 +227,14 @@ test('laneMachine: proven is quiescent not final — reorg demotes', () => {
 
 tableTests('slotMachine', slotMachine, SLOT_TABLE, (s, e, p) => slotStep(s, e, p))
 
-test('slotMachine: a dead mint returns the leaf — local refusal is not consumption', () => {
+void test('slotMachine: a dead mint returns the leaf — local refusal is not consumption', () => {
   assert.equal(slotStep('taken', 'mint-died', { guard: 'verified' }).next, 'free')
   assert.equal(slotStep('taken', 'mint-aired', { guard: 'aired|proven' }).next, 'spent')
 })
 
 tableTests('lockMachine', lockMachine, LOCK_TABLE, (s, e, p) => lockStep(s, e, p))
 
-test('lockMachine: takeover requires evidence — never a guess', () => {
+void test('lockMachine: takeover requires evidence — never a guess', () => {
   assert.equal(lockStep('stale', 'takeover', { guard: 'pid-dead|beat-dead' }).next, 'held')
   assert.equal(lockStep('stale', 'takeover').accepted, false)
   assert.equal(lockStep('held', 'stale', { guard: 'beat-gap' }).next, 'stale')
@@ -242,7 +242,7 @@ test('lockMachine: takeover requires evidence — never a guess', () => {
 
 tableTests('hostMachine', hostMachine, HOST_TABLE, (s, e, p) => hostStep(s, e, p))
 
-test('hostMachine: a single miss is a suspect, never a verdict', () => {
+void test('hostMachine: a single miss is a suspect, never a verdict', () => {
   assert.equal(hostStep('up', 'miss').next, 'suspect')
   assert.equal(hostStep('suspect', 'ok').next, 'up')
   assert.equal(hostStep('suspect', 'miss', { guard: 'repeat' }).next, 'down')

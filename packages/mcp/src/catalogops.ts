@@ -126,17 +126,14 @@ export class CatalogOps {
   ): Promise<{ manifest: ShardManifest; seq: number }> {
     if (shard.startsWith('__')) throw new Error('describeShard: system shards (__*) cannot be described')
     if (!this.deps.shards().includes(shard)) throw new Error(`describeShard: unknown shard "${shard}" — describe a shard this instance has written`)
-    const domains = [...new Set((fields.domains ?? []).map((d) => String(d).trim().toLowerCase()).filter((d) => /^[a-z0-9][a-z0-9._-]{0,47}$/.test(d)))].slice(
-      0,
-      32
-    )
+    const domains = [...new Set(fields.domains.map((d) => String(d).trim().toLowerCase()).filter((d) => /^[a-z0-9][a-z0-9._-]{0,47}$/.test(d)))].slice(0, 32)
     if (domains.length === 0) throw new Error('describeShard: at least one valid domain tag required (a-z0-9._-, up to 48 chars)')
     const desc = fields.desc !== undefined ? String(fields.desc).slice(0, 560) : undefined
     const offers = (fields.offers ?? [])
       .map((o) => ({
         kind: String(o?.kind) as ManifestOffer['kind'],
         ...(o?.priceSats !== undefined ? { priceSats: Math.max(0, Math.floor(Number(o.priceSats))) } : {}),
-        ...(o?.seq !== undefined ? { seq: Math.floor(Number(o.seq)) } : {})
+        ...(o.seq !== undefined ? { seq: Math.floor(Number(o.seq)) } : {})
       }))
       .filter((o) => o.kind === 'answer' || o.kind === 'pack' || o.kind === 'record')
       .slice(0, 64)

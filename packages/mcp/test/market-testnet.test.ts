@@ -121,7 +121,7 @@ const ANCHORED_KINDS = new Set(
 ANCHORED_KINDS.add('market')
 const treesReady = async (rt: Automation): Promise<boolean> => {
   const s = await rt.laneStock()
-  return ['market', 'bbox', 'finger'].every((k) => (s[k]?.proven ?? 0) + (ANCHORED_KINDS.has(k) ? (s[k]?.anchored ?? 0) : 0) >= TREE_READY_FLOOR)
+  return ['market', 'bbox', 'finger'].every((k) => s[k]?.proven + (ANCHORED_KINDS.has(k) ? s[k]?.anchored : 0) >= TREE_READY_FLOOR)
 }
 
 /** cycle agents until every deal-path funding tree is proven — the one real
@@ -201,7 +201,7 @@ const mkagent = async (
     // covenant/foreign inputs return undefined and count fee-only
     valueOf: (txid, vout) => reserve.utxos.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis
   })
-  const spendStatus = port.spendStatus ?? (async () => 'unknown' as const)
+  const spendStatus = port.spendStatus ?? (() => Promise.resolve('unknown' as const))
   // reconcile against chain truth: entries the file still shows free but the
   // network already spent (a prior run's tree mint, a killed agent's last
   // broadcast) must never be handed out — that is exactly how the
@@ -460,42 +460,45 @@ const stubShim = async () => {
   const waiters = new Map<string, Array<(v: object) => void>>()
   const seen: string[] = []
   let notifies = 0
-  const srv = http.createServer((req, res) => void (async () => {
-    const u = new URL(req.url ?? '/', 'http://x')
-    seen.push(`${req.method} ${u.pathname}`)
-    if (req.method === 'GET' && u.pathname === '/watch') {
-      const service = u.searchParams.get('service') ?? ''
-      const waitMs = Number(u.searchParams.get('waitMs') ?? 25_000)
-      const v = await new Promise<object>((r) => {
-        const t = setTimeout(() => r({ changed: false }), Math.min(waitMs, 10_000))
-        const list = waiters.get(service) ?? []
-        waiters.set(service, [
-          ...list,
-          (x) => {
-            clearTimeout(t)
-            r(x)
-          }
-        ])
-      })
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify(v))
-      return
-    }
-    if (req.method === 'POST' && u.pathname === '/notify') {
-      const chunks: Buffer[] = []
-      req.on('data', (c) => chunks.push(c))
-      await new Promise((r) => req.on('end', r))
-      notifies++
-      const { service } = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
-      for (const w of waiters.get(service) ?? []) w({ changed: true })
-      waiters.delete(service)
-      res.writeHead(204)
-      res.end()
-      return
-    }
-    res.writeHead(404)
-    res.end()
-  })())
+  const srv = http.createServer(
+    (req, res) =>
+      void (async () => {
+        const u = new URL(req.url ?? '/', 'http://x')
+        seen.push(`${req.method} ${u.pathname}`)
+        if (req.method === 'GET' && u.pathname === '/watch') {
+          const service = u.searchParams.get('service') ?? ''
+          const waitMs = Number(u.searchParams.get('waitMs') ?? 25_000)
+          const v = await new Promise<object>((r) => {
+            const t = setTimeout(() => r({ changed: false }), Math.min(waitMs, 10_000))
+            const list = waiters.get(service) ?? []
+            waiters.set(service, [
+              ...list,
+              (x) => {
+                clearTimeout(t)
+                r(x)
+              }
+            ])
+          })
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(v))
+          return
+        }
+        if (req.method === 'POST' && u.pathname === '/notify') {
+          const chunks: Buffer[] = []
+          req.on('data', (c) => chunks.push(c))
+          await new Promise((r) => req.on('end', r))
+          notifies++
+          const { service } = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+          for (const w of waiters.get(service) ?? []) w({ changed: true })
+          waiters.delete(service)
+          res.writeHead(204)
+          res.end()
+          return
+        }
+        res.writeHead(404)
+        res.end()
+      })()
+  )
   await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r))
   const { port } = srv.address() as AddressInfo
   return { url: `http://127.0.0.1:${port}`, notifies: () => notifies, seen: () => seen, close: () => new Promise<void>((r) => srv.close(() => r())) }
@@ -503,7 +506,7 @@ const stubShim = async () => {
 
 // ───────────────────────────── speed ─────────────────────────────
 
-test('T1: deal latency distribution — 3 sequential live deals', { timeout: 1_800_000 }, async (t) => {
+void test('T1: deal latency distribution — 3 sequential live deals', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -527,14 +530,14 @@ test('T1: deal latency distribution — 3 sequential live deals', { timeout: 1_8
     results.sort((x, y) => x - y)
     console.log(`    latency: p50=${results[1]}ms max=${results[2]}ms`)
   } finally {
-    await STOP_ALL([b?.rt, s?.rt])
+    await STOP_ALL([b.rt, s.rt])
     await shim.close()
     await f1.close()
     await f2.close()
   }
 })
 
-test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_800_000 }, async (t) => {
+void test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -550,7 +553,7 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_800_00
     for (const [i, w] of (['alice', 'bob'] as const).entries()) buyers.push(await mkagent(`${w}-b${i}`, w, [f1.url, f2.url], logs, dir, undefined, shim.url))
     await warmup([s, ...buyers], logs)
     await drive([s.rt, ...buyers.map((b) => b.rt)], 6)
-    const t0 = Date.now()
+    const _t0 = Date.now()
     const wants = await Promise.all(buyers.map((b) => b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)))
     const all = [s.rt, ...buyers.map((b) => b.rt)]
     const settledFor = async () => (await Promise.all(wants.map((w) => saleFor(s, w.wantId)))).filter((o) => o !== undefined && COMPLETE.has(o.state))
@@ -566,14 +569,14 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_800_00
     assert.equal(settled.length, wants.length)
     console.log(`    throughput: ${wants.length} live deals in ${ms}ms wall`)
   } finally {
-    await STOP_ALL([s?.rt, ...buyers.map((b) => b.rt)])
+    await STOP_ALL([s.rt, ...buyers.map((b) => b.rt)])
     await shim.close()
     await f1.close()
     await f2.close()
   }
 })
 
-test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { timeout: 1_800_000 }, async (t) => {
+void test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const run = async (watch: boolean) => {
@@ -590,7 +593,7 @@ test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { time
       await sellerize(s, 200)
       await drive([b.rt, s.rt], 8)
       const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
-      const t0 = Date.now()
+      const _t0 = Date.now()
       const ms = await until([b.rt, s.rt], 400_000, async () => {
         const bo = await opFor(b, w.wantId)
         const so = await saleFor(s, w.wantId)
@@ -599,7 +602,7 @@ test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { time
       assert.ok(ms > 0, 'deal never completed | ' + logs.slice(-20).join(' | '))
       return { ms, notifies: shim?.notifies() ?? 0 }
     } finally {
-      await STOP_ALL([b?.rt, s?.rt])
+      await STOP_ALL([b.rt, s.rt])
       await shim?.close()
       await f1.close()
       await f2.close()
@@ -611,7 +614,7 @@ test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { time
   assert.ok(watched.notifies > 0, 'shim never notified — publish→wake path did not fire on testnet')
 })
 
-test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly', { timeout: 1_800_000 }, async (t) => {
+void test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   for (const kb of [1, 32]) {
@@ -657,7 +660,7 @@ test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly
         assert.ok(dead, 'oversize envelope did not dead-letter visibly')
       }
     } finally {
-      await STOP_ALL([b?.rt, s?.rt])
+      await STOP_ALL([b.rt, s.rt])
       await f1.close()
       await f2.close()
     }
@@ -666,7 +669,7 @@ test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly
 
 // ───────────────────────────── resilience ─────────────────────────────
 
-test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 1_800_000 }, async (t) => {
+void test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -694,14 +697,14 @@ test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 1_
     })
     assert.ok(ms > 0, 'deal starved without host A | ' + logs.slice(-20).join(' | '))
   } finally {
-    await STOP_ALL([b?.rt, s?.rt])
+    await STOP_ALL([b.rt, s.rt])
     await shim.close()
     await f1.close()
     await f2.close()
   }
 })
 
-test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeout: 1_800_000 }, async (t) => {
+void test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -719,13 +722,13 @@ test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeou
     const ms = (await deal(b, s, logs, 400_000)).ms
     console.log(`    deal under 3s-delayed host: ${ms}ms`)
   } finally {
-    await STOP_ALL([b?.rt, s?.rt])
+    await STOP_ALL([b.rt, s.rt])
     await f1.close()
     await f2.close()
   }
 })
 
-test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (live)', { timeout: 1_800_000 }, async (t) => {
+void test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -758,13 +761,13 @@ test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (
       'divergence never surfaced in logs'
     )
   } finally {
-    await STOP_ALL([b?.rt, s?.rt])
+    await STOP_ALL([b.rt, s.rt])
     await f1.close()
     await f2.close()
   }
 })
 
-test('R4: partition both hosts → deaf window → heal → completes, no double-broadcast (live)', { timeout: 1_800_000 }, async (t) => {
+void test('R4: partition both hosts → deaf window → heal → completes, no double-broadcast (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -800,13 +803,13 @@ test('R4: partition both hosts → deaf window → heal → completes, no double
     const bo = await opFor(b, w.wantId)
     assert.equal((bo!.data as { escrowTxid?: string }).escrowTxid, (mid.data as { escrowTxid?: string }).escrowTxid, 'escrow re-broadcast after heal')
   } finally {
-    await STOP_ALL([b?.rt, s?.rt])
+    await STOP_ALL([b.rt, s.rt])
     await f1.close()
     await f2.close()
   }
 })
 
-test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)', { timeout: 1_800_000 }, async (t) => {
+void test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -838,14 +841,14 @@ test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)',
     const bo = (await buyerOps(b2)).find((o) => o.operationId === opId)
     assert.ok(bo !== undefined && BUYER_DONE.has(bo.state), `op ${opId} ended ${bo?.state}`)
   } finally {
-    await STOP_ALL([b?.rt, b2?.rt, s?.rt])
+    await STOP_ALL([b.rt, b2.rt, s.rt])
     await shim.close()
     await f1.close()
     await f2.close()
   }
 })
 
-test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 1_800_000 }, async (t) => {
+void test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -865,13 +868,13 @@ test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 1
     const dupes = (await buyerOps(b)).filter((o) => (o.data.want as { want?: { wantId?: string } } | undefined)?.want?.wantId === r.wantId)
     assert.equal(dupes.length, 1, 'duplicate outputs spawned extra ops')
   } finally {
-    await STOP_ALL([b?.rt, s?.rt])
+    await STOP_ALL([b.rt, s.rt])
     await f1.close()
     await f2.close()
   }
 })
 
-test('R7: late escrow rejection → funding_failed via txFacts verdict (live)', { timeout: 1_800_000 }, async (t) => {
+void test('R7: late escrow rejection → funding_failed via txFacts verdict (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -906,13 +909,13 @@ test('R7: late escrow rejection → funding_failed via txFacts verdict (live)', 
     await drive([b.rt], 3)
     assert.equal((await opFor(b, w.wantId))!.state, 'funding_failed', 'rejected funding retried itself back to life')
   } finally {
-    await STOP_ALL([b?.rt, s?.rt])
+    await STOP_ALL([b.rt, s.rt])
     await f1.close()
     await f2.close()
   }
 })
 
-test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settlements (live)', { timeout: 1_800_000 }, async (t) => {
+void test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settlements (live)', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -944,7 +947,7 @@ test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settle
     const won = (await Promise.all(buyers.map((b, i) => opFor(b, wants[i].wantId)))).filter((o) => o !== undefined && BUYER_DONE.has(o.state)).length
     console.log(`    race: ${won}/${buyers.length} buyers completed, ${sales.length} settlements`)
   } finally {
-    await STOP_ALL([s?.rt, ...buyers.map((b) => b.rt)])
+    await STOP_ALL([s.rt, ...buyers.map((b) => b.rt)])
     await f1.close()
     await f2.close()
   }
@@ -954,7 +957,7 @@ test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settle
 // gate (absolute height). refundBlocks=1 → one testnet block lapses both
 // rails' dueHeights; both deals run concurrently so a single block covers
 // the refund (escrow) AND the dispute (direct) — ~10-20min total.
-test('R9: timeout truth — escrow refund vs direct dispute on real blocks', { timeout: 1_800_000 }, async (t) => {
+void test('R9: timeout truth — escrow refund vs direct dispute on real blocks', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -1005,7 +1008,7 @@ test('R9: timeout truth — escrow refund vs direct dispute on real blocks', { t
     assert.ok(ms > 0, `timeout truth failed — escrow=${eEnd?.state} direct=${dEnd?.state} | ` + logs.slice(-15).join(' | '))
     console.log(`    R9: escrow→${eEnd!.state} direct→${dEnd!.state} in ${ms}ms`)
   } finally {
-    await STOP_ALL([be?.rt, bd?.rt, s?.rt])
+    await STOP_ALL([be.rt, bd.rt, s.rt])
     await f1.close()
     await f2.close()
   }

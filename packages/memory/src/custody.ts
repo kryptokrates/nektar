@@ -2,7 +2,7 @@
 // provision/fundingStatus) plus the P14 full-mode automata surface (AUT-005).
 import { PrivateKey } from '@bsv/sdk'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
-import { custodySigner, type SignerLike, type SignerWallet } from '@nektar/core'
+import { custodySigner, type SignerLike } from '@nektar/core'
 import type { FundingOut, FundsPurpose } from '@nektar/chain'
 import type { Transaction } from '@bsv/sdk'
 import { MemAnchor } from './anchor.js'
@@ -76,7 +76,7 @@ export abstract class MemCustody extends MemAnchor {
     const owner =
       ownerKey ??
       (this.opts.wallet !== undefined
-        ? custodySigner(this.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: `nektar-automaton:${id}`, counterparty: 'self' })
+        ? custodySigner(this.opts.wallet, { protocolID: [2, 'nektar'], keyID: `nektar-automaton:${id}`, counterparty: 'self' })
         : PrivateKey.fromRandom())
     const ac = new AutomatonChain(def, owner, this.funds, this.fundSigner(), this.chain)
     const h = await ac.deploy()

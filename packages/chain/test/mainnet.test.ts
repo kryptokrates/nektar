@@ -13,16 +13,16 @@ import path from 'node:path'
 // -- recorded fixture helpers --------------------------------------------------
 const stubFetch = (routes: Record<string, { status?: number; body?: any; raw?: string }>) => {
   const calls: string[] = []
-  const f: typeof fetch = async (input: any, init?: any) => {
+  const f: typeof fetch = (input: any, init?: any) => {
     const url = String(input)
     calls.push(`${init?.method ?? 'GET'} ${url}`)
     for (const [k, v] of Object.entries(routes)) {
       if (url.includes(k)) {
         const status = v.status ?? 200
-        return new Response(v.raw ?? JSON.stringify(v.body ?? {}), { status, headers: { 'content-type': 'application/json' } })
+        return Promise.resolve(new Response(v.raw ?? JSON.stringify(v.body ?? {}), { status, headers: { 'content-type': 'application/json' } }))
       }
     }
-    return new Response('not found', { status: 404 })
+    return Promise.resolve(new Response('not found', { status: 404 }))
   }
   ;(f as any).calls = calls
   return f
@@ -32,16 +32,18 @@ const stubFetchHdrs = (
   routes: Record<string, { status?: number; body?: any; raw?: string } | ((n: number) => { status?: number; body?: any; raw?: string })>
 ) => {
   const calls: Array<{ url: string; headers: Record<string, string> }> = []
-  const f: typeof fetch = async (input: any, init?: any) => {
+  const f: typeof fetch = (input: any, init?: any) => {
     const url = String(input)
     calls.push({ url, headers: Object.fromEntries(Object.entries(init?.headers ?? {})) })
     for (const [k, v] of Object.entries(routes)) {
       if (url.includes(k)) {
         const r = typeof v === 'function' ? v(calls.filter((c) => c.url === url).length) : v
-        return new Response(r.raw ?? JSON.stringify(r.body ?? {}), { status: r.status ?? 200, headers: { 'content-type': 'application/json' } })
+        return Promise.resolve(
+          new Response(r.raw ?? JSON.stringify(r.body ?? {}), { status: r.status ?? 200, headers: { 'content-type': 'application/json' } })
+        )
       }
     }
-    return new Response('not found', { status: 404 })
+    return Promise.resolve(new Response('not found', { status: 404 }))
   }
   ;(f as any).calls = calls
   return f
@@ -106,8 +108,8 @@ test('BsvBroadcaster: 503 twice then 202 → success, index never called; networ
   assert.equal((fetchImpl as any).calls.filter((c: any) => c.url === 'http://bcast.example/tx').length, 3, 'two 503 retries then accepted')
   assert.ok(!(fetchImpl as any).calls.some((c: any) => c.url.includes('whatsonchain.example')), 'index never called')
 
-  const fetchImpl2: typeof fetch = async (input: any) => {
-    if (String(input).includes('whatsonchain.example')) return new Response(JSON.stringify({ txid: 'x' }), { status: 200 })
+  const fetchImpl2: typeof fetch = (input: any) => {
+    if (String(input).includes('whatsonchain.example')) return Promise.resolve(new Response(JSON.stringify({ txid: 'x' }), { status: 200 }))
     throw new Error('ECONNREFUSED')
   }
   const b2 = new BsvBroadcaster({ fetchImpl: fetchImpl2, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' })
@@ -152,9 +154,9 @@ test('BsvBroadcaster fanout: every route gets the same bytes + token; first acce
 })
 
 test('BsvBroadcaster fanout: a wire refusal anywhere outranks a bare transport failure', async () => {
-  const fetchImpl: typeof fetch = async (input: any) => {
+  const fetchImpl: typeof fetch = (input: any) => {
     const url = String(input)
-    if (url.includes('arc2.example')) return new Response(JSON.stringify({ txStatus: 'REJECTED', reason: 'double spend' }), { status: 202 })
+    if (url.includes('arc2.example')) return Promise.resolve(new Response(JSON.stringify({ txStatus: 'REJECTED', reason: 'double spend' }), { status: 202 }))
     throw new Error('ECONNREFUSED')
   }
   const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', broadcasterUrls: ['http://arc2.example'] })
@@ -194,17 +196,19 @@ test('fetchBroadcasterFeeRate: /policy 100sat/1000B → 100 sat/kB', async () =>
 
 test('IndexTracker: header cached; 429 retried', async () => {
   let headerCalls = 0
-  const fetchImpl: typeof fetch = async (input: any) => {
+  const fetchImpl: typeof fetch = (input: any) => {
     const url = String(input)
-    if (url.includes('/chain/info')) return new Response(JSON.stringify({ blocks: 850000 }), { status: 200 })
+    if (url.includes('/chain/info')) return Promise.resolve(new Response(JSON.stringify({ blocks: 850000 }), { status: 200 }))
     if (url.includes('/block/height/5')) {
       headerCalls++
-      if (headerCalls === 1) return new Response('slow', { status: 429 })
-      return new Response(JSON.stringify({ hash: 'h5', previousblockhash: 'h4', merkleroot: 'mr', time: 1700000000, bits: '1d00ffff', nonce: 1 }), {
-        status: 200
-      })
+      if (headerCalls === 1) return Promise.resolve(new Response('slow', { status: 429 }))
+      return Promise.resolve(
+        new Response(JSON.stringify({ hash: 'h5', previousblockhash: 'h4', merkleroot: 'mr', time: 1700000000, bits: '1d00ffff', nonce: 1 }), {
+          status: 200
+        })
+      )
     }
-    return new Response('nf', { status: 404 })
+    return Promise.resolve(new Response('nf', { status: 404 }))
   }
   const t = new IndexTracker({ fetchImpl, indexerUrl: 'http://whatsonchain' }, { requirePow: false }) // fixture headers carry no real PoW
   assert.equal(await t.currentHeight(), 850000)
@@ -338,7 +342,7 @@ test('probeTxStatus: definitive answers vs "couldn\'t ask"', async () => {
 })
 
 // -- SpendGuard ----------------------------------------------------------------
-const okBroadcast: Broadcaster = { broadcast: async () => ({ status: 'success', txid: 'x' }) }
+const okBroadcast: Broadcaster = { broadcast: () => Promise.resolve({ status: 'success', txid: 'x' }) }
 
 test('SpendGuard: caps, interval, unknown input, ledger persistence', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'sg-'))

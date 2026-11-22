@@ -36,7 +36,7 @@ const mkFunds = async (db: knex.Knex, txs = new TxStore(), deps: Record<string, 
   await SqlFunds.open(db, txs, { pkhHex: PKH_HEX, log: () => {}, ...deps })
 const close = async (db: knex.Knex) => await db.destroy()
 
-test('SqlFunds: adopt adds live rows; refresh rebuilds the mirror', async () => {
+void test('SqlFunds: adopt adds live rows; refresh rebuilds the mirror', async () => {
   const db = mkDb()
   try {
     const f = await mkFunds(db)
@@ -55,7 +55,7 @@ test('SqlFunds: adopt adds live rows; refresh rebuilds the mirror', async () => 
   }
 })
 
-test('SqlFunds: take honors lease, hintSkip, sats bound and smallest-sufficient', async () => {
+void test('SqlFunds: take honors lease, hintSkip, sats bound and smallest-sufficient', async () => {
   const db = mkDb()
   try {
     const a = fundingTx(700)
@@ -64,12 +64,12 @@ test('SqlFunds: take honors lease, hintSkip, sats bound and smallest-sufficient'
     const txs = new TxStore()
     const f = await mkFunds(db, txs)
     for (const t of [a, b, c]) await f.adopt(t, 0)
-    f.leased = async (txid) => txid === a.id('hex')
+    f.leased = (txid) => txid === a.id('hex')
     const pick = await f.take('deal', 500)
     assert.equal(pick.tx.id('hex'), b.id('hex')) // c too small, a leased → b wins
     const g = await mkFunds(db, txs) // a "restart" shares the persisted tx store
     await g.refresh()
-    g.hintSkip = async (tx) => tx.id('hex') === b.id('hex')
+    g.hintSkip = (tx) => Promise.resolve(tx.id('hex') === b.id('hex'))
     const pick2 = await g.take('deal', 500)
     assert.equal(pick2.tx.id('hex'), a.id('hex')) // b hinted out → a (b reserved by f)
   } finally {
@@ -77,7 +77,7 @@ test('SqlFunds: take honors lease, hintSkip, sats bound and smallest-sufficient'
   }
 })
 
-test('SqlFunds: drop tombstones; adopt respects it; revive lifts it', async () => {
+void test('SqlFunds: drop tombstones; adopt respects it; revive lifts it', async () => {
   const db = mkDb()
   try {
     const a = fundingTx(800)
@@ -98,7 +98,7 @@ test('SqlFunds: drop tombstones; adopt respects it; revive lifts it', async () =
   }
 })
 
-test('SqlFunds: spent() drops inputs and adopts our change; died() frees inputs and drops our outputs', async () => {
+void test('SqlFunds: spent() drops inputs and adopts our change; died() frees inputs and drops our outputs', async () => {
   const db = mkDb()
   try {
     const parent = fundingTx(1000)
@@ -121,7 +121,7 @@ test('SqlFunds: spent() drops inputs and adopts our change; died() frees inputs 
   }
 })
 
-test('SqlFunds: concurrent take() on one coin — exactly one taker wins', async () => {
+void test('SqlFunds: concurrent take() on one coin — exactly one taker wins', async () => {
   const db = mkDb()
   try {
     const a = fundingTx(1000)
@@ -133,13 +133,13 @@ test('SqlFunds: concurrent take() on one coin — exactly one taker wins', async
     assert.equal(won.length, 1)
     assert.equal((won[0] as PromiseFulfilledResult<unknown>).value !== undefined, true)
     assert.equal(lost.length, 1)
-    assert.match(String((lost[0] as PromiseRejectedResult).reason), /no spendable output/)
+    assert.match(String(lost[0].reason), /no spendable output/)
   } finally {
     await close(db)
   }
 })
 
-test('SqlFunds: take reserves until spent or released', async () => {
+void test('SqlFunds: take reserves until spent or released', async () => {
   const db = mkDb()
   try {
     const a = fundingTx(1000)
@@ -160,7 +160,7 @@ test('SqlFunds: take reserves until spent or released', async () => {
   }
 })
 
-test('SqlFunds: crash between take and spent — reopening gives an identical live set', async () => {
+void test('SqlFunds: crash between take and spent — reopening gives an identical live set', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-sqlfunds-'))
   const file = join(dir, 'records.sqlite')
   try {
@@ -188,7 +188,7 @@ test('SqlFunds: crash between take and spent — reopening gives an identical li
   }
 })
 
-test('SqlFunds: tombstone sweep — liveSet positively names a mark to lift', async () => {
+void test('SqlFunds: tombstone sweep — liveSet positively names a mark to lift', async () => {
   const db = mkDb()
   try {
     const a = fundingTx(800)
@@ -202,7 +202,7 @@ test('SqlFunds: tombstone sweep — liveSet positively names a mark to lift', as
     await f.burn(b.id('hex'), 0)
     assert.equal(f.utxos.length, 0)
     // the index names a only — the starve sweep lifts just that mark
-    f.liveSet = async () => new Set([`${a.id('hex')}:0`])
+    f.liveSet = () => Promise.resolve(new Set([`${a.id('hex')}:0`]))
     const pick = await f.take('deal', 800)
     assert.equal(pick.tx.id('hex'), a.id('hex'))
     // b stays tombstoned — a name it doesn't carry cannot lift it
@@ -213,7 +213,7 @@ test('SqlFunds: tombstone sweep — liveSet positively names a mark to lift', as
   }
 })
 
-test('SqlFunds: a live row whose tx is missing still counts in balance()', async () => {
+void test('SqlFunds: a live row whose tx is missing still counts in balance()', async () => {
   const db = mkDb()
   try {
     const a = fundingTx(1000)
@@ -230,7 +230,7 @@ test('SqlFunds: a live row whose tx is missing still counts in balance()', async
   }
 })
 
-test('SqlFunds: a proven tx keeps its merkle path through the book', async () => {
+void test('SqlFunds: a proven tx keeps its merkle path through the book', async () => {
   const db = mkDb()
   try {
     const a = fundingTx(1000)

@@ -45,7 +45,7 @@ export interface StepResult {
 export function step(machine: AnyStateMachine, table: TransitionTable, from: string, event: string, payload: Record<string, unknown> = {}): StepResult {
   const rows = table.transitions.filter((r) => rowSources(r, table.states).includes(from) && r.event === event)
   const snap = machine.resolveState({ value: from, context: {} })
-  const result = transition(machine, snap, { ...payload, type: event } as AnyEventObject)
+  const result = transition(machine, snap, { ...payload, type: event })
   // isUnhandled is the authoritative accepted signal — an unasserted guard is a
   // refused event, never an absorb. Hydrating an unknown persisted value throws.
   if (isUnhandled(snap, result)) return { next: from, intents: [], accepted: false }
@@ -105,7 +105,7 @@ export function buildMachine(table: TransitionTable): AnyStateMachine {
   // is (state, event) → target only. Terminal classification lives in the
   // table's terminal/quiescent/parked fields, enforced by the graph test —
   // a machine-level `final` would freeze late-evidence revival edges.
-  return createMachine(configFromTable(table) as never) as unknown as AnyStateMachine
+  return createMachine(configFromTable(table) as never)
 }
 
 /** Enumerate every concrete (state, event) → target the machine declares — for the diff test. */

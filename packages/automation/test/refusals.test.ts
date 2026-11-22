@@ -17,8 +17,8 @@ const parentOf = (ancestor: Transaction): Transaction => {
   return t
 }
 
-test('refusals: only refusal shapes that name a dead ancestor mark', () => {
-  const r = openRefusals({ fetchTx: async () => undefined })
+void test('refusals: only refusal shapes that name a dead ancestor mark', () => {
+  const r = openRefusals({ fetchTx: () => Promise.resolve(undefined) })
   const dead = 'ab'.repeat(32)
   // Teranode's ERR_TX_CONFLICTING wire text — a double-spend-loser parent
   r.noteRefusal(`utxo ${dead}:0 belongs to a conflicting transaction`)
@@ -48,9 +48,9 @@ test('refusals: only refusal shapes that name a dead ancestor mark', () => {
   r.noteRefusal(undefined)
 })
 
-test('refusals: a mark expires with the refusal epoch', () => {
+void test('refusals: a mark expires with the refusal epoch', () => {
   let now = 1_000_000
-  const r = openRefusals({ fetchTx: async () => undefined, now: () => now })
+  const r = openRefusals({ fetchTx: () => Promise.resolve(undefined), now: () => now })
   const dead = 'ab'.repeat(32)
   r.noteRefusal(`utxo ${dead}:0 belongs to a conflicting transaction`)
   now += REFUSED_MARK_MS - 1
@@ -59,7 +59,7 @@ test('refusals: a mark expires with the refusal epoch', () => {
   assert.equal(r.refused(dead), false, 'expired after the epoch')
 })
 
-test('refusals: parent() marks the subject transitively — with the evidence timestamp', async () => {
+void test('refusals: parent() marks the subject transitively — with the evidence timestamp', async () => {
   let now = 1_000_000
   const dead = new Transaction()
   dead.addOutput({ satoshis: 2_000, lockingScript: lock() })
@@ -69,7 +69,7 @@ test('refusals: parent() marks the subject transitively — with the evidence ti
     [mid.id('hex'), mid],
     [dead.id('hex'), dead]
   ])
-  const r2 = openRefusals({ fetchTx: async (id) => byId.get(id), now: () => now })
+  const r2 = openRefusals({ fetchTx: (id) => Promise.resolve(byId.get(id)), now: () => now })
   r2.noteRefusal(`utxo ${dead.id('hex')}:0 belongs to a conflicting transaction`)
 
   now += 20 * 60_000 // twenty minutes into the mark's epoch
@@ -81,15 +81,15 @@ test('refusals: parent() marks the subject transitively — with the evidence ti
   assert.equal(r2.refused(subject.id('hex')), false, 'the derived mark dies with its evidence')
 })
 
-test('refusals: parent() — direct mark short-circuits; proven and clean pass', async () => {
-  const r = openRefusals({ fetchTx: async () => undefined })
+void test('refusals: parent() — direct mark short-circuits; proven and clean pass', async () => {
+  const r = openRefusals({ fetchTx: () => Promise.resolve(undefined) })
   const dead = new Transaction()
   dead.addOutput({ satoshis: 2_000, lockingScript: lock() })
   r.noteRefusal(`utxo ${dead.id('hex')}:0 belongs to a conflicting transaction`)
   assert.equal(await r.parent(dead), true, 'a directly-refused parent hits without a walk')
 
   const clean = parentOf(dead)
-  const noResolve = openRefusals({ fetchTx: async () => undefined })
+  const noResolve = openRefusals({ fetchTx: () => Promise.resolve(undefined) })
   assert.equal(await noResolve.parent(clean), false, 'nothing marked, nothing dead')
 
   const proven = parentOf(dead)

@@ -286,21 +286,22 @@ export class MemoryTreeLedger implements TreeLedger {
   // free slot key -> lane kind; adopt() writes per-slot kinds, add() the
   // tree's single kind — provisioning makes trees mixed-kind
   private free = new Map<string, string>()
-  async add(tree: Transaction, n: number, kind = 'market'): Promise<void> {
+  add(tree: Transaction, n: number, kind = 'market'): Promise<void> {
     const txid = tree.id('hex')
     this.trees.set(txid, { tree, proven: false, kind, n })
     for (let i = 0; i < n; i++) this.free.set(`${txid}:${i}`, kind)
+    return Promise.resolve()
   }
-  async adopt(tx: Transaction, slots: Array<{ vout: number; kind: string }>): Promise<number> {
+  adopt(tx: Transaction, slots: Array<{ vout: number; kind: string }>): Promise<number> {
     const txid = tx.id('hex')
-    if (this.trees.has(txid)) return 0
+    if (this.trees.has(txid)) return Promise.resolve(0)
     // provision trees minted nothing on this ledger — n:0 keeps stock()'s
     // `taken` (own-kind minted minus own-kind free) out of foreign stock
     this.trees.set(txid, { tree: tx, proven: tx.merklePath !== undefined, kind: PROVISION_KIND, n: 0 })
     for (const s of slots) this.free.set(`${txid}:${s.vout}`, s.kind)
-    return slots.length
+    return Promise.resolve(slots.length)
   }
-  async take(kind = 'market', expectedLockHex?: string): Promise<{ tree: Transaction; vout: number } | undefined> {
+  take(kind = 'market', expectedLockHex?: string): Promise<{ tree: Transaction; vout: number } | undefined> {
     // proven trees first, anchored-unproven as the fallback — the same
     // two tiers the durable ledger's proven=1 query applies before its
     // anchoredKinds fallback; a BUMP-anchored carrier is strictly better
@@ -313,12 +314,12 @@ export class MemoryTreeLedger implements TreeLedger {
         if (slotKind !== kind || !serves(t, kind)) continue
         this.free.delete(k)
         if (expectedLockHex !== undefined && t.tree.outputs[Number(v)]?.lockingScript.toHex() !== expectedLockHex) continue
-        return { tree: ownPath(t.tree), vout: Number(v) }
+        return Promise.resolve({ tree: ownPath(t.tree), vout: Number(v) })
       }
     }
-    return undefined
+    return Promise.resolve(undefined)
   }
-  async markProven(txid: string, merklePath: MerklePath): Promise<void> {
+  markProven(txid: string, merklePath: MerklePath): Promise<void> {
     const t = this.trees.get(txid)
     if (t) {
       t.proven = true
@@ -327,8 +328,9 @@ export class MemoryTreeLedger implements TreeLedger {
       // attached would be refused by hosts for missing source transactions
       for (const i of t.tree.inputs) i.sourceTransaction = undefined
     }
+    return Promise.resolve()
   }
-  async attachParentPath(txid: string, merklePath: MerklePath): Promise<boolean> {
+  attachParentPath(txid: string, merklePath: MerklePath): Promise<boolean> {
     let changed = false
     for (const t of this.trees.values()) {
       if (t.proven) continue
@@ -340,9 +342,9 @@ export class MemoryTreeLedger implements TreeLedger {
         }
       }
     }
-    return changed
+    return Promise.resolve(changed)
   }
-  async unproveFrom(height: number): Promise<string[]> {
+  unproveFrom(height: number): Promise<string[]> {
     const out: string[] = []
     for (const [txid, t] of this.trees) {
       if (t.proven && t.tree.merklePath !== undefined && t.tree.merklePath.blockHeight >= height) {
@@ -355,24 +357,25 @@ export class MemoryTreeLedger implements TreeLedger {
         if (src?.merklePath !== undefined && src.merklePath.blockHeight >= height) delete src.merklePath
       }
     }
-    return out
+    return Promise.resolve(out)
   }
-  async unproven(): Promise<Array<{ txid: string; kind: string }>> {
-    return [...this.trees].filter(([, t]) => !t.proven).map(([id, t]) => ({ txid: id, kind: t.kind }))
+  unproven(): Promise<Array<{ txid: string; kind: string }>> {
+    return Promise.resolve([...this.trees].filter(([, t]) => !t.proven).map(([id, t]) => ({ txid: id, kind: t.kind })))
   }
-  async drop(txid: string): Promise<void> {
+  drop(txid: string): Promise<void> {
     this.trees.delete(txid)
-    for (const k of [...this.free.keys()]) if (k.startsWith(`${txid}:`)) this.free.delete(k)
+    for (const k of this.free.keys()) if (k.startsWith(`${txid}:`)) this.free.delete(k)
+    return Promise.resolve()
   }
-  async remaining(kind = 'market'): Promise<number> {
+  remaining(kind = 'market'): Promise<number> {
     let n = 0
     for (const [k, slotKind] of this.free) {
       const t = this.trees.get(k.split(':')[0])!
       if (slotKind === kind && serves(t, kind)) n++
     }
-    return n
+    return Promise.resolve(n)
   }
-  async stock(kind = 'market'): Promise<{ proven: number; anchored: number; unprovenTrees: number; taken: number }> {
+  stock(kind = 'market'): Promise<{ proven: number; anchored: number; unprovenTrees: number; taken: number }> {
     let proven = 0,
       anchored = 0,
       minted = 0,
@@ -396,7 +399,7 @@ export class MemoryTreeLedger implements TreeLedger {
     // `taken` is own-kind consumed: slots this ledger minted minus the ones
     // still free on its own trees — adopted provision slots are foreign
     // stock and must neither inflate (change outputs) nor underflow it
-    return { proven, anchored, unprovenTrees: waiting.size, taken: minted - freeMine }
+    return Promise.resolve({ proven, anchored, unprovenTrees: waiting.size, taken: minted - freeMine })
   }
 }
 
@@ -465,7 +468,7 @@ export class KnexTreeLedger implements TreeLedger {
       const rows = slots.map((s) => ({ key: `${txid}:${s.vout}`, txid, vout: s.vout, kind: s.kind }))
       if (rows.length) await trx('bstack_tree_outputs').insert(rows).onConflict('key').ignore()
     })
-    return slots.length
+    return Promise.resolve(slots.length)
   }
   async take(kind = 'market', expectedLockHex?: string): Promise<{ tree: Transaction; vout: number } | undefined> {
     await this.ensure()

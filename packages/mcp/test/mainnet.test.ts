@@ -7,7 +7,7 @@ import { writeKeyFile, readKeyFile, isEncrypted, KeystoreError } from '../src/ke
 import { configFromEnv } from '../src/runtime.js'
 import { PrivateKey, P2PKH } from '@bsv/sdk'
 
-test('keystore: round trip / wrong passphrase / tampered ct', () => {
+void test('keystore: round trip / wrong passphrase / tampered ct', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'ks-'))
   const f = path.join(dir, 'k.json')
   writeKeyFile(f, '{"wif":"L5"}', 'hunter2')
@@ -28,20 +28,20 @@ test('keystore: round trip / wrong passphrase / tampered ct', () => {
 
 const env = (e: Record<string, string>) => ({ NEKTAR_DATA_DIR: mkdtempSync(path.join(tmpdir(), 'rt-')), ...e }) as NodeJS.ProcessEnv
 
-test('runtime main gate: confirm flag required', () => {
+void test('runtime main gate: confirm flag required', () => {
   assert.throws(() => configFromEnv(env({ NEKTAR_NETWORK: 'main', NEKTAR_KEY_PASSPHRASE: 'x' })), /I_UNDERSTAND/)
   const cfg = configFromEnv(env({ NEKTAR_NETWORK: 'main', NEKTAR_KEY_PASSPHRASE: 'x', NEKTAR_MAINNET_CONFIRM: 'I_UNDERSTAND' }))
   assert.equal(cfg.main?.maxFeePerTx, 1000)
-  assert.equal(cfg.main?.maxSpendPerDay, 20_000)
-  assert.equal(cfg.main?.minBroadcastIntervalMs, 250)
+  assert.equal(cfg.main.maxSpendPerDay, 20_000)
+  assert.equal(cfg.main.minBroadcastIntervalMs, 250)
   assert.equal(cfg.confirmEveryMs, 60_000)
 })
 
-test('runtime testnet: no confirm flag required; testnet-encoded fee address', () => {
+void test('runtime testnet: no confirm flag required; testnet-encoded fee address', () => {
   const cfg = configFromEnv(env({ NEKTAR_NETWORK: 'testnet', NEKTAR_KEY_PASSPHRASE: 'x' }))
   assert.equal(cfg.main?.broadcasterUrl, 'https://arcade-v2-testnet-us-1.bsvblockchain.tech')
-  assert.equal(cfg.main?.indexerUrl, 'https://test.bananablocks.com/api/v1')
-  assert.equal(cfg.main?.feeRateSatPerKb, 1)
+  assert.equal(cfg.main.indexerUrl, 'https://test.bananablocks.com/api/v1')
+  assert.equal(cfg.main.feeRateSatPerKb, 1)
   assert.equal(cfg.confirmEveryMs, 30_000)
   // testnet address encodes with testnet prefix (m/n…), mainnet with 1…
   const k = PrivateKey.fromRandom()
@@ -53,7 +53,7 @@ test('runtime testnet: no confirm flag required; testnet-encoded fee address', (
   assert.equal(s1.toHex(), s2.toHex(), 'PKH lock is encoding-independent')
 })
 
-test('runtime main: refuses without passphrase / with plaintext keys.json', async (t) => {
+void test('runtime main: refuses without passphrase / with plaintext keys.json', async (_t) => {
   const { openRuntime } = await import('../src/runtime.js')
   const base = { NEKTAR_NETWORK: 'main', NEKTAR_MAINNET_CONFIRM: 'I_UNDERSTAND' }
   // no passphrase

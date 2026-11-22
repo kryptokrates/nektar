@@ -147,7 +147,7 @@ export class CustodyOps {
     const utxos = await this.deps.funds.outs()
     return {
       address: await this.deps.funds.address(),
-      balanceSats: utxos.reduce((s, u) => s + (u.satoshis ?? 0), 0),
+      balanceSats: utxos.reduce((s, u) => s + u.satoshis, 0),
       utxos: utxos.length,
       funded: utxos.length > 0
     }

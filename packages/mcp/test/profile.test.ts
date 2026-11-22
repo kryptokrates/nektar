@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { testWorld, testChain, testFunder, type TestFunder, type TestChain } from '@nektar/chain'
+import { testWorld, testChain, testFunder, type TestChain } from '@nektar/chain'
 import { minihost } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'
 import { callTool, visibleTools } from '../src/server.js'
@@ -68,9 +68,9 @@ const trackerFor = (chain: TestChain) => ({
 })
 /** used market funding slots = minted outputs − free remaining — the
  *  ledger's own `taken` counter via laneStock, not a table read */
-const usedMarketSlots = async (rt: Automation): Promise<number> => (await rt.laneStock()).market?.taken ?? 0
+const usedMarketSlots = async (rt: Automation): Promise<number> => (await rt.laneStock()).market.taken
 
-test('profile: agent lists exactly the ten agent tools; operator lists all', async () => {
+void test('profile: agent lists exactly the ten agent tools; operator lists all', async () => {
   const prev = process.env.NEKTAR_TOOL_PROFILE
   try {
     delete process.env.NEKTAR_TOOL_PROFILE
@@ -89,7 +89,7 @@ test('profile: agent lists exactly the ten agent tools; operator lists all', asy
   }
 })
 
-test('profile: an operator-only tool is refused over HTTP and MCP in agent profile, allowed in operator profile', async (t) => {
+void test('profile: an operator-only tool is refused over HTTP and MCP in agent profile, allowed in operator profile', async (t) => {
   const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w
@@ -128,7 +128,7 @@ test('profile: an operator-only tool is refused over HTTP and MCP in agent profi
   }
 })
 
-test('profile: want refuses zero or several buyer policies; exactly one publishes', async (t) => {
+void test('profile: want refuses zero or several buyer policies; exactly one publishes', async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
   const h = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
@@ -169,7 +169,7 @@ test('profile: want refuses zero or several buyer policies; exactly one publishe
   }
 })
 
-test('profile: sell → want → deals drives a full deal; fund reports slot counts', { timeout: 300_000 }, async (t) => {
+void test('profile: sell → want → deals drives a full deal; fund reports slot counts', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
   const office = 'nektar_abcdefghij'

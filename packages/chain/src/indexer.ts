@@ -117,7 +117,7 @@ export function indexFailover(urls: string[], o?: Omit<IndexOpts, 'url'>): Chain
     const kind = o?.kind ?? guessIndexKind(url)
     return kind === 'woc' ? new WocIndex({ ...o, url }) : new BananaIndex({ ...o, url })
   })
-  const base: ChainIndex = raw.length === 1 ? raw[0]! : new FailoverIndex(raw)
+  const base: ChainIndex = raw.length === 1 ? raw[0] : new FailoverIndex(raw)
   return o?.cacheTtlMs === 0 ? base : new CachingIndex(base, o?.cacheTtlMs ?? 5_000)
 }
 

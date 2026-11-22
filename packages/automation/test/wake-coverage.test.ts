@@ -30,7 +30,7 @@ const srcFiles = (dir = srcDir): string[] =>
     e.isDirectory() ? srcFiles(join(dir, e.name)) : e.name.endsWith('.ts') || e.name.endsWith('.mjs') ? [join(dir, e.name)] : []
   )
 
-test('every cadence service declares its wake source', () => {
+void test('every cadence service declares its wake source', () => {
   // the checked-in wake map — the executor plane's recurring work. Each
   // self-arming tick names the producer signal(s) that fire it early, or
   // classifies 'probe-tier'/'floor-only' deliberately
@@ -46,11 +46,11 @@ test('every cadence service declares its wake source', () => {
   }
   const found = new Set<string>()
   for (const f of srcFiles())
-    for (const m of read(f).matchAll(/cronObject\(\s*(?:EXEC_SVC\.(\w+)|'([^']+)')/g)) found.add(m[1] !== undefined ? `nektar-${m[1]}` : m[2]!)
+    for (const m of read(f).matchAll(/cronObject\(\s*(?:EXEC_SVC\.(\w+)|'([^']+)')/g)) found.add(m[1] !== undefined ? `nektar-${m[1]}` : m[2])
   for (const name of found) assert.ok(WAKE_MAP[name] !== undefined, `cadence service '${name}' has no wake-map entry — name its wake source or classify it`)
 })
 
-test('every wait primitive site is classified — the census sees all wait classes', () => {
+void test('every wait primitive site is classified — the census sees all wait classes', () => {
   // setInterval is only ONE wait class. A wait primitive the census can't
   // see is a wait that lands undocumented: setTimeout sleeps, Promise.race
   // abandonments, AbortSignal.timeout dead-man switches, sleep() loops.
@@ -112,7 +112,7 @@ test('every wait primitive site is classified — the census sees all wait class
     }
 })
 
-test('no raw setInterval outside the classified floors', () => {
+void test('no raw setInterval outside the classified floors', () => {
   // setInterval is the poll primitive — every site must be a named floor or
   // liveness mechanism. Recurring work that waits on a producer belongs on
   // an executor send/call (delayed self-arm or keyed invocation) or a push hook instead.
@@ -146,7 +146,7 @@ test('no raw setInterval outside the classified floors', () => {
     }
 })
 
-test('store.commit hooks fire exactly where work lands', async (t) => {
+void test('store.commit hooks fire exactly where work lands', async (t) => {
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
   const store = new AutomationStore(kx)
   await store.init()
@@ -294,7 +294,7 @@ test('store.commit hooks fire exactly where work lands', async (t) => {
   })
 })
 
-test('a wedged run() link is detected and named — the bound resolves the wait, the detector catches the work', async () => {
+void test('a wedged run() link is detected and named — the bound resolves the wait, the detector catches the work', async () => {
   // ev/abandon-holds-resource: Promise.race abandons the WAIT, never the
   // work — a hung link keeps the serialized chain forever. The hold
   // detector must fire once, naming the holder so the orphan is findable.
@@ -319,18 +319,18 @@ test('a wedged run() link is detected and named — the bound resolves the wait,
   await new Promise((r) => setImmediate(r))
   // a queued link joining after the hold bound sees the holder's name
   now += WAITS.runHold.ms + 1
-  void eng.expose(async () => undefined, 'victim').catch(() => undefined)
+  void eng.expose(() => Promise.resolve(undefined), 'victim').catch(() => Promise.resolve(undefined))
   await new Promise((r) => setImmediate(r))
   assert.equal(logs.length, 1)
   assert.match(logs[0], /held .* by 'wedged-leg'/, `the log must name the holder: ${logs[0]}`)
   // once per link — a third caller doesn't re-warn for the same head
-  void eng.expose(async () => undefined, 'victim2').catch(() => undefined)
+  void eng.expose(() => Promise.resolve(undefined), 'victim2').catch(() => Promise.resolve(undefined))
   await new Promise((r) => setImmediate(r))
   assert.equal(logs.length, 1)
   void hang
 })
 
-test('runtime wires the hooks with the busy gate and push clears the ledger throttle', () => {
+void test('runtime wires the hooks with the busy gate and push clears the ledger throttle', () => {
   // source contract — the wiring is one function over two seams; the
   // assertions pin the semantics the hooks exist for (no wheel needed)
   const rt = read(join(srcDir, 'runtime.ts'))
@@ -352,7 +352,7 @@ test('runtime wires the hooks with the busy gate and push clears the ledger thro
   assert.match(rt, /Math\.min\(WAITS\.dealsBound\.ms,\s*passUntil/, 'a leg bound is min(leg, pass-remaining), never a fresh budget')
 })
 
-test('the leg context is ambient — spawned work detaches, manual threading is gone', () => {
+void test('the leg context is ambient — spawned work detaches, manual threading is gone', () => {
   // the source contract for the AsyncLocalStorage seam: deadline() owns the
   // ambient leg signal; inner IO reads it (ioSignal/nap/currentSignal);
   // spawned fire-and-forget work (post-commit hooks, wheel jobs, emitter

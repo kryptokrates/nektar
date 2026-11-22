@@ -11,7 +11,7 @@ export const handlers: Record<string, ToolHandler> = {
     const fetch: import('@nektar/reasoning').FragmentFetch = async (ref) => {
       const r = await mem.recall(ref.shard, { seq: ref.seq })
       const it = r.items[0]
-      return { verified: !!it && !it.unverifiable, text: it?.text }
+      return { verified: !!it && !it.unverifiable, text: it.text }
     }
     // private shards (remember …, private:true): a plain cite leaks the shard
     // name into the public receipt — the record must be cited via a ZK
@@ -81,7 +81,7 @@ export const handlers: Record<string, ToolHandler> = {
     // the anchored record.
     const refs: any[] = []
     for (const c of report.kept)
-      for (const r of c.cites ?? []) {
+      for (const r of c.cites) {
         refs.push(
           mem.shardPrivate(r.shard)
             ? {

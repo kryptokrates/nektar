@@ -215,7 +215,7 @@ async function checkClaim(entry) {
   // continuation tracking: the challenged claim lives on as the challenge
   // tx's output 0 — register it so the watcher keeps following the bisection
   // game instead of losing the covenant at its first spend
-  if (res?.txid) registerClaim(cfg.claimsFile, { txid: res.txid, vout: 0 })
+  if (res.txid) registerClaim(cfg.claimsFile, { txid: res.txid, vout: 0 })
 }
 
 const inconclusiveStreaks = new Map() // txid → consecutive inconclusive verifications
@@ -232,7 +232,7 @@ async function tick() {
       try {
         await checkClaim(e)
       } catch (err) {
-        console.log(`  ${e.txid?.slice(0, 8)}:${e.vout} — error: ${err.message.slice(0, 200)}`)
+        console.log(`  ${e.txid.slice(0, 8)}:${e.vout} — error: ${err.message.slice(0, 200)}`)
       }
     }
   } finally {

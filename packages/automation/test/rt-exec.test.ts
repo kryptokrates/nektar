@@ -31,12 +31,13 @@ async function prepared(store: AutomationStore, actionId: string) {
   return (await store.walletTx({ actionId }))!
 }
 
-test('Dispatcher: call dispatches to the registered handler; send fires it async', async () => {
+void test('Dispatcher: call dispatches to the registered handler; send fires it async', async () => {
   const ex = new Dispatcher()
   let sent: unknown
-  ex.register('svc', 'call-me', async (arg, k) => ({ arg, k }))
-  ex.register('svc', 'fire-me', async (arg) => {
+  ex.register('svc', 'call-me', (arg, k) => Promise.resolve({ arg, k }))
+  ex.register('svc', 'fire-me', (arg) => {
     sent = arg
+    return Promise.resolve()
   })
   const r = await ex.call<{ arg: unknown; k: unknown }>({ service: 'svc', handler: 'call-me', key: 'k1' }, { n: 1 })
   assert.deepEqual(r, { arg: { n: 1 }, k: 'k1' })
@@ -44,14 +45,15 @@ test('Dispatcher: call dispatches to the registered handler; send fires it async
   await new Promise((res) => setImmediate(res))
   assert.deepEqual(sent, { n: 2 })
   await assert.rejects(() => ex.call({ service: 'svc', handler: 'missing' }, null), /no handler/)
-  ex.close()
+  void ex.close()
 })
 
-test('Dispatcher: delayMs past the int32 timer ceiling clamps, never fires early', async () => {
+void test('Dispatcher: delayMs past the int32 timer ceiling clamps, never fires early', async () => {
   const ex = new Dispatcher()
   let fired = false
-  ex.register('svc', 'due', async () => {
+  ex.register('svc', 'due', () => {
     fired = true
+    return Promise.resolve()
   })
   // the refund_pending residence bound (180d) overflows setTimeout's int32
   // delay to 1ms — the arm must clamp to the platform ceiling instead of
@@ -59,15 +61,15 @@ test('Dispatcher: delayMs past the int32 timer ceiling clamps, never fires early
   await ex.send({ service: 'svc', handler: 'due' }, {}, { delayMs: 180 * 86_400_000 })
   await new Promise((res) => setTimeout(res, 50))
   assert.equal(fired, false)
-  ex.close()
+  void ex.close()
 })
 
-test('RestateExecutor: wire format is /restate/{call,send}/ paths with delay + idempotency-key', async () => {
+void test('RestateExecutor: wire format is /restate/{call,send}/ paths with delay + idempotency-key', async () => {
   const seen: Array<{ url: string; headers: Record<string, string>; body: string }> = []
   const realFetch = globalThis.fetch
-  globalThis.fetch = (async (url: unknown, init: { headers?: Record<string, string>; body?: string }) => {
+  globalThis.fetch = ((url: unknown, init: { headers?: Record<string, string>; body?: string }) => {
     seen.push({ url: String(url), headers: init?.headers ?? {}, body: init?.body ?? '' })
-    return new Response('{"accepted":true}', { status: 200, headers: { 'content-type': 'application/json' } })
+    return Promise.resolve(new Response('{"accepted":true}', { status: 200, headers: { 'content-type': 'application/json' } }))
   }) as typeof fetch
   try {
     const ex = new RestateExecutor('http://ingress.test:8080')
@@ -83,7 +85,7 @@ test('RestateExecutor: wire format is /restate/{call,send}/ paths with delay + i
   }
 })
 
-test('txEmit: same-key scope is emitTxEvent verbatim; otherwise the call routes through the nektar-tx object', async () => {
+void test('txEmit: same-key scope is emitTxEvent verbatim; otherwise the call routes through the nektar-tx object', async () => {
   const { kx, store } = await open()
   try {
     // the verbatim commit path — what same-key emits inside a handler run
@@ -101,13 +103,13 @@ test('txEmit: same-key scope is emitTxEvent verbatim; otherwise the call routes 
     assert.equal(routed.accepted, true)
     assert.equal(routed.next, 'submitted')
     assert.equal((await store.walletTx({ actionId: 'a:routed' }))!.state, 'submitted')
-    ex.close()
+    void ex.close()
   } finally {
     await kx.destroy()
   }
 })
 
-test('executor(): always the shared RestateExecutor; setExecutor repoints the ambient seam', () => {
+void test('executor(): always the shared RestateExecutor; setExecutor repoints the ambient seam', () => {
   const e = executor()
   assert.ok(e instanceof RestateExecutor)
   // the singleton: setExecutor is the test seam, executor() the default

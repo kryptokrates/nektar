@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { testWorld, testChain, testFunder, type TestFunder } from '@nektar/chain'
+import { testChain, testFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { visibleTools, callTool } from '../src/server.js'
 
@@ -19,7 +19,7 @@ async function setup(t: { skip: (m?: string) => void }) {
   return { chain, seller: await mk(), buyer: await mk(), mk }
 }
 
-test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is set', async (t) => {
+void test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is set', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { seller } = _w
@@ -41,7 +41,7 @@ test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is s
   }
 })
 
-test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claims', async (t) => {
+void test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claims', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const _w = await setup(t)
@@ -74,7 +74,7 @@ test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claim
     assert.equal(done.accepted, true, `buy accepted: ${done.reason ?? ''}`)
     assert.equal(done.sellerSats, 3_000)
     // 4. buyer claims from the real buy tx
-    const tx = ( chain.getTx(done.txid))!
+    const tx = chain.getTx(done.txid)!
     const claim = await callTool(buyer, 'sale', { op: 'claim', txHex: tx.toHex(), hWrapped: offer.cfg.hWrapped, sellerPub })
     assert.equal(claim.mode, 'private')
     assert.equal(claim.valueHex, VALUE.toString('hex'), 'unwrapped payload round-trips')
@@ -85,7 +85,7 @@ test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claim
   }
 })
 
-test('paid disclosure: depositor refunds an unrevealed escrow after deadline', async (t) => {
+void test('paid disclosure: depositor refunds an unrevealed escrow after deadline', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const _w = await setup(t)
@@ -115,7 +115,7 @@ test('paid disclosure: depositor refunds an unrevealed escrow after deadline', a
   }
 })
 
-test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; claim verifies it + provenance σ', async (t) => {
+void test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; claim verifies it + provenance σ', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const _w = await setup(t)
@@ -143,7 +143,7 @@ test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; cl
     })
     const done = await callTool(seller, 'sale', { op: 'complete', cfg: esc.escrow, utxo: esc.utxo, wrapped: offer.wrapped, changeSats: 490 })
     assert.equal(done.accepted, true, `buy accepted: ${done.reason ?? ''}`)
-    const tx = (await chain.getTx(done.txid))!
+    const tx = chain.getTx(done.txid)!
     const claim = await callTool(buyer, 'sale', {
       op: 'claim',
       txHex: tx.toHex(),
@@ -169,7 +169,7 @@ test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; cl
   }
 })
 
-test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape); buyer decrypts + verifies', async (t) => {
+void test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape); buyer decrypts + verifies', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const _w = await setup(t)
@@ -192,7 +192,7 @@ test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape)
     })
     const done = await callTool(seller, 'sale', { op: 'complete', cfg: esc.escrow, utxo: esc.utxo, wrapped: offer.wrapped, changeSats: 490 })
     assert.equal(done.accepted, true, `buy accepted: ${done.reason ?? ''}`)
-    const tx = (await chain.getTx(done.txid))!
+    const tx = chain.getTx(done.txid)!
     const claim = await callTool(buyer, 'sale', {
       op: 'claim',
       txHex: tx.toHex(),
@@ -209,7 +209,7 @@ test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape)
   }
 })
 
-test('GOAL-v8 D9/D10: expired offers + past-deadline escrows are refused before funding', async (t) => {
+void test('GOAL-v8 D9/D10: expired offers + past-deadline escrows are refused before funding', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const _w = await setup(t)

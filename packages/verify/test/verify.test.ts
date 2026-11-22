@@ -128,7 +128,7 @@ test('verify: odd-batch duplicate-last-leaf claim rejected', async (t) => {
   const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain: chain2, funder: f2 } = w
-  chain2.mine(1)
+  void chain2.mine(1)
   const { PrivateKey: PK } = await import('@bsv/sdk')
   const { AnchorChain: AC } = await import('@nektar/anchor')
   const { merkleProof: mp, merkleRoot: mr, computeLeaf: cl } = await import('@nektar/core')
@@ -136,7 +136,7 @@ test('verify: odd-batch duplicate-last-leaf claim rejected', async (t) => {
   const leaves = ['a', 'b', 'c'].map((s) => cl({ d: utf8(s), p: { source: 'm', time: 1, signature: new Uint8Array(0), modelId: 'm' } }))
   const R = mr(leaves)
   const g = await ac.anchor(3, R)
-  chain2.mine(1)
+  void chain2.mine(1)
   const b = buildProofBundle({
     shard: 'odd',
     leaf: leaves[2],

@@ -22,7 +22,7 @@ export function wrapBroadcast(
   /** the caller's executor — absent = the ambient restate ingress */
   exec?: Executor
 ): (tx: Transaction) => Promise<BroadcastResult> {
-  const wallet = new WalletCoordinator(store, { broadcast: inner, exec })
+  const _wallet = new WalletCoordinator(store, { broadcast: inner, exec })
   return async (tx) => {
     const txid = tx.id('hex')
     const actionId = `owner:${txid}`

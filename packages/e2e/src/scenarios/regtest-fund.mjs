@@ -95,7 +95,7 @@ while (final.length > 1) {
   final = next
 }
 const treasury = final[0]
-if (!treasury || treasury.satoshis < 1_000_000) throw new Error(`treasury too small: ${treasury?.satoshis}`)
+if (!treasury || treasury.satoshis < 1_000_000) throw new Error(`treasury too small: ${treasury.satoshis}`)
 const file = env.NEKTAR_TREASURY_FILE
 mkdirSync(dirname(file), { recursive: true })
 // preserve the target file's namespace tag (or NEKTAR_TREASURY_NS when seeding

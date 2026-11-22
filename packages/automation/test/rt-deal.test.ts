@@ -30,16 +30,16 @@ async function open(now?: () => number) {
 function deps(store: AutomationStore, extra: Partial<MarketDeps> = {}): MarketDeps {
   return {
     store,
-    call: async () => ({}),
+    call: () => Promise.resolve({}),
     memory: {} as never,
     key,
     network: 'regtest',
-    height: async () => 1,
-    fetchTx: async () => undefined,
+    height: () => Promise.resolve(1),
+    fetchTx: () => Promise.resolve(undefined),
     transport: {} as never,
     ai: {} as never,
     ...extra
-  } as MarketDeps
+  }
 }
 
 const policy = (): AutomationPolicy => ({
@@ -68,13 +68,13 @@ const policy = (): AutomationPolicy => ({
   sandbox: { mode: 'sandbox-only' }
 })
 
-test('tick under an executor fans advance out per op key — the leg leaves the mutex', async () => {
+void test('tick under an executor fans advance out per op key — the leg leaves the mutex', async () => {
   const { kx, store } = await open()
   const ex = new Dispatcher()
   const ran: string[] = []
   try {
     wireDeal(ex, {
-      advanceOp: async (id) => (ran.push(id), true),
+      advanceOp: (id) => Promise.resolve((ran.push(id), true)),
       inboxEvent: async () => {},
       reconcileOp: async () => {},
       log: () => {}
@@ -83,7 +83,7 @@ test('tick under an executor fans advance out per op key — the leg leaves the 
     wireDealfan(ex, {
       pendingInbox: () => store.pendingInbox(),
       liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => ({ operationId: o.operationId, wantId: opWantId(o) })),
-      reconcileOps: async () => [],
+      reconcileOps: () => Promise.resolve([]),
       ceilingMs: () => 60_000,
       log: () => {}
     })
@@ -99,12 +99,12 @@ test('tick under an executor fans advance out per op key — the leg leaves the 
     assert.deepEqual([...ran].sort(), ids)
   } finally {
     setExecutor(undefined)
-    ex.close()
+    void ex.close()
     await kx.destroy()
   }
 })
 
-test('advanceOp: terminal or missing ops are no-ops; a throwing leg stamps tick_error through the shared wrapper', async () => {
+void test('advanceOp: terminal or missing ops are no-ops; a throwing leg stamps tick_error through the shared wrapper', async () => {
   const { kx, store } = await open()
   try {
     const hash = await store.approvePolicy(policy(), 'test')
@@ -123,7 +123,7 @@ test('advanceOp: terminal or missing ops are no-ops; a throwing leg stamps tick_
     assert.equal(await engine.advanceOp(operation.operationId), true)
     const cur = await store.operation(operation.operationId)
     assert.equal(cur?.state, 'selected')
-    assert.ok(cur?.lastError?.length, 'the throwing leg left its error label')
+    assert.ok(cur.lastError?.length, 'the throwing leg left its error label')
 
     // terminal + missing are refused before the leg runs
     const { operation: done } = await store.createOperation({
@@ -142,14 +142,14 @@ test('advanceOp: terminal or missing ops are no-ops; a throwing leg stamps tick_
   }
 })
 
-test('deal.advance + deal.due route their key to advanceOp — deadline arm and tick share one leg', async () => {
+void test('deal.advance + deal.due route their key to advanceOp — deadline arm and tick share one leg', async () => {
   const ex = new Dispatcher()
   const calls: Array<{ handler: string; key: string }> = []
   try {
     const mk = (handler: string) =>
-      ex.register(EXEC_SVC.deal, handler, async (_arg, key) => {
+      ex.register(EXEC_SVC.deal, handler, (_arg, key) => {
         calls.push({ handler, key: key ?? '' })
-        return { ran: true }
+        return Promise.resolve({ ran: true })
       })
     mk('advance')
     mk('due')
@@ -161,6 +161,6 @@ test('deal.advance + deal.due route their key to advanceOp — deadline arm and 
       { handler: 'due', key: 'op:b' }
     ])
   } finally {
-    ex.close()
+    void ex.close()
   }
 })

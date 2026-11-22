@@ -32,7 +32,7 @@ export class KeyOps {
    *  when the instance has no wallet custody. */
   walletKeySigner(keyID: string): DigestSigner {
     if (this.deps.opts.wallet === undefined) throw new Error('walletKeySigner requires wallet custody (NEKTAR_WALLET)')
-    return custodySigner(this.deps.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID, counterparty: 'self' })
+    return custodySigner(this.deps.opts.wallet, { protocolID: [2, 'nektar'], keyID, counterparty: 'self' })
   }
 
   shardKey(shard: string): SignerLike {
@@ -44,7 +44,7 @@ export class KeyOps {
       opts.shardKeys.set(
         shard,
         opts.wallet !== undefined
-          ? custodySigner(opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: `nektar-shard:${shard}`, counterparty: 'self' })
+          ? custodySigner(opts.wallet, { protocolID: [2, 'nektar'], keyID: `nektar-shard:${shard}`, counterparty: 'self' })
           : PrivateKey.fromRandom()
       )
     }
@@ -62,7 +62,7 @@ export class KeyOps {
   /** the operator signing surface — the fund key when held, otherwise the
    *  wallet's identity key. Every legacy `.sign()` site routes here. */
   operatorSigner(): DigestSigner {
-    return this.deps.opts.wallet !== undefined ? custodySigner(this.deps.opts.wallet as SignerWallet, { identityKey: true }) : this.fundSigner()
+    return this.deps.opts.wallet !== undefined ? custodySigner(this.deps.opts.wallet, { identityKey: true }) : this.fundSigner()
   }
   /** funding-signer — P2PKH inputs, covenant funding calls, change output
    *  derivation. Toolbox mode: keyDeriver root key (exact legacy custody —

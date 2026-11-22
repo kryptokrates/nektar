@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { parseProgram } from '@nektar/datalog'
 import { PolicyDAG } from '@nektar/graph'
 import { encodeZkder } from '@nektar/zk'
@@ -49,7 +49,7 @@ const seedQuery: SecurityStateStore = {
   save: () => {}
 }
 
-test('STARK derivation verifies against the anchored dagroot record + issued queryId', async (t) => {
+void test('STARK derivation verifies against the anchored dagroot record + issued queryId', async (t) => {
   const d = dag()
   const root = Buffer.from(d.policyRoot()).toString('hex')
   assert.equal(root, fx.journal.policyRoot, 'test DAG must reproduce the fixture policy root')
@@ -70,7 +70,7 @@ test('STARK derivation verifies against the anchored dagroot record + issued que
   assert.match(String(replay.reason), /already used|not issued/)
 })
 
-test('STARK derivation NEGATIVES: unanchored root, mismatch, unissued query', async (t) => {
+void test('STARK derivation NEGATIVES: unanchored root, mismatch, unissued query', async (t) => {
   const d = dag()
   // 1. dagroot record exists but is NOT anchored → no trusted root
   const w1 = await world(t, { policyDag: d, securityStore: seedQuery })
@@ -97,7 +97,7 @@ test('STARK derivation NEGATIVES: unanchored root, mismatch, unissued query', as
   assert.match(String(r3.reason), /queryId/)
 })
 
-test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own derivation', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
+void test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own derivation', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
   const d = dag()
   const _w = await world(t, { policyDag: d })
   if (_w === undefined) return

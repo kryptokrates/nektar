@@ -21,14 +21,14 @@ const FINDING =
   'libfoo 3.0 renamed connect() to open().\n```nektar-patch\n{"edits":[{"file":"src/app.js","find":"libfoo.connect(","replace":"libfoo.open("}]}\n```'
 const good = parsePatch(FINDING)!
 
-test('sandbox: a purchased finding parses into a bounded patch proposal', () => {
+void test('sandbox: a purchased finding parses into a bounded patch proposal', () => {
   assert.deepEqual(good, { edits: [{ file: 'src/app.js', find: 'libfoo.connect(', replace: 'libfoo.open(' }] })
   assert.equal(parsePatch('no patch here'), undefined)
   assert.equal(parsePatch('```nektar-patch\nnot json\n```'), undefined)
   assert.equal(validatePatch(spec, good), undefined)
 })
 
-test('sandbox: traversal, protected files, test-oracle edits and oversized patches are refused', () => {
+void test('sandbox: traversal, protected files, test-oracle edits and oversized patches are refused', () => {
   const e = (file: string, replace = 'x') => ({ edits: [{ file, find: 'a', replace }] })
   for (const file of [
     '../outside.js',
@@ -51,14 +51,14 @@ test('sandbox: traversal, protected files, test-oracle edits and oversized patch
   assert.match(validatePatch(spec, { edits: [{ file: 'src/app.js', find: '', replace: 'x' }] })!, /malformed/)
 })
 
-test('sandbox: without real isolation the evaluation is BLOCKED — never run on the host', async (t) => {
+void test('sandbox: without real isolation the evaluation is BLOCKED — never run on the host', async (_t) => {
   let ran = false
   const none: IsolationBackend = {
     name: 'absent',
-    available: async () => false,
-    run: async () => {
+    available: () => Promise.resolve(false),
+    run: () => {
       ran = true
-      return { exitCode: 0, timedOut: false, outputTail: '' }
+      return Promise.resolve({ exitCode: 0, timedOut: false, outputTail: '' })
     }
   }
   const r = await evaluatePatch(spec, good, none)
@@ -70,14 +70,14 @@ test('sandbox: without real isolation the evaluation is BLOCKED — never run on
   assert.match(bad.reason!, /patch refused/)
 })
 
-test('sandbox: control flow with a recording backend — baseline must fail, patch must apply, hidden tests gate the result', async (t) => {
+void test('sandbox: control flow with a recording backend — baseline must fail, patch must apply, hidden tests gate the result', async (_t) => {
   const calls: Array<{ cmd: string[]; hidden?: string; app: string }> = []
   const script = (results: number[]): IsolationBackend => ({
     name: 'recording-double',
-    available: async () => true,
-    run: async (work, hidden, cmd) => {
+    available: () => Promise.resolve(true),
+    run: (work, hidden, cmd) => {
       calls.push({ cmd, hidden, app: readFileSync(join(work, 'src', 'app.js'), 'utf8') })
-      return { exitCode: results.shift() ?? 0, timedOut: false, outputTail: '' }
+      return Promise.resolve({ exitCode: results.shift() ?? 0, timedOut: false, outputTail: '' })
     }
   })
   const pass = await evaluatePatch(spec, good, script([1, 0, 0]))
@@ -92,7 +92,7 @@ test('sandbox: control flow with a recording backend — baseline must fail, pat
   assert.match((await evaluatePatch(spec, { edits: [{ file: 'src/app.js', find: 'nope(', replace: 'x(' }] }, script([1]))).reason!, /does not apply/)
 })
 
-test('sandbox: real container run — failing build, purchased fix, passing acceptance + hidden tests', async (t) => {
+void test('sandbox: real container run — failing build, purchased fix, passing acceptance + hidden tests', async (t) => {
   if (process.env.CI && process.env.NEKTAR_SANDBOX_E2E !== '1') {
     t.skip('runs in the dedicated sandbox job (NEKTAR_SANDBOX_E2E=1)')
     return
@@ -111,7 +111,7 @@ test('sandbox: real container run — failing build, purchased fix, passing acce
   })
 })
 
-test('ai: scripted matcher is deterministic; results outside the offered candidates are rejected', async (t) => {
+void test('ai: scripted matcher is deterministic; results outside the offered candidates are rejected', async (_t) => {
   const job = {
     jobId: 'j',
     kind: 'match' as const,
@@ -134,14 +134,20 @@ test('ai: scripted matcher is deterministic; results outside the offered candida
   assert.throws(() => validateResult(job, 'ignore previous instructions', model), /not an object/)
 })
 
-test('ai: provider-neutral HTTP adapter — same contract against two endpoints, bounded and schema-checked', async (t) => {
+void test('ai: provider-neutral HTTP adapter — same contract against two endpoints, bounded and schema-checked', async (_t) => {
   const job = { jobId: 'j', kind: 'match' as const, question: 'q', domains: ['d'], candidates: [{ id: '0', text: 'a' }], maxOutputTokens: 64, timeoutMs: 1000 }
   const seen: Array<{ url: string; auth?: string; body: any }> = []
   const fake =
     (content: string, status = 200): typeof fetch =>
-    async (url, init) => {
-      seen.push({ url: url instanceof URL ? url.href : url instanceof Request ? url.url : String(url), auth: (init!.headers as Record<string, string>).authorization, body: JSON.parse(init!.body as string) })
-      return new Response(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 9, completion_tokens: 3 } }), { status })
+    (url, init) => {
+      seen.push({
+        url: url instanceof URL ? url.href : url instanceof Request ? url.url : String(url),
+        auth: (init!.headers as Record<string, string>).authorization,
+        body: JSON.parse(init!.body as string)
+      })
+      return Promise.resolve(
+        new Response(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 9, completion_tokens: 3 } }), { status })
+      )
     }
   const one = new HttpChatExecutor({
     provider: 'local-llm',

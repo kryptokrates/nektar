@@ -13,7 +13,7 @@ import { join } from 'node:path'
 
 const text = (r: unknown) => JSON.parse((r as { content: Array<{ text: string }> }).content[0].text)
 
-test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 140_000 }, async (t) => {
+void test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 140_000 }, async (t) => {
   if (stackOnly(t, 'spawns the bin on regtest seeded from the shared treasury')) return
   // the spawned bin bootstraps its reserve from <dataDir>/treasury.json —
   // on an aged chain there is no address index to discover funds, so seed a

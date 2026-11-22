@@ -30,7 +30,7 @@ async function op(store: AutomationStore, state: string, id = `op-${state}`) {
   return operation
 }
 
-test('driver: declared edge writes state + event atomically', async (t) => {
+void test('driver: declared edge writes state + event atomically', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const o = await op(store, 'published')
@@ -40,7 +40,7 @@ test('driver: declared edge writes state + event atomically', async (t) => {
   assert.equal(evs[evs.length - 1].cause, 'want_signed')
 })
 
-test('driver: impossible transition throws MachineBlocked and writes nothing', async (t) => {
+void test('driver: impossible transition throws MachineBlocked and writes nothing', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const o = await op(store, 'collecting')
@@ -53,7 +53,7 @@ test('driver: impossible transition throws MachineBlocked and writes nothing', a
   assert.equal((await store.events(o.operationId)).length, evBefore)
 })
 
-test('driver: divergent target is rejected — the machine decides where an edge lands', async (t) => {
+void test('driver: divergent target is rejected — the machine decides where an edge lands', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const o = await op(store, 'collecting')
@@ -62,7 +62,7 @@ test('driver: divergent target is rejected — the machine decides where an edge
   assert.equal((await store.operation(o.operationId))!.state, 'collecting')
 })
 
-test('driver: guarded siblings resolve by cause — unresolved→uncertain, other→escalated', async (t) => {
+void test('driver: guarded siblings resolve by cause — unresolved→uncertain, other→escalated', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const a = await op(store, 'funding', 'op-fu')
@@ -76,7 +76,7 @@ test('driver: guarded siblings resolve by cause — unresolved→uncertain, othe
   await assert.rejects(store.transition(c.operationId, c.revision, 'escalated', { cause: 'needs_human:unresolved_payment' }), MachineBlocked)
 })
 
-test('driver: multi-candidate cause picks the edge whose target matches', async (t) => {
+void test('driver: multi-candidate cause picks the edge whose target matches', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const a = await op(store, 'disclosure_verified', 'op-sa')
@@ -87,7 +87,7 @@ test('driver: multi-candidate cause picks the edge whose target matches', async 
   assert.equal(dn.state, 'not_useful')
 })
 
-test('driver: funding_deferred escrow-aired reconcile lands awaiting_disclosure', async (t) => {
+void test('driver: funding_deferred escrow-aired reconcile lands awaiting_disclosure', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const o = await op(store, 'funding_deferred')
@@ -95,7 +95,7 @@ test('driver: funding_deferred escrow-aired reconcile lands awaiting_disclosure'
   assert.equal(next.state, 'awaiting_disclosure')
 })
 
-test('driver: tick_error keeps the residence clock — watchdog bound is not refreshed', async (t) => {
+void test('driver: tick_error keeps the residence clock — watchdog bound is not refreshed', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const o = await op(store, 'funding')
@@ -107,7 +107,7 @@ test('driver: tick_error keeps the residence clock — watchdog bound is not ref
   assert.equal(evs[evs.length - 1].cause, 'tick_error')
 })
 
-test('driver: same-state data-stamp causes validate through their self-edges', async (t) => {
+void test('driver: same-state data-stamp causes validate through their self-edges', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const o = await op(store, 'awaiting_disclosure')
@@ -115,7 +115,7 @@ test('driver: same-state data-stamp causes validate through their self-edges', a
   assert.equal(next.state, 'awaiting_disclosure')
 })
 
-test('driver: unmodeled cause passes through — the census gate owns it', async (t) => {
+void test('driver: unmodeled cause passes through — the census gate owns it', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const o = await op(store, 'funding')
@@ -123,7 +123,7 @@ test('driver: unmodeled cause passes through — the census gate owns it', async
   assert.equal(next.state, 'funding')
 })
 
-test('kill switch: NEKTAR_OPS_FSM=legacy writes without machine validation', async (t) => {
+void test('kill switch: NEKTAR_OPS_FSM=legacy writes without machine validation', async (t) => {
   setNektarEnv('NEKTAR_OPS_FSM', 'legacy')
   try {
     const { kx, store } = await open()

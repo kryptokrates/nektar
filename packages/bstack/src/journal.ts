@@ -110,19 +110,21 @@ export class MemoryCarrierJournal implements CarrierJournal {
     }
     return row
   }
-  async put(hash: string, c: { txid: string; beef: number[]; topics: string[]; fundingTxid?: string }) {
+  put(hash: string, c: { txid: string; beef: number[]; topics: string[]; fundingTxid?: string }) {
     this.m.set(hash, c)
+    return Promise.resolve()
   }
-  async list() {
-    return [...this.m].map(([hash, c]) => ({ hash, txid: c.txid, topics: c.topics }))
+  list() {
+    return Promise.resolve([...this.m].map(([hash, c]) => ({ hash, txid: c.txid, topics: c.topics })))
   }
-  async fundedBy(txid: string) {
-    return [...this.m].filter(([, c]) => c.fundingTxid === txid).map(([hash, c]) => ({ hash, ...c }))
+  fundedBy(txid: string) {
+    return Promise.resolve([...this.m].filter(([, c]) => c.fundingTxid === txid).map(([hash, c]) => ({ hash, ...c })))
   }
-  async del(hash: string) {
+  del(hash: string) {
     this.m.delete(hash)
+    return Promise.resolve()
   }
-  async clearPaths(fromHeight: number) {
+  clearPaths(fromHeight: number) {
     let n = 0
     for (const [hash, row] of this.m) {
       const beef = stripPaths(row.beef, fromHeight)
@@ -132,7 +134,7 @@ export class MemoryCarrierJournal implements CarrierJournal {
         n++
       }
     }
-    return n
+    return Promise.resolve(n)
   }
 }
 

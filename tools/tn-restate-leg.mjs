@@ -85,7 +85,7 @@ const mkagent = async (wifName, restate) => {
     log: (l) => logs.push(`${wifName}:${l}`),
     valueOf: (txid, vout) => reserve.utxos.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis
   })
-  const spendStatus = port.spendStatus ?? (async () => 'unknown')
+  const spendStatus = port.spendStatus ?? (() => 'unknown')
   const rec = await reconcileLiveReserve(reserve, addr, mc, spendStatus)
   console.log(`${wifName}: reconcile ${JSON.stringify(rec)}`)
   const index = indexFor({ url: INDEX })

@@ -18,7 +18,7 @@ const store = new S3ObjectStore({
 })
 const log = []
 const ok = (k, v) => log.push(`${v ? 'PASS' : 'FAIL'} ${k}`)
-const info = (s) => log.push(`INFO ${s}`)
+const _info = (s) => log.push(`INFO ${s}`)
 const sha = (b) => createHash('sha256').update(b).digest('hex')
 
 // an object shaped like a redacted trade-evidence bundle (no secrets — the

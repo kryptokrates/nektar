@@ -188,11 +188,12 @@ export interface FingerState {
 
 export class MemoryFingerState implements FingerState {
   private row: FingerStateRow | undefined
-  async get() {
-    return this.row
+  get() {
+    return Promise.resolve(this.row)
   }
-  async set(s: FingerStateRow) {
+  set(s: FingerStateRow) {
     this.row = s
+    return Promise.resolve()
   }
 }
 
@@ -416,7 +417,7 @@ export async function publishFinger(p: {
       }
       await serve(seqs, async (n) => {
         const c = await p.journal.get(`finger:carrier:${n}`)
-        if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
+        if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics, { retryWaits: [] })
       })
       await serve(seqs, async (n) => {
         const t = n === prev.seq && tokenBeef !== undefined ? { beef: tokenBeef } : await p.journal.get(`finger:token:${n}`)
@@ -431,7 +432,7 @@ export async function publishFinger(p: {
       // inside the window the head alone re-touches every host — O(1), and a
       // host that somehow lost just the tip still heals between serves
       const c = await p.journal.get(`finger:carrier:${prev.seq}`)
-      if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
+      if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics, { retryWaits: [] })
       const sv = await servable(tokenBeef)
       if (sv !== undefined) await submitAll(p.hosts, sv, topics, { retryWaits: [] })
     }
@@ -545,7 +546,7 @@ export async function publishFinger(p: {
   if (preServe) {
     for (let n = 1; n < seq; n++) {
       const c = await p.journal.get(`finger:carrier:${n}`)
-      if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
+      if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics, { retryWaits: [] })
       const t = await p.journal.get(`finger:token:${n}`)
       const sv = t === undefined ? undefined : await servable(t.beef)
       if (sv !== undefined) await submitAll(p.hosts, sv, t?.topics ?? topics, { retryWaits: [] })

@@ -45,9 +45,9 @@ function wallet(store: AutomationStore, over: Partial<WalletDeps> = {}, ex?: Dis
   const deps: WalletDeps = {
     broadcast:
       over.broadcast ??
-      (async () => {
+      (() => {
         calls.broadcast++
-        return { status: 'success' }
+        return Promise.resolve({ status: 'success' })
       }),
     txSpent: () => {
       calls.txSpent++
@@ -83,7 +83,7 @@ const leaseState = async (kx: Knex, actionId: string) => (await kx('wallet_reser
 const SEEN = { status: 'seen', source: 'chain' } as const
 const PROVEN = { status: 'proven', source: 'chain', blockHeight: 1 } as const
 
-test('driver: submit success → submitted, event row, lease released, tx-spent fired', async (t) => {
+void test('driver: submit success → submitted, event row, lease released, tx-spent fired', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'a1'
@@ -102,14 +102,14 @@ test('driver: submit success → submitted, event row, lease released, tx-spent 
   assert.equal(calls.txDied, 0)
 })
 
-test('driver: definitive refusal → rejected, tx-died fired, lease released', async (t) => {
+void test('driver: definitive refusal → rejected, tx-died fired, lease released', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'a2'
   await prepared(store, id)
   const ex = new Dispatcher()
   t.after(() => ex.close())
-  const { w, calls } = wallet(store, { broadcast: async () => ({ status: 'error', description: 'missing inputs' }) }, ex)
+  const { w, calls } = wallet(store, { broadcast: () => Promise.resolve({ status: 'error', description: 'missing inputs' }) }, ex)
   const r = await w.submit(id)
   assert.equal(r.state, 'rejected')
   assert.equal(calls.txDied, 1)
@@ -121,14 +121,14 @@ test('driver: definitive refusal → rejected, tx-died fired, lease released', a
 // the 3bb8271b incident: we refused the bytes, the counterparty aired them.
 // refused → late proof must revive: custody re-marks, the day ledger counts
 // the spend, the lease ends 'spent' — and the aired spend is counted ONCE.
-test('driver: refused-then-aired revive (3bb8271b fixture)', async (t) => {
+void test('driver: refused-then-aired revive (3bb8271b fixture)', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'a3'
   const txid = await prepared(store, id)
   const ex = new Dispatcher()
   t.after(() => ex.close())
-  const { w, calls } = wallet(store, { broadcast: async () => ({ status: 'error', description: 'missing inputs' }) }, ex)
+  const { w, calls } = wallet(store, { broadcast: () => Promise.resolve({ status: 'error', description: 'missing inputs' }) }, ex)
   await w.submit(id)
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'rejected')
   assert.equal(calls.txDied, 1)
@@ -146,14 +146,14 @@ test('driver: refused-then-aired revive (3bb8271b fixture)', async (t) => {
   )
 })
 
-test('driver: revive via seen-then-proven still counts the aired spend once', async (t) => {
+void test('driver: revive via seen-then-proven still counts the aired spend once', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'a4'
   const txid = await prepared(store, id)
   const ex = new Dispatcher()
   t.after(() => ex.close())
-  const { w, calls } = wallet(store, { broadcast: async () => ({ status: 'error', description: 'missing inputs' }) }, ex)
+  const { w, calls } = wallet(store, { broadcast: () => Promise.resolve({ status: 'error', description: 'missing inputs' }) }, ex)
   await w.submit(id)
   await w.observe(txid, SEEN)
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'observed')
@@ -165,7 +165,7 @@ test('driver: revive via seen-then-proven still counts the aired spend once', as
   assert.equal(await leaseState(kx, id), 'spent')
 })
 
-test('driver: transport failure → submission_unknown, never a verdict; replay converges after restart', async (t) => {
+void test('driver: transport failure → submission_unknown, never a verdict; replay converges after restart', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'a5'
@@ -175,7 +175,7 @@ test('driver: transport failure → submission_unknown, never a verdict; replay 
   const first = wallet(
     store,
     {
-      broadcast: async () => {
+      broadcast: () => {
         throw new Error('connection refused')
       }
     },
@@ -201,7 +201,7 @@ test('driver: transport failure → submission_unknown, never a verdict; replay 
 // after broadcast may have sent bytes is a TRANSPORT-class outcome —
 // submission_unknown, never rejected, and custody stays claimed (the bytes
 // may have aired; resubmitPending is the convergence path)
-test('driver: leg timeout mid-broadcast → submission_unknown, custody untouched', async (t) => {
+void test('driver: leg timeout mid-broadcast → submission_unknown, custody untouched', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'a5b'
@@ -229,7 +229,7 @@ test('driver: leg timeout mid-broadcast → submission_unknown, custody untouche
   assert.equal(await leaseState(kx, id), 'leased', 'the claim stays: the tx may be on the wire')
 })
 
-test('driver: impossible transitions write nothing — no state, no event row', async (t) => {
+void test('driver: impossible transitions write nothing — no state, no event row', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'a6'
@@ -251,7 +251,7 @@ test('driver: impossible transitions write nothing — no state, no event row', 
   assert.equal((await store.walletTxEvents(id)).length, before)
 })
 
-test('driver: duplicate seen is harmless; proven-before-seen confirms', async (t) => {
+void test('driver: duplicate seen is harmless; proven-before-seen confirms', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'a7'
@@ -271,7 +271,7 @@ test('driver: duplicate seen is harmless; proven-before-seen confirms', async (t
   assert.equal(await w2.observe(txid2, PROVEN), 'confirmed')
 })
 
-test('driver: post-commit effect failure leaves the committed transition intact and replays', async (t) => {
+void test('driver: post-commit effect failure leaves the committed transition intact and replays', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'a9'
@@ -314,7 +314,7 @@ test('driver: post-commit effect failure leaves the committed transition intact 
   assert.equal((await store.pendingTxEffects()).length, 0)
 })
 
-test('driver: crash between act and record replays on resubmitPending', async (t) => {
+void test('driver: crash between act and record replays on resubmitPending', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'a10'
@@ -341,7 +341,7 @@ test('driver: crash between act and record replays on resubmitPending', async (t
   const { w: w2 } = wallet(
     store,
     {
-      broadcast: async () => ({ status: 'error', description: 'txn-already-in-mempool' }),
+      broadcast: () => Promise.resolve({ status: 'error', description: 'txn-already-in-mempool' }),
       txSpent: () => {
         replayed++
       }
@@ -353,14 +353,14 @@ test('driver: crash between act and record replays on resubmitPending', async (t
   assert.equal((await store.pendingTxEffects()).length, 0)
 })
 
-test('driver: applyTxEvent on a missing action rolls back — nothing written', async (t) => {
+void test('driver: applyTxEvent on a missing action rolls back — nothing written', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   await assert.rejects(store.applyTxEvent('ghost', 'obs.seen', { guard: 'verified' }))
   assert.equal((await store.walletTxEvents('ghost')).length, 0)
 })
 
-test('watcher driver: proven row confirms + spends leases through declared intents', async (t) => {
+void test('watcher driver: proven row confirms + spends leases through declared intents', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'w1'
@@ -380,7 +380,7 @@ test('watcher driver: proven row confirms + spends leases through declared inten
   wireTx(ex, { store, fx: effects, log: () => {} })
   const wt = new TransactionWatcher(
     store,
-    async () => ({ status: 'proven', source: 'chain' }),
+    () => Promise.resolve({ status: 'proven', source: 'chain' }),
     async () => {},
     { effects, exec: ex }
   )
@@ -390,7 +390,7 @@ test('watcher driver: proven row confirms + spends leases through declared inten
   assert.equal(calls.spent, 0) // live→confirmed edge carries leases->spent, not tx-spent
 })
 
-test('watcher driver: dead row revive fires tx-spent + record-aired', async (t) => {
+void test('watcher driver: dead row revive fires tx-spent + record-aired', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'w2'
@@ -410,7 +410,7 @@ test('watcher driver: dead row revive fires tx-spent + record-aired', async (t) 
   wireTx(ex, { store, fx: effects, log: () => {} })
   const wt = new TransactionWatcher(
     store,
-    async () => ({ status: 'proven', source: 'chain' }),
+    () => Promise.resolve({ status: 'proven', source: 'chain' }),
     async () => {},
     { effects, exec: ex }
   )
@@ -422,7 +422,7 @@ test('watcher driver: dead row revive fires tx-spent + record-aired', async (t) 
   assert.equal(evs[evs.length - 1].event, 'obs.proven')
 })
 
-test('watcher driver: exported row past TTL expires and fires export-expired', async (t) => {
+void test('watcher driver: exported row past TTL expires and fires export-expired', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const id = 'w3'
@@ -442,7 +442,7 @@ test('watcher driver: exported row past TTL expires and fires export-expired', a
   wireTx(ex, { store, fx: effects, log: () => {} })
   const wt = new TransactionWatcher(
     store,
-    async () => undefined,
+    () => Promise.resolve(undefined),
     async () => {},
     { exportedTtlMs: 500, effects, exec: ex }
   )
@@ -452,7 +452,7 @@ test('watcher driver: exported row past TTL expires and fires export-expired', a
   assert.equal(await leaseState(kx, id), 'released')
 })
 
-test('both ledgers: the same driver semantics on a second store instance', async (t) => {
+void test('both ledgers: the same driver semantics on a second store instance', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const { kx: kx2, store: store2 } = await open()
@@ -462,7 +462,7 @@ test('both ledgers: the same driver semantics on a second store instance', async
     const txid = await prepared(s, id)
     const ex = new Dispatcher()
     t.after(() => ex.close())
-    const { w, calls } = wallet(s, { broadcast: async () => ({ status: 'error', description: 'missing inputs' }) }, ex)
+    const { w, calls } = wallet(s, { broadcast: () => Promise.resolve({ status: 'error', description: 'missing inputs' }) }, ex)
     await w.submit(id)
     await w.observe(txid, PROVEN)
     assert.equal((await s.walletTx({ actionId: id }))!.state, 'confirmed')
@@ -471,7 +471,7 @@ test('both ledgers: the same driver semantics on a second store instance', async
   }
 })
 
-test('kill switch: NEKTAR_TX_FSM=legacy keeps the hand-rolled path and writes no event rows', async (t) => {
+void test('kill switch: NEKTAR_TX_FSM=legacy keeps the hand-rolled path and writes no event rows', async (t) => {
   setNektarEnv('NEKTAR_TX_FSM', 'legacy')
   try {
     const { kx, store } = await open()

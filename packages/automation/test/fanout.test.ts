@@ -15,17 +15,19 @@ const sink = () => {
     rows,
     acked,
     io: {
-      enqueue: async (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => {
+      enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => {
         rows.push({ ...o, ...(opts?.delayMs !== undefined ? { delayMs: opts.delayMs } : {}) })
+        return Promise.resolve()
       },
-      ackOutbox: async (id: string) => {
+      ackOutbox: (id: string) => {
         acked.push(id)
+        return Promise.resolve()
       }
     }
   }
 }
 
-test('queueRepairs: one repair-host row per missed host, payload carries the journal key', async () => {
+void test('queueRepairs: one repair-host row per missed host, payload carries the journal key', async () => {
   const s = sink()
   await queueRepairs(s.io, 'log:stream:7', ['h1', 'h2'])
   assert.equal(s.rows.length, 2)
@@ -40,7 +42,7 @@ test('queueRepairs: one repair-host row per missed host, payload carries the jou
   assert.equal(s.rows[0].delayMs, undefined, 'missed legs repair immediately')
 })
 
-test('trackFanout: missed now, pending delayed, settled legs cancel their own repair', async () => {
+void test('trackFanout: missed now, pending delayed, settled legs cancel their own repair', async () => {
   const s = sink()
   await trackFanout(
     {

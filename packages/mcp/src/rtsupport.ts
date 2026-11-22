@@ -71,7 +71,7 @@ export function txLogBroadcast<B extends (tx: Transaction) => Promise<import('@n
       try {
         let inSats: number | null = 0
         for (const i of tx.inputs) {
-          const src = i.sourceTransaction?.outputs[i.sourceOutputIndex ?? 0]
+          const src = i.sourceTransaction?.outputs[i.sourceOutputIndex]
           if (src?.satoshis === undefined) {
             inSats = null
             break
@@ -218,15 +218,16 @@ export async function acquireLock(file: string, label: string, opts?: { staleWai
     }
   }, 5_000)
   beatTimer.unref()
-  return async () => {
+  return () => {
     clearInterval(beatTimer)
-    if (!owned) return
+    if (!owned) return Promise.resolve()
     try {
       const l = JSON.parse(readFileSync(file, 'utf8')) as { owner?: string }
       if (l.owner === me) rmSync(file)
     } catch {
       /* already gone or torn — a corpse decays by mtime either way */
     }
+    return Promise.resolve()
   }
 }
 
@@ -342,7 +343,7 @@ export function persistedTxStore(): { txStore: TxStore; open: (knex: import('kne
  *  the machine-declared intents with the exact semantics the legacy
  *  callbacks had ('watch'/'watch-trailing' map to nothing: this watcher
  *  already rescans live + recently-dead rows every pass). */
-export async function buildRecordsWatcher(d: {
+async function buildRecordsWatcher(d: {
   ledger: import('@nektar/automation').AutomationStore
   statusOf: (txid: string) => { ev: TxStatusEvent; verified: boolean } | undefined
   port: Pick<ChainPort, 'statusHint' | 'spendStatus' | 'txLookup' | 'guard'>

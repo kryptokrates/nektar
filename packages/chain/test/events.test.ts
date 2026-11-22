@@ -11,7 +11,7 @@ const mined = (txid: string, mp = { blockHeight: 7 }): TxStatusEvent => ({ txid,
 
 test('events: watch → observe delivers a mined event once; duplicates suppressed', async () => {
   let calls = 0
-  const ev = new ChainEvents({ observe: async () => (calls++, mined('t1')) })
+  const ev = new ChainEvents({ observe: () => (calls++, Promise.resolve(mined('t1'))) })
   const got: TxStatusEvent[] = []
   ev.on('tx', (e) => got.push(e))
   ev.watch('t1')
@@ -24,7 +24,7 @@ test('events: watch → observe delivers a mined event once; duplicates suppress
 
 test('events: pending observations stay watched; no emit until a status exists', async () => {
   let calls = 0
-  const ev = new ChainEvents({ observe: async () => (calls++, undefined) })
+  const ev = new ChainEvents({ observe: () => (calls++, Promise.resolve(undefined)) })
   const got: TxStatusEvent[] = []
   ev.on('tx', (e) => got.push(e))
   ev.watch('t1')
@@ -38,7 +38,7 @@ test('events: pending observations stay watched; no emit until a status exists',
 test('events: height gate — a static tip and no new watches skips the batch', async () => {
   let calls = 0
   let tip = 100
-  const ev = new ChainEvents({ observe: async () => (calls++, undefined), height: async () => tip })
+  const ev = new ChainEvents({ observe: () => (calls++, Promise.resolve(undefined)), height: () => Promise.resolve(tip) })
   ev.watch('t1')
   await ev.tick() // first tick always scans (restart recovery)
   assert.equal(calls, 1)
@@ -53,7 +53,7 @@ test('events: height gate — a static tip and no new watches skips the batch', 
 })
 
 test('events: ttl drops a never-sealing watch', async () => {
-  const ev = new ChainEvents({ observe: async () => undefined, ttlMs: 1 })
+  const ev = new ChainEvents({ observe: () => Promise.resolve(undefined), ttlMs: 1 })
   ev.watch('t1')
   await new Promise((r) => setTimeout(r, 5))
   await ev.tick()
@@ -62,7 +62,7 @@ test('events: ttl drops a never-sealing watch', async () => {
 
 test('events: abandonAfterBlocks emits abandoned once and drops the watch', async () => {
   let tip = 100
-  const ev = new ChainEvents({ observe: async () => undefined, height: async () => tip, abandonAfterBlocks: 10 })
+  const ev = new ChainEvents({ observe: () => Promise.resolve(undefined), height: () => Promise.resolve(tip), abandonAfterBlocks: 10 })
   const abandoned: string[] = []
   ev.on('abandoned', ({ txid }) => abandoned.push(txid))
   ev.watch('t1')
@@ -77,7 +77,7 @@ test('events: abandonAfterBlocks emits abandoned once and drops the watch', asyn
 
 test('events: note() records pushed status + resolves waitFor without emitting tx — and never drops the floor', async () => {
   let proven = false
-  const ev = new ChainEvents({ observe: async () => (proven ? mined('t1') : undefined) })
+  const ev = new ChainEvents({ observe: () => Promise.resolve(proven ? mined('t1') : undefined) })
   const got: TxStatusEvent[] = []
   ev.on('tx', (e) => got.push(e))
   const p = ev.waitFor('t1', 5000)
@@ -99,7 +99,7 @@ test('events: note() records pushed status + resolves waitFor without emitting t
 
 test('events: a non-terminal delivery resolves a matching waiter; others stay parked', async () => {
   let deliverable: TxStatusEvent | undefined
-  const ev = new ChainEvents({ observe: async () => deliverable })
+  const ev = new ChainEvents({ observe: () => Promise.resolve(deliverable) })
   const unconf = ev.waitFor('t1', 60_000, (e) => e.status === 'unconfirmed')
   const minedW = ev.waitFor('t1', 60_000, (e) => e.status === 'mined')
   deliverable = { txid: 't1', status: 'unconfirmed' }
@@ -111,7 +111,7 @@ test('events: a non-terminal delivery resolves a matching waiter; others stay pa
 })
 
 test('events: a terminal event resolves every waiter, matcher or not', async () => {
-  const ev = new ChainEvents({ observe: async () => undefined })
+  const ev = new ChainEvents({ observe: () => Promise.resolve(undefined) })
   const ds = ev.waitFor('t1', 60_000, (e) => e.status === 'double-spent')
   const mn = ev.waitFor('t1', 60_000, (e) => e.merklePath !== undefined)
   ev.report({ txid: 't1', status: 'mined' }) // terminal 'mined' — ends BOTH waits
@@ -138,7 +138,7 @@ test('events: concurrent probes of one txid share a single observe', async () =>
 })
 
 test('events: retained statuses evict on the same ttl sweep as watches', async () => {
-  const ev = new ChainEvents({ observe: async () => undefined, ttlMs: 1 })
+  const ev = new ChainEvents({ observe: () => Promise.resolve(undefined), ttlMs: 1 })
   ev.report({ txid: 't1', status: 'mined' })
   assert.equal(ev.statusOf('t1')?.ev.status, 'mined')
   assert.equal(ev.statusOf('t1')?.verified, true) // report() is first-party truth
@@ -147,8 +147,8 @@ test('events: retained statuses evict on the same ttl sweep as watches', async (
   assert.equal(ev.statusOf('t1'), undefined) // catch-up cache, not permanent memory
 })
 
-test('events: report() is the trusted first-party path — emits tx', async () => {
-  const ev = new ChainEvents({ observe: async () => undefined })
+test('events: report() is the trusted first-party path — emits tx', () => {
+  const ev = new ChainEvents({ observe: () => Promise.resolve(undefined) })
   const got: TxStatusEvent[] = []
   ev.on('tx', (e) => got.push(e))
   ev.report({ txid: 't1', status: 'rejected' })
@@ -158,7 +158,7 @@ test('events: report() is the trusted first-party path — emits tx', async () =
 
 test('events: waitFor resolves from a self-observed probe; times out clean', async () => {
   let prove = false
-  const ev = new ChainEvents({ observe: async () => (prove ? mined('t1') : undefined) })
+  const ev = new ChainEvents({ observe: () => Promise.resolve(prove ? mined('t1') : undefined) })
   const slow = ev.waitFor('t1', 200)
   setTimeout(() => {
     prove = true
@@ -190,9 +190,9 @@ test('events: maxPerTick rotates through an oversized interest set', async () =>
   const seen = new Set<string>()
   const ev = new ChainEvents({
     maxPerTick: 2,
-    observe: async (txid) => {
+    observe: (txid) => {
       seen.add(txid)
-      return undefined
+      return Promise.resolve(undefined)
     }
   })
   for (const t of ['a', 'b', 'c', 'd', 'e']) ev.watch(t)
@@ -205,7 +205,7 @@ test('events: maxPerTick rotates through an oversized interest set', async () =>
 })
 
 test('events: watch() wakes the substrate — a mined observe arrives without an explicit tick', async () => {
-  const ev = new ChainEvents({ observe: async () => mined('t1') })
+  const ev = new ChainEvents({ observe: () => Promise.resolve(mined('t1')) })
   const got = new Promise<TxStatusEvent>((r) => ev.on('tx', r))
   ev.watch('t1') // no start(), no tick() — the wake alone must deliver
   const e = await Promise.race([got, new Promise<undefined>((r) => setTimeout(() => r(undefined), 500))])
@@ -215,7 +215,7 @@ test('events: watch() wakes the substrate — a mined observe arrives without an
 
 test('events: note() verify-on-hint — a pushed mined hint is verified and promoted to tx, not an interval later', async () => {
   let proven = false
-  const ev = new ChainEvents({ observe: async () => (proven ? mined('t1') : undefined) })
+  const ev = new ChainEvents({ observe: () => Promise.resolve(proven ? mined('t1') : undefined) })
   const got: TxStatusEvent[] = []
   ev.on('tx', (e) => got.push(e))
   ev.watch('t1')
@@ -231,13 +231,13 @@ test('events: note() verify-on-hint — a pushed mined hint is verified and prom
 
 test('events: abandon and ttl flush parked waiters — no sleep-to-own-timeout', async () => {
   let tip = 100
-  const ev = new ChainEvents({ observe: async () => undefined, height: async () => tip, abandonAfterBlocks: 10, ttlMs: 60_000 })
+  const ev = new ChainEvents({ observe: () => Promise.resolve(undefined), height: () => Promise.resolve(tip), abandonAfterBlocks: 10, ttlMs: 60_000 })
   const p = ev.waitFor('t1', 60_000)
   await ev.tick() // first-seen at tip=100
   tip = 111
   await ev.tick()
   assert.equal(await p, undefined) // the abandoned watch answered the waiter
-  const ev2 = new ChainEvents({ observe: async () => undefined, ttlMs: 1 })
+  const ev2 = new ChainEvents({ observe: () => Promise.resolve(undefined), ttlMs: 1 })
   const p2 = ev2.waitFor('t1', 60_000)
   await new Promise((r) => setTimeout(r, 5))
   await ev2.tick()
@@ -250,11 +250,11 @@ test('events: a throwing observe never advances the abandon clock', async () => 
   let tip = 100
   let fail = true
   const ev = new ChainEvents({
-    observe: async () => {
-      if (fail) throw new Error('host down')
-      return undefined
+    observe: () => {
+      if (fail) return Promise.reject(new Error('host down'))
+      return Promise.resolve(undefined)
     },
-    height: async () => tip,
+    height: () => Promise.resolve(tip),
     abandonAfterBlocks: 10
   })
   const abandoned: string[] = []
@@ -275,7 +275,7 @@ test('events: a throwing observe never advances the abandon clock', async () => 
 
 test('events: note() dirties the set — verify-on-hint runs under a static tip', async () => {
   let proven = false
-  const ev = new ChainEvents({ observe: async () => (proven ? mined('t1') : undefined), height: async () => 100 })
+  const ev = new ChainEvents({ observe: () => Promise.resolve(proven ? mined('t1') : undefined), height: () => Promise.resolve(100) })
   const got: TxStatusEvent[] = []
   ev.on('tx', (e) => got.push(e))
   ev.watch('t1')

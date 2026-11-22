@@ -3,7 +3,7 @@
 // layer, the pack flow, and the discovery-doc projection.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { NektarMemory, type NektarMemoryOptions, CATALOG_SHARD } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { createHttpApi } from '../src/http.js'
@@ -22,7 +22,7 @@ async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOption
   return { chain, funder, mem, settle }
 }
 
-test('describeShard: manifest committed to __catalog__, shardId binds label to chain', async (t) => {
+void test('describeShard: manifest committed to __catalog__, shardId binds label to chain', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -39,7 +39,7 @@ test('describeShard: manifest committed to __catalog__, shardId binds label to c
   assert.equal(JSON.parse(Buffer.from(cat[0].fragment.d).toString('utf8')).type, 'shard-manifest')
 })
 
-test('describeShard: unknown/system shards and junk tags refused; latest wins', async (t) => {
+void test('describeShard: unknown/system shards and junk tags refused; latest wins', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -54,7 +54,7 @@ test('describeShard: unknown/system shards and junk tags refused; latest wins', 
   assert.equal((await mem.shardCatalog()).length, 1)
 })
 
-test('describeShard via tool + /.well-known/nektar projects domains/offers/shardId', async (t) => {
+void test('describeShard via tool + /.well-known/nektar projects domains/offers/shardId', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -80,7 +80,7 @@ test('describeShard via tool + /.well-known/nektar projects domains/offers/shard
   assert.equal(doc.logPublicKey, await mem.logPublicKey())
 })
 
-test('exportShardPack carries the manifest as advisory metadata', async (t) => {
+void test('exportShardPack carries the manifest as advisory metadata', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -88,10 +88,10 @@ test('exportShardPack carries the manifest as advisory metadata', async (t) => {
   await mem.describeShard('ball', { domains: ['soccer'] })
   const pack = await mem.exportShardPack('ball')
   assert.equal(pack.manifest?.shard, 'ball')
-  assert.deepEqual(pack.manifest?.domains, ['soccer'])
+  assert.deepEqual(pack.manifest.domains, ['soccer'])
 })
 
-test('importRecord: bought payload lands + __imports__ audit; forged provenance refused', async (t) => {
+void test('importRecord: bought payload lands + __imports__ audit; forged provenance refused', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -112,7 +112,7 @@ test('importRecord: bought payload lands + __imports__ audit; forged provenance 
   )
 })
 
-test('contentPrice: manifest offers drive external read/pack pricing', async (t) => {
+void test('contentPrice: manifest offers drive external read/pack pricing', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w

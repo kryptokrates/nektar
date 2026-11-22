@@ -87,8 +87,11 @@ export const handlers: Record<string, ToolHandler> = {
       }
     }
   },
-  challenge: async (mem) => {
-    return { nonce: mem.issueChallenge(), statement: 'sign with answerChallenge(key, nonce) within 5 minutes; nonces from anywhere else are refused' }
+  challenge: (mem) => {
+    return Promise.resolve({
+      nonce: mem.issueChallenge(),
+      statement: 'sign with answerChallenge(key, nonce) within 5 minutes; nonces from anywhere else are refused'
+    })
   },
   claim: async (mem, args, d) => {
     const callTool = d.call

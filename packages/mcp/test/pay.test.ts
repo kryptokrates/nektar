@@ -57,7 +57,7 @@ async function payTx(
 
 const OP_KEY = PrivateKey.fromRandom()
 
-test('payments: openRuntime refuses to start without a valid operator wallet', async (t) => {
+void test('payments: openRuntime refuses to start without a valid operator wallet', async (t) => {
   _testReset()
   process.env.NEKTAR_PAYMENTS = '1'
   delete process.env.NEKTAR_OPERATOR_WIF
@@ -103,7 +103,7 @@ test('payments: openRuntime refuses to start without a valid operator wallet', a
   assert.equal(rt.network, 'regtest', 'valid operator wallet → startup proceeds')
 })
 
-test('payments: gated tool 402s → signed tx settles → receipt commits the payment txid', async (t) => {
+void test('payments: gated tool 402s → signed tx settles → receipt commits the payment txid', async (t) => {
   _testReset()
   process.env.NEKTAR_PAYMENTS = '1'
   process.env.NEKTAR_OPERATOR_WIF = OP_KEY.toWif([0xef])
@@ -173,7 +173,7 @@ test('payments: gated tool 402s → signed tx settles → receipt commits the pa
   )
 })
 
-test('payments: underpayment, missing tag and unknown invoice are refused', async (t) => {
+void test('payments: underpayment, missing tag and unknown invoice are refused', async (t) => {
   _testReset()
   process.env.NEKTAR_PAYMENTS = '1'
   process.env.NEKTAR_OPERATOR_WIF = OP_KEY.toWif([0xef])
@@ -213,7 +213,7 @@ test('payments: underpayment, missing tag and unknown invoice are refused', asyn
   assert.match(free, /payments are disabled/)
 })
 
-test('payments: invoices carry a verifiable signed quote; tampering detected', async (t) => {
+void test('payments: invoices carry a verifiable signed quote; tampering detected', async (t) => {
   _testReset()
   process.env.NEKTAR_PAYMENTS = '1'
   process.env.NEKTAR_OPERATOR_WIF = OP_KEY.toWif([0xef])

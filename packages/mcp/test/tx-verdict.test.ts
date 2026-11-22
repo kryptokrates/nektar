@@ -36,8 +36,8 @@ const mkTx = (): Transaction => {
   return t
 }
 
-test('tx-verdict: a rejection HINT wakes subscribers but writes no verdict', async () => {
-  const { ops } = mk({ statusHint: async () => ({ status: 'REJECTED', answered: true }) })
+void test('tx-verdict: a rejection HINT wakes subscribers but writes no verdict', async () => {
+  const { ops } = mk({ statusHint: () => Promise.resolve({ status: 'REJECTED', answered: true }) })
   let fires = 0
   ops.onTxRejected(() => {
     fires++
@@ -49,7 +49,7 @@ test('tx-verdict: a rejection HINT wakes subscribers but writes no verdict', asy
   assert.equal(f.hint?.status, 'REJECTED', 'the outside word stays visible in the hint field')
 })
 
-test('tx-verdict: first-party rejection is durable — and a later proof still wins', async () => {
+void test('tx-verdict: first-party rejection is durable — and a later proof still wins', async () => {
   const { ops, store } = mk()
   const tx = mkTx()
   const txid = tx.id('hex')
@@ -63,7 +63,7 @@ test('tx-verdict: first-party rejection is durable — and a later proof still w
   assert.equal((await ops.txFacts(txid)).source, 'proof')
 })
 
-test('tx-verdict: abandon + ledger rows are terminal; a stored tx alone is not "seen"', async () => {
+void test('tx-verdict: abandon + ledger rows are terminal; a stored tx alone is not "seen"', async () => {
   const { ops } = mk()
   let fires = 0
   ops.onTxRejected(() => {
@@ -75,15 +75,15 @@ test('tx-verdict: abandon + ledger rows are terminal; a stored tx alone is not "
   assert.equal(f1.verdict, 'dead', 'the abandon horizon IS a terminal verdict')
   assert.equal(f1.source, 'abandon')
 
-  const { ops: ops2 } = mk({ ledgerState: async () => 'conflicted' })
+  const { ops: ops2 } = mk({ ledgerState: () => Promise.resolve('conflicted') })
   const f2 = await ops2.txFacts('t2')
   assert.equal(f2.verdict, 'dead', "ledger 'conflicted' is first-party truth")
   assert.equal(f2.source, 'first-party')
 
   let status = ''
   const { ops: ops3, store: store3 } = mk({
-    ledgerState: async () => 'submitted',
-    statusHint: async () => ({ status, answered: true })
+    ledgerState: () => Promise.resolve('submitted'),
+    statusHint: () => Promise.resolve({ status, answered: true })
   })
   const tx3 = mkTx()
   store3.put(tx3) // prepared-but-unbroadcast sits in the graph
@@ -98,7 +98,7 @@ test('tx-verdict: abandon + ledger rows are terminal; a stored tx alone is not "
   assert.ok(hintSeen(f4.hint), 'a seen-family status word is the "seen" hint')
 })
 
-test('tx-verdict: a pull-found proof attaches to the anchor OBJECT, not just the store — push and pull share one seam', async () => {
+void test('tx-verdict: a pull-found proof attaches to the anchor OBJECT, not just the store — push and pull share one seam', async () => {
   // regression: fetchTx used to write pull-found proofs to txs() + the
   // returned copy only — anchorTxs (the object unprovenAnchors /
   // verifyMembership / timeBounds read) stayed unproven forever even with
@@ -118,8 +118,8 @@ test('tx-verdict: a pull-found proof attaches to the anchor OBJECT, not just the
         attachCalls.push(t)
         anchorTx.merklePath = m as never // the real attachProof's write
       },
-      chain: source === 'chain.getTx' ? { getTx: async () => provenCopy } : {},
-      proofLookup: () => (source === 'proofLookup' ? async () => mp : undefined)
+      chain: source === 'chain.getTx' ? { getTx: () => provenCopy } : {},
+      proofLookup: () => (source === 'proofLookup' ? () => Promise.resolve(mp) : undefined)
     })
     const got = await ops.fetchTx(txid)
     assert.deepEqual(attachCalls, [txid], `${source}: the proof must go through attachProof — the anchor's own object is the read site`)
@@ -128,7 +128,7 @@ test('tx-verdict: a pull-found proof attaches to the anchor OBJECT, not just the
   }
 })
 
-test('tx-verdict: watcherObservation — only verified terminal records land durable verdicts', () => {
+void test('tx-verdict: watcherObservation — only verified terminal records land durable verdicts', () => {
   const ev = (status: TxStatusEvent['status'], verified: boolean) => ({ ev: { txid: 't', status }, verified })
   assert.equal(watcherObservation(ev('rejected', false), 'SEEN_ON_NETWORK'), undefined, 'a hinted rejection is never durable')
   assert.deepEqual(watcherObservation(ev('rejected', true), ''), { status: 'rejected', source: 'chain', reason: 'rejected' })
@@ -146,7 +146,7 @@ test('tx-verdict: watcherObservation — only verified terminal records land dur
 
 // spv/reimport-spent gate: a first-party spend record blocks re-import
 // while the spender is live or unrecorded; rejected/conflicted frees it
-test('importable: live spenders block re-import, dead spenders reopen it', async () => {
+void test('importable: live spenders block re-import, dead spenders reopen it', async () => {
   const { importable } = (await import('../src/txops.js')) as {
     importable?: (spender: string | undefined, spenderLedgerState: string | undefined) => boolean
   }

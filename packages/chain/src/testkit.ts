@@ -271,10 +271,10 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
       held: (t: string) => this.getTx(t),
       proof: (t: string) => this.getTx(t)?.merklePath,
       rejected: (t: string) => this.isRejected(t),
-      hint: async (t: string) => {
+      hint: (t: string) => {
         const tx = this.getTx(t)
         const status = this.isRejected(t) ? 'REJECTED' : tx?.merklePath !== undefined ? 'MINED' : tx !== undefined ? 'SEEN_ON_NETWORK' : 'UNKNOWN'
-        return { status, answered: true }
+        return Promise.resolve({ status, answered: true })
       },
       height: () => this.tipHeight()
     })(txid)
@@ -485,7 +485,7 @@ export class StackTreasury {
     // release theirs.
     this.reserve.leased = async (txid, vout) => {
       const f = join(STATE_DIR, 'leases.json')
-      return await withTreasuryLock(async () => {
+      return await withTreasuryLock(() => {
         let leases: Record<string, number> = {}
         try {
           leases = JSON.parse(readFileSync(f, 'utf8'))
@@ -505,7 +505,7 @@ export class StackTreasury {
       })
     }
   }
-  private loadOrMakeKey(file: string): PrivateKey {
+  private loadOrMakeKey(_file: string): PrivateKey {
     const kf = join(STATE_DIR, 'testkit-treasury.json')
     if (existsSync(kf)) return PrivateKey.fromWif(JSON.parse(readFileSync(kf, 'utf8')).wif)
     const key = PrivateKey.fromRandom()
@@ -526,7 +526,7 @@ export class StackTreasury {
     // bootstrapping all over again
     this.reserve.reload()
     if (this.reserve.utxos.length > 0) return
-    const addr = this.key.toPublicKey().toAddress([0x6f])
+    const _addr = this.key.toPublicKey().toAddress([0x6f])
     const tip = await this.chain.currentHeight()
     // coinbases mature at +100 on regtest — generate enough to have ≥1 mature
     if (tip < 120) await this.chain.mine(120 - tip + 1)
@@ -650,7 +650,7 @@ function readLeases(file: string): Record<string, number> {
 async function leaseReserve(t: StackTreasury, need: number): Promise<ReserveSrc[] | null> {
   const leasesFile = join(STATE_DIR, 'leases.json')
   const tw = Date.now()
-  const res = await withTreasuryLock(async () => {
+  const res = await withTreasuryLock(() => {
     t.reserve.reload()
     const leases = readLeases(leasesFile)
     const op = (u: ReserveSrc) => `${u.tx.id('hex')}:${u.vout}`
@@ -683,7 +683,7 @@ async function leaseReserve(t: StackTreasury, need: number): Promise<ReserveSrc[
 
 // `node --test` runs files in parallel processes sharing .state/*.json —
 // serialize bootstrap/refill (treasury-tail splits) across processes.
-async function withTreasuryLock<T>(fn: () => Promise<T>): Promise<T> {
+async function withTreasuryLock<T>(fn: () => T | Promise<T>): Promise<T> {
   const lock = join(STATE_DIR, 'treasury.lock')
   const deadline = Date.now() + 180_000
   for (;;) {
@@ -785,11 +785,12 @@ export class StackFunder implements Funder {
       // each other (lost entries, resurrected spends → UTXO_SPENT storms and
       // phantom "reserve empty"). reload first so this process sees the union.
       if (r.status === 'success') {
-        await withTreasuryLock(async () => {
+        await withTreasuryLock(() => {
           t.reserve.reload()
           for (const src of srcs) t.reserve.markSpent(src.tx.id('hex'), src.vout)
           const changeVout = tx.outputs.length - 1
           if ((tx.outputs[changeVout].satoshis ?? 0) > 0) t.reserve.addOwned(tx, changeVout)
+          return Promise.resolve()
         })
         f.fundingTx = tx
         // the suite mints a key per world and discards it — on a zero-subsidy
@@ -804,20 +805,22 @@ export class StackFunder implements Funder {
       if (/UTXO_SPENT|already.*spent|missing.*(input|parent)/i.test(r.description ?? '')) {
         // spent-class failure: the parents really are consumed on-chain — mark
         // them so the pool stops offering them (leases may stay; entries are dead)
-        await withTreasuryLock(async () => {
+        await withTreasuryLock(() => {
           t.reserve.reload()
           for (const src of srcs) t.reserve.markSpent(src.tx.id('hex'), src.vout)
+          return Promise.resolve()
         })
         continue
       }
       // any other failure never consumed the inputs — release the leases so a
       // later fund() can still draw them, then surface the real error
-      await withTreasuryLock(async () => {
+      await withTreasuryLock(() => {
         const leasesFile = join(STATE_DIR, 'leases.json')
         const leases = readLeases(leasesFile)
         const op = (u: ReserveSrc) => `${u.tx.id('hex')}:${u.vout}`
         for (const s of srcs) delete leases[op(s)]
         writeFileSync(leasesFile, JSON.stringify(leases))
+        return Promise.resolve()
       })
       throw new Error(`testkit: fund broadcast failed ${r.description ?? ''}`.slice(0, 160))
     }
@@ -828,7 +831,7 @@ export class StackFunder implements Funder {
     const outs = this.store.list() as FundingOut[]
     const i = outs.findIndex((u) => u.satoshis >= satoshis)
     if (i < 0) throw new Error('StackFunder: no utxo of that size')
-    const u = outs[i]!
+    const u = outs[i]
     await this.store.drop(u.tx.id('hex'), u.vout)
     return u
   }

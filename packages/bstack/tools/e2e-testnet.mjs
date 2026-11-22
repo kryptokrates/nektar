@@ -15,7 +15,7 @@
 //   testnet keystore (.state/testnet-data/fee.key.json + NEKTAR_KEY_PASSPHRASE /
 //   .state/testnet-passphrase). The key must hold testnet UTXOs (~10k sats).
 // Run: node packages/bstack/tools/e2e-testnet.mjs
-import { PrivateKey, Transaction, P2PKH } from '@bsv/sdk'
+import { PrivateKey, Transaction } from '@bsv/sdk'
 import { BsvBroadcaster, IndexTracker, discoverUtxos, merklePathMainnet } from '@nektar/chain'
 import {
   mintTree,
@@ -98,7 +98,7 @@ if (utxos.length === 0) {
   process.exit(1)
 }
 const pool = [...utxos]
-const takeFunding = async (sats) => {
+const takeFunding = (sats) => {
   const i = pool.findIndex((u) => u.satoshis >= sats + 200)
   if (i < 0) throw new Error(`no UTXO covers ${sats} sats`)
   return pool.splice(i, 1)[0]
@@ -122,7 +122,7 @@ const lanes = [
   ['finger', await fingerFundingLock(key)]
 ]
 for (const [kind, lock] of lanes) {
-  const funding = await takeFunding(800)
+  const funding = takeFunding(800)
   const tx = await mintTree({ key, funding, n: 4, satsPerOutput: 1, ...(lock !== undefined ? { lock } : {}) })
   const br = await broadcaster.broadcast(tx)
   check(br.status === 'success', `${kind} funding tree broadcast (${tx.id('hex').slice(0, 16)}…)`)

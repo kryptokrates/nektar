@@ -130,21 +130,21 @@ export const txObject = async (deps: RtDeps) => {
         // inRtScope: same-key emits inside this handler go direct — routing
         // back through the object would self-deadlock the exclusive key
         await inRtScope({ txKey: ctx.key }, async () => {
-          const w = await ctx.run('load', () => s.load(ctx.key))
+          const w = await ctx.run('load', () => Promise.resolve(s.load(ctx.key)))
           if (w === undefined) return { accepted: false }
-          const r = await ctx.run('commit', () => s.commit(w, o))
+          const r = await ctx.run('commit', () => Promise.resolve(s.commit(w, o)))
           if (!r.accepted) return { accepted: false, next: w.state, intents: [] as string[] }
-          const ok = await ctx.run('intents', () => s.intents(w, r.intents))
+          const ok = await ctx.run('intents', () => Promise.resolve(s.intents(w, r.intents)))
           const eventId = r.eventId
-          if (ok && eventId !== undefined) await ctx.run('mark', () => s.mark(eventId))
+          if (ok && eventId !== undefined) await ctx.run('mark', () => Promise.resolve(s.mark(eventId)))
           return { accepted: true, next: r.next, intents: r.intents }
         }),
       resubmit: async (ctx: restate.ObjectContext) =>
         await inRtScope({ txKey: ctx.key }, async () => {
           if (deps.submit === undefined) return { resubmitted: false }
-          const w = await ctx.run('load', () => s.load(ctx.key))
+          const w = await ctx.run('load', () => Promise.resolve(s.load(ctx.key)))
           if (w === undefined) return { resubmitted: false }
-          const r = await ctx.run('resubmit', () => s.resubmit(ctx.key))
+          const r = await ctx.run('resubmit', () => Promise.resolve(s.resubmit(ctx.key)))
           return { resubmitted: r !== undefined, state: r?.state }
         })
     }
@@ -216,10 +216,11 @@ export const dealObject = async (deps: DealDeps) => {
     name: EXEC_SVC.deal,
     options: RT_OPTS,
     handlers: {
-      advance: async (ctx: restate.ObjectContext, arg?: { op?: string }) => await ctx.run('advance', () => leg(arg, ctx.key)),
-      due: async (ctx: restate.ObjectContext, arg?: { op?: string }) => await ctx.run('advance', () => leg(arg, ctx.key)),
-      event: async (ctx: restate.ObjectContext, item: DealEvent) => await ctx.run('event', () => deps.inboxEvent(item)),
-      reconcile: async (ctx: restate.ObjectContext, arg?: { op?: string }) => await ctx.run('reconcile', () => deps.reconcileOp(arg?.op ?? ctx.key))
+      advance: async (ctx: restate.ObjectContext, arg?: { op?: string }) => await ctx.run('advance', () => Promise.resolve(leg(arg, ctx.key))),
+      due: async (ctx: restate.ObjectContext, arg?: { op?: string }) => await ctx.run('advance', () => Promise.resolve(leg(arg, ctx.key))),
+      event: async (ctx: restate.ObjectContext, item: DealEvent) => await ctx.run('event', () => Promise.resolve(deps.inboxEvent(item))),
+      reconcile: async (ctx: restate.ObjectContext, arg?: { op?: string }) =>
+        await ctx.run('reconcile', () => Promise.resolve(deps.reconcileOp(arg?.op ?? ctx.key)))
     }
   })
 }
@@ -256,10 +257,11 @@ export const custodyObject = async (deps: CustodyDeps) => {
     options: RT_OPTS,
     handlers: {
       submit: async (ctx: restate.ObjectContext, arg: CustodyLeg) =>
-        await scope(ctx.key, arg.txScope, () => ctx.run('submit', () => deps.wallet.submit(arg.actionId))),
+        await scope(ctx.key, arg.txScope, () => Promise.resolve(ctx.run('submit', () => deps.wallet.submit(arg.actionId)))),
       markRejected: async (ctx: restate.ObjectContext, arg: CustodyLeg) =>
-        await scope(ctx.key, arg.txScope, () => ctx.run('markRejected', () => deps.wallet.markRejectedById(arg.actionId, arg.observation))),
-      resubmitPending: async (ctx: restate.ObjectContext) => await scope(ctx.key, undefined, () => ctx.run('resubmit', () => deps.wallet.resubmitPending()))
+        await scope(ctx.key, arg.txScope, () => Promise.resolve(ctx.run('markRejected', () => deps.wallet.markRejectedById(arg.actionId, arg.observation)))),
+      resubmitPending: async (ctx: restate.ObjectContext) =>
+        await scope(ctx.key, undefined, () => Promise.resolve(ctx.run('resubmit', () => deps.wallet.resubmitPending())))
     }
   })
 }
@@ -294,7 +296,7 @@ export interface TransportDeps {
 export const transportDrainBody =
   (deps: TransportDeps) =>
   async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
-    const rows = await run('scan', () => deps.dueRows())
+    const rows = await run('scan', () => Promise.resolve(deps.dueRows()))
     // one journaled send per row, keyed by destination — per-host order +
     // cross-host parallelism; idempotent on actionId so a replayed or raced
     // drain can't double-send
@@ -310,7 +312,7 @@ export const transportDrainBody =
     // self-schedule the ceiling at the earliest pending wake — the durable
     // successor of armOutboxTimer; empty box leaves the loop asleep until
     // outboxReady pokes it
-    const next = await run('next', () => deps.nextAt())
+    const next = await run('next', () => Promise.resolve(deps.nextAt()))
     if (next !== undefined)
       // EVERY drain invocation arms a successor — outboxReady pokes and
       // wake-cycle drains run this same body, so an unkeyed arm adds one
@@ -333,7 +335,7 @@ export const transportObject = async (deps: TransportDeps) => {
     name: EXEC_SVC.transport,
     options: RT_OPTS_FLOOR,
     handlers: {
-      deliver: async (ctx: restate.ObjectContext, item: OutboxItem) => await ctx.run('deliver', () => deps.deliverItem(item)),
+      deliver: async (ctx: restate.ObjectContext, item: OutboxItem) => await ctx.run('deliver', () => Promise.resolve(deps.deliverItem(item))),
       drain: async (ctx: restate.ObjectContext) => {
         const transport = ctx.objectSendClient({ name: EXEC_SVC.transport } as never, TRANSPORT_DRAIN_KEY) as unknown as {
           drain: (o: unknown, opts?: unknown) => Promise<void>
@@ -386,7 +388,7 @@ export const sweepTickBody =
 export const sweepBootBody =
   (deps: SweepDeps) =>
   async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
-    const rows = await run('rows', () => deps.resubmitRows())
+    const rows = await run('rows', () => Promise.resolve(deps.resubmitRows()))
     for (const w of rows) await send({ service: EXEC_SVC.tx, handler: 'resubmit', key: w.actionId }, {})
     return { sent: rows.length }
   }
@@ -522,32 +524,32 @@ export const dealfanTickBody =
     // replay — an unjournaled gate produces a different send stream on
     // replay and the invocation dies JournalMismatchError instead of
     // completing.
-    const now0 = await run('now', async () => (deps.now ?? Date.now)())
+    const now0 = await run('now', () => Promise.resolve((deps.now ?? Date.now)()))
     const eb = Math.floor(now0 / WAITS.fanEventResend.ms)
-    const ab = deps.tickSeq === undefined ? Math.floor(now0 / WAITS.fanAdvanceResend.ms) : await run('fanseq', async () => deps.tickSeq!())
-    const inbox = await run('inbox', () => deps.pendingInbox())
+    const ab = deps.tickSeq === undefined ? Math.floor(now0 / WAITS.fanAdvanceResend.ms) : await run('fanseq', () => Promise.resolve(deps.tickSeq!()))
+    const inbox = await run('inbox', () => Promise.resolve(deps.pendingInbox()))
     for (const i of inbox)
-      if (!(await run(`dup:ev:${i.source}:${i.messageId}`, async () => dup(`ev:${i.source}:${i.messageId}`, WAITS.fanEventResend.ms))))
+      if (!(await run(`dup:ev:${i.source}:${i.messageId}`, () => Promise.resolve(dup(`ev:${i.source}:${i.messageId}`, WAITS.fanEventResend.ms)))))
         await send({ service: EXEC_SVC.deal, handler: 'event', key: dealEventKey(i) }, i, {
           idempotencyKey: `fan:ev:${i.source}:${i.messageId}:${eb}`
         })
-    const ops = await run('ops', () => deps.liveOps())
+    const ops = await run('ops', () => Promise.resolve(deps.liveOps()))
     for (const o of ops)
-      if (!(await run(`dup:adv:${o.operationId}`, async () => dup(`adv:${o.operationId}`, WAITS.fanAdvanceResend.ms))))
+      if (!(await run(`dup:adv:${o.operationId}`, () => Promise.resolve(dup(`adv:${o.operationId}`, WAITS.fanAdvanceResend.ms)))))
         await send(
           { service: EXEC_SVC.deal, handler: 'advance', key: dealOpKey(o) },
           { op: o.operationId },
           { idempotencyKey: `fan:adv:${o.operationId}:${ab}` }
         )
-    const rec = await run('reconcile', () => deps.reconcileOps())
+    const rec = await run('reconcile', () => Promise.resolve(deps.reconcileOps()))
     for (const o of rec)
-      if (!(await run(`dup:rec:${o.operationId}`, async () => dup(`rec:${o.operationId}`, WAITS.fanAdvanceResend.ms))))
+      if (!(await run(`dup:rec:${o.operationId}`, () => Promise.resolve(dup(`rec:${o.operationId}`, WAITS.fanAdvanceResend.ms)))))
         await send(
           { service: EXEC_SVC.deal, handler: 'reconcile', key: dealOpKey(o) },
           { op: o.operationId },
           { idempotencyKey: `fan:rec:${o.operationId}:${ab}` }
         )
-    if (deps.resubmitPending !== undefined) await run('resubmit', () => deps.resubmitPending!())
+    if (deps.resubmitPending !== undefined) await run('resubmit', () => Promise.resolve(deps.resubmitPending!()))
     // the floor: every tick self-arms the next at the adaptive ceiling —
     // durable delayed send under restate, executor timer under local.
     // ceilingMs() <= 0 is the floor's off-switch (intervalMs:0 = event-driven
@@ -557,9 +559,9 @@ export const dealfanTickBody =
     // so an unkeyed arm adds a permanent parallel chain per extra tick and
     // the delayed-send backlog grows without bound (rt/arm-multiplication).
     // Quantizing on ceiling windows converges all chains to ≤1 pending arm.
-    const ceil = await run('ceiling', async () => deps.ceilingMs())
+    const ceil = await run('ceiling', () => Promise.resolve(deps.ceilingMs()))
     if (ceil > 0) {
-      const now = await run('armNow', async () => (deps.now ?? Date.now)())
+      const now = await run('armNow', () => Promise.resolve((deps.now ?? Date.now)()))
       await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` })
     }
     return { events: inbox.length, advanced: ops.length, reconciled: rec.length }
@@ -667,7 +669,7 @@ const wakeCycle = async (send: RtSend, now: () => number, fanSvc: string): Promi
 export const wakeTxProofBody =
   (deps: WakeDeps) =>
   async (send: RtSend, arg: { txid: string; mpHex: string }, run: StepRun = (_n, fn) => fn()) => {
-    if (deps.legs.txProof !== undefined) await run('ledger', () => deps.legs.txProof!(arg.txid, arg.mpHex))
+    if (deps.legs.txProof !== undefined) await run('ledger', () => Promise.resolve(deps.legs.txProof!(arg.txid, arg.mpHex)))
     deps.hint(arg.txid)
     await wakeCycle(send, deps.now ?? Date.now, deps.fanSvc ?? EXEC_SVC.dealfan)
     return { done: true }
@@ -682,7 +684,7 @@ export const wakeTxRejectedBody = (deps: WakeDeps) => async (send: RtSend, arg: 
 export const wakeTxAbandonedBody =
   (deps: WakeDeps) =>
   async (send: RtSend, arg: { txid: string }, run: StepRun = (_n, fn) => fn()) => {
-    if (deps.legs.txAbandoned !== undefined) await run('ledger', () => deps.legs.txAbandoned!(arg.txid))
+    if (deps.legs.txAbandoned !== undefined) await run('ledger', () => Promise.resolve(deps.legs.txAbandoned!(arg.txid)))
     await wakeCycle(send, deps.now ?? Date.now, deps.fanSvc ?? EXEC_SVC.dealfan)
     return { done: true }
   }
@@ -690,7 +692,7 @@ export const wakeTxAbandonedBody =
 export const wakeHeightBody =
   (deps: WakeDeps) =>
   async (send: RtSend, arg: { tip: number }, run: StepRun = (_n, fn) => fn()) => {
-    const due = deps.legs.dueAtHeight === undefined ? false : await run('due', () => deps.legs.dueAtHeight!(arg.tip))
+    const due = deps.legs.dueAtHeight === undefined ? false : await run('due', () => Promise.resolve(deps.legs.dueAtHeight!(arg.tip)))
     if (due) {
       const b = Math.floor((deps.now ?? Date.now)() / 1000)
       await send({ service: deps.fanSvc ?? EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY }, {}, { idempotencyKey: `dealfan:poke:${b}` })
@@ -701,7 +703,7 @@ export const wakeHeightBody =
 export const wakeReorgBody =
   (deps: WakeDeps) =>
   async (_send: RtSend, arg: { from: number }, run: StepRun = (_n, fn) => fn()) => {
-    if (deps.legs.reorg !== undefined) await run('reorg', () => deps.legs.reorg!(arg.from))
+    if (deps.legs.reorg !== undefined) await run('reorg', () => Promise.resolve(deps.legs.reorg!(arg.from)))
     return { done: true }
   }
 
@@ -766,7 +768,7 @@ export interface CronDeps {
 export const cronTickBody =
   (service: string, deps: CronDeps) =>
   async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
-    await run('tick', () => deps.tick())
+    await run('tick', () => Promise.resolve(deps.tick()))
     // ceilingMs() <= 0 is the cadence's off-switch — a zero-delay arm is a
     // hot infinite loop, not a floor
     // The arm is content-keyed on its cadence window — every tick invocation
@@ -775,9 +777,9 @@ export const cronTickBody =
     // The window converges all chains to ≤1 pending arm. The ceiling and
     // clock are journaled too — replaying a tick re-arms with the journaled
     // values, not a different command stream.
-    const ceil = await run('ceiling', async () => deps.ceilingMs())
+    const ceil = await run('ceiling', () => Promise.resolve(deps.ceilingMs()))
     if (ceil > 0) {
-      const now = await run('armNow', async () => (deps.now ?? Date.now)())
+      const now = await run('armNow', () => Promise.resolve((deps.now ?? Date.now)()))
       await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` })
     }
     return { done: true }
@@ -846,8 +848,9 @@ export const notifyObject = async (deps: NotifyDeps) => {
     options: RT_OPTS,
     handlers: {
       peer: async (ctx: restate.ObjectContext, arg: { watch: string; service: string; query?: unknown }) =>
-        await ctx.run('peer', () => deps.peer(arg.watch, arg.service, arg.query)),
-      carrier: async (ctx: restate.ObjectContext, arg: { push: string; beefHex: string }) => await ctx.run('carrier', () => deps.carrier(arg.push, arg.beefHex))
+        await ctx.run('peer', () => Promise.resolve(deps.peer(arg.watch, arg.service, arg.query))),
+      carrier: async (ctx: restate.ObjectContext, arg: { push: string; beefHex: string }) =>
+        await ctx.run('carrier', () => Promise.resolve(deps.carrier(arg.push, arg.beefHex)))
     }
   })
 }

@@ -37,7 +37,7 @@ const cfg = {
   indexerApiKey: process.env.NEKTAR_INDEXER_API_KEY ?? process.env.NEKTAR_WOC_API_KEY
 }
 const broadcaster = new BsvBroadcaster(cfg)
-const tracker = new IndexTracker(cfg)
+const _tracker = new IndexTracker(cfg)
 
 // --- key -------------------------------------------------------------------
 function loadWif() {

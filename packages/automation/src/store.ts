@@ -730,7 +730,7 @@ export class AutomationStore {
         patch.data = canonicalJson(merged)
         // the column shadows data.provenHeight so hasLiveOps seeks instead
         // of parsing JSON — written in the same transaction, never drifts
-        patch.proven_height = (merged.provenHeight as number | undefined) ?? null
+        patch.proven_height = merged.provenHeight ?? null
       }
       if (change.dueAt !== undefined) patch.due_at = change.dueAt
       // derivable-at-commit deadline: entering a bounded state arms its

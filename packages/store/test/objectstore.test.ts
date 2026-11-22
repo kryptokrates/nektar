@@ -44,11 +44,12 @@ async function fakeS3(
   const objects = new Map<string, { bytes: Uint8Array; meta: Record<string, string> }>()
   const server = createServer((req, res) => {
     const headers = Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, Array.isArray(v) ? v.join(',') : String(v)]))
-    const auth = headers.authorization ?? ''
+    const auth = headers.authorization
     const m = auth.match(/Signature=([0-9a-f]+)/)
     // public buckets serve unsigned GET/HEAD — but a *signed* request with a
     // bad signature is still refused (gateway behaviour, drives the fallback)
     const anonymous = publicRead && (req.method === 'GET' || req.method === 'HEAD') && auth === ''
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- IncomingMessage.method/url are string|undefined; the assertions are required
     if (!anonymous && (m === null || m[1] !== expectedSig(req.method!, req.url!, headers, secret))) {
       res.writeHead(403, { 'content-type': 'application/xml' }).end(`<Error><Code>SignatureDoesNotMatch</Code><Message>bad sig</Message></Error>`)
       return
@@ -93,7 +94,7 @@ async function fakeS3(
 const store = (url: string, secret = SECRET) =>
   new S3ObjectStore({ endpoint: url, bucket: 'packs-zzktyfefka', accessKey: ACCESS, secretKey: secret, region: REGION })
 
-test('objectstore: put/get/head round trip on a signature-checking fake S3', async (t) => {
+test('objectstore: put/get/head round trip on a signature-checking fake S3', async (_t) => {
   const { server, url, objects } = await fakeS3()
   try {
     const s = store(url)
@@ -112,7 +113,7 @@ test('objectstore: put/get/head round trip on a signature-checking fake S3', asy
   }
 })
 
-test('objectstore: wrong secret → 403 surfaces as an error', async (t) => {
+test('objectstore: wrong secret → 403 surfaces as an error', async (_t) => {
   const { server, url } = await fakeS3()
   try {
     await assert.rejects(() => store(url, 'wrong-secret').put('k.json', new Uint8Array([1])), /403|SignatureDoesNotMatch/)
@@ -121,7 +122,7 @@ test('objectstore: wrong secret → 403 surfaces as an error', async (t) => {
   }
 })
 
-test('objectstore: getVerified returns verified bytes', async (t) => {
+test('objectstore: getVerified returns verified bytes', async (_t) => {
   const { server, url } = await fakeS3()
   try {
     const s = store(url)
@@ -135,7 +136,7 @@ test('objectstore: getVerified returns verified bytes', async (t) => {
   }
 })
 
-test('objectstore: getVerified rejects tampered content', async (t) => {
+test('objectstore: getVerified rejects tampered content', async (_t) => {
   const { server, url, objects } = await fakeS3()
   try {
     const s = store(url)
@@ -147,7 +148,7 @@ test('objectstore: getVerified rejects tampered content', async (t) => {
   }
 })
 
-test('objectstore: getVerified rejects oversized content and oversized refs', async (t) => {
+test('objectstore: getVerified rejects oversized content and oversized refs', async (_t) => {
   const { server, url, objects } = await fakeS3()
   try {
     const s = store(url)
@@ -161,7 +162,7 @@ test('objectstore: getVerified rejects oversized content and oversized refs', as
   }
 })
 
-test('objectstore: credential-free read — a remote reader resolves the ref by digest alone', async (t) => {
+test('objectstore: credential-free read — a remote reader resolves the ref by digest alone', async (_t) => {
   const { server, url, objects } = await fakeS3(SECRET, true)
   try {
     const bytes = new TextEncoder().encode('{"public":true}')
@@ -182,7 +183,7 @@ test('objectstore: credential-free read — a remote reader resolves the ref by 
   }
 })
 
-test('objectstore: signed read falls back to unsigned when the gateway refuses', async (t) => {
+test('objectstore: signed read falls back to unsigned when the gateway refuses', async (_t) => {
   const { server, url, objects } = await fakeS3(SECRET, true)
   try {
     const bytes = new TextEncoder().encode('fallback bytes')
@@ -201,7 +202,7 @@ test('objectstore: signed read falls back to unsigned when the gateway refuses',
   }
 })
 
-test('objectstore: env config — off without URL/bucket, secret via file or env', async (t) => {
+test('objectstore: env config — off without URL/bucket, secret via file or env', (_t) => {
   assert.equal(objectStoreFromEnv({}), undefined)
   assert.equal(
     objectStoreFromEnv({

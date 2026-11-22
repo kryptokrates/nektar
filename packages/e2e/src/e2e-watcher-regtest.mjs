@@ -2,7 +2,7 @@
 // Deploys a FRAUDULENT claim (committed journalRoot lies about the real
 // proof's journal), seeds the watcher registry + proof store, runs the
 // daemon once → the watcher must broadcast `challenge`.
-import { PrivateKey, LockingScript, Hash } from '@bsv/sdk'
+import { PrivateKey, Hash } from '@bsv/sdk'
 import { RunarContract, LocalSigner } from 'runar-sdk'
 import { NektarProvider } from '@nektar/anchor'
 import { TeranodeBroadcaster, ReserveFunder, bootstrapReserve, utxoStatus } from '@nektar/chain'

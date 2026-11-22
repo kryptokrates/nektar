@@ -25,10 +25,10 @@ if (hdrs) {
   const byH = new Map(list.map((h) => [h.height, h]))
   const tip = Math.max(0, ...list.map((h) => h.height))
   tracker = {
-    currentHeight: async () => tip,
-    tipHeight: async () => tip,
-    isValidRootForHeight: async (root, h) => byH.get(h)?.merkleRoot === root,
-    headerAtHeight: async (h) => byH.get(h)
+    currentHeight: () => tip,
+    tipHeight: () => tip,
+    isValidRootForHeight: (root, h) => byH.get(h)?.merkleRoot === root,
+    headerAtHeight: (h) => byH.get(h)
   }
 } else if (rpc) {
   const call = (m, p) =>

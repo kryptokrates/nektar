@@ -30,16 +30,16 @@ async function open() {
 function deps(store: AutomationStore, extra: Partial<MarketDeps> = {}): MarketDeps {
   return {
     store,
-    call: async () => ({}),
+    call: () => Promise.resolve({}),
     memory: {} as never,
     key,
     network: 'regtest',
-    height: async () => 1,
-    fetchTx: async () => undefined,
+    height: () => Promise.resolve(1),
+    fetchTx: () => Promise.resolve(undefined),
     transport: {} as never,
     ai: {} as never,
     ...extra
-  } as MarketDeps
+  }
 }
 
 const policy = (): AutomationPolicy => ({
@@ -68,21 +68,21 @@ const policy = (): AutomationPolicy => ({
   sandbox: { mode: 'sandbox-only' }
 })
 
-test('dealfan.tick: inbox → ev:<wantId>, ops → advance keys, reconcile rows → reconcile keys', async () => {
+void test('dealfan.tick: inbox → ev:<wantId>, ops → advance keys, reconcile rows → reconcile keys', async () => {
   const ex = new Dispatcher()
   const sent: Array<{ handler: string; key: string }> = []
   try {
-    for (const h of ['advance', 'due', 'reconcile']) ex.register(EXEC_SVC.deal, h, async (_a, k) => void sent.push({ handler: h, key: k ?? '' }))
-    ex.register(EXEC_SVC.deal, 'event', async (_a, k) => void sent.push({ handler: 'event', key: k ?? '' }))
+    for (const h of ['advance', 'due', 'reconcile']) ex.register(EXEC_SVC.deal, h, (_a, k) => Promise.resolve(void sent.push({ handler: h, key: k ?? '' })))
+    ex.register(EXEC_SVC.deal, 'event', (_a, k) => Promise.resolve(void sent.push({ handler: 'event', key: k ?? '' })))
     const items: DealEvent[] = [
       { source: 'lane', messageId: 'm1', kind: 'want', payload: { wantId: 'w-want' } },
       { source: 'msg:peer', messageId: 'm2', kind: 'message', payload: { from: 'pk', msg: { type: 'accept', wantId: 'w-msg' } } },
       { source: 'lane', messageId: 'm3', kind: 'offer', payload: { offerId: 'o-noWant' } }
     ]
     wireDealfan(ex, {
-      pendingInbox: async () => items,
-      liveOps: async () => [{ operationId: 'op:a' }, { operationId: 'op:b' }],
-      reconcileOps: async () => [{ operationId: 'op:r' }],
+      pendingInbox: () => Promise.resolve(items),
+      liveOps: () => Promise.resolve([{ operationId: 'op:a' }, { operationId: 'op:b' }]),
+      reconcileOps: () => Promise.resolve([{ operationId: 'op:r' }]),
       ceilingMs: () => 60_000,
       log: () => {}
     })
@@ -98,11 +98,11 @@ test('dealfan.tick: inbox → ev:<wantId>, ops → advance keys, reconcile rows 
       { handler: 'reconcile', key: 'op:r' }
     ])
   } finally {
-    ex.close()
+    void ex.close()
   }
 })
 
-test('dealEvent: a routed message completes its inbox row; a gated want stays pending unharmed', async () => {
+void test('dealEvent: a routed message completes its inbox row; a gated want stays pending unharmed', async () => {
   const { kx, store } = await open()
   try {
     const engine = new MarketEngine(deps(store))
@@ -127,7 +127,7 @@ test('dealEvent: a routed message completes its inbox row; a gated want stays pe
   }
 })
 
-test('reconcileOp: a landed refused escrow arms refund_pending on the op key', async () => {
+void test('reconcileOp: a landed refused escrow arms refund_pending on the op key', async () => {
   const { kx, store } = await open()
   try {
     const hash = await store.approvePolicy(policy(), 'test')
@@ -140,11 +140,11 @@ test('reconcileOp: a landed refused escrow arms refund_pending on the op key', a
       state: 'funding_failed',
       data: { escrowTxid: 'tx-esc', pendingEscrow: { cfg: { refundAfter: 500 }, utxo: { txid: 'tx-esc', vout: 0, satoshis: 1, script: 'aa' } } }
     })
-    const engine = new MarketEngine(deps(store, { txFacts: async () => ({ verdict: 'mined' as const, txid: 'tx-esc' }) }))
+    const engine = new MarketEngine(deps(store, { txFacts: () => Promise.resolve({ verdict: 'mined' as const, txid: 'tx-esc' }) }))
     await engine.reconcileOp(operation.operationId)
     const cur = await store.operation(operation.operationId)
     assert.equal(cur?.state, 'refund_pending')
-    assert.equal(cur?.dueHeight, 500)
+    assert.equal(cur.dueHeight, 500)
   } finally {
     await kx.destroy()
   }

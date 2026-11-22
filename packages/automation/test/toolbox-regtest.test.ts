@@ -13,7 +13,7 @@ import { RegtestWalletServices } from '../src/toolbox-services.js'
 // The wallet-toolbox lane on the local Teranode stack: construction, its own
 // createAction funding path (broadcast through RegtestWalletServices), output
 // listing via ToolboxFunder, and SigningWallet conformance for carrier locks.
-test('toolbox wallet: fund, list, sign against Teranode', async (t) => {
+void test('toolbox wallet: fund, list, sign against Teranode', async (t) => {
   if (stackOnly(t, 'needs the node treasury cfg + RPC for the spawned toolbox')) return
   try {
     const world = await stackWorld(t, 4, 5_000)
@@ -24,8 +24,8 @@ test('toolbox wallet: fund, list, sign against Teranode', async (t) => {
     const tbs: ToolboxHandle[] = []
     t.after(async () => {
       for (const tb of tbs) {
-        await tb.wallet.destroy?.().catch(() => undefined)
-        await tb.activeStorage.destroy?.().catch(() => undefined)
+        await tb.wallet.destroy().catch(() => undefined)
+        await tb.activeStorage.destroy().catch(() => undefined)
       }
       rmSync(dir, { recursive: true, force: true })
     })

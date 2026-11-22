@@ -28,12 +28,12 @@ const _mkWallet = (outs: Out[], beef: number[]) => {
     relinquished,
     internalized,
     wallet: {
-      listOutputs: async () => ({ outputs: outs, BEEF: beef }),
-      relinquishOutput: async (a: { output: string }) => {
+      listOutputs: () => ({ outputs: outs, BEEF: beef }),
+      relinquishOutput: (a: { output: string }) => {
         relinquished.push(a.output)
         return { relinquished: true }
       },
-      internalizeAction: async (a: { tx: number[] }) => {
+      internalizeAction: (a: { tx: number[] }) => {
         internalized.push(a.tx.length)
         return { accepted: true }
       }
@@ -43,7 +43,7 @@ const _mkWallet = (outs: Out[], beef: number[]) => {
 // spv/proofless-funding: a BEEF whose entry carries the tx BUMP hands the
 // utxo out WITH its merkle path — the bare-hex rebuild used to strip it, and
 // every tree minted on that utxo lost its zero-conf anchor
-test('LiveWalletServices.postBeef: the relayed tx keeps its input sources — the guard can price it', async () => {
+void test('LiveWalletServices.postBeef: the relayed tx keeps its input sources — the guard can price it', async () => {
   // the wallet re-relays its own unconfirmed txs; rebuilt from bare hex the
   // inputs carried no source outputs and SpendGuard refused every one
   const key = PrivateKey.fromRandom()
@@ -59,10 +59,10 @@ test('LiveWalletServices.postBeef: the relayed tx keeps its input sources — th
   const svc = new LiveWalletServices({
     chain: 'test',
     mc: {},
-    tracker: { currentHeight: async () => 1, isValidRootForHeight: async () => true },
-    broadcast: async (tx) => {
+    tracker: { currentHeight: () => Promise.resolve(1), isValidRootForHeight: () => Promise.resolve(true) },
+    broadcast: (tx) => {
       seen.push(tx)
-      return { status: 'success', txid: tx.id('hex') }
+      return Promise.resolve({ status: 'success', txid: tx.id('hex') })
     }
   })
   const r = await svc.postBeef(beef as never, [child.id('hex')])
@@ -78,24 +78,24 @@ test('LiveWalletServices.postBeef: the relayed tx keeps its input sources — th
 const offlineMc = {
   indexerUrl: 'http://index.test',
   broadcasterUrl: 'http://arc.test',
-  fetchImpl: (async () => new Response('nf', { status: 404 })) as never
+  fetchImpl: (() => new Response('nf', { status: 404 })) as never
 }
 const mkServices = () =>
   new LiveWalletServices({
     chain: 'test',
     mc: offlineMc,
-    tracker: { currentHeight: async () => 1, isValidRootForHeight: async () => true },
-    broadcast: async (tx) => ({ status: 'success', txid: tx.id('hex') })
+    tracker: { currentHeight: () => Promise.resolve(1), isValidRootForHeight: () => Promise.resolve(true) },
+    broadcast: (tx) => Promise.resolve({ status: 'success', txid: tx.id('hex') })
   })
 
 // index-lag class: a tx we broadcast/adopted sits in txStore for minutes
 // before the index knows it — the wallet's own service calls used to
 // answer 'unknown'/404 against our own reality
-test('LiveWalletServices: txStore-first reads — own txs answer before the index knows them', async () => {
+void test('LiveWalletServices: txStore-first reads — own txs answer before the index knows them', async () => {
   const tx = fundingTx(1000)
   const txid = tx.id('hex')
   const svc = mkServices()
-  svc.txLookup = async (id) => (id === txid ? tx : undefined)
+  svc.txLookup = (id) => Promise.resolve(id === txid ? tx : undefined)
   const raw = await svc.getRawTx(txid)
   assert.equal(raw.name, 'txstore')
   assert.deepEqual(raw.rawTx, Array.from(tx.toBinary()))
@@ -108,7 +108,7 @@ test('LiveWalletServices: txStore-first reads — own txs answer before the inde
 // wallet beef consumers apply the same closure rule as internalize — a
 // bare unconfirmed tx is a rejection in a bag. Whole ancestry to a BUMP
 // is what the call owes.
-test('LiveWalletServices.getBeefForTxid: unconfirmed subject carries whole ancestry to a BUMP', async () => {
+void test('LiveWalletServices.getBeefForTxid: unconfirmed subject carries whole ancestry to a BUMP', async () => {
   const gp = fundingTx(1000) // mined — txStore keeps it path-attached
   gp.merklePath = new MerklePath(100, [
     [
@@ -128,7 +128,7 @@ test('LiveWalletServices.getBeefForTxid: unconfirmed subject carries whole ances
     [subject.id('hex'), subject]
   ])
   const svc = mkServices()
-  svc.txLookup = async (id) => store.get(id)
+  svc.txLookup = (id) => Promise.resolve(store.get(id))
   const beef = await svc.getBeefForTxid(subject.id('hex'))
   const ids = (beef as unknown as Beef).txs.map((t) => t.txid)
   for (const id of [subject.id('hex'), parent.id('hex'), gp.id('hex')]) assert.ok(ids.includes(id), `beef carries ${id.slice(0, 8)}`)

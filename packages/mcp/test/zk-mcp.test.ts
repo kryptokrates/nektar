@@ -2,10 +2,10 @@
 // identity + wire-encoded clearance reach recall; every negative is refused.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { testWorld, type TestFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { NektarMemory, callTool, ClientWallet, ClearanceAuthority } from '../src/index.js'
 
-test('MCP recall with wallet identity + clearance: level-2 read only when cleared; negatives refused', async (t) => {
+void test('MCP recall with wallet identity + clearance: level-2 read only when cleared; negatives refused', async (t) => {
   const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w

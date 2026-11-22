@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PrivateKey } from '@bsv/sdk'
 import { utf8 } from '@nektar/core'
-import { testWorld, type TestFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { signProvenance, verifyCheckpoint, PromiseMonitor } from '@nektar/log'
 import { signBinding, answerChallenge, issueClearance, proveAccess } from '@nektar/identity'
 import { NektarMemory, IngestError, FileSecurityStore, type NektarMemoryOptions } from '../src/index.js'
@@ -18,7 +18,7 @@ async function world(t: { skip: (m?: string) => void }, opts: NektarMemoryOption
 }
 const P = { source: 'doi:10.1/manual', time: 1_700_000_000, signature: new Uint8Array(0), modelId: 'm' }
 
-test('COM-003: signed provenance verified at ingest; unsigned refused when required', async (t) => {
+void test('COM-003: signed provenance verified at ingest; unsigned refused when required', async (t) => {
   const src = PrivateKey.fromRandom()
   const pub = src.toPublicKey().toString()
   const s = await world(t, { requireSignedProvenance: true, agentSeed: PrivateKey.fromRandom() })
@@ -42,7 +42,7 @@ test('COM-003: signed provenance verified at ingest; unsigned refused when requi
   assert.equal((await _w2.mem.remember('m', 'unsigned ok when not required')).seq, 0)
 })
 
-test('LOG-007/005: every anchor yields a signed checkpoint; the monitor confirms promises', async (t) => {
+void test('LOG-007/005: every anchor yields a signed checkpoint; the monitor confirms promises', async (t) => {
   const _w = await world(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -72,7 +72,7 @@ test('LOG-007/005: every anchor yields a signed checkpoint; the monitor confirms
   )
 })
 
-test('LOG-006: flushDue anchors on the age threshold without a new write', async (t) => {
+void test('LOG-006: flushDue anchors on the age threshold without a new write', async (t) => {
   const s = await world(t, { batchPolicy: { maxLeaves: 100, maxAgeMs: 0 } })
   if (s === undefined) return
   const { mem } = s
@@ -85,7 +85,7 @@ test('LOG-006: flushDue anchors on the age threshold without a new write', async
   assert.deepEqual(await m2.flushDue(), [], 'nothing due')
 })
 
-test('CHN-006: pending → mined → final; requireFinal withholds until finalityDepth', async (t) => {
+void test('CHN-006: pending → mined → final; requireFinal withholds until finalityDepth', async (t) => {
   const s = await world(t, { finalityDepth: 3 })
   if (s === undefined) return
   const { chain, mem } = s
@@ -105,7 +105,7 @@ test('CHN-006: pending → mined → final; requireFinal withholds until finalit
   assert.equal((await mem.recall('s', { seq: 0, requireFinal: true })).items[0].text, 'a')
 })
 
-test('persistence: challenges, used ZK transcripts and revocations survive a restart', async (t) => {
+void test('persistence: challenges, used ZK transcripts and revocations survive a restart', async (t) => {
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-sec-')), 'security.json')
   const authority = PrivateKey.fromRandom()
   const opts = { securityStore: new FileSecurityStore(file), clearanceAuthorities: [authority.toPublicKey().toString()] }

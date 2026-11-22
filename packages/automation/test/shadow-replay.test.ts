@@ -28,17 +28,17 @@ async function open(now?: () => number) {
 function deps(store: AutomationStore, now: () => number, extra: Partial<MarketDeps> = {}): MarketDeps {
   return {
     store,
-    call: async () => ({}),
+    call: () => Promise.resolve({}),
     memory: {} as never,
     key,
     network: 'regtest',
-    height: async () => 1,
-    fetchTx: async () => undefined,
+    height: () => Promise.resolve(1),
+    fetchTx: () => Promise.resolve(undefined),
     transport: {} as never,
     ai: {} as never,
     now,
     ...extra
-  } as MarketDeps
+  }
 }
 
 function oneOutputTx(): Transaction {
@@ -75,7 +75,7 @@ function tapTx(store: AutomationStore, log: { from: string; to: string }[]) {
   }
 }
 
-test('shadow: reconcile-dead escrow agrees with the live FSM', async (t) => {
+void test('shadow: reconcile-dead escrow agrees with the live FSM', async (t) => {
   let now = 1_000_000
   const { kx, store } = await open(() => now)
   t.after(() => kx.destroy())
@@ -92,7 +92,7 @@ test('shadow: reconcile-dead escrow agrees with the live FSM', async (t) => {
   })
   const ex = new Dispatcher()
   t.after(() => ex.close())
-  const engine = new MarketEngine(deps(store, () => now, { txFacts: async () => ({ verdict: 'dead' }) as never, executor: ex }))
+  const engine = new MarketEngine(deps(store, () => now, { txFacts: () => ({ verdict: 'dead' }) as never, executor: ex }))
   wireEngine(ex, engine, { store, fx: {}, ceilingMs: () => 60000, now: () => now, log: () => {} })
   await engine.tick()
   const evs = (await store.events(operation.operationId)).map((e) => ({ from: e.from ?? '', to: e.to, cause: e.cause }))
@@ -101,7 +101,7 @@ test('shadow: reconcile-dead escrow agrees with the live FSM', async (t) => {
   for (const d of diffs) assert.equal(d.kind, 'agree', `unexpected divergence: ${JSON.stringify(d)}`)
 })
 
-test('shadow: the abandoned verdict agrees on the label but live skips the custody intent — F2/F6', async (t) => {
+void test('shadow: the abandoned verdict agrees on the label but live skips the custody intent — F2/F6', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const txLog: { from: string; to: string; hint?: 'abandon' }[] = []
@@ -115,7 +115,7 @@ test('shadow: the abandoned verdict agrees on the label but live skips the custo
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const w = new WalletCoordinator(store, {
-    broadcast: async () => ({ status: 'success' }),
+    broadcast: () => Promise.resolve({ status: 'success' }),
     ...hooks,
     exec: ex
   })
@@ -135,7 +135,7 @@ test('shadow: the abandoned verdict agrees on the label but live skips the custo
   assert.equal(died, 1, 'live skipped the tx-died intent the spec carries — the F2 custody gap')
 })
 
-test('shadow: expired-then-landed is a live-silent edge the spec already covers', async (t) => {
+void test('shadow: expired-then-landed is a live-silent edge the spec already covers', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const { txStep } = await import('../src/machines/tx.machine.js')
@@ -150,7 +150,7 @@ test('shadow: expired-then-landed is a live-silent edge the spec already covers'
   assert.equal(live?.state, 'expired', 'live still strands it — F5 confirmed as a live-silent edge')
 })
 
-test('shadow census: every cause literal emitted in src resolves to a modeled edge', async (t) => {
+void test('shadow census: every cause literal emitted in src resolves to a modeled edge', (t) => {
   // a cause with no map entry and no no-edge classification replays 'unmodeled'
   // forever — the census fails here the moment a new cause ships unclassified.
   const srcDir = (() => {
@@ -190,7 +190,7 @@ test('shadow census: every cause literal emitted in src resolves to a modeled ed
     assert.ok(noEdge.has(c) || opsCauseCandidates(c) !== undefined, `cause '${c}' is unmodeled — add a map row or a no-edge classification`)
 })
 
-test('shadow: real-history replay — market_events from a live automation.sqlite', { skip: !existsSync(process.env.NEKTAR_REPLAY_DB ?? '') }, async (t) => {
+void test('shadow: real-history replay — market_events from a live automation.sqlite', { skip: !existsSync(process.env.NEKTAR_REPLAY_DB ?? '') }, async (t) => {
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: process.env.NEKTAR_REPLAY_DB! }, useNullAsDefault: true })
   t.after(() => kx.destroy())
   const rows = (await kx('market_events').select('operation_id', 'from_state', 'to_state', 'cause').orderBy('at')) as {
@@ -213,13 +213,13 @@ test('shadow: real-history replay — market_events from a live automation.sqlit
   for (const d of diffs) assert.notEqual(d.kind, 'unmodeled', `unmodeled cause in real history: ${JSON.stringify(d)}`)
 })
 
-test('shadow report: dump the diff list', async (t) => {
+void test('shadow report: dump the diff list', async (t) => {
   const { kx, store } = await open()
   const txLog: { from: string; to: string; hint?: 'abandon' }[] = []
   const hooks: Pick<WalletDeps, 'txSpent' | 'txDied'> = { txSpent: () => {}, txDied: () => {} }
   const ex = new Dispatcher()
   t.after(() => ex.close())
-  const w = new WalletCoordinator(store, { broadcast: async () => ({ status: 'success' }), ...hooks, exec: ex })
+  const w = new WalletCoordinator(store, { broadcast: () => Promise.resolve({ status: 'success' }), ...hooks, exec: ex })
   wireTx(ex, { store, fx: fxFor(w, hooks), log: () => {} })
   const tx = oneOutputTx()
   await w.prepareOwner('upkeep', tx)

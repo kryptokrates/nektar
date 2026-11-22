@@ -6,10 +6,10 @@ import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Transaction, P2PKH } from '@bsv/sdk'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld, testChain } from '@nektar/chain'
 import { txLogBroadcast } from '../src/rtsupport.js'
 
-test('tx log: two successful broadcasts → two lines with correct fee', async (t) => {
+void test('tx log: two successful broadcasts → two lines with correct fee', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-txlog-'))
   const logPath = join(dir, 'tx-log.jsonl')
   const w = await testWorld(t, 3, 10_000)
@@ -49,7 +49,7 @@ test('tx log: two successful broadcasts → two lines with correct fee', async (
   assert.equal(readFileSync(logPath, 'utf8').trim().split('\n').length, 2)
 })
 
-test('tx log: no path → the wrap is a pass-through', async (t) => {
+void test('tx log: no path → the wrap is a pass-through', async (t) => {
   const chain = (await testChain(t))!
   const inner = chain.broadcast.bind(chain)
   assert.equal(txLogBroadcast(inner, undefined), inner)

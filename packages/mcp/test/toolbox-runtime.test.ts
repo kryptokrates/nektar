@@ -15,7 +15,7 @@ import { join } from 'node:path'
 
 const OP_KEY = PrivateKey.fromRandom()
 
-test('toolbox custody: openRuntime defaults to the wallet — anchor spends through it', async (t) => {
+void test('toolbox custody: openRuntime defaults to the wallet — anchor spends through it', async (t) => {
   // NEKTAR_WALLET unset — toolbox is the custody default (the production path)
   delete process.env.NEKTAR_WALLET
   process.env.NEKTAR_OPERATOR_WIF = OP_KEY.toWif([0xef])

@@ -22,7 +22,7 @@
 import { createRequire } from 'node:module'
 import { Beef, MerklePath, PrivateKey, Transaction } from '@bsv/sdk'
 import { Services, Setup, StorageKnex, Wallet, WalletStorageManager, randomBytesHex, sdk } from '@bsv/wallet-toolbox'
-import { type BroadcastResult, type Funder, type FundingOut } from '@nektar/chain'
+import { type Funder, type FundingOut } from '@nektar/chain'
 import { join } from 'node:path'
 
 // the toolbox's own SDK instance — cjs build. Every object handed INTO the

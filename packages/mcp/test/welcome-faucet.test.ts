@@ -16,7 +16,7 @@ import { faucetDrip, faucetEnabled, FAUCET_DEFAULT_SATS } from '../src/faucet.js
 const tmp = () => mkdtempSync(join(tmpdir(), 'nektar-wf-'))
 const testAddr = () => PrivateKey.fromRandom().toAddress([0x6f])
 
-test('welcome: empty boot seeds the shard once; contented boot and repeat boots are untouched', async (t) => {
+void test('welcome: empty boot seeds the shard once; contented boot and repeat boots are untouched', async (t) => {
   const w = await testWorld(t, 4)
   if (w === undefined) return
   const { chain, funder } = w
@@ -43,7 +43,7 @@ test('welcome: empty boot seeds the shard once; contented boot and repeat boots 
   assert.ok(!mem2.shards().includes('welcome'))
 })
 
-test('faucet: gate honours env + network; caps hold across restarts', async (t) => {
+void test('faucet: gate honours env + network; caps hold across restarts', async (t) => {
   const w = await testWorld(t, 6, 1_000_000)
   if (w === undefined) return
   const { chain, funder } = w
@@ -79,7 +79,7 @@ test('faucet: gate honours env + network; caps hold across restarts', async (t) 
   if (capped.ok === false) assert.match(capped.error, /daily/)
 })
 
-test('faucet route: disabled → 404 without spending; enabled → public drip', async (t) => {
+void test('faucet route: disabled → 404 without spending; enabled → public drip', async (t) => {
   const w = await testWorld(t, 6, 1_000_000)
   if (w === undefined) return
   const { chain, funder } = w

@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
-import { TxStore, spendValid, testWorld, testChain, type TestChain, type TestFunder } from '@nektar/chain'
+import { TxStore, spendValid, testWorld, type TestChain, type TestFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/index.js'
 
 const liveMem = async (t: { skip: (m?: string) => void }): Promise<{ mem: NektarMemory; chain: TestChain; funder: TestFunder } | undefined> => {
@@ -48,7 +48,7 @@ const bumpFor = (txid: string): MerklePath =>
     ]
   ])
 
-test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it', async (t) => {
+void test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it', async (t) => {
   const _lm = await liveMem(t)
   if (_lm === undefined) return
   const { mem, chain, funder } = _lm
@@ -56,9 +56,9 @@ test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it
   const txid = child.id('hex')
   mem.rememberTx(child)
   let lookups = 0
-  mem.txLookup = async () => {
+  mem.txLookup = () => {
     lookups++
-    return undefined
+    return Promise.resolve(undefined)
   }
   const before = await mem.fetchTx(txid)
   assert.ok(before !== undefined && before.merklePath === undefined)
@@ -68,7 +68,7 @@ test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it
   assert.equal((await mem.fetchTx(txid))?.merklePath, mp)
 })
 
-test('fetchTx: proof and tx lookups are single attempts, remembered when they hit', async (t) => {
+void test('fetchTx: proof and tx lookups are single attempts, remembered when they hit', async (t) => {
   const _lm = await liveMem(t)
   if (_lm === undefined) return
   const { mem, chain, funder } = _lm
@@ -76,14 +76,14 @@ test('fetchTx: proof and tx lookups are single attempts, remembered when they hi
   const txid = child.id('hex')
   let txHits = 0
   let proofHits = 0
-  mem.txLookup = async (id: string) => {
+  mem.txLookup = (id: string) => {
     txHits++
-    return id === txid ? Transaction.fromHex(child.toHex()) : undefined
+    return Promise.resolve(id === txid ? Transaction.fromHex(child.toHex()) : undefined)
   }
   const mp = bumpFor(txid)
-  mem.proofLookup = async (id: string) => {
+  mem.proofLookup = (id: string) => {
     proofHits++
-    return id === txid ? mp : undefined
+    return Promise.resolve(id === txid ? mp : undefined)
   }
   assert.equal((await mem.fetchTx(txid))?.merklePath, mp)
   await mem.fetchTx(txid)
@@ -95,7 +95,7 @@ test('fetchTx: proof and tx lookups are single attempts, remembered when they hi
   assert.ok(Date.now() - t0 < 1000, 'a miss never sleeps')
 })
 
-test('wire: BEEF when the ancestry is proven — the receiver verifies it against its own headers', async (t) => {
+void test('wire: BEEF when the ancestry is proven — the receiver verifies it against its own headers', async (t) => {
   const _lm = await liveMem(t)
   if (_lm === undefined) return
   const { mem, chain, funder } = _lm
@@ -107,7 +107,7 @@ test('wire: BEEF when the ancestry is proven — the receiver verifies it agains
   assert.equal(got.tx.id('hex'), child.id('hex'))
   assert.equal(got.spv, true)
   // a receiver whose headers don't contain this block cannot verify the proof
-  const foreign = { isValidRootForHeight: async () => false, currentHeight: async () => 0 }
+  const foreign = { isValidRootForHeight: () => Promise.resolve(false), currentHeight: () => Promise.resolve(0) }
   assert.equal((await TxStore.read(wire, foreign)).spv, false)
   // a tampered child fails SPV
   const bad = Transaction.fromAtomicBEEF(Array.from(Buffer.from(wire, 'hex')))
@@ -115,7 +115,7 @@ test('wire: BEEF when the ancestry is proven — the receiver verifies it agains
   assert.equal((await TxStore.read(Buffer.from(bad.toAtomicBEEF()).toString('hex'), chain)).spv, false)
 })
 
-test('wire: Extended Format when the parent is unproven; raw when it is unknown', async (t) => {
+void test('wire: Extended Format when the parent is unproven; raw when it is unknown', async (t) => {
   const _lm = await liveMem(t)
   if (_lm === undefined) return
   const { mem, chain, funder } = _lm
@@ -131,16 +131,17 @@ test('wire: Extended Format when the parent is unproven; raw when it is unknown'
   assert.equal(lone.wire(child.id('hex')), child.toHex())
 })
 
-test('TxStore: a proof ends the stored ancestry and survives a reload', async (t) => {
+void test('TxStore: a proof ends the stored ancestry and survives a reload', async (t) => {
   const w = await testWorld(t, 2)
   if (w === undefined) return
   const { chain, funder } = w
   const { parent, child } = await pair(chain, funder, true)
   const rows = new Map<string, { txid: string; raw: string; proof?: string }>()
   const persist = {
-    load: async () => [...rows.values()],
-    put: async (r: { txid: string; raw: string; proof?: string }) => {
+    load: () => Promise.resolve([...rows.values()]),
+    put: (r: { txid: string; raw: string; proof?: string }) => {
       rows.set(r.txid, r)
+      return Promise.resolve()
     }
   }
   const a = new TxStore(persist)
@@ -155,7 +156,7 @@ test('TxStore: a proof ends the stored ancestry and survives a reload', async (t
   assert.deepEqual(b.unproven(), [child.id('hex')])
 })
 
-test('spendValid: a real spend passes; a spend of another output or a broken signature does not', async (t) => {
+void test('spendValid: a real spend passes; a spend of another output or a broken signature does not', async (t) => {
   const w = await testWorld(t, 2)
   if (w === undefined) return
   const { chain, funder } = w

@@ -60,7 +60,7 @@ const stubSubstrate = (inner: ProtoWallet, calls: Calls): SignerWallet & Pick<Pr
   decrypt: async (a: Parameters<ProtoWallet['decrypt']>[0]) => await inner.decrypt(a)
 })
 
-test('client custody: sale offer → escrow → refund signs through the injected substrate', async (t) => {
+void test('client custody: sale offer → escrow → refund signs through the injected substrate', async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-client-'))
 
@@ -173,7 +173,7 @@ test('client custody: sale offer → escrow → refund signs through the injecte
   assert.equal(existsSync(join(dir, 'keys.json')), false, 'no keys.json written on the client path')
 })
 
-test('client custody: owner rotation refuses what restart cannot re-derive', async (t) => {
+void test('client custody: owner rotation refuses what restart cannot re-derive', async (t) => {
   const chain = (await testChain(t))!
   const calls: Calls = { createSignature: 0, getPublicKey: 0, createHmac: 0, sigArgs: [] }
   const stub = stubSubstrate(new ProtoWallet(PrivateKey.fromRandom()), calls)

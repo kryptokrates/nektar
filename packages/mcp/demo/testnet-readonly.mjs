@@ -18,7 +18,7 @@ const h = await tracker.headerAtHeight(tip - 1)
 console.log(
   `header @${tip - 1}: hash=${h?.hash?.slice(0, 20)}… merkleRoot=${h?.merkleRoot?.slice(0, 20)}… time=${new Date((h?.time ?? 0) * 1000).toISOString()}`
 )
-console.log(`isValidRootForHeight(own root): ${await tracker.isValidRootForHeight(h.merkleRoot, tip - 1)}`)
+console.log(`isValidRootForHeight(own root): ${await tracker.isValidRootForHeight(h?.merkleRoot, tip - 1)}`)
 
 // bananablocks serves no block→txids list; pass a txid to prove the path
 const txid = process.argv[2]

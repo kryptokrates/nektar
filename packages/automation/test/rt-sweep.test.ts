@@ -31,11 +31,12 @@ async function prepared(store: AutomationStore, actionId: string) {
 }
 
 const scanOf = (obs: Array<{ actionId: string; event: string; guard?: string }>): SweepDeps['scan'] =>
+  // eslint-disable-next-line @typescript-eslint/require-await -- the AsyncIterable contract needs `async`; the body yields, it never awaits
   async function* () {
     for (const o of obs) yield { actionId: o.actionId, observe: { event: o.event, guard: o.guard, observation: { at: 1 } } }
   }
 
-test('sweep.tick: observations fan out to per-key tx invocations and commit', async () => {
+void test('sweep.tick: observations fan out to per-key tx invocations and commit', async () => {
   const { kx, store } = await open()
   const ex = new Dispatcher()
   try {
@@ -47,7 +48,7 @@ test('sweep.tick: observations fan out to per-key tx invocations and commit', as
     ]
     wireSweep(ex, {
       scan: () => scanOf(stages.shift() ?? [])(),
-      resubmitRows: async () => [],
+      resubmitRows: () => Promise.resolve([]),
       log: () => {}
     })
     const r = await ex.call<{ sent: number }>({ service: EXEC_SVC.sweep, handler: 'tick', key: 'main' }, {})
@@ -61,12 +62,12 @@ test('sweep.tick: observations fan out to per-key tx invocations and commit', as
     await ex.drain()
     assert.equal((await store.walletTx({ actionId: 's:1' }))!.state, 'confirmed')
   } finally {
-    ex.close()
+    void ex.close()
     await kx.destroy()
   }
 })
 
-test('sweep.boot: prepared rows re-air through tx.resubmit — the coordinator leg runs inside the object', async () => {
+void test('sweep.boot: prepared rows re-air through tx.resubmit — the coordinator leg runs inside the object', async () => {
   const { kx, store } = await open()
   const ex = new Dispatcher()
   const submits: string[] = []
@@ -76,14 +77,14 @@ test('sweep.boot: prepared rows re-air through tx.resubmit — the coordinator l
       store,
       fx: {},
       log: () => {},
-      submit: async (actionId) => {
+      submit: (actionId) => {
         submits.push(actionId)
-        return { state: 'submitted', txid: 'x' }
+        return Promise.resolve({ state: 'submitted', txid: 'x' })
       }
     })
     wireSweep(ex, {
       scan: scanOf([]),
-      resubmitRows: async () => [{ actionId: 's:boot' }],
+      resubmitRows: () => Promise.resolve([{ actionId: 's:boot' }]),
       log: () => {}
     })
     const r = await ex.call<{ sent: number }>({ service: EXEC_SVC.sweep, handler: 'boot', key: 'main' }, {})
@@ -91,20 +92,20 @@ test('sweep.boot: prepared rows re-air through tx.resubmit — the coordinator l
     await ex.drain()
     assert.deepEqual(submits, ['s:boot'])
   } finally {
-    ex.close()
+    void ex.close()
     await kx.destroy()
   }
 })
 
-test('rt scope: a same-key emit inside a handler goes direct — the self-deadlock guard', async () => {
+void test('rt scope: a same-key emit inside a handler goes direct — the self-deadlock guard', async () => {
   const { kx, store } = await open()
   const ex = new Dispatcher()
   const routed: string[] = []
   try {
     const w = await prepared(store, 'a:same')
-    ex.register(EXEC_SVC.tx, 'observe', async (arg, k) => {
+    ex.register(EXEC_SVC.tx, 'observe', (arg, k) => {
       routed.push(String(k))
-      return { accepted: true }
+      return Promise.resolve({ accepted: true })
     })
     setExecutor(ex)
     // outside the scope — the emit routes through the executor
@@ -117,7 +118,7 @@ test('rt scope: a same-key emit inside a handler goes direct — the self-deadlo
     assert.equal((await store.walletTx({ actionId: 'a:same' }))!.state, 'submitted')
   } finally {
     setExecutor(undefined)
-    ex.close()
+    void ex.close()
     await kx.destroy()
   }
 })

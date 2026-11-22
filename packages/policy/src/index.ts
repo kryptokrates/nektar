@@ -51,7 +51,7 @@ export interface Decision {
   reasons?: string[]
   diagnostics?: unknown
 }
-export function authorize(policyText: string, principal: Principal, action: CedarAction, resource: Resource, level?: number): Decision {
+export function authorize(policyText: string, principal: Principal, action: CedarAction, resource: Resource, _level?: number): Decision {
   const principalUid = { type: principal.type, id: principal.id }
   const resourceUid = { type: resource.type, id: resource.id }
   const entities = [

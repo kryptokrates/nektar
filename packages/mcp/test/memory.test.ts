@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { testWorld, type TestFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { canonicalizePolicySet } from '@nektar/policy'
 import { signBinding, answerChallenge, issueChallenge, issueClearance, proveAccess, type ZkTranscript } from '@nektar/identity'
 import { NektarMemory, type NektarMemoryOptions, type ZkClearance } from '../src/memory.js'
@@ -34,7 +34,7 @@ function callerOf(mem: NektarMemory, key = PrivateKey.fromRandom()) {
 }
 const tr = (fragmentId: string, fill = 7): ZkTranscript => ({ queryId: `q${fill}`, fragmentId, nonce: new Uint8Array(32).fill(fill) })
 
-test('mcp memory: remember → anchor → prove (verified)', async (t) => {
+void test('mcp memory: remember → anchor → prove (verified)', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -47,7 +47,7 @@ test('mcp memory: remember → anchor → prove (verified)', async (t) => {
   assert.deepEqual(result, { ok: true, settled: true, anchorState: 'mined' })
 })
 
-test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', async (t) => {
+void test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -85,7 +85,7 @@ test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', a
   assert.equal(rec3.items[0].unverifiable, true)
 })
 
-test('S6.1 regression: plaintext items are SPV-verified like encrypted ones (broken anchor → unverifiable)', async (t) => {
+void test('S6.1 regression: plaintext items are SPV-verified like encrypted ones (broken anchor → unverifiable)', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -116,7 +116,7 @@ test('S6.1 regression: plaintext items are SPV-verified like encrypted ones (bro
   }
 })
 
-test('regression: encrypted records with identical provenance are NOT deduplicated (hdp binds plaintext)', async (t) => {
+void test('regression: encrypted records with identical provenance are NOT deduplicated (hdp binds plaintext)', async (t) => {
   const _w = await setup(t, { agentSeed: PrivateKey.fromRandom(), batchPolicy: { maxLeaves: 2 } })
   if (_w === undefined) return
   const { mem } = _w
@@ -129,7 +129,7 @@ test('regression: encrypted records with identical provenance are NOT deduplicat
   assert.equal((await mem.remember('e', 'second secret', prov)).duplicate, true, 'a true duplicate is still deduplicated')
 })
 
-test('§15 modality: committed into H(d‖p) and the provenance signature; invalid kind refused', async (t) => {
+void test('§15 modality: committed into H(d‖p) and the provenance signature; invalid kind refused', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -165,7 +165,7 @@ test('§15 modality: committed into H(d‖p) and the provenance signature; inval
   assert.notEqual(viaTool.hdp, plain.hdp)
 })
 
-test('§18 terminal commitment: every receipt is signed; tampering breaks verification', async (t) => {
+void test('§18 terminal commitment: every receipt is signed; tampering breaks verification', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -182,7 +182,7 @@ test('§18 terminal commitment: every receipt is signed; tampering breaks verifi
   assert.equal(verifyAnswerReceipt({ ...receipt, signature: 'zz' }).ok, false, 'malformed fails')
 })
 
-test('mcp memory: tools dispatch + prove NotAnchored is honest', async (t) => {
+void test('mcp memory: tools dispatch + prove NotAnchored is honest', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -191,7 +191,7 @@ test('mcp memory: tools dispatch + prove NotAnchored is honest', async (t) => {
   assert.deepEqual((await mem.prove('x', 0)).result, { ok: false, reason: 'NotAnchored' })
 })
 
-test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-use, level-covering', async (t) => {
+void test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-use, level-covering', async (t) => {
   const authority = PrivateKey.fromRandom()
   const _w = await setup(t, { agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPublicKey().toString()] })
   if (_w === undefined) return
@@ -233,7 +233,7 @@ test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-us
   assert.match((await mem.recall('s', { seq: 0, identity })).items[0].reason!, /zkaccess required/)
 })
 
-test('ZKA: plaintext level>0 records are gated too; instances without trusted authorities refuse', async (t) => {
+void test('ZKA: plaintext level>0 records are gated too; instances without trusted authorities refuse', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -252,7 +252,7 @@ test('ZKA: plaintext level>0 records are gated too; instances without trusted au
   assert.equal((await mem.recall('p')).items[0].text, undefined, 'no proof, no plaintext')
 })
 
-test('Cedar gates recall — verified identity, ZK-proven level, hash-mismatch; challenge must be issued here', async (t) => {
+void test('Cedar gates recall — verified identity, ZK-proven level, hash-mismatch; challenge must be issued here', async (t) => {
   const ps = canonicalizePolicySet(
     'p1',
     `
@@ -302,7 +302,7 @@ when { resource.level <= principal.level };
   assert.equal((await tampered.mem.recall('s', { identity: callerOf(tampered.mem).identity })).receipt.cedar, 'hash-mismatch')
 })
 
-test('mcp tools: challenge / rotate / revoke / authorize receipts (incl. DENY)', async (t) => {
+void test('mcp tools: challenge / rotate / revoke / authorize receipts (incl. DENY)', async (t) => {
   const policyText = 'permit(principal, action == Action::"read", resource); permit(principal, action == Action::"write", resource);'
   const _w = await setup(t, { batchPolicy: { maxLeaves: 1 }, policy: { policyText, anchoredPolicySetHash: canonicalizePolicySet('i', policyText).hash } })
   if (_w === undefined) return
@@ -329,7 +329,7 @@ test('mcp tools: challenge / rotate / revoke / authorize receipts (incl. DENY)',
   assert.equal((await callTool(mem, 'authorize', { action: 'read', identity })).receipt.decision, 'allow', 'verified principal')
 })
 
-test('mcp tool: automaton deploy → step → halt; off-δ step refused; honest statement', async (t) => {
+void test('mcp tool: automaton deploy → step → halt; off-δ step refused; honest statement', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w
@@ -357,7 +357,7 @@ test('mcp tool: automaton deploy → step → halt; off-δ step refused; honest 
   assert.equal((await callTool(mem, 'automaton', { op: 'state', id: 'doc' })).txid, h.txid)
 })
 
-test('§19 read-path: revoked author key withholds the record at recall', async (t) => {
+void test('§19 read-path: revoked author key withholds the record at recall', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -376,7 +376,7 @@ test('§19 read-path: revoked author key withholds the record at recall', async 
   assert.match(bad.items[0].reason!, /revoked key/)
 })
 
-test('§19 CRL: embedded SMT proof makes the anchored revoke record self-convicting', async (t) => {
+void test('§19 CRL: embedded SMT proof makes the anchored revoke record self-convicting', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -425,7 +425,7 @@ test('§19 CRL: embedded SMT proof makes the anchored revoke record self-convict
   assert.equal((await callTool(mem, 'revocationProof', { pkHex: other })).found, false)
 })
 
-test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-hoc edits break verification', async (t) => {
+void test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-hoc edits break verification', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -436,12 +436,12 @@ test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-ho
   await settle('s')
   // the caller's delegation map is supplied at recall time and bound by σ
   const sub = PrivateKey.fromRandom()
-  const mkDel = async (answer: string) => {
+  const mkDel = (answer: string) => {
     const delegator = sub.toPublicKey().toString()
     const msg = dsha256(concat(TAG_DELEGATION, utf8(delegator), utf8('torque sign-off'), utf8(answer)))
     return { delegator, decision: 'torque sign-off', signature: sub.sign([...msg]).toDER('hex') as string }
   }
-  const { receipt } = await mem.recall('s', { delegations: [await mkDel('service manual fact')] })
+  const { receipt } = await mem.recall('s', { delegations: [mkDel('service manual fact')] })
   assert.ok(receipt.delegations?.length === 1)
   assert.deepEqual(verifyAnswerReceipt(receipt), { ok: true })
   // §16: the map is anchored — tampered delegator, swapped decision, stripped
@@ -456,7 +456,7 @@ test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-ho
   assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [...receipt.delegations, receipt.delegations[0]] }).ok, false, 'entry appended')
 })
 
-test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-verifies Π, not the flag', async (t) => {
+void test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-verifies Π, not the flag', async (t) => {
   const authority = PrivateKey.fromRandom()
   const _w = await setup(t, { agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPublicKey().toString()] })
   if (_w === undefined) return
@@ -487,7 +487,7 @@ test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-ver
   assert.equal(dec.requiredLevel, 2n)
 })
 
-test('GOAL-v8 D2: App E level floor — derived content cannot fall below its premises', async (t) => {
+void test('GOAL-v8 D2: App E level floor — derived content cannot fall below its premises', async (t) => {
   const seed = PrivateKey.fromRandom()
   const _w = await setup(t, { agentSeed: seed, maxLevel: 5 })
   if (_w === undefined) return
@@ -524,7 +524,7 @@ test('GOAL-v8 D2: App E level floor — derived content cannot fall below its pr
   assert.equal(revised.level, 5, 'a revision of a level-5 base lands at level 5, not 0')
 })
 
-test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit records', async (t) => {
+void test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit records', async (t) => {
   const seed = PrivateKey.fromRandom()
   // disabled by default: no __access__ records at all
   delete process.env.NEKTAR_ACCESS_LOG
@@ -574,7 +574,7 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
   }
 })
 
-test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash', async (t) => {
+void test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash', async (t) => {
   const weightsHash = 'ab'.repeat(32)
   const _w = await setup(t, { model: { id: 'qwen-local-7b', params: { temperature: 0 }, weightsHash } })
   if (_w === undefined) return
@@ -584,8 +584,8 @@ test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash',
   await settle('s')
   const { receipt } = await mem.recall('s', { modelParams: { seed: 42 } })
   assert.equal(receipt.model?.id, 'qwen-local-7b')
-  assert.equal(receipt.model?.weightsHash, weightsHash)
-  assert.deepEqual(receipt.model?.params, { temperature: 0, seed: 42 }, 'operator params merged with per-call params')
+  assert.equal(receipt.model.weightsHash, weightsHash)
+  assert.deepEqual(receipt.model.params, { temperature: 0, seed: 42 }, 'operator params merged with per-call params')
   // the model block is inside the signed digest — tampering breaks verification
   const { verifyAnswerReceipt } = await import('../src/memory.js')
   assert.ok(verifyAnswerReceipt(receipt).ok)
@@ -600,7 +600,7 @@ test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash',
   assert.ok(verifyAnswerReceipt(r2.receipt).ok, 'modelless receipts still verify')
 })
 
-test('groundedAnswer: strips ungrounded claims, anchors receipt; modelManifest declares', async (t) => {
+void test('groundedAnswer: strips ungrounded claims, anchors receipt; modelManifest declares', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -631,7 +631,7 @@ test('groundedAnswer: strips ungrounded claims, anchors receipt; modelManifest d
   assert.equal(r2.checkResult, 'failed')
 })
 
-test('verifyReceipt: token → found/hash/provenance/anchored/fragments; unknown + malformed fail', async (t) => {
+void test('verifyReceipt: token → found/hash/provenance/anchored/fragments; unknown + malformed fail', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w

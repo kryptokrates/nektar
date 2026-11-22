@@ -30,7 +30,7 @@ function pushHeight(h: number): string {
   if (h === 0) return '00'
   const b: number[] = []
   for (let v = h; v > 0; v >>= 8) b.push(v & 0xff)
-  if ((b[b.length - 1]! & 0x80) !== 0) b.push(0)
+  if ((b[b.length - 1] & 0x80) !== 0) b.push(0)
   return b.length.toString(16).padStart(2, '0') + Buffer.from(b).toString('hex')
 }
 
@@ -88,15 +88,15 @@ export class MemoryChain implements TestChain {
     this.events = new ChainEvents({
       intervalMs: 50,
       ttlMs: WATCH_TTL_MS,
-      height: async () => this.tip(),
-      observe: async (txid) => {
+      height: () => Promise.resolve(this.tip()),
+      observe: (txid) => {
         if (this.faults.observer !== undefined)
-          throw new Error(`memchain: observer ${this.faults.observer === 'timeout' ? 'timed out' : 'returned 429'} for ${txid}`)
+          return Promise.reject(new Error(`memchain: observer ${this.faults.observer === 'timeout' ? 'timed out' : 'returned 429'} for ${txid}`))
         const rec = this.known.get(txid)
-        if (rec?.mp === undefined) return undefined
+        if (rec?.mp === undefined) return Promise.resolve(undefined)
         // proofs attach on delivery, like StackChain's observe — not at mine
         rec.stored.merklePath ??= MerklePath.fromBinary(rec.mp.toBinary())
-        return { txid, status: 'mined', blockHeight: rec.height!, merklePath: rec.mp }
+        return Promise.resolve({ txid, status: 'mined', blockHeight: rec.height!, merklePath: rec.mp })
       }
     })
     // genesis + premine so treasury coinbases are mature before any test runs
@@ -156,27 +156,27 @@ export class MemoryChain implements TestChain {
 
   // --- admission ---------------------------------------------------------
 
-  async broadcast(tx: Transaction): Promise<BroadcastResult> {
+  broadcast(tx: Transaction): Promise<BroadcastResult> {
     let txid: string
     let copy: Transaction
     try {
       txid = tx.id('hex')
       copy = Transaction.fromBinary(tx.toBinary())
     } catch (e) {
-      return { status: 'error', description: `TX_INVALID (31): unserializable: ${String((e as Error).message).slice(0, 90)}` }
+      return Promise.resolve({ status: 'error', description: `TX_INVALID (31): unserializable: ${String((e as Error).message).slice(0, 90)}` })
     }
     // idempotent resubmit, like the node's 202 for a known tx
     const known = this.known.get(txid)
-    if (this.mempool.has(txid) || known?.height !== undefined) return { status: 'success', txid }
+    if (this.mempool.has(txid) || known?.height !== undefined) return Promise.resolve({ status: 'success', txid })
 
-    const fail = (description: string, definitive: boolean): BroadcastResult => {
+    const fail = (description: string, definitive: boolean): Promise<BroadcastResult> => {
       if (definitive) {
         this.rejectedSet.add(txid)
         // a broadcast-time refusal is a final state — push it like 'mined' so
         // reconcile gates clear immediately (same as StackChain.broadcast)
         this.events.report({ txid, status: 'rejected' })
       }
-      return { status: 'error', txid, description }
+      return Promise.resolve({ status: 'error', txid, description })
     }
 
     const custom = this.faults.reject?.(copy)
@@ -220,12 +220,12 @@ export class MemoryChain implements TestChain {
     // script admission — the SDK interpreter on the chain's record of each
     // parent output, one input at a time, strict mode
     for (let ix = 0; ix < copy.inputs.length; ix++) {
-      const inp = copy.inputs[ix]!
-      const src = inputs[ix]!.rec.snapshot.outputs[inputs[ix]!.vout]!
+      const inp = copy.inputs[ix]
+      const src = inputs[ix].rec.snapshot.outputs[inputs[ix].vout]
       try {
         const spend = new Spend({
           sourceTXID: inp.sourceTXID!,
-          sourceOutputIndex: inp.sourceOutputIndex!,
+          sourceOutputIndex: inp.sourceOutputIndex,
           sourceSatoshis: src.satoshis ?? 0,
           lockingScript: src.lockingScript,
           transactionVersion: copy.version,
@@ -254,7 +254,7 @@ export class MemoryChain implements TestChain {
     this.mempool.set(txid, true)
     this.known.set(txid, { stored: tx, snapshot: copy, coinbase: false })
     this.events.watch(txid)
-    return { status: 'success', txid }
+    return Promise.resolve({ status: 'success', txid })
   }
 
   /** evict an accepted mempool tx and every mempool tx that descends from it:
@@ -356,7 +356,7 @@ export class MemoryChain implements TestChain {
     // requeue in original order — oldest removed block first keeps
     // parent-before-child admission order in the mempool
     for (const b of removed) {
-      this.coinbases.delete(b.txids[0]!)
+      this.coinbases.delete(b.txids[0])
       for (const txid of b.txids.slice(1)) {
         const rec = this.known.get(txid)!
         rec.height = undefined
@@ -365,7 +365,7 @@ export class MemoryChain implements TestChain {
         this.mempool.set(txid, true)
       }
     }
-    const tip = this.blocks[this.blocks.length - 1]!.header
+    const tip = this.blocks[this.blocks.length - 1].header
     const headers = [...removed].reverse().map((b) => b.header)
     for (const cb of this.reorgCbs) cb(headers, tip)
     for (const b of removed) {
@@ -390,12 +390,12 @@ export class MemoryChain implements TestChain {
 
   /** chain-side copy with the proof attached when mined — the
    *  getrawtransaction+merkle_proof lookup, for txids not broadcast by us */
-  async fetchTx(txid: string): Promise<Transaction | undefined> {
+  fetchTx(txid: string): Promise<Transaction | undefined> {
     const rec = this.known.get(txid)
-    if (rec === undefined) return undefined
+    if (rec === undefined) return Promise.resolve(undefined)
     const t = Transaction.fromBinary(rec.snapshot.toBinary())
     if (rec.mp !== undefined) t.merklePath = rec.mp
-    return t
+    return Promise.resolve(t)
   }
 
   isRejected(txid: string): boolean {
@@ -409,10 +409,10 @@ export class MemoryChain implements TestChain {
       held: (t: string) => this.getTx(t),
       proof: (t: string) => this.known.get(t)?.mp,
       rejected: (t: string) => this.isRejected(t),
-      hint: async (t: string) => {
+      hint: (t: string) => {
         const rec = this.known.get(t)
         const status = this.isRejected(t) ? 'REJECTED' : rec?.mp !== undefined ? 'MINED' : rec !== undefined ? 'SEEN_ON_NETWORK' : 'UNKNOWN'
-        return { status, answered: true }
+        return Promise.resolve({ status, answered: true })
       },
       height: () => this.tip()
     })(txid)
@@ -436,40 +436,40 @@ export class MemoryChain implements TestChain {
     return this.known.get(txid)?.stored
   }
 
-  async currentHeight(): Promise<number> {
-    return this.tip()
+  currentHeight(): Promise<number> {
+    return Promise.resolve(this.tip())
   }
 
-  async tipHeight(): Promise<number> {
-    return this.tip()
+  tipHeight(): Promise<number> {
+    return Promise.resolve(this.tip())
   }
 
-  async isValidRootForHeight(root: string, height: number): Promise<boolean> {
-    return this.blocks[height]?.header.merkleRoot === root
+  isValidRootForHeight(root: string, height: number): Promise<boolean> {
+    return Promise.resolve(this.blocks[height]?.header.merkleRoot === root)
   }
 
-  async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
-    return this.blocks[height]?.header
+  headerAtHeight(height: number): Promise<BlockHeader | undefined> {
+    return Promise.resolve(this.blocks[height]?.header)
   }
 
-  async merklePathOf(txid: string): Promise<MerklePath | undefined> {
-    return this.known.get(txid)?.mp
+  merklePathOf(txid: string): Promise<MerklePath | undefined> {
+    return Promise.resolve(this.known.get(txid)?.mp)
   }
 
-  async utxoStatus(txid: string, vout: number): Promise<'unspent' | 'spent' | 'unknown'> {
+  utxoStatus(txid: string, vout: number): Promise<'unspent' | 'spent' | 'unknown'> {
     const rec = this.known.get(txid)
-    if (rec === undefined || vout < 0 || vout >= rec.snapshot.outputs.length) return 'unknown'
-    return this.spent.has(`${txid}:${vout}`) ? 'spent' : 'unspent'
+    if (rec === undefined || vout < 0 || vout >= rec.snapshot.outputs.length) return Promise.resolve('unknown')
+    return Promise.resolve(this.spent.has(`${txid}:${vout}`) ? 'spent' : 'unspent')
   }
 
   /** the txid that spent this outpoint, when the chain's own record names
    *  one — mempool spends count (they're signed, accepted, and will land) */
-  async spenderOf(txid: string, vout: number): Promise<string | undefined> {
-    return this.spentIdx.get(`${txid}:${vout}`)
+  spenderOf(txid: string, vout: number): Promise<string | undefined> {
+    return Promise.resolve(this.spentIdx.get(`${txid}:${vout}`))
   }
 
-  async pendingBroadcasts(): Promise<number> {
-    return this.mempool.size
+  pendingBroadcasts(): Promise<number> {
+    return Promise.resolve(this.mempool.size)
   }
 }
 
@@ -493,17 +493,17 @@ export class MemoryTreasury {
     const mine = new P2PKH().lock(this.key.toPublicKey().toAddress([0x6f])).toHex()
     const outs: FundingOut[] = []
     for (const b of this.chain.blockList) {
-      const cbid = b.txids[0]!
+      const cbid = b.txids[0]
       if (b.header.height + COINBASE_MATURITY - 1 > this.chain.blockList.length - 1) break
       const rec = this.chain.getTx(cbid)
       // only coinbases paying THIS key — a treasury on another key's chain
       // would sign inputs it cannot unlock
       if (rec === undefined || rec.outputs[0]?.lockingScript.toHex() !== mine) continue
-      if ((await this.chain.utxoStatus(cbid, 0)) === 'unspent') outs.push({ tx: rec, vout: 0, satoshis: rec.outputs[0]!.satoshis ?? 0 })
+      if ((await this.chain.utxoStatus(cbid, 0)) === 'unspent') outs.push({ tx: rec, vout: 0, satoshis: rec.outputs[0].satoshis ?? 0 })
     }
     for (const c of this.change) {
       const txid = c.tx.id('hex')
-      if ((await this.chain.utxoStatus(txid, c.vout)) === 'unspent') outs.push({ tx: c.tx, vout: c.vout, satoshis: c.tx.outputs[c.vout]!.satoshis ?? 0 })
+      if ((await this.chain.utxoStatus(txid, c.vout)) === 'unspent') outs.push({ tx: c.tx, vout: c.vout, satoshis: c.tx.outputs[c.vout].satoshis ?? 0 })
     }
     return outs
   }
@@ -588,7 +588,7 @@ export class MemoryFunder implements TestFunder {
     const outs = this.store.list() as FundingOut[]
     const i = outs.findIndex((u) => u.satoshis >= satoshis)
     if (i < 0) throw new Error('MemoryFunder: no utxo of that size')
-    const u = outs[i]!
+    const u = outs[i]
     await this.store.drop(u.tx.id('hex'), u.vout)
     return u
   }

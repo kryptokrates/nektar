@@ -325,10 +325,10 @@ const assertOwnPath = (mp: MerklePath | undefined, txid: string, root: string, h
 }
 
 for (const mk of [
-  { name: 'memory', ledger: async () => ({ l: new MemoryTreeLedger() as MemoryTreeLedger | KnexTreeLedger, done: async () => {} }) },
+  { name: 'memory', ledger: () => ({ l: new MemoryTreeLedger() as MemoryTreeLedger | KnexTreeLedger, done: async () => {} }) },
   {
     name: 'knex',
-    ledger: async () => {
+    ledger: () => {
       const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
       return { l: new KnexTreeLedger(kx), done: async () => await kx.destroy() }
     }
@@ -338,7 +338,7 @@ for (const mk of [
     const key = PrivateKey.fromRandom()
     const parent = fakeParent(key)
     const tree = await mintTree({ key, funding: { tx: parent, vout: 0, satoshis: 1_000_000 }, n: 4, satsPerOutput: 1000 })
-    const { l, done } = await mk.ledger()
+    const { l, done } = mk.ledger()
     try {
       await l.add(tree, 4)
       assert.equal(await l.take('market'), undefined, 'unanchored ancestry must not serve')
@@ -376,7 +376,7 @@ for (const mk of [
     const parent = fakeParent(key)
     const parentMp = pathAt(parent, 3)
     const tree = await mintTree({ key, funding: { tx: parent, vout: 0, satoshis: 1_000_000 }, n: 2, satsPerOutput: 1000 })
-    const { l, done } = await mk.ledger()
+    const { l, done } = mk.ledger()
     try {
       await l.add(tree, 2, 'bbox')
       await l.attachParentPath(parent.id('hex'), parentMp)
@@ -406,7 +406,7 @@ for (const mk of [
     const key = PrivateKey.fromRandom()
     const parent = fakeParent(key)
     const tree = await mintTree({ key, funding: { tx: parent, vout: 0, satoshis: 1_000_000 }, n: 2, satsPerOutput: 1000 })
-    const { l, done } = await mk.ledger()
+    const { l, done } = mk.ledger()
     try {
       await l.add(tree, 2)
       await l.attachParentPath(parent.id('hex'), pathAt(parent, 5))
@@ -429,7 +429,7 @@ for (const mk of [
     assert.notEqual(t3.id('hex'), txid, 'the sibling leaf must be a different tx')
     const { compound, h3 } = blockPaths(txid, t3.id('hex'), '55'.repeat(32))
     assert.equal(minimalPath(compound, txid), false, 'compound path is what hosts refused')
-    const { l, done } = await mk.ledger()
+    const { l, done } = mk.ledger()
     try {
       await l.add(t2, 4)
       await l.markProven(txid, compound)
@@ -446,7 +446,7 @@ for (const mk of [
     const t2 = await mintTree({ key, funding: fund(key), n: 4, satsPerOutput: 1000 })
     const txid = t2.id('hex')
     const { own, h3 } = blockPaths(txid, '44'.repeat(32), '55'.repeat(32))
-    const { l, done } = await mk.ledger()
+    const { l, done } = mk.ledger()
     try {
       await l.add(t2, 4)
       await l.markProven(txid, own)
@@ -485,7 +485,7 @@ for (const mk of [
         { offset: 1, hash: h256(txid, txid) }
       ]
     ])
-    const { l, done } = await mk.ledger()
+    const { l, done } = mk.ledger()
     try {
       await l.add(t2, 4)
       await l.markProven(txid, stored)
@@ -601,7 +601,7 @@ test('ledger.adopt: drop frees provision slots of every kind and re-adopt regist
 test('deadAncestry: proven subject skips the walk — no gap reported', async () => {
   const key = PrivateKey.fromRandom()
   const t = await provenTree(key, 2)
-  const gaps = await deadAncestry(t, async () => undefined)
+  const gaps = await deadAncestry(t, () => Promise.resolve(undefined))
   assert.deepEqual(gaps, [])
 })
 
@@ -609,7 +609,7 @@ test('deadAncestry: anchored ancestry (carried, proven parents) reports nothing'
   const key = PrivateKey.fromRandom()
   const t = await anchoredTree(key, 2)
   assert.equal(t.merklePath, undefined, 'fixture is the unproven-but-anchored shape')
-  const gaps = await deadAncestry(t, async () => undefined)
+  const gaps = await deadAncestry(t, () => Promise.resolve(undefined))
   assert.deepEqual(gaps, [])
 })
 
@@ -619,7 +619,7 @@ test('deadAncestry: unlinked input + unservable parent is the direct gap (hex ro
   const t = await mintTree({ key, funding: { tx: f, vout: 0, satoshis: 1_000_000 }, n: 2, satsPerOutput: 1000 })
   // strip the in-memory link the way a serialized reload loses it
   t.inputs[0].sourceTransaction = undefined
-  const gaps = await deadAncestry(t, async () => undefined)
+  const gaps = await deadAncestry(t, () => Promise.resolve(undefined))
   assert.deepEqual(gaps, [f.id('hex')])
 })
 
@@ -631,7 +631,7 @@ test('deadAncestry: a dead grandparent is found through a live unproven parent',
   mid.addInput({ sourceTXID: g.id('hex'), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromASM('OP_1') })
   mid.addOutput({ satoshis: 1_000_000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
   const t = await mintTree({ key, funding: { tx: mid, vout: 0, satoshis: 1_000_000 }, n: 2, satsPerOutput: 1000 })
-  const gaps = await deadAncestry(t, async (id) => (id === mid.id('hex') ? mid : undefined))
+  const gaps = await deadAncestry(t, (id) => Promise.resolve(id === mid.id('hex') ? mid : undefined))
   assert.deepEqual(gaps, [g.id('hex')])
 })
 
@@ -646,7 +646,7 @@ test('deadAncestry: resolvable unproven ancestors are not dead — bound stays i
     [mid.id('hex'), mid],
     [f.id('hex'), f]
   ])
-  const gaps = await deadAncestry(t, async (id) => byId.get(id))
+  const gaps = await deadAncestry(t, (id) => Promise.resolve(byId.get(id)))
   assert.deepEqual(gaps, [])
 })
 
@@ -663,7 +663,7 @@ test('ancestryHit: a refused ancestor is found by txid alone — clean and prove
     [mid.id('hex'), mid],
     [dead.id('hex'), dead]
   ])
-  const resolve = async (id: string) => byId.get(id)
+  const resolve = (id: string) => Promise.resolve(byId.get(id))
   assert.equal(await ancestryHit(t, (id) => id === dead.id('hex'), resolve), true, 'a refused ancestor one hop up hits')
   assert.equal(await ancestryHit(t, (id) => id === mid.id('hex'), resolve), true, 'a directly-refused parent hits')
   assert.equal(await ancestryHit(t, (id) => id === t.id('hex'), resolve), true, "the subject's own txid counts")

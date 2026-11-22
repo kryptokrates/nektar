@@ -49,7 +49,7 @@ test('crypto: level keys derive distinctly', () => {
 })
 
 test('crypto: disjoint level keyspaces — holder {0,1} opens l1 not l2; l2 alone cannot open l1', () => {
-  const { encryptFragment: enc, decryptFragment: dec } = { encryptFragment, decryptFragment }
+  const { encryptFragment: _enc, decryptFragment: _dec } = { encryptFragment, decryptFragment }
   const grant01 = grantLevels(seed, 1) // S_A for holder with levels 0,1
   const l2Only = deriveLevelKey(seed, 2)
 

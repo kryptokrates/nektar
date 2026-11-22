@@ -48,6 +48,6 @@ test('wire: strict decoding rejects malformed input with WireError', () => {
     { ...w, commitment: { ...w.commitment, level: '3' } },
     { ...w, proof: {} }
   ]
-  for (const b of bad) assert.throws(() => decodePresentation(b), WireError, JSON.stringify(b)?.slice(0, 60))
+  for (const b of bad) assert.throws(() => decodePresentation(b), WireError, JSON.stringify(b).slice(0, 60))
   assert.throws(() => decodeCredential({ ...encodeCredential(cred), blinding: 'x' }), WireError)
 })

@@ -10,7 +10,7 @@ import { provenTree } from './helpers.js'
 import { FakeTracker } from '../src/testing.js'
 
 const NET = 'regtest'
-const mod = (t: FakeTracker) => createNektarModule({ log: () => {}, chainTracker: t, engine: { submit: async () => ({}) } }, [NET])
+const mod = (t: FakeTracker) => createNektarModule({ log: () => {}, chainTracker: t, engine: { submit: () => Promise.resolve({}) } }, [NET])
 
 async function wantCarrier(signer: PrivateKey, minter: PrivateKey, domains = ['compute'], net = NET, tree?: import('@bsv/sdk').Transaction) {
   const sw = await signWant(signer, { domains, question: 'q', net, ts: Date.now(), exp: Date.now() + 60000 })
@@ -77,7 +77,7 @@ async function wantCarrierExp(signer: PrivateKey, minter: PrivateKey, exp: numbe
 
 test('market: expiry required — missing, past or >7d-ahead exp refused; +1h admitted', async () => {
   let clock = Date.now()
-  const m = createNektarModule({ log: () => {}, chainTracker: new FakeTracker(), engine: { submit: async () => ({}) } }, [NET], { now: () => clock })
+  const m = createNektarModule({ log: () => {}, chainTracker: new FakeTracker(), engine: { submit: () => Promise.resolve({}) } }, [NET], { now: () => clock })
   const lane = laneOf(NET, 'compute')
   const tm = m.topics[lane]
   const k = PrivateKey.fromRandom()
@@ -94,7 +94,7 @@ test('market: expiry required — missing, past or >7d-ahead exp refused; +1h ad
 test('market: expired artifacts leave the index — lookup returns nothing and the outpoint frees', async () => {
   let clock = Date.now()
   const t = new FakeTracker()
-  const m = createNektarModule({ log: () => {}, chainTracker: t, engine: { submit: async () => ({}) } }, [NET], { now: () => clock })
+  const m = createNektarModule({ log: () => {}, chainTracker: t, engine: { submit: () => Promise.resolve({}) } }, [NET], { now: () => clock })
   const lane = laneOf(NET, 'compute')
   const tm = m.topics[lane]
   const k = PrivateKey.fromRandom()
@@ -137,7 +137,7 @@ test('restore: rehydrated rows serve lookups and hold their outpoint claim', asy
   const beef = await wantCarrier(k, k, ['compute'], NET, tree)
   const svc = m.lookups['ls_nektar']
   // no admission ever ran — the index rebuild comes only from engine rows
-  const n = await svc.restore!([engineRow(beef, lane)], { findOutput: async () => null })
+  const n = await svc.restore!([engineRow(beef, lane)], { findOutput: () => Promise.resolve(null) })
   assert.equal(n, 1)
   const wants = (await svc.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })) as Array<{ txid: string }>
   assert.equal(wants.length, 1, 'restored want is served')
@@ -148,14 +148,14 @@ test('restore: rehydrated rows serve lookups and hold their outpoint claim', asy
   // and the restored claim dedupes the same carrier
   assert.deepEqual((await m.topics[lane].identifyAdmissibleOutputs(beef, [])).outputsToAdmit, [0])
   // a second restore is a no-op, not a duplicate
-  assert.equal(await svc.restore!([engineRow(beef, lane)], { findOutput: async () => null }), 1)
+  assert.equal(await svc.restore!([engineRow(beef, lane)], { findOutput: () => Promise.resolve(null) }), 1)
   assert.equal((await svc.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })).length, 1)
 })
 
 test('restore: skips spent rows, dead payloads, foreign topics and expired artifacts', async () => {
   let clock = Date.now()
   const k = PrivateKey.fromRandom()
-  const m = createNektarModule({ log: () => {}, chainTracker: new FakeTracker(), engine: { submit: async () => ({}) } }, [NET], { now: () => clock })
+  const m = createNektarModule({ log: () => {}, chainTracker: new FakeTracker(), engine: { submit: () => Promise.resolve({}) } }, [NET], { now: () => clock })
   const lane = laneOf(NET, 'compute')
   const svc = m.lookups['ls_nektar']
   const beef = await wantCarrierExp(k, k, clock + 60_000)
@@ -167,10 +167,10 @@ test('restore: skips spent rows, dead payloads, foreign topics and expired artif
     deadBeef,
     { ...engineRow(beef.beef, lane), outputScript: [0, 81, 0], beef: undefined }
   ]
-  assert.equal(await svc.restore!(rows, { findOutput: async () => null }), 0)
+  assert.equal(await svc.restore!(rows, { findOutput: () => Promise.resolve(null) }), 0)
   assert.equal((await svc.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })).length, 0)
   // restored while valid, then the artifact's own exp passes -> dropped
-  assert.equal(await svc.restore!([engineRow(beef.beef, lane)], { findOutput: async () => null }), 1)
+  assert.equal(await svc.restore!([engineRow(beef.beef, lane)], { findOutput: () => Promise.resolve(null) }), 1)
   clock += 120_000
   assert.equal(
     (await svc.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })).length,
@@ -189,7 +189,7 @@ test('restore: script-only row rebuilds from the locking script with a fresh pro
   const row = engineRow(beef, lane)
   row.beef = undefined
   const svc = m.lookups['ls_nektar']
-  assert.equal(await svc.restore!([row], { findOutput: async () => null }), 1)
+  assert.equal(await svc.restore!([row], { findOutput: () => Promise.resolve(null) }), 1)
   assert.equal((await svc.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })).length, 1)
   assert.deepEqual((await m.topics[lane].identifyAdmissibleOutputs(await wantCarrier(k, k, ['compute'], NET, tree), [])).outputsToAdmit, [])
 })

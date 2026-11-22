@@ -378,12 +378,12 @@ test('log: foreign batches filtered by producer; wrong-prev reports a break', as
 test('log: anchor publishes a mined token; tampered root verifies to nothing', async () => {
   const s = await rig({ extraSlots: 4 })
   const mined = new Map<string, Transaction>()
-  const broadcast = async (tx: Transaction) => {
+  const broadcast = (tx: Transaction) => {
     prove(tx)
     mined.set(tx.id('hex'), tx)
-    return { status: 'success' }
+    return Promise.resolve({ status: 'success' })
   }
-  const fetchTx = async (txid: string) => mined.get(txid)
+  const fetchTx = (txid: string) => Promise.resolve(mined.get(txid))
   try {
     for (const n of [1, 2, 3])
       await appendLog({

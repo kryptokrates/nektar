@@ -32,7 +32,7 @@ const factsFor = (status: string): import('@nektar/chain').TxFacts =>
 test('journal: round-trip', async () => {
   const j = new MemoryCarrierJournal()
   assert.equal(await j.get('x'), undefined)
-  await j.put('x', { txid: 't', beef: [1, 2], topics: ['a'] })
+  void j.put('x', { txid: 't', beef: [1, 2], topics: ['a'] })
   assert.deepEqual(await j.get('x'), { txid: 't', beef: [1, 2], topics: ['a'] })
 })
 
@@ -70,12 +70,21 @@ test('ensureTrees: mints once, no double-mint while unproven, proven then low-wa
   const k = PrivateKey.fromRandom()
   const ledger = new MemoryTreeLedger()
   const broadcasted: import('@bsv/sdk').Transaction[] = []
-  const bc = async (tx: import('@bsv/sdk').Transaction) => {
+  const bc = (tx: import('@bsv/sdk').Transaction) => {
     broadcasted.push(tx)
-    return { status: 'success' as const, txid: tx.id('hex') }
+    return Promise.resolve({ status: 'success' as const, txid: tx.id('hex') })
   }
-  const fetchTx = async (txid: string) => broadcasted.find((t) => t.id('hex') === txid)
-  const p = { key: k, ledger, lowWater: 4, size: 4, satsPerOutput: 100, takeFunding: async (s: number) => fund(k, 1_000_000), broadcast: bc, fetchTx }
+  const fetchTx = (txid: string) => Promise.resolve(broadcasted.find((t) => t.id('hex') === txid))
+  const p = {
+    key: k,
+    ledger,
+    lowWater: 4,
+    size: 4,
+    satsPerOutput: 100,
+    takeFunding: (_s: number) => Promise.resolve(fund(k, 1_000_000)),
+    broadcast: bc,
+    fetchTx
+  }
   const r1 = await ensureTrees(p)
   assert.equal(broadcasted.length, 1)
   assert.equal(r1.minted.length, 1)
@@ -102,11 +111,11 @@ test('ensureTrees: fills to the in-flight bound in one pass, then parks until pr
   const k = PrivateKey.fromRandom()
   const ledger = new MemoryTreeLedger()
   const broadcasted: Transaction[] = []
-  const bc = async (tx: Transaction) => {
+  const bc = (tx: Transaction) => {
     broadcasted.push(tx)
-    return { status: 'success' as const, txid: tx.id('hex') }
+    return Promise.resolve({ status: 'success' as const, txid: tx.id('hex') })
   }
-  const fetchTx = async (txid: string) => broadcasted.find((t) => t.id('hex') === txid)
+  const fetchTx = (txid: string) => Promise.resolve(broadcasted.find((t) => t.id('hex') === txid))
   // distinct funding per mint — a deterministic fake parent would mint the
   // same txid twice and the ledger's idempotent add would collapse them
   let mints = 0
@@ -117,7 +126,7 @@ test('ensureTrees: fills to the in-flight bound in one pass, then parks until pr
     size: 4,
     satsPerOutput: 100,
     maxUnproven: 2,
-    takeFunding: async (s: number) => fund(k, 1_000_000 + 1000 * mints++),
+    takeFunding: (_s: number) => Promise.resolve(fund(k, 1_000_000 + 1000 * mints++)),
     broadcast: bc,
     fetchTx
   }
@@ -141,26 +150,26 @@ test('ensureTrees: stuck mint — keep while healing, drop on definitive verdict
   let verdict: 'keep' | 'drop' = 'keep'
   let stuckCalls = 0
   const rejected: string[] = []
-  const bc = async (tx: Transaction) => {
+  const bc = (tx: Transaction) => {
     broadcasted.push(tx)
-    return { status: 'success' as const, txid: tx.id('hex') }
+    return Promise.resolve({ status: 'success' as const, txid: tx.id('hex') })
   }
-  const fetchTx = async (txid: string) => broadcasted.find((t) => t.id('hex') === txid)
+  const fetchTx = (txid: string) => Promise.resolve(broadcasted.find((t) => t.id('hex') === txid))
   const p = {
     key: k,
     ledger,
     lowWater: 4,
     size: 4,
-    takeFunding: async () => fund(k, 1_000_000),
+    takeFunding: () => Promise.resolve(fund(k, 1_000_000)),
     broadcast: bc,
     fetchTx,
-    facts: async () => factsFor(status),
+    facts: () => Promise.resolve(factsFor(status)),
     onReject: (t: Transaction) => {
       rejected.push(t.id('hex'))
     },
-    onStuck: async () => {
+    onStuck: () => {
       stuckCalls++
-      return verdict
+      return Promise.resolve(verdict)
     }
   }
   await ensureTrees(p)
@@ -197,18 +206,19 @@ test('ensureTrees: a refused mint fires onRefused so the take heals, then fails 
   // the 'parent rejected (ancestor X)' refusal shape the broadcaster hands
   // back — the mint never books a row, so without onRefused its take
   // reservation would leak for the life of the process
-  const bc = async () => ({
-    status: 'error' as const,
-    description: `parent rejected (ancestor ${'ab'.repeat(32)}): retryable — resubmit after the ancestor is accepted`
-  })
+  const bc = () =>
+    Promise.resolve({
+      status: 'error' as const,
+      description: `parent rejected (ancestor ${'ab'.repeat(32)}): retryable — resubmit after the ancestor is accepted`
+    })
   const p = {
     key: k,
     ledger,
     lowWater: 2,
     size: 4,
-    takeFunding: async () => fund(k, 1_000_000),
+    takeFunding: () => Promise.resolve(fund(k, 1_000_000)),
     broadcast: bc,
-    fetchTx: async () => undefined,
+    fetchTx: () => Promise.resolve(undefined),
     onRefused: (t: Transaction, r: { status: string; description?: string }) => {
       refused.push({ txid: t.id('hex'), description: r.description })
     }
@@ -224,8 +234,8 @@ test('journal: fundedBy returns rows for a funding txid; put upserts beef', asyn
   await j.put('b', { txid: 'c2', beef: [2], topics: ['t'], fundingTxid: 'tree1' })
   await j.put('c', { txid: 'c3', beef: [3], topics: ['t'], fundingTxid: 'tree2' })
   await j.put('d', { txid: 'c4', beef: [4], topics: ['t'] })
-  assert.deepEqual((await j.fundedBy!('tree1')).map((r) => r.hash).sort(), ['a', 'b'])
-  assert.deepEqual((await j.fundedBy!('nope')).length, 0)
+  assert.deepEqual((await j.fundedBy('tree1')).map((r) => r.hash).sort(), ['a', 'b'])
+  assert.deepEqual((await j.fundedBy('nope')).length, 0)
   await j.put('a', { txid: 'c1', beef: [9], topics: ['t'], fundingTxid: 'tree1' })
   assert.deepEqual((await j.get('a'))!.beef, [9])
 })
@@ -361,12 +371,12 @@ test('ensureTrees: unproven provision tree does not gate the mint, and gets prov
     lowWater: 4,
     size: 4,
     satsPerOutput: 100,
-    takeFunding: async () => fund(k, 1_000_000),
-    broadcast: async (t: Transaction) => {
+    takeFunding: () => Promise.resolve(fund(k, 1_000_000)),
+    broadcast: (t: Transaction) => {
       broadcasted.push(t)
-      return { status: 'success' as const }
+      return Promise.resolve({ status: 'success' as const })
     },
-    fetchTx: async (id: string) => (id === prov.id('hex') ? prov : undefined)
+    fetchTx: (id: string) => Promise.resolve(id === prov.id('hex') ? prov : undefined)
   }
   const r1 = await ensureTrees(p)
   assert.ok(r1.minted.length > 0, 'a pending provision tree must not block the market refill')
@@ -398,11 +408,11 @@ test('ensureTrees: a rejected provision tree waits for the verdict — a hint ne
     lowWater: 4,
     size: 4,
     satsPerOutput: 100,
-    takeFunding: async () => fund(k, 1_000_000),
-    broadcast: async () => ({ status: 'success' as const }),
-    fetchTx: async () => undefined,
-    facts: async (id: string) => factsFor(id === prov.id('hex') ? 'rejected' : 'seen'),
-    onReject: async () => {
+    takeFunding: () => Promise.resolve(fund(k, 1_000_000)),
+    broadcast: () => Promise.resolve({ status: 'success' as const }),
+    fetchTx: () => Promise.resolve(undefined),
+    facts: (id: string) => Promise.resolve(factsFor(id === prov.id('hex') ? 'rejected' : 'seen')),
+    onReject: () => {
       rejected++
     }
   })
@@ -430,11 +440,11 @@ test('ensureTrees: a provision tree dead on a first-party verdict is reaped', as
     lowWater: 4,
     size: 4,
     satsPerOutput: 100,
-    takeFunding: async () => fund(k, 1_000_000),
-    broadcast: async () => ({ status: 'success' as const }),
-    fetchTx: async () => undefined,
-    facts: async () => ({ verdict: 'dead', source: 'abandon' }),
-    onReject: async () => {
+    takeFunding: () => Promise.resolve(fund(k, 1_000_000)),
+    broadcast: () => Promise.resolve({ status: 'success' as const }),
+    fetchTx: () => Promise.resolve(undefined),
+    facts: () => Promise.resolve({ verdict: 'dead', source: 'abandon' }),
+    onReject: () => {
       rejected++
     }
   })

@@ -195,7 +195,7 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
         spentTodaySats: w.spentTodaySats ?? 0,
         maxPerDay: w.caps?.maxPerDay ?? Number.MAX_SAFE_INTEGER,
         maxFeePerTx: w.caps?.maxFeePerTx ?? Number.MAX_SAFE_INTEGER,
-        costs: (rt.ops?.costs?.() ?? []) as Array<{ txid: string; spend: number; at: string }>
+        costs: rt.ops?.costs?.() ?? []
       }
     },
     publishFinger: /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_BFINGER_PUBLISH') ?? ''),

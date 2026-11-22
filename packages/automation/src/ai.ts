@@ -43,7 +43,7 @@ export function validateResult(job: AIJob, raw: unknown, model: AIResult['model'
 export class ScriptedExecutor implements AIExecutor {
   readonly provider = 'scripted'
   readonly egress = 'local' as const
-  async execute(job: AIJob): Promise<AIResult> {
+  execute(job: AIJob): Promise<AIResult> {
     const q = tokens(`${job.question} ${job.domains.join(' ')}`)
     let best: { id: string; score: number } | undefined
     for (const c of job.candidates) {
@@ -53,11 +53,13 @@ export class ScriptedExecutor implements AIExecutor {
       const score = q.size ? Math.floor((hit * 10000) / q.size) : 0
       if (score > 0 && (!best || score > best.score || (score === best.score && c.id < best.id))) best = { id: c.id, score }
     }
-    return validateResult(
-      job,
-      best ? { choice: best.id, relevanceBps: best.score } : { relevanceBps: 0 },
-      { provider: this.provider, modelId: 'token-overlap-1' },
-      { source: 'none' }
+    return Promise.resolve(
+      validateResult(
+        job,
+        best ? { choice: best.id, relevanceBps: best.score } : { relevanceBps: 0 },
+        { provider: this.provider, modelId: 'token-overlap-1' },
+        { source: 'none' }
+      )
     )
   }
 }

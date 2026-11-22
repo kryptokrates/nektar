@@ -58,7 +58,7 @@ test('memchain: mined spend proves and SDK-verifies; coinbase leads the block', 
   assert.equal(mined.merklePath.computeRoot(tx.id('hex')), (await chain.headerAtHeight(h))!.merkleRoot)
   assert.equal(await mined.verify(chain), true)
   // the coinbase's own proof sits at index 0 of the same block
-  const cb = chain.blockList[h]!.txids[0]!
+  const cb = chain.blockList[h].txids[0]
   assert.equal((await chain.merklePathOf(cb))!.computeRoot(cb), (await chain.headerAtHeight(h))!.merkleRoot)
 })
 
@@ -144,7 +144,7 @@ test('memchain: locktime-gated txs are non-final until the tip reaches them', as
 test('memchain: coinbase outputs are unspendable before maturity', async () => {
   const { chain, key } = newChain()
   const tip = await chain.currentHeight()
-  const cbid = chain.blockList[tip]!.txids[0]!
+  const cbid = chain.blockList[tip].txids[0]
   const cb = chain.getTx(cbid)!
   const t = new Transaction()
   t.addInput({ sourceTransaction: cb, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(chain.treasuryKey) })
@@ -253,7 +253,7 @@ test('memchain: fault switches — reject, hold, observer', async () => {
 test('memchain: MemoryFunder funds zeroconf parents — proven on demand, like the stack tier', async () => {
   const treasury = memoryTreasury()
   const f = await MemoryFunder.fund(treasury, 3, 10_000)
-  const parent = f.parents[0]!
+  const parent = f.parents[0]
   // broadcast and spendable immediately, but unproven until a block takes it —
   // the StackFunder contract: tests mine only where a proof is asserted
   assert.equal(parent.merklePath, undefined)
@@ -291,7 +291,7 @@ test('memchain: reject(txid) evicts the tx and its mempool descendants, freeing 
 test('memchain: concurrent MemoryFunder.fund calls serialize their splits', async () => {
   const treasury = new MemoryTreasury()
   const [fa, fb] = await Promise.all([MemoryFunder.fund(treasury, 2, 5_000), MemoryFunder.fund(treasury, 2, 5_000)])
-  assert.notEqual(fa.parents[0]!.id('hex'), fb.parents[0]!.id('hex'), 'each funder got its own split tx')
+  assert.notEqual(fa.parents[0].id('hex'), fb.parents[0].id('hex'), 'each funder got its own split tx')
   const ua = await fa.take(4_000)
   const t = new Transaction()
   t.addInput({ sourceTransaction: ua.tx, sourceOutputIndex: ua.vout, unlockingScriptTemplate: new P2PKH().unlock(fa.keyPair) })
@@ -314,7 +314,7 @@ test('memchain: mining past height 300 works; coinbase txids stay distinct', asy
   await chain.mine(210)
   const tip = await chain.currentHeight()
   assert.ok(tip >= 300, `tip ${tip}`)
-  const ids = chain.blockList.map((b) => b.txids[0]!)
+  const ids = chain.blockList.map((b) => b.txids[0])
   assert.equal(new Set(ids).size, ids.length, 'coinbase txids must be unique per block')
   const header = (await chain.headerAtHeight(tip))!
   assert.equal(headerPowValid(header), true)

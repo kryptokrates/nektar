@@ -96,7 +96,7 @@ const poll = (key) => {
       // holds — covers a move off the previous cursor AND the first landing
       // after a backend outage (prev === undefined)
       if (w.cursor !== prev || prev === undefined) {
-        for (const waiter of [...w.waiters]) {
+        for (const waiter of w.waiters) {
           if (waiter.want !== w.cursor) {
             w.waiters.delete(waiter)
             waiter.resolve(w.cursor, w.n)
@@ -174,7 +174,7 @@ const handle = async (req, res) => {
       }
       // a notify is a hint, not state: re-poll the service's lanes now and
       // let the fingerprint decide who actually wakes
-      for (const k of [...watchers.keys()]) if (k.startsWith(`${p.service}|`)) void poll(k)
+      for (const k of watchers.keys()) if (k.startsWith(`${p.service}|`)) void poll(k)
       return json(200, { ok: true })
     }
 

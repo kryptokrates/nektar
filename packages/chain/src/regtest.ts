@@ -164,7 +164,7 @@ export function regtestStackFromEnv(): { tracker: ChainTracker; broadcaster: Bro
 }
 
 // --- asset API helpers (basic auth = rpc creds) ---
-async function assetGet(cfg: RegtestConfig, path: string, binary = true): Promise<Response | null> {
+async function assetGet(cfg: RegtestConfig, path: string, _binary = true): Promise<Response | null> {
   const res = await fetch(`${cfg.assetUrl}/${path}`, {
     headers: { Authorization: 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64') },
     signal: AbortSignal.timeout(20_000)
@@ -261,7 +261,7 @@ function readVarint(b: Uint8Array, o: number): [number, number] {
 const sha256d = (b: Uint8Array): Uint8Array => dsha256(b)
 /** legacy block: 80B header + 8B sizeInBytes + varint txcount + raw txs */
 export function parseLegacyBlock(raw: Uint8Array): { txids: string[]; txs: Uint8Array[] } {
-  const hexOf = (b: Uint8Array) => Buffer.from(b).toString('hex')
+  const _hexOf = (b: Uint8Array) => Buffer.from(b).toString('hex')
   let off = 88
   let n
   ;[n, off] = readVarint(raw, off)

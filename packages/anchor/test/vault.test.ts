@@ -98,8 +98,8 @@ test('V1 VaultFunder: take() mints a capped funding out through the covenant; ov
     vault,
     owner,
     chain,
-    async () => cur,
-    async () => 1,
+    () => Promise.resolve(cur),
+    () => Promise.resolve(1),
     2n
   )
   assert.equal(await funder.address(), destPkh)

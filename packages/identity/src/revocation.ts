@@ -6,7 +6,7 @@
 // verifyProof(proof, {present: revoked}, root) with key = derive_key(pk).
 // Records without :proof= (pre-CRL writes) still parse, proof = undefined.
 import { sha256, utf8, toHex, fromHex, type Bytes } from '@nektar/core'
-import { deriveKey, verifyProof, type SmtProof, type SmtKey } from './smt.js'
+import { deriveKey, verifyProof, type SmtProof } from './smt.js'
 
 export const REVOKED_VALUE: Bytes = sha256(utf8('revoked'))
 

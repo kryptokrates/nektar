@@ -23,7 +23,7 @@ export function receiptToken(receiptHashHex: string): string {
 
 /** `nektarr1.<b64url 32B>` → hash hex; also accepts a bare 64-hex hash. */
 function parseReceiptToken(tok: string): { receiptHash: string } | null {
-  const t = (tok ?? '').trim()
+  const t = tok.trim()
   if (/^[0-9a-fA-F]{64}$/.test(t)) return { receiptHash: t.toLowerCase() }
   if (!t.startsWith(RECEIPT_TOKEN_PREFIX)) return null
   try {

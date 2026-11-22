@@ -93,7 +93,7 @@ const queue = [
   { tx: fundTx, vout: 1 },
   { tx: fundTx, vout: 2 }
 ]
-const takeFunding = async () => queue.shift()
+const takeFunding = () => queue.shift()
 const broadcast = async (tx) => {
   const r = await fetch(`${CHAIN}/arcade/tx`, { method: 'POST', body: Buffer.from(tx.toEF()) })
   if (r.status !== 200) return { status: 'error', description: `http ${r.status}` }

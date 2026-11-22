@@ -6,9 +6,9 @@ export const handlers: Record<string, ToolHandler> = {
     const r = await mem.bondDeploy(args.sats, args.releaseHeight === undefined ? undefined : BigInt(args.releaseHeight), args.force === true)
     return { ...r, releaseHeight: r.releaseHeight.toString(), receipt: { decision: 'allow', action: 'bondDeploy' } }
   },
-  bondStatus: async (mem) => {
+  bondStatus: (mem) => {
     const s = mem.bondStatus()
-    return s ? { ...s, releaseHeight: s.releaseHeight.toString(), deadline: s.deadline.toString() } : { deployed: false }
+    return Promise.resolve(s ? { ...s, releaseHeight: s.releaseHeight.toString(), deadline: s.deadline.toString() } : { deployed: false })
   },
   bondSeize: async (mem, args) => {
     const bond = args.bond

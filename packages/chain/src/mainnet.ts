@@ -8,7 +8,7 @@ import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
 import { headerPowValid, HeaderCache } from './headers.js'
-import { indexFailover, indexFor, type ChainIndex, type IndexUtxo } from './indexer.js'
+import { indexFailover, type ChainIndex, type IndexUtxo } from './indexer.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
 import type { StatusHint } from './txfacts.js'
 
@@ -157,7 +157,7 @@ export class BsvBroadcaster implements Broadcaster {
           attempts: 4,
           delay: (i) => 500 * 2 ** i,
           retryIf: (x) => x.status === 503
-        }).catch(async (e) => {
+        }).catch(async (_e) => {
           await new Promise((r2) => setTimeout(r2, 1_000))
           return await post()
         })
@@ -503,7 +503,7 @@ export class IndexTracker implements ChainTracker {
     this.cache.onReorg(cb)
   }
 
-  async isValidRootForHeight(root: string, height: number, signal?: AbortSignal): Promise<boolean> {
+  async isValidRootForHeight(root: string, height: number, _signal?: AbortSignal): Promise<boolean> {
     const h = await this.headerAtHeight(height)
     return h?.merkleRoot === root
   }
@@ -631,7 +631,7 @@ export class ChaintracksTracker implements ChainTracker {
     this.cache.onReorg(cb)
   }
 
-  async isValidRootForHeight(root: string, height: number, signal?: AbortSignal): Promise<boolean> {
+  async isValidRootForHeight(root: string, height: number, _signal?: AbortSignal): Promise<boolean> {
     const h = await this.headerAtHeight(height)
     return h?.merkleRoot === root
   }

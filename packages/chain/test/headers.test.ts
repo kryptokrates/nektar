@@ -51,18 +51,19 @@ const chaintracksJson = (h: BlockHeader) => ({
 })
 const stubFetch = (routes: Record<string, { status?: number; body?: any; raw?: string }>) => {
   const calls: string[] = []
-  const f: typeof fetch = async (input: any) => {
+  const f: typeof fetch = (input: any) => {
     const url = String(input)
     calls.push(url)
-    for (const [k, v] of Object.entries(routes)) if (url.includes(k)) return new Response(v.raw ?? JSON.stringify(v.body ?? {}), { status: v.status ?? 200 })
-    return new Response('not found', { status: 404 })
+    for (const [k, v] of Object.entries(routes))
+      if (url.includes(k)) return Promise.resolve(new Response(v.raw ?? JSON.stringify(v.body ?? {}), { status: v.status ?? 200 }))
+    return Promise.resolve(new Response('not found', { status: 404 }))
   }
   ;(f as any).calls = calls
   return f
 }
 const stubTracker = (h?: BlockHeader, mode: 'ok' | 'throw' | 'slow' = 'ok'): ChainTracker => ({
-  currentHeight: async () => 999,
-  tipHeight: async () => 999,
+  currentHeight: () => Promise.resolve(999),
+  tipHeight: () => Promise.resolve(999),
   headerAtHeight: async () => {
     if (mode === 'slow') await new Promise((r) => setTimeout(r, 300))
     if (mode === 'throw') throw new Error('witness down')
@@ -77,7 +78,13 @@ test('headerPowValid: the real 800000 header validates; forgeries do not', () =>
   assert.equal(headerPowValid(forged), false, 'one flipped merkleRoot nibble breaks the claimed hash')
   assert.equal(headerPowValid({ ...H800K, nonce: H800K.nonce + 1 }), false, 'nonce+1 breaks the claimed hash')
   const { version: _v, ...noVersion } = H800K
-  assert.equal(headerPowValid(noVersion as BlockHeader), false, 'no version → cannot serialize → cannot validate')
+  assert.equal(
+    headerPowValid(
+      /* eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- the spread strips the declared field */ noVersion as BlockHeader
+    ),
+    false,
+    'no version → cannot serialize → cannot validate'
+  )
   assert.equal(serializeHeader(H800K)!.length, 80)
 })
 
@@ -167,20 +174,20 @@ test('reorg: a fresh header that does not link to the cached parent fires onReor
 const cacheTracker = (upstream: () => BlockHeader | undefined): ChainTracker => {
   const cache = new Map<number, BlockHeader>()
   return {
-    currentHeight: async () => 999,
-    headerAtHeight: async (h) => {
+    currentHeight: () => Promise.resolve(999),
+    headerAtHeight: (h) => {
       const hit = cache.get(h)
-      if (hit !== undefined) return hit
+      if (hit !== undefined) return Promise.resolve(hit)
       const x = upstream()
       if (x !== undefined) cache.set(h, x)
-      return x
+      return Promise.resolve(x)
     },
-    refreshHeader: async (h) => {
+    refreshHeader: (h) => {
       const x = upstream()
       if (x !== undefined) cache.set(h, x)
-      return x
+      return Promise.resolve(x)
     },
-    isValidRootForHeight: async () => true
+    isValidRootForHeight: () => Promise.resolve(true)
   }
 }
 

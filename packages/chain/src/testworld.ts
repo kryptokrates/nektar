@@ -21,7 +21,7 @@ export type { TestTier, TestChain, TestFunder, TestT } from './testtier.js'
  *  `broadcast` would otherwise route later tests' broadcasts through a
  *  destroyed store; restore on teardown via t.after (see testkit.ts) */
 const unshadowBroadcast = (chain: { broadcast?: unknown }): void => {
-  delete (chain as { broadcast?: unknown }).broadcast
+  delete chain.broadcast
 }
 
 /** `{ chain, funder, treasury }` — a fresh funded identity key on the shared

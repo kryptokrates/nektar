@@ -3,7 +3,7 @@
 // script: locking/unlocking is built by runar-sdk; funding inputs use the
 // SDK P2PKH template (plain fee funding is allowed).
 import { makeRotationCert } from '@nektar/identity'
-import { Transaction, PrivateKey, P2PKH } from '@bsv/sdk'
+import { Transaction, PrivateKey } from '@bsv/sdk'
 import { RunarContract, LocalSigner, type Signer } from 'runar-sdk'
 import type { Provider, UTXO as RUTXO, TransactionData } from 'runar-sdk'
 // default burstLimit=100: measured 100 unconfirmed contract anchors on
@@ -101,9 +101,9 @@ export class NektarProvider implements Provider {
   rememberTx(tx: Transaction): void {
     this.recent.set(tx.id('hex'), tx)
   }
-  async getRawTransaction(txid: string): Promise<string> {
-    if (this.lastTx && this.lastTx.id('hex') === txid) return this.lastTx.toHex()
-    return this.recent.get(txid)?.toHex() ?? ''
+  getRawTransaction(txid: string): Promise<string> {
+    if (this.lastTx && this.lastTx.id('hex') === txid) return Promise.resolve(this.lastTx.toHex())
+    return Promise.resolve(this.recent.get(txid)?.toHex() ?? '')
   }
   readonly funds?: import('@nektar/chain').Funds
 
@@ -194,15 +194,15 @@ export class NektarProvider implements Provider {
     return []
   }
   taken = new Map<string, Transaction>()
-  async getContractUtxo(_scriptHash: string): Promise<RUTXO | null> {
-    return null
+  getContractUtxo(_scriptHash: string): Promise<RUTXO | null> {
+    return Promise.resolve(null)
   }
   getNetwork(): 'testnet' {
     return 'testnet'
   }
   feeRate = 1 // sats per KB, per runar-sdk fee computation
-  async getFeeRate(): Promise<number> {
-    return this.feeRate
+  getFeeRate(): Promise<number> {
+    return Promise.resolve(this.feeRate)
   }
 }
 
@@ -505,7 +505,7 @@ export class AnchorChain {
     return { tx, head }
   }
 
-  private async freshContract(cur: Head): Promise<RunarContract> {
+  private freshContract(cur: Head): Promise<RunarContract> {
     // every field comes from the decoded on-chain head (genesisOwner and
     // ownerPkh included) — never from local key state
     const script = cur.tx.outputs[cur.vout].lockingScript.toHex()
@@ -522,7 +522,7 @@ export class AnchorChain {
     )
     c.connect(this.provider, this.signer)
     c['currentUtxo'] = { txid: cur.tx.id('hex'), outputIndex: cur.vout, satoshis: cur.tx.outputs[cur.vout].satoshis!, script }
-    return c
+    return Promise.resolve(c)
   }
 
   confirm(txid: string, merklePath?: any): void {

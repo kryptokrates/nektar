@@ -21,7 +21,7 @@ const env = existsSync(envPath)
         .map((m) => [m[1], m[2].trim()])
     )
   : {}
-const dataDir = resolve(process.env.NEKTAR_DATA_DIR ?? env.NEKTAR_DATA_DIR ?? join(root, '.nektar'))
+const dataDir = resolve(process.env.NEKTAR_DATA_DIR ?? env.NEKTAR_DATA_DIR)
 
 const issues = [],
   fixed = [],

@@ -25,7 +25,7 @@ import {
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
 import { nektarEnv, nektarEnvNum, mkLog } from '@nektar/core'
-import { executor, cronObject, legObject, EXEC_SVC, type InvokeTarget } from '@nektar/automation'
+import { type InvokeTarget } from '@nektar/automation'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
 import { passphraseFromEnv, KeystoreError } from './keystore.js'
@@ -39,7 +39,6 @@ import {
   openRecordsDb,
   healLedgerOnProof,
   persistedTxStore,
-  buildRecordsWatcher,
   openConfirmerWatch
 } from './rtsupport.js'
 import { openCustody, regtestSeed, liveFunding, type CustodyResult } from './funding.js'
@@ -137,7 +136,7 @@ export function configFromEnv(env = process.env): RuntimeConfig {
       passphrase: secret('NEKTAR_KEY_PASSPHRASE'),
       // testnet defaults: BSV Broadcaster + WoC endpoints (probed live); main
       // keeps the built-in GorillaPool/WoC defaults when env vars are unset
-      broadcasterUrl: env.NEKTAR_BROADCASTER_URL ?? urls?.broadcaster,
+      broadcasterUrl: env.NEKTAR_BROADCASTER_URL ?? urls.broadcaster,
       // NEKTAR_BROADCASTER_URLS: comma-separated extra routes — the same
       // tx is submitted to all endpoints concurrently, first acceptance wins.
       // Both live nets always fan out so a strained or down endpoint can't
@@ -154,7 +153,7 @@ export function configFromEnv(env = process.env): RuntimeConfig {
           : ['https://arc.taal.com', 'https://arcade-v2-us-1.bsvblockchain.tech'])
       ],
       broadcasterApiKey: secret('NEKTAR_BROADCASTER_API_KEY'),
-      indexerUrl: env.NEKTAR_INDEXER_URL ?? env.NEKTAR_WOC_URL ?? urls?.indexer,
+      indexerUrl: env.NEKTAR_INDEXER_URL ?? env.NEKTAR_WOC_URL ?? urls.indexer,
       // NEKTAR_INDEXER_URLS: comma-separated extra index bases — queried in
       // order when the primary errors or misses. Both live nets append the
       // WoC mirror: a rate-limited banana must not read as chain-unreachable

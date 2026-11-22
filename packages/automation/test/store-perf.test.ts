@@ -22,7 +22,7 @@ async function op(store: AutomationStore, state: string, id: string, data: Recor
 }
 
 const plan = async (kx: Knex, sql: string, params: unknown[] = []): Promise<string[]> =>
-  ((await kx.raw(`EXPLAIN QUERY PLAN ${sql}`, params as Knex.RawBinding[])) as Array<{ detail: string }>).map((r) => r.detail)
+  (await kx.raw(`EXPLAIN QUERY PLAN ${sql}`, params as Knex.RawBinding[])).map((r: { detail: string }) => r.detail)
 
 const seeks = (details: string[], indexFrag: string): void =>
   assert.ok(
@@ -30,7 +30,7 @@ const seeks = (details: string[], indexFrag: string): void =>
     `expected a SEARCH on an index matching '${indexFrag}', got: ${details.join(' | ')}`
   )
 
-test('hot reads use their queue-head indexes', async (t) => {
+void test('hot reads use their queue-head indexes', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   // seed enough terminal mass that the planner treats 'pending' as the
@@ -92,7 +92,7 @@ test('hot reads use their queue-head indexes', async (t) => {
   seeks(d, 'market_operations_state_due_height')
 })
 
-test('hasLiveOps carries no json_extract — the column is the probe', async (t) => {
+void test('hasLiveOps carries no json_extract — the column is the probe', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const o = await op(store, 'completion_submitted', 'cs')
@@ -110,7 +110,7 @@ test('hasLiveOps carries no json_extract — the column is the probe', async (t)
   assert.equal(row2.proven_height, null)
 })
 
-test('pre-column ops table migrates: columns added, proven_height backfilled', async (t) => {
+void test('pre-column ops table migrates: columns added, proven_height backfilled', async (t) => {
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
   t.after(() => kx.destroy())
   // the pre-column shape — no proven_height, no next_reconcile_at
@@ -153,7 +153,7 @@ test('pre-column ops table migrates: columns added, proven_height backfilled', a
   assert.equal((await store.operation('old'))!.state, 'completion_submitted')
 })
 
-test('reconcileDue scan: only due rows hydrate; markReconciled stamps the cooldown', async (t) => {
+void test('reconcileDue scan: only due rows hydrate; markReconciled stamps the cooldown', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const now = Date.now()
@@ -182,7 +182,7 @@ test('reconcileDue scan: only due rows hydrate; markReconciled stamps the cooldo
   seeks(d, 'market_operations_state_next_reconcile')
 })
 
-test('prune: terminal rows past the cutoff die; live and young rows keep their history', async (t) => {
+void test('prune: terminal rows past the cutoff die; live and young rows keep their history', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const now = Date.now()

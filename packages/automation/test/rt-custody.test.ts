@@ -32,16 +32,16 @@ async function prepared(store: AutomationStore, actionId: string) {
 }
 
 const coordinator = (store: AutomationStore, extra: { txDied?: (tx: Transaction) => void } = {}) =>
-  new WalletCoordinator(store, { broadcast: async (tx) => ({ status: 'success', txid: tx.id('hex') }), ...extra })
+  new WalletCoordinator(store, { broadcast: (tx) => Promise.resolve({ status: 'success', txid: tx.id('hex') }), ...extra })
 
-test('custody legs key per actionId — the scan stays on the fixed key, a held tx key forwards as txScope', async () => {
+void test('custody legs key per actionId — the scan stays on the fixed key, a held tx key forwards as txScope', async () => {
   const ex = new Dispatcher()
   const seen: Array<{ handler: string; key?: string; arg: Record<string, unknown> }> = []
   try {
     for (const h of ['submit', 'markRejected', 'resubmitPending'])
-      ex.register(EXEC_SVC.custody, h, async (arg, k) => {
+      ex.register(EXEC_SVC.custody, h, (arg, k) => {
         seen.push({ handler: h, key: k, arg: (arg ?? {}) as Record<string, unknown> })
-        return { state: 'submitted', txid: 'x' }
+        return Promise.resolve({ state: 'submitted', txid: 'x' })
       })
     setExecutor(ex)
     const wallet = {} as WalletCoordinator
@@ -61,17 +61,17 @@ test('custody legs key per actionId — the scan stays on the fixed key, a held 
     )
   } finally {
     setExecutor(undefined)
-    ex.close()
+    void ex.close()
   }
 })
 
-test('custody.submit: the real coordinator leg — broadcast + emit commits through the tx object', async () => {
+void test('custody.submit: the real coordinator leg — broadcast + emit commits through the tx object', async () => {
   const { kx, store } = await open()
   const ex = new Dispatcher()
   const spent: string[] = []
   try {
     await prepared(store, 'c:sub')
-    wireTx(ex, { store, fx: { txSpent: async (w) => void spent.push(w.txid) }, log: () => {} })
+    wireTx(ex, { store, fx: { txSpent: (w) => void spent.push(w.txid) }, log: () => {} })
     const wallet = coordinator(store)
     wireCustody(ex, { wallet, log: () => {} })
     setExecutor(ex)
@@ -81,19 +81,19 @@ test('custody.submit: the real coordinator leg — broadcast + emit commits thro
     assert.equal(spent.length, 1, 'the aired verdict ran its custody intent')
   } finally {
     setExecutor(undefined)
-    ex.close()
+    void ex.close()
     await kx.destroy()
   }
 })
 
-test('custody.markRejected + resubmitPending: dead verdicts and the boot scan run through the object', async () => {
+void test('custody.markRejected + resubmitPending: dead verdicts and the boot scan run through the object', async () => {
   const { kx, store } = await open()
   const ex = new Dispatcher()
   const died: string[] = []
   try {
     await prepared(store, 'c:rej')
     await prepared(store, 'c:reair')
-    wireTx(ex, { store, fx: { txDied: async (w) => void died.push(w.txid) }, log: () => {} })
+    wireTx(ex, { store, fx: { txDied: (w) => void died.push(w.txid) }, log: () => {} })
     const wallet = coordinator(store)
     wireCustody(ex, { wallet, log: () => {} })
     setExecutor(ex)
@@ -111,7 +111,7 @@ test('custody.markRejected + resubmitPending: dead verdicts and the boot scan ru
     assert.equal((await store.walletTx({ actionId: 'c:reair' }))!.state, 'submitted')
   } finally {
     setExecutor(undefined)
-    ex.close()
+    void ex.close()
     await kx.destroy()
   }
 })

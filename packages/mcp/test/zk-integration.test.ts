@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { PrivateKey } from '@bsv/sdk'
-import { testWorld, testFunder, fundsOf, type TestFunder } from '@nektar/chain'
+import { testWorld, testFunder, fundsOf } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { decodeNektarAnchor } from '@nektar/contracts'
 import { fromHex, dsha256, utf8 } from '@nektar/core'
@@ -42,7 +42,7 @@ async function anchoredBatch(t: { skip: (m?: string) => void }, R: Uint8Array, s
   return { chain, tx, ac, shard: decodeNektarAnchor(tx.outputs[0].lockingScript.toHex())!.shard }
 }
 
-test('STARK membership verifies against a real anchor whose R is the proven root', async (t) => {
+void test('STARK membership verifies against a real anchor whose R is the proven root', async (t) => {
   const _w = await anchoredBatch(t, fromHex(fx.journal.root), 5)
   if (_w === undefined) return
   const { chain, tx, shard } = _w
@@ -51,7 +51,7 @@ test('STARK membership verifies against a real anchor whose R is the proven root
   assert.equal(res.anchorTxid, tx.id('hex'))
 })
 
-test('STARK membership NEGATIVES (each check fails closed with a specific reason)', async (t) => {
+void test('STARK membership NEGATIVES (each check fails closed with a specific reason)', async (t) => {
   const good = await anchoredBatch(t, fromHex(fx.journal.root), 5)
   if (good === undefined) return
   const q = fx.journal.queryId
@@ -91,7 +91,7 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
       // a second StackChain handle still answers against the SAME node's
       // headers — the BUMP root is genuinely valid there. The negative needs
       // a tracker whose header chain does NOT contain the root.
-      verifyMembershipAnchoredStark(proofBytes(), good.tx, { isValidRootForHeight: async () => false, currentHeight: async () => 0 }, issued(q), {
+      verifyMembershipAnchoredStark(proofBytes(), good.tx, { isValidRootForHeight: () => false, currentHeight: () => 0 }, issued(q), {
         shard: good.shard
       }),
       /BEEFInvalid|NotMined/
@@ -128,7 +128,7 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
   assert.match(String((await v(proofBytes(), good, reg)).reason), /already used|not issued/)
 })
 
-test('NektarMemory: issued ZK queries are single use and survive a restart (persisted)', async (t) => {
+void test('NektarMemory: issued ZK queries are single use and survive a restart (persisted)', async (t) => {
   let saved: any
   const store = {
     load: () => saved,
@@ -151,7 +151,7 @@ test('NektarMemory: issued ZK queries are single use and survive a restart (pers
   assert.equal((m2 as any).consumeZkQuery(q.queryId), false, 'single use')
 })
 
-test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own anchored batch', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
+void test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own anchored batch', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
   const w = await testWorld(t, 20)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -181,15 +181,15 @@ async function memWithFixtureAnchor(t: { skip: (m?: string) => void }) {
   // must implement the whole interface consumers touch, not just `all`
   const rows = [{ seq: 4, batchIndex: 0, leaf: new Uint8Array(32), leafIndex: 4, shard: 's', hdp: new Uint8Array(32), state: 'anchored' }]
   const stubStore = {
-    all: async () => rows,
-    bySeq: async (_s: string, seq: number) => rows.find((r) => r.seq === seq),
-    byBatch: async (_s: string, b: number) => rows.filter((r) => r.batchIndex === b),
-    byIdentity: async () => undefined,
-    nextSeq: async () => rows.length,
-    lastBatchIndex: async () => 0,
-    pending: async () => [],
-    committedUnbatched: async () => [],
-    resetUnanchored: async () => 0,
+    all: () => rows,
+    bySeq: (_s: string, seq: number) => rows.find((r) => r.seq === seq),
+    byBatch: (_s: string, b: number) => rows.filter((r) => r.batchIndex === b),
+    byIdentity: () => undefined,
+    nextSeq: () => rows.length,
+    lastBatchIndex: () => 0,
+    pending: () => [],
+    committedUnbatched: () => [],
+    resetUnanchored: () => 0,
     markBatched: async () => {},
     markAnchored: async () => {},
     append: async () => {}
@@ -207,7 +207,7 @@ async function memWithFixtureAnchor(t: { skip: (m?: string) => void }) {
   return { mem, authority, zk }
 }
 
-test('§13 combined Π: the Π binding rejects proofs paired with an unrelated clearance', async (t) => {
+void test('§13 combined Π: the Π binding rejects proofs paired with an unrelated clearance', async (t) => {
   const _mw = await memWithFixtureAnchor(t)
   if (_mw === undefined) return
   const { mem, zk } = _mw
@@ -239,7 +239,7 @@ test('§13 combined Π: the Π binding rejects proofs paired with an unrelated c
   assert.match(String(r.reason), /header does not match|stark/)
 })
 
-test('end-to-end §13 Π: membership STARK + ZKAccess clearance under ONE verifier query', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
+void test('end-to-end §13 Π: membership STARK + ZKAccess clearance under ONE verifier query', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
   const w = await testWorld(t, 20)
   if (w === undefined) return
   const { chain, funder: f } = w

@@ -51,7 +51,7 @@ const dockerUp = async (): Promise<boolean> =>
 const startEnv = async (t: { skip: (m?: string) => void }, services: unknown[], opts: Record<string, unknown>): Promise<RestateTestEnvironment | undefined> => {
   const { RestateTestEnvironment } = await import('@restatedev/restate-sdk-testcontainers')
   try {
-    return await RestateTestEnvironment.start({ services: services as never[], ...opts } as never)
+    return await RestateTestEnvironment.start({ services: services as never[], ...opts })
   } catch (e) {
     t.skip(`restate test environment unavailable: ${e instanceof Error ? e.message : String(e)}`)
     return undefined
@@ -60,7 +60,7 @@ const startEnv = async (t: { skip: (m?: string) => void }, services: unknown[], 
 
 const RUN = `${process.pid}-${Date.now().toString(36)}`
 
-test('replay: suspension probe — replays re-run the body but journaled steps and sends fire once', { timeout: 120_000 }, async (t) => {
+void test('replay: suspension probe — replays re-run the body but journaled steps and sends fire once', { timeout: 120_000 }, async (t) => {
   if (!(await dockerUp())) {
     t.skip('docker unavailable')
     return
@@ -104,7 +104,7 @@ test('replay: suspension probe — replays re-run the body but journaled steps a
     const ex = new RestateExecutor(env.baseUrl())
     const r = await ex.call<{ done: boolean }>({ service: svc, handler: 'go', key: 'k' }, null)
     assert.equal(r.done, true)
-    await until(async () => sent.length === 1)
+    await until(() => Promise.resolve(sent.length === 1))
     assert.ok(executions >= 2, `expected forced replays at the sleeps — got ${executions} execution(s) (replay may not have engaged)`)
     assert.deepEqual(marks, ['s1', 's2'], 'journaled steps executed exactly once — replays consumed the journal')
     assert.equal(sent.length, 1, 'the journaled send issued once — replay deduped it')
@@ -113,7 +113,7 @@ test('replay: suspension probe — replays re-run the body but journaled steps a
   }
 })
 
-test('replay: plane defs complete under the testcontainer endpoint host — transport.drain sends + arm', { timeout: 120_000 }, async (t) => {
+void test('replay: plane defs complete under the testcontainer endpoint host — transport.drain sends + arm', { timeout: 120_000 }, async (t) => {
   if (!(await dockerUp())) {
     t.skip('docker unavailable')
     return
@@ -122,9 +122,10 @@ test('replay: plane defs complete under the testcontainer endpoint host — tran
   let nexts = 0
   const delivered: string[] = []
   const transportDef = await transportObject({
-    dueRows: async () => (scans++, [{ actionId: 'rp:1', operationId: 'op:1', kind: 'message', destination: `rp:host-${RUN}`, payload: {}, attempts: 0 }]),
-    nextAt: async () => (nexts++, Date.now() + 60_000),
-    deliverItem: async (item) => (delivered.push(item.actionId), 'acked' as const),
+    dueRows: () =>
+      Promise.resolve((scans++, [{ actionId: 'rp:1', operationId: 'op:1', kind: 'message', destination: `rp:host-${RUN}`, payload: {}, attempts: 0 }])),
+    nextAt: () => Promise.resolve((nexts++, Date.now() + 60_000)),
+    deliverItem: (item) => Promise.resolve((delivered.push(item.actionId), 'acked' as const)),
     now: () => Date.now(),
     log: () => {}
   })
@@ -134,7 +135,7 @@ test('replay: plane defs complete under the testcontainer endpoint host — tran
     const ex = new RestateExecutor(env.baseUrl())
     const r = await ex.call<{ sent: number }>({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {})
     assert.equal(r.sent, 1)
-    await until(async () => delivered.length === 1)
+    await until(() => Promise.resolve(delivered.length === 1))
     assert.equal(scans, 1)
     assert.equal(nexts, 1)
     assert.equal(delivered.length, 1)
@@ -143,7 +144,7 @@ test('replay: plane defs complete under the testcontainer endpoint host — tran
   }
 })
 
-test('replay: plane defs complete under the testcontainer endpoint host — cron.tick self-arms once', { timeout: 120_000 }, async (t) => {
+void test('replay: plane defs complete under the testcontainer endpoint host — cron.tick self-arms once', { timeout: 120_000 }, async (t) => {
   if (!(await dockerUp())) {
     t.skip('docker unavailable')
     return
@@ -151,7 +152,7 @@ test('replay: plane defs complete under the testcontainer endpoint host — cron
   const ticks: number[] = []
   const svc = `replay-cron-${RUN}`
   const cronDef = await cronObject(svc, {
-    tick: async () => void ticks.push(Date.now()),
+    tick: () => Promise.resolve(void ticks.push(Date.now())),
     ceilingMs: () => 60_000,
     now: () => Date.now(),
     log: () => {}
@@ -169,7 +170,7 @@ test('replay: plane defs complete under the testcontainer endpoint host — cron
   }
 })
 
-test('replay: disableRetries — a poisoned leg surfaces immediately instead of hanging in backoff', { timeout: 60_000 }, async (t) => {
+void test('replay: disableRetries — a poisoned leg surfaces immediately instead of hanging in backoff', { timeout: 60_000 }, async (t) => {
   if (!(await dockerUp())) {
     t.skip('docker unavailable')
     return
@@ -179,7 +180,7 @@ test('replay: disableRetries — a poisoned leg surfaces immediately instead of 
   const poison = restate.object({
     name: svc,
     handlers: {
-      go: async (_ctx: import('@restatedev/restate-sdk').ObjectContext) => {
+      go: (_ctx: import('@restatedev/restate-sdk').ObjectContext) => {
         throw new Error('deterministic poison — must surface, not wedge')
       }
     }

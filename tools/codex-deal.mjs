@@ -16,7 +16,7 @@
 import { spawn, execFile, execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, cpSync, openSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import net from 'node:net'

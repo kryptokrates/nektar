@@ -464,7 +464,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
           downNow.add(h)
           log(`automation: watchdog: host down ${h}`)
         }
-      for (const h of [...downNow]) if (marketHosts.includes(h) && !r.downHosts.includes(h)) await rt.hostBack(h)
+      for (const h of Array.from(downNow)) if (marketHosts.includes(h) && !r.downHosts.includes(h)) await rt.hostBack(h)
     } catch (e) {
       log(`automation: watchdog: ${(e as Error).message}`)
     }
@@ -508,7 +508,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     if (f.verdict === 'dead') return { status: 'rejected' as const, source: f.source ?? 'chain', reason: 'dead' }
     return hintSeen(f.hint) ? { status: 'seen' as const, source: 'broadcaster' } : undefined
   }
-  const ledgerWatcher = new TransactionWatcher(
+  const _ledgerWatcher = new TransactionWatcher(
     store,
     observeFn,
     async (w) => {

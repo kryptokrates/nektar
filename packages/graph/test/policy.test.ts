@@ -80,7 +80,7 @@ test('instancing: selection + closure + member proof + delegation', () => {
     parseProgram(`@id r1
 spec(S,V) :- requires(P,V), applies(S,P).`).rules
   )
-  const s = (x: string) => '00'.repeat(10)
+  const _s = (_x: string) => '00'.repeat(10)
   const t = (n: number) => ({ logPos: n })
   const e1 = g.append({ kind: 'episode', phi: 'requires(t, 45)', t: t(1), context: ['dept-a'], sigma: [] }, [])
   const e2 = g.append({ kind: 'episode', phi: 'applies(p4, t)', t: t(2), context: ['dept-a'], sigma: [] }, [])

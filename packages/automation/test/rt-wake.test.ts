@@ -20,18 +20,18 @@ const rig = (deps: WakeDeps): { ex: Dispatcher; seen: Seen[] } => {
   const seen: Seen[] = []
   // the sends the wake handlers fan out — recorded so the test sees the
   // cycle tail, registered so the Dispatcher has a route for them
-  ex.register(EXEC_SVC.dealfan, 'tick', async (arg, key) => void seen.push({ service: EXEC_SVC.dealfan, handler: 'tick', key, arg }))
-  ex.register(EXEC_SVC.transport, 'drain', async (arg, key) => void seen.push({ service: EXEC_SVC.transport, handler: 'drain', key, arg }))
+  ex.register(EXEC_SVC.dealfan, 'tick', (arg, key) => Promise.resolve(void seen.push({ service: EXEC_SVC.dealfan, handler: 'tick', key, arg })))
+  ex.register(EXEC_SVC.transport, 'drain', (arg, key) => Promise.resolve(void seen.push({ service: EXEC_SVC.transport, handler: 'drain', key, arg })))
   wireWake(ex, deps)
   return { ex, seen }
 }
 
-test('wake.txProof: leg runs journaled, hint fires, cycle tail sends dealfan.tick + transport.drain', async () => {
+void test('wake.txProof: leg runs journaled, hint fires, cycle tail sends dealfan.tick + transport.drain', async () => {
   const legs: string[] = []
   const hinted: string[] = []
   const { ex, seen } = rig({
     legs: {
-      txProof: async (txid, mpHex) => void legs.push(`${txid}:${mpHex.slice(0, 8)}`)
+      txProof: (txid, mpHex) => Promise.resolve(void legs.push(`${txid}:${mpHex.slice(0, 8)}`))
     },
     hint: (txid) => void hinted.push(txid),
     log: () => {}
@@ -45,10 +45,10 @@ test('wake.txProof: leg runs journaled, hint fires, cycle tail sends dealfan.tic
     seen.map((s) => `${s.service}/${s.handler}:${s.key ?? '-'}`),
     [`${EXEC_SVC.dealfan}/tick:main`, `${EXEC_SVC.transport}/drain:${TRANSPORT_DRAIN_KEY}`]
   )
-  ex.close()
+  void ex.close()
 })
 
-test('wake.txRejected: hint + cycle tail, no ledger leg', async () => {
+void test('wake.txRejected: hint + cycle tail, no ledger leg', async () => {
   const hinted: string[] = []
   const { ex, seen } = rig({ legs: {}, hint: (txid) => void hinted.push(txid), log: () => {} })
   const r = await ex.call<{ done: boolean }>({ service: EXEC_SVC.wake, handler: 'txRejected' }, { txid: 'tx2' })
@@ -56,12 +56,12 @@ test('wake.txRejected: hint + cycle tail, no ledger leg', async () => {
   assert.deepEqual(r, { done: true })
   assert.deepEqual(hinted, ['tx2'])
   assert.equal(seen.length, 2)
-  ex.close()
+  void ex.close()
 })
 
-test('wake.height: due gate — dealfan only when a row is height-due', async () => {
+void test('wake.height: due gate — dealfan only when a row is height-due', async () => {
   let due = true
-  const { ex, seen } = rig({ legs: { dueAtHeight: async () => due }, hint: () => {}, log: () => {} })
+  const { ex, seen } = rig({ legs: { dueAtHeight: () => Promise.resolve(due) }, hint: () => {}, log: () => {} })
   assert.deepEqual(await ex.call({ service: EXEC_SVC.wake, handler: 'height' }, { tip: 100 }), { due: true })
   await ex.drain()
   assert.deepEqual(
@@ -73,25 +73,25 @@ test('wake.height: due gate — dealfan only when a row is height-due', async ()
   assert.deepEqual(await ex.call({ service: EXEC_SVC.wake, handler: 'height' }, { tip: 101 }), { due: false })
   await ex.drain()
   assert.equal(seen.length, 0)
-  ex.close()
+  void ex.close()
 })
 
-test('wake.txAbandoned: ledger leg + cycle tail', async () => {
+void test('wake.txAbandoned: ledger leg + cycle tail', async () => {
   const dropped: string[] = []
-  const { ex, seen } = rig({ legs: { txAbandoned: async (txid) => void dropped.push(txid) }, hint: () => {}, log: () => {} })
+  const { ex, seen } = rig({ legs: { txAbandoned: (txid) => Promise.resolve(void dropped.push(txid)) }, hint: () => {}, log: () => {} })
   await ex.call({ service: EXEC_SVC.wake, handler: 'txAbandoned' }, { txid: 'dead1' })
   await ex.drain()
   assert.deepEqual(dropped, ['dead1'])
   assert.equal(seen.length, 2)
-  ex.close()
+  void ex.close()
 })
 
-test('wake.reorg: demotion leg only — no cycle tail (matches the local shape)', async () => {
+void test('wake.reorg: demotion leg only — no cycle tail (matches the local shape)', async () => {
   const reorgs: number[] = []
-  const { ex, seen } = rig({ legs: { reorg: async (from) => void reorgs.push(from) }, hint: () => {}, log: () => {} })
+  const { ex, seen } = rig({ legs: { reorg: (from) => Promise.resolve(void reorgs.push(from)) }, hint: () => {}, log: () => {} })
   await ex.call({ service: EXEC_SVC.wake, handler: 'reorg' }, { from: 42 })
   await ex.drain()
   assert.deepEqual(reorgs, [42])
   assert.equal(seen.length, 0)
-  ex.close()
+  void ex.close()
 })

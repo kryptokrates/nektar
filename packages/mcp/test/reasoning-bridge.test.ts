@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PrivateKey } from '@bsv/sdk'
-import { type ChainTracker, testWorld, type TestFunder } from '@nektar/chain'
+import { type ChainTracker, testWorld } from '@nektar/chain'
 import { NektarMemory } from '@nektar/mcp'
 import { parseProgram } from '@nektar/datalog'
 import { PolicyDAG } from '@nektar/graph'
@@ -50,7 +50,7 @@ async function world(t: { skip: (m?: string) => void }) {
 }
 const m = (seq: number) => ({ shard: 'manual', seq })
 
-test('AGT-003 grounding: quote, entailed, uncited, unverifiable, not-entailed; flag vs remove', async (t) => {
+void test('AGT-003 grounding: quote, entailed, uncited, unverifiable, not-entailed; flag vs remove', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   await w.mem.remember('manual', 'requires(torque, 99).') // pending — never anchored
@@ -78,7 +78,7 @@ test('AGT-003 grounding: quote, entailed, uncited, unverifiable, not-entailed; f
   assert.notEqual(rm.reportHash, r.reportHash)
 })
 
-test('AGT-011/012 model identity + committed, anchored receipt', async (t) => {
+void test('AGT-011/012 model identity + committed, anchored receipt', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-'))
   const wp = join(dir, 'weights.gguf')
   writeFileSync(wp, Buffer.alloc(3 * 65536 + 17, 7))
@@ -105,7 +105,7 @@ test('AGT-011/012 model identity + committed, anchored receipt', async (t) => {
   assert.equal((await w.mem.prove('__receipts__', anchored.anchor.seq)).result.ok, true)
 })
 
-test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction anchored', async (t) => {
+void test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction anchored', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   const idx = new CitationIndex(join(mkdtempSync(join(tmpdir(), 'nektar-')), 'cit.json'))
@@ -141,7 +141,7 @@ test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction a
   assert.equal(new CitationIndex(idx['file']).citing(m(1)).length, 2, 'index persists')
 })
 
-test('AGT-005 consensus time: existence-by the block time; unmined/forged refused', async (t) => {
+void test('AGT-005 consensus time: existence-by the block time; unmined/forged refused', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   const tx = w.mem.anchorTx(w.mem.tailLink('manual')!.txid)!
@@ -153,14 +153,14 @@ test('AGT-005 consensus time: existence-by the block time; unmined/forged refuse
   const lying = {
     currentHeight: async () => await w.chain.currentHeight(),
     headerAtHeight: async (h: number) => await w.chain.headerAtHeight(h),
-    isValidRootForHeight: async () => false
+    isValidRootForHeight: () => false
   } as unknown as ChainTracker
   await assert.rejects(() => timeBounds(tx, lying), /does not verify/)
   const { Transaction } = await import('@bsv/sdk')
   await assert.rejects(() => timeBounds(Transaction.fromHex(tx.toHex()), w.chain), /not mined/)
 })
 
-test('AGT-007 audit bundle verifies offline; 4 tamper cases rejected with reasons', async (t) => {
+void test('AGT-007 audit bundle verifies offline; 4 tamper cases rejected with reasons', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   await w.mem.remember('manual', 'requires(torque, 55).')
@@ -223,7 +223,7 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
     ...w.chain,
     currentHeight: () => w.chain.currentHeight(),
     headerAtHeight: async (h: number) => await w.chain.headerAtHeight(h),
-    isValidRootForHeight: async () => false
+    isValidRootForHeight: () => false
   } as unknown as ChainTracker
   assert.ok(
     (await verifyAuditBundle(clone(), badHeaders, { dag })).reasons.some((r) => /fragment manual\/0: (BEEFInvalid|NotMined)/.test(r)),
@@ -233,7 +233,7 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
   assert.equal(hashOf(receipt), bundle.receiptHash)
 })
 
-test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRevoked needed', async (t) => {
+void test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRevoked needed', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   const b0 = (await w.mem.prove('manual', 0)).bundle!
@@ -299,7 +299,7 @@ test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRe
   assert.ok((await verifyAuditBundle(badProof, w.chain)).reasons.some((r) => /inclusion proof failed/.test(r)))
 })
 
-test('GOAL-v8 D4: anchored rotation chain — third party replays pk(0)→pk(i) from chain data', async (t) => {
+void test('GOAL-v8 D4: anchored rotation chain — third party replays pk(0)→pk(i) from chain data', async (t) => {
   const { verifyAnchoredRotationChain } = await import('@nektar/reasoning')
   const w = await world(t)
   if (w === undefined) return

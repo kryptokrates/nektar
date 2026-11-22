@@ -23,8 +23,7 @@ export abstract class MemZk extends MemPacks {
     if (!s) return
     for (const [n, exp] of s.challenges) this.challenges.set(n, exp)
     for (const k of s.zkSeen) this.zkSeen.add(k)
-    for (const row of s.zkQueries ?? [])
-      this.zkQueries.set(row[0], { expiry: row[1], nonce: row[2] ?? '', verifierId: row[3] ?? '', consumed: row[4] === true })
+    for (const row of s.zkQueries) this.zkQueries.set(row[0], { expiry: row[1], nonce: row[2] ?? '', verifierId: row[3] ?? '', consumed: row[4] === true })
     this.revocationOps.restore(s.revocations)
   }
   /** verifier side: issue a single-use ZK membership query (default 10 min).

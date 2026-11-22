@@ -215,7 +215,7 @@ console.log('— v2 scenario —')
   const { canonicalizePolicySet } = await import('@nektar/policy')
   const {
     signBinding,
-    issueChallenge,
+    issueChallenge: _issueChallenge,
     answerChallenge,
     issueClearance,
     proveAccess,
@@ -288,12 +288,12 @@ console.log('— v2 scenario —')
   })
   await vc.mine(1)
   check(ra !== null || ((vm as any).tails.get('__rev__')?.length ?? 0) > 0, 'revocation root anchored')
-  const { proveNonInclusion, verifyProof: verifySmtProof } = (await import('@nektar/identity')) as any
+  const { proveNonInclusion: _proveNonInclusion, verifyProof: verifySmtProof } = (await import('@nektar/identity')) as any
   const nip = smt.prove(dsha256(Buffer.from(newOwner.toPublicKey().toString())))
   check(verifySmtProof(nip, { present: false }, rootRev) === true, 'new key non-inclusion verifies vs anchored root')
   // auditor disclosure envelope: verify anchored, then fails after expiry
   const fld = [{ name: 'secret', value: 'level-2 secret', salt: new Uint8Array(32).fill(3) }]
-  const froot = fieldsCommitment(fld)
+  const _froot = fieldsCommitment(fld)
   const exp = Math.floor(Date.now() / 1000) + 60
   const env = issueDisclosure(vf.keyPair, fld, 0, C.toPublicKey().toString(), exp, 'audit')
   const fp = fieldPath(fld, 0)
@@ -306,7 +306,7 @@ console.log('— v2 scenario —')
     fieldRoot(fld),
     fp.siblings ?? fp,
     now,
-    async () => true
+    () => true
   )
   check(okD.ok === true, 'auditor envelope verifies anchored')
   const badD = await verifyDisclosureAnchored(
@@ -317,7 +317,7 @@ console.log('— v2 scenario —')
     fieldRoot(fld),
     fp.siblings ?? fp,
     exp + 61,
-    async () => true
+    () => true
   )
   check(badD.ok === false, 'auditor envelope fails after expiry')
 }
@@ -352,7 +352,16 @@ else
 // — v4 AORG + policy DAG + instancing —
 console.log('— v4 AORG / policy DAG / instancing —')
 try {
-  const { AORGraph, GraphAnchor, PolicyDAG, instanceOf, memberProof, delegate, verifyDelegation, verifyInstance } = await import('@nektar/graph')
+  const {
+    AORGraph,
+    GraphAnchor,
+    PolicyDAG,
+    instanceOf,
+    memberProof,
+    delegate,
+    verifyDelegation: _verifyDelegation,
+    verifyInstance
+  } = await import('@nektar/graph')
   const { parseProgram } = await import('@nektar/datalog')
   const cat = parseProgram(`@id r-spec
 spec(S, V) :- requires(P, V), applies(S, P).`).rules
@@ -407,7 +416,7 @@ deny(P, read, R) :- member(P, verified), fragment(R).`).rules
   ])
   const memConf = new NektarMemory(chain, f2, f2.keyPair, { batchPolicy: { maxLeaves: 10 }, policyDag: dagConflict })
   await memConf.remember('docs', 'x', {}, 0)
-  const { signBinding, issueChallenge, answerChallenge } = await import('@nektar/identity')
+  const { signBinding, issueChallenge: _issueChallenge, answerChallenge } = await import('@nektar/identity')
   const ck = PrivateKey.fromRandom()
   const cNonce = memConf.issueChallenge()
   const denyConf = await memConf.recall('docs', {

@@ -118,7 +118,7 @@ export async function buildAnchoredSettleTx(opts: {
  *  sale.buyGated pins the exact pair via hash256(prevouts); the verdict's
  *  authorize enforces payment to its payeePkh — atomic pay-iff-settled.
  *  Both legs are pure covenants (opSig + preimage — no user signature). */
-export async function buildBuyGatedTx(opts: {
+export function buildBuyGatedTx(opts: {
   saleArt: any
   sale: any
   saleUtxo: Utxo
@@ -154,7 +154,7 @@ export async function buildBuyGatedTx(opts: {
   if (vUnlock.length % 2)
     throw new Error(`verdict unlock odd hex (${vUnlock.length}): vSig=${vSig.length} vPre=${vPre.length} changePkh=${opts.changePkh.length}`)
   tx.inputs[1].unlockingScript = UnlockingScript.fromHex(vUnlock)
-  return tx
+  return Promise.resolve(tx)
 }
 
 /** terminal-method call recipe: the SDK only pushes codePart + change args

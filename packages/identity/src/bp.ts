@@ -261,7 +261,7 @@ export function verifyRangeBP(commitment: Point, proof: RangeProofBP, bind = '')
   const Pip = need(addO(addO(P, smul(mod(-mu), BP_H)), smul(tHat, U)))
   return verifyIP(gv, hp, U, Pip, proof.ip, bind)
 }
-function msmPsum(pts: Point[]): Point {
+function _msmPsum(pts: Point[]): Point {
   let acc = pts[0]
   for (let i = 1; i < pts.length; i++) acc = acc.add(pts[i])
   return acc

@@ -172,7 +172,7 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
   return {
     network: d.network,
     model: nektarEnv('NEKTAR_MODEL_ID') ?? 'operator',
-    pub: mem.operatorKey().toPublicKey().toString().slice(0, 24),
+    pub: (await mem.operatorSigner().pubKeyHex()).slice(0, 24),
     uptimeSec: Math.floor(process.uptime()),
     loop: {
       steps,
@@ -447,7 +447,7 @@ export async function cardPage(mem: NektarMemory, host: string | undefined): Pro
           ? 'local Teranode regtest'
           : 'simulated chain — demo only'
   const coverage = d && d.records > 0 ? Math.round((d.anchoredRecords / d.records) * 100) : 0
-  const operator = mem.operatorKey().toPublicKey().toString()
+  const operator = await mem.operatorSigner().pubKeyHex()
   const ogDesc = `${d?.records ?? 0} records · ${coverage}% anchored on-chain · ${receipts} receipts issued · ${pub.length} shards for sale`
   return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>nektar agent — verifiable memory</title>
 <meta property="og:title" content="nektar agent card — verifiable memory anchored on BSV">

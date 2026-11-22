@@ -798,7 +798,7 @@ export function createHttpApi(
               verifyBase: `${base}/v1/verify`,
               card: `${base}/card`,
               logPublicKey: await mem.logPublicKey(),
-              operatorPub: mem.operatorKey().toPublicKey().toString(),
+              operatorPub: await mem.operatorSigner().pubKeyHex(),
               // self-describing market config — is this instance a quorum
               // participant, and through which hosts? Report the live engine
               // state (mem.automation) not just the env flag.

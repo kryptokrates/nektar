@@ -131,6 +131,10 @@ export async function ensureRestate(
       toml,
       `# nektar sidecar — generated at boot; ports sit off nektar's own :8080
 disable-telemetry = true
+# node-name must be pinned: restate defaults it to the hostname, and a docker
+# run gets a NEW hostname per container — reuse of a persistent data dir would
+# then die with "node-name is required" on the second boot (seen live).
+node-name = "nektar"
 
 [ingress]
 bind-address = "127.0.0.1:${INGRESS_PORT}"

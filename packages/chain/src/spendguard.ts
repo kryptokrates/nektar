@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { Transaction } from '@bsv/sdk'
-import { nap } from '@nektar/core'
+import { nap, sparse } from '@nektar/core'
 import type { Broadcaster, BroadcastResult } from './interfaces.js'
 
 export interface SpendGuardOpts {
@@ -65,7 +65,7 @@ export class SpendGuard implements Broadcaster {
   private load(): Ledger {
     try {
       const l = JSON.parse(readFileSync(this.ledgerFile!, 'utf8')) as Ledger
-      if (l.day !== this.day()) return { day: this.day(), spentSats: 0, lastBroadcastAt: l.lastBroadcastAt ?? 0, records: l.records ?? [] }
+      if (l.day !== this.day()) return { day: this.day(), spentSats: 0, lastBroadcastAt: sparse(l.lastBroadcastAt) ?? 0, records: sparse(l.records) ?? [] }
       return l
     } catch {
       return { day: this.day(), spentSats: 0, lastBroadcastAt: 0, records: [] }
@@ -146,8 +146,8 @@ export class SpendGuard implements Broadcaster {
       // tracked store first (our own spends); a foreign tx carrying its parent
       // (EF/BEEF) resolves from the attached source — the network validates
       // the real value at broadcast, the fee here is ledger bookkeeping only
-      const srcOut = inp.sourceTransaction?.outputs[inp.sourceOutputIndex ?? 0]
-      const v = txid === undefined ? undefined : (this.valueOf(txid, inp.sourceOutputIndex ?? 0) ?? srcOut?.satoshis)
+      const srcOut = sparse(inp.sourceTransaction?.outputs)?.[sparse(inp.sourceOutputIndex) ?? 0]
+      const v = txid === undefined ? undefined : (this.valueOf(txid, sparse(inp.sourceOutputIndex) ?? 0) ?? srcOut?.satoshis)
       if (v === undefined || srcOut === undefined) return undefined
       vin += v
       const hex = srcOut.lockingScript.toHex()

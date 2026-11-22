@@ -4,6 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WAITS } from '../src/waits.js'
+import { sparse } from '@nektar/core'
 
 // waits-census — the wait-site inventory made executable. wake-coverage
 // enumerates the JOBS (every service/cadence names its wake source); this
@@ -47,7 +48,7 @@ void test('wait primitives only at sanctioned sites', () => {
     for (const m of src.matchAll(/setTimeout\(|setInterval\(|Promise\.race\(|AbortSignal\.timeout\(/g)) {
       const line = src.slice(0, m.index).split('\n').length
       assert.ok(
-        SANCTIONED[base] !== undefined,
+        sparse(SANCTIONED[base]) !== undefined,
         `${rel}:${line} — raw wait primitive outside the sanctioned list (classify it here or route through deadline()/nap()/WAITS)`
       )
       break // one finding per file is enough — the allowlist is per-file
@@ -88,6 +89,6 @@ void test('the registry itself conforms — class, durable, wake; mechanism need
     assert.ok(typeof w.wake === 'string' && w.wake.length > 0, `${name}: wake not declared`)
     assert.ok(Number.isFinite(w.ms) && w.ms > 0, `${name}: ms must be a positive finite number`)
     if (w.class === 'mechanism')
-      assert.ok(w.why !== undefined && w.why.length > 0, `${name}: mechanism class needs a why — what makes the wait itself the trigger`)
+      assert.ok(w.why.length > 0, `${name}: mechanism class needs a why — what makes the wait itself the trigger`)
   }
 })

@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
 const scenario = join(dirname(fileURLToPath(import.meta.url)), 'real-stack.mjs')
-const N = Number(process.argv[2] ?? process.env.NEKTAR_BENCH_RUNS ?? 10)
+const N = Number(process.argv.at(2) ?? process.env.NEKTAR_BENCH_RUNS ?? 10)
 const LABEL = process.env.NEKTAR_BENCH_LABEL ?? 'bench'
 const runDir = join(root, '.state')
 
@@ -100,7 +100,7 @@ const hops = {}
 for (const k of new Set(results.flatMap((r) => Object.keys(r.hopMs ?? {})))) hops[k] = stats(pass.map((r) => r.hopMs[k]).filter((v) => v !== undefined))
 const total = stats(pass.map((r) => r.wallMs).filter((v) => v !== undefined))
 
-const crashes = results.reduce((a, r) => a + (r.crashes ?? 0), 0)
+const crashes = results.reduce((a, r) => a + ((/** @type {number | undefined} */ (r.crashes)) ?? 0), 0)
 console.log(`\n================ ${LABEL} — ${pass.length} PASS / ${fail.length} FAIL of ${N} — ${crashes} native crash(es) (0xC0000409) ================`)
 console.log(`${'step'.padEnd(34)} ${'p50'.padStart(6)} ${'p95'.padStart(6)} ${'min'.padStart(6)} ${'max'.padStart(6)}`)
 for (const name of stepNames) {

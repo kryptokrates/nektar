@@ -47,13 +47,13 @@ export class CatalogOps {
     for (const rec of await this.deps.store.all(CATALOG_SHARD)) {
       const data = await this.deps.recordText(rec)
       if (!data) continue
-      let m: ShardManifest
+      let m: ShardManifest | null
       try {
         m = JSON.parse(data)
       } catch {
         continue
       }
-      if (m?.v !== 1 || m.type !== 'shard-manifest' || typeof m.shard !== 'string') continue
+      if (m?.v !== 1 || String(m.type) !== 'shard-manifest' || typeof m.shard !== 'string') continue
       const cur = by.get(m.shard)
       if (!cur || rec.seq > cur.seq) by.set(m.shard, { m, seq: rec.seq })
     }
@@ -130,12 +130,12 @@ export class CatalogOps {
     if (domains.length === 0) throw new Error('describeShard: at least one valid domain tag required (a-z0-9._-, up to 48 chars)')
     const desc = fields.desc !== undefined ? String(fields.desc).slice(0, 560) : undefined
     const offers = (fields.offers ?? [])
-      .map((o) => ({
+      .map((o: ManifestOffer | null) => ({
         kind: String(o?.kind) as ManifestOffer['kind'],
         ...(o?.priceSats !== undefined ? { priceSats: Math.max(0, Math.floor(Number(o.priceSats))) } : {}),
-        ...(o.seq !== undefined ? { seq: Math.floor(Number(o.seq)) } : {})
+        ...(o?.seq !== undefined ? { seq: Math.floor(Number(o.seq)) } : {})
       }))
-      .filter((o) => o.kind === 'answer' || o.kind === 'pack' || o.kind === 'record')
+      .filter((o) => ['answer', 'pack', 'record'].includes(o.kind))
       .slice(0, 64)
     const manifest: ShardManifest = {
       v: 1,

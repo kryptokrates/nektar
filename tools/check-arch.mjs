@@ -282,7 +282,7 @@ for (const f of srcFiles) {
   }
   const nektarPkgs = new Set()
   for (const mm of text.matchAll(IMPORT_RE)) {
-    const spec = /** @type {string | undefined} */ (mm[1] ?? mm[2] ?? mm[3])
+    const spec = /** @type {string | undefined} */ (mm.at(1) ?? mm.at(2) ?? mm.at(3))
     const hit = spec !== undefined ? NEKTAR_SPEC_RE.exec(spec) : null
     if (hit === null) continue
     const dstPkg = hit[1]

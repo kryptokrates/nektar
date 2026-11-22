@@ -60,23 +60,23 @@ void test('faucet: gate honours env + network; caps hold across restarts', async
   const addr = testAddr()
   const bad = await faucetDrip({ mem, address: 'not-an-address', dataDir: dir, env })
   assert.equal(bad.ok, false)
-  if (bad.ok === false) assert.equal(bad.status, 400)
+  assert.equal(bad.status, 400)
 
   const r1 = await faucetDrip({ mem, address: addr, dataDir: dir, env })
   assert.ok(r1.ok)
-  if (r1.ok) assert.equal(r1.sats, FAUCET_DEFAULT_SATS)
+  assert.equal(r1.sats, FAUCET_DEFAULT_SATS)
 
   // same address: once ever, persisted — a second process (fresh module
   // state, same ledger file) still refuses
   const r2 = await faucetDrip({ mem, address: addr, dataDir: dir, env })
   assert.equal(r2.ok, false)
-  if (r2.ok === false) assert.equal(r2.status, 429)
+  assert.equal(r2.status, 429)
 
   // a second address drips — then a tiny daily cap refuses the third
   assert.ok((await faucetDrip({ mem, address: testAddr(), dataDir: dir, env })).ok)
   const capped = await faucetDrip({ mem, address: testAddr(), dataDir: dir, env: { ...env, NEKTAR_FAUCET_DAILY_SATS: '1' } })
   assert.equal(capped.ok, false)
-  if (capped.ok === false) assert.match(capped.error, /daily/)
+  assert.match(capped.error, /daily/)
 })
 
 void test('faucet route: disabled → 404 without spending; enabled → public drip', async (t) => {

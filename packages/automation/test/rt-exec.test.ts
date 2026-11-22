@@ -67,7 +67,7 @@ void test('Dispatcher: delayMs past the int32 timer ceiling clamps, never fires 
 void test('RestateExecutor: wire format is /restate/{call,send}/ paths with delay + idempotency-key', async () => {
   const seen: Array<{ url: string; headers: Record<string, string>; body: string }> = []
   const realFetch = globalThis.fetch
-  globalThis.fetch = ((url: unknown, init: { headers?: Record<string, string>; body?: string }) => {
+  globalThis.fetch = ((url: unknown, init?: { headers?: Record<string, string>; body?: string }) => {
     seen.push({ url: String(url), headers: init?.headers ?? {}, body: init?.body ?? '' })
     return Promise.resolve(new Response('{"accepted":true}', { status: 200, headers: { 'content-type': 'application/json' } }))
   }) as typeof fetch

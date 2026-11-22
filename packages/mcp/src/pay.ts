@@ -274,7 +274,7 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
   // validation and supplied to Teranode as Extended
   // Format. Bare legacy hex is fine when the network already knows the
   // parents (mainnet/testnet broadcasts, tests with registered parents).
-  let tx: Transaction
+  let tx: Transaction | undefined
   try {
     const h = String(payment.transaction ?? '').replace(/^0x/, '')
     const bytes = Array.from(Buffer.from(h, 'hex'))
@@ -286,7 +286,7 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
       // resolve input values and the broadcaster can emit Extended Format.
       const beef = Beef.fromBinary(bytes)
       const subject = beef.txs.at(-1)!
-      tx = subject.tx ?? (subject.rawTx ? Transaction.fromBinary(subject.rawTx) : (undefined as never))
+      tx = subject.tx ?? (subject.rawTx ? Transaction.fromBinary(subject.rawTx) : undefined)
       if (!tx) throw new Error('BEEF bundle has no subject transaction')
       for (const inp of tx.inputs) {
         if (!inp.sourceTransaction && inp.sourceTXID) {

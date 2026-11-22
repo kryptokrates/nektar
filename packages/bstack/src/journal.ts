@@ -49,7 +49,7 @@ const enrichBeef = async (
   if (enrich === undefined) return undefined
   const tx = parseBeef(row.beef)
   if (tx === undefined) return undefined
-  let changed = false
+  let changed = false as boolean
   const seen = new Set<string>()
   const walk = async (t: Transaction): Promise<void> => {
     for (const i of t.inputs) {
@@ -80,7 +80,7 @@ const enrichBeef = async (
 const stripPaths = (beef: number[], fromHeight: number): number[] | undefined => {
   const tx = parseBeef(beef)
   if (tx === undefined) return undefined
-  let changed = false
+  let changed = false as boolean
   const seen = new Set<string>()
   const walk = (t: Transaction): void => {
     const id = t.id('hex')

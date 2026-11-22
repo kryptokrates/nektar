@@ -87,7 +87,7 @@ export function operatorPubs(dataDir?: string, env = process.env): string[] {
  *  not check commit/config/suite — that binding is the caller's job. */
 export function verifyToken(token: ConformanceToken, allowedPubs: string[], now = Date.now()): { ok: boolean; reason?: string } {
   try {
-    if (token.v !== 1 || typeof token.gitCommit !== 'string' || typeof token.configHash !== 'string' || typeof token.suiteDigest !== 'string')
+    if (Number(token.v) !== 1 || typeof token.gitCommit !== 'string' || typeof token.configHash !== 'string' || typeof token.suiteDigest !== 'string')
       return { ok: false, reason: 'malformed claims' }
     if (!Number.isSafeInteger(token.issuedAt) || token.expiresAt !== token.issuedAt + TOKEN_TTL_MS) return { ok: false, reason: 'expiry is not issuedAt+7d' }
     if (token.issuedAt > now + 60_000) return { ok: false, reason: 'issued in the future' }

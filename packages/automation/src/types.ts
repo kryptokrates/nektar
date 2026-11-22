@@ -72,7 +72,7 @@ export interface Automation {
    *  witness) plus every unacked outbox row with its named wait reason —
    *  the 'what is this instance waiting on' answer, machine-shaped */
   waits: () => Promise<{
-    wakes: Record<string, number>
+    wakes: Partial<Record<string, number>>
     deferred: Array<{
       actionId: string
       operationId: string

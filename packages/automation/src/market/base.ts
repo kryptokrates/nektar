@@ -2,7 +2,7 @@ import { P2PKH, PrivateKey, PublicKey, type Transaction } from '@bsv/sdk'
 import { signWant } from '@nektar/bstack'
 import { CheckpointBond } from '@nektar/anchor'
 import { TxStore, type Ingested } from '@nektar/chain'
-import { stable01 } from '@nektar/core'
+import { sparse, stable01 } from '@nektar/core'
 import type { AutomationStore, Operation } from '../store.js'
 import { WalletCoordinator } from '../wallet.js'
 import type { AutomationPolicy } from '../policy.js'
@@ -195,10 +195,10 @@ export abstract class MarketBase {
     const en = await this.d.store.operationByKey('seller-enabled')
     if (en?.state === 'enabled') {
       const pr = await this.d.store.activePolicy(String(en.data.policyHash))
-      if (pr?.roles?.includes('seller') === true) sellerDomains.push(...(pr.domains ?? []))
+      if (sparse(pr?.roles)?.includes('seller') === true) sellerDomains.push(...(sparse(pr?.domains) ?? []))
     }
     const collecting = (await this.d.store.operations({ role: 'buyer', states: ['collecting'] }))
-      .map((o) => ({ wantId: o.data.want?.want?.wantId ?? '' }))
+      .map((o) => ({ wantId: sparse(o.data.want?.want)?.wantId ?? '' }))
       .filter((x) => x.wantId !== '')
     return { sellerDomains, collecting }
   }

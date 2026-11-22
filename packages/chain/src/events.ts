@@ -205,7 +205,7 @@ export class ChainEvents extends EventEmitter {
     // then re-probe on a pace proportional to the shared tick (never hotter
     // than a quarter of it; floor 150ms, ceiling 5s) so a synchronous caller
     // doesn't stall a whole interval without hammering a live status API.
-    let settled = false
+    let settled = false as boolean
     const nudgeMs = Math.max(150, Math.min((this.opts.intervalMs ?? 5_000) / 4, timeoutMs / 4, 5_000))
     const nudge = (async () => {
       while (!settled && Date.now() < deadline && this.watched.has(txid)) {

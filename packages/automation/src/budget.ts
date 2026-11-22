@@ -6,6 +6,7 @@
 // never double-counts.
 import fs from 'node:fs'
 import path from 'node:path'
+import { sparse } from '@nektar/core'
 
 interface GrantLedger {
   totalCap: number
@@ -67,7 +68,7 @@ export class BudgetAuthority {
 
   /** declare a grant's lifetime cap + its ancestor chain */
   setCap(grantId: string, totalCap: number, parents: string[] = []): void {
-    if (!this.ledger[grantId]) this.ledger[grantId] = { totalCap, committed: 0, reservations: {}, parents }
+    if (!sparse(this.ledger[grantId])) this.ledger[grantId] = { totalCap, committed: 0, reservations: {}, parents }
     this.ledger[grantId].totalCap = totalCap
     if (parents.length) this.ledger[grantId].parents = parents
     this.save()
@@ -86,7 +87,7 @@ export class BudgetAuthority {
    *  'denied' breaches a cap (own or any ancestor's), 'no-cap' unknown grant */
   reserve(grantId: string, actionId: string, allInSats: number): 'ok' | 'exists' | 'denied' | 'no-cap' {
     if (this.revoked.has(grantId)) return 'denied'
-    const g = this.ledger[grantId]
+    const g = sparse(this.ledger[grantId])
     if (!g) return 'no-cap'
     if (actionId in (g.completed ?? {})) return 'exists' // R2: completed actions replay as idempotent hits, never re-debit
     if (actionId in g.reservations) return 'exists'
@@ -96,7 +97,7 @@ export class BudgetAuthority {
     const wouldBreach = (lg: GrantLedger) => lg.committed + Object.values(lg.reservations).reduce((a, b) => a + b, 0) + allInSats > lg.totalCap
     if (wouldBreach(g)) return 'denied'
     for (const pid of g.parents ?? []) {
-      const p = this.ledger[pid]
+      const p = sparse(this.ledger[pid])
       if (!p) return 'no-cap' // unknown ancestor — fail closed
       if (this.revoked.has(pid) || wouldBreach(p)) return 'denied'
     }
@@ -109,14 +110,14 @@ export class BudgetAuthority {
   /** commit a reservation — the spend settled; the action lands in `completed`
    *  forever (idempotency record), the reservation frees. Ancestors debit too. */
   commit(grantId: string, actionId: string): boolean {
-    const g = this.ledger[grantId]
+    const g = sparse(this.ledger[grantId])
     if (!g || !(actionId in g.reservations)) return false
     const amt = g.reservations[actionId]
     delete g.reservations[actionId]
     g.committed += amt
     ;(g.completed ??= {})[actionId] = amt
     for (const pid of g.parents ?? []) {
-      const p = this.ledger[pid]
+      const p = sparse(this.ledger[pid])
       if (p) {
         delete p.reservations[`${grantId}:${actionId}`]
         p.committed += amt
@@ -129,7 +130,7 @@ export class BudgetAuthority {
 
   /** release a reservation — the spend never escaped; headroom returns */
   release(grantId: string, actionId: string): boolean {
-    const g = this.ledger[grantId]
+    const g = sparse(this.ledger[grantId])
     if (!g || !(actionId in g.reservations)) return false
     delete g.reservations[actionId]
     this.save()
@@ -137,7 +138,7 @@ export class BudgetAuthority {
   }
 
   status(grantId: string): { totalCap: number; committed: number; reserved: number; headroom: number } | undefined {
-    const g = this.ledger[grantId]
+    const g = sparse(this.ledger[grantId])
     if (!g) return undefined
     const reserved = Object.values(g.reservations).reduce((a, b) => a + b, 0)
     return { totalCap: g.totalCap, committed: g.committed, reserved, headroom: g.totalCap - g.committed - reserved }

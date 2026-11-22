@@ -27,7 +27,7 @@ import {
   type MainnetConfig,
   type RegtestConfig
 } from '@nektar/chain'
-import { ioSignal } from '@nektar/core'
+import { ioSignal, sparse } from '@nektar/core'
 import { WAITS } from './waits.js'
 const NAME = 'teranode-regtest'
 const sdkc = createRequire(import.meta.url)('@bsv/sdk') as typeof import('@bsv/sdk')
@@ -71,7 +71,7 @@ async function closureBeef(
   }
   if (subject.merklePath === undefined) {
     for (let h = 0; h < hops; h++) {
-      let progress = false
+      const st = { progress: false }
       // a level's proof probes and parent resolves run together — the
       // closure costs depth RTTs, not one RTT per ancestor; bounded
       // workers keep the index polite
@@ -86,7 +86,7 @@ async function closureBeef(
               const tx = bt.tx!
               tx.merklePath = mp.merklePath as unknown as typeof tx.merklePath
               beef.mergeTransaction(tx)
-              progress = true
+              st.progress = true
               continue
             }
             for (const dep of bt.inputTxids) {
@@ -94,13 +94,13 @@ async function closureBeef(
                 const p = await resolveTx(dep)
                 if (p === undefined) throw new Error(`beef ancestry: unproven ${bt.txid} has unresolvable input ${dep}`)
                 beef.mergeTransaction(p)
-                progress = true
+                st.progress = true
               }
             }
           }
         })
       )
-      if (!progress) break
+      if (!st.progress) break
     }
   }
   return beef
@@ -129,7 +129,7 @@ export class RegtestWalletServices implements sdk.WalletServices {
       body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }),
       signal: ioSignal(WAITS.rpcIo.ms)
     })
-    const j = (await r.json()) as { result?: unknown; error?: { message?: string } }
+    const j = (await r.json()) as { result?: unknown; error?: { message?: string } | null }
     if (j.error !== undefined && j.error !== null) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
     return j.result
   }
@@ -266,7 +266,9 @@ export class RegtestWalletServices implements sdk.WalletServices {
   isUtxo = async (o: { txid?: string; vout: number }): Promise<boolean> => o.txid !== undefined && (await utxoStatus(this.cfg, o.txid, o.vout)) === 'unspent'
 
   getUtxoStatus = async (_output: string, _format?: sdk.GetUtxoStatusOutputFormat, outpoint?: string): Promise<sdk.GetUtxoStatusResult> => {
-    const [txid, v] = (outpoint ?? '').split('.')
+    const parts = (outpoint ?? '').split('.')
+    const txid = sparse(parts[0])
+    const v = sparse(parts[1])
     if (txid === undefined || v === undefined) return { name: NAME, status: 'error', details: [] }
     const st = await utxoStatus(this.cfg, txid, Number(v))
     return { name: NAME, status: 'success', isUtxo: st === 'unspent', details: [{ txid, index: Number(v) }] }
@@ -400,7 +402,7 @@ export class LiveWalletServices implements sdk.WalletServices {
       time: h.time,
       bits: h.bits,
       nonce: h.nonce,
-      height: h.height ?? height,
+      height: sparse(h.height) ?? height,
       hash: h.hash
     }
     this.servedHeaders.set(h.hash, header)
@@ -550,14 +552,16 @@ export class LiveWalletServices implements sdk.WalletServices {
       // once it catches up. A still-unindexed parent can't have an indexed
       // spend either.
       const local = await this.localTx(o.txid)
-      return local !== undefined && local.outputs[o.vout] !== undefined
+      return local !== undefined && sparse(local.outputs[o.vout]) !== undefined
     }
     const out = j.outputs?.[o.vout]
     return out !== undefined && out.spent !== true
   }
 
   getUtxoStatus = async (_output: string, _format?: sdk.GetUtxoStatusOutputFormat, outpoint?: string): Promise<sdk.GetUtxoStatusResult> => {
-    const [txid, v] = (outpoint ?? '').split('.')
+    const parts = (outpoint ?? '').split('.')
+    const txid = sparse(parts[0])
+    const v = sparse(parts[1])
     if (txid === undefined || v === undefined) return { name: 'woc-live', status: 'error', details: [] }
     const isUtxo = await this.isUtxo({ txid, vout: Number(v) })
     return { name: 'woc-live', status: 'success', isUtxo, details: [{ txid, index: Number(v) }] }

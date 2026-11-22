@@ -11,7 +11,7 @@
 //   NEKTAR_REGTEST_WIF                                  — treasury key; without
 //     it a generated key is persisted to .state/testkit-treasury.json and the
 //     first stackFunder() generates ~120 blocks to it for mature coinbases
-import { nektarEnv, setNektarEnv, mkLog } from '@nektar/core'
+import { nektarEnv, setNektarEnv, mkLog, sparse } from '@nektar/core'
 import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
 import { MemoryFunds, listFundsStore, type ListFundsStore } from './funds.js'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync, appendFileSync } from 'node:fs'
@@ -129,7 +129,7 @@ export async function stackUp(
   cfg: RegtestConfig = stackCfgFromEnv() ?? ({} as RegtestConfig),
   probe?: { attempts?: number; timeoutMs?: number }
 ): Promise<boolean> {
-  if (cfg.rpcUrl === undefined) return false
+  if (sparse(cfg.rpcUrl) === undefined) return false
   const attempts = probe?.attempts ?? 3
   const timeoutMs = probe?.timeoutMs ?? 15_000
   for (let i = 0; i < attempts; i++) {
@@ -151,7 +151,7 @@ export async function stackUp(
  *  including 401 auth-required — proves the service answers; only a
  *  connection-level failure counts as down. */
 export async function assetUp(cfg: RegtestConfig, timeoutMs = 5_000): Promise<boolean> {
-  if (cfg.assetUrl === undefined) return false
+  if (sparse(cfg.assetUrl) === undefined) return false
   const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
   const res = await fetch(`${cfg.assetUrl}/health`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(timeoutMs) }).catch(() => null)
   return res !== null
@@ -495,7 +495,7 @@ export class StackTreasury {
         const now = Date.now()
         for (const k of Object.keys(leases)) if (leases[k] < now) delete leases[k]
         const key = `${txid}:${vout}`
-        if (leases[key] !== undefined) {
+        if (sparse(leases[key]) !== undefined) {
           writeFileSync(f, JSON.stringify(leases))
           return true
         }
@@ -566,9 +566,9 @@ export class StackTreasury {
       // getblockchaininfo.blocks trails generatetoaddress by seconds under load,
       // which can leave toHeight < t0 and scan nothing. The asset index and its
       // throttle also lag the generate — retry briefly: both settle fast.
-      for (let i = 0; i < 20 && this.reserve.utxos.length === 0; i++) {
+      for (let i = 0; i < 20 && sparse(this.reserve.utxos)?.length === 0; i++) {
         await this.reserve.scanCoinbases(this.cfg, (m, ...p) => stackRpc(this.cfg, m, ...p), t0, t0 + 10)
-        if (this.reserve.utxos.length === 0) await new Promise((r) => setTimeout(r, 500))
+        if (sparse(this.reserve.utxos)?.length === 0) await new Promise((r) => setTimeout(r, 500))
       }
       await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
         treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json'),
@@ -590,7 +590,7 @@ export class StackTreasury {
       this.reserve.reload()
       const leases = readLeases(join(STATE_DIR, 'leases.json'))
       const op = (u: { tx: Transaction; vout: number }) => `${u.tx.id('hex')}:${u.vout}`
-      const free = this.reserve.utxos.filter((u) => u.satoshis >= 546 && leases[op(u)] === undefined).sort((a, b) => b.satoshis - a.satoshis)
+      const free = this.reserve.utxos.filter((u) => u.satoshis >= 546 && sparse(leases[op(u)]) === undefined).sort((a, b) => b.satoshis - a.satoshis)
       // same coverage predicate leaseReserve applies: single ≥need or 16 largest
       const coverable = free.some((u) => u.satoshis >= need) || free.slice(0, 16).reduce((a, u) => a + u.satoshis, 0) >= need
       if (coverable) return
@@ -655,7 +655,7 @@ async function leaseReserve(t: StackTreasury, need: number): Promise<ReserveSrc[
     const leases = readLeases(leasesFile)
     const op = (u: ReserveSrc) => `${u.tx.id('hex')}:${u.vout}`
     const free = t.reserve.utxos
-      .filter((u) => !t.reserve.isSpent(u.tx.id('hex'), u.vout) && u.satoshis >= 546 && leases[op(u)] === undefined)
+      .filter((u) => !t.reserve.isSpent(u.tx.id('hex'), u.vout) && u.satoshis >= 546 && sparse(leases[op(u)]) === undefined)
       .sort((a, b) => b.satoshis - a.satoshis)
     // prefer ONE entry covering the whole spend; else accumulate largest-first —
     // the 16-input cap must not cap coverage at the 16 smallest entries

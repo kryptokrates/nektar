@@ -7,22 +7,22 @@ import { spendValid } from '@nektar/chain'
 import { decideOffer } from '../policy.js'
 import type { Operation } from '../store.js'
 import { IngressOps } from './ingress.js'
-import { deliveredPackRefs, pkhOf } from './types.js'
+import { deliveredPackRefs, pkhOf, sparse } from './types.js'
 import type { MarketMemory, MarketMessage } from './types.js'
 
 export abstract class SellerOps extends IngressOps {
   // ── seller ──────────────────────────────────────────────────────────────
-  protected async onWant(sw: SignedWant): Promise<void> {
+  protected async onWant(sw: SignedWant | undefined): Promise<void> {
     // new-deal gates run BEFORE the want is consumed — throwing keeps the
     // inbox item pending so the want is retried when the gate re-opens
     if (this.d.killed?.()) throw new Error('killed: operator stop flag is set')
     if (this.d.deaf?.()) throw new Error('deaf: no market hosts reachable')
     const sp = await this.sellerPolicy()
-    if (!sp || !sw?.want || !verifyWant(sw.want, sw.sig, { now: this.now() })) return
+    if (!sp || sw === undefined || !verifyWant(sw.want, sw.sig, { now: this.now() })) return
     const w = sw.want
     if (w.pub === this.me) {
       this.d.log?.(
-        `market: want ${w.wantId ?? '?'} refused — self-published; a node does not answer its own wants (a self-deal canary needs a second agent identity)`
+        `market: want ${w.wantId} refused — self-published; a node does not answer its own wants (a self-deal canary needs a second agent identity)`
       )
       return
     }
@@ -195,14 +195,15 @@ export abstract class SellerOps extends IngressOps {
     const cfg = { ...offer.cfg, price: BigInt(offer.cfg.price), refundAfter: BigInt(offer.cfg.refundAfter), maxFee: BigInt(offer.cfg.maxFee) }
     const escrowScript = DisclosureSaleHost.escrowScript(cfg, m.depositorPkh)
     const directScript = new P2PKH().lock(Array.from(fromHex(offer.cfg.sellerPkh))).toHex()
+    const utxo = sparse(m.utxo)
     let direct = false
-    if (m.utxo?.script === escrowScript) direct = false
-    else if (m.utxo?.script === directScript && offer.direct === true) direct = true
+    if (utxo?.script === escrowScript) direct = false
+    else if (utxo?.script === directScript && offer.direct === true) direct = true
     else
       return await refuse(
         offer.direct === true ? 'accept is neither the quoted covenant nor a P2PKH to the seller key' : 'escrow script does not match the quoted terms'
       )
-    if (!Number.isSafeInteger(m.utxo.satoshis) || m.utxo.satoshis < Number(offer.cfg.price) + (direct ? 0 : 1))
+    if (!Number.isSafeInteger(utxo.satoshis) || utxo.satoshis < Number(offer.cfg.price) + (direct ? 0 : 1))
       return await refuse(direct ? 'payment is underfunded' : 'escrow is underfunded')
     // the buyer hands over the payment itself. It is checked here, against our
     // own headers where its ancestry is proven, and then put on the network
@@ -212,16 +213,16 @@ export abstract class SellerOps extends IngressOps {
     if (typeof m.tx === 'string') {
       try {
         const got = await this.readTx(m.tx)
-        if (got.tx.id('hex') !== m.utxo.txid) return await refuse('attached transaction is not the claimed escrow')
+        if (got.tx.id('hex') !== utxo.txid) return await refuse('attached transaction is not the claimed escrow')
         tx = got.tx
         spv = got.spv
       } catch {
         return await refuse('attached escrow transaction is unreadable')
       }
-    } else tx = await this.d.fetchTx(m.utxo.txid)
-    const out = tx?.outputs[m.utxo.vout]
-    if (!tx || tx.id('hex') !== m.utxo.txid || !out) return await refuse('escrow transaction not observable yet')
-    if (out.lockingScript.toHex() !== m.utxo.script || out.satoshis !== m.utxo.satoshis)
+    } else tx = await this.d.fetchTx(utxo.txid)
+    const out = tx?.outputs[utxo.vout]
+    if (!tx || tx.id('hex') !== utxo.txid || !out) return await refuse('escrow transaction not observable yet')
+    if (out.lockingScript.toHex() !== utxo.script || out.satoshis !== utxo.satoshis)
       return await refuse('on-chain escrow output differs from the claimed one')
     // every escrow input whose parent we can resolve is evaluated locally —
     // a bogus or unsigned spend is refused before the network is even asked.
@@ -232,9 +233,10 @@ export abstract class SellerOps extends IngressOps {
       const i = tx.inputs[ix]
       const ptxid = i.sourceTXID ?? i.sourceTransaction?.id('hex')
       if (i.sourceTransaction === undefined && ptxid !== undefined) i.sourceTransaction = await this.d.fetchTx(ptxid).catch(() => undefined)
-      const src = i.sourceTransaction?.outputs[i.sourceOutputIndex ?? -1]
-      if (!src || i.sourceOutputIndex === undefined || ptxid === undefined) continue
-      if (!spendValid(tx, ix, { txid: ptxid, vout: i.sourceOutputIndex, satoshis: src.satoshis ?? 0, script: src.lockingScript.toHex() }))
+      const vout = sparse(i.sourceOutputIndex)
+      const src = i.sourceTransaction?.outputs[vout ?? -1]
+      if (!src || vout === undefined || ptxid === undefined) continue
+      if (!spendValid(tx, ix, { txid: ptxid, vout, satoshis: src.satoshis ?? 0, script: src.lockingScript.toHex() }))
         return await refuse('escrow input does not spend its claimed parent output')
       spends++
     }
@@ -339,13 +341,13 @@ export abstract class SellerOps extends IngressOps {
    *  original operationId (the buyer's accept addresses it by offerId). Only
    *  our own key may feed it; a foreign or unsigned note is ignored. */
   protected async onSellerNote(n: Extract<MarketMessage, { type: 'sellerNote' }>): Promise<void> {
-    const sw = n?.want
-    if (!sw?.want || !verifyWant(sw.want, sw.sig, { allowExpired: true })) return
+    const sw = sparse(n.want)
+    if (sw === undefined || !verifyWant(sw.want, sw.sig, { allowExpired: true })) return
     if (sw.want.net !== this.d.network || sw.want.wantId !== n.wantId) return
     const leaf = n.offer?.commitment?.leaf ?? n.signedOffer?.offer.leaf ?? ''
     if (n.signedOffer !== undefined) {
       const so = n.signedOffer
-      if (!so?.offer || !verifyOffer(so.offer, so.sig, { allowExpired: true })) return
+      if (!verifyOffer(so.offer, so.sig, { allowExpired: true })) return
       if (so.offer.pub !== this.me || so.offer.offerId !== n.offerId || so.offer.wantId !== n.wantId) return
       if (so.offer.taskHash !== sw.want.taskHash || so.offer.wantRevision !== sw.want.revision) return
     } else {

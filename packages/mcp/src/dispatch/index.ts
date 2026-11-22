@@ -4,6 +4,7 @@
 // server.ts) lives here so group dispatchers recurse through
 // DispatchCtx.call without a ../server.js import cycle (depcruise no-circular).
 import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment } from '../pay.js'
+import { sparse } from '@nektar/core'
 import type { NektarMemory } from '../memory.js'
 import { PAID_SALE_TOOLS, paidSaleAuthorized } from './shared.js'
 import type { DispatchCtx, ToolCtx, ToolHandler } from './shared.js'
@@ -106,7 +107,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
     }
     paid = await settlePayment(mem, gated.tool, args.payment)
   }
-  const h = ALL[name]
+  const h = sparse(ALL[name])
   if (!h) throw new Error(`unknown tool ${name}`)
   const d: DispatchCtx = { ctx, paid, call: callTool }
   return h(mem, args, d, name)

@@ -7,7 +7,7 @@
 // without revealing.
 import { Transaction, LockingScript, UnlockingScript, Hash, SatoshisPerKilobyte, Utils } from '@bsv/sdk'
 import { RunarContract, computeOpPushTx, buildP2PKHScript } from 'runar-sdk'
-import { unlockP2PKH, signerPubHex, toSigner, type SignerLike } from '@nektar/core'
+import { unlockP2PKH, signerPubHex, sparse, toSigner, type SignerLike } from '@nektar/core'
 import { DISCLOSURESALE_ARTIFACT } from '@nektar/contracts'
 
 /** the escrow covenant's wire identity — name + sha256 of the compiled
@@ -141,7 +141,7 @@ export class DisclosureSaleHost {
    *  enough for the fee/preimage but carries no ancestry, so it cannot end
    *  up inside an EF/BEEF payload */
   private static parent(utxo: SaleUtxo, parentTx?: Transaction): Transaction {
-    return parentTx !== undefined && parentTx.id('hex') === utxo.txid && parentTx.outputs[utxo.vout] !== undefined
+    return parentTx !== undefined && parentTx.id('hex') === utxo.txid && sparse(parentTx.outputs[utxo.vout]) !== undefined
       ? parentTx
       : DisclosureSaleHost.sourceOf(utxo)
   }

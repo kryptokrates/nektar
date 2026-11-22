@@ -6,6 +6,7 @@
 // set, serialized takes, change detection); a FundsStore supplies the
 // backend — wallet basket, in-memory pool, or test treasury.
 import { Transaction, P2PKH } from '@bsv/sdk'
+import { sparse } from '@nektar/core'
 import type { Funder, FundingOut, Funds, FundPurpose } from './interfaces.js'
 
 /** a narrow Funder view over a Funds owner — every take is purpose-labeled.
@@ -374,14 +375,14 @@ export abstract class FundsBase implements Funds {
         } catch {
           continue // a stored tx that cannot serialize can never be spent
         }
-        if (pick.tx.outputs[pick.vout]?.satoshis === undefined || pick.tx.outputs[pick.vout]?.lockingScript === undefined) {
+        if (sparse(pick.tx.outputs[pick.vout])?.satoshis === undefined || sparse(pick.tx.outputs[pick.vout])?.lockingScript === undefined) {
           // the carried parent is a stand-in at the spent vout — an input
           // built on it cannot fee or sign. Repair from the full-tx source
           // when one exists; otherwise the row is unspendable stock and the
           // take moves to the next candidate rather than exploding in the
           // consumer (mintTree/fee reads the same fields)
           const full = await Promise.resolve(this.txOf?.(id)).catch(() => undefined)
-          if (full?.outputs[pick.vout]?.satoshis !== undefined && full?.outputs[pick.vout]?.lockingScript !== undefined) {
+          if (full !== undefined && sparse(full.outputs[pick.vout])?.satoshis !== undefined && sparse(full.outputs[pick.vout])?.lockingScript !== undefined) {
             pick.tx = full
           } else {
             continue
@@ -520,7 +521,7 @@ export function listFundsStore(): ListFundsStore {
     list: () => outs.filter((u) => !tombstones.has(op(u.tx.id('hex'), u.vout))),
     has: (txid, vout) => outs.some((u) => u.tx.id('hex') === txid && u.vout === vout),
     add: (tx, vout) => {
-      const o = tx.outputs[vout]
+      const o = sparse(tx.outputs[vout])
       if (o === undefined) throw new Error(`funds: adopt out-of-range vout ${vout}`)
       lift(op(tx.id('hex'), vout))
       tombstones.delete(op(tx.id('hex'), vout))
@@ -540,7 +541,7 @@ export function listFundsStore(): ListFundsStore {
     },
     revive: (tx, vout) => {
       tombstones.delete(op(tx.id('hex'), vout))
-      const o = tx.outputs[vout]
+      const o = sparse(tx.outputs[vout])
       const held = lift(op(tx.id('hex'), vout))
       if (o !== undefined && !outs.some((u) => u.tx.id('hex') === tx.id('hex') && u.vout === vout)) {
         outs.push({ tx, vout, satoshis: held?.satoshis ?? o.satoshis ?? 0 })

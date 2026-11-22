@@ -11,7 +11,7 @@
 import { createConnection, type Socket } from 'node:net'
 import { EventEmitter } from 'node:events'
 import { Hash, Transaction } from '@bsv/sdk'
-import { spread } from '@nektar/core'
+import { sparse, spread } from '@nektar/core'
 
 interface _P2PEvents {
   txid: (txid: string) => void // every announced txid (cheap)
@@ -143,7 +143,7 @@ export class P2PListener extends EventEmitter {
     if (this.closed) return
     const [host, port] = this.peers[this.peerIdx % this.peers.length].split(':')
     this.peerIdx++
-    const sock = createConnection({ host: host, port: Number(port ?? 8333), timeout: 15_000 })
+    const sock = createConnection({ host: host, port: Number(sparse(port) ?? 8333), timeout: 15_000 })
     this.sock = sock
     let handshook = false
     sock.on('connect', () => {
@@ -243,7 +243,7 @@ export class P2PListener extends EventEmitter {
         try {
           tx = Transaction.fromHex(p.toString('hex'))
         } catch (pe) {
-          this.emit('parsefail', String((pe as Error).message ?? pe).slice(0, 120))
+          this.emit('parsefail', String(sparse((pe as Error).message) ?? pe).slice(0, 120))
           return
         }
         this.emit('fetched', tx.id('hex'))

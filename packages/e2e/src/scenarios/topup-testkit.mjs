@@ -18,6 +18,7 @@ import { TeranodeBroadcaster } from '../../../chain/dist/src/regtest.js'
 
 const root = resolve(fileURLToPath(new URL('../../../..', import.meta.url)))
 const envFile = join(root, '.env')
+/** @type {Record<string, string | undefined>} */
 const env = existsSync(envFile)
   ? Object.fromEntries(
       readFileSync(envFile, 'utf8')

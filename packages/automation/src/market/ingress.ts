@@ -32,9 +32,9 @@ export abstract class IngressOps extends MarketBase {
   // ── dispatched downward ── tick hands work to the phase layers below; the
   // contract is declared here and implemented by SellerOps (onWant) and
   // BuyerOps (onOffer, onMessage, advance)
-  protected abstract onWant(sw: SignedWant): Promise<void>
-  protected abstract onOffer(so: SignedOffer): Promise<void>
-  protected abstract onMessage(from: string, m: MarketMessage, refs?: BoxRef[]): Promise<void>
+  protected abstract onWant(sw: SignedWant | undefined): Promise<void>
+  protected abstract onOffer(so: SignedOffer | undefined): Promise<void>
+  protected abstract onMessage(from: string, m: MarketMessage | undefined, refs?: BoxRef[]): Promise<void>
   protected abstract advance(op: Operation, height: number): Promise<void>
 
   /** in-run resubmit cadence — boot replay is a start-up seam, not the

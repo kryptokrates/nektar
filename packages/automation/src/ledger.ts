@@ -1,4 +1,5 @@
 import { Transaction } from '@bsv/sdk'
+import { sparse } from '@nektar/core'
 import type { BroadcastResult } from '@nektar/chain'
 import type { AutomationStore, TxState, WalletTx } from './store.js'
 import { WalletCoordinator } from './wallet.js'
@@ -40,12 +41,12 @@ export function wrapBroadcast(
             /* sparse EF stand-in — only the spent output is carried */
           }
         }
-        const vout = inp.sourceOutputIndex ?? 0
+        const vout = sparse(inp.sourceOutputIndex) ?? 0
         if (!srcTxid) continue
         // EF wires carry sparse parents — the spent output entry can be null
-        const spent = inp.sourceTransaction?.outputs?.[vout]
+        const spent = sparse(inp.sourceTransaction?.outputs)?.[vout]
         outs.push({ txid: srcTxid, vout, satoshis: spent?.satoshis ?? 0 })
-        if (spent !== undefined && spent !== null) {
+        if (spent != undefined) {
           try {
             parents[srcTxid] = inp.sourceTransaction!.toHex()
           } catch {

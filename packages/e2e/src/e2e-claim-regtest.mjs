@@ -187,7 +187,7 @@ try {
     ],
     1n
   )
-  check(!!r.txid, `settle broadcast (${r.txid?.slice(0, 12)}…)`)
+  check(!!r.txid, `settle broadcast (${String(r.txid).slice(0, 12)}…)`)
 
   // ── 1b. consumer gate: gated DisclosureSale spends [sale, verdict] live ──
   const vUtxo = { txid: r.txid, outputIndex: 0, satoshis: 10, script: verdict }
@@ -230,25 +230,25 @@ try {
   const ch = await c.call('challenge', [null, pubKeyHex], provider, signer, {
     newState: st0({ status: 1n, challengerPkh: opPkh, responseDeadline: 0n, window: 0n })
   })
-  check(!!ch.txid, `challenge (${ch.txid?.slice(0, 12)}…)`)
+  check(!!ch.txid, `challenge (${String(ch.txid).slice(0, 12)}…)`)
   const MID = 'dd'.repeat(32)
   const rv = await c.call('reveal', [null, pubKeyHex, MID], provider, signer, {
     newState: st0({ status: 2n, challengerPkh: opPkh, responseDeadline: 0n, window: 0n, midCommit: MID })
   })
-  check(!!rv.txid, `reveal (${rv.txid?.slice(0, 12)}…)`)
+  check(!!rv.txid, `reveal (${String(rv.txid).slice(0, 12)}…)`)
   const b1 = await c.call('bisect', [null, pubKeyHex, 1n], provider, signer, {
     newState: st0({ status: 1n, challengerPkh: opPkh, responseDeadline: 0n, window: 0n, bisectLo: 2n, bisectHi: 4n })
   })
-  check(!!b1.txid, `bisect [0,4]→[2,4] (${b1.txid?.slice(0, 12)}…)`)
+  check(!!b1.txid, `bisect [0,4]→[2,4] (${String(b1.txid).slice(0, 12)}…)`)
   const MID2 = 'ee'.repeat(32)
   const rv2 = await c.call('reveal', [null, pubKeyHex, MID2], provider, signer, {
     newState: st0({ status: 2n, challengerPkh: opPkh, responseDeadline: 0n, window: 0n, bisectLo: 2n, bisectHi: 4n, midCommit: MID2 })
   })
-  check(!!rv2.txid, `reveal2 (${rv2.txid?.slice(0, 12)}…)`)
+  check(!!rv2.txid, `reveal2 (${String(rv2.txid).slice(0, 12)}…)`)
   const b2 = await c.call('bisect', [null, pubKeyHex, 0n], provider, signer, {
     newState: st0({ status: 2n, challengerPkh: opPkh, responseDeadline: 0n, window: 0n, bisectLo: 2n, bisectHi: 3n })
   })
-  check(!!b2.txid, `bisect [2,4]→[2,3] leaf (${b2.txid?.slice(0, 12)}…)`)
+  check(!!b2.txid, `bisect [2,4]→[2,3] leaf (${String(b2.txid).slice(0, 12)}…)`)
   // proveStage: REAL Poseidon2Stage co-spend — [claim, stage UTXO].
   // Stage UTXO carries round-0 state (cells 0..23); the co-spend tx outputs
   // [stageCont(1sat), payout(4990), sharedChange(1sat)] — the stage's
@@ -329,7 +329,7 @@ try {
   const c = await deployClaim(1000n, 0n)
   await c.call('challenge', [null, pubKeyHex], provider, signer, { newState: st0({ status: 1n, challengerPkh: opPkh, responseDeadline: 0n, window: 0n }) })
   const r = await callTerminal(c, 'claimTimeout', [null, pubKeyHex, 4990n], [{ scriptHex: p2pkh(opPkh), satoshis: 4990 }], 1n)
-  check(!!r.txid, `claimTimeout (${r.txid?.slice(0, 12)}…)`)
+  check(!!r.txid, `claimTimeout (${String(r.txid).slice(0, 12)}…)`)
 } catch (e) {
   check(false, `claimTimeout: ${e.message.slice(0, 90)}`)
 }
@@ -344,7 +344,7 @@ try {
     newState: st0({ status: 2n, challengerPkh: opPkh, responseDeadline: 0n, window: 0n, midCommit: MID })
   })
   const r = await callTerminal(c, 'slashTimeout', [null, pubKeyHex, 4990n], [{ scriptHex: p2pkh(opPkh), satoshis: 4990 }], 1n)
-  check(!!r.txid, `slashTimeout (${r.txid?.slice(0, 12)}…)`)
+  check(!!r.txid, `slashTimeout (${String(r.txid).slice(0, 12)}…)`)
 } catch (e) {
   check(false, `slashTimeout: ${e.message.slice(0, 90)}`)
 }
@@ -412,7 +412,7 @@ try {
   )
   const abr = await broadcaster.broadcast(tx)
   void provider.markAccepted(tx)
-  check(abr.status === 'success', `anchored settle (${abr.txid?.slice(0, 12)}… — journalRoot==anchor.R consensus-enforced)`)
+  check(abr.status === 'success', `anchored settle (${String(abr.txid).slice(0, 12)}… — journalRoot==anchor.R consensus-enforced)`)
 } catch (e) {
   check(false, `anchored settle: ${e.message.slice(0, 90)}`)
 }

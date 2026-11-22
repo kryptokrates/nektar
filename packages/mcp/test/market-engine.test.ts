@@ -30,7 +30,8 @@ interface Agent {
 }
 
 async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: number; wantExtendMs?: number } = {}) {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-market-'))
   const agents = new Map<string, Agent>()
   const feed: Array<{ seq: number; kind: string; payload: unknown }> = []

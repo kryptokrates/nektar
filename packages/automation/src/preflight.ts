@@ -249,8 +249,9 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
     if (store !== undefined)
       for (const op of await store.operations({ states: ['disclosure_verified', 'useful'] }))
         if (op.data.evidenceRef !== undefined) refs.push({ ref: { ...op.data.evidenceRef }, src: `evidence ${op.operationId.slice(0, 8)}` })
-    for (const s of mem.shards?.() ?? []) {
-      const r = mem.packStoreRef?.(s)
+    const m = mem as Partial<Pick<AutomationHost, 'shards' | 'packStoreRef'>>
+    for (const s of m.shards?.() ?? []) {
+      const r = m.packStoreRef?.(s)
       if (r !== undefined) refs.push({ ref: r as unknown as Record<string, unknown>, src: `pack ${s}` })
     }
     if (refs.length === 0) return { check: 'store', pass: true, detail: 'no stored objects yet — nothing to fetch back' }

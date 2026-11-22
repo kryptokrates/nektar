@@ -54,7 +54,7 @@ export function parsePatch(text: string): PatchProposal | undefined {
   }
 }
 
-export function validatePatch(spec: Pick<SandboxSpec, 'allowedPaths' | 'maxPatchBytes'>, patch: PatchProposal): string | undefined {
+export function validatePatch(spec: Pick<SandboxSpec, 'allowedPaths' | 'maxPatchBytes'>, patch: PatchProposal | null): string | undefined {
   if (!patch || !Array.isArray(patch.edits) || patch.edits.length === 0 || patch.edits.length > 32) return 'patch must contain 1..32 edits'
   let bytes = 0
   for (const e of patch.edits) {

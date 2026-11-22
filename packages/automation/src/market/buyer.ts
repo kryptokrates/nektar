@@ -8,7 +8,7 @@ import type { Operation } from '../store.js'
 import { decidePurchase, digestOf, type ActionContext, type AutomationPolicy } from '../policy.js'
 import { rankOffers, type ScoreCandidate } from '../scoring.js'
 import { SellerOps } from './seller.js'
-import { CAP, PARKED, pkhOf, STATE_LIMITS, TERMINAL } from './types.js'
+import { CAP, PARKED, pkhOf, sparse, STATE_LIMITS, TERMINAL } from './types.js'
 import type { MarketMessage, StoredOffer, StuckExit } from './types.js'
 import { executor } from '../rt/exec.js'
 import { custodyMarkRejected, custodySubmit } from '../rt/emit.js'
@@ -89,25 +89,27 @@ export abstract class BuyerOps extends SellerOps {
     return undefined
   }
 
-  protected async onOffer(so: SignedOffer): Promise<void> {
-    if (!so?.offer?.wantId || !verifyOffer(so.offer, so.sig, { now: this.now() })) return
-    const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${so.offer.wantId}`)
+  protected async onOffer(so: SignedOffer | undefined): Promise<void> {
+    if (so === undefined) return
+    const offer = sparse(so.offer)
+    if (offer === undefined || !offer.wantId || !verifyOffer(offer, so.sig, { now: this.now() })) return
+    const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${offer.wantId}`)
     if (!op || op.state !== 'collecting') return
     const offers = { ...op.data.offers }
-    const key = `${so.offer.pub}:${so.offer.offerId}`
-    const prev = offers[key]
-    if (prev && prev.so.offer.revision >= so.offer.revision) return
+    const key = `${offer.pub}:${offer.offerId}`
+    const prev = sparse(offers[key])
+    if (prev && prev.so.offer.revision >= offer.revision) return
     if (!prev && Object.keys(offers).length >= 64) return
     const reject = this.offerReject(so, op.data.want!.want)
     // a quote can beat its offer across the two delivery planes (the box
     // read is faster than the offers lane) — it parks on the op instead of
     // retrying, and the commitment attaches with the offer's own commit
     const pending = { ...op.data.pendingQuotes }
-    const parked = pending[key]
+    const parked = sparse(pending[key])
     if (parked !== undefined) delete pending[key]
     // the parked quote attaches only if its commitment matches this offer —
     // same leaf check onQuote applies on the live path
-    const qsrc = prev?.commitment !== undefined ? prev : parked?.commitment?.leaf === so.offer.leaf ? parked : undefined
+    const qsrc = prev?.commitment !== undefined ? prev : parked?.commitment?.leaf === offer.leaf ? parked : undefined
     offers[key] = { so, ...(reject ? { reject } : {}), ...(qsrc?.commitment !== undefined ? { commitment: qsrc.commitment, mode: qsrc.mode } : {}) }
     await this.d.store.transition(op.operationId, op.revision, 'collecting', {
       cause: reject ? 'offer_rejected' : 'offer_recorded',
@@ -121,7 +123,7 @@ export abstract class BuyerOps extends SellerOps {
     if (!op || TERMINAL.includes(op.state)) return
     const offers = { ...op.data.offers }
     const key = `${from}:${m.offerId}`
-    const cur = offers[key]
+    const cur = sparse(offers[key])
     if (!cur) {
       // the quote beat its offer — same park convention as a delivered landing
       // early: keep it on the op, no retry budget burned (the feed is slower
@@ -159,7 +161,8 @@ export abstract class BuyerOps extends SellerOps {
     }
     if (!op || op.state !== 'awaiting_disclosure') return
     const sel = op.data.selected!
-    const chosen = op.data.offers![sel.key]
+    const chosen = sparse(op.data.offers![sel.key])
+    if (chosen === undefined) throw new Error('selected offer missing from op.data.offers')
     if (from !== chosen.so.offer.pub || m.offerId !== chosen.so.offer.offerId) return
     const utxo = op.data.utxo!
     const q = chosen.so.offer.offer as any
@@ -346,11 +349,11 @@ export abstract class BuyerOps extends SellerOps {
   /** a self-note rebuilds the operation after a database loss. Throwing keeps
    *  the inbox item pending (escrow not observable yet → retried next tick). */
   private async onNote(n: Extract<MarketMessage, { type: 'note' }>): Promise<void> {
-    const sw = n?.want
-    if (!sw?.want || !verifyWant(sw.want, sw.sig, { allowExpired: true })) return
+    const sw = sparse(n.want)
+    if (sw === undefined || !verifyWant(sw.want, sw.sig, { allowExpired: true })) return
     if (sw.want.pub !== this.me || sw.want.net !== this.d.network || sw.want.wantId !== n.wantId) return
     const so = n.offer?.so
-    if (!so?.offer || !verifyOffer(so.offer, so.sig, { allowExpired: true })) return
+    if (so === undefined || !verifyOffer(so.offer, so.sig, { allowExpired: true })) return
     if (so.offer.wantId !== n.wantId || so.offer.buyerPub !== this.me || so.offer.offerId !== n.offerId) return
     // the escrow bytes ride in the note — no indexer needed to observe it;
     // a missing/foreign payload falls back to the chain view as before
@@ -387,8 +390,8 @@ export abstract class BuyerOps extends SellerOps {
         offers: {
           [key]: {
             so,
-            ...(n.offer.commitment !== undefined ? { commitment: n.offer.commitment } : {}),
-            ...(n.offer.mode !== undefined ? { mode: n.offer.mode } : {})
+            ...(n.offer?.commitment !== undefined ? { commitment: n.offer.commitment } : {}),
+            ...(n.offer?.mode !== undefined ? { mode: n.offer.mode } : {})
           }
         },
         selected: { key },
@@ -423,7 +426,7 @@ export abstract class BuyerOps extends SellerOps {
     })
   }
 
-  protected async onMessage(from: string, m: MarketMessage, refs?: BoxRef[]): Promise<void> {
+  protected async onMessage(from: string, m: MarketMessage | undefined, refs?: BoxRef[]): Promise<void> {
     if (m?.type === 'quote') return await this.onQuote(from, m)
     if (m?.type === 'accept') return await this.onAccept(from, m)
     if (m?.type === 'delivered') return await this.onDelivered(from, m, refs)
@@ -479,7 +482,7 @@ export abstract class BuyerOps extends SellerOps {
         .filter(([, s]) => s.reject)
         .map(([k, s]) => ({ offerKey: k, reason: s.reject! }))
     ]
-    const top = ranking.ranked[0]
+    const top = ranking.ranked.at(0)
     if (!top) {
       // a live want may still be answered — republish the same signed record
       // (unchanged revision, so arriving offers still match) and collect one
@@ -515,7 +518,8 @@ export abstract class BuyerOps extends SellerOps {
     // the next tick (the op stays 'selected'/'escalated', it does not fail)
     if (this.d.killed?.() || this.d.deaf?.()) return
     const sel = op.data.selected!
-    const s = op.data.offers![sel.key]
+    const s = sparse(op.data.offers![sel.key])
+    if (s === undefined) throw new Error('selected offer missing from op.data.offers')
     const q = s.so.offer.offer as any
     const w = op.data.want!.want
     const price = s.so.offer.priceSats,
@@ -845,7 +849,7 @@ export abstract class BuyerOps extends SellerOps {
     const tx = await this.d.fetchTx(spender).catch(() => undefined)
     if (tx === undefined) return false
     const escrow = op.data.escrow
-    const out0 = tx.outputs[0]?.lockingScript.toHex()
+    const out0 = tx.outputs.at(0)?.lockingScript.toHex()
     const lock = (pkh: string | undefined) => (pkh === undefined ? undefined : new P2PKH().lock(Array.from(fromHex(pkh))).toHex())
     if (out0 !== undefined && out0 === lock(escrow?.depositorPkh)) {
       // our earlier refund aired — the money already came back
@@ -864,7 +868,7 @@ export abstract class BuyerOps extends SellerOps {
       // Replay it through the delivered path (re-runs spendValid + claim)
       // instead of treating a finished deal as a stranded refund.
       const sel = op.data.selected!
-      const chosen = op.data.offers![sel.key]
+      const chosen = sparse(op.data.offers![sel.key])
       const w = op.data.want!.want
       if (chosen === undefined) return false
       if (pa?.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
@@ -919,7 +923,7 @@ export abstract class BuyerOps extends SellerOps {
     if (pa?.reason === 'unresolved_settlement') return await this.reconcileRefund(op, pa)
     if (pa?.reason !== 'unresolved_payment') return
     const cancel = async () => {
-      if (pa?.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
+      if (pa.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
     }
     const pending = op.data.pendingEscrow
     const actionId = op.data.escrowAction
@@ -967,7 +971,7 @@ export abstract class BuyerOps extends SellerOps {
     // mined | held — the escrow is observable: commit and resume the normal
     // path (a broadcaster seen-hint is a wake signal, never escrow evidence)
     const sel = op.data.selected!
-    const s = op.data.offers![sel.key]
+    const s = sparse(op.data.offers![sel.key])
     if (s === undefined) return
     const w = op.data.want!.want
     let escrow: any = pending?.cfg
@@ -1049,7 +1053,7 @@ export abstract class BuyerOps extends SellerOps {
     const r = await this.d.call('sale#refund', { cfg: op.data.escrow, utxo: op.data.utxo })
     if (r.accepted === true) {
       await this.d.store.refundBudget(op.data.escrowAction!)
-      if (pa?.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
+      if (pa.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
       await this.d.store.transition(op.operationId, op.revision, 'refunded', {
         cause: 'refund_broadcast',
         data: { refundTxid: r.txid, refundSats: r.refundSats },
@@ -1143,7 +1147,7 @@ export abstract class BuyerOps extends SellerOps {
     // PARKED states are declared-no-bound (external actor owns the exit) —
     // they're classified, not violations
     for (const op of await this.d.store.operations({ notStates: [...TERMINAL, ...PARKED] })) {
-      const lim = STATE_LIMITS[op.state]
+      const lim = sparse(STATE_LIMITS[op.state])
       if (lim === undefined) violations.push({ operationId: op.operationId, state: op.state, ageMs: this.now() - op.updatedAt })
       else if (lim.exit !== 'escalate:human' && this.now() - op.updatedAt > lim.maxAgeMs)
         violations.push({ operationId: op.operationId, state: op.state, ageMs: this.now() - op.updatedAt })
@@ -1152,7 +1156,7 @@ export abstract class BuyerOps extends SellerOps {
   }
 
   protected async advance(op: Operation, height: number): Promise<void> {
-    const lim = STATE_LIMITS[op.state]
+    const lim = sparse(STATE_LIMITS[op.state])
     if (lim !== undefined && this.now() - op.updatedAt > lim.maxAgeMs) return await this.stuckExit(op, lim)
     if (op.role === 'buyer') {
       if (op.state === 'collecting') {

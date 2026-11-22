@@ -1,6 +1,7 @@
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { Transaction, Utils, type ChainTracker } from '@bsv/sdk'
+import { sparse } from '@nektar/core'
 import { createNektarModule } from './module.js'
 
 export class FakeTracker implements ChainTracker {
@@ -313,7 +314,7 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
             }
             continue
           }
-          if (topics[t] === undefined) {
+          if (sparse(topics[t]) === undefined) {
             res.writeHead(400, { 'content-type': 'application/json' })
             res.end(JSON.stringify({ error: `unknown topic ${t}` }))
             return

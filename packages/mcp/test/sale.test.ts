@@ -11,7 +11,8 @@ import { visibleTools, callTool } from '../src/server.js'
 const SALE_TOOLS = ['sale']
 
 async function setup(t: { skip: (m?: string) => void }) {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const mk = async (opts: any = {}) => {
     const funder = await testFunder(50)
     return new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })

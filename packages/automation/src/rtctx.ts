@@ -143,7 +143,7 @@ export interface AutomationConfig {
 export interface LaneInfra {
   mod: typeof import('@nektar/bstack')
   ledger: InstanceType<typeof import('@nektar/bstack').KnexTreeLedger>
-  journal: InstanceType<typeof import('@nektar/bstack').KnexCarrierJournal>
+  journal: import('@nektar/bstack').CarrierJournal
   logState: InstanceType<typeof import('@nektar/bstack').KnexLogState>
   fingerState: InstanceType<typeof import('@nektar/bstack').KnexFingerState>
 }

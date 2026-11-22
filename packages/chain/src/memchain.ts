@@ -9,6 +9,7 @@
 // fault injection (faults.observer) can reproduce "proven on-chain but not
 // delivered" exactly.
 import { Transaction, MerklePath, PrivateKey, P2PKH, Hash, UnlockingScript, Spend } from '@bsv/sdk'
+import { sparse } from '@nektar/core'
 import type { BlockHeader, BroadcastResult, FundingOut, TxStatusEvent } from './interfaces.js'
 import { MemoryFunds, listFundsStore, type ListFundsStore } from './funds.js'
 import { txFactsOf, type TxFacts } from './txfacts.js'
@@ -132,7 +133,7 @@ export class MemoryChain implements TestChain {
 
   /** nonce-grind at regtest difficulty — a handful of hashes per block */
   private buildHeader(merkleRoot: string): BlockHeader {
-    const prev = this.blocks[this.blocks.length - 1]
+    const prev = sparse(this.blocks[this.blocks.length - 1])
     const h: BlockHeader = {
       height: this.blocks.length,
       hash: '',
@@ -188,7 +189,7 @@ export class MemoryChain implements TestChain {
     const inputs: Array<{ rec: TxRec; vout: number }> = []
     for (const inp of copy.inputs) {
       const ptxid = inp.sourceTXID
-      const vout = inp.sourceOutputIndex
+      const vout = sparse(inp.sourceOutputIndex)
       if (ptxid === undefined || vout === undefined) return fail(`TX_MISSING_PARENT: input without a source outpoint`, false)
       if (ptxid === ZERO || vout === 0xffffffff) return fail(`TX_INVALID (18): coinbase-style input in a mempool tx`, true)
       const rec = this.known.get(ptxid)
@@ -210,10 +211,10 @@ export class MemoryChain implements TestChain {
     // the threshold — height for <500M, the tip header's time above (the
     // node's MTP is approximated by the tip time; regtest tests never sit on
     // the boundary)
-    const lt = copy.lockTime ?? 0
-    const anyNonFinal = copy.inputs.some((i) => (i.sequence ?? 0xffffffff) !== 0xffffffff)
+    const lt = sparse(copy.lockTime) ?? 0
+    const anyNonFinal = copy.inputs.some((i) => (sparse(i.sequence) ?? 0xffffffff) !== 0xffffffff)
     if (lt !== 0 && anyNonFinal) {
-      const threshold = lt < 500_000_000 ? this.tip() : (this.blocks[this.blocks.length - 1]?.header.time ?? 0)
+      const threshold = lt < 500_000_000 ? this.tip() : (sparse(this.blocks[this.blocks.length - 1]?.header.time) ?? 0)
       if (lt > threshold) return fail(`non-final: lockTime ${lt} not reached`, false)
     }
 

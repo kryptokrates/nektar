@@ -6,7 +6,7 @@
 // ./bp.js — log-rounds, Fiat–Shamir, no trusted setup. Off-chain verify only;
 // never a consensus cost.
 import { PrivateKey, PublicKey, Signature, Point, BigNumber, Curve } from '@bsv/sdk'
-import { dsha256, concat, utf8, type Bytes } from '@nektar/core'
+import { dsha256, concat, sparse, utf8, type Bytes } from '@nektar/core'
 import { proveRangeBP, verifyRangeBP, type RangeProofBP, BP_H } from './bp.js'
 
 const curve = new Curve()
@@ -216,7 +216,7 @@ export function verifyAccess(
   // the claim is about C·g^(−ℓ_j) — the commitment to (ℓ−ℓ_j)
   const Cshift = C.add(mulP(G, mod(-requiredLevel)))
   // the BP commitment uses BP_G/BP_H — verify with the matching verifier
-  if ((proof as RangeProofBP).ip !== undefined) {
+  if (sparse((proof as RangeProofBP).ip) !== undefined) {
     // C·g^(−ℓ_j) under the shared bases (G,H) IS the BP commitment shape —
     // verifyRangeBP checks it directly; transcript is bound by verifyClearanceSig+c.
     return verifyRangeBP(Cshift, proof as RangeProofBP, transcriptLabel(t, 'bp'))

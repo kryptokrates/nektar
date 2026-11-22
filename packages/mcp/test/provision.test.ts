@@ -53,7 +53,7 @@ void test('provisionPay: one tx carries every lane output plus the P2PKH funds l
     { satoshis: 100, scriptHex: lockB }
   ]
   const r = await ops.provisionPay({ outputs, address: addr, fundsSats: 10_000 })
-  const tx = aired()!
+  const tx = aired()
   assert.ok(tx !== undefined, 'tx must reach broadcast')
   assert.equal(tx.id('hex'), r.txid)
   // 3 lane outputs + 1 P2PKH funds output + 1 change output

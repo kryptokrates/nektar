@@ -94,7 +94,7 @@ while (final.length > 1) {
   for (let i = 0; i < final.length; i += 12) next.push(await combine(final.slice(i, i + 12), `combine ${i}`))
   final = next
 }
-const treasury = final[0]
+const treasury = final.at(0)
 if (!treasury || treasury.satoshis < 1_000_000) throw new Error(`treasury too small: ${treasury.satoshis}`)
 const file = env.NEKTAR_TREASURY_FILE
 mkdirSync(dirname(file), { recursive: true })

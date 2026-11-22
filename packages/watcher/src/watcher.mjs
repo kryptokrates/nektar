@@ -139,7 +139,7 @@ async function checkClaim(entry) {
   const { txid, vout } = entry
   const raw = await rpc('getrawtransaction', txid)
   const tx = Transaction.fromHex(raw)
-  const out = tx.outputs[vout]
+  const out = tx.outputs.at(vout)
   if (!out) return console.log(`  ${txid.slice(0, 8)}:${vout} — no such output`)
   const script = out.lockingScript.toHex()
   if (!script.startsWith(art.script)) {

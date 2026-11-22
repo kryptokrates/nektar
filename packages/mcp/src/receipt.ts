@@ -10,7 +10,7 @@
 // provenance-signed by the log (recall's COM-003 check), was anchored, and
 // its cited fragments are anchored. It does NOT say the answer was true —
 // the receipt itself carries TRUTH_NOTE saying exactly that.
-import { toHex, fromHex } from '@nektar/core'
+import { toHex, fromHex, sparse } from '@nektar/core'
 import { hashOf } from '@nektar/reasoning'
 import { paymentsEnabled } from './pay.js'
 import type { NektarMemory } from './memory.js'
@@ -153,8 +153,8 @@ export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; re
         }
         continue
       }
-      const f = (await mem.recall(ref.shard!, { seq: ref.seq! })).items[0]
-      const fst = f ? await mem.anchorStatus(ref.shard!, ref.seq!) : undefined
+      const f = sparse((await mem.recall(ref.shard!, { seq: ref.seq! })).items[0])
+      const fst = f ? sparse(await mem.anchorStatus(ref.shard!, ref.seq!)) : undefined
       checks.push({
         name: `fragment ${ref.shard}:${ref.seq}`,
         ok: !!f && !f.unverifiable && f.state === 'anchored',

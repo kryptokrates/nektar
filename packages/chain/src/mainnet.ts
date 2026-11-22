@@ -2,7 +2,7 @@
 // discovery, merkle paths) + the BSV Broadcaster client. NO spend happens
 // here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
 // in the runtime before any tx reaches it.
-import { currentSignal, nektarEnv, spread } from '@nektar/core'
+import { currentSignal, nektarEnv, sparse, spread } from '@nektar/core'
 import { sleep, withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
@@ -182,7 +182,7 @@ export class BsvBroadcaster implements Broadcaster {
     return (
       results.find((r) => r.status === 'success') ??
       results.find((r) => r.description?.startsWith('broadcaster ')) ??
-      results[0] ?? { status: 'error', description: 'broadcast failed: no broadcaster endpoints configured' }
+      sparse(results[0]) ?? { status: 'error', description: 'broadcast failed: no broadcaster endpoints configured' }
     )
   }
 
@@ -223,7 +223,8 @@ export function statusStream(
   const url = `${c.broadcasterUrl}/events?callbackToken=${encodeURIComponent(c.callbackToken ?? '')}`
   const minB = opts.minBackoffMs ?? 1000,
     maxB = opts.maxBackoffMs ?? 30_000
-  let closed = false
+  let closed = false as boolean
+  const done = (): boolean => closed
   let lastId: string | undefined
   let abort: AbortController | undefined
   let wake: (() => void) | undefined
@@ -289,7 +290,7 @@ export function statusStream(
         await dispatch() // flush a trailing unterminated event
         throw new Error('events stream ended')
       } catch (e) {
-        if (closed) return
+        if (done()) return
         opts.onError?.(e as Error)
         // spread() on the sleep, not the curve — the doubling stays exact,
         // the reconnect lands desynchronized across reconnecting agents.
@@ -421,7 +422,7 @@ export async function fetchRawTx(cfg: MainnetConfig | undefined, txid: string): 
     try {
       const r = await f(`${base}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) })
       if (r.ok) {
-        const j = (await r.json()) as { rawTx?: string }
+        const j = (await r.json()) as { rawTx?: string } | null
         const tx = parse(j?.rawTx)
         if (tx !== undefined) return tx
       }
@@ -700,7 +701,7 @@ export async function merklePathMainnet(cfg: MainnetConfig | undefined, txid: st
   try {
     const pr = await c.index.proof(txid)
     if (pr === undefined) return null
-    const p = tscToMerklePath({ index: pr.index, txOrId: pr.txOrId, target: pr.target, nodes: pr.nodes }, txid, pr.blockHeight)
+    const p = sparse(tscToMerklePath({ index: pr.index, txOrId: pr.txOrId, target: pr.target, nodes: pr.nodes }, txid, pr.blockHeight))
     if (p === undefined) return null
     return { merklePath: p, status: 'mined' }
   } catch {
@@ -769,7 +770,7 @@ export async function discoverUtxos(cfg: MainnetConfig | undefined, address: str
       onSkip?.(u.txid, 'served hex hashes to a different txid')
       return
     }
-    const o = tx.outputs[u.vout]
+    const o = sparse(tx.outputs[u.vout])
     if (o === undefined) {
       onSkip?.(u.txid, `index vout ${u.vout} does not exist`)
       return
@@ -854,7 +855,7 @@ async function spenderProbe(
     // the spend claim is only evidence when the served bytes name OUR
     // outpoint as an input — anything else is the index's word, ignored
     if (!spending.inputs.some((i) => String(i.sourceTXID).toLowerCase() === txid && i.sourceOutputIndex === vout)) return undefined
-    const proof = await merklePathMainnet(c, claim)
+    const proof = sparse(await merklePathMainnet(c, claim))
     if (proof !== undefined && proof !== null) {
       const root = proof.merklePath.computeRoot(claim)
       if (!(await tracker.isValidRootForHeight(root, proof.merklePath.blockHeight))) return undefined

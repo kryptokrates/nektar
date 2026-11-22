@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { createServer, type Server } from 'node:http'
 import { createHash, createHmac } from 'node:crypto'
 import { S3ObjectStore, objectStoreFromEnv, OBJECT_MAX_BYTES } from '../src/objectstore.js'
+import { sparse } from '@nektar/core'
 import { fetchObjectByRef } from '../src/chirp.js'
 
 // these tests run the S3 client against an in-process fake on 127.0.0.1 —
@@ -75,7 +76,7 @@ async function fakeS3(
       res
         .writeHead(200, {
           'content-length': o.bytes.length,
-          ...(o.meta['x-amz-meta-sha256'] !== undefined ? { 'x-amz-meta-sha256': o.meta['x-amz-meta-sha256'] } : {})
+          ...(sparse(o.meta['x-amz-meta-sha256']) !== undefined ? { 'x-amz-meta-sha256': o.meta['x-amz-meta-sha256'] } : {})
         })
         .end()
       return

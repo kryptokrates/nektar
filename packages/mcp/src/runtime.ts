@@ -81,14 +81,16 @@ function temporalSourceNames(env = process.env): string[] {
 }
 
 export function configFromEnv(env = process.env): RuntimeConfig {
-  const network = (env.NEKTAR_NETWORK ?? 'regtest') as RuntimeConfig['network']
+  const network = env.NEKTAR_NETWORK ?? 'regtest'
   if (network !== 'regtest' && network !== 'testnet' && network !== 'main')
     throw new Error(
       `NEKTAR_NETWORK must be regtest|testnet|main — got '${String(env.NEKTAR_NETWORK)}'${env.NEKTAR_NETWORK === 'mock' ? ' (the in-process mock chain was removed — testnet is the zero-infra option)' : ''}`
     )
   const dataDir = env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar')
-  const secret = (k: string) =>
-    nektarEnv(k, env) ?? (env[`${k}_FILE`] && existsSync(env[`${k}_FILE`]!) ? readFileSync(env[`${k}_FILE`]!, 'utf8').trim() : undefined)
+  const secret = (k: string): string | undefined => {
+    const f = env[`${k}_FILE`]
+    return nektarEnv(k, env) ?? (f !== undefined && existsSync(f) ? readFileSync(f, 'utf8').trim() : undefined)
+  }
   const cfg: RuntimeConfig = {
     network,
     dataDir,
@@ -190,7 +192,7 @@ export interface Runtime {
   rtKicks: InvokeTarget[]
   /** mainnet-only ops surface for /v1/wallet + /v1/costs */
   ops?: {
-    wallet: () => Promise<{
+    wallet?: () => Promise<{
       address: string
       balanceSats: number
       utxos: number
@@ -199,7 +201,7 @@ export interface Runtime {
       avgFeePerAnchorSats: number
       runwayAnchors: number | null
     }>
-    costs: () => Array<{ txid: string; bytes: number; fee: number; spend: number; at: string }>
+    costs?: () => Array<{ txid: string; bytes: number; fee: number; spend: number; at: string }>
     /** fundingImport tool: credit a tx paying the fee address */
     importFunding?: (txid: string) => Promise<unknown>
     /** fundingRefresh tool: reconcile the wallet view against chain truth */
@@ -365,7 +367,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       nlog(`${tag} tx ${w.txid}: died() failed: ${(e as Error).message}`)
     }
     await ledger.releaseLeases(w.actionId).catch(() => undefined)
-    await (fundingRefresh?.() ?? custody.funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
+    await (fundingRefresh?.() ?? (custody.funds as Partial<Funds>).refresh?.() ?? Promise.resolve()).then(() => undefined)
   }
   events.on('abandoned', ({ txid, tip, seenAtHeight }) => {
     nlog(`tx ${txid} not mined after abandon horizon — abandoned (tip ${tip}, watched since ${seenAtHeight})`)
@@ -561,7 +563,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   // a dead funding mint may free its inputs — reconcile the reserve on the
   // abandon verdict (replaces the old watcher-status refresh, which
   // status-string hints no longer trigger)
-  events.on('abandoned', () => void (fundingRefresh?.() ?? custody.funds.refresh?.()?.then(() => undefined) ?? Promise.resolve()))
+  events.on('abandoned', () => void (fundingRefresh?.() ?? (custody.funds as Partial<Funds>).refresh?.() ?? Promise.resolve()).then(() => undefined))
   // optimistic-claim surface: provider + signer over the funding view,
   // claims registry + proof store in the data dir (the watcher shares it)
   if (port.network === 'regtest' && port.getTx !== undefined) {

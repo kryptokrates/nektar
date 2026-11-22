@@ -2,6 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { medianTime, weightedMedianTime, TemporalSources } from '../src/temporal.js'
+import { sparse } from '@nektar/core'
 import { IndexTracker } from '../src/mainnet.js'
 import type { BlockHeader, ChainTracker } from '../src/interfaces.js'
 
@@ -9,7 +10,7 @@ const hdr = (height: number, time: number): BlockHeader => ({ height, hash: `h${
 const stub = (times: Record<number, number>, miss = false): ChainTracker => ({
   currentHeight: () => Promise.resolve(Math.max(...Object.keys(times).map(Number))),
   isValidRootForHeight: (root, h) => Promise.resolve(root === `r${h}`),
-  headerAtHeight: (h) => Promise.resolve(miss ? undefined : times[h] === undefined ? undefined : hdr(h, times[h]))
+  headerAtHeight: (h) => Promise.resolve(miss ? undefined : sparse(times[h]) === undefined ? undefined : hdr(h, times[h]))
 })
 
 test('medianTime: odd → middle; even → lower median (skewed-high can never push time up)', () => {

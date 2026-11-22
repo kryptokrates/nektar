@@ -5,6 +5,7 @@
 // parent, a counterparty gets a BEEF, and a received BEEF is checked against
 // the instance's own headers — no indexer and no waiting for one to catch up.
 import { Transaction, MerklePath, Spend, LockingScript, type ChainTracker } from '@bsv/sdk'
+import { sparse } from '@nektar/core'
 
 export interface TxRow {
   txid: string
@@ -95,7 +96,7 @@ export class TxStore {
           src = undefined // EF stand-in: not a real prevout reference
         }
       }
-      if (src !== undefined && i.sourceOutputIndex !== undefined) this.spends.set(`${src}:${i.sourceOutputIndex}`, txid)
+      if (src !== undefined && sparse(i.sourceOutputIndex) !== undefined) this.spends.set(`${src}:${i.sourceOutputIndex}`, txid)
     }
     const cur = this.rows.get(txid)
     const proof = cur?.proof ?? tx.merklePath
@@ -259,7 +260,7 @@ const dropUnverified = async (tx: Transaction, tracker: ChainTracker | undefined
 
 /** does input `vin` of `tx` satisfy the output it spends — run locally, no node */
 export function spendValid(tx: Transaction, vin: number, source: { txid: string; vout: number; satoshis: number; script: string }): boolean {
-  const i = tx.inputs[vin]
+  const i = sparse(tx.inputs[vin])
   if (i === undefined || i.unlockingScript === undefined) return false
   if ((i.sourceTXID ?? i.sourceTransaction?.id('hex')) !== source.txid || i.sourceOutputIndex !== source.vout) return false
   try {

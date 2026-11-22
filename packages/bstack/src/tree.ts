@@ -1,6 +1,6 @@
 import { PrivateKey, ProtoWallet, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
 import { fundingLock, feeFor, type Derivation, type Fees, type SigningWallet } from '@lightwebinc/bcommon'
-import { unlockP2PKH, signerAddress, nektarEnv, type SignerLike } from '@nektar/core'
+import { unlockP2PKH, signerAddress, nektarEnv, sparse, type SignerLike } from '@nektar/core'
 import type { FundingOut } from '@nektar/chain'
 import type { Knex } from 'knex'
 
@@ -274,7 +274,7 @@ const serves = (tree: { tree: Transaction; proven: boolean }, kind: string): boo
 export const matchProvision = (tx: Transaction, lanes: Array<{ kind: string; lockHex: string; minSats: number }>): Array<{ vout: number; kind: string }> => {
   const out: Array<{ vout: number; kind: string }> = []
   tx.outputs.forEach((o, vout) => {
-    const hex = o.lockingScript?.toHex()
+    const hex = sparse(o.lockingScript)?.toHex()
     const lane = lanes.find((l) => l.lockHex === hex && (o.satoshis ?? 0) >= l.minSats)
     if (lane) out.push({ vout, kind: lane.kind })
   })

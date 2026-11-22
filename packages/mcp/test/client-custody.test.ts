@@ -111,7 +111,7 @@ void test('client custody: sale offer → escrow → refund signs through the in
     refundAfter: height + 2,
     maxFee: 500
   })) as { cfg: Record<string, unknown>; wrapped: string; sellerPub: string; offerSig: string }
-  assert.ok(offer.cfg && offer.wrapped && offer.offerSig, `seller offer: ${JSON.stringify(offer)}`)
+  assert.ok(sparse(offer.cfg) && sparse(offer.wrapped) && sparse(offer.offerSig), `seller offer: ${JSON.stringify(offer)}`)
 
   // 2 ─ buyer escrow: funds the covenant — funding P2PKH inputs must be
   //    signed by the stub substrate (fundSigner → walletSigner →

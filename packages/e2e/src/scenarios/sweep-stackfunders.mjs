@@ -19,6 +19,7 @@ import { TeranodeBroadcaster, parseLegacyBlock } from '../../../chain/dist/src/r
 
 const root = resolve(fileURLToPath(new URL('../../../..', import.meta.url)))
 const envFile = join(root, '.env')
+/** @type {Record<string, string | undefined>} */
 const env = existsSync(envFile)
   ? Object.fromEntries(
       readFileSync(envFile, 'utf8')

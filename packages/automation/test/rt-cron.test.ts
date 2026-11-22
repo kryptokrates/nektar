@@ -30,7 +30,7 @@ void test('cron.tick: runs the pass then self-arms at ceilingMs — the chain re
   assert.deepEqual(sent, [{ delayMs: 5, target: `${EXEC_SVC.upkeep}/tick:${CRON_KEY}` }])
   // the arm is a real timer locally — wait it out; the chain tick self-arms again
   await new Promise((r) => setTimeout(r, 30))
-  assert.ok(ticks >= 2, `self-arm re-fired the tick (ticks=${ticks})`)
+  assert.ok((ticks as number) >= 2, `self-arm re-fired the tick (ticks=${ticks})`)
   await ex.close()
 })
 

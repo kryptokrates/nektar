@@ -1,3 +1,4 @@
+import { sparse } from '@nektar/core'
 import { opsStep } from './ops.machine.js'
 import { txStep } from './tx.machine.js'
 
@@ -125,7 +126,7 @@ const DENIED_CAUSE =
 
 /** Resolve a live cause to machine-event candidates (map → prefix → deny-code). */
 export function opsCauseCandidates(cause: string): Candidate[] | undefined {
-  const hit = OPS_CAUSE_MAP[cause]
+  const hit = sparse(OPS_CAUSE_MAP[cause])
   if (hit) return hit
   if (cause.startsWith('needs_human:')) {
     // unresolved_payment / unresolved_settlement escalate to 'uncertain';

@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, rmSync, statSy
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PrivateKey, Transaction } from '@bsv/sdk'
-import { detached, nektarEnv, nektarEnvNum, mkLog, nap } from '@nektar/core'
+import { detached, nektarEnv, nektarEnvNum, mkLog, nap, sparse } from '@nektar/core'
 import { TxStore, type ChainPort, type Funds, type TxStatusEvent, type ChainEvents, type BroadcastResult } from '@nektar/chain'
 import { executor, cronObject, legObject, EXEC_SVC, RT_OPTS_HEAVY, type InvokeTarget } from '@nektar/automation'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
@@ -378,7 +378,7 @@ async function buildRecordsWatcher(d: {
         // export had its window and the take-time probe burns a
         // later-landing spend anyway
         if ((await port.spendStatus?.(srcTxid, vout).catch(() => 'unknown' as const)) === 'spent') continue
-        const parentHex: string | undefined = w.parents[srcTxid]
+        const parentHex: string | undefined = sparse(w.parents[srcTxid])
         const parent = parentHex !== undefined ? Transaction.fromHex(parentHex) : await port.txLookup?.(srcTxid).catch(() => undefined)
         if (parent === undefined) continue
         await funds.revive(parent, vout)
@@ -423,7 +423,7 @@ async function buildRecordsWatcher(d: {
         } catch (e) {
           nlog(`revived tx ${w.txid}: spent() failed: ${(e as Error).message}`)
         }
-        await (fundingRefresh?.() ?? funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
+        await (fundingRefresh?.() ?? (funds.refresh?.() ?? Promise.resolve()).then(() => undefined))
       },
       onExportExpired: async (w) => {
         await exportExpired(w)
@@ -441,7 +441,7 @@ async function buildRecordsWatcher(d: {
           } catch (e) {
             nlog(`revived tx ${w.txid}: spent() failed: ${(e as Error).message}`)
           }
-          await (fundingRefresh?.() ?? funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
+          await (fundingRefresh?.() ?? (funds.refresh?.() ?? Promise.resolve()).then(() => undefined))
         },
         recordAired: (w) => {
           try {
@@ -544,8 +544,9 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
           const hintOf = async (txid: string): Promise<{ status: string; answered: boolean } | undefined> => d.port.statusHint?.(txid).catch(() => undefined)
           const reair = async (tx: Transaction): Promise<void> => {
             for (const i of tx.inputs) {
-              if (i.sourceTransaction !== undefined || i.sourceTXID === undefined) continue
-              i.sourceTransaction = await resolveTx(i.sourceTXID)
+              const pid = sparse(i.sourceTXID)
+              if (i.sourceTransaction !== undefined || pid === undefined) continue
+              i.sourceTransaction = await resolveTx(pid)
             }
             const r = await d.chain.broadcast(tx)
             if (r.status === 'success') d.nlog(`re-aired ${tx.id('hex')} — wire gap self-healed`)
@@ -571,8 +572,9 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
             if (!parked && st.status !== '') continue
             const tx = Transaction.fromHex(w.rawHex)
             for (const i of tx.inputs) {
-              if (i.sourceTransaction !== undefined || i.sourceTXID === undefined) continue
-              const hex = w.parents[i.sourceTXID]
+              const pid = sparse(i.sourceTXID)
+              if (i.sourceTransaction !== undefined || pid === undefined) continue
+              const hex = sparse(w.parents[pid])
               if (hex !== undefined) i.sourceTransaction = Transaction.fromHex(hex)
             }
             await healWalk(tx)

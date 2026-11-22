@@ -2,7 +2,7 @@
 // nektar shard via the existing remember→batch→anchor pipeline. Each vertex
 // hash is stored as a fragment whose leaf commits to it; proveVertex returns
 // the leaf's position + anchor tx so the standard SPV verify path applies.
-import { hdp, eq, utf8, type Provenance } from '@nektar/core'
+import { hdp, eq, sparse, utf8, type Provenance } from '@nektar/core'
 /** structural view of the memory surface GraphAnchor needs — satisfied by
  * NektarMemory without a package dependency (avoids a workspace cycle) */
 export interface AnchorMem {
@@ -33,7 +33,7 @@ export class GraphAnchor {
 
   /** append a vertex/edge hash as a fragment leaf; returns its log position */
   async record(h: string, meta: Record<string, string> = {}): Promise<AnchoredVertexRef> {
-    const out = await this.mem.remember(this.shard, `aorg:${h}`, { source: meta.source ?? 'aorg', modelId: meta.modelId ?? 'aorg' }, 1)
+    const out = await this.mem.remember(this.shard, `aorg:${h}`, { source: sparse(meta.source) ?? 'aorg', modelId: sparse(meta.modelId) ?? 'aorg' }, 1)
     const ref: AnchoredVertexRef = { batch: out.anchored?.n ?? -1, seq: out.seq, anchorTxid: out.anchored?.txid }
     this.recs.set(h, ref)
     return ref

@@ -41,7 +41,7 @@ export type MarketMessage =
       buyerOp?: string
       policyHash: string
       want: SignedWant
-      offer: { so: SignedOffer; commitment?: any; mode?: string }
+      offer?: { so: SignedOffer; commitment?: any; mode?: string }
       escrow: any
       utxo: { txid: string; vout: number; satoshis: number; script: string }
       escrowAction: string
@@ -303,3 +303,7 @@ export const PARKED = ['disclosure_verified']
 // persists it (the MarketOpData schema); re-exported so engine code keeps
 // this import site
 export type { StoredOffer } from '../store.js'
+
+/** declared-non-nullish reads that can still be absent at runtime — record-index
+ *  lookups and cast-boundary payloads. Widening here keeps the guard sites honest. */
+export { sparse } from '@nektar/core'

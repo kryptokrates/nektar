@@ -169,7 +169,7 @@ export class PolicyDAG {
           const pf = facts.get(`${p.pred}(${p.args.join(',')})`)
           if (!pf) return { edb: `${p.pred}(${p.args.join(',')})` }
           const child = tree(pf)
-          this.edges.push({ from: pf && this.factNode(pf).h, to: fnode.h, rule: f.prov.ruleId, e: ehash(this.factNode(pf).h, fnode.h, f.prov.ruleId) })
+          this.edges.push({ from: this.factNode(pf).h, to: fnode.h, rule: f.prov.ruleId, e: ehash(this.factNode(pf).h, fnode.h, f.prov.ruleId) })
           return child
         })
       }

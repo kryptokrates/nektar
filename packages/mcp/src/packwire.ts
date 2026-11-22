@@ -95,7 +95,7 @@ export class PackWire {
    *  recorded on __imports__ — the lineage is anchored, not asserted. The
    *  target shard must be empty (no mixing imported + native seqs). */
   async importShardPack(pack: unknown): Promise<{ imported: number; anchored: number; unverifiable: string[]; skipped: number }> {
-    const p = pack as ShardPack
+    const p = pack as Partial<ShardPack>
     if (p.v !== 1 || p.kind !== 'nektar-shard-pack' || typeof p.shard !== 'string' || !Array.isArray(p.records)) {
       throw new Error('importShard: malformed pack — expected {v:1, kind:"nektar-shard-pack", shard, records[]}')
     }

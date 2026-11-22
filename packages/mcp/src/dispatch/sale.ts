@@ -2,6 +2,7 @@
 import type { NektarMemory } from '../memory.js'
 import type { ToolHandler } from './shared.js'
 import { PublicKey } from '@bsv/sdk'
+import { sparse } from '@nektar/core'
 
 const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund', 'claim'])
 
@@ -182,7 +183,7 @@ export const handlers: Record<string, ToolHandler> = {
       payload = serializeFragment(rec.fragment)
       mode = 'fragment'
     }
-    const leafHex = toHex(rec.leaf ?? computeLeaf(rec.fragment))
+    const leafHex = toHex(sparse(rec.leaf) ?? computeLeaf(rec.fragment))
     // π_i — the record's inclusion proof — goes into the commitment so the
     // buyer verifies leaf∈anchored-batch BEFORE funding (ZKCP verify-before-pay).
     const { bundle } = await mem.prove(args.shard, args.seq)

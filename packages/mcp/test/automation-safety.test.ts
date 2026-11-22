@@ -313,7 +313,8 @@ async function world(
   t: { skip: (m?: string) => void },
   opts: { refundBlocks?: number; sellerPrice?: number; killed?: () => boolean; deaf?: () => boolean; finding?: string } = {}
 ) {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-safe-'))
   const agents = new Map<string, Agent>()
   const feed: Array<{ seq: number; kind: string; payload: unknown }> = []
@@ -557,7 +558,8 @@ void test('D7 stuck injection: a collecting op older than its bound exits by the
 })
 
 void test('preflight on a live stack: dependency checks green; spendguard detects an unguarded broadcast path', async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const funder = await testFunder(10)
   const dir = mkdtempSync(join(tmpdir(), 'nektar-pf-'))
   const mem = new NektarMemory(chain, funder, funder.keyPair, { dataDir: dir, network: 'regtest' })

@@ -19,7 +19,7 @@
 // The key never leaves the gitignored .env; only the ADDRESS is printed.
 // The AI user never sees any of this — the server is the wallet holder
 // (operator-pays model).
-import { nektarEnv, parseDotEnv } from '@nektar/core'
+import { nektarEnv, parseDotEnv, sparse } from '@nektar/core'
 import { PrivateKey } from '@bsv/sdk'
 import { existsSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -95,11 +95,11 @@ if (network === 'regtest') {
   }
   // make the operator .env self-sufficient for the MCP server: map the
   // quickstart creds into NEKTAR_RPC_* if they aren't set already.
-  if (qs.rpc_user && env.NEKTAR_RPC_USER === undefined) {
+  if (qs.rpc_user && sparse(env.NEKTAR_RPC_USER) === undefined) {
     upsertEnv(ENV_PATH, 'NEKTAR_RPC_USER', qs.rpc_user)
     env.NEKTAR_RPC_USER = qs.rpc_user
   }
-  if (qs.rpc_pass && env.NEKTAR_RPC_PASS === undefined) {
+  if (qs.rpc_pass && sparse(env.NEKTAR_RPC_PASS) === undefined) {
     upsertEnv(ENV_PATH, 'NEKTAR_RPC_PASS', qs.rpc_pass)
     env.NEKTAR_RPC_PASS = qs.rpc_pass
   }

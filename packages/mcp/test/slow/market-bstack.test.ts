@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { testChain, testFunder, type TestChain } from '@nektar/chain'
+import { sparse } from '@nektar/core'
 import { minihost, type MinihostHandle } from '@nektar/bstack/testing'
 import { NektarMemory } from '../../src/memory.js'
 import { callTool } from '../../src/server.js'
@@ -110,9 +111,11 @@ const unprovenTrees = async (rt: Automation): Promise<number> => Object.values(a
 const buyerOp = async (b: A) => (await b.rt.store.operations({ role: 'buyer' })).find((o) => o.kind === 'purchase')
 const saleOps = async (s: A) => (await s.rt.store.operations({ role: 'seller' })).filter((o) => o.kind === 'sale')
 const COMPLETE = new Set(['completion_submitted', 'settled', 'useful'])
+const stopAgent = async (a: A | undefined): Promise<void> => { await a?.rt.stop() }
 
 void test('bstack A: buyer+seller over two minihosts — journal+slot conservation, dedupe, both hosts hold', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -139,12 +142,12 @@ void test('bstack A: buyer+seller over two minihosts — journal+slot conservati
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     const done = async () => {
       const bo = await buyerOp(b)
-      const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s))[0]
+      const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
       return bo?.state === 'disclosure_verified' && so !== undefined && COMPLETE.has(so.state)
     }
     assert.ok(await until([b.rt, s.rt], chain, done, 160000), 'logs: ' + logs.slice(-20).join(' | '))
     const bo = await buyerOp(b)
-    const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s))[0]
+    const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
     assert.equal(bo?.state, 'disclosure_verified')
     assert.ok(so && COMPLETE.has(so.state), `seller op ${so.state}`)
     assert.ok(h2Failed, 'h2 received the 503-injected first submit')
@@ -169,7 +172,8 @@ void test('bstack A: buyer+seller over two minihosts — journal+slot conservati
 })
 
 void test('bstack B: competing sellers — buyer completes with the 200-sat offer', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -237,7 +241,8 @@ void test('bstack B: competing sellers — buyer completes with the 200-sat offe
 })
 
 void test('bstack C: withheld offer still completes via other host; withheld logged naming h2', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -279,7 +284,8 @@ void test('bstack C: withheld offer still completes via other host; withheld log
 })
 
 void test('bstack D: restart — journal+ledger prevent second carrier, purchase completes', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -333,7 +339,8 @@ void test('bstack D: restart — journal+ledger prevent second carrier, purchase
 })
 
 void test('bstack E: hosts down after escrow funded — chain advance still refunds the buyer', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -344,7 +351,7 @@ void test('bstack E: hosts down after escrow funded — chain advance still refu
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 8)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 500 }, b.policyHash)
-    let funded = false
+    let funded = false as boolean
     for (let i = 0; i < 80 && !funded; i++) {
       clock += 500
       await b.rt.cycle()
@@ -372,7 +379,8 @@ void test('bstack E: hosts down after escrow funded — chain advance still refu
 })
 
 void test('bstack F: default bbox channel � no injected bus; forged delivered ignored', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const office = 'nektar_abcdefghij'
@@ -426,7 +434,7 @@ void test('bstack F: default bbox channel � no injected bus; forged delivered 
     })
     const done = async () => {
       const bo = await buyerOp(b)
-      const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s))[0]
+      const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
       return bo?.state === 'disclosure_verified' && so !== undefined && COMPLETE.has(so.state)
     }
     assert.ok(await until(all, chain, done, 200000), 'logs: ' + logs.slice(-20).join(' | '))
@@ -441,7 +449,8 @@ void test('bstack F: default bbox channel � no injected bus; forged delivered 
 })
 
 void test('bstack G: read envelopes are acked off the hosts; want+offer carry signed expiry', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const office = 'nektar_abcdefghij'
@@ -474,7 +483,8 @@ void test('bstack G: read envelopes are acked off the hosts; want+offer carry si
 })
 
 void test('bstack H: seller takes the escrow from the accept and broadcasts it itself', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -503,7 +513,7 @@ void test('bstack H: seller takes the escrow from the accept and broadcasts it i
     let escrowLookups = 0
     const origFetch = s.mem.fetchTx.bind(s.mem)
     s.mem.fetchTx = async (id: string) => {
-      const stillDeciding = (await saleOps(s))[0]?.state === 'quoted'
+      const stillDeciding = (await saleOps(s)).at(0)?.state === 'quoted'
       if (id === (await resolveBlind()) && stillDeciding) {
         escrowLookups++
         return undefined
@@ -553,7 +563,7 @@ void test('bstack H: seller takes the escrow from the accept and broadcasts it i
     assert.ok(done, 'no deal | ' + logs.slice(-20).join(' | '))
     assert.ok(escrowBroadcasts >= 1, 'seller broadcast the escrow tx itself')
     assert.equal(escrowLookups, 0, 'seller never looked the escrow up')
-    const sale: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s))[0]
+    const sale: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
     const verified = (await s.rt.store.events(sale.operationId)).find((e) => e.cause === 'escrow_verified')
     assert.deepEqual(
       verified?.evidence,
@@ -563,14 +573,15 @@ void test('bstack H: seller takes the escrow from the accept and broadcasts it i
     const bought = (await b.rt.store.events((await buyerOp(b))!.operationId)).find((e) => e.cause === 'disclosure_verified')
     assert.equal((bought?.evidence as { spv?: boolean } | undefined)?.spv, true, 'the reveal arrived as BEEF and passed SPV at the buyer')
   } finally {
-    if (b !== undefined) await b.rt.stop()
-    if (s !== undefined) await s.rt.stop()
+    await stopAgent(b)
+    await stopAgent(s)
     await h1.close()
   }
 })
 
 void test('bstack I: tampered accept — txHex of a different transaction → seller stays quoted with accept_refused', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -588,8 +599,8 @@ void test('bstack I: tampered accept — txHex of a different transaction → se
     // can fund + deliver inside the same round 'quoted' lands and the fake
     // one is ignored (op no longer 'quoted'), which is the race this guards
     await b.rt.stop()
-    assert.ok(await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
-    const op: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s))[0]
+    assert.ok(await until([s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
+    const op: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
     const want = (op.data.want as { want: { wantId: string; pub: string } }).want
     const offer = op.data.offer as { cfg: { price: number | string; refundAfter: number | string; maxFee: number | string } }
     const { PublicKey, Script, Transaction } = await import('@bsv/sdk')
@@ -611,7 +622,7 @@ void test('bstack I: tampered accept — txHex of a different transaction → se
       tx: other.toHex()
     })
     await s.rt.cycle() // tick drains the inbox → onAccept
-    const op2: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s))[0]
+    const op2: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
     assert.equal(op2.state, 'quoted', 'tampered accept must not advance the sale')
     const evs = await s.rt.store.events(op.operationId)
     assert.ok(
@@ -619,14 +630,15 @@ void test('bstack I: tampered accept — txHex of a different transaction → se
       'accept_refused event recorded'
     )
   } finally {
-    if (b !== undefined) await b.rt.stop()
-    if (s !== undefined) await s.rt.stop()
+    await stopAgent(b)
+    await stopAgent(s)
     await h1.close()
   }
 })
 
 void test('bstack J: push — a mined funding tree is proven and a cycle runs without cycle()', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
@@ -635,7 +647,7 @@ void test('bstack J: push — a mined funding tree is proven and a cycle runs wi
     a = await mkagent('push', { hosts: [h1.url], chain, logs, dir })
     await a.rt.cycle() // broadcast market + bbox funding trees — still unproven
     assert.ok((await unprovenTrees(a.rt)) >= 2, 'funding trees broadcast but unproven')
-    const wakesBefore = (await a.rt.waits?.())?.wakes ?? {}
+    const wakesBefore = (await a.rt.waits()).wakes
     await chain.mine(1) // the push: mined events → proofs delivered → markProven + wake
     const t0 = Date.now()
     while ((await unprovenTrees(a.rt)) > 0 && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 25))
@@ -643,10 +655,10 @@ void test('bstack J: push — a mined funding tree is proven and a cycle runs wi
     // the durable-executor wake path drives a dealfan fan-out + transport
     // drain on proof delivery rather than a monolithic engine.tick — the
     // observable is the txProof wake counter, not a tick spy
-    const wakesAfter = (await a.rt.waits?.())?.wakes ?? {}
+    const wakesAfter = (await a.rt.waits()).wakes
     assert.ok((wakesAfter.txProof ?? 0) > (wakesBefore.txProof ?? 0), 'the txProof wake fired on the push (intervalMs was 0)')
   } finally {
-    if (a !== undefined) await a.rt.stop() // unsubscribe proofs before pools close
+    await stopAgent(a) // unsubscribe proofs before pools close
     await h1.close()
   }
 })
@@ -686,7 +698,8 @@ const readBuyer = async (key: import('@bsv/sdk').PrivateKey, hosts: string[], ch
 const noteItems = <T extends { body: object }>(items: T[]): T[] => items.filter((i) => (i.body as { market?: { type?: string } }).market?.type === 'note')
 
 void test('bstack K: buyer loses its database — the inbox note rebuilds the deal and the refund still fires', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -702,7 +715,7 @@ void test('bstack K: buyer loses its database — the inbox note rebuilds the de
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     await s.rt.stop() // seller dies before the accept is processed
     s = undefined as never
     assert.ok(
@@ -750,17 +763,17 @@ void test('bstack K: buyer loses its database — the inbox note rebuilds the de
     assert.equal((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'note acked once the deal was finished')
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
     try {
-      await b2?.rt.stop()
+      await stopAgent(b2)
     } catch {
       /* already stopped */
     }
@@ -770,7 +783,8 @@ void test('bstack K: buyer loses its database — the inbox note rebuilds the de
 })
 
 void test('bstack L: buyer loses its database — delivery still completes after restore', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -804,17 +818,17 @@ void test('bstack L: buyer loses its database — delivery still completes after
     assert.equal((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'inbox empty after the restored deal finished')
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
     try {
-      await b2?.rt.stop()
+      await stopAgent(b2)
     } catch {
       /* already stopped */
     }
@@ -824,7 +838,8 @@ void test('bstack L: buyer loses its database — delivery still completes after
 })
 
 void test('bstack M: no loss — one operation; the note is listed while the deal is open and acked when it ends', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -857,12 +872,12 @@ void test('bstack M: no loss — one operation; the note is listed while the dea
     assert.equal((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'note + delivered acked once settled')
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -872,7 +887,8 @@ void test('bstack M: no loss — one operation; the note is listed while the dea
 })
 
 void test('bstack N: a note from a foreign key is ignored and still acked', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -921,7 +937,7 @@ void test('bstack N: a note from a foreign key is ignored and still acked', { ti
     assert.equal((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'foreign envelope was acked anyway')
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
@@ -931,7 +947,8 @@ void test('bstack N: a note from a foreign key is ignored and still acked', { ti
 })
 
 void test('bstack O: the recovery note fits the 16 KiB box content limit', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -968,12 +985,12 @@ void test('bstack O: the recovery note fits the 16 KiB box content limit', { tim
     console.log(`    note: sealed envelope record is ${recordBytes} bytes (limit 16384)`)
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -987,7 +1004,7 @@ void test('bstack O: the recovery note fits the 16 KiB box content limit', { tim
 // the escrow covenant script for a quoted sale — used to identify (and fake a
 // transport failure on) exactly the escrow broadcast
 const escrowScriptFor = async (s: A, buyerPub: string): Promise<string | undefined> => {
-  const op: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s))[0]
+  const op: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
   const offer = op?.data.offer as { cfg?: { price: string | number; refundAfter: string | number; maxFee: string | number } } | undefined
   if (!offer?.cfg) return undefined
   const { DisclosureSaleHost } = await import('@nektar/anchor')
@@ -1040,7 +1057,8 @@ const sabotageEscrowBroadcast = (b: A, s: A, chain: TestChain, reject: boolean):
 }
 
 void test('bstack P: uncertain + escrow observable — reconcile resumes the deal with no operator action', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1053,7 +1071,7 @@ void test('bstack P: uncertain + escrow observable — reconcile resumes the dea
     await drive([b.rt, s.rt], chain, 12)
     const sab = sabotageEscrowBroadcast(b, s, chain, false)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     const all = [b.rt, s.rt]
     assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 240000), 'no deal | ' + logs.slice(-25).join(' | '))
     assert.ok(sab.txid() !== undefined, 'the sabotaged escrow broadcast happened')
@@ -1071,12 +1089,12 @@ void test('bstack P: uncertain + escrow observable — reconcile resumes the dea
     for (const r of all) await r.stop()
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -1085,7 +1103,8 @@ void test('bstack P: uncertain + escrow observable — reconcile resumes the dea
 })
 
 void test('bstack Q: uncertain + rejected escrow — budget released, approval canceled, funding_failed', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1098,7 +1117,7 @@ void test('bstack Q: uncertain + rejected escrow — budget released, approval c
     await drive([b.rt, s.rt], chain, 12)
     const sab = sabotageEscrowBroadcast(b, s, chain, true)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     // the rejected push can reconcile uncertain → funding_failed inside one
     // round — a once-per-round sampler legitimately never observes 'uncertain',
     // so accept either state here; the events below prove the path was taken
@@ -1131,12 +1150,12 @@ void test('bstack Q: uncertain + rejected escrow — budget released, approval c
     await s.rt.stop()
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -1149,7 +1168,8 @@ void test('bstack Q: uncertain + rejected escrow — budget released, approval c
 // accepted escrow is a mock-only state — real coverage: Q (broadcast-time
 // refusal → escrow_rejected) + the 'unknown → escrow_unconfirmed_timeout' path.
 void test.skip('bstack R: escrow rejected while awaiting_disclosure — late rejection frees the budget before the refund height', async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1181,12 +1201,12 @@ void test.skip('bstack R: escrow rejected while awaiting_disclosure — late rej
     await s.rt.stop()
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -1197,7 +1217,8 @@ void test.skip('bstack R: escrow rejected while awaiting_disclosure — late rej
 // same first-seen-wins constraint as R: the completion tx is broadcast-accepted
 // before completion_submitted — a late 'rejected' state cannot occur on regtest.
 void test.skip('bstack S: disclosure rejected after completion_submitted — seller moves to completion_failed', async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1215,16 +1236,16 @@ void test.skip('bstack S: disclosure rejected after completion_submitted — sel
       clock += 500
       await b.rt.cycle()
       await s.rt.cycle()
-      submitted = (await saleOps(s))[0]?.state === 'completion_submitted'
+      submitted = (await saleOps(s)).at(0)?.state === 'completion_submitted'
       if (!submitted) await chain.mine(1)
     }
     assert.ok(submitted, 'never completion_submitted | ' + logs.slice(-20).join(' | '))
-    const _completeTxid = (await saleOps(s))[0].data.completeTxid as string
+    const _completeTxid = (await saleOps(s)).at(0).data.completeTxid as string
     assert.ok(
-      await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'completion_failed', 80000),
+      await until([s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'completion_failed', 80000),
       'not completion_failed | ' + logs.slice(-20).join(' | ')
     )
-    const evs = await s.rt.store.events((await saleOps(s))[0].operationId)
+    const evs = await s.rt.store.events((await saleOps(s)).at(0).operationId)
     assert.ok(
       evs.some((e) => e.cause === 'disclosure_rejected_late'),
       'cause disclosure_rejected_late: ' + evs.map((e) => e.cause).join(',')
@@ -1233,12 +1254,12 @@ void test.skip('bstack S: disclosure rejected after completion_submitted — sel
     await s.rt.stop()
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -1248,7 +1269,8 @@ void test.skip('bstack S: disclosure rejected after completion_submitted — sel
 
 void test('bstack T: refused refund retries on reconcile — succeeds after one refusal; five refusals stay uncertain', { timeout: 300_000 }, async (t) => {
   for (const refuse of [1, 10]) {
-    const chain = (await testChain(t))!
+    const chain = await testChain(t)
+  if (chain === undefined) return undefined
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
     const logs: string[] = []
     const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1310,12 +1332,12 @@ void test('bstack T: refused refund retries on reconcile — succeeds after one 
       await b.rt.stop()
     } finally {
       try {
-        await b?.rt.stop()
+        await stopAgent(b)
       } catch {
         /* already stopped */
       }
       try {
-        await s?.rt.stop()
+        await stopAgent(s)
       } catch {
         /* already stopped */
       }
@@ -1329,7 +1351,8 @@ void test('bstack T: refused refund retries on reconcile — succeeds after one 
 })
 
 void test('bstack U: seller loses its database — the sellerNote rebuilds the quoted sale and the deal completes', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1343,8 +1366,8 @@ void test('bstack U: seller loses its database — the sellerNote rebuilds the q
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
-    const origOp = (await saleOps(s))[0]
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
+    const origOp = (await saleOps(s)).at(0)
     // measure the sealed sellerNote on the wire — must fit the 12 KiB budget.
     // Seller-only rounds: under immediate-select a full drive can run the deal
     // to settlement before the note is even listed, and a settled note acks —
@@ -1399,17 +1422,17 @@ void test('bstack U: seller loses its database — the sellerNote rebuilds the q
     for (const r of [b.rt, s2.rt]) await r.stop()
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
     try {
-      await s2?.rt.stop()
+      await stopAgent(s2)
     } catch {
       /* already stopped */
     }
@@ -1419,7 +1442,8 @@ void test('bstack U: seller loses its database — the sellerNote rebuilds the q
 })
 
 void test('bstack V: delivered collected but not yet processed — the held envelope survives a buyer database loss', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1440,7 +1464,7 @@ void test('bstack V: delivered collected but not yet processed — the held enve
     // the seller delivers; the buyer's next cycle collects + holds the envelope
     // but its tick dies before processing it — the doomed store loses the inbox row
     assert.ok(
-      await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'completion_submitted', 200000),
+      await until([s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'completion_submitted', 200000),
       'never delivered | ' + logs.slice(-20).join(' | ')
     )
     const engine = b.rt.engine as unknown as { tick: () => Promise<void> }
@@ -1467,17 +1491,17 @@ void test('bstack V: delivered collected but not yet processed — the held enve
     for (const r of [b2.rt, s.rt]) await r.stop()
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
     try {
-      await b2?.rt.stop()
+      await stopAgent(b2)
     } catch {
       /* already stopped */
     }
@@ -1487,7 +1511,8 @@ void test('bstack V: delivered collected but not yet processed — the held enve
 })
 
 void test('bstack W: a sellerNote from a foreign key is ignored and still acked', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1539,7 +1564,7 @@ void test('bstack W: a sellerNote from a foreign key is ignored and still acked'
     await s.rt.stop()
   } finally {
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -1565,7 +1590,8 @@ void test(
   'bstack X: a full deal journals every state on both streams — complete for the counterparty, nothing sensitive in the lines',
   { timeout: 300_000 },
   async (t) => {
-    const chain = (await testChain(t))!
+    const chain = await testChain(t)
+  if (chain === undefined) return undefined
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
     const logs: string[] = []
     const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM })
@@ -1578,11 +1604,11 @@ void test(
       await sellerize(s, 200)
       await drive([b.rt, s.rt], chain, 12)
       await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-      const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s))[0]?.state ?? '')
+      const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s)).at(0)?.state ?? '')
       assert.ok(await until([b.rt, s.rt], chain, done, 240000), 'no deal | ' + logs.slice(-25).join(' | '))
       await drive([b.rt, s.rt], chain, 3) // let the journal append settle
       const bo = (await buyerOp(b))!
-      const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s))[0]
+      const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
 
       // the buyer sees the seller's stream for this deal: complete, with the
       // seller-side states
@@ -1635,12 +1661,12 @@ void test(
       assert.ok(checked >= 2, `decoded ${checked} journal batches`)
     } finally {
       try {
-        await b?.rt.stop()
+        await stopAgent(b)
       } catch {
         /* already stopped */
       }
       try {
-        await s?.rt.stop()
+        await stopAgent(s)
       } catch {
         /* already stopped */
       }
@@ -1651,7 +1677,8 @@ void test(
 )
 
 void test('bstack Y: a journal batch dropped by every host shows the gap — complete:false', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const dropped = new Set<string>()
@@ -1665,7 +1692,7 @@ void test('bstack Y: a journal batch dropped by every host shows the gap — com
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s))[0]?.state ?? '')
+    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s)).at(0)?.state ?? '')
     assert.ok(await until([b.rt, s.rt], chain, done, 240000), 'no deal | ' + logs.slice(-25).join(' | '))
     await drive([b.rt, s.rt], chain, 3)
     const bo = (await buyerOp(b))!
@@ -1695,12 +1722,12 @@ void test('bstack Y: a journal batch dropped by every host shows the gap — com
     )
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -1710,7 +1737,8 @@ void test('bstack Y: a journal batch dropped by every host shows the gap — com
 })
 
 void test('bstack Z: restart between tick and append — events land exactly once', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   let armed = false
@@ -1757,17 +1785,17 @@ void test('bstack Z: restart between tick and append — events land exactly onc
     assert.ok(read.batches.flatMap((x) => x.lines).length > stalledLines, 'the queued events caught up')
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await b2?.rt.stop()
+      await stopAgent(b2)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -1777,7 +1805,8 @@ void test('bstack Z: restart between tick and append — events land exactly onc
 })
 
 void test('bstack AA: disjoint host sets — records find each other over the shared host', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM, finger: true })
@@ -1815,7 +1844,7 @@ void test('bstack AA: disjoint host sets — records find each other over the sh
     assert.ok(srec!.body.hosts.includes(h3.url), 'seller record resolvable on the shared host')
 
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s))[0]?.state ?? '')
+    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s)).at(0)?.state ?? '')
     assert.ok(await until([b.rt, s.rt], chain, done, 240000), 'no deal | ' + logs.slice(-25).join(' | '))
 
     // the seller's offer carrier reached H1 — a host it was never configured with
@@ -1833,12 +1862,12 @@ void test('bstack AA: disjoint host sets — records find each other over the sh
     )
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -1849,7 +1878,8 @@ void test('bstack AA: disjoint host sets — records find each other over the sh
 })
 
 void test('bstack AB: no counterparty record — the deal completes over the shared host', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   // no finger on either host: every resolve is a quiet miss, the configured set is the fallback
@@ -1863,18 +1893,18 @@ void test('bstack AB: no counterparty record — the deal completes over the sha
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s))[0]?.state ?? '')
+    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s)).at(0)?.state ?? '')
     assert.ok(await until([b.rt, s.rt], chain, done, 240000), 'no deal | ' + logs.slice(-25).join(' | '))
     const fingerLines = logs.filter((l) => /finger/i.test(l) && !/finger seq/.test(l))
     assert.ok(fingerLines.length <= 1, `at most one finger-related log line | ${fingerLines.join(' | ')}`)
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -1959,7 +1989,8 @@ const fakeS3 = async () => {
 }
 
 void test('bstack AD: a full deal stores redacted evidence — verified read, one event, journal line', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const s3 = await fakeS3()
@@ -1973,7 +2004,7 @@ void test('bstack AD: a full deal stores redacted evidence — verified read, on
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s))[0]?.state ?? '')
+    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s)).at(0)?.state ?? '')
     assert.ok(await until([b.rt, s.rt], chain, done, 240000), 'no deal | ' + logs.slice(-25).join(' | '))
     await drive([b.rt, s.rt], chain, 3)
     const bo = (await buyerOp(b))!
@@ -2005,7 +2036,7 @@ void test('bstack AD: a full deal stores redacted evidence — verified read, on
     // deals view surfaces it
     const deal = (await callTool(b.mem, 'deals', { operationId: bo.operationId })) as { evidence?: { stored?: boolean; ref?: { key: string } } }
     assert.equal(deal.evidence?.stored, true)
-    assert.equal(deal.evidence?.ref?.key, ref.key)
+    assert.equal(sparse(deal.evidence)?.ref?.key, ref.key)
     await b.rt.stop()
     await s.rt.stop()
   } finally {
@@ -2015,7 +2046,7 @@ void test('bstack AD: a full deal stores redacted evidence — verified read, on
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -2026,7 +2057,8 @@ void test('bstack AD: a full deal stores redacted evidence — verified read, on
 })
 
 void test('bstack AE: store down — the deal completes; evidence lands once the store returns', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const s3 = await fakeS3()
@@ -2061,12 +2093,12 @@ void test('bstack AE: store down — the deal completes; evidence lands once the
     await s.rt.stop()
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -2077,7 +2109,8 @@ void test('bstack AE: store down — the deal completes; evidence lands once the
 })
 
 void test('bstack AF: crash between the put and the transition — one event, one object', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const s3 = await fakeS3()
@@ -2098,7 +2131,7 @@ void test('bstack AF: crash between the put and the transition — one event, on
     const origTransition = b.rt.store.transition.bind(b.rt.store)
     let failCommit = true
     b.rt.store.transition = async (id: string, rev: number, to: string, ch: { cause?: string } & Record<string, unknown>) => {
-      if (failCommit && ch?.cause === 'evidence_stored') throw new Error('crash before commit')
+      if (failCommit && ch.cause === 'evidence_stored') throw new Error('crash before commit')
       return await origTransition(id, rev, to, ch as never)
     }
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
@@ -2134,17 +2167,17 @@ void test('bstack AF: crash between the put and the transition — one event, on
     await b2.rt.stop()
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await b2?.rt.stop()
+      await stopAgent(b2)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -2155,7 +2188,8 @@ void test('bstack AF: crash between the put and the transition — one event, on
 })
 
 void test('bstack AG: direct rail — policy-gated P2PKH payment settles the deal without a covenant', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -2173,12 +2207,12 @@ void test('bstack AG: direct rail — policy-gated P2PKH payment settles the dea
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     const done = async () => {
       const bo = await buyerOp(b)
-      const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s))[0]
+      const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
       return bo?.state === 'disclosure_verified' && so !== undefined && COMPLETE.has(so.state)
     }
     assert.ok(await until([b.rt, s.rt], chain, done, 160000), 'logs: ' + logs.slice(-20).join(' | '))
     const bo = (await buyerOp(b))!
-    const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s))[0]
+    const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
     assert.equal(bo.state, 'disclosure_verified')
     assert.ok(so && COMPLETE.has(so.state), `seller op ${so?.state}`)
     // the rail marker survived: the utxo the accept carried is a plain P2PKH
@@ -2192,12 +2226,12 @@ void test('bstack AG: direct rail — policy-gated P2PKH payment settles the dea
     assert.equal(so.data.completeTxid, utxo.txid)
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -2207,7 +2241,8 @@ void test('bstack AG: direct rail — policy-gated P2PKH payment settles the dea
 })
 
 void test('bstack AH: direct rail gated off without opts — same deal still settles via escrow covenant', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -2225,7 +2260,7 @@ void test('bstack AH: direct rail gated off without opts — same deal still set
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     const done = async () => {
       const bo = await buyerOp(b)
-      const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s))[0]
+      const so: Awaited<ReturnType<typeof saleOps>>[number] | undefined = (await saleOps(s)).at(0)
       return bo?.state === 'disclosure_verified' && so !== undefined && COMPLETE.has(so.state)
     }
     assert.ok(await until([b.rt, s.rt], chain, done, 160000), 'logs: ' + logs.slice(-20).join(' | '))
@@ -2237,12 +2272,12 @@ void test('bstack AH: direct rail gated off without opts — same deal still set
     assert.doesNotMatch(utxo.script, /^76a914[0-9a-f]{40}88ac$/, 'escrow output is the covenant, not a bare P2PKH')
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }
@@ -2252,7 +2287,8 @@ void test('bstack AH: direct rail gated off without opts — same deal still set
 })
 
 void test('reserve: one dominant UTXO denominates into medium outputs so mints and deals never contend for the same coin', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-reserve-'))
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   // the contention fixture: a single 500k coin — before the reserve policy a
@@ -2286,7 +2322,8 @@ void test(
   'announce keep-alive: an unproven-funding card re-announces inside the eviction window, then stops once the tree proves',
   { timeout: 300_000 },
   async (t) => {
-    const chain = (await testChain(t))!
+    const chain = await testChain(t)
+  if (chain === undefined) return undefined
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-announce-'))
     const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
     const logs: string[] = []
@@ -2339,7 +2376,8 @@ void test(
 // own refund) and claim the disclosure from the completion tx itself —
 // a finished deal is 'disclosure_verified', not a stranded refund.
 void test('bstack P3: refund deadline races a landed completion — chain evidence resolves the deal, no doomed retries', { timeout: 300_000 }, async (t) => {
-  const chain = (await testChain(t))!
+  const chain = await testChain(t)
+  if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -2358,7 +2396,7 @@ void test('bstack P3: refund deadline races a landed completion — chain eviden
     const origSend = transport.send.bind(transport)
     transport.send = async (to, msg, refs) => (msg.type === 'delivered' ? undefined : await origSend(to, msg, refs))
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     assert.ok(
       await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 240000),
       'escrow never observed | ' + logs.slice(-25).join(' | ')
@@ -2374,7 +2412,7 @@ void test('bstack P3: refund deadline races a landed completion — chain eviden
         chain,
         async () => {
           const o = await buyerOp(b)
-          return o?.state === 'disclosure_verified' || o?.state === 'refunded' || Number(o?.data?.refundTries ?? 0) > 0
+          return o?.state === 'disclosure_verified' || o?.state === 'refunded' || Number(o?.data.refundTries ?? 0) > 0
         },
         120000
       ),
@@ -2399,12 +2437,12 @@ void test('bstack P3: refund deadline races a landed completion — chain eviden
     await b.rt.stop()
   } finally {
     try {
-      await b?.rt.stop()
+      await stopAgent(b)
     } catch {
       /* already stopped */
     }
     try {
-      await s?.rt.stop()
+      await stopAgent(s)
     } catch {
       /* already stopped */
     }

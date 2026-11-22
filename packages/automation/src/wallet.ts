@@ -1,4 +1,5 @@
 import { Transaction } from '@bsv/sdk'
+import { sparse } from '@nektar/core'
 import { ALREADY, broadcastProvablyDead, DEFINITIVE, NEVER_LEFT, type BroadcastResult } from '@nektar/chain'
 import type { AutomationStore, WalletTx, TxState } from './store.js'
 import type { ActionContext } from './policy.js'
@@ -54,7 +55,7 @@ export class WalletCoordinator {
     for (const inp of tx.inputs) {
       const src = inp.sourceTransaction
       const txid = inp.sourceTXID ?? src?.id('hex')
-      const vout = inp.sourceOutputIndex ?? 0
+      const vout = sparse(inp.sourceOutputIndex) ?? 0
       const sats = src?.outputs[vout]?.satoshis
       if (!txid || !src || sats === undefined) throw new Error('prepare: every input needs its real source transaction')
       if (src.id('hex') !== txid) throw new Error('prepare: source transaction does not match the input outpoint')
@@ -81,7 +82,7 @@ export class WalletCoordinator {
     let vin = 0
     for (const inp of tx.inputs) {
       const txid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-      const vout = inp.sourceOutputIndex ?? 0
+      const vout = sparse(inp.sourceOutputIndex) ?? 0
       if (!txid) throw new Error('owner: input without an outpoint')
       outs.push({ txid, vout, satoshis: inp.sourceTransaction?.outputs[vout]?.satoshis ?? 0 })
       if (inp.sourceTransaction) {

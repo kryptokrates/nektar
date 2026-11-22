@@ -2,7 +2,7 @@
 // PUT shard packs to bstore (content-addressed via chirp closure), commit
 // them as bfinger store members, attach the packs store post-construction,
 // and resolve stored refs back into ShardPack objects.
-import { utf8, toHex, sha256, nektarEnv } from '@nektar/core'
+import { utf8, toHex, sha256, nektarEnv, sparse } from '@nektar/core'
 import { storeChirp, fetchObjectByRef, type ObjectRef, type PacksStore, type PackMember } from '@nektar/store'
 import type { ShardPack, NektarMemoryOptions } from './types.js'
 
@@ -60,8 +60,8 @@ export class PackOps {
           size: bytes.length,
           ...(ref.chirp !== undefined ? { chirp: ref.chirp } : {}),
           ...(ref.endpoint !== undefined ? { endpoint: ref.endpoint } : {}),
-          ...(ref.bucket !== undefined ? { bucket: ref.bucket } : {}),
-          ...(ref.key !== undefined ? { key: ref.key } : {})
+          ...(sparse(ref.bucket) !== undefined ? { bucket: ref.bucket } : {}),
+          ...(sparse(ref.key) !== undefined ? { key: ref.key } : {})
         })
       } catch {
         this.deps.metricsInc('nektar_pack_store_errors_total')

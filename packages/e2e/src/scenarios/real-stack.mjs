@@ -31,6 +31,7 @@ import { fundAgentsLive as fundAgentsLiveTestnet } from './testnet-funding.mjs'
 
 const root = resolve(fileURLToPath(new URL('../../../..', import.meta.url)))
 const envFile = join(root, '.env')
+/** @type {Record<string, string | undefined>} */
 const env = existsSync(envFile)
   ? Object.fromEntries(
       readFileSync(envFile, 'utf8')

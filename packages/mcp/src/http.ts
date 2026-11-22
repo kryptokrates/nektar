@@ -318,7 +318,7 @@ async function body(req: IncomingMessage): Promise<unknown> {
 
 export function createHttpApi(
   mem: NektarMemory,
-  ops?: { wallet: () => Promise<unknown>; costs: () => unknown; importFunding?: (txid: string) => Promise<unknown> }
+  ops?: { wallet?: () => Promise<unknown>; costs?: () => unknown; importFunding?: (txid: string) => Promise<unknown> }
 ): Server {
   // MCP Streamable HTTP: one transport + McpServer per session (mcp-session-id).
   // Idle sessions are reaped — a session survives a dropped socket by design,
@@ -880,10 +880,10 @@ export function createHttpApi(
             return res.end(json(pr))
           }
           if (req.method === 'GET' && url.pathname === '/v1/wallet') {
-            return ops ? send(200, await ops.wallet()) : send(404, { error: 'ops not enabled (main only)' })
+            return ops?.wallet ? send(200, await ops.wallet()) : send(404, { error: 'ops not enabled (main only)' })
           }
           if (req.method === 'GET' && url.pathname === '/v1/costs') {
-            return ops ? send(200, { costs: ops.costs() }) : send(404, { error: 'ops not enabled (main only)' })
+            return ops?.costs ? send(200, { costs: ops.costs() }) : send(404, { error: 'ops not enabled (main only)' })
           }
           return send(404, { error: 'not found' })
         } catch (e) {

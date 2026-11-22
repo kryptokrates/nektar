@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { nektarEnv, DEFAULT_MARKET_HOSTS, marketHostsFromEnv } from '@nektar/core'
+import { nektarEnv, DEFAULT_MARKET_HOSTS, marketHostsFromEnv, sparse } from '@nektar/core'
 import { marketHosts, savedHosts, blockedHosts } from './hosts.js'
 import type { NektarMemory } from './memory.js'
 import { receiptToken } from './receipt.js'
@@ -35,8 +35,8 @@ const NEKTAR_AMBER = '#f7991b'
 const NEKTAR_DARK = '#221e1d'
 
 const esc = (s: unknown) =>
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- narrows unknown past the object guard; required by no-base-to-string
   (s === null || s === undefined ? '' : typeof s === 'object' ? JSON.stringify(s) : String(s as string | number | boolean | symbol | bigint)).replace(
-    // eslint-disable-line @typescript-eslint/no-unnecessary-type-assertion -- narrows unknown past the object guard; required by no-base-to-string
     /[&<>"]/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!
   )
@@ -45,8 +45,8 @@ const logoSvg = (px: number) =>
   `<svg viewBox="0 0 400 400" width="${px}" height="${px}" style="border-radius:${Math.round(px / 5)}px;flex:none"><rect width="400" height="400" fill="${NEKTAR_DARK}"/><path fill="${NEKTAR_AMBER}" d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z"/><circle cx="307" cy="78" r="38" fill="${NEKTAR_AMBER}"/><ellipse cx="163" cy="190" rx="20" ry="21" fill="${NEKTAR_DARK}"/><ellipse cx="231" cy="190" rx="20" ry="21" fill="${NEKTAR_DARK}"/><path d="M 150 265.5 C 161 279 176 287 196 288 C 216 287 230 278 243 265" fill="none" stroke="${NEKTAR_DARK}" stroke-width="24" stroke-linecap="round"/></svg>`
 
 export interface HttpOps {
-  wallet: () => Promise<unknown>
-  costs: () => unknown
+  wallet?: () => Promise<unknown>
+  costs?: () => unknown
 }
 
 /** /dashboard/state — the JSON the compiled Svelte dashboard renders. Same
@@ -427,8 +427,8 @@ export async function cardPage(mem: NektarMemory, host: string | undefined): Pro
           .records(s)
           .then((r) => r.length)
           .catch(() => 0)
-        const offers = m?.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? ''
-        return `<div class=row><b>${esc(s)}</b><span class=dim>${esc(m?.domains?.join(', ') ?? '')}${m?.desc ? ` — ${esc(m.desc)}` : ''}</span><span class=dim>${n} records${offers ? ` · ${esc(offers)}` : ''}</span><a class=lnk href="${base}/v1/pack/${encodeURIComponent(s)}">pack ↗</a></div>`
+        const offers = sparse(m?.offers)?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? ''
+        return `<div class=row><b>${esc(s)}</b><span class=dim>${esc((m?.domains ?? []).join(', '))}${m?.desc ? ` — ${esc(m.desc)}` : ''}</span><span class=dim>${n} records${offers ? ` · ${esc(offers)}` : ''}</span><a class=lnk href="${base}/v1/pack/${encodeURIComponent(s)}">pack ↗</a></div>`
       })
     )
   ).join('')

@@ -125,10 +125,10 @@ void test('NektarMemory: proveSubset + verifySubset over its own anchored batch;
   // negatives at the memory layer
   const miss = await mem.proveSubset('s', [999])
   assert.equal(miss.ok, false)
-  if (!miss.ok) assert.match(miss.reason, /no record/)
+  assert.match(miss.reason, /no record/)
   const dup = await mem.proveSubset('s', [0, 0])
   assert.equal(dup.ok, false)
-  if (!dup.ok) assert.match(dup.reason, /duplicate/)
+  assert.match(dup.reason, /duplicate/)
   // a second batch anchors; a subset spanning both batches is refused
   await mem.remember('s', 'later-1')
   await mem.remember('s', 'later-2')
@@ -137,7 +137,7 @@ void test('NektarMemory: proveSubset + verifySubset over its own anchored batch;
   mem.confirmAnchor('s', mem.tailLink('s')!.txid)
   const span = await mem.proveSubset('s', [0, 70])
   assert.equal(span.ok, false)
-  if (!span.ok) assert.match(span.reason, /multiple batches/)
+  assert.match(span.reason, /multiple batches/)
   assert.match(String((await mem.verifySubset('s', sub.bytes.slice(0, 20))).reason), /codec/)
   const foreign = subsetBytes(5, [1])
   assert.match(String((await mem.verifySubset('s', foreign)).reason), /no anchor|not the anchored/)
@@ -146,7 +146,7 @@ void test('NektarMemory: proveSubset + verifySubset over its own anchored batch;
   try {
     const off1 = await mem.proveSubset('s', [0])
     assert.equal(off1.ok, false)
-    if (!off1.ok) assert.equal(off1.reason, 'disabled')
+    assert.equal(off1.reason, 'disabled')
     assert.equal((await mem.verifySubset('s', sub.bytes)).reason, 'disabled')
     assert.equal((await callTool(mem, 'proveSubset', { shard: 's', seqs: [0] })).reason, 'disabled')
     assert.equal((await callTool(mem, 'verifySubset', { shard: 's', bytes: 'aa' })).reason, 'disabled')

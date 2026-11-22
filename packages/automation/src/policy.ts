@@ -62,7 +62,7 @@ const strings = (v: unknown, re: RegExp, max: number): v is string[] =>
 export function policyError(p: unknown): string | undefined {
   if (!exact(p, TOP)) return 'unknown or missing policy field'
   const q = p as unknown as AutomationPolicy
-  if (q.v !== 1) return 'unsupported policy version'
+  if (Number(q.v) !== 1) return 'unsupported policy version'
   if (typeof q.policyId !== 'string' || !ID_RE.test(q.policyId)) return 'policyId'
   if (typeof q.network !== 'string' || !/^(regtest|testnet|main)$/.test(q.network)) return 'network'
   if (typeof q.agentPub !== 'string' || !/^0[23][0-9a-f]{64}$/.test(q.agentPub)) return 'agentPub'
@@ -70,7 +70,7 @@ export function policyError(p: unknown): string | undefined {
     !Array.isArray(q.roles) ||
     q.roles.length === 0 ||
     q.roles.length > 2 ||
-    !q.roles.every((r) => r === 'buyer' || r === 'seller') ||
+    !q.roles.every((r: string) => r === 'buyer' || r === 'seller') ||
     new Set(q.roles).size !== q.roles.length
   )
     return 'roles'
@@ -106,7 +106,7 @@ export function policyError(p: unknown): string | undefined {
     !nat(q.ai.timeoutMs, 3_600_000)
   )
     return 'ai'
-  if (!exact(q.sandbox, ['mode']) || (q.sandbox.mode !== 'sandbox-only' && q.sandbox.mode !== 'never')) return 'sandbox'
+  if (!exact(q.sandbox, ['mode']) || (q.sandbox.mode !== 'sandbox-only' && (q.sandbox.mode as string) !== 'never')) return 'sandbox'
   return undefined
 }
 

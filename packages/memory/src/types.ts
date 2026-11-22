@@ -200,7 +200,7 @@ export interface ShardPack {
     /** serialized fragment hex — carries E/hdp so encrypted records re-land
      *  byte-identically and their bundle leaf re-verifies (S3) */
     frag?: string
-    prov?: { source?: string; time?: number; signature?: string; modelId?: string; modality?: Provenance['modality'] }
+    prov?: { source?: string; time?: number; signature?: string; modelId?: string; modality?: Provenance['modality'] } | null
   }>
   /** anchorTxid → AtomicBEEF hex — the inclusion evidence for anchored records;
    *  the verifier checks these against ITS headers, not the exporter's word */

@@ -8,7 +8,7 @@ import { Transaction, Hash } from '@bsv/sdk'
 import { NektarProvider } from '@nektar/anchor'
 import { deployClaim, readClaimState, callTerminal, outpointOf, p2pkh, registerClaim, storeProof } from '@nektar/chain'
 import { verifyZkm2 } from '@nektar/zk'
-import { runarSigner, signerPubHex, type DigestSigner } from '@nektar/core'
+import { runarSigner, signerPubHex, sparse, type DigestSigner } from '@nektar/core'
 import type { Signer } from 'runar-sdk'
 import type { NektarMemory } from './memory.js'
 
@@ -28,7 +28,7 @@ export class ClaimService {
   private provider!: NektarProvider
   private signer: Signer
   private signerLike: DigestSigner
-  private pubKeyHex!: string
+  private pubKeyHex?: string
   private pkh!: string
 
   constructor(
@@ -126,7 +126,7 @@ export class ClaimService {
     const raw = await this.deps.fetchTx(txid)
     if (!raw) return { found: false, txid }
     const tx = Transaction.fromHex(raw)
-    const out = tx.outputs[vout]
+    const out = sparse(tx.outputs[vout])
     if (!out) return { found: false, txid, reason: `no output ${vout}` }
     const script = out.lockingScript.toHex()
     if (!script.startsWith(this.cArt.script)) return { found: false, txid, reason: 'not a NektarZkClaim output' }

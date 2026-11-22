@@ -517,7 +517,7 @@ export class ReserveFunder {
     minSats?: number,
     skip?: (tx: Transaction, vout: number) => Promise<boolean>
   ): Promise<{ tx: Transaction; vout: number; satoshis: number } | null> {
-    while (true) {
+    for (;;) {
       // smallest-sufficient: skip spent entries AND entries too small for the
       // spend — a first-fit dust pick produces negative-fee/insufficient txs.
       // With no explicit minimum the floor is 546 sats: a sub-dust P2PKH entry
@@ -531,7 +531,7 @@ export class ReserveFunder {
         if (skip !== undefined && (await skip(x.tx, x.vout))) continue
         candidates.push(x)
       }
-      const u = candidates.sort((a, b) => a.satoshis - b.satoshis)[0]
+      const u = candidates.sort((a, b) => a.satoshis - b.satoshis).at(0)
       if (!u) return null
       if (spendCheck && (await spendCheck(u.tx.id('hex'), u.vout))) {
         this.markSpent(u.tx.id('hex'), u.vout)

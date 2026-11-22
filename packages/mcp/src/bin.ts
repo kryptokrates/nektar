@@ -4,7 +4,7 @@
 //   Streamable HTTP+REST:  NEKTAR_HTTP_PORT=8080 node dist/src/bin.js
 // Backend via NEKTAR_NETWORK=regtest (default, local Teranode stack) | testnet | main
 // (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
-import { nektarEnv, nektarEnvFlag, parseDotEnv, setNektarEnv, mkLog } from '@nektar/core'
+import { nektarEnv, nektarEnvFlag, parseDotEnv, setNektarEnv, mkLog, sparse } from '@nektar/core'
 import { marketHosts } from './hosts.js'
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -69,11 +69,11 @@ const PROFILE_ALIASES: Record<string, string> = {
   main: 'mainnet-agent',
   mainnet: 'mainnet-agent'
 }
-const profile = nektarEnv('NEKTAR_PROFILE') ?? dot['NEKTAR_PROFILE']
+const profile = nektarEnv('NEKTAR_PROFILE') ?? sparse(dot['NEKTAR_PROFILE'])
 let defs: Record<string, string> | undefined
 if (profile !== undefined) {
-  const resolved = PROFILE_ALIASES[profile] ?? profile
-  defs = PROFILES[resolved]
+  const resolved = sparse(PROFILE_ALIASES[profile]) ?? profile
+  defs = sparse(PROFILES[resolved])
   if (defs === undefined) {
     nlog(`NEKTAR_PROFILE must be one of ${Object.keys(PROFILES).join('|')}, got "${profile}"`)
     process.exit(2)
@@ -86,7 +86,7 @@ if (envFlag !== undefined && !/^(regtest|testnet|main)$/.test(envFlag)) {
   process.exit(2)
 }
 // the strict chain for the role choice — .env is LAST here by design
-const network = nektarEnv('NEKTAR_NETWORK') ?? envFlag ?? defs?.NEKTAR_NETWORK ?? dot['NEKTAR_NETWORK']
+const network = nektarEnv('NEKTAR_NETWORK') ?? envFlag ?? sparse(defs?.NEKTAR_NETWORK) ?? sparse(dot['NEKTAR_NETWORK'])
 if (network !== undefined) setNektarEnv('NEKTAR_NETWORK', network)
 // every other key: export > flag > .env > profile default — flags fill only
 // unset values per the contract (an export is already set when we read, and
@@ -96,8 +96,8 @@ const hostFlag = flagVal('--host')
 const fill = (k: string, v: string | undefined): void => {
   if (v !== undefined && nektarEnv(k) === undefined) setNektarEnv(k, v)
 }
-fill('NEKTAR_HTTP_PORT', portFlag ?? dot['NEKTAR_HTTP_PORT'] ?? defs?.NEKTAR_HTTP_PORT)
-fill('NEKTAR_HTTP_HOST', hostFlag ?? dot['NEKTAR_HTTP_HOST'] ?? defs?.NEKTAR_HTTP_HOST)
+fill('NEKTAR_HTTP_PORT', portFlag ?? sparse(dot['NEKTAR_HTTP_PORT']) ?? defs?.NEKTAR_HTTP_PORT)
+fill('NEKTAR_HTTP_HOST', hostFlag ?? sparse(dot['NEKTAR_HTTP_HOST']) ?? defs?.NEKTAR_HTTP_HOST)
 // .env spreads over profile defaults — the strict order was for the role
 // choice only; deliberate .env config beats a profile's convenience default
 for (const [k, v] of Object.entries({ ...defs, ...dot }))

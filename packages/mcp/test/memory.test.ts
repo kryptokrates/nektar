@@ -392,7 +392,7 @@ void test('§19 CRL: embedded SMT proof makes the anchored revoke record self-co
   assert.equal(p.found, true)
   assert.equal(p.anchored, true)
   assert.equal(p.verified, true)
-  const entry = idm.parseRevocationRecord(p.data)!
+  const entry = idm.parseRevocationRecord(p.data)
   assert.ok(entry && idm.verifyRevocationEntry(entry), 'record text convicts on its own')
   assert.deepEqual(idm.deserializeSmtProof(p.smtProof).key, entry.proof!.key, 'serialized proof roundtrips')
 

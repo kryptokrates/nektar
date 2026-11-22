@@ -1,4 +1,4 @@
-import { nektarEnv } from '@nektar/core'
+import { nektarEnv, sparse } from '@nektar/core'
 import { Transaction, Script, type ChainTracker } from '@bsv/sdk'
 import {
   decodeStrictPushDrop,
@@ -235,7 +235,7 @@ function makeLookup(
             } catch {
               continue
             }
-            const cons = o.outputsConsumed?.[0]
+            const cons = sparse(o.outputsConsumed)?.at(0)
             if (cons === undefined) continue
             fundingOutpoint = `${cons.txid}:${cons.outputIndex}`
             fundingDeadline = now() + FUNDING_PROOF_MS
@@ -252,8 +252,8 @@ function makeLookup(
     },
     lookup: (q: LookupQuestion): Promise<LookupFormula> => {
       if (q.service !== LS_NAME) throw new Error(`unknown service ${q.service}`)
-      const query = q.query as Record<string, unknown>
-      for (const k of Object.keys(query ?? {})) if (!['wants', 'offers', 'want', 'announces'].includes(k)) throw new Error(`unknown member ${k}`)
+      const query = (sparse(q.query) ?? {}) as Record<string, unknown>
+      for (const k of Object.keys(query)) if (!['wants', 'offers', 'want', 'announces'].includes(k)) throw new Error(`unknown member ${k}`)
       const member = (query.wants ?? query.offers ?? query.want ?? query.announces) as { net?: string } | undefined
       if (member === undefined || !nets.includes(String(member.net))) throw new Error(`unknown net ${String(member?.net)}`)
       const net = String(member.net)

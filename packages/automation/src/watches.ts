@@ -30,7 +30,9 @@ export function openWatches(rt: Rt): void {
       await nap(Math.min(backoff, WAITS.watchBackoffCap.ms) * (0.5 + Math.random()))
       backoff = Math.min(backoff * 2, WAITS.watchBackoffCap.ms)
     }
-    while (!rt.stopped && !signal.aborted) {
+    const stopped = (): boolean => rt.stopped
+    const alive = (): boolean => !rt.stopped && !signal.aborted
+    while (alive()) {
       try {
         const u = `${base}/watch?service=${encodeURIComponent(service)}&query=${encodeURIComponent(JSON.stringify(query))}${cursor !== undefined ? `&cursor=${encodeURIComponent(cursor)}` : ''}&waitMs=25000`
         // the shim holds up to 25s; a shim that accepts and never answers
@@ -43,7 +45,7 @@ export function openWatches(rt: Rt): void {
         const j = (await r.json()) as { changed?: boolean; cursor?: string }
         cursor = j.cursor ?? cursor
         backoff = WAITS.watchBackoffMin.ms
-        if (j.changed === true && !rt.stopped) {
+        if (j.changed === true && !stopped()) {
           rt.hotUntil = Date.now() + WAITS.hotWindow.ms
           rt.countWake('watch')
           // a wake spawns a pass — spawned work never inherits the
@@ -52,7 +54,7 @@ export function openWatches(rt: Rt): void {
           void detached(() => rt.deals().catch((e) => log(`automation: watch: ${(e as Error).message}`)))
         }
       } catch {
-        if (signal.aborted || rt.stopped) return
+        if (!alive()) return
         await fail()
       }
     }

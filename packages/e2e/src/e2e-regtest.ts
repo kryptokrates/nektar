@@ -4,7 +4,7 @@
 // headers (BUMP via merklePathFor/block_legacy).
 import { PrivateKey, Transaction, MerklePath } from '@bsv/sdk'
 import { P2PKH } from '@bsv/sdk'
-import { utf8, dsha256, toHex, hash160 } from '@nektar/core'
+import { utf8, dsha256, toHex, hash160, sparse } from '@nektar/core'
 const dsha256utf8 = (s: string) => dsha256(utf8(s))
 import { NektarMemory } from '@nektar/mcp'
 import { AnchorChain } from '@nektar/anchor'
@@ -51,8 +51,8 @@ const WIF = process.env.NEKTAR_REGTEST_WIF ?? localEnv.NEKTAR_REGTEST_WIF
 if (!WIF) throw new Error('NEKTAR_REGTEST_WIF missing: set it in nektar/.env')
 const cfg: RegtestConfig = {
   rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
-  rpcUser: process.env.NEKTAR_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
-  rpcPass: process.env.NEKTAR_RPC_PASS ?? qsEnv.rpc_pass ?? '',
+  rpcUser: process.env.NEKTAR_RPC_USER ?? sparse(qsEnv.rpc_user) ?? 'teranode',
+  rpcPass: process.env.NEKTAR_RPC_PASS ?? sparse(qsEnv.rpc_pass) ?? '',
   propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
   assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
 }
@@ -440,7 +440,7 @@ console.log('— v2 scenario (regtest) —')
     C.toPublicKey().toString(),
     fld.length,
     fieldRoot(fld),
-    fp.siblings ?? fp,
+    sparse(fp.siblings) ?? fp,
     now,
     verifyAnchor
   )
@@ -451,7 +451,7 @@ console.log('— v2 scenario (regtest) —')
     C.toPublicKey().toString(),
     fld.length,
     fieldRoot(fld),
-    fp.siblings ?? fp,
+    sparse(fp.siblings) ?? fp,
     exp + 61,
     verifyAnchor
   )

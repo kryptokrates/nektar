@@ -28,7 +28,8 @@ function rng(seed: number) {
 void test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes never double-pay or overrun the budget', async (t) => {
   for (let seed = 1; seed <= 20; seed++) {
     const rand = rng(seed)
-    const chain = (await testChain(t))!
+    const chain = await testChain(t)
+    if (chain === undefined) return undefined
     const dir = mkdtempSync(join(tmpdir(), `nektar-fault-${seed}-`))
     const kxs: Knex[] = []
     const feed: Array<{ seq: number; kind: string; payload: unknown }> = []
@@ -127,9 +128,7 @@ void test('20 seeded fault schedules: dropped/duplicated/reordered delivery + cr
       return a
     }
     const cara = await mk('cara', true)
-    if (cara === undefined) return
     const bob = await mk('bob')
-    if (bob === undefined) return
     const { operationId } = await bob.engine.publishWant({ domains: ['libfoo'], question: 'libfoo connect open', maxSats: 500 }, bob.policyHash)
     const cursors = new Map<string, number>()
     for (let round = 0; round < 30; round++) {

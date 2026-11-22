@@ -2,7 +2,7 @@ import { Transaction, PublicKey } from '@bsv/sdk'
 import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/bstack'
 import { verifyOfferSig, parseBuyWrapped } from '@nektar/identity'
 import { DisclosureSaleHost, buildP2PKHScript } from '@nektar/anchor'
-import { sha256, toHex, fromHex, utf8 } from '@nektar/core'
+import { sha256, toHex, fromHex, utf8, sparse } from '@nektar/core'
 import type { AutomationStore, Operation } from './store.js'
 
 export interface TradeEvidence {
@@ -95,7 +95,7 @@ export function verifyTradeEvidence(e: TradeEvidence | RedactedTradeEvidence): {
   const sel = e.offers.find((o) => `${o.offer.pub}:${o.offer.offerId}` === e.selectedOfferKey)
   const q = sel?.offer.offer as any
   const pkh = (pub: string) => Buffer.from(PublicKey.fromString(pub).toHash() as number[]).toString('hex')
-  const redacted = 'redacted' in e && e.redacted === true
+  const redacted = 'redacted' in e && (e as { redacted?: unknown }).redacted === true
   const questionGone = (w as unknown as Record<string, unknown>).questionSha256 !== undefined
   if (redacted && questionGone) skip('want signature')
   else check('want signature', () => verifyWant(w, e.want.sig, { allowExpired: true }) && w.net === e.network)
@@ -134,7 +134,7 @@ export function verifyTradeEvidence(e: TradeEvidence | RedactedTradeEvidence): {
     const disc = Transaction.fromHex(discHex)
     check(
       'disclosure spends the escrow output',
-      () => disc.id('hex') === e.disclosure.txid && disc.inputs[0].sourceTXID === e.escrow.txid && (disc.inputs[0].sourceOutputIndex ?? 0) === e.escrow.vout
+      () => disc.id('hex') === e.disclosure.txid && disc.inputs[0].sourceTXID === e.escrow.txid && (sparse(disc.inputs[0].sourceOutputIndex) ?? 0) === e.escrow.vout
     )
     check(
       'disclosure pays the seller exactly the quoted price',

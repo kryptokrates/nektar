@@ -1,4 +1,4 @@
-import { sha256, utf8, toHex, nektarEnv } from '@nektar/core'
+import { sha256, utf8, toHex, nektarEnv, sparse } from '@nektar/core'
 import { claimsRecord, recordReader } from '@lightwebinc/bcommon'
 import { marketJson, verifyWant, verifyOffer, verifyAnnounce, type SignedWant, type SignedOffer, type SignedAnnounce } from './artifacts.js'
 
@@ -44,24 +44,24 @@ export function encodePayload(m: MarketPayload, opts?: { legacy?: boolean }): Ui
 export function decodePayload(b: Uint8Array): MarketPayload {
   if (claimsRecord(b, MAGIC)) {
     const f = reader.decode(b, MAX_PAYLOAD, LAST_KEY, MAGIC)
-    const kind = KIND_NAME[String(reader.uint(f, 1, 1, 3))]
+    const kind = sparse(KIND_NAME[String(reader.uint(f, 1, 1, 3))])
     if (kind === undefined) throw new Error('market payload: unknown kind')
     let body: MarketPayload['body'] | undefined
     try {
-      body = JSON.parse(reader.text(f, 2)) as MarketPayload['body']
+      body = sparse(JSON.parse(reader.text(f, 2)) as MarketPayload['body'])
     } catch {
       throw new Error('market payload: body is not valid JSON')
     }
     if (body === undefined || typeof body !== 'object') throw new Error('market payload: empty body')
     return { v: 1, kind, body }
   }
-  let m: MarketPayload
+  let m: MarketPayload | null
   try {
-    m = JSON.parse(new TextDecoder().decode(b)) as MarketPayload
+    m = JSON.parse(new TextDecoder().decode(b)) as MarketPayload | null
   } catch {
     throw new Error('bad market payload')
   }
-  if (m?.v !== 1 || (m.kind !== 'want' && m.kind !== 'offer' && m.kind !== 'announce') || m.body === undefined) throw new Error('bad market payload')
+  if (m?.v !== 1 || !(['want', 'offer', 'announce'] as string[]).includes(m.kind) || sparse(m.body) === undefined) throw new Error('bad market payload')
   return m
 }
 

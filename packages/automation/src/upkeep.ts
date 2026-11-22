@@ -5,7 +5,7 @@
 import { P2PKH } from '@bsv/sdk'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
-import { signerAddress, BoundedMap, BoundedSet, nektarEnvNum, deadline } from '@nektar/core'
+import { signerAddress, BoundedMap, BoundedSet, nektarEnvNum, deadline, sparse } from '@nektar/core'
 import { WAITS } from './waits.js'
 import { deadAncestry } from '@nektar/bstack'
 import { openRefusals } from './refusals.js'
@@ -175,7 +175,7 @@ export function openUpkeep(rt: Rt): void {
   const EV_CURSOR = 'log#events'
   let logError = ''
   let fingerError = ''
-  const wantIdOf = (op: { data: MarketOpData }): string | null => op.data.want?.want?.wantId ?? null
+  const wantIdOf = (op: { data: MarketOpData }): string | null => sparse(op.data.want?.want)?.wantId ?? null
   // anchors never block a cycle: they run on the inflight set like pushed work
   const maybeAnchor = (): Promise<void> => {
     if (lanes === undefined || logState === undefined || logStream === undefined) return Promise.resolve()
@@ -323,7 +323,7 @@ export function openUpkeep(rt: Rt): void {
               const outSats = cfg.reserveOutSats ?? (mem.funds.dealFloor || 25_000) * 2
               const mediums = (await mem.funds.outs()).filter((u) => u.satoshis >= outSats)
               if (mediums.length < wantOuts) {
-                const src = (await mem.fundingOuts(outSats * wantOuts + 600, 'upkeep'))[0]
+                const src = sparse((await mem.fundingOuts(outSats * wantOuts + 600, 'upkeep'))[0])
                 if (src !== undefined) {
                   const dtx = await lanes.mod.mintTree({
                     key,
@@ -597,10 +597,11 @@ export function openUpkeep(rt: Rt): void {
           }
         }
       }
-      if (rt.stopped) return
+      const stopped = (): boolean => rt.stopped
+      if (stopped()) return
       upkeepPhase = 'evidence'
       await storeEvidence()
-      if (rt.stopped) return
+      if (stopped()) return
       upkeepPhase = 'log-events'
       await appendLogEvents()
       upkeepPhase = 'prune'

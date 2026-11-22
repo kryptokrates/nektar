@@ -15,6 +15,7 @@
 // — the Restate handlers are thin ctx.run wrappers around the same steps,
 // so tests invoke the exact code the server invokes.
 import type * as restate from '@restatedev/restate-sdk'
+import { sparse } from '@nektar/core'
 import { WAITS } from '../waits.js'
 import type { AutomationStore, MarketOpData, OutboxItem, TxState, WalletTx } from '../store.js'
 import { runTxIntents, type TxEffects } from '../machines/effects.js'
@@ -505,7 +506,7 @@ export const dealOpKey = (o: DealOpRef): string => (o.wantId !== undefined ? `ev
 
 /** wantId out of an op row — `data.want` is the SignedWant on both buyer
  *  and seller ops; non-market ops have none */
-export const opWantId = (o: { data: MarketOpData }): string | undefined => o.data.want?.want?.wantId
+export const opWantId = (o: { data: MarketOpData }): string | undefined => sparse(o.data.want?.want)?.wantId
 
 export const dealfanTickBody =
   (deps: DealfanDeps, service: string = EXEC_SVC.dealfan) =>

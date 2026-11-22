@@ -90,7 +90,7 @@ void test('budget: 20 concurrent purchases cannot exceed the aggregate daily cap
     Array.from({ length: 20 }, (_, i) => store.reserveBudget(ctx(hash, `a${i}`), { purchaseSats: 500, feeSats: 10, lockedSats: 600 }))
   )
   assert.equal(results.filter((r) => r.ok).length, 5)
-  assert.ok(results.filter((r) => !r.ok).every((r) => !r.ok && r.code === 'daily_purchase_cap'))
+  assert.ok(results.filter((r) => !r.ok).every((r) => r.code === 'daily_purchase_cap'))
   const s = await store.budgetStatus(hash)
   assert.equal(s.purchaseTodaySats, 2500)
   assert.equal(s.feeTodaySats, 50)
@@ -188,9 +188,7 @@ void test('operations: idempotent creation, CAS transitions, transactional outbo
       data: { escrowTxid: 'w1' }
     })
   const a = await mk()
-  if (a === undefined) return
   const b = await mk()
-  if (b === undefined) return
   assert.equal(a.created, true)
   assert.equal(b.created, false)
   assert.equal(a.operation.operationId, b.operation.operationId)

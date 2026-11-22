@@ -1,5 +1,5 @@
 import { PrivateKey, ProtoWallet, Transaction, type ChainTracker } from '@bsv/sdk'
-import type { SignerLike } from '@nektar/core'
+import { sparse, type SignerLike } from '@nektar/core'
 import {
   mintCarrier,
   sweep as bSweep,
@@ -76,7 +76,7 @@ export async function checkCarrier(beef: number[], o: { tracker: ChainTracker })
     if (tx.inputs.length !== 1 || tx.outputs.length !== 1) return { ok: false, reason: 'shape' }
     const parent = tx.inputs[0].sourceTransaction
     if (!parent) return { ok: false, reason: 'no-parent' }
-    const out = parent.outputs[tx.inputs[0].sourceOutputIndex ?? -1]
+    const out = parent.outputs[sparse(tx.inputs[0].sourceOutputIndex) ?? -1]
     const key = decodeFunding(out.lockingScript, Array.from(FUNDING_TAG))
     if (key === undefined) return { ok: false, reason: 'not-funding' }
     return {
@@ -106,7 +106,7 @@ export async function checkSweep(beef: number[], o: { tracker: ChainTracker; hel
       // when the subject is proven the beef may carry no ancestors: the outpoint alone is the key
       const op = `${i.sourceTXID ?? p?.id('hex')}:${i.sourceOutputIndex}`
       if (p !== undefined) {
-        const out = p.outputs[i.sourceOutputIndex]
+        const out = sparse(p.outputs[i.sourceOutputIndex])
         if (out === undefined || decodeFunding(out.lockingScript, Array.from(FUNDING_TAG)) === undefined) continue
       }
       if (o.heldOutpoints === undefined || o.heldOutpoints(op)) spends.push(op)
@@ -119,7 +119,7 @@ export async function checkSweep(beef: number[], o: { tracker: ChainTracker; hel
 }
 
 function extractPayload(tx: Transaction): Uint8Array {
-  return Uint8Array.from(decodeStrictPushDrop(tx.outputs[0].lockingScript)?.fields?.[0] ?? [])
+  return Uint8Array.from(sparse(decodeStrictPushDrop(tx.outputs[0].lockingScript)?.fields)?.[0] ?? [])
 }
 
 export function carrierLockingKey(pubHex: string): string {
@@ -133,7 +133,7 @@ export function carrierFundingLockHex(beef: number[]): string | undefined {
   try {
     const tx = Transaction.fromAtomicBEEF(beef)
     const src = tx.inputs[0]?.sourceTransaction
-    return src?.outputs[tx.inputs[0].sourceOutputIndex ?? -1]?.lockingScript.toHex()
+    return sparse(src?.outputs[sparse(tx.inputs[0].sourceOutputIndex) ?? -1])?.lockingScript.toHex()
   } catch {
     return undefined
   }

@@ -103,7 +103,7 @@ async function complete() {
     signal: AbortSignal.timeout(Number(process.env.NEKTAR_CHAT_TIMEOUT_MS ?? 900_000))
   })
   if (!res.ok) throw new Error(`model endpoint ${LLM}: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`)
-  const msg = { role: 'assistant', content: '', tool_calls: [] }
+  const msg = { role: 'assistant', content: '', /** @type {any[]} */ tool_calls: [] }
   let buf = ''
   const dec = new TextDecoder()
   for await (const chunk of res.body) {
@@ -126,13 +126,13 @@ async function complete() {
       }
     }
   }
-  if (!msg.tool_calls?.length) delete msg.tool_calls
+  if (!msg.tool_calls.length) delete msg.tool_calls
   return msg
 }
 for (let round = 0; round < 8; round++) {
   const msg = await complete()
   messages.push(msg)
-  if (!msg.tool_calls?.length) {
+  if (!msg.tool_calls.length) {
     console.log(
       `\n${MODEL}: ${String(msg.content)
         .replace(/<think>[\s\S]*?<\/think>/g, '')

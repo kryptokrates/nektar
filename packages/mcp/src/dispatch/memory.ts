@@ -1,6 +1,7 @@
 // shard record + pack tools — extracted verbatim from the server.ts dispatchTool switch
 import { verifyBase } from './shared.js'
 import type { ToolHandler } from './shared.js'
+import { sparse } from '@nektar/core'
 
 export const handlers: Record<string, ToolHandler> = {
   remember: async (mem, args) => {
@@ -128,8 +129,9 @@ export const handlers: Record<string, ToolHandler> = {
     if (ref === undefined && typeof args?.operationId === 'string') {
       const au = mem.automation
       if (!au) throw new Error('evidence: operationId lookup needs automation (NEKTAR_AUTOMATION=1)')
-      ref = (await au.store.operation(args.operationId))?.data.evidenceRef as typeof ref
-      if (ref === undefined) throw new Error(`evidence: no stored evidence for ${args.operationId}`)
+      const stored = sparse((await au.store.operation(args.operationId))?.data.evidenceRef)
+      if (stored === undefined) throw new Error(`evidence: no stored evidence for ${args.operationId}`)
+      ref = stored
     }
     if (ref === undefined) throw new Error('evidence: give {ref} or {operationId}')
     // the shared store-ref chain: chirp signed → chirp unsigned → keyed

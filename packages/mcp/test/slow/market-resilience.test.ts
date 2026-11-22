@@ -508,7 +508,7 @@ void test('T4: payload scaling — 1KB completes, 32KB/128KB land honest states'
         const bo = await opFor(b, w.wantId)
         const so = await saleFor(s, w.wantId)
         console.log(
-          `    ${kb}KB: ${rounds} rounds / ${Date.now() - t0}ms — buyer=${bo?.state} cause=${JSON.stringify((bo?.data as { cause?: string })?.cause)} seller=${so?.state}`
+          `    ${kb}KB: ${rounds} rounds / ${Date.now() - t0}ms — buyer=${bo?.state} cause=${JSON.stringify((bo?.data as { cause?: string } | undefined)?.cause)} seller=${so?.state}`
         )
         assert.ok(
           rounds > 0,

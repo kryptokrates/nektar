@@ -2,7 +2,7 @@ import type { Knex } from 'knex'
 import { randomUUID } from 'node:crypto'
 import type { SignedWant, SignedOffer, BoxRef } from '@nektar/bstack'
 import type { ObjectRef } from '@nektar/store'
-import { detached, spread, stable01 } from '@nektar/core'
+import { detached, sparse, spread, stable01 } from '@nektar/core'
 import { policyHash, policyError, canonicalJson, type AutomationPolicy, type ActionContext } from './policy.js'
 import { WAITS } from './waits.js'
 import { txStep } from './machines/tx.machine.js'
@@ -195,7 +195,7 @@ const OPDATA_CHECKS: Record<keyof MarketOpData, (v: unknown) => boolean> = {
 function checkOpData(data: unknown): void {
   if (!isObj(data)) throw new Error('op.data: not an object')
   for (const [k, v] of Object.entries(data)) {
-    const chk = OPDATA_CHECKS[k as keyof MarketOpData]
+    const chk = sparse(OPDATA_CHECKS[k as keyof MarketOpData])
     if (chk === undefined) throw new Error(`op.data.${k}: undeclared field — the op.data schema is closed`)
     if (v === null || v === undefined) continue
     if (!chk(v)) throw new Error(`op.data.${k}: malformed value`)

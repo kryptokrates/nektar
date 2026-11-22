@@ -1,5 +1,5 @@
 // answer-grounding + receipt tools — extracted verbatim from the server.ts dispatchTool switch
-import { nektarEnv } from '@nektar/core'
+import { nektarEnv, sparse } from '@nektar/core'
 import { receiptToken } from '../receipt.js'
 import { shareBlock, verifyBase } from './shared.js'
 import type { ToolHandler } from './shared.js'
@@ -10,8 +10,8 @@ export const handlers: Record<string, ToolHandler> = {
     const { Buffer } = await import('node:buffer')
     const fetch: import('@nektar/reasoning').FragmentFetch = async (ref) => {
       const r = await mem.recall(ref.shard, { seq: ref.seq })
-      const it = r.items[0]
-      return { verified: !!it && !it.unverifiable, text: it.text }
+      const it = sparse(r.items[0])
+      return { verified: !!it && !it.unverifiable, text: it?.text }
     }
     // private shards (remember …, private:true): a plain cite leaks the shard
     // name into the public receipt — the record must be cited via a ZK

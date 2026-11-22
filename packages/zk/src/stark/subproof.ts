@@ -18,7 +18,7 @@
 // standard Merkle path is split at depth 6: a per-leaf subpath (≤6 siblings)
 // folds the leaf up to its shard root, and ONE shared multiproof (topPath,
 // deduplicated across shards) folds every shard root up to R_n.
-import { buildTree, hashNode, eq, heightForLeafCount, type MerkleTree } from '@nektar/core'
+import { buildTree, hashNode, eq, heightForLeafCount, sparse, type MerkleTree } from '@nektar/core'
 
 export const SHARD_LEAVES = 64
 export const SHARD_DEPTH = 6 // log2(SHARD_LEAVES): leafIndex >> 6 = shardIndex
@@ -311,7 +311,7 @@ export function verifySubsetProof(p: ZkSubsetProof): SubsetVerdict {
       } else if ((a & 1) === 0 && a + 1 >= width) {
         node = hashNode(h, h) // odd-position self-pair, same fold as the batch tree
       } else {
-        const s = p.topPath[cursor++]
+        const s = sparse(p.topPath[cursor++])
         if (s === undefined) return { ok: false, reason: 'missing top-path sibling' }
         node = (a & 1) === 0 ? hashNode(h, s) : hashNode(s, h)
       }

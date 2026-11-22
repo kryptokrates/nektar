@@ -49,7 +49,6 @@ void test('shard packs: export → import re-verifies every bundle; records prov
   assert.ok(pack.records.every((r) => typeof r.data === 'string' && typeof r.prov?.signature === 'string'))
 
   const b = peerOf(a)
-  if (b === undefined) return
   const imp = await b.importShardPack(pack)
   assert.equal(imp.imported, 2)
   assert.equal(imp.anchored, 2)
@@ -66,7 +65,6 @@ void test('shard packs: export → import re-verifies every bundle; records prov
 
   // a non-empty target refuses — imported + native seqs must never mix
   const c = peerOf(a)
-  if (c === undefined) return
   await c.remember('guide', 'native record')
   await assert.rejects(c.importShardPack(pack), /already has records/)
 
@@ -91,7 +89,6 @@ void test('shard packs: tampered data recomputes a different leaf → reported, 
   const pack = await a.mem.exportShardPack('guide')
 
   const b = peerOf(a)
-  if (b === undefined) return
   const tampered = JSON.parse(JSON.stringify(pack)) as typeof pack
   tampered.records[0].data = 'fact one, altered'
   const imp = await b.importShardPack(tampered)
@@ -102,7 +99,6 @@ void test('shard packs: tampered data recomputes a different leaf → reported, 
 
   // malformed pack → hard error, nothing lands
   const c = peerOf(a)
-  if (c === undefined) return
   await assert.rejects(c.importShardPack({ v: 2 }), /malformed/)
 })
 
@@ -168,7 +164,6 @@ void test('pack endpoint + remote import: /.well-known/nektar lists offerable sh
 
     // remote import: peer pulls the pack over HTTP and re-verifies every bundle
     const b = peerOf(a)
-    if (b === undefined) return
     const imp = await callTool(b, 'importShard', { from: base, shard: 'guide' })
     assert.equal(imp.imported, 2)
     assert.equal(imp.anchored, 2)
@@ -251,20 +246,17 @@ void test('bstore packs: describeShard publishes the pack; .well-known carries s
     assert.ok(entry.packUrl, 'http fallback stays advertised')
     // a peer imports through the store ref — getVerified + pack re-verification
     const b = peerOf(a, { objectStore: client })
-    if (b === undefined) return
     const imp = (await callTool(b, 'importShard', { store: ref })) as { imported: number; anchored: number }
     assert.equal(imp.imported, 2)
     assert.equal(imp.anchored, 2)
     // a tampered object is refused by getVerified (size/digest) before it can
     // land — strip chirp so the keyed path (the digest-checking one) is used
     const c = peerOf(a, { objectStore: client })
-    if (c === undefined) return
     objects.set(ref.key, new TextEncoder().encode('{"kind":"forged"}'))
     const keyed = { bucket: ref.bucket, key: ref.key, sha256: ref.sha256, size: ref.size, endpoint: ref.endpoint }
     await assert.rejects(callTool(c, 'importShard', { store: keyed }) as Promise<unknown>, /objectstore/)
     // and a pack that passes the digest but fails re-verification is refused too
     const d2 = peerOf(a, { objectStore: client })
-    if (d2 === undefined) return
     const pack = await a.mem.exportShardPack('guide')
     ;(pack.records[0] as { data: string }).data = 'swapped plaintext'
     const forged = await client.put(`packs/regtest/forged/${'ab'.repeat(32)}.json`, new TextEncoder().encode(JSON.stringify(pack)))

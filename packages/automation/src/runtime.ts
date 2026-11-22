@@ -237,7 +237,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     localNet,
     me,
     fanoutIo,
-    stopped: false,
+    stopped: false as boolean,
     signal: rtAbort.signal,
     wakeStats: new Map<string, number>(),
     inflight: new Set<Promise<void>>(),
@@ -441,7 +441,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // still in flight, and a crash or swallowed rejection drops it
             // permanently (one-shot send, no re-fire). A throw retries the
             // step — that's exactly what the journal is for.
-            await Promise.all([lanes.journal.clearPaths?.(from), lanes.ledger.unproveFrom?.(from)])
+            await Promise.all([lanes.journal.clearPaths?.(from), lanes.ledger.unproveFrom(from)])
           },
     // a tip advance frees every height-bound op (seize/refund deadlines)
     // at block arrival rather than the next floor tick
@@ -729,8 +729,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   for (const svc of [EXEC_SVC.upkeep, ...(watchdogOn ? [EXEC_SVC.watchdog] : []), ...(rt.watchBases.length > 0 ? [EXEC_SVC.watches] : [])])
     void exec.send({ service: svc, handler: 'tick', key: 'main' }, {}).catch((e) => log(`automation: ${svc} kick: ${(e as Error).message}`))
   for (const k of cfg.rtKicks ?? []) void exec.send(k, {}).catch((e) => log(`automation: ${k.service} kick: ${(e as Error).message}`))
-  let again = false
+  let again = false as boolean
   let running: Promise<void> | undefined
+  const stopped = (): boolean => rt.stopped
   // a phase that never settles parks EVERY later pass behind `running` —
   // bound each leg so the worst case is a logged timeout, not a silent
   // wedge (observed live: an unbounded leg froze the whole suite). The
@@ -754,7 +755,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     const run = (async () => {
       try {
         do {
-          again = false
+          again = false as boolean
           try {
             // phase timing: a pass that outruns the want collect window is a
             // silent deal killer — name the segment that ate it
@@ -808,10 +809,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
           } catch (e) {
             log(`automation: ${(e as Error).message}`)
           }
-        } while (again && !rt.stopped)
+        } while (again && !stopped())
       } finally {
         rt.busy = false
-        if (again && !rt.stopped) void deals()
+        if (again && !stopped()) void deals()
       }
     })()
     running = run

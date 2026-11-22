@@ -57,7 +57,7 @@ test('push verify surface: sealed envelope opens for the recipient only; wrong k
     assert.ok(Array.isArray(beef), 'journal carries the carrier beef')
     const me = recip.toPublicKey().toString()
     const ok = await openEnvelope(beef!, walletOrProto(recip), OFFICE, me, tr)
-    assert.ok(ok !== undefined && ok !== null, 'recipient opens the pushed envelope')
+    assert.ok(ok != null, 'recipient opens the pushed envelope')
     assert.deepEqual(ok.body, body)
     // sealed for someone else → the wrong key/pub pair fails §4.7 checks
     assert.equal(await openEnvelope(beef!, walletOrProto(other), OFFICE, other.toPublicKey().toString(), tr), undefined)

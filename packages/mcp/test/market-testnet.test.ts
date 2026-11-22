@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { PrivateKey } from '@bsv/sdk'
+import { sparse } from '@nektar/core'
 import {
   indexFailover,
   livePort,
@@ -405,7 +406,7 @@ const live = async (t: { skip: (m?: string) => void }): Promise<boolean> => {
     t.skip('testnet tier only — set NEKTAR_TEST_TIER=testnet to run')
     return false
   }
-  if (['alice', 'ben', 'bob'].some((n) => WIF[n] === undefined)) {
+  if (['alice', 'ben', 'bob'].some((n) => sparse(WIF[n]) === undefined)) {
     t.skip(`no agent keys at ${KEYS_FILE}`)
     return false
   }
@@ -420,7 +421,7 @@ const live = async (t: { skip: (m?: string) => void }): Promise<boolean> => {
     for (;;) {
       let l: { owner?: string; beat: number } | undefined
       try {
-        l = JSON.parse(readFileSync(lf, 'utf8')) as { owner?: string; beat: number }
+        l = JSON.parse(readFileSync(lf, 'utf8')) as { owner?: string; beat: number } | undefined
       } catch {
         break /* no lock held */
       }

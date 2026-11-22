@@ -6,7 +6,7 @@
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
 import { PublicKey, Transaction, P2PKH, Hash, Utils, type ChainTracker, type LockingScript } from '@bsv/sdk'
-import { toSigner, unlockP2PKH, signerAddress, egressAllowed, dbg, type SignerLike } from '@nektar/core'
+import { toSigner, unlockP2PKH, signerAddress, egressAllowed, dbg, sparse, type SignerLike } from '@nektar/core'
 import {
   mintCarrier,
   fundingLock,
@@ -81,8 +81,8 @@ const NET_LABEL = /^[a-z][a-z0-9-]{0,15}$/
 
 /** Shape-check a body. `allowHttp` is for regtest/local-rig hosts: records on a
  *  real network name https hosts only. Throws on any violation. */
-export function checkFingerBody(body: FingerBody, opts?: { allowHttp?: boolean }): void {
-  if (body === null || typeof body !== 'object' || body.v !== 1) throw new Error('finger body: v must be 1')
+export function checkFingerBody(body: FingerBody | null, opts?: { allowHttp?: boolean }): void {
+  if (body === null || typeof body !== 'object' || Number(body.v) !== 1) throw new Error('finger body: v must be 1')
   if (!Array.isArray(body.hosts) || body.hosts.length < 1 || body.hosts.length > 8) throw new Error('finger body: 1..8 hosts')
   for (const h of body.hosts) {
     let u: URL
@@ -395,7 +395,7 @@ export async function publishFinger(p: {
   }
 
   if (prev !== undefined && prev.bodyHash === hash && prev.refsHash === refsHash) {
-    const tokenBeef = latestBeef ?? prev.tokenBeef ?? (await p.journal.get(`finger:token:${prev.seq}`))?.beef
+    const tokenBeef = latestBeef ?? sparse(prev.tokenBeef) ?? (await p.journal.get(`finger:token:${prev.seq}`))?.beef
     const hostSig = p.hosts.join(',')
     if (chainServeDue(prev, hostSig, Date.now())) {
       // re-serve the WHOLE chain, not just the head: a host that never joined
@@ -420,8 +420,8 @@ export async function publishFinger(p: {
         if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics, { retryWaits: [] })
       })
       await serve(seqs, async (n) => {
-        const t = n === prev.seq && tokenBeef !== undefined ? { beef: tokenBeef } : await p.journal.get(`finger:token:${n}`)
-        const sv = t === undefined ? undefined : await servable(t.beef)
+        const t = n === prev.seq && tokenBeef !== undefined ? { beef: tokenBeef } : sparse(await p.journal.get(`finger:token:${n}`))
+        const sv = t === undefined ? undefined : sparse(await servable(t.beef))
         if (sv !== undefined) await submitAll(p.hosts, sv, topics, { retryWaits: [] })
       })
       // `at` moves only on completion — a partial pass leaves the original
@@ -433,7 +433,7 @@ export async function publishFinger(p: {
       // host that somehow lost just the tip still heals between serves
       const c = await p.journal.get(`finger:carrier:${prev.seq}`)
       if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics, { retryWaits: [] })
-      const sv = await servable(tokenBeef)
+      const sv = sparse(await servable(tokenBeef))
       if (sv !== undefined) await submitAll(p.hosts, sv, topics, { retryWaits: [] })
     }
     return { changed: false, seq: prev.seq, carrierTxid: (await p.journal.get(`finger:carrier:${prev.seq}`))?.txid, tokenTxid: prev.tokenTxid }
@@ -548,7 +548,7 @@ export async function publishFinger(p: {
       const c = await p.journal.get(`finger:carrier:${n}`)
       if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics, { retryWaits: [] })
       const t = await p.journal.get(`finger:token:${n}`)
-      const sv = t === undefined ? undefined : await servable(t.beef)
+      const sv = t === undefined ? undefined : sparse(await servable(t.beef))
       if (sv !== undefined) await submitAll(p.hosts, sv, t?.topics ?? topics, { retryWaits: [] })
     }
   }
@@ -744,7 +744,7 @@ function beefGaps(tx: Transaction): boolean {
     const t = q.shift()!
     let id: string | undefined
     try {
-      id = t.id('hex')
+      id = sparse(t.id('hex'))
     } catch {
       continue
     }
@@ -770,7 +770,7 @@ function beefGaps(tx: Transaction): boolean {
 const dropStubs = (t: Transaction): void => {
   for (const i of t.inputs) {
     const st = i.sourceTransaction
-    if (st !== undefined && st.inputs.length === 0 && st.outputs.some((o) => o === null)) i.sourceTransaction = undefined
+    if (st !== undefined && st.inputs.length === 0 && st.outputs.some((o: unknown) => o === null)) i.sourceTransaction = undefined
   }
 }
 
@@ -975,7 +975,7 @@ export async function resolveFinger(p: {
 
   const quorum = p.quorum ?? 1
   const winners = [...byCarrier.values()].filter((c) => c.hosts.length >= quorum).sort((x, y) => y.seq - x.seq)
-  const win = winners[0]
+  const win = winners.at(0)
   if (win === undefined) return undefined
   return { body: win.body, seq: win.seq, tokenTxid: win.tokenTxid, refs: win.refs, hostsAnswered: win.hosts, unreachable }
 }

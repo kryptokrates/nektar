@@ -1,5 +1,5 @@
 // Stratified semi-naive Datalog evaluation with provenance.
-import { sha256, utf8, toHex } from '@nektar/core'
+import { sha256, sparse, utf8, toHex } from '@nektar/core'
 import { isVar, type Fact, type Literal, type Rule } from './parse.js'
 
 export class CycleError extends Error {}
@@ -66,7 +66,8 @@ export class Datalog {
     for (let j = 0; j < lit.args.length; j++) {
       const a = lit.args[j]
       if (isVar(a)) {
-        if (nb[a] !== undefined && nb[a] !== f.args[j]) return null
+        const existing = sparse(nb[a])
+        if (existing !== undefined && existing !== f.args[j]) return null
         nb[a] = f.args[j]!
       } else if (a !== f.args[j]) return null
     }

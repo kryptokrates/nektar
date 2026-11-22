@@ -80,7 +80,13 @@ COPY --from=build /app/packages/mcp/demo /app/demo
 COPY --from=restate /usr/local/bin/restate-server /app/restate/restate-server
 COPY --from=stark /usr/local/bin/nektar-stark /usr/local/bin/r0vm /usr/local/bin/
 ENV NEKTAR_STARK_PROVER=/usr/local/bin/nektar-stark
-RUN mkdir -p /data && chown node:node /data
+# the musl restate-server loads system root CAs via rustls-native-certs and
+# PANICS without them (slim ships none; node never noticed — it bundles its
+# own CA store). Caught by the image-leg sidecar smoke.
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /data && chown node:node /data
 # hadolint ignore=DL3066
 USER node
 # NEKTAR_NETWORK=regtest (persistent in /data; needs NEKTAR_FUND_WIF +

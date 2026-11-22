@@ -87,6 +87,10 @@ export function policyError(p: unknown): string | undefined {
     SCORE_DIMENSIONS.reduce((s, k) => s + q.scoring.weights[k], 0) !== 10000
   )
     return 'scoring'
+  // a sub-5s window republishes the want at every boundary for its whole
+  // wantExtendMs life — ~120 outbox rows at 1s — drowning the drain behind
+  // envelopes that can never outlive an offer round-trip anyway
+  if (q.scoring.collectMs < 5_000) return 'scoring: collectMs under 5000 — the collection window must outlive one offer round-trip'
   if (
     !exact(q.seller, ['minPriceSats', 'maxPriceSats', 'maxPreparationsPerDay', 'sellableShards']) ||
     !nat(q.seller.minPriceSats) ||

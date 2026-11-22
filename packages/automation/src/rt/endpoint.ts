@@ -90,6 +90,28 @@ export async function registerDeployment(admin: string, uri: string, log: (line:
   return false
 }
 
+/** paused-invocation count on the plane — a paused head wedges its object's
+ *  FIFO invisibly (retry-policy 'pause' parks a leg after maxAttempts; every
+ *  later send on that key queues behind it forever). The operator surfaces
+ *  read this so a wedge is a loud number, not a silent stall. undefined =
+ *  admin unreachable (the plane itself may be down — equally loud). */
+export const pausedInvocations = async (admin: string, ioMs = 3_000): Promise<number | undefined> => {
+  try {
+    const r = await fetch(`${admin.replace(/\/+$/, '')}/query`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ query: "select count(*) c from sys_invocation where status = 'paused'" }),
+      signal: AbortSignal.timeout(ioMs)
+    })
+    if (!r.ok) return undefined
+    const j = (await r.json()) as { rows?: Array<{ c?: number | string }> }
+    const n = Number(j.rows?.[0]?.c ?? 0)
+    return Number.isFinite(n) ? n : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export async function openEndpoint(services: unknown[], env: EnvSource = process.env, log: (line: string) => void = () => {}): Promise<RtEndpoint> {
   // the SDK loads only on this path — an injected Dispatcher never pays its module cost
   const restate = await import('@restatedev/restate-sdk')
@@ -121,6 +143,12 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
   // cover). A registration that never lands = a dead executor plane — the
   // runtime must NOT start: a live process executing nothing is worse than
   // a refused boot.
+  // a loopback advertise is right for a host-process sidecar and silently
+  // fatal for a containerized one — the URI resolves inside the container.
+  // Registration itself may still succeed (the admin call works; delivery
+  // retries are what die), so name the fix before the wedge forms.
+  if (/^https?:\/\/(127\.|localhost|\[?::1\]?)/.test(uri))
+    log(`automation: endpoint URI ${uri} is loopback — a containerized sidecar cannot reach it; set NEKTAR_RESTATE_ENDPOINT_URI to a container-routable address (Docker Desktop: http://192.168.65.254:${port} — plain IP, not host.docker.internal, whose DNS can answer an unroutable IPv6)`)
   const expected = manifestOf(services) ?? []
   const force = expected.length === 0 || !(await manifestMatches(admin, uri, expected))
   if (!(await registerDeployment(admin, uri, log, force))) {

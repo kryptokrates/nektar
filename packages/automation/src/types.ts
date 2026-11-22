@@ -56,6 +56,14 @@ export interface Automation {
   pushCarrier?: (beef: number[]) => Promise<'envelope' | 'artifact' | false>
   /** bstore/S3 object store in use (undefined = evidence/pack storage off) */
   objectStore?: import('@nektar/store').S3ObjectStore
+  /** the durable-executor plane surface — admin introspection for operator
+   *  dashboards: the sidecar's admin URL and its paused-invocation count
+   *  (a paused head wedges its object's FIFO silently — >0 means resume/
+   *  kill is due). Absent when the plane never registered. */
+  rt?: {
+    adminUrl?: string
+    pausedCount: () => Promise<number | undefined>
+  }
   /** the latest preflight verdict — pass + the doctor-style report behind it */
   health: () => { pass: boolean; report: PreflightReport | undefined }
   /** re-run the full preflight now (the automationDoctor tool) */

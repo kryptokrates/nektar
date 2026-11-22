@@ -11,7 +11,7 @@ import { TransactionWatcher, scanTxObservations } from './ledger.js'
 import { MarketEngine, NONTERMINAL, type MarketTransport } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '@nektar/store'
-import { deadline, nap, signerPubHex, toSigner } from '@nektar/core'
+import { deadline, nap, nektarEnv, signerPubHex, toSigner } from '@nektar/core'
 import { WAITS } from './waits.js'
 import { runPreflight, WATCHDOG_CHECKS, type PreflightReport } from './preflight.js'
 import { killSwitchActive } from './kill.js'
@@ -22,7 +22,7 @@ import { openUpkeep } from './upkeep.js'
 import { openWatches } from './watches.js'
 import type { TxEffects } from './machines/effects.js'
 import { executor, EXEC_SVC } from './rt/exec.js'
-import { openEndpoint, type RtEndpoint } from './rt/endpoint.js'
+import { openEndpoint, pausedInvocations, type RtEndpoint } from './rt/endpoint.js'
 import { isLocalDispatch, wireRuntime } from './rt/dispatch.js'
 import {
   txObject,
@@ -974,6 +974,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     logStream,
     dealJournal: rt.dealJournal,
     objectStore,
+    /** the executor-plane surface for the dashboards — a paused count that
+     *  can only come from OUTSIDE the plane (a wedged FIFO can't report
+     *  itself; the admin API reads fine while objects sit frozen) */
+    rt: {
+      adminUrl: nektarEnv('NEKTAR_RESTATE_ADMIN') ?? 'http://127.0.0.1:9070',
+      pausedCount: () => pausedInvocations(nektarEnv('NEKTAR_RESTATE_ADMIN') ?? 'http://127.0.0.1:9070')
+    },
     /** the latest full preflight report — health surfaces read this, the
      *  watchdog keeps its cheap tier fresh between full runs */
     health: () => ({ pass: lastReport?.pass ?? false, report: lastReport }),

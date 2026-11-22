@@ -18,6 +18,9 @@ overrides:
 allowBuilds:
   sqlite3: true
   esbuild: true
+  cpu-features: false
+  protobufjs: false
+  ssh2: false
 
 strictDepBuilds: true
 

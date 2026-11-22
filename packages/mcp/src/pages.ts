@@ -207,6 +207,10 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
             // the Restate introspection endpoint — the Debug tab embeds it
             // once the executor port lands and reports one
             adminUrl: (au as { rt?: { adminUrl?: string } }).rt?.adminUrl ?? null,
+            // paused heads wedge their object's FIFO invisibly — the number
+            // an operator watches for 'the plane is frozen' (resume/kill via
+            // `restate invocations resume --yes <id>` on the admin port)
+            paused: (await (au as { rt?: { pausedCount?: () => Promise<number | undefined> } }).rt?.pausedCount?.()) ?? null,
             pending: waiting.slice(0, 6).map((w) => ({
               actionId: w.actionId,
               operationId: w.operationId,

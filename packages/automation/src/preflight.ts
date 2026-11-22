@@ -28,6 +28,7 @@ import type { AutomationHost } from './host.js'
 import type { AutomationStore } from './store.js'
 import { killSwitchActive } from './kill.js'
 import { conformanceStatus } from './conformance.js'
+import { pausedInvocations } from './rt/endpoint.js'
 import { fetchObjectByRef } from '@nektar/store'
 import type { S3ObjectStore } from '@nektar/store'
 import { hintSeen } from '@nektar/chain'
@@ -68,7 +69,7 @@ export interface PreflightDeps {
   only?: string[]
 }
 
-const CHEAP = new Set(['chain', 'broadcaster', 'hosts', 'killswitch'])
+const CHEAP = new Set(['chain', 'broadcaster', 'hosts', 'killswitch', 'restate-plane'])
 /** the checks the watchdog re-runs on its slow tick — read-only, no spend */
 export const WATCHDOG_CHECKS = CHEAP
 
@@ -107,6 +108,25 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
       })
     )
   }
+
+  // A0 — executor plane: paused invocations wedge their object's FIFO
+  // silently (retry-policy 'pause' parks a leg after maxAttempts; every
+  // later send on that key queues behind it forever). Read off-plane so a
+  // frozen plane still reports — the admin API answers while objects sit
+  // paused. unreachable admin = the plane is down entirely.
+  push('restate-plane', async () => {
+    const admin = nektarEnv('NEKTAR_RESTATE_ADMIN') ?? 'http://127.0.0.1:9070'
+    const paused = await bounded(pausedInvocations(admin).then((n) => n ?? -1), ceil.chainMs, 'restate admin probe')
+    if (paused < 0) return { check: 'restate-plane', pass: false, detail: `restate admin ${admin} unreachable — the executor plane is down`, fix: 'restart the restate sidecar; invocations resume when the deployment re-registers' }
+    if (paused > 0)
+      return {
+        check: 'restate-plane',
+        pass: false,
+        detail: `${paused} restate invocation(s) paused — each wedges its object's FIFO until resumed`,
+        fix: `restate --base-url ${admin} invocations list  →  restate invocations resume --yes <id>`
+      }
+    return { check: 'restate-plane', pass: true, detail: 'no paused invocations' }
+  })
 
   // A1 — chain: tip answers and height has not regressed vs the cached probe
   push('chain', async () => {

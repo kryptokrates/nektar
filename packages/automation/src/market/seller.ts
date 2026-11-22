@@ -20,7 +20,11 @@ export abstract class SellerOps extends IngressOps {
     const sp = await this.sellerPolicy()
     if (!sp || !sw?.want || !verifyWant(sw.want, sw.sig, { now: this.now() })) return
     const w = sw.want
-    if (w.pub === this.me || w.status !== 'open' || w.net !== this.d.network) return
+    if (w.pub === this.me) {
+      this.d.log?.(`market: want ${w.wantId ?? '?'} refused — self-published; a node does not answer its own wants (a self-deal canary needs a second agent identity)`)
+      return
+    }
+    if (w.status !== 'open' || w.net !== this.d.network) return
     if (w.exp !== undefined && w.exp <= this.now()) return
     const p = sp.policy
     if (p.ai.providers.length && !p.ai.providers.includes(this.d.ai.provider)) return

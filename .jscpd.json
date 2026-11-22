@@ -18,7 +18,7 @@
     "**/.state/**",
     "**/.nektar*/**",
     "vendor/**",
-    "dist-bundle/**",
+    "dist-deploy/**",
     "packages/contracts/Nektar*.json",
     "packages/zk/stark/**",
     "infra/**",

@@ -2,7 +2,7 @@ node_modules
 **/dist/**
 **/node_modules/**
 artifacts
-dist-bundle
+dist-deploy
 vendor
 .mod
 .state

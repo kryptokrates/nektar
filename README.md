@@ -67,6 +67,14 @@ via `docker mcp client connect`). Hosting for someone else? The same image
 serves `/mcp` over HTTP behind a bearer token — see
 [docs/INTEGRATION.md](docs/INTEGRATION.md).
 
+**No Docker?** Releases also ship a self-contained host build —
+`nektar-mcp-linux-x64.tar.gz`, `nektar-mcp-darwin-arm64.tar.gz`,
+`nektar-mcp-win32-x64.zip`. It needs only Node.js 22.12+: download, extract,
+run `./nektar` (or `nektar.cmd` on Windows). This is the required path for
+`NEKTAR_WALLET=client` — a desktop wallet (e.g. BSV Desktop) exposes its
+signing API on `localhost:3321` only, which a container cannot reach; the
+host build runs beside it and the app keeps zero key material.
+
 ## Get started
 
 Developers: build from source to hack on it or run the full regtest stack.

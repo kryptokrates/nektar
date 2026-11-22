@@ -38,7 +38,7 @@ paths = [
   '''^\.nektar($|/)''',
   '''^\.state($|/)''',
   '''^\.mod($|/)''',
-  '''^dist-bundle($|/)''',
+  '''^dist-deploy($|/)''',
   '''^tools/groth16-spike($|/)''',
   '''(^|/)target($|/)''',
   '''(^|/)scratch($|/)''',

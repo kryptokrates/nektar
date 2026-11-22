@@ -107,11 +107,26 @@ jobs:
           esac
           docker run --rm --entrypoint sh ghcr.io/${{ github.repository_owner }}/nektar-${{ matrix.target }}:edge -c "$test"
 
-  bundle:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  # desktop artifacts — a self-contained install tree per OS
+  # (tools/pack-deploy.mjs: pnpm deploy --prod --node-linker hoisted). This is
+  # the no-build path for HOST runs — required for NEKTAR_WALLET=client, since
+  # a desktop wallet's BRC-100 substrate binds 127.0.0.1:3321 and a container
+  # cannot reach it. sqlite3 is native → one artifact per platform. The
+  # extract→boot smoke runs on the packed file in a clean dir: it exists
+  # because the previous single-file bundle silently shipped an unresolvable
+  # createRequire('@bsv/sdk') — MODULE_NOT_FOUND on a clean machine.
+  desktop:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     permissions:
-      contents: write # gh release upload on tags
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, artifact: nektar-mcp-linux-x64.tar.gz }
+          - { os: macos-latest, artifact: nektar-mcp-darwin-arm64.tar.gz }
+          - { os: windows-latest, artifact: nektar-mcp-win32-x64.zip }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -126,30 +141,92 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
         timeout-minutes: 10
-      - run: node tools/bundle-mcp.mjs
-      - name: tar the self-contained bundle
-        run: tar -czf nektar-mcp-bundle.tar.gz -C dist-bundle .
-      # two personas → two assets: the local MCP bundle (agent docked to a
-      # desktop client) and one VPS deploy bundle (agent/ + hub/ — the
-      # README routes by intent)
-      - name: tar the deploy bundle (agent + hub — compose + helm + installer)
-        run: tar -czf nektar-deploy.tar.gz -C deploy --exclude='.env' --exclude='*/.env' agent hub
+      - run: node tools/pack-deploy.mjs
+      - name: pack artifact (unix)
+        if: runner.os != 'Windows'
+        run: tar -czf "${{ matrix.artifact }}" -C dist-deploy .
+      - name: pack artifact (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist-deploy\* -DestinationPath "${{ matrix.artifact }}"
+      # smoke the PACKED artifact, extracted to a clean dir — resolution must
+      # not escape into the workspace's node_modules
+      - name: smoke — extract, boot, health (unix)
+        if: runner.os != 'Windows'
+        run: |
+          tmp="$RUNNER_TEMP/nektar-clean"
+          rm -rf "$tmp" && mkdir -p "$tmp/.data"
+          tar -xzf "${{ matrix.artifact }}" -C "$tmp"
+          cd "$tmp"
+          NEKTAR_NETWORK=testnet NEKTAR_DATA_DIR="$tmp/.data" NEKTAR_HTTP_PORT=18099 node dist/src/bin.js > boot.log 2>&1 &
+          pid=$!
+          ok=0
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:18099/v1/health >/dev/null && { ok=1; break; }
+            sleep 1
+          done
+          kill "$pid" 2>/dev/null
+          cat boot.log
+          [ "$ok" = 1 ] || { echo "artifact boot smoke failed"; exit 1; }
+      - name: smoke — extract, boot, health (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tmp = "$env:RUNNER_TEMP\nektar-clean"
+          Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory "$tmp\.data" -Force | Out-Null
+          Expand-Archive -Path "${{ matrix.artifact }}" -DestinationPath $tmp -Force
+          Set-Location $tmp
+          $env:NEKTAR_NETWORK = 'testnet'
+          $env:NEKTAR_DATA_DIR = "$tmp\.data"
+          $env:NEKTAR_HTTP_PORT = '18099'
+          $p = Start-Process node -ArgumentList 'dist/src/bin.js' -RedirectStandardOutput boot.out -RedirectStandardError boot.err -PassThru
+          $ok = $false
+          foreach ($i in 1..60) {
+            try { if ((Invoke-WebRequest http://127.0.0.1:18099/v1/health -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200) { $ok = $true; break } } catch {}
+            Start-Sleep 1
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Get-Content boot.out, boot.err -ErrorAction SilentlyContinue
+          if (-not $ok) { throw 'artifact boot smoke failed' }
       - name: upload run artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: nektar-bundles
-          path: |
-            nektar-mcp-bundle.tar.gz
-            nektar-deploy.tar.gz
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
           if-no-files-found: error
-      - name: attach to the GitHub release (tags)
-        if: startsWith(github.ref, 'refs/tags/')
+      # two personas → two asset families: the host MCP tree (agent docked to
+      # a desktop wallet/client) and the VPS deploy bundle (compose + helm)
+      - name: tar + upload the deploy bundle (agent + hub — linux leg only)
+        if: runner.os == 'Linux'
+        run: |
+          tar -czf nektar-deploy.tar.gz -C deploy --exclude='.env' --exclude='*/.env' agent hub
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: runner.os == 'Linux'
+        with:
+          name: nektar-deploy-asset
+          path: nektar-deploy.tar.gz
+          if-no-files-found: error
+
+  release-assets:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: desktop
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # gh release upload
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: 'nektar-*'
+          merge-multiple: true
+      - name: attach to the GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
-          gh release upload "$TAG" nektar-mcp-bundle.tar.gz nektar-deploy.tar.gz --clobber
+          gh release upload "$TAG" nektar-mcp-*.tar.gz nektar-mcp-*.zip nektar-deploy.tar.gz --clobber
 
-      # npm-publish removed — the bundle ships as a release asset
-      # (nektar-mcp-bundle.tar.gz) and via the GHCR image instead
+      # npm-publish removed — the server ships as release assets
+      # (nektar-mcp-<platform>.*) and via the GHCR image instead

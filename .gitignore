@@ -38,7 +38,7 @@ circuits/membership/proof/
 circuits/membership/proof_le/
 codex-receipts.log
 tools/curve-vectors/target/
-/dist-bundle/
+/dist-deploy/
 .tools/
 test/fixtures/swarm-keys/
 packages/bstack/bundle/

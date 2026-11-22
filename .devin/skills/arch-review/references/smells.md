@@ -124,10 +124,13 @@ Severity per SKILL.md; every finding needs its measured evidence attached.
 - **Rule**: code that runs in two places (repo + host bundle + docker image)
   where the versions can differ — the image boundary is invisible to the
   repo's own gates.
-- **Evidence**: `bundle-mcp.mjs` externals list; compare `@bsv/sdk` versions
-  in `pnpm-lock` vs the image. Any dep marked `--external` in the bundle is
-  a version-skew liability — that's the SDK 2.7.1/4.0.1 incident class,
-  already burned once.
+- **Evidence**: the old `bundle-mcp.mjs` externals list (deleted — esbuild
+  could not see `createRequire('@bsv/sdk')` and shipped a bundle that
+  MODULE_NOT_FOUNDs on a clean machine). The release artifact is now
+  `tools/pack-deploy.mjs` → `pnpm deploy --node-linker hoisted`, a tree
+  resolved from the lockfile itself — skew is impossible by construction.
+  Compare `@bsv/sdk` versions in `pnpm-lock` vs the image for the docker
+  boundary; that's the SDK 2.7.1/4.0.1 incident class, already burned once.
 
 ### S6. Convergent implementation (semantic duplication)
 

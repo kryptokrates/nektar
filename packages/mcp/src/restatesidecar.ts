@@ -11,7 +11,7 @@
 //      without restate; the market plane logs what it needs.
 // The bundled ports are off nektar's own :8080 HTTP default — 18080/19070.
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process'
-import { existsSync, mkdirSync, openSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { nektarEnv, setNektarEnv } from '@nektar/core'
@@ -60,16 +60,22 @@ function wslHostGateway(spawnSyncImpl: typeof spawnSync): string | undefined {
   return m?.[1]
 }
 
-export async function ensureRestate(opts: {
-  log?: (msg: string) => void
-  env?: NodeJS.ProcessEnv
-  fetchImpl?: typeof fetch
-  spawnImpl?: SpawnImpl
-  spawnSyncImpl?: typeof spawnSync
-  platform?: NodeJS.Platform
-  restateDir?: string
-  onChild?: (c: ChildProcess) => void
-} = {}): Promise<SidecarState> {
+export async function ensureRestate(
+  opts: {
+    log?: (msg: string) => void
+    env?: NodeJS.ProcessEnv
+    fetchImpl?: typeof fetch
+    spawnImpl?: SpawnImpl
+    spawnSyncImpl?: typeof spawnSync
+    platform?: NodeJS.Platform
+    restateDir?: string
+    // registers a teardown — killing the spawned process differs per platform:
+    // native is child.kill(), the WSL bridge must pkill the linux binary inside
+    // the VM (wsl.exe's death does NOT propagate — the process is orphaned onto
+    // the WSL init, seen live)
+    onCleanup?: (fn: () => void) => void
+  } = {}
+): Promise<SidecarState> {
   const env = opts.env ?? process.env
   const log = opts.log ?? (() => {})
   const fetchImpl = opts.fetchImpl ?? fetch
@@ -89,6 +95,14 @@ export async function ensureRestate(opts: {
     if (await adminAlive(admin, fetchImpl)) {
       setNektarEnv('NEKTAR_RESTATE_URL', ingress, env)
       setNektarEnv('NEKTAR_RESTATE_ADMIN', admin, env)
+      // no win32 restate build exists — an adopted server here always lives
+      // inside WSL/docker, so the endpoint must advertise the host's gateway
+      // IP for it to call back (loopback is the VM, not us). An explicit
+      // NEKTAR_RESTATE_ENDPOINT_URI still wins.
+      if (platform === 'win32' && nektarEnv('NEKTAR_RESTATE_ENDPOINT_URI', env) === undefined) {
+        const gw = wslHostGateway(spawnSyncImpl)
+        if (gw) setNektarEnv('NEKTAR_RESTATE_ENDPOINT_URI', `http://${gw}:${nektarEnv('NEKTAR_RESTATE_ENDPOINT_PORT', env) ?? '9080'}`, env)
+      }
       log(`restate: adopting live server at ${admin}`)
       return 'adopted'
     }
@@ -102,11 +116,16 @@ export async function ensureRestate(opts: {
 
   const dataDir = nektarEnv('NEKTAR_DATA_DIR', env) ?? '.nektar'
   const work = join(dataDir, 'restate')
-  mkdirSync(join(work, 'restate-data'), { recursive: true })
-  const toml = join(work, 'nektar-restate.toml')
-  writeFileSync(
-    toml,
-    `# nektar sidecar — generated at boot; ports sit off nektar's own :8080
+
+  let child: ChildProcess
+  let wslBin: string | undefined
+  let logFd: number | undefined
+  try {
+    mkdirSync(join(work, 'restate-data'), { recursive: true })
+    const toml = join(work, 'nektar-restate.toml')
+    writeFileSync(
+      toml,
+      `# nektar sidecar — generated at boot; ports sit off nektar's own :8080
 disable-telemetry = true
 
 [ingress]
@@ -115,23 +134,21 @@ bind-address = "127.0.0.1:${INGRESS_PORT}"
 [admin]
 bind-address = "127.0.0.1:${ADMIN_PORT}"
 `
-  )
-  const logFd = openSync(join(work, 'restate.log'), 'a')
-
-  let child: ChildProcess
-  let wsl = false
-  try {
+    )
+    logFd = openSync(join(work, 'restate.log'), 'a')
     if (platform === 'win32') {
       if (!wslAvailable(spawnSyncImpl)) {
-        log('restate: bundled server is a linux binary and WSL is not installed — market plane disabled (install WSL once: wsl --install; or set NEKTAR_RESTATE_URL)')
+        log(
+          'restate: bundled server is a linux binary and WSL is not installed — market plane disabled (install WSL once: wsl --install; or set NEKTAR_RESTATE_URL)'
+        )
         return 'degraded'
       }
-      wsl = true
+      wslBin = wslpath(bin, spawnSyncImpl)
       child = spawnImpl(
         'wsl.exe',
         [
           '-e',
-          wslpath(bin, spawnSyncImpl),
+          wslBin,
           '--base-dir',
           wslpath(join(work, 'restate-data'), spawnSyncImpl),
           '--listen-mode',
@@ -142,16 +159,42 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
         ],
         { stdio: ['ignore', logFd, logFd] }
       )
+      const binPath = wslBin
+      opts.onCleanup?.(() => {
+        try {
+          child.kill()
+        } catch {
+          /* already gone */
+        }
+        try {
+          spawnSyncImpl('wsl.exe', ['-e', 'pkill', '-f', binPath], { timeout: 5000 })
+        } catch {
+          /* wsl gone or pkill failed — the orphan still answers adoption */
+        }
+      })
     } else {
       child = spawnImpl(bin, ['--base-dir', join(work, 'restate-data'), '--listen-mode', 'tcp', '--config-file', toml, '--no-logo'], {
         stdio: ['ignore', logFd, logFd]
       })
+      opts.onCleanup?.(() => {
+        try {
+          child.kill()
+        } catch {
+          /* already gone */
+        }
+      })
     }
   } catch (e) {
+    if (logFd !== undefined) {
+      try {
+        closeSync(logFd)
+      } catch {
+        /* best effort */
+      }
+    }
     log(`restate: spawn failed — ${(e as Error).message}; market plane disabled`)
     return 'degraded'
   }
-  opts.onChild?.(child)
 
   // restate takes a few seconds to provision a fresh cluster
   const deadline = Date.now() + 30_000
@@ -159,13 +202,13 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
     if (await adminAlive(adminUrl, fetchImpl, 2000)) {
       setNektarEnv('NEKTAR_RESTATE_URL', ingressUrl, env)
       setNektarEnv('NEKTAR_RESTATE_ADMIN', adminUrl, env)
-      if (wsl) {
+      if (wslBin !== undefined && nektarEnv('NEKTAR_RESTATE_ENDPOINT_URI', env) === undefined) {
         // the endpoint must advertise the windows host as WSL sees it —
         // 127.0.0.1 inside WSL is the VM, not us
         const gw = wslHostGateway(spawnSyncImpl)
         if (gw) setNektarEnv('NEKTAR_RESTATE_ENDPOINT_URI', `http://${gw}:${nektarEnv('NEKTAR_RESTATE_ENDPOINT_PORT', env) ?? '9080'}`, env)
       }
-      log(`restate: sidecar up (ingress :${INGRESS_PORT}, admin :${ADMIN_PORT}${wsl ? ', via WSL' : ''})`)
+      log(`restate: sidecar up (ingress :${INGRESS_PORT}, admin :${ADMIN_PORT}${wslBin !== undefined ? ', via WSL' : ''})`)
       return 'spawned'
     }
     await new Promise((r) => setTimeout(r, 500))
@@ -174,6 +217,13 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
     child.kill()
   } catch {
     /* already gone */
+  }
+  if (wslBin !== undefined) {
+    try {
+      spawnSyncImpl('wsl.exe', ['-e', 'pkill', '-f', wslBin], { timeout: 5000 })
+    } catch {
+      /* best effort */
+    }
   }
   log(`restate: sidecar did not come up within 30s — market plane disabled (see ${join(work, 'restate.log')})`)
   return 'degraded'

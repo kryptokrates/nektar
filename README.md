@@ -70,7 +70,10 @@ serves `/mcp` over HTTP behind a bearer token — see
 **No Docker?** Releases also ship a self-contained host build —
 `nektar-mcp-linux-x64.tar.gz`, `nektar-mcp-darwin-arm64.tar.gz`,
 `nektar-mcp-win32-x64.zip`. It needs only Node.js 22.12+: download, extract,
-run `./nektar` (or `nektar.cmd` on Windows). This is the required path for
+run `./nektar` (or `nektar.cmd` on Windows). The restate-server that powers
+deals rides inside and auto-starts at boot (on Windows through WSL, which
+ships with Windows 11 — nothing else to install; an already-running restate
+or `NEKTAR_RESTATE_URL` is used instead). This is the required path for
 `NEKTAR_WALLET=client` — a desktop wallet (e.g. BSV Desktop) exposes its
 signing API on `localhost:3321` only, which a container cannot reach; the
 host build runs beside it and the app keeps zero key material.

@@ -112,7 +112,7 @@ for (const [k, v] of Object.entries({ ...defs, ...dot }))
 // admin is adopted, else the bundled restate-server is spawned (release
 // artifacts only; dev boots degrade exactly as before)
 const { ensureRestate } = await import('./restatesidecar.js')
-await ensureRestate({ log: nlog, onChild: (c) => process.on('exit', () => c.kill()) })
+await ensureRestate({ log: nlog, onCleanup: (fn) => process.on('exit', fn) })
 const { openRuntime, configFromEnv } = await import('./runtime.js')
 const rt = await openRuntime(configFromEnv())
 nlog(`network=${rt.network}`)

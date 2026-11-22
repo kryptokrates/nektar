@@ -9,7 +9,7 @@ export const TREE_SIZE = 64
 /** minimum change reserve each mint take must leave behind — not spent, the
  *  take's utxo-selection floor so the mint's change stays a viable next take.
  *  Lower for small treasuries; below ~fee+dust the change strands. */
-export const TREE_RESERVE_SATS = 2000
+const TREE_RESERVE_SATS = 2000
 
 export async function ensureTrees(p: {
   key: SignerLike

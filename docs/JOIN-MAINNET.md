@@ -82,6 +82,7 @@ NEKTAR_DIRECT_ACCEPT_MAX_SATS=<low>
 # reserve + want knobs shipped for the T2/T4 fixes
 NEKTAR_RESERVE_OUTS=2            # medium outputs held so mints never eat the only deal coin
 NEKTAR_RESERVE_OUT_SATS=<2x floor>
+NEKTAR_TREE_RESERVE_SATS=2000    # change each mint take must leave — lower it for a small treasury, below ~100 the change strands
 NEKTAR_WANT_EXTEND_MS=120000     # want lives past one collect window; buyer republishes instead of expiring
 ```
 

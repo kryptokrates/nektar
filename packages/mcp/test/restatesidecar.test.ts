@@ -185,6 +185,29 @@ void test('sidecar: win32 spawns through wsl.exe, endpoint URI advertises the WS
   assert.ok(cmds.some((a) => a[0] === 'wsl.exe' && a.includes('pkill') && a.includes('-f')))
 })
 
+void test('sidecar: WSL present but no distro → degraded with the install hint, nothing spawned', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-rs-'))
+  writeFileSync(join(dir, 'restate-server'), 'x')
+  const env: NodeJS.ProcessEnv = { NEKTAR_DATA_DIR: mkdtempSync(join(tmpdir(), 'nektar-dd-')) }
+  const logs: string[] = []
+  // `wsl --status` passes (feature on) but `wsl -e true` fails — the
+  // distro-less shape the windows-latest CI runner actually ships
+  const st = await ensureRestate({
+    env,
+    log: (m) => logs.push(m),
+    platform: 'win32',
+    fetchImpl: deadFetch,
+    spawnSyncImpl: ((cmd: string, args?: readonly string[]) => {
+      if (cmd === 'wsl.exe' && args?.[0] === '--status') return { status: 0 }
+      return { status: 1 }
+    }) as unknown as SpawnSyncImpl,
+    spawnImpl: () => assert.fail('must not spawn'),
+    restateDir: dir
+  })
+  assert.equal(st, 'degraded')
+  assert.ok(logs.some((m) => m.includes('wsl --install -d Ubuntu')))
+})
+
 void test('sidecar: explicit NEKTAR_RESTATE_ENDPOINT_URI is never overwritten', async () => {
   const env: NodeJS.ProcessEnv = { NEKTAR_RESTATE_ENDPOINT_URI: 'http://mine:9999' }
   const st = await ensureRestate({

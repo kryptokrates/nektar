@@ -176,6 +176,17 @@ jobs:
           cat boot.log
           [ "$ok" = 1 ] || { echo "artifact boot smoke failed"; exit 1; }
           [ "$rs" = 1 ] || { echo "restate sidecar did not come up"; exit 1; }
+      # the windows artifact runs its bundled linux restate-server through
+      # WSL — the runner ships WSL2 with NO distro (`wsl -e` fails), so
+      # install Ubuntu headless first. --no-launch + no reboot needed on
+      # windows-latest where the feature is already enabled.
+      - name: wsl distro for the sidecar (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          wsl --install -d Ubuntu --no-launch
+          wsl -e true
+          if ($LASTEXITCODE -ne 0) { throw "wsl distro install did not yield a usable WSL" }
       - name: smoke — extract, boot, health (windows)
         if: runner.os == 'Windows'
         shell: pwsh

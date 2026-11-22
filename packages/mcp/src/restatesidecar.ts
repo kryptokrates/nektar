@@ -36,12 +36,16 @@ async function adminAlive(admin: string, fetchImpl: typeof fetch, timeoutMs = 15
   }
 }
 
-/** wsl.exe present? spawnSync --status: exit 0 with a distro listed */
-function wslAvailable(spawnSyncImpl: typeof spawnSync): boolean {
+/** wsl readiness: 'none' (no wsl.exe / feature off), 'nodistro' (WSL present
+ *  but no installed distribution — `wsl --status` lies about usability, seen
+ *  on the windows-latest CI runner), 'ok' (`wsl -e true` actually ran). */
+function wslStatus(spawnSyncImpl: typeof spawnSync): 'none' | 'nodistro' | 'ok' {
   try {
-    return spawnSyncImpl('wsl.exe', ['--status'], { stdio: 'pipe', timeout: 5000 }).status === 0
+    if (spawnSyncImpl('wsl.exe', ['--status'], { stdio: 'pipe', timeout: 5000 }).status !== 0) return 'none'
+    if (spawnSyncImpl('wsl.exe', ['-e', 'true'], { stdio: 'pipe', timeout: 15_000 }).status !== 0) return 'nodistro'
+    return 'ok'
   } catch {
-    return false
+    return 'none'
   }
 }
 
@@ -137,9 +141,12 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
     )
     logFd = openSync(join(work, 'restate.log'), 'a')
     if (platform === 'win32') {
-      if (!wslAvailable(spawnSyncImpl)) {
+      const ws = wslStatus(spawnSyncImpl)
+      if (ws !== 'ok') {
         log(
-          'restate: bundled server is a linux binary and WSL is not installed — market plane disabled (install WSL once: wsl --install; or set NEKTAR_RESTATE_URL)'
+          ws === 'nodistro'
+            ? 'restate: bundled server is a linux binary and WSL has no installed distro — market plane disabled (run once: wsl --install -d Ubuntu; or set NEKTAR_RESTATE_URL)'
+            : 'restate: bundled server is a linux binary and WSL is not installed — market plane disabled (install WSL once: wsl --install; or set NEKTAR_RESTATE_URL)'
         )
         return 'degraded'
       }

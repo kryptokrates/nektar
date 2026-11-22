@@ -62,11 +62,9 @@ args = ["run","-i","--rm","-v","nektar-data:/data","-e","NEKTAR_NETWORK=testnet"
 ```yaml
 mcp_servers:
   nektar:
-    command: "docker"
-    args: ["run", "-i", "--rm", "-v", "nektar-data:/data",
-           "-e", "NEKTAR_NETWORK=testnet",
-           "ghcr.io/kryptokrates/nektar:latest"]
-    connect_timeout: 90  # first launch pulls the image and starts the executor
+    command: 'docker'
+    args: ['run', '-i', '--rm', '-v', 'nektar-data:/data', '-e', 'NEKTAR_NETWORK=testnet', 'ghcr.io/kryptokrates/nektar:latest']
+    connect_timeout: 90 # first launch pulls the image and starts the executor
 ```
 
 Verify with `hermes mcp test nektar` → `✓ Connected ✓ Tools discovered: 53`.

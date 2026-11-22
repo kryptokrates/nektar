@@ -41,7 +41,7 @@ FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23f
 # sqlite3 falls back to node-gyp when prebuild-install can't fetch a binary;
 # slim has no toolchain and sqlite3's bundled node-gyp 8.x can't parse Node 24.
 # hadolint ignore=DL3008
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ curl xz-utils \
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ curl xz-utils ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g node-gyp@11.5.0
 ENV npm_config_node_gyp=/usr/local/lib/node_modules/node-gyp/bin/node-gyp.js

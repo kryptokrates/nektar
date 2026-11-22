@@ -4,7 +4,7 @@
 //   Streamable HTTP+REST:  NEKTAR_HTTP_PORT=8080 node dist/src/bin.js
 // Backend via NEKTAR_NETWORK=regtest (default, local Teranode stack) | testnet | main
 // (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
-import { nektarEnv, nektarEnvFlag, parseDotEnv, setNektarEnv, mkLog, sparse } from '@nektar/core'
+import { nektarEnv, nektarEnvFlag, nektarEnvNum, parseDotEnv, setNektarEnv, mkLog, sparse } from '@nektar/core'
 import { marketHosts } from './hosts.js'
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -188,6 +188,7 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     localHosts: nektarEnv('NEKTAR_MARKET_LOCAL_HOSTS') === '1',
     boxOffice: nektarEnv('NEKTAR_BBOX_OFFICE') ?? undefined,
     logStream: nektarEnv('NEKTAR_LOG_STREAM') ?? undefined,
+    treeSize: nektarEnvNum('NEKTAR_TREE_SIZE'),
     strict,
     unattended,
     broadcasterProbe,

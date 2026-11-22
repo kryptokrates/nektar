@@ -150,7 +150,7 @@ const mcFor = (): MainnetConfig => ({
   broadcasterUrl: ARC,
   // broadcast fan-out, same as runtime defaults — a strained endpoint can't
   // stall submits; TAAL + eu-1 accept the same bytes concurrently, first wins
-  broadcasterUrls: ['https://arc-test.taal.com', 'https://arcade-v2-testnet-eu-1.bsvblockchain.tech'],
+  broadcasterUrls: ['https://arc-test.taal.com', 'https://arcade-v2-testnet-eu-1.bsvblockchain.tech', 'https://testnet.arcade.gorillapool.io'],
   indexerUrl: INDEX,
   indexerUrls: TN_INDEXES.slice(1)
 })

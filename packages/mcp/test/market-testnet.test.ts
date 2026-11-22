@@ -148,6 +148,9 @@ const warmup = async (agents: A[], logs: string[], ms = Number(process.env.TN_WA
 
 const mcFor = (): MainnetConfig => ({
   broadcasterUrl: ARC,
+  // broadcast fan-out, same as runtime defaults — a strained endpoint can't
+  // stall submits; TAAL + eu-1 accept the same bytes concurrently, first wins
+  broadcasterUrls: ['https://arc-test.taal.com', 'https://arcade-v2-testnet-eu-1.bsvblockchain.tech'],
   indexerUrl: INDEX,
   indexerUrls: TN_INDEXES.slice(1)
 })

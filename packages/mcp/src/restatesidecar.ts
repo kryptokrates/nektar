@@ -18,7 +18,9 @@ import { nektarEnv, setNektarEnv } from '@nektar/core'
 
 const INGRESS_PORT = 18080
 const ADMIN_PORT = 19070
-const RESTATE_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../../restate')
+// dist/src/bin.js → ../../ = artifact root in the deploy tree; in the repo
+// checkout it lands on packages/mcp/restate which never exists → degrade path
+const RESTATE_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../restate')
 export type SidecarState = 'configured' | 'adopted' | 'spawned' | 'degraded'
 
 type SpawnImpl = (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess

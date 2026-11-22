@@ -50,8 +50,25 @@ services:
       NEKTAR_MAINNET_CONFIRM: ${NEKTAR_MAINNET_CONFIRM:-}
       NEKTAR_PAYMENTS: ${NEKTAR_PAYMENTS:-}
       NEKTAR_PAID_DISCLOSURE: ${NEKTAR_PAID_DISCLOSURE:-}
+      # the durable executor is required infrastructure — without a sidecar
+      # the node refuses to boot. Service-name URI: the loopback class of
+      # container/DNS traps cannot exist on a shared compose network.
+      NEKTAR_RESTATE_URL: http://restate:8080
+      NEKTAR_RESTATE_ADMIN: http://restate:9070
+      NEKTAR_RESTATE_ENDPOINT_URI: http://agent:9080
     volumes:
       # durable identity + wallet + journals — this volume IS the agent
       - agent-data:/data
+    depends_on:
+      restate:
+        condition: service_started
+  # the agent's private executor plane — co-located, never published.
+  # Its journals are the second durable store beside the data volume.
+  restate:
+    image: docker.restate.dev/restatedev/restate:latest
+    restart: unless-stopped
+    volumes:
+      - restate-data:/restate-data
 volumes:
   agent-data:
+  restate-data:

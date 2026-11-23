@@ -28,7 +28,7 @@ const rand = (): bigint => {
 }
 const privOf = (s: bigint) => PrivateKey.fromHex(s.toString(16).padStart(64, '0'))
 const pubOf = (s: bigint) => {
-  const p = privOf(s).toPublicKey() as any
+  const p = privOf(s).toPublicKey()
   return new Point(p.x, p.y)
 }
 
@@ -88,14 +88,14 @@ export function partialSign(share: Share, nonceK: bigint, e: bigint, signingSet:
   return mod(nonceK + mul(e, mul(lam, share.y)))
 }
 export function verifySchnorr(pubHex: string, msg: Uint8Array, sig: SchnorrSig): boolean {
-  const Pp = PublicKey.fromString(pubHex) as any
-  const Rp = PublicKey.fromString(sig.R) as any
+  const Pp = PublicKey.fromString(pubHex)
+  const Rp = PublicKey.fromString(sig.R)
   const P = new Point(Pp.x, Pp.y)
   const R = new Point(Rp.x, Rp.y)
   const e = challengeOf(sig.R, pubHex, msg)
   const lhs = G().mul(new BigNumber(sig.s.toString()))
   const rhs = R.add(P.mul(new BigNumber(e.toString())))
-  return (lhs as any).eq(rhs)
+  return lhs.eq(rhs)
 }
 /** aggregate partial sigs over the signing set: s = Σ s_j, R = Σ R_j. */
 export function aggregateSchnorr(partials: bigint[], reveals: bigint[]): SchnorrSig {
@@ -103,10 +103,10 @@ export function aggregateSchnorr(partials: bigint[], reveals: bigint[]): Schnorr
     R: Point | undefined
   for (const k of reveals) {
     const p = pubOf(k)
-    R = R === undefined ? p : (R as any).add(p)
+    R = R === undefined ? p : R.add(p)
   }
   for (const sj of partials) s = add(s, sj)
-  return { R: Buffer.from((R as any).encode(true)).toString('hex'), s }
+  return { R: Buffer.from(R!.encode(true)).toString('hex'), s }
 }
 
 // --- custodian ---------------------------------------------------------------

@@ -17,6 +17,7 @@
 // Run: node packages/bstack/tools/e2e-testnet.mjs
 import { PrivateKey, Transaction } from '@bsv/sdk'
 import { BsvBroadcaster, IndexTracker, discoverUtxos, merklePathMainnet } from '@nektar/chain'
+import { nap } from '../../core/dist/src/index.js'
 import {
   mintTree,
   MemoryTreeLedger,
@@ -45,7 +46,7 @@ const check = (ok, name) => {
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`)
   if (!ok) failures++
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const sleep = nap
 
 // ── config ──────────────────────────────────────────────────────────────────
 const cfg = {

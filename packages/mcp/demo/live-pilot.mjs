@@ -8,13 +8,14 @@ import path from 'node:path'
 import { PrivateKey } from '@bsv/sdk'
 import { configFromEnv, openRuntime } from '../dist/src/runtime.js'
 import { openHostPlane } from '@nektar/automation'
+import { nap } from '../../core/dist/src/index.js'
 
 let failures = 0
 const check = (ok, name) => {
   console.log(`${ok ? '✔' : '✖'} ${name}`)
   if (!ok) failures++
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const sleep = nap
 
 const env = {
   ...process.env,

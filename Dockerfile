@@ -100,7 +100,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 # hadolint ignore=DL3066
 USER node
 # NEKTAR_NETWORK=regtest (persistent in /data; needs NEKTAR_FUND_WIF +
-# NEKTAR_RPC_PASS, Teranode reachable via host.docker.internal) | ttn | main
+# NEKTAR_RPC_PASS, Teranode reachable via host.docker.internal) | testnet | main
 # NEKTAR_SEED_DOMAINS=* — the boot seed imports every announced pack so a
 # fresh instance answers non-empty; run with -e NEKTAR_SEED_DOMAINS= to opt
 # out (a silo that announces nothing and imports nothing).

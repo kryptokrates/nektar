@@ -163,6 +163,29 @@ export function verifyWant(want: WantAd, sigHex: string, opts?: { allowExpired?:
 // ── offers — the enumerable shelf: a signed per-record sale listing ─────
 // The leaf/hdp/batchR commitment lets a buyer verify inclusion BEFORE
 // funding (the same checks sale#escrow runs).
+
+/** the public DisclosureSale quote on the wire — `publicQuoteError` validates
+ *  exactly this shape. Never `wrapped`: the secret stays off the shelf.
+ *  Numeric fields are `number | string` on the wire (numLike) but the type
+ *  also admits `bigint` — the same quote reaches readers pre-serialization
+ *  (twin of identity's SaleQuoteWire; kept here so bstack gains no identity
+ *  edge). Every reader passes them through Number/BigInt anyway. */
+export interface PublicQuote {
+  cfg: {
+    sellerPkh: string
+    price: number | string | bigint
+    hWrapped: string
+    refundAfter: number | string | bigint
+    maxFee: number | string | bigint
+  }
+  sellerPub: string
+  expiresAt?: number | string | bigint
+  offerSig: string
+  artifact?: { artifactId: string; scriptHash: string }
+  direct?: boolean
+  mode?: 'key' | 'fragment'
+}
+
 export interface OfferAd {
   pub: string // seller identity key
   offerId: string
@@ -181,7 +204,7 @@ export interface OfferAd {
   priceSats: number
   domains: string[] // from the shard's manifest — feed filtering
   replyTo?: string // pub of the want this offer answers — demand-meets-supply matching
-  offer?: Record<string, unknown> // the public DisclosureSale quote (cfg/sellerPub/offerSig/expiresAt) — never `wrapped`
+  offer?: PublicQuote // the public DisclosureSale quote (cfg/sellerPub/offerSig/expiresAt) — never `wrapped`
   ts: number
   exp?: number
   /** signed network binding — 'testnet'|'main'|etc; sig covers it (can't replay cross-net) */

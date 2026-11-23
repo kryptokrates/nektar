@@ -359,9 +359,9 @@ export abstract class SellerOps extends IngressOps {
         return await decline('payment_pending_lapsed', 'payment unconfirmed too close to the refund deadline')
       const next = await this.d.store.transition(op.operationId, op.revision, 'completing', {
         cause: 'payment_proven',
-        evidence: { blockHeight: tx!.merklePath!.blockHeight }
+        evidence: { blockHeight: tx.merklePath!.blockHeight }
       })
-      if (op.data.direct === true) await this.d.ownOutput?.(tx!, utxo.vout)
+      if (op.data.direct === true) await this.d.ownOutput?.(tx, utxo.vout)
       return await this.complete(next)
     }
     // a definitive dead verdict is the declined-accept shape again — the

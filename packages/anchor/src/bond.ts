@@ -6,6 +6,7 @@
 // carries the 1-sat change output to the operator.
 import { Transaction, LockingScript, UnlockingScript, Hash } from '@bsv/sdk'
 import { RunarContract, computeOpPushTx, serializeState, extractStateFromScript, buildP2PKHScript } from 'runar-sdk'
+import { internals } from './internals.js'
 import { unlockP2PKH, signerPubHex, toSigner, type SignerLike } from '@nektar/core'
 import { NEKTAR_CHECKPOINTBOND_ARTIFACT } from '@nektar/contracts'
 import type { Broadcaster } from '@nektar/chain'
@@ -57,19 +58,19 @@ export class CheckpointBond {
   /** bond locking script = code part + OP_RETURN + serialized state.
    *  Genesis: deadline = releaseHeight (first commit must land before it). */
   lockingScript(n = 0n, lastRoot = '', deadline?: bigint, seized = 0n): string {
-    return (this.contract as any).getCodePartHex() + '6a' + this.stateHex(n, lastRoot, deadline ?? this.cfg.bondReleaseHeight, seized)
+    return internals(this.contract).getCodePartHex() + '6a' + this.stateHex(n, lastRoot, deadline ?? this.cfg.bondReleaseHeight, seized)
   }
 
   /** read the full on-chain state back out of a bond script */
   stateOf(script: string): BondState {
-    const d = extractStateFromScript(NEKTAR_CHECKPOINTBOND_ARTIFACT, script) as any
+    const d = extractStateFromScript(NEKTAR_CHECKPOINTBOND_ARTIFACT, script)
     if (!d) throw new Error('bond: not a stateful bond script')
     const num = (v: unknown) => (typeof v === 'bigint' ? v : BigInt(v as string))
     return {
       n: num(d.n),
       deadline: num(d.deadline),
       seized: num(d.seized),
-      lastRoot: typeof d.lastRoot === 'string' ? d.lastRoot : Buffer.from(d.lastRoot).toString('hex')
+      lastRoot: typeof d.lastRoot === 'string' ? d.lastRoot : Buffer.from(d.lastRoot as Uint8Array).toString('hex')
     }
   }
 
@@ -123,7 +124,7 @@ export class CheckpointBond {
     })
     for (const o of outputs) tx.addOutput({ satoshis: o.satoshis, lockingScript: LockingScript.fromHex(o.script) })
     tx.lockTime = lockTime // sequence < final so consensus enforces nLockTime
-    const c = this.contract as any
+    const c = internals(this.contract)
     const { sigHex: opSig, preimageHex } = c.computeOpPushTxWithCodeSep(tx, 0, utxo.script, utxo.satoshis, methodIndex)
     const resolved: unknown[] = []
     for (const a of args) {
@@ -155,7 +156,7 @@ export class CheckpointBond {
     const cur = this.stateOf(utxo.script)
     const bondSats = BigInt(utxo.satoshis) - fee - 1n // residual = fee + 1-sat change ≤ maxFee+1
     const next: BondState = { n: cur.n + 1n, lastRoot: newRoot, deadline: BigInt(lockTime) + this.cfg.epochLen, seized: cur.seized }
-    const contScript = (this.contract as any).getCodePartHex() + '6a' + this.stateHex(next.n, next.lastRoot, next.deadline, next.seized)
+    const contScript = internals(this.contract).getCodePartHex() + '6a' + this.stateHex(next.n, next.lastRoot, next.deadline, next.seized)
     const { tx } = await this.spend(
       utxo,
       0,
@@ -186,7 +187,7 @@ export class CheckpointBond {
   ): Promise<{ tx: Transaction }> {
     const cur = this.stateOf(utxo.script)
     const payoutSats = BigInt(utxo.satoshis) - fee - 1n - 1n // −fee −husk −change
-    const huskScript = (this.contract as any).getCodePartHex() + '6a' + this.stateHex(cur.n, cur.lastRoot, cur.deadline, 1n)
+    const huskScript = internals(this.contract).getCodePartHex() + '6a' + this.stateHex(cur.n, cur.lastRoot, cur.deadline, 1n)
     const { tx } = await this.spend(
       utxo,
       1,

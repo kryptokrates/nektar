@@ -4,6 +4,7 @@
 // OP_PUSH_TX preimage — no hand-assembled script bytes here.
 import { Transaction, LockingScript, UnlockingScript, Hash } from '@bsv/sdk'
 import { RunarContract, computeOpPushTx, serializeState, extractStateFromScript, buildP2PKHScript } from 'runar-sdk'
+import { internals } from './internals.js'
 import type { Broadcaster, Funder, FundingOut } from '@nektar/chain'
 import { toSigner, signerPubHex, type SignerLike } from '@nektar/core'
 import { NEKTAR_FEEVAULT_ARTIFACT } from '@nektar/contracts'
@@ -39,7 +40,7 @@ export class FeeVault {
 
   /** vault locking script = code part + OP_RETURN + serialized state */
   lockingScript(spentInWindow = 0n, windowStart = 0n): string {
-    return (this.contract as any).getCodePartHex() + '6a' + this.stateHex(spentInWindow, windowStart)
+    return internals(this.contract).getCodePartHex() + '6a' + this.stateHex(spentInWindow, windowStart)
   }
 
   private stateHex(spentInWindow: bigint, windowStart: bigint): string {
@@ -58,9 +59,9 @@ export class FeeVault {
 
   /** read {spentInWindow, windowStart} back out of a vault script */
   stateOf(script: string): { spentInWindow: bigint; windowStart: bigint } {
-    const d = extractStateFromScript(NEKTAR_FEEVAULT_ARTIFACT, script) as any
+    const d = extractStateFromScript(NEKTAR_FEEVAULT_ARTIFACT, script)
     if (!d) throw new Error('vault: not a stateful vault script')
-    return { spentInWindow: BigInt(d.spentInWindow), windowStart: BigInt(d.windowStart) }
+    return { spentInWindow: BigInt(d.spentInWindow as bigint), windowStart: BigInt(d.windowStart as bigint) }
   }
 
   /** build a vault spend tx: payment → destPkh, continuation, change → ownerPkh.
@@ -71,7 +72,7 @@ export class FeeVault {
     const [newSpent, newStart] = lt >= cur.windowStart + this.cfg.windowBlocks ? [payAmount, lt] : [cur.spentInWindow + payAmount, cur.windowStart]
 
     // continuation script = code part + serialized new state
-    const contScript = (this.contract as any).getCodePartHex() + '6a' + this.stateHex(newSpent, newStart)
+    const contScript = internals(this.contract).getCodePartHex() + '6a' + this.stateHex(newSpent, newStart)
 
     const ownerPkhScript = buildP2PKHScript(this.cfg.ownerPkh) // pkh-based script
     const destScript = buildP2PKHScript(this.cfg.destPkh)
@@ -90,7 +91,7 @@ export class FeeVault {
     tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(ownerPkhScript) })
     tx.lockTime = lockTime
 
-    const c = this.contract as any
+    const c = internals(this.contract)
     const { sigHex: opSig, preimageHex } = c.computeOpPushTxWithCodeSep
       ? c.computeOpPushTxWithCodeSep(tx, 0, utxo.script, utxo.satoshis, 0)
       : computeOpPushTx(tx, 0, utxo.script, utxo.satoshis, NEKTAR_FEEVAULT_ARTIFACT.codeSeparatorIndices?.[0] ?? 0)

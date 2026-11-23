@@ -14,6 +14,7 @@
 // Run: node packages/e2e/src/e2e-grothinf-regtest.mjs
 import { PrivateKey, Transaction, LockingScript, UnlockingScript, P2PKH } from '@bsv/sdk'
 import { TeranodeRPCTracker, ReserveFunder, bootstrapReserve, utxoStatus } from '@nektar/chain'
+import { nap } from '../../core/dist/src/index.js'
 import { existsSync, readFileSync } from 'node:fs'
 
 const OUT = new URL('../../../tools/groth16-spike/out/', import.meta.url)
@@ -112,7 +113,7 @@ let seen = false
 for (let i = 0; i < 20 && !seen; i++) {
   const s = await utxoStatus(cfg, tx1.id('hex'), 0)
   if (s === 'unspent') seen = true
-  else await new Promise((r) => setTimeout(r, 1500))
+  else await nap(1500)
 }
 console.log(`utxo store sees tx1:0 as ${seen ? 'unspent' : 'unknown (proceeding anyway — mempool chain)'}`)
 

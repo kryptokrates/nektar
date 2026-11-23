@@ -11,7 +11,7 @@
 //   NEKTAR_REGTEST_WIF                                  — treasury key; without
 //     it a generated key is persisted to .state/testkit-treasury.json and the
 //     first stackFunder() generates ~120 blocks to it for mature coinbases
-import { nektarEnv, setNektarEnv, mkLog, sparse } from '@nektar/core'
+import { nap, nektarEnv, setNektarEnv, mkLog, sparse } from '@nektar/core'
 import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
 import { MemoryFunds, listFundsStore, type ListFundsStore } from './funds.js'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync, appendFileSync } from 'node:fs'
@@ -137,7 +137,7 @@ export async function stackUp(
       await stackRpc(cfg, 'getblockchaininfo', { __timeoutMs: timeoutMs })
       return true
     } catch {
-      if (i + 1 < attempts) await new Promise((r) => setTimeout(r, Math.min(500 * (i + 1), timeoutMs)))
+      if (i + 1 < attempts) await nap(Math.min(500 * (i + 1), timeoutMs))
     }
   }
   return false
@@ -324,7 +324,7 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
     for (let i = 0; i < 12; i++) {
       const tx = await regtestTx(this.cfg, txid)
       if (tx !== undefined) return tx
-      await new Promise((r) => setTimeout(r, 250))
+      await nap(250)
     }
     return undefined
   }
@@ -375,7 +375,7 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
             // parallel test files collide two ways: the throttle ("too busy") and
             // stale candidates (a peer's block sealed first) — both are retriable
             if (!/too busy|overload|queue.*full|503|job not found|stale|timed out/i.test(String(e))) throw e
-            await new Promise((r) => setTimeout(r, 200 + Math.random() * 300))
+            await nap(200 + Math.random() * 300)
             return undefined
           })
       }
@@ -391,7 +391,7 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
     for (let i = 0; i < 40; i++) {
       const hdr = await stackRpc(this.cfg, 'getblockheader', tip).catch(() => undefined)
       if (hdr !== undefined) break
-      await new Promise((r) => setTimeout(r, 100))
+      await nap(100)
     }
     // generatetoaddress can report before the chain serves the new height —
     // the fixed header wait above can pass while currentHeight() still trails.
@@ -403,7 +403,7 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
       for (let i = 0; i < 100; i++) {
         const h = await this.currentHeight().catch(() => 0)
         if (h >= target) break
-        await new Promise((r) => setTimeout(r, 300))
+        await nap(300)
       }
     }
     // asset index catch-up: /merkle_proof only answers once the block's
@@ -422,8 +422,8 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
         if (r?.ok === true) {
           const body = await r.arrayBuffer().catch(() => null)
           if (body !== null) coinbase = parseLegacyBlock(new Uint8Array(body)).txids[0]
-          else await new Promise((r) => setTimeout(r, 200))
-        } else await new Promise((r) => setTimeout(r, 200))
+          else await nap(200)
+        } else await nap(200)
       }
       while (coinbase !== undefined && Date.now() < deadline) {
         const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${coinbase}`, {
@@ -431,14 +431,14 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
           signal: AbortSignal.timeout(1_500)
         }).catch(() => null)
         if (r?.ok === true) break
-        await new Promise((r) => setTimeout(r, 200))
+        await nap(200)
       }
     }
     // the subtree is sealed by here — push watched proofs now rather than
     // leaving consumers to the next poll tick (mine(); confirm() determinism)
     for (let i = 0; i < 5 && this.events.pending > 0; i++) {
       await this.events.tick()
-      if (this.events.pending > 0) await new Promise((r) => setTimeout(r, 100))
+      if (this.events.pending > 0) await nap(100)
     }
     dbgMine(Date.now() - t0)
   }
@@ -568,7 +568,7 @@ export class StackTreasury {
       // throttle also lag the generate — retry briefly: both settle fast.
       for (let i = 0; i < 20 && sparse(this.reserve.utxos)?.length === 0; i++) {
         await this.reserve.scanCoinbases(this.cfg, (m, ...p) => stackRpc(this.cfg, m, ...p), t0, t0 + 10)
-        if (sparse(this.reserve.utxos)?.length === 0) await new Promise((r) => setTimeout(r, 500))
+        if (sparse(this.reserve.utxos)?.length === 0) await nap(500)
       }
       await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
         treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json'),
@@ -701,7 +701,7 @@ async function withTreasuryLock<T>(fn: () => T | Promise<T>): Promise<T> {
       } catch {
         /* raced */
       }
-      await new Promise((r) => setTimeout(r, 150))
+      await nap(150)
     }
   }
   try {

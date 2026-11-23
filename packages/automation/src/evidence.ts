@@ -93,7 +93,7 @@ export function verifyTradeEvidence(e: TradeEvidence | RedactedTradeEvidence): {
   }
   const w = e.want.want
   const sel = e.offers.find((o) => `${o.offer.pub}:${o.offer.offerId}` === e.selectedOfferKey)
-  const q = sel?.offer.offer as any
+  const q = sel?.offer.offer
   const pkh = (pub: string) => Buffer.from(PublicKey.fromString(pub).toHash() as number[]).toString('hex')
   const redacted = 'redacted' in e && (e as { redacted?: unknown }).redacted === true
   const questionGone = (w as unknown as Record<string, unknown>).questionSha256 !== undefined
@@ -110,17 +110,21 @@ export function verifyTradeEvidence(e: TradeEvidence | RedactedTradeEvidence): {
   )
   check(
     'selected offer exists and its quote is signed by the seller',
-    () => !!sel && q.sellerPub === sel.offer.pub && (verifyOfferSig(q, w.pub, sel.offer.leaf ?? '') || verifyOfferSig(q, '', sel.offer.leaf ?? ''))
+    () =>
+      !!sel &&
+      q !== undefined &&
+      q.sellerPub === sel.offer.pub &&
+      (verifyOfferSig(q, w.pub, sel.offer.leaf ?? '') || verifyOfferSig(q, '', sel.offer.leaf ?? ''))
   )
   check(
     'price is within the signed want ceiling',
-    () => sel!.offer.priceSats === Number(q.cfg.price) && (w.maxSats === undefined || sel!.offer.priceSats <= w.maxSats)
+    () => sel!.offer.priceSats === Number(q!.cfg.price) && (w.maxSats === undefined || sel!.offer.priceSats <= w.maxSats)
   )
   const escrow = Transaction.fromHex(e.escrow.txHex)
   const discHex = 'txHexSha256' in e.disclosure ? undefined : e.disclosure.txHex
   check('escrow transaction id', () => escrow.id('hex') === e.escrow.txid)
   check('escrow output carries the quoted covenant for the buyer', () => {
-    const cfg = { ...q.cfg, price: BigInt(q.cfg.price), refundAfter: BigInt(q.cfg.refundAfter), maxFee: BigInt(q.cfg.maxFee) }
+    const cfg = { ...q!.cfg, price: BigInt(q!.cfg.price), refundAfter: BigInt(q!.cfg.refundAfter), maxFee: BigInt(q!.cfg.maxFee) }
     return (
       e.escrow.depositorPkh === pkh(w.pub) &&
       escrow.outputs[e.escrow.vout].lockingScript.toHex() === DisclosureSaleHost.escrowScript(cfg, e.escrow.depositorPkh)
@@ -139,9 +143,9 @@ export function verifyTradeEvidence(e: TradeEvidence | RedactedTradeEvidence): {
     )
     check(
       'disclosure pays the seller exactly the quoted price',
-      () => disc.outputs[0].satoshis === Number(q.cfg.price) && disc.outputs[0].lockingScript.toHex() === buildP2PKHScript(pkh(sel!.offer.pub))
+      () => disc.outputs[0].satoshis === Number(q!.cfg.price) && disc.outputs[0].lockingScript.toHex() === buildP2PKHScript(pkh(sel!.offer.pub))
     )
-    check('revealed value matches the committed hash', () => toHex(sha256(parseBuyWrapped(disc))) === q.cfg.hWrapped)
+    check('revealed value matches the committed hash', () => toHex(sha256(parseBuyWrapped(disc))) === q!.cfg.hWrapped)
   }
   return { ok: checks.every((c) => c.ok), checks, ...(skipped.length > 0 ? { redacted: skipped } : {}) }
 }

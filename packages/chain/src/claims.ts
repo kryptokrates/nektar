@@ -28,7 +28,7 @@ export async function deployClaim(art: any, ctorArgs: any[], provider: any, sign
   const c = new RunarContract(art, ctorArgs)
   c.connect(provider, signer)
   await c.deploy({ satoshis })
-  return { contract: c, utxo: (c as any).currentUtxo }
+  return { contract: c, utxo: (c as unknown as { currentUtxo: Utxo }).currentUtxo }
 }
 
 /** build the verdict locking script a settle emits */

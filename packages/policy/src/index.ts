@@ -2,7 +2,7 @@
 // Principals Agent/User, actions read/write/disclose/rotate/revoke, resources
 // Fragment (attrs: level/shard/class). Policy sets are canonicalized, hashed,
 // anchored via AnchorChain; every authorization decision is logged+anchored.
-import { isAuthorized, formatPolicies } from '@cedar-policy/cedar-wasm'
+import { isAuthorized, formatPolicies, type EntityJson } from '@cedar-policy/cedar-wasm'
 import { dsha256, utf8, toHex, concat } from '@nektar/core'
 
 export const NEKTAR_SCHEMA = `
@@ -35,15 +35,15 @@ export interface PolicySet {
 }
 /** canonicalize + hash the policy text — the anchorable commitment. */
 export function canonicalizePolicySet(name: string, text: string): PolicySet {
-  const res = formatPolicies({ policyText: text }) as any
-  const canon = res?.formatted_policy
+  const res = formatPolicies({ policyText: text })
+  const canon = res.type === 'success' ? res.formatted_policy : undefined
   if (typeof canon !== 'string') throw new Error('cedar formatPolicies failed: ' + JSON.stringify(res).slice(0, 120))
   return { name, text: canon, hash: toHex(dsha256(concat(utf8('nektar/policyset/v1'), utf8(canon)))) }
 }
 
 export function parseCheck(text: string): { ok: boolean; errors?: string[] } {
-  const res = formatPolicies({ policyText: text }) as any
-  return { ok: res?.type === 'success', errors: res?.parseErrors ?? (res?.type !== 'success' ? [JSON.stringify(res).slice(0, 200)] : undefined) }
+  const res = formatPolicies({ policyText: text })
+  return { ok: res.type === 'success', errors: res.type !== 'success' ? [JSON.stringify(res.errors).slice(0, 200)] : undefined }
 }
 
 export interface Decision {
@@ -54,9 +54,9 @@ export interface Decision {
 export function authorize(policyText: string, principal: Principal, action: CedarAction, resource: Resource, _level?: number): Decision {
   const principalUid = { type: principal.type, id: principal.id }
   const resourceUid = { type: resource.type, id: resource.id }
-  const entities = [
-    { uid: principalUid, attrs: { level: principal.level ?? 0 }, parents: [] as any[] },
-    { uid: resourceUid, attrs: { level: resource.attrs.level, shard: resource.attrs.shard, class: resource.attrs.class }, parents: [] as any[] }
+  const entities: EntityJson[] = [
+    { uid: principalUid, attrs: { level: principal.level ?? 0 }, parents: [] },
+    { uid: resourceUid, attrs: { level: resource.attrs.level, shard: resource.attrs.shard, class: resource.attrs.class }, parents: [] }
   ]
   const res = isAuthorized({
     principal: principalUid,
@@ -65,10 +65,10 @@ export function authorize(policyText: string, principal: Principal, action: Ceda
     policies: { staticPolicies: policyText },
     entities,
     context: {}
-  } as any) as any
-  const resp = res?.response ?? res
+  })
+  const resp = res.type === 'success' ? res.response : undefined
   const dec = resp?.decision ?? ''
-  return { allow: dec === 'allow' || dec === 'Allow', reasons: resp?.diagnostics?.reason ?? resp?.diagnostics?.reasons }
+  return { allow: dec === 'allow', reasons: resp?.diagnostics?.reason }
 }
 
 // --- anchored policy set + receipts ------------------------------------------

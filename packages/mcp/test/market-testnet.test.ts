@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { PrivateKey } from '@bsv/sdk'
-import { sparse } from '@nektar/core'
+import { sparse, nap } from '@nektar/core'
 import {
   indexFailover,
   livePort,
@@ -91,7 +91,7 @@ const SUITE_DIR = fileURLToPath(new URL('../../../../.state/tn-suite', import.me
 const KEYS_FILE = join(STATE, 'agent-keys.json')
 const WIF: Record<string, string> = existsSync(KEYS_FILE) ? (JSON.parse(readFileSync(KEYS_FILE, 'utf8')) as Record<string, string>) : {}
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const sleep = nap
 
 interface A {
   mem: NektarMemory

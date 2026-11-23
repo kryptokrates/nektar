@@ -1,7 +1,7 @@
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { Transaction, Utils, type ChainTracker } from '@bsv/sdk'
-import { sparse } from '@nektar/core'
+import { nap, sparse } from '@nektar/core'
 import { createNektarModule } from './module.js'
 
 export class FakeTracker implements ChainTracker {
@@ -99,7 +99,7 @@ export async function faulthost(upstream: string): Promise<FaulthostHandle> {
         return
       }
     }
-    if (fault.delayMs !== undefined && fault.delayMs > 0) await new Promise((r) => setTimeout(r, fault.delayMs))
+    if (fault.delayMs !== undefined && fault.delayMs > 0) await nap(fault.delayMs)
     try {
       const r = await fetch(upstream + (req.url ?? '/'), {
         method: req.method,

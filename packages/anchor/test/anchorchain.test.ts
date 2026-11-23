@@ -139,7 +139,7 @@ test('burst: 20 anchors with Funds-backed funder pass script verification', asyn
       throw e
     }
   }
-  assert.equal(true, true)
+  assert.ok(ac.getHead(), 'head after 20 anchors')
 })
 
 test('retry after TX_MISSING_PARENT resolves the parent (no stale lastTx)', async (t) => {

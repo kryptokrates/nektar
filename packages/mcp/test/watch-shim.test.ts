@@ -10,10 +10,11 @@ import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import { fileURLToPath } from 'node:url'
+import { nap } from '@nektar/core'
 
 const SHIM = fileURLToPath(new URL('../../../../deploy/bstack-sandbox/watch-shim.mjs', import.meta.url))
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const sleep = nap
 
 async function stack(t: test.TestContext): Promise<{
   watch: (qs: string) => Promise<{ changed: boolean; cursor: string; tookMs?: number; backend?: string }>

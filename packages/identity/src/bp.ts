@@ -29,7 +29,7 @@ const rand = (): bigint => {
 const BP_G = curve.g
 export const BP_H = curve.g.mul(new BigNumber(BigInt('0x' + Buffer.from(dsha256(utf8('nektar/bp/H/v1'))).toString('hex')).toString()))
 const ptFromHex = (hex: string): Point => {
-  const q = PublicKey.fromString(hex) as any
+  const q = PublicKey.fromString(hex)
   return new Point(q.x, q.y)
 }
 const ptHex = (p: Point): string => Buffer.from(p.encode(true)).toString('hex')

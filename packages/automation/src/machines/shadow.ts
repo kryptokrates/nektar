@@ -1,29 +1,11 @@
 import { sparse } from '@nektar/core'
-import { opsStep } from './ops.machine.js'
-import { txStep } from './tx.machine.js'
 
 /**
- * Shadow-mode replay: fold recorded transitions through the pure machines and
- * diff them against what the live FSM actually did. The machine NEVER moves
- * production state — it only answers "what would the spec have done".
+ * Shadow-mode cause mapping: the live `cause` vocabulary → machine edges.
+ * Used by driver.ts to label emissions and by the shadow-replay census gate.
+ * The replay/diff helpers that fold recorded transitions through the pure
+ * machines live in test/shadow-replay.test.ts — nothing in src replays.
  */
-
-export interface LiveTransition {
-  from: string
-  to: string
-  cause: string
-}
-
-export interface Diff {
-  kind: 'agree' | 'machine-blocks' | 'machine-diverges' | 'unmodeled'
-  from: string
-  event: string
-  live: string
-  machine: string
-  cause: string
-  guard?: string
-  note?: string
-}
 
 interface Candidate {
   event: string
@@ -141,62 +123,4 @@ export function opsCauseCandidates(cause: string): Candidate[] | undefined {
   }
   if (DENIED_CAUSE.test(cause)) return [{ event: 'policy.denied' }]
   return undefined
-}
-
-/** Replay one op's live transition log through opsMachine. */
-export function replayOps(rows: LiveTransition[]): Diff[] {
-  const diffs: Diff[] = []
-  for (const r of rows) {
-    if (!r.from || r.from === r.to) continue // creation + data-update rows carry no edge
-    const candidates = opsCauseCandidates(r.cause)
-    if (!candidates) {
-      diffs.push({ kind: 'unmodeled', from: r.from, event: r.cause, live: r.to, machine: '', cause: r.cause })
-      continue
-    }
-    // try each candidate edge × guard — report the one matching live, else the divergence
-    let matched: Diff | null = null
-    let best: Diff | null = null
-    for (const cand of candidates) {
-      for (const guard of cand.guards ?? [undefined]) {
-        const s = opsStep(r.from, cand.event, guard ? { guard } : {})
-        const d: Diff = { kind: 'agree', from: r.from, event: cand.event, live: r.to, machine: s.next, cause: r.cause, guard }
-        if (!s.accepted) d.kind = 'machine-blocks'
-        else if (s.next !== r.to) d.kind = 'machine-diverges'
-        if (d.kind === 'agree') {
-          matched = d
-          break
-        }
-        best ??= d
-      }
-      if (matched) break
-    }
-    diffs.push(matched ?? best!)
-  }
-  return diffs
-}
-
-/** Infer a txMachine event from a wallet_transactions (from,to) edge + emit context. */
-function txEventFor(from: string, to: string, hint?: 'submit' | 'observe' | 'abandon' | 'export-ttl'): { event: string; guard?: string } {
-  if (to === 'submitted') return { event: 'submit.success' }
-  if (to === 'submission_unknown') return { event: 'submit.unknown' }
-  if (to === 'observed') return { event: 'obs.seen', guard: 'verified' }
-  if (to === 'confirmed') return { event: 'obs.proven', guard: 'proof' }
-  if (to === 'expired') return { event: 'export.ttl' }
-  if (to === 'abandoned') return { event: 'abandon' }
-  if (to === 'conflicted') return hint === 'abandon' ? { event: 'abandon' } : { event: 'obs.conflicted', guard: 'verified+spentBy' }
-  if (to === 'rejected') return hint === 'submit' ? { event: 'submit.refused', guard: 'definitive' } : { event: 'obs.rejected', guard: 'verified' }
-  return { event: `unknown:${from}->${to}` }
-}
-
-/** Replay wallet_transactions edges through txMachine. */
-export function replayTx(rows: { from: string; to: string; hint?: 'submit' | 'observe' | 'abandon' | 'export-ttl' }[]): Diff[] {
-  return rows.map((r) => {
-    const { event, guard } = txEventFor(r.from, r.to, r.hint)
-    if (event.startsWith('unknown:')) return { kind: 'unmodeled', from: r.from, event, live: r.to, machine: '', cause: event }
-    const s = txStep(r.from, event, guard ? { guard } : {})
-    const d: Diff = { kind: 'agree', from: r.from, event, live: r.to, machine: s.next, cause: event, guard }
-    if (!s.accepted) d.kind = 'machine-blocks'
-    else if (s.next !== r.to) d.kind = 'machine-diverges'
-    return d
-  })
 }

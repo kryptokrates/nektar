@@ -11,7 +11,7 @@
 // its reconcile floor (the verified delivery path stays with the caller —
 // handleBroadcasterStatus verifies BUMPs against our own tracker).
 import { EventEmitter } from 'node:events'
-import { deadline, detached, type DeadlineOutcome } from '@nektar/core'
+import { deadline, detached, nap, type DeadlineOutcome } from '@nektar/core'
 import type { TxStatusEvent } from './interfaces.js'
 
 const TERMINAL: ReadonlySet<string> = new Set(['mined', 'rejected', 'double-spent'])
@@ -234,7 +234,7 @@ export class ChainEvents extends EventEmitter {
     const nudge = (async () => {
       while (!settled && Date.now() < deadline && this.watched.has(txid)) {
         await this.probeNow(txid)
-        await new Promise((r) => setTimeout(r, nudgeMs))
+        await nap(nudgeMs)
       }
     })()
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined

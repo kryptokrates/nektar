@@ -264,7 +264,7 @@ export async function handleBroadcasterStatus(
         }
       }
       if (mp === undefined) {
-        const cand2 = await (mem as any).chain?.merklePathOf?.(txid)
+        const cand2 = await (mem as unknown as { chain?: { merklePathOf?: (txid: string) => Promise<MerklePath | undefined> } }).chain?.merklePathOf?.(txid)
         // the fetched path must verify against our own tracker too —
         // the broadcaster's word alone is a hint, never a proof
         if (cand2 !== undefined) {
@@ -729,7 +729,7 @@ export function createHttpApi(
                 const given = Buffer.from(String(req.headers.authorization ?? ''))
                 if (given.length !== expected.length || !timingSafeEqual(given, expected)) return send(401, { error: 'bad callback token' })
               }
-              const j = (await body(req)) as any
+              const j = (await body(req)) as { txid?: string; txStatus?: string; merklePath?: string; extraInfo?: string }
               await handleBroadcasterStatus(mem, j)
               return send(200, { ok: true })
             } catch {

@@ -69,7 +69,7 @@ export abstract class BuyerOps extends SellerOps {
     if (o.net !== this.d.network) return 'wrong network'
     if (o.exp !== undefined && o.exp <= this.now()) return 'expired'
     if (w.maxSats !== undefined && o.priceSats > w.maxSats) return 'above the want ceiling'
-    const q = o.offer as any
+    const q = o.offer
     if (!q?.cfg) return 'no signed quote'
     if (Number(q.cfg.price) !== o.priceSats) return 'quote does not match the listing'
     // the escrow pays cfg.sellerPkh — under derived custody the quote signer
@@ -165,7 +165,7 @@ export abstract class BuyerOps extends SellerOps {
     if (chosen === undefined) throw new Error('selected offer missing from op.data.offers')
     if (from !== chosen.so.offer.pub || m.offerId !== chosen.so.offer.offerId) return
     const utxo = op.data.utxo!
-    const q = chosen.so.offer.offer as any
+    const q = chosen.so.offer.offer!
     const direct = op.data.direct === true
     // quote-message mode wins (it was the authoritative channel); the signed
     // wire quote now carries it too so a delivered landing ahead of the quote
@@ -465,8 +465,8 @@ export abstract class BuyerOps extends SellerOps {
     }
     const offers = op.data.offers!
     const cands: ScoreCandidate[] = Object.entries(offers).map(([key, s]) => {
-      const q = s.so.offer.offer as any
-      const live = !s.reject && Number(q?.expiresAt ?? 0) !== 0 ? Number(q.expiresAt) > height : !s.reject
+      const q = s.so.offer.offer
+      const live = !s.reject && Number(q?.expiresAt ?? 0) !== 0 ? Number(q!.expiresAt) > height : !s.reject
       const anchored = !!(s.commitment?.proof?.path && s.commitment.batchR && s.commitment.anchorTxid)
       // the all-in bound is rail-specific: a `direct` quote settles by
       // outright payment — its exposure is the payment fee bound, not the
@@ -475,7 +475,7 @@ export abstract class BuyerOps extends SellerOps {
       return {
         offerKey: key,
         eligible: live && Number(q?.cfg?.refundAfter ?? 0) > height + this.o.sellerSafetyBlocks,
-        maxAllInSats: s.so.offer.priceSats + (direct ? this.o.directFeeReserveSats : Number(q?.cfg?.maxFee ?? 0) + this.o.escrowFeeReserveSats),
+        maxAllInSats: s.so.offer.priceSats + (direct ? this.o.directFeeReserveSats : Number(q?.cfg.maxFee ?? 0) + this.o.escrowFeeReserveSats),
         features: { relevance: 10000, provenance: anchored ? 10000 : s.commitment?.leaf ? 5000 : 0, history: 5000, latency: 10000 }
       }
     })
@@ -528,7 +528,7 @@ export abstract class BuyerOps extends SellerOps {
     const sel = op.data.selected!
     const s = sparse(op.data.offers![sel.key])
     if (s === undefined) throw new Error('selected offer missing from op.data.offers')
-    const q = s.so.offer.offer as any
+    const q = s.so.offer.offer!
     const w = op.data.want!.want
     const price = s.so.offer.priceSats,
       maxFee = Number(q.cfg.maxFee)
@@ -635,7 +635,7 @@ export abstract class BuyerOps extends SellerOps {
           await this.wallet.prepare(ctx, 'payment', tx)
           await this.d.store.transition(funding.operationId, funding.revision, 'funding', {
             cause: 'payment_prepared',
-            data: { pendingEscrow: { cfg: { direct: true, refundAfter: q.cfg.refundAfter, depositorPkh: pkhOf(this.me) }, utxo: built.utxo } }
+            data: { pendingEscrow: { cfg: { direct: true, refundAfter: Number(q.cfg.refundAfter), depositorPkh: pkhOf(this.me) }, utxo: built.utxo } }
           })
           await this.d.afterPrepare?.(ctx.actionId)
           // broadcast starts now; the accept flies while the RTT is out —
@@ -676,7 +676,7 @@ export abstract class BuyerOps extends SellerOps {
         // the escrow slot carries {direct:true} so every rebuild path (note,
         // reconcile, wallet-row resume) reconstructs the rail from the data,
         // not the message that brought it
-        const directEscrow = { ...q.cfg, direct: true, depositorPkh: pkhOf(this.me) }
+        const directEscrow = { ...q.cfg, refundAfter: Number(q.cfg.refundAfter), direct: true, depositorPkh: pkhOf(this.me) }
         const cur = (await this.d.store.operation(op.operationId))!
         await this.d.store.transition(cur.operationId, cur.revision, 'awaiting_disclosure', {
           cause: 'payment_broadcast',
@@ -1005,7 +1005,7 @@ export abstract class BuyerOps extends SellerOps {
     if ((escrow === undefined || utxo === undefined) && wtx !== undefined) {
       // the prepared-escrow record is gone but the wallet row survived — find
       // the escrow output in the stored bytes and rebuild the cfg from the offer
-      const q = s.so.offer.offer as any
+      const q = s.so.offer.offer!
       const depositorPkh = pkhOf(this.me)
       const direct = q.direct === true
       const script = direct

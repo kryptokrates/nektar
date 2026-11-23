@@ -4,6 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { statusStream } from '../src/mainnet.js'
+import { nap } from '@nektar/core'
 
 const stream = (chunks: string[], open = false): Response =>
   new Response(
@@ -17,7 +18,7 @@ const stream = (chunks: string[], open = false): Response =>
     { status: 200, headers: { 'content-type': 'text/event-stream' } }
   )
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const sleep = nap
 
 test('statusStream: events in order, malformed skipped, reconnect sends Last-Event-ID', async () => {
   const seen: Array<{ id?: string; event?: string; data?: string }> = []

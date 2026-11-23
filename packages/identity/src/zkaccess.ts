@@ -82,7 +82,7 @@ function verifyOr(label: string, base: Point, statements: Point[], p: OrProof): 
   const m = statements.length
   if (p.a.length !== m || p.e.length !== m || p.s.length !== m) return false
   const pts = p.a.map((h) => {
-    const q = PublicKey.fromString(h) as any
+    const q = PublicKey.fromString(h)
     return new Point(q.x, q.y)
   })
   const total = challenge(label, [base, ...statements, ...pts])
@@ -128,14 +128,14 @@ export function verifyRange(C: Point, proof: RangeProof, t: ZkTranscript): boole
   if (proof.bitCommits.length !== proof.bits || proof.bitProofs.length !== proof.bits) return false
   let acc: Point | undefined
   for (let i = 0; i < proof.bits; i++) {
-    const q = PublicKey.fromString(proof.bitCommits[i]) as any
+    const q = PublicKey.fromString(proof.bitCommits[i])
     const ci = new Point(q.x, q.y)
     const term = mulP(ci, 1n << BigInt(i))
     acc = acc === undefined ? term : acc.add(term)
   }
   if (acc === undefined || !acc.eq(C)) return false
   for (let i = 0; i < proof.bits; i++) {
-    const q = PublicKey.fromString(proof.bitCommits[i]) as any
+    const q = PublicKey.fromString(proof.bitCommits[i])
     const ci = new Point(q.x, q.y)
     if (!verifyOr(transcriptLabel(t, `bit/${i}`), H, [ci, subG(ci)], proof.bitProofs[i])) return false
   }
@@ -211,7 +211,7 @@ export function verifyAccess(
   // level-0 holder could claim an astronomical level. The level domain is a
   // small int (NEKTAR_MAX_LEVEL, default 3) — bound it well under N.
   if (requiredLevel < 0n || requiredLevel > 0xffffffffn) return false
-  const Cp = PublicKey.fromString(c.hex) as any
+  const Cp = PublicKey.fromString(c.hex)
   const C = new Point(Cp.x, Cp.y)
   // the claim is about C·g^(−ℓ_j) — the commitment to (ℓ−ℓ_j)
   const Cshift = C.add(mulP(G, mod(-requiredLevel)))

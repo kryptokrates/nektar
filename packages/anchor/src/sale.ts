@@ -7,6 +7,7 @@
 // without revealing.
 import { Transaction, LockingScript, UnlockingScript, Hash, SatoshisPerKilobyte, Utils } from '@bsv/sdk'
 import { RunarContract, computeOpPushTx, buildP2PKHScript } from 'runar-sdk'
+import { internals } from './internals.js'
 import { unlockP2PKH, signerPubHex, sparse, toSigner, type SignerLike } from '@nektar/core'
 import { DISCLOSURESALE_ARTIFACT } from '@nektar/contracts'
 
@@ -158,7 +159,7 @@ export class DisclosureSaleHost {
     tx.addOutput({ satoshis: Number(this.cfg.price), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.sellerPkh)) })
     tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.depositorPkh)) })
 
-    const c = this.contract as any
+    const c = internals(this.contract)
     const { sigHex: opSig, preimageHex } = c.computeOpPushTxWithCodeSep(tx, 0, utxo.script, utxo.satoshis, 0)
     const unlock = c.buildStatefulPrefix(opSig) + this.contract.buildUnlockingScript('buy', [wrapped, changeSats, preimageHex])
     tx.inputs[0].unlockingScript = UnlockingScript.fromHex(unlock)
@@ -179,7 +180,7 @@ export class DisclosureSaleHost {
     tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.depositorPkh)) })
     tx.lockTime = lockTime
 
-    const c = this.contract as any
+    const c = internals(this.contract)
     // codeSeparator index = refund's position among PUBLIC methods (claims.ts
     // convention) — buyGated was inserted later, shifting refund to index 2
     const rIdx = DISCLOSURESALE_ARTIFACT.abi.methods.filter((m: any) => m.isPublic).findIndex((m: any) => m.name === 'refund')

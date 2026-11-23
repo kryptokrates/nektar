@@ -26,6 +26,7 @@ const { NektarMemory } = await import(dist('packages/mcp/dist/src/memory.js'))
 const { acquireLock, keyLockFile } = await import(dist('packages/mcp/dist/src/index.js'))
 const { callTool } = await import(dist('packages/mcp/dist/src/dispatch/index.js'))
 const { openAutomation, ScriptedExecutor, DEFAULT_SCORE_WEIGHTS, Dispatcher } = await import(dist('packages/automation/dist/src/index.js'))
+const { nap: sleep } = await import(dist('packages/core/dist/src/index.js'))
 
 const STATE = join(ROOT, '.state/testnet-agents')
 const SUITE_DIR = join(ROOT, '.state/tn-suite')
@@ -35,7 +36,6 @@ const ARC = process.env.NEKTAR_TN_ARC ?? 'https://arcade-v2-testnet-us-1.bsvbloc
 const INDEX = process.env.NEKTAR_TN_INDEX ?? 'https://test.bananablocks.com/api/v1'
 const BOUND = Number(process.env.TN_WARMUP_MS ?? 90 * 60_000)
 const FLOOR = Number(process.env.TN_TREE_FLOOR ?? 8)
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const WIF = existsSync(KEYS_FILE) ? JSON.parse(readFileSync(KEYS_FILE, 'utf8')) : {}
 const names = (process.argv.slice(2).filter((a) => !a.startsWith('-')).length > 0 ? process.argv.slice(2) : ['alice', 'ben', 'bob']).filter(

@@ -46,7 +46,6 @@ const die = (m) => {
   console.error(`codex-deal: ${m}`)
   process.exit(1)
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const procs = []
 let dying = false
 const cleanup = () => {
@@ -67,6 +66,7 @@ if (!keys[SELLER] || !keys[BUYER]) die(`keys for ${SELLER}/${BUYER} not in agent
 
 const requireMcp = createRequire(join(root, 'packages/mcp/package.json'))
 const { PrivateKey } = requireMcp('@bsv/sdk')
+const { nap: sleep } = requireMcp('@nektar/core')
 const pubOf = (wif) => PrivateKey.fromWif(wif).toPublicKey().toString()
 
 const post = async (port, tool, args) => {

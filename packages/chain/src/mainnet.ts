@@ -2,7 +2,7 @@
 // discovery, merkle paths) + the BSV Broadcaster client. NO spend happens
 // here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
 // in the runtime before any tx reaches it.
-import { currentSignal, nektarEnv, sparse, spread } from '@nektar/core'
+import { currentSignal, nap, nektarEnv, sparse, spread } from '@nektar/core'
 import { sleep, withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
@@ -30,10 +30,6 @@ export interface MainnetConfig {
   indexerUrls?: string[]
   indexerApiKey?: string
   indexerKind?: 'banana' | 'woc'
-  /** @deprecated use indexerUrl — honoured as an alias */
-  wocUrl?: string
-  /** @deprecated use indexerApiKey — honoured as an alias */
-  wocApiKey?: string
   chaintracksUrl?: string // chaintracks base incl. /v1|/v2 — header source for BUMP verification
   tipCacheMs?: number // currentHeight() cache TTL — heights only grow, so a stale-low answer only delays gates by ≤TTL; NEKTAR_TIP_CACHE_MS overrides (default 3000)
   feeRateSatPerKb?: number // caller-pinned fee rate — otherwise livePort takes max(floor, broadcaster-policy quote)
@@ -66,15 +62,13 @@ export const PUBLIC_BROADCASTER_URLS = new Set([
  *  standalone probe — 'public' = explicit index URL, no broadcaster
  *  configured at all, or a baked-in public primary */
 const publicIndexOk = (c?: MainnetConfig): boolean => {
-  // eslint-disable-next-line typescript/no-deprecated -- wocUrl stays readable here; this IS the alias implementation
-  if (c?.indexerUrl !== undefined || c?.wocUrl !== undefined) return true
+  if (c?.indexerUrl !== undefined) return true
   const primary = c?.broadcasterUrl ?? c?.broadcasterUrls?.[0]
   return primary === undefined || PUBLIC_BROADCASTER_URLS.has(primary)
 }
 
 const def = (c?: MainnetConfig) => {
-  // eslint-disable-next-line typescript/no-deprecated -- wocUrl stays readable here; this IS the alias implementation
-  const indexerUrl = c?.indexerUrl ?? c?.wocUrl ?? DEFAULT_INDEXER_URL
+  const indexerUrl = c?.indexerUrl ?? DEFAULT_INDEXER_URL
   // primary = explicit broadcasterUrl, else the first listed extra, else
   // the GorillaPool default; extras append in order, deduped
   const broadcasterUrls = [...new Set([c?.broadcasterUrl ?? c?.broadcasterUrls?.[0] ?? DEFAULT_BROADCASTER_URL, ...(c?.broadcasterUrls ?? [])])]
@@ -86,15 +80,13 @@ const def = (c?: MainnetConfig) => {
     callbackToken: c?.callbackToken ?? nektarEnv('NEKTAR_CALLBACK_TOKEN'),
     indexerUrl,
     index: indexFailover([...new Set([indexerUrl, ...(c?.indexerUrls ?? [])])], {
-      // eslint-disable-next-line typescript/no-deprecated -- wocApiKey stays readable here; this IS the alias implementation
-      apiKey: c?.indexerApiKey ?? c?.wocApiKey,
+      apiKey: c?.indexerApiKey,
       kind: c?.indexerKind,
       fetchImpl: c?.fetchImpl
     }),
     fetch: c?.fetchImpl ?? fetch,
     broadcasterApiKey: c?.broadcasterApiKey,
-    // eslint-disable-next-line typescript/no-deprecated -- wocApiKey stays readable here; this IS the alias implementation
-    indexerApiKey: c?.indexerApiKey ?? c?.wocApiKey,
+    indexerApiKey: c?.indexerApiKey,
     tipCacheMs: c?.tipCacheMs ?? Number(nektarEnv('NEKTAR_TIP_CACHE_MS') ?? 3_000)
   }
 }
@@ -158,7 +150,7 @@ export class BsvBroadcaster implements Broadcaster {
           delay: (i) => 500 * 2 ** i,
           retryIf: (x) => x.status === 503
         }).catch(async (_e) => {
-          await new Promise((r2) => setTimeout(r2, 1_000))
+          await nap(1_000)
           return await post()
         })
         if (r.status >= 500) throw new Error(`broadcaster HTTP ${r.status}`)

@@ -250,7 +250,7 @@ export class P2PListener extends EventEmitter {
         const txid = tx.id('hex')
         let matched = this.opts.txids?.has(txid) === true
         for (const i of tx.inputs) {
-          const st = (i as any).sourceTXID ?? (i as any).sourceTxid
+          const st = i.sourceTXID ?? (i as { sourceTxid?: string }).sourceTxid
           const sv = i.sourceOutputIndex
           if (st && this.opts.outpoints?.has(`${st}:${sv}`)) {
             this.opts.outpoints.delete(`${st}:${sv}`)

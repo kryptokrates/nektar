@@ -4,12 +4,14 @@
 // /v1/verify → the payment tx resolvable on the real network.
 //   node packages/e2e/src/e2e-pay-remote.mjs
 // env: NEKTAR_REMOTE_URL (default https://nektar.run),
-//      NEKTAR_HTTP_TOKEN (bearer), NEKTAR_FUND_WIF or the ttn-data keystore +
-//      NEKTAR_KEY_PASSPHRASE for the payer, NEKTAR_BROADCASTER_URL for the visibility check.
+//      NEKTAR_HTTP_TOKEN (bearer), NEKTAR_FUND_WIF (payer), NEKTAR_RESERVE
+//      (payer reserve file — default .state/reserve.json, shape
+//      {entries:[{txid,vout,satoshis,txHex}],spent:["txid:vout"]}),
+//      NEKTAR_BROADCASTER_URL for the visibility check.
 import { PrivateKey, Transaction } from '@bsv/sdk'
 import { readFileSync, existsSync } from 'node:fs'
 import { buildPaymentTx } from '../../mcp/dist/src/payclient.js'
-import { readKeyFile } from '../../mcp/dist/src/keystore.js'
+import { nap } from '../../core/dist/src/index.js'
 
 const BASE = process.env.NEKTAR_REMOTE_URL ?? 'https://nektar.run'
 const TOKEN = process.env.NEKTAR_HTTP_TOKEN ?? ''
@@ -18,7 +20,7 @@ const check = (ok, label) => {
   console.log(` ${ok ? '✔' : '✗ FAIL'} ${label}`)
   if (!ok) process.exit(1)
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const sleep = nap
 
 // ── MCP Streamable HTTP — JSON-RPC, SSE-or-JSON response
 let sid
@@ -75,26 +77,27 @@ if (x402) {
   check(!/mock/.test(x402.network), 'server is NOT on mock — real network required for honest settlement')
 }
 
-// ── 1) payer = the local ttn fund key's spendable utxo (a real public tx spends it)
-const pass = process.env.NEKTAR_KEY_PASSPHRASE ?? readFileSync('.state/ttn-passphrase', 'utf8').trim()
-const wif = process.env.NEKTAR_FUND_WIF ?? JSON.parse(readKeyFile('.state/ttn-data/fee.key.json', pass, true)).wif
+// ── 1) payer = the fund WIF + a caller-provided reserve file's spendable utxo
+const wif = process.env.NEKTAR_FUND_WIF
+check(!!wif, 'NEKTAR_FUND_WIF set — the payer key')
 const payer = PrivateKey.fromWif(wif)
-const res = JSON.parse(readFileSync('.state/ttn-data/reserve.json', 'utf8'))
+const reservePath = process.env.NEKTAR_RESERVE ?? '.state/reserve.json'
+const res = JSON.parse(readFileSync(reservePath, 'utf8'))
 const spent = new Set(res.spent ?? [])
 const entry = res.entries.filter((e) => !spent.has(`${e.txid}:${e.vout}`)).sort((a, b) => b.satoshis - a.satoshis)[0]
-check(!!entry, 'payer has a spendable utxo in the local ttn reserve')
+check(!!entry, `payer has a spendable utxo in ${reservePath}`)
 const payerUtxos = [{ tx: Transaction.fromHex(entry.txHex), vout: entry.vout, satoshis: entry.satoshis }]
 console.log(` payer ${payer.toPublicKey().toAddress([0x6f])} spends ${entry.satoshis} sats (${entry.txid.slice(0, 16)}…)`)
 lap('payer utxo loaded')
 
-// ── 2) remember a record on the box; its shard auto-anchors on ttn
+// ── 2) remember a record on the box; its shard auto-anchors on the live net
 const SHARD = `remote-${Date.now().toString(36)}`
-const claims = ['the deployed box settles a real ttn payment', 'the receipt names the settlement txid']
+const claims = ['the deployed box settles a real payment', 'the receipt names the settlement txid']
 for (const c of claims) {
   const r = await call('remember', { shard: SHARD, data: c })
   check(!!r, `remember "${c.slice(0, 40)}…"`)
 }
-console.log(` batch anchors automatically; waiting for the ttn proof to attach…`)
+console.log(` batch anchors automatically; waiting for the proof to attach…`)
 lap('remembers')
 
 // ── 3) wait until recall verifies seq 0 — i.e. the anchor is proven on the real chain.
@@ -131,14 +134,14 @@ const { hex, txid } = await buildPaymentTx(
 )
 const r = await call('groundedAnswer', { ...ga, payment: { invoiceId: inv.extra.invoiceId, transaction: hex } })
 // keep the local reserve honest — the spent utxo is gone, the change is ours
-if (existsSync('.state/ttn-data/reserve.json')) {
+if (existsSync(reservePath)) {
   const { Beef } = await import('@bsv/sdk')
   const { writeFileSync } = await import('node:fs')
   const subj = Beef.fromBinary(Array.from(Buffer.from(hex, 'hex'))).txs.at(-1)
   const txo = subj.tx ?? Transaction.fromBinary(subj.rawTx)
   spent.add(`${entry.txid}:${entry.vout}`)
   res.entries.push({ txid, vout: txo.outputs.length - 1, satoshis: txo.outputs.at(-1).satoshis, txHex: txo.toHex() })
-  writeFileSync('.state/ttn-data/reserve.json', JSON.stringify({ spent: [...spent], entries: res.entries }))
+  writeFileSync(reservePath, JSON.stringify({ spent: [...spent], entries: res.entries }))
 }
 check(r.committed === true, `paid call committed — settlement tx ${txid.slice(0, 16)}… broadcast by the box`)
 check(r.receipt?.payment?.txid === txid, 'receipt commits the settlement txid')

@@ -10,7 +10,7 @@ import type { Provider, UTXO as RUTXO, TransactionData } from 'runar-sdk'
 // regtest with no limit (see spikes/depth-contract.mjs); conservative default.
 import { NEKTAR_ANCHOR_ARTIFACT, NEKTAR_ANCHOR_V3_ARTIFACT, META_FLAG_HEX, contractRp, decodeNektarAnchor, TAG_RPRIME } from '@nektar/contracts'
 const TAG_HEX = toHex(TAG_RPRIME)
-import { toHex, runarSigner, signerPubHex, sparse, toSigner, spread, type AnchorData, type Bytes, type SignerLike } from '@nektar/core'
+import { toHex, runarSigner, signerPubHex, sparse, toSigner, spread, nap, type AnchorData, type Bytes, type SignerLike } from '@nektar/core'
 import type { Broadcaster, Funder, FundingOut } from '@nektar/chain'
 
 export interface Head {
@@ -388,7 +388,7 @@ export class AnchorChain {
           /* heal is best-effort — the retry loop decides */
         }
         for (let r = 0; r < 10; r++) {
-          await new Promise((resolve) => setTimeout(resolve, spread(250 * (r + 1))))
+          await nap(spread(250 * (r + 1)))
           let res
           try {
             res = await this.provider.broadcaster.broadcast(attemptTx)
@@ -555,7 +555,7 @@ export class AnchorChain {
         // chain). Same object lives in anchorTxs/txById/provider registries,
         // so one delete covers all readers.
         delete h.tx.merklePath
-        const res = await (this.provider as any).broadcaster.broadcast(h.tx)
+        const res = await this.provider.broadcaster.broadcast(h.tx)
         if (res.status !== 'success') throw new Error(`re-anchor broadcast failed: ${res.description}`)
       }
     }

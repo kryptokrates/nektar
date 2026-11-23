@@ -1,7 +1,7 @@
 {
   "packages": {
     "anchor": {
-      "loc": 1209,
+      "loc": 1212,
       "pkgFanout": 4,
       "edges": ["chain", "contracts", "core", "identity"],
       "maxFileLoc": 624,
@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 13927,
+      "loc": 13853,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1544,
@@ -25,7 +25,7 @@
       "instability": 0.571
     },
     "bstack": {
-      "loc": 5120,
+      "loc": 5143,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
       "maxFileLoc": 1075,
@@ -33,7 +33,7 @@
       "instability": 0.5
     },
     "chain": {
-      "loc": 7080,
+      "loc": 7072,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 952,
@@ -57,10 +57,10 @@
       "instability": 0
     },
     "crypto": {
-      "loc": 120,
+      "loc": 122,
       "pkgFanout": 1,
       "edges": ["core"],
-      "maxFileLoc": 117,
+      "maxFileLoc": 119,
       "maxFileFanout": 2,
       "instability": 0.25
     },
@@ -73,7 +73,7 @@
       "instability": 0.167
     },
     "e2e": {
-      "loc": 6056,
+      "loc": 6061,
       "pkgFanout": 14,
       "edges": ["anchor", "automaton", "chain", "contracts", "core", "datalog", "graph", "identity", "log", "mcp", "policy", "reasoning", "verify", "zk"],
       "maxFileLoc": 1075,
@@ -89,10 +89,10 @@
       "instability": 0.333
     },
     "identity": {
-      "loc": 1677,
+      "loc": 1697,
       "pkgFanout": 2,
       "edges": ["core", "crypto"],
-      "maxFileLoc": 324,
+      "maxFileLoc": 344,
       "maxFileFanout": 9,
       "instability": 0.25
     },
@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 11448,
+      "loc": 11446,
       "pkgFanout": 18,
       "edges": [
         "anchor",
@@ -233,7 +233,7 @@
       "fanout": 32
     },
     "packages/chain/src/mainnet.ts": {
-      "loc": 909,
+      "loc": 901,
       "fanout": 7
     },
     "packages/chain/src/testkit.ts": {

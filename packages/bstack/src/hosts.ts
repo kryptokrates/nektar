@@ -1,6 +1,6 @@
 import { decodePayload, verifyBody, bodyPub, bodyExp, bodyNet, type MarketPayload } from './market-wire.js'
 import { carrierLockingKey, checkCarrier } from './carrier.js'
-import { sha256, toHex } from '@nektar/core'
+import { nap, sha256, toHex } from '@nektar/core'
 import type { ChainTracker } from '@bsv/sdk'
 
 export type Quorum = 'all' | 'majority' | 'one' | number
@@ -79,7 +79,7 @@ export async function submitAll(
       } catch (e) {
         if (t === waits.length) return { host, ok: false, error: (e as Error).message.slice(0, 80) }
       }
-      await new Promise((r) => setTimeout(r, waits[t]))
+      await nap(waits[t])
     }
     return { host, ok: false, error: 'retries exhausted' }
   }

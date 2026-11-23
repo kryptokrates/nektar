@@ -177,7 +177,7 @@ export class ClaimService {
     const { RunarContract } = await import('runar-sdk')
     const c = new RunarContract(this.cArt, ctor)
     c.connect(this.provider, this.signer)
-    ;(c as any).currentUtxo = cUtxo
+    ;(c as unknown as { currentUtxo?: unknown }).currentUtxo = cUtxo
     const verdict =
       state.verdictCode +
       '6a' +
@@ -214,7 +214,7 @@ export class ClaimService {
     const sale = new RunarContract(this.sArt, [this.pkh, BigInt(priceSats), hw, 0n, 1000n, this.pkh, verdictOutpoint])
     sale.connect(this.provider, this.signer)
     await sale.deploy({ satoshis: priceSats + 1000 })
-    const u = (sale as any).currentUtxo
+    const u = (sale as unknown as { currentUtxo: { txid: string; outputIndex: number } }).currentUtxo
     return { txid: u.txid, vout: u.outputIndex, statement: 'sale deployed — only unlockable in a tx that also spends the bound verdict' }
   }
 

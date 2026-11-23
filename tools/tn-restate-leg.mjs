@@ -42,6 +42,7 @@ const { NektarMemory } = await import(dist('packages/mcp/dist/src/memory.js'))
 const { acquireLock, keyLockFile } = await import(dist('packages/mcp/dist/src/index.js'))
 const { callTool } = await import(dist('packages/mcp/dist/src/dispatch/index.js'))
 const { openAutomation, ScriptedExecutor, DEFAULT_SCORE_WEIGHTS, Dispatcher } = await import(dist('packages/automation/dist/src/index.js'))
+const { nap: sleep } = await import(dist('packages/core/dist/src/index.js'))
 
 // paid disclosure is opt-in — the suite sets the same default
 process.env.NEKTAR_PAID_DISCLOSURE ??= '1'
@@ -61,7 +62,6 @@ const SELLER = process.env.TN_SELLER ?? 'ben'
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
 const DOMAIN = `rtleg${Date.now().toString(36)}` // fresh domain — stale host records never win collection
 const COLLECT_MS = 45_000
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const WIF = existsSync(KEYS_FILE) ? JSON.parse(readFileSync(KEYS_FILE, 'utf8')) : {}
 if (WIF[BUYER] === undefined || WIF[SELLER] === undefined) {
   console.error(`no suite WIFs for ${BUYER}/${SELLER} — expected ${KEYS_FILE}`)

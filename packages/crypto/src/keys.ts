@@ -40,7 +40,9 @@ export function canonicalKeyID(c: FragmentContext): string {
   return parts.map((p) => `${p.length}:${p}`).join('|')
 }
 
-export const CRYPTO_PROTOCOL_ID: [number, string] = [2, 'nektar']
+// [SecurityLevel, string] is the SDK's WalletProtocol shape — SecurityLevel
+// is the union 0|1|2, so a literal 2 needs the narrowed tuple type
+export const CRYPTO_PROTOCOL_ID: [0 | 1 | 2, string] = [2, 'nektar']
 
 export interface FragmentKeys {
   /** the AES-256 key for this fragment */
@@ -57,8 +59,8 @@ export interface FragmentKeys {
 export function deriveFragmentKey(agentSeed: PrivateKey, ctx: FragmentContext): FragmentKeys {
   const deriver = new KeyDeriver(agentSeed)
   const keyID = canonicalKeyID(ctx)
-  const pub = deriver.derivePublicKey(CRYPTO_PROTOCOL_ID as any, keyID, 'self')
-  const priv = deriver.derivePrivateKey(CRYPTO_PROTOCOL_ID as any, keyID, 'self')
+  const pub = deriver.derivePublicKey(CRYPTO_PROTOCOL_ID, keyID, 'self')
+  const priv = deriver.derivePrivateKey(CRYPTO_PROTOCOL_ID, keyID, 'self')
   const scalar = Uint8Array.from(Buffer.from(priv.toHex().padStart(64, '0'), 'hex'))
   return { fragmentKey: sha256(scalar), childPub: pub.toString() }
 }
@@ -66,7 +68,7 @@ export function deriveFragmentKey(agentSeed: PrivateKey, ctx: FragmentContext): 
 /** Level key: derive once per (seed, level); used to hand out level access. */
 export function deriveLevelKey(agentSeed: PrivateKey, level: number): PrivateKey {
   const deriver = new KeyDeriver(agentSeed)
-  return deriver.derivePrivateKey(CRYPTO_PROTOCOL_ID as any, `level:${level}`, 'self')
+  return deriver.derivePrivateKey(CRYPTO_PROTOCOL_ID, `level:${level}`, 'self')
 }
 
 export interface EncryptedFragment {

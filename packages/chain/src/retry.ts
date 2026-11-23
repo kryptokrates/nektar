@@ -2,9 +2,9 @@
 // (bounded attempts + caller-chosen delay curve), pacer (minimum-spacing
 // rate limiter). Replaces the hand-rolled backoff dialects that grew
 // site-by-site in mainnet.ts/regtest.ts — sites declare intent, not loops.
-import { spread } from '@nektar/core'
+import { nap, spread } from '@nektar/core'
 
-export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+export const sleep = nap
 
 export interface RetryOpts<T> {
   /** total tries (1 = no retry) */

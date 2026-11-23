@@ -77,13 +77,8 @@ export interface SaleOffer {
 }
 
 /** canonical bytes the offer signature covers — every field a MITM could swap. */
-export function offerDigest(
-  cfg: { sellerPkh: string; price: bigint | number; hWrapped: string; refundAfter: bigint | number; maxFee: bigint | number },
-  buyerPub: string,
-  leaf: string,
-  expiresAt: bigint | number = 0
-): Bytes {
-  const u64 = (n: bigint | number) => {
+export function offerDigest(cfg: SaleQuoteCfgWire, buyerPub: string, leaf: string, expiresAt: bigint | number | string = 0): Bytes {
+  const u64 = (n: bigint | number | string) => {
     const b = Buffer.alloc(8)
     b.writeBigUInt64LE(BigInt(n))
     return new Uint8Array(b)
@@ -134,7 +129,7 @@ export async function offerDisclosure(params: {
 /** Buyer-side: verify the seller's offer attestation before funding the
  *  escrow — refuses MITM-substituted cfgs AND tampered expiry horizons. */
 export function verifyOfferSig(
-  offer: { cfg: SaleOffer['cfg']; sellerPub: string; offerSig: string; expiresAt?: bigint | number },
+  offer: { cfg: SaleQuoteCfgWire; sellerPub: string; offerSig: string; expiresAt?: bigint | number | string },
   buyerPub = '',
   leaf = ''
 ): boolean {
@@ -156,6 +151,31 @@ export function verifyOfferSig(
 
 export type SaleQuote = Omit<SaleOffer, 'wrapped'>
 
+/** quote cfg numerics as they survive JSON transport — saleQuoteWire emits
+ *  `number` under MAX_SAFE_INTEGER and decimal strings beyond it; foreign
+ *  quotes may carry either (the wire validator's numLike accepts both, and
+ *  BigInt(n) covers both at digest time) */
+export interface SaleQuoteCfgWire {
+  sellerPkh: string
+  price: bigint | number | string
+  hWrapped: string
+  refundAfter: bigint | number | string
+  maxFee: bigint | number | string
+}
+
+/** the JSON-transport shape of a SaleQuote — what saleQuoteWire emits and
+ *  the market envelope carries (twin of bstack's PublicQuote; the wire layer
+ *  keeps its own declaration so bstack gains no identity edge) */
+export interface SaleQuoteWire {
+  cfg: SaleQuoteCfgWire
+  sellerPub: string
+  expiresAt?: number | string
+  offerSig: string
+  artifact?: { artifactId: string; scriptHash: string }
+  direct?: boolean
+  mode?: 'key' | 'fragment'
+}
+
 export function publicSaleQuote(offer: SaleOffer): SaleQuote {
   const q: SaleQuote = {
     cfg: { sellerPkh: offer.cfg.sellerPkh, price: offer.cfg.price, hWrapped: offer.cfg.hWrapped, refundAfter: offer.cfg.refundAfter, maxFee: offer.cfg.maxFee },
@@ -169,11 +189,11 @@ export function publicSaleQuote(offer: SaleOffer): SaleQuote {
   return q
 }
 
-export function saleQuoteWire(q: SaleQuote): Record<string, unknown> {
+export function saleQuoteWire(q: SaleQuote): SaleQuoteWire {
   const n = (v: bigint | number | string | undefined): number | string | undefined =>
     typeof v === 'bigint' ? (v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v.toString()) : v
-  const out: Record<string, unknown> = {
-    cfg: { sellerPkh: q.cfg.sellerPkh, price: n(q.cfg.price), hWrapped: q.cfg.hWrapped, refundAfter: n(q.cfg.refundAfter), maxFee: n(q.cfg.maxFee) },
+  const out: SaleQuoteWire = {
+    cfg: { sellerPkh: q.cfg.sellerPkh, price: n(q.cfg.price)!, hWrapped: q.cfg.hWrapped, refundAfter: n(q.cfg.refundAfter)!, maxFee: n(q.cfg.maxFee)! },
     sellerPub: q.sellerPub,
     offerSig: q.offerSig
   }

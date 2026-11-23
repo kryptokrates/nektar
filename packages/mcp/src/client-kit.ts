@@ -1,10 +1,7 @@
 // Client kit: the cryptography an AGENT HARNESS does on behalf of a model.
 // The model only decides *what* to recall; the wallet proves *who* asks and
 // that the caller is cleared — keys never enter the model's context.
-//   const wallet = new ClientWallet()
-//   const identity = await wallet.identify(call)           // challenge → signed answer
-//   const zk = wallet.presentClearance(cred, 'shard', seq, 2n)
-//   await call('recall', { shard, seq, identity, zk })
+// See docs/INTEGRATION.md for the harness-side usage example.
 import { randomBytes } from 'node:crypto'
 import { PrivateKey } from '@bsv/sdk'
 import {

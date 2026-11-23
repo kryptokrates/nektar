@@ -17,20 +17,21 @@ export interface PaymentInvoice {
 export const invoiceOf = (
   paymentRequired: { accepts?: Array<{ amount?: string; extra?: Record<string, unknown> }> } | { invoice?: Record<string, unknown> }
 ): PaymentInvoice => {
-  const acc = (paymentRequired as any).accepts?.[0]
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+  const acc = 'accepts' in paymentRequired ? paymentRequired.accepts?.[0] : undefined
   if (acc)
     return {
       amount: Number(acc.amount),
-      lockingScriptHex: String(acc.extra?.lockingScriptHex ?? ''),
-      opReturn: String(acc.extra?.opReturn ?? ''),
-      invoiceId: String(acc.extra?.invoiceId ?? '')
+      lockingScriptHex: str(acc.extra?.lockingScriptHex),
+      opReturn: str(acc.extra?.opReturn),
+      invoiceId: str(acc.extra?.invoiceId)
     }
-  const inv = (paymentRequired as any).invoice
+  const inv = 'invoice' in paymentRequired ? paymentRequired.invoice : undefined
   return {
     amount: Number(inv?.amount),
-    lockingScriptHex: String(inv?.lockingScriptHex ?? ''),
-    opReturn: String(inv?.opReturn ?? ''),
-    invoiceId: String(inv?.invoiceId ?? '')
+    lockingScriptHex: str(inv?.lockingScriptHex),
+    opReturn: str(inv?.opReturn),
+    invoiceId: str(inv?.invoiceId)
   }
 }
 

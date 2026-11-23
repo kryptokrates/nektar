@@ -11,11 +11,90 @@ import type { MarketDeps } from '../src/market/types.js'
 import { inertTxEffects, type TxEffects } from '../src/machines/effects.js'
 import { Dispatcher, wireTx } from './rig.js'
 import { wireEngine } from '../src/rt/dispatch.js'
-import { OPS_NO_EDGE_CAUSES, opsCauseCandidates, replayOps, replayTx, type Diff } from '../src/machines/shadow.js'
+import { OPS_NO_EDGE_CAUSES, opsCauseCandidates } from '../src/machines/shadow.js'
+import { opsStep } from '../src/machines/ops.machine.js'
+import { txStep } from '../src/machines/tx.machine.js'
 
 // state-audit Phase 3 — replay recorded live transitions through the shadow
 // machines and report every divergence. The machine never moves production
-// state; it only answers "what would the spec have done".
+// state; it only answers "what would the spec have done". The replay/diff
+// helpers below are test-only — production shadow.ts keeps just the cause
+// vocabulary (driver.ts and the census gate consume it).
+
+interface LiveTransition {
+  from: string
+  to: string
+  cause: string
+}
+
+interface Diff {
+  kind: 'agree' | 'machine-blocks' | 'machine-diverges' | 'unmodeled'
+  from: string
+  event: string
+  live: string
+  machine: string
+  cause: string
+  guard?: string
+  note?: string
+}
+
+/** Replay one op's live transition log through opsMachine. */
+function replayOps(rows: LiveTransition[]): Diff[] {
+  const diffs: Diff[] = []
+  for (const r of rows) {
+    if (!r.from || r.from === r.to) continue // creation + data-update rows carry no edge
+    const candidates = opsCauseCandidates(r.cause)
+    if (!candidates) {
+      diffs.push({ kind: 'unmodeled', from: r.from, event: r.cause, live: r.to, machine: '', cause: r.cause })
+      continue
+    }
+    // try each candidate edge × guard — report the one matching live, else the divergence
+    let matched: Diff | null = null
+    let best: Diff | null = null
+    for (const cand of candidates) {
+      for (const guard of cand.guards ?? [undefined]) {
+        const s = opsStep(r.from, cand.event, guard ? { guard } : {})
+        const d: Diff = { kind: 'agree', from: r.from, event: cand.event, live: r.to, machine: s.next, cause: r.cause, guard }
+        if (!s.accepted) d.kind = 'machine-blocks'
+        else if (s.next !== r.to) d.kind = 'machine-diverges'
+        if (d.kind === 'agree') {
+          matched = d
+          break
+        }
+        best ??= d
+      }
+      if (matched) break
+    }
+    diffs.push(matched ?? best!)
+  }
+  return diffs
+}
+
+/** Infer a txMachine event from a wallet_transactions (from,to) edge + emit context. */
+function txEventFor(from: string, to: string, hint?: 'submit' | 'observe' | 'abandon' | 'export-ttl'): { event: string; guard?: string } {
+  if (to === 'submitted') return { event: 'submit.success' }
+  if (to === 'submission_unknown') return { event: 'submit.unknown' }
+  if (to === 'observed') return { event: 'obs.seen', guard: 'verified' }
+  if (to === 'confirmed') return { event: 'obs.proven', guard: 'proof' }
+  if (to === 'expired') return { event: 'export.ttl' }
+  if (to === 'abandoned') return { event: 'abandon' }
+  if (to === 'conflicted') return hint === 'abandon' ? { event: 'abandon' } : { event: 'obs.conflicted', guard: 'verified+spentBy' }
+  if (to === 'rejected') return hint === 'submit' ? { event: 'submit.refused', guard: 'definitive' } : { event: 'obs.rejected', guard: 'verified' }
+  return { event: `unknown:${from}->${to}` }
+}
+
+/** Replay wallet_transactions edges through txMachine. */
+function replayTx(rows: { from: string; to: string; hint?: 'submit' | 'observe' | 'abandon' | 'export-ttl' }[]): Diff[] {
+  return rows.map((r) => {
+    const { event, guard } = txEventFor(r.from, r.to, r.hint)
+    if (event.startsWith('unknown:')) return { kind: 'unmodeled', from: r.from, event, live: r.to, machine: '', cause: event }
+    const s = txStep(r.from, event, guard ? { guard } : {})
+    const d: Diff = { kind: 'agree', from: r.from, event, live: r.to, machine: s.next, cause: event, guard }
+    if (!s.accepted) d.kind = 'machine-blocks'
+    else if (s.next !== r.to) d.kind = 'machine-diverges'
+    return d
+  })
+}
 
 const key = PrivateKey.fromRandom()
 

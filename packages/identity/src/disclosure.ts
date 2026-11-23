@@ -158,7 +158,7 @@ export interface WrappedKey {
   ct: Bytes
 } // ct includes the 16B GCM tag
 function ecdhShared(priv: PrivateKey, pubHex: string): Bytes {
-  const Pp = PublicKey.fromString(pubHex) as any
+  const Pp = PublicKey.fromString(pubHex)
   const shared = new Point(Pp.x, Pp.y).mul(new BigNumber(priv.toHex(), 16))
   return Buffer.from(shared.encode(true)) as Uint8Array
 }

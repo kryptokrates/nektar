@@ -175,6 +175,15 @@ export interface MarketOptions {
   offerTtlBlocks: number
   saleMaxFee: number
   escrowFeeReserveSats: number
+  /** the direct rail's policy-accounted fee bound — what the P2PKH payment's
+   *  fee can cost at the configured rate (a 1-in/~3-out spend is ~450B;
+   *  100 covers ≤ ~220 sat/KB). Policy accounting and offer ranking quote
+   *  this on a `direct` quote instead of `maxFee + escrowFeeReserveSats` —
+   *  a 50-sat outright payment must not carry covenant-class exposure. The
+   *  custody take margin derives from the same rate, so raising
+   *  NEKTAR_FEE_RATE_SAT_PER_KB past ~220 sat/KB wants a matching raise
+   *  here (mcp wires the derived value). */
+  directFeeReserveSats: number
   sellerSafetyBlocks: number
   approvalTtlMs: number
   /** buyer-side direct-rail ceiling: when a quote advertises `direct` and the
@@ -230,6 +239,7 @@ export const DEFAULTS: MarketOptions = {
   offerTtlBlocks: 12,
   saleMaxFee: 10,
   escrowFeeReserveSats: 500,
+  directFeeReserveSats: 100,
   sellerSafetyBlocks: 2,
   approvalTtlMs: 86_400_000,
   minCollectMs: 1000,

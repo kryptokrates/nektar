@@ -1066,15 +1066,21 @@ export class AutomationStore {
    *  Short fixed re-check; the real wake-up is unblockOutbox on a freeing
    *  event (topup proven → slots appear). */
   async deferOutbox(actionId: string, error: string, checkInMs = WAITS.deferCheck.ms, cls: DeferClass = 'funding-slot'): Promise<void> {
-    await this.kx(T.outbox)
+    const n = await this.kx(T.outbox)
       .where({ action_id: actionId, status: 'pending' })
       .update({ last_error: error.slice(0, 500), defer_class: cls, next_at: this.now() + checkInMs })
+    // the defer MOVED the wake instant — tell the pump: the drain re-arms
+    // on the post-defer next_at, a fresh instant its drain:${next} key can
+    // never collide with (the arm dedups against the invocation that was
+    // itself armed under that instant — rt/drain-arm-dedup). Without this
+    // poke a deferred row had no wake path at all once the arm chain broke.
+    if (n > 0) detached(() => this.outboxReady?.())
   }
 
   async retryOutbox(actionId: string, error: string, maxAttempts = 10, cls?: DeferClass): Promise<void> {
-    await this.kx.transaction(async (trx) => {
+    const moved = await this.kx.transaction(async (trx) => {
       const r = await trx(T.outbox).where({ action_id: actionId }).first()
-      if (!r || r.status !== 'pending') return
+      if (!r || r.status !== 'pending') return 0
       const attempts = r.attempts + 1
       await trx(T.outbox)
         .where({ action_id: actionId })
@@ -1088,7 +1094,10 @@ export class AutomationStore {
           // stable01 keeps the spread replayable and restart-stable
           next_at: this.now() + spread(Math.min(WAITS.outboxRetryCap.ms, WAITS.outboxRetryBase.ms * 2 ** attempts), stable01(actionId))
         })
+      return 1
     })
+    // same moved-wake poke as deferOutbox — a rescheduled row is new work
+    if (moved > 0) detached(() => this.outboxReady?.())
   }
 
   // ── budget ──────────────────────────────────────────────────────────────

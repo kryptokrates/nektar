@@ -50,6 +50,12 @@ const opReturnScript = (opReturn: string): LockingScript => {
   )
 }
 
+/** fee bound for one P2PKH-in → payment + optional opReturn + change spend —
+ *  ~450B worst case, so the bound tracks the configured rate instead of a
+ *  fixed reserve: the direct rail's funding take and the market's policy
+ *  reserve read the same number (rt/direct-policy-amounts) */
+export const paymentFeeBoundSats = (feeRateSatPerKb?: number): number => Math.ceil((450 * (feeRateSatPerKb ?? 1)) / 1000)
+
 export class CustodyOps {
   constructor(private deps: CustodyOpsDeps) {
     // hint-only pass-over plugs into the Funds selection: a candidate whose
@@ -214,7 +220,11 @@ export class CustodyOps {
   }): Promise<{ txid: string; paidSats: number; tx?: Transaction; txHex?: string; utxo?: { txid: string; vout: number; satoshis: number; script: string } }> {
     if (!args.address && !args.scriptHex) throw new Error('sendSats: address or scriptHex required')
     const script = args.scriptHex ? LockingScript.fromHex(args.scriptHex) : new P2PKH().lock(args.address!)
-    const f = await this.takeFunding(args.amount + 600, 'deal')
+    // the take needs amount + the fee this tx will actually pay — a 1-in
+    // P2PKH spend with payment + optional opReturn + change outputs is
+    // ~450B worst case, so the bound derives from the configured rate,
+    // not a covenant-class reserve (rt/direct-policy-amounts)
+    const f = await this.takeFunding(args.amount + paymentFeeBoundSats(this.deps.feeRateSatPerKb), 'deal')
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.deps.fundSigner()) })
     tx.addOutput({ satoshis: args.amount, lockingScript: script })

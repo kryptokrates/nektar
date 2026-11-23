@@ -15,7 +15,7 @@
 // — the Restate handlers are thin ctx.run wrappers around the same steps,
 // so tests invoke the exact code the server invokes.
 import type * as restate from '@restatedev/restate-sdk'
-import { sparse } from '@nektar/core'
+import { sparse, stable01 } from '@nektar/core'
 import { WAITS } from '../waits.js'
 import type { AutomationStore, MarketOpData, OutboxItem, TxState, WalletTx } from '../store.js'
 import { runTxIntents, type TxEffects } from '../machines/effects.js'
@@ -195,6 +195,9 @@ export interface DealDeps {
   /** one op's reconcile legs — engine.reconcileOp (refused-escrow arm +
    *  refunded rescan), keyed by operationId. */
   reconcileOp: (operationId: string) => Promise<void>
+  /** resolve an ev:<wantId> key back to its operationId — pre-arg armed
+   *  sends carry no {op}, and the bare key is not an operationId */
+  opByWant?: (wantId: string) => Promise<string | undefined>
   log: (line: string) => void
 }
 
@@ -207,7 +210,17 @@ export interface DealDeps {
 export const dealAdvanceBody =
   (deps: DealDeps) =>
   async (arg: { op?: string } | undefined, key = ''): Promise<{ ran: boolean }> => {
-    return { ran: await deps.advanceOp(arg?.op ?? key) }
+    let op = arg?.op ?? key
+    // pre-arg armed sends key on ev:<wantId> — the want correlates the op,
+    // so resolve it; unresolvable (dead want / ambiguous) is a safe no-op,
+    // the op's own arms re-drive it
+    if (arg?.op === undefined && op.startsWith('ev:')) {
+      const want = op.slice(3)
+      const resolved = await deps.opByWant?.(want)
+      if (resolved === undefined) return { ran: false }
+      op = resolved
+    }
+    return { ran: await deps.advanceOp(op) }
   }
 
 export const dealObject = async (deps: DealDeps) => {
@@ -580,7 +593,11 @@ export const dealfanTickBody =
     const ceil = await run('ceiling', () => Promise.resolve(deps.ceilingMs()))
     if (ceil > 0) {
       const now = await run('armNow', () => Promise.resolve((deps.now ?? Date.now)()))
-      await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` })
+      // phase skew: services sharing one cadence fire in lockstep after a
+      // fleet restart — stable01(service) spreads each arm ≤10% inside its
+      // ceiling, deterministic so a replay re-arms identically
+      const skew = Math.floor(stable01(service) * ceil * 0.1)
+      await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil + skew, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` })
     }
     return { events: inbox.length, advanced: ops.length, reconciled: rec.length }
   }
@@ -803,7 +820,11 @@ export const cronTickBody =
     const ceil = await run('ceiling', () => Promise.resolve(deps.ceilingMs()))
     if (ceil > 0) {
       const now = await run('armNow', () => Promise.resolve((deps.now ?? Date.now)()))
-      await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` })
+      // phase skew: services sharing one cadence fire in lockstep after a
+      // fleet restart — stable01(service) spreads each arm ≤10% inside its
+      // ceiling, deterministic so a replay re-arms identically
+      const skew = Math.floor(stable01(service) * ceil * 0.1)
+      await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil + skew, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` })
     }
     return { done: true }
   }

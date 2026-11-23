@@ -214,6 +214,18 @@ export async function sweepBasket(deps: {
             blocked++
           }
           if (!ok) continue
+          // 'already' is the broadcaster's claim it holds the parent — no
+          // broadcast actually ran. Corroborate with the chain's utxo view
+          // before adopting: a lying-or-stale 'already' would install ghost
+          // funding rows ('unknown' answers defer to the next boot's retry)
+          if (br.status !== 'success' && port.spendStatus !== undefined) {
+            const st = await port.spendStatus(r.txid, r.vout).catch(() => 'unknown' as const)
+            if (st === 'unknown') {
+              l(`basket sweep: ${r.txid.slice(0, 12)}…:${r.vout} 'already' uncorroborated — deferring adoption`)
+              blocked++
+              continue
+            }
+          }
         }
         if (await funds.adopt(tx, r.vout)) swept++
       }

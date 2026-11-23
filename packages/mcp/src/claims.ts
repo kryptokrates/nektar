@@ -109,7 +109,7 @@ export class ClaimService {
       s.anchorOutpoint
     ]
     const { utxo } = await deployClaim(this.cArt, ctor, this.provider, this.signer, Number(s.bondSats))
-    registerClaim(this.claimsFile, { txid: utxo.txid, vout: utxo.outputIndex })
+    await registerClaim(this.claimsFile, { txid: utxo.txid, vout: utxo.outputIndex })
     storeProof(this.proofDir, receiptHash, bytes)
     return {
       txid: utxo.txid,

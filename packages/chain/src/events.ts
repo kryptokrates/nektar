@@ -75,8 +75,19 @@ export class ChainEvents extends EventEmitter {
   private busy = false
   private rotate = 0
   private timer?: NodeJS.Timeout
+  private running = false
   private pokeTimer?: NodeJS.Timeout
   private pokeAgain = false
+  // push-vs-floor counters — the substrate's contract is "pokes deliver,
+  // the floor only reconciles"; a floor-dominated ratio means producers
+  // stopped waking us (a silent degrade the cadence itself can't feel)
+  private pushTicks = 0
+  private floorTicks = 0
+  /** {push, floor} tick counts since start — floor should stay the
+   *  exception; push ≈ 0 means every answer arrived on the poll ceiling */
+  get wakeRatio(): { push: number; floor: number } {
+    return { push: this.pushTicks, floor: this.floorTicks }
+  }
 
   constructor(private opts: ChainEventsOpts) {
     super()
@@ -265,18 +276,37 @@ export class ChainEvents extends EventEmitter {
     if (this.pokeTimer !== undefined) return
     this.pokeTimer = setTimeout(() => {
       this.pokeTimer = undefined
+      this.pushTicks++
       void this.tick().catch(() => undefined)
     }, 0)
     this.pokeTimer.unref?.()
   }
 
   start(): void {
-    this.timer ??= setInterval(() => void this.tick().catch(() => undefined), this.opts.intervalMs ?? 5_000)
-    this.timer.unref?.()
+    if (this.running) return
+    this.running = true
+    const arm = (): void => {
+      const base = this.opts.intervalMs ?? 5_000
+      // self-arming tick, ±10% per-tick skew: setInterval would keep a
+      // fleet-restarted set of hosts phase-locked on the status API
+      // forever — the jitter drifts them back apart on every pass
+      this.timer = setTimeout(() => {
+        this.timer = undefined
+        this.floorTicks++
+        void this.tick()
+          .catch(() => undefined)
+          .finally(() => {
+            if (this.running) arm()
+          })
+      }, base * (0.9 + Math.random() * 0.2))
+      this.timer.unref?.()
+    }
+    arm()
   }
 
   stop(): void {
-    if (this.timer !== undefined) clearInterval(this.timer)
+    this.running = false
+    if (this.timer !== undefined) clearTimeout(this.timer)
     this.timer = undefined
     if (this.pokeTimer !== undefined) clearTimeout(this.pokeTimer)
     this.pokeTimer = undefined

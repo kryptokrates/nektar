@@ -4,6 +4,7 @@
 // commit→effect window that pendingTxEffects/replayTxEffects covered by
 // hand. The direct emitTxEvent path is only for same-key emits inside a
 // handler (the caller already holds that object's lock).
+import { createHash } from 'node:crypto'
 import type { AutomationStore, TxState, WalletTx } from '../store.js'
 import { emitTxEvent, type EmitResult, type TxEffects } from '../machines/effects.js'
 import { CUSTODY_KEY, EXEC_SVC, rtScopeKey, type Executor } from './exec.js'
@@ -34,6 +35,13 @@ export interface CustodyWallet {
   resubmitPending(): Promise<Array<{ actionId: string; state: TxState }>>
 }
 
+/** deterministic content key for deduped egress — guard + observation
+ *  hashed so distinct payloads never collide on one key */
+const guardKey = (payload: { guard?: string; observation?: unknown }): string => {
+  const obs = payload.observation === undefined ? '' : JSON.stringify(payload.observation)
+  return createHash('sha256').update(`${payload.guard ?? ''}${obs}`).digest('hex').slice(0, 16)
+}
+
 export async function txEmit(
   exec: Executor,
   store: AutomationStore,
@@ -47,7 +55,12 @@ export async function txEmit(
   if (rtScopeKey()?.txKey === w.actionId) return await emitTxEvent(store, w, event, payload, fx)
   const r = await exec.call<{ accepted: boolean; next?: EmitResult['next']; intents?: string[] }>(
     { service: EXEC_SVC.tx, handler: 'observe', key: w.actionId },
-    { event, guard: payload.guard, observation: payload.observation, attempt: payload.attempt } satisfies TxObserve
+    { event, guard: payload.guard, observation: payload.observation, attempt: payload.attempt } satisfies TxObserve,
+    // journaled-step egress: a caller killed between this HTTP call landing
+    // and the journal write re-fires on resume — the deterministic key makes
+    // the ingress dedupe the re-fire instead of double-observing. Same
+    // content → same result, so legitimate repeats collapse harmlessly.
+    { idempotencyKey: `observe:${w.actionId}:${event}:${guardKey(payload)}` }
   )
   return { accepted: r.accepted, next: r.next ?? w.state, intents: r.intents ?? [] }
 }
@@ -70,16 +83,24 @@ export async function custodySubmit(exec: Executor, wallet: CustodyWallet, actio
   // txScope forwards the caller's held tx key through the custody hop — a
   // resubmit arriving from tx.resubmit(A) already holds A's object lock, so
   // the emits inside wallet.submit must go direct, not re-enter the object
-  return await exec.call({ service: EXEC_SVC.custody, handler: 'submit', key: actionId }, { actionId, txScope: rtScopeKey()?.txKey } satisfies CustodyLeg)
+  return await exec.call(
+    { service: EXEC_SVC.custody, handler: 'submit', key: actionId },
+    { actionId, txScope: rtScopeKey()?.txKey } satisfies CustodyLeg,
+    { idempotencyKey: `custody:submit:${actionId}` }
+  )
 }
 
 export async function custodyMarkRejected(exec: Executor, wallet: CustodyWallet, actionId: string, observation: unknown): Promise<void> {
   if (rtScopeKey()?.custodyKey === actionId) return await wallet.markRejectedById(actionId, observation)
-  await exec.call({ service: EXEC_SVC.custody, handler: 'markRejected', key: actionId }, {
-    actionId,
-    observation,
-    txScope: rtScopeKey()?.txKey
-  } satisfies CustodyLeg)
+  await exec.call(
+    { service: EXEC_SVC.custody, handler: 'markRejected', key: actionId },
+    {
+      actionId,
+      observation,
+      txScope: rtScopeKey()?.txKey
+    } satisfies CustodyLeg,
+    { idempotencyKey: `custody:reject:${actionId}:${guardKey({ observation })}` }
+  )
 }
 
 export async function custodyResubmitPending(exec: Executor, wallet: CustodyWallet): Promise<Array<{ actionId: string; state: TxState }>> {

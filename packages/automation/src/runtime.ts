@@ -545,6 +545,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     advanceOp: (operationId: string) => engine.advanceOp(operationId),
     inboxEvent: (item: Parameters<typeof engine.dealEvent>[0]) => engine.dealEvent(item),
     reconcileOp: (operationId: string) => engine.reconcileOp(operationId),
+    opByWant: async (wantId: string) => {
+      const hits = (await store.operations({ states: NONTERMINAL })).filter((o) => opWantId(o) === wantId)
+      return hits.length === 1 ? hits[0].operationId : undefined
+    },
     log
   }
   // the deals floor cadence — hot while a live op is in flight (the old

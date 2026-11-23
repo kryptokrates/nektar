@@ -2,7 +2,7 @@
 // discovery, merkle paths) + the BSV Broadcaster client. NO spend happens
 // here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
 // in the runtime before any tx reaches it.
-import { currentSignal, nap, nektarEnv, sparse, spread, HEX64 } from '@nektar/core'
+import { currentSignal, deadline, nap, nektarEnv, sparse, spread, HEX64 } from '@nektar/core'
 import { sleep, withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
@@ -507,7 +507,7 @@ export class IndexTracker implements ChainTracker {
     if (hit) return hit
     const h = await this.fetchHeader(height)
     if (h === undefined) return undefined
-    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return h
+    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return undefined // linkage refused — don't serve what we wouldn't cache
     this.cache.set(h)
     return h
   }
@@ -523,7 +523,9 @@ export class IndexTracker implements ChainTracker {
     if (cur !== undefined && cur.hash !== h.hash) {
       await this.cache.reorgAt(h, (x) => this.fetchHeader(x))
       this.cache.set(h)
-    } else if (await this.cache.admit(h, (x) => this.fetchHeader(x))) this.cache.set(h)
+    } else if (cur !== undefined) return h // same hash already cached — linkage passed on the first admit
+    else if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return undefined // linkage refused
+    else this.cache.set(h)
     return h
   }
 
@@ -635,7 +637,7 @@ export class ChaintracksTracker implements ChainTracker {
     if (hit) return hit
     const h = await this.fetchHeader(height)
     if (h === undefined) return undefined
-    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return h
+    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return undefined // linkage refused — don't serve what we wouldn't cache
     this.cache.set(h)
     return h
   }
@@ -651,7 +653,9 @@ export class ChaintracksTracker implements ChainTracker {
     if (cur !== undefined && cur.hash !== h.hash) {
       await this.cache.reorgAt(h, (x) => this.fetchHeader(x))
       this.cache.set(h)
-    } else if (await this.cache.admit(h, (x) => this.fetchHeader(x))) this.cache.set(h)
+    } else if (cur !== undefined) return h // same hash already cached — linkage passed on the first admit
+    else if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return undefined // linkage refused
+    else this.cache.set(h)
     return h
   }
 
@@ -847,7 +851,8 @@ export async function utxoSpendStatus(
   // full retry ladder (~18s across three retried calls) inside a
   // serialized take. 4s covers a healthy RTT plus one pacing retry and
   // stays under the take-side sweep ceiling
-  return await Promise.race([spendProbe(c, tracker, txid, vout), sleep(4_000).then(() => 'unknown' as const)])
+  const r = await deadline(() => spendProbe(c, tracker, txid, vout), 4_000)
+  return r.outcome === 'settled' ? r.value : 'unknown'
 }
 
 /** same evidence bar as utxoSpendStatus, but answers with the verified
@@ -860,7 +865,8 @@ export async function utxoSpender(
   vout: number
 ): Promise<string | undefined> {
   const c = def(cfg)
-  return await Promise.race([spenderProbe(c, tracker, txid, vout), sleep(4_000).then(() => undefined)])
+  const r = await deadline(() => spenderProbe(c, tracker, txid, vout), 4_000)
+  return r.outcome === 'settled' ? r.value : undefined
 }
 
 async function spendProbe(

@@ -83,10 +83,10 @@ const optionsFingerprint = (services: unknown[]): string => {
   return createHash('sha256').update(services.map(stable).join('|')).digest('hex')
 }
 
-const manifestMatches = async (admin: string, uri: string, expected: string[]): Promise<boolean> => {
+const manifestMatches = async (admin: string, uri: string, expected: string[]): Promise<boolean | undefined> => {
   try {
     const r = await fetch(`${admin}/deployments`, { signal: AbortSignal.timeout(WAITS.registerIo.ms) })
-    if (!r.ok) return false
+    if (!r.ok) return undefined
     const body = (await r.json()) as { deployments?: AdminDeployment[] } | AdminDeployment[]
     const list = Array.isArray(body) ? body : (body.deployments ?? [])
     // the admin normalizes the registered uri (trailing slash) — a strict
@@ -105,7 +105,10 @@ const manifestMatches = async (admin: string, uri: string, expected: string[]): 
     // never a compare-failure veto
     return served !== undefined && served.join('') === expected.join('')
   } catch {
-    return false
+    // tri-state: a transient admin read failure is UNKNOWN, not "differs" —
+    // forcing re-registration on a read error orphans every armed delayed
+    // send the existing deployment holds
+    return undefined
   }
 }
 
@@ -318,9 +321,15 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
     sessions.add(s)
     s.on('close', () => sessions.delete(s))
   })
+  // bind scope follows the advertised URI: a loopback URI means same-host
+  // callers only — bind loopback so the endpoint is never reachable off-
+  // box. A routable URI (containerized sidecar) needs a wildcard bind or
+  // the sidecar can't call back. NEKTAR_RESTATE_ENDPOINT_BIND overrides.
+  const loopback = /^https?:\/\/(127\.|localhost|\[?::1\]?)/.test(uri)
+  const bind = nektarEnv('NEKTAR_RESTATE_ENDPOINT_BIND', env) ?? (loopback ? '127.0.0.1' : '0.0.0.0')
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
-    server.listen(port, () => resolve())
+    server.listen(port, bind, () => resolve())
   })
   // plain restarts keep the existing deployment (armed sends survive); only
   // a changed manifest forces a new one (the RT0011 orphan class the floors
@@ -350,7 +359,10 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
   } catch {
     /* no prior record — first boot or wiped dir */
   }
-  const force = expected.length === 0 || !(await manifestMatches(admin, uri, expected)) || lastFp !== fp
+  // manifestMatches is tri-state: undefined (read failed) does not force —
+  // the local fingerprint diff still catches a genuinely changed manifest
+  const probe = await manifestMatches(admin, uri, expected)
+  const force = expected.length === 0 || probe === false || lastFp !== fp
   if (!(await registerDeployment(admin, uri, log, force))) {
     server.close()
     throw new Error(`automation: restate deployment registration failed ${uri} — the executor plane is required infrastructure, refusing to start without it`)

@@ -125,7 +125,7 @@ export class TeranodeRPCTracker implements ChainTracker {
     if (cached) return cached
     const h = await this.fetchHeader(height)
     if (h === undefined) return undefined
-    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return h
+    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return undefined // linkage refused — don't serve what we wouldn't cache
     this.cache.set(h)
     return h
   }

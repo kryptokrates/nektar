@@ -35,7 +35,10 @@ services:
       SHIM_MODE: live
       SHIM_BROADCASTER: https://arcade.gorillapool.io
       SHIM_INDEX: https://bananablocks.com/api/v1
-      # no public mainnet chaintracks — lone-source mode (see header note)
+      # no public mainnet chaintracks known in-repo — lone-source mode:
+      # every header this serves is ONE index's word, uncorroborated.
+      # Set SHIM_CHAINTRACKS to a second source and drop this flag to
+      # restore witnessed strictness when one exists.
       SHIM_SINGLE_OK: '1'
   watch-a:
     image: ghcr.io/kryptokrates/nektar-shim:edge

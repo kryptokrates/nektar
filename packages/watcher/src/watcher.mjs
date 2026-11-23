@@ -206,16 +206,16 @@ async function checkClaim(entry) {
     console.log(`  ✔ challenge broadcast for ${txid.slice(0, 8)}:${vout}`)
   } catch (e) {
     if (/UTXO_SPENT/.test(e.message)) {
-      markClaimSpent(cfg.claimsFile, txid, vout)
+      await markClaimSpent(cfg.claimsFile, txid, vout)
       return console.log(`  ${txid.slice(0, 8)}:${vout} — outpoint already spent (likely challenged), marked`)
     }
     throw e
   }
-  markClaimSpent(cfg.claimsFile, txid, vout) // consumed by our challenge tx
+  await markClaimSpent(cfg.claimsFile, txid, vout) // consumed by our challenge tx
   // continuation tracking: the challenged claim lives on as the challenge
   // tx's output 0 — register it so the watcher keeps following the bisection
   // game instead of losing the covenant at its first spend
-  if (res.txid) registerClaim(cfg.claimsFile, { txid: res.txid, vout: 0 })
+  if (res.txid) await registerClaim(cfg.claimsFile, { txid: res.txid, vout: 0 })
 }
 
 const inconclusiveStreaks = new Map() // txid → consecutive inconclusive verifications

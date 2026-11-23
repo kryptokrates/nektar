@@ -176,8 +176,12 @@ export class WitnessedTracker implements ChainTracker {
     } = {}
   ) {}
 
+  // per-instance phase on the retry gate — a fleet that hit a disagreement
+  // together re-asks in a spread instead of hammering the witness on one
+  // 30s boundary
+  private readonly retryPhase = 0.85 + Math.random() * 0.3
   private get retryMs(): number {
-    return this.opts.retryMs ?? 30_000
+    return (this.opts.retryMs ?? 30_000) * this.retryPhase
   }
 
   /** one witness request per height per retry window — a timed-out ask keeps
@@ -271,7 +275,14 @@ export class WitnessedTracker implements ChainTracker {
   }
 
   async currentHeight(): Promise<number> {
-    return await this.primary.currentHeight().catch(() => this.witness.currentHeight())
+    // both sources, highest answer — a lone-source height lets a lying or
+    // stale primary pin the tip low and stall every height gate. Heights
+    // are monotone so max() can't regress; either source alone still
+    // answers (the outage degrade), only silence on both throws.
+    const [p, w] = await Promise.allSettled([this.primary.currentHeight(), this.witness.currentHeight()])
+    const heights = [p, w].filter((r): r is PromiseFulfilledResult<number> => r.status === 'fulfilled').map((r) => r.value)
+    if (heights.length === 0) throw new Error('headers: no source could answer currentHeight')
+    return Math.max(...heights)
   }
 
   async tipHeight(): Promise<number> {

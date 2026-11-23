@@ -184,7 +184,7 @@ export async function callTerminal(
 
 // ── file-backed claim registry + proof store (shared by watcher + MCP) ──
 import { readFileSync, mkdirSync, statSync, rmSync } from 'node:fs'
-import { writeFileAtomic } from '@nektar/core'
+import { nap, writeFileAtomic } from '@nektar/core'
 import { join } from 'node:path'
 
 export interface ClaimEntry {
@@ -204,11 +204,10 @@ export const loadClaims = (file: string): ClaimEntry[] => {
 // watcher marks spent) — an unsynchronized read-modify-write loses whichever
 // update interleaves, and a lost registration is a claim the watcher never
 // sees. mkdir is the atomic-acquire primitive (same shape as the testkit
-// treasury lock); stale-mtime breaks a dead holder's lock.
-const spin = (ms: number): void => {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-}
-function withClaimsLock<T>(file: string, fn: () => T): T {
+// treasury lock); stale-mtime breaks a dead holder's lock. The wait is an
+// async nap — a contended lock must yield the event loop, never Atomics.wait
+// it (a 30s freeze starves every other leg in the process).
+async function withClaimsLock<T>(file: string, fn: () => T): Promise<T> {
   const lock = `${file}.lock`
   const deadline = Date.now() + 30_000
   for (;;) {
@@ -226,7 +225,7 @@ function withClaimsLock<T>(file: string, fn: () => T): T {
       } catch {
         /* raced */
       }
-      spin(25)
+      await nap(25)
     }
   }
   try {
@@ -236,8 +235,8 @@ function withClaimsLock<T>(file: string, fn: () => T): T {
   }
 }
 
-export function registerClaim(file: string, e: ClaimEntry): void {
-  withClaimsLock(file, () => {
+export async function registerClaim(file: string, e: ClaimEntry): Promise<void> {
+  await withClaimsLock(file, () => {
     const list = loadClaims(file)
     if (!list.some((x) => x.txid === e.txid && x.vout === e.vout)) {
       list.push(e)
@@ -249,8 +248,8 @@ export function registerClaim(file: string, e: ClaimEntry): void {
 // The outpoint is consumed (by our challenge or any spend). The claim's
 // continuation UTXO gets a new txid the registry cannot follow without a
 // tx-index — marking spent just stops retrying the dead outpoint.
-export function markClaimSpent(file: string, txid: string, vout: number): void {
-  withClaimsLock(file, () => {
+export async function markClaimSpent(file: string, txid: string, vout: number): Promise<void> {
+  await withClaimsLock(file, () => {
     const list = loadClaims(file)
     const e = list.find((x) => x.txid === txid && x.vout === vout)
     if (e && !e.spent) {

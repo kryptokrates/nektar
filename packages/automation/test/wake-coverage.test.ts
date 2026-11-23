@@ -62,7 +62,7 @@ void test('every wait primitive site is classified — the census sees all wait 
   // Every file holding one must be classified below — the helper itself
   // (deadline/retry), a named WAITS duration, an io bound, a
   // deliberate mechanism, or a test-tier harness. ev/wait-class-blind.
-  const PRIMITIVES = /setTimeout\(|Promise\.race\(|AbortSignal\.timeout|[^a-zA-Z]sleep\(/
+  const PRIMITIVES = /setTimeout\(|Promise\.race\(|AbortSignal\.timeout|[^a-zA-Z]sleep\(|Atomics\.wait|nodeSleep/
   const CLASSIFIED: Record<string, string> = {
     'automation/src/rt/exec.ts': 'ingress fetch io bound — the only executor; durable timers live server-side',
     'automation/src/rt/dispatch.ts':

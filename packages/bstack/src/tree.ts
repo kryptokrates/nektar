@@ -4,6 +4,16 @@ import { unlockP2PKH, signerAddress, nektarEnv, sparse, type SignerLike } from '
 import type { FundingOut } from '@nektar/chain'
 import type { Knex } from 'knex'
 
+/** attached path that actually computes for this txid — the bar for
+ *  'proven' bookkeeping (a malformed blob must not mark a row proven) */
+const computes = (tx: Transaction): boolean => {
+  try {
+    return tx.merklePath !== undefined && (tx.merklePath.computeRoot(tx.id('hex')), true)
+  } catch {
+    return false
+  }
+}
+
 export const DERIVATION: Derivation = { protocol: [2, 'nektar market'], keyID: '1' }
 /** tree-row kind for adopted provision transactions — a tx that funds the
  *  instance AND carries lane-locked outputs; its slots serve every lane
@@ -305,7 +315,10 @@ export class MemoryTreeLedger implements TreeLedger {
     if (this.trees.has(txid)) return Promise.resolve(0)
     // provision trees minted nothing on this ledger — n:0 keeps stock()'s
     // `taken` (own-kind minted minus own-kind free) out of foreign stock
-    this.trees.set(txid, { tree: tx, proven: tx.merklePath !== undefined, kind: PROVISION_KIND, n: 0, addedAt: Date.now() })
+    // 'proven' requires an attached path that at least COMPUTES for this
+    // txid — a malformed blob marked proven would park the tree's anchor
+    // lane forever (chain-anchored validity stays the anchor path's gate)
+    this.trees.set(txid, { tree: tx, proven: computes(tx), kind: PROVISION_KIND, n: 0, addedAt: Date.now() })
     for (const s of slots) this.free.set(`${txid}:${s.vout}`, s.kind)
     return Promise.resolve(slots.length)
   }
@@ -465,7 +478,7 @@ export class KnexTreeLedger implements TreeLedger {
     const txid = tree.id('hex')
     await this.kx.transaction(async (trx) => {
       await trx('bstack_trees')
-        .insert({ txid, n, proven: tree.merklePath ? 1 : 0, beef: JSON.stringify(tree.toBEEF()), kind, added_at: Date.now() })
+        .insert({ txid, n, proven: computes(tree) ? 1 : 0, beef: JSON.stringify(tree.toBEEF()), kind, added_at: Date.now() })
         .onConflict('txid')
         .ignore()
       const rows = Array.from({ length: n }, (_, i) => ({ key: `${txid}:${i}`, txid, vout: i, kind }))

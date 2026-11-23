@@ -149,3 +149,35 @@ void test('reconcileOp: a landed refused escrow arms refund_pending on the op ke
     await kx.destroy()
   }
 })
+
+void test('dealfan.tick: the poll leg runs before the inbox scan — discovery has a floor', async () => {
+  const ex = new Dispatcher()
+  const sent: Array<{ handler: string; key: string }> = []
+  try {
+    ex.register(EXEC_SVC.deal, 'event', (_a, k) => Promise.resolve(void sent.push({ handler: 'event', key: k ?? '' })))
+    // the contract: a want that only exists on the lane is still fanned —
+    // the tick's poll ingests it, then the SAME tick's inbox scan fans it.
+    // Without the poll leg a cold runtime reads the lane once at boot and
+    // a published want waits forever
+    const items: DealEvent[] = []
+    let polled = false
+    wireDealfan(ex, {
+      poll: () => {
+        polled = true
+        items.push({ source: 'lane', messageId: 'm-w', kind: 'want', payload: { wantId: 'w-floor' } })
+        return Promise.resolve()
+      },
+      pendingInbox: () => Promise.resolve(items),
+      liveOps: () => Promise.resolve([]),
+      reconcileOps: () => Promise.resolve([]),
+      ceilingMs: () => 60_000,
+      log: () => {}
+    })
+    await ex.call({ service: EXEC_SVC.dealfan, handler: 'tick', key: 'main' }, {})
+    assert.equal(polled, true)
+    await ex.drain()
+    assert.deepEqual(sent, [{ handler: 'event', key: 'ev:w-floor' }])
+  } finally {
+    void ex.close()
+  }
+})

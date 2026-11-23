@@ -570,6 +570,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     // the resubmit cadence leg — 'prepared'/'submission_unknown' rows are
     // signed intents; the floor re-airs them on the engine's jittered cadence
     resubmitPending: () => engine.resubmitTick(),
+    // the discovery read rides the floor — the pre-restate scheduler ran
+    // it inside the same pass this tick replaces; without it a quiet
+    // runtime reads lanes only on commits and wants sit unread
+    poll: () => rt.poll(),
     ceilingMs: () => (Date.now() < rt.hotUntil ? Math.min(hotMs, idleMs) : idleMs),
     // the arm's idempotency window quantizes on the domain clock — a virtual
     // now must quantize on itself or the arm keys wobble across drive()s

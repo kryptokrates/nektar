@@ -1,0 +1,7 @@
+2026-11-23T12:01:25.517Z nektar main: operator fee key 1HgGHfeTBqXdzq3kGwupgkd9jZRi69k3gz — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)
+2026-11-23T12:01:25.523Z nektar main: coin book sqlite utxos (16 funding utxo(s), custody held key)
+2026-11-23T12:01:25.555Z nektar main: no callback URL — pulling tx statuses from the broadcaster /events stream
+2026-11-23T12:01:25.668Z nektar: network=main
+2026-11-23T12:01:25.673Z nektar: HTTP + MCP on :8461 (/v1, /mcp)
+2026-11-23T12:01:25.675Z nektar main: status stream: events HTTP 401
+2026-11-23T12:03:25.854Z nektar main: ledger watcher: The operation was aborted due to timeout

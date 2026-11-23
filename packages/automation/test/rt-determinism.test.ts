@@ -115,6 +115,9 @@ void test('deterministic: dealfan.tick re-fans on journaled inputs', async () =>
     pendingInbox: () => Promise.resolve([{ source: 's1', messageId: 'm1', kind: 'want', payload: { wantId: 'w1' } }]),
     liveOps: () => Promise.resolve([]),
     reconcileOps: () => Promise.resolve([]),
+    // the lane-discovery leg — wired so the body runs it inside its
+    // journaled run('poll') on every pass
+    poll: () => Promise.resolve(),
     ceilingMs: () => 0,
     now: () => clock,
     sentRecently: () => false,

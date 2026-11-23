@@ -54,9 +54,9 @@ void test('drain: due rows fan out per destination key, idempotent per actionId,
     let next: number | undefined = Date.now() + 30_000
     const stages: Array<Array<import('../src/store.js').OutboxItem>> = [
       [
-        { actionId: 'x1', operationId: 'op:x1', kind: 'message', destination: 'host:a', payload: {}, attempts: 0 },
-        { actionId: 'x2', operationId: 'op:x2', kind: 'message', destination: 'host:b', payload: {}, attempts: 0 },
-        { actionId: 'x3', operationId: 'op:x3', kind: 'message', destination: 'host:a', payload: {}, attempts: 0 }
+        { actionId: 'x1', operationId: 'op:x1', kind: 'message', destination: 'host:a', payload: {}, attempts: 0, nextAt: 100 },
+        { actionId: 'x2', operationId: 'op:x2', kind: 'message', destination: 'host:b', payload: {}, attempts: 0, nextAt: 100 },
+        { actionId: 'x3', operationId: 'op:x3', kind: 'message', destination: 'host:a', payload: {}, attempts: 0, nextAt: 100 }
       ],
       []
     ]
@@ -80,9 +80,10 @@ void test('drain: due rows fan out per destination key, idempotent per actionId,
     )
     assert.deepEqual(
       delivers.map((d) => d.opts?.idempotencyKey),
-      // the key versions by attempt — a retried row must dispatch again
-      // (actionId alone would dedupe the retry inside the retention window)
-      ['deliver:x1:0', 'deliver:x2:0', 'deliver:x3:0']
+      // the key versions by retry state (attempts + next_at) — a retried or
+      // re-deferred row must dispatch again; actionId alone would dedupe the
+      // retry inside the retention window
+      ['deliver:x1:0:100', 'deliver:x2:0:100', 'deliver:x3:0:100']
     )
     // the ceiling armed itself — a delayed drain send at next_at
     const arm = seen.find((s) => s.handler === 'drain')
@@ -132,6 +133,15 @@ void test('drain: a retried row re-fans as a NEW invocation — dedup is per-att
     assert.equal(r2.sent, 1)
     await ex.drain()
     assert.deepEqual(delivered, [1])
+    // a resource defer does NOT spend an attempt (deferOutbox leaves
+    // attempts untouched) — the row's retry identity is its moved next_at.
+    // Same actionId + same attempts + new next_at must still dispatch, or a
+    // funding-starved row dead-letters inside the idempotency retention.
+    item.nextAt = Date.now() + 60_000
+    const r3 = await ex.call<{ sent: number }>({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {})
+    assert.equal(r3.sent, 1)
+    await ex.drain()
+    assert.deepEqual(delivered, [1, 1])
   } finally {
     await ex.close()
   }

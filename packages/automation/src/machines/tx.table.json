@@ -10,7 +10,8 @@
     "abandoned": "absence verdict (no competing spend) — distinct from conflicted; fires txDied and keeps the trailing watch",
     "rejected": "provisional — a refused tx can still be aired by a counterparty holding the signed bytes; verified/proof revive it and re-run custody (tx-spent) + retro-count the spend (record-aired)",
     "conflicted": "provisional like rejected — obs.conflicted needs only a verified spentBy report, and a later BUMP for OUR tx beats it: obs.proven heals back to confirmed (the healLedgerOnProof path)",
-    "event-source guards": "obs.proven is the ONLY event that may emit 'confirmed'; obs.* require verified observations — status words and hints may only feed 'hint' handling, never a verdict transition"
+    "event-source guards": "obs.proven is the ONLY event that may emit 'confirmed'; obs.* require verified observations — status words and hints may only feed 'hint' handling, never a verdict transition",
+    "prepared observations": "a prepared row's bytes can air without our verdict write (crash between broadcast and commit, counterparty air) — obs.* heal it without a resubmit; prepared is never on the abandon clock, so it has no abandon edge"
   },
   "transitions": [
     { "state": "prepared", "event": "submit", "guard": "leases-held", "intents": ["broadcast"], "target": "prepared" },
@@ -19,6 +20,9 @@
     { "state": "prepared", "event": "submit.unknown", "intents": ["watch"], "target": "submission_unknown" },
     { "state": "prepared", "event": "obs.rejected", "guard": "verified", "intents": ["release-leases", "tx-died"], "target": "rejected" },
     { "state": "prepared", "event": "resubmit", "intents": ["broadcast"], "target": "prepared" },
+    { "state": "prepared", "event": "obs.seen", "guard": "verified", "intents": ["release-leases", "tx-spent", "watch"], "target": "observed" },
+    { "state": "prepared", "event": "obs.proven", "guard": "proof", "intents": ["tx-spent", "leases->spent"], "target": "confirmed" },
+    { "state": "prepared", "event": "obs.conflicted", "guard": "verified+spentBy", "intents": ["release-leases", "tx-died"], "target": "conflicted" },
 
     { "state": "submission_unknown", "event": "submit", "intents": ["broadcast"], "target": "submission_unknown" },
     { "state": "submission_unknown", "event": "resubmit", "intents": ["broadcast"], "target": "submission_unknown" },

@@ -291,7 +291,9 @@ void test('store.commit hooks fire exactly where work lands', async (t) => {
       { txid: 'ff'.repeat(32), vout: 0, satoshis: 1000 }
     ])
     const before = work
-    const bad = await store.applyTxEvent('a1', 'obs.proven', { guard: 'proof' })
+    // prepared --abandon--> is a rejected step: prepared is never on the
+    // abandon clock (its obs.* edges heal it instead — STATE-03)
+    const bad = await store.applyTxEvent('a1', 'abandon', {})
     assert.equal(bad.accepted, false)
     assert.equal(work, before)
     const ok = await store.applyTxEvent('a1', 'submit', { attempt: true, guard: 'leases-held' })

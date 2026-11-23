@@ -248,8 +248,10 @@ void test('driver: impossible transitions write nothing — no state, no event r
   t.after(() => kx.destroy())
   const id = 'a6'
   const txid = await prepared(store, id)
-  // prepared --obs.proven--> confirmed must NOT exist: proof before air
-  const bad = await emitTxEvent(store, (await store.walletTx({ actionId: id }))!, 'obs.proven', { guard: 'proof' }, inertTxEffects)
+  // prepared --abandon--> abandoned must NOT exist: prepared is never on
+  // the abandon clock (obs.* heal it — STATE-03 — but absence verdicts
+  // only apply once a broadcast has been attempted)
+  const bad = await emitTxEvent(store, (await store.walletTx({ actionId: id }))!, 'abandon', {}, inertTxEffects)
   assert.equal(bad.accepted, false)
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'prepared')
   assert.equal((await store.walletTxEvents(id)).length, 0)
@@ -601,4 +603,111 @@ void test('both ledgers: the same driver semantics on a second store instance', 
     assert.equal(calls.recordAired, 1)
     assert.equal((await s.walletTxEvents(id)).length, 2)
   }
+})
+
+void test('watcher driver: a prepared row whose bytes aired — proven heals to confirmed without a resubmit', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  // STATE-03: bytes aired between broadcast and the verdict write (crash,
+  // counterparty air) — the scan must reach prepared rows, not only resubmit
+  const id = 'p1'
+  await prepared(store, id)
+  const calls = { spent: 0, died: 0 }
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const effects: TxEffects = {
+    ...inertTxEffects,
+    txSpent: () => {
+      calls.spent++
+    },
+    txDied: () => {
+      calls.died++
+    }
+  }
+  wireTx(ex, { store, fx: effects, log: () => {} })
+  const wt = new TransactionWatcher(store, () => Promise.resolve({ status: 'proven', source: 'chain' }), { effects, exec: ex })
+  await wt.tick()
+  assert.equal((await store.walletTx({ actionId: id }))!.state, 'confirmed')
+  assert.equal(calls.spent, 1, 'the aired bytes mark custody spent')
+  assert.equal(calls.died, 0, 'a live verdict never revives the inputs')
+  assert.equal(await leaseState(kx, id), 'spent')
+  assert.equal((await store.pendingTxEffects()).length, 0)
+})
+
+void test('watcher driver: a prepared row whose bytes aired — seen heals to observed', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const id = 'p2'
+  await prepared(store, id)
+  const calls = { spent: 0, died: 0 }
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const effects: TxEffects = {
+    ...inertTxEffects,
+    txSpent: () => {
+      calls.spent++
+    },
+    txDied: () => {
+      calls.died++
+    }
+  }
+  wireTx(ex, { store, fx: effects, log: () => {} })
+  const wt = new TransactionWatcher(store, () => Promise.resolve({ status: 'seen', source: 'chain' }), { effects, exec: ex })
+  await wt.tick()
+  assert.equal((await store.walletTx({ actionId: id }))!.state, 'observed')
+  assert.equal(calls.spent, 1)
+  assert.equal(calls.died, 0)
+  assert.equal(await leaseState(kx, id), 'released')
+  assert.equal((await store.pendingTxEffects()).length, 0)
+})
+
+void test('watcher driver: a prepared row whose bytes aired — conflicted verdict frees custody', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const id = 'p3'
+  await prepared(store, id)
+  const calls = { spent: 0, died: 0 }
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const effects: TxEffects = {
+    ...inertTxEffects,
+    txSpent: () => {
+      calls.spent++
+    },
+    txDied: () => {
+      calls.died++
+    }
+  }
+  wireTx(ex, { store, fx: effects, log: () => {} })
+  const wt = new TransactionWatcher(store, () => Promise.resolve({ status: 'conflicted', source: 'chain', spentBy: 'ee'.repeat(32) }), {
+    effects,
+    exec: ex
+  })
+  await wt.tick()
+  assert.equal((await store.walletTx({ actionId: id }))!.state, 'conflicted')
+  assert.equal(calls.died, 1, 'a competing spend returns the inputs to custody')
+  assert.equal(calls.spent, 0)
+  assert.equal(await leaseState(kx, id), 'released')
+  assert.equal((await store.pendingTxEffects()).length, 0)
+})
+
+void test('watcher driver: a resubmit racing an observed prepared row is a no-op', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  // the scan heals the prepared row to observed before the coordinator's
+  // resubmit lands — the second verdict must not double-mark custody
+  const id = 'p4'
+  await prepared(store, id)
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  const { w, calls } = wallet(store, {}, ex)
+  const wt = new TransactionWatcher(store, () => Promise.resolve({ status: 'seen', source: 'chain' }), { effects: inertTxEffects, exec: ex })
+  await wt.tick()
+  assert.equal((await store.walletTx({ actionId: id }))!.state, 'observed')
+  assert.equal(calls.txSpent, 1)
+  const r = await w.submit(id)
+  assert.equal(r.state, 'observed')
+  assert.equal((await store.walletTx({ actionId: id }))!.state, 'observed')
+  assert.equal(calls.txSpent, 1, 'the late resubmit carries no second custody mark')
+  assert.equal(calls.broadcast, 0, 'the coordinator refuses to air a row the chain already saw')
 })

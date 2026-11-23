@@ -207,7 +207,7 @@ export async function* scanTxObservations(
   exportedTtlMs: number | undefined
 ): AsyncGenerator<{ w: WalletTx; observe: { event: string; guard?: string; observation: unknown } }> {
   const ttl = exportedTtlMs ?? WAITS.exportedTtl.ms
-  const live = await store.walletTxs(['submitted', 'submission_unknown', 'observed', 'exported'])
+  const live = await store.walletTxs(['prepared', 'submitted', 'submission_unknown', 'observed', 'exported'])
   const dead = (await store.walletTxs(['rejected', 'expired', 'abandoned'])).filter((w) => Date.now() - w.stateAt < ttl)
   for (const w of [...live, ...dead]) {
     try {

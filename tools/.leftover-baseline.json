@@ -1,7 +1,7 @@
 {
   "as-any": {
     "packages/anchor": 12,
-    "packages/automation": 10,
+    "packages/automation": 6,
     "packages/chain": 3,
     "packages/crypto": 3,
     "packages/e2e": 21,
@@ -13,6 +13,6 @@
   "markers": {},
   "debug-output": {},
   "commented-code": {
-    "packages/mcp": 6
+    "packages/mcp": 5
   }
 }

@@ -22,7 +22,10 @@ export function wireP2p(opts: {
   peers: string[]
   pkhHex: string
   reserve: UtxoView
-  addIfNew: (u: { tx: Transaction; vout: number }) => void
+  /** adoption is synchronous-fire-and-forget inside, but the seam may also
+   *  return the proof-attach promise — the 'tx' handler voids it (a
+   *  missed attach retries at the next import pass, never blocks the wire) */
+  addIfNew: (u: { tx: Transaction; vout: number }) => void | Promise<void>
   log: (s: string) => void
   /** the chain's own spend oracle — a peer's spend claim is a hint, never
    *  proof; the outpoint burns only when the oracle says 'spent' */

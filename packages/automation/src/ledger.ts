@@ -93,7 +93,7 @@ export function custodyTxEffects(d: {
           const vout = inp.sourceOutputIndex
           // provably-spent inputs stay dead — the export landed late or
           // something else consumed them. 'unknown' still frees: the
-          // export had its window and the take-time probe burns a
+          // export's window already passed and the take-time probe burns a
           // later-landing spend anyway
           if ((await d.spendStatus?.(srcTxid, vout).catch(() => 'unknown' as const)) === 'spent') continue
           const parentHex: string | undefined = sparse(w.parents[srcTxid])

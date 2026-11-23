@@ -1,0 +1,417 @@
+2026-11-23T12:12:13.382Z nektar main: operator fee key 1GGimbkJRUcdaVupwrpSux2nU5r9rSM832 — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)
+2026-11-23T12:12:13.388Z nektar main: coin book sqlite utxos (16 funding utxo(s), custody held key)
+2026-11-23T12:12:13.403Z nektar main: no callback URL — pulling tx statuses from the broadcaster /events stream
+2026-11-23T12:12:13.537Z nektar: network=main
+2026-11-23T12:12:13.550Z nektar main: status stream: events HTTP 401
+2026-11-23T12:12:13.556Z T1-storeinit
+2026-11-23T12:12:13.569Z T2-migrate
+2026-11-23T12:12:13.573Z T3-preflight
+2026-11-23T12:12:19.607Z nektar: automation: preflight degraded — funds, spendguard
+2026-11-23T12:12:19.618Z T4-engine
+2026-11-23T12:12:19.621Z T5-endpoint
+[restate][2026-11-23T12:12:19.628Z] WARN: Accepting requests without validating request signatures; handler access must be restricted
+[restate][2026-11-23T12:12:19.629Z] WARN: Accepting requests without validating request signatures; handler access must be restricted
+2026-11-23T12:12:19.646Z nektar: rt: restate deployment registered http://172.21.112.1:9081 (force=false)
+2026-11-23T12:12:19.684Z nektar: automation: restate endpoint http://172.21.112.1:9081
+2026-11-23T12:12:19.686Z nektar: automation on — 1 market host(s); policies and approvals via 'pnpm automation'
+2026-11-23T12:12:19.694Z nektar: HTTP + MCP on :8462 (/v1, /mcp)
+2026-11-23T12:12:20.120Z nektar: lanes: watching 1 subs (offers:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6)
+[restate][2026-11-23T12:12:20.984Z][nektar-tx/owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d/observe][inv_1drLEIQ7JX6k5dE67jaeV7foeVrV0Ar12p] WARN: Error when processing ctx.run 'commit'.
+ [Error: update `wallet_transactions` set `state` = 'submission_unknown', `attempts` = 1, `state_at` = 1795435940980, `last_observation` = '{"at":1795435933638,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:20.986Z][nektar-tx/owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d/observe][inv_1drLEIQ7JX6k5dE67jaeV7foeVrV0Ar12p] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'submission_unknown', `attempts` = 1, `state_at` = 1795435940980, `last_observation` = '{"at":1795435933638,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'submission_unknown', `attempts` = 1, `state_at` = 1795435940980, `last_observation` = '{"at":1795435933638,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d' - SQLITE_BUSY: database is locked
+Related command: run [commit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:21.119Z][nektar-custody/owner:9b9609fb16edaa3cf98eb99f5ae522669c481c2db5f9abde40851cc589b13633/submit][inv_12wlFKPLdcXW1datfDQGTlaiZ7nKSExCbd] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941118, `last_observation` = '{"at":1795435941116,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:9b9609fb16edaa3cf98eb99f5ae522669c481c2db5f9abde40851cc589b13633' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:21.119Z][nektar-custody/owner:9b9609fb16edaa3cf98eb99f5ae522669c481c2db5f9abde40851cc589b13633/submit][inv_12wlFKPLdcXW1datfDQGTlaiZ7nKSExCbd] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941118, `last_observation` = '{"at":1795435941116,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:9b9609fb16edaa3cf98eb99f5ae522669c481c2db5f9abde40851cc589b13633' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941118, `last_observation` = '{"at":1795435941116,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:9b9609fb16edaa3cf98eb99f5ae522669c481c2db5f9abde40851cc589b13633' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:21.129Z][nektar-custody/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/submit][inv_12XIDrVXTsDx25Ln2AQPZY0lDTQaOLXJ3F] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941129, `last_observation` = '{"at":1795435941128,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:21.130Z][nektar-custody/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/submit][inv_12XIDrVXTsDx25Ln2AQPZY0lDTQaOLXJ3F] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941129, `last_observation` = '{"at":1795435941128,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941129, `last_observation` = '{"at":1795435941128,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:21.133Z][nektar-custody/owner:b594ada35b8404354e488c1484cf56e086cdb299c1802e570c1b21874ac017ac/submit][inv_10mvMLRTzkMO32vyly2GoL5rO76t01STFB] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941133, `last_observation` = '{"at":1795435941131,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:b594ada35b8404354e488c1484cf56e086cdb299c1802e570c1b21874ac017ac' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:21.134Z][nektar-custody/owner:b594ada35b8404354e488c1484cf56e086cdb299c1802e570c1b21874ac017ac/submit][inv_10mvMLRTzkMO32vyly2GoL5rO76t01STFB] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941133, `last_observation` = '{"at":1795435941131,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:b594ada35b8404354e488c1484cf56e086cdb299c1802e570c1b21874ac017ac' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941133, `last_observation` = '{"at":1795435941131,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:b594ada35b8404354e488c1484cf56e086cdb299c1802e570c1b21874ac017ac' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:21.141Z][nektar-custody/owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf/submit][inv_1k0U5ovMs9rH3AQWRTmnmu4OvlI1780Je1] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941140, `last_observation` = '{"at":1795435941139,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:21.142Z][nektar-custody/owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf/submit][inv_1k0U5ovMs9rH3AQWRTmnmu4OvlI1780Je1] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941140, `last_observation` = '{"at":1795435941139,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941140, `last_observation` = '{"at":1795435941139,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:21.148Z][nektar-custody/owner:f83cc068fd850e24b3177d8661ed957e2017f2946d442746e51d6397e3fab838/submit][inv_10uQNdsdjDMt4JK0G9Gekh2y0mn3EZN4wT] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941147, `last_observation` = '{"at":1795435941146,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:f83cc068fd850e24b3177d8661ed957e2017f2946d442746e51d6397e3fab838' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:21.148Z][nektar-custody/owner:f83cc068fd850e24b3177d8661ed957e2017f2946d442746e51d6397e3fab838/submit][inv_10uQNdsdjDMt4JK0G9Gekh2y0mn3EZN4wT] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941147, `last_observation` = '{"at":1795435941146,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:f83cc068fd850e24b3177d8661ed957e2017f2946d442746e51d6397e3fab838' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941147, `last_observation` = '{"at":1795435941146,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:f83cc068fd850e24b3177d8661ed957e2017f2946d442746e51d6397e3fab838' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:21.257Z][nektar-custody/owner:e6f502860d1df29798f1e7fe2fba9d0c59ad470cef65241bc8a9138ae07e9213/submit][inv_1iEDYsXq6GfP6T9cCAH7ljhvQHCFWIdG17] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941256, `last_observation` = '{"at":1795435941253,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:e6f502860d1df29798f1e7fe2fba9d0c59ad470cef65241bc8a9138ae07e9213' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:21.258Z][nektar-custody/owner:e6f502860d1df29798f1e7fe2fba9d0c59ad470cef65241bc8a9138ae07e9213/submit][inv_1iEDYsXq6GfP6T9cCAH7ljhvQHCFWIdG17] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941256, `last_observation` = '{"at":1795435941253,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:e6f502860d1df29798f1e7fe2fba9d0c59ad470cef65241bc8a9138ae07e9213' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941256, `last_observation` = '{"at":1795435941253,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:e6f502860d1df29798f1e7fe2fba9d0c59ad470cef65241bc8a9138ae07e9213' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:21.265Z][nektar-custody/owner:dcc2be6553506732fc1ba3237205cd3a7aa86c68e90701d5f97e8557424a23dd/submit][inv_1lonLMHOUvtS2vp6ZUBTuh8uyva2fvYCMm] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941264, `last_observation` = '{"at":1795435941263,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:dcc2be6553506732fc1ba3237205cd3a7aa86c68e90701d5f97e8557424a23dd' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:21.265Z][nektar-custody/owner:dcc2be6553506732fc1ba3237205cd3a7aa86c68e90701d5f97e8557424a23dd/submit][inv_1lonLMHOUvtS2vp6ZUBTuh8uyva2fvYCMm] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941264, `last_observation` = '{"at":1795435941263,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:dcc2be6553506732fc1ba3237205cd3a7aa86c68e90701d5f97e8557424a23dd' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941264, `last_observation` = '{"at":1795435941263,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:dcc2be6553506732fc1ba3237205cd3a7aa86c68e90701d5f97e8557424a23dd' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:21.644Z][nektar-custody/owner:6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513/submit][inv_1kLJNsLCSpxM4JOQuteYZSmwFnAQCu1y8R] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'submitted', `attempts` = 1, `state_at` = 1795435941644, `last_observation` = '{"at":1795435941642,"result":{"status":"success","txid":"6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513"}}' where `action_id` = 'owner:6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:21.645Z][nektar-custody/owner:6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513/submit][inv_1kLJNsLCSpxM4JOQuteYZSmwFnAQCu1y8R] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'submitted', `attempts` = 1, `state_at` = 1795435941644, `last_observation` = '{"at":1795435941642,"result":{"status":"success","txid":"6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513"}}' where `action_id` = 'owner:6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'submitted', `attempts` = 1, `state_at` = 1795435941644, `last_observation` = '{"at":1795435941642,"result":{"status":"success","txid":"6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513"}}' where `action_id` = 'owner:6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:21.695Z][nektar-custody/owner:a11bfb8fbd051969173b51ed6d2e052cb2b880ee35c745903c9c1b002d0dfcfb/submit][inv_1hv1FdSGwDzi34YHnCi0u321jxGNxRbg7L] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941694, `last_observation` = '{"at":1795435941690,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:a11bfb8fbd051969173b51ed6d2e052cb2b880ee35c745903c9c1b002d0dfcfb' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:21.697Z][nektar-custody/owner:a11bfb8fbd051969173b51ed6d2e052cb2b880ee35c745903c9c1b002d0dfcfb/submit][inv_1hv1FdSGwDzi34YHnCi0u321jxGNxRbg7L] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941694, `last_observation` = '{"at":1795435941690,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:a11bfb8fbd051969173b51ed6d2e052cb2b880ee35c745903c9c1b002d0dfcfb' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941694, `last_observation` = '{"at":1795435941690,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:a11bfb8fbd051969173b51ed6d2e052cb2b880ee35c745903c9c1b002d0dfcfb' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:21.744Z][nektar-custody/owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5/submit][inv_1lNGgZBoACQ14RtbGN2pdEvsqJwOm24O1b] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941742, `last_observation` = '{"at":1795435941703,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:21.744Z][nektar-custody/owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5/submit][inv_1lNGgZBoACQ14RtbGN2pdEvsqJwOm24O1b] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941742, `last_observation` = '{"at":1795435941703,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941742, `last_observation` = '{"at":1795435941703,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:21.746Z][nektar-custody/owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74/submit][inv_1dxJjQS41mcK0wsLZlLxnx1LrBL7V19HgF] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941745, `last_observation` = '{"at":1795435941715,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:21.746Z][nektar-custody/owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74/submit][inv_1dxJjQS41mcK0wsLZlLxnx1LrBL7V19HgF] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941745, `last_observation` = '{"at":1795435941715,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941745, `last_observation` = '{"at":1795435941715,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:21.749Z][nektar-custody/owner:70c12c1caf6ee1c21d9bf0e5b0a421f82a6ae90fc008d50e02ff38150e4f8de0/submit][inv_14fK2aRnjoHM3uKgJFrDy0TYv6QrvW1acJ] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941748, `last_observation` = '{"at":1795435941719,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:70c12c1caf6ee1c21d9bf0e5b0a421f82a6ae90fc008d50e02ff38150e4f8de0' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:21.749Z][nektar-custody/owner:70c12c1caf6ee1c21d9bf0e5b0a421f82a6ae90fc008d50e02ff38150e4f8de0/submit][inv_14fK2aRnjoHM3uKgJFrDy0TYv6QrvW1acJ] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941748, `last_observation` = '{"at":1795435941719,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:70c12c1caf6ee1c21d9bf0e5b0a421f82a6ae90fc008d50e02ff38150e4f8de0' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435941748, `last_observation` = '{"at":1795435941719,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:70c12c1caf6ee1c21d9bf0e5b0a421f82a6ae90fc008d50e02ff38150e4f8de0' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:22.096Z][nektar-custody/owner:00859039ee1a428b0be6b5e78c598a7c85dc15b5acaf650ee07fb5787023d15d/submit][inv_13F17ZNnCYpd5SI2IK85p9nb5bMMcyY6SK] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435942095, `last_observation` = '{"at":1795435942094,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:00859039ee1a428b0be6b5e78c598a7c85dc15b5acaf650ee07fb5787023d15d' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:22.097Z][nektar-custody/owner:00859039ee1a428b0be6b5e78c598a7c85dc15b5acaf650ee07fb5787023d15d/submit][inv_13F17ZNnCYpd5SI2IK85p9nb5bMMcyY6SK] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435942095, `last_observation` = '{"at":1795435942094,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:00859039ee1a428b0be6b5e78c598a7c85dc15b5acaf650ee07fb5787023d15d' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435942095, `last_observation` = '{"at":1795435942094,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:00859039ee1a428b0be6b5e78c598a7c85dc15b5acaf650ee07fb5787023d15d' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:22.950Z][nektar-custody/owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf/submit][inv_1k0U5ovMs9rH3AQWRTmnmu4OvlI1780Je1] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435942950, `last_observation` = '{"at":1795435942945,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:22.951Z][nektar-custody/owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf/submit][inv_1k0U5ovMs9rH3AQWRTmnmu4OvlI1780Je1] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435942950, `last_observation` = '{"at":1795435942945,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435942950, `last_observation` = '{"at":1795435942945,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:22.955Z][nektar-custody/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/submit][inv_12XIDrVXTsDx25Ln2AQPZY0lDTQaOLXJ3F] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435942953, `last_observation` = '{"at":1795435942945,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:22.955Z][nektar-custody/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/submit][inv_12XIDrVXTsDx25Ln2AQPZY0lDTQaOLXJ3F] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435942953, `last_observation` = '{"at":1795435942945,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435942953, `last_observation` = '{"at":1795435942945,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:23.378Z][nektar-custody/owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74/submit][inv_1dxJjQS41mcK0wsLZlLxnx1LrBL7V19HgF] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435943378, `last_observation` = '{"at":1795435943372,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:23.378Z][nektar-custody/owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74/submit][inv_1dxJjQS41mcK0wsLZlLxnx1LrBL7V19HgF] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435943378, `last_observation` = '{"at":1795435943372,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435943378, `last_observation` = '{"at":1795435943372,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+[restate][2026-11-23T12:12:23.381Z][nektar-custody/owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5/submit][inv_1lNGgZBoACQ14RtbGN2pdEvsqJwOm24O1b] WARN: Error when processing ctx.run 'submit'.
+ [Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435943379, `last_observation` = '{"at":1795435943374,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5' - SQLITE_BUSY: database is locked] {
+  errno: 5,
+  code: 'SQLITE_BUSY'
+}
+[restate][2026-11-23T12:12:23.382Z][nektar-custody/owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5/submit][inv_1lNGgZBoACQ14RtbGN2pdEvsqJwOm24O1b] WARN: Error when processing a Restate context operation.
+ RestateError: (500) update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435943379, `last_observation` = '{"at":1795435943374,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5' - SQLITE_BUSY: database is locked
+Stacktrace: Error: update `wallet_transactions` set `state` = 'rejected', `attempts` = 2, `state_at` = 1795435943379, `last_observation` = '{"at":1795435943374,"escaped":false,"result":{"description":"SpendGuard refused: fee 999454 sats > maxFeePerTx 1000","status":"error"}}' where `action_id` = 'owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5' - SQLITE_BUSY: database is locked
+Related command: run [submit]
+    at ensureError (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/types/errors.js:13:83)
+    at ContextImpl.abortAttempt (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:390:96)
+    at doRun (file:///C:/Users/nedzo/Documents/Devin/nektar/node_modules/.pnpm/@restatedev+restate-sdk@1.18.3/node_modules/@restatedev/restate-sdk/dist/context_impl.js:273:11) {
+  code: 500,
+  [cause]: undefined
+}
+2026-11-23T12:13:19.874Z nektar: rt: resumed 4 transport-paused invocation(s) — restart-gap wedge cleared
+2026-11-23T12:13:20.147Z nektar: automation: reserve: funds: upkeep take of 100600 sats would leave -98879 < deal floor 0
+2026-11-23T12:13:20.220Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:13:20.246Z nektar: automation: log append 500 rows 9ms
+2026-11-23T12:13:20.411Z nektar: automation: log append: no funding slot (log: 0 proven, 0 anchored, 0 tree(s) awaiting a block)
+2026-11-23T12:13:20.558Z nektar: automation: pass 60443ms (poll 10 tick 60431 acks 2)
+2026-11-23T12:13:20.558Z nektar: automation: wakes commit:25 height:1 txProof:5
+2026-11-23T12:13:20.704Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:13:20.793Z nektar: automation: log append 500 rows 74ms
+2026-11-23T12:13:31.284Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:13:31.297Z nektar: automation: log append 500 rows 5ms
+2026-11-23T12:13:42.276Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:13:42.293Z nektar: automation: log append 500 rows 4ms
+2026-11-23T12:13:53.246Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:13:53.254Z nektar: automation: log append 500 rows 4ms
+2026-11-23T12:14:04.279Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:14:04.284Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:14:15.190Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:14:15.196Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:14:26.235Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:14:26.241Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:14:37.274Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:14:37.281Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:14:48.228Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:14:48.236Z nektar: automation: log append 500 rows 3ms
+2026-11-23T12:14:59.229Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:14:59.236Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:15:10.257Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:15:10.261Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:15:21.213Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:15:21.218Z nektar: automation: log append 500 rows 1ms
+2026-11-23T12:15:32.252Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:15:32.263Z nektar: automation: log append 500 rows 5ms
+2026-11-23T12:15:43.275Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:15:43.281Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:15:54.218Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:15:54.226Z nektar: automation: log append 500 rows 5ms
+2026-11-23T12:16:05.241Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:16:05.251Z nektar: automation: log append 500 rows 4ms
+2026-11-23T12:16:16.278Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:16:16.288Z nektar: automation: log append 500 rows 4ms
+2026-11-23T12:16:27.216Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:16:27.226Z nektar: automation: log append 500 rows 4ms
+2026-11-23T12:16:38.230Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:16:38.238Z nektar: automation: log append 500 rows 3ms
+2026-11-23T12:16:49.241Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:16:49.249Z nektar: automation: log append 500 rows 3ms
+2026-11-23T12:17:00.222Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:17:00.227Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:17:11.267Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:17:11.279Z nektar: automation: log append 500 rows 3ms
+2026-11-23T12:17:22.218Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:17:22.222Z nektar: automation: log append 500 rows 1ms
+2026-11-23T12:17:33.247Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:17:33.257Z nektar: automation: log append 500 rows 4ms
+2026-11-23T12:17:44.265Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:17:44.273Z nektar: automation: log append 500 rows 3ms
+2026-11-23T12:17:55.233Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:17:55.239Z nektar: automation: log append 500 rows 3ms
+2026-11-23T12:18:06.214Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:18:06.221Z nektar: automation: log append 500 rows 3ms
+2026-11-23T12:18:17.253Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:18:17.270Z nektar: automation: log append 500 rows 5ms
+2026-11-23T12:18:28.265Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:18:28.270Z nektar: automation: log append 500 rows 1ms
+2026-11-23T12:18:39.215Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:18:39.221Z nektar: automation: log append 500 rows 4ms
+2026-11-23T12:18:50.290Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:18:50.302Z nektar: automation: log append 500 rows 4ms
+2026-11-23T12:19:01.242Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:19:01.248Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:19:12.223Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:19:12.236Z nektar: automation: log append 500 rows 9ms
+2026-11-23T12:19:23.226Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:19:23.234Z nektar: automation: log append 500 rows 3ms
+2026-11-23T12:19:34.244Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:19:34.250Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:19:45.221Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:19:45.228Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:19:56.243Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:19:56.249Z nektar: automation: log append 500 rows 3ms
+2026-11-23T12:20:07.212Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:20:07.219Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:20:18.215Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:20:18.222Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:20:29.229Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:20:29.233Z nektar: automation: log append 500 rows 1ms
+2026-11-23T12:20:40.212Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:20:40.219Z nektar: automation: log append 500 rows 3ms
+2026-11-23T12:20:51.210Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:20:51.216Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:21:02.238Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:21:02.243Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:21:13.207Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:21:13.215Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:21:24.181Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:21:24.188Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:21:35.252Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:21:35.259Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:21:46.215Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:21:46.221Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:21:57.218Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:21:57.225Z nektar: automation: log append 500 rows 3ms
+2026-11-23T12:22:08.238Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:22:08.244Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:22:19.213Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:22:19.220Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:22:30.217Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:22:30.224Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:22:41.244Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:22:41.250Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:22:52.202Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:22:52.208Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:23:03.212Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:23:03.218Z nektar: automation: log append 500 rows 1ms
+2026-11-23T12:23:14.217Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:23:14.223Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:37:13.758Z nektar main: ledger watcher: The operation was aborted due to timeout
+2026-11-23T12:39:13.781Z nektar main: ledger watcher: The operation was aborted due to timeout
+2026-11-23T12:41:13.792Z nektar main: ledger watcher: The operation was aborted due to timeout
+2026-11-23T12:43:13.831Z nektar main: ledger watcher: The operation was aborted due to timeout
+2026-11-23T12:46:13.869Z nektar main: ledger watcher: The operation was aborted due to timeout
+2026-11-23T12:49:13.900Z nektar main: ledger watcher: The operation was aborted due to timeout
+2026-11-23T12:51:03.369Z nektar: lanes: watching 2 subs (offers:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6,offers:ca8b4957-d637-4a51-bfa7-827f04d01c8c)
+2026-11-23T12:51:03.543Z nektar: automation: wakes commit:28 height:10 txProof:5 dueAt:28
+2026-11-23T12:51:15.841Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:51:15.846Z nektar: automation: log append 500 rows 2ms
+2026-11-23T12:51:15.868Z nektar: automation: upkeep 12131ms
+2026-11-23T12:52:13.944Z nektar main: ledger watcher: The operation was aborted due to timeout

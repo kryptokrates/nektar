@@ -1,0 +1,1084 @@
+[restate][2026-11-23T12:12:19.762Z][nektar-transport/drain/drain][inv_1buDPbDd00545aBkeam7MYnXU1DMAJu3dG] INFO: Starting invocation.
+[restate][2026-11-23T12:12:19.848Z][nektar-transport/drain/drain][inv_1buDPbDd00545aBkeam7MYnXU1DMAJu3dG] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:19.931Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz7map1T5z3Xnr4AoLJGemjY] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.091Z][nektar-tx/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/observe][inv_12XIDrVXTsDx7grFtHZbwF73ng1tu0LW6I] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.158Z][nektar-tx/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/observe][inv_12XIDrVXTsDx7grFtHZbwF73ng1tu0LW6I] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:20.442Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz7map1T5z3Xnr4AoLJGemjY] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:20.460Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz4z1u8jgAs97Nc9ZqWYXDF1] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.607Z][nektar-sweep/main/boot][inv_1lGoi5PYm9TQ7aKBs6wTqSMK0Rv7r4Yer0] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.621Z][nektar-sweep/main/boot][inv_1lGoi5PYm9TQ7aKBs6wTqSMK0Rv7r4Yer0] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:20.662Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz4z1u8jgAs97Nc9ZqWYXDF1] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:20.677Z][nektar-tx/owner:9b9609fb16edaa3cf98eb99f5ae522669c481c2db5f9abde40851cc589b13633/resubmit][inv_12wlFKPLdcXW0eFc42Jiuy9BcQDuANzW2B] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.707Z][nektar-tx/owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf/resubmit][inv_1k0U5ovMs9rH5OLBIfR4UNCDUw3ujracIF] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.708Z][nektar-tx/owner:b594ada35b8404354e488c1484cf56e086cdb299c1802e570c1b21874ac017ac/resubmit][inv_10mvMLRTzkMO6EkM0sAgSfDHliZARtPdE5] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.711Z][nektar-tx/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/resubmit][inv_12XIDrVXTsDx5VjmdKCQnI6313TpJVmAa5] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.719Z][nektar-tx/owner:f83cc068fd850e24b3177d8661ed957e2017f2946d442746e51d6397e3fab838/resubmit][inv_10uQNdsdjDMt4ORCybxZHm1bjdYmI3aeRj] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.722Z][nektar-tx/owner:e1c3e7fa209ab46d36dae4c7dba115922711cc74764a0a13df339e7387a01322/resubmit][inv_1iX5b7J7hzF21o9gCbpSRK2C0pWtazPCfL] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.726Z][nektar-tx/owner:e6f502860d1df29798f1e7fe2fba9d0c59ad470cef65241bc8a9138ae07e9213/resubmit][inv_1iEDYsXq6GfP6b2dZSzdZMlhV2tXhbX7c5] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.732Z][nektar-tx/owner:d2bf52f9d37b9de8b7378419e0575a5114c519175c964aa8a6ac9df7125aedee/resubmit][inv_19uwEtd6kjvi2dC5KAfPjN6KXn4HFsmKLT] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.733Z][nektar-tx/owner:a11bfb8fbd051969173b51ed6d2e052cb2b880ee35c745903c9c1b002d0dfcfb/resubmit][inv_1hv1FdSGwDzi5kKpV8uVIzOdbvL5mtaz3X] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.734Z][nektar-tx/owner:dcc2be6553506732fc1ba3237205cd3a7aa86c68e90701d5f97e8557424a23dd/resubmit][inv_1lonLMHOUvtS5cOyzYOhe3Nb1a7oW2hBiV] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.735Z][nektar-tx/owner:6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513/resubmit][inv_1kLJNsLCSpxM6gN5SXNLpnbVtFPu53p0dj] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.740Z][nektar-tx/owner:dabed03bb56b3ea00816e7218a302eea28b87788e97560dad34bf1b39505854e/resubmit][inv_13L8MaS1VFBk1zq7ZTgGaA2mYIvT6vKZFv] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.744Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz147i4W1rlUGlNuNyJoyZhP] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.756Z][nektar-tx/owner:411cbc81e1b43d1b719a3c619d84f622aa7f619586c52ecf3d0d6c5271d7a81b/resubmit][inv_18kZwjRiNJnB2Zhn5OTptBnc7rrOkEsn6h] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.759Z][nektar-tx/owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5/resubmit][inv_1lNGgZBoACQ13bjjvhd0OiNLQgagneqAdr] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.763Z][nektar-tx/owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74/resubmit][inv_1dxJjQS41mcK4RmjDUy1mut9218THynVGF] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.764Z][nektar-tx/owner:70c12c1caf6ee1c21d9bf0e5b0a421f82a6ae90fc008d50e02ff38150e4f8de0/resubmit][inv_14fK2aRnjoHM0RusLe8AdlwBCyHQvCjJER] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.767Z][nektar-tx/owner:0dae07ee6765610e417a48dc6d53c6ca99645cb44dfa0224ab6113c278d0cc9c/resubmit][inv_1cYY4xn6G8Uj1tTSBnor7F627zymJRj6hP] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.768Z][nektar-tx/owner:c9808f132110d46de8f4ec42f2faa7c1b71ec223955b89554e3cd3c08ce0999c/resubmit][inv_1aoqO70Mpt0f27MPpgKvdnYIQ2tSWJfO8N] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.781Z][nektar-tx/owner:75173cf0f3cf562b54613566d1d23ff7f7035e8007c642bd59da11ea1606487f/resubmit][inv_168ojt75lUYu6TsHsbEoXHmZ5Qjh9ip8c1] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.782Z][nektar-tx/owner:00859039ee1a428b0be6b5e78c598a7c85dc15b5acaf650ee07fb5787023d15d/resubmit][inv_13F17ZNnCYpd0782GyZ3S6GXKCr49I70Wd] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.783Z][nektar-tx/owner:34d597b2292531073152db2602f2e4dbd6af6d3f5ed84b3df4bc93a1ee57fb09/resubmit][inv_13th3WfPlbph2lBVUifBpaS5dtHPzYPBmh] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.783Z][nektar-custody/owner:9b9609fb16edaa3cf98eb99f5ae522669c481c2db5f9abde40851cc589b13633/submit][inv_12wlFKPLdcXW1datfDQGTlaiZ7nKSExCbd] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.796Z][nektar-custody/owner:b594ada35b8404354e488c1484cf56e086cdb299c1802e570c1b21874ac017ac/submit][inv_10mvMLRTzkMO32vyly2GoL5rO76t01STFB] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.797Z][nektar-custody/owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf/submit][inv_1k0U5ovMs9rH3AQWRTmnmu4OvlI1780Je1] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.799Z][nektar-tx/owner:3c349ea4cb9cf288e257611f72c0c5c6ac463b2d9188042c6561564f5520deed/resubmit][inv_1ebMjOmf263u664gOKV3v3IvX4vILjKGVH] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.833Z][nektar-custody/owner:f83cc068fd850e24b3177d8661ed957e2017f2946d442746e51d6397e3fab838/submit][inv_10uQNdsdjDMt4JK0G9Gekh2y0mn3EZN4wT] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.834Z][nektar-custody/owner:e1c3e7fa209ab46d36dae4c7dba115922711cc74764a0a13df339e7387a01322/submit][inv_1iX5b7J7hzF26oNeRkVEgh1HDAqBjs1ngb] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.845Z][nektar-custody/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/submit][inv_12XIDrVXTsDx25Ln2AQPZY0lDTQaOLXJ3F] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.862Z][nektar-custody/owner:d2bf52f9d37b9de8b7378419e0575a5114c519175c964aa8a6ac9df7125aedee/submit][inv_19uwEtd6kjvi3LOS40CBeZ0JKI5aVFfVQ4] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.864Z][nektar-custody/owner:e6f502860d1df29798f1e7fe2fba9d0c59ad470cef65241bc8a9138ae07e9213/submit][inv_1iEDYsXq6GfP6T9cCAH7ljhvQHCFWIdG17] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.866Z][nektar-custody/owner:dcc2be6553506732fc1ba3237205cd3a7aa86c68e90701d5f97e8557424a23dd/submit][inv_1lonLMHOUvtS2vp6ZUBTuh8uyva2fvYCMm] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.874Z][nektar-custody/owner:dabed03bb56b3ea00816e7218a302eea28b87788e97560dad34bf1b39505854e/submit][inv_13L8MaS1VFBk1L5xyRlmGz6d3G9aa3wf4F] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.876Z][nektar-custody/owner:6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513/submit][inv_1kLJNsLCSpxM4JOQuteYZSmwFnAQCu1y8R] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.886Z][nektar-custody/owner:a11bfb8fbd051969173b51ed6d2e052cb2b880ee35c745903c9c1b002d0dfcfb/submit][inv_1hv1FdSGwDzi34YHnCi0u321jxGNxRbg7L] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.896Z][nektar-custody/owner:411cbc81e1b43d1b719a3c619d84f622aa7f619586c52ecf3d0d6c5271d7a81b/submit][inv_18kZwjRiNJnB3gSD0qGJAZx8YOFcKTMhHZ] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.902Z][nektar-custody/owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5/submit][inv_1lNGgZBoACQ14RtbGN2pdEvsqJwOm24O1b] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.906Z][nektar-custody/owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74/submit][inv_1dxJjQS41mcK0wsLZlLxnx1LrBL7V19HgF] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.912Z][nektar-tx/owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d/observe][inv_1drLEIQ7JX6k5dE67jaeV7foeVrV0Ar12p] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.948Z][nektar-custody/owner:70c12c1caf6ee1c21d9bf0e5b0a421f82a6ae90fc008d50e02ff38150e4f8de0/submit][inv_14fK2aRnjoHM3uKgJFrDy0TYv6QrvW1acJ] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.954Z][nektar-custody/owner:c9808f132110d46de8f4ec42f2faa7c1b71ec223955b89554e3cd3c08ce0999c/submit][inv_1aoqO70Mpt0f1WnQwSSRcU69XOIi5DCTmg] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.964Z][nektar-custody/owner:00859039ee1a428b0be6b5e78c598a7c85dc15b5acaf650ee07fb5787023d15d/submit][inv_13F17ZNnCYpd5SI2IK85p9nb5bMMcyY6SK] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.969Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz147i4W1rlUGlNuNyJoyZhP] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:20.975Z][nektar-custody/owner:75173cf0f3cf562b54613566d1d23ff7f7035e8007c642bd59da11ea1606487f/submit][inv_168ojt75lUYu2ldgz1dSGjTLaKrEHcBN9l] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.977Z][nektar-custody/owner:34d597b2292531073152db2602f2e4dbd6af6d3f5ed84b3df4bc93a1ee57fb09/submit][inv_13th3WfPlbph0bUKNpNmBT1whW1bm3HzmI] INFO: Starting invocation.
+[restate][2026-11-23T12:12:20.983Z][nektar-custody/owner:0dae07ee6765610e417a48dc6d53c6ca99645cb44dfa0224ab6113c278d0cc9c/submit][inv_1cYY4xn6G8Uj6XUvdS3tBp4gA5mogeI8ou] INFO: Starting invocation.
+[restate][2026-11-23T12:12:21.003Z][nektar-custody/owner:3c349ea4cb9cf288e257611f72c0c5c6ac463b2d9188042c6561564f5520deed/submit][inv_1ebMjOmf263u3k5JsMEFMd4ejLLRNYROwo] INFO: Starting invocation.
+[restate][2026-11-23T12:12:21.007Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz1NSmfFJSCHhkGouLTfAGLd] INFO: Starting invocation.
+[restate][2026-11-23T12:12:21.183Z][nektar-custody/owner:e1c3e7fa209ab46d36dae4c7dba115922711cc74764a0a13df339e7387a01322/submit][inv_1iX5b7J7hzF26oNeRkVEgh1HDAqBjs1ngb] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.208Z][nektar-tx/owner:e1c3e7fa209ab46d36dae4c7dba115922711cc74764a0a13df339e7387a01322/resubmit][inv_1iX5b7J7hzF21o9gCbpSRK2C0pWtazPCfL] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.230Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz1NSmfFJSCHhkGouLTfAGLd] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.268Z][nektar-custody/owner:d2bf52f9d37b9de8b7378419e0575a5114c519175c964aa8a6ac9df7125aedee/submit][inv_19uwEtd6kjvi3LOS40CBeZ0JKI5aVFfVQ4] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.273Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz3ZrwmIg74FB3QO10YLv1ZL] INFO: Starting invocation.
+[restate][2026-11-23T12:12:21.293Z][nektar-custody/owner:dabed03bb56b3ea00816e7218a302eea28b87788e97560dad34bf1b39505854e/submit][inv_13L8MaS1VFBk1L5xyRlmGz6d3G9aa3wf4F] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.304Z][nektar-tx/owner:d2bf52f9d37b9de8b7378419e0575a5114c519175c964aa8a6ac9df7125aedee/resubmit][inv_19uwEtd6kjvi2dC5KAfPjN6KXn4HFsmKLT] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.323Z][nektar-tx/owner:dabed03bb56b3ea00816e7218a302eea28b87788e97560dad34bf1b39505854e/resubmit][inv_13L8MaS1VFBk1zq7ZTgGaA2mYIvT6vKZFv] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.381Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ6PcELBwOAnDsFKHd9rkjc9] INFO: Starting invocation.
+[restate][2026-11-23T12:12:21.393Z][nektar-wake/height][inv_1c06AhlCDT1q05vJo7XQuQQbEd7gTepTgi] INFO: Starting invocation.
+[restate][2026-11-23T12:12:21.407Z][nektar-wake/height][inv_1c06AhlCDT1q05vJo7XQuQQbEd7gTepTgi] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.456Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz3ZrwmIg74FB3QO10YLv1ZL] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.472Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz25uTE57tF7r9AViuCk65yf] INFO: Starting invocation.
+[restate][2026-11-23T12:12:21.630Z][nektar-tx/owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d/observe][inv_1drLEIQ7JX6k5dE67jaeV7foeVrV0Ar12p] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:21.666Z][nektar-custody/owner:f83cc068fd850e24b3177d8661ed957e2017f2946d442746e51d6397e3fab838/submit][inv_10uQNdsdjDMt4JK0G9Gekh2y0mn3EZN4wT] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:21.688Z][nektar-custody/owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf/submit][inv_1k0U5ovMs9rH3AQWRTmnmu4OvlI1780Je1] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:21.698Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz25uTE57tF7r9AViuCk65yf] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.700Z][nektar-custody/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/submit][inv_12XIDrVXTsDx25Ln2AQPZY0lDTQaOLXJ3F] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:21.719Z][nektar-custody/owner:b594ada35b8404354e488c1484cf56e086cdb299c1802e570c1b21874ac017ac/submit][inv_10mvMLRTzkMO32vyly2GoL5rO76t01STFB] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:21.724Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz2uPZDg0VLF9egPRVlQ6tOR] INFO: Starting invocation.
+[restate][2026-11-23T12:12:21.740Z][nektar-tx/owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d/observe][inv_1drLEIQ7JX6k5dE67jaeV7foeVrV0Ar12p] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.768Z][nektar-custody/owner:411cbc81e1b43d1b719a3c619d84f622aa7f619586c52ecf3d0d6c5271d7a81b/submit][inv_18kZwjRiNJnB3gSD0qGJAZx8YOFcKTMhHZ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.776Z][nektar-custody/owner:9b9609fb16edaa3cf98eb99f5ae522669c481c2db5f9abde40851cc589b13633/submit][inv_12wlFKPLdcXW1datfDQGTlaiZ7nKSExCbd] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:21.783Z][nektar-tx/owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d/resubmit][inv_1drLEIQ7JX6k52AFcO4A2g92R4bG6fE689] INFO: Starting invocation.
+[restate][2026-11-23T12:12:21.790Z][nektar-custody/owner:e6f502860d1df29798f1e7fe2fba9d0c59ad470cef65241bc8a9138ae07e9213/submit][inv_1iEDYsXq6GfP6T9cCAH7ljhvQHCFWIdG17] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:21.793Z][nektar-tx/owner:411cbc81e1b43d1b719a3c619d84f622aa7f619586c52ecf3d0d6c5271d7a81b/resubmit][inv_18kZwjRiNJnB2Zhn5OTptBnc7rrOkEsn6h] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.823Z][nektar-custody/owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d/submit][inv_1drLEIQ7JX6k77eCqgHZ885DIhMDB5F0YJ] INFO: Starting invocation.
+[restate][2026-11-23T12:12:21.892Z][nektar-custody/owner:dcc2be6553506732fc1ba3237205cd3a7aa86c68e90701d5f97e8557424a23dd/submit][inv_1lonLMHOUvtS2vp6ZUBTuh8uyva2fvYCMm] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:21.928Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz2uPZDg0VLF9egPRVlQ6tOR] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:21.944Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz5eNfZd9kaDEA5AdTaJo6iu] INFO: Starting invocation.
+[restate][2026-11-23T12:12:22.111Z][nektar-custody/owner:c9808f132110d46de8f4ec42f2faa7c1b71ec223955b89554e3cd3c08ce0999c/submit][inv_1aoqO70Mpt0f1WnQwSSRcU69XOIi5DCTmg] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:22.118Z][nektar-custody/owner:75173cf0f3cf562b54613566d1d23ff7f7035e8007c642bd59da11ea1606487f/submit][inv_168ojt75lUYu2ldgz1dSGjTLaKrEHcBN9l] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:22.139Z][nektar-tx/owner:c9808f132110d46de8f4ec42f2faa7c1b71ec223955b89554e3cd3c08ce0999c/resubmit][inv_1aoqO70Mpt0f27MPpgKvdnYIQ2tSWJfO8N] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:22.151Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz5eNfZd9kaDEA5AdTaJo6iu] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:22.152Z][nektar-tx/owner:75173cf0f3cf562b54613566d1d23ff7f7035e8007c642bd59da11ea1606487f/resubmit][inv_168ojt75lUYu6TsHsbEoXHmZ5Qjh9ip8c1] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:22.181Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz0ESAXcG5v5cEkOe2dUW7RY] INFO: Starting invocation.
+[restate][2026-11-23T12:12:22.211Z][nektar-custody/owner:a11bfb8fbd051969173b51ed6d2e052cb2b880ee35c745903c9c1b002d0dfcfb/submit][inv_1hv1FdSGwDzi34YHnCi0u321jxGNxRbg7L] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:22.221Z][nektar-custody/owner:6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513/submit][inv_1kLJNsLCSpxM4JOQuteYZSmwFnAQCu1y8R] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:22.292Z][nektar-custody/owner:70c12c1caf6ee1c21d9bf0e5b0a421f82a6ae90fc008d50e02ff38150e4f8de0/submit][inv_14fK2aRnjoHM3uKgJFrDy0TYv6QrvW1acJ] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:22.318Z][nektar-custody/owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74/submit][inv_1dxJjQS41mcK0wsLZlLxnx1LrBL7V19HgF] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:22.376Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz0ESAXcG5v5cEkOe2dUW7RY] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:22.389Z][nektar-custody/owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5/submit][inv_1lNGgZBoACQ14RtbGN2pdEvsqJwOm24O1b] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:22.393Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz3tI7qzMgkypMt6oQedwVS8] INFO: Starting invocation.
+[restate][2026-11-23T12:12:22.521Z][nektar-custody/owner:34d597b2292531073152db2602f2e4dbd6af6d3f5ed84b3df4bc93a1ee57fb09/submit][inv_13th3WfPlbph0bUKNpNmBT1whW1bm3HzmI] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:22.533Z][nektar-custody/owner:0dae07ee6765610e417a48dc6d53c6ca99645cb44dfa0224ab6113c278d0cc9c/submit][inv_1cYY4xn6G8Uj6XUvdS3tBp4gA5mogeI8ou] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:22.548Z][nektar-tx/owner:34d597b2292531073152db2602f2e4dbd6af6d3f5ed84b3df4bc93a1ee57fb09/resubmit][inv_13th3WfPlbph2lBVUifBpaS5dtHPzYPBmh] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:22.558Z][nektar-tx/owner:0dae07ee6765610e417a48dc6d53c6ca99645cb44dfa0224ab6113c278d0cc9c/resubmit][inv_1cYY4xn6G8Uj1tTSBnor7F627zymJRj6hP] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:22.599Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz3tI7qzMgkypMt6oQedwVS8] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:22.614Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz6W48Tuyc79PPI66undutD1] INFO: Starting invocation.
+[restate][2026-11-23T12:12:22.627Z][nektar-custody/owner:00859039ee1a428b0be6b5e78c598a7c85dc15b5acaf650ee07fb5787023d15d/submit][inv_13F17ZNnCYpd5SI2IK85p9nb5bMMcyY6SK] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:22.797Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz6W48Tuyc79PPI66undutD1] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:22.811Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz63B9vxROsQVYtLDS2ZMYeq] INFO: Starting invocation.
+[restate][2026-11-23T12:12:22.997Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz63B9vxROsQVYtLDS2ZMYeq] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.021Z][nektar-custody/owner:3c349ea4cb9cf288e257611f72c0c5c6ac463b2d9188042c6561564f5520deed/submit][inv_1ebMjOmf263u3k5JsMEFMd4ejLLRNYROwo] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.031Z][nektar-custody/owner:f83cc068fd850e24b3177d8661ed957e2017f2946d442746e51d6397e3fab838/submit][inv_10uQNdsdjDMt4JK0G9Gekh2y0mn3EZN4wT] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.033Z][nektar-custody/owner:9b9609fb16edaa3cf98eb99f5ae522669c481c2db5f9abde40851cc589b13633/submit][inv_12wlFKPLdcXW1datfDQGTlaiZ7nKSExCbd] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.034Z][nektar-custody/owner:b594ada35b8404354e488c1484cf56e086cdb299c1802e570c1b21874ac017ac/submit][inv_10mvMLRTzkMO32vyly2GoL5rO76t01STFB] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.042Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz7gE67IISwmE9xUMDryCmPD] INFO: Starting invocation.
+[restate][2026-11-23T12:12:23.080Z][nektar-custody/owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d/submit][inv_1drLEIQ7JX6k77eCqgHZ885DIhMDB5F0YJ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.080Z][nektar-custody/owner:dcc2be6553506732fc1ba3237205cd3a7aa86c68e90701d5f97e8557424a23dd/submit][inv_1lonLMHOUvtS2vp6ZUBTuh8uyva2fvYCMm] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.080Z][nektar-custody/owner:e6f502860d1df29798f1e7fe2fba9d0c59ad470cef65241bc8a9138ae07e9213/submit][inv_1iEDYsXq6GfP6T9cCAH7ljhvQHCFWIdG17] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.080Z][nektar-custody/owner:a11bfb8fbd051969173b51ed6d2e052cb2b880ee35c745903c9c1b002d0dfcfb/submit][inv_1hv1FdSGwDzi34YHnCi0u321jxGNxRbg7L] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.084Z][nektar-tx/owner:b594ada35b8404354e488c1484cf56e086cdb299c1802e570c1b21874ac017ac/resubmit][inv_10mvMLRTzkMO6EkM0sAgSfDHliZARtPdE5] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.098Z][nektar-tx/owner:3c349ea4cb9cf288e257611f72c0c5c6ac463b2d9188042c6561564f5520deed/resubmit][inv_1ebMjOmf263u664gOKV3v3IvX4vILjKGVH] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.101Z][nektar-tx/owner:9b9609fb16edaa3cf98eb99f5ae522669c481c2db5f9abde40851cc589b13633/resubmit][inv_12wlFKPLdcXW0eFc42Jiuy9BcQDuANzW2B] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.105Z][nektar-tx/owner:f83cc068fd850e24b3177d8661ed957e2017f2946d442746e51d6397e3fab838/resubmit][inv_10uQNdsdjDMt4ORCybxZHm1bjdYmI3aeRj] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.121Z][nektar-tx/owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d/resubmit][inv_1drLEIQ7JX6k52AFcO4A2g92R4bG6fE689] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.121Z][nektar-tx/owner:dcc2be6553506732fc1ba3237205cd3a7aa86c68e90701d5f97e8557424a23dd/resubmit][inv_1lonLMHOUvtS5cOyzYOhe3Nb1a7oW2hBiV] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.137Z][nektar-tx/owner:a11bfb8fbd051969173b51ed6d2e052cb2b880ee35c745903c9c1b002d0dfcfb/resubmit][inv_1hv1FdSGwDzi5kKpV8uVIzOdbvL5mtaz3X] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.143Z][nektar-tx/owner:e6f502860d1df29798f1e7fe2fba9d0c59ad470cef65241bc8a9138ae07e9213/resubmit][inv_1iEDYsXq6GfP6b2dZSzdZMlhV2tXhbX7c5] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.271Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz7gE67IISwmE9xUMDryCmPD] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.287Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz6jkFkyMDDMBj41ZHsyaOIE] INFO: Starting invocation.
+[restate][2026-11-23T12:12:23.408Z][nektar-custody/owner:6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513/submit][inv_1kLJNsLCSpxM4JOQuteYZSmwFnAQCu1y8R] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.409Z][nektar-custody/owner:70c12c1caf6ee1c21d9bf0e5b0a421f82a6ae90fc008d50e02ff38150e4f8de0/submit][inv_14fK2aRnjoHM3uKgJFrDy0TYv6QrvW1acJ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.410Z][nektar-custody/owner:00859039ee1a428b0be6b5e78c598a7c85dc15b5acaf650ee07fb5787023d15d/submit][inv_13F17ZNnCYpd5SI2IK85p9nb5bMMcyY6SK] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.434Z][nektar-tx/owner:6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513/resubmit][inv_1kLJNsLCSpxM6gN5SXNLpnbVtFPu53p0dj] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.445Z][nektar-tx/owner:00859039ee1a428b0be6b5e78c598a7c85dc15b5acaf650ee07fb5787023d15d/resubmit][inv_13F17ZNnCYpd0782GyZ3S6GXKCr49I70Wd] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.445Z][nektar-tx/owner:70c12c1caf6ee1c21d9bf0e5b0a421f82a6ae90fc008d50e02ff38150e4f8de0/resubmit][inv_14fK2aRnjoHM0RusLe8AdlwBCyHQvCjJER] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.483Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz6jkFkyMDDMBj41ZHsyaOIE] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.498Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz3dhwmLvUKkBmUUm3u4qVsT] INFO: Starting invocation.
+[restate][2026-11-23T12:12:23.558Z][nektar-tx/owner:d2bf52f9d37b9de8b7378419e0575a5114c519175c964aa8a6ac9df7125aedee/observe][inv_19uwEtd6kjvi3Bsw8e6ibZi5H2H1n0fTSn] INFO: Starting invocation.
+[restate][2026-11-23T12:12:23.603Z][nektar-tx/owner:d2bf52f9d37b9de8b7378419e0575a5114c519175c964aa8a6ac9df7125aedee/observe][inv_19uwEtd6kjvi3Bsw8e6ibZi5H2H1n0fTSn] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.681Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz3dhwmLvUKkBmUUm3u4qVsT] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.701Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz6OVswampErd4aiq15HwUgZ] INFO: Starting invocation.
+[restate][2026-11-23T12:12:23.883Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz6OVswampErd4aiq15HwUgZ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:23.897Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz0wOY9rjRnxFsfbnSlWxKWx] INFO: Starting invocation.
+[restate][2026-11-23T12:12:24.096Z][nektar-custody/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/submit][inv_12XIDrVXTsDx25Ln2AQPZY0lDTQaOLXJ3F] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:24.106Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz0wOY9rjRnxFsfbnSlWxKWx] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:24.126Z][nektar-custody/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/submit][inv_12XIDrVXTsDx25Ln2AQPZY0lDTQaOLXJ3F] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:24.136Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz5w9LmY91OQObA2IBp83CgB] INFO: Starting invocation.
+[restate][2026-11-23T12:12:24.145Z][nektar-tx/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/resubmit][inv_12XIDrVXTsDx5VjmdKCQnI6313TpJVmAa5] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:24.191Z][nektar-custody/owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf/submit][inv_1k0U5ovMs9rH3AQWRTmnmu4OvlI1780Je1] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:24.213Z][nektar-custody/owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf/submit][inv_1k0U5ovMs9rH3AQWRTmnmu4OvlI1780Je1] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:24.230Z][nektar-tx/owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf/resubmit][inv_1k0U5ovMs9rH5OLBIfR4UNCDUw3ujracIF] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:24.320Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz5w9LmY91OQObA2IBp83CgB] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:24.341Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz4TK9CBFYj4cQzbbxLZZ1TE] INFO: Starting invocation.
+[restate][2026-11-23T12:12:24.527Z][nektar-transport/feed/deliver][inv_15Ps08K3qUFz4TK9CBFYj4cQzbbxLZZ1TE] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:24.574Z][nektar-custody/owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74/submit][inv_1dxJjQS41mcK0wsLZlLxnx1LrBL7V19HgF] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:24.606Z][nektar-custody/owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74/submit][inv_1dxJjQS41mcK0wsLZlLxnx1LrBL7V19HgF] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:24.633Z][nektar-tx/owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74/resubmit][inv_1dxJjQS41mcK4RmjDUy1mut9218THynVGF] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:24.653Z][nektar-custody/owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5/submit][inv_1lNGgZBoACQ14RtbGN2pdEvsqJwOm24O1b] INFO: Replaying invocation.
+[restate][2026-11-23T12:12:24.681Z][nektar-custody/owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5/submit][inv_1lNGgZBoACQ14RtbGN2pdEvsqJwOm24O1b] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:24.697Z][nektar-tx/owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5/resubmit][inv_1lNGgZBoACQ13bjjvhd0OiNLQgagneqAdr] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:12:24.706Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ6PcELBwOAnDsFKHd9rkjc9] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:13.617Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ5rfaSxEJ7woJbQGFovogFL] INFO: Starting invocation.
+[restate][2026-11-23T12:13:13.675Z][nektar-tx/owner:6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513/observe][inv_1kLJNsLCSpxM31uaekrfLnampKEM1vrr4H] INFO: Starting invocation.
+[restate][2026-11-23T12:13:13.744Z][nektar-tx/owner:6a43d0c5eb262034e6ed4810930df6bf59cbd601535c413aea3c34e572605513/observe][inv_1kLJNsLCSpxM31uaekrfLnampKEM1vrr4H] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:13.904Z][nektar-tx/owner:c9808f132110d46de8f4ec42f2faa7c1b71ec223955b89554e3cd3c08ce0999c/observe][inv_1aoqO70Mpt0f2k3Zz7tysW4HO07aVrTDA9] INFO: Starting invocation.
+[restate][2026-11-23T12:13:14.007Z][nektar-tx/owner:c9808f132110d46de8f4ec42f2faa7c1b71ec223955b89554e3cd3c08ce0999c/observe][inv_1aoqO70Mpt0f2k3Zz7tysW4HO07aVrTDA9] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:14.037Z][nektar-tx/owner:3c349ea4cb9cf288e257611f72c0c5c6ac463b2d9188042c6561564f5520deed/observe][inv_1ebMjOmf263u69u1jao6YvFC1BS1smiQ6a] INFO: Starting invocation.
+[restate][2026-11-23T12:13:14.094Z][nektar-tx/owner:3c349ea4cb9cf288e257611f72c0c5c6ac463b2d9188042c6561564f5520deed/observe][inv_1ebMjOmf263u69u1jao6YvFC1BS1smiQ6a] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:14.127Z][nektar-tx/owner:34d597b2292531073152db2602f2e4dbd6af6d3f5ed84b3df4bc93a1ee57fb09/observe][inv_13th3WfPlbph0XH8kfQnsDoesNEbpVpZDW] INFO: Starting invocation.
+[restate][2026-11-23T12:13:14.183Z][nektar-tx/owner:34d597b2292531073152db2602f2e4dbd6af6d3f5ed84b3df4bc93a1ee57fb09/observe][inv_13th3WfPlbph0XH8kfQnsDoesNEbpVpZDW] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:19.792Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ6r60dJ61Ly3mMpOoGHOJLH] INFO: Starting invocation.
+[restate][2026-11-23T12:13:19.825Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4MNbklmj5JUy5T3DJSPbN0] INFO: Starting invocation.
+[restate][2026-11-23T12:13:19.871Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ4uvVjliC1FerKIWwP0X87d] INFO: Starting invocation.
+[restate][2026-11-23T12:13:19.889Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ4KAoiKqCpOT0BywxbV12ub] INFO: Starting invocation.
+[restate][2026-11-23T12:13:19.965Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ4uvVjliC1FerKIWwP0X87d] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.008Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ32ymx6JR6pdK6riHIPCjRx] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.020Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB7sOM5njhuvKWNf8nVCIqdn] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.042Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB7sOM5njhuvKWNf8nVCIqdn] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.046Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4MNbklmj5JUy5T3DJSPbN0] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.071Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ6r60dJ61Ly3mMpOoGHOJLH] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.080Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3UDp4v7aM3zbEjoAtpZEFB] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.085Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ32ymx6JR6pdK6riHIPCjRx] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.094Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ2EXZJGjqguYq3f4aDQGW2t] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.230Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3UDp4v7aM3zbEjoAtpZEFB] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.289Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7FbFChekj8FKk7pk0rnGEH] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.426Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ2EXZJGjqguYq3f4aDQGW2t] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.520Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ4KAoiKqCpOT0BywxbV12ub] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.536Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7FbFChekj8FKk7pk0rnGEH] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.551Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5fgXsY8P9Ywcbd5xZ77hmf] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.588Z][nektar-transport/drain/drain][inv_1buDPbDd00546HPGM2tyqqSmWddao1rL5E] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.592Z][nektar-sweep/main/tick][inv_1lGoi5PYm9TQ4XBfkPhKY65vHIqD1luIC3] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.626Z][nektar-transport/drain/drain][inv_1buDPbDd00546HPGM2tyqqSmWddao1rL5E] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.664Z][nektar-sweep/main/tick][inv_1lGoi5PYm9TQ4XBfkPhKY65vHIqD1luIC3] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.711Z][nektar-tx/owner:e6f502860d1df29798f1e7fe2fba9d0c59ad470cef65241bc8a9138ae07e9213/observe][inv_1iEDYsXq6GfP3uNGC5AowdEeZVU7dInpip] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.721Z][nektar-tx/owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf/observe][inv_1k0U5ovMs9rH2FEncUudaBTmn4apQgZyQ9] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.723Z][nektar-tx/owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74/observe][inv_1dxJjQS41mcK04bSut6EWQlCQDtCJhYKMp] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.726Z][nektar-tx/owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d/observe][inv_1drLEIQ7JX6k7evPDqNBcZjNLrCQNe6MUx] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.729Z][nektar-tx/owner:a11bfb8fbd051969173b51ed6d2e052cb2b880ee35c745903c9c1b002d0dfcfb/observe][inv_1hv1FdSGwDzi3Hxunosw9DCXJrzeGf2VDb] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.732Z][nektar-tx/owner:00859039ee1a428b0be6b5e78c598a7c85dc15b5acaf650ee07fb5787023d15d/observe][inv_13F17ZNnCYpd2UisIupb6T5v7MNqc2fHSp] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.737Z][nektar-tx/owner:e1c3e7fa209ab46d36dae4c7dba115922711cc74764a0a13df339e7387a01322/observe][inv_1iX5b7J7hzF27qDXxYfwp2rnyXG0T95Sj7] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.740Z][nektar-tx/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/observe][inv_12XIDrVXTsDx2c1RS2886z2TQAk5WwWWRj] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.744Z][nektar-tx/owner:dabed03bb56b3ea00816e7218a302eea28b87788e97560dad34bf1b39505854e/observe][inv_13L8MaS1VFBk7zV7JNK03dBv0jLxBKrenf] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.746Z][nektar-tx/owner:75173cf0f3cf562b54613566d1d23ff7f7035e8007c642bd59da11ea1606487f/observe][inv_168ojt75lUYu5VV4oTxfYCuMUdpofiGUI9] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.748Z][nektar-tx/owner:dcc2be6553506732fc1ba3237205cd3a7aa86c68e90701d5f97e8557424a23dd/observe][inv_1lonLMHOUvtS0B7vfKkgnPSZZrHMH1yOgV] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.753Z][nektar-tx/owner:9b9609fb16edaa3cf98eb99f5ae522669c481c2db5f9abde40851cc589b13633/observe][inv_12wlFKPLdcXW5aZ89e7a037RRij7TkmUlr] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.759Z][nektar-tx/owner:70c12c1caf6ee1c21d9bf0e5b0a421f82a6ae90fc008d50e02ff38150e4f8de0/observe][inv_14fK2aRnjoHM3QVvf0W7CJK0Z01hDWf7wt] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.763Z][nektar-tx/owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5/observe][inv_1lNGgZBoACQ14BZayAwLUQ2GQ1CCf02YmJ] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.765Z][nektar-tx/owner:0dae07ee6765610e417a48dc6d53c6ca99645cb44dfa0224ab6113c278d0cc9c/observe][inv_1cYY4xn6G8Uj4iMh5X57gIeoHDTNROpedH] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.770Z][nektar-tx/owner:f83cc068fd850e24b3177d8661ed957e2017f2946d442746e51d6397e3fab838/observe][inv_10uQNdsdjDMt6QOyds8rrNYWKavnHCGeVb] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.773Z][nektar-tx/owner:411cbc81e1b43d1b719a3c619d84f622aa7f619586c52ecf3d0d6c5271d7a81b/observe][inv_18kZwjRiNJnB5d6fntYx9u038ZAWgjBvoJ] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.777Z][nektar-tx/owner:b594ada35b8404354e488c1484cf56e086cdb299c1802e570c1b21874ac017ac/observe][inv_10mvMLRTzkMO1U9BPTVELKoG0Avh0SzjzP] INFO: Starting invocation.
+[restate][2026-11-23T12:13:20.807Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ5rfaSxEJ7woJbQGFovogFL] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.938Z][nektar-tx/owner:e6f502860d1df29798f1e7fe2fba9d0c59ad470cef65241bc8a9138ae07e9213/observe][inv_1iEDYsXq6GfP3uNGC5AowdEeZVU7dInpip] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.943Z][nektar-tx/owner:fe4de809bf1888729e69c9ec81feaf95cd0c695516f2c71e41922f0958f4ee74/observe][inv_1dxJjQS41mcK04bSut6EWQlCQDtCJhYKMp] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.945Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5fgXsY8P9Ywcbd5xZ77hmf] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.945Z][nektar-tx/owner:9e5ac8d2bf3ec79646bda65885fdd6bb7798a37fd09c31edf0c360ff8ce2abcf/observe][inv_1k0U5ovMs9rH2FEncUudaBTmn4apQgZyQ9] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.947Z][nektar-tx/owner:958fe60e51ed112175695146e318650695d9a94c86e06d36ed5b61e01f5bc70d/observe][inv_1drLEIQ7JX6k7evPDqNBcZjNLrCQNe6MUx] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.968Z][nektar-tx/owner:a11bfb8fbd051969173b51ed6d2e052cb2b880ee35c745903c9c1b002d0dfcfb/observe][inv_1hv1FdSGwDzi3Hxunosw9DCXJrzeGf2VDb] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.970Z][nektar-tx/owner:00859039ee1a428b0be6b5e78c598a7c85dc15b5acaf650ee07fb5787023d15d/observe][inv_13F17ZNnCYpd2UisIupb6T5v7MNqc2fHSp] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.973Z][nektar-tx/owner:75173cf0f3cf562b54613566d1d23ff7f7035e8007c642bd59da11ea1606487f/observe][inv_168ojt75lUYu5VV4oTxfYCuMUdpofiGUI9] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.974Z][nektar-tx/owner:a3f69e5adfdd797619a7eb67be91d40a64f72a2915e636b96e95b9f21b9b0170/observe][inv_12XIDrVXTsDx2c1RS2886z2TQAk5WwWWRj] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.979Z][nektar-tx/owner:e1c3e7fa209ab46d36dae4c7dba115922711cc74764a0a13df339e7387a01322/observe][inv_1iX5b7J7hzF27qDXxYfwp2rnyXG0T95Sj7] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.984Z][nektar-tx/owner:dabed03bb56b3ea00816e7218a302eea28b87788e97560dad34bf1b39505854e/observe][inv_13L8MaS1VFBk7zV7JNK03dBv0jLxBKrenf] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.987Z][nektar-tx/owner:dcc2be6553506732fc1ba3237205cd3a7aa86c68e90701d5f97e8557424a23dd/observe][inv_1lonLMHOUvtS0B7vfKkgnPSZZrHMH1yOgV] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:20.993Z][nektar-tx/owner:e7b7fb3c9593c99aa81d9a10e7e19e0fc787d589ea4556fb1e6df1ba23bed3d5/observe][inv_1lNGgZBoACQ14BZayAwLUQ2GQ1CCf02YmJ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:21.000Z][nektar-tx/owner:9b9609fb16edaa3cf98eb99f5ae522669c481c2db5f9abde40851cc589b13633/observe][inv_12wlFKPLdcXW5aZ89e7a037RRij7TkmUlr] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:21.012Z][nektar-tx/owner:f83cc068fd850e24b3177d8661ed957e2017f2946d442746e51d6397e3fab838/observe][inv_10uQNdsdjDMt6QOyds8rrNYWKavnHCGeVb] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:21.018Z][nektar-tx/owner:70c12c1caf6ee1c21d9bf0e5b0a421f82a6ae90fc008d50e02ff38150e4f8de0/observe][inv_14fK2aRnjoHM3QVvf0W7CJK0Z01hDWf7wt] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:21.021Z][nektar-tx/owner:b594ada35b8404354e488c1484cf56e086cdb299c1802e570c1b21874ac017ac/observe][inv_10mvMLRTzkMO1U9BPTVELKoG0Avh0SzjzP] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:21.027Z][nektar-tx/owner:411cbc81e1b43d1b719a3c619d84f622aa7f619586c52ecf3d0d6c5271d7a81b/observe][inv_18kZwjRiNJnB5d6fntYx9u038ZAWgjBvoJ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:21.027Z][nektar-tx/owner:0dae07ee6765610e417a48dc6d53c6ca99645cb44dfa0224ab6113c278d0cc9c/observe][inv_1cYY4xn6G8Uj4iMh5X57gIeoHDTNROpedH] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:22.010Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1Psy6iKO5lgcGt6u0s0mib] INFO: Starting invocation.
+[restate][2026-11-23T12:13:22.123Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1Psy6iKO5lgcGt6u0s0mib] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:23.014Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6kYlqbDmsYHZBDGZWqXwHX] INFO: Starting invocation.
+[restate][2026-11-23T12:13:23.139Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6kYlqbDmsYHZBDGZWqXwHX] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:24.094Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0Tj6cIiNcB4vHXLBYOojup] INFO: Starting invocation.
+[restate][2026-11-23T12:13:24.293Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0Tj6cIiNcB4vHXLBYOojup] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:25.020Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4Lbiniw7J4UWpsp6ZaQoA0] INFO: Starting invocation.
+[restate][2026-11-23T12:13:25.137Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4Lbiniw7J4UWpsp6ZaQoA0] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:26.021Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ74iK7PebzbT8m1JnTzyZ91] INFO: Starting invocation.
+[restate][2026-11-23T12:13:26.115Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ74iK7PebzbT8m1JnTzyZ91] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:28.049Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4jOHvNpJGs98KWTaiIscl1] INFO: Starting invocation.
+[restate][2026-11-23T12:13:28.143Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4jOHvNpJGs98KWTaiIscl1] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:30.033Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5Q5TynFcJ7A9yFyPaBqDBX] INFO: Starting invocation.
+[restate][2026-11-23T12:13:30.129Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5Q5TynFcJ7A9yFyPaBqDBX] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:31.040Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ0J3pQROV6ILzEWGW7s2XlC] INFO: Starting invocation.
+[restate][2026-11-23T12:13:31.341Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ0J3pQROV6ILzEWGW7s2XlC] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:32.041Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4ZB0VhtVh5kR5BnL4u49hc] INFO: Starting invocation.
+[restate][2026-11-23T12:13:32.145Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4ZB0VhtVh5kR5BnL4u49hc] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:34.051Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0OSa3vChk1yKnlVoXzaTFd] INFO: Starting invocation.
+[restate][2026-11-23T12:13:34.157Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0OSa3vChk1yKnlVoXzaTFd] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:36.082Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5IZsemDaHLNbyAUrBRqr38] INFO: Starting invocation.
+[restate][2026-11-23T12:13:36.368Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5IZsemDaHLNbyAUrBRqr38] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:38.019Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2ltAH5OpNbF2z8l4MgFXDS] INFO: Starting invocation.
+[restate][2026-11-23T12:13:38.152Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2ltAH5OpNbF2z8l4MgFXDS] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:40.002Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0TfRypBPr0UqXfd1XRKFXN] INFO: Starting invocation.
+[restate][2026-11-23T12:13:40.104Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0TfRypBPr0UqXfd1XRKFXN] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:42.007Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1oECigGc5qJika2SauovbQ] INFO: Starting invocation.
+[restate][2026-11-23T12:13:42.007Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6UFrsNUSW6AarvPM8aj3Ze] INFO: Starting invocation.
+[restate][2026-11-23T12:13:42.127Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1oECigGc5qJika2SauovbQ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:42.377Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6UFrsNUSW6AarvPM8aj3Ze] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:43.989Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3TnXtwVigyMOtBjo5vZmYE] INFO: Starting invocation.
+[restate][2026-11-23T12:13:44.073Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3TnXtwVigyMOtBjo5vZmYE] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:45.990Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ71pliDbJAxiAP4pt9rHyr7] INFO: Starting invocation.
+[restate][2026-11-23T12:13:46.091Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ71pliDbJAxiAP4pt9rHyr7] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:47.988Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0ogYlLrHrh5MKMeeVYIhV1] INFO: Starting invocation.
+[restate][2026-11-23T12:13:48.070Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0ogYlLrHrh5MKMeeVYIhV1] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:49.992Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7r96X2pE5IOWzwAk6YcfNz] INFO: Starting invocation.
+[restate][2026-11-23T12:13:50.074Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7r96X2pE5IOWzwAk6YcfNz] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:51.994Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5ckWuWx8aLnhN7v6pHtOC3] INFO: Starting invocation.
+[restate][2026-11-23T12:13:52.071Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5ckWuWx8aLnhN7v6pHtOC3] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:52.997Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7hyzd1EtJG1TbOUrFlGVbQ] INFO: Starting invocation.
+[restate][2026-11-23T12:13:53.307Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7hyzd1EtJG1TbOUrFlGVbQ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:53.999Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7sf4XfwduZbWYYv3Dd0N8h] INFO: Starting invocation.
+[restate][2026-11-23T12:13:54.095Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7sf4XfwduZbWYYv3Dd0N8h] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:56.000Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0uHHlzhQuxU85euqzXWiiu] INFO: Starting invocation.
+[restate][2026-11-23T12:13:56.072Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0uHHlzhQuxU85euqzXWiiu] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:13:58.015Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6gj52Lwx8iEULVBl5XPmWn] INFO: Starting invocation.
+[restate][2026-11-23T12:13:58.090Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6gj52Lwx8iEULVBl5XPmWn] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:00.021Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5CybGFJtDVmVbUZhrJjBpF] INFO: Starting invocation.
+[restate][2026-11-23T12:14:00.138Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5CybGFJtDVmVbUZhrJjBpF] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:02.020Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4oqEjHPgo2G1Hc2VWDejvz] INFO: Starting invocation.
+[restate][2026-11-23T12:14:02.076Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4oqEjHPgo2G1Hc2VWDejvz] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:04.030Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6HujU4kYblXKG9urCTrc4w] INFO: Starting invocation.
+[restate][2026-11-23T12:14:04.031Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6BZ0fpOHErr9NMDuZT5OIA] INFO: Starting invocation.
+[restate][2026-11-23T12:14:04.118Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6HujU4kYblXKG9urCTrc4w] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:04.318Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6BZ0fpOHErr9NMDuZT5OIA] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:06.035Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ31QxcMqLGqCtvkiBIoTd3w] INFO: Starting invocation.
+[restate][2026-11-23T12:14:06.111Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ31QxcMqLGqCtvkiBIoTd3w] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:08.030Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3wYS1c55U4cCm1ZWDk0GQ6] INFO: Starting invocation.
+[restate][2026-11-23T12:14:08.115Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3wYS1c55U4cCm1ZWDk0GQ6] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:10.010Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5o6WK5TtWHR5Z9lEBbj1gv] INFO: Starting invocation.
+[restate][2026-11-23T12:14:10.087Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5o6WK5TtWHR5Z9lEBbj1gv] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:11.999Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2lWjrgESVHGO1GGTrxnEqe] INFO: Starting invocation.
+[restate][2026-11-23T12:14:12.073Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2lWjrgESVHGO1GGTrxnEqe] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:13.595Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ2tnDPgxcYaL6D3kFgk6SOQ] INFO: Starting invocation.
+[restate][2026-11-23T12:14:13.991Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0Kxx5TMsmG73WLlsaF2Ecc] INFO: Starting invocation.
+[restate][2026-11-23T12:14:14.064Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0Kxx5TMsmG73WLlsaF2Ecc] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:14.992Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6PJv93cQ6Rsm18qgyWomeh] INFO: Starting invocation.
+[restate][2026-11-23T12:14:15.233Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6PJv93cQ6Rsm18qgyWomeh] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:15.991Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ69rkomzaFmiQOVSqFnmFk4] INFO: Starting invocation.
+[restate][2026-11-23T12:14:16.071Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ69rkomzaFmiQOVSqFnmFk4] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:17.986Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3QubUGfhff2g89tIfSHVKB] INFO: Starting invocation.
+[restate][2026-11-23T12:14:18.064Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3QubUGfhff2g89tIfSHVKB] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:19.961Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ2tnDPgxcYaL6D3kFgk6SOQ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:19.989Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ402Upugvm4lZyzxRXgTiPH] INFO: Starting invocation.
+[restate][2026-11-23T12:14:20.017Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ4JQrEosQUJu3a8KD7jHRAr] INFO: Starting invocation.
+[restate][2026-11-23T12:14:20.061Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ4JQrEosQUJu3a8KD7jHRAr] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:20.110Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ402Upugvm4lZyzxRXgTiPH] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:20.992Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ4C5qOcHk6WLJdrI5nx3BBa] INFO: Starting invocation.
+[restate][2026-11-23T12:14:21.202Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ4C5qOcHk6WLJdrI5nx3BBa] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:21.992Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4nWRrrPRTEjudBymb6W05v] INFO: Starting invocation.
+[restate][2026-11-23T12:14:22.072Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4nWRrrPRTEjudBymb6W05v] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:23.996Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2ZMcWd4eTYKDC2aLHrG1rl] INFO: Starting invocation.
+[restate][2026-11-23T12:14:24.076Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB7dHEBXrie0GmN2EEcwxi6r] INFO: Starting invocation.
+[restate][2026-11-23T12:14:24.087Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB7dHEBXrie0GmN2EEcwxi6r] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:24.093Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2ZMcWd4eTYKDC2aLHrG1rl] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:26.004Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4SXSNNGCi58K5878Ma6Jq3] INFO: Starting invocation.
+[restate][2026-11-23T12:14:26.004Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7xi0pLcYHBzK3QYFMlSuTE] INFO: Starting invocation.
+[restate][2026-11-23T12:14:26.083Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4SXSNNGCi58K5878Ma6Jq3] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:26.285Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7xi0pLcYHBzK3QYFMlSuTE] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:28.006Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6Ikpg7MhTzq4Zym5eocmsc] INFO: Starting invocation.
+[restate][2026-11-23T12:14:28.094Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6Ikpg7MhTzq4Zym5eocmsc] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:30.009Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2nEq4l6GpleXA8fPX7wYnf] INFO: Starting invocation.
+[restate][2026-11-23T12:14:30.094Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2nEq4l6GpleXA8fPX7wYnf] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:32.020Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2BrS8V6FE0BeIM4L5c0jEP] INFO: Starting invocation.
+[restate][2026-11-23T12:14:32.075Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2BrS8V6FE0BeIM4L5c0jEP] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:34.023Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0RanW6rAulRB4zRDbvDa0c] INFO: Starting invocation.
+[restate][2026-11-23T12:14:34.094Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0RanW6rAulRB4zRDbvDa0c] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:36.030Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3jz19RLTjYAEDWVoFVJoW6] INFO: Starting invocation.
+[restate][2026-11-23T12:14:36.089Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3jz19RLTjYAEDWVoFVJoW6] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:37.036Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ1KgbvY76f8K6HTt0Io5LQQ] INFO: Starting invocation.
+[restate][2026-11-23T12:14:37.316Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ1KgbvY76f8K6HTt0Io5LQQ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:38.036Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ68u8BIYk6i69QKY0QilGnS] INFO: Starting invocation.
+[restate][2026-11-23T12:14:38.103Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ68u8BIYk6i69QKY0QilGnS] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:40.030Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1pGEpTYvGIVLVOCGW2BdTC] INFO: Starting invocation.
+[restate][2026-11-23T12:14:40.121Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1pGEpTYvGIVLVOCGW2BdTC] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:42.016Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4uZrusqnSBJ7JDGRGu4Naw] INFO: Starting invocation.
+[restate][2026-11-23T12:14:42.105Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4uZrusqnSBJ7JDGRGu4Naw] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:44.001Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0lDKCP1SFTbckexUwjrhlb] INFO: Starting invocation.
+[restate][2026-11-23T12:14:44.090Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0lDKCP1SFTbckexUwjrhlb] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:45.995Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4gXek39FzmEe4mGosYNTqH] INFO: Starting invocation.
+[restate][2026-11-23T12:14:46.074Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4gXek39FzmEe4mGosYNTqH] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:47.995Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ78M7WT2DIkCDzicL5CRXkK] INFO: Starting invocation.
+[restate][2026-11-23T12:14:47.996Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ4Ca85vSgo9RnbYb3W6HbwE] INFO: Starting invocation.
+[restate][2026-11-23T12:14:48.074Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ78M7WT2DIkCDzicL5CRXkK] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:48.290Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ4Ca85vSgo9RnbYb3W6HbwE] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:49.991Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7GlbaJZMipwwsknnsiNPSd] INFO: Starting invocation.
+[restate][2026-11-23T12:14:50.044Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7GlbaJZMipwwsknnsiNPSd] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:52.053Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2hL6j0jiJ8Gwe8tjA1OZ1d] INFO: Starting invocation.
+[restate][2026-11-23T12:14:52.133Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2hL6j0jiJ8Gwe8tjA1OZ1d] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:54.002Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6BryyxK1eqX7BJgP2VRl3O] INFO: Starting invocation.
+[restate][2026-11-23T12:14:54.065Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6BryyxK1eqX7BJgP2VRl3O] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:56.000Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0escrdUx4pCfiQRLPyqyLh] INFO: Starting invocation.
+[restate][2026-11-23T12:14:56.069Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0escrdUx4pCfiQRLPyqyLh] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:58.004Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2Ym8SdcfoGtBdki2xujRFr] INFO: Starting invocation.
+[restate][2026-11-23T12:14:58.072Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2Ym8SdcfoGtBdki2xujRFr] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:14:59.005Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5Ajx66yZVilEQnA7F6JuI5] INFO: Starting invocation.
+[restate][2026-11-23T12:14:59.268Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5Ajx66yZVilEQnA7F6JuI5] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:00.011Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0Y2wnPxXAjdm8XdralHiIq] INFO: Starting invocation.
+[restate][2026-11-23T12:15:00.100Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0Y2wnPxXAjdm8XdralHiIq] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:02.016Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1p4yjNAOWtDwQSd3YgpoNh] INFO: Starting invocation.
+[restate][2026-11-23T12:15:02.085Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1p4yjNAOWtDwQSd3YgpoNh] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:04.021Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2fOmkUdjPEeqTqm9DDViBt] INFO: Starting invocation.
+[restate][2026-11-23T12:15:04.094Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2fOmkUdjPEeqTqm9DDViBt] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:06.026Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3ADQHFigpnNxkeKZLrVc5A] INFO: Starting invocation.
+[restate][2026-11-23T12:15:06.086Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3ADQHFigpnNxkeKZLrVc5A] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:08.031Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2YHfdP3am2VGB0csGFiPZr] INFO: Starting invocation.
+[restate][2026-11-23T12:15:08.099Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2YHfdP3am2VGB0csGFiPZr] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:10.038Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7ygTFgH1fTFj0w50rNnLjA] INFO: Starting invocation.
+[restate][2026-11-23T12:15:10.039Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4mnQhfIGfNrWG6w2ryrH5K] INFO: Starting invocation.
+[restate][2026-11-23T12:15:10.112Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4mnQhfIGfNrWG6w2ryrH5K] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:10.302Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7ygTFgH1fTFj0w50rNnLjA] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:12.044Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ38KZosdZylEMQN7I8HhQuu] INFO: Starting invocation.
+[restate][2026-11-23T12:15:12.126Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ38KZosdZylEMQN7I8HhQuu] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:13.603Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ3eyuPLoT2kQwGkE23YnXSU] INFO: Starting invocation.
+[restate][2026-11-23T12:15:14.025Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ27igly0rUoLDntsxyAdhcq] INFO: Starting invocation.
+[restate][2026-11-23T12:15:14.107Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ27igly0rUoLDntsxyAdhcq] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:16.016Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6WMnzzdLl4Ow0KFPQPSeVQ] INFO: Starting invocation.
+[restate][2026-11-23T12:15:16.102Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6WMnzzdLl4Ow0KFPQPSeVQ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:18.001Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2mOpSJF4B6FRYwheommDAs] INFO: Starting invocation.
+[restate][2026-11-23T12:15:18.097Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2mOpSJF4B6FRYwheommDAs] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:19.995Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4SRKko4lIuAKwXs4JVVD1v] INFO: Starting invocation.
+[restate][2026-11-23T12:15:20.098Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4SRKko4lIuAKwXs4JVVD1v] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:20.149Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ3eyuPLoT2kQwGkE23YnXSU] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:20.995Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5YdooBL4yVU1Tz7eovVuiS] INFO: Starting invocation.
+[restate][2026-11-23T12:15:20.999Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ6uFKkUyn0QCe3QdsTZhR0F] INFO: Starting invocation.
+[restate][2026-11-23T12:15:21.037Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ6uFKkUyn0QCe3QdsTZhR0F] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:21.260Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5YdooBL4yVU1Tz7eovVuiS] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:21.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ18aCJzEG3NidxU64mzRhQS] INFO: Starting invocation.
+[restate][2026-11-23T12:15:21.993Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ27BeVngIufffwBmiw7nuk4] INFO: Starting invocation.
+[restate][2026-11-23T12:15:22.072Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ18aCJzEG3NidxU64mzRhQS] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:22.184Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ27BeVngIufffwBmiw7nuk4] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:23.989Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6CmQ1788rdTnaS5PEk3HG8] INFO: Starting invocation.
+[restate][2026-11-23T12:15:24.061Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6CmQ1788rdTnaS5PEk3HG8] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:25.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1if3q95NH77QCHtvDXlALr] INFO: Starting invocation.
+[restate][2026-11-23T12:15:26.068Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1if3q95NH77QCHtvDXlALr] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:27.999Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3EzlxL1nefmLFrLVwSdWhB] INFO: Starting invocation.
+[restate][2026-11-23T12:15:28.079Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB2kKeZj1XQ4f9FVzhHqarlT] INFO: Starting invocation.
+[restate][2026-11-23T12:15:28.093Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB2kKeZj1XQ4f9FVzhHqarlT] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:28.111Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3EzlxL1nefmLFrLVwSdWhB] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:29.998Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1LGpE1nv9innC13QIsLDjx] INFO: Starting invocation.
+[restate][2026-11-23T12:15:30.058Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1LGpE1nv9innC13QIsLDjx] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:32.008Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7zd0cWaNkNOyJ9zi4uVJy6] INFO: Starting invocation.
+[restate][2026-11-23T12:15:32.010Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ352YXkRjzs9MqFAlrrOff3] INFO: Starting invocation.
+[restate][2026-11-23T12:15:32.091Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ352YXkRjzs9MqFAlrrOff3] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:32.303Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7zd0cWaNkNOyJ9zi4uVJy6] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:34.011Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4JVbUz7QGmfBaKq3pcK6xS] INFO: Starting invocation.
+[restate][2026-11-23T12:15:34.095Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4JVbUz7QGmfBaKq3pcK6xS] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:36.013Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3ahhMcdxSc2EUGf6n4C3fD] INFO: Starting invocation.
+[restate][2026-11-23T12:15:36.087Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3ahhMcdxSc2EUGf6n4C3fD] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:38.018Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2JX7uHzyJFBQJr1X2iCEpS] INFO: Starting invocation.
+[restate][2026-11-23T12:15:38.086Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2JX7uHzyJFBQJr1X2iCEpS] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:40.026Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6PJ8ru5qjuD5fKrQ53sdgv] INFO: Starting invocation.
+[restate][2026-11-23T12:15:40.088Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6PJ8ru5qjuD5fKrQ53sdgv] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:42.034Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5H1rLqbIqpd3RiNuUffNFC] INFO: Starting invocation.
+[restate][2026-11-23T12:15:42.133Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5H1rLqbIqpd3RiNuUffNFC] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:43.040Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ3iLgQh2mKSBMFQ5oOYfyaV] INFO: Starting invocation.
+[restate][2026-11-23T12:15:43.324Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ3iLgQh2mKSBMFQ5oOYfyaV] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:44.041Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1DraZrC682hVVl8IUdyIRx] INFO: Starting invocation.
+[restate][2026-11-23T12:15:44.126Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1DraZrC682hVVl8IUdyIRx] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:46.025Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6ayYjK5ssG9fgLyjukGbjz] INFO: Starting invocation.
+[restate][2026-11-23T12:15:46.106Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6ayYjK5ssG9fgLyjukGbjz] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:48.007Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1I1cP4WfZ6gE6Q5K8Aa4V2] INFO: Starting invocation.
+[restate][2026-11-23T12:15:48.081Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1I1cP4WfZ6gE6Q5K8Aa4V2] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:50.001Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2AVq18YnizauxPuOLWviWA] INFO: Starting invocation.
+[restate][2026-11-23T12:15:50.071Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2AVq18YnizauxPuOLWviWA] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:51.990Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1CDkEj4rfjIVCyoJJWQNFZ] INFO: Starting invocation.
+[restate][2026-11-23T12:15:52.062Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1CDkEj4rfjIVCyoJJWQNFZ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:53.991Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3EucW9V4xYqfhqCEkQnBE1] INFO: Starting invocation.
+[restate][2026-11-23T12:15:53.992Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ0e9KfvKseP1EKnDWKyZ538] INFO: Starting invocation.
+[restate][2026-11-23T12:15:54.082Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3EucW9V4xYqfhqCEkQnBE1] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:54.264Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ0e9KfvKseP1EKnDWKyZ538] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:55.995Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ275W7VxE4yT7fA6qRRbtwr] INFO: Starting invocation.
+[restate][2026-11-23T12:15:56.117Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ275W7VxE4yT7fA6qRRbtwr] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:57.995Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2pi8gnJywvNyGLYnFPYKaQ] INFO: Starting invocation.
+[restate][2026-11-23T12:15:58.074Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2pi8gnJywvNyGLYnFPYKaQ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:15:59.996Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ46gjy0JhjI9MOpE13QScuL] INFO: Starting invocation.
+[restate][2026-11-23T12:16:00.075Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ46gjy0JhjI9MOpE13QScuL] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:02.001Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3GV50qkO3YrPvvPvMJPaze] INFO: Starting invocation.
+[restate][2026-11-23T12:16:02.093Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3GV50qkO3YrPvvPvMJPaze] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:04.004Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3JEXbkSAFRu4FTJ4mnNhTM] INFO: Starting invocation.
+[restate][2026-11-23T12:16:04.074Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3JEXbkSAFRu4FTJ4mnNhTM] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:05.014Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6qG3ZW3V4PtHKkNSR84OGt] INFO: Starting invocation.
+[restate][2026-11-23T12:16:05.300Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6qG3ZW3V4PtHKkNSR84OGt] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:06.008Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ23UELXPtVpqG0mF9OoUOCS] INFO: Starting invocation.
+[restate][2026-11-23T12:16:06.076Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ23UELXPtVpqG0mF9OoUOCS] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:08.016Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4ztQJA8zXQbOLhOigpk7u5] INFO: Starting invocation.
+[restate][2026-11-23T12:16:08.101Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4ztQJA8zXQbOLhOigpk7u5] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:10.023Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4Km7iE8gaKZVVdvNzWCD8W] INFO: Starting invocation.
+[restate][2026-11-23T12:16:10.088Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4Km7iE8gaKZVVdvNzWCD8W] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:12.029Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4iucxs2NGPlSMTTxynSDb6] INFO: Starting invocation.
+[restate][2026-11-23T12:16:12.100Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4iucxs2NGPlSMTTxynSDb6] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:13.597Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ5uCaYTpXdVzrvfkVtfwPZo] INFO: Starting invocation.
+[restate][2026-11-23T12:16:14.032Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0zKHAMDyiG1UJe4nPm0o2m] INFO: Starting invocation.
+[restate][2026-11-23T12:16:14.101Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0zKHAMDyiG1UJe4nPm0o2m] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:16.043Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2qVhgftOsJ8SgoEG77cjH9] INFO: Starting invocation.
+[restate][2026-11-23T12:16:16.050Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6BmSM5zZoUTXBfZQDr9Yhq] INFO: Starting invocation.
+[restate][2026-11-23T12:16:16.171Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6BmSM5zZoUTXBfZQDr9Yhq] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:16.328Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2qVhgftOsJ8SgoEG77cjH9] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:18.020Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ46DdM4mVzPLnfCuYMqIGV6] INFO: Starting invocation.
+[restate][2026-11-23T12:16:18.100Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ46DdM4mVzPLnfCuYMqIGV6] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:20.007Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5v5qwCZOv8iwGYpWZrDDnK] INFO: Starting invocation.
+[restate][2026-11-23T12:16:20.077Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5v5qwCZOv8iwGYpWZrDDnK] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:20.460Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ5uCaYTpXdVzrvfkVtfwPZo] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:22.015Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5gVWC0asjE4DDRJ8Pvwmie] INFO: Starting invocation.
+[restate][2026-11-23T12:16:22.034Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ6sdzj1GtACp3ramNmfB9zf] INFO: Starting invocation.
+[restate][2026-11-23T12:16:22.122Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ6sdzj1GtACp3ramNmfB9zf] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:22.291Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5gVWC0asjE4DDRJ8Pvwmie] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:22.995Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ4EFNRnvc3ntNxbebBnPLWH] INFO: Starting invocation.
+[restate][2026-11-23T12:16:23.206Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ4EFNRnvc3ntNxbebBnPLWH] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:24.060Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7GKOfnwAQ9e0Zosyc3QUIn] INFO: Starting invocation.
+[restate][2026-11-23T12:16:24.274Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7GKOfnwAQ9e0Zosyc3QUIn] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:25.991Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7JzkQW5Vz9MziqzHWL340f] INFO: Starting invocation.
+[restate][2026-11-23T12:16:26.073Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7JzkQW5Vz9MziqzHWL340f] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:26.998Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ3LG9IgQfmwg0g4s6dT2JiR] INFO: Starting invocation.
+[restate][2026-11-23T12:16:27.262Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ3LG9IgQfmwg0g4s6dT2JiR] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:27.989Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ723VE9xEuRvBO4rEI7zb9b] INFO: Starting invocation.
+[restate][2026-11-23T12:16:28.072Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ723VE9xEuRvBO4rEI7zb9b] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:29.996Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7GvbAeutIJ0eO7qF8tajHC] INFO: Starting invocation.
+[restate][2026-11-23T12:16:30.086Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7GvbAeutIJ0eO7qF8tajHC] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:31.998Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2MEAjFJMOtcXcW4kMq02V1] INFO: Starting invocation.
+[restate][2026-11-23T12:16:32.081Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB5SnSnKfAD4dK5Pa1Lt6Oib] INFO: Starting invocation.
+[restate][2026-11-23T12:16:32.098Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB5SnSnKfAD4dK5Pa1Lt6Oib] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:32.114Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2MEAjFJMOtcXcW4kMq02V1] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:33.999Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4REhpUARgDrQGq5XNZJEjH] INFO: Starting invocation.
+[restate][2026-11-23T12:16:34.082Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4REhpUARgDrQGq5XNZJEjH] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:36.002Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6hMgOlrNKc856lxBHBdyt9] INFO: Starting invocation.
+[restate][2026-11-23T12:16:36.092Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6hMgOlrNKc856lxBHBdyt9] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:38.008Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ03VsdziRGSECB1OMr3RNvW] INFO: Starting invocation.
+[restate][2026-11-23T12:16:38.009Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ370V9dGZvs7FgOvD2bW2oY] INFO: Starting invocation.
+[restate][2026-11-23T12:16:38.088Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ03VsdziRGSECB1OMr3RNvW] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:38.267Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ370V9dGZvs7FgOvD2bW2oY] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:40.012Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3oVoLwqbAfSjDWrabgThha] INFO: Starting invocation.
+[restate][2026-11-23T12:16:40.086Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3oVoLwqbAfSjDWrabgThha] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:42.026Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2M4Z5X7bqtIJy252WyjGki] INFO: Starting invocation.
+[restate][2026-11-23T12:16:42.113Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2M4Z5X7bqtIJy252WyjGki] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:44.026Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3W2LvbF3W9b35Qq76s2H51] INFO: Starting invocation.
+[restate][2026-11-23T12:16:44.098Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3W2LvbF3W9b35Qq76s2H51] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:46.031Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2FFFUhqCsfQCmLvkc5jnEB] INFO: Starting invocation.
+[restate][2026-11-23T12:16:46.108Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2FFFUhqCsfQCmLvkc5jnEB] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:48.037Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0fMGYo7X12IS2ae9XiDG2u] INFO: Starting invocation.
+[restate][2026-11-23T12:16:48.112Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0fMGYo7X12IS2ae9XiDG2u] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:49.030Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ620onrb0mbouiasRL4QMIj] INFO: Starting invocation.
+[restate][2026-11-23T12:16:49.290Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ620onrb0mbouiasRL4QMIj] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:50.019Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0Ht1jDLbMvVWEldHssDPDd] INFO: Starting invocation.
+[restate][2026-11-23T12:16:50.131Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0Ht1jDLbMvVWEldHssDPDd] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:52.007Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2yWgTKEpNBzeFacNny8JNE] INFO: Starting invocation.
+[restate][2026-11-23T12:16:52.103Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2yWgTKEpNBzeFacNny8JNE] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:53.997Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4q43oBczM9IExIkWBS4aB9] INFO: Starting invocation.
+[restate][2026-11-23T12:16:54.064Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm32RjJ1zEKHr1I6bNprUBUn] INFO: Starting invocation.
+[restate][2026-11-23T12:16:54.090Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4q43oBczM9IExIkWBS4aB9] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:54.266Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm32RjJ1zEKHr1I6bNprUBUn] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:55.992Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4kkc4pmaQcPO7rFkh4u7Ql] INFO: Starting invocation.
+[restate][2026-11-23T12:16:56.111Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4kkc4pmaQcPO7rFkh4u7Ql] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:57.990Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1RXtPcCgHAWKqYbxblc4NC] INFO: Starting invocation.
+[restate][2026-11-23T12:16:58.081Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1RXtPcCgHAWKqYbxblc4NC] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:16:59.989Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2DqNl2CGOGO0MyktA22iev] INFO: Starting invocation.
+[restate][2026-11-23T12:16:59.990Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7kyuDHBfJxZrBd6071LC8o] INFO: Starting invocation.
+[restate][2026-11-23T12:17:00.077Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2DqNl2CGOGO0MyktA22iev] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:00.266Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7kyuDHBfJxZrBd6071LC8o] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:01.991Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7mru1UgTwJZqvkoz4zaaJ9] INFO: Starting invocation.
+[restate][2026-11-23T12:17:02.070Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7mru1UgTwJZqvkoz4zaaJ9] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:03.996Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ72IRVA6chaL5EDOGhlExsK] INFO: Starting invocation.
+[restate][2026-11-23T12:17:04.110Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ72IRVA6chaL5EDOGhlExsK] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:05.999Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5LtQlf3Bs2H7UgfpAnxBcK] INFO: Starting invocation.
+[restate][2026-11-23T12:17:06.087Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5LtQlf3Bs2H7UgfpAnxBcK] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:08.006Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ35Pfv9dpm7FPyDMpOZvd1Z] INFO: Starting invocation.
+[restate][2026-11-23T12:17:08.093Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ35Pfv9dpm7FPyDMpOZvd1Z] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:10.008Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ53hhb7naIPUk64VxwNRMlA] INFO: Starting invocation.
+[restate][2026-11-23T12:17:10.115Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ53hhb7naIPUk64VxwNRMlA] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:11.012Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5Mv6ASiJsu7WgFioHOoxpX] INFO: Starting invocation.
+[restate][2026-11-23T12:17:11.391Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5Mv6ASiJsu7WgFioHOoxpX] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:12.012Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0I3nA6ngqNLQaPrAmpRIQQ] INFO: Starting invocation.
+[restate][2026-11-23T12:17:12.101Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0I3nA6ngqNLQaPrAmpRIQQ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:13.631Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ33aJg9UDQFAL9whRL6Rxze] INFO: Starting invocation.
+[restate][2026-11-23T12:17:13.642Z][nektar-wake/height][inv_1fNVSrxMCtnD4pZIZIf5zaaz8NohwkgnRk] INFO: Starting invocation.
+[restate][2026-11-23T12:17:13.653Z][nektar-wake/height][inv_1fNVSrxMCtnD4pZIZIf5zaaz8NohwkgnRk] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:14.019Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0cX98iyT7XH2YJdffwwXSi] INFO: Starting invocation.
+[restate][2026-11-23T12:17:14.102Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0cX98iyT7XH2YJdffwwXSi] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:16.027Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5F8o3jnWcUGhKLOQ6q0OWx] INFO: Starting invocation.
+[restate][2026-11-23T12:17:16.109Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5F8o3jnWcUGhKLOQ6q0OWx] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:18.033Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ47vObYm3shG30olkX1uDP2] INFO: Starting invocation.
+[restate][2026-11-23T12:17:18.106Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ47vObYm3shG30olkX1uDP2] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:20.038Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1YjKcF3fdw8iaJoevd27ch] INFO: Starting invocation.
+[restate][2026-11-23T12:17:20.144Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1YjKcF3fdw8iaJoevd27ch] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:21.391Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ33aJg9UDQFAL9whRL6Rxze] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:22.032Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ30CVPVgP7Jr6SH7kFaNDt0] INFO: Starting invocation.
+[restate][2026-11-23T12:17:22.033Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7DhTJtQb9Vg2ZqVZJz72aW] INFO: Starting invocation.
+[restate][2026-11-23T12:17:22.113Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ30CVPVgP7Jr6SH7kFaNDt0] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:22.260Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7DhTJtQb9Vg2ZqVZJz72aW] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:23.025Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ3XOaOZ6CjuzXMybM0CmCYv] INFO: Starting invocation.
+[restate][2026-11-23T12:17:23.064Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ3XOaOZ6CjuzXMybM0CmCYv] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:24.018Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ0idLlnCvnQURmABsG5rxQR] INFO: Starting invocation.
+[restate][2026-11-23T12:17:24.029Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ72sqD9DoxWEVo8VDJSZHAu] INFO: Starting invocation.
+[restate][2026-11-23T12:17:24.142Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ72sqD9DoxWEVo8VDJSZHAu] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:24.241Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ0idLlnCvnQURmABsG5rxQR] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:26.005Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1h4ALjoHCUg709qfkRi4dC] INFO: Starting invocation.
+[restate][2026-11-23T12:17:26.088Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1h4ALjoHCUg709qfkRi4dC] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:27.995Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ708Teb0nQS6Vwr6lImAaLl] INFO: Starting invocation.
+[restate][2026-11-23T12:17:28.120Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ708Teb0nQS6Vwr6lImAaLl] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:30.010Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3HfdWA1y7BCptJHl59QXPN] INFO: Starting invocation.
+[restate][2026-11-23T12:17:30.096Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm5f8KWgTXDIHMRbjRbPr9CS] INFO: Starting invocation.
+[restate][2026-11-23T12:17:30.122Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3HfdWA1y7BCptJHl59QXPN] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:30.303Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm5f8KWgTXDIHMRbjRbPr9CS] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:32.007Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4bqO6VzcfuWRmwNjUqYEps] INFO: Starting invocation.
+[restate][2026-11-23T12:17:32.099Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4bqO6VzcfuWRmwNjUqYEps] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:32.997Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2aIifmyg0YyEeqCi6QEDqp] INFO: Starting invocation.
+[restate][2026-11-23T12:17:33.315Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2aIifmyg0YyEeqCi6QEDqp] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:33.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3a7iA4CKNL3BhrqgXDQRmw] INFO: Starting invocation.
+[restate][2026-11-23T12:17:34.097Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3a7iA4CKNL3BhrqgXDQRmw] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:35.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ653n22WID0FEL2d4FgitpI] INFO: Starting invocation.
+[restate][2026-11-23T12:17:36.064Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm67O1Uh2Eo0TQRWJFs4BOnR] INFO: Starting invocation.
+[restate][2026-11-23T12:17:36.085Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB2KG8IfmRNzGIYIvvbNNXZN] INFO: Starting invocation.
+[restate][2026-11-23T12:17:36.102Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB2KG8IfmRNzGIYIvvbNNXZN] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:36.111Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ653n22WID0FEL2d4FgitpI] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:36.247Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm67O1Uh2Eo0TQRWJFs4BOnR] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:38.002Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0PugAOSvQ1ZpHj0mdZlUfX] INFO: Starting invocation.
+[restate][2026-11-23T12:17:38.100Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0PugAOSvQ1ZpHj0mdZlUfX] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:40.002Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5VJsKdnCROMOpkLEqWQ2Lm] INFO: Starting invocation.
+[restate][2026-11-23T12:17:40.081Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5VJsKdnCROMOpkLEqWQ2Lm] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:42.021Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2AGtk1tDUgDoqobYqbQDzq] INFO: Starting invocation.
+[restate][2026-11-23T12:17:42.141Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm22DK4jaJNOwDKqze6h5xCl] INFO: Starting invocation.
+[restate][2026-11-23T12:17:42.157Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2AGtk1tDUgDoqobYqbQDzq] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:42.337Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm22DK4jaJNOwDKqze6h5xCl] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:44.014Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0bYKSu8ggljgkhdPW1ibfU] INFO: Starting invocation.
+[restate][2026-11-23T12:17:44.021Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ1Q74asDWnr1ItbqA2iRCLV] INFO: Starting invocation.
+[restate][2026-11-23T12:17:44.120Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0bYKSu8ggljgkhdPW1ibfU] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:44.323Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ1Q74asDWnr1ItbqA2iRCLV] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:46.022Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5OzaXATWWDYwrXvik3s4ot] INFO: Starting invocation.
+[restate][2026-11-23T12:17:46.123Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5OzaXATWWDYwrXvik3s4ot] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:48.132Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ24cExgOxgY9KulnwywAtSi] INFO: Starting invocation.
+[restate][2026-11-23T12:17:48.413Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm5iJY4P9tOMk8i4sOYLYltz] INFO: Starting invocation.
+[restate][2026-11-23T12:17:48.456Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ24cExgOxgY9KulnwywAtSi] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:48.639Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm5iJY4P9tOMk8i4sOYLYltz] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:50.036Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1orIe8dycd7nogs3OplM9G] INFO: Starting invocation.
+[restate][2026-11-23T12:17:50.125Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1orIe8dycd7nogs3OplM9G] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:52.037Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2cA58Q6U6ncI2WyDwxrgfe] INFO: Starting invocation.
+[restate][2026-11-23T12:17:52.114Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2cA58Q6U6ncI2WyDwxrgfe] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:54.029Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7l3ciauUAYsobX2aYu8iY8] INFO: Starting invocation.
+[restate][2026-11-23T12:17:54.091Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm46EVCVbmRzsSuCmN1TQ0RS] INFO: Starting invocation.
+[restate][2026-11-23T12:17:54.114Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7l3ciauUAYsobX2aYu8iY8] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:54.291Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm46EVCVbmRzsSuCmN1TQ0RS] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:55.021Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ1gY9wgYcd1TzlWARBB6PJM] INFO: Starting invocation.
+[restate][2026-11-23T12:17:55.270Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ1gY9wgYcd1TzlWARBB6PJM] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:56.013Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6IvpE8Shk9QR7UA4FceUu6] INFO: Starting invocation.
+[restate][2026-11-23T12:17:56.090Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6IvpE8Shk9QR7UA4FceUu6] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:58.004Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7uEfpN0X7z0hhqD7gA9uOu] INFO: Starting invocation.
+[restate][2026-11-23T12:17:58.097Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7uEfpN0X7z0hhqD7gA9uOu] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:17:59.999Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2LDh52GawHwhS2LG9qwMe7] INFO: Starting invocation.
+[restate][2026-11-23T12:18:00.060Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm6ROaHMDK3o5Z6YxHbaWqf9] INFO: Starting invocation.
+[restate][2026-11-23T12:18:00.083Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2LDh52GawHwhS2LG9qwMe7] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:00.235Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm6ROaHMDK3o5Z6YxHbaWqf9] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:01.991Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7jL6tS0iaK2cvmIFv8oKAU] INFO: Starting invocation.
+[restate][2026-11-23T12:18:02.059Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7jL6tS0iaK2cvmIFv8oKAU] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:03.988Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6XfP1Dol1eGeXdPUmIfWHJ] INFO: Starting invocation.
+[restate][2026-11-23T12:18:04.068Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6XfP1Dol1eGeXdPUmIfWHJ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:05.995Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1PqfbSgginHXeKTeU5EpAh] INFO: Starting invocation.
+[restate][2026-11-23T12:18:05.995Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7aaTq2gwTDYXAI4ZGQoFV4] INFO: Starting invocation.
+[restate][2026-11-23T12:18:06.060Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm0cGVfYoIeqBRzKnMoxRXsC] INFO: Starting invocation.
+[restate][2026-11-23T12:18:06.082Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1PqfbSgginHXeKTeU5EpAh] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:06.263Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm0cGVfYoIeqBRzKnMoxRXsC] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:06.283Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7aaTq2gwTDYXAI4ZGQoFV4] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:07.992Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3AUvYVY8QOmCFdyimBsCno] INFO: Starting invocation.
+[restate][2026-11-23T12:18:08.087Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3AUvYVY8QOmCFdyimBsCno] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:09.997Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5wEnKe9XAX2YBNK7CbAPel] INFO: Starting invocation.
+[restate][2026-11-23T12:18:10.074Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5wEnKe9XAX2YBNK7CbAPel] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:12.003Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6T7ldXybmGtSvuJjUtbimb] INFO: Starting invocation.
+[restate][2026-11-23T12:18:12.075Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6T7ldXybmGtSvuJjUtbimb] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:13.616Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ7AVFDCTWoC2swM0warQOQp] INFO: Starting invocation.
+[restate][2026-11-23T12:18:14.024Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7fbUqTd5tIexgRVQpXB70X] INFO: Starting invocation.
+[restate][2026-11-23T12:18:14.277Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7fbUqTd5tIexgRVQpXB70X] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:16.013Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4fHua8vdAdQyeYWTc0tah8] INFO: Starting invocation.
+[restate][2026-11-23T12:18:16.109Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4fHua8vdAdQyeYWTc0tah8] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:17.016Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ0UnIC3TrhFZljiyfmo3CMu] INFO: Starting invocation.
+[restate][2026-11-23T12:18:17.323Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ0UnIC3TrhFZljiyfmo3CMu] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:18.016Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3UHbhHlIqeYMcmRnG0HeTn] INFO: Starting invocation.
+[restate][2026-11-23T12:18:18.112Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3UHbhHlIqeYMcmRnG0HeTn] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:20.025Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2UMl611m1HIv0HsuQJw4An] INFO: Starting invocation.
+[restate][2026-11-23T12:18:20.099Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2UMl611m1HIv0HsuQJw4An] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:22.037Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ53YLoDfMwVPxbiux4uhYSv] INFO: Starting invocation.
+[restate][2026-11-23T12:18:22.121Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ53YLoDfMwVPxbiux4uhYSv] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:22.887Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ7AVFDCTWoC2swM0warQOQp] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:24.035Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1piFMWKtbMBkpxCHhJXSzA] INFO: Starting invocation.
+[restate][2026-11-23T12:18:24.039Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ24g7CmMxblIlRUN48P2KeL] INFO: Starting invocation.
+[restate][2026-11-23T12:18:24.060Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ24g7CmMxblIlRUN48P2KeL] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:24.106Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1piFMWKtbMBkpxCHhJXSzA] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:25.040Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ0bXl7XFEq7pMHnSZHNUzxY] INFO: Starting invocation.
+[restate][2026-11-23T12:18:25.264Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ0bXl7XFEq7pMHnSZHNUzxY] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:26.028Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3ChIuzhDzypfUTxe4jlmr5] INFO: Starting invocation.
+[restate][2026-11-23T12:18:26.101Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3ChIuzhDzypfUTxe4jlmr5] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:28.021Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2kHMYQe37xsvVeZttuKIA3] INFO: Starting invocation.
+[restate][2026-11-23T12:18:28.023Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1q53bpqSZ97kNjvDalxAhY] INFO: Starting invocation.
+[restate][2026-11-23T12:18:28.126Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1q53bpqSZ97kNjvDalxAhY] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:28.307Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2kHMYQe37xsvVeZttuKIA3] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:30.004Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ40mtUWwh0JNbKVCPS7Ozkr] INFO: Starting invocation.
+[restate][2026-11-23T12:18:30.113Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ40mtUWwh0JNbKVCPS7Ozkr] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:32.003Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3xILJRdoksc1WrE8ZnNHmi] INFO: Starting invocation.
+[restate][2026-11-23T12:18:32.097Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3xILJRdoksc1WrE8ZnNHmi] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:33.992Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4IIaTqa9c7VVkP570nxOrF] INFO: Starting invocation.
+[restate][2026-11-23T12:18:34.090Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4IIaTqa9c7VVkP570nxOrF] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:35.995Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ39V2lMRJDmAq8zIR6jjsgg] INFO: Starting invocation.
+[restate][2026-11-23T12:18:36.101Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ39V2lMRJDmAq8zIR6jjsgg] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:37.991Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ65c1r97MLkN9QCDM78cinP] INFO: Starting invocation.
+[restate][2026-11-23T12:18:38.091Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ65c1r97MLkN9QCDM78cinP] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:38.997Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5kiysLnkqAurFeTBXPqoNT] INFO: Starting invocation.
+[restate][2026-11-23T12:18:39.261Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5kiysLnkqAurFeTBXPqoNT] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:40.000Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4GL1ZGuYB0fkS4UOyDUuaB] INFO: Starting invocation.
+[restate][2026-11-23T12:18:40.100Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB2OJ0EEfP0u3eUR63okafxm] INFO: Starting invocation.
+[restate][2026-11-23T12:18:40.125Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB2OJ0EEfP0u3eUR63okafxm] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:40.143Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4GL1ZGuYB0fkS4UOyDUuaB] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:41.994Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6TMclxq41vO96j019ikc9R] INFO: Starting invocation.
+[restate][2026-11-23T12:18:42.100Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6TMclxq41vO96j019ikc9R] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:44.012Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0FRi6meQd9XvK2WkYt1QfI] INFO: Starting invocation.
+[restate][2026-11-23T12:18:44.093Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0FRi6meQd9XvK2WkYt1QfI] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:46.005Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ71lVP3kEZ0KymTnnF1mJFa] INFO: Starting invocation.
+[restate][2026-11-23T12:18:46.083Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ71lVP3kEZ0KymTnnF1mJFa] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:48.010Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1EOlUcCLQiLPTBwy9xTYQm] INFO: Starting invocation.
+[restate][2026-11-23T12:18:48.096Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1EOlUcCLQiLPTBwy9xTYQm] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:49.175Z][nektar-tx/owner:b22a26fce0d453b60b6edf552f68bc014c8b4f7d5ed8f0a0382b597ab6d1ac1a/observe][inv_1l7ws2nNyIxz17wW8LLDLeLr6NiLoWjonM] INFO: Starting invocation.
+[restate][2026-11-23T12:18:49.187Z][nektar-tx/owner:b22a26fce0d453b60b6edf552f68bc014c8b4f7d5ed8f0a0382b597ab6d1ac1a/observe][inv_1l7ws2nNyIxz17wW8LLDLeLr6NiLoWjonM] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:49.291Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ0pWNnmYGvUT5R33YL1nANe] INFO: Starting invocation.
+[restate][2026-11-23T12:18:50.018Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ70DGG8oPGyZNAuePWDAzje] INFO: Starting invocation.
+[restate][2026-11-23T12:18:50.022Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1vLBDClVLFLwjPFiP2K1Fj] INFO: Starting invocation.
+[restate][2026-11-23T12:18:50.107Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1vLBDClVLFLwjPFiP2K1Fj] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:50.355Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ70DGG8oPGyZNAuePWDAzje] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:52.024Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0d7OgvZOkZLiPxbp9cJajv] INFO: Starting invocation.
+[restate][2026-11-23T12:18:52.114Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0d7OgvZOkZLiPxbp9cJajv] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:54.037Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4ChKSWkDxj6QbRFCOLFE0a] INFO: Starting invocation.
+[restate][2026-11-23T12:18:54.127Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4ChKSWkDxj6QbRFCOLFE0a] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:56.038Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4C58iOY6samQLzT8SPdj0S] INFO: Starting invocation.
+[restate][2026-11-23T12:18:56.139Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4C58iOY6samQLzT8SPdj0S] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:56.453Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ0pWNnmYGvUT5R33YL1nANe] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:18:58.029Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4akeOK15qvcq0uGEdofora] INFO: Starting invocation.
+[restate][2026-11-23T12:18:58.122Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4akeOK15qvcq0uGEdofora] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:00.012Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ14S2Zsb8AZzwTTuumbXSgd] INFO: Starting invocation.
+[restate][2026-11-23T12:19:00.090Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ14S2Zsb8AZzwTTuumbXSgd] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:01.006Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5zodviluNkcM15bfPNtmQh] INFO: Starting invocation.
+[restate][2026-11-23T12:19:01.283Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5zodviluNkcM15bfPNtmQh] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:02.006Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2XD3L53K6MCJQIHJGNp1zi] INFO: Starting invocation.
+[restate][2026-11-23T12:19:02.076Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2XD3L53K6MCJQIHJGNp1zi] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:03.995Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1H1IZ6BZsv6omhHqqmNyU7] INFO: Starting invocation.
+[restate][2026-11-23T12:19:04.086Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1H1IZ6BZsv6omhHqqmNyU7] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:05.990Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5SqhiSfOuAqrENs3u7Y0I0] INFO: Starting invocation.
+[restate][2026-11-23T12:19:06.075Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5SqhiSfOuAqrENs3u7Y0I0] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:07.990Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0pzHcEIq54vbmzCIxjd2XH] INFO: Starting invocation.
+[restate][2026-11-23T12:19:08.061Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0pzHcEIq54vbmzCIxjd2XH] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:09.991Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6rpJID86uhZyJsZfR0EjjF] INFO: Starting invocation.
+[restate][2026-11-23T12:19:10.067Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6rpJID86uhZyJsZfR0EjjF] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:11.993Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ410hxIV9WCP05QMEtytdqT] INFO: Starting invocation.
+[restate][2026-11-23T12:19:11.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5iUSGQ0NmGg9XcYgFqPBow] INFO: Starting invocation.
+[restate][2026-11-23T12:19:12.089Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5iUSGQ0NmGg9XcYgFqPBow] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:12.295Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ410hxIV9WCP05QMEtytdqT] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:13.616Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ0ZK1eadeKmQlszBUQul8by] INFO: Starting invocation.
+[restate][2026-11-23T12:19:13.995Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6xkN1t8GAudsfiEDjmi6MT] INFO: Starting invocation.
+[restate][2026-11-23T12:19:14.062Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6xkN1t8GAudsfiEDjmi6MT] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:15.998Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6cBEFtVoHxSp4cBmkGJomz] INFO: Starting invocation.
+[restate][2026-11-23T12:19:16.076Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6cBEFtVoHxSp4cBmkGJomz] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:18.002Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2Ek29zGJ6hVVmznPoGA9mn] INFO: Starting invocation.
+[restate][2026-11-23T12:19:18.054Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2Ek29zGJ6hVVmznPoGA9mn] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:20.009Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3q7y45ze2ROXBNO2ZPaE4u] INFO: Starting invocation.
+[restate][2026-11-23T12:19:20.089Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3q7y45ze2ROXBNO2ZPaE4u] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:21.178Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ0ZK1eadeKmQlszBUQul8by] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:22.013Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5KNK3xfFbjFq3rvW8oDwHd] INFO: Starting invocation.
+[restate][2026-11-23T12:19:22.061Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5KNK3xfFbjFq3rvW8oDwHd] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:23.022Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2wjLv6fh7WaBWjt4Zoq8wQ] INFO: Starting invocation.
+[restate][2026-11-23T12:19:23.263Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2wjLv6fh7WaBWjt4Zoq8wQ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:24.021Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2ZKFtp68NvX2Lt8Kcwy13O] INFO: Starting invocation.
+[restate][2026-11-23T12:19:24.076Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2ZKFtp68NvX2Lt8Kcwy13O] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:25.021Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ5xl1rAKxO3EAEI3YP0gaKa] INFO: Starting invocation.
+[restate][2026-11-23T12:19:25.036Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ5xl1rAKxO3EAEI3YP0gaKa] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:26.027Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2SEgm2tojHpswMHnS3c9Yl] INFO: Starting invocation.
+[restate][2026-11-23T12:19:26.027Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ7gWDe9VimFc4YG5Kqb6qKr] INFO: Starting invocation.
+[restate][2026-11-23T12:19:26.082Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2SEgm2tojHpswMHnS3c9Yl] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:26.234Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ7gWDe9VimFc4YG5Kqb6qKr] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:28.033Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4RWRSl8zCOf9hCWzx3sVdQ] INFO: Starting invocation.
+[restate][2026-11-23T12:19:28.070Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4RWRSl8zCOf9hCWzx3sVdQ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:30.044Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2C41Xa10gD5lHKEsSzxRbn] INFO: Starting invocation.
+[restate][2026-11-23T12:19:30.111Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2C41Xa10gD5lHKEsSzxRbn] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:32.024Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6UUBlhulxpEE4eKQ3iJhh4] INFO: Starting invocation.
+[restate][2026-11-23T12:19:32.086Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6UUBlhulxpEE4eKQ3iJhh4] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:34.006Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4noaFCZ8GLN7vUwN2rcY10] INFO: Starting invocation.
+[restate][2026-11-23T12:19:34.008Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ1bEEghuGlgUBLoRlDx40Gn] INFO: Starting invocation.
+[restate][2026-11-23T12:19:34.053Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4noaFCZ8GLN7vUwN2rcY10] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:34.284Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ1bEEghuGlgUBLoRlDx40Gn] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:35.996Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ23bCS1Jc8Z58RBbFbBdMpi] INFO: Starting invocation.
+[restate][2026-11-23T12:19:36.042Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ23bCS1Jc8Z58RBbFbBdMpi] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:37.992Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ05oTlbyWKaeCJN6oZRPe3C] INFO: Starting invocation.
+[restate][2026-11-23T12:19:38.024Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ05oTlbyWKaeCJN6oZRPe3C] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:39.987Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7q92TRrxHykmc1JNWC72cS] INFO: Starting invocation.
+[restate][2026-11-23T12:19:40.022Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7q92TRrxHykmc1JNWC72cS] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:41.994Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3SXdtCmp3dQXe23cIG9HWh] INFO: Starting invocation.
+[restate][2026-11-23T12:19:42.035Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3SXdtCmp3dQXe23cIG9HWh] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:43.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1raomidub0yY0JOJlJq7se] INFO: Starting invocation.
+[restate][2026-11-23T12:19:44.039Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB1lRW1BK70Nzj2br5pWFtBQ] INFO: Starting invocation.
+[restate][2026-11-23T12:19:44.046Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB1lRW1BK70Nzj2br5pWFtBQ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:44.054Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1raomidub0yY0JOJlJq7se] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:44.991Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2wQSQzutPIKJFslbcP2fgh] INFO: Starting invocation.
+[restate][2026-11-23T12:19:45.250Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2wQSQzutPIKJFslbcP2fgh] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:45.994Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1jt2PUTh2AXloEjNTj7ILT] INFO: Starting invocation.
+[restate][2026-11-23T12:19:46.036Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1jt2PUTh2AXloEjNTj7ILT] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:47.996Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0ss6UNtbYgFNv3igQPtJ5K] INFO: Starting invocation.
+[restate][2026-11-23T12:19:48.035Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0ss6UNtbYgFNv3igQPtJ5K] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:50.019Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ72lW2ZvLlbQ7xG5sDfWc0S] INFO: Starting invocation.
+[restate][2026-11-23T12:19:50.072Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ72lW2ZvLlbQ7xG5sDfWc0S] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:52.007Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7fRHoYWbX2ZjeAcXL7nqT5] INFO: Starting invocation.
+[restate][2026-11-23T12:19:52.050Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7fRHoYWbX2ZjeAcXL7nqT5] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:54.014Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ35QbOAhICDWjkLsO2qJAu4] INFO: Starting invocation.
+[restate][2026-11-23T12:19:54.059Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ35QbOAhICDWjkLsO2qJAu4] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:54.311Z][nektar-tx/owner:9f5d102fb10e76c023fb96672654d56e6e45395e12388e1e0516354aac1f275b/observe][inv_1dBdFJFUWset0RL1CmYgQnS8TiUX4xlvxp] INFO: Starting invocation.
+[restate][2026-11-23T12:19:54.318Z][nektar-tx/owner:9f5d102fb10e76c023fb96672654d56e6e45395e12388e1e0516354aac1f275b/observe][inv_1dBdFJFUWset0RL1CmYgQnS8TiUX4xlvxp] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:54.431Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ0bd61Uzsnp9kxrOyEcw6qr] INFO: Starting invocation.
+[restate][2026-11-23T12:19:56.020Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2F0yDMKUoqum54kexInHPQ] INFO: Starting invocation.
+[restate][2026-11-23T12:19:56.022Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7p1MCZJoRiuQkGt1kS1n2A] INFO: Starting invocation.
+[restate][2026-11-23T12:19:56.071Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7p1MCZJoRiuQkGt1kS1n2A] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:56.274Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2F0yDMKUoqum54kexInHPQ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:19:58.031Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7DoR481odgALN7yTL6PQXq] INFO: Starting invocation.
+[restate][2026-11-23T12:19:58.069Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7DoR481odgALN7yTL6PQXq] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:00.030Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3xHRyxnnNv5IR2HmbgdiLs] INFO: Starting invocation.
+[restate][2026-11-23T12:20:00.071Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3xHRyxnnNv5IR2HmbgdiLs] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:01.437Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ0bd61Uzsnp9kxrOyEcw6qr] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:02.037Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ34qORUUGSaL6h9sqF4F5SR] INFO: Starting invocation.
+[restate][2026-11-23T12:20:02.075Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ34qORUUGSaL6h9sqF4F5SR] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:04.017Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4oR0n9pdYKePJY3jh8Z4pC] INFO: Starting invocation.
+[restate][2026-11-23T12:20:04.055Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4oR0n9pdYKePJY3jh8Z4pC] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:06.007Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3RSkFYFAwcPfNGDHoaj82N] INFO: Starting invocation.
+[restate][2026-11-23T12:20:06.055Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm3j8GpZBpe0qNivGl253d2q] INFO: Starting invocation.
+[restate][2026-11-23T12:20:06.066Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3RSkFYFAwcPfNGDHoaj82N] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:06.249Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm3j8GpZBpe0qNivGl253d2q] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:07.001Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6htRLJsanoyzqgWHEpg6ox] INFO: Starting invocation.
+[restate][2026-11-23T12:20:07.238Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6htRLJsanoyzqgWHEpg6ox] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:07.994Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2SYitT1UcMujDjxiZ9b58u] INFO: Starting invocation.
+[restate][2026-11-23T12:20:08.029Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2SYitT1UcMujDjxiZ9b58u] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:09.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4ON4KNkx5Ph9Vli4p6ltbq] INFO: Starting invocation.
+[restate][2026-11-23T12:20:10.029Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4ON4KNkx5Ph9Vli4p6ltbq] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:11.988Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ54t2Jsb6aZxUQB7mKuGKxs] INFO: Starting invocation.
+[restate][2026-11-23T12:20:12.025Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ54t2Jsb6aZxUQB7mKuGKxs] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:13.623Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ3inAnojdRV9cZ3Q6D3Jpth] INFO: Starting invocation.
+[restate][2026-11-23T12:20:13.987Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7xmqLnuzvl7PymFvN04VyX] INFO: Starting invocation.
+[restate][2026-11-23T12:20:14.025Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7xmqLnuzvl7PymFvN04VyX] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:15.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4J81APBsmM1vTxL94gGFZK] INFO: Starting invocation.
+[restate][2026-11-23T12:20:16.031Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4J81APBsmM1vTxL94gGFZK] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:17.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6uodn7zbbAVncYKzAbqyTs] INFO: Starting invocation.
+[restate][2026-11-23T12:20:17.993Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6bC2SNV1tK4UW8yJqdMfHd] INFO: Starting invocation.
+[restate][2026-11-23T12:20:18.034Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm6EFT9o6HSC3AmZvSdBRHsw] INFO: Starting invocation.
+[restate][2026-11-23T12:20:18.046Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6uodn7zbbAVncYKzAbqyTs] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:18.214Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm6EFT9o6HSC3AmZvSdBRHsw] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:18.245Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6bC2SNV1tK4UW8yJqdMfHd] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:19.995Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2rbmQSPZ0ldsQjMf59cPiE] INFO: Starting invocation.
+[restate][2026-11-23T12:20:20.033Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2rbmQSPZ0ldsQjMf59cPiE] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:21.031Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ3inAnojdRV9cZ3Q6D3Jpth] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:21.999Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1vOyzRSwy7wPzu4AfDeWS4] INFO: Starting invocation.
+[restate][2026-11-23T12:20:22.043Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1vOyzRSwy7wPzu4AfDeWS4] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:24.010Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1RHFLnt4tnKehJ4Wf60w9o] INFO: Starting invocation.
+[restate][2026-11-23T12:20:24.041Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm1hKogfCmRv4NagxkYSYNA3] INFO: Starting invocation.
+[restate][2026-11-23T12:20:24.052Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1RHFLnt4tnKehJ4Wf60w9o] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:24.219Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm1hKogfCmRv4NagxkYSYNA3] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:26.011Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2QGl1P5bT9pzLrNs2th5nx] INFO: Starting invocation.
+[restate][2026-11-23T12:20:26.012Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ5SE9CX42kGrY8nrTbs7XGn] INFO: Starting invocation.
+[restate][2026-11-23T12:20:26.028Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ5SE9CX42kGrY8nrTbs7XGn] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:26.054Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2QGl1P5bT9pzLrNs2th5nx] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:27.015Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ4qthWnKZS4YkuHXch8UYDV] INFO: Starting invocation.
+[restate][2026-11-23T12:20:27.229Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ4qthWnKZS4YkuHXch8UYDV] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:28.018Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4YU0LifAao2t7UQhHHZ9mx] INFO: Starting invocation.
+[restate][2026-11-23T12:20:28.056Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4YU0LifAao2t7UQhHHZ9mx] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:29.024Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ0kYhQc0P5vIto89PLHoLw9] INFO: Starting invocation.
+[restate][2026-11-23T12:20:29.256Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ0kYhQc0P5vIto89PLHoLw9] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:30.023Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0rS8EEB9vmZPeTog7yVlTW] INFO: Starting invocation.
+[restate][2026-11-23T12:20:30.060Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0rS8EEB9vmZPeTog7yVlTW] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:32.030Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0s35mcv11KGG3UIMYN9cdt] INFO: Starting invocation.
+[restate][2026-11-23T12:20:32.068Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0s35mcv11KGG3UIMYN9cdt] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:34.036Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3K2XH7aRtvDk2zAILhXMzU] INFO: Starting invocation.
+[restate][2026-11-23T12:20:34.081Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3K2XH7aRtvDk2zAILhXMzU] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:36.018Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1rU4JvpDRkZyTuPBkYQyii] INFO: Starting invocation.
+[restate][2026-11-23T12:20:36.057Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1rU4JvpDRkZyTuPBkYQyii] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:38.003Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4ByccLZayTTUMeQKXkljbC] INFO: Starting invocation.
+[restate][2026-11-23T12:20:38.037Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4ByccLZayTTUMeQKXkljbC] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:39.995Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6LIRvw2vIrCLwoWxA2sImx] INFO: Starting invocation.
+[restate][2026-11-23T12:20:39.996Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0L2NOb9Jl8aiikXDCMpOZH] INFO: Starting invocation.
+[restate][2026-11-23T12:20:40.042Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0L2NOb9Jl8aiikXDCMpOZH] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:40.242Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6LIRvw2vIrCLwoWxA2sImx] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:41.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ14kKKUH6eezIVR54wvZBUV] INFO: Starting invocation.
+[restate][2026-11-23T12:20:42.033Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ14kKKUH6eezIVR54wvZBUV] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:43.987Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2Q6LBumVXef0TqdmZXA8w0] INFO: Starting invocation.
+[restate][2026-11-23T12:20:44.030Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2Q6LBumVXef0TqdmZXA8w0] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:45.987Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7wR0Z8P6mtwVTTLjmX8EVK] INFO: Starting invocation.
+[restate][2026-11-23T12:20:46.032Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7wR0Z8P6mtwVTTLjmX8EVK] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:47.990Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ22YsPvL4Er1znkk6zsCPuT] INFO: Starting invocation.
+[restate][2026-11-23T12:20:48.044Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB1iraJ0HvFohRcCw5NXAdIT] INFO: Starting invocation.
+[restate][2026-11-23T12:20:48.052Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB1iraJ0HvFohRcCw5NXAdIT] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:48.058Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ22YsPvL4Er1znkk6zsCPuT] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:49.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0my3NW0tJ92f3w4EHVoFuD] INFO: Starting invocation.
+[restate][2026-11-23T12:20:50.041Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0my3NW0tJ92f3w4EHVoFuD] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:50.994Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2dfQgAhllopZFLp4XFYPB2] INFO: Starting invocation.
+[restate][2026-11-23T12:20:51.240Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2dfQgAhllopZFLp4XFYPB2] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:51.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3GQk1fB83iTF5EP0ZQDJmG] INFO: Starting invocation.
+[restate][2026-11-23T12:20:52.029Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3GQk1fB83iTF5EP0ZQDJmG] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:53.998Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0aCZPCrcUzVYyeGtW52z5z] INFO: Starting invocation.
+[restate][2026-11-23T12:20:54.029Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm4FOAJUMKO7foPLkdgAQFvN] INFO: Starting invocation.
+[restate][2026-11-23T12:20:54.039Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0aCZPCrcUzVYyeGtW52z5z] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:54.202Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm4FOAJUMKO7foPLkdgAQFvN] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:56.005Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3a0fezYpJUJEIpoNN86t9E] INFO: Starting invocation.
+[restate][2026-11-23T12:20:56.049Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3a0fezYpJUJEIpoNN86t9E] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:20:58.009Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ423Gip42vnrsrItpzAZYb6] INFO: Starting invocation.
+[restate][2026-11-23T12:20:58.058Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ423Gip42vnrsrItpzAZYb6] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:00.014Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ302wkU8k8VcQsNIDGsi6z5] INFO: Starting invocation.
+[restate][2026-11-23T12:21:00.048Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm25cRJL6Bes9tGCT9OE2zSG] INFO: Starting invocation.
+[restate][2026-11-23T12:21:00.059Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ302wkU8k8VcQsNIDGsi6z5] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:00.232Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm25cRJL6Bes9tGCT9OE2zSG] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:00.285Z][nektar-tx/owner:61a47d0f9be7a0ab8e7e41c3f4baf3dfe4bdcb6081e38f3dd120260160d61436/observe][inv_17exWSxpdV3g6bNj7TVkZgDBAJwDLuNcL0] INFO: Starting invocation.
+[restate][2026-11-23T12:21:00.291Z][nektar-tx/owner:61a47d0f9be7a0ab8e7e41c3f4baf3dfe4bdcb6081e38f3dd120260160d61436/observe][inv_17exWSxpdV3g6bNj7TVkZgDBAJwDLuNcL0] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:00.405Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ1wyuJKMTvTU08wucwjoye8] INFO: Starting invocation.
+[restate][2026-11-23T12:21:02.021Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2uBBn2P2zIcvqdRcub9vzA] INFO: Starting invocation.
+[restate][2026-11-23T12:21:02.022Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7zsFkP58gsAd9Ox7nDjq2B] INFO: Starting invocation.
+[restate][2026-11-23T12:21:02.061Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2uBBn2P2zIcvqdRcub9vzA] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:02.263Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7zsFkP58gsAd9Ox7nDjq2B] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:04.027Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7CpCpiTjxGovraJT8yOzgY] INFO: Starting invocation.
+[restate][2026-11-23T12:21:04.066Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7CpCpiTjxGovraJT8yOzgY] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:06.034Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0CDZSJCwhyS21DgSaGFID3] INFO: Starting invocation.
+[restate][2026-11-23T12:21:06.064Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm7q88ySvkbOkiCjx1BXlHqV] INFO: Starting invocation.
+[restate][2026-11-23T12:21:06.074Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0CDZSJCwhyS21DgSaGFID3] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:06.234Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm7q88ySvkbOkiCjx1BXlHqV] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:07.414Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ1wyuJKMTvTU08wucwjoye8] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:08.015Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5WSR9ajX8Fo5R3apDydVa1] INFO: Starting invocation.
+[restate][2026-11-23T12:21:08.054Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5WSR9ajX8Fo5R3apDydVa1] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:10.001Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3xyyD3ZNZyjCPpvwM1tNWA] INFO: Starting invocation.
+[restate][2026-11-23T12:21:10.045Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3xyyD3ZNZyjCPpvwM1tNWA] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:11.992Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ55NBNwhY93AvogAnkempRr] INFO: Starting invocation.
+[restate][2026-11-23T12:21:12.022Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm4mEevBRz1lW6vB7gTfrMpM] INFO: Starting invocation.
+[restate][2026-11-23T12:21:12.033Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ55NBNwhY93AvogAnkempRr] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:12.192Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm4mEevBRz1lW6vB7gTfrMpM] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:12.990Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7mUOZVQFQUxlvgW3YlBjqL] INFO: Starting invocation.
+[restate][2026-11-23T12:21:13.239Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7mUOZVQFQUxlvgW3YlBjqL] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:13.469Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ5wxtGNgNj4O4QtGoryrIHn] INFO: Starting invocation.
+[restate][2026-11-23T12:21:13.987Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0KLD5gof2TKBDMpC5GLmp1] INFO: Starting invocation.
+[restate][2026-11-23T12:21:14.024Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0KLD5gof2TKBDMpC5GLmp1] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:15.988Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2MaS3IzF30kqnl1Sd2m2o8] INFO: Starting invocation.
+[restate][2026-11-23T12:21:16.033Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2MaS3IzF30kqnl1Sd2m2o8] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:17.986Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0DI2bBxlW75JlrwgtI0tww] INFO: Starting invocation.
+[restate][2026-11-23T12:21:18.024Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0DI2bBxlW75JlrwgtI0tww] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:19.984Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ67w7qlLe2RFRP57IydKHbV] INFO: Starting invocation.
+[restate][2026-11-23T12:21:20.022Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ67w7qlLe2RFRP57IydKHbV] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:21.599Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ5wxtGNgNj4O4QtGoryrIHn] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:21.993Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3ff36weIEignvIO5JGWy0X] INFO: Starting invocation.
+[restate][2026-11-23T12:21:22.037Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3ff36weIEignvIO5JGWy0X] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:23.996Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3zBPnQTXar1yh9gEP4duG4] INFO: Starting invocation.
+[restate][2026-11-23T12:21:23.997Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5OOfeM8FqyoIG6JHccY6wR] INFO: Starting invocation.
+[restate][2026-11-23T12:21:24.035Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm0L5lOc11WQ2IgLfBcGKsgX] INFO: Starting invocation.
+[restate][2026-11-23T12:21:24.046Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3zBPnQTXar1yh9gEP4duG4] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:24.209Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm0L5lOc11WQ2IgLfBcGKsgX] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:24.212Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ5OOfeM8FqyoIG6JHccY6wR] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:26.007Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7CC727fyDPAIpopuPJN6EP] INFO: Starting invocation.
+[restate][2026-11-23T12:21:26.043Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7CC727fyDPAIpopuPJN6EP] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:27.001Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ6FDqI5yQEUUlPgMOKKJMP5] INFO: Starting invocation.
+[restate][2026-11-23T12:21:27.020Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ6FDqI5yQEUUlPgMOKKJMP5] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:28.002Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2DLFn9nhlBBwYpnLUr6dS1] INFO: Starting invocation.
+[restate][2026-11-23T12:21:28.002Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ5DAeIA5AuCXmVEMTjYdnof] INFO: Starting invocation.
+[restate][2026-11-23T12:21:28.052Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2DLFn9nhlBBwYpnLUr6dS1] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:28.205Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ5DAeIA5AuCXmVEMTjYdnof] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:30.007Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2KD6TbKWDP5tVZFE0bpTql] INFO: Starting invocation.
+[restate][2026-11-23T12:21:30.046Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2KD6TbKWDP5tVZFE0bpTql] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:32.017Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ59WRR3VRnnK5XKRi1TPrHs] INFO: Starting invocation.
+[restate][2026-11-23T12:21:32.058Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ59WRR3VRnnK5XKRi1TPrHs] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:34.019Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3YucZuALgjjQl4M70eucEM] INFO: Starting invocation.
+[restate][2026-11-23T12:21:34.064Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3YucZuALgjjQl4M70eucEM] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:35.023Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6ENcMXMcJBJju0vfWN9SH8] INFO: Starting invocation.
+[restate][2026-11-23T12:21:35.283Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6ENcMXMcJBJju0vfWN9SH8] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:36.047Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5VYy70vFHQrGlo58HhtRVY] INFO: Starting invocation.
+[restate][2026-11-23T12:21:36.077Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm0Vbj6J8Z1oIWMbt7azjpOv] INFO: Starting invocation.
+[restate][2026-11-23T12:21:36.086Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5VYy70vFHQrGlo58HhtRVY] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:36.261Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm0Vbj6J8Z1oIWMbt7azjpOv] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:38.034Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6BsQ1VAX8Un4mP7lxakAl6] INFO: Starting invocation.
+[restate][2026-11-23T12:21:38.069Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6BsQ1VAX8Un4mP7lxakAl6] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:40.030Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ15g12eGVhyN8HNiIAZjDWI] INFO: Starting invocation.
+[restate][2026-11-23T12:21:40.074Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ15g12eGVhyN8HNiIAZjDWI] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:42.013Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4kvhyUpfeYeLT1UC6XvhXV] INFO: Starting invocation.
+[restate][2026-11-23T12:21:42.057Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm6GzEhfJXZZNJr1qrmi70Zu] INFO: Starting invocation.
+[restate][2026-11-23T12:21:42.068Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4kvhyUpfeYeLT1UC6XvhXV] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:42.241Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm6GzEhfJXZZNJr1qrmi70Zu] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:43.998Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0C3IOGoOWPSmmMHEchv1H7] INFO: Starting invocation.
+[restate][2026-11-23T12:21:44.038Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0C3IOGoOWPSmmMHEchv1H7] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:45.992Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ630xgfFySe5vS1AynDddTe] INFO: Starting invocation.
+[restate][2026-11-23T12:21:45.994Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1vDu5h6Myb1sGn1Wq2Aapu] INFO: Starting invocation.
+[restate][2026-11-23T12:21:46.043Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1vDu5h6Myb1sGn1Wq2Aapu] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:46.256Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ630xgfFySe5vS1AynDddTe] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:47.987Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4zE4ze6pChJPYDIIv2Q79U] INFO: Starting invocation.
+[restate][2026-11-23T12:21:48.030Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4zE4ze6pChJPYDIIv2Q79U] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:49.988Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ69bPVR3lKhx8xwrb2Z0j5L] INFO: Starting invocation.
+[restate][2026-11-23T12:21:50.021Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ69bPVR3lKhx8xwrb2Z0j5L] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:51.986Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0n8mG6lkD8DZiBqIhOImc3] INFO: Starting invocation.
+[restate][2026-11-23T12:21:52.022Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB15BgVuvdeLgb5CBLxn0KXW] INFO: Starting invocation.
+[restate][2026-11-23T12:21:52.030Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB15BgVuvdeLgb5CBLxn0KXW] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:52.037Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0n8mG6lkD8DZiBqIhOImc3] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:53.990Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1c6gIGL6IYmCpI0MKLu88F] INFO: Starting invocation.
+[restate][2026-11-23T12:21:54.029Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm4lyJO5arF9t22KzLN0KNTD] INFO: Starting invocation.
+[restate][2026-11-23T12:21:54.044Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1c6gIGL6IYmCpI0MKLu88F] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:54.204Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm4lyJO5arF9t22KzLN0KNTD] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:55.995Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ57BK6NkHah416gtvcHoiyS] INFO: Starting invocation.
+[restate][2026-11-23T12:21:56.044Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ57BK6NkHah416gtvcHoiyS] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:56.996Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ4DcYFwoJ7JdyXgo5teXQe4] INFO: Starting invocation.
+[restate][2026-11-23T12:21:57.250Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ4DcYFwoJ7JdyXgo5teXQe4] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:21:58.001Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5YcQPv5SoBJkIoogYJYhcD] INFO: Starting invocation.
+[restate][2026-11-23T12:21:58.036Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5YcQPv5SoBJkIoogYJYhcD] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:00.005Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0CPmyqpbCLORKAKnUS9lY2] INFO: Starting invocation.
+[restate][2026-11-23T12:22:00.056Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0CPmyqpbCLORKAKnUS9lY2] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:02.011Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7jbhhTqZgSj5iWAzpRnzCf] INFO: Starting invocation.
+[restate][2026-11-23T12:22:02.047Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7jbhhTqZgSj5iWAzpRnzCf] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:04.015Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0w81iHwsAMIAQbNRngM2Ga] INFO: Starting invocation.
+[restate][2026-11-23T12:22:04.059Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0w81iHwsAMIAQbNRngM2Ga] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:06.021Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5Cfr2Kba1G7lNmvqjDPKVd] INFO: Starting invocation.
+[restate][2026-11-23T12:22:06.056Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm1o65XPdAZJcxunptLr0Y2N] INFO: Starting invocation.
+[restate][2026-11-23T12:22:06.068Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5Cfr2Kba1G7lNmvqjDPKVd] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:06.231Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm1o65XPdAZJcxunptLr0Y2N] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:08.027Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ0RfwWYCyn2brWllQWLhz4f] INFO: Starting invocation.
+[restate][2026-11-23T12:22:08.030Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3Ub9W06wez6CQy5JHYVarM] INFO: Starting invocation.
+[restate][2026-11-23T12:22:08.080Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3Ub9W06wez6CQy5JHYVarM] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:08.270Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ0RfwWYCyn2brWllQWLhz4f] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:10.038Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ54xM8IesUl5U2iVCRdjCtw] INFO: Starting invocation.
+[restate][2026-11-23T12:22:10.075Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ54xM8IesUl5U2iVCRdjCtw] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:12.025Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ37DLLYvi2LMHXfZApFzhrz] INFO: Starting invocation.
+[restate][2026-11-23T12:22:12.079Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ37DLLYvi2LMHXfZApFzhrz] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:13.631Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ4CdyJ3xYNckaT5XioHYaAR] INFO: Starting invocation.
+[restate][2026-11-23T12:22:14.009Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1QxBJB37xLiW1T6FVWeqoa] INFO: Starting invocation.
+[restate][2026-11-23T12:22:14.046Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1QxBJB37xLiW1T6FVWeqoa] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:16.002Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0gBDVJfYhGJFcVrN5fIkIy] INFO: Starting invocation.
+[restate][2026-11-23T12:22:16.041Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0gBDVJfYhGJFcVrN5fIkIy] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:17.991Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ78lnmHLA59exGD7SUkkZC4] INFO: Starting invocation.
+[restate][2026-11-23T12:22:18.019Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm6cSUoaPNe3bQnhYDUkhlPK] INFO: Starting invocation.
+[restate][2026-11-23T12:22:18.027Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ78lnmHLA59exGD7SUkkZC4] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:18.194Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm6cSUoaPNe3bQnhYDUkhlPK] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:18.990Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ1VZzo8ATWhEZ0DUkgzaCoA] INFO: Starting invocation.
+[restate][2026-11-23T12:22:19.253Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ1VZzo8ATWhEZ0DUkgzaCoA] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:19.987Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1SjDwpaNP3BgqDPqKjTROh] INFO: Starting invocation.
+[restate][2026-11-23T12:22:20.028Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1SjDwpaNP3BgqDPqKjTROh] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:21.988Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ24WVHP63oytlGYYc1eSx7k] INFO: Starting invocation.
+[restate][2026-11-23T12:22:22.034Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ24WVHP63oytlGYYc1eSx7k] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:22.446Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ4CdyJ3xYNckaT5XioHYaAR] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:23.986Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4Hy0HuGAkqm2qJiCB3ayYU] INFO: Starting invocation.
+[restate][2026-11-23T12:22:24.015Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm1I6yJ8xlzmI7hAnjF4YLuc] INFO: Starting invocation.
+[restate][2026-11-23T12:22:24.023Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4Hy0HuGAkqm2qJiCB3ayYU] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:24.194Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm1I6yJ8xlzmI7hAnjF4YLuc] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:25.990Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ502tXdjCPmq5QF6H2P8eFV] INFO: Starting invocation.
+[restate][2026-11-23T12:22:26.027Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ502tXdjCPmq5QF6H2P8eFV] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:27.999Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ73SMoXbwJ8hLV5IYnWCSYY] INFO: Starting invocation.
+[restate][2026-11-23T12:22:28.001Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ2wntIZ2LePrWUDVS5qO5m0] INFO: Starting invocation.
+[restate][2026-11-23T12:22:28.017Z][nektar-confirmer/main/tick][inv_1lGoi5PYm9TQ2wntIZ2LePrWUDVS5qO5m0] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:28.039Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ73SMoXbwJ8hLV5IYnWCSYY] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:28.997Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ4WFxmq7Yx2PvwAyviEakxy] INFO: Starting invocation.
+[restate][2026-11-23T12:22:29.478Z][nektar-watchdog/main/tick][inv_1lGoi5PYm9TQ4WFxmq7Yx2PvwAyviEakxy] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:29.998Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4pUAonlaEdVNwgDZqKqrBE] INFO: Starting invocation.
+[restate][2026-11-23T12:22:30.001Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2TH8jlPCPGtXK5Rjarf42Y] INFO: Starting invocation.
+[restate][2026-11-23T12:22:30.031Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm2KfDjgyPV2LWwfVfvIU5xK] INFO: Starting invocation.
+[restate][2026-11-23T12:22:30.043Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm2KfDjgyPV2LWwfVfvIU5xK] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:30.049Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ4pUAonlaEdVNwgDZqKqrBE] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:30.244Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ2TH8jlPCPGtXK5Rjarf42Y] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:32.004Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3gahhCKjd9FFugGZ6U8WD9] INFO: Starting invocation.
+[restate][2026-11-23T12:22:32.039Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3gahhCKjd9FFugGZ6U8WD9] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:34.007Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2x3y89JcPMblqaC2JHdEyU] INFO: Starting invocation.
+[restate][2026-11-23T12:22:34.045Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ2x3y89JcPMblqaC2JHdEyU] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:36.013Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1CR6SKXjmtKLOOAugLzEoa] INFO: Starting invocation.
+[restate][2026-11-23T12:22:36.044Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm6xi11GUyh59KIZbPS9oPNC] INFO: Starting invocation.
+[restate][2026-11-23T12:22:36.054Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1CR6SKXjmtKLOOAugLzEoa] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:36.213Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm6xi11GUyh59KIZbPS9oPNC] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:38.019Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3KTE17jdQMFn9CSehhhXId] INFO: Starting invocation.
+[restate][2026-11-23T12:22:38.064Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3KTE17jdQMFn9CSehhhXId] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:40.025Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7dJVxefU84BvzmJnMBat3l] INFO: Starting invocation.
+[restate][2026-11-23T12:22:40.072Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7dJVxefU84BvzmJnMBat3l] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:41.030Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6fvnSgNIJEUpL7EXLzzl64] INFO: Starting invocation.
+[restate][2026-11-23T12:22:41.270Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ6fvnSgNIJEUpL7EXLzzl64] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:42.033Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6c5xyM52iGXD36L1J9FZr8] INFO: Starting invocation.
+[restate][2026-11-23T12:22:42.061Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm4d8Po3TyaFdvWYCdvEACor] INFO: Starting invocation.
+[restate][2026-11-23T12:22:42.067Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6c5xyM52iGXD36L1J9FZr8] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:42.232Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm4d8Po3TyaFdvWYCdvEACor] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:44.028Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6nKPdBxbyL3JCqtvSQboaJ] INFO: Starting invocation.
+[restate][2026-11-23T12:22:44.065Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6nKPdBxbyL3JCqtvSQboaJ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:46.010Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ74S2nEnoNCL3vyB8jKhdO2] INFO: Starting invocation.
+[restate][2026-11-23T12:22:46.050Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ74S2nEnoNCL3vyB8jKhdO2] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:47.996Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0502xFcMfjlk781X41IEta] INFO: Starting invocation.
+[restate][2026-11-23T12:22:48.034Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm531es1wtmHk8pM5RfsxZsx] INFO: Starting invocation.
+[restate][2026-11-23T12:22:48.045Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0502xFcMfjlk781X41IEta] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:48.207Z][nektar-deal/ev:b9ad36c7-c4c7-4864-96b9-6e1e6239fae6/advance][inv_19MndEphiDqm531es1wtmHk8pM5RfsxZsx] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:49.990Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6NqOMR28lvcTtAgfXTamPC] INFO: Starting invocation.
+[restate][2026-11-23T12:22:50.031Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6NqOMR28lvcTtAgfXTamPC] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:51.986Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ79I95UwWulSzfe9X9s4vUu] INFO: Starting invocation.
+[restate][2026-11-23T12:22:51.987Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ0ICZAfZ3D56XMC7LHf3luR] INFO: Starting invocation.
+[restate][2026-11-23T12:22:52.024Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ79I95UwWulSzfe9X9s4vUu] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:52.232Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ0ICZAfZ3D56XMC7LHf3luR] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:53.987Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5suDrRnwMZ4GBr15TeC9WZ] INFO: Starting invocation.
+[restate][2026-11-23T12:22:54.027Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5suDrRnwMZ4GBr15TeC9WZ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:55.985Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5qy91gOFBM5sUdDCOldb8N] INFO: Starting invocation.
+[restate][2026-11-23T12:22:56.022Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB4JVbeBtPEoOrdE2AQJDB5O] INFO: Starting invocation.
+[restate][2026-11-23T12:22:56.029Z][nektar-custody/global/resubmitPending][inv_1fsg95kbGEBB4JVbeBtPEoOrdE2AQJDB5O] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:56.032Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5qy91gOFBM5sUdDCOldb8N] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:57.992Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5WcsQ38waa41smtRkEXp0k] INFO: Starting invocation.
+[restate][2026-11-23T12:22:58.022Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ5WcsQ38waa41smtRkEXp0k] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:22:59.994Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6nuxqjawKyE7O4d9P2owxg] INFO: Starting invocation.
+[restate][2026-11-23T12:23:00.039Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ6nuxqjawKyE7O4d9P2owxg] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:01.997Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1PBMLCUoalwbFPpg8xXuTq] INFO: Starting invocation.
+[restate][2026-11-23T12:23:02.032Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1PBMLCUoalwbFPpg8xXuTq] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:02.999Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7ykX3604UlCjZlZGRdFFqx] INFO: Starting invocation.
+[restate][2026-11-23T12:23:03.240Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ7ykX3604UlCjZlZGRdFFqx] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:04.000Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0zIlpkCQ5bjNbQkx3DM8D8] INFO: Starting invocation.
+[restate][2026-11-23T12:23:04.038Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0zIlpkCQ5bjNbQkx3DM8D8] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:06.006Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3eVZeYrKpBdaaCL8rcug5P] INFO: Starting invocation.
+[restate][2026-11-23T12:23:06.099Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ3eVZeYrKpBdaaCL8rcug5P] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:08.013Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1oypYH9ZjUGaz72wbWzgC1] INFO: Starting invocation.
+[restate][2026-11-23T12:23:08.064Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1oypYH9ZjUGaz72wbWzgC1] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:09.844Z][nektar-tx/owner:dd743b4482793af6b3161dc213a0608fdeb384237c45b84146b997e27d8a1c2f/observe][inv_1gt94seXWw3Z5pNFhGnntdQLidGXpk3TsJ] INFO: Starting invocation.
+[restate][2026-11-23T12:23:09.849Z][nektar-tx/owner:dd743b4482793af6b3161dc213a0608fdeb384237c45b84146b997e27d8a1c2f/observe][inv_1gt94seXWw3Z5pNFhGnntdQLidGXpk3TsJ] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:09.951Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ6XkN6Rxc85USlh8l5a70wf] INFO: Starting invocation.
+[restate][2026-11-23T12:23:10.018Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ04AohaFN0jAcKXeuqFex14] INFO: Starting invocation.
+[restate][2026-11-23T12:23:10.062Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ04AohaFN0jAcKXeuqFex14] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:12.024Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7yJ7kAjkEWaMypB1K1d10v] INFO: Starting invocation.
+[restate][2026-11-23T12:23:12.068Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ7yJ7kAjkEWaMypB1K1d10v] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:14.032Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1bMeaCeseS2Lz9C5c6Mias] INFO: Starting invocation.
+[restate][2026-11-23T12:23:14.033Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ422tZF84lamC7uN1HWsd1k] INFO: Starting invocation.
+[restate][2026-11-23T12:23:14.078Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ1bMeaCeseS2Lz9C5c6Mias] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:14.250Z][nektar-upkeep/main/tick][inv_1lGoi5PYm9TQ422tZF84lamC7uN1HWsd1k] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:15.938Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ6XkN6Rxc85USlh8l5a70wf] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:15.946Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ4vJtUEUR5PYoxCBoiIHIFw] INFO: Starting invocation.
+[restate][2026-11-23T12:23:16.024Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0gzshZ3rWVGY2iOMC9tD39] INFO: Starting invocation.
+[restate][2026-11-23T12:23:16.068Z][nektar-dealfan/main/tick][inv_1lGoi5PYm9TQ0gzshZ3rWVGY2iOMC9tD39] INFO: Invocation completed successfully.
+[restate][2026-11-23T12:23:24.144Z][nektar-watcher/main/tick][inv_1lGoi5PYm9TQ4vJtUEUR5PYoxCBoiIHIFw] INFO: Invocation completed successfully.

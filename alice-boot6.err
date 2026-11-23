@@ -1,0 +1,34 @@
+2026-11-23T12:05:10.380Z nektar main: operator fee key 1HgGHfeTBqXdzq3kGwupgkd9jZRi69k3gz — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)
+2026-11-23T12:05:10.383Z nektar main: coin book sqlite utxos (16 funding utxo(s), custody held key)
+2026-11-23T12:05:10.419Z nektar main: no callback URL — pulling tx statuses from the broadcaster /events stream
+2026-11-23T12:05:10.552Z nektar: network=main
+2026-11-23T12:05:10.564Z nektar main: status stream: events HTTP 401
+2026-11-23T12:05:10.570Z T1-storeinit
+2026-11-23T12:05:10.580Z T2-migrate
+2026-11-23T12:05:10.581Z T3-preflight
+2026-11-23T12:05:16.607Z nektar: automation: preflight degraded — funds, spendguard
+2026-11-23T12:05:16.643Z T4-engine
+2026-11-23T12:05:16.653Z T5-endpoint
+[restate][2026-11-23T12:05:16.660Z] WARN: Accepting requests without validating request signatures; handler access must be restricted
+[restate][2026-11-23T12:05:16.663Z] WARN: Accepting requests without validating request signatures; handler access must be restricted
+2026-11-23T12:05:16.693Z nektar: rt: restate deployment registered http://172.21.112.1:9080 (force=false)
+2026-11-23T12:05:16.762Z nektar: automation: restate endpoint http://172.21.112.1:9080
+2026-11-23T12:05:16.771Z nektar: automation on — 1 market host(s); policies and approvals via 'pnpm automation'
+2026-11-23T12:05:16.780Z nektar: HTTP + MCP on :8461 (/v1, /mcp)
+2026-11-23T12:05:18.075Z nektar: lanes: watching 1 subs (lane:main:market-facts)
+2026-11-23T12:05:18.273Z nektar: automation: box: no funding slot (bbox: 0 proven, 0 anchored, 0 tree(s) awaiting a block)
+2026-11-23T12:05:18.318Z nektar: automation: box: no funding slot (bbox: 0 proven, 0 anchored, 0 tree(s) awaiting a block)
+2026-11-23T12:05:18.644Z nektar: automation: reserve: funds: upkeep take of 100600 sats would leave -99073 < deal floor 0
+2026-11-23T12:05:18.813Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:05:18.854Z nektar: automation: log append: no funding slot (log: 0 proven, 0 anchored, 0 tree(s) awaiting a block)
+2026-11-23T12:05:18.905Z nektar: automation: wakes commit:2
+2026-11-23T12:05:19.226Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:05:29.344Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:05:40.226Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:05:51.266Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:06:02.288Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:06:13.205Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:06:24.227Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:06:35.367Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:06:46.281Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T12:06:57.250Z nektar: automation: ensureTrees: funds: no spendable output ≥ 264 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more

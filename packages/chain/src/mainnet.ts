@@ -745,7 +745,10 @@ export async function merklePathMainnet(cfg: MainnetConfig | undefined, txid: st
 }
 
 // --- funding import by txid (address indexes can be unavailable) ---
-/** fetch a funding tx and return its P2PKH outputs locked to `pkhHex`.
+/** fetch a funding tx and return its P2PKH outputs locked to `pkhHex` —
+ *  discovery only: bytes, txid, vout, script. The merkle proof is not fetched
+ *  here; it attaches at the funder seam (`liveFunding` → `fundingProofAttacher`,
+ *  mcp/src/funding.ts), which asks `ChainPort.proofLookup` once per txid.
  *  `tracker` verifies any carried proof against our own headers — without it a
  *  BEEF import's BUMPs are unverifiable and get stripped at `TxStore.read`. */
 export async function importFundingTx(cfg: MainnetConfig | undefined, ref: string, pkhHex: string, tracker?: ChainTracker): Promise<FundingOut[]> {
@@ -777,6 +780,9 @@ function fundingOutputs(tx: Transaction, pkhHex: string): FundingOut[] {
 }
 
 // --- UTXO discovery -----------------------------------------------------------
+/** address-index scan for funding outputs — discovery only (bytes, txid, vout,
+ *  script). The merkle proof attaches at the funder seam (`liveFunding` →
+ *  `fundingProofAttacher`), never here. */
 export async function discoverUtxos(cfg: MainnetConfig | undefined, address: string, onSkip?: (txid: string, reason: string) => void): Promise<FundingOut[]> {
   const c = def(cfg)
   const list = await c.index.utxos(address)

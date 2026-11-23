@@ -8,7 +8,7 @@
 // port.broadcast/tracker/mine/guard.
 import { join } from 'node:path'
 import { existsSync, renameSync } from 'node:fs'
-import { PrivateKey, Transaction, WalletClient, ProtoWallet, PublicKey as SdkPublicKey } from '@bsv/sdk'
+import { PrivateKey, Transaction, WalletClient, ProtoWallet, PublicKey as SdkPublicKey, MerklePath } from '@bsv/sdk'
 import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvFlag, nektarEnvNum, mkLog, writeErr, type LogLine, type SignerWallet } from '@nektar/core'
 import {
   bootstrapReserve,
@@ -246,6 +246,54 @@ export async function regtestSeed(deps: { rc: RegtestConfig & { fundWif: string 
   await funds.refresh?.()
 }
 
+/** fetch + verify the funding tx's proof at the adoption seam — the one
+ *  place imported/discovered funding meets the port's witnessed headers.
+ *  The discovery paths (importFundingTx, discoverUtxos, the p2p eyes) stay
+ *  bytes-only by design; the proof lands here, in TxStore, where
+ *  CustodyOps.takeFunding's held-proof lookup already reads it — so a tree
+ *  minted on imported stock anchors without waiting a block for its own
+ *  proof. A txid the port can't prove yet is handed to the events floor:
+ *  the verified observe attaches it when it lands. Never throws — a
+ *  couldn't-ask lookup must not block the adoption of a valid coin. */
+export function fundingProofAttacher(d: {
+  txStore: Pick<TxStore, 'get' | 'setProof'>
+  /** ChainPort.proofLookup — already verified against the port's witnessed
+   *  headers; absent on tiers with no proof source (watch-only then) */
+  proofLookup?: (txid: string) => Promise<MerklePath | undefined>
+  watchTx: (txid: string) => void
+  log: (line: string) => void
+}): (tx: Transaction) => Promise<void> {
+  const inflight = new Map<string, Promise<void>>()
+  const watched = new Set<string>()
+  return (tx) => {
+    const txid = tx.id('hex')
+    // held evidence is never re-fetched — carried on the tx or already
+    // stored from an earlier seam
+    if (tx.merklePath !== undefined || d.txStore.get(txid)?.merklePath !== undefined) return Promise.resolve()
+    const pending = inflight.get(txid)
+    if (pending !== undefined) return pending
+    if (watched.has(txid)) return Promise.resolve()
+    const p = (async () => {
+      try {
+        const mp = await d.proofLookup?.(txid)
+        if (mp !== undefined) {
+          d.txStore.setProof(txid, mp)
+          d.log(`funding ${txid.slice(0, 12)}… proof attached at height ${mp.blockHeight}`)
+          return
+        }
+      } catch {
+        /* a lookup failure is "couldn't ask" — the events floor answers when the proof lands */
+      }
+      watched.add(txid)
+      d.watchTx(txid)
+    })().finally(() => {
+      inflight.delete(txid)
+    })
+    inflight.set(txid, p)
+    return p
+  }
+}
+
 export interface LiveFundingDeps {
   cfg: { dataDir: string }
   mc: MainnetConfig & { maxFeePerTx?: number; maxSpendPerDay?: number; minBroadcastIntervalMs?: number }
@@ -256,6 +304,9 @@ export interface LiveFundingDeps {
   port: ChainPort
   /** the fully-wrapped broadcast (ledger + log + watch) */
   broadcast: (tx: Transaction) => Promise<BroadcastResult>
+  /** the events floor — a funding tx the port can't prove yet is watched so
+   *  its proof attaches when it lands (fundingProofAttacher) */
+  watchTx: (txid: string) => void
 }
 
 export interface LiveFunding {
@@ -293,6 +344,10 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
   // import, indexer discovery, fee-vault mint) signals through addIfNew so
   // waitForFunding's poll can sleep event-driven instead of fixed-cadence
   let fundingWake: (() => void) | undefined
+  // the adoption seam's proof fetcher — every producer that lands a funding
+  // tx goes through addIfNew, so the proof attaches exactly once, at the
+  // seam where custody takes the coin (SPV-03)
+  const attach = fundingProofAttacher({ txStore, proofLookup: port.proofLookup, watchTx: deps.watchTx, log: l })
   // adopt is fire-and-forget for latency, but never silently: a refusal names
   // the outpoint and (via the chain-verified oracle, not an index) whether the
   // coin is already spent — the difference between "dead funding tx, send
@@ -309,7 +364,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
       })
       .catch((e) => l(`funding ${tag} adopt failed: ${(e as Error).message}`))
   }
-  const addIfNew = (u: { tx: Transaction; vout: number }) => {
+  const addIfNew = (u: { tx: Transaction; vout: number }): Promise<void> => {
     txStore.put(u.tx)
     // first-party spend record beats any index or operator-named txid: an
     // outpoint a stored tx of ours already spends is never re-imported — a
@@ -318,14 +373,17 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
     const spender = txStore.spender(u.tx.id('hex'), u.vout)
     if (spender === undefined) {
       adopt(u)
-      return
+    } else {
+      void ledger
+        .walletTx({ txid: spender })
+        .then((w) => {
+          if (importable(spender, w?.state)) adopt(u)
+        })
+        .catch(() => undefined) // unreadable ledger → stay skipped; the next import pass retries
     }
-    void ledger
-      .walletTx({ txid: spender })
-      .then((w) => {
-        if (importable(spender, w?.state)) adopt(u)
-      })
-      .catch(() => undefined) // unreadable ledger → stay skipped; the next import pass retries
+    // adoption is NOT delayed by the lookup — the caller's Promise.all only
+    // bounds the proof fetch, not the coin book
+    return attach(u.tx)
   }
   // optional p2p eyes: NEKTAR_P2P_PEERS='ip:port,...' — first-hand inv stream
   // watching our reserve outpoints (spend events by ANYONE) and the fee-key
@@ -368,7 +426,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
     .map((s) => s.trim())
     .filter(Boolean)) {
     try {
-      for (const u of await importFundingTx(mc, txid, pkhHex, port.tracker)) addIfNew(u)
+      await Promise.all((await importFundingTx(mc, txid, pkhHex, port.tracker)).map((u) => addIfNew(u)))
     } catch (e) {
       l(`funding import ${txid}: ${(e as Error).message}`)
     }
@@ -380,7 +438,9 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
     // path is NEKTAR_FUND_TXIDS=<txid|hex:rawtx> (import above).
     if (nektarEnv('NEKTAR_INDEXER_DISCOVERY') !== '1') return
     try {
-      for (const u of await discoverUtxos(mc, fundAddress, (t, why) => l(`discover: index entry ${t.slice(0, 12)} skipped: ${why}`))) addIfNew(u)
+      await Promise.all(
+        (await discoverUtxos(mc, fundAddress, (t, why) => l(`discover: index entry ${t.slice(0, 12)} skipped: ${why}`))).map((u) => addIfNew(u))
+      )
     } catch (e) {
       l(`UTXO discovery unavailable (${(e as Error).message}) — set NEKTAR_FUND_TXIDS=<funding txid>`)
     }
@@ -430,7 +490,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
         .map((s) => s.trim())
         .filter(Boolean)) {
         try {
-          for (const u of await importFundingTx(mc, txid, pkhHex, port.tracker)) addIfNew(u)
+          await Promise.all((await importFundingTx(mc, txid, pkhHex, port.tracker)).map((u) => addIfNew(u)))
         } catch {
           /* keep polling */
         }
@@ -465,7 +525,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
     // reserve without a restart (same path as NEKTAR_FUND_TXIDS)
     importFunding: async (txid: string) => {
       const added = await importFundingTx(mc, txid, pkhHex, port.tracker)
-      for (const u of added) addIfNew(u)
+      await Promise.all(added.map((u) => addIfNew(u)))
       const balanceSats = funds.utxos.reduce((s, u) => s + u.satoshis, 0)
       return { imported: added.length, utxos: funds.utxos.length, balanceSats, address: fundAddress, txids: [...new Set(added.map((u) => u.tx.id('hex')))] }
     },
@@ -477,11 +537,15 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
       await funds.refresh()
       let imported = 0
       try {
-        for (const u of await discoverUtxos(mc, fundAddress, (t, why) => l(`discover: index entry ${t.slice(0, 12)} skipped: ${why}`))) {
-          const before = funds.utxos.length
-          addIfNew(u)
-          if (funds.utxos.length > before) imported++
-        }
+        const found = await discoverUtxos(mc, fundAddress, (t, why) => l(`discover: index entry ${t.slice(0, 12)} skipped: ${why}`))
+        const counts = await Promise.all(
+          found.map(async (u) => {
+            const before = funds.utxos.length
+            await addIfNew(u)
+            return funds.utxos.length > before ? 1 : 0
+          })
+        )
+        imported = counts.reduce((a: number, b) => a + b, 0)
       } catch {
         /* discovery down — wallet view still refreshed */
       }

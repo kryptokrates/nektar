@@ -56,7 +56,7 @@ export function wireP2p(opts: {
   p2p.on('pay', (t, v, s) => opts.log(`nektar p2p: incoming ${s}sat to fee key — tx ${t.slice(0, 12)}…:${v}\n`))
   p2p.on('tx', (tx) => {
     for (const [v, o] of tx.outputs.entries()) {
-      if (o.lockingScript.toHex() === fundPkhScript) opts.addIfNew({ tx, vout: v })
+      if (o.lockingScript.toHex() === fundPkhScript) void opts.addIfNew({ tx, vout: v })
     }
   })
   p2p.on('peer', (a, up) => opts.log(`nektar p2p: peer ${a} ${up ? 'connected' : 'down'}\n`))

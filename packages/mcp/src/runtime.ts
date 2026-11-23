@@ -550,7 +550,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   let topUp: (() => Promise<void>) | undefined
   let ops: Runtime['ops'] | undefined
   if (!injected && live) {
-    const lf = await liveFunding({ cfg, mc: mc!, net, custody, txStore, ledger, port, broadcast: chain.broadcast })
+    const lf = await liveFunding({ cfg, mc: mc!, net, custody, txStore, ledger, port, broadcast: chain.broadcast, watchTx: (txid) => events.watch(txid) })
     ops = lf.ops
     fundingRefresh = lf.refresh
     topUp = lf.topUp

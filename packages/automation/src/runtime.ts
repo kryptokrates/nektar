@@ -488,6 +488,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
           log(`automation: watchdog: host down ${h}`)
         }
       for (const h of Array.from(downNow)) if (marketHosts.includes(h) && !r.downHosts.includes(h)) await rt.hostBack(h)
+      // the outbox floor — every pending-row wake rides outboxReady pokes or
+      // the drain's self-armed ceiling; if a wake was missed (deduped arm,
+      // a lost poke) overdue rows would sleep forever. A due row present on
+      // the watchdog's bounded pass re-pokes the pump — the poke coalesces
+      // on the draining flag so this costs one flagged call at most.
+      const next = await store.nextOutboxAt()
+      if (next !== undefined && next <= Date.now()) store.outboxReady?.()
     } catch (e) {
       log(`automation: watchdog: ${(e as Error).message}`)
     }

@@ -6,6 +6,7 @@
 // (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
 import { nektarEnv, nektarEnvFlag, nektarEnvNum, parseDotEnv, setNektarEnv, mkLog, sparse } from '@nektar/core'
 import { marketHosts } from './hosts.js'
+import { paymentFeeBoundSats } from './custody.js'
 import { existsSync, readFileSync } from 'node:fs'
 
 // --env <regtest|testnet|main> (or --env=x) + optional .env beside cwd →
@@ -267,6 +268,10 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
       // payments (payment-final, no refund); NEKTAR_DIRECT_ACCEPT=1 advertises
       // it on our quotes. Both off by default: escrow stays the default rail.
       ...(nektarEnv('NEKTAR_DIRECT_MAX_SATS') ? { directMaxSats: Number(nektarEnv('NEKTAR_DIRECT_MAX_SATS')) } : {}),
+      // the direct rail's policy-accounted fee bound rides the effective fee
+      // rate — the same number the custody take margin uses, so raising
+      // NEKTAR_FEE_RATE_SAT_PER_KB lifts policy reserve and take together
+      directFeeReserveSats: paymentFeeBoundSats(rt.mem.feeRateSatPerKb),
       ...(nektarEnv('NEKTAR_DIRECT_ACCEPT') === '1' ? { directAccept: true } : {}),
       // NEKTAR_DIRECT_ACCEPT_MAX_SATS caps which quotes advertise the direct
       // rail — disclosure ships against an unproven payment, so this bounds

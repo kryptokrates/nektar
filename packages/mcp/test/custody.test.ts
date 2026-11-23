@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { MerklePath, PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
 import { fundsOf } from '@nektar/chain'
-import { CustodyOps } from '../src/custody.js'
+import { CustodyOps, paymentFeeBoundSats } from '../src/custody.js'
 
 const key = PrivateKey.fromRandom()
 const parent = (): Transaction => {
@@ -178,6 +178,35 @@ void test('custody: a sealed dead verdict after submit throws and tombstones', a
   // so they can never be handed out — but the taken parent was never marked
   // spent; its hold is released back into the pool
   assert.deepEqual(marks, ['markSpent', 'markSpent'], 'the taken input returns to the reserve')
+})
+
+// the direct rail's funding take is amount + the payment's actual fee bound —
+// a fixed covenant-class reserve starved small payments (a 50-sat deal asked
+// for a ≥650-sat utxo). The bound tracks the configured fee rate.
+void test('custody: sendSats takes amount + the rate-derived fee bound, not a fixed reserve', async () => {
+  const p = parent()
+  p.merklePath = pathFor(p)
+  let asked = 0
+  const base = fundsOf({ utxos: [{ tx: p, vout: 0, satoshis: 100_000 }], markSpent: () => {}, addOwned: () => {}, address: () => key.toAddress() })
+  const ops = new CustodyOps({
+    funds: {
+      ...base,
+      take: (purpose: never, sats: number) => {
+        asked = sats
+        return base.take(purpose, sats)
+      }
+    },
+    fundSigner: () => key,
+    broadcast: () => Promise.resolve({ status: 'success' }),
+    txs: () => {},
+    feeRateSatPerKb: 150
+  })
+  const r = await ops.sendSats({ amount: 50, address: key.toPublicKey().toAddress(), buildOnly: true })
+  assert.equal(asked, 50 + paymentFeeBoundSats(150), 'the take asks for amount + the ~450B payment bound at the configured rate')
+  assert.equal(r.utxo?.satoshis, 50)
+  // the bound really covers the fee this shape pays — not just a number
+  const fee = 100_000 - (r.tx?.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0) ?? 0)
+  assert.ok(fee > 0 && fee <= paymentFeeBoundSats(150), `fee ${fee} inside the ${paymentFeeBoundSats(150)} bound`)
 })
 
 void test('custody: a seen status returns after one read — bounded confirmation, not a wait loop', async () => {

@@ -183,3 +183,67 @@ void test('deliverOutboxItem: ack on success, defer on funding-slot, retry on fa
     await kx.destroy()
   }
 })
+
+void test('outbox lost-wakeup: a deferred/retried row re-pokes the pump — the drain arm lands on the new wake', async () => {
+  const { kx, store } = await open()
+  const ex = new Dispatcher()
+  try {
+    const seen: Array<{ handler: string; opts?: { delayMs?: number; idempotencyKey?: string } }> = []
+    const origSend = ex.send.bind(ex)
+    ex.send = async (t, a, o) => {
+      seen.push({ handler: t.handler, opts: o })
+      return origSend(t, a, o)
+    }
+    // the store-driven pump: every wake lands as a drain call — the same
+    // shape openOutbox wires (pokes coalesce; here a plain call suffices)
+    const pokes: Promise<unknown>[] = []
+    const DRAIN = { service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY } as const
+    store.outboxReady = () => {
+      pokes.push(ex.call(DRAIN, {}).catch(() => undefined))
+    }
+    const engine = new MarketEngine(deps(store, { transport: { send: async () => Promise.reject(new Error('no spendable funding slot')) } as never }))
+    wireTransport(ex, {
+      dueRows: () => store.dueOutbox(50),
+      nextAt: () => store.nextOutboxAt(),
+      deliverItem: (item) => engine.deliverOutboxItem(item),
+      now: () => Date.now(),
+      log: () => {}
+    } satisfies TransportDeps)
+    // joined sends fire more pokes; walk to quiescence
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 20; i++) {
+        await ex.drain()
+        if (pokes.length === 0) return
+        await Promise.allSettled(pokes.splice(0))
+      }
+    }
+    await enq(store, 'lost1', 'host:down')
+    await settle()
+    // the defer moved the wake — pending, not due, no attempt spent
+    const row = await store.outboxRow('lost1')
+    assert.ok(row !== undefined)
+    assert.equal(row.status, 'pending')
+    assert.equal((await store.waitingOn('op:lost1'))[0].attempts, 0)
+    const wakeAt = row.nextAt
+    assert.ok(wakeAt > Date.now())
+    // the drain re-armed on the POST-defer instant — the arm key must be
+    // drain:${new next_at}, never drain:${stale} which dedups against the
+    // invocation that ran the stale pass (the observed dead chain: rows
+    // overdue 30+ min with no scheduled successor, mainnet deal 16:12)
+    const arms = () => seen.filter((s) => s.handler === 'drain').map((s) => s.opts?.idempotencyKey)
+    assert.ok(arms().includes(`drain:${wakeAt}`), `no drain arm at the deferred wake ${wakeAt} — arms: ${JSON.stringify(arms())}`)
+    // the retry path keeps the same contract — a rescheduled row pokes too
+    const before = seen.length
+    await store.retryOutbox('lost1', 'host unreachable')
+    const retried = await store.outboxRow('lost1')
+    assert.ok(retried !== undefined)
+    assert.equal((await store.waitingOn('op:lost1'))[0].attempts, 1) // a real retry spends its attempt
+    assert.ok(retried.nextAt !== wakeAt)
+    await settle()
+    assert.ok(arms().includes(`drain:${retried.nextAt}`), `no drain arm at the retried wake ${retried.nextAt} — arms: ${JSON.stringify(arms())}`)
+    assert.ok(seen.length > before)
+  } finally {
+    await ex.close()
+    await kx.destroy()
+  }
+})

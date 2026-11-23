@@ -464,10 +464,14 @@ export abstract class BuyerOps extends SellerOps {
       const q = s.so.offer.offer as any
       const live = !s.reject && Number(q?.expiresAt ?? 0) !== 0 ? Number(q.expiresAt) > height : !s.reject
       const anchored = !!(s.commitment?.proof?.path && s.commitment.batchR && s.commitment.anchorTxid)
+      // the all-in bound is rail-specific: a `direct` quote settles by
+      // outright payment — its exposure is the payment fee bound, not the
+      // covenant's maxFee + escrow reserve (rt/direct-policy-amounts)
+      const direct = q?.direct === true && this.o.directMaxSats !== undefined && this.o.directMaxSats > 0 && s.so.offer.priceSats <= this.o.directMaxSats
       return {
         offerKey: key,
         eligible: live && Number(q?.cfg?.refundAfter ?? 0) > height + this.o.sellerSafetyBlocks,
-        maxAllInSats: s.so.offer.priceSats + Number(q?.cfg?.maxFee ?? 0) + this.o.escrowFeeReserveSats,
+        maxAllInSats: s.so.offer.priceSats + (direct ? this.o.directFeeReserveSats : Number(q?.cfg?.maxFee ?? 0) + this.o.escrowFeeReserveSats),
         features: { relevance: 10000, provenance: anchored ? 10000 : s.commitment?.leaf ? 5000 : 0, history: 5000, latency: 10000 }
       }
     })
@@ -524,8 +528,22 @@ export abstract class BuyerOps extends SellerOps {
     const w = op.data.want!.want
     const price = s.so.offer.priceSats,
       maxFee = Number(q.cfg.maxFee)
-    const amounts = { purchaseSats: price, feeSats: maxFee + this.o.escrowFeeReserveSats, lockedSats: price + maxFee }
-    const actionDigest = digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'escrow', offerKey: sel.key, cfg: q.cfg, amounts })
+    // the rail is decided before policy accounting: a `direct` quote inside
+    // the operator's no-recourse ceiling settles by outright P2PKH — its fee
+    // exposure is the payment bound, and nothing is escrow-locked, so quoting
+    // maxFee + escrowFeeReserveSats here would escalate covenant-class
+    // numbers on a payment that never builds a covenant (rt/direct-policy-amounts)
+    const direct = q.direct === true && this.o.directMaxSats !== undefined && this.o.directMaxSats > 0 && price <= this.o.directMaxSats
+    const amounts = direct
+      ? { purchaseSats: price, feeSats: this.o.directFeeReserveSats, lockedSats: price + this.o.directFeeReserveSats }
+      : { purchaseSats: price, feeSats: maxFee + this.o.escrowFeeReserveSats, lockedSats: price + maxFee }
+    const actionDigest = digestOf('nektar:automation:action:1', {
+      op: op.operationId,
+      kind: direct ? 'direct' : 'escrow',
+      offerKey: sel.key,
+      cfg: q.cfg,
+      amounts
+    })
     const approved = op.state === 'escalated' && (await this.d.store.consumeApproval(op.operationId, actionDigest))
     if (op.state === 'escalated' && !approved) {
       const a = (await this.d.store.approvals()).find((x) => x.approvalId === op.data.pendingApproval?.approvalId)
@@ -580,7 +598,6 @@ export abstract class BuyerOps extends SellerOps {
       // accept envelope queues/flies during the broadcaster RTT, then the
       // verdict is applied to the post-transition op below
       let pendingSubmit: Promise<{ state: string; txid: string; detail?: string }> | undefined
-      const direct = q.direct === true && this.o.directMaxSats !== undefined && this.o.directMaxSats > 0 && price <= this.o.directMaxSats
       if (direct) {
         const payScript = new P2PKH().lock(Array.from(fromHex(q.cfg.sellerPkh))).toHex()
         const payOffer = {

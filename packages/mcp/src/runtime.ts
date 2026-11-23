@@ -351,7 +351,11 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     intervalMs: cfg.confirmEveryMs ?? (net === 'regtest' ? 2_000 : 30_000),
     abandonAfterBlocks: port.abandonAfterBlocks,
     height: async () => await port.height(),
-    observe: port.observe
+    observe: port.observe,
+    onStall: (what, ms, txid) => {
+      nlog(`chain ${what} probe exceeded ${ms}ms${txid !== undefined ? ` (${txid})` : ''} — treated as unanswered`)
+      memRef?.metrics.inc('nektar_chain_probe_stalls_total', { what }, 1, 'chain-event probes that exceeded their bound')
+    }
   })
   eventsRef = events
   // the ONE custody effect set — wrapBroadcast's verdicts, the records

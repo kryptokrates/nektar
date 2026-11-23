@@ -11,6 +11,7 @@
 // its reconcile floor (the verified delivery path stays with the caller —
 // handleBroadcasterStatus verifies BUMPs against our own tracker).
 import { EventEmitter } from 'node:events'
+import { deadline, detached, type DeadlineOutcome } from '@nektar/core'
 import type { TxStatusEvent } from './interfaces.js'
 
 const TERMINAL: ReadonlySet<string> = new Set(['mined', 'rejected', 'double-spent'])
@@ -35,6 +36,16 @@ export interface ChainEventsOpts {
   /** requires `height`: an entry watched for N+ blocks without a terminal
    *  status emits 'abandoned' once and is dropped (conflicting-spend case). */
   abandonAfterBlocks?: number
+  /** bound on one observe / height read — default 45s; a probe past it is
+   *  'couldn't ask' (the same class as a throw): the dedup entry clears, the
+   *  caller moves on, and the abandon clock never counts it. The substrate
+   *  must not depend on every port's observe being well-behaved — one read
+   *  that never settles must not starve every watch and waitFor behind it. */
+  observeTimeoutMs?: number
+  /** fired when an observe or height read exceeds observeTimeoutMs — the
+   *  host's stall metric/log seam. Not fired for a throw (couldn't-ask the
+   *  ordinary way) or an ambient abort (a shutdown, not a slowness). */
+  onStall?: (what: 'observe' | 'height', ms: number, txid?: string) => void
 }
 
 interface WatchEntry {
@@ -145,24 +156,37 @@ export class ChainEvents extends EventEmitter {
   }
 
   /** one observed read for `txid`, dedup'd across concurrent callers — a
-   *  waitFor nudge and the tick sharing a txid get one fetch, not two. */
+   *  waitFor nudge and the tick sharing a txid get one fetch, not two. The
+   *  read is BOUNDED: a port whose observe never settles used to pin this
+   *  dedup entry (and busy, and every later probe's coalesce) forever; the
+   *  deadline makes 'couldn't ask' a recoverable outcome instead of a silent
+   *  substrate death. detached() because the shared probe must not inherit a
+   *  caller's leg deadline — its own bound is the only clock it answers. */
   private probe(txid: string): Promise<TxStatusEvent | undefined> {
     const inflight = this.probing.get(txid)
     if (inflight !== undefined) return inflight
-    const p = this.opts
-      .observe(txid)
-      .then((ev) => {
+    const ms = this.opts.observeTimeoutMs ?? 45_000
+    const p = detached(() => deadline(() => this.opts.observe(txid), ms))
+      .then((r) => {
         this.probing.delete(txid)
-        if (ev !== undefined) {
-          this.deliver(ev)
-        } else {
-          // a resolved undefined is a definitive "not terminal yet" — only
-          // an answered read may feed the abandon clock; a throw below is
-          // "couldn't ask" and must never advance it
-          const w = this.watched.get(txid)
-          if (w !== undefined && this.tip !== undefined) w.answeredTip = this.tip
+        if (r.outcome === 'settled') {
+          const ev = r.value
+          if (ev !== undefined) {
+            this.deliver(ev)
+          } else {
+            // a resolved undefined is a definitive "not terminal yet" — only
+            // an answered read may feed the abandon clock; a timeout or a
+            // throw is "couldn't ask" and must never advance it
+            const w = this.watched.get(txid)
+            if (w !== undefined && this.tip !== undefined) w.answeredTip = this.tip
+          }
+          return ev
         }
-        return ev
+        // timeout/aborted — couldn't ask: probing cleared above, clock
+        // untouched. A timeout names the slow port leg; an ambient abort is
+        // a shutdown, not a slowness, and stays silent.
+        if (r.outcome === 'timeout') this.opts.onStall?.('observe', ms, txid)
+        return undefined
       })
       .catch(() => {
         this.probing.delete(txid)
@@ -268,11 +292,15 @@ export class ChainEvents extends EventEmitter {
     try {
       // a FAILED height read is not "tip unchanged" — couldn't-ask must not
       // satisfy the proof-gate, or the observe batch starves on the stale
-      // tip while observe itself would have answered
+      // tip while observe itself would have answered. Bounded like probe():
+      // a height read that never settles is the same failed-read class.
       let heightKnown = true
       if (this.opts.height !== undefined) {
-        const tip = await this.opts.height().catch(() => undefined)
+        const ms = this.opts.observeTimeoutMs ?? 45_000
+        const r = await detached(() => deadline(() => this.opts.height!(), ms)).catch((): DeadlineOutcome<number> => ({ outcome: 'aborted' }))
+        const tip = r.outcome === 'settled' ? r.value : undefined
         heightKnown = tip !== undefined
+        if (r.outcome === 'timeout') this.opts.onStall?.('height', ms)
         if (tip !== undefined && tip !== this.tip) {
           this.tip = tip
           this.emit('height', tip)

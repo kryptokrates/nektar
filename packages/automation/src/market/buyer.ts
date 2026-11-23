@@ -3,7 +3,7 @@ import { verifyOffer, verifyWant, type BoxRef, type SignedOffer, type SignedWant
 import { verifyOfferSig } from '@nektar/identity'
 import { COVENANT_ID, DisclosureSaleHost } from '@nektar/anchor'
 import { fromHex, parseFragment } from '@nektar/core'
-import { spendValid, FundsStarvedError, type Ingested } from '@nektar/chain'
+import { spendValid, FundsStarvedError, isHeaderUnavailable, type Ingested } from '@nektar/chain'
 import type { Operation } from '../store.js'
 import { decidePurchase, digestOf, type ActionContext, type AutomationPolicy } from '../policy.js'
 import { rankOffers, type ScoreCandidate } from '../scoring.js'
@@ -200,7 +200,9 @@ export abstract class BuyerOps extends SellerOps {
       let got: Ingested | undefined
       try {
         if (typeof m.tx === 'string') got = await this.readTx(m.tx)
-      } catch {
+      } catch (e) {
+        // a header outage is not "unreadable" — held pending, not parked
+        if (isHeaderUnavailable(e)) throw e
         /* unreadable wire — fall through to the on-chain fetch */
       }
       if (got === undefined) {
@@ -365,7 +367,9 @@ export abstract class BuyerOps extends SellerOps {
           tx = got.tx
           this.d.rememberTx?.(tx)
         }
-      } catch {
+      } catch (e) {
+        // a header outage is not "unreadable" — held pending, no attempt spent
+        if (isHeaderUnavailable(e)) throw e
         /* unreadable — fall through to the chain view */
       }
     }

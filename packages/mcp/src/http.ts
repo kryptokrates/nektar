@@ -1,6 +1,7 @@
 // API-001: minimal versioned HTTP API (node:http, no framework). Same tools
 // as MCP, plus public read endpoints. Every route is in OPENAPI (tested).
 import { nektarEnv, deadline } from '@nektar/core'
+import { isHeaderUnavailable } from '@nektar/chain'
 import { marketHosts, addSavedHost, removeSavedHost } from './hosts.js'
 import { faucetEnabled, faucetDrip } from './faucet.js'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
@@ -447,7 +448,12 @@ export function createHttpApi(
             const beef = typeof laneBody.beef === 'string' ? Buffer.from(laneBody.beef, 'hex') : undefined
             if (beef === undefined || beef.length === 0 || beef.length > 128 * 1024 || beef.toString('hex') !== laneBody.beef)
               return send(400, { error: 'a hex carrier beef is required (<= 128 KiB)' })
-            const kind = await au.pushCarrier([...beef]).catch(() => false)
+            const kind = await au.pushCarrier([...beef]).catch((e) => {
+              // a header outage reaches the outer 500 — "couldn't ask,
+              // retry", never the 422 refusal a submitter would record
+              if (isHeaderUnavailable(e)) throw e
+              return false
+            })
             return kind === false ? send(422, { error: 'carrier failed verification' }) : send(200, { ok: true, kind })
           }
           if (req.method === 'GET' && url.pathname === '/v1/openapi.json') return send(200, OPENAPI)

@@ -8,6 +8,7 @@ import { PublicKey, Transaction, type ChainTracker } from '@bsv/sdk'
 import { mintCarrier, fundingLock, lockFields, unlocker, type Derivation, type SigningWallet } from '@lightwebinc/bcommon'
 import { P2PKH } from '@bsv/sdk'
 import { toSigner, signerAddress, type SignerLike } from '@nektar/core'
+import { isHeaderUnavailable } from '@nektar/chain'
 import {
   EncodingLines,
   ProfileFull,
@@ -243,7 +244,10 @@ async function admitBatch(beef: number[], o: { stream: string; producer: Uint8Ar
             .filter((l) => l.length > 0)
         : []
     return { seq: b.seq, commitment: toHex(a.carrier.commitment), timestamp: b.timestamp, lines, prev: toHex(b.prev) }
-  } catch {
+  } catch (e) {
+    // a header outage is "couldn't ask" — swallowing it would report this
+    // seq as a gap/withheld instead of unverifiable
+    if (isHeaderUnavailable(e)) throw e
     return undefined
   }
 }
@@ -392,7 +396,9 @@ export async function readLog(p: { hosts: string[]; stream: string; producer: st
         if (missing || toHex(intervalRoot(covered)) !== toHex(a.root)) continue
         okToken = { tx, anchor: a }
         break
-      } catch {
+      } catch (e) {
+        // a header outage must not shrink anchoredThrough into a verdict
+        if (isHeaderUnavailable(e)) throw e
         /* not the token */
       }
     }

@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory, { type Knex } from 'knex'
-import { testChain, testFunder } from '@nektar/chain'
+import { testChain, testFunder, HeaderUnavailableError } from '@nektar/chain'
 import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/bstack'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -214,6 +214,44 @@ void test('S1 regtest: three sellers quote 450/300/200, buyer scores, pays the b
   await bob.engine.markUsefulness(operationId, true, { tests: 'pass' })
   assert.equal((await bob.engine.status(operationId))!.operation.state, 'useful')
   assert.equal(((await c.engine.status(sale.operationId))!.operation.data.offer as any).wrapped, '[sealed]', 'status never echoes the sealed credential')
+})
+
+// SPV-02: an accept whose wire verification can't ask the headers is NOT a
+// decline — the inbox item stays pending with its attempt count untouched,
+// the sale stays 'quoted', and the same item processes once headers recover.
+void test('a header outage during accept verify holds the inbox item — no decline, no attempt spent', async (t) => {
+  const w = await world(t)
+  if (w === undefined) return
+  t.after(w.close)
+  const c = await w.seller('cara', 200)
+  const bob = await w.add('bob')
+  await bob.engine.publishWant({ domains: ['libfoo'], question: 'connect is not a function', maxSats: 500 }, bob.policyHash)
+  await w.round()
+  await w.round()
+  w.advance(1500)
+  await w.round([bob]) // the buyer selects cara and sends her the accept
+  const sale = (await c.store.operations({ role: 'seller' })).find((o) => o.kind === 'sale')!
+  assert.equal(sale.state, 'quoted')
+  // the outage: every wire read on HER engine rejects — dealEvent must hold
+  // the item, not spend an attempt, and never queue the deterministic decline
+  const deps = (c.engine as unknown as { d: { readTx?: (hex: string) => Promise<never> } }).d
+  deps.readTx = () => Promise.reject(new HeaderUnavailableError(1, 'no-source'))
+  await w.round([c])
+  const pending = (await c.kx('market_inbox').where({ status: 'pending' }).select('*')) as Array<{ attempts: number }>
+  assert.ok(pending.length >= 1, 'the accept is still pending — not failed, not completed')
+  assert.equal(Math.max(...pending.map((r) => r.attempts)), 0, 'a header outage does not spend an inbox attempt')
+  const declines = (await c.kx('market_outbox').where('payload', 'like', '%decline%').select('*')) as unknown[]
+  assert.equal(declines.length, 0, 'no decline outbox row — a could-not-ask is not a refusal')
+  assert.equal((await c.store.operations({ role: 'seller' })).find((o) => o.kind === 'sale')!.state, 'quoted', 'the sale never saw the accept')
+  // heal — the SAME item processes on the next pass. The fan re-sends a
+  // pending row once per fanEventResend window (10s), so the clock must
+  // cross the window for the re-fire to escape send-dedup
+  delete deps.readTx
+  w.advance(11_000)
+  await w.round([c])
+  await w.round([c])
+  const healed = (await c.store.operations({ role: 'seller' })).find((o) => o.kind === 'sale')!
+  assert.notEqual(healed.state, 'quoted', 'the accept settles once headers answer again')
 })
 
 void test('two wants from one buyer are answered and settled independently', async (t) => {

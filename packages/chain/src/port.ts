@@ -217,9 +217,12 @@ export async function livePort(mc: MainnetConfig & { feeRateSatPerKb?: number },
   // headers via Chaintracks (public, no key) WITNESSED by WoC: each source
   // self-authenticates its answers via header PoW (NEKTAR_HEADER_POW=0 opts a
   // private non-PoW net out), and the two must agree before a root is
-  // served. NEKTAR_STRICT_HEADERS=1 fails closed when the witness can't
-  // answer; default degrades to the reachable source marked uncorroborated.
+  // served. Strict is the default — when the witness can't answer no root is
+  // served (a header outage is "no verdict — retry", never an anchor on one
+  // source); NEKTAR_STRICT_HEADERS=0 opts into the lone-source degrade.
   const requirePow = nektarEnvFlag('NEKTAR_HEADER_POW') !== false
+  const strictHeaders = nektarEnvFlag('NEKTAR_STRICT_HEADERS') !== false
+  if (!strictHeaders) log(`nektar ${net}: NEKTAR_STRICT_HEADERS=0 — proofs may anchor to a single uncorroborated header source\n`)
   const tracker = new WitnessedTracker(
     new ChaintracksTracker(
       mc,
@@ -229,7 +232,7 @@ export async function livePort(mc: MainnetConfig & { feeRateSatPerKb?: number },
     ),
     new IndexTracker(mc, { requirePow }),
     {
-      strict: nektarEnvFlag('NEKTAR_STRICT_HEADERS'),
+      strict: strictHeaders,
       onDisagree: (height, primaryHash, witnessHash) =>
         log(`nektar ${net}: header sources disagree at ${height} (primary ${primaryHash}, witness ${witnessHash}) — serving no root\n`)
     }

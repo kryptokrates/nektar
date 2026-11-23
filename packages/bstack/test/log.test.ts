@@ -10,6 +10,7 @@ import { mintCarrier, lockFields, unlocker } from '@lightwebinc/bcommon'
 import { EncodingLines, ProfileFull, TagAnchor, encodeAnchor, encodeBatch, fromHex, toHex } from '@lightwebinc/blogs-host/dist/index.js'
 import { fund, prove } from './helpers.js'
 import { minihost, FakeTracker } from '../src/testing.js'
+import { HeaderUnavailableError, isHeaderUnavailable } from '@nektar/chain'
 
 const STREAM = 'nektar_abcdefghij'
 const DER_B = { protocol: [1, 'blogs'] as [1, 'blogs'], keyID: 'batch' }
@@ -549,6 +550,38 @@ test('log heal: a host that missed seq 1 catches up when seq 2 appends', async (
     const read = await readLog({ hosts: [s.h2.url], stream: STREAM, producer: s.key.toPublicKey().toString(), tracker: s.tracker })
     assert.equal(read.head, 2, 'h2 holds both seqs after the heal')
     assert.deepEqual(read.gaps, [])
+  } finally {
+    await s.h1.close()
+    await s.h2.close()
+  }
+})
+
+// SPV-02: a header outage is "couldn't ask", not an empty seq — readLog must
+// reject with the outage error instead of reporting a false gap/withheld
+test('log: a header outage rejects the read — never a false gap', async () => {
+  const s = await rig()
+  try {
+    await appendLog({
+      key: s.key,
+      ledger: s.ledger,
+      journal: s.journal,
+      state: s.state,
+      hosts: s.hosts,
+      stream: STREAM,
+      lines: lines(1),
+      now: () => 1000,
+      quorum: 'all'
+    })
+    const pub = s.key.toPublicKey().toString()
+    const healthy = await readLog({ hosts: s.hosts, stream: STREAM, producer: pub, tracker: s.tracker })
+    assert.equal(healthy.head, 1)
+    const orig = s.tracker.isValidRootForHeight.bind(s.tracker)
+    s.tracker.isValidRootForHeight = () => Promise.reject(new HeaderUnavailableError(1, 'no-source'))
+    await assert.rejects(readLog({ hosts: s.hosts, stream: STREAM, producer: pub, tracker: s.tracker }), (e: unknown) => isHeaderUnavailable(e))
+    s.tracker.isValidRootForHeight = orig
+    const healed = await readLog({ hosts: s.hosts, stream: STREAM, producer: pub, tracker: s.tracker })
+    assert.equal(healed.head, 1)
+    assert.deepEqual(healed.gaps, [])
   } finally {
     await s.h1.close()
     await s.h2.close()

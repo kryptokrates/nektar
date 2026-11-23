@@ -3,7 +3,7 @@ import { signOffer, verifyOffer, verifyWant, deadAncestry, type SignedWant } fro
 import { publicSaleQuote, saleQuoteWire, verifyOfferSig } from '@nektar/identity'
 import { DisclosureSaleHost } from '@nektar/anchor'
 import { fromHex } from '@nektar/core'
-import { spendValid } from '@nektar/chain'
+import { spendValid, isHeaderUnavailable } from '@nektar/chain'
 import { decideOffer } from '../policy.js'
 import type { Operation } from '../store.js'
 import { IngressOps } from './ingress.js'
@@ -214,7 +214,10 @@ export abstract class SellerOps extends IngressOps {
         if (got.tx.id('hex') !== utxo.txid) return await refuse('attached transaction is not the claimed escrow')
         tx = got.tx
         spv = got.spv
-      } catch {
+      } catch (e) {
+        // a header outage is not a verdict — no decline is sent; the
+        // rethrow reaches dealEvent, which holds the inbox item pending
+        if (isHeaderUnavailable(e)) throw e
         return await refuse('attached escrow transaction is unreadable')
       }
     } else tx = await this.d.fetchTx(utxo.txid)

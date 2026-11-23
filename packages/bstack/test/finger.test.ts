@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey, ProtoWallet, Transaction, P2PKH, Utils } from '@bsv/sdk'
 import { sparse } from '@nektar/core'
+import { HeaderUnavailableError, isHeaderUnavailable } from '@nektar/chain'
 import { MemoryTreeLedger, mintTree } from '../src/tree.js'
 import { MemoryCarrierJournal } from '../src/journal.js'
 import {
@@ -643,6 +644,28 @@ test('finger: a stocked-out lane reports proven/anchored/waiting counts', async 
   try {
     await s.ledger.drop(s.tree.id('hex'))
     await assert.rejects(s.publish(body1()), /publishFinger: no funding slot \(finger: 0 proven/)
+  } finally {
+    await s.h1.close()
+    await s.h2.close()
+  }
+})
+
+// SPV-02: an unmined token's ancestry check can't answer during a header
+// outage — the resolution rejects with the outage error instead of resolving
+// to "no record"
+test('finger: a header outage rejects the resolution — never a miss', async () => {
+  const s = await rig({ noproof: true, provenFunding: true })
+  try {
+    const r = await s.publish(body1())
+    assert.equal(r.changed, true)
+    const pub = s.key.toPublicKey().toString()
+    assert.ok((await resolveFinger({ hosts: s.hosts, pub, tracker: s.tracker })) !== undefined, 'healthy read resolves')
+    const orig = s.tracker.isValidRootForHeight.bind(s.tracker)
+    s.tracker.isValidRootForHeight = () => Promise.reject(new HeaderUnavailableError(1, 'no-source'))
+    await assert.rejects(resolveFinger({ hosts: s.hosts, pub, tracker: s.tracker }), (e: unknown) => isHeaderUnavailable(e))
+    s.tracker.isValidRootForHeight = orig
+    const healed = await resolveFinger({ hosts: s.hosts, pub, tracker: s.tracker })
+    assert.ok(healed !== undefined && healed.tokenTxid === r.tokenTxid)
   } finally {
     await s.h1.close()
     await s.h2.close()

@@ -6,6 +6,7 @@
 // the instance's own headers — no indexer and no waiting for one to catch up.
 import { Transaction, MerklePath, Spend, LockingScript, type ChainTracker } from '@bsv/sdk'
 import { sparse } from '@nektar/core'
+import { isHeaderUnavailable } from './headers.js'
 
 export interface TxRow {
   txid: string
@@ -225,7 +226,11 @@ export class TxStore {
       if (tracker !== undefined) {
         try {
           spv = await tx.verify(tracker)
-        } catch {
+        } catch (e) {
+          // a header outage is not a verdict — reject so the caller's retry
+          // boundary keeps the item; anything else is "unverified", same as
+          // a negative answer
+          if (isHeaderUnavailable(e)) throw e
           spv = false
         }
       }

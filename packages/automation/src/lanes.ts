@@ -6,6 +6,7 @@ import { BoundedMap, BoundedSet, ioSignal } from '@nektar/core'
 import { WAITS } from './waits.js'
 import { EXEC_SVC, executor } from './rt/exec.js'
 import { requeueAckItems, trackFanout } from './fanout.js'
+import { isHeaderUnavailable } from '@nektar/chain'
 import type { MarketMessage } from './market.js'
 import type { FingerRec, Rt } from './rtctx.js'
 
@@ -58,8 +59,11 @@ export function openLanes(rt: Rt): void {
             : undefined
         rec = { hosts, office: r.body.office, stream: r.body.stream, ...(watch !== undefined ? { watch } : {}), ...(push !== undefined ? { push } : {}) }
       }
-    } catch {
-      /* no record (or no host serves one) — the configured set is the fallback */
+    } catch (e) {
+      /* no record (or no host serves one) — the configured set is the fallback.
+         A header outage is "couldn't ask": skip the negative-cache write so
+         the next pass re-queries instead of serving a minute-old miss */
+      if (isHeaderUnavailable(e)) return undefined
     }
     fingerCache.set(pub, { at: t, rec })
     // event-driven deferred acks: an envelope deferred on an unresolved
@@ -161,7 +165,12 @@ export function openLanes(rt: Rt): void {
     }
     // ls_nektar artifact (offer) — the same checkCarrier + payload/body/
     // locking-key verification readOffers runs, then the same ingestEvents
-    const chk = await lanes.mod.checkCarrier(beef, { tracker }).catch(() => undefined)
+    const chk = await lanes.mod.checkCarrier(beef, { tracker }).catch((e) => {
+      // a header outage is not "not for us" — /v1/lane answers it 500-retry,
+      // never the 422 refusal that would tell the pusher the carrier is bad
+      if (isHeaderUnavailable(e)) throw e
+      return undefined
+    })
     if (chk === undefined || !chk.ok) return false
     try {
       const p = lanes.mod.decodePayload(new Uint8Array(chk.payload))

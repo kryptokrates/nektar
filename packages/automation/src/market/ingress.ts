@@ -5,6 +5,7 @@ import { MarketBase } from './base.js'
 import { NONTERMINAL } from './types.js'
 import { WAITS } from '../waits.js'
 import { deadline, stable01 } from '@nektar/core'
+import { isHeaderUnavailable } from '@nektar/chain'
 import type { MarketMessage } from './types.js'
 import { executor, EXEC_SVC } from '../rt/exec.js'
 import { custodyResubmitPoke } from '../rt/emit.js'
@@ -128,6 +129,13 @@ export abstract class IngressOps extends MarketBase {
       }
       await this.d.store.completeInbox(i.source, i.messageId)
     } catch (e) {
+      // a header outage is "couldn't ask", not a failure — the item stays
+      // pending WITHOUT spending an attempt (same treatment the want gates
+      // above get): the next fan-out re-reads it once headers recover
+      if (isHeaderUnavailable(e)) {
+        this.d.log?.(`inbox ${i.source}:${i.messageId}: no corroborated header — item held pending, attempt not spent`)
+        return
+      }
       await this.d.store.failInbox(i.source, i.messageId, (e as Error).message)
     }
   }

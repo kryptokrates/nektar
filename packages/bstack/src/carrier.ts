@@ -12,6 +12,7 @@ import {
   type SigningWallet
 } from '@lightwebinc/bcommon'
 import { anchoredTree, DERIVATION, FUNDING_TAG, ORIGINATOR } from './tree.js'
+import { isHeaderUnavailable } from '@nektar/chain'
 
 // a carrier's funding parent must be proven — or one unconfirmed level deep
 // on anchored ancestry, the same §10.3 rule finger applies to tokens: every
@@ -88,6 +89,9 @@ export async function checkCarrier(beef: number[], o: { tracker: ChainTracker })
       unprovenFunding: parent.merklePath === undefined
     }
   } catch (e) {
+    // a header outage is "couldn't ask", not a parse/refusal — the caller's
+    // retry boundary keeps the item
+    if (isHeaderUnavailable(e)) throw e
     return { ok: false, reason: `parse:${(e as Error).message.slice(0, 80)}` }
   }
 }
@@ -114,6 +118,7 @@ export async function checkSweep(beef: number[], o: { tracker: ChainTracker; hel
     if (spends.length === 0) return { ok: false, reason: 'no-held-outpoint' }
     return { ok: true, spends }
   } catch (e) {
+    if (isHeaderUnavailable(e)) throw e
     return { ok: false, reason: `parse:${(e as Error).message.slice(0, 80)}` }
   }
 }

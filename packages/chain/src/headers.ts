@@ -129,13 +129,32 @@ interface WitMark {
   hash: string
 }
 
+/** no corroborated header could be established for a height — NOT a verdict.
+ *  "no source answered", "exactly one did (strict refusal)" and "the two
+ *  disagree" are all "couldn't ask": a caller must treat this as retry-
+ *  later, never as "the root is wrong" — a header outage must not strip a
+ *  proof, refuse a payment or dead an inbox item. */
+export class HeaderUnavailableError extends Error {
+  readonly code = 'HEADER_UNAVAILABLE'
+  constructor(
+    readonly height: number,
+    readonly why: 'no-source' | 'uncorroborated' | 'disagree'
+  ) {
+    super(`no corroborated header at height ${height} (${why}) — not a verdict, retry`)
+  }
+}
+export const isHeaderUnavailable = (e: unknown): e is HeaderUnavailableError =>
+  e instanceof HeaderUnavailableError || (typeof e === 'object' && e !== null && (e as { code?: unknown }).code === 'HEADER_UNAVAILABLE')
+
 /** two independent header sources, required to agree before a root is served.
  *  PoW per header proves the answer is real work, NOT that it is on the
  *  most-work chain — the witness is what rules out a sourced-but-minority
  *  (or simply different) fork. Fail closed on disagreement: a height the two
- *  sources split on serves no root until they agree. Non-strict mode degrades
- *  to the reachable source and marks the height uncorroborated — re-asked at
- *  most once per `retryMs` until the witness lands an agreement. */
+ *  sources split on serves no root until they agree. STRICT IS THE DEFAULT:
+ *  when one source cannot answer nothing is served, and isValidRootForHeight
+ *  distinguishes the miss from a verdict (HeaderUnavailableError — retry).
+ *  `strict: false` opts into the single-source degrade: the reachable source
+ *  is served marked uncorroborated, re-asked at most once per `retryMs`. */
 export class WitnessedTracker implements ChainTracker {
   // one entry per distinct height queried — an unbounded Map leaks on a
   // weeks-uptime process scanning many heights (the BoundedMap adoption
@@ -143,6 +162,9 @@ export class WitnessedTracker implements ChainTracker {
   // round-trip returns, never a wrong verdict.
   private marks = new BoundedMap<number, WitMark>(8192)
   private asks = new BoundedMap<number, { at: number; p: Promise<BlockHeader | undefined> }>(8192)
+  // why the last headerAtHeight read for a height declined with neither a
+  // verdict nor a mark — isValidRootForHeight reads it to name the outage
+  private lastMiss = new BoundedMap<number, 'no-source' | 'uncorroborated'>(8192)
 
   constructor(
     private primary: ChainTracker,
@@ -216,19 +238,37 @@ export class WitnessedTracker implements ChainTracker {
       return undefined
     }
     if (p !== undefined) {
-      if (this.opts.strict === true) return undefined
+      if (this.opts.strict !== false) {
+        this.lastMiss.set(height, 'uncorroborated')
+        return undefined
+      }
       this.marks.set(height, { at: Date.now(), state: 'uncorroborated', hash: p.hash })
       return p
     }
-    if (w !== undefined && this.opts.strict !== true) {
+    if (w !== undefined) {
+      if (this.opts.strict !== false) {
+        this.lastMiss.set(height, 'uncorroborated')
+        return undefined
+      }
       this.marks.set(height, { at: Date.now(), state: 'uncorroborated', hash: w.hash })
       return w
     }
+    this.lastMiss.set(height, 'no-source')
     return undefined
   }
 
+  /** a declined read is "couldn't establish", not "the root is wrong" — only
+   *  a root for a block that cannot exist (above the known tip) is a real
+   *  negative verdict. Every other miss rejects with HeaderUnavailableError
+   *  so the caller's retry boundary keeps the item. */
   async isValidRootForHeight(root: string, height: number): Promise<boolean> {
-    return (await this.headerAtHeight(height))?.merkleRoot === root
+    const h = await this.headerAtHeight(height)
+    if (h !== undefined) return h.merkleRoot === root
+    const tip = await this.currentHeight().catch(() => undefined)
+    if (tip !== undefined && height > tip) return false
+    const m = this.marks.get(height)
+    const why = m?.state === 'mismatch' && Date.now() - m.at <= this.retryMs ? 'disagree' : (this.lastMiss.get(height) ?? 'no-source')
+    throw new HeaderUnavailableError(height, why)
   }
 
   async currentHeight(): Promise<number> {

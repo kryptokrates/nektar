@@ -1,7 +1,7 @@
 import { P2PKH, PrivateKey, PublicKey, type Transaction } from '@bsv/sdk'
 import { signWant } from '@nektar/bstack'
 import { CheckpointBond } from '@nektar/anchor'
-import { TxStore, type Ingested } from '@nektar/chain'
+import { TxStore, isHeaderUnavailable, type Ingested } from '@nektar/chain'
 import { sparse, stable01 } from '@nektar/core'
 import type { AutomationStore, Operation } from '../store.js'
 import { WalletCoordinator } from '../wallet.js'
@@ -315,7 +315,10 @@ export abstract class MarketBase {
             tx = got.tx
             this.d.rememberTx?.(tx)
           }
-        } catch {
+        } catch (e) {
+          // a header outage is not "unreadable" — it reaches the retry
+          // boundary instead of downgrading to the unverified chain view
+          if (isHeaderUnavailable(e)) throw e
           /* unreadable — fall through to the chain view */
         }
       }

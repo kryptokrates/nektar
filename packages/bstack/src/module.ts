@@ -1,4 +1,5 @@
 import { nektarEnv, sparse } from '@nektar/core'
+import { isHeaderUnavailable } from '@nektar/chain'
 import { Transaction, Script, type ChainTracker } from '@bsv/sdk'
 import {
   decodeStrictPushDrop,
@@ -244,7 +245,11 @@ function makeLookup(
           if (exp === undefined || exp <= now()) continue
           idx.record(o.txid, beef ?? [], payload, fundingOutpoint, fundingDeadline)
           restored++
-        } catch {
+        } catch (e) {
+          // a header outage is not "a bad row" — abort the restore so the
+          // caller's retry boundary re-runs it, rather than serving a
+          // partially-indexed host as healthy
+          if (isHeaderUnavailable(e)) throw e
           /* one bad row must not abort the restore of the rest */
         }
       }

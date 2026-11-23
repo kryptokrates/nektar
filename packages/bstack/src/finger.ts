@@ -7,6 +7,7 @@
 // and log batches.
 import { PublicKey, Transaction, P2PKH, Hash, Utils, type ChainTracker, type LockingScript } from '@bsv/sdk'
 import { toSigner, unlockP2PKH, signerAddress, egressAllowed, dbg, sparse, type SignerLike } from '@nektar/core'
+import { isHeaderUnavailable } from '@nektar/chain'
 import {
   mintCarrier,
   fundingLock,
@@ -928,7 +929,10 @@ export async function resolveFinger(p: {
       let ok = false
       try {
         ok = await token.verify(p.tracker)
-      } catch {
+      } catch (e) {
+        // a header outage is "couldn't ask", not an invalid token — the
+        // whole resolution rejects instead of reporting a miss
+        if (isHeaderUnavailable(e)) throw e
         ok = false
       }
       if (!ok) continue

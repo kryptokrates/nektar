@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, Script, UnlockingScript, MerklePath } from '@bsv/sdk'
 import { TxStore } from '../src/txstore.js'
+import { HeaderUnavailableError } from '../src/headers.js'
 
 const key = PrivateKey.fromRandom()
 const addr = key.toPublicKey().toAddress()
@@ -80,6 +81,31 @@ const pathOn = (tx: Transaction, height: number): MerklePath =>
   ])
 const yesTracker = { isValidRootForHeight: () => Promise.resolve(true), currentHeight: () => Promise.resolve(0) }
 const noTracker = { isValidRootForHeight: () => Promise.resolve(false), currentHeight: () => Promise.resolve(0) }
+
+// SPV-02: a header outage is not a verdict — read must reject with
+// HeaderUnavailableError so the item stays for a later pass; a path is
+// stripped only on a real "not valid" answer.
+test('TxStore.read: a header outage rejects — the carried path is evidence, not a negative', async () => {
+  const parent = coinbase(0)
+  const child = new Transaction()
+  child.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  child.addOutput({ satoshis: 80_000, lockingScript: new P2PKH().lock(addr) })
+  await child.sign()
+  child.merklePath = pathOn(child, 9) // the subject carries its own BUMP (atomic BEEF)
+  const beef = Buffer.from(child.toAtomicBEEF()).toString('hex')
+  const downTracker = {
+    isValidRootForHeight: (_root: string, height: number) => Promise.reject(new HeaderUnavailableError(height, 'no-source')),
+    currentHeight: () => Promise.resolve(0)
+  }
+  await assert.rejects(
+    () => TxStore.read(beef, downTracker),
+    (e: unknown) => e instanceof HeaderUnavailableError && e.why === 'no-source',
+    'the outage must reach a retry boundary — never resolve with the proof stripped'
+  )
+  // control: a tracker that actually answers "not valid" still strips + resolves
+  const { tx } = await TxStore.read(beef, noTracker)
+  assert.equal(tx.merklePath, undefined)
+})
 
 test('TxStore.read: a forged merkle path is stripped at ingest, never adopted', async () => {
   const parent = coinbase(0)

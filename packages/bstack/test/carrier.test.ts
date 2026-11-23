@@ -7,6 +7,7 @@ import { DERIVATION, ORIGINATOR } from '../src/tree.js'
 
 import { anchoredTree, provenTree } from './helpers.js'
 import { FakeTracker } from '../src/testing.js'
+import { HeaderUnavailableError, isHeaderUnavailable } from '@nektar/chain'
 
 const pay = new TextEncoder().encode('hello carrier')
 
@@ -38,6 +39,26 @@ test('carrier: tree proof failing the tracker fails', async () => {
   const c = await checkCarrier(beef, { tracker: bad })
   assert.equal(c.ok, false)
   assert.equal(c.reason, 'spv')
+})
+
+// SPV-02: a header outage is not 'parse:'/spv — checkCarrier must reject so
+// the caller's retry boundary keeps the item (a parse:false verdict would
+// read as "the carrier is bad", which a witness outage is not).
+test('carrier: a header outage rejects, a real "not valid" still answers spv', async () => {
+  const key = PrivateKey.fromRandom()
+  const tree = await provenTree(key)
+  const { beef } = await buildCarrier({ key, payload: pay, slot: { tree, vout: 0 } })
+  const down = new FakeTracker()
+  down.isValidRootForHeight = () => Promise.reject(new HeaderUnavailableError(1, 'uncorroborated'))
+  await assert.rejects(
+    () => checkCarrier(beef, { tracker: down }),
+    (e) => isHeaderUnavailable(e) && e.why === 'uncorroborated',
+    'a witness outage must not flatten into a parse/spv refusal'
+  )
+  const bad = new FakeTracker()
+  bad.ok = false
+  const c = await checkCarrier(beef, { tracker: bad })
+  assert.deepEqual(c, { ok: false, reason: 'spv' })
 })
 
 test('carrier: unproven tree cannot build (beef would not be atomic-verifiable)', async () => {

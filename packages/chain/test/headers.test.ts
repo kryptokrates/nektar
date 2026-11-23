@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Hash } from '@bsv/sdk'
-import { serializeHeader, headerPowValid, linksTo, WitnessedTracker } from '../src/headers.js'
+import { serializeHeader, headerPowValid, linksTo, WitnessedTracker, HeaderUnavailableError, isHeaderUnavailable } from '../src/headers.js'
 import { ChaintracksTracker, IndexTracker } from '../src/mainnet.js'
 import type { BlockHeader, ChainTracker } from '../src/interfaces.js'
 
@@ -62,7 +62,9 @@ const stubFetch = (routes: Record<string, { status?: number; body?: any; raw?: s
   return f
 }
 const stubTracker = (h?: BlockHeader, mode: 'ok' | 'throw' | 'slow' = 'ok'): ChainTracker => ({
-  currentHeight: () => Promise.resolve(999),
+  // the stub tip must sit ABOVE the heights under test — below it a declined
+  // header read is a forged-future verdict (false), not an outage
+  currentHeight: () => Promise.resolve(900_000),
   tipHeight: () => Promise.resolve(999),
   headerAtHeight: async () => {
     if (mode === 'slow') await new Promise((r) => setTimeout(r, 300))
@@ -114,23 +116,92 @@ test('WitnessedTracker: agree corroborates, disagree fails closed, silence degra
   assert.equal(await wd.headerAtHeight(800000), undefined, 'a split serves no root')
   assert.equal(disagreement, '800000:true:true', 'onDisagree reports both hashes')
   assert.equal(wd.corroborated(800000), false)
-  // witness throws → non-strict serves primary uncorroborated; strict fails closed
-  const wn = new WitnessedTracker(stubTracker(h), stubTracker(undefined, 'throw'))
+  // witness throws → strict:false (the now-OPT-IN degrade) serves primary
+  // uncorroborated; default fails closed
+  const wn = new WitnessedTracker(stubTracker(h), stubTracker(undefined, 'throw'), { strict: false })
   assert.equal((await wn.headerAtHeight(800000))?.hash, h.hash)
   assert.equal(wn.corroborated(800000), false)
-  const ws = new WitnessedTracker(stubTracker(h), stubTracker(undefined, 'throw'), { strict: true })
-  assert.equal(await ws.headerAtHeight(800000), undefined, 'strict refuses without the witness')
-  // slow witness → uncorroborated now, corroborated once its answer lands
-  const slow = new WitnessedTracker(stubTracker(h), stubTracker(h, 'slow'), { witnessTimeoutMs: 50 })
+  const ws = new WitnessedTracker(stubTracker(h), stubTracker(undefined, 'throw'))
+  assert.equal(await ws.headerAtHeight(800000), undefined, 'strict-by-default refuses without the witness')
+  // slow witness → uncorroborated now (opt-in), corroborated once its answer lands
+  const slow = new WitnessedTracker(stubTracker(h), stubTracker(h, 'slow'), { strict: false, witnessTimeoutMs: 50 })
   assert.equal((await slow.headerAtHeight(800000))?.hash, h.hash)
   assert.equal(slow.corroborated(800000), false, 'a timed-out witness leaves the height uncorroborated')
   await new Promise((r) => setTimeout(r, 400))
   assert.equal((await slow.headerAtHeight(800000))?.hash, h.hash)
   assert.equal(slow.corroborated(800000), true, 'the landed witness answer corroborates a later read')
-  // primary down → non-strict falls back to the witness
-  const wp = new WitnessedTracker(stubTracker(undefined, 'throw'), stubTracker(h))
+  // primary down → strict:false falls back to the witness
+  const wp = new WitnessedTracker(stubTracker(undefined, 'throw'), stubTracker(h), { strict: false })
   assert.equal((await wp.headerAtHeight(800000))?.hash, h.hash)
   assert.equal(wp.corroborated(800000), false)
+})
+
+// SPV-02: strict two-source verification is the default; a header outage is
+// never a verdict — isValidRootForHeight rejects with HeaderUnavailableError
+// so a retry boundary keeps the item instead of recording a negative.
+test('WitnessedTracker: strict is the default — a lone source refuses, the miss is not a verdict', async () => {
+  const h = fakeHeader(800000, 'aa'.repeat(32))
+  const wt = new WitnessedTracker(stubTracker(h), stubTracker(undefined, 'throw'))
+  assert.equal(await wt.headerAtHeight(800000), undefined, 'no opts → strict: a lone source is never served')
+  const e = await wt.isValidRootForHeight(h.merkleRoot, 800000).then(
+    () => undefined,
+    (x) => x
+  )
+  assert.ok(isHeaderUnavailable(e), 'the outage must reject, not answer false')
+  assert.equal((e as HeaderUnavailableError).why, 'uncorroborated', 'exactly one source answered — strict refusal')
+})
+
+test('WitnessedTracker: a corroborated height still answers true/false', async () => {
+  const h = fakeHeader(800000, 'aa'.repeat(32))
+  const wt = new WitnessedTracker(stubTracker(h), stubTracker(h))
+  assert.equal(await wt.isValidRootForHeight(h.merkleRoot, 800000), true)
+  assert.equal(await wt.isValidRootForHeight('0'.repeat(64), 800000), false, 'a wrong root against a served header is a verdict')
+})
+
+test('WitnessedTracker: a surviving disagreement rejects isValidRootForHeight, not a false verdict', async () => {
+  const a = fakeHeader(800000, 'aa'.repeat(32))
+  const b = fakeHeader(800000, 'bb'.repeat(32))
+  let disagreements = 0
+  const wt = new WitnessedTracker(
+    cacheTracker(() => a),
+    cacheTracker(() => b),
+    { onDisagree: () => disagreements++ }
+  )
+  const e = await wt.isValidRootForHeight(a.merkleRoot, 800000).then(
+    () => undefined,
+    (x) => x
+  )
+  assert.ok(isHeaderUnavailable(e))
+  assert.equal((e as HeaderUnavailableError).why, 'disagree')
+  assert.equal(disagreements, 1, 'onDisagree fired through the refresh path')
+})
+
+test('WitnessedTracker: no source answers — the outage rejects; a forged future height stays a verdict', async () => {
+  const silent: ChainTracker = {
+    currentHeight: () => Promise.resolve(900_000), // tip known, ≥ the asked height
+    headerAtHeight: () => Promise.resolve(undefined),
+    isValidRootForHeight: () => Promise.resolve(false)
+  }
+  const wt = new WitnessedTracker(silent, silent)
+  const e = await wt.isValidRootForHeight('0'.repeat(64), 800000).then(
+    () => undefined,
+    (x) => x
+  )
+  assert.ok(isHeaderUnavailable(e))
+  assert.equal((e as HeaderUnavailableError).why, 'no-source', 'neither source answered')
+  // a root for a block past the known tip is not an outage — it is a forgery
+  const tipLow: ChainTracker = { ...silent, currentHeight: () => Promise.resolve(5) }
+  const wf = new WitnessedTracker(tipLow, tipLow)
+  assert.equal(await wf.isValidRootForHeight('0'.repeat(64), 800000), false, 'a far-future height cannot be an eternal retry')
+})
+
+test('WitnessedTracker: strict:false opts into the single-source degrade', async () => {
+  const h = fakeHeader(800000, 'aa'.repeat(32))
+  const wt = new WitnessedTracker(stubTracker(h), stubTracker(undefined, 'throw'), { strict: false })
+  assert.equal((await wt.headerAtHeight(800000))?.hash, h.hash)
+  assert.equal(wt.corroborated(800000), false)
+  assert.equal(await wt.isValidRootForHeight(h.merkleRoot, 800000), true, 'the opted-out tracker still answers from its lone source')
+  assert.equal(await wt.isValidRootForHeight('0'.repeat(64), 800000), false)
 })
 
 test('reorg: a fresh header that does not link to the cached parent fires onReorg once', async () => {
@@ -174,7 +245,7 @@ test('reorg: a fresh header that does not link to the cached parent fires onReor
 const cacheTracker = (upstream: () => BlockHeader | undefined): ChainTracker => {
   const cache = new Map<number, BlockHeader>()
   return {
-    currentHeight: () => Promise.resolve(999),
+    currentHeight: () => Promise.resolve(900_000),
     headerAtHeight: (h) => {
       const hit = cache.get(h)
       if (hit !== undefined) return Promise.resolve(hit)

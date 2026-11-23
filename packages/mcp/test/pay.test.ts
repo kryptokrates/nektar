@@ -8,7 +8,8 @@ import { utf8 } from '@nektar/core'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
-import { _testReset, verifyQuoteSig } from '../src/pay.js'
+import { _testReset, verifyQuoteSig, settlePayment, paymentRequired } from '../src/pay.js'
+import { HeaderUnavailableError, isHeaderUnavailable } from '@nektar/chain'
 import { openRuntime } from '../src/runtime.js'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -237,4 +238,71 @@ void test('payments: invoices carry a verifiable signed quote; tampering detecte
   const denied = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'x', cites: [{ shard: 's', seq: 0 }] }] })
   const extra = denied.accepts[0].extra
   assert.equal(verifyQuoteSig({ ...extra, amount: Number(denied.accepts[0].amount), expires: extra.expiresMs }), true, '402-carried quote verifies')
+})
+
+// SPV-02: a header outage inside ancestry verification is "no verdict" — the
+// payer sees the retryable tool error (the thrown HeaderUnavailableError
+// reaches the callTool isError surface with its 'not a verdict, retry'
+// message), the invoice and the payment are never consumed, and the SAME
+// payment settles once headers answer.
+void test('payments: a header outage during ancestry verification is a retry, not a consumption', async (t) => {
+  _testReset()
+  process.env.NEKTAR_PAYMENTS = '1'
+  process.env.NEKTAR_OPERATOR_WIF = OP_KEY.toWif([0xef])
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-pay-'))
+  process.env.NEKTAR_DATA_DIR = dir
+  t.after(() => {
+    delete process.env.NEKTAR_PAYMENTS
+    delete process.env.NEKTAR_OPERATOR_WIF
+    delete process.env.NEKTAR_DATA_DIR
+    _testReset()
+  })
+
+  const w = await testWorld(t, 10)
+  if (w === undefined) return
+  const { chain, funder } = w
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
+  const payer = await testFunder(6)
+  await chain.mine(1) // land the payer's split tx so its parent carries a real BUMP
+  const { required } = await paymentRequired(mem, 'anchor', 100)
+  const accept = (required as { accepts: Array<{ amount: string; extra: { invoiceId: string; lockingScriptHex: string; opReturn: string } }> }).accepts[0]
+  const inv = accept.extra
+  const fund = await payer.take(Number(accept.amount) + 2000)
+  const mp = await chain.merklePathOf(fund.tx.id('hex'))
+  assert.ok(mp !== undefined, 'the mined funding parent must carry a proof — verify() is what the outage hits')
+  fund.tx.merklePath = mp
+  const tx = new Transaction()
+  tx.addInput({ sourceTransaction: fund.tx, sourceOutputIndex: fund.vout, unlockingScriptTemplate: new P2PKH().unlock(payer.keyPair) })
+  tx.addOutput({ lockingScript: LockingScript.fromHex(inv.lockingScriptHex), satoshis: Number(accept.amount) })
+  tx.addOutput({
+    lockingScript: new Script()
+      .writeOpCode(0x00)
+      .writeOpCode(0x6a)
+      .writeBin([...utf8(inv.opReturn)]),
+    satoshis: 0
+  })
+  tx.addOutput({ lockingScript: new P2PKH().lock(payer.keyPair.toPublicKey().toAddress([0x6f])), change: true })
+  await tx.fee()
+  await tx.sign()
+  // atomic BEEF keeps the carried parent's BUMP attached through the parse —
+  // the plain-beef path wires parents from raw bytes and drops it
+  const beefHex = Buffer.from(tx.toAtomicBEEF()).toString('hex')
+  // the outage: every root check throws — ancestry verification can never
+  // reach a verdict, so nothing negative may be recorded
+  const realTracker = mem.sdkTracker.bind(mem)
+  const down = {
+    isValidRootForHeight: (_r: string, h: number) => Promise.reject(new HeaderUnavailableError(h, 'uncorroborated')),
+    currentHeight: () => Promise.resolve(0)
+  }
+  mem.sdkTracker = () => down as ReturnType<NektarMemory['sdkTracker']>
+  await assert.rejects(
+    () => settlePayment(mem, 'anchor', { invoiceId: inv.invoiceId, transaction: beefHex }),
+    (e: unknown) => isHeaderUnavailable(e) && e.why === 'uncorroborated',
+    'the outage surfaces as a retryable error — never a consumed or refused payment'
+  )
+  // heal — the SAME invoice and the SAME payment settle: nothing was spent,
+  // refused, or consumed on the failed pass
+  mem.sdkTracker = realTracker
+  const res = await settlePayment(mem, 'anchor', { invoiceId: inv.invoiceId, transaction: beefHex })
+  assert.equal(res.txid, tx.id('hex'), 'the payment settles once headers answer again')
 })

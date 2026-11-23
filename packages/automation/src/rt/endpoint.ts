@@ -182,6 +182,20 @@ const DEPLOYMENT_PAUSE = /h2 pool|connection refused|network is unreachable|conn
  *  service segment is always first. */
 const targetService = (t: string): string => t.split('/')[0].split('.')[0]
 
+/** restart-gap wedge tracking — a paused invocation with journal_size > 1
+ *  and NO last_failure is the mid-Run kill class: the process died inside a
+ *  journaled leg and restate's resume accepts (200) yet never re-dispatches
+ *  (observed live: PATCH resume → running_at frozen, status stays paused).
+ *  A journaled DOMAIN failure always records last_failure — those keep the
+ *  breaker. So: resume once, and if the leg is still paused on the next
+ *  pass, DELETE it — invocations are scheduling, the durable intent
+ *  (wallet_tx state, outbox rows) re-drives the work via resubmitPending /
+ *  advance pokes. Process-scoped map is enough: the id is only marked while
+ *  it stays paused; a cleared or re-paused-after-boot leg resumes once more
+ *  before its kill — worst case one extra window, never an instant kill. */
+const resumeMarks = new Map<string, number>()
+const RESUME_MARK_CAP = 256
+
 export const healPausedInvocations = async (
   admin: string,
   uri: string,
@@ -204,15 +218,18 @@ export const healPausedInvocations = async (
     const j = (await r.json()) as {
       rows?: Array<{ id?: string; target?: string; last_failure?: string; journal_size?: number | string }>
     }
-    const rows = (j.rows ?? [])
-      .filter(
-        (x) =>
-          x.id &&
-          (ours === undefined || (x.target !== undefined && ours.has(targetService(x.target)))) &&
-          (Number(x.journal_size ?? 0) <= 1 || DEPLOYMENT_PAUSE.test(x.last_failure ?? ''))
-      )
-      .slice(0, cap)
-    if (rows.length === 0) return 0
+    const ours_ = (x: { target?: string }): boolean => ours === undefined || (x.target !== undefined && ours.has(targetService(x.target)))
+    const paused = (j.rows ?? []).filter((x) => x.id && ours_(x))
+    // two distinct wounds with two distinct cures:
+    //  - resumable: never ran (js<=1) or a wire/deployment-shaped failure
+    //  - restartGap: journaled (js>1), NO failure recorded — resume no-ops
+    //    on this class (the dead Run entry can never re-dispatch), so the
+    //    second sighting kills it and the durable intent re-drives the work
+    const resumable = paused.filter((x) => Number(x.journal_size ?? 0) <= 1 || DEPLOYMENT_PAUSE.test(x.last_failure ?? '')).slice(0, cap)
+    const restartGap = paused.filter((x) => Number(x.journal_size ?? 0) > 1 && !(x.last_failure ?? '').trim()).slice(0, cap)
+    if (resumeMarks.size > RESUME_MARK_CAP) resumeMarks.clear()
+    for (const id of resumeMarks.keys()) if (!restartGap.some((x) => x.id === id)) resumeMarks.delete(id)
+    if (resumable.length === 0 && restartGap.length === 0) return 0
     // our deployment id is the fallback rebind — a paused leg whose pinned
     // deployment was deleted can't plain-resume ('deployment id not pinned')
     let depId: string | undefined
@@ -224,7 +241,7 @@ export const healPausedInvocations = async (
       depId = [...list].reverse().find((d) => (d.uri ?? '').replace(/\/+$/, '') === want)?.id
     }
     let healed = 0
-    for (const x of rows) {
+    for (const x of resumable) {
       const id = encodeURIComponent(x.id as string)
       let ok = false
       try {
@@ -248,7 +265,32 @@ export const healPausedInvocations = async (
       else log(`rt: paused invocation ${x.id} (${x.target}) did not resume — inspect manually`)
     }
     if (healed > 0) log(`rt: resumed ${healed} transport-paused invocation(s) — restart-gap wedge cleared`)
-    return healed
+    let killed = 0
+    for (const x of restartGap) {
+      const id = encodeURIComponent(x.id as string)
+      if (!resumeMarks.has(x.id as string)) {
+        // first sighting — give resume its chance; if it re-pauses the
+        // mark carries to the next pass and the leg is killed below
+        try {
+          await fetch(`${a}/invocations/${id}/resume`, { method: 'PATCH', signal: AbortSignal.timeout(ioMs) })
+        } catch {
+          /* mark anyway — a dead admin kills on sighting two as well */
+        }
+        resumeMarks.set(x.id as string, Date.now())
+        continue
+      }
+      try {
+        const kr = await fetch(`${a}/invocations/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(ioMs) })
+        if (kr.ok || kr.status === 404) {
+          killed++
+          resumeMarks.delete(x.id as string)
+          log(`rt: killed restart-gap invocation ${x.id} (${x.target}) — resume cannot re-dispatch a dead Run; the durable row re-drives it`)
+        }
+      } catch {
+        /* next pass tries again */
+      }
+    }
+    return healed + killed
   } catch {
     return 0
   }

@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { createServer } from 'node:http'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { nektarEnv } from '@nektar/core'
 import { RestateExecutor } from '../src/rt/exec.js'
 import { legObject } from '../src/rt/services.js'
-import { openEndpoint, type RtEndpoint } from '../src/rt/endpoint.js'
+import { healPausedInvocations, openEndpoint, type RtEndpoint } from '../src/rt/endpoint.js'
 
 // rt-live — the durability drills the Dispatcher can't model, on a REAL
 // restate server: journal replay across endpoint loss, ingress idempotency,
@@ -234,5 +235,68 @@ void test('live: server restart — the armed delayed send survives the durable 
     }
   } finally {
     await run('docker', ['rm', '-f', name]).catch(() => undefined)
+  }
+})
+
+void test('heal: restart-gap invocation (journaled, no failure) resumes once, then is killed', async () => {
+  // stub admin plane — one paused leg per class. The restart-gap leg
+  // (journal_size 2, NO last_failure) resumes once and is killed on the
+  // second sighting; a journaled leg WITH a recorded domain failure keeps
+  // the breaker; a never-dispatched leg just resumes.
+  const resumed: string[] = []
+  const deleted: string[] = []
+  const rows = [
+    { id: 'inv_gap', target: 'nektar-custody/owner:k1/submit', journal_size: 2, last_failure: '' },
+    { id: 'inv_domain', target: 'nektar-custody/owner:k2/submit', journal_size: 5, last_failure: 'ledger conflict: already committed' },
+    { id: 'inv_fresh', target: 'nektar-tx/tx:t1/resubmit', journal_size: 1, last_failure: '' }
+  ]
+  const srv = createServer((req, res) => {
+    req.resume()
+    req.on('end', () => {
+      if (req.method === 'POST' && req.url === '/query') {
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ rows }))
+        return
+      }
+      if (req.method === 'GET' && req.url === '/deployments') {
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ deployments: [] }))
+        return
+      }
+      const m = /^\/invocations\/([^/]+)\/resume/.exec(req.url ?? '')
+      if (req.method === 'PATCH' && m) {
+        resumed.push(decodeURIComponent(m[1]))
+        res.statusCode = 200
+        res.end('{}')
+        return
+      }
+      const d = /^\/invocations\/([^/?]+)/.exec(req.url ?? '')
+      if (req.method === 'DELETE' && d) {
+        deleted.push(decodeURIComponent(d[1]))
+        res.statusCode = 202
+        res.end('{}')
+        return
+      }
+      res.statusCode = 404
+      res.end('{}')
+    })
+  })
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve))
+  const addr = srv.address()
+  const admin = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    // pass 1 — the gap leg gets its resume chance and a mark; the domain
+    // failure keeps the breaker; the fresh leg resumes
+    await healPausedInvocations(admin, 'http://127.0.0.1:9081/', () => {})
+    assert.deepEqual(resumed.sort(), ['inv_fresh', 'inv_gap'].sort())
+    assert.equal(deleted.length, 0)
+    // pass 2 — still paused → the marked gap leg is killed so the durable
+    // intent re-drives it; the domain failure still never resumes
+    await healPausedInvocations(admin, 'http://127.0.0.1:9081/', () => {})
+    assert.deepEqual(deleted, ['inv_gap'])
+    assert.ok(!resumed.includes('inv_domain'), 'a journaled domain failure keeps the breaker')
+    assert.ok(!deleted.includes('inv_domain'), 'a domain failure is never killed')
+  } finally {
+    srv.close()
   }
 })

@@ -231,6 +231,20 @@ output selects the rail, never a trust assumption. Lapsed delivery leaves
 the operation `disputed` (the payment is final), so keep the ceiling to
 amounts worth losing.
 
+**Zero-conf delivery** (`NEKTAR_ZEROCONF_MAX_SATS`, default 1,000;
+`NEKTAR_ZEROCONF_MAX_ANCESTORS`, default 2): a verified payment proves
+where the money came from, not that it will confirm. At or under the cap —
+and with no more unproven ancestors behind it than the bound — the seller
+delivers at zero-conf on both rails, exactly as it always has. Above either
+bound the sale parks in `payment_pending`: nothing ships until the
+payment's own merkle proof arrives (a broadcaster status is never enough).
+A first-party dead verdict or — on the escrow rail — the refund deadline
+returns the sale to `quoted` with a decline to the buyer; the direct rail
+never lapses on height because the payment is already final. Set
+`NEKTAR_ZEROCONF_MAX_SATS=0` to wait for proof on every sale. The buyer
+sees the same deal shape it always did — a seller that never delivers can
+still be refunded against at `refundAfter`.
+
 Where the human is: the policy (once); anything the policy does not cover
 (price/fee/locked-capital above limits, domain outside policy, unresolved
 payment state) pauses that one operation and waits in `approvals`. Revoking a

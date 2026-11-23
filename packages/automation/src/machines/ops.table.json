@@ -16,6 +16,7 @@
     "disclosure_verified",
     "preparing",
     "quoted",
+    "payment_pending",
     "completing",
     "completion_submitted",
     "watching",
@@ -66,6 +67,7 @@
     "uncertain",
     "preparing",
     "quoted",
+    "payment_pending",
     "completing",
     "completion_submitted",
     "watching",
@@ -74,7 +76,8 @@
   "notes": {
     "parked": "money settled, awaiting external actor (markUsefulness) — no bound, declared class F4",
     "revival edges": "funding_failed→refund_pending on late escrow-verdict=mined; refunded→uncertain on refund-tx rejection — both proof-gated",
-    "tick.error": "label write ONLY — must not refresh the stuck-state clock (F1); modeled as self-transition, effector writes last_error column"
+    "tick.error": "label write ONLY — must not refresh the stuck-state clock (F1); modeled as self-transition, effector writes last_error column",
+    "payment_pending": "seller holds delivery — the payment verified but is unproven and above the zero-conf policy (maxZeroconfSats / maxUnconfirmedAncestors); only the payment's own proof releases it"
   },
   "transitions": [
     { "state": "published", "event": "want.signed", "intents": ["publish-want"], "target": "collecting" },
@@ -130,7 +133,18 @@
       "target": "uncertain"
     },
     {
-      "state": ["selected", "funding", "funding_deferred", "refund_pending", "refunding", "completing", "completion_submitted", "watching", "seizing"],
+      "state": [
+        "selected",
+        "funding",
+        "funding_deferred",
+        "refund_pending",
+        "refunding",
+        "payment_pending",
+        "completing",
+        "completion_submitted",
+        "watching",
+        "seizing"
+      ],
       "event": "needs.human",
       "intents": ["request-approval"],
       "target": "escalated"
@@ -157,6 +171,7 @@
     { "state": "preparing", "event": "offer.signed", "intents": [], "target": "quoted" },
     { "state": "preparing", "event": "prep.failed", "intents": [], "target": "preparation_failed" },
     { "state": "preparing", "event": "stuck.timeout", "guard": "no-escrow", "intents": [], "target": "preparation_failed" },
+    { "state": "quoted", "event": "payment.pending", "guard": "spv-verify", "intents": [], "target": "payment_pending" },
     { "state": "quoted", "event": "escrow.verified", "guard": "spv-verify", "intents": [], "target": "completing" },
     { "state": "quoted", "event": "payment.verified", "guard": "spv-verify", "intents": ["adopt-payment"], "target": "completing" },
     { "state": "quoted", "event": "offer.declined", "intents": [], "target": "declined" },
@@ -164,6 +179,10 @@
     { "state": "quoted", "event": "quote.expired", "intents": [], "target": "expired" },
     { "state": "quoted", "event": "restored", "intents": [], "target": "self" },
     { "state": "quoted", "event": "stuck.timeout", "guard": "maxAgeMs", "intents": ["abort"], "target": "canceled" },
+    { "state": "payment_pending", "event": "payment.proven", "guard": "proof", "intents": [], "target": "completing" },
+    { "state": "payment_pending", "event": "payment.died", "guard": "verdict=dead", "intents": [], "target": "quoted" },
+    { "state": "payment_pending", "event": "payment.lapsed", "intents": [], "target": "quoted" },
+    { "state": "payment_pending", "event": "stuck.timeout", "guard": "maxAgeMs", "intents": ["escalate-human"], "target": "escalated" },
     { "state": "completing", "event": "disclosure.submitted", "intents": [], "target": "completion_submitted" },
     { "state": "completing", "event": "direct.delivery", "intents": ["deliver"], "target": "completion_submitted" },
     { "state": "completing", "event": "escrow.broadcast_refused", "intents": [], "target": "quoted" },

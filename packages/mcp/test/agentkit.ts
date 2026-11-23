@@ -35,7 +35,19 @@ export interface TestPolicyOpts {
   domains?: string[]
   collectMs?: number
   maxPreparationsPerDay?: number
+  /** seller price ceiling — the default policy caps at 1000; the zero-conf
+   *  policy tests quote above it */
+  maxPriceSats?: number
   limits?: Partial<AutomationPolicy['limits']>
+}
+
+/** the zero-conf policy is closed by default (1,000 sats / 2 ancestors) —
+ *  suites written before it ran every sale open; pin that behavior through
+ *  ONE shared constant, never scattered literals. New tests pass real
+ *  defaults via `opts` overrides. */
+export const ZEROCONF_OPEN: Pick<MarketOptions, 'maxZeroconfSats' | 'maxUnconfirmedAncestors'> = {
+  maxZeroconfSats: Number.MAX_SAFE_INTEGER,
+  maxUnconfirmedAncestors: 64
 }
 
 /** the baseline trading policy — tight caps so deal tests exercise the guard;
@@ -61,7 +73,12 @@ export const testPolicyFor = (pub: string, o: TestPolicyOpts = {}): AutomationPo
     ...o.limits
   },
   scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: o.collectMs ?? 1000 },
-  seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: o.maxPreparationsPerDay ?? 5, sellableShards: ['guide'] },
+  seller: {
+    minPriceSats: 100,
+    maxPriceSats: o.maxPriceSats ?? 1000,
+    maxPreparationsPerDay: o.maxPreparationsPerDay ?? 5,
+    sellableShards: ['guide']
+  },
   disclosure: { allowPublic: false },
   ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
   sandbox: { mode: 'sandbox-only' }
@@ -140,7 +157,7 @@ const wireAgent = async (name: string, mem: NektarMemory, o: TestAgentOpts): Pro
     ...(o.reserveOutSats !== undefined ? { reserveOutSats: o.reserveOutSats } : {}),
     ...(o.announce === true ? { announce: true } : {}),
     ...(o.watch !== undefined ? { watchHosts: [o.watch], watchPublic: o.watch } : {}),
-    opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts }
+    opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...ZEROCONF_OPEN, ...o.opts }
   })
   mem.automation = rt // bin.ts does the same in production
   return { mem, rt, pub, policyHash: await rt.store.approvePolicy(testPolicyFor(pub, o.policy), 'test:operator'), name }

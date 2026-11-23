@@ -69,6 +69,10 @@ spec:
               value: {{ .Values.agent.maxSpendSatsPerDay | quote }}
             - name: NEKTAR_MIN_BROADCAST_INTERVAL_MS
               value: {{ .Values.agent.minBroadcastIntervalMs | quote }}
+            - name: NEKTAR_ZEROCONF_MAX_SATS
+              value: {{ .Values.agent.zeroconfMaxSats | quote }}
+            - name: NEKTAR_ZEROCONF_MAX_ANCESTORS
+              value: {{ .Values.agent.zeroconfMaxAncestors | quote }}
             - name: NEKTAR_MAINNET_CONFIRM
               value: {{ .Values.agent.mainnetConfirm | quote }}
             - name: NEKTAR_PAYMENTS

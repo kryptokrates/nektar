@@ -79,6 +79,11 @@ NEKTAR_FINALITY_DEPTH=<explicit, default 6 on main>
 # NEKTAR_DIRECT_ACCEPT=1        # leave unset
 NEKTAR_DIRECT_ACCEPT_MAX_SATS=<low>
 
+# zero-conf delivery — the no-recourse cap on BOTH rails (defaults shown);
+# above it a sale holds in payment_pending until the payment's own proof
+NEKTAR_ZEROCONF_MAX_SATS=1000
+NEKTAR_ZEROCONF_MAX_ANCESTORS=2
+
 # reserve + want knobs shipped for the T2/T4 fixes
 NEKTAR_RESERVE_OUTS=2            # medium outputs held so mints never eat the only deal coin
 NEKTAR_RESERVE_OUT_SATS=<2x floor>

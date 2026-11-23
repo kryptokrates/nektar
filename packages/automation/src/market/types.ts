@@ -131,6 +131,10 @@ export interface MarketDeps {
   /** mark an output of an accepted transaction as ours — direct-rail payments
    *  become the seller's custody the moment the payment verifies */
   ownOutput?: (tx: Transaction, vout: number) => void | Promise<void>
+  /** register a counterparty tx with the chain-event substrate — proof
+   *  delivery and the abandon horizon then cover it (the payment_pending
+   *  watch: a proof or a conflict wakes the parked sale) */
+  watchTx?: (txid: string) => void
   settleEscrow?: (tx: Transaction) => void | Promise<void>
   /** rollback of settleEscrow's optimistic adoption when the wallet ledger
    *  itself declares the tx dead (SpendGuard refusal, definitive reject,
@@ -187,6 +191,12 @@ export interface MarketOptions {
    *  so this cap is the operator's no-recourse exposure (the mirror of the
    *  buyer's directMaxSats). Absent = any price (opt-in already accepts it). */
   directAcceptMaxSats?: number
+  /** the largest sale delivered against an unproven payment, both rails —
+   *  above it the sale parks in payment_pending until the payment's own
+   *  proof arrives; 0 = always wait */
+  maxZeroconfSats: number
+  /** unproven ancestor txs tolerated behind a zero-conf payment */
+  maxUnconfirmedAncestors: number
   /** buyer-side opt-in: a verified disclosure counts as the usefulness
    *  evaluation — deals reach `useful` without an operator call. Default off:
    *  the consumer judges content. */
@@ -225,7 +235,9 @@ export const DEFAULTS: MarketOptions = {
   minCollectMs: 1000,
   collectQuietMs: 0,
   wantExtendMs: 120_000,
-  deliverBoundMs: 45_000
+  deliverBoundMs: 45_000,
+  maxZeroconfSats: 1000,
+  maxUnconfirmedAncestors: 2
 }
 export const pkhOf = (pub: string) => Buffer.from(PublicKey.fromString(pub).toHash() as number[]).toString('hex')
 /** a bstore ObjectRef → stock plaintext ref (digest-pinned locator). https
@@ -275,6 +287,10 @@ export const STATE_LIMITS: Record<string, { maxAgeMs: number; exit: StuckExit }>
   // seller
   preparing: { maxAgeMs: 10 * 60_000, exit: 'abort' },
   quoted: { maxAgeMs: 86_400_000, exit: 'abort' },
+  // the payment verified but waits on its own proof — three days is the
+  // stuck bound; the abandon horizon and the lapse deadline are the real
+  // drivers (payment_died / payment_pending_lapsed)
+  payment_pending: { maxAgeMs: 3 * 86_400_000, exit: 'escalate:human' },
   completing: { maxAgeMs: 30 * 60_000, exit: 'escalate:human' },
   completion_submitted: { maxAgeMs: 3 * 86_400_000, exit: 'escalate:human' },
   // observer

@@ -23,7 +23,7 @@ import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
 import { killSwitchActive } from '@nektar/automation'
 import { requeueAckItems } from '@nektar/automation'
-import { testPolicyFor, wireEngine } from './agentkit.js'
+import { testPolicyFor, wireEngine, ZEROCONF_OPEN } from './agentkit.js'
 import { runPreflight } from '@nektar/automation'
 import { issueToken, verifyToken, conformanceStatus, conformanceConfigHash, suiteDigest, TOKEN_TTL_MS } from '@nektar/automation'
 
@@ -98,6 +98,7 @@ void test('D7 every nonterminal FSM state declares a bound + an exit; nothing el
     'uncertain',
     'preparing',
     'quoted',
+    'payment_pending',
     'completing',
     'completion_submitted',
     'watching',
@@ -361,7 +362,7 @@ async function world(
       killed: opts.killed,
       deaf: opts.deaf,
       executor: ex,
-      opts: { refundBlocks: opts.refundBlocks ?? 144 }
+      opts: { refundBlocks: opts.refundBlocks ?? 144, ...ZEROCONF_OPEN }
     })
     const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
     wireEngine(ex, engine, store, {

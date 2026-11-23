@@ -49,6 +49,7 @@ import { openAutomation, type Automation, Dispatcher } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
+import { ZEROCONF_OPEN } from './agentkit.js'
 
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
 const NET = 'testnet'
@@ -275,7 +276,7 @@ const mkagent = async (
     // the pipeline when the gate needs a lane refilled in one block-window
     treeMaxUnproven: Number(process.env.NEKTAR_TREE_MAX_UNPROVEN ?? 0) || undefined,
     ...(watch !== undefined ? { watchHosts: [watch], watchPublic: watch } : {}),
-    opts: { offerTtlBlocks: 48, ...opts }
+    opts: { offerTtlBlocks: 48, ...ZEROCONF_OPEN, ...opts }
   })
   mem.automation = rt
   const stopRt = rt.stop.bind(rt)

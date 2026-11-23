@@ -1324,6 +1324,7 @@ export abstract class BuyerOps extends SellerOps {
         op.state === 'seizing' ? await this.d.store.transition(op.operationId, op.revision, 'watching', { cause: 'resume_after_restart' }) : op
       )
     if (op.role === 'seller' && op.kind === 'sale') {
+      if (op.state === 'payment_pending') return await this.settlePendingPayment(op, height)
       if (op.state === 'completing') return await this.complete(op)
       if (op.state === 'quoted' && op.dueHeight !== undefined && height >= op.dueHeight)
         await this.d.store.transition(op.operationId, op.revision, 'expired', { cause: 'quote_expired', dueHeight: null })

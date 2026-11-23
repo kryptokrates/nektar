@@ -283,8 +283,15 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
       ...(nektarEnv('NEKTAR_DIRECT_ACCEPT') === '1' ? { directAccept: true } : {}),
       // NEKTAR_DIRECT_ACCEPT_MAX_SATS caps which quotes advertise the direct
       // rail — disclosure ships against an unproven payment, so this bounds
-      // the seller's no-recourse exposure (unset = any price)
+      // the seller's advertised exposure (unset = any price; the zero-conf
+      // policy below is the rail-agnostic delivery bound that always applies)
       ...(nektarEnv('NEKTAR_DIRECT_ACCEPT_MAX_SATS') ? { directAcceptMaxSats: Number(nektarEnv('NEKTAR_DIRECT_ACCEPT_MAX_SATS')) } : {}),
+      // NEKTAR_ZEROCONF_MAX_SATS caps delivery against an unproven payment on
+      // BOTH rails — above it the sale parks in payment_pending until the
+      // payment's own proof (0 = always wait). NEKTAR_ZEROCONF_MAX_ANCESTORS
+      // bounds the unproven chain depth behind the payment.
+      ...(nektarEnvNum('NEKTAR_ZEROCONF_MAX_SATS') !== undefined ? { maxZeroconfSats: nektarEnvNum('NEKTAR_ZEROCONF_MAX_SATS') } : {}),
+      ...(nektarEnvNum('NEKTAR_ZEROCONF_MAX_ANCESTORS') !== undefined ? { maxUnconfirmedAncestors: nektarEnvNum('NEKTAR_ZEROCONF_MAX_ANCESTORS') } : {}),
       // NEKTAR_AUTO_USEFUL=1 — a verified disclosure closes the deal as
       // `useful` without waiting on an operator markUsefulness call
       ...(nektarEnv('NEKTAR_AUTO_USEFUL') === '1' ? { autoUseful: true } : {})

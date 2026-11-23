@@ -10,7 +10,7 @@ import { callTool } from '../src/server.js'
 import { AutomationStore } from '@nektar/automation'
 import { MarketEngine, Dispatcher, inertTxEffects, type MarketMessage, type WalletTx } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
-import { wireEngine } from './agentkit.js'
+import { wireEngine, ZEROCONF_OPEN } from './agentkit.js'
 import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
@@ -102,7 +102,7 @@ void test('20 seeded fault schedules: dropped/duplicated/reordered delivery + cr
         transport,
         ai: new ScriptedExecutor(),
         executor: ex,
-        opts: { refundBlocks: 8 }
+        opts: { refundBlocks: 8, ...ZEROCONF_OPEN }
       })
       const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
       wireEngine(ex, engine, store, {

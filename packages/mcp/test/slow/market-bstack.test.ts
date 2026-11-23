@@ -12,7 +12,7 @@ import { openAutomation, type Automation, Dispatcher } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
 import type { MarketMessage } from '@nektar/automation'
-import { testAgent, respawnAgent, testPolicyFor, type TestAgent, type TestAgentOpts } from '../agentkit.js'
+import { testAgent, respawnAgent, testPolicyFor, ZEROCONF_OPEN, type TestAgent, type TestAgentOpts } from '../agentkit.js'
 
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
@@ -311,7 +311,7 @@ void test('bstack D: restart — journal+ledger prevent second carrier, purchase
         ai: new ScriptedExecutor(),
         now: () => clock,
         messages: msgs.for(pubB),
-        opts: { offerTtlBlocks: 10000, refundBlocks: 10000 }
+        opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...ZEROCONF_OPEN }
       })
     let bRt = await open()
     const policyHash = await bRt.store.approvePolicy(policyFor(pubB), 'test:operator')
@@ -571,7 +571,13 @@ void test('bstack H: seller takes the escrow from the accept and broadcasts it i
     const verified = (await s.rt.store.events(sale.operationId)).find((e) => e.cause === 'escrow_verified')
     assert.deepEqual(
       verified?.evidence,
-      { spv: true, spends: 1 },
+      {
+        spv: true,
+        spends: 1,
+        // the zero-conf decision record — here the payment carried its own
+        // proof, so the policy released it without consulting the caps
+        zeroconf: { verdict: 'proven', unconfirmedAncestors: 0, capSats: ZEROCONF_OPEN.maxZeroconfSats }
+      },
       'the escrow arrived as BEEF and passed SPV + local spend checks against the headers the seller holds'
     )
     const bought = (await b.rt.store.events((await buyerOp(b))!.operationId)).find((e) => e.cause === 'disclosure_verified')

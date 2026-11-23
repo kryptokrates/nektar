@@ -53,6 +53,8 @@ agent:
   maxSpendSatsPerDay: ''
   minBroadcastIntervalMs: ''
   directAcceptMaxSats: ''
+  zeroconfMaxSats: ''
+  zeroconfMaxAncestors: ''
   payments: ''
   paidDisclosure: ''
   mainnetConfirm: ''

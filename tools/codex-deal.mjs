@@ -168,6 +168,10 @@ const agentEnv = (port, dataDir, wif) => ({
   NEKTAR_HTTP_PORT: String(port),
   NEKTAR_HTTP_HOST: '127.0.0.1',
   NEKTAR_DATA_DIR: dataDir,
+  // a --price over the 1,000-sat zero-conf cap parks the demo sale until the
+  // payment mines — the demo exists to show zero-conf delivery, so the cap
+  // lifts to exactly the demo price
+  NEKTAR_ZEROCONF_MAX_SATS: String(Math.max(PRICE, 1000)),
   NEKTAR_AUTOMATION: '1',
   NEKTAR_PAID_DISCLOSURE: '1',
   NEKTAR_WALLET: 'toolbox',

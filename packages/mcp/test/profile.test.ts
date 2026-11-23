@@ -19,7 +19,7 @@ import { createMcpServer } from '../src/mcp-server.js'
 import { openAutomation, type Automation, Dispatcher } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
-import { testAgent, testPolicyFor, type TestAgent, type TestPolicyOpts } from './agentkit.js'
+import { testAgent, testPolicyFor, ZEROCONF_OPEN, type TestAgent, type TestPolicyOpts } from './agentkit.js'
 
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 const AGENT_TEN = ['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor', 'automationDoctor']
@@ -148,7 +148,7 @@ void test('profile: want refuses zero or several buyer policies; exactly one pub
       call: (t2, a) => callTool(mem, t2, a),
       ai: new ScriptedExecutor(),
       now: () => clock,
-      opts: { offerTtlBlocks: 10000, refundBlocks: 10000 }
+      opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...ZEROCONF_OPEN }
     })
     mem.automation = rt
     // zero buyer policies

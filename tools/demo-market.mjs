@@ -109,7 +109,15 @@ const bin = join(root, 'packages/mcp/dist/src/bin.js')
 const boot = (card) => {
   const fd = openSync(join(card.dataDir, 'agent.log'), 'a')
   const child = spawn(process.execPath, [`--env-file=${card.envFile}`, bin], {
-    env: { ...process.env, ...parseEnv(card.envFile), NEKTAR_FUND_TXIDS: `hex:${fundingHex}` },
+    env: {
+      ...process.env,
+      ...parseEnv(card.envFile),
+      NEKTAR_FUND_TXIDS: `hex:${fundingHex}`,
+      // the demo's price rides the zero-conf rail: above the 1,000-sat
+      // default the sale would park ~10 min for the payment's own proof and
+      // blow the --timeout window — lift the cap to exactly the demo price
+      NEKTAR_ZEROCONF_MAX_SATS: String(Math.max(priceSats, 1000))
+    },
     detached: true,
     stdio: ['ignore', fd, fd]
   })

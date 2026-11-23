@@ -48,7 +48,7 @@ type EscrowCfg = {
   direct?: boolean
 } & Record<string, unknown>
 
-type UtxoRef = { txid: string; vout: number; satoshis: number; script: string }
+export type UtxoRef = { txid: string; vout: number; satoshis: number; script: string }
 
 /** the quote's commitment bag — wire-supplied (types.ts keeps the wire side
  *  opaque): the fields the engine scores/verifies are typed, extra wire

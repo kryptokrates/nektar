@@ -5,9 +5,10 @@ import { DisclosureSaleHost } from '@nektar/anchor'
 import { fromHex } from '@nektar/core'
 import { spendValid, isHeaderUnavailable } from '@nektar/chain'
 import { decideOffer } from '../policy.js'
-import type { Operation } from '../store.js'
+import type { Operation, UtxoRef } from '../store.js'
 import { IngressOps } from './ingress.js'
 import { deliveredPackRefs, pkhOf, sparse } from './types.js'
+import { unconfirmedAncestors, zeroconfVerdict } from './zeroconf.js'
 import type { MarketMemory, MarketMessage } from './types.js'
 
 export abstract class SellerOps extends IngressOps {
@@ -249,6 +250,25 @@ export abstract class SellerOps extends IngressOps {
       const dead = await deadAncestry(tx, (id) => this.d.fetchTx(id).catch(() => undefined))
       if (dead.length > 0) return await refuse(`escrow ancestry unresolvable: ${dead.length} input(s) have no reachable parent`)
     }
+    // the zero-conf policy — proven ancestry says where the payment came
+    // from, not that it will confirm. 'proven' is the payment's OWN merkle
+    // path — the wire copy's, or one our store already holds and verified
+    // (txFacts.proof reads exactly that; a bytes lookup is not needed —
+    // the accept decision stays offline). Never the spv flag: above the
+    // cap or the ancestor bound the sale parks until that proof.
+    const proven =
+      tx.merklePath !== undefined || (this.d.txFacts !== undefined && (await this.d.txFacts(utxo.txid).catch(() => undefined))?.proof !== undefined)
+    const ancestors = proven ? 0 : await unconfirmedAncestors(tx, (id) => this.d.fetchTx(id).catch(() => undefined), this.o.maxUnconfirmedAncestors)
+    const verdict = zeroconfVerdict({
+      proven,
+      priceSats: Number(offer.cfg.price),
+      unconfirmedAncestors: ancestors,
+      opts: this.o
+    })
+    const zeroconf = { verdict, unconfirmedAncestors: ancestors, capSats: this.o.maxZeroconfSats }
+    // the conflict watch — proof delivery and the abandon horizon now reach
+    // the op through the existing wake legs
+    if (!proven) this.d.watchTx?.(utxo.txid)
     // escrow rebroadcast starts before the bookkeeping — the 'completing'
     // transition, height fetch and custody mark all happen inside the
     // broadcaster RTT. The verdict is still joined before complete(): a
@@ -260,12 +280,37 @@ export abstract class SellerOps extends IngressOps {
       await escrowBroadcastP?.catch(() => undefined)
       return await refuse('too close to the refund deadline')
     }
+    if (verdict === 'await-proof') {
+      // above the policy the sale holds delivery until the payment's own
+      // proof — but join the rebroadcast verdict first: a refused payment
+      // leaves the op 'quoted' exactly like the completing rail's refusal
+      if (escrowBroadcastP !== undefined) {
+        const br = await escrowBroadcastP
+        if (br.status !== 'success') {
+          await this.d.store.transition(op.operationId, op.revision, 'quoted', {
+            cause: 'accept_refused',
+            evidence: { reason: `escrow not accepted by the network: ${br.description ?? br.status}` }
+          })
+          return
+        }
+      }
+      this.d.log?.(
+        `market: sale ${op.operationId} holds delivery until the payment proves (price ${offer.cfg.price} > cap ${this.o.maxZeroconfSats} sats or ${ancestors} unconfirmed ancestor(s))`
+      )
+      await this.d.store.transition(op.operationId, op.revision, 'payment_pending', {
+        cause: 'payment_awaiting_proof',
+        data: direct ? { direct: true, utxo: m.utxo } : { escrow: { cfg: { ...offer.cfg, depositorPkh: m.depositorPkh }, utxo: m.utxo } },
+        evidence: { spv, spends, zeroconf }
+      })
+      return
+    }
+    this.d.log?.(`market: sale ${op.operationId} delivering on ${verdict} payment (${ancestors} unconfirmed ancestor(s), cap ${this.o.maxZeroconfSats} sats)`)
     const next = await this.d.store.transition(op.operationId, op.revision, 'completing', {
       cause: direct ? 'payment_verified' : 'escrow_verified',
       // a direct payment is already the seller's money — mark it owned so the
       // funder/wallet layer takes custody of the output we just broadcast
       data: direct ? { direct: true, utxo: m.utxo } : { escrow: { cfg: { ...offer.cfg, depositorPkh: m.depositorPkh }, utxo: m.utxo } },
-      evidence: { spv, spends }
+      evidence: { spv, spends, zeroconf }
     })
     if (direct) await this.d.ownOutput?.(tx, m.utxo.vout)
     if (escrowBroadcastP !== undefined) {
@@ -281,6 +326,55 @@ export abstract class SellerOps extends IngressOps {
       }
     }
     await this.complete(next)
+  }
+
+  /** the payment_pending driver — the payment verified but is unproven and
+   *  above the zero-conf policy. Exits: its own proof releases delivery,
+   *  a dead verdict declines the deal, the escrow's refund deadline lapses
+   *  it, and the 3-day stuck bound escalates. NOTHING is delivered from
+   *  this state except through the proven leg. */
+  protected async settlePendingPayment(op: Operation, height: number): Promise<void> {
+    const offer = op.data.offer!
+    const w = op.data.want!.want
+    const utxo = (op.data.direct === true ? op.data.utxo : op.data.escrow!.utxo) as UtxoRef
+    const decline = async (cause: string, reason: string): Promise<void> => {
+      await this.d.store.transition(op.operationId, op.revision, 'quoted', {
+        cause,
+        outbox: [
+          {
+            actionId: `${op.operationId}:decline:${op.revision}`,
+            kind: 'message',
+            destination: w.pub,
+            payload: { type: 'decline', wantId: w.wantId, offerId: op.operationId, reason }
+          }
+        ]
+      })
+    }
+    const tx = await this.d.fetchTx(utxo.txid).catch(() => undefined)
+    const proven = tx?.merklePath !== undefined && height - tx.merklePath.blockHeight + 1 >= 1
+    if (proven) {
+      // escrow rail: a proof landing too late to outrun the refund deadline
+      // lapses instead of completing — the direct rail never lapses on height
+      if (op.data.direct !== true && height + this.o.sellerSafetyBlocks >= Number(offer.cfg.refundAfter))
+        return await decline('payment_pending_lapsed', 'payment unconfirmed too close to the refund deadline')
+      const next = await this.d.store.transition(op.operationId, op.revision, 'completing', {
+        cause: 'payment_proven',
+        evidence: { blockHeight: tx!.merklePath!.blockHeight }
+      })
+      if (op.data.direct === true) await this.d.ownOutput?.(tx!, utxo.vout)
+      return await this.complete(next)
+    }
+    // a definitive dead verdict is the declined-accept shape again — the
+    // buyer's outbox already stopped; tell them the payment never landed
+    if (
+      this.d.txFacts !== undefined &&
+      this.reconcileGate(op.operationId, utxo.txid, op.nextReconcileAt) &&
+      (await this.d.txFacts(utxo.txid)).verdict === 'dead'
+    )
+      return await decline('payment_died', 'payment did not confirm')
+    if (op.data.direct !== true && height + this.o.sellerSafetyBlocks >= Number(offer.cfg.refundAfter))
+      return await decline('payment_pending_lapsed', 'payment unconfirmed too close to the refund deadline')
+    // otherwise the watch + the floor re-drive it — proof, conflict, lapse
   }
 
   protected async complete(op: Operation): Promise<void> {

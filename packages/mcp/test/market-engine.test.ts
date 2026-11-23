@@ -4,16 +4,16 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory, { type Knex } from 'knex'
-import { testChain, testFunder, HeaderUnavailableError } from '@nektar/chain'
+import { testChain, testFunder, HeaderUnavailableError, type TestFunder } from '@nektar/chain'
 import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/bstack'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { AutomationStore } from '@nektar/automation'
-import { MarketEngine, Dispatcher, inertTxEffects, type MarketMessage, type WalletTx } from '@nektar/automation'
+import { MarketEngine, Dispatcher, inertTxEffects, type MarketMessage, type MarketOptions, type WalletTx } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
-import { testPolicyFor, wireEngine } from './agentkit.js'
-import { PrivateKey, Transaction } from '@bsv/sdk'
+import { testPolicyFor, wireEngine, ZEROCONF_OPEN, type TestPolicyOpts } from './agentkit.js'
+import { PrivateKey, Transaction, P2PKH } from '@bsv/sdk'
 
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
@@ -21,6 +21,7 @@ const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replac
 interface Agent {
   name: string
   mem: NektarMemory
+  funder: TestFunder
   store: AutomationStore
   kx: Knex
   engine: MarketEngine
@@ -29,7 +30,7 @@ interface Agent {
   file: string
 }
 
-async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: number; wantExtendMs?: number } = {}) {
+async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: number; wantExtendMs?: number; zeroconf?: boolean } = {}) {
   const chain = await testChain(t)
   if (chain === undefined) return undefined
   const dir = mkdtempSync(join(tmpdir(), 'nektar-market-'))
@@ -58,7 +59,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
     }
   })
   const hooks = { afterPrepare: undefined as undefined | ((actionId: string) => void) }
-  const engineFor = (mem: NektarMemory, store: AutomationStore) => {
+  const engineFor = (mem: NektarMemory, store: AutomationStore, market?: Partial<MarketOptions>) => {
     // engine-level suite: no runtime, so the executor is an in-process
     // dispatcher carrying the same deal-path bodies the endpoint would serve
     const ex = new Dispatcher()
@@ -71,13 +72,24 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
       call: (tool, args) => callTool(mem, tool, args),
       height: () => mem.chainHeight(),
       fetchTx: async (txid) => chain.fetchTx(txid),
+      txFacts: (txid) => chain.txFacts(txid),
+      ownOutput: async (tx, vout) => {
+        await mem.funds.adopt(tx, vout)
+      },
       transport: transportFor(mem.operatorKey().toPublicKey().toString()),
       ai: new ScriptedExecutor(),
       broadcast: (tx) => mem.broadcastTx(tx),
       settleEscrow: (tx) => mem.funds.spent(tx),
       afterPrepare: (id) => hooks.afterPrepare?.(id),
       executor: ex,
-      opts: { refundBlocks: opts.refundBlocks ?? 144, ...(opts.wantExtendMs !== undefined ? { wantExtendMs: opts.wantExtendMs } : {}) }
+      opts: {
+        refundBlocks: opts.refundBlocks ?? 144,
+        ...(opts.wantExtendMs !== undefined ? { wantExtendMs: opts.wantExtendMs } : {}),
+        // suites written before the zero-conf policy ran every sale open —
+        // zeroconf:false is the opt-in to the real 1,000-sat/2-ancestor gate
+        ...(opts.zeroconf === false ? {} : ZEROCONF_OPEN),
+        ...market
+      }
     })
     const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
     wireEngine(ex, engine, store, {
@@ -94,8 +106,13 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
     })
     return engine
   }
-  const policyFor = (pub: string, extra: Partial<AutomationPolicy['limits']> = {}): AutomationPolicy => testPolicyFor(pub, { limits: extra })
-  const add = async (name: string, limits: Partial<AutomationPolicy['limits']> = {}): Promise<Agent> => {
+  const policyFor = (pub: string, limits: Partial<AutomationPolicy['limits']> = {}, policy: Omit<TestPolicyOpts, 'limits'> = {}): AutomationPolicy =>
+    testPolicyFor(pub, { limits, ...policy })
+  const add = async (
+    name: string,
+    limits: Partial<AutomationPolicy['limits']> = {},
+    extra: { policy?: Omit<TestPolicyOpts, 'limits'>; market?: Partial<MarketOptions> } = {}
+  ): Promise<Agent> => {
     // real funding: anchors, escrows and refunds all broadcast real txs — a
     // dry funder fails at the first remember() (mid-migration regression)
     const funder = await testFunder(40)
@@ -105,14 +122,14 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
     const store = new AutomationStore(kx, now)
     await store.init()
     const pub = mem.operatorKey().toPublicKey().toString()
-    const policyHash = await store.approvePolicy(policyFor(pub, limits), 'test:operator')
-    const a: Agent = { name, mem, store, kx, engine: engineFor(mem, store), pub, policyHash, file }
+    const policyHash = await store.approvePolicy(policyFor(pub, limits, extra.policy), 'test:operator')
+    const a: Agent = { name, mem, funder, store, kx, engine: engineFor(mem, store, extra.market), pub, policyHash, file }
     agents.set(name, a)
     everyone.push(a)
     return a
   }
-  const seller = async (name: string, price: number) => {
-    const a = await add(name)
+  const seller = async (name: string, price: number, extra: { policy?: Omit<TestPolicyOpts, 'limits'>; market?: Partial<MarketOptions> } = {}) => {
+    const a = await add(name, {}, extra)
     await a.mem.remember('guide', FINDING)
     await a.mem.remember('guide', 'unrelated note about gardening and tomatoes')
     await chain.mine(1)
@@ -571,4 +588,227 @@ void test('want-TTL race: a live want republishes at the collection boundary ins
   st = (await bob.engine.status(operationId))!.operation
   assert.equal(st.state, 'expired')
   assert.equal((await bob.store.events(operationId)).at(-1)?.cause, 'no_qualifying_offer')
+})
+
+// ── SPV-01: the zero-conf delivery policy ────────────────────────────────
+// A verified-but-unproven payment above the cap parks the sale in
+// payment_pending; only the payment's own proof releases delivery. These
+// run on real defaults (zeroconf:false) — the pre-policy suites ride
+// ZEROCONF_OPEN through agentkit.
+const BIG_BUYER: Partial<AutomationPolicy['limits']> = {
+  perPurchaseSats: 20_000,
+  dailyPurchaseSats: 60_000,
+  runTotalSats: 80_000,
+  maxLockedSats: 30_000,
+  maxUnconfirmedSats: 60_000,
+  maxUnconfirmedCount: 12
+}
+const BIG_SELLER = { policy: { maxPriceSats: 20_000 } }
+
+const saleOf = async (a: Agent) => (await a.store.operations({ role: 'seller' })).find((o) => o.kind === 'sale')!
+const outboxRows = async (a: Agent, like: string) => (await a.kx('market_outbox').where('payload', 'like', like).select('*')) as Array<{ payload: string }>
+const statesSeen = async (a: Agent, operationId: string) => new Set((await a.store.events(operationId)).map((e) => e.to))
+
+// the shared deal drive: want out, quotes in, the buyer selects and ships
+// the accept — everything after that is the test's own assertion surface
+const driveToAccept = async (w: NonNullable<Awaited<ReturnType<typeof world>>>, bob: Agent, maxSats: number) => {
+  const { operationId } = await bob.engine.publishWant(
+    { domains: ['libfoo'], question: 'libfoo 3.0 build fails: connect is not a function', maxSats },
+    bob.policyHash
+  )
+  await w.round()
+  await w.round()
+  w.advance(1500)
+  await w.round([bob])
+  return operationId
+}
+
+void test('zeroconf: a <=1000-sat sale still delivers on the unproven payment — the pre-policy behaviour, pinned', async (t) => {
+  const w = await world(t, { zeroconf: false })
+  if (w === undefined) return
+  t.after(w.close)
+  const c = await w.seller('cara', 400)
+  const bob = await w.add('bob')
+  // the buyer's funding split proves before the deal — the payment's
+  // ancestry then sits inside the 2-ancestor bound, and only the payment
+  // itself is unproven: the exact zero-conf case the cap exists for
+  await w.chain.mine(1)
+  const operationId = await driveToAccept(w, bob, 500)
+  await w.round([c])
+  const sale = await saleOf(c)
+  assert.equal(sale.state, 'completion_submitted', `expected delivery at zero-conf, got ${sale.state}`)
+  const utxo = (sale.data.escrow as { utxo: { txid: string } }).utxo
+  assert.equal(w.chain.getTx(utxo.txid)?.merklePath, undefined, 'the payment itself never confirmed before delivery')
+  assert.ok((await outboxRows(c, '%"delivered"%')).length >= 1, 'the delivered outbox row exists')
+  await w.round([bob])
+  await w.round([bob])
+  assert.equal((await bob.engine.status(operationId))!.operation.state, 'disclosure_verified')
+})
+
+void test('zeroconf: a 5000-sat sale parks in payment_pending — only its own proof releases it', async (t) => {
+  const w = await world(t, { zeroconf: false })
+  if (w === undefined) return
+  t.after(w.close)
+  const c = await w.seller('cara', 5000, BIG_SELLER)
+  const bob = await w.add('bob', BIG_BUYER)
+  await w.chain.mine(1)
+  const operationId = await driveToAccept(w, bob, 6000)
+  await w.round([c])
+  const sale = await saleOf(c)
+  assert.equal(sale.state, 'payment_pending', `expected the park, got ${sale.state}`)
+  assert.ok(!(await statesSeen(c, sale.operationId)).has('completing'), 'no completing transition was written')
+  assert.equal((await outboxRows(c, '%"delivered"%')).length, 0, 'nothing was delivered')
+  assert.equal(sale.data.completeTxid, undefined, 'no completion tx was broadcast')
+  // the payment mines — the next pass completes the deal end to end
+  await w.chain.mine(1)
+  await w.round([c])
+  let cur = await saleOf(c)
+  assert.equal(cur.state, 'completion_submitted', `the proven payment released delivery, got ${cur.state}`)
+  assert.equal((await c.store.events(cur.operationId)).find((e) => e.to === 'completing')?.cause, 'payment_proven')
+  assert.ok((await outboxRows(c, '%"delivered"%')).length >= 1)
+  await w.round([bob])
+  await w.round([bob])
+  assert.equal((await bob.engine.status(operationId))!.operation.state, 'disclosure_verified')
+  cur = await saleOf(c)
+  assert.notEqual(cur.data.completeTxid, undefined)
+})
+
+void test('zeroconf: a payment proven before the accept processes goes straight to completing — the park is skipped', async (t) => {
+  const w = await world(t, { zeroconf: false })
+  if (w === undefined) return
+  t.after(w.close)
+  const c = await w.seller('cara', 5000, BIG_SELLER)
+  const bob = await w.add('bob', BIG_BUYER)
+  await w.chain.mine(1)
+  await driveToAccept(w, bob, 6000)
+  // the accept sits in her inbox while the payment confirms — she reads it
+  // already proven, so payment_pending is never entered
+  await w.chain.mine(1)
+  await w.round([c])
+  const sale = await saleOf(c)
+  assert.equal(sale.state, 'completion_submitted', `expected direct completion, got ${sale.state}`)
+  assert.ok(!(await statesSeen(c, sale.operationId)).has('payment_pending'), 'payment_pending never appeared in the history')
+})
+
+void test('zeroconf: a dead verdict on the pending payment returns the sale to quoted with a decline — nothing ships', async (t) => {
+  const w = await world(t, { zeroconf: false })
+  if (w === undefined) return
+  t.after(w.close)
+  const c = await w.seller('cara', 5000, BIG_SELLER)
+  const bob = await w.add('bob', BIG_BUYER)
+  await w.chain.mine(1)
+  await driveToAccept(w, bob, 6000)
+  await w.round([c])
+  const sale = await saleOf(c)
+  assert.equal(sale.state, 'payment_pending')
+  const utxo = (sale.data.escrow as { utxo: { txid: string } }).utxo
+  // first-party death: the chain rejects the pending payment outright
+  const reject = (w.chain as unknown as { reject?: (txid: string) => boolean }).reject
+  if (reject === undefined) return t.skip('this chain tier has no reject() seam')
+  assert.equal(reject.call(w.chain, utxo.txid), true, 'the mempool payment is rejectable')
+  // the reconcile gate already probed once during the park — let it re-open
+  w.advance(70_000)
+  await w.round([c])
+  const cur = await saleOf(c)
+  assert.equal(cur.state, 'quoted', `expected the decline path, got ${cur.state}`)
+  assert.equal((await c.store.events(cur.operationId)).at(-1)?.cause, 'payment_died')
+  const declines = await outboxRows(c, '%"decline"%')
+  assert.ok(declines.length >= 1, 'a decline reached the buyer')
+  assert.equal((await outboxRows(c, '%"delivered"%')).length, 0, 'nothing was ever delivered')
+})
+
+void test('zeroconf: a <=1000-sat sale with 3 unproven ancestors still parks — the ancestor bound is a price-independent rail', async (t) => {
+  const w = await world(t, { zeroconf: false })
+  if (w === undefined) return
+  t.after(w.close)
+  const c = await w.seller('cara', 400)
+  const bob = await w.add('bob')
+  // put the buyer's whole book two hops behind unmined drains: the escrow's
+  // only candidate then carries drain2 -> drain -> funding split, three
+  // unproven ancestors — the treasury coinbase that ends the chain IS proven
+  const outs = await bob.funder.funds.list()
+  const me = new P2PKH().lock(bob.funder.address())
+  const selfSpend = async (outs: Array<{ tx: Transaction; vout: number; satoshis: number }>) => {
+    const d = new Transaction()
+    let inSats = 0
+    for (const u of outs) {
+      d.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: new P2PKH().unlock(bob.funder.keyPair) })
+      inSats += u.satoshis
+    }
+    d.addOutput({ lockingScript: me, satoshis: inSats - 2000 })
+    d.addOutput({ lockingScript: me, change: true })
+    await d.fee()
+    await d.sign()
+    const br = await w.chain.broadcast(d)
+    assert.equal(br.status, 'success', br.description)
+    for (const u of outs) bob.funder.markSpent(u.tx.id('hex'), u.vout)
+    bob.funder.addOwned(d, 0)
+    return d
+  }
+  const drain = await selfSpend(outs)
+  await selfSpend([{ tx: drain, vout: 0, satoshis: drain.outputs[0].satoshis! }])
+  await driveToAccept(w, bob, 500)
+  await w.round([c])
+  const sale = await saleOf(c)
+  assert.equal(sale.state, 'payment_pending', `expected the ancestor-bound park, got ${sale.state}`)
+  assert.equal((await outboxRows(c, '%"delivered"%')).length, 0)
+  // and the same deal still releases on the payment's own proof
+  await w.chain.mine(1)
+  await w.round([c])
+  assert.equal((await saleOf(c)).state, 'completion_submitted')
+})
+
+void test('zeroconf: the direct rail holds delivery too — the payment is not adopted until it proves', async (t) => {
+  const w = await world(t, { zeroconf: false })
+  if (w === undefined) return
+  t.after(w.close)
+  const c = await w.seller('cara', 5000, { ...BIG_SELLER, market: { directAccept: true } })
+  const bob = await w.add('bob', BIG_BUYER, { market: { directMaxSats: 10_000 } })
+  await w.chain.mine(1)
+  const operationId = await driveToAccept(w, bob, 6000)
+  const adopted: string[] = []
+  const deps = (c.engine as unknown as { d: { ownOutput?: (tx: Transaction, vout: number) => Promise<void> } }).d
+  const orig = deps.ownOutput!
+  deps.ownOutput = async (tx, vout) => {
+    adopted.push(`${tx.id('hex')}:${vout}`)
+    return await orig(tx, vout)
+  }
+  await w.round([c])
+  const sale = await saleOf(c)
+  assert.equal(sale.state, 'payment_pending', `expected the park on the direct rail, got ${sale.state}`)
+  assert.equal(sale.data.direct, true, 'the accept rode the direct rail')
+  assert.equal(adopted.length, 0, 'the payment output is not in her coin book while it is unproven')
+  assert.equal((await outboxRows(c, '%"delivered"%')).length, 0)
+  await w.chain.mine(1)
+  await w.round([c])
+  const cur = await saleOf(c)
+  assert.equal(cur.state, 'completion_submitted', `the proven payment released delivery, got ${cur.state}`)
+  assert.ok(adopted.length >= 1, 'the payment output was adopted once proven')
+  assert.ok((await outboxRows(c, '%"delivered"%')).length >= 1)
+  await w.round([bob])
+  await w.round([bob])
+  assert.equal((await bob.engine.status(operationId))!.operation.state, 'disclosure_verified')
+})
+
+void test('zeroconf: the escrow refund deadline lapses a parked payment back to quoted with a decline', async (t) => {
+  const w = await world(t, { zeroconf: false, refundBlocks: 6 })
+  if (w === undefined) return
+  t.after(w.close)
+  const c = await w.seller('cara', 5000, BIG_SELLER)
+  const bob = await w.add('bob', BIG_BUYER)
+  await w.chain.mine(1)
+  await driveToAccept(w, bob, 6000)
+  await w.round([c])
+  const sale = await saleOf(c)
+  assert.equal(sale.state, 'payment_pending')
+  // mining past refundAfter - sellerSafetyBlocks proves the payment AND runs
+  // out the clock — the lapsed leg fires instead of completing
+  await w.chain.mine(8)
+  await w.round([c])
+  const cur = await saleOf(c)
+  assert.equal(cur.state, 'quoted', `expected the lapse, got ${cur.state}`)
+  assert.equal((await c.store.events(cur.operationId)).at(-1)?.cause, 'payment_pending_lapsed')
+  const declines = await outboxRows(c, '%"decline"%')
+  assert.ok(declines.length >= 1, 'a decline reached the buyer')
+  assert.equal((await outboxRows(c, '%"delivered"%')).length, 0, 'nothing was delivered')
 })

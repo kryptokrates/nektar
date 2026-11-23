@@ -381,6 +381,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     rememberTx: (tx) => {
       mem.rememberTx(tx)
     },
+    watchTx: (txid) => mem.watchTx?.(txid),
     ownOutput: async (tx, vout) => {
       await mem.funds.adopt(tx, vout)
     },

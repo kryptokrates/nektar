@@ -960,9 +960,7 @@ export abstract class BuyerOps extends SellerOps {
               wtx,
               'obs.rejected',
               { guard: 'verified', observation: { cause: 'escrow_rejected' } },
-              {
-                txDied: (row) => this.d.txDied?.(Transaction.fromHex(row.rawHex))
-              }
+              this.txFx
             )
         }
       }

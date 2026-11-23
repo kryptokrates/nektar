@@ -14,20 +14,15 @@ export interface WalletDeps {
    *  injected cfg.exec (test Dispatcher) routes the emits too; absent = the
    *  ambient restate ingress */
   exec?: Executor
-  /** first-party death of a tracked tx — frees live inputs, tombstones its
-   *  adopted outputs (funds.died). Fires when THIS ledger learns the tx
-   *  never aired or was rejected: a SpendGuard-refused tx has no chain
-   *  presence for `deadParent` to read, so the wallet-ledger verdict is
-   *  the only first-party signal a phantom parent's children can wedge on */
-  txDied?: (tx: Transaction) => void | Promise<void>
-  /** first-party custody mark for an aired tx — consumes inputs, adopts
-   *  owned outputs (funds.spent). The deal path still settles inline; this
-   *  dep is what lets a boot replay (resubmitPending) finish the custody
-   *  half of a submit whose caller died between prepare and settle */
-  txSpent?: (tx: Transaction) => void | Promise<void>
-  /** a refused tx that aired anyway — retro-count the spend in the day
-   *  ledger (SpendGuard.recordAired); the revive edges carry this intent */
-  recordAired?: (tx: Transaction) => void | Promise<void>
+  /** the host's one custody effect set (custodyTxEffects) — the table
+   *  declares WHICH intents fire (first-party txDied on a dead verdict —
+   *  a SpendGuard-refused tx has no chain presence for `deadParent` to
+   *  read, so this ledger's verdict is the only first-party signal a
+   *  phantom parent's children can wedge on — txSpent on air and on
+   *  dead→live revive, recordAired on the refused-but-landed path); the
+   *  effect set answers 'how'. Same-key emits inside a routed handler run
+   *  it directly, so coordinator and object never disagree. */
+  fx: TxEffects
 }
 
 export type TxObservation =
@@ -123,16 +118,6 @@ export class WalletCoordinator {
     return tx
   }
 
-  /** the coordinator's custody deps as machine effects — the table owns the
-   *  'when', the deps only answer 'how' */
-  private fx(): TxEffects {
-    return {
-      txSpent: this.deps.txSpent ? (w: WalletTx) => this.deps.txSpent!(this.rebuild(w)) : undefined,
-      txDied: this.deps.txDied ? (w: WalletTx) => this.deps.txDied!(this.rebuild(w)) : undefined,
-      recordAired: this.deps.recordAired ? (w: WalletTx) => this.deps.recordAired!(this.rebuild(w)) : undefined
-    }
-  }
-
   async submit(actionId: string): Promise<{ state: TxState; txid: string; detail?: string }> {
     const w = await this.store.walletTx({ actionId })
     if (!w) throw new Error(`submit: nothing prepared for ${actionId}`)
@@ -149,11 +134,11 @@ export class WalletCoordinator {
     const obs = { at: Date.now(), result: res }
     const ex = this.deps.exec ?? executor()
     if (res.status === 'success' || ALREADY.test(detail)) {
-      await txEmit(ex, this.store, w, 'submit.success', { observation: obs, attempt: true }, this.fx())
+      await txEmit(ex, this.store, w, 'submit.success', { observation: obs, attempt: true }, this.deps.fx)
       return { state: 'submitted', txid: w.txid }
     }
     if (w.state === 'submitted') {
-      await txEmit(ex, this.store, w, 'resubmit', { observation: { ...obs, resubmission: true }, attempt: true }, this.fx())
+      await txEmit(ex, this.store, w, 'resubmit', { observation: { ...obs, resubmission: true }, attempt: true }, this.deps.fx)
       return { state: 'submitted', txid: w.txid, detail }
     }
     if (NEVER_LEFT.test(detail) || (DEFINITIVE.test(detail) && !detail.startsWith('transport:'))) {
@@ -167,13 +152,13 @@ export class WalletCoordinator {
           observation: { ...obs, ...(NEVER_LEFT.test(detail) ? { escaped: false } : {}) },
           attempt: true
         },
-        this.fx()
+        this.deps.fx
       )
       return { state: r.next, txid: w.txid, detail }
     }
     // 'submit.unknown' has no edge on an already-unknown row — a repeat
     // unknown is a 'resubmit' self-edge there (records the attempt)
-    const r = await txEmit(ex, this.store, w, w.state === 'prepared' ? 'submit.unknown' : 'resubmit', { observation: obs, attempt: true }, this.fx())
+    const r = await txEmit(ex, this.store, w, w.state === 'prepared' ? 'submit.unknown' : 'resubmit', { observation: obs, attempt: true }, this.deps.fx)
     return { state: r.next, txid: w.txid, detail }
   }
 
@@ -184,7 +169,7 @@ export class WalletCoordinator {
     // only ever emitted from verified sources (the watchers gate hints) —
     // a raw hint belongs in the observeFn, never in this call
     const { event, guard } = obsEvent(o)
-    const r = await txEmit(this.deps.exec ?? executor(), this.store, w, event, { guard, observation: { at: Date.now(), ...o } }, this.fx())
+    const r = await txEmit(this.deps.exec ?? executor(), this.store, w, event, { guard, observation: { at: Date.now(), ...o } }, this.deps.fx)
     return r.next
   }
 
@@ -194,7 +179,7 @@ export class WalletCoordinator {
    *  construction: state + event row + lease release + tx-died in one
    *  commit, never a bare setTxState that strands phantom adoption */
   async markRejected(w: WalletTx, observation: unknown): Promise<void> {
-    await txEmit(this.deps.exec ?? executor(), this.store, w, 'obs.rejected', { guard: 'verified', observation }, this.fx())
+    await txEmit(this.deps.exec ?? executor(), this.store, w, 'obs.rejected', { guard: 'verified', observation }, this.deps.fx)
   }
 
   /** markRejected keyed by actionId — the custody object's entry shape; a
@@ -207,7 +192,7 @@ export class WalletCoordinator {
   async resubmitPending(): Promise<Array<{ actionId: string; state: TxState }>> {
     // boot replay also finishes committed-but-uneffected intents — a crash
     // between persist and act replays custody here, not on a prayer
-    await replayTxEffects(this.store, this.fx()).catch(() => 0)
+    await replayTxEffects(this.store, this.deps.fx).catch(() => 0)
     const out: Array<{ actionId: string; state: TxState }> = []
     for (const w of await this.store.walletTxs(['prepared', 'submission_unknown']))
       out.push({ actionId: w.actionId, state: (await this.submit(w.actionId)).state })

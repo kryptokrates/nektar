@@ -6,6 +6,7 @@ import { AutomationStore } from '../src/store.js'
 import { inRtScope, setExecutor, EXEC_SVC } from '../src/rt/exec.js'
 import { type SweepDeps } from '../src/rt/services.js'
 import { txEmit } from '../src/rt/emit.js'
+import { inertTxEffects } from '../src/machines/effects.js'
 import { Dispatcher, wireSweep, wireTx } from './rig.js'
 
 // rt-sweep — the sweep legs through the test Dispatcher: sweep.tick fans
@@ -41,7 +42,7 @@ void test('sweep.tick: observations fan out to per-key tx invocations and commit
   const ex = new Dispatcher()
   try {
     await prepared(store, 's:1')
-    wireTx(ex, { store, fx: {}, log: () => {} })
+    wireTx(ex, { store, fx: inertTxEffects, log: () => {} })
     const stages: Array<Array<{ actionId: string; event: string; guard?: string }>> = [
       [{ actionId: 's:1', event: 'submit.unknown' }],
       [{ actionId: 's:1', event: 'obs.proven', guard: 'proof' }]
@@ -75,7 +76,7 @@ void test('sweep.boot: prepared rows re-air through tx.resubmit — the coordina
     await prepared(store, 's:boot')
     wireTx(ex, {
       store,
-      fx: {},
+      fx: inertTxEffects,
       log: () => {},
       submit: (actionId) => {
         submits.push(actionId)
@@ -109,10 +110,10 @@ void test('rt scope: a same-key emit inside a handler goes direct — the self-d
     })
     setExecutor(ex)
     // outside the scope — the emit routes through the executor
-    await txEmit(ex, store, w, 'submit.success', { observation: { at: 1 }, attempt: true }, {})
+    await txEmit(ex, store, w, 'submit.success', { observation: { at: 1 }, attempt: true }, inertTxEffects)
     assert.deepEqual(routed, ['a:same'])
     // inside the object's own scope — the emit must NOT route back
-    const direct = await inRtScope({ txKey: 'a:same' }, () => txEmit(ex, store, w, 'submit.success', { observation: { at: 2 }, attempt: true }, {}))
+    const direct = await inRtScope({ txKey: 'a:same' }, () => txEmit(ex, store, w, 'submit.success', { observation: { at: 2 }, attempt: true }, inertTxEffects))
     assert.equal(direct.accepted, true)
     assert.deepEqual(routed, ['a:same']) // unchanged — the executor was bypassed
     assert.equal((await store.walletTx({ actionId: 'a:same' }))!.state, 'submitted')

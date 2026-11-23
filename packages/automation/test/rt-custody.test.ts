@@ -6,6 +6,7 @@ import { AutomationStore } from '../src/store.js'
 import { WalletCoordinator } from '../src/wallet.js'
 import { setExecutor, EXEC_SVC, CUSTODY_KEY, inRtScope } from '../src/rt/exec.js'
 import { custodyMarkRejected, custodyResubmitPending, custodySubmit } from '../src/rt/emit.js'
+import { inertTxEffects, type TxEffects } from '../src/machines/effects.js'
 import { Dispatcher, wireCustody, wireTx } from './rig.js'
 
 // rt-custody — the Phase 4 leg: the coordinator's custody verbs as
@@ -31,8 +32,8 @@ async function prepared(store: AutomationStore, actionId: string) {
   return (await store.walletTx({ actionId }))!
 }
 
-const coordinator = (store: AutomationStore, extra: { txDied?: (tx: Transaction) => void } = {}) =>
-  new WalletCoordinator(store, { broadcast: (tx) => Promise.resolve({ status: 'success', txid: tx.id('hex') }), ...extra })
+const coordinator = (store: AutomationStore) =>
+  new WalletCoordinator(store, { broadcast: (tx) => Promise.resolve({ status: 'success', txid: tx.id('hex') }), fx: inertTxEffects })
 
 void test('custody legs key per actionId — the scan stays on the fixed key, a held tx key forwards as txScope', async () => {
   const ex = new Dispatcher()
@@ -71,7 +72,8 @@ void test('custody.submit: the real coordinator leg — broadcast + emit commits
   const spent: string[] = []
   try {
     await prepared(store, 'c:sub')
-    wireTx(ex, { store, fx: { txSpent: (w) => void spent.push(w.txid) }, log: () => {} })
+    const fx: TxEffects = { ...inertTxEffects, txSpent: (w) => void spent.push(w.txid) }
+    wireTx(ex, { store, fx, log: () => {} })
     const wallet = coordinator(store)
     wireCustody(ex, { wallet, log: () => {} })
     setExecutor(ex)
@@ -93,7 +95,8 @@ void test('custody.markRejected + resubmitPending: dead verdicts and the boot sc
   try {
     await prepared(store, 'c:rej')
     await prepared(store, 'c:reair')
-    wireTx(ex, { store, fx: { txDied: (w) => void died.push(w.txid) }, log: () => {} })
+    const fx: TxEffects = { ...inertTxEffects, txDied: (w) => void died.push(w.txid) }
+    wireTx(ex, { store, fx, log: () => {} })
     const wallet = coordinator(store)
     wireCustody(ex, { wallet, log: () => {} })
     setExecutor(ex)

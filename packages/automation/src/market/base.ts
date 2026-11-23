@@ -5,6 +5,8 @@ import { TxStore, type Ingested } from '@nektar/chain'
 import { sparse, stable01 } from '@nektar/core'
 import type { AutomationStore, Operation } from '../store.js'
 import { WalletCoordinator } from '../wallet.js'
+import { txFromRow } from '../ledger.js'
+import type { TxEffects } from '../machines/effects.js'
 import type { AutomationPolicy } from '../policy.js'
 import { DEFAULTS, STATE_LIMITS } from './types.js'
 import { WAITS } from '../waits.js'
@@ -18,6 +20,9 @@ export abstract class MarketBase {
   protected me: string
   protected chain: Promise<unknown> = Promise.resolve()
   protected wallet?: WalletCoordinator
+  /** the engine's custody effect set — coordinator, emits, and any inline
+   *  machine write all run these same handlers */
+  protected readonly txFx: TxEffects
   protected inflight = new Set<string>()
   /** per-operation reconcile throttle (engine clock, 30 s) — kept in memory:
    *  persisting it would need an event-writing transition per check, and the
@@ -54,13 +59,26 @@ export abstract class MarketBase {
     // stuck deadline at commit so the wheel wakes at its instant (the
     // advance() scan stays the missed-arm floor)
     d.store.residenceBound = (s) => STATE_LIMITS[s]?.maxAgeMs
+    // one effect set for the whole engine — the host's custodyTxEffects when
+    // it passes one, else the legacy triple mapped through txFromRow so
+    // engine-only embeddings and tests keep working
+    this.txFx = d.txEffects ?? {
+      txSpent: async (w) => {
+        await d.settleEscrow?.(txFromRow(w))
+      },
+      txDied: async (w) => {
+        await d.txDied?.(txFromRow(w))
+      },
+      recordAired: async (w) => {
+        await d.recordAired?.(txFromRow(w))
+      },
+      exportExpired: async () => {}
+    }
     if (d.broadcast)
       this.wallet = new WalletCoordinator(d.store, {
         broadcast: d.broadcast,
         exec: d.executor,
-        txDied: d.txDied,
-        txSpent: d.settleEscrow,
-        recordAired: d.recordAired
+        fx: this.txFx
       })
   }
 

@@ -1,13 +1,13 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { Transaction, MerklePath } from '@bsv/sdk'
+import { MerklePath } from '@bsv/sdk'
 import { hintSeen } from '@nektar/chain'
 import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
 import type { AutomationHost } from './host.js'
 import { AutomationStore, type OutboxItem, type WalletTx } from './store.js'
-import { scanTxObservations } from './ledger.js'
+import { custodyTxEffects, scanTxObservations } from './ledger.js'
 import { MarketEngine, NONTERMINAL, type MarketTransport } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '@nektar/store'
@@ -20,7 +20,6 @@ import { openLanes } from './lanes.js'
 import { openOutbox } from './outbox.js'
 import { openUpkeep } from './upkeep.js'
 import { openWatches } from './watches.js'
-import type { TxEffects } from './machines/effects.js'
 import { executor, EXEC_SVC } from './rt/exec.js'
 import { openEndpoint, pausedInvocations, type RtEndpoint } from './rt/endpoint.js'
 import { isLocalDispatch, wireRuntime } from './rt/dispatch.js'
@@ -352,6 +351,15 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // RestateExecutor (NEKTAR_RESTATE_URL)
   const exec = cfg.exec ?? executor()
   rt.exec = exec
+  // the ONE custody effect set — coordinator, routed emits and the tx
+  // object all run it; a host may inject its own over the same coin book
+  const txFx =
+    cfg.txEffects ??
+    custodyTxEffects({
+      funds: mem.funds,
+      recordAired: mem.recordAired !== undefined ? (tx) => mem.recordAired!(tx) : undefined,
+      log
+    })
   const engine = new MarketEngine({
     store,
     executor: exec,
@@ -385,6 +393,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     recordAired: (tx) => {
       mem.recordAired?.(tx)
     },
+    txEffects: txFx,
     transport,
     ai: cfg.ai ?? aiFromEnv(),
     log,
@@ -498,30 +507,6 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // Without this, a 'rejected' row is terminal forever: the input sits
   // released-but-spent and the change stays tombstoned. Re-observing dead
   // rows is what converges ledger and custody on the chain's truth.
-  const rebuildStored = (w: WalletTx): Transaction => {
-    const tx = Transaction.fromHex(w.rawHex)
-    for (const inp of tx.inputs) {
-      const hex = inp.sourceTXID !== undefined ? w.parents[inp.sourceTXID] : undefined
-      if (hex !== undefined) inp.sourceTransaction = Transaction.fromHex(hex)
-    }
-    return tx
-  }
-  // machine mode: the same custody semantics as declared intents —
-  // the table decides WHICH fire, the effector just executes. The tx
-  // virtual object's ctx.run legs run these same impls when the executor
-  // is restate — one effect set, two dispatch paths.
-  const txFx: TxEffects = {
-    txDied: async (w) => {
-      await mem.funds.died(rebuildStored(w))
-    },
-    txSpent: async (w) => {
-      await mem.funds.spent(rebuildStored(w))
-      log(`automation: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
-    },
-    recordAired: (w) => {
-      mem.recordAired?.(rebuildStored(w))
-    }
-  }
   // the sweep's observeFn — the nektar-sweep service sends each observation
   // to the row's tx object
   const observeFn = async (txid: string) => {

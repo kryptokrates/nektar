@@ -7,8 +7,9 @@ import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
 import { testWorld, dryFunder, type TestFunder } from '@nektar/chain'
 import { AutomationStore, RevisionConflict, classifyDeliveryError } from '../src/store.js'
-import { WalletCoordinator, type WalletDeps } from '../src/wallet.js'
-import type { TxEffects } from '../src/machines/effects.js'
+import { WalletCoordinator } from '../src/wallet.js'
+import { txFromRow } from '../src/ledger.js'
+import { inertTxEffects, type TxEffects } from '../src/machines/effects.js'
 import { Dispatcher, wireTx } from './rig.js'
 import { policyHash, policyError, decidePurchase, decideOffer, type AutomationPolicy, type ActionContext } from '../src/policy.js'
 import { DEFAULT_SCORE_WEIGHTS } from '../src/scoring.js'
@@ -298,14 +299,24 @@ async function payment(funder: TestFunder, sats = 500) {
   return tx
 }
 
-// the observe handler's intent set mirrors the coordinator's own fx(): an
-// emit routed through the Dispatcher lands on wireTx's handler, whose fx
-// must rebuild the stored bytes and call the same deps — the test-side twin
-// of wallet.ts's driver fx (runtime.ts does the same with txFx)
-const fxFor = (w: WalletCoordinator, deps: Pick<WalletDeps, 'txSpent' | 'txDied' | 'recordAired'>): TxEffects => ({
-  txSpent: deps.txSpent === undefined ? undefined : async (wt) => await deps.txSpent!(await w.rebuildTx(wt)),
-  txDied: deps.txDied === undefined ? undefined : async (wt) => await deps.txDied!(await w.rebuildTx(wt)),
-  recordAired: deps.recordAired === undefined ? undefined : async (wt) => await deps.recordAired!(await w.rebuildTx(wt))
+// custody hooks take the rebuilt Transaction — the one total effect set a
+// coordinator and its wireTx handler share (production: custodyTxEffects)
+type TxHooks = {
+  txSpent?: (tx: Transaction) => void | Promise<void>
+  txDied?: (tx: Transaction) => void | Promise<void>
+  recordAired?: (tx: Transaction) => void | Promise<void>
+}
+const fxFor = (deps: TxHooks): TxEffects => ({
+  txSpent: async (wt) => {
+    await deps.txSpent?.(txFromRow(wt))
+  },
+  txDied: async (wt) => {
+    await deps.txDied?.(txFromRow(wt))
+  },
+  recordAired: async (wt) => {
+    await deps.recordAired?.(txFromRow(wt))
+  },
+  exportExpired: () => {}
 })
 
 void test('wallet: bytes persisted before submission; a crash between prepare and submit resumes the SAME tx', async (t) => {
@@ -322,9 +333,10 @@ void test('wallet: bytes persisted before submission; a crash between prepare an
     broadcast: () => {
       throw new Error('process died')
     },
+    fx: inertTxEffects,
     exec: ex1
   })
-  wireTx(ex1, { store: a.store, fx: {}, log: () => {}, submit: (id) => w1.submit(id) })
+  wireTx(ex1, { store: a.store, fx: inertTxEffects, log: () => {}, submit: (id) => w1.submit(id) })
   const prepared = await w1.prepare(ctx('h', 'pay:1'), 'send', tx)
   assert.equal(prepared.state, 'prepared')
   assert.equal(prepared.feeSats, 50)
@@ -340,9 +352,10 @@ void test('wallet: bytes persisted before submission; a crash between prepare an
       seen.push(x.id('hex'))
       return await chain.broadcast(x)
     },
+    fx: inertTxEffects,
     exec: ex2
   })
-  wireTx(ex2, { store: b.store, fx: {}, log: () => {}, submit: (id) => w2.submit(id) })
+  wireTx(ex2, { store: b.store, fx: inertTxEffects, log: () => {}, submit: (id) => w2.submit(id) })
   assert.deepEqual(await w2.resubmitPending(), [{ actionId: 'pay:1', state: 'submitted' }])
   assert.deepEqual(seen, [tx.id('hex')], 'the recorded bytes were sent — nothing was rebuilt')
   assert.equal((await w2.submit('pay:1')).state, 'submitted', 'resubmitting an accepted tx is harmless')
@@ -372,8 +385,8 @@ void test('wallet: one outpoint, one live action; guard refusal and network reje
   let reply: import('@nektar/chain').BroadcastResult = { status: 'error', description: 'broadcaster: REJECTED — missing inputs' }
   const ex = new Dispatcher()
   t.after(() => ex.close())
-  const w = new WalletCoordinator(store, { broadcast: () => Promise.resolve(reply), exec: ex })
-  wireTx(ex, { store, fx: {}, log: () => {}, submit: (id) => w.submit(id) })
+  const w = new WalletCoordinator(store, { broadcast: () => Promise.resolve(reply), fx: inertTxEffects, exec: ex })
+  wireTx(ex, { store, fx: inertTxEffects, log: () => {}, submit: (id) => w.submit(id) })
   const t1 = await build(),
     t2 = await build()
   await w.prepare(ctx('h', 'a'), 'send', t1)
@@ -399,8 +412,8 @@ void test('wallet: one outpoint, one live action; guard refusal and network reje
   reply = { status: 'error', description: 'SpendGuard refused: fee 5000 sats > maxFeePerTx 1000' }
   const ex2 = new Dispatcher()
   t.after(() => ex2.close())
-  const w2 = new WalletCoordinator(store2, { broadcast: () => Promise.resolve(reply), exec: ex2 })
-  wireTx(ex2, { store: store2, fx: {}, log: () => {}, submit: (id) => w2.submit(id) })
+  const w2 = new WalletCoordinator(store2, { broadcast: () => Promise.resolve(reply), fx: inertTxEffects, exec: ex2 })
+  wireTx(ex2, { store: store2, fx: inertTxEffects, log: () => {}, submit: (id) => w2.submit(id) })
   await w2.prepare(ctx('h', 'a'), 'send', t1)
   assert.equal((await w2.submit('a')).state, 'rejected')
   assert.equal((await w2.prepare(ctx('h', 'b'), 'send', t2)).state, 'prepared', 'a tx that never left the process frees its inputs')
@@ -429,20 +442,21 @@ void test('wallet: first-party deaths run custody hooks — txDied on refusal/re
   // gate → txDied gets the rebuilt tx so custody drops its outputs
   const died: string[] = []
   const spent: string[] = []
-  const hooks: Pick<WalletDeps, 'txDied' | 'txSpent'> = {
+  const hooks: TxHooks = {
     txDied: (tx) => void died.push(tx.id('hex')),
     txSpent: (tx) => void spent.push(tx.id('hex'))
   }
   // one dispatcher per store: the three coordinators below ride the same
   // observe handler — their custody deps are identical by construction
+  const fx = fxFor(hooks)
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const w = new WalletCoordinator(store, {
     broadcast: () => Promise.resolve({ status: 'error', description: 'SpendGuard refused: daily cap' }),
-    ...hooks,
+    fx,
     exec: ex
   })
-  wireTx(ex, { store, fx: fxFor(w, hooks), log: () => {} })
+  wireTx(ex, { store, fx, log: () => {} })
   const t1 = await build()
   await w.prepare(ctx('h', 'a'), 'send', t1)
   assert.equal((await w.submit('a')).state, 'rejected')
@@ -453,7 +467,7 @@ void test('wallet: first-party deaths run custody hooks — txDied on refusal/re
     broadcast: () => {
       throw new Error('socket died')
     },
-    ...hooks,
+    fx,
     exec: ex
   })
   const t2 = await build()
@@ -463,7 +477,7 @@ void test('wallet: first-party deaths run custody hooks — txDied on refusal/re
   // a network-observed rejection/conflict is a death too
   const w3 = new WalletCoordinator(store, {
     broadcast: () => Promise.resolve({ status: 'success' }),
-    ...hooks,
+    fx,
     exec: ex
   })
   // t2's input stays leased to 'b' — submission_unknown is undecidable, so a
@@ -493,18 +507,19 @@ void test('wallet: a refused tx aired by the counterparty revives custody, not a
   await tx.sign()
   const died: string[] = []
   const spent: string[] = []
-  const hooks: Pick<WalletDeps, 'txDied' | 'txSpent'> = {
+  const hooks: TxHooks = {
     txDied: (x) => void died.push(x.id('hex')),
     txSpent: (x) => void spent.push(x.id('hex'))
   }
+  const fx = fxFor(hooks)
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const w = new WalletCoordinator(store, {
     broadcast: () => Promise.resolve({ status: 'error', description: 'SpendGuard refused: daily cap' }),
-    ...hooks,
+    fx,
     exec: ex
   })
-  wireTx(ex, { store, fx: fxFor(w, hooks), log: () => {} })
+  wireTx(ex, { store, fx, log: () => {} })
   await w.prepare(ctx('h', 'a'), 'send', tx)
   assert.equal((await w.submit('a')).state, 'rejected', 'our own broadcast never left')
   assert.deepEqual(died, [tx.id('hex')], 'the refusal freed custody')
@@ -531,11 +546,15 @@ void test('watcher: recently-rejected rows still re-observe — the counterparty
   const revived: string[] = []
   const ex = new Dispatcher()
   t.after(() => ex.close())
-  const w = new WalletCoordinator(store, { broadcast: () => Promise.resolve({ status: 'error', description: 'SpendGuard refused: daily cap' }), exec: ex })
   // the dead→live revive fires the 'tx-spent' intent on the
   // rejected --obs.seen--> observed edge — the observe body runs it via
   // wireTx's fx
-  const effects: TxEffects = { txSpent: (row) => void revived.push(row.txid) }
+  const effects: TxEffects = { ...inertTxEffects, txSpent: (row) => void revived.push(row.txid) }
+  const w = new WalletCoordinator(store, {
+    broadcast: () => Promise.resolve({ status: 'error', description: 'SpendGuard refused: daily cap' }),
+    fx: effects,
+    exec: ex
+  })
   wireTx(ex, { store, fx: effects, log: () => {}, submit: (id) => w.submit(id) })
   await w.prepare(ctx('h', 'a'), 'send', tx)
   assert.equal((await w.submit('a')).state, 'rejected')

@@ -4,7 +4,7 @@ import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
 import { executor, RestateExecutor, setExecutor, EXEC_SVC } from '../src/rt/exec.js'
-import { emitTxEvent } from '../src/machines/effects.js'
+import { emitTxEvent, inertTxEffects } from '../src/machines/effects.js'
 import { txEmit } from '../src/rt/emit.js'
 import { Dispatcher, wireTx } from './rig.js'
 
@@ -90,7 +90,7 @@ void test('txEmit: same-key scope is emitTxEvent verbatim; otherwise the call ro
   try {
     // the verbatim commit path — what same-key emits inside a handler run
     const w = await prepared(store, 'a:local')
-    const direct = await emitTxEvent(store, w, 'submit.success', { observation: { at: 1 }, attempt: true }, {})
+    const direct = await emitTxEvent(store, w, 'submit.success', { observation: { at: 1 }, attempt: true }, inertTxEffects)
     assert.equal(direct.accepted, true)
     assert.equal(direct.next, 'submitted')
 
@@ -98,8 +98,8 @@ void test('txEmit: same-key scope is emitTxEvent verbatim; otherwise the call ro
     // endpoint — the routed emit runs the real leg one dispatch layer deep
     const w2 = await prepared(store, 'a:routed')
     const ex = new Dispatcher()
-    wireTx(ex, { store, fx: {}, log: () => {} })
-    const routed = await txEmit(ex, store, w2, 'submit.success', { observation: { at: 2 }, attempt: true }, {})
+    wireTx(ex, { store, fx: inertTxEffects, log: () => {} })
+    const routed = await txEmit(ex, store, w2, 'submit.success', { observation: { at: 2 }, attempt: true }, inertTxEffects)
     assert.equal(routed.accepted, true)
     assert.equal(routed.next, 'submitted')
     assert.equal((await store.walletTx({ actionId: 'a:routed' }))!.state, 'submitted')

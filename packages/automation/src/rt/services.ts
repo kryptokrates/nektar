@@ -82,7 +82,7 @@ export interface ObserveResult {
 export const txSteps = (deps: RtDeps) => ({
   load: (actionId: string) => deps.store.walletTx({ actionId }),
   commit: (w: WalletTx, o: TxObserve) => deps.store.applyTxEvent(w.actionId, o.event, { guard: o.guard, observation: o.observation, attempt: o.attempt }),
-  intents: (w: WalletTx, intents: string[]) => runTxIntents(intents, w, deps.fx),
+  intents: (w: WalletTx, intents: string[]) => runTxIntents(intents, w, deps.fx, deps.log),
   mark: (eventId: number) => deps.store.markTxEffects(eventId).catch(() => undefined),
   resubmit: (actionId: string) => deps.submit!(actionId)
 })

@@ -9,7 +9,7 @@ import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nek
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { AutomationStore } from '@nektar/automation'
-import { MarketEngine, Dispatcher, type MarketMessage, type WalletTx } from '@nektar/automation'
+import { MarketEngine, Dispatcher, inertTxEffects, type MarketMessage, type WalletTx } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
 import { testPolicyFor, wireEngine } from './agentkit.js'
@@ -82,6 +82,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
     const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
     wireEngine(ex, engine, store, {
       fx: {
+        ...inertTxEffects,
         txDied: async (w) => {
           await mem.funds.died(await rebuild(w))
         },

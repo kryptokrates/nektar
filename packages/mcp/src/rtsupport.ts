@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PrivateKey, Transaction } from '@bsv/sdk'
 import { detached, nektarEnv, nektarEnvNum, mkLog, nap, sparse } from '@nektar/core'
-import { TxStore, type ChainPort, type Funds, type TxStatusEvent, type ChainEvents, type BroadcastResult } from '@nektar/chain'
+import { TxStore, type ChainPort, type TxStatusEvent, type ChainEvents, type BroadcastResult } from '@nektar/chain'
 import { executor, cronObject, legObject, EXEC_SVC, RT_OPTS_HEAVY, type InvokeTarget } from '@nektar/automation'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { readKeyFile, writeKeyFile, fundKeyFromMnemonic } from './keystore.js'
@@ -275,17 +275,22 @@ export async function openRecordsDb(dataDir: string) {
   await knex.raw('PRAGMA busy_timeout=5000')
   const store: ShardStore = new KnexShardStore(knex)
   await store.init?.()
-  const { AutomationStore, wrapBroadcast, leasePredicate } = await import('@nektar/automation')
+  const { AutomationStore, wrapBroadcast, leasePredicate, custodyTxEffects } = await import('@nektar/automation')
   const ledger = new AutomationStore(knex)
   await ledger.init()
-  return { knex, store, ledger, wrapBroadcast, leasePredicate }
+  return { knex, store, ledger, wrapBroadcast, leasePredicate, custodyTxEffects }
 }
 
 /** heal hook: a verified proof arriving after a terminal-looking ledger
  *  verdict ('conflicted' from the abandon horizon, 'rejected' from a
  *  first-party refusal) flips the row back to 'confirmed' — those verdicts
  *  are ceilings, not truth. Errors log to stderr, never crash. */
-export function healLedgerOnProof(mem: NektarMemory, ledger: import('@nektar/automation').AutomationStore, tag: string): () => void {
+export function healLedgerOnProof(
+  mem: NektarMemory,
+  ledger: import('@nektar/automation').AutomationStore,
+  tag: string,
+  fx: import('@nektar/automation').TxEffects
+): () => void {
   const nlog = mkLog(`nektar ${tag}`)
   // onTxProof has no removal API — the stop flag is the unsubscribe: a
   // proof landing between close() and store teardown must not launch an
@@ -302,9 +307,8 @@ export function healLedgerOnProof(mem: NektarMemory, ledger: import('@nektar/aut
           if (w !== undefined && (w.state === 'conflicted' || w.state === 'rejected')) {
             const { txEmit, executor } = await import('@nektar/automation')
             // the machine owns the revive: obs.proven@proof carries tx-spent
-            // + leases->spent + record-aired; with no fx here the intents
-            // commit uneffected and the next watcher sweep replays them
-            await txEmit(executor(), ledger, w, 'obs.proven', { guard: 'proof', observation: { at: Date.now(), healed: true } }, {})
+            // + leases->spent + record-aired — the runtime's one custody set
+            await txEmit(executor(), ledger, w, 'obs.proven', { guard: 'proof', observation: { at: Date.now(), healed: true } }, fx)
             nlog(`${txid} proved after a terminal verdict — ledger healed to confirmed`)
           }
         } catch (e) {
@@ -365,50 +369,13 @@ export function persistedTxStore(): { txStore: TxStore; open: (knex: import('kne
 async function buildRecordsWatcher(d: {
   ledger: import('@nektar/automation').AutomationStore
   statusOf: (txid: string) => { ev: TxStatusEvent; verified: boolean } | undefined
-  port: Pick<ChainPort, 'statusHint' | 'spendStatus' | 'txLookup' | 'guard'>
-  funds: Funds
-  fundingRefresh: (() => Promise<unknown>) | undefined
-  diedFromRow: (w: import('@nektar/automation').WalletTx, tag: string) => Promise<void>
+  port: Pick<ChainPort, 'statusHint'>
+  /** the runtime's one custody effect set — the watcher's emits run it */
+  txEffects: import('@nektar/automation').TxEffects
   net: string
 }): Promise<import('@nektar/automation').TransactionWatcher> {
   const { TransactionWatcher } = await import('@nektar/automation')
-  const { ledger, statusOf, port, funds, fundingRefresh, diedFromRow, net } = d
-  const nlog = mkLog(`nektar ${net}`)
-  const txFromRow = (w: { rawHex: string; parents: Record<string, string> }): Transaction => {
-    const tx = Transaction.fromHex(w.rawHex)
-    for (const inp of tx.inputs) {
-      const hex = inp.sourceTXID !== undefined ? w.parents[inp.sourceTXID] : undefined
-      if (hex !== undefined) inp.sourceTransaction = Transaction.fromHex(hex)
-    }
-    return tx
-  }
-  const exportExpired = async (w: { txid: string; rawHex: string; parents: Record<string, string> }): Promise<void> => {
-    let freed = 0
-    let inputs = 0
-    try {
-      const tx = Transaction.fromHex(w.rawHex)
-      inputs = tx.inputs.length
-      for (const inp of tx.inputs) {
-        const srcTxid = inp.sourceTXID
-        if (srcTxid === undefined) continue
-        const vout = inp.sourceOutputIndex
-        // provably-spent inputs stay dead — the export landed late or
-        // something else consumed them. 'unknown' still frees: the
-        // export had its window and the take-time probe burns a
-        // later-landing spend anyway
-        if ((await port.spendStatus?.(srcTxid, vout).catch(() => 'unknown' as const)) === 'spent') continue
-        const parentHex: string | undefined = sparse(w.parents[srcTxid])
-        const parent = parentHex !== undefined ? Transaction.fromHex(parentHex) : await port.txLookup?.(srcTxid).catch(() => undefined)
-        if (parent === undefined) continue
-        await funds.revive(parent, vout)
-        freed++
-      }
-    } catch (e) {
-      nlog(`expired export ${w.txid}: revive failed: ${(e as Error).message}`)
-      return
-    }
-    nlog(`export ${w.txid} expired unaired — ${freed}/${inputs} input(s) returned to custody`)
-  }
+  const { ledger, statusOf, port } = d
   return new TransactionWatcher(
     ledger,
     async (txid) => {
@@ -430,28 +397,7 @@ async function buildRecordsWatcher(d: {
       // WHICH fire, the effector just executes. 'watch' / 'watch-trailing'
       // map to nothing here: this watcher already rescans live +
       // recently-dead rows every pass
-      effects: {
-        txDied: async (w) => diedFromRow(w, 'rejected'),
-        txSpent: async (w) => {
-          try {
-            await funds.spent(txFromRow(w))
-            nlog(`${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
-          } catch (e) {
-            nlog(`revived tx ${w.txid}: spent() failed: ${(e as Error).message}`)
-          }
-          await (fundingRefresh?.() ?? (funds.refresh?.() ?? Promise.resolve()).then(() => undefined))
-        },
-        recordAired: (w) => {
-          try {
-            port.guard?.recordAired(txFromRow(w))
-          } catch {
-            /* day-ledger accounting is best-effort — the custody mark above is the durable one */
-          }
-        },
-        exportExpired: async (w) => {
-          await exportExpired(w)
-        }
-      }
+      effects: d.txEffects
     }
   )
 }
@@ -470,9 +416,8 @@ export interface ConfirmerWatchDeps {
   ledger: import('@nektar/automation').AutomationStore
   chain: { broadcast: (tx: Transaction) => Promise<BroadcastResult> }
   txStore: TxStore
-  funds: Funds
-  fundingRefresh: (() => Promise<void>) | undefined
-  diedFromRow: (w: import('@nektar/automation').WalletTx, tag: string) => Promise<void>
+  /** the runtime's one custody effect set — the records watcher's emits run it */
+  txEffects: import('@nektar/automation').TxEffects
   net: string
   nlog: (line: string) => void
   persistKeys: () => void
@@ -643,9 +588,7 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
     ledger: d.ledger,
     statusOf: (txid) => d.events.statusOf(txid),
     port: d.port,
-    funds: d.funds,
-    fundingRefresh: d.fundingRefresh,
-    diedFromRow: d.diedFromRow,
+    txEffects: d.txEffects,
     net: d.net
   })
   let watching = false

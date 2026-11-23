@@ -4,10 +4,11 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
-import { WalletCoordinator, type WalletDeps } from '../src/wallet.js'
+import { WalletCoordinator } from '../src/wallet.js'
+import { txFromRow } from '../src/ledger.js'
 import { MarketEngine } from '../src/market.js'
 import type { MarketDeps } from '../src/market/types.js'
-import type { TxEffects } from '../src/machines/effects.js'
+import { inertTxEffects, type TxEffects } from '../src/machines/effects.js'
 import { Dispatcher, wireTx } from './rig.js'
 import { wireEngine } from '../src/rt/dispatch.js'
 import { OPS_NO_EDGE_CAUSES, opsCauseCandidates, replayOps, replayTx, type Diff } from '../src/machines/shadow.js'
@@ -51,10 +52,24 @@ function oneOutputTx(): Transaction {
 // emit routed through the Dispatcher lands on wireTx's handler, whose fx
 // must rebuild the stored bytes and call the same deps — the test-side twin
 // of wallet.ts's driver fx (runtime.ts does the same with txFx)
-const fxFor = (w: WalletCoordinator, deps: Pick<WalletDeps, 'txSpent' | 'txDied' | 'recordAired'>): TxEffects => ({
-  txSpent: deps.txSpent === undefined ? undefined : async (wt) => await deps.txSpent!(await w.rebuildTx(wt)),
-  txDied: deps.txDied === undefined ? undefined : async (wt) => await deps.txDied!(await w.rebuildTx(wt)),
-  recordAired: deps.recordAired === undefined ? undefined : async (wt) => await deps.recordAired!(await w.rebuildTx(wt))
+// custody hooks take the rebuilt Transaction — the one total effect set a
+// coordinator and its wireTx handler share (production: custodyTxEffects)
+type TxHooks = {
+  txSpent?: (tx: Transaction) => void | Promise<void>
+  txDied?: (tx: Transaction) => void | Promise<void>
+  recordAired?: (tx: Transaction) => void | Promise<void>
+}
+const fxFor = (deps: TxHooks): TxEffects => ({
+  txSpent: async (wt) => {
+    await deps.txSpent?.(txFromRow(wt))
+  },
+  txDied: async (wt) => {
+    await deps.txDied?.(txFromRow(wt))
+  },
+  recordAired: async (wt) => {
+    await deps.recordAired?.(txFromRow(wt))
+  },
+  exportExpired: () => {}
 })
 
 /** Wrap the write paths so every live tx edge lands in the replay log —
@@ -93,7 +108,7 @@ void test('shadow: reconcile-dead escrow agrees with the live FSM', async (t) =>
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const engine = new MarketEngine(deps(store, () => now, { txFacts: () => ({ verdict: 'dead' }) as never, executor: ex }))
-  wireEngine(ex, engine, { store, fx: {}, ceilingMs: () => 60000, now: () => now, log: () => {} })
+  wireEngine(ex, engine, { store, fx: inertTxEffects, ceilingMs: () => 60000, now: () => now, log: () => {} })
   await engine.tick()
   const evs = (await store.events(operation.operationId)).map((e) => ({ from: e.from ?? '', to: e.to, cause: e.cause }))
   const diffs = replayOps(evs)
@@ -106,20 +121,21 @@ void test('shadow: the abandoned verdict agrees on the label but live skips the 
   t.after(() => kx.destroy())
   const txLog: { from: string; to: string; hint?: 'abandon' }[] = []
   let died = 0
-  const hooks: Pick<WalletDeps, 'txSpent' | 'txDied'> = {
+  const hooks: TxHooks = {
     txSpent: () => {},
     txDied: () => {
       died++
     }
   }
+  const fx = fxFor(hooks)
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const w = new WalletCoordinator(store, {
     broadcast: () => Promise.resolve({ status: 'success' }),
-    ...hooks,
+    fx,
     exec: ex
   })
-  wireTx(ex, { store, fx: fxFor(w, hooks), log: () => {} })
+  wireTx(ex, { store, fx, log: () => {} })
   const tx = oneOutputTx()
   const actionId = `owner:${tx.id('hex')}`
   await w.prepareOwner('upkeep', tx)
@@ -216,11 +232,12 @@ void test('shadow: real-history replay — market_events from a live automation.
 void test('shadow report: dump the diff list', async (t) => {
   const { kx, store } = await open()
   const txLog: { from: string; to: string; hint?: 'abandon' }[] = []
-  const hooks: Pick<WalletDeps, 'txSpent' | 'txDied'> = { txSpent: () => {}, txDied: () => {} }
+  const hooks: TxHooks = { txSpent: () => {}, txDied: () => {} }
+  const fx = fxFor(hooks)
   const ex = new Dispatcher()
   t.after(() => ex.close())
-  const w = new WalletCoordinator(store, { broadcast: () => Promise.resolve({ status: 'success' }), ...hooks, exec: ex })
-  wireTx(ex, { store, fx: fxFor(w, hooks), log: () => {} })
+  const w = new WalletCoordinator(store, { broadcast: () => Promise.resolve({ status: 'success' }), fx, exec: ex })
+  wireTx(ex, { store, fx, log: () => {} })
   const tx = oneOutputTx()
   await w.prepareOwner('upkeep', tx)
   tapTx(store, txLog)

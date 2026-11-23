@@ -7,7 +7,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AutomationStore } from '@nektar/automation'
-import { wrapBroadcast, leasePredicate, TransactionWatcher, Dispatcher, wireTx } from '@nektar/automation'
+import { wrapBroadcast, leasePredicate, TransactionWatcher, Dispatcher, wireTx, inertTxEffects } from '@nektar/automation'
 import { NektarMemory } from '../src/memory.js'
 
 async function open() {
@@ -31,8 +31,8 @@ void test('ledger: every owner broadcast is recorded with bytes before the outco
   // restate ingress, which would route this tx observe off the test's store
   // (and its http socket would hold the process open past teardown)
   const ex = new Dispatcher()
-  wireTx(ex, { store, fx: {}, log: () => {} })
-  chain.broadcast = wrapBroadcast(store, chain.broadcast.bind(chain), ex)
+  wireTx(ex, { store, fx: inertTxEffects, log: () => {} })
+  chain.broadcast = wrapBroadcast(store, chain.broadcast.bind(chain), { fx: inertTxEffects, exec: ex })
   const r2 = await mem.sendSats({ amount: 500, address: PrivateKey.fromRandom().toPublicKey().toAddress([0x6f]) })
   const rec = await store.walletTx({ txid: r2.txid })
   assert.ok(rec, 'owner spend landed in the ledger')
@@ -95,8 +95,8 @@ void test('ledger: EF relay with sparse parent outputs — bookkeeping must not 
   tx.inputs[0].sourceTransaction = stub as any
   const inner = () => Promise.resolve({ status: 'success' as const, txid: tx.id('hex'), description: 'ok' })
   const ex2 = new Dispatcher()
-  wireTx(ex2, { store, fx: {}, log: () => {} })
-  const wrapped = wrapBroadcast(store, inner, ex2)
+  wireTx(ex2, { store, fx: inertTxEffects, log: () => {} })
+  const wrapped = wrapBroadcast(store, inner, { fx: inertTxEffects, exec: ex2 })
   const r = await wrapped(tx)
   assert.equal(r.status, 'success', 'the broadcast result reaches the caller even though nothing was recordable')
   await kx.destroy()
@@ -131,8 +131,8 @@ void test('ledger: an exported row the counterparty aired settles; an unaired on
   // an aired export settles like any broadcast — 'confirmed' burns its leases
   const airedParent = await mk('aired')
   const ex = new Dispatcher()
-  wireTx(ex, { store, fx: {}, log: () => {} })
-  const settled = new TransactionWatcher(store, () => Promise.resolve({ status: 'proven', source: 'test' }), { effects: {}, exec: ex })
+  wireTx(ex, { store, fx: inertTxEffects, log: () => {} })
+  const settled = new TransactionWatcher(store, () => Promise.resolve({ status: 'proven', source: 'test' }), { effects: inertTxEffects, exec: ex })
   await settled.tick()
   assert.equal((await store.walletTx({ actionId: 'owner:aired' }))!.state, 'confirmed', 'a landed export confirms')
   assert.equal((await store.leaseState(airedParent, 0))!.state, 'spent')
@@ -143,6 +143,7 @@ void test('ledger: an exported row the counterparty aired settles; an unaired on
   wireTx(ex2, {
     store,
     fx: {
+      ...inertTxEffects,
       exportExpired: () => {
         revived++
       }
@@ -152,6 +153,7 @@ void test('ledger: an exported row the counterparty aired settles; an unaired on
   const expiring = new TransactionWatcher(store, () => Promise.resolve(undefined), {
     exportedTtlMs: 0,
     effects: {
+      ...inertTxEffects,
       exportExpired: () => {
         revived++
       }
@@ -168,8 +170,8 @@ void test('ledger: an exported row the counterparty aired settles; an unaired on
   // a fresh export inside its window is untouched
   await mk('fresh')
   const ex3 = new Dispatcher()
-  wireTx(ex3, { store, fx: {}, log: () => {} })
-  const waiting = new TransactionWatcher(store, () => Promise.resolve(undefined), { exportedTtlMs: 60_000, effects: {}, exec: ex3 })
+  wireTx(ex3, { store, fx: inertTxEffects, log: () => {} })
+  const waiting = new TransactionWatcher(store, () => Promise.resolve(undefined), { exportedTtlMs: 60_000, effects: inertTxEffects, exec: ex3 })
   await waiting.tick()
   assert.equal((await store.walletTx({ actionId: 'owner:fresh' }))!.state, 'exported', 'inside the window the row waits')
   await kx.destroy()

@@ -418,7 +418,7 @@ export const wireRuntime = (ex: LocalDispatch, d: WireAll): void => {
  *  wireEngine(ex, engine, {store, fx, ...}) completes the service map. */
 export interface WireEngineDeps {
   store: import('../store.js').AutomationStore
-  fx?: import('../machines/effects.js').TxEffects
+  fx: import('../machines/effects.js').TxEffects
   submit?: RtDeps['submit']
   scan?: SweepDeps['scan']
   resubmitRows?: SweepDeps['resubmitRows']
@@ -453,7 +453,7 @@ export const wireEngine = (ex: LocalDispatch, engine: EngineSurface, d: WireEngi
     }))
   }
   wireRuntime(ex, {
-    tx: { store: d.store, fx: d.fx ?? {}, log, submit: d.submit ?? ((actionId) => engine.submitTx(actionId)) },
+    tx: { store: d.store, fx: d.fx, log, submit: d.submit ?? ((actionId) => engine.submitTx(actionId)) },
     sweep: {
       scan: d.scan ?? async function* () {},
       resubmitRows: d.resubmitRows ?? (() => Promise.resolve([])),

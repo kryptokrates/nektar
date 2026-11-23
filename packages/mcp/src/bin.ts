@@ -183,6 +183,7 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
   }
   rt.mem.automation = await openAutomation(rt.mem, {
     network: rt.network,
+    txEffects: rt.txEffects,
     dataDir: nektarEnv('NEKTAR_DATA_DIR') ?? '.nektar',
     marketHosts: mh,
     localHosts: nektarEnv('NEKTAR_MARKET_LOCAL_HOSTS') === '1',

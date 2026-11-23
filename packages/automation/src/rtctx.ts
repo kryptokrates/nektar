@@ -88,6 +88,10 @@ export interface AutomationConfig {
    *  RestateExecutor still opens the endpoint — injection retargets the
    *  ingress, LocalDispatch replaces it. */
   exec?: import('./rt/exec.js').Executor
+  /** the host's custody effect set; absent = built from the host's coin
+   *  book (custodyTxEffects over mem.funds). One set for every emit site
+   *  and the tx object — a declared intent must always have its effector. */
+  txEffects?: import('./machines/effects.js').TxEffects
   /** watch-shim base URLs (NEKTAR_WATCH_URLS) — long-poll wake in front of
    *  ordinary BRC-24 hosts. Each subscription mirrors a query the poll loop
    *  already issues; a changed result-set runs deals() at once. Optional:

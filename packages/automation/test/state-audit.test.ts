@@ -3,11 +3,11 @@ import assert from 'node:assert/strict'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
-import { WalletCoordinator, type WalletDeps } from '../src/wallet.js'
-import { TransactionWatcher } from '../src/ledger.js'
+import { WalletCoordinator } from '../src/wallet.js'
+import { TransactionWatcher, txFromRow } from '../src/ledger.js'
 import { MarketEngine } from '../src/market.js'
 import { NONTERMINAL, TERMINAL, type MarketDeps } from '../src/market/types.js'
-import type { TxEffects } from '../src/machines/effects.js'
+import { inertTxEffects, type TxEffects } from '../src/machines/effects.js'
 import { Dispatcher, wireTx } from './rig.js'
 import { wireEngine } from '../src/rt/dispatch.js'
 import { policyError, type AutomationPolicy } from '../src/policy.js'
@@ -76,24 +76,41 @@ function oneOutputTx(payTo = key): Transaction {
 // emit routed through the Dispatcher lands on wireTx's handler, whose fx
 // must rebuild the stored bytes and call the same deps — the test-side twin
 // of wallet.ts's driver fx (runtime.ts does the same with txFx)
-const fxFor = (w: WalletCoordinator, deps: Pick<WalletDeps, 'txSpent' | 'txDied' | 'recordAired'>): TxEffects => ({
-  txSpent: deps.txSpent === undefined ? undefined : async (wt) => await deps.txSpent!(await w.rebuildTx(wt)),
-  txDied: deps.txDied === undefined ? undefined : async (wt) => await deps.txDied!(await w.rebuildTx(wt)),
-  recordAired: deps.recordAired === undefined ? undefined : async (wt) => await deps.recordAired!(await w.rebuildTx(wt))
+// custody hooks take the rebuilt Transaction — the one total effect set a
+// coordinator and its wireTx handler share (production: custodyTxEffects)
+type TxHooks = {
+  txSpent?: (tx: Transaction) => void | Promise<void>
+  txDied?: (tx: Transaction) => void | Promise<void>
+  recordAired?: (tx: Transaction) => void | Promise<void>
+}
+const fxFor = (deps: TxHooks): TxEffects => ({
+  txSpent: async (wt) => {
+    await deps.txSpent?.(txFromRow(wt))
+  },
+  txDied: async (wt) => {
+    await deps.txDied?.(txFromRow(wt))
+  },
+  recordAired: async (wt) => {
+    await deps.recordAired?.(txFromRow(wt))
+  },
+  exportExpired: () => {}
 })
 
-// the engine-side twin: base.ts builds the coordinator's custody deps as
-// {txDied, txSpent: settleEscrow, recordAired} — the observe intents run
-// those same impls (rebuilt to a Transaction first, exactly like fx())
-const engineFx = (engine: MarketEngine, d: MarketDeps): TxEffects => {
-  const coord = engine.walletCoordinator
-  const fx: TxEffects = {}
-  if (coord === undefined) return fx
-  if (d.txDied !== undefined) fx.txDied = async (wt) => await d.txDied!(await coord.rebuildTx(wt))
-  if (d.settleEscrow !== undefined) fx.txSpent = async (wt) => await d.settleEscrow!(await coord.rebuildTx(wt))
-  if (d.recordAired !== undefined) fx.recordAired = async (wt) => await d.recordAired!(await coord.rebuildTx(wt))
-  return fx
-}
+// the engine-side twin — base.ts's own txFx mapping verbatim: the host's
+// txEffects when present, else the legacy triple over txFromRow
+const engineFx = (d: MarketDeps): TxEffects =>
+  d.txEffects ?? {
+    txSpent: async (wt) => {
+      await d.settleEscrow?.(txFromRow(wt))
+    },
+    txDied: async (wt) => {
+      await d.txDied?.(txFromRow(wt))
+    },
+    recordAired: async (wt) => {
+      await d.recordAired?.(txFromRow(wt))
+    },
+    exportExpired: () => {}
+  }
 
 // an engine whose durable legs run on an in-process Dispatcher — wireEngine
 // mirrors runtime.ts's service surface; the floor self-arm sits on a 60s
@@ -102,7 +119,7 @@ const mkEngine = (t: TestContext, d: MarketDeps): MarketEngine => {
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const engine = new MarketEngine({ ...d, executor: ex })
-  wireEngine(ex, engine, { store: d.store, fx: engineFx(engine, d), ceilingMs: () => 60_000, now: d.now ?? Date.now, log: () => {} })
+  wireEngine(ex, engine, { store: d.store, fx: engineFx(d), ceilingMs: () => 60_000, now: d.now ?? Date.now, log: () => {} })
   return engine
 }
 
@@ -140,20 +157,21 @@ void test('F2/F6: an abandoned verdict runs the custody rollback and labels the 
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   let died = 0
-  const hooks: Pick<WalletDeps, 'txSpent' | 'txDied'> = {
+  const hooks: TxHooks = {
     txSpent: () => {},
     txDied: () => {
       died++
     }
   }
+  const fx = fxFor(hooks)
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const w = new WalletCoordinator(store, {
     broadcast: () => Promise.resolve({ status: 'success' }),
-    ...hooks,
+    fx,
     exec: ex
   })
-  wireTx(ex, { store, fx: fxFor(w, hooks), log: () => {} })
+  wireTx(ex, { store, fx, log: () => {} })
   const tx = oneOutputTx()
   const actionId = `owner:${tx.id('hex')}`
   await w.prepareOwner('upkeep', tx)
@@ -257,8 +275,8 @@ void test('F5: an expired export that lands late is observed, not stranded in a 
   await store.setTxState('a1', 'expired', { reason: 'test expiry' })
   const ex = new Dispatcher()
   t.after(() => ex.close())
-  wireTx(ex, { store, fx: {}, log: () => {} })
-  const w = new TransactionWatcher(store, () => Promise.resolve({ status: 'seen' as const, source: 't' }), { effects: {}, exec: ex })
+  wireTx(ex, { store, fx: inertTxEffects, log: () => {} })
+  const w = new TransactionWatcher(store, () => Promise.resolve({ status: 'seen' as const, source: 't' }), { effects: inertTxEffects, exec: ex })
   await w.tick()
   assert.equal((await store.walletTx({ txid }))!.state, 'observed', 'a landed-late export must move to observed')
 })

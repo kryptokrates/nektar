@@ -139,6 +139,11 @@ export interface MarketDeps {
   /** a refused tx that aired anyway — retro-count its spend in the cap
    *  ledger; the machine's revive edges carry this as a declared intent */
   recordAired?: (tx: Transaction) => void | Promise<void>
+  /** the runtime's one custody effect set — the coordinator and the tx
+   *  object must run the same handlers; absent, the engine builds the
+   *  legacy set from settleEscrow/txDied/recordAired (tests, engine-only
+   *  embeddings) */
+  txEffects?: import('../machines/effects.js').TxEffects
   afterPrepare?: (actionId: string) => void | Promise<void>
   transport: MarketTransport
   executor?: Executor

@@ -21,6 +21,7 @@ import {
   type DealEvent
 } from '../src/rt/services.js'
 import { openEndpoint } from '../src/rt/endpoint.js'
+import { inertTxEffects } from '../src/machines/effects.js'
 import { custodySubmit, txEmit } from '../src/rt/emit.js'
 
 // rt-spike — the live proof: a tx leg end-to-end through a REAL restate
@@ -81,7 +82,7 @@ void test(
       parents: {},
       feeSats: 1
     })
-    const endpoint = await openEndpoint([await txObject({ store, fx: {}, log: () => {} })], {
+    const endpoint = await openEndpoint([await txObject({ store, fx: inertTxEffects, log: () => {} })], {
       NEKTAR_RESTATE_ENDPOINT_URI: ENDPOINT_URI,
       NEKTAR_RESTATE_ADMIN: ADMIN,
       NEKTAR_RESTATE_ENDPOINT_PORT: ENDPOINT_PORT
@@ -90,13 +91,13 @@ void test(
     try {
       // leg 1: the submit verdict lands as a journaled call on the tx object
       const w = (await store.walletTx({ actionId: 'spike:1' }))!
-      const r1 = await txEmit(ex, store, w, 'submit.unknown', { observation: { at: 1, error: 'transport' }, attempt: true }, {})
+      const r1 = await txEmit(ex, store, w, 'submit.unknown', { observation: { at: 1, error: 'transport' }, attempt: true }, inertTxEffects)
       assert.equal(r1.accepted, true)
       assert.equal(r1.next, 'submission_unknown')
 
       // leg 2: a late verified proof revives — the journaled emit commits
       // through the same object, serialized after leg 1
-      const r2 = await txEmit(ex, store, w, 'obs.proven', { guard: 'proof', observation: { at: 2 } }, {})
+      const r2 = await txEmit(ex, store, w, 'obs.proven', { guard: 'proof', observation: { at: 2 } }, inertTxEffects)
       assert.equal(r2.accepted, true)
       assert.equal(r2.next, 'confirmed')
       assert.equal((await store.walletTx({ actionId: 'spike:1' }))!.state, 'confirmed')
@@ -133,7 +134,7 @@ void test(
       [{ actionId: 'sweep:1', observe: { event: 'submit.unknown', observation: { at: 1 }, attempt: true } }],
       [{ actionId: 'sweep:1', observe: { event: 'obs.proven', guard: 'proof', observation: { at: 2 } } }]
     ]
-    const txDef = await txObject({ store, fx: {}, log: () => {} })
+    const txDef = await txObject({ store, fx: inertTxEffects, log: () => {} })
     const sweepDef = await sweepService(
       {
         // eslint-disable-next-line @typescript-eslint/require-await -- the AsyncIterable contract needs `async`; the body yields, it never awaits
@@ -232,8 +233,8 @@ void test(
       parents: {},
       feeSats: 1
     })
-    const wallet = new WalletCoordinator(store, { broadcast: (tx) => Promise.resolve({ status: 'success', txid: tx.id('hex') }) })
-    const txDef = await txObject({ store, fx: {}, log: () => {} })
+    const wallet = new WalletCoordinator(store, { broadcast: (tx) => Promise.resolve({ status: 'success', txid: tx.id('hex') }), fx: inertTxEffects })
+    const txDef = await txObject({ store, fx: inertTxEffects, log: () => {} })
     const custodyDef = await custodyObject({ wallet, log: () => {} })
     const endpoint = await openEndpoint([txDef, custodyDef], {
       NEKTAR_RESTATE_ENDPOINT_URI: ENDPOINT_URI,

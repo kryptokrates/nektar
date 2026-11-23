@@ -12,6 +12,7 @@ import {
   NONTERMINAL,
   opWantId,
   wireTx,
+  inertTxEffects,
   wireDeal,
   wireDealfan,
   wireCustody
@@ -165,7 +166,7 @@ export const wireEngine = (
   const log = opts.log ?? (() => {})
   const now = opts.now ?? (() => Date.now())
   let fanSeq = 0
-  wireTx(ex, { store, fx: opts.fx ?? {}, log, submit: (actionId) => engine.submitTx(actionId) })
+  wireTx(ex, { store, fx: opts.fx ?? inertTxEffects, log, submit: (actionId) => engine.submitTx(actionId) })
   wireDeal(ex, {
     advanceOp: (operationId) => engine.advanceOp(operationId),
     inboxEvent: (item) => engine.dealEvent(item),

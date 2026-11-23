@@ -186,6 +186,9 @@ export interface Runtime {
   mem: NektarMemory
   close: () => Promise<void>
   network: RuntimeConfig['network']
+  /** the runtime's one custody effect set — every tx emit site and the tx
+   *  object run it; openAutomation hands it to its runtime unchanged */
+  txEffects: import('@nektar/automation').TxEffects
   /** host-composed endpoint defs + boot kicks for the shared restate
    *  endpoint — openAutomation registers and fires them */
   rtDefs: unknown[]
@@ -319,7 +322,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
         }))
   // records db + tx store open before custody — SqlFunds binds the `utxos`
   // table on the same knex and rehydrates coins from tx_store
-  const { knex, store, ledger, wrapBroadcast, leasePredicate } = await openRecordsDb(cfg.dataDir)
+  const { knex, store, ledger, wrapBroadcast, leasePredicate, custodyTxEffects } = await openRecordsDb(cfg.dataDir)
   await openTxStore(knex)
   // custody — an injected coin book skips the whole wallet assembly
   const custody: CustodyResult = injected
@@ -351,24 +354,20 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     observe: port.observe
   })
   eventsRef = events
-  // a tracked tx any verdict calls dead can never land — its adopted outputs
-  // are phantom: died() tombstones them and revives provably-live inputs.
-  // Shared by the watcher (rejected/conflicted) and the abandon handler —
-  // terminal-for-custody writes MUST go through this path
-  const diedFromRow = async (w: Awaited<ReturnType<typeof ledger.walletTxs>>[number], tag: string): Promise<void> => {
-    try {
-      const tx = Transaction.fromHex(w.rawHex)
-      for (const inp of tx.inputs) {
-        const hex = inp.sourceTXID !== undefined ? w.parents[inp.sourceTXID] : undefined
-        if (hex !== undefined) inp.sourceTransaction = Transaction.fromHex(hex)
-      }
-      await custody.funds.died(tx)
-    } catch (e) {
-      nlog(`${tag} tx ${w.txid}: died() failed: ${(e as Error).message}`)
-    }
-    await ledger.releaseLeases(w.actionId).catch(() => undefined)
-    await (fundingRefresh?.() ?? (custody.funds as Partial<Funds>).refresh?.() ?? Promise.resolve()).then(() => undefined)
-  }
+  // the ONE custody effect set — wrapBroadcast's verdicts, the records
+  // watcher, the abandon + proof-heal emits, and the tx object all run it;
+  // a declared intent always has its effector
+  let fundingRefresh: (() => Promise<void>) | undefined
+  const txEffects = custodyTxEffects({
+    funds: custody.funds,
+    spendStatus: port.spendStatus,
+    txLookup: port.txLookup,
+    recordAired: port.guard !== undefined ? (tx: Transaction) => void port.guard!.recordAired(tx) : undefined,
+    afterChange: async () => {
+      await (fundingRefresh?.() ?? (custody.funds as Partial<Funds>).refresh?.())
+    },
+    log: nlog
+  })
   events.on('abandoned', ({ txid, tip, seenAtHeight }) => {
     nlog(`tx ${txid} not mined after abandon horizon — abandoned (tip ${tip}, watched since ${seenAtHeight})`)
     // repair-by-name: an ABSENCE verdict — mark 'abandoned' (never
@@ -386,9 +385,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
             hit,
             'abandon',
             { observation: { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` } },
-            {
-              txDied: (row) => diedFromRow(row, 'abandoned')
-            }
+            txEffects
           )
         }
         memRef?.events.emit('txAbandoned', { txid, tip, seenAtHeight })
@@ -471,7 +468,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     }
   }
   if ('dealFloor' in custody.funds) custody.funds.dealFloor = nektarEnvNum('NEKTAR_DEAL_FLOOR_SATS') ?? 0
-  chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
+  chain.broadcast = wrapBroadcast(ledger, chain.broadcast, { fx: txEffects, log: nlog })
   chain.broadcast = txLogBroadcast(chain.broadcast)
   const mem = new NektarMemory(
     chain,
@@ -504,7 +501,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     store
   )
   memRef = mem
-  const stopProofHeal = healLedgerOnProof(mem, ledger, net)
+  const stopProofHeal = healLedgerOnProof(mem, ledger, net, txEffects)
   // a reorg invalidates cached proofs at/above the fork: clear them and
   // re-watch so the observe path re-fetches and re-verifies against the new
   // headers. Un-anchoring shard records stays out of scope — finalityDepth
@@ -546,7 +543,6 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   // funding — the reserve fills per-network: regtest bootstraps a treasury
   // split; live nets run imports/discovery/vault/p2p + the funding wait and
   // expose the /v1 ops surface
-  let fundingRefresh: (() => Promise<void>) | undefined
   let topUp: (() => Promise<void>) | undefined
   let ops: Runtime['ops'] | undefined
   if (!injected && live) {
@@ -594,9 +590,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     ledger,
     chain,
     txStore,
-    funds: custody.funds,
-    fundingRefresh,
-    diedFromRow,
+    txEffects,
     net,
     nlog,
     persistKeys,
@@ -608,6 +602,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     mem,
     network: net,
     ops,
+    txEffects,
     /** host-composed endpoint defs + boot kicks — openAutomation registers
      *  them on the shared restate endpoint; rejected under an injected
      *  cfg.exec Dispatcher (the in-process test seam) */

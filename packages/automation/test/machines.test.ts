@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { declaredTransitions, type AnyStateMachine, type TransitionTable } from '../src/machines/machine.js'
 import { OPS_TABLE, opsMachine, opsStep } from '../src/machines/ops.machine.js'
 import { TX_TABLE, txMachine, txStep } from '../src/machines/tx.machine.js'
+import { IN_TX_INTENTS, DESCRIPTIVE_INTENTS, TX_EFFECT_OF } from '../src/machines/effects.js'
 import { LEASE_TABLE, leaseMachine, leaseStep } from '../src/machines/lease.machine.js'
 import { INBOX_TABLE, inboxMachine, inboxStep } from '../src/machines/inbox.machine.js'
 import { OUTBOX_TABLE, outboxMachine, outboxStep } from '../src/machines/outbox.machine.js'
@@ -134,6 +135,14 @@ void test('txMachine: timeout-without-verdict goes to unknown/quiescent, never f
   for (const e of ['bogus', 'tick.error', 'stuck.timeout']) {
     assert.equal(txStep('submission_unknown', e).next, 'submission_unknown')
   }
+})
+
+void test('txMachine: every declared intent has a home — in-tx, descriptive, or an effector', () => {
+  // the census a partial TxEffects used to break silently: a declared intent
+  // the dispatcher can't resolve must never exist
+  const seen = new Set<string>()
+  for (const t of TX_TABLE.transitions) for (const i of t.intents ?? []) seen.add(i)
+  for (const i of seen) assert.ok(IN_TX_INTENTS.has(i) || DESCRIPTIVE_INTENTS.has(i) || i in TX_EFFECT_OF, `tx intent '${i}' has no effector and is not in-tx`)
 })
 
 void test('txMachine: crash/restart is identity — state lives in the row, not memory', () => {

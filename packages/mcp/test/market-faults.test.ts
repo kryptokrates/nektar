@@ -8,7 +8,7 @@ import { testChain, testFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { AutomationStore } from '@nektar/automation'
-import { MarketEngine, Dispatcher, type MarketMessage, type WalletTx } from '@nektar/automation'
+import { MarketEngine, Dispatcher, inertTxEffects, type MarketMessage, type WalletTx } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import { wireEngine } from './agentkit.js'
 import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
@@ -107,6 +107,7 @@ void test('20 seeded fault schedules: dropped/duplicated/reordered delivery + cr
       const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
       wireEngine(ex, engine, store, {
         fx: {
+          ...inertTxEffects,
           txDied: async (w) => {
             await mem.funds.died(await rebuild(w))
           },

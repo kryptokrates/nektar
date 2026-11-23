@@ -18,8 +18,8 @@ export {
   AutomationStore,
   classifyDeliveryError
 } from './store.js'
-export { type TxObservationInput, wrapBroadcast, leasePredicate, splitDailySpend, TransactionWatcher } from './ledger.js'
-export { emitTxEvent, replayTxEffects, type TxEffects } from './machines/effects.js'
+export { type TxObservationInput, wrapBroadcast, leasePredicate, splitDailySpend, TransactionWatcher, custodyTxEffects, txFromRow } from './ledger.js'
+export { emitTxEvent, replayTxEffects, inertTxEffects, TX_EFFECT_OF, IN_TX_INTENTS, DESCRIPTIVE_INTENTS, type TxEffects } from './machines/effects.js'
 export * from './rt/index.js'
 export { obsEvent, opsFsmLegacy } from './machines/driver.js'
 export {

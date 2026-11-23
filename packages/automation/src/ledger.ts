@@ -1,8 +1,7 @@
 import { Transaction } from '@bsv/sdk'
 import { sparse } from '@nektar/core'
-import type { BroadcastResult } from '@nektar/chain'
+import type { BroadcastResult, Funds } from '@nektar/chain'
 import type { AutomationStore, WalletTx } from './store.js'
-import { WalletCoordinator } from './wallet.js'
 import { replayTxEffects, type TxEffects } from './machines/effects.js'
 import { obsEvent } from './machines/driver.js'
 import { executor, type Executor } from './rt/exec.js'
@@ -17,13 +16,112 @@ export interface TxObservationInput {
   spentBy?: string
 }
 
+/** rebuild a stored row's bytes with their declared parents — the
+ *  Transaction the custody effects operate on */
+export function txFromRow(w: { rawHex: string; parents: Record<string, string> }): Transaction {
+  const tx = Transaction.fromHex(w.rawHex)
+  for (const inp of tx.inputs) {
+    const hex = inp.sourceTXID !== undefined ? w.parents[inp.sourceTXID] : undefined
+    if (hex !== undefined) inp.sourceTransaction = Transaction.fromHex(hex)
+  }
+  return tx
+}
+
+/** the ONE custody effect set — every emit site and the tx virtual object
+ *  run the handlers built here so a declared intent can never commit
+ *  uneffected. `afterChange` reconciles the reserve after custody changed
+ *  under a dead verdict or a revive (the funding refresh hook). */
+export function custodyTxEffects(d: {
+  funds: Pick<Funds, 'spent' | 'died' | 'revive'>
+  spendStatus?: (txid: string, vout: number) => Promise<'spent' | 'unspent' | 'unknown'>
+  txLookup?: (txid: string) => Promise<Transaction | undefined>
+  recordAired?: (tx: Transaction) => void | Promise<void>
+  /** reconcile the reserve after custody changed under a dead verdict or a revive */
+  afterChange?: () => Promise<unknown>
+  log: (line: string) => void
+}): TxEffects {
+  // the custody mark is the durable half — a failed reconcile is logged and
+  // never fails the effect (a retry would re-run the mark for nothing)
+  const reconcile = async (): Promise<void> => {
+    try {
+      await d.afterChange?.()
+    } catch (e) {
+      d.log(`reserve reconcile failed: ${(e as Error).message}`)
+    }
+  }
+  return {
+    txDied: async (w) => {
+      try {
+        await d.funds.died(txFromRow(w))
+      } catch (e) {
+        d.log(`tx ${w.txid}: died() failed: ${(e as Error).message}`)
+        throw e // a failed effect stays pending — the journal retries
+      }
+      await reconcile()
+    },
+    txSpent: async (w) => {
+      // w is the row BEFORE the transition — a dead→live observation is the
+      // counterparty-air path, the only case the reserve must reconcile
+      const wasDead = ['rejected', 'expired', 'abandoned', 'conflicted'].includes(w.state)
+      try {
+        await d.funds.spent(txFromRow(w))
+      } catch (e) {
+        d.log(`tx ${w.txid}: spent() failed: ${(e as Error).message}`)
+        throw e
+      }
+      if (wasDead) {
+        d.log(`${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
+        await reconcile()
+      }
+    },
+    recordAired: async (w) => {
+      try {
+        await d.recordAired?.(txFromRow(w))
+      } catch {
+        /* day-ledger accounting is best-effort — the custody mark is the durable one. Absent dep = unguarded host = explicit no-op. */
+      }
+    },
+    exportExpired: async (w) => {
+      let freed = 0
+      let inputs = 0
+      try {
+        const tx = Transaction.fromHex(w.rawHex)
+        inputs = tx.inputs.length
+        for (const inp of tx.inputs) {
+          const srcTxid = inp.sourceTXID
+          if (srcTxid === undefined) continue
+          const vout = inp.sourceOutputIndex
+          // provably-spent inputs stay dead — the export landed late or
+          // something else consumed them. 'unknown' still frees: the
+          // export had its window and the take-time probe burns a
+          // later-landing spend anyway
+          if ((await d.spendStatus?.(srcTxid, vout).catch(() => 'unknown' as const)) === 'spent') continue
+          const parentHex: string | undefined = sparse(w.parents[srcTxid])
+          const parent = parentHex !== undefined ? Transaction.fromHex(parentHex) : await d.txLookup?.(srcTxid).catch(() => undefined)
+          if (parent === undefined) continue
+          await d.funds.revive(parent, vout)
+          freed++
+        }
+      } catch (e) {
+        d.log(`expired export ${w.txid}: revive failed: ${(e as Error).message}`)
+        throw e // a failed effect stays pending — the journal retries
+      }
+      d.log(`export ${w.txid} expired unaired — ${freed}/${inputs} input(s) returned to custody`)
+    }
+  }
+}
+
 export function wrapBroadcast(
   store: AutomationStore,
   inner: (tx: Transaction) => Promise<BroadcastResult>,
-  /** the caller's executor — absent = the ambient restate ingress */
-  exec?: Executor
+  opts: {
+    /** the caller's one custody effect set — the wrapped verdicts run it */
+    fx: TxEffects
+    /** the caller's executor — absent = the ambient restate ingress */
+    exec?: Executor
+    log?: (line: string) => void
+  }
 ): (tx: Transaction) => Promise<BroadcastResult> {
-  const _wallet = new WalletCoordinator(store, { broadcast: inner, exec })
   return async (tx) => {
     const txid = tx.id('hex')
     const actionId = `owner:${txid}`
@@ -71,12 +169,12 @@ export function wrapBroadcast(
         const w = await store.walletTx({ actionId }).catch(() => undefined)
         if (w !== undefined)
           await txEmit(
-            exec ?? executor(),
+            opts.exec ?? executor(),
             store,
             w,
             r.status === 'success' ? 'submit.success' : 'submit.unknown',
             { observation: { at: Date.now(), result: r }, attempt: true },
-            {}
+            opts.fx
           ).catch(() => {})
       }
       return r
@@ -85,12 +183,12 @@ export function wrapBroadcast(
         const w = await store.walletTx({ actionId }).catch(() => undefined)
         if (w !== undefined)
           await txEmit(
-            exec ?? executor(),
+            opts.exec ?? executor(),
             store,
             w,
             'submit.unknown',
             { observation: { at: Date.now(), error: (e as Error).message }, attempt: true },
-            {}
+            opts.fx
           ).catch(() => {})
       }
       throw e

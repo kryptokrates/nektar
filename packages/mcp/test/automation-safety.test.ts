@@ -16,7 +16,7 @@ import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nek
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { AutomationStore } from '@nektar/automation'
-import { MarketEngine, STATE_LIMITS, Dispatcher, wireTx, type MarketMessage, type WalletTx } from '@nektar/automation'
+import { MarketEngine, STATE_LIMITS, Dispatcher, wireTx, inertTxEffects, type MarketMessage, type WalletTx } from '@nektar/automation'
 import { WalletCoordinator } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
@@ -128,12 +128,13 @@ void test('D6 crash between broadcast and journal write: resubmit replays identi
     // driver mode routes emits through the executor — a dispatcher carrying
     // the tx object bodies, same as the endpoint serves
     const ex = new Dispatcher()
-    wireTx(ex, { store, fx: {}, log: () => {} })
+    wireTx(ex, { store, fx: inertTxEffects, log: () => {} })
     const wallet = new WalletCoordinator(store, {
       broadcast: (t) => {
         aired.push(t.id('hex'))
         return Promise.resolve({ status: 'success' })
       },
+      fx: inertTxEffects,
       exec: ex
     })
     const ctx = { operationId: 'op1', actionId: 'op1:escrow', policyHash: 'p', networkId: 'regtest' }
@@ -179,7 +180,11 @@ void test('D6 crash between broadcast and journal write: resubmit replays identi
     const tx2 = new Transaction()
     tx2.addInput({ sourceTransaction: parent2, sourceOutputIndex: 0, unlockingScript: Script.fromHex('51') })
     tx2.addOutput({ lockingScript: new P2PKH().lock(key.toPublicKey().toHash()), satoshis: 9_000 })
-    const wallet2 = new WalletCoordinator(store, { broadcast: () => Promise.resolve({ status: 'error', description: 'txn-already-in-mempool' }), exec: ex })
+    const wallet2 = new WalletCoordinator(store, {
+      broadcast: () => Promise.resolve({ status: 'error', description: 'txn-already-in-mempool' }),
+      fx: inertTxEffects,
+      exec: ex
+    })
     store.setTxState = orig
     const ctx2 = { ...ctx, actionId: 'op1:refund' }
     await wallet2.prepare(ctx2, 'refund', tx2)
@@ -361,6 +366,7 @@ async function world(
     const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
     wireEngine(ex, engine, store, {
       fx: {
+        ...inertTxEffects,
         txDied: async (w) => {
           await mem.funds.died(await rebuild(w))
         },

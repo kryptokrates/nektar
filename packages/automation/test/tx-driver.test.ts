@@ -2,11 +2,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import knexFactory, { type Knex } from 'knex'
 import { currentSignal, deadline, nap } from '@nektar/core'
-import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
+import { PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
 import { WalletCoordinator, type WalletDeps } from '../src/wallet.js'
-import { TransactionWatcher } from '../src/ledger.js'
-import { emitTxEvent, replayTxEffects, type TxEffects } from '../src/machines/effects.js'
+import { TransactionWatcher, custodyTxEffects } from '../src/ledger.js'
+import { emitTxEvent, replayTxEffects, inertTxEffects, type TxEffects } from '../src/machines/effects.js'
 import { Dispatcher, wireTx } from './rig.js'
 
 // Phase B — tx.machine as DRIVER: the table decides, store.applyTxEvent
@@ -40,8 +40,35 @@ async function prepared(store: AutomationStore, actionId: string, leased = true)
   return t.id('hex')
 }
 
-function wallet(store: AutomationStore, over: Partial<WalletDeps> = {}, ex?: Dispatcher) {
+// custody hooks take the rebuilt Transaction — the old WalletDeps shape;
+// the helper folds them into one total TxEffects shared by the coordinator
+// and the observe handler (production: custodyTxEffects fills that role)
+function wallet(
+  store: AutomationStore,
+  over: Partial<WalletDeps> & {
+    txSpent?: (tx: Transaction) => void | Promise<void>
+    txDied?: (tx: Transaction) => void | Promise<void>
+    recordAired?: (tx: Transaction) => void | Promise<void>
+  } = {},
+  ex?: Dispatcher
+) {
   const calls = { broadcast: 0, txSpent: 0, txDied: 0, recordAired: 0 }
+  let w!: WalletCoordinator
+  const fx: TxEffects = {
+    txSpent: async (wt) => {
+      calls.txSpent++
+      await over.txSpent?.(await w.rebuildTx(wt))
+    },
+    txDied: async (wt) => {
+      calls.txDied++
+      await over.txDied?.(await w.rebuildTx(wt))
+    },
+    recordAired: async (wt) => {
+      calls.recordAired++
+      await over.recordAired?.(await w.rebuildTx(wt))
+    },
+    exportExpired: () => {}
+  }
   const deps: WalletDeps = {
     broadcast:
       over.broadcast ??
@@ -49,29 +76,16 @@ function wallet(store: AutomationStore, over: Partial<WalletDeps> = {}, ex?: Dis
         calls.broadcast++
         return Promise.resolve({ status: 'success' })
       }),
-    txSpent: () => {
-      calls.txSpent++
-    },
-    txDied: () => {
-      calls.txDied++
-    },
-    recordAired: () => {
-      calls.recordAired++
-    },
-    ...over,
+    fx,
     ...(ex !== undefined ? { exec: ex } : {})
   }
-  const w = new WalletCoordinator(store, deps)
+  w = new WalletCoordinator(store, deps)
   if (ex !== undefined)
     wireTx(ex, {
       store,
-      // the observe handler's intents run this coordinator's own deps —
-      // wallet.fx()'s rebuild-then-call mapping, verbatim test-side
-      fx: {
-        txSpent: async (wt) => await deps.txSpent?.(await w.rebuildTx(wt)),
-        txDied: async (wt) => await deps.txDied?.(await w.rebuildTx(wt)),
-        recordAired: async (wt) => await deps.recordAired?.(await w.rebuildTx(wt))
-      },
+      // the observe handler runs the coordinator's OWN effect set — the
+      // one-total-set rule means the object and the caller never disagree
+      fx,
       log: () => {},
       submit: (id) => w.submit(id)
     })
@@ -235,7 +249,7 @@ void test('driver: impossible transitions write nothing — no state, no event r
   const id = 'a6'
   const txid = await prepared(store, id)
   // prepared --obs.proven--> confirmed must NOT exist: proof before air
-  const bad = await emitTxEvent(store, (await store.walletTx({ actionId: id }))!, 'obs.proven', { guard: 'proof' }, {})
+  const bad = await emitTxEvent(store, (await store.walletTx({ actionId: id }))!, 'obs.proven', { guard: 'proof' }, inertTxEffects)
   assert.equal(bad.accepted, false)
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'prepared')
   assert.equal((await store.walletTxEvents(id)).length, 0)
@@ -285,10 +299,10 @@ void test('driver: post-commit effect failure leaves the committed transition in
     'obs.proven',
     { guard: 'proof', observation: PROVEN },
     {
+      ...inertTxEffects,
       txSpent: () => {
         throw new Error('custody store down')
-      },
-      recordAired: () => {}
+      }
     }
   )
   const row = await store.walletTx({ actionId: id })
@@ -301,6 +315,7 @@ void test('driver: post-commit effect failure leaves the committed transition in
   let spent = 0
   let aired = 0
   const done = await replayTxEffects(store, {
+    ...inertTxEffects,
     txSpent: () => {
       spent++
     },
@@ -370,6 +385,7 @@ void test('watcher driver: proven row confirms + spends leases through declared 
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const effects: TxEffects = {
+    ...inertTxEffects,
     txSpent: () => {
       calls.spent++
     },
@@ -395,6 +411,7 @@ void test('watcher driver: dead row revive fires tx-spent + record-aired', async
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const effects: TxEffects = {
+    ...inertTxEffects,
     txSpent: () => {
       calls.spent++
     },
@@ -425,6 +442,7 @@ void test('watcher driver: exported row past TTL expires and fires export-expire
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const effects: TxEffects = {
+    ...inertTxEffects,
     exportExpired: () => {
       calls.expired++
     }
@@ -435,6 +453,135 @@ void test('watcher driver: exported row past TTL expires and fires export-expire
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'expired')
   assert.equal(calls.expired, 1)
   assert.equal(await leaseState(kx, id), 'released')
+})
+
+void test('effects: an intent with no effector is not done — the event stays pending for replay', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const id = 'e1'
+  await prepared(store, id)
+  await store.setTxState(id, 'rejected', { reason: 'refused' }, false)
+  // a partial set is an untyped caller bug the dispatcher must surface:
+  // obs.proven@proof carries tx-spent + record-aired — {} runs none of it
+  const r = await emitTxEvent(store, (await store.walletTx({ actionId: id }))!, 'obs.proven', { guard: 'proof' }, {} as TxEffects)
+  assert.equal(r.accepted, true)
+  assert.equal((await store.walletTx({ actionId: id }))!.state, 'confirmed')
+  const pending = await store.pendingTxEffects()
+  assert.equal(pending.length, 1, 'a missing effector is a failed effect — the event must stay pending, not mark done')
+  let spent = 0
+  let aired = 0
+  const done = await replayTxEffects(store, {
+    ...inertTxEffects,
+    txSpent: () => {
+      spent++
+    },
+    recordAired: () => {
+      aired++
+    }
+  })
+  assert.equal(done, 1)
+  assert.equal(spent, 1)
+  assert.equal(aired, 1)
+  assert.equal((await store.pendingTxEffects()).length, 0)
+})
+
+void test('driver: abandon commits release-leases + tx-died — a dead verdict frees the claim', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const id = 'e2'
+  await prepared(store, id)
+  await store.setTxState(id, 'submitted', {}, false)
+  let died = 0
+  await emitTxEvent(
+    store,
+    (await store.walletTx({ actionId: id }))!,
+    'abandon',
+    { observation: { reason: 'not mined' } },
+    {
+      ...inertTxEffects,
+      txDied: () => {
+        died++
+      }
+    }
+  )
+  assert.equal((await store.walletTx({ actionId: id }))!.state, 'abandoned')
+  assert.equal(await leaseState(kx, id), 'released', 'abandon frees the claim in-tx — no hand-rolled release')
+  assert.equal(died, 1, 'every non-confirmed terminal verdict runs txDied')
+})
+
+void test('watcher driver: export.ttl returns inputs to custody through the tx object', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  // an exported row whose input's parent bytes sit in the parents map —
+  // revive needs the parent, not a chain lookup (no spendStatus/txLookup here)
+  const parent = new Transaction()
+  parent.addInput({ sourceTXID: 'aa'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: UnlockingScript.fromHex('51') })
+  parent.addOutput({ satoshis: 5000, lockingScript: new P2PKH().lock(key.toPublicKey().toHash()) })
+  const x = new Transaction()
+  x.addInput({ sourceTXID: parent.id('hex'), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex('51') })
+  x.addOutput({ satoshis: 4900, lockingScript: new P2PKH().lock(key.toPublicKey().toHash()) })
+  const id = 'w4'
+  await store.recordPrepared(
+    {
+      actionId: id,
+      operationId: 'op:w4',
+      kind: 'payment',
+      txid: x.id('hex'),
+      rawHex: x.toHex(),
+      parents: { [parent.id('hex')]: parent.toHex() },
+      feeSats: 100
+    },
+    [{ txid: parent.id('hex'), vout: 0, satoshis: 5000 }]
+  )
+  await store.setTxState(id, 'exported', {}, false)
+  // the ONE production effect set — no spendStatus: 'unknown' still frees
+  const revived: Array<{ txid: string; vout: number }> = []
+  const fx = custodyTxEffects({
+    funds: {
+      spent: () => {},
+      died: () => {},
+      revive: (p: Transaction, vout: number) => {
+        revived.push({ txid: p.id('hex'), vout })
+      }
+    },
+    log: () => {}
+  })
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  wireTx(ex, { store, fx, log: () => {} })
+  const wt = new TransactionWatcher(store, () => Promise.resolve(undefined), { exportedTtlMs: 0, effects: fx, exec: ex })
+  await wt.tick()
+  assert.equal((await store.walletTx({ actionId: id }))!.state, 'expired')
+  assert.deepEqual(revived, [{ txid: parent.id('hex'), vout: 0 }], 'the unaired export hands its input back through the tx object')
+  assert.equal(await leaseState(kx, id), 'released')
+  assert.equal((await store.pendingTxEffects()).length, 0)
+})
+
+void test('custodyTxEffects: txSpent reconciles the reserve only on a dead→live revive', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  let afterChange = 0
+  const fx = custodyTxEffects({
+    funds: { spent: () => {}, died: () => {}, revive: () => {} },
+    afterChange: () => {
+      afterChange++
+      return Promise.resolve()
+    },
+    log: () => {}
+  })
+  // submit.success on a live row — custody marks, but nothing was dead: no reconcile
+  const id = 'c1'
+  await prepared(store, id)
+  await emitTxEvent(store, (await store.walletTx({ actionId: id }))!, 'submit.success', { attempt: true }, fx)
+  assert.equal((await store.walletTx({ actionId: id }))!.state, 'submitted')
+  assert.equal(afterChange, 0, 'a live→submitted mark never reconciles')
+  // dead→live revive — the refused tx aired: custody re-marks AND reconciles
+  const id2 = 'c2'
+  await prepared(store, id2)
+  await store.setTxState(id2, 'rejected', { reason: 'refused' }, false)
+  await emitTxEvent(store, (await store.walletTx({ actionId: id2 }))!, 'obs.seen', { guard: 'verified' }, fx)
+  assert.equal((await store.walletTx({ actionId: id2 }))!.state, 'observed')
+  assert.equal(afterChange, 1, 'the revive re-mark reconciles the reserve once')
 })
 
 void test('both ledgers: the same driver semantics on a second store instance', async (t) => {

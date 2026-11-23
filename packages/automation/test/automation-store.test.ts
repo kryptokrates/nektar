@@ -827,7 +827,10 @@ void test('wallet ledger migration: pre-split rows copy into the ledger file onc
   const legacyStore = new AutomationStore(legacy)
   await legacyStore.init()
   const leased = { txid: 'ff'.repeat(32), vout: 1, satoshis: 50 }
-  await legacyStore.recordPrepared({ actionId: 'owner:dead', operationId: 'owner', kind: 'owner', txid: 'ee'.repeat(32), rawHex: '00', parents: {}, feeSats: 1 }, [leased])
+  await legacyStore.recordPrepared(
+    { actionId: 'owner:dead', operationId: 'owner', kind: 'owner', txid: 'ee'.repeat(32), rawHex: '00', parents: {}, feeSats: 1 },
+    [leased]
+  )
   await legacy.destroy()
   // post-split: wallet side on records.sqlite — the migration carries the rows
   const market = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'market.sqlite') }, useNullAsDefault: true })

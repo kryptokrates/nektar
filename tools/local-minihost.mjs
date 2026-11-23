@@ -10,5 +10,8 @@ const port = Number(process.argv[2] ?? 8470)
 const tracker = new WitnessedTracker(new ChaintracksTracker(), new IndexTracker(), {
   onDisagree: (h, p, w) => console.error(`headers disagree at ${h} (${p} vs ${w})`)
 })
-const h = await minihost(['main'], { tracker, port })
+// office must match what clients compute (officeFor() = DEFAULT_OFFICE) —
+// without it every tm_bbox_* submit 400s as an unknown topic and the paid
+// mailbox lane is dead on this host
+const h = await minihost(['main'], { tracker, port, office: 'nektar_abcdefghij' })
 console.log(`minihost up at ${h.url} (net=main)`)

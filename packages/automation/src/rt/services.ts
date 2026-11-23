@@ -456,6 +456,12 @@ export interface DealfanDeps {
   /** the resubmit cadence leg — a throttled custody.resubmitPending send;
    *  the deals floor used to carry this inside engine.tick() */
   resubmitPending?: () => Promise<void>
+  /** the discovery read — the pre-restate scheduler ran poll inside the
+   *  same deals pass this tick replaces. Without it a cold seller reads
+   *  the lane once at boot and then only on commits: a want on the host
+   *  sits unread until something else pokes deals(). It runs before the
+   *  inbox scan so items ingested this tick fan out in the same pass. */
+  poll?: () => Promise<void>
   /** the floor cadence — re-read on every arm so the hot/idle adaptive
    *  ceiling keeps working (the scheduler 'deals' row's successor) */
   ceilingMs: () => number
@@ -531,6 +537,10 @@ export const dealfanTickBody =
     const now0 = await run('now', () => Promise.resolve((deps.now ?? Date.now)()))
     const eb = Math.floor(now0 / WAITS.fanEventResend.ms)
     const ab = deps.tickSeq === undefined ? Math.floor(now0 / WAITS.fanAdvanceResend.ms) : await run('fanseq', () => Promise.resolve(deps.tickSeq!()))
+    // discovery floor: the lane/mailbox read rides the tick so a quiet
+    // runtime still polls at the arm's cadence — order matters, a want
+    // ingested below lands in this tick's inbox scan
+    if (deps.poll !== undefined) await run('poll', () => deps.poll!())
     const inbox = await run('inbox', () => Promise.resolve(deps.pendingInbox()))
     for (const i of inbox)
       if (!(await run(`dup:ev:${i.source}:${i.messageId}`, () => Promise.resolve(dup(`ev:${i.source}:${i.messageId}`, WAITS.fanEventResend.ms)))))

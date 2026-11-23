@@ -4,7 +4,7 @@
 // marketJson(ad) → sha256 → DER sig. The `pay`/listing-fee fields and the
 // output-script encoders had no remaining users and are gone.
 import { PublicKey, Signature } from '@bsv/sdk'
-import { sha256, utf8, toHex, toSigner, signerPubHex, type SignerLike } from '@nektar/core'
+import { sha256, utf8, toHex, toSigner, signerPubHex, HEX64, type SignerLike } from '@nektar/core'
 import { randomUUID } from 'node:crypto'
 
 /** deterministic JSON: BigInt → decimal string, object keys sorted recursively, array order kept */
@@ -22,7 +22,7 @@ export const marketJson = (v: unknown): string =>
   )
 
 const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
-const HASH64_RE = /^[0-9a-f]{64}$/i
+const HASH64_RE = HEX64
 const numLike = (v: unknown): boolean =>
   typeof v === 'bigint' || (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) || (typeof v === 'string' && /^[0-9]{1,20}$/.test(v))
 
@@ -258,7 +258,7 @@ export const publicQuoteError = (q: unknown): string | null => {
     const ar = a as Record<string, unknown>
     for (const k of Object.keys(ar)) if (k !== 'artifactId' && k !== 'scriptHash') return `unexpected artifact field '${k}'`
     if (typeof ar.artifactId !== 'string' || ar.artifactId.length === 0 || ar.artifactId.length > 64) return 'bad artifact.artifactId'
-    if (typeof ar.scriptHash !== 'string' || !/^[0-9a-f]{64}$/i.test(ar.scriptHash)) return 'bad artifact.scriptHash'
+    if (typeof ar.scriptHash !== 'string' || !HASH64_RE.test(ar.scriptHash)) return 'bad artifact.scriptHash'
   }
   if (o.direct !== undefined && typeof o.direct !== 'boolean') return 'bad direct'
   if (o.mode !== undefined && o.mode !== 'key' && o.mode !== 'fragment') return 'bad mode'

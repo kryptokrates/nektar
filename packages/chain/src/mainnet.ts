@@ -2,7 +2,7 @@
 // discovery, merkle paths) + the BSV Broadcaster client. NO spend happens
 // here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
 // in the runtime before any tx reaches it.
-import { currentSignal, nap, nektarEnv, sparse, spread } from '@nektar/core'
+import { currentSignal, nap, nektarEnv, sparse, spread, HEX64 } from '@nektar/core'
 import { sleep, withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
@@ -10,7 +10,7 @@ import { tscMerklePath } from '@lightwebinc/bcommon'
 import { headerPowValid, HeaderCache } from './headers.js'
 import { indexFailover, type ChainIndex, type IndexUtxo } from './indexer.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
-import type { StatusHint } from './txfacts.js'
+import { MINED_WORDS, REJECTED_WORDS, type StatusHint } from './txfacts.js'
 
 export interface MainnetConfig {
   broadcasterUrl?: string // primary BSV Broadcaster base (no trailing slash)
@@ -156,7 +156,7 @@ export class BsvBroadcaster implements Broadcaster {
         if (r.status >= 500) throw new Error(`broadcaster HTTP ${r.status}`)
         const body = await r.json().catch(() => ({}))
         const st = String(body.txStatus ?? '').toUpperCase()
-        if (r.ok && st !== 'REJECTED' && st !== 'DOUBLE_SPEND_ATTEMPTED') {
+        if (r.ok && !REJECTED_WORDS.includes(st)) {
           return { status: 'success', txid: tx.id('hex') }
         }
         return { status: 'error', description: `broadcaster ${st || `HTTP ${r.status}`}: ${body.reason ?? body.detail ?? body.extraInfo ?? ''}`.trim() }
@@ -718,7 +718,7 @@ export async function merklePathMainnet(cfg: MainnetConfig | undefined, txid: st
       }
     }
     const st = String(b.txStatus ?? '').toUpperCase()
-    if (st !== 'MINED' && st !== 'IMMUTABLE') {
+    if (!MINED_WORDS.includes(st)) {
       return null // still pending / rejected upstream
     }
     break // an answering endpoint that reports mined-without-path → TSC proof
@@ -754,7 +754,7 @@ export async function importFundingTx(cfg: MainnetConfig | undefined, ref: strin
     if (wire.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(wire)) throw new Error(`malformed transaction hex (${wire.length} chars)`)
     return fundingOutputs((await TxStore.read(wire, tracker)).tx, pkhHex)
   }
-  if (!/^[0-9a-fA-F]{64}$/.test(ref))
+  if (!HEX64.test(ref))
     throw new Error(`malformed txid — expected 64 hex chars, 'hex:<rawtx>', got "${ref.slice(0, 24)}${ref.length > 24 ? '…' : ''}"`)
   const c = def(cfg)
   const hex = await c.index.txHex(ref)
@@ -882,7 +882,7 @@ async function spenderProbe(
     const j = await c.index.txJson(txid)
     if (j === undefined) return undefined
     const claim = j.outputs?.[vout]?.spentTxId
-    if (typeof claim !== 'string' || !/^[0-9a-fA-F]{64}$/.test(claim)) return undefined
+    if (typeof claim !== 'string' || !HEX64.test(claim)) return undefined
     const spending = await fetchRawTx(c, claim)
     if (spending === undefined) return undefined
     // the spend claim is only evidence when the served bytes name OUR

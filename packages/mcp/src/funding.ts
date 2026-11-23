@@ -15,6 +15,8 @@ import {
   regtestRpc,
   importFundingTx,
   discoverUtxos,
+  ALREADY,
+  broadcastProvablyDead,
   type ChainPort,
   type BroadcastResult,
   type RegtestConfig,
@@ -204,8 +206,9 @@ export async function sweepBasket(deps: {
         const stalled = r.parentStatus !== 'completed' && r.parentStatus !== 'unproven' && proven === undefined
         if (stalled) {
           const br = await port.broadcast(tx)
-          const ok = br.status === 'success' || /already/i.test(br.description ?? '')
-          const dead = /double.?spend|missing inputs|bad-txns|non-final/i.test(br.description ?? '')
+          const desc = br.description ?? ''
+          const ok = br.status === 'success' || ALREADY.test(desc)
+          const dead = broadcastProvablyDead(desc)
           if (!ok && !dead) {
             l(`basket sweep: ${r.txid.slice(0, 12)}…:${r.vout} parent broadcast failed (${br.description ?? 'rejected'}) — retry next boot`)
             blocked++

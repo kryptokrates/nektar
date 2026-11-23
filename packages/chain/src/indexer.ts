@@ -7,7 +7,7 @@
 // against witnessed headers; a spend claim is only believed when the named
 // spender's own bytes name the outpoint.
 import { withRetry, pacer } from './retry.js'
-import { BoundedMap, currentSignal } from '@nektar/core'
+import { BoundedMap, currentSignal, HEX64 } from '@nektar/core'
 import type { BlockHeader } from './interfaces.js'
 
 /** normalized tx view — the fields the money path reads off an index */
@@ -240,7 +240,7 @@ export class BananaIndex implements ChainIndex {
     // a just-sealed tip is served with prev_hash:"" until the link is
     // backfilled — an unusable parent must miss, never poison the linkage
     // walk (an absent/empty prev_hash is "not yet indexed", not "reorg")
-    if (height > 0 && !/^[0-9a-f]{64}$/i.test(b.prev_hash ?? '')) return undefined
+    if (height > 0 && !HEX64.test(b.prev_hash ?? '')) return undefined
     return {
       height,
       hash: b.hash,

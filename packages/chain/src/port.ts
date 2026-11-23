@@ -15,7 +15,7 @@ import { randomBytes } from 'node:crypto'
 import { type Transaction, type MerklePath } from '@bsv/sdk'
 import { nektarEnv, nektarEnvFlag, setNektarEnv } from '@nektar/core'
 import type { BroadcastResult, ChainTracker, TxStatusEvent } from './interfaces.js'
-import type { StatusHint } from './txfacts.js'
+import { MINED_WORDS, REJECTED_WORDS, type StatusHint } from './txfacts.js'
 import { SpendGuard, type SpendGuardOpts } from './spendguard.js'
 import { TeranodeBroadcaster, TeranodeRPCTracker, regtestTx, regtestMerkleProof, regtestRpc, utxoStatus, type RegtestConfig } from './regtest.js'
 import { WitnessedTracker } from './headers.js'
@@ -277,11 +277,11 @@ export async function livePort(mc: MainnetConfig & { feeRateSatPerKb?: number },
       // own BUMP). It lands as a hint (resolves waiters, keeps the floor),
       // never on the verified path — same treatment the push path gives it.
       const probe = await statusHint(txid)
-      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(probe.status)) deps.note?.({ txid, status: 'rejected' })
+      if (REJECTED_WORDS.includes(probe.status)) deps.note?.({ txid, status: 'rejected' })
       // an unanswered probe — or a 'mined' claim we hold no verified path
       // for — is not "not mined": throwing keeps the abandon clock from
       // counting a question nobody answered
-      if (!probe.answered || probe.status === 'MINED' || probe.status === 'IMMUTABLE') throw new Error(`cannot establish 'not mined' for ${txid}`)
+      if (!probe.answered || MINED_WORDS.includes(probe.status)) throw new Error(`cannot establish 'not mined' for ${txid}`)
       return undefined
     },
     spendStatus: (txid, vout) => utxoSpendStatus(mc, tracker, txid, vout),

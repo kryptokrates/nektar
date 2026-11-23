@@ -85,6 +85,13 @@ export function txFactsOf(deps: TxFactsDeps): (txid: string) => Promise<TxFacts>
   }
 }
 
+/** the mined-word pair — a proof claim, still hint-tier until a BUMP verifies */
+export const MINED_WORDS = ['MINED', 'IMMUTABLE']
+
+/** the rejection-word pair — a refusal claim; a double-spend is provable only
+ *  via the competing tx's own BUMP */
+export const REJECTED_WORDS = ['REJECTED', 'DOUBLE_SPEND_ATTEMPTED']
+
 /** status words meaning "the network carries it" — a MINED/IMMUTABLE word is
  *  a strong hint but earns no 'mined' verdict without a proof object */
 export const SEEN_HINTS = [
@@ -96,6 +103,18 @@ export const SEEN_HINTS = [
   'STUMP_PROCESSING',
   'MINED',
   'IMMUTABLE'
+]
+
+/** every broadcaster status word we know — push-callback normalization set;
+ *  unknown words collapse to OTHER rather than being trusted verbatim */
+export const KNOWN_STATUSES = [
+  ...SEEN_HINTS,
+  'QUEUED',
+  'STORED',
+  'ANNOUNCED_TO_NETWORK',
+  'SEEN_IN_ORPHAN_MEMPOOL',
+  'CONFIRMED',
+  ...REJECTED_WORDS
 ]
 
 /** an answered seen-family status — the tx is observable somewhere */

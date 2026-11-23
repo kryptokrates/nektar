@@ -6,7 +6,7 @@
 // Proofs are pushed (events substrate/broadcaster callbacks); the lookups are
 // the single-attempt recovery path for what a push missed while down.
 import type { Transaction, MerklePath } from '@bsv/sdk'
-import { TxStore, txFactsOf, type TxFacts, type TxStatusEvent, type StatusHint } from '@nektar/chain'
+import { TxStore, txFactsOf, SEEN_HINTS, REJECTED_WORDS, type TxFacts, type TxStatusEvent, type StatusHint } from '@nektar/chain'
 import type { TxObservationInput } from '@nektar/automation'
 
 export interface TxOpsDeps {
@@ -235,11 +235,8 @@ export function watcherObservation(seen: { ev: TxStatusEvent; verified: boolean 
     if (seen.ev.status === 'mined') return { status: 'proven', source: 'broadcaster' }
   }
   if (seen?.ev.status === 'rejected' || seen?.ev.status === 'double-spent') return undefined
-  if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) return undefined
-  if (
-    ['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING', 'MINED', 'IMMUTABLE'].includes(status)
-  )
-    return { status: 'seen', source: 'broadcaster' }
+  if (REJECTED_WORDS.includes(status)) return undefined
+  if (SEEN_HINTS.includes(status)) return { status: 'seen', source: 'broadcaster' }
   return undefined
 }
 

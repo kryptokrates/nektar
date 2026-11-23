@@ -30,7 +30,7 @@ import {
 import { intervalRoot } from '@lightwebinc/blogs-host/dist/merkle.js'
 import { readPushDrop } from '@lightwebinc/blogs-host/dist/script.js'
 import { submitAll, lookupAll, type Quorum, type SubmitAllResult } from './hosts.js'
-import { ancestorsOf } from './finger.js'
+import { rebroadcastAncestors } from './finger.js'
 import { carrierFundingLockHex, walletOrProto } from './carrier.js'
 import { fundingSlotReason } from './tree.js'
 import type { TreeLedger } from './tree.js'
@@ -582,13 +582,7 @@ export async function anchorLog(p: {
         // a funding slot tree) is absent from mempool. Re-broadcast the
         // tx's ancestors oldest-first and retry once before giving up; the
         // journaled prev tokens carry their ancestry in their BEEF.
-        try {
-          for (const anc of ancestorsOf(tx)) {
-            if (anc.merklePath === undefined) await p.broadcast(anc).catch(() => undefined)
-          }
-        } catch {
-          /* heal is best-effort — the retried broadcast decides */
-        }
+        await rebroadcastAncestors(p, tx)
         br = await p.broadcast(tx)
       }
       if (br.status !== 'success') {

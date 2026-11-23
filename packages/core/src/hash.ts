@@ -2,6 +2,10 @@ import { createHash } from 'node:crypto'
 
 export type Bytes = Uint8Array
 
+/** a 32-byte hex string — txids, hashes, proof elements; the one copy of the
+ *  pattern so no site re-derives (or mis-derives) it */
+export const HEX64 = /^[0-9a-f]{64}$/i
+
 export function sha256(b: Bytes): Bytes {
   return new Uint8Array(createHash('sha256').update(Buffer.from(b)).digest())
 }

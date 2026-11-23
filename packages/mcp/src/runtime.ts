@@ -21,7 +21,9 @@ import {
   type Funds,
   type RegtestConfig,
   type MainnetConfig,
-  type TxStatusEvent
+  type TxStatusEvent,
+  MINED_WORDS,
+  REJECTED_WORDS
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
 import { nektarEnv, nektarEnvNum, mkLog } from '@nektar/core'
@@ -543,8 +545,8 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     // push whose BUMP failed verification keeps the pull probe's floor
     if (typeof w.txid === 'string') {
       const s = String(w.txStatus ?? '').toUpperCase()
-      if (s === 'MINED' || s === 'IMMUTABLE') events.note({ txid: w.txid, status: 'mined' })
-      else if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(s)) events.note({ txid: w.txid, status: 'rejected' })
+      if (MINED_WORDS.includes(s)) events.note({ txid: w.txid, status: 'mined' })
+      else if (REJECTED_WORDS.includes(s)) events.note({ txid: w.txid, status: 'rejected' })
     }
   })
   // funding — the reserve fills per-network: regtest bootstraps a treasury

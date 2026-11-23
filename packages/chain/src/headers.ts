@@ -2,10 +2,9 @@
 // the proof-of-work check that makes a served header self-verifying, and the
 // witnessed tracker that makes two independent sources attest the same chain.
 import { Hash } from '@bsv/sdk'
-import { BoundedMap } from '@nektar/core'
+import { BoundedMap, HEX64 } from '@nektar/core'
 import type { BlockHeader, ChainTracker } from './interfaces.js'
 
-const HEX64 = /^[0-9a-fA-F]{64}$/
 
 /** the consensus serialization — 80 bytes: version LE32, prevHash and
  *  merkleRoot in internal (reversed) order, then time/bits/nonce LE32.

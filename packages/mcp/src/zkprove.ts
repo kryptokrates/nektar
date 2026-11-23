@@ -4,7 +4,7 @@
 // tombstones. NektarMemory no longer knows STARK exists — the query registry
 // stays single-owner in ZkQueryOps via the consume/peek callbacks, and the
 // anchor lookup stays in the shared maps passed by reference.
-import { toHex, fromHex, merkleProof, nektarEnv } from '@nektar/core'
+import { toHex, fromHex, merkleProof, nektarEnv, HEX64 } from '@nektar/core'
 import {
   proveMembershipStark,
   verifyMembershipAnchoredStark,
@@ -62,7 +62,7 @@ export class ZkProveOps {
    *  ZK-STARK (RISC Zero succinct receipt): reveals neither the leaf, its
    *  index nor the path. */
   async proveMembership(shard: string, seq: number, queryIdHex: string): Promise<{ bytes: Uint8Array; ms: number }> {
-    if (!/^[0-9a-f]{64}$/.test(queryIdHex)) throw new Error('queryId must be 32-byte hex (issued by the verifier)')
+    if (!HEX64.test(queryIdHex)) throw new Error('queryId must be 32-byte hex (issued by the verifier)')
     const rec = await this.deps.store.bySeq(shard, seq)
     if (!rec || rec.batchIndex === undefined) throw new Error('fragment not batched')
     const batch = await this.deps.store.byBatch(shard, rec.batchIndex)
@@ -307,7 +307,7 @@ export class ZkProveOps {
    *  (same as recall); caller EDB facts are private context premises.
    *  Reveals neither the path nor any fact; journal = (policyRoot, conclusionHash, queryId). */
   async proveDerivation(shard: string, query: { pred: string; args: string[]; edb?: Fact[] }, queryIdHex: string): Promise<{ bytes: Uint8Array; ms: number }> {
-    if (!/^[0-9a-f]{64}$/.test(queryIdHex)) throw new Error('queryId must be 32-byte hex (issued by the verifier)')
+    if (!HEX64.test(queryIdHex)) throw new Error('queryId must be 32-byte hex (issued by the verifier)')
     const dag = this.deps.policyDag()
     if (!dag) throw new Error('no policy DAG configured on this instance')
     const { derivationPath, nodeHash } = await import('@nektar/datalog')

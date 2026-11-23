@@ -85,7 +85,7 @@ const state = new MemoryFingerState()
 
 // the proven tree must reach tm_finger: its funding leaves are admitted as
 // 'funding' outputs so storage can vouch for the carrier's parent
-const tr = await submitAll(HOSTS, tree.toAtomicBEEF(), ['tm_finger'])
+const tr = await submitAll(HOSTS, tree.toAtomicBEEF(), ['tm_finger'], { retryWaits: [1000, 2000, 4000] })
 info(`tree -> tm_finger took=${tr.took.length} missed=${JSON.stringify(tr.missed)}`)
 ok('funding tree BEEF published to tm_finger', tr.took.length === HOSTS.length)
 

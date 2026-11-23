@@ -62,7 +62,7 @@ const sw = signWant(key, { domains: ['compute'], question: 'live', net: NET, ts:
 const { carrier, beef } = await buildCarrier({ key, payload: encodePayload({ v: 1, kind: 'want', body: sw }), slot: { tree, vout: 0 } })
 const lanes = lanesFor(NET, ['compute'])
 info(`carrier ${carrier.id('hex')} -> lanes ${lanes.join(',')}`)
-const sub = await submitAll(HOSTS, beef, lanes)
+const sub = await submitAll(HOSTS, beef, lanes, { retryWaits: [1000, 2000, 4000] })
 info(`submit -> ${JSON.stringify(sub)}`)
 ok('submit accepted', sub.ok)
 const r = await readWants(HOSTS, { net: NET, domain: 'compute' }, { tracker, net: NET })
@@ -74,7 +74,7 @@ info(`broadcast sweep ${swp.id('hex')} -> ${br2.status} ${(await br2.text()).sli
 await rpc('generatetoaddress', [1, addr])
 // a retraction must be a MINED sweep: embed the sweep's own proof at its mined height
 swp.merklePath = mkPath(swp.id('hex'), await minedHeight(swp.id('hex')))
-const sub2 = await submitAll(HOSTS, swp.toAtomicBEEF(), lanes)
+const sub2 = await submitAll(HOSTS, swp.toAtomicBEEF(), lanes, { retryWaits: [1000, 2000, 4000] })
 info(`submit sweep -> ${JSON.stringify(sub2)}`)
 const r2 = await readWants(HOSTS, { net: NET, domain: 'compute' }, { tracker, net: NET })
 ok(`after sweep the want is gone (items=${r2.items.length})`, r2.items.length === 0)

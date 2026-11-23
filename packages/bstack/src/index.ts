@@ -113,7 +113,7 @@ export {
   type ReadResult,
   type ReadOpts
 } from './hosts.js'
-export { LANE_TABLES, migrateLaneTables } from './lanes.js'
+export { LANE_TABLES, migrateLaneTables, copyTablesAcrossAttach } from './lanes.js'
 export { MemoryCarrierJournal, KnexCarrierJournal, type CarrierJournal } from './journal.js'
 export { artifactHash, publishArtifact, resubmitCarrier, republishOne, republishProved } from './publish.js'
 export {

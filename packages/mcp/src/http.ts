@@ -1,7 +1,9 @@
 // API-001: minimal versioned HTTP API (node:http, no framework). Same tools
 // as MCP, plus public read endpoints. Every route is in OPENAPI (tested).
-import { nektarEnv, deadline } from '@nektar/core'
-import { isHeaderUnavailable } from '@nektar/chain'
+import { nektarEnv, deadline, HEX64 } from '@nektar/core'
+import { isHeaderUnavailable, KNOWN_STATUSES, MINED_WORDS, REJECTED_WORDS } from '@nektar/chain'
+
+const KNOWN_SET = new Set(KNOWN_STATUSES)
 import { marketHosts, addSavedHost, removeSavedHost } from './hosts.js'
 import { faucetEnabled, faucetDrip } from './faucet.js'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
@@ -225,34 +227,19 @@ export async function handleBroadcasterStatus(
   const status = String(j.txStatus ?? '?')
   // the raw status/txid are unbounded unauth input — normalize before they
   // become metric labels / hintedTxids entries (both retain forever)
-  const KNOWN_STATUSES = new Set([
-    'QUEUED',
-    'RECEIVED',
-    'STORED',
-    'ANNOUNCED_TO_NETWORK',
-    'SENT_TO_NETWORK',
-    'ACCEPTED_BY_NETWORK',
-    'SEEN_ON_NETWORK',
-    'MINED',
-    'SEEN_IN_ORPHAN_MEMPOOL',
-    'CONFIRMED',
-    'REJECTED',
-    'DOUBLE_SPEND_ATTEMPTED',
-    'IMMUTABLE'
-  ])
-  const norm = KNOWN_STATUSES.has(status.toUpperCase()) ? status.toUpperCase() : 'OTHER'
+  const norm = KNOWN_SET.has(status.toUpperCase()) ? status.toUpperCase() : 'OTHER'
   mem.metrics.inc('nektar_broadcaster_callbacks_total', { status: norm.toLowerCase() }, 1, 'broadcaster status callbacks received')
   mem.events.emit('broadcasterStatus', { txid: j.txid, status, detail: j.extraInfo })
   // a pushed rejection is wake-only — it pokes subscribers into re-asking
   // txFacts; the durable verdict belongs to verified chain events, a
   // first-party refusal, or the abandon horizon
-  const txidOk = typeof j.txid === 'string' && /^[0-9a-f]{64}$/i.test(j.txid)
+  const txidOk = typeof j.txid === 'string' && HEX64.test(j.txid)
   const txid = txidOk ? (j.txid as string) : undefined
-  if (txid !== undefined && ['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(norm)) mem.hintTxRejected(txid)
+  if (txid !== undefined && REJECTED_WORDS.includes(norm)) mem.hintTxRejected(txid)
   // N9 — the status is an unauthenticated input, not proof. A carried BUMP
   // must verify against our own tracker before it counts; without one we
   // fetch evidence; without evidence the tx stays unconfirmed.
-  if ((norm === 'MINED' || norm === 'IMMUTABLE') && txid !== undefined) {
+  if (MINED_WORDS.includes(norm) && txid !== undefined) {
     try {
       let mp: import('@bsv/sdk').MerklePath | undefined
       if (typeof j.merklePath === 'string' && j.merklePath.length > 0) {

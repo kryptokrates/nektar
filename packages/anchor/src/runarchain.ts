@@ -10,7 +10,7 @@ import type { Provider, UTXO as RUTXO, TransactionData } from 'runar-sdk'
 // regtest with no limit (see spikes/depth-contract.mjs); conservative default.
 import { NEKTAR_ANCHOR_ARTIFACT, NEKTAR_ANCHOR_V3_ARTIFACT, META_FLAG_HEX, contractRp, decodeNektarAnchor, TAG_RPRIME } from '@nektar/contracts'
 const TAG_HEX = toHex(TAG_RPRIME)
-import { toHex, runarSigner, signerPubHex, sparse, toSigner, spread, nap, type AnchorData, type Bytes, type SignerLike } from '@nektar/core'
+import { toHex, runarSigner, signerPubHex, sparse, toSigner, spread, nap, rebroadcastAncestors, type AnchorData, type Bytes, type SignerLike } from '@nektar/core'
 import type { Broadcaster, Funder, FundingOut } from '@nektar/chain'
 
 export interface Head {
@@ -33,28 +33,8 @@ export interface AnchorOptions {
 // provider only keeps which outpoint IT currently holds so repeated
 // getUtxos calls for one build hand back the same coin.
 
-/** every ancestor of tx in dependency order (parents before children) via
- *  sourceTransaction links — the order a missing-ancestors broadcast heal
- *  must use so each parent lands before its child. Same pure walk as
- *  bstack's ancestorsOf — inlined here: @nektar/anchor sits below bstack
- *  in the package graph and must not reach up. */
-function ancestorsOf(tx: Transaction): Transaction[] {
-  const seen = new Set<string>()
-  const out: Transaction[] = []
-  const walk = (t: Transaction): void => {
-    for (const inp of t.inputs) {
-      const src = inp.sourceTransaction
-      if (src === undefined) continue
-      const id = src.id('hex')
-      if (seen.has(id)) continue
-      seen.add(id)
-      walk(src)
-      out.push(src)
-    }
-  }
-  walk(tx)
-  return out
-}
+// ancestorsOf + the ancestor re-air heal live in @nektar/core (txwalk.ts) —
+// shared with bstack's token/log paths without anchor reaching up the graph.
 
 /** runar-sdk Provider backed by our Broadcaster/Funder (+ optional utxo feed). */
 export class NektarProvider implements Provider {
@@ -380,13 +360,7 @@ export class AnchorChain {
         // or a fee input that never landed. attemptTx's sourceTransaction
         // links carry the chain, so re-supply unproven ancestors oldest-first
         // before re-broadcasting the child (same heal as finger's token path)
-        try {
-          for (const anc of ancestorsOf(attemptTx)) {
-            if (anc.merklePath === undefined) await this.provider.broadcaster.broadcast(anc).catch(() => undefined)
-          }
-        } catch {
-          /* heal is best-effort — the retry loop decides */
-        }
+        await rebroadcastAncestors(this.provider.broadcaster, attemptTx)
         for (let r = 0; r < 10; r++) {
           await nap(spread(250 * (r + 1)))
           let res

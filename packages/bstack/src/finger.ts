@@ -6,7 +6,7 @@
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
 import { PublicKey, Transaction, P2PKH, Hash, Utils, SatoshisPerKilobyte, type ChainTracker, type LockingScript } from '@bsv/sdk'
-import { toSigner, unlockP2PKH, signerAddress, egressAllowed, dbg, sparse, type SignerLike } from '@nektar/core'
+import { toSigner, unlockP2PKH, signerAddress, egressAllowed, dbg, sparse, ancestorsOf, rebroadcastAncestors, type SignerLike } from '@nektar/core'
 import { isHeaderUnavailable } from '@nektar/chain'
 import {
   mintCarrier,
@@ -299,26 +299,10 @@ const chainServeDue = (prev: FingerStateRow | undefined, hostSig: string, now: n
  *  are met" resubmission: tm_finger admits an unmined token on its own
  *  validity, and a reader resolves it either once the served token BEEF
  *  carries a proof or while its ancestry is proven (zero-conf). */
-/** every ancestor of tx in dependency order (parents before children) via
- *  sourceTransaction links — the order a missing-ancestors broadcast heal
- *  must use so each parent lands before its child. */
-export function ancestorsOf(tx: Transaction): Transaction[] {
-  const seen = new Set<string>()
-  const out: Transaction[] = []
-  const walk = (t: Transaction): void => {
-    for (const inp of t.inputs) {
-      const src = inp.sourceTransaction
-      if (src === undefined) continue
-      const id = src.id('hex')
-      if (seen.has(id)) continue
-      seen.add(id)
-      walk(src)
-      out.push(src)
-    }
-  }
-  walk(tx)
-  return out
-}
+// ancestorsOf + rebroadcastAncestors live in @nektar/core — re-exported for
+// existing importers
+export { ancestorsOf, rebroadcastAncestors }
+
 export async function publishFinger(p: {
   key: SignerLike
   wallet?: SigningWallet
@@ -570,17 +554,9 @@ export async function publishFinger(p: {
   if (br.status !== 'success' && /missing input/i.test(JSON.stringify(br))) {
     // the tx's own ancestry ran ahead of the network: a parent (previous
     // record token or fee parent) is absent — evicted or never landed.
-    // tokenTx's sourceTransaction links carry the whole chain, so re-
-    // broadcast ancestors oldest-first to re-supply the network, then retry
-    // once. Still refused → throw: stall at this seq rather than commit a
+    // Still refused → throw: stall at this seq rather than commit a
     // phantom (prev stays pinned at the last good one).
-    try {
-      for (const anc of ancestorsOf(tokenTx)) {
-        if (anc.merklePath === undefined) await p.broadcast(anc).catch(() => undefined)
-      }
-    } catch {
-      /* heal is best-effort — the retried broadcast decides */
-    }
+    await rebroadcastAncestors(p, tokenTx)
     br = await p.broadcast(tokenTx)
   }
   if (br.status !== 'success') {

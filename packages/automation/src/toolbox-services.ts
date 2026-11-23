@@ -25,7 +25,10 @@ import {
   type BroadcastResult,
   type ChainIndex,
   type MainnetConfig,
-  type RegtestConfig
+  type RegtestConfig,
+  DEFINITIVE,
+  DOUBLE_SPEND,
+  NEVER_LEFT
 } from '@nektar/chain'
 import { ioSignal, sparse } from '@nektar/core'
 import { WAITS } from './waits.js'
@@ -505,8 +508,9 @@ export class LiveWalletServices implements sdk.WalletServices {
         // double-spend gets the competingTxs machinery; a genuine rejection is
         // the only case that should poison. Local SpendGuard refusals and
         // transport failures are service errors — retryable by definition.
-        const doubleSpend = /double.?spend/i.test(msg)
-        const invalid = !doubleSpend && /\bREJECTED\b|missing input|malformed|invalid/i.test(msg) && !/SpendGuard|HTTP|fetch|timeout|abort/i.test(msg)
+        const doubleSpend = DOUBLE_SPEND.test(msg)
+        const transient = NEVER_LEFT.test(msg) || /HTTP|fetch|timeout|abort/i.test(msg)
+        const invalid = !doubleSpend && !transient && (DEFINITIVE.test(msg) || /malformed|invalid/i.test(msg))
         txidResults.push({
           txid,
           status: 'error',

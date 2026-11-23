@@ -55,9 +55,10 @@ export async function submitAll(
   opts?: { quorum?: Quorum; timeoutMs?: number; retryWaits?: number[]; early?: boolean }
 ): Promise<SubmitAllResult> {
   const timeoutMs = opts?.timeoutMs ?? 15000
-  // journaled callers pass retryWaits:[] — their own journal is the retry layer,
-  // so a dead host costs one refused fetch instead of ~7s of sleeps per cycle
-  const waits = opts?.retryWaits ?? [1000, 2000, 4000]
+  // no implicit retry ladder: every src caller passes retryWaits:[] because the
+  // caller's own journal is the retry layer — a dead host must cost one refused
+  // fetch, not ~7s of sleeps per cycle. Retry is opt-in (demos pass a ladder).
+  const waits = opts?.retryWaits ?? []
   const n = need(opts?.quorum, hosts.length)
   type Leg = { host: string; ok: boolean; admitted?: boolean; error?: string }
   const per = async (host: string): Promise<Leg> => {

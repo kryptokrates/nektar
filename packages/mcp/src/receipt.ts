@@ -10,7 +10,7 @@
 // provenance-signed by the log (recall's COM-003 check), was anchored, and
 // its cited fragments are anchored. It does NOT say the answer was true —
 // the receipt itself carries TRUTH_NOTE saying exactly that.
-import { toHex, fromHex, sparse } from '@nektar/core'
+import { toHex, fromHex, sparse, HEX64 } from '@nektar/core'
 import { hashOf } from '@nektar/reasoning'
 import { paymentsEnabled } from './pay.js'
 import type { NektarMemory } from './memory.js'
@@ -24,7 +24,7 @@ export function receiptToken(receiptHashHex: string): string {
 /** `nektarr1.<b64url 32B>` → hash hex; also accepts a bare 64-hex hash. */
 function parseReceiptToken(tok: string): { receiptHash: string } | null {
   const t = tok.trim()
-  if (/^[0-9a-fA-F]{64}$/.test(t)) return { receiptHash: t.toLowerCase() }
+  if (HEX64.test(t)) return { receiptHash: t.toLowerCase() }
   if (!t.startsWith(RECEIPT_TOKEN_PREFIX)) return null
   try {
     const b = Buffer.from(t.slice(RECEIPT_TOKEN_PREFIX.length), 'base64url')

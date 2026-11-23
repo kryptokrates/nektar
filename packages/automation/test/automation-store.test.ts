@@ -6,9 +6,9 @@ import { join } from 'node:path'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
 import { testWorld, dryFunder, type TestFunder } from '@nektar/chain'
-import { AutomationStore, RevisionConflict, classifyDeliveryError } from '../src/store.js'
+import { AutomationStore, RevisionConflict, LeaseConflictError, classifyDeliveryError } from '../src/store.js'
 import { WalletCoordinator } from '../src/wallet.js'
-import { txFromRow } from '../src/ledger.js'
+import { txFromRow, wrapBroadcast } from '../src/ledger.js'
 import { inertTxEffects, type TxEffects } from '../src/machines/effects.js'
 import { Dispatcher, wireTx } from './rig.js'
 import { policyHash, policyError, decidePurchase, decideOffer, type AutomationPolicy, type ActionContext } from '../src/policy.js'
@@ -867,4 +867,117 @@ void test('wallet ledger migration: pre-split rows copy into the ledger file onc
   assert.equal(await store.leasedOutpoint(leased.txid, 1), true)
   // the sentinel short-circuits a second run — re-runs stay free
   assert.deepEqual(await migrateWalletTables(autoFile, wkx), [])
+})
+
+void test('wallet: recordBroadcast refuses an outpoint a foreign LIVE lease holds', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const txid = (c: string) => c.repeat(64)
+  // act-a's prepared row holds a live lease on 'a':0 — the same rule
+  // leaseOutpoints/recordPrepared already enforce must bind recordBroadcast
+  await store.recordPrepared({ actionId: 'act-a', operationId: 'op', kind: 'send', txid: txid('a'), rawHex: '00', parents: {}, feeSats: 1 }, [
+    { txid: txid('a'), vout: 0, satoshis: 100 }
+  ])
+  await assert.rejects(
+    store.recordBroadcast(
+      { txid: txid('b'), rawHex: '00', parents: {}, feeSats: 1, outs: [{ txid: txid('a'), vout: 0, satoshis: 100 }] },
+      'act-b',
+      'op',
+      'send'
+    ),
+    LeaseConflictError
+  )
+  assert.equal((await store.leaseState(txid('a'), 0))?.actionId, 'act-a', 'the refused claim must not re-point the live lease')
+  assert.equal(await store.walletTx({ actionId: 'act-b' }), undefined, 'the refusal rolls the tx row back too')
+})
+
+void test('wallet: recordBroadcast claims over a stale lease (holder already aired)', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const txid = (c: string) => c.repeat(64)
+  // same shape, but act-a's tx row is 'submitted' — a broadcast-and-closed
+  // claim is stale bookkeeping the new claim inherits the outpoint from
+  await store.recordPrepared({ actionId: 'act-a', operationId: 'op', kind: 'send', txid: txid('a'), rawHex: '00', parents: {}, feeSats: 1 }, [
+    { txid: txid('a'), vout: 0, satoshis: 100 }
+  ])
+  await store.setTxState('act-a', 'submitted')
+  await store.recordBroadcast(
+    { txid: txid('b'), rawHex: '00', parents: {}, feeSats: 1, outs: [{ txid: txid('a'), vout: 0, satoshis: 100 }] },
+    'act-b',
+    'op',
+    'send'
+  )
+  assert.equal((await store.leaseState(txid('a'), 0))?.actionId, 'act-b')
+  assert.equal((await store.walletTx({ actionId: 'act-b' }))?.txid, txid('b'))
+})
+
+void test('wallet: recordBroadcast is idempotent for the same action + tx', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const txid = 'b'.repeat(64)
+  const out = { txid: 'a'.repeat(64), vout: 0, satoshis: 100 }
+  const rec = { txid, rawHex: '00', parents: {}, feeSats: 1, outs: [out] }
+  await store.recordBroadcast(rec, 'act-b', 'op', 'send')
+  await store.recordBroadcast(rec, 'act-b', 'op', 'send')
+  assert.equal((await store.leaseState(out.txid, 0))?.actionId, 'act-b')
+  assert.equal((await kx('wallet_transactions').where({ action_id: 'act-b' })).length, 1)
+})
+
+void test('wrapBroadcast: an engine-tracked tx records no owner row and never touches its lease', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  // an engine tx already has its own row under op:1 — the wrapped broadcast
+  // must not write an owner: row, re-point the lease, or log a refusal
+  const x = new Transaction()
+  x.addInput({ sourceTXID: 'dd'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex('51') })
+  x.addOutput({ satoshis: 100, lockingScript: new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])) })
+  await store.recordPrepared({ actionId: 'op:1', operationId: 'op', kind: 'send', txid: x.id('hex'), rawHex: x.toHex(), parents: {}, feeSats: 1 }, [
+    { txid: 'dd'.repeat(32), vout: 0, satoshis: 100 }
+  ])
+  const lines: string[] = []
+  let innerCalls = 0
+  const wrapped = wrapBroadcast(
+    store,
+    () => {
+      innerCalls++
+      return Promise.resolve({ status: 'success' })
+    },
+    { fx: inertTxEffects, log: (l) => lines.push(l), exec: new Dispatcher() }
+  )
+  const r = await wrapped(x)
+  assert.equal(r.status, 'success')
+  assert.equal(innerCalls, 1)
+  assert.equal(await store.walletTx({ actionId: `owner:${x.id('hex')}` }), undefined, 'no owner row for an engine-tracked tx')
+  assert.equal((await store.walletTx({ actionId: 'op:1' }))?.state, 'prepared', 'the engine row is untouched')
+  assert.equal((await store.leaseState('dd'.repeat(32), 0))?.actionId, 'op:1', 'the engine lease is not re-pointed')
+  assert.deepEqual(lines, [], 'an engine verdict is silent — its own coordinator emits')
+})
+
+void test('wrapBroadcast: a foreign tx over a live lease still airs, with one owner-record refusal logged', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  // the ledger never authorises or blocks a broadcast — the claim refusal is
+  // a ledger bookkeeping verdict, logged once, and inner still runs
+  await store.recordPrepared({ actionId: 'op:1', operationId: 'op', kind: 'send', txid: 'aa'.repeat(32), rawHex: '00', parents: {}, feeSats: 1 }, [
+    { txid: 'ee'.repeat(32), vout: 0, satoshis: 100 }
+  ])
+  const x = new Transaction()
+  x.addInput({ sourceTXID: 'ee'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex('51') })
+  x.addOutput({ satoshis: 50, lockingScript: new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])) })
+  const lines: string[] = []
+  let innerCalls = 0
+  const wrapped = wrapBroadcast(
+    store,
+    () => {
+      innerCalls++
+      return Promise.resolve({ status: 'success' })
+    },
+    { fx: inertTxEffects, log: (l) => lines.push(l), exec: new Dispatcher() }
+  )
+  const r = await wrapped(x)
+  assert.equal(r.status, 'success', 'a bookkeeping refusal never blocks the air')
+  assert.equal(innerCalls, 1)
+  assert.equal(await store.walletTx({ actionId: `owner:${x.id('hex')}` }), undefined, 'no owner row over a foreign live lease')
+  assert.equal((await store.leaseState('ee'.repeat(32), 0))?.actionId, 'op:1', 'the live lease keeps its owner')
+  assert.equal(lines.filter((l) => l.includes('owner record')).length, 1, 'exactly one owner-record refusal line')
 })

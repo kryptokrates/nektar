@@ -126,43 +126,54 @@ export function wrapBroadcast(
     const txid = tx.id('hex')
     const actionId = `owner:${txid}`
     let recorded = false
-    try {
-      const parents: Record<string, string> = {}
-      const outs: Array<{ txid: string; vout: number; satoshis: number }> = []
-      let vin = 0
-      for (const inp of tx.inputs) {
-        let srcTxid = inp.sourceTXID
-        if (srcTxid === undefined && inp.sourceTransaction !== undefined) {
-          try {
-            srcTxid = inp.sourceTransaction.id('hex')
-          } catch {
-            /* sparse EF stand-in — only the spent output is carried */
+    // engine txs already carry a row under their own action — only an
+    // untracked txid needs the owner:<txid> bookkeeping row
+    const known = await store.walletTx({ txid }).catch(() => undefined)
+    if (known === undefined) {
+      try {
+        const parents: Record<string, string> = {}
+        const outs: Array<{ txid: string; vout: number; satoshis: number }> = []
+        let vin = 0
+        for (const inp of tx.inputs) {
+          let srcTxid = inp.sourceTXID
+          if (srcTxid === undefined && inp.sourceTransaction !== undefined) {
+            try {
+              srcTxid = inp.sourceTransaction.id('hex')
+            } catch {
+              /* sparse EF stand-in — only the spent output is carried */
+            }
+          }
+          const vout = sparse(inp.sourceOutputIndex) ?? 0
+          if (!srcTxid) continue
+          // EF wires carry sparse parents — the spent output entry can be null
+          const spent = sparse(inp.sourceTransaction?.outputs)?.[vout]
+          outs.push({ txid: srcTxid, vout, satoshis: spent?.satoshis ?? 0 })
+          if (spent != undefined) {
+            try {
+              parents[srcTxid] = inp.sourceTransaction!.toHex()
+            } catch {
+              /* spent output known, full parent bytes are not — hex stays out */
+            }
+            vin += spent.satoshis ?? 0
           }
         }
-        const vout = sparse(inp.sourceOutputIndex) ?? 0
-        if (!srcTxid) continue
-        // EF wires carry sparse parents — the spent output entry can be null
-        const spent = sparse(inp.sourceTransaction?.outputs)?.[vout]
-        outs.push({ txid: srcTxid, vout, satoshis: spent?.satoshis ?? 0 })
-        if (spent != undefined) {
-          try {
-            parents[srcTxid] = inp.sourceTransaction!.toHex()
-          } catch {
-            /* spent output known, full parent bytes are not — hex stays out */
-          }
-          vin += spent.satoshis ?? 0
-        }
+        await store.recordBroadcast(
+          { txid, rawHex: tx.toHex(), parents, feeSats: Math.max(0, vin - tx.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)), outs },
+          actionId,
+          'owner',
+          'owner'
+        )
+        recorded = true
+      } catch (e) {
+        /* a ledger outage must not fabricate an authorization — the broadcaster still decides */
+        opts.log?.(`ledger: owner record for ${txid} refused — ${(e as Error).message}`)
       }
-      await store.recordBroadcast(
-        { txid, rawHex: tx.toHex(), parents, feeSats: Math.max(0, vin - tx.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)), outs },
-        actionId,
-        'owner',
-        'owner'
-      )
+    } else if (known.actionId === actionId) {
+      // an earlier call for the same owner tx already recorded it
       recorded = true
-    } catch {
-      /* a ledger outage must not fabricate an authorization — the broadcaster still decides */
     }
+    // a row under any other action is that action's coordinator's to watch —
+    // no write, no log: the wrapped call only airs bytes here
     try {
       const r = await inner(tx)
       if (recorded) {

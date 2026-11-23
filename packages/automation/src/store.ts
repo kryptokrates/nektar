@@ -305,6 +305,11 @@ const sum = async (q: Knex.QueryBuilder, col: string): Promise<number> => Number
 
 export class RevisionConflict extends Error {}
 
+/** recordBroadcast claimed an outpoint a foreign LIVE lease still holds —
+ *  distinct from a plain Error so the caller (wrapBroadcast) can tell a
+ *  claim refusal from a ledger outage. */
+export class LeaseConflictError extends Error {}
+
 /** the ops.machine refused a transition() write — the cause resolved to
  *  machine candidates but no declared edge carries (from,cause)→to. Throws
  *  inside the write transaction: state, event row and outbox all roll back.
@@ -1217,23 +1222,29 @@ export class AutomationStore {
     return this.leaseLiveRow(lease, rows.get(lease.action_id))
   }
 
+  /** the ONE lease-claim rule: claim these outpoints for actionId unless a
+   *  foreign LIVE lease holds one. Every writer that takes outpoints —
+   *  leaseOutpoints, recordPrepared, recordBroadcast — goes through this so
+   *  the conflict check and the upsert can never drift apart. */
+  private async claimLeases(trx: Knex.Transaction, actionId: string, outs: Array<{ txid: string; vout: number; satoshis: number }>): Promise<boolean> {
+    const held = await trx(T.leases).whereIn(
+      'outpoint',
+      outs.map((o) => `${o.txid}:${o.vout}`)
+    )
+    const foreign = held.filter((r) => r.action_id !== actionId)
+    const txRows = await this.leaseTxRows(trx, foreign)
+    if (foreign.some((r) => this.leaseLiveRow(r, txRows.get(r.action_id)))) return false
+    const now = this.now()
+    for (const o of outs)
+      await trx(T.leases)
+        .insert({ outpoint: `${o.txid}:${o.vout}`, action_id: actionId, satoshis: o.satoshis, state: 'leased', at: now })
+        .onConflict('outpoint')
+        .merge()
+    return true
+  }
+
   async leaseOutpoints(actionId: string, outs: Array<{ txid: string; vout: number; satoshis: number }>): Promise<boolean> {
-    return await this.wkx.transaction(async (trx) => {
-      const held = await trx(T.leases).whereIn(
-        'outpoint',
-        outs.map((o) => `${o.txid}:${o.vout}`)
-      )
-      const foreign = held.filter((r) => r.action_id !== actionId)
-      const txRows = await this.leaseTxRows(trx, foreign)
-      if (foreign.some((r) => this.leaseLiveRow(r, txRows.get(r.action_id)))) return false
-      const now = this.now()
-      for (const o of outs)
-        await trx(T.leases)
-          .insert({ outpoint: `${o.txid}:${o.vout}`, action_id: actionId, satoshis: o.satoshis, state: 'leased', at: now })
-          .onConflict('outpoint')
-          .merge()
-      return true
-    })
+    return await this.wkx.transaction((trx) => this.claimLeases(trx, actionId, outs))
   }
 
   async leaseState(txid: string, vout: number): Promise<{ actionId: string; state: string } | undefined> {
@@ -1273,21 +1284,8 @@ export class AutomationStore {
       // lease+record must commit together: a crash between a committed lease
       // and a failed record leaves 'leased'-with-no-tx — a wedge take() frees
       // but prepare() refuses forever. Same conflict rule as leaseOutpoints.
-      if (leaseOuts !== undefined) {
-        const held = await trx(T.leases).whereIn(
-          'outpoint',
-          leaseOuts.map((o) => `${o.txid}:${o.vout}`)
-        )
-        const foreign = held.filter((r) => r.action_id !== t.actionId)
-        const txRows = await this.leaseTxRows(trx, foreign)
-        if (foreign.some((r) => this.leaseLiveRow(r, txRows.get(r.action_id)))) throw new Error('prepare: an input is already leased to another action')
-        const now = this.now()
-        for (const o of leaseOuts)
-          await trx(T.leases)
-            .insert({ outpoint: `${o.txid}:${o.vout}`, action_id: t.actionId, satoshis: o.satoshis, state: 'leased', at: now })
-            .onConflict('outpoint')
-            .merge()
-      }
+      if (leaseOuts !== undefined && !(await this.claimLeases(trx, t.actionId, leaseOuts)))
+        throw new Error('prepare: an input is already leased to another action')
       const row = {
         action_id: t.actionId,
         operation_id: t.operationId,
@@ -1327,12 +1325,9 @@ export class AutomationStore {
     state: TxState = 'prepared'
   ): Promise<void> {
     await this.wkx.transaction(async (trx) => {
+      if (!(await this.claimLeases(trx, actionId, t.outs)))
+        throw new LeaseConflictError(`recordBroadcast: an input of ${t.txid} is already leased to another live action`)
       const now = this.now()
-      for (const o of t.outs)
-        await trx(T.leases)
-          .insert({ outpoint: `${o.txid}:${o.vout}`, action_id: actionId, satoshis: o.satoshis, state: 'leased', at: now })
-          .onConflict('outpoint')
-          .merge()
       await trx(T.txs)
         .insert({
           action_id: actionId,

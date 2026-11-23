@@ -15,6 +15,7 @@ export {
   type Approval,
   type DeferClass,
   RevisionConflict,
+  LeaseConflictError,
   AutomationStore,
   classifyDeliveryError
 } from './store.js'

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { openRuntime, configFromEnv } from '../../packages/mcp/dist/src/index.js'
+import { openHostPlane } from '../../packages/automation/dist/src/index.js'
 import { proveMembershipStark, verifyZkm2 } from '../../packages/zk/dist/src/stark/index.js'
 const env = (p) =>
   existsSync(p)
@@ -30,6 +31,16 @@ const rt = await openRuntime(
     NEKTAR_CONFIRM_MS: '1500'
   })
 )
+// the confirmer cadence (auto-mine + BUMP attach) is journaled on the
+// executor plane — register it beside the runtime exactly as bin.ts's host
+// plane does, else the anchor never proves
+const hp = await openHostPlane({
+  store: rt.ledger,
+  txEffects: rt.txEffects,
+  rtDefs: rt.rtDefs,
+  rtKicks: rt.rtKicks,
+  log: console.log
+})
 const S = `stark-${randomBytes(3).toString('hex')}`
 for (const d of ['alpha fact', 'beta fact', 'gamma fact']) await rt.mem.remember(S, d, { source: 'spike' })
 const a = await rt.mem.anchorShard(S)
@@ -53,5 +64,6 @@ console.log(
   `STARK: prove ${ms} ms, proof ${bytes.length} B, verify ${vms} ms → ${v.ok ? 'valid' : v.reason}; root == anchored R (${b.anchor.R.slice(0, 16)}…): ${v.ok && v.journal.root === b.anchor.R}`
 )
 console.log(ok ? 'S0.3 PASS' : 'S0.3 FAIL')
+await hp.stop()
 await rt.close()
 process.exit(ok ? 0 : 1)

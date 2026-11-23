@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { PrivateKey } from '@bsv/sdk'
 import { configFromEnv, openRuntime } from '../dist/src/runtime.js'
+import { openHostPlane } from '@nektar/automation'
 
 let failures = 0
 const check = (ok, name) => {
@@ -43,7 +44,13 @@ async function waitProven(rt, seq, maxMin = 25) {
   return r
 }
 
+// BUMP attach + ledger verdicts are journaled on the executor plane — the
+// host plane serves confirmer/watcher/tx exactly as bin.ts does with
+// automation off, else proofs never land
+const hostPlane = (rt) => openHostPlane({ store: rt.ledger, txEffects: rt.txEffects, rtDefs: rt.rtDefs, rtKicks: rt.rtKicks, log: console.log })
+
 let rt = await openRuntime(cfg)
+let hp = await hostPlane(rt)
 try {
   const w = await rt.ops.wallet()
   console.log(`network ${env.NEKTAR_NETWORK} · fee address ${w.address} · balance ${w.balanceSats} sats (${w.utxos} utxos) · caps ${JSON.stringify(w.caps)}`)
@@ -74,9 +81,11 @@ try {
   console.log(`  ${link(rot?.txid)}`)
 
   // 5. restart on the same data dir → continue the persisted head (no fork)
+  await hp.stop()
   await rt.close()
   await sleep(1000)
   rt = await openRuntime(cfg)
+  hp = await hostPlane(rt)
   for (let i = 6; i < 8; i++) await rt.mem.remember(shard, `pilot record ${i} after restart`, { source: 'pilot' })
   const a2 = await rt.mem.anchorShard(shard)
   check(a2?.n === 2, `after restart: anchor n=${a2?.n} spends the persisted (rotated) head`)
@@ -108,6 +117,7 @@ try {
   const w2 = await rt.ops.wallet()
   console.log(`spent today ${w2.spentTodaySats} sats · balance ${w2.balanceSats} sats`)
 } finally {
+  await hp?.stop().catch(() => {})
   await rt.close().catch(() => {})
 }
 if (failures) {

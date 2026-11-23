@@ -1,6 +1,9 @@
 // endpoint.ts — serve the service handlers in-process (the restate server
 // invokes them over HTTP/2) and register the deployment with the server's
 // admin API. Registration is idempotent — the server dedupes by URI.
+// The executor plane is mandatory: openAutomation (market on) and
+// openHostPlane (market off) are the two registration paths — exactly one
+// runs per process, and there is no Restate-less boot.
 import { createServer, type Http2Server, type ServerHttp2Session } from 'node:http2'
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
@@ -44,7 +47,9 @@ const manifestOf = (services: unknown[] | undefined): string[] | undefined => se
  *  on a shared restate server an unscoped resume wedges OTHER apps' legs
  *  back into legs we never owned (and our deployment-rebind would re-pin
  *  them onto us). */
-const svcName = (svc: unknown): string | undefined => {
+/** exported so host-plane tests record service names with the exact
+ *  extraction the endpoint itself uses (never a re-derived copy). */
+export const svcName = (svc: unknown): string | undefined => {
   const s = svc as { name?: string; definition?: { name?: string } }
   return s.definition?.name ?? s.name
 }

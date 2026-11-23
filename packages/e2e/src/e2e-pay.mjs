@@ -6,6 +6,7 @@
 //   regtest: node packages/e2e/src/e2e-pay.mjs           (local Teranode stack)
 import { PrivateKey } from '@bsv/sdk'
 import { configFromEnv, openRuntime } from '../../mcp/dist/src/runtime.js'
+import { openHostPlane } from '../../automation/dist/src/index.js'
 import { createHttpApi } from '../../mcp/dist/src/http.js'
 import { buildPaymentTx } from '../../mcp/dist/src/payclient.js'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -125,6 +126,16 @@ if (net === 'regtest') {
 }
 
 const rt = await openRuntime(configFromEnv())
+// the confirmer cadence + records watcher are journaled on the executor
+// plane — register them beside the runtime exactly as bin.ts's host plane
+// does, else anchors never mine/prove and payment verdicts never land
+const hp = await openHostPlane({
+  store: rt.ledger,
+  txEffects: rt.txEffects,
+  rtDefs: rt.rtDefs,
+  rtKicks: rt.rtKicks,
+  log: console.log
+})
 const srv = createHttpApi(rt.mem).listen(0)
 await new Promise((r) => srv.once('listening', r))
 const base = `http://127.0.0.1:${srv.address().port}`
@@ -199,5 +210,6 @@ check(!!again.error || !!again.paymentRequired === false, 'reused payment tx rej
 lap('verify+replay')
 console.log(`\n receipt: ${r.receiptToken}\n verify:  ${r.verifyUrl}\n  [total: ${Date.now() - _t0}ms — anchor lag ${Math.round(anchorLag / 1000)}s]`)
 srv.close()
+await hp.stop()
 await rt.close()
 process.exit(0)

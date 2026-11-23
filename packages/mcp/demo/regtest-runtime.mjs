@@ -6,6 +6,7 @@ import { readFileSync, existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openRuntime, configFromEnv } from '../dist/src/index.js'
+import { openHostPlane } from '@nektar/automation'
 
 const env = (p) =>
   existsSync(p)
@@ -42,15 +43,23 @@ const waitProven = async (mem, s, ms = 60_000) => {
   return mem.unprovenAnchors().length === 0
 }
 
+// the confirmer cadence (auto-mine + BUMP attach) is journaled on the
+// executor plane — register it beside the runtime exactly as bin.ts's
+// host plane does, else ledger rows sit 'prepared' and nothing mines
+const hostPlane = (rt) => openHostPlane({ store: rt.ledger, txEffects: rt.txEffects, rtDefs: rt.rtDefs, rtKicks: rt.rtKicks, log: console.log })
+
 let rt = await openRuntime(cfg)
+let hp = await hostPlane(rt)
 await rt.mem.remember('rt', 'regtest runtime fact A', { source: 'rt' })
 const a = await rt.mem.remember('rt', 'fact B', { source: 'rt' })
 check(!!a.anchored, `anchored n=${a.anchored?.n} ${a.anchored?.txid}`)
 check(await waitProven(rt.mem), 'confirmer mined + attached the BUMP')
 check((await rt.mem.prove('rt', 0)).result.ok, 'prove against real Teranode headers')
 const head = rt.mem.anchorHead('rt').tx.id('hex')
+await hp.stop()
 await rt.close()
 rt = await openRuntime(cfg)
+hp = await hostPlane(rt)
 check(rt.mem.anchorHead('rt')?.tx.id('hex') === head, 'restart resumed the persisted head')
 await rt.mem.remember('rt', 'fact C', { source: 'rt' })
 const d = await rt.mem.remember('rt', 'fact D', { source: 'rt' })
@@ -58,6 +67,7 @@ check(d.anchored?.n === 1, `post-restart anchor n=1 spends the persisted head: $
 check(await waitProven(rt.mem), 'confirmer after restart')
 check((await rt.mem.prove('rt', 0)).result.ok && (await rt.mem.prove('rt', 3)).result.ok, 'old and new records provable')
 check((await rt.mem.recall('rt', { seq: 2 })).items[0]?.text === 'fact C', 'encrypted record decrypts with the persisted agent key')
+await hp.stop()
 await rt.close()
 console.log(fails ? `REGTEST RUNTIME FAIL (${fails})` : 'REGTEST RUNTIME PASS')
 process.exit(fails ? 1 : 0)

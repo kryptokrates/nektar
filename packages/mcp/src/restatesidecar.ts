@@ -7,8 +7,8 @@
 //   3. bundled restate-server exists      → spawn it as a sidecar: native on
 //      linux/darwin, through wsl.exe on win32 (restatedev ships no windows
 //      binary; WSL2 localhostForwarding mirrors the ports onto Windows).
-//   4. anything fails                    → degrade: the memory path works
-//      without restate; the market plane logs what it needs.
+//   4. anything fails                    → unavailable: the executor plane is
+//      mandatory and the caller refuses to boot (RESTATE_REQUIRED).
 // The bundled ports are off nektar's own :8080 HTTP default — 18080/19070.
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
@@ -19,9 +19,15 @@ import { nektarEnv, setNektarEnv } from '@nektar/core'
 const INGRESS_PORT = 18080
 const ADMIN_PORT = 19070
 // dist/src/bin.js → ../../ = artifact root in the deploy tree; in the repo
-// checkout it lands on packages/mcp/restate which never exists → degrade path
+// checkout it lands on packages/mcp/restate which never exists → unavailable path
 const RESTATE_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../restate')
-export type SidecarState = 'configured' | 'adopted' | 'spawned' | 'degraded'
+export type SidecarState = 'configured' | 'adopted' | 'spawned' | 'unavailable'
+
+/** the boot-refusal message when no executor plane can be configured, adopted
+ *  or spawned — every journaled surface (tx object, confirmer, watcher,
+ *  market plane) sits on it, so there is no memory-only boot */
+export const RESTATE_REQUIRED =
+  'the executor plane (Restate) is required and none is available — set NEKTAR_RESTATE_URL to a running restate ingress, run the release artifact (bundles restate-server; on Windows it needs WSL with a distro: wsl --install -d Ubuntu), or start one yourself (see docs/OPERATIONS.md, "Executor plane")'
 
 type SpawnImpl = (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess
 
@@ -114,8 +120,8 @@ export async function ensureRestate(
 
   const bin = join(restateDir, 'restate-server')
   if (!existsSync(bin)) {
-    log('restate: no bundled server and none answering — market plane disabled (set NEKTAR_RESTATE_URL to enable deals)')
-    return 'degraded'
+    log('restate: no bundled server and none answering on :19070/:9070 — set NEKTAR_RESTATE_URL or run the release artifact (it bundles restate-server)')
+    return 'unavailable'
   }
 
   const dataDir = nektarEnv('NEKTAR_DATA_DIR', env) ?? '.nektar'
@@ -162,10 +168,10 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
       if (ws !== 'ok') {
         log(
           ws === 'nodistro'
-            ? 'restate: bundled server is a linux binary and WSL has no installed distro — market plane disabled (run once: wsl --install -d Ubuntu; or set NEKTAR_RESTATE_URL)'
-            : 'restate: bundled server is a linux binary and WSL is not installed — market plane disabled (install WSL once: wsl --install; or set NEKTAR_RESTATE_URL)'
+            ? 'restate: bundled server is a linux binary and WSL has no installed distro — run once: wsl --install -d Ubuntu; or set NEKTAR_RESTATE_URL'
+            : 'restate: bundled server is a linux binary and WSL is not installed — install WSL once: wsl --install; or set NEKTAR_RESTATE_URL'
         )
-        return 'degraded'
+        return 'unavailable'
       }
       wslBin = wslpath(spawnBin, spawnSyncImpl)
       child = spawnImpl(
@@ -216,8 +222,8 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
         /* best effort */
       }
     }
-    log(`restate: spawn failed — ${(e as Error).message}; market plane disabled`)
-    return 'degraded'
+    log(`restate: spawn failed — ${(e as Error).message}; set NEKTAR_RESTATE_URL to a running ingress`)
+    return 'unavailable'
   }
 
   // restate takes a few seconds to provision a fresh cluster — but a binary
@@ -256,7 +262,7 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
     }
   }
   log(
-    `restate: ${childDied !== undefined ? `sidecar died (${childDied})` : 'sidecar did not come up within 30s'} — market plane disabled (see ${join(work, 'restate.log')})`
+    `restate: ${childDied !== undefined ? `sidecar died (${childDied})` : 'sidecar did not come up within 30s'} — set NEKTAR_RESTATE_URL to a running ingress (see ${join(work, 'restate.log')})`
   )
-  return 'degraded'
+  return 'unavailable'
 }

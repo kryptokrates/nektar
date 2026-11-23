@@ -110,9 +110,16 @@ for (const [k, v] of Object.entries({ ...defs, ...dot }))
 // never overrides set vars, so by the time it runs our values already hold.
 // executor plane before the runtime opens — NEKTAR_RESTATE_URL wins, a live
 // admin is adopted, else the bundled restate-server is spawned (release
-// artifacts only; dev boots degrade exactly as before)
-const { ensureRestate } = await import('./restatesidecar.js')
-await ensureRestate({ log: nlog, onCleanup: (fn) => process.on('exit', fn) })
+// artifacts only). The plane is mandatory: every journaled surface (tx
+// object, confirmer cadence, records watcher, market plane) sits on it, so
+// there is no memory-only boot — refuse before the data dir opens or the
+// instance lock is taken.
+const { ensureRestate, RESTATE_REQUIRED } = await import('./restatesidecar.js')
+const plane = await ensureRestate({ log: nlog, onCleanup: (fn) => process.on('exit', fn) })
+if (plane === 'unavailable') {
+  nlog(RESTATE_REQUIRED)
+  process.exit(2)
+}
 const { openRuntime, configFromEnv } = await import('./runtime.js')
 const rt = await openRuntime(configFromEnv())
 nlog(`network=${rt.network}`)
@@ -159,6 +166,11 @@ if (seedDomains.length > 0 && mh.length > 0) {
     )
     .catch((e) => nlog(`seed: ${(e as Error).message}`))
 }
+// the host plane (tx object + confirmer cadence + records watcher) is
+// journaled work — it registers on the restate endpoint whether or not the
+// market plane is on. openAutomation registers the same service names, so
+// exactly one of the two opens an endpoint in a process.
+let hostPlane: { uri: string; stop: () => Promise<void> } | undefined
 if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
   const { openAutomation } = await import('@nektar/automation')
   // unattended mode is honored ONLY behind a valid conformance token —
@@ -281,6 +293,15 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
   })
   nlog(`automation on — ${mh.length} market host(s); policies and approvals via 'pnpm automation'`)
   if (mh.length === 0) nlog('automation: no market hosts (set NEKTAR_MARKET_HOSTS) — wants and offers cannot be published')
+} else {
+  const { openHostPlane } = await import('@nektar/automation')
+  hostPlane = await openHostPlane({
+    store: rt.ledger,
+    txEffects: rt.txEffects,
+    rtDefs: rt.rtDefs,
+    rtKicks: rt.rtKicks,
+    log: nlog
+  })
 }
 const port = nektarEnv('NEKTAR_HTTP_PORT')
 let srv: ReturnType<typeof import('./http.js').createHttpApi> | undefined
@@ -327,6 +348,7 @@ const stop = async () => {
     srv.closeIdleConnections() // sever idle keep-alives so the socket count drains
   }
   await rt.mem.automation?.stop().catch(() => {})
+  await hostPlane?.stop().catch(() => {})
   await rt.close().catch(() => {})
   process.exit(0)
 }

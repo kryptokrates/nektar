@@ -189,8 +189,11 @@ export interface Runtime {
   /** the runtime's one custody effect set — every tx emit site and the tx
    *  object run it; openAutomation hands it to its runtime unchanged */
   txEffects: import('@nektar/automation').TxEffects
+  /** the records-side wallet ledger — the host plane's tx object serves it */
+  ledger: import('@nektar/automation').AutomationStore
   /** host-composed endpoint defs + boot kicks for the shared restate
-   *  endpoint — openAutomation registers and fires them */
+   *  endpoint — openHostPlane (automation off) or openAutomation (on)
+   *  registers and fires them */
   rtDefs: unknown[]
   rtKicks: InvokeTarget[]
   /** mainnet-only ops surface for /v1/wallet + /v1/costs */
@@ -607,9 +610,11 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     network: net,
     ops,
     txEffects,
-    /** host-composed endpoint defs + boot kicks — openAutomation registers
-     *  them on the shared restate endpoint; rejected under an injected
-     *  cfg.exec Dispatcher (the in-process test seam) */
+    ledger,
+    /** host-composed endpoint defs + boot kicks — openHostPlane (automation
+     *  off) or openAutomation (on) registers them on the shared restate
+     *  endpoint; rejected under an injected cfg.exec Dispatcher (the
+     *  in-process test seam) */
     rtDefs,
     rtKicks,
     close: async () => {

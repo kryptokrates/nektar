@@ -87,7 +87,7 @@ void test('sidecar: standard ports :9070/:8080 adopted when :19070 is dark', asy
   assert.equal(env.NEKTAR_RESTATE_ADMIN, 'http://127.0.0.1:9070')
 })
 
-void test('sidecar: no bundled binary → degraded with a log, nothing spawned', async () => {
+void test('sidecar: no bundled binary → unavailable with a log naming NEKTAR_RESTATE_URL, nothing spawned', async () => {
   const env: NodeJS.ProcessEnv = {}
   const logs: string[] = []
   const st = await ensureRestate({
@@ -97,12 +97,12 @@ void test('sidecar: no bundled binary → degraded with a log, nothing spawned',
     spawnImpl: () => assert.fail('must not spawn'),
     restateDir: mkdtempSync(join(tmpdir(), 'nektar-nors-'))
   })
-  assert.equal(st, 'degraded')
+  assert.equal(st, 'unavailable')
   assert.ok(logs.some((m) => m.includes('NEKTAR_RESTATE_URL')))
   assert.equal(env.NEKTAR_RESTATE_URL, undefined)
 })
 
-void test('sidecar: spawn failure degrades — memory plane still boots', async () => {
+void test('sidecar: spawn failure → unavailable — the caller refuses to boot', async () => {
   const env: NodeJS.ProcessEnv = { NEKTAR_DATA_DIR: mkdtempSync(join(tmpdir(), 'nektar-dd-')) }
   const logs: string[] = []
   const dir = mkdtempSync(join(tmpdir(), 'nektar-rs-'))
@@ -117,11 +117,11 @@ void test('sidecar: spawn failure degrades — memory plane still boots', async 
     },
     restateDir: dir
   })
-  assert.equal(st, 'degraded')
+  assert.equal(st, 'unavailable')
   assert.ok(logs.some((m) => m.includes('spawn failed')))
 })
 
-void test('sidecar: child dying at exec degrades immediately — no 30s poll', async () => {
+void test('sidecar: child dying at exec → unavailable immediately — no 30s poll', async () => {
   // the glibc-on-bookworm exec failure seen in the image smoke: the binary
   // can't even start, admin never answers — the child's error/exit event must
   // cut the wait short instead of polling a dead port for the full deadline
@@ -142,7 +142,7 @@ void test('sidecar: child dying at exec degrades immediately — no 30s poll', a
     },
     restateDir: dir
   })
-  assert.equal(st, 'degraded')
+  assert.equal(st, 'unavailable')
   assert.ok(Date.now() - t0 < 5_000)
   assert.ok(logs.some((m) => m.includes('sidecar died')))
 })
@@ -216,7 +216,7 @@ void test('sidecar: win32 spawns through wsl.exe, endpoint URI advertises the WS
   assert.ok(cmds.some((a) => a[0] === 'wsl.exe' && a.includes('pkill') && a.includes('-f')))
 })
 
-void test('sidecar: WSL present but no distro → degraded with the install hint, nothing spawned', async () => {
+void test('sidecar: WSL present but no distro → unavailable with the install hint, nothing spawned', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-rs-'))
   writeFileSync(join(dir, 'restate-server'), 'x')
   const env: NodeJS.ProcessEnv = { NEKTAR_DATA_DIR: mkdtempSync(join(tmpdir(), 'nektar-dd-')) }
@@ -235,7 +235,7 @@ void test('sidecar: WSL present but no distro → degraded with the install hint
     spawnImpl: () => assert.fail('must not spawn'),
     restateDir: dir
   })
-  assert.equal(st, 'degraded')
+  assert.equal(st, 'unavailable')
   assert.ok(logs.some((m) => m.includes('wsl --install -d Ubuntu')))
 })
 

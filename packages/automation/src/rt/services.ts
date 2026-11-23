@@ -317,18 +317,22 @@ export const transportDrainBody =
     // successor of armOutboxTimer; empty box leaves the loop asleep until
     // outboxReady pokes it
     const next = await run('next', () => Promise.resolve(deps.nextAt()))
-    if (next !== undefined)
+    if (next !== undefined) {
       // EVERY drain invocation arms a successor — outboxReady pokes and
       // wake-cycle drains run this same body, so an unkeyed arm adds one
       // permanent self-arming chain per poke and the delayed-send backlog
       // grows forever (rt/arm-multiplication). Keying the arm on `next` —
       // the domain-derived earliest wake — converges any number of
       // concurrent chains to ≤1 pending arm per wake instant.
+      // the delay's clock must be journaled too: a replay that reads a
+      // moved now() re-times the arm and dies JournalMismatchError
+      const now = await run('armNow', () => Promise.resolve(deps.now()))
       await send(
         { service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY },
         {},
-        { delayMs: Math.max(0, next - deps.now()), idempotencyKey: `drain:${next}` }
+        { delayMs: Math.max(0, next - now), idempotencyKey: `drain:${next}` }
       )
+    }
     return { sent: rows.length, nextAt: next }
   }
 
@@ -664,8 +668,11 @@ export interface WakeDeps {
  * coalesce on a 1s bucket: a chain-event burst queues ≤1 pass per target
  * per window instead of one full scan per event. Distinct from the
  * self-arm keys — pokes never collide with arms. */
-const wakeCycle = async (send: RtSend, now: () => number, fanSvc: string): Promise<void> => {
-  const b = Math.floor(now() / 1000)
+const wakeCycle = async (send: RtSend, run: StepRun, now: () => number, fanSvc: string): Promise<void> => {
+  // the bucket MUST come out of the journal: a replay that crosses the
+  // second boundary re-issues the sends — an unjournaled now() re-keys
+  // them and the invocation dies JournalMismatchError (rt/determinism)
+  const b = await run('pokeBucket', () => Promise.resolve(Math.floor(now() / 1000)))
   await send({ service: fanSvc, handler: 'tick', key: CRON_KEY }, {}, { idempotencyKey: `dealfan:poke:${b}` })
   await send({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {}, { idempotencyKey: `drain:poke:${b}` })
 }
@@ -675,21 +682,23 @@ export const wakeTxProofBody =
   async (send: RtSend, arg: { txid: string; mpHex: string }, run: StepRun = (_n, fn) => fn()) => {
     if (deps.legs.txProof !== undefined) await run('ledger', () => Promise.resolve(deps.legs.txProof!(arg.txid, arg.mpHex)))
     deps.hint(arg.txid)
-    await wakeCycle(send, deps.now ?? Date.now, deps.fanSvc ?? EXEC_SVC.dealfan)
+    await wakeCycle(send, run, deps.now ?? Date.now, deps.fanSvc ?? EXEC_SVC.dealfan)
     return { done: true }
   }
 
-export const wakeTxRejectedBody = (deps: WakeDeps) => async (send: RtSend, arg: { txid: string }) => {
-  deps.hint(arg.txid)
-  await wakeCycle(send, deps.now ?? Date.now, deps.fanSvc ?? EXEC_SVC.dealfan)
-  return { done: true }
-}
+export const wakeTxRejectedBody =
+  (deps: WakeDeps) =>
+  async (send: RtSend, arg: { txid: string }, run: StepRun = (_n, fn) => fn()) => {
+    deps.hint(arg.txid)
+    await wakeCycle(send, run, deps.now ?? Date.now, deps.fanSvc ?? EXEC_SVC.dealfan)
+    return { done: true }
+  }
 
 export const wakeTxAbandonedBody =
   (deps: WakeDeps) =>
   async (send: RtSend, arg: { txid: string }, run: StepRun = (_n, fn) => fn()) => {
     if (deps.legs.txAbandoned !== undefined) await run('ledger', () => Promise.resolve(deps.legs.txAbandoned!(arg.txid)))
-    await wakeCycle(send, deps.now ?? Date.now, deps.fanSvc ?? EXEC_SVC.dealfan)
+    await wakeCycle(send, run, deps.now ?? Date.now, deps.fanSvc ?? EXEC_SVC.dealfan)
     return { done: true }
   }
 
@@ -698,7 +707,7 @@ export const wakeHeightBody =
   async (send: RtSend, arg: { tip: number }, run: StepRun = (_n, fn) => fn()) => {
     const due = deps.legs.dueAtHeight === undefined ? false : await run('due', () => Promise.resolve(deps.legs.dueAtHeight!(arg.tip)))
     if (due) {
-      const b = Math.floor((deps.now ?? Date.now)() / 1000)
+      const b = await run('pokeBucket', () => Promise.resolve(Math.floor((deps.now ?? Date.now)() / 1000)))
       await send({ service: deps.fanSvc ?? EXEC_SVC.dealfan, handler: 'tick', key: CRON_KEY }, {}, { idempotencyKey: `dealfan:poke:${b}` })
     }
     return { due }
@@ -738,7 +747,7 @@ export const wakeService = async (deps: WakeDeps) => {
     options: RT_OPTS_FLOOR,
     handlers: {
       txProof: async (ctx: restate.Context, arg: { txid: string; mpHex: string }) => await proof(send(ctx), arg, (n, fn) => ctx.run(n, fn)),
-      txRejected: async (ctx: restate.Context, arg: { txid: string }) => await rejected(send(ctx), arg),
+      txRejected: async (ctx: restate.Context, arg: { txid: string }) => await rejected(send(ctx), arg, (n, fn) => ctx.run(n, fn)),
       txAbandoned: async (ctx: restate.Context, arg: { txid: string }) => await abandoned(send(ctx), arg, (n, fn) => ctx.run(n, fn)),
       height: async (ctx: restate.Context, arg: { tip: number }) => await height(send(ctx), arg, (n, fn) => ctx.run(n, fn)),
       reorg: async (ctx: restate.Context, arg: { from: number }) => await reorg(send(ctx), arg, (n, fn) => ctx.run(n, fn))

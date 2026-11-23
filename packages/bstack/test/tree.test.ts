@@ -64,7 +64,11 @@ test('ledger: unproven tree with anchored ancestry hands out zero-conf slots', a
   assert.equal(s.tree.id('hex'), t.id('hex'))
   assert.equal(await l.remaining(), 1)
   // it still lists as unproven so markProven anchors it once mined
-  assert.deepEqual(await l.unproven(), [{ txid: t.id('hex'), kind: 'market' }])
+  const u = await l.unproven()
+  assert.equal(u.length, 1)
+  assert.equal(u[0].txid, t.id('hex'))
+  assert.equal(u[0].kind, 'market')
+  assert.ok(typeof u[0].addedAt === 'number' && u[0].addedAt > 0, 'row age is recorded for heal policy')
 })
 
 test('ledger: anchored ancestry serves only the market lane — bbox still waits for mined', async () => {
@@ -141,7 +145,11 @@ test('ledger (knex): unproven tree with anchored ancestry hands out zero-conf sl
     assert.ok(s !== undefined)
     assert.equal(s.tree.id('hex'), t.id('hex'))
     assert.equal(await l.remaining(), 1)
-    assert.deepEqual(await l.unproven(), [{ txid: t.id('hex'), kind: 'market' }])
+    const u = await l.unproven()
+    assert.equal(u.length, 1)
+    assert.equal(u[0].txid, t.id('hex'))
+    assert.equal(u[0].kind, 'market')
+    assert.ok(typeof u[0].addedAt === 'number' && u[0].addedAt > 0)
     // a second anchored tree registered as bbox still waits for the BUMP
     const b = await anchoredTree(key, 1)
     await l.add(b, 1, 'bbox')
@@ -390,7 +398,10 @@ for (const mk of [
       // carrier graph), so the demoted row has nothing to anchor on — it
       // waits unproven until the re-mined proof arrives
       assert.deepEqual(await l.unproveFrom(4), [tree.id('hex')])
-      assert.deepEqual(await l.unproven(), [{ txid: tree.id('hex'), kind: 'bbox' }])
+      const demoted = await l.unproven()
+      assert.equal(demoted.length, 1)
+      assert.equal(demoted[0].txid, tree.id('hex'))
+      assert.equal(demoted[0].kind, 'bbox')
       assert.equal(await l.remaining('bbox'), 0)
       assert.equal(await l.take('bbox'), undefined)
       // re-minted on the new fork: markProven heals the row again — before

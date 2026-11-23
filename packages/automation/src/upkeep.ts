@@ -34,7 +34,12 @@ export function openUpkeep(rt: Rt): void {
   }
   // stuck-mint healing — a mint the chain observer can't see ('unknown') gets
   // one resubmit per age window; only a definitive refusal counts toward the
-  // drop verdict — a dead endpoint must never reap a healthy mint.
+  // drop verdict — a dead endpoint must never reap a healthy mint. The age
+  // window keys on the row's durable added_at (unprovenSince): the old
+  // in-memory first-seen reset on every restart, so a churned process could
+  // hold phantom mints under the heal window indefinitely (observed: two
+  // never-propagated bbox mints pinned the mint gate ~50min). This map now
+  // only rate-limits resubmits and counts definitive refusals per process.
   // txFacts is throttled: ChainEvents polls these txids on its own watch
   // floor and delivers rejections/proofs itself — this second read is only
   // the mint-gate's heal/reap input, so a short cache loses no signal
@@ -50,7 +55,7 @@ export function openUpkeep(rt: Rt): void {
   // on two upkeep passes evicts (a single fetch miss must not reap stock
   // whose parent was simply between propagation hops)
   const deadSuspects = new BoundedMap<string, number>(4096)
-  const stuckMints = new BoundedMap<string, { first: number; tries: number }>(4096)
+  const stuckMints = new BoundedMap<string, { first: number; tries: number; last: number }>(4096)
   // refused-ancestor registry — a refusal that names its ancestor is
   // first-party evidence the ancestor is dead to this mempool: every
   // outpoint whose unproven ancestry contains it can never air, whatever
@@ -80,17 +85,21 @@ export function openUpkeep(rt: Rt): void {
     }
     return r
   }
-  const stuckMint = async (tree: import('@bsv/sdk').Transaction): Promise<'keep' | 'drop'> => {
+  const stuckMint = async (tree: import('@bsv/sdk').Transaction, unprovenSince?: number): Promise<'keep' | 'drop'> => {
     const tid = tree.id('hex')
     const now = Date.now()
-    const s = stuckMints.get(tid) ?? { first: now, tries: 0 }
+    const s = stuckMints.get(tid) ?? { first: unprovenSince ?? now, tries: 0, last: 0 }
     stuckMints.set(tid, s)
-    if (now - s.first < WAITS.mintHeal.ms) return 'keep'
+    // eligibility rides the row's durable age when known; rows predating the
+    // column (addedAt undefined) fall back to this process's first sighting
+    const first = unprovenSince ?? s.first
+    if (now - first < WAITS.mintHeal.ms) return 'keep'
+    if (s.last !== 0 && now - s.last < WAITS.mintHeal.ms) return 'keep' // one resubmit per window per process
     const r = await broadcast(tree).catch((e: unknown) => ({
       status: 'error' as const,
       description: `transport: ${e instanceof Error ? e.message : String(e)}`
     }))
-    s.first = now // one heal attempt per window
+    s.last = now // rate-limit resubmits; eligibility stays on `first`
     if (r.status === 'success') {
       s.tries = 0
       return 'keep'
@@ -431,7 +440,7 @@ export function openUpkeep(rt: Rt): void {
               onRefused: (tree, r) => {
                 if (BROADCAST_DEFINITIVE.test(r.description ?? '') && !(r.description ?? '').startsWith('transport:')) ghostMint(tree)
               },
-              onStuck: (tree) => stuckMint(tree),
+              onStuck: (tree, unprovenSince) => stuckMint(tree, unprovenSince),
               onSpent: (tree) => void mem.funds.spent(tree)
             })
             // a fresh market tree's slots are usable the moment it's added —

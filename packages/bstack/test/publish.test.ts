@@ -1,9 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey, ProtoWallet, Transaction, UnlockingScript } from '@bsv/sdk'
+import knex from 'knex'
 import { signWant } from '../src/artifacts.js'
 import { fundingLock } from '@lightwebinc/bcommon'
-import { DERIVATION, FUNDING_TAG, ORIGINATOR } from '../src/tree.js'
+import { DERIVATION, FUNDING_TAG, ORIGINATOR, KnexTreeLedger } from '../src/tree.js'
 import { MemoryCarrierJournal } from '../src/journal.js'
 import { MemoryTreeLedger } from '../src/tree.js'
 import { publishArtifact, republishProved, republishOne, resubmitCarrier, artifactHash } from '../src/publish.js'
@@ -240,6 +241,60 @@ test('ensureTrees: stuck mint — keep while healing, drop on definitive verdict
   assert.equal(stuckCalls, 3)
   assert.deepEqual(rejected, [broadcasted[0].id('hex'), broadcasted[1].id('hex')])
   assert.equal((await ledger.unproven()).length, 1)
+})
+
+test('ensureTrees: onStuck receives the durable row age — a backdated phantom is heal-eligible across restarts', async () => {
+  const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  try {
+    const k = PrivateKey.fromRandom()
+    const ledger = new KnexTreeLedger(kx)
+    const broadcasted: Transaction[] = []
+    const bc = (tx: Transaction) => {
+      broadcasted.push(tx)
+      return Promise.resolve({ status: 'success' as const, txid: tx.id('hex') })
+    }
+    const fetchTx = (txid: string) => Promise.resolve(broadcasted.find((t) => t.id('hex') === txid))
+    const p = {
+      key: k,
+      ledger,
+      lowWater: 4,
+      size: 4,
+      takeFunding: () => Promise.resolve(fund(k, 1_000_000)),
+      broadcast: bc,
+      fetchTx
+    }
+    await ensureTrees(p)
+    const phantom = broadcasted[0].id('hex')
+    // a never-propagated mint: age the row in the ledger itself — heal policy
+    // must read THIS, not an in-memory first-seen that resets on boot
+    const backdated = Date.now() - 11 * 60_000
+    await kx('bstack_trees').where({ txid: phantom }).update({ added_at: backdated })
+    let seen: number | undefined
+    await ensureTrees({
+      ...p,
+      facts: () => Promise.resolve(factsFor('unknown')),
+      onStuck: (_tx, unprovenSince) => {
+        seen = unprovenSince
+        return Promise.resolve('keep')
+      }
+    })
+    assert.equal(seen, backdated, 'onStuck must see the persisted row age, not process uptime')
+    // a legacy row (added_at NULL) reports undefined — the caller falls back
+    // to its own first-sighting window instead of treating it as brand-new
+    await kx('bstack_trees').where({ txid: phantom }).update({ added_at: null })
+    seen = 1
+    await ensureTrees({
+      ...p,
+      facts: () => Promise.resolve(factsFor('unknown')),
+      onStuck: (_tx, unprovenSince) => {
+        seen = unprovenSince
+        return Promise.resolve('keep')
+      }
+    })
+    assert.equal(seen, undefined)
+  } finally {
+    await kx.destroy()
+  }
 })
 
 test('ensureTrees: a refused mint fires onRefused so the take heals, then fails the pass', async () => {

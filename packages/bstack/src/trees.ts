@@ -41,8 +41,10 @@ export async function ensureTrees(p: {
    *  undecidable status — the silent-eviction case a rejection verdict never
    *  covers): 'keep' leaves the row, 'drop' reaps it like a rejection. The
    *  caller heals inside (resubmit) and answers 'drop' only on a definitive
-   *  failure — a row left here gates every later mint of its kind. */
-  onStuck?: (tx: Transaction) => Promise<'keep' | 'drop'>
+   *  failure — a row left here gates every later mint of its kind.
+   *  `unprovenSince` is the durable row age (bstack_trees.added_at) — heal
+   *  windows must key on it, not on in-memory first-seen. */
+  onStuck?: (tx: Transaction, unprovenSince?: number) => Promise<'keep' | 'drop'>
   onSpent?: (tx: Transaction) => void | Promise<void>
   /** max unproven mints in flight per kind (default 1) — deeper than one
    *  keeps a refill minting while an earlier mint still waits on its block,
@@ -88,7 +90,7 @@ export async function ensureTrees(p: {
         // silently vanished or refused on a status word — resubmit or reap.
         // The heal path decides on first-party evidence; a pushed hint alone
         // never drops a row or writes a tombstone
-        if ((await p.onStuck(tx)) === 'drop') {
+        if ((await p.onStuck(tx, u.addedAt)) === 'drop') {
           await p.ledger.drop(u.txid)
           if (p.onReject !== undefined) await p.onReject(tx)
         }

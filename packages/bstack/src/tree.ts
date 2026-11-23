@@ -102,7 +102,10 @@ export interface TreeLedger {
    *  unproven() rows, so a re-mined proof on the new fork can never heal it.
    *  Returns the txids that were demoted. */
   unproveFrom(height: number): Promise<string[]>
-  unproven(): Promise<Array<{ txid: string; kind: string }>>
+  /** unproven rows carry `addedAt` (ms epoch at insert) so heal/reap policy
+   *  can age a row across restarts — in-memory first-seen resets on every
+   *  boot and lets a churned process keep a phantom mint gating forever */
+  unproven(): Promise<Array<{ txid: string; kind: string; addedAt?: number }>>
   /** remove a tree + all its slots — a mint that never landed on-chain
    *  (rejected / evicted) would otherwise sit in unproven() forever and gate
    *  out every future mint of that kind */
@@ -282,13 +285,13 @@ export const matchProvision = (tx: Transaction, lanes: Array<{ kind: string; loc
 }
 
 export class MemoryTreeLedger implements TreeLedger {
-  private trees = new Map<string, { tree: Transaction; proven: boolean; kind: string; n: number }>()
+  private trees = new Map<string, { tree: Transaction; proven: boolean; kind: string; n: number; addedAt: number }>()
   // free slot key -> lane kind; adopt() writes per-slot kinds, add() the
   // tree's single kind — provisioning makes trees mixed-kind
   private free = new Map<string, string>()
   add(tree: Transaction, n: number, kind = 'market'): Promise<void> {
     const txid = tree.id('hex')
-    this.trees.set(txid, { tree, proven: false, kind, n })
+    this.trees.set(txid, { tree, proven: false, kind, n, addedAt: Date.now() })
     for (let i = 0; i < n; i++) this.free.set(`${txid}:${i}`, kind)
     return Promise.resolve()
   }
@@ -297,7 +300,7 @@ export class MemoryTreeLedger implements TreeLedger {
     if (this.trees.has(txid)) return Promise.resolve(0)
     // provision trees minted nothing on this ledger — n:0 keeps stock()'s
     // `taken` (own-kind minted minus own-kind free) out of foreign stock
-    this.trees.set(txid, { tree: tx, proven: tx.merklePath !== undefined, kind: PROVISION_KIND, n: 0 })
+    this.trees.set(txid, { tree: tx, proven: tx.merklePath !== undefined, kind: PROVISION_KIND, n: 0, addedAt: Date.now() })
     for (const s of slots) this.free.set(`${txid}:${s.vout}`, s.kind)
     return Promise.resolve(slots.length)
   }
@@ -359,8 +362,8 @@ export class MemoryTreeLedger implements TreeLedger {
     }
     return Promise.resolve(out)
   }
-  unproven(): Promise<Array<{ txid: string; kind: string }>> {
-    return Promise.resolve([...this.trees].filter(([, t]) => !t.proven).map(([id, t]) => ({ txid: id, kind: t.kind })))
+  unproven(): Promise<Array<{ txid: string; kind: string; addedAt: number }>> {
+    return Promise.resolve([...this.trees].filter(([, t]) => !t.proven).map(([id, t]) => ({ txid: id, kind: t.kind, addedAt: t.addedAt })))
   }
   drop(txid: string): Promise<void> {
     this.trees.delete(txid)
@@ -426,6 +429,13 @@ export class KnexTreeLedger implements TreeLedger {
         t.string('kind').notNullable().defaultTo('market')
       })
     }
+    // durable mint age — rows predating the column read as NULL and callers
+    // treat them as 'unknown age' (conservative: a fresh in-memory window)
+    if ((await this.kx.schema.hasTable('bstack_trees')) && !(await this.kx.schema.hasColumn('bstack_trees', 'added_at'))) {
+      await this.kx.schema.alterTable('bstack_trees', (t) => {
+        t.bigInteger('added_at')
+      })
+    }
     if (!(await this.kx.schema.hasTable('bstack_trees'))) {
       await this.kx.schema.createTable('bstack_trees', (t) => {
         t.string('txid').primary()
@@ -433,6 +443,7 @@ export class KnexTreeLedger implements TreeLedger {
         t.integer('proven').notNullable().defaultTo(0)
         t.string('beef').notNullable()
         t.string('kind').notNullable().defaultTo('market')
+        t.bigInteger('added_at')
       })
     }
     if (!(await this.kx.schema.hasTable('bstack_tree_outputs'))) {
@@ -449,7 +460,7 @@ export class KnexTreeLedger implements TreeLedger {
     const txid = tree.id('hex')
     await this.kx.transaction(async (trx) => {
       await trx('bstack_trees')
-        .insert({ txid, n, proven: tree.merklePath ? 1 : 0, beef: JSON.stringify(tree.toBEEF()), kind })
+        .insert({ txid, n, proven: tree.merklePath ? 1 : 0, beef: JSON.stringify(tree.toBEEF()), kind, added_at: Date.now() })
         .onConflict('txid')
         .ignore()
       const rows = Array.from({ length: n }, (_, i) => ({ key: `${txid}:${i}`, txid, vout: i, kind }))
@@ -462,7 +473,7 @@ export class KnexTreeLedger implements TreeLedger {
     if (await this.kx('bstack_trees').where({ txid }).first()) return 0
     await this.kx.transaction(async (trx) => {
       await trx('bstack_trees')
-        .insert({ txid, n: slots.length, proven: tx.merklePath ? 1 : 0, beef: JSON.stringify(tx.toBEEF()), kind: PROVISION_KIND })
+        .insert({ txid, n: slots.length, proven: tx.merklePath ? 1 : 0, beef: JSON.stringify(tx.toBEEF()), kind: PROVISION_KIND, added_at: Date.now() })
         .onConflict('txid')
         .ignore()
       const rows = slots.map((s) => ({ key: `${txid}:${s.vout}`, txid, vout: s.vout, kind: s.kind }))
@@ -596,9 +607,14 @@ export class KnexTreeLedger implements TreeLedger {
     }
     return out
   }
-  async unproven(): Promise<Array<{ txid: string; kind: string }>> {
+  async unproven(): Promise<Array<{ txid: string; kind: string; addedAt?: number }>> {
     await this.ensure()
-    return (await this.kx('bstack_trees').where({ proven: 0 }).select('txid', 'kind')).map((r) => ({ txid: r.txid, kind: r.kind }))
+    return (await this.kx('bstack_trees').where({ proven: 0 }).select('txid', 'kind', 'added_at')).map((r) => ({
+      txid: r.txid,
+      kind: r.kind,
+      // NULL = row predates the column — 'unknown age', not 'brand new'
+      addedAt: r.added_at === null || r.added_at === undefined ? undefined : Number(r.added_at)
+    }))
   }
   async drop(txid: string): Promise<void> {
     await this.ensure()

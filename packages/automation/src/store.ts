@@ -294,7 +294,7 @@ export interface Approval {
   actionDigest: string
   maxExtraSats: number
   expiresAt: number
-  status: 'pending' | 'approved' | 'denied' | 'consumed' | 'canceled'
+  status: 'pending' | 'approved' | 'denied' | 'consumed' | 'canceled' | 'expired'
   evidence: unknown
   decidedBy?: string
 }
@@ -538,6 +538,13 @@ export class AutomationStore {
         // window that replayTxEffects re-runs (intents are idempotent)
         t.integer('effected').notNullable().defaultTo(0)
       })
+    // effect-replay bookkeeping (STATE-06): attempts/error/next_at bound the
+    // replay's cadence and record WHY a wedge is wedged — an invisible
+    // every-tick retry is exactly the unbounded loop this closes
+    if (!(await this.wkx.schema.hasColumn(T.txEvents, 'effect_attempts')))
+      await this.wkx.schema.alterTable(T.txEvents, (t) => t.integer('effect_attempts').notNullable().defaultTo(0))
+    if (!(await this.wkx.schema.hasColumn(T.txEvents, 'effect_error'))) await this.wkx.schema.alterTable(T.txEvents, (t) => t.text('effect_error'))
+    if (!(await this.wkx.schema.hasColumn(T.txEvents, 'effect_next_at'))) await this.wkx.schema.alterTable(T.txEvents, (t) => t.bigInteger('effect_next_at'))
   }
 
   // ── policies ────────────────────────────────────────────────────────────
@@ -785,6 +792,7 @@ export class AutomationStore {
             kind: o.kind,
             destination: o.destination,
             payload: canonicalJson(o.payload),
+            refs: o.refs !== undefined ? canonicalJson(o.refs) : null,
             status: 'pending',
             attempts: 0,
             next_at: now
@@ -1252,6 +1260,10 @@ export class AutomationStore {
     return true
   }
 
+  /** TEST SEAM — production never claims bare outpoints: every real claim
+   *  rides claimLeases inside the row's write transaction (recordPrepared,
+   *  recordBroadcast) so lease+record commit or fail together. This stays
+   *  public because the claim rule's tests exercise it directly. */
   async leaseOutpoints(actionId: string, outs: Array<{ txid: string; vout: number; satoshis: number }>): Promise<boolean> {
     return await this.wkx.transaction((trx) => this.claimLeases(trx, actionId, outs))
   }
@@ -1438,15 +1450,39 @@ export class AutomationStore {
   }
 
   /** committed transitions whose post-commit intents never finished — the
-   *  crash-between-commit-and-act window, replayed on the next tick */
-  async pendingTxEffects(): Promise<Array<{ eventId: number; actionId: string; intents: string[]; tx?: WalletTx }>> {
-    const rows = await this.wkx(T.txEvents).where({ effected: 0 }).orderBy('id')
-    const out: Array<{ eventId: number; actionId: string; intents: string[]; tx?: WalletTx }> = []
+   *  crash-between-commit-and-act window, replayed when the row's backoff
+   *  says so (effect_next_at spaces retries so a deterministic failure is a
+   *  surfaced wedge, not a hot loop) */
+  async pendingTxEffects(): Promise<Array<{ eventId: number; actionId: string; intents: string[]; tx?: WalletTx; attempts: number; lastError?: string }>> {
+    const now = Date.now()
+    const rows = await this.wkx(T.txEvents)
+      .where({ effected: 0 })
+      .where((q) => q.whereNull('effect_next_at').orWhere('effect_next_at', '<=', now))
+      .orderBy('id')
+    const out: Array<{ eventId: number; actionId: string; intents: string[]; tx?: WalletTx; attempts: number; lastError?: string }> = []
     for (const r of rows) {
       const w = await this.walletTx({ actionId: r.action_id })
-      out.push({ eventId: Number(r.id), actionId: r.action_id, intents: JSON.parse(r.intents), tx: w })
+      out.push({
+        eventId: Number(r.id),
+        actionId: r.action_id,
+        intents: JSON.parse(r.intents),
+        tx: w,
+        attempts: Number(r.effect_attempts ?? 0),
+        ...(r.effect_error != null ? { lastError: r.effect_error } : {})
+      })
     }
     return out
+  }
+
+  /** record a failed effect replay — count it, keep the error, and push the
+   *  next eligible replay out on a capped exponential back-off (1min → 1h).
+   *  The wedge stays retriable forever (a custody effect may not be lost) but
+   *  is no longer an unbounded every-tick hammer, and the row now says why. */
+  async recordTxEffectFailure(eventId: number, error: string): Promise<void> {
+    const cur = await this.wkx(T.txEvents).where({ id: eventId }).first('effect_attempts')
+    const attempts = Number(cur?.effect_attempts ?? 0) + 1
+    const nextAt = Date.now() + Math.min(60_000 * 2 ** Math.min(attempts - 1, 10), 3_600_000)
+    await this.wkx(T.txEvents).where({ id: eventId }).update({ effect_attempts: attempts, effect_error: error.slice(0, 500), effect_next_at: nextAt })
   }
 
   /** the machine's persisted event log for a wallet action */
@@ -1487,11 +1523,19 @@ export class AutomationStore {
     evidence?: unknown
   }): Promise<Approval> {
     return await this.kx.transaction(async (trx) => {
+      const now = this.now()
       const prev = await trx(T.approvals)
         .where({ operation_id: a.operationId, action_digest: a.actionDigest })
         .whereIn('status', ['pending', 'approved'])
         .first()
-      if (prev) return this.appr(prev)
+      if (prev) {
+        if (Number(prev.expires_at) > now) return this.appr(prev)
+        // a lapsed row must not shadow a fresh request (STATE-08/12): pending
+        // rows were never decided — mark the lapse so pending listings stop
+        // reporting it; an approved row keeps its status (the decision was
+        // real — consumers gate on expiresAt at spend time)
+        if (prev.status === 'pending') await trx(T.approvals).where({ approval_id: prev.approval_id }).update({ status: 'expired', decided_at: now })
+      }
       const row = {
         approval_id: randomUUID(),
         operation_id: a.operationId,
@@ -1510,6 +1554,10 @@ export class AutomationStore {
   }
 
   async approvals(status?: Approval['status']): Promise<Approval[]> {
+    // lazy expiry: undecided rows past their horizon are 'expired', not
+    // 'pending' — a stale row must stop shadowing new requests and stop
+    // reporting itself as awaiting a decision (STATE-08/12's wedge)
+    await this.kx(T.approvals).where({ status: 'pending' }).where('expires_at', '<=', this.now()).update({ status: 'expired', decided_at: this.now() })
     const b = this.kx(T.approvals).select('*').orderBy('created_at')
     return (await (status ? b.where({ status }) : b)).map((r) => this.appr(r))
   }

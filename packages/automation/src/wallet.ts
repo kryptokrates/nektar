@@ -7,6 +7,18 @@ import { replayTxEffects, type TxEffects } from './machines/effects.js'
 import { executor, type Executor } from './rt/exec.js'
 import { txEmit } from './rt/emit.js'
 import { obsEvent } from './machines/driver.js'
+import { OPS_TABLE } from './machines/ops.machine.js'
+
+/** the ops table's terminal set — an op past one of these states is over:
+ *  re-airing its wallet tx is broadcaster quota spent on a dead deal */
+const TERMINAL_OPS = new Set(OPS_TABLE.terminal)
+
+/** the resubmit scan's attempt bound — past it the row stops re-airing and
+ *  the abandon horizon owns the verdict: a tx that can't land in ~60
+ *  broadcasts (≈1h at the resubmit cadence) isn't going to, and every
+ *  cadence-air is quota the fleet could spend on live rows. The watcher
+ *  still observes the row — stopping airs is not stopping the watch. */
+const RESUBMIT_BOUND = 60
 
 export interface WalletDeps {
   broadcast: (tx: Transaction) => Promise<BroadcastResult>
@@ -194,8 +206,18 @@ export class WalletCoordinator {
     // between persist and act replays custody here, not on a prayer
     await replayTxEffects(this.store, this.deps.fx).catch(() => 0)
     const out: Array<{ actionId: string; state: TxState }> = []
-    for (const w of await this.store.walletTxs(['prepared', 'submission_unknown']))
+    for (const w of await this.store.walletTxs(['prepared', 'submission_unknown'])) {
+      // attempt bound: past RESUBMIT_BOUND the abandon horizon owns the row —
+      // the scan stops adding airs; the watcher still observes it (STATE-09)
+      if (w.attempts >= RESUBMIT_BOUND) continue
+      // a terminal op's tx is a dead deal's leftover — its row still watches
+      // for a landing but nothing re-airs it on the op's behalf. An absent op
+      // row (owner txs carry operationId 'owner') means "no op to be over":
+      // keep resubmitting
+      const op = await this.store.operation(w.operationId).catch(() => undefined)
+      if (op !== undefined && TERMINAL_OPS.has(op.state)) continue
       out.push({ actionId: w.actionId, state: (await this.submit(w.actionId)).state })
+    }
     return out
   }
 }

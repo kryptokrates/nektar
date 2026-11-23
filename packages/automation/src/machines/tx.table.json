@@ -51,6 +51,8 @@
     { "state": "exported", "event": "obs.seen", "guard": "verified", "intents": ["release-leases"], "target": "observed" },
     { "state": "exported", "event": "obs.proven", "guard": "proof", "intents": ["leases->spent"], "target": "confirmed" },
     { "state": "exported", "event": "obs.rejected", "guard": "verified", "intents": ["release-leases", "tx-died"], "target": "rejected" },
+    { "state": "exported", "event": "obs.conflicted", "guard": "verified+spentBy", "intents": ["release-leases", "tx-died"], "target": "conflicted" },
+    { "state": "exported", "event": "abandon", "intents": ["release-leases", "tx-died", "watch-trailing"], "target": "abandoned" },
     { "state": "exported", "event": "export.ttl", "intents": ["release-leases", "export-expired", "watch-trailing"], "target": "expired" },
 
     { "state": "rejected", "event": "obs.seen", "guard": "verified", "intents": ["tx-spent", "record-aired"], "target": "observed" },

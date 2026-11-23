@@ -126,17 +126,32 @@ export class SqlFunds extends FundsBase {
    *  the stored tx (a row whose tx the store no longer holds is unspendable
    *  stock: logged and passed over, same verdict `take` gives unserializable
    *  parents). */
+  /** live rows whose tx bytes the store can't return — counted by balance()
+   *  (the money is ours) but unspendable until the bytes resolve; surfaced so
+   *  "owned but unusable" stock is a visible wedge, not a silent skip */
+  async unspendableSats(): Promise<number> {
+    const rows = (await this.knex<Row>('utxos').where({ state: LIVE }).select('txid', 'vout', 'satoshis')) as Row[]
+    let sum = 0
+    for (const r of rows) if (this.txs.get(r.txid) === undefined) sum += r.satoshis
+    return sum
+  }
+
   private async live(): Promise<FundingOut[]> {
     const rows = (await this.knex<Row>('utxos').where({ state: LIVE }).select('txid', 'vout', 'satoshis')) as Row[]
     const out: FundingOut[] = []
+    let unspendable = 0,
+      unspendableSats = 0
     for (const r of rows) {
       const tx = this.txs.get(r.txid)
       if (tx === undefined) {
-        this.log(`sqlfunds: live row ${r.txid.slice(0, 12)}…:${r.vout} has no stored tx — skipped`)
+        unspendable++
+        unspendableSats += r.satoshis
         continue
       }
       out.push({ tx, vout: r.vout, satoshis: r.satoshis })
     }
+    if (unspendable > 0)
+      this.log(`sqlfunds: ${unspendable} live row(s) totaling ${unspendableSats} sats have no stored tx — unspendable until the bytes resolve`)
     this.cache = out
     return out
   }

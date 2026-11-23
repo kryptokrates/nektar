@@ -67,20 +67,30 @@ export const TX_EFFECT_OF: Record<string, keyof TxEffects> = {
  *  a throw OR a declared intent with no effector (unknown name or a missing
  *  handler). A failed effect leaves the event uneffected and
  *  replayTxEffects retries it. */
-export async function runTxIntents(intents: string[], w: WalletTx, fx: TxEffects, log?: (line: string) => void): Promise<boolean> {
+export async function runTxIntents(
+  intents: string[],
+  w: WalletTx,
+  fx: TxEffects,
+  log?: (line: string) => void,
+  out?: { error?: string }
+): Promise<boolean> {
   let ok = true
+  const fail = (why: string) => {
+    ok = false
+    if (out !== undefined && out.error === undefined) out.error = why
+  }
   for (const i of intents) {
     if (IN_TX_INTENTS.has(i) || DESCRIPTIVE_INTENTS.has(i)) continue
     const handler = fx[TX_EFFECT_OF[i] as keyof TxEffects]
     if (typeof handler !== 'function') {
-      ok = false
+      fail(`intent '${i}' has no effector`)
       log?.(`tx intent '${i}' has no effector — event stays pending (${w.actionId})`)
       continue
     }
     try {
       await handler(w)
-    } catch {
-      ok = false
+    } catch (e) {
+      fail((e as Error).message)
     }
   }
   return ok
@@ -117,9 +127,15 @@ export async function emitTxEvent(
 export async function replayTxEffects(store: AutomationStore, fx: TxEffects, log?: (line: string) => void): Promise<number> {
   let done = 0
   for (const p of await store.pendingTxEffects()) {
-    if (p.tx === undefined || (await runTxIntents(p.intents, p.tx, fx, log))) {
+    const out: { error?: string } = {}
+    if (p.tx === undefined || (await runTxIntents(p.intents, p.tx, fx, log, out))) {
       await store.markTxEffects(p.eventId).catch(() => undefined)
       done++
+    } else {
+      // record the failure: the row backs off and now carries WHY — an
+      // invisible every-tick retry was the unbounded loop STATE-06 closed
+      await store.recordTxEffectFailure(p.eventId, out.error ?? 'effect failed').catch(() => undefined)
+      if (p.attempts >= 4) log?.(`tx effect still failing after ${p.attempts + 1} attempts (event ${p.eventId}, ${p.actionId}): ${out.error ?? '?'}`)
     }
   }
   return done

@@ -242,6 +242,10 @@ export interface OutboxItem {
    *  message — digest-pinned locators for external evidence */
   refs?: Array<{ url: string; sha256: string; length: number; key?: string }>
   attempts: number
+  /** the row's scheduled wake — the drain versions its send idempotency on
+   *  it: a defer moves next_at without spending an attempt, and resends must
+   *  still be new invocations, not dedupes of the first leg */
+  nextAt?: number
 }
 export interface BudgetAmounts {
   purchaseSats: number
@@ -333,18 +337,31 @@ export class AutomationStore {
    *  advance() scan to notice the age (the scan stays the floor) */
   residenceBound?: (state: string) => number | undefined
 
+  /** the wallet ledger's connection — txs + leases + tx events are custody
+   *  bookkeeping and share records.sqlite's file so take()/leasePredicate and
+   *  the resubmit path read one physical truth (the lanes.sqlite precedent);
+   *  standalone stores keep the single-connection default */
+  private readonly wkx: Knex
+
   constructor(
     private kx: Knex,
-    private now: () => number = Date.now
-  ) {}
+    private now: () => number = Date.now,
+    walletKx?: Knex
+  ) {
+    this.wkx = walletKx ?? kx
+  }
 
   async close(): Promise<void> {
     await this.kx.destroy()
+    if (this.wkx !== this.kx) await this.wkx.destroy()
   }
 
   async init(): Promise<void> {
     const mk = async (name: string, build: (t: Knex.CreateTableBuilder) => void) => {
       if (!(await this.kx.schema.hasTable(name))) await this.kx.schema.createTable(name, build)
+    }
+    const mkW = async (name: string, build: (t: Knex.CreateTableBuilder) => void) => {
+      if (!(await this.wkx.schema.hasTable(name))) await this.wkx.schema.createTable(name, build)
     }
     await mk(T.ops, (t) => {
       t.string('operation_id').primary()
@@ -471,14 +488,14 @@ export class AutomationStore {
       t.string('state').notNullable()
       t.bigInteger('at').notNullable()
     })
-    await mk(T.leases, (t) => {
+    await mkW(T.leases, (t) => {
       t.string('outpoint').primary()
       t.string('action_id').notNullable().index()
       t.bigInteger('satoshis').notNullable()
       t.string('state').notNullable()
       t.bigInteger('at').notNullable()
     })
-    await mk(T.txs, (t) => {
+    await mkW(T.txs, (t) => {
       t.string('action_id').primary()
       t.string('operation_id').notNullable()
       t.string('kind').notNullable()
@@ -495,14 +512,14 @@ export class AutomationStore {
        *  written, so a creation clock can never give the verdict a window */
       t.bigInteger('state_at')
     })
-    if (!(await this.kx.schema.hasColumn(T.txs, 'state_at'))) await this.kx.schema.table(T.txs, (t) => t.bigInteger('state_at'))
-    await this.kx(T.txs)
+    if (!(await this.wkx.schema.hasColumn(T.txs, 'state_at'))) await this.wkx.schema.table(T.txs, (t) => t.bigInteger('state_at'))
+    await this.wkx(T.txs)
       .whereNull('state_at')
-      .update({ state_at: this.kx.ref('at') })
+      .update({ state_at: this.wkx.ref('at') })
     // the machine's event log — every txStep write records (from,event,guard,
     // to,intents) so the driver's decisions replay and audit like market_events
-    if (!(await this.kx.schema.hasTable(T.txEvents)))
-      await this.kx.schema.createTable(T.txEvents, (t) => {
+    if (!(await this.wkx.schema.hasTable(T.txEvents)))
+      await this.wkx.schema.createTable(T.txEvents, (t) => {
         t.increments('id').primary()
         t.string('action_id').notNullable().index()
         t.bigInteger('at').notNullable()
@@ -672,8 +689,9 @@ export class AutomationStore {
     const txEvents =
       terminal.txs.length === 0
         ? 0
-        : await this.kx(T.txEvents).where('at', '<', beforeMs).whereIn('action_id', this.kx(T.txs).select('action_id').whereIn('state', terminal.txs)).del()
+        : await this.wkx(T.txEvents).where('at', '<', beforeMs).whereIn('action_id', this.wkx(T.txs).select('action_id').whereIn('state', terminal.txs)).del()
     await this.kx.raw('PRAGMA wal_checkpoint(TRUNCATE)').catch(() => undefined)
+    if (this.wkx !== this.kx) await this.wkx.raw('PRAGMA wal_checkpoint(TRUNCATE)').catch(() => undefined)
     return { inbox, outbox, events, txEvents }
   }
 
@@ -964,7 +982,8 @@ export class AutomationStore {
       destination: r.destination,
       payload: JSON.parse(r.payload),
       ...(r.refs != null ? { refs: JSON.parse(r.refs) } : {}),
-      attempts: r.attempts
+      attempts: r.attempts,
+      nextAt: Number(r.next_at)
     }))
   }
 
@@ -1199,7 +1218,7 @@ export class AutomationStore {
   }
 
   async leaseOutpoints(actionId: string, outs: Array<{ txid: string; vout: number; satoshis: number }>): Promise<boolean> {
-    return await this.kx.transaction(async (trx) => {
+    return await this.wkx.transaction(async (trx) => {
       const held = await trx(T.leases).whereIn(
         'outpoint',
         outs.map((o) => `${o.txid}:${o.vout}`)
@@ -1218,7 +1237,7 @@ export class AutomationStore {
   }
 
   async leaseState(txid: string, vout: number): Promise<{ actionId: string; state: string } | undefined> {
-    const r = await this.kx(T.leases)
+    const r = await this.wkx(T.leases)
       .where({ outpoint: `${txid}:${vout}` })
       .first()
     return r ? { actionId: r.action_id, state: r.state } : undefined
@@ -1245,7 +1264,7 @@ export class AutomationStore {
     t: Omit<WalletTx, 'state' | 'attempts' | 'lastObservation' | 'at' | 'stateAt'>,
     leaseOuts?: Array<{ txid: string; vout: number; satoshis: number }>
   ): Promise<WalletTx> {
-    return await this.kx.transaction(async (trx) => {
+    return await this.wkx.transaction(async (trx) => {
       const prev = await trx(T.txs).where({ action_id: t.actionId }).first()
       if (prev) {
         if (prev.txid !== t.txid) throw new Error(`action ${t.actionId} already prepared a different transaction (${prev.txid})`)
@@ -1288,7 +1307,7 @@ export class AutomationStore {
   }
 
   async walletTx(q: { actionId?: string; txid?: string }): Promise<WalletTx | undefined> {
-    const r = await this.kx(T.txs)
+    const r = await this.wkx(T.txs)
       .where(q.actionId ? { action_id: q.actionId } : { txid: q.txid })
       .first()
     return r ? this.wtx(r) : undefined
@@ -1297,7 +1316,7 @@ export class AutomationStore {
   async leasedOutpoint(txid: string, vout: number): Promise<boolean> {
     const r = await this.leaseState(txid, vout)
     if (r === undefined || r.state === 'released') return false
-    return await this.leaseLive(this.kx, { action_id: r.actionId, state: r.state })
+    return await this.leaseLive(this.wkx, { action_id: r.actionId, state: r.state })
   }
 
   async recordBroadcast(
@@ -1307,7 +1326,7 @@ export class AutomationStore {
     kind: string,
     state: TxState = 'prepared'
   ): Promise<void> {
-    await this.kx.transaction(async (trx) => {
+    await this.wkx.transaction(async (trx) => {
       const now = this.now()
       for (const o of t.outs)
         await trx(T.leases)
@@ -1334,11 +1353,11 @@ export class AutomationStore {
   }
 
   async walletTxs(states: TxState[]): Promise<WalletTx[]> {
-    return (await this.kx(T.txs).whereIn('state', states).orderBy('at')).map((r) => this.wtx(r))
+    return (await this.wkx(T.txs).whereIn('state', states).orderBy('at')).map((r) => this.wtx(r))
   }
 
   async setTxState(actionId: string, state: TxState, observation?: unknown, attempt = false): Promise<void> {
-    await this.kx.transaction(async (trx) => {
+    await this.wkx.transaction(async (trx) => {
       const r = await trx(T.txs).where({ action_id: actionId }).first()
       if (!r) throw new Error(`unknown wallet action ${actionId}`)
       await trx(T.txs)
@@ -1358,7 +1377,7 @@ export class AutomationStore {
   }
 
   async releaseLeases(actionId: string): Promise<void> {
-    await this.kx(T.leases).where({ action_id: actionId, state: 'leased' }).update({ state: 'released' })
+    await this.wkx(T.leases).where({ action_id: actionId, state: 'leased' }).update({ state: 'released' })
   }
 
   /**
@@ -1373,7 +1392,7 @@ export class AutomationStore {
     event: string,
     payload: { guard?: string; observation?: unknown; attempt?: boolean } = {}
   ): Promise<{ accepted: boolean; next: TxState; intents: string[]; eventId?: number }> {
-    const r = await this.kx.transaction(async (trx) => {
+    const r = await this.wkx.transaction(async (trx) => {
       const cur = await trx(T.txs).where({ action_id: actionId }).first()
       if (!cur) throw new Error(`unknown wallet action ${actionId}`)
       const s = txStep(cur.state, event, payload.guard !== undefined ? { guard: payload.guard } : {})
@@ -1411,13 +1430,13 @@ export class AutomationStore {
   /** mark an event's post-commit intents dispatched — called only after the
    *  effect loop finishes clean */
   async markTxEffects(eventId: number): Promise<void> {
-    await this.kx(T.txEvents).where({ id: eventId }).update({ effected: 1 })
+    await this.wkx(T.txEvents).where({ id: eventId }).update({ effected: 1 })
   }
 
   /** committed transitions whose post-commit intents never finished — the
    *  crash-between-commit-and-act window, replayed on the next tick */
   async pendingTxEffects(): Promise<Array<{ eventId: number; actionId: string; intents: string[]; tx?: WalletTx }>> {
-    const rows = await this.kx(T.txEvents).where({ effected: 0 }).orderBy('id')
+    const rows = await this.wkx(T.txEvents).where({ effected: 0 }).orderBy('id')
     const out: Array<{ eventId: number; actionId: string; intents: string[]; tx?: WalletTx }> = []
     for (const r of rows) {
       const w = await this.walletTx({ actionId: r.action_id })
@@ -1428,7 +1447,7 @@ export class AutomationStore {
 
   /** the machine's persisted event log for a wallet action */
   async walletTxEvents(actionId: string): Promise<Array<{ at: number; from: string; event: string; guard?: string; to: string; intents: string[] }>> {
-    return (await this.kx(T.txEvents).where({ action_id: actionId }).orderBy('at')).map((r) => ({
+    return (await this.wkx(T.txEvents).where({ action_id: actionId }).orderBy('at')).map((r) => ({
       at: Number(r.at),
       from: r.from_state,
       event: r.event,

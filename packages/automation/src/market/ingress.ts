@@ -7,7 +7,7 @@ import { WAITS } from '../waits.js'
 import { deadline, stable01 } from '@nektar/core'
 import type { MarketMessage } from './types.js'
 import { executor, EXEC_SVC } from '../rt/exec.js'
-import { custodyResubmitPending } from '../rt/emit.js'
+import { custodyResubmitPoke } from '../rt/emit.js'
 
 /** pump fan-out: deliveries are independent and off the engine mutex, so a
  *  small pool overlaps legs instead of serializing the whole due batch
@@ -66,7 +66,8 @@ export abstract class IngressOps extends MarketBase {
     if (this.resubmitEvery < 0) this.resubmitEvery = WAITS.resubmitCadence.ms + Math.floor(stable01(this.me) * WAITS.resubmitJitter.ms)
     if (this.now() - this.lastResubmitAt < this.resubmitEvery) return
     this.lastResubmitAt = this.now()
-    if (this.wallet !== undefined) await custodyResubmitPending(this.d.executor ?? executor(), this.wallet).catch(() => undefined)
+    if (this.wallet !== undefined)
+      await custodyResubmitPoke(this.d.executor ?? executor(), this.wallet, Math.floor(this.now() / WAITS.resubmitCadence.ms)).catch(() => undefined)
   }
 
   tick(): Promise<void> {

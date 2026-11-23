@@ -789,3 +789,60 @@ void test('aggregates: opsByIds, eventCountsByOp, hasLiveOps, hasDueAtHeight', a
   assert.equal(await store.hasDueAtHeight(['expired'], 100), false, 'the state filter still applies')
   void c
 })
+
+void test('wallet ledger: a second knex routes txs/leases/events off the market db', async (t) => {
+  const market = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  const wallet = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  const store = new AutomationStore(market, Date.now, wallet)
+  await store.init()
+  t.after(async () => {
+    await market.destroy()
+    await wallet.destroy()
+  })
+  // wallet tables exist only on the wallet connection
+  assert.equal(await wallet.schema.hasTable('wallet_transactions'), true)
+  assert.equal(await wallet.schema.hasTable('wallet_reservations'), true)
+  assert.equal(await market.schema.hasTable('wallet_transactions'), false)
+  assert.equal(await market.schema.hasTable('wallet_reservations'), false)
+  // a prepared action + its lease land on the wallet db and read through the facade
+  const txid = 'cc'.repeat(32)
+  const leased = { txid: 'dd'.repeat(32), vout: 0, satoshis: 100 }
+  await store.recordPrepared({ actionId: 'a1', operationId: 'owner', kind: 'owner', txid, rawHex: '00', parents: {}, feeSats: 5 }, [leased])
+  assert.equal((await wallet('wallet_transactions').where({ action_id: 'a1' })).length, 1)
+  assert.equal(await store.leasedOutpoint(leased.txid, 0), true)
+  assert.equal((await store.walletTxs(['prepared'])).length, 1)
+  // a txVO observation + lease release land on the same connection
+  await store.setTxState('a1', 'confirmed', undefined, true)
+  assert.equal((await wallet('wallet_reservations').where({ action_id: 'a1' }).first()).state, 'spent')
+  // the market side never saw any of it
+  assert.equal((await market('market_operations')).length, 0)
+})
+
+void test('wallet ledger migration: pre-split rows copy into the ledger file once', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-wallet-mig-'))
+  const autoFile = join(dir, 'automation.sqlite')
+  const recFile = join(dir, 'records.sqlite')
+  // legacy layout: the wallet ledger written inside automation.sqlite
+  const legacy = knexFactory({ client: 'sqlite3', connection: { filename: autoFile }, useNullAsDefault: true })
+  const legacyStore = new AutomationStore(legacy)
+  await legacyStore.init()
+  const leased = { txid: 'ff'.repeat(32), vout: 1, satoshis: 50 }
+  await legacyStore.recordPrepared({ actionId: 'owner:dead', operationId: 'owner', kind: 'owner', txid: 'ee'.repeat(32), rawHex: '00', parents: {}, feeSats: 1 }, [leased])
+  await legacy.destroy()
+  // post-split: wallet side on records.sqlite — the migration carries the rows
+  const market = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'market.sqlite') }, useNullAsDefault: true })
+  const wkx = knexFactory({ client: 'sqlite3', connection: { filename: recFile }, useNullAsDefault: true })
+  const store = new AutomationStore(market, Date.now, wkx)
+  await store.init()
+  t.after(async () => {
+    await market.destroy()
+    await wkx.destroy()
+  })
+  const { migrateWalletTables } = await import('../src/walletmigrate.js')
+  const copied = await migrateWalletTables(autoFile, wkx)
+  assert.deepEqual(copied.sort(), ['wallet_reservations', 'wallet_transactions', 'wallet_tx_events'].sort())
+  assert.equal((await store.walletTxs(['prepared'])).length, 1)
+  assert.equal(await store.leasedOutpoint(leased.txid, 1), true)
+  // the sentinel short-circuits a second run — re-runs stay free
+  assert.deepEqual(await migrateWalletTables(autoFile, wkx), [])
+})

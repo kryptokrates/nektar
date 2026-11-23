@@ -86,3 +86,14 @@ export async function custodyResubmitPending(exec: Executor, wallet: CustodyWall
   if (rtScopeKey()?.custodyKey === CUSTODY_KEY) return await wallet.resubmitPending()
   return await exec.call({ service: EXEC_SVC.custody, handler: 'resubmitPending', key: CUSTODY_KEY }, null)
 }
+
+/** the cadence leg's poke — send, not call: a resubmit scan is one broadcast
+ *  per stranded row, and a call would hold the caller's invocation budget
+ *  for the whole serialized pass (rt/tick-starvation: a prepared-row backlog
+ *  burned a dealfan tick's 120s, the aborted leg retried to pause, and the
+ *  paused head wedged the object's whole key). Deduped per cadence window so
+ *  back-to-back pokes can't queue duplicate scans behind the custody key. */
+export async function custodyResubmitPoke(exec: Executor, wallet: CustodyWallet, window: number): Promise<void> {
+  if (rtScopeKey()?.custodyKey === CUSTODY_KEY) return void (await wallet.resubmitPending())
+  await exec.send({ service: EXEC_SVC.custody, handler: 'resubmitPending', key: CUSTODY_KEY }, null, { idempotencyKey: `resubmit:${window}` })
+}

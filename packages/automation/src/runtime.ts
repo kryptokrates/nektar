@@ -79,8 +79,31 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // one clock domain: next_at/dueAt stamps and every engine-side due check
   // compare against cfg.now — mixing the real clock into row stamps while the
   // engine reads a virtual one makes fresh rows look not-yet-due forever
-  const store = new AutomationStore(kx, cfg.now)
+  // the wallet ledger (txs + leases + tx events) is custody bookkeeping — it
+  // lives in records.sqlite with the coin book so take()/leasePredicate and
+  // the resubmit path read the same physical rows wrapBroadcast records.
+  // Before the split the runtime wrote them to automation.sqlite where the
+  // records-side readers couldn't see them — prepared actions stayed
+  // invisible to custody and their leases wedged the treasury (the
+  // lanes.sqlite precedent: one file per durable domain).
+  let kxWallet: Knex | undefined
+  if (cfg.dataDir) {
+    kxWallet = knexFactory({
+      client: 'sqlite3',
+      connection: { filename: join(cfg.dataDir, 'records.sqlite') },
+      useNullAsDefault: true
+    })
+    await kxWallet.raw('PRAGMA journal_mode=WAL')
+    await kxWallet.raw('PRAGMA busy_timeout=5000')
+  }
+  const store = new AutomationStore(kx, cfg.now, kxWallet)
   await store.init()
+  // pre-split deployments hold wallet rows inside automation.sqlite — copy
+  // them into the ledger file (sentinel-gated, re-run safe)
+  if (cfg.dataDir && kxWallet !== undefined) {
+    const { migrateWalletTables } = await import('./walletmigrate.js')
+    await migrateWalletTables(join(cfg.dataDir, 'automation.sqlite'), kxWallet)
+  }
   const key = mem.operatorSigner?.() ?? toSigner(mem.operatorKey())
   const me = await signerPubHex(key)
   const wallet = mem.operatorWallet()
@@ -707,6 +730,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       // mid-assembly failure (e.g. endpoint port already bound) must not
       // leave the stores open — a held sqlite -wal fails temp-dir cleanup
       await kxLanes?.destroy().catch(() => undefined)
+      await kxWallet?.destroy().catch(() => undefined)
       await kx.destroy().catch(() => undefined)
       throw e
     }
@@ -1138,6 +1162,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       // destroyed pool
       await (exec as { close?: () => void | Promise<void> }).close?.()
       await kxLanes?.destroy()
+      await kxWallet?.destroy()
       await kx.destroy()
     }
   }

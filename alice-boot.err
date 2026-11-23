@@ -1,0 +1,57 @@
+2026-11-23T08:33:34.403Z nektar main: operator fee key 1HgGHfeTBqXdzq3kGwupgkd9jZRi69k3gz — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)
+2026-11-23T08:33:34.410Z nektar main: coin book sqlite utxos (13 funding utxo(s), custody held key)
+2026-11-23T08:33:34.451Z nektar main: no callback URL — pulling tx statuses from the broadcaster /events stream
+2026-11-23T08:33:34.579Z nektar: network=main
+2026-11-23T08:33:34.591Z nektar main: status stream: events HTTP 401
+2026-11-23T08:33:40.634Z nektar: automation: preflight degraded — restate-plane, funds, spendguard
+[restate][2026-11-23T08:33:40.662Z] WARN: Accepting requests without validating request signatures; handler access must be restricted
+[restate][2026-11-23T08:33:40.664Z] WARN: Accepting requests without validating request signatures; handler access must be restricted
+2026-11-23T08:33:40.711Z nektar: rt: restate deployment registered http://172.21.112.1:9080 (force=false)
+2026-11-23T08:33:40.866Z nektar: rt: resumed 3 transport-paused invocation(s) — restart-gap wedge cleared
+2026-11-23T08:33:40.866Z nektar: automation: restate endpoint http://172.21.112.1:9080
+2026-11-23T08:33:40.872Z nektar: automation on — 1 market host(s); policies and approvals via 'pnpm automation'
+2026-11-23T08:33:40.882Z nektar: HTTP + MCP on :8461 (/v1, /mcp)
+2026-11-23T08:33:42.190Z nektar: automation: reserve: funds: upkeep take of 100600 sats would leave -99016 < deal floor 0
+2026-11-23T08:33:44.146Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:33:44.173Z nektar: automation: log append: no funding slot (log: 0 proven, 0 anchored, 0 tree(s) awaiting a block)
+2026-11-23T08:33:44.194Z nektar: automation: upkeep 2284ms
+2026-11-23T08:33:45.074Z nektar: automation: reserve: funds: upkeep take of 100600 sats would leave -99073 < deal floor 0
+2026-11-23T08:33:46.048Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:33:57.080Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:33:57.109Z nektar: automation: upkeep 2101ms
+2026-11-23T08:34:10.332Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:34:10.346Z nektar: automation: upkeep 2303ms
+2026-11-23T08:34:23.121Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:34:23.139Z nektar: automation: upkeep 2132ms
+2026-11-23T08:34:36.288Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:34:36.303Z nektar: automation: upkeep 2272ms
+2026-11-23T08:34:48.867Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:35:01.087Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:35:01.105Z nektar: automation: upkeep 2095ms
+2026-11-23T08:35:13.939Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:35:26.000Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:35:26.010Z nektar: automation: upkeep 2014ms
+2026-11-23T08:35:38.778Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:35:51.308Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:35:51.317Z nektar: automation: upkeep 2311ms
+2026-11-23T08:36:03.858Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:36:16.144Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:36:16.152Z nektar: automation: upkeep 2120ms
+2026-11-23T08:36:28.841Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:36:41.001Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:36:53.842Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:37:06.061Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:37:06.070Z nektar: automation: upkeep 2069ms
+2026-11-23T08:37:18.957Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:37:31.069Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:37:31.078Z nektar: automation: upkeep 2077ms
+2026-11-23T08:37:43.952Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:37:56.299Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:37:56.310Z nektar: automation: upkeep 2286ms
+2026-11-23T08:38:08.874Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:38:21.053Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:38:21.062Z nektar: automation: upkeep 2045ms
+2026-11-23T08:38:33.946Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:38:46.004Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more
+2026-11-23T08:38:46.015Z nektar: automation: upkeep 2009ms
+2026-11-23T08:38:58.947Z nektar: automation: ensureTrees: funds: no spendable output ≥ 204 sats — the mint reserve is 200 sats; lower NEKTAR_TREE_RESERVE_SATS or fund more

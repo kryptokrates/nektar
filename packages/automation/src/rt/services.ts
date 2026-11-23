@@ -302,13 +302,16 @@ export const transportDrainBody =
     // cross-host parallelism; idempotent on actionId so a replayed or raced
     // drain can't double-send
     for (const item of rows)
-      // the key must version by attempt: a row the first delivery failed on
-      // re-fans on its next_at — deduping by actionId alone would swallow the
-      // retry inside the 24h idempotency retention (the row would dead-letter
-      // having hit the wire once). Same-attempt re-fans still dedupe; a new
-      // attempt is new work. `rt/dedup-kills-retry`
+      // the key must version per retry state: a row the first delivery
+      // failed on re-fans on its next_at — deduping by actionId alone would
+      // swallow the retry inside the 24h idempotency retention (the row
+      // would dead-letter having hit the wire once). attempts alone doesn't
+      // version: a resource-gated defer (deferOutbox) moves next_at WITHOUT
+      // spending an attempt, so attempts-keyed sends dedupe forever.
+      // Same-state re-fans still dedupe; a rescheduled row is new work.
+      // `rt/dedup-kills-retry`
       await send({ service: EXEC_SVC.transport, handler: 'deliver', key: item.destination }, item, {
-        idempotencyKey: `deliver:${item.actionId}:${item.attempts}`
+        idempotencyKey: `deliver:${item.actionId}:${item.attempts}:${item.nextAt ?? 0}`
       })
     // self-schedule the ceiling at the earliest pending wake — the durable
     // successor of armOutboxTimer; empty box leaves the loop asleep until

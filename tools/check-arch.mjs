@@ -163,6 +163,15 @@ const GATES = [
     ]
   },
   {
+    name: 'tx-state-direct-write',
+    re: /\bsetTxState\s*\(/g,
+    scope: GATED,
+    // wallet-tx transitions are written only by the tx state machine
+    // (applyTxEvent via txEmit/emitTxEvent). store.ts keeps setTxState for
+    // test arrangement — production code may not call it.
+    allow: ['packages/automation/src/store.ts']
+  },
+  {
     name: 'broadcaster-status-read',
     re: /\b(fetchTxStatus|probeTxStatus)\b/g,
     scope: GATED,

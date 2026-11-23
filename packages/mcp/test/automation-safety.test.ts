@@ -139,9 +139,9 @@ void test('D6 crash between broadcast and journal write: resubmit replays identi
     const ctx = { operationId: 'op1', actionId: 'op1:escrow', policyHash: 'p', networkId: 'regtest' }
     await wallet.prepare(ctx, 'escrow', tx)
     // crash AFTER broadcast, BEFORE the durable journal write — the row
-    // stays 'prepared'. Driver mode journals through applyTxEvent (state +
-    // event row in one commit), legacy through setTxState — inject at both
-    // seams so the crash window holds under either NEKTAR_TX_FSM value
+    // stays 'prepared'. The machine journals through applyTxEvent (state +
+    // event row in one commit) — inject at both write seams so the crash
+    // window holds no matter which leg a future path takes
     const orig = store.setTxState.bind(store)
     const origApply = store.applyTxEvent.bind(store)
     let crashed = false

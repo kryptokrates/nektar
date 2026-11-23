@@ -300,13 +300,11 @@ export function healLedgerOnProof(mem: NektarMemory, ledger: import('@nektar/aut
         try {
           const w = await ledger.walletTx({ txid })
           if (w !== undefined && (w.state === 'conflicted' || w.state === 'rejected')) {
-            const { txEmit, executor, txFsmLegacy } = await import('@nektar/automation')
-            if (!txFsmLegacy()) {
-              // the machine owns the revive: obs.proven@proof carries tx-spent
-              // + leases->spent + record-aired; with no fx here the intents
-              // commit uneffected and the next watcher sweep replays them
-              await txEmit(executor(), ledger, w, 'obs.proven', { guard: 'proof', observation: { at: Date.now(), healed: true } }, {})
-            } else await ledger.setTxState(w.actionId, 'confirmed', { at: Date.now(), healed: true })
+            const { txEmit, executor } = await import('@nektar/automation')
+            // the machine owns the revive: obs.proven@proof carries tx-spent
+            // + leases->spent + record-aired; with no fx here the intents
+            // commit uneffected and the next watcher sweep replays them
+            await txEmit(executor(), ledger, w, 'obs.proven', { guard: 'proof', observation: { at: Date.now(), healed: true } }, {})
             nlog(`${txid} proved after a terminal verdict — ledger healed to confirmed`)
           }
         } catch (e) {
@@ -362,9 +360,8 @@ export function persistedTxStore(): { txStore: TxStore; open: (knex: import('kne
 /** The records-ledger watcher — the tx.machine effector wired to custody.
  *  txFromRow rehydrates parent txs for funds.spent/revive; exportExpired
  *  returns provably-live inputs on a timed-out export; the effects map runs
- *  the machine-declared intents with the exact semantics the legacy
- *  callbacks had ('watch'/'watch-trailing' map to nothing: this watcher
- *  already rescans live + recently-dead rows every pass). */
+ *  the machine-declared intents ('watch'/'watch-trailing' map to nothing:
+ *  this watcher already rescans live + recently-dead rows every pass). */
 async function buildRecordsWatcher(d: {
   ledger: import('@nektar/automation').AutomationStore
   statusOf: (txid: string) => { ev: TxStatusEvent; verified: boolean } | undefined
@@ -424,36 +421,15 @@ async function buildRecordsWatcher(d: {
       const hint = await port.statusHint?.(txid).catch(() => ({ status: '', answered: false }))
       return watcherObservation(seen, hint?.status ?? '')
     },
-    async (w) => diedFromRow(w, 'rejected'),
     {
       // the counterparty's window to air a signed payment (x402 export);
       // past it the watcher releases the leases and hands custody back
       // every input the chain still shows unspent — the one-way-door fix
       exportedTtlMs: nektarEnvNum('NEKTAR_EXPORT_TTL_MS') ?? 24 * 60 * 60_000,
-      onRevived: async (w) => {
-        // a tx we tombstoned as rejected/expired is on the wire after all —
-        // its inputs are provably gone and its change is provably ours.
-        // spent() does both marks; WalletFunds' internalize lifts the
-        // dropped-set tombstone on outputs it re-owns.
-        try {
-          const tx = txFromRow(w)
-          await funds.spent(tx)
-          // the refusal let the sats leave anyway — the day ledger must
-          // count them or tomorrow's headroom is overstated
-          port.guard?.recordAired(tx)
-          nlog(`${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
-        } catch (e) {
-          nlog(`revived tx ${w.txid}: spent() failed: ${(e as Error).message}`)
-        }
-        await (fundingRefresh?.() ?? (funds.refresh?.() ?? Promise.resolve()).then(() => undefined))
-      },
-      onExportExpired: async (w) => {
-        await exportExpired(w)
-      },
-      // machine mode: the same custody semantics as declared intents — the
-      // table decides WHICH fire, the effector just executes. 'watch' /
-      // 'watch-trailing' map to nothing here: this watcher already rescans
-      // live + recently-dead rows every pass
+      // the same custody semantics as declared intents — the table decides
+      // WHICH fire, the effector just executes. 'watch' / 'watch-trailing'
+      // map to nothing here: this watcher already rescans live +
+      // recently-dead rows every pass
       effects: {
         txDied: async (w) => diedFromRow(w, 'rejected'),
         txSpent: async (w) => {

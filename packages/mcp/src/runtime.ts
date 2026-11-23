@@ -379,22 +379,17 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       try {
         const hit = (await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])).find((w) => w.txid === txid)
         if (hit !== undefined) {
-          const { txEmit, executor, txFsmLegacy } = await import('@nektar/automation')
-          if (!txFsmLegacy()) {
-            await txEmit(
-              executor(),
-              ledger,
-              hit,
-              'abandon',
-              { observation: { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` } },
-              {
-                txDied: (row) => diedFromRow(row, 'abandoned')
-              }
-            )
-          } else {
-            await ledger.setTxState(hit.actionId, 'abandoned', { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` })
-            await diedFromRow(hit, 'abandoned')
-          }
+          const { txEmit, executor } = await import('@nektar/automation')
+          await txEmit(
+            executor(),
+            ledger,
+            hit,
+            'abandon',
+            { observation: { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` } },
+            {
+              txDied: (row) => diedFromRow(row, 'abandoned')
+            }
+          )
         }
         memRef?.events.emit('txAbandoned', { txid, tip, seenAtHeight })
       } catch (e) {

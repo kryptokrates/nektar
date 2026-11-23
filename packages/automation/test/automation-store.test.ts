@@ -532,15 +532,15 @@ void test('watcher: recently-rejected rows still re-observe — the counterparty
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const w = new WalletCoordinator(store, { broadcast: () => Promise.resolve({ status: 'error', description: 'SpendGuard refused: daily cap' }), exec: ex })
-  // driver mode: the dead→live revive fires the 'tx-spent' intent on the
-  // rejected --obs.seen--> observed edge — the same custody re-mark the
-  // legacy onRevived hook ran (the observe body runs it via wireTx's fx)
+  // the dead→live revive fires the 'tx-spent' intent on the
+  // rejected --obs.seen--> observed edge — the observe body runs it via
+  // wireTx's fx
   const effects: TxEffects = { txSpent: (row) => void revived.push(row.txid) }
   wireTx(ex, { store, fx: effects, log: () => {}, submit: (id) => w.submit(id) })
   await w.prepare(ctx('h', 'a'), 'send', tx)
   assert.equal((await w.submit('a')).state, 'rejected')
   const { TransactionWatcher } = await import('../src/ledger.js')
-  const watcher = new TransactionWatcher(store, () => Promise.resolve({ status: 'seen' as const, source: 't' }), undefined, { effects, exec: ex })
+  const watcher = new TransactionWatcher(store, () => Promise.resolve({ status: 'seen' as const, source: 't' }), { effects, exec: ex })
   assert.equal(await watcher.tick(), 1, 'the rejected row is inside its re-air window and must be re-observed')
   assert.deepEqual(revived, [tx.id('hex')])
   assert.equal((await store.walletTx({ actionId: 'a' }))?.state, 'observed')
@@ -827,7 +827,10 @@ void test('wallet ledger migration: pre-split rows copy into the ledger file onc
   const legacyStore = new AutomationStore(legacy)
   await legacyStore.init()
   const leased = { txid: 'ff'.repeat(32), vout: 1, satoshis: 50 }
-  await legacyStore.recordPrepared({ actionId: 'owner:dead', operationId: 'owner', kind: 'owner', txid: 'ee'.repeat(32), rawHex: '00', parents: {}, feeSats: 1 }, [leased])
+  await legacyStore.recordPrepared(
+    { actionId: 'owner:dead', operationId: 'owner', kind: 'owner', txid: 'ee'.repeat(32), rawHex: '00', parents: {}, feeSats: 1 },
+    [leased]
+  )
   await legacy.destroy()
   // post-split: wallet side on records.sqlite — the migration carries the rows
   const market = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'market.sqlite') }, useNullAsDefault: true })

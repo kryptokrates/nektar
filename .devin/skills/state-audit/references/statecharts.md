@@ -44,8 +44,8 @@ XState v6 (`6.0.0-beta.3`, pinned) is the spec evaluator for the
 declared machines: one `<resource>.table.json` (the audit's transition
 table) plus a thin `.machine.ts` per resource, `step()` in `machine.ts`
 as the pure transition function, `shadow.ts` for replay diffs,
-`driver.ts` for live-write validation (`NEKTAR_TX_FSM`/`NEKTAR_OPS_FSM`
-= `legacy` kill switches), `effects.ts` as the store-bound effector.
+`driver.ts` for live-write validation (the ops `NEKTAR_OPS_FSM` = `legacy`
+kill switch), `effects.ts` as the store-bound effector.
 The constraints below are why the layer is shaped this way — they stay
 binding on any change to it.
 

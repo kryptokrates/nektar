@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import knexFactory, { type Knex } from 'knex'
-import { currentSignal, deadline, nap, setNektarEnv } from '@nektar/core'
+import { currentSignal, deadline, nap } from '@nektar/core'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
 import { WalletCoordinator, type WalletDeps } from '../src/wallet.js'
@@ -378,12 +378,7 @@ void test('watcher driver: proven row confirms + spends leases through declared 
     }
   }
   wireTx(ex, { store, fx: effects, log: () => {} })
-  const wt = new TransactionWatcher(
-    store,
-    () => Promise.resolve({ status: 'proven', source: 'chain' }),
-    async () => {},
-    { effects, exec: ex }
-  )
+  const wt = new TransactionWatcher(store, () => Promise.resolve({ status: 'proven', source: 'chain' }), { effects, exec: ex })
   await wt.tick()
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'confirmed')
   assert.equal(await leaseState(kx, id), 'spent')
@@ -408,12 +403,7 @@ void test('watcher driver: dead row revive fires tx-spent + record-aired', async
     }
   }
   wireTx(ex, { store, fx: effects, log: () => {} })
-  const wt = new TransactionWatcher(
-    store,
-    () => Promise.resolve({ status: 'proven', source: 'chain' }),
-    async () => {},
-    { effects, exec: ex }
-  )
+  const wt = new TransactionWatcher(store, () => Promise.resolve({ status: 'proven', source: 'chain' }), { effects, exec: ex })
   await wt.tick()
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'confirmed')
   assert.equal(calls.spent, 1)
@@ -440,12 +430,7 @@ void test('watcher driver: exported row past TTL expires and fires export-expire
     }
   }
   wireTx(ex, { store, fx: effects, log: () => {} })
-  const wt = new TransactionWatcher(
-    store,
-    () => Promise.resolve(undefined),
-    async () => {},
-    { exportedTtlMs: 500, effects, exec: ex }
-  )
+  const wt = new TransactionWatcher(store, () => Promise.resolve(undefined), { exportedTtlMs: 500, effects, exec: ex })
   await wt.tick()
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'expired')
   assert.equal(calls.expired, 1)
@@ -468,23 +453,5 @@ void test('both ledgers: the same driver semantics on a second store instance', 
     assert.equal((await s.walletTx({ actionId: id }))!.state, 'confirmed')
     assert.equal(calls.recordAired, 1)
     assert.equal((await s.walletTxEvents(id)).length, 2)
-  }
-})
-
-void test('kill switch: NEKTAR_TX_FSM=legacy keeps the hand-rolled path and writes no event rows', async (t) => {
-  setNektarEnv('NEKTAR_TX_FSM', 'legacy')
-  try {
-    const { kx, store } = await open()
-    t.after(() => kx.destroy())
-    const id = 'l1'
-    await prepared(store, id)
-    const { w, calls } = wallet(store)
-    const r = await w.submit(id)
-    assert.equal(r.state, 'submitted')
-    assert.equal(calls.txSpent, 1)
-    assert.equal(await leaseState(kx, id), 'released')
-    assert.equal((await store.walletTxEvents(id)).length, 0) // legacy: no event log
-  } finally {
-    setNektarEnv('NEKTAR_TX_FSM', undefined)
   }
 })

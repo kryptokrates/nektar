@@ -7,7 +7,7 @@ import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
 import type { AutomationHost } from './host.js'
 import { AutomationStore, type OutboxItem, type WalletTx } from './store.js'
-import { TransactionWatcher, scanTxObservations } from './ledger.js'
+import { scanTxObservations } from './ledger.js'
 import { MarketEngine, NONTERMINAL, type MarketTransport } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '@nektar/store'
@@ -522,36 +522,14 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       mem.recordAired?.(rebuildStored(w))
     }
   }
-  // the sweep's observeFn — shared by the watcher (local ticks) and the
-  // nektar-sweep service (restate mode sends each observation to the row's
-  // tx object)
+  // the sweep's observeFn — the nektar-sweep service sends each observation
+  // to the row's tx object
   const observeFn = async (txid: string) => {
     const f = await mem.txFacts(txid)
     if (f.verdict === 'mined') return { status: 'proven' as const, source: 'chain' }
     if (f.verdict === 'dead') return { status: 'rejected' as const, source: f.source ?? 'chain', reason: 'dead' }
     return hintSeen(f.hint) ? { status: 'seen' as const, source: 'broadcaster' } : undefined
   }
-  const _ledgerWatcher = new TransactionWatcher(
-    store,
-    observeFn,
-    async (w) => {
-      await mem.funds.died(rebuildStored(w))
-    },
-    {
-      onRevived: async (w) => {
-        // inputs provably spent, change provably ours — spent() does both
-        // marks; the change output's tombstone lifts on re-adoption
-        const tx = rebuildStored(w)
-        await mem.funds.spent(tx)
-        // the refusal let the sats leave anyway — the day ledger must
-        // count them or tomorrow's headroom is overstated
-        mem.recordAired?.(tx)
-        log(`automation: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
-      },
-      effects: txFx,
-      exec
-    }
-  )
   let lastLedgerSweep = 0
   let lastWakeReport = 0
   // boot replay: 'prepared'/'submission_unknown' rows are signed intents a

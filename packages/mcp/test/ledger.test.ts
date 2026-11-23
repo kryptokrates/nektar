@@ -130,18 +130,33 @@ void test('ledger: an exported row the counterparty aired settles; an unaired on
   }
   // an aired export settles like any broadcast — 'confirmed' burns its leases
   const airedParent = await mk('aired')
-  const settled = new TransactionWatcher(store, () => Promise.resolve({ status: 'proven', source: 'test' }))
+  const ex = new Dispatcher()
+  wireTx(ex, { store, fx: {}, log: () => {} })
+  const settled = new TransactionWatcher(store, () => Promise.resolve({ status: 'proven', source: 'test' }), { effects: {}, exec: ex })
   await settled.tick()
   assert.equal((await store.walletTx({ actionId: 'owner:aired' }))!.state, 'confirmed', 'a landed export confirms')
   assert.equal((await store.leaseState(airedParent, 0))!.state, 'spent')
   // an unaired export past its TTL releases the lease and fires the revive hook once
   const staleParent = await mk('stale')
   let revived = 0
-  const expiring = new TransactionWatcher(store, () => Promise.resolve(undefined), undefined, {
+  const ex2 = new Dispatcher()
+  wireTx(ex2, {
+    store,
+    fx: {
+      exportExpired: () => {
+        revived++
+      }
+    },
+    log: () => {}
+  })
+  const expiring = new TransactionWatcher(store, () => Promise.resolve(undefined), {
     exportedTtlMs: 0,
-    onExportExpired: () => {
-      revived++
-    }
+    effects: {
+      exportExpired: () => {
+        revived++
+      }
+    },
+    exec: ex2
   })
   await expiring.tick()
   assert.equal((await store.walletTx({ actionId: 'owner:stale' }))!.state, 'expired', 'unaired export past TTL expires')
@@ -152,7 +167,9 @@ void test('ledger: an exported row the counterparty aired settles; an unaired on
   assert.equal(again, 0)
   // a fresh export inside its window is untouched
   await mk('fresh')
-  const waiting = new TransactionWatcher(store, () => Promise.resolve(undefined), undefined, { exportedTtlMs: 60_000 })
+  const ex3 = new Dispatcher()
+  wireTx(ex3, { store, fx: {}, log: () => {} })
+  const waiting = new TransactionWatcher(store, () => Promise.resolve(undefined), { exportedTtlMs: 60_000, effects: {}, exec: ex3 })
   await waiting.tick()
   assert.equal((await store.walletTx({ actionId: 'owner:fresh' }))!.state, 'exported', 'inside the window the row waits')
   await kx.destroy()

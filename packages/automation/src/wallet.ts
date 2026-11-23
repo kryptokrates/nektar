@@ -6,7 +6,7 @@ import type { ActionContext } from './policy.js'
 import { replayTxEffects, type TxEffects } from './machines/effects.js'
 import { executor, type Executor } from './rt/exec.js'
 import { txEmit } from './rt/emit.js'
-import { obsEvent, txFsmLegacy } from './machines/driver.js'
+import { obsEvent } from './machines/driver.js'
 
 export interface WalletDeps {
   broadcast: (tx: Transaction) => Promise<BroadcastResult>
@@ -144,105 +144,48 @@ export class WalletCoordinator {
       res = { status: 'error', description: `transport: ${(e as Error).message}` }
     }
     const detail = res.description ?? ''
-    if (!txFsmLegacy()) {
-      // driver mode: broadcast already ran above (the coordinator IS the
-      // 'broadcast' effect) — emit the verdict; the table carries custody
-      const obs = { at: Date.now(), result: res }
-      const ex = this.deps.exec ?? executor()
-      if (res.status === 'success' || ALREADY.test(detail)) {
-        await txEmit(ex, this.store, w, 'submit.success', { observation: obs, attempt: true }, this.fx())
-        return { state: 'submitted', txid: w.txid }
-      }
-      if (w.state === 'submitted') {
-        await txEmit(ex, this.store, w, 'resubmit', { observation: { ...obs, resubmission: true }, attempt: true }, this.fx())
-        return { state: 'submitted', txid: w.txid, detail }
-      }
-      if (NEVER_LEFT.test(detail) || (DEFINITIVE.test(detail) && !detail.startsWith('transport:'))) {
-        const r = await txEmit(
-          ex,
-          this.store,
-          w,
-          'submit.refused',
-          {
-            guard: 'definitive',
-            observation: { ...obs, ...(NEVER_LEFT.test(detail) ? { escaped: false } : {}) },
-            attempt: true
-          },
-          this.fx()
-        )
-        return { state: r.next, txid: w.txid, detail }
-      }
-      // 'submit.unknown' has no edge on an already-unknown row — a repeat
-      // unknown is a 'resubmit' self-edge there (records the attempt)
-      const r = await txEmit(ex, this.store, w, w.state === 'prepared' ? 'submit.unknown' : 'resubmit', { observation: obs, attempt: true }, this.fx())
-      return { state: r.next, txid: w.txid, detail }
-    }
+    // broadcast already ran above (the coordinator IS the 'broadcast'
+    // effect) — emit the verdict; the table carries custody
+    const obs = { at: Date.now(), result: res }
+    const ex = this.deps.exec ?? executor()
     if (res.status === 'success' || ALREADY.test(detail)) {
-      await this.store.setTxState(actionId, 'submitted', { at: Date.now(), result: res }, true)
-      // the bytes aired — the inputs' fate is now this tx's fate, tracked by
-      // custody (spent-marks, spendCheck, the tombstone sweep). A lease that
-      // outlives its broadcast only wedges the change chain it consumed.
-      await this.store.releaseLeases(actionId)
-      // custody settles here too, not only at the call site: a replayed row
-      // whose caller died between prepare and settle still drops its inputs
-      // and adopts its change — idempotent where the deal already settled
-      await Promise.resolve(this.deps.txSpent?.(this.rebuild(w))).catch(() => undefined)
+      await txEmit(ex, this.store, w, 'submit.success', { observation: obs, attempt: true }, this.fx())
       return { state: 'submitted', txid: w.txid }
     }
     if (w.state === 'submitted') {
-      await this.store.setTxState(actionId, 'submitted', { at: Date.now(), result: res, resubmission: true }, true)
+      await txEmit(ex, this.store, w, 'resubmit', { observation: { ...obs, resubmission: true }, attempt: true }, this.fx())
       return { state: 'submitted', txid: w.txid, detail }
     }
-    if (NEVER_LEFT.test(detail)) {
-      await this.store.setTxState(actionId, 'rejected', { at: Date.now(), result: res, escaped: false }, true)
-      await this.store.releaseLeases(actionId)
-      // the tx never left the process — any optimistic spent() adoption is a
-      // phantom: died() tombstones its owned outputs, revives live inputs
-      await Promise.resolve(this.deps.txDied?.(this.rebuild(w))).catch(() => undefined)
-      return { state: 'rejected', txid: w.txid, detail }
+    if (NEVER_LEFT.test(detail) || (DEFINITIVE.test(detail) && !detail.startsWith('transport:'))) {
+      const r = await txEmit(
+        ex,
+        this.store,
+        w,
+        'submit.refused',
+        {
+          guard: 'definitive',
+          observation: { ...obs, ...(NEVER_LEFT.test(detail) ? { escaped: false } : {}) },
+          attempt: true
+        },
+        this.fx()
+      )
+      return { state: r.next, txid: w.txid, detail }
     }
-    const state: TxState = DEFINITIVE.test(detail) && !detail.startsWith('transport:') ? 'rejected' : 'submission_unknown'
-    await this.store.setTxState(actionId, state, { at: Date.now(), result: res }, true)
-    // a definitively-rejected tx never airs — its inputs are either spent
-    // (custody already knows) or still live; holding the lease only blocks
-    // the next attempt with a phantom 'already leased' collision
-    if (state === 'rejected') {
-      await this.store.releaseLeases(actionId)
-      await Promise.resolve(this.deps.txDied?.(this.rebuild(w))).catch(() => undefined)
-    }
-    return { state, txid: w.txid, detail }
+    // 'submit.unknown' has no edge on an already-unknown row — a repeat
+    // unknown is a 'resubmit' self-edge there (records the attempt)
+    const r = await txEmit(ex, this.store, w, w.state === 'prepared' ? 'submit.unknown' : 'resubmit', { observation: obs, attempt: true }, this.fx())
+    return { state: r.next, txid: w.txid, detail }
   }
 
   async observe(txid: string, o: TxObservation): Promise<TxState | undefined> {
     const w = await this.store.walletTx({ txid })
     if (!w) return undefined
-    if (!txFsmLegacy()) {
-      // the observation contract: 'seen'/'proven'/'rejected'/'conflicted' are
-      // only ever emitted from verified sources (the watchers gate hints) —
-      // a raw hint belongs in the observeFn, never in this call
-      const { event, guard } = obsEvent(o)
-      const r = await txEmit(this.deps.exec ?? executor(), this.store, w, event, { guard, observation: { at: Date.now(), ...o } }, this.fx())
-      return r.next
-    }
-    const next: TxState = o.status === 'proven' ? 'confirmed' : o.status === 'seen' ? (w.state === 'confirmed' ? 'confirmed' : 'observed') : o.status
-    await this.store.setTxState(w.actionId, next, { at: Date.now(), ...o })
-    // a tx our own verdict called dead still aired — 'SpendGuard refused'
-    // only means OUR broadcast stopped; the counterparty may re-air the
-    // signed bytes (the accept carries them by design). died() already
-    // freed its custody: revive re-marks the inputs spent and re-owns the
-    // change, or a released-but-spent input gets re-taken into a doomed tx.
-    if ((w.state === 'rejected' || w.state === 'expired' || w.state === 'abandoned') && (next === 'observed' || next === 'confirmed'))
-      await Promise.resolve(this.deps.txSpent?.(this.rebuild(w))).catch(() => undefined)
-    // every observed verdict closes the tx's story — the lease has said all
-    // it can; liveness verdicts belong to custody from here. A non-confirmed
-    // terminal verdict MUST run the custody rollback — rejected/conflicted/
-    // abandoned adopted outputs are phantom: the change belongs to whatever
-    // spend won (or to nobody); drop it and revive provably-live inputs
-    if (next === 'confirmed' || next === 'rejected' || next === 'conflicted' || next === 'abandoned') {
-      await this.store.releaseLeases(w.actionId)
-      if (next !== 'confirmed') await Promise.resolve(this.deps.txDied?.(this.rebuild(w))).catch(() => undefined)
-    }
-    return next
+    // the observation contract: 'seen'/'proven'/'rejected'/'conflicted' are
+    // only ever emitted from verified sources (the watchers gate hints) —
+    // a raw hint belongs in the observeFn, never in this call
+    const { event, guard } = obsEvent(o)
+    const r = await txEmit(this.deps.exec ?? executor(), this.store, w, event, { guard, observation: { at: Date.now(), ...o } }, this.fx())
+    return r.next
   }
 
   /** a verified-dead verdict arriving off the submit/observe path (deal
@@ -251,13 +194,7 @@ export class WalletCoordinator {
    *  construction: state + event row + lease release + tx-died in one
    *  commit, never a bare setTxState that strands phantom adoption */
   async markRejected(w: WalletTx, observation: unknown): Promise<void> {
-    if (!txFsmLegacy()) {
-      await txEmit(this.deps.exec ?? executor(), this.store, w, 'obs.rejected', { guard: 'verified', observation }, this.fx())
-      return
-    }
-    await this.store.setTxState(w.actionId, 'rejected', observation)
-    await this.store.releaseLeases(w.actionId)
-    await Promise.resolve(this.deps.txDied?.(this.rebuild(w))).catch(() => undefined)
+    await txEmit(this.deps.exec ?? executor(), this.store, w, 'obs.rejected', { guard: 'verified', observation }, this.fx())
   }
 
   /** markRejected keyed by actionId — the custody object's entry shape; a
@@ -270,7 +207,7 @@ export class WalletCoordinator {
   async resubmitPending(): Promise<Array<{ actionId: string; state: TxState }>> {
     // boot replay also finishes committed-but-uneffected intents — a crash
     // between persist and act replays custody here, not on a prayer
-    if (!txFsmLegacy()) await replayTxEffects(this.store, this.fx()).catch(() => 0)
+    await replayTxEffects(this.store, this.fx()).catch(() => 0)
     const out: Array<{ actionId: string; state: TxState }> = []
     for (const w of await this.store.walletTxs(['prepared', 'submission_unknown']))
       out.push({ actionId: w.actionId, state: (await this.submit(w.actionId)).state })

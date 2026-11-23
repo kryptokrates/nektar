@@ -21,7 +21,7 @@ export {
 export { type TxObservationInput, wrapBroadcast, leasePredicate, splitDailySpend, TransactionWatcher } from './ledger.js'
 export { emitTxEvent, replayTxEffects, type TxEffects } from './machines/effects.js'
 export * from './rt/index.js'
-export { obsEvent, txFsmLegacy, opsFsmLegacy } from './machines/driver.js'
+export { obsEvent, opsFsmLegacy } from './machines/driver.js'
 export {
   type MarketMessage,
   type MarketTransport,

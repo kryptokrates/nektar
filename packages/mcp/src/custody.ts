@@ -28,7 +28,6 @@ export interface CustodyOpsDeps {
           kind: string,
           state?: import('@nektar/automation').TxState
         ) => Promise<unknown>
-        setTxState: (actionId: string, state: import('@nektar/automation').TxState, observation?: unknown, attempt?: boolean) => Promise<void>
       }
     | undefined
   network?: string

@@ -1,10 +1,10 @@
 import { Transaction } from '@bsv/sdk'
 import { sparse } from '@nektar/core'
 import type { BroadcastResult } from '@nektar/chain'
-import type { AutomationStore, TxState, WalletTx } from './store.js'
+import type { AutomationStore, WalletTx } from './store.js'
 import { WalletCoordinator } from './wallet.js'
 import { replayTxEffects, type TxEffects } from './machines/effects.js'
-import { obsEvent, txFsmLegacy } from './machines/driver.js'
+import { obsEvent } from './machines/driver.js'
 import { executor, type Executor } from './rt/exec.js'
 import { txEmit } from './rt/emit.js'
 import { WAITS } from './waits.js'
@@ -68,35 +68,30 @@ export function wrapBroadcast(
     try {
       const r = await inner(tx)
       if (recorded) {
-        if (!txFsmLegacy()) {
-          const w = await store.walletTx({ actionId }).catch(() => undefined)
-          if (w !== undefined)
-            await txEmit(
-              exec ?? executor(),
-              store,
-              w,
-              r.status === 'success' ? 'submit.success' : 'submit.unknown',
-              { observation: { at: Date.now(), result: r }, attempt: true },
-              {}
-            ).catch(() => {})
-        } else
-          await store.setTxState(actionId, r.status === 'success' ? 'submitted' : 'submission_unknown', { at: Date.now(), result: r }, true).catch(() => {})
+        const w = await store.walletTx({ actionId }).catch(() => undefined)
+        if (w !== undefined)
+          await txEmit(
+            exec ?? executor(),
+            store,
+            w,
+            r.status === 'success' ? 'submit.success' : 'submit.unknown',
+            { observation: { at: Date.now(), result: r }, attempt: true },
+            {}
+          ).catch(() => {})
       }
       return r
     } catch (e) {
       if (recorded) {
-        if (!txFsmLegacy()) {
-          const w = await store.walletTx({ actionId }).catch(() => undefined)
-          if (w !== undefined)
-            await txEmit(
-              exec ?? executor(),
-              store,
-              w,
-              'submit.unknown',
-              { observation: { at: Date.now(), error: (e as Error).message }, attempt: true },
-              {}
-            ).catch(() => {})
-        } else await store.setTxState(actionId, 'submission_unknown', { at: Date.now(), error: (e as Error).message }, true).catch(() => {})
+        const w = await store.walletTx({ actionId }).catch(() => undefined)
+        if (w !== undefined)
+          await txEmit(
+            exec ?? executor(),
+            store,
+            w,
+            'submit.unknown',
+            { observation: { at: Date.now(), error: (e as Error).message }, attempt: true },
+            {}
+          ).catch(() => {})
       }
       throw e
     }
@@ -104,10 +99,10 @@ export function wrapBroadcast(
 }
 
 /** the sweep's scan half: live+dead rows × observeFn → (row, observe)
- *  pairs — tickDriver emits them serially in-process (driver mode: each
- *  emit rides the caller's executor); the sweep service sends each to the
+ *  pairs — the watcher tick emits them serially in-process (each emit
+ *  rides the caller's executor); the sweep service sends each to the
  *  row's own tx object (per-key serialized, journaled invocations).
- *  Release-lease bookkeeping rides the scan in both modes. */
+ *  Release-lease bookkeeping rides the scan. */
 export async function* scanTxObservations(
   store: AutomationStore,
   observeFn: (txid: string) => Promise<TxObservationInput | undefined>,
@@ -165,96 +160,31 @@ export class TransactionWatcher {
   constructor(
     private store: AutomationStore,
     private observeFn: (txid: string) => Promise<TxObservationInput | undefined>,
-    /** terminal death of a tracked tx — the row travels so the handler can
-     *  rebuild the tx (parents are stored) and free its custody */
-    private onRejected?: (w: WalletTx, reason: string) => Promise<void> | void,
-    private opts?: {
+    private opts: {
       /** ms an 'exported' row may sit unaired before its leases release and
        *  custody takes its inputs back — the counterparty's window to air */
       exportedTtlMs?: number
-      /** fired once when an export expires — the caller revives whatever
-       *  inputs the chain still shows live */
-      onExportExpired?: (w: WalletTx) => Promise<void> | void
-      /** a row our own verdict called dead ('rejected'/'expired') turned out
-       *  aired — the counterparty re-broadcast bytes it was handed (the deal
-       *  accept ships the signed tx by design). died()/revive already ran
-       *  against it; the handler re-marks inputs spent and re-owns outputs */
-      onRevived?: (w: WalletTx, o: TxObservationInput) => Promise<void> | void
-      /** machine-mode effect implementations — the table's intent names
-       *  resolve to these post-commit calls. When set (and the legacy flag
-       *  is off) the watcher is a pure effector: observe → emit → intents */
-      effects?: TxEffects
+      /** the table's intent names resolve to these post-commit calls — the
+       *  watcher is a pure effector: observe → emit → intents */
+      effects: TxEffects
       /** the caller's executor — the driver's emits ride it (an injected
        *  cfg.exec Dispatcher included); absent = the ambient restate ingress */
       exec?: Executor
     }
   ) {}
 
+  /** the watcher is a pure effector — enumerate, observe, emit through
+   *  txStep, let the table's intents run custody. The verdict mapping lives
+   *  in obsEvent; observation sources stay verified-only upstream in
+   *  observeFn. */
   async tick(): Promise<number> {
-    if (!txFsmLegacy() && this.opts?.effects !== undefined) return this.tickDriver()
-    let changed = 0
-    const live = await this.store.walletTxs(['submitted', 'submission_unknown', 'observed', 'exported'])
-    // dead-verdict rows still get a window of re-observation: a refused tx
-    // can air through the counterparty (its bytes were handed over), and a
-    // verdict that says 'rejected' while the wire says 'seen' leaves inputs
-    // released-but-spent and change un-owned. Bounded by the same window an
-    // its window — past it, a take-time spend probe burns what lands late.
-    const ttl = this.opts?.exportedTtlMs ?? WAITS.exportedTtl.ms
-    const dead = (await this.store.walletTxs(['rejected', 'expired', 'abandoned'])).filter((w) => Date.now() - w.stateAt < ttl)
-    for (const w of [...live, ...dead]) {
-      try {
-        // a lease means 'we may still air these bytes' — once the tx is
-        // seen or submitted its inputs belong to custody's bookkeeping,
-        // and stale leases from killed runs only wedge the change chain
-        if (w.state === 'submitted' || w.state === 'observed') await this.store.releaseLeases(w.actionId)
-        const o = await this.observeFn(w.txid)
-        if (o !== undefined) {
-          const next: TxState = o.status === 'proven' ? 'confirmed' : o.status === 'seen' ? (w.state === 'confirmed' ? 'confirmed' : 'observed') : o.status
-          if (next !== w.state) {
-            await this.store.setTxState(w.actionId, next, { at: Date.now(), ...o })
-            changed++
-            if (o.status === 'rejected' || o.status === 'conflicted' || (o.status as string) === 'abandoned')
-              await this.onRejected?.(w, o.reason ?? o.spentBy ?? o.status)
-            // dead→live is the counterparty-air case: custody already freed
-            // the inputs — re-mark them spent and re-own the change before a
-            // take() recycles the released-but-spent coin
-            if ((w.state === 'rejected' || w.state === 'expired' || w.state === 'abandoned') && (next === 'observed' || next === 'confirmed'))
-              await this.opts?.onRevived?.(w, o)
-            if (next === 'confirmed' || next === 'rejected' || next === 'conflicted' || next === 'abandoned') await this.store.releaseLeases(w.actionId)
-          }
-          continue
-        }
-        // a signed payment handed to a counterparty gets one window to air —
-        // without this 'exported' is a one-way door: the inputs sit in the
-        // wallet as relinquished AND leased, stranded silently forever
-        if (w.state === 'exported' && this.opts?.exportedTtlMs !== undefined && Date.now() - w.at >= this.opts.exportedTtlMs) {
-          await this.store.releaseLeases(w.actionId)
-          await this.store.setTxState(w.actionId, 'expired', {
-            at: Date.now(),
-            reason: `exported tx unaired for ${Math.round((Date.now() - w.at) / 60000)}min`
-          })
-          changed++
-          await this.opts.onExportExpired?.(w)
-        }
-      } catch {
-        /* unknown, not failed — try again next tick */
-      }
-    }
-    return changed
-  }
-
-  /** driver mode: the watcher is a pure effector — enumerate, observe,
-   *  emit through txStep, let the table's intents run custody. The verdict
-   *  mapping lives in obsEvent; observation sources stay verified-only
-   *  upstream in observeFn exactly as before. */
-  private async tickDriver(): Promise<number> {
-    const fx = this.opts!.effects!
+    const fx = this.opts.effects
     // every sweep retries committed-but-uneffected intents first — the
     // crash window between commit and effect dispatch self-heals here
     await replayTxEffects(this.store, fx).catch(() => 0)
     let changed = 0
-    for await (const { w, observe } of scanTxObservations(this.store, this.observeFn, this.opts?.exportedTtlMs)) {
-      const r = await txEmit(this.opts?.exec ?? executor(), this.store, w, observe.event, { guard: observe.guard, observation: observe.observation }, fx)
+    for await (const { w, observe } of scanTxObservations(this.store, this.observeFn, this.opts.exportedTtlMs)) {
+      const r = await txEmit(this.opts.exec ?? executor(), this.store, w, observe.event, { guard: observe.guard, observation: observe.observation }, fx)
       if (r.next !== w.state) changed++
     }
     return changed

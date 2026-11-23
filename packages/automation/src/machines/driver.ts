@@ -9,9 +9,6 @@ import { opsCauseCandidates } from './shadow.js'
  * (store.ts → driver.ts → store.ts would be a cycle).
  */
 
-/** kill switch — one release back to the hand-rolled FSM */
-export const txFsmLegacy = (): boolean => nektarEnv('NEKTAR_TX_FSM') === 'legacy'
-
 /** kill switch — one release back to unvalidated transition() writes */
 export const opsFsmLegacy = (): boolean => nektarEnv('NEKTAR_OPS_FSM') === 'legacy'
 

@@ -11,7 +11,7 @@ import { SellerOps } from './seller.js'
 import { CAP, PARKED, pkhOf, sparse, STATE_LIMITS, TERMINAL } from './types.js'
 import type { MarketMessage, StoredOffer, StuckExit } from './types.js'
 import { executor } from '../rt/exec.js'
-import { custodyMarkRejected, custodySubmit } from '../rt/emit.js'
+import { custodyMarkRejected, custodySubmit, txEmit } from '../rt/emit.js'
 
 // a take that lost the race to a concurrent spend is not a deal fault —
 // 'selected' re-enters fund() next tick and the funding window bounds the
@@ -949,14 +949,21 @@ export abstract class BuyerOps extends SellerOps {
         await this.d.store.releaseBudget(actionId)
         await this.d.store.releaseLeases(actionId)
         // a dead verdict on a row that may have escaped owes the coin book
-        // its custody rollback — route through the coordinator so driver
-        // mode journals the edge and both modes fire txDied
+        // its custody rollback — routed through the machine so the edge is
+        // journaled and the tx-died intent fires
         if (wtx !== undefined && (wtx.state === 'prepared' || wtx.state === 'submission_unknown')) {
           if (this.wallet !== undefined) await custodyMarkRejected(this.d.executor ?? executor(), this.wallet, wtx.actionId, { cause: 'escrow_rejected' })
-          else {
-            await this.d.store.setTxState(actionId, 'rejected', { cause: 'escrow_rejected' })
-            await Promise.resolve(this.d.txDied?.(Transaction.fromHex(wtx.rawHex))).catch(() => undefined)
-          }
+          else
+            await txEmit(
+              this.d.executor ?? executor(),
+              this.d.store,
+              wtx,
+              'obs.rejected',
+              { guard: 'verified', observation: { cause: 'escrow_rejected' } },
+              {
+                txDied: (row) => this.d.txDied?.(Transaction.fromHex(row.rawHex))
+              }
+            )
         }
       }
       await cancel()

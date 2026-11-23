@@ -67,13 +67,7 @@ export const TX_EFFECT_OF: Record<string, keyof TxEffects> = {
  *  a throw OR a declared intent with no effector (unknown name or a missing
  *  handler). A failed effect leaves the event uneffected and
  *  replayTxEffects retries it. */
-export async function runTxIntents(
-  intents: string[],
-  w: WalletTx,
-  fx: TxEffects,
-  log?: (line: string) => void,
-  out?: { error?: string }
-): Promise<boolean> {
+export async function runTxIntents(intents: string[], w: WalletTx, fx: TxEffects, log?: (line: string) => void, out?: { error?: string }): Promise<boolean> {
   let ok = true
   const fail = (why: string) => {
     ok = false

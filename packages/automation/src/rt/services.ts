@@ -597,7 +597,11 @@ export const dealfanTickBody =
       // fleet restart — stable01(service) spreads each arm ≤10% inside its
       // ceiling, deterministic so a replay re-arms identically
       const skew = Math.floor(stable01(service) * ceil * 0.1)
-      await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil + skew, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` })
+      await send(
+        { service, handler: 'tick', key: CRON_KEY },
+        {},
+        { delayMs: ceil + skew, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` }
+      )
     }
     return { events: inbox.length, advanced: ops.length, reconciled: rec.length }
   }
@@ -824,7 +828,11 @@ export const cronTickBody =
       // fleet restart — stable01(service) spreads each arm ≤10% inside its
       // ceiling, deterministic so a replay re-arms identically
       const skew = Math.floor(stable01(service) * ceil * 0.1)
-      await send({ service, handler: 'tick', key: CRON_KEY }, {}, { delayMs: ceil + skew, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` })
+      await send(
+        { service, handler: 'tick', key: CRON_KEY },
+        {},
+        { delayMs: ceil + skew, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` }
+      )
     }
     return { done: true }
   }

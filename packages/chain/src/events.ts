@@ -290,15 +290,18 @@ export class ChainEvents extends EventEmitter {
       // self-arming tick, ±10% per-tick skew: setInterval would keep a
       // fleet-restarted set of hosts phase-locked on the status API
       // forever — the jitter drifts them back apart on every pass
-      this.timer = setTimeout(() => {
-        this.timer = undefined
-        this.floorTicks++
-        void this.tick()
-          .catch(() => undefined)
-          .finally(() => {
-            if (this.running) arm()
-          })
-      }, base * (0.9 + Math.random() * 0.2))
+      this.timer = setTimeout(
+        () => {
+          this.timer = undefined
+          this.floorTicks++
+          void this.tick()
+            .catch(() => undefined)
+            .finally(() => {
+              if (this.running) arm()
+            })
+        },
+        base * (0.9 + Math.random() * 0.2)
+      )
       this.timer.unref?.()
     }
     arm()

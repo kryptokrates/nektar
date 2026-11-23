@@ -6,7 +6,7 @@
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
 import { PublicKey, Transaction, P2PKH, Hash, Utils, SatoshisPerKilobyte, type ChainTracker, type LockingScript } from '@bsv/sdk'
-import { toSigner, unlockP2PKH, signerAddress, egressAllowed, dbg, sparse, ancestorsOf, rebroadcastAncestors, type SignerLike } from '@nektar/core'
+import { toSigner, unlockP2PKH, signerAddress, egressAllowed, dbg, sparse, rebroadcastAncestors, type SignerLike } from '@nektar/core'
 import { isHeaderUnavailable } from '@nektar/chain'
 import {
   mintCarrier,
@@ -299,9 +299,9 @@ const chainServeDue = (prev: FingerStateRow | undefined, hostSig: string, now: n
  *  are met" resubmission: tm_finger admits an unmined token on its own
  *  validity, and a reader resolves it either once the served token BEEF
  *  carries a proof or while its ancestry is proven (zero-conf). */
-// ancestorsOf + rebroadcastAncestors live in @nektar/core — re-exported for
-// existing importers
-export { ancestorsOf, rebroadcastAncestors }
+// rebroadcastAncestors lives in @nektar/core — re-exported for existing
+// importers
+export { rebroadcastAncestors }
 
 export async function publishFinger(p: {
   key: SignerLike

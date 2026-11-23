@@ -205,7 +205,7 @@ export const loadClaims = (file: string): ClaimEntry[] => {
 // update interleaves, and a lost registration is a claim the watcher never
 // sees. mkdir is the atomic-acquire primitive (same shape as the testkit
 // treasury lock); stale-mtime breaks a dead holder's lock. The wait is an
-// async nap — a contended lock must yield the event loop, never Atomics.wait
+// async nap — a contended lock must yield the event loop, never block it
 // it (a 30s freeze starves every other leg in the process).
 async function withClaimsLock<T>(file: string, fn: () => T): Promise<T> {
   const lock = `${file}.lock`

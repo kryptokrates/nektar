@@ -10,7 +10,19 @@ import type { Provider, UTXO as RUTXO, TransactionData } from 'runar-sdk'
 // regtest with no limit (see spikes/depth-contract.mjs); conservative default.
 import { NEKTAR_ANCHOR_ARTIFACT, NEKTAR_ANCHOR_V3_ARTIFACT, META_FLAG_HEX, contractRp, decodeNektarAnchor, TAG_RPRIME } from '@nektar/contracts'
 const TAG_HEX = toHex(TAG_RPRIME)
-import { toHex, runarSigner, signerPubHex, sparse, toSigner, spread, nap, rebroadcastAncestors, type AnchorData, type Bytes, type SignerLike } from '@nektar/core'
+import {
+  toHex,
+  runarSigner,
+  signerPubHex,
+  sparse,
+  toSigner,
+  spread,
+  nap,
+  rebroadcastAncestors,
+  type AnchorData,
+  type Bytes,
+  type SignerLike
+} from '@nektar/core'
 import type { Broadcaster, Funder, FundingOut } from '@nektar/chain'
 
 export interface Head {

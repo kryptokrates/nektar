@@ -39,7 +39,10 @@ export interface CustodyWallet {
  *  hashed so distinct payloads never collide on one key */
 const guardKey = (payload: { guard?: string; observation?: unknown }): string => {
   const obs = payload.observation === undefined ? '' : JSON.stringify(payload.observation)
-  return createHash('sha256').update(`${payload.guard ?? ''}${obs}`).digest('hex').slice(0, 16)
+  return createHash('sha256')
+    .update(`${payload.guard ?? ''}${obs}`)
+    .digest('hex')
+    .slice(0, 16)
 }
 
 export async function txEmit(
@@ -83,11 +86,9 @@ export async function custodySubmit(exec: Executor, wallet: CustodyWallet, actio
   // txScope forwards the caller's held tx key through the custody hop — a
   // resubmit arriving from tx.resubmit(A) already holds A's object lock, so
   // the emits inside wallet.submit must go direct, not re-enter the object
-  return await exec.call(
-    { service: EXEC_SVC.custody, handler: 'submit', key: actionId },
-    { actionId, txScope: rtScopeKey()?.txKey } satisfies CustodyLeg,
-    { idempotencyKey: `custody:submit:${actionId}` }
-  )
+  return await exec.call({ service: EXEC_SVC.custody, handler: 'submit', key: actionId }, { actionId, txScope: rtScopeKey()?.txKey } satisfies CustodyLeg, {
+    idempotencyKey: `custody:submit:${actionId}`
+  })
 }
 
 export async function custodyMarkRejected(exec: Executor, wallet: CustodyWallet, actionId: string, observation: unknown): Promise<void> {

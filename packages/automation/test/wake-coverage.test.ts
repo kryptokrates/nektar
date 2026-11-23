@@ -73,6 +73,8 @@ void test('every wait primitive site is classified — the census sees all wait 
     'automation/src/toolbox-services.ts': 'WAITS.rpcIo io bound',
     'automation/src/ai.ts': 'AbortSignal.timeout — sandbox io bound (aborts INTO the work)',
     'core/src/deadline.ts': 'deadline()/nap()/spread()/stable01 — THE bound helper',
+    'core/src/fsx.ts':
+      'Atomics.wait ≤50ms ×6 inside writeFileAtomic — sync API constraint; Windows rename EPERM/EBUSY backoff, ≤250ms bound per write (AV/indexer window, not a wait site)',
     'chain/src/retry.ts': 'sleep()/pacer — the shared wait helper (spread-jittered)',
     'chain/src/events.ts': 'waitFor helper + the shared substrate poller floor',
     'chain/src/indexer.ts': 'fetch abort bound — io',
@@ -80,6 +82,7 @@ void test('every wait primitive site is classified — the census sees all wait 
     'chain/src/regtest.ts': 'rpc io bounds + withRetry curves (spread inside withRetry)',
     'chain/src/spendguard.ts': 'min-interval spend spacing — deliberate mechanism',
     'chain/src/headers.ts': 'bounded header fetch race — io',
+    'chain/src/claims.ts': 'mkdir file-lock acquire — nap(25) spin inside a 30s bound; deliberate mechanism (cross-process claim registry)',
     'chain/src/p2p.ts': 'peer reconnect — spread-jittered',
     'chain/src/testkit.ts': 'test-tier harness — regtest mine/wait helpers',
     'bstack/src/hosts.ts': 'fetch io bounds',

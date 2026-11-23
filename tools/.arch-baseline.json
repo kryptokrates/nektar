@@ -1,18 +1,18 @@
 {
   "packages": {
     "anchor": {
-      "loc": 1212,
+      "loc": 1222,
       "pkgFanout": 4,
       "edges": ["chain", "contracts", "core", "identity"],
-      "maxFileLoc": 624,
+      "maxFileLoc": 610,
       "maxFileFanout": 8,
       "instability": 0.4
     },
     "automation": {
-      "loc": 13853,
+      "loc": 13996,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
-      "maxFileLoc": 1544,
+      "maxFileLoc": 1596,
       "maxFileFanout": 29,
       "instability": 0.75
     },
@@ -25,15 +25,15 @@
       "instability": 0.571
     },
     "bstack": {
-      "loc": 5143,
+      "loc": 5142,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
-      "maxFileLoc": 1075,
+      "maxFileLoc": 1051,
       "maxFileFanout": 13,
       "instability": 0.5
     },
     "chain": {
-      "loc": 7072,
+      "loc": 7134,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 952,
@@ -49,11 +49,11 @@
       "instability": 0.143
     },
     "core": {
-      "loc": 1179,
+      "loc": 1223,
       "pkgFanout": 0,
       "edges": [],
       "maxFileLoc": 301,
-      "maxFileFanout": 15,
+      "maxFileFanout": 16,
       "instability": 0
     },
     "crypto": {
@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 11446,
+      "loc": 11447,
       "pkgFanout": 18,
       "edges": [
         "anchor",
@@ -127,7 +127,7 @@
         "verify",
         "zk"
       ],
-      "maxFileLoc": 906,
+      "maxFileLoc": 893,
       "maxFileFanout": 24,
       "instability": 0.947
     },
@@ -213,19 +213,19 @@
       "fanout": 13
     },
     "packages/automation/src/rt/services.ts": {
-      "loc": 880,
+      "loc": 909,
       "fanout": 7
     },
     "packages/automation/src/runtime.ts": {
-      "loc": 1145,
+      "loc": 1149,
       "fanout": 29
     },
     "packages/automation/src/store.ts": {
-      "loc": 1544,
+      "loc": 1596,
       "fanout": 9
     },
     "packages/bstack/src/finger.ts": {
-      "loc": 1075,
+      "loc": 1051,
       "fanout": 8
     },
     "packages/chain/src/index.ts": {
@@ -233,7 +233,7 @@
       "fanout": 32
     },
     "packages/chain/src/mainnet.ts": {
-      "loc": 901,
+      "loc": 910,
       "fanout": 7
     },
     "packages/chain/src/testkit.ts": {
@@ -245,7 +245,7 @@
       "fanout": 6
     },
     "packages/mcp/src/http.ts": {
-      "loc": 906,
+      "loc": 893,
       "fanout": 13
     },
     "packages/mcp/src/memory.ts": {

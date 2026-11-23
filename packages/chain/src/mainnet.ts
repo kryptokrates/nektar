@@ -3,7 +3,7 @@
 // here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
 // in the runtime before any tx reaches it.
 import { currentSignal, deadline, nap, nektarEnv, sparse, spread, HEX64 } from '@nektar/core'
-import { sleep, withRetry } from './retry.js'
+import { withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
@@ -507,7 +507,10 @@ export class IndexTracker implements ChainTracker {
     if (hit) return hit
     const h = await this.fetchHeader(height)
     if (h === undefined) return undefined
-    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return undefined // linkage refused — don't serve what we wouldn't cache
+    // admit() false means a linkage MISMATCH was found and reorgAt
+    // reconciled the cache around h — the header is still the fresh answer
+    // and must be served (the witness gate corroborates, not the cache)
+    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return h
     this.cache.set(h)
     return h
   }
@@ -523,9 +526,7 @@ export class IndexTracker implements ChainTracker {
     if (cur !== undefined && cur.hash !== h.hash) {
       await this.cache.reorgAt(h, (x) => this.fetchHeader(x))
       this.cache.set(h)
-    } else if (cur !== undefined) return h // same hash already cached — linkage passed on the first admit
-    else if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return undefined // linkage refused
-    else this.cache.set(h)
+    } else if (await this.cache.admit(h, (x) => this.fetchHeader(x))) this.cache.set(h)
     return h
   }
 
@@ -637,7 +638,10 @@ export class ChaintracksTracker implements ChainTracker {
     if (hit) return hit
     const h = await this.fetchHeader(height)
     if (h === undefined) return undefined
-    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return undefined // linkage refused — don't serve what we wouldn't cache
+    // admit() false means a linkage MISMATCH was found and reorgAt
+    // reconciled the cache around h — the header is still the fresh answer
+    // and must be served (the witness gate corroborates, not the cache)
+    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return h
     this.cache.set(h)
     return h
   }
@@ -653,9 +657,7 @@ export class ChaintracksTracker implements ChainTracker {
     if (cur !== undefined && cur.hash !== h.hash) {
       await this.cache.reorgAt(h, (x) => this.fetchHeader(x))
       this.cache.set(h)
-    } else if (cur !== undefined) return h // same hash already cached — linkage passed on the first admit
-    else if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return undefined // linkage refused
-    else this.cache.set(h)
+    } else if (await this.cache.admit(h, (x) => this.fetchHeader(x))) this.cache.set(h)
     return h
   }
 
@@ -758,8 +760,7 @@ export async function importFundingTx(cfg: MainnetConfig | undefined, ref: strin
     if (wire.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(wire)) throw new Error(`malformed transaction hex (${wire.length} chars)`)
     return fundingOutputs((await TxStore.read(wire, tracker)).tx, pkhHex)
   }
-  if (!HEX64.test(ref))
-    throw new Error(`malformed txid — expected 64 hex chars, 'hex:<rawtx>', got "${ref.slice(0, 24)}${ref.length > 24 ? '…' : ''}"`)
+  if (!HEX64.test(ref)) throw new Error(`malformed txid — expected 64 hex chars, 'hex:<rawtx>', got "${ref.slice(0, 24)}${ref.length > 24 ? '…' : ''}"`)
   const c = def(cfg)
   const hex = await c.index.txHex(ref)
   if (hex === undefined) throw new Error(`${ref}: index could not serve the tx`)

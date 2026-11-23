@@ -5,7 +5,6 @@ import { Hash } from '@bsv/sdk'
 import { BoundedMap, HEX64 } from '@nektar/core'
 import type { BlockHeader, ChainTracker } from './interfaces.js'
 
-
 /** the consensus serialization — 80 bytes: version LE32, prevHash and
  *  merkleRoot in internal (reversed) order, then time/bits/nonce LE32.
  *  `undefined` when the header lacks what serialization needs (no version —

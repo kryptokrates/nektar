@@ -170,7 +170,7 @@ export function verifyWant(want: WantAd, sigHex: string, opts?: { allowExpired?:
  *  also admits `bigint` — the same quote reaches readers pre-serialization
  *  (twin of identity's SaleQuoteWire; kept here so bstack gains no identity
  *  edge). Every reader passes them through Number/BigInt anyway. */
-export interface PublicQuote {
+interface PublicQuote {
   cfg: {
     sellerPkh: string
     price: number | string | bigint

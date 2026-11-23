@@ -1457,7 +1457,9 @@ export class AutomationStore {
     const now = Date.now()
     const rows = await this.wkx(T.txEvents)
       .where({ effected: 0 })
-      .where((q) => q.whereNull('effect_next_at').orWhere('effect_next_at', '<=', now))
+      .where((q) => {
+        q.whereNull('effect_next_at').orWhere('effect_next_at', '<=', now)
+      })
       .orderBy('id')
     const out: Array<{ eventId: number; actionId: string; intents: string[]; tx?: WalletTx; attempts: number; lastError?: string }> = []
     for (const r of rows) {
@@ -1482,7 +1484,9 @@ export class AutomationStore {
     const cur = await this.wkx(T.txEvents).where({ id: eventId }).first('effect_attempts')
     const attempts = Number(cur?.effect_attempts ?? 0) + 1
     const nextAt = Date.now() + Math.min(60_000 * 2 ** Math.min(attempts - 1, 10), 3_600_000)
-    await this.wkx(T.txEvents).where({ id: eventId }).update({ effect_attempts: attempts, effect_error: error.slice(0, 500), effect_next_at: nextAt })
+    await this.wkx(T.txEvents)
+      .where({ id: eventId })
+      .update({ effect_attempts: attempts, effect_error: error.slice(0, 500), effect_next_at: nextAt })
   }
 
   /** the machine's persisted event log for a wallet action */

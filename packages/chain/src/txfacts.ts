@@ -107,15 +107,7 @@ export const SEEN_HINTS = [
 
 /** every broadcaster status word we know — push-callback normalization set;
  *  unknown words collapse to OTHER rather than being trusted verbatim */
-export const KNOWN_STATUSES = [
-  ...SEEN_HINTS,
-  'QUEUED',
-  'STORED',
-  'ANNOUNCED_TO_NETWORK',
-  'SEEN_IN_ORPHAN_MEMPOOL',
-  'CONFIRMED',
-  ...REJECTED_WORDS
-]
+export const KNOWN_STATUSES = [...SEEN_HINTS, 'QUEUED', 'STORED', 'ANNOUNCED_TO_NETWORK', 'SEEN_IN_ORPHAN_MEMPOOL', 'CONFIRMED', ...REJECTED_WORDS]
 
 /** an answered seen-family status — the tx is observable somewhere */
 export const hintSeen = (h?: StatusHint): boolean => h !== undefined && h.answered && SEEN_HINTS.includes(h.status)

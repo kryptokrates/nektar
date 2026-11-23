@@ -1,6 +1,6 @@
 // RunarContract members the SDK declares `private` that this package calls
 // at runtime — the methods exist; upstream just hides them. One named
-// structural view instead of an `as any` at every call site.
+// structural view instead of an untyped cast at every call site.
 import type { Transaction } from '@bsv/sdk'
 import type { RunarContract, UTXO } from 'runar-sdk'
 

@@ -107,7 +107,7 @@ export async function ensureTrees(p: {
   const minted: string[] = []
   for (;;) {
     const unprovenKind = (await p.ledger.unproven()).filter((u) => u.kind === kind).length
-    if ((await p.ledger.remaining(kind)) >= lowWater || unprovenKind >= (p.maxUnproven ?? 2)) break
+    if ((await p.ledger.remaining(kind)) >= lowWater || unprovenKind >= (p.maxUnproven ?? 1)) break
     const reserve = p.reserveSats ?? TREE_RESERVE_SATS
     let funding: FundingOut
     try {

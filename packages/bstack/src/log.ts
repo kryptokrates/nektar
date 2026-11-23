@@ -4,7 +4,7 @@
 // admission verdict are upstream's (vendored @lightwebinc/blogs-host); the
 // carriers, funding trees and unlock scripts are bcommon's, as for market
 // artifacts, with the blogs derivations and tags of spec section 6.1.
-import { PublicKey, Transaction, type ChainTracker } from '@bsv/sdk'
+import { PublicKey, Transaction, SatoshisPerKilobyte, type ChainTracker } from '@bsv/sdk'
 import { mintCarrier, fundingLock, lockFields, unlocker, type Derivation, type SigningWallet } from '@lightwebinc/bcommon'
 import { P2PKH } from '@bsv/sdk'
 import { toSigner, signerAddress, type SignerLike } from '@nektar/core'
@@ -474,6 +474,9 @@ export async function anchorLog(p: {
   maxAgeMs?: number
   quorum?: Quorum
   log?: (s: string) => void
+  /** caller-resolved sat/kB — funded spends should price off the port's
+   *  rate, not the SDK LivePolicy's single-endpoint quote */
+  feeRateSatPerKb?: number
 }): Promise<{ interval: number; first: number; count: number; root: string; txid: string; missed?: Array<{ host: string; error: string }> } | undefined> {
   checkStream(p.stream)
   const now = p.now ?? Date.now
@@ -570,7 +573,7 @@ export async function anchorLog(p: {
     }
     tx.addInput({ sourceTransaction: slot.tree, sourceOutputIndex: slot.vout, unlockingScriptTemplate: unlocker(w, ORIGINATOR, DERIVATION_BATCH) })
     try {
-      await tx.fee()
+      await tx.fee(p.feeRateSatPerKb !== undefined ? new SatoshisPerKilobyte(Math.max(1, p.feeRateSatPerKb)) : undefined)
       await tx.sign()
       const txid = tx.id('hex')
       let br = await p.broadcast(tx)

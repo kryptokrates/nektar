@@ -58,6 +58,11 @@ export interface AutomationHost extends MarketMemory {
    *  private key and expose only this. Hosts without it are held-key by
    *  definition: `toSigner(operatorKey())` is the identical fallback */
   operatorSigner?(): import('@nektar/core').DigestSigner
+  /** the port-resolved sat/kB every funded spend should price at — the
+   *  host resolves max(network floor, broadcaster policy quote); funded-tx
+   *  builders that accept a rate must be handed this, not left on the SDK
+   *  LivePolicy single-endpoint default */
+  feeRateSatPerKb?: number
   /** the one coin book — takes, spend/death/adoption bookkeeping route
    *  through it; callers never mark outpoints themselves */
   funds: Funds

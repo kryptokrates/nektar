@@ -201,6 +201,7 @@ export function openUpkeep(rt: Rt): void {
           broadcast: (tx) => broadcast(tx),
           fetchTx: (txid) => mem.fetchTx(txid),
           now: cfg.now,
+          feeRateSatPerKb: mem.feeRateSatPerKb,
           log: (line) => log(`automation: ${line}`)
         })
         if (r !== undefined) {
@@ -341,7 +342,8 @@ export function openUpkeep(rt: Rt): void {
                     n: wantOuts,
                     satsPerOutput: outSats,
                     lock: new P2PKH().lock(await signerAddress(key)),
-                    changeOutputs: cfg.changeFanout ?? 4
+                    changeOutputs: cfg.changeFanout ?? 4,
+                    feeRateSatPerKb: mem.feeRateSatPerKb
                   })
                   const br = await broadcast(dtx)
                   if (br.status === 'success') {
@@ -425,6 +427,7 @@ export function openUpkeep(rt: Rt): void {
               size: spec.size,
               satsPerOutput: spec.satsPerOutput,
               reserveSats: cfg.treeReserveSats,
+              feeRateSatPerKb: mem.feeRateSatPerKb,
               lock: kind === 'market' ? undefined : spec.lock,
               takeFunding: async (sats: number) => (await mem.fundingOuts(sats, 'upkeep'))[0],
               broadcast: (tx) => broadcast(tx),
@@ -504,6 +507,7 @@ export function openUpkeep(rt: Rt): void {
             fetchTx: (txid) => mem.fetchTx(txid),
             allowHttp: localNet,
             now: cfg.now,
+            feeRateSatPerKb: mem.feeRateSatPerKb,
             onSpent: (tx) => void mem.funds.spent(tx),
             onDied: (tx) => void mem.funds.died(tx)
           })

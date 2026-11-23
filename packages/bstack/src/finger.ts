@@ -5,7 +5,7 @@
 // admission verdicts are upstream's (vendored @lightwebinc/bfinger-host);
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
-import { PublicKey, Transaction, P2PKH, Hash, Utils, type ChainTracker, type LockingScript } from '@bsv/sdk'
+import { PublicKey, Transaction, P2PKH, Hash, Utils, SatoshisPerKilobyte, type ChainTracker, type LockingScript } from '@bsv/sdk'
 import { toSigner, unlockP2PKH, signerAddress, egressAllowed, dbg, sparse, type SignerLike } from '@nektar/core'
 import { isHeaderUnavailable } from '@nektar/chain'
 import {
@@ -341,6 +341,9 @@ export async function publishFinger(p: {
    *  cycle finds 'no spendable output' with the file showing free sats. */
   onDied?: (tx: Transaction) => void | Promise<void>
   now?: () => number
+  /** caller-resolved sat/kB — funded spends should price off the port's
+   *  rate, not the SDK LivePolicy's single-endpoint quote */
+  feeRateSatPerKb?: number
 }): Promise<{ changed: boolean; seq: number; carrierTxid?: string; tokenTxid?: string }> {
   checkFingerBody(p.body, { allowHttp: p.allowHttp })
   const s = toSigner(p.key)
@@ -528,7 +531,7 @@ export async function publishFinger(p: {
     tokenTx.addOutput({ lockingScript: new P2PKH().lock(await signerAddress(s)), change: true })
     const fund = await p.takeFunding(5000)
     tokenTx.addInput({ sourceTransaction: fund.tx, sourceOutputIndex: fund.vout, unlockingScriptTemplate: unlockP2PKH(s) })
-    await tokenTx.fee()
+    await tokenTx.fee(p.feeRateSatPerKb !== undefined ? new SatoshisPerKilobyte(Math.max(1, p.feeRateSatPerKb)) : undefined)
     await tokenTx.sign()
     // the fee parent may be a not-yet-proven tx — carry whatever ancestry is
     // obtainable now so the BEEF passes host SPV while the token is unmined

@@ -706,3 +706,19 @@ test('deadAncestry: a level of unresolved parents resolves concurrently — cost
   assert.equal(gaps.length, 3)
   assert.ok(maxInflight >= 2, `parents resolved serially (max in-flight ${maxInflight})`)
 })
+
+test('tree: an explicit feeRateSatPerKb prices the mint off that rate, not LivePolicy', async () => {
+  const key = PrivateKey.fromRandom()
+  const fee = (t: Transaction): number => {
+    const ins = t.inputs.reduce((s, i) => s + (i.sourceTransaction?.outputs[i.sourceOutputIndex]?.satoshis ?? 0), 0)
+    return ins - t.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)
+  }
+  const cheap = await mintTree({ key, funding: fund(key), n: 8, satsPerOutput: 1000, feeRateSatPerKb: 100 })
+  const dear = await mintTree({ key, funding: fund(key), n: 8, satsPerOutput: 1000, feeRateSatPerKb: 500 })
+  const fc = fee(cheap)
+  const fd = fee(dear)
+  assert.ok(fc > 0, 'fee is positive')
+  // same tx shape → fee scales with the passed rate (±one change-output
+  // rounding); a LivePolicy-priced mint could never produce this delta
+  assert.ok(fd >= fc * 4 && fd <= fc * 6, `fee ${fd} should be ~5x ${fc}`)
+})

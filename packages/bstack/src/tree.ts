@@ -1,4 +1,4 @@
-import { PrivateKey, ProtoWallet, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
+import { PrivateKey, ProtoWallet, Transaction, P2PKH, MerklePath, SatoshisPerKilobyte } from '@bsv/sdk'
 import { fundingLock, feeFor, type Derivation, type Fees, type SigningWallet } from '@lightwebinc/bcommon'
 import { unlockP2PKH, signerAddress, nektarEnv, sparse, type SignerLike } from '@nektar/core'
 import type { FundingOut } from '@nektar/chain'
@@ -25,6 +25,11 @@ export async function mintTree(p: {
    *  distinct vout off THIS tx, so its unconfirmed ancestry stays one hop
    *  deep instead of chaining mint-to-mint (default 1 = a serial chain) */
   changeOutputs?: number
+  /** caller-resolved sat/kB — pass the port's fee rate so the mint prices
+   *  off the same quote every other funded spend uses. Unset keeps the SDK
+   *  LivePolicy (single-endpoint ARC quote) — fine for tests, wrong source
+   *  for a funded spend on a live net */
+  feeRateSatPerKb?: number
 }): Promise<Transaction> {
   const { key, funding, n } = p
   const sats = p.satsPerOutput ?? 1
@@ -40,7 +45,7 @@ export async function mintTree(p: {
   for (let i = 0; i < n; i++) tx.addOutput({ satoshis: sats, lockingScript: lock })
   const changeLock = p.changeScript ?? new P2PKH().lock(await signerAddress(key))
   for (let i = 0; i < changeOuts; i++) tx.addOutput({ lockingScript: changeLock, change: true })
-  await tx.fee()
+  await tx.fee(p.feeRateSatPerKb !== undefined ? new SatoshisPerKilobyte(Math.max(1, p.feeRateSatPerKb)) : undefined)
   await tx.sign()
   return tx
 }

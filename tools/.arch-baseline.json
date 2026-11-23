@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 13918,
+      "loc": 13927,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1544,
@@ -25,10 +25,10 @@
       "instability": 0.571
     },
     "bstack": {
-      "loc": 5098,
+      "loc": 5120,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
-      "maxFileLoc": 1072,
+      "maxFileLoc": 1075,
       "maxFileFanout": 13,
       "instability": 0.5
     },
@@ -225,7 +225,7 @@
       "fanout": 9
     },
     "packages/bstack/src/finger.ts": {
-      "loc": 1072,
+      "loc": 1075,
       "fanout": 8
     },
     "packages/chain/src/index.ts": {

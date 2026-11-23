@@ -58,6 +58,8 @@ export async function ensureTrees(p: {
    *  change the mint leaves for the NEXT take, not a cost. Small treasuries
    *  lower it (NEKTAR_TREE_RESERVE_SATS); below ~fee+dust the change strands */
   reserveSats?: number
+  /** caller-resolved sat/kB for the mint — forwarded to mintTree */
+  feeRateSatPerKb?: number
 }): Promise<{ minted: string[]; proven: string[]; remaining: number }> {
   // Hosts admit a carrier only from a funding tree that is proven in a block,
   // so the stock is what keeps publishing free of block times: the next tree
@@ -114,7 +116,16 @@ export async function ensureTrees(p: {
       if (e instanceof FundsStarvedError) throw new Error(`${e.message} — the mint reserve is ${reserve} sats; lower NEKTAR_TREE_RESERVE_SATS or fund more`)
       throw e
     }
-    const tree = await mintTree({ key: p.key, wallet: p.wallet, funding, n: size, satsPerOutput, lock: p.lock, changeOutputs: p.changeFanout ?? 4 })
+    const tree = await mintTree({
+      key: p.key,
+      wallet: p.wallet,
+      funding,
+      n: size,
+      satsPerOutput,
+      lock: p.lock,
+      changeOutputs: p.changeFanout ?? 4,
+      feeRateSatPerKb: p.feeRateSatPerKb
+    })
     // a funder re-issuing the same UTXO mints the identical tree — the
     // ledger's idempotent add would leave unprovenKind flat and the loop
     // would never reach its bound; treat a repeat as the bound itself

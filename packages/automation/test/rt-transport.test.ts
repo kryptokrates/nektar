@@ -247,3 +247,50 @@ void test('outbox lost-wakeup: a deferred/retried row re-pokes the pump — the 
     await kx.destroy()
   }
 })
+
+void test('drain: in-flight due row does not mask a later pending row or self-dedupe drain arm (rt/dedup-kills-arm)', async () => {
+  let clock = 10_000
+  const kx = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  const store = new AutomationStore(kx, () => clock)
+  await store.init()
+  const ex = new Dispatcher()
+  try {
+    // R1 is due now (T1=10_000); R2 is due later (T2=30_000)
+    await store.enqueue({ actionId: 'r1', operationId: 'op:r1', kind: 'message', destination: 'host:a', payload: {} })
+    await store.enqueue({ actionId: 'r2', operationId: 'op:r2', kind: 'message', destination: 'host:b', payload: {} }, { delayMs: 20_000 })
+    const arms: Array<{ delayMs?: number; idempotencyKey?: string }> = []
+    let armed!: () => void
+    const armedP = new Promise<void>((r) => (armed = r))
+    const origSend = ex.send.bind(ex)
+    ex.send = async (t, a, o) => {
+      if (t.handler === 'drain') {
+        arms.push({ delayMs: o?.delayMs, idempotencyKey: o?.idempotencyKey })
+        armed()
+      }
+      return origSend(t, a, o)
+    }
+    // R1's deliver stays pending while drain runs (mirrors real Restate detached deliver)
+    let releaseR1!: () => void
+    const r1Gate = new Promise<void>((r) => (releaseR1 = r))
+    wireTransport(ex, {
+      dueRows: () => store.dueOutbox(50),
+      nextAt: (excludeIds) => store.nextOutboxAt(excludeIds !== undefined && excludeIds.length > 0 ? { excludeIds } : undefined),
+      deliverItem: async (item) => {
+        if (item.actionId === 'r1') await r1Gate
+        await store.ackOutbox(item.actionId)
+        return 'acked'
+      },
+      now: () => clock,
+      log: () => {}
+    })
+    const drainCall = ex.call({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {})
+    await armedP
+    // even BEFORE R1 acks, drain must have armed directly on R2's 30_000 wake, not R1's 10_000
+    assert.deepEqual(arms, [{ delayMs: 20_000, idempotencyKey: 'drain:30000' }])
+    releaseR1()
+    await drainCall
+  } finally {
+    await ex.close()
+    await kx.destroy()
+  }
+})

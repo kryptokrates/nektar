@@ -2,7 +2,7 @@ import { Transaction } from '@bsv/sdk'
 import { mintTree, PROVISION_KIND, type TreeLedger } from './tree.js'
 import type { SigningWallet } from '@lightwebinc/bcommon'
 import type { SignerLike } from '@nektar/core'
-import { hintRejected, hintSilent, FundsStarvedError, type FundingOut, type BroadcastResult } from '@nektar/chain'
+import { broadcastProvablyDead, hintRejected, hintSilent, FundsStarvedError, type FundingOut, type BroadcastResult } from '@nektar/chain'
 
 /** outputs per funding tree unless the caller sizes it */
 export const TREE_SIZE = 64
@@ -126,17 +126,23 @@ export async function ensureTrees(p: {
       changeOutputs: p.changeFanout ?? 4,
       feeRateSatPerKb: p.feeRateSatPerKb
     })
+    const txid = tree.id('hex')
     // a funder re-issuing the same UTXO mints the identical tree — the
     // ledger's idempotent add would leave unprovenKind flat and the loop
     // would never reach its bound; treat a repeat as the bound itself
-    if (minted.includes(tree.id('hex'))) break
+    if (minted.includes(txid)) break
+    // persist BEFORE broadcast (data/durability-point): a crash or transport
+    // timeout after broadcast leaves the row in unproven() so txProof /
+    // stuckMint reconcile the 64 lane-locked outputs instead of orphaning
+    // them forever. Only a provably-dead refusal drops the row back out.
+    await p.ledger.add(tree, size, kind)
     const r = await p.broadcast(tree)
     if (r.status !== 'success') {
+      if (broadcastProvablyDead(r.description ?? '')) await p.ledger.drop(txid)
       if (p.onRefused !== undefined) await p.onRefused(tree, r)
       throw new Error(`ensureTrees: broadcast failed ${JSON.stringify(r).slice(0, 120)}`)
     }
-    await p.ledger.add(tree, size, kind)
-    minted.push(tree.id('hex'))
+    minted.push(txid)
     if (p.onSpent !== undefined) await p.onSpent(tree)
   }
   return { minted, proven, remaining: await p.ledger.remaining(kind) }

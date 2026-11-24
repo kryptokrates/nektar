@@ -135,18 +135,8 @@ export interface MarketDeps {
    *  delivery and the abandon horizon then cover it (the payment_pending
    *  watch: a proof or a conflict wakes the parked sale) */
   watchTx?: (txid: string) => void
-  settleEscrow?: (tx: Transaction) => void | Promise<void>
-  /** rollback of settleEscrow's optimistic adoption when the wallet ledger
-   *  itself declares the tx dead (SpendGuard refusal, definitive reject,
-   *  conflicted): inputs revive, phantom outputs tombstone */
-  txDied?: (tx: Transaction) => void | Promise<void>
-  /** a refused tx that aired anyway — retro-count its spend in the cap
-   *  ledger; the machine's revive edges carry this as a declared intent */
-  recordAired?: (tx: Transaction) => void | Promise<void>
   /** the runtime's one custody effect set — the coordinator and the tx
-   *  object must run the same handlers; absent, the engine builds the
-   *  legacy set from settleEscrow/txDied/recordAired (tests, engine-only
-   *  embeddings) */
+   *  object must run the same handlers */
   txEffects?: import('../machines/effects.js').TxEffects
   afterPrepare?: (actionId: string) => void | Promise<void>
   transport: MarketTransport

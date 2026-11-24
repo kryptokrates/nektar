@@ -402,3 +402,17 @@ test('events: waitFor on a hung-observe txid times out on its own clock; a healt
   const hit = await ev.waitFor('ok', 1_000)
   assert.equal(hit?.ev.status, 'mined')
 })
+
+test('events: note() with unverified terminal status never prematurely terminates non-matching waitFor', { timeout: 10_000 }, async () => {
+  let proven = false
+  const ev = new ChainEvents({ observe: () => Promise.resolve(proven ? mined('t1') : undefined) })
+  const waiting = ev.waitFor('t1', 5_000, (e) => e.merklePath !== undefined)
+  ev.note({ txid: 't1', status: 'mined' }) // hint without merklePath
+  const early = await Promise.race([waiting.then(() => 'resolved'), nap(80).then(() => 'parked')])
+  assert.equal(early, 'parked', 'unverified hint must not terminate a non-matching waiter')
+  proven = true
+  await ev.tick()
+  const got = await waiting
+  assert.equal(got?.verified, true)
+  assert.ok(got?.ev.merklePath !== undefined)
+})

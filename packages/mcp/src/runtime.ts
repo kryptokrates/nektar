@@ -26,7 +26,7 @@ import {
   REJECTED_WORDS
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
-import { nektarEnv, nektarEnvNum, mkLog } from '@nektar/core'
+import { HEX64, nektarEnv, nektarEnvNum, mkLog } from '@nektar/core'
 import { type InvokeTarget } from '@nektar/automation'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
@@ -515,22 +515,34 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   // re-watch so the observe path re-fetches and re-verifies against the new
   // headers. Un-anchoring shard records stays out of scope — finalityDepth
   // already withholds shallow anchors from queries.
-  let lastReorgFrom: number | undefined
+  let lastReorgKey: string | undefined
   port.tracker.onReorg?.((removed, newTip) => {
     if (removed.length === 0) return
     const from = Math.min(...removed.map((h) => h.height))
-    // the same fork fires once per witnessed source — the effects are
-    // idempotent but the log, the metric and the emit must not double-count
-    if (from === lastReorgFrom) return
-    lastReorgFrom = from
+    // the same fork fires once per witnessed source — key on fork height AND
+    // new tip hash so a second distinct reorg at the same height is never dropped
+    const reorgKey = `${from}:${newTip.hash}`
+    if (reorgKey === lastReorgKey) return
+    lastReorgKey = reorgKey
     nlog(`header reorg — ${removed.length} stale header(s) from height ${from}, new tip ${newTip.height}`)
     mem.metrics.inc('nektar_reorgs_total', {}, 1, 'header-chain reorgs observed')
     for (const txid of txStore.clearProofsFrom(from)) events.watch(txid)
     mem.events.emit('reorg', { from, tip: newTip.height })
   })
   mem.metrics.gauge('nektar_fee_balance_sats', () => utxosOf()?.reduce((s, u) => s + (u.satoshis ?? 0), 0) ?? 0, 'operator fee-key balance (sats)')
+  mem.metrics.gauge('nektar_chain_wake_push_ticks', () => events.wakeRatio.push, 'chain-event ticks driven by push/poke wakes')
+  mem.metrics.gauge('nektar_chain_wake_floor_ticks', () => events.wakeRatio.floor, 'chain-event ticks driven by the poll ceiling')
+  // pushed status hints (both inbound webhook and outbound SSE) → substrate
+  // note() so waiters see the hint and verify-on-hint pokes observe immediately
+  const onBroadcasterStatus = ({ txid, status }: { txid?: unknown; status?: unknown }) => {
+    if (typeof txid !== 'string' || !HEX64.test(txid)) return
+    const s = typeof status === 'string' ? status.toUpperCase() : ''
+    if (MINED_WORDS.includes(s)) events.note({ txid, status: 'mined' })
+    else if (REJECTED_WORDS.includes(s)) events.note({ txid, status: 'rejected' })
+  }
+  mem.events.on('broadcasterStatus', onBroadcasterStatus)
   // pushed status hints (the port's SSE channel) → the same handler the
-  // webhook uses, plus a substrate note so waiters see the hint
+  // webhook uses (which emits broadcasterStatus → onBroadcasterStatus above)
   const stream = port.openHintStream?.(async (j) => {
     const w = j as { txid?: string; txStatus?: string }
     mem.metrics.inc(
@@ -540,14 +552,6 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       'broadcaster status stream events received'
     )
     await handleBroadcasterStatus(mem, w)
-    // the pushed status is a wake hint: note() records it for statusOf/
-    // waitFor, but interest only drops when a verified observe delivers — a
-    // push whose BUMP failed verification keeps the pull probe's floor
-    if (typeof w.txid === 'string') {
-      const s = String(w.txStatus ?? '').toUpperCase()
-      if (MINED_WORDS.includes(s)) events.note({ txid: w.txid, status: 'mined' })
-      else if (REJECTED_WORDS.includes(s)) events.note({ txid: w.txid, status: 'rejected' })
-    }
   })
   // funding — the reserve fills per-network: regtest bootstraps a treasury
   // split; live nets run imports/discovery/vault/p2p + the funding wait and
@@ -620,6 +624,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     rtDefs,
     rtKicks,
     close: async () => {
+      mem.events.off('broadcasterStatus', onBroadcasterStatus)
       stream?.close()
       events.stop()
       stopProofHeal()

@@ -3,7 +3,9 @@ import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { MemoryTreeLedger } from '../src/tree.js'
 import { MemoryCarrierJournal } from '../src/journal.js'
-import { sendBox, readBox, ackBox, boxFundingLock, DEFAULT_OFFICE } from '../src/box.js'
+import { sendBox, readBox, ackBox, openEnvelope, boxFundingLock, DEFAULT_OFFICE } from '../src/box.js'
+import { walletOrProto } from '../src/carrier.js'
+import { HeaderUnavailableError, isHeaderUnavailable } from '@nektar/chain'
 import { mintTree } from '../src/tree.js'
 import { fund, prove } from './helpers.js'
 import { minihost, FakeTracker } from '../src/testing.js'
@@ -226,4 +228,65 @@ test('ledger kind: market and bbox slots are separate; 4a schema migrates', asyn
   assert.equal(await kl.remaining('bbox'), 4)
   assert.equal(await kl.remaining('market'), 1)
   await kx.destroy()
+})
+
+test('box: forged BUMP rejected by openEnvelope; HeaderUnavailableError propagates from openEnvelope and readBox', async () => {
+  const tr = new FakeTracker()
+  const h1 = await minihost([], { tracker: tr, office: OFFICE })
+  try {
+    const sender = PrivateKey.fromRandom()
+    const recip = PrivateKey.fromRandom()
+    const ledger = await boxLedger(sender)
+    const journal = new MemoryCarrierJournal()
+    let pushedBeef: number[] | undefined
+    await sendBox({
+      key: sender,
+      ledger,
+      journal,
+      hosts: [h1.url],
+      to: recip.toPublicKey().toString(),
+      body: { market: { t: 9 } },
+      push: (b) => {
+        pushedBeef = b
+      }
+    })
+    assert.ok(pushedBeef !== undefined)
+    const me = recip.toPublicKey().toString()
+    // strict tracker with empty validRoots -> BUMP root is forged/unknown -> refused
+    tr.strict = true
+    assert.equal(await openEnvelope(pushedBeef, walletOrProto(recip), OFFICE, me, tr), undefined, 'forged BUMP refused by openEnvelope')
+    assert.equal((await readBox({ key: recip, hosts: [h1.url], tracker: tr })).items.length, 0, 'forged BUMP refused by readBox')
+    // header outage -> HeaderUnavailableError propagates (retryable, never a negative verdict)
+    tr.isValidRootForHeight = () => Promise.reject(new HeaderUnavailableError(1, 'no-source'))
+    await assert.rejects(openEnvelope(pushedBeef, walletOrProto(recip), OFFICE, me, tr), (e: unknown) => isHeaderUnavailable(e))
+    await assert.rejects(readBox({ key: recip, hosts: [h1.url], tracker: tr }), (e: unknown) => isHeaderUnavailable(e))
+  } finally {
+    await h1.close()
+  }
+})
+
+test('box ack: returns per-receipt fanout with journal key and missed hosts for repair', async () => {
+  const tr = new FakeTracker()
+  const h1 = await minihost([], { tracker: tr, office: OFFICE })
+  try {
+    const a = PrivateKey.fromRandom()
+    const b = PrivateKey.fromRandom()
+    const ledgerA = await boxLedger(a)
+    const journalA = new MemoryCarrierJournal()
+    const ledgerB = await boxLedger(b)
+    const journalB = new MemoryCarrierJournal()
+    await sendBox({ key: a, ledger: ledgerA, journal: journalA, hosts: [h1.url], to: b.toPublicKey().toString(), body: { market: { t: 1 } } })
+    const read1 = await readBox({ key: b, hosts: [h1.url], tracker: tr })
+    const items = read1.items.map((i) => ({ txid: i.txid, commitment: i.commitment }))
+    const dead = 'http://127.0.0.1:1'
+    const ack = await ackBox({ key: b, ledger: ledgerB, journal: journalB, hosts: [h1.url, dead], items })
+    assert.equal(ack.fanout.length, 1)
+    assert.equal(ack.fanout[0].hash, `ack:${items[0].txid}`)
+    const settled = await ack.fanout[0].settled
+    assert.deepEqual(settled.took, [h1.url])
+    assert.equal(settled.missed.length, 1)
+    assert.equal(settled.missed[0].host, dead)
+  } finally {
+    await h1.close()
+  }
 })

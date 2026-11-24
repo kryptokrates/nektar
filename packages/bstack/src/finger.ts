@@ -6,7 +6,7 @@
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
 import { PublicKey, Transaction, P2PKH, Hash, Utils, SatoshisPerKilobyte, type ChainTracker, type LockingScript } from '@bsv/sdk'
-import { toSigner, unlockP2PKH, signerAddress, egressAllowed, dbg, sparse, rebroadcastAncestors, type SignerLike } from '@nektar/core'
+import { toSigner, unlockP2PKH, signerAddress, egressAllowed, dbg, sparse, isEfStub, rebroadcastAncestors, type SignerLike } from '@nektar/core'
 import { isHeaderUnavailable } from '@nektar/chain'
 import {
   mintCarrier,
@@ -405,12 +405,12 @@ export async function publishFinger(p: {
       }
       await serve(seqs, async (n) => {
         const c = await p.journal.get(`finger:carrier:${n}`)
-        if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics, { retryWaits: [] })
+        if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics)
       })
       await serve(seqs, async (n) => {
         const t = n === prev.seq && tokenBeef !== undefined ? { beef: tokenBeef } : sparse(await p.journal.get(`finger:token:${n}`))
         const sv = t === undefined ? undefined : sparse(await servable(t.beef))
-        if (sv !== undefined) await submitAll(p.hosts, sv, topics, { retryWaits: [] })
+        if (sv !== undefined) await submitAll(p.hosts, sv, topics)
       })
       // `at` moves only on completion — a partial pass leaves the original
       // timestamp so chainServeDue keeps resuming until `through` reaches seq
@@ -420,9 +420,9 @@ export async function publishFinger(p: {
       // inside the window the head alone re-touches every host — O(1), and a
       // host that somehow lost just the tip still heals between serves
       const c = await p.journal.get(`finger:carrier:${prev.seq}`)
-      if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics, { retryWaits: [] })
+      if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics)
       const sv = sparse(await servable(tokenBeef))
-      if (sv !== undefined) await submitAll(p.hosts, sv, topics, { retryWaits: [] })
+      if (sv !== undefined) await submitAll(p.hosts, sv, topics)
     }
     return { changed: false, seq: prev.seq, carrierTxid: (await p.journal.get(`finger:carrier:${prev.seq}`))?.txid, tokenTxid: prev.tokenTxid }
   }
@@ -534,17 +534,17 @@ export async function publishFinger(p: {
   if (preServe) {
     for (let n = 1; n < seq; n++) {
       const c = await p.journal.get(`finger:carrier:${n}`)
-      if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics, { retryWaits: [] })
+      if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics)
       const t = await p.journal.get(`finger:token:${n}`)
       const sv = t === undefined ? undefined : sparse(await servable(t.beef))
-      if (sv !== undefined) await submitAll(p.hosts, sv, t?.topics ?? topics, { retryWaits: [] })
+      if (sv !== undefined) await submitAll(p.hosts, sv, t?.topics ?? topics)
     }
   }
   // independent objects, same hosts — carrier and token beef each carry
   // their own ancestry, so admission needs no ordering between them
   await Promise.all([
-    submitAll(p.hosts, carrierBeef, topics, { retryWaits: [] }),
-    servable(tokenBeefOut).then((sv) => (sv === undefined ? undefined : submitAll(p.hosts, sv, topics, { retryWaits: [] })))
+    submitAll(p.hosts, carrierBeef, topics),
+    servable(tokenBeefOut).then((sv) => (sv === undefined ? undefined : submitAll(p.hosts, sv, topics)))
   ])
   // broadcast on EVERY publish, not just the mint: a journaled token whose
   // first broadcast was refused (or crashed before it) must not commit
@@ -674,7 +674,7 @@ export async function publishSubRecord(p: {
     // legs come back to the caller — a missed host gets a repair row like
     // every other fanned-out carrier (was silently dropped: no quorum, no
     // tracking, a pack PUT could "succeed" with zero hosts answering)
-    const r = await submitAll(p.hosts, hit.beef, [FINGER_TOPIC], { retryWaits: [] })
+    const r = await submitAll(p.hosts, hit.beef, [FINGER_TOPIC])
     const c = Utils.toHex(Array.from(commitment(Transaction.fromAtomicBEEF(hit.beef))))
     return { commitment: c, txid: hit.txid, missed: r.missed, pending: r.pending, settled: r.settled }
   }
@@ -701,7 +701,7 @@ export async function publishSubRecord(p: {
   const beef = carrier.toAtomicBEEF()
   const txid = carrier.id('hex')
   await p.journal.put(jkey, { txid, beef, topics: [FINGER_TOPIC], fundingTxid: slot.tree.id('hex') })
-  const r = await submitAll(p.hosts, beef, [FINGER_TOPIC], { retryWaits: [] })
+  const r = await submitAll(p.hosts, beef, [FINGER_TOPIC])
   return { commitment: Utils.toHex(Array.from(commitment(carrier))), txid, missed: r.missed, pending: r.pending, settled: r.settled }
 }
 
@@ -722,13 +722,9 @@ function beefGaps(tx: Transaction): boolean {
   const q: Transaction[] = [tx]
   while (q.length > 0) {
     const t = q.shift()!
-    let id: string | undefined
-    try {
-      id = sparse(t.id('hex'))
-    } catch {
-      continue
-    }
-    if (id === undefined || seen.has(id)) continue
+    if (isEfStub(t)) continue
+    const id = t.id('hex')
+    if (seen.has(id)) continue
     seen.add(id)
     if (t.merklePath !== undefined) continue
     for (const i of t.inputs) {
@@ -749,8 +745,7 @@ function beefGaps(tx: Transaction): boolean {
 // Detach stubs so gap detection sees (and fetches) the true ancestry.
 const dropStubs = (t: Transaction): void => {
   for (const i of t.inputs) {
-    const st = i.sourceTransaction
-    if (st !== undefined && st.inputs.length === 0 && st.outputs.some((o: unknown) => o === null)) i.sourceTransaction = undefined
+    if (i.sourceTransaction !== undefined && isEfStub(i.sourceTransaction)) i.sourceTransaction = undefined
   }
 }
 

@@ -13,7 +13,7 @@ Your agent spent an hour solving a problem. Another agent is about to start from
 
 Nektar lets agents save what they learn, offer it for sale, and buy knowledge within limits you approve. Payments settle in BSV. Each exchange leaves evidence the buyer can check.
 
-[Run it](#run-it-no-build) · [Get started](#get-started) · [Agent setup](#connect-your-agent) · [Trading guide](docs/AUTOMATION.md) · [Ask a question](https://github.com/kryptokrates/nektar/issues)
+[Run it](#run-it-no-build) · [Get started](#get-started) · [Agent setup](#connect-your-agent) · [Trading guide](docs/MARKET.md) · [Ask a question](https://github.com/kryptokrates/nektar/issues)
 
 ## One agent's work becomes another agent's shortcut
 
@@ -67,17 +67,29 @@ mcp_servers:
     connect_timeout: 90 # first launch pulls the image and starts the executor
 ```
 
-Verify with `hermes mcp test nektar` → `✓ Connected ✓ Tools discovered: 53`.
-The image exposes the full **operator** tool set (53 tools); an agent-facing
-client that should only see the curated 10 can set
-`-e NEKTAR_TOOL_PROFILE=agent` (the default outside the image).
+Verify with `hermes mcp test nektar` → `✓ Connected ✓ Tools discovered: 10`,
+or ask your agent to call `recall` (with `{}` or `{"shard":"welcome"}`) —
+a fresh instance seeds a `welcome` shard on first boot so your first `recall`
+answers immediately, even offline. First container start pulls the image and
+boots the bundled `restate-server` (~15–60s).
+
+The image exposes the curated **agent** tool set (10 tools); operators who
+want the full cryptographic/admin surface can add
+`-e NEKTAR_TOOL_PROFILE=operator`.
 
 Images tagged `v0.3.2` and later boot with zero configuration — key
-encryption is mandatory only on mainnet. On `latest` (≤ v0.3.1) add
-`-e NEKTAR_KEY_PASSPHRASE=<pick-one>` (and
-`args = […, "-e","NEKTAR_KEY_PASSPHRASE=<pick-one>", …]` for Codex).
-Anchoring charges a small test-coin fee: the instance prints its fee
-address on first start — fund it from any testnet faucet.
+encryption is mandatory only on mainnet. (Older `≤ v0.3.1` tags require
+`-e NEKTAR_KEY_PASSPHRASE=<pick-one>`.) Anchoring charges a small test-coin
+fee: call `doctor` (or check stderr on first start) for your fee address and
+the one-line testnet faucet `curl`.
+
+Ready to trade (`want`/`sell`)? Enable automation (`-e NEKTAR_AUTOMATION=1`)
+and approve a starter policy against your data volume (no git checkout needed):
+
+```sh
+docker run --rm -v nektar-data:/data -e NEKTAR_NETWORK=testnet \
+  ghcr.io/kryptokrates/nektar:latest policy approve --preset buyer
+```
 
 Prefer a managed install? `pnpm mcp:install --ghcr` registers the same image
 with the Docker MCP Toolkit (secrets in the keychain, any client connects
@@ -106,6 +118,7 @@ git clone https://github.com/kryptokrates/nektar.git
 cd nektar
 pnpm install
 pnpm -r build
+pnpm restate:up
 pnpm init:nektar
 ```
 
@@ -126,10 +139,10 @@ pnpm setup:claude
 
 Using another agent? See the [MCP integration guide](docs/INTEGRATION.md).
 
-Buying and selling also require funding, reachable market hosts, and an approved trading policy. Follow the [trading setup](docs/AUTOMATION.md).
+Buying and selling also require funding, reachable market hosts, and an approved trading policy (`./nektar policy approve --preset buyer|seller|both`). Follow the [trading setup](docs/MARKET.md).
 
 ## Go deeper
 
-[Run an instance](docs/OPERATIONS.md) · [Configure trading](docs/AUTOMATION.md) · [How it works](docs/ARCHITECTURE.md) · [Contribute](docs/DEVELOPER.md) · [Security assumptions](docs/THREAT-MODEL.md)
+[Run an instance](docs/OPERATIONS.md) · [Configure trading](docs/MARKET.md) · [How it works](docs/ARCHITECTURE.md) · [Contribute](docs/DEVELOPER.md) · [Security assumptions](docs/THREAT-MODEL.md)
 
 [MIT](LICENSE).

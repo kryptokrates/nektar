@@ -86,8 +86,7 @@ const GATES = [
     name: 'raw-key-material',
     re: /(PrivateKey\.fromWif|PrivateKey\.fromHex|new\s+PrivateKey\s*\()/g,
     scope: GATED,
-    // keystore bootstrap + composition roots. dispatch/identity.ts rotate
-    // keeps a legacy WIF arg flagged for removal; toolbox re-wraps a
+    // keystore bootstrap + composition roots. toolbox re-wraps a
     // PrivateKey for the SDK key deriver. No NEW site may introduce key
     // material into app code.
     allow: [
@@ -96,7 +95,6 @@ const GATES = [
       'packages/mcp/src/rtsupport.ts',
       'packages/mcp/src/funding.ts',
       'packages/mcp/src/pay.ts',
-      'packages/mcp/src/dispatch/identity.ts',
       'packages/automation/src/toolbox.ts',
       'packages/chain/src/port.ts',
       'packages/chain/src/testkit.ts',
@@ -203,6 +201,30 @@ const GATES = [
     // console output IS the interface, not daemon logs. (Scope already
     // excludes e2e/watcher harness tiers and test files are outside src/.)
     allow: ['packages/core/src/log.ts', 'packages/mcp/src/init.ts']
+  },
+  {
+    name: 'legacy-settle-escrow',
+    re: /\bsettleEscrow\s*[:(]/g,
+    scope: GATED,
+    // custody effects flow through TxEffects / tx.machine (txEmit) — never
+    // a side-door MarketDeps.settleEscrow bypass. sale.ts keeps its internal
+    // helper for non-wallet direct calls.
+    allow: ['packages/mcp/src/dispatch/sale.ts']
+  },
+  {
+    name: 'wire-beef-sniff',
+    re: /0100beef|0200beef|01010101/g,
+    scope: GATED,
+    // all wire tx/BEEF decoding + SPV checks go through TxStore.read.
+    allow: ['packages/chain/src/txstore.ts']
+  },
+  {
+    name: 'dead-chain-cast',
+    re: /as\s+unknown\s+as\s*\{\s*chain\??:/g,
+    scope: GATED,
+    // reach chain proofs through typed MemTx methods (lookupProof), never
+    // unsafe casts against private/legacy chain shapes.
+    allow: []
   }
 ]
 

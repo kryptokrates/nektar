@@ -1,6 +1,6 @@
 # Using nektar from AI tools
 
-nektar is an **MCP server**, built on the official SDK. It exposes 12 tools, resources (`nektar://record/{shard}/{seq}`, `nektar://checkpoint/{shard}`) and prompts (`grounded-answer`, `remember-with-source`, `audit-answer`). It also sends server instructions that tell the model to recall before answering, remember facts with their source, cite proofs, and never claim truth.
+nektar is an **MCP server**, built on the official SDK. It exposes 10 curated agent tools by default (or the full operator set with `NEKTAR_TOOL_PROFILE=operator`), resources (`nektar://record/{shard}/{seq}`, `nektar://checkpoint/{shard}`) and prompts (`grounded-answer`, `remember-with-source`, `audit-answer`). It also sends server instructions that tell the model to recall before answering, remember facts with their source, cite proofs, and never claim truth.
 
 ```mermaid
 flowchart LR
@@ -36,7 +36,8 @@ pnpm mcp:smoke                                # remember → anchor → prove TH
 
 ```sh
 pnpm stack:up                              # Teranode regtest
-node packages/mcp/dist/src/init.js --network=regtest   # wallet: key → .env, funding check
+pnpm restate:up                            # local Restate executor sidecar (once)
+pnpm init:nektar --env regtest             # write .env + verify boot
 pnpm mcp:install --regtest claude-desktop  # profile "nektar_regtest"
 NEKTAR_PROFILE=nektar_regtest pnpm mcp:smoke
 ```
@@ -113,7 +114,7 @@ OpenAI/Anthropic function-calling apps can call `/v1/tools/{name}` directly.
 
 **Remote connectors (claude.ai, ChatGPT)** need this `/mcp` endpoint on a public HTTPS host with OAuth 2.1. That is **not deployed yet** (no public host, no OAuth). The transport is ready.
 
-## 5. Real chain (regtest now, testnet later)
+## 5. Real chain (regtest, testnet, main)
 
 | env                                                                                         | meaning                                                                                            |
 | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |

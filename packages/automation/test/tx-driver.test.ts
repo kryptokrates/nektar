@@ -86,8 +86,7 @@ function wallet(
       // the observe handler runs the coordinator's OWN effect set — the
       // one-total-set rule means the object and the caller never disagree
       fx,
-      log: () => {},
-      submit: (id) => w.submit(id)
+      log: () => {}
     })
   return { w, calls }
 }
@@ -710,4 +709,91 @@ void test('watcher driver: a resubmit racing an observed prepared row is a no-op
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'observed')
   assert.equal(calls.txSpent, 1, 'the late resubmit carries no second custody mark')
   assert.equal(calls.broadcast, 0, 'the coordinator refuses to air a row the chain already saw')
+})
+
+void test('driver: submission_unknown confirming or observed runs tx-spent + lease update', async (t) => {
+  for (const [id, ev, guard, wantState, wantLease] of [
+    ['su1', 'obs.proven', 'proof', 'confirmed', 'spent'],
+    ['su2', 'obs.seen', 'verified', 'observed', 'released']
+  ] as const) {
+    const { kx, store } = await open()
+    t.after(() => kx.destroy())
+    await prepared(store, id)
+    await store.applyTxEvent(id, 'submit.unknown', { observation: { err: 'timeout' }, attempt: true })
+    assert.equal((await store.walletTx({ actionId: id }))!.state, 'submission_unknown')
+    let spent = 0
+    await emitTxEvent(store, (await store.walletTx({ actionId: id }))!, ev, { guard, observation: PROVEN }, { ...inertTxEffects, txSpent: () => void spent++ })
+    assert.equal((await store.walletTx({ actionId: id }))!.state, wantState)
+    assert.equal(spent, 1, `${id}: tx-spent must run when leaving submission_unknown`)
+    assert.equal(await leaseState(kx, id), wantLease)
+  }
+})
+
+void test('custodyTxEffects: replayTxEffects preserves from_state so dead→live revive reconciles reserve', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const id = 'rev-replay'
+  await prepared(store, id)
+  await store.setTxState(id, 'rejected', { reason: 'refused' })
+  // simulate crash between applyTxEvent commit and post-commit effect dispatch
+  const r = await store.applyTxEvent(id, 'obs.proven', { guard: 'proof', observation: PROVEN })
+  assert.equal(r.accepted, true)
+  assert.equal((await store.walletTx({ actionId: id }))!.state, 'confirmed')
+  let spent = 0
+  let reconciled = 0
+  const fx = custodyTxEffects({
+    funds: {
+      spent: () => {
+        spent++
+        return Promise.resolve()
+      },
+      died: () => Promise.resolve(),
+      revive: () => Promise.resolve()
+    },
+    afterChange: () => {
+      reconciled++
+      return Promise.resolve()
+    },
+    log: () => {}
+  })
+  const done = await replayTxEffects(store, fx)
+  assert.equal(done, 1)
+  assert.equal(spent, 1)
+  assert.equal(reconciled, 1, 'crash-replayed dead→live revive must see from_state and run afterChange')
+})
+
+void test('watcher driver: broadcaster status hint cannot revive dead/prepared/unknown rows (spv/hint-as-verified)', async (t) => {
+  for (const state of ['prepared', 'submission_unknown', 'rejected', 'abandoned', 'expired'] as const) {
+    const { kx, store } = await open()
+    t.after(() => kx.destroy())
+    const id = `hint-${state}`
+    await prepared(store, id)
+    if (state !== 'prepared') await store.setTxState(id, state, { reason: 'setup' })
+    const ex = new Dispatcher()
+    t.after(() => ex.close())
+    let spent = 0
+    let aired = 0
+    const effects: TxEffects = {
+      ...inertTxEffects,
+      txSpent: () => void spent++,
+      recordAired: () => void aired++
+    }
+    wireTx(ex, { store, fx: effects, log: () => {} })
+    const wt = new TransactionWatcher(store, () => Promise.resolve({ status: 'seen', source: 'broadcaster' }), { effects, exec: ex })
+    await wt.tick()
+    assert.equal((await store.walletTx({ actionId: id }))!.state, state, `${state}: broadcaster hint must not move state`)
+    assert.equal(spent, 0, `${state}: broadcaster hint must not fire tx-spent`)
+    assert.equal(aired, 0, `${state}: broadcaster hint must not fire record-aired`)
+  }
+  // already-submitted rows still advance to observed on a broadcaster hint (no custody intents)
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  await prepared(store, 'hint-sub')
+  await store.setTxState('hint-sub', 'submitted')
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  wireTx(ex, { store, fx: inertTxEffects, log: () => {} })
+  const wt = new TransactionWatcher(store, () => Promise.resolve({ status: 'seen', source: 'broadcaster' }), { effects: inertTxEffects, exec: ex })
+  await wt.tick()
+  assert.equal((await store.walletTx({ actionId: 'hint-sub' }))!.state, 'observed')
 })

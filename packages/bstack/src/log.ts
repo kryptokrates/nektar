@@ -111,6 +111,9 @@ export class KnexLogState implements LogState {
 const anchorKey = (s: string): string => `${s}#anchor` // seq=interval, prev=txid(hash order), extra={first,count}
 const coverKey = (s: string): string => `${s}#cover` // seq=last anchored batch seq
 const flightKey = (s: string): string => `${s}#flight` // seq=interval, prev=txid display, extra={first,count}
+const healKey = (s: string): string => `${s}#heal` // extra={at,hosts,through,target}
+const LOG_HEAL_MS = 15 * 60_000
+const LOG_HEAL_BATCH = 24
 
 // ── append ────────────────────────────────────────────────────────────────
 
@@ -129,7 +132,14 @@ export async function appendLog(p: {
   lines: string[]
   now?: () => number
   quorum?: Quorum
-}): Promise<{ seq: number; txid: string; commitment: string; took: string[]; missed: Array<{ host: string; error: string }> }> {
+}): Promise<{
+  seq: number
+  txid: string
+  commitment: string
+  took: string[]
+  missed: Array<{ host: string; error: string }>
+  healMissed: Array<{ key: string; host: string; error: string }>
+}> {
   checkStream(p.stream)
   if (p.lines.length === 0) throw new Error('appendLog: empty batch')
   const head = (await p.state.get(p.stream)) ?? { seq: 0, prev: ZERO32 }
@@ -174,30 +184,48 @@ export async function appendLog(p: {
     commitment = toHex(new Uint8Array(carrier.hash() as number[]))
     await p.journal.put(jkey, { txid, beef, topics, fundingTxid: slot.tree.id('hex') })
   }
-  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [] })
+  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum })
   if (!r.ok) throw new Error(`log submit failed: ${JSON.stringify(r.missed).slice(0, 200)}`)
   await p.state.set(p.stream, { seq, prev: commitment })
-  // chain heal, same contract as publishFinger: a host that lost mid-chain
-  // batches can never re-sync from head-only publishes — re-serve every
-  // journaled batch on each append; hosts dedupe what they already hold and
-  // the misses ride back through the same repair-row contract
-  const healMissed = new Set<string>()
-  const heals: Promise<void>[] = []
-  for (let s = 1; s < seq; s++) {
-    const held = await p.journal.get(`log:${p.stream}:${s}`)
-    if (held === undefined || !Array.isArray(held.beef) || held.beef.length === 0) continue
-    heals.push(
-      submitAll(p.hosts, held.beef, held.topics, { retryWaits: [] })
-        .then((rr) => {
-          for (const m of rr.missed) healMissed.add(m.host)
-        })
-        .catch(() => undefined)
-    )
+  // amortized chain heal (same contract as publishFinger): re-serve historical
+  // batches in bounded windows when hosts change or LOG_HEAL_MS elapses —
+  // never an unbounded O(seq) storm on every append. Misses carry their own
+  // historical journal key (`log:<stream>:<s>`) so callers repair the actual
+  // missing batch rather than re-queuing the new head.
+  const healMissed: Array<{ key: string; host: string; error: string }> = []
+  if (seq > 1) {
+    const nowMs = (p.now ?? Date.now)()
+    const hostSig = [...p.hosts].sort().join(',')
+    const hs = await p.state.get(healKey(p.stream))
+    const ex = hs?.extra as { at?: number; hosts?: string; through?: number; target?: number } | undefined
+    const hostChanged = ex === undefined || ex.hosts !== hostSig
+    const resuming = !hostChanged && (ex.through ?? 0) < (ex.target ?? 0)
+    const periodic = !hostChanged && !resuming && nowMs - (ex.at ?? 0) >= LOG_HEAL_MS
+    if (hostChanged || resuming || periodic) {
+      const done = resuming ? (ex.through ?? 0) : 0
+      const target = resuming ? Math.min(ex.target ?? seq - 1, seq - 1) : seq - 1
+      const upto = Math.min(done + LOG_HEAL_BATCH, target)
+      const seqs = Array.from({ length: Math.max(0, upto - done) }, (_, i) => done + i + 1)
+      for (let i = 0; i < seqs.length; i += 8) {
+        await Promise.all(
+          seqs.slice(i, i + 8).map(async (s) => {
+            const key = `log:${p.stream}:${s}`
+            const held = await p.journal.get(key)
+            if (held === undefined || !Array.isArray(held.beef) || held.beef.length === 0) return
+            const rr = await submitAll(p.hosts, held.beef, held.topics).catch(() => undefined)
+            if (rr !== undefined) for (const m of rr.missed) healMissed.push({ key, host: m.host, error: m.error })
+          })
+        )
+      }
+      const complete = upto >= target
+      await p.state.set(healKey(p.stream), {
+        seq: upto,
+        prev: '',
+        extra: { at: complete ? nowMs : (ex?.at ?? nowMs), hosts: hostSig, through: upto, target }
+      })
+    }
   }
-  await Promise.all(heals)
-  const missed = [...r.missed]
-  for (const h of healMissed) if (!missed.some((m) => m.host === h)) missed.push({ host: h, error: 'heal' })
-  return { seq, txid, commitment, took: r.took, missed }
+  return { seq, txid, commitment, took: r.took, missed: r.missed, healMissed }
 }
 
 // ── read ──────────────────────────────────────────────────────────────────
@@ -446,7 +474,7 @@ export async function publishMinedLog(p: {
   }
   // the caller owns the legs: a host that missed this publish gets a repair
   // row keyed `logpub:{stream}:{txid}` like every other fanned-out carrier
-  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum ?? 'one', retryWaits: [] })
+  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum ?? 'one' })
   return { ...r, txid }
 }
 

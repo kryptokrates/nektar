@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { nektarEnv } from '@nektar/core'
 import { RestateExecutor } from '../src/rt/exec.js'
 import { legObject } from '../src/rt/services.js'
-import { healPausedInvocations, openEndpoint, type RtEndpoint } from '../src/rt/endpoint.js'
+import { healPausedInvocations, openEndpoint, registerDeployment, rekickKilledTarget, type RtEndpoint } from '../src/rt/endpoint.js'
 
 // rt-live — the durability drills the Dispatcher can't model, on a REAL
 // restate server: journal replay across endpoint loss, ingress idempotency,
@@ -247,6 +247,7 @@ void test('heal: restart-gap invocation (journaled, no failure) resumes once, th
   const deleted: string[] = []
   const rows = [
     { id: 'inv_gap', target: 'nektar-custody/owner:k1/submit', journal_size: 2, last_failure: '' },
+    { id: 'inv_cron', target: 'nektar-watchdog/main/tick', journal_size: 2, last_failure: '' },
     { id: 'inv_domain', target: 'nektar-custody/owner:k2/submit', journal_size: 5, last_failure: 'ledger conflict: already committed' },
     { id: 'inv_fresh', target: 'nektar-tx/tx:t1/resubmit', journal_size: 1, last_failure: '' }
   ]
@@ -285,17 +286,51 @@ void test('heal: restart-gap invocation (journaled, no failure) resumes once, th
   const addr = srv.address()
   const admin = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
   try {
-    // pass 1 — the gap leg gets its resume chance and a mark; the domain
+    const kicked: Array<{ service: string; handler: string; key?: string }> = []
+    const fakeExec = {
+      send: (t: { service: string; handler: string; key?: string }) => {
+        kicked.push(t)
+        return Promise.resolve()
+      },
+      call: () => Promise.resolve(undefined as never)
+    }
+    const onKilled = (target: string) => rekickKilledTarget(fakeExec, target, () => {})
+    // pass 1 — the gap legs get their resume chance and a mark; the domain
     // failure keeps the breaker; the fresh leg resumes
-    await healPausedInvocations(admin, 'http://127.0.0.1:9081/', () => {})
-    assert.deepEqual(resumed.sort(), ['inv_fresh', 'inv_gap'].sort())
+    await healPausedInvocations(admin, 'http://127.0.0.1:9081/', () => {}, 3_000, 32, undefined, onKilled)
+    assert.deepEqual(resumed.sort(), ['inv_cron', 'inv_fresh', 'inv_gap'].sort())
     assert.equal(deleted.length, 0)
-    // pass 2 — still paused → the marked gap leg is killed so the durable
-    // intent re-drives it; the domain failure still never resumes
-    await healPausedInvocations(admin, 'http://127.0.0.1:9081/', () => {})
-    assert.deepEqual(deleted, ['inv_gap'])
+    assert.equal(kicked.length, 0)
+    // pass 2 — still paused → marked gap legs are killed; the killed cadence
+    // object gets re-kicked so its self-arm chain does not die, while custody
+    // relies on durable rows (no blind re-kick)
+    await healPausedInvocations(admin, 'http://127.0.0.1:9081/', () => {}, 3_000, 32, undefined, onKilled)
+    assert.deepEqual(deleted.sort(), ['inv_cron', 'inv_gap'].sort())
+    assert.deepEqual(kicked, [{ service: 'nektar-watchdog', handler: 'tick', key: 'main' }])
     assert.ok(!resumed.includes('inv_domain'), 'a journaled domain failure keeps the breaker')
     assert.ok(!deleted.includes('inv_domain'), 'a domain failure is never killed')
+  } finally {
+    srv.close()
+  }
+})
+
+void test('endpoint: registerDeployment fails fast on deterministic 4xx (non-409)', async () => {
+  let hits = 0
+  const srv = createServer((req, res) => {
+    req.resume()
+    req.on('end', () => {
+      hits++
+      res.statusCode = 400
+      res.end('invalid uri')
+    })
+  })
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve))
+  const addr = srv.address()
+  const admin = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const ok = await registerDeployment(admin, 'http://127.0.0.1:9081/', () => {}, true)
+    assert.equal(ok, false)
+    assert.equal(hits, 1, '400 is deterministic — must not retry 20x')
   } finally {
     srv.close()
   }

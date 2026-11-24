@@ -22,7 +22,7 @@
 import { createRequire } from 'node:module'
 import { Beef, MerklePath, PrivateKey, Transaction } from '@bsv/sdk'
 import { Services, Setup, StorageKnex, Wallet, WalletStorageManager, randomBytesHex, sdk } from '@bsv/wallet-toolbox'
-import { type Funder, type FundingOut } from '@nektar/chain'
+import { FundsStarvedError, type Funder, type FundingOut } from '@nektar/chain'
 import { join } from 'node:path'
 
 // the toolbox's own SDK instance — cjs build. Every object handed INTO the
@@ -184,7 +184,7 @@ export class ToolboxFunder implements Funder {
       }
       if (r.outputs.length < 1000) break
     }
-    throw new Error(`toolbox funder: no spendable output >= ${satoshis} sats — top up via fundToolbox()`)
+    throw new FundsStarvedError(`toolbox funder: no spendable output >= ${satoshis} sats — top up via fundToolbox()`)
   }
 }
 

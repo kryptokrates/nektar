@@ -121,6 +121,10 @@ export interface TreeLedger {
    *  can age a row across restarts — in-memory first-seen resets on every
    *  boot and lets a churned process keep a phantom mint gating forever */
   unproven(): Promise<Array<{ txid: string; kind: string; addedAt?: number }>>
+  /** return a taken slot whose carrier build died before reaching the wire
+   *  (slot.table.json: taken --mint-died--> free). No-op if the parent tree
+   *  was already dropped. */
+  release?(txid: string, vout: number, kind?: string): Promise<void>
   /** remove a tree + all its slots — a mint that never landed on-chain
    *  (rejected / evicted) would otherwise sit in unproven() forever and gate
    *  out every future mint of that kind */
@@ -383,6 +387,10 @@ export class MemoryTreeLedger implements TreeLedger {
   unproven(): Promise<Array<{ txid: string; kind: string; addedAt: number }>> {
     return Promise.resolve([...this.trees].filter(([, t]) => !t.proven).map(([id, t]) => ({ txid: id, kind: t.kind, addedAt: t.addedAt })))
   }
+  release(txid: string, vout: number, kind = 'market'): Promise<void> {
+    if (this.trees.has(txid)) this.free.set(`${txid}:${vout}`, kind)
+    return Promise.resolve()
+  }
   drop(txid: string): Promise<void> {
     this.trees.delete(txid)
     for (const k of this.free.keys()) if (k.startsWith(`${txid}:`)) this.free.delete(k)
@@ -634,10 +642,23 @@ export class KnexTreeLedger implements TreeLedger {
       addedAt: r.added_at === null || r.added_at === undefined ? undefined : Number(r.added_at)
     }))
   }
+  async release(txid: string, vout: number, kind = 'market'): Promise<void> {
+    await this.ensure()
+    await this.kx.transaction(async (trx) => {
+      const parent = await trx('bstack_trees').where({ txid }).first('txid')
+      if (!parent) return
+      await trx('bstack_tree_outputs')
+        .insert({ key: `${txid}:${vout}`, txid, vout, kind })
+        .onConflict('key')
+        .ignore()
+    })
+  }
   async drop(txid: string): Promise<void> {
     await this.ensure()
-    await this.kx('bstack_trees').where({ txid }).del()
-    await this.kx('bstack_tree_outputs').where({ txid }).del()
+    await this.kx.transaction(async (trx) => {
+      await trx('bstack_trees').where({ txid }).del()
+      await trx('bstack_tree_outputs').where({ txid }).del()
+    })
   }
   async remaining(kind = 'market'): Promise<number> {
     await this.ensure()

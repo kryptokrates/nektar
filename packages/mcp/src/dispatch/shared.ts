@@ -90,6 +90,9 @@ export async function singlePolicy(au: NonNullable<NektarMemory['automation']>, 
     const p = await au.store.activePolicy(r.policyHash)
     if (p && p.roles.includes(role) && p.agentPub === au.engine.agentPub && p.network === au.engine.network) found.push(r.policyHash)
   }
-  if (found.length !== 1) throw new Error(`${tool}: operator must approve exactly one ${role} policy (pnpm automation policy approve …)`)
+  if (found.length !== 1)
+    throw new Error(
+      `${tool}: operator must approve exactly one ${role} policy (nektar policy approve --preset ${role} or pnpm automation policy approve <file>)`
+    )
   return found[0]
 }

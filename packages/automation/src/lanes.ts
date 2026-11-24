@@ -2,9 +2,9 @@
 // inbox msgs surface (sendBox/readBox/ackBox), host-health notes, the
 // republish queue, and the want/offer/inbox poll passes.
 import { createHash } from 'node:crypto'
-import { BoundedMap, BoundedSet, ioSignal } from '@nektar/core'
+import { BoundedMap, BoundedSet, detached, ioSignal } from '@nektar/core'
 import { WAITS } from './waits.js'
-import { EXEC_SVC, executor } from './rt/exec.js'
+import { EXEC_SVC, executor, PermanentError, RetryAfterError } from './rt/exec.js'
 import { requeueAckItems, trackFanout } from './fanout.js'
 import { isHeaderUnavailable } from '@nektar/chain'
 import type { MarketMessage } from './market.js'
@@ -86,18 +86,42 @@ export function openLanes(rt: Rt): void {
   // bound — a leg's awaited IO dies at the operation deadline instead of
   // the fetch outliving the leg that asked for it
   const io = (ms: number): AbortSignal => ioSignal(ms, rt.signal)
+  const RETRY_AFTER_MIN_MS = 1_000
+  const retryAfterMs = (r: Response): number | undefined => {
+    const h = r.headers.get('retry-after')?.trim()
+    if (h === undefined || h === '') return undefined
+    if (/^\d+$/.test(h)) return Math.max(RETRY_AFTER_MIN_MS, Number(h) * RETRY_AFTER_MIN_MS)
+    const at = Date.parse(h)
+    return Number.isFinite(at) ? Math.max(RETRY_AFTER_MIN_MS, at - Date.now()) : undefined
+  }
+  const throwHttp = (label: string, r: Response): never => {
+    const msg = `${label}: ${r.status}`
+    if (r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429) throw new PermanentError(msg, r.status)
+    if (r.status === 429 || r.status === 503) {
+      const ms = retryAfterMs(r)
+      if (ms !== undefined) throw new RetryAfterError(msg, ms)
+    }
+    throw new Error(msg)
+  }
   // the notify/push fetch legs — raw HTTP throws on failure. They run as
   // journaled nektar-notify invocations where the throw retries the
   // delivery instead of dropping it
   const peerLeg = async (watch: string, service: string, query?: unknown): Promise<void> => {
-    const r = await fetch(`${watch.replace(/\/+$/, '')}/notify`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(query === undefined ? { service } : { service, query }),
-      signal: io(WAITS.pushIo.ms),
-      redirect: 'error' // a redirect into an unscreened host is still an egress bypass
-    })
-    if (!r.ok) throw new Error(`notify → ${watch}: ${r.status}`)
+    let r: Response
+    try {
+      r = await fetch(`${watch.replace(/\/+$/, '')}/notify`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(query === undefined ? { service } : { service, query }),
+        signal: io(WAITS.pushIo.ms),
+        redirect: 'error' // a redirect into an unscreened host is still an egress bypass
+      })
+    } catch (e) {
+      const m = `${(e as Error).message} ${(e as { cause?: { message?: string } }).cause?.message ?? ''}`
+      if (/redirect/i.test(m)) throw new PermanentError(`notify → ${watch}: redirect refused`, 400)
+      throw e
+    }
+    if (!r.ok) throwHttp(`notify → ${watch}`, r)
   }
   const carrierLeg = async (push: string, beefHex: string): Promise<void> => {
     const r = await fetch(push, {
@@ -106,7 +130,7 @@ export function openLanes(rt: Rt): void {
       body: JSON.stringify({ beef: beefHex }),
       signal: io(WAITS.pushIo.ms)
     })
-    if (!r.ok) throw new Error(`push → ${push}: ${r.status}`)
+    if (!r.ok) throwHttp(`push → ${push}`, r)
   }
   rt.notifyLegs = { peer: peerLeg, carrier: carrierLeg }
   const notifyPeer = (rec: { watch?: string } | undefined, service: string, query?: unknown): void => {
@@ -151,7 +175,10 @@ export function openLanes(rt: Rt): void {
     const office = cfg.boxOffice ?? lanes.mod.officeFor()
     // sealed box envelope — the same admit/decrypt/verify as readBox's
     // openEnvelope (wrong-recipient pushes drop at the `to` check inside)
-    const env = await lanes.mod.openEnvelope(beef, w, office, rt.me, tracker).catch(() => undefined)
+    const env = await lanes.mod.openEnvelope(beef, w, office, rt.me, tracker).catch((e) => {
+      if (isHeaderUnavailable(e)) throw e
+      return undefined
+    })
     if (env !== undefined) {
       const msg = (env.body as { market?: MarketMessage }).market
       if (msg !== undefined && typeof msg === 'object') {
@@ -244,6 +271,7 @@ export function openLanes(rt: Rt): void {
     msg: MarketMessage | undefined
     refs?: import('@nektar/bstack').BoxRef[]
     created: number
+    delivered: boolean
   }> = []
   // envelopes pushed for ack whose sender's finger record hadn't resolved —
   // they leave pendingAcks once our own hosts drop their copy, but the copies
@@ -302,7 +330,8 @@ export function openLanes(rt: Rt): void {
                   from: i.from,
                   msg: (i.body as { market?: MarketMessage }).market,
                   refs: i.refs,
-                  created: i.created
+                  created: i.created,
+                  delivered: false
                 }))
               // quorum-1 read first: envelopes are content-addressed, so the
               // fastest host's answer delivers the items — a single slow or
@@ -316,21 +345,32 @@ export function openLanes(rt: Rt): void {
               // read landed between collects. Union by txid:commitment keeps
               // late-merged items deliverable on the next collect and lets
               // ack() only release what was actually handed out.
-              const mergeAcks = (items: ReturnType<typeof listAcks>): void => {
+              const mergeAcks = (items: ReturnType<typeof listAcks>): number => {
                 const seen = new Set(pendingAcks.map((p) => `${p.txid}:${p.commitment}`))
-                for (const i of items) if (!seen.has(`${i.txid}:${i.commitment}`)) pendingAcks.push(i)
+                let added = 0
+                for (const i of items)
+                  if (!seen.has(`${i.txid}:${i.commitment}`)) {
+                    pendingAcks.push(i)
+                    added++
+                  }
+                return added
               }
               const r =
                 marketHosts.length > 1
                   ? await (async () => {
                       const fast = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, quorum: 1, cache: boxCache })
-                      void lanes.mod
-                        .readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, cache: boxCache })
-                        .then((full) => {
-                          laneNotes(full, full.answered)
-                          mergeAcks(listAcks(full.items))
-                        })
-                        .catch(() => undefined)
+                      void detached(() =>
+                        lanes.mod
+                          .readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, cache: boxCache })
+                          .then((full) => {
+                            laneNotes(full, full.answered)
+                            if (mergeAcks(listAcks(full.items)) > 0) {
+                              rt.countWake('box:staged')
+                              void detached(() => rt.deals().catch(() => undefined))
+                            }
+                          })
+                          .catch(() => undefined)
+                      )
                       return fast
                     })()
                   : await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, cache: boxCache })
@@ -340,7 +380,10 @@ export function openLanes(rt: Rt): void {
               const selfNote = (p: { from: string; msg?: MarketMessage }) => p.from === rt.me && (p.msg?.type === 'note' || p.msg?.type === 'sellerNote')
               pendingAcks.sort((a, b) => Number(selfNote(b)) - Number(selfNote(a)))
               const out: Array<{ from: string; msg: MarketMessage; refs?: import('@nektar/bstack').BoxRef[] }> = []
-              for (const p of pendingAcks) if (p.msg !== undefined && typeof p.msg === 'object') out.push({ from: p.from, msg: p.msg, refs: p.refs })
+              for (const p of pendingAcks) {
+                p.delivered = true
+                if (p.msg !== undefined && typeof p.msg === 'object') out.push({ from: p.from, msg: p.msg, refs: p.refs })
+              }
               return out
             } catch (e) {
               log(`automation: box: ${(e as Error).message}`)
@@ -351,6 +394,12 @@ export function openLanes(rt: Rt): void {
             const items: Array<{ txid: string; commitment: string; from: string }> = []
             const held: typeof pendingAcks = []
             for (const p of pendingAcks) {
+              // an item merged by a background full read AFTER collect() has not
+              // been handed to ingestMessage yet — keep it until the next collect
+              if (!p.delivered) {
+                held.push(p)
+                continue
+              }
               // a recovery note from our own key stays listed until its deal is over
               if (
                 p.from === rt.me &&
@@ -440,6 +489,7 @@ export function openLanes(rt: Rt): void {
                 office: cfg.boxOffice,
                 items
               })
+              for (const f of r.fanout) await trackFanout(f, rt.fanoutIo)
               if (r.skipped > 0 && r.skipped !== lastAckSkipped) {
                 lastAckSkipped = r.skipped
                 log(`automation: box ack: ${r.skipped} envelope(s) skipped — no bbox funding slot`)
@@ -504,23 +554,25 @@ export function openLanes(rt: Rt): void {
         if (marketHosts.length > 1) {
           const fast = await s.call({ timeoutMs, quorum: 1 })
           const seenFast = new Set(fast.items.map((i) => i.txid))
-          void s
-            .call({ timeoutMs })
-            .then((full) => {
-              laneNotes(full, Object.keys(full.perHost))
-              // stage only what the fast quorum didn't already deliver —
-              // re-delivering the full set makes every staged item a wasted
-              // ingest pass for an item already in the store
-              const rest = full.items.filter((i) => !seenFast.has(i.txid)).map((i) => ({ seq: i.txid, kind: s.kind, payload: i.payload.body }))
-              if (rest.length > 0) {
-                pendingLane.set(s.tag, [...(pendingLane.get(s.tag) ?? []), ...rest])
-                // staged items deserve the next pass NOW, not whenever the
-                // idle ceiling happens to fire — the same wake push uses
-                rt.countWake('lane:staged')
-                void rt.deals().catch(() => undefined)
-              }
-            })
-            .catch(() => undefined)
+          void detached(() =>
+            s
+              .call({ timeoutMs })
+              .then((full) => {
+                laneNotes(full, Object.keys(full.perHost))
+                // stage only what the fast quorum didn't already deliver —
+                // re-delivering the full set makes every staged item a wasted
+                // ingest pass for an item already in the store
+                const rest = full.items.filter((i) => !seenFast.has(i.txid)).map((i) => ({ seq: i.txid, kind: s.kind, payload: i.payload.body }))
+                if (rest.length > 0) {
+                  pendingLane.set(s.tag, [...(pendingLane.get(s.tag) ?? []), ...rest])
+                  // staged items deserve the next pass NOW, not whenever the
+                  // idle ceiling happens to fire — the same wake push uses
+                  rt.countWake('lane:staged')
+                  void detached(() => rt.deals().catch(() => undefined))
+                }
+              })
+              .catch(() => undefined)
+          )
           if ((fast.items as unknown[]).length > 0 || staged.length > 0)
             log(`lanes: ${s.tag} items=${(fast.items as unknown[]).length} staged=${staged.length}`)
           const events = toEvents(fast.items)

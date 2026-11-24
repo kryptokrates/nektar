@@ -561,3 +561,16 @@ test('fetchRawTx: EF-form rawTx parses; both sources down is undefined; wrong tx
     assert.equal(await mod.fetchRawTx!(cfg, txid), undefined, 'bytes that hash to another txid are refused')
   })
 })
+
+test('BsvBroadcaster: transport throw retries through withRetry and succeeds on recovery', async () => {
+  let attempts = 0
+  const fetchImpl: typeof fetch = () => {
+    attempts++
+    if (attempts === 1) return Promise.reject(new Error('socket hang up'))
+    return Promise.resolve(new Response(JSON.stringify({ txStatus: 'SEEN_ON_NETWORK' }), { status: 200, headers: { 'content-type': 'application/json' } }))
+  }
+  const b = new BsvBroadcaster({ broadcasterUrl: 'http://bcast.example', fetchImpl })
+  const res = await b.broadcast(tx())
+  assert.equal(res.status, 'success')
+  assert.equal(attempts, 2, 'single jittered retry path handles transport throws')
+})

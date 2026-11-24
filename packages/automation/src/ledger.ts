@@ -1,5 +1,5 @@
 import { Transaction } from '@bsv/sdk'
-import { sparse } from '@nektar/core'
+import { fullSourceTx, inputPrevout, sparse } from '@nektar/core'
 import type { BroadcastResult, Funds } from '@nektar/chain'
 import type { AutomationStore, WalletTx } from './store.js'
 import { replayTxEffects, type TxEffects } from './machines/effects.js'
@@ -135,25 +135,13 @@ export function wrapBroadcast(
         const outs: Array<{ txid: string; vout: number; satoshis: number }> = []
         let vin = 0
         for (const inp of tx.inputs) {
-          let srcTxid = inp.sourceTXID
-          if (srcTxid === undefined && inp.sourceTransaction !== undefined) {
-            try {
-              srcTxid = inp.sourceTransaction.id('hex')
-            } catch {
-              /* sparse EF stand-in — only the spent output is carried */
-            }
-          }
-          const vout = sparse(inp.sourceOutputIndex) ?? 0
-          if (!srcTxid) continue
-          // EF wires carry sparse parents — the spent output entry can be null
-          const spent = sparse(inp.sourceTransaction?.outputs)?.[vout]
-          outs.push({ txid: srcTxid, vout, satoshis: spent?.satoshis ?? 0 })
+          const prev = inputPrevout(inp)
+          if (prev === undefined) continue
+          const spent = sparse(inp.sourceTransaction?.outputs)?.[prev.vout]
+          outs.push({ txid: prev.txid, vout: prev.vout, satoshis: spent?.satoshis ?? 0 })
           if (spent != undefined) {
-            try {
-              parents[srcTxid] = inp.sourceTransaction!.toHex()
-            } catch {
-              /* spent output known, full parent bytes are not — hex stays out */
-            }
+            const full = fullSourceTx(inp)
+            if (full !== undefined) parents[prev.txid] = full.toHex()
             vin += spent.satoshis ?? 0
           }
         }
@@ -215,24 +203,25 @@ export function wrapBroadcast(
 export async function* scanTxObservations(
   store: AutomationStore,
   observeFn: (txid: string) => Promise<TxObservationInput | undefined>,
-  exportedTtlMs: number | undefined
+  exportedTtlMs: number | undefined,
+  now: () => number = Date.now
 ): AsyncGenerator<{ w: WalletTx; observe: { event: string; guard?: string; observation: unknown } }> {
   const ttl = exportedTtlMs ?? WAITS.exportedTtl.ms
   const live = await store.walletTxs(['prepared', 'submitted', 'submission_unknown', 'observed', 'exported'])
-  const dead = (await store.walletTxs(['rejected', 'expired', 'abandoned'])).filter((w) => Date.now() - w.stateAt < ttl)
+  const dead = (await store.walletTxs(['rejected', 'expired', 'abandoned'])).filter((w) => now() - w.stateAt < ttl)
   for (const w of [...live, ...dead]) {
     try {
       if (w.state === 'submitted' || w.state === 'observed') await store.releaseLeases(w.actionId)
       const o = await observeFn(w.txid)
       if (o !== undefined) {
         const { event, guard } = obsEvent(o)
-        yield { w, observe: { event, guard, observation: { at: Date.now(), ...o } } }
+        yield { w, observe: { event, guard, observation: { at: now(), ...o } } }
         continue
       }
-      if (w.state === 'exported' && exportedTtlMs !== undefined && Date.now() - w.at >= exportedTtlMs) {
+      if (w.state === 'exported' && exportedTtlMs !== undefined && now() - w.at >= exportedTtlMs) {
         yield {
           w,
-          observe: { event: 'export.ttl', observation: { at: Date.now(), reason: `exported tx unaired for ${Math.round((Date.now() - w.at) / 60000)}min` } }
+          observe: { event: 'export.ttl', observation: { at: now(), reason: `exported tx unaired for ${Math.round((now() - w.at) / 60000)}min` } }
         }
       }
     } catch {
@@ -279,6 +268,7 @@ export class TransactionWatcher {
       /** the caller's executor — the driver's emits ride it (an injected
        *  cfg.exec Dispatcher included); absent = the ambient restate ingress */
       exec?: Executor
+      now?: () => number
     }
   ) {}
 
@@ -292,7 +282,7 @@ export class TransactionWatcher {
     // crash window between commit and effect dispatch self-heals here
     await replayTxEffects(this.store, fx).catch(() => 0)
     let changed = 0
-    for await (const { w, observe } of scanTxObservations(this.store, this.observeFn, this.opts.exportedTtlMs)) {
+    for await (const { w, observe } of scanTxObservations(this.store, this.observeFn, this.opts.exportedTtlMs, this.opts.now)) {
       const r = await txEmit(this.opts.exec ?? executor(), this.store, w, observe.event, { guard: observe.guard, observation: observe.observation }, fx)
       if (r.next !== w.state) changed++
     }

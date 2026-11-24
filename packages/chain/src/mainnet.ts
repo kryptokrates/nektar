@@ -2,7 +2,7 @@
 // discovery, merkle paths) + the BSV Broadcaster client. NO spend happens
 // here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
 // in the runtime before any tx reaches it.
-import { currentSignal, deadline, nap, nektarEnv, sparse, spread, HEX64 } from '@nektar/core'
+import { currentSignal, deadline, ioSignal, nektarEnv, sparse, spread, HEX64 } from '@nektar/core'
 import { withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
@@ -144,14 +144,13 @@ export class BsvBroadcaster implements Broadcaster {
         // transport timeout both earn one retry rather than a starvation
         // verdict for the caller
         const post = () => req(this.cfg, `${base}/tx`, { method: 'POST', headers, body: payload }, 60_000)
-        // 503 = backpressure, nothing queued — retry the same instance shortly
+        // 503 = backpressure, nothing queued; transport errors are idempotent
+        // (same bytes, same txid) — retry both through one jittered policy
         const r = await withRetry(post, {
           attempts: 4,
           delay: (i) => 500 * 2 ** i,
-          retryIf: (x) => x.status === 503
-        }).catch(async (_e) => {
-          await nap(1_000)
-          return await post()
+          retryIf: (x) => x.status === 503,
+          retryErr: () => true
         })
         if (r.status >= 500) throw new Error(`broadcaster HTTP ${r.status}`)
         const body = await r.json().catch(() => ({}))
@@ -447,7 +446,7 @@ export async function fetchRawTx(cfg: MainnetConfig | undefined, txid: string): 
   }
   for (const base of c.broadcasterUrls) {
     try {
-      const r = await f(`${base}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) })
+      const r = await f(`${base}/tx/${txid}`, { signal: ioSignal(10_000) })
       if (r.ok) {
         const j = (await r.json()) as { rawTx?: string } | null
         const tx = parse(j?.rawTx)

@@ -71,21 +71,19 @@ export abstract class IngressOps extends MarketBase {
       await custodyResubmitPoke(this.d.executor ?? executor(), this.wallet, Math.floor(this.now() / WAITS.resubmitCadence.ms)).catch(() => undefined)
   }
 
-  tick(): Promise<void> {
-    return this.run(async () => {
-      // the whole pass is one invocation on dealfan — the scans journal
-      // (replay re-sends the SAME snapshot), every leg lands on its own
-      // serialized key, and the tick self-arms the floor's next cadence.
-      // call() keeps "tick() = one complete pass" semantics.
-      const ex = this.d.executor ?? executor()
-      await ex.call({ service: EXEC_SVC.dealfan, handler: 'tick', key: 'main' }, {}).catch((e: unknown) => {
-        this.d.log?.(`market: dealfan tick: ${(e as Error).message}`)
-      })
-      // with the runtime's pump wired, the end-of-tick pass is a poke
-      // (the drain runs off the engine mutex)
-      if (this.d.store.outboxReady !== undefined) this.d.store.outboxReady()
-      else await this.pumpOutbox()
-    }, 'tick')
+  async tick(): Promise<void> {
+    // the whole pass is one invocation on dealfan — the scans journal
+    // (replay re-sends the SAME snapshot), every leg lands on its own
+    // serialized key, and the tick self-arms the floor's next cadence.
+    // call() keeps "tick() = one complete pass" semantics.
+    const ex = this.d.executor ?? executor()
+    await ex.call({ service: EXEC_SVC.dealfan, handler: 'tick', key: 'main' }, {}).catch((e: unknown) => {
+      this.d.log?.(`market: dealfan tick: ${(e as Error).message}`)
+    })
+    // with the runtime's pump wired, the end-of-tick pass is a poke
+    // (the drain runs off the engine mutex)
+    if (this.d.store.outboxReady !== undefined) this.d.store.outboxReady()
+    else await this.pumpOutbox()
   }
 
   /** one op's advance leg — the try/stamp wrapper shared by the local tick

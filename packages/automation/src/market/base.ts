@@ -5,8 +5,7 @@ import { TxStore, isHeaderUnavailable, type Ingested } from '@nektar/chain'
 import { sparse, stable01 } from '@nektar/core'
 import type { AutomationStore, Operation } from '../store.js'
 import { WalletCoordinator } from '../wallet.js'
-import { txFromRow } from '../ledger.js'
-import type { TxEffects } from '../machines/effects.js'
+import { inertTxEffects, type TxEffects } from '../machines/effects.js'
 import type { AutomationPolicy } from '../policy.js'
 import { DEFAULTS, STATE_LIMITS } from './types.js'
 import { WAITS } from '../waits.js'
@@ -59,21 +58,9 @@ export abstract class MarketBase {
     // stuck deadline at commit so the wheel wakes at its instant (the
     // advance() scan stays the missed-arm floor)
     d.store.residenceBound = (s) => STATE_LIMITS[s]?.maxAgeMs
-    // one effect set for the whole engine — the host's custodyTxEffects when
-    // it passes one, else the legacy triple mapped through txFromRow so
-    // engine-only embeddings and tests keep working
-    this.txFx = d.txEffects ?? {
-      txSpent: async (w) => {
-        await d.settleEscrow?.(txFromRow(w))
-      },
-      txDied: async (w) => {
-        await d.txDied?.(txFromRow(w))
-      },
-      recordAired: async (w) => {
-        await d.recordAired?.(txFromRow(w))
-      },
-      exportExpired: async () => {}
-    }
+    // one effect set for the whole engine — the host's custodyTxEffects
+    // (inertTxEffects only for engine-only tests without a coin book)
+    this.txFx = d.txEffects ?? inertTxEffects
     if (d.broadcast)
       this.wallet = new WalletCoordinator(d.store, {
         broadcast: d.broadcast,
@@ -377,8 +364,9 @@ export abstract class MarketBase {
       })
     } catch (e) {
       const msg = (e as Error).message
-      await this.d.store.transition(next.operationId, next.revision, /not yet seizable/.test(msg) ? 'watching' : 'seize_failed', {
-        cause: 'seize_refused',
+      const notYet = /not yet seizable/.test(msg)
+      await this.d.store.transition(next.operationId, next.revision, notYet ? 'watching' : 'seize_failed', {
+        cause: notYet ? 'seize_not_yet' : 'seize_refused',
         lastError: msg.slice(0, 500)
       })
     }

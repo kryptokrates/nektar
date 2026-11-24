@@ -6,7 +6,7 @@ import { detached, sparse, spread, stable01 } from '@nektar/core'
 import { policyHash, policyError, canonicalJson, type AutomationPolicy, type ActionContext } from './policy.js'
 import { WAITS } from './waits.js'
 import { txStep } from './machines/tx.machine.js'
-import { opsFsmLegacy, opEdgeAgrees } from './machines/driver.js'
+import { opEdgeAgrees } from './machines/driver.js'
 
 const T = {
   ops: 'market_operations',
@@ -731,13 +731,11 @@ export class AutomationStore {
       // resolve to a declared edge that accepts from the persisted state and
       // lands exactly on the caller's target. Data-stamp writes (same state)
       // still validate; unmodeled causes pass — the census gate owns them.
-      if (!opsFsmLegacy()) {
-        const v = opEdgeAgrees(cur.state, to, change.cause)
-        if (!v.ok)
-          throw new MachineBlocked(
-            `operation ${operationId}: ${cur.state} --${change.cause}--> ${to} has no machine edge (${v.event ?? 'unmodeled'}${v.guard !== undefined ? ' @' + v.guard : ''} would land ${v.machine ?? '?'})`
-          )
-      }
+      const v = opEdgeAgrees(cur.state, to, change.cause)
+      if (!v.ok)
+        throw new MachineBlocked(
+          `operation ${operationId}: ${cur.state} --${change.cause}--> ${to} has no machine edge (${v.event ?? 'unmodeled'}${v.guard !== undefined ? ' @' + v.guard : ''} would land ${v.machine ?? '?'})`
+        )
       const now = this.now()
       // updated_at is the residence clock the stuck watchdog measures — only a
       // real state change resets it. Same-state writes (error labels, evidence,
@@ -1002,8 +1000,10 @@ export class AutomationStore {
 
   /** earliest pending outbox wake — the pump sleeps until this, so a
    *  deferred row fires at its next_at rather than at the next tick */
-  async nextOutboxAt(): Promise<number | undefined> {
-    const r = await this.kx(T.outbox).where({ status: 'pending' }).min('next_at as n').first()
+  async nextOutboxAt(opts?: { excludeIds?: readonly string[] }): Promise<number | undefined> {
+    let q = this.kx(T.outbox).where({ status: 'pending' })
+    if (opts?.excludeIds !== undefined && opts.excludeIds.length > 0) q = q.whereNotIn('action_id', opts.excludeIds)
+    const r = await q.min('next_at as n').first()
     return r?.n === null || r?.n === undefined ? undefined : Number(r.n)
   }
 
@@ -1453,20 +1453,23 @@ export class AutomationStore {
    *  crash-between-commit-and-act window, replayed when the row's backoff
    *  says so (effect_next_at spaces retries so a deterministic failure is a
    *  surfaced wedge, not a hot loop) */
-  async pendingTxEffects(): Promise<Array<{ eventId: number; actionId: string; intents: string[]; tx?: WalletTx; attempts: number; lastError?: string }>> {
-    const now = Date.now()
+  async pendingTxEffects(): Promise<
+    Array<{ eventId: number; actionId: string; fromState: TxState; intents: string[]; tx?: WalletTx; attempts: number; lastError?: string }>
+  > {
+    const now = this.now()
     const rows = await this.wkx(T.txEvents)
       .where({ effected: 0 })
       .where((q) => {
         q.whereNull('effect_next_at').orWhere('effect_next_at', '<=', now)
       })
       .orderBy('id')
-    const out: Array<{ eventId: number; actionId: string; intents: string[]; tx?: WalletTx; attempts: number; lastError?: string }> = []
+    const out: Array<{ eventId: number; actionId: string; fromState: TxState; intents: string[]; tx?: WalletTx; attempts: number; lastError?: string }> = []
     for (const r of rows) {
       const w = await this.walletTx({ actionId: r.action_id })
       out.push({
         eventId: Number(r.id),
         actionId: r.action_id,
+        fromState: r.from_state as TxState,
         intents: JSON.parse(r.intents),
         tx: w,
         attempts: Number(r.effect_attempts ?? 0),
@@ -1483,7 +1486,8 @@ export class AutomationStore {
   async recordTxEffectFailure(eventId: number, error: string): Promise<void> {
     const cur = await this.wkx(T.txEvents).where({ id: eventId }).first('effect_attempts')
     const attempts = Number(cur?.effect_attempts ?? 0) + 1
-    const nextAt = Date.now() + Math.min(60_000 * 2 ** Math.min(attempts - 1, 10), 3_600_000)
+    const nextAt =
+      this.now() + spread(Math.min(WAITS.txEffectRetryCap.ms, WAITS.txEffectRetryBase.ms * 2 ** Math.min(attempts - 1, 10)), stable01(String(eventId)))
     await this.wkx(T.txEvents)
       .where({ id: eventId })
       .update({ effect_attempts: attempts, effect_error: error.slice(0, 500), effect_next_at: nextAt })

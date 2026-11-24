@@ -12,10 +12,9 @@
 // so fan-out asserts are deterministic.
 import { detached } from '@nektar/core'
 import type { Executor, InvokeTarget, SendOpts, RtSend } from './exec.js'
-import { EXEC_SVC, inRtScope, rtScopeKey } from './exec.js'
+import { EXEC_SVC, inRtScope, PermanentError, rtScopeKey } from './exec.js'
 import {
   txObserveBody,
-  txResubmitBody,
   sweepTickBody,
   sweepBootBody,
   dealAdvanceBody,
@@ -38,9 +37,10 @@ import {
   type WakeDeps,
   type CronDeps,
   type NotifyDeps,
-  type DealEvent
+  type DealEvent,
+  type TickArg
 } from './services.js'
-import type { CustodyLeg, TxObserve } from './emit.js'
+import type { CustodyLeg, CustodyResubmitArg, TxObserve } from './emit.js'
 import type { OutboxItem } from '../store.js'
 import { NONTERMINAL } from '../market.js'
 
@@ -171,7 +171,14 @@ export class Dispatcher implements LocalDispatch {
           if (k !== undefined) this.idemResolve.get(k)?.res(v)
         },
         (e) => {
-          if (k !== undefined) this.idemResolve.get(k)?.rej(e)
+          if (k !== undefined) {
+            const waiter = this.idemResolve.get(k)
+            if (!(e instanceof PermanentError)) {
+              this.idempotent.delete(k)
+              this.idemResolve.delete(k)
+            }
+            waiter?.rej(e)
+          }
         }
       )
       this.pending.add(p)
@@ -252,19 +259,20 @@ export class Dispatcher implements LocalDispatch {
     // beats a silent hang.
     if (scope !== undefined && rtScopeKey()?.held?.includes(scope))
       throw new Error(`executor: re-entrant call on held key ${scope} — route same-key work through inRtScope`)
-    const p =
-      scope === undefined
-        ? fn(arg, target.key)
-        : this.chain(scope, () =>
-            // the handler runs holding this scope — nested calls see it in
-            // 'held' alongside whatever the caller already held
-            inRtScope({ held: [...(rtScopeKey()?.held ?? []), scope] }, () => fn(arg, target.key))
-          )
+    const parentHeld = rtScopeKey()?.held ?? []
+    const nextHeld = scope !== undefined ? [...parentHeld, scope] : [...parentHeld]
+    const invoke = (): Promise<unknown> => detached(() => inRtScope({ txKey: undefined, custodyKey: undefined, held: nextHeld }, () => fn(arg, target.key)))
+    const p = scope === undefined ? invoke() : this.chain(scope, invoke)
     // the record IS the invocation promise — a dup call attaches mid-flight
-    // and resolves to the same result, terminal error included
+    // and resolves to the same result, terminal error included. Transient
+    // errors evict so caller retries run fresh (real Restate retries them
+    // rather than caching a transient throw as terminal).
     if (idemSet !== undefined) {
-      this.idempotent.set(idemSet.key, p)
-      void p.catch(() => undefined)
+      const ik = idemSet.key
+      this.idempotent.set(ik, p)
+      void p.catch((e: unknown) => {
+        if (!(e instanceof PermanentError) && this.idempotent.get(ik) === p) this.idempotent.delete(ik)
+      })
     }
     // a call is in-flight work too — close() must join it, or a handler
     // still running fires post-teardown sends against closing stores
@@ -306,12 +314,10 @@ const rigSend = (ex: LocalDispatch): RtSend => ex.send.bind(ex)
 
 export const wireTx = (ex: LocalDispatch, deps: RtDeps): void => {
   const observe = txObserveBody(deps)
-  const resubmit = txResubmitBody(deps)
   // inRtScope mirrors the VO handlers: same-key emits inside the handler
   // must go direct — routing them back through exec.call would wait on
   // this very invocation (the exclusive-key self-deadlock)
   ex.register(EXEC_SVC.tx, 'observe', (arg, key) => inRtScope({ txKey: key ?? '' }, () => observe(arg as TxObserve, key ?? '')))
-  ex.register(EXEC_SVC.tx, 'resubmit', (arg, key) => inRtScope({ txKey: key ?? '' }, () => resubmit(arg, key ?? '')))
 }
 
 export const wireSweep = (ex: LocalDispatch, deps: SweepDeps): void => {
@@ -331,23 +337,36 @@ export const wireDeal = (ex: LocalDispatch, deps: DealDeps): void => {
 
 export const wireDealfan = (ex: LocalDispatch, deps: DealfanDeps): void => {
   const tick = dealfanTickBody(deps)
-  ex.register(EXEC_SVC.dealfan, 'tick', () => tick(rigSend(ex)))
+  ex.register(EXEC_SVC.dealfan, 'tick', (arg) => tick(rigSend(ex), undefined, arg as TickArg | undefined))
 }
 
 export const wireCustody = (ex: LocalDispatch, deps: CustodyDeps): void => {
   // same scope the VO sets: custodyKey records the handler's held key
   // (actionId per tx leg, 'global' for the scan) so nested custody legs
-  // for the same id go direct; the forwarded txScope re-establishes the
-  // caller's held tx key so its emits skip the locked object
-  const scope = <T>(key: string, txScope: string | undefined, fn: () => Promise<T>): Promise<T> => inRtScope({ custodyKey: key, txKey: txScope }, fn)
-  ex.register(EXEC_SVC.custody, 'submit', (arg, key) => scope(key ?? '', (arg as CustodyLeg).txScope, () => deps.wallet.submit((arg as CustodyLeg).actionId)))
+  // for the same id go direct
+  const scope = <T>(key: string, fn: () => Promise<T>): Promise<T> => inRtScope({ custodyKey: key }, fn)
+  ex.register(EXEC_SVC.custody, 'submit', (arg, key) => scope(key ?? '', () => deps.wallet.submit((arg as CustodyLeg).actionId)))
   ex.register(EXEC_SVC.custody, 'markRejected', (arg, key) => {
     const a = arg as CustodyLeg & { observation: unknown }
-    return scope(key ?? '', a.txScope, () => deps.wallet.markRejectedById(a.actionId, a.observation))
+    return scope(key ?? '', () => deps.wallet.markRejectedById(a.actionId, a.observation))
   })
-  ex.register(EXEC_SVC.custody, 'resubmitPending', (arg, key) =>
-    scope(key ?? '', (arg as CustodyLeg | undefined)?.txScope, () => deps.wallet.resubmitPending())
-  )
+  ex.register(EXEC_SVC.custody, 'resubmitPending', async (arg, key) => {
+    const ids = await scope(key ?? '', () => deps.wallet.resubmitCandidates())
+    if ((arg as CustodyResubmitArg | null | undefined)?.fanOnly === true) {
+      for (const actionId of ids) await ex.send({ service: EXEC_SVC.custody, handler: 'submit', key: actionId }, { actionId } satisfies CustodyLeg)
+      return [] as Array<{ actionId: string; state: import('../store.js').TxState }>
+    }
+    const settled = await Promise.allSettled(
+      ids.map((actionId) =>
+        ex
+          .call<{ state: import('../store.js').TxState }>({ service: EXEC_SVC.custody, handler: 'submit', key: actionId }, { actionId } satisfies CustodyLeg)
+          .then((r) => ({ actionId, state: r.state }))
+      )
+    )
+    return settled
+      .filter((r): r is PromiseFulfilledResult<{ actionId: string; state: import('../store.js').TxState }> => r.status === 'fulfilled')
+      .map((r) => r.value)
+  })
 }
 
 export const wireTransport = (ex: LocalDispatch, deps: TransportDeps): void => {
@@ -366,7 +385,7 @@ export const wireWake = (ex: LocalDispatch, deps: WakeDeps): void => {
 }
 
 export const wireCron = (ex: LocalDispatch, service: string, deps: CronDeps): void => {
-  ex.register(service, 'tick', () => cronTickBody(service, deps)(rigSend(ex)))
+  ex.register(service, 'tick', (arg) => cronTickBody(service, deps)(rigSend(ex), undefined, arg as TickArg | undefined))
 }
 
 export const wireLeg = (ex: LocalDispatch, service: string, leg: () => Promise<void>): void => {
@@ -419,7 +438,6 @@ export const wireRuntime = (ex: LocalDispatch, d: WireAll): void => {
 export interface WireEngineDeps {
   store: import('../store.js').AutomationStore
   fx: import('../machines/effects.js').TxEffects
-  submit?: RtDeps['submit']
   scan?: SweepDeps['scan']
   resubmitRows?: SweepDeps['resubmitRows']
   wake?: WakeDeps
@@ -453,7 +471,7 @@ export const wireEngine = (ex: LocalDispatch, engine: EngineSurface, d: WireEngi
     }))
   }
   wireRuntime(ex, {
-    tx: { store: d.store, fx: d.fx, log, submit: d.submit ?? ((actionId) => engine.submitTx(actionId)) },
+    tx: { store: d.store, fx: d.fx, log },
     sweep: {
       scan: d.scan ?? async function* () {},
       resubmitRows: d.resubmitRows ?? (() => Promise.resolve([])),
@@ -477,7 +495,7 @@ export const wireEngine = (ex: LocalDispatch, engine: EngineSurface, d: WireEngi
     },
     transport: {
       dueRows: () => d.store.dueOutbox(),
-      nextAt: () => d.store.nextOutboxAt(),
+      nextAt: (excludeIds) => d.store.nextOutboxAt(excludeIds !== undefined && excludeIds.length > 0 ? { excludeIds } : undefined),
       deliverItem: (item) => engine.deliverOutboxItem(item),
       now: d.now ?? (() => Date.now()),
       log

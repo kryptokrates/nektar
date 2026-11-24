@@ -345,7 +345,18 @@ async function world(
   })
   const engineFor = (mem: NektarMemory, store: AutomationStore) => {
     const ex = new Dispatcher()
-    const engine = new MarketEngine({
+    let engine!: MarketEngine
+    const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
+    const fx = {
+      ...inertTxEffects,
+      txDied: async (w: WalletTx) => {
+        await mem.funds.died(await rebuild(w))
+      },
+      txSpent: async (w: WalletTx) => {
+        await mem.funds.spent(await rebuild(w))
+      }
+    }
+    engine = new MarketEngine({
       store,
       memory: mem,
       key: mem.operatorKey(),
@@ -358,25 +369,13 @@ async function world(
       transport: transportFor(mem.operatorKey().toPublicKey().toString()),
       ai: new ScriptedExecutor(),
       broadcast: (tx) => mem.broadcastTx(tx),
-      settleEscrow: (tx) => mem.funds.spent(tx),
+      txEffects: fx,
       killed: opts.killed,
       deaf: opts.deaf,
       executor: ex,
       opts: { refundBlocks: opts.refundBlocks ?? 144, ...ZEROCONF_OPEN }
     })
-    const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
-    wireEngine(ex, engine, store, {
-      fx: {
-        ...inertTxEffects,
-        txDied: async (w) => {
-          await mem.funds.died(await rebuild(w))
-        },
-        txSpent: async (w) => {
-          await mem.funds.spent(await rebuild(w))
-        }
-      },
-      now
-    })
+    wireEngine(ex, engine, store, { fx, now })
     return engine
   }
   const policyFor = (pub: string): AutomationPolicy => testPolicyFor(pub)

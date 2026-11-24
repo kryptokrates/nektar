@@ -20,6 +20,8 @@ services:
   restate:
     image: docker.restate.dev/restatedev/restate:1.8.1
     restart: unless-stopped
+    environment:
+      RESTATE_NODE_NAME: nektar-seller
     volumes:
       - restate-seller-data:/restate-data
     ports:
@@ -62,6 +64,8 @@ services:
   restate-buyer:
     image: docker.restate.dev/restatedev/restate:1.8.1
     restart: unless-stopped
+    environment:
+      RESTATE_NODE_NAME: nektar-buyer
     volumes:
       - restate-buyer-data:/restate-data
     ports:

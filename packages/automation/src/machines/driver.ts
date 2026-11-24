@@ -1,16 +1,12 @@
-import { nektarEnv } from '@nektar/core'
 import { opsStep } from './ops.machine.js'
 import { opsCauseCandidates } from './shadow.js'
 
 /**
- * The pure spec-side of the machine drivers: flag gates, observation→event
+ * The pure spec-side of the machine drivers: observation→event
  * mapping and the ops-transition validator. NOTHING here may import the
  * store — the store-bound effect dispatch lives in machines/effects.ts
  * (store.ts → driver.ts → store.ts would be a cycle).
  */
-
-/** kill switch — one release back to unvalidated transition() writes */
-export const opsFsmLegacy = (): boolean => nektarEnv('NEKTAR_OPS_FSM') === 'legacy'
 
 export interface OpVerdict {
   ok: boolean
@@ -42,14 +38,16 @@ export function opEdgeAgrees(from: string, to: string, cause: string): OpVerdict
 }
 
 /** A watcher/coordinator observation → its declared event + guard. Only
- *  proof-bearing sources may name 'proven'; everything else is 'verified'
- *  at best — a hint alone must never reach this function as 'seen'. */
-export function obsEvent(o: { status: 'seen' | 'proven' | 'rejected' | 'conflicted' | 'abandoned' }): { event: string; guard?: string } {
+ *  proof-bearing sources may name 'proven'; a raw broadcaster status string
+ *  (source === 'broadcaster') is a 'hint' — it may advance an already-
+ *  submitted row to observed, never revive a dead row or fire custody
+ *  intents (spv/hint-as-verified). */
+export function obsEvent(o: { status: 'seen' | 'proven' | 'rejected' | 'conflicted' | 'abandoned'; source?: string }): { event: string; guard?: string } {
   switch (o.status) {
     case 'proven':
       return { event: 'obs.proven', guard: 'proof' }
     case 'seen':
-      return { event: 'obs.seen', guard: 'verified' }
+      return { event: 'obs.seen', guard: o.source === 'broadcaster' ? 'hint' : 'verified' }
     case 'rejected':
       return { event: 'obs.rejected', guard: 'verified' }
     case 'conflicted':

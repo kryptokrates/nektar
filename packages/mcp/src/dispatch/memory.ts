@@ -21,6 +21,22 @@ export const handlers: Record<string, ToolHandler> = {
     return { ...r, private: mem.shardPrivate(args.shard) || undefined }
   },
   recall: async (mem, args, d) => {
+    const visibleShards = () => mem.shards().filter((s) => !s.startsWith('__') && !mem.shardPrivate(s))
+    const { decodePresentation } = await import('@nektar/identity')
+    const zk = args?.zk === undefined ? undefined : decodePresentation(args.zk)
+    if (typeof args?.shard !== 'string' || args.shard.length === 0) {
+      const shards = visibleShards()
+      if (shards.length === 0) return { shards: [], items: [], hint: 'no shards yet — call remember to store a fact' }
+      const items: Array<Record<string, unknown>> = []
+      let receipt: unknown
+      for (const shard of shards) {
+        const r = await mem.recall(shard, { identity: args?.identity, zk })
+        receipt ??= r.receipt
+        for (const it of r.items) items.push({ shard, ...it })
+      }
+      if (items.length > 0) mem.events.emit('recall', { shard: '*', count: items.length })
+      return { shards, items, receipt }
+    }
     // parity with the prove tool's refusal: private/system shards are not
     // served to external callers (the private flag gates citations, packs and
     // listings — it must gate reads too)
@@ -29,8 +45,8 @@ export const handlers: Record<string, ToolHandler> = {
         ok: false,
         reason: `shard "${args.shard}" is private — contents refused; verify via a ZK membership proof (zkQuery → proveMembership → verifyMembership)`
       }
-    const { decodePresentation } = await import('@nektar/identity')
-    const r = await mem.recall(args.shard, { seq: args.seq, identity: args.identity, zk: args.zk === undefined ? undefined : decodePresentation(args.zk) })
+    const r = await mem.recall(args.shard, { seq: args.seq, identity: args.identity, zk })
+    if (r.items.length > 0) mem.events.emit('recall', { shard: args.shard, count: r.items.length })
     // tell the model how to recover from a wrong seq instead of an empty answer
     if (args.seq !== undefined && r.items.length === 0) {
       const seqs = (await mem.records(args.shard)).map((x) => x.seq)
@@ -39,6 +55,16 @@ export const handlers: Record<string, ToolHandler> = {
         hint: seqs.length
           ? `no record with seq ${args.seq} in shard "${args.shard}"; existing seqs: ${seqs.join(', ')} — or omit seq to recall all`
           : `shard "${args.shard}" is empty`
+      }
+    }
+    if (r.items.length === 0) {
+      const shards = visibleShards()
+      return {
+        ...r,
+        ...(shards.length > 0
+          ? { shards, hint: `shard "${args.shard}" is empty; available shards: ${shards.join(', ')}` }
+          : { hint: `shard "${args.shard}" is empty — call remember to store a fact` }),
+        shardPrivate: mem.shardPrivate(args.shard) || undefined
       }
     }
     return { ...r, shardPrivate: mem.shardPrivate(args.shard) || undefined }

@@ -39,7 +39,7 @@ const env = existsSync(join(root, '.env'))
         .map((m) => [m[1], m[2].trim()])
     )
   : {}
-const dataDir = resolve(flag('--data') ?? process.env.NEKTAR_DATA_DIR ?? env.NEKTAR_DATA_DIR)
+const dataDir = resolve(flag('--data') ?? process.env.NEKTAR_DATA_DIR ?? env.NEKTAR_DATA_DIR ?? '.nektar')
 const json = argv.includes('--json') ? (argv.splice(argv.indexOf('--json'), 1), true) : false
 const dist = join(root, 'packages/automation/dist/src')
 if (!existsSync(join(dist, 'store.js'))) {

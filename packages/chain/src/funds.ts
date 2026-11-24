@@ -6,7 +6,7 @@
 // set, serialized takes, change detection); a FundsStore supplies the
 // backend — wallet basket, in-memory pool, or test treasury.
 import { Transaction, P2PKH } from '@bsv/sdk'
-import { sparse } from '@nektar/core'
+import { inputPrevout, sparse } from '@nektar/core'
 import type { Funder, FundingOut, Funds, FundPurpose } from './interfaces.js'
 
 /** a narrow Funder view over a Funds owner — every take is purpose-labeled.
@@ -408,15 +408,8 @@ export abstract class FundsBase implements Funds {
 
   /** input outpoint id — sourceTXID or the held sourceTransaction's id */
   private static inputOp(inp: Transaction['inputs'][number]): string | undefined {
-    let txid = inp.sourceTXID
-    if (txid === undefined && inp.sourceTransaction !== undefined) {
-      try {
-        txid = inp.sourceTransaction.id('hex')
-      } catch {
-        txid = undefined // an EF/lazy stand-in cannot serialize — sourceTXID is its honest name
-      }
-    }
-    return txid !== undefined ? op(txid, inp.sourceOutputIndex) : undefined
+    const prev = inputPrevout(inp)
+    return prev !== undefined ? op(prev.txid, prev.vout) : undefined
   }
 
   async spent(tx: Transaction): Promise<void> {

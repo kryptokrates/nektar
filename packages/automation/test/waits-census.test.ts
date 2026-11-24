@@ -67,7 +67,7 @@ void test('every wait-site duration literal is named', () => {
     /timeout|Timeout|setTimeout|setInterval|race|deadline|Deadline|next_at|nextAt|dueIn|delay|Delay|backoff|attempt|attempts|ttl|Ttl|TTL|expir|Expir|until|Until|cooldown|held|Held|defer|Defer|interval|Interval|cadence|poll|Poll|retry|Retry|floor|rearm|throttle|Throttle|window|Window|since|Since|age|Age|sweep|Sweep|ceiling|Ceil|ceil|nap|sleep|ms\b/
   const LITERAL = /\d+_000\b|\b86_400_000\b|\b60_000\b/
   const EXEMPT_FILES = new Set(['waits.ts', 'market/types.ts', 'conformance.ts', 'policy.ts'])
-  const NAMED = /WAITS\.\w+\.ms|const [A-Z][A-Z0-9_]*(_MS|Ms|_TTL)\b|exportedTtl|deliverBoundMs|timeoutMs|waitMs=|checkInMs|attempts\b/
+  const NAMED = /WAITS\.\w+\.ms|const [A-Z][A-Z0-9_]*(_MS|Ms|_TTL)\b|exportedTtl|deliverBoundMs|timeoutMs|waitMs=|checkInMs/
   for (const f of srcFiles()) {
     const rel = f.slice(srcDir.length + 1).replaceAll('\\', '/')
     if (EXEMPT_FILES.has(rel)) continue

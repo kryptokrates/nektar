@@ -15,21 +15,43 @@
 // — the Restate handlers are thin ctx.run wrappers around the same steps,
 // so tests invoke the exact code the server invokes.
 import type * as restate from '@restatedev/restate-sdk'
-import { sparse, stable01 } from '@nektar/core'
+import { sparse, stable01, withLegSignal } from '@nektar/core'
 import { WAITS } from '../waits.js'
 import type { AutomationStore, MarketOpData, OutboxItem, TxState, WalletTx } from '../store.js'
 import { runTxIntents, type TxEffects } from '../machines/effects.js'
-import { EXEC_SVC, inRtScope, type RtSend } from './exec.js'
-import type { CustodyLeg, TxObserve } from './emit.js'
+import { EXEC_SVC, inRtScope, PermanentError, RetryAfterError, type RtSend } from './exec.js'
+import type { CustodyLeg, CustodyResubmitArg, TxObserve } from './emit.js'
 import type { WalletCoordinator } from '../wallet.js'
 
 export interface RtDeps {
   store: AutomationStore
   fx: TxEffects
   log: (line: string) => void
-  /** coordinator submit — the resubmit handler's broadcast leg (engine.submitTx) */
-  submit?: (actionId: string) => Promise<{ state: TxState; txid: string } | undefined>
 }
+
+export interface TickArg {
+  after?: number
+}
+
+const nextArmBucket = (now: number, ceil: number, after?: number): number => {
+  const base = Math.floor(now / ceil) * ceil + ceil
+  return typeof after === 'number' && base <= after ? after + ceil : base
+}
+
+type RestateMod = typeof import('@restatedev/restate-sdk')
+
+const classifyErr = async <T>(sdk: RestateMod, fn: () => Promise<T> | T): Promise<T> => {
+  try {
+    return await fn()
+  } catch (e) {
+    if (e instanceof PermanentError) throw new sdk.TerminalError(e.message, { errorCode: e.code })
+    if (e instanceof RetryAfterError) throw new sdk.RetryableError(e.message, { retryAfter: e.retryAfterMs })
+    throw e
+  }
+}
+
+const runStep = async <T>(sdk: RestateMod, ctx: restate.Context, name: string, fn: () => Promise<T> | T): Promise<T> =>
+  await ctx.run(name, () => withLegSignal(ctx.request().attemptCompletedSignal, () => classifyErr(sdk, fn)))
 
 /** the service options every def carries.
  *  - inactivityTimeout: the 60s default suspends a leg that emits no journal
@@ -83,8 +105,7 @@ export const txSteps = (deps: RtDeps) => ({
   load: (actionId: string) => deps.store.walletTx({ actionId }),
   commit: (w: WalletTx, o: TxObserve) => deps.store.applyTxEvent(w.actionId, o.event, { guard: o.guard, observation: o.observation, attempt: o.attempt }),
   intents: (w: WalletTx, intents: string[]) => runTxIntents(intents, w, deps.fx, deps.log),
-  mark: (eventId: number) => deps.store.markTxEffects(eventId).catch(() => undefined),
-  resubmit: (actionId: string) => deps.submit!(actionId)
+  mark: (eventId: number) => deps.store.markTxEffects(eventId).catch(() => undefined)
 })
 
 /** commit → intents → mark — the observe handler's step chain. */
@@ -107,19 +128,6 @@ export const txObserveBody =
     return await emitSteps(s)(w, o)
   }
 
-/** the resubmit arm — re-broadcasts a prepared/unknown row from stored
- *  bytes. At-least-once on the wire ('already known' dedupes); the emit
- *  inside submit runs direct via the rt scope. */
-export const txResubmitBody =
-  (deps: RtDeps) =>
-  async (_: unknown, actionId: string): Promise<{ resubmitted: boolean; state?: string }> => {
-    const s = txSteps(deps)
-    const w = await s.load(actionId)
-    if (w === undefined || deps.submit === undefined) return { resubmitted: false }
-    const r = await s.resubmit(actionId)
-    return { resubmitted: r !== undefined, state: r?.state }
-  }
-
 export const txObject = async (deps: RtDeps) => {
   const restate = await import('@restatedev/restate-sdk')
   const s = txSteps(deps)
@@ -131,22 +139,14 @@ export const txObject = async (deps: RtDeps) => {
         // inRtScope: same-key emits inside this handler go direct — routing
         // back through the object would self-deadlock the exclusive key
         await inRtScope({ txKey: ctx.key }, async () => {
-          const w = await ctx.run('load', () => Promise.resolve(s.load(ctx.key)))
+          const w = await runStep(restate, ctx, 'load', () => s.load(ctx.key))
           if (w === undefined) return { accepted: false }
-          const r = await ctx.run('commit', () => Promise.resolve(s.commit(w, o)))
+          const r = await runStep(restate, ctx, 'commit', () => s.commit(w, o))
           if (!r.accepted) return { accepted: false, next: w.state, intents: [] as string[] }
-          const ok = await ctx.run('intents', () => Promise.resolve(s.intents(w, r.intents)))
+          const ok = await runStep(restate, ctx, 'intents', () => s.intents(w, r.intents))
           const eventId = r.eventId
-          if (ok && eventId !== undefined) await ctx.run('mark', () => Promise.resolve(s.mark(eventId)))
+          if (ok && eventId !== undefined) await runStep(restate, ctx, 'mark', () => s.mark(eventId))
           return { accepted: true, next: r.next, intents: r.intents }
-        }),
-      resubmit: async (ctx: restate.ObjectContext) =>
-        await inRtScope({ txKey: ctx.key }, async () => {
-          if (deps.submit === undefined) return { resubmitted: false }
-          const w = await ctx.run('load', () => Promise.resolve(s.load(ctx.key)))
-          if (w === undefined) return { resubmitted: false }
-          const r = await ctx.run('resubmit', () => Promise.resolve(s.resubmit(ctx.key)))
-          return { resubmitted: r !== undefined, state: r?.state }
         })
     }
   })
@@ -230,11 +230,16 @@ export const dealObject = async (deps: DealDeps) => {
     name: EXEC_SVC.deal,
     options: RT_OPTS,
     handlers: {
-      advance: async (ctx: restate.ObjectContext, arg?: { op?: string }) => await ctx.run('advance', () => Promise.resolve(leg(arg, ctx.key))),
-      due: async (ctx: restate.ObjectContext, arg?: { op?: string }) => await ctx.run('advance', () => Promise.resolve(leg(arg, ctx.key))),
-      event: async (ctx: restate.ObjectContext, item: DealEvent) => await ctx.run('event', () => Promise.resolve(deps.inboxEvent(item))),
-      reconcile: async (ctx: restate.ObjectContext, arg?: { op?: string }) =>
-        await ctx.run('reconcile', () => Promise.resolve(deps.reconcileOp(arg?.op ?? ctx.key)))
+      advance: async (ctx: restate.ObjectContext, arg?: { op?: string }) => await runStep(restate, ctx, 'advance', () => leg(arg, ctx.key)),
+      due: async (ctx: restate.ObjectContext, arg?: { op?: string }) => await runStep(restate, ctx, 'advance', () => leg(arg, ctx.key)),
+      event: restate.handlers.object.exclusive(
+        { ingressPrivate: true },
+        async (ctx: restate.ObjectContext, item: DealEvent) => await runStep(restate, ctx, 'event', () => deps.inboxEvent(item))
+      ),
+      reconcile: restate.handlers.object.exclusive(
+        { ingressPrivate: true },
+        async (ctx: restate.ObjectContext, arg?: { op?: string }) => await runStep(restate, ctx, 'reconcile', () => deps.reconcileOp(arg?.op ?? ctx.key))
+      )
     }
   })
 }
@@ -259,23 +264,39 @@ export interface CustodyDeps {
 
 export const custodyObject = async (deps: CustodyDeps) => {
   const restate = await import('@restatedev/restate-sdk')
-  // the held key is per-leg (actionId for submit/markRejected, 'global'
-  // for the resubmit scan) — the scope records it so nested custody legs
-  // for the same id go direct instead of self-deadlocking. The forwarded
-  // txScope re-establishes the caller's held tx key — a resubmit reaching
-  // us via tx.resubmit(A) emits A's events direct, not back through A's
-  // locked object (which this call chain now blocks on)
-  const scope = <T>(key: string, txScope: string | undefined, fn: () => Promise<T>): Promise<T> => inRtScope({ custodyKey: key, txKey: txScope }, fn)
+  const scope = <T>(key: string, fn: () => Promise<T>): Promise<T> => inRtScope({ custodyKey: key }, fn)
   return restate.object({
     name: EXEC_SVC.custody,
     options: RT_OPTS,
     handlers: {
       submit: async (ctx: restate.ObjectContext, arg: CustodyLeg) =>
-        await scope(ctx.key, arg.txScope, () => Promise.resolve(ctx.run('submit', () => deps.wallet.submit(arg.actionId)))),
+        await scope(ctx.key, () => runStep(restate, ctx, 'submit', () => deps.wallet.submit(arg.actionId))),
       markRejected: async (ctx: restate.ObjectContext, arg: CustodyLeg) =>
-        await scope(ctx.key, arg.txScope, () => Promise.resolve(ctx.run('markRejected', () => deps.wallet.markRejectedById(arg.actionId, arg.observation)))),
-      resubmitPending: async (ctx: restate.ObjectContext) =>
-        await scope(ctx.key, undefined, () => Promise.resolve(ctx.run('resubmit', () => deps.wallet.resubmitPending())))
+        await scope(ctx.key, () => runStep(restate, ctx, 'markRejected', () => deps.wallet.markRejectedById(arg.actionId, arg.observation))),
+      resubmitPending: async (ctx: restate.ObjectContext, arg?: CustodyResubmitArg | null) => {
+        const ids = await scope(ctx.key, () => runStep(restate, ctx, 'scan', () => deps.wallet.resubmitCandidates()))
+        if (arg?.fanOnly === true) {
+          for (const actionId of ids)
+            await (
+              ctx.objectSendClient({ name: EXEC_SVC.custody } as never, actionId) as unknown as {
+                submit: (a: CustodyLeg) => Promise<void>
+              }
+            ).submit({ actionId })
+          return [] as Array<{ actionId: string; state: TxState }>
+        }
+        const settled = await Promise.allSettled(
+          ids.map((actionId) =>
+            (
+              ctx.objectClient({ name: EXEC_SVC.custody } as never, actionId) as unknown as {
+                submit: (a: CustodyLeg) => Promise<{ state: TxState; txid: string }>
+              }
+            )
+              .submit({ actionId })
+              .then((r) => ({ actionId, state: r.state }))
+          )
+        )
+        return settled.filter((r): r is PromiseFulfilledResult<{ actionId: string; state: TxState }> => r.status === 'fulfilled').map((r) => r.value)
+      }
     }
   })
 }
@@ -299,7 +320,7 @@ export interface TransportDeps {
   /** due pending rows — the journaled scan input (store.dueOutbox) */
   dueRows: () => Promise<OutboxItem[]>
   /** earliest pending wake — the drain's self-schedule (store.nextOutboxAt) */
-  nextAt: () => Promise<number | undefined>
+  nextAt: (excludeIds?: string[]) => Promise<number | undefined>
   /** one row's delivery leg — engine.deliverOutboxItem (deliver + ack /
    *  retry / defer + shrink recovery inside) */
   deliverItem: (item: OutboxItem) => Promise<'acked' | 'retried' | 'deferred' | 'skipped'>
@@ -329,7 +350,8 @@ export const transportDrainBody =
     // self-schedule the ceiling at the earliest pending wake — the durable
     // successor of armOutboxTimer; empty box leaves the loop asleep until
     // outboxReady pokes it
-    const next = await run('next', () => Promise.resolve(deps.nextAt()))
+    const fanned = rows.map((r) => r.actionId)
+    const next = await run('next', () => Promise.resolve(deps.nextAt(fanned)))
     if (next !== undefined) {
       // EVERY drain invocation arms a successor — outboxReady pokes and
       // wake-cycle drains run this same body, so an unkeyed arm adds one
@@ -340,11 +362,8 @@ export const transportDrainBody =
       // the delay's clock must be journaled too: a replay that reads a
       // moved now() re-times the arm and dies JournalMismatchError
       const now = await run('armNow', () => Promise.resolve(deps.now()))
-      await send(
-        { service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY },
-        {},
-        { delayMs: Math.max(0, next - now), idempotencyKey: `drain:${next}` }
-      )
+      const armKey = fanned.length > 0 && next <= now ? `drain:${next}:${fanned[fanned.length - 1]}` : `drain:${next}`
+      await send({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {}, { delayMs: Math.max(0, next - now), idempotencyKey: armKey })
     }
     return { sent: rows.length, nextAt: next }
   }
@@ -356,7 +375,10 @@ export const transportObject = async (deps: TransportDeps) => {
     name: EXEC_SVC.transport,
     options: RT_OPTS_FLOOR,
     handlers: {
-      deliver: async (ctx: restate.ObjectContext, item: OutboxItem) => await ctx.run('deliver', () => Promise.resolve(deps.deliverItem(item))),
+      deliver: restate.handlers.object.exclusive(
+        { ingressPrivate: true },
+        async (ctx: restate.ObjectContext, item: OutboxItem) => await runStep(restate, ctx, 'deliver', () => deps.deliverItem(item))
+      ),
       drain: async (ctx: restate.ObjectContext) => {
         const transport = ctx.objectSendClient({ name: EXEC_SVC.transport } as never, TRANSPORT_DRAIN_KEY) as unknown as {
           drain: (o: unknown, opts?: unknown) => Promise<void>
@@ -373,7 +395,7 @@ export const transportObject = async (deps: TransportDeps) => {
             await transport.drain(arg, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey }))
           else throw new Error(`transport send: no handler ${target.handler}`)
         }
-        return await drain(send, (n, fn) => ctx.run(n, fn))
+        return await drain(send, (n, fn) => runStep(restate, ctx, n, fn))
       }
     }
   })
@@ -410,7 +432,7 @@ export const sweepBootBody =
   (deps: SweepDeps) =>
   async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
     const rows = await run('rows', () => Promise.resolve(deps.resubmitRows()))
-    for (const w of rows) await send({ service: EXEC_SVC.tx, handler: 'resubmit', key: w.actionId }, {})
+    for (const w of rows) await send({ service: EXEC_SVC.custody, handler: 'submit', key: w.actionId }, { actionId: w.actionId } satisfies CustodyLeg)
     return { sent: rows.length }
   }
 
@@ -424,14 +446,18 @@ export const sweepService = async (deps: SweepDeps, txDef: unknown) => {
     const tx = (key: string) =>
       ctx.objectSendClient(txDef as never, key) as unknown as {
         observe: (o: TxObserve) => Promise<void>
-        resubmit: (o: unknown) => Promise<void>
+      }
+    const custody = (key: string) =>
+      ctx.objectSendClient({ name: EXEC_SVC.custody } as never, key) as unknown as {
+        submit: (o: CustodyLeg) => Promise<void>
       }
     return async (target, arg) => {
       if (target.service === EXEC_SVC.tx) {
-        const c = tx(target.key ?? '')
-        if (target.handler === 'observe') await c.observe(arg as TxObserve)
-        else if (target.handler === 'resubmit') await c.resubmit(arg)
+        if (target.handler === 'observe') await tx(target.key ?? '').observe(arg as TxObserve)
         else throw new Error(`sweep send: no tx handler ${target.handler}`)
+      } else if (target.service === EXEC_SVC.custody) {
+        if (target.handler === 'submit') await custody(target.key ?? '').submit(arg as CustodyLeg)
+        else throw new Error(`sweep send: no custody handler ${target.handler}`)
       } else throw new Error(`sweep send: no route for ${target.service}`)
     }
   }
@@ -442,8 +468,8 @@ export const sweepService = async (deps: SweepDeps, txDef: unknown) => {
     name: EXEC_SVC.sweep,
     options: RT_OPTS_FLOOR,
     handlers: {
-      tick: async (ctx: restate.ObjectContext) => await tick(send(ctx), (n, fn) => ctx.run(n, fn)),
-      boot: async (ctx: restate.ObjectContext) => await boot(send(ctx), (n, fn) => ctx.run(n, fn))
+      tick: async (ctx: restate.ObjectContext) => await tick(send(ctx), (n, fn) => runStep(restate, ctx, n, fn)),
+      boot: async (ctx: restate.ObjectContext) => await boot(send(ctx), (n, fn) => runStep(restate, ctx, n, fn))
     }
   })
 }
@@ -536,7 +562,7 @@ export const opWantId = (o: { data: MarketOpData }): string | undefined => spars
 
 export const dealfanTickBody =
   (deps: DealfanDeps, service: string = EXEC_SVC.dealfan) =>
-  async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
+  async (send: RtSend, run: StepRun = (_n, fn) => fn(), arg?: TickArg) => {
     const dup = deps.sentRecently ?? (() => false)
     // the fan keys carry the durable dedup layer — sentRecently is the cheap
     // in-memory pre-filter, the ingress key dedups the send that survives a
@@ -553,7 +579,10 @@ export const dealfanTickBody =
     // completing.
     const now0 = await run('now', () => Promise.resolve((deps.now ?? Date.now)()))
     const eb = Math.floor(now0 / WAITS.fanEventResend.ms)
-    const ab = deps.tickSeq === undefined ? Math.floor(now0 / WAITS.fanAdvanceResend.ms) : await run('fanseq', () => Promise.resolve(deps.tickSeq!()))
+    const ab =
+      deps.tickSeq === undefined
+        ? String(Math.floor(now0 / WAITS.fanAdvanceResend.ms))
+        : `${now0}:${await run('fanseq', () => Promise.resolve(deps.tickSeq!()))}`
     // discovery floor: the lane/mailbox read rides the tick so a quiet
     // runtime still polls at the arm's cadence — order matters, a want
     // ingested below lands in this tick's inbox scan
@@ -597,11 +626,11 @@ export const dealfanTickBody =
       // fleet restart — stable01(service) spreads each arm ≤10% inside its
       // ceiling, deterministic so a replay re-arms identically
       const skew = Math.floor(stable01(service) * ceil * 0.1)
-      await send(
-        { service, handler: 'tick', key: CRON_KEY },
-        {},
-        { delayMs: ceil + skew, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` }
-      )
+      const bucket = nextArmBucket(now, ceil, arg?.after)
+      await send({ service, handler: 'tick', key: CRON_KEY }, { after: bucket } satisfies TickArg, {
+        delayMs: ceil + skew,
+        idempotencyKey: `${service}:tick:${bucket}`
+      })
     }
     return { events: inbox.length, advanced: ops.length, reconciled: rec.length }
   }
@@ -640,7 +669,7 @@ export const dealfanObject = async (deps: DealfanDeps, dealDef: unknown, opts?: 
     name: service,
     options: { ...RT_OPTS_FLOOR, ...opts },
     handlers: {
-      tick: async (ctx: restate.ObjectContext) => await tick(send(ctx), (n, fn) => ctx.run(n, fn))
+      tick: async (ctx: restate.ObjectContext, arg?: TickArg) => await tick(send(ctx), (n, fn) => runStep(restate, ctx, n, fn), arg)
     }
   })
 }
@@ -777,11 +806,11 @@ export const wakeService = async (deps: WakeDeps) => {
     name: EXEC_SVC.wake,
     options: RT_OPTS_FLOOR,
     handlers: {
-      txProof: async (ctx: restate.Context, arg: { txid: string; mpHex: string }) => await proof(send(ctx), arg, (n, fn) => ctx.run(n, fn)),
-      txRejected: async (ctx: restate.Context, arg: { txid: string }) => await rejected(send(ctx), arg, (n, fn) => ctx.run(n, fn)),
-      txAbandoned: async (ctx: restate.Context, arg: { txid: string }) => await abandoned(send(ctx), arg, (n, fn) => ctx.run(n, fn)),
-      height: async (ctx: restate.Context, arg: { tip: number }) => await height(send(ctx), arg, (n, fn) => ctx.run(n, fn)),
-      reorg: async (ctx: restate.Context, arg: { from: number }) => await reorg(send(ctx), arg, (n, fn) => ctx.run(n, fn))
+      txProof: async (ctx: restate.Context, arg: { txid: string; mpHex: string }) => await proof(send(ctx), arg, (n, fn) => runStep(restate, ctx, n, fn)),
+      txRejected: async (ctx: restate.Context, arg: { txid: string }) => await rejected(send(ctx), arg, (n, fn) => runStep(restate, ctx, n, fn)),
+      txAbandoned: async (ctx: restate.Context, arg: { txid: string }) => await abandoned(send(ctx), arg, (n, fn) => runStep(restate, ctx, n, fn)),
+      height: async (ctx: restate.Context, arg: { tip: number }) => await height(send(ctx), arg, (n, fn) => runStep(restate, ctx, n, fn)),
+      reorg: async (ctx: restate.Context, arg: { from: number }) => await reorg(send(ctx), arg, (n, fn) => runStep(restate, ctx, n, fn))
     }
   })
 }
@@ -811,7 +840,7 @@ export interface CronDeps {
 
 export const cronTickBody =
   (service: string, deps: CronDeps) =>
-  async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
+  async (send: RtSend, run: StepRun = (_n, fn) => fn(), arg?: TickArg) => {
     await run('tick', () => Promise.resolve(deps.tick()))
     // ceilingMs() <= 0 is the cadence's off-switch — a zero-delay arm is a
     // hot infinite loop, not a floor
@@ -828,11 +857,11 @@ export const cronTickBody =
       // fleet restart — stable01(service) spreads each arm ≤10% inside its
       // ceiling, deterministic so a replay re-arms identically
       const skew = Math.floor(stable01(service) * ceil * 0.1)
-      await send(
-        { service, handler: 'tick', key: CRON_KEY },
-        {},
-        { delayMs: ceil + skew, idempotencyKey: `${service}:tick:${Math.floor(now / ceil) * ceil + ceil}` }
-      )
+      const bucket = nextArmBucket(now, ceil, arg?.after)
+      await send({ service, handler: 'tick', key: CRON_KEY }, { after: bucket } satisfies TickArg, {
+        delayMs: ceil + skew,
+        idempotencyKey: `${service}:tick:${bucket}`
+      })
     }
     return { done: true }
   }
@@ -844,14 +873,14 @@ export const cronObject = async (service: string, deps: CronDeps, opts?: RtOpts)
     name: service,
     options: { ...RT_OPTS_FLOOR, ...opts },
     handlers: {
-      tick: async (ctx: restate.ObjectContext) => {
+      tick: async (ctx: restate.ObjectContext, arg?: TickArg) => {
         const self = ctx.objectSendClient({ name: service } as never, CRON_KEY) as unknown as { tick: (o: unknown, opts?: unknown) => Promise<void> }
-        const send: RtSend = async (target, arg, opts) => {
+        const send: RtSend = async (target, a, o) => {
           if (target.service !== service || target.handler !== 'tick') throw new Error(`cron send: no route ${target.service}/${target.handler}`)
-          await self.tick(arg, restate.rpc.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey }))
+          await self.tick(a, restate.rpc.sendOpts({ delay: o?.delayMs ?? 0, idempotencyKey: o?.idempotencyKey }))
         }
         // a self-SEND on the same key — one-way, no lock wait, no deadlock
-        return await tick(send, (n, fn) => ctx.run(n, fn))
+        return await tick(send, (n, fn) => runStep(restate, ctx, n, fn), arg)
       }
     }
   })
@@ -867,7 +896,7 @@ export const legObject = async (service: string, leg: () => Promise<void>, opts?
     options: { ...RT_OPTS_FLOOR, ...opts },
     handlers: {
       tick: async (ctx: restate.ObjectContext) => {
-        await ctx.run('tick', leg)
+        await runStep(restate, ctx, 'tick', leg)
         return { done: true }
       }
     }
@@ -897,12 +926,12 @@ export const notifyObject = async (deps: NotifyDeps) => {
   const restate = await import('@restatedev/restate-sdk')
   return restate.object({
     name: EXEC_SVC.notify,
-    options: RT_OPTS,
+    options: RT_OPTS_FLOOR,
     handlers: {
       peer: async (ctx: restate.ObjectContext, arg: { watch: string; service: string; query?: unknown }) =>
-        await ctx.run('peer', () => Promise.resolve(deps.peer(arg.watch, arg.service, arg.query))),
+        await runStep(restate, ctx, 'peer', () => deps.peer(arg.watch, arg.service, arg.query)),
       carrier: async (ctx: restate.ObjectContext, arg: { push: string; beefHex: string }) =>
-        await ctx.run('carrier', () => Promise.resolve(deps.carrier(arg.push, arg.beefHex)))
+        await runStep(restate, ctx, 'carrier', () => deps.carrier(arg.push, arg.beefHex))
     }
   })
 }

@@ -63,7 +63,18 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
     // engine-level suite: no runtime, so the executor is an in-process
     // dispatcher carrying the same deal-path bodies the endpoint would serve
     const ex = new Dispatcher()
-    const engine = new MarketEngine({
+    let engine!: MarketEngine
+    const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
+    const fx = {
+      ...inertTxEffects,
+      txDied: async (w: WalletTx) => {
+        await mem.funds.died(await rebuild(w))
+      },
+      txSpent: async (w: WalletTx) => {
+        await mem.funds.spent(await rebuild(w))
+      }
+    }
+    engine = new MarketEngine({
       store,
       memory: mem,
       key: mem.operatorKey(),
@@ -79,7 +90,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
       transport: transportFor(mem.operatorKey().toPublicKey().toString()),
       ai: new ScriptedExecutor(),
       broadcast: (tx) => mem.broadcastTx(tx),
-      settleEscrow: (tx) => mem.funds.spent(tx),
+      txEffects: fx,
       afterPrepare: (id) => hooks.afterPrepare?.(id),
       executor: ex,
       opts: {
@@ -91,19 +102,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
         ...market
       }
     })
-    const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
-    wireEngine(ex, engine, store, {
-      fx: {
-        ...inertTxEffects,
-        txDied: async (w) => {
-          await mem.funds.died(await rebuild(w))
-        },
-        txSpent: async (w) => {
-          await mem.funds.spent(await rebuild(w))
-        }
-      },
-      now
-    })
+    wireEngine(ex, engine, store, { fx, now })
     return engine
   }
   const policyFor = (pub: string, limits: Partial<AutomationPolicy['limits']> = {}, policy: Omit<TestPolicyOpts, 'limits'> = {}): AutomationPolicy =>

@@ -10,7 +10,7 @@ import type { ToolCtx } from './server.js'
 
 export const INSTRUCTIONS = [
   'nektar is verifiable, encrypted agent memory anchored on BSV.',
-  'Before answering a factual question, call `recall` (or use the `grounded-answer` prompt) and answer only from items whose check is verified.',
+  'Before answering a factual question, call `recall` (omit `shard` to discover and read available shards such as `welcome`, or use the `grounded-answer` prompt) and answer only from items whose check is verified.',
   'For a verifiable answer, pass your draft claims to `groundedAnswer`: every claim must cite a verified fragment and be quoted or entailed — ungrounded text is stripped and an answer receipt is anchored.',
   'When `groundedAnswer`/`commitReceipt` returns receiptToken, end the answer with a one-line footer `receipt: <receiptToken>` and the `verify:` URL — anyone can scan it at /v1/verify to check the answer was committed and derivable.',
   'When the user states a fact worth keeping, call `remember` with its source.',

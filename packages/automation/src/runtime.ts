@@ -385,15 +385,6 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     ownOutput: async (tx, vout) => {
       await mem.funds.adopt(tx, vout)
     },
-    settleEscrow: async (tx) => {
-      await mem.funds.spent(tx)
-    },
-    txDied: async (tx) => {
-      await mem.funds.died(tx)
-    },
-    recordAired: (tx) => {
-      mem.recordAired?.(tx)
-    },
     txEffects: txFx,
     transport,
     ai: cfg.ai ?? aiFromEnv(),
@@ -504,7 +495,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       // the watchdog's bounded pass re-pokes the pump — the poke coalesces
       // on the draining flag so this costs one flagged call at most.
       const next = await store.nextOutboxAt()
-      if (next !== undefined && next <= Date.now()) store.outboxReady?.()
+      if (next !== undefined && next <= (cfg.now ?? Date.now)()) store.outboxReady?.()
     } catch (e) {
       log(`automation: watchdog: ${(e as Error).message}`)
     }
@@ -521,6 +512,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     const f = await mem.txFacts(txid)
     if (f.verdict === 'mined') return { status: 'proven' as const, source: 'chain' }
     if (f.verdict === 'dead') return { status: 'rejected' as const, source: f.source ?? 'chain', reason: 'dead' }
+    if (f.tx !== undefined) return { status: 'seen' as const, source: 'chain' }
     return hintSeen(f.hint) ? { status: 'seen' as const, source: 'broadcaster' } : undefined
   }
   let lastLedgerSweep = 0
@@ -533,10 +525,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // the durable executor is unconditional: every routing site's send/call
   // lands at the restate ingress, and the handler defs serve on the
   // in-process endpoint the server invokes over HTTP/2.
-  const txDeps = { store, fx: txFx, log, submit: (actionId: string) => engine.submitTx(actionId) }
+  const txDeps = { store, fx: txFx, log }
   const sweepDeps = {
     scan: async function* () {
-      for await (const x of scanTxObservations(store, observeFn, undefined)) yield { actionId: x.w.actionId, observe: x.observe }
+      for await (const x of scanTxObservations(store, observeFn, undefined, cfg.now)) yield { actionId: x.w.actionId, observe: x.observe }
     },
     resubmitRows: () => store.walletTxs(['prepared', 'submission_unknown']),
     log
@@ -617,7 +609,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // and self-schedules its ceiling at the earliest next_at
   const transportDeps = {
     dueRows: () => store.dueOutbox(),
-    nextAt: () => store.nextOutboxAt(),
+    nextAt: (excludeIds?: string[]) => store.nextOutboxAt(excludeIds !== undefined && excludeIds.length > 0 ? { excludeIds } : undefined),
     deliverItem: (item: OutboxItem) => engine.deliverOutboxItem(item),
     // next_at is stamped on the store's clock — the arm must subtract the
     // SAME clock or every due-row arm lands early/late by the clock skew
@@ -769,8 +761,6 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // bounds would let one pass eat 3x the budget)
             const passUntil = t0 + WAITS.passBound.ms
             const legMs = (): number => Math.max(1, Math.min(WAITS.dealsBound.ms, passUntil - Date.now()))
-            await bound('poll', () => rt.poll(), legMs())
-            const t1 = Date.now()
             await bound('tick', () => engine.tick(), legMs())
             const t2 = Date.now()
             // the ledger sweep rides the deals pass — serialized behind the
@@ -787,7 +777,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             }
             rt.pushAcks()
             const t3 = Date.now()
-            if (t3 - t0 > WAITS.passReport.ms) log(`automation: pass ${t3 - t0}ms (poll ${t1 - t0} tick ${t2 - t1} acks ${t3 - t2})`)
+            if (t3 - t0 > WAITS.passReport.ms) log(`automation: pass ${t3 - t0}ms (tick ${t2 - t0} acks ${t3 - t2})`)
             // the push-vs-floor witness: which sources actually fired passes.
             // A path that never counts is dead push degrading to ceiling speed
             if (t3 - lastWakeReport > WAITS.wakeReport.ms) {
@@ -961,9 +951,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     rt.countWake('height')
     // the due-gate lives inside the wake leg — a tip that frees no op
     // costs one journaled probe, not a pass
-    const work = exec
-      .send({ service: EXEC_SVC.wake, handler: 'height' }, { tip }, { idempotencyKey: `wake:height:${tip}` })
-      .catch((e: unknown) => log(`automation: height: ${(e as Error).message}`))
+    const work = exec.send({ service: EXEC_SVC.wake, handler: 'height' }, { tip }).catch((e: unknown) => log(`automation: height: ${(e as Error).message}`))
     rt.inflight.add(work)
     const done = (): void => {
       rt.inflight.delete(work)

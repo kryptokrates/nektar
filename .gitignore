@@ -48,6 +48,7 @@ codex-receipts.log
 /.unused-sites.txt
 tools/curve-vectors/target/
 /dist-deploy/
+packages/mcp/restate/
 .tools/
 test/fixtures/swarm-keys/
 packages/bstack/bundle/

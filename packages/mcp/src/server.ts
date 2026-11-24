@@ -44,11 +44,12 @@ export const TOOLS = [
   },
   {
     name: 'recall',
-    description: 'Recall fragments for a shard; decrypts when the agent seed is held. Returns an answer receipt.',
+    description:
+      'Recall fragments for a shard (omit shard to list and recall readable shards); decrypts when the agent seed is held. Returns an answer receipt.',
     inputSchema: {
       type: 'object',
       properties: {
-        shard: { type: 'string', description: 'memory namespace' },
+        shard: { type: 'string', description: 'memory namespace; omit to list available non-private shards and recall from them' },
         seq: { type: 'number', description: 'one record (the seq returned by remember); omit to recall the whole shard' },
         identity: {
           type: 'object',
@@ -60,8 +61,7 @@ export const TOOLS = [
           description:
             'clearance presentation for level>0 records (client wallet): {commitment, proof, transcript:{queryId,fragmentId,nonce(hex)}, requiredLevel(decimal string)}'
         }
-      },
-      required: ['shard']
+      }
     }
   },
   {
@@ -217,11 +217,11 @@ export const TOOLS = [
   {
     name: 'rotate',
     description:
-      "Rotate a shard's owner key on-chain; emits a matching rotation cert leaf. New owner: newOwnerWif (legacy key custody) or newOwnerKeyId (wallet-derived keyID, e.g. nektar-shard:payments:2 — wallet custody, no key material crosses the API).",
+      "Rotate a shard's owner key on-chain; emits a matching rotation cert leaf. New owner: newOwnerKeyId (wallet-derived keyID, e.g. nektar-shard:payments — no key material crosses the API).",
     inputSchema: {
       type: 'object',
-      properties: { shard: { type: 'string' }, newOwnerWif: { type: 'string' }, newOwnerKeyId: { type: 'string' } },
-      required: ['shard']
+      properties: { shard: { type: 'string' }, newOwnerKeyId: { type: 'string' } },
+      required: ['shard', 'newOwnerKeyId']
     }
   },
   {

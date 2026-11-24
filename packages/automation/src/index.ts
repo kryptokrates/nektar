@@ -22,7 +22,7 @@ export {
 export { type TxObservationInput, wrapBroadcast, leasePredicate, splitDailySpend, TransactionWatcher, custodyTxEffects, txFromRow } from './ledger.js'
 export { emitTxEvent, replayTxEffects, inertTxEffects, TX_EFFECT_OF, IN_TX_INTENTS, DESCRIPTIVE_INTENTS, type TxEffects } from './machines/effects.js'
 export * from './rt/index.js'
-export { obsEvent, opsFsmLegacy } from './machines/driver.js'
+export { obsEvent } from './machines/driver.js'
 export {
   type MarketMessage,
   type MarketTransport,
@@ -41,6 +41,7 @@ export {
   type PurchaseIntent,
   type OfferIntent,
   policyError,
+  policyApprovalError,
   canonicalJson,
   digestOf,
   policyHash,

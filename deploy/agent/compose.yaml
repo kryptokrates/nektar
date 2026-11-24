@@ -27,6 +27,10 @@ services:
       NEKTAR_UNATTENDED: ${NEKTAR_UNATTENDED:-}
       NEKTAR_FUND_WIF: ${NEKTAR_FUND_WIF:-}
       NEKTAR_FUND_TXIDS: ${NEKTAR_FUND_TXIDS:-}
+      NEKTAR_WAIT_FUNDING: ${NEKTAR_WAIT_FUNDING:-}
+      NEKTAR_INDEXER_DISCOVERY: ${NEKTAR_INDEXER_DISCOVERY:-}
+      NEKTAR_OPERATOR_TOKEN: ${NEKTAR_OPERATOR_TOKEN:-}
+      NEKTAR_VERIFY_BASE: ${NEKTAR_VERIFY_BASE:-}
       NEKTAR_MARKET_LOCAL_HOSTS: ${NEKTAR_MARKET_LOCAL_HOSTS:-}
       # unset = the baked-in seed hosts for this network (testnet defaults
       # join the public quorum); set to pin your own host pair
@@ -47,6 +51,9 @@ services:
       NEKTAR_MAX_FEE_SATS_PER_TX: ${NEKTAR_MAX_FEE_SATS_PER_TX:-}
       NEKTAR_MAX_SPEND_SATS_PER_DAY: ${NEKTAR_MAX_SPEND_SATS_PER_DAY:-}
       NEKTAR_MIN_BROADCAST_INTERVAL_MS: ${NEKTAR_MIN_BROADCAST_INTERVAL_MS:-}
+      NEKTAR_ZEROCONF_MAX_SATS: ${NEKTAR_ZEROCONF_MAX_SATS:-}
+      NEKTAR_ZEROCONF_MAX_ANCESTORS: ${NEKTAR_ZEROCONF_MAX_ANCESTORS:-}
+      NEKTAR_STRICT_HEADERS: ${NEKTAR_STRICT_HEADERS:-}
       NEKTAR_MAINNET_CONFIRM: ${NEKTAR_MAINNET_CONFIRM:-}
       NEKTAR_PAYMENTS: ${NEKTAR_PAYMENTS:-}
       NEKTAR_PAID_DISCLOSURE: ${NEKTAR_PAID_DISCLOSURE:-}
@@ -56,6 +63,7 @@ services:
       NEKTAR_RESTATE_URL: http://restate:8080
       NEKTAR_RESTATE_ADMIN: http://restate:9070
       NEKTAR_RESTATE_ENDPOINT_URI: http://agent:9080
+      NEKTAR_RESTATE_IDENTITY_KEYS: ${NEKTAR_RESTATE_IDENTITY_KEYS:-}
     volumes:
       # durable identity + wallet + journals — this volume IS the agent
       - agent-data:/data
@@ -67,6 +75,8 @@ services:
   restate:
     image: docker.restate.dev/restatedev/restate:1.8.1
     restart: unless-stopped
+    environment:
+      RESTATE_NODE_NAME: nektar
     volumes:
       - restate-data:/restate-data
 volumes:

@@ -1,4 +1,5 @@
 // operator/automation surface tools — extracted verbatim from the server.ts dispatchTool switch
+import { nektarEnv } from '@nektar/core'
 import { paidSaleAuthorized, singlePolicy } from './shared.js'
 import type { ToolHandler } from './shared.js'
 
@@ -11,19 +12,26 @@ export const handlers: Record<string, ToolHandler> = {
       const w = (await dd.ctx.ops.wallet()) as Record<string, unknown>
       d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
     }
+    const shardNames = mem.shards().filter((s) => !s.startsWith('__') && !mem.shardPrivate(s))
     // B3 — bootstrap state: 'sealed' = the agent publishes its bfinger
     // record and is discoverable; 'unsealed' = it still needs a configured
     // host set for counterparties to reach it
-    const out: Record<string, unknown> = { ...d, bootstrap: mem.automation?.bootstrap?.() ?? 'unsealed' }
+    const bootstrap = mem.automation ? (mem.automation.bootstrap?.() ?? 'unsealed') : 'standalone'
+    const out: Record<string, unknown> = { ...d, shardNames, bootstrap }
     // bumper layer — each degraded check names the unblock command, not just
     // the state; the caller should never need docs to take the next step
     const hints: string[] = []
-    if (out.bootstrap === 'unsealed') hints.push("unsealed — set NEKTAR_MARKET_HOSTS to this instance's public host pair so counterparties can reach it")
+    if (bootstrap === 'unsealed') hints.push("unsealed — set NEKTAR_MARKET_HOSTS to this instance's public host pair so counterparties can reach it")
     const funding = out.funding as Record<string, unknown> | undefined
-    if (funding?.funded === false)
+    if (funding?.funded === false) {
+      const addr = String(funding.address)
+      const importStep = nektarEnv('NEKTAR_HTTP_PORT') !== undefined ? 'POST /v1/tools/fundingImport {"txid":"<txid>"}' : 'call fundingImport {"txid":"<txid>"}'
+      const faucetStep =
+        out.network === 'testnet' ? ` (or drip: curl -X POST https://nektar.run/v1/faucet -H 'content-type: application/json' -d '{"address":"${addr}"}')` : ''
       hints.push(
-        `unfunded — send ${out.network === 'main' ? '' : 'testnet '}sats to ${String(funding.address)}, then POST /v1/tools/fundingImport {"txid":"<txid>"} (or boot with NEKTAR_WAIT_FUNDING=1)`
+        `unfunded — send ${out.network === 'main' ? '' : 'testnet '}sats to ${addr}${faucetStep}, then ${importStep} (or boot with NEKTAR_WAIT_FUNDING=1)`
       )
+    }
     if (typeof out.unprovenAnchors === 'number' && out.unprovenAnchors > 0)
       hints.push(`${out.unprovenAnchors} anchor(s) proving — safe to use meanwhile; nothing to do`)
     if (hints.length > 0) out.hints = hints

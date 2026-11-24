@@ -88,7 +88,18 @@ void test('20 seeded fault schedules: dropped/duplicated/reordered delivery + cr
         }
       }
       const ex = new Dispatcher()
-      const engine = new MarketEngine({
+      let engine!: MarketEngine
+      const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
+      const fx = {
+        ...inertTxEffects,
+        txDied: async (w: WalletTx) => {
+          await mem.funds.died(await rebuild(w))
+        },
+        txSpent: async (w: WalletTx) => {
+          await mem.funds.spent(await rebuild(w))
+        }
+      }
+      engine = new MarketEngine({
         store,
         memory: mem,
         key: mem.operatorKey(),
@@ -98,25 +109,13 @@ void test('20 seeded fault schedules: dropped/duplicated/reordered delivery + cr
         height: () => mem.chainHeight(),
         fetchTx: async (id) => chain.fetchTx(id),
         broadcast: (tx) => mem.broadcastTx(tx),
-        settleEscrow: (tx) => mem.funds.spent(tx),
+        txEffects: fx,
         transport,
         ai: new ScriptedExecutor(),
         executor: ex,
         opts: { refundBlocks: 8, ...ZEROCONF_OPEN }
       })
-      const rebuild = (w: WalletTx) => engine.walletCoordinator!.rebuildTx(w)
-      wireEngine(ex, engine, store, {
-        fx: {
-          ...inertTxEffects,
-          txDied: async (w) => {
-            await mem.funds.died(await rebuild(w))
-          },
-          txSpent: async (w) => {
-            await mem.funds.spent(await rebuild(w))
-          }
-        },
-        now
-      })
+      wireEngine(ex, engine, store, { fx, now })
       const a = { mem, store, engine, pub, policyHash, name }
       agents.set(name, a)
       if (seller) {

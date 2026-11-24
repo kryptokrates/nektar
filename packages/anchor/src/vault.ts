@@ -9,9 +9,6 @@ import type { Broadcaster, Funder, FundingOut } from '@nektar/chain'
 import { toSigner, signerPubHex, type SignerLike } from '@nektar/core'
 import { NEKTAR_FEEVAULT_ARTIFACT } from '@nektar/contracts'
 
-/** GOAL-v7 name kept for compatibility. */
-export type VaultParams = VaultConfig
-
 export interface VaultConfig {
   destPkh: string // 20B hex — the only payable address (anchor funding wallet)
   ownerPkh: string // 20B hex — operator key

@@ -3,7 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, Script, LockingScript } from '@bsv/sdk'
-import { testWorld, stackChain, skipUnlessStack, StackFunder, stackTreasury, testFunder, stackOnly, type TestFunder } from '@nektar/chain'
+import { testWorld, stackChain, skipUnlessStack, StackFunder, stackTreasury, testFunder, stackOnly, buildBump, type TestFunder } from '@nektar/chain'
 import { utf8 } from '@nektar/core'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -11,7 +11,7 @@ import { verifyReceipt } from '../src/receipt.js'
 import { _testReset, verifyQuoteSig, settlePayment, paymentRequired } from '../src/pay.js'
 import { HeaderUnavailableError, isHeaderUnavailable } from '@nektar/chain'
 import { openRuntime } from '../src/runtime.js'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -305,4 +305,74 @@ void test('payments: a header outage during ancestry verification is a retry, no
   mem.sdkTracker = realTracker
   const res = await settlePayment(mem, 'anchor', { invoiceId: inv.invoiceId, transaction: beefHex })
   assert.equal(res.txid, tx.id('hex'), 'the payment settles once headers answer again')
+})
+
+void test('payments: plain BEEF (0100beef) preserves parent BUMP, forged BUMP refused, payments.json renamed to .migrated', async (t) => {
+  _testReset()
+  process.env.NEKTAR_PAYMENTS = '1'
+  process.env.NEKTAR_OPERATOR_WIF = OP_KEY.toWif([0xef])
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-pay-beef-'))
+  process.env.NEKTAR_DATA_DIR = dir
+  const legacyFile = join(dir, 'payments.json')
+  writeFileSync(legacyFile, JSON.stringify({ consumed: ['aa'.repeat(32)] }))
+  t.after(() => {
+    delete process.env.NEKTAR_PAYMENTS
+    delete process.env.NEKTAR_OPERATOR_WIF
+    delete process.env.NEKTAR_DATA_DIR
+    _testReset()
+  })
+
+  const w = await testWorld(t, 10)
+  if (w === undefined) return
+  const { chain, funder } = w
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
+  const payer = await testFunder(6)
+  await chain.mine(1)
+  const { required } = await paymentRequired(mem, 'anchor', 100)
+  const accept = (required as { accepts: Array<{ amount: string; extra: { invoiceId: string; lockingScriptHex: string; opReturn: string } }> }).accepts[0]
+  const inv = accept.extra
+  const fund = await payer.take(Number(accept.amount) + 2000)
+  const realMp = (await chain.merklePathOf(fund.tx.id('hex')))!
+
+  // 1) forged BUMP on parent in plain BEEF -> rejected (strippedBumps > 0)
+  const badParent = Transaction.fromHex(fund.tx.toHex())
+  badParent.merklePath = buildBump([badParent.id('hex'), 'bb'.repeat(32)], 0, 777_777)
+  const badTx = new Transaction()
+  badTx.addInput({ sourceTransaction: badParent, sourceOutputIndex: fund.vout, unlockingScriptTemplate: new P2PKH().unlock(payer.keyPair) })
+  badTx.addOutput({ lockingScript: LockingScript.fromHex(inv.lockingScriptHex), satoshis: Number(accept.amount) })
+  badTx.addOutput({
+    lockingScript: new Script()
+      .writeOpCode(0x00)
+      .writeOpCode(0x6a)
+      .writeBin([...utf8(inv.opReturn)]),
+    satoshis: 0
+  })
+  badTx.addOutput({ lockingScript: new P2PKH().lock(payer.keyPair.toPublicKey().toAddress([0x6f])), change: true })
+  await badTx.fee()
+  await badTx.sign()
+  await assert.rejects(
+    () => settlePayment(mem, 'anchor', { invoiceId: inv.invoiceId, transaction: Buffer.from(badTx.toBEEF()).toString('hex') }),
+    /ancestry fails verification/
+  )
+  // legacy payments.json was migrated and renamed on first getReceiver() call
+  assert.equal(existsSync(legacyFile), false, 'payments.json renamed aside after migration')
+  assert.equal(existsSync(`${legacyFile}.migrated`), true, 'payments.json.migrated marker written')
+
+  // 2) valid plain BEEF (0100beef) with real parent BUMP settles cleanly
+  fund.tx.merklePath = realMp
+  const goodTx = new Transaction()
+  goodTx.addInput({ sourceTransaction: fund.tx, sourceOutputIndex: fund.vout, unlockingScriptTemplate: new P2PKH().unlock(payer.keyPair) })
+  goodTx.addOutput({ lockingScript: LockingScript.fromHex(inv.lockingScriptHex), satoshis: Number(accept.amount) })
+  goodTx.addOutput({
+    lockingScript: new Script()
+      .writeOpCode(0x00)
+      .writeOpCode(0x6a)
+      .writeBin([...utf8(inv.opReturn)]),
+    satoshis: 0
+  })
+  goodTx.addOutput({ lockingScript: new P2PKH().lock(payer.keyPair.toPublicKey().toAddress([0x6f])), change: true })
+  await goodTx.fee()
+  await goodTx.sign()
+  const res = await settlePayment(mem, 'anchor', { invoiceId: inv.invoiceId, transaction: Buffer.from(goodTx.toBEEF()).toString('hex') })
+  assert.equal(res.txid, goodTx.id('hex'), 'plain BEEF settles through TxStore.read')
 })

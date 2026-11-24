@@ -97,20 +97,8 @@ const fxFor = (deps: TxHooks): TxEffects => ({
 })
 
 // the engine-side twin — base.ts's own txFx mapping verbatim: the host's
-// txEffects when present, else the legacy triple over txFromRow
-const engineFx = (d: MarketDeps): TxEffects =>
-  d.txEffects ?? {
-    txSpent: async (wt) => {
-      await d.settleEscrow?.(txFromRow(wt))
-    },
-    txDied: async (wt) => {
-      await d.txDied?.(txFromRow(wt))
-    },
-    recordAired: async (wt) => {
-      await d.recordAired?.(txFromRow(wt))
-    },
-    exportExpired: () => {}
-  }
+// txEffects when present, else inertTxEffects
+const engineFx = (d: MarketDeps): TxEffects => d.txEffects ?? { txSpent: () => {}, txDied: () => {}, recordAired: () => {}, exportExpired: () => {} }
 
 // an engine whose durable legs run on an in-process Dispatcher — wireEngine
 // mirrors runtime.ts's service surface; the floor self-arm sits on a 60s
@@ -246,9 +234,11 @@ void test('N1: reconcile-dead on a submission_unknown escrow runs the custody ro
     deps(store, () => now, {
       broadcast: () => ({ status: 'error', description: 'transport: down' }) as never,
       txFacts: () => ({ verdict: 'dead' }) as never,
-      txDied: () => {
-        died++
-      }
+      txEffects: fxFor({
+        txDied: () => {
+          died++
+        }
+      })
     })
   )
   await engine.tick()

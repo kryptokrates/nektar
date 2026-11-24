@@ -20,6 +20,10 @@ export const writeErr = (chunk: string): void => {
   process.stderr.write(chunk)
 }
 
+export const writeOut = (chunk: string): void => {
+  process.stdout.write(chunk)
+}
+
 /** mkLog(prefix) → (line) => void — ISO-8601 stamp + `prefix:` + line on
  *  stderr, exactly one stamped line per call (a trailing '\n' in the line
  *  is normalized away; pass-through seams emit complete lines). Pass ''

@@ -333,6 +333,24 @@ const matrix: Scenario[] = [
       await new Promise((r) => setTimeout(r, 100))
       assert.equal(c.probe.records.filter((r) => r.key === key).length, 1, 'a completed invocation still dedupes — the runtime retry discipline relies on it')
     }
+  },
+  {
+    name: 'call() clears txKey/custodyKey ALS in callee while preserving held deadlock guard (Dispatcher-only)',
+    match: false,
+    run: async (c) => {
+      const ex = c.ex as Dispatcher
+      let calleeScope: ReturnType<typeof rtScopeKey>
+      ex.register(c.svc, 'inspect', () => {
+        calleeScope = rtScopeKey()
+        return Promise.resolve({ ok: true })
+      })
+      await inRtScope({ txKey: 'tx-caller', custodyKey: 'cust-caller', held: [`${c.svc}/caller`] }, () =>
+        ex.call({ service: c.svc, handler: 'inspect', key: `CALLEE-${c.run}` }, {})
+      )
+      assert.equal(calleeScope?.txKey, undefined, 'call() must not leak caller txKey across invocation boundary')
+      assert.equal(calleeScope?.custodyKey, undefined, 'call() must not leak caller custodyKey across invocation boundary')
+      assert.ok(calleeScope?.held?.includes(`${c.svc}/caller`), 'held keys still accumulate for deadlock detection')
+    }
   }
 ]
 

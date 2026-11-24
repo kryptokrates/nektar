@@ -140,15 +140,18 @@ try {
 note(`wrote ${envPath}` + (generatedPass ? '\ngenerated NEKTAR_KEY_PASSPHRASE — .env + the data dir ARE the agent; back up both' : ''))
 
 // ─── next steps ─────────────────────────────────────────────────────────────
+const hasRestateBin = existsSync(join(root, 'packages/mcp/restate/restate-server'))
 console.log('\nNext:')
+if (!hasRestateBin && !process.env.NEKTAR_RESTATE_URL && !prev.NEKTAR_RESTATE_URL)
+  console.log('  pnpm restate:up    — install the local Restate executor sidecar (once, required at boot)')
 if (net === 'regtest') {
   console.log('  pnpm stack:up      — local Teranode stack (regtest coins, free)')
   console.log('  pnpm demo          — first verified receipt in <60s on the stack')
   console.log('  pnpm setup:claude  — wire Claude Code (or: pnpm setup:codex)')
 } else if (net === 'testnet') {
   console.log(`  node packages/mcp/dist/src/bin.js            # starts on testnet (port: ${port ?? 'stdio only'})`)
-  console.log('  → call fundingStatus, send testnet coins to the address, then fundingImport <txid>')
-  console.log('  → then want → deals → your first purchase on the public market')
+  console.log('  → call recall {} for the seeded welcome shard; call doctor for your fee address & testnet faucet curl')
+  console.log('  → for trading: node packages/mcp/dist/src/bin.js policy approve --preset buyer')
   console.log('  pnpm setup:claude                            # wire your agent client')
 } else if (net === 'main') {
   console.log('  MAINNET spends real BSV. Required before the server will start:')
@@ -171,7 +174,12 @@ if (existsSync(binJs) && net !== 'main') {
     env: { ...process.env, NEKTAR_NETWORK: net, NEKTAR_DATA_DIR: dataDir, NEKTAR_KEY_PASSPHRASE: pass || undefined, NEKTAR_HTTP_PORT: String(alivePort) },
     stdio: ['ignore', 'pipe', 'pipe']
   })
-  child.stderr.resume()
+  const errLines = []
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk) => {
+    for (const l of chunk.split(/\r?\n/)) if (l.trim()) errLines.push(l.trim())
+    if (errLines.length > 20) errLines.splice(0, errLines.length - 20)
+  })
   child.stdout.resume()
   let alive = false
   for (let i = 0; i < 60; i++) {
@@ -186,7 +194,12 @@ if (existsSync(binJs) && net !== 'main') {
   }
   child.kill()
   if (alive) s.stop('alive-check: instance booted — your agent is alive')
-  else s.error('alive-check: instance did NOT come up — run doctor for diagnostics')
+  else {
+    const tail = errLines.slice(-4).join('\n  ')
+    s.error(`alive-check: instance did NOT come up${tail ? `\n  ${tail}` : ''}`)
+    if (/restate|RESTATE_REQUIRED/i.test(tail)) note('run once: pnpm restate:up (installs the local Restate sidecar), or set NEKTAR_RESTATE_URL', 'next step')
+    else note('run: node tools/doctor.mjs', 'diagnostics')
+  }
 } else if (!existsSync(binJs)) {
   note('skipping alive-check — run pnpm -r build first')
 }

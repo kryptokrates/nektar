@@ -146,6 +146,8 @@ spec:
             # HTTP server owns :8080, so the ingress moves off it
             - name: RESTATE_INGRESS__BIND_PORT
               value: "8111"
+            - name: RESTATE_NODE_NAME
+              value: "nektar"
           startupProbe:
             httpGet:
               path: /health

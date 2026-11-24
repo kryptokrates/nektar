@@ -20,6 +20,13 @@ export abstract class MemTx extends MemKeys {
   async readTxWire(hex: string): Promise<Ingested> {
     return await this.txOps.readTxWire(hex)
   }
+  /** single-attempt proof lookup through the chain port (falls back to
+   *  chain.getTx for bare test-chain embeddings without a ChainPort) */
+  async lookupProof(txid: string): Promise<import('@bsv/sdk').MerklePath | undefined> {
+    const mp = await this.proofLookup?.(txid)
+    if (mp !== undefined) return mp
+    return (await (this.chain as { getTx?: (t: string) => Transaction | undefined | Promise<Transaction | undefined> }).getTx?.(txid))?.merklePath
+  }
   /** subscribe to verified tx proofs — fed by verified broadcaster callbacks
    *  (http layer checks the BUMP first) and by chain 'mined' status events */
   onTxProof(cb: (txid: string, mp: import('@bsv/sdk').MerklePath) => void): void {

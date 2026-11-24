@@ -8,8 +8,26 @@
 // The handler bodies back the endpoint's Restate handlers — services.ts
 // wraps them in ctx.run steps; tests invoke the same bodies directly.
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { nektarEnv } from '@nektar/core'
+import { ioSignal, nektarEnv } from '@nektar/core'
 import { WAITS } from '../waits.js'
+
+export class PermanentError extends Error {
+  readonly code: number
+  constructor(message: string, code = 400) {
+    super(message)
+    this.name = 'PermanentError'
+    this.code = code
+  }
+}
+
+export class RetryAfterError extends Error {
+  readonly retryAfterMs: number
+  constructor(message: string, retryAfterMs: number) {
+    super(message)
+    this.name = 'RetryAfterError'
+    this.retryAfterMs = retryAfterMs
+  }
+}
 
 export interface InvokeTarget {
   /** restate service/object/workflow name */
@@ -122,7 +140,7 @@ export class RestateExecutor implements Executor {
       },
       body: JSON.stringify(arg ?? null),
       // the ingress is local — a dead/wedged one fails fast rather than parking a send
-      signal: AbortSignal.timeout(ioMs)
+      signal: ioSignal(ioMs)
     })
   }
 

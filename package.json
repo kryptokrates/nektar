@@ -32,6 +32,7 @@
     "mcp:install": "node tools/mcp-install.mjs",
     "setup:claude": "node tools/setup-claude.mjs",
     "init:nektar": "node tools/init.mjs",
+    "restate:up": "node tools/restate-up.mjs",
     "update:nektar": "node tools/update.mjs",
     "doctor:fix": "node tools/doctor.mjs --fix",
     "config:nektar": "node tools/config.mjs",

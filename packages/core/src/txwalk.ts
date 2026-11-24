@@ -1,5 +1,29 @@
 // Transaction-graph walks — pure traversals over sourceTransaction links.
-import { Transaction } from '@bsv/sdk'
+import type { Transaction, TransactionInput } from '@bsv/sdk'
+import { sparse } from './sparse.js'
+
+export function isEfStub(tx: Transaction): boolean {
+  if (tx.inputs.length === 0 && tx.outputs.some((o: unknown) => o === null)) return true
+  try {
+    tx.id('hex')
+    return false
+  } catch {
+    return true
+  }
+}
+
+export function fullSourceTx(inp: TransactionInput): Transaction | undefined {
+  const src = inp.sourceTransaction
+  if (src === undefined || isEfStub(src)) return undefined
+  if (inp.sourceTXID !== undefined && src.id('hex') !== inp.sourceTXID) return undefined
+  return src
+}
+
+export function inputPrevout(inp: TransactionInput): { txid: string; vout: number } | undefined {
+  const txid = inp.sourceTXID ?? fullSourceTx(inp)?.id('hex')
+  const vout = sparse(inp.sourceOutputIndex)
+  return txid !== undefined && vout !== undefined ? { txid, vout } : undefined
+}
 
 /** every ancestor of tx in dependency order (parents before children) via
  *  sourceTransaction links — the order a missing-ancestors broadcast heal
@@ -9,7 +33,7 @@ export function ancestorsOf(tx: Transaction): Transaction[] {
   const out: Transaction[] = []
   const walk = (t: Transaction): void => {
     for (const inp of t.inputs) {
-      const src = inp.sourceTransaction
+      const src = fullSourceTx(inp)
       if (src === undefined) continue
       const id = src.id('hex')
       if (seen.has(id)) continue

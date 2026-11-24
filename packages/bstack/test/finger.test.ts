@@ -237,7 +237,7 @@ test('finger: forged record under another key loses to the real chain', async ()
     // the real tm_finger refuses it: the carrier lock derives from `other`,
     // not from the identity the record names
     const { submitAll } = await import('../src/hosts.js')
-    await submitAll(s.hosts, carrier.toAtomicBEEF(), ['tm_finger'], { retryWaits: [] })
+    await submitAll(s.hosts, carrier.toAtomicBEEF(), ['tm_finger'])
     const got = await resolveFinger({ hosts: s.hosts, pub, tracker: s.tracker })
     assert.equal(got?.seq, 1, 'the forged seq-2 was refused; the real chain stands')
   } finally {

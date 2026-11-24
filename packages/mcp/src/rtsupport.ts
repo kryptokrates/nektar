@@ -77,6 +77,21 @@ export function loadFeeKey(dataDir: string, wif: string | undefined, pass: strin
   return key
 }
 
+export async function operatorPubForDataDir(dataDir: string, net: 'regtest' | 'testnet' | 'main', pass: string | undefined): Promise<string> {
+  if (net !== 'regtest' && nektarEnv('NEKTAR_WALLET') === 'client') {
+    const { WalletClient } = await import('@bsv/sdk')
+    const sub = await probeWalletSubstrate()
+    if (sub === 'locked') throw new Error('NEKTAR_WALLET=client: BSV Desktop is running but the vault is LOCKED — unlock it first')
+    if (sub === 'absent') throw new Error('NEKTAR_WALLET=client: no BRC-100 wallet substrate on localhost:3321 — start BSV Desktop unlocked')
+    const w = new WalletClient('auto', 'nektar')
+    return (await w.getPublicKey({ identityKey: true })).publicKey
+  }
+  const wif = nektarEnv('NEKTAR_FUND_WIF') ?? (net === 'regtest' ? nektarEnv('NEKTAR_REGTEST_WIF') : undefined)
+  return loadFeeKey(dataDir, wif, pass, net === 'main')
+    .toPublicKey()
+    .toString()
+}
+
 // NEKTAR_TX_LOG: when set to a file path, append one JSON line per SUCCESSFUL
 // broadcast — {t, txid, bytes, inSats, outSats, feeSats} — so operator cost
 // accounting comes from the wire, not from estimates. inSats/feeSats are null
@@ -571,16 +586,26 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
   // flag is the only removal that works on every subscription shape
   let closed = false
   let anchorWake = false
-  d.mem.onAnchorQueued(() => {
-    if (anchorWake || closed) return
+  let wantAnchor = false
+  const fireAnchor = (): void => {
+    if (closed) return
+    if (anchorWake) {
+      wantAnchor = true
+      return
+    }
     anchorWake = true
     void executor()
       .call({ service: EXEC_SVC.confirmer, handler: 'tick', key: 'main' }, {})
       .catch((e: unknown) => d.nlog(`confirmer wake: ${(e as Error).message}`))
-      .finally(() => {
+      .then(() => {
         anchorWake = false
+        if (wantAnchor && !closed) {
+          wantAnchor = false
+          fireAnchor()
+        }
       })
-  })
+  }
+  d.mem.onAnchorQueued(fireAnchor)
   // the ledger watcher — event-driven off the shared substrate's sweeps,
   // height advances and pushed broadcaster statuses; no private interval.
   // Construction + custody effects live in rtsupport (boot plumbing)
@@ -592,6 +617,7 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
     net: d.net
   })
   let watching = false
+  let wantWatch = false
   // journal retention on the records ledger — 'confirmed' is the one tx
   // state with no outgoing edge, so its event journal is complete and
   // prunable past the window. Daily-gated: event bursts must not sweep
@@ -612,13 +638,21 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
   // event burst still coalesces to at most one queued pass
   rtDefs.push(await legObject(EXEC_SVC.watcher, watchLeg, RT_OPTS_HEAVY))
   const watchOnce = (): void => {
-    if (watching || closed) return
+    if (closed) return
+    if (watching) {
+      wantWatch = true
+      return
+    }
     watching = true
     void executor()
       .call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})
       .catch((e) => d.nlog(`ledger watcher: ${(e as Error).message}`))
-      .finally(() => {
+      .then(() => {
         watching = false
+        if (wantWatch && !closed) {
+          wantWatch = false
+          watchOnce()
+        }
       })
   }
   const relayHeight = (tip: number) => {

@@ -91,12 +91,16 @@ token.
 Agent-profile clients see ten tools: `remember`, `recall`, `groundedAnswer`,
 `verifyReceipt`, `want`, `sell`, `deals`, `fund`, `doctor`,
 `automationDoctor`. `NEKTAR_TOOL_PROFILE=operator` on the instance exposes
-the full set.
+the full set. Call `recall {}` (or `{"shard":"welcome"}`) for your first
+verified read from the seeded `welcome` shard. See [docs/ADAPTERS.md](ADAPTERS.md)
+for the frozen contract and additional client paste blocks.
 
 ## Buying and selling (market)
 
 Memory calls (`remember`/`recall`/`groundedAnswer`) work on any instance.
-Market calls need the operator to have approved a policy:
+Market calls need `NEKTAR_AUTOMATION=1` and an operator-approved policy
+(`nektar policy approve --preset buyer|seller|both` on Docker/host builds, or
+`pnpm automation policy approve <file>` in a source checkout):
 
 - `want {domains, question, maxSats}` — publish a buy intent; the engine
   collects offers and settles escrow itself.

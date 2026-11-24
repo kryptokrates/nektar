@@ -251,7 +251,7 @@ export async function handleBroadcasterStatus(
         }
       }
       if (mp === undefined) {
-        const cand2 = await (mem as unknown as { chain?: { merklePathOf?: (txid: string) => Promise<MerklePath | undefined> } }).chain?.merklePathOf?.(txid)
+        const cand2 = await mem.lookupProof(txid)
         // the fetched path must verify against our own tracker too —
         // the broadcaster's word alone is a hint, never a proof
         if (cand2 !== undefined) {

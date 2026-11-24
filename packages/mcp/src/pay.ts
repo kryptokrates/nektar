@@ -4,13 +4,13 @@
 // No wallet ecosystem — anything that can sign a BSV tx can pay (a WIF is
 // enough). Settlement is publicly auditable from the tx alone: (pays payTo ≥
 // amount) ∧ (carries `nektarpay:<invoiceId>`) — the receipt commits the txid.
-import { Transaction, PrivateKey, PublicKey, Signature, P2PKH, Beef } from '@bsv/sdk'
-import type { ChainTracker } from '@bsv/sdk'
+import { Transaction, PrivateKey, PublicKey, Signature, P2PKH } from '@bsv/sdk'
 import { LedgerReceiver, spentOutpoints } from '@lightwebinc/bcommon/host'
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { utf8, sha256, toHex, signerAddress, signerPubHex, toSigner, nektarEnv, nektarEnvNum } from '@nektar/core'
+import { utf8, sha256, toHex, signerAddress, signerPubHex, toSigner, nektarEnv, nektarEnvNum, fullSourceTx } from '@nektar/core'
+import { isHeaderUnavailable } from '@nektar/chain'
 import type { NektarMemory } from './memory.js'
 
 export const paymentsEnabled = (): boolean => /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAYMENTS') ?? '')
@@ -76,16 +76,17 @@ export const priceFor = (tool: string): number =>
     nektarEnv(`NEKTAR_PRICE_${tool.toUpperCase()}_SATS`) ?? nektarEnv('NEKTAR_PRICE_SATS') ?? (tool === 'anchor' ? 100 : PROVER_TOOLS.has(tool) ? 500 : 250)
   )
 
-/** walk the tx's carried ancestry: every served BUMP must verify against
- * `tracker`; unproven ancestry may run at most `NEKTAR_PAY_ANCESTRY` hops
- * (default 4) and at most `NEKTAR_PAY_ANCESTRY_NODES` total parents
- * (default 64) — absent parents don't count (the broadcaster validates
- * them), a carried-but-unproven one does, and an invalid BUMP refuses. */
-const carriedAncestryOk = async (tx: Transaction, tracker: ChainTracker): Promise<boolean> => {
+/** walk the tx's carried ancestry after TxStore.read verified/stripped BUMPs:
+ *  unproven ancestry may run at most `NEKTAR_PAY_ANCESTRY` hops (default 4)
+ *  and at most `NEKTAR_PAY_ANCESTRY_NODES` total parents (default 64) —
+ *  absent parents don't count (the broadcaster validates them), a carried-but-
+ *  unproven one does, and any surviving merklePath already verified against
+ *  our tracker inside TxStore.read. */
+const carriedAncestryOk = (tx: Transaction): boolean => {
   const maxHops = Math.max(0, nektarEnvNum('NEKTAR_PAY_ANCESTRY') ?? 4)
   const maxNodes = Math.max(1, nektarEnvNum('NEKTAR_PAY_ANCESTRY_NODES') ?? 64)
   const seen = new Set([tx.id('hex')])
-  let frontier = tx.inputs.map((i) => i.sourceTransaction).filter((p): p is Transaction => p !== undefined)
+  let frontier = tx.inputs.map(fullSourceTx).filter((p): p is Transaction => p !== undefined)
   for (let hops = 0; frontier.length > 0; hops++) {
     if (hops >= maxHops) return false
     const next: Transaction[] = []
@@ -94,11 +95,11 @@ const carriedAncestryOk = async (tx: Transaction, tracker: ChainTracker): Promis
       if (seen.has(id)) continue
       seen.add(id)
       if (seen.size > maxNodes) return false
-      if (p.merklePath !== undefined) {
-        if (!(await p.merklePath.verify(id, tracker))) return false
-        continue // a proven parent terminates its branch
+      if (p.merklePath !== undefined) continue // verified by TxStore.read — terminates branch
+      for (const i of p.inputs) {
+        const src = fullSourceTx(i)
+        if (src !== undefined) next.push(src)
       }
-      for (const i of p.inputs) if (i.sourceTransaction !== undefined) next.push(i.sourceTransaction)
     }
     frontier = next
   }
@@ -177,9 +178,10 @@ const getReceiver = (): LedgerReceiver => {
   receiver ??= new LedgerReceiver(payDir())
   if (!legacyMigrated) {
     legacyMigrated = true
+    const legacyFile = legacyPayFile()
     try {
-      if (existsSync(legacyPayFile()))
-        for (const t of (JSON.parse(readFileSync(legacyPayFile(), 'utf8')).consumed ?? []) as string[])
+      if (existsSync(legacyFile)) {
+        for (const t of (JSON.parse(readFileSync(legacyFile, 'utf8')).consumed ?? []) as string[])
           receiver.claim({
             txid: String(t),
             beef: [],
@@ -192,6 +194,12 @@ const getReceiver = (): LedgerReceiver => {
             inputs: [],
             decision: 'fast'
           })
+        try {
+          renameSync(legacyFile, `${legacyFile}.migrated`)
+        } catch {
+          /* rename failed — migration is idempotent, next boot retries */
+        }
+      }
     } catch {
       /* legacy file unreadable — txid-only protection survives in memory */
     }
@@ -270,35 +278,19 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
     throw new Error('invoice expired — call payQuote for a fresh one')
   }
   const recv = getReceiver()
-  // raw hex OR BEEF: BEEF carries the funding parents — needed by script
-  // validation and supplied to Teranode as Extended
-  // Format. Bare legacy hex is fine when the network already knows the
-  // parents (mainnet/testnet broadcasts, tests with registered parents).
-  let tx: Transaction | undefined
+  // raw hex, EF, or BEEF (v1/v2/Atomic): TxStore.read parses all wire forms,
+  // verifies carried BUMPs against our tracker (rethrowing HeaderUnavailableError),
+  // and counts any unverified/forged BUMPs it stripped.
+  let tx: Transaction
+  let strippedBumps = 0
   try {
     const h = String(payment.transaction ?? '').replace(/^0x/, '')
-    const bytes = Array.from(Buffer.from(h, 'hex'))
-    if (h.startsWith('01010101')) {
-      tx = Transaction.fromAtomicBEEF(bytes)
-    } else if (h.startsWith('0100beef')) {
-      // BEEF carries ancestors topologically — the subject tx is last; wire
-      // each input's sourceTransaction from the bundle so SpendGuard can
-      // resolve input values and the broadcaster can emit Extended Format.
-      const beef = Beef.fromBinary(bytes)
-      const subject = beef.txs.at(-1)!
-      tx = subject.tx ?? (subject.rawTx ? Transaction.fromBinary(subject.rawTx) : undefined)
-      if (!tx) throw new Error('BEEF bundle has no subject transaction')
-      for (const inp of tx.inputs) {
-        if (!inp.sourceTransaction && inp.sourceTXID) {
-          const p = beef.findTxid(inp.sourceTXID)
-          const parent = p?.tx ?? (p?.rawTx ? Transaction.fromBinary(p.rawTx) : undefined)
-          if (parent) inp.sourceTransaction = parent
-        }
-      }
-    } else {
-      tx = Transaction.fromHex(h)
-    }
+    if (h.length === 0) throw new Error('empty transaction')
+    const ingested = await mem.readTxWire(h)
+    tx = ingested.tx
+    strippedBumps = ingested.strippedBumps ?? 0
   } catch (e) {
+    if (isHeaderUnavailable(e)) throw e
     throw new Error(`payment.transaction is not a parseable raw/BEEF tx (${(e as Error).message.slice(0, 80)})`, { cause: e })
   }
   const tagHex = Buffer.from(utf8(inv.opReturn)).toString('hex')
@@ -309,11 +301,11 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
   })
   if (!paid) throw new Error(`payment tx does not pay ${inv.payTo} ≥ ${inv.amount} sats`)
   if (!tagged) throw new Error(`payment tx is missing the invoice tag output — needs OP_FALSE OP_RETURN "${inv.opReturn}"`)
-  // counterparty-carried ancestry: every BUMP in the bundle verifies against
-  // OUR tracker, and the unproven chain it hangs off is bounded — a carried
-  // parent is our risk surface (double-spend room grows with unconfirmed
-  // depth); an absent one is the network's — broadcast rejects it
-  if (!(await carriedAncestryOk(tx, mem.sdkTracker())))
+  // counterparty-carried ancestry: every BUMP in the bundle must verify against
+  // OUR tracker (strippedBumps === 0), and the unproven chain it hangs off is
+  // bounded — a carried parent is our risk surface (double-spend room grows
+  // with unconfirmed depth); an absent one is the network's — broadcast rejects it
+  if (strippedBumps > 0 || !carriedAncestryOk(tx))
     throw new Error('payment ancestry fails verification or exceeds the unproven-depth cap — provide proven parents')
   const txid = tx.id('hex')
   // stock claim check BEFORE broadcast: replayed txid, or a conflict with a

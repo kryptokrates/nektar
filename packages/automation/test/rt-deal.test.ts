@@ -1,13 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import knexFactory from 'knex'
-import { PrivateKey } from '@bsv/sdk'
+import { P2PKH, PrivateKey, Transaction, UnlockingScript } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
 import { MarketEngine } from '../src/market.js'
 import type { MarketDeps } from '../src/market/types.js'
 import { NONTERMINAL } from '../src/market/types.js'
 import { setExecutor, EXEC_SVC } from '../src/rt/exec.js'
 import { Dispatcher, wireDealfan, wireDeal } from './rig.js'
+import { wireEngine } from '../src/rt/dispatch.js'
+import { inertTxEffects } from '../src/machines/effects.js'
 import { opWantId } from '../src/rt/services.js'
 import type { AutomationPolicy } from '../src/policy.js'
 import { DEFAULT_SCORE_WEIGHTS } from '../src/scoring.js'
@@ -19,6 +21,7 @@ import { DEFAULT_SCORE_WEIGHTS } from '../src/scoring.js'
 // still stamps tick_error — the same semantics the inline loop had.
 
 const key = PrivateKey.fromRandom()
+const sellerKey = PrivateKey.fromRandom()
 
 async function open(now?: () => number) {
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
@@ -265,6 +268,167 @@ void test('direct rail: ranking admits an offer whose covenant all-in would bust
     await engine.advanceOp(operation.operationId)
     const cur = await store.operation(operation.operationId)
     assert.equal(cur?.state, 'awaiting_disclosure', 'the direct offer selected and funded — escrow accounting would have rejected it over_budget')
+  } finally {
+    await kx.destroy()
+  }
+})
+
+void test('direct rail: wallet broadcast refusal / unknown joins pendingSubmit and never optimistically adopts change', async () => {
+  const mkPayTx = () => {
+    const parent = new Transaction()
+    parent.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: UnlockingScript.fromASM('OP_1') })
+    parent.addOutput({ satoshis: 500, lockingScript: new P2PKH().lock(key.toPublicKey().toHash()) })
+    const tx = new Transaction()
+    tx.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromASM('OP_1') })
+    tx.addOutput({ satoshis: 50, lockingScript: new P2PKH().lock(sellerKey.toPublicKey().toHash()) })
+    tx.addOutput({ satoshis: 400, lockingScript: new P2PKH().lock(key.toPublicKey().toHash()) })
+    return tx
+  }
+  for (const [label, br, wantState] of [
+    ['daily-cap', { status: 'error' as const, description: 'SpendGuard refused: daily cap exceeded' }, 'funding_deferred'],
+    ['unknown', { status: 'error' as const, description: 'transport: timeout' }, 'uncertain']
+  ] as const) {
+    const { kx, store } = await open(() => 1_700_000_000_000)
+    const ex = new Dispatcher()
+    try {
+      const p = policy()
+      p.limits.perTxFeeSats = 150
+      const hash = await store.approvePolicy(p, 'test')
+      const { operation } = await store.createOperation({
+        role: 'buyer',
+        kind: 'purchase',
+        dedupeKey: `dd-join-${label}`,
+        policyHash: hash,
+        network: 'regtest',
+        state: 'selected',
+        data: { selected: { key: 'k1' }, offers: { k1: directOffer() }, want: want() }
+      })
+      const payTx = mkPayTx()
+      let settled = 0
+      const fx = {
+        ...inertTxEffects,
+        txSpent: () => {
+          settled++
+        }
+      }
+      const d = deps(store, {
+        executor: ex,
+        now: () => 1_700_000_000_000,
+        opts: { directMaxSats: 100, directFeeReserveSats: 100 },
+        broadcast: () => Promise.resolve(br),
+        txEffects: fx,
+        call: (tool) => {
+          assert.equal(tool, 'sale#payBuild')
+          return Promise.resolve({
+            tx: payTx,
+            txHex: payTx.toHex(),
+            utxo: { txid: payTx.id('hex'), vout: 0, satoshis: 50, script: payTx.outputs[0].lockingScript.toHex() }
+          })
+        }
+      })
+      const engine = new MarketEngine(d)
+      wireEngine(ex, engine, {
+        store,
+        fx,
+        ceilingMs: () => 60_000,
+        now: () => 1_700_000_000_000
+      })
+      await engine.advanceOp(operation.operationId)
+      const cur = await store.operation(operation.operationId)
+      assert.equal(cur?.state, wantState, `${label}: direct rail must join pendingSubmit and unwind to ${wantState}`)
+      assert.equal(settled, 0, `${label}: txSpent must never adopt change before broadcast succeeds`)
+      if (label === 'daily-cap') {
+        assert.equal((await store.budgetStatus(hash)).lockedSats, 0, 'budget released on SpendGuard refusal')
+        // clock domain check: dueAt computed on domain now (1_700_000_000_000 → next UTC midnight), not wall clock
+        const expectedMidnight = new Date(1_700_000_000_000)
+        expectedMidnight.setUTCHours(24, 0, 0, 0)
+        assert.equal(cur?.dueAt, expectedMidnight.getTime())
+      }
+    } finally {
+      await ex.close()
+      await kx.destroy()
+    }
+  }
+})
+
+void test('seller direct rail: failed accept broadcast rolls back to quoted without calling ownOutput', async () => {
+  const { kx, store } = await open()
+  try {
+    const pkhHex = Buffer.from(sellerKey.toPublicKey().toHash()).toString('hex')
+    const buyerPkhHex = Buffer.from(key.toPublicKey().toHash()).toString('hex')
+    const directScript = new P2PKH().lock(sellerKey.toPublicKey().toHash()).toHex()
+    const payTx = new Transaction()
+    payTx.addOutput({ satoshis: 50, lockingScript: new P2PKH().lock(sellerKey.toPublicKey().toHash()) })
+    const txid = payTx.id('hex')
+    const { operation } = await store.createOperation({
+      role: 'seller',
+      kind: 'sale',
+      dedupeKey: 'sell-direct-refuse',
+      policyHash: 'p',
+      network: 'regtest',
+      state: 'quoted',
+      data: {
+        want: want(),
+        offer: {
+          cfg: { sellerPkh: pkhHex, price: 50, hWrapped: 'aa'.repeat(32), refundAfter: 200, maxFee: 10 },
+          sellerPub: sellerKey.toPublicKey().toString(),
+          offerSig: 'sig',
+          direct: true,
+          wrapped: 'deadbeef'
+        }
+      }
+    })
+    let owned = 0
+    const engine = new MarketEngine({
+      ...deps(store, {
+        key: sellerKey,
+        height: () => Promise.resolve(10),
+        readTx: () => Promise.resolve({ tx: payTx, spv: true, format: 'raw' as const }),
+        broadcast: () => Promise.resolve({ status: 'error', description: 'txn-mempool-conflict' }),
+        ownOutput: () => {
+          owned++
+        }
+      })
+    })
+    await engine.ingestMessage(key.toPublicKey().toString(), {
+      type: 'accept',
+      wantId: 'w-direct',
+      offerId: operation.operationId,
+      depositorPkh: buyerPkhHex,
+      utxo: { txid, vout: 0, satoshis: 50, script: directScript },
+      tx: payTx.toHex()
+    })
+    const items = await engine.pendingInbox()
+    await engine.dealEvent(items[0])
+    const cur = await store.operation(operation.operationId)
+    assert.equal(cur?.state, 'quoted', 'refused payment broadcast rolls sale back to quoted')
+    assert.equal(owned, 0, 'ownOutput must not adopt a payment whose broadcast failed')
+  } finally {
+    await kx.destroy()
+  }
+})
+
+void test('funding_deferred: pending txFacts without held tx bytes must not promote to awaiting_disclosure', async () => {
+  const { kx, store } = await open(() => 1_000_000)
+  try {
+    const { operation } = await store.createOperation({
+      role: 'buyer',
+      kind: 'purchase',
+      dedupeKey: 'fd-pending-absent',
+      policyHash: 'p',
+      network: 'regtest',
+      state: 'funding_deferred',
+      dueAt: 2_000_000,
+      data: { escrowTxid: 'cc'.repeat(32) }
+    })
+    const engine = new MarketEngine(
+      deps(store, {
+        now: () => 1_000_000,
+        txFacts: () => Promise.resolve({ verdict: 'pending' })
+      })
+    )
+    await engine.advanceOp(operation.operationId)
+    assert.equal((await store.operation(operation.operationId))?.state, 'funding_deferred', 'absent tx stays deferred')
   } finally {
     await kx.destroy()
   }

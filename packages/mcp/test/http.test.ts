@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { AddressInfo } from 'node:net'
-import { testWorld } from '@nektar/chain'
+import { HeaderUnavailableError, testWorld } from '@nektar/chain'
 import { verifyCheckpoint } from '@nektar/log'
 import { NektarMemory, createHttpApi, OPENAPI } from '../src/index.js'
 
@@ -151,6 +151,29 @@ void test('verify page: OG unfurl meta + install CTA + copyable badge markdown',
       if (savedNet === undefined) delete process.env.NEKTAR_NETWORK
       else process.env.NEKTAR_NETWORK = savedNet
     }
+  } finally {
+    srv.close()
+  }
+})
+
+void test('HTTP API: /v1/lane returns 500 (retry) instead of 422 when pushCarrier hits HeaderUnavailableError', async (t) => {
+  const w = await testWorld(t, 4)
+  if (w === undefined) return
+  const { chain, funder } = w
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
+  mem.automation = {
+    pushCarrier: () => Promise.reject(new HeaderUnavailableError(1, 'no-source'))
+  } as unknown as typeof mem.automation
+  const srv = createHttpApi(mem).listen(0)
+  await new Promise((r) => srv.once('listening', r))
+  const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`
+  try {
+    const r = await fetch(`${base}/v1/lane`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ beef: '01010101deadbeef' })
+    })
+    assert.equal(r.status, 500, 'header outage must return 500-retry, never 422 refusal')
   } finally {
     srv.close()
   }

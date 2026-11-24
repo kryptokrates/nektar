@@ -8,8 +8,9 @@ import { createServer, type Http2Server, type ServerHttp2Session } from 'node:ht
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { nektarEnv, nektarEnvNum, nap, type EnvSource } from '@nektar/core'
+import { nektarEnv, nektarEnvNum, nap, spread, type EnvSource } from '@nektar/core'
 import { WAITS } from '../waits.js'
+import { EXEC_SVC, RestateExecutor, type Executor } from './exec.js'
 
 export interface RtEndpoint {
   /** the URI the server invokes handlers at */
@@ -83,16 +84,21 @@ const optionsFingerprint = (services: unknown[]): string => {
   return createHash('sha256').update(services.map(stable).join('|')).digest('hex')
 }
 
+const listDeployments = async (admin: string, uri: string, ioMs: number): Promise<AdminDeployment[] | undefined> => {
+  const r = await fetch(`${admin.replace(/\/+$/, '')}/deployments`, { signal: AbortSignal.timeout(ioMs) })
+  if (!r.ok) return undefined
+  const body = (await r.json()) as { deployments?: AdminDeployment[] } | AdminDeployment[]
+  const list = Array.isArray(body) ? body : (body.deployments ?? [])
+  // the admin normalizes the registered uri (trailing slash) — a strict
+  // compare never matches → force-register every boot → orphaned sends
+  const want = uri.replace(/\/+$/, '')
+  return list.filter((d) => (d.uri ?? '').replace(/\/+$/, '') === want)
+}
+
 const manifestMatches = async (admin: string, uri: string, expected: string[]): Promise<boolean | undefined> => {
   try {
-    const r = await fetch(`${admin}/deployments`, { signal: AbortSignal.timeout(WAITS.registerIo.ms) })
-    if (!r.ok) return undefined
-    const body = (await r.json()) as { deployments?: AdminDeployment[] } | AdminDeployment[]
-    const list = Array.isArray(body) ? body : (body.deployments ?? [])
-    // the admin normalizes the registered uri (trailing slash) — a strict
-    // compare never matches → force-register every boot → orphaned sends
-    const want = uri.replace(/\/+$/, '')
-    const mine = list.filter((d) => (d.uri ?? '').replace(/\/+$/, '') === want)
+    const mine = await listDeployments(admin, uri, WAITS.registerIo.ms)
+    if (mine === undefined) return undefined
     if (mine.length === 0) return false
     let newest = mine[mine.length - 1]
     // the list response may carry services inline; fetch detail when not
@@ -133,10 +139,11 @@ export async function registerDeployment(admin: string, uri: string, log: (line:
         return true
       }
       log(`rt: deployment registration ${r.status} ${await r.text().catch(() => '')}`)
+      if (r.status >= 400 && r.status < 500) return false
     } catch {
       // server still starting
     }
-    await nap(WAITS.registerRetry.ms)
+    await nap(spread(WAITS.registerRetry.ms))
   }
   log(`rt: restate deployment registration failed ${uri} — invocations will not reach this endpoint`)
   return false
@@ -185,6 +192,30 @@ const DEPLOYMENT_PAUSE = /h2 pool|connection refused|network is unreachable|conn
  *  service segment is always first. */
 const targetService = (t: string): string => t.split('/')[0].split('.')[0]
 
+/** self-arming cadence services whose next tick is armed ONLY at the tail of
+ *  the current tick — killing a mid-Run paused head severs their chain unless
+ *  a fresh kick re-arms the object immediately (rt/orphaned-chain). */
+const SELF_ARMING_CADENCE: ReadonlySet<string> = new Set([EXEC_SVC.dealfan, EXEC_SVC.upkeep, EXEC_SVC.watchdog, EXEC_SVC.watches, EXEC_SVC.confirmer])
+
+/** re-kick a killed self-arming cadence or transport drain head so clearing a
+ *  restart-gap wedge never leaves its background floor dead until reboot */
+export const rekickKilledTarget = (exec: Executor, target: string, log: (line: string) => void): void => {
+  const svc = targetService(target)
+  if (SELF_ARMING_CADENCE.has(svc)) {
+    void exec
+      .send({ service: svc, handler: 'tick', key: 'main' }, {})
+      .then(() => log(`rt: re-kicked killed cadence ${svc}/main/tick`))
+      .catch((e) => log(`rt: re-kick ${svc}/main/tick failed: ${(e as Error).message}`))
+    return
+  }
+  if (svc === EXEC_SVC.transport && target.endsWith('/drain')) {
+    void exec
+      .send({ service: EXEC_SVC.transport, handler: 'drain', key: 'drain' }, {})
+      .then(() => log(`rt: re-kicked killed transport/drain`))
+      .catch((e) => log(`rt: re-kick transport/drain failed: ${(e as Error).message}`))
+  }
+}
+
 /** restart-gap wedge tracking — a paused invocation with journal_size > 1
  *  and NO last_failure is the mid-Run kill class: the process died inside a
  *  journaled leg and restate's resume accepts (200) yet never re-dispatches
@@ -205,7 +236,8 @@ export const healPausedInvocations = async (
   log: (line: string) => void,
   ioMs = 3_000,
   cap = 32,
-  ours?: ReadonlySet<string>
+  ours?: ReadonlySet<string>,
+  onKilled?: (target: string) => void
 ): Promise<number> => {
   const a = admin.replace(/\/+$/, '')
   try {
@@ -235,14 +267,8 @@ export const healPausedInvocations = async (
     if (resumable.length === 0 && restartGap.length === 0) return 0
     // our deployment id is the fallback rebind — a paused leg whose pinned
     // deployment was deleted can't plain-resume ('deployment id not pinned')
-    let depId: string | undefined
-    const dr = await fetch(`${a}/deployments`, { signal: AbortSignal.timeout(ioMs) })
-    if (dr.ok) {
-      const body = (await dr.json()) as { deployments?: AdminDeployment[] } | AdminDeployment[]
-      const list = Array.isArray(body) ? body : (body.deployments ?? [])
-      const want = uri.replace(/\/+$/, '')
-      depId = [...list].reverse().find((d) => (d.uri ?? '').replace(/\/+$/, '') === want)?.id
-    }
+    const mine = await listDeployments(a, uri, ioMs).catch(() => undefined)
+    const depId = mine?.at(-1)?.id
     let healed = 0
     for (const x of resumable) {
       const id = encodeURIComponent(x.id as string)
@@ -288,6 +314,7 @@ export const healPausedInvocations = async (
           killed++
           resumeMarks.delete(x.id as string)
           log(`rt: killed restart-gap invocation ${x.id} (${x.target}) — resume cannot re-dispatch a dead Run; the durable row re-drives it`)
+          if (x.target !== undefined) onKilled?.(x.target)
         }
       } catch {
         /* next pass tries again */
@@ -346,6 +373,8 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
     log(
       `automation: endpoint URI ${uri} is loopback — a containerized sidecar cannot reach it; set NEKTAR_RESTATE_ENDPOINT_URI to a container-routable address (Docker Desktop: http://192.168.65.254:${port} — plain IP, not host.docker.internal, whose DNS can answer an unroutable IPv6)`
     )
+  if (!loopback && identityKeys.length === 0)
+    log(`automation: endpoint binds ${bind}:${port} without NEKTAR_RESTATE_IDENTITY_KEYS — set request-signing keys on non-loopback topologies`)
   const expected = manifestOf(services) ?? []
   // the served-contract fingerprint includes handler options — a manifest
   // name-match with changed options still forces (an RT_OPTS_* bump that
@@ -382,12 +411,15 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
   // retries exhaust, which can be seconds after this pass (mid-run network
   // flaps pause later still). Deterministic failures stay paused (the
   // restate-plane preflight keeps reporting them).
-  await healPausedInvocations(admin, uri, log, 3_000, 32, ourNames)
+  const ingress = nektarEnv('NEKTAR_RESTATE_URL', env) ?? 'http://127.0.0.1:8080'
+  const kickExec = new RestateExecutor(ingress, log)
+  const onKilled = (target: string): void => rekickKilledTarget(kickExec, target, log)
+  await healPausedInvocations(admin, uri, log, 3_000, 32, ourNames, onKilled)
   let healing = false
   const healFloor = setInterval(() => {
     if (healing) return
     healing = true
-    void healPausedInvocations(admin, uri, log, 3_000, 32, ourNames).finally(() => {
+    void healPausedInvocations(admin, uri, log, 3_000, 32, ourNames, onKilled).finally(() => {
       healing = false
     })
   }, WAITS.healPaused.ms)

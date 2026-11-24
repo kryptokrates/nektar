@@ -3,8 +3,11 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { EventEmitter } from 'node:events'
 import type { ChildProcess, SpawnOptions, SpawnSyncReturns } from 'node:child_process'
+import { Dispatcher, EXEC_SVC, setExecutor, inertTxEffects } from '@nektar/automation'
 import { ensureRestate } from '../src/restatesidecar.js'
+import { openConfirmerWatch } from '../src/rtsupport.js'
 
 // the sidecar's resolution order — every external seam (fetch, spawn, spawnSync,
 // platform, restateDir) is injected so the tests never touch a real restate
@@ -249,4 +252,72 @@ void test('sidecar: explicit NEKTAR_RESTATE_ENDPOINT_URI is never overwritten', 
   })
   assert.equal(st, 'adopted')
   assert.equal(env.NEKTAR_RESTATE_ENDPOINT_URI, 'http://mine:9999')
+})
+
+void test('openConfirmerWatch: wake arriving mid-pass triggers one follow-up pass (rt/lost-coalesced-wake)', async () => {
+  const ex = new Dispatcher()
+  const memEvents = new EventEmitter()
+  const chainEvents = new EventEmitter()
+  let anchorCb: (() => void) | undefined
+  let releaseWatch1!: () => void
+  const watch1Gate = new Promise<void>((r) => (releaseWatch1 = r))
+  let watchRuns = 0
+  let releaseConf1!: () => void
+  const conf1Gate = new Promise<void>((r) => (releaseConf1 = r))
+  let confRuns = 0
+  ex.register(EXEC_SVC.watcher, 'tick', async () => {
+    watchRuns++
+    if (watchRuns === 1) await watch1Gate
+    return { done: true }
+  })
+  ex.register(EXEC_SVC.confirmer, 'tick', async () => {
+    confRuns++
+    if (confRuns === 1) await conf1Gate
+    return { done: true }
+  })
+  setExecutor(ex)
+  try {
+    const cw = await openConfirmerWatch({
+      cfg: { confirmEveryMs: 60_000 },
+      mem: {
+        events: memEvents,
+        onAnchorQueued: (cb: () => void) => {
+          anchorCb = cb
+        },
+        flushDue: () => Promise.resolve(),
+        unprovenAnchors: () => [],
+        fetchTx: () => Promise.resolve(undefined)
+      } as never,
+      port: {} as never,
+      events: Object.assign(chainEvents, { watch: () => {}, statusOf: () => undefined, pending: 0 }) as never,
+      ledger: { walletTxs: () => Promise.resolve([]), prune: () => Promise.resolve({ inbox: 0, outbox: 0, events: 0, txEvents: 0 }) } as never,
+      chain: { broadcast: () => Promise.resolve({ status: 'success' }) } as never,
+      txStore: { unproven: () => [], get: () => undefined } as never,
+      txEffects: inertTxEffects,
+      net: 'regtest',
+      nlog: () => {},
+      persistKeys: () => {},
+      topUp: undefined
+    })
+    try {
+      // two watcher wakes while pass 1 is in-flight → must coalesce to exactly 1 follow-up (total 2)
+      memEvents.emit('broadcasterStatus', { txid: '00'.repeat(32), status: 'MINED' })
+      memEvents.emit('broadcasterStatus', { txid: '11'.repeat(32), status: 'MINED' })
+      memEvents.emit('broadcasterStatus', { txid: '22'.repeat(32), status: 'MINED' })
+      // two anchor wakes while pass 1 is in-flight → must coalesce to exactly 1 follow-up (total 2)
+      anchorCb?.()
+      anchorCb?.()
+      anchorCb?.()
+      releaseWatch1()
+      releaseConf1()
+      await new Promise((r) => setTimeout(r, 50))
+      assert.equal(watchRuns, 2, 'mid-pass watcher wake must trigger exactly one follow-up pass')
+      assert.equal(confRuns, 2, 'mid-pass anchor wake must trigger exactly one follow-up pass')
+    } finally {
+      cw.close()
+    }
+  } finally {
+    setExecutor(undefined)
+    await ex.close()
+  }
 })

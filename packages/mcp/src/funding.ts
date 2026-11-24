@@ -139,7 +139,9 @@ export async function openCustody(
     releaseKeyLock = await acquireLock(keyLockFile(pkhHex), `fund key ${fundAddress}`)
   }
   log(net)(
-    `operator fee key ${fundAddress} — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)`
+    `operator fee key ${fundAddress} — fund this address to enable anchoring${
+      net === 'testnet' ? ` (faucet: curl -X POST https://nektar.run/v1/faucet -H 'content-type: application/json' -d '{"address":"${fundAddress}"}')` : ''
+    } (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)`
   )
   // the one coin book for both custody modes — signing differs (held key via
   // ProtoWallet, external via WalletClient), coin state does not

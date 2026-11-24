@@ -48,7 +48,14 @@ export async function publishArtifact(p: {
   } else {
     const slot = await p.ledger.take('market', lockHex)
     if (slot === undefined) throw new Error(await fundingSlotReason(p.ledger, 'market'))
-    const c = await buildCarrier({ key: p.key, wallet: p.wallet, payload: encodePayload(p.payload), slot })
+    let c: Awaited<ReturnType<typeof buildCarrier>>
+    try {
+      c = await buildCarrier({ key: p.key, wallet: p.wallet, payload: encodePayload(p.payload), slot })
+    } catch (e) {
+      // carrier never left the process — return the taken slot to stock
+      await p.ledger.release?.(slot.tree.id('hex'), slot.vout, 'market').catch(() => undefined)
+      throw e
+    }
     beef = c.beef
     txid = c.carrier.id('hex')
     await p.journal.put(hash, { txid, beef, topics, fundingTxid: slot.tree.id('hex') })
@@ -58,7 +65,7 @@ export async function publishArtifact(p: {
   // the journal still carries it, so one slow host can't price every send at
   // its own 15s timeout (observed: offers pending until the want expired)
   p.push?.(beef)
-  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [], early: true })
+  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, early: true })
   if (!r.ok) throw new Error(`publishArtifact: quorum failed ${JSON.stringify(r.missed)}`)
   return { txid, hash, took: r.took, admitted: r.admitted, missed: r.missed, pending: r.pending, settled: r.settled }
 }
@@ -69,7 +76,7 @@ export async function publishArtifact(p: {
 export async function resubmitCarrier(p: { journal: CarrierJournal; host: string; key: string }): Promise<void> {
   const row = await p.journal.get(p.key)
   if (row === undefined) return
-  const r = await submitAll([p.host], row.beef, row.topics, { quorum: 'all', retryWaits: [] })
+  const r = await submitAll([p.host], row.beef, row.topics, { quorum: 'all' })
   if (!r.ok) throw new Error(`resubmit ${p.host}: ${r.missed[0].error}`)
 }
 
@@ -100,7 +107,7 @@ export async function republishOne(p: {
     // strict hosts refuse carriers whose proven parents still carry inputs
     ownPath(parent)
     const beef = tx.toAtomicBEEF()
-    const r = await submitAll(p.hosts, beef, row.topics, { retryWaits: [] })
+    const r = await submitAll(p.hosts, beef, row.topics)
     // persist the enriched beef only once quorum is reached — a row left
     // unenriched retries on the next pass instead of stranding a missed host
     // on its stale deadline-bound copy

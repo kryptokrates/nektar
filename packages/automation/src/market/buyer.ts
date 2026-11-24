@@ -15,12 +15,9 @@ import { custodyMarkRejected, custodySubmit, txEmit } from '../rt/emit.js'
 
 // a take that lost the race to a concurrent spend is not a deal fault —
 // 'selected' re-enters fund() next tick and the funding window bounds the
-// retry. Only starvation-class errors qualify; refusals stay terminal. The
-// typed code is the contract across the package boundary; the text match
-// stays as the compat floor for impls that still throw plain errors
+// retry. Only starvation-class errors qualify; refusals stay terminal.
 function starved(e: unknown): boolean {
-  if (e instanceof FundsStarvedError || (e as { code?: string }).code === 'STARVED') return true
-  return /no spendable output|deal floor/i.test(e instanceof Error ? e.message : String(e))
+  return e instanceof FundsStarvedError || (e as { code?: string }).code === 'STARVED'
 }
 
 export abstract class BuyerOps extends SellerOps {
@@ -45,7 +42,7 @@ export abstract class BuyerOps extends SellerOps {
    *  freed its custody) — cleared so a retry prepares a fresh tx */
   private async spendRefused(funding: Operation, detail: string): Promise<void> {
     if (/daily cap/i.test(detail)) {
-      const midnight = new Date()
+      const midnight = new Date(this.now())
       midnight.setUTCHours(24, 0, 0, 0)
       await this.d.store.transition(funding.operationId, funding.revision, 'funding_deferred', {
         cause: 'spend_cap_deferred',
@@ -612,7 +609,7 @@ export abstract class BuyerOps extends SellerOps {
         }
         let pay: any
         let payTx: Transaction | undefined
-        if (this.wallet && this.d.settleEscrow) {
+        if (this.wallet) {
           let built: any
           try {
             built = await this.d.call('sale#payBuild', { amount: price, scriptHex: payScript, cfg: q.cfg, offer: payOffer })
@@ -639,9 +636,10 @@ export abstract class BuyerOps extends SellerOps {
           })
           await this.d.afterPrepare?.(ctx.actionId)
           // broadcast starts now; the accept flies while the RTT is out —
-          // the verdict is joined after the awaiting_disclosure transition
+          // the verdict is joined after the awaiting_disclosure transition.
+          // tx.machine's submit.success intent runs tx-spent once aired;
+          // adopting change pre-verdict leaks phantom change on submission_unknown.
           pendingSubmit = this.submitSettled(ctx)
-          await this.d.settleEscrow(tx)
           this.d.rememberTx?.(tx)
           pay = { accepted: true, txid: built.utxo.txid, utxo: built.utxo }
         } else {
@@ -704,11 +702,12 @@ export abstract class BuyerOps extends SellerOps {
             }
           ]
         })
+        await this.joinPendingSubmit(op.operationId, ctx.actionId, pendingSubmit)
         return
       }
       let r: any
       let escrowTx: Transaction | undefined
-      if (this.wallet && this.d.settleEscrow) {
+      if (this.wallet) {
         let built: any
         try {
           built = await this.d.call('sale#escrowBuild', {
@@ -744,9 +743,10 @@ export abstract class BuyerOps extends SellerOps {
         })
         await this.d.afterPrepare?.(ctx.actionId)
         // broadcast starts now; the accept flies while the RTT is out —
-        // the verdict is joined after the awaiting_disclosure transition
+        // the verdict is joined after the awaiting_disclosure transition.
+        // tx.machine's submit.success intent runs tx-spent once aired;
+        // adopting change pre-verdict leaks phantom change on submission_unknown.
         pendingSubmit = this.submitSettled(ctx)
-        await this.d.settleEscrow(tx)
         this.d.rememberTx?.(tx)
         r = { accepted: true, txid: built.utxo.txid, utxo: built.utxo, escrow: built.escrow }
       } else
@@ -817,26 +817,33 @@ export abstract class BuyerOps extends SellerOps {
       // the state machine unwinds honestly: SpendGuard means the sats never
       // left (release covers the committed row); anything else stays
       // 'uncertain' for a human, since the wire may still confirm
-      if (pendingSubmit !== undefined) {
-        const sub = await pendingSubmit
-        if (sub.state !== 'submitted' && sub.state !== 'observed' && sub.state !== 'confirmed') {
-          const live = (await this.d.store.operation(op.operationId))!
-          if (sub.state === 'rejected' && /SpendGuard refused/i.test(sub.detail ?? '')) {
-            await this.d.store.releaseBudget(ctx.actionId)
-            await this.spendRefused(live, sub.detail ?? '')
-          } else
-            await this.escalate(
-              live,
-              'unresolved_payment',
-              digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-escrow' }),
-              0,
-              { reason: sub.detail ?? sub.state },
-              'uncertain'
-            )
-        }
-      }
+      await this.joinPendingSubmit(op.operationId, ctx.actionId, pendingSubmit)
     } finally {
       this.inflight.delete(op.operationId)
+    }
+  }
+
+  private async joinPendingSubmit(
+    operationId: string,
+    actionId: string,
+    pendingSubmit: Promise<{ state: string; txid: string; detail?: string }> | undefined
+  ): Promise<void> {
+    if (pendingSubmit === undefined) return
+    const sub = await pendingSubmit
+    if (sub.state !== 'submitted' && sub.state !== 'observed' && sub.state !== 'confirmed') {
+      const live = (await this.d.store.operation(operationId))!
+      if (sub.state === 'rejected' && /SpendGuard refused/i.test(sub.detail ?? '')) {
+        await this.d.store.releaseBudget(actionId)
+        await this.spendRefused(live, sub.detail ?? '')
+      } else
+        await this.escalate(
+          live,
+          'unresolved_payment',
+          digestOf('nektar:automation:action:1', { op: operationId, kind: 'resolve-escrow' }),
+          0,
+          { reason: sub.detail ?? sub.state },
+          'uncertain'
+        )
     }
   }
 
@@ -1021,7 +1028,11 @@ export abstract class BuyerOps extends SellerOps {
       utxo = { txid, vout, satoshis: tx.outputs[vout].satoshis ?? 0, script }
     }
     if (escrow === undefined || utxo === undefined) return
-    if (wtx !== undefined) await this.d.settleEscrow?.(Transaction.fromHex(wtx.rawHex))
+    if (wtx !== undefined) {
+      const ev = facts.verdict === 'mined' ? 'obs.proven' : 'obs.seen'
+      const guard = facts.verdict === 'mined' ? 'proof' : 'verified'
+      await txEmit(this.d.executor ?? executor(), this.d.store, wtx, ev, { guard, observation: { cause: 'reconciled_escrow_observed' } }, this.txFx)
+    }
     if (actionId !== undefined) await this.d.store.commitBudget(actionId)
     await cancel()
     await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
@@ -1211,11 +1222,10 @@ export abstract class BuyerOps extends SellerOps {
       }
       if (op.state === 'funding' && !this.inflight.has(op.operationId)) {
         const pending = op.data.pendingEscrow
-        if (pending && this.wallet && this.d.settleEscrow) {
+        if (pending && this.wallet) {
           const sub = await custodySubmit(this.d.executor ?? executor(), this.wallet, op.data.escrowAction!)
           if (sub.state === 'submitted' || sub.state === 'observed' || sub.state === 'confirmed') {
             const wtx = await this.d.store.walletTx({ actionId: op.data.escrowAction! })
-            if (wtx) await this.d.settleEscrow(Transaction.fromHex(wtx.rawHex))
             await this.d.store.commitBudget(op.data.escrowAction!)
             const sel2 = op.data.selected!
             const s2 = op.data.offers![sel2.key]
@@ -1270,8 +1280,8 @@ export abstract class BuyerOps extends SellerOps {
         // safe because nothing left.
         const txid = op.data.escrowTxid
         if (txid !== undefined && this.d.txFacts !== undefined && this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) {
-          const v = (await this.d.txFacts(txid)).verdict
-          if (v === 'mined' || v === 'pending') {
+          const facts = await this.d.txFacts(txid)
+          if (facts.verdict === 'mined' || facts.tx !== undefined) {
             await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
               cause: 'deferred_escrow_aired'
             })

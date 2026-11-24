@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from 'node:fs'
 // minimal-typing boot. .env lines are applied only where the var isn't
 // already set (shell wins).
 const nlog = mkLog('nektar')
+const bootStartedAt = Date.now()
 const argv = process.argv.slice(2)
 /** --flag value and --flag=value both parse — silently ignoring the = form
  *  booted the default network once already */
@@ -115,6 +116,11 @@ for (const [k, v] of Object.entries({ ...defs, ...dot }))
 // object, confirmer cadence, records watcher, market plane) sits on it, so
 // there is no memory-only boot — refuse before the data dir opens or the
 // instance lock is taken.
+if (argv[0] === 'policy') {
+  const { runPolicyCli } = await import('./policy-cli.js')
+  process.exit(await runPolicyCli(argv.slice(1)))
+}
+
 const { ensureRestate, RESTATE_REQUIRED } = await import('./restatesidecar.js')
 const plane = await ensureRestate({ log: nlog, onCleanup: (fn) => process.on('exit', fn) })
 if (plane === 'unavailable') {
@@ -124,6 +130,21 @@ if (plane === 'unavailable') {
 const { openRuntime, configFromEnv } = await import('./runtime.js')
 const rt = await openRuntime(configFromEnv())
 nlog(`network=${rt.network}`)
+rt.mem.events.once('recall', (ev?: { shard?: string; count?: number }) => {
+  nlog(`first-recall (TTFV) in ${Date.now() - bootStartedAt}ms (shard=${ev?.shard ?? '*'}, items=${ev?.count ?? 0})`)
+})
+{
+  const { faucetEnabled, FAUCET_DEFAULT_SATS } = await import('./faucet.js')
+  if (faucetEnabled()) {
+    const dripSats = nektarEnvNum('NEKTAR_FAUCET_SATS') ?? FAUCET_DEFAULT_SATS
+    const rawCap = nektarEnv('NEKTAR_MAX_SPEND_SATS_PER_DAY')
+    const dayCap = rawCap === 'unlimited' ? Number.MAX_SAFE_INTEGER : (nektarEnvNum('NEKTAR_MAX_SPEND_SATS_PER_DAY') ?? 20_000)
+    if (dayCap < dripSats * 3)
+      nlog(
+        `faucet: NEKTAR_MAX_SPEND_SATS_PER_DAY=${dayCap} allows only ${Math.floor(dayCap / dripSats)} drip(s)/day at ${dripSats} sats each — raise NEKTAR_MAX_SPEND_SATS_PER_DAY to serve more strangers`
+      )
+  }
+}
 // zero-config join, Layer 0 — a genuinely empty boot gets a small local
 // 'welcome' shard so the first recall answers even while every seed host is
 // dark. One-shot (dataDir marker), local writes only, NEKTAR_SEED_WELCOME=0
@@ -341,7 +362,7 @@ if (port) {
       throw err
     }
   })
-  server.listen(Number(port), host, () => nlog(`HTTP + MCP on :${port} (/v1, /mcp)`))
+  server.listen(Number(port), host, () => nlog(`HTTP + MCP on :${port} (/v1, /mcp) — ready in ${Date.now() - bootStartedAt}ms`))
 }
 let stopping = false
 const stop = async () => {
@@ -372,6 +393,7 @@ process.on('SIGTERM', () => {
 })
 if (!port) {
   await (await import('./mcp-server.js')).serveStdio(rt.mem, rt.ops)
+  nlog(`MCP stdio ready in ${Date.now() - bootStartedAt}ms`)
   // the MCP client went away → exit (otherwise `docker run -i` containers leak
   // and several instances end up sharing one data volume)
   process.stdin.on('end', () => {

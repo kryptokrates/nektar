@@ -121,21 +121,21 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
   const hosts = marketHosts()
   const saved = new Set(savedHosts())
   const blocked = new Set(blockedHosts())
-  const downSet = new Set(typeof au?.health === 'function' ? (au.health().report?.downHosts ?? []) : [])
-  const slots = typeof au?.marketSlots === 'function' ? await au.marketSlots().catch(() => undefined) : undefined
-  const boot = typeof au?.bootstrap === 'function' ? au.bootstrap() : undefined
+  const downSet = new Set(au?.health().report?.downHosts ?? [])
+  const slots = au !== undefined ? await au.marketSlots().catch(() => undefined) : undefined
+  const boot = au?.bootstrap?.()
   const pending = au ? await au.store.approvals('pending') : []
   const rawOps = au ? (await au.store.operations()).filter((o) => o.kind !== 'enable') : []
   const autoOps = rawOps.slice(-8).reverse()
   // the execution tail — Temporal's "pending first" view: non-acked outbox
   // rows (what it's waiting on, attempt count, next retry), the armed drain
   // time, and the newest journal events across the most recent ops
-  const waiting = typeof au?.store.waitingOn === 'function' ? await au.store.waitingOn().catch(() => []) : []
-  const nextAt = typeof au?.store.nextOutboxAt === 'function' ? await au.store.nextOutboxAt().catch(() => undefined) : undefined
+  const waiting = au !== undefined ? await au.store.waitingOn().catch(() => []) : []
+  const nextAt = au !== undefined ? await au.store.nextOutboxAt().catch(() => undefined) : undefined
   const journal = (
     await Promise.all(
       rawOps.slice(-3).map(async (o) =>
-        (typeof au?.store.events === 'function' ? await au.store.events(o.operationId).catch(() => []) : []).map((e) => ({
+        (au !== undefined ? await au.store.events(o.operationId).catch(() => []) : []).map((e) => ({
           op: o.operationId.slice(0, 8),
           at: e.at,
           to: e.to,
@@ -217,14 +217,14 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
           })),
           ops: autoOps.map((o) => ({ role: o.role, kind: o.kind, state: o.state, lastError: o.lastError })),
           rt: {
-            executor: (au as { rt?: unknown }).rt === undefined ? 'local' : 'restate',
+            executor: 'restate',
             // the Restate introspection endpoint — the Debug tab embeds it
             // once the executor port lands and reports one
-            adminUrl: (au as { rt?: { adminUrl?: string } }).rt?.adminUrl ?? null,
+            adminUrl: au.rt?.adminUrl ?? null,
             // paused heads wedge their object's FIFO invisibly — the number
             // an operator watches for 'the plane is frozen' (resume/kill via
             // `restate invocations resume --yes <id>` on the admin port)
-            paused: (await (au as { rt?: { pausedCount?: () => Promise<number | undefined> } }).rt?.pausedCount?.()) ?? null,
+            paused: (await au.rt?.pausedCount()) ?? null,
             pending: waiting.slice(0, 6).map((w) => ({
               actionId: w.actionId,
               operationId: w.operationId,

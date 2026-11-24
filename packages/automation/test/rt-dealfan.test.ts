@@ -181,3 +181,47 @@ void test('dealfan.tick: the poll leg runs before the inbox scan — discovery h
     void ex.close()
   }
 })
+
+void test('dealfan.tick: fanSeq reset across restart does not collide with prior 24h-retained keys (rt/dedup-kills-retry)', async () => {
+  // single Dispatcher models the persistent Restate idempotency store across a process restart
+  const ex = new Dispatcher()
+  const advanced: string[] = []
+  try {
+    ex.register(EXEC_SVC.deal, 'advance', (arg) => {
+      advanced.push((arg as { op?: string }).op ?? '')
+      return Promise.resolve({ ran: true })
+    })
+    let clock = 100_000
+    let seq1 = 0
+    wireDealfan(ex, {
+      pendingInbox: () => Promise.resolve([]),
+      liveOps: () => Promise.resolve([{ operationId: 'op:surviving' }]),
+      reconcileOps: () => Promise.resolve([]),
+      ceilingMs: () => 0,
+      now: () => clock,
+      tickSeq: () => ++seq1,
+      log: () => {}
+    })
+    await ex.call({ service: EXEC_SVC.dealfan, handler: 'tick', key: 'main' }, {})
+    await ex.drain()
+    assert.equal(advanced.length, 1)
+
+    // simulated restart: time moved forward, fanSeq resets to 0, same server idempotency table
+    clock += 10_000
+    let seq2 = 0
+    wireDealfan(ex, {
+      pendingInbox: () => Promise.resolve([]),
+      liveOps: () => Promise.resolve([{ operationId: 'op:surviving' }]),
+      reconcileOps: () => Promise.resolve([]),
+      ceilingMs: () => 0,
+      now: () => clock,
+      tickSeq: () => ++seq2,
+      log: () => {}
+    })
+    await ex.call({ service: EXEC_SVC.dealfan, handler: 'tick', key: 'main' }, {})
+    await ex.drain()
+    assert.equal(advanced.length, 2, 'reset fanSeq after restart must still dispatch deal.advance')
+  } finally {
+    void ex.close()
+  }
+})

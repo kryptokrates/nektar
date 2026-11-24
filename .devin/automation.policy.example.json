@@ -1,7 +1,7 @@
 {
   "v": 1,
   "policyId": "example-buyer-seller",
-  "network": "mock",
+  "network": "testnet",
   "agentPub": "02REPLACE_WITH_THE_INSTANCE_OPERATOR_PUBKEY_66_HEX_CHARS_0000000000000",
   "roles": ["buyer", "seller"],
   "notBefore": 0,

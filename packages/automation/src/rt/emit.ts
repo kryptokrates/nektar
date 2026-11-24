@@ -22,7 +22,10 @@ export interface TxObserve {
 export interface CustodyLeg {
   actionId: string
   observation?: unknown
-  txScope?: string
+}
+
+export interface CustodyResubmitArg {
+  fanOnly?: boolean
 }
 
 /** the coordinator surface the custody legs need — structurally typed so
@@ -35,15 +38,22 @@ export interface CustodyWallet {
   resubmitPending(): Promise<Array<{ actionId: string; state: TxState }>>
 }
 
+const stableObs = (obs: unknown): string => {
+  if (obs === undefined) return ''
+  if (obs !== null && typeof obs === 'object' && !Array.isArray(obs)) {
+    const { at: _at, ...rest } = obs as Record<string, unknown>
+    return JSON.stringify(rest)
+  }
+  return JSON.stringify(obs)
+}
+
 /** deterministic content key for deduped egress — guard + observation
  *  hashed so distinct payloads never collide on one key */
-const guardKey = (payload: { guard?: string; observation?: unknown }): string => {
-  const obs = payload.observation === undefined ? '' : JSON.stringify(payload.observation)
-  return createHash('sha256')
-    .update(`${payload.guard ?? ''}${obs}`)
+const guardKey = (payload: { guard?: string; observation?: unknown }): string =>
+  createHash('sha256')
+    .update(`${payload.guard ?? ''}${stableObs(payload.observation)}`)
     .digest('hex')
     .slice(0, 16)
-}
 
 export async function txEmit(
   exec: Executor,
@@ -63,7 +73,7 @@ export async function txEmit(
     // and the journal write re-fires on resume — the deterministic key makes
     // the ingress dedupe the re-fire instead of double-observing. Same
     // content → same result, so legitimate repeats collapse harmlessly.
-    { idempotencyKey: `observe:${w.actionId}:${event}:${guardKey(payload)}` }
+    { idempotencyKey: `observe:${w.actionId}:${event}:${w.attempts}:${guardKey(payload)}` }
   )
   return { accepted: r.accepted, next: r.next ?? w.state, intents: r.intents ?? [] }
 }
@@ -83,12 +93,11 @@ export async function txEmit(
 
 export async function custodySubmit(exec: Executor, wallet: CustodyWallet, actionId: string): Promise<{ state: TxState; txid: string; detail?: string }> {
   if (rtScopeKey()?.custodyKey === actionId) return await wallet.submit(actionId)
-  // txScope forwards the caller's held tx key through the custody hop — a
-  // resubmit arriving from tx.resubmit(A) already holds A's object lock, so
-  // the emits inside wallet.submit must go direct, not re-enter the object
-  return await exec.call({ service: EXEC_SVC.custody, handler: 'submit', key: actionId }, { actionId, txScope: rtScopeKey()?.txKey } satisfies CustodyLeg, {
-    idempotencyKey: `custody:submit:${actionId}`
-  })
+  // No static actionId idempotencyKey: a submission_unknown outcome is a
+  // normal return, so a row-only key caches it for the retention window and
+  // swallows every retry (boot sweep, funding crash-resume) — per-actionId
+  // key FIFO + row-state guard + wire ALREADY absorb repeats instead.
+  return await exec.call({ service: EXEC_SVC.custody, handler: 'submit', key: actionId }, { actionId } satisfies CustodyLeg)
 }
 
 export async function custodyMarkRejected(exec: Executor, wallet: CustodyWallet, actionId: string, observation: unknown): Promise<void> {
@@ -97,8 +106,7 @@ export async function custodyMarkRejected(exec: Executor, wallet: CustodyWallet,
     { service: EXEC_SVC.custody, handler: 'markRejected', key: actionId },
     {
       actionId,
-      observation,
-      txScope: rtScopeKey()?.txKey
+      observation
     } satisfies CustodyLeg,
     { idempotencyKey: `custody:reject:${actionId}:${guardKey({ observation })}` }
   )
@@ -117,5 +125,7 @@ export async function custodyResubmitPending(exec: Executor, wallet: CustodyWall
  *  back-to-back pokes can't queue duplicate scans behind the custody key. */
 export async function custodyResubmitPoke(exec: Executor, wallet: CustodyWallet, window: number): Promise<void> {
   if (rtScopeKey()?.custodyKey === CUSTODY_KEY) return void (await wallet.resubmitPending())
-  await exec.send({ service: EXEC_SVC.custody, handler: 'resubmitPending', key: CUSTODY_KEY }, null, { idempotencyKey: `resubmit:${window}` })
+  await exec.send({ service: EXEC_SVC.custody, handler: 'resubmitPending', key: CUSTODY_KEY }, { fanOnly: true } satisfies CustodyResubmitArg, {
+    idempotencyKey: `resubmit:${window}`
+  })
 }

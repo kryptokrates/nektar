@@ -31,6 +31,24 @@ if (rpc.pass === undefined || rpc.pass === '') {
   console.error('demo needs the local Teranode regtest stack (NEKTAR_RPC_PASS unset). Run pnpm stack:up first.')
   process.exit(1)
 }
+const restateAlive = async (u) => {
+  try {
+    const r = await fetch(`${u}/version`, { signal: AbortSignal.timeout(1000) })
+    return r.status < 500 || r.ok
+  } catch {
+    return false
+  }
+}
+if (
+  !process.env.NEKTAR_RESTATE_URL &&
+  !existsSync(join(root, 'packages/mcp/restate/restate-server')) &&
+  !(await restateAlive('http://127.0.0.1:19070')) &&
+  !(await restateAlive('http://127.0.0.1:9070'))
+) {
+  console.error('demo needs the Restate executor plane — run once: pnpm restate:up (or set NEKTAR_RESTATE_URL)')
+  process.exit(2)
+}
+const t0 = Date.now()
 const mine = async (n = 1) => {
   const r = await fetch(rpc.url, {
     method: 'POST',
@@ -91,6 +109,7 @@ try {
   console.log(`    receipt: ${r.share?.token ?? r.receiptToken}`)
   console.log(`    verify:  ${r.verifyUrl}`)
   console.log()
+  console.log(`  completed in ${((Date.now() - t0) / 1000).toFixed(1)}s`)
   console.log('  next: pnpm setup:claude (or setup:codex) wires the hooks;')
   console.log('        exportShard "guide" → packUrl hands this memory to another operator.')
   console.log('        proofs show committed + anchored + derivable — never "true".\n')

@@ -5,7 +5,24 @@ import knexFactory from 'knex'
 import { testWorld } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { createHttpApi } from '../src/http.js'
-import { AutomationStore } from '@nektar/automation'
+import { AutomationStore, type Automation } from '@nektar/automation'
+
+const stubAutomation = (store: AutomationStore): Automation => ({
+  store,
+  engine: undefined as unknown as Automation['engine'],
+  cycle: () => Promise.resolve(),
+  deals: () => Promise.resolve(),
+  upkeep: () => Promise.resolve(),
+  marketSlots: () => Promise.resolve({ market: 0, bbox: 0, log: 0, finger: 0 }),
+  laneStock: () => Promise.resolve({}),
+  provisionPlan: () => Promise.resolve({ outputs: [] }),
+  adoptProvision: () => Promise.resolve({}),
+  health: () => ({ pass: true, report: undefined }),
+  preflight: () => Promise.resolve({ pass: true, at: 0, checks: [], downHosts: [] }),
+  waits: () => Promise.resolve({ wakes: {}, deferred: [] }),
+  bootstrap: () => 'unsealed',
+  stop: () => Promise.resolve()
+})
 
 void test('dashboard automation inbox: agent bearer cannot approve; operator token can; origin and expiry enforced', async (t) => {
   process.env.NEKTAR_HTTP_TOKEN = 'agent-token'
@@ -17,7 +34,7 @@ void test('dashboard automation inbox: agent bearer cannot approve; operator tok
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
   const store = new AutomationStore(kx)
   await store.init()
-  mem.automation = { store } as never
+  mem.automation = stubAutomation(store)
   const a = await store.requestApproval({
     operationId: 'op1',
     reason: 'price_above_policy',

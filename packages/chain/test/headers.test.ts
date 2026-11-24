@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Hash } from '@bsv/sdk'
+import { currentSignal, deadline, nap } from '@nektar/core'
 import { serializeHeader, headerPowValid, linksTo, WitnessedTracker, HeaderUnavailableError, isHeaderUnavailable } from '../src/headers.js'
 import { ChaintracksTracker, IndexTracker } from '../src/mainnet.js'
 import type { BlockHeader, ChainTracker } from '../src/interfaces.js'
@@ -308,4 +309,28 @@ test('linksTo: parent-child linkage is hash + adjacent height', () => {
   assert.equal(linksTo(a, b), false)
   assert.equal(linksTo(fakeHeader(11, 'cc'.repeat(32)), a), false, 'wrong prevHash is not a link')
   assert.equal(linksTo(fakeHeader(12, a.hash), a), false, 'height gap is not a link')
+})
+
+test('WitnessedTracker: an aborted caller leg does not cancel or poison the shared witness ask', async () => {
+  const a = fakeHeader(800000, 'aa'.repeat(32))
+  let witnessSawAmbient = false
+  const witness: ChainTracker = {
+    currentHeight: () => Promise.resolve(800000),
+    isValidRootForHeight: () => Promise.resolve(true),
+    headerAtHeight: async () => {
+      if (currentSignal() !== undefined) witnessSawAmbient = true
+      await nap(80)
+      return a
+    }
+  }
+  const wt = new WitnessedTracker(
+    cacheTracker(() => a),
+    witness,
+    { witnessTimeoutMs: 500, retryMs: 30_000 }
+  )
+  const r = await deadline(() => wt.headerAtHeight(800000), 20)
+  assert.equal(r.outcome, 'timeout')
+  assert.equal(witnessSawAmbient, false, 'shared witness ask runs detached from the caller leg')
+  const h = await wt.headerAtHeight(800000)
+  assert.equal(h?.hash, a.hash, 'later callers pick up the landed witness header instead of a poisoned undefined')
 })

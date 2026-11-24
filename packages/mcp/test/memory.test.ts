@@ -309,7 +309,7 @@ void test('mcp tools: challenge / rotate / revoke / authorize receipts (incl. DE
   const { mem } = _w
   await callTool(mem, 'remember', { shard: 't', data: 'x' })
   await callTool(mem, 'anchor', { shard: 't' })
-  const rot = await callTool(mem, 'rotate', { shard: 't', newOwnerWif: PrivateKey.fromRandom().toWif() })
+  const rot = await callTool(mem, 'rotate', { shard: 't', newOwnerKeyId: 'nektar-shard:t' })
   assert.ok(typeof rot.txid === 'string' && rot.receipt.decision === 'allow', 'rotate returns receipt')
   const revoked = PrivateKey.fromRandom().toPublicKey().toString()
   const rev = await callTool(mem, 'revoke', { pkHex: revoked })

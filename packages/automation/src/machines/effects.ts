@@ -122,7 +122,7 @@ export async function replayTxEffects(store: AutomationStore, fx: TxEffects, log
   let done = 0
   for (const p of await store.pendingTxEffects()) {
     const out: { error?: string } = {}
-    if (p.tx === undefined || (await runTxIntents(p.intents, p.tx, fx, log, out))) {
+    if (p.tx === undefined || (await runTxIntents(p.intents, { ...p.tx, state: p.fromState }, fx, log, out))) {
       await store.markTxEffects(p.eventId).catch(() => undefined)
       done++
     } else {

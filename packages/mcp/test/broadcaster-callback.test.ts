@@ -1,8 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, type MerklePath } from '@bsv/sdk'
-import { buildBump, testWorld, type TestFunder, type TestChain } from '@nektar/chain'
-import { NektarMemory, createHttpApi } from '../src/index.js'
+import { buildBump, testWorld, memoryPort, fundsOf, type TestFunder, type TestChain } from '@nektar/chain'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { NektarMemory, createHttpApi, openRuntime } from '../src/index.js'
 import type { Server } from 'node:http'
 
 const serve = async (t: {
@@ -147,5 +150,62 @@ void test('broadcaster callback: NEKTAR_CALLBACK_TOKEN gates the webhook (Author
     srv.close()
     if (prev === undefined) delete process.env.NEKTAR_CALLBACK_TOKEN
     else process.env.NEKTAR_CALLBACK_TOKEN = prev
+  }
+})
+
+void test('broadcaster callback: bare MINED without inline BUMP resolves proof via ChainPort proofLookup', async (t) => {
+  const w = await testWorld(t, 10)
+  if (w === undefined) return
+  const { chain, funder } = w
+  const rt = await openRuntime({ network: 'regtest', dataDir: mkdtempSync(join(tmpdir(), 'nektar-cb-')) }, { chain: memoryPort(chain), funds: fundsOf(funder) })
+  const srv = createHttpApi(rt.mem).listen(0)
+  await new Promise((r) => srv.once('listening', r))
+  const base = `http://127.0.0.1:${(srv.address() as { port: number }).port}`
+  try {
+    const { txid } = await minedTx(chain, funder)
+    let fires = 0
+    const seen = new Set<string>()
+    rt.mem.onTxProof((id) => {
+      fires++
+      seen.add(id)
+    })
+    // bare MINED status (no merklePath field, matching SSE / bare webhooks)
+    const r = await cb(base, '/v1/broadcaster-callback', bodyOf(txid))
+    assert.equal(r.status, 200)
+    assert.equal(fires, 1, 'proofLookup resolved and verified the BUMP')
+    assert.ok(seen.has(txid))
+    const rendered = rt.mem.metrics.render()
+    assert.match(rendered, /nektar_chain_wake_push_ticks/)
+    assert.match(rendered, /nektar_chain_wake_floor_ticks/)
+  } finally {
+    srv.close()
+    await rt.close()
+  }
+})
+
+void test('runtime onReorg: two distinct reorgs at the same fork height both emit', async (t) => {
+  const w = await testWorld(t, 10)
+  if (w === undefined) return
+  const { chain, funder } = w
+  const port = memoryPort(chain)
+  const reorgListeners: Array<(removed: Array<{ height: number; hash: string }>, newTip: { height: number; hash: string }) => void> = []
+  port.tracker = {
+    ...port.tracker,
+    onReorg: (cb) => reorgListeners.push(cb as never)
+  }
+  const rt = await openRuntime({ network: 'regtest', dataDir: mkdtempSync(join(tmpdir(), 'nektar-reorg-')) }, { chain: port, funds: fundsOf(funder) })
+  try {
+    const seen: Array<{ from: number; tip: number }> = []
+    rt.mem.events.on('reorg', (e: { from: number; tip: number }) => seen.push(e))
+    for (const cb of reorgListeners) {
+      cb([{ height: 10, hash: 'aa'.repeat(32) }], { height: 11, hash: 'bb'.repeat(32) })
+      // duplicate witness callback for the same fork collapses
+      cb([{ height: 10, hash: 'aa'.repeat(32) }], { height: 11, hash: 'bb'.repeat(32) })
+      // second distinct reorg at the SAME height with a different newTip hash must fire
+      cb([{ height: 10, hash: 'bb'.repeat(32) }], { height: 11, hash: 'cc'.repeat(32) })
+    }
+    assert.equal(seen.length, 2, 'distinct tip hash at the same fork height must not be deduped away')
+  } finally {
+    await rt.close()
   }
 })

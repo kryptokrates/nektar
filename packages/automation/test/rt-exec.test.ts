@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
+import { ioSignal, withLegSignal } from '@nektar/core'
 import { AutomationStore } from '../src/store.js'
 import { executor, RestateExecutor, setExecutor, EXEC_SVC } from '../src/rt/exec.js'
 import { emitTxEvent, inertTxEffects } from '../src/machines/effects.js'
@@ -120,4 +121,41 @@ void test('executor(): always the shared RestateExecutor; setExecutor repoints t
   } finally {
     setExecutor(undefined)
   }
+})
+
+void test('txEmit: volatile observation.at does not break ingress dedup, while incremented attempts still dispatch', async () => {
+  const { kx, store } = await open()
+  const ex = new Dispatcher()
+  let observed = 0
+  try {
+    const w = await prepared(store, 'a:dedup')
+    ex.register(EXEC_SVC.tx, 'observe', () => {
+      observed++
+      return Promise.resolve({ accepted: true, next: 'submission_unknown', intents: [] })
+    })
+    await txEmit(ex, store, w, 'submit.unknown', { observation: { at: 1000, result: { status: 'error' } }, attempt: true }, inertTxEffects)
+    await txEmit(ex, store, w, 'submit.unknown', { observation: { at: 2500, result: { status: 'error' } }, attempt: true }, inertTxEffects)
+    assert.equal(observed, 1, 'same verdict with different observation.at must dedupe at ingress')
+
+    await txEmit(
+      ex,
+      store,
+      { ...w, attempts: w.attempts + 1 },
+      'submit.unknown',
+      { observation: { at: 3500, result: { status: 'error' } }, attempt: true },
+      inertTxEffects
+    )
+    assert.equal(observed, 2, 'next attempt count must dispatch as a fresh invocation')
+  } finally {
+    await ex.close()
+    await kx.destroy()
+  }
+})
+
+void test('withLegSignal: bridges attemptCompletedSignal into ioSignal()', () => {
+  const ac = new AbortController()
+  const sig = withLegSignal(ac.signal, () => ioSignal(60_000))
+  assert.equal(sig.aborted, false)
+  ac.abort(new Error('attempt retired'))
+  assert.equal(sig.aborted, true)
 })

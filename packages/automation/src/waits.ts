@@ -180,6 +180,10 @@ export const WAITS = {
   outboxRetryBase: { ms: 1_000, class: 'backoff', durable: true, wake: 'unblockOutbox / pullOutbox / ceiling' },
   /** outbox backoff cap */
   outboxRetryCap: { ms: 300_000, class: 'backoff', durable: true, wake: 'unblockOutbox / ceiling' },
+  /** failed tx-effect replay backoff base (2^(attempts-1) × this, spread()-jittered) */
+  txEffectRetryBase: { ms: 60_000, class: 'backoff', durable: true, wake: 'replayTxEffects' },
+  /** failed tx-effect replay backoff cap */
+  txEffectRetryCap: { ms: 3_600_000, class: 'backoff', durable: true, wake: 'replayTxEffects' },
   /** repair-queue enqueue delay (fanout) */
   repairDelay: { ms: 20_000, class: 'backoff', durable: true, wake: 'queueRepairs on miss' },
   /** watch-shim reconnect backoff bounds (jittered: * (0.5+rand)) */

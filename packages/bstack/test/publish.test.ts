@@ -324,6 +324,28 @@ test('ensureTrees: a refused mint fires onRefused so the take heals, then fails 
   await assert.rejects(() => ensureTrees(p), /broadcast failed/, 'the pass still fails — the next tick mints on surviving stock')
   assert.equal(refused.length, 1, 'the heal seam fired with the refused mint and its result')
   assert.match(refused[0].description ?? '', /parent rejected/)
+  assert.equal((await ledger.unproven()).length, 0, 'a provably-dead refusal drops the pre-booked row back out')
+})
+
+test('ensureTrees: persists the tree BEFORE broadcast so a transport timeout does not orphan 64 slots', async () => {
+  const k = PrivateKey.fromRandom()
+  const ledger = new MemoryTreeLedger()
+  let seenAtBroadcast = 0
+  const p = {
+    key: k,
+    ledger,
+    lowWater: 2,
+    size: 4,
+    takeFunding: () => Promise.resolve(fund(k, 1_000_000)),
+    broadcast: async () => {
+      seenAtBroadcast = (await ledger.unproven()).length
+      return { status: 'error' as const, description: 'transport: ETIMEDOUT' }
+    },
+    fetchTx: () => Promise.resolve(undefined)
+  }
+  await assert.rejects(() => ensureTrees(p), /broadcast failed/)
+  assert.equal(seenAtBroadcast, 1, 'tree row was persisted before broadcast ran')
+  assert.equal((await ledger.unproven()).length, 1, 'non-definitive transport failure retains the row for txProof/stuckMint reconcile')
 })
 
 test('journal: fundedBy returns rows for a funding txid; put upserts beef', async () => {

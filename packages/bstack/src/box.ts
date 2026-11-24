@@ -1,4 +1,5 @@
-import { Hash, PublicKey, Utils, type ChainTracker, type WalletInterface } from '@bsv/sdk'
+import { Hash, PublicKey, Transaction, Utils, type ChainTracker, type WalletInterface } from '@bsv/sdk'
+import { isHeaderUnavailable } from '@nektar/chain'
 import { toSigner, signerPubHex, type SignerLike } from '@nektar/core'
 import { sealEnvelope, encodePlaintext, envelopeRecord, envelopeCarrier, envelopeFundingLock } from '@lightwebinc/bbox-host/codec/send.js'
 import { decodeEnvelope, encodeReceipt, checkBox, checkOffice, MaxAcks } from '@lightwebinc/bbox-host/codec/boxrec.js'
@@ -122,7 +123,7 @@ export async function sendBox(p: {
   // the journal is the retry layer — a dead host must not put seconds of
   // sleeps on the message path, and a send is done when quorum answered
   p.push?.(beef)
-  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [], early: true })
+  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, early: true })
   if (!r.ok) throw new Error(`box submit failed: ${JSON.stringify(r.missed).slice(0, 200)}`)
   return { txid, hash: artifactHash, took: r.took, admitted: r.admitted, missed: r.missed, pending: r.pending, settled: r.settled }
 }
@@ -151,11 +152,23 @@ export async function ackBox(p: {
   office?: string
   items: Array<{ txid: string; commitment: string }>
   quorum?: Quorum
-}): Promise<{ receipts: string[]; acked: number; resent: number; skipped: number; stockReason?: string }> {
+}): Promise<{
+  receipts: string[]
+  acked: number
+  resent: number
+  skipped: number
+  stockReason?: string
+  fanout: Array<{
+    hash: string
+    missed: Array<{ host: string; error: string }>
+    pending: string[]
+    settled: Promise<{ took: string[]; missed: Array<{ host: string; error: string }> }>
+  }>
+}> {
   const office = p.office ?? DEFAULT_OFFICE
   checkOffice(office)
   const topics = [`tm_bbox_${office}`]
-  const resend = new Map<string, { txid: string; beef: number[] }>()
+  const resend = new Map<string, { txid: string; key: string; beef: number[] }>()
   const fresh: Array<{ txid: string; commitment: string }> = []
   const s = toSigner(p.key)
   const w = walletOrProto(p.key, p.wallet)
@@ -169,7 +182,7 @@ export async function ackBox(p: {
       fresh.push(i)
     } else if (hit !== undefined) {
       resent++
-      resend.set(hit.txid, { txid: hit.txid, beef: hit.beef })
+      resend.set(hit.txid, { txid: hit.txid, key: `ack:${i.txid}`, beef: hit.beef })
     } else fresh.push(i)
   }
   let acked = 0,
@@ -190,18 +203,25 @@ export async function ackBox(p: {
     const beef = carrier.toAtomicBEEF()
     const txid = carrier.id('hex')
     for (const i of chunk) await p.journal.put(`ack:${i.txid}`, { txid, beef, topics, fundingTxid: slot.tree.id('hex') })
-    resend.set(txid, { txid, beef })
+    resend.set(txid, { txid, key: `ack:${chunk[0].txid}`, beef })
     acked += chunk.length
   }
-  // receipts fan out in parallel with no sleeps — the journal re-serves any
-  // host that misses this round on the next cycle
+  // receipts fan out in parallel with no sleeps — missed/pending legs return
+  // in `fanout` so callers can feed trackFanout and repair sender-only hosts
+  const fanout: Array<{
+    hash: string
+    missed: Array<{ host: string; error: string }>
+    pending: string[]
+    settled: Promise<{ took: string[]; missed: Array<{ host: string; error: string }> }>
+  }> = []
   await Promise.all(
     [...resend.values()].map(async (r) => {
-      const s = await submitAll(p.hosts, r.beef, topics, { quorum: p.quorum, retryWaits: [], early: true })
+      const s = await submitAll(p.hosts, r.beef, topics, { quorum: p.quorum, early: true })
       if (s.ok) receipts.push(r.txid)
+      fanout.push({ hash: r.key, missed: s.missed, pending: s.pending, settled: s.settled })
     })
   )
-  return { receipts, acked, resent, skipped, ...(stockOut !== undefined ? { stockReason: stockOut } : {}) }
+  return { receipts, acked, resent, skipped, fanout, ...(stockOut !== undefined ? { stockReason: stockOut } : {}) }
 }
 
 export async function readBox(p: {
@@ -255,10 +275,11 @@ export async function readBox(p: {
             }
             return hit
           }
-          const it = await openEnvelope(o.beef, w, office, me, p.tracker).catch(() => undefined)
+          const it = await openEnvelope(o.beef, w, office, me, p.tracker)
           if (it !== undefined) p.cache?.set(ck, it)
           return it
-        } catch {
+        } catch (e) {
+          if (isHeaderUnavailable(e)) throw e
           return undefined
         }
       })
@@ -298,8 +319,37 @@ export async function openEnvelope(
   tracker: ChainTracker
 ): Promise<(BoxItem & { expires: number }) | undefined> {
   // spec §8.1 via the real codec verdict, then §4.7 recipient checks in order
-  const adm = await admit(new Uint8Array(beef), [], { office, headers: tracker }).catch(() => undefined)
+  const adm = await admit(new Uint8Array(beef), [], { office, headers: tracker }).catch((e) => {
+    if (isHeaderUnavailable(e)) throw e
+    return undefined
+  })
   if (adm === undefined || adm.kind !== 'envelope' || adm.carrier === undefined) return undefined
+  // admit() verifies BEEF structure assuming engine-side SPV — verify the
+  // carried BUMP(s) against our own tracker here so forged roots never pass
+  const spvOk = async (t: Transaction, seen = new Set<string>()): Promise<{ ok: boolean; verified: boolean }> => {
+    const id = t.id('hex')
+    if (seen.has(id)) return { ok: true, verified: false }
+    seen.add(id)
+    if (t.merklePath !== undefined) {
+      return (await t.merklePath.verify(id, tracker)) ? { ok: true, verified: true } : { ok: false, verified: false }
+    }
+    if (t.inputs.length === 0) return { ok: false, verified: false }
+    let verified = false
+    for (const i of t.inputs) {
+      if (i.sourceTransaction === undefined) return { ok: false, verified: false }
+      const r = await spvOk(i.sourceTransaction, seen)
+      if (!r.ok) return r
+      verified = verified || r.verified
+    }
+    return { ok: true, verified }
+  }
+  try {
+    const spv = await spvOk(Transaction.fromAtomicBEEF(beef))
+    if (!spv.ok || !spv.verified) return undefined
+  } catch (e) {
+    if (isHeaderUnavailable(e)) throw e
+    return undefined
+  }
   const env = decodeEnvelope(new Uint8Array(adm.carrier.record))
   if (env.office !== office) return undefined
   if (Utils.toHex(Array.from(env.to)) !== me) return undefined

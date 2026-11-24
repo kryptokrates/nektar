@@ -48,11 +48,13 @@ services:
   # it (required, not optional). restate-data/ is the embedded persistent
   # store — the second durable store beside records.sqlite.
   restate:
-    image: docker.restate.dev/restatedev/restate:latest
+    image: docker.restate.dev/restatedev/restate:1.8.1
+    environment:
+      RESTATE_NODE_NAME: nektar
     ports:
-      - '18080:8080' # ingress (8080 → nektar-http, 8090 → teranode asset on this box)
-      - '9070:9070' # admin + UI
-      - '9071:9071' # node ctrl
+      - '127.0.0.1:18080:8080' # ingress (8080 → nektar-http, 8090 → teranode asset on this box)
+      - '127.0.0.1:9070:9070' # admin + UI
+      - '127.0.0.1:9071:9071' # node ctrl
     volumes:
       - restate-data:/restate-data
     extra_hosts:

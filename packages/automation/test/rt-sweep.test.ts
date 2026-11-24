@@ -74,14 +74,10 @@ void test('sweep.boot: prepared rows re-air through tx.resubmit — the coordina
   const submits: string[] = []
   try {
     await prepared(store, 's:boot')
-    wireTx(ex, {
-      store,
-      fx: inertTxEffects,
-      log: () => {},
-      submit: (actionId) => {
-        submits.push(actionId)
-        return Promise.resolve({ state: 'submitted', txid: 'x' })
-      }
+    wireTx(ex, { store, fx: inertTxEffects, log: () => {} })
+    ex.register(EXEC_SVC.custody, 'submit', (arg) => {
+      submits.push((arg as { actionId: string }).actionId)
+      return Promise.resolve({ state: 'submitted', txid: 'x' })
     })
     wireSweep(ex, {
       scan: scanOf([]),

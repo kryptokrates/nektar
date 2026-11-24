@@ -21,7 +21,7 @@ const env = existsSync(envPath)
         .map((m) => [m[1], m[2].trim()])
     )
   : {}
-const dataDir = resolve(process.env.NEKTAR_DATA_DIR ?? env.NEKTAR_DATA_DIR)
+const dataDir = resolve(process.env.NEKTAR_DATA_DIR ?? env.NEKTAR_DATA_DIR ?? '.nektar')
 
 const issues = [],
   fixed = [],
@@ -74,6 +74,24 @@ for (const f of ['keys.json', 'records.sqlite', 'VERSION']) {
   else report(f !== 'records.sqlite' || existsSync(dataDir), `${f} absent${f === 'keys.json' ? ' — identity not generated yet (first boot creates it)' : ''}`)
 }
 
+// executor plane (Restate) — mandatory at boot
+const restateUrl = process.env.NEKTAR_RESTATE_URL ?? env.NEKTAR_RESTATE_URL
+const restateBin = join(root, 'packages/mcp/restate/restate-server')
+const probeAdmin = async (url) => {
+  try {
+    const r = await fetch(`${url}/version`, { signal: AbortSignal.timeout(1500) })
+    return r.status < 500 || r.ok
+  } catch {
+    return false
+  }
+}
+if (restateUrl) report(true, `executor plane configured (NEKTAR_RESTATE_URL=${restateUrl})`)
+else if (await probeAdmin('http://127.0.0.1:19070')) report(true, 'executor plane answering on http://127.0.0.1:19070')
+else if (await probeAdmin('http://127.0.0.1:9070')) report(true, 'executor plane answering on http://127.0.0.1:9070')
+else if (existsSync(restateBin)) report(true, `executor plane sidecar installed (${restateBin})`)
+else report(false, 'executor plane (Restate) unavailable — run: pnpm restate:up (or set NEKTAR_RESTATE_URL)')
+
 if (!FIX && refused.length) console.log(`\n${refused.length} repairable issue(s) — re-run with --fix`)
 if (FIX) console.log(`\n${fixed.length} fixed, ${refused.length} refused`)
-process.exit(refused.length && !fixed.length && FIX ? 1 : 0)
+const hasFail = issues.some((i) => !i.ok)
+process.exit((refused.length && !fixed.length && FIX) || hasFail ? 1 : 0)

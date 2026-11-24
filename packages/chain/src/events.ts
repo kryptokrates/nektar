@@ -143,7 +143,7 @@ export class ChainEvents extends EventEmitter {
     // otherwise hint-verified-hint would re-emit a duplicate 'tx'
     const verified = prev?.verified === true && prev.ev.status === ev.status
     this.lastStatus.set(ev.txid, { ev, at: Date.now(), verified })
-    this.resolve(ev, TERMINAL.has(ev.status), verified)
+    this.resolve(ev, false, verified)
     // verify-on-hint: a pushed status (MINED from a status stream, a
     // broadcaster callback) is checked by our own observe on the next
     // macrotask — the 'tx' emit arrives in ms, not at the interval floor.
@@ -241,19 +241,23 @@ export class ChainEvents extends EventEmitter {
     // than a quarter of it; floor 150ms, ceiling 5s) so a synchronous caller
     // doesn't stall a whole interval without hammering a live status API.
     let settled = false as boolean
+    const nudgeAc = new AbortController()
     const nudgeMs = Math.max(150, Math.min((this.opts.intervalMs ?? 5_000) / 4, timeoutMs / 4, 5_000))
     const nudge = (async () => {
       while (!settled && Date.now() < deadline && this.watched.has(txid)) {
         await this.probeNow(txid)
-        await nap(nudgeMs)
+        if (nudgeAc.signal.aborted) break
+        await nap(nudgeMs, { signal: nudgeAc.signal })
       }
     })()
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<undefined>((r) => {
       timeoutTimer = setTimeout(() => r(undefined), timeoutMs)
+      timeoutTimer.unref?.()
     })
     const ev = await Promise.race([pending, timeout])
     settled = true
+    nudgeAc.abort()
     // a wait resolved early (delivery or stop()) must not leave its timer
     // holding the process for the remaining timeoutMs
     if (timeoutTimer !== undefined) clearTimeout(timeoutTimer)

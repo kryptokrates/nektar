@@ -38,6 +38,7 @@ not trusted.
       handle_path /hosts/b* { reverse_proxy localhost:18392 }
       handle_path /watch/a* { reverse_proxy localhost:18393 }
       handle_path /watch/b* { reverse_proxy localhost:18394 }
+      handle { reverse_proxy localhost:8080 }
   }
   ```
 
@@ -55,17 +56,19 @@ not trusted.
 ## Up
 
 One command — fetches the two files it needs (no repo checkout), generates
-the four secrets, and starts everything:
+the four secrets, derives the host/push/watch URLs from your public base, and
+starts everything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | \
-  NEKTAR_MARKET_HOSTS=https://<you>/hosts/a,https://<you>/hosts/b,https://nektar.run/hosts/a,https://nektar.run/hosts/b \
-  NEKTAR_PUSH_PUBLIC=https://<you> \
-  NEKTAR_WATCH_URLS=https://<you>/watch/a,https://<you>/watch/b \
-  NEKTAR_WATCH_PUBLIC=https://<you>/watch \
+  NEKTAR_PUBLIC_URL=https://<you> \
   NEKTAR_WAIT_FUNDING=1 NEKTAR_INDEXER_DISCOVERY=1 \
   bash
 ```
+
+(`NEKTAR_PUBLIC_URL` fills `NEKTAR_MARKET_HOSTS`, `NEKTAR_PUSH_PUBLIC`,
+`NEKTAR_WATCH_URLS`, and `NEKTAR_WATCH_PUBLIC` automatically, including the
+`nektar.run` seed pair on testnet; set any of those individually to override.)
 
 Or by hand from a checkout: `cp deploy/hub/.env.example deploy/hub/.env`,
 fill the marked values (`openssl rand -hex 32` ×4 for the secrets), then

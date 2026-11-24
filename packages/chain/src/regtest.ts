@@ -45,7 +45,7 @@ export class TeranodeRPCTracker implements ChainTracker {
         Authorization: 'Basic ' + Buffer.from(`${this.cfg.rpcUser}:${this.cfg.rpcPass}`).toString('base64')
       },
       body: JSON.stringify({ jsonrpc: '1.0', id: ++this.rpcId, method, params }),
-      signal: AbortSignal.timeout(15_000)
+      signal: ioSignal(15_000)
     })
     const j = await res.json()
     if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
@@ -167,7 +167,7 @@ export function regtestStackFromEnv(): { tracker: ChainTracker; broadcaster: Bro
 async function assetGet(cfg: RegtestConfig, path: string, _binary = true): Promise<Response | null> {
   const res = await fetch(`${cfg.assetUrl}/${path}`, {
     headers: { Authorization: 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64') },
-    signal: AbortSignal.timeout(20_000)
+    signal: ioSignal(20_000)
   })
   if (!res.ok) return null
   return res
@@ -182,7 +182,7 @@ export function regtestRpc(cfg: RegtestConfig): (method: string, ...params: unkn
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: auth },
       body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }),
-      signal: AbortSignal.timeout(15_000)
+      signal: ioSignal(15_000)
     })
     const j = (await r.json()) as { result?: unknown; error?: unknown }
     if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
@@ -207,9 +207,7 @@ export async function regtestMerkleProof(
   opts?: { strict?: boolean }
 ): Promise<MerklePath | undefined> {
   const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
-  const res = await fetchImpl(`${cfg.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(15_000) }).catch(
-    () => null
-  )
+  const res = await fetchImpl(`${cfg.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: ioSignal(15_000) }).catch(() => null)
   // strict (the events-observe contract): "couldn't ask" THROWS so the
   // caller can tell it apart from a definitive "not proven" — a dead or
   // rate-limited host must never count toward the abandon clock. A 404 or
@@ -237,7 +235,7 @@ export async function regtestTx(cfg: RegtestConfig, txid: string, fetchImpl: typ
       method: 'POST',
       headers: { 'content-type': 'application/json', Authorization: auth },
       body: JSON.stringify({ jsonrpc: '1.0', id: 1, method: 'getrawtransaction', params: [txid] }),
-      signal: AbortSignal.timeout(15_000)
+      signal: ioSignal(15_000)
     })
     const j = (await r.json()) as { result?: unknown; error?: unknown }
     if (typeof j.result !== 'string' || j.result === '') return undefined
@@ -630,7 +628,7 @@ export async function bootstrapReserve(
     for (let k = 0; k < n; k++) tx.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: per })
     tx.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: sats - n * per - 1000 })
     await tx.sign()
-    const known = await fetch(`${cfg.assetUrl}/tx/${tx.id('hex')}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(15_000) })
+    const known = await fetch(`${cfg.assetUrl}/tx/${tx.id('hex')}`, { headers: { Authorization: auth }, signal: ioSignal(15_000) })
     if (known.ok) return null
     const r = await new TeranodeBroadcaster(cfg.propagationUrl).broadcast(tx)
     return r.status === 'success' ? tx : null
@@ -673,7 +671,7 @@ export async function bootstrapReserve(
   const first = Math.max(1, last - (opts.maxScan ?? 800))
   for (let h = last; h >= first && tried < (opts.maxCandidates ?? 200); h--) {
     const hash = (await rpc('getblockhash', h)) as string
-    const res = await fetch(`${cfg.assetUrl}/block_legacy/${hash}`, { signal: AbortSignal.timeout(20_000) }).catch(() => null)
+    const res = await fetch(`${cfg.assetUrl}/block_legacy/${hash}`, { signal: ioSignal(20_000) }).catch(() => null)
     if (res === null || !res.ok) continue
     const body = await res.arrayBuffer().catch(() => null)
     if (body === null) continue

@@ -4,8 +4,11 @@
 // destination.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { EXEC_SVC } from '../src/rt/exec.js'
+import { createServer } from 'node:http'
+import { EXEC_SVC, PermanentError, RetryAfterError } from '../src/rt/exec.js'
 import { CRON_KEY } from '../src/rt/services.js'
+import { openLanes } from '../src/lanes.js'
+import type { Rt } from '../src/rtctx.js'
 import { Dispatcher, wireCron, wireLeg, wireNotify } from './rig.js'
 
 void test('cron.tick: runs the pass then self-arms at ceilingMs — the chain re-fires', async () => {
@@ -101,4 +104,77 @@ void test('legObject: event-sink leg runs journaled on its key, no self-arm', as
   await ex.call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})
   assert.equal(calls, 2)
   await ex.close()
+})
+
+void test('cron.tick: early wake before bucket boundary never self-dedupes the chain (rt/dedup-kills-chain)', async () => {
+  const ex = new Dispatcher()
+  const arms: Array<{ key?: string; after?: number }> = []
+  const orig = ex.send.bind(ex)
+  ex.send = (t, a, o) => {
+    arms.push({ key: o?.idempotencyKey, after: (a as { after?: number } | undefined)?.after })
+    return orig(t, a, o)
+  }
+  let clock = 10_000
+  wireCron(ex, EXEC_SVC.upkeep, {
+    tick: () => Promise.resolve(),
+    ceilingMs: () => 1_000,
+    now: () => clock,
+    log: () => {}
+  })
+  // tick 1 at 10_000 arms bucket 11_000
+  await ex.call({ service: EXEC_SVC.upkeep, handler: 'tick', key: CRON_KEY }, {})
+  assert.deepEqual(arms[0], { key: `${EXEC_SVC.upkeep}:tick:11000`, after: 11_000 })
+  // simulate early wake (clock skew: 1ms before 11_000) carrying { after: 11_000 }
+  clock = 10_999
+  await ex.call({ service: EXEC_SVC.upkeep, handler: 'tick', key: CRON_KEY }, { after: 11_000 })
+  assert.deepEqual(arms[1], { key: `${EXEC_SVC.upkeep}:tick:12000`, after: 12_000 }, 'must advance strictly past arg.after instead of self-deduping')
+  await ex.close()
+})
+
+void test('notify legs: HTTP 4xx throws PermanentError, HTTP 429 Retry-After throws RetryAfterError (rt/poisoned-leg)', async () => {
+  const srv = createServer((req, res) => {
+    req.resume()
+    req.on('end', () => {
+      if (req.url === '/reject/notify' || req.url === '/reject') {
+        res.statusCode = 422
+        res.end('bad carrier')
+        return
+      }
+      if (req.url === '/limit/notify' || req.url === '/limit') {
+        res.statusCode = 429
+        res.setHeader('retry-after', '7')
+        res.end('slow down')
+        return
+      }
+      res.statusCode = 500
+      res.end('transient')
+    })
+  })
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve))
+  const port = (srv.address() as { port: number }).port
+  const base = `http://127.0.0.1:${port}`
+  try {
+    const rt = {
+      cfg: { network: 'regtest' },
+      mem: {},
+      log: () => {},
+      store: {},
+      marketHosts: [],
+      localNet: true,
+      downNow: new Set(),
+      watchBases: []
+    } as unknown as Rt
+    openLanes(rt)
+    assert.ok(rt.notifyLegs !== undefined)
+    await assert.rejects(rt.notifyLegs.peer(`${base}/reject`, 'ls_nektar'), (e: unknown) => e instanceof PermanentError && e.code === 422)
+    await assert.rejects(rt.notifyLegs.carrier(`${base}/reject`, 'aa'), (e: unknown) => e instanceof PermanentError && e.code === 422)
+    await assert.rejects(rt.notifyLegs.peer(`${base}/limit`, 'ls_nektar'), (e: unknown) => e instanceof RetryAfterError && e.retryAfterMs === 7000)
+    await assert.rejects(rt.notifyLegs.carrier(`${base}/limit`, 'aa'), (e: unknown) => e instanceof RetryAfterError && e.retryAfterMs === 7000)
+    await assert.rejects(
+      rt.notifyLegs.carrier(`${base}/err`, 'aa'),
+      (e: unknown) => e instanceof Error && !(e instanceof PermanentError) && !(e instanceof RetryAfterError)
+    )
+  } finally {
+    srv.close()
+  }
 })

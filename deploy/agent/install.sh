@@ -71,6 +71,7 @@ fi
 [ -n "${NEKTAR_PUSH_PUBLIC:-}" ] && set_kv NEKTAR_PUSH_PUBLIC "$NEKTAR_PUSH_PUBLIC"
 [ -n "${NEKTAR_FUND_WIF:-}" ] && set_kv NEKTAR_FUND_WIF "$NEKTAR_FUND_WIF"
 [ -n "${NEKTAR_FUND_TXIDS:-}" ] && set_kv NEKTAR_FUND_TXIDS "$NEKTAR_FUND_TXIDS"
+[ -n "${NEKTAR_WAIT_FUNDING:-}" ] && set_kv NEKTAR_WAIT_FUNDING "$NEKTAR_WAIT_FUNDING"
 [ -n "${NEKTAR_INDEXER_DISCOVERY:-}" ] && set_kv NEKTAR_INDEXER_DISCOVERY "$NEKTAR_INDEXER_DISCOVERY"
 [ -n "${NEKTAR_NETWORK:-}" ] && set_kv NEKTAR_NETWORK "$NEKTAR_NETWORK"
 # mainnet ack gate — same refusal the runtime enforces, caught at install time

@@ -191,7 +191,7 @@ void test('client custody: owner rotation refuses what restart cannot re-derive'
   // owner is not this shard key' — plus persistKeys would leak the material
   // into any legacy keys.json.
   await assert.rejects(mem.rotateShard('manual', PrivateKey.fromRandom()), /external wallet custody/)
-  await assert.rejects(callTool(mem, 'rotate', { shard: 'manual', newOwnerWif: PrivateKey.fromRandom().toWif() }), /external wallet custody/)
+  await assert.rejects(callTool(mem, 'rotate', { shard: 'manual', newOwnerWif: PrivateKey.fromRandom().toWif() }), /newOwnerKeyId/)
   // a non-default keyID is the same brick under either custody — nothing
   // persists it, and only 'nektar-shard:<shard>' re-derives at boot
   await assert.rejects(callTool(mem, 'rotate', { shard: 'manual', newOwnerKeyId: 'custom:1' }), /cannot be re-derived/)

@@ -22,109 +22,108 @@ more.")
 
 - `deploy/hub/` + `deploy/agent/`.
 
-| Step                   | Time      | Effort                               | Knowledge                  | Triage                                                                                                                        |
-| ---------------------- | --------- | ------------------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `install.sh` one-liner | 5 min     | one command, four secrets auto-gen'd | docker only                | keep — shipped                                                                                                                |
-| `NEKTAR_MARKET_HOSTS`  | —         | decide                               | "what are my public URLs?" | KEEP (advertising requires it) — seed pair documented                                                                         |
-| funding                | 0–10 min  | send testnet sats to printed address | none (auto-key)            | **MOVED** — `loadFeeKey` generates `fee.key.json`; `WAIT_FUNDING`+`INDEXER_DISCOVERY` hold+detect (compose passthrough added) |
-| public URL/TLS         | 10–30 min | DNS+proxy                            | DNS, TLS, ports            | KEEP — inline Caddyfile now in doc (was a dead-end pointer)                                                                   |
-| verify card            | 1 min     | one curl                             | —                          | keep                                                                                                                          |
+| Step                   | Time      | Effort                                                     | Knowledge       | Triage                                                                                                                                 |
+| ---------------------- | --------- | ---------------------------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `install.sh` one-liner | 5 min     | one command (`NEKTAR_PUBLIC_URL`), four secrets auto-gen'd | docker only     | **MOVED** — `NEKTAR_PUBLIC_URL` derives market/push/watch URLs automatically; compose forwards all `.env.example` keys (CI-tested)     |
+| funding                | 0–10 min  | send testnet sats or curl `/v1/faucet`                     | none (auto-key) | **MOVED** — `loadFeeKey` generates `fee.key.json`; boot log & `doctor` print faucet curl; `WAIT_FUNDING`+`INDEXER_DISCOVERY` forwarded |
+| public URL/TLS         | 10–30 min | DNS+proxy                                                  | DNS, TLS, ports | KEEP-LEGIBLE — inline Caddyfile proxies `/hosts/*`, `/watch/*`, AND fallback `localhost:8080` (`/mcp`, `/v1/*`, `/.well-known/*`)      |
+| verify card            | 1 min     | one curl                                                   | —               | keep                                                                                                                                   |
 
-**Score:** ~9/10 (was ~8). The grant channel is a real endpoint now:
-`POST /v1/faucet {address}` — unauthenticated by design, one drip per
-address + daily cap persisted in `faucet-drips.json`, opt-in via
-`NEKTAR_FAUCET=1` (hard-refused on main), the spend itself still rides
-SqlFunds + SpendGuard. JOIN-TESTNET names the self-serve curl; the issue
-channel stays as fallback.
-**Residual:** needs the hub operator to flip the flag and keep the drip
-key funded — infrastructure, not code.
+**Score:** 8/10 (re-audited from unmeasured ~9/10; parity gate measured at
+4.4ms in `packages/mcp/test/friction.test.ts`; live VPS end-to-end join time
+remains to be clocked on a fresh third-party host). Every `.env.example` key
+in `deploy/hub` and `deploy/agent` is now forwarded in `compose.yaml` and
+CI-asserted; `NEKTAR_PUBLIC_URL` collapses 4 URL vars into 1; Caddyfile now
+routes `/mcp` & `/v1/*`; `bin.ts` warns when `NEKTAR_FAUCET=1` runs against
+the default 20k/day SpendGuard cap.
+**Residual:** live VPS stopwatch measurement + operator keeping the drip key
+funded.
 
 ## J2 · Fresh instance → non-empty first run
 
 **First value:** `recall` returns real content. **Target:** <5 min.
-**Artifact:** `openRuntime` boot path, dir-lane announce import.
+**Measured (in-process HTTP + welcome seed, `friction.test.ts`):** **889ms**
+(boot→`ready` and `first-recall (TTFV)` are now logged by `bin.ts`).
+**Artifact:** `openRuntime` boot path, `welcome.ts`, `recall` omitted-shard discovery, `tools/restate-up.mjs`, `tools/init.mjs`.
 
-| Step                 | Time   | Effort              | Knowledge | Triage      |
-| -------------------- | ------ | ------------------- | --------- | ----------- |
-| start container      | 1 min  | none                | —         | keep        |
-| bootstrap host union | <1 min | none (automatic)    | —         | keep — done |
-| pack import          | ~1 min | none (seed domains) | —         | keep — done |
-| `recall` answers     | —      | one call            | —         | keep        |
+| Step                       | Time   | Effort                 | Knowledge | Triage                                                                                                                                  |
+| -------------------------- | ------ | ---------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| start container            | 15–60s | one command            | docker    | KEEP-LEGIBLE — `Dockerfile` defaults to 10-tool `agent` profile; `README.md` notes first-boot sidecar pull                              |
+| welcome + pack seed        | <1s    | none (automatic)       | —         | keep — Layer 0 (`welcome`) + Layer 2 (`NEKTAR_SEED_DOMAINS=*`)                                                                          |
+| `recall {}` answers        | <1s    | one call, zero args    | —         | **KILLED** — `shard` is optional on `recall` (omitted returns `shards` + items; wrong shard hints names); `doctor` exposes `shardNames` |
+| source dev (`init`/`demo`) | <60s   | `pnpm restate:up` once | —         | **MOVED** — `pnpm restate:up` installs the SHA256-verified sidecar into `packages/mcp/restate/`; `init.mjs` surfaces stderr on failure  |
 
-**Score:** ~9/10 (was ~8-with-a-hole — the hole is closed). Layer 0
-(`mcp/src/welcome.ts`): a genuinely empty boot seeds a small `welcome`
-shard through `mem.remember` — provenance `nektar-welcome`, one-shot via
-a dataDir marker, never a boot failure, `NEKTAR_SEED_WELCOME=0` opts
-out. The first `recall` now answers even with every seed host dark (the
-baked `nektar.run` pair 502'd during this fix — exactly the failure
-mode). Layer 2 (dir-lane pack import, `NEKTAR_SEED_DOMAINS=*` baked)
-still adds live operator content when hosts answer.
+**Score:** 9/10 (in-process TTFV measured at 889ms; container cold-pull
+remains network-bound and named in `README.md`).
 
 ## J3 · External AI client → first tool call
 
-**First value:** `recall` from Claude Code/Codex/OpenClaw/Hermes.
-**Target:** <3 min. **Artifact:** MCP stdio/HTTP + `/v1` surface.
+**First value:** `recall` from Claude Code/Codex/OpenClaw/Hermes/curl.
+**Target:** <3 min. **Measured (`friction.test.ts`):** **889ms** (HTTP
+`POST /v1/tools/recall` with `{"shard":"welcome"}` and `{}`); CLI setup
+scripts (`setup-claude.mjs` + `setup-codex.mjs`) verified in **1.6s**.
+**Artifact:** MCP stdio/HTTP + `/v1` surface + `docs/ADAPTERS.md` + `tools/setup-*.mjs`.
 
-| Client                    | Path                            | Friction                                  |
-| ------------------------- | ------------------------------- | ----------------------------------------- |
-| Claude Code               | `setup:claude` merges config    | keep — one command                        |
-| Codex                     | `setup:codex`                   | keep — one command                        |
-| OpenClaw / any MCP-native | MCP stanza paste                | **MOVE → publish per-platform snippet**   |
-| Hermes / function-calling | needs `/v1/tools` + HTTP bearer | **MOVE → thin shim doc + OpenAPI stanza** |
-| raw HTTP                  | `/v1/tools/{name}` + bearer     | keep                                      |
+| Client                    | Path                                      | Friction                                                                                 |
+| ------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Claude Code               | `setup:claude` merges `.mcp.json` + hooks | **KILLED** — now registers MCP server + hooks + `CLAUDE.md`, supports `--port`/`--token` |
+| Codex                     | `setup:codex` merges config               | **KILLED** — supports `--port`/`--url`/`--token` and reads `.env` defaults               |
+| OpenClaw / any MCP-native | MCP stanza paste                          | keep — 10-tool `agent` profile consistent across README, JOIN-AGENT, INTEGRATION         |
+| Hermes / function-calling | `/v1/tools` + `/v1/openapi.json`          | keep                                                                                     |
+| raw HTTP                  | `POST /v1/tools/recall`                   | **KILLED** — `ADAPTERS.md` contract & curl fixed (`{"shard":"welcome"}` / `{}`)          |
 
-**Score:** ~8/10 (was ~6 — `docs/ADAPTERS.md` now freezes the minimal
-contract (remember/recall/groundedAnswer/verifyReceipt/doctor/
-automation + want/sell/deals) and ships every stanza: Claude Code,
-Codex, OpenClaw mcpServers JSON, Hermes HTTP-shim recipe over
-`/v1/openapi.json`, raw curl).
+**Score:** 9/10 (all docs aligned on 10 agent tools vs operator opt-in;
+`ADAPTERS.md` curl payload regression-tested in `friction.test.ts`).
 
 ## J4 · Agent → settled deal
 
-**First value:** `want → quote → escrow → disclosure → settled`.
-**Target:** bounded by watch+poll; p50 visible. **Artifact:** the whole
-deal path (this suite's battleground).
+**First value:** policy approved → `want → quote → escrow → disclosure → settled`.
+**Target:** bounded by watch+poll; p50 visible. **Measured policy setup
+(`friction.test.ts`):** **578ms** (`nektar policy init` + `approve --preset both`
 
-| Phase                                | Live wall hit    | Fix landed                                                |
-| ------------------------------------ | ---------------- | --------------------------------------------------------- |
-| want dies before slow quote          | T2 failure       | `wantExtendMs` republish — keep-alive at collect boundary |
-| mint + escrow share one UTXO         | T1/T4 starvation | `reserveOuts` fan-out — medium outputs on hand            |
-| card evicted before tree proves      | announce loss    | keep-alive every 4 min inside host's 10-min window        |
-| accept parks behind dead-host repair | R1 starvation    | pooled outbox pump + `deliverBoundMs`                     |
-| host refuses carrier — thin ancestry | carrier refusal  | `NEKTAR_ANCHORED_LANES` + vendored bbox patch             |
-| wedged leg parks whole pump          | silent wedge     | `deliverBoundMs`, `bound()` on upkeep legs                |
+- `list` + `revoke` without Restate or git checkout).
+  **Artifact:** `packages/mcp/src/policy-cli.ts`, `docs/MARKET.md`, deal path.
 
-**Score:** ~8/10 — every starvation class has a shipped fix and all 13
-tests pass on live infrastructure (chunked fresh-process runs; the
-single-process ceiling was the Node heap, raised to 8GB in
-`test:testnet` — a literal clean single run remains to be demonstrated
-on a box that can hold it). Cold-boot carriers now ride anchored trees:
-`NEKTAR_ANCHORED_LANES=all` is the image/agent-compose default, so the
-first carrier pays a broadcast RTT instead of a block (unpatched hosts
-refuse the carrier and the lane falls back to proven-only — visible,
-self-healing).
+| Phase                                | Live wall hit                | Fix landed                                                                                |
+| ------------------------------------ | ---------------------------- | ----------------------------------------------------------------------------------------- |
+| no-build policy approval             | required git + `pnpm`        | `nektar policy approve --preset buyer\|seller\|both` built into `bin.ts` (Docker + host)  |
+| README "Trading guide" link          | pointed to internal debt log | retargeted to `docs/MARKET.md`; `.devin/automation.policy.example.json` fixed (`testnet`) |
+| want dies before slow quote          | T2 failure                   | `wantExtendMs` republish — keep-alive at collect boundary                                 |
+| mint + escrow share one UTXO         | T1/T4 starvation             | `reserveOuts` fan-out — medium outputs on hand                                            |
+| card evicted before tree proves      | announce loss                | keep-alive every 4 min inside host's 10-min window                                        |
+| accept parks behind dead-host repair | R1 starvation                | pooled outbox pump + `deliverBoundMs`                                                     |
+| host refuses carrier — thin ancestry | carrier refusal              | `NEKTAR_ANCHORED_LANES` + vendored bbox patch                                             |
+| wedged leg parks whole pump          | silent wedge                 | `deliverBoundMs`, `bound()` on upkeep legs                                                |
+
+**Score:** 8.5/10 — no-build policy approval is now a single command with
+built-in presets (keeping explicit human approval and `I_UNDERSTAND` mainnet
+gate); all 13 live-infrastructure deal tests pass on chunked runs.
 **The honest note:** deal friction is physics-limited (block cadence,
-mining), but every _unnecessary_ wait inside that physics has been
-named and bounded.
+mining), and every _unnecessary_ wait and setup cliff inside that physics
+is now named, bounded, or eliminated.
 
 ## J5 · Broken thing → named cause
 
 **First value:** an operator can self-diagnose without us. **Target:**
-error → legible cause in logs, instantly. **Artifact:** log surface +
-`doctor` + phase tagging.
+error → legible cause in logs, instantly. **Measured (`friction.test.ts`):**
+**504ms** (`doctor` standalone/transport/faucet hint checks); **1.6s**
+(`tools/doctor.mjs` Restate + lock diagnostics).
+**Artifact:** log surface + `doctor` + `tools/doctor.mjs` + `tools/init.mjs` + phase tagging.
 
-| Failure                | Before                            | Now                                                              |
-| ---------------------- | --------------------------------- | ---------------------------------------------------------------- |
-| wedged upkeep          | silent `pumping` forever          | `upkeep(finger) exceeded …`                                      |
-| dead host stalls sends | serial pump wedged                | bounded delivery, transport-class retry                          |
-| poisoned journal       | retries forever, 80 poisoned rows | dead-ancestry eviction + `beefGaps` skip                         |
-| suite quiet = wedge?   | indistinguishable                 | `[suite quiet <n>s] last: <line>`                                |
-| db dies, hosts loop    | `ENOTFOUND db` ×2,400 restarts    | `restart: unless-stopped` on `db` (was the only service without) |
+| Failure                                   | Before                                   | Now                                                                                  |
+| ----------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------ |
+| `init` alive-check fails                  | stderr discarded; generic "run doctor"   | prints stderr tail + exact `pnpm restate:up` unblock when `RESTATE_REQUIRED`         |
+| `doctor.mjs` / `automation.mjs` unset dir | `ERR_INVALID_ARG_TYPE` crash             | defaults to `.nektar`; `doctor.mjs` probes Restate (`:19070`/`:9070`/sidecar binary) |
+| solo `doctor` output                      | `bootstrap: 'unsealed'` + HTTP-only hint | `bootstrap: 'standalone'`, `shardNames[]`, transport-aware `fundingImport` + faucet  |
+| wedged upkeep                             | silent `pumping` forever                 | `upkeep(finger) exceeded …`                                                          |
+| dead host stalls sends                    | serial pump wedged                       | bounded delivery, transport-class retry                                              |
+| poisoned journal                          | retries forever, 80 poisoned rows        | dead-ancestry eviction + `beefGaps` skip                                             |
+| suite quiet = wedge?                      | indistinguishable                        | `[suite quiet <n>s] last: <line>`                                                    |
+| db dies, hosts loop                       | `ENOTFOUND db` ×2,400 restarts           | `restart: unless-stopped` on `db`                                                    |
 
-**Score:** ~8/10 (was ~7 — `doctor` now returns `hints[]`: each
-degraded check names its unblock command — unsealed → set
-MARKET_HOSTS, unfunded → address + fundingImport, anchors proving →
-nothing to do).
+**Score:** 9/10 — every known silent cliff (`init` stderr, unset
+`NEKTAR_DATA_DIR`, missing Restate check, misleading standalone `unsealed`
+hint, silent compose env drops) is fixed and regression-tested.
 
 ## Cross-cutting walls
 

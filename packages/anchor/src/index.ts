@@ -1,7 +1,7 @@
 export { AnchorChain, NektarProvider } from './runarchain.js'
 export type { Head, AnchorResult, AnchorOptions as AnchorChainOptions } from './runarchain.js'
 export { FeeVault, VaultFunder } from './vault.js'
-export type { VaultConfig, VaultParams, VaultUtxo } from './vault.js'
+export type { VaultConfig, VaultUtxo } from './vault.js'
 export { CheckpointBond } from './bond.js'
 export type { BondConfig, BondUtxo, BondState } from './bond.js'
 export { DisclosureSaleHost, COVENANT_ID } from './sale.js'

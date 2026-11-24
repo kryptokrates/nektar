@@ -51,7 +51,12 @@ in fees per agent (1104 + 976 + 975 + 388 bytes).
 ## Run an instance
 
 ```bash
-# operator, once: approve the limits (prints the policy hash)
+# no-build Docker / host release — approve a starter policy bound to your key:
+./nektar policy approve --preset both --domains libfoo --shards guide
+# (Docker: docker run --rm -v nektar-data:/data -e NEKTAR_NETWORK=testnet \
+#    ghcr.io/kryptokrates/nektar:latest policy approve --preset both)
+
+# or from a source checkout with a custom policy file:
 cp .devin/automation.policy.example.json my-policy.json
 pnpm automation policy approve my-policy.json
 

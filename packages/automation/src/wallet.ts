@@ -4,7 +4,7 @@ import { ALREADY, broadcastProvablyDead, DEFINITIVE, NEVER_LEFT, type BroadcastR
 import type { AutomationStore, WalletTx, TxState } from './store.js'
 import type { ActionContext } from './policy.js'
 import { replayTxEffects, type TxEffects } from './machines/effects.js'
-import { executor, type Executor } from './rt/exec.js'
+import { executor, PermanentError, type Executor } from './rt/exec.js'
 import { txEmit } from './rt/emit.js'
 import { obsEvent } from './machines/driver.js'
 import { OPS_TABLE } from './machines/ops.machine.js'
@@ -122,7 +122,7 @@ export class WalletCoordinator {
 
   private rebuild(w: WalletTx): Transaction {
     const tx = Transaction.fromHex(w.rawHex)
-    if (tx.id('hex') !== w.txid) throw new Error(`stored bytes for ${w.actionId} do not hash to ${w.txid}`)
+    if (tx.id('hex') !== w.txid) throw new PermanentError(`stored bytes for ${w.actionId} do not hash to ${w.txid}`)
     for (const inp of tx.inputs) {
       const hex = inp.sourceTXID ? w.parents[inp.sourceTXID] : undefined
       if (hex) inp.sourceTransaction = Transaction.fromHex(hex)
@@ -132,7 +132,7 @@ export class WalletCoordinator {
 
   async submit(actionId: string): Promise<{ state: TxState; txid: string; detail?: string }> {
     const w = await this.store.walletTx({ actionId })
-    if (!w) throw new Error(`submit: nothing prepared for ${actionId}`)
+    if (!w) throw new PermanentError(`submit: nothing prepared for ${actionId}`, 404)
     if (w.state !== 'prepared' && w.state !== 'submission_unknown' && w.state !== 'submitted') return { state: w.state, txid: w.txid }
     let res: BroadcastResult
     try {
@@ -201,11 +201,13 @@ export class WalletCoordinator {
     if (w !== undefined) await this.markRejected(w, observation)
   }
 
-  async resubmitPending(): Promise<Array<{ actionId: string; state: TxState }>> {
-    // boot replay also finishes committed-but-uneffected intents — a crash
-    // between persist and act replays custody here, not on a prayer
+  /** scan prepared/submission_unknown rows eligible for re-air (after
+   *  replaying any committed-but-uneffected custody intents). Separated from
+   *  per-row submission so the custody object's global scan can fan out to
+   *  each row's own actionId key instead of bypassing per-actionId locks. */
+  async resubmitCandidates(): Promise<string[]> {
     await replayTxEffects(this.store, this.deps.fx).catch(() => 0)
-    const out: Array<{ actionId: string; state: TxState }> = []
+    const ids: string[] = []
     for (const w of await this.store.walletTxs(['prepared', 'submission_unknown'])) {
       // attempt bound: past RESUBMIT_BOUND the abandon horizon owns the row —
       // the scan stops adding airs; the watcher still observes it (STATE-09)
@@ -216,7 +218,15 @@ export class WalletCoordinator {
       // keep resubmitting
       const op = await this.store.operation(w.operationId).catch(() => undefined)
       if (op !== undefined && TERMINAL_OPS.has(op.state)) continue
-      out.push({ actionId: w.actionId, state: (await this.submit(w.actionId)).state })
+      ids.push(w.actionId)
+    }
+    return ids
+  }
+
+  async resubmitPending(): Promise<Array<{ actionId: string; state: TxState }>> {
+    const out: Array<{ actionId: string; state: TxState }> = []
+    for (const actionId of await this.resubmitCandidates()) {
+      out.push({ actionId, state: (await this.submit(actionId)).state })
     }
     return out
   }

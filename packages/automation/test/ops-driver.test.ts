@@ -1,7 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import knexFactory from 'knex'
-import { setNektarEnv } from '@nektar/core'
 import { AutomationStore, MachineBlocked } from '../src/store.js'
 
 // Phase C — ops.machine as DRIVER of transition(): every state-changing
@@ -123,16 +122,27 @@ void test('driver: unmodeled cause passes through — the census gate owns it', 
   assert.equal(next.state, 'funding')
 })
 
-void test('kill switch: NEKTAR_OPS_FSM=legacy writes without machine validation', async (t) => {
-  setNektarEnv('NEKTAR_OPS_FSM', 'legacy')
-  try {
-    const { kx, store } = await open()
-    t.after(() => kx.destroy())
-    const o = await op(store, 'collecting')
-    // would MachineBlocked under the driver — legacy writes it
-    const next = await store.transition(o.operationId, o.revision, 'collecting', { cause: 'want_signed' })
-    assert.equal(next.state, 'collecting')
-  } finally {
-    setNektarEnv('NEKTAR_OPS_FSM', undefined)
+void test('driver: every production recovery transition agrees with ops.table.json', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const cases: Array<[from: string, to: string, cause: string]> = [
+    ['completing', 'completion_failed', 'completion_refused'],
+    ['funding', 'funding_failed', 'spend_guard_refused'],
+    ['awaiting_disclosure', 'funding_failed', 'spend_guard_refused'],
+    ['awaiting_disclosure', 'refunded', 'refund_observed_on_chain'],
+    ['refund_pending', 'refunded', 'refund_observed_on_chain'],
+    ['refund_pending', 'awaiting_disclosure', 'escrow_spent_by_completion'],
+    ['uncertain', 'awaiting_disclosure', 'escrow_spent_by_completion'],
+    ['seizing', 'watching', 'seize_not_yet'],
+    ['seizing', 'seize_failed', 'seize_refused'],
+    ['collecting', 'denied', 'policy_revoked_or_expired'],
+    ['escalated', 'denied', 'action_reused_with_different_terms'],
+    ['escalated', 'escalated', 'needs_human:daily_cap']
+  ]
+  for (let i = 0; i < cases.length; i++) {
+    const [from, to, cause] = cases[i]
+    const o = await op(store, from, `rec-${i}`)
+    const next = await store.transition(o.operationId, o.revision, to, { cause })
+    assert.equal(next.state, to, `${from} --${cause}--> ${to}`)
   }
 })

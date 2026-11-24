@@ -27,12 +27,11 @@ export class KeyOps {
   walletLogSigner(): DigestSigner {
     return custodySigner(this.deps.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: 'nektar-log', counterparty: 'self' })
   }
-  /** arbitrary wallet-derived signer for a nektar keyID — used by rotate to
-   *  assign a new shard owner without key material crossing the API. Throws
-   *  when the instance has no wallet custody. */
+  /** wallet-derived signer for a nektar keyID — used by rotate to assign a
+   *  new shard owner without key material crossing the API. Uses the
+   *  configured wallet or the operator ProtoWallet. */
   walletKeySigner(keyID: string): DigestSigner {
-    if (this.deps.opts.wallet === undefined) throw new Error('walletKeySigner requires wallet custody (NEKTAR_WALLET)')
-    return custodySigner(this.deps.opts.wallet, { protocolID: [2, 'nektar'], keyID, counterparty: 'self' })
+    return custodySigner(this.operatorWallet(), { protocolID: [2, 'nektar'], keyID, counterparty: 'self' })
   }
 
   shardKey(shard: string): SignerLike {

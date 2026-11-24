@@ -528,13 +528,23 @@ export class LiveWalletServices implements sdk.WalletServices {
     const results: sdk.StatusForTxidResult[] = []
     for (const txid of txids) {
       try {
+        const pr = await merklePathMainnet(this.opts.mc, txid).catch(() => null)
+        if (pr !== null) {
+          let root: string | undefined
+          try {
+            root = pr.merklePath.computeRoot(txid)
+          } catch {
+            root = undefined
+          }
+          if (root !== undefined && (await this.opts.tracker.isValidRootForHeight(root, pr.merklePath.blockHeight).catch(() => false))) {
+            const tip = await this.getHeight().catch(() => pr.merklePath.blockHeight)
+            results.push({ txid, depth: Math.max(1, tip - pr.merklePath.blockHeight + 1), status: 'mined' })
+            continue
+          }
+        }
         const j = await this.idx.txJson(txid)
-        const depth = j?.confirmations ?? 0
-        let status: 'known' | 'mined' | 'unknown' = j === undefined ? 'unknown' : depth > 0 ? 'mined' : 'known'
-        // index-silent is not 'does not exist' — our own broadcast/adopted
-        // txs sit in txStore long before the index catches up
-        if (status === 'unknown' && (await this.localTx(txid)) !== undefined) status = 'known'
-        results.push({ txid, depth, status })
+        const status: 'known' | 'unknown' = j !== undefined || (await this.localTx(txid)) !== undefined ? 'known' : 'unknown'
+        results.push({ txid, depth: status === 'known' ? 0 : undefined, status })
       } catch {
         results.push({ txid, depth: undefined, status: 'unknown' })
       }

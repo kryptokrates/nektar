@@ -29,6 +29,8 @@ secrets:
 env:
   - name: NEKTAR_NETWORK
     value: testnet
+  - name: NEKTAR_TOOL_PROFILE
+    value: operator
   - name: NEKTAR_MAX_FEE_SATS_PER_TX
     value: '{{nektar.max_fee_sats_per_tx}}'
   - name: NEKTAR_MAX_SPEND_SATS_PER_DAY

@@ -45,6 +45,12 @@ export const currentSignal = (): AbortSignal | undefined => legCtx.getStore()
  *  it neither inherits the spawning leg's deadline nor leaks it onward. */
 export const detached = <T>(work: () => T): T => legCtx.exit(work)
 
+export const withLegSignal = <T>(signal: AbortSignal | undefined, work: () => T): T => {
+  if (signal === undefined) return work()
+  const ambient = currentSignal()
+  return legCtx.run(ambient !== undefined ? AbortSignal.any([ambient, signal]) : signal, work)
+}
+
 /** the shared IO-signal shape for a bounded call inside (or outside) a
  *  leg: own `AbortSignal.timeout(ms)` + the ambient leg + an explicit
  *  caller signal — all merged, so the call dies at the earliest of its

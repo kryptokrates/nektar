@@ -307,12 +307,9 @@ export abstract class SellerOps extends IngressOps {
     this.d.log?.(`market: sale ${op.operationId} delivering on ${verdict} payment (${ancestors} unconfirmed ancestor(s), cap ${this.o.maxZeroconfSats} sats)`)
     const next = await this.d.store.transition(op.operationId, op.revision, 'completing', {
       cause: direct ? 'payment_verified' : 'escrow_verified',
-      // a direct payment is already the seller's money — mark it owned so the
-      // funder/wallet layer takes custody of the output we just broadcast
       data: direct ? { direct: true, utxo: m.utxo } : { escrow: { cfg: { ...offer.cfg, depositorPkh: m.depositorPkh }, utxo: m.utxo } },
       evidence: { spv, spends, zeroconf }
     })
-    if (direct) await this.d.ownOutput?.(tx, m.utxo.vout)
     if (escrowBroadcastP !== undefined) {
       const br = await escrowBroadcastP
       if (br.status !== 'success') {
@@ -325,6 +322,9 @@ export abstract class SellerOps extends IngressOps {
         return
       }
     }
+    // a direct payment is only adopted into the seller's coin book AFTER
+    // the broadcast witness succeeded (never optimistically before verdict)
+    if (direct) await this.d.ownOutput?.(tx, m.utxo.vout)
     await this.complete(next)
   }
 

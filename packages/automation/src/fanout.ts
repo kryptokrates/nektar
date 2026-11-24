@@ -10,8 +10,8 @@ import { WAITS } from './waits.js'
  *  retry for hosts only the sender knows */
 export const requeueAckItems = (
   items: Array<{ txid: string; commitment: string; from: string }>
-): Array<{ txid: string; commitment: string; from: string; msg: undefined; created: number }> =>
-  items.map((i) => ({ txid: i.txid, commitment: i.commitment, from: i.from, msg: undefined, created: 0 }))
+): Array<{ txid: string; commitment: string; from: string; msg: undefined; created: number; delivered: boolean }> =>
+  items.map((i) => ({ txid: i.txid, commitment: i.commitment, from: i.from, msg: undefined, created: 0, delivered: true }))
 
 /** one repair-host row per host. `idSuffix` distinguishes rows enqueued at
  *  different stages of the same carrier's life — a republish-time repair

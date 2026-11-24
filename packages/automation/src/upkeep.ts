@@ -5,7 +5,7 @@
 import { P2PKH } from '@bsv/sdk'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
-import { signerAddress, BoundedMap, BoundedSet, nektarEnvNum, deadline, sparse } from '@nektar/core'
+import { signerAddress, BoundedMap, BoundedSet, nektarEnvNum, deadline, detached, sparse } from '@nektar/core'
 import { WAITS } from './waits.js'
 import { deadAncestry } from '@nektar/bstack'
 import { openRefusals } from './refusals.js'
@@ -188,37 +188,39 @@ export function openUpkeep(rt: Rt): void {
   // anchors never block a cycle: they run on the inflight set like pushed work
   const maybeAnchor = (): Promise<void> => {
     if (lanes === undefined || logState === undefined || logStream === undefined) return Promise.resolve()
-    const work = (async () => {
-      try {
-        const r = await lanes.mod.anchorLog({
-          key,
-          wallet,
-          ledger: lanes.ledger,
-          journal: lanes.journal,
-          state: logState,
-          hosts: marketHosts,
-          stream: logStream,
-          broadcast: (tx) => broadcast(tx),
-          fetchTx: (txid) => mem.fetchTx(txid),
-          now: cfg.now,
-          feeRateSatPerKb: mem.feeRateSatPerKb,
-          log: (line) => log(`automation: ${line}`)
-        })
-        if (r !== undefined) {
-          log(`automation: log anchor interval ${r.interval} ${r.txid}`)
-          // a host that missed the mined-anchor publish gets a repair row
-          // keyed `logpub:{stream}:{txid}` — the journaled BEEF re-serves it
-          if (r.missed !== undefined && r.missed.length > 0)
-            await queueRepairs(
-              rt.fanoutIo,
-              `logpub:${logStream}:${r.txid}`,
-              r.missed.map((m) => m.host)
-            )
+    const work = detached(() =>
+      (async () => {
+        try {
+          const r = await lanes.mod.anchorLog({
+            key,
+            wallet,
+            ledger: lanes.ledger,
+            journal: lanes.journal,
+            state: logState,
+            hosts: marketHosts,
+            stream: logStream,
+            broadcast: (tx) => broadcast(tx),
+            fetchTx: (txid) => mem.fetchTx(txid),
+            now: cfg.now,
+            feeRateSatPerKb: mem.feeRateSatPerKb,
+            log: (line) => log(`automation: ${line}`)
+          })
+          if (r !== undefined) {
+            log(`automation: log anchor interval ${r.interval} ${r.txid}`)
+            // a host that missed the mined-anchor publish gets a repair row
+            // keyed `logpub:{stream}:{txid}` — the journaled BEEF re-serves it
+            if (r.missed !== undefined && r.missed.length > 0)
+              await queueRepairs(
+                rt.fanoutIo,
+                `logpub:${logStream}:${r.txid}`,
+                r.missed.map((m) => m.host)
+              )
+          }
+        } catch (e) {
+          log(`automation: log anchor: ${(e as Error).message.slice(0, 200)}`)
         }
-      } catch (e) {
-        log(`automation: log anchor: ${(e as Error).message.slice(0, 200)}`)
-      }
-    })()
+      })()
+    )
     rt.inflight.add(work)
     const done = (): void => {
       rt.inflight.delete(work)
@@ -277,6 +279,13 @@ export function openUpkeep(rt: Rt): void {
           `log:${logStream}:${r.seq}`,
           r.missed.map((m) => m.host)
         )
+        const byKey = new Map<string, string[]>()
+        for (const m of r.healMissed) {
+          const hs = byKey.get(m.key) ?? []
+          hs.push(m.host)
+          byKey.set(m.key, hs)
+        }
+        for (const [k, hosts] of byKey) await queueRepairs(rt.fanoutIo, k, hosts)
       }
       // the cursor moves only after the batch reached quorum: a crash between
       // tick and append replays the same lines on the next cycle, and the

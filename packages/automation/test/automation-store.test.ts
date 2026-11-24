@@ -336,7 +336,7 @@ void test('wallet: bytes persisted before submission; a crash between prepare an
     fx: inertTxEffects,
     exec: ex1
   })
-  wireTx(ex1, { store: a.store, fx: inertTxEffects, log: () => {}, submit: (id) => w1.submit(id) })
+  wireTx(ex1, { store: a.store, fx: inertTxEffects, log: () => {} })
   const prepared = await w1.prepare(ctx('h', 'pay:1'), 'send', tx)
   assert.equal(prepared.state, 'prepared')
   assert.equal(prepared.feeSats, 50)
@@ -355,7 +355,7 @@ void test('wallet: bytes persisted before submission; a crash between prepare an
     fx: inertTxEffects,
     exec: ex2
   })
-  wireTx(ex2, { store: b.store, fx: inertTxEffects, log: () => {}, submit: (id) => w2.submit(id) })
+  wireTx(ex2, { store: b.store, fx: inertTxEffects, log: () => {} })
   assert.deepEqual(await w2.resubmitPending(), [{ actionId: 'pay:1', state: 'submitted' }])
   assert.deepEqual(seen, [tx.id('hex')], 'the recorded bytes were sent — nothing was rebuilt')
   assert.equal((await w2.submit('pay:1')).state, 'submitted', 'resubmitting an accepted tx is harmless')
@@ -386,7 +386,7 @@ void test('wallet: one outpoint, one live action; guard refusal and network reje
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const w = new WalletCoordinator(store, { broadcast: () => Promise.resolve(reply), fx: inertTxEffects, exec: ex })
-  wireTx(ex, { store, fx: inertTxEffects, log: () => {}, submit: (id) => w.submit(id) })
+  wireTx(ex, { store, fx: inertTxEffects, log: () => {} })
   const t1 = await build(),
     t2 = await build()
   await w.prepare(ctx('h', 'a'), 'send', t1)
@@ -413,7 +413,7 @@ void test('wallet: one outpoint, one live action; guard refusal and network reje
   const ex2 = new Dispatcher()
   t.after(() => ex2.close())
   const w2 = new WalletCoordinator(store2, { broadcast: () => Promise.resolve(reply), fx: inertTxEffects, exec: ex2 })
-  wireTx(ex2, { store: store2, fx: inertTxEffects, log: () => {}, submit: (id) => w2.submit(id) })
+  wireTx(ex2, { store: store2, fx: inertTxEffects, log: () => {} })
   await w2.prepare(ctx('h', 'a'), 'send', t1)
   assert.equal((await w2.submit('a')).state, 'rejected')
   assert.equal((await w2.prepare(ctx('h', 'b'), 'send', t2)).state, 'prepared', 'a tx that never left the process frees its inputs')
@@ -555,7 +555,7 @@ void test('watcher: recently-rejected rows still re-observe — the counterparty
     fx: effects,
     exec: ex
   })
-  wireTx(ex, { store, fx: effects, log: () => {}, submit: (id) => w.submit(id) })
+  wireTx(ex, { store, fx: effects, log: () => {} })
   await w.prepare(ctx('h', 'a'), 'send', tx)
   assert.equal((await w.submit('a')).state, 'rejected')
   const { TransactionWatcher } = await import('../src/ledger.js')

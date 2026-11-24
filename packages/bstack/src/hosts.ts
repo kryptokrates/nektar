@@ -1,6 +1,7 @@
 import { decodePayload, verifyBody, bodyPub, bodyExp, bodyNet, type MarketPayload } from './market-wire.js'
 import { carrierLockingKey, checkCarrier } from './carrier.js'
-import { nap, sha256, toHex } from '@nektar/core'
+import { isHeaderUnavailable } from '@nektar/chain'
+import { detached, ioSignal, sha256, toHex } from '@nektar/core'
 import type { ChainTracker } from '@bsv/sdk'
 
 export type Quorum = 'all' | 'majority' | 'one' | number
@@ -52,37 +53,33 @@ export async function submitAll(
   hosts: string[],
   beef: number[],
   topics: string[],
-  opts?: { quorum?: Quorum; timeoutMs?: number; retryWaits?: number[]; early?: boolean }
+  opts?: { quorum?: Quorum; timeoutMs?: number; early?: boolean }
 ): Promise<SubmitAllResult> {
   const timeoutMs = opts?.timeoutMs ?? 15000
-  // no implicit retry ladder: every src caller passes retryWaits:[] because the
-  // caller's own journal is the retry layer — a dead host must cost one refused
-  // fetch, not ~7s of sleeps per cycle. Retry is opt-in (demos pass a ladder).
-  const waits = opts?.retryWaits ?? []
   const n = need(opts?.quorum, hosts.length)
   type Leg = { host: string; ok: boolean; admitted?: boolean; error?: string }
   const per = async (host: string): Promise<Leg> => {
-    for (let t = 0; t <= waits.length; t++) {
-      try {
-        const r = await fetch(`${host}/submit`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/octet-stream', 'x-topics': JSON.stringify(topics) },
-          body: Buffer.from(beef),
-          signal: AbortSignal.timeout(timeoutMs)
-        })
-        if (r.ok) {
-          const steak = (await r.json().catch(() => ({}))) as Record<string, { outputsToAdmit?: number[] }>
-          const admitted = topics.some((t) => (steak[t]?.outputsToAdmit?.length ?? 0) > 0)
-          return { host, ok: true, admitted }
-        }
-        if (r.status < 500) return { host, ok: false, error: `http ${r.status}` }
-        if (t === waits.length) return { host, ok: false, error: `http ${r.status}: ${(await r.text().catch(() => '')).slice(0, 120)}` }
-      } catch (e) {
-        if (t === waits.length) return { host, ok: false, error: (e as Error).message.slice(0, 80) }
+    try {
+      // early:true straggler legs intentionally outlive quorum resolution so
+      // `settled` can settle repairs after the caller's deadline() exits;
+      // non-early submits merge the ambient leg context via ioSignal.
+      const signal = opts?.early === true ? detached(() => ioSignal(timeoutMs)) : ioSignal(timeoutMs)
+      const r = await fetch(`${host}/submit`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream', 'x-topics': JSON.stringify(topics) },
+        body: Buffer.from(beef),
+        signal
+      })
+      if (r.ok) {
+        const steak = (await r.json().catch(() => ({}))) as Record<string, { outputsToAdmit?: number[] }>
+        const admitted = topics.some((t) => (steak[t]?.outputsToAdmit?.length ?? 0) > 0)
+        return { host, ok: true, admitted }
       }
-      await nap(waits[t])
+      if (r.status < 500) return { host, ok: false, error: `http ${r.status}` }
+      return { host, ok: false, error: `http ${r.status}: ${(await r.text().catch(() => '')).slice(0, 120)}` }
+    } catch (e) {
+      return { host, ok: false, error: (e as Error).message.slice(0, 80) }
     }
-    return { host, ok: false, error: 'retries exhausted' }
   }
   const jobs = hosts.map(per)
   // every leg's final answer — never rejects; an early caller uses it to
@@ -129,7 +126,7 @@ export async function lookupAll(
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ service, query }),
-        signal: AbortSignal.timeout(opts?.timeoutMs ?? 15000)
+        signal: ioSignal(opts?.timeoutMs ?? 15000)
       })
       if (!r.ok) return { host, error: `http ${r.status}` }
       const j = (await r.json()) as { type?: string; outputs?: Array<{ beef: number[]; outputIndex: number }> }
@@ -154,7 +151,7 @@ export async function lookupAll(
           out.push(r)
           settled++
           if ('outputs' in r) ok++
-          if (ok >= quorum || settled === hosts.length) resolve(out)
+          if (ok >= quorum || settled === hosts.length) resolve([...out])
         })
       }
     })
@@ -210,10 +207,11 @@ export async function readItems(hosts: string[], service: string, query: unknown
           const ck = VerifiedCache.key(o2.beef)
           const hit = o.cache?.get(ck)
           if (hit !== undefined) return { hit, ck }
-          const c = await checkCarrier(o2.beef, { tracker: o.tracker }).catch(() => undefined)
-          if (c === undefined || !c.ok) return undefined
+          const c = await checkCarrier(o2.beef, { tracker: o.tracker })
+          if (!c.ok) return undefined
           return { c, ck }
-        } catch {
+        } catch (e) {
+          if (isHeaderUnavailable(e)) throw e
           return undefined
         }
       })

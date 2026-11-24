@@ -4,19 +4,25 @@
 #   curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | bash
 #
 # Installs Docker if missing, fetches compose + env template, generates the
-# four secrets, and starts the hub. One thing it cannot know — your hosts'
-# PUBLIC urls (they go verbatim into your announce):
+# four secrets, and starts the hub. One thing it cannot know — your hub's
+# PUBLIC base URL (used to derive your announced host/push/watch URLs):
 #
-#   NEKTAR_MARKET_HOSTS=https://hub.example/hosts/a,https://hub.example/hosts/b,https://nektar.run/hosts/a,https://nektar.run/hosts/b ./install.sh
+#   NEKTAR_PUBLIC_URL=https://hub.example ./install.sh
 #
+# (Or override NEKTAR_MARKET_HOSTS / NEKTAR_PUSH_PUBLIC / NEKTAR_WATCH_URLS /
+# NEKTAR_WATCH_PUBLIC individually.)
 # If unset, the install brings the hub up on localhost defaults with
 # NEKTAR_ANNOUNCE=0 — a smoke check that advertises nothing unreachable.
-# Set the public urls and re-run to publish.
+# Set NEKTAR_PUBLIC_URL (or NEKTAR_MARKET_HOSTS) and re-run to publish.
 #
-# Optional passthroughs: NEKTAR_PUSH_PUBLIC, NEKTAR_WATCH_URLS,
-# NEKTAR_WATCH_PUBLIC, NEKTAR_FUND_WIF, NEKTAR_FUND_TXIDS,
-# NEKTAR_WAIT_FUNDING, NEKTAR_INDEXER_DISCOVERY, NEKTAR_SEED_DOMAINS,
-# NEKTAR_NETWORK, NEKTAR_ANNOUNCE, NEKTAR_HUB_DIR (default ~/nektar-hub),
+# Optional passthroughs: NEKTAR_PUBLIC_URL, NEKTAR_MARKET_HOSTS,
+# NEKTAR_PUSH_PUBLIC, NEKTAR_WATCH_URLS, NEKTAR_WATCH_PUBLIC,
+# NEKTAR_FUND_WIF, NEKTAR_FUND_TXIDS, NEKTAR_WAIT_FUNDING,
+# NEKTAR_INDEXER_DISCOVERY, NEKTAR_SEED_DOMAINS, NEKTAR_NETWORK,
+# NEKTAR_ANNOUNCE, NEKTAR_FAUCET, NEKTAR_FAUCET_SATS,
+# NEKTAR_FAUCET_DAILY_SATS, NEKTAR_MAX_SPEND_SATS_PER_DAY,
+# NEKTAR_ZEROCONF_MAX_SATS, NEKTAR_ZEROCONF_MAX_ANCESTORS,
+# NEKTAR_STRICT_HEADERS, NEKTAR_HUB_DIR (default ~/nektar-hub),
 # NEKTAR_AGENT_BRANCH.
 #
 # Funding needs no WIF: the agent generates its own key on first boot and
@@ -77,9 +83,26 @@ for k in NEKTAR_KEY_PASSPHRASE NEKTAR_HTTP_TOKEN OVERLAY_DB_PASSWORD OVERLAY_ADM
     set_kv "$k" "$(openssl rand -hex 32)"
   fi
 done
+if [ -n "${NEKTAR_PUBLIC_URL:-}" ]; then
+  pub="${NEKTAR_PUBLIC_URL%/}"
+  net="${NEKTAR_NETWORK:-testnet}"
+  if [ -z "${NEKTAR_MARKET_HOSTS:-}" ]; then
+    if [ "$net" = "testnet" ]; then
+      NEKTAR_MARKET_HOSTS="${pub}/hosts/a,${pub}/hosts/b,https://nektar.run/hosts/a,https://nektar.run/hosts/b"
+    else
+      NEKTAR_MARKET_HOSTS="${pub}/hosts/a,${pub}/hosts/b"
+    fi
+  fi
+  [ -z "${NEKTAR_PUSH_PUBLIC:-}" ] && NEKTAR_PUSH_PUBLIC="$pub"
+  [ -z "${NEKTAR_WATCH_URLS:-}" ] && NEKTAR_WATCH_URLS="${pub}/watch/a,${pub}/watch/b"
+  [ -z "${NEKTAR_WATCH_PUBLIC:-}" ] && NEKTAR_WATCH_PUBLIC="${pub}/watch"
+fi
 for k in NEKTAR_MARKET_HOSTS NEKTAR_PUSH_PUBLIC NEKTAR_WATCH_URLS NEKTAR_WATCH_PUBLIC \
   NEKTAR_FUND_WIF NEKTAR_FUND_TXIDS NEKTAR_WAIT_FUNDING NEKTAR_INDEXER_DISCOVERY \
-  NEKTAR_SEED_DOMAINS NEKTAR_NETWORK NEKTAR_ANNOUNCE; do
+  NEKTAR_SEED_DOMAINS NEKTAR_NETWORK NEKTAR_ANNOUNCE \
+  NEKTAR_FAUCET NEKTAR_FAUCET_SATS NEKTAR_FAUCET_DAILY_SATS \
+  NEKTAR_MAX_SPEND_SATS_PER_DAY NEKTAR_ZEROCONF_MAX_SATS NEKTAR_ZEROCONF_MAX_ANCESTORS \
+  NEKTAR_STRICT_HEADERS; do
   eval "v=\${$k:-}"
   [ -n "$v" ] && set_kv "$k" "$v"
 done

@@ -4,7 +4,7 @@
 // site-by-site in mainnet.ts/regtest.ts — sites declare intent, not loops.
 import { nap, spread } from '@nektar/core'
 
-export const sleep = nap
+const sleep = nap
 
 export interface RetryOpts<T> {
   /** total tries (1 = no retry) */
@@ -45,7 +45,10 @@ export const pacer = (minMs: number): (() => Promise<void>) => {
       if (wait > 0) await sleep(wait)
       last = Date.now()
     })
-    tail = p
+    tail = p.then(
+      () => undefined,
+      () => undefined
+    )
     return p
   }
 }

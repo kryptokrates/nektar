@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { nap } from '@nektar/core'
-import { withRetry } from '../src/retry.js'
+import { deadline, nap } from '@nektar/core'
+import { pacer, withRetry } from '../src/retry.js'
 
 // retry — the shared curve carries the jitter so no caller can land a
 // phase-aligned cadence: withRetry applies spread() (0.5x..1.5x) to the
@@ -36,4 +36,13 @@ test('withRetry jitters the caller curve — the sleep is the spread value, not 
   await nap(300)
   assert.equal(tries, 2)
   assert.equal(value, 'ok')
+})
+
+test('pacer: an aborted caller inside deadline() never poisons subsequent callers', async () => {
+  const pace = pacer(200)
+  await pace() // seed last = now so the next caller sleeps
+  const aborted = await deadline(() => pace(), 30)
+  assert.equal(aborted.outcome, 'timeout')
+  // a later caller must still resolve cleanly, not inherit the aborted tail rejection
+  await pace()
 })

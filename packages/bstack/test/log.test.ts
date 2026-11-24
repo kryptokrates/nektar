@@ -587,3 +587,57 @@ test('log: a header outage rejects the read — never a false gap', async () => 
     await s.h2.close()
   }
 })
+
+test('log heal: historical misses report their own seq key and stay amortized inside the window', async () => {
+  const s = await rig()
+  try {
+    await appendLog({
+      key: s.key,
+      ledger: s.ledger,
+      journal: s.journal,
+      state: s.state,
+      hosts: [s.h1.url],
+      stream: STREAM,
+      lines: lines(1),
+      now: () => 1000,
+      quorum: 'all'
+    })
+    const dead = 'http://127.0.0.1:1'
+    const r2 = await appendLog({
+      key: s.key,
+      ledger: s.ledger,
+      journal: s.journal,
+      state: s.state,
+      hosts: [s.h1.url, dead],
+      stream: STREAM,
+      lines: lines(2),
+      now: () => 2000,
+      quorum: 'one'
+    })
+    assert.deepEqual(
+      r2.missed.map((m) => m.host),
+      [dead]
+    )
+    assert.deepEqual(
+      r2.healMissed.map((m) => ({ key: m.key, host: m.host })),
+      [{ key: `log:${STREAM}:1`, host: dead }],
+      'historical miss names log:<stream>:1, not the new head seq 2'
+    )
+    // third append on the same host set inside LOG_HEAL_MS skips the historical re-serve
+    const r3 = await appendLog({
+      key: s.key,
+      ledger: s.ledger,
+      journal: s.journal,
+      state: s.state,
+      hosts: [s.h1.url, dead],
+      stream: STREAM,
+      lines: lines(3),
+      now: () => 3000,
+      quorum: 'one'
+    })
+    assert.deepEqual(r3.healMissed, [], 'historical re-serve amortized inside LOG_HEAL_MS')
+  } finally {
+    await s.h1.close()
+    await s.h2.close()
+  }
+})

@@ -4,7 +4,9 @@ import { PrivateKey } from '@bsv/sdk'
 import { signWant } from '../src/artifacts.js'
 import { buildCarrier, buildSweep } from '../src/carrier.js'
 import { encodePayload, lanesFor } from '../src/market-wire.js'
-import { submitAll, readWants, VerifiedCache } from '../src/hosts.js'
+import { submitAll, lookupAll, readWants, VerifiedCache } from '../src/hosts.js'
+import { deadline } from '@nektar/core'
+import { HeaderUnavailableError, isHeaderUnavailable } from '@nektar/chain'
 import { provenTree } from './helpers.js'
 import { FakeTracker, minihost, faulthost } from '../src/testing.js'
 
@@ -51,7 +53,7 @@ test('hosts: early resolve returns at quorum while a straggler still lands', asy
     const k = PrivateKey.fromRandom()
     const { beef } = await want(k)
     const t0 = Date.now()
-    const r = await submitAll([a.url, slowUrl], beef, lanesFor(NET, ['compute']), { retryWaits: [], early: true })
+    const r = await submitAll([a.url, slowUrl], beef, lanesFor(NET, ['compute']), { early: true })
     const ms = Date.now() - t0
     assert.ok(r.ok)
     assert.ok(ms < 2500, `early resolve waited ${ms}ms for the straggler`)
@@ -59,7 +61,7 @@ test('hosts: early resolve returns at quorum while a straggler still lands', asy
     await new Promise((r2) => setTimeout(r2, 3300))
     // without early the same call is priced by the slow host
     const t1 = Date.now()
-    const r2 = await submitAll([a.url, slowUrl], beef, lanesFor(NET, ['compute']), { retryWaits: [] })
+    const r2 = await submitAll([a.url, slowUrl], beef, lanesFor(NET, ['compute']))
     assert.ok(r2.ok)
     assert.ok(Date.now() - t1 >= 2900, 'non-early call waits for every host')
   } finally {
@@ -188,7 +190,7 @@ test('hosts: early resolve at quorum leaves the straggler in pending; settled re
   const k = PrivateKey.fromRandom()
   const { beef } = await want(k)
   try {
-    const r = await submitAll([a.url, b.url, f.url], beef, lanesFor(NET, ['compute']), { retryWaits: [], early: true })
+    const r = await submitAll([a.url, b.url, f.url], beef, lanesFor(NET, ['compute']), { early: true })
     assert.ok(r.ok, 'quorum of two took it')
     assert.deepEqual(r.missed, [], 'nothing had FAILED at resolve time')
     assert.deepEqual(r.pending, [f.url], 'the unanswered leg is reported pending, not missed')
@@ -251,4 +253,41 @@ test('hosts: a failed verification is never cached — the next read re-checks',
   assert.equal((await rd()).items.length, 1, 'the re-check passes once the tracker accepts')
   assert.ok(calls > failed, 'a negative verdict was re-verified, not served from cache')
   await a.close()
+})
+
+test('hosts: readWants propagates HeaderUnavailableError instead of dropping carriers', async () => {
+  const tr = new FakeTracker()
+  const a = await minihost([NET], tr)
+  try {
+    const k = PrivateKey.fromRandom()
+    const { beef } = await want(k)
+    await submitAll([a.url], beef, lanesFor(NET, ['compute']))
+    tr.isValidRootForHeight = () => Promise.reject(new HeaderUnavailableError(1, 'no-source'))
+    await assert.rejects(readWants([a.url], { net: NET, domain: 'compute' }, { tracker: tr, net: NET }), (e: unknown) => isHeaderUnavailable(e))
+  } finally {
+    await a.close()
+  }
+})
+
+test('hosts: lookupAll quorum returns a snapshot array and respects ambient deadline()', async () => {
+  const tr = new FakeTracker()
+  const a = await minihost([NET], tr)
+  const slow = await faulthost(a.url)
+  slow.fault.delayMs = 200
+  try {
+    const { answers } = await lookupAll([a.url, slow.url], 'ls_nektar', { wants: { net: NET, domain: 'compute' } }, { quorum: 1 })
+    assert.equal(answers.length, 1)
+    await new Promise((r) => setTimeout(r, 260))
+    assert.equal(answers.length, 1, 'late straggler must not mutate the returned quorum snapshot')
+
+    // ambient deadline aborts a slow lookup instead of waiting out the full 15s timeout
+    slow.fault.delayMs = 5_000
+    const t0 = Date.now()
+    const r = await deadline(() => lookupAll([slow.url], 'ls_nektar', { wants: { net: NET, domain: 'compute' } }), 80)
+    assert.equal(r.outcome, 'timeout')
+    assert.ok(Date.now() - t0 < 1_000)
+  } finally {
+    await slow.close()
+    await a.close()
+  }
 })

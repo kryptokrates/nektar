@@ -5,7 +5,7 @@
 // parent, a counterparty gets a BEEF, and a received BEEF is checked against
 // the instance's own headers — no indexer and no waiting for one to catch up.
 import { Transaction, MerklePath, Spend, LockingScript, type ChainTracker } from '@bsv/sdk'
-import { sparse } from '@nektar/core'
+import { fullSourceTx, inputPrevout, sparse } from '@nektar/core'
 import { isHeaderUnavailable } from './headers.js'
 
 export interface TxRow {
@@ -22,10 +22,13 @@ const hexOf = (b: number[] | Uint8Array): string => Buffer.from(b).toString('hex
 const MAX_DEPTH = 64
 
 /** what a wire payload turned out to be: `spv` is true only when the whole
- *  ancestry verified — scripts, amounts and every proof against `tracker` */
+ *  ancestry verified — scripts, amounts and every proof against `tracker`.
+ *  `strippedBumps` counts carried merkle paths that failed verification and
+ *  were deleted before return. */
 export interface Ingested {
   tx: Transaction
   spv: boolean
+  strippedBumps?: number
 }
 
 export class TxStore {
@@ -89,15 +92,8 @@ export class TxStore {
     // every stored tx records the outpoints its inputs consume — subject and
     // ancestry alike (the recursive ancestor puts below index themselves)
     for (const i of tx.inputs) {
-      let src = i.sourceTXID
-      if (src === undefined) {
-        try {
-          src = i.sourceTransaction?.id('hex')
-        } catch {
-          src = undefined // EF stand-in: not a real prevout reference
-        }
-      }
-      if (src !== undefined && sparse(i.sourceOutputIndex) !== undefined) this.spends.set(`${src}:${i.sourceOutputIndex}`, txid)
+      const prev = inputPrevout(i)
+      if (prev !== undefined) this.spends.set(`${prev.txid}:${prev.vout}`, txid)
     }
     const cur = this.rows.get(txid)
     const proof = cur?.proof ?? tx.merklePath
@@ -112,20 +108,8 @@ export class TxStore {
     }
     if (proof !== undefined || depth >= MAX_DEPTH) return // a proven tx ends the ancestry
     for (const i of tx.inputs) {
-      // a sourceTransaction whose own id does not match sourceTXID is a
-      // synthetic stand-in (fee preimage stub), not ancestry — never store it.
-      // EF-decoded parents are likewise stand-ins (only the spent output is
-      // carried — id()/toHex() can't serialize them): skip them too, since a
-      // partial transaction is not storable ancestry anyway.
-      if (i.sourceTransaction === undefined) continue
-      let srcId: string
-      try {
-        srcId = i.sourceTransaction.id('hex')
-      } catch {
-        continue
-      }
-      if (i.sourceTXID !== undefined && srcId !== i.sourceTXID) continue
-      this.put(i.sourceTransaction, depth + 1)
+      const src = fullSourceTx(i)
+      if (src !== undefined) this.put(src, depth + 1)
     }
   }
 
@@ -234,8 +218,8 @@ export class TxStore {
           spv = false
         }
       }
-      await dropUnverified(tx, tracker)
-      return { tx, spv }
+      const stripped = await dropUnverified(tx, tracker)
+      return { tx, spv, ...(stripped > 0 ? { strippedBumps: stripped } : {}) }
     }
     if (/^[0-9a-f]{8}0000000000ef/i.test(hex)) return { tx: Transaction.fromHexEF(hex), spv: false }
     return { tx: Transaction.fromHex(hex), spv: false }
@@ -247,20 +231,23 @@ export class TxStore {
  *  compute. With no tracker nothing is verifiable: same outcome. Valid
  *  ancestor BUMPs survive even when the subject itself is unproven — zeroconf
  *  ancestry keeps traveling; `spv` stays the whole-chain verdict for callers. */
-const dropUnverified = async (tx: Transaction, tracker: ChainTracker | undefined, seen = new Set<string>(), depth = 0): Promise<void> => {
-  if (depth > MAX_DEPTH) return
+const dropUnverified = async (tx: Transaction, tracker: ChainTracker | undefined, seen = new Set<string>(), depth = 0): Promise<number> => {
+  if (depth > MAX_DEPTH) return 0
   let txid: string
   try {
     txid = tx.id('hex')
   } catch {
-    return
+    return 0
   }
-  if (seen.has(txid)) return
+  if (seen.has(txid)) return 0
   seen.add(txid)
+  let stripped = 0
   if (tx.merklePath !== undefined && (tracker === undefined || !(await tx.merklePath.verify(txid, tracker)))) {
     delete tx.merklePath
+    stripped++
   }
-  for (const i of tx.inputs) if (i.sourceTransaction !== undefined) await dropUnverified(i.sourceTransaction, tracker, seen, depth + 1)
+  for (const i of tx.inputs) if (i.sourceTransaction !== undefined) stripped += await dropUnverified(i.sourceTransaction, tracker, seen, depth + 1)
+  return stripped
 }
 
 /** does input `vin` of `tx` satisfy the output it spends — run locally, no node */

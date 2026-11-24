@@ -21,6 +21,8 @@ secrets:
 env:
   - name: NEKTAR_NETWORK
     value: regtest
+  - name: NEKTAR_TOOL_PROFILE
+    value: operator
   - name: NEKTAR_RPC_URL
     value: http://host.docker.internal:9292/
   - name: NEKTAR_PROPAGATION_URL

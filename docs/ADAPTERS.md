@@ -10,15 +10,15 @@ surface.
 Tools in the first block are the stable surface — names and required
 parameters are frozen; new fields and tools arrive additively only.
 
-| Tool                      | Purpose                                                     | Minimal args               |
-| ------------------------- | ----------------------------------------------------------- | -------------------------- |
-| `recall`                  | read memory — fragments with provenance                     | `question` / shard filters |
-| `remember`                | write memory — anchored, signed                             | `data`, `shard`            |
-| `groundedAnswer`          | answer citing verified fragments + receipt footer           | `question`                 |
-| `verifyReceipt`           | check a receipt token offline/online                        | `token`                    |
-| `doctor`                  | one-call health: funding, counts, bootstrap, `hints[]` next | —                          |
-| `automation`              | marketplace ops: `publishWant`, `enableSeller`, `status`, … | `op` + op args             |
-| `want` / `sell` / `deals` | ergonomic market entry points                               | want: `domains`, `maxSats` |
+| Tool                      | Purpose                                                      | Minimal args                                                  |
+| ------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------- |
+| `recall`                  | read memory — fragments with provenance                      | `shard` (optional — omit to list/read shards, e.g. `welcome`) |
+| `remember`                | write memory — anchored, signed                              | `data`, `shard`                                               |
+| `groundedAnswer`          | answer citing verified fragments + receipt footer            | `claims` (`[{text, cites:[{shard, seq}]}]`)                   |
+| `verifyReceipt`           | check a receipt token offline/online                         | `token`                                                       |
+| `doctor`                  | one-call health: funding, `shardNames`, bootstrap, `hints[]` | —                                                             |
+| `automation`              | marketplace ops: `publishWant`, `enableSeller`, `status`, …  | `op` + op args (operator profile)                             |
+| `want` / `sell` / `deals` | ergonomic market entry points                                | want: `domains`, `maxSats`                                    |
 
 Everything else on the surface (`prove`, `anchor`, `exportShard`,
 `importShard`, `fundingImport`, `sendSats`, `evidence`, …) is extended
@@ -44,10 +44,10 @@ claude mcp add --transport http nektar https://<you>/mcp \
   --header "Authorization: Bearer <NEKTAR_HTTP_TOKEN>"
 ```
 
-Local per-project: `pnpm setup:claude` also installs the receipt
-discipline hooks (Stop + SessionStart) into the project's
-`.claude/` — that integration verifies answer footers, it does not
-register the server.
+Local per-project: `pnpm setup:claude` registers the HTTP MCP server in
+`.mcp.json` (accepts `--port`/`--url`/`--token` or reads `.env`) AND
+installs the receipt discipline hooks (Stop + SessionStart) into the
+project's `.claude/`.
 
 ### Codex — `~/.codex/config.toml`
 
@@ -106,7 +106,7 @@ curl -s https://<you>/v1/tools \
 curl -s https://<you>/v1/tools/recall \
   -H "Authorization: Bearer <NEKTAR_HTTP_TOKEN>" \
   -H 'content-type: application/json' \
-  -d '{"question":"what does this shard know?"}'        # call
+  -d '{"shard":"welcome"}'                               # call (or {} to list & read all shards)
 ```
 
 ## Which instance do clients attach to?

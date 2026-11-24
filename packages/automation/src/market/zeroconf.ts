@@ -8,6 +8,7 @@
 // ancestor bound cover the honest common case; anything larger or deeper
 // parks in payment_pending until the payment's own proof arrives.
 import type { Transaction } from '@bsv/sdk'
+import { fullSourceTx, inputPrevout } from '@nektar/core'
 
 export type ZeroconfVerdict = 'proven' | 'zeroconf' | 'await-proof'
 
@@ -39,32 +40,15 @@ export async function unconfirmedAncestors(tx: Transaction, resolve: (txid: stri
   while (queue.length > 0 && count <= cap) {
     const cur = queue.shift()!
     for (const i of cur.inputs) {
-      // the wire reference names the parent; a stand-in sourceTransaction's
-      // id() may throw — try it only as the fallback (ancestryWalk's rule)
-      let id = i.sourceTXID
-      if (id === undefined && i.sourceTransaction !== undefined) {
-        try {
-          id = i.sourceTransaction.id('hex')
-        } catch {
-          id = undefined
-        }
-      }
+      const id = inputPrevout(i)?.txid
       // a null prevout (coinbase-shaped input) is a structural terminal, not
       // an unproven ancestor — there is no parent to count
       if (id === undefined || id === '00'.repeat(32) || seen.has(id)) continue
       seen.add(id)
       // the carried parent wins — a resolved copy can never be LESS proven
       // than the wire that already survived TxStore.read. A stand-in
-      // carries no ancestry: its id() throws, so resolve the real parent
-      let p = i.sourceTransaction
-      if (p !== undefined) {
-        try {
-          p.id('hex')
-        } catch {
-          p = undefined
-        }
-      }
-      p ??= await resolve(id)
+      // carries no ancestry, so resolve the real parent
+      const p = fullSourceTx(i) ?? (await resolve(id))
       if (p === undefined) {
         count++
         continue

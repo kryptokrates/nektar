@@ -469,6 +469,27 @@ for (const mk of [
     }
   })
 
+  test(`release (${mk.name}): returning a taken slot restores stock; releasing after drop is a no-op`, async () => {
+    const key = PrivateKey.fromRandom()
+    const t = await provenTree(key, 2)
+    const txid = t.id('hex')
+    const { l, done } = mk.ledger()
+    try {
+      await l.add(t, 2)
+      await l.markProven(txid, t.merklePath!)
+      const got = await l.take()
+      assert.ok(got !== undefined)
+      assert.equal(await l.remaining(), 1)
+      await l.release(txid, got.vout)
+      assert.equal(await l.remaining(), 2, 'released slot returns to free stock')
+      await l.drop(txid)
+      await l.release(txid, got.vout)
+      assert.equal(await l.remaining(), 0, 'releasing against a dropped tree leaves no orphan slot')
+    } finally {
+      await done()
+    }
+  })
+
   // regression: an odd-count block duplicates the last leaf — the tree's own
   // txid legitimately appears at both the real offset and the offset after.
   // MerklePath.extract() resolves the txid by hash and re-flags that copy, so

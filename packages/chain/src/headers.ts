@@ -2,7 +2,7 @@
 // the proof-of-work check that makes a served header self-verifying, and the
 // witnessed tracker that makes two independent sources attest the same chain.
 import { Hash } from '@bsv/sdk'
-import { BoundedMap, HEX64 } from '@nektar/core'
+import { BoundedMap, detached, HEX64 } from '@nektar/core'
 import type { BlockHeader, ChainTracker } from './interfaces.js'
 
 /** the consensus serialization — 80 bytes: version LE32, prevHash and
@@ -188,7 +188,7 @@ export class WitnessedTracker implements ChainTracker {
   private askWitness(height: number): Promise<BlockHeader | undefined> {
     const cur = this.asks.get(height)
     if (cur !== undefined && Date.now() - cur.at < this.retryMs) return cur.p
-    const p = this.witness.headerAtHeight(height).catch(() => undefined)
+    const p = detached(() => this.witness.headerAtHeight(height)).catch(() => undefined)
     this.asks.set(height, { at: Date.now(), p })
     return p
   }

@@ -6,6 +6,9 @@ image: nektar:local
 longLived: true
 volumes:
   - nektar-data:/data
+env:
+  - name: NEKTAR_TOOL_PROFILE
+    value: operator
 description: >-
   Encrypted, provenance-bearing agent memory whose history is anchored on BSV.
   Tools: remember, recall, prove, anchor, ZK membership/clearance, rotate,

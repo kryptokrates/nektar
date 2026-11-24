@@ -11,11 +11,10 @@
 // localhostForwarding mirrors the ports onto windows localhost).
 //   node tools/pack-deploy.mjs   → dist-deploy/   (node dist/src/bin.js)
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { fetchRestateBinary, RESTATE_VERSION } from './restate-fetch.mjs'
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const out = join(root, 'dist-deploy')
@@ -43,47 +42,11 @@ if (r.status !== 0) process.exit(r.status ?? 1)
 // ─── restate-server sidecar ─────────────────────────────────────────────────
 // the executor plane's only external process — version pinned to the compose
 // sidecar's. win32 gets the musl build (run through wsl.exe at boot).
-const RESTATE_VERSION = '1.8.1'
-const RESTATE_TARGETS = {
-  'linux-x64': 'x86_64-unknown-linux-musl',
-  'linux-arm64': 'aarch64-unknown-linux-musl',
-  'darwin-arm64': 'aarch64-apple-darwin',
-  'darwin-x64': 'x86_64-apple-darwin',
-  'win32-x64': 'x86_64-unknown-linux-musl' // via WSL — no win32 build exists
-}
-const target = RESTATE_TARGETS[`${process.platform}-${process.arch}`]
-if (!target) {
+const fetched = await fetchRestateBinary(join(out, 'restate'))
+if (!fetched.installed) {
   console.warn(`no restate-server target for ${process.platform}-${process.arch} — artifact ships without the sidecar`)
 } else {
-  const base = `https://github.com/restatedev/restate/releases/download/v${RESTATE_VERSION}`
-  const name = `restate-server-${target}.tar.xz`
-  const dl = async (f) => {
-    const res = await fetch(`${base}/${f}`)
-    if (!res.ok) throw new Error(`${f}: HTTP ${res.status}`)
-    return Buffer.from(await res.arrayBuffer())
-  }
-  const [txz, sha] = await Promise.all([dl(name), dl(`${name}.sha256`)])
-  const want = sha.toString('utf8').split(/\s+/)[0].toLowerCase()
-  const got = createHash('sha256').update(txz).digest('hex')
-  if (got !== want) throw new Error(`restate-server sha256 mismatch: got ${got}, want ${want}`)
-  const tmp = mkdtempSync(join(tmpdir(), 'restate-'))
-  writeFileSync(join(tmp, name), txz)
-  // extract in cwd with a bare filename — no absolute path reaches tar at
-  // all, so gnu tar's `C:` remote-host quirk and bsdtar's missing
-  // --force-local are both sidestepped (win32/macos runners ship bsdtar)
-  const x = spawnSync('tar', ['-xJf', name], { cwd: tmp, stdio: 'inherit' })
-  if (x.status !== 0) throw new Error(`tar extract failed (${x.status}) — need bsdtar with xz support`)
-  const src = join(tmp, `restate-server-${target}`, 'restate-server')
-  const rd = join(out, 'restate')
-  mkdirSync(rd, { recursive: true })
-  cpSync(src, join(rd, 'restate-server'))
-  try {
-    chmodSync(join(rd, 'restate-server'), 0o755)
-  } catch {
-    /* windows */
-  }
-  rmSync(tmp, { recursive: true, force: true })
-  console.log(`restate-server ${RESTATE_VERSION} (${target}) → restate/`)
+  console.log(`restate-server ${RESTATE_VERSION} (${fetched.target}) → restate/`)
 }
 
 writeFileSync(join(out, 'nektar'), '#!/bin/sh\nexec node "$(dirname "$0")/dist/src/bin.js" "$@"\n')
@@ -110,6 +73,9 @@ Executor: a restate-server rides inside restate/ and auto-starts at boot —
           NEKTAR_RESTATE_URL is used instead).
 Client:   point your MCP client at the command above (stdio), or at
           http://localhost:8080/mcp when NEKTAR_HTTP_PORT is set.
+First call: recall {} (reads the seeded 'welcome' shard).
+Trading:  ./nektar policy approve --preset buyer|seller|both
+          (sets up an operator-approved trading policy without a git checkout).
 `
 )
 console.log(`deploy tree → ${out}`)

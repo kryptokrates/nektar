@@ -11,7 +11,7 @@
 // its reconcile floor (the verified delivery path stays with the caller —
 // handleBroadcasterStatus verifies BUMPs against our own tracker).
 import { EventEmitter } from 'node:events'
-import { deadline, detached, nap, type DeadlineOutcome } from '@nektar/core'
+import { deadline, detached, nap, spread, type DeadlineOutcome } from '@nektar/core'
 import type { TxStatusEvent } from './interfaces.js'
 
 const TERMINAL: ReadonlySet<string> = new Set(['mined', 'rejected', 'double-spent'])
@@ -70,7 +70,9 @@ export class ChainEvents extends EventEmitter {
    *  one fetch instead of multiplying identical chain reads */
   private probing = new Map<string, Promise<TxStatusEvent | undefined>>()
   private tip: number | undefined
+  private tipChangedAt = 0
   private scannedAtTip: number | undefined
+  private hadProbeError = false
   private dirty = true
   private busy = false
   private rotate = 0
@@ -142,15 +144,16 @@ export class ChainEvents extends EventEmitter {
     // a pushed hint never downgrades a verified record for the same status —
     // otherwise hint-verified-hint would re-emit a duplicate 'tx'
     const verified = prev?.verified === true && prev.ev.status === ev.status
+    const changed = prev === undefined || prev.ev.status !== ev.status || (ev.merklePath !== undefined && prev.ev.merklePath === undefined)
     this.lastStatus.set(ev.txid, { ev, at: Date.now(), verified })
     this.resolve(ev, false, verified)
-    // verify-on-hint: a pushed status (MINED from a status stream, a
-    // broadcaster callback) is checked by our own observe on the next
-    // macrotask — the 'tx' emit arrives in ms, not at the interval floor.
-    // dirty re-opens the proof gate: under a static tip the batch would
-    // otherwise be skipped and the hint would wait for the next block.
-    this.dirty = true
-    this.poke()
+    // verify-on-hint: only re-poke on a CHANGED hint or a mined/path hint —
+    // re-poking on an unchanged 'rejected' hint from observe() caused an
+    // infinite tight HTTP spin-loop until abandon/TTL.
+    if (changed || ev.status === 'mined') {
+      this.dirty = true
+      this.poke()
+    }
   }
 
   /** a first-party observation (e.g. a definitive broadcast refusal): emits
@@ -196,10 +199,14 @@ export class ChainEvents extends EventEmitter {
         // timeout/aborted — couldn't ask: probing cleared above, clock
         // untouched. A timeout names the slow port leg; an ambient abort is
         // a shutdown, not a slowness, and stays silent.
-        if (r.outcome === 'timeout') this.opts.onStall?.('observe', ms, txid)
+        if (r.outcome === 'timeout') {
+          this.hadProbeError = true
+          this.opts.onStall?.('observe', ms, txid)
+        }
         return undefined
       })
       .catch(() => {
+        this.hadProbeError = true
         this.probing.delete(txid)
         return undefined
       })
@@ -247,7 +254,7 @@ export class ChainEvents extends EventEmitter {
       while (!settled && Date.now() < deadline && this.watched.has(txid)) {
         await this.probeNow(txid)
         if (nudgeAc.signal.aborted) break
-        await nap(nudgeMs, { signal: nudgeAc.signal })
+        await nap(Math.min(nudgeMs, Math.max(20, Math.floor(spread(nudgeMs * 0.85)))), { signal: nudgeAc.signal })
       }
     })()
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined
@@ -339,7 +346,9 @@ export class ChainEvents extends EventEmitter {
         heightKnown = tip !== undefined
         if (r.outcome === 'timeout') this.opts.onStall?.('height', ms)
         if (tip !== undefined && tip !== this.tip) {
+          const advanced = this.tip !== undefined
           this.tip = tip
+          if (advanced) this.tipChangedAt = Date.now()
           this.emit('height', tip)
         }
       }
@@ -362,16 +371,24 @@ export class ChainEvents extends EventEmitter {
         if (s.at < staleAt) this.lastStatus.delete(txid)
       }
       // proof-gating: a static tip and no new watches make every observe a
-      // guaranteed miss — skip the batch like the old proofScanTip gate did
-      const gated = this.opts.height !== undefined && heightKnown && this.tip === this.scannedAtTip && !this.dirty
+      // guaranteed miss — EXCEPT during the 90s post-tip catch-up window
+      // (headers advance before broadcasters/indexers index BUMPs), when
+      // watched.size > maxPerTick (incomplete rotation), or after a probe error.
+      const postTipCatchup = this.tipChangedAt > 0 && Date.now() - this.tipChangedAt < 90_000
+      const gated = this.opts.height !== undefined && heightKnown && this.tip === this.scannedAtTip && !this.dirty && !postTipCatchup
       if (!gated && this.watched.size > 0) {
         const keys = [...this.watched.keys()]
         const n = Math.min(this.opts.maxPerTick ?? 8, keys.length)
         const batch = Array.from({ length: n }, (_, i) => keys[(this.rotate + i) % keys.length])
         this.rotate = keys.length > 0 ? (this.rotate + n) % keys.length : 0
+        this.hadProbeError = false
         await Promise.all(batch.map((txid) => this.probeOne(txid)))
-        this.scannedAtTip = this.tip
-        this.dirty = false
+        if (keys.length <= n && !this.hadProbeError) {
+          this.scannedAtTip = this.tip
+          this.dirty = false
+        } else {
+          this.dirty = true
+        }
       }
       // abandonment is evaluated AFTER the batch so a probe that just
       // answered lands in the same sweep — and only answered reads move the

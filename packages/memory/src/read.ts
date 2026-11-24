@@ -89,6 +89,9 @@ interface RecallItem {
 }
 
 const normSearch = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim()
+// Cache docker image inspection for 60s so /state and /card never spawn a 5s
+// docker subprocess per HTTP request
+let proverCache: { img: string; at: number; value: string } | undefined
 const queryTokens = (q: string): string[] => [
   ...new Set(
     normSearch(q)
@@ -548,11 +551,17 @@ export abstract class MemRead extends MemRecords {
       ? existsSync(proverBin)
         ? 'native binary'
         : 'NEKTAR_STARK_PROVER set but file missing'
-      : await new Promise<string>((res) => {
-          execFile('docker', ['image', 'inspect', nektarEnv('NEKTAR_STARK_IMAGE') ?? 'nektar-stark-build'], { timeout: 5_000 }, (e) =>
-            res(e ? 'absent (set NEKTAR_STARK_PROVER or build nektar-stark-build)' : 'docker image')
-          )
-        })
+      : await (async (): Promise<string> => {
+          const img = nektarEnv('NEKTAR_STARK_IMAGE') ?? 'nektar-stark-build'
+          if (proverCache !== undefined && proverCache.img === img && Date.now() - proverCache.at < 60_000) return proverCache.value
+          const value = await new Promise<string>((res) => {
+            execFile('docker', ['image', 'inspect', img], { timeout: 5_000 }, (e) =>
+              res(e ? 'absent (set NEKTAR_STARK_PROVER or build nektar-stark-build)' : 'docker image')
+            )
+          })
+          proverCache = { img, at: Date.now(), value }
+          return value
+        })()
     return {
       network: this.opts.network ?? 'main',
       funding: await this.fundingStatus(),

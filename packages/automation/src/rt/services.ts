@@ -33,6 +33,11 @@ export interface TickArg {
   after?: number
 }
 
+// Per-process phase salt so fleet restarts don't synchronize every agent's
+// cron ticks to the same millisecond. Always read INSIDE ctx.run so Restate
+// replays the exact journaled arm delay deterministically.
+const INSTANCE_SALT = Math.random().toString(36).slice(2)
+
 const nextArmBucket = (now: number, ceil: number, after?: number): number => {
   const base = Math.floor(now / ceil) * ceil + ceil
   return typeof after === 'number' && base <= after ? after + ceil : base
@@ -599,9 +604,9 @@ export const dealfanTickBody =
       if (ceil > 0) {
         const now = (deps.now ?? Date.now)()
         // phase skew: services sharing one cadence fire in lockstep after a
-        // fleet restart — stable01(service) spreads each arm ≤10% inside its
-        // ceiling, deterministic so a replay re-arms identically
-        const skew = Math.floor(stable01(service) * ceil * 0.1)
+        // fleet restart — stable01(service:salt) spreads each arm ≤10% inside
+        // its ceiling; computed inside ctx.run so replay re-arms identically
+        const skew = Math.floor(stable01(`${service}:${INSTANCE_SALT}`) * ceil * 0.1)
         const bucket = nextArmBucket(now, ceil, arg?.after)
         arm = { after: bucket, delayMs: ceil + skew, idem: `${service}:tick:${bucket}` }
       }
@@ -837,11 +842,12 @@ export const cronTickBody =
     // values, not a different command stream.
     const ceil = await run('ceiling', () => Promise.resolve(deps.ceilingMs()))
     if (ceil > 0) {
-      const now = await run('armNow', () => Promise.resolve((deps.now ?? Date.now)()))
-      // phase skew: services sharing one cadence fire in lockstep after a
-      // fleet restart — stable01(service) spreads each arm ≤10% inside its
-      // ceiling, deterministic so a replay re-arms identically
-      const skew = Math.floor(stable01(service) * ceil * 0.1)
+      const { now, skew } = await run('armNow', async () => ({
+        now: await Promise.resolve((deps.now ?? Date.now)()),
+        // phase skew: services sharing one cadence fire in lockstep after a
+        // fleet restart — journaled inside ctx.run so replay re-arms identically
+        skew: Math.floor(stable01(`${service}:${INSTANCE_SALT}`) * ceil * 0.1)
+      }))
       const bucket = nextArmBucket(now, ceil, arg?.after)
       await send({ service, handler: 'tick', key: CRON_KEY }, { after: bucket } satisfies TickArg, {
         delayMs: ceil + skew,

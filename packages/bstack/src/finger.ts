@@ -924,12 +924,31 @@ export async function resolveFinger(p: {
     if (Utils.toHex(Array.from(dec.lockingKey.encode(true) as number[])) !== recordKey.encode(true, 'hex')) continue
     const tokKey = tokenKeyOf(token)
     if (tokKey === undefined || tokKey !== profileKey.encode(true, 'hex')) continue
-    // §10.4: the carrier's funding parent — a mined bf\x02 funding leaf under
-    // the identity's record derivation
+    // §10.4: the carrier's funding parent — mined or 1-hop anchored bf\x02
+    // funding leaf under the identity's record derivation (consistent with
+    // NEKTAR_ANCHORED_LANES=all / provenParent)
     const parent = carrier.inputs[0]?.sourceTransaction
     const pout = parent?.outputs[carrier.inputs[0].sourceOutputIndex]
     if (parent === undefined || pout === undefined) continue
-    if (parent.merklePath === undefined || !(await parent.merklePath.verify(parent.id('hex'), p.tracker))) continue
+    let parentOk = false
+    try {
+      if (parent.merklePath !== undefined) {
+        parentOk = await parent.merklePath.verify(parent.id('hex'), p.tracker)
+      } else if (parent.inputs.length > 0) {
+        parentOk = true
+        for (const pi of parent.inputs) {
+          const gp = pi.sourceTransaction
+          if (!gp?.merklePath || !(await gp.merklePath.verify(gp.id('hex'), p.tracker))) {
+            parentOk = false
+            break
+          }
+        }
+      }
+    } catch (e) {
+      if (isHeaderUnavailable(e)) throw e
+      parentOk = false
+    }
+    if (!parentOk) continue
     const fkey = decodeFunding(pout.lockingScript)
     if (fkey === undefined || fkey.encode(true, 'hex') !== recordKey.encode(true, 'hex')) continue
     // §10.5: validity window, when the record sets one (unix seconds)
@@ -982,12 +1001,20 @@ export async function resolveStoreMembers(p: {
       if (tx === undefined) continue
       // the tracker param is not decorative: the host only ASSERTS it holds
       // this carrier — the carried beef is evidence only once its proofs
-      // check against our own headers (the same gate token resolution runs:
-      // a proven subject's BUMP directly, carried ancestry via verify)
-      if (tx.merklePath !== undefined && !(await tx.merklePath.verify(tx.id('hex'), p.tracker))) continue
-      if (!(await tx.verify(p.tracker))) continue
+      // check against our own headers AND its commitment matches p.carrier.
+      let verified = false
+      try {
+        const pathOk = tx.merklePath === undefined || (await tx.merklePath.verify(tx.id('hex'), p.tracker))
+        verified = pathOk && (await tx.verify(p.tracker))
+      } catch (e) {
+        if (isHeaderUnavailable(e)) throw e
+        verified = false
+      }
+      if (!verified) continue
       const d = decodeCarrier(tx)
       if (typeof d === 'string') continue
+      // fab/resend-forgeable: verify the carrier's commitment matches the requested ref
+      if (Utils.toHex(Array.from(d.c)) !== p.carrier.toLowerCase()) continue
       const rec = d.record
       if (rec.kind !== KindSub && rec.kind !== KindManifest) continue
       if (Utils.toHex(Array.from(rec.identityKey)) !== p.pub.toLowerCase()) continue

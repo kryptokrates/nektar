@@ -334,3 +334,18 @@ test('WitnessedTracker: an aborted caller leg does not cancel or poison the shar
   const h = await wt.headerAtHeight(800000)
   assert.equal(h?.hash, a.hash, 'later callers pick up the landed witness header instead of a poisoned undefined')
 })
+
+test('WitnessedTracker: tip+1 throws HeaderUnavailableError (tip-lag), while tip+5 returns false', async () => {
+  const mk = (tip: number): ChainTracker => ({
+    currentHeight: () => Promise.resolve(tip),
+    headerAtHeight: () => Promise.resolve(undefined),
+    isValidRootForHeight: () => Promise.resolve(false)
+  })
+  const wt = new WitnessedTracker(mk(800_000), mk(800_000))
+  await assert.rejects(
+    () => wt.isValidRootForHeight('aa'.repeat(32), 800_001),
+    (e: unknown) => isHeaderUnavailable(e),
+    'tip+1 is tip lag, not a forged proof'
+  )
+  assert.equal(await wt.isValidRootForHeight('aa'.repeat(32), 800_005), false, 'far future height stays false')
+})

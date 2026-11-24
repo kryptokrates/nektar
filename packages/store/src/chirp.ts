@@ -17,13 +17,14 @@ import { getObjectUnsigned } from './objectstore.js'
 const chirpKey = (hashHex: string): string => `chirp/${hashHex}`
 
 /** every object the tree for `bytes` produces, keyed for the store:
- *  `chirp/<hash>` → node/blob bytes (root first), plus the chirp:// URL. */
+ *  blobs → branches → root LAST (bottom-up commit order so a failed mid-upload
+ *  never leaves a live root pointing at missing blobs), plus the chirp:// URL. */
 function chirpObjects(bytes: Uint8Array): { url: string; rootHash: string; objects: Map<string, Uint8Array> } {
   const built = buildChirp(bytes)
   const objects = new Map<string, Uint8Array>()
-  objects.set(chirpKey(toHex(Uint8Array.from(built.rootHash))), built.root)
-  for (const b of built.branches) objects.set(chirpKey(toHex(Uint8Array.from(sha256(b)))), b)
   for (const b of built.blobs ?? []) objects.set(chirpKey(toHex(Uint8Array.from(sha256(b)))), b)
+  for (const b of built.branches) objects.set(chirpKey(toHex(Uint8Array.from(sha256(b)))), b)
+  objects.set(chirpKey(toHex(Uint8Array.from(built.rootHash))), built.root)
   return { url: chirpURL(built.rootHash), rootHash: toHex(Uint8Array.from(built.rootHash)), objects }
 }
 
@@ -62,8 +63,12 @@ const unsignedFetch =
 async function resolveChirp(url: string, fetch: (hash: Uint8Array) => Promise<Uint8Array> | Uint8Array): Promise<Uint8Array> {
   const rootHash = parseChirpURL(url)
   const got = new Map<string, Uint8Array>()
+  let totalBytes = 0
+  const maxBytes = 8 * 1024 * 1024
   const closure = await verifyClosure(rootHash, async (h) => {
     const b = await fetch(h)
+    totalBytes += b.length
+    if (totalBytes > maxBytes) throw new Error(`chirp: total closure bytes ${totalBytes} exceeds ${maxBytes} byte bound`)
     got.set(toHex(Uint8Array.from(h)), b)
     return b
   })

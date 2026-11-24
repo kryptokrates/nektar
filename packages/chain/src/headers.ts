@@ -184,13 +184,28 @@ export class WitnessedTracker implements ChainTracker {
   }
 
   /** one witness request per height per retry window — a timed-out ask keeps
-   *  running in the background and later reads pick up its landed result */
+   *  running in the background and later reads pick up its landed result.
+   *  A resolved-undefined miss (fresh block not yet indexed by witness) uses a
+   *  short ~3s retry window instead of the full 30s split-retry window. */
   private askWitness(height: number): Promise<BlockHeader | undefined> {
-    const cur = this.asks.get(height)
-    if (cur !== undefined && Date.now() - cur.at < this.retryMs) return cur.p
-    const p = detached(() => this.witness.headerAtHeight(height)).catch(() => undefined)
-    this.asks.set(height, { at: Date.now(), p })
-    return p
+    const cur = this.asks.get(height) as { at: number; p: Promise<BlockHeader | undefined>; missed?: boolean } | undefined
+    const windowMs = cur?.missed === true ? Math.min(this.retryMs, 3_000 * this.retryPhase) : this.retryMs
+    if (cur !== undefined && Date.now() - cur.at < windowMs) return cur.p
+    const entry: { at: number; p: Promise<BlockHeader | undefined>; missed?: boolean } = {
+      at: Date.now(),
+      p: Promise.resolve(undefined)
+    }
+    entry.p = detached(() => this.witness.headerAtHeight(height))
+      .then((h) => {
+        if (h === undefined) entry.missed = true
+        return h
+      })
+      .catch(() => {
+        entry.missed = true
+        return undefined
+      })
+    this.asks.set(height, entry)
+    return entry.p
   }
 
   /** bounded wait on the witness — a slow witness never stalls a read */
@@ -198,6 +213,7 @@ export class WitnessedTracker implements ChainTracker {
     const ms = this.opts.witnessTimeoutMs ?? 4_000
     return await new Promise((resolve) => {
       const t = setTimeout(() => resolve(undefined), ms)
+      t.unref?.()
       void p.then((h) => {
         clearTimeout(t)
         resolve(h)
@@ -267,7 +283,13 @@ export class WitnessedTracker implements ChainTracker {
     const h = await this.headerAtHeight(height)
     if (h !== undefined) return h.merkleRoot === root
     const tip = await this.currentHeight().catch(() => undefined)
-    if (tip !== undefined && height > tip) return false
+    if (tip !== undefined && height > tip) {
+      // A freshly mined block 1-2 heights ahead of a 15s-cached tip is tip lag,
+      // not a forged proof — throw HeaderUnavailableError so TxStore.read never
+      // strips a valid newly-mined BUMP.
+      if (height <= tip + 2) throw new HeaderUnavailableError(height, 'no-source')
+      return false
+    }
     const m = this.marks.get(height)
     const why = m?.state === 'mismatch' && Date.now() - m.at <= this.retryMs ? 'disagree' : (this.lastMiss.get(height) ?? 'no-source')
     throw new HeaderUnavailableError(height, why)

@@ -173,7 +173,7 @@ export class TxStore {
    *  message), else Extended Format when the direct parents are known, else
    *  the raw tx. The receiver runs SPV on a BEEF and otherwise lets the
    *  network's acceptance of the transaction stand in for it. */
-  wire(txid: string, maxBytes = 6000): string | undefined {
+  wire(txid: string, maxBytes = 32_768): string | undefined {
     const tx = this.get(txid)
     if (tx === undefined) return undefined
     if (this.complete(tx)) {

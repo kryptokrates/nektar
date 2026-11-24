@@ -246,7 +246,8 @@ export async function handleBroadcasterStatus(
         try {
           const cand = MerklePath.fromHex(j.merklePath)
           if (await cand.verify(txid, mem.sdkTracker())) mp = cand
-        } catch {
+        } catch (e) {
+          if (isHeaderUnavailable(e)) throw e
           /* unusable — fetch evidence instead */
         }
       }
@@ -257,14 +258,16 @@ export async function handleBroadcasterStatus(
         if (cand2 !== undefined) {
           try {
             if (await cand2.verify(txid, mem.sdkTracker())) mp = cand2
-          } catch {
+          } catch (e) {
+            if (isHeaderUnavailable(e)) throw e
             /* unverifiable */
           }
         }
       }
       if (mp) mem.deliverTxProof(txid, mp)
       // no fallback: a status without retrievable evidence is a hint, not a confirmation
-    } catch {
+    } catch (e) {
+      if (isHeaderUnavailable(e)) throw e
       /* evidence fetch failed — leave unconfirmed, reconcile later */
     }
   }
@@ -327,7 +330,7 @@ export function createHttpApi(
   // SSE-triggered reloads share one computation; invalidated on mem 'change'
   const STATE_CACHE_MS = 1_500
   let stateCache: { host: string | undefined; at: number; body: Record<string, unknown> } | undefined
-  let stateInflight: Promise<Record<string, unknown>> | undefined
+  const stateInflight = new Map<string, Promise<Record<string, unknown>>>()
   const clearStateCache = () => {
     stateCache = undefined
   }
@@ -483,17 +486,20 @@ export function createHttpApi(
             if (stateCache !== undefined && stateCache.host === host && Date.now() - stateCache.at < STATE_CACHE_MS) {
               return send(200, stateCache.body)
             }
-            if (stateInflight === undefined) {
-              stateInflight = dashboardState(mem, ops, host)
+            const hostKey = host ?? ''
+            let inflight = stateInflight.get(hostKey)
+            if (inflight === undefined) {
+              inflight = dashboardState(mem, ops, host)
                 .then((b) => {
                   stateCache = { host, at: Date.now(), body: b }
                   return b
                 })
                 .finally(() => {
-                  stateInflight = undefined
+                  stateInflight.delete(hostKey)
                 })
+              stateInflight.set(hostKey, inflight)
             }
-            return send(200, await stateInflight)
+            return send(200, await inflight)
           }
           if (req.method === 'GET' && url.pathname.startsWith('/assets/')) {
             const name = url.pathname.slice('/assets/'.length)
@@ -738,11 +744,14 @@ export function createHttpApi(
                 const expected = Buffer.from(`Bearer ${cbTok}`)
                 const given = Buffer.from(String(req.headers.authorization ?? ''))
                 if (given.length !== expected.length || !timingSafeEqual(given, expected)) return send(401, { error: 'bad callback token' })
+              } else if ((nektarEnv('NEKTAR_NETWORK') ?? 'regtest') !== 'regtest') {
+                return send(403, { error: 'callback disabled on live networks without NEKTAR_CALLBACK_TOKEN' })
               }
               const j = (await body(req)) as { txid?: string; txStatus?: string; merklePath?: string; extraInfo?: string }
               await handleBroadcasterStatus(mem, j)
               return send(200, { ok: true })
-            } catch {
+            } catch (e) {
+              if (isHeaderUnavailable(e)) return send(503, { error: 'headers unavailable — retry' })
               return send(400, { error: 'bad callback' })
             }
           }

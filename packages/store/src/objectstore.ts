@@ -16,7 +16,7 @@
 
 import { createHmac } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { sha256, toHex, nektarEnv, egressAllowed } from '@nektar/core'
+import { sha256, toHex, nektarEnv, egressAllowed, ioSignal } from '@nektar/core'
 
 export interface ObjectRef {
   bucket: string
@@ -65,6 +65,34 @@ export interface ObjectStoreConfig {
   region?: string
 }
 
+async function readBoundedBytes(r: Response, key: string, maxBytes: number): Promise<Uint8Array> {
+  const declared = Number(r.headers.get('content-length') ?? 0)
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new Error(`objectstore: object ${key} declares ${declared} bytes, over the ${maxBytes} byte bound`)
+  }
+  if (r.body === null) return new Uint8Array(0)
+  const reader = r.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {})
+      throw new Error(`objectstore: object ${key} is >${maxBytes} bytes, over the ${maxBytes} byte bound`)
+    }
+    chunks.push(value)
+  }
+  const out = new Uint8Array(total)
+  let off = 0
+  for (const c of chunks) {
+    out.set(c, off)
+    off += c.byteLength
+  }
+  return out
+}
+
 export class S3ObjectStore {
   readonly bucket: string
   readonly endpoint: string
@@ -95,7 +123,7 @@ export class S3ObjectStore {
   async get(key: string, bucket = this.bucket): Promise<Uint8Array> {
     const r = await this.request('GET', bucket, key)
     if (!r.ok) throw await this.s3Error(r)
-    return new Uint8Array(await r.arrayBuffer())
+    return await readBoundedBytes(r, key, OBJECT_MAX_BYTES)
   }
 
   async head(key: string, bucket = this.bucket): Promise<StoredHead | undefined> {
@@ -145,6 +173,7 @@ export class S3ObjectStore {
     return await fetch(url, {
       method,
       headers: { ...headers, authorization },
+      signal: ioSignal(15_000),
       ...(body !== undefined ? { body: Buffer.from(body) } : {})
     })
   }
@@ -167,14 +196,12 @@ export async function getObjectUnsigned(endpoint: string, bucket: string, key: s
   // (receipt/pack/ref fields) — screen it: loopback/private/link-local hosts
   // and redirects into unscreened targets are refused. Local rigs opt out
   // via the network flag (a regtest bstore IS a loopback service).
-  if (!egressAllowed(endpoint, { allowHttp: true, allowLocal: nektarEnv('NEKTAR_NETWORK') === 'regtest' }))
-    throw new Error(`objectstore: endpoint refused by egress policy`)
+  const isRegtest = nektarEnv('NEKTAR_NETWORK') === 'regtest'
+  if (!egressAllowed(endpoint, { allowHttp: isRegtest, allowLocal: isRegtest })) throw new Error(`objectstore: endpoint refused by egress policy`)
   const url = `${endpoint.replace(/\/+$/, '')}/${uriEncode(bucket)}/${encodeKey(key)}`
-  const r = await fetch(url, { signal: AbortSignal.timeout(15_000), redirect: 'error' })
+  const r = await fetch(url, { signal: ioSignal(15_000), redirect: 'error' })
   if (!r.ok) throw new Error(`s3 unsigned GET ${bucket}/${key} → ${r.status}`)
-  const bytes = new Uint8Array(await r.arrayBuffer())
-  if (bytes.length > OBJECT_MAX_BYTES) throw new Error(`objectstore: object ${key} is ${bytes.length} bytes, over the ${OBJECT_MAX_BYTES} byte bound`)
-  return bytes
+  return await readBoundedBytes(r, key, OBJECT_MAX_BYTES)
 }
 
 /** Env configuration — feature is OFF when NEKTAR_BSTORE_S3_URL or

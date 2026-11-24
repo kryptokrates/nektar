@@ -143,12 +143,15 @@ export interface TreeLedger {
   adopt(tx: Transaction, slots: Array<{ vout: number; kind: string }>): Promise<number>
 }
 
-// a tree hosts may fund-accept before it mines: proven, or one unconfirmed
-// level deep on anchored ancestry — every input's source carries a merkle
-// path (the same §10.3 rule finger applies to tokens). The tree still lists
-// in unproven() so its own BUMP attaches when the topup mines.
-export const anchoredTree = (tree: Transaction): boolean =>
-  tree.merklePath !== undefined || (tree.inputs.length > 0 && tree.inputs.every((i) => i.sourceTransaction?.merklePath !== undefined))
+// a tree hosts may fund-accept before it mines: proven, or bounded anchored
+// ancestry (up to 2 unconfirmed hops so changeFanout 2nd-gen mints also serve
+// immediately without a 10-min block stall) where every branch terminates at a
+// BUMP-carrying ancestor. Still lists in unproven() until its own BUMP lands.
+export const anchoredTree = (tree: Transaction, depth = 0): boolean => {
+  if (tree.merklePath !== undefined) return true
+  if (depth >= 2 || tree.inputs.length === 0) return false
+  return tree.inputs.every((i) => i.sourceTransaction !== undefined && anchoredTree(i.sourceTransaction, depth + 1))
+}
 
 /** the ancestry gaps that kill a tree's carriers: every input on the
  *  unproven chain must resolve — carried bytes or a fetched copy. An input
@@ -269,15 +272,13 @@ export const ancestryHit = async (
   return (await ancestryWalk(tree, resolveTx, refused, maxNodes)).stopped
 }
 
-// only the market lane tolerates unproven funding by default: the nektar
-// module accepts anchored ancestry, and vendored hosts do so only where
-// their admission allows it. blogs/finger carriers carry ancestry natively;
-// bbox admits it once the host runs the anchored-admission patch (one BUMP
-// may anchor a deeper ancestor). NEKTAR_ANCHORED_LANES names the kinds an
-// anchored tree may serve — 'all' or a comma list — for hosts known to
-// admit it; elsewhere a refused carrier would only cost a broadcast.
+// both market and bbox tolerate anchored unproven funding by default so cold-
+// start deals (wants, offers, quotes, accepts, deliveries) do not stall 10-60m
+// waiting for a block. NEKTAR_ANCHORED_LANES='market' restricts back to market-
+// only; 'all' also enables log and finger.
 const anchoredKinds = (env: NodeJS.ProcessEnv = process.env): Set<string> => {
-  const v = nektarEnv('NEKTAR_ANCHORED_LANES', env) ?? ''
+  const v = nektarEnv('NEKTAR_ANCHORED_LANES', env)
+  if (v === undefined || v === '') return new Set(['market', 'bbox'])
   const kinds = new Set(
     v === 'all' || v === '1'
       ? ['bbox', 'log', 'finger']

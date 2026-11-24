@@ -514,7 +514,7 @@ export async function anchorLog(p: {
 
   // an anchor in flight: mined? then publish + advance the head and stop
   const flight = await p.state.get(flightKey(p.stream))
-  if (flight !== undefined) {
+  if (flight !== undefined && flight.seq > 0 && flight.prev !== '') {
     const tx = await p.fetchTx(flight.prev)
     if (tx?.merklePath === undefined) return undefined
     const pub = await publishMinedLog({ journal: p.journal, hosts: p.hosts, stream: p.stream, tx, quorum: p.quorum })
@@ -591,44 +591,50 @@ export async function anchorLog(p: {
   const token = await lockFields(w, ORIGINATOR, DERIVATION_ANCHOR, [TagAnchor, record], true)
   tx.addOutput({ satoshis: 1, lockingScript: token })
   tx.addOutput({ lockingScript: new P2PKH().lock(await signerAddress(s)), change: true })
-  // funding inputs until the fee is covered
+  // funding inputs until the fee is covered — accumulate slots instead of
+  // popping on insufficient-fee catch, and release all taken slots on failure.
   const logLock = (await logFundingLock(s, w)).toHex()
+  const takenSlots: Array<{ tree: Transaction; vout: number }> = []
+  const releaseAll = async () => {
+    for (const sl of takenSlots) await p.ledger.release?.(sl.tree.id('hex'), sl.vout)
+  }
   for (let i = 0; i < 8; i++) {
     const slot = await p.ledger.take(LOG_KIND, logLock)
     if (slot === undefined) {
+      await releaseAll()
       log(`log anchor: ${await fundingSlotReason(p.ledger, LOG_KIND)} for the fee`)
       return undefined
     }
+    takenSlots.push(slot)
     tx.addInput({ sourceTransaction: slot.tree, sourceOutputIndex: slot.vout, unlockingScriptTemplate: unlocker(w, ORIGINATOR, DERIVATION_BATCH) })
     try {
       await tx.fee(p.feeRateSatPerKb !== undefined ? new SatoshisPerKilobyte(Math.max(1, p.feeRateSatPerKb)) : undefined)
       await tx.sign()
-      const txid = tx.id('hex')
-      let br = await p.broadcast(tx)
-      if (br.status !== 'success' && /missing input/i.test(JSON.stringify(br))) {
-        // the anchor chain outran the network — a parent (previous anchor or
-        // a funding slot tree) is absent from mempool. Re-broadcast the
-        // tx's ancestors oldest-first and retry once before giving up; the
-        // journaled prev tokens carry their ancestry in their BEEF.
-        await rebroadcastAncestors(p, tx)
-        br = await p.broadcast(tx)
-      }
-      if (br.status !== 'success') {
-        log(`log anchor: broadcast refused ${JSON.stringify(br).slice(0, 120)}`)
-        return undefined
-      }
-      const aHit = `log-anchor:${p.stream}:${interval}`
-      await p.journal.put(aHit, { txid, beef: tx.toAtomicBEEF(), topics: [logTopic(p.stream)], fundingTxid: slot.tree.id('hex') })
-      await p.state.set(flightKey(p.stream), { seq: interval, prev: txid, extra: { first, count } })
-      return { interval, first, count, root: toHex(root), txid }
     } catch (e) {
-      tx.inputs.pop()
       if (i === 7) {
+        await releaseAll()
         log(`log anchor: cannot cover fee: ${(e as Error).message.slice(0, 120)}`)
         return undefined
       }
+      continue
     }
+    const txid = tx.id('hex')
+    let br = await p.broadcast(tx)
+    if (br.status !== 'success' && /missing input/i.test(JSON.stringify(br))) {
+      await rebroadcastAncestors(p, tx)
+      br = await p.broadcast(tx)
+    }
+    if (br.status !== 'success') {
+      await releaseAll()
+      log(`log anchor: broadcast refused ${JSON.stringify(br).slice(0, 120)}`)
+      return undefined
+    }
+    const aHit = `log-anchor:${p.stream}:${interval}`
+    await p.journal.put(aHit, { txid, beef: tx.toAtomicBEEF(), topics: [logTopic(p.stream)], fundingTxid: slot.tree.id('hex') })
+    await p.state.set(flightKey(p.stream), { seq: interval, prev: txid, extra: { first, count } })
+    return { interval, first, count, root: toHex(root), txid }
   }
+  await releaseAll()
   return undefined
 }
 

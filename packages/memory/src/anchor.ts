@@ -20,6 +20,7 @@ export abstract class MemAnchor extends MemTx {
         new AnchorChain(shard, this.shardKey(shard), this.funds, this.fundSigner(), this.chain, {
           burstLimit: this.opts.burstLimit,
           feeRateSatPerKb: this.opts.feeRateSatPerKb,
+          network: this.opts.network,
           shardPub: this._shardPubs.get(shard)
         })
       )

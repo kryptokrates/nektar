@@ -5,6 +5,7 @@
 // so parents come through the caller's fetchTx (graph first, network last).
 import type { Transaction } from '@bsv/sdk'
 import { CheckpointBond, type BondUtxo } from '@nektar/anchor'
+import { broadcastProvablyDead, type Funds } from '@nektar/chain'
 import { signerPubKeyHash, toHex, type SignerLike } from '@nektar/core'
 
 export interface BondOpsDeps {
@@ -12,6 +13,7 @@ export interface BondOpsDeps {
   txs: () => import('@nektar/chain').TxStore
   fetchTx: (txid: string) => Promise<Transaction | undefined>
   takeFunding: (satoshis: number) => Promise<import('@nektar/chain').FundingOut>
+  funds?: Funds
   fundKey: SignerLike
   bondOpts: () => { ownerKey?: SignerLike; sats?: number; horizonBlocks?: number; maxFee?: bigint; epochBlocks?: number } | undefined
   network?: string
@@ -80,9 +82,11 @@ export class BondOps {
     const utxo = this.contract.deployUtxo(tx, bondSats, script)
     const br = await this.deps.chain.broadcast(tx)
     if (br.status !== 'success') {
+      if (broadcastProvablyDead(br.description ?? '')) await this.deps.funds?.died(tx)
       this.contract = undefined
       throw new Error(`bond deploy broadcast failed: ${br.description ?? 'unknown'}`)
     }
+    await this.deps.funds?.spent(tx)
     this.deps.txs().put(tx)
     this.head = utxo
     this.deps.persist()
@@ -227,7 +231,10 @@ export class BondOps {
     if (!this.contract || !this.head || this.busy) return false
     this.busy = true
     try {
-      const c = await this.contract.buildCommit(this.head, this.key(), lastRoot, await this.deps.chain.currentHeight(), this.deps.chain)
+      const parentTx = await this.parentTx(this.head.txid)
+      const commitFee = this.deps.network === 'main' ? 500n : BigInt(this.contract.params.maxFee) - 1n
+      const c = await this.contract.buildCommit(this.head, this.key(), lastRoot, await this.deps.chain.currentHeight(), this.deps.chain, commitFee, parentTx)
+      this.deps.txs().put(c.tx)
       this.head = { txid: c.tx.id('hex'), vout: 0, satoshis: c.tx.outputs[0].satoshis!, script: c.tx.outputs[0].lockingScript.toHex() }
       this.deps.persist()
       return true
@@ -249,7 +256,10 @@ export class BondOps {
     if (s.seized !== 0n || this.busy || BigInt(height) + margin < s.deadline) return 'skipped'
     this.busy = true
     try {
-      const c = await this.contract.buildCommit(this.head, this.key(), s.lastRoot, height, this.deps.chain)
+      const parentTx = await this.parentTx(this.head.txid)
+      const commitFee = this.deps.network === 'main' ? 500n : BigInt(this.contract.params.maxFee) - 1n
+      const c = await this.contract.buildCommit(this.head, this.key(), s.lastRoot, height, this.deps.chain, commitFee, parentTx)
+      this.deps.txs().put(c.tx)
       this.head = { txid: c.tx.id('hex'), vout: 0, satoshis: c.tx.outputs[0].satoshis!, script: c.tx.outputs[0].lockingScript.toHex() }
       this.deps.persist()
       return 'committed'

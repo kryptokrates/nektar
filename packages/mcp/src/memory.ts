@@ -142,6 +142,7 @@ export class NektarMemory extends MemRead {
       txs: () => this.txs,
       fetchTx: (t) => this.fetchTx(t),
       takeFunding: (s) => this.takeFunding(s, 'publish'),
+      funds: this.funds,
       fundKey: this.fundSigner(),
       bondOpts: () => this.opts.bond,
       network: this.opts.network,
@@ -225,6 +226,7 @@ export class NektarMemory extends MemRead {
       fundSigner: () => this.fundSigner(),
       chain: this.chain,
       feeRateSatPerKb: () => this.opts.feeRateSatPerKb ?? 1,
+      network: this.opts.network,
       metricsInc: (n, l, x, h) => this.metrics.inc(n, l, x, h),
       proveMembership: (s, q, qid) => this.proveMembership(s, q, qid)
     })

@@ -23,7 +23,7 @@ import {
   type Bytes,
   type SignerLike
 } from '@nektar/core'
-import type { Broadcaster, Funder, FundingOut } from '@nektar/chain'
+import type { Broadcaster, Funder } from '@nektar/chain'
 
 export interface Head {
   tx: Transaction
@@ -50,13 +50,15 @@ export interface AnchorOptions {
 
 /** runar-sdk Provider backed by our Broadcaster/Funder (+ optional utxo feed). */
 export class NektarProvider implements Provider {
-  network = 'testnet' as const
+  network: 'mainnet' | 'testnet'
   lastTx?: Transaction
   constructor(
     public broadcaster: Broadcaster,
     private funder: (Funder & { funds?: import('@nektar/chain').Funds }) | import('@nektar/chain').Funds,
-    public funderAddress?: string
+    public funderAddress?: string,
+    network: 'mainnet' | 'testnet' = 'testnet'
   ) {
+    this.network = network
     // a bare Funds is the owner itself; a Funder carrier exposes it as .funds
     const f = funder as { funds?: import('@nektar/chain').Funds; spent?: unknown; adopt?: unknown }
     this.funds = f.funds ?? (typeof f.spent === 'function' && typeof f.adopt === 'function' ? (f as unknown as import('@nektar/chain').Funds) : undefined)
@@ -161,36 +163,40 @@ export class NektarProvider implements Provider {
       }
       this.held = undefined // consumed or dropped — pick anew
     }
-    // hand runar the single largest available candidate — it becomes exactly
-    // one funding input. smallest-first starved on a small change output
-    // while big reserve entries sat unused; a list >1 makes runar add every
-    // entry as an input (wasteful).
-    const cands = await funds.outs()
-    for (const u of cands) this.known.set(u.tx.id('hex'), u.tx)
-    while (cands.length > 0) {
-      const u = cands.reduce((a: FundingOut, b: FundingOut) => (b.satoshis > a.satoshis ? b : a))
-      if (funds.hold(u.tx.id('hex'), u.vout)) {
-        this.held = {
-          txid: u.tx.id('hex'),
-          outputIndex: u.vout,
-          satoshis: u.satoshis,
-          script: u.tx.outputs[u.vout].lockingScript.toHex(),
-          tx: u.tx
-        }
-        this.taken.set(u.tx.id('hex'), u.tx)
-        const { txid, outputIndex, satoshis, script } = this.held
-        return [{ txid, outputIndex, satoshis, script }]
+    // Route through funds.take('publish', minSats) so dealFloor, leased,
+    // tombstoned, deadParent, spendCheck, proofOf, takeOverride (FeeVault),
+    // and proven-first depth ordering all apply uniformly.
+    const minSats = Math.max(100, this.feeRate * 4)
+    try {
+      const u = await funds.take('publish', minSats)
+      this.known.set(u.tx.id('hex'), u.tx)
+      this.held = {
+        txid: u.tx.id('hex'),
+        outputIndex: u.vout,
+        satoshis: u.satoshis,
+        script: u.tx.outputs[u.vout].lockingScript.toHex(),
+        tx: u.tx
       }
-      cands.splice(cands.indexOf(u), 1) // another chain leased it — next largest
+      this.taken.set(u.tx.id('hex'), u.tx)
+      const { txid, outputIndex, satoshis, script } = this.held
+      return [{ txid, outputIndex, satoshis, script }]
+    } catch {
+      return []
     }
-    return []
+  }
+  /** release any unspent held UTXO reservation on build/broadcast failure */
+  releaseHeld(): void {
+    if (this.held !== undefined) {
+      this.funds?.release(this.held.txid, this.held.outputIndex)
+      this.held = undefined
+    }
   }
   taken = new Map<string, Transaction>()
   getContractUtxo(_scriptHash: string): Promise<RUTXO | null> {
     return Promise.resolve(null)
   }
-  getNetwork(): 'testnet' {
-    return 'testnet'
+  getNetwork(): 'mainnet' | 'testnet' {
+    return this.network
   }
   feeRate = 1 // sats per KB, per runar-sdk fee computation
   getFeeRate(): Promise<number> {
@@ -220,7 +226,7 @@ export class AnchorChain {
     private funder: Funder | import('@nektar/chain').Funds,
     fundKey: SignerLike,
     broadcaster: Broadcaster,
-    private opts: AnchorOptions & { shardPub?: string } = {}
+    private opts: AnchorOptions & { shardPub?: string; network?: 'regtest' | 'testnet' | 'main' } = {}
   ) {
     this.shard = shard
     this.shardKey = shardKey
@@ -237,7 +243,7 @@ export class AnchorChain {
       : signerPubHex(shardKey).then((p) => {
           this._shardPub = p
         })
-    this.provider = new NektarProvider(broadcaster, funder)
+    this.provider = new NektarProvider(broadcaster, funder, undefined, opts.network === 'main' ? 'mainnet' : 'testnet')
     if (opts.feeRateSatPerKb !== undefined) this.provider.feeRate = opts.feeRateSatPerKb
     const rec = (tx: Transaction) => {
       this.ownAttempts.add(tx.id('hex'))
@@ -245,9 +251,12 @@ export class AnchorChain {
     }
     this.provider.onAttempt = rec
     this.provider.onSuccess = rec
-    void this.signer.getAddress().then((a) => {
-      this.provider.funderAddress = a
-    })
+    void this.signer
+      .getAddress()
+      .then((a) => {
+        this.provider.funderAddress = a
+      })
+      .catch(() => {})
   }
 
   private _shardId?: string
@@ -359,15 +368,25 @@ export class AnchorChain {
         const sm = /([0-9a-f]{64}):(\d+) utxo already spent/.exec(msg)
         const h = this.getHead()
         if (sm && (!h || `${sm[1]}:${sm[2]}` !== `${h.tx.id('hex')}:${h.vout}`)) {
-          void this.provider.funds?.burn(sm[1], Number(sm[2]))
+          await this.provider.funds?.burn(sm[1], Number(sm[2]))
           if (this.provider.held?.txid === sm[1] && this.provider.held.outputIndex === Number(sm[2])) this.provider.held = undefined
           this.contract = undefined
-          if (attempt >= 5) throw e
+          if (attempt >= 5) {
+            this.provider.releaseHeld()
+            throw e
+          }
           continue
         }
-        if (!/TX_MISSING_PARENT|timed? ?out|ETIMEDOUT/i.test(msg)) throw e
+        const retryable = /TX_MISSING_PARENT|MISSING_INPUTS|missing inputs|bad-txns-inputs-missingorspent|timed? ?out|ETIMEDOUT|fetch failed/i.test(msg)
+        if (!retryable) {
+          this.provider.releaseHeld()
+          throw e
+        }
         const attemptTx = this.provider.lastAttempt
-        if (!attemptTx) throw e
+        if (!attemptTx) {
+          this.provider.releaseHeld()
+          throw e
+        }
         // the missing parent is our own ancestry — usually the previous head
         // or a fee input that never landed. attemptTx's sourceTransaction
         // links carry the chain, so re-supply unproven ancestors oldest-first
@@ -385,8 +404,12 @@ export class AnchorChain {
           const inner = res?.status === 'error' ? (res.description ?? '') : ''
           const adoptedInner = this.ownSpenderOfHead(inner)
           if (adoptedInner) return await this.acceptHead(adoptedInner)
-          if (inner && !/TX_MISSING_PARENT/.test(inner)) throw new Error(inner, { cause: e })
+          if (inner && !/TX_MISSING_PARENT|MISSING_INPUTS|missing inputs|bad-txns-inputs-missingorspent/i.test(inner)) {
+            this.provider.releaseHeld()
+            throw new Error(inner, { cause: e })
+          }
         }
+        this.provider.releaseHeld()
         throw e
       }
     }

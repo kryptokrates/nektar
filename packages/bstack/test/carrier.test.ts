@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { PrivateKey, ProtoWallet } from '@bsv/sdk'
+import { PrivateKey, ProtoWallet, Transaction, P2PKH } from '@bsv/sdk'
 import { mintCarrier } from '@lightwebinc/bcommon'
 import { buildCarrier, checkCarrier, buildSweep } from '../src/carrier.js'
 import { DERIVATION, ORIGINATOR } from '../src/tree.js'
@@ -106,4 +106,18 @@ test('sweep: builds a self-paying sweep of tree outputs', async () => {
   const s = await buildSweep({ key, tree, vouts: [1, 2], fees: { sats: 1, bytes: 1, floor: 1 } })
   assert.equal(s.inputs.length, 2)
   assert.ok(s.outputs[0].satoshis! > 0)
+})
+
+test('carrier: 0-input unproven parent cannot bypass SPV check', async () => {
+  const key = PrivateKey.fromRandom()
+  const zeroInParent = new Transaction()
+  zeroInParent.addOutput({ lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()), satoshis: 10_000 })
+  const tree = new Transaction()
+  tree.addInput({ sourceTransaction: zeroInParent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  tree.addOutput({ lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()), satoshis: 5_000 })
+  await tree.sign()
+  const carrier = await mintCarrier(new ProtoWallet(key), ORIGINATOR, DERIVATION, pay, tree, 0)
+  const c = await checkCarrier(carrier.toAtomicBEEF(), { tracker: new FakeTracker() })
+  assert.equal(c.ok, false)
+  assert.equal(c.reason, 'spv')
 })

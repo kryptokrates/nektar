@@ -23,6 +23,7 @@ import {
   BsvBroadcaster,
   IndexTracker,
   ChaintracksTracker,
+  resolveMainnetConfig,
   merklePathMainnet,
   fetchRawTx,
   fetchBroadcasterFeeRate,
@@ -223,14 +224,18 @@ export async function livePort(mc: MainnetConfig & { feeRateSatPerKb?: number },
   const requirePow = nektarEnvFlag('NEKTAR_HEADER_POW') !== false
   const strictHeaders = nektarEnvFlag('NEKTAR_STRICT_HEADERS') !== false
   if (!strictHeaders) log(`nektar ${net}: NEKTAR_STRICT_HEADERS=0 — proofs may anchor to a single uncorroborated header source\n`)
+  // Resolve MainnetConfig ONCE so every helper shares one CachingIndex + pacer
+  // and keeps failover indexerUrls/indexerKind/fetchImpl intact.
+  const rmc = resolveMainnetConfig(mc)
+  const primaryBroadcaster = rmc.broadcasterUrl ?? 'https://arcade-v2-us-1.bsvblockchain.tech'
   const tracker = new WitnessedTracker(
     new ChaintracksTracker(
-      mc,
-      mc.chaintracksUrl ?? (testNet ? `${mc.broadcasterUrl}/chaintracks/v2` : 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2'),
+      rmc,
+      mc.chaintracksUrl ?? (testNet ? `${primaryBroadcaster}/chaintracks/v2` : 'https://arcade-v2-us-1.bsvblockchain.tech/chaintracks/v2'),
       undefined,
       { requirePow }
     ),
-    new IndexTracker(mc, { requirePow }),
+    new IndexTracker(rmc, { requirePow }),
     {
       strict: strictHeaders,
       onDisagree: (height, primaryHash, witnessHash) =>
@@ -250,24 +255,26 @@ export async function livePort(mc: MainnetConfig & { feeRateSatPerKb?: number },
           return t
         })()
     setNektarEnv('NEKTAR_CALLBACK_TOKEN', mc.callbackToken)
+    rmc.callbackToken = mc.callbackToken
   }
   const callbackUrl = deps.callbackUrl ?? mc.callbackUrl ?? nektarEnv('NEKTAR_CALLBACK_URL')
-  const raw = new BsvBroadcaster(mc)
+  const raw = new BsvBroadcaster(rmc)
   const guard = new SpendGuard(raw, deps.valueOf ?? (() => undefined), deps.guard ?? {})
   const statusHint = (txid: string): Promise<StatusHint> => raw.statusHint(txid)
   const floor = testNet ? 1 : 100
-  const feeRateSatPerKb = Math.max(mc.feeRateSatPerKb ?? floor, await fetchBroadcasterFeeRate(mc).catch(() => floor))
+  const feeRateSatPerKb = Math.max(mc.feeRateSatPerKb ?? floor, await fetchBroadcasterFeeRate(rmc).catch(() => floor))
+  const proofLookup = async (txid: string) => {
+    const r = await merklePathMainnet(rmc, txid)
+    if (!r) return undefined
+    const root = r.merklePath.computeRoot(txid)
+    return (await tracker.isValidRootForHeight(root, r.merklePath.blockHeight)) ? r.merklePath : undefined
+  }
   return {
     network: net,
     broadcast: (tx) => guard.broadcast(tx),
     tracker,
-    proofLookup: async (txid) => {
-      const r = await merklePathMainnet(mc, txid)
-      if (!r) return undefined
-      const root = r.merklePath.computeRoot(txid)
-      return (await tracker.isValidRootForHeight(root, r.merklePath.blockHeight)) ? r.merklePath : undefined
-    },
-    txLookup: async (txid) => await fetchRawTx(mc, txid),
+    proofLookup,
+    txLookup: async (txid) => await fetchRawTx(rmc, txid),
     statusHint,
     observe: async (txid) => {
       const tx = await deps.held?.(txid).catch(() => undefined)
@@ -278,14 +285,20 @@ export async function livePort(mc: MainnetConfig & { feeRateSatPerKb?: number },
       // never on the verified path — same treatment the push path gives it.
       const probe = await statusHint(txid)
       if (REJECTED_WORDS.includes(probe.status)) deps.note?.({ txid, status: 'rejected' })
+      // If statusHint reports MINED, verify via proofLookup directly so
+      // ChainEvents delivers verified 'mined' without waiting for a confirmer pull.
+      if (MINED_WORDS.includes(probe.status)) {
+        const mp = await proofLookup(txid).catch(() => undefined)
+        if (mp !== undefined) return { txid, status: 'mined', blockHeight: mp.blockHeight, merklePath: mp }
+      }
       // an unanswered probe — or a 'mined' claim we hold no verified path
       // for — is not "not mined": throwing keeps the abandon clock from
       // counting a question nobody answered
       if (!probe.answered || MINED_WORDS.includes(probe.status)) throw new Error(`cannot establish 'not mined' for ${txid}`)
       return undefined
     },
-    spendStatus: (txid, vout) => utxoSpendStatus(mc, tracker, txid, vout),
-    spenderOf: (txid, vout) => utxoSpender(mc, tracker, txid, vout),
+    spendStatus: (txid, vout) => utxoSpendStatus(rmc, tracker, txid, vout),
+    spenderOf: (txid, vout) => utxoSpender(rmc, tracker, txid, vout),
     height: () => tracker.currentHeight(),
     abandonAfterBlocks: Number(nektarEnv('NEKTAR_ABANDON_BLOCKS') ?? 6),
     openHintStream:
@@ -293,7 +306,7 @@ export async function livePort(mc: MainnetConfig & { feeRateSatPerKb?: number },
         ? (sink) => {
             const cursorFile = join(deps.dataDir, 'sse-cursor')
             const stream = statusStream(
-              mc,
+              rmc,
               async (ev) => {
                 if (ev.data === undefined) return
                 let j: unknown

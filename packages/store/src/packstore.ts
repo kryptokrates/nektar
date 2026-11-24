@@ -105,18 +105,26 @@ export class PacksStore {
   async add(m: Omit<PackMember, 'c'>): Promise<{ commitment: string; txid?: string } | undefined> {
     if (this.members.some((x) => x.sha256 === m.sha256)) return undefined
     const sub = await this.deps.publish(KindSub, this.members.length + 1, new CborMap(memberEntries({ ...m, c: '' }, false)))
-    this.members.push({ ...m, c: sub.commitment })
+    const nextMembers = [...this.members, { ...m, c: sub.commitment }]
     let txid: string | undefined
-    if (this.members.length > 1) {
+    let nextManifestC = this.manifestC
+    let nextManifestSeq = this.manifestSeq
+    if (nextMembers.length > 1) {
       const manifest = new CborMap([
         { key: 'v', val: 1n },
         { key: 'name', val: PACKS_STORE_NAME },
-        { key: 'members', val: this.members.map((x): Value => new CborMap(memberEntries(x, true))) }
+        { key: 'members', val: nextMembers.map((x): Value => new CborMap(memberEntries(x, true))) }
       ])
-      const man = await this.deps.publish(KindManifest, ++this.manifestSeq, manifest)
-      this.manifestC = man.commitment
+      nextManifestSeq = this.manifestSeq + 1
+      const man = await this.deps.publish(KindManifest, nextManifestSeq, manifest)
+      nextManifestC = man.commitment
       txid = man.txid
     }
+    // Commit in-memory state only after both publishes succeed so a failed
+    // manifest publish never leaves ref() with a mismatched root/head.
+    this.members = nextMembers
+    this.manifestSeq = nextManifestSeq
+    this.manifestC = nextManifestC
     await this.persist?.()
     return { commitment: sub.commitment, ...(txid !== undefined ? { txid } : {}) }
   }

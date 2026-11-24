@@ -122,6 +122,8 @@ export class P2PListener extends EventEmitter {
   readonly opts: Required<Omit<P2POptions, 'peers' | 'txids' | 'outpoints' | 'scripts'>> & Pick<P2POptions, 'txids' | 'outpoints' | 'scripts'>
   private peers: string[]
 
+  private rateTimer: ReturnType<typeof setInterval>
+
   constructor(opts: P2POptions) {
     super()
     this.peers = opts.peers
@@ -133,10 +135,11 @@ export class P2PListener extends EventEmitter {
       outpoints: opts.outpoints,
       scripts: opts.scripts
     }
-    setInterval(() => {
+    this.rateTimer = setInterval(() => {
       this.fetchWindow = Date.now()
       this.fetchCount = 0
-    }, 1000).unref()
+    }, 1000)
+    this.rateTimer.unref()
   }
 
   connect(): void {
@@ -175,7 +178,16 @@ export class P2PListener extends EventEmitter {
       }
     })
     sock.on('timeout', () => sock.destroy())
+    const onHandshake = () => {
+      if (!handshook) {
+        handshook = true
+        this.emit('peer', `${host}:${port}`, true)
+      }
+    }
+    this.once('_verack', onHandshake)
     sock.on('close', () => {
+      this.off('_verack', onHandshake)
+      this.buf = Buffer.alloc(0)
       this.emit('peer', `${host}:${port}`, false)
       // spread() — a dropped peer set reconnects desynchronized, not on one tick
       if (!this.closed) {
@@ -184,17 +196,11 @@ export class P2PListener extends EventEmitter {
       }
     })
     sock.on('error', (e) => this.emit('error', e))
-    const onHandshake = () => {
-      if (!handshook) {
-        handshook = true
-        this.emit('peer', `${host}:${port}`, true)
-      }
-    }
-    this.once('_verack', onHandshake)
   }
 
   close(): void {
     this.closed = true
+    clearInterval(this.rateTimer)
     if (this.reconnectTimer !== undefined) clearTimeout(this.reconnectTimer)
     this.sock?.destroy()
   }

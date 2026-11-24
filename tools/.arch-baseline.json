@@ -1,15 +1,15 @@
 {
   "packages": {
     "anchor": {
-      "loc": 1219,
+      "loc": 1243,
       "pkgFanout": 4,
       "edges": ["chain", "contracts", "core", "identity"],
-      "maxFileLoc": 610,
+      "maxFileLoc": 633,
       "maxFileFanout": 8,
       "instability": 0.4
     },
     "automation": {
-      "loc": 14255,
+      "loc": 14288,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1612,
@@ -25,18 +25,18 @@
       "instability": 0.571
     },
     "bstack": {
-      "loc": 5247,
+      "loc": 5305,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
-      "maxFileLoc": 1046,
+      "maxFileLoc": 1073,
       "maxFileFanout": 13,
       "instability": 0.5
     },
     "chain": {
-      "loc": 7141,
+      "loc": 7270,
       "pkgFanout": 1,
       "edges": ["core"],
-      "maxFileLoc": 952,
+      "maxFileLoc": 992,
       "maxFileFanout": 32,
       "instability": 0.091
     },
@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 13558,
+      "loc": 13649,
       "pkgFanout": 18,
       "edges": [
         "anchor",
@@ -127,12 +127,12 @@
         "verify",
         "zk"
       ],
-      "maxFileLoc": 917,
+      "maxFileLoc": 926,
       "maxFileFanout": 24,
       "instability": 0.947
     },
     "memory": {
-      "loc": 2680,
+      "loc": 2690,
       "pkgFanout": 14,
       "edges": [
         "anchor",
@@ -150,7 +150,7 @@
         "store",
         "verify"
       ],
-      "maxFileLoc": 623,
+      "maxFileLoc": 632,
       "maxFileFanout": 12,
       "instability": 0.933
     },
@@ -171,10 +171,10 @@
       "instability": 0.667
     },
     "store": {
-      "loc": 457,
+      "loc": 497,
       "pkgFanout": 1,
       "edges": ["core"],
-      "maxFileLoc": 198,
+      "maxFileLoc": 225,
       "maxFileFanout": 3,
       "instability": 0.25
     },
@@ -209,11 +209,11 @@
       "fanout": 22
     },
     "packages/automation/src/market/buyer.ts": {
-      "loc": 1386,
+      "loc": 1387,
       "fanout": 13
     },
     "packages/automation/src/rt/services.ts": {
-      "loc": 923,
+      "loc": 929,
       "fanout": 7
     },
     "packages/automation/src/runtime.ts": {
@@ -225,7 +225,7 @@
       "fanout": 9
     },
     "packages/bstack/src/finger.ts": {
-      "loc": 1046,
+      "loc": 1073,
       "fanout": 8
     },
     "packages/chain/src/index.ts": {
@@ -233,7 +233,7 @@
       "fanout": 32
     },
     "packages/chain/src/mainnet.ts": {
-      "loc": 921,
+      "loc": 992,
       "fanout": 7
     },
     "packages/chain/src/testkit.ts": {
@@ -245,11 +245,11 @@
       "fanout": 6
     },
     "packages/mcp/src/http.ts": {
-      "loc": 917,
+      "loc": 926,
       "fanout": 13
     },
     "packages/mcp/src/memory.ts": {
-      "loc": 319,
+      "loc": 321,
       "fanout": 24
     },
     "packages/mcp/src/server.ts": {

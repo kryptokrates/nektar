@@ -7,16 +7,17 @@
 //   #6 Auto-detect first testnet funding (opt-out via NEKTAR_INDEXER_DISCOVERY=0)
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import knexFactory from 'knex'
 import { PrivateKey } from '@bsv/sdk'
 import { testWorld, TxStore, type Funds } from '@nektar/chain'
-import { AutomationStore, SqlFunds } from '@nektar/automation'
+import { AutomationStore, SqlFunds, BudgetAuthority } from '@nektar/automation'
 import { KnexShardStore } from '@nektar/log'
 import { NektarMemory, createHttpApi, callTool } from '../src/index.js'
+import { acquireLock } from '../src/rtsupport.js'
 import { liveFunding } from '../src/funding.js'
 import { seedWelcome } from '../src/welcome.js'
 import { runHookCli } from '../src/hooks-cli.js'
@@ -385,6 +386,40 @@ void test('#6: testnet auto-detects first funding when 0 UTXOs (opt-out via NEKT
     if (prevDisc === undefined) delete process.env.NEKTAR_INDEXER_DISCOVERY
     else process.env.NEKTAR_INDEXER_DISCOVERY = prevDisc
     await kx.destroy()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+void test('mainnet-hardening: acquireLock recovers from a stale .breaking token left by a crashed process', async () => {
+  const dir = mkTmp('nektar-lock-break-')
+  try {
+    const lockFile = join(dir, 'instance.lock')
+    const breakFile = `${lockFile}.breaking`
+    const oldMs = Date.now() - 60_000
+    writeFileSync(lockFile, JSON.stringify({ owner: '999999@dead-host', beat: oldMs }))
+    writeFileSync(breakFile, '999998@dead-host')
+    utimesSync(lockFile, new Date(oldMs), new Date(oldMs))
+    utimesSync(breakFile, new Date(oldMs), new Date(oldMs))
+    const release = await acquireLock(lockFile, 'test-lock')
+    await release()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+void test('mainnet-hardening: BudgetAuthority.release frees ancestor grant reservations', () => {
+  const dir = mkTmp('nektar-budget-rel-')
+  try {
+    const ba = new BudgetAuthority(dir)
+    ba.setCap('parent', 1000)
+    ba.setCap('child', 500, ['parent'])
+    assert.equal(ba.reserve('child', 'act-1', 400), 'ok')
+    assert.equal(ba.status('parent')?.headroom, 600)
+    assert.equal(ba.status('child')?.headroom, 100)
+    assert.equal(ba.release('child', 'act-1'), true)
+    assert.equal(ba.status('child')?.headroom, 500)
+    assert.equal(ba.status('parent')?.headroom, 1000, 'ancestor headroom must be restored on release')
+  } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })

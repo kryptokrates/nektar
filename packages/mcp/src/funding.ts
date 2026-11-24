@@ -369,38 +369,38 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
   // the outpoint and (via the chain-verified oracle, not an index) whether the
   // coin is already spent — the difference between "dead funding tx, send
   // another" and "already on the book"
-  const adopt = (u: { tx: Transaction; vout: number }): void => {
+  const adopt = async (u: { tx: Transaction; vout: number }): Promise<void> => {
     const tag = `${u.tx.id('hex').slice(0, 12)}…:${u.vout}`
-    void funds
-      .adopt(u.tx, u.vout)
-      .then(async (ok) => {
-        if (ok) return fundingWake?.()
-        const why =
-          (await funds.spendCheck?.(u.tx.id('hex'), u.vout).catch(() => undefined)) === true ? 'outpoint already spent on-chain' : 'already held or tombstoned'
-        l(`funding ${tag} refused — ${why}`)
-      })
-      .catch((e) => l(`funding ${tag} adopt failed: ${(e as Error).message}`))
+    try {
+      const ok = await funds.adopt(u.tx, u.vout)
+      if (ok) {
+        fundingWake?.()
+        return
+      }
+      const why =
+        (await funds.spendCheck?.(u.tx.id('hex'), u.vout).catch(() => undefined)) === true ? 'outpoint already spent on-chain' : 'already held or tombstoned'
+      l(`funding ${tag} refused — ${why}`)
+    } catch (e) {
+      l(`funding ${tag} adopt failed: ${(e as Error).message}`)
+    }
   }
-  const addIfNew = (u: { tx: Transaction; vout: number }): Promise<void> => {
+  const addIfNew = async (u: { tx: Transaction; vout: number }): Promise<void> => {
     txStore.put(u.tx)
     // first-party spend record beats any index or operator-named txid: an
     // outpoint a stored tx of ours already spends is never re-imported — a
     // definitively rejected/conflicted spender excepted, since that spend
     // never landed and the outpoint is genuinely unspent again
     const spender = txStore.spender(u.tx.id('hex'), u.vout)
-    if (spender === undefined) {
-      adopt(u)
-    } else {
-      void ledger
-        .walletTx({ txid: spender })
-        .then((w) => {
-          if (importable(spender, w?.state)) adopt(u)
-        })
-        .catch(() => undefined) // unreadable ledger → stay skipped; the next import pass retries
-    }
-    // adoption is NOT delayed by the lookup — the caller's Promise.all only
-    // bounds the proof fetch, not the coin book
-    return attach(u.tx)
+    const adoptWork =
+      spender === undefined
+        ? adopt(u)
+        : ledger
+            .walletTx({ txid: spender })
+            .then(async (w) => {
+              if (importable(spender, w?.state)) await adopt(u)
+            })
+            .catch(() => undefined) // unreadable ledger → stay skipped; the next import pass retries
+    await Promise.all([adoptWork, attach(u.tx)])
   }
   // optional p2p eyes: NEKTAR_P2P_PEERS='ip:port,...' — first-hand inv stream
   // watching our reserve outpoints (spend events by ANYONE) and the fee-key
@@ -432,6 +432,8 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
       funds,
       broadcast: deps.broadcast,
       currentHeight: async () => await port.tracker.currentHeight(),
+      feeRateSatPerKb: mc.feeRateSatPerKb,
+      fetchTx: async (txid: string) => txStore.get(txid) ?? (await port.getTx?.(txid)) ?? (await port.txLookup?.(txid)),
       net,
       log: mkLog('')
     })
@@ -455,8 +457,9 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
     // the reserve is empty (0 UTXOs), run discovery automatically so first
     // faucet drips are adopted without copy-pasting txids (NEKTAR_INDEXER_DISCOVERY=0
     // opts out; stops automatically once the first UTXO lands).
-    const autoTestnet = net === 'testnet' && funds.utxos.length === 0 && nektarEnv('NEKTAR_INDEXER_DISCOVERY') !== '0'
-    if (nektarEnv('NEKTAR_INDEXER_DISCOVERY') !== '1' && !autoTestnet) return
+    const autoEmpty =
+      (net === 'testnet' || nektarEnv('NEKTAR_WAIT_FUNDING') === '1') && funds.utxos.length === 0 && nektarEnv('NEKTAR_INDEXER_DISCOVERY') !== '0'
+    if (nektarEnv('NEKTAR_INDEXER_DISCOVERY') !== '1' && !autoEmpty) return
     try {
       await Promise.all(
         (await discoverUtxos(mc, fundAddress, (t, why) => l(`discover: index entry ${t.slice(0, 12)} skipped: ${why}`))).map((u) => addIfNew(u))

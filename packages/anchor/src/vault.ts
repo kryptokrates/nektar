@@ -63,7 +63,7 @@ export class FeeVault {
 
   /** build a vault spend tx: payment → destPkh, continuation, change → ownerPkh.
    *  Returns { tx } — the caller broadcasts it. */
-  async buildSpend(utxo: VaultUtxo, ownerKey: SignerLike, payAmount: bigint, lockTime: number, fee = 1n): Promise<{ tx: Transaction }> {
+  async buildSpend(utxo: VaultUtxo, ownerKey: SignerLike, payAmount: bigint, lockTime: number, fee = 1n, parentTx?: Transaction): Promise<{ tx: Transaction }> {
     const cur = this.stateOf(utxo.script)
     const lt = BigInt(lockTime)
     const [newSpent, newStart] = lt >= cur.windowStart + this.cfg.windowBlocks ? [payAmount, lt] : [cur.spentInWindow + payAmount, cur.windowStart]
@@ -80,6 +80,7 @@ export class FeeVault {
     tx.addInput({
       sourceTXID: utxo.txid,
       sourceOutputIndex: utxo.vout,
+      ...(parentTx !== undefined ? { sourceTransaction: parentTx } : {}),
       unlockingScript: new UnlockingScript(),
       sequence: 0xfffffffe
     })

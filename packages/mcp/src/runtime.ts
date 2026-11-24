@@ -22,9 +22,12 @@ import {
   type RegtestConfig,
   type MainnetConfig,
   type TxStatusEvent,
+  KNOWN_STATUSES,
   MINED_WORDS,
   REJECTED_WORDS
 } from '@nektar/chain'
+
+const KNOWN_STATUS_SET = new Set(KNOWN_STATUSES)
 import { handleBroadcasterStatus } from './http.js'
 import { HEX64, nektarEnv, nektarEnvNum, mkLog } from '@nektar/core'
 import { type InvokeTarget } from '@nektar/automation'
@@ -274,10 +277,12 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   }
   mkdirSync(cfg.dataDir, { recursive: true })
   // live custody needs the passphrase BEFORE keys/decrypt; the injected tier
-  // has no encrypted material
+  // has no encrypted material. External-wallet custody (NEKTAR_WALLET=client)
+  // creates zero local private keys, so it needs no passphrase unless an
+  // existing encrypted keys.json is present (loadKeys still enforces that).
   const pass = live ? mc?.passphrase : passphraseFromEnv()
-  if (net === 'main' && !pass) throw new KeystoreError(`${net} requires NEKTAR_KEY_PASSPHRASE (or _FILE) for keys at rest`)
   const externalWallet = live && !injected && nektarEnv('NEKTAR_WALLET') === 'client'
+  if (net === 'main' && !pass && !externalWallet) throw new KeystoreError(`${net} requires NEKTAR_KEY_PASSPHRASE (or _FILE) for keys at rest`)
   const { release: releaseLock } = await acquireInstanceLock(cfg.dataDir)
   // encryption is mandatory on main only — test-coin keys are mode-0600
   // plaintext when no passphrase is set (set it and they encrypt the same)
@@ -562,13 +567,10 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   // webhook uses (which emits broadcasterStatus → onBroadcasterStatus above)
   const stream = port.openHintStream?.(async (j) => {
     const w = j as { txid?: string; txStatus?: string }
-    mem.metrics.inc(
-      'nektar_broadcaster_stream_events_total',
-      { status: String(w.txStatus ?? '?').toLowerCase() },
-      1,
-      'broadcaster status stream events received'
-    )
-    await handleBroadcasterStatus(mem, w)
+    const norm = String(w.txStatus ?? '').toUpperCase()
+    const status = KNOWN_STATUS_SET.has(norm) ? norm.toLowerCase() : 'other'
+    mem.metrics.inc('nektar_broadcaster_stream_events_total', { status }, 1, 'broadcaster status stream events received')
+    await handleBroadcasterStatus(mem, w).catch(() => undefined)
   })
   // funding — the reserve fills per-network: regtest bootstraps a treasury
   // split; live nets run imports/discovery/vault/p2p + the funding wait and
@@ -649,24 +651,34 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       events.stop()
       stopProofHeal()
       cw.close()
-      // every teardown await carries a ceiling — a wedged chain/db call
-      // must not hang the exit (bin.ts's hard deadline is the outer backstop)
+      // every teardown await carries a ceiling — total stays under bin.ts's
+      // 20s hard exit so locks + sqlite close cleanly instead of getting killed
       const bounded = async (p: Promise<unknown>, ms: number, what: string): Promise<void> => {
-        const r = await Promise.race([
-          Promise.resolve(p).then(
-            () => 'done',
-            () => 'done'
-          ),
-          new Promise<'timeout'>((res) => setTimeout(() => res('timeout'), ms))
-        ])
-        if (r === 'timeout') nlog(`close: ${what} exceeded ${ms}ms — proceeding`)
+        let timer: ReturnType<typeof setTimeout> | undefined
+        try {
+          const r = await Promise.race([
+            Promise.resolve(p).then(
+              () => 'done',
+              () => 'done'
+            ),
+            new Promise<'timeout'>((res) => {
+              timer = setTimeout(() => res('timeout'), ms)
+              timer.unref?.()
+            })
+          ])
+          if (r === 'timeout') nlog(`close: ${what} exceeded ${ms}ms — proceeding`)
+        } finally {
+          if (timer !== undefined) clearTimeout(timer)
+        }
       }
-      await bounded(cw.inflight() ?? Promise.resolve(), 15_000, 'inflight confirmer pass')
+      await bounded(cw.inflight() ?? Promise.resolve(), 5_000, 'inflight confirmer pass')
+      // flush final confirmer pass BEFORE releasing locks so a successor
+      // cannot race our closing writes on the same dataDir / fund key
+      await bounded(cw.tick(), 5_000, 'final confirmer pass')
+      await bounded(custody.closeWallet?.() ?? Promise.resolve(), 3_000, 'wallet close')
+      await bounded(knex.destroy(), 3_000, 'records db')
       await releaseLock()
       await custody.releaseKeyLock?.()
-      await bounded(cw.tick(), 20_000, 'final confirmer pass')
-      await bounded(custody.closeWallet?.() ?? Promise.resolve(), 10_000, 'wallet close')
-      await bounded(knex.destroy(), 10_000, 'records db')
     }
   }
 }

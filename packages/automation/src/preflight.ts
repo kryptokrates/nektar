@@ -207,7 +207,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
     if (cfg.marketHosts.length === 0)
       return { check: 'hosts', pass: false, detail: 'no market hosts configured', fix: 'set NEKTAR_MARKET_HOSTS (or let bootstrap resolve them)' }
     const { lookupAll } = await import('@nektar/bstack')
-    const me = mem.operatorKey().toPublicKey().toString().toLowerCase()
+    const me = (mem.operatorSigner !== undefined ? await mem.operatorSigner().pubKeyHex() : mem.operatorKey().toPublicKey().toString()).toLowerCase()
     const [carriers, fingers, boxes] = await Promise.all([
       lookupAll(cfg.marketHosts, 'ls_nektar', { wants: { net: cfg.network, domain: '_preflight', limit: 1 } }, { timeoutMs: ceil.hostMs }),
       lookupAll(cfg.marketHosts, 'ls_finger', { identityKey: me }, { timeoutMs: ceil.hostMs }),
@@ -302,7 +302,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
   push('policy', async () => {
     if (store === undefined)
       return { check: 'policy', pass: false, detail: 'automation store not open', fix: 'the automation runtime must open before preflight runs' }
-    const me = mem.operatorKey().toPublicKey().toString()
+    const me = mem.operatorSigner !== undefined ? await mem.operatorSigner().pubKeyHex() : mem.operatorKey().toPublicKey().toString()
     const live: string[] = []
     for (const row of await store.policies()) {
       if (row.revokedAt !== undefined) continue

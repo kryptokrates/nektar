@@ -55,6 +55,16 @@ export async function submitAll(
   topics: string[],
   opts?: { quorum?: Quorum; timeoutMs?: number; early?: boolean }
 ): Promise<SubmitAllResult> {
+  if (hosts.length === 0) {
+    return {
+      ok: false,
+      took: [],
+      admitted: [],
+      missed: [],
+      pending: [],
+      settled: Promise.resolve({ took: [], missed: [] })
+    }
+  }
   const timeoutMs = opts?.timeoutMs ?? 15000
   const n = need(opts?.quorum, hosts.length)
   type Leg = { host: string; ok: boolean; admitted?: boolean; error?: string }
@@ -72,7 +82,11 @@ export async function submitAll(
       })
       if (r.ok) {
         const steak = (await r.json().catch(() => ({}))) as Record<string, { outputsToAdmit?: number[] }>
+        const hasTopicKeys = topics.some((t) => steak[t] !== undefined)
         const admitted = topics.some((t) => (steak[t]?.outputsToAdmit?.length ?? 0) > 0)
+        // If a host returned an explicit STEAK entry with 0 admitted outputs,
+        // treat as refusal instead of false quorum success.
+        if (hasTopicKeys && !admitted) return { host, ok: false, admitted: false, error: 'overlay refused admission (0 outputsToAdmit)' }
         return { host, ok: true, admitted }
       }
       if (r.status < 500) return { host, ok: false, error: `http ${r.status}` }
@@ -106,7 +120,10 @@ export async function submitAll(
               if (ok >= n || acc.length === hosts.length) resolve([...acc])
             })
         })
-      : await Promise.all(jobs)
+      : await Promise.all(jobs).then((all) => {
+          for (const r of all) answered.add(r.host)
+          return all
+        })
   const took = rs.filter((r) => r.ok).map((r) => r.host)
   const admitted = rs.filter((r) => r.ok && r.admitted === true).map((r) => r.host)
   const missed = rs.filter((r) => !r.ok).map((r) => ({ host: r.host, error: r.error! }))
@@ -120,13 +137,15 @@ export async function lookupAll(
   query: unknown,
   opts?: { timeoutMs?: number; quorum?: number }
 ): Promise<{ answers: Array<{ host: string; outputs: Array<{ beef: number[]; outputIndex: number }> } | { host: string; error: string }> }> {
+  const quorumCtl = new AbortController()
   const per = async (host: string) => {
     try {
+      const baseSig = ioSignal(opts?.timeoutMs ?? 15000)
       const r = await fetch(`${host}/lookup`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ service, query }),
-        signal: ioSignal(opts?.timeoutMs ?? 15000)
+        signal: AbortSignal.any([baseSig, quorumCtl.signal])
       })
       if (!r.ok) return { host, error: `http ${r.status}` }
       const j = (await r.json()) as { type?: string; outputs?: Array<{ beef: number[]; outputIndex: number }> }
@@ -137,21 +156,25 @@ export async function lookupAll(
   }
   const quorum = opts?.quorum ?? hosts.length
   if (quorum >= hosts.length) return { answers: await Promise.all(hosts.map(per)) }
-  // quorum-N: resolve the moment N hosts have answered (success or error —
-  // the caller asked for N independent reads, not N successes). Slow/dead
-  // hosts no longer gate the read by their full timeout; unanswered hosts
-  // are simply absent from `answers`, not fabricated failures.
+  // quorum-N: resolve the moment N hosts have answered and abort remaining
+  // slow sockets immediately so they don't linger until timeoutMs.
   return {
     answers: await new Promise((resolve) => {
       const out: Array<Awaited<ReturnType<typeof per>>> = []
       let settled = 0
       let ok = 0
+      let done = false
       for (const h of hosts) {
         void per(h).then((r) => {
+          if (done) return
           out.push(r)
           settled++
           if ('outputs' in r) ok++
-          if (ok >= quorum || settled === hosts.length) resolve([...out])
+          if (ok >= quorum || settled === hosts.length) {
+            done = true
+            quorumCtl.abort()
+            resolve([...out])
+          }
         })
       }
     })
@@ -248,8 +271,8 @@ export async function readItems(hosts: string[], service: string, query: unknown
     }
   }
   const withheld: Array<{ host: string; txid: string }> = []
-  const unreachableSet = new Set(unreachable)
-  for (const [txid, hs] of seenBy) if (items.has(txid)) for (const h of hosts) if (!hs.has(h) && !unreachableSet.has(h)) withheld.push({ host: h, txid })
+  const answeredHosts = Object.keys(perHost)
+  for (const [txid, hs] of seenBy) if (items.has(txid)) for (const h of answeredHosts) if (!hs.has(h)) withheld.push({ host: h, txid })
   return { items: [...items.values()], perHost, withheld, unreachable }
 }
 

@@ -163,7 +163,7 @@ export class CustodyOps {
     lockingScriptHex: string
     opReturn: string
   }): Promise<{ payment: { invoiceId: string; transaction: string }; txid: string }> {
-    const f = await this.takeFunding(inv.amount + 600, 'deal')
+    const f = await this.takeFunding(inv.amount + paymentFeeBoundSats(this.deps.feeRateSatPerKb), 'deal')
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.deps.fundSigner()) })
     tx.addOutput({ satoshis: inv.amount, lockingScript: LockingScript.fromHex(inv.lockingScriptHex) })
@@ -275,7 +275,9 @@ export class CustodyOps {
     if (args.fundsSats !== undefined && (!Number.isInteger(args.fundsSats) || args.fundsSats < 546))
       throw new Error('provisionPay: fundsSats must be an integer >= 546')
     const total = args.outputs.reduce((s, o) => s + o.satoshis, 0) + (args.fundsSats ?? 0)
-    const f = await this.takeFunding(total + 600)
+    const rate = this.deps.feeRateSatPerKb ?? 1
+    const feeMargin = Math.max(paymentFeeBoundSats(rate), Math.ceil((((args.outputs.length + 2) * 40 + 200) / 1000) * rate) + 100)
+    const f = await this.takeFunding(total + feeMargin)
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.deps.fundSigner()) })
     for (const o of args.outputs) tx.addOutput({ satoshis: o.satoshis, lockingScript: LockingScript.fromHex(o.scriptHex) })

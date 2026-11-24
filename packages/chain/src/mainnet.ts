@@ -4,7 +4,7 @@
 // in the runtime before any tx reaches it.
 import { currentSignal, deadline, ioSignal, nektarEnv, sparse, spread, HEX64 } from '@nektar/core'
 import { withRetry } from './retry.js'
-import { TxStore } from './txstore.js'
+import { TxStore, spendValid } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
 import { headerPowValid, HeaderCache } from './headers.js'
@@ -67,29 +67,59 @@ const publicIndexOk = (c?: MainnetConfig): boolean => {
   return primary === undefined || PUBLIC_BROADCASTER_URLS.has(primary)
 }
 
-const def = (c?: MainnetConfig) => {
+const RESOLVED_CFG = Symbol('nektar.resolvedMainnet')
+
+type ResolvedMainnetConfig = {
+  [RESOLVED_CFG]: true
+  broadcasterUrl: string
+  broadcasterUrls: string[]
+  callbackUrl: string | undefined
+  callbackToken: string | undefined
+  indexerUrl: string
+  indexerUrls: string[] | undefined
+  indexerKind: MainnetConfig['indexerKind']
+  index: ChainIndex
+  fetch: typeof fetch
+  fetchImpl: typeof fetch | undefined
+  broadcasterApiKey: string | undefined
+  indexerApiKey: string | undefined
+  tipCacheMs: number
+}
+
+const isResolved = (c: unknown): c is ResolvedMainnetConfig => typeof c === 'object' && c !== null && RESOLVED_CFG in c
+
+const def = (c?: MainnetConfig | ResolvedMainnetConfig): ResolvedMainnetConfig => {
+  if (isResolved(c)) return c
   const indexerUrl = c?.indexerUrl ?? DEFAULT_INDEXER_URL
   // primary = explicit broadcasterUrl, else the first listed extra, else
   // the GorillaPool default; extras append in order, deduped
   const broadcasterUrls = [...new Set([c?.broadcasterUrl ?? c?.broadcasterUrls?.[0] ?? DEFAULT_BROADCASTER_URL, ...(c?.broadcasterUrls ?? [])])]
   return {
+    [RESOLVED_CFG]: true,
     // BSV Broadcaster (formerly Arcade; the ARC successor) — GorillaPool instance
     broadcasterUrl: broadcasterUrls[0],
     broadcasterUrls,
     callbackUrl: c?.callbackUrl ?? nektarEnv('NEKTAR_CALLBACK_URL'),
     callbackToken: c?.callbackToken ?? nektarEnv('NEKTAR_CALLBACK_TOKEN'),
     indexerUrl,
+    indexerUrls: c?.indexerUrls,
+    indexerKind: c?.indexerKind,
     index: indexFailover([...new Set([indexerUrl, ...(c?.indexerUrls ?? [])])], {
       apiKey: c?.indexerApiKey,
       kind: c?.indexerKind,
       fetchImpl: c?.fetchImpl
     }),
     fetch: c?.fetchImpl ?? fetch,
+    fetchImpl: c?.fetchImpl,
     broadcasterApiKey: c?.broadcasterApiKey,
     indexerApiKey: c?.indexerApiKey,
     tipCacheMs: c?.tipCacheMs ?? Number(nektarEnv('NEKTAR_TIP_CACHE_MS') ?? 15_000)
   }
 }
+
+/** Resolve once per livePort so every helper shares one CachingIndex + pacer
+ *  and preserves failover indexerUrls/indexerKind/fetchImpl. */
+export const resolveMainnetConfig = (c?: MainnetConfig): MainnetConfig => def(c) as unknown as MainnetConfig
 
 const req = async (c: ReturnType<typeof def>, url: string, init: RequestInit = {}, ms = 20_000): Promise<Response> => {
   const ctl = new AbortController()
@@ -140,20 +170,19 @@ export class BsvBroadcaster implements Broadcaster {
     // resolves unconfirmed parents from it); plain raw otherwise. One payload
     // serves every endpoint — same bytes, same txid, resubmission idempotent.
     const payload = new Uint8Array(tx.inputs.every((i) => i.sourceTransaction !== undefined) ? tx.toEF() : tx.toBinary())
+    const urls = this.cfg.broadcasterUrls
+    if (urls.length === 0) return { status: 'error', description: 'broadcast failed: no broadcaster endpoints configured' }
+    const winCtl = new AbortController()
     const submit = async (base: string): Promise<BroadcastResult> => {
       try {
-        // EF submits under load can queue past the default 20s window — the
-        // post is idempotent (same bytes, same txid), so a slow answer and a
-        // transport timeout both earn one retry rather than a starvation
-        // verdict for the caller
-        const post = () => req(this.cfg, `${base}/tx`, { method: 'POST', headers, body: payload }, 60_000)
+        const post = () => req(this.cfg, `${base}/tx`, { method: 'POST', headers, body: payload, signal: winCtl.signal }, 60_000)
         // 503 = backpressure, nothing queued; transport errors are idempotent
         // (same bytes, same txid) — retry both through one jittered policy
         const r = await withRetry(post, {
           attempts: 4,
           delay: (i) => 500 * 2 ** i,
-          retryIf: (x) => x.status === 503,
-          retryErr: () => true
+          retryIf: (x) => !winCtl.signal.aborted && x.status === 503,
+          retryErr: () => !winCtl.signal.aborted
         })
         if (r.status >= 500) throw new Error(`broadcaster HTTP ${r.status}`)
         const body = await r.json().catch(() => ({}))
@@ -163,21 +192,36 @@ export class BsvBroadcaster implements Broadcaster {
         }
         return { status: 'error', description: `broadcaster ${st || `HTTP ${r.status}`}: ${body.reason ?? body.detail ?? body.extraInfo ?? ''}`.trim() }
       } catch (e) {
-        // the broadcaster is the only write path — a transport failure is an
-        // error answer, never a detour through the index
         return { status: 'error', description: `broadcast failed: ${(e as Error).message}` }
       }
     }
-    // every configured endpoint gets the same bytes at once — first
-    // acceptance wins. Among all-failed answers a wire verdict ('broadcaster
-    // REJECTED: …' / a 4xx reason) outranks a bare transport failure: it
-    // names why the tx was refused instead of just that a route was down.
-    const results = await Promise.all(this.cfg.broadcasterUrls.map(submit))
-    return (
-      results.find((r) => r.status === 'success') ??
-      results.find((r) => r.description?.startsWith('broadcaster ')) ??
-      sparse(results[0]) ?? { status: 'error', description: 'broadcast failed: no broadcaster endpoints configured' }
-    )
+    // every configured endpoint gets the same bytes at once — first acceptance
+    // wins AND aborts slower siblings immediately so one dead secondary route
+    // never pins SpendGuard.tail for minutes.
+    return await new Promise<BroadcastResult>((resolve) => {
+      const results: BroadcastResult[] = []
+      let settled = false
+      let remaining = urls.length
+      for (const base of urls) {
+        void submit(base).then((r) => {
+          if (settled) return
+          if (r.status === 'success') {
+            settled = true
+            winCtl.abort()
+            resolve(r)
+            return
+          }
+          results.push(r)
+          if (--remaining === 0) {
+            settled = true
+            resolve(
+              results.find((x) => x.description?.startsWith('broadcaster ')) ??
+                sparse(results[0]) ?? { status: 'error', description: 'broadcast failed: no broadcaster endpoints configured' }
+            )
+          }
+        })
+      }
+    })
   }
 
   /** the broadcaster's current word for a txid — a HINT, never a verdict:
@@ -248,7 +292,16 @@ export function statusStream(
         const headers: Record<string, string> = { accept: 'text/event-stream' }
         if (lastId !== undefined) headers['Last-Event-ID'] = lastId
         if (c.broadcasterApiKey) headers.Authorization = `Bearer ${c.broadcasterApiKey}`
-        const res = await f(urlFor(base), { headers, signal: abort.signal })
+        // connect timeout (15s) + read-idle watchdog (90s) so half-open TCP/NAT
+        // sockets reconnect and rotate instead of wedging SSE silently forever
+        const connectTimer = setTimeout(() => abort?.abort(), 15_000)
+        connectTimer.unref?.()
+        let res: Response
+        try {
+          res = await f(urlFor(base), { headers, signal: abort.signal })
+        } finally {
+          clearTimeout(connectTimer)
+        }
         if (!res.ok || res.body === null) {
           const err = new Error(`events HTTP ${res.status}`)
           // auth refusals don't self-heal — mark the endpoint dead and
@@ -286,8 +339,16 @@ export function statusStream(
           }
         }
         for (;;) {
-          const { done, value } = await reader.read()
-          if (done) break
+          const idleTimer = setTimeout(() => abort?.abort(), 90_000)
+          idleTimer.unref?.()
+          let chunk: ReadableStreamReadResult<Uint8Array>
+          try {
+            chunk = await reader.read()
+          } finally {
+            clearTimeout(idleTimer)
+          }
+          const { done: eof, value } = chunk
+          if (eof) break
           buf += dec.decode(value, { stream: true })
           let nl
           while ((nl = buf.indexOf('\n')) >= 0) {
@@ -458,11 +519,13 @@ export async function fetchRawTx(cfg: MainnetConfig | undefined, txid: string): 
   } catch {
     /* fall through to the broadcaster source */
   }
+  const h: Record<string, string> = {}
+  if (c.broadcasterApiKey) h.Authorization = `Bearer ${c.broadcasterApiKey}`
   for (const base of c.broadcasterUrls) {
     try {
-      const r = await f(`${base}/tx/${txid}`, { signal: ioSignal(10_000) })
+      const r = await f(`${base}/tx/${txid}`, { headers: h, signal: ioSignal(10_000) })
       if (r.ok) {
-        const j = (await r.json()) as { rawTx?: string } | null
+        const j = (await r.json().catch(() => null)) as { rawTx?: string } | null
         const tx = parse(j?.rawTx)
         if (tx !== undefined) return tx
       }
@@ -728,19 +791,19 @@ export async function merklePathMainnet(cfg: MainnetConfig | undefined, txid: st
   for (const base of c.broadcasterUrls) {
     const ar = await req(c, `${base}/tx/${txid}`, { headers: h }).catch(() => undefined)
     if (ar === undefined || !ar.ok) continue // dead route — try the next one
-    const b = await ar.json()
+    const b = (await ar.json().catch(() => null)) as { merklePath?: string; txStatus?: string } | null
+    if (!b) continue
     if (b.merklePath) {
       try {
         return { merklePath: MerklePath.fromHex(b.merklePath), status: String(b.txStatus ?? 'mined') }
       } catch {
-        break // a malformed path is a claim, not a proof — index fallback
+        continue // malformed path — try next broadcaster / index fallback
       }
     }
     const st = String(b.txStatus ?? '').toUpperCase()
-    if (!MINED_WORDS.includes(st)) {
-      return null // still pending / rejected upstream
-    }
-    break // an answering endpoint that reports mined-without-path → TSC proof
+    // primary lagging behind a newly mined block must NOT short-circuit
+    // secondary broadcasters or the index TSC fallback
+    if (MINED_WORDS.includes(st)) break
   }
   // index TSC-proof fallback — the root it claims is still verified against
   // the witnessed tracker by the caller before the proof is trusted
@@ -906,13 +969,21 @@ async function spenderProbe(
     const spending = await fetchRawTx(c, claim)
     if (spending === undefined) return undefined
     // the spend claim is only evidence when the served bytes name OUR
-    // outpoint as an input — anything else is the index's word, ignored
-    if (!spending.inputs.some((i) => String(i.sourceTXID).toLowerCase() === txid && i.sourceOutputIndex === vout)) return undefined
+    // outpoint as an input AND either carry a header-verified BUMP or pass
+    // local script verification (`spendValid`) against the spent output —
+    // prevents a hostile/buggy indexer from burning live UTXOs with fake txs.
+    const vin = spending.inputs.findIndex((i) => String(i.sourceTXID).toLowerCase() === txid && i.sourceOutputIndex === vout)
+    if (vin === -1) return undefined
     const proof = sparse(await merklePathMainnet(c, claim))
     if (proof !== undefined && proof !== null) {
       const root = proof.merklePath.computeRoot(claim)
       if (!(await tracker.isValidRootForHeight(root, proof.merklePath.blockHeight))) return undefined
+      return claim
     }
+    const parent = await fetchRawTx(c, txid)
+    const srcOut = parent?.outputs[vout]
+    if (srcOut?.satoshis === undefined) return undefined
+    if (!spendValid(spending, vin, { txid, vout, satoshis: srcOut.satoshis, script: srcOut.lockingScript.toHex() })) return undefined
     return claim
   } catch {
     return undefined

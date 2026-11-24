@@ -50,9 +50,10 @@ const opWif = (): PrivateKey | undefined => {
 }
 
 /** settle address + quote signer: the operator WIF when set (legacy custody),
- *  else the instance's operator signer — no private key held. */
+ *  else the instance's fund signer (derived `nektar-fund` under client custody,
+ *  which CAN root-sign spends — `identityKey` cannot on sdk-4). */
 const operatorAddress = async (mem: NektarMemory): Promise<string> =>
-  opWif() !== undefined ? opAddr! : await signerAddress(mem.operatorSigner(), nektarEnv('NEKTAR_NETWORK') === 'main' ? [0x00] : [0x6f])
+  opWif() !== undefined ? opAddr! : await signerAddress(mem.fundSigner(), nektarEnv('NEKTAR_NETWORK') === 'main' ? [0x00] : [0x6f])
 
 /** startup check: paid tools require a settle destination BEFORE the first
  *  invoice is served — either the operator WIF (legacy) or NEKTAR_WALLET=client
@@ -85,6 +86,8 @@ export const priceFor = (tool: string): number =>
 const carriedAncestryOk = (tx: Transaction): boolean => {
   const maxHops = Math.max(0, nektarEnvNum('NEKTAR_PAY_ANCESTRY') ?? 4)
   const maxNodes = Math.max(1, nektarEnvNum('NEKTAR_PAY_ANCESTRY_NODES') ?? 64)
+  const requireCarried = nektarEnv('NEKTAR_NETWORK') === 'main' || /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAY_REQUIRE_BEEF') ?? '')
+  if (tx.merklePath === undefined && requireCarried && tx.inputs.some((i) => fullSourceTx(i) === undefined)) return false
   const seen = new Set([tx.id('hex')])
   let frontier = tx.inputs.map(fullSourceTx).filter((p): p is Transaction => p !== undefined)
   for (let hops = 0; frontier.length > 0; hops++) {
@@ -96,9 +99,11 @@ const carriedAncestryOk = (tx: Transaction): boolean => {
       seen.add(id)
       if (seen.size > maxNodes) return false
       if (p.merklePath !== undefined) continue // verified by TxStore.read — terminates branch
+      if (p.inputs.length === 0) return false
       for (const i of p.inputs) {
         const src = fullSourceTx(i)
         if (src !== undefined) next.push(src)
+        else if (requireCarried) return false
       }
     }
     frontier = next
@@ -211,7 +216,7 @@ const getReceiver = (): LedgerReceiver => {
  *  attributable offer (a doctored amount/payTo fails quoteSig verification) */
 const issueInvoice = async (mem: NektarMemory, tool: string, amount?: number): Promise<Invoice> => {
   sweepInvoices()
-  const signer = toSigner(opWif() ?? mem.operatorSigner())
+  const signer = toSigner(opWif() ?? mem.fundSigner())
   const payTo = await operatorAddress(mem)
   const inv: Invoice = {
     invoiceId: randomBytes(8).toString('hex'),
@@ -307,6 +312,9 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
   // with unconfirmed depth); an absent one is the network's — broadcast rejects it
   if (strippedBumps > 0 || !carriedAncestryOk(tx))
     throw new Error('payment ancestry fails verification or exceeds the unproven-depth cap — provide proven parents')
+  const maxZeroConf = nektarEnvNum('NEKTAR_PAY_MAX_ZEROCONF_SATS')
+  if (tx.merklePath === undefined && maxZeroConf !== undefined && inv.amount > maxZeroConf)
+    throw new Error(`payment exceeds zero-conf cap (${inv.amount} > ${maxZeroConf} sats) — provide a mined payment tx with BUMP`)
   const txid = tx.id('hex')
   // stock claim check BEFORE broadcast: replayed txid, or a conflict with a
   // coin an accepted payment already spent — two verifying txs sharing a coin
@@ -315,11 +323,16 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
   const claim = recv.refusal({ txid, inputs })
   if (claim === 'replayed') throw new Error(`payment txid ${txid.slice(0, 16)}… already consumed — one tx pays for one call`)
   if (claim === 'conflict') throw new Error(`payment tx spends a coin an accepted payment already spent — conflict, only one can settle`)
+  // serialize BEFORE broadcast so a missing sourceTransaction on a raw tx can
+  // never throw after the tx already aired and leave the payment unclaimed
+  const beef = tx.inputs.every((i) => i.sourceTransaction !== undefined)
+    ? Array.from(Uint8Array.from(tx.toAtomicBEEF()))
+    : Array.from(Uint8Array.from(tx.toBinary()))
   const r = await mem.broadcastTx(tx)
   if (r.status !== 'success') throw new Error(`payment broadcast failed: ${r.description}`)
   recv.claim({
     txid,
-    beef: Array.from(Uint8Array.from(tx.toAtomicBEEF())),
+    beef,
     outputIndex: 0,
     satoshis: inv.amount,
     derivationPrefix: '',
@@ -329,6 +342,13 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
     inputs,
     decision: 'fast'
   })
+  // when payments settle directly to our fund address (no separate operator WIF),
+  // adopt the received output(s) into the coin book so they are spendable
+  if (opWif() === undefined) {
+    for (const [vout, o] of tx.outputs.entries()) {
+      if (o.lockingScript.toHex() === inv.lockingScriptHex) void mem.funds.adopt(tx, vout)
+    }
+  }
   invoices.delete(inv.invoiceId)
   return { txid, amountSats: inv.amount, payTo: inv.payTo, invoiceId: inv.invoiceId }
 }

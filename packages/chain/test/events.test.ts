@@ -416,3 +416,46 @@ test('events: note() with unverified terminal status never prematurely terminate
   assert.equal(got?.verified, true)
   assert.ok(got?.ev.merklePath !== undefined)
 })
+
+test('events: repeated unchanged rejected note() does not spin-poke observe()', async () => {
+  let calls = 0
+  const ev = new ChainEvents({
+    observe: (txid) => {
+      calls++
+      // mimics livePort.observe(): notes 'rejected' hint and returns undefined
+      ev.note({ txid, status: 'rejected' })
+      return Promise.resolve(undefined)
+    }
+  })
+  ev.watch('t-spin')
+  await ev.tick()
+  await nap(40)
+  // first watch/tick observes and notes 'rejected' (changed: undefined→rejected),
+  // triggering at most one verify-on-hint pass; subsequent unchanged 'rejected'
+  // hints MUST NOT re-poke infinitely
+  assert.ok(calls <= 2, `expected <= 2 observe calls, got ${calls}`)
+  ev.stop()
+})
+
+test('events: post-tip catch-up window re-probes after tip advance even if first observe misses', async () => {
+  let calls = 0
+  let tip = 100
+  const ev = new ChainEvents({
+    observe: () => {
+      calls++
+      return Promise.resolve(undefined)
+    },
+    height: () => Promise.resolve(tip)
+  })
+  ev.watch('t-lag')
+  await ev.tick() // initial scan at tip=100
+  assert.equal(calls, 1)
+  await ev.tick() // static tip before any advance -> gated
+  assert.equal(calls, 1)
+  tip = 101 // new block arrived; indexer may still lag behind headers
+  await ev.tick()
+  assert.equal(calls, 2)
+  await ev.tick() // inside 90s post-tip catch-up window -> still re-probes!
+  assert.equal(calls, 3)
+  ev.stop()
+})

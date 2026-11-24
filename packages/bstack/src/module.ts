@@ -1,4 +1,4 @@
-import { nektarEnv, sparse } from '@nektar/core'
+import { nektarEnv, nektarEnvNum, sparse } from '@nektar/core'
 import { isHeaderUnavailable } from '@nektar/chain'
 import { Transaction, Script, type ChainTracker } from '@bsv/sdk'
 import {
@@ -46,11 +46,10 @@ function trackerOf(host: Host): ChainTracker {
 
 const laneNet = (topic: string): string | undefined => /^tm_nektar_([a-z0-9]+)_[0-9a-f]$/.exec(topic)?.[1]
 
-// a carrier admitted on unproven funding ancestry must anchor within ~one
-// block or its claims are evicted — bounds a double-spent tree's orphaned
-// entries (the BEEF 0-conf rule needs an expiry since no probe can watch
-// the funding outpoint's conflicting spend through ModuleHost today)
-const FUNDING_PROOF_MS = 10 * 60_000
+// a carrier admitted on unproven funding ancestry must anchor within a
+// mainnet-safe window (2h default; ~37% of mainnet blocks exceed 10 min) or
+// its claims are evicted. Configurable via NEKTAR_FUNDING_PROOF_MS.
+const FUNDING_PROOF_MS = Math.max(60_000, nektarEnvNum('NEKTAR_FUNDING_PROOF_MS') ?? 2 * 60 * 60_000)
 
 class LaneIndex {
   entries = new Map<string, { beef: number[]; payload: MarketPayload; outpoint: string; fundingDeadline?: number }>()
@@ -239,7 +238,9 @@ function makeLookup(
             const cons = sparse(o.outputsConsumed)?.at(0)
             if (cons === undefined) continue
             fundingOutpoint = `${cons.txid}:${cons.outputIndex}`
-            fundingDeadline = now() + FUNDING_PROOF_MS
+            // Do not stamp a short eviction timer onto already-admitted script-
+            // only restored rows — they already passed admission and carry exp.
+            fundingDeadline = undefined
           }
           const exp = bodyExp(payload)
           if (exp === undefined || exp <= now()) continue

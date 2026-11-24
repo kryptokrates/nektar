@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, rmSync, statSy
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PrivateKey, Transaction } from '@bsv/sdk'
-import { detached, nektarEnv, nektarEnvNum, mkLog, nap, sparse } from '@nektar/core'
+import { detached, ioSignal, nektarEnv, nektarEnvNum, mkLog, nap, sparse } from '@nektar/core'
 import { TxStore, type ChainPort, type TxStatusEvent, type ChainEvents, type BroadcastResult } from '@nektar/chain'
 import { executor, cronObject, legObject, wireCron, wireLeg, EXEC_SVC, RT_OPTS_HEAVY, type InvokeTarget, type LocalDispatch } from '@nektar/automation'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
@@ -31,7 +31,8 @@ export async function probeWalletSubstrate(fetchImpl: typeof fetch = fetch): Pro
       method: 'POST',
       // the JSON API refuses requests with no Origin header (HTTP 400)
       headers: { 'content-type': 'application/json', origin: 'http://localhost' },
-      body: '{}'
+      body: '{}',
+      signal: ioSignal(3_000)
     })
     const body = (await r.json().catch(() => ({}))) as { code?: string; description?: string }
     if (body.code === 'WALLET_LOCKED' || (body.description ?? '').includes('locked')) return 'locked'
@@ -198,6 +199,8 @@ export async function acquireLock(file: string, label: string, opts?: { staleWai
   // lock must never wait on a second writer). Opt-in callers wait for the
   // beat to decay instead of crash-looping.
   const until = Date.now() + (opts?.staleWaitMs ?? 0)
+  // hard bound on waiting for another process's .breaking sidecar (e.g. SIGKILL mid-break)
+  const breakUntil = Math.max(until, Date.now() + 12_000)
   for (;;) {
     if (tryCreate()) break
     const p = probe()
@@ -213,6 +216,17 @@ export async function acquireLock(file: string, label: string, opts?: { staleWai
     try {
       writeFileSync(breakFile, me, { flag: 'wx' })
     } catch {
+      // expire an orphaned .breaking token left behind by a SIGKILL mid-break
+      try {
+        if (Date.now() - statSync(breakFile).mtimeMs >= 10_000) {
+          rmSync(breakFile)
+          continue
+        }
+      } catch {
+        /* disappeared — retry immediately */
+        continue
+      }
+      if (Date.now() >= breakUntil) throw inUse(p.owner ?? 'unknown')
       await nap(300) // another breaker mid-displacement — its outcome lands first
       continue
     }

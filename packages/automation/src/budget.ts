@@ -133,6 +133,10 @@ export class BudgetAuthority {
     const g = sparse(this.ledger[grantId])
     if (!g || !(actionId in g.reservations)) return false
     delete g.reservations[actionId]
+    for (const pid of g.parents ?? []) {
+      const p = sparse(this.ledger[pid])
+      if (p) delete p.reservations[`${grantId}:${actionId}`]
+    }
     this.save()
     return true
   }

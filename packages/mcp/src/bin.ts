@@ -235,7 +235,9 @@ if (automationOn) {
         await fetch(url, { method: 'POST', body: '', signal: AbortSignal.timeout(3_000) })
         return true // any HTTP answer = endpoint up
       }
-      const base = nektarEnv('NEKTAR_BROADCASTER_URL') ?? 'https://arcade.gorillapool.io'
+      const base =
+        nektarEnv('NEKTAR_BROADCASTER_URL') ??
+        (rt.network === 'testnet' ? 'https://arcade-v2-testnet-us-1.bsvblockchain.tech' : 'https://arcade.gorillapool.io')
       await fetch(`${base}/tx/${'00'.repeat(32)}`, { signal: AbortSignal.timeout(5_000) })
       return true
     } catch {
@@ -312,9 +314,10 @@ if (automationOn) {
     // change outputs a mint fans its remainder across — depth-1 ancestry for
     // the next few spends instead of a serial mint-to-mint chain
     changeFanout: nektarEnv('NEKTAR_CHANGE_FANOUT') ? Number(nektarEnv('NEKTAR_CHANGE_FANOUT')) : undefined,
-    // a settlement proof must sit this deep before a completion settles —
-    // the same finality depth the memory applies to anchor queries
-    settleDepth: rt.mem.finalityDepth,
+    // a settlement proof sits this deep before a completion settles — default 1
+    // (1 confirmed block with verified BUMP) instead of tying to finalityDepth=6
+    // (~60 min wait); override with NEKTAR_SETTLE_DEPTH for high-value boxes
+    settleDepth: nektarEnvNum('NEKTAR_SETTLE_DEPTH') ?? 1,
     // the watcher region's durable defs (confirmer cadence, records-watcher
     // event sink) + the boot kicks that start the self-arm chains
     rtDefs: rt.rtDefs,

@@ -1,12 +1,12 @@
 // setup.ts — openRuntime boot helpers: the optional p2p eyes and the
 // NektarFeeVault funding mint. Both are opt-in (NEKTAR_P2P_PEERS /
 // NEKTAR_FEE_VAULT) and both only wire side-effects — no deal-path logic.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { P2PListener } from '@nektar/chain'
+import { P2PListener, broadcastProvablyDead } from '@nektar/chain'
 import type { Funds } from '@nektar/chain'
 import type { Transaction } from '@bsv/sdk'
-import { unlockP2PKH, type SignerLike } from '@nektar/core'
+import { unlockP2PKH, writeFileAtomic, type SignerLike } from '@nektar/core'
 
 /** the sync view wireP2p and the fee vault need over the Funds owner:
  *  current owned set + a burn verb for observed spends */
@@ -83,6 +83,8 @@ export async function setupFeeVault(opts: {
   funds: Funds & UtxoView
   broadcast: (tx: Transaction) => Promise<{ status: string; description?: string }>
   currentHeight: () => Promise<number>
+  feeRateSatPerKb?: number
+  fetchTx?: (txid: string) => Promise<Transaction | undefined>
   net: string
   log: (s: string) => void
 }): Promise<() => Promise<{ tx: Transaction; vout: number; satoshis: number }>> {
@@ -109,21 +111,29 @@ export async function setupFeeVault(opts: {
     ? (JSON.parse(readFileSync(vutxoFile, 'utf8')) as { current?: { txid: string; vout: number; satoshis: number; script: string }; minted?: string[] })
     : {}
   let vaultUtxo = vstate.current
+  let vaultParentTx: Transaction | undefined
   const vaultMinted = new Set(vstate.minted ?? [])
-  const saveVault = () => writeFileSync(vutxoFile, JSON.stringify({ current: vaultUtxo, minted: [...vaultMinted] }))
+  const saveVault = () => writeFileAtomic(vutxoFile, JSON.stringify({ current: vaultUtxo, minted: [...vaultMinted] }))
+  const rate = opts.feeRateSatPerKb ?? (opts.net === 'main' ? 100 : 1)
+  const deployFee = Math.max(100, Math.ceil(3 * rate))
+  const spendFee = BigInt(Math.min(vcfg.maxFee, Math.max(2, Math.ceil(4 * rate))))
   const deployVault = async () => {
     const sats = vcfg.vaultSats ?? 50_000
-    const u = await opts.funds.take('upkeep', sats + 601).catch(() => {
-      throw new Error(`vault deploy needs a reserve utxo ≥ ${sats + 600} sats — fund ${opts.fundAddress}`)
+    const u = await opts.funds.take('upkeep', sats + deployFee + 546).catch(() => {
+      throw new Error(`vault deploy needs a reserve utxo ≥ ${sats + deployFee + 546} sats — fund ${opts.fundAddress}`)
     })
     const tx = new Tx()
     tx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: unlockP2PKH(opts.fundKey) })
     tx.addOutput({ satoshis: sats, lockingScript: LScript.fromHex(vault.lockingScript(0n, 0n)) })
-    tx.addOutput({ satoshis: u.satoshis - sats - 100, lockingScript: LScript.fromHex(buildP2PKHScript(opts.pkhHex)) })
+    tx.addOutput({ satoshis: u.satoshis - sats - deployFee, lockingScript: LScript.fromHex(buildP2PKHScript(opts.pkhHex)) })
     await tx.sign()
     const r = await opts.broadcast(tx)
-    if (r.status !== 'success') throw new Error(`vault deploy refused: ${r.description}`)
+    if (r.status !== 'success') {
+      if (broadcastProvablyDead(r.description ?? '')) await opts.funds.died(tx)
+      throw new Error(`vault deploy refused: ${r.description}`)
+    }
     await opts.funds.spent(tx)
+    vaultParentTx = tx
     vaultUtxo = { txid: tx.id('hex'), vout: 0, satoshis: sats, script: vault.lockingScript(0n, 0n) }
     saveVault()
     opts.log(
@@ -133,11 +143,16 @@ export async function setupFeeVault(opts: {
   const mint = async () => {
     if (!vaultUtxo) await deployVault()
     const pay = BigInt(vcfg.fundSats ?? vcfg.perTxCap)
-    const { tx } = await vault.buildSpend(vaultUtxo!, opts.fundKey, pay, await opts.currentHeight(), 2n)
+    const parent = vaultParentTx?.id('hex') === vaultUtxo!.txid ? vaultParentTx : await opts.fetchTx?.(vaultUtxo!.txid)
+    const { tx } = await vault.buildSpend(vaultUtxo!, opts.fundKey, pay, await opts.currentHeight(), spendFee, parent)
     const r = await opts.broadcast(tx)
-    if (r.status !== 'success') throw new Error(`vault spend refused: ${r.description}`)
+    if (r.status !== 'success') {
+      if (broadcastProvablyDead(r.description ?? '')) await opts.funds.died(tx)
+      throw new Error(`vault spend refused: ${r.description}`)
+    }
     await opts.funds.spent(tx)
     await opts.funds.adopt(tx, 2) // the 1-sat covenant change — reclaimable
+    vaultParentTx = tx
     const cont = tx.outputs[0]
     vaultUtxo = { txid: tx.id('hex'), vout: 0, satoshis: cont.satoshis!, script: cont.lockingScript.toHex() }
     vaultMinted.add(`${tx.id('hex')}:1`)

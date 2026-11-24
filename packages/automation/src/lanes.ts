@@ -124,12 +124,20 @@ export function openLanes(rt: Rt): void {
     if (!r.ok) throwHttp(`notify → ${watch}`, r)
   }
   const carrierLeg = async (push: string, beefHex: string): Promise<void> => {
-    const r = await fetch(push, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ beef: beefHex }),
-      signal: io(WAITS.pushIo.ms)
-    })
+    let r: Response
+    try {
+      r = await fetch(push, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ beef: beefHex }),
+        signal: io(WAITS.pushIo.ms),
+        redirect: 'error'
+      })
+    } catch (e) {
+      const m = `${(e as Error).message} ${(e as { cause?: { message?: string } }).cause?.message ?? ''}`
+      if (/redirect/i.test(m)) throw new PermanentError(`push → ${push}: redirect refused`, 400)
+      throw e
+    }
     if (!r.ok) throwHttp(`push → ${push}`, r)
   }
   rt.notifyLegs = { peer: peerLeg, carrier: carrierLeg }

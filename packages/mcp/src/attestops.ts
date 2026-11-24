@@ -5,7 +5,7 @@
 // by reference with TxOps/restore.
 import { Transaction, LockingScript, UnlockingScript, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import { toHex, signerAddress, unlockP2PKH, type DigestSigner } from '@nektar/core'
-import type { Broadcaster, Funds } from '@nektar/chain'
+import { broadcastProvablyDead, type Broadcaster, type Funds } from '@nektar/chain'
 
 export interface AttestOpsDeps {
   /** txid → attestation/model-verifier tx this instance broadcast (shared map) */
@@ -15,6 +15,7 @@ export interface AttestOpsDeps {
   fundSigner: () => DigestSigner
   chain: Broadcaster
   feeRateSatPerKb: () => number
+  network?: string
   metricsInc: (name: string, labels?: Record<string, string>, n?: number, help?: string) => void
   proveMembership: (shard: string, seq: number, queryIdHex: string) => Promise<{ bytes: Uint8Array; ms: number }>
 }
@@ -31,7 +32,7 @@ export class AttestOps {
     const { tx } = await buildAttestationTx(f, this.deps.fundSigner(), commitment, this.deps.feeRateSatPerKb())
     const r = await this.deps.chain.broadcast(tx)
     if (r.status !== 'success') {
-      await this.deps.funds.died(tx)
+      if (broadcastProvablyDead(r.description ?? '')) await this.deps.funds.died(tx)
       throw new Error(`attestation broadcast failed: ${r.description}`)
     }
     this.deps.attestationTxs.set(tx.id('hex'), tx)
@@ -67,7 +68,7 @@ export class AttestOps {
    *  attestation a receipt cites: it exists on-chain or it doesn't. */
   async attestInferenceOnchain(lockHex: string, unlockHex: string): Promise<{ deployTxid: string; spendTxid: string }> {
     const LOCK_SATS = 20_000
-    const addr = await signerAddress(this.deps.fundSigner(), [0x6f])
+    const addr = await signerAddress(this.deps.fundSigner(), this.deps.network === 'main' ? [0x00] : [0x6f])
     const f = await this.deps.funds.take('upkeep', LOCK_SATS + 5_000)
     const tx1 = new Transaction()
     tx1.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.deps.fundSigner()) })
@@ -77,7 +78,7 @@ export class AttestOps {
     await tx1.sign()
     const b1 = await this.deps.chain.broadcast(tx1)
     if (b1.status !== 'success') {
-      await this.deps.funds.died(tx1)
+      if (broadcastProvablyDead(b1.description ?? '')) await this.deps.funds.died(tx1)
       throw new Error(`verifier deploy failed: ${b1.description}`)
     }
     await this.deps.funds.spent(tx1)
@@ -87,7 +88,7 @@ export class AttestOps {
     tx2.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: LOCK_SATS - 5_000 })
     const b2 = await this.deps.chain.broadcast(tx2)
     if (b2.status !== 'success') {
-      await this.deps.funds.died(tx2)
+      if (broadcastProvablyDead(b2.description ?? '')) await this.deps.funds.died(tx2)
       throw new Error(`proof spend failed: ${b2.description}`)
     }
     await this.deps.funds.spent(tx2)

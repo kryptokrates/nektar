@@ -6,10 +6,10 @@ import { writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 /** write `data` to `file` via a `<file>.tmp` sibling + rename. */
-export function writeFileAtomic(file: string, data: Uint8Array | string): void {
+export function writeFileAtomic(file: string, data: Uint8Array | string, opts?: { mode?: number }): void {
   mkdirSync(dirname(file), { recursive: true })
   const tmp = `${file}.tmp`
-  writeFileSync(tmp, data)
+  writeFileSync(tmp, data, opts?.mode !== undefined ? { mode: opts.mode } : undefined)
   // Windows: renameSync hits transient EPERM/EEXIST/EBUSY/EACCES while an AV
   // scan or indexer briefly holds the destination — retry over that window
   // instead of aborting the process on a ~50ms lock.

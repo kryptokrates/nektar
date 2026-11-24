@@ -277,7 +277,9 @@ export const STATE_LIMITS: Record<string, { maxAgeMs: number; exit: StuckExit }>
   // instead of dying 'funding_failed'. Two days is the stuck bound; the
   // deferral itself lapses at dueAt
   funding_deferred: { maxAgeMs: 2 * 86_400_000, exit: 'escalate:human' },
-  awaiting_disclosure: { maxAgeMs: 6 * 3600_000, exit: 'refund' },
+  // must exceed refundBlocks (default 144 blocks ≈ 24h) so a legitimate slow
+  // block run doesn't fire the stuck-deal timer before the refund locktime opens
+  awaiting_disclosure: { maxAgeMs: 28 * 3600_000, exit: 'refund' },
   // a refused escrow that landed anyway is a live covenant on our sats —
   // park here until refundAfter, then reclaim. The exit is only the stuck
   // bound: dueHeight is the real driver and can sit months out

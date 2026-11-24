@@ -14,16 +14,16 @@ import {
 import { anchoredTree, DERIVATION, FUNDING_TAG, ORIGINATOR } from './tree.js'
 import { isHeaderUnavailable } from '@nektar/chain'
 
-// a carrier's funding parent must be proven — or one unconfirmed level deep
-// on anchored ancestry, the same §10.3 rule finger applies to tokens: every
-// one of the tree's own inputs carries a verifiable merkle path, so the BEEF
-// steps back to a mined anchor and the host's exposure is a single mempool
-// hop of a 1-sat slot
-const provenParent = async (p: Transaction, tracker: ChainTracker): Promise<boolean> => {
+// a carrier's funding parent must be proven — or bounded first-party anchored
+// ancestry (up to 3 unconfirmed hops) terminating at a verified BUMP on every
+// branch. Rejects 0-input forged parents (spv/thin-ancestry).
+const provenParent = async (p: Transaction, tracker: ChainTracker, depth = 0): Promise<boolean> => {
   if (p.merklePath !== undefined) return await p.merklePath.verify(p.id('hex'), tracker)
+  if (depth >= 3 || p.inputs.length === 0) return false
   for (const i of p.inputs) {
     const gp = i.sourceTransaction
-    if (!gp?.merklePath || !(await gp.merklePath.verify(gp.id('hex'), tracker))) return false
+    if (gp === undefined) return false
+    if (!(await provenParent(gp, tracker, depth + 1))) return false
   }
   return true
 }

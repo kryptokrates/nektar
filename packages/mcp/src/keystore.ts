@@ -3,8 +3,8 @@
 // On `main` every key file MUST be encrypted — a plaintext keys.json or a
 // missing passphrase refuses startup. Regtest only encrypts when a
 // passphrase is set.
-import { nektarEnv } from '@nektar/core'
-import { readFileSync, writeFileSync, chmodSync } from 'node:fs'
+import { nektarEnv, writeFileAtomic } from '@nektar/core'
+import { readFileSync, chmodSync } from 'node:fs'
 import { scryptSync, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
 import { HD, Mnemonic, PrivateKey } from '@bsv/sdk'
 
@@ -73,7 +73,7 @@ export function writeKeyFile(file: string, plain: string, pass: string | undefin
   // never encrypt under a sentinel/empty passphrase — the file would read as
   // encrypted while its key is a public constant
   const p = pass === undefined || pass === '' || pass === '<UNKNOWN>' ? undefined : pass
-  writeFileSync(file, p ? enc(p, plain) : plain, { mode: 0o600 })
+  writeFileAtomic(file, p ? enc(p, plain) : plain, { mode: 0o600 })
   try {
     chmodSync(file, 0o600)
   } catch {

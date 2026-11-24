@@ -242,7 +242,7 @@ export abstract class BuyerOps extends SellerOps {
     let text: string | undefined
     try {
       const bytes = fromHex(claim.valueHex)
-      text = Buffer.from(chosen.mode === 'fragment' ? parseFragment(bytes).d : bytes).toString('utf8')
+      text = Buffer.from(offerMode === 'fragment' ? parseFragment(bytes).d : bytes).toString('utf8')
     } catch {
       /* opaque payload */
     }
@@ -291,8 +291,8 @@ export abstract class BuyerOps extends SellerOps {
    *  (a mint tx) is exactly what blows the seal. Over budget the tx field is
    *  omitted and the seller falls back to fetchTx. */
   private escrowWire(txid: string, rawHex?: string): { tx: string } | {} {
-    const w = this.d.txWire?.(txid, 3000) ?? rawHex
-    return w !== undefined && w.length <= 6000 ? { tx: w } : {}
+    const w = this.d.txWire?.(txid, 12_000) ?? rawHex
+    return w !== undefined && w.length <= 24_000 ? { tx: w } : {}
   }
 
   private noteFor(
@@ -309,8 +309,8 @@ export abstract class BuyerOps extends SellerOps {
     // rebuilt operation can check and re-broadcast it without asking any
     // indexer; the wire stays small enough to fit the box beside the rest
     // (a pathological multi-input escrow simply falls back to fetchTx)
-    const cand = this.d.txWire?.(utxo.txid, 2000) ?? rawHex
-    const tx = cand !== undefined && cand.length <= 6000 ? cand : undefined
+    const cand = this.d.txWire?.(utxo.txid, 8_000) ?? rawHex
+    const tx = cand !== undefined && cand.length <= 16_000 ? cand : undefined
     return {
       type: 'note',
       v: 1,
@@ -1370,7 +1370,8 @@ export abstract class BuyerOps extends SellerOps {
           else if (op.data.provenHeight !== tx.merklePath.blockHeight)
             await this.d.store.transition(op.operationId, op.revision, 'completion_submitted', {
               cause: 'disclosure_proof_awaiting_depth',
-              data: { provenHeight: tx.merklePath.blockHeight }
+              data: { provenHeight: tx.merklePath.blockHeight },
+              dueHeight: tx.merklePath.blockHeight + (this.d.settleDepth ?? 1) - 1
             })
         } else if (
           this.d.txFacts !== undefined &&

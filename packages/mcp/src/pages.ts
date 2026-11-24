@@ -66,18 +66,43 @@ export { safeHost }
 const jsStr = (v: string): string => JSON.stringify(v).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')
 
 export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined, host: string | undefined): Promise<Record<string, unknown>> {
-  const d = await mem.doctor()
-  if (ops?.wallet) {
-    const w = (await ops.wallet()) as Record<string, unknown>
+  const au = mem.automation
+  const [d, walletInfo, rrecsRaw, cat, slots, pending, allOps, waiting, nextAt, pubHex, paused, policyData] = await Promise.all([
+    mem.doctor(),
+    ops?.wallet ? ops.wallet() : Promise.resolve(undefined),
+    mem.records('__receipts__').catch(() => [] as Array<{ seq: number; fragment: { d: Uint8Array } }>),
+    mem.shardCatalog().catch(() => [] as Array<{ shard: string; domains: string[]; offers?: Array<{ kind: string; priceSats: number }> }>),
+    au !== undefined ? au.marketSlots().catch(() => undefined) : Promise.resolve(undefined),
+    au ? au.store.approvals('pending') : Promise.resolve([]),
+    au ? au.store.operations() : Promise.resolve([]),
+    au !== undefined ? au.store.waitingOn().catch(() => []) : Promise.resolve([]),
+    au !== undefined ? au.store.nextOutboxAt().catch(() => undefined) : Promise.resolve(undefined),
+    mem.operatorSigner().pubKeyHex(),
+    au?.rt ? au.rt.pausedCount() : Promise.resolve(undefined),
+    (async () => {
+      if (!au) return []
+      const [rows, en] = await Promise.all([
+        au.store.policies().catch(() => [] as Awaited<ReturnType<typeof au.store.policies>>),
+        au.store.operationByKey('seller-enabled').catch(() => undefined)
+      ])
+      const live = typeof en?.data.policyHash === 'string' ? en.data.policyHash : undefined
+      return Promise.all(
+        rows.map(async (r) => ({
+          ...r,
+          active: r.policyHash === live,
+          policy: r.revokedAt === undefined ? ((await au.store.activePolicy(r.policyHash).catch(() => undefined)) ?? null) : null
+        }))
+      )
+    })()
+  ])
+  if (walletInfo !== undefined) {
+    const w = walletInfo as Record<string, unknown>
     d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
   }
   const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${safeHost(host)}`
   // records + fragment.d — the writer-side plaintext: recall() withholds
   // text until the anchor verifies, but the operator's own ledger is readable
-  const rrecs = (await mem.records('__receipts__').catch(() => [] as Array<{ seq: number; fragment: { d: Uint8Array } }>)) as Array<{
-    seq: number
-    fragment: { d: Uint8Array }
-  }>
+  const rrecs = rrecsRaw as Array<{ seq: number; fragment: { d: Uint8Array } }>
   const decoded = rrecs.map((r) => {
     let sats: number | null = null,
       tool = '',
@@ -112,28 +137,22 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
   // the 24h delta — only receipts whose own timestamp lands inside the window;
   // untimestamped receipts don't count rather than guess
   const earned24h = decoded.reduce((a, r) => a + (r.at !== null && r.at >= Date.now() - 864e5 ? (r.sats ?? 0) : 0), 0)
-  const cat = await mem.shardCatalog().catch(() => [] as Array<{ shard: string; domains: string[]; offers?: Array<{ kind: string; priceSats: number }> }>)
   const f = d.funding
   const bal = Number(f.balanceSats ?? f.satoshis ?? 0)
-  const au = mem.automation
   // network position — which market hosts this instance trades through and
   // whether the last probe could reach them (up / down / configured)
   const hosts = marketHosts()
   const saved = new Set(savedHosts())
   const blocked = new Set(blockedHosts())
   const downSet = new Set(au?.health().report?.downHosts ?? [])
-  const slots = au !== undefined ? await au.marketSlots().catch(() => undefined) : undefined
   const boot = au?.bootstrap?.()
-  const pending = au ? await au.store.approvals('pending') : []
-  const rawOps = au ? (await au.store.operations()).filter((o) => o.kind !== 'enable') : []
+  const rawOps = allOps.filter((o) => o.kind !== 'enable')
   const autoOps = rawOps.slice(-8).reverse()
   // the execution tail — Temporal's "pending first" view: non-acked outbox
   // rows (what it's waiting on, attempt count, next retry), the armed drain
   // time, and the newest journal events across the most recent ops
-  const waiting = au !== undefined ? await au.store.waitingOn().catch(() => []) : []
-  const nextAt = au !== undefined ? await au.store.nextOutboxAt().catch(() => undefined) : undefined
-  const journal = (
-    await Promise.all(
+  const [journal, market] = await Promise.all([
+    Promise.all(
       rawOps.slice(-3).map(async (o) =>
         (au !== undefined ? await au.store.events(o.operationId).catch(() => []) : []).map((e) => ({
           op: o.operationId.slice(0, 8),
@@ -142,15 +161,25 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
           cause: e.cause
         }))
       )
-    )
-  )
-    .flat()
-    .sort((a, b) => b.at - a.at)
-    .slice(0, 8)
+    ).then((rows) =>
+      rows
+        .flat()
+        .sort((a, b) => b.at - a.at)
+        .slice(0, 8)
+    ),
+    Promise.all(
+      cat.map(async (m) => ({
+        shard: m.shard,
+        domains: m.domains,
+        records: await mem.shardCount(m.shard).catch(() => 0),
+        works: decoded.filter((r) => r.shards.includes(m.shard)).length,
+        earned: decoded.filter((r) => r.shards.includes(m.shard)).reduce((a, r) => a + (r.sats ?? 0), 0),
+        offers: m.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? ''
+      }))
+    ).then((rows) => rows.sort((a, b) => b.earned - a.earned || b.records - a.records))
+  ])
   const coverage = d.records > 0 ? Math.round((d.anchoredRecords / d.records) * 100) : 100
   const earned = amounts.reduce((a, b) => a + b, 0)
-  const worksFor = (shard: string) => decoded.filter((r) => r.shards.includes(shard)).length
-  const earnedFor = (shard: string) => decoded.filter((r) => r.shards.includes(shard)).reduce((a, r) => a + (r.sats ?? 0), 0)
   // cold-start loop — the smallest self-sustaining earning network for one
   // operator; every step is derived from live state, the frontier is named
   const steps = [
@@ -172,7 +201,7 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
   return {
     network: d.network,
     model: nektarEnv('NEKTAR_MODEL_ID') ?? 'operator',
-    pub: (await mem.operatorSigner().pubKeyHex()).slice(0, 24),
+    pub: pubHex.slice(0, 24),
     uptimeSec: Math.floor(process.uptime()),
     loop: {
       steps,
@@ -185,18 +214,7 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
     memory: { shards: d.shards, records: d.records, anchored: d.anchoredRecords, unproven: d.unprovenAnchors, coverage, prover: d.prover },
     // the domain track record — records per shard is the agent's provable
     // depth in each domain it sells
-    market: (
-      await Promise.all(
-        cat.map(async (m) => ({
-          shard: m.shard,
-          domains: m.domains,
-          records: (await mem.records(m.shard).catch(() => [])).length,
-          works: worksFor(m.shard),
-          earned: earnedFor(m.shard),
-          offers: m.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? ''
-        }))
-      )
-    ).sort((a, b) => b.earned - a.earned || b.records - a.records),
+    market,
     net: {
       hosts: hosts.map((h) => ({ url: h, state: au === undefined ? 'configured' : downSet.has(h) ? 'down' : 'up', saved: saved.has(h) })),
       // the network's baked-in seeds not already joined — the zero-config
@@ -224,7 +242,7 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
             // paused heads wedge their object's FIFO invisibly — the number
             // an operator watches for 'the plane is frozen' (resume/kill via
             // `restate invocations resume --yes <id>` on the admin port)
-            paused: (await au.rt?.pausedCount()) ?? null,
+            paused: paused ?? null,
             pending: waiting.slice(0, 6).map((w) => ({
               actionId: w.actionId,
               operationId: w.operationId,
@@ -245,19 +263,7 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
     // agent trades under (seller-enabled marks the live seller row), and
     // where every market host came from (env / joined / left)
     settings: {
-      policies: await (async () => {
-        if (!au) return []
-        const rows = await au.store.policies().catch(() => [] as Awaited<ReturnType<typeof au.store.policies>>)
-        const en = await au.store.operationByKey('seller-enabled').catch(() => undefined)
-        const live = typeof en?.data.policyHash === 'string' ? en.data.policyHash : undefined
-        return Promise.all(
-          rows.map(async (r) => ({
-            ...r,
-            active: r.policyHash === live,
-            policy: r.revokedAt === undefined ? ((await au.store.activePolicy(r.policyHash).catch(() => undefined)) ?? null) : null
-          }))
-        )
-      })(),
+      policies: policyData,
       hosts: { env: marketHostsFromEnv(), added: [...saved], blocked: [...blocked] }
     }
   }

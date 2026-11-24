@@ -416,14 +416,24 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
   const onKilled = (target: string): void => rekickKilledTarget(kickExec, target, log)
   await healPausedInvocations(admin, uri, log, 3_000, 32, ourNames, onKilled)
   let healing = false
-  const healFloor = setInterval(() => {
-    if (healing) return
-    healing = true
-    void healPausedInvocations(admin, uri, log, 3_000, 32, ourNames, onKilled).finally(() => {
-      healing = false
-    })
-  }, WAITS.healPaused.ms)
-  healFloor.unref()
+  let closed = false
+  let healTimer: ReturnType<typeof setTimeout> | undefined
+  const scheduleHeal = (): void => {
+    if (closed) return
+    healTimer = setTimeout(() => {
+      if (closed || healing) {
+        scheduleHeal()
+        return
+      }
+      healing = true
+      void healPausedInvocations(admin, uri, log, 3_000, 32, ourNames, onKilled).finally(() => {
+        healing = false
+        scheduleHeal()
+      })
+    }, spread(WAITS.healPaused.ms))
+    healTimer.unref()
+  }
+  scheduleHeal()
   return {
     uri,
     // crash semantics, not graceful drain: destroying sessions drops
@@ -434,7 +444,8 @@ export async function openEndpoint(services: unknown[], env: EnvSource = process
     // the honest shutdown, not a risk).
     close: () =>
       new Promise((resolve) => {
-        clearInterval(healFloor)
+        closed = true
+        if (healTimer !== undefined) clearTimeout(healTimer)
         for (const s of sessions) s.destroy()
         server.close(() => resolve())
       })

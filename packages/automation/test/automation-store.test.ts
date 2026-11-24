@@ -981,3 +981,64 @@ void test('wrapBroadcast: a foreign tx over a live lease still airs, with one ow
   assert.equal((await store.leaseState('ee'.repeat(32), 0))?.actionId, 'op:1', 'the live lease keeps its owner')
   assert.equal(lines.filter((l) => l.includes('owner record')).length, 1, 'exactly one owner-record refusal line')
 })
+
+void test('wrapBroadcast: local SpendGuard refusal marks owner row rejected(escaped:false) and watcher skips it', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const ex = new Dispatcher()
+  t.after(() => ex.close())
+  wireTx(ex, { store, fx: inertTxEffects, log: () => {} })
+  const x = new Transaction()
+  x.addInput({ sourceTXID: 'ff'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex('51') })
+  x.addOutput({ satoshis: 546, lockingScript: new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])) })
+  const wrapped = wrapBroadcast(store, () => Promise.resolve({ status: 'error', description: 'SpendGuard refused: fee 999454 sats > maxFeePerTx 1000' }), {
+    fx: inertTxEffects,
+    exec: ex
+  })
+  const r = await wrapped(x)
+  assert.equal(r.status, 'error')
+  const row = await store.walletTx({ actionId: `owner:${x.id('hex')}` })
+  assert.equal(row?.state, 'rejected', 'local SpendGuard refusal must land in rejected, not submission_unknown')
+  assert.equal((row?.lastObservation as { escaped?: boolean } | undefined)?.escaped, false)
+  let observed = 0
+  const { TransactionWatcher } = await import('../src/ledger.js')
+  const watcher = new TransactionWatcher(
+    store,
+    () => {
+      observed++
+      return Promise.resolve(undefined)
+    },
+    { effects: inertTxEffects, exec: ex }
+  )
+  await watcher.tick()
+  assert.equal(observed, 0, 'never-escaped owner row must not be probed by watcher/tick')
+})
+
+void test('preflight spendguard probe exercises SpendGuard without writing owner rows', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const { runPreflight } = await import('../src/preflight.js')
+  let probed = 0
+  let memBroadcasts = 0
+  const rep = await runPreflight({
+    mem: {
+      broadcastTx: () => {
+        memBroadcasts++
+        return Promise.resolve({ status: 'error', description: 'SpendGuard refused: via mem' })
+      }
+    } as never,
+    store,
+    cfg: { network: 'regtest', marketHosts: [] },
+    probes: {
+      spendGuard: () => {
+        probed++
+        return Promise.resolve({ status: 'error', description: 'SpendGuard refused: fee 999454 sats > maxFeePerTx 1000' })
+      }
+    },
+    only: ['spendguard']
+  })
+  assert.equal(rep.pass, true)
+  assert.equal(probed, 1, 'direct spendGuard probe ran')
+  assert.equal(memBroadcasts, 0, 'wrapBroadcast/mem.broadcastTx was bypassed')
+  assert.equal((await store.walletTxs(['prepared', 'submitted', 'submission_unknown', 'rejected'])).length, 0, 'no synthetic owner row written')
+})

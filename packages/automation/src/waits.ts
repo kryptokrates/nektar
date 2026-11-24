@@ -87,6 +87,10 @@ export const WAITS = {
   /** upkeep pass cadence — the upkeep object's journaled self-arm under
    *  restate, the local executor's delay timer in dev/test mode */
   upkeepCadence: { ms: 10_000, class: 'ceiling', durable: false, wake: 'cycle() push path + self-arm' },
+  /** upkeep tree-mint starvation backoff base (2^n × this, spread()-jittered) */
+  upkeepStarveBase: { ms: 30_000, class: 'backoff', durable: false, wake: 'funds.adopted / txProof' },
+  /** upkeep tree-mint starvation backoff cap */
+  upkeepStarveCap: { ms: 300_000, class: 'backoff', durable: false, wake: 'funds.adopted / txProof' },
   /** watchdog probe cadence — the cheap tier only; the full preflight
    *  stays operator-driven (automationDoctor) */
   watchdogCadence: { ms: 60_000, class: 'ceiling', durable: false, wake: 'self-arm / local executor delay' },

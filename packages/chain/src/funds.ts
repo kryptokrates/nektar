@@ -120,6 +120,10 @@ export abstract class FundsBase implements Funds {
   protected readonly reserved = new Set<string>()
   /** serialized take() — the async list/lease/proof gap must not interleave */
   private queue: Promise<unknown> = Promise.resolve()
+  /** starve-sweep throttle — prevents repeated liveSet() index scans every
+   *  upkeep tick on an empty/starved book; reset on any coin-book mutation */
+  private lastStarveSweepAt = 0
+  public starveSweepCooldownMs = 60_000
   protected abstract readonly store: FundsStore
 
   /** late-bound behavior hooks — interface-level fields so callers that
@@ -228,6 +232,7 @@ export abstract class FundsBase implements Funds {
   async burn(txid: string, vout: number): Promise<void> {
     await this.store.drop(txid, vout)
     this.reserved.delete(op(txid, vout))
+    this.lastStarveSweepAt = 0
   }
 
   /** a resolved candidate's outpoint id — the hint side of selection
@@ -304,12 +309,14 @@ export abstract class FundsBase implements Funds {
       if (
         !candidates.some((u) => u.satoshis >= sats) &&
         (this.liveSet !== undefined || this.liveCheck !== undefined) &&
-        this.store.tombstonedList !== undefined
+        this.store.tombstonedList !== undefined &&
+        Date.now() - this.lastStarveSweepAt >= this.starveSweepCooldownMs
       ) {
+        this.lastStarveSweepAt = Date.now()
         const tombs = (await this.store.tombstonedList()).sort((a, b) => (b.satoshis ?? 0) - (a.satoshis ?? 0))
-        // the listing oracle answers for the whole book in one call; the
-        // per-outpoint probe is the capped fallback where no listing exists
-        const set = await this.liveSet?.().catch(() => undefined)
+        // the listing oracle answers for the whole book in one call; skip the
+        // network roundtrip completely when there are no tombstones to revive
+        const set = tombs.length > 0 ? await this.liveSet?.().catch(() => undefined) : undefined
         // non-deal takes owe the floor too — keep reviving until the take's
         // own need plus the reserved deal-floor is covered, not just `sats`
         const want = sats + (purpose === 'deal' ? 0 : (this.dealFloor ?? 25_000))
@@ -426,6 +433,7 @@ export abstract class FundsBase implements Funds {
       if ((await this.store.has?.(tx.id('hex'), vout)) === true) continue
       await this.store.add(tx, vout)
     }
+    this.lastStarveSweepAt = 0
   }
 
   /** a signed tx left our hands for someone else to air — the inputs are
@@ -469,6 +477,7 @@ export abstract class FundsBase implements Funds {
     for (const [vout, o] of tx.outputs.entries()) {
       if (o.lockingScript.toHex() === lock) await this.store.drop(txid, vout)
     }
+    this.lastStarveSweepAt = 0
   }
 
   /** verified-live re-ownership of a tombstoned out — reconcile's verb.
@@ -479,6 +488,7 @@ export abstract class FundsBase implements Funds {
     if (this.store.revive !== undefined) await this.store.revive(tx, vout)
     else await this.store.add(tx, vout)
     this.reserved.delete(op(txid, vout))
+    this.lastStarveSweepAt = 0
   }
 
   async adopt(tx: Transaction, vout: number): Promise<boolean> {
@@ -487,6 +497,7 @@ export abstract class FundsBase implements Funds {
     if ((await this.spendCheck?.(txid, vout)) === true) return false
     if ((await this.store.has?.(txid, vout)) === true) return false
     await this.store.add(tx, vout)
+    this.lastStarveSweepAt = 0
     this.onAdopted?.()
     return true
   }

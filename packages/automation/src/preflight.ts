@@ -64,6 +64,9 @@ export interface PreflightDeps {
     spend?: () => Promise<
       { spentTodaySats: number; maxPerDay: number; maxFeePerTx: number; costs?: Array<{ txid: string; spend: number; at: string }> } | undefined
     >
+    /** direct SpendGuard dry-run probe — bypasses wrapBroadcast so preflight
+     *  never writes a synthetic owner:* row into records.sqlite */
+    spendGuard?: (tx: Transaction) => Promise<import('@nektar/chain').BroadcastResult>
   }
   /** which checks to run — the watchdog re-runs only the cheap probe tier */
   only?: string[]
@@ -389,7 +392,8 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
     const tx = new Transaction()
     tx.addInput({ sourceTXID: parent.id('hex'), sourceOutputIndex: 0, sourceTransaction: parent, unlockingScript: new UnlockingScript([{ op: 0 }]) })
     tx.addOutput({ lockingScript: new P2PKH().lock(tmp.toPublicKey().toHash()), satoshis: 546 })
-    const r = await bounded(mem.broadcastTx(tx), ceil.chainMs * 2, 'spend dry-run')
+    const dryRun = deps.probes?.spendGuard ?? ((t: Transaction) => mem.broadcastTx(t))
+    const r = await bounded(dryRun(tx), ceil.chainMs * 2, 'spend dry-run')
     const desc = r.description ?? ''
     if (!/SpendGuard refused/i.test(desc))
       return {

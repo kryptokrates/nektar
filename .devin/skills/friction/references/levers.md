@@ -59,14 +59,31 @@ Load-bearing friction stays — but it stops being silent.
 The surface looks like what they already run — the learning curve
 deletes itself.
 
-| Lever                     | Mechanic                                                          | Repo examples                                                |
-| ------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------ |
-| **MCP stanza**            | One config block per client, same shape as every other MCP server | `setup:claude`, `setup:codex`                                |
-| **HTTP + OpenAPI**        | Non-MCP clients call routes they already understand               | `GET /v1/tools`, `POST /v1/tools/{name}`, `/v1/openapi.json` |
-| **compose shape**         | Standard docker-compose ops flow                                  | `deploy/hub/compose.yaml` + `.env`                           |
-| **bearer auth**           | Token in env, header in request — nothing new                     | `NEKTAR_HTTP_TOKEN`                                          |
-| **Ecosystem names**       | `tools`, `health`, `token`, `compose.yaml`, `helm`                | chart at `deploy/hub/helm`                                   |
-| **WIF + address formats** | The keys look like every other BSV key                            | testnet `m…`/`n…`, standard WIF                              |
+| Lever                      | Mechanic                                                            | Repo examples                                                               |
+| -------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| **MCP stanza + Registry**  | Standard config block + official `server.json` discovery            | `server.json`, `nektar dock`, `setup:claude`, `setup:codex`                 |
+| **Native memory slot**     | Plug into the harness's own memory provider / plugin hook interface | `integrations/hermes` (`MemoryProvider`), `integrations/openclaw` (slot)    |
+| **Native plugin bundle**   | One manifest bundles MCP + hooks + `agentskills.io` `SKILL.md`      | `.claude-plugin/plugin.json` + `marketplace.json` + `skills/nektar-memory/` |
+| **One brain, many mouths** | Single local loopback daemon + auto-attach stdio↔HTTP bridge        | `nektar` companion HTTP + `mcp-bridge.ts` (zero `instance.lock` clashes)    |
+| **HTTP + OpenAPI**         | Non-MCP clients call routes they already understand                 | `GET /v1/tools`, `POST /v1/tools/{name}`, `/v1/openapi.json`                |
+| **compose shape**          | Standard docker-compose ops flow                                    | `deploy/hub/compose.yaml` + `.env`                                          |
+| **bearer auth**            | Token in env, header in request — nothing new                       | `NEKTAR_HTTP_TOKEN`                                                         |
+| **Ecosystem names**        | `tools`, `health`, `token`, `compose.yaml`, `helm`                  | chart at `deploy/hub/helm`                                                  |
+| **WIF + address formats**  | The keys look like every other BSV key                              | testnet `m…`/`n…`, standard WIF                                             |
+
+## Comparative Ecosystem Benchmark (Zero-Config Docking)
+
+What leading AI agent harnesses and memory layers do to erase friction,
+and the exact Nektar lever (preserving Nektar's verification & custody
+boundaries):
+
+| Peer / Harness | Their Zero-Config Lever | Nektar Equivalent | Ethical / Honesty Boundary Kept |
+| --- | --- | --- | --- |
+| **Hermes Agent** | `MemoryProvider` ABC (`prefetch`, `on_memory_write`, `sync_turn`, `config_schema.py`), `hermes plugins install`, `hermes memory setup/status`, `spawn_context_thread`, secret scrubbing | `integrations/hermes/` (`hermes-memory-nektar` with `plugin.yaml` + `entry_points`), auto-discovers loopback Nektar, mirrors `MEMORY.md`/`USER.md`, exposes `groundedAnswer` + market tools | Non-blocking bounded prefetch (800ms); raw turn capture opt-in; Hermes secret-scrubbing honored; truth caveat preserved |
+| **OpenClaw** | Exclusive `plugins.slots.memory`, `openclaw.plugin.json`, typed `api.on("before_prompt_build" \| "agent_end")`, `openclaw doctor`, alive-check before trust | `integrations/openclaw/` (`openclaw.plugin.json`, `before_prompt_build` prefetch, `agent_end` receipt check + native tools) | Read-only fail-open prefetch; no hidden spend authority |
+| **Claude Code / Codex** | `.claude-plugin/plugin.json` + `marketplace.json` bundling `.mcp.json` + hooks + `SKILL.md`; portable commands | `.claude-plugin/` + `skills/nektar-memory/SKILL.md` + `nektar hook session-start\|prefetch\|verify-receipt` (zero checkout paths) | Stop hook blocks once on failed/drifted receipt without infinite loops |
+| **Supermemory Local / Ollama** | Single local daemon on a fixed port; zero-env boot; every client on the machine shares one brain | Zero-env `testnet` default + companion loopback HTTP (`:18420`) + `mcp-bridge.ts` auto-attach on stdio + `nektar dock auto` | Single-writer `instance.lock` preserved inside the daemon; no unauthenticated non-loopback bind |
+| **Honcho / Hindsight / Mem0** | One-line `plugins install` / `npx connect auto`, bounded context injection, background extraction | `nektar dock auto` across 9 clients + live `recall {}` verification probe before exit | Explicit policy approval CLI-only (`nektar policy approve`) — never hidden behind auto-install |
 
 ## Bumper Levers
 

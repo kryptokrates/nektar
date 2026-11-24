@@ -118,3 +118,32 @@ test('funds: a deadParents oracle answers dead — a later deadParent write cann
   assert.equal((await dead.list()).length, 0, 'the registered mark still vets the revive')
   assert.equal(deadStore.tombstones.has(`${parent.id('hex')}:0`), true)
 })
+
+test('funds: starve sweep throttles repeated liveSet calls and resets on adopt', async () => {
+  const key = PrivateKey.fromRandom()
+  const addr = key.toAddress()
+  const deps = { pkhHex: Buffer.from(key.toPublicKey().toHash()).toString('hex') }
+  const lock = () => new P2PKH().lock(addr)
+  const store = listFundsStore()
+  const funds = new MemoryFunds(store, deps)
+  const tomb = new Transaction()
+  tomb.addOutput({ lockingScript: lock(), satoshis: 50_000 })
+  void store.add(tomb, 0)
+  void store.drop(tomb.id('hex'), 0)
+
+  let liveSetCalls = 0
+  funds.liveSet = () => {
+    liveSetCalls++
+    return Promise.resolve(new Set<string>())
+  }
+  await assert.rejects(() => funds.take('upkeep', 10_000))
+  assert.equal(liveSetCalls, 1, 'first starve triggers one liveSet scan')
+  await assert.rejects(() => funds.take('upkeep', 10_000))
+  assert.equal(liveSetCalls, 1, 'repeat starve inside cooldown skips liveSet scan')
+
+  const small = new Transaction()
+  small.addOutput({ lockingScript: lock(), satoshis: 1_000 })
+  await funds.adopt(small, 0)
+  await assert.rejects(() => funds.take('upkeep', 10_000))
+  assert.equal(liveSetCalls, 2, 'adopt() resets the starve-sweep cooldown')
+})

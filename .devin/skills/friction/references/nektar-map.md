@@ -13,6 +13,7 @@ more.")
 - [J3 · External AI client → first tool call](#j3--external-ai-client--first-tool-call)
 - [J4 · Agent → settled deal](#j4--agent--settled-deal)
 - [J5 · Broken thing → named cause](#j5--broken-thing--named-cause)
+- [J6 · Ambient multi-app docking (one brain, many mouths)](#j6--ambient-multi-app-docking-one-brain-many-mouths)
 - [Cross-cutting walls](#cross-cutting-walls)
 
 ## J1 · Stranger → announced operator
@@ -53,27 +54,31 @@ funded.
 | `recall {}` answers        | <1s    | one call, zero args    | —         | **KILLED** — `shard` is optional on `recall` (omitted returns `shards` + items; wrong shard hints names); `doctor` exposes `shardNames` |
 | source dev (`init`/`demo`) | <60s   | `pnpm restate:up` once | —         | **MOVED** — `pnpm restate:up` installs the SHA256-verified sidecar into `packages/mcp/restate/`; `init.mjs` surfaces stderr on failure  |
 
-**Score:** 9/10 (in-process TTFV measured at 889ms; container cold-pull
-remains network-bound and named in `README.md`).
+**Score:** 9/10 (warm/CI TTFV 889ms; zero-env `bin.ts` defaults to `testnet`
+when no regtest creds are present, companion loopback HTTP keeps `/v1/verify`
+and `/` alive in stdio mode, and container cold-pull wait is named in
+`README.md`).
 
 ## J3 · External AI client → first tool call
 
-**First value:** `recall` from Claude Code/Codex/OpenClaw/Hermes/curl.
+**First value:** `recall` from Hermes / OpenClaw / Claude Code / Codex / Cursor / Windsurf / curl.
 **Target:** <3 min. **Measured (`friction.test.ts`):** **889ms** (HTTP
-`POST /v1/tools/recall` with `{"shard":"welcome"}` and `{}`); CLI setup
-scripts (`setup-claude.mjs` + `setup-codex.mjs`) verified in **1.6s**.
-**Artifact:** MCP stdio/HTTP + `/v1` surface + `docs/ADAPTERS.md` + `tools/setup-*.mjs`.
+`POST /v1/tools/recall` with `{"shard":"welcome"}` and `{}`); `nektar dock` +
+`setup-claude`/`setup-codex` verified in automated tests.
+**Artifact:** MCP stdio/HTTP + stdio↔HTTP bridge + `nektar dock` + `/v1` + `server.json` + `docs/ADAPTERS.md`.
 
-| Client                    | Path                                      | Friction                                                                                 |
-| ------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Claude Code               | `setup:claude` merges `.mcp.json` + hooks | **KILLED** — now registers MCP server + hooks + `CLAUDE.md`, supports `--port`/`--token` |
-| Codex                     | `setup:codex` merges config               | **KILLED** — supports `--port`/`--url`/`--token` and reads `.env` defaults               |
-| OpenClaw / any MCP-native | MCP stanza paste                          | keep — 10-tool `agent` profile consistent across README, JOIN-AGENT, INTEGRATION         |
-| Hermes / function-calling | `/v1/tools` + `/v1/openapi.json`          | keep                                                                                     |
-| raw HTTP                  | `POST /v1/tools/recall`                   | **KILLED** — `ADAPTERS.md` contract & curl fixed (`{"shard":"welcome"}` / `{}`)          |
+| Client | Path | Maturity | Friction |
+| --- | --- | --- | --- |
+| **Hermes Agent** | Native `MemoryProvider` (`integrations/hermes`) + `mcp_servers` + `SKILL.md` | **L2/L3** | **MOVED** — `nektar dock hermes` or `hermes plugins install` + `hermes memory setup`; auto-prefetch & `MEMORY.md` mirror |
+| **OpenClaw** | Native `plugins.slots.memory` (`integrations/openclaw`) + hooks | **L2/L3** | **MOVED** — `before_prompt_build` prefetch + `agent_end` receipt check + native tools |
+| **Claude Code** | `.claude-plugin/` bundle + `nektar dock claude` (portable `nektar hook` + `SKILL.md`) | **L2/L3** | **KILLED** — zero hardcoded checkout paths; `SessionStart` + `UserPromptSubmit` prefetch + `Stop` receipt block |
+| **Codex CLI** | `nektar dock codex` / `setup:codex` + `SKILL.md` | **L2** | **KILLED** — portable `nektar hook verify-receipt --codex` + `[mcp_servers.nektar]` |
+| **Cursor / Windsurf / Claude Desktop / OpenCode / Goose** | `nektar dock auto` + MCP Registry `server.json` | **L1/L2** | **KILLED** — one command detects and merges non-clobbering config |
+| **raw HTTP** | `POST /v1/tools/recall` | **L1** | **KILLED** — `ADAPTERS.md` contract & curl verified in `friction.test.ts` |
 
-**Score:** 9/10 (all docs aligned on 10 agent tools vs operator opt-in;
-`ADAPTERS.md` curl payload regression-tested in `friction.test.ts`).
+**Score:** 9/10 (L1 auto-dock + L2/L3 native Hermes/OpenClaw/Claude plugins +
+`server.json` + aligned 10-tool `agent` profile across Docker, GHCR YAML, and
+docs; cold-stranger upstream catalog listings remain external submissions).
 
 ## J4 · Agent → settled deal
 
@@ -125,6 +130,26 @@ error → legible cause in logs, instantly. **Measured (`friction.test.ts`):**
 `NEKTAR_DATA_DIR`, missing Restate check, misleading standalone `unsealed`
 hint, silent compose env drops) is fixed and regression-tested.
 
+## J6 · Ambient multi-app docking (one brain, many mouths)
+
+**First value:** two or more AI apps on one machine (e.g. Hermes + Claude Code
+or Cursor) share one live `nektar` memory with zero `instance.lock` crashes,
+automatic pre-turn context prefetch, and working `/v1/verify` receipt checks.
+**Target:** <60 s from `nektar dock auto` to 2nd app recall.
+**Artifact:** `bin.ts` zero-env default + companion loopback HTTP (`:18420`) +
+`mcp-bridge.ts` + `dock-cli.ts` + `hooks-cli.ts` + `integrations/{hermes,openclaw}` + `.claude-plugin/`.
+
+| Step | Time | Effort | Knowledge | Triage |
+| --- | --- | --- | --- | --- |
+| Zero-env local boot | <3 s | `./nektar` (0 env vars) | none | **KILLED** — defaults to `testnet` when no regtest creds exist; writes `daemon.json` |
+| 2nd AI app attach | <100 ms | automatic | none | **KILLED** — stdio detects live loopback daemon and runs `mcp-bridge.ts` (zero `instance.lock` crash) |
+| Client auto-wiring | <5 s | `nektar dock auto` | none | **MOVED** — detects Hermes, OpenClaw, Claude, Codex, Cursor, Windsurf, OpenCode, Goose + runs live `recall {}` probe |
+| Per-turn recall/verify | <800 ms | **zero** (ambient) | none | **MOVED** — Hermes `MemoryProvider`, OpenClaw `before_prompt_build`/`agent_end`, Claude portable `nektar hook` |
+
+**Score:** 8.5/10 (automated bridge, dock, hooks, and Hermes `MemoryProvider`
+tests passing; remaining step to 10/10 is upstream publication to the Hermes
+plugin catalog, OpenClaw registry, and official MCP Registry).
+
 ## Cross-cutting walls
 
 Ranked by leverage — where the next friction dollar goes:
@@ -133,21 +158,23 @@ Ranked by leverage — where the next friction dollar goes:
    self-serve endpoint (opt-in, capped, persisted); JOIN-TESTNET names
    the curl. Remaining: the operator keeps the drip key funded.
 2. ~~**Lane-stock cold start** (J4, internal)~~ — DONE at the default:
-   `NEKTAR_ANCHORED_LANES=all` is now the image + agent-compose default
-   (was hub-only), so a cold agent's first carrier rides an anchored
-   mint, not a block wait. Pre-proven seed stock remains the further
-   lever if an unpatched-host path still waits.
-3. **Tool contract freeze** (J3) — integrators can't pin against
+   `NEKTAR_ANCHORED_LANES=all` is now the image + agent-compose default.
+3. ~~**Zero-env boot + multi-client shared brain** (J2/J6)~~ — DONE:
+   `bin.ts` defaults to `testnet` when unconfigured, binds companion
+   loopback HTTP (`:18420`) alongside stdio, and transparently bridges
+   subsequent stdio clients over Streamable HTTP (`mcp-bridge.ts`).
+4. ~~**Universal auto-dock + native ecosystem plugins** (J3/J6)~~ — DONE
+   in-repo: `nektar dock`, portable `nektar hook`, `integrations/hermes`
+   (`MemoryProvider`), `integrations/openclaw` (`plugins.slots.memory`),
+   `.claude-plugin/` + `skills/nektar-memory/SKILL.md`, and `server.json`.
+   **Next:** submit to upstream catalogs (Hermes plugins, OpenClaw, MCP Registry).
+5. **Tool contract freeze** (J3) — integrators can't pin against
    "whatever the server exposes". A named minimal contract
    (`recall`/`commit`/`verify` + `automation`) is the adapter MVP's
    actual deliverable.
-4. **`doctor` → next-command mapping** (J5) — health output that names
-   the unblock command per finding.
-5. **The grant/faucet link** — a funding ask that isn't a conversation.
-6. **Hidden authority** — behavior gates that live in env vars instead
-   of the approvable policy surface (`NEKTAR_PAID_DISCLOSURE` was one —
-   `sell` simply wasn't in the tool list and no approved policy could
-   grant it). An agent can't discover them and an operator can't grant
-   them without a restart and a docs dive. Rule: a capability gate that
-   an operator should be able to grant belongs in the policy schema;
-   env is an override, never the only lever.
+6. **Remote OAuth 2.1 for hosted `/mcp`** — required for zero-config
+   web connectors (claude.ai, ChatGPT) to dock without manual bearer paste.
+7. **Hidden authority** — behavior gates that live in env vars instead
+   of the approvable policy surface (`NEKTAR_PAID_DISCLOSURE` was one).
+   Rule: a capability gate that an operator should be able to grant
+   belongs in the policy schema; env is an override, never the only lever.

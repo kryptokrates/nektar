@@ -65,12 +65,15 @@ for work we could have done earlier.
 **Goal: 10/10.** Rate any journey, join doc, setup file, or adoption
 plan 0-10. Report the score and the specific changes that reach 10/10.
 
-- **9-10:** Named first-value moment with a measured time-to-reach; a
-  straight line with ≤5 steps; correct defaults everywhere; waits are
-  named, bounded, and progress-visible; errors say what they're waiting
-  on and what to do next
-- **7-8:** Works end-to-end unattended, but a non-essential decision or
-  an undocumented wait remains on the happy path
+- **9-10:** Named first-value moment with a **cold-stranger** measured
+  time-to-reach (not just an in-process CI timer); a straight line with
+  ≤5 steps; zero-env defaults everywhere; waits are named, bounded, and
+  progress-visible; errors say what they're waiting on and what to do
+  next; for AI-app docking, ambient lifecycle hooks remove per-turn
+  prompting and multiple apps share one brain without lock contention
+- **7-8:** Works end-to-end unattended, but a non-essential decision,
+  undocumented wait, pull-only MCP prompting tax, or single-client lock
+  cliff remains on the happy path
 - **5-6:** Requires config before first value, or reading docs to
   unblock a predictable dead end
 - **3-4:** Multi-step setup with assumed knowledge; first value gated
@@ -79,6 +82,9 @@ plan 0-10. Report the score and the specific changes that reach 10/10.
   external account before any value is visible
 
 A journey with no measured time-to-first-value cannot score above 6.
+An in-process unit test timer proves *no regression*, never cold-stranger
+TTFV — separate warm/CI timings from cold-machine timings and never let a
+fast CI timer inflate a broken zero-env or multi-client path to 9/10.
 
 ## Framework
 
@@ -106,8 +112,15 @@ actual journey — not the intended one — is the only reliable method.
   reads as "broken", not "working"
 - Required knowledge is friction even when it costs no time: BSV
   concepts, TLS, DNS, Docker internals are all admission fees
-- Friction hides in the tail: error recovery, upgrade, and teardown
-  paths are audited too — a scary exit is a reason to never start
+- **Ambient vs. prompted effort (the ×1,000 multiplier):** one-time
+  install effort is paid once; per-turn effort ("remember to call
+  `recall`", "ground that answer", "save this") is paid on every turn.
+  A pull-only MCP server shifts that tax onto the user forever; ambient
+  lifecycle docking (`prefetch`, `on_memory_write`, `Stop`/`agent_end`
+  verification) zeroes it out
+- Friction hides in the tail: error recovery, upgrade, multi-client
+  concurrency, and teardown paths are audited too — a scary exit or a
+  second-client lock crash is a reason to never adopt
 
 **Applications:**
 
@@ -267,19 +280,57 @@ measured gets removed.
 
 **Metrics per journey (this repo):**
 
-| Journey          | First-value moment                 | Metric                        | Target   |
-| ---------------- | ---------------------------------- | ----------------------------- | -------- |
-| Operator (hub)   | card visible on dir lane           | clone → announce              | < 30 min |
-| Fresh instance   | `recall` returns seeded content    | start → non-empty answer      | < 5 min  |
-| Adapter client   | first successful tool call         | config paste → `recall`       | < 3 min  |
-| Deal             | want → quote seen                  | publish → first offer (watch) | bounded  |
-| Recovery         | named cause + next command in logs | error → legible cause         | instant  |
-| Suite (internal) | first green verdict                | launch → first pass           | minutes  |
+| Journey             | First-value moment                       | Metric                        | Target   |
+| ------------------- | ---------------------------------------- | ----------------------------- | -------- |
+| Operator (hub)      | card visible on dir lane                 | clone → announce              | < 30 min |
+| Fresh instance      | `recall` returns seeded content          | start → non-empty answer      | < 5 min  |
+| Adapter client      | first successful tool call               | config paste / `dock` → call  | < 3 min  |
+| Ambient multi-app   | auto-prefetch + receipt across ≥2 apps   | `dock auto` → 2nd app recall  | < 60 s   |
+| Deal                | want → quote seen                        | publish → first offer (watch) | bounded  |
+| Recovery            | named cause + next command in logs       | error → legible cause         | instant  |
+| Suite (internal)    | first green verdict                      | launch → first pass           | minutes  |
 
 Instrumentation rules: log the step the user was on, not just the
-error; errors name what they are waiting on and the next command; and
-once per milestone, _ask the stranger_ — "how hard was that, what
+error; errors name what they are waiting on and the next command;
+separate **warm/CI** measurements from **cold-stranger** measurements;
+and once per milestone, _ask the stranger_ — "how hard was that, what
 surprised you" beats any dashboard (CES).
+
+### 7. The Docking Maturity Ladder (L0 → L3)
+
+**Core concept:** Conforming to a known shape (Jakob's law) is only
+step one. When docking into an existing AI harness (Hermes, OpenClaw,
+Claude Code, Codex, Cursor, Windsurf, Goose, OpenCode), there are four
+maturity rungs — and stopping at L0 leaves 90% of the adoption friction
+alive:
+
+| Level | Pattern | User action | Per-turn effort | Example |
+| --- | --- | --- | --- | --- |
+| **L0 · Docs paste** | README stanza | Hand-edit JSON/YAML/TOML | High (must remind agent) | Paste `mcpServers` block |
+| **L1 · Auto-dock CLI** | Sniff + merge + probe | `nektar dock auto` | Medium (tools wired, pull-only) | Detect installed clients, merge non-clobbering, run live `recall {}` |
+| **L2 · Native plugin / catalog** | Host's own slot & installer | `hermes plugins install` / `/plugin install` / `openclaw plugins install` | Low (host-native discovery & UI) | Hermes `MemoryProvider`, OpenClaw `plugins.slots.memory`, `.claude-plugin`, MCP Registry `server.json`, `agentskills.io` `SKILL.md` |
+| **L3 · Ambient lifecycle + shared brain** | Lifecycle hooks + single local daemon | Zero after install | **Zero** (auto-prefetch, curated mirror, auto-verify) | Pre-turn `prefetch`/`before_prompt_build`, `on_memory_write` mirror, `Stop`/`agent_end` receipt check, shared loopback daemon + stdio bridge |
+
+**Key insights:**
+
+- **One brain, many mouths:** Developers run 2–4 AI apps on one machine
+  (Claude Code + Cursor + Hermes + OpenClaw). A single-writer
+  `instance.lock` over per-client stdio spawns crashes the second app.
+  A shared local daemon + transparent stdio-to-HTTP bridge gives every
+  client instant (<100ms) attach, live `/v1/verify` links, hooks, and
+  one unified memory with zero lock contention.
+- **Native slot beats generic wrapper:** Every major harness now ships
+  an explicit memory/plugin slot (Hermes `MemoryProvider`, OpenClaw
+  `plugins.slots.memory`, Claude Code `.claude-plugin`). Docking into
+  the native slot unlocks `prefetch`, `on_memory_write`, wizard UI, and
+  secret scrubbing for free.
+- **Portable hooks, zero checkout paths:** Hooks and plugin manifests
+  must work from a release binary or container — never hardcode paths
+  into a local git checkout.
+- **Honest ambient boundary:** Auto-prefetch (read-only, bounded
+  timeout, fail-open), curated write mirroring (`MEMORY.md`/`USER.md`),
+  and receipt verification are safe defaults. Raw full-transcript
+  capture stays opt-in, and spends/policies stay explicitly gated.
 
 See [references/audit-playbook.md](references/audit-playbook.md) for
 the audit procedure, [references/levers.md](references/levers.md) for
@@ -297,6 +348,9 @@ today.
 | "Documented, therefore removed"          | A paragraph describing a step still makes the user do it   | Snippets, defaults, generated artifacts — remove the step itself |
 | Silent waits                             | Unnamed waiting reads as broken; users quit or retry wrong | Every wait gets a name, a bound, and visible progress            |
 | New surface shapes                       | Custom formats charge learning-cost at the door            | Conform to MCP/compose/OpenAPI/bearer shapes users know          |
+| Stopping at L0 pull-only MCP             | Users still pay per-turn prompting friction forever        | Climb to L1 (`dock`), L2 (native plugin), L3 (ambient hooks)     |
+| Per-client stdio lock collisions         | Second AI app on the same laptop crashes on `instance.lock`| Shared local daemon + stdio-to-HTTP bridge ("one brain")         |
+| Counting CI timings as cold TTFV         | 889ms unit test hides a 60s cold boot or zero-env crash    | Separate warm/CI from cold-stranger timings in the audit ledger  |
 | Treating drop-off as a marketing problem | More traffic into a leaky funnel scales nothing            | Fix the earliest drop-off first; measure the funnel              |
 | Gate-keeping by domain knowledge         | Requiring BSV/SPV/TLS literacy is an admission fee         | Hide the expertise; surface it only on opt-in                    |
 | Friction for everyone, trust for no one  | Removing _all_ friction invites spam and abuse             | Friction for abusers, none for the good — asymmetric by design   |
@@ -305,10 +359,13 @@ today.
 
 | Question                                                  | If No                                     | Action                                               |
 | --------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------- |
-| Is there a named first-value moment with a measured time? | Friction work is unmeasured               | Define the moment; instrument the clock              |
+| Is there a named first-value moment with a cold metric?   | Friction work is unmeasured or inflated   | Define the moment; measure cold-stranger AND CI time |
+| Does bare zero-env boot succeed out of the box?           | First run crashes before any value        | Default to zero-infra testnet; gate regtest/main     |
 | Does the happy path need zero decisions?                  | Each decision is a drop-off               | Convert to correct defaults; sequence the rest       |
 | Does every env field have a working default or generator? | Required reasoning = required abandonment | Default it, generate it, or delete the field         |
 | Does first value arrive before any external dependency?   | Gated on strangers = gated forever        | Ship seeded/provable content; flintstone honestly    |
+| Can ≥2 AI apps dock on one laptop without lock errors?    | Second app crashes; memory fragments      | Shared local daemon + auto-attach stdio bridge       |
+| Does docking remove per-turn prompting (L2/L3)?           | Agent forgets to recall/verify every turn | Native memory slot + prefetch + receipt hooks        |
 | Do errors say what they wait on + the next command?       | Silent waits read as broken               | Name the phase, bound it, print the bumper           |
-| Does the surface match shapes users already know?         | Learning cost charged at the door         | Conform to MCP/compose/OpenAPI conventions           |
+| Does the surface match shapes users already know?         | Learning cost charged at the door         | Conform to MCP/plugin/compose/OpenAPI conventions    |
 | Is every load-bearing check still present and legible?    | Friction removed where safety lived       | Restore the gate; make it named and progress-visible |

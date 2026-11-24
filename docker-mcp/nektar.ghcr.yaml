@@ -19,8 +19,8 @@ description: >-
 secrets:
   - name: nektar.key_passphrase
     env: NEKTAR_KEY_PASSPHRASE
-    example: <long random passphrase>
-    description: Encrypts keys.json and fee.key.json at rest (required)
+    example: <optional on testnet; encrypts keys at rest>
+    description: Encrypts keys.json and fee.key.json at rest (optional on testnet, required on main)
   # optional operator envs (NEKTAR_FUND_WIF — else a fee.key.json key is
   # generated; NEKTAR_BROADCASTER_API_KEY) stay undeclared for now: the
   # toolkit injects '<UNKNOWN>' for declared-but-unset secrets and images
@@ -30,7 +30,7 @@ env:
   - name: NEKTAR_NETWORK
     value: testnet
   - name: NEKTAR_TOOL_PROFILE
-    value: operator
+    value: agent
   - name: NEKTAR_MAX_FEE_SATS_PER_TX
     value: '{{nektar.max_fee_sats_per_tx}}'
   - name: NEKTAR_MAX_SPEND_SATS_PER_DAY

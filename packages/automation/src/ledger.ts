@@ -1,6 +1,6 @@
 import { Transaction } from '@bsv/sdk'
 import { fullSourceTx, inputPrevout, sparse } from '@nektar/core'
-import type { BroadcastResult, Funds } from '@nektar/chain'
+import { NEVER_LEFT, type BroadcastResult, type Funds } from '@nektar/chain'
 import type { AutomationStore, WalletTx } from './store.js'
 import { replayTxEffects, type TxEffects } from './machines/effects.js'
 import { obsEvent } from './machines/driver.js'
@@ -166,15 +166,19 @@ export function wrapBroadcast(
       const r = await inner(tx)
       if (recorded) {
         const w = await store.walletTx({ actionId }).catch(() => undefined)
-        if (w !== undefined)
+        if (w !== undefined) {
+          const neverLeft = r.status !== 'success' && NEVER_LEFT.test(r.description ?? '')
           await txEmit(
             opts.exec ?? executor(),
             store,
             w,
-            r.status === 'success' ? 'submit.success' : 'submit.unknown',
-            { observation: { at: Date.now(), result: r }, attempt: true },
+            r.status === 'success' ? 'submit.success' : neverLeft ? 'submit.refused' : 'submit.unknown',
+            neverLeft
+              ? { guard: 'definitive', observation: { at: Date.now(), escaped: false, result: r }, attempt: true }
+              : { observation: { at: Date.now(), result: r }, attempt: true },
             opts.fx
           ).catch(() => {})
+        }
       }
       return r
     } catch (e) {
@@ -200,6 +204,8 @@ export function wrapBroadcast(
  *  rides the caller's executor); the sweep service sends each to the
  *  row's own tx object (per-key serialized, journaled invocations).
  *  Release-lease bookkeeping rides the scan. */
+const SCAN_POOL = 4
+
 export async function* scanTxObservations(
   store: AutomationStore,
   observeFn: (txid: string) => Promise<TxObservationInput | undefined>,
@@ -208,25 +214,38 @@ export async function* scanTxObservations(
 ): AsyncGenerator<{ w: WalletTx; observe: { event: string; guard?: string; observation: unknown } }> {
   const ttl = exportedTtlMs ?? WAITS.exportedTtl.ms
   const live = await store.walletTxs(['prepared', 'submitted', 'submission_unknown', 'observed', 'exported'])
-  const dead = (await store.walletTxs(['rejected', 'expired', 'abandoned'])).filter((w) => now() - w.stateAt < ttl)
-  for (const w of [...live, ...dead]) {
-    try {
-      if (w.state === 'submitted' || w.state === 'observed') await store.releaseLeases(w.actionId)
-      const o = await observeFn(w.txid)
-      if (o !== undefined) {
-        const { event, guard } = obsEvent(o)
-        yield { w, observe: { event, guard, observation: { at: now(), ...o } } }
-        continue
-      }
-      if (w.state === 'exported' && exportedTtlMs !== undefined && now() - w.at >= exportedTtlMs) {
-        yield {
-          w,
-          observe: { event: 'export.ttl', observation: { at: now(), reason: `exported tx unaired for ${Math.round((now() - w.at) / 60000)}min` } }
+  // owner-only dead rows whose bytes explicitly never left the process
+  // (e.g. local SpendGuard refusal) were never handed to a counterparty and
+  // cannot appear on the network — skip probing them. Engine rows stay in the
+  // counterparty-air window even when our own submit refused locally.
+  const dead = (await store.walletTxs(['rejected', 'expired', 'abandoned'])).filter(
+    (w) => now() - w.stateAt < ttl && !(w.kind === 'owner' && (w.lastObservation as { escaped?: boolean } | undefined)?.escaped === false)
+  )
+  const rows = [...live, ...dead]
+  for (let idx = 0; idx < rows.length; idx += SCAN_POOL) {
+    const batch = rows.slice(idx, idx + SCAN_POOL)
+    const results = await Promise.all(
+      batch.map(async (w) => {
+        try {
+          if (w.state === 'submitted' || w.state === 'observed') await store.releaseLeases(w.actionId)
+          const o = await observeFn(w.txid)
+          if (o !== undefined) {
+            const { event, guard } = obsEvent(o)
+            return { w, observe: { event, guard, observation: { at: now(), ...o } } }
+          }
+          if (w.state === 'exported' && exportedTtlMs !== undefined && now() - w.at >= exportedTtlMs) {
+            return {
+              w,
+              observe: { event: 'export.ttl', observation: { at: now(), reason: `exported tx unaired for ${Math.round((now() - w.at) / 60000)}min` } }
+            }
+          }
+        } catch {
+          /* unknown, not failed — try again next tick */
         }
-      }
-    } catch {
-      /* unknown, not failed — try again next tick */
-    }
+        return undefined
+      })
+    )
+    for (const r of results) if (r !== undefined) yield r
   }
 }
 

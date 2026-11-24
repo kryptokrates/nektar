@@ -61,9 +61,16 @@ writeFileSync(
   `nektar-mcp — verifiable agent memory on BSV (self-contained, no build)
 Requires: Node.js 22.12+ (node --version)
 Run:      ./nektar   (unix)   or   nektar.cmd   (windows)
-          stdio MCP by default; NEKTAR_HTTP_PORT=8080 adds /v1 + /mcp over HTTP
-Config:   a .env in this directory is read at boot — e.g.
-            NEKTAR_NETWORK=testnet
+          Zero-env default boots on BSV testnet with a seeded 'welcome' shard,
+          serves MCP over stdio + companion loopback HTTP (:18420) for /v1/verify,
+          hooks, and the dashboard — and automatically bridges a 2nd AI app onto
+          the already-running daemon with zero lock collisions.
+Dock:     ./nektar dock          # auto-detect & wire Hermes, OpenClaw, Claude Code,
+                                 # Codex, Cursor, Windsurf, Claude Desktop, OpenCode, Goose
+          ./nektar dock --dry    # preview changes without writing
+          ./nektar status        # check running daemon + Restate executor
+Config:   optional .env beside this binary — e.g.
+            NEKTAR_NETWORK=testnet   (default when unconfigured)
             NEKTAR_WALLET=client     # sign via local BSV Desktop (:3321)
           or omit NEKTAR_WALLET for the embedded wallet (generates a fee
           key on first boot and prints the address to fund).
@@ -71,8 +78,6 @@ Executor: a restate-server rides inside restate/ and auto-starts at boot —
           nothing else to install (on Windows it runs through WSL, which
           ships with Windows 11; an already-running restate or
           NEKTAR_RESTATE_URL is used instead).
-Client:   point your MCP client at the command above (stdio), or at
-          http://localhost:8080/mcp when NEKTAR_HTTP_PORT is set.
 First call: recall {} (reads the seeded 'welcome' shard).
 Trading:  ./nektar policy approve --preset buyer|seller|both
           (sets up an operator-approved trading policy without a git checkout).

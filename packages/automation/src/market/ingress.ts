@@ -43,6 +43,7 @@ export abstract class IngressOps extends MarketBase {
    *  agent's cadence deterministically — restarts don't phase-align */
   private lastResubmitAt = -Infinity
   private resubmitEvery = -1
+  private lastHeight = 0
 
   /** the inbox scan with the self-note ordering — self-notes must restore
    *  their operation before anything else in the batch runs (a want lane
@@ -104,7 +105,20 @@ export abstract class IngressOps extends MarketBase {
   async advanceOp(operationId: string): Promise<boolean> {
     const op = await this.d.store.operation(operationId)
     if (op === undefined || !NONTERMINAL.includes(op.state)) return false
-    await this.advanceLeg(op, await this.d.height())
+    let h: number
+    try {
+      h = await this.d.height()
+      if (h > this.lastHeight) this.lastHeight = h
+    } catch (e) {
+      if (this.lastHeight > 0) {
+        this.d.log?.(`market: height unavailable (${(e as Error).message.slice(0, 120)}) — using cached height ${this.lastHeight}`)
+        h = this.lastHeight
+      } else {
+        await this.d.store.transition(op.operationId, op.revision, op.state, { cause: 'tick_error', lastError: (e as Error).message.slice(0, 500) })
+        return true
+      }
+    }
+    await this.advanceLeg(op, h)
     return true
   }
 

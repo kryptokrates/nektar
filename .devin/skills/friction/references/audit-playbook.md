@@ -111,13 +111,42 @@ conform (Jakob's law) or moves behind the value moment.
 - [ ] Does every step end with a verifiable "you should see X"?
 - [ ] Is failure recovery one lookup away, legible by a stranger?
 
-### Adapter / API audit
+### Adapter / API & Ecosystem Docking audit
 
-- [ ] Is the registration stanza a copy-paste block per platform?
+- [ ] Does bare zero-env boot (`./nektar` or `docker run` with no `-e` flags)
+      reach a healthy `recall {}` without crashing?
+- [ ] Does one command (`nektar dock auto`) auto-detect installed AI apps,
+      merge non-clobbering config, and run a live `recall {}` probe?
+- [ ] Can two AI clients (e.g. Claude Code + Hermes or Cursor) connect
+      simultaneously to the same local data dir without `instance.lock`
+      contention?
+- [ ] Does stdio mode keep `/v1/verify` receipt links, hooks, and the
+      dashboard alive (via companion loopback HTTP or shared daemon)?
+- [ ] Does the harness integration climb past L0 paste into native slots
+      (Hermes `MemoryProvider`, OpenClaw `plugins.slots.memory`, Claude
+      `.claude-plugin`, `agentskills.io` `SKILL.md`, MCP `server.json`)?
+- [ ] Ambient turn test: open a fresh session and ask a question *without
+      mentioning nektar* — does prefetch or session context arrive
+      automatically, bounded and fail-open?
+- [ ] Portable-path test: do hooks and plugin manifests work from a release
+      artifact with zero hardcoded repo-checkout paths?
+- [ ] Clean exit test: does `--uninstall` detach cleanly while leaving
+      sibling MCP servers, hooks, and instructions untouched?
 - [ ] Is the first tool call the one that demonstrates value (`recall`
       with content, not `health`)?
 - [ ] Do errors return the action ("publish a want") not the
       mechanism ("lane slot unproven")?
+
+### Cold-Stranger vs. Warm-CI Measurement Rule
+
+Always log **two** numbers for every instrumented journey so CI speed never
+masks cold-machine friction:
+
+- **Warm / CI (`friction.test.ts`):** in-process or local-binary regression
+  guard (milliseconds). Catches silent breakage in PRs.
+- **Cold stranger (clean box / clean dir / no checkout):** wall-clock time
+  from download/install to first real value, plus total decisions asked.
+  This is the number that governs the 0–10 score.
 
 ## Recording Findings
 

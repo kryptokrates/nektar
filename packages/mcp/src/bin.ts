@@ -218,6 +218,8 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
   rt.mem.automation = await openAutomation(rt.mem, {
     network: rt.network,
     txEffects: rt.txEffects,
+    walletKx: rt.walletKx,
+    spendGuardProbe: rt.spendGuardProbe,
     dataDir: nektarEnv('NEKTAR_DATA_DIR') ?? '.nektar',
     marketHosts: mh,
     localHosts: nektarEnv('NEKTAR_MARKET_LOCAL_HOSTS') === '1',
@@ -245,7 +247,7 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     // packs) on the dir lane so fresh instances can enumerate this operator
     announce: /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_ANNOUNCE') ?? ''),
     watchdogMs: nektarEnv('NEKTAR_WATCHDOG_MS') ? Number(nektarEnv('NEKTAR_WATCHDOG_MS')) : undefined,
-    intervalMs: Number(nektarEnv('NEKTAR_AUTOMATION_INTERVAL_MS') ?? 1000),
+    intervalMs: Number(nektarEnv('NEKTAR_AUTOMATION_INTERVAL_MS') ?? 5000),
     watchHosts: (nektarEnv('NEKTAR_WATCH_URLS') ?? '')
       .split(',')
       .map((u) => u.trim())

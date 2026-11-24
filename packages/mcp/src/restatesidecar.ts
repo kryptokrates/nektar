@@ -12,6 +12,7 @@
 // The bundled ports are off nektar's own :8080 HTTP default — 18080/19070.
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
+import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { nektarEnv, setNektarEnv } from '@nektar/core'
@@ -62,9 +63,17 @@ function wslpath(winPath: string, spawnSyncImpl: typeof spawnSync): string {
   return r.stdout.trim()
 }
 
-/** the windows host IP as WSL sees it — default route's gateway. The
- *  restate inside WSL calls our endpoint on this, not on its own localhost. */
-function wslHostGateway(spawnSyncImpl: typeof spawnSync): string | undefined {
+/** the windows host IP as WSL sees it — check the vEthernet (WSL) adapter
+ *  locally first (0ms, no subprocess), falling back to `ip route` inside WSL. */
+function wslHostGateway(spawnSyncImpl: typeof spawnSync, allowLocalIfaces = true): string | undefined {
+  if (allowLocalIfaces) {
+    const ifaces = networkInterfaces()
+    for (const [name, addrs] of Object.entries(ifaces)) {
+      if (!/wsl/i.test(name) || addrs === undefined) continue
+      const v4 = addrs.find((a) => a.family === 'IPv4' && !a.internal)
+      if (v4?.address) return v4.address
+    }
+  }
   const r = spawnSyncImpl('wsl.exe', ['-e', 'sh', '-c', 'ip route show default'], { encoding: 'utf8', timeout: 5000 })
   const m = r.status === 0 ? r.stdout.match(/default via (\S+)/) : null
   return m?.[1]
@@ -110,7 +119,7 @@ export async function ensureRestate(
       // IP for it to call back (loopback is the VM, not us). An explicit
       // NEKTAR_RESTATE_ENDPOINT_URI still wins.
       if (platform === 'win32' && nektarEnv('NEKTAR_RESTATE_ENDPOINT_URI', env) === undefined) {
-        const gw = wslHostGateway(spawnSyncImpl)
+        const gw = wslHostGateway(spawnSyncImpl, opts.spawnSyncImpl === undefined)
         if (gw) setNektarEnv('NEKTAR_RESTATE_ENDPOINT_URI', `http://${gw}:${nektarEnv('NEKTAR_RESTATE_ENDPOINT_PORT', env) ?? '9080'}`, env)
       }
       log(`restate: adopting live server at ${admin}`)
@@ -241,7 +250,7 @@ bind-address = "127.0.0.1:${ADMIN_PORT}"
       if (wslBin !== undefined && nektarEnv('NEKTAR_RESTATE_ENDPOINT_URI', env) === undefined) {
         // the endpoint must advertise the windows host as WSL sees it —
         // 127.0.0.1 inside WSL is the VM, not us
-        const gw = wslHostGateway(spawnSyncImpl)
+        const gw = wslHostGateway(spawnSyncImpl, opts.spawnSyncImpl === undefined)
         if (gw) setNektarEnv('NEKTAR_RESTATE_ENDPOINT_URI', `http://${gw}:${nektarEnv('NEKTAR_RESTATE_ENDPOINT_PORT', env) ?? '9080'}`, env)
       }
       log(`restate: sidecar up (ingress :${INGRESS_PORT}, admin :${ADMIN_PORT}${wslBin !== undefined ? ', via WSL' : ''})`)

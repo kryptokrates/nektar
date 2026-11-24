@@ -64,38 +64,46 @@ function aiFromEnv(env = process.env): AIExecutor {
 // exactly as the old closure's lets did.
 export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig): Promise<Automation> {
   const knexFactory = (await import('knex')).default
+  const sqlitePool = {
+    min: 1,
+    max: 1,
+    afterCreate: (conn: { run: (sql: string, cb: (e?: Error | null) => void) => void }, done: (e: Error | null, conn: unknown) => void) => {
+      conn.run('PRAGMA journal_mode=WAL', (e1) => {
+        if (e1) return done(e1, conn)
+        conn.run('PRAGMA busy_timeout=5000', (e2) => {
+          if (e2) return done(e2, conn)
+          conn.run('PRAGMA synchronous=NORMAL', (e3) => done(e3 ?? null, conn))
+        })
+      })
+    }
+  }
   if (cfg.dataDir) mkdirSync(cfg.dataDir, { recursive: true })
   const kx: Knex = knexFactory({
     client: 'sqlite3',
     connection: { filename: cfg.dataDir ? join(cfg.dataDir, 'automation.sqlite') : ':memory:' },
-    useNullAsDefault: true
+    useNullAsDefault: true,
+    pool: sqlitePool
   })
-  // same contract records.sqlite gets in rtsupport — WAL so readers (outbox
-  // pump, watchers, HTTP) don't queue behind the writer; busy_timeout so a
-  // contended write retries instead of erroring. :memory: ignores both.
-  await kx.raw('PRAGMA journal_mode=WAL')
-  await kx.raw('PRAGMA busy_timeout=5000')
   // one clock domain: next_at/dueAt stamps and every engine-side due check
   // compare against cfg.now — mixing the real clock into row stamps while the
   // engine reads a virtual one makes fresh rows look not-yet-due forever
   // the wallet ledger (txs + leases + tx events) is custody bookkeeping — it
   // lives in records.sqlite with the coin book so take()/leasePredicate and
   // the resubmit path read the same physical rows wrapBroadcast records.
-  // Before the split the runtime wrote them to automation.sqlite where the
-  // records-side readers couldn't see them — prepared actions stayed
-  // invisible to custody and their leases wedged the treasury (the
-  // lanes.sqlite precedent: one file per durable domain).
-  let kxWallet: Knex | undefined
-  if (cfg.dataDir) {
+  // When the host already opened records.sqlite (cfg.walletKx), reuse its
+  // single pool so concurrent Restate object keys never trigger
+  // SQLITE_BUSY_SNAPSHOT across dual pools.
+  const ownsWalletKx = cfg.walletKx === undefined
+  let kxWallet: Knex | undefined = cfg.walletKx
+  if (kxWallet === undefined && cfg.dataDir) {
     kxWallet = knexFactory({
       client: 'sqlite3',
       connection: { filename: join(cfg.dataDir, 'records.sqlite') },
-      useNullAsDefault: true
+      useNullAsDefault: true,
+      pool: sqlitePool
     })
-    await kxWallet.raw('PRAGMA journal_mode=WAL')
-    await kxWallet.raw('PRAGMA busy_timeout=5000')
   }
-  const store = new AutomationStore(kx, cfg.now, kxWallet)
+  const store = new AutomationStore(kx, cfg.now, kxWallet, ownsWalletKx)
   await store.init()
   // pre-split deployments hold wallet rows inside automation.sqlite — copy
   // them into the ledger file (sentinel-gated, re-run safe)
@@ -119,7 +127,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       store,
       objectStore,
       cfg: pfCfg,
-      probes: { broadcaster: cfg.broadcasterProbe, spend: cfg.spendProbe },
+      probes: { broadcaster: cfg.broadcasterProbe, spend: cfg.spendProbe, spendGuard: cfg.spendGuardProbe },
       ...(only !== undefined ? { only } : {})
     })
   let lastReport: PreflightReport | undefined = await runChecks()
@@ -128,6 +136,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       .filter((c) => !c.pass)
       .map((c) => `${c.check}: ${c.detail}`)
       .join(' | ')
+    if (ownsWalletKx) await kxWallet?.destroy()
     await kx.destroy()
     throw new Error(`automation preflight failed (strict) — ${failed}`)
   }
@@ -154,9 +163,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       : await (async () => {
           const mod = await import('@nektar/bstack')
           const lp = cfg.dataDir ? join(cfg.dataDir, 'lanes.sqlite') : ':memory:'
-          kxLanes = knexFactory({ client: 'sqlite3', connection: { filename: lp }, useNullAsDefault: true })
-          await kxLanes.raw('PRAGMA journal_mode=WAL')
-          await kxLanes.raw('PRAGMA busy_timeout=5000')
+          kxLanes = knexFactory({ client: 'sqlite3', connection: { filename: lp }, useNullAsDefault: true, pool: sqlitePool })
           // seed a fresh lanes.sqlite by copying lane-table ROWS — a file copy
           // would drag every automation table in and miss WAL commits. The
           // call is unconditional: the sentinel inside migrateLaneTables
@@ -828,6 +835,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // funds.adopt. The 5s bucket coalesces a multi-utxo import to one send.
   mem.funds.onAdopted = () => {
     rt.countWake('funded')
+    rt.rtUpkeepClearStarve?.()
     if (rt.stopped) return
     const b = Math.floor((cfg.now ?? Date.now)() / 5000)
     void exec.send({ service: EXEC_SVC.upkeep, handler: 'tick', key: 'main' }, {}, { idempotencyKey: `upkeep:funded:${b}` }).catch(() => undefined)
@@ -898,6 +906,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   mem.onTxProof((txid, mp) => {
     if (rt.stopped) return
     rt.countWake('txProof')
+    rt.rtUpkeepClearStarve?.()
     // the leg + cycle tail is a durable wake invocation — a crash between
     // proof receipt and markProven can no longer drop the wake; the
     // idempotency key dedupes a repeat announce of the SAME proof. Keyed
@@ -1129,7 +1138,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       // destroyed pool
       await (exec as { close?: () => void | Promise<void> }).close?.()
       await kxLanes?.destroy()
-      await kxWallet?.destroy()
+      if (ownsWalletKx) await kxWallet?.destroy()
       await kx.destroy()
     }
   }

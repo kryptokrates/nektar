@@ -323,6 +323,15 @@ export function createHttpApi(
   // full exports are capped
   const packCache = new Map<string, { key: string; pack: unknown }>()
   let packInflight = 0
+  // /state short TTL cache + in-flight deduplication — dashboard polls and
+  // SSE-triggered reloads share one computation; invalidated on mem 'change'
+  const STATE_CACHE_MS = 1_500
+  let stateCache: { host: string | undefined; at: number; body: Record<string, unknown> } | undefined
+  let stateInflight: Promise<Record<string, unknown>> | undefined
+  const clearStateCache = () => {
+    stateCache = undefined
+  }
+  mem.events.on('change', clearStateCache)
   // /dashboard/events subscriber cap
   let sseClients = 0
   const SSE_MAX = 32
@@ -470,7 +479,21 @@ export function createHttpApi(
             return
           }
           if (req.method === 'GET' && url.pathname === '/state') {
-            return send(200, await dashboardState(mem, ops, req.headers.host))
+            const host = req.headers.host
+            if (stateCache !== undefined && stateCache.host === host && Date.now() - stateCache.at < STATE_CACHE_MS) {
+              return send(200, stateCache.body)
+            }
+            if (stateInflight === undefined) {
+              stateInflight = dashboardState(mem, ops, host)
+                .then((b) => {
+                  stateCache = { host, at: Date.now(), body: b }
+                  return b
+                })
+                .finally(() => {
+                  stateInflight = undefined
+                })
+            }
+            return send(200, await stateInflight)
           }
           if (req.method === 'GET' && url.pathname.startsWith('/assets/')) {
             const name = url.pathname.slice('/assets/'.length)
@@ -840,7 +863,7 @@ export function createHttpApi(
               // prove+verify per record, so repeat/concurrent hits must not
               // pay it again. A shifted head/record count busts the entry.
               const head = mem.tailLink(shard)?.txid ?? ''
-              const n = (await mem.records(shard)).length
+              const n = await mem.shardCount(shard)
               const ckey = `${shard}|${head}|${n}`
               const etag = `W/"${createHash('sha256').update(ckey).digest('hex').slice(0, 32)}"`
               if (req.headers['if-none-match'] === etag && packCache.get(shard)?.key === ckey) return send(304, '', 'text/plain')
@@ -886,6 +909,7 @@ export function createHttpApi(
   )
   server.on('close', () => {
     clearInterval(sessionReaper)
+    mem.events.off('change', clearStateCache)
     for (const s of sessions.values()) void s.t.close()
   })
   return server

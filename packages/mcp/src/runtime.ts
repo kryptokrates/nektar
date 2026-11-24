@@ -133,30 +133,38 @@ export function configFromEnv(env = process.env): RuntimeConfig {
     const urls =
       network === 'testnet'
         ? { broadcaster: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', indexer: 'https://test.bananablocks.com/api/v1' }
-        : { broadcaster: undefined, indexer: 'https://bananablocks.com/api/v1' }
+        : { broadcaster: 'https://arcade.gorillapool.io', indexer: 'https://bananablocks.com/api/v1' }
+    const broadcasterApiKey = secret('NEKTAR_BROADCASTER_API_KEY')
     cfg.confirmEveryMs = nektarEnvNum('NEKTAR_CONFIRM_MS', env) ?? (testNet ? 30_000 : 60_000)
     cfg.main = {
       fundWif: secret('NEKTAR_FUND_WIF'),
       passphrase: secret('NEKTAR_KEY_PASSPHRASE'),
       // testnet defaults: BSV Broadcaster + WoC endpoints (probed live); main
-      // keeps the built-in GorillaPool/WoC defaults when env vars are unset
+      // defaults to keyless GorillaPool so SSE /events and /policy never hit
+      // key-gated TAAL 401s on boot.
       broadcasterUrl: env.NEKTAR_BROADCASTER_URL ?? urls.broadcaster,
       // NEKTAR_BROADCASTER_URLS: comma-separated extra routes — the same
       // tx is submitted to all endpoints concurrently, first acceptance wins.
-      // Both live nets always fan out so a strained or down endpoint can't
-      // stall the whole submit path — the same resilience shape as
-      // indexerUrls (TAAL needs an api key to accept; keyless it's a fast
-      // reject, never a blocker). Endpoints validate inputs against their
-      // own chain's UTXO set — a wrong-scoped route can only reject.
+      // Keyless routes lead; TAAL is appended only when an API key is supplied
+      // so keyless deployments never burn 401s on boot, probes, or SSE streams.
       broadcasterUrls: [
         ...(env.NEKTAR_BROADCASTER_URLS?.split(',')
           .map((s) => s.trim().replace(/\/+$/, ''))
           .filter(Boolean) ?? []),
         ...(network === 'testnet'
-          ? ['https://arc-test.taal.com', 'https://arcade-v2-testnet-eu-1.bsvblockchain.tech', 'https://testnet.arcade.gorillapool.io']
-          : ['https://arc.taal.com', 'https://arcade-v2-us-1.bsvblockchain.tech', 'https://arcade.gorillapool.io'])
+          ? [
+              'https://arcade-v2-testnet-us-1.bsvblockchain.tech',
+              'https://arcade-v2-testnet-eu-1.bsvblockchain.tech',
+              'https://testnet.arcade.gorillapool.io',
+              ...(broadcasterApiKey !== undefined ? ['https://arc-test.taal.com'] : [])
+            ]
+          : [
+              'https://arcade.gorillapool.io',
+              'https://arcade-v2-us-1.bsvblockchain.tech',
+              ...(broadcasterApiKey !== undefined ? ['https://arc.taal.com'] : [])
+            ])
       ],
-      broadcasterApiKey: secret('NEKTAR_BROADCASTER_API_KEY'),
+      broadcasterApiKey,
       indexerUrl: env.NEKTAR_INDEXER_URL ?? env.NEKTAR_WOC_URL ?? urls.indexer,
       // NEKTAR_INDEXER_URLS: comma-separated extra index bases — queried in
       // order when the primary errors or misses. Both live nets append the
@@ -193,6 +201,12 @@ export interface Runtime {
   txEffects: import('@nektar/automation').TxEffects
   /** the records-side wallet ledger — the host plane's tx object serves it */
   ledger: import('@nektar/automation').AutomationStore
+  /** shared records.sqlite Knex pool — passed into openAutomation so the
+   *  process holds one pool on records.sqlite (prevents SQLITE_BUSY_SNAPSHOT) */
+  walletKx?: import('knex').Knex
+  /** raw SpendGuard-wrapped broadcaster (pre-wrapBroadcast) for preflight's
+   *  synthetic dry-run probe — avoids writing fake owner:* rows on boot */
+  spendGuardProbe?: (tx: Transaction) => Promise<import('@nektar/chain').BroadcastResult>
   /** host-composed endpoint defs + boot kicks for the shared restate
    *  endpoint — openHostPlane (automation off) or openAutomation (on)
    *  registers and fires them */
@@ -617,6 +631,8 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     ops,
     txEffects,
     ledger,
+    walletKx: knex,
+    spendGuardProbe: port.broadcast,
     /** host-composed endpoint defs + boot kicks — openHostPlane (automation
      *  off) or openAutomation (on) registers them on the shared restate
      *  endpoint; rejected under an injected cfg.exec Dispatcher (the

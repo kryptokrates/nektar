@@ -87,7 +87,7 @@ const def = (c?: MainnetConfig) => {
     fetch: c?.fetchImpl ?? fetch,
     broadcasterApiKey: c?.broadcasterApiKey,
     indexerApiKey: c?.indexerApiKey,
-    tipCacheMs: c?.tipCacheMs ?? Number(nektarEnv('NEKTAR_TIP_CACHE_MS') ?? 3_000)
+    tipCacheMs: c?.tipCacheMs ?? Number(nektarEnv('NEKTAR_TIP_CACHE_MS') ?? 15_000)
   }
 }
 
@@ -100,7 +100,10 @@ const req = async (c: ReturnType<typeof def>, url: string, init: RequestInit = {
     // as an orphaned socket (an abort mid-submit classifies as
     // submission_unknown upstream: bytes may have left, never a verdict)
     const ambient = currentSignal()
-    return await c.fetch(url, { ...init, signal: ambient !== undefined ? AbortSignal.any([ctl.signal, ambient]) : ctl.signal })
+    const signals: AbortSignal[] = [ctl.signal]
+    if (ambient !== undefined) signals.push(ambient)
+    if (init.signal !== undefined && init.signal !== null) signals.push(init.signal)
+    return await c.fetch(url, { ...init, signal: signals.length === 1 ? ctl.signal : AbortSignal.any(signals) })
   } finally {
     clearTimeout(t)
   }
@@ -353,7 +356,7 @@ export async function fetchBroadcasterFeeRate(cfg?: MainnetConfig): Promise<numb
   // primary first; a dead route falls through to the next configured one
   for (const base of c.broadcasterUrls) {
     try {
-      const p = await j(await req(c, `${base}/policy`, { headers: h }))
+      const p = await j(await req(c, `${base}/policy`, { headers: h }, 5_000))
       const f = p.policy?.miningFee ?? p.miningFee
       return Math.ceil((f.satoshis * 1000) / f.bytes)
     } catch {
@@ -382,32 +385,43 @@ export async function probeTxStatus(
   const c = def(cfg)
   const h: Record<string, string> = {}
   if (c.broadcasterApiKey) h.Authorization = `Bearer ${c.broadcasterApiKey}`
-  // every configured endpoint is asked at once — the primary's answer is
-  // preferred (list order), a clean 404 on any route is still a real answer
-  const answers = await Promise.all(
-    c.broadcasterUrls.map(async (base) => {
-      try {
-        const r = await req(c, `${base}/tx/${txid}`, { headers: h }, 10_000)
-        if (r.ok) {
-          const s = String(((await r.json().catch(() => undefined)) as { txStatus?: string } | undefined)?.txStatus ?? '').toUpperCase()
-          if (s !== '') return { status: s, answered: true }
-          // 2xx without a txStatus → not answered by the broadcaster
-        } else if (r.status === 404) {
-          return { status: '', answered: true } // a clean "not found" is a real answer
+  // every configured endpoint is asked at once — first non-empty status
+  // short-circuits and aborts slower siblings so a hanging/401 endpoint
+  // cannot stall the probe for its full 10s timeout; clean 404s record
+  // `answered` while letting another route or the index fallback say MINED.
+  const abortAll = new AbortController()
+  let answered = false
+  const verdict = await new Promise<{ status: string; answered: boolean } | undefined>((resolve) => {
+    let pending = c.broadcasterUrls.length
+    if (pending === 0) return resolve(undefined)
+    let settled = false
+    for (const base of c.broadcasterUrls) {
+      void (async () => {
+        try {
+          const r = await req(c, `${base}/tx/${txid}`, { headers: h, signal: abortAll.signal }, 10_000)
+          if (r.ok) {
+            const s = String(((await r.json().catch(() => undefined)) as { txStatus?: string } | undefined)?.txStatus ?? '').toUpperCase()
+            if (s !== '' && !settled) {
+              settled = true
+              abortAll.abort()
+              resolve({ status: s, answered: true })
+              return
+            }
+          } else if (r.status === 404) {
+            answered = true // a clean "not found" is a real answer
+          }
+        } catch {
+          /* endpoint undecidable — another route may still answer */
+        } finally {
+          if (--pending === 0 && !settled) {
+            settled = true
+            resolve(undefined)
+          }
         }
-        // 429 / 5xx / other non-ok → the broadcaster never answered
-      } catch {
-        /* endpoint undecidable — another route may still answer */
-      }
-      return { status: '', answered: false }
-    })
-  )
-  // a nonempty status from any route short-circuits; 'not found' answers
-  // only mark the question answered and still let the index say MINED —
-  // a mined tx ages out of broadcaster memory
-  const verdict = answers.find((a) => a.answered && a.status !== '')
+      })()
+    }
+  })
   if (verdict !== undefined) return verdict
-  const answered = answers.some((a) => a.answered)
   const indexOk = opts?.indexerFallback ?? opts?.wocFallback ?? publicIndexOk(cfg)
   if (!indexOk) return { status: '', answered }
   try {

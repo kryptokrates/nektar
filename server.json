@@ -1,0 +1,46 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.nedzof/nektar",
+  "title": "nektar — Verifiable Agent Memory & Knowledge Market",
+  "description": "Verifiable, encrypted AI agent memory anchored on BSV with checkable answer receipts and policy-controlled knowledge trading. Zero-config testnet boot with a seeded welcome shard.",
+  "repository": {
+    "url": "https://github.com/kryptokrates/nektar",
+    "source": "github"
+  },
+  "version": "0.3.2",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/kryptokrates/nektar:latest",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "NEKTAR_NETWORK",
+          "description": "BSV network: testnet (default zero-config), regtest, or main",
+          "isRequired": false,
+          "default": "testnet"
+        },
+        {
+          "name": "NEKTAR_TOOL_PROFILE",
+          "description": "Exposed tool surface: agent (10 curated tools, default) or operator (full admin/ZK surface)",
+          "isRequired": false,
+          "default": "agent"
+        },
+        {
+          "name": "NEKTAR_KEY_PASSPHRASE",
+          "description": "Optional on testnet (keys stay mode-0600); required on mainnet to encrypt keys at rest",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "NEKTAR_AUTOMATION",
+          "description": "Set to 1 to enable the policy-gated knowledge marketplace (want/sell/deals)",
+          "isRequired": false,
+          "default": "0"
+        }
+      ]
+    }
+  ]
+}

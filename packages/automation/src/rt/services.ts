@@ -572,67 +572,52 @@ export const dealfanTickBody =
     // reconcile sends are per-TICK work pokes — a windowed key collapses
     // distinct ticks into one leg and starves ops whose gates matured
     // between ticks, so they carry the tickSeq when one is wired.
-    // EVERY decision input lives inside a journaled step: the sentRecently
-    // map, the time buckets, the seq, and ceilingMs() all differ across a
-    // replay — an unjournaled gate produces a different send stream on
-    // replay and the invocation dies JournalMismatchError instead of
-    // completing.
-    const now0 = await run('now', () => Promise.resolve((deps.now ?? Date.now)()))
-    const eb = Math.floor(now0 / WAITS.fanEventResend.ms)
-    const ab =
-      deps.tickSeq === undefined
-        ? String(Math.floor(now0 / WAITS.fanAdvanceResend.ms))
-        : `${now0}:${await run('fanseq', () => Promise.resolve(deps.tickSeq!()))}`
-    // discovery floor: the lane/mailbox read rides the tick so a quiet
-    // runtime still polls at the arm's cadence — order matters, a want
-    // ingested below lands in this tick's inbox scan
+    // EVERY decision input lives inside a single journaled 'plan' step: the
+    // sentRecently map, the time buckets, the seq, the DB snapshot, and
+    // ceilingMs() all differ across a replay — batching them into one step
+    // guarantees identical replay while cutting per-tick Restate roundtrips
+    // from ~10-15 down to 1-2.
     if (deps.poll !== undefined) await run('poll', () => deps.poll!())
-    const inbox = await run('inbox', () => Promise.resolve(deps.pendingInbox()))
-    for (const i of inbox)
-      if (!(await run(`dup:ev:${i.source}:${i.messageId}`, () => Promise.resolve(dup(`ev:${i.source}:${i.messageId}`, WAITS.fanEventResend.ms)))))
-        await send({ service: EXEC_SVC.deal, handler: 'event', key: dealEventKey(i) }, i, {
-          idempotencyKey: `fan:ev:${i.source}:${i.messageId}:${eb}`
-        })
-    const ops = await run('ops', () => Promise.resolve(deps.liveOps()))
-    for (const o of ops)
-      if (!(await run(`dup:adv:${o.operationId}`, () => Promise.resolve(dup(`adv:${o.operationId}`, WAITS.fanAdvanceResend.ms)))))
-        await send(
-          { service: EXEC_SVC.deal, handler: 'advance', key: dealOpKey(o) },
-          { op: o.operationId },
-          { idempotencyKey: `fan:adv:${o.operationId}:${ab}` }
-        )
-    const rec = await run('reconcile', () => Promise.resolve(deps.reconcileOps()))
-    for (const o of rec)
-      if (!(await run(`dup:rec:${o.operationId}`, () => Promise.resolve(dup(`rec:${o.operationId}`, WAITS.fanAdvanceResend.ms)))))
-        await send(
-          { service: EXEC_SVC.deal, handler: 'reconcile', key: dealOpKey(o) },
-          { op: o.operationId },
-          { idempotencyKey: `fan:rec:${o.operationId}:${ab}` }
-        )
+    const plan = await run('plan', async () => {
+      const now0 = (deps.now ?? Date.now)()
+      const eb = Math.floor(now0 / WAITS.fanEventResend.ms)
+      const ab = deps.tickSeq === undefined ? String(Math.floor(now0 / WAITS.fanAdvanceResend.ms)) : `${now0}:${deps.tickSeq()}`
+      const inbox = await Promise.resolve(deps.pendingInbox())
+      const events = inbox
+        .filter((i) => !dup(`ev:${i.source}:${i.messageId}`, WAITS.fanEventResend.ms))
+        .map((i) => ({ key: dealEventKey(i), item: i, idem: `fan:ev:${i.source}:${i.messageId}:${eb}` }))
+      const ops = await Promise.resolve(deps.liveOps())
+      const advances = ops
+        .filter((o) => !dup(`adv:${o.operationId}`, WAITS.fanAdvanceResend.ms))
+        .map((o) => ({ key: dealOpKey(o), op: o.operationId, idem: `fan:adv:${o.operationId}:${ab}` }))
+      const rec = await Promise.resolve(deps.reconcileOps())
+      const reconciles = rec
+        .filter((o) => !dup(`rec:${o.operationId}`, WAITS.fanAdvanceResend.ms))
+        .map((o) => ({ key: dealOpKey(o), op: o.operationId, idem: `fan:rec:${o.operationId}:${ab}` }))
+      const ceil = deps.ceilingMs()
+      let arm: { after: number; delayMs: number; idem: string } | undefined
+      if (ceil > 0) {
+        const now = (deps.now ?? Date.now)()
+        // phase skew: services sharing one cadence fire in lockstep after a
+        // fleet restart — stable01(service) spreads each arm ≤10% inside its
+        // ceiling, deterministic so a replay re-arms identically
+        const skew = Math.floor(stable01(service) * ceil * 0.1)
+        const bucket = nextArmBucket(now, ceil, arg?.after)
+        arm = { after: bucket, delayMs: ceil + skew, idem: `${service}:tick:${bucket}` }
+      }
+      return { events, advances, reconciles, arm, counts: { events: inbox.length, advanced: ops.length, reconciled: rec.length } }
+    })
+    for (const e of plan.events) await send({ service: EXEC_SVC.deal, handler: 'event', key: e.key }, e.item, { idempotencyKey: e.idem })
+    for (const a of plan.advances) await send({ service: EXEC_SVC.deal, handler: 'advance', key: a.key }, { op: a.op }, { idempotencyKey: a.idem })
+    for (const r of plan.reconciles) await send({ service: EXEC_SVC.deal, handler: 'reconcile', key: r.key }, { op: r.op }, { idempotencyKey: r.idem })
     if (deps.resubmitPending !== undefined) await run('resubmit', () => Promise.resolve(deps.resubmitPending!()))
-    // the floor: every tick self-arms the next at the adaptive ceiling —
-    // durable delayed send under restate, executor timer under local.
-    // ceilingMs() <= 0 is the floor's off-switch (intervalMs:0 = event-driven
-    // only) — a zero-delay arm would hot-loop the tick forever.
-    // The arm is content-keyed on its cadence window: EVERY tick invocation
-    // arms (boot kick, wake-cycle sends, engine pokes all run this body),
-    // so an unkeyed arm adds a permanent parallel chain per extra tick and
-    // the delayed-send backlog grows without bound (rt/arm-multiplication).
-    // Quantizing on ceiling windows converges all chains to ≤1 pending arm.
-    const ceil = await run('ceiling', () => Promise.resolve(deps.ceilingMs()))
-    if (ceil > 0) {
-      const now = await run('armNow', () => Promise.resolve((deps.now ?? Date.now)()))
-      // phase skew: services sharing one cadence fire in lockstep after a
-      // fleet restart — stable01(service) spreads each arm ≤10% inside its
-      // ceiling, deterministic so a replay re-arms identically
-      const skew = Math.floor(stable01(service) * ceil * 0.1)
-      const bucket = nextArmBucket(now, ceil, arg?.after)
-      await send({ service, handler: 'tick', key: CRON_KEY }, { after: bucket } satisfies TickArg, {
-        delayMs: ceil + skew,
-        idempotencyKey: `${service}:tick:${bucket}`
+    if (plan.arm !== undefined) {
+      await send({ service, handler: 'tick', key: CRON_KEY }, { after: plan.arm.after } satisfies TickArg, {
+        delayMs: plan.arm.delayMs,
+        idempotencyKey: plan.arm.idem
       })
     }
-    return { events: inbox.length, advanced: ops.length, reconciled: rec.length }
+    return plan.counts
   }
 
 export const dealfanObject = async (deps: DealfanDeps, dealDef: unknown, opts?: RtOpts, service: string = EXEC_SVC.dealfan) => {

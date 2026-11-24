@@ -5,7 +5,8 @@
 import { P2PKH } from '@bsv/sdk'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
-import { signerAddress, BoundedMap, BoundedSet, nektarEnvNum, deadline, detached, sparse } from '@nektar/core'
+import { signerAddress, BoundedMap, BoundedSet, nektarEnvNum, deadline, detached, sparse, spread } from '@nektar/core'
+import { FundsStarvedError } from '@nektar/chain'
 import { WAITS } from './waits.js'
 import { deadAncestry } from '@nektar/bstack'
 import { openRefusals } from './refusals.js'
@@ -307,6 +308,15 @@ export function openUpkeep(rt: Rt): void {
   let announceLast: { canon: string; exp: number; hash?: string; publishedAt?: number } | undefined
   let announceError = ''
   let reserveError = ''
+  // tree-mint starvation backoff — avoids burning 4-7s of starved take() +
+  // liveSet() scans every 10s when the treasury is below dealFloor; cleared
+  // immediately when funds.adopted or txProof fires
+  let starveBackoffMs = 0
+  let starveUntil = 0
+  rt.rtUpkeepClearStarve = () => {
+    starveBackoffMs = 0
+    starveUntil = 0
+  }
   // retention sweep cadence — the prune phase itself decides daily; the
   // clock lives here so a mid-pass abandon doesn't re-enter it early
   let lastPruneAt = -Infinity
@@ -340,8 +350,11 @@ export function openUpkeep(rt: Rt): void {
               // dealFloor 0 = "no floor configured" — size the medium off
               // the default, never off zero
               const outSats = cfg.reserveOutSats ?? (mem.funds.dealFloor || 25_000) * 2
-              const mediums = (await mem.funds.outs()).filter((u) => u.satoshis >= outSats)
-              if (mediums.length < wantOuts) {
+              const allOuts = await mem.funds.outs()
+              const mediums = allOuts.filter((u) => u.satoshis >= outSats)
+              const totalSats = allOuts.reduce((s, u) => s + u.satoshis, 0)
+              const needSats = outSats * wantOuts + 600 + (mem.funds.dealFloor ?? 0)
+              if (mediums.length < wantOuts && totalSats >= needSats) {
                 const src = sparse((await mem.fundingOuts(outSats * wantOuts + 600, 'upkeep'))[0])
                 if (src !== undefined) {
                   const dtx = await lanes.mod.mintTree({
@@ -412,75 +425,83 @@ export function openUpkeep(rt: Rt): void {
             )
           }
           upkeepPhase = 'trees'
-          for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger'] as const) {
-            // stop() drains upkeep with a bound — bail between phases so a
-            // late pass doesn't outlive the pool it's about to write to
-            if (rt.stopped) return
-            const spec = await laneSpec(kind)
-            const r = await lanes.mod.ensureTrees({
-              key,
-              wallet,
-              ledger: lanes.ledger,
-              kind,
-              // every lane refills a whole tree ahead: with the proof now
-              // travelling on the FundingOut, an anchored tree serves the
-              // market lane at once, and proven stock is already there when
-              // the vendored-codec lanes (which demand the tree's own mined
-              // path) need it. Proven-only kinds default lowWater to the
-              // full tree — a shallower buffer is a ~1 block stall on
-              // stock-out since they cannot dip into anchored stock
-              lowWater:
-                kind === 'finger' ? (cfg.treeLowWater ?? 2) : kind === 'market' ? (cfg.treeLowWater ?? cfg.treeSize ?? 64) : (cfg.treeLowWater ?? spec.size),
-              maxUnproven: cfg.treeMaxUnproven ?? 2,
-              changeFanout: cfg.changeFanout,
-              size: spec.size,
-              satsPerOutput: spec.satsPerOutput,
-              reserveSats: cfg.treeReserveSats,
-              feeRateSatPerKb: mem.feeRateSatPerKb,
-              lock: kind === 'market' ? undefined : spec.lock,
-              takeFunding: async (sats: number) => (await mem.fundingOuts(sats, 'upkeep'))[0],
-              broadcast: (tx) => broadcast(tx),
-              fetchTx: (txid) => mem.fetchTx(txid),
-              facts,
-              onReject: (tree) => ghostMint(tree),
-              // a mint refused at broadcast: the refusal's ancestor already
-              // fed refusedAncestors through `broadcast`; a definitive
-              // refusal ghosts the take so the input's reservation frees
-              // and its dead-parent side stays quarantined. A maybe-aired
-              // (transport) failure keeps the reservation — a phantom
-              // reservation beats a double-spend of a mint that may land.
-              onRefused: (tree, r) => {
-                if (BROADCAST_DEFINITIVE.test(r.description ?? '') && !(r.description ?? '').startsWith('transport:')) ghostMint(tree)
-              },
-              onStuck: (tree, unprovenSince) => stuckMint(tree, unprovenSince),
-              onSpent: (tree) => void mem.funds.spent(tree)
-            })
-            // a fresh market tree's slots are usable the moment it's added —
-            // anchored ancestry — so wake slot-deferred work now instead of
-            // letting the defer window lapse
-            if (r.minted.length > 0 && kind === 'market') await store.unblockOutbox('funding-slot')
-            // a proven log tree's BEEF must reach tm_log before hosts can
-            // admit carriers spending it - journaled, publishes once
-            for (const txid of r.proven) {
-              const tx = await mem.fetchTx(txid)
-              if (tx !== undefined && logStream !== undefined) {
-                const pub = await lanes.mod.publishMinedLog({ journal: lanes.journal, hosts: marketHosts, stream: logStream, tx })
-                await queueRepairs(
-                  rt.fanoutIo,
-                  `logpub:${logStream}:${txid}`,
-                  pub.missed.map((m) => m.host)
-                )
+          if (Date.now() >= starveUntil) {
+            for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger'] as const) {
+              // stop() drains upkeep with a bound — bail between phases so a
+              // late pass doesn't outlive the pool it's about to write to
+              if (rt.stopped) return
+              const spec = await laneSpec(kind)
+              const r = await lanes.mod.ensureTrees({
+                key,
+                wallet,
+                ledger: lanes.ledger,
+                kind,
+                // every lane refills a whole tree ahead: with the proof now
+                // travelling on the FundingOut, an anchored tree serves the
+                // market lane at once, and proven stock is already there when
+                // the vendored-codec lanes (which demand the tree's own mined
+                // path) need it. Proven-only kinds default lowWater to the
+                // full tree — a shallower buffer is a ~1 block stall on
+                // stock-out since they cannot dip into anchored stock
+                lowWater:
+                  kind === 'finger' ? (cfg.treeLowWater ?? 2) : kind === 'market' ? (cfg.treeLowWater ?? cfg.treeSize ?? 64) : (cfg.treeLowWater ?? spec.size),
+                maxUnproven: cfg.treeMaxUnproven ?? 2,
+                changeFanout: cfg.changeFanout,
+                size: spec.size,
+                satsPerOutput: spec.satsPerOutput,
+                reserveSats: cfg.treeReserveSats,
+                feeRateSatPerKb: mem.feeRateSatPerKb,
+                lock: kind === 'market' ? undefined : spec.lock,
+                takeFunding: async (sats: number) => (await mem.fundingOuts(sats, 'upkeep'))[0],
+                broadcast: (tx) => broadcast(tx),
+                fetchTx: (txid) => mem.fetchTx(txid),
+                facts,
+                onReject: (tree) => ghostMint(tree),
+                // a mint refused at broadcast: the refusal's ancestor already
+                // fed refusedAncestors through `broadcast`; a definitive
+                // refusal ghosts the take so the input's reservation frees
+                // and its dead-parent side stays quarantined. A maybe-aired
+                // (transport) failure keeps the reservation — a phantom
+                // reservation beats a double-spend of a mint that may land.
+                onRefused: (tree, r) => {
+                  if (BROADCAST_DEFINITIVE.test(r.description ?? '') && !(r.description ?? '').startsWith('transport:')) ghostMint(tree)
+                },
+                onStuck: (tree, unprovenSince) => stuckMint(tree, unprovenSince),
+                onSpent: (tree) => void mem.funds.spent(tree)
+              })
+              // a fresh market tree's slots are usable the moment it's added —
+              // anchored ancestry — so wake slot-deferred work now instead of
+              // letting the defer window lapse
+              if (r.minted.length > 0 && kind === 'market') await store.unblockOutbox('funding-slot')
+              // a proven log tree's BEEF must reach tm_log before hosts can
+              // admit carriers spending it - journaled, publishes once
+              for (const txid of r.proven) {
+                const tx = await mem.fetchTx(txid)
+                if (tx !== undefined && logStream !== undefined) {
+                  const pub = await lanes.mod.publishMinedLog({ journal: lanes.journal, hosts: marketHosts, stream: logStream, tx })
+                  await queueRepairs(
+                    rt.fanoutIo,
+                    `logpub:${logStream}:${txid}`,
+                    pub.missed.map((m) => m.host)
+                  )
+                }
+                // carriers minted on this tree while it was unproven carry a
+                // host-side eviction deadline that never clears on its own —
+                // queue a per-row re-announce with the parent's BUMP attached;
+                // every tree kind carries carriers (market offers, finger
+                // records, log batches, box envelopes) — fundedBy() finds only
+                // rows that recorded the tree they spend
+                if (tx?.merklePath !== undefined) await rt.queueRepublish(txid)
               }
-              // carriers minted on this tree while it was unproven carry a
-              // host-side eviction deadline that never clears on its own —
-              // queue a per-row re-announce with the parent's BUMP attached;
-              // every tree kind carries carriers (market offers, finger
-              // records, log batches, box envelopes) — fundedBy() finds only
-              // rows that recorded the tree they spend
-              if (tx?.merklePath !== undefined) await rt.queueRepublish(txid)
             }
+            starveBackoffMs = 0
+            starveUntil = 0
           }
         } catch (e) {
+          if (e instanceof FundsStarvedError) {
+            starveBackoffMs = starveBackoffMs === 0 ? WAITS.upkeepStarveBase.ms : Math.min(WAITS.upkeepStarveCap.ms, starveBackoffMs * 2)
+            starveUntil = Date.now() + spread(starveBackoffMs)
+          }
           log(`automation: ensureTrees: ${(e as Error).message}`)
         }
       }

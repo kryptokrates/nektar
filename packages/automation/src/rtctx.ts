@@ -59,6 +59,14 @@ export interface AutomationConfig {
   /** stronger broadcaster liveness probe (the transport knows the endpoint —
    *  an HTTP answer proves the socket where txFacts can't) */
   broadcasterProbe?: () => Promise<boolean>
+  /** raw SpendGuard-wrapped broadcaster (bypassing wrapBroadcast) for
+   *  preflight's synthetic dry-run — proves the guard refuses over-cap fees
+   *  without writing a fake owner:* row into records.sqlite */
+  spendGuardProbe?: (tx: import('@bsv/sdk').Transaction) => Promise<import('@nektar/chain').BroadcastResult>
+  /** shared records.sqlite Knex pool from the host — when supplied,
+   *  openAutomation reuses it instead of opening a second pool to the same
+   *  SQLite file (avoids SQLITE_BUSY_SNAPSHOT across dual pools) */
+  walletKx?: Knex
   /** the guarded-broadcaster's day ledger, when the runtime composes one —
    *  the doctor's 'budget' check reads today's committed spend + caps and
    *  splits upkeep vs deal sats against the wallet ledger */
@@ -247,6 +255,7 @@ export interface Rt {
   notifyLegs?: { peer: (watch: string, service: string, query?: unknown) => Promise<void>; carrier: (push: string, beefHex: string) => Promise<void> }
   hostBack: (h: string) => Promise<void>
   queueRepublish: (treeTxid: string) => Promise<void>
+  rtUpkeepClearStarve?: () => void
   poll: () => Promise<void>
   pushAcks: () => void
   pumpOutbox: () => void

@@ -123,6 +123,17 @@ void test('deterministic: dealfan.tick re-fans on journaled inputs', async () =>
     log: () => {}
   }
   await deterministic((send, run) => dealfanTickBody(deps)(send, run), 'dealfan re-keyed its fan sends')
+  // verify batching: all local reads + dup filtering + arm planning live in
+  // one 'plan' step so idle ticks never pay 10+ Restate roundtrips
+  const steps: string[] = []
+  await dealfanTickBody(deps)(
+    () => Promise.resolve(),
+    (name, fn) => {
+      steps.push(name)
+      return fn()
+    }
+  )
+  assert.ok(steps.length <= 3, `expected ≤3 journaled steps per dealfan tick, got ${steps.length}: ${steps.join(', ')}`)
 })
 
 void test('deterministic: transport.drain re-arms with the journaled clock', async () => {

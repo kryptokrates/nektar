@@ -347,18 +347,30 @@ export class AutomationStore {
    *  the resubmit path read one physical truth (the lanes.sqlite precedent);
    *  standalone stores keep the single-connection default */
   private readonly wkx: Knex
+  private readonly ownsWalletKx: boolean
+  /** serializes in-process write transactions on records.sqlite so concurrent
+   *  Restate object keys never race a DEFERRED read→write lock upgrade */
+  private wkxQueue: Promise<unknown> = Promise.resolve()
 
   constructor(
     private kx: Knex,
     private now: () => number = Date.now,
-    walletKx?: Knex
+    walletKx?: Knex,
+    ownsWalletKx = true
   ) {
     this.wkx = walletKx ?? kx
+    this.ownsWalletKx = walletKx !== undefined && ownsWalletKx
+  }
+
+  private wkxWrite<T>(fn: (trx: Knex.Transaction) => Promise<T>): Promise<T> {
+    const run = this.wkxQueue.then(() => this.wkx.transaction(fn))
+    this.wkxQueue = run.catch(() => {})
+    return run
   }
 
   async close(): Promise<void> {
     await this.kx.destroy()
-    if (this.wkx !== this.kx) await this.wkx.destroy()
+    if (this.ownsWalletKx && this.wkx !== this.kx) await this.wkx.destroy()
   }
 
   async init(): Promise<void> {
@@ -1345,7 +1357,7 @@ export class AutomationStore {
     kind: string,
     state: TxState = 'prepared'
   ): Promise<void> {
-    await this.wkx.transaction(async (trx) => {
+    await this.wkxWrite(async (trx) => {
       if (!(await this.claimLeases(trx, actionId, t.outs)))
         throw new LeaseConflictError(`recordBroadcast: an input of ${t.txid} is already leased to another live action`)
       const now = this.now()
@@ -1373,7 +1385,7 @@ export class AutomationStore {
   }
 
   async setTxState(actionId: string, state: TxState, observation?: unknown, attempt = false): Promise<void> {
-    await this.wkx.transaction(async (trx) => {
+    await this.wkxWrite(async (trx) => {
       const r = await trx(T.txs).where({ action_id: actionId }).first()
       if (!r) throw new Error(`unknown wallet action ${actionId}`)
       await trx(T.txs)
@@ -1408,7 +1420,7 @@ export class AutomationStore {
     event: string,
     payload: { guard?: string; observation?: unknown; attempt?: boolean } = {}
   ): Promise<{ accepted: boolean; next: TxState; intents: string[]; eventId?: number }> {
-    const r = await this.wkx.transaction(async (trx) => {
+    const r = await this.wkxWrite(async (trx) => {
       const cur = await trx(T.txs).where({ action_id: actionId }).first()
       if (!cur) throw new Error(`unknown wallet action ${actionId}`)
       const s = txStep(cur.state, event, payload.guard !== undefined ? { guard: payload.guard } : {})

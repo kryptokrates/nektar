@@ -283,11 +283,26 @@ export const acquireInstanceLock = async (dataDir: string): Promise<{ release: (
  *  data dir's durable state (WAL + busy_timeout), was two verbatim copies. */
 export async function openRecordsDb(dataDir: string) {
   const knexMod = (await import('knex')).default
-  const knex = knexMod({ client: 'sqlite3', connection: { filename: join(dataDir, 'records.sqlite') }, useNullAsDefault: true })
-  // WAL: readers don't queue behind the writer; busy_timeout turns a
-  // contended SQLITE_BUSY into a wait instead of a surfaced error
-  await knex.raw('PRAGMA journal_mode=WAL')
-  await knex.raw('PRAGMA busy_timeout=5000')
+  const knex = knexMod({
+    client: 'sqlite3',
+    connection: { filename: join(dataDir, 'records.sqlite') },
+    useNullAsDefault: true,
+    pool: {
+      min: 1,
+      max: 1,
+      afterCreate: (conn: { run: (sql: string, cb: (e?: Error | null) => void) => void }, done: (e: Error | null, conn: unknown) => void) => {
+        // WAL: readers don't queue behind the writer; busy_timeout turns a
+        // contended SQLITE_BUSY into a wait instead of a surfaced error
+        conn.run('PRAGMA journal_mode=WAL', (e1) => {
+          if (e1) return done(e1, conn)
+          conn.run('PRAGMA busy_timeout=5000', (e2) => {
+            if (e2) return done(e2, conn)
+            conn.run('PRAGMA synchronous=NORMAL', (e3) => done(e3 ?? null, conn))
+          })
+        })
+      }
+    }
+  })
   const store: ShardStore = new KnexShardStore(knex)
   await store.init?.()
   const { AutomationStore, wrapBroadcast, leasePredicate, custodyTxEffects } = await import('@nektar/automation')

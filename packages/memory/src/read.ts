@@ -465,4 +465,9 @@ export abstract class MemRead extends MemRecords {
     if (unproven > 0) refused.push(`${unproven} unproven anchor(s) — re-anchoring spends sats; handle deliberately`)
     return { fixed, refused }
   }
+
+  /** lightweight record count for a shard (avoids hydrating/decrypting every record) */
+  shardCount(shard: string): Promise<number> {
+    return this.store.nextSeq(shard)
+  }
 }

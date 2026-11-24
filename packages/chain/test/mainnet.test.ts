@@ -194,6 +194,26 @@ test('fetchBroadcasterFeeRate: /policy 100sat/1000B → 100 sat/kB', async () =>
   assert.equal(await fetchBroadcasterFeeRate({ fetchImpl, broadcasterUrl: 'http://bcast' }), 100)
 })
 
+test('probeTxStatus: resolves early on first definitive status and aborts slow sibling', async () => {
+  let slowAborted = false
+  const fetchImpl: typeof fetch = (input: any, init?: RequestInit) => {
+    const url = String(input)
+    if (url.startsWith('http://fast')) return Promise.resolve(new Response(JSON.stringify({ txStatus: 'SEEN_ON_NETWORK' }), { status: 200 }))
+    return new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        slowAborted = true
+        reject(new Error('aborted'))
+      })
+    })
+  }
+  const t0 = Date.now()
+  const r = await probeTxStatus({ fetchImpl, broadcasterUrls: ['http://slow', 'http://fast'] }, 'aa'.repeat(32), { indexerFallback: false })
+  const elapsed = Date.now() - t0
+  assert.deepEqual(r, { status: 'SEEN_ON_NETWORK', answered: true })
+  assert.ok(elapsed < 1_000, `expected early resolve, took ${elapsed}ms`)
+  assert.equal(slowAborted, true, 'slow sibling fetch must be aborted once verdict lands')
+})
+
 test('IndexTracker: header cached; 429 retried', async () => {
   let headerCalls = 0
   const fetchImpl: typeof fetch = (input: any) => {

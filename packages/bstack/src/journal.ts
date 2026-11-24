@@ -21,6 +21,8 @@ export interface CarrierJournal {
    *  stored beefs so the enrich seam re-attaches proofs computed against
    *  the new headers on next read. Returns the rows touched. */
   clearPaths?(fromHeight: number): Promise<number>
+  /** delete carrier journal rows older than `olderThanMs` to bound lanes.sqlite size. */
+  prune?(olderThanMs: number): Promise<number>
 }
 
 /** stored beef is either subject form — rows journal atomic today, but
@@ -154,6 +156,7 @@ export class KnexCarrierJournal implements CarrierJournal {
     }))
   }
   private async doEnsure(): Promise<void> {
+    await this.kx.raw('PRAGMA busy_timeout = 10000').catch(() => undefined)
     if (await this.kx.schema.hasTable('bstack_carriers')) {
       if (!(await this.kx.schema.hasColumn('bstack_carriers', 'funding_txid'))) {
         await this.kx.schema.alterTable('bstack_carriers', (t) => {
@@ -245,6 +248,12 @@ export class KnexCarrierJournal implements CarrierJournal {
         n++
       }
     }
+    return n
+  }
+  async prune(olderThanMs: number): Promise<number> {
+    await this.ensure()
+    const n = await this.kx('bstack_carriers').where('created_at', '<', olderThanMs).del()
+    if (n > 0) await this.kx.raw('PRAGMA wal_checkpoint(TRUNCATE)').catch(() => undefined)
     return n
   }
 }

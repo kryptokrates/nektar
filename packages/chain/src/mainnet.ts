@@ -157,6 +157,24 @@ export class BsvBroadcaster implements Broadcaster {
     // a custom first entry in broadcasterUrls counts as a private config
     this.indexFallback = publicIndexOk(c)
   }
+  // per-endpoint circuit breaker: after 3 consecutive transport/5xx failures,
+  // skip the broken route for 60s..5m (exponential) while healthy routes serve
+  private circuit = new Map<string, { fails: number; openUntil: number }>()
+  private activeUrls(urls: string[]): string[] {
+    const now = Date.now()
+    const healthy = urls.filter((u) => (this.circuit.get(u)?.openUntil ?? 0) <= now)
+    return healthy.length > 0 ? healthy : urls
+  }
+  private markHealthy(base: string): void {
+    this.circuit.delete(base)
+  }
+  private markUnhealthy(base: string): void {
+    const cur = this.circuit.get(base)
+    const fails = (cur?.fails ?? 0) + 1
+    const openUntil = fails >= 3 ? Date.now() + Math.min(5 * 60_000, 60_000 * 2 ** (fails - 3)) : 0
+    this.circuit.set(base, { fails, openUntil })
+  }
+
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' }
     if (this.cfg.broadcasterApiKey) headers.Authorization = `Bearer ${this.cfg.broadcasterApiKey}`
@@ -170,8 +188,9 @@ export class BsvBroadcaster implements Broadcaster {
     // resolves unconfirmed parents from it); plain raw otherwise. One payload
     // serves every endpoint — same bytes, same txid, resubmission idempotent.
     const payload = new Uint8Array(tx.inputs.every((i) => i.sourceTransaction !== undefined) ? tx.toEF() : tx.toBinary())
-    const urls = this.cfg.broadcasterUrls
-    if (urls.length === 0) return { status: 'error', description: 'broadcast failed: no broadcaster endpoints configured' }
+    const allUrls = this.cfg.broadcasterUrls
+    if (allUrls.length === 0) return { status: 'error', description: 'broadcast failed: no broadcaster endpoints configured' }
+    const urls = this.activeUrls(allUrls)
     const winCtl = new AbortController()
     const submit = async (base: string): Promise<BroadcastResult> => {
       try {
@@ -184,7 +203,11 @@ export class BsvBroadcaster implements Broadcaster {
           retryIf: (x) => !winCtl.signal.aborted && x.status === 503,
           retryErr: () => !winCtl.signal.aborted
         })
-        if (r.status >= 500) throw new Error(`broadcaster HTTP ${r.status}`)
+        if (r.status >= 500) {
+          this.markUnhealthy(base)
+          return { status: 'error', description: `broadcast failed: broadcaster HTTP ${r.status}` }
+        }
+        this.markHealthy(base)
         const body = await r.json().catch(() => ({}))
         const st = String(body.txStatus ?? '').toUpperCase()
         if (r.ok && !REJECTED_WORDS.includes(st)) {
@@ -192,6 +215,7 @@ export class BsvBroadcaster implements Broadcaster {
         }
         return { status: 'error', description: `broadcaster ${st || `HTTP ${r.status}`}: ${body.reason ?? body.detail ?? body.extraInfo ?? ''}`.trim() }
       } catch (e) {
+        if (!winCtl.signal.aborted) this.markUnhealthy(base)
         return { status: 'error', description: `broadcast failed: ${(e as Error).message}` }
       }
     }
@@ -237,7 +261,10 @@ export class BsvBroadcaster implements Broadcaster {
   /** the broadcaster's current word for a txid — a HINT, never a verdict:
    *  routes through the shared observer seam incl. the index mined-fallback */
   async statusHint(txid: string): Promise<StatusHint> {
-    return await probeTxStatus(this.cfg, txid, { indexerFallback: this.indexFallback })
+    return await probeTxStatus(this.cfg, txid, {
+      indexerFallback: this.indexFallback,
+      urls: this.activeUrls(this.cfg.broadcasterUrls)
+    })
   }
 }
 
@@ -451,7 +478,7 @@ export async function fetchBroadcasterFeeRate(cfg?: MainnetConfig): Promise<numb
 export async function probeTxStatus(
   cfg: MainnetConfig | undefined,
   txid: string,
-  opts?: { wocFallback?: boolean; indexerFallback?: boolean }
+  opts?: { wocFallback?: boolean; indexerFallback?: boolean; urls?: string[] }
 ): Promise<{ status: string; answered: boolean }> {
   const c = def(cfg)
   const h: Record<string, string> = {}
@@ -462,11 +489,12 @@ export async function probeTxStatus(
   // `answered` while letting another route or the index fallback say MINED.
   const abortAll = new AbortController()
   let answered = false
+  const urls = opts?.urls ?? c.broadcasterUrls
   const verdict = await new Promise<{ status: string; answered: boolean } | undefined>((resolve) => {
-    let pending = c.broadcasterUrls.length
+    let pending = urls.length
     if (pending === 0) return resolve(undefined)
     let settled = false as boolean
-    for (const base of c.broadcasterUrls) {
+    for (const base of urls) {
       void (async () => {
         try {
           const r = await req(c, `${base}/tx/${txid}`, { headers: h, signal: abortAll.signal }, 10_000)

@@ -130,10 +130,9 @@ void test('F1: a poisoned op still reaches its declared stuck exit — error lab
     t,
     deps(store, () => now)
   )
-  // 'selected' bound is 15 min, exit abort → 'canceled'. Six 5-minute ticks
-  // is 30 min elapsed: today every tick's tick_error write refreshes
-  // updatedAt — the clock the bound measures — so it never fires.
-  for (let i = 0; i < 6; i++) {
+  // 'selected' bound is 45 min, exit abort → 'canceled'. Ten 5-minute ticks
+  // is 50 min elapsed: tick_error writes must not refresh the stuck-state clock.
+  for (let i = 0; i < 10; i++) {
     now += 5 * 60_000
     await engine.tick()
   }

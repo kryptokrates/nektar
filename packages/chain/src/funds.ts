@@ -6,7 +6,7 @@
 // set, serialized takes, change detection); a FundsStore supplies the
 // backend — wallet basket, in-memory pool, or test treasury.
 import { Transaction, P2PKH } from '@bsv/sdk'
-import { inputPrevout, sparse } from '@nektar/core'
+import { deadline, inputPrevout, sparse } from '@nektar/core'
 import type { Funder, FundingOut, Funds, FundPurpose } from './interfaces.js'
 
 /** a narrow Funder view over a Funds owner — every take is purpose-labeled.
@@ -378,7 +378,10 @@ export abstract class FundsBase implements Funds {
       }
       candidates.sort((a, b) => depth(a) - depth(b) || a.satoshis - b.satoshis)
       // first-party truth side: a 'spent' answer burns the candidate for
-      // good and selection moves on — a hint only passes over, this drops
+      // good and selection moves on — a hint only passes over, this drops.
+      // Bound network probes (3s per probe, max 3 timeouts) so a degraded
+      // indexer never turns a deal tick into a 30-120s serialized stall.
+      let probeTimeouts = 0
       for (const pick of candidates) {
         let id: string
         try {
@@ -399,15 +402,94 @@ export abstract class FundsBase implements Funds {
             continue
           }
         }
-        if ((await this.spendCheck?.(id, pick.vout)) === true) {
-          await this.burn(id, pick.vout)
-          continue
+        if (this.spendCheck !== undefined && probeTimeouts < 3) {
+          const sr = await deadline(() => this.spendCheck!(id, pick.vout), 3_000).catch(() => ({ outcome: 'timeout' as const }))
+          if (sr.outcome === 'timeout') probeTimeouts++
+          else if (sr.outcome === 'settled' && sr.value === true) {
+            await this.burn(id, pick.vout)
+            continue
+          }
         }
         this.reserved.add(op(id, pick.vout))
-        if (pick.tx.merklePath === undefined) await this.deps.proofOf?.(pick.tx)
+        if (pick.tx.merklePath === undefined && this.deps.proofOf !== undefined) {
+          await deadline(() => this.deps.proofOf!(pick.tx), 3_000).catch(() => undefined)
+        }
         return pick
       }
       throw new FundsStarvedError(`funds: no spendable output ≥ ${sats} sats`)
+    })
+    this.queue = run.catch(() => {})
+    return run
+  }
+
+  /** reserve multiple small confirmed/spendable outputs summing to at least
+   *  `minTotalSats` (up to `maxInputs`). Used for UTXO consolidation and
+   *  multi-input reserve splits on fragmented wallets. `selfPay=true` skips
+   *  the dealFloor check because all sats minus relay fee return to us. */
+  takeMany(
+    purpose: FundPurpose,
+    minTotalSats: number,
+    opts: { maxInputs?: number; minOutputSats?: number; maxOutputSats?: number; confirmedOnly?: boolean; selfPay?: boolean } = {}
+  ): Promise<FundingOut[]> {
+    const maxInputs = Math.max(1, opts.maxInputs ?? 16)
+    const minOut = Math.max(1, opts.minOutputSats ?? 1)
+    const run = this.queue.then(async () => {
+      const all = await this.store.list()
+      const deadMemo = new Map<string, boolean>()
+      const candidates: FundingOut[] = []
+      for (const u of all) {
+        const veto = await this.unusable(u, deadMemo)
+        if (veto === 'dead') {
+          await this.died(u.tx)
+          continue
+        }
+        if (veto !== false) continue
+        if (opts.confirmedOnly === true && u.tx.merklePath === undefined) continue
+        if (u.satoshis < minOut) continue
+        if (opts.maxOutputSats !== undefined && u.satoshis > opts.maxOutputSats) continue
+        candidates.push(u)
+      }
+      // proven first, then smallest-first so consolidation sweeps fragmented small UTXOs first
+      candidates.sort((a, b) => (a.tx.merklePath !== undefined ? 0 : 1) - (b.tx.merklePath !== undefined ? 0 : 1) || a.satoshis - b.satoshis)
+      const picked: FundingOut[] = []
+      let total = 0
+      let probeTimeouts = 0
+      for (const pick of candidates) {
+        if (picked.length >= maxInputs || total >= minTotalSats) break
+        let id: string
+        try {
+          id = pick.tx.id('hex')
+        } catch {
+          continue
+        }
+        if (sparse(pick.tx.outputs[pick.vout])?.satoshis === undefined || sparse(pick.tx.outputs[pick.vout])?.lockingScript === undefined) continue
+        if (this.spendCheck !== undefined && probeTimeouts < 3) {
+          const sr = await deadline(() => this.spendCheck!(id, pick.vout), 3_000).catch(() => ({ outcome: 'timeout' as const }))
+          if (sr.outcome === 'timeout') probeTimeouts++
+          else if (sr.outcome === 'settled' && sr.value === true) {
+            await this.burn(id, pick.vout)
+            continue
+          }
+        }
+        picked.push(pick)
+        total += pick.satoshis
+      }
+      if (total < minTotalSats || picked.length === 0) {
+        throw new FundsStarvedError(`funds: cannot assemble ≥ ${minTotalSats} sats from up to ${maxInputs} outputs (got ${total})`)
+      }
+      if (purpose !== 'deal' && opts.selfPay !== true) {
+        const floor = this.dealFloor ?? 25_000
+        let owned = 0
+        for (const u of all) if (!this.reserved.has(op(u.tx.id('hex'), u.vout))) owned += u.satoshis
+        if (owned - total < floor) throw new FundsStarvedError(`funds: ${purpose} takeMany of ${total} sats would leave ${owned - total} < deal floor ${floor}`)
+      }
+      for (const p of picked) this.reserved.add(op(p.tx.id('hex'), p.vout))
+      if (this.deps.proofOf !== undefined) {
+        await Promise.all(
+          picked.filter((p) => p.tx.merklePath === undefined).map((p) => deadline(() => this.deps.proofOf!(p.tx), 3_000).catch(() => undefined))
+        )
+      }
+      return picked
     })
     this.queue = run.catch(() => {})
     return run

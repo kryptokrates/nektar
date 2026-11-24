@@ -594,3 +594,33 @@ test('BsvBroadcaster: transport throw retries through withRetry and succeeds on 
   assert.equal(res.status, 'success')
   assert.equal(attempts, 2, 'single jittered retry path handles transport throws')
 })
+
+test('BsvBroadcaster: circuit breaker skips unhealthy secondary after 3 consecutive failures', async () => {
+  const hits: Record<string, number> = { good: 0, bad: 0 }
+  const fetchImpl: typeof fetch = (input) => {
+    const url = String(input)
+    if (url.includes('good.example')) {
+      hits.good++
+      return Promise.resolve(new Response(JSON.stringify({ txStatus: 'SEEN_ON_NETWORK' }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    }
+    hits.bad++
+    return Promise.resolve(new Response('bad gateway', { status: 502 }))
+  }
+  const b = new BsvBroadcaster({
+    broadcasterUrl: 'http://good.example',
+    broadcasterUrls: ['http://bad.example'],
+    fetchImpl
+  })
+  // First 3 broadcasts hit both routes; bad.example fails 3 times and trips its circuit
+  for (let i = 0; i < 3; i++) {
+    const r = await b.broadcast(tx())
+    assert.equal(r.status, 'success')
+  }
+  const badHitsAfterTrip = hits.bad
+  assert.ok(badHitsAfterTrip >= 3, 'unhealthy route tried at least 3 times before circuit opens')
+  // 4th broadcast must bypass bad.example completely while good.example still serves
+  const r4 = await b.broadcast(tx())
+  assert.equal(r4.status, 'success')
+  assert.equal(hits.bad, badHitsAfterTrip, 'open circuit must skip unhealthy secondary route')
+  assert.equal(hits.good, 4)
+})

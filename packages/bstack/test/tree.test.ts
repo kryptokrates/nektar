@@ -743,3 +743,32 @@ test('tree: an explicit feeRateSatPerKb prices the mint off that rate, not LiveP
   // rounding); a LivePolicy-priced mint could never produce this delta
   assert.ok(fd >= fc * 4 && fd <= fc * 6, `fee ${fd} should be ~5x ${fc}`)
 })
+
+test('ledger (knex): prune removes exhausted proven trees while preserving active and unproven trees', async () => {
+  const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  try {
+    const key = PrivateKey.fromRandom()
+    const l = new KnexTreeLedger(kx)
+    const exhausted = await provenTree(key, 1)
+    const active = await provenTree(key, 2)
+    const unproven = await mintTree({ key, funding: fund(key), n: 3, satsPerOutput: 1000 })
+    await l.add(exhausted, 1, 'market')
+    await l.markProven(exhausted.id('hex'), exhausted.merklePath!)
+    // exhaust the single slot on `exhausted`
+    const s = await l.take('market')
+    assert.equal(s?.tree.id('hex'), exhausted.id('hex'))
+    await l.add(active, 2, 'market')
+    await l.markProven(active.id('hex'), active.merklePath!)
+    await l.add(unproven, 1, 'bbox')
+    // backdate all rows so cutoff includes them
+    await kx('bstack_trees').update({ added_at: 1000 })
+    const pruned = await l.prune(Date.now())
+    assert.equal(pruned, 1, 'only the exhausted proven tree is pruned')
+    const left = (await kx('bstack_trees').select('txid')).map((r: { txid: string }) => r.txid)
+    assert.ok(!left.includes(exhausted.id('hex')), 'exhausted proven tree removed')
+    assert.ok(left.includes(active.id('hex')), 'active proven tree kept')
+    assert.ok(left.includes(unproven.id('hex')), 'unproven tree kept')
+  } finally {
+    await kx.destroy()
+  }
+})

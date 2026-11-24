@@ -238,6 +238,8 @@ export async function livePort(mc: MainnetConfig & { feeRateSatPerKb?: number },
     new IndexTracker(rmc, { requirePow }),
     {
       strict: strictHeaders,
+      requirePow,
+      persistPath: join(deps.dataDir, 'headers-cache.json'),
       onDisagree: (height, primaryHash, witnessHash) =>
         log(`nektar ${net}: header sources disagree at ${height} (primary ${primaryHash}, witness ${witnessHash}) — serving no root\n`)
     }

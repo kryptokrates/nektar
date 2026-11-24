@@ -1,8 +1,9 @@
 // headers.ts — self-authenticating block headers: the 80-byte serialization,
 // the proof-of-work check that makes a served header self-verifying, and the
 // witnessed tracker that makes two independent sources attest the same chain.
+import { existsSync, readFileSync } from 'node:fs'
 import { Hash } from '@bsv/sdk'
-import { BoundedMap, detached, HEX64 } from '@nektar/core'
+import { BoundedMap, detached, HEX64, writeJsonAtomic } from '@nektar/core'
 import type { BlockHeader, ChainTracker } from './interfaces.js'
 
 /** the consensus serialization — 80 bytes: version LE32, prevHash and
@@ -163,6 +164,11 @@ export class WitnessedTracker implements ChainTracker {
   // why the last headerAtHeight read for a height declined with neither a
   // verdict nor a mark — isValidRootForHeight reads it to name the outage
   private lastMiss = new BoundedMap<number, 'no-source' | 'uncorroborated'>(8192)
+  // finalized corroborated headers persisted across restarts (tip - finalityDepth)
+  private persisted = new BoundedMap<number, BlockHeader>(10_000)
+  private knownTip = 0
+  private lastPersistAt = 0
+  private dirtyPersist = 0
 
   constructor(
     private primary: ChainTracker,
@@ -171,9 +177,88 @@ export class WitnessedTracker implements ChainTracker {
       strict?: boolean
       witnessTimeoutMs?: number
       retryMs?: number
+      /** optional disk path for deeply-finalized corroborated headers */
+      persistPath?: string
+      /** confirmations below known tip before persisting a corroborated header (default 12) */
+      finalityDepth?: number
+      /** verify PoW before admitting persisted headers from disk (default true) */
+      requirePow?: boolean
       onDisagree?: (height: number, primaryHash: string, witnessHash: string) => void
     } = {}
-  ) {}
+  ) {
+    this.loadPersisted()
+  }
+
+  private loadPersisted(): void {
+    const file = this.opts.persistPath
+    if (file === undefined || !existsSync(file)) return
+    try {
+      const raw = JSON.parse(readFileSync(file, 'utf8')) as unknown
+      if (!Array.isArray(raw)) return
+      const checkPow = this.opts.requirePow !== false
+      const now = Date.now()
+      for (const item of raw) {
+        const h = item as Partial<BlockHeader> | null
+        if (
+          h === null ||
+          typeof h !== 'object' ||
+          typeof h.height !== 'number' ||
+          typeof h.hash !== 'string' ||
+          typeof h.merkleRoot !== 'string' ||
+          typeof h.prevHash !== 'string' ||
+          typeof h.time !== 'number' ||
+          typeof h.bits !== 'number' ||
+          typeof h.nonce !== 'number'
+        )
+          continue
+        const hdr = h as BlockHeader
+        if (checkPow && !headerPowValid(hdr)) continue
+        this.persisted.set(hdr.height, hdr)
+        this.marks.set(hdr.height, { at: now, state: 'ok', hash: hdr.hash })
+      }
+    } catch {
+      /* corrupt or unreadable disk cache — rebuild cleanly from live sources */
+    }
+  }
+
+  private maybePersist(h: BlockHeader): void {
+    const file = this.opts.persistPath
+    if (file === undefined) return
+    const depth = this.opts.finalityDepth ?? 12
+    if (this.knownTip === 0) {
+      void this.currentHeight()
+        .then((t) => {
+          if (t > 0) this.maybePersist(h)
+        })
+        .catch(() => {})
+      return
+    }
+    if (h.height > this.knownTip - depth) return
+    if (this.opts.requirePow !== false && !headerPowValid(h)) return
+    if (this.persisted.get(h.height)?.hash === h.hash) return
+    this.persisted.set(h.height, h)
+    this.dirtyPersist++
+    const now = Date.now()
+    if (this.lastPersistAt === 0 || this.dirtyPersist >= 20 || now - this.lastPersistAt >= 5_000) {
+      this.flushPersisted()
+    }
+  }
+
+  /** flush persisted finalized headers to disk (best-effort atomic write) */
+  flushPersisted(): void {
+    const file = this.opts.persistPath
+    if (file === undefined || this.dirtyPersist === 0) return
+    try {
+      writeJsonAtomic(
+        file,
+        [...this.persisted].map(([, h]) => h)
+      )
+      this.lastPersistAt = Date.now()
+      this.dirtyPersist = 0
+    } catch {
+      /* advisory cache — never fail a verification read on disk error */
+    }
+  }
 
   // per-instance phase on the retry gate — a fleet that hit a disagreement
   // together re-asks in a spread instead of hammering the witness on one
@@ -222,11 +307,18 @@ export class WitnessedTracker implements ChainTracker {
   }
 
   async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
+    // deeply-finalized corroborated headers (loaded with PoW verified) answer
+    // locally in 0ms without re-hitting rate-limited public APIs after restart
+    const cached = this.persisted.get(height)
+    if (cached !== undefined) return cached
     const p = await this.primary.headerAtHeight(height).catch(() => undefined)
     // a corroborated height stays served without re-asking — but only for
     // the SAME hash: a primary answer that changed (reorg) re-verifies
     const m = this.marks.get(height)
-    if (p !== undefined && m?.state === 'ok' && m.hash === p.hash) return p
+    if (p !== undefined && m?.state === 'ok' && m.hash === p.hash) {
+      this.maybePersist(p)
+      return p
+    }
     // inside the retry window a known split fails closed immediately — the
     // refresh path below re-runs only once per retryMs so a persistent fork
     // can't turn every read into two forced re-fetches
@@ -235,6 +327,7 @@ export class WitnessedTracker implements ChainTracker {
     if (p !== undefined && w !== undefined) {
       if (p.hash === w.hash) {
         this.marks.set(height, { at: Date.now(), state: 'ok', hash: p.hash })
+        this.maybePersist(p)
         return p
       }
       // a hash split can be a STALE CACHE on either side, not a chain split —
@@ -248,6 +341,7 @@ export class WitnessedTracker implements ChainTracker {
       const w3 = w2 ?? w
       if (p3.hash === w3.hash) {
         this.marks.set(height, { at: Date.now(), state: 'ok', hash: p3.hash })
+        this.maybePersist(p3)
         return p3
       }
       // fail closed: disagreement at a height serves no root until it resolves
@@ -303,12 +397,16 @@ export class WitnessedTracker implements ChainTracker {
     const [p, w] = await Promise.allSettled([this.primary.currentHeight(), this.witness.currentHeight()])
     const heights = [p, w].filter((r): r is PromiseFulfilledResult<number> => r.status === 'fulfilled').map((r) => r.value)
     if (heights.length === 0) throw new Error('headers: no source could answer currentHeight')
-    return Math.max(...heights)
+    const maxH = Math.max(...heights)
+    if (maxH > this.knownTip) this.knownTip = maxH
+    return maxH
   }
 
   async tipHeight(): Promise<number> {
     const tip = (t: ChainTracker) => (t.tipHeight !== undefined ? t.tipHeight() : t.currentHeight())
-    return await tip(this.primary).catch(() => tip(this.witness))
+    const h = await tip(this.primary).catch(() => tip(this.witness))
+    if (h > this.knownTip) this.knownTip = h
+    return h
   }
 
   /** force both sources to re-ask a height — clears the corroboration mark
@@ -317,13 +415,27 @@ export class WitnessedTracker implements ChainTracker {
   async refreshHeader(height: number): Promise<BlockHeader | undefined> {
     this.marks.delete(height)
     this.asks.delete(height)
+    this.persisted.delete(height)
     const [p, w] = await Promise.all([this.primary.refreshHeader?.(height).catch(() => undefined), this.witness.refreshHeader?.(height).catch(() => undefined)])
     return p ?? w
   }
 
   onReorg(cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {
-    this.primary.onReorg?.(cb)
-    this.witness.onReorg?.(cb)
+    const wrapped = (removed: BlockHeader[], newTip: BlockHeader) => {
+      if (removed.length > 0) {
+        const minH = Math.min(...removed.map((h) => h.height))
+        const drop: number[] = []
+        for (const [h] of this.persisted) if (h >= minH) drop.push(h)
+        for (const h of drop) this.persisted.delete(h)
+        if (drop.length > 0) {
+          this.dirtyPersist++
+          this.flushPersisted()
+        }
+      }
+      cb(removed, newTip)
+    }
+    this.primary.onReorg?.(wrapped)
+    this.witness.onReorg?.(wrapped)
   }
 
   /** true = both sources agreed at this height; false = served uncorroborated

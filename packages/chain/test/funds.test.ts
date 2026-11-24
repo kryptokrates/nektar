@@ -147,3 +147,23 @@ test('funds: starve sweep throttles repeated liveSet calls and resets on adopt',
   await assert.rejects(() => funds.take('upkeep', 10_000))
   assert.equal(liveSetCalls, 2, 'adopt() resets the starve-sweep cooldown')
 })
+
+test('funds: takeMany consolidates fragmented outputs, skips dust, and releases cleanly', async () => {
+  const key = PrivateKey.fromRandom()
+  const addr = key.toAddress()
+  const deps = { pkhHex: Buffer.from(key.toPublicKey().toHash()).toString('hex') }
+  const lock = () => new P2PKH().lock(addr)
+  const store = listFundsStore()
+  const funds = new MemoryFunds(store, deps)
+  // 1 dust output (300 sats) + 4 distinct small outputs (4001..4004 sats)
+  for (const sats of [300, 4_001, 4_002, 4_003, 4_004]) {
+    const t = new Transaction()
+    t.addOutput({ lockingScript: lock(), satoshis: sats })
+    await funds.adopt(t, 0)
+  }
+  const picked = await funds.takeMany('upkeep', 10_000, { minOutputSats: 600, maxInputs: 4, selfPay: true })
+  assert.equal(picked.length, 3, 'picks 3 small outputs (>= 12000 sats), skipping 300-sat dust')
+  assert.ok(picked.every((u) => u.satoshis >= 4_001))
+  for (const u of picked) funds.release(u.tx.id('hex'), u.vout)
+  assert.equal((await funds.outs()).length, 5, 'releasing restores all picked outpoints')
+})

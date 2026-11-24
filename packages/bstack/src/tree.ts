@@ -141,6 +141,9 @@ export interface TreeLedger {
    *  and one free slot per entry carrying its own kind at its real vout.
    *  Idempotent — re-adopting the same tx adds nothing and returns 0. */
   adopt(tx: Transaction, slots: Array<{ vout: number; kind: string }>): Promise<number>
+  /** reclaim exhausted proven tree rows (0 remaining free outputs) older than
+   *  `olderThanMs` to prevent unbounded lanes.sqlite growth. */
+  prune?(olderThanMs: number): Promise<number>
 }
 
 // a tree hosts may fund-accept before it mines: proven, or bounded anchored
@@ -450,6 +453,7 @@ export class KnexTreeLedger implements TreeLedger {
     }))
   }
   private async doEnsure(): Promise<void> {
+    await this.kx.raw('PRAGMA busy_timeout = 10000').catch(() => undefined)
     if ((await this.kx.schema.hasTable('bstack_trees')) && !(await this.kx.schema.hasColumn('bstack_trees', 'kind'))) {
       await this.kx.schema.alterTable('bstack_trees', (t) => {
         t.string('kind').notNullable().defaultTo('market')
@@ -721,6 +725,20 @@ export class KnexTreeLedger implements TreeLedger {
     ])
     const taken = Number((m as { s: number | null } | undefined)?.s ?? 0) - Number((f as { c: number } | undefined)?.c ?? 0)
     return { proven: Number(r?.c ?? 0), anchored, unprovenTrees: Number(u?.c ?? 0), taken }
+  }
+  async prune(olderThanMs: number): Promise<number> {
+    await this.ensure()
+    const n = await this.kx('bstack_trees')
+      .where('proven', 1)
+      .where((qb) => {
+        void qb.whereNull('added_at').orWhere('added_at', '<', olderThanMs)
+      })
+      .whereNotExists(function () {
+        void this.select(1).from('bstack_tree_outputs').whereRaw('bstack_tree_outputs.txid = bstack_trees.txid')
+      })
+      .del()
+    if (n > 0) await this.kx.raw('PRAGMA wal_checkpoint(TRUNCATE)').catch(() => undefined)
+    return n
   }
 }
 

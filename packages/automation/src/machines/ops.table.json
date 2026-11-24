@@ -96,6 +96,7 @@
     { "state": "selected", "event": "cap.refused", "guard": "!policy.escalate", "intents": ["release-budget"], "target": "denied" },
     { "state": "selected", "event": "policy.revoked", "intents": [], "target": "denied" },
     { "state": "selected", "event": "policy.denied", "intents": ["release-budget"], "target": "denied" },
+    { "state": "selected", "event": "bbox.unready", "intents": [], "target": "self" },
     { "state": "selected", "event": "stuck.timeout", "guard": "no-escrow", "intents": ["release-budget"], "target": "canceled" },
     { "state": "escalated", "event": "approval.granted", "intents": [], "target": "funding" },
     { "state": "escalated", "event": "approval.denied", "intents": ["release-budget"], "target": "denied" },

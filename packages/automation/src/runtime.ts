@@ -398,6 +398,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     log,
     killed: () => killSwitchActive(cfg.dataDir).killed,
     deaf: deafNow,
+    canDeliverBox: lanes === undefined ? undefined : async () => (await lanes.ledger.remaining('bbox')) > 0,
     opts: {
       ...cfg.opts,
       ...(cfg.minCollectMs !== undefined ? { minCollectMs: cfg.minCollectMs } : {}),

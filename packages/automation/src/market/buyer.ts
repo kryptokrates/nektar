@@ -519,9 +519,17 @@ export abstract class BuyerOps extends SellerOps {
   }
 
   private async fund(op: Operation, p: AutomationPolicy): Promise<void> {
-    // a new escrow is a new spend — paused while stopped or deaf, retried on
-    // the next tick (the op stays 'selected'/'escalated', it does not fail)
+    // a new escrow is a new spend — paused while stopped, deaf, or awaiting
+    // proven bbox stock (prevents locking buyer sats on-chain when accept
+    // cannot be delivered yet; retried automatically once bbox confirms)
     if (this.d.killed?.() || this.d.deaf?.()) return
+    if (this.d.canDeliverBox !== undefined && !(await this.d.canDeliverBox())) {
+      const msg = 'waiting for bbox funding tree confirmation (1 block)'
+      if (op.lastError !== msg) {
+        await this.d.store.transition(op.operationId, op.revision, op.state, { cause: 'awaiting_bbox_stock', lastError: msg })
+      }
+      return
+    }
     const sel = op.data.selected!
     const s = sparse(op.data.offers![sel.key])
     if (s === undefined) throw new Error('selected offer missing from op.data.offers')

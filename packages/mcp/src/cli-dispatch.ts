@@ -22,6 +22,10 @@ export async function runSubcommand(argv: string[]): Promise<number | undefined>
     const { runStatusCli } = await import('./status-cli.js')
     return await runStatusCli(argv.slice(1))
   }
+  if (sub === 'check-mainnet') {
+    const { runMainnetCheckCli } = await import('./mainnet-check.js')
+    return await runMainnetCheckCli(argv.slice(1))
+  }
   return undefined
 }
 

@@ -2,10 +2,10 @@
 // healing, own bfinger record, bstore evidence, blogs deal journal
 // (append + anchor), and the deal-journal view `deals {operationId}` reads.
 // The `upkeep` guard serializes it; the assembler's cycle() and tick drive it.
-import { P2PKH } from '@bsv/sdk'
+import { P2PKH, SatoshisPerKilobyte, Transaction } from '@bsv/sdk'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
-import { signerAddress, BoundedMap, BoundedSet, nektarEnvNum, deadline, detached, sparse, spread } from '@nektar/core'
+import { signerAddress, unlockP2PKH, BoundedMap, BoundedSet, nektarEnvFlag, nektarEnvNum, deadline, detached, sparse, spread } from '@nektar/core'
 import { FundsStarvedError } from '@nektar/chain'
 import { WAITS } from './waits.js'
 import { deadAncestry } from '@nektar/bstack'
@@ -320,6 +320,7 @@ export function openUpkeep(rt: Rt): void {
   // retention sweep cadence — the prune phase itself decides daily; the
   // clock lives here so a mid-pass abandon doesn't re-enter it early
   let lastPruneAt = -Infinity
+  let lastConsolidateAt = -Infinity
 
   let upkeepPhase = 'start'
   const bound = async <T>(work: (signal: AbortSignal) => Promise<T>, ms = WAITS.upkeepBound.ms): Promise<T | undefined> => {
@@ -448,6 +449,87 @@ export function openUpkeep(rt: Rt): void {
             }
             starveBackoffMs = 0
             starveUntil = 0
+          }
+          upkeepPhase = 'consolidate'
+          // UTXO consolidation: mature wallets fragment into hundreds of small
+          // change UTXOs that slow boot reconciliation and break single-input
+          // reserve splits. Merge up to 16 confirmed non-dust UTXOs into clean
+          // medium outputs at most once per 30 min (opt-out: NEKTAR_AUTO_CONSOLIDATE=0).
+          const nowCon = cfg.now?.() ?? Date.now()
+          if (
+            nektarEnvFlag('NEKTAR_AUTO_CONSOLIDATE') !== false &&
+            mem.funds.takeMany !== undefined &&
+            nowCon - lastConsolidateAt >= 30 * 60_000 &&
+            !cancelled()
+          ) {
+            try {
+              const rate = mem.feeRateSatPerKb ?? (cfg.network === 'main' ? 100 : 1)
+              const inputFee = Math.max(1, Math.ceil((148 * rate) / 1000))
+              const minConSats = Math.max(546, inputFee * 3)
+              const outSats = cfg.reserveOutSats ?? (mem.funds.dealFloor || 25_000) * 2
+              const wantOutsCon = cfg.reserveOuts ?? 2
+              const allOuts = await mem.funds.outs()
+              const smallConfirmed = allOuts.filter((u) => u.tx.merklePath !== undefined && u.satoshis >= minConSats && u.satoshis < outSats)
+              const mediums = allOuts.filter((u) => u.satoshis >= outSats)
+              const needReserve = outSats * wantOutsCon + 600
+              const canSingleSplit = allOuts.some((u) => u.satoshis >= needReserve)
+              const totalSmall = smallConfirmed.reduce((s, u) => s + u.satoshis, 0)
+              const shouldConsolidate =
+                smallConfirmed.length > 24 ||
+                (wantOutsCon > 0 && mediums.length < wantOutsCon && !canSingleSplit && smallConfirmed.length >= 2 && totalSmall >= needReserve)
+              if (shouldConsolidate) {
+                const targetSats = Math.min(totalSmall, Math.max(needReserve + 2_000, outSats * Math.max(2, wantOutsCon)))
+                const ins = await mem.funds.takeMany('upkeep', targetSats, {
+                  maxInputs: 16,
+                  minOutputSats: minConSats,
+                  maxOutputSats: outSats - 1,
+                  confirmedOnly: true,
+                  selfPay: true
+                })
+                if (ins.length >= 2) {
+                  try {
+                    const addr = await signerAddress(key, cfg.network === 'main' ? [0x00] : [0x6f])
+                    const lock = new P2PKH().lock(addr)
+                    const ctx = new Transaction()
+                    let inSum = 0
+                    for (const u of ins) {
+                      ctx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: unlockP2PKH(key) })
+                      inSum += u.satoshis
+                    }
+                    const estFee = Math.max(200, Math.ceil(((ins.length * 148 + (wantOutsCon + 1) * 34 + 20) * rate) / 1000) + 100)
+                    let rem = inSum - estFee
+                    let made = 0
+                    for (let i = 0; i < wantOutsCon && rem >= outSats + 546; i++) {
+                      ctx.addOutput({ satoshis: outSats, lockingScript: lock })
+                      rem -= outSats
+                      made++
+                    }
+                    ctx.addOutput({ lockingScript: lock, change: true })
+                    await ctx.fee(new SatoshisPerKilobyte(rate))
+                    await ctx.sign()
+                    const br = await broadcast(ctx)
+                    if (br.status === 'success') {
+                      lastConsolidateAt = nowCon
+                      await mem.funds.spent(ctx)
+                      log(`automation: consolidate: merged ${ins.length} UTXOs (${inSum} sats) into ${made}x${outSats} + change`)
+                    } else if (BROADCAST_DEFINITIVE.test(br.description ?? '') && !(br.description ?? '').startsWith('transport:')) {
+                      await mem.funds.died(ctx)
+                    }
+                  } catch (e) {
+                    for (const u of ins) mem.funds.release(u.tx.id('hex'), u.vout)
+                    throw e
+                  }
+                } else {
+                  for (const u of ins) mem.funds.release(u.tx.id('hex'), u.vout)
+                }
+              }
+            } catch (e) {
+              const m = `automation: consolidate: ${(e as Error).message.slice(0, 160)}`
+              if (m !== reserveError) {
+                reserveError = m
+                log(m)
+              }
+            }
           }
           upkeepPhase = 'reserve'
           // reserve policy: keep `reserveOuts` medium self-pay outputs on
@@ -665,8 +747,13 @@ export function openUpkeep(rt: Rt): void {
         lastPruneAt = nowMs
         const retentionMs = (nektarEnvNum('NEKTAR_JOURNAL_RETENTION_DAYS') ?? 30) * WAITS.day.ms
         const n = await store.prune(nowMs - retentionMs, { ops: TERMINAL, txs: ['confirmed'] })
-        const total = n.inbox + n.outbox + n.events + n.txEvents
-        if (total > 0) log(`automation: pruned ${total} rows (inbox=${n.inbox} outbox=${n.outbox} events=${n.events} txEvents=${n.txEvents})`)
+        const prunedTrees = (await lanes?.ledger.prune?.(nowMs - retentionMs).catch(() => 0)) ?? 0
+        const prunedCarriers = (await lanes?.journal.prune?.(nowMs - retentionMs).catch(() => 0)) ?? 0
+        const total = n.inbox + n.outbox + n.events + n.txEvents + prunedTrees + prunedCarriers
+        if (total > 0)
+          log(
+            `automation: pruned ${total} rows (inbox=${n.inbox} outbox=${n.outbox} events=${n.events} txEvents=${n.txEvents} trees=${prunedTrees} carriers=${prunedCarriers})`
+          )
       }
       upkeepPhase = 'done'
     } catch (e) {

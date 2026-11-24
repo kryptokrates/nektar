@@ -1,5 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Hash } from '@bsv/sdk'
 import { currentSignal, deadline, nap } from '@nektar/core'
 import { serializeHeader, headerPowValid, linksTo, WitnessedTracker, HeaderUnavailableError, isHeaderUnavailable } from '../src/headers.js'
@@ -348,4 +351,53 @@ test('WitnessedTracker: tip+1 throws HeaderUnavailableError (tip-lag), while tip
     'tip+1 is tip lag, not a forged proof'
   )
   assert.equal(await wt.isValidRootForHeight('aa'.repeat(32), 800_005), false, 'far future height stays false')
+})
+
+test('WitnessedTracker: persists finalized corroborated headers and reloads offline with PoW validation', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-hdr-cache-'))
+  const file = join(dir, 'headers-cache.json')
+  try {
+    // 1. Corroborate real mainnet header H800K with tip well above finalityDepth (12)
+    let primaryHits = 0
+    let witnessHits = 0
+    const mk = (counter: () => void): ChainTracker => ({
+      currentHeight: () => Promise.resolve(800_100),
+      headerAtHeight: async (h) => {
+        counter()
+        return h === H800K.height ? H800K : undefined
+      },
+      isValidRootForHeight: async (root, h) => h === H800K.height && root === H800K.merkleRoot
+    })
+    const wt1 = new WitnessedTracker(
+      mk(() => primaryHits++),
+      mk(() => witnessHits++),
+      { persistPath: file, finalityDepth: 12 }
+    )
+    await wt1.currentHeight()
+    assert.equal((await wt1.headerAtHeight(H800K.height))?.hash, H800K.hash)
+    assert.equal(primaryHits, 1)
+    assert.equal(witnessHits, 1)
+
+    // 2. Restart with completely offline trackers — persisted header answers in 0ms with 0 remote calls
+    let offlineCalls = 0
+    const offline: ChainTracker = {
+      currentHeight: () => Promise.reject(new Error('offline')),
+      headerAtHeight: () => {
+        offlineCalls++
+        return Promise.reject(new Error('offline'))
+      },
+      isValidRootForHeight: () => Promise.reject(new Error('offline'))
+    }
+    const wt2 = new WitnessedTracker(offline, offline, { persistPath: file })
+    assert.equal(await wt2.isValidRootForHeight(H800K.merkleRoot, H800K.height), true)
+    assert.equal(offlineCalls, 0, 'persisted finalized header must not hit remote trackers')
+
+    // 3. Tampered PoW-invalid entry on disk is rejected on load
+    const forged = { ...H800K, merkleRoot: '0'.repeat(64) }
+    writeFileSync(file, JSON.stringify([forged]))
+    const wt3 = new WitnessedTracker(offline, offline, { persistPath: file })
+    assert.equal(await wt3.headerAtHeight(H800K.height), undefined, 'PoW-invalid disk header must be ignored')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

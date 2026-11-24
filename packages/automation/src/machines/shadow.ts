@@ -37,6 +37,7 @@ const OPS_CAUSE_MAP: Record<string, Candidate[]> = {
   payment_build_refused: [{ event: 'escrow.failed' }],
   funding_starved: [{ event: 'starved.retry' }],
   funding_starved_exhausted: [{ event: 'starved.exhausted' }],
+  awaiting_bbox_stock: [{ event: 'bbox.unready' }],
   spend_cap_deferred: [{ event: 'daily.cap' }],
   spend_window_reset: [{ event: 'cap.reset' }],
   spend_guard_refused: [{ event: 'cap.refused', guards: ['policy.escalate', '!policy.escalate'] }, { event: 'escrow.failed' }],

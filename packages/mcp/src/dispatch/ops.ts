@@ -34,6 +34,17 @@ export const handlers: Record<string, ToolHandler> = {
     }
     if (typeof out.unprovenAnchors === 'number' && out.unprovenAnchors > 0)
       hints.push(`${out.unprovenAnchors} anchor(s) proving — safe to use meanwhile; nothing to do`)
+    if (mem.automation !== undefined) {
+      const laneStock = await mem.automation.laneStock?.().catch(() => undefined)
+      if (laneStock !== undefined) {
+        out.laneStock = laneStock
+        const bboxReady = (laneStock.bbox?.proven ?? 0) > 0
+        const bboxWaiting = (laneStock.bbox?.unprovenTrees ?? 0) > 0
+        if (!bboxReady && bboxWaiting) {
+          hints.push('bbox funding tree awaiting 1st block confirmation (~10 min once per agent) — deals will hold in selected until confirmed')
+        }
+      }
+    }
     if (hints.length > 0) out.hints = hints
     if (args?.fix) return { ...out, repair: await mem.doctorRepair() }
     return out

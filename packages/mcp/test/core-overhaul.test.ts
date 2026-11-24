@@ -18,6 +18,7 @@ import { AutomationStore, SqlFunds, BudgetAuthority } from '@nektar/automation'
 import { KnexShardStore } from '@nektar/log'
 import { NektarMemory, createHttpApi, callTool } from '../src/index.js'
 import { acquireLock } from '../src/rtsupport.js'
+import { runMainnetCheck } from '../src/mainnet-check.js'
 import { liveFunding } from '../src/funding.js'
 import { seedWelcome } from '../src/welcome.js'
 import { runHookCli } from '../src/hooks-cli.js'
@@ -419,6 +420,54 @@ void test('mainnet-hardening: BudgetAuthority.release frees ancestor grant reser
     assert.equal(ba.release('child', 'act-1'), true)
     assert.equal(ba.status('child')?.headroom, 500)
     assert.equal(ba.status('parent')?.headroom, 1000, 'ancestor headroom must be restored on release')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+void test('mainnet-hardening: runMainnetCheck validates confirm, custody, callback-token, headers, and fee caps', async () => {
+  const dir = mkTmp('nektar-mainnet-chk-')
+  try {
+    const stubFetch: typeof fetch = (input) => {
+      const u = String(input)
+      if (u.includes('/chaintracks/v2/height') || u.includes('/getPresentHeight')) {
+        return Promise.resolve(new Response(JSON.stringify({ height: 900_000, value: 900_000 }), { status: 200 }))
+      }
+      if (u.includes('/block/tip') || u.includes('/chain/info')) {
+        return Promise.resolve(new Response(JSON.stringify({ height: 900_000, blocks: 900_000 }), { status: 200 }))
+      }
+      if (u.includes('/policy')) {
+        return Promise.resolve(new Response(JSON.stringify({ policy: { miningFee: { satoshis: 100, bytes: 1000 } } }), { status: 200 }))
+      }
+      return Promise.resolve(new Response('{}', { status: 200 }))
+    }
+    const bad = await runMainnetCheck({
+      dataDir: dir,
+      fetchImpl: stubFetch,
+      env: {
+        NEKTAR_WALLET: 'toolbox',
+        NEKTAR_CALLBACK_URL: 'https://example.com',
+        NEKTAR_MAX_FEE_SATS_PER_TX: '100'
+      }
+    })
+    assert.equal(bad.ok, false)
+    assert.equal(bad.checks.find((c) => c.name === 'mainnet-confirm')?.status, 'fail')
+    assert.equal(bad.checks.find((c) => c.name === 'custody')?.status, 'fail')
+    assert.equal(bad.checks.find((c) => c.name === 'callback-token')?.status, 'fail')
+    assert.equal(bad.checks.find((c) => c.name === 'broadcaster-fees')?.status, 'fail')
+
+    const good = await runMainnetCheck({
+      dataDir: dir,
+      fetchImpl: stubFetch,
+      env: {
+        NEKTAR_MAINNET_CONFIRM: 'I_UNDERSTAND',
+        NEKTAR_WALLET: 'toolbox',
+        NEKTAR_KEY_PASSPHRASE: 'secret-test-pass',
+        NEKTAR_CALLBACK_TOKEN: 'tok123',
+        NEKTAR_MAX_FEE_SATS_PER_TX: '1000'
+      }
+    })
+    assert.equal(good.ok, true, JSON.stringify(good.checks))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

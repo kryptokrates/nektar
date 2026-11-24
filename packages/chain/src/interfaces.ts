@@ -98,6 +98,12 @@ export interface Funds {
    *  proof we hold. `upkeep`/`publish` may not dip the balance below the
    *  floor that keeps one deal affordable. Throws when nothing fits. */
   take: (purpose: FundPurpose, sats: number) => Promise<FundingOut>
+  /** reserve multiple spendable outputs summing to ≥ `minTotalSats` (consolidation / multi-input splits) */
+  takeMany?: (
+    purpose: FundPurpose,
+    minTotalSats: number,
+    opts?: { maxInputs?: number; minOutputSats?: number; maxOutputSats?: number; confirmedOnly?: boolean; selfPay?: boolean }
+  ) => Promise<FundingOut[]>
   /** one call after a successful broadcast: consumes our inputs, adopts
    *  outputs that pay us (change and escrow returns). */
   spent: (tx: Transaction) => void | Promise<void>

@@ -433,3 +433,37 @@ void test('funding_deferred: pending txFacts without held tx bytes must not prom
     await kx.destroy()
   }
 })
+
+void test('buyer pre-funding gate: canDeliverBox=false holds op in selected without locking funds', async () => {
+  const { kx, store } = await open(() => 1_000_000)
+  try {
+    const hash = await store.approvePolicy(policy(), 'test')
+    const { operation } = await store.createOperation({
+      role: 'buyer',
+      kind: 'purchase',
+      dedupeKey: 'bbox-gate-1',
+      policyHash: hash,
+      network: 'regtest',
+      state: 'selected',
+      data: {}
+    })
+    let callCount = 0
+    const engine = new MarketEngine(
+      deps(store, {
+        now: () => 1_000_000,
+        canDeliverBox: () => Promise.resolve(false),
+        call: () => {
+          callCount++
+          return Promise.resolve({})
+        }
+      })
+    )
+    await engine.advanceOp(operation.operationId)
+    const cur = await store.operation(operation.operationId)
+    assert.equal(cur?.state, 'selected', 'op must stay in selected until bbox lane has servable stock')
+    assert.match(cur?.lastError ?? '', /bbox/, 'operator-visible reason names bbox warmup')
+    assert.equal(callCount, 0, 'must not call sale#fund or lock escrow funds while bbox is unready')
+  } finally {
+    await kx.destroy()
+  }
+})

@@ -917,35 +917,49 @@ export async function reconcileLiveReserve(
       reserve.unmark(e.txid, e.vout)
       healed++
     }
-  for (const e of entries) {
-    if (liveSet.has(`${e.txid}:${e.vout}`)) continue
+  // parallelize missing-entry probes (6 workers) and dedupe txHex fetches by
+  // txid so mature 400-UTXO wallets reconcile in seconds instead of minutes
+  const missing = entries.filter((e) => !liveSet.has(`${e.txid}:${e.vout}`))
+  const txHexCache = new Map<string, Promise<string | undefined>>()
+  const cachedHex = (txid: string): Promise<string | undefined> => {
+    let p = txHexCache.get(txid)
+    if (p === undefined) {
+      p = index.txHex(txid).catch(() => undefined)
+      txHexCache.set(txid, p)
+    }
+    return p
+  }
+  const runPool = async <T>(items: T[], workers: number, fn: (item: T) => Promise<void>): Promise<void> => {
+    let next = 0
+    await Promise.all(
+      Array.from({ length: Math.min(workers, items.length) }, async () => {
+        while (next < items.length) await fn(items[next++])
+      })
+    )
+  }
+  await runPool(missing, 6, async (e) => {
     if ((await spendStatus(e.txid, e.vout)) === 'spent') {
       reserve.markSpent(e.txid, e.vout)
       marked++
-      continue
+      return
     }
-    // dead drafts — change outputs of own broadcasts that never landed (the
-    // index has never served the parent): the outpoint does not exist on
-    // chain, so every take on it is a guaranteed broadcast failure. The mark
-    // is offer bookkeeping, not a chain claim — the heal pass lifts it if
-    // the parent ever becomes servable.
-    if ((await index.txHex(e.txid).catch(() => undefined)) === undefined) {
+    if ((await cachedHex(e.txid)) === undefined) {
       reserve.markSpent(e.txid, e.vout)
       marked++
     }
-  }
+  })
   // adopt live UTXOs the file doesn't know (minted-tree change, settlement
-  // income from earlier runs) — fetch each parent tx hex and addOwned it
-  for (const u of live) {
-    if (known.has(`${u.txid}:${u.vout}`)) continue
-    const hex = await index.txHex(u.txid).catch(() => undefined)
-    if (hex === undefined) continue
+  // income from earlier runs) — deduped by txid across workers
+  const unknown = live.filter((u) => !known.has(`${u.txid}:${u.vout}`))
+  await runPool(unknown, 6, async (u) => {
+    const hex = await cachedHex(u.txid)
+    if (hex === undefined) return
     try {
       reserve.addOwned(Transaction.fromHex(hex), u.vout)
       adopted++
     } catch {
       /* skip unparseable */
     }
-  }
+  })
   return { marked, adopted, healed }
 }

@@ -152,6 +152,11 @@ export interface MarketDeps {
   /** watchdog flag — every configured host currently unreachable. New deals
    *  and new escrows pause while deaf; in-flight deals continue. */
   deaf?: () => boolean
+  /** pre-funding box-delivery readiness check — vendored @lightwebinc/bbox-host
+   *  strictly requires a proven (mined) bbox tree, so buyers defer locking
+   *  escrow sats on-chain while bbox has 0 servable slots (preventing 24h
+   *  stranded funds on cold start). Absent in unit tests without lanes. */
+  canDeliverBox?: () => Promise<boolean>
   now?: () => number
   opts?: Partial<MarketOptions>
   /** diagnostic surface for the serialized-work mutex — a hung run() link
@@ -269,7 +274,7 @@ export const STATE_LIMITS: Record<string, { maxAgeMs: number; exit: StuckExit }>
   // buyer
   published: { maxAgeMs: 60_000, exit: 'abort' },
   collecting: { maxAgeMs: 86_400_000, exit: 'abort' },
-  selected: { maxAgeMs: 15 * 60_000, exit: 'abort' },
+  selected: { maxAgeMs: 45 * 60_000, exit: 'abort' },
   escalated: { maxAgeMs: 7 * 86_400_000, exit: 'escalate:human' },
   funding: { maxAgeMs: 30 * 60_000, exit: 'escalate:human' },
   // a SpendGuard daily-cap refusal is a window, not a no — park the deal

@@ -67,12 +67,13 @@ const jsStr = (v: string): string => JSON.stringify(v).replace(/</g, '\\u003c').
 
 export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined, host: string | undefined): Promise<Record<string, unknown>> {
   const au = mem.automation
-  const [d, walletInfo, rrecsRaw, cat, slots, pending, allOps, waiting, nextAt, pubHex, paused, policyData] = await Promise.all([
+  const [d, walletInfo, rrecsRaw, cat, slots, laneStock, pending, allOps, waiting, nextAt, pubHex, paused, policyData] = await Promise.all([
     mem.doctor(),
     ops?.wallet ? ops.wallet() : Promise.resolve(undefined),
     mem.records('__receipts__').catch(() => [] as Array<{ seq: number; fragment: { d: Uint8Array } }>),
     mem.shardCatalog().catch(() => [] as Array<{ shard: string; domains: string[]; offers?: Array<{ kind: string; priceSats: number }> }>),
     au !== undefined ? au.marketSlots().catch(() => undefined) : Promise.resolve(undefined),
+    au !== undefined ? au.laneStock().catch(() => undefined) : Promise.resolve(undefined),
     au ? au.store.approvals('pending') : Promise.resolve([]),
     au ? au.store.operations() : Promise.resolve([]),
     au !== undefined ? au.store.waitingOn().catch(() => []) : Promise.resolve([]),
@@ -221,6 +222,7 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
       // "join the public hosts" suggestion (regtest/main carry none)
       seeds: (DEFAULT_MARKET_HOSTS[d.network] ?? []).filter((h) => !hosts.includes(h) && !blocked.has(h)),
       slots: slots ?? null,
+      laneStock: laneStock ?? null,
       boot: boot ?? null,
       push: nektarEnv('NEKTAR_PUSH_PUBLIC') ?? null
     },

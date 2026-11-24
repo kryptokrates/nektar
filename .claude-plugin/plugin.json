@@ -1,0 +1,19 @@
+{
+  "name": "nektar",
+  "version": "0.3.2",
+  "description": "Verifiable, encrypted agent memory anchored on BSV with checkable answer receipts and policy-controlled knowledge trading.",
+  "author": {
+    "name": "kryptokrates",
+    "url": "https://github.com/kryptokrates/nektar"
+  },
+  "repository": "https://github.com/kryptokrates/nektar",
+  "license": "MIT",
+  "keywords": ["memory", "mcp", "verifiable", "receipts", "bsv", "knowledge-market"],
+  "skills": ["../skills/nektar-memory"],
+  "mcpServers": {
+    "nektar": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "nektar-data:/data", "-e", "NEKTAR_NETWORK=testnet", "ghcr.io/kryptokrates/nektar:latest"]
+    }
+  }
+}

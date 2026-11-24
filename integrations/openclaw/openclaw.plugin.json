@@ -1,0 +1,55 @@
+{
+  "id": "nektar-memory",
+  "name": "nektar-memory",
+  "version": "0.3.2",
+  "description": "Verifiable, encrypted agent memory anchored on BSV with checkable receipts and policy-controlled knowledge trading.",
+  "kind": "memory",
+  "openclaw": {
+    "extensions": ["./index.mjs"]
+  },
+  "activation": {
+    "onCapabilities": ["hook", "memory"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "Optional nektar HTTP base URL (blank = auto-discover loopback daemon.json / :18420 / :8080)"
+      },
+      "token": {
+        "type": "string",
+        "description": "Optional bearer token (NEKTAR_HTTP_TOKEN)"
+      },
+      "defaultShard": {
+        "type": "string",
+        "default": "openclaw",
+        "description": "Default shard for nektar_remember calls"
+      },
+      "autoRecall": {
+        "type": "boolean",
+        "default": true,
+        "description": "Inject top verified fragments into before_prompt_build (800ms cap, fail-open)"
+      },
+      "verifyReceipts": {
+        "type": "boolean",
+        "default": true,
+        "description": "Verify nektarr1. receipt tokens in assistant replies on agent_end"
+      },
+      "autoCapture": {
+        "type": "boolean",
+        "default": false,
+        "description": "Opt-in: capture concise turn summaries into nektar on agent_end"
+      },
+      "prefetchTimeoutMs": {
+        "type": "integer",
+        "default": 800
+      },
+      "prefetchMaxChars": {
+        "type": "integer",
+        "default": 1600
+      }
+    }
+  }
+}

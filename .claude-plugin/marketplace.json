@@ -1,0 +1,17 @@
+{
+  "name": "nektar",
+  "owner": {
+    "name": "kryptokrates",
+    "url": "https://github.com/kryptokrates/nektar"
+  },
+  "description": "Official nektar plugin marketplace — verifiable, encrypted AI agent memory and knowledge market anchored on BSV.",
+  "plugins": [
+    {
+      "name": "nektar",
+      "source": "./.claude-plugin",
+      "description": "Verifiable BSV-anchored agent memory, checkable receipts, and policy-gated knowledge trading (zero-config testnet boot).",
+      "version": "0.3.2",
+      "category": "memory"
+    }
+  ]
+}

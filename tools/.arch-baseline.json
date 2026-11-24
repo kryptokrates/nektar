@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 11820,
+      "loc": 13356,
       "pkgFanout": 18,
       "edges": [
         "anchor",

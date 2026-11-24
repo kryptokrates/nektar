@@ -42,19 +42,19 @@ note(
 
 // ─── 1. network ─────────────────────────────────────────────────────────────
 const networks = [
-  { value: 'regtest', label: 'regtest — local Teranode stack, zero real cost (best first run)' },
-  { value: 'testnet', label: 'testnet — public test coins, real market' },
+  { value: 'testnet', label: 'testnet — zero local infra, public test coins, instant welcome shard (best first run)' },
+  { value: 'regtest', label: 'regtest — local Teranode stack, zero real cost (for protocol hacking)' },
   { value: 'main', label: 'main — real BSV. Read docs/OPERATIONS.md first' }
 ]
 const net =
   arg('--env') ??
   (YES
-    ? (prev.NEKTAR_NETWORK ?? 'regtest')
+    ? (prev.NEKTAR_NETWORK ?? 'testnet')
     : req(
         await select({
           message: '1/4 — which network?',
           options: networks,
-          initialValue: networks.some((n) => n.value === prev.NEKTAR_NETWORK) ? prev.NEKTAR_NETWORK : 'regtest'
+          initialValue: networks.some((n) => n.value === prev.NEKTAR_NETWORK) ? prev.NEKTAR_NETWORK : 'testnet'
         })
       ))
 if (!networks.some((n) => n.value === net)) {
@@ -105,7 +105,7 @@ const generatedPass = mustEnc && !pass
 if (generatedPass) pass = randomBytes(24).toString('hex')
 
 // ─── 4. port ────────────────────────────────────────────────────────────
-const port = arg('--port') ?? prev.NEKTAR_HTTP_PORT
+const port = arg('--port') ?? prev.NEKTAR_HTTP_PORT ?? '18420'
 
 // ─── write .env ─────────────────────────────────────────────────────────────
 const lines = [`# nektar init — ${new Date().toISOString().slice(0, 10)} (${net})`, `NEKTAR_NETWORK=${net}`, `NEKTAR_DATA_DIR=${dataDir}`]
@@ -206,21 +206,26 @@ if (existsSync(binJs) && net !== 'main') {
 
 // ─── client detection (Hermes: find existing agent setups) ──────────────────
 const { homedir } = await import('node:os')
-const clients = [
-  { dir: join(homedir(), '.claude'), label: 'Claude Code', script: 'tools/setup-claude.mjs' },
-  { dir: join(homedir(), '.codex'), label: 'Codex CLI', script: 'tools/setup-codex.mjs' }
-].filter((c) => existsSync(c.dir))
-if (clients.length) {
-  console.log(`found agent clients: ${clients.map((c) => c.label).join(', ')}\n`)
-  for (const c of clients) {
-    if (!YES) {
-      const a = req(await confirm({ message: `wire ${c.label} into nektar now?`, initialValue: true }))
-      if (a) {
-        const { spawnSync } = await import('node:child_process')
-        spawnSync(process.execPath, [join(root, c.script)], { stdio: 'inherit' })
-      }
-    } else console.log(`  → wire it later: node ${c.script}`)
-  }
+const home = homedir()
+const detected = [
+  { ok: existsSync(join(home, '.hermes')) || existsSync(join(home, '.local', 'share', 'hermes')), id: 'hermes', label: 'Hermes Agent' },
+  { ok: existsSync(join(home, '.openclaw')), id: 'openclaw', label: 'OpenClaw' },
+  { ok: existsSync(join(home, '.claude')), id: 'claude', label: 'Claude Code' },
+  { ok: existsSync(join(home, '.codex')), id: 'codex', label: 'Codex CLI' },
+  { ok: existsSync(join(home, '.cursor')), id: 'cursor', label: 'Cursor' },
+  { ok: existsSync(join(home, '.codeium', 'windsurf')), id: 'windsurf', label: 'Windsurf' },
+  { ok: existsSync(join(home, '.config', 'opencode')), id: 'opencode', label: 'OpenCode' },
+  { ok: existsSync(join(home, '.config', 'goose')), id: 'goose', label: 'Goose' }
+].filter((c) => c.ok)
+if (detected.length) {
+  console.log(`found agent clients: ${detected.map((c) => c.label).join(', ')}\n`)
+  if (!YES && existsSync(binJs)) {
+    const a = req(await confirm({ message: `dock nektar into all ${detected.length} detected client(s) now?`, initialValue: true }))
+    if (a) {
+      const { spawnSync } = await import('node:child_process')
+      spawnSync(process.execPath, [binJs, 'dock', 'auto'], { stdio: 'inherit' })
+    }
+  } else console.log(`  → wire them anytime: pnpm dock`)
   console.log('')
 }
 outro('done')

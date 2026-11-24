@@ -394,7 +394,7 @@ export async function probeTxStatus(
   const verdict = await new Promise<{ status: string; answered: boolean } | undefined>((resolve) => {
     let pending = c.broadcasterUrls.length
     if (pending === 0) return resolve(undefined)
-    let settled = false
+    let settled = false as boolean
     for (const base of c.broadcasterUrls) {
       void (async () => {
         try {

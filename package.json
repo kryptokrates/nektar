@@ -31,6 +31,7 @@
     "sbom": "node tools/sbom.mjs",
     "mcp:install": "node tools/mcp-install.mjs",
     "setup:claude": "node tools/setup-claude.mjs",
+    "dock": "node packages/mcp/dist/src/bin.js dock",
     "init:nektar": "node tools/init.mjs",
     "restate:up": "node tools/restate-up.mjs",
     "update:nektar": "node tools/update.mjs",

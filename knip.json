@@ -3,7 +3,7 @@
   "workspaces": {
     ".": {
       "entry": ["tools/**/*.mjs", "integrations/**/*.{js,mjs}", "circuits/**/*.mjs", "docs/**/*.mjs", "deploy/**/*.mjs"],
-      "ignore": ["spikes/**", "test/fixtures/**", "scratch/**", ".devin/**", "deploy/bstack-sandbox/modules/**"],
+      "ignore": ["spikes/**", "test/fixtures/**", ".devin/**", "deploy/bstack-sandbox/modules/**"],
       "ignoreBinaries": ["gitleaks", "codex"]
     },
     "packages/mcp": {

@@ -42,11 +42,28 @@ one container, including the **restate-server** that powers deals — no
 compose file or second service needed; `NEKTAR_RESTATE_URL` still lets you
 point at an external executor instead.
 
+**One-command local dock (Hermes, OpenClaw, Claude Code, Codex, Cursor, Windsurf, Goose, OpenCode)**
+
+Start one local instance (zero env vars — defaults to `testnet` with a seeded
+`welcome` shard and companion loopback HTTP on `:18420`), then dock every
+installed AI app on your machine in one command:
+
+```sh
+./nektar --port 18420 &    # or: docker run -d -p 18420:18420 -e NEKTAR_HTTP_PORT=18420 -v nektar-data:/data ghcr.io/kryptokrates/nektar:latest
+./nektar dock auto         # wires native Hermes MemoryProvider, OpenClaw memory slot, Claude hooks + SKILL.md, MCP configs + live recall probe
+```
+
+Every subsequent stdio client (`./nektar`) transparently bridges onto the
+running local daemon — **one brain, many mouths**, zero `instance.lock`
+conflicts. For native ecosystem plugins, see
+[integrations/hermes](integrations/hermes/README.md),
+[integrations/openclaw](integrations/openclaw/README.md), and
+[docs/ADAPTERS.md](docs/ADAPTERS.md).
+
 **Claude Code**
 
 ```sh
-claude mcp add nektar -- docker run -i --rm -v nektar-data:/data \
-  -e NEKTAR_NETWORK=testnet ghcr.io/kryptokrates/nektar:latest
+claude mcp add nektar -- docker run -i --rm -v nektar-data:/data ghcr.io/kryptokrates/nektar:latest
 ```
 
 **Codex** — `~/.codex/config.toml`:
@@ -54,16 +71,16 @@ claude mcp add nektar -- docker run -i --rm -v nektar-data:/data \
 ```toml
 [mcp_servers.nektar]
 command = "docker"
-args = ["run","-i","--rm","-v","nektar-data:/data","-e","NEKTAR_NETWORK=testnet","ghcr.io/kryptokrates/nektar:latest"]
+args = ["run","-i","--rm","-v","nektar-data:/data","ghcr.io/kryptokrates/nektar:latest"]
 ```
 
-**Hermes** — `$HERMES_HOME/config.yaml`:
+**Hermes** — native `MemoryProvider` (`hermes plugins install ./integrations/hermes && hermes memory setup`) or `$HERMES_HOME/config.yaml`:
 
 ```yaml
 mcp_servers:
   nektar:
     command: 'docker'
-    args: ['run', '-i', '--rm', '-v', 'nektar-data:/data', '-e', 'NEKTAR_NETWORK=testnet', 'ghcr.io/kryptokrates/nektar:latest']
+    args: ['run', '-i', '--rm', '-v', 'nektar-data:/data', 'ghcr.io/kryptokrates/nektar:latest']
     connect_timeout: 90 # first launch pulls the image and starts the executor
 ```
 

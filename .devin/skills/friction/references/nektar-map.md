@@ -67,14 +67,14 @@ and `/` alive in stdio mode, and container cold-pull wait is named in
 `setup-claude`/`setup-codex` verified in automated tests.
 **Artifact:** MCP stdio/HTTP + stdio↔HTTP bridge + `nektar dock` + `/v1` + `server.json` + `docs/ADAPTERS.md`.
 
-| Client | Path | Maturity | Friction |
-| --- | --- | --- | --- |
-| **Hermes Agent** | Native `MemoryProvider` (`integrations/hermes`) + `mcp_servers` + `SKILL.md` | **L2/L3** | **MOVED** — `nektar dock hermes` or `hermes plugins install` + `hermes memory setup`; auto-prefetch & `MEMORY.md` mirror |
-| **OpenClaw** | Native `plugins.slots.memory` (`integrations/openclaw`) + hooks | **L2/L3** | **MOVED** — `before_prompt_build` prefetch + `agent_end` receipt check + native tools |
-| **Claude Code** | `.claude-plugin/` bundle + `nektar dock claude` (portable `nektar hook` + `SKILL.md`) | **L2/L3** | **KILLED** — zero hardcoded checkout paths; `SessionStart` + `UserPromptSubmit` prefetch + `Stop` receipt block |
-| **Codex CLI** | `nektar dock codex` / `setup:codex` + `SKILL.md` | **L2** | **KILLED** — portable `nektar hook verify-receipt --codex` + `[mcp_servers.nektar]` |
-| **Cursor / Windsurf / Claude Desktop / OpenCode / Goose** | `nektar dock auto` + MCP Registry `server.json` | **L1/L2** | **KILLED** — one command detects and merges non-clobbering config |
-| **raw HTTP** | `POST /v1/tools/recall` | **L1** | **KILLED** — `ADAPTERS.md` contract & curl verified in `friction.test.ts` |
+| Client                                                    | Path                                                                                  | Maturity  | Friction                                                                                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **Hermes Agent**                                          | Native `MemoryProvider` (`integrations/hermes`) + `mcp_servers` + `SKILL.md`          | **L2/L3** | **MOVED** — `nektar dock hermes` or `hermes plugins install` + `hermes memory setup`; auto-prefetch & `MEMORY.md` mirror |
+| **OpenClaw**                                              | Native `plugins.slots.memory` (`integrations/openclaw`) + hooks                       | **L2/L3** | **MOVED** — `before_prompt_build` prefetch + `agent_end` receipt check + native tools                                    |
+| **Claude Code**                                           | `.claude-plugin/` bundle + `nektar dock claude` (portable `nektar hook` + `SKILL.md`) | **L2/L3** | **KILLED** — zero hardcoded checkout paths; `SessionStart` + `UserPromptSubmit` prefetch + `Stop` receipt block          |
+| **Codex CLI**                                             | `nektar dock codex` / `setup:codex` + `SKILL.md`                                      | **L2**    | **KILLED** — portable `nektar hook verify-receipt --codex` + `[mcp_servers.nektar]`                                      |
+| **Cursor / Windsurf / Claude Desktop / OpenCode / Goose** | `nektar dock auto` + MCP Registry `server.json`                                       | **L1/L2** | **KILLED** — one command detects and merges non-clobbering config                                                        |
+| **raw HTTP**                                              | `POST /v1/tools/recall`                                                               | **L1**    | **KILLED** — `ADAPTERS.md` contract & curl verified in `friction.test.ts`                                                |
 
 **Score:** 9/10 (L1 auto-dock + L2/L3 native Hermes/OpenClaw/Claude plugins +
 `server.json` + aligned 10-tool `agent` profile across Docker, GHCR YAML, and
@@ -139,12 +139,12 @@ automatic pre-turn context prefetch, and working `/v1/verify` receipt checks.
 **Artifact:** `bin.ts` zero-env default + companion loopback HTTP (`:18420`) +
 `mcp-bridge.ts` + `dock-cli.ts` + `hooks-cli.ts` + `integrations/{hermes,openclaw}` + `.claude-plugin/`.
 
-| Step | Time | Effort | Knowledge | Triage |
-| --- | --- | --- | --- | --- |
-| Zero-env local boot | <3 s | `./nektar` (0 env vars) | none | **KILLED** — defaults to `testnet` when no regtest creds exist; writes `daemon.json` |
-| 2nd AI app attach | <100 ms | automatic | none | **KILLED** — stdio detects live loopback daemon and runs `mcp-bridge.ts` (zero `instance.lock` crash) |
-| Client auto-wiring | <5 s | `nektar dock auto` | none | **MOVED** — detects Hermes, OpenClaw, Claude, Codex, Cursor, Windsurf, OpenCode, Goose + runs live `recall {}` probe |
-| Per-turn recall/verify | <800 ms | **zero** (ambient) | none | **MOVED** — Hermes `MemoryProvider`, OpenClaw `before_prompt_build`/`agent_end`, Claude portable `nektar hook` |
+| Step                   | Time    | Effort                  | Knowledge | Triage                                                                                                               |
+| ---------------------- | ------- | ----------------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
+| Zero-env local boot    | <3 s    | `./nektar` (0 env vars) | none      | **KILLED** — defaults to `testnet` when no regtest creds exist; writes `daemon.json`                                 |
+| 2nd AI app attach      | <100 ms | automatic               | none      | **KILLED** — stdio detects live loopback daemon and runs `mcp-bridge.ts` (zero `instance.lock` crash)                |
+| Client auto-wiring     | <5 s    | `nektar dock auto`      | none      | **MOVED** — detects Hermes, OpenClaw, Claude, Codex, Cursor, Windsurf, OpenCode, Goose + runs live `recall {}` probe |
+| Per-turn recall/verify | <800 ms | **zero** (ambient)      | none      | **MOVED** — Hermes `MemoryProvider`, OpenClaw `before_prompt_build`/`agent_end`, Claude portable `nektar hook`       |
 
 **Score:** 8.5/10 (automated bridge, dock, hooks, and Hermes `MemoryProvider`
 tests passing; remaining step to 10/10 is upstream publication to the Hermes

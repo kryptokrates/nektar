@@ -43,21 +43,47 @@ POST http://<instance>:8080/v1/tools/<name>     # JSON body = the tool args
 GET  http://<instance>:8080/v1/openapi.json     # the OpenAPI spec
 ```
 
+## One-command local dock
+
+On a local machine with Hermes, OpenClaw, Claude Code, Codex, Cursor, Windsurf,
+Claude Desktop, OpenCode, or Goose installed:
+
+```bash
+./nektar --port 18420 &    # single local daemon (zero env vars → testnet + welcome shard)
+./nektar dock auto         # detects installed apps, wires native plugins/MCP/hooks, probes recall {}
+```
+
 ## Framework paste blocks
 
-### Hermes (verified)
+### Hermes (native `MemoryProvider` or MCP)
+
+**Native memory slot (ambient prefetch + `MEMORY.md` mirroring):**
+
+```bash
+hermes plugins install ./integrations/hermes
+hermes memory setup        # select "nektar" — auto-discovers localhost:18420
+hermes memory status
+```
+
+**Or MCP (`$HERMES_HOME/config.yaml`):**
 
 ```yaml
-# ~/.local/share/hermes/config.yaml  (Windows: %LOCALAPPDATA%/hermes/config.yaml)
+# ~/.hermes/config.yaml  (or ~/.local/share/hermes/config.yaml)
 mcp_servers:
   nektar:
-    url: http://<instance>:8080/mcp
+    url: http://<instance>:18420/mcp
     headers:
       Authorization: Bearer <token>
 ```
 
 Then `hermes mcp test nektar` → `✓ Connected ✓ Tools discovered: 10`, and
 `hermes -z "use the nektar fund tool"` makes real calls.
+
+### OpenClaw (native `plugins.slots.memory` or MCP)
+
+```bash
+nektar dock openclaw       # or: openclaw plugins install ./integrations/openclaw
+```
 
 ### curl (verified)
 

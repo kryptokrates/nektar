@@ -6,7 +6,7 @@
 //   node tools/custody.mjs [--data <dir>] [--json]
 import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 
 const root = join(fileURLToPath(import.meta.url), '..', '..')

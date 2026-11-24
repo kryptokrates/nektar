@@ -125,8 +125,8 @@ conform (Jakob's law) or moves behind the value moment.
 - [ ] Does the harness integration climb past L0 paste into native slots
       (Hermes `MemoryProvider`, OpenClaw `plugins.slots.memory`, Claude
       `.claude-plugin`, `agentskills.io` `SKILL.md`, MCP `server.json`)?
-- [ ] Ambient turn test: open a fresh session and ask a question *without
-      mentioning nektar* — does prefetch or session context arrive
+- [ ] Ambient turn test: open a fresh session and ask a question _without
+      mentioning nektar_ — does prefetch or session context arrive
       automatically, bounded and fail-open?
 - [ ] Portable-path test: do hooks and plugin manifests work from a release
       artifact with zero hardcoded repo-checkout paths?

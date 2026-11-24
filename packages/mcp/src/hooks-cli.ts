@@ -6,8 +6,17 @@
 //   nektar hook verify-receipt --codex   Codex notify hook (logs + optional --chain)
 import { spawn } from 'node:child_process'
 import { appendFileSync, readFileSync } from 'node:fs'
-import { nektarEnv, writeErr, writeOut, type EnvSource } from '@nektar/core'
+import { deadline, nektarEnv, writeErr, writeOut, type EnvSource } from '@nektar/core'
 import { discoverDaemon } from './daemon.js'
+
+const isLoopbackOrigin = (origin: string): boolean => {
+  try {
+    const h = new URL(origin).hostname
+    return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]'
+  } catch {
+    return false
+  }
+}
 
 export interface HookIo {
   out?: (s: string) => void
@@ -157,18 +166,36 @@ async function runVerifyReceipt(argv: string[], io: HookIo): Promise<number> {
     const chainArgs = chainIdx >= 0 ? argv.slice(chainIdx + 1, -1) : []
     if (chainArgs.length > 0) {
       try {
-        await new Promise<void>((res) => {
-          const c = spawn(chainArgs[0], [...chainArgs.slice(1), payload], { stdio: 'inherit' })
-          c.on('close', () => res())
-          c.on('error', () => res())
-        })
+        await deadline(async (signal) => {
+          await new Promise<void>((res) => {
+            const c = spawn(chainArgs[0], [...chainArgs.slice(1), payload], { stdio: 'inherit' })
+            const onAbort = () => {
+              try {
+                c.kill()
+              } catch {
+                /* already exited */
+              }
+              res()
+            }
+            signal.addEventListener('abort', onAbort, { once: true })
+            c.on('close', () => {
+              signal.removeEventListener('abort', onAbort)
+              res()
+            })
+            c.on('error', () => {
+              signal.removeEventListener('abort', onAbort)
+              res()
+            })
+          })
+        }, 5_000)
       } catch {
         /* ignore chain error */
       }
     }
     try {
       const j = JSON.parse(payload || '{}') as Record<string, unknown>
-      text = String(j['last-assistant-message'] ?? j.lastAssistantMessage ?? '')
+      const rawMsg = j['last-assistant-message'] ?? j.lastAssistantMessage
+      text = typeof rawMsg === 'string' ? rawMsg : ''
     } catch {
       text = payload
     }
@@ -212,7 +239,10 @@ async function runVerifyReceipt(argv: string[], io: HookIo): Promise<number> {
   if (!base) {
     try {
       const m = text.match(/verify:\s*(https?:\/\/\S+)/i)
-      if (m?.[1]) base = new URL(m[1]).origin
+      const cand = m?.[1] ? new URL(m[1]).origin : undefined
+      // Only trust a loopback verify: origin extracted from untrusted assistant
+      // text — prevents SSRF, token exfiltration, and remote verification spoofing.
+      if (cand && isLoopbackOrigin(cand)) base = cand
     } catch {
       /* ignore invalid URL */
     }
@@ -272,7 +302,18 @@ async function runVerifyReceipt(argv: string[], io: HookIo): Promise<number> {
     const notifyCmd = nektarEnv('NEKTAR_NOTIFY_CMD', env)
     if (notifyCmd) {
       try {
-        spawn(notifyCmd, [logLines.join('\n')], { stdio: 'ignore', shell: true })
+        // Pass untrusted verify summaries via env + stdin — never interpolate
+        // untrusted text as shell-evaluated command arguments.
+        const notifyText = logLines.join('\n')
+        const child = spawn(notifyCmd, [], {
+          stdio: ['pipe', 'ignore', 'ignore'],
+          shell: true,
+          env: { ...process.env, NEKTAR_NOTIFY_TEXT: notifyText }
+        })
+        child.on('error', () => {})
+        child.stdin?.on('error', () => {})
+        child.stdin?.end(notifyText + '\n')
+        child.unref()
       } catch {
         /* ignore */
       }

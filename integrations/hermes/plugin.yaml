@@ -1,0 +1,12 @@
+name: nektar
+version: '0.3.2'
+description: 'Verifiable, encrypted agent memory anchored on BSV with checkable receipts and policy-controlled knowledge trading.'
+requires_hermes: '>=0.20.0'
+capabilities:
+  - memory_provider
+  - tools
+requires_env: []
+optional_env:
+  - NEKTAR_URL
+  - NEKTAR_HTTP_TOKEN
+  - NEKTAR_SHARD

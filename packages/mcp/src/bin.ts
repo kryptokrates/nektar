@@ -7,7 +7,9 @@
 import { nektarEnv, nektarEnvFlag, nektarEnvNum, parseDotEnv, setNektarEnv, mkLog, sparse } from '@nektar/core'
 import { marketHosts } from './hosts.js'
 import { paymentFeeBoundSats } from './custody.js'
+import { clearDaemonInfo, DEFAULT_DAEMON_PORT, resolveDefaultNetwork, writeDaemonInfo } from './daemon.js'
 import { existsSync, readFileSync } from 'node:fs'
+import type { AddressInfo } from 'node:net'
 
 // --env <regtest|testnet|main> (or --env=x) + optional .env beside cwd →
 // minimal-typing boot. .env lines are applied only where the var isn't
@@ -87,9 +89,20 @@ if (envFlag !== undefined && !/^(regtest|testnet|main)$/.test(envFlag)) {
   nlog(`--env must be regtest|testnet|main, got "${envFlag}"`)
   process.exit(2)
 }
-// the strict chain for the role choice — .env is LAST here by design
-const network = nektarEnv('NEKTAR_NETWORK') ?? envFlag ?? sparse(defs?.NEKTAR_NETWORK) ?? sparse(dot['NEKTAR_NETWORK'])
-if (network !== undefined) setNektarEnv('NEKTAR_NETWORK', network)
+// the strict chain for the role choice — .env is LAST here by design; when
+// completely unconfigured with no regtest creds, default to testnet so bare
+// `./nektar` or `docker run` boots cleanly out of the box.
+const netResolved = resolveDefaultNetwork({
+  envNet: nektarEnv('NEKTAR_NETWORK'),
+  flagNet: envFlag,
+  profileNet: sparse(defs?.NEKTAR_NETWORK),
+  dotNet: sparse(dot['NEKTAR_NETWORK']),
+  dot
+})
+setNektarEnv('NEKTAR_NETWORK', netResolved.network)
+if (netResolved.defaulted && netResolved.network === 'testnet') {
+  nlog('defaulting to testnet (zero-config) — pass --env regtest for local Teranode')
+}
 // every other key: export > flag > .env > profile default — flags fill only
 // unset values per the contract (an export is already set when we read, and
 // a flag that clobbered it would surprise the deployer who exported)
@@ -116,9 +129,19 @@ for (const [k, v] of Object.entries({ ...defs, ...dot }))
 // object, confirmer cadence, records watcher, market plane) sits on it, so
 // there is no memory-only boot — refuse before the data dir opens or the
 // instance lock is taken.
-if (argv[0] === 'policy') {
-  const { runPolicyCli } = await import('./policy-cli.js')
-  process.exit(await runPolicyCli(argv.slice(1)))
+const { runSubcommand, tryAttachStdioBridge } = await import('./cli-dispatch.js')
+const cliExit = await runSubcommand(argv)
+if (cliExit !== undefined) process.exit(cliExit)
+
+// One brain, many mouths: in stdio mode (no explicit NEKTAR_HTTP_PORT), if a
+// local nektar daemon is already live on loopback, attach a lightweight
+// stdio ↔ Streamable HTTP bridge instead of colliding on instance.lock or
+// cold-starting Restate. Set NEKTAR_NO_BRIDGE=1 to force a dedicated instance.
+const requestedPort = nektarEnv('NEKTAR_HTTP_PORT')
+if (!requestedPort && nektarEnvFlag('NEKTAR_NO_BRIDGE') !== true) {
+  if (await tryAttachStdioBridge({ dataDir: nektarEnv('NEKTAR_DATA_DIR') ?? '.nektar', log: nlog })) {
+    await new Promise(() => {})
+  }
 }
 
 const { ensureRestate, RESTATE_REQUIRED } = await import('./restatesidecar.js')
@@ -339,6 +362,7 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
   })
 }
 const port = nektarEnv('NEKTAR_HTTP_PORT')
+const dataDirForDaemon = nektarEnv('NEKTAR_DATA_DIR') ?? '.nektar'
 let srv: ReturnType<typeof import('./http.js').createHttpApi> | undefined
 if (port) {
   srv = (await import('./http.js')).createHttpApi(rt.mem, rt.ops)
@@ -364,12 +388,43 @@ if (port) {
       throw err
     }
   })
-  server.listen(Number(port), host, () => nlog(`HTTP + MCP on :${port} (/v1, /mcp) — ready in ${Date.now() - bootStartedAt}ms`))
+  server.listen(Number(port), host, () => {
+    const addr = server.address() as AddressInfo | null
+    const boundPort = addr?.port ?? Number(port)
+    writeDaemonInfo(dataDirForDaemon, {
+      url: `http://127.0.0.1:${boundPort}`,
+      pid: process.pid,
+      network: rt.network,
+      startedAt: Date.now()
+    })
+    nlog(`HTTP + MCP on :${boundPort} (/v1, /mcp) — ready in ${Date.now() - bootStartedAt}ms`)
+  })
+} else if (nektarEnvFlag('NEKTAR_COMPANION_HTTP') !== false) {
+  // stdio-mode companion loopback HTTP: keeps /v1/verify receipt links,
+  // portable hooks, the Svelte dashboard (/), and 2nd-client stdio bridges
+  // alive even when launched as a bare stdio MCP server. Loopback-only.
+  const companion = (await import('./http.js')).createHttpApi(rt.mem, rt.ops)
+  srv = companion
+  const tryListen = (p: number) => {
+    companion.once('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE' && p !== 0) tryListen(0)
+      else nlog(`companion HTTP skipped: ${err.message}`)
+    })
+    companion.listen(p, '127.0.0.1', () => {
+      const addr = companion.address() as AddressInfo | null
+      if (!addr) return
+      const url = `http://127.0.0.1:${addr.port}`
+      writeDaemonInfo(dataDirForDaemon, { url, pid: process.pid, network: rt.network, startedAt: Date.now() })
+      nlog(`companion loopback HTTP on ${url} (/v1/verify, /mcp, /)`)
+    })
+  }
+  tryListen(DEFAULT_DAEMON_PORT)
 }
 let stopping = false
 const stop = async () => {
   if (stopping) return
   stopping = true
+  clearDaemonInfo(dataDirForDaemon, process.pid)
   // the whole teardown is bounded: a wedged close must not hang the
   // process — on Windows a lingering socket keeps the port hostage for
   // the respawned agent, and open sockets at process.exit trip the libuv

@@ -82,7 +82,7 @@ plan 0-10. Report the score and the specific changes that reach 10/10.
   external account before any value is visible
 
 A journey with no measured time-to-first-value cannot score above 6.
-An in-process unit test timer proves *no regression*, never cold-stranger
+An in-process unit test timer proves _no regression_, never cold-stranger
 TTFV — separate warm/CI timings from cold-machine timings and never let a
 fast CI timer inflate a broken zero-env or multi-client path to 9/10.
 
@@ -280,15 +280,15 @@ measured gets removed.
 
 **Metrics per journey (this repo):**
 
-| Journey             | First-value moment                       | Metric                        | Target   |
-| ------------------- | ---------------------------------------- | ----------------------------- | -------- |
-| Operator (hub)      | card visible on dir lane                 | clone → announce              | < 30 min |
-| Fresh instance      | `recall` returns seeded content          | start → non-empty answer      | < 5 min  |
-| Adapter client      | first successful tool call               | config paste / `dock` → call  | < 3 min  |
-| Ambient multi-app   | auto-prefetch + receipt across ≥2 apps   | `dock auto` → 2nd app recall  | < 60 s   |
-| Deal                | want → quote seen                        | publish → first offer (watch) | bounded  |
-| Recovery            | named cause + next command in logs       | error → legible cause         | instant  |
-| Suite (internal)    | first green verdict                      | launch → first pass           | minutes  |
+| Journey           | First-value moment                     | Metric                        | Target   |
+| ----------------- | -------------------------------------- | ----------------------------- | -------- |
+| Operator (hub)    | card visible on dir lane               | clone → announce              | < 30 min |
+| Fresh instance    | `recall` returns seeded content        | start → non-empty answer      | < 5 min  |
+| Adapter client    | first successful tool call             | config paste / `dock` → call  | < 3 min  |
+| Ambient multi-app | auto-prefetch + receipt across ≥2 apps | `dock auto` → 2nd app recall  | < 60 s   |
+| Deal              | want → quote seen                      | publish → first offer (watch) | bounded  |
+| Recovery          | named cause + next command in logs     | error → legible cause         | instant  |
+| Suite (internal)  | first green verdict                    | launch → first pass           | minutes  |
 
 Instrumentation rules: log the step the user was on, not just the
 error; errors name what they are waiting on and the next command;
@@ -304,12 +304,12 @@ Claude Code, Codex, Cursor, Windsurf, Goose, OpenCode), there are four
 maturity rungs — and stopping at L0 leaves 90% of the adoption friction
 alive:
 
-| Level | Pattern | User action | Per-turn effort | Example |
-| --- | --- | --- | --- | --- |
-| **L0 · Docs paste** | README stanza | Hand-edit JSON/YAML/TOML | High (must remind agent) | Paste `mcpServers` block |
-| **L1 · Auto-dock CLI** | Sniff + merge + probe | `nektar dock auto` | Medium (tools wired, pull-only) | Detect installed clients, merge non-clobbering, run live `recall {}` |
-| **L2 · Native plugin / catalog** | Host's own slot & installer | `hermes plugins install` / `/plugin install` / `openclaw plugins install` | Low (host-native discovery & UI) | Hermes `MemoryProvider`, OpenClaw `plugins.slots.memory`, `.claude-plugin`, MCP Registry `server.json`, `agentskills.io` `SKILL.md` |
-| **L3 · Ambient lifecycle + shared brain** | Lifecycle hooks + single local daemon | Zero after install | **Zero** (auto-prefetch, curated mirror, auto-verify) | Pre-turn `prefetch`/`before_prompt_build`, `on_memory_write` mirror, `Stop`/`agent_end` receipt check, shared loopback daemon + stdio bridge |
+| Level                                     | Pattern                               | User action                                                               | Per-turn effort                                       | Example                                                                                                                                      |
+| ----------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| **L0 · Docs paste**                       | README stanza                         | Hand-edit JSON/YAML/TOML                                                  | High (must remind agent)                              | Paste `mcpServers` block                                                                                                                     |
+| **L1 · Auto-dock CLI**                    | Sniff + merge + probe                 | `nektar dock auto`                                                        | Medium (tools wired, pull-only)                       | Detect installed clients, merge non-clobbering, run live `recall {}`                                                                         |
+| **L2 · Native plugin / catalog**          | Host's own slot & installer           | `hermes plugins install` / `/plugin install` / `openclaw plugins install` | Low (host-native discovery & UI)                      | Hermes `MemoryProvider`, OpenClaw `plugins.slots.memory`, `.claude-plugin`, MCP Registry `server.json`, `agentskills.io` `SKILL.md`          |
+| **L3 · Ambient lifecycle + shared brain** | Lifecycle hooks + single local daemon | Zero after install                                                        | **Zero** (auto-prefetch, curated mirror, auto-verify) | Pre-turn `prefetch`/`before_prompt_build`, `on_memory_write` mirror, `Stop`/`agent_end` receipt check, shared loopback daemon + stdio bridge |
 
 **Key insights:**
 
@@ -341,19 +341,19 @@ today.
 
 ## Common Mistakes
 
-| Mistake                                  | Why It Fails                                               | Fix                                                              |
-| ---------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------- |
-| Removing the check instead of the wait   | Verification is load-bearing; a skipped SPV is a defect    | Keep the check; parallelize, pre-warm, or background the wait    |
-| Front-loading decisions                  | Config questions before value = abandoned installs         | Sequence: ask only when the input is actually needed             |
-| "Documented, therefore removed"          | A paragraph describing a step still makes the user do it   | Snippets, defaults, generated artifacts — remove the step itself |
-| Silent waits                             | Unnamed waiting reads as broken; users quit or retry wrong | Every wait gets a name, a bound, and visible progress            |
-| New surface shapes                       | Custom formats charge learning-cost at the door            | Conform to MCP/compose/OpenAPI/bearer shapes users know          |
-| Stopping at L0 pull-only MCP             | Users still pay per-turn prompting friction forever        | Climb to L1 (`dock`), L2 (native plugin), L3 (ambient hooks)     |
-| Per-client stdio lock collisions         | Second AI app on the same laptop crashes on `instance.lock`| Shared local daemon + stdio-to-HTTP bridge ("one brain")         |
-| Counting CI timings as cold TTFV         | 889ms unit test hides a 60s cold boot or zero-env crash    | Separate warm/CI from cold-stranger timings in the audit ledger  |
-| Treating drop-off as a marketing problem | More traffic into a leaky funnel scales nothing            | Fix the earliest drop-off first; measure the funnel              |
-| Gate-keeping by domain knowledge         | Requiring BSV/SPV/TLS literacy is an admission fee         | Hide the expertise; surface it only on opt-in                    |
-| Friction for everyone, trust for no one  | Removing _all_ friction invites spam and abuse             | Friction for abusers, none for the good — asymmetric by design   |
+| Mistake                                  | Why It Fails                                                | Fix                                                              |
+| ---------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------- |
+| Removing the check instead of the wait   | Verification is load-bearing; a skipped SPV is a defect     | Keep the check; parallelize, pre-warm, or background the wait    |
+| Front-loading decisions                  | Config questions before value = abandoned installs          | Sequence: ask only when the input is actually needed             |
+| "Documented, therefore removed"          | A paragraph describing a step still makes the user do it    | Snippets, defaults, generated artifacts — remove the step itself |
+| Silent waits                             | Unnamed waiting reads as broken; users quit or retry wrong  | Every wait gets a name, a bound, and visible progress            |
+| New surface shapes                       | Custom formats charge learning-cost at the door             | Conform to MCP/compose/OpenAPI/bearer shapes users know          |
+| Stopping at L0 pull-only MCP             | Users still pay per-turn prompting friction forever         | Climb to L1 (`dock`), L2 (native plugin), L3 (ambient hooks)     |
+| Per-client stdio lock collisions         | Second AI app on the same laptop crashes on `instance.lock` | Shared local daemon + stdio-to-HTTP bridge ("one brain")         |
+| Counting CI timings as cold TTFV         | 889ms unit test hides a 60s cold boot or zero-env crash     | Separate warm/CI from cold-stranger timings in the audit ledger  |
+| Treating drop-off as a marketing problem | More traffic into a leaky funnel scales nothing             | Fix the earliest drop-off first; measure the funnel              |
+| Gate-keeping by domain knowledge         | Requiring BSV/SPV/TLS literacy is an admission fee          | Hide the expertise; surface it only on opt-in                    |
+| Friction for everyone, trust for no one  | Removing _all_ friction invites spam and abuse              | Friction for abusers, none for the good — asymmetric by design   |
 
 ## Quick Diagnostic
 

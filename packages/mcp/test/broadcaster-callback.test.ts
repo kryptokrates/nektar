@@ -157,7 +157,14 @@ void test('broadcaster callback: bare MINED without inline BUMP resolves proof v
   const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w
-  const rt = await openRuntime({ network: 'regtest', dataDir: mkdtempSync(join(tmpdir(), 'nektar-cb-')) }, { chain: memoryPort(chain), funds: fundsOf(funder) })
+  const rt = await openRuntime(
+    {
+      network: 'regtest',
+      dataDir: mkdtempSync(join(tmpdir(), 'nektar-cb-')),
+      regtest: { rpcUrl: '', rpcUser: '', rpcPass: '', propagationUrl: '', assetUrl: '', fundWif: funder.keyPair.toWif() }
+    },
+    { chain: memoryPort(chain), funds: fundsOf(funder) }
+  )
   const srv = createHttpApi(rt.mem).listen(0)
   await new Promise((r) => srv.once('listening', r))
   const base = `http://127.0.0.1:${(srv.address() as { port: number }).port}`
@@ -193,7 +200,14 @@ void test('runtime onReorg: two distinct reorgs at the same fork height both emi
     ...port.tracker,
     onReorg: (cb) => reorgListeners.push(cb as never)
   }
-  const rt = await openRuntime({ network: 'regtest', dataDir: mkdtempSync(join(tmpdir(), 'nektar-reorg-')) }, { chain: port, funds: fundsOf(funder) })
+  const rt = await openRuntime(
+    {
+      network: 'regtest',
+      dataDir: mkdtempSync(join(tmpdir(), 'nektar-reorg-')),
+      regtest: { rpcUrl: '', rpcUser: '', rpcPass: '', propagationUrl: '', assetUrl: '', fundWif: funder.keyPair.toWif() }
+    },
+    { chain: port, funds: fundsOf(funder) }
+  )
   try {
     const seen: Array<{ from: number; tip: number }> = []
     rt.mem.events.on('reorg', (e: { from: number; tip: number }) => seen.push(e))

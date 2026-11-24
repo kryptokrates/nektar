@@ -8,7 +8,6 @@
 // and replays the body answering run() from the journal alone.
 import test, { beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { EXEC_SVC } from '../src/rt/exec.js'
 import type { RtSend } from '../src/rt/exec.js'
 import {
   wakeTxProofBody,

@@ -45,11 +45,11 @@ async function fakeS3(
   const objects = new Map<string, { bytes: Uint8Array; meta: Record<string, string> }>()
   const server = createServer((req, res) => {
     const headers = Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, Array.isArray(v) ? v.join(',') : String(v)]))
-    const auth = headers.authorization
-    const m = auth.match(/Signature=([0-9a-f]+)/)
+    const auth: string | undefined = headers.authorization
+    const m = auth?.match(/Signature=([0-9a-f]+)/) ?? null
     // public buckets serve unsigned GET/HEAD — but a *signed* request with a
     // bad signature is still refused (gateway behaviour, drives the fallback)
-    const anonymous = publicRead && (req.method === 'GET' || req.method === 'HEAD') && auth === ''
+    const anonymous = publicRead && (req.method === 'GET' || req.method === 'HEAD') && (auth === undefined || auth === '')
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- IncomingMessage.method/url are string|undefined; the assertions are required
     if (!anonymous && (m === null || m[1] !== expectedSig(req.method!, req.url!, headers, secret))) {
       res.writeHead(403, { 'content-type': 'application/xml' }).end(`<Error><Code>SignatureDoesNotMatch</Code><Message>bad sig</Message></Error>`)

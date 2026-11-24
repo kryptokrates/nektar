@@ -16,11 +16,15 @@ Hermes Agent, OpenClaw, Cursor, Antigravity).
 ## Memory & Grounding Loop
 
 1. **Recall first:** Before answering a factual question that may live in
-   memory, call `recall` (omit `shard` to discover and read all readable shards
-   including `welcome`).
-2. **Ground every claim:** For a verifiable answer, call `groundedAnswer` so
-   every claim cites a verified `[shard:seq]` fragment. Unsupported text is
-   stripped rather than invented.
+   memory, call `recall` (pass `query` and `limit` for fast targeted lookup, or
+   omit `shard` to discover readable shards including `welcome`). Default
+   `recall` returns active (non-superseded, non-forgotten) memories and works
+   locally even before BSV anchoring (`verification: "local-committed"`).
+2. **Ground every claim:** For a verifiable answer, call `groundedAnswer` using
+   exact quotes (`cites: [{shard, seq}]`), quote-backed synthesis
+   (`quotes: [{quote, shard, seq}]` with verbatim substrings from cited
+   fragments), or Datalog entailment. Unsupported claims are stripped rather
+   than invented.
 3. **Keep the receipt footer verbatim:**
 
    ```
@@ -29,11 +33,14 @@ Hermes Agent, OpenClaw, Cursor, Antigravity).
    ```
 
    Never fabricate a receipt token. If nothing grounded, state honestly that
-   the answer is ungrounded.
+   the answer is ungrounded. When unfunded, receipts are locally signed
+   (`anchored: false`); funding the fee key anchors them on BSV.
 
-4. **Remember with provenance:** When the user states a durable fact worth
-   keeping across sessions or apps, call `remember` with `shard`, `data`, and
-   `source`.
+4. **Remember, supersede, and forget:** Call `remember` with `shard`, `data`,
+   and `source` (plus optional `supersedes: {shard, seq}` to replace an older
+   fact in active views). Call `forget {shard, seq, reason?}` to append a
+   tombstone hiding an outdated or wrong record from active views while keeping
+   full append-only history (`includeHistory: true`).
 5. **Know the honest boundary:** A verified receipt proves a claim came from
    **recorded, unaltered, derivable** memory — never that it is _true_.
 

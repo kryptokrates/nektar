@@ -12,7 +12,8 @@ import type { AutomationStore } from '../store.js'
 import type { TxEffects } from '../machines/effects.js'
 import { txObject } from './services.js'
 import { openEndpoint } from './endpoint.js'
-import { executor, type Executor, type InvokeTarget } from './exec.js'
+import { executor, setExecutor, type Executor, type InvokeTarget } from './exec.js'
+import { Dispatcher, wireTx, type LocalDispatch } from './dispatch.js'
 
 /** the durable host plane — tx object + every host-composed def (confirmer,
  *  watcher) registered on one endpoint, then each boot kick fired once. A
@@ -38,4 +39,30 @@ export async function openHostPlane(d: {
   d.log(`host plane: restate endpoint ${ep.uri}`)
   for (const k of d.rtKicks) void (d.exec ?? executor()).send(k, {}).catch((e) => d.log(`host plane: ${k.service} kick: ${(e as Error).message}`))
   return { uri: ep.uri, stop: () => ep.close() }
+}
+
+/** sidecar-free solo host plane — serves tx object + confirmer + records
+ *  watcher in-process on a local Dispatcher when NEKTAR_AUTOMATION is off
+ *  (zero Restate binary, zero WSL2, zero Docker). Durable multi-step market
+ *  automation (NEKTAR_AUTOMATION=1) continues to require Restate. */
+export async function openLocalHostPlane(d: {
+  store: AutomationStore
+  txEffects: TxEffects
+  localWire?: (ex: LocalDispatch) => void
+  rtKicks: InvokeTarget[]
+  log: (line: string) => void
+}): Promise<{ uri: string; stop: () => Promise<void> }> {
+  const disp = new Dispatcher(d.log)
+  setExecutor(disp)
+  wireTx(disp, { store: d.store, fx: d.txEffects, log: d.log })
+  d.localWire?.(disp)
+  d.log('host plane: in-process solo executor (Restate not required until NEKTAR_AUTOMATION=1)')
+  for (const k of d.rtKicks) void disp.send(k, {}).catch((e) => d.log(`host plane: ${k.service} kick: ${(e as Error).message}`))
+  return {
+    uri: 'local://in-process',
+    stop: async () => {
+      await disp.close()
+      setExecutor(undefined)
+    }
+  }
 }

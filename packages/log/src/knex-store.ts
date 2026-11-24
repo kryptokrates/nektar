@@ -26,17 +26,27 @@ export class KnexShardStore implements ShardStore {
         t.integer('leaf_index')
         t.string('anchor_txid')
         t.text('meta_json')
+        t.string('receipt_hash')
         t.primary(['shard', 'seq'])
         t.unique(['shard', 'hdp'])
         t.index(['shard', 'state', 'batch_index'], 'nektar_log_pending_idx')
+        t.index(['receipt_hash'], 'nektar_log_receipt_idx')
       })
-    } else if (!(await this.knex.schema.hasColumn(TABLE, 'meta_json'))) {
-      await this.knex.schema.alterTable(TABLE, (t) => {
-        t.text('meta_json')
-      })
+    } else {
+      if (!(await this.knex.schema.hasColumn(TABLE, 'meta_json'))) {
+        await this.knex.schema.alterTable(TABLE, (t) => {
+          t.text('meta_json')
+        })
+      }
+      if (!(await this.knex.schema.hasColumn(TABLE, 'receipt_hash'))) {
+        await this.knex.schema.alterTable(TABLE, (t) => {
+          t.string('receipt_hash')
+        })
+      }
     }
     // hot scan: committedUnbatched runs on every remember + flush tick
     await this.knex.raw('CREATE INDEX IF NOT EXISTS nektar_log_pending_idx ON ?? (??, ??, ??)', [TABLE, 'shard', 'state', 'batch_index'])
+    await this.knex.raw('CREATE INDEX IF NOT EXISTS nektar_log_receipt_idx ON ?? (??)', [TABLE, 'receipt_hash'])
     // shard-name cache — restoreState names written shards from here so a
     // restart can't orphan a shard that was never anchored (the snapshot's
     // touched set only saves on chain-write ops; the log is the truth)
@@ -58,11 +68,22 @@ export class KnexShardStore implements ShardStore {
       batch_index: r.batchIndex ?? null,
       leaf_index: r.leafIndex ?? null,
       anchor_txid: r.anchorTxid ?? null,
-      meta_json: JSON.stringify({ level: r.level, authorPub: r.authorPub, authorEpoch: r.authorEpoch })
+      receipt_hash: r.receiptHash?.toLowerCase() ?? null,
+      meta_json: JSON.stringify({
+        level: r.level,
+        authorPub: r.authorPub,
+        authorEpoch: r.authorEpoch,
+        supersedes: r.supersedes,
+        forgets: r.forgets,
+        receiptHash: r.receiptHash
+      })
     }
   }
 
   private rec(row: any): LogRecord {
+    const meta = row.meta_json
+      ? (JSON.parse(row.meta_json) as Pick<LogRecord, 'level' | 'authorPub' | 'authorEpoch' | 'supersedes' | 'forgets' | 'receiptHash'>)
+      : {}
     return {
       shard: row.shard,
       seq: row.seq,
@@ -73,13 +94,18 @@ export class KnexShardStore implements ShardStore {
       batchIndex: row.batch_index ?? undefined,
       leafIndex: row.leaf_index ?? undefined,
       anchorTxid: row.anchor_txid ?? undefined,
-      ...(row.meta_json ? (JSON.parse(row.meta_json) as Pick<LogRecord, 'level' | 'authorPub' | 'authorEpoch'>) : {})
+      ...meta,
+      ...(row.receipt_hash ? { receiptHash: row.receipt_hash as string } : {})
     }
   }
 
   async append(rec: LogRecord): Promise<void> {
     await this.knex(TABLE).insert(this.row(rec))
     this.known.add(rec.shard)
+  }
+  async byReceiptHash(receiptHash: string): Promise<LogRecord | undefined> {
+    const row = await this.knex(TABLE).where({ receipt_hash: receiptHash.toLowerCase() }).first()
+    return row && this.rec(row)
   }
   async byIdentity(shard: string, hdpHex: string): Promise<LogRecord | undefined> {
     const row = await this.knex(TABLE)

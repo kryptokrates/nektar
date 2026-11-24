@@ -32,6 +32,12 @@ export const TOOLS = [
           description: '§AppE: records this fact is derived from — the new level is floored at their max so derived content cannot leak downward'
         },
         source: { type: 'string', description: 'where the fact comes from (document, URL, person)' },
+        supersedes: {
+          type: 'object',
+          properties: { shard: { type: 'string' }, seq: { type: 'number' } },
+          required: ['shard', 'seq'],
+          description: 'append-only superseding: mark an earlier record as replaced in default active recall views while preserving full history'
+        },
         modality: {
           type: 'object',
           description: '§15 modal qualifier committed into the provenance hash, e.g. {kind:"temporal",qualifier:"as of Block 105432, Reg X includes Clause Y"}',
@@ -43,14 +49,37 @@ export const TOOLS = [
     }
   },
   {
+    name: 'forget',
+    description:
+      'Append a tombstone hiding an earlier record from default active recall views without deleting append-only history (includeHistory:true still sees everything).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        shard: { type: 'string', description: 'shard containing the record to hide from active views' },
+        seq: { type: 'number', description: 'record seq to tombstone' },
+        reason: { type: 'string', description: 'optional audit reason recorded in the append-only tombstone' }
+      },
+      required: ['shard', 'seq']
+    }
+  },
+  {
     name: 'recall',
     description:
-      'Recall fragments for a shard (omit shard to list and recall readable shards); decrypts when the agent seed is held. Returns an answer receipt.',
+      'Recall active fragments for a shard (omit shard to list and recall readable shards); supports fast local search (query), pagination (limit/offset/since), and history inspection. Local reads work even before BSV anchoring (labeled local-committed); set requireAnchored:true for SPV-only reads.',
     inputSchema: {
       type: 'object',
       properties: {
         shard: { type: 'string', description: 'memory namespace; omit to list available non-private shards and recall from them' },
-        seq: { type: 'number', description: 'one record (the seq returned by remember); omit to recall the whole shard' },
+        seq: { type: 'number', description: 'one record (the seq returned by remember); omit to recall the shard' },
+        query: { type: 'string', description: 'optional keyword/phrase search query — ranks and returns matching active records' },
+        limit: { type: 'number', description: 'maximum number of records to return' },
+        offset: { type: 'number', description: 'number of records to skip for pagination' },
+        since: { type: 'number', description: 'only return records written at or after this Unix timestamp (seconds or ms)' },
+        includeHistory: { type: 'boolean', description: 'include superseded, forgotten, and tombstone records (default false = active view only)' },
+        requireAnchored: {
+          type: 'boolean',
+          description: 'require on-chain SPV anchoring and withhold local-committed unanchored records (default false for local owner)'
+        },
         identity: {
           type: 'object',
           description:
@@ -422,7 +451,7 @@ export const TOOLS = [
   {
     name: 'groundedAnswer',
     description:
-      "Wright §8 (∀φ∈Rq ∃Ki: VerifyFragment(Ki)∧φ⊢di): takes the caller's draft claims, checks every cite resolves to a VERIFIED fragment and the claim is quoted or Datalog-entailed, STRIPS everything that fails, then anchors an answer receipt. Ungrounded statements are removed — the receipt is the per-answer proof, not an optional add-on.",
+      "Wright §8 (∀φ∈Rq ∃Ki: VerifyFragment(Ki)∧φ⊢di): takes the caller's draft claims, checks every cite resolves to a verified fragment and the claim is exact-quoted, quote-backed (`quotes:[{quote,shard,seq}]`), or Datalog-entailed, STRIPS everything that fails, then commits an answer receipt (anchored on BSV when funded, or local-signed when unfunded). Ungrounded statements are removed — the receipt is the per-answer proof, not an optional add-on.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -436,11 +465,25 @@ export const TOOLS = [
               cites: {
                 type: 'array',
                 items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] },
-                description: 'private-shard cites are auto-proved (ZK membership) when the prover is available; may also carry explicit zk:{queryId,proof}'
+                description: 'cited fragments for exact-quote or Datalog grounding; private-shard cites are auto-proved (ZK membership)'
+              },
+              quotes: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: { quote: { type: 'string' }, shard: { type: 'string' }, seq: { type: 'number' } },
+                  required: ['quote', 'shard', 'seq']
+                },
+                description:
+                  'quote-backed synthesis: verbatim substrings from cited fragments that support a naturally written claim text; every quote is mechanically substring-verified'
               }
             },
-            required: ['text', 'cites']
+            required: ['text']
           }
+        },
+        requireAnchored: {
+          type: 'boolean',
+          description: 'require SPV-anchored fragments and on-chain receipt anchoring (default false for local owner reads)'
         },
         mode: { type: 'string', description: '"remove" (default — strip ungrounded) or "flag"' },
         modelAttestation: {
@@ -780,7 +823,7 @@ export const TOOLS = [
 ] as const
 
 /** tools visible to clients right now — paid-disclosure tools are gated by env */
-const AGENT_TOOLS = new Set(['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor', 'automationDoctor'])
+const AGENT_TOOLS = new Set(['remember', 'forget', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor', 'automationDoctor'])
 const toolProfile = (): 'agent' | 'operator' => ((nektarEnv('NEKTAR_TOOL_PROFILE') ?? 'agent').toLowerCase() === 'operator' ? 'operator' : 'agent')
 export const visibleTools = async (mem?: import('./memory.js').NektarMemory) => {
   const paid = await paidSaleAuthorized(mem?.automation)

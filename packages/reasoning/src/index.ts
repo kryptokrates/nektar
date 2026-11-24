@@ -38,12 +38,20 @@ export interface FragmentRef {
  *  ZK proof bytes the service verified at commit — the proof itself is
  *  fetchable at /v1/proof/<proofCommit> so a verifier can re-run it. */
 export type CommittedRef = FragmentRef | { private: true; hdp: string; anchorTxid?: string; proofCommit?: string }
+export interface QuoteCite {
+  quote: string
+  shard: string
+  seq: number
+}
 export interface Claim {
   text: string
   literal?: string
   cites: FragmentRef[]
+  /** Quote-backed synthesis: verbatim substrings from cited fragments that support `text`. */
+  quotes?: QuoteCite[]
 }
-export type GroundReason = 'grounded:quote' | 'grounded:entailed' | 'uncited' | 'citation-unverifiable' | 'not-entailed'
+export type GroundReason =
+  'grounded:quote' | 'grounded:quote-backed' | 'grounded:entailed' | 'uncited' | 'citation-unverifiable' | 'quote-mismatch' | 'not-entailed'
 export interface GroundedClaim extends Claim {
   grounded: boolean
   reason: GroundReason
@@ -74,20 +82,17 @@ export async function ground(claims: Claim[], fetch: FragmentFetch, opts: { mode
   const mode = opts.mode ?? 'flag'
   const out: GroundedClaim[] = []
   for (const c of claims) {
-    if (c.cites.length === 0) {
+    const quotes = c.quotes ?? []
+    if (c.cites.length === 0 && quotes.length === 0) {
       out.push({ ...c, grounded: false, reason: 'uncited' })
       continue
     }
-    const verified = (await Promise.all(c.cites.map(fetch))).filter((f) => f.verified && f.text !== undefined).map((f) => f.text!)
-    if (verified.length === 0) {
-      out.push({ ...c, grounded: false, reason: 'citation-unverifiable' })
-      continue
-    }
+    const verified = c.cites.length > 0 ? (await Promise.all(c.cites.map(fetch))).filter((f) => f.verified && f.text !== undefined).map((f) => f.text!) : []
     if (verified.some((t) => norm(t).includes(norm(c.text)))) {
       out.push({ ...c, grounded: true, reason: 'grounded:quote' })
       continue
     }
-    if (c.literal) {
+    if (verified.length > 0 && c.literal) {
       const goal = parseLiteral(c.literal)
       const derived = new Datalog(opts.rules ?? []).run(verified.flatMap(factsOf))
       if (derived.has(`${goal.pred}(${goal.args.join(',')})`)) {
@@ -95,11 +100,32 @@ export async function ground(claims: Claim[], fetch: FragmentFetch, opts: { mode
         continue
       }
     }
+    if (quotes.length > 0) {
+      const fetchedQuotes = await Promise.all(quotes.map((q) => fetch({ shard: q.shard, seq: q.seq })))
+      if (fetchedQuotes.some((f) => !f.verified || f.text === undefined)) {
+        out.push({ ...c, grounded: false, reason: 'citation-unverifiable' })
+        continue
+      }
+      const allQuotesMatch = quotes.every((q, i) => {
+        const nq = norm(q.quote)
+        return nq.length >= 3 && norm(fetchedQuotes[i].text!).includes(nq)
+      })
+      if (allQuotesMatch) {
+        out.push({ ...c, grounded: true, reason: 'grounded:quote-backed' })
+        continue
+      }
+      out.push({ ...c, grounded: false, reason: 'quote-mismatch' })
+      continue
+    }
+    if (verified.length === 0) {
+      out.push({ ...c, grounded: false, reason: 'citation-unverifiable' })
+      continue
+    }
     out.push({ ...c, grounded: false, reason: 'not-entailed' })
   }
   const flagged = out.filter((c) => !c.grounded)
   const kept = mode === 'remove' ? out.filter((c) => c.grounded) : out
-  const strip = ({ text, literal, cites }: Claim): Claim => ({ text, literal, cites })
+  const strip = ({ text, literal, cites, quotes }: Claim): Claim => ({ text, literal, cites, ...(quotes ? { quotes } : {}) })
   return { claims: out, kept: kept.map(strip), flagged, mode, reportHash: hashOf({ mode, claims: out }) }
 }
 
@@ -130,6 +156,8 @@ export interface Receipt {
   modelId: ModelIdentity
   timestamp: number
   groundingReportHash?: string
+  /** honest grounding tier: exact substring quote, quote-backed synthesis, Datalog entailment, or mixed */
+  groundingTier?: 'exact-quote' | 'quote-backed-synthesis' | 'datalog-entailed' | 'mixed'
   truthNote: string
   /** §16 delegation map μ_i: sub-decisions asserted by delegating agents.
    *  signature = Sign_delegator(H(TAG_DELEGATION‖delegator‖decision‖answer)) */

@@ -26,6 +26,17 @@ import { MemZk } from './zk.js'
 
 const DELTA_PREFIX = 'delta:'
 
+function tokenizeText(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 2)
+  )
+}
+
 export abstract class MemRecords extends MemZk {
   /** anchor a model manifest on the __model__ shard and bind it to receipts. */
   async modelManifest(m: Parameters<typeof import('@nektar/reasoning').modelIdentity>[0]) {
@@ -137,7 +148,11 @@ export abstract class MemRecords extends MemZk {
     d: string,
     prov?: Partial<Provenance> & { sourcePub?: string; epoch?: number },
     level = 0,
-    opts?: { premiseRefs?: Array<{ shard: string; seq: number }> }
+    opts?: {
+      premiseRefs?: Array<{ shard: string; seq: number }>
+      supersedes?: { shard: string; seq: number }
+      forgets?: { shard: string; seq: number; reason?: string }
+    }
   ): Promise<RememberResult> {
     // App E: derived content inherits the max level of its premises — the
     // caller may ask for higher, never lower.
@@ -170,6 +185,9 @@ export abstract class MemRecords extends MemZk {
     if (this.canEncrypt() && level > (this.opts.maxLevel ?? 0))
       throw new IngestError(`level ${level} exceeds this instance's maxLevel ${this.opts.maxLevel ?? 0}`)
     this.touched.add(shard)
+    // public receipt hash index for O(1) __receipts__ lookup (hash is already public in tokens)
+    const receiptMatch = shard === '__receipts__' ? /^receipt:([0-9a-f]{64})(?::|$)/i.exec(d) : null
+    const receiptHash = receiptMatch?.[1]?.toLowerCase()
     // encryption runs inside the shard queue (log.remember's prepare hook):
     // the seq the key context binds is the seq actually assigned — a guessed
     // seq could interleave with another writer and produce an undecryptable
@@ -181,7 +199,10 @@ export abstract class MemRecords extends MemZk {
       fragment,
       {
         level,
-        ...(prov?.sourcePub !== undefined ? { authorPub: prov.sourcePub, authorEpoch: prov.epoch ?? 0 } : {})
+        ...(prov?.sourcePub !== undefined ? { authorPub: prov.sourcePub, authorEpoch: prov.epoch ?? 0 } : {}),
+        ...(opts?.supersedes !== undefined ? { supersedes: opts.supersedes } : {}),
+        ...(opts?.forgets !== undefined ? { forgets: opts.forgets } : {}),
+        ...(receiptHash !== undefined ? { receiptHash } : {})
       },
       seed === undefined
         ? undefined
@@ -206,6 +227,16 @@ export abstract class MemRecords extends MemZk {
             frag.d = new Uint8Array(0) // plaintext is not retained with E
           }
     )
+    if (level === 0) {
+      let idx = this.searchIndex.get(shard)
+      if (!idx) {
+        idx = new Map()
+        this.searchIndex.set(shard, idx)
+      }
+      if (!opts?.forgets) idx.set(rec.seq, { text: d, tokens: tokenizeText(d) })
+      if (opts?.supersedes?.shard === shard) idx.delete(opts.supersedes.seq)
+      if (opts?.forgets?.shard === shard) idx.delete(opts.forgets.seq)
+    }
     if (!duplicate) this.promises.push({ shard, seq: rec.seq, issuedAt: Date.now() })
     const out: RememberResult = {
       shard,
@@ -223,6 +254,23 @@ export abstract class MemRecords extends MemZk {
     return out
   }
 
+  /** append-only tombstone: hides (shard, seq) from active recall views without
+   *  deleting history; `includeHistory: true` and explicit `seq` reads remain auditable. */
+  async forget(shard: string, seq: number, reason?: string): Promise<RememberResult> {
+    const target = await this.store.bySeq(shard, seq)
+    if (!target) throw new Error(`forget: no record ${shard}/${seq}`)
+    const payload = JSON.stringify({ type: 'forget', shard, seq, ...(reason ? { reason } : {}) })
+    return await this.remember(shard, payload, { source: 'nektar-forget' }, target.level ?? 0, {
+      forgets: { shard, seq, ...(reason ? { reason } : {}) }
+    })
+  }
+
+  /** O(1) lookup of a receipt's seq on __receipts__ via the indexed receipt_hash column. */
+  async findReceiptSeq(receiptHash: string): Promise<number | undefined> {
+    const rec = await this.store.byReceiptHash?.(receiptHash.toLowerCase())
+    return rec?.shard === '__receipts__' ? rec.seq : undefined
+  }
+
   /**
    * prove: build a proof bundle for one record and verify it against headers.
    * A lie stays a lie: if the record was never anchored, the receipt says
@@ -231,23 +279,36 @@ export abstract class MemRecords extends MemZk {
   async prove(shard: string, seq: number): Promise<{ bundle?: ProofBundle; result: VerifyResult | { ok: false; reason: 'NotAnchored' | 'NotFound' } }> {
     const rec = await this.store.bySeq(shard, seq)
     if (!rec) return { result: { ok: false, reason: 'NotFound' } }
+    const cacheKey = `${shard}:${seq}`
     // pack-imported record: its proof is the bundle the exporter shipped —
     // verifyFragment re-checks leaf→batch→anchor→headers, zero trust needed
-    const ib = this.importedBundles.get(`${shard}:${seq}`)
-    if (ib) return { bundle: ib, result: await verifyFragment(ib, this.chain) }
+    const ib = this.importedBundles.get(cacheKey)
+    if (ib) {
+      const impKey = rec.anchorTxid ?? ib.chainTail.at(-1)?.txid ?? 'imported'
+      const hit = this.proofCache.get(cacheKey)
+      if (hit && hit.anchorTxid === impKey && hit.result.ok) return { bundle: hit.bundle, result: hit.result }
+      const result = await verifyFragment(ib, this.chain)
+      if (result.ok) this.proofCache.set(cacheKey, { anchorTxid: impKey, bundle: ib, result })
+      return { bundle: ib, result }
+    }
     if (!rec.anchorTxid || rec.batchIndex === undefined) {
       return { result: { ok: false, reason: 'NotAnchored' } }
     }
-    // rebuild the batch leaves from records of the same batch
-    const batchRecs = await this.store.byBatch(shard, rec.batchIndex)
-    const leaves = batchRecs.map((r) => r.leaf)
-    const R = merkleRoot(leaves)
     const head = this.anchorChain(shard).getHead()
     // find the anchor tx for this batch: search chain tail then head history
     const link = (this.tails.get(shard) ?? []).find((l) => l.n === rec.batchIndex)
     if (!link || !head) return { result: { ok: false, reason: 'NotAnchored' } }
     const anchorTx = this.anchorTxs.get(link.txid)
     if (!anchorTx) return { result: { ok: false, reason: 'NotAnchored' } }
+    const proofVersion = `${rec.anchorTxid}:${anchorTx.merklePath?.blockHeight ?? -1}`
+    const hit = this.proofCache.get(cacheKey)
+    if (hit && hit.anchorTxid === proofVersion && hit.result.ok) {
+      return { bundle: hit.bundle, result: hit.result }
+    }
+    // rebuild the batch leaves from records of the same batch
+    const batchRecs = await this.store.byBatch(shard, rec.batchIndex)
+    const leaves = batchRecs.map((r) => r.leaf)
+    const R = merkleRoot(leaves)
     this.anchorChain(shard).beefOf(anchorTx, true)
     const bundle = buildProofBundle({
       shard,
@@ -266,6 +327,7 @@ export abstract class MemRecords extends MemZk {
     const t0 = performance.now()
     const result = await verifyFragment(bundle, this.chain)
     this.metrics.observe('nektar_proof_latency_ms', performance.now() - t0, 'verifyFragment latency')
+    if (result.ok) this.proofCache.set(cacheKey, { anchorTxid: proofVersion, bundle, result })
     return { bundle, result }
   }
 }

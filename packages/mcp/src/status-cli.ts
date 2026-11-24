@@ -54,6 +54,7 @@ export async function runStatusCli(argv: string[], io: StatusIo = {}): Promise<n
   if (restate === 'unavailable') {
     const bin = join(fileURLToPath(new URL('../../restate', import.meta.url)), 'restate-server')
     if (existsSync(bin)) restate = `bundled (${bin})`
+    else restate = 'in-process solo mode (Restate only needed for NEKTAR_AUTOMATION=1)'
   }
 
   const report = {

@@ -131,8 +131,11 @@ class NektarMemoryProvider(_BaseMemoryProvider):
         _ = session_id
         timeout_s = max(0.1, float(self.config.get("prefetch_timeout_ms", 800)) / 1000.0)
         max_chars = int(self.config.get("prefetch_max_chars", 1600))
+        payload: dict[str, Any] = {"limit": 5}
+        if (query or "").strip():
+            payload["query"] = query.strip()
         try:
-            res = self.client.call_tool("recall", {}, timeout_s=timeout_s)
+            res = self.client.call_tool("recall", payload, timeout_s=timeout_s)
         except Exception:
             return ""
         items = res.get("items")
@@ -237,6 +240,9 @@ class NektarMemoryProvider(_BaseMemoryProvider):
                         "properties": {
                             "shard": {"type": "string", "description": "Optional shard name (e.g. welcome, hermes)"},
                             "seq": {"type": "integer", "description": "Optional single record seq"},
+                            "query": {"type": "string", "description": "Optional search query to rank relevant memories"},
+                            "limit": {"type": "integer", "description": "Optional max results"},
+                            "includeHistory": {"type": "boolean", "description": "Include superseded/forgotten records"},
                         },
                     },
                 },
@@ -245,15 +251,36 @@ class NektarMemoryProvider(_BaseMemoryProvider):
                 "type": "function",
                 "function": {
                     "name": "nektar_remember",
-                    "description": "Persist a durable fact into nektar verifiable memory with provenance.",
+                    "description": "Persist a durable fact into nektar verifiable memory with provenance (optionally superseding an older seq).",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "shard": {"type": "string"},
                             "data": {"type": "string"},
                             "source": {"type": "string"},
+                            "supersedes": {
+                                "type": "object",
+                                "properties": {"shard": {"type": "string"}, "seq": {"type": "integer"}},
+                                "required": ["shard", "seq"],
+                            },
                         },
                         "required": ["data"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "nektar_forget",
+                    "description": "Append a tombstone hiding an outdated or wrong record from active recall views without deleting append-only history.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "shard": {"type": "string"},
+                            "seq": {"type": "integer"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["shard", "seq"],
                     },
                 },
             },
@@ -359,6 +386,7 @@ class NektarMemoryProvider(_BaseMemoryProvider):
         mapping = {
             "nektar_recall": "recall",
             "nektar_remember": "remember",
+            "nektar_forget": "forget",
             "nektar_grounded_answer": "groundedAnswer",
             "nektar_verify_receipt": "verifyReceipt",
             "nektar_want": "want",

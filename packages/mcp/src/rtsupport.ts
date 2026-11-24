@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { PrivateKey, Transaction } from '@bsv/sdk'
 import { detached, nektarEnv, nektarEnvNum, mkLog, nap, sparse } from '@nektar/core'
 import { TxStore, type ChainPort, type TxStatusEvent, type ChainEvents, type BroadcastResult } from '@nektar/chain'
-import { executor, cronObject, legObject, EXEC_SVC, RT_OPTS_HEAVY, type InvokeTarget } from '@nektar/automation'
+import { executor, cronObject, legObject, wireCron, wireLeg, EXEC_SVC, RT_OPTS_HEAVY, type InvokeTarget, type LocalDispatch } from '@nektar/automation'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { readKeyFile, writeKeyFile, fundKeyFromMnemonic } from './keystore.js'
 import { watcherObservation } from './txops.js'
@@ -457,6 +457,8 @@ export interface ConfirmerWatchDeps {
 export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
   rtDefs: unknown[]
   rtKicks: InvokeTarget[]
+  /** wires confirmer + watcher onto a local Dispatcher in solo memory mode */
+  localWire: (ex: LocalDispatch) => void
   /** final-flush seam for close() — one last confirmer pass */
   tick: () => Promise<void>
   /** the running pass's promise while one is in flight */
@@ -683,6 +685,10 @@ export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
   return {
     rtDefs,
     rtKicks,
+    localWire: (ex: LocalDispatch) => {
+      wireCron(ex, EXEC_SVC.confirmer, { tick, ceilingMs: () => d.cfg.confirmEveryMs ?? 5000, log: d.nlog })
+      wireLeg(ex, EXEC_SVC.watcher, watchLeg)
+    },
     tick,
     inflight: () => inflight,
     close: () => {

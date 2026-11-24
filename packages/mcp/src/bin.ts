@@ -144,11 +144,15 @@ if (!requestedPort && nektarEnvFlag('NEKTAR_NO_BRIDGE') !== true) {
   }
 }
 
-const { ensureRestate, RESTATE_REQUIRED } = await import('./restatesidecar.js')
-const plane = await ensureRestate({ log: nlog, onCleanup: (fn) => process.on('exit', fn) })
-if (plane === 'unavailable') {
-  nlog(RESTATE_REQUIRED)
-  process.exit(2)
+const automationOn = /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')
+const useRestate = automationOn || nektarEnv('NEKTAR_RESTATE_URL') !== undefined || nektarEnvFlag('NEKTAR_RESTATE_REQUIRED') === true
+if (useRestate) {
+  const { ensureRestate, RESTATE_REQUIRED } = await import('./restatesidecar.js')
+  const plane = await ensureRestate({ log: nlog, onCleanup: (fn) => process.on('exit', fn) })
+  if (plane === 'unavailable') {
+    nlog(RESTATE_REQUIRED)
+    process.exit(2)
+  }
 }
 const { openRuntime, configFromEnv } = await import('./runtime.js')
 const rt = await openRuntime(configFromEnv())
@@ -216,7 +220,7 @@ if (seedDomains.length > 0 && mh.length > 0) {
 // market plane is on. openAutomation registers the same service names, so
 // exactly one of the two opens an endpoint in a process.
 let hostPlane: { uri: string; stop: () => Promise<void> } | undefined
-if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
+if (automationOn) {
   const { openAutomation } = await import('@nektar/automation')
   // unattended mode is honored ONLY behind a valid conformance token —
   // it implies the strict gate so a red preflight refuses to start
@@ -351,12 +355,21 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
   })
   nlog(`automation on — ${mh.length} market host(s); policies and approvals via 'pnpm automation'`)
   if (mh.length === 0) nlog('automation: no market hosts (set NEKTAR_MARKET_HOSTS) — wants and offers cannot be published')
-} else {
+} else if (useRestate) {
   const { openHostPlane } = await import('@nektar/automation')
   hostPlane = await openHostPlane({
     store: rt.ledger,
     txEffects: rt.txEffects,
     rtDefs: rt.rtDefs,
+    rtKicks: rt.rtKicks,
+    log: nlog
+  })
+} else {
+  const { openLocalHostPlane } = await import('@nektar/automation')
+  hostPlane = await openLocalHostPlane({
+    store: rt.ledger,
+    txEffects: rt.txEffects,
+    localWire: rt.rtLocalWire,
     rtKicks: rt.rtKicks,
     log: nlog
   })

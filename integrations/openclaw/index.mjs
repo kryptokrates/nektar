@@ -128,7 +128,8 @@ export function createNektarOpenClawPlugin(opts = {}) {
             if (!base) return undefined
             const query = String(event?.prompt ?? event?.message ?? event?.userMessage ?? '')
             try {
-              const res = await callNektarTool(base, token, 'recall', {}, prefetchTimeoutMs, fetchImpl)
+              const payload = query.trim() ? { query: query.trim(), limit: 5 } : { limit: 5 }
+              const res = await callNektarTool(base, token, 'recall', payload, prefetchTimeoutMs, fetchImpl)
               const picks = rankItems(res?.items, query, 5)
               if (picks.length === 0) return undefined
               const lines = ['[nektar verified memory — cite via nektar_grounded_answer; proofs show recorded+unaltered, not truth]']
@@ -218,8 +219,9 @@ export function createNektarOpenClawPlugin(opts = {}) {
       // 3. Native tool registration (works even without separate MCP config)
       if (typeof api.registerTool === 'function') {
         const defs = [
-          ['nektar_recall', 'recall', 'Recall verified fragments from nektar memory (omit shard to discover shards).'],
-          ['nektar_remember', 'remember', 'Persist a durable fact into nektar verifiable memory with provenance.'],
+          ['nektar_recall', 'recall', 'Recall verified fragments from nektar memory (supports query, limit, shard).'],
+          ['nektar_remember', 'remember', 'Persist a durable fact into nektar verifiable memory with provenance (supports supersedes).'],
+          ['nektar_forget', 'forget', 'Append a tombstone hiding an earlier record from active recall views without deleting history.'],
           ['nektar_grounded_answer', 'groundedAnswer', 'Produce a grounded answer citing verified fragments with a checkable receipt footer.'],
           ['nektar_verify_receipt', 'verifyReceipt', 'Verify a nektarr1.<token> answer receipt.'],
           ['nektar_want', 'want', 'Publish a policy-bounded knowledge buy want on the nektar BSV market.'],

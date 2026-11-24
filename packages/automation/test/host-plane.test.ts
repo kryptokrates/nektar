@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import knexFactory from 'knex'
 import { AutomationStore } from '../src/store.js'
 import { inertTxEffects } from '../src/machines/effects.js'
-import { openHostPlane } from '../src/rt/hostplane.js'
+import { openHostPlane, openLocalHostPlane } from '../src/rt/hostplane.js'
 import { svcName } from '../src/rt/endpoint.js'
-import { EXEC_SVC, type Executor, type InvokeTarget } from '../src/rt/exec.js'
+import { EXEC_SVC, executor, type Executor, type InvokeTarget } from '../src/rt/exec.js'
 
 // host-plane — the automation-less registration path. Fakes sit at the two
 // seams only: `open` stands in for openEndpoint (records the service names
@@ -86,5 +86,31 @@ void test('host plane: a failing endpoint registration rejects and no kick is se
     /admin down/
   )
   assert.equal(sends.length, 0)
+  await kx.destroy()
+})
+
+void test('local host plane: boots in-process without Restate, wires tx + localWire, fires kicks, and cleans up executor', async () => {
+  const { kx, s } = await store()
+  let kicked = 0
+  const hp = await openLocalHostPlane({
+    store: s,
+    txEffects: inertTxEffects,
+    localWire: (ex) => {
+      ex.register(EXEC_SVC.confirmer, 'tick', () => {
+        kicked++
+        return Promise.resolve({ ok: true })
+      })
+    },
+    rtKicks: [{ service: EXEC_SVC.confirmer, handler: 'tick', key: 'main' }],
+    log: () => {}
+  })
+  assert.equal(hp.uri, 'local://in-process')
+  await new Promise((r) => setTimeout(r, 25))
+  assert.equal(kicked, 1, 'boot kick ran in-process on local Dispatcher')
+  // ambient executor() routes directly to our local Dispatcher
+  const direct = await executor().call<{ ok: boolean }>({ service: EXEC_SVC.confirmer, handler: 'tick', key: 'main' }, {})
+  assert.equal(direct.ok, true)
+  assert.equal(kicked, 2)
+  await hp.stop()
   await kx.destroy()
 })

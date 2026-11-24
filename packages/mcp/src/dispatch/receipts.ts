@@ -1,16 +1,22 @@
 // answer-grounding + receipt tools — extracted verbatim from the server.ts dispatchTool switch
 import { nektarEnv, sparse } from '@nektar/core'
+import { paymentsEnabled } from '../pay.js'
 import { receiptToken } from '../receipt.js'
 import { shareBlock, verifyBase } from './shared.js'
 import type { ToolHandler } from './shared.js'
+
+const UNFUNDED_RE = /no funding|insufficient|reserve empty|no utxo|empty reserve|0 utxo/i
 
 export const handlers: Record<string, ToolHandler> = {
   groundedAnswer: async (mem, args, d) => {
     const { ground, commitReceipt } = await import('@nektar/reasoning')
     const { Buffer } = await import('node:buffer')
+    const allowLocal = !d.ctx.external && args?.requireAnchored !== true
+    let allCitedAnchored = true
     const fetch: import('@nektar/reasoning').FragmentFetch = async (ref) => {
-      const r = await mem.recall(ref.shard, { seq: ref.seq })
+      const r = await mem.recall(ref.shard, { seq: ref.seq, allowLocal })
       const it = sparse(r.items[0])
+      if (it && it.anchored === false) allCitedAnchored = false
       return { verified: !!it && !it.unverifiable, text: it?.text }
     }
     // private shards (remember …, private:true): a plain cite leaks the shard
@@ -22,8 +28,10 @@ export const handlers: Record<string, ToolHandler> = {
     const privRefused: any[] = []
     const claimsForGround: any[] = []
     const proofCommits = new Map<string, { commit: string; store?: { endpoint: string; bucket: string } }>() // `${shard}:${seq}` → proof commit + store locator
-    for (const c of args.claims ?? []) {
-      const priv = (c.cites ?? []).filter((r: any) => mem.shardPrivate(r.shard))
+    for (const rawClaim of args.claims ?? []) {
+      const c = { ...rawClaim, cites: Array.isArray(rawClaim.cites) ? rawClaim.cites : [] }
+      const allRefs = [...c.cites, ...(Array.isArray(c.quotes) ? c.quotes : [])]
+      const priv = allRefs.filter((r: any) => mem.shardPrivate(r.shard))
       if (priv.length === 0) {
         claimsForGround.push(c)
         continue
@@ -76,23 +84,40 @@ export const handlers: Record<string, ToolHandler> = {
         note: 'no claim survived grounding — nothing committed (an underivable answer is invalid by construction)'
       }
     }
-    // the receipt commits only cites of KEPT claims — and private cites are
-    // redacted to {private, hdp, anchorTxid}: the shard name never enters
-    // the anchored record.
+    const keptReasons = new Set(report.claims.filter((c) => c.grounded).map((c) => c.reason))
+    const groundingTier: 'exact-quote' | 'quote-backed-synthesis' | 'datalog-entailed' | 'mixed' | undefined =
+      keptReasons.size > 1
+        ? 'mixed'
+        : keptReasons.has('grounded:quote')
+          ? 'exact-quote'
+          : keptReasons.has('grounded:quote-backed')
+            ? 'quote-backed-synthesis'
+            : keptReasons.has('grounded:entailed')
+              ? 'datalog-entailed'
+              : undefined
+    // the receipt commits only cites of KEPT claims (both cites and quotes) —
+    // private cites are redacted to {private, hdp, anchorTxid}: the shard name
+    // never enters the anchored record.
     const refs: any[] = []
-    for (const c of report.kept)
-      for (const r of c.cites) {
+    const seenRef = new Set<string>()
+    for (const c of report.kept) {
+      const claimRefs = [...(c.cites ?? []), ...(c.quotes ?? []).map((q) => ({ shard: q.shard, seq: q.seq }))]
+      for (const r of claimRefs) {
+        const key = `${r.shard}:${r.seq}`
+        if (seenRef.has(key)) continue
+        seenRef.add(key)
         refs.push(
           mem.shardPrivate(r.shard)
             ? {
                 private: true,
-                proofCommit: proofCommits.get(`${r.shard}:${r.seq}`)?.commit,
-                ...(proofCommits.get(`${r.shard}:${r.seq}`)?.store !== undefined ? { proofStore: proofCommits.get(`${r.shard}:${r.seq}`)!.store } : {}),
+                proofCommit: proofCommits.get(key)?.commit,
+                ...(proofCommits.get(key)?.store !== undefined ? { proofStore: proofCommits.get(key)!.store } : {}),
                 ...((await mem.fragmentRef(r.shard, r.seq)) ?? { hdp: '' })
               }
             : r
         )
       }
+    }
     // modelAttestation (from attestInference): the statement MUST re-derive
     // from (input‖output‖modelPoseidon) before it enters the anchored record —
     // fail closed, never commit an unverifiable attestation.
@@ -107,14 +132,30 @@ export const handlers: Record<string, ToolHandler> = {
       const v = validateAttestation(attestation)
       if (!v.ok) throw new Error(`modelAttestation rejected: ${v.reason}`)
     }
+    const canLocalFallback = allowLocal && !paymentsEnabled()
+    const hasFunds = (await mem.funds.outs().catch(() => [])).length > 0
+    const initialCheckResult: 'verified' | 'unverifiable' = allCitedAnchored && hasFunds ? 'verified' : 'unverifiable'
+    const anchorMem: import('@nektar/reasoning').AnchorMem = {
+      remember: (shard, data) => mem.remember(shard, data),
+      anchorShard: async (shard) => {
+        if (canLocalFallback && !hasFunds) return null
+        try {
+          return await mem.anchorShard(shard)
+        } catch (e) {
+          if (canLocalFallback && UNFUNDED_RE.test((e as Error).message)) return null
+          throw e
+        }
+      }
+    }
     const { receipt, receiptHash, anchor } = await commitReceipt(
       {
         answer,
         fragmentRefs: refs,
-        checkResult: 'verified',
+        checkResult: initialCheckResult,
         timestamp: Date.now(),
         modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
         groundingReportHash: report.reportHash,
+        ...(groundingTier ? { groundingTier } : {}),
         ...(attestation ? { modelAttestation: attestation } : {}),
         ...(d.paid ? { payment: d.paid } : {}),
         ...(typeof args?.caller === 'string' ? { caller: args.caller } : {}),
@@ -123,12 +164,16 @@ export const handlers: Record<string, ToolHandler> = {
           ? { manifestId: args?.manifestId ?? nektarEnv('NEKTAR_LAST_MANIFEST') }
           : {})
       },
-      mem
+      anchorMem
     )
+    const anchored = allCitedAnchored && Boolean(anchor?.txid)
     const token = receiptToken(receiptHash)
     return {
       answer,
       committed: true,
+      anchored,
+      verification: anchored ? 'spv-anchored' : 'local-signed-unanchored',
+      ...(groundingTier ? { groundingTier } : {}),
       kept: report.kept,
       flagged: report.flagged,
       grounding: report,
@@ -138,7 +183,7 @@ export const handlers: Record<string, ToolHandler> = {
       verifyUrl: `${verifyBase()}/v1/verify?r=${token}`,
       share: shareBlock(token),
       anchor,
-      checkResult: 'verified'
+      checkResult: anchored ? 'verified' : 'unverifiable'
     }
   },
   commitReceipt: async (mem, args, d) => {

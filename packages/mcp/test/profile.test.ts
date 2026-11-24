@@ -22,7 +22,7 @@ import type { AutomationPolicy } from '@nektar/automation'
 import { testAgent, testPolicyFor, ZEROCONF_OPEN, type TestAgent, type TestPolicyOpts } from './agentkit.js'
 
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
-const AGENT_TEN = ['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor', 'automationDoctor']
+const AGENT_TEN = ['remember', 'forget', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor', 'automationDoctor']
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
 const NET = 'regtest'
 let clock = Date.now()

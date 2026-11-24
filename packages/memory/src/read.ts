@@ -73,6 +73,39 @@ export function verifyAnswerReceipt(r: AnswerReceipt): { ok: boolean; reason?: s
   }
 }
 
+interface RecallItem {
+  seq: number
+  state: string
+  text?: string
+  unverifiable?: boolean
+  reason?: string
+  zk?: string
+  anchored?: boolean
+  verification?: 'spv-anchored' | 'local-committed'
+  supersedes?: { shard: string; seq: number }
+  forgets?: { shard: string; seq: number; reason?: string }
+  superseded?: boolean
+  forgotten?: boolean
+}
+
+const normSearch = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim()
+const queryTokens = (q: string): string[] => [
+  ...new Set(
+    normSearch(q)
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 2)
+  )
+]
+const scoreText = (text: string, qNorm: string, qToks: string[], cachedToks?: Set<string>): number => {
+  const low = normSearch(text)
+  let score = 0
+  if (qNorm.length >= 3 && low.includes(qNorm)) score += 3
+  for (const w of qToks) {
+    if (cachedToks ? cachedToks.has(w) || low.includes(w) : low.includes(w)) score += 1
+  }
+  return score
+}
+
 export abstract class MemRead extends MemRecords {
   /**
    * recall: fetch fragments for a shard (optionally only anchored), decrypt
@@ -100,10 +133,66 @@ export abstract class MemRead extends MemRecords {
       /** per-call invocation params merged into receipt.model.params (the
        * caller knows temperature/seed; the operator owns id + weightsHash) */
       modelParams?: Record<string, unknown>
+      /** allow local-owner reads of unanchored ('NotAnchored') records with
+       *  honest `anchored: false, verification: 'local-committed'` labels.
+       *  Defaults to false so programmatic/external calls remain strict SPV-only. */
+      allowLocal?: boolean
+      /** optional local keyword/phrase query — ranks matching records and returns only hits */
+      query?: string
+      /** optional pagination cap (applied before decrypt/prove when no query is given) */
+      limit?: number
+      /** optional pagination offset */
+      offset?: number
+      /** optional timestamp lower bound (epoch seconds or ms) */
+      since?: number
+      /** include superseded, forgotten, and tombstone records (default: active view only) */
+      includeHistory?: boolean
     }
-  ): Promise<{ items: Array<{ seq: number; state: string; text?: string; unverifiable?: boolean; reason?: string; zk?: string }>; receipt: AnswerReceipt }> {
+  ): Promise<{ items: RecallItem[]; receipt: AnswerReceipt }> {
+    const query = typeof opts?.query === 'string' ? opts.query.trim() : ''
+    const qNorm = query ? normSearch(query) : ''
+    const qToks = query ? queryTokens(query) : []
+    const offset = typeof opts?.offset === 'number' && opts.offset > 0 ? Math.floor(opts.offset) : 0
+    const limit = typeof opts?.limit === 'number' && opts.limit > 0 ? Math.floor(opts.limit) : undefined
+
     const single = opts?.seq !== undefined ? await this.store.bySeq(shard, opts.seq) : undefined
-    const items = opts?.seq !== undefined ? (single ? [single] : []) : await this.store.all(shard)
+    let items: import('@nektar/log').LogRecord[]
+    let superseded = new Set<number>()
+    let forgotten = new Set<number>()
+    let preRankedByIndex = false
+
+    if (opts?.seq !== undefined) {
+      items = single ? [single] : []
+    } else {
+      const allRecs = await this.store.all(shard)
+      for (const r of allRecs) {
+        if (r.supersedes?.shard === shard) superseded.add(r.supersedes.seq)
+        if (r.forgets?.shard === shard) forgotten.add(r.forgets.seq)
+      }
+      items = opts?.includeHistory ? allRecs : allRecs.filter((r) => !r.forgets && !superseded.has(r.seq) && !forgotten.has(r.seq))
+      if (opts?.since !== undefined && Number.isFinite(opts.since)) {
+        const sinceSec = opts.since > 1e12 ? Math.floor(opts.since / 1000) : opts.since
+        items = items.filter((r) => (r.fragment.p.time ?? 0) >= sinceSec)
+      }
+      if (!query && (offset > 0 || limit !== undefined)) {
+        items = items.slice(offset, limit !== undefined ? offset + limit : undefined)
+      } else if (query) {
+        const shardIdx = this.searchIndex.get(shard)
+        // fast path: if every candidate is level-0 and already indexed in RAM,
+        // rank & slice BEFORE prove()/decrypt so warm searches are O(K) instead of O(N)
+        if (shardIdx && items.every((r) => (r.level ?? 0) === 0 && shardIdx.has(r.seq))) {
+          const scored = items
+            .map((r) => {
+              const e = shardIdx.get(r.seq)!
+              return { r, score: scoreText(e.text, qNorm, qToks, e.tokens) }
+            })
+            .filter((x) => x.score > 0)
+            .sort((a, b) => b.score - a.score || b.r.seq - a.r.seq)
+          items = scored.slice(offset, limit !== undefined ? offset + limit : undefined).map((x) => x.r)
+          preRankedByIndex = true
+        }
+      }
+    }
     const caller = this.verifiedCaller(opts?.identity)
     let zkState: AnswerReceipt['zkaccess'] = 'not-required'
     let zkOk = false
@@ -195,15 +284,22 @@ export abstract class MemRead extends MemRecords {
       // policy); per-item non-permits are withheld individually below
       if (/conflict|mismatch/.test(dagState)) cedarState = 'deny'
     }
-    const out: AnswerReceipt['fragmentRefs'] = []
-    const texts: Array<{ seq: number; state: string; text?: string; unverifiable?: boolean; reason?: string; zk?: string }> = []
+    let out: AnswerReceipt['fragmentRefs'] = []
+    let texts: RecallItem[] = []
     // S6.1: any item whose SPV verification fails flips the whole receipt to
     // 'unverifiable' — anchor presence alone never earns 'verified'
     let verifyFailed = false
     for (const r of items) {
       const ref = { shard, seq: r.seq, hdp: toHex(r.hdp), anchorTxid: r.anchorTxid }
       out.push(ref)
-      const item: { seq: number; state: string; text?: string; unverifiable?: boolean; reason?: string; zk?: string } = { seq: r.seq, state: r.state }
+      const item: RecallItem = {
+        seq: r.seq,
+        state: r.state,
+        ...(r.supersedes ? { supersedes: r.supersedes } : {}),
+        ...(r.forgets ? { forgets: r.forgets } : {}),
+        ...(superseded.has(r.seq) ? { superseded: true } : {}),
+        ...(forgotten.has(r.seq) ? { forgotten: true } : {})
+      }
       if (opts?.zk) item.zk = zkOk ? 'verified' : 'rejected'
       // fail-soft per record: a stored malformed level (a poisoned write from
       // before input validation) must withhold this item, not reject the
@@ -246,13 +342,24 @@ export abstract class MemRead extends MemRecords {
         item.unverifiable = true
         item.reason = authorDeny
       } else if (r.fragment.E && r.fragment.E.length > 0) {
-        // KEY-008: decrypt ONLY after verifyFragment succeeds for this record.
+        // KEY-008: decrypt ONLY after verifyFragment succeeds for this record
+        // (or, for local-owner reads with allowLocal:true, when the ONLY failure
+        // is NotAnchored — never on invalid SPV proofs or failed security gates).
         const { result } = await this.prove(shard, r.seq)
-        if (!result.ok) {
+        const localOk = !result.ok && opts?.allowLocal === true && result.reason === 'NotAnchored'
+        if (!result.ok && !localOk) {
           item.unverifiable = true
           item.reason = `verify: ${result.reason}`
           verifyFailed = true
         } else if (this.canEncrypt()) {
+          if (localOk) {
+            verifyFailed = true
+            item.anchored = false
+            item.verification = 'local-committed'
+          } else {
+            item.anchored = true
+            item.verification = 'spv-anchored'
+          }
           try {
             const buf = Buffer.from(r.fragment.E)
             const aadLen = buf.readUInt16BE(0)
@@ -261,9 +368,15 @@ export abstract class MemRead extends MemRecords {
               keyID: '',
               aad: new Uint8Array(buf.subarray(2, 2 + aadLen))
             }
-            // try each granted level key — disjoint keyspaces mean only the
-            // level the fragment was written at will pass GCM auth.
-            for (let l = 0; l <= (this.opts.maxLevel ?? 0); l++) {
+            // try the record's recorded level first, then fall back across
+            // granted level keys (disjoint keyspaces mean only the true level passes GCM)
+            const maxL = this.opts.maxLevel ?? 0
+            const pref = typeof r.level === 'number' && r.level >= 0 && r.level <= maxL ? r.level : undefined
+            const levels =
+              pref !== undefined
+                ? [pref, ...Array.from({ length: maxL + 1 }, (_, i) => i).filter((i) => i !== pref)]
+                : Array.from({ length: maxL + 1 }, (_, i) => i)
+            for (const l of levels) {
               for (const fragmentKey of await this.fragmentKeyCandidates(this.ctx(shard, r.seq, l))) {
                 let pt: Uint8Array
                 try {
@@ -293,6 +406,7 @@ export abstract class MemRead extends MemRecords {
                 shredKey(fragmentKey)
                 break
               }
+              if (item.text !== undefined || item.unverifiable) break
             }
             if (item.text === undefined && item.reason === undefined) {
               item.unverifiable = true
@@ -309,14 +423,33 @@ export abstract class MemRead extends MemRecords {
       } else {
         // S6.1: plaintext items run the SAME SPV verification as encrypted
         // ones (verify only — there is no decrypt step). An unanchored or
-        // failed record is withheld and marked, never served as verified.
+        // failed record is withheld and marked unless local-owner allowLocal=true.
         const { result } = await this.prove(shard, r.seq)
-        if (!result.ok) {
+        const localOk = !result.ok && opts?.allowLocal === true && result.reason === 'NotAnchored'
+        if (!result.ok && !localOk) {
           item.unverifiable = true
           item.reason = `verify: ${result.reason}`
           verifyFailed = true
         } else {
+          if (localOk) {
+            verifyFailed = true
+            item.anchored = false
+            item.verification = 'local-committed'
+          } else {
+            item.anchored = true
+            item.verification = 'spv-anchored'
+          }
           item.text = r.fragment.d.length ? Buffer.from(r.fragment.d).toString('utf8') : undefined
+        }
+      }
+      if (!item.unverifiable && item.text !== undefined && level === 0n && !r.forgets) {
+        let shardIdx = this.searchIndex.get(shard)
+        if (!shardIdx) {
+          shardIdx = new Map()
+          this.searchIndex.set(shard, shardIdx)
+        }
+        if (!shardIdx.has(r.seq)) {
+          shardIdx.set(r.seq, { text: item.text, tokens: new Set(queryTokens(item.text)) })
         }
       }
       if (item.unverifiable)
@@ -327,6 +460,22 @@ export abstract class MemRead extends MemRecords {
           'records withheld from a read, by reason'
         )
       texts.push(item)
+    }
+    // Cold-start query ranking: when searchIndex wasn't yet warm, rank decoded
+    // results now and keep out/texts aligned before signing the receipt.
+    if (query && !preRankedByIndex) {
+      const pairs = texts
+        .map((item, i) => ({
+          item,
+          ref: out[i],
+          score: !item.unverifiable && typeof item.text === 'string' ? scoreText(item.text, qNorm, qToks) : 0
+        }))
+        .filter((x) => x.score > 0)
+        .sort((a, b) => b.score - a.score || b.item.seq - a.item.seq)
+      const sliced = pairs.slice(offset, limit !== undefined ? offset + limit : undefined)
+      texts = sliced.map((x) => x.item)
+      out = sliced.map((x) => x.ref)
+      verifyFailed = texts.some((i) => i.unverifiable || i.anchored === false)
     }
     const answer = texts.map((i) => i.text ?? '[unverifiable]').join('\n')
     const verified = out.length === 0 || (out.every((r) => r.anchorTxid) && !verifyFailed)

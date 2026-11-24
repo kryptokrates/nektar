@@ -16,26 +16,60 @@ export const handlers: Record<string, ToolHandler> = {
     // a stored non-integer/negative level throws in the recall loop's BigInt()
     // and permanently poisons the shard on the append-only store
     if (!Number.isInteger(level) || level < 0) throw new Error('remember: level must be a non-negative integer')
-    const r = await mem.remember(args.shard, args.data, { source: args.source, modality: args.modality }, level, { premiseRefs: args.premiseRefs })
+    let supersedes: { shard: string; seq: number } | undefined
+    if (args.supersedes !== undefined) {
+      const sup = args.supersedes as { shard?: unknown; seq?: unknown }
+      if (typeof sup?.shard !== 'string' || sup.shard.length === 0 || sup.shard.startsWith('__') || !Number.isInteger(sup.seq) || (sup.seq as number) < 0)
+        throw new Error('remember: supersedes must be {shard: string, seq: non-negative integer}')
+      supersedes = { shard: sup.shard, seq: sup.seq as number }
+    }
+    const r = await mem.remember(args.shard, args.data, { source: args.source, modality: args.modality }, level, {
+      premiseRefs: args.premiseRefs,
+      supersedes
+    })
     if (args.private === true) mem.setShardPrivate(args.shard)
-    return { ...r, private: mem.shardPrivate(args.shard) || undefined }
+    return { ...r, ...(supersedes ? { supersedes } : {}), private: mem.shardPrivate(args.shard) || undefined }
+  },
+  forget: async (mem, args) => {
+    if (typeof args?.shard !== 'string' || args.shard.length === 0 || args.shard.startsWith('__'))
+      throw new Error('forget: shard must be a non-empty non-system shard name')
+    if (!Number.isInteger(args?.seq) || args.seq < 0) throw new Error('forget: seq must be a non-negative integer')
+    const reason = typeof args?.reason === 'string' && args.reason.trim().length > 0 ? args.reason.trim() : undefined
+    const r = await mem.forget(args.shard, args.seq, reason)
+    return { ...r, forgotten: { shard: args.shard, seq: args.seq, ...(reason ? { reason } : {}) } }
   },
   recall: async (mem, args, d) => {
     const visibleShards = () => mem.shards().filter((s) => !s.startsWith('__') && !mem.shardPrivate(s))
     const { decodePresentation } = await import('@nektar/identity')
     const zk = args?.zk === undefined ? undefined : decodePresentation(args.zk)
+    const allowLocal = !d.ctx.external && args?.requireAnchored !== true
+    const query = typeof args?.query === 'string' && args.query.trim().length > 0 ? args.query.trim() : undefined
+    const limit = typeof args?.limit === 'number' && Number.isFinite(args.limit) && args.limit > 0 ? Math.floor(args.limit) : undefined
+    const offset = typeof args?.offset === 'number' && Number.isFinite(args.offset) && args.offset > 0 ? Math.floor(args.offset) : undefined
+    const since = typeof args?.since === 'number' && Number.isFinite(args.since) ? args.since : undefined
+    const includeHistory = args?.includeHistory === true
     if (typeof args?.shard !== 'string' || args.shard.length === 0) {
       const shards = visibleShards()
       if (shards.length === 0) return { shards: [], items: [], hint: 'no shards yet — call remember to store a fact' }
       const items: Array<Record<string, unknown>> = []
       let receipt: unknown
       for (const shard of shards) {
-        const r = await mem.recall(shard, { identity: args?.identity, zk })
+        const r = await mem.recall(shard, {
+          identity: args?.identity,
+          zk,
+          allowLocal,
+          query,
+          since,
+          includeHistory,
+          // cap per-shard fetch to offset+limit when global pagination is set
+          ...(limit !== undefined ? { limit: (offset ?? 0) + limit } : {})
+        })
         receipt ??= r.receipt
         for (const it of r.items) items.push({ shard, ...it })
       }
-      if (items.length > 0) mem.events.emit('recall', { shard: '*', count: items.length })
-      return { shards, items, receipt }
+      const paged = offset !== undefined || limit !== undefined ? items.slice(offset ?? 0, limit !== undefined ? (offset ?? 0) + limit : undefined) : items
+      if (paged.length > 0) mem.events.emit('recall', { shard: '*', count: paged.length })
+      return { shards, items: paged, receipt }
     }
     // parity with the prove tool's refusal: private/system shards are not
     // served to external callers (the private flag gates citations, packs and
@@ -45,7 +79,17 @@ export const handlers: Record<string, ToolHandler> = {
         ok: false,
         reason: `shard "${args.shard}" is private — contents refused; verify via a ZK membership proof (zkQuery → proveMembership → verifyMembership)`
       }
-    const r = await mem.recall(args.shard, { seq: args.seq, identity: args.identity, zk })
+    const r = await mem.recall(args.shard, {
+      seq: args.seq,
+      identity: args.identity,
+      zk,
+      allowLocal,
+      query,
+      limit,
+      offset,
+      since,
+      includeHistory
+    })
     if (r.items.length > 0) mem.events.emit('recall', { shard: args.shard, count: r.items.length })
     // tell the model how to recover from a wrong seq instead of an empty answer
     if (args.seq !== undefined && r.items.length === 0) {
@@ -58,6 +102,7 @@ export const handlers: Record<string, ToolHandler> = {
       }
     }
     if (r.items.length === 0) {
+      if (query) return { ...r, hint: `no records matched query "${query}" in shard "${args.shard}"` }
       const shards = visibleShards()
       return {
         ...r,

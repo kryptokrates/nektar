@@ -9,7 +9,7 @@ import type { Transaction } from '@bsv/sdk'
 import type { BatchLog, ShardStore, Checkpoint } from '@nektar/log'
 import type { AnchorChain } from '@nektar/anchor'
 import type { AutomatonChain } from '@nektar/automaton'
-import type { ProofBundle, AnchorLink } from '@nektar/verify'
+import type { ProofBundle, AnchorLink, VerifyResult } from '@nektar/verify'
 import type { Broadcaster, ChainTracker, FunderLike, Funds } from '@nektar/chain'
 import { TxStore } from '@nektar/chain'
 import type { SignerLike } from '@nektar/core'
@@ -147,4 +147,17 @@ export abstract class MemBase {
   // anchor: no shard state, no contract. Off-chain WASM verify stays
   // authoritative; the chain only timestamps the commitment.
   protected attestationTxs = new Map<string, Transaction>()
+
+  /** immutable SPV verification cache: 'shard:seq' → { anchorTxid, bundle, result }.
+   *  Invalidated on header reorg or proof replacement. */
+  protected proofCache = new Map<string, { anchorTxid: string; bundle: ProofBundle; result: VerifyResult }>()
+
+  /** in-memory per-shard normalized plaintext index for fast local search
+   *  (level-0 records only — never written to disk, never bypasses read guards). */
+  protected searchIndex = new Map<string, Map<number, { text: string; tokens: Set<string> }>>()
+
+  /** invalidate cached SPV verification verdicts (called on header reorg or proof update) */
+  clearProofCache(): void {
+    this.proofCache.clear()
+  }
 }

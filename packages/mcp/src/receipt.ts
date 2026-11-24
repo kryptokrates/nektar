@@ -42,6 +42,11 @@ interface ReceiptCheck {
 }
 export interface VerifyReceiptResult {
   ok: boolean
+  /** true when found + body hash matches + provenance signature verifies + every
+   *  cited fragment is locally intact, even if not yet anchored on BSV */
+  localVerified?: boolean
+  /** true when the receipt and all cited fragments are anchored on BSV */
+  anchored?: boolean
   receiptHash: string
   checks: ReceiptCheck[]
   receipt?: unknown
@@ -50,33 +55,47 @@ export interface VerifyReceiptResult {
   anchorTxid?: string
 }
 
-/** Decode a token, find the receipt record on __receipts__ via recall (the
- *  decrypt+provenance path — records may be encrypted at rest), and run the
- *  traffic-light checks: found → body-hash → provenance → anchored → each
- *  cited fragment anchored. `ok` = every hard check passed. */
+/** Decode a token, find the receipt record on __receipts__ via O(1) index
+ *  lookup + recall (the decrypt+provenance path — records may be encrypted at
+ *  rest), and run the traffic-light checks: found → body-hash → provenance →
+ *  anchored → each cited fragment anchored. `ok` = every hard check passed
+ *  (strictly SPV-anchored); `localVerified` = locally committed, hash-intact,
+ *  and provenance-signed even before BSV anchoring. */
 export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; receiptHash?: string }): Promise<VerifyReceiptResult> {
   const parsed = arg.token ? parseReceiptToken(arg.token) : arg.receiptHash ? { receiptHash: arg.receiptHash.toLowerCase() } : null
   if (!parsed) throw new Error('verifyReceipt: pass token (nektarr1.…) or receiptHash (64-hex)')
   const checks: ReceiptCheck[] = []
 
-  const items = (await mem.recall('__receipts__')).items
-  const rec = items.find((i) => i.text?.startsWith(`receipt:${parsed.receiptHash}`))
+  const indexedSeq = await mem.findReceiptSeq(parsed.receiptHash)
+  const rec =
+    indexedSeq !== undefined
+      ? sparse((await mem.recall('__receipts__', { seq: indexedSeq, allowLocal: true })).items[0])
+      : (await mem.recall('__receipts__', { allowLocal: true })).items.find((i) => i.text?.startsWith(`receipt:${parsed.receiptHash}`))
   if (!rec)
     return {
       ok: false,
+      localVerified: false,
+      anchored: false,
       receiptHash: parsed.receiptHash,
       checks: [{ name: 'found', ok: false, detail: `no record receipt:${parsed.receiptHash.slice(0, 16)}… on __receipts__` }]
     }
   checks.push({ name: 'found', ok: true, detail: `record on __receipts__ at seq ${rec.seq}` })
 
   const bodyB64 = rec.text!.split(':')[2]
-  let receipt: { fragmentRefs?: Array<{ shard: string; seq: number }>; checkResult?: string; groundingReportHash?: string } | undefined
+  let receipt:
+    | {
+        fragmentRefs?: Array<{ shard: string; seq: number }>
+        checkResult?: string
+        groundingReportHash?: string
+        groundingTier?: string
+      }
+    | undefined
   if (bodyB64) {
     try {
       receipt = JSON.parse(Buffer.from(bodyB64, 'base64url').toString('utf8'))
       const ok = hashOf(receipt) === parsed.receiptHash
       checks.push({ name: 'hash', ok, detail: ok ? 'stored body re-hashes to the token' : 'body hash MISMATCH — record tampered' })
-      if (!ok) return { ok: false, receiptHash: parsed.receiptHash, checks, receipt }
+      if (!ok) return { ok: false, localVerified: false, anchored: false, receiptHash: parsed.receiptHash, checks, receipt }
     } catch {
       checks.push({ name: 'hash', ok: false, detail: 'record body is not parseable receipt JSON' })
     }
@@ -91,7 +110,7 @@ export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; re
       ? { name: 'provenance', ok: false, detail: `originator signature failed: ${rec.reason ?? 'unverifiable'}` }
       : { name: 'provenance', ok: true, detail: 'originator signature verifies (COM-003, via recall)' }
   )
-  if (rec.unverifiable) return { ok: false, receiptHash: parsed.receiptHash, checks, receipt }
+  if (rec.unverifiable) return { ok: false, localVerified: false, anchored: false, receiptHash: parsed.receiptHash, checks, receipt }
 
   const st = await mem.anchorStatus('__receipts__', rec.seq)
   const anchorTxid = (await mem.records('__receipts__')).find((r) => r.seq === rec.seq)?.anchorTxid
@@ -99,8 +118,12 @@ export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; re
     name: 'anchored',
     ok: rec.state === 'anchored',
     detail:
-      rec.state === 'anchored' ? `anchor tx — ${st.state}, ${st.confirmations} conf (depth ${st.depth})` : `record state "${rec.state}" — not yet anchored`
+      rec.state === 'anchored'
+        ? `anchor tx — ${st.state}, ${st.confirmations} conf (depth ${st.depth})`
+        : `record state "${rec.state}" — local-committed, not yet anchored on BSV`
   })
+  let allFragmentsLocallyIntact = true
+  let allFragmentsAnchored = true
 
   if (receipt?.fragmentRefs?.length) {
     // cite cap: each private cite costs a ~85ms blocking STARK re-verify and
@@ -153,14 +176,18 @@ export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; re
         }
         continue
       }
-      const f = sparse((await mem.recall(ref.shard!, { seq: ref.seq! })).items[0])
+      const f = sparse((await mem.recall(ref.shard!, { seq: ref.seq!, allowLocal: true })).items[0])
       const fst = f ? sparse(await mem.anchorStatus(ref.shard!, ref.seq!)) : undefined
+      const fragAnchored = !!f && !f.unverifiable && f.state === 'anchored'
+      const fragLocalOk = !!f && !f.unverifiable
+      if (!fragLocalOk) allFragmentsLocallyIntact = false
+      if (!fragAnchored) allFragmentsAnchored = false
       checks.push({
         name: `fragment ${ref.shard}:${ref.seq}`,
-        ok: !!f && !f.unverifiable && f.state === 'anchored',
+        ok: fragAnchored,
         detail: !f
           ? 'cited record NOT FOUND'
-          : `state "${f.state}"${f.unverifiable ? `, unverifiable (${f.reason ?? ''})` : ''}, ${fst!.state} ${fst!.confirmations}conf`
+          : `state "${f.state}"${f.unverifiable ? `, unverifiable (${f.reason ?? ''})` : f.anchored === false ? ' (local-committed, not yet anchored)' : ''}, ${fst!.state} ${fst!.confirmations}conf`
       })
     }
   } else {
@@ -168,6 +195,7 @@ export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; re
   }
   if (receipt?.groundingReportHash)
     checks.push({ name: 'grounding', ok: 'info', detail: `grounding report committed (${receipt.groundingReportHash.slice(0, 16)}…)` })
+  if (receipt?.groundingTier) checks.push({ name: 'groundingTier', ok: 'info', detail: receipt.groundingTier })
   if (receipt?.checkResult) checks.push({ name: 'checkResult', ok: 'info', detail: receipt.checkResult })
 
   // paid mode: the receipt commits the settlement txid — "was this answer paid
@@ -250,5 +278,8 @@ export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; re
   }
 
   const ok = checks.every((c) => c.ok === true || c.ok === 'info' || c.ok === 'skip')
-  return { ok, receiptHash: parsed.receiptHash, checks, receipt, anchorTxid }
+  const anchored = rec.state === 'anchored' && allFragmentsAnchored
+  const nonAnchorFails = checks.filter((c) => c.ok === false && c.name !== 'anchored' && !c.name.startsWith('fragment '))
+  const localVerified = allFragmentsLocallyIntact && nonAnchorFails.length === 0
+  return { ok, localVerified, anchored, receiptHash: parsed.receiptHash, checks, receipt, anchorTxid }
 }

@@ -74,7 +74,9 @@ for (const f of ['keys.json', 'records.sqlite', 'VERSION']) {
   else report(f !== 'records.sqlite' || existsSync(dataDir), `${f} absent${f === 'keys.json' ? ' — identity not generated yet (first boot creates it)' : ''}`)
 }
 
-// executor plane (Restate) — mandatory at boot
+// executor plane (Restate) — optional in solo memory mode (runs in-process),
+// mandatory when NEKTAR_AUTOMATION=1 (durable market sagas)
+const automationOn = /^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? env.NEKTAR_AUTOMATION ?? '')
 const restateUrl = process.env.NEKTAR_RESTATE_URL ?? env.NEKTAR_RESTATE_URL
 const restateBin = join(root, 'packages/mcp/restate/restate-server')
 const probeAdmin = async (url) => {
@@ -89,7 +91,8 @@ if (restateUrl) report(true, `executor plane configured (NEKTAR_RESTATE_URL=${re
 else if (await probeAdmin('http://127.0.0.1:19070')) report(true, 'executor plane answering on http://127.0.0.1:19070')
 else if (await probeAdmin('http://127.0.0.1:9070')) report(true, 'executor plane answering on http://127.0.0.1:9070')
 else if (existsSync(restateBin)) report(true, `executor plane sidecar installed (${restateBin})`)
-else report(false, 'executor plane (Restate) unavailable — run: pnpm restate:up (or set NEKTAR_RESTATE_URL)')
+else if (!automationOn) report(true, 'executor plane: in-process solo mode (Restate only required when NEKTAR_AUTOMATION=1)')
+else report(false, 'executor plane (Restate) unavailable for NEKTAR_AUTOMATION=1 — run: pnpm restate:up (or set NEKTAR_RESTATE_URL)')
 
 if (!FIX && refused.length) console.log(`\n${refused.length} repairable issue(s) — re-run with --fix`)
 if (FIX) console.log(`\n${fixed.length} fixed, ${refused.length} refused`)

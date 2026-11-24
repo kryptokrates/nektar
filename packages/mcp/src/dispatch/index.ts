@@ -23,6 +23,7 @@ import { handlers as opsHandlers } from './ops.js'
 const MUTATING_TOOLS = new Set([
   'automation',
   'remember',
+  'forget',
   'describeShard',
   'groundedAnswer',
   'commitReceipt',

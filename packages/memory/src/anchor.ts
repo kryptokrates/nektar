@@ -52,6 +52,7 @@ export abstract class MemAnchor extends MemTx {
   /** attach a BUMP to an anchor (must prove THIS txid) and mark the chain confirmed */
   attachProof(shard: string, txid: string, mp: import('@bsv/sdk').MerklePath): void {
     this.anchorOps.attachProof(shard, txid, mp)
+    this.clearProofCache()
   }
   /** shards this instance has written or anchored */
   shards(): string[] {

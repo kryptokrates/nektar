@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 14228,
+      "loc": 14255,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1612,
@@ -97,7 +97,7 @@
       "instability": 0.25
     },
     "log": {
-      "loc": 573,
+      "loc": 611,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 195,
@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 13356,
+      "loc": 13558,
       "pkgFanout": 18,
       "edges": [
         "anchor",
@@ -132,7 +132,7 @@
       "instability": 0.947
     },
     "memory": {
-      "loc": 2455,
+      "loc": 2680,
       "pkgFanout": 14,
       "edges": [
         "anchor",
@@ -150,7 +150,7 @@
         "store",
         "verify"
       ],
-      "maxFileLoc": 474,
+      "maxFileLoc": 623,
       "maxFileFanout": 12,
       "instability": 0.933
     },
@@ -163,10 +163,10 @@
       "instability": 0.25
     },
     "reasoning": {
-      "loc": 567,
+      "loc": 595,
       "pkgFanout": 6,
       "edges": ["chain", "core", "datalog", "graph", "identity", "verify"],
-      "maxFileLoc": 520,
+      "maxFileLoc": 548,
       "maxFileFanout": 9,
       "instability": 0.667
     },
@@ -251,6 +251,10 @@
     "packages/mcp/src/memory.ts": {
       "loc": 319,
       "fanout": 24
+    },
+    "packages/mcp/src/server.ts": {
+      "loc": 835,
+      "fanout": 5
     }
   },
   "typeOnlyCycles": []

@@ -212,6 +212,8 @@ export interface Runtime {
    *  registers and fires them */
   rtDefs: unknown[]
   rtKicks: InvokeTarget[]
+  /** solo-mode wiring for confirmer + watcher on an in-process Dispatcher */
+  rtLocalWire?: (ex: import('@nektar/automation').LocalDispatch) => void
   /** mainnet-only ops surface for /v1/wallet + /v1/costs */
   ops?: {
     wallet?: () => Promise<{
@@ -540,6 +542,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     lastReorgKey = reorgKey
     nlog(`header reorg — ${removed.length} stale header(s) from height ${from}, new tip ${newTip.height}`)
     mem.metrics.inc('nektar_reorgs_total', {}, 1, 'header-chain reorgs observed')
+    mem.clearProofCache()
     for (const txid of txStore.clearProofsFrom(from)) events.watch(txid)
     mem.events.emit('reorg', { from, tip: newTip.height })
   })
@@ -639,6 +642,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
      *  in-process test seam) */
     rtDefs,
     rtKicks,
+    rtLocalWire: cw.localWire,
     close: async () => {
       mem.events.off('broadcasterStatus', onBroadcasterStatus)
       stream?.close()

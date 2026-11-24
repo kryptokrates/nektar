@@ -124,10 +124,12 @@ async function runPrefetch(io: HookIo): Promise<number> {
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   if (daemon.token) headers.authorization = `Bearer ${daemon.token}`
   try {
+    const bodyPayload: Record<string, unknown> = { limit: 5 }
+    if (prompt.trim()) bodyPayload.query = prompt.trim()
     const r = await fetchImpl(`${daemon.url}/v1/tools/recall`, {
       method: 'POST',
       headers,
-      body: '{}',
+      body: JSON.stringify(bodyPayload),
       signal: AbortSignal.timeout(800)
     })
     if (!r.ok) return 0
@@ -254,7 +256,7 @@ async function runVerifyReceipt(argv: string[], io: HookIo): Promise<number> {
 
   const results: Array<{
     token: string
-    ok: boolean | null
+    ok: boolean | 'local' | null
     failNames: string[]
     checks: Array<{ name: string; ok: unknown }>
     receipt?: { answer?: string; modelAttestation?: { verifierTxid?: string } }
@@ -266,6 +268,7 @@ async function runVerifyReceipt(argv: string[], io: HookIo): Promise<number> {
       const r = await fetchImpl(`${base}/v1/verify?r=${encodeURIComponent(t)}`, { signal: AbortSignal.timeout(3_000) })
       const j = (await r.json()) as {
         ok?: boolean
+        localVerified?: boolean
         checks?: Array<{ name: string; ok: unknown }>
         receipt?: { answer?: string; modelAttestation?: { verifierTxid?: string } }
       }
@@ -273,7 +276,14 @@ async function runVerifyReceipt(argv: string[], io: HookIo): Promise<number> {
       const fails = checks.filter((c) => c.ok === false).map((c) => c.name)
       const drift = Boolean(j.receipt?.answer) && !norm(text).includes(norm(j.receipt?.answer))
       if (drift) fails.push('answer-drift')
-      results.push({ token: t, ok: j.ok === true && !drift, failNames: fails, checks, receipt: j.receipt })
+      const localOnly = !drift && j.ok !== true && j.localVerified === true
+      results.push({
+        token: t,
+        ok: j.ok === true && !drift ? true : localOnly ? 'local' : false,
+        failNames: fails,
+        checks,
+        receipt: j.receipt
+      })
     } catch (e) {
       results.push({ token: t, ok: null, failNames: [], checks: [], note: `verify endpoint unreachable (${(e as Error).message})` })
     }
@@ -281,7 +291,7 @@ async function runVerifyReceipt(argv: string[], io: HookIo): Promise<number> {
 
   const logLines: string[] = []
   for (const r of results) {
-    const icon = r.ok === true ? '✓ VERIFIED' : r.ok === false ? '✗ FAILED' : '? UNCHECKED'
+    const icon = r.ok === true ? '✓ VERIFIED' : r.ok === 'local' ? '~ LOCAL-SIGNED (unanchored)' : r.ok === false ? '✗ FAILED' : '? UNCHECKED'
     const summary = `${icon} ${r.token.slice(0, 24)}…${r.ok === false ? ' — ' + r.failNames.join(', ') : r.ok === null ? ' — ' + (r.note ?? '') : ''}`
     logLines.push(summary)
     err(`nektar ${summary}\n`)

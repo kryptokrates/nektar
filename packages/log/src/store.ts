@@ -17,6 +17,12 @@ export interface LogRecord {
   anchorTxid?: string
   authorPub?: string // §19: verified originator key …
   authorEpoch?: number // … and its rotation epoch at write time
+  /** append-only lineage: this record supersedes an earlier record in active recall views */
+  supersedes?: { shard: string; seq: number }
+  /** append-only tombstone: hides an earlier record from active recall views without deleting history */
+  forgets?: { shard: string; seq: number; reason?: string }
+  /** public 64-hex receipt hash for O(1) __receipts__ lookup (even when payload is encrypted) */
+  receiptHash?: string
 }
 
 export interface ShardStore {
@@ -25,6 +31,7 @@ export interface ShardStore {
   byIdentity: (shard: string, hdpHex: string) => Promise<LogRecord | undefined>
   bySeq: (shard: string, seq: number) => Promise<LogRecord | undefined>
   byBatch: (shard: string, batchIndex: number) => Promise<LogRecord[]> // batch members, leafIndex order
+  byReceiptHash?: (receiptHash: string) => Promise<LogRecord | undefined>
   nextSeq: (shard: string) => Promise<number>
   pending: (shard: string) => Promise<LogRecord[]> // state 'committed', not anchored
   committedUnbatched: (shard: string) => Promise<LogRecord[]> // committed, no batchIndex yet
@@ -45,13 +52,18 @@ export interface ShardStore {
 
 export class MemoryShardStore implements ShardStore {
   private recs = new Map<string, LogRecord[]>() // shard -> records
+  private byReceipt = new Map<string, LogRecord>()
   private list(shard: string): LogRecord[] {
     if (!this.recs.has(shard)) this.recs.set(shard, [])
     return this.recs.get(shard)!
   }
   append(rec: LogRecord): Promise<void> {
     this.list(rec.shard).push(rec)
+    if (rec.receiptHash) this.byReceipt.set(rec.receiptHash.toLowerCase(), rec)
     return Promise.resolve()
+  }
+  byReceiptHash(receiptHash: string): Promise<LogRecord | undefined> {
+    return Promise.resolve(this.byReceipt.get(receiptHash.toLowerCase()))
   }
   byIdentity(shard: string, hdpHex: string): Promise<LogRecord | undefined> {
     return Promise.resolve(this.list(shard).find((r) => Buffer.from(r.hdp).toString('hex') === hdpHex))

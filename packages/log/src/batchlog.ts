@@ -91,7 +91,7 @@ export class BatchLog {
   async remember(
     shard: string,
     fragment: Fragment,
-    meta: Partial<Pick<LogRecord, 'level' | 'authorPub' | 'authorEpoch'>> = {},
+    meta: Partial<Pick<LogRecord, 'level' | 'authorPub' | 'authorEpoch' | 'supersedes' | 'forgets' | 'receiptHash'>> = {},
     prepare?: (fragment: Fragment, seq: number) => void | Promise<void>
   ): Promise<{ rec: LogRecord; promise: InclusionPromise; duplicate: boolean }> {
     return await this.enqueue(shard, async () => await this.rememberInner(shard, fragment, meta, prepare))
@@ -99,7 +99,7 @@ export class BatchLog {
   private async rememberInner(
     shard: string,
     fragment: Fragment,
-    meta: Partial<Pick<LogRecord, 'level' | 'authorPub' | 'authorEpoch'>>,
+    meta: Partial<Pick<LogRecord, 'level' | 'authorPub' | 'authorEpoch' | 'supersedes' | 'forgets' | 'receiptHash'>>,
     prepare?: (fragment: Fragment, seq: number) => void | Promise<void>
   ): Promise<{ rec: LogRecord; promise: InclusionPromise; duplicate: boolean }> {
     const idh = identityHash(fragment)

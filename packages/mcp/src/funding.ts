@@ -450,10 +450,13 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
   }
   const discover = async () => {
     // tracked-set model: we spend only what we made or were handed. Address-
-    // index discovery is OPT-IN — NEKTAR_INDEXER_DISCOVERY=1 — because it
-    // creates an indexer dependency that doesn't scale. The default funding
-    // path is NEKTAR_FUND_TXIDS=<txid|hex:rawtx> (import above).
-    if (nektarEnv('NEKTAR_INDEXER_DISCOVERY') !== '1') return
+    // index discovery is OPT-IN on mainnet (NEKTAR_INDEXER_DISCOVERY=1) because
+    // it creates an indexer dependency that doesn't scale. On testnet, while
+    // the reserve is empty (0 UTXOs), run discovery automatically so first
+    // faucet drips are adopted without copy-pasting txids (NEKTAR_INDEXER_DISCOVERY=0
+    // opts out; stops automatically once the first UTXO lands).
+    const autoTestnet = net === 'testnet' && funds.utxos.length === 0 && nektarEnv('NEKTAR_INDEXER_DISCOVERY') !== '0'
+    if (nektarEnv('NEKTAR_INDEXER_DISCOVERY') !== '1' && !autoTestnet) return
     try {
       await Promise.all(
         (await discoverUtxos(mc, fundAddress, (t, why) => l(`discover: index entry ${t.slice(0, 12)} skipped: ${why}`))).map((u) => addIfNew(u))

@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 14390,
+      "loc": 14394,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1612,
@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 13666,
+      "loc": 13976,
       "pkgFanout": 18,
       "edges": [
         "anchor",
@@ -225,7 +225,7 @@
       "fanout": 9
     },
     "packages/automation/src/upkeep.ts": {
-      "loc": 840,
+      "loc": 844,
       "fanout": 13
     },
     "packages/bstack/src/finger.ts": {

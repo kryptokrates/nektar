@@ -384,6 +384,8 @@ export function openUpkeep(rt: Rt): void {
               // late pass doesn't outlive the pool it's about to write to
               if (cancelled()) return
               const spec = await laneSpec(kind)
+              const st = await lanes.ledger.stock?.(kind)
+              const coldStart = st !== undefined && st.proven === 0 && st.taken === 0
               const r = await lanes.mod.ensureTrees({
                 key,
                 wallet,
@@ -398,7 +400,7 @@ export function openUpkeep(rt: Rt): void {
                 // stock-out since they cannot dip into anchored stock
                 lowWater:
                   kind === 'finger' ? (cfg.treeLowWater ?? 2) : kind === 'market' ? (cfg.treeLowWater ?? cfg.treeSize ?? 64) : (cfg.treeLowWater ?? spec.size),
-                maxUnproven: cfg.treeMaxUnproven ?? 2,
+                maxUnproven: cfg.treeMaxUnproven ?? (kind === 'finger' || kind === 'log' || coldStart ? 1 : 2),
                 changeFanout: cfg.changeFanout,
                 size: spec.size,
                 satsPerOutput: spec.satsPerOutput,
@@ -473,12 +475,14 @@ export function openUpkeep(rt: Rt): void {
               const mediums = allOuts.filter((u) => u.satoshis >= outSats)
               const needReserve = outSats * wantOutsCon + 600
               const canSingleSplit = allOuts.some((u) => u.satoshis >= needReserve)
-              const totalSmall = smallConfirmed.reduce((s, u) => s + u.satoshis, 0)
+              const sortedSmall = [...smallConfirmed].sort((a, b) => a.satoshis - b.satoshis)
+              const totalSmall = sortedSmall.reduce((s, u) => s + u.satoshis, 0)
+              const batchSum = sortedSmall.slice(0, 16).reduce((s, u) => s + u.satoshis, 0)
               const shouldConsolidate =
                 smallConfirmed.length > 24 ||
                 (wantOutsCon > 0 && mediums.length < wantOutsCon && !canSingleSplit && smallConfirmed.length >= 2 && totalSmall >= needReserve)
-              if (shouldConsolidate) {
-                const targetSats = Math.min(totalSmall, Math.max(needReserve + 2_000, outSats * Math.max(2, wantOutsCon)))
+              if (shouldConsolidate && batchSum > minConSats * 2) {
+                const targetSats = Math.min(batchSum, Math.max(needReserve + 2_000, outSats * Math.max(2, wantOutsCon)))
                 const ins = await mem.funds.takeMany('upkeep', targetSats, {
                   maxInputs: 16,
                   minOutputSats: minConSats,

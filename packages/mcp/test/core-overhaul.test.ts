@@ -472,3 +472,71 @@ void test('mainnet-hardening: runMainnetCheck validates confirm, custody, callba
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+void test('mainnet-hardening: sale#offer/complete/refund scale covenant fees to live feeRateSatPerKb (>=100 sat/kB)', async (t) => {
+  const w = await testWorld(t, 4)
+  if (w === undefined) return
+  const prevPaid = process.env.NEKTAR_PAID_DISCLOSURE
+  process.env.NEKTAR_PAID_DISCLOSURE = '1'
+  try {
+    const seller = new NektarMemory(w.chain, w.funder, w.funder.keyPair, {
+      batchPolicy: { maxLeaves: 4 },
+      network: 'main',
+      feeRateSatPerKb: 100
+    })
+    const buyer = new NektarMemory(w.chain, w.funder, w.funder.keyPair, {
+      batchPolicy: { maxLeaves: 4 },
+      network: 'main',
+      feeRateSatPerKb: 100
+    })
+    const height = await w.chain.currentHeight()
+    const offer = (await callTool(seller, 'sale', {
+      op: 'offer',
+      value: Buffer.from('mainnet-secret-payload-value-for-fee-sizing-check').toString('hex'),
+      price: 200,
+      refundAfter: height + 20,
+      maxFee: 10
+    })) as { cfg: { price: number; refundAfter: number; maxFee: number; sellerPkh: string; hWrapped: string }; wrapped: string }
+    assert.ok(offer.cfg.maxFee >= 300, `mainnet offer maxFee (${offer.cfg.maxFee}) must cover >=100 sat/kB buy fee + change margin`)
+
+    const escrow = (await callTool(buyer, 'sale', {
+      op: 'escrow',
+      cfg: offer.cfg,
+      amount: offer.cfg.price + offer.cfg.maxFee
+    })) as { accepted: boolean; txid: string; utxo: { txid: string; vout: number; satoshis: number; script: string }; escrow: Record<string, unknown> }
+    assert.equal(escrow.accepted, true)
+
+    const complete = (await callTool(seller, 'sale', {
+      op: 'complete',
+      cfg: escrow.escrow,
+      utxo: escrow.utxo,
+      wrapped: offer.wrapped
+    })) as { accepted: boolean; txid: string; txHex: string }
+    assert.equal(complete.accepted, true)
+    const { Transaction } = await import('@bsv/sdk')
+    const buyTx = Transaction.fromHex(complete.txHex)
+    const buyBytes = buyTx.toBinary().length
+    const buyFee = escrow.utxo.satoshis - buyTx.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)
+    assert.ok(buyFee >= Math.ceil((buyBytes * 100) / 1000), `complete fee ${buyFee} sats must cover ${buyBytes}B @ 100 sat/kB`)
+
+    // Also verify refund fee scales to 100 sat/kB on a second escrow
+    const escrow2 = (await callTool(buyer, 'sale', {
+      op: 'escrow',
+      cfg: offer.cfg,
+      amount: offer.cfg.price + offer.cfg.maxFee
+    })) as { accepted: boolean; utxo: { txid: string; vout: number; satoshis: number; script: string }; escrow: Record<string, unknown> }
+    assert.equal(escrow2.accepted, true)
+    await w.chain.mine(25)
+    const refund = (await callTool(buyer, 'sale', {
+      op: 'refund',
+      cfg: escrow2.escrow,
+      utxo: escrow2.utxo
+    })) as { accepted: boolean; refundSats: number }
+    assert.equal(refund.accepted, true)
+    const refundFee = escrow2.utxo.satoshis - refund.refundSats
+    assert.ok(refundFee >= 65, `mainnet refund fee ${refundFee} sats must cover ~613B @ 100 sat/kB`)
+  } finally {
+    if (prevPaid === undefined) delete process.env.NEKTAR_PAID_DISCLOSURE
+    else process.env.NEKTAR_PAID_DISCLOSURE = prevPaid
+  }
+})

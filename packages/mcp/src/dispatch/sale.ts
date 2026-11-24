@@ -8,17 +8,19 @@ const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund'
 
 // the covenant's maxFee must cover the disclosure tx's relay fee AND still
 // leave a spendable change for the buyer — a flat floor underpays a big
-// payload into an arithmetically un-settleable quote: even zeroing change,
-// utxo − price = maxFee < the tx's relay cost, so complete() can only fail.
-// Sized to the payload: ~1 sat/KB (BSV relay floor) over an estimated
-// wrapped+script size, plus a change margin above the dust floor (~135
-// sats) so the depositor's return output is standard, not dust.
-const saleFeeBound = (payloadBytes: number, floor: number): number => Math.max(floor, Math.ceil((payloadBytes + 4096) / 1000) + 150)
+// payload or a 100+ sat/kB mainnet relay policy into an arithmetically
+// un-settleable quote: even zeroing change, utxo − price = maxFee < the tx's
+// relay cost, so complete() can only fail with TX_POLICY (39).
+// Sized to the payload + covenant unlocking overhead (~1.6 KB) at the live
+// feeRateSatPerKb, plus a 150-sat change margin so the depositor's return
+// output stays above dust.
+const saleFeeBound = (payloadBytes: number, floor: number, rateSatPerKb = 1): number =>
+  Math.max(floor, Math.ceil(((payloadBytes + 1600) * Math.max(1, rateSatPerKb)) / 1000) + 150)
 
-// the complete/refund spend should pay the relay fee its size actually
-// needs — a flat cap overpays small spends and starves big ones, both
-// inside the same covenant bound
-const relayNeed = (payloadBytes: number): number => Math.ceil((payloadBytes + 2048) / 1000)
+// the complete/refund spend must pay the relay fee its actual serialized size
+// needs at the live fee rate — a 1-sat/kB or flat 10-sat floor fails mainnet
+// TX_POLICY (39) insufficient-fee on ~1.3 KB buy / ~613 B refund txs
+const relayNeed = (payloadBytes: number, rateSatPerKb = 1): number => Math.max(10, Math.ceil(((payloadBytes + 1400) * Math.max(1, rateSatPerKb)) / 1000) + 10)
 
 async function settleEscrow(mem: NektarMemory, tx: import('@bsv/sdk').Transaction): Promise<void> {
   await mem.funds.spent(tx)
@@ -151,7 +153,7 @@ export const handlers: Record<string, ToolHandler> = {
       value,
       price: BigInt(args.price),
       refundAfter: BigInt(args.refundAfter),
-      maxFee: BigInt(saleFeeBound(value.length, Number(args.maxFee))),
+      maxFee: BigInt(saleFeeBound(value.length, Number(args.maxFee), mem.feeRateSatPerKb)),
       buyerPub: args.buyerPub,
       expiresAt: args.expiresAt !== undefined ? BigInt(args.expiresAt) : undefined
     })
@@ -192,7 +194,7 @@ export const handlers: Record<string, ToolHandler> = {
       value: payload,
       price: BigInt(args.price),
       refundAfter: BigInt(args.refundAfter),
-      maxFee: BigInt(saleFeeBound(payload.length, Number(args.maxFee))),
+      maxFee: BigInt(saleFeeBound(payload.length, Number(args.maxFee), mem.feeRateSatPerKb)),
       buyerPub: args.buyerPub,
       leaf: leafHex,
       expiresAt: args.expiresAt !== undefined ? BigInt(args.expiresAt) : undefined,
@@ -243,17 +245,31 @@ export const handlers: Record<string, ToolHandler> = {
     if (args.utxo?.script !== undefined && !host.matchesScript(args.utxo.script))
       return { accepted: false, reason: 'sale op=complete: cfg does not match the escrow locking script — params disagree with the on-chain covenant' }
     // covenant bound: utxo − price − change ≤ maxFee → change ≥ utxo − price − maxFee.
-    // Fee sized to the wrapped payload the unlocking script carries — a flat
-    // ~350 overpays small spends and still starves big ones into
-    // insufficient-fee; the bound itself stays the ceiling.
-    const changeSats =
+    // Size the fee to the actual serialized buy tx at mem.feeRateSatPerKb so
+    // mainnet (100+ sat/kB) never fails TX_POLICY (39) insufficient-fee, while
+    // keeping change inside the covenant's maxFee bound and above 0.
+    const rate = Math.max(1, mem.feeRateSatPerKb)
+    const maxFeeNum = Number(host.params.maxFee)
+    const parentTx = await mem.fetchTx(args.utxo.txid)
+    const capFee = (want: number): bigint => BigInt(Math.max(1, Math.min(maxFeeNum - 2, want, args.utxo.satoshis - Number(host.params.price) - 1)))
+    let feePaid =
       args.changeSats !== undefined
-        ? BigInt(args.changeSats)
-        : BigInt(args.utxo.satoshis) - host.params.price - BigInt(Math.min(Number(host.params.maxFee) - 2, Math.max(10, relayNeed(args.wrapped.length / 2))))
+        ? BigInt(args.utxo.satoshis) - host.params.price - BigInt(args.changeSats)
+        : capFee(relayNeed(args.wrapped.length / 2, rate))
+    let changeSats = args.changeSats !== undefined ? BigInt(args.changeSats) : BigInt(args.utxo.satoshis) - host.params.price - feePaid
     // the remembered escrow is the reveal's real parent — with it attached
     // the tx broadcasts as proper EF and the buyer receives BEEF/EF, not a
     // synthetic stub that cannot carry ancestry
-    const { tx } = host.buildBuy(args.utxo, args.wrapped, changeSats, await mem.fetchTx(args.utxo.txid))
+    let { tx } = host.buildBuy(args.utxo, args.wrapped, changeSats, parentTx)
+    if (args.changeSats === undefined) {
+      const exactNeed = Math.ceil((tx.toBinary().length * rate) / 1000) + 5
+      const bumped = capFee(Math.max(Number(feePaid), exactNeed))
+      if (bumped > feePaid) {
+        feePaid = bumped
+        changeSats = BigInt(args.utxo.satoshis) - host.params.price - feePaid
+        tx = host.buildBuy(args.utxo, args.wrapped, changeSats, parentTx).tx
+      }
+    }
     const r = await mem.broadcastTx(tx)
     if (r.status !== 'success') return { accepted: false, reason: r.description }
     return { accepted: true, txid: tx.id('hex'), sellerSats: tx.outputs[0].satoshis, txHex: tx.toHex() }
@@ -270,16 +286,26 @@ export const handlers: Record<string, ToolHandler> = {
     })
     if (args.utxo?.script !== undefined && !host.matchesScript(args.utxo.script))
       return { accepted: false, reason: 'sale op=refund: cfg does not match the escrow locking script — params disagree with the on-chain covenant' }
-    // a refund carries no payload — ~2KB worst case; pay its real size, not
-    // the covenant bound (which now scales with the payload it never had)
-    const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats) : BigInt(args.utxo.satoshis) - BigInt(Math.min(Number(host.params.maxFee), 10))
-    const { tx } = await host.buildRefund(
-      args.utxo,
-      mem.fundSigner(),
-      args.lockTime ?? Number(host.params.refundAfter),
-      changeSats,
-      await mem.fetchTx(args.utxo.txid)
-    )
+    // a refund carries no payload (~613B) — scale to mem.feeRateSatPerKb and
+    // verify against actual serialized tx bytes so mainnet refunds never fail
+    // TX_POLICY (39) insufficient-fee and trap buyer escrow funds
+    const rate = Math.max(1, mem.feeRateSatPerKb)
+    const maxFeeNum = Number(host.params.maxFee)
+    const parentTx = await mem.fetchTx(args.utxo.txid)
+    const capFee = (want: number): bigint => BigInt(Math.max(1, Math.min(maxFeeNum - 2, want, args.utxo.satoshis - 1)))
+    let feePaid =
+      args.changeSats !== undefined ? BigInt(args.utxo.satoshis) - BigInt(args.changeSats) : capFee(Math.max(10, Math.ceil((900 * rate) / 1000) + 10))
+    let changeSats = args.changeSats !== undefined ? BigInt(args.changeSats) : BigInt(args.utxo.satoshis) - feePaid
+    let { tx } = await host.buildRefund(args.utxo, mem.fundSigner(), args.lockTime ?? Number(host.params.refundAfter), changeSats, parentTx)
+    if (args.changeSats === undefined) {
+      const exactNeed = Math.ceil((tx.toBinary().length * rate) / 1000) + 5
+      const bumped = capFee(Math.max(Number(feePaid), exactNeed))
+      if (bumped > feePaid) {
+        feePaid = bumped
+        changeSats = BigInt(args.utxo.satoshis) - feePaid
+        tx = (await host.buildRefund(args.utxo, mem.fundSigner(), args.lockTime ?? Number(host.params.refundAfter), changeSats, parentTx)).tx
+      }
+    }
     const r = await mem.broadcastTx(tx)
     if (r.status !== 'success') return { accepted: false, reason: r.description }
     return { accepted: true, txid: tx.id('hex'), refundSats: tx.outputs[0].satoshis }

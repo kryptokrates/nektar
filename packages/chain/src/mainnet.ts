@@ -175,11 +175,11 @@ export class BsvBroadcaster implements Broadcaster {
     const winCtl = new AbortController()
     const submit = async (base: string): Promise<BroadcastResult> => {
       try {
-        const post = () => req(this.cfg, `${base}/tx`, { method: 'POST', headers, body: payload, signal: winCtl.signal }, 60_000)
+        const post = () => req(this.cfg, `${base}/tx`, { method: 'POST', headers, body: payload, signal: winCtl.signal }, 15_000)
         // 503 = backpressure, nothing queued; transport errors are idempotent
         // (same bytes, same txid) — retry both through one jittered policy
         const r = await withRetry(post, {
-          attempts: 4,
+          attempts: 3,
           delay: (i) => 500 * 2 ** i,
           retryIf: (x) => !winCtl.signal.aborted && x.status === 503,
           retryErr: () => !winCtl.signal.aborted
@@ -197,24 +197,34 @@ export class BsvBroadcaster implements Broadcaster {
     }
     // every configured endpoint gets the same bytes at once — first acceptance
     // wins AND aborts slower siblings immediately so one dead secondary route
-    // never pins SpendGuard.tail for minutes.
+    // never pins SpendGuard.tail for minutes. When a live endpoint returns a
+    // wire refusal (HTTP 4xx / REJECTED), give healthy siblings a short 5s
+    // grace window to accept instead of waiting out a hanging dead route.
     return await new Promise<BroadcastResult>((resolve) => {
       const results: BroadcastResult[] = []
       let settled = false
       let remaining = urls.length
+      let refusalTimer: ReturnType<typeof setTimeout> | undefined
+      const finish = (r: BroadcastResult) => {
+        if (settled) return
+        settled = true
+        if (refusalTimer !== undefined) clearTimeout(refusalTimer)
+        winCtl.abort()
+        resolve(r)
+      }
       for (const base of urls) {
         void submit(base).then((r) => {
           if (settled) return
-          if (r.status === 'success') {
-            settled = true
-            winCtl.abort()
-            resolve(r)
-            return
-          }
+          if (r.status === 'success') return finish(r)
           results.push(r)
+          if (r.description?.startsWith('broadcaster ') && remaining > 1 && refusalTimer === undefined) {
+            refusalTimer = setTimeout(() => {
+              finish(results.find((x) => x.description?.startsWith('broadcaster ')) ?? r)
+            }, 5_000)
+            refusalTimer.unref?.()
+          }
           if (--remaining === 0) {
-            settled = true
-            resolve(
+            finish(
               results.find((x) => x.description?.startsWith('broadcaster ')) ??
                 sparse(results[0]) ?? { status: 'error', description: 'broadcast failed: no broadcaster endpoints configured' }
             )

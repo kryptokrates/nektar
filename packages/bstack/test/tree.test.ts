@@ -71,25 +71,21 @@ test('ledger: unproven tree with anchored ancestry hands out zero-conf slots', a
   assert.ok(typeof u[0].addedAt === 'number' && u[0].addedAt > 0, 'row age is recorded for heal policy')
 })
 
-test('ledger: anchored ancestry serves market and bbox by default — log/finger still wait for mined', async () => {
+test('ledger: anchored ancestry serves only the market lane — bbox still waits for mined', async () => {
   const key = PrivateKey.fromRandom()
-  const tBbox = await anchoredTree(key, 2)
-  const tLog = await anchoredTree(key, 2)
+  const t = await anchoredTree(key, 2)
   const l = new MemoryTreeLedger()
-  await l.add(tBbox, 2, 'bbox')
-  assert.equal(await l.remaining('bbox'), 2, 'anchored bbox tree serves zero-conf by default')
-  assert.ok((await l.take('bbox')) !== undefined)
-  await l.add(tLog, 2, 'log')
-  assert.equal(await l.remaining('log'), 0, 'unproven log tree must not serve')
-  assert.equal(await l.take('log'), undefined)
-  prove(tLog)
-  await l.markProven(tLog.id('hex'), tLog.merklePath!)
-  assert.equal(await l.remaining('log'), 2)
+  await l.add(t, 2, 'bbox')
+  assert.equal(await l.remaining('bbox'), 0, 'unproven bbox tree must not serve')
+  assert.equal(await l.take('bbox'), undefined)
+  prove(t)
+  await l.markProven(t.id('hex'), t.merklePath!)
+  assert.equal(await l.remaining('bbox'), 2)
 })
 
 // E1: a funding tx carrying its own proof anchors the fresh tree — the
-// market + bbox lanes serve it at once while the proven-only lanes still wait
-test('ledger: a tree minted on a proven funding parent serves market, never log', async () => {
+// market lane serves it at once while the vendored-codec lanes still wait
+test('ledger: a tree minted on a proven funding parent serves market, never bbox', async () => {
   const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
   try {
     const key = PrivateKey.fromRandom()
@@ -99,7 +95,7 @@ test('ledger: a tree minted on a proven funding parent serves market, never log'
     for (const l of [new MemoryTreeLedger(), new KnexTreeLedger(kx)]) {
       await l.add(t, 4, 'market')
       assert.ok((await l.take('market')) !== undefined, 'anchored tree must serve the market lane')
-      assert.equal(await l.take('log'), undefined)
+      assert.equal(await l.take('bbox'), undefined)
     }
   } finally {
     await kx.destroy()
@@ -154,11 +150,11 @@ test('ledger (knex): unproven tree with anchored ancestry hands out zero-conf sl
     assert.equal(u[0].txid, t.id('hex'))
     assert.equal(u[0].kind, 'market')
     assert.ok(typeof u[0].addedAt === 'number' && u[0].addedAt > 0)
-    // a second anchored tree registered as log still waits for the BUMP
+    // a second anchored tree registered as bbox still waits for the BUMP
     const b = await anchoredTree(key, 1)
-    await l.add(b, 1, 'log')
-    assert.equal(await l.take('log'), undefined)
-    assert.equal(await l.remaining('log'), 0)
+    await l.add(b, 1, 'bbox')
+    assert.equal(await l.take('bbox'), undefined)
+    assert.equal(await l.remaining('bbox'), 0)
   } finally {
     await kx.destroy()
   }

@@ -25,7 +25,7 @@
       "instability": 0.571
     },
     "bstack": {
-      "loc": 5305,
+      "loc": 5307,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
       "maxFileLoc": 1073,
@@ -33,10 +33,10 @@
       "instability": 0.5
     },
     "chain": {
-      "loc": 7270,
+      "loc": 7280,
       "pkgFanout": 1,
       "edges": ["core"],
-      "maxFileLoc": 992,
+      "maxFileLoc": 1002,
       "maxFileFanout": 32,
       "instability": 0.091
     },
@@ -233,7 +233,7 @@
       "fanout": 32
     },
     "packages/chain/src/mainnet.ts": {
-      "loc": 992,
+      "loc": 1002,
       "fanout": 7
     },
     "packages/chain/src/testkit.ts": {

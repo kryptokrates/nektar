@@ -272,13 +272,15 @@ export const ancestryHit = async (
   return (await ancestryWalk(tree, resolveTx, refused, maxNodes)).stopped
 }
 
-// both market and bbox tolerate anchored unproven funding by default so cold-
-// start deals (wants, offers, quotes, accepts, deliveries) do not stall 10-60m
-// waiting for a block. NEKTAR_ANCHORED_LANES='market' restricts back to market-
-// only; 'all' also enables log and finger.
+// `market` is always anchored-capable (`nektar-module` verifies anchored
+// ancestry). Vendored reference codecs (`@lightwebinc/bbox-host`, `blogs`,
+// `bfinger`) enforce that the Atomic BEEF carries ONLY the funding tree's own
+// mined BUMP ("the proof holds more than the funding tree's path"), so `bbox`,
+// `log`, and `finger` stay proven-only by default; NEKTAR_ANCHORED_LANES=all|1
+// or a comma list opts in when running custom hosts that accept anchored trees.
 const anchoredKinds = (env: NodeJS.ProcessEnv = process.env): Set<string> => {
   const v = nektarEnv('NEKTAR_ANCHORED_LANES', env)
-  if (v === undefined || v === '') return new Set(['market', 'bbox'])
+  if (v === undefined || v === '') return new Set(['market'])
   const kinds = new Set(
     v === 'all' || v === '1'
       ? ['bbox', 'log', 'finger']

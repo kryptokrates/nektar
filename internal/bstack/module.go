@@ -19,8 +19,9 @@ import (
 )
 
 // MarketEvent is emitted whenever the Nektar overlay LookupService admits a verified market artifact.
-// The embedded Hub fans these directly out over native SSE (/events), replacing watch-shim completely.
+// The embedded Hub assigns monotonic Seq numbers and fans these out over cursored SSE (/events).
 type MarketEvent struct {
+	Seq        int64         `json:"seq,omitempty"`
 	Topic      string        `json:"topic"`
 	TxID       string        `json:"txid"`
 	Vout       uint32        `json:"vout"`
@@ -205,6 +206,7 @@ type MarketLookupService struct {
 }
 
 type indexedRecord struct {
+	seq        int64
 	outpoint   transaction.Outpoint
 	topic      string
 	payload    MarketPayload
@@ -279,6 +281,9 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 	}
 	key := op.String()
 	s.mu.Lock()
+	if existing, ok := s.records[key]; ok {
+		rec.seq = existing.seq
+	}
 	s.records[key] = rec
 	cb := s.onAdmit
 	s.mu.Unlock()
@@ -288,6 +293,7 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 	}
 	if cb != nil {
 		cb(MarketEvent{
+			Seq:        rec.seq,
 			Topic:      topic,
 			TxID:       op.Txid.String(),
 			Vout:       op.Index,
@@ -296,6 +302,16 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		})
 	}
 	return nil
+}
+
+// SetSeq stamps a durable Hub-assigned monotonic sequence number on an indexed outpoint.
+func (s *MarketLookupService) SetSeq(outpointKey string, seq int64) {
+	s.mu.Lock()
+	if rec, ok := s.records[outpointKey]; ok {
+		rec.seq = seq
+		s.records[outpointKey] = rec
+	}
+	s.mu.Unlock()
 }
 
 func (s *MarketLookupService) OutputAdmittedByTopic(_ context.Context, payload *module.OutputAdmittedByTopic) error {
@@ -347,6 +363,7 @@ type MarketQuery struct {
 	Pub      string       `json:"pub,omitempty"`
 	BuyerPub string       `json:"buyerPub,omitempty"`
 	SinceMs  int64        `json:"sinceMs,omitempty"`
+	SinceSeq int64        `json:"sinceSeq,omitempty"`
 	Limit    int          `json:"limit,omitempty"`
 }
 
@@ -388,10 +405,14 @@ func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQ
 		if q.SinceMs > 0 && rec.admittedAt < q.SinceMs {
 			continue
 		}
+		if q.SinceSeq > 0 && rec.seq <= q.SinceSeq {
+			continue
+		}
 		if domLower != "" && !hasDomain(rec.domains, domLower) {
 			continue
 		}
 		results = append(results, MarketEvent{
+			Seq:        rec.seq,
 			Topic:      rec.topic,
 			TxID:       rec.outpoint.Txid.String(),
 			Vout:       rec.outpoint.Index,

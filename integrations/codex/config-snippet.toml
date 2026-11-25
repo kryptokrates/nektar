@@ -1,16 +1,15 @@
 # merge into ~/.codex/config.toml
 
-# ── nektar MCP server (HTTP transport — same process serves /v1/verify) ──
-# start it first:  NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=testnet NEKTAR_KEY_PASSPHRASE=<pick-one> node packages/mcp/dist/src/bin.js
-# (testnet = public test coins, zero local infra — passphrase optional on testnet, required on main; regtest = local Teranode stack, needs .env keys)
+# ── nektar v0.4 MCP server (native Go binary — auto-bridges to running `nektar serve` daemon!) ──
+# Start the daemon once:  nektar serve   (listens on http://127.0.0.1:18420)
+# Or use stdio directly (zero SQLite lock contention when daemon is running):
 [mcp_servers.nektar]
-url = "http://localhost:8080/mcp"
+command = "nektar"
+args = ["mcp"]
 
-# ── turn-complete receipt check ──
-# Codex notify is fire-and-forget: it can flag a failed receipt in
-# codex-receipts.log but cannot block the turn. If you already have a notify
-# (e.g. computer-use), chain it — our adapter calls it first with the same
-# payload:
-#   notify = ["node", "integrations/codex/verify-notify.mjs", "--chain",
-#             "C:\\path\\to\\your\\existing-notify.exe", "turn-ended"]
-notify = ["node", "integrations/codex/verify-notify.mjs"]
+# Alternatively, connect directly over Streamable HTTP MCP:
+# [mcp_servers.nektar]
+# url = "http://127.0.0.1:18420/mcp"
+
+# ── turn-complete receipt verification (native Go hook — zero Node.js!) ──
+notify = ["nektar", "hook", "verify-receipt"]

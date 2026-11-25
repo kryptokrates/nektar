@@ -42,6 +42,34 @@
       slots: Record<string, number> | null
       boot: string | null
       push: string | null
+      peers?: Array<{
+        pub: string
+        handle?: string
+        publicUrl?: string
+        bboxOffice?: string
+        sellDomains?: string[]
+        bountyDomains?: string[]
+        isHub?: boolean
+      }>
+      bounties?: Array<{
+        id: string
+        domain: string
+        question: string
+        rewardSats: number
+        filled: number
+        maxFills: number
+      }>
+      liquidity?: {
+        fillRate: number
+        medianTimeToOfferMs: number
+        zeroRate: number
+        hubSupplyShare: number
+        organicSellers: number
+        activePeers: number
+        sseWakes: number
+        pollWakes: number
+        bboxWakes: number
+      } | null
     }
     automation: { pending: Pending[]; ops: Op[]; rt: Rt } | null
     share: { enabled: boolean; url: string }
@@ -414,6 +442,54 @@
           {#if joinMsg}<p class="jmsg">{joinMsg}</p>{/if}
           {#if joinFound.length}
             <div class="jline"><span class="mut">it knows {joinFound.length} more:</span>{#each joinFound as h}<button class="jbtn" onclick={() => joinHost(h)}>+ {host(h)}</button>{/each}<button class="jbtn jok" onclick={joinAll}>add all</button></div>
+          {/if}
+        </div>
+
+        <div class="card">
+          <h2>Peers <small>{s.net.peers?.length ?? 0} verified on dir lane</small></h2>
+          {#if s.net.peers?.length}
+            {#each s.net.peers as p}
+              <div class="row">
+                <span>
+                  <b class="mono">{p.handle || p.pub.slice(0, 14) + '…'}</b>
+                  <span class="chip">{p.isHub ? 'hub' : 'organic'}</span>
+                  {#if p.publicUrl}<span class="chip ok">direct</span>{:else}<span class="chip">NAT bbox</span>{/if}
+                  {#each p.sellDomains ?? [] as dm}<i class="dom">{dm}</i>{/each}
+                </span>
+                <span class="mut mono">{p.publicUrl ? host(p.publicUrl) : (p.bboxOffice || 'bbox')}</span>
+              </div>
+            {/each}
+          {:else}
+            <p class="empty">no peers announced yet — join a Hub or run <code>nektar peers</code></p>
+          {/if}
+        </div>
+
+        <div class="card">
+          <h2>Hub Bounties & Liquidity <small>sell verified facts directly to the Hub</small></h2>
+          {#if s.net.liquidity}
+            <div class="rline">
+              <span class="chip">fill {(s.net.liquidity.fillRate * 100).toFixed(0)}%</span>
+              <span class="chip">median offer {s.net.liquidity.medianTimeToOfferMs} ms</span>
+              <span class="chip">organic sellers {s.net.liquidity.organicSellers}</span>
+              <span class="chip">SSE wakes {s.net.liquidity.sseWakes}</span>
+              <span class="chip">poll wakes {s.net.liquidity.pollWakes}</span>
+            </div>
+          {/if}
+          {#if s.net.bounties?.length}
+            {#each s.net.bounties as b}
+              <div class="row">
+                <span>
+                  <b>{b.id}</b> <i class="dom">{b.domain}</i>
+                  <small class="mut"> · {b.question}</small>
+                </span>
+                <span class="rowend">
+                  <b class="ok">+{fmt(b.rewardSats)} sats</b>
+                  <small class="mut">{b.filled}/{b.maxFills}</small>
+                </span>
+              </div>
+            {/each}
+          {:else}
+            <p class="empty">no active bounties on connected hubs — run <code>nektar serve --hub</code> to host a bounty pool</p>
           {/if}
         </div>
       {/if}

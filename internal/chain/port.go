@@ -305,6 +305,80 @@ func (p *Port) BalanceSats() uint64 {
 	return p.embedded.Pool.Balance()
 }
 
+// UTXOCount returns the number of outputs currently held in the embedded funding pool.
+func (p *Port) UTXOCount() int {
+	if p.embedded == nil || p.embedded.Pool == nil {
+		return 0
+	}
+	return p.embedded.Pool.Count()
+}
+
+// EnsureSplitCoins fans out a single large UTXO into targetCount spendable reserve outputs
+// of splitSats each (plus change) so parallel market deals and anchors never starve on one UTXO.
+func (p *Port) EnsureSplitCoins(ctx context.Context, targetCount int, splitSats uint64) error {
+	if p.embedded == nil || p.embedded.Pool == nil || targetCount <= 1 || splitSats == 0 {
+		return nil
+	}
+	if p.embedded.Pool.Count() >= targetCount {
+		return nil
+	}
+	fundScript, err := p.signer.FundScript()
+	if err != nil {
+		return err
+	}
+	needed := targetCount - p.embedded.Pool.Count()
+	if needed > 16 {
+		needed = 16
+	}
+	if p.BalanceSats() < uint64(needed+1)*splitSats+1000 {
+		return nil
+	}
+	outs := make([]*transaction.TransactionOutput, needed)
+	for i := range needed {
+		outs[i] = &transaction.TransactionOutput{
+			Satoshis:      splitSats,
+			LockingScript: fundScript,
+		}
+	}
+	tx, fee, spend, err := p.BuildFundedTx(ctx, outs)
+	if err != nil {
+		return err
+	}
+	if _, err := p.Broadcast(ctx, tx, fee, spend); err != nil {
+		return err
+	}
+	return p.AdoptChange(tx)
+}
+
+// SendToAddress builds, signs, SpendGuard-checks, and broadcasts a payment to a BSV P2PKH address.
+func (p *Port) SendToAddress(ctx context.Context, address string, sats uint64) (*transaction.Transaction, string, error) {
+	if sats == 0 {
+		return nil, "", errors.New("chain: send amount must be > 0")
+	}
+	addr, err := script.NewAddressFromString(address)
+	if err != nil {
+		return nil, "", fmt.Errorf("chain: invalid address %q: %w", address, err)
+	}
+	lock, err := p2pkh.Lock(addr)
+	if err != nil {
+		return nil, "", fmt.Errorf("chain: p2pkh lock: %w", err)
+	}
+	tx, fee, spend, err := p.BuildFundedTx(ctx, []*transaction.TransactionOutput{
+		{Satoshis: sats, LockingScript: lock},
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	txid, err := p.Broadcast(ctx, tx, fee, spend)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := p.AdoptChange(tx); err != nil {
+		return tx, txid, err
+	}
+	return tx, txid, nil
+}
+
 // Height returns the current chain tip height.
 func (p *Port) Height(ctx context.Context) (uint32, error) {
 	if p.testChain != nil {

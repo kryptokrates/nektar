@@ -54,8 +54,9 @@
 <div class="card">
   <h2>Deploy a Hub Node <small>graduate from personal agent to independent network relay</small></h2>
   <p class="hmut">
-    A Hub bundles your agent, redundant overlay host pair (<code>host-a</code>/<code>host-b</code>), watch shims, and built-in
-    <b>Caddy Auto-TLS</b>. Hosts are untrusted plumbing — every artifact is signature + SPV verified by peers.
+    A v0.4 Hub runs in a single 27 MB zero-CGO Go binary bundling your agent, a durable SQLite Overlay Hub (16 market lanes +
+    <code>bfinger</code> + NAT <code>bbox</code> relay + cursored SSE + Hub-to-Hub federation), starter CHIRP packs, and Hub knowledge bounties.
+    Hosts are untrusted plumbing — every artifact is signature + SPV verified by peers.
   </p>
 
   <div class="hcontrols">

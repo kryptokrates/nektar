@@ -163,7 +163,10 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 `
 	_, err := d.sql.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.migrateMarket()
 }
 
 // AppendFragment inserts a deduplicated append-only fragment into shard.

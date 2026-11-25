@@ -1,31 +1,29 @@
 ---
 name: nektar-memory
 description: >
-  Use nektar verifiable, encrypted agent memory anchored on BSV. Recall saved
-  knowledge before answering factual questions, persist durable facts with
-  provenance, route verifiable answers through groundedAnswer with checkable
-  receipt footers, and optionally buy/sell knowledge under operator-approved
-  policies.
+  Use nektar v0.4 verifiable, encrypted agent memory & autonomous knowledge market
+  anchored on BSV. Recall saved knowledge before answering factual questions, persist
+  durable facts with provenance, route verifiable answers through groundedAnswer with
+  checkable nektarr1.* receipt footers, discover peers on the dir lane, and buy/sell
+  verified knowledge with peer agents or Hub bounties under operator-approved policies.
 ---
 
-# nektar — Verifiable Agent Memory & Knowledge Market
+# nektar v0.4 — Verifiable Agent Memory & Autonomous Knowledge Market
 
-Works across every `agentskills.io`-compatible harness (Claude Code, Codex CLI,
-Hermes Agent, OpenClaw, Cursor, Antigravity).
+Single zero-CGO Go binary (`nektar`, default daemon `http://127.0.0.1:18420`). Works across
+every `agentskills.io`-compatible harness (Claude Code, Codex CLI, Hermes Agent, OpenClaw,
+Cursor, Windsurf, VS Code, Antigravity).
 
 ## Memory & Grounding Loop
 
 1. **Recall first:** Before answering a factual question that may live in
-   memory, call `recall` (pass `query` and `limit` for fast targeted lookup, or
-   omit `shard` to discover readable shards including `welcome`). Default
-   `recall` returns active (non-superseded, non-forgotten) memories and works
-   locally even before BSV anchoring (`verification: "local-committed"`).
-2. **Ground every claim:** For a verifiable answer, call `groundedAnswer` using
-   exact quotes (`cites: [{shard, seq}]`), quote-backed synthesis
-   (`quotes: [{quote, shard, seq}]` with verbatim substrings from cited
-   fragments), or Datalog entailment. Unsupported claims are stripped rather
-   than invented.
-3. **Keep the receipt footer verbatim:**
+   memory, call `recall` (pass `query` and `limit`, or omit `shard` to search
+   every readable shard including the auto-seeded `welcome` shard).
+2. **Ground every claim:** Route factual answers through `groundedAnswer` using
+   exact citations (`cites: [{shard, seq}]`), verbatim quotes
+   (`quotes: [{quote, shard, seq}]`), or Google Mangle Datalog entailment.
+   Unsupported claims are stripped automatically.
+3. **Preserve the receipt footer verbatim:**
 
    ```
    receipt: nektarr1.<token>
@@ -33,22 +31,26 @@ Hermes Agent, OpenClaw, Cursor, Antigravity).
    ```
 
    Never fabricate a receipt token. If nothing grounded, state honestly that
-   the answer is ungrounded. When unfunded, receipts are locally signed
-   (`anchored: false`); funding the fee key anchors them on BSV.
-
-4. **Remember, supersede, and forget:** Call `remember` with `shard`, `data`,
-   and `source` (plus optional `supersedes: {shard, seq}` to replace an older
-   fact in active views). Call `forget {shard, seq, reason?}` to append a
-   tombstone hiding an outdated or wrong record from active views while keeping
-   full append-only history (`includeHistory: true`).
+   the answer is ungrounded.
+4. **Remember & forget:** Call `remember {shard, text, source?, autoAnchor?, borgGroup?}`
+   to persist provenance-signed fragments (optionally BRC-369 encrypted to a Borg group).
+   Call `forget {shard, seq}` to shred local plaintext while keeping the anchored commitment.
 5. **Know the honest boundary:** A verified receipt proves a claim came from
-   **recorded, unaltered, derivable** memory — never that it is _true_.
+   **recorded, unaltered, derivable** memory — never that its content is _true_.
 
-## Knowledge Trading (Opt-In, Policy-Gated)
+## Peer Discovery & Knowledge Trading (Opt-In, Policy-Gated)
 
-- Use `want {domains, question, maxSats}` to buy knowledge within the
-  operator-approved buyer policy.
-- Use `sell {shard, domains, priceSats}` to offer a shard under an approved
-  seller policy.
-- Use `deals {}` and `fund {}` to monitor active deals and funding runway.
-- Use `doctor {}` for one-call diagnostics and exact next-command hints.
+- **Discover peers & bounties:** Call `peers {refresh: true}` (or `nektar peers`) to list
+  signature-verified peers on the `dir` lane, `bfinger` handles, advertised CHIRP starter
+  packs, and open Hub knowledge bounties.
+- **Buy from peers or Hub:** Call `want {domains, question, maxSats, targetShard?}`
+  to broadcast a signed `WantAd`, collect live SSE quotes, rank by price + verified seller
+  reputation, pay via AtomicBEEF (direct HTTP or NAT-safe `bbox` relay), verify the
+  BRC-369 content key + remote CHIRP closure + SPV Merkle proof, and commit the fact locally.
+  Requires an approved buyer policy (`nektar policy approve --preset buyer` or 1-click in Dashboard).
+- **Sell to peers:** Call `sell {shard, domains, priceSats}` to arm a local shard for
+  autonomous quoting & AtomicBEEF settlement.
+- **Sell TO the Hub:** Call `sell {bountyId, shard, seq}` (or `nektar sell -bounty bounty-ops -shard <shard>`)
+  to submit an SPV-anchored fragment to a Hub bounty pool and receive an immediate BSV payout.
+- **Monitor & diagnose:** Call `deals {}`, `fund {faucet?: true}`, and `doctor {}` for
+  live liquidity metrics, funding runway, and exact next-command hints.

@@ -84,20 +84,34 @@ type SignedOffer struct {
 }
 
 type OfferAd struct {
-	OfferID      string   `json:"offerId"`
-	WantID       string   `json:"wantId"`
-	Pub          string   `json:"pub"`
-	BuyerPub     string   `json:"buyerPub"`
-	Net          string   `json:"net"`
-	Domains      []string `json:"domains"`
-	PriceSats    uint64   `json:"priceSats"`
-	Shard        string   `json:"shard,omitempty"`
-	Leaf         string   `json:"leaf,omitempty"`
-	ChirpURL     string   `json:"chirpUrl,omitempty"`
-	KeyCommitHex string   `json:"keyCommitHex,omitempty"`
-	Direct       bool     `json:"direct,omitempty"`
-	Revision     int      `json:"revision"`
-	Exp          int64    `json:"exp"`
+	OfferID      string          `json:"offerId"`
+	WantID       string          `json:"wantId"`
+	Pub          string          `json:"pub"`
+	BuyerPub     string          `json:"buyerPub"`
+	Net          string          `json:"net"`
+	Domains      []string        `json:"domains"`
+	PriceSats    uint64          `json:"priceSats"`
+	Shard        string          `json:"shard,omitempty"`
+	Leaf         string          `json:"leaf,omitempty"`
+	ChirpURL     string          `json:"chirpUrl,omitempty"`
+	KeyCommitHex string          `json:"keyCommitHex,omitempty"`
+	PayAddress   string          `json:"payAddress,omitempty"`
+	SellerURL    string          `json:"sellerUrl,omitempty"`
+	BboxOffice   string          `json:"bboxOffice,omitempty"`
+	SaleOffer    json.RawMessage `json:"saleOffer,omitempty"`
+	IsHub        bool            `json:"isHub,omitempty"`
+	Direct       bool            `json:"direct,omitempty"`
+	Revision     int             `json:"revision"`
+	Exp          int64           `json:"exp"`
+}
+
+// PackRef advertises a content-addressed CHIRP shard pack in a signed AnnounceAd.
+type PackRef struct {
+	Shard    string   `json:"shard"`
+	Domains  []string `json:"domains,omitempty"`
+	ChirpURL string   `json:"chirpUrl"`
+	RootHex  string   `json:"rootHex,omitempty"`
+	Count    int      `json:"count,omitempty"`
 }
 
 // SignedAnnounce advertises an operator/hub node on the enumerable dir lane.
@@ -107,12 +121,18 @@ type SignedAnnounce struct {
 }
 
 type AnnounceAd struct {
-	Pub     string   `json:"pub"`
-	Net     string   `json:"net"`
-	Handle  string   `json:"handle,omitempty"` // bfinger user@domain
-	Hosts   []string `json:"hosts"`
-	Domains []string `json:"domains,omitempty"`
-	Exp     int64    `json:"exp"`
+	Pub           string    `json:"pub"`
+	Net           string    `json:"net"`
+	Handle        string    `json:"handle,omitempty"` // bfinger user@domain
+	PublicURL     string    `json:"publicUrl,omitempty"`
+	BboxOffice    string    `json:"bboxOffice,omitempty"`
+	Hosts         []string  `json:"hosts"`
+	Domains       []string  `json:"domains,omitempty"`
+	SellDomains   []string  `json:"sellDomains,omitempty"`
+	BountyDomains []string  `json:"bountyDomains,omitempty"`
+	Packs         []PackRef `json:"packs,omitempty"`
+	IsHub         bool      `json:"isHub,omitempty"`
+	Exp           int64     `json:"exp"`
 }
 
 // EncodePayload encodes a MarketPayload as a stock Lightweb canonical CBOR nkt1 record.

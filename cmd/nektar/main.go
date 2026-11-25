@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,6 +22,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
@@ -29,7 +31,10 @@ import (
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
-const Version = "0.4.0"
+const (
+	Version          = "0.4.0"
+	DefaultLocalPort = "18420"
+)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -59,10 +64,24 @@ func main() {
 		err = cmdVerify(args)
 	case "status":
 		err = cmdStatus(args)
-	case "check-mainnet":
-		err = cmdCheckMainnet()
+	case "doctor":
+		err = cmdDoctor(args)
+	case "peers":
+		err = cmdPeers(args)
+	case "want":
+		err = cmdWant(args)
+	case "sell":
+		err = cmdSell(args)
+	case "policy":
+		err = cmdPolicy(args)
 	case "dock":
 		err = cmdDock(args)
+	case "hook":
+		err = cmdHook(args)
+	case "open":
+		err = cmdOpen(args)
+	case "check-mainnet":
+		err = cmdCheckMainnet()
 	default:
 		printUsage()
 		os.Exit(2)
@@ -74,19 +93,26 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`nektar v0.4 — Verifiable, encrypted agent memory anchored on BSV
+	fmt.Println(`nektar v0.4 — Verifiable, encrypted agent memory & autonomous knowledge market on BSV
 
 Usage:
-  nektar serve          Start unified HTTP + MCP + A2A + L0 LLM Proxy + Svelte Dashboard + optional Hub/Restate
-  nektar mcp            Run stdio MCP server (for Claude Desktop / Claude Code / Codex / Cursor)
-  nektar hub            Run standalone embedded Go Overlay Hub (tm_nektar_* + bfinger/bbox/blogs/borg/bsecret/bstore + SSE)
+  nektar serve          Start unified HTTP + MCP + A2A + L0 Proxy + Market Broker + Svelte Dashboard (default :18420)
+  nektar mcp            Run stdio MCP server (auto-bridges to live daemon if running; zero lock contention!)
+  nektar hub            Run standalone durable SQLite Overlay Hub (16 lanes + bfinger + SSE + NAT bbox + bounties)
+  nektar dock           Auto-detect & configure Claude Code, Cursor, Codex, VS Code, Windsurf, Hermes + live probe
+  nektar open           Open the Nektar Dashboard in your browser
+  nektar doctor         Run full node health diagnosis with exact next steps
+  nektar policy         Manage operator spending/selling policies (approve --preset buyer|seller|both | list | revoke)
+  nektar peers          Discover verified peers, bfinger handles, advertised CHIRP packs & Hub bounties
+  nektar want           Buy verified knowledge live from peers or the Hub (-domains, -question, -max)
+  nektar sell           Arm a local shard for A2A selling (-shard, -domains, -price) or sell to Hub (-bounty)
+  nektar hook           Native zero-Node Claude Code / Codex hooks (session-start | prefetch | verify-receipt)
   nektar remember       Commit a fragment to a shard (-shard, -text, -anchor, -group)
-  nektar recall         Recall fragments from a shard (-shard, -query, -spv)
+  nektar recall         Recall fragments (-shard optional, -query, -spv)
   nektar anchor         Anchor unanchored fragments in a shard (-shard)
   nektar verify         Verify a nektarr1.* receipt token (-token)
   nektar status         Print node identity, wallet balance, shards, policy hash, and SpendGuard state
   nektar check-mainnet  Verify mainnet safety environment gates before live launch
-  nektar dock           Print client MCP / L0 Proxy connection config for Claude, Codex, and OpenAI SDKs
   nektar version        Print build version`)
 }
 
@@ -106,6 +132,20 @@ func envUint64(key string, fallback uint64) uint64 {
 	return fallback
 }
 
+func parseCSVEnv(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func defaultDataDir() string {
 	if v := os.Getenv("NEKTAR_DATA_DIR"); v != "" {
 		return v
@@ -114,7 +154,15 @@ func defaultDataDir() string {
 	return filepath.Join(home, ".nektar")
 }
 
-func openRuntime(ctx context.Context, networkOverride, dataDirOverride string) (*memory.Service, *market.Engine, func(), error) {
+type runtimeBundle struct {
+	mem     *memory.Service
+	mkt     *market.Engine
+	disc    *discovery.Service
+	dataDir string
+	closeFn func()
+}
+
+func openRuntime(ctx context.Context, networkOverride, dataDirOverride string, listenPort string) (*runtimeBundle, error) {
 	net := networkOverride
 	if net == "" {
 		net = envOr("NEKTAR_NETWORK", "memory")
@@ -124,7 +172,7 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string) (
 		dir = defaultDataDir()
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	dbPath := filepath.Join(dir, "nektar.sqlite")
 	if net == "memory" && dataDirOverride == "" && os.Getenv("NEKTAR_DATA_DIR") == "" {
@@ -132,7 +180,7 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string) (
 	}
 	db, err := store.Open(dbPath)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	port, err := chain.Open(ctx, chain.Config{
 		Network:        net,
@@ -154,14 +202,17 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string) (
 	})
 	if err != nil {
 		_ = db.Close()
-		return nil, nil, nil, err
+		return nil, err
 	}
 	objStore, err := bstack.NewFileObjectStore(dir)
 	if err != nil {
 		_ = db.Close()
-		return nil, nil, nil, err
+		return nil, err
 	}
-	publicURL := strings.TrimRight(envOr("NEKTAR_PUBLIC_URL", "http://127.0.0.1:"+envOr("NEKTAR_HTTP_PORT", "8080")), "/")
+	if listenPort == "" {
+		listenPort = envOr("NEKTAR_HTTP_PORT", DefaultLocalPort)
+	}
+	publicURL := strings.TrimRight(envOr("NEKTAR_PUBLIC_URL", "http://127.0.0.1:"+listenPort), "/")
 	mem, err := memory.New(db, port, bstack.NewGroupRegistry(), objStore, memory.Config{
 		VerifyBaseURL: publicURL + "/v1/verify",
 		ModelID: reasoning.ModelIdentity{
@@ -172,34 +223,73 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string) (
 	})
 	if err != nil {
 		_ = db.Close()
-		return nil, nil, nil, err
+		return nil, err
 	}
 	mkt := market.NewEngine(mem, market.DefaultPolicy())
-	return mem, mkt, func() { _ = db.Close() }, nil
+	_ = market.SyncPolicyFromDB(db, mkt.Policy())
+	disc := discovery.New(mem, parseCSVEnv("NEKTAR_MARKET_HOSTS"), nil)
+	return &runtimeBundle{
+		mem:     mem,
+		mkt:     mkt,
+		disc:    disc,
+		dataDir: dir,
+		closeFn: func() { _ = db.Close() },
+	}, nil
+}
+
+func extractPort(listenAddr string) (int, string) {
+	_, portStr, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		portStr = strings.TrimPrefix(listenAddr, ":")
+	}
+	p, _ := strconv.Atoi(portStr)
+	if p == 0 {
+		p = 18420
+		portStr = DefaultLocalPort
+	}
+	return p, portStr
 }
 
 func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	addr := fs.String("listen", ":"+envOr("NEKTAR_HTTP_PORT", "8080"), "HTTP listen address")
+	addr := fs.String("listen", ":"+envOr("NEKTAR_HTTP_PORT", DefaultLocalPort), "HTTP listen address")
 	restateAddr := fs.String("restate-listen", os.Getenv("NEKTAR_RESTATE_LISTEN"), "Optional dedicated Restate HTTP/2 endpoint address (e.g. :9080)")
-	withHub := fs.Bool("hub", os.Getenv("NEKTAR_EMBED_HUB") == "1", "Mount embedded Go Overlay Hub at /hub/")
-	net := fs.String("network", "", "Network override (memory|regtest|testnet|main)")
+	withHub := fs.Bool("hub", os.Getenv("NEKTAR_EMBED_HUB") == "1", "Mount embedded durable SQLite Go Overlay Hub at /hub/ with starter liquidity & bounties")
+	netName := fs.String("network", "", "Network override (memory|regtest|testnet|main)")
 	dataDir := fs.String("data-dir", "", "Data directory override")
+	publicURLFlag := fs.String("public-url", os.Getenv("NEKTAR_PUBLIC_URL"), "Publicly reachable HTTP base URL for direct A2A trades (empty = NAT bbox fallback)")
+	hostsFlag := fs.String("hosts", os.Getenv("NEKTAR_MARKET_HOSTS"), "Comma-separated market hub URLs to join")
 	_ = fs.Parse(args)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	mem, mkt, closeFn, err := openRuntime(ctx, *net, *dataDir)
+	portNum, portStr := extractPort(*addr)
+	rt, err := openRuntime(ctx, *netName, *dataDir, portStr)
 	if err != nil {
 		return err
 	}
-	defer closeFn()
+	defer rt.closeFn()
 
+	// Cold-start zero-empty-room welcome shard + UTXO fan-out!
+	if _, err := rt.mem.EnsureWelcome(ctx); err != nil {
+		log.Printf("welcome seed warning: %v", err)
+	}
+	if rt.mem.Chain().BalanceSats() > 10_000 {
+		_ = rt.mem.Chain().EnsureSplitCoins(ctx, 4, 2000)
+	}
+
+	// Optionally mount durable embedded Go Overlay Hub at /hub/ with Liquidity Engine + Bounties + Faucet!
 	var hubNode *hub.Node
+	var liqState *hub.LiquidityState
 	if *withHub {
+		hubDBPath := filepath.Join(rt.dataDir, "hub.sqlite")
+		if rt.mem.Chain().Network() == "memory" && *dataDir == "" && os.Getenv("NEKTAR_DATA_DIR") == "" {
+			hubDBPath = ":memory:"
+		}
 		hubNode, err = hub.NewNode(hub.Config{
-			Network:       mem.Chain().Network(),
+			Network:       rt.mem.Chain().Network(),
+			DBPath:        hubDBPath,
 			EnableFinger:  true,
 			EnableBbox:    true,
 			EnableBlogs:   true,
@@ -207,30 +297,84 @@ func cmdServe(args []string) error {
 			EnableBsecret: true,
 			EnableBstore:  true,
 			Getenv:        os.Getenv,
-			ChainTracker:  mem.Chain().Tracker(),
+			ChainTracker:  rt.mem.Chain().Tracker(),
 		})
 		if err != nil {
 			return err
 		}
+		defer hubNode.Close()
+		liqState, err = hub.ArmHubLiquidity(ctx, hubNode, rt.mem, hub.LiquidityConfig{
+			SeedStarterShards: true,
+			ArmBounties:       true,
+			StarterPriceSats:  50,
+			BountyRewardSats:  100,
+		})
+		if err != nil {
+			log.Printf("hub liquidity warning: %v", err)
+		}
+		if peers := parseCSVEnv("NEKTAR_PEER_HUBS"); len(peers) > 0 {
+			hubNode.StartFederation(ctx, peers)
+		}
 	}
 
-	app, err := server.NewApp(mem, mkt, server.Config{
+	localBase := fmt.Sprintf("http://127.0.0.1:%d", portNum)
+	pubURL := strings.TrimRight(strings.TrimSpace(*publicURLFlag), "/")
+	if pubURL == "" && *withHub {
+		pubURL = localBase
+	}
+
+	// Merge any CLI --hosts into discovery!
+	if strings.TrimSpace(*hostsFlag) != "" {
+		var extra []string
+		for _, h := range strings.Split(*hostsFlag, ",") {
+			if h = strings.TrimSpace(h); h != "" {
+				extra = append(extra, h)
+			}
+		}
+		rt.disc = discovery.New(rt.mem, extra, nil)
+	}
+
+	var appRef *server.App
+	broker := market.NewBroker(rt.mem, rt.mkt, rt.disc, market.BrokerConfig{
+		PublicURL:  pubURL,
+		BboxOffice: envOr("NEKTAR_BBOX_OFFICE", "default"),
+		Handle:     os.Getenv("NEKTAR_HANDLE"),
+		IsHub:      *withHub,
+		OnStateChange: func(ev string, _ any) {
+			if appRef != nil {
+				appRef.BroadcastDashboardEvent(ev)
+			}
+		},
+	})
+	if liqState != nil {
+		broker.SetAdvertisedPacks(liqState.Packs, liqState.BountyDomains)
+	}
+
+	apiTok := envOr("NEKTAR_API_TOKEN", os.Getenv("NEKTAR_HTTP_TOKEN"))
+	opTok := os.Getenv("NEKTAR_OPERATOR_TOKEN")
+	app, err := server.NewApp(rt.mem, rt.mkt, server.Config{
 		ListenAddr:        *addr,
-		PublicURL:         os.Getenv("NEKTAR_PUBLIC_URL"),
-		APIToken:          os.Getenv("NEKTAR_API_TOKEN"),
+		PublicURL:         pubURL,
+		APIToken:          apiTok,
+		OperatorToken:     opTok,
+		ToolProfile:       envOr("NEKTAR_TOOL_PROFILE", "operator"),
 		OpenAIUpstream:    os.Getenv("NEKTAR_OPENAI_UPSTREAM"),
 		AnthropicUpstream: os.Getenv("NEKTAR_ANTHROPIC_UPSTREAM"),
 		Hub:               hubNode,
+		Discovery:         rt.disc,
+		Broker:            broker,
 		MountRestate:      true,
+		RestateAdminURL:   os.Getenv("NEKTAR_RESTATE_ADMIN"),
 	})
 	if err != nil {
 		return err
 	}
+	appRef = app
 
 	if *restateAddr != "" {
 		go func() {
 			log.Printf("nektar restate Go SDK endpoint listening on %s (BuyerDeal, SellerDeal, Custody, Tx, AnchorCadence)", *restateAddr)
-			if rErr := mkt.BindRestate(restateserver.NewRestate()).Start(ctx, *restateAddr); rErr != nil && ctx.Err() == nil {
+			if rErr := rt.mkt.BindRestate(restateserver.NewRestate()).Start(ctx, *restateAddr); rErr != nil && ctx.Err() == nil {
 				log.Printf("restate server stopped: %v", rErr)
 			}
 		}()
@@ -239,17 +383,38 @@ func cmdServe(args []string) error {
 			go func() {
 				time.Sleep(500 * time.Millisecond)
 				rc := market.NewRestateClient(os.Getenv("NEKTAR_RESTATE_URL"), adminURL)
-				if err := rc.RegisterDeployment(ctx, epURI, true); err != nil {
+				if changed, err := rc.EnsureDeployment(ctx, epURI, false); err != nil {
 					log.Printf("restate auto-register (%s -> %s): %v", adminURL, epURI, err)
-				} else {
+				} else if changed {
 					log.Printf("restate Go SDK deployment registered (%s -> %s)", adminURL, epURI)
 				}
 			}()
 		}
 	}
 
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		return err
+	}
+	actualPort := ln.Addr().(*net.TCPAddr).Port
+	actualURL := fmt.Sprintf("http://127.0.0.1:%d", actualPort)
+	if *withHub && pubURL == localBase {
+		broker.SetPublicURL(actualURL)
+	}
+
+	// Write daemon.json so `nektar mcp`, `nektar open`, `nektar hook`, `nektar dock`, and Hermes auto-discover us!
+	_ = server.WriteDaemonInfo(rt.dataDir, server.DaemonInfo{
+		PID:       os.Getpid(),
+		Port:      actualPort,
+		URL:       actualURL,
+		Network:   rt.mem.Chain().Network(),
+		DataDir:   rt.dataDir,
+		AuthToken: apiTok,
+		StartedAt: time.Now().Unix(),
+	})
+	defer server.RemoveDaemonInfo(rt.dataDir)
+
 	httpSrv := &http.Server{
-		Addr:              *addr,
 		Handler:           app.Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
 	}
@@ -260,8 +425,26 @@ func cmdServe(args []string) error {
 		_ = httpSrv.Shutdown(shutCtx)
 	}()
 
-	log.Printf("nektar v%s listening on %s (network=%s, pub=%s)", Version, *addr, mem.Chain().Network(), mem.Chain().IdentityPubHex()[:16]+"...")
-	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	// Once listener is live, self-join embedded Hub, start Broker SSE/poll/bbox loops, announce on `dir`, and seed packs!
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		if *withHub {
+			_, _, _ = rt.disc.JoinHost(ctx, actualURL+"/hub")
+		}
+		broker.Start(ctx)
+		_, _ = broker.AnnounceSelf(ctx)
+		if seedDoms := parseCSVEnv("NEKTAR_SEED_DOMAINS"); len(seedDoms) > 0 {
+			if n, sErr := rt.disc.SeedFromNetwork(ctx, seedDoms); sErr == nil && n > 0 {
+				log.Printf("seeded %d verified fragment(s) from network CHIRP packs", n)
+			}
+		}
+	}()
+
+	log.Printf("nektar v%s listening on %s (network=%s, pub=%s, hub=%v)", Version, actualURL, rt.mem.Chain().Network(), rt.mem.Chain().IdentityPubHex()[:16]+"...", *withHub)
+	if apiTok != "" || opTok != "" {
+		log.Printf("dashboard 1-click pairing URL: %s/pair?code=%s", actualURL, app.CreatePairCode())
+	}
+	if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil
@@ -269,34 +452,57 @@ func cmdServe(args []string) error {
 
 func cmdMCP(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
-	net := fs.String("network", "", "Network override")
+	netName := fs.String("network", "", "Network override")
 	dataDir := fs.String("data-dir", "", "Data directory override")
+	direct := fs.Bool("direct", false, "Force in-process stdio MCP instead of bridging to a running daemon")
 	_ = fs.Parse(args)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	mem, mkt, closeFn, err := openRuntime(ctx, *net, *dataDir)
+	dir := *dataDir
+	if dir == "" {
+		dir = defaultDataDir()
+	}
+	// One brain, many mouths: if a live `nektar serve` daemon is running, transparently bridge stdio -> /mcp!
+	if !*direct {
+		if info, ok := server.DetectLiveDaemon(dir); ok {
+			return server.RunStdioBridge(ctx, info.URL, info.AuthToken, os.Stdin, os.Stdout)
+		}
+	}
+
+	rt, err := openRuntime(ctx, *netName, *dataDir, DefaultLocalPort)
 	if err != nil {
 		return err
 	}
-	defer closeFn()
+	defer rt.closeFn()
+	_, _ = rt.mem.EnsureWelcome(ctx)
 
-	srv := server.NewMCPServer(mem, mkt)
+	broker := market.NewBroker(rt.mem, rt.mkt, rt.disc, market.BrokerConfig{})
+	tb := server.NewToolbox(rt.mem, rt.mkt, broker, rt.disc, nil, envOr("NEKTAR_TOOL_PROFILE", "agent"))
+	srv := server.NewMCPServerWithToolbox(tb)
 	return srv.Run(ctx, &mcp.StdioTransport{})
 }
 
 func cmdHub(args []string) error {
 	fs := flag.NewFlagSet("hub", flag.ExitOnError)
-	addr := fs.String("listen", ":"+envOr("NEKTAR_HUB_PORT", "8081"), "Hub HTTP listen address")
-	net := fs.String("network", envOr("NEKTAR_NETWORK", "regtest"), "Network name")
+	addr := fs.String("listen", ":"+envOr("NEKTAR_HUB_PORT", "18421"), "Hub HTTP listen address")
+	netName := fs.String("network", envOr("NEKTAR_NETWORK", "memory"), "Network name")
+	dataDir := fs.String("data-dir", "", "Data directory for hub.sqlite")
+	peersFlag := fs.String("peers", os.Getenv("NEKTAR_PEER_HUBS"), "Comma-separated sibling Hub URLs to federate with")
 	_ = fs.Parse(args)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	dir := *dataDir
+	if dir == "" {
+		dir = defaultDataDir()
+	}
+	dbPath := filepath.Join(dir, "hub.sqlite")
 	node, err := hub.NewNode(hub.Config{
-		Network:       *net,
+		Network:       *netName,
+		DBPath:        dbPath,
 		EnableFinger:  true,
 		EnableBbox:    true,
 		EnableBlogs:   true,
@@ -308,6 +514,18 @@ func cmdHub(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer node.Close()
+
+	if strings.TrimSpace(*peersFlag) != "" {
+		var peers []string
+		for _, p := range strings.Split(*peersFlag, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				peers = append(peers, p)
+			}
+		}
+		node.StartFederation(ctx, peers)
+	}
+
 	httpSrv := &http.Server{Addr: *addr, Handler: node.Handler(), ReadHeaderTimeout: 15 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -315,7 +533,7 @@ func cmdHub(args []string) error {
 		defer cancel()
 		_ = httpSrv.Shutdown(shutCtx)
 	}()
-	log.Printf("nektar hub v%s listening on %s (topics=%d lookups=%d)", Version, *addr, len(node.Topics()), len(node.Lookups()))
+	log.Printf("nektar hub v%s listening on %s (db=%s topics=%d lookups=%d)", Version, *addr, dbPath, len(node.Topics()), len(node.Lookups()))
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
@@ -332,13 +550,13 @@ func cmdRemember(args []string) error {
 	_ = fs.Parse(args)
 
 	ctx := context.Background()
-	mem, _, closeFn, err := openRuntime(ctx, "", *dataDir)
+	rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
 	if err != nil {
 		return err
 	}
-	defer closeFn()
+	defer rt.closeFn()
 
-	res, err := mem.Remember(ctx, memory.RememberInput{
+	res, err := rt.mem.Remember(ctx, memory.RememberInput{
 		Shard:      *shard,
 		Text:       *text,
 		BorgGroup:  *group,
@@ -352,24 +570,24 @@ func cmdRemember(args []string) error {
 
 func cmdRecall(args []string) error {
 	fs := flag.NewFlagSet("recall", flag.ExitOnError)
-	shard := fs.String("shard", "default", "Target shard name")
+	shard := fs.String("shard", "", "Optional shard name (omit to recall across all shards)")
 	query := fs.String("query", "", "Filter query")
 	spv := fs.Bool("spv", false, "Verify SPV proofs offline")
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
 
 	ctx := context.Background()
-	mem, _, closeFn, err := openRuntime(ctx, "", *dataDir)
+	rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
 	if err != nil {
 		return err
 	}
-	defer closeFn()
+	defer rt.closeFn()
 
-	res, err := mem.Recall(ctx, memory.RecallInput{Shard: *shard, Query: *query, VerifySPV: *spv})
+	shards, items, err := rt.mem.RecallAllShards(ctx, memory.RecallInput{Shard: *shard, Query: *query, VerifySPV: *spv})
 	if err != nil {
 		return err
 	}
-	return printJSON(res)
+	return printJSON(map[string]any{"shards": shards, "items": items, "count": len(items)})
 }
 
 func cmdAnchor(args []string) error {
@@ -379,13 +597,13 @@ func cmdAnchor(args []string) error {
 	_ = fs.Parse(args)
 
 	ctx := context.Background()
-	mem, _, closeFn, err := openRuntime(ctx, "", *dataDir)
+	rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
 	if err != nil {
 		return err
 	}
-	defer closeFn()
+	defer rt.closeFn()
 
-	res, err := mem.AnchorShard(ctx, *shard)
+	res, err := rt.mem.AnchorShard(ctx, *shard)
 	if err != nil {
 		return err
 	}
@@ -399,13 +617,13 @@ func cmdVerify(args []string) error {
 	_ = fs.Parse(args)
 
 	ctx := context.Background()
-	mem, _, closeFn, err := openRuntime(ctx, "", *dataDir)
+	rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
 	if err != nil {
 		return err
 	}
-	defer closeFn()
+	defer rt.closeFn()
 
-	res, err := mem.VerifyReceipt(ctx, *token)
+	res, err := rt.mem.VerifyReceipt(ctx, *token)
 	if err != nil {
 		return err
 	}
@@ -417,13 +635,22 @@ func cmdStatus(args []string) error {
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
 
+	dir := *dataDir
+	if dir == "" {
+		dir = defaultDataDir()
+	}
+	if info, ok := server.DetectLiveDaemon(dir); ok {
+		if out, err := callLiveTool(info, "status", map[string]any{}); err == nil {
+			return printJSON(out)
+		}
+	}
 	ctx := context.Background()
-	mem, mkt, closeFn, err := openRuntime(ctx, "", *dataDir)
+	rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
 	if err != nil {
 		return err
 	}
-	defer closeFn()
-	return printJSON(server.BuildStatus(ctx, mem, mkt))
+	defer rt.closeFn()
+	return printJSON(server.BuildStatus(ctx, rt.mem, rt.mkt))
 }
 
 func cmdCheckMainnet() error {
@@ -441,32 +668,6 @@ func cmdCheckMainnet() error {
 		return fmt.Errorf("mainnet gate incomplete — set: %s", strings.Join(missing, ", "))
 	}
 	fmt.Println("mainnet gates OK: confirmation, headers source, settlement spec, and SpendGuard configured")
-	return nil
-}
-
-func cmdDock(args []string) error {
-	fs := flag.NewFlagSet("dock", flag.ExitOnError)
-	url := fs.String("url", "http://127.0.0.1:"+envOr("NEKTAR_HTTP_PORT", "8080"), "Nektar HTTP base URL")
-	_ = fs.Parse(args)
-	u := strings.TrimRight(*url, "/")
-	fmt.Printf(`Nektar v%s client docking snippets:
-
-1) Claude Code / Cursor / Codex (stdio MCP):
-   { "mcpServers": { "nektar": { "command": "nektar", "args": ["mcp"] } } }
-
-2) Streamable HTTP MCP endpoint:
-   %s/mcp
-
-3) Zero-code L0 OpenAI SDK Memory Proxy:
-   OPENAI_BASE_URL=%s/v1/proxy/openai/v1
-
-4) Zero-code L0 Anthropic SDK Memory Proxy:
-   ANTHROPIC_BASE_URL=%s/v1/proxy/anthropic
-
-5) A2A Agent Card & Dashboard:
-   %s/.well-known/agent.json
-   %s/dashboard
-`, Version, u, u, u, u, u)
 	return nil
 }
 

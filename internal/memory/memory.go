@@ -374,9 +374,9 @@ func shardIdentifier(shard string, pubBytes []byte) string {
 	return core.ToHex(h)
 }
 
-// RecallInput specifies a shard recall query.
+// RecallInput specifies a shard recall query (omit Shard to search across all non-system shards).
 type RecallInput struct {
-	Shard             string           `json:"shard"`
+	Shard             string           `json:"shard,omitempty"`
 	Query             string           `json:"query,omitempty"`
 	Principal         policy.Principal `json:"principal,omitempty"`
 	CallerPub         string           `json:"callerPub,omitempty"`

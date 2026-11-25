@@ -2,12 +2,17 @@
   "hooks": {
     "Stop": [
       {
-        "hooks": [{ "type": "command", "command": "node integrations/claude-code/verify-receipt.mjs" }]
+        "hooks": [{ "type": "command", "command": "nektar hook verify-receipt" }]
       }
     ],
     "SessionStart": [
       {
-        "hooks": [{ "type": "command", "command": "node integrations/claude-code/session-start.mjs" }]
+        "hooks": [{ "type": "command", "command": "nektar hook session-start" }]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{ "type": "command", "command": "nektar hook prefetch" }]
       }
     ]
   }

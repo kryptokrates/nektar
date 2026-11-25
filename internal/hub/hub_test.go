@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -117,4 +118,142 @@ func TestEmbeddedHubWithLightwebFingerAndSSE(t *testing.T) {
 	if len(resList) != 1 {
 		t.Fatalf("expected 1 lookup result, got %#v", parsed)
 	}
+}
+
+func TestHubSQLiteRestartFederationBboxAndBounties(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "hub1.sqlite")
+	node1, err := NewNode(Config{Network: "memory", DBPath: dbPath})
+	if err != nil {
+		t.Fatalf("NewNode 1: %v", err)
+	}
+	buyerKey, _ := ec.NewPrivateKey()
+	want := bstack.WantAd{
+		WantID:   "persist-want-1",
+		Pub:      hex.EncodeToString(buyerKey.PubKey().Compressed()),
+		Net:      "memory",
+		Domains:  []string{"ops"},
+		Query:    "durable hub check",
+		MaxSats:  500,
+		Revision: 1,
+		Exp:      time.Now().Add(time.Hour).UnixMilli(),
+	}
+	sig, _ := bstack.SignArtifact(buyerKey, want)
+	body, _ := json.Marshal(bstack.SignedWant{Want: want, Sig: sig})
+	cborBytes, _ := bstack.EncodePayload(bstack.MarketPayload{Kind: bstack.KindWant, Body: body})
+	ls := &script.Script{}
+	_ = ls.AppendOpcodes(script.OpFALSE, script.OpRETURN)
+	_ = ls.AppendPushData(cborBytes)
+	tx := transaction.NewTransaction()
+	tx.AddOutput(&transaction.TransactionOutput{Satoshis: 0, LockingScript: ls})
+	beef, _ := tx.AtomicBEEF(false)
+
+	lane := bstack.LaneOf("memory", "ops")
+	if _, err := node1.Submit(context.Background(), beef, []string{lane}); err != nil {
+		t.Fatalf("Submit to hub1: %v", err)
+	}
+	_ = node1.Close()
+
+	// Reopen Hub 1 on the SAME SQLite file and assert event survives restart + replays over cursored SSE!
+	node1Reopened, err := NewNode(Config{Network: "memory", DBPath: dbPath})
+	if err != nil {
+		t.Fatalf("Reopen hub1: %v", err)
+	}
+	defer node1Reopened.Close()
+	ts1 := httptest.NewServer(node1Reopened.Handler())
+	defer ts1.Close()
+
+	// Verify /events?cursor=0 replays persisted seq=1 after restart!
+	sseCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(sseCtx, http.MethodGet, ts1.URL+"/events?cursor=0", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /events?cursor=0: %v", err)
+	}
+	sc := bufio.NewScanner(resp.Body)
+	replayed := false
+	for sc.Scan() {
+		if strings.Contains(sc.Text(), "persist-want-1") {
+			replayed = true
+			break
+		}
+	}
+	resp.Body.Close()
+	if !replayed {
+		t.Fatal("expected SQLite-persisted want to replay over /events?cursor=0 after hub restart")
+	}
+
+	// Start Hub 2 federating from Hub 1 and verify it pulls persist-want-1 automatically!
+	node2, err := NewNode(Config{Network: "memory"})
+	if err != nil {
+		t.Fatalf("NewNode 2: %v", err)
+	}
+	defer node2.Close()
+	fedCtx, fedCancel := context.WithCancel(context.Background())
+	defer fedCancel()
+	node2.StartFederation(fedCtx, []string{ts1.URL})
+
+	deadline := time.Now().Add(4 * time.Second)
+	federated := false
+	for time.Now().Before(deadline) {
+		evs, _ := node2.Store().EventsSince(0, nil, 10)
+		if len(evs) > 0 {
+			federated = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !federated {
+		t.Fatal("expected Hub 2 to federate persist-want-1 from Hub 1")
+	}
+
+	// Verify NAT bbox relay (/bbox/send & /bbox/inbox).
+	bboxPayload, _ := json.Marshal(BboxMessage{
+		Office:       "default",
+		RecipientPub: "02aaaa",
+		SenderPub:    "02bbbb",
+		DealID:       "deal-nat-1",
+		Kind:         "purchase_beef",
+		Body:         json.RawMessage(`{"ok":true}`),
+	})
+	bResp, err := http.Post(ts1.URL+"/bbox/send", "application/json", bytes.NewReader(bboxPayload))
+	if err != nil || bResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /bbox/send failed: err=%v resp=%+v", err, bResp)
+	}
+	bResp.Body.Close()
+	inResp, err := http.Get(ts1.URL + "/bbox/inbox?pub=02aaaa&since=0")
+	if err != nil || inResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /bbox/inbox failed: err=%v", err)
+	}
+	var inbox struct {
+		Messages []BboxMessage `json:"messages"`
+	}
+	_ = json.NewDecoder(inResp.Body).Decode(&inbox)
+	inResp.Body.Close()
+	if len(inbox.Messages) != 1 || inbox.Messages[0].DealID != "deal-nat-1" {
+		t.Fatalf("expected 1 bbox message, got %+v", inbox.Messages)
+	}
+
+	// Verify bounty registration, payout handler, and duplicate-HDP rejection (HTTP 409).
+	_ = node1Reopened.Store().UpsertBounty(Bounty{ID: "b-test", Domain: "ops", Question: "test", RewardSats: 100, MaxFills: 5, Active: true})
+	node1Reopened.SetBountyHandler(func(_ context.Context, b Bounty, sub BountySubmission) (*BountyPayoutResult, error) {
+		return &BountyPayoutResult{Accepted: true, BountyID: b.ID, RewardSats: b.RewardSats, TxID: "deadbeef"}, nil
+	})
+	subBody, _ := json.Marshal(BountySubmission{
+		BountyID:      "b-test",
+		SellerPub:     "02cccc",
+		SellerAddress: "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+		HDP:           "hdp-unique-1",
+		Text:          "verified ops fact for hub bounty",
+	})
+	r1, err := http.Post(ts1.URL+"/bounties/submit", "application/json", bytes.NewReader(subBody))
+	if err != nil || r1.StatusCode != http.StatusOK {
+		t.Fatalf("first bounty submit failed: err=%v resp=%+v", err, r1)
+	}
+	r1.Body.Close()
+	r2, err := http.Post(ts1.URL+"/bounties/submit", "application/json", bytes.NewReader(subBody))
+	if err != nil || r2.StatusCode != http.StatusConflict {
+		t.Fatalf("expected HTTP 409 on duplicate HDP bounty submit, got err=%v code=%d", err, r2.StatusCode)
+	}
+	r2.Body.Close()
 }

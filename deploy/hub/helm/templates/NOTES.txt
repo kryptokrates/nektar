@@ -1,19 +1,10 @@
-nektar-hub installed as {{ .Release.Name }}.
+nektar-hub v0.4 installed as {{ .Release.Name }}.
 
-Workloads:
-  {{ include "nektar-hub.fullname" . }}-agent      agent (StatefulSet)
-  {{ include "nektar-hub.fullname" . }}-db         overlay mysql (StatefulSet)
-  {{ include "nektar-hub.fullname" . }}-shim       header shim (Deployment)
-{{- range $h := .Values.hosts }}
-  {{ include "nektar-hub.fullname" $ }}-host-{{ $h.name }}     engine+watch Pod (StatefulSet, svc :8080/:8081)
+Workload:
+  {{ include "nektar-hub.fullname" . }}-hub      single-binary Go Agent + embedded 16-lane SQLite Overlay Hub (:18420)
+
+Health check:
+  kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "nektar-hub.fullname" . }}-hub
+{{- if .Values.publicUrl }}
+  curl -fsS {{ .Values.publicUrl }}/v1/health
 {{- end }}
-
-Your announce advertises NEKTAR_MARKET_HOSTS =
-  {{ required "marketHosts is required" .Values.marketHosts }}
-— those must be the PUBLIC URLs other operators dial (usually the ingress
-hosts above). Verify each answers:
-
-  curl -sf {{ index (splitList "," .Values.marketHosts) 0 }}/healthz || true
-
-Watch the rollout:
-  kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "nektar-hub.fullname" . }}-agent

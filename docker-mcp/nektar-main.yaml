@@ -1,66 +1,42 @@
 name: nektar-main
-title: nektar on BSV MAINNET (real funds — capped)
+title: nektar — verifiable agent memory (BSV mainnet)
 type: server
-image: nektar:local
-description: >-
-  nektar on BSV mainnet via BSV Broadcaster (GorillaPool) + WhatsOnChain. Anchor fees are paid
-  by a dedicated operator fee key (generated on first start; its address is
-  printed to stderr — fund it deliberately). All broadcasts pass a SpendGuard:
-  per-tx fee cap, per-day spend cap, min broadcast interval, persisted ledger.
-  Keys are encrypted at rest (NEKTAR_KEY_PASSPHRASE). Records, anchor state and
-  the spend ledger persist in the nektar-main-data volume. NEKTAR_MAINNET_CONFIRM
-  is required config — it is never defaulted.
+image: ghcr.io/kryptokrates/nektar:latest
+command:
+  - mcp
 longLived: true
 volumes:
   - nektar-main-data:/data
-secrets:
-  - name: nektar-main.key_passphrase
-    env: NEKTAR_KEY_PASSPHRASE
-    example: <long random passphrase>
-    description: Encrypts keys.json and fee.key.json at rest (required)
-  - name: nektar-main.broadcaster_api_key
-    env: NEKTAR_BROADCASTER_API_KEY
-    example: <gorillapool broadcaster api key — optional>
-    description: BSV Broadcaster API key (public policy/broadcast works without it; a key lifts rate limits)
-  - name: nektar-main.fund_wif
-    env: NEKTAR_FUND_WIF
-    example: <WIF — optional>
-    description: Operator fee key as WIF. If unset, a fee.key.json key is generated and its address printed.
+description: >-
+  BSV mainnet deployment (real satoshis). Requires explicit confirmation
+  NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND and configured headers/settler endpoints.
+  SpendGuard caps every broadcast fail-closed.
 env:
   - name: NEKTAR_NETWORK
     value: main
   - name: NEKTAR_MAINNET_CONFIRM
-    value: '{{nektar-main.mainnet_confirm}}'
-  - name: NEKTAR_MAX_FEE_SATS_PER_TX
-    value: '{{nektar-main.max_fee_sats_per_tx}}'
-  - name: NEKTAR_MAX_SPEND_SATS_PER_DAY
-    value: '{{nektar-main.max_spend_sats_per_day}}'
-  - name: NEKTAR_MIN_BROADCAST_INTERVAL_MS
-    value: '{{nektar-main.min_broadcast_interval_ms}}'
-  - name: NEKTAR_MODEL_ID
-    value: '{{nektar-main.model_id}}'
-  - name: NEKTAR_CLEARANCE_AUTHORITIES
-    value: '{{nektar-main.clearance_authorities}}'
+    value: '{{nektar.mainnet_confirm}}'
+  - name: NEKTAR_TOOL_PROFILE
+    value: agent
+  - name: NEKTAR_HEADERS_SOURCE
+    value: woc:main
+  - name: NEKTAR_SETTLE_SPEC
+    value: arcade:https://arcade.gorillapool.io
+  - name: NEKTAR_MAX_FEE_PER_TX
+    value: '{{nektar.max_fee_per_tx}}'
+  - name: NEKTAR_MAX_SPEND_PER_DAY
+    value: '{{nektar.max_spend_per_day}}'
 config:
-  - name: nektar-main
-    description: Mainnet deployment — real BSV, read the SpendGuard caps
+  - name: nektar
+    description: BSV mainnet deployment — real satoshis
     type: object
     properties:
       mainnet_confirm:
         type: string
-        description: MUST be exactly "I_UNDERSTAND" — acknowledges this spends real BSV
-      max_fee_sats_per_tx:
+        description: Must be set to I_UNDERSTAND to enable mainnet broadcasts
+      max_fee_per_tx:
         type: integer
         description: Per-transaction fee cap in sats (default 1000)
-      max_spend_sats_per_day:
+      max_spend_per_day:
         type: integer
-        description: Daily fee spend cap in sats, UTC day (default 20000)
-      min_broadcast_interval_ms:
-        type: integer
-        description: Minimum ms between broadcasts (default 10000)
-      model_id:
-        type: string
-        description: Exact model identity bound into answer receipts
-      clearance_authorities:
-        type: string
-        description: Comma-separated pubkeys trusted to issue clearance credentials (level > 0 reads)
+        description: Daily fee spend cap in sats (default 20000)

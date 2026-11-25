@@ -1,31 +1,64 @@
-# Nektar v0.4 Hub — Collapsed from 12 containers + 2x MariaDB + Node watch/header shims
-# down to ONE static Go binary hosting:
-#   - Nektar Agent (MCP + HTTP + A2A + L0 LLM Proxy + Svelte Dashboard + Restate services)
+# Nektar v0.4 Hub — Single static Pure-Go binary + active Restate durable executor hosting:
+#   - Nektar Agent (MCP + HTTP + A2A + L0 LLM Proxy + Svelte 5 Dashboard + Restate services)
 #   - Embedded Go Overlay Hub (tm_nektar_<net>_0..f, ls_nektar, bfinger, bbox, blogs, borg, bsecret, bstore)
-#   - Native SSE /hub/events push (zero watch-shim containers, zero MySQL/MariaDB!)
+#   - Native SSE /hub/events push, curated starter liquidity, verified bounties & testnet faucet
 #
 #   docker compose -f deploy/hub/compose.yaml up -d
 #   docker compose -f deploy/hub/compose.yaml --profile tls up -d
+#   docker compose -f deploy/hub/compose.yaml --profile tls --profile tunnel up -d
 name: nektar-hub
 services:
+  restate:
+    image: docker.restate.dev/restatedev/restate:1.8.1
+    restart: unless-stopped
+    environment:
+      RESTATE_NODE_NAME: nektar-hub
+      RESTATE_REQUEST_IDENTITY_PRIVATE_KEY: ${RESTATE_REQUEST_IDENTITY_PRIVATE_KEY:-}
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://127.0.0.1:9070/health >/dev/null 2>&1 || wget -qO- http://127.0.0.1:9070/health >/dev/null 2>&1 || true']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - restate-data:/restate-data
+
   hub:
     image: ghcr.io/kryptokrates/nektar:${NEKTAR_IMAGE_TAG:-latest}${NEKTAR_IMAGE_DIGEST:+@${NEKTAR_IMAGE_DIGEST}}
     restart: unless-stopped
-    command: ['serve', '-listen', ':8080', '-restate-listen', ':9080', '-hub']
+    command: ['serve', '-listen', ':18420', '-restate-listen', ':9080', '-hub']
+    depends_on:
+      restate:
+        condition: service_healthy
     ports:
-      - '${NEKTAR_HTTP_PORT:-8080}:8080'
+      - '${NEKTAR_HTTP_PORT:-18420}:18420'
     environment:
       NEKTAR_NETWORK: ${NEKTAR_NETWORK:-testnet}
       NEKTAR_DATA_DIR: /data
+      NEKTAR_HTTP_PORT: '18420'
+      NEKTAR_CONTAINER: '1'
       NEKTAR_EMBED_HUB: '1'
       NEKTAR_PUBLIC_URL: ${NEKTAR_PUBLIC_URL:-}
-      NEKTAR_API_TOKEN: ${NEKTAR_API_TOKEN:-}
+      NEKTAR_HTTP_TOKEN: ${NEKTAR_HTTP_TOKEN:-}
+      NEKTAR_OPERATOR_TOKEN: ${NEKTAR_OPERATOR_TOKEN:-}
+      NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:-}
+      NEKTAR_PEER_HUBS: ${NEKTAR_PEER_HUBS:-}
+      NEKTAR_SEED_DOMAINS: ${NEKTAR_SEED_DOMAINS:-}
+      NEKTAR_TOOL_PRICES: ${NEKTAR_TOOL_PRICES:-}
+      NEKTAR_HUB_RESALE_SATS: ${NEKTAR_HUB_RESALE_SATS:-}
+      NEKTAR_FAUCET_DAILY_CAP: ${NEKTAR_FAUCET_DAILY_CAP:-50000}
       NEKTAR_HEADERS_SOURCE: ${NEKTAR_HEADERS_SOURCE:-woc:test}
       NEKTAR_SETTLE_SPEC: ${NEKTAR_SETTLE_SPEC:-}
       NEKTAR_ARCADE_KEY: ${NEKTAR_ARCADE_KEY:-}
       NEKTAR_WOC_KEY: ${NEKTAR_WOC_KEY:-}
+      NEKTAR_RESTATE_URL: ${NEKTAR_RESTATE_URL:-http://restate:8080}
+      NEKTAR_RESTATE_ADMIN: ${NEKTAR_RESTATE_ADMIN:-http://restate:9070}
+      NEKTAR_RESTATE_ENDPOINT_URI: ${NEKTAR_RESTATE_ENDPOINT_URI:-http://hub:9080}
+      NEKTAR_RESTATE_IDENTITY_KEY: ${NEKTAR_RESTATE_IDENTITY_KEY:-}
+      NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT: ${NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT:-1}
+      NEKTAR_RESTATE_INTERNAL_TOKEN: ${NEKTAR_RESTATE_INTERNAL_TOKEN:-}
+      NEKTAR_MAX_FEE_PER_TX: ${NEKTAR_MAX_FEE_PER_TX:-10000}
+      NEKTAR_MAX_SPEND_PER_DAY: ${NEKTAR_MAX_SPEND_PER_DAY:-100000}
       NEKTAR_MAINNET_CONFIRM: ${NEKTAR_MAINNET_CONFIRM:-}
-      # Optional Lightweb Go modules mounted directly in-process when configured:
       BBOX_OFFICES: ${BBOX_OFFICES:-}
       BLOGS_STREAMS: ${BLOGS_STREAMS:-}
       BORG_HALLS: ${BORG_HALLS:-}
@@ -33,15 +66,6 @@ services:
       BSTORE_BUCKETS: ${BSTORE_BUCKETS:-}
     volumes:
       - hub-data:/data
-
-  restate:
-    profiles: [restate]
-    image: docker.restate.dev/restatedev/restate:1.8.1
-    restart: unless-stopped
-    environment:
-      RESTATE_NODE_NAME: nektar-hub
-    volumes:
-      - restate-data:/restate-data
 
   caddy:
     profiles: [tls]
@@ -65,7 +89,7 @@ services:
     profiles: [tunnel]
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    command: ['tunnel', '--no-autoupdate', '--url', 'http://hub:8080']
+    command: ['tunnel', '--no-autoupdate', '--url', 'http://hub:18420']
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
     depends_on:
@@ -75,7 +99,7 @@ configs:
   caddyfile:
     content: |
       {$NEKTAR_DOMAIN::80} {
-        reverse_proxy hub:8080 {
+        reverse_proxy hub:18420 {
           flush_interval -1
         }
       }

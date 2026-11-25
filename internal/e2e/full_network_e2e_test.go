@@ -136,7 +136,6 @@ func spawnAgent(t *testing.T, ctx context.Context, opts agentOpts) *testAgent {
 		Hub:               hubNode,
 		Discovery:         disc,
 		Broker:            broker,
-		MountRestate:      true,
 	})
 	if err != nil {
 		t.Fatalf("%s server.NewApp: %v", opts.name, err)
@@ -259,7 +258,8 @@ func TestFiveNodeFullStackSmokeMeshSecurityAndChaos(t *testing.T) {
 		}
 		stResp.Body.Close()
 
-		// 2. Hermes agent.json name == "nektar" & Restate /restate/discover (all 5 services)
+		// 2. Hermes agent.json name == "nektar"; public :18420 MUST NOT expose /restate/ (returns 404);
+		//    dedicated Restate SDK endpoint exposes all 6 services with v4 manifest!
 		cardResp, _ := http.Get(alpha.ts.URL + "/.well-known/agent.json")
 		var card map[string]any
 		_ = json.NewDecoder(cardResp.Body).Decode(&card)
@@ -267,16 +267,28 @@ func TestFiveNodeFullStackSmokeMeshSecurityAndChaos(t *testing.T) {
 		if card["name"] != "nektar" {
 			t.Fatalf("agent.json name expected nektar, got %v", card["name"])
 		}
-		rsReq, _ := http.NewRequest(http.MethodGet, alpha.ts.URL+"/restate/discover", nil)
-		rsReq.Header.Set("Accept", "application/vnd.restate.endpointmanifest.v3+json")
-		rsResp, err := http.DefaultClient.Do(rsReq)
-		if err != nil || rsResp.StatusCode != http.StatusOK {
-			t.Fatalf("/restate/discover failed: %v", err)
+		pubRsResp, err := http.Get(alpha.ts.URL + "/restate/discover")
+		if err != nil {
+			t.Fatalf("GET /restate/discover failed: %v", err)
 		}
-		rsBody, _ := io.ReadAll(rsResp.Body)
-		rsResp.Body.Close()
-		for _, svc := range []string{"BuyerDeal", "SellerDeal", "Custody", "Tx", "AnchorCadence"} {
-			if !strings.Contains(string(rsBody), `"`+svc+`"`) {
+		pubRsResp.Body.Close()
+		if pubRsResp.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected public /restate/discover to return 404, got %d", pubRsResp.StatusCode)
+		}
+		rh, err := alpha.mkt.NewRestateServer().Handler()
+		if err != nil {
+			t.Fatalf("NewRestateServer().Handler: %v", err)
+		}
+		rsRec := httptest.NewRecorder()
+		rsReq := httptest.NewRequest(http.MethodGet, "/discover", nil)
+		rsReq.Header.Set("Accept", "application/vnd.restate.endpointmanifest.v4+json")
+		rh.ServeHTTP(rsRec, rsReq)
+		if rsRec.Code != http.StatusOK {
+			t.Fatalf("dedicated Restate /discover failed: code=%d body=%s", rsRec.Code, rsRec.Body.String())
+		}
+		rsBody := rsRec.Body.String()
+		for _, svc := range []string{"BuyerDeal", "SellerDeal", "Custody", "Tx", "AnchorCadence", "NektarRuntime"} {
+			if !strings.Contains(rsBody, `"`+svc+`"`) {
 				t.Fatalf("missing Restate service %s", svc)
 			}
 		}

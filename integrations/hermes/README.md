@@ -7,8 +7,8 @@ anchoring, checkable answer receipts, and policy-bounded knowledge trading.
 ## Zero-Config Install (3 commands)
 
 ```bash
-# 1. Start local nektar (zero env vars — defaults to BSV testnet + seeded welcome shard)
-./nektar --port 18420
+# 1. Start local nektar (zero env vars — defaults to persistent BSV testnet + seeded welcome shard on :18420)
+nektar serve
 
 # 2. Install the plugin (or run `nektar dock hermes` to wire plugin + skill + MCP in one step)
 hermes plugins install ./integrations/hermes

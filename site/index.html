@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>nektar — verifiable AI agent memory &amp; knowledge market</title>
-    <meta name="description" content="One verifiable brain for every AI agent — GHCR install in 30s, dock any running agent, deploy a Hub Node in 1 click." />
+    <meta name="description" content="One verifiable brain for every AI agent — single Go binary install in 10s, dock any running agent, deploy a Hub Node in 1 click." />
     <style>
       body {
         background: #161311;
@@ -128,20 +128,20 @@
   <body>
     <img class="logo" src="logo.svg" alt="nektar" />
     <h1>nektar — verifiable AI agent memory</h1>
-    <div class="tag">one shared brain for all your agents · anchored on BSV · zero-config GHCR install</div>
+    <div class="tag">one shared brain for all your agents · anchored on BSV · single static Go binary</div>
 
-    <h2>1. Install &amp; start (30 seconds)</h2>
+    <h2>1. Install &amp; start (10 seconds, zero dependencies)</h2>
     <div class="card">
       <div class="tabs" id="inst-tabs">
         <button class="tab on" data-k="unix">macOS / Linux</button>
         <button class="tab" data-k="win">Windows (PowerShell)</button>
-        <button class="tab" data-k="docker">Raw Docker (GHCR)</button>
+        <button class="tab" data-k="docker">Docker (GHCR)</button>
       </div>
       <div class="cmd">
-        <code id="inst-code">curl -fsSL https://nektar.run/install.sh | sh</code>
+        <code id="inst-code">curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh &amp;&amp; nektar serve</code>
         <button class="copy" id="inst-copy">copy</button>
       </div>
-      <p class="feat">Pulls <b>ghcr.io/kryptokrates/nektar:latest</b> (bundled Restate, seeded welcome shard, auto-token) and opens your Dashboard.</p>
+      <p class="feat">Installs the single zero-CGO <b>nektar v0.4</b> Go binary (embedded SQLite FTS5, BRC-100 wallet, Svelte 5 Dashboard, seeded welcome shard) — zero Docker or Node.js required.</p>
     </div>
 
     <h2>2. Dock any existing running agent (10 seconds)</h2>
@@ -182,8 +182,8 @@
 
     <script>
       const INST = {
-        unix: 'curl -fsSL https://nektar.run/install.sh | sh',
-        win: 'irm https://nektar.run/install.ps1 | iex',
+        unix: 'curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh && nektar serve',
+        win: 'irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1 | iex; nektar serve',
         docker: 'docker run -d --name nektar --restart unless-stopped -p 127.0.0.1:18420:18420 -v nektar-data:/data ghcr.io/kryptokrates/nektar:latest serve'
       }
       const DOCK = {

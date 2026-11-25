@@ -64,7 +64,7 @@ function Sync-DaemonJson {
   $opTok = (docker exec $Container cat /data/operator-token 2>$null)
   if ($opTok) { $opTok = $opTok.Trim() }
   $obj = @{ url = $BaseUrl; network = $Network; container = $Container }
-  if ($tok) { $obj.token = $tok }
+  if ($tok) { $obj.token = $tok; $obj.authToken = $tok }
   if ($opTok) { $obj.operatorToken = $opTok }
   $obj | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $DaemonJson
 }
@@ -93,8 +93,8 @@ function Invoke-NektarUp {
     $model = if ($env:NEKTAR_MODEL_ID) { $env:NEKTAR_MODEL_ID } else { 'unspecified' }
     $null = docker run -d --name $Container --restart unless-stopped `
       -p "127.0.0.1:${Port}:18420" -v "${Volume}:/data" `
-      -e "NEKTAR_NETWORK=$Network" -e "NEKTAR_AUTOMATION=$auto" -e "NEKTAR_MODEL_ID=$model" `
-      $Image serve
+      -e "NEKTAR_NETWORK=$Network" -e "NEKTAR_HTTP_PORT=18420" -e "NEKTAR_AUTOMATION=$auto" -e "NEKTAR_MODEL_ID=$model" `
+      $Image serve -listen :18420
   }
   Write-Host -NoNewline 'nektar: waiting for ready '
   for ($i = 0; $i -lt 45; $i++) {
@@ -104,7 +104,7 @@ function Invoke-NektarUp {
         Write-Host ' ok!'
         Sync-DaemonJson
         $logs = (docker logs --tail 25 $Container 2>&1) -join "`n"
-        if ($logs -match '(?s)(╭─ nektar ready.*?╰─)') { Write-Output $Matches[1] }
+        if ($logs -match '(?s)(╭─ nektar.*?╰─[^\n]*)') { Write-Output $Matches[1] }
         return
       }
     } catch {}
@@ -254,15 +254,15 @@ switch ($Command.ToLowerInvariant()) {
   'dock' { Invoke-NektarDock $Rest }
   'hub' {
     Assert-Docker
-    if (Test-ContainerRunning) { & docker exec $Container node dist/src/bin.js hub @Rest }
+    if (Test-ContainerRunning) { & docker exec $Container nektar hub @Rest }
     else { & docker run --rm $Image hub @Rest }
   }
-  { $_ -in @('policy', 'doctor', 'check-mainnet') } {
+  { $_ -in @('policy', 'doctor', 'check-mainnet', 'wallet', 'remember', 'recall', 'anchor', 'verify', 'version') } {
     Assert-Docker
-    if (Test-ContainerRunning) { & docker exec -i $Container node dist/src/bin.js $Command @Rest }
+    if (Test-ContainerRunning) { & docker exec -i $Container nektar $Command @Rest }
     else { & docker run --rm -i -v "${Volume}:/data" -e "NEKTAR_NETWORK=$Network" $Image $Command @Rest }
   }
-  'exec' { Assert-Docker; & docker exec -i $Container node dist/src/bin.js @Rest }
+  'exec' { Assert-Docker; & docker exec -i $Container nektar @Rest }
   { $_ -in @('help', '-h', '--help') } { Show-Usage }
   default { Write-Error "nektar: unknown command '$Command'"; Show-Usage; exit 2 }
 }

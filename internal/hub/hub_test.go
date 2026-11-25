@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -207,23 +208,65 @@ func TestHubSQLiteRestartFederationBboxAndBounties(t *testing.T) {
 		t.Fatal("expected Hub 2 to federate persist-want-1 from Hub 1")
 	}
 
-	// Verify NAT bbox relay (/bbox/send & /bbox/inbox).
-	bboxPayload, _ := json.Marshal(BboxMessage{
+	// Verify NAT bbox relay (/bbox/send & /bbox/inbox) enforces ECDSA signatures!
+	senderKey, _ := ec.NewPrivateKey()
+	recipientKey, _ := ec.NewPrivateKey()
+	senderPub := hex.EncodeToString(senderKey.PubKey().Compressed())
+	recipientPub := hex.EncodeToString(recipientKey.PubKey().Compressed())
+
+	unsignedPayload, _ := json.Marshal(BboxMessage{
 		Office:       "default",
-		RecipientPub: "02aaaa",
-		SenderPub:    "02bbbb",
-		DealID:       "deal-nat-1",
+		RecipientPub: recipientPub,
+		SenderPub:    senderPub,
+		DealID:       "deal-nat-unsigned",
 		Kind:         "purchase_beef",
 		Body:         json.RawMessage(`{"ok":true}`),
 	})
+	if unResp, err := http.Post(ts1.URL+"/bbox/send", "application/json", bytes.NewReader(unsignedPayload)); err != nil || unResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected HTTP 401 for unsigned /bbox/send, got err=%v resp=%+v", err, unResp)
+	} else {
+		unResp.Body.Close()
+	}
+
+	signedMsg := BboxMessage{
+		Office:       "default",
+		RecipientPub: recipientPub,
+		SenderPub:    senderPub,
+		DealID:       "deal-nat-1",
+		Kind:         "purchase_beef",
+		Body:         json.RawMessage(`{"ok":true}`),
+	}
+	bboxSig, err := bstack.SignArtifact(senderKey, signedMsg.Signable())
+	if err != nil {
+		t.Fatalf("SignArtifact bbox send: %v", err)
+	}
+	signedMsg.Sig = bboxSig
+	bboxPayload, _ := json.Marshal(signedMsg)
 	bResp, err := http.Post(ts1.URL+"/bbox/send", "application/json", bytes.NewReader(bboxPayload))
 	if err != nil || bResp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /bbox/send failed: err=%v resp=%+v", err, bResp)
 	}
 	bResp.Body.Close()
-	inResp, err := http.Get(ts1.URL + "/bbox/inbox?pub=02aaaa&since=0")
+
+	// Unsigned /bbox/inbox must return 401!
+	if unInResp, err := http.Get(ts1.URL + "/bbox/inbox?pub=" + recipientPub + "&since=0"); err != nil || unInResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected HTTP 401 for unsigned /bbox/inbox, got err=%v resp=%+v", err, unInResp)
+	} else {
+		unInResp.Body.Close()
+	}
+
+	tsNow := time.Now().Unix()
+	inSig, err := bstack.SignArtifact(recipientKey, map[string]any{"action": "bbox_inbox", "pub": recipientPub, "ts": tsNow})
+	if err != nil {
+		t.Fatalf("SignArtifact bbox inbox: %v", err)
+	}
+	inReq, _ := http.NewRequest(http.MethodGet, ts1.URL+"/bbox/inbox?pub="+recipientPub+"&since=0", nil)
+	inReq.Header.Set("X-Nektar-Pub", recipientPub)
+	inReq.Header.Set("X-Nektar-Ts", strconv.FormatInt(tsNow, 10))
+	inReq.Header.Set("X-Nektar-Sig", inSig)
+	inResp, err := http.DefaultClient.Do(inReq)
 	if err != nil || inResp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /bbox/inbox failed: err=%v", err)
+		t.Fatalf("GET /bbox/inbox failed: err=%v resp=%+v", err, inResp)
 	}
 	var inbox struct {
 		Messages []BboxMessage `json:"messages"`

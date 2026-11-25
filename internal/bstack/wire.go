@@ -94,9 +94,10 @@ type OfferAd struct {
 	Shard        string          `json:"shard,omitempty"`
 	Leaf         string          `json:"leaf,omitempty"`
 	ChirpURL     string          `json:"chirpUrl,omitempty"`
-	KeyCommitHex string          `json:"keyCommitHex,omitempty"`
-	PayAddress   string          `json:"payAddress,omitempty"`
-	SellerURL    string          `json:"sellerUrl,omitempty"`
+	KeyCommitHex   string          `json:"keyCommitHex,omitempty"`
+	PayAddress     string          `json:"payAddress,omitempty"`
+	PayIdentityKey string          `json:"payIdentityKey,omitempty"`
+	SellerURL      string          `json:"sellerUrl,omitempty"`
 	BboxOffice   string          `json:"bboxOffice,omitempty"`
 	SaleOffer    json.RawMessage `json:"saleOffer,omitempty"`
 	IsHub        bool            `json:"isHub,omitempty"`

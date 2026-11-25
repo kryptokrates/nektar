@@ -2,15 +2,18 @@ name: nektar
 title: nektar — verifiable agent memory (BSV)
 type: server
 image: nektar:local
-# stateful server: keep one container per gateway session, data in a named volume
+command:
+  - mcp
 longLived: true
 volumes:
   - nektar-data:/data
 env:
+  - name: NEKTAR_NETWORK
+    value: testnet
   - name: NEKTAR_TOOL_PROFILE
     value: operator
 description: >-
-  Encrypted, provenance-bearing agent memory whose history is anchored on BSV.
-  Tools: remember, recall, prove, anchor, ZK membership/clearance, rotate,
-  revoke, disclose, authorize, automaton. Proofs show what was recorded and
-  unaltered — never that it is true.
+  Encrypted, provenance-bearing agent memory anchored on BSV (v0.4 Pure-Go).
+  Tools: remember, recall, forget, groundedAnswer, verifyReceipt, want, sell,
+  deals, fund, doctor, peers, anchor, prove, borgGroup, exportPack, importPack,
+  authorize, status. Proofs show what was recorded and unaltered — never that it is true.

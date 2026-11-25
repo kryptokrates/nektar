@@ -1,10 +1,8 @@
 apiVersion: v2
 name: nektar-hub
 description: >-
-  An independent nektar hub — a market-capable agent plus its own host pair,
-  announcing on the dir lane so fresh agents find it without a registry.
-  Host pods carry their watch shim as a sidecar; everything the agent
-  publishes is signed + SPV-verified peer-side.
+  An independent Nektar v0.4 Pure-Go Hub — single-binary agent + embedded
+  16-lane SQLite Overlay Hub + liquidity/bounty engine + Svelte dashboard.
 type: application
-version: 0.1.0
-appVersion: latest
+version: 0.4.0
+appVersion: "0.4.0"

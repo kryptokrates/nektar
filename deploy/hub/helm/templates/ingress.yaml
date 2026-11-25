@@ -1,38 +1,29 @@
-{{- if .Values.ingress.enabled }}
+{{- if and .Values.ingress.enabled .Values.ingress.agentHost }}
 {{- $full := include "nektar-hub.fullname" . }}
-{{- range $e := list
-  (dict "host" .Values.ingress.agentHost "svc" (printf "%s-agent" $full) "port" "http" "name" "agent")
-  (dict "host" .Values.ingress.hostAHost "svc" (printf "%s-host-a" $full) "port" "engine" "name" "host-a")
-  (dict "host" .Values.ingress.hostBHost "svc" (printf "%s-host-b" $full) "port" "engine" "name" "host-b")
-}}
-{{- if $e.host }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ $full }}-{{ $e.name }}
+  name: {{ $full }}-hub
   labels:
-    {{- include "nektar-hub.labels" $ | nindent 4 }}
+    {{- include "nektar-hub.labels" . | nindent 4 }}
 spec:
-  {{- if $.Values.ingress.className }}
-  ingressClassName: {{ $.Values.ingress.className }}
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
   {{- end }}
-  {{- if and $.Values.ingress.tls $.Values.ingress.tlsSecretName }}
+  {{- if and .Values.ingress.tls .Values.ingress.tlsSecretName }}
   tls:
-    - hosts: [{{ $e.host | quote }}]
-      secretName: {{ $.Values.ingress.tlsSecretName }}
+    - hosts: [{{ .Values.ingress.agentHost | quote }}]
+      secretName: {{ .Values.ingress.tlsSecretName }}
   {{- end }}
   rules:
-    - host: {{ $e.host | quote }}
+    - host: {{ .Values.ingress.agentHost | quote }}
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ $e.svc }}
+                name: {{ $full }}-hub
                 port:
-                  name: {{ $e.port }}
----
-{{- end }}
-{{- end }}
+                  name: http
 {{- end }}

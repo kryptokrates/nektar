@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "node dist/src/bin.js serve --port 8080 --host 0.0.0.0",
+    "startCommand": "nektar serve -listen :18420 -hub",
     "healthcheckPath": "/v1/health",
     "healthcheckTimeout": 60,
     "restartPolicyType": "ON_FAILURE",

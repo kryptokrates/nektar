@@ -67,12 +67,12 @@ case ":${PATH}:" in
 esac
 
 if [ "$DO_DOCK" = "1" ]; then
-  "$BIN_DIR/nektar" dock -write auto
+  "$BIN_DIR/nektar" dock auto
 else
   printf '\nNext (zero Docker, starts in <50ms on http://127.0.0.1:18420):\n'
   printf '  nektar serve           # start unified agent daemon + Svelte Dashboard + MCP + Market Broker\n'
   printf '  nektar serve --hub     # start agent + embedded durable SQLite Overlay Hub + Bounties\n'
-  printf '  nektar dock -write     # auto-wire Claude Code, Cursor, Codex, VS Code, Windsurf\n'
-  printf '  nektar open            # open Dashboard (1-click recall, faucet, policy presets & peers)\n'
+  printf '  nektar dock            # auto-wire Claude Code, Cursor, VS Code, Hermes, OpenClaw, Codex…\n'
+  printf '  nektar open            # open Dashboard with 1-click pairing\n'
   printf '  nektar doctor          # check wallet, policies, peers & SSE health\n\n'
 fi

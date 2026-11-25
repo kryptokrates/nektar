@@ -14,6 +14,8 @@
   let copied = $state('')
   let faucetBusy = $state(false)
   let faucetMsg = $state('')
+  let desktopBusy = $state(false)
+  let desktopMsg = $state('')
   let recallBusy = $state(false)
   let recallRes = $state<{ items: number; shards: string[]; verifyUrl?: string; err?: string } | null>(null)
   let policyBusy = $state(false)
@@ -93,6 +95,29 @@
     }
   }
 
+  async function fundFromDesktop() {
+    desktopBusy = true
+    desktopMsg = ''
+    try {
+      const r = await fetch('/v1/wallet/fund-desktop', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sats: 10000 })
+      })
+      const j = (await r.json().catch(() => ({}))) as { txid?: string; satoshis?: number; error?: string }
+      if (!r.ok) {
+        desktopMsg = j.error ?? `desktop fund failed (${r.status})`
+        return
+      }
+      desktopMsg = `✓ received ${j.satoshis ?? 10000} sats from BSV Desktop (${String(j.txid ?? '').slice(0, 10)}…)`
+      await onRefresh()
+    } catch (e) {
+      desktopMsg = String(e)
+    } finally {
+      desktopBusy = false
+    }
+  }
+
   async function approvePreset(preset: 'buyer' | 'seller' | 'both') {
     policyBusy = true
     policyMsg = ''
@@ -103,11 +128,19 @@
         if (!ok) return
         body.confirm = 'I_UNDERSTAND'
       }
-      const r = await fetch('/v1/onboard/policy-preset', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body)
-      })
+      const post = (tok?: string) =>
+        fetch('/v1/onboard/policy-preset', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...(tok ? { authorization: `Bearer ${tok}` } : {}) },
+          body: JSON.stringify(body)
+        })
+      let r = await post(sessionStorage.getItem('nektar-operator-token') ?? undefined)
+      if (r.status === 401 || r.status === 403) {
+        const tok = prompt('operator token (NEKTAR_OPERATOR_TOKEN)')
+        if (!tok) return
+        sessionStorage.setItem('nektar-operator-token', tok)
+        r = await post(tok)
+      }
       const j = (await r.json().catch(() => ({}))) as { policyId?: string; error?: string }
       if (!r.ok) {
         policyMsg = j.error ?? `approval failed (${r.status})`
@@ -146,7 +179,7 @@
           <button class="pill" class:on={dockTab === 'mcp'} onclick={() => (dockTab = 'mcp')}>MCP URL</button>
         </div>
         {#if dockTab === 'dock'}
-          <p class="smut">Auto-wires Claude Code, Cursor, Hermes, OpenClaw, Codex, VS Code, Zed & Goose.</p>
+          <p class="smut">Auto-wires Claude Code, Cursor, VS Code, Windsurf, Codex, Zed, Cline, Continue, Goose, OpenCode, Gemini, Hermes &amp; OpenClaw.</p>
           <div class="cmd">
             <code>{dockCmd}</code>
             <button onclick={() => copy('dock', dockCmd)}>{copied === 'dock' ? '✓' : 'copy'}</button>
@@ -187,11 +220,20 @@
           {#if sats > 0}<span class="okb">✓ {sats} sats</span>{/if}
         </div>
         {#if network === 'testnet'}
-          <p class="smut">Request free test coins straight to your fee key{feeAddress ? ` (${feeAddress.slice(0, 12)}…)` : ''}.</p>
-          <button class="abtn" onclick={requestFaucet} disabled={faucetBusy}>{faucetBusy ? 'requesting…' : '1-Click Testnet Faucet'}</button>
+          <p class="smut">Fund via Testnet Faucet or 1-click BRC-29 from BSV Desktop{feeAddress ? ` (${feeAddress.slice(0, 12)}…)` : ''}.</p>
+          <div class="rowbtns">
+            <button class="abtn" onclick={requestFaucet} disabled={faucetBusy}>{faucetBusy ? 'requesting…' : '1-Click Testnet Faucet'}</button>
+            <button class="abtn ghost" onclick={fundFromDesktop} disabled={desktopBusy}>{desktopBusy ? 'connecting…' : 'Fund from BSV Desktop'}</button>
+          </div>
           {#if faucetMsg}<p class="sres">{faucetMsg}</p>{/if}
+          {#if desktopMsg}<p class="sres">{desktopMsg}</p>{/if}
         {:else}
           <p class="smut">Fee address: <code>{feeAddress ?? 'initializing…'}</code></p>
+          <div class="rowbtns">
+            <button class="abtn" onclick={fundFromDesktop} disabled={desktopBusy}>{desktopBusy ? 'connecting…' : 'Fund from BSV Desktop'}</button>
+            {#if feeAddress}<button class="abtn ghost" onclick={() => copy('addr', feeAddress!)}>{copied === 'addr' ? 'copied ✓' : 'Copy Address'}</button>{/if}
+          </div>
+          {#if desktopMsg}<p class="sres">{desktopMsg}</p>{/if}
         {/if}
       </div>
 

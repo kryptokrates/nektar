@@ -22,14 +22,64 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "nektar",
 		Version: "0.4.0",
-	}, nil)
+	}, &mcp.ServerOptions{
+		Instructions: "When answering factual questions from memory: (1) call recall first (omit shard to discover shards including 'welcome'); (2) route verifiable answers through groundedAnswer citing verified fragments; (3) preserve the returned receipt: and verify: footer verbatim; (4) never fabricate receipts — proofs show recorded + unaltered + derivable, never truth.",
+	})
+
+	srv.AddResource(&mcp.Resource{
+		URI:         "nektar://welcome",
+		Name:        "Nektar Welcome Memory",
+		Description: "Seeded starter memory fragments and usage instructions.",
+		MIMEType:    "application/json",
+	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		res, err := tb.ExecRecall(ctx, memory.RecallInput{Shard: "welcome", Limit: 20})
+		if err != nil {
+			return nil, err
+		}
+		b, _ := json.MarshalIndent(res, "", "  ")
+		return &mcp.ReadResourceResult{
+			Contents: []*mcp.ResourceContents{{
+				URI:      req.Params.URI,
+				MIMEType: "application/json",
+				Text:     string(b),
+			}},
+		}, nil
+	})
 
 	// --- Core 10-tool Agent Profile ---
+	type mcpRememberArgs struct {
+		Shard      string            `json:"shard,omitempty"`
+		Text       string            `json:"text,omitempty"`
+		Data       string            `json:"data,omitempty"`
+		Source     string            `json:"source,omitempty"`
+		Level      int               `json:"level,omitempty"`
+		Class      string            `json:"class,omitempty"`
+		BorgGroup  string            `json:"borgGroup,omitempty"`
+		CallerPub  string            `json:"callerPub,omitempty"`
+		Supersedes int64             `json:"supersedes,omitempty"`
+		AutoAnchor bool              `json:"autoAnchor,omitempty"`
+		Extra      map[string]string `json:"extra,omitempty"`
+	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "remember",
 		Description: "Commit a provenance-signed memory fragment into a shard, optionally BRC-369 encrypting to a Borg group and/or anchoring on BSV.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in memory.RememberInput) (*mcp.CallToolResult, any, error) {
-		res, err := tb.mem.Remember(ctx, in)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, raw mcpRememberArgs) (*mcp.CallToolResult, any, error) {
+		txt := raw.Text
+		if txt == "" {
+			txt = raw.Data
+		}
+		res, err := tb.mem.Remember(ctx, memory.RememberInput{
+			Shard:      raw.Shard,
+			Text:       txt,
+			Source:     raw.Source,
+			Level:      raw.Level,
+			Class:      raw.Class,
+			BorgGroup:  raw.BorgGroup,
+			CallerPub:  raw.CallerPub,
+			Supersedes: raw.Supersedes,
+			AutoAnchor: raw.AutoAnchor,
+			Extra:      raw.Extra,
+		})
 		if err != nil {
 			return nil, nil, err
 		}

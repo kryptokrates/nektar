@@ -7,11 +7,11 @@ post-turn receipt verification (`agent_end`), and native memory/market tools.
 ## Zero-Config Setup
 
 ```bash
-# 1. Start local nektar (zero env vars — defaults to testnet + seeded welcome shard)
-./nektar --port 18420
+# 1. Start local nektar (zero env vars — defaults to persistent testnet + seeded welcome shard on :18420)
+nektar serve
 
 # 2. One-command auto-dock (copies plugin + merges ~/.openclaw/openclaw.json)
-./nektar dock openclaw
+nektar dock openclaw
 
 # Or install manually via OpenClaw CLI:
 openclaw plugins install ./integrations/openclaw

@@ -7,38 +7,43 @@
     "url": "https://github.com/kryptokrates/nektar",
     "source": "github"
   },
-  "version": "0.3.2",
+  "version": "0.4.0",
   "packages": [
     {
       "registryType": "oci",
       "identifier": "ghcr.io/kryptokrates/nektar:latest",
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
           "name": "NEKTAR_NETWORK",
-          "description": "BSV network: testnet (default zero-config), regtest, or main",
+          "description": "BSV network: testnet (default zero-config), memory, regtest, or main",
           "isRequired": false,
           "default": "testnet"
         },
         {
           "name": "NEKTAR_TOOL_PROFILE",
-          "description": "Exposed tool surface: agent (10 curated tools, default) or operator (full admin/ZK surface)",
+          "description": "Exposed tool surface: agent (10 curated tools, default) or operator (18 tools)",
           "isRequired": false,
           "default": "agent"
         },
         {
-          "name": "NEKTAR_KEY_PASSPHRASE",
-          "description": "Optional on testnet (keys stay mode-0600); required on mainnet to encrypt keys at rest",
+          "name": "NEKTAR_WALLET",
+          "description": "Key custody mode: embedded (default BRC-100 SQLite) or client (BSV Desktop localhost:3321)",
           "isRequired": false,
-          "isSecret": true
+          "default": "embedded"
         },
         {
-          "name": "NEKTAR_AUTOMATION",
-          "description": "Set to 1 to enable the policy-gated knowledge marketplace (want/sell/deals)",
-          "isRequired": false,
-          "default": "0"
+          "name": "NEKTAR_MARKET_HOSTS",
+          "description": "Optional comma-separated market Hub URLs (defaults to nektar.run/hub)",
+          "isRequired": false
         }
       ]
     }

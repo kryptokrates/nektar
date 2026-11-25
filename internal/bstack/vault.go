@@ -104,14 +104,41 @@ type BorgGroup struct {
 	EpochMembers map[int64][]string  `json:"epochMembers"`
 }
 
+// GroupPersistence persists BorgGroup state + epoch keys across restarts.
+type GroupPersistence interface {
+	LoadBorgGroups() ([]*BorgGroup, error)
+	SaveBorgGroup(g *BorgGroup) error
+}
+
 // GroupRegistry manages borg groups & epoch keys for Nektar shards.
 type GroupRegistry struct {
-	mu     sync.RWMutex
-	groups map[string]*BorgGroup
+	mu      sync.RWMutex
+	groups  map[string]*BorgGroup
+	persist GroupPersistence
 }
 
 func NewGroupRegistry() *GroupRegistry {
 	return &GroupRegistry{groups: make(map[string]*BorgGroup)}
+}
+
+// SetPersistence attaches a durable store, loading any previously saved groups immediately.
+func (r *GroupRegistry) SetPersistence(p GroupPersistence) error {
+	if p == nil {
+		return nil
+	}
+	loaded, err := p.LoadBorgGroups()
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.persist = p
+	for _, g := range loaded {
+		if _, exists := r.groups[g.GroupID]; !exists {
+			r.groups[g.GroupID] = g
+		}
+	}
+	return nil
 }
 
 // CreateGroup creates a new borg group at epoch 1 with ownerPub as the initial member.
@@ -134,6 +161,11 @@ func (r *GroupRegistry) CreateGroup(groupID, name, ownerPub string) (*BorgGroup,
 		Epochs:       map[int64][32]byte{1: sym},
 		EpochMembers: map[int64][]string{1: {ownerPub}},
 	}
+	if r.persist != nil {
+		if err := r.persist.SaveBorgGroup(g); err != nil {
+			return nil, fmt.Errorf("borg: persist group: %w", err)
+		}
+	}
 	r.groups[groupID] = g
 	return g, nil
 }
@@ -152,6 +184,11 @@ func (r *GroupRegistry) AddMember(groupID, pubHex, role string) error {
 	g.Members[pubHex] = role
 	delete(g.Revoked, pubHex)
 	g.EpochMembers[g.CurrentEpoch] = append(g.EpochMembers[g.CurrentEpoch], pubHex)
+	if r.persist != nil {
+		if err := r.persist.SaveBorgGroup(g); err != nil {
+			return fmt.Errorf("borg: persist add member: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -180,6 +217,11 @@ func (r *GroupRegistry) RevokeMember(groupID, pubHex string) (int64, error) {
 		remaining = append(remaining, m)
 	}
 	g.EpochMembers[g.CurrentEpoch] = remaining
+	if r.persist != nil {
+		if err := r.persist.SaveBorgGroup(g); err != nil {
+			return 0, fmt.Errorf("borg: persist revoke: %w", err)
+		}
+	}
 	return g.CurrentEpoch, nil
 }
 

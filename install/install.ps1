@@ -42,12 +42,12 @@ if (-not $userPath -or ($userPath -split ';' | Where-Object { $_ -ieq $InstallDi
 $exe = if ($Docker) { Join-Path $InstallDir 'nektar.cmd' } else { Join-Path $InstallDir 'nektar.exe' }
 
 if ($Dock) {
-  & $exe dock -write auto
+  & $exe dock auto
 } else {
   Write-Output "`nNext (zero Docker, starts in <50ms on http://127.0.0.1:18420):"
   Write-Output "  nektar serve           # start unified agent daemon + Svelte Dashboard + MCP + Market Broker"
   Write-Output "  nektar serve --hub     # start agent + embedded durable SQLite Overlay Hub + Bounties"
-  Write-Output "  nektar dock -write     # auto-wire Claude Code, Cursor, VS Code, Windsurf, Codex..."
+  Write-Output "  nektar dock            # auto-wire Claude Code, Cursor, VS Code, Windsurf, Codex, Hermes, OpenClaw..."
   Write-Output "  nektar open            # open Dashboard (1-click recall, faucet, policy presets & peers)"
   Write-Output "  nektar doctor          # check wallet, policies, peers & SSE health`n"
 }

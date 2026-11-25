@@ -3,11 +3,11 @@ package wallet
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-sdk/transaction/chaintracker"
-	sdkwallet "github.com/bsv-blockchain/go-sdk/wallet"
 	"github.com/lightwebinc/bcommon/bwallet"
 	"github.com/lightwebinc/bcommon/feepolicy"
 	"github.com/lightwebinc/bcommon/mint"
@@ -15,47 +15,48 @@ import (
 	"github.com/lightwebinc/bcommon/publish"
 )
 
-// Transaction lifecycle statuses (aligned with BRC-100 / go-wallet-toolbox utxo-lifecycle.md).
+// Transaction lifecycle statuses aligned with BRC-100 / go-wallet-toolbox.
 const (
-	StatusUnsigned    = "unsigned"
-	StatusUnprocessed = "unprocessed"
-	StatusSending     = "sending"
-	StatusUnproven    = "unproven"
-	StatusCompleted   = "completed"
-	StatusNoSend      = "nosend"
-	StatusFailed      = "failed"
+	StatusUnsigned          = "unsigned"
+	StatusUnprocessed       = "unprocessed"
+	StatusSending           = "sending"
+	StatusSubmissionUnknown = "submission_unknown"
+	StatusUnproven          = "unproven"
+	StatusCompleted         = "completed"
+	StatusNoSend            = "nosend"
+	StatusFailed            = "failed"
+	StatusAborted           = "aborted"
 )
 
-// Standard spending baskets (only these three are eligible for automatic fee/funding selection).
+// Standard spending baskets managed by go-wallet-toolbox StrategyThroughput plus Nektar's static funding basket.
 // Any custom application basket is never auto-spent for fees (per BRC-46 / BRC-100).
 const (
 	BasketDefault = "default"
 	BasketReserve = "reserve"
 	BasketFuel    = "fuel"
+	BasketFunding = "nektar funding"
 )
 
-// Key kinds tracked per output so Sweep / CreateAction / Consolidate know how to sign any UTXO.
+// Key kinds exposed in UTXO listings.
 const (
 	KeyKindFund   = "fund"   // derived under Nektar Profile (nektar fund / nektar-fund, self)
-	KeyKindBRC29  = "brc29"  // derived under BRC-29 (2-3241645161d8-<prefix> <suffix>, sender)
+	KeyKindBRC29  = "brc29"  // derived under BRC-29 (wallet payment / go-wallet-toolbox change)
 	KeyKindCustom = "custom" // basket insertion or external script not auto-signed by wallet
 )
 
 const (
 	// CoinbaseMaturity matches BSV consensus coinbase maturity (100 blocks).
 	CoinbaseMaturity = 100
-	// DefaultMaxUnprovenDepth caps 0-conf ancestry chain depth to bound BEEF size and mempool risk.
+	// DefaultMaxUnprovenDepth caps reported/monitored 0-conf chain depth.
 	DefaultMaxUnprovenDepth = 15
-	// DefaultMaxInputsPerTx caps automatic multi-input coin selection per single transaction.
-	DefaultMaxInputsPerTx = 256
-	// DefaultSweepChunkInputs caps inputs per sweep chunk transaction to stay well within policy limits.
-	DefaultSweepChunkInputs = 400
-	// DefaultReservationTTL is how long an unsigned two-phase action holds reserved UTXOs before AbortAbandoned reclaims them.
+	// DefaultSweepChunkInputs caps explicit inputs per sweep chunk transaction.
+	DefaultSweepChunkInputs = 300
+	// DefaultReservationTTL is how long an unsigned two-phase action lives before AbortAbandoned reclaims it.
 	DefaultReservationTTL = 5 * time.Minute
 	// DefaultTxCacheSize bounds the in-memory parsed transaction LRU cache.
 	DefaultTxCacheSize = 512
 	// WalletVersion is returned by BRC-100 GetVersion.
-	WalletVersion = "nektar-wallet-0.4.0"
+	WalletVersion = "nektar-toolbox-0.4.0"
 )
 
 // Standard errors returned by the wallet engine.
@@ -66,12 +67,89 @@ var (
 	ErrNoSettler       = errors.New("wallet: no transaction broadcaster configured")
 	ErrActionNotFound  = errors.New("wallet: action reference not found")
 	ErrInvalidArgs     = errors.New("wallet: invalid arguments")
-	ErrNetworkMismatch = errors.New("wallet: network mismatch between local and remote wallet")
-	ErrSpendRejected   = errors.New("wallet: spend rejected by policy")
+	ErrNetworkMismatch  = errors.New("wallet: network mismatch between local and remote wallet")
+	ErrSpendRejected    = errors.New("wallet: spend rejected by policy")
+	ErrBroadcastUnknown = errors.New("wallet: broadcast outcome unknown (timeout or transport failure)")
 )
 
-// DefaultNetworkFees matches BSV's 100 sat/kB rate with 1 sat floor and 100 sat dust threshold
-// (avoiding sub-100-sat change outputs while paying ~23 sats for typical 1-in/2-out P2PKH txs).
+type ctxKeyOverrideGuard struct{}
+type ctxKeyExternalSpend struct{}
+type ctxKeyPostErrSink struct{}
+
+type postErrSink struct {
+	mu   sync.Mutex
+	txid string
+	err  error
+}
+
+func (p *postErrSink) record(txid string, err error) {
+	if p == nil || err == nil {
+		return
+	}
+	p.mu.Lock()
+	p.txid = txid
+	p.err = err
+	p.mu.Unlock()
+}
+
+func (p *postErrSink) get() (string, error) {
+	if p == nil {
+		return "", nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.txid, p.err
+}
+
+func withPostErrSink(ctx context.Context) (context.Context, *postErrSink) {
+	s := &postErrSink{}
+	return context.WithValue(ctx, ctxKeyPostErrSink{}, s), s
+}
+
+func postErrSinkFromCtx(ctx context.Context) *postErrSink {
+	if ctx == nil {
+		return nil
+	}
+	s, _ := ctx.Value(ctxKeyPostErrSink{}).(*postErrSink)
+	return s
+}
+
+type externalSpendHint struct {
+	set       bool
+	sweepAll  bool
+	sats      uint64
+}
+
+// WithOverrideGuard marks a context as an explicit operator treasury sweep allowed to bypass SpendGuard.
+func WithOverrideGuard(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyOverrideGuard{}, true)
+}
+
+func isOverrideGuard(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(ctxKeyOverrideGuard{}).(bool)
+	return v
+}
+
+func withExternalSpend(ctx context.Context, sats uint64) context.Context {
+	return context.WithValue(ctx, ctxKeyExternalSpend{}, externalSpendHint{set: true, sats: sats})
+}
+
+func withSweepAllExternalSpend(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyExternalSpend{}, externalSpendHint{set: true, sweepAll: true})
+}
+
+func externalSpendFromCtx(ctx context.Context) externalSpendHint {
+	if ctx == nil {
+		return externalSpendHint{}
+	}
+	h, _ := ctx.Value(ctxKeyExternalSpend{}).(externalSpendHint)
+	return h
+}
+
+// DefaultNetworkFees matches BSV's 100 sat/kB rate with 1 sat floor and 100 sat dust threshold.
 var DefaultNetworkFees = mint.Fees{
 	Rate:    mint.Rate{Sats: 100, Bytes: 1000},
 	Floor:   1,
@@ -79,21 +157,21 @@ var DefaultNetworkFees = mint.Fees{
 	MaxRate: mint.Rate{Sats: 500, Bytes: 1000},
 }
 
-// FuelProfile tunes the background two-tier FuelKeeper (Reserve -> Fuel) for standard or high-throughput nodes.
+// FuelProfile tunes go-wallet-toolbox StrategyThroughput + FuelKeeper FanOutFuel rounds.
 type FuelProfile struct {
-	Name                    string
-	FuelTarget              int    // desired spendable fuel UTXOs
-	FuelSats                uint64 // satoshis per fuel UTXO
-	LowWaterPct             int    // replenish when fuel count < FuelTarget * LowWaterPct / 100
-	ReserveTarget           int    // desired reserve UTXOs
-	ReserveSats             uint64 // satoshis per reserve UTXO
-	MaxFanOutOutputs        int    // max outputs per single fan-out tx
-	DustThresholdSats       uint64 // outputs below this (in default/fuel) are eligible for idle consolidation
-	DustConsolidateTrigger  int    // trigger idle dust consolidation when dust count >= this
-	DefaultAcceptDelayed    bool   // throughput hint when caller leaves AcceptDelayedBroadcast nil
+	Name                   string
+	FuelTarget             int    // desired spendable fuel UTXOs
+	FuelSats               uint64 // satoshis per fuel UTXO
+	LowWaterPct            int    // replenish when fuel count < FuelTarget * LowWaterPct / 100
+	ReserveTarget          int    // desired reserve UTXOs
+	ReserveSats            uint64 // satoshis per reserve UTXO
+	MaxFanOutOutputs       int    // max outputs per single FanOutFuel tx
+	DustThresholdSats      uint64 // outputs below this (in default/fuel) are eligible for consolidation
+	DustConsolidateTrigger int    // trigger idle dust consolidation when dust count >= this
+	DefaultAcceptDelayed   bool   // throughput hint when caller leaves AcceptDelayedBroadcast nil
 }
 
-// StandardFuelProfile is tuned for ordinary agent nodes (~25-100 TPS burst on WAL SQLite).
+// StandardFuelProfile is tuned for ordinary agent nodes.
 func StandardFuelProfile() FuelProfile {
 	return FuelProfile{
 		Name:                   "standard",
@@ -146,12 +224,13 @@ type ProofLookupFunc func(ctx context.Context, txid string) (*transaction.Merkle
 // HeaderBytesFunc returns the 80-byte raw block header for height (optional, for BRC-100 GetHeaderForHeight).
 type HeaderBytesFunc func(ctx context.Context, height uint32) ([]byte, error)
 
-// Config configures a pure-Go BRC-100 Engine.
+// Config configures a pure-Go BRC-100 Engine backed by go-wallet-toolbox + modernc.org/sqlite.
 type Config struct {
 	Dir              string                    // directory holding identity.json & wallet.sqlite (empty => in-memory)
+	InMemoryStore    bool                      // keep identity.json in Dir, run SQLite in-memory (ideal for ephemeral memory testchain)
 	Mainnet          bool                      // true for mainnet, false for testnet/regtest/memory
 	Originator       string                    // BRC-100 originator (default "nektar")
-	Profile          bwallet.Profile           // BRC-43 funding derivation profile
+	Profile          bwallet.Profile           // BRC-43 static funding derivation profile
 	Tracker          chaintracker.ChainTracker // SPV header verifier & height source
 	HeaderBytes      HeaderBytesFunc           // optional raw 80-byte header getter
 	FeeSource        feepolicy.Source          // live ARC/Arcade policy or static rate
@@ -161,16 +240,18 @@ type Config struct {
 	WoC              *nodeapi.WoC              // optional WhatsOnChain client for external address sync
 	Broadcast        BroadcastFunc             // optional custom broadcaster (overrides Settler; used for testchain)
 	ProofLookup      ProofLookupFunc           // optional custom proof lookup (used for testchain)
-	SpendGuard       SpendGuardCheck           // optional fail-closed spend guard hook
+	SpendGuard       SpendGuardCheck           // optional fail-closed spend guard hook (enforced post-signing in PostFromBEEF)
+	SpendGuardCheck  func(feeSats, spendSats uint64) error // optional read-only pre-build cap check
+	SpendGuardRefund func(txid string)         // optional pre-broadcast refund hook on definitive rejection
 	FuelProfile      *FuelProfile              // nil => StandardFuelProfile()
 	MaxUnprovenDepth int                       // 0 => DefaultMaxUnprovenDepth (15)
-	MaxInputsPerTx   int                       // 0 => DefaultMaxInputsPerTx (256)
+	MaxInputsPerTx   int                       // reserved for caller compatibility
 	ReservationTTL   time.Duration             // 0 => DefaultReservationTTL (5m)
 	TxCacheSize      int                       // 0 => DefaultTxCacheSize (512)
 	Logger           func(format string, args ...any)
 }
 
-// TxRecord is one persisted transaction row in wallet_txs.
+// TxRecord is one transaction record returned by ListRecentActions / HTTP API / CLI.
 type TxRecord struct {
 	TxID              string   `json:"txid"`
 	Reference         string   `json:"reference,omitempty"`
@@ -182,18 +263,12 @@ type TxRecord struct {
 	Labels            []string `json:"labels,omitempty"`
 	Version           uint32   `json:"version"`
 	LockTime          uint32   `json:"lockTime"`
-	RawTx             []byte   `json:"-"`
-	BEEF              []byte   `json:"-"`
-	MerklePath        []byte   `json:"-"`
 	BlockHeight       uint32   `json:"blockHeight"`
-	UnprovenDepth     int      `json:"unprovenDepth"`
-	BroadcastAttempts int      `json:"broadcastAttempts"`
-	LastError         string   `json:"lastError,omitempty"`
 	CreatedAt         int64    `json:"createdAt"`
 	UpdatedAt         int64    `json:"updatedAt"`
 }
 
-// OutputRecord is one persisted UTXO row in wallet_outputs.
+// OutputRecord is one UTXO record returned by ListUTXOs / HTTP API / CLI.
 type OutputRecord struct {
 	ID                 int64    `json:"id"`
 	TxID               string   `json:"txid"`
@@ -203,9 +278,7 @@ type OutputRecord struct {
 	LockingScriptHex   string   `json:"lockingScriptHex,omitempty"`
 	Basket             string   `json:"basket"`
 	Spendable          bool     `json:"spendable"`
-	SpentByTxID        string   `json:"spentByTxid,omitempty"`
-	ReservedByRef      string   `json:"reservedByRef,omitempty"`
-	ReservedUntil      int64    `json:"reservedUntil,omitempty"`
+	Reserved           bool     `json:"reserved,omitempty"`
 	KeyKind            string   `json:"keyKind"`
 	DerivationPrefix   string   `json:"derivationPrefix,omitempty"`
 	DerivationSuffix   string   `json:"derivationSuffix,omitempty"`
@@ -213,25 +286,8 @@ type OutputRecord struct {
 	Tags               []string `json:"tags,omitempty"`
 	CustomInstructions string   `json:"customInstructions,omitempty"`
 	OutputDescription  string   `json:"outputDescription,omitempty"`
-	Coinbase           bool     `json:"coinbase,omitempty"`
-	BlockHeight        uint32   `json:"blockHeight"`
 	CreatedAt          int64    `json:"createdAt"`
-	// Joined parent tx metadata populated by selector/listing queries.
-	ParentStatus        string `json:"parentStatus,omitempty"`
-	ParentUnprovenDepth int    `json:"parentUnprovenDepth,omitempty"`
-}
-
-// InputRecord tracks an input spent by a wallet transaction for BRC-100 ListActions.
-type InputRecord struct {
-	TxID                string `json:"txid"`
-	Vin                 uint32 `json:"vin"`
-	SourceTxID          string `json:"sourceTxid"`
-	SourceVout          uint32 `json:"sourceVout"`
-	SourceSatoshis      uint64 `json:"sourceSatoshis"`
-	SourceLockingScript []byte `json:"-"`
-	UnlockingScript     []byte `json:"-"`
-	InputDescription    string `json:"inputDescription"`
-	SequenceNumber      uint32 `json:"sequenceNumber"`
+	ParentStatus       string   `json:"parentStatus,omitempty"`
 }
 
 // BalanceBreakdown gives full visibility into confirmed, unproven, reserved, and basketed UTXOs.
@@ -249,6 +305,8 @@ type BalanceBreakdown struct {
 	ReserveSats      uint64 `json:"reserveSats"`
 	DefaultCount     int    `json:"defaultCount"`
 	DefaultSats      uint64 `json:"defaultSats"`
+	FundingCount     int    `json:"fundingCount,omitempty"`
+	FundingSats      uint64 `json:"fundingSats,omitempty"`
 	CustomCount      int    `json:"customCount"`
 	MaxUnprovenDepth int    `json:"maxUnprovenDepth"`
 	PendingTxCount   int    `json:"pendingTxCount"`
@@ -256,14 +314,14 @@ type BalanceBreakdown struct {
 
 // SendArgs sends BSV to either a P2PKH address OR a BRC-100 identity public key (BRC-29).
 type SendArgs struct {
-	ToAddress      string   `json:"toAddress,omitempty"`      // base58 P2PKH address
-	ToIdentityKey  string   `json:"toIdentityKey,omitempty"`  // compressed 66-hex secp256k1 pubkey (derives BRC-29 output!)
-	Satoshis       uint64   `json:"satoshis"`
-	Description    string   `json:"description,omitempty"`
-	Labels         []string `json:"labels,omitempty"`
-	AcceptDelayed  bool     `json:"acceptDelayed,omitempty"`
-	NoSend         bool     `json:"noSend,omitempty"`
-	OverrideGuard  bool     `json:"overrideGuard,omitempty"`
+	ToAddress     string   `json:"toAddress,omitempty"`
+	ToIdentityKey string   `json:"toIdentityKey,omitempty"`
+	Satoshis      uint64   `json:"satoshis"`
+	Description   string   `json:"description,omitempty"`
+	Labels        []string `json:"labels,omitempty"`
+	AcceptDelayed bool     `json:"acceptDelayed,omitempty"`
+	NoSend        bool     `json:"noSend,omitempty"`
+	OverrideGuard bool     `json:"overrideGuard,omitempty"`
 }
 
 // SendResult returns the signed tx, AtomicBEEF, and BRC-29 remittance (when sent to an identity key).
@@ -275,19 +333,48 @@ type SendResult struct {
 	BEEF              []byte                   `json:"-"`
 	BEEFHex           string                   `json:"beefHex,omitempty"`
 	Tx                *transaction.Transaction `json:"-"`
-	DerivationPrefix  string                   `json:"derivationPrefix,omitempty"`  // base64 (BRC-29)
-	DerivationSuffix  string                   `json:"derivationSuffix,omitempty"`  // base64 (BRC-29)
-	SenderIdentityKey string                   `json:"senderIdentityKey,omitempty"` // compressed hex
+	DerivationPrefix  string                   `json:"derivationPrefix,omitempty"`
+	DerivationSuffix  string                   `json:"derivationSuffix,omitempty"`
+	SenderIdentityKey string                   `json:"senderIdentityKey,omitempty"`
 	OutputIndex       uint32                   `json:"outputIndex"`
 }
 
-// SweepArgs sweeps 100% of spendable UTXOs across default, reserve, and fuel baskets.
+// SweepArgs sweeps 100% of spendable UTXOs across default, reserve, fuel, and funding baskets.
 type SweepArgs struct {
 	ToAddress     string `json:"toAddress,omitempty"`
 	ToIdentityKey string `json:"toIdentityKey,omitempty"`
+	WireURL       string `json:"wireUrl,omitempty"`
 	Description   string `json:"description,omitempty"`
-	MaxPerTx      int    `json:"maxPerTx,omitempty"` // default DefaultSweepChunkInputs (400)
+	MaxPerTx      int    `json:"maxPerTx,omitempty"`
 	OverrideGuard bool   `json:"overrideGuard,omitempty"`
+}
+
+// PendingBRC29Record durably persists BRC-29 derivation nonces before broadcasting desktop fund/sweep txs
+// so a crash between CreateAction and InternalizeAction never orphans funds.
+type PendingBRC29Record struct {
+	ID               int64  `json:"id"`
+	Direction        string `json:"direction"` // "fund" | "sweep"
+	WireURL          string `json:"wireUrl,omitempty"`
+	CounterpartyPub  string `json:"counterpartyPub"`
+	DerivationPrefix string `json:"derivationPrefix"`
+	DerivationSuffix string `json:"derivationSuffix"`
+	LockingScriptHex string `json:"lockingScriptHex,omitempty"`
+	Satoshis         uint64 `json:"satoshis"`
+	TxID             string `json:"txid,omitempty"`
+	OutputIndex      uint32 `json:"outputIndex"`
+	AtomicBEEF       []byte `json:"-"`
+	Status           string `json:"status"` // "pending" | "done" | "failed"
+	CreatedAt        int64  `json:"createdAt"`
+	UpdatedAt        int64  `json:"updatedAt"`
+}
+
+// PaymentRemittance holds BRC-29 derivation metadata for one payment output.
+type PaymentRemittance struct {
+	TxID              string `json:"txid"`
+	OutputIndex       uint32 `json:"outputIndex"`
+	DerivationPrefix  string `json:"derivationPrefix"`
+	DerivationSuffix  string `json:"derivationSuffix"`
+	SenderIdentityKey string `json:"senderIdentityKey"`
 }
 
 // SweepResult summarizes one or more sweep transactions.
@@ -302,13 +389,14 @@ type SweepResult struct {
 	DerivationSuffix  string                     `json:"derivationSuffix,omitempty"`
 	SenderIdentityKey string                     `json:"senderIdentityKey,omitempty"`
 	OutputIndices     []uint32                   `json:"outputIndices,omitempty"`
+	Remittances       []PaymentRemittance        `json:"remittances,omitempty"`
 }
 
 // ConsolidateArgs merges fragmented small UTXOs into clean reserve outputs.
 type ConsolidateArgs struct {
-	BelowSats   uint64 `json:"belowSats,omitempty"` // 0 => consolidate all small UTXOs (default 10000)
-	MaxInputs   int    `json:"maxInputs,omitempty"` // default 100
-	TargetBasket string `json:"targetBasket,omitempty"` // default "reserve"
+	BelowSats    uint64 `json:"belowSats,omitempty"`
+	MaxInputs    int    `json:"maxInputs,omitempty"`
+	TargetBasket string `json:"targetBasket,omitempty"`
 }
 
 // ConsolidateResult reports a UTXO consolidation pass.
@@ -331,109 +419,14 @@ type ImportResult struct {
 
 // SyncReport summarizes a Monitor reconciliation pass.
 type SyncReport struct {
-	AddedOutputs  int `json:"addedOutputs"`
-	ProvedTxs     int `json:"provedTxs"`
-	SentWaiting   int `json:"sentWaiting"`
-	AbortedStale  int `json:"abortedStale"`
-	PrunedSpent   int `json:"prunedSpent"`
+	AddedOutputs int `json:"addedOutputs"`
+	ProvedTxs    int `json:"provedTxs"`
+	SentWaiting  int `json:"sentWaiting"`
+	AbortedStale int `json:"abortedStale"`
+	PrunedSpent  int `json:"prunedSpent"`
 }
 
-// IsSpendingBasket reports whether basket is eligible for automatic fee/funding coin selection.
+// IsSpendingBasket reports whether basket is part of the wallet's spendable balance.
 func IsSpendingBasket(basket string) bool {
-	return basket == BasketDefault || basket == BasketReserve || basket == BasketFuel
+	return basket == BasketDefault || basket == BasketReserve || basket == BasketFuel || basket == BasketFunding
 }
-
-// isWalletStatusAccepted maps a wallet_txs status to BRC-100 ActionStatus.
-func toBRC100ActionStatus(status string) sdkwallet.ActionStatus {
-	switch status {
-	case StatusCompleted:
-		return sdkwallet.ActionStatusCompleted
-	case StatusUnprocessed:
-		return sdkwallet.ActionStatusUnprocessed
-	case StatusSending:
-		return sdkwallet.ActionStatusSending
-	case StatusUnproven:
-		return sdkwallet.ActionStatusUnproven
-	case StatusUnsigned:
-		return sdkwallet.ActionStatusUnsigned
-	case StatusNoSend:
-		return sdkwallet.ActionStatusNoSend
-	default:
-		return sdkwallet.ActionStatusNonFinal
-	}
-}
-
-const walletSchemaSQL = `
-CREATE TABLE IF NOT EXISTS wallet_txs (
-	txid               TEXT PRIMARY KEY,
-	reference          TEXT UNIQUE,
-	status             TEXT NOT NULL,
-	is_outgoing        INTEGER NOT NULL DEFAULT 1,
-	satoshis           INTEGER NOT NULL DEFAULT 0,
-	fee_sats           INTEGER NOT NULL DEFAULT 0,
-	description        TEXT NOT NULL DEFAULT '',
-	labels_json        TEXT NOT NULL DEFAULT '[]',
-	version            INTEGER NOT NULL DEFAULT 1,
-	lock_time          INTEGER NOT NULL DEFAULT 0,
-	raw_tx             BLOB,
-	beef               BLOB,
-	merkle_path        BLOB,
-	block_height       INTEGER NOT NULL DEFAULT 0,
-	unproven_depth     INTEGER NOT NULL DEFAULT 0,
-	broadcast_attempts INTEGER NOT NULL DEFAULT 0,
-	last_error         TEXT NOT NULL DEFAULT '',
-	created_at         INTEGER NOT NULL,
-	updated_at         INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_wallet_txs_status ON wallet_txs(status, updated_at);
-
-CREATE TABLE IF NOT EXISTS wallet_outputs (
-	id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-	txid                TEXT NOT NULL,
-	vout                INTEGER NOT NULL,
-	satoshis            INTEGER NOT NULL,
-	locking_script      BLOB NOT NULL,
-	basket              TEXT NOT NULL DEFAULT 'default',
-	spendable           INTEGER NOT NULL DEFAULT 1,
-	spent_by_txid       TEXT NOT NULL DEFAULT '',
-	reserved_by_ref     TEXT NOT NULL DEFAULT '',
-	reserved_until      INTEGER NOT NULL DEFAULT 0,
-	key_kind            TEXT NOT NULL DEFAULT 'fund',
-	derivation_prefix   TEXT NOT NULL DEFAULT '',
-	derivation_suffix   TEXT NOT NULL DEFAULT '',
-	sender_identity_key TEXT NOT NULL DEFAULT '',
-	tags_json           TEXT NOT NULL DEFAULT '[]',
-	custom_instructions TEXT NOT NULL DEFAULT '',
-	output_description  TEXT NOT NULL DEFAULT '',
-	coinbase            INTEGER NOT NULL DEFAULT 0,
-	block_height        INTEGER NOT NULL DEFAULT 0,
-	created_at          INTEGER NOT NULL,
-	UNIQUE(txid, vout)
-);
-CREATE INDEX IF NOT EXISTS idx_wallet_outputs_select
-	ON wallet_outputs(basket, spendable, reserved_by_ref, satoshis, id);
-CREATE INDEX IF NOT EXISTS idx_wallet_outputs_reserved
-	ON wallet_outputs(reserved_by_ref, reserved_until);
-CREATE INDEX IF NOT EXISTS idx_wallet_outputs_txid
-	ON wallet_outputs(txid);
-
-CREATE TABLE IF NOT EXISTS wallet_inputs (
-	txid                  TEXT NOT NULL,
-	vin                   INTEGER NOT NULL,
-	source_txid           TEXT NOT NULL,
-	source_vout           INTEGER NOT NULL,
-	source_satoshis       INTEGER NOT NULL DEFAULT 0,
-	source_locking_script BLOB,
-	unlocking_script      BLOB,
-	input_description     TEXT NOT NULL DEFAULT '',
-	sequence_number       INTEGER NOT NULL DEFAULT 4294967295,
-	PRIMARY KEY (txid, vin)
-);
-
-CREATE TABLE IF NOT EXISTS wallet_pending_actions (
-	reference  TEXT PRIMARY KEY,
-	state_json BLOB NOT NULL,
-	expires_at INTEGER NOT NULL,
-	created_at INTEGER NOT NULL
-);
-`

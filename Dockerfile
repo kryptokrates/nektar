@@ -41,12 +41,15 @@ RUN apk add --no-cache ca-certificates wget \
  && mkdir -p /data && chown nektar:nektar /data
 COPY --from=go-build /out/nektar /usr/local/bin/nektar
 COPY --from=go-build /out/restate-server /usr/local/bin/restate-server
+COPY integrations/hermes /usr/local/share/nektar/integrations/hermes
+COPY integrations/openclaw /usr/local/share/nektar/integrations/openclaw
+COPY skills/nektar-memory /usr/local/share/nektar/skills/nektar-memory
 USER nektar
-ENV NEKTAR_DATA_DIR=/data NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=testnet
-EXPOSE 8080 9080
+ENV NEKTAR_DATA_DIR=/data NEKTAR_HTTP_PORT=18420 NEKTAR_NETWORK=testnet NEKTAR_CONTAINER=1
+EXPOSE 18420 9080
 VOLUME /data
 LABEL io.modelcontextprotocol.server.name="io.github.nedzof/nektar"
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD wget -qO- http://127.0.0.1:8080/v1/health || exit 1
+  CMD wget -qO- http://127.0.0.1:18420/v1/health || exit 1
 ENTRYPOINT ["/usr/local/bin/nektar"]
 CMD ["serve"]

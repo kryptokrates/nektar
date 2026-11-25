@@ -1,61 +1,29 @@
-# Join testnet — run an independent nektar hub
+# Join testnet — run an independent Nektar v0.4 Hub
 
 We need operators who are **not us**. Everything the network does on one box
-is a simulation; the gate that matters is a second team running `deploy/hub/`
+is a simulation; the gate that matters is a second team running a Nektar v0.4 Hub
 on their own hardware, on their own keys, somewhere we don't control.
 
-This is the whole ask: a Linux box, Docker, a public address, ~30 minutes,
-zero real money (testnet sats only — we'll fund you if you ask).
+This is the whole ask: any Linux box (even a $4 / 512 MB RAM VPS), a public address, ~2 minutes,
+zero real money (testnet sats only — free faucet built in).
 
-## What you're agreeing to run
+## What you're agreeing to run (v0.4 Pure-Go Single Binary)
 
-One compose file brings up a self-contained hub:
+In v0.4, the entire Hub — agent, 16-lane Overlay Hub (`tm_nektar_<net>_0..f` + `ls_nektar`),
+Lightweb modules (`bfinger`, `bbox`, `blogs`, `borg`, `bsecret`, `bstore`), native SSE `/events`,
+liquidity/bounty engine, faucet, and Svelte 5 Dashboard — runs inside **one static Go binary**
+(`nektar serve -hub -listen :18420`), with optional Caddy Auto-TLS in front:
 
-| Piece               | What it is                                                     | Trust              |
-| ------------------- | -------------------------------------------------------------- | ------------------ |
-| `agent`             | the nektar MCP server + automation (announces, seeds, deals)   | yours — your keys  |
-| `host-a`/`host-b`   | overlay hosts carrying market/envelope/finger/directory lanes  | untrusted plumbing |
-| `watch-a`/`watch-b` | wake shims — peers long-poll these instead of polling hosts    | untrusted plumbing |
-| `db` + `shim`       | mysql for host state; a header shim proxying testnet endpoints | untrusted plumbing |
+| Piece   | What it is                                                               | Trust              |
+| ------- | ------------------------------------------------------------------------ | ------------------ |
+| `hub`   | single v0.4 Go binary (`nektar serve -listen :18420 -hub`, SQLite FTS5) | yours — your keys  |
+| `caddy` | optional Let's Encrypt HTTPS reverse proxy (or `cloudflared` tunnel)     | untrusted plumbing |
 
-Hosts can censor or withhold — never forge. Everything they serve is
-signature- and SPV-verified by the reader, so a misbehaving host is detected,
+Hubs can censor or withhold — never forge. Everything they serve is
+signature- and SPV-verified by the reader, so a misbehaving Hub is detected,
 not trusted.
 
-## Requirements
-
-- Any always-on Linux box with Docker + docker compose (a $5 VPS is plenty —
-  ~1 GB RAM, ~10 GB disk).
-- A public address peers can reach: a domain with TLS (`hub.example.com`) or
-  a bare `https://` reverse proxy in front of ports 18391/18392. Plain
-  IP+port works on testnet if TLS is a blocker — say so and we'll note the
-  exception. Caddy is the shortest path — a `Caddyfile` this small does
-  auto-TLS + routing:
-
-  ```caddyfile
-  hub.example.com {
-      handle_path /hosts/a* { reverse_proxy localhost:18391 }
-      handle_path /hosts/b* { reverse_proxy localhost:18392 }
-      handle_path /watch/a* { reverse_proxy localhost:18393 }
-      handle_path /watch/b* { reverse_proxy localhost:18394 }
-      handle { reverse_proxy localhost:8080 }
-  }
-  ```
-
-- **No key to generate.** The agent creates its own persistent fee key on
-  first boot and prints `operator fee key <address>` — send testnet sats
-  to that address. Self-serve: `curl -X POST https://nektar.run/v1/faucet
--H 'content-type: application/json' -d '{"address":"<printed address>"}'`
-  (one drip per address; if it's out or down, any public testnet faucet
-  works, or open a GitHub issue titled `TESTNET-GRANT` with your address).
-  Set `NEKTAR_WAIT_FUNDING=1` +
-  `NEKTAR_INDEXER_DISCOVERY=1` and the agent holds startup until the sats
-  land — nothing else to do. (Bring-your-own-key operators can instead set
-  `NEKTAR_FUND_WIF` to a base58check WIF — _not_ raw hex.)
-
-## Up (1 command — built-in Caddy Auto-TLS & auto-faucet)
-
-`deploy/hub/compose.yaml` now bundles **Caddy Auto-TLS** (and an optional Cloudflare Tunnel for home NAT) directly inside the stack — no manual Caddyfile, no repo checkout, and automatic testnet faucet funding:
+## Up in 1 Command (Built-in Caddy Auto-TLS & Auto-Faucet)
 
 ```bash
 # Option 1 — Zero-domain instant HTTPS on any fresh VPS (<public-ip>.sslip.io):
@@ -63,98 +31,57 @@ curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/h
 
 # Option 2 — With your own domain (Caddy provisions Let's Encrypt automatically):
 curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | \
-  NEKTAR_PUBLIC_URL=https://<you> bash
+  NEKTAR_DOMAIN=hub.example.com bash
 
 # Option 3 — Behind a home router / NAT (zero open ports via Cloudflare Tunnel):
 curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | \
-  NEKTAR_HUB_MODE=tunnel bash
+  NEKTAR_TUNNEL=1 bash
 
 # Option 4 — Already installed the nektar CLI? Graduate in one command:
 nektar hub up --auto-ip   # or: nektar hub up --domain <you>  |  --tunnel
+
+# Option 5 — Zero-Docker native Go binary on any Linux box:
+curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh
+nektar serve -hub -listen :18420
 ```
 
 **1-Click Cloud & Home-Server Templates** also ship in `deploy/hub/templates/`:
 
-- **Hetzner / DigitalOcean / Vultr / AWS:** paste [deploy/hub/templates/cloud-init.yaml](../deploy/hub/templates/cloud-init.yaml) into User Data (~90s to live HTTPS hub).
+- **Hetzner / DigitalOcean / Vultr / AWS:** paste [cloud-init.yaml](../deploy/hub/templates/cloud-init.yaml) into User Data (~45s to live HTTPS hub).
 - **Coolify / Dokploy:** import [coolify.compose.yaml](../deploy/hub/templates/coolify.compose.yaml) or [dokploy.compose.yaml](../deploy/hub/templates/dokploy.compose.yaml).
+- **Fly.io / Render / Railway:** [fly.toml](../deploy/hub/templates/fly.toml), [render.yaml](../deploy/hub/templates/render.yaml), [railway.json](../deploy/hub/templates/railway.json).
 - **Umbrel / CasaOS:** [umbrel/](../deploy/hub/templates/umbrel/umbrel-app.yml) and [casaos.yaml](../deploy/hub/templates/casaos.yaml).
+- **Kubernetes / Helm:** `helm install nektar-hub deploy/hub/helm --set publicUrl=https://<you>`.
 
-(`NEKTAR_PUBLIC_URL` fills `NEKTAR_MARKET_HOSTS`, `NEKTAR_PUSH_PUBLIC`,
-`NEKTAR_WATCH_URLS`, and `NEKTAR_WATCH_PUBLIC` automatically, including the
-`nektar.run` seed pair on testnet; set any of those individually to override.)
+## Funding on Testnet
 
-Or by hand from a checkout: `cp deploy/hub/.env.example deploy/hub/.env`,
-fill the marked values (`openssl rand -hex 32` ×4 for the secrets), then
-`docker compose -f deploy/hub/compose.yaml --env-file deploy/hub/.env up -d`.
+No key to generate manually — the Hub creates its own persistent BRC-100 embedded
+wallet on first boot under `/data/wallet/`. Self-serve testnet sats:
 
-Healthy boot looks like: `automation: preflight` green, then
-`automation: announce` within the first upkeep pass, then quiet periodic
-lane polls. If `NEKTAR_WAIT_FUNDING=1` is set, the agent first prints a QR
-
-- `operator fee key <address>` and waits for sats — that wait is the only
-  step that can stall, and it's the one thing we can help with instantly.
+```bash
+curl -X POST https://nektar.run/v1/faucet \
+  -H 'content-type: application/json' \
+  -d '{"address":"<your funding address from nektar status>"}'
+```
 
 ## Verify you joined
 
-1. **Your card is on the dir lane.** Ask your own host pair:
-   `curl -X POST https://<you>/hosts/a/lookup -H 'content-type: application/json' -d '{"service":"ls_nektar","query":{"announces":{"net":"testnet"}}}'`
-   → your pubkey in the results (appears after the first announce — the
-   keep-alive re-announces until the card's funding proof lands, ~one
-   block). `POST /v1/tools/doctor` on the agent (bearer `NEKTAR_HTTP_TOKEN`)
-   is the one-call health read for everything else.
-2. **We union you.** Tell us your `https://<you>/hosts/{a,b}` — a fresh
-   instance here reads the directory, unions your hosts, and we confirm the
-   union in our logs. That is the gate: independent operators found by the
-   protocol, not by configuration.
-3. **Seeded content.** `NEKTAR_SEED_DOMAINS` defaults to `*` — your
-   agent imports every announced pack at boot; a second
-   fresh instance can then import them _from you_.
+1. **Health & Hub status:** `curl -fsS https://<you>/v1/health` and `curl -fsS https://<you>/hub/health`
+2. **Your card is on the dir lane:**
+   ```bash
+   curl -X POST https://<you>/hub/lookup \
+     -H 'content-type: application/json' \
+     -d '{"service":"ls_nektar","query":{"kind":"announce","net":"testnet"}}'
+   ```
+3. **Connect your AI clients:**
+   ```bash
+   claude mcp add --transport http nektar https://<you>/mcp \
+     --header "Authorization: Bearer <NEKTAR_API_TOKEN>"
+   ```
+   Or inspect `/v1/openapi.json` and `/v1/metrics` (Prometheus).
 
-## Connect your AI client
+## Honest Boundaries
 
-The hub you just built is also your agent's memory endpoint — attach any
-MCP-capable client to it:
-
-```bash
-# Claude Code
-claude mcp add --transport http nektar https://<you>/mcp \
-  --header "Authorization: Bearer <NEKTAR_HTTP_TOKEN>"
-
-# Codex — ~/.codex/config.toml
-# [mcp_servers.nektar]
-# url = "https://<you>/mcp"
-# http_headers = { "Authorization" = "Bearer <NEKTAR_HTTP_TOKEN>" }
-```
-
-Non-MCP clients (Hermes-style function calling, anything HTTP-capable) use
-the REST surface with the same bearer: `GET /v1/tools` for the manifest,
-`POST /v1/tools/{name}` to call — `/v1/openapi.json` carries the schemas.
-
-## What we ask in return
-
-- **Keep it up ~1 week.** The thing we're measuring is uptime-independence:
-  your hosts + announce must be reachable when you're not thinking about us.
-- **Report crashes, refused carriers, and anything in `docker compose logs`
-  that looks wrong** — a paste is enough; don't debug it for us.
-- Testnet sats only: nothing you run here can spend real money. If the agent
-  asks for `NEKTAR_MAINNET_CONFIRM`, stop — that's a misconfiguration.
-
-## If it breaks
-
-- `EAI_AGAIN ... 'db'` on the hosts: mysql raced the restart — the
-  `restart: unless-stopped` policy self-heals in ~30s; if it doesn't,
-  `docker compose restart db && docker compose restart host-a host-b`.
-- Ports refusing externally but `curl` works on the box: NAT/forwarding —
-  your announce advertises the PUBLIC urls, so fix the proxy, not the .env.
-- `no funding slot`/`automation: reserve:` errors: the fee address is empty
-  or its outputs are dust — top it up (or `POST /v1/tools/fundingImport`
-  with the funding txid); the agent adopts new outputs on the next
-  reconcile.
-
-## What running this proves (and doesn't)
-
-It proves the wire under real independence: your clock, your NAT, your key
-custody, your latency. Fresh instances finding your card and unioning your
-hosts is the network's own bootstrap working with no registry. It does not
-yet prove operator economics or mainnet safety — that's the soak and the
-`docs/JOIN-MAINNET.md` gates, and your week of uptime is one of the inputs.
+Verification proves **recorded, unaltered, and derivable** — never that a claim is _true_.
+Testnet sats have no monetary value; mainnet (`NEKTAR_NETWORK=main`) refuses to boot
+without `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND` and enforces `SpendGuard` caps fail-closed.

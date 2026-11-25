@@ -25,14 +25,29 @@
     nextAt: number | null
     journal: Array<{ op: string; at: number; to: string; cause: string }>
   }
-  type Shard = { shard: string; domains: string[]; records: number; works: number; earned: number; offers: string }
+  type Shard = { shard: string; domains: string[]; records: number; works: number; earned: number; offers: string; active?: boolean }
   type State = {
     network: string
     model: string
     pub: string
     uptimeSec: number
     loop: { steps: { name: string; done: boolean }[]; done: number; frontier: string; next: string }
-    treasury: { address?: string | null; sats: number; utxos: number; funded: boolean; payments: string }
+    treasury: {
+      address?: string | null
+      identityPub?: string | null
+      sats: number
+      confirmedSats?: number
+      unprovenSats?: number
+      reservedSats?: number
+      utxos: number
+      fuelUtxos?: number
+      reserveUtxos?: number
+      defaultUtxos?: number
+      walletMode?: string
+      feeRateSatPerKB?: number
+      funded: boolean
+      payments: string
+    }
     receipts: { count: number; earned: number; earned24h: number; amounts: number[]; list: Receipt[] }
     memory: { shards: number; records: number; anchored: number; unproven: number; coverage: number; prover: string }
     market: Shard[]
@@ -70,6 +85,13 @@
         pollWakes: number
         bboxWakes: number
       } | null
+      unmatchedWants?: Array<{
+        wantId: string
+        domain: string
+        query: string
+        maxSats: number
+        seenAt: number
+      }>
     }
     automation: { pending: Pending[]; ops: Op[]; rt: Rt } | null
     share: { enabled: boolean; url: string }
@@ -102,6 +124,15 @@
   let joinInput = $state('')
   let joinMsg = $state('')
   let joinFound = $state<string[]>([])
+  let addrCopied = $state(false)
+  let walletBusy = $state(false)
+  let walletMsg = $state('')
+  let walletErr = $state('')
+  let showWithdraw = $state(false)
+  let sendTo = $state('')
+  let sendSats = $state('')
+  let showDesktopFund = $state(false)
+  let desktopFundSats = $state('10000')
 
   const fmt = (n: number) => n.toLocaleString('en').replace(/,/g, "'")
   const host = (u: string) => u.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
@@ -214,6 +245,164 @@
     const j = (await r.json().catch(() => ({}))) as { error?: string }
     joinMsg = r.ok ? `left ${host(u)}` : (j.error ?? `disconnect failed (${r.status})`)
     await load()
+  }
+
+  async function copyAddress() {
+    if (!s?.treasury.address) return
+    await navigator.clipboard.writeText(s.treasury.address).catch(() => {})
+    addrCopied = true
+    setTimeout(() => (addrCopied = false), 1500)
+  }
+
+  async function operatorRequest(method: string, url: string, payload?: Record<string, unknown>) {
+    const run = (tok?: string) =>
+      fetch(url, {
+        method,
+        headers: {
+          ...(payload !== undefined ? { 'content-type': 'application/json' } : {}),
+          ...(tok ? { authorization: `Bearer ${tok}` } : {})
+        },
+        ...(payload !== undefined ? { body: JSON.stringify(payload) } : {})
+      })
+    let r = await run(sessionStorage.getItem('nektar-operator-token') ?? undefined)
+    if (r.status === 401 || r.status === 403) {
+      const tok = prompt('operator token (NEKTAR_OPERATOR_TOKEN)')
+      if (!tok) return null
+      sessionStorage.setItem('nektar-operator-token', tok)
+      r = await run(tok)
+    }
+    return r
+  }
+
+  async function operatorPost(url: string, payload: Record<string, unknown>) {
+    return operatorRequest('POST', url, payload)
+  }
+
+  async function toggleListing(shard: string, active: boolean) {
+    const r = await operatorRequest('PATCH', `/v1/market/listings/${encodeURIComponent(shard)}`, { active })
+    if (r && !r.ok) err = `update listing failed (${r.status})`
+    await load()
+  }
+
+  async function deleteListing(shard: string) {
+    if (!confirm(`Remove sell listing for shard "${shard}"?`)) return
+    const r = await operatorRequest('DELETE', `/v1/market/listings/${encodeURIComponent(shard)}`)
+    if (r && !r.ok) err = `delete listing failed (${r.status})`
+    await load()
+  }
+
+  async function syncWallet() {
+    walletBusy = true
+    walletMsg = ''
+    walletErr = ''
+    try {
+      const r = await fetch('/v1/wallet/sync', { method: 'POST' })
+      const j = (await r.json().catch(() => ({}))) as { added?: number; proved?: number; error?: string }
+      if (!r.ok) {
+        walletErr = j.error ?? `sync failed (${r.status})`
+        return
+      }
+      walletMsg = `✓ synced (+${j.added ?? 0} UTXO, ${j.proved ?? 0} proved)`
+      await load()
+    } catch (e) {
+      walletErr = String(e)
+    } finally {
+      walletBusy = false
+    }
+  }
+
+  async function fundFromDesktop() {
+    const amount = Number(desktopFundSats)
+    if (!Number.isFinite(amount) || amount <= 0) {
+      walletErr = 'enter positive satoshis'
+      return
+    }
+    walletBusy = true
+    walletMsg = ''
+    walletErr = ''
+    try {
+      const r = await fetch('/v1/wallet/fund-desktop', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sats: Math.floor(amount) })
+      })
+      const j = (await r.json().catch(() => ({}))) as { txid?: string; satoshis?: number; error?: string }
+      if (!r.ok) {
+        walletErr = j.error ?? `desktop fund failed (${r.status})`
+        return
+      }
+      walletMsg = `✓ +${fmt(j.satoshis ?? amount)} sats from BSV Desktop (${String(j.txid ?? '').slice(0, 10)}…)`
+      showDesktopFund = false
+      await load()
+    } catch (e) {
+      walletErr = String(e)
+    } finally {
+      walletBusy = false
+    }
+  }
+
+  async function sendWalletFunds() {
+    const dest = sendTo.trim()
+    const amount = Number(sendSats)
+    if (!dest || !Number.isFinite(amount) || amount <= 0) {
+      walletErr = 'enter destination address/identity key and positive sats'
+      return
+    }
+    const payload: Record<string, unknown> = { to: dest, sats: Math.floor(amount) }
+    if (s?.network === 'main') {
+      if (!confirm(`MAINNET: send ${fmt(amount)} real sats to ${dest}?`)) return
+      payload.confirm = 'I_UNDERSTAND'
+    }
+    walletBusy = true
+    walletMsg = ''
+    walletErr = ''
+    try {
+      const r = await operatorPost('/v1/wallet/send', payload)
+      if (!r) return
+      const j = (await r.json().catch(() => ({}))) as { txid?: string; feeSats?: number; error?: string }
+      if (!r.ok) {
+        walletErr = j.error ?? `send failed (${r.status})`
+        return
+      }
+      walletMsg = `✓ sent ${fmt(amount)} sats (fee ${j.feeSats ?? 0}, tx ${String(j.txid ?? '').slice(0, 10)}…)`
+      sendSats = ''
+      await load()
+    } catch (e) {
+      walletErr = String(e)
+    } finally {
+      walletBusy = false
+    }
+  }
+
+  async function sweepWalletFunds(toDesktop: boolean) {
+    const dest = sendTo.trim()
+    if (!toDesktop && !dest) {
+      walletErr = 'enter destination address/identity key to sweep'
+      return
+    }
+    const targetLabel = toDesktop ? 'local BSV Desktop' : dest
+    if (!confirm(`Sweep 100% of spendable funds (${fmt(s?.treasury.sats ?? 0)} sats) to ${targetLabel}?`)) return
+    const payload: Record<string, unknown> = toDesktop ? { toDesktop: true } : { to: dest }
+    if (s?.network === 'main') payload.confirm = 'I_UNDERSTAND'
+    walletBusy = true
+    walletMsg = ''
+    walletErr = ''
+    try {
+      const r = await operatorPost('/v1/wallet/sweep', payload)
+      if (!r) return
+      const j = (await r.json().catch(() => ({}))) as { sweptSats?: number; totalFeeSats?: number; error?: string }
+      if (!r.ok) {
+        walletErr = j.error ?? `sweep failed (${r.status})`
+        return
+      }
+      walletMsg = `✓ swept ${fmt(j.sweptSats ?? 0)} sats (fee ${j.totalFeeSats ?? 0})`
+      showWithdraw = false
+      await load()
+    } catch (e) {
+      walletErr = String(e)
+    } finally {
+      walletBusy = false
+    }
   }
 
   let es: EventSource | null = null
@@ -348,7 +537,35 @@
       {:else}
         <p class="empty">the earnings curve draws itself — first groundedAnswer issues the first checkable work</p>
       {/if}
+      {#if s.loop?.steps?.length}
+        <div class="rline" style="margin-top:.85rem;padding-top:.7rem;border-top:1px solid var(--line)">
+          <span class="chip">activation {s.loop.frontier}</span>
+          {#each s.loop.steps as st}
+            <span class="chip" class:ok={st.done}>{st.done ? '✓' : '·'} {st.name}</span>
+          {/each}
+        </div>
+      {/if}
       </section>
+      {/if}
+
+      {#if (tab === 'overview' || tab === 'earnings') && s.market.length > 0}
+        <div class="card" id="listings">
+          <h2>Listed Shards <small>{s.market.length} shard{s.market.length === 1 ? '' : 's'} offered on market</small></h2>
+          {#each s.market as m}
+            <div class="row">
+              <span>
+                <b>{m.shard}</b>
+                {#each m.domains as dm}<i class="dom">{dm}</i>{/each}
+                <small class="mut"> · {m.records} rec · {m.works} sold · {fmt(m.earned)} sats · {m.offers}</small>
+              </span>
+              <span class="rowend">
+                <span class="chip" class:ok={m.active !== false}>{m.active !== false ? 'active' : 'paused'}</span>
+                <button class="jbtn" onclick={() => toggleListing(m.shard, m.active === false)}>{m.active !== false ? 'pause' : 'resume'}</button>
+                <button class="x" title="delete listing" onclick={() => deleteListing(m.shard)}>✕</button>
+              </span>
+            </div>
+          {/each}
+        </div>
       {/if}
 
       {#if tab === 'overview' || tab === 'earnings'}
@@ -469,6 +686,8 @@
           {#if s.net.liquidity}
             <div class="rline">
               <span class="chip">fill {(s.net.liquidity.fillRate * 100).toFixed(0)}%</span>
+              <span class="chip">zero {(s.net.liquidity.zeroRate * 100).toFixed(0)}%</span>
+              <span class="chip">hub supply {(s.net.liquidity.hubSupplyShare * 100).toFixed(0)}%</span>
               <span class="chip">median offer {s.net.liquidity.medianTimeToOfferMs} ms</span>
               <span class="chip">organic sellers {s.net.liquidity.organicSellers}</span>
               <span class="chip">SSE wakes {s.net.liquidity.sseWakes}</span>
@@ -489,7 +708,16 @@
               </div>
             {/each}
           {:else}
-            <p class="empty">no active bounties on connected hubs — run <code>nektar serve --hub</code> to host a bounty pool</p>
+            <p class="empty">no active bounties on connected hubs — run <code>nektar serve -hub</code> to host a bounty pool</p>
+          {/if}
+          {#if s.net.unmatchedWants?.length}
+            <h2 style="margin-top:1rem">Unmatched Demand <small>zero-offer wants — seed these domains to earn</small></h2>
+            {#each s.net.unmatchedWants as uw}
+              <div class="row">
+                <span><i class="dom">{uw.domain}</i> <small class="mut">{uw.query || 'any query'}</small></span>
+                <span class="chip">up to {fmt(uw.maxSats)} sats</span>
+              </div>
+            {/each}
           {/if}
         </div>
       {/if}
@@ -588,32 +816,41 @@
 
       {#if tab === 'debug'}
         <div class="card">
-          <h2>Debug <small>operator diagnostics — local only</small></h2>
-          <p class="tabhint">the Restate introspection UI mounts here once the executor port lands — invocations, objects, awakeables</p>
+          <h2>Debug <small>Restate durable executor &amp; operator diagnostics</small></h2>
+          <p class="tabhint">live Restate sys_invocation telemetry — BuyerDeal, SellerDeal, Custody, Tx, AnchorCadence</p>
           {#if s.automation}
             <div class="rline">
-              <span class="chip">executor {s.automation.rt.executor}</span>
-              <span class="chip">{s.automation.rt.pending.length} in outbox</span>
-              <span class="chip">drain {s.automation.rt.nextAt ? new Date(s.automation.rt.nextAt).toLocaleTimeString() : 'idle'}</span>
+              <span class="chip" class:ok={s.automation.rt.executor === 'restate'} class:bad={s.automation.rt.executor === 'restate-unavailable'}>executor {s.automation.rt.executor}</span>
+              <span class="chip">{s.automation.rt.pending.length} active</span>
+              <span class="chip">{s.automation.rt.journal.length} invocations</span>
+              <span class="chip">next {s.automation.rt.nextAt ? new Date(s.automation.rt.nextAt).toLocaleTimeString() : 'idle'}</span>
+              {#if s.automation.rt.adminUrl}
+                <a class="chip" href={s.automation.rt.adminUrl} target="_blank" rel="noreferrer">Restate Admin API ↗</a>
+              {/if}
             </div>
-            {#if s.automation.rt.adminUrl}
-              <iframe class="restate" src={s.automation.rt.adminUrl} title="restate ui"></iframe>
-            {:else}
-              <div class="rph"><b>restate ui</b><p>embeds at the executor's admin endpoint once the port lands — the journaled steps below are what it will introspect</p></div>
+            {#if s.automation.rt.executor !== 'restate'}
+              <div class="rph">
+                <b>durable executor {s.automation.rt.executor}</b>
+                <p>Run <code>nektar restate-up</code> (or start with Docker Compose) so <code>restate-server</code> supervises durable deals, awakeables, custody reservations &amp; anchor cadences.</p>
+              </div>
             {/if}
             {#if s.automation.rt.pending.length}
-              <table class="jt"><thead><tr><th>kind</th><th>op</th><th>status</th><th>attempts</th><th>next</th></tr></thead><tbody>
+              <h3 style="margin:.9rem 0 .4rem;font-size:.82rem;color:var(--mut);text-transform:uppercase;letter-spacing:.08em">Active / Suspended Invocations</h3>
+              <table class="jt"><thead><tr><th>target</th><th>invocation</th><th>status</th><th>retries</th><th>next</th></tr></thead><tbody>
                 {#each s.automation.rt.pending as p}
-                  <tr><td>{p.kind}</td><td class="mono">{p.operationId.slice(0, 8)}…</td><td>{p.status}{p.deferClass ? ` · ${p.deferClass}` : ''}{p.lastError ? ` · ${p.lastError}` : ''}</td><td>{p.attempts}</td><td class="mut">{new Date(p.nextAt).toLocaleTimeString()}</td></tr>
+                  <tr><td>{p.kind}</td><td class="mono">{p.operationId.slice(0, 12)}…</td><td>{p.status}{p.deferClass ? ` · ${p.deferClass}` : ''}{p.lastError ? ` · ${p.lastError}` : ''}</td><td>{p.attempts}</td><td class="mut">{p.nextAt ? new Date(p.nextAt).toLocaleTimeString() : '—'}</td></tr>
                 {/each}
               </tbody></table>
             {/if}
             {#if s.automation.rt.journal.length}
-              <table class="jt"><thead><tr><th>at</th><th>op</th><th>to</th><th>cause</th></tr></thead><tbody>
+              <h3 style="margin:.9rem 0 .4rem;font-size:.82rem;color:var(--mut);text-transform:uppercase;letter-spacing:.08em">Recent Restate Invocations</h3>
+              <table class="jt"><thead><tr><th>at</th><th>target</th><th>status</th><th>detail</th></tr></thead><tbody>
                 {#each s.automation.rt.journal as e}
-                  <tr><td class="mut">{new Date(e.at).toLocaleTimeString()}</td><td class="mono">{e.op}</td><td>{e.to}</td><td class="mut">{e.cause}</td></tr>
+                  <tr><td class="mut">{e.at ? new Date(e.at).toLocaleTimeString() : '—'}</td><td class="mono">{e.op}</td><td>{e.to}</td><td class="mut">{e.cause}</td></tr>
                 {/each}
               </tbody></table>
+            {:else if s.automation.rt.executor === 'restate'}
+              <p class="empty">Restate connected and ready — no invocations recorded yet.</p>
             {/if}
           {:else}
             <p class="empty">automation not attached — nothing to introspect yet</p>
@@ -628,9 +865,59 @@
 
     <aside class="rail">
         <div class="card">
-          <h2>Wallet</h2>
+          <h2>Wallet <small>{s.treasury.walletMode ?? 'embedded'} · {s.treasury.feeRateSatPerKB ?? 100} sat/kB</small></h2>
           <div class="wbal">{fmt(s.treasury.sats)} <em>sats</em></div>
-          <p class="wmeta">{s.treasury.utxos} reserve output{s.treasury.utxos === 1 ? '' : 's'} · payments {s.treasury.payments} · {s.treasury.funded ? 'funded' : 'needs funding'}</p>
+          <p class="wmeta">
+            {#if (s.treasury.confirmedSats ?? 0) > 0 || (s.treasury.unprovenSats ?? 0) > 0}
+              {fmt(s.treasury.confirmedSats ?? 0)} confirmed{#if (s.treasury.unprovenSats ?? 0) > 0} · {fmt(s.treasury.unprovenSats ?? 0)} unconfirmed{/if}
+            {:else}
+              {s.treasury.funded ? 'funded' : 'needs funding'}
+            {/if}
+            · {s.treasury.payments}
+          </p>
+          <div class="wchips">
+            <span class="chip">UTXOs {s.treasury.utxos}</span>
+            {#if s.treasury.fuelUtxos !== undefined}<span class="chip">fuel {s.treasury.fuelUtxos}</span>{/if}
+            {#if s.treasury.reserveUtxos !== undefined}<span class="chip">reserve {s.treasury.reserveUtxos}</span>{/if}
+            {#if (s.treasury.defaultUtxos ?? 0) > 0}<span class="chip">default {s.treasury.defaultUtxos}</span>{/if}
+          </div>
+          {#if s.treasury.address}
+            <div class="waddr">
+              <code class="mono">{s.treasury.address}</code>
+              <button class="wmini" onclick={copyAddress}>{addrCopied ? '✓' : 'copy'}</button>
+            </div>
+          {/if}
+          <div class="wacts">
+            <button class="wbtn" onclick={syncWallet} disabled={walletBusy}>{walletBusy ? '…' : 'Sync'}</button>
+            {#if (s.treasury.walletMode ?? 'embedded') === 'embedded'}
+              <button class="wbtn" onclick={() => { showDesktopFund = !showDesktopFund; showWithdraw = false }}>+ BSV Desktop</button>
+              <button class="wbtn" onclick={() => { showWithdraw = !showWithdraw; showDesktopFund = false }}>Withdraw / Sweep</button>
+            {/if}
+          </div>
+          {#if showDesktopFund}
+            <div class="wbox">
+              <div class="wrow">
+                <input class="win" type="number" min="100" bind:value={desktopFundSats} placeholder="sats (e.g. 10000)" />
+                <button class="wbtn primary" onclick={fundFromDesktop} disabled={walletBusy}>Fund</button>
+              </div>
+              <small class="mut">Requests 1-click BRC-29 funding from local BSV Desktop (127.0.0.1:3321).</small>
+            </div>
+          {/if}
+          {#if showWithdraw}
+            <div class="wbox">
+              <input class="win" bind:value={sendTo} placeholder="BSV address or 66-hex BRC-100 identity key" />
+              <div class="wrow">
+                <input class="win" type="number" min="1" bind:value={sendSats} placeholder="amount (sats)" />
+                <button class="wbtn primary" onclick={sendWalletFunds} disabled={walletBusy}>Send</button>
+              </div>
+              <div class="wrow">
+                <button class="wbtn" onclick={() => sweepWalletFunds(false)} disabled={walletBusy}>Sweep All to Address</button>
+                <button class="wbtn" onclick={() => sweepWalletFunds(true)} disabled={walletBusy}>Sweep to BSV Desktop</button>
+              </div>
+            </div>
+          {/if}
+          {#if walletMsg}<p class="jmsg">{walletMsg}</p>{/if}
+          {#if walletErr}<p class="werr">{walletErr}</p>{/if}
         </div>
 
         <div class="card" id="network">
@@ -1034,14 +1321,6 @@
     white-space: pre-wrap;
     word-break: break-word;
   }
-  .restate {
-    width: 100%;
-    height: 440px;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    background: #fff;
-    margin-top: 0.8rem;
-  }
   .rph {
     border: 1px dashed var(--line);
     border-radius: 10px;
@@ -1170,6 +1449,103 @@
     color: var(--mut);
     font-size: 0.72rem;
     margin: 0.3rem 0 0;
+  }
+  .wchips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.55rem;
+  }
+  .waddr {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.6rem;
+    background: #120e0c;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.3rem 0.45rem;
+  }
+  .waddr code {
+    flex: 1;
+    font-size: 0.7rem;
+    color: var(--mut);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wmini {
+    background: var(--card2);
+    border: 1px solid var(--line);
+    color: var(--amber);
+    border-radius: 6px;
+    padding: 0.14rem 0.45rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .wacts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.65rem;
+  }
+  .wbtn {
+    background: var(--card2);
+    border: 1px solid var(--line);
+    color: #ece7e4;
+    border-radius: 8px;
+    padding: 0.34rem 0.6rem;
+    font: inherit;
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .wbtn:hover {
+    border-color: var(--amber);
+    color: var(--amber);
+  }
+  .wbtn.primary {
+    background: var(--amber);
+    border-color: var(--amber);
+    color: var(--dark);
+    font-weight: 700;
+  }
+  .wbtn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .wbox {
+    margin-top: 0.65rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid var(--line);
+    display: grid;
+    gap: 0.45rem;
+  }
+  .wrow {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+  .win {
+    flex: 1;
+    min-width: 110px;
+    background: #120e0c;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: #ece7e4;
+    padding: 0.36rem 0.55rem;
+    font: inherit;
+    font-size: 0.76rem;
+  }
+  .win:focus {
+    outline: none;
+    border-color: var(--amber);
+  }
+  .werr {
+    color: var(--bad);
+    font-size: 0.76rem;
+    margin: 0.5rem 0 0;
   }
   /* 1180–920: the fixed 360px rail would squeeze the feed below ~255px —
      drop it under the feed and let its cards tile side-by-side */

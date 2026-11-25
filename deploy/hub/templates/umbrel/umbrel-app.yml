@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nektar-hub
 category: ai
 name: Nektar
-version: '0.3.2'
+version: '0.4.0'
 tagline: Verifiable AI agent memory & BSV knowledge hub
 description: >-
   Run your own sovereign Nektar agent and market hub node on your Umbrel home

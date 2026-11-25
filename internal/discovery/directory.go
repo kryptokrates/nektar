@@ -77,7 +77,21 @@ func New(mem *memory.Service, envHosts []string, hc *http.Client) *Service {
 	if hc == nil {
 		hc = &http.Client{Timeout: 12 * time.Second}
 	}
-	ak, _ := ec.NewPrivateKey()
+	var ak *ec.PrivateKey
+	if mem != nil && mem.DB() != nil {
+		if raw, err := mem.DB().LoadOrCreateStableKey("node_market_key_v1", func() ([]byte, error) {
+			k, err := ec.NewPrivateKey()
+			if err != nil {
+				return nil, err
+			}
+			return k.Serialize(), nil
+		}); err == nil && len(raw) == 32 {
+			ak, _ = ec.PrivateKeyFromBytes(raw)
+		}
+	}
+	if ak == nil {
+		ak, _ = ec.NewPrivateKey()
+	}
 	cleanEnv := normalizeHosts(envHosts)
 	return &Service{
 		mem:         mem,
@@ -92,6 +106,13 @@ func New(mem *memory.Service, envHosts []string, hc *http.Client) *Service {
 // AnnouncePubHex returns the compressed pubkey signing this node's AnnounceAd records.
 func (s *Service) AnnouncePubHex() string {
 	return hex.EncodeToString(s.announceKey.PubKey().Compressed())
+}
+
+// Withholdings returns any multi-host directory withholding warnings detected during quorum reads.
+func (s *Service) Withholdings() []WithholdingWarning {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]WithholdingWarning(nil), s.withholdings...)
 }
 
 // ActiveHosts merges env/seed hosts + persisted joined hosts minus explicitly blocked hosts.
@@ -241,13 +262,24 @@ func (s *Service) PublishAnnounce(ctx context.Context, ad bstack.AnnounceAd) (in
 	if ad.Exp == 0 {
 		ad.Exp = time.Now().Add(72 * time.Hour).UnixMilli()
 	}
-	sig, err := bstack.SignArtifact(s.announceKey, ad)
-	if err != nil {
-		return 0, err
-	}
-	body, err := json.Marshal(bstack.SignedAnnounce{Announce: ad, Sig: sig})
-	if err != nil {
-		return 0, err
+	// Guarantee post-CBOR payload fits under bstack.MaxPayload (16KB), trimming Packs if oversized!
+	var body []byte
+	for {
+		sig, err := bstack.SignArtifact(s.announceKey, ad)
+		if err != nil {
+			return 0, err
+		}
+		body, err = json.Marshal(bstack.SignedAnnounce{Announce: ad, Sig: sig})
+		if err != nil {
+			return 0, err
+		}
+		if encoded, encErr := bstack.EncodePayload(bstack.MarketPayload{Kind: bstack.KindAnnounce, Body: body}); encErr == nil && len(encoded) <= bstack.MaxPayload {
+			break
+		}
+		if len(ad.Packs) == 0 {
+			return 0, errors.New("discovery: AnnounceAd exceeds MaxPayload even with 0 packs")
+		}
+		ad.Packs = ad.Packs[:len(ad.Packs)/2]
 	}
 	beef, err := BuildMarketBEEF(bstack.MarketPayload{Kind: bstack.KindAnnounce, Body: body})
 	if err != nil {
@@ -291,7 +323,7 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 			if resp != nil {
 				resp.Body.Close()
 			}
-			_ = s.mem.DB().UpsertHost(store.HostRecord{URL: h, State: "down", Source: "joined", LastSeen: time.Now().Unix()})
+			_ = s.mem.DB().UpdateHostHealth(h, "down", time.Now().Unix())
 			continue
 		}
 		var ans struct {
@@ -299,7 +331,7 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&ans)
 		resp.Body.Close()
-		_ = s.mem.DB().UpsertHost(store.HostRecord{URL: h, State: "up", Source: "joined", LastSeen: time.Now().Unix()})
+		_ = s.mem.DB().UpdateHostHealth(h, "up", time.Now().Unix())
 
 		perHostSeen[h] = make(map[string]bool)
 		for _, ev := range ans.Result {
@@ -352,9 +384,19 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 		}
 	}
 
+	nowMs := time.Now().UnixMilli()
 	out := make([]PeerInfo, 0, len(byPub))
 	s.mu.Lock()
+	// Evict any expired peers from the local cache.
+	for pub, old := range s.peers {
+		if old.Exp > 0 && old.Exp < nowMs {
+			delete(s.peers, pub)
+		}
+	}
 	for pub, p := range byPub {
+		if p.Exp > 0 && p.Exp < nowMs {
+			continue
+		}
 		s.peers[pub] = *p
 		out = append(out, *p)
 	}
@@ -363,12 +405,16 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 	return out, nil
 }
 
-// Peers returns all currently known verified peers.
+// Peers returns all currently known unexpired verified peers.
 func (s *Service) Peers() []PeerInfo {
+	nowMs := time.Now().UnixMilli()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]PeerInfo, 0, len(s.peers))
 	for _, p := range s.peers {
+		if p.Exp > 0 && p.Exp < nowMs {
+			continue
+		}
 		out = append(out, p)
 	}
 	return out

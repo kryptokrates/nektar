@@ -63,7 +63,7 @@ surface — stable in practice, not part of the frozen floor.
 | L0 LLM Memory Proxy | `POST /v1/proxy/openai/v1/*`, `/v1/proxy/anthropic/v1/*` | `X-Nektar-Token` or `nkt:<tok>:<key>`    | any existing OpenAI/Anthropic agent      |
 | MCP Streamable HTTP | `https://<host>/mcp`                                     | `Authorization: Bearer` or **OAuth 2.1** | remote/local MCP clients, web connectors |
 | A2A Agent Card/RPC  | `GET /.well-known/agent.json`, `POST /a2a`               | `Authorization: Bearer`                  | A2A multi-agent orchestrators            |
-| MCP stdio           | `docker run -i --rm … ghcr.io/kryptokrates/nektar`       | —                                        | ephemeral per-project stdio clients      |
+| MCP stdio           | `nektar mcp` (or `docker run -i --rm -v nektar-data:/data ghcr.io/kryptokrates/nektar:latest mcp`) | —                                        | ephemeral per-project stdio clients      |
 | REST tools          | `GET /v1/tools`, `POST /v1/tools/{name}`                 | `Authorization: Bearer`                  | non-MCP platforms & scripts              |
 | OpenAPI             | `GET /v1/openapi.json`                                   | `Authorization: Bearer`                  | manifest-driven registration             |
 | Bundled Adapters    | `GET /v1/adapters/manifest`, `/bundle/{hermes,openclaw}` | public read-only                         | zero-checkout L3 plugin installation     |
@@ -77,9 +77,9 @@ Instead of hand-editing JSON/YAML/TOML across every AI app on your machine, run
 artifact):
 
 ```bash
-./nektar --port 18420 &          # single shared local brain (zero env vars → testnet + welcome shard)
-./nektar dock auto               # detects & wires Hermes, OpenClaw, Claude Code, Codex, Cursor,
-                                 # Windsurf, Claude Desktop, OpenCode, Goose + runs live recall {} probe
+nektar serve &                   # single shared local brain (zero env vars → persistent testnet + welcome shard on :18420)
+nektar dock                      # detects & wires Hermes, OpenClaw, Claude Code, Codex, Cursor,
+                                 # Windsurf, VS Code, Zed, Cline, Continue, Claude Desktop, OpenCode, Goose, Gemini + runs live recall {} probe
 ```
 
 - **One brain, many mouths:** If a second AI app launches `nektar` over stdio
@@ -99,7 +99,7 @@ artifact):
 | **Hermes Agent**                                          | Native `MemoryProvider` (`integrations/hermes/`) + `nektar dock hermes`           | **L3**    | `prefetch` before each turn, `MEMORY.md`/`USER.md` write mirroring, receipt check, native tools + `mcp_servers` |
 | **OpenClaw**                                              | Native `plugins.slots.memory` (`integrations/openclaw/`) + `nektar dock openclaw` | **L3**    | `before_prompt_build` prefetch, `agent_end` receipt check, native tools                                         |
 | **Claude Code**                                           | `.claude-plugin/` marketplace bundle + `nektar dock claude`                       | **L3**    | `.mcp.json`, portable `SessionStart` + `UserPromptSubmit` prefetch + `Stop` receipt block, `SKILL.md`           |
-| **Codex CLI**                                             | `nektar dock codex` / `pnpm setup:codex`                                          | **L2**    | `[mcp_servers.nektar]`, portable `notify` receipt check, `AGENTS.md`, `SKILL.md`                                |
+| **Codex CLI**                                             | `nektar dock codex`                                                               | **L2**    | `[mcp_servers.nektar]`, portable `notify` receipt check, `AGENTS.md`, `SKILL.md`                                |
 | **Cursor / Windsurf / Claude Desktop / OpenCode / Goose** | `nektar dock auto` + MCP Registry `server.json`                                   | **L1/L2** | Non-clobbering MCP registration + live `recall {}` check                                                        |
 | **Raw HTTP / custom agents**                              | `GET /v1/openapi.json` + `POST /v1/tools/{name}`                                  | **L1**    | Standard OpenAPI + bearer auth                                                                                  |
 
@@ -142,7 +142,7 @@ Binds `nektar-memory` into OpenClaw's exclusive `plugins.slots.memory` slot with
 
 ```bash
 # Local project (MCP + portable SessionStart/UserPromptSubmit/Stop hooks + SKILL.md):
-nektar dock claude          # or: pnpm setup:claude
+nektar dock claude
 
 # Remote hub:
 claude mcp add --transport http nektar https://<you>/mcp \
@@ -155,7 +155,7 @@ plus the `agentskills.io` skill at [skills/nektar-memory/SKILL.md](../skills/nek
 ### Codex — `~/.codex/config.toml`
 
 ```bash
-nektar dock codex           # or: pnpm setup:codex
+nektar dock codex
 ```
 
 Or manually:
@@ -171,7 +171,7 @@ Local zero-env Docker stdio variant:
 ```toml
 [mcp_servers.nektar]
 command = "docker"
-args = ["run","-i","--rm","-v","nektar-data:/data","ghcr.io/kryptokrates/nektar:latest"]
+args = ["run","-i","--rm","-v","nektar-data:/data","ghcr.io/kryptokrates/nektar:latest","mcp"]
 ```
 
 ### Cursor / Windsurf / Claude Desktop / OpenCode / Goose

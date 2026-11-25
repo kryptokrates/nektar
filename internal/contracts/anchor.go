@@ -1,6 +1,7 @@
 package contracts
 
 import (
+	"context"
 	"crypto/sha256"
 	"embed"
 	"encoding/binary"
@@ -261,6 +262,27 @@ type VerifyResult struct {
 
 // VerifyFragment performs full offline SPV verification of a ProofBundle using only block headers.
 func VerifyFragment(bundle ProofBundle, tracker chaintracker.ChainTracker) VerifyResult {
+	return VerifyFragmentCtx(context.Background(), bundle, tracker)
+}
+
+// VerifyFragmentCtx performs full offline SPV verification of a ProofBundle using ctx for header verification.
+func VerifyFragmentCtx(ctx context.Context, bundle ProofBundle, tracker chaintracker.ChainTracker) VerifyResult {
+	return verifyFragment(ctx, bundle, tracker, true)
+}
+
+// VerifyFragmentStructural verifies all cryptographic commitments in a ProofBundle (AnchorBEEF,
+// Rúnar NektarAnchor locking script & state, batch Merkle path, ChainTail R' hash chain, and BUMP
+// root computation) WITHOUT checking the BUMP root against a ChainTracker.
+// MUST ONLY be used for cross-node tests on isolated ephemeral "memory" testchains; live networks
+// MUST always call VerifyFragmentCtx with a real PoW ChainTracker.
+func VerifyFragmentStructural(bundle ProofBundle) VerifyResult {
+	return verifyFragment(context.Background(), bundle, nil, false)
+}
+
+func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracker.ChainTracker, checkHeaders bool) VerifyResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if bundle.LeafIndex < 0 || uint64(bundle.LeafIndex) >= bundle.Size {
 		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "leafIndex outside batch size"}
 	}
@@ -302,20 +324,22 @@ func VerifyFragment(bundle ProofBundle, tracker chaintracker.ChainTracker) Verif
 	settled := false
 	anchorState := "broadcast"
 	if anchorTx.MerklePath != nil {
-		if tracker == nil {
-			return VerifyResult{OK: false, Reason: "BEEFInvalid", Detail: "no chain tracker configured to verify BUMP"}
-		}
 		txidHash := anchorTx.TxID()
 		root, err := anchorTx.MerklePath.ComputeRoot(txidHash)
 		if err != nil {
 			return VerifyResult{OK: false, Reason: "BEEFInvalid", Detail: "merkle path compute root: " + err.Error()}
 		}
-		valid, err := tracker.IsValidRootForHeight(nil, root, anchorTx.MerklePath.BlockHeight)
-		if err != nil || !valid {
-			return VerifyResult{OK: false, Reason: "BEEFInvalid", Detail: "BUMP root not valid in header chain"}
+		if checkHeaders {
+			if tracker == nil {
+				return VerifyResult{OK: false, Reason: "BEEFInvalid", Detail: "no chain tracker configured to verify BUMP"}
+			}
+			valid, err := tracker.IsValidRootForHeight(ctx, root, anchorTx.MerklePath.BlockHeight)
+			if err != nil || !valid {
+				return VerifyResult{OK: false, Reason: "BEEFInvalid", Detail: "BUMP root not valid in header chain"}
+			}
+			settled = true
+			anchorState = "mined"
 		}
-		settled = true
-		anchorState = "mined"
 	}
 
 	if len(bundle.ChainTail) == 0 {

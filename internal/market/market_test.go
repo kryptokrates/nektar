@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	restateserver "github.com/restatedev/sdk-go/server"
-
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/memory"
@@ -44,28 +42,28 @@ func TestRestateGoSDKServicesClientAndAtomicKnowledgeTrade(t *testing.T) {
 	buyer := NewEngine(buyerMem, DefaultPolicy())
 	seller := NewEngine(sellerMem, DefaultPolicy())
 
-	// 1. Verify ALL 5 Restate Go SDK services (BuyerDeal, SellerDeal, Custody, Tx, AnchorCadence)
-	//    bind and serve Restate's service discovery protocol!
-	rSrv := buyer.BindRestate(restateserver.NewRestate())
+	// 1. Verify ALL 6 Restate Go SDK services (BuyerDeal, SellerDeal, Custody, Tx, AnchorCadence, NektarRuntime)
+	//    bind and serve Restate's service discovery protocol, with ingressPrivate on Custody/Tx/AnchorCadence!
+	rSrv := buyer.NewRestateServer()
 	h, err := rSrv.Handler()
 	if err != nil || h == nil {
 		t.Fatalf("Restate Bind/Handler failed: %v", err)
 	}
 	rec := httptest.NewRecorder()
 	discReq := httptest.NewRequest(http.MethodGet, "/discover", nil)
-	discReq.Header.Set("Accept", "application/vnd.restate.endpointmanifest.v3+json")
+	discReq.Header.Set("Accept", "application/vnd.restate.endpointmanifest.v4+json")
 	h.ServeHTTP(rec, discReq)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Restate /discover expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	manifest := rec.Body.String()
-	for _, svcName := range []string{"BuyerDeal", "SellerDeal", "Custody", "Tx", "AnchorCadence"} {
+	for _, svcName := range []string{"BuyerDeal", "SellerDeal", "Custody", "Tx", "AnchorCadence", "NektarRuntime"} {
 		if !strings.Contains(manifest, `"`+svcName+`"`) {
 			t.Fatalf("Restate Go manifest missing %s: %s", svcName, manifest)
 		}
 	}
 
-	// 2. Verify pure-Go RestateClient Admin registration + Ingress Tx.emit call!
+	// 2. Verify pure-Go RestateClient Admin registration + sdk-go/ingress async NektarRuntime/emitTx send!
 	var regURI, calledPath string
 	mockRestate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -79,7 +77,7 @@ func TestRestateGoSDKServicesClientAndAtomicKnowledgeTrade(t *testing.T) {
 		}
 		calledPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"txid":"tx123","status":"mined","blockHeight":900001}`))
+		_, _ = w.Write([]byte(`{"invocationId":"inv_tx123","status":"Accepted"}`))
 	}))
 	defer mockRestate.Close()
 
@@ -90,9 +88,9 @@ func TestRestateGoSDKServicesClientAndAtomicKnowledgeTrade(t *testing.T) {
 	if regURI != "http://127.0.0.1:9080" {
 		t.Fatalf("unexpected registered URI: %q", regURI)
 	}
-	txSt, err := rc.EmitTxEvent(ctx, "tx123", TxEventInput{Kind: "mined", BlockHeight: 900001})
-	if err != nil || calledPath != "/Tx/tx123/emit" || txSt.Status != "mined" {
-		t.Fatalf("EmitTxEvent failed: path=%q st=%+v err=%v", calledPath, txSt, err)
+	invID, err := rc.EmitTxEvent(ctx, "tx123", TxEventInput{Kind: "mined", BlockHeight: 900001})
+	if err != nil || calledPath != "/NektarRuntime/emitTx/send" || invID != "inv_tx123" {
+		t.Fatalf("EmitTxEvent failed: path=%q invID=%q err=%v", calledPath, invID, err)
 	}
 
 	// 3. Deterministic bps ranking & kill-switch refusal.

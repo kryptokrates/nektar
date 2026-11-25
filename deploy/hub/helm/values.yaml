@@ -1,102 +1,61 @@
-# nektar-hub — one release = agent + host pair + their supporting services.
-
+# nektar-hub v0.4 — single-binary Pure-Go Agent + embedded 16-lane SQLite Overlay Hub.
 images:
   agent:
     repository: ghcr.io/kryptokrates/nektar
-  host:
-    repository: ghcr.io/kryptokrates/nektar-bbox-host
-  shim:
-    repository: ghcr.io/kryptokrates/nektar-shim
-  db:
-    repository: ghcr.io/kryptokrates/nektar-hub-db
-  # one tag pins every image — they ship on the same release line
   tag: latest
-  # sha256:<hex> per-component override via e.g. images.host.digest
   digest: ''
   pullPolicy: IfNotPresent
 
-# regtest | testnet | main
+# memory | regtest | testnet | main
 network: testnet
 
-# REQUIRED — the hosts' PUBLIC base URLs, comma-separated
-# (https://hub.example/host-a,https://hub.example/host-b). Verbatim into the
-# announce + finger record — this is what other operators dial.
+# Public base URL of this Hub (e.g. https://hub.example.com).
+publicUrl: ''
+# Optional extra peer market hosts (comma-separated).
 marketHosts: ''
-
-# the host pair — name suffixes feed service + statefulset + claim names;
-# db is the knex schema each writes (initdb in nektar-hub-db creates both)
-hosts:
-  - name: a
-    db: overlay
-  - name: b
-    db: overlay_b
 
 agent:
   modelId: unspecified
   automation: true
   announce: true
-  bfingerPublish: true
-  unattended: false
-  # public URL peers POST pushed carriers to, e.g. https://hub.example/lane
-  pushPublic: ''
-  # blank = auto: this release's own host pair for submit traffic
-  marketLocalHosts: ''
-  # blank = auto: this release's own watch endpoints (host Pods :8081)
-  watchUrls: ''
-  watchPublic: ''
+  seedDomains: '*'
   operatorToken: ''
   verifyBase: ''
-  seedDomains: ''
-  minCollectMs: ''
-  collectQuietMs: ''
   maxFeeSatsPerTx: ''
   maxSpendSatsPerDay: ''
-  minBroadcastIntervalMs: ''
-  directAcceptMaxSats: ''
-  zeroconfMaxSats: ''
-  zeroconfMaxAncestors: ''
-  payments: ''
-  paidDisclosure: ''
   mainnetConfirm: ''
 
-shim:
-  # testnet defaults — on main supply your own broadcaster/index/chaintracks
-  broadcaster: https://arcade-v2-testnet-us-1.bsvblockchain.tech
-  index: https://test.bananablocks.com/api/v1
-  chaintracks: https://arcade-v2-testnet-us-1.bsvblockchain.tech/chaintracks/v2
-
 secrets:
-  keyPassphrase: '' # encrypts keys.json at rest — required
-  httpToken: '' # bearer for /mcp + private /v1 — required
-  fundWif: '' # embedded toolbox wallet root (empty = fund printed address)
-  overlayDbPassword: '' # knex login for BOTH host schemas — required
-  overlayAdminToken: '' # host admin surface — required
-  # bring your own Secret instead — must carry all five keys above
+  httpToken: ''
+  operatorToken: ''
   existingSecret: ''
 
 persistence:
   storageClass: ''
   agentSize: 5Gi
-  dbSize: 5Gi
-  hostSize: 5Gi
 
 service:
   type: ClusterIP
-  # hosts + watch ports are published per-host Service: :8080 engine, :8081 watch
+  port: 18420
 
 ingress:
   enabled: false
   className: ''
-  # one host rule per surface; annotate TLS via your controller
-  agentHost: '' # e.g. hub.example → agent :8080 (bearer-gated)
-  hostAHost: '' # e.g. host-a.hub.example → host-a svc (8080+8081)
-  hostBHost: ''
+  agentHost: ''
   tls: false
   tlsSecretName: ''
 
-resources: {}
-  # per-component overrides: resources.agent / db / shim / host / watch
-  # agent:
-  #   requests: { cpu: 250m, memory: 512Mi }
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
 
-topics: nektar_abcdefghij
+restate:
+  image:
+    repository: docker.restate.dev/restatedev/restate
+    tag: '1.8.1'
+    pullPolicy: IfNotPresent
+  persistence:
+    size: 1Gi

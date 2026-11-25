@@ -63,7 +63,7 @@
     />
     {#if err}<p class="gerr">{err}</p>{/if}
     <button class="gbtn" type="submit" disabled={busy || !token.trim()}>{busy ? 'verifying…' : 'Open Dashboard'}</button>
-    <p class="ghint">Tip: inside Docker, check <code>nektar logs</code> for your one-time <code>/pair?code=…</code> link.</p>
+    <p class="ghint">Tip: run <code>nektar open</code> for one-click pairing, <code>nektar status</code> for local info, or <code>docker logs nektar</code> inside Docker.</p>
   </form>
 </div>
 

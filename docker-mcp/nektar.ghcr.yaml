@@ -1,63 +1,41 @@
 name: nektar
 title: nektar — verifiable agent memory (BSV testnet)
 type: server
-# digest-pinned at release time — the tag is documentation, the digest is
-# what actually pulls. Bump both together when publishing a new image.
-image: ghcr.io/kryptokrates/nektar:latest@sha256:34516320f2e5e5bc3e150f2383b4dfeb731e38fb2c4017047f8bec39f6c9b66d
+image: ghcr.io/kryptokrates/nektar:latest
+command:
+  - mcp
 longLived: true
 volumes:
   - nektar-data:/data
 description: >-
-  Encrypted, provenance-bearing agent memory whose history is anchored on the
-  public BSV testnet (test coins, no monetary value). Tools: remember, recall,
-  prove, anchor, ZK membership/clearance, rotate, revoke, disclose, authorize,
-  automaton. Proofs show what was recorded and unaltered — never that it is
-  true. Anchor fees are paid by a dedicated operator fee key (generated on
-  first start; its address is printed to stderr — fund it with testnet coins).
-  All broadcasts pass a SpendGuard (per-tx fee cap, per-day spend cap, min
-  interval, persisted ledger). Keys are encrypted at rest.
-secrets:
-  - name: nektar.key_passphrase
-    env: NEKTAR_KEY_PASSPHRASE
-    example: <optional on testnet; encrypts keys at rest>
-    description: Encrypts keys.json and fee.key.json at rest (optional on testnet, required on main)
-  # optional operator envs (NEKTAR_FUND_WIF — else a fee.key.json key is
-  # generated; NEKTAR_BROADCASTER_API_KEY) stay undeclared for now: the
-  # toolkit injects '<UNKNOWN>' for declared-but-unset secrets and images
-  # tagged before the nektarEnv sentinel fix can't tolerate it. Re-add here
-  # once the published image carries the fix.
+  Encrypted, provenance-bearing agent memory anchored on public BSV testnet
+  (v0.4 Pure-Go single binary). Tools: remember, recall, forget, groundedAnswer,
+  verifyReceipt, want, sell, deals, fund, doctor. Proofs show what was recorded
+  and unaltered — never that it is true.
 env:
   - name: NEKTAR_NETWORK
     value: testnet
   - name: NEKTAR_TOOL_PROFILE
     value: agent
-  - name: NEKTAR_MAX_FEE_SATS_PER_TX
-    value: '{{nektar.max_fee_sats_per_tx}}'
-  - name: NEKTAR_MAX_SPEND_SATS_PER_DAY
-    value: '{{nektar.max_spend_sats_per_day}}'
-  - name: NEKTAR_MIN_BROADCAST_INTERVAL_MS
-    value: '{{nektar.min_broadcast_interval_ms}}'
-  - name: NEKTAR_MODEL_ID
-    value: '{{nektar.model_id}}'
-  - name: NEKTAR_CLEARANCE_AUTHORITIES
-    value: '{{nektar.clearance_authorities}}'
+  - name: NEKTAR_WALLET
+    value: embedded
+  - name: NEKTAR_MAX_FEE_PER_TX
+    value: '{{nektar.max_fee_per_tx}}'
+  - name: NEKTAR_MAX_SPEND_PER_DAY
+    value: '{{nektar.max_spend_per_day}}'
+  - name: NEKTAR_MODEL_RELEASE
+    value: '{{nektar.model_release}}'
 config:
   - name: nektar
     description: BSV testnet deployment — test coins only
     type: object
     properties:
-      max_fee_sats_per_tx:
+      max_fee_per_tx:
         type: integer
-        description: Per-transaction fee cap in sats (default 1000)
-      max_spend_sats_per_day:
+        description: Per-transaction fee cap in sats (default 10000)
+      max_spend_per_day:
         type: integer
-        description: Daily fee spend cap in sats, UTC day (default 20000)
-      min_broadcast_interval_ms:
-        type: integer
-        description: Minimum ms between broadcasts (default 10000)
-      model_id:
+        description: Daily fee spend cap in sats, UTC day (default 2000000)
+      model_release:
         type: string
         description: Exact model identity bound into answer receipts
-      clearance_authorities:
-        type: string
-        description: Comma-separated pubkeys trusted to issue clearance credentials (level > 0 reads)

@@ -24,6 +24,7 @@ type DaemonInfo struct {
 	Network   string `json:"network"`
 	DataDir   string `json:"dataDir"`
 	AuthToken string `json:"authToken,omitempty"`
+	Token     string `json:"token,omitempty"`
 	StartedAt int64  `json:"startedAt"`
 }
 
@@ -33,6 +34,11 @@ func DaemonInfoPath(dataDir string) string {
 
 // WriteDaemonInfo atomically writes daemon.json (mode 0600) so sibling tools can discover the running daemon.
 func WriteDaemonInfo(dataDir string, info DaemonInfo) error {
+	if info.AuthToken != "" && info.Token == "" {
+		info.Token = info.AuthToken
+	} else if info.Token != "" && info.AuthToken == "" {
+		info.AuthToken = info.Token
+	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
 	}
@@ -62,6 +68,11 @@ func DetectLiveDaemon(dataDir string) (*DaemonInfo, bool) {
 	var info DaemonInfo
 	if err := json.Unmarshal(b, &info); err != nil || info.URL == "" {
 		return nil, false
+	}
+	if info.AuthToken == "" && info.Token != "" {
+		info.AuthToken = info.Token
+	} else if info.Token == "" && info.AuthToken != "" {
+		info.Token = info.AuthToken
 	}
 	hc := &http.Client{Timeout: 500 * time.Millisecond}
 	resp, err := hc.Get(strings.TrimRight(info.URL, "/") + "/v1/health")

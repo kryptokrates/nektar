@@ -36,15 +36,9 @@ operatorToken: ''
 verifyBase: ''
 
 secrets:
-  # encrypts keys.json at rest — required unless existingSecret is set
-  keyPassphrase: ''
-  # bearer for /mcp + private /v1 endpoints — required
+  # bearer for /mcp + private /v1 endpoints — required unless existingSecret is set
   httpToken: ''
-  # WIF the embedded toolbox wallet derives from (empty = fund the printed
-  # fee address after first boot)
-  fundWif: ''
-  # bring your own Secret instead: must carry NEKTAR_KEY_PASSPHRASE,
-  # NEKTAR_HTTP_TOKEN and optionally NEKTAR_FUND_WIF
+  # bring your own Secret instead: must carry NEKTAR_HTTP_TOKEN
   existingSecret: ''
 
 persistence:
@@ -54,7 +48,7 @@ persistence:
 
 service:
   type: ClusterIP
-  port: 8080
+  port: 18420
 
 ingress:
   enabled: false
@@ -89,6 +83,7 @@ restate:
     # on 'latest' is not a deployable risk
     tag: '1.8.1'
     pullPolicy: IfNotPresent
+  identityPublicKey: ''
   resources:
     requests:
       cpu: 100m

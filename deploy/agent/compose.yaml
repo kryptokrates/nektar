@@ -1,43 +1,62 @@
-# Nektar v0.4 Agent — Single static Go binary + optional Restate & Caddy Auto-TLS.
+# Nektar v0.4 Agent — Single static Pure-Go binary + active Restate durable executor & optional Caddy Auto-TLS.
 #   docker compose -f deploy/agent/compose.yaml up -d
-# Pass `--profile restate` for durable Restate market workflows, and `--profile tls` with NEKTAR_DOMAIN for Let's Encrypt HTTPS.
+# Pass `--profile tls` with NEKTAR_DOMAIN for Let's Encrypt HTTPS.
 name: nektar-agent
 services:
+  restate:
+    image: docker.restate.dev/restatedev/restate:1.8.1
+    restart: unless-stopped
+    environment:
+      RESTATE_NODE_NAME: nektar
+      RESTATE_REQUEST_IDENTITY_PRIVATE_KEY: ${RESTATE_REQUEST_IDENTITY_PRIVATE_KEY:-}
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://127.0.0.1:9070/health >/dev/null 2>&1 || wget -qO- http://127.0.0.1:9070/health >/dev/null 2>&1 || true']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - restate-data:/restate-data
+
   agent:
     image: ghcr.io/kryptokrates/nektar:${NEKTAR_IMAGE_TAG:-latest}${NEKTAR_IMAGE_DIGEST:+@${NEKTAR_IMAGE_DIGEST}}
     restart: unless-stopped
-    command: ['serve', '-listen', ':8080', '-restate-listen', ':9080']
+    command: ['serve', '-listen', ':18420', '-restate-listen', ':9080']
+    depends_on:
+      restate:
+        condition: service_healthy
     ports:
-      - '${NEKTAR_HTTP_BIND:-127.0.0.1}:${NEKTAR_HTTP_PORT:-8080}:8080'
+      - '${NEKTAR_HTTP_BIND:-127.0.0.1}:${NEKTAR_HTTP_PORT:-18420}:18420'
     environment:
       NEKTAR_NETWORK: ${NEKTAR_NETWORK:-testnet}
       NEKTAR_DATA_DIR: /data
-      NEKTAR_HTTP_PORT: '8080'
+      NEKTAR_HTTP_PORT: '18420'
+      NEKTAR_CONTAINER: '1'
       NEKTAR_PUBLIC_URL: ${NEKTAR_PUBLIC_URL:-}
-      NEKTAR_API_TOKEN: ${NEKTAR_API_TOKEN:-}
+      NEKTAR_HTTP_TOKEN: ${NEKTAR_HTTP_TOKEN:-}
+      NEKTAR_OPERATOR_TOKEN: ${NEKTAR_OPERATOR_TOKEN:-}
+      NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:-}
+      NEKTAR_SEED_DOMAINS: ${NEKTAR_SEED_DOMAINS:-}
+      NEKTAR_TOOL_PROFILE: ${NEKTAR_TOOL_PROFILE:-operator}
+      NEKTAR_TOOL_PRICES: ${NEKTAR_TOOL_PRICES:-}
       NEKTAR_WALLET: ${NEKTAR_WALLET:-embedded}
       NEKTAR_HEADERS_SOURCE: ${NEKTAR_HEADERS_SOURCE:-woc:test}
       NEKTAR_CHAIN_SPEC: ${NEKTAR_CHAIN_SPEC:-}
       NEKTAR_SETTLE_SPEC: ${NEKTAR_SETTLE_SPEC:-}
       NEKTAR_ARCADE_KEY: ${NEKTAR_ARCADE_KEY:-}
       NEKTAR_WOC_KEY: ${NEKTAR_WOC_KEY:-}
+      NEKTAR_RESTATE_URL: ${NEKTAR_RESTATE_URL:-http://restate:8080}
+      NEKTAR_RESTATE_ADMIN: ${NEKTAR_RESTATE_ADMIN:-http://restate:9070}
+      NEKTAR_RESTATE_ENDPOINT_URI: ${NEKTAR_RESTATE_ENDPOINT_URI:-http://agent:9080}
+      NEKTAR_RESTATE_IDENTITY_KEY: ${NEKTAR_RESTATE_IDENTITY_KEY:-}
+      NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT: ${NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT:-1}
+      NEKTAR_RESTATE_INTERNAL_TOKEN: ${NEKTAR_RESTATE_INTERNAL_TOKEN:-}
       NEKTAR_OPENAI_UPSTREAM: ${NEKTAR_OPENAI_UPSTREAM:-https://api.openai.com}
       NEKTAR_ANTHROPIC_UPSTREAM: ${NEKTAR_ANTHROPIC_UPSTREAM:-https://api.anthropic.com}
       NEKTAR_MAX_FEE_PER_TX: ${NEKTAR_MAX_FEE_PER_TX:-10000}
-      NEKTAR_MAX_SPEND_PER_TX: ${NEKTAR_MAX_SPEND_PER_TX:-100000}
-      NEKTAR_MAX_SPEND_PER_DAY: ${NEKTAR_MAX_SPEND_PER_DAY:-2000000}
+      NEKTAR_MAX_SPEND_PER_DAY: ${NEKTAR_MAX_SPEND_PER_DAY:-100000}
       NEKTAR_MAINNET_CONFIRM: ${NEKTAR_MAINNET_CONFIRM:-}
     volumes:
       - agent-data:/data
-
-  restate:
-    profiles: [restate]
-    image: docker.restate.dev/restatedev/restate:1.8.1
-    restart: unless-stopped
-    environment:
-      RESTATE_NODE_NAME: nektar
-    volumes:
-      - restate-data:/restate-data
 
   caddy:
     profiles: [tls]
@@ -61,7 +80,7 @@ configs:
   caddyfile:
     content: |
       {$NEKTAR_DOMAIN::80} {
-        reverse_proxy agent:8080 {
+        reverse_proxy agent:18420 {
           flush_interval -1
         }
       }

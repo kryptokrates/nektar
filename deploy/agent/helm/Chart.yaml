@@ -5,5 +5,5 @@ description: >-
   Everything it publishes is signed + SPV-verified peer-side; the market hosts
   it talks to are untrusted plumbing.
 type: application
-version: 0.2.0
-appVersion: latest
+version: 0.4.0
+appVersion: "0.4.0"

@@ -1,15 +1,15 @@
 #cloud-config
-# Nektar Hub Node — Universal 1-Click Cloud-Init (Hetzner Cloud, DigitalOcean,
+# Nektar v0.4 Hub Node — Universal 1-Click Cloud-Init (Hetzner Cloud, DigitalOcean,
 # Vultr, Linode, AWS EC2, GCP Compute Engine).
 #
-# Paste into "User Data" when creating any Ubuntu/Debian VPS (>= 1 vCPU, 2 GB RAM):
+# Paste into "User Data" when creating any Ubuntu/Debian VPS (>= 1 vCPU, 512 MB RAM):
 #   1. Installs Docker Engine + Compose plugin
-#   2. Pulls GHCR Hub images (nektar, nektar-bbox-host, nektar-shim, nektar-hub-db, caddy)
+#   2. Pulls the single v0.4 Pure-Go Hub image (ghcr.io/kryptokrates/nektar:latest) + Caddy
 #   3. Auto-provisions trusted Let's Encrypt HTTPS via <public-ip>.sslip.io
-#      (or replace NEKTAR_AUTO_IP=1 with NEKTAR_PUBLIC_URL=https://hub.yourdomain.com)
-#   4. Requests a free testnet faucet drip and announces the hub on the dir lane
+#      (or replace NEKTAR_AUTO_IP=1 with NEKTAR_DOMAIN=hub.yourdomain.com)
+#   4. Starts the embedded 16-lane SQLite Overlay Hub + liquidity engine + dashboard on :18420
 #
-# Ready in ~90 seconds. Check status via: ssh root@<ip> "cd /root/nektar-hub && docker compose logs -f agent"
+# Ready in ~45 seconds. Check status via: ssh root@<ip> "cd /opt/nektar-hub && docker compose logs -f hub"
 package_update: true
 packages:
   - curl

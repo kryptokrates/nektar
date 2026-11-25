@@ -400,6 +400,63 @@ func (g *AORGraph) Append(v Vertex, premises []string, ruleTag string) (Vertex, 
 	return v, nil
 }
 
+// AORGSnapshot serializes an AORGraph for durable SQLite persistence across restarts.
+type AORGSnapshot struct {
+	Vertices  map[string]Vertex `json:"vertices"`
+	Edges     []Edge            `json:"edges"`
+	InvalidAt map[string]int64  `json:"invalidAt"`
+	Rules     []string          `json:"rules"`
+}
+
+// AddRules appends Datalog rules to the graph without wiping existing vertices or edges.
+func (g *AORGraph) AddRules(rules ...string) {
+	g.mu.Lock()
+	g.rules = append(g.rules, rules...)
+	g.mu.Unlock()
+}
+
+// Snapshot returns a deep copy of the graph suitable for JSON persistence.
+func (g *AORGraph) Snapshot() AORGSnapshot {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	verts := make(map[string]Vertex, len(g.vertices))
+	for k, v := range g.vertices {
+		verts[k] = v
+	}
+	inv := make(map[string]int64, len(g.invalidAt))
+	for k, v := range g.invalidAt {
+		inv[k] = v
+	}
+	return AORGSnapshot{
+		Vertices:  verts,
+		Edges:     append([]Edge(nil), g.edges...),
+		InvalidAt: inv,
+		Rules:     append([]string(nil), g.rules...),
+	}
+}
+
+// Restore loads a persisted AORGSnapshot into g.
+func (g *AORGraph) Restore(snap AORGSnapshot) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if snap.Vertices != nil {
+		g.vertices = make(map[string]Vertex, len(snap.Vertices))
+		for k, v := range snap.Vertices {
+			g.vertices[k] = v
+		}
+	}
+	g.edges = append([]Edge(nil), snap.Edges...)
+	if snap.InvalidAt != nil {
+		g.invalidAt = make(map[string]int64, len(snap.InvalidAt))
+		for k, v := range snap.InvalidAt {
+			g.invalidAt[k] = v
+		}
+	}
+	if len(snap.Rules) > 0 {
+		g.rules = append([]string(nil), snap.Rules...)
+	}
+}
+
 // CurrentView returns all vertices valid at logical time atLogPos (bi-temporal projection).
 func (g *AORGraph) CurrentView(atLogPos int64) []Vertex {
 	g.mu.RLock()

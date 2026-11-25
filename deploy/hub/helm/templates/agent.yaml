@@ -1,114 +1,165 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "nektar-hub.fullname" . }}-agent
+  name: {{ include "nektar-hub.fullname" . }}-hub
   labels:
     {{- include "nektar-hub.labels" . | nindent 4 }}
-    app.kubernetes.io/component: agent
+    app.kubernetes.io/component: hub
 spec:
-  serviceName: {{ include "nektar-hub.fullname" . }}-agent
+  serviceName: {{ include "nektar-hub.fullname" . }}-hub
   replicas: 1
   selector:
     matchLabels:
       {{- include "nektar-hub.labels" . | nindent 6 }}
-      app.kubernetes.io/component: agent
+      app.kubernetes.io/component: hub
   template:
     metadata:
       labels:
         {{- include "nektar-hub.labels" . | nindent 8 }}
-        app.kubernetes.io/component: agent
+        app.kubernetes.io/component: hub
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
-        - name: agent
+        - name: hub
           image: {{ include "nektar-hub.image" (dict "root" . "component" "agent") }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args: ["serve", "-listen", ":18420", "-restate-listen", "127.0.0.1:9080", "-hub"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: NEKTAR_NETWORK
               value: {{ .Values.network | quote }}
             - name: NEKTAR_DATA_DIR
               value: /data
             - name: NEKTAR_HTTP_PORT
-              value: "8080"
-            - name: NEKTAR_HTTP_HOST
-              value: "0.0.0.0"
+              value: "18420"
+            - name: NEKTAR_EMBED_HUB
+              value: "1"
             - name: NEKTAR_MODEL_ID
               value: {{ .Values.agent.modelId | quote }}
             - name: NEKTAR_AUTOMATION
               value: {{ ternary "1" "" .Values.agent.automation | quote }}
-            - name: NEKTAR_UNATTENDED
-              value: {{ ternary "1" "" .Values.agent.unattended | quote }}
             - name: NEKTAR_ANNOUNCE
               value: {{ ternary "1" "" .Values.agent.announce | quote }}
-            - name: NEKTAR_BFINGER_PUBLISH
-              value: {{ ternary "1" "" .Values.agent.bfingerPublish | quote }}
-            # PUBLIC urls — verbatim into the announce + finger record
+            - name: NEKTAR_PUBLIC_URL
+              value: {{ .Values.publicUrl | quote }}
+            - name: NEKTAR_VERIFY_BASE
+              value: {{ .Values.agent.verifyBase | default .Values.publicUrl | quote }}
             - name: NEKTAR_MARKET_HOSTS
-              value: {{ required "marketHosts is required (the hosts' PUBLIC URLs)" .Values.marketHosts | quote }}
-            # internal traffic path — defaults to this release's own host pair
-            - name: NEKTAR_MARKET_LOCAL_HOSTS
-              value: {{ .Values.agent.marketLocalHosts | default (printf "http://%s-host-a:8080,http://%s-host-b:8080" (include "nektar-hub.fullname" .) (include "nektar-hub.fullname" .)) | quote }}
-            - name: NEKTAR_WATCH_URLS
-              value: {{ .Values.agent.watchUrls | default (printf "http://%s-host-a:8081,http://%s-host-b:8081" (include "nektar-hub.fullname" .) (include "nektar-hub.fullname" .)) | quote }}
-            - name: NEKTAR_WATCH_PUBLIC
-              value: {{ .Values.agent.watchPublic | quote }}
-            - name: NEKTAR_PUSH_PUBLIC
-              value: {{ .Values.agent.pushPublic | quote }}
+              value: {{ .Values.marketHosts | quote }}
             - name: NEKTAR_SEED_DOMAINS
               value: {{ .Values.agent.seedDomains | quote }}
-            - name: NEKTAR_OPERATOR_TOKEN
-              value: {{ .Values.agent.operatorToken | quote }}
-            - name: NEKTAR_VERIFY_BASE
-              value: {{ .Values.agent.verifyBase | quote }}
-            - name: NEKTAR_MIN_COLLECT_MS
-              value: {{ .Values.agent.minCollectMs | quote }}
-            - name: NEKTAR_COLLECT_QUIET_MS
-              value: {{ .Values.agent.collectQuietMs | quote }}
             - name: NEKTAR_MAX_FEE_SATS_PER_TX
               value: {{ .Values.agent.maxFeeSatsPerTx | quote }}
             - name: NEKTAR_MAX_SPEND_SATS_PER_DAY
               value: {{ .Values.agent.maxSpendSatsPerDay | quote }}
-            - name: NEKTAR_MIN_BROADCAST_INTERVAL_MS
-              value: {{ .Values.agent.minBroadcastIntervalMs | quote }}
-            - name: NEKTAR_ZEROCONF_MAX_SATS
-              value: {{ .Values.agent.zeroconfMaxSats | quote }}
-            - name: NEKTAR_ZEROCONF_MAX_ANCESTORS
-              value: {{ .Values.agent.zeroconfMaxAncestors | quote }}
             - name: NEKTAR_MAINNET_CONFIRM
               value: {{ .Values.agent.mainnetConfirm | quote }}
-            - name: NEKTAR_PAYMENTS
-              value: {{ .Values.agent.payments | quote }}
-            - name: NEKTAR_PAID_DISCLOSURE
-              value: {{ .Values.agent.paidDisclosure | quote }}
-            - name: NEKTAR_KEY_PASSPHRASE
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "nektar-hub.secretName" . }}
-                  key: NEKTAR_KEY_PASSPHRASE
-            - name: NEKTAR_HTTP_TOKEN
+            - name: NEKTAR_RESTATE_URL
+              value: "http://127.0.0.1:8111"
+            - name: NEKTAR_RESTATE_ADMIN
+              value: "http://127.0.0.1:9070"
+            - name: NEKTAR_RESTATE_ENDPOINT_URI
+              value: "http://127.0.0.1:9080"
+            - name: NEKTAR_API_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "nektar-hub.secretName" . }}
                   key: NEKTAR_HTTP_TOKEN
-            - name: NEKTAR_FUND_WIF
+            - name: NEKTAR_OPERATOR_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "nektar-hub.secretName" . }}
-                  key: NEKTAR_FUND_WIF
+                  key: NEKTAR_OPERATOR_TOKEN
                   optional: true
           ports:
             - name: http
-              containerPort: 8080
-          readinessProbe:
-            tcpSocket:
+              containerPort: 18420
+          startupProbe:
+            httpGet:
+              path: /v1/health
               port: http
-            periodSeconds: 5
             failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 2
           resources:
-            {{- toYaml (.Values.resources.agent | default .Values.resources) | nindent 12 }}
+            {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+        - name: restate
+          image: "{{ .Values.restate.image.repository | default "docker.restate.dev/restatedev/restate" }}:{{ .Values.restate.image.tag | default "1.8.1" }}"
+          imagePullPolicy: {{ .Values.restate.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: RESTATE_INGRESS__BIND_PORT
+              value: "8111"
+            - name: RESTATE_NODE_NAME
+              value: "nektar-hub"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 9070
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9070
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9070
+            periodSeconds: 10
+            failureThreshold: 2
+          volumeMounts:
+            - name: restate-data
+              mountPath: /restate-data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
   volumeClaimTemplates:
+    - metadata:
+        name: restate-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.restate.persistence.size | default "1Gi" }}
     - metadata:
         name: data
       spec:
@@ -123,16 +174,16 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "nektar-hub.fullname" . }}-agent
+  name: {{ include "nektar-hub.fullname" . }}-hub
   labels:
     {{- include "nektar-hub.labels" . | nindent 4 }}
-    app.kubernetes.io/component: agent
+    app.kubernetes.io/component: hub
 spec:
   type: {{ .Values.service.type }}
   ports:
     - name: http
-      port: 8080
+      port: {{ .Values.service.port | default 18420 }}
       targetPort: http
   selector:
     {{- include "nektar-hub.labels" . | nindent 4 }}
-    app.kubernetes.io/component: agent
+    app.kubernetes.io/component: hub

@@ -41,6 +41,8 @@ type Config struct {
 //   - Google Mangle Datalog grounding + AORG + nektarr1 receipts (internal/reasoning).
 type Service struct {
 	mu            sync.RWMutex
+	shardMu       sync.Mutex
+	shardLocks    map[string]*sync.Mutex
 	db            *store.DB
 	port          *chain.Port
 	groups        *bstack.GroupRegistry
@@ -51,6 +53,7 @@ type Service struct {
 	verifyBaseURL string
 	modelID       reasoning.ModelIdentity
 	aorg          *reasoning.AORGraph
+	onRemember    func(shard string)
 }
 
 // New constructs a NektarMemory Service.
@@ -64,34 +67,85 @@ func New(db *store.DB, port *chain.Port, groups *bstack.GroupRegistry, objects b
 	if objects == nil {
 		objects = bstack.NewMemoryObjectStore()
 	}
+	polName := "default"
 	pol := cfg.PolicyText
 	if strings.TrimSpace(pol) == "" {
-		pol = policy.DefaultPolicySet
+		var saved struct {
+			Name string `json:"name"`
+			Text string `json:"text"`
+		}
+		if ok, _ := db.GetJSON("cedar_policy_v1", &saved); ok && strings.TrimSpace(saved.Text) != "" {
+			pol = saved.Text
+			if saved.Name != "" {
+				polName = saved.Name
+			}
+		} else {
+			pol = policy.DefaultPolicySet
+		}
 	}
-	pc, err := policy.Canonicalize("default", pol)
+	pc, err := policy.Canonicalize(polName, pol)
 	if err != nil {
 		return nil, err
 	}
+	rules := append([]string(nil), cfg.DatalogRules...)
+	if len(rules) == 0 {
+		var savedRules []string
+		if ok, _ := db.GetJSON("mangle_rules_v1", &savedRules); ok && len(savedRules) > 0 {
+			rules = savedRules
+		}
+	}
+	aorg := reasoning.NewAORGraph(rules)
+	var aorgSnap reasoning.AORGSnapshot
+	if ok, _ := db.GetJSON("aorg_state_v1", &aorgSnap); ok && len(aorgSnap.Vertices) > 0 {
+		aorg.Restore(aorgSnap)
+		if len(rules) > 0 {
+			aorg.AddRules(rules...)
+		}
+	}
 	baseURL := strings.TrimRight(cfg.VerifyBaseURL, "/")
 	if baseURL == "" {
-		baseURL = "http://127.0.0.1:8080/v1/verify"
+		baseURL = "http://127.0.0.1:18420/v1/verify"
 	}
 	mid := cfg.ModelID
 	if mid.Kind == "" {
 		mid = reasoning.ModelIdentity{Kind: "api", Provider: "nektar", Release: "v0.4"}
 	}
+	if err := groups.SetPersistence(&dbGroupStore{db: db}); err != nil {
+		return nil, fmt.Errorf("memory: load borg groups: %w", err)
+	}
 	return &Service{
+		shardLocks:    make(map[string]*sync.Mutex),
 		db:            db,
 		port:          port,
 		groups:        groups,
 		objects:       objects,
 		policyText:    pol,
 		policyCommit:  pc,
-		rules:         append([]string(nil), cfg.DatalogRules...),
+		rules:         rules,
 		verifyBaseURL: baseURL,
 		modelID:       mid,
-		aorg:          reasoning.NewAORGraph(cfg.DatalogRules),
+		aorg:          aorg,
 	}, nil
+}
+
+func (s *Service) lockShard(shard string) func() {
+	s.shardMu.Lock()
+	m, ok := s.shardLocks[shard]
+	if !ok {
+		m = &sync.Mutex{}
+		s.shardLocks[shard] = m
+	}
+	s.shardMu.Unlock()
+	m.Lock()
+	return m.Unlock
+}
+
+// SetOnRemember registers an optional hook invoked whenever a new fragment is committed to a shard
+// (used to trigger durable Restate AnchorCadence scheduling).
+func (s *Service) SetOnRemember(fn func(shard string)) {
+	s.mu.Lock()
+	s.onRemember = fn
+	s.mu.Unlock()
 }
 
 func (s *Service) DB() *store.DB                   { return s.db }
@@ -105,7 +159,7 @@ func (s *Service) PolicyCommit() *policy.PolicyCommitment {
 	return s.policyCommit
 }
 
-// SetPolicy updates the active Cedar policy set atomically.
+// SetPolicy updates the active Cedar policy set atomically and persists it to SQLite.
 func (s *Service) SetPolicy(name, text string) (*policy.PolicyCommitment, error) {
 	pc, err := policy.Canonicalize(name, text)
 	if err != nil {
@@ -115,15 +169,36 @@ func (s *Service) SetPolicy(name, text string) (*policy.PolicyCommitment, error)
 	s.policyText = text
 	s.policyCommit = pc
 	s.mu.Unlock()
+	_ = s.db.SetJSON("cedar_policy_v1", map[string]string{"name": name, "text": text})
 	return pc, nil
 }
 
-// AddRules appends Mangle Datalog rules used during grounding and AORG reasoning.
+// AddRules appends Mangle Datalog rules without wiping existing AORG vertices, and persists rules to SQLite.
 func (s *Service) AddRules(rules ...string) {
 	s.mu.Lock()
 	s.rules = append(s.rules, rules...)
-	s.aorg = reasoning.NewAORGraph(s.rules)
+	allRules := append([]string(nil), s.rules...)
+	s.aorg.AddRules(rules...)
 	s.mu.Unlock()
+	_ = s.db.SetJSON("mangle_rules_v1", allRules)
+}
+
+// AppendAORGVertex appends a vertex to the AORGraph and persists the graph snapshot to SQLite.
+func (s *Service) AppendAORGVertex(v reasoning.Vertex, premises []string, ruleTag string) (reasoning.Vertex, error) {
+	out, err := s.aorg.Append(v, premises, ruleTag)
+	if err != nil {
+		return reasoning.Vertex{}, err
+	}
+	_ = s.db.SetJSON("aorg_state_v1", s.aorg.Snapshot())
+	return out, nil
+}
+
+// AuthorizeAction evaluates the active Cedar policy for any action ("read"|"write"|"disclose"|"rotate"|"revoke").
+func (s *Service) AuthorizeAction(principal policy.Principal, action string, resource policy.Resource) (policy.Decision, error) {
+	s.mu.RLock()
+	polText := s.policyText
+	s.mu.RUnlock()
+	return policy.Authorize(polText, principal, action, resource)
 }
 
 // RememberInput describes a fragment to persist into a shard.
@@ -135,7 +210,9 @@ type RememberInput struct {
 	Class      string            `json:"class,omitempty"`
 	BorgGroup  string            `json:"borgGroup,omitempty"` // if set, seals via BRC-369 keyed under group epoch
 	CallerPub  string            `json:"callerPub,omitempty"`
+	Principal  *policy.Principal `json:"principal,omitempty"`
 	Supersedes int64             `json:"supersedes,omitempty"`
+	Tainted    bool              `json:"tainted,omitempty"`
 	AutoAnchor bool              `json:"autoAnchor,omitempty"`
 	Extra      map[string]string `json:"extra,omitempty"`
 }
@@ -162,6 +239,23 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 	}
 	if in.Text == "" {
 		return nil, errors.New("memory: text is required")
+	}
+	// Cedar write-gate enforcement (default owner level 100 when Principal omitted).
+	writePrincipal := policy.Principal{Type: "Agent", ID: "owner", Level: 100}
+	if in.Principal != nil && in.Principal.ID != "" {
+		writePrincipal = *in.Principal
+	}
+	if dec, err := s.AuthorizeAction(writePrincipal, "write", policy.Resource{
+		Type:  "Fragment",
+		ID:    in.Shard + "#new",
+		Level: int64(in.Level),
+		Shard: in.Shard,
+		Class: in.Class,
+	}); err != nil || !dec.Allow {
+		if err != nil {
+			return nil, fmt.Errorf("memory: cedar write policy error: %w", err)
+		}
+		return nil, fmt.Errorf("memory: cedar policy denied write to shard %q (level %d > principal level %d)", in.Shard, in.Level, writePrincipal.Level)
 	}
 	src := in.Source
 	if src == "" {
@@ -195,6 +289,7 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 		Level:      in.Level,
 		Class:      in.Class,
 		Supersedes: in.Supersedes,
+		Tainted:    in.Tainted,
 		CreatedAt:  now,
 	}
 
@@ -250,6 +345,13 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 		} else if err != nil {
 			return nil, err
 		}
+	} else if !dedup && in.Shard != ReceiptsShard {
+		s.mu.RLock()
+		hook := s.onRemember
+		s.mu.RUnlock()
+		if hook != nil {
+			go hook(in.Shard)
+		}
 	}
 
 	return &RememberResult{
@@ -272,8 +374,11 @@ func (s *Service) Forget(_ context.Context, shard string, seq int64) error {
 }
 
 // AnchorShard commits all unanchored fragments in shard into a real NektarAnchor BSV transaction,
-// guarded by SpendGuard, and stores the AtomicBEEF proof bundle locally.
+// serialized per-shard with durable pre-broadcast pending_anchors persistence, guarded by SpendGuard.
 func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAnchor, error) {
+	unlock := s.lockShard(shard)
+	defer unlock()
+
 	unanchored, err := s.db.ListUnanchored(shard)
 	if err != nil {
 		return nil, err
@@ -314,6 +419,19 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 	pubBytes := s.port.Signer().IdentityKey().Compressed()
 	shardID := core.ShardIDFromPubkey(pubBytes)
 
+	// Persist pending_anchors intent BEFORE building/broadcasting so a crash after broadcast is recoverable!
+	now := time.Now().Unix()
+	if err := s.db.SavePendingAnchor(store.PendingAnchor{
+		Shard:      shard,
+		N:          nextN,
+		Seqs:       seqs,
+		RootHex:    core.ToHex(root),
+		ChainedHex: core.ToHex(rp),
+		CreatedAt:  now,
+	}); err != nil {
+		return nil, fmt.Errorf("memory: persist pending anchor: %w", err)
+	}
+
 	state := contracts.AnchorState{
 		Shard:    shardID,
 		OwnerPub: s.port.IdentityPubHex(),
@@ -327,6 +445,7 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 	}
 	lockScript, err := contracts.EncodeAnchorLockingScript(state)
 	if err != nil {
+		_ = s.db.DeletePendingAnchor(shard, nextN)
 		return nil, err
 	}
 	var tx *transaction.Transaction
@@ -335,12 +454,20 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		var fee, spend uint64
 		tx, fee, spend, err = s.port.BuildFundedTx(ctx, []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)})
 		if err != nil {
+			_ = s.db.DeletePendingAnchor(shard, nextN)
 			return nil, err
+		}
+		if beefPre, bErr := chain.SafeAtomicBEEF(tx); bErr == nil {
+			_ = s.db.UpdatePendingAnchorTx(shard, nextN, tx.TxID().String(), beefPre)
 		}
 		txid, err = s.port.Broadcast(ctx, tx, fee, spend)
 		if err != nil {
 			if attempt < 2 && (strings.Contains(err.Error(), "UTXO_SPENT") || strings.Contains(err.Error(), "spent by another transaction")) {
 				continue
+			}
+			// Keep pending_anchors row if broadcast outcome is unknown so boot reconciliation can recover it!
+			if !strings.Contains(err.Error(), "broadcast outcome unknown") {
+				_ = s.db.DeletePendingAnchor(shard, nextN)
 			}
 			return nil, err
 		}
@@ -370,12 +497,75 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		Beef:        beef,
 		Settled:     settled,
 		BlockHeight: height,
-		CreatedAt:   time.Now().Unix(),
+		CreatedAt:   now,
 	}
 	if err := s.db.RecordBatchAnchor(batch, seqs); err != nil {
 		return nil, err
 	}
+	if shard == ReceiptsShard {
+		for _, seq := range seqs {
+			_ = s.db.UpdateReceiptAnchor(seq, txid)
+		}
+	}
 	return &batch, nil
+}
+
+// ReconcilePendingAnchors recovers any in-flight pending_anchors persisted before a crash.
+func (s *Service) ReconcilePendingAnchors(ctx context.Context) (int, error) {
+	pending, err := s.db.ListPendingAnchors()
+	if err != nil || len(pending) == 0 {
+		return 0, err
+	}
+	recovered := 0
+	pubBytes := s.port.Signer().IdentityKey().Compressed()
+	shardID := core.ShardIDFromPubkey(pubBytes)
+	for _, p := range pending {
+		unlock := s.lockShard(p.Shard)
+		if p.TxID == "" {
+			_ = s.db.DeletePendingAnchor(p.Shard, p.N)
+			unlock()
+			continue
+		}
+		// Check if transaction landed on chain or in local wallet storage.
+		mp, height, mined := s.port.Proof(ctx, p.TxID)
+		tx := s.port.Tx(p.TxID)
+		if !mined && tx == nil && len(p.Beef) == 0 {
+			_ = s.db.DeletePendingAnchor(p.Shard, p.N)
+			unlock()
+			continue
+		}
+		beef := p.Beef
+		if tx != nil {
+			if mp != nil {
+				tx.MerklePath = mp
+			}
+			if b, bErr := chain.SafeAtomicBEEF(tx); bErr == nil && len(b) > 0 {
+				beef = b
+			}
+		}
+		if len(beef) > 0 && (mined || tx != nil) {
+			batch := store.BatchAnchor{
+				Shard:       p.Shard,
+				ShardID:     shardID,
+				N:           p.N,
+				Size:        len(p.Seqs),
+				RootHex:     p.RootHex,
+				ChainedHex:  p.ChainedHex,
+				TxID:        p.TxID,
+				Beef:        beef,
+				Settled:     mined,
+				BlockHeight: int64(height),
+				CreatedAt:   p.CreatedAt,
+			}
+			if rErr := s.db.RecordBatchAnchor(batch, p.Seqs); rErr == nil {
+				recovered++
+			}
+		} else {
+			_ = s.db.DeletePendingAnchor(p.Shard, p.N)
+		}
+		unlock()
+	}
+	return recovered, nil
 }
 
 func shardIdentifier(shard string, pubBytes []byte) string {
@@ -407,6 +597,7 @@ type RecalledFragment struct {
 	BorgEpoch   int64                   `json:"borgEpoch,omitempty"`
 	AnchorTxID  string                  `json:"anchorTxid,omitempty"`
 	AnchorState string                  `json:"anchorState,omitempty"`
+	Tainted     bool                    `json:"tainted,omitempty"`
 	SPV         *contracts.VerifyResult `json:"spv,omitempty"`
 	CreatedAt   int64                   `json:"createdAt"`
 }
@@ -441,6 +632,15 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 	s.mu.RUnlock()
 
 	qLower := strings.ToLower(strings.TrimSpace(in.Query))
+	var ftsRank map[int64]int
+	if qLower != "" {
+		if hits, err := s.db.SearchFTS(in.Shard, in.Query, 200); err == nil && len(hits) > 0 {
+			ftsRank = make(map[int64]int, len(hits))
+			for idx, h := range hits {
+				ftsRank[h.Seq] = idx
+			}
+		}
+	}
 	var out []RecalledFragment
 
 	for _, r := range records {
@@ -485,8 +685,11 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 		}
 
 		text := string(plaintext)
-		if qLower != "" && !strings.Contains(strings.ToLower(text), qLower) {
-			continue
+		if qLower != "" {
+			_, ftsHit := ftsRank[r.Seq]
+			if !ftsHit && !strings.Contains(strings.ToLower(text), qLower) {
+				continue
+			}
 		}
 
 		item := RecalledFragment{
@@ -500,6 +703,7 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 			BorgGroup:  r.BorgGroup,
 			BorgEpoch:  r.BorgEpoch,
 			AnchorTxID: r.AnchorTxID,
+			Tainted:    r.Tainted,
 			CreatedAt:  r.CreatedAt,
 		}
 		if r.BatchN < 0 {
@@ -523,7 +727,7 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 }
 
 // Prove constructs a self-contained ProofBundle for (shard, seq) and runs full offline SPV verification.
-func (s *Service) Prove(_ context.Context, shard string, seq int64) (*contracts.ProofBundle, *contracts.VerifyResult, error) {
+func (s *Service) Prove(ctx context.Context, shard string, seq int64) (*contracts.ProofBundle, *contracts.VerifyResult, error) {
 	rec, err := s.db.GetFragment(shard, seq)
 	if err != nil {
 		return nil, nil, err
@@ -597,26 +801,41 @@ func (s *Service) Prove(_ context.Context, shard string, seq int64) (*contracts.
 		ChainTail:  tail,
 		AnchorBEEF: target.Beef,
 	}
-	vr := contracts.VerifyFragment(*bundle, s.port.Tracker())
+	vr := contracts.VerifyFragmentCtx(ctx, *bundle, s.port.Tracker())
 	return bundle, &vr, nil
 }
 
 // RefreshAnchorProofs polls the chain for mined MerklePaths on any unsettled broadcast anchors,
-// attaches the mined BUMP into the stored AnchorBEEF, verifies against headers, and upgrades settled=true.
+// verifies the computed Merkle root against PoW headers before upgrading settled=true, and attaches
+// the mined BUMP into the stored AnchorBEEF.
 func (s *Service) RefreshAnchorProofs(ctx context.Context) (int, error) {
 	unsettled, err := s.db.ListUnsettledAnchors()
 	if err != nil || len(unsettled) == 0 {
 		return 0, err
 	}
 	upgraded := 0
+	tracker := s.port.Tracker()
 	for _, a := range unsettled {
 		mp, height, ok := s.port.Proof(ctx, a.TxID)
 		if !ok || mp == nil {
 			continue
 		}
+		if height == 0 {
+			height = mp.BlockHeight
+		}
 		tx, err := transaction.NewTransactionFromBEEF(a.Beef)
 		if err != nil {
 			continue
+		}
+		root, rErr := mp.ComputeRoot(tx.TxID())
+		if rErr != nil || root == nil {
+			continue
+		}
+		if tracker != nil {
+			valid, vErr := tracker.IsValidRootForHeight(ctx, root, height)
+			if vErr != nil || !valid {
+				continue
+			}
 		}
 		tx.MerklePath = mp
 		newBeef, err := tx.AtomicBEEF(false)
@@ -674,6 +893,10 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 	fetch := func(ref reasoning.FragmentRef) (bool, string) {
 		r, err := s.db.GetFragment(ref.Shard, ref.Seq)
 		if err != nil || r.Forgotten {
+			return false, ""
+		}
+		// Never ground new answers on superseded facts!
+		if newerSeq, sErr := s.db.SupersededBy(ref.Shard, ref.Seq); sErr == nil && newerSeq > 0 {
 			return false, ""
 		}
 		dec, err := policy.Authorize(polText, principal, "read", policy.Resource{
@@ -771,29 +994,52 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 		return nil, err
 	}
 
-	// Commit receipt into __receipts__ shard.
-	remRes, err := s.Remember(ctx, RememberInput{
-		Shard:      ReceiptsShard,
-		Text:       string(bodyJSON),
-		Source:     "receipt",
-		Class:      "receipt",
-		AutoAnchor: in.AutoAnchor,
-	})
+	// Atomically commit receipt fragment (__receipts__), receipts index, and citation edges in ONE SQLite tx!
+	now := rcp.Timestamp
+	prov := core.Provenance{
+		Source:  "receipt",
+		Time:    now,
+		ModelID: s.modelID.Provider + "/" + s.modelID.Release,
+	}
+	sigBytes, err := s.port.SignDigest(ctx, core.ProvenanceDigest(bodyJSON, prov))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("memory: sign receipt provenance: %w", err)
+	}
+	prov.Signature = sigBytes
+	provBytes := core.SerializeProvenance(prov)
+	hdp := core.ComputeHDP(bodyJSON, prov)
+	leaf := core.ComputeLeaf(core.Fragment{Data: bodyJSON, Provenance: prov, HDP: hdp})
+	fragRec := store.FragmentRecord{
+		Shard:      ReceiptsShard,
+		HDP:        core.ToHex(hdp),
+		Leaf:       core.ToHex(leaf),
+		Data:       bodyJSON,
+		Provenance: provBytes,
+		Class:      "receipt",
+		BatchN:     -1,
+		LeafIndex:  -1,
+		CreatedAt:  now,
 	}
 	cites := make([]store.CitationEdge, 0, len(refs))
 	for _, r := range refs {
 		cites = append(cites, store.CitationEdge{Shard: r.Shard, Seq: r.Seq, ReceiptHash: rcpHash})
 	}
-	if err := s.db.SaveReceipt(store.ReceiptRecord{
+	storedFrag, err := s.db.CommitReceiptAtomic(fragRec, store.ReceiptRecord{
 		ReceiptHash: rcpHash,
-		ShardSeq:    remRes.Seq,
 		BodyJSON:    bodyJSON,
-		AnchorTxID:  remRes.AnchorTxID,
-		CreatedAt:   rcp.Timestamp,
-	}, cites); err != nil {
+		CreatedAt:   now,
+	}, cites)
+	if err != nil {
 		return nil, err
+	}
+	var anchorTxID string
+	if in.AutoAnchor {
+		if a, aErr := s.AnchorShard(ctx, ReceiptsShard); aErr != nil {
+			return nil, aErr
+		} else if a != nil {
+			anchorTxID = a.TxID
+			_ = s.db.UpdateReceiptAnchor(storedFrag.Seq, anchorTxID)
+		}
 	}
 
 	verifyURL := s.verifyBaseURL + "/" + tok
@@ -808,7 +1054,7 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 		Footer:       footer,
 		Report:       report,
 		Receipt:      &rcp,
-		AnchorTxID:   remRes.AnchorTxID,
+		AnchorTxID:   anchorTxID,
 	}, nil
 }
 
@@ -821,10 +1067,12 @@ type ReceiptVerification struct {
 	ReceiptToken     string                    `json:"receiptToken"`
 	Receipt          *reasoning.Receipt        `json:"receipt,omitempty"`
 	ReceiptAnchored  bool                      `json:"receiptAnchored"`
-	CitationsChecked int                       `json:"citationsChecked"`
-	CitationsMined   int                       `json:"citationsMined"`
-	CitationsMissing int                       `json:"citationsMissing"`
-	TruthNote        string                    `json:"truthNote"`
+	CitationsChecked    int                       `json:"citationsChecked"`
+	CitationsMined      int                       `json:"citationsMined"`
+	CitationsMissing    int                       `json:"citationsMissing"`
+	CitationsSuperseded int                       `json:"citationsSuperseded,omitempty"`
+	SupersededRefs      []string                  `json:"supersededRefs,omitempty"`
+	TruthNote           string                    `json:"truthNote"`
 }
 
 // VerifyReceipt validates a nektarr1.* token or 64-hex hash, its §16 delegations, and its cited SPV proofs.
@@ -856,11 +1104,18 @@ func (s *Service) VerifyReceipt(ctx context.Context, tokenOrHash string) (*Recei
 		return &ReceiptVerification{Verdict: "red", Reason: err.Error(), ReceiptHash: h, ReceiptToken: tok, Receipt: &rcp, TruthNote: reasoning.TruthNote}, nil
 	}
 
+	// Derive ReceiptAnchored live from the __receipts__ fragment's anchor_txid (so later anchoring reflects immediately!).
+	receiptAnchored := rec.AnchorTxID != ""
+	if !receiptAnchored && rec.ShardSeq > 0 {
+		if rf, rfErr := s.db.GetFragment(ReceiptsShard, rec.ShardSeq); rfErr == nil && rf.AnchorTxID != "" {
+			receiptAnchored = true
+		}
+	}
 	out := &ReceiptVerification{
 		ReceiptHash:     h,
 		ReceiptToken:    tok,
 		Receipt:         &rcp,
-		ReceiptAnchored: rec.AnchorTxID != "",
+		ReceiptAnchored: receiptAnchored,
 		TruthNote:       reasoning.TruthNote,
 	}
 	for _, ref := range rcp.FragmentRefs {
@@ -869,6 +1124,10 @@ func (s *Service) VerifyReceipt(ctx context.Context, tokenOrHash string) (*Recei
 		if fErr != nil || f.Forgotten {
 			out.CitationsMissing++
 			continue
+		}
+		if newerSeq, sErr := s.db.SupersededBy(ref.Shard, ref.Seq); sErr == nil && newerSeq > 0 {
+			out.CitationsSuperseded++
+			out.SupersededRefs = append(out.SupersededRefs, fmt.Sprintf("%s#%d->#%d", ref.Shard, ref.Seq, newerSeq))
 		}
 		if f.BatchN >= 0 {
 			_, vr, pErr := s.Prove(ctx, ref.Shard, ref.Seq)
@@ -883,6 +1142,10 @@ func (s *Service) VerifyReceipt(ctx context.Context, tokenOrHash string) (*Recei
 		out.Verdict = "red"
 		out.OK = false
 		out.Reason = fmt.Sprintf("%d cited fragment(s) missing or forgotten", out.CitationsMissing)
+	case out.CitationsSuperseded > 0:
+		out.Verdict = "amber"
+		out.OK = true
+		out.Reason = fmt.Sprintf("%d cited fragment(s) were superseded by a newer revision; re-grounding recommended", out.CitationsSuperseded)
 	case out.CitationsChecked > 0 && out.CitationsMined == out.CitationsChecked:
 		out.Verdict = "green"
 		out.OK = true
@@ -953,26 +1216,133 @@ func (s *Service) ExportShardPack(_ context.Context, shard string) (*ShardPackRe
 }
 
 // ImportShardPack resolves and verifies a CHIRP shard pack closure and imports its fragments into targetShard.
-func (s *Service) ImportShardPack(_ context.Context, chirpURL, targetShard string) (int, error) {
+func (s *Service) ImportShardPack(ctx context.Context, chirpURL, targetShard string) (int, error) {
 	raw, err := bstack.ResolveChirp(s.objects, chirpURL)
 	if err != nil {
 		return 0, err
 	}
+	n, _, err := s.importShardPackVerified(ctx, raw, targetShard)
+	return n, err
+}
+
+func (s *Service) importShardPackVerified(ctx context.Context, raw []byte, targetShard string) (int, string, error) {
 	var pack ShardPack
 	if err := json.Unmarshal(raw, &pack); err != nil {
-		return 0, fmt.Errorf("memory: decode shard pack: %w", err)
+		return 0, "", fmt.Errorf("memory: decode shard pack: %w", err)
 	}
 	if targetShard == "" {
 		targetShard = pack.Shard
 	}
+	// Verify every claimed anchor's AnchorBEEF + Rúnar NektarAnchor state (+ header BUMP on live nets)
+	// and refuse overwriting any conflicting existing local anchor!
+	verifiedAnchors := make(map[int64]store.BatchAnchor, len(pack.Anchors))
+	for _, a := range pack.Anchors {
+		if len(a.Beef) == 0 {
+			continue
+		}
+		tx, tErr := transaction.NewTransactionFromBEEF(a.Beef)
+		if tErr != nil || len(tx.Outputs) == 0 || tx.Outputs[0].LockingScript == nil {
+			continue
+		}
+		st, dErr := contracts.DecodeNektarAnchor(*tx.Outputs[0].LockingScript)
+		if dErr != nil {
+			continue
+		}
+		if st.N != uint64(a.N) || st.Size != uint64(a.Size) || !strings.EqualFold(hex.EncodeToString(st.R), a.RootHex) ||
+			!strings.EqualFold(hex.EncodeToString(st.Rp), a.ChainedHex) || tx.TxID().String() != a.TxID {
+			continue
+		}
+		if tx.MerklePath != nil && s.port.Network() != "memory" {
+			tracker := s.port.Tracker()
+			if tracker == nil {
+				continue
+			}
+			root, rErr := tx.MerklePath.ComputeRoot(tx.TxID())
+			if rErr != nil || root == nil {
+				continue
+			}
+			valid, vErr := tracker.IsValidRootForHeight(ctx, root, tx.MerklePath.BlockHeight)
+			if vErr != nil || !valid {
+				continue
+			}
+		}
+		a.Shard = targetShard
+		if err := s.db.SaveBatchAnchorStrict(a); err != nil {
+			return 0, targetShard, fmt.Errorf("memory: import shard pack anchor conflict: %w", err)
+		}
+		verifiedAnchors[a.N] = a
+	}
+
 	imported := 0
 	for _, f := range pack.Fragments {
 		f.Shard = targetShard
-		f.BatchN = -1
-		f.LeafIndex = -1
+		f.Tainted = true
+		if a, hasAnchor := verifiedAnchors[f.BatchN]; !hasAnchor || f.BatchN < 0 || f.AnchorTxID != a.TxID {
+			f.BatchN = -1
+			f.LeafIndex = -1
+			f.AnchorTxID = ""
+		}
 		if _, dedup, err := s.db.AppendFragment(f); err == nil && !dedup {
 			imported++
 		}
 	}
-	return imported, nil
+	return imported, targetShard, nil
+}
+
+type dbGroupStore struct {
+	db *store.DB
+}
+
+func (g *dbGroupStore) LoadBorgGroups() ([]*bstack.BorgGroup, error) {
+	rows, err := g.db.ListBorgGroups()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*bstack.BorgGroup, 0, len(rows))
+	for _, r := range rows {
+		bg := &bstack.BorgGroup{
+			GroupID:      r.GroupID,
+			Name:         r.Name,
+			CurrentEpoch: r.CurrentEpoch,
+			Members:      make(map[string]string),
+			Revoked:      make(map[string]int64),
+			Epochs:       make(map[int64][32]byte),
+			EpochMembers: make(map[int64][]string),
+		}
+		_ = json.Unmarshal(r.MembersJSON, &bg.Members)
+		_ = json.Unmarshal(r.RevokedJSON, &bg.Revoked)
+		_ = json.Unmarshal(r.EpochMembersJSON, &bg.EpochMembers)
+		var hexEpochs map[int64]string
+		if json.Unmarshal(r.EpochsJSON, &hexEpochs) == nil {
+			for ep, hx := range hexEpochs {
+				if raw, decErr := hex.DecodeString(hx); decErr == nil && len(raw) == 32 {
+					var k [32]byte
+					copy(k[:], raw)
+					bg.Epochs[ep] = k
+				}
+			}
+		}
+		out = append(out, bg)
+	}
+	return out, nil
+}
+
+func (g *dbGroupStore) SaveBorgGroup(bg *bstack.BorgGroup) error {
+	memJSON, _ := json.Marshal(bg.Members)
+	revJSON, _ := json.Marshal(bg.Revoked)
+	epMemJSON, _ := json.Marshal(bg.EpochMembers)
+	hexEpochs := make(map[int64]string, len(bg.Epochs))
+	for ep, k := range bg.Epochs {
+		hexEpochs[ep] = hex.EncodeToString(k[:])
+	}
+	epJSON, _ := json.Marshal(hexEpochs)
+	return g.db.SaveBorgGroup(store.BorgGroupRecord{
+		GroupID:          bg.GroupID,
+		Name:             bg.Name,
+		CurrentEpoch:     bg.CurrentEpoch,
+		MembersJSON:      memJSON,
+		RevokedJSON:      revJSON,
+		EpochsJSON:       epJSON,
+		EpochMembersJSON: epMemJSON,
+	})
 }

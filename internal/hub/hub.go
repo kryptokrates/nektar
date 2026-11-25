@@ -28,6 +28,7 @@ import (
 	bstoremod "github.com/lightwebinc/bstore/module"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 // BountySubmission is an agent's submission selling verified knowledge to the Hub bounty pool.
@@ -39,6 +40,7 @@ type BountySubmission struct {
 	Seq           int64           `json:"seq"`
 	HDP           string          `json:"hdp"`
 	Text          string          `json:"text"`
+	ProvenanceHex string          `json:"provenanceHex,omitempty"`
 	ProofBundle   json.RawMessage `json:"proofBundle,omitempty"`
 }
 
@@ -125,8 +127,11 @@ type Node struct {
 	subs          map[chan bstack.MarketEvent]map[string]bool
 	rates         map[string]*rateBucket
 	maxPerMin     int
+	tracker       chaintracker.ChainTracker
 	bountyHandler BountyHandler
 	httpClient    *http.Client
+	stopCh        chan struct{}
+	closeOnce     sync.Once
 }
 
 // NewNode constructs an embedded durable Hub Node mounting Nektar's 16 market lanes + requested Lightweb modules.
@@ -156,8 +161,10 @@ func NewNode(cfg Config) (*Node, error) {
 		subs:          make(map[chan bstack.MarketEvent]map[string]bool),
 		rates:         make(map[string]*rateBucket),
 		maxPerMin:     maxPerMin,
+		tracker:       cfg.ChainTracker,
 		bountyHandler: cfg.OnBountySubmit,
 		httpClient:    &http.Client{Timeout: 20 * time.Second},
+		stopCh:        make(chan struct{}),
 	}
 
 	// 1. Mount Nektar v0.4 market module (tm_nektar_<net>_0..f + ls_nektar) with durable SSE callback!
@@ -229,10 +236,43 @@ func NewNode(cfg Config) (*Node, error) {
 		return nil, fmt.Errorf("hub: restore store: %w", err)
 	}
 
+	// 5. Always-on background maintenance (expiry GC for hub_events + bbox TTL/row cap, even on standalone hubs).
+	go n.maintenanceLoop()
+
 	return n, nil
 }
 
-func (n *Node) Close() error           { return n.store.Close() }
+func (n *Node) maintenanceLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-n.stopCh:
+			return
+		case <-ticker.C:
+			nowMs := time.Now().UnixMilli()
+			_, _ = n.store.PruneExpired(nowMs)
+			_, _ = n.store.PruneBbox(nowMs-int64(7*24*time.Hour/time.Millisecond), 10_000)
+			if n.marketLS != nil {
+				_ = n.marketLS.PruneExpired(nowMs)
+			}
+			// Evict stale per-pubkey rate-limit buckets.
+			n.mu.Lock()
+			now := time.Now()
+			for pub, b := range n.rates {
+				if now.Sub(b.windowStart) >= 2*time.Minute {
+					delete(n.rates, pub)
+				}
+			}
+			n.mu.Unlock()
+		}
+	}
+}
+
+func (n *Node) Close() error {
+	n.closeOnce.Do(func() { close(n.stopCh) })
+	return n.store.Close()
+}
 func (n *Node) Store() *Store          { return n.store }
 func (n *Node) SetBountyHandler(h BountyHandler) {
 	n.mu.Lock()
@@ -241,32 +281,44 @@ func (n *Node) SetBountyHandler(h BountyHandler) {
 }
 
 func (n *Node) restoreFromStore(ctx context.Context) error {
-	events, err := n.store.EventsSince(0, nil, 1000)
-	if err != nil {
-		return err
-	}
 	if n.marketLS == nil {
 		return nil
 	}
-	for _, ev := range events {
-		if len(ev.BEEF) == 0 {
-			continue
+	var cursor int64
+	for {
+		events, err := n.store.EventsSince(cursor, nil, 1000)
+		if err != nil {
+			return err
 		}
-		tx, err := transaction.NewTransactionFromBEEF(ev.BEEF)
-		if err != nil || int(ev.Vout) >= len(tx.Outputs) {
-			continue
+		if len(events) == 0 {
+			break
 		}
-		out := tx.Outputs[ev.Vout]
-		op := transaction.Outpoint{Txid: *tx.TxID(), Index: ev.Vout}
-		_ = n.marketLS.OutputAdmittedByTopic(ctx, &module.OutputAdmittedByTopic{
-			Mode:          module.AdmitLockingScript,
-			Outpoint:      op,
-			Topic:         ev.Topic,
-			Satoshis:      out.Satoshis,
-			LockingScript: out.LockingScript,
-			AtomicBEEF:    ev.BEEF,
-		})
-		n.marketLS.SetSeq(op.String(), ev.Seq)
+		for _, ev := range events {
+			if ev.Seq > cursor {
+				cursor = ev.Seq
+			}
+			if len(ev.BEEF) == 0 {
+				continue
+			}
+			tx, err := transaction.NewTransactionFromBEEF(ev.BEEF)
+			if err != nil || int(ev.Vout) >= len(tx.Outputs) {
+				continue
+			}
+			out := tx.Outputs[ev.Vout]
+			op := transaction.Outpoint{Txid: *tx.TxID(), Index: ev.Vout}
+			_ = n.marketLS.OutputAdmittedByTopic(ctx, &module.OutputAdmittedByTopic{
+				Mode:          module.AdmitLockingScript,
+				Outpoint:      op,
+				Topic:         ev.Topic,
+				Satoshis:      out.Satoshis,
+				LockingScript: out.LockingScript,
+				AtomicBEEF:    ev.BEEF,
+			})
+			n.marketLS.SetSeq(op.String(), ev.Seq)
+		}
+		if len(events) < 1000 {
+			break
+		}
 	}
 	return nil
 }
@@ -309,6 +361,13 @@ func (n *Node) allowPubRate(pub string) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	now := time.Now()
+	if len(n.rates) > 4096 {
+		for k, v := range n.rates {
+			if now.Sub(v.windowStart) >= time.Minute {
+				delete(n.rates, k)
+			}
+		}
+	}
 	b, ok := n.rates[pub]
 	if !ok || now.Sub(b.windowStart) >= time.Minute {
 		n.rates[pub] = &rateBucket{windowStart: now, count: 1}
@@ -501,7 +560,7 @@ func (n *Node) Lookup(ctx context.Context, q *lookup.LookupQuestion) (*lookup.Lo
 	return ls.Lookup(ctx, q)
 }
 
-// StartFederation subscribes to sibling peer hubs' /events streams with jittered reconnects,
+// StartFederation subscribes to sibling peer hubs' /events streams with persisted cursors and jittered reconnects,
 // re-admitting every verified BEEF idempotently so agents on different hubs find and trade with each other.
 func (n *Node) StartFederation(ctx context.Context, peerHubURLs []string) {
 	for _, u := range peerHubURLs {
@@ -511,27 +570,19 @@ func (n *Node) StartFederation(ctx context.Context, peerHubURLs []string) {
 		}
 		go n.federatePeerLoop(ctx, peer)
 	}
-	// Periodic expiry GC with jitter.
-	go func() {
-		for {
-			wait := time.Duration(float64(5*time.Minute) * (0.5 + rand.Float64()))
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(wait):
-				_, _ = n.store.PruneExpired(time.Now().UnixMilli())
-			}
-		}
-	}()
 }
 
 func (n *Node) federatePeerLoop(ctx context.Context, peer string) {
-	var cursor int64
+	cursor := n.store.GetFedCursor(peer)
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		cursor = n.pullPeerOnce(ctx, peer, cursor)
+		next := n.pullPeerOnce(ctx, peer, cursor)
+		if next > cursor {
+			cursor = next
+			_ = n.store.SetFedCursor(peer, cursor)
+		}
 		backoff := time.Duration(float64(3*time.Second) * (0.5 + rand.Float64()))
 		select {
 		case <-ctx.Done():
@@ -542,31 +593,13 @@ func (n *Node) federatePeerLoop(ctx context.Context, peer string) {
 }
 
 func (n *Node) pullPeerOnce(ctx context.Context, peer string, cursor int64) int64 {
-	// Fetch missed raw BEEFs via /sync?cursor= (numbered, repairable stream — fab/gap-unrepaired).
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/sync?cursor=%d", peer, cursor), nil)
-	if err != nil {
-		return cursor
-	}
-	resp, err := n.httpClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		return cursor
-	}
-	var items []StoredEvent
-	_ = json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&items)
-	resp.Body.Close()
-	for _, it := range items {
-		if len(it.BEEF) > 0 && it.Topic != "" {
-			_, _ = n.Submit(ctx, it.BEEF, []string{it.Topic})
-		}
-		if it.Seq > cursor {
-			cursor = it.Seq
-		}
+	// Drain missed raw BEEFs via /sync?cursor= in paginated batches until caught up.
+	cursor = n.syncRange(ctx, peer, cursor)
+	if cursor > 0 {
+		_ = n.store.SetFedCursor(peer, cursor)
 	}
 
-	// Now hold SSE /events?cursor= until EOF or error to wake immediately on new items!
+	// Hold SSE /events?cursor= until EOF or error, syncing inline without tearing down the stream!
 	sseReq, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/events?cursor=%d", peer, cursor), nil)
 	if err != nil {
 		return cursor
@@ -580,12 +613,16 @@ func (n *Node) pullPeerOnce(ctx context.Context, peer string, cursor int64) int6
 	}
 	defer sseResp.Body.Close()
 	sc := bufio.NewScanner(sseResp.Body)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
 		if strings.HasPrefix(line, "id: ") {
 			if id, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "id: ")), 10, 64); err == nil && id > cursor {
-				// Trigger one /sync pull to ingest the exact BEEF bytes cleanly!
-				return n.syncRange(ctx, peer, cursor)
+				next := n.syncRange(ctx, peer, cursor)
+				if next > cursor {
+					cursor = next
+					_ = n.store.SetFedCursor(peer, cursor)
+				}
 			}
 		}
 	}
@@ -593,29 +630,38 @@ func (n *Node) pullPeerOnce(ctx context.Context, peer string, cursor int64) int6
 }
 
 func (n *Node) syncRange(ctx context.Context, peer string, cursor int64) int64 {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/sync?cursor=%d", peer, cursor), nil)
-	if err != nil {
-		return cursor
-	}
-	resp, err := n.httpClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil {
-			resp.Body.Close()
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/sync?cursor=%d", peer, cursor), nil)
+		if err != nil {
+			return cursor
 		}
-		return cursor
-	}
-	defer resp.Body.Close()
-	var items []StoredEvent
-	_ = json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&items)
-	for _, it := range items {
-		if len(it.BEEF) > 0 && it.Topic != "" {
-			_, _ = n.Submit(ctx, it.BEEF, []string{it.Topic})
+		resp, err := n.httpClient.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			return cursor
 		}
-		if it.Seq > cursor {
-			cursor = it.Seq
+		var items []StoredEvent
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&items)
+		resp.Body.Close()
+		if len(items) == 0 {
+			return cursor
+		}
+		advanced := false
+		for _, it := range items {
+			if len(it.BEEF) > 0 && it.Topic != "" {
+				_, _ = n.Submit(ctx, it.BEEF, []string{it.Topic})
+			}
+			if it.Seq > cursor {
+				cursor = it.Seq
+				advanced = true
+			}
+		}
+		if len(items) < 200 || !advanced {
+			return cursor
 		}
 	}
-	return cursor
 }
 
 // Handler returns the HTTP handler exposing BRC-22 /submit, BRC-24 /lookup, numbered/cursored SSE /events,
@@ -719,21 +765,32 @@ func (n *Node) Handler() http.Handler {
 
 		var lastSent int64 = cursor
 		if cursor >= 0 && (r.URL.Query().Has("cursor") || r.Header.Get("Last-Event-ID") != "") {
-			backlog, _ := n.store.EventsSince(cursor, doms, 200)
-			for _, st := range backlog {
-				ev := bstack.MarketEvent{
-					Seq:        st.Seq,
-					Topic:      st.Topic,
-					TxID:       st.TxID,
-					Vout:       st.Vout,
-					AdmittedAt: st.AdmittedAt,
-					Payload:    st.Payload,
+			// Drain full backlog in paginated 200-event chunks before switching to live push!
+			for {
+				backlog, bErr := n.store.EventsSince(lastSent, doms, 200)
+				if bErr != nil || len(backlog) == 0 {
+					break
 				}
-				b, _ := json.Marshal(ev)
-				_, _ = fmt.Fprintf(w, "id: %d\nevent: market\ndata: %s\n\n", ev.Seq, b)
-				lastSent = ev.Seq
+				for _, st := range backlog {
+					ev := bstack.MarketEvent{
+						Seq:        st.Seq,
+						Topic:      st.Topic,
+						TxID:       st.TxID,
+						Vout:       st.Vout,
+						AdmittedAt: st.AdmittedAt,
+						Payload:    st.Payload,
+					}
+					b, _ := json.Marshal(ev)
+					_, _ = fmt.Fprintf(w, "id: %d\nevent: market\ndata: %s\n\n", ev.Seq, b)
+					if ev.Seq > lastSent {
+						lastSent = ev.Seq
+					}
+				}
+				flusher.Flush()
+				if len(backlog) < 200 {
+					break
+				}
 			}
-			flusher.Flush()
 		}
 
 		keepalive := time.NewTicker(15 * time.Second)
@@ -762,7 +819,7 @@ func (n *Node) Handler() http.Handler {
 		}
 	})
 
-	// NAT-safe counterparty store-and-forward relay (/bbox/send & /bbox/inbox).
+	// Authenticated NAT-safe counterparty store-and-forward relay (/bbox/send & /bbox/inbox).
 	mux.HandleFunc("POST /bbox/send", func(w http.ResponseWriter, r *http.Request) {
 		var msg BboxMessage
 		if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&msg); err != nil {
@@ -771,6 +828,14 @@ func (n *Node) Handler() http.Handler {
 		}
 		if msg.RecipientPub == "" || msg.SenderPub == "" || msg.DealID == "" || msg.Kind == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "recipientPub, senderPub, dealId, and kind are required"})
+			return
+		}
+		if msg.Sig == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "bbox message signature required"})
+			return
+		}
+		if err := bstack.VerifyArtifact(msg.SenderPub, msg.Sig, msg.Signable()); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid bbox sender signature"})
 			return
 		}
 		if !n.allowPubRate(msg.SenderPub) {
@@ -788,6 +853,24 @@ func (n *Node) Handler() http.Handler {
 		pub := strings.TrimSpace(r.URL.Query().Get("pub"))
 		if pub == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pub query parameter required"})
+			return
+		}
+		hdrPub := strings.TrimSpace(r.Header.Get("X-Nektar-Pub"))
+		hdrTs := strings.TrimSpace(r.Header.Get("X-Nektar-Ts"))
+		hdrSig := strings.TrimSpace(r.Header.Get("X-Nektar-Sig"))
+		if hdrPub != pub || hdrTs == "" || hdrSig == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "signed X-Nektar-Pub / X-Nektar-Ts / X-Nektar-Sig headers required for bbox inbox"})
+			return
+		}
+		ts, tsErr := strconv.ParseInt(hdrTs, 10, 64)
+		now := time.Now().Unix()
+		if tsErr != nil || ts < now-300 || ts > now+300 {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "expired or invalid X-Nektar-Ts"})
+			return
+		}
+		authPayload := map[string]any{"action": "bbox_inbox", "pub": pub, "ts": ts}
+		if err := bstack.VerifyArtifact(pub, hdrSig, authPayload); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid bbox inbox signature"})
 			return
 		}
 		since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
@@ -814,17 +897,13 @@ func (n *Node) Handler() http.Handler {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		b, err := n.store.GetBounty(sub.BountyID)
-		if err != nil || !b.Active || b.Filled >= b.MaxFills {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "bounty not found or already filled"})
-			return
-		}
 		if sub.HDP == "" || sub.Text == "" || sub.SellerPub == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hdp, text, and sellerPub are required"})
 			return
 		}
-		if dup, _ := n.store.HasBountyClaim(sub.HDP); dup {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "duplicate fragment HDP already claimed"})
+		b, err := n.store.GetBounty(sub.BountyID)
+		if err != nil || !b.Active || b.Filled >= b.MaxFills {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "bounty not found or already filled"})
 			return
 		}
 		n.mu.RLock()
@@ -834,13 +913,32 @@ func (n *Node) Handler() http.Handler {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "hub bounty buyer is not armed"})
 			return
 		}
+		// Atomically reserve bounty slot + unique HDP claim BEFORE executing payout!
+		if err := n.store.ReserveBountyClaim(b.ID, sub.HDP, sub.SellerPub, b.RewardSats); err != nil {
+			if errors.Is(err, ErrBountyDuplicate) {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "duplicate fragment HDP already claimed"})
+				return
+			}
+			if errors.Is(err, ErrBountyFilled) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "bounty not found or already filled"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 		res, err := bh(r.Context(), b, sub)
 		if err != nil {
+			// Only release reservation if payout definitely did NOT broadcast (never on ErrBroadcastUnknown!).
+			if !errors.Is(err, nwallet.ErrBroadcastUnknown) {
+				_ = n.store.CancelBountyClaim(b.ID, sub.HDP)
+			}
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		if res.Accepted {
-			_ = n.store.RecordBountyClaim(b.ID, sub.HDP, sub.SellerPub, res.TxID, res.RewardSats)
+		if res != nil && res.Accepted {
+			_ = n.store.FinalizeBountyClaim(sub.HDP, res.TxID)
+		} else {
+			_ = n.store.CancelBountyClaim(b.ID, sub.HDP)
 		}
 		writeJSON(w, http.StatusOK, res)
 	})

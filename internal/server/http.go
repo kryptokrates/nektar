@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -13,14 +12,15 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/lightwebinc/bcommon/payee"
+	"github.com/lightwebinc/bcommon/guard"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	restateserver "github.com/restatedev/sdk-go/server"
 
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/discovery"
@@ -28,6 +28,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/reasoning"
+	"github.com/kryptokrates/nektar/internal/store"
 )
 
 //go:embed all:ui_dist
@@ -43,11 +44,12 @@ type Config struct {
 	ToolPrices        map[string]uint64 // optional BRC-105/402 satoshi price per route/tool name
 	OpenAIUpstream    string            // L0 proxy upstream (default https://api.openai.com)
 	AnthropicUpstream string            // L0 proxy upstream (default https://api.anthropic.com)
-	Hub               *hub.Node         // optional embedded Go overlay hub mounted under /hub/
+	Hub               *hub.Node // optional embedded Go overlay hub mounted under /hub/
 	Discovery         *discovery.Service
 	Broker            *market.Broker
-	MountRestate      bool // mounts Restate Go SDK service handler under /restate/
+	RestateClient     *market.RestateClient // active Restate Ingress/Admin client (restate-server)
 	RestateAdminURL   string
+	ExposeWalletWire  bool // opt-in loopback-only BRC-100 wire at /v1/wallet/wire/
 	HTTPClient        *http.Client
 }
 
@@ -66,8 +68,6 @@ type App struct {
 	mcpSrv     *mcp.Server
 	cfg        Config
 	startedAt  time.Time
-	claimsMu   sync.Mutex
-	payClaims  payee.Claims
 	httpClient *http.Client
 	handler    http.Handler
 
@@ -76,6 +76,17 @@ type App struct {
 
 	pairMu    sync.Mutex
 	pairCodes map[string]pairTicket
+
+	faucetMu  sync.Mutex
+	faucetIPs map[string][]int64
+
+	oauthMu      sync.Mutex
+	oauthClients map[string]oauthClient
+	oauthCodes   map[string]oauthCode
+	oauthTokens  map[string]oauthAccessToken
+
+	ttfvMs      atomic.Int64
+	verifyViews atomic.Int64
 }
 
 // NewApp wires MCP Streamable HTTP, Unified Tools API, REST API, A2A Agent Card + JSON-RPC,
@@ -109,8 +120,12 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 		cfg:        cfg,
 		startedAt:  time.Now(),
 		httpClient: hc,
-		evSubs:     make(map[chan string]struct{}),
-		pairCodes:  make(map[string]pairTicket),
+		evSubs:       make(map[chan string]struct{}),
+		pairCodes:    make(map[string]pairTicket),
+		faucetIPs:    make(map[string][]int64),
+		oauthClients: make(map[string]oauthClient),
+		oauthCodes:   make(map[string]oauthCode),
+		oauthTokens:  make(map[string]oauthAccessToken),
 	}
 	app.handler = app.buildMux()
 	return app, nil
@@ -191,8 +206,10 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		baseURL = "http://127.0.0.1:18420"
 	}
 	addr, _ := a.mem.Chain().FundAddress()
-	bal := a.mem.Chain().BalanceSats()
-	utxos := a.mem.Chain().UTXOCount()
+	balBreakdown, _ := a.mem.Chain().Balance(ctx)
+	bal := balBreakdown.SpendableSats
+	utxos := balBreakdown.SpendableCount
+	feeRate := a.mem.Chain().FeeRateSatPerKB(ctx)
 	shards, _ := a.mem.ListUserShards()
 	totalRecs, anchoredRecs, _ := a.mem.DB().CountFragments()
 	unproven := totalRecs - anchoredRecs
@@ -252,18 +269,28 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		}
 	}
 
-	// Market shards summary
+	// Market shards summary (real settled works & sats per shard)
 	marketRows := make([]map[string]any, 0, len(listings))
 	for _, l := range listings {
 		frags, _ := a.mem.DB().ListFragments(l.Shard)
+		works, shardEarned, _ := a.mem.DB().SellerShardStats(l.Shard)
 		marketRows = append(marketRows, map[string]any{
 			"shard":   l.Shard,
 			"domains": l.Domains,
 			"records": len(frags),
-			"works":   0,
-			"earned":  0,
+			"works":   works,
+			"earned":  shardEarned,
+			"active":  l.Active,
 			"offers":  fmt.Sprintf("%d sats", l.PriceSats),
 		})
+	}
+	unmatchedWants, _ := a.mem.DB().ListUnmatchedWants(20)
+	if unmatchedWants == nil {
+		unmatchedWants = []store.UnmatchedWantRecord{}
+	}
+	withholdings := a.disc.Withholdings()
+	if withholdings == nil {
+		withholdings = []discovery.WithholdingWarning{}
 	}
 
 	// Hosts + Peers + Bounties + Liquidity
@@ -341,7 +368,7 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		policyRows = append(policyRows, row)
 	}
 
-	// Automation panel (Approvals + Broker ops + Deal journal)
+	// Automation panel (Approvals + Broker ops + REAL Restate durable execution telemetry — F26).
 	pendingRows := make([]map[string]any, 0, len(pendingApprs))
 	for _, p := range pendingApprs {
 		pendingRows = append(pendingRows, map[string]any{
@@ -349,10 +376,11 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 			"reason":       p.Reason,
 			"maxExtraSats": p.MaxExtraSats,
 			"operationId":  p.DealID,
+			"awakeableId":  p.AwakeableID,
 			"expiresAt":    time.Unix(p.ExpiresAt, 0).UTC().Format(time.RFC3339),
 		})
 	}
-	journal := make([]map[string]any, 0, len(deals))
+	dealFeed := make([]map[string]any, 0, len(deals))
 	for i, d := range deals {
 		if i >= 12 {
 			break
@@ -361,12 +389,58 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		if cause == "" {
 			cause = fmt.Sprintf("%s · %d sats", d.Role, d.PriceSats)
 		}
-		journal = append(journal, map[string]any{
+		dealFeed = append(dealFeed, map[string]any{
 			"op":    d.DealID,
 			"at":    d.UpdatedAt * 1000,
 			"to":    d.Status,
 			"cause": cause,
 		})
+	}
+	rtExecutor := "unattached"
+	rtPending := make([]map[string]any, 0)
+	rtJournal := make([]map[string]any, 0)
+	var rtNextAt any = nil
+	if a.cfg.RestateClient != nil {
+		if invs, qErr := a.cfg.RestateClient.QueryInvocations(ctx, 25); qErr == nil {
+			rtExecutor = "restate"
+			var earliestNext int64
+			for _, inv := range invs {
+				stLower := strings.ToLower(inv.Status)
+				isActive := stLower == "pending" || stLower == "scheduled" || stLower == "running" || stLower == "suspended" || stLower == "backing-off" || stLower == "paused" || stLower == "ready"
+				if isActive {
+					nextAt := inv.NextRetryAt
+					if nextAt == 0 {
+						nextAt = inv.ModifiedAt
+					}
+					if nextAt > 0 && (earliestNext == 0 || nextAt < earliestNext) {
+						earliestNext = nextAt
+					}
+					rtPending = append(rtPending, map[string]any{
+						"kind":        inv.Target,
+						"operationId": inv.ID,
+						"status":      inv.Status,
+						"attempts":    inv.RetryCount,
+						"nextAt":      nextAt,
+						"lastError":   inv.LastFailureErr,
+					})
+				}
+				cause := inv.LastFailureErr
+				if cause == "" {
+					cause = inv.ID
+				}
+				rtJournal = append(rtJournal, map[string]any{
+					"op":    inv.Target,
+					"at":    inv.ModifiedAt,
+					"to":    inv.Status,
+					"cause": cause,
+				})
+			}
+			if earliestNext > 0 {
+				rtNextAt = earliestNext
+			}
+		} else {
+			rtExecutor = "restate-unavailable"
+		}
 	}
 	ops := []map[string]any{}
 	if a.broker != nil {
@@ -417,11 +491,20 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 			"next":     nextStep,
 		},
 		"treasury": map[string]any{
-			"address":  addr,
-			"sats":     bal,
-			"utxos":    utxos,
-			"funded":   bal > 0,
-			"payments": "BRC-105 + AtomicBEEF",
+			"address":         addr,
+			"identityPub":     a.mem.Chain().IdentityPubHex(),
+			"sats":            bal,
+			"confirmedSats":   balBreakdown.ConfirmedSats,
+			"unprovenSats":    balBreakdown.UnprovenSats,
+			"reservedSats":    balBreakdown.ReservedSats,
+			"utxos":           utxos,
+			"fuelUtxos":       balBreakdown.FuelCount,
+			"reserveUtxos":    balBreakdown.ReserveCount,
+			"defaultUtxos":    balBreakdown.DefaultCount,
+			"walletMode":      a.mem.Chain().WalletMode(),
+			"feeRateSatPerKB": feeRate,
+			"funded":          bal > 0,
+			"payments":        "BRC-100 + BRC-29 + AtomicBEEF",
 		},
 		"receipts": map[string]any{
 			"count":     len(rcps),
@@ -445,19 +528,22 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 			"slots":     map[string]int{"peers": len(peers), "bounties": len(bounties), "listings": len(listings)},
 			"boot":      "dir-v1",
 			"push":      pushURL,
-			"peers":     peers,
-			"bounties":  bounties,
-			"liquidity": liquidity,
+			"peers":          peers,
+			"bounties":       bounties,
+			"liquidity":      liquidity,
+			"unmatchedWants": unmatchedWants,
+			"withholdings":   withholdings,
 		},
 		"automation": map[string]any{
 			"pending": pendingRows,
 			"ops":     ops,
+			"deals":   dealFeed,
 			"rt": map[string]any{
-				"executor": "go-restate-sdk",
+				"executor": rtExecutor,
 				"adminUrl": adminURL,
-				"pending":  []any{},
-				"nextAt":   nil,
-				"journal":  journal,
+				"pending":  rtPending,
+				"nextAt":   rtNextAt,
+				"journal":  rtJournal,
 			},
 		},
 		"share": map[string]any{
@@ -492,16 +578,19 @@ func (a *App) buildMux() http.Handler {
 	mux.HandleFunc("GET /pair", a.handlePair)
 
 	// 3. Health, discovery, public card & A2A Agent Card.
-	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, _ *http.Request) {
+	healthHandler := func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":      true,
 			"version": "0.4.0",
 			"network": a.mem.Chain().Network(),
 		})
-	})
-	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
+	}
+	mux.HandleFunc("GET /v1/health", healthHandler)
+	mux.HandleFunc("GET /health", healthHandler)
+	mux.HandleFunc("GET /healthz", healthHandler)
+	mux.Handle("GET /v1/status", a.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, BuildStatus(r.Context(), a.mem, a.mkt))
-	})
+	})))
 	mux.HandleFunc("GET /.well-known/nektar", func(w http.ResponseWriter, r *http.Request) {
 		shards, _ := a.mem.ListUserShards()
 		resp := map[string]any{
@@ -521,7 +610,7 @@ func (a *App) buildMux() http.Handler {
 		writeJSON(w, http.StatusOK, resp)
 	})
 	mux.HandleFunc("GET /.well-known/agent.json", a.handleAgentCard)
-	mux.HandleFunc("POST /a2a", a.handleA2A)
+	mux.Handle("POST /a2a", a.withAuth(http.HandlerFunc(a.handleA2A)))
 	mux.HandleFunc("GET /card", a.handlePublicCard)
 
 	// 4. Unified Tools API (used by OnboardingCard, Hermes, CLI, and external SDKs!).
@@ -539,46 +628,7 @@ func (a *App) buildMux() http.Handler {
 	mux.HandleFunc("GET /v1/verify/{token}", a.handleVerifyReceipt)
 	mux.HandleFunc("GET /v1/pack/{shard}", a.handleShardPack)
 	mux.HandleFunc("GET /v1/chirp/{hash}", a.handleChirpObject)
-	mux.HandleFunc("GET /v1/wallet", func(w http.ResponseWriter, _ *http.Request) {
-		addr, _ := a.mem.Chain().FundAddress()
-		spentToday, maxDay, maxFee, txCount := a.mem.Chain().SpendGuard().Stats()
-		writeJSON(w, http.StatusOK, map[string]any{
-			"network":     a.mem.Chain().Network(),
-			"identityPub": a.mem.Chain().IdentityPubHex(),
-			"fundAddress": addr,
-			"balanceSats": a.mem.Chain().BalanceSats(),
-			"utxos":       a.mem.Chain().UTXOCount(),
-			"spendGuard": map[string]any{
-				"spentToday": spentToday,
-				"maxPerDay":  maxDay,
-				"maxFee":     maxFee,
-				"txCount":    txCount,
-			},
-		})
-	})
-	mux.Handle("POST /v1/wallet/sync", a.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		added, proved, sErr := a.mem.Chain().SyncPool(r.Context())
-		upgraded, _ := a.mem.RefreshAnchorProofs(r.Context())
-		if sErr != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]any{
-				"ok":              false,
-				"error":           sErr.Error(),
-				"balanceSats":     a.mem.Chain().BalanceSats(),
-				"utxos":           a.mem.Chain().UTXOCount(),
-				"upgradedAnchors": upgraded,
-			})
-			return
-		}
-		a.BroadcastDashboardEvent("wallet_sync")
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":              true,
-			"added":           added,
-			"proved":          proved,
-			"upgradedAnchors": upgraded,
-			"balanceSats":     a.mem.Chain().BalanceSats(),
-			"utxos":           a.mem.Chain().UTXOCount(),
-		})
-	})))
+	a.registerWalletRoutes(mux)
 
 	// 6. Live A2A Market Purchase, Host Discovery, Onboarding, Faucet & Approvals!
 	mux.HandleFunc("POST /v1/market/purchase", a.handleMarketPurchase)
@@ -587,37 +637,92 @@ func (a *App) buildMux() http.Handler {
 	mux.Handle("POST /v1/onboard/faucet", a.withAuth(http.HandlerFunc(a.handleOnboardFaucet)))
 	mux.HandleFunc("POST /v1/faucet", a.handlePublicFaucet)
 	mux.Handle("POST /v1/onboard/policy-preset", a.withOperatorAuth(http.HandlerFunc(a.handlePolicyPreset)))
+	mux.Handle("GET /v1/policies", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		list, err := a.mem.DB().ListOperatorPolicies()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"policies": list})
+	})))
+	mux.Handle("DELETE /v1/policies/{id}", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimSpace(r.PathValue("id"))
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "policy id required"})
+			return
+		}
+		if err := a.mem.DB().RevokeOperatorPolicy(id); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		_ = market.SyncPolicyFromDB(a.mem.DB(), a.mkt.Policy())
+		a.BroadcastDashboardEvent("policy_revoked")
+		writeJSON(w, http.StatusOK, map[string]any{"revoked": id})
+	})))
+	mux.Handle("POST /v1/auth/pair-code", a.withAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"code": a.CreatePairCode()})
+	})))
+	mux.Handle("POST /v1/automation/kill", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		a.mkt.Policy().SetKillSwitch(in.Enabled)
+		a.BroadcastDashboardEvent("kill_switch")
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "killSwitch": in.Enabled})
+	})))
+	mux.Handle("DELETE /v1/market/listings/{shard}", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		shard := strings.TrimSpace(r.PathValue("shard"))
+		if shard == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "shard required"})
+			return
+		}
+		if err := a.mem.DB().DeleteSellListing(shard); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		a.BroadcastDashboardEvent("listing_deleted")
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": shard})
+	})))
+	mux.Handle("PATCH /v1/market/listings/{shard}", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		shard := strings.TrimSpace(r.PathValue("shard"))
+		var in struct {
+			Active bool `json:"active"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := a.mem.DB().SetSellListingActive(shard, in.Active); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		a.BroadcastDashboardEvent("listing_updated")
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "shard": shard, "active": in.Active})
+	})))
 	mux.Handle("GET /v1/onboard/hub-bundle", a.withAuth(http.HandlerFunc(a.handleHubBundle)))
 	mux.Handle("POST /v1/automation/approvals/{id}", a.withOperatorAuth(http.HandlerFunc(a.handleApprovalDecision)))
 
-	// 7. L0 Transparent LLM Memory Proxy (OpenAI & Anthropic drop-in!).
-	mux.Handle("POST /v1/proxy/openai/v1/chat/completions", a.withAuth(http.HandlerFunc(a.handleOpenAIProxy)))
-	mux.Handle("POST /v1/proxy/anthropic/v1/messages", a.withAuth(http.HandlerFunc(a.handleAnthropicProxy)))
+	// 7. L0 Transparent LLM Memory Proxy, MCP OAuth 2.1, OpenAPI, Bundled Adapters & Prometheus Metrics.
+	a.registerProxyRoutes(mux)
+	a.registerOAuthRoutes(mux)
+	a.registerAdapterRoutes(mux)
+	a.registerMetricsRoutes(mux)
 
-	// 8. Embedded Overlay Hub & Restate Services.
+	// 8. Embedded Overlay Hub (Restate services are NEVER exposed on the public :18420 mux — dedicated internal h2c port only!).
 	if a.cfg.Hub != nil {
 		mux.Handle("/hub/", http.StripPrefix("/hub", a.cfg.Hub.Handler()))
-	}
-	if a.cfg.MountRestate && a.mkt != nil {
-		if rh, err := a.mkt.BindRestate(restateserver.NewRestate()).Handler(); err == nil {
-			mux.Handle("/restate/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				r2 := r.Clone(r.Context())
-				r2.URL.Path = strings.TrimPrefix(r.URL.Path, "/restate")
-				if r2.URL.Path == "" {
-					r2.URL.Path = "/"
-				}
-				r2.RequestURI = r2.URL.RequestURI()
-				rh.ServeHTTP(w, r2)
-			}))
-		}
 	}
 
 	// 9. Svelte 5 Dashboard exact routes (/state, /events, /dashboard/state, /dashboard/events, /).
 	mux.Handle("GET /state", a.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, a.BuildDashboardState(r.Context(), "http://"+r.Host))
+		writeJSON(w, http.StatusOK, a.BuildDashboardState(r.Context(), requestBaseURL(r)))
 	})))
 	mux.Handle("GET /dashboard/state", a.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, a.BuildDashboardState(r.Context(), "http://"+r.Host))
+		writeJSON(w, http.StatusOK, a.BuildDashboardState(r.Context(), requestBaseURL(r)))
 	})))
 	mux.Handle("GET /events", a.withAuth(http.HandlerFunc(a.handleDashboardSSE)))
 	mux.Handle("GET /dashboard/events", a.withAuth(http.HandlerFunc(a.handleDashboardSSE)))
@@ -688,6 +793,21 @@ func (a *App) handleDashboardSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func requestBaseURL(r *http.Request) string {
+	scheme := "http"
+	if strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") || r.TLS != nil {
+		scheme = "https"
+	}
+	host := r.Host
+	if xfHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); xfHost != "" {
+		host = xfHost
+	}
+	if host == "" {
+		host = "127.0.0.1:18420"
+	}
+	return scheme + "://" + host
+}
+
 func (a *App) tokenMatches(got string, requireOperator bool) bool {
 	if got == "" {
 		return false
@@ -698,7 +818,7 @@ func (a *App) tokenMatches(got string, requireOperator bool) bool {
 	if !requireOperator && a.cfg.APIToken != "" && subtle.ConstantTimeCompare([]byte(got), []byte(a.cfg.APIToken)) == 1 {
 		return true
 	}
-	return false
+	return a.matchOAuthToken(got, requireOperator)
 }
 
 func (a *App) extractToken(r *http.Request) string {
@@ -802,6 +922,9 @@ func (a *App) handleToolCall(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if name == "recall" || name == "groundedAnswer" {
+		a.recordTTFV()
+	}
 	if name == "remember" || name == "groundedAnswer" || name == "want" || name == "sell" || name == "anchor" {
 		a.BroadcastDashboardEvent("tool:" + name)
 	}
@@ -872,9 +995,56 @@ func (a *App) handleOnboardFaucet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "txid": txid, "sats": sats, "address": addr})
 }
 
+func (a *App) allowFaucetIP(r *http.Request) bool {
+	ip := r.RemoteAddr
+	// Only trust X-Forwarded-For when explicitly behind a trusted reverse proxy!
+	if os.Getenv("NEKTAR_TRUST_PROXY") == "1" {
+		if xf := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xf != "" {
+			ip = strings.TrimSpace(strings.Split(xf, ",")[0])
+		}
+	}
+	if h, _, ok := strings.Cut(ip, ":"); ok && h != "" {
+		ip = h
+	}
+	now := time.Now().Unix()
+	a.faucetMu.Lock()
+	defer a.faucetMu.Unlock()
+	if len(a.faucetIPs) > 4096 {
+		for k, times := range a.faucetIPs {
+			active := false
+			for _, ts := range times {
+				if now-ts < 3600 {
+					active = true
+					break
+				}
+			}
+			if !active {
+				delete(a.faucetIPs, k)
+			}
+		}
+	}
+	prev := a.faucetIPs[ip]
+	kept := prev[:0]
+	for _, ts := range prev {
+		if now-ts < 3600 {
+			kept = append(kept, ts)
+		}
+	}
+	if len(kept) >= 5 {
+		a.faucetIPs[ip] = kept
+		return false
+	}
+	a.faucetIPs[ip] = append(kept, now)
+	return true
+}
+
 func (a *App) handlePublicFaucet(w http.ResponseWriter, r *http.Request) {
 	if a.cfg.Hub == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "faucet is only served on Hub nodes"})
+		return
+	}
+	if !a.allowFaucetIP(r) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "faucet rate limit exceeded for this IP — try again later"})
 		return
 	}
 	var in struct {
@@ -884,7 +1054,7 @@ func (a *App) handlePublicFaucet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	txid, sats, err := hub.DripFaucet(r.Context(), a.mem, in.Address, 5000, 25_000)
+	txid, sats, err := hub.DripFaucet(r.Context(), a.mem, in.Address, 2000, 10_000)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -928,24 +1098,31 @@ func (a *App) handleHubBundle(w http.ResponseWriter, r *http.Request) {
 	if domain == "" {
 		domain = "hub.example.com"
 	}
-	cliCmd := fmt.Sprintf("NEKTAR_NETWORK=%s NEKTAR_EMBED_HUB=1 nektar serve --hub --listen :18420", net)
-	vpsCmd := fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh && NEKTAR_NETWORK=%s nektar serve --hub --listen :18420", net)
+	cliCmd := fmt.Sprintf("nektar hub up --auto-ip --network %s", net)
+	vpsCmd := fmt.Sprintf("NEKTAR_NETWORK=%s NEKTAR_AUTO_IP=1 curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | bash", net)
 	if mode == "domain" {
-		cliCmd = fmt.Sprintf("NEKTAR_NETWORK=%s NEKTAR_PUBLIC_URL=https://%s NEKTAR_EMBED_HUB=1 nektar serve --hub --listen :18420", net, domain)
+		cliCmd = fmt.Sprintf("nektar hub up --domain %s --network %s", domain, net)
+		vpsCmd = fmt.Sprintf("NEKTAR_NETWORK=%s NEKTAR_DOMAIN=%s curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | bash", net, domain)
 	} else if mode == "tunnel" {
-		cliCmd = fmt.Sprintf("NEKTAR_NETWORK=%s nektar serve --hub --listen :18420 & cloudflared tunnel --url http://127.0.0.1:18420", net)
+		cliCmd = fmt.Sprintf("nektar hub up --tunnel --network %s", net)
+		vpsCmd = fmt.Sprintf("NEKTAR_NETWORK=%s NEKTAR_TUNNEL=1 curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | bash", net)
 	}
 	cloudInit := fmt.Sprintf(`#cloud-config
+package_update: true
+packages: [curl, ca-certificates, openssl]
 runcmd:
-  - curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh
-  - NEKTAR_NETWORK=%s NEKTAR_EMBED_HUB=1 nohup /usr/local/bin/nektar serve --hub --listen :18420 >/var/log/nektar.log 2>&1 &
+  - |
+    export NEKTAR_HUB_DIR=/opt/nektar-hub
+    export NEKTAR_NETWORK=%s
+    export NEKTAR_AUTO_IP=1
+    curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | bash
 `, net)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cliCommand":         cliCmd,
 		"vpsOneLiner":        vpsCmd,
 		"cloudInitYaml":      cloudInit,
-		"coolifyTemplateUrl": "https://github.com/kryptokrates/nektar/blob/master/deploy/hub/templates/coolify.compose.yaml",
-		"helmCommand":        "helm install nektar-hub https://github.com/kryptokrates/nektar/tree/master/deploy/hub/helm",
+		"coolifyTemplateUrl": "https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/templates/coolify.compose.yaml",
+		"helmCommand":        "helm install nektar-hub deploy/hub/helm --set network=" + net + " --set publicUrl=https://" + domain,
 	})
 }
 
@@ -978,25 +1155,35 @@ func (a *App) handleApprovalDecision(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handlePublicCard(w http.ResponseWriter, r *http.Request) {
-	st := a.BuildDashboardState(r.Context(), "http://"+r.Host)
+	base := requestBaseURL(r)
+	st := a.BuildDashboardState(r.Context(), base)
 	if strings.Contains(r.Header.Get("Accept"), "application/json") {
 		writeJSON(w, http.StatusOK, st)
 		return
 	}
 	rcps := st["receipts"].(map[string]any)
+	idPub := a.mem.Chain().IdentityPubHex()
+	netName := a.mem.Chain().Network()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>Nektar Agent Card</title>
+<meta property="og:title" content="Nektar v0.4 Verifiable AI Agent">
+<meta property="og:description" content="%v checkable receipts · %v sats earned on BSV %s">
+<meta name="twitter:card" content="summary">
 <style>body{font-family:system-ui,sans-serif;max-width:680px;margin:2rem auto;padding:1rem;background:#120e0c;color:#ece7e4}
-.card{background:#211b17;border:1px solid #3a2f28;border-radius:14px;padding:1.5rem}
-h1{color:#f7991b;margin-top:0}code{color:#f7991b}</style></head><body>
+.card{background:#211b17;border:1px solid #3a2f28;border-radius:14px;padding:1.5rem;margin-bottom:1rem}
+h1{color:#f7991b;margin-top:0}code{color:#f7991b;word-break:break-all}a{color:#f7991b}
+pre{background:#120e0c;border:1px solid #3a2f28;border-radius:8px;padding:.75rem;overflow-x:auto;font-size:.82rem}</style></head><body>
 <div class="card"><h1>Nektar v0.4 Verifiable Agent</h1>
 <p><strong>Identity:</strong> <code>%s</code></p>
-<p><strong>Network:</strong> %s</p>
+<p><strong>Network:</strong> %s · <a href="/.well-known/nektar">Discovery JSON ↗</a> · <a href="/.well-known/agent.json">A2A Card ↗</a></p>
 <p><strong>Checkable Receipts:</strong> %v · <strong>Earned:</strong> %v sats</p>
-<p><small>%s</small></p></div></body></html>`,
-		html.EscapeString(a.mem.Chain().IdentityPubHex()),
-		html.EscapeString(a.mem.Chain().Network()),
+<p><small>%s</small></p></div>
+<div class="card"><h3>Run your own verifiable AI agent</h3>
+<pre>curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh &amp;&amp; nektar serve</pre></div></body></html>`,
+		rcps["count"], rcps["earned"], html.EscapeString(netName),
+		html.EscapeString(idPub),
+		html.EscapeString(netName),
 		rcps["count"], rcps["earned"], html.EscapeString(reasoning.TruthNote),
 	)
 }
@@ -1012,12 +1199,18 @@ func serveEmbeddedIndex(w http.ResponseWriter, uiSub fs.FS) {
 	_, _ = w.Write(b)
 }
 
-// BRC105PaymentHeader is the JSON payload accepted in `X-BSV-Payment` for HTTP 402 paid routes,
-// validated for replay/double-spend conflicts via `lightwebinc/bcommon/payee.Claims`.
+// BRC105PaymentHeader is the JSON payload accepted in `X-BSV-Payment` for HTTP 402 paid routes.
+// Supports both verified AtomicBEEF + BRC-29 remittance (internalized directly into the server wallet)
+// and lightweight `{txid, amountSats, inputs}` claims validated via `lightwebinc/bcommon/payee.Claims`.
 type BRC105PaymentHeader struct {
-	TxID       string   `json:"txid"`
-	AmountSats uint64   `json:"amountSats"`
-	Inputs     []string `json:"inputs"`
+	TxID              string   `json:"txid"`
+	AmountSats        uint64   `json:"amountSats"`
+	Inputs            []string `json:"inputs"`
+	BEEFHex           string   `json:"beefHex,omitempty"`
+	OutputIndex       uint32   `json:"outputIndex,omitempty"`
+	DerivationPrefix  string   `json:"derivationPrefix,omitempty"`
+	DerivationSuffix  string   `json:"derivationSuffix,omitempty"`
+	SenderIdentityKey string   `json:"senderIdentityKey,omitempty"`
 }
 
 func (a *App) withPaywall(toolName string, next http.Handler) http.Handler {
@@ -1028,31 +1221,96 @@ func (a *App) withPaywall(toolName string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hdr := strings.TrimSpace(r.Header.Get("X-BSV-Payment"))
 		addr, _ := a.mem.Chain().FundAddress()
+		idPub := a.mem.Chain().IdentityPubHex()
 		if hdr == "" {
 			w.Header().Set("X-BSV-Payment-Amount", strconv.FormatUint(price, 10))
 			w.Header().Set("X-BSV-Payment-Destination", addr)
+			w.Header().Set("X-BSV-Payment-Identity", idPub)
 			w.Header().Set("X-BSV-Payment-Protocol", "BRC-105")
 			writeJSON(w, http.StatusPaymentRequired, map[string]any{
 				"error":       "payment_required",
 				"tool":        toolName,
 				"amountSats":  price,
 				"destination": addr,
+				"identityKey": idPub,
 			})
 			return
 		}
 		var pay BRC105PaymentHeader
-		if err := json.Unmarshal([]byte(hdr), &pay); err != nil || pay.TxID == "" || pay.AmountSats < price {
+		if err := json.Unmarshal([]byte(hdr), &pay); err != nil {
+			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "invalid X-BSV-Payment header"})
+			return
+		}
+
+		// Verified AtomicBEEF path (BRC-105 / BRC-29 or direct P2PKH funding output):
+		if pay.BEEFHex != "" {
+			rawBeef, err := hex.DecodeString(strings.TrimSpace(pay.BEEFHex))
+			if err != nil {
+				writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "invalid X-BSV-Payment beefHex"})
+				return
+			}
+			_, tx, txHash, err := guard.ParseBEEF(rawBeef, guard.DefaultBound)
+			if err != nil || tx == nil || txHash == nil {
+				writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "unparseable X-BSV-Payment AtomicBEEF"})
+				return
+			}
+			txid := txHash.String()
+			inKeys := make([]string, 0, len(tx.Inputs))
+			for _, in := range tx.Inputs {
+				if in.SourceTXID != nil {
+					inKeys = append(inKeys, fmt.Sprintf("%s:%d", in.SourceTXID.String(), in.SourceTxOutIndex))
+				}
+			}
+			// Atomic cross-interface SQLite payment claim registry (shared with /v1/market/purchase).
+			if err := a.mem.DB().ClaimPaymentAtomic(txid, inKeys); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]any{"error": "payment_rejected", "reason": err.Error()})
+				return
+			}
+
+			var paid uint64
+			if pay.DerivationPrefix != "" && pay.DerivationSuffix != "" && pay.SenderIdentityKey != "" {
+				paid, err = a.mem.Chain().InternalizeBRC29(
+					r.Context(), rawBeef, pay.OutputIndex,
+					pay.DerivationPrefix, pay.DerivationSuffix, pay.SenderIdentityKey,
+					"BRC-105 payment for "+toolName, []string{"brc105", toolName},
+				)
+				if err != nil {
+					_ = a.mem.DB().ReleasePaymentClaim(txid)
+					writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 payment verification failed: " + err.Error()})
+					return
+				}
+			} else {
+				paid, err = a.mem.Chain().AdoptReceived(r.Context(), tx)
+				if err != nil {
+					_ = a.mem.DB().ReleasePaymentClaim(txid)
+					writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "payment verification failed: " + err.Error()})
+					return
+				}
+			}
+			if paid < price {
+				_ = a.mem.DB().ReleasePaymentClaim(txid)
+				writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": fmt.Sprintf("insufficient payment (%d < %d sats)", paid, price)})
+				return
+			}
+			a.BroadcastDashboardEvent("wallet_payment")
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Legacy unverified JSON header is strictly refused on live networks (regtest/testnet/main);
+		// only accepted in local in-memory tests where no real BSV payment BEEF is required.
+		if a.mem.Chain().Network() != "memory" {
+			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "beefHex payment transaction is required on live networks"})
+			return
+		}
+		if pay.TxID == "" || pay.AmountSats < price {
 			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "invalid or insufficient X-BSV-Payment"})
 			return
 		}
-		a.claimsMu.Lock()
-		claim := a.payClaims.Claim(pay.TxID, pay.Inputs)
-		a.claimsMu.Unlock()
-
-		if claim != payee.Accepted {
+		if err := a.mem.DB().ClaimPaymentAtomic(pay.TxID, pay.Inputs); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"error":  "payment_rejected",
-				"reason": claim.String(),
+				"reason": err.Error(),
 			})
 			return
 		}
@@ -1086,6 +1344,7 @@ func (a *App) handleRecall(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	a.recordTTFV()
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -1120,11 +1379,13 @@ func (a *App) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	a.recordTTFV()
 	a.BroadcastDashboardEvent("receipt")
 	writeJSON(w, http.StatusOK, res)
 }
 
 func (a *App) handleVerifyReceipt(w http.ResponseWriter, r *http.Request) {
+	a.verifyViews.Add(1)
 	tok := strings.TrimSpace(r.PathValue("token"))
 	if tok == "" {
 		tok = strings.TrimSpace(r.URL.Query().Get("r"))
@@ -1149,20 +1410,45 @@ func (a *App) handleVerifyReceipt(w http.ResponseWriter, r *http.Request) {
 		if ver.Receipt != nil {
 			answer = ver.Receipt.Answer
 		}
+		supWarn := ""
+		if ver.CitationsSuperseded > 0 {
+			supWarn = fmt.Sprintf(`<div class="warn"><strong>Superseded citation notice:</strong> %d cited fragment(s) have newer revisions (%s).</div>`,
+				ver.CitationsSuperseded, html.EscapeString(strings.Join(ver.SupersededRefs, ", ")))
+		}
+		base := requestBaseURL(r)
+		badgeURL := base + "/v1/badge/" + html.EscapeString(ver.ReceiptToken)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>Nektar Receipt Verification</title>
-<style>body{font-family:system-ui,sans-serif;max-width:720px;margin:2rem auto;padding:1rem;background:#0b0f17;color:#e5e7eb}
+		_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>Nektar Receipt Verification — %s</title>
+<meta property="og:title" content="Nektar Receipt: %s">
+<meta property="og:description" content="%s">
+<meta name="twitter:card" content="summary">
+<style>body{font-family:system-ui,sans-serif;max-width:740px;margin:2rem auto;padding:1rem;background:#120e0c;color:#ece7e4}
 .badge{display:inline-block;padding:.35rem .8rem;border-radius:999px;font-weight:700;text-transform:uppercase;background:%s;color:#fff}
-.card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:1.25rem;margin-top:1rem}
-code{color:#93c5fd;word-break:break-all}</style></head><body>
+.card{background:#211b17;border:1px solid #3a2f28;border-radius:12px;padding:1.25rem;margin-top:1rem}
+.warn{background:rgba(217,119,6,.16);border:1px solid #d97706;border-radius:8px;padding:.75rem;margin-top:.75rem;color:#fcd34d}
+code{color:#f7991b;word-break:break-all}a{color:#f7991b}
+pre{background:#120e0c;border:1px solid #3a2f28;border-radius:8px;padding:.65rem;overflow-x:auto;font-size:.8rem}</style></head><body>
 <h1>Nektar Receipt Verifier</h1><span class="badge">%s</span>
+%s
 <div class="card"><p><strong>Status:</strong> %s</p><p><strong>Token:</strong> <code>%s</code></p>
 <p><strong>Answer:</strong> %s</p><p><strong>Citations:</strong> %d checked / %d mined</p>
-<p><small>%s</small></p></div></body></html>`,
-			color, html.EscapeString(ver.Verdict), html.EscapeString(ver.Reason),
+<p><strong>Agent:</strong> <a href="/card">View Agent Card ↗</a> · <a href="/v1/badge/%s">SVG Badge ↗</a></p>
+<p><small>%s</small></p></div>
+<div class="card"><h3>Verify your own AI agent — Install Nektar</h3>
+<p>Give Claude Code, Cursor, Hermes, OpenClaw, or any OpenAI/Anthropic agent verifiable BSV-anchored memory in 10 seconds:</p>
+<pre>curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh &amp;&amp; nektar serve</pre>
+<p><small>Embeddable badge: <code>![nektar receipt](%s)</code></small></p></div></body></html>`,
+			html.EscapeString(ver.Verdict),
+			html.EscapeString(ver.Verdict),
+			html.EscapeString(ver.Reason),
+			color, html.EscapeString(ver.Verdict), supWarn,
+			html.EscapeString(ver.Reason),
 			html.EscapeString(ver.ReceiptToken), html.EscapeString(answer),
-			ver.CitationsChecked, ver.CitationsMined, html.EscapeString(ver.TruthNote),
+			ver.CitationsChecked, ver.CitationsMined,
+			html.EscapeString(ver.ReceiptToken),
+			html.EscapeString(ver.TruthNote),
+			badgeURL,
 		)
 		return
 	}
@@ -1262,98 +1548,6 @@ func (a *App) handleA2A(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": rpc.ID, "result": result})
-}
-
-func (a *App) handleOpenAIProxy(w http.ResponseWriter, r *http.Request) {
-	shard := r.Header.Get("X-Nektar-Shard")
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	memBlock := a.buildMemoryContext(r.Context(), shard)
-	if memBlock != "" {
-		msgs, _ := payload["messages"].([]any)
-		injected := append([]any{map[string]any{
-			"role":    "system",
-			"content": memBlock,
-		}}, msgs...)
-		payload["messages"] = injected
-		raw, _ = json.Marshal(payload)
-	}
-	a.forwardProxy(w, r, strings.TrimRight(a.cfg.OpenAIUpstream, "/")+"/v1/chat/completions", raw)
-}
-
-func (a *App) handleAnthropicProxy(w http.ResponseWriter, r *http.Request) {
-	shard := r.Header.Get("X-Nektar-Shard")
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	memBlock := a.buildMemoryContext(r.Context(), shard)
-	if memBlock != "" {
-		existing, _ := payload["system"].(string)
-		if existing != "" {
-			payload["system"] = memBlock + "\n\n" + existing
-		} else {
-			payload["system"] = memBlock
-		}
-		raw, _ = json.Marshal(payload)
-	}
-	a.forwardProxy(w, r, strings.TrimRight(a.cfg.AnthropicUpstream, "/")+"/v1/messages", raw)
-}
-
-func (a *App) buildMemoryContext(ctx context.Context, shard string) string {
-	_, frags, err := a.mem.RecallAllShards(ctx, memory.RecallInput{Shard: shard, Limit: 20})
-	if err != nil || len(frags) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	label := shard
-	if label == "" {
-		label = "all shards"
-	}
-	sb.WriteString("[Nektar Verified Memory — " + label + "]\n")
-	for _, f := range frags {
-		sb.WriteString(fmt.Sprintf("- [%s#%d] %s\n", f.Shard, f.Seq, f.Text))
-	}
-	return sb.String()
-}
-
-func (a *App) forwardProxy(w http.ResponseWriter, orig *http.Request, targetURL string, body []byte) {
-	req, err := http.NewRequestWithContext(orig.Context(), http.MethodPost, targetURL, bytes.NewReader(body))
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	for _, h := range []string{"Authorization", "x-api-key", "anthropic-version"} {
-		if v := orig.Header.Get(h); v != "" {
-			req.Header.Set(h, v)
-		}
-	}
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, io.LimitReader(resp.Body, 16<<20))
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

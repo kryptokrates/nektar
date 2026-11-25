@@ -16,12 +16,14 @@ const norm = (s) =>
     .replace(/\s+/g, ' ')
     .trim()
 
-function readDaemonUrl(dir) {
+function readDaemonInfo(dir) {
   const p = join(dir, 'daemon.json')
   if (!existsSync(p)) return undefined
   try {
     const j = JSON.parse(readFileSync(p, 'utf8'))
-    return typeof j?.url === 'string' && /^https?:\/\//i.test(j.url) ? j.url.replace(/\/+$/, '') : undefined
+    const url = typeof j?.url === 'string' && /^https?:\/\//i.test(j.url) ? j.url.replace(/\/+$/, '') : undefined
+    const token = typeof j?.authToken === 'string' && j.authToken ? j.authToken : typeof j?.token === 'string' && j.token ? j.token : undefined
+    return url ? { url, token } : undefined
   } catch {
     return undefined
   }
@@ -41,8 +43,10 @@ async function discoverNektar(cfg, fetchImpl = fetch) {
   add(cfg?.url)
   add(process.env.NEKTAR_URL)
   add(process.env.NEKTAR_DAEMON_URL)
-  add(readDaemonUrl(join(process.cwd(), '.nektar')))
-  add(readDaemonUrl(join(homedir(), '.nektar')))
+  for (const d of [readDaemonInfo(join(process.cwd(), '.nektar')), readDaemonInfo(join(homedir(), '.nektar'))]) {
+    if (d?.token && cfg && !cfg.token) cfg.token = d.token
+    add(d?.url)
+  }
   if (process.env.NEKTAR_HTTP_PORT) add(`http://127.0.0.1:${process.env.NEKTAR_HTTP_PORT}`)
   for (const p of DEFAULT_PORTS) add(`http://127.0.0.1:${p}`)
 
@@ -235,7 +239,7 @@ export function createNektarOpenClawPlugin(opts = {}) {
             description,
             execute: async (args) => {
               const base = await resolveUrl()
-              if (!base) return { ok: false, error: 'nektar daemon not reachable — start with `nektar --port 18420`' }
+              if (!base) return { ok: false, error: 'nektar daemon not reachable — start with `nektar serve`' }
               const payload = { ...args }
               if (remoteName === 'remember' && !payload.shard) payload.shard = defaultShard
               return await callNektarTool(base, token, remoteName, payload, 15_000, fetchImpl)

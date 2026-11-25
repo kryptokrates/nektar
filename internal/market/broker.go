@@ -20,16 +20,17 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/transaction"
-	"github.com/lightwebinc/bcommon/payee"
+	"github.com/lightwebinc/bcommon/bwallet"
+	"github.com/restatedev/sdk-go/ingress"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/contracts"
-	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 // BrokerConfig configures the autonomous live A2A & Hub Market Broker.
@@ -41,6 +42,7 @@ type BrokerConfig struct {
 	CollectTimeout time.Duration
 	OnStateChange  func(event string, payload any)
 	HTTPClient     *http.Client
+	RestateClient  *RestateClient // active Restate durable executor client (BuyerDeal, SellerDeal, Custody, Tx, AnchorCadence)
 }
 
 // WantRequest describes a buyer's live knowledge purchase request across active hubs.
@@ -63,11 +65,15 @@ type SellInput struct {
 
 // PurchaseRequest is sent from Buyer to Seller (via direct HTTP POST /v1/market/purchase OR Hub NAT /bbox/send).
 type PurchaseRequest struct {
-	OfferID        string `json:"offerId"`
-	WantID         string `json:"wantId"`
-	BuyerPub       string `json:"buyerPub"`
-	TxID           string `json:"txid"`
-	PaymentBEEFHex string `json:"paymentBeefHex"`
+	OfferID           string `json:"offerId"`
+	WantID            string `json:"wantId"`
+	BuyerPub          string `json:"buyerPub"`
+	TxID              string `json:"txid"`
+	PaymentBEEFHex    string `json:"paymentBeefHex"`
+	OutputIndex       uint32 `json:"outputIndex,omitempty"`
+	DerivationPrefix  string `json:"derivationPrefix,omitempty"`
+	DerivationSuffix  string `json:"derivationSuffix,omitempty"`
+	SenderIdentityKey string `json:"senderIdentityKey,omitempty"`
 }
 
 // PurchaseResponse is returned by Seller after validating Buyer's AtomicBEEF payment & BRC-105 replay claim.
@@ -104,17 +110,19 @@ type Broker struct {
 	cfg        BrokerConfig
 	httpClient *http.Client
 
-	mu           sync.RWMutex
-	pendingSales map[string]*pendingSale
-	offerInbox   map[string]chan bstack.OfferAd
-	bboxReplies  map[string]chan PurchaseResponse
-	activeLoops  map[string]bool
-	seenWants    map[string]bool
-	packs        []bstack.PackRef
-	bountyDoms   []string
+	mu              sync.RWMutex
+	restate         *RestateClient
+	pendingSales    map[string]*pendingSale
+	offerInbox      map[string]chan bstack.OfferAd
+	bboxReplies     map[string]chan PurchaseResponse
+	bboxExpected    map[string]string // offerID -> expected sellerPub
+	bboxWantByOffer map[string]string // offerID -> wantID (for Restate BuyerDeal/deliverKey wakeup)
+	activeLoops     map[string]context.CancelFunc
+	seenWants       map[string]int64 // wantID -> seenUnix (bounded)
+	packs           []bstack.PackRef
+	bountyDoms      []string
 
-	claimsMu  sync.Mutex
-	payClaims payee.Claims
+	cursorMu sync.Mutex
 
 	sseWakes  atomic.Int64
 	pollWakes atomic.Int64
@@ -127,24 +135,80 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 		cfg.BboxOffice = "default"
 	}
 	if cfg.CollectTimeout <= 0 {
-		cfg.CollectTimeout = 1500 * time.Millisecond
+		cfg.CollectTimeout = 4 * time.Second
 	}
 	hc := cfg.HTTPClient
 	if hc == nil {
 		hc = &http.Client{Timeout: 15 * time.Second}
 	}
 	_ = SyncPolicyFromDB(mem.DB(), engine.Policy())
-	return &Broker{
-		mem:          mem,
-		engine:       engine,
-		disc:         disc,
-		cfg:          cfg,
-		httpClient:   hc,
-		pendingSales: make(map[string]*pendingSale),
-		offerInbox:   make(map[string]chan bstack.OfferAd),
-		bboxReplies:  make(map[string]chan PurchaseResponse),
-		activeLoops:  make(map[string]bool),
-		seenWants:    make(map[string]bool),
+	b := &Broker{
+		mem:             mem,
+		engine:          engine,
+		disc:            disc,
+		cfg:             cfg,
+		httpClient:      hc,
+		restate:         cfg.RestateClient,
+		pendingSales:    make(map[string]*pendingSale),
+		offerInbox:      make(map[string]chan bstack.OfferAd),
+		bboxReplies:     make(map[string]chan PurchaseResponse),
+		bboxExpected:    make(map[string]string),
+		bboxWantByOffer: make(map[string]string),
+		activeLoops:     make(map[string]context.CancelFunc),
+		seenWants:       make(map[string]int64),
+	}
+	if engine != nil {
+		engine.SetBroker(b)
+	}
+	b.restorePersistedState()
+	return b
+}
+
+func (b *Broker) restorePersistedState() {
+	if b.mem == nil || b.mem.DB() == nil {
+		return
+	}
+	now := time.Now().Unix()
+	_, _ = b.mem.DB().PruneExpiredPendingSales(now)
+	if sales, err := b.mem.DB().ListPendingSales(now); err == nil {
+		for _, r := range sales {
+			if ps := pendingSaleFromRecord(r); ps != nil {
+				b.pendingSales[r.OfferID] = ps
+			}
+		}
+	}
+}
+
+func pendingSaleFromRecord(r store.PendingSaleRecord) *pendingSale {
+	var so contracts.KeyedSaleOffer
+	if err := json.Unmarshal(r.SaleOfferJSON, &so); err != nil {
+		return nil
+	}
+	rkBytes, err := hex.DecodeString(r.RevealKeyHex)
+	if err != nil || len(rkBytes) != 32 {
+		return nil
+	}
+	var rk [32]byte
+	copy(rk[:], rkBytes)
+	var pb *contracts.ProofBundle
+	if len(r.ProofBundleJSON) > 0 {
+		var tmp contracts.ProofBundle
+		if json.Unmarshal(r.ProofBundleJSON, &tmp) == nil {
+			pb = &tmp
+		}
+	}
+	return &pendingSale{
+		OfferID:     r.OfferID,
+		WantID:      r.WantID,
+		BuyerPub:    r.BuyerPub,
+		Shard:       r.Shard,
+		Seq:         r.Seq,
+		SaleOffer:   &so,
+		RevealKey:   rk,
+		ChirpURL:    r.ChirpURL,
+		ProofBundle: pb,
+		ExpiresAt:   r.ExpiresAt,
+		Settled:     r.Settled,
 	}
 }
 
@@ -152,6 +216,17 @@ func (b *Broker) Engine() *Engine               { return b.engine }
 func (b *Broker) Discovery() *discovery.Service { return b.disc }
 func (b *Broker) PubHex() string                { return hex.EncodeToString(b.engine.saleKey.PubKey().Compressed()) }
 func (b *Broker) PublicURL() string             { return strings.TrimRight(b.cfg.PublicURL, "/") }
+func (b *Broker) SetRestateClient(rc *RestateClient) {
+	b.mu.Lock()
+	b.restate = rc
+	b.mu.Unlock()
+}
+func (b *Broker) RestateClient() *RestateClient {
+	b.mu.RLock()
+	rc := b.restate
+	b.mu.RUnlock()
+	return rc
+}
 func (b *Broker) SetPublicURL(u string) {
 	b.mu.Lock()
 	b.cfg.PublicURL = strings.TrimRight(u, "/")
@@ -196,23 +271,70 @@ func (b *Broker) Start(ctx context.Context) {
 	}()
 	// NAT-safe bbox inbox loop (delivers purchases to NAT-ed sellers & key reveals to buyers).
 	go b.bboxLoop(ctx)
+
+	// Immediate boot peer crawl + periodic directory crawl (every 15m) & 24h announce keep-alive.
+	go func() {
+		if hosts := b.disc.ActiveHosts(); len(hosts) > 0 {
+			_, _ = b.disc.DiscoverPeers(ctx, hosts)
+		}
+		crawlTicker := time.NewTicker(15 * time.Minute)
+		announceTicker := time.NewTicker(24 * time.Hour)
+		defer crawlTicker.Stop()
+		defer announceTicker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-crawlTicker.C:
+				if hosts := b.disc.ActiveHosts(); len(hosts) > 0 {
+					_, _ = b.disc.DiscoverPeers(ctx, hosts)
+				}
+			case <-announceTicker.C:
+				if hosts := b.disc.ActiveHosts(); len(hosts) > 0 {
+					_, _ = b.AnnounceSelf(ctx)
+				}
+			}
+		}
+	}()
 }
 
 func (b *Broker) ensureHostLoops(ctx context.Context) {
-	for _, h := range b.disc.ActiveHosts() {
-		b.mu.Lock()
-		already := b.activeLoops[h]
-		if !already {
-			b.activeLoops[h] = true
+	active := b.disc.ActiveHosts()
+	activeSet := make(map[string]bool, len(active))
+	for _, h := range active {
+		activeSet[h] = true
+	}
+	b.mu.Lock()
+	// Cancel SSE loops for hosts that were removed or blocked!
+	for h, cancel := range b.activeLoops {
+		if !activeSet[h] {
+			cancel()
+			delete(b.activeLoops, h)
 		}
-		b.mu.Unlock()
-		if !already {
-			go b.sseHostLoop(ctx, h)
+	}
+	var toStart []struct {
+		url string
+		ctx context.Context
+	}
+	for _, h := range active {
+		if _, exists := b.activeLoops[h]; !exists {
+			hCtx, cancel := context.WithCancel(ctx)
+			b.activeLoops[h] = cancel
+			toStart = append(toStart, struct {
+				url string
+				ctx context.Context
+			}{url: h, ctx: hCtx})
 		}
+	}
+	b.mu.Unlock()
+	for _, s := range toStart {
+		go b.sseHostLoop(s.ctx, s.url)
 	}
 }
 
 func (b *Broker) loadCursor(hubURL string) int64 {
+	b.cursorMu.Lock()
+	defer b.cursorMu.Unlock()
 	var v int64
 	ok, _ := b.mem.DB().GetJSON("hub_cursor:"+hubURL, &v)
 	if !ok {
@@ -225,7 +347,11 @@ func (b *Broker) saveCursor(hubURL string, seq int64) {
 	if seq <= 0 {
 		return
 	}
-	if cur := b.loadCursor(hubURL); seq > cur {
+	b.cursorMu.Lock()
+	defer b.cursorMu.Unlock()
+	var cur int64
+	_, _ = b.mem.DB().GetJSON("hub_cursor:"+hubURL, &cur)
+	if seq > cur {
 		_ = b.mem.DB().SetJSON("hub_cursor:"+hubURL, seq)
 	}
 }
@@ -277,8 +403,12 @@ func (b *Broker) sseHostLoop(ctx context.Context, hubURL string) {
 				continue
 			}
 			b.sseWakes.Add(1)
-			b.saveCursor(hubURL, ev.Seq)
+			// Gap detection: if an SSE event jumped ahead of our persisted cursor, repair via /sync first!
+			if prev := b.loadCursor(hubURL); prev > 0 && ev.Seq > prev+1 {
+				b.pollHostOnce(ctx, hubURL)
+			}
 			b.handleMarketEvent(ctx, ev)
+			b.saveCursor(hubURL, ev.Seq)
 		}
 		resp.Body.Close()
 	}
@@ -332,11 +462,20 @@ func (b *Broker) handleMarketEvent(ctx context.Context, ev bstack.MarketEvent) {
 			return // ignore our own want
 		}
 		b.mu.Lock()
-		if b.seenWants[sw.Want.WantID] {
+		if _, dup := b.seenWants[sw.Want.WantID]; dup {
 			b.mu.Unlock()
 			return
 		}
-		b.seenWants[sw.Want.WantID] = true
+		nowUnix := time.Now().Unix()
+		if len(b.seenWants) >= 4096 {
+			cutoff := nowUnix - 3600
+			for k, ts := range b.seenWants {
+				if ts < cutoff || len(b.seenWants) >= 3072 {
+					delete(b.seenWants, k)
+				}
+			}
+		}
+		b.seenWants[sw.Want.WantID] = nowUnix
 		b.mu.Unlock()
 		go b.autoQuoteWant(ctx, sw.Want)
 
@@ -438,6 +577,7 @@ func (b *Broker) AnnounceSelf(ctx context.Context) (int, error) {
 
 // autoQuoteWant inspects an incoming verified WantAd and automatically quotes our best matching anchored fragment.
 func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
+	_ = SyncPolicyFromDB(b.mem.DB(), b.engine.Policy())
 	kill, _, _, _, _, _, sellerOK := b.engine.Policy().Snapshot()
 	if kill {
 		return
@@ -506,11 +646,64 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	payAddr, _ := b.mem.Chain().FundAddress()
 	offerID := fmt.Sprintf("off-%s-%s", shortPub(b.PubHex()), randIDHex())
 
-	b.mu.Lock()
+	// Build and verify OfferAd fits within post-CBOR bstack.MaxPayload BEFORE persisting pendingSale!
+	b.mu.RLock()
 	pubURL := b.cfg.PublicURL
 	office := b.cfg.BboxOffice
 	isHub := b.cfg.IsHub
-	b.pendingSales[offerID] = &pendingSale{
+	b.mu.RUnlock()
+
+	offer := bstack.OfferAd{
+		OfferID:        offerID,
+		WantID:         want.WantID,
+		Pub:            b.PubHex(),
+		BuyerPub:       want.Pub,
+		Net:            b.mem.Chain().Network(),
+		Domains:        want.Domains,
+		PriceSats:      matched.PriceSats,
+		Shard:          matched.Shard,
+		Leaf:           best.Leaf,
+		ChirpURL:       chirpURL,
+		KeyCommitHex:   saleOffer.KeyCommitment,
+		PayAddress:     payAddr,
+		PayIdentityKey: b.mem.Chain().IdentityPubHex(),
+		SellerURL:      pubURL,
+		BboxOffice:     office,
+		SaleOffer:      saleJSON,
+		IsHub:          isHub,
+		Direct:         pubURL != "",
+		Revision:       1,
+		Exp:            time.Now().Add(30 * time.Minute).UnixMilli(),
+	}
+	var beef []byte
+	for attempt := 0; attempt < 2; attempt++ {
+		sig, sErr := bstack.SignArtifact(b.engine.saleKey, offer)
+		if sErr != nil {
+			return
+		}
+		body, mErr := json.Marshal(bstack.SignedOffer{Offer: offer, Sig: sig})
+		if mErr != nil {
+			return
+		}
+		payload := bstack.MarketPayload{Kind: bstack.KindOffer, Body: body}
+		if encoded, eErr := bstack.EncodePayload(payload); eErr == nil && len(encoded) <= bstack.MaxPayload {
+			beef, err = discovery.BuildMarketBEEF(payload)
+			break
+		}
+		// Strip inline ciphertext on retry so buyer fetches via CHIRP and post-CBOR stays <= MaxPayload!
+		if attempt == 0 && wireSale.CiphertextHex != "" {
+			wireSale.CiphertextHex = ""
+			saleJSON, _ = json.Marshal(wireSale)
+			offer.SaleOffer = saleJSON
+			continue
+		}
+		return
+	}
+	if err != nil || len(beef) == 0 {
+		return
+	}
+
+	ps := &pendingSale{
 		OfferID:     offerID,
 		WantID:      want.WantID,
 		BuyerPub:    want.Pub,
@@ -522,44 +715,54 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		ProofBundle: pb,
 		ExpiresAt:   int64(saleOffer.ExpiresAt),
 	}
+	b.mu.Lock()
+	b.pendingSales[offerID] = ps
+	nowUnix := time.Now().Unix()
+	for id, old := range b.pendingSales {
+		if old.ExpiresAt > 0 && old.ExpiresAt < nowUnix {
+			delete(b.pendingSales, id)
+		}
+	}
 	b.mu.Unlock()
+	fullSaleJSON, _ := json.Marshal(saleOffer)
+	var pbJSON []byte
+	if pb != nil {
+		pbJSON, _ = json.Marshal(pb)
+	}
+	_ = b.mem.DB().SavePendingSale(store.PendingSaleRecord{
+		OfferID:         offerID,
+		WantID:          want.WantID,
+		BuyerPub:        want.Pub,
+		Shard:           matched.Shard,
+		Seq:             best.Seq,
+		SaleOfferJSON:   fullSaleJSON,
+		RevealKeyHex:    hex.EncodeToString(revealKey[:]),
+		ChirpURL:        chirpURL,
+		ProofBundleJSON: pbJSON,
+		ExpiresAt:       int64(saleOffer.ExpiresAt),
+	})
 
-	offer := bstack.OfferAd{
-		OfferID:      offerID,
-		WantID:       want.WantID,
-		Pub:          b.PubHex(),
-		BuyerPub:     want.Pub,
-		Net:          b.mem.Chain().Network(),
-		Domains:      want.Domains,
-		PriceSats:    matched.PriceSats,
-		Shard:        matched.Shard,
-		Leaf:         best.Leaf,
-		ChirpURL:     chirpURL,
-		KeyCommitHex: saleOffer.KeyCommitment,
-		PayAddress:   payAddr,
-		SellerURL:    pubURL,
-		BboxOffice:   office,
-		SaleOffer:    saleJSON,
-		IsHub:        isHub,
-		Direct:       pubURL != "",
-		Revision:     1,
-		Exp:          time.Now().Add(30 * time.Minute).UnixMilli(),
-	}
-	sig, err := bstack.SignArtifact(b.engine.saleKey, offer)
-	if err != nil {
-		return
-	}
-	body, err := json.Marshal(bstack.SignedOffer{Offer: offer, Sig: sig})
-	if err != nil {
-		return
-	}
-	beef, err := discovery.BuildMarketBEEF(bstack.MarketPayload{Kind: bstack.KindOffer, Body: body})
-	if err != nil {
-		return
-	}
 	topics := lanesForDomains(offer.Net, want.Domains)
 	for _, h := range b.disc.ActiveHosts() {
 		_ = b.disc.SubmitBEEF(ctx, h, beef, topics)
+	}
+	// Start durable Restate SellerDeal workflow asynchronously (/send — never blocks SSE consumer!).
+	if rc := b.RestateClient(); rc != nil {
+		go func(oid string, w bstack.WantAd, sh string, sq int64, price uint64, bpub string, so *contracts.KeyedSaleOffer, rk [32]byte, cu string, bundle *contracts.ProofBundle) {
+			sCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_, _ = rc.StartSellerDealAsync(sCtx, oid, SellerDealInput{
+				Want:            w,
+				Shard:           sh,
+				Seq:             sq,
+				PriceSats:       price,
+				BuyerPub:        bpub,
+				PreCreatedOffer: so,
+				RevealKeyHex:    hex.EncodeToString(rk[:]),
+				ChirpURL:        cu,
+				ProofBundle:     bundle,
+			})
+		}(offerID, want, matched.Shard, best.Seq, matched.PriceSats, want.Pub, saleOffer, revealKey, chirpURL, pb)
 	}
 }
 
@@ -572,6 +775,17 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 	b.mu.Lock()
 	sale, ok := b.pendingSales[req.OfferID]
 	b.mu.Unlock()
+	if !ok {
+		if rec, dErr := b.mem.DB().GetPendingSale(req.OfferID); dErr == nil {
+			if restored := pendingSaleFromRecord(rec); restored != nil && (restored.ExpiresAt == 0 || restored.ExpiresAt >= time.Now().Unix()) {
+				sale = restored
+				ok = true
+				b.mu.Lock()
+				b.pendingSales[req.OfferID] = sale
+				b.mu.Unlock()
+			}
+		}
+	}
 	if !ok {
 		return nil, fmt.Errorf("market: unknown or expired offerId %q", req.OfferID)
 	}
@@ -591,16 +805,59 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		return nil, errors.New("market: payment txid mismatch vs AtomicBEEF")
 	}
 
-	// Verify payment transaction pays >= Offer.Price to Seller's own funding script!
-	fundScript, err := b.mem.Chain().Signer().FundScript()
-	if err != nil {
-		return nil, err
+	// Idempotent key re-reveal on buyer retry for the EXACT same payment txid!
+	if existing, gErr := b.mem.DB().GetDeal("sell-" + sale.OfferID); gErr == nil && existing.Status == "settled" {
+		if existing.PaymentTxID == txid {
+			keyHex := existing.ClaimKeyHex
+			if keyHex == "" {
+				keyHex = hex.EncodeToString(sale.RevealKey[:])
+			}
+			return &PurchaseResponse{
+				OK:            true,
+				OfferID:       sale.OfferID,
+				SellerPub:     b.PubHex(),
+				ContentKeyHex: keyHex,
+				CiphertextHex: sale.SaleOffer.CiphertextHex,
+				ChirpURL:      sale.ChirpURL,
+				ProofBundle:   sale.ProofBundle,
+			}, nil
+		}
+		return nil, errors.New("market: offer already settled with a different payment txid")
 	}
-	fundHex := fundScript.String()
+
+	// Verify payment transaction pays >= Offer.Price via BRC-29 derived key OR legacy FundScript!
+	isBRC29 := req.DerivationPrefix != "" && req.DerivationSuffix != "" && req.SenderIdentityKey != ""
 	var paidSats uint64
-	for _, out := range tx.Outputs {
-		if out.LockingScript != nil && out.LockingScript.String() == fundHex {
-			paidSats += out.Satoshis
+	if isBRC29 {
+		d := &bwallet.Derivation{
+			SecurityLevel:   int(bwallet.PaymentProtocol.SecurityLevel),
+			Protocol:        bwallet.PaymentProtocol.Protocol,
+			KeyID:           bwallet.PaymentKeyID(req.DerivationPrefix, req.DerivationSuffix),
+			CounterpartyHex: req.SenderIdentityKey,
+			OwnerHex:        b.mem.Chain().IdentityPubHex(),
+		}
+		wantScript, dErr := b.mem.Chain().Signer().DerivedScript(ctx, d)
+		if dErr != nil {
+			return nil, fmt.Errorf("market: derive BRC-29 script: %w", dErr)
+		}
+		if uint64(req.OutputIndex) >= uint64(len(tx.Outputs)) {
+			return nil, fmt.Errorf("market: BRC-29 outputIndex %d out of range", req.OutputIndex)
+		}
+		out := tx.Outputs[req.OutputIndex]
+		if out.LockingScript == nil || !bytes.Equal(*out.LockingScript, *wantScript) {
+			return nil, errors.New("market: payment output does not match BRC-29 derivation")
+		}
+		paidSats = out.Satoshis
+	} else {
+		fundScript, err := b.mem.Chain().Signer().FundScript()
+		if err != nil {
+			return nil, err
+		}
+		fundHex := fundScript.String()
+		for _, out := range tx.Outputs {
+			if out.LockingScript != nil && out.LockingScript.String() == fundHex {
+				paidSats += out.Satoshis
+			}
 		}
 	}
 	if paidSats < sale.SaleOffer.Config.Price {
@@ -613,33 +870,46 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		return nil, fmt.Errorf("market: payment %d sats exceeds zeroConfMaxSats (%d) without confirmation proof", sale.SaleOffer.Config.Price, zeroConfMax)
 	}
 
-	// BRC-105 / payee.Claims replay & double-spend conflict guard!
+	// Atomic cross-interface SQLite payment claim registry (shared with HTTP 402 paywall)!
 	inputs := make([]string, 0, len(tx.Inputs))
 	for _, in := range tx.Inputs {
 		if in.SourceTXID != nil {
 			inputs = append(inputs, fmt.Sprintf("%s:%d", in.SourceTXID.String(), in.SourceTxOutIndex))
 		}
 	}
-	b.claimsMu.Lock()
-	claim := b.payClaims.Claim(txid, inputs)
-	b.claimsMu.Unlock()
-	if claim != payee.Accepted {
-		return nil, fmt.Errorf("market: payment claim rejected (%s)", claim.String())
+	if err := b.mem.DB().ClaimPaymentAtomic(txid, inputs); err != nil {
+		return nil, fmt.Errorf("market: payment claim rejected (%w)", err)
 	}
 
-	// Credit Seller's own bwallet.Pool immediately & broadcast on live networks if not yet seen!
+	// Credit Seller's wallet immediately & verify SPV against shared headers on live networks!
 	if b.mem.Chain().Network() != "memory" {
-		_, _ = b.mem.Chain().AdoptReceived(ctx, tx)
+		if isBRC29 {
+			if _, iErr := b.mem.Chain().InternalizeBRC29(
+				ctx, beefBytes, req.OutputIndex,
+				req.DerivationPrefix, req.DerivationSuffix, req.SenderIdentityKey,
+				"market sale "+sale.OfferID, []string{"market", "sale"},
+			); iErr != nil {
+				_ = b.mem.DB().ReleasePaymentClaim(txid)
+				return nil, fmt.Errorf("market: internalize BRC-29 payment: %w", iErr)
+			}
+		} else {
+			if _, aErr := b.mem.Chain().AdoptReceived(ctx, tx); aErr != nil {
+				_ = b.mem.DB().ReleasePaymentClaim(txid)
+				return nil, fmt.Errorf("market: adopt received payment: %w", aErr)
+			}
+		}
 	}
 
 	// Mark settled & persist durable Seller DealRecord!
 	b.mu.Lock()
 	sale.Settled = true
 	b.mu.Unlock()
+	_ = b.mem.DB().MarkPendingSaleSettled(sale.OfferID)
 	_ = b.mem.DB().SaveDeal(store.DealRecord{
 		DealID:          "sell-" + sale.OfferID,
 		Role:            "seller",
 		Status:          "settled",
+		Shard:           sale.Shard,
 		PaymentTxID:     txid,
 		PaymentBEEF:     beefBytes,
 		ClaimKeyHex:     hex.EncodeToString(sale.RevealKey[:]),
@@ -649,6 +919,17 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		IsHubSeller:     b.cfg.IsHub,
 	})
 	b.notify("deal_settled", map[string]any{"role": "seller", "offerId": sale.OfferID, "txid": txid, "sats": sale.SaleOffer.Config.Price})
+
+	// Notify active Restate SellerDeal workflow + Tx lifecycle journal asynchronously!
+	if rc := b.RestateClient(); rc != nil {
+		confirmed := tx.MerklePath != nil
+		go func(oid, tid, sh string, sats uint64, conf bool) {
+			sCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_, _ = rc.DeliverSellerPayment(sCtx, oid, PaymentSignal{TxID: tid, AmountSats: sats, Confirmed: conf})
+			_, _ = rc.EmitTxEvent(sCtx, tid, TxEventInput{Kind: "broadcast", Shard: sh, Detail: "seller-sale:" + oid})
+		}(sale.OfferID, txid, sale.Shard, paidSats, confirmed)
+	}
 
 	return &PurchaseResponse{
 		OK:            true,
@@ -661,9 +942,194 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 	}, nil
 }
 
+// CollectOffersForWant publishes a signed WantAd across active hubs and collects cryptographically verified OfferAds.
+// Called by both the Restate BuyerDeal workflow (inside restate.Run) and direct local unit tests.
+func (b *Broker) CollectOffersForWant(ctx context.Context, want bstack.WantAd, collectTimeout time.Duration) ([]bstack.OfferAd, int64, error) {
+	hosts := b.disc.ActiveHosts()
+	if len(hosts) == 0 {
+		return nil, 0, errors.New("market: no active hub hosts configured (join a hub first)")
+	}
+	wantID := want.WantID
+	inbox := make(chan bstack.OfferAd, 32)
+	b.mu.Lock()
+	b.offerInbox[wantID] = inbox
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		delete(b.offerInbox, wantID)
+		b.mu.Unlock()
+	}()
+
+	sig, err := bstack.SignArtifact(b.engine.saleKey, want)
+	if err != nil {
+		return nil, 0, err
+	}
+	body, err := json.Marshal(bstack.SignedWant{Want: want, Sig: sig})
+	if err != nil {
+		return nil, 0, err
+	}
+	beef, err := discovery.BuildMarketBEEF(bstack.MarketPayload{Kind: bstack.KindWant, Body: body})
+	if err != nil {
+		return nil, 0, err
+	}
+	startTime := time.Now()
+	topics := lanesForDomains(want.Net, want.Domains)
+	submitted := 0
+	for _, h := range hosts {
+		if err := b.disc.SubmitBEEF(ctx, h, beef, topics); err == nil {
+			submitted++
+		}
+	}
+	if submitted == 0 {
+		return nil, 0, errors.New("failed to submit WantAd to any active hub")
+	}
+
+	timeout := collectTimeout
+	if timeout <= 0 {
+		timeout = b.cfg.CollectTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	lookupTick := time.NewTimer(300 * time.Millisecond)
+	defer lookupTick.Stop()
+
+	seenOffers := make(map[string]bstack.OfferAd)
+	var firstOfferMs int64
+	collectOffers := func(o bstack.OfferAd) {
+		if o.WantID != wantID {
+			return
+		}
+		if _, dup := seenOffers[o.OfferID]; dup {
+			return
+		}
+		var so contracts.KeyedSaleOffer
+		if err := json.Unmarshal(o.SaleOffer, &so); err != nil {
+			return
+		}
+		if err := contracts.VerifySaleOffer(&so, b.PubHex(), o.Leaf); err != nil {
+			return
+		}
+		if firstOfferMs == 0 {
+			firstOfferMs = time.Since(startTime).Milliseconds()
+			if firstOfferMs == 0 {
+				firstOfferMs = 1
+			}
+		}
+		seenOffers[o.OfferID] = o
+	}
+
+	var graceTimer *time.Timer
+	var graceCh <-chan time.Time
+collectLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			break collectLoop
+		case o := <-inbox:
+			collectOffers(o)
+			if len(seenOffers) > 0 && graceTimer == nil {
+				graceTimer = time.NewTimer(200 * time.Millisecond)
+				graceCh = graceTimer.C
+			}
+		case <-lookupTick.C:
+			for _, o := range b.lookupOffers(ctx, hosts, wantID) {
+				collectOffers(o)
+			}
+			if len(seenOffers) > 0 && graceTimer == nil {
+				graceTimer = time.NewTimer(150 * time.Millisecond)
+				graceCh = graceTimer.C
+			}
+		case <-graceCh:
+			break collectLoop
+		case <-timer.C:
+			for _, o := range b.lookupOffers(ctx, hosts, wantID) {
+				collectOffers(o)
+			}
+			break collectLoop
+		}
+	}
+	if graceTimer != nil {
+		graceTimer.Stop()
+	}
+
+	offers := make([]bstack.OfferAd, 0, len(seenOffers))
+	for _, o := range seenOffers {
+		offers = append(offers, o)
+	}
+	return offers, firstOfferMs, nil
+}
+
+// DeliverPurchaseAsync delivers a buyer's AtomicBEEF payment to Seller.
+// Direct HTTP returns the seller's immediate PurchaseResponse; NAT bbox sends purchase_beef
+// and returns (nil, nil) immediately so Restate BuyerDeal suspends durably on Promise("claim")!
+func (b *Broker) DeliverPurchaseAsync(ctx context.Context, chosen bstack.OfferAd, dealID string, pReq PurchaseRequest) (*PurchaseResponse, error) {
+	var directErr error
+	if chosen.SellerURL != "" {
+		pResp, err := b.sendDirectPurchase(ctx, chosen.SellerURL, pReq)
+		if err == nil && pResp != nil && pResp.OK {
+			return pResp, nil
+		}
+		directErr = err
+		if pResp != nil && !pResp.OK && pResp.Error != "" && chosen.BboxOffice == "" {
+			return pResp, errors.New(pResp.Error)
+		}
+	}
+	if chosen.BboxOffice != "" {
+		hosts := b.disc.ActiveHosts()
+		b.mu.Lock()
+		b.bboxExpected[pReq.OfferID] = chosen.Pub
+		b.bboxWantByOffer[pReq.OfferID] = dealID
+		b.mu.Unlock()
+		bodyRaw, _ := json.Marshal(pReq)
+		msg := hub.BboxMessage{
+			Office:       chosen.BboxOffice,
+			RecipientPub: chosen.Pub,
+			SenderPub:    b.PubHex(),
+			DealID:       dealID,
+			Kind:         "purchase_beef",
+			Body:         bodyRaw,
+		}
+		sig, sErr := bstack.SignArtifact(b.engine.saleKey, msg.Signable())
+		if sErr != nil {
+			return nil, sErr
+		}
+		msg.Sig = sig
+		env, _ := json.Marshal(msg)
+		sent := false
+		for _, h := range hosts {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h, "/")+"/bbox/send", bytes.NewReader(env))
+			if err != nil {
+				continue
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := b.httpClient.Do(req)
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode < 300 {
+					sent = true
+					break
+				}
+			}
+		}
+		if sent {
+			return nil, nil
+		}
+		if directErr != nil {
+			return nil, directErr
+		}
+		return nil, errors.New("failed to deliver purchase via direct HTTP or hub bbox")
+	}
+	if directErr != nil {
+		return nil, directErr
+	}
+	return nil, errors.New("seller advertised neither SellerURL nor BboxOffice")
+}
+
 // Want publishes a signed WantAd across active hubs, collects & ranks verified offers,
 // executes AtomicBEEF payment (direct HTTP or NAT bbox fallback), verifies the revealed
 // BRC-369 content key + remote CHIRP closure + SPV Merkle ProofBundle, and commits the knowledge!
+// When an active RestateClient is attached (default in `nektar serve`), execution runs durably
+// through the Restate BuyerDeal workflow + Custody VO + Tx VO (zero local-broker bypass!).
 func (b *Broker) Want(ctx context.Context, req WantRequest) (*store.DealRecord, error) {
 	if len(req.Domains) == 0 {
 		req.Domains = []string{"ops"}
@@ -678,11 +1144,6 @@ func (b *Broker) Want(ctx context.Context, req WantRequest) (*store.DealRecord, 
 	if len(hosts) == 0 {
 		return nil, errors.New("market: no active hub hosts configured (join a hub first)")
 	}
-	_ = SyncPolicyFromDB(b.mem.DB(), b.engine.Policy())
-	kill, maxDeal, maxDay, _, spent, buyerOK, _ := b.engine.Policy().Snapshot()
-	if kill {
-		return nil, errors.New("market: operator kill switch is engaged")
-	}
 
 	wantID := fmt.Sprintf("want-%s-%s", shortPub(b.PubHex()), randIDHex())
 	want := bstack.WantAd{
@@ -695,15 +1156,82 @@ func (b *Broker) Want(ctx context.Context, req WantRequest) (*store.DealRecord, 
 		Revision: 1,
 		Exp:      time.Now().Add(30 * time.Minute).UnixMilli(),
 	}
+
+	// Active Restate Durable Executor path (primary production path — NO local-broker bypass!).
+	if rc := b.RestateClient(); rc != nil {
+		if _, err := rc.StartBuyerDealAsync(ctx, wantID, BuyerDealInput{
+			Want:               want,
+			TargetShard:        req.TargetShard,
+			CollectTimeout:     req.CollectTimeout,
+			WaitTimeout:        5 * time.Minute,
+			ApprovedOverrideID: req.ApprovedOverrideID,
+		}); err != nil {
+			return nil, err
+		}
+		handle := ingress.WorkflowHandle[DealState](rc.Ingress, "BuyerDeal", wantID)
+		ticker := time.NewTicker(80 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if rec, gErr := b.mem.DB().GetDeal(wantID); gErr == nil {
+				if rec.Status == "approval_pending" {
+					// Workflow is durably suspended on its Restate Awakeable; return immediately to caller!
+					return &rec, nil
+				}
+				if rec.Status == "settled" || rec.Status == "expired" || rec.Status == "failed" {
+					return &rec, nil
+				}
+			}
+			if st, oErr := handle.Output(ctx); oErr == nil {
+				if rec, gErr := b.mem.DB().GetDeal(wantID); gErr == nil {
+					return &rec, nil
+				}
+				return &store.DealRecord{
+					DealID:        wantID,
+					Role:          "buyer",
+					Status:        st.Status,
+					Shard:         st.Shard,
+					PaymentTxID:   st.PaymentTxID,
+					DeliveredText: st.DeliveredTxt,
+					Error:         st.Error,
+				}, nil
+			}
+			select {
+			case <-ctx.Done():
+				if rec, gErr := b.mem.DB().GetDeal(wantID); gErr == nil {
+					return &rec, ctx.Err()
+				}
+				return nil, ctx.Err()
+			case <-ticker.C:
+			}
+		}
+	}
+
+	_ = SyncPolicyFromDB(b.mem.DB(), b.engine.Policy())
+	kill, maxDeal, maxDay, _, spent, buyerOK, _ := b.engine.Policy().Snapshot()
+	if kill {
+		return nil, errors.New("market: operator kill switch is engaged")
+	}
+	if req.ApprovedOverrideID != "" {
+		if err := b.mem.DB().ConsumeApprovalOverride(req.ApprovedOverrideID); err != nil {
+			return nil, fmt.Errorf("market: invalid or consumed approval override %q: %w", req.ApprovedOverrideID, err)
+		}
+	}
 	wantJSON, _ := json.Marshal(want)
 
-	// Load-bearing operator consent gate: require active buyer policy & caps unless explicitly approved!
-	if req.ApprovedOverrideID == "" && (!buyerOK || (maxDeal > 0 && req.MaxSats > maxDeal) || (maxDay > 0 && spent+req.MaxSats > maxDay)) {
+	// Load-bearing operator consent gate: require active buyer policy, allowed domain, & caps unless explicitly approved!
+	domainErr := b.engine.Policy().CanSpendForDomains("", req.Domains, 0)
+	if req.ApprovedOverrideID == "" && (!buyerOK || domainErr != nil || (maxDeal > 0 && req.MaxSats > maxDeal) || (maxDay > 0 && spent+req.MaxSats > maxDay)) {
 		reason := "no active buyer policy approved (run `nektar policy approve --preset buyer` or approve in Dashboard)"
-		if buyerOK && maxDeal > 0 && req.MaxSats > maxDeal {
+		if buyerOK && domainErr != nil {
+			reason = domainErr.Error()
+		} else if buyerOK && maxDeal > 0 && req.MaxSats > maxDeal {
 			reason = fmt.Sprintf("requested maxSats (%d) exceeds buyer policy maxPerDeal (%d)", req.MaxSats, maxDeal)
 		} else if buyerOK && maxDay > 0 && spent+req.MaxSats > maxDay {
-			reason = fmt.Sprintf("requested maxSats (%d) exceeds remaining daily cap (%d)", req.MaxSats, maxDay-spent)
+			var rem uint64
+			if maxDay > spent {
+				rem = maxDay - spent
+			}
+			reason = fmt.Sprintf("requested maxSats (%d) exceeds remaining daily cap (%d)", req.MaxSats, rem)
 		}
 		appID := "appr-" + randIDHex()
 		_ = b.mem.DB().SaveApproval(store.ApprovalRecord{
@@ -845,8 +1373,14 @@ collectLoop:
 	}
 
 	if len(seenOffers) == 0 {
+		_ = b.mem.DB().RecordUnmatchedWant(store.UnmatchedWantRecord{
+			WantID:  wantID,
+			Domain:  req.Domains[0],
+			Query:   req.Question,
+			MaxSats: req.MaxSats,
+		})
 		rec.Status = "expired"
-		rec.Error = "no valid offers received within collect window"
+		rec.Error = fmt.Sprintf("no valid offers received within %s for domain %q — try `nektar peers` to see active sellers/bounties or widen domains/maxSats", b.cfg.CollectTimeout.Round(time.Millisecond), req.Domains[0])
 		_ = b.mem.DB().SaveDeal(rec)
 		return &rec, nil
 	}
@@ -884,26 +1418,34 @@ collectLoop:
 	rec.Status = "offered"
 	_ = b.mem.DB().SaveDeal(rec)
 
-	// Split coins proactively in memory mode when UTXO count is low; on live testnet/main
-	// avoid adding an extra synchronous Arcade broadcast round-trip on the critical purchase path.
-	if b.mem.Chain().Network() == "memory" {
-		_ = b.mem.Chain().EnsureSplitCoins(ctx, 4, maxU64(chosen.PriceSats*2, 1000))
+	// Build, SpendGuard-check, and broadcast BSV payment (preferring BRC-29 derived key when Seller advertises PayIdentityKey).
+	sendArgs := nwallet.SendArgs{
+		Satoshis:    chosen.PriceSats,
+		Description: "market purchase " + chosen.OfferID,
+		Labels:      []string{"market", "purchase"},
 	}
-
-	// Build, SpendGuard-check, and broadcast real BSV payment to Seller's signed PayAddress!
-	payTx, payTxID, err := b.mem.Chain().SendToAddress(ctx, chosen.PayAddress, chosen.PriceSats)
+	if chosen.PayIdentityKey != "" {
+		sendArgs.ToIdentityKey = chosen.PayIdentityKey
+	} else {
+		sendArgs.ToAddress = chosen.PayAddress
+	}
+	sendRes, err := b.mem.Chain().Send(ctx, sendArgs)
 	if err != nil {
 		rec.Status = "failed"
 		rec.Error = "payment failed: " + err.Error()
 		_ = b.mem.DB().SaveDeal(rec)
 		return &rec, err
 	}
-	payBEEF, err := chain.SafeAtomicBEEF(payTx)
-	if err != nil {
-		rec.Status = "failed"
-		rec.Error = "encode payment AtomicBEEF: " + err.Error()
-		_ = b.mem.DB().SaveDeal(rec)
-		return &rec, err
+	payTxID := sendRes.TxID
+	payBEEF := sendRes.BEEF
+	if len(payBEEF) == 0 && sendRes.Tx != nil {
+		payBEEF, err = chain.SafeAtomicBEEF(sendRes.Tx)
+		if err != nil {
+			rec.Status = "failed"
+			rec.Error = "encode payment AtomicBEEF: " + err.Error()
+			_ = b.mem.DB().SaveDeal(rec)
+			return &rec, err
+		}
 	}
 	b.engine.Policy().RecordSpend(chosen.PriceSats)
 	rec.PaymentTxID = payTxID
@@ -911,20 +1453,29 @@ collectLoop:
 	rec.Status = "paid"
 	_ = b.mem.DB().SaveDeal(rec)
 
-	// Deliver AtomicBEEF to Seller via Direct HTTP OR NAT bbox fallback!
+	// Deliver AtomicBEEF (+ BRC-29 remittance when used) to Seller via Direct HTTP OR NAT bbox fallback!
 	pReq := PurchaseRequest{
-		OfferID:        chosen.OfferID,
-		WantID:         wantID,
-		BuyerPub:       b.PubHex(),
-		TxID:           payTxID,
-		PaymentBEEFHex: hex.EncodeToString(payBEEF),
+		OfferID:           chosen.OfferID,
+		WantID:            wantID,
+		BuyerPub:          b.PubHex(),
+		TxID:              payTxID,
+		PaymentBEEFHex:    hex.EncodeToString(payBEEF),
+		OutputIndex:       sendRes.OutputIndex,
+		DerivationPrefix:  sendRes.DerivationPrefix,
+		DerivationSuffix:  sendRes.DerivationSuffix,
+		SenderIdentityKey: sendRes.SenderIdentityKey,
 	}
 	var pResp *PurchaseResponse
 	if chosen.SellerURL != "" {
 		pResp, err = b.sendDirectPurchase(ctx, chosen.SellerURL, pReq)
 	}
 	if pResp == nil && chosen.BboxOffice != "" {
-		pResp, err = b.sendBboxPurchase(ctx, hosts[0], chosen.Pub, chosen.BboxOffice, wantID, pReq)
+		for _, h := range hosts {
+			pResp, err = b.sendBboxPurchase(ctx, h, chosen.Pub, chosen.BboxOffice, wantID, pReq)
+			if err == nil && pResp != nil && pResp.OK {
+				break
+			}
+		}
 	}
 	if err != nil || pResp == nil || !pResp.OK {
 		_ = b.mem.DB().RecordReputation(chosen.Pub, false, 0)
@@ -985,14 +1536,25 @@ collectLoop:
 		return &rec, err
 	}
 
-	// 4. Verify seller's SPV Merkle ProofBundle if attached!
+	// 4. Full offline SPV verification of seller's ProofBundle (AnchorBEEF + NektarAnchor + ChainTail + BUMP/headers + leaf match)!
 	if pResp.ProofBundle != nil {
-		if err := verifyBundleOffline(*pResp.ProofBundle); err != nil {
+		if !strings.EqualFold(pResp.ProofBundle.Leaf, chosen.Leaf) {
 			_ = b.mem.DB().RecordReputation(chosen.Pub, false, 0)
 			rec.Status = "failed"
-			rec.Error = "seller SPV ProofBundle invalid: " + err.Error()
+			rec.Error = "seller SPV ProofBundle leaf mismatches signed offer leaf"
 			_ = b.mem.DB().SaveDeal(rec)
-			return &rec, err
+			return &rec, errors.New(rec.Error)
+		}
+		vr := contracts.VerifyFragmentCtx(ctx, *pResp.ProofBundle, b.mem.Chain().Tracker())
+		if !vr.OK && b.mem.Chain().Network() == "memory" && vr.Reason == "BEEFInvalid" && strings.Contains(vr.Detail, "BUMP root not valid in header chain") {
+			vr = contracts.VerifyFragmentStructural(*pResp.ProofBundle)
+		}
+		if !vr.OK {
+			_ = b.mem.DB().RecordReputation(chosen.Pub, false, 0)
+			rec.Status = "failed"
+			rec.Error = fmt.Sprintf("seller SPV ProofBundle invalid (%s: %s)", vr.Reason, vr.Detail)
+			_ = b.mem.DB().SaveDeal(rec)
+			return &rec, errors.New(rec.Error)
 		}
 	}
 
@@ -1006,7 +1568,8 @@ collectLoop:
 		Shard:      targetShard,
 		Text:       string(plaintext),
 		Source:     "market:" + shortPub(chosen.Pub),
-		Class:      req.Domains[0],
+		Class:      "market:" + req.Domains[0],
+		Tainted:    true,
 		AutoAnchor: b.mem.Chain().Network() == "memory" && b.mem.Chain().BalanceSats() > 1000,
 	}); err != nil {
 		rec.Status = "failed"
@@ -1016,6 +1579,7 @@ collectLoop:
 	}
 
 	_ = b.mem.DB().RecordReputation(chosen.Pub, true, chosen.PriceSats)
+	rec.Shard = targetShard
 	rec.ClaimKeyHex = pResp.ContentKeyHex
 	rec.DeliveredText = string(plaintext)
 	rec.Status = "settled"
@@ -1025,12 +1589,43 @@ collectLoop:
 	return &rec, nil
 }
 
-// ApproveAndExecute settles a pending operator approval and, if approved, re-runs the paused Want deal!
+// ApproveAndExecute settles a pending operator approval with atomic SQLite CAS.
+// When the paused BuyerDeal is suspended on a Restate Awakeable (active Restate mode),
+// it resolves that EXACT awakeable to resume the original wantID (zero duplicate deals!).
 func (b *Broker) ApproveAndExecute(ctx context.Context, approvalID string, approve bool) (store.ApprovalRecord, *store.DealRecord, error) {
 	appr, err := b.mem.DB().DecideApproval(approvalID, approve)
 	if err != nil {
 		return store.ApprovalRecord{}, nil, err
 	}
+	// Active Restate Awakeable resume path (resumes the exact suspended BuyerDeal workflow!).
+	if rc := b.RestateClient(); rc != nil && appr.AwakeableID != "" {
+		dec := ApprovalDecision{Approved: approve, DecidedBy: "operator"}
+		if !approve {
+			dec.Reason = "denied by operator"
+		}
+		if rErr := rc.ResolveAwakeable(ctx, appr.AwakeableID, dec); rErr != nil {
+			return appr, nil, rErr
+		}
+		if st, aErr := rc.AttachBuyerDeal(ctx, appr.DealID); aErr == nil && st != nil {
+			if deal, dErr := b.mem.DB().GetDeal(appr.DealID); dErr == nil {
+				return appr, &deal, nil
+			}
+			return appr, &store.DealRecord{
+				DealID:        appr.DealID,
+				Role:          "buyer",
+				Status:        st.Status,
+				Shard:         st.Shard,
+				PaymentTxID:   st.PaymentTxID,
+				DeliveredText: st.DeliveredTxt,
+				Error:         st.Error,
+			}, nil
+		}
+		if deal, dErr := b.mem.DB().GetDeal(appr.DealID); dErr == nil {
+			return appr, &deal, nil
+		}
+		return appr, nil, nil
+	}
+
 	if !approve {
 		if deal, dErr := b.mem.DB().GetDeal(appr.DealID); dErr == nil {
 			deal.Status = "failed"
@@ -1095,6 +1690,10 @@ func (b *Broker) SellToHub(ctx context.Context, hubURL, bountyID, shard string, 
 	if err != nil {
 		return nil, err
 	}
+	var provHex string
+	if rec, gErr := b.mem.DB().GetFragment(shard, target.Seq); gErr == nil && len(rec.Provenance) > 0 {
+		provHex = hex.EncodeToString(rec.Provenance)
+	}
 	sub := hub.BountySubmission{
 		BountyID:      bountyID,
 		SellerPub:     b.PubHex(),
@@ -1103,6 +1702,7 @@ func (b *Broker) SellToHub(ctx context.Context, hubURL, bountyID, shard string, 
 		Seq:           target.Seq,
 		HDP:           target.HDP,
 		Text:          target.Text,
+		ProvenanceHex: provHex,
 		ProofBundle:   pbRaw,
 	}
 	body, _ := json.Marshal(sub)
@@ -1224,22 +1824,30 @@ func (b *Broker) sendBboxPurchase(ctx context.Context, hubURL, sellerPub, office
 	ch := make(chan PurchaseResponse, 1)
 	b.mu.Lock()
 	b.bboxReplies[pReq.OfferID] = ch
+	b.bboxExpected[pReq.OfferID] = sellerPub
 	b.mu.Unlock()
 	defer func() {
 		b.mu.Lock()
 		delete(b.bboxReplies, pReq.OfferID)
+		delete(b.bboxExpected, pReq.OfferID)
 		b.mu.Unlock()
 	}()
 
 	bodyRaw, _ := json.Marshal(pReq)
-	env, _ := json.Marshal(hub.BboxMessage{
+	msg := hub.BboxMessage{
 		Office:       office,
 		RecipientPub: sellerPub,
 		SenderPub:    b.PubHex(),
 		DealID:       dealID,
 		Kind:         "purchase_beef",
 		Body:         bodyRaw,
-	})
+	}
+	sig, sErr := bstack.SignArtifact(b.engine.saleKey, msg.Signable())
+	if sErr != nil {
+		return nil, sErr
+	}
+	msg.Sig = sig
+	env, _ := json.Marshal(msg)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(hubURL, "/")+"/bbox/send", bytes.NewReader(env))
 	if err != nil {
 		return nil, err
@@ -1264,21 +1872,52 @@ func (b *Broker) sendBboxPurchase(ctx context.Context, hubURL, sellerPub, office
 	}
 }
 
+func (b *Broker) loadBboxCursor(hubURL string) int64 {
+	var v int64
+	if ok, _ := b.mem.DB().GetJSON("bbox_cursor:"+hubURL, &v); ok {
+		return v
+	}
+	return 0
+}
+
+func (b *Broker) saveBboxCursor(hubURL string, seq int64) {
+	if seq <= 0 {
+		return
+	}
+	_ = b.mem.DB().SetJSON("bbox_cursor:"+hubURL, seq)
+}
+
 func (b *Broker) bboxLoop(ctx context.Context) {
 	cursors := make(map[string]int64)
-	ticker := time.NewTicker(150 * time.Millisecond)
-	defer ticker.Stop()
 	for {
+		b.mu.RLock()
+		waitingReply := len(b.bboxReplies) > 0
+		b.mu.RUnlock()
+		interval := 3 * time.Second
+		if waitingReply {
+			interval = 500 * time.Millisecond
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-time.After(interval):
+			gotAny := false
 			for _, h := range b.disc.ActiveHosts() {
-				since := cursors[h]
+				since, loaded := cursors[h]
+				if !loaded {
+					since = b.loadBboxCursor(h)
+					cursors[h] = since
+				}
 				u := fmt.Sprintf("%s/bbox/inbox?pub=%s&since=%d", strings.TrimRight(h, "/"), b.PubHex(), since)
 				req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 				if err != nil {
 					continue
+				}
+				tsNow := time.Now().Unix()
+				if inSig, sErr := bstack.SignArtifact(b.engine.saleKey, map[string]any{"action": "bbox_inbox", "pub": b.PubHex(), "ts": tsNow}); sErr == nil {
+					req.Header.Set("X-Nektar-Pub", b.PubHex())
+					req.Header.Set("X-Nektar-Ts", strconv.FormatInt(tsNow, 10))
+					req.Header.Set("X-Nektar-Sig", inSig)
 				}
 				resp, err := b.httpClient.Do(req)
 				if err != nil || resp.StatusCode != http.StatusOK {
@@ -1293,11 +1932,22 @@ func (b *Broker) bboxLoop(ctx context.Context) {
 				_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&parsed)
 				resp.Body.Close()
 				for _, m := range parsed.Messages {
+					gotAny = true
+					b.bboxWakes.Add(1)
+					// Process message FIRST, then persist bbox_cursor so a mid-handler crash retries cleanly!
+					b.handleBboxMessage(ctx, h, m)
 					if m.Seq > cursors[h] {
 						cursors[h] = m.Seq
+						b.saveBboxCursor(h, m.Seq)
 					}
-					b.bboxWakes.Add(1)
-					b.handleBboxMessage(ctx, h, m)
+				}
+			}
+			if gotAny {
+				// Immediate quick follow-up when a trade message just arrived.
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(250 * time.Millisecond):
 				}
 			}
 		}
@@ -1305,6 +1955,10 @@ func (b *Broker) bboxLoop(ctx context.Context) {
 }
 
 func (b *Broker) handleBboxMessage(ctx context.Context, hubURL string, m hub.BboxMessage) {
+	// Verify sender signature on every relayed bbox message before trusting payload!
+	if m.Sig == "" || bstack.VerifyArtifact(m.SenderPub, m.Sig, m.Signable()) != nil {
+		return
+	}
 	switch m.Kind {
 	case "purchase_beef":
 		var pReq PurchaseRequest
@@ -1316,14 +1970,18 @@ func (b *Broker) handleBboxMessage(ctx context.Context, hubURL string, m hub.Bbo
 			pResp = &PurchaseResponse{OK: false, OfferID: pReq.OfferID, SellerPub: b.PubHex(), Error: err.Error()}
 		}
 		bodyRaw, _ := json.Marshal(pResp)
-		env, _ := json.Marshal(hub.BboxMessage{
+		replyMsg := hub.BboxMessage{
 			Office:       m.Office,
 			RecipientPub: m.SenderPub,
 			SenderPub:    b.PubHex(),
 			DealID:       m.DealID,
 			Kind:         "reveal_key",
 			Body:         bodyRaw,
-		})
+		}
+		if sig, sErr := bstack.SignArtifact(b.engine.saleKey, replyMsg.Signable()); sErr == nil {
+			replyMsg.Sig = sig
+		}
+		env, _ := json.Marshal(replyMsg)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(hubURL, "/")+"/bbox/send", bytes.NewReader(env))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
@@ -1338,7 +1996,30 @@ func (b *Broker) handleBboxMessage(ctx context.Context, hubURL string, m hub.Bbo
 		}
 		b.mu.RLock()
 		ch := b.bboxReplies[pResp.OfferID]
+		expSeller := b.bboxExpected[pResp.OfferID]
+		wantID := b.bboxWantByOffer[pResp.OfferID]
+		rc := b.restate
 		b.mu.RUnlock()
+		if expSeller != "" && m.SenderPub != expSeller {
+			return // reject spoofed reveal_key from non-seller pubkey!
+		}
+		if wantID == "" {
+			wantID = m.DealID
+		}
+		// Wake suspended Restate BuyerDeal workflow via Promise("claim")!
+		if rc != nil && wantID != "" && pResp.OK {
+			go func(wid string, pr PurchaseResponse) {
+				dCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_, _ = rc.DeliverBuyerKey(dCtx, wid, ClaimSignal{
+					ClaimTxID:     pr.OfferID,
+					ContentKeyHex: pr.ContentKeyHex,
+					CiphertextHex: pr.CiphertextHex,
+					ChirpURL:      pr.ChirpURL,
+					ProofBundle:   pr.ProofBundle,
+				})
+			}(wantID, pResp)
+		}
 		if ch != nil {
 			select {
 			case ch <- pResp:
@@ -1395,14 +2076,24 @@ func pickBestFragment(frags []memory.RecalledFragment, query string) *memory.Rec
 	if len(frags) == 0 {
 		return nil
 	}
-	tokens := strings.Fields(strings.ToLower(query))
-	bestIdx := len(frags) - 1
-	bestScore := -1
+	var tokens []string
+	for _, raw := range strings.Fields(strings.ToLower(query)) {
+		tok := strings.Trim(raw, ".,?!:;\"'()[]{}")
+		if len(tok) >= 3 {
+			tokens = append(tokens, tok)
+		}
+	}
+	if len(tokens) == 0 {
+		cp := frags[len(frags)-1]
+		return &cp
+	}
+	bestIdx := -1
+	bestScore := 0
 	for i, f := range frags {
 		lower := strings.ToLower(f.Text)
 		score := 0
 		for _, tok := range tokens {
-			if len(tok) >= 3 && strings.Contains(lower, tok) {
+			if strings.Contains(lower, tok) {
 				score++
 			}
 		}
@@ -1411,31 +2102,11 @@ func pickBestFragment(frags []memory.RecalledFragment, query string) *memory.Rec
 			bestIdx = i
 		}
 	}
+	if bestIdx < 0 {
+		return nil
+	}
 	cp := frags[bestIdx]
 	return &cp
-}
-
-func verifyBundleOffline(pb contracts.ProofBundle) error {
-	leafBytes, err := hex.DecodeString(pb.Leaf)
-	if err != nil {
-		return err
-	}
-	rootBytes, err := hex.DecodeString(pb.Anchor.R)
-	if err != nil {
-		return err
-	}
-	siblings := make([][]byte, len(pb.Path))
-	for i, s := range pb.Path {
-		b, err := hex.DecodeString(s)
-		if err != nil {
-			return err
-		}
-		siblings[i] = b
-	}
-	if !core.VerifyProof(leafBytes, &core.MerkleProof{Index: pb.LeafIndex, Siblings: siblings}, rootBytes) {
-		return errors.New("merkle proof invalid")
-	}
-	return nil
 }
 
 func lanesForDomains(net string, domains []string) []string {

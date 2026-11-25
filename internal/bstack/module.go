@@ -314,6 +314,20 @@ func (s *MarketLookupService) SetSeq(outpointKey string, seq int64) {
 	s.mu.Unlock()
 }
 
+// PruneExpired evicts all expired records from the in-memory lookup index to bound RAM usage.
+func (s *MarketLookupService) PruneExpired(nowMs int64) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pruned := 0
+	for k, rec := range s.records {
+		if rec.exp > 0 && rec.exp < nowMs {
+			delete(s.records, k)
+			pruned++
+		}
+	}
+	return pruned
+}
+
 func (s *MarketLookupService) OutputAdmittedByTopic(_ context.Context, payload *module.OutputAdmittedByTopic) error {
 	if payload == nil {
 		return nil

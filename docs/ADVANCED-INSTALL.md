@@ -1,88 +1,94 @@
-# Advanced Install & Developer Setups
+# Advanced Install & Developer Setups (v0.4 Pure-Go)
 
-The primary user path is the **GHCR-first install** (`curl -fsSL https://nektar.run/install.sh | sh` or `irm https://nektar.run/install.ps1 | iex`). Use the paths below only when you need host-native desktop wallet signing (`NEKTAR_WALLET=client`), Docker Desktop MCP Toolkit, bare stdio containers, or source development against local Teranode regtest.
+The primary user path is the **zero-dependency static Go binary**:
+`curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh`
+(or `irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1 | iex` on Windows).
+
+Use the paths below for Docker/GHCR, BSV Desktop wallet custody, Docker MCP Toolkit, Homebrew, or building from source.
 
 ---
 
-## 1. Host-Native Build (Required for BSV Desktop / `NEKTAR_WALLET=client`)
-
-Desktop BRC-100 wallets (e.g. BSV Desktop / Metanet Desktop) expose their signing API on `localhost:3321` only, which a container cannot reach. Install the self-contained host build (requires Node.js 22.12+; bundles `restate-server`, `integrations/`, and `skills/`):
+## 1. Docker / GHCR (`--docker` opt-in)
 
 ```sh
-# macOS / Linux
-curl -fsSL https://nektar.run/install.sh | sh -s -- --native
+# macOS / Linux thin GHCR launcher (manages ghcr.io/kryptokrates/nektar:latest on :18420)
+curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --docker
+nektar up && nektar dock
+```
 
+```powershell
 # Windows PowerShell
-& ([scriptblock]::Create((irm https://nektar.run/install.ps1))) -Native
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Docker
+nektar up
+nektar dock
 ```
 
-Or download directly from [GitHub Releases](https://github.com/kryptokrates/nektar/releases/latest):
-
-- `nektar-mcp-linux-x64.tar.gz`
-- `nektar-mcp-darwin-arm64.tar.gz`
-- `nektar-mcp-win32-x64.zip` (runs bundled Linux `restate-server` through WSL2)
-
-Boot unlocked BSV Desktop first, then:
+Or run the container directly:
 
 ```sh
-NEKTAR_WALLET=client ./nektar serve
+docker run -d --name nektar --restart unless-stopped \
+  -p 127.0.0.1:18420:18420 -v nektar-data:/data \
+  ghcr.io/kryptokrates/nektar:latest serve
 ```
 
 ---
 
-## 2. Direct Stdio Container (Per-Client Spawn)
+## 2. Host-Native Desktop Wallet (`NEKTAR_WALLET=client`)
 
-If you prefer an MCP client to spawn an ephemeral stdio container directly instead of talking to one shared daemon (`nektar up`):
+Desktop BRC-100 wallets (BSV Desktop / Metanet Desktop) listen on loopback `http://127.0.0.1:3321`.
+Run the native Go binary on the host alongside your unlocked desktop wallet:
 
 ```sh
-# Claude Code
-claude mcp add nektar -- docker run -i --rm -v nektar-data:/data ghcr.io/kryptokrates/nektar:latest
+NEKTAR_WALLET=client nektar serve
 ```
 
-> Note: do not run a long-lived `nektar` daemon on the same `nektar-data` volume simultaneously with a direct stdio container, or `instance.lock` will reject the second writer. For multiple clients sharing one brain, use `nektar up` + `nektar dock` (HTTP MCP).
+(`NEKTAR_WALLET=client` is refused on `memory`/`regtest` networks.)
 
 ---
 
-## 3. Docker Desktop MCP Toolkit
+## 3. Direct Stdio Container (Per-Client Spawn)
+
+Pass `"mcp"` explicitly so the container speaks MCP over stdio instead of starting the HTTP server:
 
 ```sh
-pnpm mcp:install --ghcr
-docker mcp client connect claude-desktop --profile nektar
+claude mcp add nektar -- docker run -i --rm -v nektar-data:/data ghcr.io/kryptokrates/nektar:latest mcp
 ```
 
-See [docs/INTEGRATION.md](INTEGRATION.md) for regtest/mainnet profiles.
+> Note: do not run a long-lived `nektar serve` daemon on the same `nektar-data` volume simultaneously with a direct stdio container, or `instance.lock` will reject the second writer. For multiple clients sharing one brain, run `nektar serve` (or `nektar up`) and dock via `nektar dock` (Streamable HTTP MCP on `:18420`).
 
 ---
 
-## 4. Homebrew (macOS / Linux)
+## 4. Docker Desktop MCP Toolkit
+
+Catalog manifests live under `docker-mcp/` (`nektar.yaml`, `nektar.ghcr.yaml`, `nektar-main.yaml`, `nektar-regtest.yaml`). All stdio entries explicitly invoke `mcp`.
+
+---
+
+## 5. Homebrew (macOS / Linux)
 
 ```sh
 brew install kryptokrates/tap/nektar
-nektar up && nektar dock
+nektar serve
+nektar dock
 ```
 
 Formula source: [packaging/homebrew/nektar.rb](../packaging/homebrew/nektar.rb).
 
 ---
 
-## 5. Build from Source & Local Teranode Regtest
-
-Requires **Node.js 22.12+**, **pnpm**, and **Docker** (for local Teranode regtest):
+## 6. Build from Source (Go 1.27+, Zero CGO)
 
 ```bash
 git clone https://github.com/kryptokrates/nektar.git
 cd nektar
-pnpm install
-pnpm -r build
-pnpm restate:up        # fetch SHA256-verified restate-server sidecar once
-pnpm init:nektar       # interactive wizard
+go build -o nektar ./cmd/nektar
+go vet ./... && go test -race ./...
+./nektar serve
 ```
 
-Run the local regtest stack and 60-second demo:
+Rebuild the embedded Svelte 5 Dashboard UI:
 
 ```bash
-pnpm stack:up
-pnpm demo
+cd ui && npm install && npm run build
+# Sync ui/dist/ -> internal/server/ui_dist/ before rebuilding the Go binary
 ```
-
-See [docs/DEVELOPER.md](DEVELOPER.md) and [docs/OPERATIONS.md](OPERATIONS.md) for all verification gates, covenants, STARK provers, and `deploy/bstore/`.

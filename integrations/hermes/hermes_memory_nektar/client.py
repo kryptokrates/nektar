@@ -11,17 +11,19 @@ from urllib import error, parse, request
 DEFAULT_PORTS = (18420, 8080)
 
 
-def _read_daemon_json(path: Path) -> str | None:
+def _read_daemon_json(path: Path) -> tuple[str | None, str | None]:
     try:
         if not path.is_file():
-            return None
+            return None, None
         data = json.loads(path.read_text(encoding="utf-8"))
         url = data.get("url")
+        tok = data.get("authToken") or data.get("token")
+        tok_s = tok.strip() if isinstance(tok, str) and tok.strip() else None
         if isinstance(url, str) and url.startswith(("http://", "https://")):
-            return url.rstrip("/")
+            return url.rstrip("/"), tok_s
     except Exception:
-        return None
-    return None
+        return None, None
+    return None, None
 
 
 class NektarClient:
@@ -59,13 +61,19 @@ class NektarClient:
                 seen.add(norm)
                 out.append(norm)
 
+        def add_daemon(path: Path) -> None:
+            u, tok = _read_daemon_json(path)
+            if tok and not self.token:
+                self.token = tok
+            add(u)
+
         add(self.explicit_url)
         add(os.environ.get("NEKTAR_URL"))
         add(os.environ.get("NEKTAR_DAEMON_URL"))
         if self.data_dir:
-            add(_read_daemon_json(Path(self.data_dir) / "daemon.json"))
-        add(_read_daemon_json(Path.cwd() / ".nektar" / "daemon.json"))
-        add(_read_daemon_json(Path.home() / ".nektar" / "daemon.json"))
+            add_daemon(Path(self.data_dir) / "daemon.json")
+        add_daemon(Path.cwd() / ".nektar" / "daemon.json")
+        add_daemon(Path.home() / ".nektar" / "daemon.json")
         env_port = os.environ.get("NEKTAR_HTTP_PORT")
         if env_port:
             add(f"http://127.0.0.1:{env_port}")
@@ -98,7 +106,7 @@ class NektarClient:
         base = self.ensure_url(timeout_s=min(timeout_s, 0.5))
         if not base:
             raise ConnectionError(
-                "nektar daemon not reachable — start it with `nektar --port 18420` or set NEKTAR_URL"
+                "nektar daemon not reachable — start it with `nektar serve` or set NEKTAR_URL"
             )
         payload = json.dumps(args or {}).encode("utf-8")
         req = request.Request(

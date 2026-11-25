@@ -32,7 +32,7 @@ type StoredEvent struct {
 	AdmittedAt int64                `json:"admittedAt"`
 }
 
-// BboxMessage is a store-and-forward message relayed for counterparties behind NAT.
+// BboxMessage is a signed store-and-forward message relayed for counterparties behind NAT.
 type BboxMessage struct {
 	Seq          int64           `json:"seq"`
 	Office       string          `json:"office"`
@@ -41,7 +41,30 @@ type BboxMessage struct {
 	DealID       string          `json:"dealId"`
 	Kind         string          `json:"kind"` // purchase_beef | reveal_key | receipt
 	Body         json.RawMessage `json:"body"`
+	Sig          string          `json:"sig,omitempty"`
 	CreatedAt    int64           `json:"createdAt"`
+}
+
+// BboxSignablePayload is the canonical signed portion of BboxMessage (excluding server-assigned Seq/CreatedAt/Sig).
+type BboxSignablePayload struct {
+	Office       string          `json:"office"`
+	RecipientPub string          `json:"recipientPub"`
+	SenderPub    string          `json:"senderPub"`
+	DealID       string          `json:"dealId"`
+	Kind         string          `json:"kind"`
+	Body         json.RawMessage `json:"body"`
+}
+
+// Signable returns the canonical signable struct for BboxMessage.
+func (m BboxMessage) Signable() BboxSignablePayload {
+	return BboxSignablePayload{
+		Office:       m.Office,
+		RecipientPub: m.RecipientPub,
+		SenderPub:    m.SenderPub,
+		DealID:       m.DealID,
+		Kind:         m.Kind,
+		Body:         m.Body,
+	}
 }
 
 // Bounty describes a domain knowledge bounty the Hub will pay agents to fulfill.
@@ -135,10 +158,47 @@ CREATE TABLE IF NOT EXISTS hub_bounty_claims (
 	seller_pub  TEXT NOT NULL,
 	txid        TEXT NOT NULL DEFAULT '',
 	reward_sats INTEGER NOT NULL,
+	status      TEXT NOT NULL DEFAULT 'paid',
 	created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS hub_fed_cursors (
+	peer       TEXT PRIMARY KEY,
+	cursor     INTEGER NOT NULL DEFAULT 0,
+	updated_at INTEGER NOT NULL
 );
 `
 	_, err := s.sql.Exec(schema)
+	if err != nil {
+		return err
+	}
+	_, _ = s.sql.Exec(`ALTER TABLE hub_bounty_claims ADD COLUMN status TEXT NOT NULL DEFAULT 'paid'`)
+	_, _ = s.sql.Exec(`ALTER TABLE hub_bbox ADD COLUMN sig TEXT NOT NULL DEFAULT ''`)
+	return nil
+}
+
+// GetFedCursor loads the persisted federation cursor for peer.
+func (s *Store) GetFedCursor(peer string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var c int64
+	_ = s.sql.QueryRow(`SELECT cursor FROM hub_fed_cursors WHERE peer = ?`, peer).Scan(&c)
+	return c
+}
+
+// SetFedCursor atomically advances the persisted federation cursor for peer (monotonic max).
+func (s *Store) SetFedCursor(peer string, cursor int64) error {
+	if peer == "" || cursor <= 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.sql.Exec(`
+		INSERT INTO hub_fed_cursors (peer, cursor, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(peer) DO UPDATE SET
+			cursor = CASE WHEN excluded.cursor > hub_fed_cursors.cursor THEN excluded.cursor ELSE hub_fed_cursors.cursor END,
+			updated_at = excluded.updated_at`,
+		peer, cursor, time.Now().Unix())
 	return err
 }
 
@@ -235,6 +295,75 @@ func (s *Store) PruneExpired(nowMs int64) (int64, error) {
 	return res.RowsAffected()
 }
 
+// PruneBbox deletes old bbox relay envelopes and enforces a hard row cap to bound storage.
+func (s *Store) PruneBbox(cutoffMs int64, maxRows int) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var total int64
+	if cutoffMs > 0 {
+		if res, err := s.sql.Exec(`DELETE FROM hub_bbox WHERE created_at > 0 AND created_at < ?`, cutoffMs); err == nil {
+			n, _ := res.RowsAffected()
+			total += n
+		}
+	}
+	if maxRows > 0 {
+		if res, err := s.sql.Exec(`DELETE FROM hub_bbox WHERE seq NOT IN (SELECT seq FROM hub_bbox ORDER BY seq DESC LIMIT ?)`, maxRows); err == nil {
+			n, _ := res.RowsAffected()
+			total += n
+		}
+	}
+	return total, nil
+}
+
+// DomainDensity summarizes live Hub market activity per domain (for Prometheus & Dashboard).
+type DomainDensity struct {
+	Domain string `json:"domain"`
+	Wants  int64  `json:"wants"`
+	Offers int64  `json:"offers"`
+}
+
+// DomainDensityStats counts unexpired wants and offers per domain on this Hub.
+func (s *Store) DomainDensityStats() ([]DomainDensity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	nowMs := time.Now().UnixMilli()
+	rows, err := s.sql.Query(`SELECT kind, domains_json FROM hub_events WHERE (exp = 0 OR exp > ?) AND kind IN ('want', 'offer')`, nowMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := make(map[string]*DomainDensity)
+	for rows.Next() {
+		var kind, domJSON string
+		if err := rows.Scan(&kind, &domJSON); err != nil {
+			return nil, err
+		}
+		var doms []string
+		_ = json.Unmarshal([]byte(domJSON), &doms)
+		for _, d := range doms {
+			d = strings.ToLower(strings.TrimSpace(d))
+			if d == "" {
+				continue
+			}
+			c, ok := counts[d]
+			if !ok {
+				c = &DomainDensity{Domain: d}
+				counts[d] = c
+			}
+			if kind == "want" {
+				c.Wants++
+			} else if kind == "offer" {
+				c.Offers++
+			}
+		}
+	}
+	out := make([]DomainDensity, 0, len(counts))
+	for _, c := range counts {
+		out = append(out, *c)
+	}
+	return out, rows.Err()
+}
+
 // SaveBboxMessage stores a NAT-safe relay envelope for recipientPub.
 func (s *Store) SaveBboxMessage(msg BboxMessage) (int64, error) {
 	s.mu.Lock()
@@ -246,9 +375,9 @@ func (s *Store) SaveBboxMessage(msg BboxMessage) (int64, error) {
 		msg.CreatedAt = time.Now().UnixMilli()
 	}
 	res, err := s.sql.Exec(`
-		INSERT INTO hub_bbox (office, recipient_pub, sender_pub, deal_id, kind, body_json, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		msg.Office, msg.RecipientPub, msg.SenderPub, msg.DealID, msg.Kind, []byte(msg.Body), msg.CreatedAt)
+		INSERT INTO hub_bbox (office, recipient_pub, sender_pub, deal_id, kind, body_json, sig, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		msg.Office, msg.RecipientPub, msg.SenderPub, msg.DealID, msg.Kind, []byte(msg.Body), msg.Sig, msg.CreatedAt)
 	if err != nil {
 		return 0, err
 	}
@@ -263,7 +392,7 @@ func (s *Store) ListBboxMessages(recipientPub string, sinceSeq int64, limit int)
 		limit = 50
 	}
 	rows, err := s.sql.Query(`
-		SELECT seq, office, recipient_pub, sender_pub, deal_id, kind, body_json, created_at
+		SELECT seq, office, recipient_pub, sender_pub, deal_id, kind, body_json, COALESCE(sig, ''), created_at
 		FROM hub_bbox WHERE recipient_pub = ? AND seq > ? ORDER BY seq ASC LIMIT ?`,
 		recipientPub, sinceSeq, limit)
 	if err != nil {
@@ -274,7 +403,7 @@ func (s *Store) ListBboxMessages(recipientPub string, sinceSeq int64, limit int)
 	for rows.Next() {
 		var m BboxMessage
 		var body []byte
-		if err := rows.Scan(&m.Seq, &m.Office, &m.RecipientPub, &m.SenderPub, &m.DealID, &m.Kind, &body, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.Seq, &m.Office, &m.RecipientPub, &m.SenderPub, &m.DealID, &m.Kind, &body, &m.Sig, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		m.Body = json.RawMessage(body)
@@ -352,6 +481,66 @@ func (s *Store) HasBountyClaim(hdp string) (bool, error) {
 	return n > 0, err
 }
 
+var (
+	ErrBountyFilled    = errors.New("hub: bounty not found, inactive, or already filled")
+	ErrBountyDuplicate = errors.New("hub: duplicate fragment HDP already claimed")
+)
+
+// ReserveBountyClaim atomically increments filled (guarding active=1 AND filled < max_fills)
+// and inserts a pending claim for hdp inside ONE SQLite transaction BEFORE payout.
+func (s *Store) ReserveBountyClaim(bountyID, hdp, sellerPub string, rewardSats uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.Exec(`UPDATE hub_bounties SET filled = filled + 1 WHERE id = ? AND active = 1 AND filled < max_fills`, bountyID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return ErrBountyFilled
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO hub_bounty_claims (hdp, bounty_id, seller_pub, txid, reward_sats, status, created_at)
+		VALUES (?, ?, ?, '', ?, 'pending', ?)`,
+		hdp, bountyID, sellerPub, rewardSats, time.Now().Unix()); err != nil {
+		return ErrBountyDuplicate
+	}
+	return tx.Commit()
+}
+
+// FinalizeBountyClaim marks a reserved bounty claim as paid and records its payout txid.
+func (s *Store) FinalizeBountyClaim(hdp, txid string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.sql.Exec(`UPDATE hub_bounty_claims SET txid = ?, status = 'paid' WHERE hdp = ?`, txid, hdp)
+	return err
+}
+
+// CancelBountyClaim rolls back a pending bounty claim reservation if validation or pre-broadcast payout fails.
+func (s *Store) CancelBountyClaim(bountyID, hdp string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.Exec(`DELETE FROM hub_bounty_claims WHERE hdp = ? AND status = 'pending'`, hdp)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 1 {
+		_, _ = tx.Exec(`UPDATE hub_bounties SET filled = CASE WHEN filled > 0 THEN filled - 1 ELSE 0 END WHERE id = ?`, bountyID)
+	}
+	return tx.Commit()
+}
+
 // RecordBountyClaim atomically records a paid bounty claim and increments the bounty's filled count.
 func (s *Store) RecordBountyClaim(bountyID, hdp, sellerPub, txid string, rewardSats uint64) error {
 	s.mu.Lock()
@@ -362,8 +551,8 @@ func (s *Store) RecordBountyClaim(bountyID, hdp, sellerPub, txid string, rewardS
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.Exec(`
-		INSERT INTO hub_bounty_claims (hdp, bounty_id, seller_pub, txid, reward_sats, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+		INSERT INTO hub_bounty_claims (hdp, bounty_id, seller_pub, txid, reward_sats, status, created_at)
+		VALUES (?, ?, ?, ?, ?, 'paid', ?)`,
 		hdp, bountyID, sellerPub, txid, rewardSats, time.Now().Unix()); err != nil {
 		return err
 	}

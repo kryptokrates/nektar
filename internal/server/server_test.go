@@ -54,7 +54,6 @@ func TestUnifiedServerRESTA2AProxyPaywallAndDashboard(t *testing.T) {
 		ToolPrices:     map[string]uint64{"groundedAnswer": 100},
 		OpenAIUpstream: mockLLM.URL,
 		Hub:            hubNode,
-		MountRestate:   true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -177,18 +176,86 @@ func TestUnifiedServerRESTA2AProxyPaywallAndDashboard(t *testing.T) {
 	}
 	hResp.Body.Close()
 
-	// 8. Mounted Restate Go SDK endpoint discovery (/restate/discover) exposes all 5 services!
-	rsReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/restate/discover", nil)
-	rsReq.Header.Set("Accept", "application/vnd.restate.endpointmanifest.v3+json")
-	rsResp, err := http.DefaultClient.Do(rsReq)
-	if err != nil || rsResp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /restate/discover failed: %+v %v", rsResp, err)
+	// 8. Public :18420 server MUST NOT expose /restate/ (returns 404); dedicated Restate handler exposes all services!
+	pubRsResp, err := http.Get(ts.URL + "/restate/discover")
+	if err != nil {
+		t.Fatalf("GET /restate/discover failed: %v", err)
 	}
-	rsBody, _ := io.ReadAll(rsResp.Body)
-	rsResp.Body.Close()
-	for _, svc := range []string{"BuyerDeal", "SellerDeal", "Custody", "Tx", "AnchorCadence"} {
-		if !strings.Contains(string(rsBody), `"`+svc+`"`) {
-			t.Fatalf("/restate/discover missing %s: %s", svc, string(rsBody))
+	pubRsResp.Body.Close()
+	if pubRsResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected /restate/discover on public server to return 404, got %d", pubRsResp.StatusCode)
+	}
+	rh, err := mkt.NewRestateServer().Handler()
+	if err != nil {
+		t.Fatalf("NewRestateServer().Handler(): %v", err)
+	}
+	rsRec := httptest.NewRecorder()
+	rsReq := httptest.NewRequest(http.MethodGet, "/discover", nil)
+	rsReq.Header.Set("Accept", "application/vnd.restate.endpointmanifest.v4+json")
+	rh.ServeHTTP(rsRec, rsReq)
+	if rsRec.Code != http.StatusOK {
+		t.Fatalf("dedicated Restate /discover failed: code=%d body=%s", rsRec.Code, rsRec.Body.String())
+	}
+	rsBody := rsRec.Body.String()
+	for _, svc := range []string{"BuyerDeal", "SellerDeal", "Custody", "Tx", "AnchorCadence", "NektarRuntime"} {
+		if !strings.Contains(rsBody, `"`+svc+`"`) {
+			t.Fatalf("Restate /discover missing %s: %s", svc, rsBody)
 		}
 	}
+
+	// 9. New Wallet REST API: GET /v1/wallet, /v1/wallet/utxos, /v1/wallet/actions, POST /v1/wallet/fuel, /v1/wallet/send, /v1/wallet/sweep!
+	wResp, err := http.Get(ts.URL + "/v1/wallet")
+	if err != nil || wResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/wallet failed: %+v %v", wResp, err)
+	}
+	var wInfo map[string]any
+	_ = json.NewDecoder(wResp.Body).Decode(&wInfo)
+	wResp.Body.Close()
+	if wInfo["walletMode"] != "embedded" || wInfo["balanceSats"].(float64) == 0 {
+		t.Fatalf("unexpected /v1/wallet payload: %+v", wInfo)
+	}
+
+	// Warm fuel pool via POST /v1/wallet/fuel
+	fResp, err := http.Post(ts.URL+"/v1/wallet/fuel", "application/json", strings.NewReader(`{"target":8,"sats":1500}`))
+	if err != nil || fResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /v1/wallet/fuel failed: %+v %v", fResp, err)
+	}
+	fResp.Body.Close()
+
+	// Send via POST /v1/wallet/send to self fundAddress (or fresh peer)
+	peerPort, err := chain.Open(ctx, chain.Config{Network: "memory", DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peerPort.Close()
+	peerAddr, _ := peerPort.FundAddress()
+	sResp, err := http.Post(ts.URL+"/v1/wallet/send", "application/json", strings.NewReader(`{"to":"`+peerAddr+`","sats":1000}`))
+	if err != nil || sResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /v1/wallet/send failed: %+v %v", sResp, err)
+	}
+	sResp.Body.Close()
+
+	// List UTXOs & Actions
+	uResp, err := http.Get(ts.URL + "/v1/wallet/utxos?basket=fuel")
+	if err != nil || uResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/wallet/utxos failed: %+v %v", uResp, err)
+	}
+	uResp.Body.Close()
+	aResp, err := http.Get(ts.URL + "/v1/wallet/actions?limit=10")
+	if err != nil || aResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/wallet/actions failed: %+v %v", aResp, err)
+	}
+	aResp.Body.Close()
+
+	// Sweep remaining funds via POST /v1/wallet/sweep!
+	swResp, err := http.Post(ts.URL+"/v1/wallet/sweep", "application/json", strings.NewReader(`{"to":"`+peerAddr+`"}`))
+	if err != nil || swResp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(swResp.Body)
+		t.Fatalf("POST /v1/wallet/sweep failed: status=%d body=%s err=%v", swResp.StatusCode, string(b), err)
+	}
+	swResp.Body.Close()
+	if port.BalanceSats() != 0 {
+		t.Fatalf("expected 0 spendable sats after /v1/wallet/sweep, got %d", port.BalanceSats())
+	}
+	_ = port.Close()
 }

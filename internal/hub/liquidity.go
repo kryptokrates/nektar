@@ -6,14 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
-	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 // LiquidityConfig configures the Hub's cold-start liquidity engine:
@@ -157,19 +159,19 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 	if len(strings.TrimSpace(sub.Text)) < 12 {
 		return nil, errors.New("bounty: fragment text too short to qualify")
 	}
-	// Verify SPV / Merkle ProofBundle structurally (and against headers when available on shared network).
-	if len(sub.ProofBundle) > 0 {
-		var pb contracts.ProofBundle
-		if err := json.Unmarshal(sub.ProofBundle, &pb); err != nil {
-			return nil, fmt.Errorf("bounty: invalid proofBundle JSON: %w", err)
-		}
-		if err := verifyProofBundleStructure(pb); err != nil {
-			return nil, fmt.Errorf("bounty: proofBundle verification failed: %w", err)
-		}
+	// Mandatory SPV / Merkle ProofBundle — never pay unverified text submissions.
+	if len(sub.ProofBundle) == 0 {
+		return nil, errors.New("bounty: anchored proofBundle is required for payout")
+	}
+	var pb contracts.ProofBundle
+	if err := json.Unmarshal(sub.ProofBundle, &pb); err != nil {
+		return nil, fmt.Errorf("bounty: invalid proofBundle JSON: %w", err)
+	}
+	if err := verifyBountyProofBundle(ctx, mem, pb, sub); err != nil {
+		return nil, fmt.Errorf("bounty: proofBundle verification failed: %w", err)
 	}
 
-	// Ensure Hub has spendable coins & execute real SpendGuard-enforced payout!
-	_ = mem.Chain().EnsureSplitCoins(ctx, 4, maxUint64(b.RewardSats*2, 1000))
+	// Execute SpendGuard-enforced payout directly (background FuelKeeper maintains UTXO depth asynchronously).
 	_, txid, err := mem.Chain().SendToAddress(ctx, sub.SellerAddress, b.RewardSats)
 	if err != nil {
 		return nil, fmt.Errorf("bounty: payout failed: %w", err)
@@ -187,11 +189,18 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 	if err != nil {
 		return nil, fmt.Errorf("bounty: commit acquired fragment: %w", err)
 	}
+	// Sustainable Hub market-maker pricing: default 120% of bounty reward (or NEKTAR_HUB_RESALE_SATS override).
+	resalePrice := maxUint64((b.RewardSats*12)/10, 120)
+	if raw := strings.TrimSpace(os.Getenv("NEKTAR_HUB_RESALE_SATS")); raw != "" {
+		if v, pErr := strconv.ParseUint(raw, 10, 64); pErr == nil && v > 0 {
+			resalePrice = v
+		}
+	}
 	// Ensure curated/<domain> is also armed for resale to future buyers!
 	_ = mem.DB().SaveSellListing(store.SellListing{
 		Shard:       curatedShard,
 		Domains:     []string{b.Domain},
-		PriceSats:   maxUint64(b.RewardSats/2, 25),
+		PriceSats:   resalePrice,
 		Description: "Hub bounty-acquired verified knowledge (" + b.Domain + ")",
 		Active:      true,
 	})
@@ -205,29 +214,48 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 	}, nil
 }
 
-// verifyProofBundleStructure checks offline Merkle leaf inclusion + Rúnar NektarAnchor covenant state.
-func verifyProofBundleStructure(pb contracts.ProofBundle) error {
-	if pb.Leaf == "" || pb.Anchor.R == "" {
-		return errors.New("missing leaf or anchor root")
+// verifyBountyProofBundle performs full offline SPV verification of AnchorBEEF + Rúnar NektarAnchor
+// + ChainTail + header BUMP root + HDP/leaf/provenance commitment before any bounty payout.
+func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contracts.ProofBundle, sub BountySubmission) error {
+	if strings.TrimSpace(sub.HDP) == "" {
+		return errors.New("missing submission hdp")
 	}
-	leafBytes, err := hex.DecodeString(pb.Leaf)
-	if err != nil {
-		return err
+	hdpBytes, err := hex.DecodeString(strings.TrimSpace(sub.HDP))
+	if err != nil || len(hdpBytes) != 32 {
+		return errors.New("invalid submission hdp hex")
 	}
-	rootBytes, err := hex.DecodeString(pb.Anchor.R)
-	if err != nil {
-		return err
-	}
-	siblings := make([][]byte, len(pb.Path))
-	for i, s := range pb.Path {
-		b, err := hex.DecodeString(s)
-		if err != nil {
-			return err
+	// If provenance is provided, verify HDP cryptographically binds sub.Text + provenance!
+	if strings.TrimSpace(sub.ProvenanceHex) != "" {
+		provRaw, pErr := hex.DecodeString(strings.TrimSpace(sub.ProvenanceHex))
+		if pErr != nil {
+			return errors.New("invalid submission provenanceHex")
 		}
-		siblings[i] = b
+		expectedHDP := core.SHA256(core.Concat(core.TagProv, []byte(sub.Text), provRaw))
+		if !core.EqualBytes(expectedHDP, hdpBytes) {
+			return errors.New("submission text/provenance does not match hdp")
+		}
 	}
-	if !core.VerifyProof(leafBytes, &core.MerkleProof{Index: pb.LeafIndex, Siblings: siblings}, rootBytes) {
-		return errors.New("merkle inclusion proof invalid")
+	expectedLeaf := core.ToHex(core.ComputeLeaf(core.Fragment{HDP: hdpBytes}))
+	if !strings.EqualFold(pb.Leaf, expectedLeaf) {
+		return errors.New("proofBundle leaf does not commit to submission hdp")
+	}
+	if len(pb.AnchorBEEF) == 0 {
+		return errors.New("proofBundle missing anchorBEEF")
+	}
+	vr := contracts.VerifyFragmentCtx(ctx, pb, mem.Chain().Tracker())
+	if !vr.OK {
+		// In multi-node "memory" mode tests, each node runs an isolated in-memory testchain with
+		// independent coinbase block headers; still verify every Rúnar/Merkle/ChainTail/BUMP commitment!
+		if mem.Chain().Network() == "memory" && vr.Reason == "BEEFInvalid" && strings.Contains(vr.Detail, "BUMP root not valid in header chain") {
+			vr = contracts.VerifyFragmentStructural(pb)
+		}
+	}
+	if !vr.OK {
+		return fmt.Errorf("%s: %s", vr.Reason, vr.Detail)
+	}
+	// On live networks require mined BUMP confirmation verified against PoW headers (prevent unmined fake-anchor drain).
+	if mem.Chain().Network() != "memory" && !vr.Settled {
+		return errors.New("proofBundle anchor must be mined and SPV-verified against block headers on live networks")
 	}
 	return nil
 }
@@ -247,20 +275,26 @@ func DripFaucet(ctx context.Context, mem *memory.Service, address string, dripSa
 	if perAddressCap == 0 {
 		perAddressCap = 10_000
 	}
-	claim, err := mem.DB().GetFaucetClaim(address)
-	if err != nil {
+	globalCap := uint64(50_000)
+	if raw := strings.TrimSpace(os.Getenv("NEKTAR_FAUCET_DAILY_CAP")); raw != "" {
+		if v, pErr := strconv.ParseUint(raw, 10, 64); pErr == nil && v > 0 {
+			globalCap = v
+		}
+	}
+	// Atomically check AND reserve both per-address and global daily caps BEFORE broadcasting!
+	if err := mem.DB().ReserveFaucetDrip(address, dripSats, perAddressCap, globalCap); err != nil {
+		if errors.Is(err, store.ErrFaucetCapExceeded) {
+			return "", 0, fmt.Errorf("faucet: daily cap reached (per-address %d / global %d sats) — try again tomorrow", perAddressCap, globalCap)
+		}
 		return "", 0, err
 	}
-	now := time.Now().Unix()
-	if claim.TotalSats+dripSats > perAddressCap && now-claim.LastClaimAt < 86400 {
-		return "", 0, fmt.Errorf("faucet: daily cap (%d sats) reached for %s", perAddressCap, address)
-	}
-	_ = mem.Chain().EnsureSplitCoins(ctx, 4, dripSats*2)
 	_, txid, err = mem.Chain().SendToAddress(ctx, address, dripSats)
 	if err != nil {
+		if !errors.Is(err, nwallet.ErrBroadcastUnknown) {
+			_ = mem.DB().RefundFaucetDrip(address, dripSats)
+		}
 		return "", 0, err
 	}
-	_ = mem.DB().RecordFaucetClaim(address, dripSats)
 	return txid, dripSats, nil
 }
 

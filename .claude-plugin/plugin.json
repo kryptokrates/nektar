@@ -1,6 +1,6 @@
 {
   "name": "nektar",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Verifiable, encrypted agent memory anchored on BSV with checkable answer receipts and policy-controlled knowledge trading.",
   "author": {
     "name": "kryptokrates",
@@ -13,7 +13,7 @@
   "mcpServers": {
     "nektar": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "nektar-data:/data", "-e", "NEKTAR_NETWORK=testnet", "ghcr.io/kryptokrates/nektar:latest"]
+      "args": ["run", "-i", "--rm", "-v", "nektar-data:/data", "-e", "NEKTAR_NETWORK=testnet", "ghcr.io/kryptokrates/nektar:latest", "mcp"]
     }
   }
 }

@@ -19,6 +19,7 @@ import (
 // Fail-closed: if KillSwitch is set or price exceeds caps, deals are refused.
 type Policy struct {
 	mu               sync.RWMutex
+	db               *store.DB
 	KillSwitch       bool            `json:"killSwitch"`
 	MaxSatsPerDeal   uint64          `json:"maxSatsPerDeal"`
 	MaxSatsPerDay    uint64          `json:"maxSatsPerDay"`
@@ -29,6 +30,22 @@ type Policy struct {
 	DailySpentSats   uint64          `json:"dailySpentSats"`
 	BuyerApproved    bool            `json:"buyerApproved"`
 	SellerApproved   bool            `json:"sellerApproved"`
+}
+
+func (p *Policy) AttachDB(db *store.DB) {
+	if db == nil {
+		return
+	}
+	p.mu.Lock()
+	p.db = db
+	if v, err := db.DailySpend("market_daily_spend"); err == nil {
+		p.DailySpentSats = v
+	}
+	var killed bool
+	if ok, err := db.GetJSON("market_kill_switch", &killed); err == nil && ok && killed {
+		p.KillSwitch = true
+	}
+	p.mu.Unlock()
 }
 
 func DefaultPolicy() *Policy {
@@ -44,28 +61,73 @@ func DefaultPolicy() *Policy {
 func (p *Policy) SetKillSwitch(on bool) {
 	p.mu.Lock()
 	p.KillSwitch = on
+	db := p.db
 	p.mu.Unlock()
+	if db != nil {
+		_ = db.SetJSON("market_kill_switch", on)
+	}
 }
 
 func (p *Policy) Snapshot() (kill bool, maxDeal, maxDay, zeroConf, spent uint64, buyerOK, sellerOK bool) {
 	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.KillSwitch, p.MaxSatsPerDeal, p.MaxSatsPerDay, p.ZeroConfMaxSats, p.DailySpentSats, p.BuyerApproved, p.SellerApproved
+	db := p.db
+	kill, maxDeal, maxDay, zeroConf, spent, buyerOK, sellerOK = p.KillSwitch, p.MaxSatsPerDeal, p.MaxSatsPerDay, p.ZeroConfMaxSats, p.DailySpentSats, p.BuyerApproved, p.SellerApproved
+	p.mu.RUnlock()
+	if db != nil {
+		if v, err := db.DailySpend("market_daily_spend"); err == nil {
+			spent = v
+		}
+	}
+	return kill, maxDeal, maxDay, zeroConf, spent, buyerOK, sellerOK
 }
 
 func (p *Policy) CanSpend(sellerPub string, sats uint64) error {
+	return p.CanSpendForDomains(sellerPub, nil, sats)
+}
+
+func (p *Policy) CanSpendForDomains(sellerPub string, domains []string, sats uint64) error {
 	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if p.KillSwitch {
+	db := p.db
+	kill := p.KillSwitch
+	blocked := p.BlockedSellers[sellerPub]
+	maxDeal := p.MaxSatsPerDeal
+	maxDay := p.MaxSatsPerDay
+	spent := p.DailySpentSats
+	var allowedCopy map[string]bool
+	if len(p.AllowedDomains) > 0 {
+		allowedCopy = make(map[string]bool, len(p.AllowedDomains))
+		for k, v := range p.AllowedDomains {
+			allowedCopy[k] = v
+		}
+	}
+	p.mu.RUnlock()
+	if db != nil {
+		if v, err := db.DailySpend("market_daily_spend"); err == nil {
+			spent = v
+		}
+	}
+	if kill {
 		return errors.New("market: operator kill switch is engaged")
 	}
-	if p.BlockedSellers[sellerPub] {
+	if blocked {
 		return errors.New("market: seller is blocked by policy")
 	}
-	if p.MaxSatsPerDeal > 0 && sats > p.MaxSatsPerDeal {
+	if len(allowedCopy) > 0 && len(domains) > 0 && !allowedCopy["*"] {
+		domOK := false
+		for _, d := range domains {
+			if allowedCopy[strings.ToLower(strings.TrimSpace(d))] {
+				domOK = true
+				break
+			}
+		}
+		if !domOK {
+			return fmt.Errorf("market: domain(s) %v not in policy allowedDomains", domains)
+		}
+	}
+	if maxDeal > 0 && sats > maxDeal {
 		return errors.New("market: deal price exceeds maxSatsPerDeal")
 	}
-	if p.MaxSatsPerDay > 0 && p.DailySpentSats+sats > p.MaxSatsPerDay {
+	if maxDay > 0 && spent+sats > maxDay {
 		return errors.New("market: deal exceeds daily spending cap")
 	}
 	return nil
@@ -74,7 +136,15 @@ func (p *Policy) CanSpend(sellerPub string, sats uint64) error {
 func (p *Policy) RecordSpend(sats uint64) {
 	p.mu.Lock()
 	p.DailySpentSats += sats
+	db := p.db
 	p.mu.Unlock()
+	if db != nil {
+		if next, err := db.AddDailySpend("market_daily_spend", sats); err == nil {
+			p.mu.Lock()
+			p.DailySpentSats = next
+			p.mu.Unlock()
+		}
+	}
 }
 
 // ApprovePolicyPreset creates, hashes, persists, and activates a safe operator policy preset
@@ -175,11 +245,13 @@ func SyncPolicyFromDB(db *store.DB, pol *Policy) error {
 	pol.BuyerApproved = false
 	pol.SellerApproved = false
 	var maxDeal, maxDay, zeroConf uint64
+	activeCount := 0
 	doms := make(map[string]bool)
 	for _, rec := range list {
 		if !rec.Active {
 			continue
 		}
+		activeCount++
 		for _, r := range rec.Roles {
 			if r == "buyer" {
 				pol.BuyerApproved = true
@@ -203,21 +275,27 @@ func SyncPolicyFromDB(db *store.DB, pol *Policy) error {
 			}
 		}
 	}
-	if maxDeal > 0 {
+	if activeCount > 0 {
 		pol.MaxSatsPerDeal = maxDeal
-	}
-	if maxDay > 0 {
 		pol.MaxSatsPerDay = maxDay
-	}
-	if zeroConf > 0 {
 		pol.ZeroConfMaxSats = zeroConf
+	} else if len(list) > 0 {
+		// All persisted policies were revoked: reset caps to 0 (fail-closed, never keep stale revoked caps).
+		pol.MaxSatsPerDeal = 0
+		pol.MaxSatsPerDay = 0
+		pol.ZeroConfMaxSats = 0
 	}
 	if len(doms) > 0 {
 		pol.AllowedDomains = doms
 	} else {
 		pol.AllowedDomains = nil
 	}
+	var killed bool
+	if ok, kErr := db.GetJSON("market_kill_switch", &killed); kErr == nil && ok {
+		pol.KillSwitch = killed
+	}
 	pol.mu.Unlock()
+	pol.AttachDB(db)
 	return nil
 }
 
@@ -241,7 +319,7 @@ func RankOffersWithRep(want bstack.WantAd, offers []bstack.OfferAd, pol *Policy,
 		if want.MaxSats > 0 && o.PriceSats > want.MaxSats {
 			continue
 		}
-		if pol != nil && pol.CanSpend(o.Pub, o.PriceSats) != nil {
+		if pol != nil && pol.CanSpendForDomains(o.Pub, want.Domains, o.PriceSats) != nil {
 			continue
 		}
 		var score int64

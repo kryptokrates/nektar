@@ -239,10 +239,9 @@ class NektarMemoryProvider(_BaseMemoryProvider):
                         "type": "object",
                         "properties": {
                             "shard": {"type": "string", "description": "Optional shard name (e.g. welcome, hermes)"},
-                            "seq": {"type": "integer", "description": "Optional single record seq"},
-                            "query": {"type": "string", "description": "Optional search query to rank relevant memories"},
+                            "query": {"type": "string", "description": "Optional search query to rank relevant memories (FTS5 BM25)"},
                             "limit": {"type": "integer", "description": "Optional max results"},
-                            "includeHistory": {"type": "boolean", "description": "Include superseded/forgotten records"},
+                            "includeSuperseded": {"type": "boolean", "description": "Include superseded records"},
                         },
                     },
                 },
@@ -256,13 +255,10 @@ class NektarMemoryProvider(_BaseMemoryProvider):
                         "type": "object",
                         "properties": {
                             "shard": {"type": "string"},
-                            "data": {"type": "string"},
+                            "text": {"type": "string"},
+                            "data": {"type": "string", "description": "Alias for text"},
                             "source": {"type": "string"},
-                            "supersedes": {
-                                "type": "object",
-                                "properties": {"shard": {"type": "string"}, "seq": {"type": "integer"}},
-                                "required": ["shard", "seq"],
-                            },
+                            "supersedes": {"type": "integer", "description": "Optional prior fragment seq in this shard superseded by this fact"},
                         },
                         "required": ["data"],
                     },
@@ -413,7 +409,7 @@ class NektarMemoryProvider(_BaseMemoryProvider):
             return {
                 "provider": "nektar",
                 "status": "offline",
-                "hint": "start local nektar (`nektar --port 18420`) or set NEKTAR_URL",
+                "hint": "start local nektar (`nektar serve`) or set NEKTAR_URL",
             }
         try:
             doc = self.client.call_tool("doctor", {}, timeout_s=1.5)

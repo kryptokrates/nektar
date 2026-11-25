@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -92,21 +91,5 @@ func (s *Service) RecallAllShards(ctx context.Context, in RecallInput) ([]string
 
 // ImportShardPackBytes verifies and imports a raw ShardPack JSON payload (used after CHIRP resolution).
 func (s *Service) ImportShardPackBytes(raw []byte, targetShard string) (int, string, error) {
-	var pack ShardPack
-	if err := json.Unmarshal(raw, &pack); err != nil {
-		return 0, "", fmt.Errorf("memory: decode shard pack: %w", err)
-	}
-	if targetShard == "" {
-		targetShard = pack.Shard
-	}
-	imported := 0
-	for _, f := range pack.Fragments {
-		f.Shard = targetShard
-		f.BatchN = -1
-		f.LeafIndex = -1
-		if _, dedup, err := s.db.AppendFragment(f); err == nil && !dedup {
-			imported++
-		}
-	}
-	return imported, targetShard, nil
+	return s.importShardPackVerified(context.Background(), raw, targetShard)
 }

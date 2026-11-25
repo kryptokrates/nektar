@@ -1,56 +1,16 @@
 name: nektar-regtest
-title: nektar on Teranode regtest (persistent)
+title: nektar — verifiable agent memory (local regtest)
 type: server
-image: nektar:local
-description: >-
-  nektar against a local Teranode regtest stack (pnpm stack:up). Records,
-  anchor heads, replay-protection state, funding reserve and keys persist in
-  the nektar-regtest-data volume; restarts continue the same shard chains.
+image: ghcr.io/kryptokrates/nektar:latest
+command:
+  - mcp
 longLived: true
 volumes:
   - nektar-regtest-data:/data
-secrets:
-  - name: nektar-regtest.fund_wif
-    env: NEKTAR_FUND_WIF
-    example: <regtest miner WIF>
-    description: Fee-paying key (regtest miner key, nektar/.env NEKTAR_REGTEST_WIF)
-  - name: nektar-regtest.rpc_pass
-    env: NEKTAR_RPC_PASS
-    example: <rpc_pass>
-    description: Teranode RPC/asset password (infra/teranode-quickstart/.env rpc_pass)
+description: >-
+  Local BSV regtest / memory deployment for development and offline testing.
 env:
   - name: NEKTAR_NETWORK
-    value: regtest
+    value: memory
   - name: NEKTAR_TOOL_PROFILE
     value: operator
-  - name: NEKTAR_RPC_URL
-    value: http://host.docker.internal:9292/
-  - name: NEKTAR_PROPAGATION_URL
-    value: http://host.docker.internal:8833/tx
-  - name: NEKTAR_ASSET_URL
-    value: http://host.docker.internal:8090/api/v1
-  - name: NEKTAR_RPC_USER
-    value: '{{nektar-regtest.rpc_user}}'
-  - name: NEKTAR_AUTOMINE
-    value: '{{nektar-regtest.automine}}'
-  - name: NEKTAR_MODEL_ID
-    value: '{{nektar-regtest.model_id}}'
-  - name: NEKTAR_CLEARANCE_AUTHORITIES
-    value: '{{nektar-regtest.clearance_authorities}}'
-config:
-  - name: nektar-regtest
-    description: Teranode regtest connection
-    type: object
-    properties:
-      rpc_user:
-        type: string
-        description: Teranode RPC user (quickstart default "teranode")
-      automine:
-        type: integer
-        description: 1 = mine a block when anchors wait for confirmation (regtest only), 0 = off
-      model_id:
-        type: string
-        description: Exact model identity bound into answer receipts
-      clearance_authorities:
-        type: string
-        description: Comma-separated pubkeys trusted to issue clearance credentials (level > 0 reads)

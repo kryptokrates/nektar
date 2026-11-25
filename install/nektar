@@ -57,8 +57,8 @@ sync_daemon_json() {
   op_tok="$(docker exec "$CONTAINER" cat /data/operator-token 2>/dev/null | tr -d '\r\n' || true)"
   umask 077
   if [ -n "$tok" ]; then
-    printf '{\n  "url": "%s",\n  "network": "%s",\n  "token": "%s",\n  "operatorToken": "%s",\n  "container": "%s"\n}\n' \
-      "$BASE_URL" "$NETWORK" "$tok" "$op_tok" "$CONTAINER" >"$DAEMON_JSON"
+    printf '{\n  "url": "%s",\n  "network": "%s",\n  "token": "%s",\n  "authToken": "%s",\n  "operatorToken": "%s",\n  "container": "%s"\n}\n' \
+      "$BASE_URL" "$NETWORK" "$tok" "$tok" "$op_tok" "$CONTAINER" >"$DAEMON_JSON"
   else
     printf '{\n  "url": "%s",\n  "network": "%s",\n  "container": "%s"\n}\n' \
       "$BASE_URL" "$NETWORK" "$CONTAINER" >"$DAEMON_JSON"
@@ -94,9 +94,10 @@ cmd_up() {
       -p "127.0.0.1:${PORT}:18420" \
       -v "${VOLUME}:/data" \
       -e "NEKTAR_NETWORK=${NETWORK}" \
+      -e "NEKTAR_HTTP_PORT=18420" \
       -e "NEKTAR_AUTOMATION=${NEKTAR_AUTOMATION:-0}" \
       -e "NEKTAR_MODEL_ID=${NEKTAR_MODEL_ID:-unspecified}" \
-      "$IMAGE" serve >/dev/null
+      "$IMAGE" serve -listen :18420 >/dev/null
   fi
   printf 'nektar: waiting for ready '
   i=0
@@ -104,7 +105,7 @@ cmd_up() {
     if curl -fsS --max-time 2 "${BASE_URL}/v1/health" >/dev/null 2>&1; then
       printf ' ok!\n'
       sync_daemon_json
-      docker logs --tail 25 "$CONTAINER" 2>&1 | sed -n '/╭─ nektar ready/,/╰─/p' || true
+      docker logs --tail 25 "$CONTAINER" 2>&1 | sed -n '/╭─ nektar/,/╰─/p' || true
       return 0
     fi
     printf '.'
@@ -364,7 +365,7 @@ cmd_hub() {
     down|status|logs|template|help|--help|-h)
       need_docker
       if container_running; then
-        docker exec "$CONTAINER" node dist/src/bin.js hub "$sub" "$@"
+        docker exec "$CONTAINER" nektar hub "$sub" "$@"
       else
         docker run --rm "$IMAGE" hub "$sub" "$@"
       fi
@@ -394,17 +395,17 @@ case "$CMD" in
     ;;
   dock) cmd_dock "$@" ;;
   hub) cmd_hub "$@" ;;
-  policy|doctor|check-mainnet)
+  policy|doctor|check-mainnet|wallet|remember|recall|anchor|verify|version)
     need_docker
     if container_running; then
-      docker exec -i "$CONTAINER" node dist/src/bin.js "$CMD" "$@"
+      docker exec -i "$CONTAINER" nektar "$CMD" "$@"
     else
       docker run --rm -i -v "${VOLUME}:/data" -e "NEKTAR_NETWORK=${NETWORK}" "$IMAGE" "$CMD" "$@"
     fi
     ;;
   exec)
     need_docker
-    docker exec -i "$CONTAINER" node dist/src/bin.js "$@"
+    docker exec -i "$CONTAINER" nektar "$@"
     ;;
   -h|--help|help) usage ;;
   *) printf 'nektar: unknown command "%s"\n\n' "$CMD" >&2; usage >&2; exit 2 ;;

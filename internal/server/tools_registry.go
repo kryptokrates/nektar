@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -93,23 +94,72 @@ func (tb *Toolbox) ListTools() []ToolSpec {
 	return all
 }
 
+// IsAllowedTool reports whether tool name is permitted under the active tool profile.
+func (tb *Toolbox) IsAllowedTool(name string) bool {
+	for _, t := range tb.ListTools() {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Call executes any tool by name from raw JSON args (used identically by HTTP /v1/tools/{name}, A2A, and CLI).
 func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessage) (any, error) {
+	if !tb.IsAllowedTool(name) {
+		return nil, fmt.Errorf("tool %q is disabled under profile %q (set NEKTAR_TOOL_PROFILE=operator to enable)", name, tb.profile)
+	}
 	if len(rawArgs) == 0 {
 		rawArgs = json.RawMessage(`{}`)
 	}
 	switch name {
 	case "remember":
 		var raw struct {
-			memory.RememberInput
-			Data string `json:"data,omitempty"`
+			Shard      string            `json:"shard"`
+			Text       string            `json:"text"`
+			Data       string            `json:"data,omitempty"`
+			Source     string            `json:"source,omitempty"`
+			Level      int               `json:"level,omitempty"`
+			Class      string            `json:"class,omitempty"`
+			BorgGroup  string            `json:"borgGroup,omitempty"`
+			CallerPub  string            `json:"callerPub,omitempty"`
+			Supersedes json.RawMessage   `json:"supersedes,omitempty"`
+			AutoAnchor bool              `json:"autoAnchor,omitempty"`
+			Extra      map[string]string `json:"extra,omitempty"`
 		}
 		if err := json.Unmarshal(rawArgs, &raw); err != nil {
 			return nil, err
 		}
-		in := raw.RememberInput
+		in := memory.RememberInput{
+			Shard:      raw.Shard,
+			Text:       raw.Text,
+			Source:     raw.Source,
+			Level:      raw.Level,
+			Class:      raw.Class,
+			BorgGroup:  raw.BorgGroup,
+			CallerPub:  raw.CallerPub,
+			AutoAnchor: raw.AutoAnchor,
+			Extra:      raw.Extra,
+		}
 		if in.Text == "" && raw.Data != "" {
 			in.Text = raw.Data // Hermes NektarMemoryProvider uses `data`
+		}
+		if len(raw.Supersedes) > 0 && string(raw.Supersedes) != "null" {
+			var seq int64
+			if err := json.Unmarshal(raw.Supersedes, &seq); err == nil {
+				in.Supersedes = seq
+			} else {
+				var obj struct {
+					Shard string `json:"shard"`
+					Seq   int64  `json:"seq"`
+				}
+				if err := json.Unmarshal(raw.Supersedes, &obj); err == nil {
+					in.Supersedes = obj.Seq
+					if in.Shard == "" && obj.Shard != "" {
+						in.Shard = obj.Shard
+					}
+				}
+			}
 		}
 		return tb.mem.Remember(ctx, in)
 
@@ -384,27 +434,57 @@ func (tb *Toolbox) ExecDeals(_ context.Context) map[string]any {
 }
 
 type FundToolInput struct {
-	Faucet bool   `json:"faucet,omitempty"`
-	Sync   bool   `json:"sync,omitempty"`
-	HubURL string `json:"hubUrl,omitempty"`
+	Faucet     bool   `json:"faucet,omitempty"`
+	Sync       bool   `json:"sync,omitempty"`
+	HubURL     string `json:"hubUrl,omitempty"`
+	ImportTxID string `json:"importTxid,omitempty"`
+	ImportBEEF string `json:"importBeef,omitempty"`
 }
 
 func (tb *Toolbox) ExecFund(ctx context.Context, in FundToolInput) (map[string]any, error) {
-	addr, err := tb.mem.Chain().FundAddress()
+	ch := tb.mem.Chain()
+	addr, err := ch.FundAddress()
 	if err != nil {
 		return nil, err
 	}
+	var importRes any
+	if strings.TrimSpace(in.ImportBEEF) != "" {
+		raw, dErr := hex.DecodeString(strings.TrimSpace(in.ImportBEEF))
+		if dErr != nil {
+			return nil, fmt.Errorf("fund: decode importBeef hex: %w", dErr)
+		}
+		importRes, err = ch.ImportBEEF(ctx, raw)
+		if err != nil {
+			return nil, err
+		}
+	} else if strings.TrimSpace(in.ImportTxID) != "" {
+		importRes, err = ch.ImportTxID(ctx, in.ImportTxID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	var syncedAdded, syncedProved, upgradedAnchors int
 	if in.Sync {
-		syncedAdded, syncedProved, _ = tb.mem.Chain().SyncPool(ctx)
+		syncedAdded, syncedProved, _ = ch.SyncPool(ctx)
 		upgradedAnchors, _ = tb.mem.RefreshAnchorProofs(ctx)
 	}
-	spentToday, maxDay, maxFee, txCount := tb.mem.Chain().SpendGuard().Stats()
+	bal, _ := ch.Balance(ctx)
+	spentToday, maxDay, maxFee, txCount := ch.SpendGuard().Stats()
 	out := map[string]any{
-		"network":         tb.mem.Chain().Network(),
+		"network":         ch.Network(),
+		"walletMode":      ch.WalletMode(),
+		"identityPub":     ch.IdentityPubHex(),
 		"address":         addr,
-		"balanceSats":     tb.mem.Chain().BalanceSats(),
-		"utxos":           tb.mem.Chain().UTXOCount(),
+		"balanceSats":     bal.SpendableSats,
+		"confirmedSats":   bal.ConfirmedSats,
+		"unprovenSats":    bal.UnprovenSats,
+		"reservedSats":    bal.ReservedSats,
+		"utxos":           bal.SpendableCount,
+		"fuelCount":       bal.FuelCount,
+		"reserveCount":    bal.ReserveCount,
+		"defaultCount":    bal.DefaultCount,
+		"feeRateSatPerKB": ch.FeeRateSatPerKB(ctx),
 		"syncedAdded":     syncedAdded,
 		"syncedProved":    syncedProved,
 		"upgradedAnchors": upgradedAnchors,
@@ -415,6 +495,9 @@ func (tb *Toolbox) ExecFund(ctx context.Context, in FundToolInput) (map[string]a
 			"txCount":    txCount,
 		},
 	}
+	if importRes != nil {
+		out["imported"] = importRes
+	}
 	if in.Faucet {
 		txid, sats, fErr := tb.requestFaucet(ctx, addr, in.HubURL)
 		if fErr != nil {
@@ -422,7 +505,7 @@ func (tb *Toolbox) ExecFund(ctx context.Context, in FundToolInput) (map[string]a
 		} else {
 			out["faucetTxid"] = txid
 			out["faucetSats"] = sats
-			out["balanceSats"] = tb.mem.Chain().BalanceSats()
+			out["balanceSats"] = ch.BalanceSats()
 		}
 	}
 	return out, nil
@@ -536,7 +619,7 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 		nextSteps = append(nextSteps, "Start a local Hub (`nektar serve --hub`) or join a Hub in Dashboard -> Network")
 	}
 
-	// 5. SSE vs Poll health
+	// 5. SSE vs Poll health & host withholding telemetry
 	if tb.broker != nil {
 		liq := tb.broker.LiquidityMetrics()
 		checks = append(checks, DoctorCheck{
@@ -544,6 +627,17 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 			Status: "green",
 			Detail: fmt.Sprintf("sseWakes=%v pollWakes=%v bboxWakes=%v", liq["sseWakes"], liq["pollWakes"], liq["bboxWakes"]),
 		})
+	}
+	var withholdings []discovery.WithholdingWarning
+	if tb.disc != nil {
+		withholdings = tb.disc.Withholdings()
+		if len(withholdings) > 0 {
+			checks = append(checks, DoctorCheck{
+				Name:   "host_integrity",
+				Status: "amber",
+				Detail: fmt.Sprintf("%d host withholding event(s) detected across directory quorum", len(withholdings)),
+			})
+		}
 	}
 
 	overall := "green"
@@ -564,6 +658,7 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 		"records":         total,
 		"anchoredRecords": anchored,
 		"checks":          checks,
+		"withholdings":    withholdings,
 		"nextSteps":       nextSteps,
 		"hints":           nextSteps,
 		"truthNote":       reasoning.TruthNote,
@@ -628,14 +723,19 @@ func (tb *Toolbox) fetchHubBounties(ctx context.Context, hosts []string) []hub.B
 }
 
 type BorgGroupInput struct {
-	Op      string `json:"op"`
-	GroupID string `json:"groupId"`
-	Name    string `json:"name,omitempty"`
-	PubHex  string `json:"pubHex,omitempty"`
-	Role    string `json:"role,omitempty"`
+	Op        string            `json:"op"`
+	GroupID   string            `json:"groupId"`
+	Name      string            `json:"name,omitempty"`
+	PubHex    string            `json:"pubHex,omitempty"`
+	Role      string            `json:"role,omitempty"`
+	Principal *policy.Principal `json:"principal,omitempty"`
 }
 
 func (tb *Toolbox) ExecBorgGroup(in BorgGroupInput) (any, error) {
+	princ := policy.Principal{Type: "Agent", ID: "owner", Level: 100}
+	if in.Principal != nil && in.Principal.ID != "" {
+		princ = *in.Principal
+	}
 	switch in.Op {
 	case "create":
 		owner := in.PubHex
@@ -644,12 +744,18 @@ func (tb *Toolbox) ExecBorgGroup(in BorgGroupInput) (any, error) {
 		}
 		return tb.mem.Groups().CreateGroup(in.GroupID, in.Name, owner)
 	case "add":
+		if dec, err := tb.mem.AuthorizeAction(princ, "rotate", policy.Resource{Type: "Fragment", ID: "group:" + in.GroupID, Shard: in.GroupID, Level: 0}); err != nil || !dec.Allow {
+			return nil, fmt.Errorf("cedar policy denied rotate on group %q", in.GroupID)
+		}
 		if err := tb.mem.Groups().AddMember(in.GroupID, in.PubHex, in.Role); err != nil {
 			return nil, err
 		}
 		g, _ := tb.mem.Groups().GetGroup(in.GroupID)
 		return g, nil
 	case "revoke":
+		if dec, err := tb.mem.AuthorizeAction(princ, "revoke", policy.Resource{Type: "Fragment", ID: "group:" + in.GroupID, Shard: in.GroupID, Level: 0}); err != nil || !dec.Allow {
+			return nil, fmt.Errorf("cedar policy denied revoke on group %q", in.GroupID)
+		}
 		ep, err := tb.mem.Groups().RevokeMember(in.GroupID, in.PubHex)
 		if err != nil {
 			return nil, err

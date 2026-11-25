@@ -73,6 +73,7 @@ type Port struct {
 	headerClient *headers.Client
 	testChain    *testchain.Chain
 	nodeChain    *nodeapi.Sources
+	woc          *nodeapi.WoC
 	settler      publish.Settler
 	httpClient   *http.Client
 	txs          map[string]*transaction.Transaction
@@ -192,14 +193,32 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		}
 		p.headerClient = hc
 		p.tracker = hc
-		if cfg.ChainSpec != "" {
-			src, err := nodeapi.ParseChain(cfg.ChainSpec, nodeapi.ChainOptions{
+		chainSpec := cfg.ChainSpec
+		if chainSpec == "" {
+			switch net {
+			case "main":
+				chainSpec = "woc:main"
+			case "testnet":
+				chainSpec = "woc:test"
+			}
+		}
+		if net == "testnet" {
+			if w, wErr := nodeapi.NewWoC("test", cfg.WoCKey); wErr == nil {
+				p.woc = w
+			}
+		} else if net == "main" {
+			if w, wErr := nodeapi.NewWoC("main", cfg.WoCKey); wErr == nil {
+				p.woc = w
+			}
+		}
+		if chainSpec != "" {
+			src, err := nodeapi.ParseChain(chainSpec, nodeapi.ChainOptions{
 				WoCKey:  cfg.WoCKey,
 				Client:  p.httpClient,
 				Headers: p.tracker,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("chain: chain spec %q: %w", cfg.ChainSpec, err)
+				return nil, fmt.Errorf("chain: chain spec %q: %w", chainSpec, err)
 			}
 			p.nodeChain = src
 		}
@@ -412,6 +431,7 @@ func (p *Port) Broadcast(ctx context.Context, tx *transaction.Transaction, feeSa
 	if err := p.settler.Submit(ctx, tx); err != nil {
 		return "", fmt.Errorf("chain: %s broadcast: %w", p.settler.Name(), err)
 	}
+	p.saveTxBEEF(tx)
 	p.mu.Lock()
 	p.txs[txid] = tx
 	p.mu.Unlock()
@@ -494,26 +514,37 @@ func (p *Port) BuildFundedTx(ctx context.Context, outputs []*transaction.Transac
 		return nil, 0, 0, err
 	}
 	var outTotal uint64
+	estBytes := uint64(192) // 1 P2PKH input + version/locktime + change output
 	for _, o := range outputs {
 		outTotal += o.Satoshis
+		scriptLen := uint64(25)
+		if o.LockingScript != nil {
+			scriptLen = uint64(len(*o.LockingScript))
+		}
+		estBytes += 12 + scriptLen
 	}
-	const feeEstimate = uint64(300)
-	coin, err := p.embedded.Pool.TakeAtLeast(tip, outTotal+feeEstimate, nil)
+	// Dynamic fee at 150 sat/kB (min 250 sats) safely clears GorillaPool Arcade's 100 sat/kB policy
+	// for both compact P2PKH spends and ~1.7 KB Rúnar NektarAnchor covenants.
+	feeEstimate := (estBytes*150 + 999) / 1000
+	if feeEstimate < 250 {
+		feeEstimate = 250
+	}
+	need := outTotal + feeEstimate
+	coin, err := p.embedded.Pool.TakeAtLeast(tip, need, nil)
+	if err != nil {
+		// Fall back to 1-hop unproven outputs (e.g. fresh UTXO fan-out / change on testnet before next block)
+		// so sequential trades & anchors never block 10 minutes waiting for a block!
+		if allow := p.embedded.Pool.UnprovenTxids(); len(allow) > 0 {
+			coin, err = p.embedded.Pool.TakeAtLeast(tip, need, allow)
+		}
+	}
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("chain: take funding coin: %w", err)
 	}
-	srcTx, err := transaction.NewTransactionFromHex(coin.Raw)
+	srcTx, err := p.loadTxWithAncestors(ctx, coin)
 	if err != nil {
 		_ = p.embedded.Pool.Return(coin)
 		return nil, 0, 0, fmt.Errorf("chain: decode funding parent tx: %w", err)
-	}
-	if coin.Bump != "" {
-		bumpBytes, bErr := hex.DecodeString(coin.Bump)
-		if bErr == nil {
-			if mp, mErr := transaction.NewMerklePathFromBinary(bumpBytes); mErr == nil {
-				srcTx.MerklePath = mp
-			}
-		}
 	}
 
 	tx := transaction.NewTransaction()

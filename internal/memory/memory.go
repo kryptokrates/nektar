@@ -340,7 +340,7 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 	if err := s.port.AdoptChange(tx); err != nil {
 		return nil, err
 	}
-	beef, err := tx.AtomicBEEF(false)
+	beef, err := chain.SafeAtomicBEEF(tx)
 	if err != nil {
 		return nil, fmt.Errorf("memory: encode AtomicBEEF: %w", err)
 	}
@@ -590,6 +590,35 @@ func (s *Service) Prove(_ context.Context, shard string, seq int64) (*contracts.
 	}
 	vr := contracts.VerifyFragment(*bundle, s.port.Tracker())
 	return bundle, &vr, nil
+}
+
+// RefreshAnchorProofs polls the chain for mined MerklePaths on any unsettled broadcast anchors,
+// attaches the mined BUMP into the stored AnchorBEEF, verifies against headers, and upgrades settled=true.
+func (s *Service) RefreshAnchorProofs(ctx context.Context) (int, error) {
+	unsettled, err := s.db.ListUnsettledAnchors()
+	if err != nil || len(unsettled) == 0 {
+		return 0, err
+	}
+	upgraded := 0
+	for _, a := range unsettled {
+		mp, height, ok := s.port.Proof(ctx, a.TxID)
+		if !ok || mp == nil {
+			continue
+		}
+		tx, err := transaction.NewTransactionFromBEEF(a.Beef)
+		if err != nil {
+			continue
+		}
+		tx.MerklePath = mp
+		newBeef, err := tx.AtomicBEEF(false)
+		if err != nil {
+			continue
+		}
+		if err := s.db.UpdateAnchorProof(a.Shard, a.N, newBeef, int64(height)); err == nil {
+			upgraded++
+		}
+	}
+	return upgraded, nil
 }
 
 // GroundedAnswerInput requests a grounded, receipt-backed answer from claims citing memory fragments.

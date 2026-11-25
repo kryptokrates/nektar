@@ -373,6 +373,7 @@ func (tb *Toolbox) ExecDeals(_ context.Context) map[string]any {
 
 type FundToolInput struct {
 	Faucet bool   `json:"faucet,omitempty"`
+	Sync   bool   `json:"sync,omitempty"`
 	HubURL string `json:"hubUrl,omitempty"`
 }
 
@@ -381,12 +382,20 @@ func (tb *Toolbox) ExecFund(ctx context.Context, in FundToolInput) (map[string]a
 	if err != nil {
 		return nil, err
 	}
+	var syncedAdded, syncedProved, upgradedAnchors int
+	if in.Sync {
+		syncedAdded, syncedProved, _ = tb.mem.Chain().SyncPool(ctx)
+		upgradedAnchors, _ = tb.mem.RefreshAnchorProofs(ctx)
+	}
 	spentToday, maxDay, maxFee, txCount := tb.mem.Chain().SpendGuard().Stats()
 	out := map[string]any{
-		"network":     tb.mem.Chain().Network(),
-		"address":     addr,
-		"balanceSats": tb.mem.Chain().BalanceSats(),
-		"utxos":       tb.mem.Chain().UTXOCount(),
+		"network":         tb.mem.Chain().Network(),
+		"address":         addr,
+		"balanceSats":     tb.mem.Chain().BalanceSats(),
+		"utxos":           tb.mem.Chain().UTXOCount(),
+		"syncedAdded":     syncedAdded,
+		"syncedProved":    syncedProved,
+		"upgradedAnchors": upgradedAnchors,
 		"spendGuard": map[string]any{
 			"spentToday": spentToday,
 			"maxPerDay":  maxDay,

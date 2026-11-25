@@ -556,6 +556,29 @@ func (a *App) buildMux() http.Handler {
 			},
 		})
 	})
+	mux.Handle("POST /v1/wallet/sync", a.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		added, proved, sErr := a.mem.Chain().SyncPool(r.Context())
+		upgraded, _ := a.mem.RefreshAnchorProofs(r.Context())
+		if sErr != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"ok":              false,
+				"error":           sErr.Error(),
+				"balanceSats":     a.mem.Chain().BalanceSats(),
+				"utxos":           a.mem.Chain().UTXOCount(),
+				"upgradedAnchors": upgraded,
+			})
+			return
+		}
+		a.BroadcastDashboardEvent("wallet_sync")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":              true,
+			"added":           added,
+			"proved":          proved,
+			"upgradedAnchors": upgraded,
+			"balanceSats":     a.mem.Chain().BalanceSats(),
+			"utxos":           a.mem.Chain().UTXOCount(),
+		})
+	})))
 
 	// 6. Live A2A Market Purchase, Host Discovery, Onboarding, Faucet & Approvals!
 	mux.HandleFunc("POST /v1/market/purchase", a.handleMarketPurchase)

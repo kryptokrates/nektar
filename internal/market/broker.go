@@ -22,6 +22,7 @@ import (
 	"github.com/lightwebinc/bcommon/payee"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
@@ -625,6 +626,11 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		return nil, fmt.Errorf("market: payment claim rejected (%s)", claim.String())
 	}
 
+	// Credit Seller's own bwallet.Pool immediately & broadcast on live networks if not yet seen!
+	if b.mem.Chain().Network() != "memory" {
+		_, _ = b.mem.Chain().AdoptReceived(ctx, tx)
+	}
+
 	// Mark settled & persist durable Seller DealRecord!
 	b.mu.Lock()
 	sale.Settled = true
@@ -888,7 +894,7 @@ collectLoop:
 		_ = b.mem.DB().SaveDeal(rec)
 		return &rec, err
 	}
-	payBEEF, err := payTx.AtomicBEEF(false)
+	payBEEF, err := chain.SafeAtomicBEEF(payTx)
 	if err != nil {
 		rec.Status = "failed"
 		rec.Error = "encode payment AtomicBEEF: " + err.Error()

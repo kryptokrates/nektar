@@ -386,6 +386,39 @@ func (d *DB) ListAnchors(shard string) ([]BatchAnchor, error) {
 	return out, rows.Err()
 }
 
+// ListUnsettledAnchors returns all anchors with settled=0 across every shard (for live proof refresh).
+func (d *DB) ListUnsettledAnchors() ([]BatchAnchor, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rows, err := d.sql.Query(`
+		SELECT shard, shard_id, n, size, root_hex, chained_hex, txid, beef, settled, block_height, created_at
+		FROM anchors WHERE settled = 0 ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BatchAnchor
+	for rows.Next() {
+		var a BatchAnchor
+		var settled int
+		if err := rows.Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.TxID, &a.Beef, &settled, &a.BlockHeight, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		a.Settled = settled != 0
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// UpdateAnchorProof upgrades a broadcast anchor to settled=1 once its mined BUMP proof lands.
+func (d *DB) UpdateAnchorProof(shard string, n int64, beef []byte, blockHeight int64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.sql.Exec(`UPDATE anchors SET beef = ?, settled = 1, block_height = ? WHERE shard = ? AND n = ?`,
+		beef, blockHeight, shard, n)
+	return err
+}
+
 // SaveReceipt persists a committed receipt and its citation edges.
 func (d *DB) SaveReceipt(rec ReceiptRecord, cites []CitationEdge) error {
 	d.mu.Lock()

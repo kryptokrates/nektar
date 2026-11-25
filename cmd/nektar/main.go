@@ -271,9 +271,27 @@ func cmdServe(args []string) error {
 	}
 	defer rt.closeFn()
 
-	// Cold-start zero-empty-room welcome shard + UTXO fan-out!
+	// Cold-start zero-empty-room welcome shard + live UTXO sync & fan-out!
 	if _, err := rt.mem.EnsureWelcome(ctx); err != nil {
 		log.Printf("welcome seed warning: %v", err)
+	}
+	if rt.mem.Chain().Network() != "memory" {
+		if added, proved, sErr := rt.mem.Chain().SyncPool(ctx); sErr == nil && (added > 0 || proved > 0) {
+			log.Printf("synced %s wallet pool: +%d UTXO(s), %d proved (balance=%d sats)", rt.mem.Chain().Network(), added, proved, rt.mem.Chain().BalanceSats())
+		}
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					_, _, _ = rt.mem.Chain().SyncPool(ctx)
+					_, _ = rt.mem.RefreshAnchorProofs(ctx)
+				}
+			}
+		}()
 	}
 	if rt.mem.Chain().BalanceSats() > 10_000 {
 		_ = rt.mem.Chain().EnsureSplitCoins(ctx, 4, 2000)
@@ -306,7 +324,7 @@ func cmdServe(args []string) error {
 		liqState, err = hub.ArmHubLiquidity(ctx, hubNode, rt.mem, hub.LiquidityConfig{
 			SeedStarterShards: true,
 			ArmBounties:       true,
-			StarterPriceSats:  50,
+			StarterPriceSats:  90,
 			BountyRewardSats:  100,
 		})
 		if err != nil {

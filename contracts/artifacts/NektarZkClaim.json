@@ -574,7 +574,7 @@
       "outArity": 1
     }
   ],
-  "buildTimestamp": "2026-11-25T15:20:25Z",
+  "buildTimestamp": "2026-11-25T17:51:50Z",
   "anf": {
     "contractName": "NektarZkClaim",
     "properties": [

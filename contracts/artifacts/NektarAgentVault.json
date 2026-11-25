@@ -1,0 +1,4090 @@
+{
+  "version": "runar-v1.0.0-rc.1",
+  "compilerVersion": "1.0.0-rc.1-go",
+  "contractName": "NektarAgentVault",
+  "parentClass": "StatefulSmartContract",
+  "abi": {
+    "constructor": {
+      "params": [
+        {
+          "name": "operatorPkh",
+          "type": "ByteString"
+        },
+        {
+          "name": "agentPkh",
+          "type": "ByteString"
+        },
+        {
+          "name": "perTxCap",
+          "type": "bigint"
+        },
+        {
+          "name": "windowCap",
+          "type": "bigint"
+        },
+        {
+          "name": "windowBlocks",
+          "type": "bigint"
+        },
+        {
+          "name": "maxFee",
+          "type": "bigint"
+        }
+      ]
+    },
+    "methods": [
+      {
+        "name": "p2pkh",
+        "params": [
+          {
+            "name": "pkh",
+            "type": "ByteString"
+          }
+        ],
+        "isPublic": false
+      },
+      {
+        "name": "agentSpend",
+        "params": [
+          {
+            "name": "sig",
+            "type": "Sig"
+          },
+          {
+            "name": "pubKey",
+            "type": "PubKey"
+          },
+          {
+            "name": "destScript",
+            "type": "ByteString"
+          },
+          {
+            "name": "payAmount",
+            "type": "bigint"
+          },
+          {
+            "name": "newSpent",
+            "type": "bigint"
+          },
+          {
+            "name": "newStart",
+            "type": "bigint"
+          },
+          {
+            "name": "contSats",
+            "type": "bigint"
+          },
+          {
+            "name": "_changePKH",
+            "type": "Ripemd160"
+          },
+          {
+            "name": "_changeAmount",
+            "type": "bigint"
+          },
+          {
+            "name": "txPreimage",
+            "type": "SigHashPreimage"
+          }
+        ],
+        "isPublic": true,
+        "usesCodePart": true
+      },
+      {
+        "name": "operatorControl",
+        "params": [
+          {
+            "name": "sig",
+            "type": "Sig"
+          },
+          {
+            "name": "pubKey",
+            "type": "PubKey"
+          },
+          {
+            "name": "newAgentPkh",
+            "type": "ByteString"
+          },
+          {
+            "name": "newPerTxCap",
+            "type": "bigint"
+          },
+          {
+            "name": "newWindowCap",
+            "type": "bigint"
+          },
+          {
+            "name": "newWindowBlocks",
+            "type": "bigint"
+          },
+          {
+            "name": "newMaxFee",
+            "type": "bigint"
+          },
+          {
+            "name": "newPaused",
+            "type": "bigint"
+          },
+          {
+            "name": "contSats",
+            "type": "bigint"
+          },
+          {
+            "name": "_changePKH",
+            "type": "Ripemd160"
+          },
+          {
+            "name": "_changeAmount",
+            "type": "bigint"
+          },
+          {
+            "name": "txPreimage",
+            "type": "SigHashPreimage"
+          }
+        ],
+        "isPublic": true,
+        "usesCodePart": true
+      },
+      {
+        "name": "operatorSweep",
+        "params": [
+          {
+            "name": "sig",
+            "type": "Sig"
+          },
+          {
+            "name": "pubKey",
+            "type": "PubKey"
+          },
+          {
+            "name": "destPkh",
+            "type": "ByteString"
+          },
+          {
+            "name": "sweepSats",
+            "type": "bigint"
+          },
+          {
+            "name": "_changePKH",
+            "type": "Ripemd160"
+          },
+          {
+            "name": "_changeAmount",
+            "type": "bigint"
+          },
+          {
+            "name": "txPreimage",
+            "type": "SigHashPreimage"
+          }
+        ],
+        "isPublic": true,
+        "usesCodePart": true
+      }
+    ]
+  },
+  "script": "61ab76009c637552798201149d757676aa517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e01007e818b21414136d08c5ed2bf3ba048afe6dcaebafeffffffffffffffffffffffffffffff007d97785296789f527952798d9495937782927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e827c7e23022079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798027c7e827c7e01307c7e01417e21038ff83d8cf12121491609c4939dc11c4aa35503508fe432dc5a5c1905608b9218ad7601687f77820134947f75517f7c01007e817602fd009f6375677602fe009c6375547f77677602ff009c6375587f776775527f776868685c798276043f0d0000819c6952947b7c7f517f75016a880261ab7c7e8869768254947f7701007e8101419d7601687f7782012c947f758258947f75517f7c01007e817602fd009f6375677602fe009c6375547f77677602ff009c6375587f776775527f776868685b79827700947f77517f7c01007e8176014c9f637f6776014c9c6375516776014d9c63755267014e9d5468687f7c01007e817f68517f7c01007e8176014c9f637f6776014c9c6375516776014d9c63755267014e9d5468687f7c01007e817f68587f7c817c587f7c817c587f7c817c587f7c817c587f7c817c587f7c817c587f00888176009d5879827701149c635779827701149c67006869011179a958798801127a01127aad59798258947f77547f7501007e815a7982012c947f77547f7501007e8105ffffffff009f69040065cd1d787c9f695279787ca269607951a2635d7951a267006869011179827751a2695279567993787ca2766360790112799c670068635f797b9c67007b75686351776791635e795379011179939c670068635d7952799c67006868695e795679a1695f795779a1695979820134947f77587f75815d7901117993787ca2695d79946079945479a1695e7a537a755d7a537a755c7a597959795979597959795979587958795b79011879016a7e597a8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e6776030000019f635480527f75014d7c7e7c7e675580547f75014e7c7e7c7e6868687e587a8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e6776030000019f635480527f75014d7c7e7c7e675580547f75014e7c7e7c7e6868687e577a58807e567a58807e557a58807e547a58807e537a58807e7b58807e7c58807e827602fd009f635280517f756776030000019f635380527f7501fd7c7e67760500000000019f635580547f7501fe7c7e675980587f7501ff7c7e6868687c7e7c58807c7e5d7a5e7a827602fd009f635280517f756776030000019f635380527f7501fd7c7e67760500000000019f635580547f7501fe7c7e675980587f7501ff7c7e6868687c7e7c58807c7e5d7a5d7a00787c9c9163041976a9147b7e0288ac7e7c58807c7e67007b7577687b7b7e7c7eaa5a7a820128947f7701207f7587777777777777777777776776519c637552798201149d757676aa517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e01007e818b21414136d08c5ed2bf3ba048afe6dcaebafeffffffffffffffffffffffffffffff007d97785296789f527952798d9495937782927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e827c7e23022079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798027c7e827c7e01307c7e01417e21038ff83d8cf12121491609c4939dc11c4aa35503508fe432dc5a5c1905608b9218ad7601687f77820134947f75517f7c01007e817602fd009f6375677602fe009c6375547f77677602ff009c6375587f776775527f776868685e798276043f0d0000819c6952947b7c7f517f75016a880261ab7c7e8869768254947f7701007e8101419d7601687f7782012c947f758258947f75517f7c01007e817602fd009f6375677602fe009c6375547f77677602ff009c6375587f776775527f776868685d79827700947f77517f7c01007e8176014c9f637f6776014c9c6375516776014d9c63755267014e9d5468687f7c01007e817f68517f7c01007e8176014c9f637f6776014c9c6375516776014d9c63755267014e9d5468687f7c01007e817f68587f7c817c587f7c817c587f7c817c587f7c817c587f7c817c587f7c817c587f0088815879827701149d011379a959798801147a01147aad011279827701149d01117951a2636079011279a2670068635f7951a2670068635e7951a2670068695d79916351675d79519c68695c7951a26901127a587a7501117a587a75607a587a755f7a587a755e7a587a755d7a567a755c7a5979577957795779577957795e795e795979011679016a7e597a8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e6776030000019f635480527f75014d7c7e7c7e675580547f75014e7c7e7c7e6868687e587a8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e6776030000019f635480527f75014d7c7e7c7e675580547f75014e7c7e7c7e6868687e577a58807e567a58807e557a58807e547a58807e537a58807e7b58807e7c58807e827602fd009f635280517f756776030000019f635380527f7501fd7c7e67760500000000019f635580547f7501fe7c7e675980587f7501ff7c7e6868687c7e7c58807c7e5c7a5c7a00787c9c9163041976a9147b7e0288ac7e7c58807c7e67007b7577687eaa5a7a820128947f7701207f75877777777777777777777767529d52798201149d757676aa517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f517f7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e01007e818b21414136d08c5ed2bf3ba048afe6dcaebafeffffffffffffffffffffffffffffff007d97785296789f527952798d9495937782927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f82927f7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e7c7e827c7e23022079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798027c7e827c7e01307c7e01417e21038ff83d8cf12121491609c4939dc11c4aa35503508fe432dc5a5c1905608b9218ad7601687f77820134947f75517f7c01007e817602fd009f6375677602fe009c6375547f77677602ff009c6375587f776775527f7768686859798276043f0d0000819c6952947b7c7f517f75016a880261ab7c7e8869768254947f7701007e8101419d7601687f7782012c947f758258947f75517f7c01007e817602fd009f6375677602fe009c6375547f77677602ff009c6375587f776775527f776868685879827700947f77517f7c01007e8176014c9f637f6776014c9c6375516776014d9c63755267014e9d5468687f7c01007e817f68517f7c01007e8176014c9f637f6776014c9c6375516776014d9c63755267014e9d5468687f7c01007e817f68587f7c817c587f7c817c587f7c817c587f7c817c587f7c817c587f7c817c587f0088815879827701149d5e79a95979885f7a5f7aad5d79827701149d5c7951a2695c7a5d7a0376a9147c0288ac7e7e827602fd009f635280517f756776030000019f635380527f7501fd7c7e67760500000000019f635580547f7501fe7c7e675980587f7501ff7c7e6868687c7e7c58807c7e5c7a5c7a00787c9c9163041976a9147b7e0288ac7e7c58807c7e67007b7577687eaa5a7a820128947f7701207f7587777777777777777777776868",
+  "asm": "OP_NOP OP_CODESEPARATOR OP_DUP OP_0 OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_PICK OP_SIZE \u003c14\u003e OP_NUMEQUALVERIFY OP_DROP OP_DUP \u003craw 422 bytes\u003e OP_DUP \u003c68\u003e OP_SPLIT OP_NIP OP_SIZE \u003c34\u003e OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_DUP \u003cfd00\u003e OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DUP \u003cfe00\u003e OP_NUMEQUAL OP_IF OP_DROP OP_4 OP_SPLIT OP_NIP OP_ELSE OP_DUP \u003cff00\u003e OP_NUMEQUAL OP_IF OP_DROP OP_8 OP_SPLIT OP_NIP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_ENDIF OP_ENDIF OP_12 OP_PICK OP_SIZE OP_DUP \u003c3f0d0000\u003e OP_BIN2NUM OP_NUMEQUAL OP_VERIFY OP_2 OP_SUB OP_ROT OP_SWAP OP_SPLIT OP_1 OP_SPLIT OP_DROP \u003c6a\u003e OP_EQUALVERIFY \u003c61ab\u003e OP_SWAP OP_CAT OP_EQUALVERIFY OP_VERIFY OP_DUP OP_SIZE OP_4 OP_SUB OP_SPLIT OP_NIP \u003c00\u003e OP_CAT OP_BIN2NUM \u003c41\u003e OP_NUMEQUALVERIFY OP_DUP \u003c68\u003e OP_SPLIT OP_NIP OP_SIZE \u003c2c\u003e OP_SUB OP_SPLIT OP_DROP OP_SIZE OP_8 OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_DUP \u003cfd00\u003e OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DUP \u003cfe00\u003e OP_NUMEQUAL OP_IF OP_DROP OP_4 OP_SPLIT OP_NIP OP_ELSE OP_DUP \u003cff00\u003e OP_NUMEQUAL OP_IF OP_DROP OP_8 OP_SPLIT OP_NIP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_ENDIF OP_ENDIF OP_11 OP_PICK OP_SIZE OP_NIP OP_0 OP_SUB OP_SPLIT OP_NIP OP_1 OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_DUP \u003c4c\u003e OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP \u003c4c\u003e OP_NUMEQUAL OP_IF OP_DROP OP_1 OP_ELSE OP_DUP \u003c4d\u003e OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_ELSE \u003c4e\u003e OP_NUMEQUALVERIFY OP_4 OP_ENDIF OP_ENDIF OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_SPLIT OP_ENDIF OP_1 OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_DUP \u003c4c\u003e OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP \u003c4c\u003e OP_NUMEQUAL OP_IF OP_DROP OP_1 OP_ELSE OP_DUP \u003c4d\u003e OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_ELSE \u003c4e\u003e OP_NUMEQUALVERIFY OP_4 OP_ENDIF OP_ENDIF OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_SPLIT OP_ENDIF OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_0 OP_EQUALVERIFY OP_BIN2NUM OP_DUP OP_0 OP_NUMEQUALVERIFY OP_8 OP_PICK OP_SIZE OP_NIP \u003c14\u003e OP_NUMEQUAL OP_IF OP_7 OP_PICK OP_SIZE OP_NIP \u003c14\u003e OP_NUMEQUAL OP_ELSE OP_FALSE OP_ENDIF OP_VERIFY \u003c11\u003e OP_PICK OP_HASH160 OP_8 OP_PICK OP_EQUALVERIFY \u003c12\u003e OP_ROLL \u003c12\u003e OP_ROLL OP_CHECKSIGVERIFY OP_9 OP_PICK OP_SIZE OP_8 OP_SUB OP_SPLIT OP_NIP OP_4 OP_SPLIT OP_DROP \u003c00\u003e OP_CAT OP_BIN2NUM OP_10 OP_PICK OP_SIZE \u003c2c\u003e OP_SUB OP_SPLIT OP_NIP OP_4 OP_SPLIT OP_DROP \u003c00\u003e OP_CAT OP_BIN2NUM \u003cffffffff00\u003e OP_LESSTHAN OP_VERIFY \u003c0065cd1d\u003e OP_OVER OP_SWAP OP_LESSTHAN OP_VERIFY OP_2 OP_PICK OP_OVER OP_SWAP OP_GREATERTHANOREQUAL OP_VERIFY OP_16 OP_PICK OP_1 OP_GREATERTHANOREQUAL OP_IF OP_13 OP_PICK OP_1 OP_GREATERTHANOREQUAL OP_ELSE OP_FALSE OP_ENDIF OP_VERIFY \u003c11\u003e OP_PICK OP_SIZE OP_NIP OP_1 OP_GREATERTHANOREQUAL OP_VERIFY OP_2 OP_PICK OP_6 OP_PICK OP_ADD OP_OVER OP_SWAP OP_GREATERTHANOREQUAL OP_DUP OP_IF OP_16 OP_PICK \u003c12\u003e OP_PICK OP_NUMEQUAL OP_ELSE OP_FALSE OP_ENDIF OP_IF OP_15 OP_PICK OP_ROT OP_NUMEQUAL OP_ELSE OP_FALSE OP_ROT OP_DROP OP_ENDIF OP_IF OP_TRUE OP_NIP OP_ELSE OP_NOT OP_IF OP_14 OP_PICK OP_3 OP_PICK \u003c11\u003e OP_PICK OP_ADD OP_NUMEQUAL OP_ELSE OP_FALSE OP_ENDIF OP_IF OP_13 OP_PICK OP_2 OP_PICK OP_NUMEQUAL OP_ELSE OP_FALSE OP_ENDIF OP_ENDIF OP_VERIFY OP_14 OP_PICK OP_6 OP_PICK OP_LESSTHANOREQUAL OP_VERIFY OP_15 OP_PICK OP_7 OP_PICK OP_LESSTHANOREQUAL OP_VERIFY OP_9 OP_PICK OP_SIZE \u003c34\u003e OP_SUB OP_SPLIT OP_NIP OP_8 OP_SPLIT OP_DROP OP_BIN2NUM OP_13 OP_PICK \u003c11\u003e OP_PICK OP_ADD OP_OVER OP_SWAP OP_GREATERTHANOREQUAL OP_VERIFY OP_13 OP_PICK OP_SUB OP_16 OP_PICK OP_SUB OP_4 OP_PICK OP_LESSTHANOREQUAL OP_VERIFY OP_14 OP_ROLL OP_3 OP_ROLL OP_DROP OP_13 OP_ROLL OP_3 OP_ROLL OP_DROP OP_12 OP_ROLL OP_9 OP_PICK OP_9 OP_PICK OP_9 OP_PICK OP_9 OP_PICK OP_9 OP_PICK OP_9 OP_PICK OP_8 OP_PICK OP_8 OP_PICK OP_11 OP_PICK \u003c18\u003e OP_PICK \u003c6a\u003e OP_CAT OP_9 OP_ROLL OP_SIZE OP_DUP \u003c4c\u003e OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP \u003c0001\u003e OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP \u003c4c\u003e OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_DUP \u003c000001\u003e OP_LESSTHAN OP_IF OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP \u003c4d\u003e OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_5 OP_NUM2BIN OP_4 OP_SPLIT OP_DROP \u003c4e\u003e OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_ENDIF OP_CAT OP_8 OP_ROLL OP_SIZE OP_DUP \u003c4c\u003e OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP \u003c0001\u003e OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP \u003c4c\u003e OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_DUP \u003c000001\u003e OP_LESSTHAN OP_IF OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP \u003c4d\u003e OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_5 OP_NUM2BIN OP_4 OP_SPLIT OP_DROP \u003c4e\u003e OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_ENDIF OP_CAT OP_7 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_6 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_5 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_4 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_3 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_ROT OP_8 OP_NUM2BIN OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_CAT OP_SIZE OP_DUP \u003cfd00\u003e OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_DUP \u003c000001\u003e OP_LESSTHAN OP_IF OP_3 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP \u003cfd\u003e OP_SWAP OP_CAT OP_ELSE OP_DUP \u003c0000000001\u003e OP_LESSTHAN OP_IF OP_5 OP_NUM2BIN OP_4 OP_SPLIT OP_DROP \u003cfe\u003e OP_SWAP OP_CAT OP_ELSE OP_9 OP_NUM2BIN OP_8 OP_SPLIT OP_DROP \u003cff\u003e OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_13 OP_ROLL OP_14 OP_ROLL OP_SIZE OP_DUP \u003cfd00\u003e OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_DUP \u003c000001\u003e OP_LESSTHAN OP_IF OP_3 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP \u003cfd\u003e OP_SWAP OP_CAT OP_ELSE OP_DUP \u003c0000000001\u003e OP_LESSTHAN OP_IF OP_5 OP_NUM2BIN OP_4 OP_SPLIT OP_DROP \u003cfe\u003e OP_SWAP OP_CAT OP_ELSE OP_9 OP_NUM2BIN OP_8 OP_SPLIT OP_DROP \u003cff\u003e OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_13 OP_ROLL OP_13 OP_ROLL OP_0 OP_OVER OP_SWAP OP_NUMEQUAL OP_NOT OP_IF \u003c1976a914\u003e OP_ROT OP_CAT \u003c88ac\u003e OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_ELSE OP_0 OP_ROT OP_DROP OP_NIP OP_ENDIF OP_ROT OP_ROT OP_CAT OP_SWAP OP_CAT OP_HASH256 OP_10 OP_ROLL OP_SIZE \u003c28\u003e OP_SUB OP_SPLIT OP_NIP \u003c20\u003e OP_SPLIT OP_DROP OP_EQUAL OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_ELSE OP_DUP OP_1 OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_PICK OP_SIZE \u003c14\u003e OP_NUMEQUALVERIFY OP_DROP OP_DUP \u003craw 422 bytes\u003e OP_DUP \u003c68\u003e OP_SPLIT OP_NIP OP_SIZE \u003c34\u003e OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_DUP \u003cfd00\u003e OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DUP \u003cfe00\u003e OP_NUMEQUAL OP_IF OP_DROP OP_4 OP_SPLIT OP_NIP OP_ELSE OP_DUP \u003cff00\u003e OP_NUMEQUAL OP_IF OP_DROP OP_8 OP_SPLIT OP_NIP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_ENDIF OP_ENDIF OP_14 OP_PICK OP_SIZE OP_DUP \u003c3f0d0000\u003e OP_BIN2NUM OP_NUMEQUAL OP_VERIFY OP_2 OP_SUB OP_ROT OP_SWAP OP_SPLIT OP_1 OP_SPLIT OP_DROP \u003c6a\u003e OP_EQUALVERIFY \u003c61ab\u003e OP_SWAP OP_CAT OP_EQUALVERIFY OP_VERIFY OP_DUP OP_SIZE OP_4 OP_SUB OP_SPLIT OP_NIP \u003c00\u003e OP_CAT OP_BIN2NUM \u003c41\u003e OP_NUMEQUALVERIFY OP_DUP \u003c68\u003e OP_SPLIT OP_NIP OP_SIZE \u003c2c\u003e OP_SUB OP_SPLIT OP_DROP OP_SIZE OP_8 OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_DUP \u003cfd00\u003e OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DUP \u003cfe00\u003e OP_NUMEQUAL OP_IF OP_DROP OP_4 OP_SPLIT OP_NIP OP_ELSE OP_DUP \u003cff00\u003e OP_NUMEQUAL OP_IF OP_DROP OP_8 OP_SPLIT OP_NIP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_ENDIF OP_ENDIF OP_13 OP_PICK OP_SIZE OP_NIP OP_0 OP_SUB OP_SPLIT OP_NIP OP_1 OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_DUP \u003c4c\u003e OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP \u003c4c\u003e OP_NUMEQUAL OP_IF OP_DROP OP_1 OP_ELSE OP_DUP \u003c4d\u003e OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_ELSE \u003c4e\u003e OP_NUMEQUALVERIFY OP_4 OP_ENDIF OP_ENDIF OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_SPLIT OP_ENDIF OP_1 OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_DUP \u003c4c\u003e OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP \u003c4c\u003e OP_NUMEQUAL OP_IF OP_DROP OP_1 OP_ELSE OP_DUP \u003c4d\u003e OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_ELSE \u003c4e\u003e OP_NUMEQUALVERIFY OP_4 OP_ENDIF OP_ENDIF OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_SPLIT OP_ENDIF OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_0 OP_EQUALVERIFY OP_BIN2NUM OP_8 OP_PICK OP_SIZE OP_NIP \u003c14\u003e OP_NUMEQUALVERIFY \u003c13\u003e OP_PICK OP_HASH160 OP_9 OP_PICK OP_EQUALVERIFY \u003c14\u003e OP_ROLL \u003c14\u003e OP_ROLL OP_CHECKSIGVERIFY \u003c12\u003e OP_PICK OP_SIZE OP_NIP \u003c14\u003e OP_NUMEQUALVERIFY \u003c11\u003e OP_PICK OP_1 OP_GREATERTHANOREQUAL OP_IF OP_16 OP_PICK \u003c12\u003e OP_PICK OP_GREATERTHANOREQUAL OP_ELSE OP_FALSE OP_ENDIF OP_IF OP_15 OP_PICK OP_1 OP_GREATERTHANOREQUAL OP_ELSE OP_FALSE OP_ENDIF OP_IF OP_14 OP_PICK OP_1 OP_GREATERTHANOREQUAL OP_ELSE OP_FALSE OP_ENDIF OP_VERIFY OP_13 OP_PICK OP_NOT OP_IF OP_TRUE OP_ELSE OP_13 OP_PICK OP_1 OP_NUMEQUAL OP_ENDIF OP_VERIFY OP_12 OP_PICK OP_1 OP_GREATERTHANOREQUAL OP_VERIFY \u003c12\u003e OP_ROLL OP_8 OP_ROLL OP_DROP \u003c11\u003e OP_ROLL OP_8 OP_ROLL OP_DROP OP_16 OP_ROLL OP_8 OP_ROLL OP_DROP OP_15 OP_ROLL OP_8 OP_ROLL OP_DROP OP_14 OP_ROLL OP_8 OP_ROLL OP_DROP OP_13 OP_ROLL OP_6 OP_ROLL OP_DROP OP_12 OP_ROLL OP_9 OP_PICK OP_7 OP_PICK OP_7 OP_PICK OP_7 OP_PICK OP_7 OP_PICK OP_7 OP_PICK OP_14 OP_PICK OP_14 OP_PICK OP_9 OP_PICK \u003c16\u003e OP_PICK \u003c6a\u003e OP_CAT OP_9 OP_ROLL OP_SIZE OP_DUP \u003c4c\u003e OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP \u003c0001\u003e OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP \u003c4c\u003e OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_DUP \u003c000001\u003e OP_LESSTHAN OP_IF OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP \u003c4d\u003e OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_5 OP_NUM2BIN OP_4 OP_SPLIT OP_DROP \u003c4e\u003e OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_ENDIF OP_CAT OP_8 OP_ROLL OP_SIZE OP_DUP \u003c4c\u003e OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP \u003c0001\u003e OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP \u003c4c\u003e OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_DUP \u003c000001\u003e OP_LESSTHAN OP_IF OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP \u003c4d\u003e OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_5 OP_NUM2BIN OP_4 OP_SPLIT OP_DROP \u003c4e\u003e OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_ENDIF OP_CAT OP_7 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_6 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_5 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_4 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_3 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_ROT OP_8 OP_NUM2BIN OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_CAT OP_SIZE OP_DUP \u003cfd00\u003e OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_DUP \u003c000001\u003e OP_LESSTHAN OP_IF OP_3 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP \u003cfd\u003e OP_SWAP OP_CAT OP_ELSE OP_DUP \u003c0000000001\u003e OP_LESSTHAN OP_IF OP_5 OP_NUM2BIN OP_4 OP_SPLIT OP_DROP \u003cfe\u003e OP_SWAP OP_CAT OP_ELSE OP_9 OP_NUM2BIN OP_8 OP_SPLIT OP_DROP \u003cff\u003e OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_12 OP_ROLL OP_12 OP_ROLL OP_0 OP_OVER OP_SWAP OP_NUMEQUAL OP_NOT OP_IF \u003c1976a914\u003e OP_ROT OP_CAT \u003c88ac\u003e OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_ELSE OP_0 OP_ROT OP_DROP OP_NIP OP_ENDIF OP_CAT OP_HASH256 OP_10 OP_ROLL OP_SIZE \u003c28\u003e OP_SUB OP_SPLIT OP_NIP \u003c20\u003e OP_SPLIT OP_DROP OP_EQUAL OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_ELSE OP_2 OP_NUMEQUALVERIFY OP_2 OP_PICK OP_SIZE \u003c14\u003e OP_NUMEQUALVERIFY OP_DROP OP_DUP \u003craw 422 bytes\u003e OP_DUP \u003c68\u003e OP_SPLIT OP_NIP OP_SIZE \u003c34\u003e OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_DUP \u003cfd00\u003e OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DUP \u003cfe00\u003e OP_NUMEQUAL OP_IF OP_DROP OP_4 OP_SPLIT OP_NIP OP_ELSE OP_DUP \u003cff00\u003e OP_NUMEQUAL OP_IF OP_DROP OP_8 OP_SPLIT OP_NIP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_ENDIF OP_ENDIF OP_9 OP_PICK OP_SIZE OP_DUP \u003c3f0d0000\u003e OP_BIN2NUM OP_NUMEQUAL OP_VERIFY OP_2 OP_SUB OP_ROT OP_SWAP OP_SPLIT OP_1 OP_SPLIT OP_DROP \u003c6a\u003e OP_EQUALVERIFY \u003c61ab\u003e OP_SWAP OP_CAT OP_EQUALVERIFY OP_VERIFY OP_DUP OP_SIZE OP_4 OP_SUB OP_SPLIT OP_NIP \u003c00\u003e OP_CAT OP_BIN2NUM \u003c41\u003e OP_NUMEQUALVERIFY OP_DUP \u003c68\u003e OP_SPLIT OP_NIP OP_SIZE \u003c2c\u003e OP_SUB OP_SPLIT OP_DROP OP_SIZE OP_8 OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_DUP \u003cfd00\u003e OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DUP \u003cfe00\u003e OP_NUMEQUAL OP_IF OP_DROP OP_4 OP_SPLIT OP_NIP OP_ELSE OP_DUP \u003cff00\u003e OP_NUMEQUAL OP_IF OP_DROP OP_8 OP_SPLIT OP_NIP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_ENDIF OP_ENDIF OP_8 OP_PICK OP_SIZE OP_NIP OP_0 OP_SUB OP_SPLIT OP_NIP OP_1 OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_DUP \u003c4c\u003e OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP \u003c4c\u003e OP_NUMEQUAL OP_IF OP_DROP OP_1 OP_ELSE OP_DUP \u003c4d\u003e OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_ELSE \u003c4e\u003e OP_NUMEQUALVERIFY OP_4 OP_ENDIF OP_ENDIF OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_SPLIT OP_ENDIF OP_1 OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_DUP \u003c4c\u003e OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP \u003c4c\u003e OP_NUMEQUAL OP_IF OP_DROP OP_1 OP_ELSE OP_DUP \u003c4d\u003e OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_ELSE \u003c4e\u003e OP_NUMEQUALVERIFY OP_4 OP_ENDIF OP_ENDIF OP_SPLIT OP_SWAP \u003c00\u003e OP_CAT OP_BIN2NUM OP_SPLIT OP_ENDIF OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_0 OP_EQUALVERIFY OP_BIN2NUM OP_8 OP_PICK OP_SIZE OP_NIP \u003c14\u003e OP_NUMEQUALVERIFY OP_14 OP_PICK OP_HASH160 OP_9 OP_PICK OP_EQUALVERIFY OP_15 OP_ROLL OP_15 OP_ROLL OP_CHECKSIGVERIFY OP_13 OP_PICK OP_SIZE OP_NIP \u003c14\u003e OP_NUMEQUALVERIFY OP_12 OP_PICK OP_1 OP_GREATERTHANOREQUAL OP_VERIFY OP_12 OP_ROLL OP_13 OP_ROLL \u003c76a914\u003e OP_SWAP \u003c88ac\u003e OP_CAT OP_CAT OP_SIZE OP_DUP \u003cfd00\u003e OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_DUP \u003c000001\u003e OP_LESSTHAN OP_IF OP_3 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP \u003cfd\u003e OP_SWAP OP_CAT OP_ELSE OP_DUP \u003c0000000001\u003e OP_LESSTHAN OP_IF OP_5 OP_NUM2BIN OP_4 OP_SPLIT OP_DROP \u003cfe\u003e OP_SWAP OP_CAT OP_ELSE OP_9 OP_NUM2BIN OP_8 OP_SPLIT OP_DROP \u003cff\u003e OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_12 OP_ROLL OP_12 OP_ROLL OP_0 OP_OVER OP_SWAP OP_NUMEQUAL OP_NOT OP_IF \u003c1976a914\u003e OP_ROT OP_CAT \u003c88ac\u003e OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_ELSE OP_0 OP_ROT OP_DROP OP_NIP OP_ENDIF OP_CAT OP_HASH256 OP_10 OP_ROLL OP_SIZE \u003c28\u003e OP_SUB OP_SPLIT OP_NIP \u003c20\u003e OP_SPLIT OP_DROP OP_EQUAL OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_ENDIF OP_ENDIF",
+  "stateFields": [
+    {
+      "name": "operatorPkh",
+      "type": "ByteString",
+      "index": 0
+    },
+    {
+      "name": "agentPkh",
+      "type": "ByteString",
+      "index": 1
+    },
+    {
+      "name": "perTxCap",
+      "type": "bigint",
+      "index": 2
+    },
+    {
+      "name": "windowCap",
+      "type": "bigint",
+      "index": 3
+    },
+    {
+      "name": "windowBlocks",
+      "type": "bigint",
+      "index": 4
+    },
+    {
+      "name": "maxFee",
+      "type": "bigint",
+      "index": 5
+    },
+    {
+      "name": "spentInWindow",
+      "type": "bigint",
+      "index": 6,
+      "initialValue": 0
+    },
+    {
+      "name": "windowStart",
+      "type": "bigint",
+      "index": 7,
+      "initialValue": 0
+    },
+    {
+      "name": "paused",
+      "type": "bigint",
+      "index": 8,
+      "initialValue": 0
+    }
+  ],
+  "codeSepIndexSlots": [
+    {
+      "byteOffset": 599,
+      "codeSepIndex": 1
+    },
+    {
+      "byteOffset": 1941,
+      "codeSepIndex": 1
+    },
+    {
+      "byteOffset": 3093,
+      "codeSepIndex": 1
+    }
+  ],
+  "codeSeparatorIndex": 1,
+  "codeSeparatorIndices": [
+    1
+  ],
+  "rawScriptSpans": [
+    {
+      "offset": 15,
+      "length": 422,
+      "inArity": 1,
+      "outArity": 1
+    },
+    {
+      "offset": 1357,
+      "length": 422,
+      "inArity": 1,
+      "outArity": 1
+    },
+    {
+      "offset": 2509,
+      "length": 422,
+      "inArity": 1,
+      "outArity": 1
+    }
+  ],
+  "buildTimestamp": "2026-11-25T17:51:49Z",
+  "anf": {
+    "contractName": "NektarAgentVault",
+    "properties": [
+      {
+        "name": "operatorPkh",
+        "type": "ByteString",
+        "readonly": false
+      },
+      {
+        "name": "agentPkh",
+        "type": "ByteString",
+        "readonly": false
+      },
+      {
+        "name": "perTxCap",
+        "type": "bigint",
+        "readonly": false
+      },
+      {
+        "name": "windowCap",
+        "type": "bigint",
+        "readonly": false
+      },
+      {
+        "name": "windowBlocks",
+        "type": "bigint",
+        "readonly": false
+      },
+      {
+        "name": "maxFee",
+        "type": "bigint",
+        "readonly": false
+      },
+      {
+        "name": "spentInWindow",
+        "type": "bigint",
+        "readonly": false,
+        "initialValue": 0
+      },
+      {
+        "name": "windowStart",
+        "type": "bigint",
+        "readonly": false,
+        "initialValue": 0
+      },
+      {
+        "name": "paused",
+        "type": "bigint",
+        "readonly": false,
+        "initialValue": 0
+      }
+    ],
+    "methods": [
+      {
+        "name": "constructor",
+        "params": [
+          {
+            "name": "operatorPkh",
+            "type": "ByteString"
+          },
+          {
+            "name": "agentPkh",
+            "type": "ByteString"
+          },
+          {
+            "name": "perTxCap",
+            "type": "bigint"
+          },
+          {
+            "name": "windowCap",
+            "type": "bigint"
+          },
+          {
+            "name": "windowBlocks",
+            "type": "bigint"
+          },
+          {
+            "name": "maxFee",
+            "type": "bigint"
+          }
+        ],
+        "body": [
+          {
+            "name": "t0",
+            "value": {
+              "kind": "load_prop",
+              "name": "operatorPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t1",
+            "value": {
+              "kind": "load_prop",
+              "name": "agentPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t2",
+            "value": {
+              "kind": "load_prop",
+              "name": "perTxCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t3",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t4",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowBlocks"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t5",
+            "value": {
+              "kind": "load_prop",
+              "name": "maxFee"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t6",
+            "value": {
+              "args": [
+                "t0",
+                "t1",
+                "t2",
+                "t3",
+                "t4",
+                "t5"
+              ],
+              "func": "super",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t7",
+            "value": {
+              "kind": "load_prop",
+              "name": "operatorPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t8",
+            "value": {
+              "kind": "update_prop",
+              "name": "operatorPkh",
+              "value": "t7"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t9",
+            "value": {
+              "kind": "load_prop",
+              "name": "agentPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t10",
+            "value": {
+              "kind": "update_prop",
+              "name": "agentPkh",
+              "value": "t9"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t11",
+            "value": {
+              "kind": "load_prop",
+              "name": "perTxCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t12",
+            "value": {
+              "kind": "update_prop",
+              "name": "perTxCap",
+              "value": "t11"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t13",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t14",
+            "value": {
+              "kind": "update_prop",
+              "name": "windowCap",
+              "value": "t13"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t15",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowBlocks"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t16",
+            "value": {
+              "kind": "update_prop",
+              "name": "windowBlocks",
+              "value": "t15"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t17",
+            "value": {
+              "kind": "load_prop",
+              "name": "maxFee"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          },
+          {
+            "name": "t18",
+            "value": {
+              "kind": "update_prop",
+              "name": "maxFee",
+              "value": "t17"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 15,
+              "column": 22
+            }
+          }
+        ],
+        "isPublic": false
+      },
+      {
+        "name": "p2pkh",
+        "params": [
+          {
+            "name": "pkh",
+            "type": "ByteString"
+          }
+        ],
+        "body": [
+          {
+            "name": "t0",
+            "value": {
+              "kind": "load_const",
+              "value": "76a914"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 35,
+              "column": 1
+            }
+          },
+          {
+            "name": "t1",
+            "value": {
+              "kind": "load_param",
+              "name": "pkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 35,
+              "column": 1
+            }
+          },
+          {
+            "name": "t2",
+            "value": {
+              "kind": "load_const",
+              "value": "88ac"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 35,
+              "column": 1
+            }
+          },
+          {
+            "name": "t3",
+            "value": {
+              "args": [
+                "t1",
+                "t2"
+              ],
+              "func": "cat",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 35,
+              "column": 1
+            }
+          },
+          {
+            "name": "t4",
+            "value": {
+              "args": [
+                "t0",
+                "t3"
+              ],
+              "func": "cat",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 35,
+              "column": 1
+            }
+          }
+        ],
+        "isPublic": false
+      },
+      {
+        "name": "agentSpend",
+        "params": [
+          {
+            "name": "sig",
+            "type": "Sig"
+          },
+          {
+            "name": "pubKey",
+            "type": "PubKey"
+          },
+          {
+            "name": "destScript",
+            "type": "ByteString"
+          },
+          {
+            "name": "payAmount",
+            "type": "bigint"
+          },
+          {
+            "name": "newSpent",
+            "type": "bigint"
+          },
+          {
+            "name": "newStart",
+            "type": "bigint"
+          },
+          {
+            "name": "contSats",
+            "type": "bigint"
+          },
+          {
+            "name": "_changePKH",
+            "type": "Ripemd160"
+          },
+          {
+            "name": "_changeAmount",
+            "type": "bigint"
+          },
+          {
+            "name": "txPreimage",
+            "type": "SigHashPreimage"
+          }
+        ],
+        "body": [
+          {
+            "name": "t0",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t1",
+            "value": {
+              "kind": "check_preimage",
+              "preimage": "t0"
+            }
+          },
+          {
+            "name": "t2",
+            "value": {
+              "kind": "assert",
+              "value": "t1"
+            }
+          },
+          {
+            "name": "t3",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t4",
+            "value": {
+              "args": [
+                "t3"
+              ],
+              "func": "extractSigHashType",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t5",
+            "value": {
+              "kind": "load_const",
+              "value": 65
+            }
+          },
+          {
+            "name": "t6",
+            "value": {
+              "kind": "bin_op",
+              "left": "t4",
+              "op": "===",
+              "right": "t5"
+            }
+          },
+          {
+            "name": "t7",
+            "value": {
+              "kind": "assert",
+              "value": "t6"
+            }
+          },
+          {
+            "name": "t8",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t9",
+            "value": {
+              "kind": "deserialize_state",
+              "preimage": "t8"
+            }
+          },
+          {
+            "name": "t10",
+            "value": {
+              "kind": "load_prop",
+              "name": "paused"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 49,
+              "column": 1
+            }
+          },
+          {
+            "name": "t11",
+            "value": {
+              "kind": "load_const",
+              "value": 0
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 49,
+              "column": 1
+            }
+          },
+          {
+            "name": "t12",
+            "value": {
+              "kind": "bin_op",
+              "left": "t10",
+              "op": "===",
+              "right": "t11"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 49,
+              "column": 1
+            }
+          },
+          {
+            "name": "t13",
+            "value": {
+              "kind": "assert",
+              "value": "t12"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 49,
+              "column": 1
+            }
+          },
+          {
+            "name": "t14",
+            "value": {
+              "kind": "load_prop",
+              "name": "operatorPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 50,
+              "column": 1
+            }
+          },
+          {
+            "name": "t15",
+            "value": {
+              "args": [
+                "t14"
+              ],
+              "func": "len",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 50,
+              "column": 1
+            }
+          },
+          {
+            "name": "t16",
+            "value": {
+              "kind": "load_const",
+              "value": 20
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 50,
+              "column": 1
+            }
+          },
+          {
+            "name": "t17",
+            "value": {
+              "kind": "bin_op",
+              "left": "t15",
+              "op": "===",
+              "right": "t16"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 50,
+              "column": 1
+            }
+          },
+          {
+            "name": "t23",
+            "value": {
+              "cond": "t17",
+              "else": [
+                {
+                  "name": "t22",
+                  "value": {
+                    "kind": "load_const",
+                    "value": false
+                  }
+                }
+              ],
+              "kind": "if",
+              "then": [
+                {
+                  "name": "t18",
+                  "value": {
+                    "kind": "load_prop",
+                    "name": "agentPkh"
+                  }
+                },
+                {
+                  "name": "t19",
+                  "value": {
+                    "args": [
+                      "t18"
+                    ],
+                    "func": "len",
+                    "kind": "call"
+                  }
+                },
+                {
+                  "name": "t20",
+                  "value": {
+                    "kind": "load_const",
+                    "value": 20
+                  }
+                },
+                {
+                  "name": "t21",
+                  "value": {
+                    "kind": "bin_op",
+                    "left": "t19",
+                    "op": "===",
+                    "right": "t20"
+                  }
+                }
+              ]
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 50,
+              "column": 1
+            }
+          },
+          {
+            "name": "t24",
+            "value": {
+              "kind": "assert",
+              "value": "t23"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 50,
+              "column": 1
+            }
+          },
+          {
+            "name": "t25",
+            "value": {
+              "kind": "load_param",
+              "name": "pubKey"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 51,
+              "column": 1
+            }
+          },
+          {
+            "name": "t26",
+            "value": {
+              "args": [
+                "t25"
+              ],
+              "func": "hash160",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 51,
+              "column": 1
+            }
+          },
+          {
+            "name": "t27",
+            "value": {
+              "kind": "load_prop",
+              "name": "agentPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 51,
+              "column": 1
+            }
+          },
+          {
+            "name": "t28",
+            "value": {
+              "kind": "bin_op",
+              "left": "t26",
+              "op": "===",
+              "result_type": "bytes",
+              "right": "t27"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 51,
+              "column": 1
+            }
+          },
+          {
+            "name": "t29",
+            "value": {
+              "kind": "assert",
+              "value": "t28"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 51,
+              "column": 1
+            }
+          },
+          {
+            "name": "t30",
+            "value": {
+              "kind": "load_param",
+              "name": "sig"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 52,
+              "column": 1
+            }
+          },
+          {
+            "name": "t31",
+            "value": {
+              "kind": "load_param",
+              "name": "pubKey"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 52,
+              "column": 1
+            }
+          },
+          {
+            "name": "t32",
+            "value": {
+              "args": [
+                "t30",
+                "t31"
+              ],
+              "func": "checkSig",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 52,
+              "column": 1
+            }
+          },
+          {
+            "name": "t33",
+            "value": {
+              "kind": "assert",
+              "value": "t32"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 52,
+              "column": 1
+            }
+          },
+          {
+            "name": "t34",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 53,
+              "column": 1
+            }
+          },
+          {
+            "name": "t35",
+            "value": {
+              "args": [
+                "t34"
+              ],
+              "func": "extractLocktime",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 53,
+              "column": 1
+            }
+          },
+          {
+            "name": "lt",
+            "value": {
+              "kind": "load_const",
+              "value": "@ref:t35"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 53,
+              "column": 1
+            }
+          },
+          {
+            "name": "t36",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 54,
+              "column": 1
+            }
+          },
+          {
+            "name": "t37",
+            "value": {
+              "args": [
+                "t36"
+              ],
+              "func": "extractSequence",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 54,
+              "column": 1
+            }
+          },
+          {
+            "name": "t38",
+            "value": {
+              "kind": "load_const",
+              "value": 4294967295
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 54,
+              "column": 1
+            }
+          },
+          {
+            "name": "t39",
+            "value": {
+              "kind": "bin_op",
+              "left": "t37",
+              "op": "\u003c",
+              "right": "t38"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 54,
+              "column": 1
+            }
+          },
+          {
+            "name": "t40",
+            "value": {
+              "kind": "assert",
+              "value": "t39"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 54,
+              "column": 1
+            }
+          },
+          {
+            "name": "t41",
+            "value": {
+              "kind": "load_const",
+              "value": 500000000
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 55,
+              "column": 1
+            }
+          },
+          {
+            "name": "t42",
+            "value": {
+              "kind": "bin_op",
+              "left": "lt",
+              "op": "\u003c",
+              "right": "t41"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 55,
+              "column": 1
+            }
+          },
+          {
+            "name": "t43",
+            "value": {
+              "kind": "assert",
+              "value": "t42"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 55,
+              "column": 1
+            }
+          },
+          {
+            "name": "t44",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowStart"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 56,
+              "column": 1
+            }
+          },
+          {
+            "name": "t45",
+            "value": {
+              "kind": "bin_op",
+              "left": "lt",
+              "op": "\u003e=",
+              "right": "t44"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 56,
+              "column": 1
+            }
+          },
+          {
+            "name": "t46",
+            "value": {
+              "kind": "assert",
+              "value": "t45"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 56,
+              "column": 1
+            }
+          },
+          {
+            "name": "t47",
+            "value": {
+              "kind": "load_param",
+              "name": "payAmount"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 57,
+              "column": 1
+            }
+          },
+          {
+            "name": "t48",
+            "value": {
+              "kind": "load_const",
+              "value": 1
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 57,
+              "column": 1
+            }
+          },
+          {
+            "name": "t49",
+            "value": {
+              "kind": "bin_op",
+              "left": "t47",
+              "op": "\u003e=",
+              "right": "t48"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 57,
+              "column": 1
+            }
+          },
+          {
+            "name": "t54",
+            "value": {
+              "cond": "t49",
+              "else": [
+                {
+                  "name": "t53",
+                  "value": {
+                    "kind": "load_const",
+                    "value": false
+                  }
+                }
+              ],
+              "kind": "if",
+              "then": [
+                {
+                  "name": "t50",
+                  "value": {
+                    "kind": "load_param",
+                    "name": "contSats"
+                  }
+                },
+                {
+                  "name": "t51",
+                  "value": {
+                    "kind": "load_const",
+                    "value": 1
+                  }
+                },
+                {
+                  "name": "t52",
+                  "value": {
+                    "kind": "bin_op",
+                    "left": "t50",
+                    "op": "\u003e=",
+                    "right": "t51"
+                  }
+                }
+              ]
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 57,
+              "column": 1
+            }
+          },
+          {
+            "name": "t55",
+            "value": {
+              "kind": "assert",
+              "value": "t54"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 57,
+              "column": 1
+            }
+          },
+          {
+            "name": "t56",
+            "value": {
+              "kind": "load_param",
+              "name": "destScript"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 58,
+              "column": 1
+            }
+          },
+          {
+            "name": "t57",
+            "value": {
+              "args": [
+                "t56"
+              ],
+              "func": "len",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 58,
+              "column": 1
+            }
+          },
+          {
+            "name": "t58",
+            "value": {
+              "kind": "load_const",
+              "value": 1
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 58,
+              "column": 1
+            }
+          },
+          {
+            "name": "t59",
+            "value": {
+              "kind": "bin_op",
+              "left": "t57",
+              "op": "\u003e=",
+              "right": "t58"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 58,
+              "column": 1
+            }
+          },
+          {
+            "name": "t60",
+            "value": {
+              "kind": "assert",
+              "value": "t59"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 58,
+              "column": 1
+            }
+          },
+          {
+            "name": "t61",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowStart"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 59,
+              "column": 1
+            }
+          },
+          {
+            "name": "t62",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowBlocks"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 59,
+              "column": 1
+            }
+          },
+          {
+            "name": "t63",
+            "value": {
+              "kind": "bin_op",
+              "left": "t61",
+              "op": "+",
+              "right": "t62"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 59,
+              "column": 1
+            }
+          },
+          {
+            "name": "t64",
+            "value": {
+              "kind": "bin_op",
+              "left": "lt",
+              "op": "\u003e=",
+              "right": "t63"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 59,
+              "column": 1
+            }
+          },
+          {
+            "name": "expired",
+            "value": {
+              "kind": "load_const",
+              "value": "@ref:t64"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 59,
+              "column": 1
+            }
+          },
+          {
+            "name": "t69",
+            "value": {
+              "cond": "expired",
+              "else": [
+                {
+                  "name": "t68",
+                  "value": {
+                    "kind": "load_const",
+                    "value": false
+                  }
+                }
+              ],
+              "kind": "if",
+              "then": [
+                {
+                  "name": "t65",
+                  "value": {
+                    "kind": "load_param",
+                    "name": "newSpent"
+                  }
+                },
+                {
+                  "name": "t66",
+                  "value": {
+                    "kind": "load_param",
+                    "name": "payAmount"
+                  }
+                },
+                {
+                  "name": "t67",
+                  "value": {
+                    "kind": "bin_op",
+                    "left": "t65",
+                    "op": "===",
+                    "right": "t66"
+                  }
+                }
+              ]
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 60,
+              "column": 1
+            }
+          },
+          {
+            "name": "t73",
+            "value": {
+              "cond": "t69",
+              "else": [
+                {
+                  "name": "t72",
+                  "value": {
+                    "kind": "load_const",
+                    "value": false
+                  }
+                }
+              ],
+              "kind": "if",
+              "then": [
+                {
+                  "name": "t70",
+                  "value": {
+                    "kind": "load_param",
+                    "name": "newStart"
+                  }
+                },
+                {
+                  "name": "t71",
+                  "value": {
+                    "kind": "bin_op",
+                    "left": "t70",
+                    "op": "===",
+                    "right": "lt"
+                  }
+                }
+              ]
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 60,
+              "column": 1
+            }
+          },
+          {
+            "name": "t88",
+            "value": {
+              "cond": "t73",
+              "else": [
+                {
+                  "name": "t75",
+                  "value": {
+                    "kind": "unary_op",
+                    "op": "!",
+                    "operand": "expired"
+                  }
+                },
+                {
+                  "name": "t82",
+                  "value": {
+                    "cond": "t75",
+                    "else": [
+                      {
+                        "name": "t81",
+                        "value": {
+                          "kind": "load_const",
+                          "value": false
+                        }
+                      }
+                    ],
+                    "kind": "if",
+                    "then": [
+                      {
+                        "name": "t76",
+                        "value": {
+                          "kind": "load_param",
+                          "name": "newSpent"
+                        }
+                      },
+                      {
+                        "name": "t77",
+                        "value": {
+                          "kind": "load_prop",
+                          "name": "spentInWindow"
+                        }
+                      },
+                      {
+                        "name": "t78",
+                        "value": {
+                          "kind": "load_param",
+                          "name": "payAmount"
+                        }
+                      },
+                      {
+                        "name": "t79",
+                        "value": {
+                          "kind": "bin_op",
+                          "left": "t77",
+                          "op": "+",
+                          "right": "t78"
+                        }
+                      },
+                      {
+                        "name": "t80",
+                        "value": {
+                          "kind": "bin_op",
+                          "left": "t76",
+                          "op": "===",
+                          "right": "t79"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "t87",
+                  "value": {
+                    "cond": "t82",
+                    "else": [
+                      {
+                        "name": "t86",
+                        "value": {
+                          "kind": "load_const",
+                          "value": false
+                        }
+                      }
+                    ],
+                    "kind": "if",
+                    "then": [
+                      {
+                        "name": "t83",
+                        "value": {
+                          "kind": "load_param",
+                          "name": "newStart"
+                        }
+                      },
+                      {
+                        "name": "t84",
+                        "value": {
+                          "kind": "load_prop",
+                          "name": "windowStart"
+                        }
+                      },
+                      {
+                        "name": "t85",
+                        "value": {
+                          "kind": "bin_op",
+                          "left": "t83",
+                          "op": "===",
+                          "right": "t84"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "kind": "if",
+              "then": [
+                {
+                  "name": "t74",
+                  "value": {
+                    "kind": "load_const",
+                    "value": true
+                  }
+                }
+              ]
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 60,
+              "column": 1
+            }
+          },
+          {
+            "name": "t89",
+            "value": {
+              "kind": "assert",
+              "value": "t88"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 60,
+              "column": 1
+            }
+          },
+          {
+            "name": "t90",
+            "value": {
+              "kind": "load_param",
+              "name": "newSpent"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 62,
+              "column": 1
+            }
+          },
+          {
+            "name": "t91",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 62,
+              "column": 1
+            }
+          },
+          {
+            "name": "t92",
+            "value": {
+              "kind": "bin_op",
+              "left": "t90",
+              "op": "\u003c=",
+              "right": "t91"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 62,
+              "column": 1
+            }
+          },
+          {
+            "name": "t93",
+            "value": {
+              "kind": "assert",
+              "value": "t92"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 62,
+              "column": 1
+            }
+          },
+          {
+            "name": "t94",
+            "value": {
+              "kind": "load_param",
+              "name": "payAmount"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 63,
+              "column": 1
+            }
+          },
+          {
+            "name": "t95",
+            "value": {
+              "kind": "load_prop",
+              "name": "perTxCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 63,
+              "column": 1
+            }
+          },
+          {
+            "name": "t96",
+            "value": {
+              "kind": "bin_op",
+              "left": "t94",
+              "op": "\u003c=",
+              "right": "t95"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 63,
+              "column": 1
+            }
+          },
+          {
+            "name": "t97",
+            "value": {
+              "kind": "assert",
+              "value": "t96"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 63,
+              "column": 1
+            }
+          },
+          {
+            "name": "t98",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 64,
+              "column": 1
+            }
+          },
+          {
+            "name": "t99",
+            "value": {
+              "args": [
+                "t98"
+              ],
+              "func": "extractAmount",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 64,
+              "column": 1
+            }
+          },
+          {
+            "name": "inSats",
+            "value": {
+              "kind": "load_const",
+              "value": "@ref:t99"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 64,
+              "column": 1
+            }
+          },
+          {
+            "name": "t100",
+            "value": {
+              "kind": "load_param",
+              "name": "contSats"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 65,
+              "column": 1
+            }
+          },
+          {
+            "name": "t101",
+            "value": {
+              "kind": "load_param",
+              "name": "payAmount"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 65,
+              "column": 1
+            }
+          },
+          {
+            "name": "t102",
+            "value": {
+              "kind": "bin_op",
+              "left": "t100",
+              "op": "+",
+              "right": "t101"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 65,
+              "column": 1
+            }
+          },
+          {
+            "name": "t103",
+            "value": {
+              "kind": "bin_op",
+              "left": "inSats",
+              "op": "\u003e=",
+              "right": "t102"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 65,
+              "column": 1
+            }
+          },
+          {
+            "name": "t104",
+            "value": {
+              "kind": "assert",
+              "value": "t103"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 65,
+              "column": 1
+            }
+          },
+          {
+            "name": "t105",
+            "value": {
+              "kind": "load_param",
+              "name": "contSats"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 66,
+              "column": 1
+            }
+          },
+          {
+            "name": "t106",
+            "value": {
+              "kind": "bin_op",
+              "left": "inSats",
+              "op": "-",
+              "right": "t105"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 66,
+              "column": 1
+            }
+          },
+          {
+            "name": "t107",
+            "value": {
+              "kind": "load_param",
+              "name": "payAmount"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 66,
+              "column": 1
+            }
+          },
+          {
+            "name": "t108",
+            "value": {
+              "kind": "bin_op",
+              "left": "t106",
+              "op": "-",
+              "right": "t107"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 66,
+              "column": 1
+            }
+          },
+          {
+            "name": "t109",
+            "value": {
+              "kind": "load_prop",
+              "name": "maxFee"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 66,
+              "column": 1
+            }
+          },
+          {
+            "name": "t110",
+            "value": {
+              "kind": "bin_op",
+              "left": "t108",
+              "op": "\u003c=",
+              "right": "t109"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 66,
+              "column": 1
+            }
+          },
+          {
+            "name": "t111",
+            "value": {
+              "kind": "assert",
+              "value": "t110"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 66,
+              "column": 1
+            }
+          },
+          {
+            "name": "t112",
+            "value": {
+              "kind": "load_param",
+              "name": "newSpent"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 67,
+              "column": 1
+            }
+          },
+          {
+            "name": "t113",
+            "value": {
+              "kind": "update_prop",
+              "name": "spentInWindow",
+              "value": "t112"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 67,
+              "column": 1
+            }
+          },
+          {
+            "name": "t114",
+            "value": {
+              "kind": "load_param",
+              "name": "newStart"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 68,
+              "column": 1
+            }
+          },
+          {
+            "name": "t115",
+            "value": {
+              "kind": "update_prop",
+              "name": "windowStart",
+              "value": "t114"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 68,
+              "column": 1
+            }
+          },
+          {
+            "name": "t116",
+            "value": {
+              "kind": "load_param",
+              "name": "contSats"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 69,
+              "column": 1
+            }
+          },
+          {
+            "name": "t117",
+            "value": {
+              "kind": "load_prop",
+              "name": "operatorPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 69,
+              "column": 1
+            }
+          },
+          {
+            "name": "t118",
+            "value": {
+              "kind": "load_prop",
+              "name": "agentPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 69,
+              "column": 1
+            }
+          },
+          {
+            "name": "t119",
+            "value": {
+              "kind": "load_prop",
+              "name": "perTxCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 69,
+              "column": 1
+            }
+          },
+          {
+            "name": "t120",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 69,
+              "column": 1
+            }
+          },
+          {
+            "name": "t121",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowBlocks"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 69,
+              "column": 1
+            }
+          },
+          {
+            "name": "t122",
+            "value": {
+              "kind": "load_prop",
+              "name": "maxFee"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 69,
+              "column": 1
+            }
+          },
+          {
+            "name": "t123",
+            "value": {
+              "kind": "load_prop",
+              "name": "spentInWindow"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 69,
+              "column": 1
+            }
+          },
+          {
+            "name": "t124",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowStart"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 69,
+              "column": 1
+            }
+          },
+          {
+            "name": "t125",
+            "value": {
+              "kind": "load_prop",
+              "name": "paused"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 69,
+              "column": 1
+            }
+          },
+          {
+            "name": "t126",
+            "value": {
+              "kind": "add_output",
+              "preimage": "",
+              "satoshis": "t116",
+              "stateValues": [
+                "t117",
+                "t118",
+                "t119",
+                "t120",
+                "t121",
+                "t122",
+                "t123",
+                "t124",
+                "t125"
+              ]
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 69,
+              "column": 1
+            }
+          },
+          {
+            "name": "t127",
+            "value": {
+              "kind": "load_param",
+              "name": "payAmount"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 70,
+              "column": 1
+            }
+          },
+          {
+            "name": "t128",
+            "value": {
+              "kind": "load_param",
+              "name": "destScript"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 70,
+              "column": 1
+            }
+          },
+          {
+            "name": "t129",
+            "value": {
+              "kind": "add_raw_output",
+              "satoshis": "t127",
+              "scriptBytes": "t128"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 70,
+              "column": 1
+            }
+          },
+          {
+            "name": "t130",
+            "value": {
+              "kind": "load_param",
+              "name": "_changePKH"
+            }
+          },
+          {
+            "name": "t131",
+            "value": {
+              "kind": "load_param",
+              "name": "_changeAmount"
+            }
+          },
+          {
+            "name": "t132",
+            "value": {
+              "kind": "load_const",
+              "value": 0
+            }
+          },
+          {
+            "name": "t133",
+            "value": {
+              "kind": "bin_op",
+              "left": "t131",
+              "op": "!==",
+              "right": "t132"
+            }
+          },
+          {
+            "name": "t136",
+            "value": {
+              "cond": "t133",
+              "else": [
+                {
+                  "name": "t135",
+                  "value": {
+                    "kind": "load_const",
+                    "value": ""
+                  }
+                }
+              ],
+              "kind": "if",
+              "then": [
+                {
+                  "name": "t134",
+                  "value": {
+                    "args": [
+                      "t130",
+                      "t131"
+                    ],
+                    "func": "buildChangeOutput",
+                    "kind": "call"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "t137",
+            "value": {
+              "args": [
+                "t126",
+                "t129"
+              ],
+              "func": "cat",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t138",
+            "value": {
+              "args": [
+                "t137",
+                "t136"
+              ],
+              "func": "cat",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t139",
+            "value": {
+              "args": [
+                "t138"
+              ],
+              "func": "hash256",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t140",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t141",
+            "value": {
+              "args": [
+                "t140"
+              ],
+              "func": "extractOutputHash",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t142",
+            "value": {
+              "kind": "bin_op",
+              "left": "t139",
+              "op": "===",
+              "result_type": "bytes",
+              "right": "t141"
+            }
+          },
+          {
+            "name": "t143",
+            "value": {
+              "isAutoInjectedStateCheck": true,
+              "kind": "assert",
+              "value": "t142"
+            }
+          }
+        ],
+        "isPublic": true
+      },
+      {
+        "name": "operatorControl",
+        "params": [
+          {
+            "name": "sig",
+            "type": "Sig"
+          },
+          {
+            "name": "pubKey",
+            "type": "PubKey"
+          },
+          {
+            "name": "newAgentPkh",
+            "type": "ByteString"
+          },
+          {
+            "name": "newPerTxCap",
+            "type": "bigint"
+          },
+          {
+            "name": "newWindowCap",
+            "type": "bigint"
+          },
+          {
+            "name": "newWindowBlocks",
+            "type": "bigint"
+          },
+          {
+            "name": "newMaxFee",
+            "type": "bigint"
+          },
+          {
+            "name": "newPaused",
+            "type": "bigint"
+          },
+          {
+            "name": "contSats",
+            "type": "bigint"
+          },
+          {
+            "name": "_changePKH",
+            "type": "Ripemd160"
+          },
+          {
+            "name": "_changeAmount",
+            "type": "bigint"
+          },
+          {
+            "name": "txPreimage",
+            "type": "SigHashPreimage"
+          }
+        ],
+        "body": [
+          {
+            "name": "t0",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t1",
+            "value": {
+              "kind": "check_preimage",
+              "preimage": "t0"
+            }
+          },
+          {
+            "name": "t2",
+            "value": {
+              "kind": "assert",
+              "value": "t1"
+            }
+          },
+          {
+            "name": "t3",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t4",
+            "value": {
+              "args": [
+                "t3"
+              ],
+              "func": "extractSigHashType",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t5",
+            "value": {
+              "kind": "load_const",
+              "value": 65
+            }
+          },
+          {
+            "name": "t6",
+            "value": {
+              "kind": "bin_op",
+              "left": "t4",
+              "op": "===",
+              "right": "t5"
+            }
+          },
+          {
+            "name": "t7",
+            "value": {
+              "kind": "assert",
+              "value": "t6"
+            }
+          },
+          {
+            "name": "t8",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t9",
+            "value": {
+              "kind": "deserialize_state",
+              "preimage": "t8"
+            }
+          },
+          {
+            "name": "t10",
+            "value": {
+              "kind": "load_prop",
+              "name": "operatorPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 86,
+              "column": 1
+            }
+          },
+          {
+            "name": "t11",
+            "value": {
+              "args": [
+                "t10"
+              ],
+              "func": "len",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 86,
+              "column": 1
+            }
+          },
+          {
+            "name": "t12",
+            "value": {
+              "kind": "load_const",
+              "value": 20
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 86,
+              "column": 1
+            }
+          },
+          {
+            "name": "t13",
+            "value": {
+              "kind": "bin_op",
+              "left": "t11",
+              "op": "===",
+              "right": "t12"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 86,
+              "column": 1
+            }
+          },
+          {
+            "name": "t14",
+            "value": {
+              "kind": "assert",
+              "value": "t13"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 86,
+              "column": 1
+            }
+          },
+          {
+            "name": "t15",
+            "value": {
+              "kind": "load_param",
+              "name": "pubKey"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 87,
+              "column": 1
+            }
+          },
+          {
+            "name": "t16",
+            "value": {
+              "args": [
+                "t15"
+              ],
+              "func": "hash160",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 87,
+              "column": 1
+            }
+          },
+          {
+            "name": "t17",
+            "value": {
+              "kind": "load_prop",
+              "name": "operatorPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 87,
+              "column": 1
+            }
+          },
+          {
+            "name": "t18",
+            "value": {
+              "kind": "bin_op",
+              "left": "t16",
+              "op": "===",
+              "result_type": "bytes",
+              "right": "t17"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 87,
+              "column": 1
+            }
+          },
+          {
+            "name": "t19",
+            "value": {
+              "kind": "assert",
+              "value": "t18"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 87,
+              "column": 1
+            }
+          },
+          {
+            "name": "t20",
+            "value": {
+              "kind": "load_param",
+              "name": "sig"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 88,
+              "column": 1
+            }
+          },
+          {
+            "name": "t21",
+            "value": {
+              "kind": "load_param",
+              "name": "pubKey"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 88,
+              "column": 1
+            }
+          },
+          {
+            "name": "t22",
+            "value": {
+              "args": [
+                "t20",
+                "t21"
+              ],
+              "func": "checkSig",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 88,
+              "column": 1
+            }
+          },
+          {
+            "name": "t23",
+            "value": {
+              "kind": "assert",
+              "value": "t22"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 88,
+              "column": 1
+            }
+          },
+          {
+            "name": "t24",
+            "value": {
+              "kind": "load_param",
+              "name": "newAgentPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 89,
+              "column": 1
+            }
+          },
+          {
+            "name": "t25",
+            "value": {
+              "args": [
+                "t24"
+              ],
+              "func": "len",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 89,
+              "column": 1
+            }
+          },
+          {
+            "name": "t26",
+            "value": {
+              "kind": "load_const",
+              "value": 20
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 89,
+              "column": 1
+            }
+          },
+          {
+            "name": "t27",
+            "value": {
+              "kind": "bin_op",
+              "left": "t25",
+              "op": "===",
+              "right": "t26"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 89,
+              "column": 1
+            }
+          },
+          {
+            "name": "t28",
+            "value": {
+              "kind": "assert",
+              "value": "t27"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 89,
+              "column": 1
+            }
+          },
+          {
+            "name": "t29",
+            "value": {
+              "kind": "load_param",
+              "name": "newPerTxCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 90,
+              "column": 1
+            }
+          },
+          {
+            "name": "t30",
+            "value": {
+              "kind": "load_const",
+              "value": 1
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 90,
+              "column": 1
+            }
+          },
+          {
+            "name": "t31",
+            "value": {
+              "kind": "bin_op",
+              "left": "t29",
+              "op": "\u003e=",
+              "right": "t30"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 90,
+              "column": 1
+            }
+          },
+          {
+            "name": "t36",
+            "value": {
+              "cond": "t31",
+              "else": [
+                {
+                  "name": "t35",
+                  "value": {
+                    "kind": "load_const",
+                    "value": false
+                  }
+                }
+              ],
+              "kind": "if",
+              "then": [
+                {
+                  "name": "t32",
+                  "value": {
+                    "kind": "load_param",
+                    "name": "newWindowCap"
+                  }
+                },
+                {
+                  "name": "t33",
+                  "value": {
+                    "kind": "load_param",
+                    "name": "newPerTxCap"
+                  }
+                },
+                {
+                  "name": "t34",
+                  "value": {
+                    "kind": "bin_op",
+                    "left": "t32",
+                    "op": "\u003e=",
+                    "right": "t33"
+                  }
+                }
+              ]
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 90,
+              "column": 1
+            }
+          },
+          {
+            "name": "t41",
+            "value": {
+              "cond": "t36",
+              "else": [
+                {
+                  "name": "t40",
+                  "value": {
+                    "kind": "load_const",
+                    "value": false
+                  }
+                }
+              ],
+              "kind": "if",
+              "then": [
+                {
+                  "name": "t37",
+                  "value": {
+                    "kind": "load_param",
+                    "name": "newWindowBlocks"
+                  }
+                },
+                {
+                  "name": "t38",
+                  "value": {
+                    "kind": "load_const",
+                    "value": 1
+                  }
+                },
+                {
+                  "name": "t39",
+                  "value": {
+                    "kind": "bin_op",
+                    "left": "t37",
+                    "op": "\u003e=",
+                    "right": "t38"
+                  }
+                }
+              ]
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 90,
+              "column": 1
+            }
+          },
+          {
+            "name": "t46",
+            "value": {
+              "cond": "t41",
+              "else": [
+                {
+                  "name": "t45",
+                  "value": {
+                    "kind": "load_const",
+                    "value": false
+                  }
+                }
+              ],
+              "kind": "if",
+              "then": [
+                {
+                  "name": "t42",
+                  "value": {
+                    "kind": "load_param",
+                    "name": "newMaxFee"
+                  }
+                },
+                {
+                  "name": "t43",
+                  "value": {
+                    "kind": "load_const",
+                    "value": 1
+                  }
+                },
+                {
+                  "name": "t44",
+                  "value": {
+                    "kind": "bin_op",
+                    "left": "t42",
+                    "op": "\u003e=",
+                    "right": "t43"
+                  }
+                }
+              ]
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 90,
+              "column": 1
+            }
+          },
+          {
+            "name": "t47",
+            "value": {
+              "kind": "assert",
+              "value": "t46"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 90,
+              "column": 1
+            }
+          },
+          {
+            "name": "t48",
+            "value": {
+              "kind": "load_param",
+              "name": "newPaused"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 91,
+              "column": 1
+            }
+          },
+          {
+            "name": "t49",
+            "value": {
+              "kind": "load_const",
+              "value": 0
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 91,
+              "column": 1
+            }
+          },
+          {
+            "name": "t50",
+            "value": {
+              "kind": "bin_op",
+              "left": "t48",
+              "op": "===",
+              "right": "t49"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 91,
+              "column": 1
+            }
+          },
+          {
+            "name": "t55",
+            "value": {
+              "cond": "t50",
+              "else": [
+                {
+                  "name": "t52",
+                  "value": {
+                    "kind": "load_param",
+                    "name": "newPaused"
+                  }
+                },
+                {
+                  "name": "t53",
+                  "value": {
+                    "kind": "load_const",
+                    "value": 1
+                  }
+                },
+                {
+                  "name": "t54",
+                  "value": {
+                    "kind": "bin_op",
+                    "left": "t52",
+                    "op": "===",
+                    "right": "t53"
+                  }
+                }
+              ],
+              "kind": "if",
+              "then": [
+                {
+                  "name": "t51",
+                  "value": {
+                    "kind": "load_const",
+                    "value": true
+                  }
+                }
+              ]
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 91,
+              "column": 1
+            }
+          },
+          {
+            "name": "t56",
+            "value": {
+              "kind": "assert",
+              "value": "t55"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 91,
+              "column": 1
+            }
+          },
+          {
+            "name": "t57",
+            "value": {
+              "kind": "load_param",
+              "name": "contSats"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 92,
+              "column": 1
+            }
+          },
+          {
+            "name": "t58",
+            "value": {
+              "kind": "load_const",
+              "value": 1
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 92,
+              "column": 1
+            }
+          },
+          {
+            "name": "t59",
+            "value": {
+              "kind": "bin_op",
+              "left": "t57",
+              "op": "\u003e=",
+              "right": "t58"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 92,
+              "column": 1
+            }
+          },
+          {
+            "name": "t60",
+            "value": {
+              "kind": "assert",
+              "value": "t59"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 92,
+              "column": 1
+            }
+          },
+          {
+            "name": "t61",
+            "value": {
+              "kind": "load_param",
+              "name": "newAgentPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 93,
+              "column": 1
+            }
+          },
+          {
+            "name": "t62",
+            "value": {
+              "kind": "update_prop",
+              "name": "agentPkh",
+              "value": "t61"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 93,
+              "column": 1
+            }
+          },
+          {
+            "name": "t63",
+            "value": {
+              "kind": "load_param",
+              "name": "newPerTxCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 94,
+              "column": 1
+            }
+          },
+          {
+            "name": "t64",
+            "value": {
+              "kind": "update_prop",
+              "name": "perTxCap",
+              "value": "t63"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 94,
+              "column": 1
+            }
+          },
+          {
+            "name": "t65",
+            "value": {
+              "kind": "load_param",
+              "name": "newWindowCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 95,
+              "column": 1
+            }
+          },
+          {
+            "name": "t66",
+            "value": {
+              "kind": "update_prop",
+              "name": "windowCap",
+              "value": "t65"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 95,
+              "column": 1
+            }
+          },
+          {
+            "name": "t67",
+            "value": {
+              "kind": "load_param",
+              "name": "newWindowBlocks"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 96,
+              "column": 1
+            }
+          },
+          {
+            "name": "t68",
+            "value": {
+              "kind": "update_prop",
+              "name": "windowBlocks",
+              "value": "t67"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 96,
+              "column": 1
+            }
+          },
+          {
+            "name": "t69",
+            "value": {
+              "kind": "load_param",
+              "name": "newMaxFee"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 97,
+              "column": 1
+            }
+          },
+          {
+            "name": "t70",
+            "value": {
+              "kind": "update_prop",
+              "name": "maxFee",
+              "value": "t69"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 97,
+              "column": 1
+            }
+          },
+          {
+            "name": "t71",
+            "value": {
+              "kind": "load_param",
+              "name": "newPaused"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 98,
+              "column": 1
+            }
+          },
+          {
+            "name": "t72",
+            "value": {
+              "kind": "update_prop",
+              "name": "paused",
+              "value": "t71"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 98,
+              "column": 1
+            }
+          },
+          {
+            "name": "t73",
+            "value": {
+              "kind": "load_param",
+              "name": "contSats"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 99,
+              "column": 1
+            }
+          },
+          {
+            "name": "t74",
+            "value": {
+              "kind": "load_prop",
+              "name": "operatorPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 99,
+              "column": 1
+            }
+          },
+          {
+            "name": "t75",
+            "value": {
+              "kind": "load_prop",
+              "name": "agentPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 99,
+              "column": 1
+            }
+          },
+          {
+            "name": "t76",
+            "value": {
+              "kind": "load_prop",
+              "name": "perTxCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 99,
+              "column": 1
+            }
+          },
+          {
+            "name": "t77",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowCap"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 99,
+              "column": 1
+            }
+          },
+          {
+            "name": "t78",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowBlocks"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 99,
+              "column": 1
+            }
+          },
+          {
+            "name": "t79",
+            "value": {
+              "kind": "load_prop",
+              "name": "maxFee"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 99,
+              "column": 1
+            }
+          },
+          {
+            "name": "t80",
+            "value": {
+              "kind": "load_prop",
+              "name": "spentInWindow"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 99,
+              "column": 1
+            }
+          },
+          {
+            "name": "t81",
+            "value": {
+              "kind": "load_prop",
+              "name": "windowStart"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 99,
+              "column": 1
+            }
+          },
+          {
+            "name": "t82",
+            "value": {
+              "kind": "load_prop",
+              "name": "paused"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 99,
+              "column": 1
+            }
+          },
+          {
+            "name": "t83",
+            "value": {
+              "kind": "add_output",
+              "preimage": "",
+              "satoshis": "t73",
+              "stateValues": [
+                "t74",
+                "t75",
+                "t76",
+                "t77",
+                "t78",
+                "t79",
+                "t80",
+                "t81",
+                "t82"
+              ]
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 99,
+              "column": 1
+            }
+          },
+          {
+            "name": "t84",
+            "value": {
+              "kind": "load_param",
+              "name": "_changePKH"
+            }
+          },
+          {
+            "name": "t85",
+            "value": {
+              "kind": "load_param",
+              "name": "_changeAmount"
+            }
+          },
+          {
+            "name": "t86",
+            "value": {
+              "kind": "load_const",
+              "value": 0
+            }
+          },
+          {
+            "name": "t87",
+            "value": {
+              "kind": "bin_op",
+              "left": "t85",
+              "op": "!==",
+              "right": "t86"
+            }
+          },
+          {
+            "name": "t90",
+            "value": {
+              "cond": "t87",
+              "else": [
+                {
+                  "name": "t89",
+                  "value": {
+                    "kind": "load_const",
+                    "value": ""
+                  }
+                }
+              ],
+              "kind": "if",
+              "then": [
+                {
+                  "name": "t88",
+                  "value": {
+                    "args": [
+                      "t84",
+                      "t85"
+                    ],
+                    "func": "buildChangeOutput",
+                    "kind": "call"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "t91",
+            "value": {
+              "args": [
+                "t83",
+                "t90"
+              ],
+              "func": "cat",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t92",
+            "value": {
+              "args": [
+                "t91"
+              ],
+              "func": "hash256",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t93",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t94",
+            "value": {
+              "args": [
+                "t93"
+              ],
+              "func": "extractOutputHash",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t95",
+            "value": {
+              "kind": "bin_op",
+              "left": "t92",
+              "op": "===",
+              "result_type": "bytes",
+              "right": "t94"
+            }
+          },
+          {
+            "name": "t96",
+            "value": {
+              "isAutoInjectedStateCheck": true,
+              "kind": "assert",
+              "value": "t95"
+            }
+          }
+        ],
+        "isPublic": true
+      },
+      {
+        "name": "operatorSweep",
+        "params": [
+          {
+            "name": "sig",
+            "type": "Sig"
+          },
+          {
+            "name": "pubKey",
+            "type": "PubKey"
+          },
+          {
+            "name": "destPkh",
+            "type": "ByteString"
+          },
+          {
+            "name": "sweepSats",
+            "type": "bigint"
+          },
+          {
+            "name": "_changePKH",
+            "type": "Ripemd160"
+          },
+          {
+            "name": "_changeAmount",
+            "type": "bigint"
+          },
+          {
+            "name": "txPreimage",
+            "type": "SigHashPreimage"
+          }
+        ],
+        "body": [
+          {
+            "name": "t0",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t1",
+            "value": {
+              "kind": "check_preimage",
+              "preimage": "t0"
+            }
+          },
+          {
+            "name": "t2",
+            "value": {
+              "kind": "assert",
+              "value": "t1"
+            }
+          },
+          {
+            "name": "t3",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t4",
+            "value": {
+              "args": [
+                "t3"
+              ],
+              "func": "extractSigHashType",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t5",
+            "value": {
+              "kind": "load_const",
+              "value": 65
+            }
+          },
+          {
+            "name": "t6",
+            "value": {
+              "kind": "bin_op",
+              "left": "t4",
+              "op": "===",
+              "right": "t5"
+            }
+          },
+          {
+            "name": "t7",
+            "value": {
+              "kind": "assert",
+              "value": "t6"
+            }
+          },
+          {
+            "name": "t8",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t9",
+            "value": {
+              "kind": "deserialize_state",
+              "preimage": "t8"
+            }
+          },
+          {
+            "name": "t10",
+            "value": {
+              "kind": "load_prop",
+              "name": "operatorPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 109,
+              "column": 1
+            }
+          },
+          {
+            "name": "t11",
+            "value": {
+              "args": [
+                "t10"
+              ],
+              "func": "len",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 109,
+              "column": 1
+            }
+          },
+          {
+            "name": "t12",
+            "value": {
+              "kind": "load_const",
+              "value": 20
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 109,
+              "column": 1
+            }
+          },
+          {
+            "name": "t13",
+            "value": {
+              "kind": "bin_op",
+              "left": "t11",
+              "op": "===",
+              "right": "t12"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 109,
+              "column": 1
+            }
+          },
+          {
+            "name": "t14",
+            "value": {
+              "kind": "assert",
+              "value": "t13"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 109,
+              "column": 1
+            }
+          },
+          {
+            "name": "t15",
+            "value": {
+              "kind": "load_param",
+              "name": "pubKey"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 110,
+              "column": 1
+            }
+          },
+          {
+            "name": "t16",
+            "value": {
+              "args": [
+                "t15"
+              ],
+              "func": "hash160",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 110,
+              "column": 1
+            }
+          },
+          {
+            "name": "t17",
+            "value": {
+              "kind": "load_prop",
+              "name": "operatorPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 110,
+              "column": 1
+            }
+          },
+          {
+            "name": "t18",
+            "value": {
+              "kind": "bin_op",
+              "left": "t16",
+              "op": "===",
+              "result_type": "bytes",
+              "right": "t17"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 110,
+              "column": 1
+            }
+          },
+          {
+            "name": "t19",
+            "value": {
+              "kind": "assert",
+              "value": "t18"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 110,
+              "column": 1
+            }
+          },
+          {
+            "name": "t20",
+            "value": {
+              "kind": "load_param",
+              "name": "sig"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 111,
+              "column": 1
+            }
+          },
+          {
+            "name": "t21",
+            "value": {
+              "kind": "load_param",
+              "name": "pubKey"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 111,
+              "column": 1
+            }
+          },
+          {
+            "name": "t22",
+            "value": {
+              "args": [
+                "t20",
+                "t21"
+              ],
+              "func": "checkSig",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 111,
+              "column": 1
+            }
+          },
+          {
+            "name": "t23",
+            "value": {
+              "kind": "assert",
+              "value": "t22"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 111,
+              "column": 1
+            }
+          },
+          {
+            "name": "t24",
+            "value": {
+              "kind": "load_param",
+              "name": "destPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 112,
+              "column": 1
+            }
+          },
+          {
+            "name": "t25",
+            "value": {
+              "args": [
+                "t24"
+              ],
+              "func": "len",
+              "kind": "call"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 112,
+              "column": 1
+            }
+          },
+          {
+            "name": "t26",
+            "value": {
+              "kind": "load_const",
+              "value": 20
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 112,
+              "column": 1
+            }
+          },
+          {
+            "name": "t27",
+            "value": {
+              "kind": "bin_op",
+              "left": "t25",
+              "op": "===",
+              "right": "t26"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 112,
+              "column": 1
+            }
+          },
+          {
+            "name": "t28",
+            "value": {
+              "kind": "assert",
+              "value": "t27"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 112,
+              "column": 1
+            }
+          },
+          {
+            "name": "t29",
+            "value": {
+              "kind": "load_param",
+              "name": "sweepSats"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 113,
+              "column": 1
+            }
+          },
+          {
+            "name": "t30",
+            "value": {
+              "kind": "load_const",
+              "value": 1
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 113,
+              "column": 1
+            }
+          },
+          {
+            "name": "t31",
+            "value": {
+              "kind": "bin_op",
+              "left": "t29",
+              "op": "\u003e=",
+              "right": "t30"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 113,
+              "column": 1
+            }
+          },
+          {
+            "name": "t32",
+            "value": {
+              "kind": "assert",
+              "value": "t31"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 113,
+              "column": 1
+            }
+          },
+          {
+            "name": "t33",
+            "value": {
+              "kind": "load_param",
+              "name": "sweepSats"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 114,
+              "column": 1
+            }
+          },
+          {
+            "name": "t34",
+            "value": {
+              "kind": "load_param",
+              "name": "destPkh"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 114,
+              "column": 1
+            }
+          },
+          {
+            "name": "t35",
+            "value": {
+              "kind": "load_const",
+              "value": "@this"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 114,
+              "column": 1
+            }
+          },
+          {
+            "name": "t36",
+            "value": {
+              "args": [
+                "t34"
+              ],
+              "kind": "method_call",
+              "method": "p2pkh",
+              "object": "t35"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 114,
+              "column": 1
+            }
+          },
+          {
+            "name": "t37",
+            "value": {
+              "kind": "add_raw_output",
+              "satoshis": "t33",
+              "scriptBytes": "t36"
+            },
+            "sourceLoc": {
+              "file": "src/NektarAgentVault.runar.go",
+              "line": 114,
+              "column": 1
+            }
+          },
+          {
+            "name": "t38",
+            "value": {
+              "kind": "load_param",
+              "name": "_changePKH"
+            }
+          },
+          {
+            "name": "t39",
+            "value": {
+              "kind": "load_param",
+              "name": "_changeAmount"
+            }
+          },
+          {
+            "name": "t40",
+            "value": {
+              "kind": "load_const",
+              "value": 0
+            }
+          },
+          {
+            "name": "t41",
+            "value": {
+              "kind": "bin_op",
+              "left": "t39",
+              "op": "!==",
+              "right": "t40"
+            }
+          },
+          {
+            "name": "t44",
+            "value": {
+              "cond": "t41",
+              "else": [
+                {
+                  "name": "t43",
+                  "value": {
+                    "kind": "load_const",
+                    "value": ""
+                  }
+                }
+              ],
+              "kind": "if",
+              "then": [
+                {
+                  "name": "t42",
+                  "value": {
+                    "args": [
+                      "t38",
+                      "t39"
+                    ],
+                    "func": "buildChangeOutput",
+                    "kind": "call"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "t45",
+            "value": {
+              "args": [
+                "t37",
+                "t44"
+              ],
+              "func": "cat",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t46",
+            "value": {
+              "args": [
+                "t45"
+              ],
+              "func": "hash256",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t47",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t48",
+            "value": {
+              "args": [
+                "t47"
+              ],
+              "func": "extractOutputHash",
+              "kind": "call"
+            }
+          },
+          {
+            "name": "t49",
+            "value": {
+              "kind": "bin_op",
+              "left": "t46",
+              "op": "===",
+              "result_type": "bytes",
+              "right": "t48"
+            }
+          },
+          {
+            "name": "t50",
+            "value": {
+              "isAutoInjectedStateCheck": true,
+              "kind": "assert",
+              "value": "t49"
+            }
+          }
+        ],
+        "isPublic": true
+      }
+    ],
+    "parentClass": "StatefulSmartContract"
+  }
+}

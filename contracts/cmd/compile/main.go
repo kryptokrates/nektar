@@ -17,6 +17,7 @@ var productionContracts = []string{
 	"NektarAnchor",
 	"NektarAutomaton",
 	"NektarFeeVault",
+	"NektarAgentVault",
 	"NektarCheckpointBond",
 	"DisclosureSale",
 	"NektarZkClaim",

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -79,6 +80,8 @@ func main() {
 		err = cmdPolicy(args)
 	case "wallet":
 		err = cmdWallet(args)
+	case "vault":
+		err = cmdVault(args)
 	case "dock":
 		err = cmdDock(args)
 	case "hook":
@@ -116,7 +119,8 @@ Usage:
   nektar hook           Native zero-Node Claude Code / Codex hooks (session-start | prefetch | verify-receipt)
   nektar remember       Commit a fragment to a shard (-shard, -text, -anchor, -group)
   nektar recall         Recall fragments (-shard optional, -query, -spv)
-  nektar anchor         Anchor unanchored fragments in a shard (-shard)
+  nektar anchor         Anchor unanchored fragments in a shard (-shard) or rotate ownership (anchor rotate -shard -new-owner)
+  nektar vault          Manage two-key on-chain NektarAgentVault (deploy | status | pause | resume | rotate-agent | sweep)
   nektar verify         Verify a nektarr1.* receipt token (-token)
   nektar status         Print node identity, wallet balance, shards, policy hash, and SpendGuard state
   nektar wallet         Manage BRC-100 wallet (status | address | utxos | actions | sync | fund | import | send | sweep | consolidate | fuel)
@@ -861,6 +865,28 @@ func cmdRecall(args []string) error {
 }
 
 func cmdAnchor(args []string) error {
+	if len(args) > 0 && args[0] == "rotate" {
+		fs := flag.NewFlagSet("anchor rotate", flag.ExitOnError)
+		shard := fs.String("shard", "default", "Target shard name")
+		newOwner := fs.String("new-owner", "", "New owner compressed 33-byte pubkey hex or 20-byte PKH hex")
+		dataDir := fs.String("data-dir", "", "Data directory override")
+		_ = fs.Parse(args[1:])
+		if strings.TrimSpace(*newOwner) == "" {
+			return errors.New("anchor rotate: -new-owner <pubHex|pkhHex> is required")
+		}
+		ctx := context.Background()
+		rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
+		if err != nil {
+			return err
+		}
+		defer rt.closeFn()
+		res, err := rt.mem.RotateShardOwner(ctx, *shard, strings.TrimSpace(*newOwner))
+		if err != nil {
+			return err
+		}
+		return printJSON(res)
+	}
+
 	fs := flag.NewFlagSet("anchor", flag.ExitOnError)
 	shard := fs.String("shard", "default", "Target shard name")
 	dataDir := fs.String("data-dir", "", "Data directory override")

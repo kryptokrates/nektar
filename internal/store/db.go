@@ -530,6 +530,36 @@ func (d *DB) ListFragments(shard string) ([]FragmentRecord, error) {
 	return out, rows.Err()
 }
 
+// ListRecentFragments returns the newest active (non-forgotten, non-system) fragments across user shards.
+func (d *DB) ListRecentFragments(limit int) ([]FragmentRecord, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rows, err := d.sql.Query(`
+		SELECT shard, seq, hdp, leaf, COALESCE(prev_leaf, ''), COALESCE(chain_hash, ''), data, ciphertext, keyed_meta, provenance,
+		       level, class, borg_group, borg_epoch, batch_n, leaf_index,
+		       anchor_txid, supersedes, forgotten, tainted, created_at
+		FROM fragments
+		WHERE shard != '__receipts__' AND forgotten = 0
+		ORDER BY created_at DESC, seq DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FragmentRecord
+	for rows.Next() {
+		r, err := scanFragment(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ListUnanchored returns fragments in shard not yet committed to a batch anchor.
 func (d *DB) ListUnanchored(shard string) ([]FragmentRecord, error) {
 	d.mu.Lock()
@@ -664,6 +694,34 @@ func (d *DB) RecordBatchAnchor(anchor BatchAnchor, seqs []int64) error {
 		}
 	}
 	_, _ = tx.Exec(`DELETE FROM pending_anchors WHERE shard = ? AND n = ?`, anchor.Shard, anchor.N)
+	return tx.Commit()
+}
+
+// UpdateAnchorHead updates the latest batch anchor's txid, beef, settled status, and height
+// after an on-chain NektarAnchor.Rotate() spend (which preserves n, R, Rp, size while rotating ownerPkh).
+func (d *DB) UpdateAnchorHead(shard string, n int64, newTxID string, newBeef []byte, settled bool, blockHeight int64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.Exec(`
+		UPDATE anchors SET txid = ?, beef = ?, settled = ?, block_height = ?
+		WHERE shard = ? AND n = ?`,
+		newTxID, newBeef, boolToInt(settled), blockHeight, shard, n,
+	)
+	if err != nil {
+		return err
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return fmt.Errorf("store: anchor (%s, n=%d) not found for head update", shard, n)
+	}
+	if _, err := tx.Exec(`UPDATE fragments SET anchor_txid = ? WHERE shard = ? AND batch_n = ?`, newTxID, shard, n); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

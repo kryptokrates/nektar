@@ -68,7 +68,7 @@ func TestCovenantASMInvariants(t *testing.T) {
 	// and the 500_000_000 (0065cd1d) locktime domain constant.
 	const seqConstLE = "ffffffff00"  // 4294967295n in signed LE script number
 	const lockDomainLE = "0065cd1d"  // 500000000n in signed LE script number
-	for _, name := range []string{"NektarZkClaim", "DisclosureSale", "NektarCheckpointBond", "NektarFeeVault"} {
+	for _, name := range []string{"NektarZkClaim", "DisclosureSale", "NektarCheckpointBond", "NektarFeeVault", "NektarAgentVault"} {
 		a := loadFullArtifact(t, name)
 		if !strings.Contains(strings.ToLower(a.Script), seqConstLE) {
 			t.Errorf("F-02 REGRESSION: %s missing nSequence < 0xffffffff (%s) check in compiled Script", name, seqConstLE)

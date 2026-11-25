@@ -14,6 +14,7 @@ import (
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/lightwebinc/bcommon/guard"
 	restate "github.com/restatedev/sdk-go"
@@ -95,12 +96,13 @@ type PaymentSignal struct {
 
 // ClaimSignal delivers the seller's BRC-369 revealed content key k to a waiting BuyerDeal workflow.
 type ClaimSignal struct {
-	ClaimTxID     string                 `json:"claimTxid"`
-	ContentKeyHex string                 `json:"contentKeyHex"`
-	CiphertextHex string                 `json:"ciphertextHex,omitempty"`
-	ChirpURL      string                 `json:"chirpUrl,omitempty"`
-	ProofBundle   *contracts.ProofBundle `json:"proofBundle,omitempty"`
-	DealReceipt   *DealReceipt           `json:"dealReceipt,omitempty"`
+	ClaimTxID      string                 `json:"claimTxid"`
+	ClaimTxBEEFHex string                 `json:"claimTxBeefHex,omitempty"`
+	ContentKeyHex  string                 `json:"contentKeyHex"`
+	CiphertextHex  string                 `json:"ciphertextHex,omitempty"`
+	ChirpURL       string                 `json:"chirpUrl,omitempty"`
+	ProofBundle    *contracts.ProofBundle `json:"proofBundle,omitempty"`
+	DealReceipt    *DealReceipt           `json:"dealReceipt,omitempty"`
 }
 
 // CustodyReserveInput serializes global spend reservation through the private Restate Custody Virtual Object.
@@ -1148,6 +1150,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			var payBEEF []byte
 			var outIdx uint32
 			var derivPrefix, derivSuffix, senderKey string
+			var escrowPayload *EscrowObligationPayload
 			if existing, gErr := e.mem.DB().GetDeal(dealID); gErr == nil && existing.PaymentTxID != "" {
 				payTxID = existing.PaymentTxID
 				payBEEF = existing.PaymentBEEF
@@ -1155,6 +1158,12 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 				derivPrefix = existing.PaymentDerivPrefix
 				derivSuffix = existing.PaymentDerivSuffix
 				senderKey = existing.PaymentSenderKey
+				if ob, obErr := e.mem.DB().GetObligation(ObligationID(dealID, ObligationRevealOwed)); obErr == nil && len(ob.PayloadJSON) > 0 {
+					var ep EscrowObligationPayload
+					if json.Unmarshal(ob.PayloadJSON, &ep) == nil && ep.EscrowTxID != "" {
+						escrowPayload = &ep
+					}
+				}
 				// Ensure previously built/uncertain tx is actually broadcast idempotently without constructing a second tx!
 				mined, wStatus, _, _ := e.mem.Chain().TxBroadcastStatus(rctx, payTxID)
 				if !mined && len(payBEEF) > 0 {
@@ -1180,7 +1189,130 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 					Status:          "payment_pending",
 					CounterpartyPub: chosen.Pub,
 				})
-				if chosen.PayIdentityKey != "" {
+
+				// Wave 1 Rúnar Escrow Path: when policy selects DisclosureSale escrow (default auto >= 500 sats
+				// or > ZeroConfMaxSats) and Seller supplied a signed KeyedSaleOffer, fund an atomic DisclosureSale
+				// UTXO (from an active NektarAgentVault in 1 tx when deployed, else from BRC-100 wallet!).
+				useEscrow := e.policy != nil && e.policy.ShouldUseEscrow(chosen.PriceSats) && len(chosen.SaleOffer) > 0
+				if useEscrow {
+					var so contracts.KeyedSaleOffer
+					if uErr := json.Unmarshal(chosen.SaleOffer, &so); uErr != nil {
+						return buyerPayResult{NowUnix: now, PreBroadcastErr: "decode saleOffer for escrow: " + uErr.Error()}, nil
+					}
+					hWrapped, hwErr := hex.DecodeString(so.Config.HWrapped)
+					if hwErr != nil || len(hWrapped) != 32 {
+						return buyerPayResult{NowUnix: now, PreBroadcastErr: "saleOffer missing valid 32-byte hWrapped"}, nil
+					}
+					var sellerPKH []byte
+					if chosen.PayAddress != "" {
+						if addr, aErr := script.NewAddressFromString(strings.TrimSpace(chosen.PayAddress)); aErr == nil && len(addr.PublicKeyHash) == 20 {
+							sellerPKH = append([]byte(nil), addr.PublicKeyHash...)
+						}
+					}
+					if len(sellerPKH) != 20 {
+						sellerPKH, _ = hex.DecodeString(so.Config.SellerPKH)
+					}
+					depPKH, fErr := e.mem.Chain().FundPKH(rctx)
+					if fErr != nil || len(depPKH) != 20 {
+						return buyerPayResult{NowUnix: now, PreBroadcastErr: fmt.Sprintf("derive depositor PKH: %v", fErr)}, nil
+					}
+					maxFee := so.Config.MaxFee
+					if maxFee < 300 {
+						maxFee = 500
+					}
+					if maxFee > 2000 {
+						maxFee = 2000
+					}
+					refundAfter := so.Config.RefundAfter
+					if refundAfter == 0 || (refundAfter >= 500_000_000 && int64(refundAfter) <= now+120) {
+						refundAfter = uint64(now + 3600)
+					}
+					escrowParams := contracts.DisclosureSaleParams{
+						SellerPKH:    sellerPKH,
+						Price:        chosen.PriceSats,
+						HWrapped:     hWrapped,
+						RefundAfter:  refundAfter,
+						MaxFee:       maxFee,
+						DepositorPKH: depPKH,
+					}
+					escrowLock, lErr := contracts.EncodeDisclosureSaleLockingScript(escrowParams)
+					if lErr != nil {
+						return buyerPayResult{NowUnix: now, PreBroadcastErr: "encode DisclosureSale escrow: " + lErr.Error()}, nil
+					}
+					escrowSats := escrowParams.RequiredEscrowSatoshis() + 100
+
+					// Atomic 1-tx composition: if an active unpaused NektarAgentVault is deployed, fund the
+					// DisclosureSale escrow DIRECTLY from the vault via AgentSpend (Output 0 = vault, Output 1 = escrow)!
+					fundedFromVault := false
+					if vRec, _, vErr := LoadActiveVault(e.mem.DB()); vErr == nil && vRec != nil && !vRec.State.Paused {
+						vTx, vBEEF, vOutIdx, _, _, svErr := SpendActiveVault(rctx, e.mem.DB(), e.mem.Chain(), escrowLock, escrowSats)
+						if svErr == nil && vTx != nil {
+							payTxID = vTx.TxID().String()
+							payBEEF = vBEEF
+							outIdx = vOutIdx
+							fundedFromVault = true
+						}
+					}
+					if !fundedFromVault {
+						builtTx, builtBEEF, fee, spend, bErr := e.mem.Chain().BuildFundedTxWithBEEF(rctx, []*transaction.TransactionOutput{{
+							Satoshis:      escrowSats,
+							LockingScript: escrowLock,
+						}})
+						if bErr != nil {
+							if errors.Is(bErr, nwallet.ErrBroadcastUnknown) {
+								return buyerPayResult{}, bErr
+							}
+							return buyerPayResult{NowUnix: now, PreBroadcastErr: bErr.Error()}, nil
+						}
+						payTxID = builtTx.TxID().String()
+						payBEEF = builtBEEF
+						if len(payBEEF) == 0 {
+							if b2, sErr := chain.SafeAtomicBEEF(builtTx); sErr == nil && len(b2) > 0 {
+								payBEEF = b2
+							}
+						}
+						outIdx = 0
+						e.persistDealRecord(store.DealRecord{
+							DealID:             dealID,
+							Role:               "buyer",
+							Status:             "payment_pending",
+							CounterpartyPub:    chosen.Pub,
+							PaymentTxID:        payTxID,
+							PaymentBEEF:        payBEEF,
+							PaymentOutputIndex: outIdx,
+						})
+						if _, brErr := e.mem.Chain().Broadcast(rctx, builtTx, fee, spend); brErr != nil {
+							if errors.Is(brErr, nwallet.ErrBroadcastUnknown) {
+								return buyerPayResult{}, brErr
+							}
+							return buyerPayResult{NowUnix: now, PreBroadcastErr: brErr.Error()}, nil
+						}
+						if freshBEEF, fErr := chain.SafeAtomicBEEF(builtTx); fErr == nil && len(freshBEEF) > 0 {
+							payBEEF = freshBEEF
+						}
+					}
+					escrowPayload = &EscrowObligationPayload{
+						OfferID:      chosen.OfferID,
+						EscrowTxID:   payTxID,
+						EscrowVout:   outIdx,
+						EscrowBEEF:   hex.EncodeToString(payBEEF),
+						SellerPKH:    hex.EncodeToString(sellerPKH),
+						DepositorPKH: hex.EncodeToString(depPKH),
+						Price:        chosen.PriceSats,
+						HWrapped:     so.Config.HWrapped,
+						RefundAfter:  refundAfter,
+						MaxFee:       maxFee,
+					}
+					e.persistDealRecord(store.DealRecord{
+						DealID:             dealID,
+						Role:               "buyer",
+						Status:             "paid_awaiting_reveal",
+						CounterpartyPub:    chosen.Pub,
+						PaymentTxID:        payTxID,
+						PaymentBEEF:        payBEEF,
+						PaymentOutputIndex: outIdx,
+					})
+				} else if chosen.PayIdentityKey != "" {
 					// Pre-build signed NoSend BRC-29 tx and persist txid + BEEF + remittance metadata BEFORE broadcast
 					// so neither crashes nor ErrBroadcastUnknown retries can ever double-pay or lose BRC-29 nonces!
 					builtTx, fee, spend, sendRes, alreadyBroadcast, bErr := e.mem.Chain().BuildBRC29Tx(rctx, chosen.PayIdentityKey, chosen.PriceSats, "market purchase "+chosen.OfferID)
@@ -1265,7 +1397,11 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			}
 
 			if payTxID != "" && e.mem != nil && e.mem.DB() != nil {
-				_ = RecordRevealOwed(e.mem.DB(), dealID, chosen.Pub, payTxID, chosen.PriceSats, now+7200)
+				dl := now + 7200
+				if escrowPayload != nil && escrowPayload.RefundAfter >= 500_000_000 {
+					dl = int64(escrowPayload.RefundAfter)
+				}
+				_ = RecordRevealOwedWithEscrow(e.mem.DB(), dealID, chosen.Pub, payTxID, chosen.PriceSats, dl, escrowPayload)
 			}
 
 			res := buyerPayResult{NowUnix: now, TxID: payTxID}
@@ -1280,6 +1416,13 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 				DerivationSuffix:  derivSuffix,
 				SenderIdentityKey: senderKey,
 			}
+			if escrowPayload != nil {
+				pReq.EscrowMode = true
+				pReq.DepositorPKH = escrowPayload.DepositorPKH
+				pReq.EscrowSellerPKH = escrowPayload.SellerPKH
+				pReq.EscrowRefundAfter = escrowPayload.RefundAfter
+				pReq.EscrowMaxFee = escrowPayload.MaxFee
+			}
 			br.signPurchaseRequest(&pReq)
 			// Try direct HTTP first; if Seller is NAT-ed, fire bbox purchase_beef asynchronously
 			// and return nil so BuyerDeal suspends durably on Restate Promise("claim")!
@@ -1287,13 +1430,18 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			if dErr != nil {
 				res.DeliveryErr = dErr.Error()
 			} else if pResp != nil && pResp.OK {
+				claimTID := payTxID
+				if pResp.ClaimTxID != "" {
+					claimTID = pResp.ClaimTxID
+				}
 				res.ImmediateClaim = &ClaimSignal{
-					ClaimTxID:     payTxID,
-					ContentKeyHex: pResp.ContentKeyHex,
-					CiphertextHex: pResp.CiphertextHex,
-					ChirpURL:      pResp.ChirpURL,
-					ProofBundle:   pResp.ProofBundle,
-					DealReceipt:   pResp.DealReceipt,
+					ClaimTxID:      claimTID,
+					ClaimTxBEEFHex: pResp.ClaimTxBEEFHex,
+					ContentKeyHex:  pResp.ContentKeyHex,
+					CiphertextHex:  pResp.CiphertextHex,
+					ChirpURL:       pResp.ChirpURL,
+					ProofBundle:    pResp.ProofBundle,
+					DealReceipt:    pResp.DealReceipt,
 				}
 			}
 			return res, nil
@@ -1412,8 +1560,8 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			targetShard = "market/" + dom
 		}
 
-		if strings.TrimSpace(sig.ContentKeyHex) == "" {
-			return buyerVerifyResult{NowUnix: now, FailedReason: "missing contentKeyHex in seller claim signal"}, nil
+		if strings.TrimSpace(sig.ContentKeyHex) == "" && strings.TrimSpace(sig.ClaimTxBEEFHex) == "" {
+			return buyerVerifyResult{NowUnix: now, FailedReason: "missing contentKeyHex and claimTxBeefHex in seller claim signal"}, nil
 		}
 		if len(chosen.SaleOffer) == 0 {
 			return buyerVerifyResult{NowUnix: now, FailedReason: "missing signed BRC-369 SaleOffer in chosen offer"}, nil
@@ -1422,6 +1570,20 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			var saleOffer contracts.KeyedSaleOffer
 			if err := json.Unmarshal(chosen.SaleOffer, &saleOffer); err != nil {
 				return buyerVerifyResult{NowUnix: now, FailedReason: "decode saleOffer: " + err.Error()}, nil
+			}
+			// Trustless L1 fallback: if ContentKeyHex was omitted/dropped off HTTP, extract `k` directly
+			// from the on-chain DisclosureSale.Buy(k) transaction's unlocking script!
+			if strings.TrimSpace(sig.ContentKeyHex) == "" && strings.TrimSpace(sig.ClaimTxBEEFHex) != "" {
+				if rawClaim, dErr := hex.DecodeString(strings.TrimSpace(sig.ClaimTxBEEFHex)); dErr == nil {
+					if _, claimTx, _, pErr := guard.ParseBEEF(rawClaim, guard.DefaultBound); pErr == nil && claimTx != nil {
+						if extracted, eErr := contracts.ExtractRevealedKeyFromBuyTx(claimTx, 0, saleOffer.Config.HWrapped); eErr == nil {
+							sig.ContentKeyHex = hex.EncodeToString(extracted)
+						}
+					}
+				}
+			}
+			if strings.TrimSpace(sig.ContentKeyHex) == "" {
+				return buyerVerifyResult{NowUnix: now, FailedReason: "missing contentKeyHex in seller claim signal (and on-chain extraction failed)"}, nil
 			}
 			// Skip remote CHIRP HTTP refetch when verified CiphertextHex is already inline in signed SaleOffer (Finding #33).
 			if saleOffer.CiphertextHex == "" {

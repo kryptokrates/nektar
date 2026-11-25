@@ -26,6 +26,11 @@ const (
 
 	PrivacyMetadataOnly       = "metadata_only"
 	PrivacyDisclosablePreview = "disclosable_preview"
+
+	EscrowModeAuto      = "auto"
+	EscrowModeAlways    = "always"
+	EscrowModeOff       = "off"
+	DefaultEscrowMinSat = uint64(500)
 )
 
 // AIMatchingPolicy governs cloud AI matching egress, privacy scope, thresholds, and semantic intent.
@@ -160,6 +165,8 @@ type Policy struct {
 	DailySpentSats           uint64            `json:"dailySpentSats"`
 	BuyerApproved            bool              `json:"buyerApproved"`
 	SellerApproved           bool              `json:"sellerApproved"`
+	EscrowMode               string            `json:"escrowMode,omitempty"`    // auto (default) | always | off
+	EscrowMinSats            uint64            `json:"escrowMinSats,omitempty"` // default 500 sats in auto mode
 	AIMatching               *AIMatchingPolicy `json:"aiMatching,omitempty"`
 	pinnedOperatorPub        string
 	activePolicyHash         string
@@ -280,8 +287,63 @@ func DefaultPolicy() *Policy {
 		ZeroConfMaxSats:          0, // fail-closed: 0-conf disabled until explicitly approved by operator policy
 		ZeroConfMaxAggregateSats: 0,
 		MaxUnconfirmedAncestors:  15,
+		EscrowMode:               EscrowModeAuto,
+		EscrowMinSats:            DefaultEscrowMinSat,
 		BlockedSellers:           make(map[string]bool),
 		PreferredSellers:         make(map[string]bool),
+	}
+}
+
+// SetEscrowMode configures the buyer's DisclosureSale on-chain escrow policy ("auto" | "always" | "off").
+func (p *Policy) SetEscrowMode(mode string, minSats uint64) {
+	if p == nil {
+		return
+	}
+	m := strings.ToLower(strings.TrimSpace(mode))
+	if m == "" {
+		m = EscrowModeAuto
+	}
+	p.mu.Lock()
+	p.EscrowMode = m
+	if minSats > 0 {
+		p.EscrowMinSats = minSats
+	}
+	p.mu.Unlock()
+}
+
+// ShouldUseEscrow reports whether a purchase of priceSats should settle via trustless
+// DisclosureSale on-chain atomic escrow instead of direct BRC-29 payment.
+func (p *Policy) ShouldUseEscrow(priceSats uint64) bool {
+	if priceSats == 0 {
+		return false
+	}
+	if p == nil {
+		return priceSats >= DefaultEscrowMinSat
+	}
+	p.mu.RLock()
+	mode := strings.ToLower(strings.TrimSpace(p.EscrowMode))
+	minSats := p.EscrowMinSats
+	zeroConfMax := p.ZeroConfMaxSats
+	p.mu.RUnlock()
+	if mode == "" {
+		mode = EscrowModeAuto
+	}
+	if minSats == 0 {
+		minSats = DefaultEscrowMinSat
+	}
+	switch mode {
+	case EscrowModeAlways:
+		return true
+	case EscrowModeOff:
+		return false
+	default: // auto
+		if priceSats >= minSats {
+			return true
+		}
+		if zeroConfMax > 0 && priceSats > zeroConfMax {
+			return true
+		}
+		return false
 	}
 }
 
@@ -508,6 +570,70 @@ func ApprovePolicyPresetSigned(
 		if err := SignOperatorPolicy(ctx, operatorPub, signDigest, &rec); err != nil {
 			return store.OperatorPolicyRecord{}, err
 		}
+	}
+	if db != nil {
+		if err := db.SaveOperatorPolicy(rec); err != nil {
+			return store.OperatorPolicyRecord{}, err
+		}
+	}
+	if pol != nil && db != nil {
+		_ = SyncPolicyFromDB(db, pol)
+	} else if pol != nil {
+		applyPolicyRecord(pol, rec)
+	}
+	return rec, nil
+}
+
+// PolicyLimitsOverride carries optional custom satoshi limits when approving a policy.
+type PolicyLimitsOverride struct {
+	MaxPerDeal  uint64
+	MaxPerDay   uint64
+	ZeroConfMax *uint64
+}
+
+// ApprovePolicyCustom creates, validates, hashes, persists, and activates an operator policy
+// with optional custom satoshi limits and optional Jev AI matching controls.
+func ApprovePolicyCustom(
+	db *store.DB,
+	pol *Policy,
+	preset string,
+	domains []string,
+	limits *PolicyLimitsOverride,
+	approvedBy string,
+	aiPol *AIMatchingPolicy,
+) (store.OperatorPolicyRecord, error) {
+	rec, err := buildOperatorPolicyRecord(preset, domains, approvedBy, aiPol)
+	if err != nil {
+		return store.OperatorPolicyRecord{}, err
+	}
+	if limits != nil {
+		if limits.MaxPerDeal > 0 {
+			rec.MaxPerDeal = limits.MaxPerDeal
+		}
+		if limits.MaxPerDay > 0 {
+			rec.MaxPerDay = limits.MaxPerDay
+		}
+		if limits.ZeroConfMax != nil {
+			rec.ZeroConfMax = *limits.ZeroConfMax
+		}
+		if rec.MaxPerDeal > rec.MaxPerDay {
+			return store.OperatorPolicyRecord{}, errors.New("market: maxPerDeal cannot exceed maxPerDay")
+		}
+		hashInput := map[string]any{
+			"roles":       rec.Roles,
+			"domains":     rec.Domains,
+			"maxPerDeal":  rec.MaxPerDeal,
+			"maxPerDay":   rec.MaxPerDay,
+			"zeroConfMax": rec.ZeroConfMax,
+		}
+		if rec.AIPolicyJSON != "" {
+			hashInput["aiMatching"] = aiPol
+		}
+		canon, cErr := core.CanonicalJSON(hashInput)
+		if cErr != nil {
+			return store.OperatorPolicyRecord{}, cErr
+		}
+		rec.PolicyHash = hex.EncodeToString(core.SHA256(canon))
 	}
 	if db != nil {
 		if err := db.SaveOperatorPolicy(rec); err != nil {

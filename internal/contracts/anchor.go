@@ -40,10 +40,44 @@ type CovenantID struct {
 }
 
 var (
-	artifactMu    sync.RWMutex
-	artifactCache = make(map[string]*Artifact)
-	codeCache     = make(map[string][]byte)
+	artifactMu        sync.RWMutex
+	artifactCache     = make(map[string]*Artifact)
+	codeCache         = make(map[string][]byte)
+	patchedAnchorCode []byte
 )
+
+func loadPatchedAnchorCode() ([]byte, error) {
+	artifactMu.RLock()
+	if len(patchedAnchorCode) > 0 {
+		c := patchedAnchorCode
+		artifactMu.RUnlock()
+		return c, nil
+	}
+	artifactMu.RUnlock()
+
+	art, err := LoadFullArtifact("NektarAnchor")
+	if err != nil {
+		return nil, err
+	}
+	code, err := BuildCodePart(art, nil)
+	if err != nil {
+		return nil, fmt.Errorf("contracts: patch NektarAnchor codeSepIndexSlots: %w", err)
+	}
+	artifactMu.Lock()
+	patchedAnchorCode = code
+	artifactMu.Unlock()
+	return code, nil
+}
+
+// IsSpendableNektarAnchorScript reports whether scriptBytes carries the codeSepIndex-patched
+// NektarAnchor v4 code prefix that can be spent on-chain via Append() / Rotate().
+func IsSpendableNektarAnchorScript(scriptBytes []byte) bool {
+	patched, err := loadPatchedAnchorCode()
+	if err != nil || len(patched) == 0 {
+		return false
+	}
+	return len(scriptBytes) > len(patched) && core.EqualBytes(scriptBytes[:len(patched)], patched) && scriptBytes[len(patched)] == 0x6a
+}
 
 // LoadArtifact reads and caches an embedded Rúnar JSON artifact by contract name (e.g. "NektarAnchor").
 func LoadArtifact(name string) (*Artifact, error) {
@@ -103,6 +137,7 @@ func ListArtifacts() []string {
 		"NektarAutomaton",
 		"DisclosureSale",
 		"NektarFeeVault",
+		"NektarAgentVault",
 		"NektarCheckpointBond",
 		"NektarZkClaim",
 		"NektarGrothClaim",
@@ -123,10 +158,10 @@ type AnchorState struct {
 	Metanet  bool   `json:"metanet"`
 }
 
-// EncodeAnchorLockingScript builds the NektarAnchor locking script:
-// <compiled NektarAnchor code> OP_RETURN [0x04 "META"] <genesisOwner33> <n_le8> <size_le8> <R32> <Rp32> <len(tag)><tag> <len(pkh)><pkh>
+// EncodeAnchorLockingScript builds the L1-spendable NektarAnchor locking script:
+// <patched NektarAnchor code> OP_RETURN [0x04 "META"] <genesisOwner33> <n_le8> <size_le8> <R32> <Rp32> <len(tag)><tag> <len(pkh)><pkh>
 func EncodeAnchorLockingScript(st AnchorState) (*script.Script, error) {
-	codeBytes, err := loadArtifactCode("NektarAnchor")
+	codeBytes, err := loadPatchedAnchorCode()
 	if err != nil {
 		return nil, err
 	}
@@ -171,9 +206,14 @@ func EncodeAnchorLockingScript(st AnchorState) (*script.Script, error) {
 }
 
 // DecodeNektarAnchor decodes and validates a NektarAnchor locking script's OP_RETURN state suffix
-// and verifies the code prefix matches the embedded NektarAnchor or NektarAnchorV3 artifact.
+// and verifies the code prefix matches the patched L1-spendable NektarAnchor, legacy unpatched
+// NektarAnchor, or legacy NektarAnchorV3 artifact.
 func DecodeNektarAnchor(scriptBytes []byte) (*AnchorState, error) {
-	codeV4, err := loadArtifactCode("NektarAnchor")
+	codeV4Patched, err := loadPatchedAnchorCode()
+	if err != nil {
+		return nil, err
+	}
+	codeV4Raw, err := loadArtifactCode("NektarAnchor")
 	if err != nil {
 		return nil, err
 	}
@@ -181,8 +221,10 @@ func DecodeNektarAnchor(scriptBytes []byte) (*AnchorState, error) {
 
 	var suffix []byte
 	switch {
-	case len(scriptBytes) > len(codeV4) && core.EqualBytes(scriptBytes[:len(codeV4)], codeV4) && scriptBytes[len(codeV4)] == 0x6a:
-		suffix = scriptBytes[len(codeV4)+1:]
+	case len(scriptBytes) > len(codeV4Patched) && core.EqualBytes(scriptBytes[:len(codeV4Patched)], codeV4Patched) && scriptBytes[len(codeV4Patched)] == 0x6a:
+		suffix = scriptBytes[len(codeV4Patched)+1:]
+	case len(scriptBytes) > len(codeV4Raw) && core.EqualBytes(scriptBytes[:len(codeV4Raw)], codeV4Raw) && scriptBytes[len(codeV4Raw)] == 0x6a:
+		suffix = scriptBytes[len(codeV4Raw)+1:]
 	case len(codeV3) > 0 && len(scriptBytes) > len(codeV3) && core.EqualBytes(scriptBytes[:len(codeV3)], codeV3) && scriptBytes[len(codeV3)] == 0x6a:
 		suffix = scriptBytes[len(codeV3)+1:]
 	default:

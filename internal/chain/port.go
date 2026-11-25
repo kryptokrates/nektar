@@ -112,8 +112,10 @@ type Port struct {
 	txMinedHooks []nwallet.TxMinedHook
 
 	// Lightweight bookkeeping for BuildFundedTx -> Broadcast split callers & client-mode txs.
-	pendingNoSend map[string]string                   // txid -> action reference (embedded BuildFundedTx)
-	clientBuilt   map[string]*transaction.Transaction // hot cache backed durably by clientTxDir
+	pendingNoSend    map[string]string                   // txid -> action reference (embedded BuildFundedTx)
+	clientBuilt      map[string]*transaction.Transaction // hot cache backed durably by clientTxDir
+	memCovenantTxs   map[string]*transaction.Transaction // memory-mode locktime-final covenant txs (real IsFinalTx + Chronicle VM)
+	memCovenantSpent map[string]string                   // memory-mode "txid:vout" -> spending txid double-spend guard
 }
 
 // strictSettler wraps a bcommon publish.Settler so unacknowledged TCP writes and Arcade
@@ -243,8 +245,10 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		guard:         guardInst,
 		httpClient:    &http.Client{Timeout: 20 * time.Second},
 		zeroConfWatch: NewZeroConfWatch(),
-		pendingNoSend: make(map[string]string),
-		clientBuilt:   make(map[string]*transaction.Transaction),
+		pendingNoSend:    make(map[string]string),
+		clientBuilt:      make(map[string]*transaction.Transaction),
+		memCovenantTxs:   make(map[string]*transaction.Transaction),
+		memCovenantSpent: make(map[string]string),
 	}
 
 	// 1. Configure multi-witness chain tracker, chain view (WoC/node), settler (Arcade/RPC/TCP), and live feepolicy!
@@ -1515,6 +1519,9 @@ func (p *Port) Tx(txid string) *transaction.Transaction {
 	if p.testChain != nil {
 		p.tcMu.Lock()
 		tx := p.testChain.Tx(txid)
+		if tx == nil {
+			tx = p.memCovenantTxs[txid]
+		}
 		p.tcMu.Unlock()
 		if tx != nil {
 			return tx

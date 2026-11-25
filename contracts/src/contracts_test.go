@@ -228,3 +228,68 @@ func TestNektarGrothClaimSettleValid(t *testing.T) {
 		c.SettleValid(sig, pub, runar.ByteString(make([]byte, 72))+runar.HexToBytes("01"), 1000, 4000)
 	})
 }
+
+func TestNektarAgentVaultTwoKeyRules(t *testing.T) {
+	opSig := runar.SignTestMessage(runar.Alice.PrivKey)
+	opPub := runar.Alice.PubKey
+	opPkh := runar.Hash160(opPub)
+
+	agSig := runar.SignTestMessage(runar.Bob.PrivKey)
+	agPub := runar.Bob.PubKey
+	agPkh := runar.Hash160(agPub)
+
+	c := &NektarAgentVault{
+		OperatorPkh:   opPkh,
+		AgentPkh:      agPkh,
+		PerTxCap:      2000,
+		WindowCap:     5000,
+		WindowBlocks:  144,
+		MaxFee:        500,
+		SpentInWindow: 0,
+		WindowStart:   0,
+		Paused:        0,
+	}
+
+	dest := c.p2pkh(agPkh)
+	// Valid spend within PerTxCap & WindowCap.
+	// Note: in mock Go test mode, ExtractAmount(TxPreimage)=10000, ExtractLocktime=0, ExtractSequence=0.
+	c.AgentSpend(agSig, agPub, dest, 1500, 1500, 0, 8200)
+	if c.SpentInWindow != 1500 {
+		t.Fatalf("expected SpentInWindow=1500, got %d", c.SpentInWindow)
+	}
+
+	// Exceeding PerTxCap must panic.
+	assertPanics(t, "over PerTxCap", func() {
+		c.AgentSpend(agSig, agPub, dest, 2500, 4000, 0, 7200)
+	})
+
+	// Exceeding WindowCap across cumulative spends must panic (1500 + 2000 + 2000 = 5500 > 5000).
+	c.AgentSpend(agSig, agPub, dest, 2000, 3500, 0, 7700)
+	assertPanics(t, "over WindowCap", func() {
+		c.AgentSpend(agSig, agPub, dest, 2000, 5500, 0, 7700)
+	})
+
+	// Hot agent MUST NOT be able to call OperatorControl or OperatorSweep.
+	assertPanics(t, "agent tries OperatorControl", func() {
+		c.OperatorControl(agSig, agPub, agPkh, 999999, 999999, 1, 500, 0, 9500)
+	})
+	assertPanics(t, "agent tries OperatorSweep", func() {
+		c.OperatorSweep(agSig, agPub, agPkh, 9500)
+	})
+
+	// Cold operator pauses the vault -> hot agent is immediately locked out.
+	c.OperatorControl(opSig, opPub, agPkh, 2000, 5000, 144, 500, 1, 9500)
+	if c.Paused != 1 {
+		t.Fatalf("expected Paused=1, got %d", c.Paused)
+	}
+	assertPanics(t, "agent spend while paused", func() {
+		c.AgentSpend(agSig, agPub, dest, 100, 3600, 0, 9600)
+	})
+
+	// Cold operator can unpause, rotate agent key, and sweep.
+	c.OperatorControl(opSig, opPub, opPkh, 2000, 5000, 144, 500, 0, 9500)
+	if c.Paused != 0 || c.AgentPkh != opPkh {
+		t.Fatalf("expected unpaused rotated vault")
+	}
+	c.OperatorSweep(opSig, opPub, opPkh, 9500)
+}

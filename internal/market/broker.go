@@ -81,6 +81,11 @@ type PurchaseRequest struct {
 	DerivationPrefix  string `json:"derivationPrefix,omitempty"`
 	DerivationSuffix  string `json:"derivationSuffix,omitempty"`
 	SenderIdentityKey string `json:"senderIdentityKey,omitempty"`
+	EscrowMode        bool   `json:"escrowMode,omitempty"`
+	DepositorPKH      string `json:"depositorPkh,omitempty"`
+	EscrowSellerPKH   string `json:"escrowSellerPkh,omitempty"`
+	EscrowRefundAfter uint64 `json:"escrowRefundAfter,omitempty"`
+	EscrowMaxFee      uint64 `json:"escrowMaxFee,omitempty"`
 	TS                int64  `json:"ts,omitempty"`
 	BuyerSig          string `json:"buyerSig,omitempty"`
 }
@@ -101,17 +106,19 @@ func (r PurchaseRequest) Signable() map[string]any {
 // When Status == "awaiting_confirmation", payment was SPV-verified & internalized but exceeds 0-conf caps
 // (or settleDepth); ContentKeyHex is withheld until the tx mines at RequiredDepth and Seller delivers reveal_key.
 type PurchaseResponse struct {
-	OK            bool                   `json:"ok"`
-	Status        string                 `json:"status,omitempty"` // settled | awaiting_confirmation
-	RequiredDepth int                    `json:"requiredDepth,omitempty"`
-	OfferID       string                 `json:"offerId"`
-	SellerPub     string                 `json:"sellerPub"`
-	ContentKeyHex string                 `json:"contentKeyHex,omitempty"`
-	CiphertextHex string                 `json:"ciphertextHex,omitempty"`
-	ChirpURL      string                 `json:"chirpUrl,omitempty"`
-	ProofBundle   *contracts.ProofBundle `json:"proofBundle,omitempty"`
-	DealReceipt   *DealReceipt           `json:"dealReceipt,omitempty"`
-	Error         string                 `json:"error,omitempty"`
+	OK             bool                   `json:"ok"`
+	Status         string                 `json:"status,omitempty"` // settled | awaiting_confirmation
+	RequiredDepth  int                    `json:"requiredDepth,omitempty"`
+	OfferID        string                 `json:"offerId"`
+	SellerPub      string                 `json:"sellerPub"`
+	ContentKeyHex  string                 `json:"contentKeyHex,omitempty"`
+	ClaimTxID      string                 `json:"claimTxid,omitempty"`
+	ClaimTxBEEFHex string                 `json:"claimTxBeefHex,omitempty"`
+	CiphertextHex  string                 `json:"ciphertextHex,omitempty"`
+	ChirpURL       string                 `json:"chirpUrl,omitempty"`
+	ProofBundle    *contracts.ProofBundle `json:"proofBundle,omitempty"`
+	DealReceipt    *DealReceipt           `json:"dealReceipt,omitempty"`
+	Error          string                 `json:"error,omitempty"`
 }
 
 type pendingConfirmEntry struct {
@@ -1270,14 +1277,80 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		}, nil
 	}
 
-	// Verify payment transaction pays >= Offer.Price via BRC-29 derived key (strictly required on live networks
-	// to prevent replay of publicly visible historical mined deposits to static FundAddress()).
-	isBRC29 := req.DerivationPrefix != "" && req.DerivationSuffix != "" && req.SenderIdentityKey != ""
-	if !isBRC29 && b.mem.Chain().Network() != "memory" {
-		return nil, errors.New("market: BRC-29 payment remittance (derivationPrefix, derivationSuffix, senderIdentityKey) is required on live networks")
+	// Verify payment transaction pays >= Offer.Price via DisclosureSale on-chain escrow OR BRC-29 derived key
+	// (strictly required on live networks to prevent replay of publicly visible historical deposits to static FundAddress()).
+	isEscrow := req.EscrowMode
+	isBRC29 := !isEscrow && req.DerivationPrefix != "" && req.DerivationSuffix != "" && req.SenderIdentityKey != ""
+	if !isEscrow && !isBRC29 && b.mem.Chain().Network() != "memory" {
+		return nil, errors.New("market: DisclosureSale escrow or BRC-29 payment remittance is required on live networks")
 	}
 	var paidSats uint64
-	if isBRC29 {
+	var escrowParams contracts.DisclosureSaleParams
+	if isEscrow {
+		if uint64(req.OutputIndex) >= uint64(len(tx.Outputs)) {
+			return nil, fmt.Errorf("market: escrow outputIndex %d out of range", req.OutputIndex)
+		}
+		depPKH, dErr := hex.DecodeString(strings.TrimSpace(req.DepositorPKH))
+		if dErr != nil || len(depPKH) != 20 {
+			return nil, errors.New("market: escrow requires 20-byte hex depositorPkh")
+		}
+		sellerPKH, sErr := hex.DecodeString(strings.TrimSpace(req.EscrowSellerPKH))
+		if sErr != nil || len(sellerPKH) != 20 {
+			return nil, errors.New("market: escrow requires 20-byte hex escrowSellerPkh")
+		}
+		// Verify EscrowSellerPKH belongs to THIS seller (either our wallet FundPKH or our signed offer SellerPKH)!
+		sellerPKHMatches := false
+		if myFundPKH, fErr := b.mem.Chain().FundPKH(ctx); fErr == nil && bytes.Equal(myFundPKH, sellerPKH) {
+			sellerPKHMatches = true
+		}
+		if offerPKH, oErr := hex.DecodeString(sale.SaleOffer.Config.SellerPKH); oErr == nil && bytes.Equal(offerPKH, sellerPKH) {
+			sellerPKHMatches = true
+		}
+		if !sellerPKHMatches {
+			return nil, errors.New("market: escrowSellerPkh does not belong to this seller")
+		}
+		hWrappedBytes, hwErr := hex.DecodeString(sale.SaleOffer.Config.HWrapped)
+		if hwErr != nil || len(hWrappedBytes) != 32 {
+			return nil, errors.New("market: seller offer has invalid hWrapped")
+		}
+		maxFee := req.EscrowMaxFee
+		if maxFee < 100 || maxFee > 5000 {
+			return nil, fmt.Errorf("market: escrow maxFee %d outside safe range [100, 5000]", maxFee)
+		}
+		refundAfter := req.EscrowRefundAfter
+		if refundAfter == 0 {
+			refundAfter = sale.SaleOffer.Config.RefundAfter
+		}
+		// Ensure RefundAfter has safe headroom so buyer cannot front-run our Buy() with an immediate Refund()!
+		if refundAfter < 500_000_000 {
+			if curH, hErr := b.mem.Chain().Height(ctx); hErr == nil && refundAfter <= uint64(curH)+1 {
+				return nil, fmt.Errorf("market: escrow refundAfter height %d too close to tip %d", refundAfter, curH)
+			}
+		} else if int64(refundAfter) <= nowUnix+60 {
+			return nil, fmt.Errorf("market: escrow refundAfter timestamp %d too close to now %d", refundAfter, nowUnix)
+		}
+		escrowParams = contracts.DisclosureSaleParams{
+			SellerPKH:    sellerPKH,
+			Price:        sale.SaleOffer.Config.Price,
+			HWrapped:     hWrappedBytes,
+			RefundAfter:  refundAfter,
+			MaxFee:       maxFee,
+			DepositorPKH: depPKH,
+		}
+		expectedEscrowLock, eErr := contracts.EncodeDisclosureSaleLockingScript(escrowParams)
+		if eErr != nil {
+			return nil, fmt.Errorf("market: encode DisclosureSale escrow: %w", eErr)
+		}
+		out := tx.Outputs[req.OutputIndex]
+		if out == nil || out.LockingScript == nil || !bytes.Equal(*out.LockingScript, *expectedEscrowLock) {
+			return nil, errors.New("market: escrow output locking script does not match committed DisclosureSale covenant")
+		}
+		if out.Satoshis < escrowParams.RequiredEscrowSatoshis() {
+			return nil, fmt.Errorf("market: escrow balance %d < required %d (price + maxFee + 1)",
+				out.Satoshis, escrowParams.RequiredEscrowSatoshis())
+		}
+		paidSats = sale.SaleOffer.Config.Price
+	} else if isBRC29 {
 		d := &bwallet.Derivation{
 			SecurityLevel:   int(bwallet.PaymentProtocol.SecurityLevel),
 			Protocol:        bwallet.PaymentProtocol.Protocol,
@@ -1360,9 +1433,9 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 
 	// On live networks, credit Seller's wallet immediately without double-broadcasting or poisoning SpendGuard:
 	// In embedded BRC-29 mode, InternalizeBRC29 runs verified SPV + WithIncomingInternalize broadcast once;
-	// in client mode or non-BRC-29 mode, RelayExternalTx broadcasts unmined tx once.
+	// in escrow mode, relay unmined escrow tx before executing atomic DisclosureSale.Buy(k).
 	if b.mem.Chain().Network() != "memory" {
-		needRelay := !confirmed && (!isBRC29 || b.mem.Chain().WalletMode() != "embedded")
+		needRelay := !confirmed && (isEscrow || !isBRC29 || b.mem.Chain().WalletMode() != "embedded")
 		if needRelay {
 			if rErr := b.mem.Chain().RelayExternalTx(ctx, tx); rErr != nil {
 				_ = b.mem.DB().ReleasePaymentClaim(txid)
@@ -1378,11 +1451,42 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 				_ = b.mem.DB().ReleasePaymentClaim(txid)
 				return nil, fmt.Errorf("market: internalize BRC-29 payment: %w", iErr)
 			}
-		} else {
+		} else if !isEscrow {
 			if _, aErr := b.mem.Chain().AdoptReceived(ctx, tx); aErr != nil {
 				_ = b.mem.DB().ReleasePaymentClaim(txid)
 				return nil, fmt.Errorf("market: adopt received payment: %w", aErr)
 			}
+		}
+	}
+
+	// Atomic on-chain DisclosureSale.Buy(k) claim: Seller reveals the 32-byte BRC-369 content key `k`
+	// directly in Input 0's unlocking script on BSV L1 to claim `Price` sats!
+	var claimTxID string
+	var claimTxBEEFHex string
+	if isEscrow && !needsConfirm {
+		buyFee := min(escrowParams.MaxFee, uint64(300))
+		buyTx, bErr := contracts.BuildDisclosureSaleBuyTx(tx, req.OutputIndex, escrowParams, sale.RevealKey[:], buyFee)
+		if bErr != nil {
+			_ = b.mem.DB().ReleasePaymentClaim(txid)
+			return nil, fmt.Errorf("market: build DisclosureSale.Buy tx: %w", bErr)
+		}
+		// On live networks, ALWAYS broadcast Buy(k) to chain (fail-closed).
+		// On memory testchain, submit whenever the escrow parent tx exists on this node's testchain
+		// (isolated two-node unit tests keep separate in-memory testchains; Chronicle VM already verified buyTx above).
+		shouldSubmit := b.mem.Chain().Network() != "memory" || b.mem.Chain().Tx(txid) != nil
+		if shouldSubmit {
+			cTxID, sErr := b.mem.Chain().SubmitCovenantTx(ctx, buyTx)
+			if sErr != nil {
+				_ = b.mem.DB().ReleasePaymentClaim(txid)
+				return nil, fmt.Errorf("market: broadcast DisclosureSale.Buy tx: %w", sErr)
+			}
+			claimTxID = cTxID
+			_, _ = b.mem.Chain().AdoptReceived(ctx, buyTx)
+		} else {
+			claimTxID = buyTx.TxID().String()
+		}
+		if buyBEEF, bErr := chain.SafeAtomicBEEF(buyTx); bErr == nil && len(buyBEEF) > 0 {
+			claimTxBEEFHex = hex.EncodeToString(buyBEEF)
 		}
 	}
 
@@ -1505,15 +1609,17 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 	}
 
 	return &PurchaseResponse{
-		OK:            true,
-		Status:        "settled",
-		OfferID:       sale.OfferID,
-		SellerPub:     b.PubHex(),
-		ContentKeyHex: hex.EncodeToString(sale.RevealKey[:]),
-		CiphertextHex: sale.SaleOffer.CiphertextHex,
-		ChirpURL:      sale.ChirpURL,
-		ProofBundle:   freshPB,
-		DealReceipt:   sellerReceipt,
+		OK:             true,
+		Status:         "settled",
+		OfferID:        sale.OfferID,
+		SellerPub:      b.PubHex(),
+		ContentKeyHex:  hex.EncodeToString(sale.RevealKey[:]),
+		ClaimTxID:      claimTxID,
+		ClaimTxBEEFHex: claimTxBEEFHex,
+		CiphertextHex:  sale.SaleOffer.CiphertextHex,
+		ChirpURL:       sale.ChirpURL,
+		ProofBundle:    freshPB,
+		DealReceipt:    sellerReceipt,
 	}, nil
 }
 
@@ -3109,11 +3215,13 @@ func (b *Broker) handleBboxMessage(ctx context.Context, hubURL string, m hub.Bbo
 		if rc != nil && wantID != "" && pResp.OK {
 			dCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			_, kErr := rc.DeliverBuyerKey(dCtx, wantID, ClaimSignal{
-				ClaimTxID:     pResp.OfferID,
-				ContentKeyHex: pResp.ContentKeyHex,
-				CiphertextHex: pResp.CiphertextHex,
-				ChirpURL:      pResp.ChirpURL,
-				ProofBundle:   pResp.ProofBundle,
+				ClaimTxID:      pResp.ClaimTxID,
+				ClaimTxBEEFHex: pResp.ClaimTxBEEFHex,
+				ContentKeyHex:  pResp.ContentKeyHex,
+				CiphertextHex:  pResp.CiphertextHex,
+				ChirpURL:       pResp.ChirpURL,
+				ProofBundle:    pResp.ProofBundle,
+				DealReceipt:    pResp.DealReceipt,
 			})
 			cancel()
 			if kErr != nil {

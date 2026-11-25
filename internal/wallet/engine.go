@@ -47,6 +47,35 @@ type toolboxTables struct {
 	knownTxs     string
 }
 
+// chronicleScriptsVerifier upgrades go-wallet-toolbox's ScriptsVerifier from pre-Chronicle
+// (WithAfterGenesis) to full post-Chronicle BSV consensus (WithAfterChronicle) so Rúnar
+// v1.0.0-rc.1 covenants using OP_2MUL/OP_2DIV/OP_RSHIFTNUM verify natively on createAction and internalizeAction.
+type chronicleScriptsVerifier struct{}
+
+func (chronicleScriptsVerifier) VerifyScripts(ctx context.Context, tx *transaction.Transaction) (bool, error) {
+	if tx == nil {
+		return false, errors.New("nil transaction")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for vin, input := range tx.Inputs {
+		sourceOutput := input.SourceTxOutput()
+		if sourceOutput == nil {
+			return false, fmt.Errorf("failed to verify scripts for tx: %s, err: missing source output: input %d", tx.TxID().String(), vin)
+		}
+		if err := interpreter.NewEngine().Execute(
+			interpreter.WithTx(tx, vin, sourceOutput),
+			interpreter.WithForkID(),
+			interpreter.WithAfterChronicle(),
+			interpreter.WithContext(ctx),
+		); err != nil {
+			return false, fmt.Errorf("failed to verify scripts for tx: %s, err: script verification failed: %w", tx.TxID().String(), err)
+		}
+	}
+	return true, nil
+}
+
 // Engine is Nektar's pure-Go BRC-100 embedded wallet powered by the official BSV Association
 // go-wallet-toolbox (pkg/wallet + pkg/storage + pkg/brc29) running zero-CGO over modernc.org/sqlite
 // via storage.WithGORM and Nektar's bcommon wdk.Services adapter (zero Kubernetes/Teranode deps).
@@ -186,6 +215,7 @@ func Open(cfg Config) (*Engine, error) {
 		chainNet,
 		svc,
 		storage.WithGORM(gormDB),
+		storage.WithScriptsVerifier(chronicleScriptsVerifier{}),
 		storage.WithLogger(tbLogger),
 		storage.WithFeeModel(defs.FeeModel{Type: defs.SatPerKB, Value: int64(feeSatPerKB)}),
 		storage.WithUTXOManagement(utxoCfg),
@@ -330,7 +360,8 @@ func buildUTXOManagementConfig(prof FuelProfile, feeSatPerKB uint64) defs.UTXOMa
 	}
 	cfg.Throughput.LowWaterPercent = lowWater
 	cfg.Throughput.HighWaterPercent = 100
-	cfg.Throughput.SpendPolicy = defs.SpendPolicyAny
+	// SpendPolicyPreferMined prefers mined/proven UTXOs and never spends TxStatusSending outputs.
+	cfg.Throughput.SpendPolicy = defs.SpendPolicyPreferMined
 	cfg.Throughput.PoolBasket = BasketFuel
 	cfg.Throughput.ReserveBasket = BasketReserve
 	maxOut := uint64(prof.MaxFanOutOutputs)
@@ -511,8 +542,35 @@ func (e *Engine) Provider() *storage.Provider       { return e.provider }
 func (e *Engine) Tracker() chaintracker.ChainTracker { return e.cfg.Tracker }
 func (e *Engine) IdentityKey() *ec.PublicKey        { return e.rootKey.PubKey() }
 func (e *Engine) IdentityPubHex() string            { return hex.EncodeToString(e.rootKey.PubKey().Compressed()) }
+func (e *Engine) FundPubKey() *ec.PublicKey         { return e.fundKey.PubKey() }
 func (e *Engine) FundAddress() string               { return e.fundAddr }
 func (e *Engine) FundScript() *script.Script        { return e.fundScript }
+
+// SignIdentityHash signs a 32-byte digest with the embedded wallet's root identity key
+// without ever exposing raw private key bytes outside internal/wallet.
+func (e *Engine) SignIdentityHash(digest []byte) ([]byte, error) {
+	if len(digest) != 32 {
+		return nil, errors.New("wallet: SignIdentityHash requires 32-byte digest")
+	}
+	sig, err := e.rootKey.Sign(digest)
+	if err != nil {
+		return nil, err
+	}
+	return sig.Serialize(), nil
+}
+
+// SignFundHash signs a 32-byte digest with the embedded wallet's BRC-43 funding key
+// without ever exposing raw private key bytes outside internal/wallet.
+func (e *Engine) SignFundHash(digest []byte) ([]byte, error) {
+	if len(digest) != 32 {
+		return nil, errors.New("wallet: SignFundHash requires 32-byte digest")
+	}
+	sig, err := e.fundKey.Sign(digest)
+	if err != nil {
+		return nil, err
+	}
+	return sig.Serialize(), nil
+}
 func (e *Engine) Signer() *bwallet.Signer           { return e.signer }
 func (e *Engine) FuelKeeper() *FuelKeeper           { return e.fuel }
 func (e *Engine) Monitor() *Monitor                 { return e.monitor }
@@ -747,10 +805,11 @@ func (e *Engine) verifyOutpointSpent(ctx context.Context, txid string, vout uint
 		LockingScript: &ls,
 	}
 	spendTx.Inputs[matchedVin].SetSourceTxOutput(prevOut)
-	flags := scriptflag.EnableSighashForkID | scriptflag.UTXOAfterGenesis | scriptflag.Genesis
+	flags := scriptflag.EnableSighashForkID | scriptflag.UTXOAfterGenesis | scriptflag.Genesis | scriptflag.UTXOAfterChronicle | scriptflag.Chronicle
 	if err := interpreter.NewEngine().Execute(
 		interpreter.WithTx(spendTx, matchedVin, prevOut),
 		interpreter.WithFlags(flags),
+		interpreter.WithAfterChronicle(),
 		interpreter.WithContext(ctx),
 	); err != nil {
 		return false, nil

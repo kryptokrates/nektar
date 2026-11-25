@@ -15,7 +15,7 @@ const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund'
 // feeRateSatPerKb, plus a 150-sat change margin so the depositor's return
 // output stays above dust.
 const saleFeeBound = (payloadBytes: number, floor: number, rateSatPerKb = 1): number =>
-  Math.max(floor, Math.ceil(((payloadBytes + 1600) * Math.max(1, rateSatPerKb)) / 1000) + 150)
+  Math.max(floor, Math.ceil((payloadBytes + 4096) / 1000) + 150, Math.ceil(((payloadBytes + 1600) * Math.max(1, rateSatPerKb)) / 1000) + 150)
 
 // the complete/refund spend must pay the relay fee its actual serialized size
 // needs at the live fee rate — a 1-sat/kB or flat 10-sat floor fails mainnet

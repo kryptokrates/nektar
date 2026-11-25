@@ -320,3 +320,30 @@ test('memchain: mining past height 300 works; coinbase txids stay distinct', asy
   assert.equal(headerPowValid(header), true)
   assert.equal(linksTo(header, (await chain.headerAtHeight(tip - 1))!), true)
 })
+
+test('memchain: minFeeRateSatPerKb enforces mainnet relay policy (TX_POLICY 39)', async () => {
+  const key = PrivateKey.fromRandom()
+  const chain = new MemoryChain({ treasuryKey: key, minFeeRateSatPerKb: 100 })
+  const src = chain.blockList[1].txids[0]
+  const parent = (await chain.fetchTx(src))!
+  const addr = key.toPublicKey().toAddress([0x6f])
+  const inSats = parent.outputs[0].satoshis!
+
+  // Underpaid tx (~192B @ 100 sat/kB needs >=20 sats; paying 5 sats must fail TX_POLICY 39)
+  const low = new Transaction()
+  low.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  low.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: inSats - 5 })
+  await low.sign()
+  const bad = await chain.broadcast(low)
+  assert.equal(bad.status, 'error')
+  assert.match(bad.description ?? '', /TX_POLICY \(39\):.*insufficient-fee/)
+
+  // Properly funded tx (>=100 sat/kB) is admitted cleanly
+  const ok = new Transaction()
+  ok.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  ok.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: inSats - 50 })
+  await ok.sign()
+  const good = await chain.broadcast(ok)
+  assert.equal(good.status, 'success')
+  chain.stopWatching()
+})

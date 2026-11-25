@@ -63,6 +63,9 @@ export interface MemoryChainFaults {
   hold?: (txid: string) => boolean
   /** the events observer throws ("couldn't ask") as a timeout or an HTTP 429 */
   observer?: 'timeout' | 'rate-limit'
+  /** minimum relay fee rate (sat/kB) enforced at broadcast admission —
+   *  set to 100 to enforce mainnet GorillaPool/Arcade policy (`TX_POLICY 39`) */
+  minFeeRateSatPerKb?: number
 }
 
 export class MemoryChain implements TestChain {
@@ -84,8 +87,9 @@ export class MemoryChain implements TestChain {
 
   faults: MemoryChainFaults = {}
 
-  constructor(opts: { treasuryKey?: PrivateKey; premine?: number } = {}) {
+  constructor(opts: { treasuryKey?: PrivateKey; premine?: number; minFeeRateSatPerKb?: number } = {}) {
     this.treasuryKey = opts.treasuryKey ?? PrivateKey.fromRandom()
+    if (opts.minFeeRateSatPerKb !== undefined) this.faults.minFeeRateSatPerKb = opts.minFeeRateSatPerKb
     this.events = new ChainEvents({
       intervalMs: 50,
       ttlMs: WATCH_TTL_MS,
@@ -206,6 +210,17 @@ export class MemoryChain implements TestChain {
     }
     const outSats = copy.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)
     if (inSats < outSats) return fail(`TX_INVALID (31): [ProcessTransaction][${txid}] outputs exceed inputs`, true)
+    const minRate = this.faults.minFeeRateSatPerKb ?? 0
+    if (minRate > 0) {
+      const txBytes = copy.toBinary().length
+      const minFee = Math.ceil((txBytes * minRate) / 1000)
+      if (inSats - outSats < minFee) {
+        return fail(
+          `broadcaster HTTP 400: TX_INVALID (31): GoBDK fail to ValidateTransaction -> TX_POLICY (39): transaction fee is too low (${inSats - outSats} < ${minFee} sats for ${txBytes}B @ ${minRate} sat/kB) -> TX_POLICY (39): insufficient-fee`,
+          true
+        )
+      }
+    }
 
     // nLockTime: final when every sequence is final, or the lock is at/below
     // the threshold — height for <500M, the tip header's time above (the

@@ -286,13 +286,16 @@ export abstract class BuyerOps extends SellerOps {
 
   /** what the seller is handed for an escrow this instance funded — bounded
    *  so the whole envelope stays under the box's MaxContent cap (16KiB sealed
-   *  — roughly ~8KiB of payload once encoded/encrypted): the covenant script
+   *  — ~14KiB JSON plaintext before encryption framing): the covenant script
    *  + fields already cost a chunk of it, and an EF carrying a fat parent
-   *  (a mint tx) is exactly what blows the seal. Over budget the tx field is
-   *  omitted and the seller falls back to fetchTx. */
-  private escrowWire(txid: string, rawHex?: string): { tx: string } | {} {
-    const w = this.d.txWire?.(txid, 12_000) ?? rawHex
-    return w !== undefined && w.length <= 24_000 ? { tx: w } : {}
+   *  (e.g. a 16-input consolidation tx or 64-out mint tx) is what blows the
+   *  seal (`boxrec: range: content`). When EF exceeds budget, fall back to
+   *  plain rawHex (escrow alone); omit `tx` only if even rawHex won't fit. */
+  private escrowWire(txid: string, rawHex?: string, maxHexChars = 9_500): { tx: string } | {} {
+    const ef = this.d.txWire?.(txid, Math.floor(maxHexChars / 2))
+    if (ef !== undefined && ef.length <= maxHexChars) return { tx: ef }
+    if (rawHex !== undefined && rawHex.length <= maxHexChars) return { tx: rawHex }
+    return {}
   }
 
   private noteFor(
@@ -307,11 +310,11 @@ export abstract class BuyerOps extends SellerOps {
   ): Extract<MarketMessage, { type: 'note' }> {
     // the escrow travels inside the note too — after a database loss the
     // rebuilt operation can check and re-broadcast it without asking any
-    // indexer; the wire stays small enough to fit the box beside the rest
-    // (a pathological multi-input escrow simply falls back to fetchTx)
-    const cand = this.d.txWire?.(utxo.txid, 8_000) ?? rawHex
-    const tx = cand !== undefined && cand.length <= 16_000 ? cand : undefined
-    return {
+    // indexer. Measure the base note first so total sealed envelope (plaintext
+    // JSON + BRC-42 encryption + framing) stays strictly under bbox's 16KiB
+    // MaxContent ceiling (~11KiB plaintext JSON budget); fall back from EF to
+    // plain rawHex when the parent is a fat consolidation/mint tx.
+    const base: Extract<MarketMessage, { type: 'note' }> = {
       type: 'note',
       v: 1,
       wantId,
@@ -323,9 +326,11 @@ export abstract class BuyerOps extends SellerOps {
       escrow,
       utxo,
       escrowAction,
-      amounts,
-      ...(tx !== undefined ? { tx } : {})
+      amounts
     }
+    const remainingHex = Math.max(0, 11_000 - JSON.stringify(base).length - 32)
+    const picked = this.escrowWire(utxo.txid, rawHex, remainingHex)
+    return 'tx' in picked ? { ...base, tx: picked.tx } : base
   }
 
   /** does a buyer purchase exist for this want (held `delivered` envelopes are

@@ -366,11 +366,12 @@ void test('bstack E: hosts down after escrow funded — chain advance still refu
       await chain.mine(1)
     }
     assert.ok(funded, 'escrow never funded | ' + logs.slice(-20).join(' | '))
-    // both hosts go down and the seller stops — tick must still fire refunds.
+    // seller stops first (so no in-flight wake delivers over the in-memory bus
+    // while hosts shut down), then hosts go down — tick must still fire refunds.
     // refundBlocks=40 is a pure height wait: one generatetoaddress(40) call
     // beats ~30 rounds of cycle+mine (~1.5s each) for the same tip
-    await h1.close()
     await s.rt.stop()
+    await h1.close()
     await chain.mine(40)
     const refunded = await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'refunded', 20000)
     const fin = await buyerOp(b)
@@ -814,6 +815,13 @@ void test('bstack L: buyer loses its database — delivery still completes after
       await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 200000),
       'never funded | ' + logs.slice(-20).join(' | ')
     )
+    // the recovery note is an async outbox leg — wait for it to land on the
+    // hosts before simulating buyer DB loss (only driving b.rt so s cannot
+    // deliver prematurely)
+    assert.ok(
+      await until([b.rt], chain, async () => noteItems((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items).length >= 1, 120000),
+      'recovery note never listed | ' + logs.slice(-20).join(' | ')
+    )
     const escrowTxid = (await buyerOp(b))!.data.escrowTxid as string
     await b.rt.stop()
     rmSync(join(dir, 'buyer'), { recursive: true, force: true })
@@ -976,6 +984,11 @@ void test('bstack O: the recovery note fits the 16 KiB box content limit', { tim
     assert.ok(
       await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 200000),
       'never funded | ' + logs.slice(-20).join(' | ')
+    )
+    // the note publish is an async outbox leg — wait for it on the drive cadence (same as bstack M)
+    assert.ok(
+      await until([b.rt], chain, async () => noteItems((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items).length >= 1, 60_000),
+      'note never listed | ' + logs.slice(-20).join(' | ')
     )
     const items = (await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items
     const note = noteItems(items)[0]
@@ -1370,10 +1383,17 @@ void test('bstack V: delivered collected but not yet processed — the held enve
       await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 200000),
       'never funded | ' + logs.slice(-20).join(' | ')
     )
+    // the recovery note is an async outbox leg — wait for it to land on the
+    // hosts before simulating buyer DB loss (only driving b.rt so s cannot
+    // deliver prematurely)
+    assert.ok(
+      await until([b.rt], chain, async () => noteItems((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items).length >= 1, 120000),
+      'recovery note never listed | ' + logs.slice(-20).join(' | ')
+    )
     // the seller delivers; the buyer's next cycle collects + holds the envelope
     // but its tick dies before processing it — the doomed store loses the inbox row
     assert.ok(
-      await until([s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'completion_submitted', 200000),
+      await until([s.rt], chain, async () => COMPLETE.has((await saleOps(s)).at(0)?.state ?? ''), 200000),
       'never delivered | ' + logs.slice(-20).join(' | ')
     )
     const engine = b.rt.engine as unknown as { tick: () => Promise<void> }
@@ -2308,8 +2328,13 @@ void test('bstack P3: refund deadline races a landed completion — chain eviden
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s)).at(0)?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     assert.ok(
-      await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 240000),
-      'escrow never observed | ' + logs.slice(-25).join(' | ')
+      await until(
+        [b.rt, s.rt],
+        chain,
+        async () => (await buyerOp(b))?.state === 'awaiting_disclosure' && COMPLETE.has((await saleOps(s)).at(0)?.state ?? ''),
+        240000
+      ),
+      'escrow never observed or seller never completed | ' + logs.slice(-25).join(' | ')
     )
     assert.ok(sab.txid() !== undefined, 'the sabotaged escrow broadcast happened')
     // seller goes dark — the deadline must rescue the depositor

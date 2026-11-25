@@ -559,6 +559,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // under restate each send is a durable queued invocation, so the same
   // send-identity is throttled to one per window (domain clock).
   const sendDedup = new Map<string, { at: number; ms: number }>()
+  // A verified proof or tip advance changes the preconditions of waiting ops
+  // (completion_submitted → settled, payment_pending, bbox-gated selected) —
+  // clear per-op advance throttling so the push wake actually runs advanceOp
+  // immediately instead of sitting out the 15s fanAdvanceResend window.
+  const clearAdvanceDedup = (): void => {
+    for (const k of sendDedup.keys()) if (k.startsWith('adv:')) sendDedup.delete(k)
+  }
   // due-arm dedup — a transition re-arms its stamped due_at on every write;
   // an identical (op, instant) delayed send is pure churn on the key's
   // FIFO. The ingress `due:` key is the durable dedup (it survives a
@@ -907,6 +914,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   mem.onTxProof((txid, mp) => {
     if (rt.stopped) return
     rt.countWake('txProof')
+    clearAdvanceDedup()
     rt.rtUpkeepClearStarve?.()
     // the leg + cycle tail is a durable wake invocation — a crash between
     // proof receipt and markProven can no longer drop the wake; the

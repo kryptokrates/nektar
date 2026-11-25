@@ -36,6 +36,7 @@ type DealState struct {
 	Status       string                    `json:"status"` // open | approval_pending | collecting | offered | payment_pending | paid_awaiting_reveal | claimed | settled | failed | expired
 	Want         bstack.WantAd             `json:"want"`
 	ChosenOffer  *bstack.OfferAd           `json:"chosenOffer,omitempty"`
+	MatchAudit   *MatchAudit               `json:"matchAudit,omitempty"`
 	ChirpURL     string                    `json:"chirpUrl,omitempty"`
 	SaleOffer    *contracts.KeyedSaleOffer `json:"saleOffer,omitempty"`
 	PaymentTxID  string                    `json:"paymentTxid,omitempty"`
@@ -175,6 +176,7 @@ type Engine struct {
 	policy        *Policy
 	saleKey       *ec.PrivateKey // persistent node key signing DisclosureSale offers
 	broker        *Broker
+	matcher       Matcher
 	internalToken string
 }
 
@@ -227,6 +229,21 @@ func (e *Engine) getBroker() *Broker {
 	b := e.broker
 	e.mu.RUnlock()
 	return b
+}
+
+// SetMatcher attaches an optional Jev System One semantic Matcher for Restate workflows.
+func (e *Engine) SetMatcher(m Matcher) {
+	e.mu.Lock()
+	e.matcher = m
+	e.mu.Unlock()
+}
+
+// Matcher returns the attached semantic Matcher (or nil if deterministic-only).
+func (e *Engine) Matcher() Matcher {
+	e.mu.RLock()
+	m := e.matcher
+	e.mu.RUnlock()
+	return m
 }
 
 // SetInternalToken configures an optional shared secret checked on NektarRuntime ingress calls.
@@ -299,6 +316,12 @@ func dealStateFromRecord(r store.DealRecord) DealState {
 			st.ChosenOffer = &off
 		}
 	}
+	if len(r.MatchAuditJSON) > 0 {
+		var ma MatchAudit
+		if json.Unmarshal(r.MatchAuditJSON, &ma) == nil {
+			st.MatchAudit = &ma
+		}
+	}
 	return st
 }
 
@@ -326,6 +349,9 @@ func (e *Engine) persistDealRecord(rec store.DealRecord) {
 	}
 	if len(rec.ChosenOfferJSON) == 0 {
 		rec.ChosenOfferJSON = existing.ChosenOfferJSON
+	}
+	if len(rec.MatchAuditJSON) == 0 {
+		rec.MatchAuditJSON = existing.MatchAuditJSON
 	}
 	if rec.PaymentTxID == "" {
 		rec.PaymentTxID = existing.PaymentTxID
@@ -478,13 +504,25 @@ type buyerPolicyEval struct {
 	BypassPolicy   bool   `json:"bypassPolicy"`
 }
 
+type buyerCollectResult struct {
+	NowUnix        int64            `json:"nowUnix"`
+	NoOffers       bool             `json:"noOffers"`
+	PolicyRejected bool             `json:"policyRejected"`
+	Error          string           `json:"error,omitempty"`
+	Offers         []bstack.OfferAd `json:"offers,omitempty"`
+	FirstOfferMs   int64            `json:"firstOfferMs"`
+}
+
 type buyerRankResult struct {
-	NowUnix        int64           `json:"nowUnix"`
-	NoOffers       bool            `json:"noOffers"`
-	PolicyRejected bool            `json:"policyRejected"`
-	Error          string          `json:"error,omitempty"`
-	Chosen         *bstack.OfferAd `json:"chosen,omitempty"`
-	FirstOfferMs   int64           `json:"firstOfferMs"`
+	NowUnix          int64           `json:"nowUnix"`
+	NoOffers         bool            `json:"noOffers"`
+	PolicyRejected   bool            `json:"policyRejected"`
+	NeedsEscalation  bool            `json:"needsEscalation,omitempty"`
+	EscalationReason string          `json:"escalationReason,omitempty"`
+	Error            string          `json:"error,omitempty"`
+	Chosen           *bstack.OfferAd `json:"chosen,omitempty"`
+	MatchAudit       *MatchAudit     `json:"matchAudit,omitempty"`
+	FirstOfferMs     int64           `json:"firstOfferMs"`
 }
 
 type buyerPayResult struct {
@@ -687,8 +725,8 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 		bypassPolicy = true
 	}
 
-	// Step 3: Collect (if live broker) & rank offers deterministically inside restate.Run.
-	rankedRes, err := restate.Run(ctx, func(rctx restate.RunContext) (buyerRankResult, error) {
+	// Step 3a: Collect & cryptographically verify offers inside restate.Run (isolated from AI retries).
+	collectRes, err := restate.Run(ctx, func(rctx restate.RunContext) (buyerCollectResult, error) {
 		now := time.Now().Unix()
 		offers := in.Offers
 		var firstOfferMs int64
@@ -734,7 +772,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 					WantJSON: wantJSON,
 					Error:    "no eligible offers under policy",
 				})
-				return buyerRankResult{NowUnix: now, PolicyRejected: true, Error: "no eligible offers under policy"}, nil
+				return buyerCollectResult{NowUnix: now, PolicyRejected: true, Error: "no eligible offers under policy"}, nil
 			}
 			e.persistDealRecord(store.DealRecord{
 				DealID:   dealID,
@@ -751,7 +789,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 					WantJSON: wantJSON,
 					Error:    cErr.Error(),
 				})
-				return buyerRankResult{NowUnix: now, PolicyRejected: true, Error: cErr.Error()}, nil
+				return buyerCollectResult{NowUnix: now, PolicyRejected: true, Error: cErr.Error()}, nil
 			}
 			offers = collected
 			firstOfferMs = fms
@@ -776,10 +814,41 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 					WantJSON: wantJSON,
 					Error:    msg,
 				})
-				return buyerRankResult{NowUnix: now, NoOffers: true, Error: msg}, nil
+				return buyerCollectResult{NowUnix: now, NoOffers: true, Error: msg}, nil
 			}
 		}
+		return buyerCollectResult{
+			NowUnix:      now,
+			Offers:       offers,
+			FirstOfferMs: firstOfferMs,
+		}, nil
+	}, restate.WithName("buyer_collect_offers"))
+	if err != nil {
+		return st, err
+	}
+	if collectRes.NoOffers {
+		st.Status = "expired"
+		st.Error = collectRes.Error
+		st.UpdatedAt = collectRes.NowUnix
+		restate.Set(ctx, "state", st)
+		return st, nil
+	}
+	if collectRes.PolicyRejected || len(collectRes.Offers) == 0 {
+		st.Status = "failed"
+		st.Error = collectRes.Error
+		st.UpdatedAt = collectRes.NowUnix
+		restate.Set(ctx, "state", st)
+		return st, nil
+	}
 
+	// Step 3b: Deterministic base ranking + optional Jev System One semantic match inside its own
+	// restate.Run step so journal replays never re-call Jev (0x RT0016) and retries never re-broadcast WantAd.
+	rankedRes, err := restate.Run(ctx, func(rctx restate.RunContext) (buyerRankResult, error) {
+		now := time.Now().Unix()
+		wantJSON, _ := json.Marshal(want)
+		if e.mem != nil && e.mem.DB() != nil {
+			_ = SyncPolicyFromDB(e.mem.DB(), e.policy)
+		}
 		reps := make(map[string]store.SellerReputation)
 		if e.mem != nil && e.mem.DB() != nil {
 			if list, lErr := e.mem.DB().ListReputations(); lErr == nil {
@@ -792,7 +861,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 		if !bypassPolicy {
 			rankPol = e.policy
 		}
-		ranked := RankOffersWithRep(want, offers, rankPol, reps)
+		ranked := RankOffersWithRep(want, collectRes.Offers, rankPol, reps)
 		if len(ranked) == 0 {
 			msg := "no eligible offers under policy"
 			e.persistDealRecord(store.DealRecord{
@@ -804,7 +873,58 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			})
 			return buyerRankResult{NowUnix: now, PolicyRejected: true, Error: msg}, nil
 		}
+
 		chosen := ranked[0].Offer
+		var matchAudit *MatchAudit
+		var matchAuditJSON []byte
+		if m := e.Matcher(); m != nil {
+			mDec := m.MatchOffersForBuyer(rctx, want, ranked, reps, e.policy)
+			maCopy := mDec.Audit
+			matchAudit = &maCopy
+			matchAuditJSON, _ = json.Marshal(maCopy)
+			if mDec.Verdict == "reject" || mDec.Chosen == nil {
+				msg := mDec.Reason
+				if msg == "" {
+					msg = "no offers passed semantic matching policy"
+				}
+				e.persistDealRecord(store.DealRecord{
+					DealID:         dealID,
+					Role:           "buyer",
+					Status:         "failed",
+					WantJSON:       wantJSON,
+					MatchAuditJSON: matchAuditJSON,
+					Error:          msg,
+				})
+				return buyerRankResult{NowUnix: now, PolicyRejected: true, Error: msg, MatchAudit: matchAudit}, nil
+			}
+			chosen = *mDec.Chosen
+			if mDec.Verdict == "escalate" {
+				chosenJSON, _ := json.Marshal(chosen)
+				e.persistDealRecord(store.DealRecord{
+					DealID:          dealID,
+					Role:            "buyer",
+					Status:          "approval_pending",
+					WantJSON:        wantJSON,
+					ChosenOfferJSON: chosenJSON,
+					MatchAuditJSON:  matchAuditJSON,
+					CounterpartyPub: chosen.Pub,
+					PriceSats:       chosen.PriceSats,
+					ChirpURL:        chosen.ChirpURL,
+					IsHubSeller:     chosen.IsHub,
+					FirstOfferMs:    collectRes.FirstOfferMs,
+					Error:           mDec.Reason,
+				})
+				return buyerRankResult{
+					NowUnix:          now,
+					NeedsEscalation:  true,
+					EscalationReason: mDec.Reason,
+					Chosen:           &chosen,
+					MatchAudit:       matchAudit,
+					FirstOfferMs:     collectRes.FirstOfferMs,
+				}, nil
+			}
+		}
+
 		chosenJSON, _ := json.Marshal(chosen)
 		e.persistDealRecord(store.DealRecord{
 			DealID:          dealID,
@@ -812,18 +932,20 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			Status:          "offered",
 			WantJSON:        wantJSON,
 			ChosenOfferJSON: chosenJSON,
+			MatchAuditJSON:  matchAuditJSON,
 			CounterpartyPub: chosen.Pub,
 			PriceSats:       chosen.PriceSats,
 			ChirpURL:        chosen.ChirpURL,
 			IsHubSeller:     chosen.IsHub,
-			FirstOfferMs:    firstOfferMs,
+			FirstOfferMs:    collectRes.FirstOfferMs,
 		})
 		return buyerRankResult{
 			NowUnix:      now,
 			Chosen:       &chosen,
-			FirstOfferMs: firstOfferMs,
+			MatchAudit:   matchAudit,
+			FirstOfferMs: collectRes.FirstOfferMs,
 		}, nil
-	}, restate.WithName("buyer_collect_and_rank"))
+	}, restate.WithName("buyer_jev_match"))
 	if err != nil {
 		return st, err
 	}
@@ -836,6 +958,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 	}
 	if rankedRes.PolicyRejected || rankedRes.Chosen == nil {
 		st.Status = "failed"
+		st.MatchAudit = rankedRes.MatchAudit
 		st.Error = rankedRes.Error
 		st.UpdatedAt = rankedRes.NowUnix
 		restate.Set(ctx, "state", st)
@@ -844,7 +967,116 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 
 	chosen := *rankedRes.Chosen
 	st.ChosenOffer = &chosen
+	st.MatchAudit = rankedRes.MatchAudit
 	st.ChirpURL = chosen.ChirpURL
+
+	// Step 3c: Post-match Restate Awakeable Escalation when Jev flags borderline confidence or semantic risk.
+	// Note: Approving this semantic escalation does NOT set bypassPolicy=true; Custody/global still enforces hard caps!
+	if rankedRes.NeedsEscalation {
+		escTimeout := in.ApprovalTimeout
+		if escTimeout <= 0 {
+			escTimeout = 15 * time.Minute
+		}
+		escAwk := restate.Awakeable[ApprovalDecision](ctx)
+		escID := "appr-" + strings.ReplaceAll(restate.UUID(ctx).String(), "-", "")[:16]
+		escAwkID := escAwk.Id()
+
+		escNow, eErr := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
+			now := time.Now().Unix()
+			if e.mem != nil && e.mem.DB() != nil {
+				_ = e.mem.DB().SaveApproval(store.ApprovalRecord{
+					ID:           escID,
+					DealID:       dealID,
+					Reason:       rankedRes.EscalationReason,
+					MaxExtraSats: chosen.PriceSats,
+					Status:       "pending",
+					AwakeableID:  escAwkID,
+					ExpiresAt:    now + int64(escTimeout.Seconds()),
+				})
+			}
+			e.persistDealRecord(store.DealRecord{
+				DealID:    dealID,
+				Role:      "buyer",
+				Status:    "approval_pending",
+				PriceSats: chosen.PriceSats,
+				Error:     rankedRes.EscalationReason + " [approvalId=" + escID + "]",
+			})
+			if br := e.getBroker(); br != nil {
+				br.notify("approval_pending", map[string]any{"approvalId": escID, "dealId": dealID, "reason": rankedRes.EscalationReason, "awakeableId": escAwkID})
+			}
+			return now, nil
+		}, restate.WithName("buyer_persist_match_escalation"))
+		if eErr != nil {
+			return st, eErr
+		}
+
+		st.Status = "approval_pending"
+		st.ApprovalID = escID
+		st.AwakeableID = escAwkID
+		st.Error = rankedRes.EscalationReason + " [approvalId=" + escID + "]"
+		st.UpdatedAt = escNow
+		restate.Set(ctx, "state", st)
+
+		escTimer := restate.After(ctx, escTimeout)
+		winner, waitErr := restate.WaitFirst(ctx, escAwk, escTimer)
+		if waitErr != nil {
+			return st, waitErr
+		}
+		if winner == escTimer {
+			expNow, _ := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
+				now := time.Now().Unix()
+				e.persistDealRecord(store.DealRecord{
+					DealID: dealID,
+					Role:   "buyer",
+					Status: "expired",
+					Error:  "semantic match escalation timed out",
+				})
+				return now, nil
+			}, restate.WithName("buyer_match_escalation_expired"))
+			st.Status = "expired"
+			st.Error = "semantic match escalation timed out"
+			st.UpdatedAt = expNow
+			restate.Set(ctx, "state", st)
+			return st, nil
+		}
+		dec, dErr := escAwk.Result()
+		if dErr != nil || !dec.Approved {
+			reason := "semantic match denied by operator"
+			if dErr != nil {
+				reason = dErr.Error()
+			} else if dec.Reason != "" {
+				reason = dec.Reason
+			}
+			denyNow, _ := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
+				now := time.Now().Unix()
+				e.persistDealRecord(store.DealRecord{
+					DealID: dealID,
+					Role:   "buyer",
+					Status: "failed",
+					Error:  reason,
+				})
+				return now, nil
+			}, restate.WithName("buyer_match_escalation_denied"))
+			st.Status = "failed"
+			st.Error = reason
+			st.UpdatedAt = denyNow
+			restate.Set(ctx, "state", st)
+			return st, nil
+		}
+		_, _ = restate.Run(ctx, func(_ restate.RunContext) (bool, error) {
+			if e.mem != nil && e.mem.DB() != nil && st.ApprovalID != "" {
+				_, _ = e.mem.DB().MarkApprovalResolvedAwakeable(st.ApprovalID, true)
+			}
+			e.persistDealRecord(store.DealRecord{
+				DealID: dealID,
+				Role:   "buyer",
+				Status: "offered",
+				Error:  "",
+			})
+			return true, nil
+		}, restate.WithName("buyer_match_escalation_consume"))
+	}
+
 	st.Status = "offered"
 	st.Error = ""
 	st.UpdatedAt = rankedRes.NowUnix

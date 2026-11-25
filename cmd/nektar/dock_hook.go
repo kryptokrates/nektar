@@ -209,6 +209,14 @@ func cmdPolicy(args []string) error {
 		preset := fs.String("preset", "both", "Policy preset: buyer | seller | both")
 		domains := fs.String("domains", "", "Optional comma-separated allowed domains")
 		confirm := fs.String("confirm", os.Getenv("NEKTAR_MAINNET_CONFIRM"), "Required I_UNDERSTAND on mainnet")
+		aiMode := fs.String("ai-mode", "", "Optional Jev AI matching mode: off | advisory | gated | strict")
+		aiPrivacy := fs.String("ai-privacy", "", "Optional seller privacy scope: metadata_only | disclosable_preview")
+		aiHosts := fs.String("ai-hosts", "", "Optional comma-separated allowed AI egress hostnames")
+		aiIntent := fs.String("ai-intent", "", "Optional semantic scope description for Jev policy-fit rubric")
+		aiProhibit := fs.String("ai-prohibit", "", "Optional comma-separated prohibited topics for Jev matching")
+		aiMinRel := fs.Int64("ai-min-relevance", 0, "Optional minimum relevance floor in basis points (0..10000)")
+		aiEscConf := fs.Int64("ai-escalate-confidence", 0, "Optional confidence floor in bps below which deals escalate for approval")
+		aiCedarFile := fs.String("ai-cedar-file", "", "Optional path to Cedar post-match market policy file")
 		dataDir := fs.String("data-dir", "", "Data directory override")
 		_ = fs.Parse(rest)
 
@@ -218,16 +226,58 @@ func cmdPolicy(args []string) error {
 				doms = append(doms, d)
 			}
 		}
+		var aiPol *market.AIMatchingPolicy
+		var hosts, prohib []string
+		for _, h := range strings.Split(*aiHosts, ",") {
+			if h = strings.TrimSpace(h); h != "" {
+				hosts = append(hosts, h)
+			}
+		}
+		for _, p := range strings.Split(*aiProhibit, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				prohib = append(prohib, p)
+			}
+		}
+		var cedarText string
+		if strings.TrimSpace(*aiCedarFile) != "" {
+			b, rErr := os.ReadFile(strings.TrimSpace(*aiCedarFile))
+			if rErr != nil {
+				return fmt.Errorf("read --ai-cedar-file: %w", rErr)
+			}
+			cedarText = string(b)
+		}
+		candAI := &market.AIMatchingPolicy{
+			Mode:                 strings.TrimSpace(*aiMode),
+			AllowedHosts:         hosts,
+			SellerPrivacyScope:   strings.TrimSpace(*aiPrivacy),
+			MinSellerRelevanceBP: *aiMinRel,
+			MinBuyerRelevanceBP:  *aiMinRel,
+			EscalateConfidenceBP: *aiEscConf,
+			SemanticIntent:       strings.TrimSpace(*aiIntent),
+			ProhibitedTopics:     prohib,
+			CedarMarketPolicy:    cedarText,
+		}
+		if !candAI.IsEmpty() {
+			if err := candAI.Validate(); err != nil {
+				return err
+			}
+			aiPol = candAI
+		}
+
 		dir := *dataDir
 		if dir == "" {
 			dir = defaultDataDir()
 		}
 		if info, ok := server.DetectLiveDaemon(dir); ok {
-			out, err := callLiveAPI(info, http.MethodPost, "/v1/onboard/policy-preset", map[string]any{
+			payload := map[string]any{
 				"preset":  *preset,
 				"domains": doms,
 				"confirm": *confirm,
-			})
+			}
+			if aiPol != nil {
+				payload["aiMatching"] = aiPol
+			}
+			out, err := callLiveAPI(info, http.MethodPost, "/v1/onboard/policy-preset", payload)
 			if err != nil {
 				return err
 			}
@@ -242,7 +292,7 @@ func cmdPolicy(args []string) error {
 		if rt.mem.Chain().Mainnet() && *confirm != "I_UNDERSTAND" {
 			return errors.New("mainnet policy approval requires --confirm I_UNDERSTAND")
 		}
-		rec, err := market.ApprovePolicyPreset(rt.mem.DB(), rt.mkt.Policy(), *preset, doms, "cli")
+		rec, err := market.ApprovePolicyPresetWithAI(rt.mem.DB(), rt.mkt.Policy(), *preset, doms, "cli", aiPol)
 		if err != nil {
 			return err
 		}

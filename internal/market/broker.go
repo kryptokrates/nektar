@@ -42,9 +42,11 @@ type BrokerConfig struct {
 	Handle         string // optional bfinger handle (e.g. "alice@nektar.run")
 	IsHub          bool   // true when running as a Hub liquidity maker
 	CollectTimeout time.Duration
+	GraceTimeout   time.Duration // wait after first offer for competing quotes (default 200ms, or 500ms with AI matcher)
 	OnStateChange  func(event string, payload any)
 	HTTPClient     *http.Client
 	RestateClient  *RestateClient // active Restate durable executor client (BuyerDeal, SellerDeal, Custody, Tx, AnchorCadence)
+	Matcher        Matcher        // optional Jev System One semantic matcher
 }
 
 // WantRequest describes a buyer's live knowledge purchase request across active hubs.
@@ -135,6 +137,7 @@ type Broker struct {
 
 	mu              sync.RWMutex
 	restate         *RestateClient
+	matcher         Matcher
 	pendingSales    map[string]*pendingSale
 	offerInbox      map[string]chan bstack.OfferAd
 	bboxReplies     map[string]chan PurchaseResponse
@@ -166,6 +169,13 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 	if cfg.CollectTimeout <= 0 {
 		cfg.CollectTimeout = 4 * time.Second
 	}
+	if cfg.GraceTimeout <= 0 {
+		if cfg.Matcher != nil && cfg.Matcher.DefaultMode() != AIModeOff {
+			cfg.GraceTimeout = 500 * time.Millisecond
+		} else {
+			cfg.GraceTimeout = 200 * time.Millisecond
+		}
+	}
 	netName := ""
 	if mem != nil && mem.Chain() != nil {
 		netName = mem.Chain().Network()
@@ -184,6 +194,7 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 		httpClient:      hc,
 		sseClient:       sseHC,
 		restate:         cfg.RestateClient,
+		matcher:         cfg.Matcher,
 		pendingSales:    make(map[string]*pendingSale),
 		offerInbox:      make(map[string]chan bstack.OfferAd),
 		bboxReplies:     make(map[string]chan PurchaseResponse),
@@ -195,6 +206,9 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 	}
 	if engine != nil {
 		engine.SetBroker(b)
+		if cfg.Matcher != nil {
+			engine.SetMatcher(cfg.Matcher)
+		}
 	}
 	b.restorePersistedState()
 	return b
@@ -301,6 +315,29 @@ func (b *Broker) RestateClient() *RestateClient {
 	rc := b.restate
 	b.mu.RUnlock()
 	return rc
+}
+func (b *Broker) SetMatcher(m Matcher) {
+	b.mu.Lock()
+	b.matcher = m
+	b.mu.Unlock()
+	if b.engine != nil {
+		b.engine.SetMatcher(m)
+	}
+}
+func (b *Broker) Matcher() Matcher {
+	b.mu.RLock()
+	m := b.matcher
+	b.mu.RUnlock()
+	if m == nil && b.engine != nil {
+		return b.engine.Matcher()
+	}
+	return m
+}
+func (b *Broker) MatcherMetrics() MatcherMetrics {
+	if m := b.Matcher(); m != nil {
+		return m.MetricsSnapshot()
+	}
+	return MatcherMetrics{}
 }
 func (b *Broker) SetPublicURL(u string) {
 	b.mu.Lock()
@@ -765,7 +802,8 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		wantDoms[strings.ToLower(strings.TrimSpace(d))] = true
 	}
 
-	var matched *store.SellListing
+	// Collect ALL active SellListings eligible under domain & maxSats (no first-listing blindness).
+	var eligibleListings []store.SellListing
 	for i := range listings {
 		l := listings[i]
 		if !l.Active {
@@ -776,16 +814,12 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		}
 		for _, ld := range l.Domains {
 			if ld == "*" || wantDoms[strings.ToLower(ld)] {
-				cp := l
-				matched = &cp
+				eligibleListings = append(eligibleListings, l)
 				break
 			}
 		}
-		if matched != nil {
-			break
-		}
 	}
-	if matched == nil {
+	if len(eligibleListings) == 0 {
 		return
 	}
 
@@ -808,18 +842,84 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		return
 	}
 
-	// Only ever consider Level 0, non-Borg, Cedar-"disclose" fragments for automated market quoting.
-	frags, err := b.mem.Recall(ctx, memory.RecallInput{
-		Shard:        matched.Shard,
-		Principal:    policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
-		Action:       "disclose",
-		DisallowBorg: true,
-	})
-	if err != nil || len(frags) == 0 {
+	// Stage 1 (Deterministic Cedar Pre-Gate): ONLY Level 0, non-Borg, Cedar-"disclose" fragments
+	// from explicitly armed sell_listings may enter candidate selection.
+	tokens := extractQueryTokens(want.Query)
+	matcher := b.Matcher()
+	useAI := false
+	if matcher != nil {
+		aiPol := AIMatchingPolicy{}
+		if p := b.engine.Policy().AIMatchingPolicy(); p != nil {
+			aiPol = *p
+		}
+		useAI = aiPol.Normalized(matcher.DefaultMode()).Mode != AIModeOff
+	}
+
+	var sellerCands []SellerCandidate
+	for _, listing := range eligibleListings {
+		frags, rErr := b.mem.Recall(ctx, memory.RecallInput{
+			Shard:        listing.Shard,
+			Principal:    policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
+			Action:       "disclose",
+			DisallowBorg: true,
+		})
+		if rErr != nil || len(frags) == 0 {
+			continue
+		}
+		for _, f := range frags {
+			if useAI {
+				// Dedicated Cedar pre-egress check: allows operators to forbid Agent::"jev-matcher"
+				// on specific shards/classes without disabling local selling.
+				if dec, aErr := b.mem.AuthorizeAction(policy.JevMatcherPrincipal, "disclose", policy.Resource{
+					Type:  "Fragment",
+					ID:    fmt.Sprintf("%s#%d", f.Shard, f.Seq),
+					Level: int64(f.Level),
+					Shard: f.Shard,
+					Class: f.Class,
+				}); aErr != nil || !dec.Allow {
+					continue
+				}
+			}
+			sellerCands = append(sellerCands, SellerCandidate{
+				Listing:      listing,
+				Fragment:     f,
+				LexicalScore: lexicalFragmentScore(f.Text, tokens),
+			})
+		}
+	}
+	if len(sellerCands) == 0 {
 		return
 	}
-	best := pickBestFragment(frags, want.Query)
-	if best == nil {
+
+	var matched *store.SellListing
+	var best *memory.RecalledFragment
+	if useAI {
+		// Pre-sort candidates by lexical score desc, then newest seq desc, and cap at maxSellerJevCandidates.
+		sort.SliceStable(sellerCands, func(i, j int) bool {
+			if sellerCands[i].LexicalScore != sellerCands[j].LexicalScore {
+				return sellerCands[i].LexicalScore > sellerCands[j].LexicalScore
+			}
+			return sellerCands[i].Fragment.Seq > sellerCands[j].Fragment.Seq
+		})
+		dec := matcher.MatchWantForSeller(ctx, want, sellerCands, b.engine.Policy())
+		if !dec.Approved || dec.Chosen == nil {
+			return
+		}
+		lCopy := dec.Chosen.Listing
+		fCopy := dec.Chosen.Fragment
+		matched = &lCopy
+		best = &fCopy
+	} else {
+		dec := deterministicSellerDecision(want.Query, sellerCands, "deterministic")
+		if !dec.Approved || dec.Chosen == nil {
+			return
+		}
+		lCopy := dec.Chosen.Listing
+		fCopy := dec.Chosen.Fragment
+		matched = &lCopy
+		best = &fCopy
+	}
+	if matched == nil || best == nil {
 		return
 	}
 	// Ensure fragment has an anchor & SPV ProofBundle before quoting!
@@ -848,6 +948,13 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	isHub := b.cfg.IsHub
 	b.mu.RUnlock()
 
+	var offerTags []string
+	if cls := sanitizeUntrusted(best.Class, 32); cls != "" {
+		offerTags = append(offerTags, cls)
+	}
+	if best.AnchorTxID != "" {
+		offerTags = append(offerTags, "anchored")
+	}
 	offer := bstack.OfferAd{
 		OfferID:        offerID,
 		WantID:         want.WantID,
@@ -865,6 +972,8 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		SellerURL:      pubURL,
 		BboxOffice:     office,
 		SaleOffer:      saleJSON,
+		Description:    sanitizeUntrusted(matched.Description, maxOfferDescChars),
+		Tags:           offerTags,
 		IsHub:          isHub,
 		Direct:         pubURL != "",
 		Revision:       1,
@@ -1274,7 +1383,7 @@ collectLoop:
 		case o := <-inbox:
 			collectOffers(o)
 			if len(seenOffers) > 0 && graceTimer == nil {
-				graceTimer = time.NewTimer(200 * time.Millisecond)
+				graceTimer = time.NewTimer(b.cfg.GraceTimeout)
 				graceCh = graceTimer.C
 			}
 		case <-lookupTick.C:
@@ -1617,7 +1726,7 @@ collectLoop:
 		case o := <-inbox:
 			collectOffers(o)
 			if len(seenOffers) > 0 && graceTimer == nil {
-				graceTimer = time.NewTimer(200 * time.Millisecond)
+				graceTimer = time.NewTimer(b.cfg.GraceTimeout)
 				graceCh = graceTimer.C
 			}
 		case <-lookupTick.C:
@@ -1677,6 +1786,41 @@ collectLoop:
 	}
 
 	chosen := ranked[0].Offer
+	if matcher := b.Matcher(); matcher != nil {
+		mDec := matcher.MatchOffersForBuyer(ctx, want, ranked, reps, b.engine.Policy())
+		auditJSON, _ := json.Marshal(mDec.Audit)
+		rec.MatchAuditJSON = auditJSON
+		if mDec.Verdict == "reject" || mDec.Chosen == nil {
+			rec.Status = "failed"
+			rec.Error = mDec.Reason
+			if rec.Error == "" {
+				rec.Error = "offers rejected by semantic matching policy"
+			}
+			_ = b.mem.DB().SaveDeal(rec)
+			return &rec, nil
+		}
+		if mDec.Verdict == "escalate" && req.ApprovedOverrideID == "" {
+			appID := "appr-" + randIDHex()
+			_ = b.mem.DB().SaveApproval(store.ApprovalRecord{
+				ID:           appID,
+				DealID:       wantID,
+				Reason:       mDec.Reason,
+				MaxExtraSats: mDec.Chosen.PriceSats,
+				Status:       "pending",
+				ExpiresAt:    time.Now().Add(15 * time.Minute).Unix(),
+			})
+			chosenJSON, _ := json.Marshal(mDec.Chosen)
+			rec.ChosenOfferJSON = chosenJSON
+			rec.CounterpartyPub = mDec.Chosen.Pub
+			rec.PriceSats = mDec.Chosen.PriceSats
+			rec.Status = "approval_pending"
+			rec.Error = mDec.Reason + " [approvalId=" + appID + "]"
+			_ = b.mem.DB().SaveDeal(rec)
+			b.notify("approval_pending", map[string]any{"approvalId": appID, "dealId": wantID, "reason": mDec.Reason})
+			return &rec, nil
+		}
+		chosen = *mDec.Chosen
+	}
 	chosenJSON, _ := json.Marshal(chosen)
 	rec.ChosenOfferJSON = chosenJSON
 	rec.CounterpartyPub = chosen.Pub

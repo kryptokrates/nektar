@@ -90,6 +90,9 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		if len(sw.Want.Domains) == 0 || len(sw.Want.Domains) > MaxDomains {
 			return errors.New("want domains out of range")
 		}
+		if len(sw.Want.Query) > 1024 {
+			return errors.New("want query exceeds 1024 bytes")
+		}
 		if sw.Want.Exp <= 0 || sw.Want.Exp < nowMs || sw.Want.Exp > maxExp {
 			return errors.New("want missing exp, expired, or lifetime too long")
 		}
@@ -114,6 +117,17 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		}
 		if len(so.Offer.Domains) == 0 || len(so.Offer.Domains) > MaxDomains {
 			return errors.New("offer domains out of range")
+		}
+		if len(so.Offer.Description) > 280 {
+			return errors.New("offer description exceeds 280 bytes")
+		}
+		if len(so.Offer.Tags) > 8 {
+			return errors.New("offer tags exceed max 8")
+		}
+		for _, tag := range so.Offer.Tags {
+			if len(tag) > 32 {
+				return errors.New("offer tag exceeds 32 bytes")
+			}
 		}
 		if so.Offer.Exp <= 0 || so.Offer.Exp < nowMs || so.Offer.Exp > maxExp {
 			return errors.New("offer missing exp, expired, or lifetime too long")

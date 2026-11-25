@@ -28,6 +28,34 @@ type Principal struct {
 	Level int64  `json:"level"`
 }
 
+// JevMatcherPrincipal is the dedicated Level-0 Cedar principal evaluated before any
+// fragment preview may leave the node to the external Jev System One matching API.
+// Operators can write targeted `forbid (principal == Agent::"jev-matcher", ...)` rules
+// to keep specific shards/classes strictly local without disabling local market selling.
+var JevMatcherPrincipal = Principal{
+	Type:  "Agent",
+	ID:    "jev-matcher",
+	Level: 0,
+}
+
+// MatchContext carries deterministic integer-bps match signals into Cedar Request.Context
+// for optional operator-authored post-match market policies (monotonic tightening only).
+type MatchContext struct {
+	Role         string `json:"role"` // buyer | seller
+	RelevanceBP  int64  `json:"relevanceBp"`
+	ConfidenceBP int64  `json:"confidenceBp"`
+	AbuseProbBP  int64  `json:"abuseProbBp"`
+	PolicyFitBP  int64  `json:"policyFitBp"`
+	PriceSats    int64  `json:"priceSats"`
+	MaxSats      int64  `json:"maxSats"`
+	SettledDeals int64  `json:"settledDeals"`
+	FailedDeals  int64  `json:"failedDeals"`
+	IsHub        bool   `json:"isHub"`
+	Direct       bool   `json:"direct"`
+	RiskFlag     string `json:"riskFlag"`
+	Domain       string `json:"domain"`
+}
+
 type Resource struct {
 	Type  string `json:"type"` // Fragment
 	ID    string `json:"id"`
@@ -76,6 +104,31 @@ func Canonicalize(name, text string) (*PolicyCommitment, error) {
 
 // Authorize evaluates a Cedar policy set in native Go (zero WASM overhead).
 func Authorize(policyText string, principal Principal, action string, resource Resource) (Decision, error) {
+	return authorizeWithContext(policyText, principal, action, resource, cedar.NewRecord(nil))
+}
+
+// AuthorizeMatch evaluates an operator-authored Cedar market policy with deterministic
+// integer-bps MatchContext attributes (zero float non-determinism; fail-closed on diag.Errors).
+func AuthorizeMatch(policyText string, principal Principal, action string, resource Resource, mctx MatchContext) (Decision, error) {
+	ctxRec := cedar.NewRecord(cedar.RecordMap{
+		"role":         cedar.String(mctx.Role),
+		"relevanceBp":  cedar.Long(mctx.RelevanceBP),
+		"confidenceBp": cedar.Long(mctx.ConfidenceBP),
+		"abuseProbBp":  cedar.Long(mctx.AbuseProbBP),
+		"policyFitBp":  cedar.Long(mctx.PolicyFitBP),
+		"priceSats":    cedar.Long(mctx.PriceSats),
+		"maxSats":      cedar.Long(mctx.MaxSats),
+		"settledDeals": cedar.Long(mctx.SettledDeals),
+		"failedDeals":  cedar.Long(mctx.FailedDeals),
+		"isHub":        cedar.Boolean(mctx.IsHub),
+		"direct":       cedar.Boolean(mctx.Direct),
+		"riskFlag":     cedar.String(mctx.RiskFlag),
+		"domain":       cedar.String(mctx.Domain),
+	})
+	return authorizeWithContext(policyText, principal, action, resource, ctxRec)
+}
+
+func authorizeWithContext(policyText string, principal Principal, action string, resource Resource, reqCtx cedar.Record) (Decision, error) {
 	ps, err := cedar.NewPolicySetFromBytes("policy.cedar", []byte(policyText))
 	if err != nil {
 		return Decision{}, fmt.Errorf("policy: parse cedar: %w", err)
@@ -113,7 +166,7 @@ func Authorize(policyText string, principal Principal, action string, resource R
 		Principal: pUID,
 		Action:    aUID,
 		Resource:  rUID,
-		Context:   cedar.NewRecord(nil),
+		Context:   reqCtx,
 	})
 	// Fail closed on any policy evaluation error (e.g. missing attribute, type mismatch, overflow).
 	if len(diag.Errors) > 0 {

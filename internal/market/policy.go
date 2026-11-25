@@ -3,6 +3,7 @@ package market
 import (
 	crand "crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -12,24 +13,201 @@ import (
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/store"
 )
+
+const (
+	AIModeOff      = "off"
+	AIModeAdvisory = "advisory"
+	AIModeGated    = "gated"
+	AIModeStrict   = "strict"
+
+	PrivacyMetadataOnly       = "metadata_only"
+	PrivacyDisclosablePreview = "disclosable_preview"
+)
+
+// AIMatchingPolicy governs cloud AI matching egress, privacy scope, thresholds, and semantic intent.
+// Committed into OperatorPolicyRecord.PolicyHash (operator-only; never mutable by agent tools).
+// Monotonic tightening: AI matching may only rank, reject, or escalate within deterministic hard policy.
+type AIMatchingPolicy struct {
+	Mode                 string   `json:"mode,omitempty"`                 // off | advisory | gated | strict
+	AllowedHosts         []string `json:"allowedHosts,omitempty"`         // pinned AI egress hostnames
+	SellerPrivacyScope   string   `json:"sellerPrivacyScope,omitempty"`   // metadata_only | disclosable_preview
+	MaxRelevanceWeightBP int64    `json:"maxRelevanceWeightBp,omitempty"` // default 3000 (max 5000)
+	MinSellerRelevanceBP int64    `json:"minSellerRelevanceBp,omitempty"` // default 5000 (2.0/4.0)
+	MinBuyerRelevanceBP  int64    `json:"minBuyerRelevanceBp,omitempty"`  // default 5000 (2.0/4.0)
+	MinConfidenceBP      int64    `json:"minConfidenceBp,omitempty"`      // default 6500 (0.65)
+	MaxAbuseProbBP       int64    `json:"maxAbuseProbBp,omitempty"`       // default 3500 (0.35)
+	EscalateConfidenceBP int64    `json:"escalateConfidenceBp,omitempty"` // default 7500 (0.75)
+	AutoApproveMaxSats   uint64   `json:"autoApproveMaxSats,omitempty"`   // default 500
+	SemanticIntent       string   `json:"semanticIntent,omitempty"`       // optional operator intent rubric
+	ProhibitedTopics     []string `json:"prohibitedTopics,omitempty"`     // optional semantic exclusions
+	CedarMarketPolicy    string   `json:"cedarMarketPolicy,omitempty"`    // optional post-match Cedar rules
+}
+
+// IsEmpty reports whether no AI matching fields have been configured.
+func (a *AIMatchingPolicy) IsEmpty() bool {
+	if a == nil {
+		return true
+	}
+	return strings.TrimSpace(a.Mode) == "" &&
+		len(a.AllowedHosts) == 0 &&
+		strings.TrimSpace(a.SellerPrivacyScope) == "" &&
+		a.MaxRelevanceWeightBP == 0 &&
+		a.MinSellerRelevanceBP == 0 &&
+		a.MinBuyerRelevanceBP == 0 &&
+		a.MinConfidenceBP == 0 &&
+		a.MaxAbuseProbBP == 0 &&
+		a.EscalateConfidenceBP == 0 &&
+		a.AutoApproveMaxSats == 0 &&
+		strings.TrimSpace(a.SemanticIntent) == "" &&
+		len(a.ProhibitedTopics) == 0 &&
+		strings.TrimSpace(a.CedarMarketPolicy) == ""
+}
+
+// Validate verifies operator AI matching policy fields fail-closed.
+func (a *AIMatchingPolicy) Validate() error {
+	if a == nil {
+		return nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(a.Mode))
+	if mode != "" && mode != AIModeOff && mode != AIModeAdvisory && mode != AIModeGated && mode != AIModeStrict {
+		return fmt.Errorf("market: invalid aiMatching.mode %q (use off, advisory, gated, or strict)", a.Mode)
+	}
+	priv := strings.ToLower(strings.TrimSpace(a.SellerPrivacyScope))
+	if priv != "" && priv != PrivacyMetadataOnly && priv != PrivacyDisclosablePreview {
+		return fmt.Errorf("market: invalid aiMatching.sellerPrivacyScope %q (use metadata_only or disclosable_preview)", a.SellerPrivacyScope)
+	}
+	if a.MaxRelevanceWeightBP < 0 || a.MaxRelevanceWeightBP > 5000 {
+		return fmt.Errorf("market: aiMatching.maxRelevanceWeightBp %d out of range [0, 5000]", a.MaxRelevanceWeightBP)
+	}
+	for name, v := range map[string]int64{
+		"minSellerRelevanceBp": a.MinSellerRelevanceBP,
+		"minBuyerRelevanceBp":  a.MinBuyerRelevanceBP,
+		"minConfidenceBp":      a.MinConfidenceBP,
+		"maxAbuseProbBp":       a.MaxAbuseProbBP,
+		"escalateConfidenceBp": a.EscalateConfidenceBP,
+	} {
+		if v < 0 || v > 10000 {
+			return fmt.Errorf("market: aiMatching.%s %d out of range [0, 10000]", name, v)
+		}
+	}
+	if strings.TrimSpace(a.CedarMarketPolicy) != "" {
+		if _, err := policy.Canonicalize("market-ai", a.CedarMarketPolicy); err != nil {
+			return fmt.Errorf("market: invalid aiMatching.cedarMarketPolicy: %w", err)
+		}
+	}
+	return nil
+}
+
+// Normalized returns a copy with safe defaults applied for active AI matching.
+func (a AIMatchingPolicy) Normalized(defaultMode string) AIMatchingPolicy {
+	out := a
+	out.Mode = strings.ToLower(strings.TrimSpace(out.Mode))
+	if out.Mode == "" {
+		out.Mode = strings.ToLower(strings.TrimSpace(defaultMode))
+	}
+	if out.Mode == "" {
+		out.Mode = AIModeOff
+	}
+	out.SellerPrivacyScope = strings.ToLower(strings.TrimSpace(out.SellerPrivacyScope))
+	if out.SellerPrivacyScope == "" {
+		out.SellerPrivacyScope = PrivacyDisclosablePreview
+	}
+	if out.MaxRelevanceWeightBP <= 0 {
+		out.MaxRelevanceWeightBP = 3000
+	}
+	if out.MaxRelevanceWeightBP > 5000 {
+		out.MaxRelevanceWeightBP = 5000
+	}
+	if out.MinSellerRelevanceBP <= 0 {
+		out.MinSellerRelevanceBP = 5000
+	}
+	if out.MinBuyerRelevanceBP <= 0 {
+		out.MinBuyerRelevanceBP = 5000
+	}
+	if out.MinConfidenceBP <= 0 {
+		out.MinConfidenceBP = 6500
+	}
+	if out.MaxAbuseProbBP <= 0 {
+		out.MaxAbuseProbBP = 3500
+	}
+	if out.EscalateConfidenceBP <= 0 {
+		out.EscalateConfidenceBP = 7500
+	}
+	if out.AutoApproveMaxSats == 0 {
+		out.AutoApproveMaxSats = 500
+	}
+	return out
+}
 
 // Policy constrains automated agent market spending and selling.
 // Fail-closed: if KillSwitch is set or price exceeds caps, deals are refused.
 type Policy struct {
 	mu               sync.RWMutex
 	db               *store.DB
-	KillSwitch       bool            `json:"killSwitch"`
-	MaxSatsPerDeal   uint64          `json:"maxSatsPerDeal"`
-	MaxSatsPerDay    uint64          `json:"maxSatsPerDay"`
-	ZeroConfMaxSats  uint64          `json:"zeroConfMaxSats"`
-	AllowedDomains   map[string]bool `json:"allowedDomains,omitempty"`
-	BlockedSellers   map[string]bool `json:"blockedSellers,omitempty"`
-	PreferredSellers map[string]bool `json:"preferredSellers,omitempty"`
-	DailySpentSats   uint64          `json:"dailySpentSats"`
-	BuyerApproved    bool            `json:"buyerApproved"`
-	SellerApproved   bool            `json:"sellerApproved"`
+	KillSwitch       bool              `json:"killSwitch"`
+	MaxSatsPerDeal   uint64            `json:"maxSatsPerDeal"`
+	MaxSatsPerDay    uint64            `json:"maxSatsPerDay"`
+	ZeroConfMaxSats  uint64            `json:"zeroConfMaxSats"`
+	AllowedDomains   map[string]bool   `json:"allowedDomains,omitempty"`
+	BlockedSellers   map[string]bool   `json:"blockedSellers,omitempty"`
+	PreferredSellers map[string]bool   `json:"preferredSellers,omitempty"`
+	DailySpentSats   uint64            `json:"dailySpentSats"`
+	BuyerApproved    bool              `json:"buyerApproved"`
+	SellerApproved   bool              `json:"sellerApproved"`
+	AIMatching       *AIMatchingPolicy `json:"aiMatching,omitempty"`
+}
+
+// AIMatchingPolicy returns a defensive copy of the active operator AI matching policy (or nil if unset).
+func (p *Policy) AIMatchingPolicy() *AIMatchingPolicy {
+	if p == nil {
+		return nil
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.AIMatching == nil {
+		return nil
+	}
+	cp := *p.AIMatching
+	cp.AllowedHosts = append([]string(nil), p.AIMatching.AllowedHosts...)
+	cp.ProhibitedTopics = append([]string(nil), p.AIMatching.ProhibitedTopics...)
+	return &cp
+}
+
+// SetAIMatchingPolicy updates the in-memory AI matching policy atomically.
+func (p *Policy) SetAIMatchingPolicy(ai *AIMatchingPolicy) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	if ai == nil {
+		p.AIMatching = nil
+	} else {
+		cp := *ai
+		cp.AllowedHosts = append([]string(nil), ai.AllowedHosts...)
+		cp.ProhibitedTopics = append([]string(nil), ai.ProhibitedTopics...)
+		p.AIMatching = &cp
+	}
+	p.mu.Unlock()
+}
+
+// AllowedDomainsList returns a sorted snapshot of the policy's allowed domains.
+func (p *Policy) AllowedDomainsList() []string {
+	if p == nil {
+		return nil
+	}
+	p.mu.RLock()
+	out := make([]string, 0, len(p.AllowedDomains))
+	for d, ok := range p.AllowedDomains {
+		if ok {
+			out = append(out, d)
+		}
+	}
+	p.mu.RUnlock()
+	sort.Strings(out)
+	return out
 }
 
 func (p *Policy) AttachDB(db *store.DB) {
@@ -150,6 +328,15 @@ func (p *Policy) RecordSpend(sats uint64) {
 // ApprovePolicyPreset creates, hashes, persists, and activates a safe operator policy preset
 // ("buyer" | "seller" | "both") so autonomous buying/selling passes explicit operator consent.
 func ApprovePolicyPreset(db *store.DB, pol *Policy, preset string, domains []string, approvedBy string) (store.OperatorPolicyRecord, error) {
+	return ApprovePolicyPresetWithAI(db, pol, preset, domains, approvedBy, nil)
+}
+
+// ApprovePolicyPresetWithAI creates, validates, hashes, persists, and activates an operator policy preset
+// with optional Jev AI matching egress/privacy/threshold controls bound into PolicyHash.
+func ApprovePolicyPresetWithAI(db *store.DB, pol *Policy, preset string, domains []string, approvedBy string, aiPol *AIMatchingPolicy) (store.OperatorPolicyRecord, error) {
+	if err := aiPol.Validate(); err != nil {
+		return store.OperatorPolicyRecord{}, err
+	}
 	preset = strings.ToLower(strings.TrimSpace(preset))
 	var roles []string
 	switch preset {
@@ -169,24 +356,37 @@ func ApprovePolicyPreset(db *store.DB, pol *Policy, preset string, domains []str
 	if _, err := crand.Read(idBytes[:]); err != nil {
 		return store.OperatorPolicyRecord{}, fmt.Errorf("market: csprng failed: %w", err)
 	}
-	rec := store.OperatorPolicyRecord{
-		PolicyID:    fmt.Sprintf("pol-%s-%s", preset, hex.EncodeToString(idBytes[:])),
-		Roles:       roles,
-		Domains:     domains,
-		MaxPerDeal:  2_000,
-		MaxPerDay:   20_000,
-		ZeroConfMax: 1_000,
-		Active:      true,
-		ApprovedBy:  approvedBy,
-		ApprovedAt:  time.Now().Unix(),
+	var aiJSON string
+	if !aiPol.IsEmpty() {
+		raw, err := core.CanonicalJSON(aiPol)
+		if err != nil {
+			return store.OperatorPolicyRecord{}, err
+		}
+		aiJSON = string(raw)
 	}
-	canon, err := core.CanonicalJSON(map[string]any{
+	rec := store.OperatorPolicyRecord{
+		PolicyID:     fmt.Sprintf("pol-%s-%s", preset, hex.EncodeToString(idBytes[:])),
+		Roles:        roles,
+		Domains:      domains,
+		MaxPerDeal:   2_000,
+		MaxPerDay:    20_000,
+		ZeroConfMax:  1_000,
+		AIPolicyJSON: aiJSON,
+		Active:       true,
+		ApprovedBy:   approvedBy,
+		ApprovedAt:   time.Now().Unix(),
+	}
+	hashInput := map[string]any{
 		"roles":       rec.Roles,
 		"domains":     rec.Domains,
 		"maxPerDeal":  rec.MaxPerDeal,
 		"maxPerDay":   rec.MaxPerDay,
 		"zeroConfMax": rec.ZeroConfMax,
-	})
+	}
+	if aiJSON != "" {
+		hashInput["aiMatching"] = aiPol
+	}
+	canon, err := core.CanonicalJSON(hashInput)
 	if err != nil {
 		return store.OperatorPolicyRecord{}, err
 	}
@@ -232,6 +432,12 @@ func applyPolicyRecord(pol *Policy, rec store.OperatorPolicyRecord) {
 			pol.AllowedDomains[strings.ToLower(strings.TrimSpace(d))] = true
 		}
 	}
+	if strings.TrimSpace(rec.AIPolicyJSON) != "" {
+		var ai AIMatchingPolicy
+		if json.Unmarshal([]byte(rec.AIPolicyJSON), &ai) == nil {
+			pol.AIMatching = &ai
+		}
+	}
 }
 
 // SyncPolicyFromDB loads active persisted operator_policies into pol.
@@ -249,6 +455,7 @@ func SyncPolicyFromDB(db *store.DB, pol *Policy) error {
 	var maxDeal, maxDay, zeroConf uint64
 	activeCount := 0
 	doms := make(map[string]bool)
+	var latestAI *AIMatchingPolicy
 	for _, rec := range list {
 		if !rec.Active {
 			continue
@@ -276,16 +483,25 @@ func SyncPolicyFromDB(db *store.DB, pol *Policy) error {
 				doms[d] = true
 			}
 		}
+		// ListOperatorPolicies returns newest first: take the newest active policy carrying AI config.
+		if latestAI == nil && strings.TrimSpace(rec.AIPolicyJSON) != "" {
+			var parsed AIMatchingPolicy
+			if json.Unmarshal([]byte(rec.AIPolicyJSON), &parsed) == nil {
+				latestAI = &parsed
+			}
+		}
 	}
 	if activeCount > 0 {
 		pol.MaxSatsPerDeal = maxDeal
 		pol.MaxSatsPerDay = maxDay
 		pol.ZeroConfMaxSats = zeroConf
+		pol.AIMatching = latestAI
 	} else if len(list) > 0 {
 		// All persisted policies were revoked: reset caps to 0 (fail-closed, never keep stale revoked caps).
 		pol.MaxSatsPerDeal = 0
 		pol.MaxSatsPerDay = 0
 		pol.ZeroConfMaxSats = 0
+		pol.AIMatching = nil
 	}
 	if len(doms) > 0 {
 		pol.AllowedDomains = doms
@@ -301,11 +517,15 @@ func SyncPolicyFromDB(db *store.DB, pol *Policy) error {
 	return nil
 }
 
-// ScoredOffer ranks a candidate OfferAd deterministically using integer basis points (0..11000).
+// ScoredOffer ranks a candidate OfferAd deterministically using integer basis points.
 type ScoredOffer struct {
-	Offer   bstack.OfferAd `json:"offer"`
-	ScoreBP int64          `json:"scoreBp"`
-	Reason  string         `json:"reason"`
+	Offer           bstack.OfferAd `json:"offer"`
+	ScoreBP         int64          `json:"scoreBp"`
+	BaseScoreBP     int64          `json:"baseScoreBp,omitempty"`
+	SemanticScoreBP int64          `json:"semanticScoreBp,omitempty"`
+	ConfidenceBP    int64          `json:"confidenceBp,omitempty"`
+	RiskFlag        string         `json:"riskFlag,omitempty"`
+	Reason          string         `json:"reason"`
 }
 
 // RankOffers scores and sorts offers deterministically in integer basis points.
@@ -361,7 +581,7 @@ func RankOffersWithRep(want bstack.WantAd, offers []bstack.OfferAd, pol *Policy,
 				}
 			}
 		}
-		ranked = append(ranked, ScoredOffer{Offer: o, ScoreBP: score, Reason: "eligible"})
+		ranked = append(ranked, ScoredOffer{Offer: o, ScoreBP: score, BaseScoreBP: score, Reason: "eligible"})
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {
 		if ranked[i].ScoreBP != ranked[j].ScoreBP {

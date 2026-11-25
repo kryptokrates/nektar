@@ -99,8 +99,10 @@ type OfferAd struct {
 	PayIdentityKey string          `json:"payIdentityKey,omitempty"`
 	SellerURL      string          `json:"sellerUrl,omitempty"`
 	BboxOffice   string          `json:"bboxOffice,omitempty"`
-	SaleOffer    json.RawMessage `json:"saleOffer,omitempty"`
-	IsHub        bool            `json:"isHub,omitempty"`
+	SaleOffer      json.RawMessage `json:"saleOffer,omitempty"`
+	Description    string          `json:"description,omitempty"`
+	Tags           []string        `json:"tags,omitempty"`
+	IsHub          bool            `json:"isHub,omitempty"`
 	Direct       bool            `json:"direct,omitempty"`
 	Revision     int             `json:"revision"`
 	Exp          int64           `json:"exp"`

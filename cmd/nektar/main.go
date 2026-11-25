@@ -25,6 +25,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
+	"github.com/kryptokrates/nektar/internal/jev"
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/reasoning"
@@ -151,6 +152,57 @@ func parseCSVEnv(key string) []string {
 		}
 	}
 	return out
+}
+
+func resolveEnvSecret(envKey string) (string, error) {
+	val := strings.TrimSpace(os.Getenv(envKey))
+	filePath := strings.TrimSpace(os.Getenv(envKey + "_FILE"))
+	if val != "" && filePath != "" {
+		return "", fmt.Errorf("set either %s or %s_FILE, not both", envKey, envKey)
+	}
+	if filePath != "" {
+		b, err := os.ReadFile(filePath)
+		if err != nil {
+			return "", fmt.Errorf("read %s_FILE: %w", envKey, err)
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+	return val, nil
+}
+
+func buildJevMatcherFromEnv(network string) market.Matcher {
+	apiKey, err := resolveEnvSecret("NEKTAR_JEV_API_KEY")
+	if err != nil {
+		log.Printf("jev matcher disabled: %v", err)
+		return nil
+	}
+	if apiKey == "" {
+		return nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(envOr("NEKTAR_JEV_MODE", market.AIModeGated)))
+	if mode == market.AIModeOff {
+		return nil
+	}
+	timeoutMs := envUint64("NEKTAR_JEV_TIMEOUT_MS", 2500)
+	cl, err := jev.NewClient(jev.Config{
+		Provider:     envOr("NEKTAR_JEV_PROVIDER", jev.ProviderTypeSafe),
+		BaseURL:      os.Getenv("NEKTAR_JEV_BASE_URL"),
+		APIKey:       apiKey,
+		Model:        os.Getenv("NEKTAR_JEV_MODEL"),
+		Network:      network,
+		AllowedHosts: parseCSVEnv("NEKTAR_JEV_ALLOWED_HOSTS"),
+		Timeout:      time.Duration(timeoutMs) * time.Millisecond,
+	})
+	if err != nil {
+		log.Printf("jev matcher disabled: %v", err)
+		return nil
+	}
+	privacy := envOr("NEKTAR_JEV_PRIVACY", market.PrivacyDisclosablePreview)
+	log.Printf("jev matcher armed: provider=%s model=%s mode=%s privacy=%s", cl.Provider(), cl.Model(), mode, privacy)
+	return market.NewJevMatcher(cl, market.JevMatcherOptions{
+		DefaultMode:        mode,
+		DefaultPrivacyMode: privacy,
+	})
 }
 
 func defaultDataDir() string {
@@ -454,11 +506,13 @@ func cmdServe(args []string) error {
 	// Construct Broker and App BEFORE starting the Restate durable plane so any immediately
 	// replaying BuyerDeal/SellerDeal invocation always sees a live Broker and App (zero nil-broker skip).
 	var appRef atomic.Pointer[server.App]
+	jevMatcher := buildJevMatcherFromEnv(rt.mem.Chain().Network())
 	broker := market.NewBroker(rt.mem, rt.mkt, rt.disc, market.BrokerConfig{
 		PublicURL:  pubURL,
 		BboxOffice: envOr("NEKTAR_BBOX_OFFICE", "default"),
 		Handle:     os.Getenv("NEKTAR_HANDLE"),
 		IsHub:      *withHub,
+		Matcher:    jevMatcher,
 		OnStateChange: func(ev string, _ any) {
 			if a := appRef.Load(); a != nil {
 				a.BroadcastDashboardEvent(ev)
@@ -704,7 +758,9 @@ func cmdMCP(args []string) error {
 	stopRefresher := startAnchorProofRefresher(ctx, rt.mem)
 	defer stopRefresher()
 
-	broker := market.NewBroker(rt.mem, rt.mkt, rt.disc, market.BrokerConfig{})
+	broker := market.NewBroker(rt.mem, rt.mkt, rt.disc, market.BrokerConfig{
+		Matcher: buildJevMatcherFromEnv(rt.mem.Chain().Network()),
+	})
 	tb := server.NewToolbox(rt.mem, rt.mkt, broker, rt.disc, nil, envOr("NEKTAR_TOOL_PROFILE", "agent"))
 	srv := server.NewMCPServerWithToolbox(tb)
 	return srv.Run(ctx, &mcp.StdioTransport{})

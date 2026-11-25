@@ -104,6 +104,24 @@ func (a *App) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		writeGauge("nektar_liquidity_zero_rate", "Fraction of buyer wants receiving zero offers.", toF("zeroRate"))
 		writeGauge("nektar_liquidity_hub_supply_share", "Share of settled deals filled by Hub supply.", toF("hubSupplyShare"))
 		writeGauge("nektar_liquidity_active_peers", "Verified peers announced on the directory lane.", toF("activePeers"))
+
+		mm := a.broker.MatcherMetrics()
+		jevEnabled := 0.0
+		if mm.Enabled {
+			jevEnabled = 1.0
+		}
+		writeGauge("nektar_jev_enabled", "1 if Jev System One semantic matcher is enabled, 0 otherwise.", jevEnabled)
+		writeCounter("nektar_jev_requests_total", "Total Jev AI semantic match evaluations executed.", float64(mm.Requests))
+		writeCounter("nektar_jev_rejections_total", "Total wants or offers rejected by Jev semantic/policy post-gates.", float64(mm.Rejections))
+		writeCounter("nektar_jev_escalations_total", "Total buyer deals escalated to operator Awakeable approval by Jev matcher.", float64(mm.Escalations))
+		writeCounter("nektar_jev_fallbacks_total", "Total Jev matcher fallbacks to deterministic ranking.", float64(mm.Fallbacks))
+		writeCounter("nektar_jev_input_tokens_total", "Total Jev AI input tokens consumed.", float64(mm.InputTokens))
+		writeGauge("nektar_jev_avg_latency_ms", "Average Jev AI evaluation latency in milliseconds.", float64(mm.AvgLatencyMs))
+		circuitOpen := 0.0
+		if mm.ClientHealth != nil && mm.ClientHealth.CircuitOpen {
+			circuitOpen = 1.0
+		}
+		writeGauge("nektar_jev_circuit_open", "1 if Jev AI client circuit breaker is currently open.", circuitOpen)
 	}
 
 	if a.cfg.Hub != nil && a.cfg.Hub.Store() != nil {

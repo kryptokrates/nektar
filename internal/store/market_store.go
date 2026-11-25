@@ -28,17 +28,18 @@ type SellListing struct {
 
 // OperatorPolicyRecord persists an operator-approved market spending/selling policy.
 type OperatorPolicyRecord struct {
-	PolicyID    string   `json:"policyId"`
-	PolicyHash  string   `json:"policyHash"`
-	Roles       []string `json:"roles"` // buyer | seller
-	Domains     []string `json:"domains,omitempty"`
-	MaxPerDeal  uint64   `json:"maxPerDeal"`
-	MaxPerDay   uint64   `json:"maxPerDay"`
-	ZeroConfMax uint64   `json:"zeroConfMax"`
-	Active      bool     `json:"active"`
-	ApprovedBy  string   `json:"approvedBy"`
-	ApprovedAt  int64    `json:"approvedAt"`
-	RevokedAt   int64    `json:"revokedAt,omitempty"`
+	PolicyID     string   `json:"policyId"`
+	PolicyHash   string   `json:"policyHash"`
+	Roles        []string `json:"roles"` // buyer | seller
+	Domains      []string `json:"domains,omitempty"`
+	MaxPerDeal   uint64   `json:"maxPerDeal"`
+	MaxPerDay    uint64   `json:"maxPerDay"`
+	ZeroConfMax  uint64   `json:"zeroConfMax"`
+	AIPolicyJSON string   `json:"aiPolicyJson,omitempty"`
+	Active       bool     `json:"active"`
+	ApprovedBy   string   `json:"approvedBy"`
+	ApprovedAt   int64    `json:"approvedAt"`
+	RevokedAt    int64    `json:"revokedAt,omitempty"`
 }
 
 // DealRecord persists a buyer or seller deal across restarts with optimistic CAS revision.
@@ -49,6 +50,7 @@ type DealRecord struct {
 	Shard              string `json:"shard,omitempty"`
 	WantJSON           []byte `json:"wantJson,omitempty"`
 	ChosenOfferJSON    []byte `json:"chosenOfferJson,omitempty"`
+	MatchAuditJSON     []byte `json:"matchAuditJson,omitempty"`
 	PaymentTxID        string `json:"paymentTxid,omitempty"`
 	PaymentBEEF        []byte `json:"paymentBeef,omitempty"`
 	PaymentOutputIndex uint32 `json:"paymentOutputIndex,omitempty"`
@@ -330,6 +332,11 @@ CREATE TABLE IF NOT EXISTS unmatched_wants (
 		}
 		_, _ = d.sql.Exec(`PRAGMA user_version = 2`)
 	}
+	if userVer < 3 {
+		_, _ = d.sql.Exec(`ALTER TABLE operator_policies ADD COLUMN ai_policy_json TEXT NOT NULL DEFAULT ''`)
+		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN match_audit_json BLOB`)
+		_, _ = d.sql.Exec(`PRAGMA user_version = 3`)
+	}
 	return nil
 }
 
@@ -481,9 +488,9 @@ func (d *DB) SaveOperatorPolicy(p OperatorPolicyRecord) error {
 	doms, _ := json.Marshal(p.Domains)
 	_, err := d.sql.Exec(`
 		INSERT OR REPLACE INTO operator_policies
-		(policy_id, policy_hash, roles_json, domains_json, max_per_deal, max_per_day, zero_conf_max, active, approved_by, approved_at, revoked_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.PolicyID, p.PolicyHash, string(roles), string(doms), p.MaxPerDeal, p.MaxPerDay, p.ZeroConfMax,
+		(policy_id, policy_hash, roles_json, domains_json, max_per_deal, max_per_day, zero_conf_max, ai_policy_json, active, approved_by, approved_at, revoked_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.PolicyID, p.PolicyHash, string(roles), string(doms), p.MaxPerDeal, p.MaxPerDay, p.ZeroConfMax, p.AIPolicyJSON,
 		boolToInt(p.Active), p.ApprovedBy, p.ApprovedAt, p.RevokedAt)
 	return err
 }
@@ -501,8 +508,8 @@ func (d *DB) ListOperatorPolicies() ([]OperatorPolicyRecord, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rows, err := d.sql.Query(`
-		SELECT policy_id, policy_hash, roles_json, domains_json, max_per_deal, max_per_day, zero_conf_max, active, approved_by, approved_at, revoked_at
-		FROM operator_policies ORDER BY approved_at DESC`)
+		SELECT policy_id, policy_hash, roles_json, domains_json, max_per_deal, max_per_day, zero_conf_max, COALESCE(ai_policy_json, ''), active, approved_by, approved_at, revoked_at
+		FROM operator_policies ORDER BY approved_at DESC, rowid DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +519,7 @@ func (d *DB) ListOperatorPolicies() ([]OperatorPolicyRecord, error) {
 		var p OperatorPolicyRecord
 		var rolesJSON, domJSON string
 		var active int
-		if err := rows.Scan(&p.PolicyID, &p.PolicyHash, &rolesJSON, &domJSON, &p.MaxPerDeal, &p.MaxPerDay, &p.ZeroConfMax, &active, &p.ApprovedBy, &p.ApprovedAt, &p.RevokedAt); err != nil {
+		if err := rows.Scan(&p.PolicyID, &p.PolicyHash, &rolesJSON, &domJSON, &p.MaxPerDeal, &p.MaxPerDay, &p.ZeroConfMax, &p.AIPolicyJSON, &active, &p.ApprovedBy, &p.ApprovedAt, &p.RevokedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(rolesJSON), &p.Roles)
@@ -537,11 +544,11 @@ func (d *DB) SaveDeal(rec DealRecord) error {
 	}
 	_, err := d.sql.Exec(`
 		INSERT OR REPLACE INTO deals
-		(deal_id, role, status, shard, want_json, chosen_offer_json, payment_txid, payment_beef,
+		(deal_id, role, status, shard, want_json, chosen_offer_json, match_audit_json, payment_txid, payment_beef,
 		 payment_output_index, payment_deriv_prefix, payment_deriv_suffix, payment_sender_key,
 		 claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, error, revision, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.DealID, rec.Role, rec.Status, rec.Shard, rec.WantJSON, rec.ChosenOfferJSON, rec.PaymentTxID, rec.PaymentBEEF,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.DealID, rec.Role, rec.Status, rec.Shard, rec.WantJSON, rec.ChosenOfferJSON, rec.MatchAuditJSON, rec.PaymentTxID, rec.PaymentBEEF,
 		rec.PaymentOutputIndex, rec.PaymentDerivPrefix, rec.PaymentDerivSuffix, rec.PaymentSenderKey,
 		rec.ClaimKeyHex, rec.ChirpURL, rec.DeliveredText, rec.CounterpartyPub, rec.PriceSats,
 		boolToInt(rec.IsHubSeller), rec.FirstOfferMs, rec.Error, rec.Revision, rec.CreatedAt, rec.UpdatedAt)
@@ -556,14 +563,14 @@ func (d *DB) UpdateDealCAS(rec DealRecord) (bool, error) {
 	now := time.Now().Unix()
 	res, err := d.sql.Exec(`
 		UPDATE deals SET
-			role = ?, status = ?, shard = ?, want_json = ?, chosen_offer_json = ?,
+			role = ?, status = ?, shard = ?, want_json = ?, chosen_offer_json = ?, match_audit_json = ?,
 			payment_txid = ?, payment_beef = ?,
 			payment_output_index = ?, payment_deriv_prefix = ?, payment_deriv_suffix = ?, payment_sender_key = ?,
 			claim_key_hex = ?, chirp_url = ?,
 			delivered_text = ?, counterparty_pub = ?, price_sats = ?, is_hub_seller = ?,
 			first_offer_ms = ?, error = ?, revision = revision + 1, updated_at = ?
 		WHERE deal_id = ? AND revision = ?`,
-		rec.Role, rec.Status, rec.Shard, rec.WantJSON, rec.ChosenOfferJSON,
+		rec.Role, rec.Status, rec.Shard, rec.WantJSON, rec.ChosenOfferJSON, rec.MatchAuditJSON,
 		rec.PaymentTxID, rec.PaymentBEEF,
 		rec.PaymentOutputIndex, rec.PaymentDerivPrefix, rec.PaymentDerivSuffix, rec.PaymentSenderKey,
 		rec.ClaimKeyHex, rec.ChirpURL,
@@ -581,13 +588,13 @@ func (d *DB) GetDeal(dealID string) (DealRecord, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	row := d.sql.QueryRow(`
-		SELECT deal_id, role, status, shard, want_json, chosen_offer_json, payment_txid, payment_beef,
+		SELECT deal_id, role, status, shard, want_json, chosen_offer_json, match_audit_json, payment_txid, payment_beef,
 		       COALESCE(payment_output_index, 0), COALESCE(payment_deriv_prefix, ''), COALESCE(payment_deriv_suffix, ''), COALESCE(payment_sender_key, ''),
 		       claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, error, revision, created_at, updated_at
 		FROM deals WHERE deal_id = ?`, dealID)
 	var r DealRecord
 	var hub int
-	err := row.Scan(&r.DealID, &r.Role, &r.Status, &r.Shard, &r.WantJSON, &r.ChosenOfferJSON, &r.PaymentTxID, &r.PaymentBEEF,
+	err := row.Scan(&r.DealID, &r.Role, &r.Status, &r.Shard, &r.WantJSON, &r.ChosenOfferJSON, &r.MatchAuditJSON, &r.PaymentTxID, &r.PaymentBEEF,
 		&r.PaymentOutputIndex, &r.PaymentDerivPrefix, &r.PaymentDerivSuffix, &r.PaymentSenderKey,
 		&r.ClaimKeyHex, &r.ChirpURL, &r.DeliveredText, &r.CounterpartyPub, &r.PriceSats, &hub, &r.FirstOfferMs,
 		&r.Error, &r.Revision, &r.CreatedAt, &r.UpdatedAt)
@@ -603,7 +610,7 @@ func (d *DB) ListDeals(limit int) ([]DealRecord, error) {
 		limit = 100
 	}
 	rows, err := d.sql.Query(`
-		SELECT deal_id, role, status, shard, want_json, chosen_offer_json, payment_txid, payment_beef,
+		SELECT deal_id, role, status, shard, want_json, chosen_offer_json, match_audit_json, payment_txid, payment_beef,
 		       COALESCE(payment_output_index, 0), COALESCE(payment_deriv_prefix, ''), COALESCE(payment_deriv_suffix, ''), COALESCE(payment_sender_key, ''),
 		       claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, error, revision, created_at, updated_at
 		FROM deals ORDER BY updated_at DESC LIMIT ?`, limit)
@@ -615,7 +622,7 @@ func (d *DB) ListDeals(limit int) ([]DealRecord, error) {
 	for rows.Next() {
 		var r DealRecord
 		var hub int
-		if err := rows.Scan(&r.DealID, &r.Role, &r.Status, &r.Shard, &r.WantJSON, &r.ChosenOfferJSON, &r.PaymentTxID, &r.PaymentBEEF,
+		if err := rows.Scan(&r.DealID, &r.Role, &r.Status, &r.Shard, &r.WantJSON, &r.ChosenOfferJSON, &r.MatchAuditJSON, &r.PaymentTxID, &r.PaymentBEEF,
 			&r.PaymentOutputIndex, &r.PaymentDerivPrefix, &r.PaymentDerivSuffix, &r.PaymentSenderKey,
 			&r.ClaimKeyHex, &r.ChirpURL, &r.DeliveredText, &r.CounterpartyPub, &r.PriceSats, &hub, &r.FirstOfferMs,
 			&r.Error, &r.Revision, &r.CreatedAt, &r.UpdatedAt); err != nil {

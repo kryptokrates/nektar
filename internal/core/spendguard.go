@@ -200,8 +200,11 @@ func (g *SpendGuard) checkLocked(now time.Time, feeSats, spendSats uint64) (uint
 	if g.spentToday+g.reservedToday+totalSpend > g.maxSpendDay {
 		return 0, fmt.Errorf("%w: (%d + %d + %d > %d sats)", ErrDailyCapExceeded, g.spentToday, g.reservedToday, totalSpend, g.maxSpendDay)
 	}
-	if g.minInterval > 0 && !g.lastBroadcast.IsZero() && now.Sub(g.lastBroadcast) < g.minInterval {
-		return 0, ErrMinInterval
+	if g.minInterval > 0 && !g.lastBroadcast.IsZero() {
+		if elapsed := now.Sub(g.lastBroadcast); elapsed < g.minInterval {
+			rem := (g.minInterval - elapsed).Round(time.Millisecond)
+			return 0, fmt.Errorf("%w (retry after %s)", ErrMinInterval, rem)
+		}
 	}
 	return totalSpend, nil
 }
@@ -336,27 +339,57 @@ func (g *SpendGuard) CheckAndRecord(txid string, feeSats, spendSats uint64) erro
 	return nil
 }
 
-// Refund reverses a recorded spend ONLY on definitive pre-broadcast rejection (never on unknown timeout).
-func (g *SpendGuard) Refund(txid string) {
+// Refund reverses a recorded spend ONLY on definitive pre-broadcast refusal (never on post-submit
+// error strings or unknown timeouts) and propagates any persistence failure.
+func (g *SpendGuard) Refund(txid string) error {
 	if txid == "" {
-		return
+		return nil
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.rollDayLocked(g.now())
 	for i := len(g.records) - 1; i >= 0; i-- {
 		if g.records[i].TxID == txid {
-			if g.spentToday >= g.records[i].SpendSats {
-				g.spentToday -= g.records[i].SpendSats
+			rec := g.records[i]
+			prevSpent := g.spentToday
+			if g.spentToday >= rec.SpendSats {
+				g.spentToday -= rec.SpendSats
 			} else {
 				g.spentToday = 0
 			}
+			prevRecords := append([]SpendRecord(nil), g.records...)
 			g.records = append(g.records[:i], g.records[i+1:]...)
 			delete(g.txIndex, txid)
-			_ = g.persistLocked()
-			return
+			if err := g.persistLocked(); err != nil {
+				g.spentToday = prevSpent
+				g.records = prevRecords
+				g.txIndex[txid] = struct{}{}
+				return err
+			}
+			return nil
 		}
 	}
+	return nil
+}
+
+// MinInterval returns the configured minimum spacing between outgoing broadcasts.
+func (g *SpendGuard) MinInterval() time.Duration {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.minInterval
+}
+
+// RemainingInterval returns how long remains before the next outgoing broadcast is permitted.
+func (g *SpendGuard) RemainingInterval() time.Duration {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.minInterval <= 0 || g.lastBroadcast.IsZero() {
+		return 0
+	}
+	if rem := g.minInterval - g.now().Sub(g.lastBroadcast); rem > 0 {
+		return rem
+	}
+	return 0
 }
 
 // Stats returns current UTC day spend and caps.

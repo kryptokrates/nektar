@@ -457,8 +457,11 @@ func (tb *Toolbox) ExecDeals(_ context.Context) map[string]any {
 	listings, _ := tb.mem.DB().ListSellListings()
 	reps, _ := tb.mem.DB().ListReputations()
 	var liq map[string]any
+	var matcherMetrics *market.MatcherMetrics
 	if tb.broker != nil {
 		liq = tb.broker.LiquidityMetrics()
+		mm := tb.broker.MatcherMetrics()
+		matcherMetrics = &mm
 	}
 	return map[string]any{
 		"deals":            deals,
@@ -466,6 +469,7 @@ func (tb *Toolbox) ExecDeals(_ context.Context) map[string]any {
 		"sellListings":     listings,
 		"reputations":      reps,
 		"liquidity":        liq,
+		"matcher":          matcherMetrics,
 	}
 }
 
@@ -663,6 +667,20 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 			Status: "green",
 			Detail: fmt.Sprintf("sseWakes=%v pollWakes=%v bboxWakes=%v", liq["sseWakes"], liq["pollWakes"], liq["bboxWakes"]),
 		})
+		if mm := tb.broker.MatcherMetrics(); mm.Enabled {
+			st := "green"
+			detail := fmt.Sprintf("mode=%s requests=%d rejections=%d escalations=%d fallbacks=%d inputTokens=%d",
+				mm.DefaultMode, mm.Requests, mm.Rejections, mm.Escalations, mm.Fallbacks, mm.InputTokens)
+			if mm.ClientHealth != nil && mm.ClientHealth.CircuitOpen {
+				st = "amber"
+				detail += " (circuit breaker open)"
+			}
+			checks = append(checks, DoctorCheck{
+				Name:   "jev_matcher",
+				Status: st,
+				Detail: detail,
+			})
+		}
 	}
 	var withholdings []discovery.WithholdingWarning
 	if tb.disc != nil {

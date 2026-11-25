@@ -411,21 +411,28 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		if p.Active {
 			hasActivePolicy = true
 		}
+		policyBody := map[string]any{
+			"roles":   p.Roles,
+			"domains": p.Domains,
+			"limits": map[string]any{
+				"maxPerDeal":  p.MaxPerDeal,
+				"maxPerDay":   p.MaxPerDay,
+				"zeroConfMax": p.ZeroConfMax,
+			},
+		}
+		if strings.TrimSpace(p.AIPolicyJSON) != "" {
+			var aiPol market.AIMatchingPolicy
+			if json.Unmarshal([]byte(p.AIPolicyJSON), &aiPol) == nil {
+				policyBody["aiMatching"] = aiPol
+			}
+		}
 		row := map[string]any{
 			"policyHash": p.PolicyHash,
 			"policyId":   p.PolicyID,
 			"approvedAt": maxI64(0, time.Now().Unix()-p.ApprovedAt),
 			"approvedBy": p.ApprovedBy,
 			"active":     p.Active,
-			"policy": map[string]any{
-				"roles":   p.Roles,
-				"domains": p.Domains,
-				"limits": map[string]any{
-					"maxPerDeal":  p.MaxPerDeal,
-					"maxPerDay":   p.MaxPerDay,
-					"zeroConfMax": p.ZeroConfMax,
-				},
-			},
+			"policy":     policyBody,
 		}
 		if p.RevokedAt > 0 {
 			row["revokedAt"] = maxI64(0, time.Now().Unix()-p.RevokedAt)
@@ -454,12 +461,19 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		if cause == "" {
 			cause = fmt.Sprintf("%s · %d sats", d.Role, d.PriceSats)
 		}
-		dealFeed = append(dealFeed, map[string]any{
+		entry := map[string]any{
 			"op":    d.DealID,
 			"at":    d.UpdatedAt * 1000,
 			"to":    d.Status,
 			"cause": cause,
-		})
+		}
+		if len(d.MatchAuditJSON) > 0 {
+			var ma market.MatchAudit
+			if json.Unmarshal(d.MatchAuditJSON, &ma) == nil {
+				entry["matchAudit"] = ma
+			}
+		}
+		dealFeed = append(dealFeed, entry)
 	}
 	rtExecutor := "unattached"
 	rtPending := make([]map[string]any, 0)
@@ -1165,11 +1179,12 @@ func (a *App) handlePublicFaucet(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handlePolicyPreset(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Preset  string   `json:"preset"`
-		Domains []string `json:"domains,omitempty"`
-		Confirm string   `json:"confirm,omitempty"`
+		Preset     string                   `json:"preset"`
+		Domains    []string                 `json:"domains,omitempty"`
+		Confirm    string                   `json:"confirm,omitempty"`
+		AIMatching *market.AIMatchingPolicy `json:"aiMatching,omitempty"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&in); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16384)).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1177,7 +1192,7 @@ func (a *App) handlePolicyPreset(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mainnet policy approval requires confirm=\"I_UNDERSTAND\""})
 		return
 	}
-	rec, err := market.ApprovePolicyPreset(a.mem.DB(), a.mkt.Policy(), in.Preset, in.Domains, "dashboard")
+	rec, err := market.ApprovePolicyPresetWithAI(a.mem.DB(), a.mkt.Policy(), in.Preset, in.Domains, "dashboard", in.AIMatching)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

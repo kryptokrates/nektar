@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestSpendGuardCorruptFileFailsClosed(t *testing.T) {
@@ -65,5 +67,44 @@ func TestSpendGuardAtomicReserveAndCommit(t *testing.T) {
 	spent2, _, _, count2 := sg.Stats()
 	if spent2 != 400 || count2 != 1 {
 		t.Fatalf("idempotent re-record double-counted: spent=%d count=%d", spent2, count2)
+	}
+}
+
+func TestSpendGuardMinIntervalIncludesRetryAfterAndRefundRollsBackOnPersistError(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "spend-guard.json")
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	sg := NewSpendGuard(SpendGuardOpts{
+		MaxFeeSatsPerTx: 1000,
+		MaxSpendSatsDay: 5000,
+		MinInterval:     2 * time.Second,
+		StatePath:       statePath,
+		Now:             func() time.Time { return now },
+	})
+	if err := sg.CheckAndRecord("tx-1", 100, 200); err != nil {
+		t.Fatalf("first CheckAndRecord: %v", err)
+	}
+	now = now.Add(500 * time.Millisecond)
+	if rem := sg.RemainingInterval(); rem != 1500*time.Millisecond {
+		t.Fatalf("expected RemainingInterval=1.5s, got %s", rem)
+	}
+	err := sg.Check(100, 200)
+	if !errors.Is(err, ErrMinInterval) || !strings.Contains(err.Error(), "retry after 1.5s") {
+		t.Fatalf("expected ErrMinInterval with retry-after duration, got %v", err)
+	}
+
+	// Verify Refund rolls back in-memory state if persistence fails (e.g. target path replaced by directory).
+	if err := os.Remove(statePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(statePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := sg.Refund("tx-1"); err == nil {
+		t.Fatalf("expected Refund to propagate persistence error")
+	}
+	spent, _, _, count := sg.Stats()
+	if spent != 200 || count != 1 {
+		t.Fatalf("expected failed Refund to preserve in-memory state, got spent=%d count=%d", spent, count)
 	}
 }

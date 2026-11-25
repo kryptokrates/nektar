@@ -151,3 +151,96 @@ func TestToolAuthBoundaries(t *testing.T) {
 		t.Fatalf("non-operator exportPack did not include Level-0 public fragment (got %d fragments)", len(pack.Fragments))
 	}
 }
+
+// TestDashboardStateFeedEnrichment verifies GET /state includes recent feed fragments and receipt answers.
+func TestDashboardStateFeedEnrichment(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	port, err := chain.Open(ctx, chain.Config{Network: "memory", DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer port.Close()
+	mem, err := memory.New(db, port, bstack.NewGroupRegistry(), bstack.NewMemoryObjectStore(), memory.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rem, err := mem.Remember(ctx, memory.RememberInput{Shard: "notes", Text: "Twetch style timeline test fact"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mkt := market.NewEngine(mem, market.DefaultPolicy())
+	app, err := NewApp(mem, mkt, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := app.BuildDashboardState(ctx, "http://127.0.0.1:18420")
+	feed, ok := st["feed"].([]map[string]any)
+	if !ok || len(feed) == 0 {
+		t.Fatalf("expected non-empty feed in BuildDashboardState, got %T %v", st["feed"], st["feed"])
+	}
+	if feed[0]["shard"] != "notes" || feed[0]["seq"] != rem.Seq {
+		t.Fatalf("unexpected feed[0]: %+v", feed[0])
+	}
+}
+
+// TestPolicyProfileDefaultsConfidence verifies Easy / Standard / Secure profiles automatically attach
+// backend semantic-matching confidence floors (0.80 / 0.85 / 0.92) via handlePolicyPreset.
+func TestPolicyProfileDefaultsConfidence(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	port, err := chain.Open(ctx, chain.Config{Network: "memory", DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer port.Close()
+	mem, err := memory.New(db, port, bstack.NewGroupRegistry(), bstack.NewMemoryObjectStore(), memory.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mkt := market.NewEngine(mem, market.DefaultPolicy())
+	app, err := NewApp(mem, mkt, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		profile string
+		wantBP  int64
+		wantMax uint64
+	}{
+		{"easy", 8000, 5000},
+		{"standard", 8500, 2000},
+		{"secure", 9200, 250},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodPost, "/v1/onboard/policy-preset", strings.NewReader(`{"profile":"`+tc.profile+`"}`))
+		rr := httptest.NewRecorder()
+		app.handlePolicyPreset(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("profile %s returned %d: %s", tc.profile, rr.Code, rr.Body.String())
+		}
+		var rec store.OperatorPolicyRecord
+		if err := json.Unmarshal(rr.Body.Bytes(), &rec); err != nil {
+			t.Fatalf("decode %s: %v", tc.profile, err)
+		}
+		if rec.MaxPerDeal != tc.wantMax {
+			t.Fatalf("profile %s maxPerDeal=%d want %d", tc.profile, rec.MaxPerDeal, tc.wantMax)
+		}
+		var ai market.AIMatchingPolicy
+		if err := json.Unmarshal([]byte(rec.AIPolicyJSON), &ai); err != nil {
+			t.Fatalf("profile %s invalid AIPolicyJSON %q: %v", tc.profile, rec.AIPolicyJSON, err)
+		}
+		if ai.MinConfidenceBP != tc.wantBP {
+			t.Fatalf("profile %s minConfidenceBp=%d want %d", tc.profile, ai.MinConfidenceBP, tc.wantBP)
+		}
+	}
+}

@@ -134,16 +134,17 @@
     flex-wrap: wrap;
   }
   .hpill {
-    background: #2e2620;
-    border: 1px solid #3a2f28;
-    color: #a89a8e;
+    background: var(--surf, #11100e);
+    border: 1px solid var(--line, #23201d);
+    color: var(--mut, #9a9087);
     border-radius: 99px;
-    padding: 0.35rem 0.75rem;
-    font-size: 0.8rem;
+    padding: 0.32rem 0.72rem;
+    font-size: 0.78rem;
+    font-weight: 600;
     cursor: pointer;
   }
   .hpill.on {
-    background: rgb(247 153 27 / 16%);
+    background: rgb(247 153 27 / 13%);
     border-color: #f7991b;
     color: #f7991b;
   }
@@ -154,52 +155,52 @@
   }
   .hin,
   .hsel {
-    background: #120e0c;
-    border: 1px solid #3a2f28;
-    border-radius: 8px;
-    color: #ece7e4;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.84rem;
+    background: var(--bg, #090807);
+    border: 1px solid var(--line, #23201d);
+    border-radius: 9px;
+    color: var(--ink, #f1ede9);
+    padding: 0.48rem 0.72rem;
+    font-size: 0.82rem;
   }
   .hin {
     flex: 1;
-    min-width: 220px;
+    min-width: 200px;
     font-family: ui-monospace, monospace;
   }
   .hblock {
-    background: #1a1512;
-    border: 1px solid #3a2f28;
-    border-radius: 10px;
-    padding: 0.8rem 0.95rem;
+    background: var(--surf, #11100e);
+    border: 1px solid var(--line, #23201d);
+    border-radius: 12px;
+    padding: 0.85rem 0.95rem;
     margin-bottom: 0.8rem;
   }
   .hhead {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    font-size: 0.84rem;
+    font-size: 0.82rem;
     margin-bottom: 0.5rem;
   }
   .hhead button,
   .hbtn {
     background: #f7991b;
-    color: #221e1d;
+    color: #120e0c;
     border: 0;
-    border-radius: 7px;
-    padding: 0.35rem 0.75rem;
-    font-size: 0.78rem;
-    font-weight: 700;
+    border-radius: 999px;
+    padding: 0.32rem 0.8rem;
+    font-size: 0.76rem;
+    font-weight: 800;
     cursor: pointer;
   }
   pre {
     margin: 0;
-    background: #120e0c;
-    border: 1px solid #2e2620;
-    border-radius: 7px;
+    background: var(--bg, #090807);
+    border: 1px solid var(--line, #23201d);
+    border-radius: 8px;
     padding: 0.65rem;
-    font-size: 0.76rem;
+    font-size: 0.75rem;
     overflow-x: auto;
-    color: #ece7e4;
+    color: var(--ink, #f1ede9);
     white-space: pre-wrap;
     word-break: break-all;
   }

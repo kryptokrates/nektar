@@ -584,6 +584,70 @@ func ApprovePolicyPresetSigned(
 	return rec, nil
 }
 
+// PolicyProfile defines canonical Easy / Standard / Secure policy defaults including
+// the automatic semantic-matching confidence floor (quantized in basis points, 0..10000).
+type PolicyProfile struct {
+	Name        string
+	Preset      string // "buyer" | "seller" | "both"
+	MaxPerDeal  uint64
+	MaxPerDay   uint64
+	ZeroConfMax uint64
+	AIMatching  AIMatchingPolicy
+}
+
+// PolicyProfileDefaults returns canonical defaults for "easy", "standard", or "secure".
+func PolicyProfileDefaults(tier string) (PolicyProfile, bool) {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "easy":
+		return PolicyProfile{
+			Name:        "easy",
+			Preset:      "both",
+			MaxPerDeal:  5_000,
+			MaxPerDay:   50_000,
+			ZeroConfMax: 2_500,
+			AIMatching: AIMatchingPolicy{
+				Mode:                 AIModeGated,
+				SellerPrivacyScope:   PrivacyDisclosablePreview,
+				MinConfidenceBP:      8000, // 0.80
+				EscalateConfidenceBP: 8200, // 0.82
+				AutoApproveMaxSats:   1_000,
+			},
+		}, true
+	case "standard":
+		return PolicyProfile{
+			Name:        "standard",
+			Preset:      "both",
+			MaxPerDeal:  2_000,
+			MaxPerDay:   20_000,
+			ZeroConfMax: 1_000,
+			AIMatching: AIMatchingPolicy{
+				Mode:                 AIModeGated,
+				SellerPrivacyScope:   PrivacyDisclosablePreview,
+				MinConfidenceBP:      8500, // 0.85
+				EscalateConfidenceBP: 8800, // 0.88
+				AutoApproveMaxSats:   500,
+			},
+		}, true
+	case "secure":
+		return PolicyProfile{
+			Name:        "secure",
+			Preset:      "buyer",
+			MaxPerDeal:  250,
+			MaxPerDay:   2_000,
+			ZeroConfMax: 0,
+			AIMatching: AIMatchingPolicy{
+				Mode:                 AIModeGated,
+				SellerPrivacyScope:   PrivacyMetadataOnly,
+				MinConfidenceBP:      9200, // 0.92
+				EscalateConfidenceBP: 9500, // 0.95
+				AutoApproveMaxSats:   100,
+			},
+		}, true
+	default:
+		return PolicyProfile{}, false
+	}
+}
+
 // PolicyLimitsOverride carries optional custom satoshi limits when approving a policy.
 type PolicyLimitsOverride struct {
 	MaxPerDeal  uint64
@@ -869,6 +933,13 @@ func RankOffers(want bstack.WantAd, offers []bstack.OfferAd, pol *Policy) []Scor
 // RankOffersWithRep adds a verified seller-reputation integer bps bonus (up to +1000 bp)
 // derived strictly from locally verified settled vs failed trades in SQLite.
 func RankOffersWithRep(want bstack.WantAd, offers []bstack.OfferAd, pol *Policy, reps map[string]store.SellerReputation) []ScoredOffer {
+	return RankOffersWithRepAndBonds(want, offers, pol, reps, nil)
+}
+
+// RankOffersWithRepAndBonds extends RankOffersWithRep with a deterministic SPV-verified
+// NektarCheckpointBond stake bonus (up to +750 bp for active un-seized bonds >= 1000 sats)
+// to defeat free Sybil quote spam.
+func RankOffersWithRepAndBonds(want bstack.WantAd, offers []bstack.OfferAd, pol *Policy, reps map[string]store.SellerReputation, verifiedBondSats map[string]uint64) []ScoredOffer {
 	var ranked []ScoredOffer
 	for _, o := range offers {
 		if want.Net == "main" || want.Net == "testnet" {
@@ -918,6 +989,15 @@ func RankOffersWithRep(want bstack.WantAd, offers []bstack.OfferAd, pol *Policy,
 					}
 					score += repBonus
 				}
+			}
+		}
+		if verifiedBondSats != nil {
+			if bondSats := verifiedBondSats[o.OfferID]; bondSats >= 1000 {
+				bondBonus := int64(bondSats / 100)
+				if bondBonus > 750 {
+					bondBonus = 750
+				}
+				score += bondBonus
 			}
 		}
 		ranked = append(ranked, ScoredOffer{Offer: o, ScoreBP: score, BaseScoreBP: score, Reason: "eligible"})

@@ -296,7 +296,7 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 	cutoff24h := time.Now().Add(-24 * time.Hour).Unix()
 	amounts := make([]uint64, 0, len(rcps)+len(deals))
 	rcpList := make([]map[string]any, 0, len(rcps))
-	for _, r := range rcps {
+	for idx, r := range rcps {
 		tok, _ := reasoning.ReceiptToken(r.ReceiptHash)
 		var parsed reasoning.Receipt
 		_ = json.Unmarshal(r.BodyJSON, &parsed)
@@ -317,13 +317,23 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 			}
 			amounts = append(amounts, parsed.Payment.AmountSats)
 		}
+		verdict := "amber"
+		if idx < 20 && tok != "" {
+			if vr, vErr := a.mem.VerifyReceipt(ctx, tok); vErr == nil && vr != nil && vr.Verdict != "" {
+				verdict = vr.Verdict
+			}
+		}
 		rcpList = append(rcpList, map[string]any{
-			"seq":    r.ShardSeq,
-			"tool":   "groundedAnswer",
-			"sats":   satsVal,
-			"shards": shList,
-			"at":     r.CreatedAt * 1000,
-			"url":    "/v1/verify/" + tok,
+			"seq":      r.ShardSeq,
+			"tool":     "groundedAnswer",
+			"sats":     satsVal,
+			"shards":   shList,
+			"at":       r.CreatedAt * 1000,
+			"url":      "/v1/verify/" + tok,
+			"token":    tok,
+			"answer":   shortStr(parsed.Answer, 300),
+			"anchored": r.AnchorTxID != "",
+			"verdict":  verdict,
 		})
 	}
 	for _, d := range deals {
@@ -560,6 +570,61 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		pushURL = a.broker.PublicURL()
 	}
 
+	// Recent memory stream for the live Home timeline with automatic SPV settlement state.
+	unsettledList, _ := a.mem.DB().ListUnsettledAnchors()
+	unsettledKeys := make(map[string]bool, len(unsettledList))
+	for _, ua := range unsettledList {
+		unsettledKeys[fmt.Sprintf("%s#%d", ua.Shard, ua.N)] = true
+	}
+	recentFrags, _ := a.mem.DB().ListRecentFragments(30)
+	feedRows := make([]map[string]any, 0, len(recentFrags))
+	for _, f := range recentFrags {
+		encrypted := f.BorgGroup != ""
+		txt := ""
+		if encrypted {
+			txt = fmt.Sprintf("[encrypted · borg:%s · epoch %d]", f.BorgGroup, f.BorgEpoch)
+		} else {
+			txt = shortStr(string(f.Data), 500)
+		}
+		settled := f.BatchN >= 0 && !unsettledKeys[fmt.Sprintf("%s#%d", f.Shard, f.BatchN)]
+		feedRows = append(feedRows, map[string]any{
+			"shard":      f.Shard,
+			"seq":        f.Seq,
+			"hdp":        f.HDP,
+			"text":       txt,
+			"encrypted":  encrypted,
+			"borgGroup":  f.BorgGroup,
+			"level":      f.Level,
+			"class":      f.Class,
+			"batchN":     f.BatchN,
+			"anchorTxid": f.AnchorTxID,
+			"settled":    settled,
+			"tainted":    f.Tainted,
+			"createdAt":  f.CreatedAt,
+		})
+	}
+
+	// Jev open-weight semantic matcher status (if attached).
+	var aiStatus map[string]any
+	if a.broker != nil {
+		mm := a.broker.MatcherMetrics()
+		aiStatus = map[string]any{
+			"enabled":      mm.Enabled,
+			"mode":         mm.DefaultMode,
+			"requests":     mm.Requests,
+			"rejections":   mm.Rejections,
+			"escalations":  mm.Escalations,
+			"fallbacks":    mm.Fallbacks,
+			"errors":       mm.Errors,
+			"avgLatencyMs": mm.AvgLatencyMs,
+		}
+		if mm.ClientHealth != nil {
+			aiStatus["endpoint"] = mm.ClientHealth.Endpoint
+			aiStatus["model"] = mm.ClientHealth.Model
+			aiStatus["circuitOpen"] = mm.ClientHealth.CircuitOpen
+		}
+	}
+
 	return map[string]any{
 		"network":   a.mem.Chain().Network(),
 		"model":     "nektar/v0.4-go",
@@ -602,6 +667,8 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 			"coverage": coverage,
 			"prover":   "SPV + Rúnar + Mangle",
 		},
+		"feed":   feedRows,
+		"ai":     aiStatus,
 		"market": marketRows,
 		"net": map[string]any{
 			"hosts":     hostRows,
@@ -1192,10 +1259,14 @@ func (a *App) handlePublicFaucet(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handlePolicyPreset(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Preset     string                   `json:"preset"`
-		Domains    []string                 `json:"domains,omitempty"`
-		Confirm    string                   `json:"confirm,omitempty"`
-		AIMatching *market.AIMatchingPolicy `json:"aiMatching,omitempty"`
+		Profile     string                   `json:"profile,omitempty"` // easy | standard | secure
+		Preset      string                   `json:"preset"`
+		Domains     []string                 `json:"domains,omitempty"`
+		MaxPerDeal  uint64                   `json:"maxPerDeal,omitempty"`
+		MaxPerDay   uint64                   `json:"maxPerDay,omitempty"`
+		ZeroConfMax *uint64                  `json:"zeroConfMax,omitempty"`
+		Confirm     string                   `json:"confirm,omitempty"`
+		AIMatching  *market.AIMatchingPolicy `json:"aiMatching,omitempty"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 16384)).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1205,7 +1276,45 @@ func (a *App) handlePolicyPreset(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mainnet policy approval requires confirm=\"I_UNDERSTAND\""})
 		return
 	}
-	rec, err := market.ApprovePolicyPresetWithAI(a.mem.DB(), a.mkt.Policy(), in.Preset, in.Domains, "dashboard", in.AIMatching)
+	tier := strings.TrimSpace(in.Profile)
+	if tier == "" {
+		tier = "standard"
+	}
+	prof, ok := market.PolicyProfileDefaults(tier)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("unknown policy profile %q (use easy, standard, or secure)", in.Profile)})
+		return
+	}
+	preset := strings.TrimSpace(in.Preset)
+	if preset == "" {
+		preset = prof.Preset
+	}
+	aiPol := in.AIMatching
+	if aiPol == nil {
+		cp := prof.AIMatching
+		aiPol = &cp
+	}
+	var limits *market.PolicyLimitsOverride
+	if in.MaxPerDeal > 0 || in.MaxPerDay > 0 || in.ZeroConfMax != nil || strings.TrimSpace(in.Profile) != "" {
+		zc := prof.ZeroConfMax
+		if in.ZeroConfMax != nil {
+			zc = *in.ZeroConfMax
+		}
+		deal := in.MaxPerDeal
+		if deal == 0 {
+			deal = prof.MaxPerDeal
+		}
+		day := in.MaxPerDay
+		if day == 0 {
+			day = prof.MaxPerDay
+		}
+		limits = &market.PolicyLimitsOverride{
+			MaxPerDeal:  deal,
+			MaxPerDay:   day,
+			ZeroConfMax: &zc,
+		}
+	}
+	rec, err := market.ApprovePolicyCustom(a.mem.DB(), a.mkt.Policy(), preset, in.Domains, limits, "dashboard", aiPol)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

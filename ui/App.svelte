@@ -1,158 +1,62 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import type { DealFeedEntry, DrawerTarget, FeedFragment, NavTab, PeerInfo, Receipt, State } from './lib/types'
+  import { fmtSats } from './lib/format'
+  import { operatorFetch, postJSON, registerOperatorPrompter } from './lib/api'
   import AuthGate from './components/AuthGate.svelte'
-  import OnboardingCard from './components/OnboardingCard.svelte'
-  import HubTab from './components/HubTab.svelte'
-
-  type Receipt = { seq: number; tool: string; sats: number | null; shards: string[]; at: number | null; url: string }
-  type Host = { url: string; state: string; saved?: boolean }
-  type Pending = { id: string; reason: string; maxExtraSats: number; operationId: string; expiresAt: string }
-  type Op = { role: string; kind: string; state: string; lastError?: string }
-  type WaitRow = {
-    actionId: string
-    operationId: string
-    kind: string
-    status: string
-    deferClass: string | null
-    lastError: string | null
-    attempts: number
-    nextAt: number
-  }
-  type Rt = {
-    executor: string
-    adminUrl: string | null
-    pending: WaitRow[]
-    nextAt: number | null
-    journal: Array<{ op: string; at: number; to: string; cause: string }>
-  }
-  type Shard = { shard: string; domains: string[]; records: number; works: number; earned: number; offers: string; active?: boolean }
-  type State = {
-    network: string
-    model: string
-    pub: string
-    uptimeSec: number
-    loop: { steps: { name: string; done: boolean }[]; done: number; frontier: string; next: string }
-    treasury: {
-      address?: string | null
-      identityPub?: string | null
-      sats: number
-      confirmedSats?: number
-      unprovenSats?: number
-      reservedSats?: number
-      utxos: number
-      fuelUtxos?: number
-      reserveUtxos?: number
-      defaultUtxos?: number
-      walletMode?: string
-      feeRateSatPerKB?: number
-      funded: boolean
-      payments: string
-    }
-    receipts: { count: number; earned: number; earned24h: number; amounts: number[]; list: Receipt[] }
-    memory: { shards: number; records: number; anchored: number; unproven: number; coverage: number; prover: string }
-    market: Shard[]
-    net: {
-      hosts: Host[]
-      seeds: string[]
-      slots: Record<string, number> | null
-      boot: string | null
-      push: string | null
-      peers?: Array<{
-        pub: string
-        handle?: string
-        publicUrl?: string
-        bboxOffice?: string
-        sellDomains?: string[]
-        bountyDomains?: string[]
-        isHub?: boolean
-      }>
-      bounties?: Array<{
-        id: string
-        domain: string
-        question: string
-        rewardSats: number
-        filled: number
-        maxFills: number
-      }>
-      liquidity?: {
-        fillRate: number
-        medianTimeToOfferMs: number
-        zeroRate: number
-        hubSupplyShare: number
-        organicSellers: number
-        activePeers: number
-        sseWakes: number
-        pollWakes: number
-        bboxWakes: number
-      } | null
-      unmatchedWants?: Array<{
-        wantId: string
-        domain: string
-        query: string
-        maxSats: number
-        seenAt: number
-      }>
-    }
-    automation: { pending: Pending[]; ops: Op[]; rt: Rt } | null
-    share: { enabled: boolean; url: string }
-    settings: {
-      policies: Array<{
-        policyHash: string
-        policyId: string
-        approvedAt: number
-        approvedBy: string
-        revokedAt?: number
-        active: boolean
-        policy: {
-          roles: string[]
-          domains?: string[]
-          limits: Record<string, number>
-          seller?: Record<string, unknown>
-        } | null
-      }>
-      hosts: { env: string[]; added: string[]; blocked: string[] }
-    }
-  }
+  import Sidebar from './components/Sidebar.svelte'
+  import FeedView from './components/FeedView.svelte'
+  import MarketView from './components/MarketView.svelte'
+  import WalletView from './components/WalletView.svelte'
+  import NodeView from './components/NodeView.svelte'
+  import RightRail from './components/RightRail.svelte'
+  import DetailDrawer from './components/DetailDrawer.svelte'
+  import CommandPalette from './components/CommandPalette.svelte'
+  import OperatorModal from './components/OperatorModal.svelte'
+  import DockModal from './components/DockModal.svelte'
 
   let s = $state<State | null>(null)
-  let err = $state('')
   let needsAuth = $state(false)
   let live = $state(false)
-  let copied = $state(false)
-  let tab = $state<'overview' | 'earnings' | 'activity' | 'network' | 'hub' | 'agent' | 'settings' | 'debug'>('overview')
-  let sub = $state<'policy' | 'identity' | 'hosts' | 'runtime'>('policy')
-  let joinInput = $state('')
-  let joinMsg = $state('')
-  let joinFound = $state<string[]>([])
-  let addrCopied = $state(false)
-  let walletBusy = $state(false)
-  let walletMsg = $state('')
-  let walletErr = $state('')
-  let showWithdraw = $state(false)
-  let sendTo = $state('')
-  let sendSats = $state('')
-  let showDesktopFund = $state(false)
-  let desktopFundSats = $state('10000')
+  let tab = $state<NavTab>('home')
+  let searchQuery = $state('')
+  let composerEl = $state<HTMLTextAreaElement | null>(null)
+  let drawer = $state<DrawerTarget>(null)
+  let paletteOpen = $state(false)
+  let dockOpen = $state(false)
+  let faucetBusy = $state(false)
+  let toast = $state<{ msg: string; isErr: boolean } | null>(null)
+  let toastTimer: ReturnType<typeof setTimeout> | null = null
 
-  const fmt = (n: number) => n.toLocaleString('en').replace(/,/g, "'")
-  const host = (u: string) => u.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
-  const ago = (sec: number) => {
-    const h = Math.floor(sec / 3600)
-    return h > 0 ? `${h}h ${Math.floor((sec % 3600) / 60)}m` : `${Math.floor(sec / 60)}m`
+  // In-app operator token & confirm modal state (zero window.prompt / window.confirm)
+  let modalMode = $state<'none' | 'token' | 'confirm'>('none')
+  let modalTitle = $state('')
+  let modalDetail = $state('')
+  let tokenResolver: ((v: string | null) => void) | null = null
+  let confirmResolver: ((ok: boolean) => void) | null = null
+
+  function showToast(msg: string, isErr = false) {
+    toast = { msg, isErr }
+    if (toastTimer) clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => (toast = null), 3400)
   }
-  const agoSince = (at: number | null) => (at === null ? '' : ago(Math.max(0, Math.floor((Date.now() - at) / 1000))))
 
-  // cumulative earnings curve — one point per work, oldest first
-  const cum = (amounts: number[]) => amounts.slice().reverse().reduce<number[]>((out, v, i) => [...out, (out[i - 1] ?? 0) + v], [])
-  const AW = 720,
-    AH = 140
-  function area(vals: number[]) {
-    const max = Math.max(...vals, 1)
-    const pts = vals.map(
-      (v, i) => [vals.length === 1 ? AW / 2 : (i / (vals.length - 1)) * AW, AH - 6 - (v / max) * (AH - 16)] as const
-    )
-    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ')
-    return { line, fill: pts.length ? `${line} L${AW},${AH} L0,${AH} Z` : '', last: pts.at(-1) }
+  function promptOperator(reason: string): Promise<string | null> {
+    modalTitle = 'Operator Authorization'
+    modalDetail = reason
+    modalMode = 'token'
+    return new Promise((resolve) => {
+      tokenResolver = resolve
+    })
+  }
+
+  function askConfirm(title: string, detail: string): Promise<boolean> {
+    modalTitle = title
+    modalDetail = detail
+    modalMode = 'confirm'
+    return new Promise((resolve) => {
+      confirmResolver = resolve
+    })
   }
 
   async function load() {
@@ -160,250 +64,130 @@
       const r = await fetch('/state')
       if (r.status === 401) {
         needsAuth = true
-        err = ''
         return
       }
       if (!r.ok) throw new Error(`state ${r.status}`)
       needsAuth = false
       s = await r.json()
-      document.title = s.receipts.earned > 0 ? `${fmt(s.receipts.earned)} sats · nektar` : 'nektar'
-      err = ''
+      document.title = s && s.receipts.earned > 0 ? `${fmtSats(s.receipts.earned)} sats · nektar` : 'nektar'
     } catch (e) {
-      err = String(e)
+      showToast(String(e), true)
     }
   }
 
-  async function share() {
-    if (!s?.share.url) return
-    try {
-      if (navigator.share) await navigator.share({ title: "my agent's track record", url: s.share.url })
-      else await navigator.clipboard.writeText(s.share.url)
-    } catch {
-      await navigator.clipboard.writeText(s.share.url).catch(() => {})
-    }
-    copied = true
-    setTimeout(() => (copied = false), 1600)
+  function focusComposer() {
+    tab = 'home'
+    setTimeout(() => composerEl?.focus(), 20)
   }
 
-  async function decide(id: string, approve: boolean) {
-    const tok = sessionStorage.getItem('nektar-operator-token') ?? prompt('operator token (NEKTAR_OPERATOR_TOKEN — not the agent bearer)')
-    if (!tok) return
-    sessionStorage.setItem('nektar-operator-token', tok)
-    const r = await fetch(`/v1/automation/approvals/${id}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${tok}` },
-      body: JSON.stringify({ approve })
-    })
-    if (!r.ok) err = `decision rejected (${r.status})`
-    await load()
-  }
-
-  // join flow — paste-anything → the server probes /.well-known/nektar,
-  // persists + hot-adds, returns the peer's advertised hosts (the crawl)
-  const hostPost = (u: string, tok?: string) =>
-    fetch('/v1/hosts', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...(tok ? { authorization: `Bearer ${tok}` } : {}) },
-      body: JSON.stringify({ url: u })
-    })
-  async function joinHost(u: string) {
-    if (!u.trim()) return
-    joinMsg = ''
-    let r = await hostPost(u.trim(), sessionStorage.getItem('nektar-operator-token') ?? undefined)
-    if (r.status === 403) {
-      const tok = prompt('operator token (NEKTAR_OPERATOR_TOKEN)')
-      if (!tok) return
-      sessionStorage.setItem('nektar-operator-token', tok)
-      r = await hostPost(u.trim(), tok)
-    }
-    const j = (await r.json().catch(() => ({}))) as { error?: string; url?: string; discovered?: string[] }
-    if (!r.ok) {
-      joinMsg = j.error ?? `join failed (${r.status})`
+  async function runQuickRecall() {
+    const rec = await postJSON<{ items?: Array<{ shard: string; seq: number; text?: string }> }>('/v1/tools/recall', { limit: 5 })
+    if (!rec.ok) {
+      showToast(rec.data.error ?? 'Recall failed', true)
       return
     }
-    joinMsg = `✓ ${j.url} joined`
-    joinFound = j.discovered ?? []
-    joinInput = ''
-    await load()
-  }
-  async function joinAll() {
-    for (const h of joinFound) await joinHost(h)
-    joinFound = []
-  }
-
-  // leave a host — saved joins drop; env/seed hosts block so the leave persists
-  async function disconnect(u: string) {
-    const del = (tok?: string) =>
-      fetch(`/v1/hosts?url=${encodeURIComponent(u)}`, { method: 'DELETE', headers: tok ? { authorization: `Bearer ${tok}` } : {} })
-    let r = await del(sessionStorage.getItem('nektar-operator-token') ?? undefined)
-    if (r.status === 403) {
-      const tok = prompt('operator token (NEKTAR_OPERATOR_TOKEN)')
-      if (!tok) return
-      sessionStorage.setItem('nektar-operator-token', tok)
-      r = await del(tok)
-    }
-    const j = (await r.json().catch(() => ({}))) as { error?: string }
-    joinMsg = r.ok ? `left ${host(u)}` : (j.error ?? `disconnect failed (${r.status})`)
-    await load()
-  }
-
-  async function copyAddress() {
-    if (!s?.treasury.address) return
-    await navigator.clipboard.writeText(s.treasury.address).catch(() => {})
-    addrCopied = true
-    setTimeout(() => (addrCopied = false), 1500)
-  }
-
-  async function operatorRequest(method: string, url: string, payload?: Record<string, unknown>) {
-    const run = (tok?: string) =>
-      fetch(url, {
-        method,
-        headers: {
-          ...(payload !== undefined ? { 'content-type': 'application/json' } : {}),
-          ...(tok ? { authorization: `Bearer ${tok}` } : {})
-        },
-        ...(payload !== undefined ? { body: JSON.stringify(payload) } : {})
+    const items = rec.data.items ?? []
+    if (items.length > 0 && items[0].text) {
+      const g = await postJSON('/v1/tools/groundedAnswer', {
+        claims: [{ text: items[0].text.slice(0, 140), cites: [{ shard: items[0].shard, seq: items[0].seq }] }]
       })
-    let r = await run(sessionStorage.getItem('nektar-operator-token') ?? undefined)
-    if (r.status === 401 || r.status === 403) {
-      const tok = prompt('operator token (NEKTAR_OPERATOR_TOKEN)')
-      if (!tok) return null
-      sessionStorage.setItem('nektar-operator-token', tok)
-      r = await run(tok)
+      if (g.ok) showToast('Issued first verifiable receipt ✓')
+      else showToast(g.data.error ?? 'Grounding failed', true)
+    } else {
+      showToast('No memories yet — write one in the composer above.', true)
     }
-    return r
-  }
-
-  async function operatorPost(url: string, payload: Record<string, unknown>) {
-    return operatorRequest('POST', url, payload)
-  }
-
-  async function toggleListing(shard: string, active: boolean) {
-    const r = await operatorRequest('PATCH', `/v1/market/listings/${encodeURIComponent(shard)}`, { active })
-    if (r && !r.ok) err = `update listing failed (${r.status})`
     await load()
   }
 
-  async function deleteListing(shard: string) {
-    if (!confirm(`Remove sell listing for shard "${shard}"?`)) return
-    const r = await operatorRequest('DELETE', `/v1/market/listings/${encodeURIComponent(shard)}`)
-    if (r && !r.ok) err = `delete listing failed (${r.status})`
-    await load()
-  }
-
-  async function syncWallet() {
-    walletBusy = true
-    walletMsg = ''
-    walletErr = ''
+  async function requestFaucet() {
+    faucetBusy = true
     try {
-      const r = await fetch('/v1/wallet/sync', { method: 'POST' })
-      const j = (await r.json().catch(() => ({}))) as { added?: number; proved?: number; error?: string }
+      const r = await fetch('/v1/onboard/faucet', { method: 'POST' })
+      const j = (await r.json().catch(() => ({}))) as { sats?: number; error?: string }
       if (!r.ok) {
-        walletErr = j.error ?? `sync failed (${r.status})`
+        showToast(j.error ?? `Faucet failed (${r.status})`, true)
         return
       }
-      walletMsg = `✓ synced (+${j.added ?? 0} UTXO, ${j.proved ?? 0} proved)`
+      showToast(`Received +${fmtSats(j.sats ?? 2000)} test sats ✓`)
       await load()
-    } catch (e) {
-      walletErr = String(e)
     } finally {
-      walletBusy = false
+      faucetBusy = false
     }
   }
 
-  async function fundFromDesktop() {
-    const amount = Number(desktopFundSats)
-    if (!Number.isFinite(amount) || amount <= 0) {
-      walletErr = 'enter positive satoshis'
-      return
-    }
-    walletBusy = true
-    walletMsg = ''
-    walletErr = ''
-    try {
-      const r = await fetch('/v1/wallet/fund-desktop', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sats: Math.floor(amount) })
-      })
-      const j = (await r.json().catch(() => ({}))) as { txid?: string; satoshis?: number; error?: string }
-      if (!r.ok) {
-        walletErr = j.error ?? `desktop fund failed (${r.status})`
-        return
-      }
-      walletMsg = `✓ +${fmt(j.satoshis ?? amount)} sats from BSV Desktop (${String(j.txid ?? '').slice(0, 10)}…)`
-      showDesktopFund = false
-      await load()
-    } catch (e) {
-      walletErr = String(e)
-    } finally {
-      walletBusy = false
-    }
-  }
-
-  async function sendWalletFunds() {
-    const dest = sendTo.trim()
-    const amount = Number(sendSats)
-    if (!dest || !Number.isFinite(amount) || amount <= 0) {
-      walletErr = 'enter destination address/identity key and positive sats'
-      return
-    }
-    const payload: Record<string, unknown> = { to: dest, sats: Math.floor(amount) }
+  async function approveStarterPolicy() {
+    const body: Record<string, unknown> = { preset: 'both' }
     if (s?.network === 'main') {
-      if (!confirm(`MAINNET: send ${fmt(amount)} real sats to ${dest}?`)) return
-      payload.confirm = 'I_UNDERSTAND'
+      const ok = await askConfirm('Mainnet Trading Policy', 'Approve starter Buyer + Seller policy using real BSV?')
+      if (!ok) return
+      body.confirm = 'I_UNDERSTAND'
     }
-    walletBusy = true
-    walletMsg = ''
-    walletErr = ''
-    try {
-      const r = await operatorPost('/v1/wallet/send', payload)
-      if (!r) return
-      const j = (await r.json().catch(() => ({}))) as { txid?: string; feeSats?: number; error?: string }
-      if (!r.ok) {
-        walletErr = j.error ?? `send failed (${r.status})`
-        return
-      }
-      walletMsg = `✓ sent ${fmt(amount)} sats (fee ${j.feeSats ?? 0}, tx ${String(j.txid ?? '').slice(0, 10)}…)`
-      sendSats = ''
+    const r = await operatorFetch('POST', '/v1/onboard/policy-preset', body, 'Approve starter Buyer + Seller policy')
+    if (!r) return
+    const j = (await r.json().catch(() => ({}))) as { policyId?: string; error?: string }
+    if (!r.ok) showToast(j.error ?? `Approval failed (${r.status})`, true)
+    else {
+      showToast(`Enabled ${j.policyId ?? 'starter'} policy ✓`)
       await load()
-    } catch (e) {
-      walletErr = String(e)
-    } finally {
-      walletBusy = false
     }
   }
 
-  async function sweepWalletFunds(toDesktop: boolean) {
-    const dest = sendTo.trim()
-    if (!toDesktop && !dest) {
-      walletErr = 'enter destination address/identity key to sweep'
-      return
-    }
-    const targetLabel = toDesktop ? 'local BSV Desktop' : dest
-    if (!confirm(`Sweep 100% of spendable funds (${fmt(s?.treasury.sats ?? 0)} sats) to ${targetLabel}?`)) return
-    const payload: Record<string, unknown> = toDesktop ? { toDesktop: true } : { to: dest }
-    if (s?.network === 'main') payload.confirm = 'I_UNDERSTAND'
-    walletBusy = true
-    walletMsg = ''
-    walletErr = ''
-    try {
-      const r = await operatorPost('/v1/wallet/sweep', payload)
-      if (!r) return
-      const j = (await r.json().catch(() => ({}))) as { sweptSats?: number; totalFeeSats?: number; error?: string }
-      if (!r.ok) {
-        walletErr = j.error ?? `sweep failed (${r.status})`
-        return
-      }
-      walletMsg = `✓ swept ${fmt(j.sweptSats ?? 0)} sats (fee ${j.totalFeeSats ?? 0})`
-      showWithdraw = false
+  async function anchorShard(shard: string) {
+    const r = await postJSON<{ anchor?: { txid?: string } }>('/v1/anchor', { shard })
+    if (!r.ok) showToast(r.data.error ?? `Anchor failed (${r.status})`, true)
+    else {
+      showToast(r.data.anchor?.txid ? `Anchored #${shard} on BSV ✓` : `Nothing unanchored in #${shard}`)
       await load()
-    } catch (e) {
-      walletErr = String(e)
-    } finally {
-      walletBusy = false
     }
   }
+
+  async function forgetMemory(shard: string, seq: number) {
+    const ok = await askConfirm('Forget & Shred Memory', `Shred local plaintext of #${shard}:${seq}? On-chain hash stays intact.`)
+    if (!ok) return
+    const r = await postJSON('/v1/tools/forget', { shard, seq })
+    if (!r.ok) showToast(r.data.error ?? `Forget failed (${r.status})`, true)
+    else {
+      showToast(`Shredded #${shard}:${seq}`)
+      await load()
+    }
+  }
+
+  async function decideApproval(id: string, approve: boolean) {
+    const r = await operatorFetch(
+      'POST',
+      `/v1/automation/approvals/${id}`,
+      { approve },
+      approve ? 'Approve pending market deal' : 'Deny pending market deal'
+    )
+    if (!r) return
+    if (!r.ok) showToast(`Decision rejected (${r.status})`, true)
+    else {
+      showToast(approve ? 'Deal approved ✓' : 'Deal denied')
+      await load()
+    }
+  }
+
+  async function shareUrl(url: string) {
+    await navigator.clipboard.writeText(url).catch(() => {})
+    showToast('Verification link copied ✓')
+  }
+
+  const commands = $derived([
+    { id: 'compose', label: 'Remember a fact', hint: 'Home composer', run: focusComposer },
+    { id: 'recall', label: 'Run verified recall + receipt', hint: 'welcome shard', run: () => void runQuickRecall() },
+    { id: 'dock', label: 'Dock AI agent (Claude / Cursor / Proxy / MCP)', hint: 'Setup', run: () => (dockOpen = true) },
+    { id: 'home', label: 'Go to Home Feed', hint: 'Timeline', run: () => (tab = 'home') },
+    { id: 'market', label: 'Go to Market', hint: 'Bounties & Peers', run: () => (tab = 'market') },
+    { id: 'wallet', label: 'Go to Wallet', hint: 'Balance & Ledger', run: () => (tab = 'wallet') },
+    { id: 'node', label: 'Go to Node & Diagnostics', hint: 'Policies · Hosts · Hub', run: () => (tab = 'node') },
+    ...(s?.network === 'testnet'
+      ? [{ id: 'faucet', label: 'Request Testnet Faucet sats', hint: 'Free test BSV', run: () => void requestFaucet() }]
+      : []),
+    { id: 'policy', label: 'Approve Starter Trading Policy', hint: 'Buyer + Seller', run: () => void approveStarterPolicy() },
+    ...(s?.share.enabled
+      ? [{ id: 'share', label: "Copy agent's public record link", hint: s.share.url, run: () => void shareUrl(s!.share.url) }]
+      : [])
+  ])
 
   let es: EventSource | null = null
   function connectEvents() {
@@ -414,9 +198,16 @@
     es.onerror = () => (live = false)
   }
 
+  function onGlobalKey(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault()
+      paletteOpen = !paletteOpen
+    }
+  }
+
   onMount(() => {
+    registerOperatorPrompter(promptOperator)
     void (async () => {
-      // Auto-consume `#token=<secret>` from pairing URLs into an HttpOnly cookie
       const hash = window.location.hash
       if (hash.startsWith('#token=')) {
         const tok = decodeURIComponent(hash.slice('#token='.length))
@@ -434,6 +225,8 @@
   })
 </script>
 
+<svelte:window onkeydown={onGlobalKey} />
+
 {#if needsAuth}
   <AuthGate
     onUnlocked={() => {
@@ -442,1340 +235,181 @@
       connectEvents()
     }}
   />
+{:else if !s}
+  <div class="boot">loading nektar…</div>
 {:else}
-{#if err}
-  <div class="err">{err}</div>
-{/if}
-{#if !s}
-  <div class="boot">loading…</div>
-{:else}
-  {@const curve = area(cum(s.receipts.amounts))}
-  {@const amts = s.receipts.amounts}
-  {@const half = Math.floor(amts.length / 2)}
-  {@const recent = half > 0 ? amts.slice(-half).reduce((x, y) => x + y, 0) / half : 0}
-  {@const prior = amts.length - half > 0 ? amts.slice(0, amts.length - half).reduce((x, y) => x + y, 0) / (amts.length - half) : 0}
-  {@const trend = amts.length >= 4 ? (recent > prior * 1.1 ? '↑' : recent < prior * 0.9 ? '↓' : '→') : null}
-  <div class="app">
-    <aside class="sidenav">
-      <div class="brand">
-        <svg viewBox="0 0 400 400" width="30" height="30" class="drop"
-          ><rect width="400" height="400" fill="#221e1d" rx="60" /><path
-            fill="#f7991b"
-            d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z"
-          /><circle cx="307" cy="78" r="38" fill="#f7991b" /><ellipse cx="163" cy="190" rx="20" ry="21" fill="#221e1d" /><ellipse
-            cx="231"
-            cy="190"
-            rx="20"
-            ry="21"
-            fill="#221e1d"
-          /><path
-            d="M 150 265.5 C 161 279 176 287 196 288 C 216 287 230 278 243 265"
-            fill="none"
-            stroke="#221e1d"
-            stroke-width="24"
-            stroke-linecap="round"
-          /></svg
-        ><b>nektar</b><span class="live" class:down={!live}><i></i>{live ? 'live' : 'offline'}</span>
-      </div>
-      <nav class="menu">
-        <button class="mi" class:active={tab === 'overview'} onclick={() => (tab = 'overview')}><svg viewBox="0 0 20 20" class="mico"><path d="M3 10l7-7 7 7v8a1 1 0 01-1 1h-4v-5h-4v5H4a1 1 0 01-1-1z" fill="currentColor" /></svg>Overview</button>
-        <button class="mi" class:active={tab === 'earnings'} onclick={() => (tab = 'earnings')}><svg viewBox="0 0 20 20" class="mico"><path d="M10 3v14M14.5 6H8.2a2.6 2.6 0 000 5.2h3.6a2.6 2.6 0 010 5.2H5.5" stroke="currentColor" fill="none" stroke-width="1.7" stroke-linecap="round" /></svg>Earnings</button>
-        <button class="mi" class:active={tab === 'activity'} onclick={() => (tab = 'activity')}><svg viewBox="0 0 20 20" class="mico"><path d="M2.5 10h3l2-5.5 3 11 2-5.5h4.5" stroke="currentColor" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>Activity</button>
-        <button class="mi" class:active={tab === 'network'} onclick={() => (tab = 'network')}><svg viewBox="0 0 20 20" class="mico"><circle cx="4.5" cy="10" r="2" fill="currentColor" /><circle cx="15" cy="5" r="2" fill="currentColor" /><circle cx="15" cy="15" r="2" fill="currentColor" /><path d="M6.5 9.3 13 5.9M6.5 10.7l6.5 3.4" stroke="currentColor" stroke-width="1.4" /></svg>Network</button>
-        <button class="mi" class:active={tab === 'hub'} onclick={() => (tab = 'hub')}><svg viewBox="0 0 20 20" class="mico"><rect x="3" y="4" width="14" height="4.5" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.5" /><rect x="3" y="11.5" width="14" height="4.5" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.5" /><circle cx="6.2" cy="6.2" r="0.9" fill="currentColor" /><circle cx="6.2" cy="13.8" r="0.9" fill="currentColor" /></svg>Hub Node</button>
-        <button class="mi" class:active={tab === 'agent'} onclick={() => (tab = 'agent')}><svg viewBox="0 0 20 20" class="mico"><rect x="4.5" y="7" width="11" height="9" rx="2.2" stroke="currentColor" fill="none" stroke-width="1.6" /><circle cx="8" cy="11" r="1.1" fill="currentColor" /><circle cx="12" cy="11" r="1.1" fill="currentColor" /><path d="M10 4v3" stroke="currentColor" stroke-width="1.6" /></svg>Agent</button>
-        <button class="mi" class:active={tab === 'settings'} onclick={() => (tab = 'settings')}><svg viewBox="0 0 20 20" class="mico"><path d="M3 6h9M16 6h1M3 14h1M8 14h9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /><circle cx="14" cy="6" r="2" stroke="currentColor" fill="none" stroke-width="1.6" /><circle cx="6" cy="14" r="2" stroke="currentColor" fill="none" stroke-width="1.6" /></svg>Settings</button>
-        <div class="msep"></div>
-        <button class="mi dbg-mi" class:active={tab === 'debug'} onclick={() => (tab = 'debug')}><svg viewBox="0 0 20 20" class="mico"><rect x="3" y="4" width="14" height="12" rx="2" stroke="currentColor" fill="none" stroke-width="1.6" /><path d="M6 8l2.5 2L6 12M10 12h4" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>Debug</button>
-      </nav>
-      <div class="sfoot">
-        <code class="pub">{s.pub}…</code>
-        <small class="mut">{s.model} · {s.network} · {ago(s.uptimeSec)}</small>
-      </div>
-    </aside>
+  <div class="shell">
+    <Sidebar
+      {tab}
+      {live}
+      network={s.network}
+      pub={s.pub}
+      uptimeSec={s.uptimeSec}
+      pendingApprovals={s.automation?.pending.length ?? 0}
+      onSelect={(t) => (tab = t)}
+      onCompose={focusComposer}
+      onOpenPalette={() => (paletteOpen = true)}
+    />
 
-    <main class="feed">
-      {#if tab === 'overview'}
-      <OnboardingCard
-        network={s.network}
-        feeAddress={s.treasury.address ?? null}
-        sats={s.treasury.sats}
-        receiptCount={s.receipts.count}
-        hasPolicy={s.settings.policies.some((p) => !p.revokedAt)}
-        onRefresh={load}
-        onOpenHub={() => (tab = 'hub')}
-      />
-      <section class="hero card" id="overview">
-      <div class="herorow">
-        <div class="earn">
-          <div class="pre verdict" class:verdict-sell={s.receipts.count > 0}>{s.receipts.count > 0 ? 'selling' : s.market.length > 0 ? 'listed' : 'idle'}</div>
-          <h1>{fmt(s.receipts.earned)} <em>sats</em></h1>
-          {#if s.receipts.earned24h > 0}<div class="chg24">+{fmt(s.receipts.earned24h)} sats <small>· 24h</small></div>{/if}
-          <p class="sub">
-            {s.receipts.count} checkable work{s.receipts.count === 1 ? '' : 's'} · {s.market.length} domain{s.market.length === 1 ? '' : 's'} for sale{#if trend !== null} · earning {trend}{/if}
-          </p>
-        </div>
-        <div class="heroright">
-          {#if s.share.enabled}
-            <button class="share" onclick={share}>{copied ? 'copied ✓' : "share your agent's record ↗"}</button>
-          {/if}
-        </div>
-      </div>
-      {#if s.receipts.amounts.length}
-        <svg viewBox={`0 0 ${AW} ${AH}`} class="area" preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="eg" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="rgba(76,194,107,.35)" />
-              <stop offset="100%" stop-color="rgba(76,194,107,0)" />
-            </linearGradient>
-          </defs>
-          {#each [0.25, 0.5, 0.75] as g}<line x1="0" y1={AH * g} x2={AW} y2={AH * g} class="agrid" />{/each}
-          <path d={curve.fill} fill="url(#eg)" />
-          <path d={curve.line} class="aline" />
-          {#if curve.last}<circle cx={curve.last[0]} cy={curve.last[1]} r="4" class="adot" />{/if}
-        </svg>
+    <main class="center">
+      {#if tab === 'home'}
+        <FeedView
+          {s}
+          {searchQuery}
+          bind:composerEl
+          onRefresh={load}
+          onToast={showToast}
+          onInspectMemory={(m: FeedFragment) => (drawer = { kind: 'memory', item: m })}
+          onInspectReceipt={(r: Receipt) => (drawer = { kind: 'receipt', item: r })}
+          onInspectDeal={(d: DealFeedEntry) => (drawer = { kind: 'deal', item: d })}
+          onForgetMemory={(sh, seq) => void forgetMemory(sh, seq)}
+          onDecideApproval={(id, ok) => void decideApproval(id, ok)}
+          onShareUrl={(u) => void shareUrl(u)}
+        />
+      {:else if tab === 'market'}
+        <MarketView
+          {s}
+          onRefresh={load}
+          onToast={showToast}
+          onInspectPeer={(p: PeerInfo) => (drawer = { kind: 'peer', item: p })}
+        />
+      {:else if tab === 'wallet'}
+        <WalletView {s} onRefresh={load} onToast={showToast} onConfirm={askConfirm} />
       {:else}
-        <p class="empty">the earnings curve draws itself — first groundedAnswer issues the first checkable work</p>
-      {/if}
-      {#if s.loop?.steps?.length}
-        <div class="rline" style="margin-top:.85rem;padding-top:.7rem;border-top:1px solid var(--line)">
-          <span class="chip">activation {s.loop.frontier}</span>
-          {#each s.loop.steps as st}
-            <span class="chip" class:ok={st.done}>{st.done ? '✓' : '·'} {st.name}</span>
-          {/each}
-        </div>
-      {/if}
-      </section>
-      {/if}
-
-      {#if (tab === 'overview' || tab === 'earnings') && s.market.length > 0}
-        <div class="card" id="listings">
-          <h2>Listed Shards <small>{s.market.length} shard{s.market.length === 1 ? '' : 's'} offered on market</small></h2>
-          {#each s.market as m}
-            <div class="row">
-              <span>
-                <b>{m.shard}</b>
-                {#each m.domains as dm}<i class="dom">{dm}</i>{/each}
-                <small class="mut"> · {m.records} rec · {m.works} sold · {fmt(m.earned)} sats · {m.offers}</small>
-              </span>
-              <span class="rowend">
-                <span class="chip" class:ok={m.active !== false}>{m.active !== false ? 'active' : 'paused'}</span>
-                <button class="jbtn" onclick={() => toggleListing(m.shard, m.active === false)}>{m.active !== false ? 'pause' : 'resume'}</button>
-                <button class="x" title="delete listing" onclick={() => deleteListing(m.shard)}>✕</button>
-              </span>
-            </div>
-          {/each}
-        </div>
-      {/if}
-
-      {#if tab === 'overview' || tab === 'earnings'}
-      <div class="card" id="earnings">
-          <h2>Earnings <small>every answer checkable by a stranger</small></h2>
-          {#if tab === 'earnings'}<p class="tabhint">the feed a buyer reads — every row a verifiable earning · next: per-answer proof pages · payout history</p>{/if}
-          {#each s.receipts.list as r}
-            <div class="lrow">
-              <svg viewBox="0 0 400 400" class="drop-sm"><rect width="400" height="400" fill="#221e1d" rx="60" /><path
-                  fill="#f7991b"
-                  d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z"
-                /></svg>
-              <div class="lbody"><b>{r.tool}</b>{#each r.shards as sh}<i class="dom">{sh}</i>{/each}</div>
-              <b class="lnum">{r.sats === null ? '—' : `+${fmt(r.sats)}`}<small> sats</small></b>
-              {#if r.at}<span class="rago">{agoSince(r.at)}</span>{/if}
-              <a href={r.url}>verify ↗</a>
-            </div>
-          {:else}
-            <p class="empty">no works yet — the first groundedAnswer issues the first checkable earning</p>
-          {/each}
-        </div>
-      {/if}
-
-      {#if tab === 'overview' || tab === 'activity'}
-        <div class="card" id="activity">
-          <h2>
-            Activity <small>
-              {#if s.automation}
-                {s.automation.ops.filter((o) => o.state === 'running').length} running · {s.automation.pending.length} approval{s.automation.pending.length === 1 ? '' : 's'} · {s.automation.rt.pending.length} waiting
-              {:else}
-                not running — start automation to trade unattended
-              {/if}
-            </small>
-          </h2>
-          {#if tab === 'activity'}<p class="tabhint">pending first, then the journaled steps — next: per-op invocation timelines</p>{/if}
-          {#if s.automation}
-            {#each s.automation.rt.pending as p}
-              <div class="row">
-                <span><i class="pulse"></i>{p.kind} <small class="mut">→ {p.operationId.slice(0, 8)}…{p.deferClass ? ` · ${p.deferClass}` : ''}{p.lastError ? ` · ${p.lastError}` : ''}</small></span>
-                <b>attempt {p.attempts} · {new Date(p.nextAt).toLocaleTimeString()}</b>
-              </div>
-            {/each}
-            {#each s.automation.pending as a}
-              <div class="row">
-                <span><b>{a.reason}</b> <small class="mut">≤ {a.maxExtraSats} sats · {a.operationId.slice(0, 8)}… · expires {new Date(a.expiresAt).toLocaleTimeString()}</small></span>
-                <span class="acts"><button onclick={() => decide(a.id, true)}>approve</button><button class="ghost" onclick={() => decide(a.id, false)}>deny</button></span>
-              </div>
-            {/each}
-            {#each s.automation.ops as o}
-              <div class="row"><span class="mut">{o.role} {o.kind}</span><b class={o.lastError ? 'bad' : o.state === 'running' ? 'ok' : ''}>{o.state}{o.lastError ? ` — ${o.lastError}` : ''}</b></div>
-            {:else}
-              {#if !s.automation.pending.length && !s.automation.rt.pending.length}<p class="empty">idle — routine trades do not prompt</p>{/if}
-            {/each}
-            {#if s.automation.rt.journal.length}
-              <div class="journal">
-                {#each s.automation.rt.journal as e}
-                  <div><span class="mono">{e.op}</span> → {e.to} <span class="mut">· {e.cause}</span></div>
-                {/each}
-              </div>
-            {/if}
-          {:else}
-            <p class="empty">the agent earns unattended once automation is attached</p>
-          {/if}
-        </div>
-      {/if}
-
-      {#if tab === 'network'}
-        <div class="card">
-          <h2>Network <small>{s.net.hosts.length ? `${s.net.hosts.filter((h) => h.state === 'up').length} of ${s.net.hosts.length} hosts up` : 'single-player'}</small></h2>
-          <p class="tabhint">who this instance trades through — next: peer cards · per-host lane stock · quorum depth</p>
-          {#each s.net.hosts as h}
-            <div class="row">
-              <span class="mono">{h.url}{#if h.saved} <small class="mut">· saved</small>{/if}</span>
-              <span class="rowend"><b class={h.state === 'down' ? 'bad' : h.state === 'up' ? 'ok' : ''}>{h.state}</b><button class="x" title="disconnect" onclick={() => disconnect(h.url)}>✕</button></span>
-            </div>
-          {:else}
-            <p class="empty">no market hosts yet — join one below to start trading</p>
-          {/each}
-          {#if s.net.slots}
-            <div class="rline">
-              {#each Object.entries(s.net.slots) as [lane, n]}<span class="chip">{lane} {n}</span>{/each}
-            </div>
-          {/if}
-          {#if s.net.seeds?.length}
-            <div class="jline"><span class="mut">public hosts:</span>{#each s.net.seeds as seed}<button class="jbtn" onclick={() => joinHost(seed)}>join {host(seed)}</button>{/each}</div>
-          {/if}
-          <div class="jline">
-            <input class="jin" bind:value={joinInput} placeholder="add a host — https://… or a .well-known URL" onkeydown={(e) => e.key === 'Enter' && joinHost(joinInput)} />
-            <button class="jbtn" onclick={() => joinHost(joinInput)}>join</button>
-          </div>
-          {#if joinMsg}<p class="jmsg">{joinMsg}</p>{/if}
-          {#if joinFound.length}
-            <div class="jline"><span class="mut">it knows {joinFound.length} more:</span>{#each joinFound as h}<button class="jbtn" onclick={() => joinHost(h)}>+ {host(h)}</button>{/each}<button class="jbtn jok" onclick={joinAll}>add all</button></div>
-          {/if}
-        </div>
-
-        <div class="card">
-          <h2>Peers <small>{s.net.peers?.length ?? 0} verified on dir lane</small></h2>
-          {#if s.net.peers?.length}
-            {#each s.net.peers as p}
-              <div class="row">
-                <span>
-                  <b class="mono">{p.handle || p.pub.slice(0, 14) + '…'}</b>
-                  <span class="chip">{p.isHub ? 'hub' : 'organic'}</span>
-                  {#if p.publicUrl}<span class="chip ok">direct</span>{:else}<span class="chip">NAT bbox</span>{/if}
-                  {#each p.sellDomains ?? [] as dm}<i class="dom">{dm}</i>{/each}
-                </span>
-                <span class="mut mono">{p.publicUrl ? host(p.publicUrl) : (p.bboxOffice || 'bbox')}</span>
-              </div>
-            {/each}
-          {:else}
-            <p class="empty">no peers announced yet — join a Hub or run <code>nektar peers</code></p>
-          {/if}
-        </div>
-
-        <div class="card">
-          <h2>Hub Bounties & Liquidity <small>sell verified facts directly to the Hub</small></h2>
-          {#if s.net.liquidity}
-            <div class="rline">
-              <span class="chip">fill {(s.net.liquidity.fillRate * 100).toFixed(0)}%</span>
-              <span class="chip">zero {(s.net.liquidity.zeroRate * 100).toFixed(0)}%</span>
-              <span class="chip">hub supply {(s.net.liquidity.hubSupplyShare * 100).toFixed(0)}%</span>
-              <span class="chip">median offer {s.net.liquidity.medianTimeToOfferMs} ms</span>
-              <span class="chip">organic sellers {s.net.liquidity.organicSellers}</span>
-              <span class="chip">SSE wakes {s.net.liquidity.sseWakes}</span>
-              <span class="chip">poll wakes {s.net.liquidity.pollWakes}</span>
-            </div>
-          {/if}
-          {#if s.net.bounties?.length}
-            {#each s.net.bounties as b}
-              <div class="row">
-                <span>
-                  <b>{b.id}</b> <i class="dom">{b.domain}</i>
-                  <small class="mut"> · {b.question}</small>
-                </span>
-                <span class="rowend">
-                  <b class="ok">+{fmt(b.rewardSats)} sats</b>
-                  <small class="mut">{b.filled}/{b.maxFills}</small>
-                </span>
-              </div>
-            {/each}
-          {:else}
-            <p class="empty">no active bounties on connected hubs — run <code>nektar serve -hub</code> to host a bounty pool</p>
-          {/if}
-          {#if s.net.unmatchedWants?.length}
-            <h2 style="margin-top:1rem">Unmatched Demand <small>zero-offer wants — seed these domains to earn</small></h2>
-            {#each s.net.unmatchedWants as uw}
-              <div class="row">
-                <span><i class="dom">{uw.domain}</i> <small class="mut">{uw.query || 'any query'}</small></span>
-                <span class="chip">up to {fmt(uw.maxSats)} sats</span>
-              </div>
-            {/each}
-          {/if}
-        </div>
-      {/if}
-
-      {#if tab === 'hub'}
-        <HubTab network={s.network} onJoinHub={joinHost} />
-      {/if}
-
-      {#if tab === 'agent'}
-        <div class="card">
-          <h2>Agent <small>{s.automation ? `${s.automation.ops.filter((o) => o.state === 'running').length} running` : 'idle'}</small></h2>
-          <p class="tabhint">the runtime you leave running — next: workflow history per op · awakeable stats</p>
-          {#if s.automation}
-            {#each s.automation.ops as o}
-              <div class="row"><span class="mut">{o.role} {o.kind}</span><b class={o.lastError ? 'bad' : o.state === 'running' ? 'ok' : ''}>{o.state}{o.lastError ? ` — ${o.lastError}` : ''}</b></div>
-            {/each}
-            <div class="rline">
-              <span class="chip">executor {s.automation.rt.executor}</span>
-              <span class="chip">{s.automation.rt.pending.length} in outbox</span>
-              <span class="chip">drain {s.automation.rt.nextAt ? new Date(s.automation.rt.nextAt).toLocaleTimeString() : 'idle'}</span>
-            </div>
-          {:else}
-            <p class="empty">leave the agent running — it answers, prices and collects while you're away</p>
-          {/if}
-        </div>
-      {/if}
-
-      {#if tab === 'settings'}
-        <div class="card">
-          <h2>Settings <small>the knobs this instance runs under</small></h2>
-          <div class="subpills">
-            {#each ['policy', 'identity', 'hosts', 'runtime'] as p}
-              <button class="pill" class:on={sub === p} onclick={() => (sub = p as typeof sub)}>{p}</button>
-            {/each}
-          </div>
-
-          {#if sub === 'policy'}
-            {#if s.settings.policies.length}
-              {#each s.settings.policies as row}
-                <div class="rline">
-                  <span class="chip">{row.policyId}</span>
-                  {#if row.policy}{#each row.policy.roles as r}<span class="chip">{r}</span>{/each}{/if}
-                  {#if row.active}<span class="chip ok">active seller</span>{/if}
-                  {#if row.revokedAt}<span class="chip bad">revoked {ago(row.revokedAt)}</span>{/if}
-                  <span class="mut" style="margin-left:auto">{row.policyHash.slice(0, 12)}… · approved {ago(row.approvedAt)} by {row.approvedBy}</span>
-                </div>
-                {#if row.policy}
-                  {@const p = row.policy}
-                  {#if p.domains?.length}<div class="rline">{#each p.domains as dm}<span class="chip">{dm}</span>{/each}</div>{/if}
-                  <details class="pol"><summary>limits + seller terms</summary>
-                    <table class="jt"><tbody>
-                      {#each Object.entries(p.limits ?? {}) as [k, v]}<tr><td class="mut">{k}</td><td>{String(v)}</td></tr>{/each}
-                      {#if p.seller}{#each Object.entries(p.seller) as [k, v]}<tr><td class="mut">seller.{k}</td><td>{Array.isArray(v) ? v.join(', ') : String(v)}</td></tr>{/each}{/if}
-                    </tbody></table>
-                  </details>
-                {/if}
-              {/each}
-            {:else}
-              <p class="empty">no policy approved yet — approve a starter preset in Quickstart or run <code>nektar policy approve --preset buyer</code></p>
-            {/if}
-          {/if}
-
-          {#if sub === 'identity'}
-            <table class="jt"><tbody>
-              <tr><td class="mut">pubkey</td><td class="mono">{s.pub}…</td></tr>
-              <tr><td class="mut">model</td><td>{s.model}</td></tr>
-              <tr><td class="mut">network</td><td>{s.network}</td></tr>
-              <tr><td class="mut">uptime</td><td>{ago(s.uptimeSec)}</td></tr>
-              <tr><td class="mut">card</td><td><a href={s.share.url}>{s.share.url}</a></td></tr>
-            </tbody></table>
-          {/if}
-
-          {#if sub === 'hosts'}
-            <table class="jt"><thead><tr><th>source</th><th>hosts</th></tr></thead><tbody>
-              <tr><td class="mut">env / seeds</td><td class="mono">{s.settings.hosts.env.join(', ') || '—'}</td></tr>
-              <tr><td class="mut">joined (saved)</td><td class="mono">{s.settings.hosts.added.join(', ') || '—'}</td></tr>
-              <tr><td class="mut">left (blocked)</td><td class="mono">{s.settings.hosts.blocked.join(', ') || '—'}</td></tr>
-            </tbody></table>
-          {/if}
-
-          {#if sub === 'runtime'}
-            <table class="jt"><tbody>
-              <tr><td class="mut">stream</td><td><b class={live ? 'ok' : 'bad'}>{live ? 'live' : 'offline'}</b></td></tr>
-              <tr><td class="mut">share page</td><td>{s.share.enabled ? 'on' : 'off (NEKTAR_PACK_SHARE=0)'}</td></tr>
-              <tr><td class="mut">push url</td><td class="mono">{s.net.push ?? '—'}</td></tr>
-              {#if s.automation}
-                <tr><td class="mut">executor</td><td>{s.automation.rt.executor}</td></tr>
-                <tr><td class="mut">outbox</td><td>{s.automation.rt.pending.length} pending · drain {s.automation.rt.nextAt ? new Date(s.automation.rt.nextAt).toLocaleTimeString() : 'idle'}</td></tr>
-              {:else}
-                <tr><td class="mut">automation</td><td>not attached</td></tr>
-              {/if}
-            </tbody></table>
-          {/if}
-        </div>
-      {/if}
-
-      {#if tab === 'debug'}
-        <div class="card">
-          <h2>Debug <small>Restate durable executor &amp; operator diagnostics</small></h2>
-          <p class="tabhint">live Restate sys_invocation telemetry — BuyerDeal, SellerDeal, Custody, Tx, AnchorCadence</p>
-          {#if s.automation}
-            <div class="rline">
-              <span class="chip" class:ok={s.automation.rt.executor === 'restate'} class:bad={s.automation.rt.executor === 'restate-unavailable'}>executor {s.automation.rt.executor}</span>
-              <span class="chip">{s.automation.rt.pending.length} active</span>
-              <span class="chip">{s.automation.rt.journal.length} invocations</span>
-              <span class="chip">next {s.automation.rt.nextAt ? new Date(s.automation.rt.nextAt).toLocaleTimeString() : 'idle'}</span>
-              {#if s.automation.rt.adminUrl}
-                <a class="chip" href={s.automation.rt.adminUrl} target="_blank" rel="noreferrer">Restate Admin API ↗</a>
-              {/if}
-            </div>
-            {#if s.automation.rt.executor !== 'restate'}
-              <div class="rph">
-                <b>durable executor {s.automation.rt.executor}</b>
-                <p>Run <code>nektar restate-up</code> (or start with Docker Compose) so <code>restate-server</code> supervises durable deals, awakeables, custody reservations &amp; anchor cadences.</p>
-              </div>
-            {/if}
-            {#if s.automation.rt.pending.length}
-              <h3 style="margin:.9rem 0 .4rem;font-size:.82rem;color:var(--mut);text-transform:uppercase;letter-spacing:.08em">Active / Suspended Invocations</h3>
-              <table class="jt"><thead><tr><th>target</th><th>invocation</th><th>status</th><th>retries</th><th>next</th></tr></thead><tbody>
-                {#each s.automation.rt.pending as p}
-                  <tr><td>{p.kind}</td><td class="mono">{p.operationId.slice(0, 12)}…</td><td>{p.status}{p.deferClass ? ` · ${p.deferClass}` : ''}{p.lastError ? ` · ${p.lastError}` : ''}</td><td>{p.attempts}</td><td class="mut">{p.nextAt ? new Date(p.nextAt).toLocaleTimeString() : '—'}</td></tr>
-                {/each}
-              </tbody></table>
-            {/if}
-            {#if s.automation.rt.journal.length}
-              <h3 style="margin:.9rem 0 .4rem;font-size:.82rem;color:var(--mut);text-transform:uppercase;letter-spacing:.08em">Recent Restate Invocations</h3>
-              <table class="jt"><thead><tr><th>at</th><th>target</th><th>status</th><th>detail</th></tr></thead><tbody>
-                {#each s.automation.rt.journal as e}
-                  <tr><td class="mut">{e.at ? new Date(e.at).toLocaleTimeString() : '—'}</td><td class="mono">{e.op}</td><td>{e.to}</td><td class="mut">{e.cause}</td></tr>
-                {/each}
-              </tbody></table>
-            {:else if s.automation.rt.executor === 'restate'}
-              <p class="empty">Restate connected and ready — no invocations recorded yet.</p>
-            {/if}
-          {:else}
-            <p class="empty">automation not attached — nothing to introspect yet</p>
-          {/if}
-        </div>
-        <div class="card">
-          <h2>State <small>GET /state verbatim</small></h2>
-          <pre class="dbg">{JSON.stringify(s, null, 2)}</pre>
-        </div>
+        <NodeView {s} {live} onRefresh={load} onToast={showToast} onConfirm={askConfirm} onOpenDock={() => (dockOpen = true)} />
       {/if}
     </main>
 
-    <aside class="rail">
-        <div class="card">
-          <h2>Wallet <small>{s.treasury.walletMode ?? 'embedded'} · {s.treasury.feeRateSatPerKB ?? 100} sat/kB</small></h2>
-          <div class="wbal">{fmt(s.treasury.sats)} <em>sats</em></div>
-          <p class="wmeta">
-            {#if (s.treasury.confirmedSats ?? 0) > 0 || (s.treasury.unprovenSats ?? 0) > 0}
-              {fmt(s.treasury.confirmedSats ?? 0)} confirmed{#if (s.treasury.unprovenSats ?? 0) > 0} · {fmt(s.treasury.unprovenSats ?? 0)} unconfirmed{/if}
-            {:else}
-              {s.treasury.funded ? 'funded' : 'needs funding'}
-            {/if}
-            · {s.treasury.payments}
-          </p>
-          <div class="wchips">
-            <span class="chip">UTXOs {s.treasury.utxos}</span>
-            {#if s.treasury.fuelUtxos !== undefined}<span class="chip">fuel {s.treasury.fuelUtxos}</span>{/if}
-            {#if s.treasury.reserveUtxos !== undefined}<span class="chip">reserve {s.treasury.reserveUtxos}</span>{/if}
-            {#if (s.treasury.defaultUtxos ?? 0) > 0}<span class="chip">default {s.treasury.defaultUtxos}</span>{/if}
-          </div>
-          {#if s.treasury.address}
-            <div class="waddr">
-              <code class="mono">{s.treasury.address}</code>
-              <button class="wmini" onclick={copyAddress}>{addrCopied ? '✓' : 'copy'}</button>
-            </div>
-          {/if}
-          <div class="wacts">
-            <button class="wbtn" onclick={syncWallet} disabled={walletBusy}>{walletBusy ? '…' : 'Sync'}</button>
-            {#if (s.treasury.walletMode ?? 'embedded') === 'embedded'}
-              <button class="wbtn" onclick={() => { showDesktopFund = !showDesktopFund; showWithdraw = false }}>+ BSV Desktop</button>
-              <button class="wbtn" onclick={() => { showWithdraw = !showWithdraw; showDesktopFund = false }}>Withdraw / Sweep</button>
-            {/if}
-          </div>
-          {#if showDesktopFund}
-            <div class="wbox">
-              <div class="wrow">
-                <input class="win" type="number" min="100" bind:value={desktopFundSats} placeholder="sats (e.g. 10000)" />
-                <button class="wbtn primary" onclick={fundFromDesktop} disabled={walletBusy}>Fund</button>
-              </div>
-              <small class="mut">Requests 1-click BRC-29 funding from local BSV Desktop (127.0.0.1:3321).</small>
-            </div>
-          {/if}
-          {#if showWithdraw}
-            <div class="wbox">
-              <input class="win" bind:value={sendTo} placeholder="BSV address or 66-hex BRC-100 identity key" />
-              <div class="wrow">
-                <input class="win" type="number" min="1" bind:value={sendSats} placeholder="amount (sats)" />
-                <button class="wbtn primary" onclick={sendWalletFunds} disabled={walletBusy}>Send</button>
-              </div>
-              <div class="wrow">
-                <button class="wbtn" onclick={() => sweepWalletFunds(false)} disabled={walletBusy}>Sweep All to Address</button>
-                <button class="wbtn" onclick={() => sweepWalletFunds(true)} disabled={walletBusy}>Sweep to BSV Desktop</button>
-              </div>
-            </div>
-          {/if}
-          {#if walletMsg}<p class="jmsg">{walletMsg}</p>{/if}
-          {#if walletErr}<p class="werr">{walletErr}</p>{/if}
-        </div>
-
-        <div class="card" id="network">
-          <h2>Network <small>{s.net.hosts.length ? `${s.net.hosts.filter((h) => h.state === 'up').length} of ${s.net.hosts.length} hosts up` : 'single-player'}</small></h2>
-          {#each s.net.hosts as h}
-            <div class="row"><span class="mono">{host(h.url)}</span><b class={h.state === 'down' ? 'bad' : h.state === 'up' ? 'ok' : ''}>{h.state}</b></div>
-          {:else}
-            <p class="empty">no market hosts configured — set NEKTAR_MARKET_HOSTS to join a network</p>
-          {/each}
-          {#if s.net.slots}
-            <div class="rline">
-              {#each Object.entries(s.net.slots) as [lane, n]}<span class="chip">{lane} {n}</span>{/each}
-            </div>
-          {/if}
-        </div>
-
-        <div class="card" id="agent">
-          <h2>Agent</h2>
-          {#if s.automation}
-            {#if s.automation.ops.length}
-              <div class="ostrip">
-                {#each s.automation.ops as o}<i class={o.lastError ? 's-err' : o.state === 'running' ? 's-run' : 's-idle'} title="{o.role} {o.kind} — {o.state}{o.lastError ? ` (${o.lastError})` : ''}"></i>{/each}
-              </div>
-            {/if}
-            <div class="rline">
-              <span class="chip">executor {s.automation.rt.executor}</span>
-              <span class="chip">{s.automation.rt.pending.length} in outbox</span>
-              <span class="chip">drain {s.automation.rt.nextAt ? new Date(s.automation.rt.nextAt).toLocaleTimeString() : 'idle'}</span>
-            </div>
-          {:else}
-            <p class="empty">leave the agent running — it answers, prices and collects while you're away</p>
-          {/if}
-        </div>
-    </aside>
+    <RightRail
+      {s}
+      {searchQuery}
+      {faucetBusy}
+      onSearch={(q) => (searchQuery = q)}
+      onOpenPalette={() => (paletteOpen = true)}
+      onOpenDock={() => (dockOpen = true)}
+      onQuickRecall={() => void runQuickRecall()}
+      onRequestFaucet={() => void requestFaucet()}
+      onApproveStarter={() => void approveStarterPolicy()}
+      onNavigate={(t) => (tab = t)}
+    />
   </div>
-{/if}
+
+  <DetailDrawer target={drawer} onClose={() => (drawer = null)} />
+  <CommandPalette open={paletteOpen} {commands} onClose={() => (paletteOpen = false)} />
+  <DockModal open={dockOpen} onClose={() => (dockOpen = false)} />
+  <OperatorModal
+    mode={modalMode}
+    title={modalTitle}
+    detail={modalDetail}
+    onResolveToken={(v) => {
+      modalMode = 'none'
+      tokenResolver?.(v)
+      tokenResolver = null
+    }}
+    onResolveConfirm={(ok) => {
+      modalMode = 'none'
+      confirmResolver?.(ok)
+      confirmResolver = null
+    }}
+  />
+
+  {#if toast}
+    <div class="toast" class:err={toast.isErr} role="status">{toast.msg}</div>
+  {/if}
 {/if}
 
 <style>
   :global(*) {
     box-sizing: border-box;
   }
-  :global(html) {
-    scroll-behavior: smooth;
-  }
-  :global(body) {
-    margin: 0;
-    background: #120e0c;
-    color: #ece7e4;
-    font-family:
-      system-ui,
-      -apple-system,
-      'Segoe UI',
-      sans-serif;
-    font-size: 14px;
-  }
-  :global(.err) {
-    background: #e5534b;
-    color: #fff;
-    padding: 0.4rem 1rem;
-    font-size: 0.8rem;
-  }
-  :root {
+  :global(:root) {
+    --bg: #090807;
+    --surf: #11100e;
+    --hover: #171513;
+    --line: #23201d;
+    --line2: #342f2a;
+    --ink: #f1ede9;
+    --mut: #9a9087;
+    --mut2: #6d655e;
     --amber: #f7991b;
-    --dark: #221e1d;
-    --card: #211b17;
-    --card2: #2e2620;
-    --line: #3a2f28;
-    --mut: #a89a8e;
     --ok: #4cc26b;
     --bad: #e5534b;
   }
+  :global(body) {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+  :global(.mono) {
+    font-family: ui-monospace, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace;
+  }
   .boot {
-    display: flex;
+    display: grid;
+    place-items: center;
     min-height: 100vh;
-    align-items: center;
+    color: var(--mut);
+    font-size: 0.9rem;
+  }
+  .shell {
+    display: grid;
+    grid-template-columns: 216px minmax(0, 620px) 304px;
     justify-content: center;
-    color: var(--mut);
-  }
-  .app {
-    display: grid;
-    grid-template-columns: 210px minmax(0, 1fr) 360px;
-    gap: 1.4rem;
-    width: min(1440px, 100%);
+    min-height: 100vh;
+    max-width: 1200px;
     margin: 0 auto;
-    padding: 1.4rem 1.6rem;
-    align-items: start;
-    position: relative;
+    padding: 0 0.75rem;
   }
-  .app::before {
-    content: '';
-    position: absolute;
-    inset: -200px -100px auto;
-    height: 480px;
-    background: radial-gradient(ellipse 60% 55% at 55% 0%, rgb(247 153 27 / 11%), transparent 70%);
-    pointer-events: none;
-    z-index: -1;
-  }
-  .sidenav {
-    position: sticky;
-    top: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 1.4rem;
-    min-height: calc(100vh - 3rem);
-    padding: 0.5rem 0.4rem;
-  }
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 0.55rem;
-    font-size: 1.15rem;
-    font-weight: 800;
-  }
-  .brand .live {
-    margin-left: auto;
-  }
-  .menu {
-    display: grid;
-    gap: 0.15rem;
-  }
-  .mi {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.6rem 0.7rem;
-    border-radius: 10px;
-    color: var(--mut);
-    text-decoration: none;
-    font-weight: 600;
-    font-size: 0.92rem;
-    background: none;
-    border: 0;
-    font-family: inherit;
-    text-align: left;
-    cursor: pointer;
-    transition:
-      background 0.15s,
-      color 0.15s;
-  }
-  .mi:hover {
-    background: rgb(247 153 27 / 8%);
-    color: #ece7e4;
-  }
-  .mi.active {
-    color: var(--amber);
-    background: rgb(247 153 27 / 10%);
-  }
-  .mico {
-    width: 18px;
-    height: 18px;
-    flex-shrink: 0;
-  }
-  .sfoot {
-    margin-top: auto;
-    display: grid;
-    gap: 0.3rem;
-    font-size: 0.75rem;
-  }
-  .drop {
-    border-radius: 6px;
-  }
-  .live {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: 0.72rem;
-    color: var(--ok);
-    background: rgb(76 194 107 / 10%);
-    padding: 0.15rem 0.6rem;
-    border-radius: 99px;
-  }
-  .live.down {
-    color: var(--bad);
-    background: rgb(229 83 75 / 10%);
-  }
-  .live i {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: currentColor;
-    animation: pulse 2.4s infinite;
-  }
-  @keyframes pulse {
-    50% {
-      opacity: 0.4;
-    }
-  }
-  .mut {
-    color: var(--mut);
-  }
-  .pub {
-    background: var(--card2);
-    padding: 2px 8px;
-    border-radius: 5px;
-    font-size: 0.75rem;
-    color: var(--mut);
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .feed {
-    display: grid;
-    gap: 1.2rem;
+  .center {
     min-width: 0;
+    min-height: 100vh;
+    border-left: 1px solid var(--line);
+    border-right: 1px solid var(--line);
   }
-  .card {
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 1.2rem 1.4rem;
-    box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 4%),
-      0 10px 28px rgb(0 0 0 / 45%);
-  }
-  .hero {
-    background: linear-gradient(115deg, #2a221c 0%, #3a2a12 55%, #241e1a 100%);
-    padding: 1.8rem 1.6rem 0.9rem;
-  }
-  .herorow {
-    display: flex;
-    align-items: center;
-    gap: 1.6rem;
-  }
-  .pre {
-    color: var(--amber);
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
-  }
-  .earn h1 {
-    font-size: 4.2rem;
-    margin: 0.15rem 0 0.5rem;
-    color: var(--amber);
-    font-weight: 800;
-    line-height: 1;
-    font-variant-numeric: tabular-nums;
-    text-shadow: 0 0 30px rgb(247 153 27 / 35%);
-  }
-  .earn h1 em {
-    font-style: normal;
-    font-size: 1.5rem;
-    color: var(--mut);
-    font-weight: 600;
-  }
-  .sub {
-    color: var(--mut);
-    margin: 0;
-    font-size: 0.92rem;
-  }
-  .heroright {
-    margin-left: auto;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.9rem;
-    flex-shrink: 0;
-  }
-  .share {
-    background: var(--amber);
-    color: var(--dark);
-    border: 0;
-    font-weight: 700;
-    font-size: 0.95rem;
-    padding: 0.7rem 1.4rem;
-    border-radius: 10px;
-    cursor: pointer;
-    box-shadow: 0 0 22px rgb(247 153 27 / 35%);
-    white-space: nowrap;
-    transition: filter 0.15s;
-  }
-  .share:hover {
-    filter: brightness(1.1);
-  }
-  .area {
-    display: block;
-    width: 100%;
-    height: 130px;
-    margin-top: 1rem;
-  }
-  .agrid {
-    stroke: rgb(76 194 107 / 9%);
-    stroke-width: 1;
-  }
-  .aline {
-    fill: none;
-    stroke: var(--ok);
-    stroke-width: 2.5;
-    stroke-linejoin: round;
-    filter: drop-shadow(0 0 7px rgb(76 194 107 / 45%));
-  }
-  .adot {
-    fill: var(--ok);
-    filter: drop-shadow(0 0 6px rgb(76 194 107 / 80%));
-  }
-  .chg24 {
-    color: var(--ok);
-    font-weight: 800;
-    font-size: 1.05rem;
-    font-variant-numeric: tabular-nums;
-    margin-top: 0.15rem;
-  }
-  .chg24 small {
-    color: var(--mut);
-    font-weight: 600;
-    font-size: 0.75rem;
-  }
-  .rago {
-    color: var(--mut);
-    font-size: 0.72rem;
-    white-space: nowrap;
-  }
-  .rail {
-    display: grid;
-    gap: 1.2rem;
-    position: sticky;
-    top: 1.2rem;
-  }
-  .lrow {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    flex-wrap: wrap;
-    padding: 0.85rem 0.4rem;
-    border-bottom: 1px solid rgb(247 153 27 / 8%);
-    font-size: 0.9rem;
-  }
-  .lrow:last-of-type {
-    border-bottom: none;
-  }
-  .lbody {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .lnum {
-    color: var(--amber);
-    font-size: 1.05rem;
-    font-weight: 800;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-  .lnum small {
-    color: var(--mut);
-    font-size: 0.7rem;
-    font-weight: 600;
-  }
-  .msep {
-    border-top: 1px solid var(--line);
-    margin: 0.35rem 0.5rem;
-  }
-  .dbg-mi {
-    font-size: 0.82rem;
-    color: var(--mut);
-    opacity: 0.7;
-  }
-  .dbg-mi.active {
-    opacity: 1;
-  }
-  .tabhint {
-    color: var(--mut);
-    font-size: 0.78rem;
-    margin: -0.5rem 0 1rem;
-  }
-  .jt {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.78rem;
-    margin-top: 0.8rem;
-    /* display:block keeps the inner table grid but lets the frame scroll
-       horizontally — unbreakable hashes/URLs no longer blow out the card */
-    display: block;
-    overflow-x: auto;
-  }
-  .jt th {
-    text-align: left;
-    color: var(--mut);
-    font-weight: 600;
-    font-size: 0.66rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 0.35rem 0.5rem;
-    border-bottom: 1px solid var(--line);
-  }
-  .jt td {
-    padding: 0.45rem 0.5rem;
-    border-bottom: 1px solid #1d1816;
-  }
-  .dbg {
-    background: #0d0a09;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 0.85rem;
-    font-size: 0.72rem;
-    line-height: 1.5;
-    overflow-x: auto;
-    max-height: 420px;
-    overflow: auto;
-    margin: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .rph {
-    border: 1px dashed var(--line);
-    border-radius: 10px;
-    padding: 1rem;
-    margin-top: 0.8rem;
-  }
-  .rph b {
-    color: var(--amber);
-    font-size: 0.85rem;
-  }
-  .rph p {
-    color: var(--mut);
-    font-size: 0.78rem;
-    margin: 0.3rem 0 0;
-  }
-  .jline {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    margin-top: 0.7rem;
-  }
-  .jline .mut {
-    font-size: 0.78rem;
-  }
-  .jin {
-    flex: 1;
-    min-width: 220px;
-    background: #0d0a09;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    color: #ece7e4;
-    padding: 0.5rem 0.7rem;
-    font: inherit;
-    font-size: 0.85rem;
-  }
-  .jin:focus {
-    outline: none;
-    border-color: var(--amber);
-  }
-  .jbtn {
-    background: #241c14;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    color: var(--amber);
-    padding: 0.45rem 0.75rem;
-    font: inherit;
-    font-size: 0.8rem;
-    font-weight: 700;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .jbtn:hover {
-    border-color: var(--amber);
-  }
-  .jok {
-    color: var(--ok);
-  }
-  .jmsg {
-    color: var(--ok);
-    font-size: 0.8rem;
-    margin: 0.6rem 0 0;
-  }
-  .rowend {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-  }
-  .x {
-    background: none;
-    border: 1px solid transparent;
-    border-radius: 8px;
-    color: var(--mut);
-    font-size: 0.8rem;
-    padding: 0.15rem 0.45rem;
-    cursor: pointer;
-    opacity: 0.6;
-  }
-  .x:hover {
-    color: var(--bad);
-    border-color: var(--bad);
-    opacity: 1;
-  }
-  .subpills {
-    display: flex;
-    gap: 0.4rem;
-    flex-wrap: wrap;
-    margin: -0.4rem 0 1rem;
-  }
-  .pill {
-    background: #241c14;
-    border: 1px solid var(--line);
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 1.5rem;
+    transform: translateX(-50%);
+    z-index: 100;
+    background: #1b1815;
+    border: 1px solid var(--line2);
+    color: var(--ink);
+    padding: 0.55rem 1.05rem;
     border-radius: 999px;
-    color: var(--mut);
-    padding: 0.3rem 0.8rem;
-    font: inherit;
-    font-size: 0.78rem;
-    font-weight: 700;
-    cursor: pointer;
-    text-transform: capitalize;
-  }
-  .pill.on {
-    color: var(--amber);
-    border-color: var(--amber);
-  }
-  .drop-sm {
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .wbal {
-    font-size: 1.9rem;
-    font-weight: 800;
-    color: var(--amber);
-    font-variant-numeric: tabular-nums;
-  }
-  .wbal em {
-    font-style: normal;
-    font-size: 0.9rem;
-    color: var(--mut);
+    font-size: 0.82rem;
     font-weight: 600;
+    box-shadow: 0 12px 34px rgb(0 0 0 / 65%);
   }
-  .wmeta {
-    color: var(--mut);
-    font-size: 0.72rem;
-    margin: 0.3rem 0 0;
-  }
-  .wchips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-    margin-top: 0.55rem;
-  }
-  .waddr {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    margin-top: 0.6rem;
-    background: #120e0c;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 0.3rem 0.45rem;
-  }
-  .waddr code {
-    flex: 1;
-    font-size: 0.7rem;
-    color: var(--mut);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .wmini {
-    background: var(--card2);
-    border: 1px solid var(--line);
-    color: var(--amber);
-    border-radius: 6px;
-    padding: 0.14rem 0.45rem;
-    font-size: 0.7rem;
-    font-weight: 700;
-    cursor: pointer;
-  }
-  .wacts {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-    margin-top: 0.65rem;
-  }
-  .wbtn {
-    background: var(--card2);
-    border: 1px solid var(--line);
-    color: #ece7e4;
-    border-radius: 8px;
-    padding: 0.34rem 0.6rem;
-    font: inherit;
-    font-size: 0.74rem;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .wbtn:hover {
-    border-color: var(--amber);
-    color: var(--amber);
-  }
-  .wbtn.primary {
-    background: var(--amber);
-    border-color: var(--amber);
-    color: var(--dark);
-    font-weight: 700;
-  }
-  .wbtn:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-  .wbox {
-    margin-top: 0.65rem;
-    padding-top: 0.65rem;
-    border-top: 1px solid var(--line);
-    display: grid;
-    gap: 0.45rem;
-  }
-  .wrow {
-    display: flex;
-    gap: 0.4rem;
-    flex-wrap: wrap;
-  }
-  .win {
-    flex: 1;
-    min-width: 110px;
-    background: #120e0c;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    color: #ece7e4;
-    padding: 0.36rem 0.55rem;
-    font: inherit;
-    font-size: 0.76rem;
-  }
-  .win:focus {
-    outline: none;
-    border-color: var(--amber);
-  }
-  .werr {
-    color: var(--bad);
-    font-size: 0.76rem;
-    margin: 0.5rem 0 0;
-  }
-  /* 1180–920: the fixed 360px rail would squeeze the feed below ~255px —
-     drop it under the feed and let its cards tile side-by-side */
-  @media (max-width: 1180px) {
-    .app {
-      grid-template-columns: 210px minmax(0, 1fr);
-    }
-    .rail {
-      grid-column: 1 / -1;
-      position: static;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      align-items: start;
-    }
-  }
-  @media (max-width: 920px) {
-    .app {
-      grid-template-columns: 1fr;
-      padding: 0.9rem 0.8rem;
-      gap: 1rem;
-    }
-    .sidenav {
-      position: static;
-      min-height: 0;
-      flex-direction: row;
-      align-items: center;
-      gap: 1rem;
-    }
-    .menu {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.15rem;
-    }
-    .sfoot {
-      display: none;
-    }
-    .rail {
-      position: static;
-      grid-template-columns: 1fr;
-    }
-    .card {
-      padding: 1rem;
-    }
-    .herorow {
-      flex-wrap: wrap;
-    }
-    .heroright {
-      margin-left: 0;
-      flex-direction: row;
-    }
-    .earn h1 {
-      font-size: 3rem;
-    }
-    h2 {
-      flex-wrap: wrap;
-      row-gap: 0.2rem;
-    }
-    .jin {
-      min-width: 0;
-      flex-basis: 100%;
-    }
-  }
-  h2 {
-    font-size: 0.95rem;
-    margin: 0 0 0.7rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 1rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  h2 small {
-    color: var(--mut);
-    font-weight: 400;
-    font-size: 0.75rem;
-    text-transform: none;
-    letter-spacing: 0;
-  }
-  .dom {
-    font-style: normal;
-    font-size: 0.66rem;
-    color: var(--amber);
-    background: rgb(247 153 27 / 12%);
-    border: 1px solid rgb(247 153 27 / 25%);
-    padding: 0.08rem 0.45rem;
-    border-radius: 99px;
-    margin-left: 0.4rem;
-  }
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 0.8rem;
-    padding: 0.5rem 0.3rem;
-    border-bottom: 1px solid rgb(247 153 27 / 8%);
-    font-size: 0.85rem;
-  }
-  .row:last-of-type {
-    border-bottom: none;
-  }
-  .row > :first-child {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .row > :nth-child(2) {
-    flex-shrink: 0;
-  }
-  .lrow a {
-    color: var(--amber);
-    text-decoration: none;
-    font-size: 0.78rem;
-    white-space: nowrap;
-  }
-  .mono {
-    font-family: ui-monospace, monospace;
-    font-size: 0.8rem;
-  }
-  .bad {
-    color: var(--bad);
-  }
-  .ok {
-    color: var(--ok);
-  }
-  .empty {
-    color: var(--mut);
-    font-size: 0.8rem;
-    padding: 0.8rem 0;
-    margin: 0;
+  .toast.err {
+    border-color: var(--bad);
+    color: #ffd5d2;
   }
 
-  .ostrip {
-    display: flex;
-    gap: 5px;
-    margin-bottom: 0.7rem;
+  @media (max-width: 1100px) and (min-width: 721px) {
+    .shell {
+      grid-template-columns: 68px minmax(0, 620px) 270px;
+      padding: 0 0.5rem;
+    }
   }
-  .ostrip i {
-    flex: 1;
-    height: 8px;
-    border-radius: 4px;
-    background: var(--line);
+  @media (max-width: 1020px) {
+    .shell {
+      grid-template-columns: 68px minmax(0, 1fr);
+    }
   }
-  .ostrip i.s-run {
-    background: var(--ok);
-    box-shadow: 0 0 6px rgb(76 194 107 / 40%);
-  }
-  .ostrip i.s-err {
-    background: var(--bad);
-    box-shadow: 0 0 6px rgb(229 83 75 / 40%);
-  }
-  .acts {
-    display: flex;
-    gap: 0.4rem;
-    flex-shrink: 0;
-  }
-  .acts button {
-    background: var(--amber);
-    color: var(--dark);
-    border: 0;
-    border-radius: 6px;
-    font-weight: 600;
-    padding: 0.3rem 0.7rem;
-    cursor: pointer;
-    font-size: 0.75rem;
-  }
-  .acts .ghost {
-    background: transparent;
-    color: var(--mut);
-    border: 1px solid var(--line);
-  }
-  i.pulse {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--amber);
-    margin-right: 0.55rem;
-    vertical-align: 1px;
-    animation: pulse 1.6s ease-out infinite;
-  }
-  .rline {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    margin-top: 0.8rem;
-    padding-top: 0.8rem;
-    border-top: 1px solid var(--line);
-  }
-  .chip {
-    font-size: 0.68rem;
-    background: var(--card2);
-    border: 1px solid var(--line);
-    border-radius: 99px;
-    padding: 0.18rem 0.6rem;
-    color: var(--mut);
-  }
-  .journal {
-    margin-top: 0.5rem;
-    font-size: 0.75rem;
-    display: grid;
-    gap: 0.15rem;
-    color: var(--mut);
-  }
-  .journal .mono {
-    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-    color: var(--amber);
-  }
-  .pol {
-    margin: 0.3rem 0 0.5rem;
-    font-size: 0.78rem;
-    color: var(--mut);
-  }
-  .pol summary {
-    cursor: pointer;
-    padding: 0.2rem 0;
-  }
-  .pol summary:hover {
-    color: var(--amber);
-  }
-  .pol .jt {
-    margin-top: 0.4rem;
-  }
-  .verdict {
-    font-weight: 800;
-    letter-spacing: 0.22em;
-    color: var(--mut);
-  }
-  .verdict-sell {
-    color: var(--amber);
-    text-shadow: 0 0 24px rgba(247, 153, 27, 0.5);
+  @media (max-width: 720px) {
+    .shell {
+      grid-template-columns: 1fr;
+      padding: 0 0 60px;
+    }
+    .center {
+      border-left: 0;
+      border-right: 0;
+    }
+    .toast {
+      bottom: 4.5rem;
+    }
   }
 </style>

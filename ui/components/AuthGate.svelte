@@ -76,13 +76,13 @@
     padding: 1.5rem;
   }
   .gate {
-    background: #211b17;
-    border: 1px solid #3a2f28;
+    background: #11100e;
+    border: 1px solid #24201d;
     border-radius: 16px;
     padding: 1.8rem;
-    max-width: 440px;
+    max-width: 420px;
     width: 100%;
-    box-shadow: 0 18px 42px rgb(0 0 0 / 55%);
+    box-shadow: 0 24px 60px rgb(0 0 0 / 65%);
     display: grid;
     gap: 1rem;
   }

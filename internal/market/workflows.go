@@ -881,7 +881,19 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 		if !bypassPolicy {
 			rankPol = e.policy
 		}
-		ranked := RankOffersWithRep(want, collectRes.Offers, rankPol, reps)
+		verifiedBonds := make(map[string]uint64)
+		var port *chain.Port
+		if e.mem != nil {
+			port = e.mem.Chain()
+		}
+		for _, off := range collectRes.Offers {
+			if off.BondOutpoint != "" && off.BondBEEFHex != "" {
+				if sats := VerifyOfferBondSats(rctx, off, port); sats > 0 {
+					verifiedBonds[off.OfferID] = sats
+				}
+			}
+		}
+		ranked := RankOffersWithRepAndBonds(want, collectRes.Offers, rankPol, reps, verifiedBonds)
 		if len(ranked) == 0 {
 			msg := "no eligible offers under policy"
 			e.persistDealRecord(store.DealRecord{
@@ -1694,6 +1706,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			if sErr := SignDealReceiptBuyer(rctx, buyerSignPub, e.mem.Chain().SignDigest, &dr); sErr == nil {
 				dealReceipt = &dr
 				dealReceiptJSON, _ = json.Marshal(dr)
+				_, _, _ = CommitDealAudit(rctx, e.mem, dr, false)
 			}
 		}
 		if e.mem != nil && e.mem.DB() != nil {

@@ -82,6 +82,8 @@ func main() {
 		err = cmdWallet(args)
 	case "vault":
 		err = cmdVault(args)
+	case "bond":
+		err = cmdBond(args)
 	case "dock":
 		err = cmdDock(args)
 	case "hook":
@@ -121,6 +123,7 @@ Usage:
   nektar recall         Recall fragments (-shard optional, -query, -spv)
   nektar anchor         Anchor unanchored fragments in a shard (-shard) or rotate ownership (anchor rotate -shard -new-owner)
   nektar vault          Manage two-key on-chain NektarAgentVault (deploy | status | pause | resume | rotate-agent | sweep)
+  nektar bond           Manage slashable NektarCheckpointBond SLA bond (open | commit | status | seize | close)
   nektar verify         Verify a nektarr1.* receipt token (-token)
   nektar status         Print node identity, wallet balance, shards, policy hash, and SpendGuard state
   nektar wallet         Manage BRC-100 wallet (status | address | utxos | actions | sync | fund | import | send | sweep | consolidate | fuel)

@@ -333,7 +333,7 @@ func TestWalletConcurrentLoad(t *testing.T) {
 	var warmFees uint64
 	txsBefore, _, _ := eng.ListRecentActions(ctx, 500, 0)
 	for _, r := range txsBefore {
-		if r.IsOutgoing && r.Status != StatusFailed {
+		if r.IsOutgoing && (r.Status == StatusCompleted || r.Status == StatusUnproven) {
 			warmFees += r.FeeSats
 		}
 	}
@@ -416,7 +416,9 @@ func TestWalletConcurrentLoad(t *testing.T) {
 	}
 	var allFees uint64
 	for _, r := range allTxs {
-		if r.IsOutgoing && r.Status != StatusFailed {
+		// Only committed (completed/unproven) txs have deducted fees from TotalSats;
+		// unsigned/unprocessed/sending/aborted txs retain full input value in ReservedSats.
+		if r.IsOutgoing && (r.Status == StatusCompleted || r.Status == StatusUnproven) {
 			allFees += r.FeeSats
 		}
 	}

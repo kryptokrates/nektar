@@ -102,6 +102,8 @@ type OfferAd struct {
 	SaleOffer      json.RawMessage `json:"saleOffer,omitempty"`
 	Description    string          `json:"description,omitempty"`
 	Tags           []string        `json:"tags,omitempty"`
+	BondOutpoint   string          `json:"bondOutpoint,omitempty"`
+	BondBEEFHex    string          `json:"bondBeefHex,omitempty"`
 	IsHub          bool            `json:"isHub,omitempty"`
 	Direct       bool            `json:"direct,omitempty"`
 	Revision     int             `json:"revision"`
@@ -134,6 +136,8 @@ type AnnounceAd struct {
 	SellDomains   []string  `json:"sellDomains,omitempty"`
 	BountyDomains []string  `json:"bountyDomains,omitempty"`
 	Packs         []PackRef `json:"packs,omitempty"`
+	BondOutpoint  string    `json:"bondOutpoint,omitempty"`
+	BondBEEFHex   string    `json:"bondBeefHex,omitempty"`
 	IsHub         bool      `json:"isHub,omitempty"`
 	Exp           int64     `json:"exp"`
 }

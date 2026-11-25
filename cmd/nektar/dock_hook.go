@@ -296,6 +296,7 @@ func cmdPolicy(args []string) error {
 		if err != nil {
 			return err
 		}
+		_, _, _ = market.CommitPolicyAudit(ctx, rt.mem, rec, false)
 		return printJSON(rec)
 
 	case "list":

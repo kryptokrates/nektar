@@ -858,6 +858,14 @@ func (b *Broker) AnnounceSelf(ctx context.Context) (int, error) {
 	bountyDoms := append([]string(nil), b.bountyDoms...)
 	b.mu.RUnlock()
 
+	var bondOutpoint, bondBEEF string
+	if bRec, _, bErr := LoadActiveBond(b.mem.DB()); bErr == nil && bRec != nil && !bRec.State.Seized {
+		bondOutpoint = bRec.Outpoint()
+		if len(bRec.BEEFHex) <= 8192 {
+			bondBEEF = bRec.BEEFHex
+		}
+	}
+
 	return b.disc.PublishAnnounce(ctx, bstack.AnnounceAd{
 		Handle:        handle,
 		PublicURL:     pubURL,
@@ -866,6 +874,8 @@ func (b *Broker) AnnounceSelf(ctx context.Context) (int, error) {
 		SellDomains:   sellDoms,
 		BountyDomains: bountyDoms,
 		Packs:         packs,
+		BondOutpoint:  bondOutpoint,
+		BondBEEFHex:   bondBEEF,
 		IsHub:         isHub,
 	})
 }
@@ -1054,6 +1064,13 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	if best.AnchorTxID != "" {
 		offerTags = append(offerTags, "anchored")
 	}
+	var offerBondOutpoint, offerBondBEEF string
+	if bRec, _, bErr := LoadActiveBond(b.mem.DB()); bErr == nil && bRec != nil && !bRec.State.Seized {
+		offerBondOutpoint = bRec.Outpoint()
+		if len(bRec.BEEFHex) <= 8192 {
+			offerBondBEEF = bRec.BEEFHex
+		}
+	}
 	offer := bstack.OfferAd{
 		OfferID:        offerID,
 		WantID:         want.WantID,
@@ -1073,13 +1090,15 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		SaleOffer:      saleJSON,
 		Description:    sanitizeUntrusted(matched.Description, maxOfferDescChars),
 		Tags:           offerTags,
+		BondOutpoint:   offerBondOutpoint,
+		BondBEEFHex:    offerBondBEEF,
 		IsHub:          isHub,
 		Direct:         pubURL != "",
 		Revision:       1,
 		Exp:            time.Now().Add(30 * time.Minute).UnixMilli(),
 	}
 	var beef []byte
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		sig, sErr := bstack.SignArtifact(b.engine.saleKey, offer)
 		if sErr != nil {
 			return
@@ -1093,11 +1112,15 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 			beef, err = b.buildMarketAdBEEF(ctx, payload)
 			break
 		}
-		// Strip inline ciphertext on retry so buyer fetches via CHIRP and post-CBOR stays <= MaxPayload!
+		// Strip inline ciphertext first, then BondBEEFHex if still > MaxPayload.
 		if attempt == 0 && wireSale.CiphertextHex != "" {
 			wireSale.CiphertextHex = ""
 			saleJSON, _ = json.Marshal(wireSale)
 			offer.SaleOffer = saleJSON
+			continue
+		}
+		if offer.BondBEEFHex != "" {
+			offer.BondBEEFHex = ""
 			continue
 		}
 		return
@@ -1588,6 +1611,9 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 	})
 	if len(sellerReceiptJSON) > 0 {
 		_ = RecordCountersigOwed(b.mem.DB(), "sell-"+sale.OfferID, req.BuyerPub, txid, sale.SaleOffer.Config.Price, sellerReceiptJSON)
+		if sellerReceipt != nil {
+			_, _, _ = CommitDealAudit(ctx, b.mem, *sellerReceipt, false)
+		}
 	}
 	if !confirmed && txid != "" {
 		_ = RecordProofUpgradeOwed(b.mem.DB(), "sell-"+sale.OfferID, "seller", req.BuyerPub, txid, sale.SaleOffer.Config.Price)

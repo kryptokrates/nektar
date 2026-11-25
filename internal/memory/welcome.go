@@ -17,7 +17,7 @@ func (s *Service) EnsureWelcome(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	for _, sh := range shards {
-		if sh != ReceiptsShard {
+		if !IsSystemShard(sh) {
 			return false, nil // already populated
 		}
 	}
@@ -47,7 +47,7 @@ func (s *Service) ListUserShards() ([]string, error) {
 	}
 	out := make([]string, 0, len(all))
 	for _, sh := range all {
-		if sh == ReceiptsShard {
+		if IsSystemShard(sh) {
 			continue
 		}
 		out = append(out, sh)

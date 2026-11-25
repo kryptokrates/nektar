@@ -25,7 +25,17 @@ import (
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
-const ReceiptsShard = "__receipts__"
+const (
+	ReceiptsShard = "__receipts__"
+	DealsShard    = "__deals__"
+	PoliciesShard = "__policies__"
+)
+
+// IsSystemShard reports whether shard is a reserved internal audit shard anchored by NektarAnchor.
+func IsSystemShard(shard string) bool {
+	s := strings.TrimSpace(shard)
+	return s == ReceiptsShard || s == DealsShard || s == PoliciesShard
+}
 
 // ValidateShardName enforces safe, bounded shard names and blocks external access to reserved system shards.
 func ValidateShardName(shard string, allowSystem bool) error {
@@ -36,7 +46,7 @@ func ValidateShardName(shard string, allowSystem bool) error {
 	if len(s) > 128 {
 		return errors.New("memory: shard name exceeds 128 characters")
 	}
-	if s == ReceiptsShard {
+	if IsSystemShard(s) {
 		if allowSystem {
 			return nil
 		}
@@ -396,7 +406,7 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 		} else if err != nil {
 			return nil, err
 		}
-	} else if !dedup && in.Shard != ReceiptsShard {
+	} else if !dedup && !IsSystemShard(in.Shard) {
 		s.mu.RLock()
 		hook := s.onRemember
 		s.mu.RUnlock()

@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
@@ -154,51 +155,26 @@ func parseCSVEnv(key string) []string {
 	return out
 }
 
-func resolveEnvSecret(envKey string) (string, error) {
-	val := strings.TrimSpace(os.Getenv(envKey))
-	filePath := strings.TrimSpace(os.Getenv(envKey + "_FILE"))
-	if val != "" && filePath != "" {
-		return "", fmt.Errorf("set either %s or %s_FILE, not both", envKey, envKey)
-	}
-	if filePath != "" {
-		b, err := os.ReadFile(filePath)
-		if err != nil {
-			return "", fmt.Errorf("read %s_FILE: %w", envKey, err)
-		}
-		return strings.TrimSpace(string(b)), nil
-	}
-	return val, nil
-}
-
 func buildJevMatcherFromEnv(network string) market.Matcher {
-	apiKey, err := resolveEnvSecret("NEKTAR_JEV_API_KEY")
-	if err != nil {
-		log.Printf("jev matcher disabled: %v", err)
-		return nil
-	}
-	if apiKey == "" {
-		return nil
-	}
 	mode := strings.ToLower(strings.TrimSpace(envOr("NEKTAR_JEV_MODE", market.AIModeGated)))
 	if mode == market.AIModeOff {
 		return nil
 	}
 	timeoutMs := envUint64("NEKTAR_JEV_TIMEOUT_MS", 2500)
 	cl, err := jev.NewClient(jev.Config{
-		Provider:     envOr("NEKTAR_JEV_PROVIDER", jev.ProviderTypeSafe),
 		BaseURL:      os.Getenv("NEKTAR_JEV_BASE_URL"),
-		APIKey:       apiKey,
 		Model:        os.Getenv("NEKTAR_JEV_MODEL"),
 		Network:      network,
 		AllowedHosts: parseCSVEnv("NEKTAR_JEV_ALLOWED_HOSTS"),
 		Timeout:      time.Duration(timeoutMs) * time.Millisecond,
 	})
 	if err != nil {
-		log.Printf("jev matcher disabled: %v", err)
+		log.Printf("openweight matcher disabled: %v", err)
 		return nil
 	}
 	privacy := envOr("NEKTAR_JEV_PRIVACY", market.PrivacyDisclosablePreview)
-	log.Printf("jev matcher armed: provider=%s model=%s mode=%s privacy=%s", cl.Provider(), cl.Model(), mode, privacy)
+	log.Printf("openweight matcher armed: endpoint=%s model=%s mode=%s privacy=%s (local keyless; falls back cleanly if offline)",
+		cl.Health().Endpoint, cl.Model(), mode, privacy)
 	return market.NewJevMatcher(cl, market.JevMatcherOptions{
 		DefaultMode:        mode,
 		DefaultPrivacyMode: privacy,
@@ -260,6 +236,7 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string, l
 		HeaderSource:    os.Getenv("NEKTAR_HEADERS_SOURCE"),
 		ChainSpec:       os.Getenv("NEKTAR_CHAIN_SPEC"),
 		SettleSpec:      os.Getenv("NEKTAR_SETTLE_SPEC"),
+		SettleDepth:     int(envInt64("NEKTAR_SETTLE_DEPTH", 0)),
 		ArcadeKey:       os.Getenv("NEKTAR_ARCADE_KEY"),
 		RPCUser:         os.Getenv("NEKTAR_RPC_USER"),
 		RPCPass:         os.Getenv("NEKTAR_RPC_PASS"),
@@ -305,6 +282,9 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string, l
 		return nil, err
 	}
 	mkt := market.NewEngine(mem, market.DefaultPolicy())
+	if pinnedOp := strings.TrimSpace(os.Getenv("NEKTAR_OPERATOR_PUBKEY")); pinnedOp != "" {
+		mkt.Policy().SetPinnedOperatorPub(pinnedOp)
+	}
 	_ = market.SyncPolicyFromDB(db, mkt.Policy())
 	if killActive(dir) {
 		mkt.Policy().SetKillSwitch(true)
@@ -414,9 +394,13 @@ func cmdServe(args []string) error {
 	}
 	defer rt.closeFn()
 
-	// Reconcile any pre-crash pending shard anchor intents before accepting new traffic (F8)!
+	// Reconcile any pre-crash pending shard anchor intents and surviving commercial obligations before accepting traffic!
 	if nRec, rErr := rt.mem.ReconcilePendingAnchors(ctx); rErr == nil && nRec > 0 {
 		log.Printf("reconciled %d pending shard anchor(s) from crash journal", nRec)
+	}
+	if obRep, oErr := market.ReconcileObligations(ctx, rt.mem.DB(), nil, time.Now().Unix()); oErr == nil && obRep.Checked > 0 {
+		log.Printf("reconciled %d surviving commercial obligation(s): fulfilled=%d overdue=%d refundClaimable=%d open=%d",
+			obRep.Checked, obRep.Fulfilled, obRep.MarkedOverdue, obRep.RefundClaimable, obRep.StillOpen)
 	}
 
 	// Cold-start zero-empty-room welcome shard + live UTXO sync & fan-out!
@@ -585,6 +569,33 @@ func cmdServe(args []string) error {
 	if *withHub {
 		_, _, _ = rt.disc.JoinHost(ctx, actualURL+"/hub")
 	}
+	// Wire Monitor verified-BUMP OnTxMined & WitnessedTracker OnReorg callbacks across memory, market broker, and hub!
+	rt.mem.Chain().OnTxMined(func(txid string, height uint32, mp *transaction.MerklePath) {
+		mCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		if _, err := rt.mem.RefreshAnchorProofByTxID(mCtx, txid, height, mp); err == nil && hubNode != nil {
+			if packs, rErr := hub.RefreshHubLiquidityStock(mCtx, rt.mem); rErr == nil && len(packs) > 0 {
+				var bountyDoms []string
+				if liqState != nil {
+					bountyDoms = liqState.BountyDomains
+				}
+				broker.SetAdvertisedPacks(packs, bountyDoms)
+			}
+		}
+		broker.OnPaymentTxMined(mCtx, txid, height, mp)
+		if hubNode != nil {
+			_ = hubNode.OnBountyPayoutMined(txid)
+		}
+	})
+	rt.mem.Chain().OnReorg(func(forkHeight uint32, _ []string) {
+		rCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		_, _ = rt.mem.HandleReorg(forkHeight)
+		broker.HandleReorg(rCtx, forkHeight)
+		if hubNode != nil {
+			_ = hubNode.HandleReorg(rCtx, forkHeight)
+		}
+	})
 	broker.Start(ctx)
 
 	// Start active Restate durable execution plane (dedicated h2c endpoint + auto-supervised or external restate-server).
@@ -883,9 +894,18 @@ func cmdAnchor(args []string) error {
 
 func cmdVerify(args []string) error {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
-	token := fs.String("token", "", "Receipt token (nektarr1....) or 64-hex hash")
+	token := fs.String("token", "", "Receipt token (nektarr1.... or nektardr1....) or 64-hex hash")
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
+
+	if strings.HasPrefix(strings.TrimSpace(*token), market.DealReceiptTokenPrefix) {
+		rcp, err := market.DecodeDealReceiptToken(*token)
+		if err != nil {
+			return err
+		}
+		vr := market.VerifyDealReceipt(*rcp, false)
+		return printJSON(map[string]any{"verification": vr, "receipt": rcp})
+	}
 
 	dir := *dataDir
 	if dir == "" {
@@ -941,16 +961,25 @@ func cmdCheckMainnet() error {
 	if os.Getenv("NEKTAR_MAINNET_CONFIRM") != "I_UNDERSTAND" {
 		missing = append(missing, "NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND")
 	}
-	if os.Getenv("NEKTAR_HEADERS_SOURCE") == "" {
-		missing = append(missing, "NEKTAR_HEADERS_SOURCE (e.g. chaintracks:https://... or woc:main)")
+	headerSpec := strings.TrimSpace(os.Getenv("NEKTAR_HEADERS_SOURCE"))
+	if headerSpec == "" {
+		missing = append(missing, fmt.Sprintf("NEKTAR_HEADERS_SOURCE (>=2 distinct-origin PoW witnesses, e.g. %q)", chain.DefaultHeaderSources("main")))
 	}
-	if os.Getenv("NEKTAR_SETTLE_SPEC") == "" {
+	settleSpec := strings.TrimSpace(os.Getenv("NEKTAR_SETTLE_SPEC"))
+	if settleSpec == "" {
 		missing = append(missing, "NEKTAR_SETTLE_SPEC (e.g. arcade:https://arcade.gorillapool.io)")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("mainnet gate incomplete — set: %s", strings.Join(missing, ", "))
 	}
-	fmt.Println("mainnet gates OK: confirmation, headers source, settlement spec, and SpendGuard configured")
+	chainSpec := strings.TrimSpace(os.Getenv("NEKTAR_CHAIN_SPEC"))
+	if chainSpec == "" {
+		chainSpec = "woc:main"
+	}
+	if err := chain.ValidateHeaderIndependence("main", headerSpec, chainSpec, settleSpec); err != nil {
+		return fmt.Errorf("mainnet header independence gate failed: %w", err)
+	}
+	fmt.Println("mainnet gates OK: confirmation, >=2 independent PoW header witnesses (non-circular), settlement spec, and SpendGuard configured")
 	return nil
 }
 

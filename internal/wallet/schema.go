@@ -70,11 +70,14 @@ var (
 	ErrNetworkMismatch  = errors.New("wallet: network mismatch between local and remote wallet")
 	ErrSpendRejected    = errors.New("wallet: spend rejected by policy")
 	ErrBroadcastUnknown = errors.New("wallet: broadcast outcome unknown (timeout or transport failure)")
+	ErrThrottled        = errors.New("wallet: sync throttled")
+	ErrDepthExceeded    = errors.New("wallet: unconfirmed ancestor chain depth limit exceeded")
 )
 
 type ctxKeyOverrideGuard struct{}
 type ctxKeyExternalSpend struct{}
 type ctxKeyPostErrSink struct{}
+type ctxKeyIncomingInternalize struct{}
 
 type postErrSink struct {
 	mu   sync.Mutex
@@ -130,6 +133,20 @@ func isOverrideGuard(ctx context.Context) bool {
 		return false
 	}
 	v, _ := ctx.Value(ctxKeyOverrideGuard{}).(bool)
+	return v
+}
+
+// WithIncomingInternalize marks a context as internalizing a verified incoming third-party transaction
+// so go-wallet-toolbox's BackgroundBroadcast does not debit buyer change against the receiver's SpendGuard.
+func WithIncomingInternalize(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyIncomingInternalize{}, true)
+}
+
+func isIncomingInternalize(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(ctxKeyIncomingInternalize{}).(bool)
 	return v
 }
 
@@ -224,31 +241,41 @@ type ProofLookupFunc func(ctx context.Context, txid string) (*transaction.Merkle
 // HeaderBytesFunc returns the 80-byte raw block header for height (optional, for BRC-100 GetHeaderForHeight).
 type HeaderBytesFunc func(ctx context.Context, height uint32) ([]byte, error)
 
+// MedianTimePastFunc returns the consensus 11-block median time past at the current chain tip.
+type MedianTimePastFunc func(ctx context.Context) (uint32, error)
+
+// TxMinedHook is notified when Monitor proves a transaction mined with a verified MerklePath.
+type TxMinedHook func(txid string, height uint32, mp *transaction.MerklePath)
+
 // Config configures a pure-Go BRC-100 Engine backed by go-wallet-toolbox + modernc.org/sqlite.
 type Config struct {
-	Dir              string                    // directory holding identity.json & wallet.sqlite (empty => in-memory)
-	InMemoryStore    bool                      // keep identity.json in Dir, run SQLite in-memory (ideal for ephemeral memory testchain)
-	Mainnet          bool                      // true for mainnet, false for testnet/regtest/memory
-	Originator       string                    // BRC-100 originator (default "nektar")
-	Profile          bwallet.Profile           // BRC-43 static funding derivation profile
-	Tracker          chaintracker.ChainTracker // SPV header verifier & height source
-	HeaderBytes      HeaderBytesFunc           // optional raw 80-byte header getter
-	FeeSource        feepolicy.Source          // live ARC/Arcade policy or static rate
-	Settler          publish.Settler           // optional live broadcaster (Arcade / RPC / TCP)
-	Arcade           *publish.Arcade           // optional Arcade client for fast proof lookup
-	Chain            nodeapi.Chain             // optional Tx/Proof/Spend view (WoC / node)
-	WoC              *nodeapi.WoC              // optional WhatsOnChain client for external address sync
-	Broadcast        BroadcastFunc             // optional custom broadcaster (overrides Settler; used for testchain)
-	ProofLookup      ProofLookupFunc           // optional custom proof lookup (used for testchain)
-	SpendGuard       SpendGuardCheck           // optional fail-closed spend guard hook (enforced post-signing in PostFromBEEF)
-	SpendGuardCheck  func(feeSats, spendSats uint64) error // optional read-only pre-build cap check
-	SpendGuardRefund func(txid string)         // optional pre-broadcast refund hook on definitive rejection
-	FuelProfile      *FuelProfile              // nil => StandardFuelProfile()
-	MaxUnprovenDepth int                       // 0 => DefaultMaxUnprovenDepth (15)
-	MaxInputsPerTx   int                       // reserved for caller compatibility
-	ReservationTTL   time.Duration             // 0 => DefaultReservationTTL (5m)
-	TxCacheSize      int                       // 0 => DefaultTxCacheSize (512)
-	Logger           func(format string, args ...any)
+	Dir                         string                    // directory holding identity.json & wallet.sqlite (empty => in-memory)
+	InMemoryStore               bool                      // keep identity.json in Dir, run SQLite in-memory (ideal for ephemeral memory testchain)
+	Mainnet                     bool                      // true for mainnet, false for testnet/regtest/memory
+	Originator                  string                    // BRC-100 originator (default "nektar")
+	Profile                     bwallet.Profile           // BRC-43 static funding derivation profile
+	Tracker                     chaintracker.ChainTracker // SPV header verifier & height source
+	HeaderBytes                 HeaderBytesFunc           // optional raw 80-byte header getter
+	MedianTimePast              MedianTimePastFunc        // optional consensus 11-block MTP getter
+	FeeSource                   feepolicy.Source          // live ARC/Arcade policy or static rate
+	Settler                     publish.Settler           // optional live broadcaster (Arcade / RPC / TCP)
+	Arcade                      *publish.Arcade           // optional Arcade client for fast proof lookup
+	Chain                       nodeapi.Chain             // optional Tx/Proof/Spend view (WoC / node)
+	WoC                         *nodeapi.WoC              // optional WhatsOnChain client for external address sync
+	Broadcast                   BroadcastFunc             // optional custom broadcaster (overrides Settler; used for testchain)
+	ProofLookup                 ProofLookupFunc           // optional custom proof lookup (used for testchain)
+	SpendGuard                  SpendGuardCheck           // optional fail-closed spend guard hook (enforced post-signing in PostFromBEEF)
+	SpendGuardCheck             func(feeSats, spendSats uint64) error // optional read-only pre-build cap check
+	SpendGuardRefund            func(txid string) error   // optional pre-broadcast refund hook on pre-submit local refusal
+	SpendGuardRemainingInterval func() time.Duration      // optional min-interval remaining time for FuelKeeper pacing
+	OnTxMined                   TxMinedHook               // optional callback invoked when Monitor verifies a mined BUMP
+	SettleDepth                 int                       // confirmations before finalizing proofs / BlocksDelay (>=1 on live)
+	FuelProfile                 *FuelProfile              // nil => StandardFuelProfile()
+	MaxUnprovenDepth            int                       // 0 => DefaultMaxUnprovenDepth (15)
+	MaxInputsPerTx              int                       // reserved for caller compatibility
+	ReservationTTL              time.Duration             // 0 => DefaultReservationTTL (5m)
+	TxCacheSize                 int                       // 0 => DefaultTxCacheSize (512)
+	Logger                      func(format string, args ...any)
 }
 
 // TxRecord is one transaction record returned by ListRecentActions / HTTP API / CLI.
@@ -292,24 +319,27 @@ type OutputRecord struct {
 
 // BalanceBreakdown gives full visibility into confirmed, unproven, reserved, and basketed UTXOs.
 type BalanceBreakdown struct {
-	ConfirmedSats    uint64 `json:"confirmedSats"`
-	UnprovenSats     uint64 `json:"unprovenSats"`
-	ReservedSats     uint64 `json:"reservedSats"`
-	TotalSats        uint64 `json:"totalSats"`
-	SpendableSats    uint64 `json:"spendableSats"`
-	UTXOCount        int    `json:"utxoCount"`
-	SpendableCount   int    `json:"spendableCount"`
-	FuelCount        int    `json:"fuelCount"`
-	FuelSats         uint64 `json:"fuelSats"`
-	ReserveCount     int    `json:"reserveCount"`
-	ReserveSats      uint64 `json:"reserveSats"`
-	DefaultCount     int    `json:"defaultCount"`
-	DefaultSats      uint64 `json:"defaultSats"`
-	FundingCount     int    `json:"fundingCount,omitempty"`
-	FundingSats      uint64 `json:"fundingSats,omitempty"`
-	CustomCount      int    `json:"customCount"`
-	MaxUnprovenDepth int    `json:"maxUnprovenDepth"`
-	PendingTxCount   int    `json:"pendingTxCount"`
+	ConfirmedSats     uint64 `json:"confirmedSats"`
+	UnprovenSats      uint64 `json:"unprovenSats"`
+	ReservedSats      uint64 `json:"reservedSats"`
+	TotalSats         uint64 `json:"totalSats"`
+	SpendableSats     uint64 `json:"spendableSats"`
+	UTXOCount         int    `json:"utxoCount"`
+	SpendableCount    int    `json:"spendableCount"`
+	FuelCount         int    `json:"fuelCount"`
+	FuelSats          uint64 `json:"fuelSats"`
+	ProvenFuelCount   int    `json:"provenFuelCount"`
+	UnprovenFuelCount int    `json:"unprovenFuelCount"`
+	ProvenFuelSats    uint64 `json:"provenFuelSats"`
+	ReserveCount      int    `json:"reserveCount"`
+	ReserveSats       uint64 `json:"reserveSats"`
+	DefaultCount      int    `json:"defaultCount"`
+	DefaultSats       uint64 `json:"defaultSats"`
+	FundingCount      int    `json:"fundingCount,omitempty"`
+	FundingSats       uint64 `json:"fundingSats,omitempty"`
+	CustomCount       int    `json:"customCount"`
+	MaxUnprovenDepth  int    `json:"maxUnprovenDepth"`
+	PendingTxCount    int    `json:"pendingTxCount"`
 }
 
 // SendArgs sends BSV to either a P2PKH address OR a BRC-100 identity public key (BRC-29).

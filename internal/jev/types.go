@@ -10,13 +10,12 @@ import (
 )
 
 const (
-	ProviderTypeSafe   = "typesafe"
-	ProviderOpenRouter = "openrouter"
+	ProviderOpenWeight = "openweight"
 
-	DefaultTypeSafeURL     = "https://api.typesafe.ai/v1/systemone"
-	DefaultOpenRouterURL   = "https://openrouter.ai/api/alpha/decisions"
-	DefaultTypeSafeModel   = "jev-latest"
-	DefaultOpenRouterModel = "typesafe/jev-1.14"
+	// DefaultBaseURL targets a local self-hosted open-weight System One server (e.g. Decis or OpenJev).
+	DefaultBaseURL = "http://127.0.0.1:8000/v1/systemone"
+	// DefaultModel targets a compact open-weight System One decision model (override via NEKTAR_JEV_MODEL).
+	DefaultModel = "kev-0.8b"
 )
 
 // QuestionType identifies one of Jev AI's System One structured decision primitives.

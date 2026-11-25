@@ -275,3 +275,20 @@ func (c *txLRU) Delete(txid string) {
 		delete(c.items, txid)
 	}
 }
+
+// EvictFromHeight removes any cached transactions claiming a MerklePath at or above forkHeight
+// so reorged proofs are never served stale from memory.
+func (c *txLRU) EvictFromHeight(forkHeight uint32) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	evicted := 0
+	for txid, el := range c.items {
+		entry := el.Value.(*txLRUEntry)
+		if entry != nil && entry.tx != nil && entry.tx.MerklePath != nil && entry.tx.MerklePath.BlockHeight >= forkHeight {
+			c.ll.Remove(el)
+			delete(c.items, txid)
+			evicted++
+		}
+	}
+	return evicted
+}

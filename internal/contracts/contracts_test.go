@@ -57,12 +57,17 @@ func TestAnchorEncodeDecodeAndSaleBRC369(t *testing.T) {
 	buyerPub := hex.EncodeToString(buyer.PubKey().Compressed())
 	secret := []byte("Verifiable alpha insight worth 500 sats")
 	expUnix := uint64(time.Now().Add(time.Hour).Unix())
-	offer, err := CreateKeyedSaleOffer(priv, secret, 500, expUnix+3600, 100, expUnix, buyerPub, "", false)
+	leafHex := hex.EncodeToString(core.SHA256([]byte("test-fragment-leaf")))
+	offer, err := CreateKeyedSaleOffer(priv, secret, 500, expUnix+3600, 100, expUnix, buyerPub, leafHex, false)
 	if err != nil {
 		t.Fatalf("CreateKeyedSaleOffer: %v", err)
 	}
-	if err := VerifySaleOffer(offer, buyerPub, ""); err != nil {
+	if err := VerifySaleOffer(offer, buyerPub, leafHex); err != nil {
 		t.Fatalf("VerifySaleOffer: %v", err)
+	}
+	// Empty leafHex MUST fail closed so offers cannot bypass mandatory buyer SPV verification.
+	if err := VerifySaleOffer(offer, buyerPub, ""); err == nil {
+		t.Fatal("expected VerifySaleOffer to reject empty leafHex")
 	}
 	k := offer.ContentKey()
 	opened, err := ClaimKeyedSale(offer, k[:])

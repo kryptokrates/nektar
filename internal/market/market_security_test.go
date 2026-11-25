@@ -56,22 +56,23 @@ func TestMarketSecurityPolicyCapsOfferIntegrityAndInternalAuth(t *testing.T) {
 		t.Fatal("expected checkInternalAuthReq to reject missing internal token header")
 	}
 
-	// 3. KeyedSaleOffer integrity: expired offer and tampered KeyCommitment/Ciphertext must be rejected!
+	// 3. KeyedSaleOffer integrity: expired offer, missing leaf, and tampered KeyCommitment/Ciphertext must be rejected!
 	sellerKey, _ := ec.NewPrivateKey()
 	buyerKey, _ := ec.NewPrivateKey()
 	buyerPub := hex.EncodeToString(buyerKey.PubKey().Compressed())
+	testLeaf := strings.Repeat("aa", 32)
 
 	expiredOffer, err := contracts.CreateKeyedSaleOffer(
 		sellerKey,
 		[]byte("secret fact"),
 		500, 1000, 100,
 		uint64(time.Now().Add(-time.Minute).Unix()),
-		buyerPub, "", true,
+		buyerPub, testLeaf, true,
 	)
 	if err != nil {
 		t.Fatalf("CreateKeyedSaleOffer: %v", err)
 	}
-	if err := contracts.VerifySaleOffer(expiredOffer, buyerPub, ""); err == nil {
+	if err := contracts.VerifySaleOffer(expiredOffer, buyerPub, testLeaf); err == nil {
 		t.Fatal("expected VerifySaleOffer to reject expired offer")
 	}
 
@@ -80,24 +81,27 @@ func TestMarketSecurityPolicyCapsOfferIntegrityAndInternalAuth(t *testing.T) {
 		[]byte("secret fact"),
 		500, 1000, 100,
 		uint64(time.Now().Add(time.Hour).Unix()),
-		buyerPub, "", true,
+		buyerPub, testLeaf, true,
 	)
 	if err != nil {
 		t.Fatalf("CreateKeyedSaleOffer valid: %v", err)
 	}
-	if err := contracts.VerifySaleOffer(validOffer, buyerPub, ""); err != nil {
+	if err := contracts.VerifySaleOffer(validOffer, buyerPub, testLeaf); err != nil {
 		t.Fatalf("VerifySaleOffer valid failed: %v", err)
+	}
+	if err := contracts.VerifySaleOffer(validOffer, buyerPub, ""); err == nil {
+		t.Fatal("expected VerifySaleOffer to reject empty leafHex")
 	}
 
 	tamperedCT := *validOffer
 	tamperedCT.CiphertextHex = strings.Repeat("00", len(validOffer.CiphertextHex)/2)
-	if err := contracts.VerifySaleOffer(&tamperedCT, buyerPub, ""); err == nil {
+	if err := contracts.VerifySaleOffer(&tamperedCT, buyerPub, testLeaf); err == nil {
 		t.Fatal("expected VerifySaleOffer to reject tampered CiphertextHex")
 	}
 
 	tamperedCommit := *validOffer
 	tamperedCommit.KeyCommitment = strings.Repeat("11", 32)
-	if err := contracts.VerifySaleOffer(&tamperedCommit, buyerPub, ""); err == nil {
+	if err := contracts.VerifySaleOffer(&tamperedCommit, buyerPub, testLeaf); err == nil {
 		t.Fatal("expected VerifySaleOffer to reject tampered KeyCommitment")
 	}
 

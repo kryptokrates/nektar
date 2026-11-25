@@ -21,6 +21,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/reasoning"
 	"github.com/kryptokrates/nektar/internal/store"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 const ReceiptsShard = "__receipts__"
@@ -496,32 +497,28 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 	shardID := core.ShardIDFromPubkey(pubBytes)
 
 	// Guard against clobbering an existing in-flight pending anchor for (shard, nextN):
-	// reconcile it first instead of blindly overwriting with INSERT OR REPLACE.
+	// run per-shard reconciliation directly so confirmed-broadcast first-party anchors promote
+	// immediately instead of stalling the shard behind a mined block wait!
 	if existingPending, pErr := s.db.ListPendingAnchors(); pErr == nil {
 		for _, p := range existingPending {
 			if p.Shard == shard && p.N == nextN {
-				if p.TxID != "" {
-					mp, height, mined := s.port.Proof(ctx, p.TxID)
-					if mined && mp != nil && len(p.Beef) > 0 {
-						batch := store.BatchAnchor{
-							Shard:       p.Shard,
-							ShardID:     shardID,
-							N:           p.N,
-							Size:        len(p.Seqs),
-							RootHex:     p.RootHex,
-							ChainedHex:  p.ChainedHex,
-							TxID:        p.TxID,
-							Beef:        p.Beef,
-							Settled:     true,
-							BlockHeight: int64(height),
-							CreatedAt:   p.CreatedAt,
-						}
-						if rErr := s.db.RecordBatchAnchor(batch, p.Seqs); rErr == nil {
-							return &batch, nil
-						}
-					}
-					return nil, fmt.Errorf("memory: pending anchor (%s, n=%d, txid=%s) still awaiting reconciliation", shard, nextN, p.TxID)
+				if p.TxID == "" {
+					_ = s.db.DeletePendingAnchor(p.Shard, p.N)
+					break
 				}
+				recBatch, cleaned, wStatus, recErr := s.reconcilePendingAnchorLocked(ctx, p, shardID)
+				if recErr != nil {
+					return nil, recErr
+				}
+				if recBatch != nil {
+					// Previous batch (shard, nextN) was recorded! Return it cleanly.
+					return recBatch, nil
+				}
+				if cleaned {
+					// Confirmed unbroadcast local nosend/aborted/failed row was cleaned up; proceed to build fresh batch.
+					break
+				}
+				return nil, fmt.Errorf("memory: pending anchor (%s, n=%d, txid=%s, walletStatus=%q) still awaiting reconciliation", shard, nextN, p.TxID, wStatus)
 			}
 		}
 	}
@@ -555,45 +552,44 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		_ = s.db.DeletePendingAnchor(shard, nextN)
 		return nil, err
 	}
-	var tx *transaction.Transaction
-	var txid string
-	for attempt := range 3 {
-		var fee, spend uint64
-		tx, fee, spend, err = s.port.BuildFundedTx(ctx, []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)})
-		if err != nil {
+	tx, beef, fee, spend, err := s.port.BuildFundedTxWithBEEF(ctx, []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)})
+	if err != nil {
+		_ = s.db.DeletePendingAnchor(shard, nextN)
+		return nil, err
+	}
+	if uErr := s.db.UpdatePendingAnchorTx(shard, nextN, tx.TxID().String(), beef); uErr != nil {
+		return nil, fmt.Errorf("memory: persist pending anchor txid: %w", uErr)
+	}
+	txid, err := s.port.Broadcast(ctx, tx, fee, spend)
+	if err != nil {
+		// Only delete pending_anchors on genuine local pre-broadcast refusal (SpendGuard cap).
+		// On ANY post-submit broadcaster error or ErrBroadcastUnknown, keep pending_anchors intact for reconciliation!
+		if errors.Is(err, nwallet.ErrSpendRejected) {
 			_ = s.db.DeletePendingAnchor(shard, nextN)
-			return nil, err
 		}
-		if beefPre, bErr := chain.SafeAtomicBEEF(tx); bErr == nil {
-			if uErr := s.db.UpdatePendingAnchorTx(shard, nextN, tx.TxID().String(), beefPre); uErr != nil {
-				return nil, fmt.Errorf("memory: persist pending anchor txid: %w", uErr)
-			}
-		}
-		txid, err = s.port.Broadcast(ctx, tx, fee, spend)
-		if err != nil {
-			if attempt < 2 && (strings.Contains(err.Error(), "UTXO_SPENT") || strings.Contains(err.Error(), "spent by another transaction")) {
-				continue
-			}
-			// Keep pending_anchors row if broadcast outcome is unknown so boot reconciliation can recover it!
-			if !strings.Contains(err.Error(), "broadcast outcome unknown") {
-				_ = s.db.DeletePendingAnchor(shard, nextN)
-			}
-			return nil, err
-		}
-		break
+		return nil, err
 	}
 	if err := s.port.AdoptChange(tx); err != nil {
 		return nil, err
 	}
-	beef, err := chain.SafeAtomicBEEF(tx)
-	if err != nil {
-		return nil, fmt.Errorf("memory: encode AtomicBEEF: %w", err)
-	}
+
+	// Only check instant post-broadcast proof in memory mode (or when Broadcast already attached a BUMP).
+	// On live networks, skip the wasted 1ms-after-broadcast proof lookup; RefreshAnchorProofs upgrades once mined.
 	var settled bool
 	var height int64
-	if mp, h, ok := s.port.Proof(ctx, txid); ok && mp != nil {
-		settled = true
-		height = int64(h)
+	if tx.MerklePath != nil {
+		beef, settled, height = s.embedVerifiedAnchorBUMP(ctx, txid, beef, tx, tx.MerklePath, tx.MerklePath.BlockHeight)
+	} else if s.port.Network() == "memory" {
+		if mp, h, ok := s.port.Proof(ctx, txid); ok && mp != nil {
+			beef, settled, height = s.embedVerifiedAnchorBUMP(ctx, txid, beef, tx, mp, h)
+		}
+	}
+	if len(beef) == 0 {
+		var bErr error
+		beef, bErr = chain.SafeAtomicBEEF(tx)
+		if bErr != nil {
+			return nil, fmt.Errorf("memory: encode AtomicBEEF: %w", bErr)
+		}
 	}
 	batch := store.BatchAnchor{
 		Shard:       shard,
@@ -619,8 +615,136 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 	return &batch, nil
 }
 
+// embedVerifiedAnchorBUMP verifies mp against witnessed headers, attaches tx.MerklePath = mp,
+// and re-encodes strict AtomicBEEF(false). Returns settled=true ONLY if the returned BEEF
+// actually embeds the verified BUMP; never persists Settled=true with a BUMP-less BEEF.
+func (s *Service) embedVerifiedAnchorBUMP(
+	ctx context.Context,
+	txid string,
+	existingBeef []byte,
+	tx *transaction.Transaction,
+	mp *transaction.MerklePath,
+	height uint32,
+) ([]byte, bool, int64) {
+	if mp == nil {
+		return existingBeef, false, 0
+	}
+	if height == 0 {
+		height = mp.BlockHeight
+	}
+	if tx == nil && len(existingBeef) > 0 {
+		if _, parsed, _, err := guard.ParseBEEF(existingBeef, guard.DefaultBound); err == nil && parsed != nil {
+			tx = parsed
+		}
+	}
+	if tx == nil {
+		return existingBeef, false, 0
+	}
+	if tx.TxID().String() != txid {
+		return existingBeef, false, 0
+	}
+	root, rErr := mp.ComputeRoot(tx.TxID())
+	if rErr != nil || root == nil {
+		return existingBeef, false, 0
+	}
+	tracker := s.port.Tracker()
+	if tracker == nil {
+		return existingBeef, false, 0
+	}
+	valid, vErr := tracker.IsValidRootForHeight(ctx, root, height)
+	if vErr != nil || !valid {
+		return existingBeef, false, 0
+	}
+	txCopy := *tx
+	txCopy.MerklePath = mp
+	newBeef, bErr := txCopy.AtomicBEEF(false)
+	if bErr != nil || len(newBeef) == 0 {
+		return existingBeef, false, 0
+	}
+	return newBeef, true, int64(height)
+}
+
+func (s *Service) reconcilePendingAnchorLocked(ctx context.Context, p store.PendingAnchor, shardID string) (recorded *store.BatchAnchor, cleaned bool, wStatus string, err error) {
+	if p.TxID == "" {
+		_ = s.db.DeletePendingAnchor(p.Shard, p.N)
+		return nil, true, "", nil
+	}
+	mined, walletStatus, mp, height := s.port.TxBroadcastStatus(ctx, p.TxID)
+	wStatus = walletStatus
+	tx := s.port.Tx(p.TxID)
+	beef := p.Beef
+	if tx != nil && len(beef) == 0 {
+		if b, bErr := chain.SafeAtomicBEEF(tx); bErr == nil && len(b) > 0 {
+			beef = b
+		}
+	}
+
+	// Local embedded wallet confirms tx was never broadcast or definitely aborted/failed: clean up cleanly!
+	if !mined && (walletStatus == "nosend" || walletStatus == "failed" || walletStatus == "aborted" || walletStatus == "unsigned" || walletStatus == "unprocessed") {
+		if walletStatus == "nosend" && s.port.Engine() != nil {
+			_ = s.port.Engine().AbortNoSendByTxID(ctx, p.TxID)
+		}
+		_ = s.db.DeletePendingAnchor(p.Shard, p.N)
+		return nil, true, walletStatus, nil
+	}
+
+	// First-party confirmed broadcast states (never 'sending' or 'submission_unknown') promote immediately
+	// to anchors(settled=0 or 1) so the shard does not stall waiting for a block!
+	confirmedBroadcast := mined || walletStatus == "completed" || walletStatus == "unproven" || walletStatus == "unmined"
+	if !confirmedBroadcast && len(beef) > 0 && s.port.Network() != "memory" {
+		if _, parsedTx, _, pErr := guard.ParseBEEF(beef, guard.DefaultBound); pErr == nil && parsedTx != nil {
+			if rErr := s.port.RelayExternalTx(ctx, parsedTx); rErr == nil {
+				confirmedBroadcast = true
+			} else {
+				lower := strings.ToLower(rErr.Error())
+				if strings.Contains(lower, "already in mempool") || strings.Contains(lower, "already known") || strings.Contains(lower, "txn-already-known") {
+					confirmedBroadcast = true
+				}
+				// Never delete pending_anchors from broadcaster error strings ("utxo_spent", "missing inputs", etc.):
+				// keep pending until Monitor.UnFail proves or settles the underlying tx.
+			}
+		}
+	}
+
+	if len(beef) > 0 && confirmedBroadcast {
+		var settled bool
+		var blockHeight int64
+		if mined && mp != nil {
+			beef, settled, blockHeight = s.embedVerifiedAnchorBUMP(ctx, p.TxID, beef, tx, mp, height)
+		}
+		batch := store.BatchAnchor{
+			Shard:       p.Shard,
+			ShardID:     shardID,
+			N:           p.N,
+			Size:        len(p.Seqs),
+			RootHex:     p.RootHex,
+			ChainedHex:  p.ChainedHex,
+			TxID:        p.TxID,
+			Beef:        beef,
+			Settled:     settled,
+			BlockHeight: blockHeight,
+			CreatedAt:   p.CreatedAt,
+		}
+		if rErr := s.db.RecordBatchAnchor(batch, p.Seqs); rErr != nil {
+			return nil, false, walletStatus, rErr
+		}
+		if p.Shard == ReceiptsShard {
+			for _, seq := range p.Seqs {
+				_ = s.db.UpdateReceiptAnchor(seq, p.TxID)
+			}
+		}
+		return &batch, false, walletStatus, nil
+	}
+	if len(beef) == 0 && !mined && walletStatus == "" {
+		_ = s.db.DeletePendingAnchor(p.Shard, p.N)
+		return nil, true, walletStatus, nil
+	}
+	return nil, false, walletStatus, nil
+}
+
 // ReconcilePendingAnchors recovers any in-flight pending_anchors persisted before a crash.
-// Never promotes an unbroadcast local 'nosend'/'failed'/'aborted' transaction as anchored.
+// Never promotes an unbroadcast local 'nosend'/'failed'/'aborted' transaction as anchored,
+// and never persists Settled=true without embedding a header-verified BUMP into AnchorBEEF.
 func (s *Service) ReconcilePendingAnchors(ctx context.Context) (int, error) {
 	pending, err := s.db.ListPendingAnchors()
 	if err != nil || len(pending) == 0 {
@@ -631,81 +755,22 @@ func (s *Service) ReconcilePendingAnchors(ctx context.Context) (int, error) {
 	shardID := core.ShardIDFromPubkey(pubBytes)
 	for _, p := range pending {
 		unlock := s.lockShard(p.Shard)
-		if p.TxID == "" {
-			_ = s.db.DeletePendingAnchor(p.Shard, p.N)
-			unlock()
-			continue
-		}
-		// Inspect chain proof AND durable wallet transaction status (never treat raw local NoSend tx as broadcast).
-		mined, wStatus, mp, height := s.port.TxBroadcastStatus(ctx, p.TxID)
-		tx := s.port.Tx(p.TxID)
-		beef := p.Beef
-		if tx != nil {
-			if mp != nil {
-				tx.MerklePath = mp
-			}
-			if b, bErr := chain.SafeAtomicBEEF(tx); bErr == nil && len(b) > 0 {
-				beef = b
-			}
-		}
-
-		// Local embedded wallet confirms tx was never broadcast or definitely aborted/failed: clean up cleanly!
-		if !mined && (wStatus == "nosend" || wStatus == "failed" || wStatus == "aborted" || wStatus == "unsigned" || wStatus == "unprocessed") {
-			if wStatus == "nosend" && s.port.Engine() != nil {
-				_ = s.port.Engine().AbortNoSendByTxID(ctx, p.TxID)
-			}
-			_ = s.db.DeletePendingAnchor(p.Shard, p.N)
-			unlock()
-			continue
-		}
-
-		confirmedBroadcast := mined || wStatus == "completed" || wStatus == "unproven" || wStatus == "unmined" || wStatus == "sending"
-		// If broadcast status is unknown (embedded submission_unknown or client-mode unmined after restart),
-		// re-air persisted BEEF against the live network before deciding; keep pending if network is unreachable.
-		if !confirmedBroadcast && len(beef) > 0 && s.port.Network() != "memory" {
-			if _, parsedTx, _, pErr := guard.ParseBEEF(beef, guard.DefaultBound); pErr == nil && parsedTx != nil {
-				if rErr := s.port.RelayExternalTx(ctx, parsedTx); rErr == nil {
-					confirmedBroadcast = true
-				} else {
-					lower := strings.ToLower(rErr.Error())
-					if strings.Contains(lower, "already in mempool") || strings.Contains(lower, "already known") || strings.Contains(lower, "txn-already-known") {
-						confirmedBroadcast = true
-					} else if strings.Contains(lower, "missing inputs") || strings.Contains(lower, "utxo_spent") || strings.Contains(lower, "double") {
-						_ = s.db.DeletePendingAnchor(p.Shard, p.N)
-						unlock()
-						continue
-					} else {
-						// Transient/unknown: keep pending_anchors row intact for the next reconciliation attempt.
-						unlock()
-						continue
-					}
-				}
-			}
-		}
-
-		if len(beef) > 0 && confirmedBroadcast {
-			batch := store.BatchAnchor{
-				Shard:       p.Shard,
-				ShardID:     shardID,
-				N:           p.N,
-				Size:        len(p.Seqs),
-				RootHex:     p.RootHex,
-				ChainedHex:  p.ChainedHex,
-				TxID:        p.TxID,
-				Beef:        beef,
-				Settled:     mined,
-				BlockHeight: int64(height),
-				CreatedAt:   p.CreatedAt,
-			}
-			if rErr := s.db.RecordBatchAnchor(batch, p.Seqs); rErr == nil {
-				recovered++
-			}
-		} else if len(beef) == 0 && !mined {
-			_ = s.db.DeletePendingAnchor(p.Shard, p.N)
-		}
+		recBatch, _, _, rErr := s.reconcilePendingAnchorLocked(ctx, p, shardID)
 		unlock()
+		if rErr == nil && recBatch != nil {
+			recovered++
+		}
 	}
 	return recovered, nil
+}
+
+// HandleReorg clears settled anchor proofs at or above forkHeight so RefreshAnchorProofs
+// re-acquires post-reorg BUMPs instead of serving orphaned proofs.
+func (s *Service) HandleReorg(forkHeight uint32) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	return s.db.ClearAnchorProofsFrom(int64(forkHeight))
 }
 
 func shardIdentifier(shard string, pubBytes []byte) string {
@@ -791,6 +856,18 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 		}
 	}
 	var out []RecalledFragment
+	// Load batch anchors once to report honest mined vs broadcast state and memoize per-batch SPV verification.
+	anchorSettled := make(map[int64]bool)
+	if shardAnchors, aErr := s.db.ListAnchors(in.Shard); aErr == nil {
+		for _, a := range shardAnchors {
+			anchorSettled[a.N] = a.Settled
+		}
+	}
+	type batchKey struct {
+		shard string
+		n     int64
+	}
+	spvMemos := make(map[batchKey]*contracts.AnchorBatchMemo)
 
 	for _, r := range records {
 		if r.Forgotten {
@@ -866,14 +943,22 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 		}
 		if r.BatchN < 0 {
 			item.AnchorState = "unanchored"
+		} else if anchorSettled[r.BatchN] {
+			item.AnchorState = "mined"
 		} else {
-			item.AnchorState = "anchored"
+			item.AnchorState = "broadcast"
 		}
 		if in.VerifySPV && r.BatchN >= 0 {
-			_, vr, pErr := s.Prove(ctx, r.Shard, r.Seq)
+			bk := batchKey{shard: r.Shard, n: r.BatchN}
+			_, vr, nextMemo, pErr := s.proveWithMemo(ctx, r.Shard, r.Seq, policy.Principal{Type: "Agent", ID: "owner", Level: 100}, spvMemos[bk])
+			if nextMemo != nil {
+				spvMemos[bk] = nextMemo
+			}
 			if pErr == nil && vr != nil {
 				item.SPV = vr
-				item.AnchorState = vr.AnchorState
+				if vr.AnchorState != "" {
+					item.AnchorState = vr.AnchorState
+				}
 			}
 		}
 		out = append(out, item)
@@ -891,12 +976,17 @@ func (s *Service) Prove(ctx context.Context, shard string, seq int64) (*contract
 
 // ProveAuthorized enforces Cedar read authorization before constructing a ProofBundle for (shard, seq).
 func (s *Service) ProveAuthorized(ctx context.Context, shard string, seq int64, principal policy.Principal) (*contracts.ProofBundle, *contracts.VerifyResult, error) {
+	bundle, vr, _, err := s.proveWithMemo(ctx, shard, seq, principal, nil)
+	return bundle, vr, err
+}
+
+func (s *Service) proveWithMemo(ctx context.Context, shard string, seq int64, principal policy.Principal, memo *contracts.AnchorBatchMemo) (*contracts.ProofBundle, *contracts.VerifyResult, *contracts.AnchorBatchMemo, error) {
 	if err := ValidateShardName(shard, true); err != nil {
-		return nil, nil, err
+		return nil, nil, memo, err
 	}
 	rec, err := s.db.GetFragment(shard, seq)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, memo, err
 	}
 	if principal.ID == "" {
 		principal = policy.Principal{Type: "Agent", ID: "owner", Level: 100}
@@ -909,28 +999,28 @@ func (s *Service) ProveAuthorized(ctx context.Context, shard string, seq int64, 
 		Class: rec.Class,
 	}); aErr != nil || !dec.Allow {
 		if aErr != nil {
-			return nil, nil, fmt.Errorf("memory: cedar prove policy error: %w", aErr)
+			return nil, nil, memo, fmt.Errorf("memory: cedar prove policy error: %w", aErr)
 		}
-		return nil, nil, fmt.Errorf("memory: cedar policy denied prove on %s#%d", rec.Shard, rec.Seq)
+		return nil, nil, memo, fmt.Errorf("memory: cedar policy denied prove on %s#%d", rec.Shard, rec.Seq)
 	}
 	if rec.BatchN < 0 {
-		return nil, &contracts.VerifyResult{OK: false, AnchorState: "unanchored", Reason: "fragment not yet anchored"}, nil
+		return nil, &contracts.VerifyResult{OK: false, AnchorState: "unanchored", Reason: "fragment not yet anchored"}, memo, nil
 	}
 	batchFrags, err := s.db.ListBatchFragments(shard, rec.BatchN)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, memo, err
 	}
 	leaves := make([][]byte, len(batchFrags))
 	for i, f := range batchFrags {
 		lb, err := hex.DecodeString(f.Leaf)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, memo, err
 		}
 		leaves[i] = lb
 	}
 	mp, err := core.ComputeMerkleProof(leaves, rec.LeafIndex)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, memo, err
 	}
 	pathHex := make([]string, len(mp.Siblings))
 	for i, p := range mp.Siblings {
@@ -938,7 +1028,7 @@ func (s *Service) ProveAuthorized(ctx context.Context, shard string, seq int64, 
 	}
 	anchors, err := s.db.ListAnchors(shard)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, memo, err
 	}
 	var target *store.BatchAnchor
 	var tail []contracts.AnchorLink
@@ -961,7 +1051,7 @@ func (s *Service) ProveAuthorized(ctx context.Context, shard string, seq int64, 
 		}
 	}
 	if target == nil {
-		return nil, nil, fmt.Errorf("memory: missing anchor batch %d for shard %q", rec.BatchN, shard)
+		return nil, nil, memo, fmt.Errorf("memory: missing anchor batch %d for shard %q", rec.BatchN, shard)
 	}
 	bundle := &contracts.ProofBundle{
 		Version:   1,
@@ -982,52 +1072,56 @@ func (s *Service) ProveAuthorized(ctx context.Context, shard string, seq int64, 
 		ChainTail:  tail,
 		AnchorBEEF: target.Beef,
 	}
-	vr := contracts.VerifyFragmentCtx(ctx, *bundle, s.port.Tracker())
-	return bundle, &vr, nil
+	vr, outMemo := contracts.VerifyFragmentWithMemo(ctx, *bundle, s.port.Tracker(), 1, memo)
+	return bundle, &vr, outMemo, nil
 }
 
 // RefreshAnchorProofs polls the chain for mined MerklePaths on any unsettled broadcast anchors,
-// verifies the computed Merkle root against PoW headers before upgrading settled=true, and attaches
-// the mined BUMP into the stored AnchorBEEF.
+// verifies the computed Merkle root against witnessed PoW headers before upgrading settled=true,
+// and embeds the mined BUMP into the stored AnchorBEEF. Fails closed when tracker == nil.
 func (s *Service) RefreshAnchorProofs(ctx context.Context) (int, error) {
+	if s.port.Tracker() == nil {
+		return 0, chain.ErrTrackerUnavailable
+	}
 	unsettled, err := s.db.ListUnsettledAnchors()
 	if err != nil || len(unsettled) == 0 {
 		return 0, err
 	}
 	upgraded := 0
-	tracker := s.port.Tracker()
 	for _, a := range unsettled {
-		mp, height, ok := s.port.Proof(ctx, a.TxID)
-		if !ok || mp == nil {
+		mp, height, ok, pErr := s.port.ProofChecked(ctx, a.TxID)
+		if pErr != nil || !ok || mp == nil {
 			continue
 		}
-		if height == 0 {
-			height = mp.BlockHeight
-		}
-		tx, err := transaction.NewTransactionFromBEEF(a.Beef)
-		if err != nil {
+		newBeef, settled, blockHeight := s.embedVerifiedAnchorBUMP(ctx, a.TxID, a.Beef, nil, mp, height)
+		if !settled {
 			continue
 		}
-		root, rErr := mp.ComputeRoot(tx.TxID())
-		if rErr != nil || root == nil {
-			continue
-		}
-		if tracker != nil {
-			valid, vErr := tracker.IsValidRootForHeight(ctx, root, height)
-			if vErr != nil || !valid {
-				continue
-			}
-		}
-		tx.MerklePath = mp
-		newBeef, err := tx.AtomicBEEF(false)
-		if err != nil {
-			continue
-		}
-		if err := s.db.UpdateAnchorProof(a.Shard, a.N, newBeef, int64(height)); err == nil {
+		if err := s.db.UpdateAnchorProof(a.Shard, a.N, newBeef, blockHeight); err == nil {
 			upgraded++
 		}
 	}
 	return upgraded, nil
+}
+
+// RefreshAnchorProofByTxID upgrades a matching unsettled anchor immediately when Monitor.OnTxMined
+// fires with a verified MerklePath, avoiding a 45s polling delay.
+func (s *Service) RefreshAnchorProofByTxID(ctx context.Context, txid string, height uint32, mp *transaction.MerklePath) (bool, error) {
+	if s == nil || s.db == nil || txid == "" || mp == nil {
+		return false, nil
+	}
+	a, found, err := s.db.GetAnchorByTxID(txid)
+	if err != nil || !found || a.Settled {
+		return false, err
+	}
+	newBeef, settled, blockHeight := s.embedVerifiedAnchorBUMP(ctx, txid, a.Beef, nil, mp, height)
+	if !settled {
+		return false, nil
+	}
+	if err := s.db.UpdateAnchorProof(a.Shard, a.N, newBeef, blockHeight); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // GroundedAnswerInput requests a grounded, receipt-backed answer from claims citing memory fragments.
@@ -1265,13 +1359,14 @@ type ReceiptVerification struct {
 	ReceiptToken     string                    `json:"receiptToken"`
 	Receipt          *reasoning.Receipt        `json:"receipt,omitempty"`
 	ReceiptAnchored  bool                      `json:"receiptAnchored"`
-	CitationsChecked    int                       `json:"citationsChecked"`
-	CitationsMined      int                       `json:"citationsMined"`
-	CitationsMissing    int                       `json:"citationsMissing"`
-	CitationsInvalid    int                       `json:"citationsInvalid,omitempty"`
-	CitationsSuperseded int                       `json:"citationsSuperseded,omitempty"`
-	SupersededRefs      []string                  `json:"supersededRefs,omitempty"`
-	TruthNote           string                    `json:"truthNote"`
+	CitationsChecked     int                       `json:"citationsChecked"`
+	CitationsMined       int                       `json:"citationsMined"`
+	CitationsMissing     int                       `json:"citationsMissing"`
+	CitationsInvalid     int                       `json:"citationsInvalid,omitempty"`
+	CitationsUnavailable int                       `json:"citationsUnavailable,omitempty"`
+	CitationsSuperseded  int                       `json:"citationsSuperseded,omitempty"`
+	SupersededRefs       []string                  `json:"supersededRefs,omitempty"`
+	TruthNote            string                    `json:"truthNote"`
 }
 
 // VerifyReceipt validates a nektarr1.* token or 64-hex hash, its §16 delegations, and its cited SPV proofs.
@@ -1306,10 +1401,16 @@ func (s *Service) VerifyReceipt(ctx context.Context, tokenOrHash string) (*Recei
 		return &ReceiptVerification{Verdict: "red", Reason: err.Error(), ReceiptHash: h, ReceiptToken: tok, Receipt: &rcp, TruthNote: reasoning.TruthNote}, nil
 	}
 
-	// Derive ReceiptAnchored live from the __receipts__ fragment's anchor_txid (so later anchoring reflects immediately!).
-	receiptAnchored := rec.AnchorTxID != ""
-	if !receiptAnchored && rec.ShardSeq > 0 {
+	// Derive ReceiptAnchored strictly from settled=1 anchors (with embedded BUMP), never bare anchor_txid != "".
+	anchorTxID := rec.AnchorTxID
+	if anchorTxID == "" && rec.ShardSeq > 0 {
 		if rf, rfErr := s.db.GetFragment(ReceiptsShard, rec.ShardSeq); rfErr == nil && rf.AnchorTxID != "" {
+			anchorTxID = rf.AnchorTxID
+		}
+	}
+	receiptAnchored := false
+	if anchorTxID != "" {
+		if settled, sErr := s.db.IsAnchorSettled(anchorTxID); sErr == nil && settled {
 			receiptAnchored = true
 		}
 	}
@@ -1320,6 +1421,11 @@ func (s *Service) VerifyReceipt(ctx context.Context, tokenOrHash string) (*Recei
 		ReceiptAnchored: receiptAnchored,
 		TruthNote:       reasoning.TruthNote,
 	}
+	type batchKey struct {
+		shard string
+		n     int64
+	}
+	spvMemos := make(map[batchKey]*contracts.AnchorBatchMemo)
 	for _, ref := range rcp.FragmentRefs {
 		out.CitationsChecked++
 		f, fErr := s.db.GetFragment(ref.Shard, ref.Seq)
@@ -1332,13 +1438,25 @@ func (s *Service) VerifyReceipt(ctx context.Context, tokenOrHash string) (*Recei
 			out.SupersededRefs = append(out.SupersededRefs, fmt.Sprintf("%s#%d->#%d", ref.Shard, ref.Seq, newerSeq))
 		}
 		if f.BatchN >= 0 {
-			_, vr, pErr := s.Prove(ctx, ref.Shard, ref.Seq)
+			bk := batchKey{shard: ref.Shard, n: f.BatchN}
+			_, vr, nextMemo, pErr := s.proveWithMemo(ctx, ref.Shard, ref.Seq, policy.Principal{Type: "Agent", ID: "owner", Level: 100}, spvMemos[bk])
+			if nextMemo != nil {
+				spvMemos[bk] = nextMemo
+			}
 			if pErr != nil || vr == nil {
 				out.CitationsInvalid++
 			} else if vr.OK && vr.Settled {
 				out.CitationsMined++
-			} else if !vr.OK && vr.Reason != "Unsettled" {
-				out.CitationsInvalid++
+			} else if !vr.OK {
+				switch vr.Reason {
+				case "Unsettled", "InsufficientDepth":
+					// Valid structurally, awaiting mining/confirmation depth -> amber.
+				case "TrackerUnavailable":
+					// Header witness transport/quorum outage -> amber (never red forgery!).
+					out.CitationsUnavailable++
+				default:
+					out.CitationsInvalid++
+				}
 			}
 		}
 	}
@@ -1352,6 +1470,10 @@ func (s *Service) VerifyReceipt(ctx context.Context, tokenOrHash string) (*Recei
 		out.Verdict = "red"
 		out.OK = false
 		out.Reason = fmt.Sprintf("%d cited fragment(s) missing or forgotten", out.CitationsMissing)
+	case out.CitationsUnavailable > 0:
+		out.Verdict = "amber"
+		out.OK = true
+		out.Reason = fmt.Sprintf("header tracker unavailable while verifying %d cited fragment(s); retryable", out.CitationsUnavailable)
 	case out.CitationsSuperseded > 0:
 		out.Verdict = "amber"
 		out.OK = true
@@ -1586,59 +1708,85 @@ func (s *Service) importShardPackVerified(ctx context.Context, raw []byte, targe
 	verifiedAnchors := make(map[int64]store.BatchAnchor, len(sortedAnchors))
 	prevRp := core.Zero32Bytes()
 	expectedN := int64(0)
+	tracker := s.port.Tracker()
 	for _, a := range sortedAnchors {
 		if len(a.Beef) == 0 {
-			continue
+			break
 		}
 		// Enforce contiguous anchor numbering from genesis (no skipped N=0 or gaps bypassing ChainRp!).
 		if a.N != expectedN {
-			continue
+			break
 		}
-		_, tx, txHash, tErr := guard.ParseBEEF(a.Beef, guard.DefaultBound)
+		parsedBeef, tx, txHash, tErr := guard.ParseBEEF(a.Beef, guard.DefaultBound)
 		if tErr != nil || tx == nil || txHash == nil || len(tx.Outputs) == 0 || tx.Outputs[0].LockingScript == nil {
-			continue
+			break
 		}
 		st, dErr := contracts.DecodeNektarAnchor(*tx.Outputs[0].LockingScript)
 		if dErr != nil {
-			continue
+			break
 		}
 		if st.N != uint64(a.N) || st.Size != uint64(a.Size) || !strings.EqualFold(hex.EncodeToString(st.R), a.RootHex) ||
 			!strings.EqualFold(hex.EncodeToString(st.Rp), a.ChainedHex) || txHash.String() != a.TxID {
-			continue
+			break
 		}
 		// Enforce sequential ChainRp linkage across every imported anchor.
 		wantTag := core.ChainRpWithTag(st.Tag, prevRp, st.R, st.Size)
 		wantLegacy := core.EqualBytes(st.Tag, core.TagAnchorTag) && core.EqualBytes(st.Rp, core.ChainRp(prevRp, st.R, st.Size))
 		if !core.EqualBytes(wantTag, st.Rp) && !wantLegacy {
-			continue
+			break
 		}
-		prevRp = st.Rp
-		expectedN = a.N + 1
-		// Derive Settled strictly from verified BUMP against header chain (never trust untrusted JSON flag!).
+		// Derive Settled and BlockHeight strictly from verified BUMP or full carried-ancestry SPV
+		// BEFORE advancing prevRp/expectedN or persisting anything. Never trust untrusted JSON flags/heights!
 		a.Settled = false
+		a.BlockHeight = 0
 		if tx.MerklePath != nil {
+			root, rErr := tx.MerklePath.ComputeRoot(txHash)
+			if rErr != nil || root == nil {
+				break
+			}
 			if s.port.Network() == "memory" {
+				// Even in memory mode, ComputeRoot already ran above; check tracker if same chain or mark settled.
 				a.Settled = true
+				a.BlockHeight = int64(tx.MerklePath.BlockHeight)
 			} else {
-				tracker := s.port.Tracker()
 				if tracker == nil {
-					continue
-				}
-				root, rErr := tx.MerklePath.ComputeRoot(txHash)
-				if rErr != nil || root == nil {
-					continue
+					return 0, targetShard, fmt.Errorf("memory: import shard pack requires chain tracker for anchor %d: %w", a.N, chain.ErrTrackerUnavailable)
 				}
 				valid, vErr := tracker.IsValidRootForHeight(ctx, root, tx.MerklePath.BlockHeight)
-				if vErr != nil || !valid {
-					continue
+				if vErr != nil {
+					// Return retryable error on tracker outage instead of silently dropping valid anchors and corrupting ChainTail!
+					return 0, targetShard, fmt.Errorf("memory: header tracker unavailable verifying imported anchor %d: %w", a.N, vErr)
+				}
+				if !valid {
+					break
 				}
 				a.Settled = true
+				a.BlockHeight = int64(tx.MerklePath.BlockHeight)
+			}
+		} else {
+			// Unmined pack anchor: MUST pass full spv.Verify of carried input ancestry (reject pathless/unproven anchors!).
+			if s.port.Network() != "memory" {
+				if tracker == nil {
+					return 0, targetShard, fmt.Errorf("memory: import shard pack requires chain tracker for unmined anchor %d: %w", a.N, chain.ErrTrackerUnavailable)
+				}
+				if sErr := chain.VerifyTransactionSPV(ctx, tx, parsedBeef, tracker); sErr != nil {
+					if errors.Is(sErr, chain.ErrTrackerUnavailable) {
+						return 0, targetShard, fmt.Errorf("memory: header tracker unavailable verifying unmined anchor %d: %w", a.N, sErr)
+					}
+					break
+				}
+			} else if tracker != nil {
+				if sErr := chain.VerifyTransactionSPV(ctx, tx, parsedBeef, tracker); sErr != nil {
+					break
+				}
 			}
 		}
 		a.Shard = targetShard
 		if err := s.db.SaveBatchAnchorStrict(a); err != nil {
 			return 0, targetShard, fmt.Errorf("memory: import shard pack anchor conflict: %w", err)
 		}
+		prevRp = st.Rp
+		expectedN = a.N + 1
 		verifiedAnchors[a.N] = a
 	}
 

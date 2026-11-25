@@ -18,18 +18,30 @@ import (
 
 // StoredEvent is one durably persisted admitted market output on the Hub.
 type StoredEvent struct {
-	Seq        int64                `json:"seq"`
-	Outpoint   string               `json:"outpoint"`
-	Topic      string               `json:"topic"`
-	TxID       string               `json:"txid"`
-	Vout       uint32               `json:"vout"`
-	Kind       bstack.ArtifactKind  `json:"kind"`
-	Pub        string               `json:"pub"`
-	Domains    []string             `json:"domains"`
-	Payload    bstack.MarketPayload `json:"payload"`
-	BEEF       []byte               `json:"beef,omitempty"`
-	Exp        int64                `json:"exp"`
-	AdmittedAt int64                `json:"admittedAt"`
+	Seq         int64                `json:"seq"`
+	Outpoint    string               `json:"outpoint"`
+	Topic       string               `json:"topic"`
+	TxID        string               `json:"txid"`
+	Vout        uint32               `json:"vout"`
+	Kind        bstack.ArtifactKind  `json:"kind"`
+	Pub         string               `json:"pub"`
+	Domains     []string             `json:"domains"`
+	Payload     bstack.MarketPayload `json:"payload"`
+	BEEF        []byte               `json:"beef,omitempty"`
+	BlockHeight int64                `json:"blockHeight,omitempty"`
+	Exp         int64                `json:"exp"`
+	AdmittedAt  int64                `json:"admittedAt"`
+}
+
+// BountyClaim represents one persisted Hub bounty claim row.
+type BountyClaim struct {
+	HDP        string `json:"hdp"`
+	BountyID   string `json:"bountyId"`
+	SellerPub  string `json:"sellerPub"`
+	TxID       string `json:"txid"`
+	RewardSats uint64 `json:"rewardSats"`
+	Status     string `json:"status"` // pending | broadcast | paid
+	CreatedAt  int64  `json:"createdAt"`
 }
 
 // BboxMessage is a signed, E2E-encrypted store-and-forward message relayed for counterparties behind NAT.
@@ -186,6 +198,9 @@ CREATE TABLE IF NOT EXISTS hub_fed_cursors (
 	_, _ = s.sql.Exec(`ALTER TABLE hub_bbox ADD COLUMN ts INTEGER NOT NULL DEFAULT 0`)
 	_, _ = s.sql.Exec(`ALTER TABLE hub_bbox ADD COLUMN nonce TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.sql.Exec(`ALTER TABLE hub_bbox ADD COLUMN aud TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.sql.Exec(`ALTER TABLE hub_events ADD COLUMN spent INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.sql.Exec(`ALTER TABLE hub_events ADD COLUMN block_height INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.sql.Exec(`CREATE INDEX IF NOT EXISTS idx_hub_events_height ON hub_events(block_height)`)
 	return nil
 }
 
@@ -235,14 +250,88 @@ func (s *Store) AppendEvent(ev StoredEvent) (int64, bool, error) {
 		ev.AdmittedAt = time.Now().UnixMilli()
 	}
 	res, err := s.sql.Exec(`
-		INSERT INTO hub_events (outpoint, topic, txid, vout, kind, pub, domains_json, payload_json, beef, exp, admitted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ev.Outpoint, ev.Topic, ev.TxID, ev.Vout, string(ev.Kind), ev.Pub, string(doms), pJSON, ev.BEEF, ev.Exp, ev.AdmittedAt)
+		INSERT INTO hub_events (outpoint, topic, txid, vout, kind, pub, domains_json, payload_json, beef, exp, admitted_at, spent, block_height)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+		ev.Outpoint, ev.Topic, ev.TxID, ev.Vout, string(ev.Kind), ev.Pub, string(doms), pJSON, ev.BEEF, ev.Exp, ev.AdmittedAt, ev.BlockHeight)
 	if err != nil {
 		return 0, false, err
 	}
 	seq, err := res.LastInsertId()
 	return seq, true, err
+}
+
+// FindEventTopicByOutpoint reports whether an outpoint was previously admitted and whether it is spent.
+func (s *Store) FindEventTopicByOutpoint(outpoint string) (topic string, spent bool, found bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var sp int
+	err = s.sql.QueryRow(`SELECT topic, spent FROM hub_events WHERE outpoint = ?`, outpoint).Scan(&topic, &sp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, false, nil
+	}
+	if err != nil {
+		return "", false, false, err
+	}
+	return topic, sp != 0, true, nil
+}
+
+// MarkOutpointSpent marks a previously admitted Hub event outpoint as spent so it is excluded from active scans.
+func (s *Store) MarkOutpointSpent(outpoint string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var topic string
+	var sp int
+	err := s.sql.QueryRow(`SELECT topic, spent FROM hub_events WHERE outpoint = ?`, outpoint).Scan(&topic, &sp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if sp == 0 {
+		if _, err := s.sql.Exec(`UPDATE hub_events SET spent = 1 WHERE outpoint = ?`, outpoint); err != nil {
+			return "", false, err
+		}
+	}
+	return topic, true, nil
+}
+
+// EvictEventsFromHeight removes all persisted Hub events anchored at block_height >= forkHeight
+// (triggered on verified chain reorgs) and returns the evicted events so lookup services can evict them too.
+func (s *Store) EvictEventsFromHeight(forkHeight uint32) ([]StoredEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.sql.Query(`
+		SELECT seq, outpoint, topic, txid, vout, kind, pub, domains_json, payload_json, beef, block_height, exp, admitted_at
+		FROM hub_events WHERE block_height >= ? AND block_height > 0`, forkHeight)
+	if err != nil {
+		return nil, err
+	}
+	var evicted []StoredEvent
+	for rows.Next() {
+		var e StoredEvent
+		var kindStr, domJSON string
+		var pJSON []byte
+		if err := rows.Scan(&e.Seq, &e.Outpoint, &e.Topic, &e.TxID, &e.Vout, &kindStr, &e.Pub, &domJSON, &pJSON, &e.BEEF, &e.BlockHeight, &e.Exp, &e.AdmittedAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		e.Kind = bstack.ArtifactKind(kindStr)
+		_ = json.Unmarshal([]byte(domJSON), &e.Domains)
+		_ = json.Unmarshal(pJSON, &e.Payload)
+		evicted = append(evicted, e)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(evicted) > 0 {
+		if _, err := s.sql.Exec(`DELETE FROM hub_events WHERE block_height >= ? AND block_height > 0`, forkHeight); err != nil {
+			return nil, err
+		}
+	}
+	return evicted, nil
 }
 
 // EventsSince loads unexpired events with seq > cursor ordered ascending (for SSE resume & poll floor).
@@ -262,9 +351,9 @@ func (s *Store) EventsSinceScanned(cursor int64, domainFilter []string, limit in
 	}
 	nowMs := time.Now().UnixMilli()
 	rows, err := s.sql.Query(`
-		SELECT seq, outpoint, topic, txid, vout, kind, pub, domains_json, payload_json, beef, exp, admitted_at
+		SELECT seq, outpoint, topic, txid, vout, kind, pub, domains_json, payload_json, beef, COALESCE(block_height, 0), exp, admitted_at
 		FROM hub_events
-		WHERE seq > ? AND (exp = 0 OR exp > ?)
+		WHERE seq > ? AND spent = 0 AND (exp = 0 OR exp > ?)
 		ORDER BY seq ASC LIMIT ?`, cursor, nowMs, limit)
 	if err != nil {
 		return nil, cursor, 0, err
@@ -282,7 +371,7 @@ func (s *Store) EventsSinceScanned(cursor int64, domainFilter []string, limit in
 		var e StoredEvent
 		var kindStr, domJSON string
 		var pJSON []byte
-		if err := rows.Scan(&e.Seq, &e.Outpoint, &e.Topic, &e.TxID, &e.Vout, &kindStr, &e.Pub, &domJSON, &pJSON, &e.BEEF, &e.Exp, &e.AdmittedAt); err != nil {
+		if err := rows.Scan(&e.Seq, &e.Outpoint, &e.Topic, &e.TxID, &e.Vout, &kindStr, &e.Pub, &domJSON, &pJSON, &e.BEEF, &e.BlockHeight, &e.Exp, &e.AdmittedAt); err != nil {
 			return nil, nextCursor, rawCount, err
 		}
 		rawCount++
@@ -352,7 +441,7 @@ func (s *Store) DomainDensityStats() ([]DomainDensity, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	nowMs := time.Now().UnixMilli()
-	rows, err := s.sql.Query(`SELECT kind, domains_json FROM hub_events WHERE (exp = 0 OR exp > ?) AND kind IN ('want', 'offer')`, nowMs)
+	rows, err := s.sql.Query(`SELECT kind, domains_json FROM hub_events WHERE spent = 0 AND (exp = 0 OR exp > ?) AND kind IN ('want', 'offer')`, nowMs)
 	if err != nil {
 		return nil, err
 	}
@@ -538,11 +627,41 @@ func (s *Store) ReserveBountyClaim(bountyID, hdp, sellerPub string, rewardSats u
 	return tx.Commit()
 }
 
+// GetBountyClaim returns the persisted bounty claim record for a canonical HDP digest.
+func (s *Store) GetBountyClaim(hdp string) (BountyClaim, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var c BountyClaim
+	err := s.sql.QueryRow(`SELECT hdp, bounty_id, seller_pub, txid, reward_sats, status, created_at FROM hub_bounty_claims WHERE hdp = ?`, hdp).
+		Scan(&c.HDP, &c.BountyID, &c.SellerPub, &c.TxID, &c.RewardSats, &c.Status, &c.CreatedAt)
+	return c, err
+}
+
+// MarkBountyClaimBroadcast records a broadcast payout txid while keeping status='broadcast'
+// until confirmed at settleDepth (preventing unconfirmed broadcasts from being marked permanently paid).
+func (s *Store) MarkBountyClaimBroadcast(hdp, txid string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.sql.Exec(`UPDATE hub_bounty_claims SET txid = ?, status = 'broadcast' WHERE hdp = ? AND status IN ('pending', 'broadcast')`, txid, hdp)
+	return err
+}
+
 // FinalizeBountyClaim marks a reserved bounty claim as paid and records its payout txid.
 func (s *Store) FinalizeBountyClaim(hdp, txid string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.sql.Exec(`UPDATE hub_bounty_claims SET txid = ?, status = 'paid' WHERE hdp = ?`, txid, hdp)
+	return err
+}
+
+// FinalizeBountyClaimByTxID promotes a 'broadcast' bounty claim to 'paid' once its payout tx mines at settleDepth.
+func (s *Store) FinalizeBountyClaimByTxID(txid string) error {
+	if txid == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.sql.Exec(`UPDATE hub_bounty_claims SET status = 'paid' WHERE txid = ? AND status = 'broadcast'`, txid)
 	return err
 }
 

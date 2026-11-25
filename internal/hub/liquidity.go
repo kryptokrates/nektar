@@ -97,28 +97,34 @@ func ArmHubLiquidity(ctx context.Context, node *Node, mem *memory.Service, cfg L
 			if mem.Chain().BalanceSats() > 1000 {
 				_, _ = mem.AnchorShard(ctx, st.Shard)
 			}
-			if res, err := mem.ExportPublicShardPack(ctx, st.Shard); err == nil && res != nil && res.ChirpURL != "" {
-				frags, _ := mem.DB().ListFragments(st.Shard)
-				state.Packs = append(state.Packs, bstack.PackRef{
-					Shard:    st.Shard,
-					Domains:  st.Domains,
-					ChirpURL: res.ChirpURL,
-					RootHex:  res.RootHex,
-					Count:    len(frags),
-				})
+			isLive := mem.Chain().Network() != "memory"
+			hasMined := !isLive || shardHasMinedAnchor(mem, st.Shard)
+			if hasMined {
+				if res, err := mem.ExportPublicShardPack(ctx, st.Shard); err == nil && res != nil && res.ChirpURL != "" {
+					frags, _ := mem.DB().ListFragments(st.Shard)
+					state.Packs = append(state.Packs, bstack.PackRef{
+						Shard:    st.Shard,
+						Domains:  st.Domains,
+						ChirpURL: res.ChirpURL,
+						RootHex:  res.RootHex,
+						Count:    len(frags),
+					})
+				}
 			}
-			// Arm starter shard as a low-price Hub fallback SellListing.
+			// Arm starter shard as a low-price Hub fallback SellListing (active only once mined on live networks).
 			_ = mem.DB().SaveSellListing(store.SellListing{
 				Shard:       st.Shard,
 				Domains:     st.Domains,
 				PriceSats:   cfg.StarterPriceSats,
 				Description: "Hub curated starter knowledge (" + st.Shard + ")",
-				Active:      true,
+				Active:      hasMined,
 			})
-			for _, d := range st.Domains {
-				if !domSeen[d] {
-					domSeen[d] = true
-					state.SellDomains = append(state.SellDomains, d)
+			if hasMined {
+				for _, d := range st.Domains {
+					if !domSeen[d] {
+						domSeen[d] = true
+						state.SellDomains = append(state.SellDomains, d)
+					}
 				}
 			}
 		}
@@ -153,8 +159,61 @@ func ArmHubLiquidity(ctx context.Context, node *Node, mem *memory.Service, cfg L
 	return state, nil
 }
 
-// handleVerifiedBounty verifies a contributing agent's ProofBundle + Merkle inclusion, pays their
-// BSV address via SpendGuard-enforced SendToAddress, and commits the verified fact into curated/<domain>.
+// shardHasMinedAnchor returns true iff shard has at least one settled anchor row carrying a verified BUMP BEEF.
+func shardHasMinedAnchor(mem *memory.Service, shard string) bool {
+	if mem == nil || mem.DB() == nil {
+		return false
+	}
+	anchors, err := mem.DB().ListAnchors(shard)
+	if err != nil {
+		return false
+	}
+	for _, a := range anchors {
+		if a.Settled && len(a.Beef) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// RefreshHubLiquidityStock activates any pending starter/curated SellListings whose shard anchors
+// have now mined and re-exports public starter CHIRP packs with embedded mined BUMPs.
+func RefreshHubLiquidityStock(ctx context.Context, mem *memory.Service) ([]bstack.PackRef, error) {
+	if mem == nil || mem.DB() == nil {
+		return nil, nil
+	}
+	listings, err := mem.DB().ListSellListings()
+	if err != nil {
+		return nil, err
+	}
+	var packs []bstack.PackRef
+	for _, l := range listings {
+		if !shardHasMinedAnchor(mem, l.Shard) {
+			continue
+		}
+		if !l.Active {
+			l.Active = true
+			_ = mem.DB().SaveSellListing(l)
+		}
+		if strings.HasPrefix(l.Shard, "ops/") {
+			if res, eErr := mem.ExportPublicShardPack(ctx, l.Shard); eErr == nil && res != nil && res.ChirpURL != "" {
+				frags, _ := mem.DB().ListFragments(l.Shard)
+				packs = append(packs, bstack.PackRef{
+					Shard:    l.Shard,
+					Domains:  l.Domains,
+					ChirpURL: res.ChirpURL,
+					RootHex:  res.RootHex,
+					Count:    len(frags),
+				})
+			}
+		}
+	}
+	return packs, nil
+}
+
+// handleVerifiedBounty verifies a contributing agent's ProofBundle + Merkle inclusion at settleDepth,
+// pays their BSV address via SpendGuard-enforced Port.Send returning full AtomicBEEF, and commits
+// the verified fact into curated/<domain>.
 func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, sub BountySubmission) (*BountyPayoutResult, error) {
 	if strings.TrimSpace(sub.SellerAddress) == "" {
 		return nil, errors.New("bounty: sellerAddress required for BSV payout")
@@ -175,7 +234,7 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 	}
 
 	// Persist acquired verified knowledge into Hub's curated/<domain> shard BEFORE broadcasting payout
-	// (AutoAnchor: false so anchor/UTXO errors or HTTP client cancel NEVER happen after SendToAddress and trigger CancelBountyClaim!).
+	// (AutoAnchor: false so anchor/UTXO errors or HTTP client cancel NEVER happen after Send and trigger CancelBountyClaim!).
 	curatedShard := "curated/" + b.Domain
 	rem, err := mem.Remember(ctx, memory.RememberInput{
 		Shard:      curatedShard,
@@ -188,10 +247,15 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 		return nil, fmt.Errorf("bounty: commit acquired fragment: %w", err)
 	}
 
-	// Execute SpendGuard-enforced payout directly (use detached context timeout so client disconnect mid-send cannot mask broadcast).
+	// Execute SpendGuard-enforced payout via Port.Send returning strict AtomicBEEF so the seller can
+	// SPV-verify and internalize immediately without a 60s poll + block wait.
 	payCtx, payCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer payCancel()
-	_, txid, err := mem.Chain().SendToAddress(payCtx, sub.SellerAddress, b.RewardSats)
+	sendRes, err := mem.Chain().Send(payCtx, nwallet.SendArgs{
+		ToAddress:   sub.SellerAddress,
+		Satoshis:    b.RewardSats,
+		Description: "nektar hub bounty payout " + b.ID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("bounty: payout failed: %w", err)
 	}
@@ -203,19 +267,21 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 			resalePrice = v
 		}
 	}
-	// Ensure curated/<domain> is also armed for resale to future buyers!
+	// On live networks, keep curated/<domain> listing inactive until its shard anchor is mined (RefreshHubLiquidityStock activates it).
+	listingActive := mem.Chain().Network() == "memory" || shardHasMinedAnchor(mem, curatedShard)
 	_ = mem.DB().SaveSellListing(store.SellListing{
 		Shard:       curatedShard,
 		Domains:     []string{b.Domain},
 		PriceSats:   resalePrice,
 		Description: "Hub bounty-acquired verified knowledge (" + b.Domain + ")",
-		Active:      true,
+		Active:      listingActive,
 	})
 	return &BountyPayoutResult{
 		Accepted:   true,
 		BountyID:   b.ID,
 		RewardSats: b.RewardSats,
-		TxID:       txid,
+		TxID:       sendRes.TxID,
+		BEEFHex:    sendRes.BEEFHex,
 		Shard:      curatedShard,
 		Seq:        rem.Seq,
 	}, nil
@@ -294,7 +360,12 @@ func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contra
 	if len(pb.AnchorBEEF) == 0 {
 		return errors.New("proofBundle missing anchorBEEF")
 	}
-	vr := contracts.VerifyFragmentCtx(ctx, pb, mem.Chain().Tracker())
+	var vr contracts.VerifyResult
+	if mem.Chain().Network() != "memory" {
+		vr = contracts.VerifyFragmentWithDepth(ctx, pb, mem.Chain().Tracker(), mem.Chain().SettleDepth())
+	} else {
+		vr = contracts.VerifyFragmentCtx(ctx, pb, mem.Chain().Tracker())
+	}
 	if !vr.OK {
 		// In multi-node "memory" mode tests, each node runs an isolated in-memory testchain with
 		// independent coinbase block headers; still verify every Rúnar/Merkle/ChainTail/BUMP commitment!
@@ -305,7 +376,7 @@ func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contra
 	if !vr.OK {
 		return fmt.Errorf("%s: %s", vr.Reason, vr.Detail)
 	}
-	// On live networks require mined BUMP confirmation verified against PoW headers (prevent unmined fake-anchor drain).
+	// On live networks require mined BUMP confirmation at settleDepth verified against PoW headers.
 	if mem.Chain().Network() != "memory" && !vr.Settled {
 		return errors.New("proofBundle anchor must be mined and SPV-verified against block headers on live networks")
 	}
@@ -314,12 +385,19 @@ func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contra
 
 // DripFaucet sends a rate-limited starter testnet/memory drip to address (STRICTLY refused on mainnet!).
 func DripFaucet(ctx context.Context, mem *memory.Service, address string, dripSats, perAddressCap uint64) (txid string, sent uint64, err error) {
+	txid, _, sent, err = DripFaucetBEEF(ctx, mem, address, dripSats, perAddressCap)
+	return txid, sent, err
+}
+
+// DripFaucetBEEF sends a rate-limited starter testnet/memory drip to address and returns the full
+// AtomicBEEF hex alongside txid so recipients can SPV-verify and internalize immediately at 0-conf.
+func DripFaucetBEEF(ctx context.Context, mem *memory.Service, address string, dripSats, perAddressCap uint64) (txid string, beefHex string, sent uint64, err error) {
 	if mem.Chain().Mainnet() {
-		return "", 0, errors.New("faucet: disabled on mainnet")
+		return "", "", 0, errors.New("faucet: disabled on mainnet")
 	}
 	address = strings.TrimSpace(address)
 	if address == "" {
-		return "", 0, errors.New("faucet: address is required")
+		return "", "", 0, errors.New("faucet: address is required")
 	}
 	if dripSats == 0 {
 		dripSats = 2000
@@ -336,18 +414,22 @@ func DripFaucet(ctx context.Context, mem *memory.Service, address string, dripSa
 	// Atomically check AND reserve both per-address and global daily caps BEFORE broadcasting!
 	if err := mem.DB().ReserveFaucetDrip(address, dripSats, perAddressCap, globalCap); err != nil {
 		if errors.Is(err, store.ErrFaucetCapExceeded) {
-			return "", 0, fmt.Errorf("faucet: daily cap reached (per-address %d / global %d sats) — try again tomorrow", perAddressCap, globalCap)
+			return "", "", 0, fmt.Errorf("faucet: daily cap reached (per-address %d / global %d sats) — try again tomorrow", perAddressCap, globalCap)
 		}
-		return "", 0, err
+		return "", "", 0, err
 	}
-	_, txid, err = mem.Chain().SendToAddress(ctx, address, dripSats)
+	sendRes, err := mem.Chain().Send(ctx, nwallet.SendArgs{
+		ToAddress:   address,
+		Satoshis:    dripSats,
+		Description: "nektar hub faucet drip",
+	})
 	if err != nil {
 		if !errors.Is(err, nwallet.ErrBroadcastUnknown) {
 			_ = mem.DB().RefundFaucetDrip(address, dripSats)
 		}
-		return "", 0, err
+		return "", "", 0, err
 	}
-	return txid, dripSats, nil
+	return sendRes.TxID, sendRes.BEEFHex, dripSats, nil
 }
 
 func maxUint64(a, b uint64) uint64 {

@@ -18,7 +18,8 @@ func TestOfferDigestV2Framing(t *testing.T) {
 	buyerHex := hex.EncodeToString(buyer.PubKey().Compressed())
 	exp := uint64(time.Now().Unix() + 3600)
 
-	offer, err := CreateKeyedSaleOffer(seller, []byte("verified-knowledge"), 1000, exp+600, 100, exp, buyerHex, "", false)
+	leafHex := hex.EncodeToString(core.SHA256([]byte("fuzz-leaf")))
+	offer, err := CreateKeyedSaleOffer(seller, []byte("verified-knowledge"), 1000, exp+600, 100, exp, buyerHex, leafHex, false)
 	if err != nil {
 		t.Fatalf("CreateKeyedSaleOffer: %v", err)
 	}
@@ -26,13 +27,13 @@ func TestOfferDigestV2Framing(t *testing.T) {
 	if offer.Version != 2 {
 		t.Fatalf("expected Offer Version=2, got %d", offer.Version)
 	}
-	if err := VerifySaleOffer(offer, buyerHex, ""); err != nil {
+	if err := VerifySaleOffer(offer, buyerHex, leafHex); err != nil {
 		t.Fatalf("VerifySaleOffer v2 failed: %v", err)
 	}
 	// Mutating CiphertextHex MUST fail signature verification (bound via ciphertextSha256).
 	tampered := *offer
 	tampered.CiphertextHex = offer.CiphertextHex + "00"
-	if err := VerifySaleOffer(&tampered, buyerHex, ""); err == nil {
+	if err := VerifySaleOffer(&tampered, buyerHex, leafHex); err == nil {
 		t.Fatal("VerifySaleOffer accepted tampered ciphertext")
 	}
 	// Verify ClearContentKey zeroizes the secret scalar.

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 
@@ -334,13 +335,20 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "authorize",
 			Description: "Evaluate the active native Cedar policy set for a principal, action, and resource.",
-		}, func(_ context.Context, _ *mcp.CallToolRequest, in authArgs) (*mcp.CallToolResult, any, error) {
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in authArgs) (*mcp.CallToolResult, any, error) {
 			pc := tb.mem.PolicyCommit()
 			dec, err := policy.Authorize(pc.Text, in.Principal, in.Action, in.Resource)
 			if err != nil {
 				return nil, nil, err
 			}
 			rcp := policy.MakeReceipt(in.Principal, in.Action, in.Resource, pc, dec.Allow)
+			if tb.mem.Chain() != nil {
+				if pub, pErr := tb.mem.Chain().SigningPubKey(ctx); pErr == nil && pub != nil {
+					_ = policy.SignDecisionReceipt(hex.EncodeToString(pub.Compressed()), func(digest []byte) ([]byte, error) {
+						return tb.mem.Chain().SignDigest(ctx, digest)
+					}, &rcp)
+				}
+			}
 			return jsonToolResult(map[string]any{"decision": dec, "receipt": rcp})
 		})
 

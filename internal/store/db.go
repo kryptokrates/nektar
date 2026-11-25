@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,12 +14,33 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// ComputeFragmentChainHash computes the domain-separated double-SHA-256 chain hash binding
+// each appended fragment to its shard predecessor: DSHA256("nektar:frag-chain:v1" || prevChain32 || leaf).
+func ComputeFragmentChainHash(prevChainHex, leafHex string) string {
+	var prev [32]byte
+	if prevChainHex != "" {
+		if b, err := hex.DecodeString(prevChainHex); err == nil && len(b) == 32 {
+			copy(prev[:], b)
+		}
+	}
+	leafBytes, _ := hex.DecodeString(leafHex)
+	buf := make([]byte, 0, len("nektar:frag-chain:v1")+32+len(leafBytes))
+	buf = append(buf, "nektar:frag-chain:v1"...)
+	buf = append(buf, prev[:]...)
+	buf = append(buf, leafBytes...)
+	h1 := sha256.Sum256(buf)
+	h2 := sha256.Sum256(h1[:])
+	return hex.EncodeToString(h2[:])
+}
+
 // FragmentRecord is one persisted append-only row in a memory shard.
 type FragmentRecord struct {
 	Shard        string `json:"shard"`
 	Seq          int64  `json:"seq"`
 	HDP          string `json:"hdp"`
 	Leaf         string `json:"leaf"`
+	PrevLeaf     string `json:"prevLeaf,omitempty"`
+	ChainHash    string `json:"chainHash,omitempty"`
 	Data         []byte `json:"data,omitempty"`
 	Ciphertext   []byte `json:"ciphertext,omitempty"`
 	KeyedMeta    []byte `json:"keyedMeta,omitempty"` // BRC-369 keyed envelope metadata
@@ -206,8 +229,10 @@ CREATE TABLE IF NOT EXISTS kv (
 	if err != nil {
 		return err
 	}
-	// Idempotent column migration for existing databases created before v0.4.1.
+	// Idempotent column migrations for existing databases.
 	_, _ = d.sql.Exec(`ALTER TABLE fragments ADD COLUMN tainted INTEGER NOT NULL DEFAULT 0`)
+	_, _ = d.sql.Exec(`ALTER TABLE fragments ADD COLUMN prev_leaf TEXT NOT NULL DEFAULT ''`)
+	_, _ = d.sql.Exec(`ALTER TABLE fragments ADD COLUMN chain_hash TEXT NOT NULL DEFAULT ''`)
 	// Clean up any orphaned FTS5 rows belonging to forgotten fragments (crash recovery for shredded records).
 	if _, err := d.sql.Exec(`
 		DELETE FROM fragments_fts
@@ -252,6 +277,12 @@ func (d *DB) AppendFragment(rec FragmentRecord) (FragmentRecord, bool, error) {
 		return FragmentRecord{}, false, err
 	}
 	rec.Seq = nextSeq
+	var prevLeaf, prevChain string
+	if nextSeq > 1 {
+		_ = tx.QueryRow(`SELECT leaf, COALESCE(chain_hash, '') FROM fragments WHERE shard = ? AND seq = ?`, rec.Shard, nextSeq-1).Scan(&prevLeaf, &prevChain)
+	}
+	rec.PrevLeaf = prevLeaf
+	rec.ChainHash = ComputeFragmentChainHash(prevChain, rec.Leaf)
 	if rec.BatchN == 0 && rec.AnchorTxID == "" {
 		rec.BatchN = -1
 		rec.LeafIndex = -1
@@ -261,11 +292,11 @@ func (d *DB) AppendFragment(rec FragmentRecord) (FragmentRecord, bool, error) {
 	}
 	_, err = tx.Exec(`
 		INSERT INTO fragments (
-			shard, seq, hdp, leaf, data, ciphertext, keyed_meta, provenance,
+			shard, seq, hdp, leaf, prev_leaf, chain_hash, data, ciphertext, keyed_meta, provenance,
 			level, class, borg_group, borg_epoch, batch_n, leaf_index,
 			anchor_txid, supersedes, forgotten, tainted, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.Shard, rec.Seq, rec.HDP, rec.Leaf, rec.Data, rec.Ciphertext, rec.KeyedMeta, rec.Provenance,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.Shard, rec.Seq, rec.HDP, rec.Leaf, rec.PrevLeaf, rec.ChainHash, rec.Data, rec.Ciphertext, rec.KeyedMeta, rec.Provenance,
 		rec.Level, rec.Class, rec.BorgGroup, rec.BorgEpoch, rec.BatchN, rec.LeafIndex,
 		rec.AnchorTxID, rec.Supersedes, boolToInt(rec.Forgotten), boolToInt(rec.Tainted), rec.CreatedAt,
 	)
@@ -456,7 +487,7 @@ func (d *DB) ListPendingAnchors() ([]PendingAnchor, error) {
 
 func (d *DB) getByHDP(shard, hdp string) (FragmentRecord, error) {
 	row := d.sql.QueryRow(`
-		SELECT shard, seq, hdp, leaf, data, ciphertext, keyed_meta, provenance,
+		SELECT shard, seq, hdp, leaf, COALESCE(prev_leaf, ''), COALESCE(chain_hash, ''), data, ciphertext, keyed_meta, provenance,
 		       level, class, borg_group, borg_epoch, batch_n, leaf_index,
 		       anchor_txid, supersedes, forgotten, tainted, created_at
 		FROM fragments WHERE shard = ? AND hdp = ?`, shard, hdp)
@@ -468,7 +499,7 @@ func (d *DB) GetFragment(shard string, seq int64) (FragmentRecord, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	row := d.sql.QueryRow(`
-		SELECT shard, seq, hdp, leaf, data, ciphertext, keyed_meta, provenance,
+		SELECT shard, seq, hdp, leaf, COALESCE(prev_leaf, ''), COALESCE(chain_hash, ''), data, ciphertext, keyed_meta, provenance,
 		       level, class, borg_group, borg_epoch, batch_n, leaf_index,
 		       anchor_txid, supersedes, forgotten, tainted, created_at
 		FROM fragments WHERE shard = ? AND seq = ?`, shard, seq)
@@ -480,7 +511,7 @@ func (d *DB) ListFragments(shard string) ([]FragmentRecord, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rows, err := d.sql.Query(`
-		SELECT shard, seq, hdp, leaf, data, ciphertext, keyed_meta, provenance,
+		SELECT shard, seq, hdp, leaf, COALESCE(prev_leaf, ''), COALESCE(chain_hash, ''), data, ciphertext, keyed_meta, provenance,
 		       level, class, borg_group, borg_epoch, batch_n, leaf_index,
 		       anchor_txid, supersedes, forgotten, tainted, created_at
 		FROM fragments WHERE shard = ? ORDER BY seq ASC`, shard)
@@ -504,7 +535,7 @@ func (d *DB) ListUnanchored(shard string) ([]FragmentRecord, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rows, err := d.sql.Query(`
-		SELECT shard, seq, hdp, leaf, data, ciphertext, keyed_meta, provenance,
+		SELECT shard, seq, hdp, leaf, COALESCE(prev_leaf, ''), COALESCE(chain_hash, ''), data, ciphertext, keyed_meta, provenance,
 		       level, class, borg_group, borg_epoch, batch_n, leaf_index,
 		       anchor_txid, supersedes, forgotten, tainted, created_at
 		FROM fragments WHERE shard = ? AND batch_n < 0 ORDER BY seq ASC`, shard)
@@ -528,7 +559,7 @@ func (d *DB) ListBatchFragments(shard string, batchN int64) ([]FragmentRecord, e
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rows, err := d.sql.Query(`
-		SELECT shard, seq, hdp, leaf, data, ciphertext, keyed_meta, provenance,
+		SELECT shard, seq, hdp, leaf, COALESCE(prev_leaf, ''), COALESCE(chain_hash, ''), data, ciphertext, keyed_meta, provenance,
 		       level, class, borg_group, borg_epoch, batch_n, leaf_index,
 		       anchor_txid, supersedes, forgotten, tainted, created_at
 		FROM fragments WHERE shard = ? AND batch_n = ? ORDER BY leaf_index ASC`, shard, batchN)
@@ -693,6 +724,56 @@ func (d *DB) UpdateAnchorProof(shard string, n int64, beef []byte, blockHeight i
 	return err
 }
 
+// ClearAnchorProofsFrom rolls back settled anchors at or above forkHeight after a chain reorg
+// so RefreshAnchorProofs re-acquires valid post-reorg BUMPs instead of serving orphaned proofs.
+func (d *DB) ClearAnchorProofsFrom(forkHeight int64) (int64, error) {
+	if forkHeight <= 0 {
+		return 0, nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	res, err := d.sql.Exec(`UPDATE anchors SET settled = 0, block_height = 0 WHERE settled = 1 AND block_height >= ?`, forkHeight)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// IsAnchorSettled reports whether txid corresponds to a settled batch anchor carrying persisted BEEF.
+func (d *DB) IsAnchorSettled(txid string) (bool, error) {
+	if txid == "" {
+		return false, nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var n int
+	err := d.sql.QueryRow(`SELECT COUNT(1) FROM anchors WHERE txid = ? AND settled = 1 AND length(beef) > 0`, txid).Scan(&n)
+	return n > 0, err
+}
+
+// GetAnchorByTxID fetches a batch anchor matching txid, if any.
+func (d *DB) GetAnchorByTxID(txid string) (BatchAnchor, bool, error) {
+	if txid == "" {
+		return BatchAnchor{}, false, nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var a BatchAnchor
+	var settled int
+	err := d.sql.QueryRow(`
+		SELECT shard, shard_id, n, size, root_hex, chained_hex, txid, beef, settled, block_height, created_at
+		FROM anchors WHERE txid = ? LIMIT 1`, txid).
+		Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.TxID, &a.Beef, &settled, &a.BlockHeight, &a.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return BatchAnchor{}, false, nil
+	}
+	if err != nil {
+		return BatchAnchor{}, false, err
+	}
+	a.Settled = settled != 0
+	return a, true, nil
+}
+
 // CommitReceiptAtomic atomically appends the __receipts__ fragment, persists the receipts row,
 // and records all citation edges inside a single SQLite transaction.
 func (d *DB) CommitReceiptAtomic(frag FragmentRecord, rec ReceiptRecord, cites []CitationEdge) (FragmentRecord, error) {
@@ -853,7 +934,7 @@ func scanFragment(s scanner) (FragmentRecord, error) {
 	var r FragmentRecord
 	var forgotten, tainted int
 	err := s.Scan(
-		&r.Shard, &r.Seq, &r.HDP, &r.Leaf, &r.Data, &r.Ciphertext, &r.KeyedMeta, &r.Provenance,
+		&r.Shard, &r.Seq, &r.HDP, &r.Leaf, &r.PrevLeaf, &r.ChainHash, &r.Data, &r.Ciphertext, &r.KeyedMeta, &r.Provenance,
 		&r.Level, &r.Class, &r.BorgGroup, &r.BorgEpoch, &r.BatchN, &r.LeafIndex,
 		&r.AnchorTxID, &r.Supersedes, &forgotten, &tainted, &r.CreatedAt,
 	)

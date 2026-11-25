@@ -1,6 +1,7 @@
 package market
 
 import (
+	"context"
 	crand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -145,19 +146,65 @@ func (a AIMatchingPolicy) Normalized(defaultMode string) AIMatchingPolicy {
 // Policy constrains automated agent market spending and selling.
 // Fail-closed: if KillSwitch is set or price exceeds caps, deals are refused.
 type Policy struct {
-	mu               sync.RWMutex
-	db               *store.DB
-	KillSwitch       bool              `json:"killSwitch"`
-	MaxSatsPerDeal   uint64            `json:"maxSatsPerDeal"`
-	MaxSatsPerDay    uint64            `json:"maxSatsPerDay"`
-	ZeroConfMaxSats  uint64            `json:"zeroConfMaxSats"`
-	AllowedDomains   map[string]bool   `json:"allowedDomains,omitempty"`
-	BlockedSellers   map[string]bool   `json:"blockedSellers,omitempty"`
-	PreferredSellers map[string]bool   `json:"preferredSellers,omitempty"`
-	DailySpentSats   uint64            `json:"dailySpentSats"`
-	BuyerApproved    bool              `json:"buyerApproved"`
-	SellerApproved   bool              `json:"sellerApproved"`
-	AIMatching       *AIMatchingPolicy `json:"aiMatching,omitempty"`
+	mu                       sync.RWMutex
+	db                       *store.DB
+	KillSwitch               bool              `json:"killSwitch"`
+	MaxSatsPerDeal           uint64            `json:"maxSatsPerDeal"`
+	MaxSatsPerDay            uint64            `json:"maxSatsPerDay"`
+	ZeroConfMaxSats          uint64            `json:"zeroConfMaxSats"`
+	ZeroConfMaxAggregateSats uint64            `json:"zeroConfMaxAggregateSats,omitempty"`
+	MaxUnconfirmedAncestors  int               `json:"maxUnconfirmedAncestors,omitempty"`
+	AllowedDomains           map[string]bool   `json:"allowedDomains,omitempty"`
+	BlockedSellers           map[string]bool   `json:"blockedSellers,omitempty"`
+	PreferredSellers         map[string]bool   `json:"preferredSellers,omitempty"`
+	DailySpentSats           uint64            `json:"dailySpentSats"`
+	BuyerApproved            bool              `json:"buyerApproved"`
+	SellerApproved           bool              `json:"sellerApproved"`
+	AIMatching               *AIMatchingPolicy `json:"aiMatching,omitempty"`
+	pinnedOperatorPub        string
+	activePolicyHash         string
+	tamperedPolicies         int
+}
+
+// SetPinnedOperatorPub pins an external Operator compressed secp256k1 pubkey (NEKTAR_OPERATOR_PUBKEY)
+// so SyncPolicyFromDB rejects unsigned or forged operator_policies rows (separation of powers).
+func (p *Policy) SetPinnedOperatorPub(pubHex string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.pinnedOperatorPub = strings.ToLower(strings.TrimSpace(pubHex))
+	p.mu.Unlock()
+}
+
+// PinnedOperatorPub returns the configured external operator public key hex (empty if unpinned).
+func (p *Policy) PinnedOperatorPub() string {
+	if p == nil {
+		return ""
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.pinnedOperatorPub
+}
+
+// ActivePolicyHash returns the canonical PolicyHash of the newest verified active operator policy.
+func (p *Policy) ActivePolicyHash() string {
+	if p == nil {
+		return ""
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.activePolicyHash
+}
+
+// TamperedPoliciesCount returns the number of active DB policy rows rejected during the last sync.
+func (p *Policy) TamperedPoliciesCount() int {
+	if p == nil {
+		return 0
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.tamperedPolicies
 }
 
 // AIMatchingPolicy returns a defensive copy of the active operator AI matching policy (or nil if unset).
@@ -228,12 +275,33 @@ func (p *Policy) AttachDB(db *store.DB) {
 
 func DefaultPolicy() *Policy {
 	return &Policy{
-		MaxSatsPerDeal:   50_000,
-		MaxSatsPerDay:    500_000,
-		ZeroConfMaxSats:  10_000,
-		BlockedSellers:   make(map[string]bool),
-		PreferredSellers: make(map[string]bool),
+		MaxSatsPerDeal:           50_000,
+		MaxSatsPerDay:            500_000,
+		ZeroConfMaxSats:          0, // fail-closed: 0-conf disabled until explicitly approved by operator policy
+		ZeroConfMaxAggregateSats: 0,
+		MaxUnconfirmedAncestors:  15,
+		BlockedSellers:           make(map[string]bool),
+		PreferredSellers:         make(map[string]bool),
 	}
+}
+
+// ZeroConfLimits returns the enforced per-deal cap, aggregate unconfirmed cap, and max unconfirmed ancestor depth.
+func (p *Policy) ZeroConfLimits() (perDeal uint64, aggregate uint64, maxAncestors int) {
+	if p == nil {
+		return 0, 0, 15
+	}
+	p.mu.RLock()
+	perDeal = p.ZeroConfMaxSats
+	aggregate = p.ZeroConfMaxAggregateSats
+	maxAncestors = p.MaxUnconfirmedAncestors
+	p.mu.RUnlock()
+	if aggregate == 0 && perDeal > 0 {
+		aggregate = perDeal * 4
+	}
+	if maxAncestors <= 0 {
+		maxAncestors = 15
+	}
+	return perDeal, aggregate, maxAncestors
 }
 
 func (p *Policy) SetKillSwitch(on bool) {
@@ -331,9 +399,136 @@ func ApprovePolicyPreset(db *store.DB, pol *Policy, preset string, domains []str
 	return ApprovePolicyPresetWithAI(db, pol, preset, domains, approvedBy, nil)
 }
 
+// OperatorPolicyDigest computes the domain-separated, length-framed digest signed by the Operator key
+// to separate policy-granting authority from hot agent execution ("The Agent Has Permission. Who Pays?").
+func OperatorPolicyDigest(rec store.OperatorPolicyRecord) []byte {
+	roles := append([]string(nil), rec.Roles...)
+	sort.Strings(roles)
+	doms := append([]string(nil), rec.Domains...)
+	sort.Strings(doms)
+	return core.DSHA256(core.Concat(
+		[]byte("nektar:operator-policy:v2"),
+		core.Field([]byte(rec.PolicyID)),
+		core.Field([]byte(rec.PolicyHash)),
+		core.Field([]byte(strings.Join(roles, ","))),
+		core.Field([]byte(strings.Join(doms, ","))),
+		core.U64LE(rec.MaxPerDeal),
+		core.U64LE(rec.MaxPerDay),
+		core.U64LE(rec.ZeroConfMax),
+		core.Field([]byte(rec.AIPolicyJSON)),
+		core.Field([]byte(rec.ApprovedBy)),
+		core.U64LE(uint64(rec.ApprovedAt)),
+	))
+}
+
+// SignOperatorPolicy signs rec with the operator key via signDigest (preserving zero raw key exposure).
+func SignOperatorPolicy(ctx context.Context, operatorPub string, signDigest func(context.Context, []byte) ([]byte, error), rec *store.OperatorPolicyRecord) error {
+	if rec == nil || operatorPub == "" || signDigest == nil {
+		return errors.New("market: missing policy record, operatorPub, or signer")
+	}
+	if _, _, err := core.ParseStrictCompressedPubKey(operatorPub); err != nil {
+		return fmt.Errorf("market: invalid operatorPub: %w", err)
+	}
+	rec.OperatorPub = strings.ToLower(strings.TrimSpace(operatorPub))
+	sig, err := signDigest(ctx, OperatorPolicyDigest(*rec))
+	if err != nil {
+		return err
+	}
+	rec.OperatorSig = hex.EncodeToString(sig)
+	return nil
+}
+
+// VerifyOperatorPolicy verifies rec's canonical PolicyHash and cryptographic OperatorSig.
+// When pinnedOperatorPub is non-empty, rec MUST be signed by that exact pinned operator key (fail-closed).
+func VerifyOperatorPolicy(rec store.OperatorPolicyRecord, pinnedOperatorPub string) error {
+	hashInput := map[string]any{
+		"roles":       rec.Roles,
+		"domains":     rec.Domains,
+		"maxPerDeal":  rec.MaxPerDeal,
+		"maxPerDay":   rec.MaxPerDay,
+		"zeroConfMax": rec.ZeroConfMax,
+	}
+	if strings.TrimSpace(rec.AIPolicyJSON) != "" {
+		var ai AIMatchingPolicy
+		if err := json.Unmarshal([]byte(rec.AIPolicyJSON), &ai); err != nil {
+			return fmt.Errorf("market: corrupt aiPolicyJson on policy %s: %w", rec.PolicyID, err)
+		}
+		hashInput["aiMatching"] = &ai
+	}
+	canon, err := core.CanonicalJSON(hashInput)
+	if err != nil {
+		return err
+	}
+	wantHash := hex.EncodeToString(core.SHA256(canon))
+	if rec.PolicyHash != "" && !strings.EqualFold(rec.PolicyHash, wantHash) {
+		return fmt.Errorf("market: policy %s hash mismatch (tampered SQLite row)", rec.PolicyID)
+	}
+	pinned := strings.ToLower(strings.TrimSpace(pinnedOperatorPub))
+	if pinned != "" {
+		if !strings.EqualFold(strings.TrimSpace(rec.OperatorPub), pinned) {
+			return fmt.Errorf("market: policy %s operatorPub %q != pinned %q", rec.PolicyID, rec.OperatorPub, pinned)
+		}
+		if strings.TrimSpace(rec.OperatorSig) == "" {
+			return fmt.Errorf("market: policy %s missing required operatorSig under pinned operator key", rec.PolicyID)
+		}
+	}
+	if strings.TrimSpace(rec.OperatorSig) != "" {
+		pub, _, err := core.ParseStrictCompressedPubKey(rec.OperatorPub)
+		if err != nil {
+			return fmt.Errorf("market: policy %s invalid operatorPub: %w", rec.PolicyID, err)
+		}
+		sig, err := core.ParseStrictLowSDER(rec.OperatorSig)
+		if err != nil {
+			return fmt.Errorf("market: policy %s invalid operatorSig: %w", rec.PolicyID, err)
+		}
+		if !sig.Verify(OperatorPolicyDigest(rec), pub) {
+			return fmt.Errorf("market: policy %s operatorSig verification failed", rec.PolicyID)
+		}
+	}
+	return nil
+}
+
+// ApprovePolicyPresetSigned creates, cryptographically signs with operatorPub, persists, and activates a policy preset.
+func ApprovePolicyPresetSigned(
+	ctx context.Context,
+	db *store.DB,
+	pol *Policy,
+	preset string,
+	domains []string,
+	approvedBy string,
+	aiPol *AIMatchingPolicy,
+	operatorPub string,
+	signDigest func(context.Context, []byte) ([]byte, error),
+) (store.OperatorPolicyRecord, error) {
+	rec, err := buildOperatorPolicyRecord(preset, domains, approvedBy, aiPol)
+	if err != nil {
+		return store.OperatorPolicyRecord{}, err
+	}
+	if operatorPub != "" && signDigest != nil {
+		if err := SignOperatorPolicy(ctx, operatorPub, signDigest, &rec); err != nil {
+			return store.OperatorPolicyRecord{}, err
+		}
+	}
+	if db != nil {
+		if err := db.SaveOperatorPolicy(rec); err != nil {
+			return store.OperatorPolicyRecord{}, err
+		}
+	}
+	if pol != nil && db != nil {
+		_ = SyncPolicyFromDB(db, pol)
+	} else if pol != nil {
+		applyPolicyRecord(pol, rec)
+	}
+	return rec, nil
+}
+
 // ApprovePolicyPresetWithAI creates, validates, hashes, persists, and activates an operator policy preset
 // with optional Jev AI matching egress/privacy/threshold controls bound into PolicyHash.
 func ApprovePolicyPresetWithAI(db *store.DB, pol *Policy, preset string, domains []string, approvedBy string, aiPol *AIMatchingPolicy) (store.OperatorPolicyRecord, error) {
+	return ApprovePolicyPresetSigned(context.Background(), db, pol, preset, domains, approvedBy, aiPol, "", nil)
+}
+
+func buildOperatorPolicyRecord(preset string, domains []string, approvedBy string, aiPol *AIMatchingPolicy) (store.OperatorPolicyRecord, error) {
 	if err := aiPol.Validate(); err != nil {
 		return store.OperatorPolicyRecord{}, err
 	}
@@ -391,16 +586,6 @@ func ApprovePolicyPresetWithAI(db *store.DB, pol *Policy, preset string, domains
 		return store.OperatorPolicyRecord{}, err
 	}
 	rec.PolicyHash = hex.EncodeToString(core.SHA256(canon))
-	if db != nil {
-		if err := db.SaveOperatorPolicy(rec); err != nil {
-			return store.OperatorPolicyRecord{}, err
-		}
-	}
-	if pol != nil && db != nil {
-		_ = SyncPolicyFromDB(db, pol)
-	} else if pol != nil {
-		applyPolicyRecord(pol, rec)
-	}
 	return rec, nil
 }
 
@@ -452,6 +637,9 @@ func SyncPolicyFromDB(db *store.DB, pol *Policy) error {
 	pol.mu.Lock()
 	pol.BuyerApproved = false
 	pol.SellerApproved = false
+	pinnedOp := pol.pinnedOperatorPub
+	pol.activePolicyHash = ""
+	pol.tamperedPolicies = 0
 	var maxDeal, maxDay, zeroConf uint64
 	activeCount := 0
 	doms := make(map[string]bool)
@@ -460,7 +648,15 @@ func SyncPolicyFromDB(db *store.DB, pol *Policy) error {
 		if !rec.Active {
 			continue
 		}
+		// Fail closed on tampered PolicyHash or invalid/unpinned OperatorSig!
+		if vErr := VerifyOperatorPolicy(rec, pinnedOp); vErr != nil {
+			pol.tamperedPolicies++
+			continue
+		}
 		activeCount++
+		if pol.activePolicyHash == "" {
+			pol.activePolicyHash = rec.PolicyHash
+		}
 		for _, r := range rec.Roles {
 			if r == "buyer" {
 				pol.BuyerApproved = true
@@ -495,13 +691,24 @@ func SyncPolicyFromDB(db *store.DB, pol *Policy) error {
 		pol.MaxSatsPerDeal = maxDeal
 		pol.MaxSatsPerDay = maxDay
 		pol.ZeroConfMaxSats = zeroConf
+		if zeroConf > 0 && pol.ZeroConfMaxAggregateSats == 0 {
+			pol.ZeroConfMaxAggregateSats = zeroConf * 4
+		}
+		if pol.MaxUnconfirmedAncestors <= 0 {
+			pol.MaxUnconfirmedAncestors = 15
+		}
 		pol.AIMatching = latestAI
 	} else if len(list) > 0 {
 		// All persisted policies were revoked: reset caps to 0 (fail-closed, never keep stale revoked caps).
 		pol.MaxSatsPerDeal = 0
 		pol.MaxSatsPerDay = 0
 		pol.ZeroConfMaxSats = 0
+		pol.ZeroConfMaxAggregateSats = 0
 		pol.AIMatching = nil
+	} else {
+		// Empty operator policy table: fail closed on counterparty zero-conf acceptance.
+		pol.ZeroConfMaxSats = 0
+		pol.ZeroConfMaxAggregateSats = 0
 	}
 	if len(doms) > 0 {
 		pol.AllowedDomains = doms
@@ -538,6 +745,12 @@ func RankOffers(want bstack.WantAd, offers []bstack.OfferAd, pol *Policy) []Scor
 func RankOffersWithRep(want bstack.WantAd, offers []bstack.OfferAd, pol *Policy, reps map[string]store.SellerReputation) []ScoredOffer {
 	var ranked []ScoredOffer
 	for _, o := range offers {
+		if want.Net == "main" || want.Net == "testnet" {
+			leafRaw, lErr := hex.DecodeString(strings.TrimSpace(o.Leaf))
+			if lErr != nil || len(leafRaw) != 32 {
+				continue
+			}
+		}
 		if want.MaxSats > 0 && o.PriceSats > want.MaxSats {
 			continue
 		}

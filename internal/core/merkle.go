@@ -5,10 +5,16 @@ import (
 	"math/bits"
 )
 
+const (
+	// MaxMerkleProofDepth bounds sender-held Merkle inclusion proofs (mfspv bound: depth 48 covers 2^48 leaves / 10^11 tx/s blocks).
+	MaxMerkleProofDepth = 48
+)
+
 var (
-	ErrEmptyLeaves  = errors.New("merkle: empty leaves")
-	ErrIndexOutRange = errors.New("merkle: index out of range")
-	ErrInvalidProof = errors.New("merkle: invalid leaf, sibling length, or negative index")
+	ErrEmptyLeaves      = errors.New("merkle: empty leaves")
+	ErrIndexOutRange    = errors.New("merkle: index out of range")
+	ErrInvalidProof     = errors.New("merkle: invalid leaf, sibling length, or negative index")
+	ErrProofDepthExceed = errors.New("merkle: proof depth exceeds MaxMerkleProofDepth")
 )
 
 // MerkleProof is an inclusion path for leaf at Index within a batch Merkle tree.
@@ -106,6 +112,9 @@ func ComputeMerkleProof(leaves [][]byte, index int) (*MerkleProof, error) {
 func ReconstructRootChecked(leaf []byte, proof *MerkleProof) ([]byte, error) {
 	if proof == nil || proof.Index < 0 || len(leaf) != 32 {
 		return nil, ErrInvalidProof
+	}
+	if len(proof.Siblings) > MaxMerkleProofDepth {
+		return nil, ErrProofDepthExceed
 	}
 	cur := leaf
 	idx := proof.Index

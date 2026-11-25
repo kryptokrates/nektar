@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	// AdvisoryMatchNote preserves Nektar's Honesty Rule: Jev AI outputs are probabilistic System-1
+	// AdvisoryMatchNote preserves Nektar's Honesty Rule: open-weight System-1 outputs are probabilistic
 	// match telemetry, never authoritative truth proofs or hard policy overrides.
-	AdvisoryMatchNote = "Probabilistic System-1 match signal (Jev AI); deterministic policy, Cedar, SpendGuard, and cryptographic proofs remain authoritative."
+	AdvisoryMatchNote = "Probabilistic System-1 match signal (self-hosted open-weight matcher); deterministic policy, Cedar, SpendGuard, and cryptographic proofs remain authoritative."
 
 	maxSellerJevCandidates = 8
 	maxBuyerJevOffers      = 12

@@ -12,6 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lightwebinc/bcommon/guard"
+
+	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
@@ -378,6 +381,13 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 			return nil, err
 		}
 		rcp := policy.MakeReceipt(in.Principal, in.Action, in.Resource, pc, dec.Allow)
+		if tb.mem.Chain() != nil {
+			if pub, pErr := tb.mem.Chain().SigningPubKey(ctx); pErr == nil && pub != nil {
+				_ = policy.SignDecisionReceipt(hex.EncodeToString(pub.Compressed()), func(digest []byte) ([]byte, error) {
+					return tb.mem.Chain().SignDigest(ctx, digest)
+				}, &rcp)
+			}
+		}
 		return map[string]any{"decision": dec, "receipt": rcp}, nil
 
 	case "status":
@@ -557,9 +567,10 @@ func (tb *Toolbox) requestFaucet(ctx context.Context, address, hubURL string) (s
 	}
 	// If this node hosts an embedded hub in memory/testnet mode, drip locally!
 	if tb.hubNode != nil {
-		return hub.DripFaucet(ctx, tb.mem, address, 2000, 10_000)
+		txid, _, sats, err := hub.DripFaucetBEEF(ctx, tb.mem, address, 2000, 10_000)
+		return txid, sats, err
 	}
-	// Otherwise try calling connected Hub /v1/faucet!
+	// Otherwise call connected Hub /v1/faucet and verify carried AtomicBEEF immediately (Finding #12, #20)!
 	targets := []string{}
 	if hubURL != "" {
 		targets = append(targets, strings.TrimRight(hubURL, "/"))
@@ -570,6 +581,7 @@ func (tb *Toolbox) requestFaucet(ctx context.Context, address, hubURL string) (s
 		}
 	}
 	body, _ := json.Marshal(map[string]any{"address": address})
+	isLive := tb.mem.Chain().Network() != "memory"
 	for _, base := range targets {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/faucet", bytes.NewReader(body))
 		if err != nil {
@@ -581,14 +593,59 @@ func (tb *Toolbox) requestFaucet(ctx context.Context, address, hubURL string) (s
 			continue
 		}
 		var parsed struct {
-			TxID  string `json:"txid"`
-			Sats  uint64 `json:"sats"`
-			Error string `json:"error"`
+			TxID    string `json:"txid"`
+			BEEFHex string `json:"beefHex"`
+			Sats    uint64 `json:"sats"`
+			Error   string `json:"error"`
 		}
-		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&parsed)
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&parsed)
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusOK && parsed.TxID != "" {
-			return parsed.TxID, parsed.Sats, nil
+			if strings.TrimSpace(parsed.BEEFHex) == "" {
+				if isLive {
+					return "", 0, fmt.Errorf("faucet %s returned bare txid %s without required AtomicBEEF", base, parsed.TxID)
+				}
+				return parsed.TxID, parsed.Sats, nil
+			}
+			rawBeef, dErr := hex.DecodeString(strings.TrimSpace(parsed.BEEFHex))
+			if dErr != nil {
+				return "", 0, fmt.Errorf("faucet %s returned invalid beefHex: %w", base, dErr)
+			}
+			_, tx, txHash, pErr := guard.ParseBEEF(rawBeef, guard.DefaultBound)
+			if pErr != nil || tx == nil || txHash == nil {
+				return "", 0, fmt.Errorf("faucet %s returned unparseable AtomicBEEF: %v", base, pErr)
+			}
+			if !strings.EqualFold(txHash.String(), parsed.TxID) {
+				return "", 0, fmt.Errorf("faucet %s txid %s mismatches AtomicBEEF txid %s", base, parsed.TxID, txHash.String())
+			}
+			fundScript, fsErr := tb.mem.Chain().Signer().FundScript()
+			if fsErr != nil {
+				return "", 0, fsErr
+			}
+			var gotSats uint64
+			for _, o := range tx.Outputs {
+				if o.LockingScript != nil && bytes.Equal(*o.LockingScript, *fundScript) {
+					gotSats += o.Satoshis
+				}
+			}
+			if gotSats == 0 || (parsed.Sats > 0 && gotSats < parsed.Sats) {
+				return "", 0, fmt.Errorf("faucet %s BEEF pays %d sats to our address (< declared %d sats)", base, gotSats, parsed.Sats)
+			}
+			if isLive {
+				if _, vErr := chain.VerifyCounterpartyPaymentBEEF(ctx, rawBeef, tb.mem.Chain().Tracker(), chain.PaymentVerifyOpts{
+					ExpectedAmountSats: gotSats,
+					SettleDepth:        tb.mem.Chain().SettleDepth(),
+					AllowZeroConf:      true,
+				}); vErr != nil {
+					return "", 0, fmt.Errorf("faucet %s SPV verification failed: %w", base, vErr)
+				}
+				if tb.mem.Chain().WalletMode() == "embedded" {
+					if _, impErr := tb.mem.Chain().ImportBEEF(ctx, rawBeef); impErr != nil {
+						return "", 0, fmt.Errorf("faucet %s import verified BEEF failed: %w", base, impErr)
+					}
+				}
+			}
+			return parsed.TxID, gotSats, nil
 		}
 		if parsed.Error != "" {
 			return "", 0, errors.New(parsed.Error)
@@ -617,17 +674,36 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 		nextSteps = append(nextSteps, "Run `nektar remember -shard notes -text \"...\"`")
 	}
 
-	// 2. Wallet & UTXO check
-	bal := tb.mem.Chain().BalanceSats()
-	utxos := tb.mem.Chain().UTXOCount()
+	// 2. Wallet, proven fuel stock, unproven depth, pending anchors, and SPV witness check (Finding #42)
+	bal, balErr := tb.mem.Chain().Balance(ctx)
 	addr, _ := tb.mem.Chain().FundAddress()
-	if bal > 0 && utxos >= 2 {
-		checks = append(checks, DoctorCheck{Name: "wallet", Status: "green", Detail: fmt.Sprintf("%d sats across %d UTXO(s) (%s)", bal, utxos, addr)})
-	} else if bal > 0 {
-		checks = append(checks, DoctorCheck{Name: "wallet", Status: "amber", Detail: fmt.Sprintf("%d sats on 1 UTXO — will auto-split on next trade", bal)})
+	pendingAnchors, _ := tb.mem.DB().CountPendingAnchors()
+	unsettledAnchors, _ := tb.mem.DB().CountUnsettledAnchors()
+	zcSats, zcCount := tb.mem.Chain().ZeroConfWatch().Exposure()
+	if balErr != nil {
+		checks = append(checks, DoctorCheck{Name: "wallet", Status: "red", Detail: fmt.Sprintf("wallet balance query failed: %v", balErr)})
+	} else if bal.SpendableSats > 0 && bal.SpendableCount >= 2 {
+		st := "green"
+		detail := fmt.Sprintf("%d sats (%d confirmed / %d unproven) across %d UTXO(s); fuel=%d proven/%d unproven; maxUnprovenDepth=%d (%s)",
+			bal.SpendableSats, bal.ConfirmedSats, bal.UnprovenSats, bal.SpendableCount,
+			bal.ProvenFuelCount, bal.UnprovenFuelCount, bal.MaxUnprovenDepth, addr)
+		if bal.MaxUnprovenDepth >= 15 {
+			st = "amber"
+			detail += " — unproven chain depth at cap; waiting for block confirmation"
+		}
+		checks = append(checks, DoctorCheck{Name: "wallet", Status: st, Detail: detail})
+	} else if bal.SpendableSats > 0 {
+		checks = append(checks, DoctorCheck{Name: "wallet", Status: "amber", Detail: fmt.Sprintf("%d sats (%d confirmed / %d unproven) on %d UTXO(s) — fuel=%d proven/%d unproven", bal.SpendableSats, bal.ConfirmedSats, bal.UnprovenSats, bal.SpendableCount, bal.ProvenFuelCount, bal.UnprovenFuelCount)})
 	} else {
 		checks = append(checks, DoctorCheck{Name: "wallet", Status: "amber", Detail: fmt.Sprintf("0 sats at %s", addr)})
 		nextSteps = append(nextSteps, "Fund wallet via 1-click Testnet Faucet or `nektar serve` dashboard")
+	}
+	if pendingAnchors > 0 || unsettledAnchors > 0 {
+		checks = append(checks, DoctorCheck{
+			Name:   "anchors",
+			Status: "amber",
+			Detail: fmt.Sprintf("%d pending anchor(s), %d broadcast anchor(s) awaiting mined BUMP (settleDepth=%d)", pendingAnchors, unsettledAnchors, tb.mem.Chain().SettleDepth()),
+		})
 	}
 
 	// 3. Operator policy check
@@ -638,7 +714,13 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 			activePols++
 		}
 	}
-	if activePols > 0 {
+	if tb.mkt != nil && tb.mkt.Policy().TamperedPoliciesCount() > 0 {
+		checks = append(checks, DoctorCheck{
+			Name:   "policy",
+			Status: "red",
+			Detail: fmt.Sprintf("%d active operator policy row(s) rejected for hash/signature tamper (fail-closed)", tb.mkt.Policy().TamperedPoliciesCount()),
+		})
+	} else if activePols > 0 {
 		checks = append(checks, DoctorCheck{Name: "policy", Status: "green", Detail: fmt.Sprintf("%d active operator market policy(ies)", activePols)})
 	} else {
 		checks = append(checks, DoctorCheck{Name: "policy", Status: "amber", Detail: "no market policy approved yet (trades will pause for approval)"})
@@ -669,8 +751,14 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 		})
 		if mm := tb.broker.MatcherMetrics(); mm.Enabled {
 			st := "green"
-			detail := fmt.Sprintf("mode=%s requests=%d rejections=%d escalations=%d fallbacks=%d inputTokens=%d",
-				mm.DefaultMode, mm.Requests, mm.Rejections, mm.Escalations, mm.Fallbacks, mm.InputTokens)
+			ep := ""
+			model := ""
+			if mm.ClientHealth != nil {
+				ep = mm.ClientHealth.Endpoint
+				model = mm.ClientHealth.Model
+			}
+			detail := fmt.Sprintf("provider=openweight endpoint=%s model=%s mode=%s requests=%d rejections=%d escalations=%d fallbacks=%d inputTokens=%d",
+				ep, model, mm.DefaultMode, mm.Requests, mm.Rejections, mm.Escalations, mm.Fallbacks, mm.InputTokens)
 			if mm.ClientHealth != nil && mm.ClientHealth.CircuitOpen {
 				st = "amber"
 				detail += " (circuit breaker open)"
@@ -694,6 +782,49 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 		}
 	}
 
+	// 6. Local shard hash-chain integrity, surviving obligations, and verifiable book reconciliation.
+	if reports, iErr := tb.mem.VerifyAllShardsIntegrity(); iErr == nil {
+		broken := 0
+		var brokenDetail string
+		for _, r := range reports {
+			if !r.OK {
+				broken++
+				if brokenDetail == "" {
+					brokenDetail = fmt.Sprintf("shard %s broken at seq %d: %s", r.Shard, r.BrokenSeq, r.Reason)
+				}
+			}
+		}
+		if broken > 0 {
+			checks = append(checks, DoctorCheck{Name: "shard_integrity", Status: "red", Detail: brokenDetail})
+		} else {
+			checks = append(checks, DoctorCheck{Name: "shard_integrity", Status: "green", Detail: fmt.Sprintf("%d user shard(s) hash-chain verified", len(reports))})
+		}
+	}
+	if openOb, overdueOb, oErr := tb.mem.DB().CountObligations(); oErr == nil {
+		st := "green"
+		if overdueOb > 0 {
+			st = "amber"
+		}
+		checks = append(checks, DoctorCheck{
+			Name:   "obligations",
+			Status: st,
+			Detail: fmt.Sprintf("open=%d overdue=%d surviving commercial obligations", openOb, overdueOb),
+		})
+	}
+	if bookRep, bErr := market.ReconcileBooks(tb.mem.DB(), tb.mem.Chain().SpendGuard(), time.Now()); bErr == nil {
+		st := "green"
+		detail := fmt.Sprintf("buyerDeals=%d (%d sats) sellerDeals=%d (%d sats) bilateralReceipts=%d",
+			bookRep.SettledBuyerDeals, bookRep.SettledBuyerSats, bookRep.SettledSellerDeals, bookRep.SettledSellerSats, bookRep.BilateralReceipts)
+		if !bookRep.OK {
+			st = "amber"
+			if bookRep.InvalidReceipts > 0 {
+				st = "red"
+			}
+			detail += fmt.Sprintf(" anomalies=%d (%s)", len(bookRep.Anomalies), bookRep.Anomalies[0])
+		}
+		checks = append(checks, DoctorCheck{Name: "book_reconciliation", Status: st, Detail: detail})
+	}
+
 	overall := "green"
 	for _, c := range checks {
 		if c.Status == "red" {
@@ -705,17 +836,27 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 		}
 	}
 	return map[string]any{
-		"ok":              overall != "red",
-		"verdict":         overall,
-		"network":         tb.mem.Chain().Network(),
-		"shardNames":      shards,
-		"records":         total,
-		"anchoredRecords": anchored,
-		"checks":          checks,
-		"withholdings":    withholdings,
-		"nextSteps":       nextSteps,
-		"hints":           nextSteps,
-		"truthNote":       reasoning.TruthNote,
+		"ok":                   overall != "red",
+		"verdict":              overall,
+		"network":              tb.mem.Chain().Network(),
+		"shardNames":           shards,
+		"records":              total,
+		"anchoredRecords":      anchored,
+		"confirmedSats":        bal.ConfirmedSats,
+		"unprovenSats":         bal.UnprovenSats,
+		"provenFuelCount":      bal.ProvenFuelCount,
+		"unprovenFuelCount":    bal.UnprovenFuelCount,
+		"maxUnprovenDepth":     bal.MaxUnprovenDepth,
+		"pendingAnchors":       pendingAnchors,
+		"unsettledAnchors":     unsettledAnchors,
+		"zeroConfExposureSats": zcSats,
+		"zeroConfCount":        zcCount,
+		"settleDepth":          tb.mem.Chain().SettleDepth(),
+		"checks":               checks,
+		"withholdings":         withholdings,
+		"nextSteps":            nextSteps,
+		"hints":                nextSteps,
+		"truthNote":            reasoning.TruthNote,
 	}
 }
 

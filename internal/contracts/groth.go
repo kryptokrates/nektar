@@ -1,12 +1,15 @@
 package contracts
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 
+	"github.com/bsv-blockchain/go-sdk/spv"
 	"github.com/bsv-blockchain/go-sdk/transaction"
+	"github.com/bsv-blockchain/go-sdk/transaction/chaintracker"
 
 	"github.com/kryptokrates/nektar/internal/core"
 )
@@ -18,7 +21,10 @@ type GrothSettlementResult struct {
 	VerifierVKHash    string `json:"verifierVkHash"`
 	DocPushStatement  string `json:"docPushStatement"`
 	JournalRoot       string `json:"journalRoot"`
-	Verified          bool   `json:"verified"`
+	BlockHeight       uint32 `json:"blockHeight,omitempty"`
+	Depth             int    `json:"depth,omitempty"`
+	StructuralBound   bool   `json:"structuralBound"`
+	Verified          bool   `json:"verified"` // true ONLY after witnessed-header BUMP + settleDepth + spv.Verify!
 }
 
 // ExtractGrothDocPush extracts the leading doc-push statement root from a Groth16 verifier locking script
@@ -57,12 +63,14 @@ func ExtractGrothDocPush(verifierLockScript []byte) ([]byte, []byte, error) {
 	return stmt, vkCode, nil
 }
 
-// VerifyGrothClaimSettlement performs the mandatory off-chain F-18 cross-check for NektarGrothClaim:
-//  1. Verifies settleTx has exactly 2 inputs and input[1] spends verifierOutpoint (verifierTx:verifierVout).
-//  2. Parses verifierTx's locking script doc-push prefix `<statement-root> <index> OP_2DROP <vkCode>`.
-//  3. Verifies sha256(vkCode) == expectedVKScriptHashHex (rejecting dummy OP_TRUE or dev setups).
-//  4. Verifies statement-root == expectedJournalRoot (binding the verified proof to ClaimVerdict.journalRoot).
-func VerifyGrothClaimSettlement(
+// VerifyGrothDocPushBinding performs structural off-chain F-18 doc-push binding checks ONLY:
+//   1. Verifies settleTx has 2 inputs and input[1] names verifierOutpoint (verifierTx:verifierVout).
+//   2. Parses verifierTx's locking script doc-push prefix `<statement-root> <index> OP_2DROP <vkCode>`.
+//   3. Verifies sha256(vkCode) == expectedVKScriptHashHex and statement-root == expectedJournalRoot.
+//
+// It NEVER sets Verified=true (use VerifyGrothClaimSettlementSPV with a witnessed ChainTracker + minDepth
+// to verify mined BUMP settlement and script execution).
+func VerifyGrothDocPushBinding(
 	settleTx *transaction.Transaction,
 	verifierTx *transaction.Transaction,
 	verifierVout uint32,
@@ -101,6 +109,78 @@ func VerifyGrothClaimSettlement(
 		VerifierVKHash:   vkHashHex,
 		DocPushStatement: hex.EncodeToString(stmt),
 		JournalRoot:      hex.EncodeToString(expectedJournalRoot),
-		Verified:         true,
+		StructuralBound:  true,
+		Verified:         false,
 	}, nil
+}
+
+// VerifyGrothClaimSettlement is retained for compatibility and explicitly returns StructuralBound=true,
+// Verified=false because it runs without a ChainTracker or script execution. For consensus-verified
+// settlement (Verified=true), call VerifyGrothClaimSettlementSPV.
+func VerifyGrothClaimSettlement(
+	settleTx *transaction.Transaction,
+	verifierTx *transaction.Transaction,
+	verifierVout uint32,
+	expectedVKScriptHashHex string,
+	expectedJournalRoot []byte,
+) (*GrothSettlementResult, error) {
+	return VerifyGrothDocPushBinding(settleTx, verifierTx, verifierVout, expectedVKScriptHashHex, expectedJournalRoot)
+}
+
+// VerifyGrothClaimSettlementSPV performs full structural + consensus SPV verification of a
+// NektarGrothClaim settlement: doc-push binding, witnessed header BUMP verification at >= minDepth,
+// and go-sdk/spv.Verify consensus/script execution before setting Verified=true.
+func VerifyGrothClaimSettlementSPV(
+	ctx context.Context,
+	settleTx *transaction.Transaction,
+	verifierTx *transaction.Transaction,
+	verifierVout uint32,
+	expectedVKScriptHashHex string,
+	expectedJournalRoot []byte,
+	tracker chaintracker.ChainTracker,
+	minDepth int,
+) (*GrothSettlementResult, error) {
+	if tracker == nil {
+		return nil, errors.New("groth: witnessed ChainTracker is required for consensus SPV verification")
+	}
+	if minDepth <= 0 {
+		minDepth = 1
+	}
+	res, err := VerifyGrothDocPushBinding(settleTx, verifierTx, verifierVout, expectedVKScriptHashHex, expectedJournalRoot)
+	if err != nil {
+		return nil, err
+	}
+	if settleTx.MerklePath == nil {
+		return nil, errors.New("groth: settleTx lacks a mined MerklePath (BUMP)")
+	}
+	root, rErr := settleTx.MerklePath.ComputeRoot(settleTx.TxID())
+	if rErr != nil || root == nil {
+		return nil, fmt.Errorf("groth: compute settleTx merkle root: %v", rErr)
+	}
+	valid, vErr := tracker.IsValidRootForHeight(ctx, root, settleTx.MerklePath.BlockHeight)
+	if vErr != nil {
+		return nil, fmt.Errorf("groth: header tracker verify failed: %w", vErr)
+	}
+	if !valid {
+		return nil, errors.New("groth: settleTx BUMP root invalid in header chain")
+	}
+	tip, tErr := tracker.CurrentHeight(ctx)
+	if tErr != nil {
+		return nil, fmt.Errorf("groth: header tip height failed: %w", tErr)
+	}
+	depth := 0
+	if tip >= settleTx.MerklePath.BlockHeight {
+		depth = int(tip-settleTx.MerklePath.BlockHeight) + 1
+	}
+	if depth < minDepth {
+		return nil, fmt.Errorf("groth: settleTx confirmation depth %d < required minDepth %d", depth, minDepth)
+	}
+	// Verify settleTx (including script execution when unmined inputs exist) via go-sdk/spv.Verify.
+	if ok, sErr := spv.Verify(ctx, settleTx, tracker, nil); sErr != nil || !ok {
+		return nil, fmt.Errorf("groth: spv.Verify failed: %v", sErr)
+	}
+	res.BlockHeight = settleTx.MerklePath.BlockHeight
+	res.Depth = depth
+	res.Verified = true
+	return res, nil
 }

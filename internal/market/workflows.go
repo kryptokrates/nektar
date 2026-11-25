@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-sdk/chainhash"
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/lightwebinc/bcommon/guard"
@@ -37,6 +38,7 @@ type DealState struct {
 	Want         bstack.WantAd             `json:"want"`
 	ChosenOffer  *bstack.OfferAd           `json:"chosenOffer,omitempty"`
 	MatchAudit   *MatchAudit               `json:"matchAudit,omitempty"`
+	DealReceipt  *DealReceipt              `json:"dealReceipt,omitempty"`
 	ChirpURL     string                    `json:"chirpUrl,omitempty"`
 	SaleOffer    *contracts.KeyedSaleOffer `json:"saleOffer,omitempty"`
 	PaymentTxID  string                    `json:"paymentTxid,omitempty"`
@@ -82,11 +84,13 @@ type SellerDealInput struct {
 	ProofBundle     *contracts.ProofBundle    `json:"proofBundle,omitempty"`
 }
 
-// PaymentSignal delivers a buyer's payment txid to a waiting SellerDeal workflow.
+// PaymentSignal delivers a buyer's payment txid + optional verified BUMP proof to a waiting SellerDeal workflow.
 type PaymentSignal struct {
-	TxID       string `json:"txid"`
-	AmountSats uint64 `json:"amountSats"`
-	Confirmed  bool   `json:"confirmed"`
+	TxID          string `json:"txid"`
+	AmountSats    uint64 `json:"amountSats"`
+	Confirmed     bool   `json:"confirmed"`
+	BlockHeight   uint32 `json:"blockHeight,omitempty"`
+	MerklePathHex string `json:"merklePathHex,omitempty"`
 }
 
 // ClaimSignal delivers the seller's BRC-369 revealed content key k to a waiting BuyerDeal workflow.
@@ -96,6 +100,7 @@ type ClaimSignal struct {
 	CiphertextHex string                 `json:"ciphertextHex,omitempty"`
 	ChirpURL      string                 `json:"chirpUrl,omitempty"`
 	ProofBundle   *contracts.ProofBundle `json:"proofBundle,omitempty"`
+	DealReceipt   *DealReceipt           `json:"dealReceipt,omitempty"`
 }
 
 // CustodyReserveInput serializes global spend reservation through the private Restate Custody Virtual Object.
@@ -124,11 +129,12 @@ type CustodyReserveResult struct {
 
 // TxEventInput records a durable transaction lifecycle transition on the private Restate Tx Virtual Object.
 type TxEventInput struct {
-	Kind        string `json:"kind"` // prepared | submission_unknown | broadcast | mempool | mined | failed | aborted
-	Shard       string `json:"shard,omitempty"`
-	BlockHeight uint32 `json:"blockHeight,omitempty"`
-	Detail      string `json:"detail,omitempty"`
-	ObservedAt  int64  `json:"observedAt,omitempty"`
+	Kind          string `json:"kind"` // prepared | submission_unknown | broadcast | mempool | mined | reorged | failed | aborted
+	Shard         string `json:"shard,omitempty"`
+	BlockHeight   uint32 `json:"blockHeight,omitempty"`
+	MerklePathHex string `json:"merklePathHex,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	ObservedAt    int64  `json:"observedAt,omitempty"`
 }
 
 // TxState is the durable state stored per txid inside the Restate Tx Virtual Object.
@@ -147,11 +153,12 @@ type AnchorCadenceInput struct {
 
 // AnchorCadenceState summarizes the latest durable anchor cadence run for a shard.
 type AnchorCadenceState struct {
-	Shard      string `json:"shard"`
-	LastTxID   string `json:"lastTxid,omitempty"`
-	LastRunAt  int64  `json:"lastRunAt"`
-	AnchorRuns int64  `json:"anchorRuns"`
-	NextSlot   int64  `json:"nextSlot,omitempty"`
+	Shard          string `json:"shard"`
+	LastTxID       string `json:"lastTxid,omitempty"`
+	LastRunAt      int64  `json:"lastRunAt"`
+	AnchorRuns     int64  `json:"anchorRuns"`
+	NextSlot       int64  `json:"nextSlot,omitempty"`
+	DeferredReason string `json:"deferredReason,omitempty"`
 }
 
 // RuntimeTxEmitInput dispatches a Tx event from the authenticated NektarRuntime gateway to the private Tx VO.
@@ -322,6 +329,12 @@ func dealStateFromRecord(r store.DealRecord) DealState {
 			st.MatchAudit = &ma
 		}
 	}
+	if len(r.DealReceiptJSON) > 0 {
+		var dr DealReceipt
+		if json.Unmarshal(r.DealReceiptJSON, &dr) == nil {
+			st.DealReceipt = &dr
+		}
+	}
 	return st
 }
 
@@ -336,8 +349,9 @@ func (e *Engine) persistDealRecord(rec store.DealRecord) {
 		_ = e.mem.DB().SaveDeal(rec)
 		return
 	}
-	// Monotonicity guard: once a deal is settled, never regress status back to pre-settlement states.
-	if existing.Status == "settled" && rec.Status != "settled" {
+	// Monotonicity guard: once a deal is settled, never regress status back to pre-settlement states
+	// EXCEPT on explicit verified chain reorg rollback ("reorged").
+	if existing.Status == "settled" && rec.Status != "settled" && rec.Status != "reorged" {
 		rec.Status = "settled"
 		if rec.Error != "" && existing.Error == "" {
 			rec.Error = ""
@@ -352,6 +366,9 @@ func (e *Engine) persistDealRecord(rec store.DealRecord) {
 	}
 	if len(rec.MatchAuditJSON) == 0 {
 		rec.MatchAuditJSON = existing.MatchAuditJSON
+	}
+	if len(rec.DealReceiptJSON) == 0 {
+		rec.DealReceiptJSON = existing.DealReceiptJSON
 	}
 	if rec.PaymentTxID == "" {
 		rec.PaymentTxID = existing.PaymentTxID
@@ -388,7 +405,7 @@ func (e *Engine) persistDealRecord(rec store.DealRecord) {
 	if ok, casErr := e.mem.DB().UpdateDealCAS(rec); casErr != nil || !ok {
 		// Re-read once on concurrent modification and retry CAS cleanly.
 		if latest, gErr := e.mem.DB().GetDeal(rec.DealID); gErr == nil {
-			if latest.Status == "settled" && rec.Status != "settled" {
+			if latest.Status == "settled" && rec.Status != "settled" && rec.Status != "reorged" {
 				rec.Status = "settled"
 			}
 			rec.Revision = latest.Revision
@@ -534,10 +551,11 @@ type buyerPayResult struct {
 }
 
 type buyerVerifyResult struct {
-	NowUnix       int64  `json:"nowUnix"`
-	DeliveredText string `json:"deliveredText,omitempty"`
-	TargetShard   string `json:"targetShard,omitempty"`
-	FailedReason  string `json:"failedReason,omitempty"`
+	NowUnix       int64        `json:"nowUnix"`
+	DeliveredText string       `json:"deliveredText,omitempty"`
+	TargetShard   string       `json:"targetShard,omitempty"`
+	DealReceipt   *DealReceipt `json:"dealReceipt,omitempty"`
+	FailedReason  string       `json:"failedReason,omitempty"`
 }
 
 func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput) (DealState, error) {
@@ -1139,13 +1157,19 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 				senderKey = existing.PaymentSenderKey
 				// Ensure previously built/uncertain tx is actually broadcast idempotently without constructing a second tx!
 				mined, wStatus, _, _ := e.mem.Chain().TxBroadcastStatus(rctx, payTxID)
-				if !mined && wStatus == "nosend" && len(payBEEF) > 0 {
+				if !mined && len(payBEEF) > 0 {
 					if _, parsedTx, _, pErr := guard.ParseBEEF(payBEEF, guard.DefaultBound); pErr == nil && parsedTx != nil {
-						if _, bErr := e.mem.Chain().Broadcast(rctx, parsedTx, 0, chosen.PriceSats); bErr != nil {
-							if errors.Is(bErr, nwallet.ErrBroadcastUnknown) {
-								return buyerPayResult{}, bErr
+						switch wStatus {
+						case "nosend":
+							if _, bErr := e.mem.Chain().Broadcast(rctx, parsedTx, 0, chosen.PriceSats); bErr != nil {
+								if errors.Is(bErr, nwallet.ErrBroadcastUnknown) {
+									return buyerPayResult{}, bErr
+								}
+								return buyerPayResult{NowUnix: now, PreBroadcastErr: bErr.Error()}, nil
 							}
-							return buyerPayResult{NowUnix: now, PreBroadcastErr: bErr.Error()}, nil
+						case "submission_unknown", "sending", "unproven":
+							// Re-air unproven/uncertain payment idempotently so mempool/peers receive full BEEF ancestry.
+							_ = e.mem.Chain().RelayExternalTx(rctx, parsedTx)
 						}
 					}
 				}
@@ -1240,6 +1264,10 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 				}
 			}
 
+			if payTxID != "" && e.mem != nil && e.mem.DB() != nil {
+				_ = RecordRevealOwed(e.mem.DB(), dealID, chosen.Pub, payTxID, chosen.PriceSats, now+7200)
+			}
+
 			res := buyerPayResult{NowUnix: now, TxID: payTxID}
 			pReq := PurchaseRequest{
 				OfferID:           chosen.OfferID,
@@ -1265,6 +1293,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 					CiphertextHex: pResp.CiphertextHex,
 					ChirpURL:      pResp.ChirpURL,
 					ProofBundle:   pResp.ProofBundle,
+					DealReceipt:   pResp.DealReceipt,
 				}
 			}
 			return res, nil
@@ -1394,20 +1423,19 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			if err := json.Unmarshal(chosen.SaleOffer, &saleOffer); err != nil {
 				return buyerVerifyResult{NowUnix: now, FailedReason: "decode saleOffer: " + err.Error()}, nil
 			}
-			if chosen.SellerURL != "" && chosen.ChirpURL != "" {
-				if br := e.getBroker(); br != nil {
-					ct, cErr := br.disc.FetchRemoteChirp(rctx, chosen.SellerURL, chosen.ChirpURL)
-					if cErr != nil {
-						return buyerVerifyResult{NowUnix: now, FailedReason: "remote CHIRP verification failed: " + cErr.Error()}, nil
+			// Skip remote CHIRP HTTP refetch when verified CiphertextHex is already inline in signed SaleOffer (Finding #33).
+			if saleOffer.CiphertextHex == "" {
+				if chosen.SellerURL != "" && chosen.ChirpURL != "" {
+					if br := e.getBroker(); br != nil {
+						ct, cErr := br.disc.FetchRemoteChirp(rctx, chosen.SellerURL, chosen.ChirpURL)
+						if cErr != nil {
+							return buyerVerifyResult{NowUnix: now, FailedReason: "remote CHIRP verification failed: " + cErr.Error()}, nil
+						}
+						saleOffer.CiphertextHex = hex.EncodeToString(ct)
 					}
-					ctHex := hex.EncodeToString(ct)
-					if saleOffer.CiphertextHex != "" && ctHex != saleOffer.CiphertextHex {
-						return buyerVerifyResult{NowUnix: now, FailedReason: "CHIRP ciphertext mismatch vs signed offer"}, nil
-					}
-					saleOffer.CiphertextHex = ctHex
+				} else if sig.CiphertextHex != "" {
+					saleOffer.CiphertextHex = sig.CiphertextHex
 				}
-			} else if saleOffer.CiphertextHex == "" && sig.CiphertextHex != "" {
-				saleOffer.CiphertextHex = sig.CiphertextHex
 			}
 			keyBytes, kErr := hex.DecodeString(strings.TrimSpace(sig.ContentKeyHex))
 			if kErr != nil || len(keyBytes) != 32 {
@@ -1417,16 +1445,22 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			if pErr != nil {
 				return buyerVerifyResult{NowUnix: now, FailedReason: "BRC-369 key verification failed: " + pErr.Error()}, nil
 			}
-			if sig.ProofBundle == nil && chosen.Leaf != "" && e.mem != nil && e.mem.Chain().Network() != "memory" {
+			// Unconditional SPV ProofBundle verification on live networks (zero Leaf=="" bypass — Finding #3!).
+			if sig.ProofBundle == nil && e.mem != nil && e.mem.Chain().Network() != "memory" {
 				return buyerVerifyResult{NowUnix: now, FailedReason: "missing SPV ProofBundle from seller"}, nil
 			}
 			if sig.ProofBundle != nil {
-				if chosen.Leaf != "" && !strings.EqualFold(sig.ProofBundle.Leaf, chosen.Leaf) {
+				if !strings.EqualFold(sig.ProofBundle.Leaf, chosen.Leaf) {
 					return buyerVerifyResult{NowUnix: now, FailedReason: "seller SPV ProofBundle leaf mismatches signed offer leaf"}, nil
 				}
-				vr := contracts.VerifyFragmentCtx(rctx, *sig.ProofBundle, e.mem.Chain().Tracker())
-				if !vr.OK && e.mem.Chain().Network() == "memory" && vr.Reason == "BEEFInvalid" && strings.Contains(vr.Detail, "BUMP root not valid in header chain") {
-					vr = contracts.VerifyFragmentStructural(*sig.ProofBundle)
+				var vr contracts.VerifyResult
+				if e.mem.Chain().Network() != "memory" {
+					vr = contracts.VerifyFragmentWithDepth(rctx, *sig.ProofBundle, e.mem.Chain().Tracker(), e.mem.Chain().SettleDepth())
+				} else {
+					vr = contracts.VerifyFragmentCtx(rctx, *sig.ProofBundle, e.mem.Chain().Tracker())
+					if !vr.OK && vr.Reason == "BEEFInvalid" && strings.Contains(vr.Detail, "BUMP root not valid in header chain") {
+						vr = contracts.VerifyFragmentStructural(*sig.ProofBundle)
+					}
 				}
 				if !vr.OK {
 					return buyerVerifyResult{NowUnix: now, FailedReason: fmt.Sprintf("seller SPV ProofBundle invalid (%s: %s)", vr.Reason, vr.Detail)}, nil
@@ -1455,20 +1489,69 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 		if e.mem != nil && e.mem.DB() != nil && chosen.Pub != "" {
 			_ = e.mem.DB().RecordReputation(chosen.Pub, true, chosen.PriceSats)
 		}
+		var dealReceipt *DealReceipt
+		var dealReceiptJSON []byte
+		if e.mem != nil && e.mem.Chain() != nil {
+			buyerSignPub := e.mem.Chain().IdentityPubHex()
+			if bPub, pErr := e.mem.Chain().SigningPubKey(rctx); pErr == nil && bPub != nil {
+				buyerSignPub = hex.EncodeToString(bPub.Compressed())
+			}
+			var dr DealReceipt
+			if sig.DealReceipt != nil {
+				dr = *sig.DealReceipt
+				if dr.SellerSig != "" {
+					if vr := VerifyDealReceipt(dr, false); !vr.OK || !vr.SellerVerified {
+						return buyerVerifyResult{NowUnix: now, FailedReason: "seller triple-entry deal receipt signature invalid: " + vr.Error}, nil
+					}
+				}
+			} else {
+				dr = DealReceipt{
+					Version:       1,
+					DealID:        dealID,
+					OfferID:       chosen.OfferID,
+					BuyerPub:      buyerSignPub,
+					SellerPub:     chosen.Pub,
+					Domains:       want.Domains,
+					PriceSats:     chosen.PriceSats,
+					WantHash:      sha256CanonicalHex(want),
+					PaymentTxID:   st.PaymentTxID,
+					KeyCommitment: chosen.KeyCommitHex,
+					FragmentLeaf:  chosen.Leaf,
+					SettledAt:     now,
+				}
+				if dr.PaymentTxID == "" {
+					dr.PaymentTxID = sig.ClaimTxID
+				}
+				if e.policy != nil {
+					dr.BuyerPolicyHash = e.policy.ActivePolicyHash()
+				}
+				if st.MatchAudit != nil {
+					dr.MatchAuditHash = sha256CanonicalHex(st.MatchAudit)
+				}
+			}
+			if sErr := SignDealReceiptBuyer(rctx, buyerSignPub, e.mem.Chain().SignDigest, &dr); sErr == nil {
+				dealReceipt = &dr
+				dealReceiptJSON, _ = json.Marshal(dr)
+			}
+		}
+		if e.mem != nil && e.mem.DB() != nil {
+			_ = FulfillRevealOwed(e.mem.DB(), dealID)
+		}
 		e.persistDealRecord(store.DealRecord{
-			DealID:        dealID,
-			Role:          "buyer",
-			Status:        "settled",
-			Shard:         targetShard,
-			PaymentTxID:   st.PaymentTxID,
-			ClaimKeyHex:   sig.ContentKeyHex,
-			DeliveredText: deliveredText,
-			Error:         "",
+			DealID:          dealID,
+			Role:            "buyer",
+			Status:          "settled",
+			Shard:           targetShard,
+			DealReceiptJSON: dealReceiptJSON,
+			PaymentTxID:     st.PaymentTxID,
+			ClaimKeyHex:     sig.ContentKeyHex,
+			DeliveredText:   deliveredText,
+			Error:           "",
 		})
 		if br := e.getBroker(); br != nil {
 			br.notify("deal_settled", map[string]any{"role": "buyer", "dealId": dealID, "txid": st.PaymentTxID, "sats": chosen.PriceSats, "shard": targetShard})
 		}
-		return buyerVerifyResult{NowUnix: now, DeliveredText: deliveredText, TargetShard: targetShard}, nil
+		return buyerVerifyResult{NowUnix: now, DeliveredText: deliveredText, TargetShard: targetShard, DealReceipt: dealReceipt}, nil
 	}, restate.WithName("buyer_verify_and_commit"))
 	if err != nil {
 		return st, err
@@ -1496,6 +1579,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 	st.ClaimTxID = sig.ClaimTxID
 	st.Shard = verRes.TargetShard
 	st.DeliveredTxt = verRes.DeliveredText
+	st.DealReceipt = verRes.DealReceipt
 	st.Status = "settled"
 	st.Error = ""
 	st.UpdatedAt = verRes.NowUnix
@@ -1757,9 +1841,58 @@ func (e *Engine) restateSellerDeliverPayment(ctx restate.WorkflowSharedContext, 
 	return true, nil
 }
 
+func (e *Engine) verifyMerklePathProof(ctx context.Context, txid, mpHex string, enforceDepth bool) (uint32, error) {
+	if e.mem == nil || e.mem.Chain() == nil || e.mem.Chain().Network() == "memory" {
+		return 0, nil
+	}
+	if strings.TrimSpace(mpHex) == "" {
+		return 0, restate.TerminalErrorf("nektar: merklePathHex proof is required to confirm/mine tx %s on live networks", txid)
+	}
+	mp, err := transaction.NewMerklePathFromHex(strings.TrimSpace(mpHex))
+	if err != nil || mp == nil {
+		return 0, restate.TerminalErrorf("nektar: invalid merklePathHex for tx %s: %v", txid, err)
+	}
+	txHash, err := chainhash.NewHashFromHex(strings.TrimSpace(txid))
+	if err != nil || txHash == nil {
+		return 0, restate.TerminalErrorf("nektar: invalid txid %q: %v", txid, err)
+	}
+	root, err := mp.ComputeRoot(txHash)
+	if err != nil || root == nil {
+		return 0, restate.TerminalErrorf("nektar: BUMP ComputeRoot failed for %s: %v", txid, err)
+	}
+	tracker := e.mem.Chain().Tracker()
+	if tracker == nil {
+		return 0, fmt.Errorf("nektar: header tracker unavailable while verifying tx %s", txid)
+	}
+	valid, vErr := tracker.IsValidRootForHeight(ctx, root, mp.BlockHeight)
+	if vErr != nil {
+		return 0, fmt.Errorf("nektar: header tracker error verifying tx %s: %w", txid, vErr)
+	}
+	if !valid {
+		return 0, restate.TerminalErrorf("nektar: REFUSED-BUMP merkle root invalid at height %d for tx %s", mp.BlockHeight, txid)
+	}
+	if enforceDepth {
+		tip, tErr := tracker.CurrentHeight(ctx)
+		if tErr != nil {
+			return 0, fmt.Errorf("nektar: header tracker height error for tx %s: %w", txid, tErr)
+		}
+		if tip < mp.BlockHeight || int(tip-mp.BlockHeight)+1 < e.mem.Chain().SettleDepth() {
+			return 0, fmt.Errorf("nektar: tx %s at height %d has not reached settleDepth %d (tip=%d)", txid, mp.BlockHeight, e.mem.Chain().SettleDepth(), tip)
+		}
+	}
+	return mp.BlockHeight, nil
+}
+
 func (e *Engine) restateSellerConfirmPayment(ctx restate.WorkflowSharedContext, sig PaymentSignal) (bool, error) {
 	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
 		return false, err
+	}
+	if e.mem != nil && e.mem.Chain() != nil && e.mem.Chain().Network() != "memory" {
+		bh, vErr := e.verifyMerklePathProof(ctx, sig.TxID, sig.MerklePathHex, true)
+		if vErr != nil {
+			return false, vErr
+		}
+		sig.BlockHeight = bh
 	}
 	sig.Confirmed = true
 	if err := restate.Promise[PaymentSignal](ctx, "payment_confirmed").Resolve(sig); err != nil {
@@ -1782,7 +1915,7 @@ func (e *Engine) restateCustodyReserve(ctx restate.ObjectContext, in CustodyRese
 	if attempt <= 0 {
 		attempt = 1
 	}
-	res, err := restate.Run(ctx, func(_ restate.RunContext) (CustodyReserveResult, error) {
+	res, err := restate.Run(ctx, func(rctx restate.RunContext) (CustodyReserveResult, error) {
 		if e.mem != nil && e.mem.DB() != nil {
 			_ = SyncPolicyFromDB(e.mem.DB(), e.policy)
 		}
@@ -1803,7 +1936,11 @@ func (e *Engine) restateCustodyReserve(ctx restate.ObjectContext, in CustodyRese
 			maxDeal = ^uint64(0)
 			maxDay = ^uint64(0)
 		}
-		bal := e.mem.Chain().BalanceSats()
+		bal, balErr := e.mem.Chain().BalanceChecked(rctx)
+		if balErr != nil {
+			// Propagate wallet DB/RPC errors retryably rather than masking them as "insufficient balance"!
+			return CustodyReserveResult{}, fmt.Errorf("custody balance check failed: %w", balErr)
+		}
 		if bal < in.AmountSats {
 			return CustodyReserveResult{Approved: false, BalanceSats: bal, Reason: "insufficient balance"}, nil
 		}
@@ -1872,11 +2009,15 @@ func shouldAdvanceTxStatus(cur, next string) bool {
 	if cur == "" {
 		return true
 	}
-	// Revival edge: a previously failed/aborted tx that actually mined on-chain ALWAYS advances to mined!
+	// Revival edge: a previously failed/aborted/reorged tx that actually mined on-chain ALWAYS advances to mined!
 	if next == "mined" {
 		return true
 	}
-	// Never regress a mined tx!
+	// Reorg edge: a mined tx orphaned by a verified chain reorg rolls back to "reorged" (never stuck permanently mined!).
+	if cur == "mined" && next == "reorged" {
+		return true
+	}
+	// Never regress a mined tx to pre-mined broadcast/mempool!
 	if cur == "mined" {
 		return false
 	}
@@ -1886,6 +2027,9 @@ func shouldAdvanceTxStatus(cur, next string) bool {
 	}
 	if cur == "failed" || cur == "aborted" {
 		return false
+	}
+	if cur == "reorged" {
+		return next == "broadcast" || next == "mempool" || next == "mined" || next == "failed" || next == "aborted"
 	}
 	return txStatusRank(next) > txStatusRank(cur)
 }
@@ -1899,8 +2043,8 @@ func txEventExists(events []TxEventInput, ev TxEventInput) bool {
 	return false
 }
 
-// restateTxEmit enforces content deduplication, monotonic lifecycle progression, revival-on-mine,
-// and deterministic timestamping (never calls time.Now() outside restate.Run!).
+// restateTxEmit enforces content deduplication, verified BUMP proofs on live "mined" transitions,
+// reorg rollback edges, monotonic lifecycle progression, revival-on-mine, and deterministic timestamping.
 func (e *Engine) restateTxEmit(ctx restate.ObjectContext, ev TxEventInput) (TxState, error) {
 	txid := restate.Key(ctx)
 	st, err := restate.Get[TxState](ctx, "tx")
@@ -1910,6 +2054,18 @@ func (e *Engine) restateTxEmit(ctx restate.ObjectContext, ev TxEventInput) (TxSt
 	st.TxID = txid
 	if txEventExists(st.Events, ev) {
 		return st, nil
+	}
+	// On live networks, refuse unverified bare "mined" status strings without a header-verified BUMP!
+	if ev.Kind == "mined" && e.mem != nil && e.mem.Chain() != nil && e.mem.Chain().Network() != "memory" {
+		verifiedHeight, vErr := restate.Run(ctx, func(rctx restate.RunContext) (uint32, error) {
+			return e.verifyMerklePathProof(rctx, txid, ev.MerklePathHex, false)
+		}, restate.WithName("tx_emit_verify_bump"))
+		if vErr != nil {
+			return st, vErr
+		}
+		if verifiedHeight > 0 {
+			ev.BlockHeight = verifiedHeight
+		}
 	}
 	obsAt := ev.ObservedAt
 	if obsAt == 0 {
@@ -1923,8 +2079,11 @@ func (e *Engine) restateTxEmit(ctx restate.ObjectContext, ev TxEventInput) (TxSt
 	}
 	if shouldAdvanceTxStatus(st.Status, ev.Kind) {
 		st.Status = ev.Kind
+		if ev.Kind == "reorged" {
+			st.BlockHeight = 0
+		}
 	}
-	if ev.BlockHeight > st.BlockHeight {
+	if ev.Kind != "reorged" && ev.BlockHeight > st.BlockHeight {
 		st.BlockHeight = ev.BlockHeight
 	}
 	st.Events = append(st.Events, ev)
@@ -2021,6 +2180,7 @@ func (e *Engine) restateAnchorCadenceTrigger(ctx restate.ObjectContext, in Ancho
 	}
 	st.LastRunAt = step.NowUnix
 	st.NextSlot = step.NextSlot
+	st.DeferredReason = step.DeferredReason
 	restate.Set(ctx, "cadence", st)
 
 	if in.IntervalSeconds > 0 && step.HasMore && step.NextSlot > 0 {

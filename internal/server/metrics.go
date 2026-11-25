@@ -25,7 +25,7 @@ func (a *App) recordTTFV() {
 	a.ttfvMs.CompareAndSwap(0, ms)
 }
 
-func (a *App) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+func (a *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
 	writeGauge := func(name, help string, val float64) {
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s gauge\n%s %g\n", name, help, name, name, val)
@@ -60,20 +60,44 @@ func (a *App) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	writeCounter("nektar_verify_views_total", "Total receipt verification views.", float64(a.verifyViews.Load()))
 	writeGauge("nektar_deals_total", "Total market deals recorded.", float64(dealCount))
 
-	var feeBalanceSats, spentTodaySats, dailyCapSats uint64
-	var utxoCount, spendTxCount int
+	var feeBalanceSats, confirmedSats, unprovenSats, spentTodaySats, dailyCapSats, zeroConfExposure uint64
+	var utxoCount, provenFuel, unprovenFuel, maxUnprovenDepth, spendTxCount, settleDepth int
 	if a.mem != nil && a.mem.Chain() != nil {
-		feeBalanceSats = a.mem.Chain().BalanceSats()
-		utxoCount = a.mem.Chain().UTXOCount()
+		if bal, bErr := a.mem.Chain().Balance(r.Context()); bErr == nil {
+			feeBalanceSats = bal.SpendableSats
+			confirmedSats = bal.ConfirmedSats
+			unprovenSats = bal.UnprovenSats
+			utxoCount = bal.SpendableCount
+			provenFuel = bal.ProvenFuelCount
+			unprovenFuel = bal.UnprovenFuelCount
+			maxUnprovenDepth = bal.MaxUnprovenDepth
+		}
 		if sg := a.mem.Chain().SpendGuard(); sg != nil {
 			spentTodaySats, dailyCapSats, _, spendTxCount = sg.Stats()
 		}
+		zeroConfExposure, _ = a.mem.Chain().ZeroConfWatch().Exposure()
+		settleDepth = a.mem.Chain().SettleDepth()
 	}
 	writeGauge("nektar_fee_balance_sats", "Spendable wallet balance in satoshis.", float64(feeBalanceSats))
+	writeGauge("nektar_wallet_confirmed_sats", "Confirmed BUMP-verified wallet balance in satoshis.", float64(confirmedSats))
+	writeGauge("nektar_wallet_unproven_sats", "Unconfirmed wallet balance in satoshis.", float64(unprovenSats))
 	writeGauge("nektar_wallet_utxos", "Spendable UTXO count in the wallet pool.", float64(utxoCount))
+	writeGauge("nektar_wallet_proven_fuel_utxos", "Confirmed proven fuel UTXO count.", float64(provenFuel))
+	writeGauge("nektar_wallet_unproven_fuel_utxos", "Unconfirmed fuel UTXO count.", float64(unprovenFuel))
+	writeGauge("nektar_wallet_max_unproven_depth", "Maximum unconfirmed ancestor chain depth in wallet.", float64(maxUnprovenDepth))
+	writeGauge("nektar_zeroconf_exposure_sats", "Active unconfirmed counterparty 0-conf exposure in satoshis.", float64(zeroConfExposure))
+	writeGauge("nektar_settle_depth", "Required confirmation depth for value-final settlement.", float64(settleDepth))
 	writeGauge("nektar_spend_guard_spent_sats", "Satoshis spent today under SpendGuard.", float64(spentTodaySats))
 	writeGauge("nektar_spend_guard_daily_cap_sats", "Daily satoshi spend cap enforced by SpendGuard.", float64(dailyCapSats))
 	writeCounter("nektar_spend_guard_tx_total", "Total broadcasts recorded by SpendGuard today.", float64(spendTxCount))
+
+	if openOb, overdueOb, err := a.mem.DB().CountObligations(); err == nil {
+		writeGauge("nektar_obligations_open", "Open surviving commercial obligations.", float64(openOb))
+		writeGauge("nektar_obligations_overdue", "Overdue surviving commercial obligations requiring attention.", float64(overdueOb))
+	}
+	if a.mkt != nil {
+		writeGauge("nektar_policy_tampered_total", "Active operator policy rows rejected for hash or signature tamper.", float64(a.mkt.Policy().TamperedPoliciesCount()))
+	}
 
 	restateUp := 0.0
 	if a.restateClient() != nil {
@@ -167,13 +191,18 @@ func (a *App) handleVerifyBadge(w http.ResponseWriter, r *http.Request) {
 	label := "nektar receipt"
 	status := "unverified"
 	color := "#dc2626"
-	if err == nil && ver != nil {
+	if err != nil {
+		status = "tracker unavailable"
+		color = "#d97706"
+	} else if ver != nil {
 		switch ver.Verdict {
 		case "green":
 			status = "verified"
 			color = "#16a34a"
 		case "amber":
-			if ver.CitationsSuperseded > 0 {
+			if ver.CitationsUnavailable > 0 {
+				status = "tracker unavailable"
+			} else if ver.CitationsSuperseded > 0 {
 				status = "superseded"
 			} else {
 				status = "anchored pending"

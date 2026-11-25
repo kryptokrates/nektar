@@ -428,10 +428,8 @@ func TestJevMatcherEndToEndHTTPMockBrokerWant(t *testing.T) {
 	defer jevSrv.Close()
 
 	cl, err := jev.NewClient(jev.Config{
-		Provider: jev.ProviderTypeSafe,
-		BaseURL:  jevSrv.URL,
-		APIKey:   "mock-key",
-		Network:  "memory",
+		BaseURL: jevSrv.URL,
+		Network: "memory",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -447,7 +445,7 @@ func TestJevMatcherEndToEndHTTPMockBrokerWant(t *testing.T) {
 	}, pol, nil)
 	dec := matcher.MatchOffersForBuyer(ctx, want, ranked, nil, pol)
 	if dec.Verdict != "allow" || dec.Chosen == nil || dec.Chosen.OfferID != "off-http-1" {
-		t.Fatalf("expected HTTP mock Jev allow, got %+v", dec)
+		t.Fatalf("expected HTTP mock open-weight allow, got %+v", dec)
 	}
 	mm := matcher.MetricsSnapshot()
 	if mm.Requests != 1 || mm.InputTokens != 190 || mm.ClientHealth == nil {
@@ -455,22 +453,16 @@ func TestJevMatcherEndToEndHTTPMockBrokerWant(t *testing.T) {
 	}
 }
 
-// TestJevLiveMatchingTrials is an opt-in 10-scenario live accuracy benchmark (NEKTAR_JEV_LIVE_TEST=1).
+// TestJevLiveMatchingTrials is an opt-in live trial against a local/hub open-weight System One server (NEKTAR_JEV_LIVE_TEST=1).
 func TestJevLiveMatchingTrials(t *testing.T) {
 	if os.Getenv("NEKTAR_JEV_LIVE_TEST") != "1" {
-		t.Skip("set NEKTAR_JEV_LIVE_TEST=1 and NEKTAR_JEV_API_KEY to run live Jev AI matching trials")
-	}
-	apiKey := strings.TrimSpace(os.Getenv("NEKTAR_JEV_API_KEY"))
-	if apiKey == "" {
-		t.Fatal("NEKTAR_JEV_API_KEY required when NEKTAR_JEV_LIVE_TEST=1")
+		t.Skip("set NEKTAR_JEV_LIVE_TEST=1 (with a local Decis/OpenJev server on http://127.0.0.1:8000 or NEKTAR_JEV_BASE_URL) to run live open-weight matching trials")
 	}
 	cl, err := jev.NewClient(jev.Config{
-		Provider: os.Getenv("NEKTAR_JEV_PROVIDER"),
-		BaseURL:  os.Getenv("NEKTAR_JEV_BASE_URL"),
-		APIKey:   apiKey,
-		Model:    os.Getenv("NEKTAR_JEV_MODEL"),
-		Network:  "testnet",
-		Timeout:  8 * time.Second,
+		BaseURL: os.Getenv("NEKTAR_JEV_BASE_URL"),
+		Model:   os.Getenv("NEKTAR_JEV_MODEL"),
+		Network: "testnet",
+		Timeout: 8 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)

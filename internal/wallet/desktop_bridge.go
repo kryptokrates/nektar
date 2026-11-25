@@ -145,24 +145,36 @@ func FundFromWireWallet(ctx context.Context, wireURL string, amountSats uint64, 
 	if err != nil {
 		return nil, fmt.Errorf("wallet desktop bridge: desktop CreateAction: %w", err)
 	}
+	txidStr := actRes.Txid.String()
 	if len(actRes.Tx) == 0 {
-		return nil, fmt.Errorf("wallet desktop bridge: desktop CreateAction returned empty AtomicBEEF (txid %s)", actRes.Txid.String())
+		// Persist the broadcast txid BEFORE returning so ReconcilePendingBRC29 can recover via chain BEEF!
+		_ = target.UpdatePendingBRC29Tx(ctx, pendingID, txidStr, 0, nil, amountSats)
+		return nil, fmt.Errorf("wallet desktop bridge: desktop CreateAction returned empty AtomicBEEF (txid %s persisted for recovery)", txidStr)
 	}
 
-	// Locate exact output index matching our derived locking script (handles wallets that shuffle outputs).
-	outIdx := uint32(0)
-	if _, parsedTx, _, pErr := guard.ParseBEEF(actRes.Tx, guard.DefaultBound); pErr == nil && parsedTx != nil {
-		for idx, o := range parsedTx.Outputs {
-			if o.LockingScript != nil && string(*o.LockingScript) == string(*lockScript) && o.Satoshis == amountSats {
-				outIdx = uint32(idx)
-				break
-			}
+	// Locate exact output index matching our derived locking script (fail closed on parse/match failure; never default outIdx=0).
+	_, parsedTx, _, pErr := guard.ParseBEEF(actRes.Tx, guard.DefaultBound)
+	if pErr != nil || parsedTx == nil {
+		_ = target.UpdatePendingBRC29Tx(ctx, pendingID, txidStr, 0, actRes.Tx, amountSats)
+		return nil, fmt.Errorf("wallet desktop bridge: parse desktop AtomicBEEF for %s: %v", txidStr, pErr)
+	}
+	var outIdx uint32
+	matched := false
+	for idx, o := range parsedTx.Outputs {
+		if o.LockingScript != nil && string(*o.LockingScript) == string(*lockScript) && o.Satoshis == amountSats {
+			outIdx = uint32(idx)
+			matched = true
+			break
 		}
 	}
-	_ = target.UpdatePendingBRC29Tx(ctx, pendingID, actRes.Txid.String(), outIdx, actRes.Tx, amountSats)
+	if !matched {
+		_ = target.UpdatePendingBRC29Tx(ctx, pendingID, txidStr, 0, actRes.Tx, amountSats)
+		return nil, fmt.Errorf("wallet desktop bridge: broadcast tx %s missing expected BRC-29 output script", txidStr)
+	}
+	_ = target.UpdatePendingBRC29Tx(ctx, pendingID, txidStr, outIdx, actRes.Tx, amountSats)
 
 	// Immediately internalize AtomicBEEF + BRC-29 remittance into target Engine!
-	intRes, err := target.InternalizeAction(ctx, sdkwallet.InternalizeActionArgs{
+	intRes, err := target.InternalizeAction(WithIncomingInternalize(ctx), sdkwallet.InternalizeActionArgs{
 		Tx:          actRes.Tx,
 		Description: fmt.Sprintf("Funded %d sats from BSV Desktop", amountSats),
 		Labels:      []string{"desktop-fund", "brc29"},
@@ -177,18 +189,22 @@ func FundFromWireWallet(ctx context.Context, wireURL string, amountSats uint64, 
 		}},
 	}, target.cfg.Originator)
 	if err != nil {
-		return nil, fmt.Errorf("wallet desktop bridge: internalize into Nektar (txid %s): %w", actRes.Txid.String(), err)
+		return nil, fmt.Errorf("wallet desktop bridge: internalize into Nektar (txid %s): %w", txidStr, err)
+	}
+	if intRes == nil || !intRes.Accepted {
+		return nil, fmt.Errorf("wallet desktop bridge: Nektar rejected internalization of desktop fund tx %s", txidStr)
 	}
 	_ = target.MarkPendingBRC29Done(ctx, pendingID)
+	target.fuel.Wake()
 
 	return &DesktopFundResult{
-		TxID:             actRes.Txid.String(),
+		TxID:             txidStr,
 		Satoshis:         amountSats,
 		DesktopIdentity:  desktopHex,
 		NektarIdentity:   target.IdentityPubHex(),
 		DerivationPrefix: prefixB64,
 		DerivationSuffix: suffixB64,
-		Internalized:     intRes != nil && intRes.Accepted,
+		Internalized:     true,
 	}, nil
 }
 
@@ -237,13 +253,13 @@ func SweepToWireWallet(ctx context.Context, wireURL string, source *Engine, over
 		DesktopIdentity: desktopHex,
 	}
 	for i, rem := range sweepRes.Remittances {
-		if i >= len(sweepRes.BEEFs) {
-			break
+		if i >= len(sweepRes.BEEFs) || len(sweepRes.BEEFs[i]) == 0 {
+			return out, fmt.Errorf("wallet desktop bridge: missing AtomicBEEF for sweep chunk %d (txid %s)", i, rem.TxID)
 		}
 		preRaw, err1 := base64.StdEncoding.DecodeString(rem.DerivationPrefix)
 		sufRaw, err2 := base64.StdEncoding.DecodeString(rem.DerivationSuffix)
 		if err1 != nil || err2 != nil {
-			continue
+			return out, fmt.Errorf("wallet desktop bridge: invalid BRC-29 remittance encoding for sweep %s", rem.TxID)
 		}
 		intRes, iErr := desktop.InternalizeAction(ctx, sdkwallet.InternalizeActionArgs{
 			Tx:          sweepRes.BEEFs[i],
@@ -262,10 +278,11 @@ func SweepToWireWallet(ctx context.Context, wireURL string, source *Engine, over
 		if iErr != nil {
 			return out, fmt.Errorf("wallet desktop bridge: desktop InternalizeAction for sweep %s: %w", rem.TxID, iErr)
 		}
-		_ = source.MarkPendingBRC29DoneByTx(ctx, rem.TxID, rem.OutputIndex)
-		if intRes != nil && intRes.Accepted {
-			out.Internalized++
+		if intRes == nil || !intRes.Accepted {
+			return out, fmt.Errorf("wallet desktop bridge: desktop rejected internalization for sweep %s", rem.TxID)
 		}
+		_ = source.MarkPendingBRC29DoneByTx(ctx, rem.TxID, rem.OutputIndex)
+		out.Internalized++
 	}
 	return out, nil
 }
@@ -305,9 +322,23 @@ func ReconcilePendingBRC29(ctx context.Context, e *Engine, defaultWireURL string
 			if len(beef) == 0 && txID != "" {
 				if tx, tErr := e.LoadParsedTx(ctx, txID); tErr == nil && tx != nil {
 					beef, _ = SafeAtomicBEEF(tx)
-				} else if bObj, bErr := e.svc.GetBEEF(ctx, txID, nil); bErr == nil && bObj != nil {
-					if tx := bObj.FindTransaction(txID); tx != nil {
-						beef, _ = SafeAtomicBEEF(tx)
+				}
+				if len(beef) == 0 {
+					if bObj, bErr := e.svc.GetBEEF(ctx, txID, nil); bErr == nil && bObj != nil {
+						if tx := bObj.FindTransaction(txID); tx != nil {
+							beef, _ = SafeAtomicBEEF(tx)
+							if rec.LockingScriptHex != "" {
+								if wantLS, hErr := hex.DecodeString(rec.LockingScriptHex); hErr == nil {
+									for idx, o := range tx.Outputs {
+										if o.LockingScript != nil && string(*o.LockingScript) == string(wantLS) {
+											outIdx = uint32(idx)
+											break
+										}
+									}
+								}
+							}
+							_ = e.UpdatePendingBRC29Tx(ctx, rec.ID, txID, outIdx, beef, rec.Satoshis)
+						}
 					}
 				}
 			}

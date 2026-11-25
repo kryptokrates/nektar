@@ -11,23 +11,27 @@ import (
 	"time"
 )
 
-func TestClientTypeSafeAndOpenRouterDialects(t *testing.T) {
+func TestClientOpenWeightDialectsAndNoAPIKey(t *testing.T) {
 	ctx := context.Background()
 
-	// 1. TypeSafe direct dialect: `noul` field + array `probabilities` on score.
+	// 1. Default open-weight System One dialect (`noul` + array `probabilities`), ZERO Authorization header!
 	var calls atomic.Int32
-	tsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	localSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.Header.Get("Authorization") != "Bearer ts-secret" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
+		if auth := r.Header.Get("Authorization"); auth != "" {
+			t.Errorf("expected keyless open-weight request (no Authorization header), got %q", auth)
 		}
 		if r.URL.Path != "/v1/systemone" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
+		var got Request
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		if got.Model != DefaultModel {
+			t.Errorf("expected default open-weight model %q, got %q", DefaultModel, got.Model)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"model": "jev-1.14.0",
+			"model": "kev-0.8b",
 			"request_id": "req-1",
 			"answers": {
 				"best": {"type": "choice", "choice": "o1", "confidence": 0.91, "probabilities": {"none": 0.02, "o0": 0.07, "o1": 0.91}},
@@ -37,16 +41,18 @@ func TestClientTypeSafeAndOpenRouterDialects(t *testing.T) {
 			"usage": {"input_tokens": 180, "output_tokens": 0}
 		}`))
 	}))
-	defer tsSrv.Close()
+	defer localSrv.Close()
 
+	// Loopback open-weight sidecar MUST work even when Network is "main"!
 	cl, err := NewClient(Config{
-		Provider: ProviderTypeSafe,
-		BaseURL:  tsSrv.URL,
-		APIKey:   "ts-secret",
-		Network:  "memory",
+		BaseURL: localSrv.URL,
+		Network: "main",
 	})
 	if err != nil {
-		t.Fatalf("NewClient: %v", err)
+		t.Fatalf("NewClient (loopback on main): %v", err)
+	}
+	if cl.Provider() != ProviderOpenWeight {
+		t.Fatalf("expected provider %q, got %q", ProviderOpenWeight, cl.Provider())
 	}
 	req := Request{
 		State: map[string]any{"want": "fix teranode spend"},
@@ -82,66 +88,80 @@ func TestClientTypeSafeAndOpenRouterDialects(t *testing.T) {
 		t.Fatalf("expected cache hit (1 upstream call), got %d", calls.Load())
 	}
 
-	// 2. OpenRouter dialect: `probability` field on noul + `/api/alpha/decisions`.
-	orSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/alpha/decisions" {
-			t.Errorf("unexpected openrouter path %q", r.URL.Path)
-		}
+	// 2. Alternate open-weight response dialect using `probability` on noul + custom model override.
+	altSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var got Request
 		_ = json.NewDecoder(r.Body).Decode(&got)
-		if got.Model != DefaultOpenRouterModel {
-			t.Errorf("expected default openrouter model %q, got %q", DefaultOpenRouterModel, got.Model)
+		if got.Model != "laya-multilingual" {
+			t.Errorf("expected model laya-multilingual, got %q", got.Model)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"model": "typesafe/jev-1.14-20261014",
-			"provider": "TypeSafe",
+			"model": "laya-multilingual",
 			"answers": {
 				"safe": {"type": "noul", "probability": 0.87, "confidence": 0.9}
 			},
 			"usage": {"input_tokens": 90, "output_tokens": 0}
 		}`))
 	}))
-	defer orSrv.Close()
+	defer altSrv.Close()
 
-	orCl, err := NewClient(Config{
-		Provider: ProviderOpenRouter,
-		BaseURL:  orSrv.URL,
-		APIKey:   "or-secret",
-		Network:  "memory",
+	altCl, err := NewClient(Config{
+		BaseURL: altSrv.URL + "/v1",
+		Model:   "laya-multilingual",
+		Network: "testnet",
 	})
 	if err != nil {
-		t.Fatalf("NewClient openrouter: %v", err)
+		t.Fatalf("NewClient alt: %v", err)
 	}
-	orResp, err := orCl.Evaluate(ctx, Request{
+	altResp, err := altCl.Evaluate(ctx, Request{
 		State: "test",
 		Questions: map[string]Question{
 			"safe": {Type: TypeNoul, Instructions: "safe?"},
 		},
 	})
 	if err != nil {
-		t.Fatalf("OpenRouter Evaluate: %v", err)
+		t.Fatalf("alt Evaluate: %v", err)
 	}
-	if p, ok := orResp.Answers["safe"].NoulProb(); !ok || p != 0.87 {
-		t.Fatalf("expected normalized OpenRouter noul prob 0.87, got %v (ok=%v)", p, ok)
+	if p, ok := altResp.Answers["safe"].NoulProb(); !ok || p != 0.87 {
+		t.Fatalf("expected normalized noul prob 0.87, got %v (ok=%v)", p, ok)
+	}
+
+	// 3. Default Config{} (zero env/args) points directly to local open-weight 127.0.0.1:8000/v1/systemone.
+	defCl, err := NewClient(Config{Network: "main"})
+	if err != nil {
+		t.Fatalf("NewClient default: %v", err)
+	}
+	if defCl.Health().Endpoint != DefaultBaseURL || defCl.Model() != DefaultModel {
+		t.Fatalf("unexpected defaults: endpoint=%s model=%s", defCl.Health().Endpoint, defCl.Model())
 	}
 }
 
-func TestClientValidationOutOfSetCircuitBreakerAndHostAllowlist(t *testing.T) {
+func TestClientValidationHostedRefusalCircuitBreakerAndSSRF(t *testing.T) {
 	ctx := context.Background()
+
+	// Hosted third-party Jev cloud endpoints MUST be rejected outright!
+	for _, blocked := range []string{
+		"https://api.typesafe.ai/v1/systemone",
+		"https://openrouter.ai/api/alpha/decisions",
+	} {
+		if _, err := NewClient(Config{BaseURL: blocked, Network: "main"}); !errors.Is(err, ErrHostedProviderDisallowed) {
+			t.Fatalf("expected ErrHostedProviderDisallowed for %s, got %v", blocked, err)
+		}
+	}
 
 	// Out-of-set choice must be rejected.
 	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"model": "jev-latest",
+			"model": "kev-0.8b",
 			"answers": {"pick": {"type": "choice", "choice": "invented_option", "confidence": 0.99}},
 			"usage": {"input_tokens": 50}
 		}`))
 	}))
 	defer badSrv.Close()
 
-	clBad, err := NewClient(Config{BaseURL: badSrv.URL, APIKey: "k", Network: "memory"})
+	clBad, err := NewClient(Config{BaseURL: badSrv.URL, Network: "memory"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +175,7 @@ func TestClientValidationOutOfSetCircuitBreakerAndHostAllowlist(t *testing.T) {
 	}
 
 	// Host allowlist enforcement (policy egress pinning).
-	clBad.SetAllowedHosts([]string{"api.typesafe.ai"})
+	clBad.SetAllowedHosts([]string{"jev.hub.example"})
 	if _, err := clBad.Evaluate(ctx, Request{
 		State:     "s",
 		Questions: map[string]Question{"q": {Type: TypeNoul, Instructions: "?"}},
@@ -173,13 +193,12 @@ func TestClientValidationOutOfSetCircuitBreakerAndHostAllowlist(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"model":"jev-latest","answers":{"q":{"type":"noul","noul":0.8}},"usage":{"input_tokens":20}}`))
+		_, _ = w.Write([]byte(`{"model":"kev-0.8b","answers":{"q":{"type":"noul","noul":0.8}},"usage":{"input_tokens":20}}`))
 	}))
 	defer flakySrv.Close()
 
 	clFlaky, err := NewClient(Config{
 		BaseURL:          flakySrv.URL,
-		APIKey:           "k",
 		Network:          "memory",
 		CircuitThreshold: 2,
 		CircuitCooldown:  15 * time.Second,
@@ -207,12 +226,14 @@ func TestClientValidationOutOfSetCircuitBreakerAndHostAllowlist(t *testing.T) {
 		t.Fatal("expected circuit breaker closed after recovery")
 	}
 
-	// Mainnet must refuse http:// and private loopback endpoints!
-	if _, err := NewClient(Config{
-		BaseURL: "http://127.0.0.1:9999/v1/systemone",
-		APIKey:  "k",
-		Network: "main",
-	}); err == nil {
-		t.Fatal("expected mainnet Jev client to block non-HTTPS / loopback endpoint")
+	// Mainnet still blocks non-HTTPS remote endpoints AND private/cloud-metadata IPs!
+	for _, bad := range []string{
+		"http://jev.remote-hub.example/v1/systemone",
+		"https://169.254.169.254/v1/systemone",
+		"http://10.0.0.15:8000/v1/systemone",
+	} {
+		if _, err := NewClient(Config{BaseURL: bad, Network: "main"}); err == nil {
+			t.Fatalf("expected mainnet client to block %s", bad)
+		}
 	}
 }

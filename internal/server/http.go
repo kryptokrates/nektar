@@ -8,6 +8,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"github.com/lightwebinc/bcommon/guard"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
@@ -325,7 +327,7 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		})
 	}
 	for _, d := range deals {
-		if d.Role == "seller" && d.Status == "settled" && d.PriceSats > 0 {
+		if d.Role == "seller" && d.Status == "settled" && d.PriceSats > 0 && d.PaymentTxID != "" {
 			earned += d.PriceSats
 			if d.UpdatedAt >= cutoff24h {
 				earned24h += d.PriceSats
@@ -1067,7 +1069,18 @@ func (a *App) handleMarketPurchase(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := a.broker.HandlePurchase(r.Context(), req)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, market.PurchaseResponse{OK: false, OfferID: req.OfferID, Error: err.Error()})
+		code := http.StatusBadRequest
+		if errors.Is(err, chain.ErrTrackerUnavailable) {
+			code = http.StatusServiceUnavailable
+		} else if errors.Is(err, chain.ErrConflictDetected) {
+			code = http.StatusConflict
+		}
+		writeJSON(w, code, market.PurchaseResponse{OK: false, OfferID: req.OfferID, Error: err.Error()})
+		return
+	}
+	if resp != nil && resp.Status == "awaiting_confirmation" {
+		a.BroadcastDashboardEvent("payment_pending")
+		writeJSON(w, http.StatusAccepted, resp)
 		return
 	}
 	a.BroadcastDashboardEvent("deal_settled")
@@ -1169,12 +1182,12 @@ func (a *App) handlePublicFaucet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	txid, sats, err := hub.DripFaucet(r.Context(), a.mem, in.Address, 2000, 10_000)
+	txid, beefHex, sats, err := hub.DripFaucetBEEF(r.Context(), a.mem, in.Address, 2000, 10_000)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "txid": txid, "sats": sats})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "txid": txid, "beefHex": beefHex, "sats": sats})
 }
 
 func (a *App) handlePolicyPreset(w http.ResponseWriter, r *http.Request) {
@@ -1275,7 +1288,7 @@ func (a *App) buildPublicCardSummary() map[string]any {
 	deals, _ := a.mem.DB().ListDeals(500)
 	var earned uint64
 	for _, d := range deals {
-		if d.Role == "seller" && d.Status == "settled" {
+		if d.Role == "seller" && d.Status == "settled" && d.PaymentTxID != "" {
 			earned += d.PriceSats
 		}
 	}
@@ -1443,32 +1456,72 @@ func (a *App) withPaywall(toolName string, next http.Handler) http.Handler {
 				return
 			}
 
+			// Full consensus SPV verification (spv.Verify + REFUSED-BUMP + tracker outage separation + settleDepth +
+			// per-tx/aggregate 0-conf caps + maxUnconfirmedAncestors + conflict watch) BEFORE replay claim or broadcast!
+			var settledAtDepth bool
+			if a.mem.Chain().Network() != "memory" {
+				zeroConfMax := a.mem.Chain().ZeroConfMaxSats()
+				zeroConfAgg := a.mem.Chain().ZeroConfMaxAggregateSats()
+				maxAnc := a.mem.Chain().MaxUnconfirmedAncestors()
+				if a.mkt != nil && a.mkt.Policy() != nil {
+					pMax, pAgg, pAnc := a.mkt.Policy().ZeroConfLimits()
+					if pMax > 0 || zeroConfMax == 0 {
+						zeroConfMax = pMax
+					}
+					if pAgg > 0 || zeroConfAgg == 0 {
+						zeroConfAgg = pAgg
+					}
+					if pAnc > 0 {
+						maxAnc = pAnc
+					}
+				}
+				ver, vErr := chain.VerifyCounterpartyPaymentBEEF(r.Context(), rawBeef, a.mem.Chain().Tracker(), chain.PaymentVerifyOpts{
+					ExpectedAmountSats:       price,
+					MaxUnconfirmedAncestors:  maxAnc,
+					ZeroConfMaxSats:          zeroConfMax,
+					ZeroConfMaxAggregateSats: zeroConfAgg,
+					SettleDepth:              a.mem.Chain().SettleDepth(),
+					AllowZeroConf:            zeroConfMax > 0,
+					ConflictWatch:            a.mem.Chain().ZeroConfWatch(),
+					TrackOnZeroConf:          true,
+				})
+				if vErr != nil {
+					if errors.Is(vErr, chain.ErrTrackerUnavailable) {
+						writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "header tracker unavailable: " + vErr.Error()})
+						return
+					}
+					if errors.Is(vErr, chain.ErrConflictDetected) {
+						writeJSON(w, http.StatusConflict, map[string]any{"error": "payment_conflict", "reason": vErr.Error()})
+						return
+					}
+					writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "payment SPV verification failed: " + vErr.Error()})
+					return
+				}
+				if ver.NeedsConfirmation {
+					writeJSON(w, http.StatusPaymentRequired, map[string]any{
+						"error":         "confirmation_required",
+						"reason":        ver.EscalationReason,
+						"requiredDepth": a.mem.Chain().SettleDepth(),
+						"txid":          txid,
+					})
+					return
+				}
+				settledAtDepth = ver.SettledAtDepth
+			}
+
 			// Atomic cross-interface SQLite payment claim registry (shared with /v1/market/purchase).
 			if err := a.mem.DB().ClaimPaymentAtomic(txid, inKeys); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]any{"error": "payment_rejected", "reason": err.Error()})
 				return
 			}
 
-			// On live networks, verify mined BUMP confirmation against our PoW header tracker,
-			// or require synchronous network broadcast (RelayExternalTx) of unconfirmed transactions
-			// BEFORE serving paid endpoints (prevents double-spend acceptance via swallowed InternalizeAction errors).
-			if a.mem.Chain().Network() != "memory" {
-				confirmed := false
-				if tx.MerklePath != nil {
-					if tracker := a.mem.Chain().Tracker(); tracker != nil {
-						if root, rErr := tx.MerklePath.ComputeRoot(txHash); rErr == nil && root != nil {
-							if valid, vErr := tracker.IsValidRootForHeight(r.Context(), root, tx.MerklePath.BlockHeight); vErr == nil && valid {
-								confirmed = true
-							}
-						}
-					}
-				}
-				if !confirmed {
-					if rErr := a.mem.Chain().RelayExternalTx(r.Context(), tx); rErr != nil {
-						_ = a.mem.DB().ReleasePaymentClaim(txid)
-						writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "unconfirmed payment broadcast failed: " + rErr.Error()})
-						return
-					}
+			// Broadcast unmined payment once without double-broadcasting or poisoning seller SpendGuard:
+			// in embedded BRC-29 mode, InternalizeBRC29 performs SPV + single WithIncomingInternalize broadcast.
+			if a.mem.Chain().Network() != "memory" && !settledAtDepth && (!isBRC29 || a.mem.Chain().WalletMode() != "embedded") {
+				if rErr := a.mem.Chain().RelayExternalTx(r.Context(), tx); rErr != nil {
+					_ = a.mem.DB().ReleasePaymentClaim(txid)
+					writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "unconfirmed payment broadcast failed: " + rErr.Error()})
+					return
 				}
 			}
 
@@ -1480,17 +1533,20 @@ func (a *App) withPaywall(toolName string, next http.Handler) http.Handler {
 					"BRC-105 payment for "+toolName, []string{"brc105", toolName},
 				)
 				if err != nil {
+					_ = a.mem.DB().ReleasePaymentClaim(txid)
 					writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 payment verification failed: " + err.Error()})
 					return
 				}
 			} else {
 				paid, err = a.mem.Chain().AdoptReceived(r.Context(), tx)
 				if err != nil {
+					_ = a.mem.DB().ReleasePaymentClaim(txid)
 					writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "payment verification failed: " + err.Error()})
 					return
 				}
 			}
 			if paid < price {
+				_ = a.mem.DB().ReleasePaymentClaim(txid)
 				writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": fmt.Sprintf("insufficient payment (%d < %d sats)", paid, price)})
 				return
 			}

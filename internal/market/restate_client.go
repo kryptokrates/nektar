@@ -376,23 +376,19 @@ func (c *RestateClient) GetTxState(ctx context.Context, txid string) (*TxState, 
 	return &out, nil
 }
 
-// TriggerAnchorCadence pokes the private AnchorCadence VO asynchronously with a quantized slot idempotency key (R6, R9).
+// TriggerAnchorCadence pokes the private AnchorCadence VO asynchronously with a short 5-second
+// ingress dedup bucket (separate from IntervalSeconds used for deferred dry-wallet/HasMore cadence)
+// so rapid on-remember bursts coalesce without dropping subsequent fragments for 5 minutes!
 func (c *RestateClient) TriggerAnchorCadence(ctx context.Context, shard string, intervalSec int64) (string, error) {
-	var slot int64
-	if intervalSec > 0 {
-		slot = (time.Now().Unix() / intervalSec) * intervalSec
-	} else {
-		// Short 5-second dedup bucket for immediate on-remember pokes!
-		slot = (time.Now().Unix() / 5) * 5
-	}
+	dedupSlot := (time.Now().Unix() / 5) * 5
 	opts := []ingress.SendOption{
-		restate.WithIdempotencyKey(fmt.Sprintf("rt-anchor:%s:%d", shard, slot)),
+		restate.WithIdempotencyKey(fmt.Sprintf("rt-anchor:%s:%d", shard, dedupSlot)),
 	}
 	if hdrs := c.runtimeHeaders(); hdrs != nil {
 		opts = append(opts, restate.WithHeaders(hdrs))
 	}
 	sr, err := ingress.ServiceSend[RuntimeAnchorTriggerInput](c.Ingress, "NektarRuntime", "triggerAnchor").
-		Send(ctx, RuntimeAnchorTriggerInput{Shard: shard, IntervalSeconds: intervalSec, Slot: slot}, opts...)
+		Send(ctx, RuntimeAnchorTriggerInput{Shard: shard, IntervalSeconds: intervalSec, Slot: dedupSlot}, opts...)
 	if err != nil {
 		return "", fmt.Errorf("restate: triggerAnchor %s: %w", shard, err)
 	}

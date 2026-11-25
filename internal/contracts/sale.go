@@ -224,10 +224,10 @@ func VerifySaleOffer(offer *KeyedSaleOffer, buyerPub, leafHex string) error {
 			return fmt.Errorf("sale: invalid buyerPub: %w", bErr)
 		}
 	}
-	if leafHex != "" {
-		if lb, lErr := hex.DecodeString(leafHex); lErr != nil || len(lb) != 32 {
-			return errors.New("sale: leafHex must be 32-byte hex")
-		}
+	// Require a non-empty 32-byte hex Leaf on every sale offer so an empty Leaf can NEVER
+	// bypass mandatory buyer SPV ProofBundle verification.
+	if lb, lErr := hex.DecodeString(leafHex); lErr != nil || len(lb) != 32 {
+		return errors.New("sale: leafHex must be non-empty 32-byte hex")
 	}
 	sig, err := core.ParseStrictLowSDER(offer.OfferSig)
 	if err != nil {
@@ -305,6 +305,9 @@ func ClaimKeyedSale(offer *KeyedSaleOffer, releasedKey []byte) ([]byte, error) {
 	ct, err := hex.DecodeString(offer.CiphertextHex)
 	if err != nil {
 		return nil, err
+	}
+	if offer.CiphertextSHA256 != "" && hex.EncodeToString(core.SHA256(ct)) != offer.CiphertextSHA256 {
+		return nil, errors.New("sale: ciphertext SHA-256 does not match signed offer ciphertextSha256")
 	}
 	return keyed.OpenSegment(k, salt, ct)
 }

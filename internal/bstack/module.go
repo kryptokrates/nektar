@@ -2,6 +2,7 @@ package bstack
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,11 +16,14 @@ import (
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	sdkpushdrop "github.com/bsv-blockchain/go-sdk/transaction/template/pushdrop"
+	"github.com/lightwebinc/bcommon/carrier"
 	"github.com/lightwebinc/bcommon/module"
+	"github.com/lightwebinc/bcommon/record"
 )
 
 // MarketEvent is emitted whenever the Nektar overlay LookupService admits a verified market artifact.
 // The embedded Hub assigns monotonic Seq numbers and fans these out over cursored SSE (/events).
+// BEEF carries the verified transaction bytes so subscribers & federation peers verify locally without refetch.
 type MarketEvent struct {
 	Seq        int64         `json:"seq,omitempty"`
 	Topic      string        `json:"topic"`
@@ -27,6 +31,7 @@ type MarketEvent struct {
 	Vout       uint32        `json:"vout"`
 	AdmittedAt int64         `json:"admittedAt"`
 	Payload    MarketPayload `json:"payload"`
+	BEEF       []byte        `json:"beef,omitempty"`
 }
 
 // MarketTopicManager implements lightwebinc/bcommon/module.TopicManager for one `tm_nektar_<net>_<nibble>` lane.
@@ -112,6 +117,10 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		if so.Offer.OfferID == "" || so.Offer.WantID == "" || so.Offer.Pub == "" {
 			return errors.New("offer missing required ids or pub")
 		}
+		leafRaw, lErr := hex.DecodeString(strings.TrimSpace(so.Offer.Leaf))
+		if lErr != nil || len(leafRaw) != 32 {
+			return errors.New("offer missing or invalid 32-byte hex leaf")
+		}
 		if expectedNet != "" && so.Offer.Net != expectedNet {
 			return fmt.Errorf("offer net %q != %q", so.Offer.Net, expectedNet)
 		}
@@ -176,6 +185,75 @@ func topicMatchesDomains(net, topic string, domains []string) bool {
 	return false
 }
 
+// ClassifyNkt1 implements bcommon/carrier.Classify for canonical CBOR nkt1 PushDrop records.
+func ClassifyNkt1(payload []byte) (bool, error) {
+	if !record.Claims(payload, MarketMagic) {
+		return false, nil
+	}
+	if _, err := DecodePayload(payload); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// ExtractPayloadIdentity returns the compressed 33-byte identity pubkey declared inside a MarketPayload.
+func ExtractPayloadIdentity(p MarketPayload) ([]byte, error) {
+	var pubHex string
+	switch p.Kind {
+	case KindWant:
+		var sw SignedWant
+		if err := json.Unmarshal(p.Body, &sw); err != nil {
+			return nil, fmt.Errorf("invalid want JSON: %w", err)
+		}
+		pubHex = sw.Want.Pub
+	case KindOffer:
+		var so SignedOffer
+		if err := json.Unmarshal(p.Body, &so); err != nil {
+			return nil, fmt.Errorf("invalid offer JSON: %w", err)
+		}
+		pubHex = so.Offer.Pub
+	case KindAnnounce:
+		var sa SignedAnnounce
+		if err := json.Unmarshal(p.Body, &sa); err != nil {
+			return nil, fmt.Errorf("invalid announce JSON: %w", err)
+		}
+		pubHex = sa.Announce.Pub
+	default:
+		return nil, fmt.Errorf("unsupported market kind %q", p.Kind)
+	}
+	raw, err := hex.DecodeString(strings.TrimSpace(pubHex))
+	if err != nil || len(raw) != 33 {
+		return nil, errors.New("invalid 33-byte compressed identity pubkey")
+	}
+	return raw, nil
+}
+
+// VerifyMarketCarrier decodes and enforces all bcommon/carrier REFUSED-* rules
+// (canonical PushDrop shape, unmineable locktime/sequence, canonical single-push unlocking script,
+// BRC-42 key derivation from the payload's declared identity key, and PushDrop field signature)
+// followed by ValidateMarketPayload.
+func VerifyMarketCarrier(tx *transaction.Transaction, expectedNet, expectedTopic string, now time.Time) (uint32, MarketPayload, error) {
+	c, err := carrier.Decode(tx, ClassifyNkt1)
+	if err != nil {
+		return 0, MarketPayload{}, err
+	}
+	p, err := DecodePayload(c.Payload)
+	if err != nil {
+		return 0, MarketPayload{}, err
+	}
+	idBytes, err := ExtractPayloadIdentity(p)
+	if err != nil {
+		return 0, MarketPayload{}, err
+	}
+	if err := c.Validate(MarketCarrierParams, idBytes); err != nil {
+		return 0, MarketPayload{}, err
+	}
+	if err := ValidateMarketPayload(p, expectedNet, expectedTopic, now); err != nil {
+		return 0, MarketPayload{}, err
+	}
+	return c.OutputIndex, p, nil
+}
+
 func (m *MarketTopicManager) IdentifyAdmissibleOutputs(_ context.Context, beef *transaction.Beef, txid *chainhash.Hash, _ []uint32) (overlay.AdmittanceInstructions, error) {
 	var out overlay.AdmittanceInstructions
 	if beef == nil || txid == nil {
@@ -186,6 +264,27 @@ func (m *MarketTopicManager) IdentifyAdmissibleOutputs(_ context.Context, beef *
 		return out, nil
 	}
 	now := m.now()
+	isLive := m.Net == "main" || m.Net == "testnet"
+	if isLive {
+		vout, _, err := VerifyMarketCarrier(tx, m.Net, m.Topic, now)
+		if err != nil {
+			return out, fmt.Errorf("market carrier refused: %w", err)
+		}
+		out.OutputsToAdmit = append(out.OutputsToAdmit, vout)
+		return out, nil
+	}
+	// On memory/regtest: if the transaction carries a PushDrop carrier (with inputs), enforce
+	// the full REFUSED-* carrier contract so tests can exercise live carrier rules directly.
+	if len(tx.Inputs) > 0 {
+		vout, _, err := VerifyMarketCarrier(tx, m.Net, m.Topic, now)
+		if err == nil {
+			out.OutputsToAdmit = append(out.OutputsToAdmit, vout)
+			return out, nil
+		}
+		if !errors.Is(err, carrier.ErrNotCarrier) {
+			return out, fmt.Errorf("market carrier refused: %w", err)
+		}
+	}
 	for i, txOut := range tx.Outputs {
 		p, ok, _ := ExtractNkt1Payload(txOut.LockingScript)
 		if !ok {
@@ -226,6 +325,7 @@ type indexedRecord struct {
 	outpoint   transaction.Outpoint
 	topic      string
 	payload    MarketPayload
+	beef       []byte
 	admittedAt int64
 	wantID     string
 	offerID    string
@@ -261,6 +361,7 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		outpoint:   op,
 		topic:      topic,
 		payload:    p,
+		beef:       append([]byte(nil), beef...),
 		admittedAt: time.Now().UnixMilli(),
 	}
 	switch p.Kind {
@@ -334,6 +435,7 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 			Vout:       op.Index,
 			AdmittedAt: rec.admittedAt,
 			Payload:    p,
+			BEEF:       append([]byte(nil), rec.beef...),
 		})
 	}
 	return nil
@@ -467,6 +569,7 @@ func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQ
 			Vout:       rec.outpoint.Index,
 			AdmittedAt: rec.admittedAt,
 			Payload:    rec.payload,
+			BEEF:       append([]byte(nil), rec.beef...),
 		})
 		opCopy := rec.outpoint
 		formulas = append(formulas, lookup.LookupFormula{Outpoint: &opCopy})

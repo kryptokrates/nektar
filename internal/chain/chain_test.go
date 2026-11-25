@@ -154,16 +154,21 @@ func TestClientWalletWireRoundTrip(t *testing.T) {
 			t.Fatalf("SeedCoinbaseOutput: %v", err)
 		}
 	}
+	if _, err := desktop.AbsorbFundingBasket(ctx); err != nil {
+		t.Fatalf("desktop.AbsorbFundingBasket: %v", err)
+	}
 
 	wireSrv := httptest.NewServer(wirewallet.Serve(desktop))
 	defer wireSrv.Close()
 
-	// Open chain.Port in NEKTAR_WALLET=client mode pointing at the simulated BSV Desktop wire endpoint!
+	// Open chain.Port in NEKTAR_WALLET=client mode pointing at the simulated BSV Desktop wire endpoint
+	// with an offline TestTracker (real live networks enforce >=2 independent PoW witnesses!).
 	clientPort, err := Open(ctx, Config{
 		Network:       "testnet",
 		DataDir:       t.TempDir(),
 		WalletMode:    "client",
 		WalletWireURL: wireSrv.URL,
+		TestTracker:   tc,
 	})
 	if err != nil {
 		t.Fatalf("Open client port: %v", err)
@@ -220,7 +225,7 @@ func TestClientWalletWireRoundTrip(t *testing.T) {
 		t.Fatalf("client Send BRC-29 failed: %v", err)
 	}
 	// Peer internalizes the BRC-29 payment sent by clientPort!
-	peerPort := &Port{wallet: peer, engine: peer, signer: peer.Signer()}
+	peerPort := &Port{wallet: peer, engine: peer, signer: peer.Signer(), tracker: tc, settleDepth: 1, maxUnconfAnc: DefaultMaxUnconfirmedAncestors}
 	credited, err := peerPort.InternalizeBRC29(
 		ctx, sendRes.BEEF, sendRes.OutputIndex,
 		sendRes.DerivationPrefix, sendRes.DerivationSuffix, sendRes.SenderIdentityKey,

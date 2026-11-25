@@ -1130,34 +1130,59 @@ func cmdHook(args []string) error {
 		results := make([]any, 0, len(tokens))
 		for _, tok := range tokens {
 			var res any
+			var vErr error
 			if live {
-				res, _ = callLiveTool(info, "verifyReceipt", map[string]any{"token": tok})
+				res, vErr = callLiveTool(info, "verifyReceipt", map[string]any{"token": tok})
 			} else {
 				ctx := context.Background()
-				if rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort); err == nil {
-					res, _ = rt.mem.VerifyReceipt(ctx, tok)
+				rt, rErr := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
+				if rErr != nil {
+					vErr = fmt.Errorf("open runtime: %w", rErr)
+				} else {
+					res, vErr = rt.mem.VerifyReceipt(ctx, tok)
 					rt.closeFn()
 				}
 			}
-			if res != nil {
-				results = append(results, res)
-				b, _ := json.Marshal(res)
-				var v struct {
-					OK      bool   `json:"ok"`
-					Verdict string `json:"verdict"`
-					Reason  string `json:"reason"`
+			if vErr != nil {
+				failedReasons = append(failedReasons, fmt.Sprintf("%s: verification error (%v)", tok, vErr))
+				continue
+			}
+			if res == nil {
+				failedReasons = append(failedReasons, fmt.Sprintf("%s: empty verification response", tok))
+				continue
+			}
+			results = append(results, res)
+			b, mErr := json.Marshal(res)
+			if mErr != nil {
+				failedReasons = append(failedReasons, fmt.Sprintf("%s: marshal verification response: %v", tok, mErr))
+				continue
+			}
+			var v struct {
+				OK      bool   `json:"ok"`
+				Verdict string `json:"verdict"`
+				Reason  string `json:"reason"`
+			}
+			if uErr := json.Unmarshal(b, &v); uErr != nil {
+				failedReasons = append(failedReasons, fmt.Sprintf("%s: invalid verification payload (%v)", tok, uErr))
+				continue
+			}
+			if !v.OK || v.Verdict == "red" {
+				reason := v.Reason
+				if reason == "" {
+					reason = "verdict=" + v.Verdict
 				}
-				if json.Unmarshal(b, &v) == nil && (!v.OK || v.Verdict == "red") {
-					failedReasons = append(failedReasons, fmt.Sprintf("%s: %s", tok, v.Reason))
-				}
+				failedReasons = append(failedReasons, fmt.Sprintf("%s: %s", tok, reason))
 			}
 		}
-		if len(failedReasons) > 0 && !*codexMode {
-			return printJSON(map[string]any{
-				"decision": "block",
-				"reason":   "Nektar receipt verification failed: " + strings.Join(failedReasons, "; ") + " — re-ground via groundedAnswer or state answer is ungrounded.",
-				"verified": results,
-			})
+		if len(failedReasons) > 0 {
+			if !*codexMode {
+				return printJSON(map[string]any{
+					"decision": "block",
+					"reason":   "Nektar receipt verification failed: " + strings.Join(failedReasons, "; ") + " — re-ground via groundedAnswer or state answer is ungrounded.",
+					"verified": results,
+				})
+			}
+			return fmt.Errorf("nektar receipt verification failed: %s", strings.Join(failedReasons, "; "))
 		}
 		return printJSON(map[string]any{"verified": results})
 

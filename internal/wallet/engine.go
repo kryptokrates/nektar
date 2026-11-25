@@ -20,7 +20,11 @@ import (
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/script"
+	"github.com/bsv-blockchain/go-sdk/script/interpreter"
+	"github.com/bsv-blockchain/go-sdk/script/interpreter/scriptflag"
+	"github.com/bsv-blockchain/go-sdk/spv"
 	"github.com/bsv-blockchain/go-sdk/transaction"
+	"github.com/bsv-blockchain/go-sdk/transaction/chaintracker"
 	"github.com/bsv-blockchain/go-sdk/transaction/template/p2pkh"
 	sdkwallet "github.com/bsv-blockchain/go-sdk/wallet"
 	"github.com/bsv-blockchain/go-wallet-toolbox/pkg/brc29"
@@ -168,6 +172,15 @@ func Open(cfg Config) (*Engine, error) {
 		minAgeSec = 1
 	}
 
+	blocksDelay := uint(0)
+	if !cfg.InMemoryStore {
+		if cfg.SettleDepth > 0 {
+			blocksDelay = uint(cfg.SettleDepth)
+		} else {
+			blocksDelay = 1
+		}
+	}
+
 	tbLogger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 	provider, err := storage.NewGORMProvider(
 		chainNet,
@@ -186,7 +199,8 @@ func Open(cfg Config) (*Engine, error) {
 		}),
 		storage.WithSynchronizeTxStatuses(defs.SynchronizeTxStatuses{
 			MaxAttempts:            10,
-			BlocksDelay:            0,
+			MaxRebroadcastAttempts: 5,
+			BlocksDelay:            blocksDelay,
 			CheckNoSendPeriodHours: 24,
 		}),
 	)
@@ -256,6 +270,9 @@ func Open(cfg Config) (*Engine, error) {
 	e.fuel = newFuelKeeper(e)
 	e.monitor = newMonitor(e)
 	svc.ownedOutputSum = e.ownedOutputSumForTx
+	svc.isIncomingTx = e.isIncomingTx
+	svc.loadTxFromDB = e.loadTxFromKnownTxs
+	svc.loadBeefFromDB = e.loadBeefFromStorage
 
 	// Reclaim any orphaned NoSend transactions left behind by a previous process crash.
 	if !cfg.InMemoryStore {
@@ -489,16 +506,257 @@ func (e *Engine) logf(format string, args ...any) {
 }
 
 // Public accessors.
-func (e *Engine) Toolbox() *toolboxwallet.Wallet { return e.tb }
-func (e *Engine) Provider() *storage.Provider    { return e.provider }
-func (e *Engine) IdentityKey() *ec.PublicKey     { return e.rootKey.PubKey() }
-func (e *Engine) IdentityPubHex() string         { return hex.EncodeToString(e.rootKey.PubKey().Compressed()) }
-func (e *Engine) FundAddress() string            { return e.fundAddr }
-func (e *Engine) FundScript() *script.Script     { return e.fundScript }
-func (e *Engine) Signer() *bwallet.Signer        { return e.signer }
-func (e *Engine) FuelKeeper() *FuelKeeper        { return e.fuel }
-func (e *Engine) Monitor() *Monitor              { return e.monitor }
-func (e *Engine) FuelDenom() uint64              { return e.fuelDenom }
+func (e *Engine) Toolbox() *toolboxwallet.Wallet    { return e.tb }
+func (e *Engine) Provider() *storage.Provider       { return e.provider }
+func (e *Engine) Tracker() chaintracker.ChainTracker { return e.cfg.Tracker }
+func (e *Engine) IdentityKey() *ec.PublicKey        { return e.rootKey.PubKey() }
+func (e *Engine) IdentityPubHex() string            { return hex.EncodeToString(e.rootKey.PubKey().Compressed()) }
+func (e *Engine) FundAddress() string               { return e.fundAddr }
+func (e *Engine) FundScript() *script.Script        { return e.fundScript }
+func (e *Engine) Signer() *bwallet.Signer           { return e.signer }
+func (e *Engine) FuelKeeper() *FuelKeeper           { return e.fuel }
+func (e *Engine) Monitor() *Monitor                 { return e.monitor }
+func (e *Engine) FuelDenom() uint64                 { return e.fuelDenom }
+
+// HandleReorg rolls back orphaned proofs in go-wallet-toolbox storage and evicts reorged
+// MerklePaths from the local LRU cache so stale proofs are never served after a chain fork.
+func (e *Engine) HandleReorg(ctx context.Context, forkHeight uint32, orphanedHashes []string) error {
+	e.txCache.EvictFromHeight(forkHeight)
+	var firstErr error
+	if e.provider != nil && len(orphanedHashes) > 0 {
+		if err := e.provider.HandleReorg(ctx, orphanedHashes); err != nil {
+			firstErr = err
+		}
+	}
+	// Clear any remaining cached proof metadata at or above forkHeight in known_txes / transactions
+	// in case a header fork wasn't matched by block_hash alone.
+	if e.sqlDB != nil && forkHeight > 0 {
+		_, _ = e.sqlDB.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE "%s" SET status = 'unproven', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND status = 'completed' AND tx_id IN (SELECT tx_id FROM "%s" WHERE block_height >= ?)`, e.tables.transactions, e.tables.knownTxs),
+			e.userID, forkHeight,
+		)
+		_, _ = e.sqlDB.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE "%s" SET status = 'unmined', block_height = NULL, block_hash = NULL, merkle_root = NULL, merkle_path = NULL WHERE block_height >= ?`, e.tables.knownTxs),
+			forkHeight,
+		)
+	}
+	return firstErr
+}
+
+func (e *Engine) isIncomingTx(txid string) bool {
+	if e.readDB == nil || txid == "" {
+		return false
+	}
+	var isOut int
+	q := fmt.Sprintf(`SELECT is_outgoing FROM "%s" WHERE tx_id = ? AND user_id = ? AND deleted_at IS NULL LIMIT 1`, e.tables.transactions)
+	if err := e.readDB.QueryRow(q, txid, e.userID).Scan(&isOut); err != nil {
+		return false
+	}
+	return isOut == 0
+}
+
+func (e *Engine) loadBeefFromStorage(ctx context.Context, txid string) (*transaction.Beef, error) {
+	if e.provider == nil || txid == "" {
+		return nil, fmt.Errorf("wallet: storage unavailable")
+	}
+	return e.provider.GetBeefForTransaction(ctx, txid, wdk.StorageGetBeefOptions{})
+}
+
+func (e *Engine) loadTxFromKnownTxs(ctx context.Context, txid string) *transaction.Transaction {
+	if e.provider == nil || txid == "" {
+		return nil
+	}
+	ktxs, err := e.provider.KnownTxEntity().Read().TxID(txid).Find(ctx)
+	if err != nil || len(ktxs) == 0 {
+		return nil
+	}
+	ktx := ktxs[0]
+	if len(ktx.RawTx) == 0 {
+		return nil
+	}
+	tx, pErr := transaction.NewTransactionFromBytes(ktx.RawTx)
+	if pErr != nil {
+		return nil
+	}
+	if len(ktx.MerklePath) > 0 {
+		if mp, mpErr := transaction.NewMerklePathFromBinary(ktx.MerklePath); mpErr == nil {
+			tx.MerklePath = mp
+		}
+	}
+	if tx.MerklePath == nil && len(ktx.InputBEEF) > 0 {
+		if inBeef, _, _, bErr := guard.ParseBEEF(ktx.InputBEEF, guard.DefaultBound); bErr == nil && inBeef != nil {
+			hydrateInputs(tx, inBeef, e.txCache, nil, 0, e.cfg.MaxUnprovenDepth)
+		}
+	}
+	return tx
+}
+
+// promoteTxStatusAtomic atomically transitions a transaction row (from submission_unknown, nosend,
+// failed, or aborted) to completed or unproven, restoring outputs.spendable=1, upserting user_utxos,
+// and synchronizing known_txes (including block_hash & merkle_root when mined) so UTXOs are never stranded.
+func (e *Engine) promoteTxStatusAtomic(
+	ctx context.Context,
+	dbTxRowID int64,
+	txid string,
+	newStatus string,
+	txObj *transaction.Transaction,
+	mp *transaction.MerklePath,
+	height uint32,
+	blockHash string,
+	merkleRoot string,
+) error {
+	if e.sqlDB == nil || txid == "" {
+		return errors.New("wallet: sqlDB unavailable")
+	}
+	if dbTxRowID == 0 {
+		_ = e.readDB.QueryRowContext(ctx,
+			fmt.Sprintf(`SELECT id FROM "%s" WHERE user_id = ? AND tx_id = ? AND deleted_at IS NULL LIMIT 1`, e.tables.transactions),
+			e.userID, txid,
+		).Scan(&dbTxRowID)
+	}
+	if dbTxRowID == 0 {
+		return fmt.Errorf("wallet: transaction row not found for %s", txid)
+	}
+
+	dbTx, err := e.sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dbTx.Rollback() }()
+
+	if _, err := dbTx.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE "%s" SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`, e.tables.transactions),
+		newStatus, dbTxRowID, e.userID,
+	); err != nil {
+		return err
+	}
+	if txObj != nil {
+		for _, in := range txObj.Inputs {
+			if in == nil || in.SourceTXID == nil {
+				continue
+			}
+			srcTx := in.SourceTXID.String()
+			_, _ = dbTx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE "%s" SET spendable = 0, spent_by = ? WHERE user_id = ? AND tx_id = ? AND vout = ? AND deleted_at IS NULL`, e.tables.outputs),
+				dbTxRowID, e.userID, srcTx, in.SourceTxOutIndex,
+			)
+			_, _ = dbTx.ExecContext(ctx,
+				fmt.Sprintf(`DELETE FROM "%s" WHERE user_id = ? AND output_id IN (SELECT id FROM "%s" WHERE user_id = ? AND tx_id = ? AND vout = ?)`, e.tables.userUTXOs, e.tables.outputs),
+				e.userID, e.userID, srcTx, in.SourceTxOutIndex,
+			)
+		}
+	}
+	if _, err := dbTx.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE "%s" SET spendable = 1 WHERE transaction_id = ? AND user_id = ? AND spent_by IS NULL AND deleted_at IS NULL AND basket_name IN ('default','reserve','fuel','nektar funding')`, e.tables.outputs),
+		dbTxRowID, e.userID,
+	); err != nil {
+		return err
+	}
+	utxoStatus := "unproven"
+	if newStatus == StatusCompleted {
+		utxoStatus = "mined"
+	}
+	if _, err := dbTx.ExecContext(ctx,
+		fmt.Sprintf(`INSERT INTO "%s" (user_id, output_id, basket_name, satoshis, estimated_input_size, created_at, utxo_status)
+			SELECT user_id, id, basket_name, satoshis, 148, CURRENT_TIMESTAMP, ?
+			FROM "%s"
+			WHERE transaction_id = ? AND user_id = ? AND spendable = 1 AND spent_by IS NULL AND deleted_at IS NULL AND basket_name IN ('default','reserve','fuel','nektar funding')
+			ON CONFLICT(output_id) DO UPDATE SET utxo_status = excluded.utxo_status`,
+			e.tables.userUTXOs, e.tables.outputs),
+		utxoStatus, dbTxRowID, e.userID,
+	); err != nil {
+		// Fallback if unique index isn't on output_id alone.
+		_, _ = dbTx.ExecContext(ctx,
+			fmt.Sprintf(`INSERT OR IGNORE INTO "%s" (user_id, output_id, basket_name, satoshis, estimated_input_size, created_at, utxo_status)
+				SELECT user_id, id, basket_name, satoshis, 148, CURRENT_TIMESTAMP, ?
+				FROM "%s"
+				WHERE transaction_id = ? AND user_id = ? AND spendable = 1 AND spent_by IS NULL AND deleted_at IS NULL AND basket_name IN ('default','reserve','fuel','nektar funding')`,
+				e.tables.userUTXOs, e.tables.outputs),
+			utxoStatus, dbTxRowID, e.userID,
+		)
+		_, _ = dbTx.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE "%s" SET utxo_status = ? WHERE user_id = ? AND output_id IN (SELECT id FROM "%s" WHERE transaction_id = ? AND user_id = ?)`,
+				e.tables.userUTXOs, e.tables.outputs),
+			utxoStatus, e.userID, dbTxRowID, e.userID,
+		)
+	}
+
+	if newStatus == StatusCompleted && mp != nil {
+		mpBytes := mp.Bytes()
+		if len(mpBytes) == 0 {
+			return errors.New("wallet: empty merkle path bytes on mined promotion")
+		}
+		if _, err := dbTx.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE "%s" SET status = 'completed', block_height = ?, block_hash = ?, merkle_root = ?, merkle_path = ? WHERE tx_id = ?`, e.tables.knownTxs),
+			height, blockHash, merkleRoot, mpBytes, txid,
+		); err != nil {
+			return err
+		}
+	} else {
+		_, _ = dbTx.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE "%s" SET status = 'unmined' WHERE tx_id = ? AND status != 'completed'`, e.tables.knownTxs),
+			txid,
+		)
+	}
+	return dbTx.Commit()
+}
+
+// verifyOutpointSpent cryptographically verifies that (txid, vout) is spent externally by fetching
+// the candidate spending transaction's raw bytes, confirming sha256d == spenderTxID, confirming an
+// input spends (txid, vout), and verifying either a header-verified BUMP on spenderTx or valid
+// Bitcoin Script execution against lockScript. Never trusts bare indexer JSON or absence.
+func (e *Engine) verifyOutpointSpent(ctx context.Context, txid string, vout uint32, satoshis uint64, lockScript []byte) (bool, error) {
+	if e.cfg.Chain == nil || txid == "" {
+		return false, nil
+	}
+	spenderTxID, err := e.cfg.Chain.Spender(ctx, txid, vout)
+	if err != nil || spenderTxID == "" {
+		return false, err
+	}
+	raw, err := e.cfg.Chain.TxRaw(ctx, spenderTxID)
+	if err != nil || len(raw) == 0 {
+		return false, err
+	}
+	spendTx, err := transaction.NewTransactionFromBytes(raw)
+	if err != nil || spendTx.TxID().String() != spenderTxID {
+		return false, nil
+	}
+	matchedVin := -1
+	for idx, in := range spendTx.Inputs {
+		if in != nil && in.SourceTXID != nil && in.SourceTXID.String() == txid && in.SourceTxOutIndex == vout {
+			matchedVin = idx
+			break
+		}
+	}
+	if matchedVin < 0 {
+		return false, nil
+	}
+	// If the spending transaction is mined with a header-verified BUMP, the spend is consensus-proven.
+	if e.svc != nil && e.cfg.Tracker != nil {
+		if mp, _, ok, pErr := e.svc.lookupProof(ctx, spenderTxID); pErr == nil && ok && mp != nil {
+			return true, nil
+		}
+	}
+	// Otherwise verify the unlocking script cryptographically against the locking script!
+	if len(lockScript) == 0 {
+		lockScript = []byte(*e.fundScript)
+	}
+	ls := script.Script(lockScript)
+	prevOut := &transaction.TransactionOutput{
+		Satoshis:      satoshis,
+		LockingScript: &ls,
+	}
+	spendTx.Inputs[matchedVin].SetSourceTxOutput(prevOut)
+	flags := scriptflag.EnableSighashForkID | scriptflag.UTXOAfterGenesis | scriptflag.Genesis
+	if err := interpreter.NewEngine().Execute(
+		interpreter.WithTx(spendTx, matchedVin, prevOut),
+		interpreter.WithFlags(flags),
+		interpreter.WithContext(ctx),
+	); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
 
 func (e *Engine) ownedOutputSumForTx(txid string) (uint64, bool) {
 	if e.readDB == nil || txid == "" {
@@ -698,6 +956,14 @@ func (e *Engine) createActionGuarded(ctx context.Context, args sdkwallet.CreateA
 		}
 	}
 
+	// Enforce MaxUnprovenDepth as a real spend cap on live networks when only deep unproven UTXOs exist.
+	if !e.cfg.InMemoryStore && !isSignLater && !isPureSendWith && e.cfg.MaxUnprovenDepth > 0 {
+		if bal, bErr := e.Balance(ctx); bErr == nil && bal.ConfirmedSats == 0 && bal.MaxUnprovenDepth >= e.cfg.MaxUnprovenDepth {
+			return nil, fmt.Errorf("%w: active unproven chain depth %d reached policy cap %d (wait for a block confirmation)",
+				ErrDepthExceeded, bal.MaxUnprovenDepth, e.cfg.MaxUnprovenDepth)
+		}
+	}
+
 	// Read-only SpendGuard pre-check for fast fail (zero phantom deduction; real deduction happens
 	// once post-signing inside bcommonServices.PostFromBEEF with exact fee + external net spend).
 	if !skipGuard && !overrideGuard && !isNoSend && !isSignLater && !isPureSendWith && e.cfg.SpendGuardCheck != nil {
@@ -719,27 +985,27 @@ func (e *Engine) createActionGuarded(ctx context.Context, args sdkwallet.CreateA
 	ctx, errSink := withPostErrSink(ctx)
 	res, err := e.tb.CreateAction(ctx, args, orig)
 	if err != nil && isNotEnoughFunds(err) && !isPureSendWith && e.svc.hasBroadcaster() {
-		retried := false
 		// 1. If static FundAddress() deposits are waiting in BasketFunding, absorb into native BRC-29 "default".
-		if absorbed, aErr := e.AbsorbFundingBasket(ctx); aErr == nil && absorbed > 0 {
+		if absorbed, aErr := e.AbsorbFundingBasket(ctx); aErr != nil {
+			e.logf("wallet: CreateAction funding-basket absorb failed: %v", aErr)
+		} else if absorbed > 0 {
 			res, err = e.tb.CreateAction(ctx, args, orig)
-			retried = true
 		}
 		// 2. If funds are split across StrategyThroughput baskets (default + reserve + fuel) such that no
 		// single basket covers this action alone, reclaim just enough reserve/fuel into "default" and retry!
 		if err != nil && isNotEnoughFunds(err) {
-			var outTotal uint64
+			var needed uint64
 			for _, o := range args.Outputs {
 				if o.Satoshis != primitives.SweepMaxSatoshis {
-					outTotal += o.Satoshis
+					needed += o.Satoshis
 				}
 			}
-			if reclaimed, rErr := e.reclaimPoolToDefault(ctx, outTotal+e.estimateFeeSats(ctx, 4, len(args.Outputs)+1)); rErr == nil && reclaimed > 0 {
+			if reclaimed, rErr := e.reclaimPoolToDefault(ctx, needed+e.estimateFeeSats(ctx, 4, len(args.Outputs)+1)); rErr != nil {
+				e.logf("wallet: CreateAction pool reclaim failed: %v", rErr)
+			} else if reclaimed > 0 {
 				res, err = e.tb.CreateAction(ctx, args, orig)
-				retried = true
 			}
 		}
-		_ = retried
 	}
 	if err != nil {
 		if sinkTxID, sinkErr := errSink.get(); sinkErr != nil {
@@ -806,24 +1072,74 @@ func (e *Engine) ListActions(ctx context.Context, args sdkwallet.ListActionsArgs
 
 func (e *Engine) InternalizeAction(ctx context.Context, args sdkwallet.InternalizeActionArgs, originator string) (*sdkwallet.InternalizeActionResult, error) {
 	args.Description = ensureDesc(args.Description, "nektar internalize action")
-	res, err := e.tb.InternalizeAction(ctx, args, e.normalizeOrig(originator))
+	// Run full consensus go-sdk/spv.Verify (coinbase maturity 100, confiscation maturity 1000,
+	// finality with 11-block MTP, out<=in overspend, duplicate inputs, era scripts, BUMP verification)
+	// before accepting any incoming BEEF into wallet storage.
+	parsedBeef, parsed, _, pErr := guard.ParseBEEF(args.Tx, guard.DefaultBound)
+	if pErr != nil || parsed == nil {
+		return nil, fmt.Errorf("wallet: InternalizeAction invalid BEEF: %v", pErr)
+	}
+	if e.cfg.Tracker == nil {
+		return nil, ErrNoChain
+	}
+	if parsed.MerklePath == nil {
+		hydrateInputs(parsed, parsedBeef, e.txCache, e.svc.dbLoader(ctx), 0, e.cfg.MaxUnprovenDepth)
+		if !e.cfg.InMemoryStore && e.cfg.MaxUnprovenDepth > 0 {
+			if depth := countUnminedAncestors(parsed, e.cfg.MaxUnprovenDepth+2); depth > e.cfg.MaxUnprovenDepth {
+				return nil, fmt.Errorf("%w: incoming tx %s has %d unconfirmed ancestors (max %d)", ErrDepthExceeded, parsed.TxID().String(), depth, e.cfg.MaxUnprovenDepth)
+			}
+		}
+	}
+	if ok, sErr := spv.Verify(ctx, parsed, e.cfg.Tracker, nil); sErr != nil || !ok {
+		return nil, fmt.Errorf("wallet: InternalizeAction SPV verify failed for %s: %v", parsed.TxID().String(), sErr)
+	}
+
+	// Mark incoming internalization so go-wallet-toolbox BackgroundBroadcast never debits buyer
+	// change against the receiver's SpendGuard, and capture any swallowed broadcast errors.
+	intCtx, errSink := withPostErrSink(WithIncomingInternalize(ctx))
+	res, err := e.tb.InternalizeAction(intCtx, args, e.normalizeOrig(originator))
 	if err != nil {
 		return nil, err
 	}
-	if _, parsed, _, pErr := guard.ParseBEEF(args.Tx, guard.DefaultBound); pErr == nil && parsed != nil {
-		e.txCache.Put(parsed.TxID().String(), parsed)
+	if sinkTxID, sinkErr := errSink.get(); sinkErr != nil {
+		e.logf("wallet: InternalizeAction background broadcast warning for %s: %v", sinkTxID, sinkErr)
 	}
+	e.txCache.Put(parsed.TxID().String(), parsed)
+	e.fuel.Wake()
 	return res, nil
 }
 
-func (e *Engine) ListOutputs(ctx context.Context, args sdkwallet.ListOutputsArgs, originator string) (*sdkwallet.ListOutputsResult, error) {
-	res, err := e.tb.ListOutputs(ctx, args, e.normalizeOrig(originator))
-	if err == nil && res != nil && res.TotalOutputs == 0 && args.Basket == BasketDefault && e.svc.hasBroadcaster() {
-		if absorbed, aErr := e.AbsorbFundingBasket(ctx); aErr == nil && absorbed > 0 {
-			return e.tb.ListOutputs(ctx, args, e.normalizeOrig(originator))
+func countUnminedAncestors(tx *transaction.Transaction, capLimit int) int {
+	if tx == nil || tx.MerklePath != nil {
+		return 0
+	}
+	seen := make(map[string]bool)
+	var walk func(cur *transaction.Transaction)
+	walk = func(cur *transaction.Transaction) {
+		if cur == nil || cur.MerklePath != nil || len(seen) >= capLimit {
+			return
+		}
+		id := cur.TxID().String()
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		for _, in := range cur.Inputs {
+			if in != nil && in.SourceTransaction != nil && in.SourceTransaction.MerklePath == nil {
+				walk(in.SourceTransaction)
+				if len(seen) >= capLimit {
+					return
+				}
+			}
 		}
 	}
-	return res, err
+	walk(tx)
+	return len(seen)
+}
+
+func (e *Engine) ListOutputs(ctx context.Context, args sdkwallet.ListOutputsArgs, originator string) (*sdkwallet.ListOutputsResult, error) {
+	// Read-only BRC-100 RPC: never trigger synchronous AbsorbFundingBasket broadcasts here.
+	return e.tb.ListOutputs(ctx, args, e.normalizeOrig(originator))
 }
 
 func (e *Engine) RelinquishOutput(ctx context.Context, args sdkwallet.RelinquishOutputArgs, originator string) (*sdkwallet.RelinquishOutputResult, error) {
@@ -944,8 +1260,21 @@ func (e *Engine) SendNoSendTx(ctx context.Context, txid string) error {
 		}
 		return err
 	}
+	foundAccepted := false
 	for _, sw := range res.SendWithResults {
-		if sw.Txid.String() == txid && sw.Status == sdkwallet.ActionResultStatusFailed {
+		if sw.Txid.String() != txid {
+			continue
+		}
+		switch sw.Status {
+		case sdkwallet.ActionResultStatusUnproven:
+			foundAccepted = true
+		case sdkwallet.ActionResultStatusSending:
+			_ = e.MarkSubmissionUnknown(ctx, txid)
+			if lastErr := e.svc.takeLastErr(txid); lastErr != nil {
+				return fmt.Errorf("%w: %w", ErrBroadcastUnknown, lastErr)
+			}
+			return fmt.Errorf("%w: tx %s still in sending state", ErrBroadcastUnknown, txid)
+		case sdkwallet.ActionResultStatusFailed:
 			if lastErr := e.svc.takeLastErr(txid); lastErr != nil {
 				if errors.Is(lastErr, ErrBroadcastUnknown) {
 					_ = e.MarkSubmissionUnknown(ctx, txid)
@@ -954,6 +1283,13 @@ func (e *Engine) SendNoSendTx(ctx context.Context, txid string) error {
 			}
 			return fmt.Errorf("wallet: broadcast failed for tx %s", txid)
 		}
+	}
+	if !foundAccepted && !e.cfg.InMemoryStore {
+		_ = e.MarkSubmissionUnknown(ctx, txid)
+		if lastErr := e.svc.takeLastErr(txid); lastErr != nil {
+			return fmt.Errorf("%w: %w", ErrBroadcastUnknown, lastErr)
+		}
+		return fmt.Errorf("%w: SendWith did not confirm acceptance for tx %s", ErrBroadcastUnknown, txid)
 	}
 	e.svc.takeLastErr(txid)
 	e.fuel.Wake()
@@ -1039,9 +1375,10 @@ func (e *Engine) findTxByLockingScript(ctx context.Context, lockScriptHex string
 }
 
 // isSpendableParentStatus returns true only for transaction states whose outputs may safely be spent as parents.
+// Never includes TxStatusSending (unconfirmed self-submission whose broadcast outcome is still unverified).
 func isSpendableParentStatus(st wdk.TxStatus) bool {
 	switch st {
-	case wdk.TxStatusCompleted, wdk.TxStatusUnproven, wdk.TxStatusSending:
+	case wdk.TxStatusCompleted, wdk.TxStatusUnproven:
 		return true
 	default:
 		return false
@@ -1070,46 +1407,92 @@ func (e *Engine) MarkSubmissionUnknown(ctx context.Context, txid string) error {
 	}
 	qUtxo := fmt.Sprintf(`DELETE FROM "%s" WHERE user_id = ? AND output_id IN (SELECT id FROM "%s" WHERE user_id = ? AND tx_id = ?)`, e.tables.userUTXOs, e.tables.outputs)
 	_, _ = tx.ExecContext(ctx, qUtxo, e.userID, e.userID, txid)
+	_, _ = tx.ExecContext(ctx, fmt.Sprintf(`UPDATE "%s" SET status = 'unmined' WHERE tx_id = ? AND status = 'nosend'`, e.tables.knownTxs), txid)
 	return tx.Commit()
 }
 
-// ReconcileOrphanedNoSend aborts stale 'nosend' transactions older than ReservationTTL ONLY after
-// verifying the transaction is neither mined nor present in mempool (preventing double-spend of live txs).
+// ReconcileOrphanedNoSend reconciles stale 'nosend' transactions older than ReservationTTL:
+//   - If a header-verified BUMP exists, atomically promotes to 'completed' (restoring outputs + user_utxos + known_txes).
+//   - If verified raw tx bytes exist on chain, atomically promotes to 'unproven' (restoring outputs + user_utxos + known_txes).
+//   - Never aborts on upstream error or single-host 404 before 2*ReservationTTL.
 func (e *Engine) ReconcileOrphanedNoSend(ctx context.Context) (int, error) {
 	if e.readDB == nil {
 		return 0, nil
 	}
 	cutoff := time.Now().Add(-e.cfg.ReservationTTL)
-	q := fmt.Sprintf(`SELECT COALESCE(tx_id, '') FROM "%s" WHERE user_id = ? AND deleted_at IS NULL AND status = 'nosend' AND updated_at < ? AND tx_id != ''`, e.tables.transactions)
+	q := fmt.Sprintf(`SELECT id, COALESCE(tx_id, ''), updated_at FROM "%s" WHERE user_id = ? AND deleted_at IS NULL AND status = 'nosend' AND updated_at < ? AND tx_id != ''`, e.tables.transactions)
 	rows, err := e.readDB.QueryContext(ctx, q, e.userID, cutoff)
 	if err != nil {
 		return 0, err
 	}
-	var txids []string
+	type nsRow struct {
+		id        int64
+		txid      string
+		updatedAt time.Time
+	}
+	var cands []nsRow
 	for rows.Next() {
-		var id string
-		if rows.Scan(&id) == nil && id != "" {
-			txids = append(txids, id)
+		var r nsRow
+		if rows.Scan(&r.id, &r.txid, &r.updatedAt) == nil && r.txid != "" {
+			cands = append(cands, r)
 		}
 	}
 	_ = rows.Close()
 	aborted := 0
-	for _, id := range txids {
-		// Never abort a nosend tx if it already landed on-chain or in mempool!
+	for _, c := range cands {
 		if e.svc != nil {
-			if mp, _, ok, _ := e.svc.lookupProof(ctx, id); ok && mp != nil {
-				_, _ = e.sqlDB.ExecContext(ctx, fmt.Sprintf(`UPDATE "%s" SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND tx_id = ?`, e.tables.transactions), e.userID, id)
+			// Single verified proof lookup (validates ComputeRoot + IsValidRootForHeight).
+			mp, h, ok, pErr := e.svc.lookupProof(ctx, c.txid)
+			if pErr != nil {
+				// Fail closed on tracker/upstream error.
 				continue
 			}
-			if stRes, sErr := e.svc.GetStatusForTxIDs(ctx, []string{id}); sErr != nil {
-				// Upstream unreachable: fail closed (do not abort when chain presence cannot be ruled out).
+			if ok && mp != nil {
+				if h == 0 {
+					h = mp.BlockHeight
+				}
+				txHash, _ := chainhash.NewHashFromHex(c.txid)
+				root, rErr := mp.ComputeRoot(txHash)
+				hdr, hdrErr := e.svc.ChainHeaderByHeight(ctx, h)
+				txObj, _ := e.LoadParsedTx(ctx, c.txid)
+				if rErr == nil && root != nil && hdrErr == nil && hdr != nil && txObj != nil {
+					if e.cfg.InMemoryStore || strings.EqualFold(hdr.MerkleRoot, root.String()) {
+						txObj.MerklePath = mp
+						if e.promoteTxStatusAtomic(ctx, c.id, c.txid, StatusCompleted, txObj, mp, h, hdr.Hash, root.String()) == nil {
+							e.txCache.Put(c.txid, txObj)
+							if e.cfg.OnTxMined != nil {
+								e.cfg.OnTxMined(c.txid, h, mp)
+							}
+						}
+					}
+				}
 				continue
-			} else if stRes != nil && len(stRes.Results) == 1 && stRes.Results[0].Status != wdk.ResultStatusForTxIDNotFound.String() {
-				_, _ = e.sqlDB.ExecContext(ctx, fmt.Sprintf(`UPDATE "%s" SET status = 'unproven', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND tx_id = ?`, e.tables.transactions), e.userID, id)
+			}
+			if e.cfg.Chain != nil {
+				raw, rErr := e.cfg.Chain.TxRaw(ctx, c.txid)
+				if rErr == nil && len(raw) > 0 {
+					if parsed, parseErr := transaction.NewTransactionFromBytes(raw); parseErr == nil && parsed.TxID().String() == c.txid {
+						_ = e.promoteTxStatusAtomic(ctx, c.id, c.txid, StatusUnproven, parsed, nil, 0, "", "")
+						continue
+					}
+				}
+				if rErr != nil {
+					low := strings.ToLower(rErr.Error())
+					if !strings.Contains(low, "404") && !strings.Contains(low, "not found") && !strings.Contains(low, "no such") {
+						// Upstream unreachable: fail closed (never abort on network error).
+						continue
+					}
+				}
+				// Never abort from a single-host 404 until the explicit abandon horizon (2*ReservationTTL) passes.
+				if !e.cfg.InMemoryStore && time.Since(c.updatedAt) < 2*e.cfg.ReservationTTL {
+					continue
+				}
+			} else if !e.cfg.InMemoryStore {
+				// No external chain source to rule out broadcast: fail closed on live networks.
 				continue
 			}
 		}
-		if err := e.AbortNoSendByTxID(ctx, id); err == nil {
+		if err := e.AbortNoSendByTxID(ctx, c.txid); err == nil {
 			aborted++
 		}
 	}
@@ -1160,11 +1543,47 @@ func (e *Engine) AbsorbFundingBasket(ctx context.Context) (int, error) {
 		end := min(start+chunkSize, len(eligible))
 		chunk := eligible[start:end]
 		if err := e.absorbFundingChunk(ctx, chunk); err != nil {
+			// On multi-input failure, isolate any output with verified spend evidence (never absence!)
+			// and retry with the remaining unspent inputs so one dead UTXO cannot stall a 100-input chunk.
+			if len(chunk) > 1 {
+				healthy, pruned := e.filterVerifiedUnspentOutputs(ctx, chunk)
+				if pruned > 0 && len(healthy) > 0 {
+					if rErr := e.absorbFundingChunk(ctx, healthy); rErr == nil {
+						absorbed += len(healthy)
+						continue
+					}
+				}
+			}
 			return absorbed, err
 		}
 		absorbed += len(chunk)
 	}
 	return absorbed, nil
+}
+
+// filterVerifiedUnspentOutputs marks outputs Spendable=false ONLY when local spent_by or
+// cryptographically verified external spending tx bytes prove the output is already spent.
+func (e *Engine) filterVerifiedUnspentOutputs(ctx context.Context, chunk []*entity.Output) (healthy []*entity.Output, pruned int) {
+	f := false
+	for _, o := range chunk {
+		if o.TxID == nil || *o.TxID == "" {
+			continue
+		}
+		if o.SpentBy != nil {
+			pruned++
+			continue
+		}
+		if spent, err := e.verifyOutpointSpent(ctx, *o.TxID, o.Vout, uint64(o.Satoshis), o.LockingScript); err == nil && spent {
+			_ = e.provider.OutputsEntity().Update(ctx, &entity.OutputUpdateSpecification{
+				ID:        o.ID,
+				Spendable: &f,
+			})
+			pruned++
+			continue
+		}
+		healthy = append(healthy, o)
+	}
+	return healthy, pruned
 }
 
 func (e *Engine) absorbFundingChunk(ctx context.Context, chunk []*entity.Output) error {
@@ -1514,8 +1933,7 @@ func (e *Engine) migrateLegacyPool(ctx context.Context, walletDir, legacyFile st
 				continue
 			}
 		}
-		e.txCache.Put(o.TxID, tx)
-		_, iErr := e.tb.InternalizeAction(ctx, sdkwallet.InternalizeActionArgs{
+		_, iErr := e.InternalizeAction(WithIncomingInternalize(ctx), sdkwallet.InternalizeActionArgs{
 			Tx:          atomicBeef,
 			Description: "migrated from legacy wallet.json",
 			Labels:      []string{"migrated"},
@@ -1532,6 +1950,7 @@ func (e *Engine) migrateLegacyPool(ctx context.Context, walletDir, legacyFile st
 			e.logf("wallet: migrate output %s:%d skipped: %v", o.TxID, o.Vout, iErr)
 			continue
 		}
+		e.txCache.Put(o.TxID, tx)
 		imported++
 	}
 	_ = os.Rename(poolPath, poolPath+".migrated")
@@ -1564,7 +1983,7 @@ func (e *Engine) Balance(ctx context.Context) (BalanceBreakdown, error) {
 			  AND o.deleted_at IS NULL
 			  AND o.spent_by IS NULL
 			  AND o.satoshis > 0
-			  AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','nosend','submission_unknown')
+			  AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','nosend','sending','submission_unknown')
 			UNION ALL
 			SELECT
 				COALESCE(o.basket_name, '') AS basket,
@@ -1576,10 +1995,10 @@ func (e *Engine) Balance(ctx context.Context) (BalanceBreakdown, error) {
 			INNER JOIN "%s" owner ON owner.id = o.transaction_id
 			WHERE sp.user_id = ?
 			  AND sp.deleted_at IS NULL
-			  AND sp.status IN ('unsigned','unprocessed','nosend','submission_unknown')
+			  AND sp.status IN ('unsigned','unprocessed','nosend','sending','submission_unknown')
 			  AND o.user_id = ?
 			  AND o.satoshis > 0
-			  AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','nosend','submission_unknown')
+			  AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','nosend','sending','submission_unknown')
 		)
 		GROUP BY basket, is_reserved, is_confirmed`,
 		e.tables.outputs, e.tables.transactions, e.tables.userUTXOs,
@@ -1626,6 +2045,12 @@ func (e *Engine) Balance(ctx context.Context) (BalanceBreakdown, error) {
 		case BasketFuel:
 			b.FuelCount += cnt
 			b.FuelSats += sats
+			if isConfirmed != 0 {
+				b.ProvenFuelCount += cnt
+				b.ProvenFuelSats += sats
+			} else {
+				b.UnprovenFuelCount += cnt
+			}
 		case BasketReserve:
 			b.ReserveCount += cnt
 			b.ReserveSats += sats
@@ -1643,13 +2068,17 @@ func (e *Engine) Balance(ctx context.Context) (BalanceBreakdown, error) {
 
 	pendingQ := fmt.Sprintf(`SELECT COUNT(1) FROM "%s" WHERE user_id = ? AND deleted_at IS NULL AND status IN ('unsigned','unprocessed','sending','submission_unknown')`, e.tables.transactions)
 	_ = e.readDB.QueryRowContext(ctx, pendingQ, e.userID).Scan(&b.PendingTxCount)
-	b.MaxUnprovenDepth = e.computeMaxUnprovenDepth(ctx)
+	depth, dErr := e.computeMaxUnprovenDepthChecked(ctx)
+	if dErr != nil {
+		e.logf("wallet: computeMaxUnprovenDepth warning: %v", dErr)
+	}
+	b.MaxUnprovenDepth = depth
 	return b, nil
 }
 
-func (e *Engine) computeMaxUnprovenDepth(ctx context.Context) int {
+func (e *Engine) computeMaxUnprovenDepthChecked(ctx context.Context) (int, error) {
 	if e.readDB == nil {
-		return 0
+		return 0, nil
 	}
 	q := fmt.Sprintf(`
 		SELECT DISTINCT COALESCE(owner.tx_id, '')
@@ -1666,7 +2095,7 @@ func (e *Engine) computeMaxUnprovenDepth(ctx context.Context) int {
 	)
 	rows, err := e.readDB.QueryContext(ctx, q, e.userID)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	var unproved []string
 	for rows.Next() {
@@ -1677,7 +2106,7 @@ func (e *Engine) computeMaxUnprovenDepth(ctx context.Context) int {
 	}
 	_ = rows.Close()
 	if len(unproved) == 0 {
-		return 0
+		return 0, nil
 	}
 
 	// Build parent-tx status lookup for fast bounded DFS.
@@ -1727,7 +2156,7 @@ func (e *Engine) computeMaxUnprovenDepth(ctx context.Context) int {
 			maxDepth = d
 		}
 	}
-	return maxDepth
+	return maxDepth, nil
 }
 
 // ListUTXOs returns unspent UTXO records filtered by basket ("all", "default", "reserve", "fuel", etc.)
@@ -1928,14 +2357,16 @@ func (e *Engine) ListRecentActions(ctx context.Context, limit, offset int) ([]Tx
 	return out, total, rows.Err()
 }
 
-// LoadParsedTx resolves a transaction by txid from LRU cache or go-wallet-toolbox KnownTx storage.
+// LoadParsedTx resolves a transaction by txid from LRU cache or go-wallet-toolbox KnownTx storage,
+// hydrating unmined parent inputs from InputBEEF and SQLite known_txes before caching.
 func (e *Engine) LoadParsedTx(ctx context.Context, txid string) (*transaction.Transaction, error) {
 	if tx, ok := e.txCache.Get(txid); ok && tx != nil {
 		return tx, nil
 	}
+	loader := e.svc.dbLoader(ctx)
 	if beef, err := e.provider.GetBeefForTransaction(ctx, txid, wdk.StorageGetBeefOptions{}); err == nil && beef != nil {
 		if tx := beef.FindTransaction(txid); tx != nil {
-			hydrateInputs(tx, beef, e.txCache, 0)
+			hydrateInputs(tx, beef, e.txCache, loader, 0, e.cfg.MaxUnprovenDepth)
 			e.txCache.Put(txid, tx)
 			return tx, nil
 		}
@@ -1949,6 +2380,13 @@ func (e *Engine) LoadParsedTx(ctx context.Context, txid string) (*transaction.Tr
 					if mp, mpErr := transaction.NewMerklePathFromBinary(ktx.MerklePath); mpErr == nil {
 						tx.MerklePath = mp
 					}
+				}
+				if tx.MerklePath == nil {
+					var inBeef *transaction.Beef
+					if len(ktx.InputBEEF) > 0 {
+						inBeef, _, _, _ = guard.ParseBEEF(ktx.InputBEEF, guard.DefaultBound)
+					}
+					hydrateInputs(tx, inBeef, e.txCache, loader, 0, e.cfg.MaxUnprovenDepth)
 				}
 				e.txCache.Put(txid, tx)
 				return tx, nil
@@ -2271,6 +2709,11 @@ func (e *Engine) Sweep(ctx context.Context, args SweepArgs) (*SweepResult, error
 			})
 		}
 		txid, beef, parsed, sweptSats, feeSats, inputsUsed, sErr := e.sweepExplicitChunk(ctx, chunk, includeDefault, lockScript, desc)
+		if sErr != nil && len(chunk) > 1 {
+			if healthy, pruned := e.filterVerifiedUnspentOutputs(ctx, chunk); pruned > 0 && len(healthy) > 0 {
+				txid, beef, parsed, sweptSats, feeSats, inputsUsed, sErr = e.sweepExplicitChunk(ctx, healthy, includeDefault, lockScript, desc)
+			}
+		}
 		if sErr != nil {
 			return out, sErr
 		}
@@ -2699,35 +3142,25 @@ func (e *Engine) ImportBEEF(ctx context.Context, beefBytes []byte) (*ImportResul
 	return e.importTxToFundingBasket(ctx, tx, beefBytes, "imported BEEF payment")
 }
 
-// ImportTxID fetches a mined transaction + proof from Arcade/Chain and internalizes outputs paying FundAddress().
+// ImportTxID fetches a transaction and its complete ancestor BEEF (back to mined header-verified
+// BUMPs within MaxUnprovenDepth), SPV-verifies it, and internalizes outputs paying FundAddress().
 func (e *Engine) ImportTxID(ctx context.Context, txid string) (*ImportResult, error) {
 	txid = strings.TrimSpace(txid)
 	if len(txid) != 64 {
 		return nil, fmt.Errorf("%w: txid must be 64 hex chars", ErrInvalidArgs)
 	}
-	var tx *transaction.Transaction
-	if cached, ok := e.txCache.Get(txid); ok && cached != nil {
-		tx = cached
-	} else if e.cfg.Chain != nil {
-		raw, err := e.cfg.Chain.TxRaw(ctx, txid)
-		if err != nil {
-			return nil, fmt.Errorf("wallet: fetch tx %s: %w", txid, err)
-		}
-		tx, err = transaction.NewTransactionFromBytes(raw)
-		if err != nil {
-			return nil, fmt.Errorf("wallet: parse tx %s: %w", txid, err)
-		}
-	} else {
-		return nil, fmt.Errorf("wallet: no chain client configured to fetch tx %s", txid)
+	beef, err := e.svc.GetBEEF(ctx, txid, nil)
+	if err != nil || beef == nil {
+		return nil, fmt.Errorf("wallet: assemble complete ancestor BEEF for %s: %w", txid, err)
 	}
-	if tx.MerklePath == nil {
-		if mp, _, ok, _ := e.svc.lookupProof(ctx, txid); ok && mp != nil {
-			tx.MerklePath = mp
-		}
+	tx := beef.FindTransaction(txid)
+	if tx == nil {
+		return nil, fmt.Errorf("wallet: tx %s missing from assembled BEEF", txid)
 	}
+	hydrateInputs(tx, beef, e.txCache, e.svc.dbLoader(ctx), 0, e.cfg.MaxUnprovenDepth)
 	atomicBeef, err := SafeAtomicBEEF(tx)
 	if err != nil {
-		return nil, fmt.Errorf("wallet: encode AtomicBEEF for %s: %w", txid, err)
+		return nil, fmt.Errorf("wallet: encode strict AtomicBEEF for %s: %w", txid, err)
 	}
 	return e.importTxToFundingBasket(ctx, tx, atomicBeef, "imported txid payment")
 }
@@ -2794,6 +3227,11 @@ func (e *Engine) importTxToFundingBasket(ctx context.Context, tx *transaction.Tr
 			continue
 		}
 		if string(*o.LockingScript) == string(fundBytes) {
+			// Guard against resurrecting outputs this wallet already knows or already spent!
+			// go-wallet-toolbox BasketInsertion runs GORM Save which would overwrite spendable=1, spent_by=NULL.
+			if e.HasOutput(ctx, txid, uint32(idx)) {
+				continue
+			}
 			outputs = append(outputs, sdkwallet.InternalizeOutput{
 				OutputIndex: uint32(idx),
 				Protocol:    sdkwallet.InternalizeProtocolBasketInsertion,
@@ -2815,7 +3253,9 @@ func (e *Engine) importTxToFundingBasket(ctx context.Context, tx *transaction.Tr
 			return nil, err
 		}
 	}
-	_, err := e.tb.InternalizeAction(ctx, sdkwallet.InternalizeActionArgs{
+	// Route through Engine.InternalizeAction so full go-sdk/spv.Verify (coinbase maturity 100,
+	// finality, overspend, scripts), ancestor depth cap, WithIncomingInternalize, and fuel.Wake run!
+	_, err := e.InternalizeAction(WithIncomingInternalize(ctx), sdkwallet.InternalizeActionArgs{
 		Tx:          atomicBeef,
 		Description: ensureDesc(desc, "nektar import payment"),
 		Labels:      []string{"import"},
@@ -2824,8 +3264,6 @@ func (e *Engine) importTxToFundingBasket(ctx context.Context, tx *transaction.Tr
 	if err != nil {
 		return nil, err
 	}
-	// Cache strictly AFTER InternalizeAction succeeds so a transient/0-conf failure never pins an unimported deposit.
-	e.txCache.Put(txid, tx)
 	mined := tx.MerklePath != nil
 	var height uint32
 	if mined {
@@ -2861,15 +3299,18 @@ func (e *Engine) PruneUnrecognizedTxs(ctx context.Context, keep func(txid string
 	return nil
 }
 
-// SafeAtomicBEEF encodes tx as strict BRC-95 AtomicBEEF (allowPartial=false), falling back
-// to allowPartial=true only when spending an external unconfirmed faucet output whose remote
-// ancestor BUMP has not yet mined.
+// SafeAtomicBEEF encodes tx strictly as BRC-95 AtomicBEEF (allowPartial=false).
+// Never silently falls back to allowPartial=true (which drops missing parent ancestry).
 func SafeAtomicBEEF(tx *transaction.Transaction) ([]byte, error) {
 	if tx == nil {
 		return nil, errors.New("wallet: nil transaction")
 	}
-	if b, err := tx.AtomicBEEF(false); err == nil && len(b) > 0 {
-		return b, nil
+	b, err := tx.AtomicBEEF(false)
+	if err != nil {
+		return nil, fmt.Errorf("wallet: strict AtomicBEEF encode failed for %s: %w", tx.TxID().String(), err)
 	}
-	return tx.AtomicBEEF(true)
+	if len(b) == 0 {
+		return nil, fmt.Errorf("wallet: empty AtomicBEEF for %s", tx.TxID().String())
+	}
+	return b, nil
 }

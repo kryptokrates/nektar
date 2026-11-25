@@ -61,8 +61,9 @@ func TestSinglePostSigningSpendGuardAndTimeoutUnknown(t *testing.T) {
 			}
 			return nil
 		},
-		SpendGuardRefund: func(txid string) {
+		SpendGuardRefund: func(txid string) error {
 			refundCalls.Add(1)
+			return nil
 		},
 	}
 	eng, err := Open(cfg)
@@ -89,14 +90,14 @@ func TestSinglePostSigningSpendGuardAndTimeoutUnknown(t *testing.T) {
 		t.Fatalf("expected exact post-signing fee>0 and spend>=8000, got fee=%d spend=%d", checkedFee, checkedSpend)
 	}
 
-	// 2. Definitive rejection triggers SpendGuardRefund!
+	// 2. Post-submit broadcaster error strings MUST NOT refund SpendGuard or mark terminal double-spend!
 	rejectNext.Store(true)
 	refundsBefore := refundCalls.Load()
 	if _, err := eng.Send(ctx, SendArgs{ToAddress: dstAddr, Satoshis: 1000}); err == nil {
-		t.Fatal("expected definitive broadcast reject error")
+		t.Fatal("expected broadcaster rejection error")
 	}
-	if refundCalls.Load() != refundsBefore+1 {
-		t.Fatalf("expected SpendGuardRefund on definitive rejection, got delta=%d", refundCalls.Load()-refundsBefore)
+	if refundCalls.Load() != refundsBefore {
+		t.Fatalf("post-submit error string MUST NOT refund SpendGuard, got delta=%d", refundCalls.Load()-refundsBefore)
 	}
 	rejectNext.Store(false)
 
@@ -134,16 +135,12 @@ func TestServicesFailClosedHeaderSPVAndNoSelfSubmittedCache(t *testing.T) {
 		t.Fatalf("expected NLockTimeIsFinal to fail closed without height source, got final=%v err=%v", final, err)
 	}
 
-	// 3. GetStatusForTxIDs MUST NOT return "known" just because tx is cached locally in RAM txCache!
+	// 3. GetStatusForTxIDs MUST fail closed (never trust txCache or return NotFound,nil when Tracker/Chain == nil)!
 	tx := transaction.NewTransaction()
 	txid := tx.TxID().String()
 	cache.Put(txid, tx)
-	stRes, err := svc.GetStatusForTxIDs(ctx, []string{txid})
-	if err != nil {
-		t.Fatalf("GetStatusForTxIDs: %v", err)
-	}
-	if len(stRes.Results) != 1 || stRes.Results[0].Status != "unknown" {
-		t.Fatalf("expected unknown status without external chain confirmation (no txCache self-confirm), got %+v", stRes.Results)
+	if _, err := svc.GetStatusForTxIDs(ctx, []string{txid}); !errors.Is(err, ErrNoChain) {
+		t.Fatalf("expected ErrNoChain when Tracker/Chain == nil, got %v", err)
 	}
 }
 

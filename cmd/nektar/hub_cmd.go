@@ -20,6 +20,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bsv-blockchain/go-sdk/transaction"
+
+	"github.com/kryptokrates/nektar/internal/chain"
+	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/server"
 )
@@ -121,6 +125,25 @@ func cmdHubRun(args []string) error {
 	}
 	if rt != nil {
 		hCfg.ChainTracker = rt.mem.Chain().Tracker()
+	} else if *netName == "main" || *netName == "testnet" {
+		headerSpec := strings.TrimSpace(os.Getenv("NEKTAR_HEADERS_SOURCE"))
+		if headerSpec == "" {
+			headerSpec = chain.DefaultHeaderSources(*netName)
+		}
+		chainSpec := strings.TrimSpace(os.Getenv("NEKTAR_CHAIN_SPEC"))
+		if chainSpec == "" {
+			if *netName == "main" {
+				chainSpec = "woc:main"
+			} else {
+				chainSpec = "woc:test"
+			}
+		}
+		settleSpec := strings.TrimSpace(os.Getenv("NEKTAR_SETTLE_SPEC"))
+		wt, wErr := chain.NewWitnessedTrackerFromSpec(*netName, headerSpec, chainSpec, settleSpec, core.SafeHTTPClientForNetwork(*netName, 15*time.Second))
+		if wErr != nil {
+			return fmt.Errorf("hub: live network %q requires independent witnessed ChainTracker: %w", *netName, wErr)
+		}
+		hCfg.ChainTracker = wt
 	}
 	node, err := hub.NewNode(hCfg)
 	if err != nil {
@@ -129,6 +152,20 @@ func cmdHubRun(args []string) error {
 	defer node.Close()
 
 	if rt != nil {
+		rt.mem.Chain().OnTxMined(func(txid string, height uint32, mp *transaction.MerklePath) {
+			mCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			if _, aErr := rt.mem.RefreshAnchorProofByTxID(mCtx, txid, height, mp); aErr == nil {
+				_, _ = hub.RefreshHubLiquidityStock(mCtx, rt.mem)
+			}
+			_ = node.OnBountyPayoutMined(txid)
+		})
+		rt.mem.Chain().OnReorg(func(forkHeight uint32, _ []string) {
+			rCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			_, _ = rt.mem.HandleReorg(forkHeight)
+			_ = node.HandleReorg(rCtx, forkHeight)
+		})
 		if _, lErr := hub.ArmHubLiquidity(ctx, node, rt.mem, hub.LiquidityConfig{
 			SeedStarterShards: true,
 			ArmBounties:       true,
@@ -331,10 +368,11 @@ func cmdHubUp(args []string) error {
 	envText = upsertEnvKV(envText, "NEKTAR_HTTP_PORT", DefaultLocalPort)
 	if net == "main" {
 		envText = upsertEnvKV(envText, "NEKTAR_MAINNET_CONFIRM", "I_UNDERSTAND")
-		envText = upsertEnvKV(envText, "NEKTAR_HEADERS_SOURCE", "woc:main")
+		envText = upsertEnvKV(envText, "NEKTAR_HEADERS_SOURCE", chain.DefaultHeaderSources("main"))
 		envText = upsertEnvKV(envText, "NEKTAR_SETTLE_SPEC", "arcade:https://arcade.gorillapool.io")
 	} else {
-		envText = upsertEnvKV(envText, "NEKTAR_HEADERS_SOURCE", "woc:test")
+		envText = upsertEnvKV(envText, "NEKTAR_HEADERS_SOURCE", chain.DefaultHeaderSources("testnet"))
+		envText = upsertEnvKV(envText, "NEKTAR_SETTLE_SPEC", "arcade:https://testnet.arcade.gorillapool.io")
 	}
 
 	var profiles []string

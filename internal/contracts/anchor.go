@@ -14,6 +14,8 @@ import (
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/script"
+	"github.com/bsv-blockchain/go-sdk/spv"
+	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-sdk/transaction/chaintracker"
 	"github.com/lightwebinc/bcommon/guard"
 
@@ -261,11 +263,22 @@ type ProofBundle struct {
 
 // VerifyResult reports the honest verification outcome for a ProofBundle.
 type VerifyResult struct {
-	OK          bool   `json:"ok"`
-	Settled     bool   `json:"settled"`
-	AnchorState string `json:"anchorState,omitempty"` // broadcast | mined
-	Reason      string `json:"reason,omitempty"`
-	Detail      string `json:"detail,omitempty"`
+	OK               bool   `json:"ok"`
+	Settled          bool   `json:"settled"`
+	AncestryVerified bool   `json:"ancestryVerified,omitempty"` // true when unmined carried BEEF ancestry passed spv.Verify
+	AnchorState      string `json:"anchorState,omitempty"`      // broadcast | mined
+	BlockHeight      uint32 `json:"blockHeight,omitempty"`
+	Depth            int    `json:"depth,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+	Detail           string `json:"detail,omitempty"`
+}
+
+// AnchorBatchMemo caches the verified anchor-tx, ChainTail, and BUMP header result for one (shard, batchN)
+// so Recall(VerifySPV:true) and VerifyReceipt avoid re-parsing AnchorBEEF and re-querying headers per fragment.
+type AnchorBatchMemo struct {
+	State      *AnchorState
+	Result     VerifyResult
+	AnchorTxID string
 }
 
 // VerifyFragment performs full offline SPV verification of a ProofBundle using only block headers.
@@ -275,27 +288,131 @@ func VerifyFragment(bundle ProofBundle, tracker chaintracker.ChainTracker) Verif
 
 // VerifyFragmentCtx performs full offline SPV verification of a ProofBundle using ctx for header verification.
 func VerifyFragmentCtx(ctx context.Context, bundle ProofBundle, tracker chaintracker.ChainTracker) VerifyResult {
-	return verifyFragment(ctx, bundle, tracker, true)
+	return VerifyFragmentWithDepth(ctx, bundle, tracker, 1)
+}
+
+// VerifyFragmentWithDepth performs full offline SPV verification of a ProofBundle requiring at least
+// minDepth block confirmations against the witnessed header tip before returning OK:true, Settled:true.
+func VerifyFragmentWithDepth(ctx context.Context, bundle ProofBundle, tracker chaintracker.ChainTracker, minDepth int) VerifyResult {
+	if minDepth <= 0 {
+		minDepth = 1
+	}
+	return verifyFragment(ctx, bundle, tracker, true, minDepth, nil)
+}
+
+// VerifyFragmentWithMemo verifies bundle using an optional per-batch memo cache (keyed by caller per batch)
+// while still verifying this fragment's individual leaf -> R_n Merkle proof independently.
+func VerifyFragmentWithMemo(ctx context.Context, bundle ProofBundle, tracker chaintracker.ChainTracker, minDepth int, memo *AnchorBatchMemo) (VerifyResult, *AnchorBatchMemo) {
+	if minDepth <= 0 {
+		minDepth = 1
+	}
+	if memo != nil && memo.State != nil {
+		if vr := verifyFragmentLeafOnly(bundle, memo.State); !vr.OK {
+			return vr, memo
+		}
+		return memo.Result, memo
+	}
+	var outMemo AnchorBatchMemo
+	vr := verifyFragment(ctx, bundle, tracker, true, minDepth, &outMemo)
+	if outMemo.State != nil {
+		return vr, &outMemo
+	}
+	return vr, nil
+}
+
+// VerifyFirstPartyAnchorAncestry checks structural commitment, ChainTail continuity, AND carried
+// input ancestry via go-sdk/spv.Verify for a first-party unmined anchor without weakening VerifyFragmentCtx
+// (which always keeps OK:false, Reason:"Unsettled" on unmined anchors).
+func VerifyFirstPartyAnchorAncestry(ctx context.Context, bundle ProofBundle, tracker chaintracker.ChainTracker) VerifyResult {
+	return verifyFragment(ctx, bundle, tracker, true, 1, nil)
 }
 
 // VerifyFragmentStructural verifies all cryptographic commitments in a ProofBundle (AnchorBEEF,
 // Rúnar NektarAnchor locking script & state, batch Merkle path, ChainTail R' hash chain, and BUMP
 // root computation) WITHOUT checking the BUMP root against a ChainTracker.
 // MUST ONLY be used for cross-node tests on isolated ephemeral "memory" testchains; live networks
-// MUST always call VerifyFragmentCtx with a real PoW ChainTracker.
+// MUST always call VerifyFragmentCtx/VerifyFragmentWithDepth with a real witnessed PoW ChainTracker.
 func VerifyFragmentStructural(bundle ProofBundle) VerifyResult {
-	return verifyFragment(context.Background(), bundle, nil, false)
+	return verifyFragment(context.Background(), bundle, nil, false, 1, nil)
 }
 
 // MaxMerkleBatchSize caps untrusted ProofBundle.Size to prevent integer-overflow or DoS.
 const MaxMerkleBatchSize uint64 = 1 << 24
 
-func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracker.ChainTracker, checkHeaders bool) VerifyResult {
+func verifyFragmentLeafOnly(bundle ProofBundle, state *AnchorState) VerifyResult {
+	if bundle.Size == 0 || bundle.Size > MaxMerkleBatchSize {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "batch size out of bounds"}
+	}
+	if len(bundle.Path) > core.MaxMerkleProofDepth {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "merkle proof depth exceeds cap"}
+	}
+	if bundle.LeafIndex < 0 || uint64(bundle.LeafIndex) >= bundle.Size {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "leafIndex outside batch size"}
+	}
+	if len(bundle.Path) != core.HeightForLeafCount(int(bundle.Size)) {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "path height does not match committed batch size"}
+	}
+	leaf, err := hex.DecodeString(bundle.Leaf)
+	if err != nil || len(leaf) != 32 {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "leaf must be 32-byte hex"}
+	}
+	sibs := make([][]byte, len(bundle.Path))
+	for i, s := range bundle.Path {
+		b, err := hex.DecodeString(s)
+		if err != nil || len(b) != 32 {
+			return VerifyResult{OK: false, Reason: "BadBundle", Detail: "path sibling must be 32-byte hex"}
+		}
+		sibs[i] = b
+	}
+	recomputedR, err := core.ReconstructRootChecked(leaf, &core.MerkleProof{Index: bundle.LeafIndex, Siblings: sibs})
+	if err != nil {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: err.Error()}
+	}
+	if state.Shard != bundle.Shard || state.N != bundle.N || state.Size != bundle.Size {
+		return VerifyResult{OK: false, Reason: "AnchorFieldMismatch", Detail: "shard/n/size mismatch"}
+	}
+	if !core.EqualBytes(state.R, recomputedR) {
+		return VerifyResult{OK: false, Reason: "LeafPathMismatch", Detail: "recomputed R_n != anchor R_n"}
+	}
+	return VerifyResult{OK: true}
+}
+
+func hydrateAnchorInputs(tx *transaction.Transaction, beef *transaction.Beef, visiting map[string]bool) bool {
+	if tx == nil || tx.MerklePath != nil {
+		return true
+	}
+	id := tx.TxID().String()
+	if visiting[id] {
+		return false
+	}
+	visiting[id] = true
+	defer delete(visiting, id)
+	for _, in := range tx.Inputs {
+		if in == nil || in.SourceTXID == nil {
+			return false
+		}
+		if in.SourceTransaction == nil && beef != nil {
+			in.SourceTransaction = beef.FindTransaction(in.SourceTXID.String())
+		}
+		if in.SourceTransaction == nil {
+			return false
+		}
+		if in.SourceTransaction.MerklePath == nil && !hydrateAnchorInputs(in.SourceTransaction, beef, visiting) {
+			return false
+		}
+	}
+	return true
+}
+
+func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracker.ChainTracker, checkHeaders bool, minDepth int, memoOut *AnchorBatchMemo) VerifyResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if bundle.Size == 0 || bundle.Size > MaxMerkleBatchSize {
 		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "batch size out of bounds"}
+	}
+	if len(bundle.Path) > core.MaxMerkleProofDepth {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "merkle proof depth exceeds cap"}
 	}
 	if bundle.LeafIndex < 0 || uint64(bundle.LeafIndex) >= bundle.Size {
 		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "leafIndex outside batch size"}
@@ -320,7 +437,7 @@ func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracke
 		return VerifyResult{OK: false, Reason: "BadBundle", Detail: err.Error()}
 	}
 
-	_, anchorTx, _, err := guard.ParseBEEF(bundle.AnchorBEEF, guard.DefaultBound)
+	parsedBeef, anchorTx, _, err := guard.ParseBEEF(bundle.AnchorBEEF, guard.DefaultBound)
 	if err != nil || anchorTx == nil {
 		msg := "empty transaction"
 		if err != nil {
@@ -343,31 +460,8 @@ func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracke
 		return VerifyResult{OK: false, Reason: "LeafPathMismatch", Detail: "recomputed R_n != anchor R_n"}
 	}
 
-	settled := false
-	anchorState := "broadcast"
-	if anchorTx.MerklePath != nil {
-		txidHash := anchorTx.TxID()
-		root, err := anchorTx.MerklePath.ComputeRoot(txidHash)
-		if err != nil {
-			return VerifyResult{OK: false, Reason: "BEEFInvalid", Detail: "merkle path compute root: " + err.Error()}
-		}
-		if checkHeaders {
-			if tracker == nil {
-				return VerifyResult{OK: false, Reason: "BEEFInvalid", Detail: "no chain tracker configured to verify BUMP"}
-			}
-			valid, err := tracker.IsValidRootForHeight(ctx, root, anchorTx.MerklePath.BlockHeight)
-			if err != nil || !valid {
-				return VerifyResult{OK: false, Reason: "BEEFInvalid", Detail: "BUMP root not valid in header chain"}
-			}
-			settled = true
-			anchorState = "mined"
-		}
-	} else if checkHeaders {
-		// Fail closed on SPV verification when the transaction lacks a mined MerklePath (BUMP):
-		// structural checks pass via VerifyFragmentStructural, but unmined offline BEEFs must not return OK:true.
-		return VerifyResult{OK: false, Settled: false, AnchorState: "broadcast", Reason: "Unsettled", Detail: "anchor tx has no mined MerklePath (BUMP)"}
-	}
-
+	// Validate ChainTail continuity BEFORE checking mined/unmined status so a forged unmined
+	// ChainTail ALWAYS fails closed as ChainInconsistent (RED) rather than rendering Unsettled (AMBER).
 	if len(bundle.ChainTail) == 0 {
 		return VerifyResult{OK: false, Reason: "ChainInconsistent", Detail: "empty chainTail"}
 	}
@@ -397,6 +491,92 @@ func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracke
 		prevRp = rpBytes
 	}
 
+	saveMemo := func(vr VerifyResult) VerifyResult {
+		if memoOut != nil {
+			memoOut.State = state
+			memoOut.AnchorTxID = txidStr
+			memoOut.Result = vr
+		}
+		return vr
+	}
+
+	settled := false
+	anchorState := "broadcast"
+	var blockHeight uint32
+	var depth int
+	if anchorTx.MerklePath != nil {
+		if len(anchorTx.MerklePath.Path) > core.MaxMerkleProofDepth {
+			return saveMemo(VerifyResult{OK: false, Reason: "BEEFInvalid", Detail: "BUMP merkle path depth exceeds cap"})
+		}
+		txidHash := anchorTx.TxID()
+		root, err := anchorTx.MerklePath.ComputeRoot(txidHash)
+		if err != nil {
+			return saveMemo(VerifyResult{OK: false, Reason: "BEEFInvalid", Detail: "merkle path compute root: " + err.Error()})
+		}
+		blockHeight = anchorTx.MerklePath.BlockHeight
+		if checkHeaders {
+			if tracker == nil {
+				return saveMemo(VerifyResult{OK: false, Reason: "TrackerUnavailable", Detail: "no chain tracker configured to verify BUMP"})
+			}
+			valid, err := tracker.IsValidRootForHeight(ctx, root, blockHeight)
+			if err != nil {
+				// Distinctly report tracker transport/quorum outage (AMBER) vs root mismatch forgery (RED).
+				return saveMemo(VerifyResult{OK: false, Settled: false, AnchorState: "broadcast", BlockHeight: blockHeight, Reason: "TrackerUnavailable", Detail: "header tracker error: " + err.Error()})
+			}
+			if !valid {
+				return saveMemo(VerifyResult{OK: false, Settled: false, AnchorState: "broadcast", BlockHeight: blockHeight, Reason: "BEEFInvalid", Detail: "BUMP root not valid in header chain"})
+			}
+			if minDepth > 1 {
+				tip, tErr := tracker.CurrentHeight(ctx)
+				if tErr != nil {
+					return saveMemo(VerifyResult{OK: false, Settled: false, AnchorState: "mined", BlockHeight: blockHeight, Reason: "TrackerUnavailable", Detail: "header tip height error: " + tErr.Error()})
+				}
+				if tip >= blockHeight {
+					depth = int(tip-blockHeight) + 1
+				}
+				if depth < minDepth {
+					return saveMemo(VerifyResult{
+						OK:          false,
+						Settled:     false,
+						AnchorState: "mined",
+						BlockHeight: blockHeight,
+						Depth:       depth,
+						Reason:      "InsufficientDepth",
+						Detail:      fmt.Sprintf("anchor confirmation depth %d < required settleDepth %d", depth, minDepth),
+					})
+				}
+			} else {
+				depth = 1
+			}
+			settled = true
+			anchorState = "mined"
+		}
+	} else if checkHeaders {
+		// Safety invariant: NEVER return OK:true for unmined anchors. Check carried funding ancestry
+		// via go-sdk/spv.Verify and report it separately in AncestryVerified while returning Reason:"Unsettled".
+		ancestryOK := false
+		if tracker != nil && hydrateAnchorInputs(anchorTx, parsedBeef, make(map[string]bool)) {
+			if ok, sErr := spv.Verify(ctx, anchorTx, tracker, nil); sErr == nil && ok {
+				ancestryOK = true
+			}
+		}
+		return saveMemo(VerifyResult{
+			OK:               false,
+			Settled:          false,
+			AncestryVerified: ancestryOK,
+			AnchorState:      "broadcast",
+			Reason:           "Unsettled",
+			Detail:           "anchor tx has no mined MerklePath (BUMP)",
+		})
+	}
+
 	_ = chainhash.Hash{}
-	return VerifyResult{OK: true, Settled: settled, AnchorState: anchorState}
+	return saveMemo(VerifyResult{
+		OK:               true,
+		Settled:          settled,
+		AncestryVerified: settled,
+		AnchorState:      anchorState,
+		BlockHeight:      blockHeight,
+		Depth:            depth,
+	})
 }

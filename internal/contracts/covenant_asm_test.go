@@ -119,8 +119,8 @@ func TestVerifyGrothClaimSettlement(t *testing.T) {
 	settleTx.AddInput(&transaction.TransactionInput{SourceTXID: verifierTx.TxID(), SourceTxOutIndex: 0})
 
 	res, err := VerifyGrothClaimSettlement(settleTx, verifierTx, 0, vkHashHex, journalRoot[:])
-	if err != nil || !res.Verified {
-		t.Fatalf("VerifyGrothClaimSettlement valid case failed: res=%+v err=%v", res, err)
+	if err != nil || !res.StructuralBound || res.Verified {
+		t.Fatalf("VerifyGrothClaimSettlement structural binding failed (must not set Verified=true without ChainTracker): res=%+v err=%v", res, err)
 	}
 	// Wrong VK hash must fail closed (blocks dummy OP_TRUE verifier).
 	if _, err := VerifyGrothClaimSettlement(settleTx, verifierTx, 0, strings.Repeat("aa", 32), journalRoot[:]); err == nil {

@@ -18,9 +18,14 @@ import (
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
+	sdkwallet "github.com/bsv-blockchain/go-sdk/wallet"
+	"github.com/lightwebinc/bcommon/carrier"
 	"github.com/lightwebinc/bcommon/chirp"
+	"github.com/lightwebinc/bcommon/guard"
+	"github.com/lightwebinc/bcommon/verify"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
@@ -287,7 +292,17 @@ func (s *Service) PublishAnnounce(ctx context.Context, ad bstack.AnnounceAd) (in
 		}
 		ad.Packs = ad.Packs[:len(ad.Packs)/2]
 	}
-	beef, err := BuildMarketBEEF(bstack.MarketPayload{Kind: bstack.KindAnnounce, Body: body})
+	payload := bstack.MarketPayload{Kind: bstack.KindAnnounce, Body: body}
+	var beef []byte
+	var err error
+	if s.network == "main" || s.network == "testnet" {
+		if s.mem == nil || s.mem.Chain() == nil {
+			return 0, errors.New("discovery: chain port required to mint funded PushDrop carrier on live network")
+		}
+		beef, err = BuildFundedMarketCarrierBEEF(ctx, s.mem.Chain(), s.announceKey, payload)
+	} else {
+		beef, err = BuildMarketBEEF(payload)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -339,15 +354,54 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 		resp.Body.Close()
 		_ = s.mem.DB().UpdateHostHealth(h, "up", time.Now().Unix())
 
-		nowMsCheck := time.Now().UnixMilli()
+		nowTime := time.Now()
+		nowMsCheck := nowTime.UnixMilli()
 		maxExpMs := nowMsCheck + bstack.MaxLifetime.Milliseconds() + 60_000
+		isLive := s.network == "main" || s.network == "testnet"
 		perHostSeen[h] = make(map[string]bool)
 		for _, ev := range ans.Result {
-			if ev.Payload.Kind != bstack.KindAnnounce {
+			payload := ev.Payload
+			if isLive && len(ev.BEEF) == 0 {
+				continue // live networks require carried BEEF on directory lookups
+			}
+			if len(ev.BEEF) > 0 {
+				var tx *transaction.Transaction
+				_, parsedTx, _, pErr := guard.ParseBEEF(ev.BEEF, guard.DefaultBound)
+				if pErr == nil && parsedTx != nil {
+					tx = parsedTx
+				} else if !isLive {
+					if t0, tErr := transaction.NewTransactionFromBEEF(ev.BEEF); tErr == nil && t0 != nil {
+						tx = t0
+					}
+				}
+				if tx == nil || (ev.TxID != "" && !strings.EqualFold(tx.TxID().String(), ev.TxID)) || int(ev.Vout) >= len(tx.Outputs) {
+					continue
+				}
+				if isLive {
+					vout, verifiedPayload, cErr := bstack.VerifyMarketCarrier(tx, s.network, ev.Topic, nowTime)
+					if cErr != nil || vout != ev.Vout {
+						continue
+					}
+					if s.mem == nil || s.mem.Chain() == nil || s.mem.Chain().Tracker() == nil {
+						continue
+					}
+					if verdict, _ := verify.Check(ctx, tx, s.mem.Chain().Tracker()); verdict != verify.Passed {
+						continue
+					}
+					payload = verifiedPayload
+				} else {
+					extracted, ok, _ := bstack.ExtractNkt1Payload(tx.Outputs[ev.Vout].LockingScript)
+					if !ok {
+						continue
+					}
+					payload = extracted
+				}
+			}
+			if payload.Kind != bstack.KindAnnounce {
 				continue
 			}
 			var sa bstack.SignedAnnounce
-			if err := json.Unmarshal(ev.Payload.Body, &sa); err != nil {
+			if err := json.Unmarshal(payload.Body, &sa); err != nil {
 				continue
 			}
 			// Reject cross-network replay, missing/expired Exp, or unbounded Exp.
@@ -384,9 +438,12 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 		}
 	}
 
-	// Detect withholding across healthy multi-host quorums.
+	// Detect withholding across healthy multi-host quorums and quarantine disputed peers
+	// seen on fewer than strict majority (>50%) of responding hosts.
 	var warnings []WithholdingWarning
+	quorum := 1
 	if len(perHostSeen) >= 2 {
+		quorum = len(perHostSeen)/2 + 1
 		for pub := range byPub {
 			for h, seen := range perHostSeen {
 				if !seen[pub] {
@@ -407,6 +464,11 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 	}
 	for pub, p := range byPub {
 		if p.Exp > 0 && p.Exp < nowMs {
+			continue
+		}
+		if len(p.SeenOnHosts) < quorum {
+			// Disputed peer omitted by a quorum of sibling hosts: quarantine rather than blindly unioning.
+			delete(s.peers, pub)
 			continue
 		}
 		s.peers[pub] = *p
@@ -555,7 +617,8 @@ func (s *Service) FetchRemoteChirp(ctx context.Context, peerBaseURL, chirpURL st
 	return out, nil
 }
 
-// BuildMarketBEEF encodes a MarketPayload into an OP_FALSE OP_RETURN AtomicBEEF transaction for Hub /submit.
+// BuildMarketBEEF encodes a MarketPayload into an OP_FALSE OP_RETURN AtomicBEEF transaction for Hub /submit
+// (memory/regtest test mode only; live networks require BuildFundedMarketCarrierBEEF).
 func BuildMarketBEEF(p bstack.MarketPayload) ([]byte, error) {
 	cborBytes, err := bstack.EncodePayload(p)
 	if err != nil {
@@ -567,6 +630,63 @@ func BuildMarketBEEF(p bstack.MarketPayload) ([]byte, error) {
 	tx := transaction.NewTransaction()
 	tx.AddOutput(&transaction.TransactionOutput{Satoshis: 0, LockingScript: ls})
 	return tx.AtomicBEEF(false)
+}
+
+// BuildFundedMarketCarrierBEEF mints a funded, non-mineable (LockTime=2100, Sequence=0) PushDrop carrier
+// transaction via lightwebinc/bcommon/carrier whose funding input carries full SPV ancestry up to mined BUMPs.
+// Satisfies all REFUSED-* checks in MarketTopicManager and verify.Check on live networks.
+func BuildFundedMarketCarrierBEEF(ctx context.Context, port *chain.Port, priv *ec.PrivateKey, p bstack.MarketPayload) ([]byte, error) {
+	if port == nil {
+		return nil, errors.New("discovery: chain port required for funded market carrier")
+	}
+	if priv == nil {
+		return nil, errors.New("discovery: signing key required for funded market carrier")
+	}
+	cborBytes, err := bstack.EncodePayload(p)
+	if err != nil {
+		return nil, err
+	}
+	protoWallet, err := sdkwallet.NewCompletedProtoWallet(priv)
+	if err != nil {
+		return nil, fmt.Errorf("discovery: init carrier signer wallet: %w", err)
+	}
+	fundLock, err := carrier.FundingLock(ctx, protoWallet, bstack.Originator, bstack.MarketCarrierParams)
+	if err != nil {
+		return nil, fmt.Errorf("discovery: derive carrier funding lock: %w", err)
+	}
+	fundTx, _, feeSats, spendSats, err := port.BuildFundedTxWithBEEF(ctx, []*transaction.TransactionOutput{
+		{Satoshis: 1, LockingScript: fundLock},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("discovery: build carrier funding tx: %w", err)
+	}
+	if _, err := port.Broadcast(ctx, fundTx, feeSats, spendSats); err != nil {
+		return nil, fmt.Errorf("discovery: broadcast carrier funding tx: %w", err)
+	}
+	var fundVout uint32
+	foundOut := false
+	for i, o := range fundTx.Outputs {
+		if o != nil && o.LockingScript != nil && bytes.Equal(*o.LockingScript, *fundLock) {
+			fundVout = uint32(i)
+			foundOut = true
+			break
+		}
+	}
+	if !foundOut {
+		return nil, errors.New("discovery: carrier funding output not found in built transaction")
+	}
+	carrierTx, err := carrier.Mint(ctx, protoWallet, bstack.Originator, bstack.MarketCarrierParams, cborBytes, fundTx, fundVout)
+	if err != nil {
+		return nil, fmt.Errorf("discovery: mint PushDrop carrier: %w", err)
+	}
+	if len(carrierTx.Inputs) > 0 && carrierTx.Inputs[0].SourceTransaction == nil {
+		carrierTx.Inputs[0].SourceTransaction = fundTx
+	}
+	beef, err := carrierTx.AtomicBEEF(false)
+	if err != nil {
+		return nil, fmt.Errorf("discovery: encode carrier AtomicBEEF: %w", err)
+	}
+	return beef, nil
 }
 
 // SubmitBEEF posts an AtomicBEEF to a Hub's /submit endpoint for topics.

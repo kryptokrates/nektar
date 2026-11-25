@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/overlay"
 	"github.com/bsv-blockchain/go-sdk/overlay/lookup"
 	"github.com/bsv-blockchain/go-sdk/transaction"
@@ -23,6 +24,7 @@ import (
 	bboxmod "github.com/lightwebinc/bbox/module"
 	"github.com/lightwebinc/bcommon/guard"
 	"github.com/lightwebinc/bcommon/module"
+	"github.com/lightwebinc/bcommon/verify"
 	bfingermod "github.com/lightwebinc/bfinger/module"
 	blogsmod "github.com/lightwebinc/blogs/module"
 	borgmod "github.com/lightwebinc/borg/module"
@@ -65,11 +67,14 @@ func (s BountySubmission) Signable(canonicalHDP string) map[string]any {
 }
 
 // BountyPayoutResult reports the Hub's verified payment to a contributing agent.
+// BEEFHex carries the strict AtomicBEEF payout transaction so recipients can SPV-verify and internalize immediately.
 type BountyPayoutResult struct {
 	Accepted   bool   `json:"accepted"`
 	BountyID   string `json:"bountyId"`
 	RewardSats uint64 `json:"rewardSats"`
 	TxID       string `json:"txid,omitempty"`
+	BEEFHex    string `json:"beefHex,omitempty"`
+	Status     string `json:"status,omitempty"` // broadcast | paid | pending
 	Shard      string `json:"shard,omitempty"`
 	Seq        int64  `json:"seq,omitempty"`
 	Reason     string `json:"reason,omitempty"`
@@ -170,6 +175,9 @@ func NewNode(cfg Config) (*Node, error) {
 	net := cfg.Network
 	if net == "" {
 		net = "regtest"
+	}
+	if (net == "main" || net == "testnet") && cfg.ChainTracker == nil {
+		return nil, fmt.Errorf("hub: witnessed ChainTracker is required on live network %q", net)
 	}
 	getenv := cfg.Getenv
 	if getenv == nil {
@@ -333,6 +341,7 @@ func (n *Node) restoreFromStore(ctx context.Context) error {
 	if n.marketLS == nil {
 		return nil
 	}
+	isLive := n.net == "main" || n.net == "testnet"
 	var cursor int64
 	for {
 		events, err := n.store.EventsSince(cursor, nil, 1000)
@@ -349,9 +358,24 @@ func (n *Node) restoreFromStore(ctx context.Context) error {
 			if len(ev.BEEF) == 0 {
 				continue
 			}
-			tx, err := transaction.NewTransactionFromBEEF(ev.BEEF)
-			if err != nil || int(ev.Vout) >= len(tx.Outputs) {
-				continue
+			var tx *transaction.Transaction
+			if isLive {
+				_, parsed, _, pErr := guard.ParseBEEF(ev.BEEF, guard.DefaultBound)
+				if pErr != nil || parsed == nil || int(ev.Vout) >= len(parsed.Outputs) {
+					continue
+				}
+				if n.tracker != nil {
+					if verdict, _ := verify.Check(ctx, parsed, n.tracker); verdict != verify.Passed {
+						continue
+					}
+				}
+				tx = parsed
+			} else {
+				parsed, err := transaction.NewTransactionFromBEEF(ev.BEEF)
+				if err != nil || parsed == nil || int(ev.Vout) >= len(parsed.Outputs) {
+					continue
+				}
+				tx = parsed
 			}
 			out := tx.Outputs[ev.Vout]
 			op := transaction.Outpoint{Txid: *tx.TxID(), Index: ev.Vout}
@@ -370,6 +394,34 @@ func (n *Node) restoreFromStore(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// HandleReorg evicts persisted Hub events anchored at block_height >= forkHeight and notifies
+// every mounted LookupService via OutputEvicted so orphaned block state is rolled back cleanly.
+func (n *Node) HandleReorg(ctx context.Context, forkHeight uint32) error {
+	if forkHeight == 0 {
+		return nil
+	}
+	evicted, err := n.store.EvictEventsFromHeight(forkHeight)
+	if err != nil {
+		return err
+	}
+	for _, ev := range evicted {
+		h, hErr := chainhash.NewHashFromHex(ev.TxID)
+		if hErr != nil || h == nil {
+			continue
+		}
+		op := transaction.Outpoint{Txid: *h, Index: ev.Vout}
+		for _, ls := range n.lookups {
+			_ = ls.OutputEvicted(ctx, &op)
+		}
+	}
+	return nil
+}
+
+// OnBountyPayoutMined promotes a broadcast bounty claim to 'paid' once its payout tx mines at settleDepth.
+func (n *Node) OnBountyPayoutMined(txid string) error {
+	return n.store.FinalizeBountyClaimByTxID(txid)
 }
 
 func (n *Node) mountModule(m module.Module) {
@@ -535,12 +587,23 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 	if len(rawBEEF) > 4<<20 {
 		return nil, errors.New("hub: BEEF exceeds 4 MiB limit")
 	}
+	isLive := n.net == "main" || n.net == "testnet"
+	if isLive && n.tracker == nil {
+		return nil, errors.New("hub: witnessed ChainTracker is required on live networks")
+	}
+	allMarketTopics := len(topics) > 0
+	for _, t := range topics {
+		if !strings.HasPrefix(t, "tm_nektar_") {
+			allMarketTopics = false
+			break
+		}
+	}
 	var tx *transaction.Transaction
 	_, parsedTx, _, err := guard.ParseBEEF(rawBEEF, guard.DefaultBound)
 	if err == nil && parsedTx != nil {
 		tx = parsedTx
-	} else if err != nil && strings.Contains(err.Error(), "no inputs") && len(rawBEEF) <= 64<<10 {
-		// Unfunded 0-input OP_FALSE OP_RETURN market carrier transactions (<= 64 KiB, <= 16 outputs).
+	} else if !isLive && allMarketTopics && err != nil && strings.Contains(err.Error(), "no inputs") && len(rawBEEF) <= 64<<10 {
+		// Unfunded 0-input OP_FALSE OP_RETURN market carrier transactions allowed ONLY on memory/regtest.
 		t0, tErr := transaction.NewTransactionFromBEEF(rawBEEF)
 		if tErr != nil || t0 == nil || len(t0.Inputs) != 0 || len(t0.Outputs) == 0 || len(t0.Outputs) > 16 {
 			return nil, fmt.Errorf("hub: parse carrier BEEF: %w", err)
@@ -552,10 +615,51 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 		}
 		return nil, fmt.Errorf("hub: parse BEEF: %w", err)
 	}
+	// Run overlay SPV verification against witnessed headers BEFORE admitting to any topic manager
+	// (including all 6 mounted Lightweb modules which assume host-engine SPV already ran).
+	if len(tx.Inputs) > 0 && n.tracker != nil {
+		verdict, vErr := verify.Check(ctx, tx, n.tracker)
+		if verdict != verify.Passed {
+			if verdict == verify.Transport {
+				return nil, fmt.Errorf("hub: tracker unavailable: %w", vErr)
+			}
+			return nil, fmt.Errorf("hub: SPV verification refused (%v): %w", verdict, vErr)
+		}
+	}
 	txid := tx.TxID()
 	beef := transaction.NewBeef()
 	if _, err := beef.MergeTransaction(tx); err != nil {
 		return nil, fmt.Errorf("hub: merge tx into BEEF: %w", err)
+	}
+
+	// Track previously admitted outpoints spent by tx.Inputs so TopicManagers receive accurate
+	// previousCoins and LookupServices receive OutputSpent notifications.
+	type spentPrev struct {
+		outpointKey string
+		outpoint    transaction.Outpoint
+		topic       string
+	}
+	spentByTopic := make(map[string][]uint32)
+	var spentList []spentPrev
+	for idx, inp := range tx.Inputs {
+		if inp.SourceTXID == nil {
+			continue
+		}
+		op := transaction.Outpoint{Txid: *inp.SourceTXID, Index: inp.SourceTxOutIndex}
+		prevTopic, alreadySpent, found, fErr := n.store.FindEventTopicByOutpoint(op.String())
+		if fErr == nil && found && !alreadySpent {
+			spentByTopic[prevTopic] = append(spentByTopic[prevTopic], uint32(idx))
+			spentList = append(spentList, spentPrev{
+				outpointKey: op.String(),
+				outpoint:    op,
+				topic:       prevTopic,
+			})
+		}
+	}
+
+	var blockHeight int64
+	if tx.MerklePath != nil {
+		blockHeight = int64(tx.MerklePath.BlockHeight)
 	}
 	subCtx := module.WithSubmission(ctx, rawBEEF)
 	steak := make(overlay.Steak)
@@ -565,7 +669,7 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 		if !ok {
 			continue
 		}
-		inst, err := tm.IdentifyAdmissibleOutputs(subCtx, beef, txid, nil)
+		inst, err := tm.IdentifyAdmissibleOutputs(subCtx, beef, txid, spentByTopic[topic])
 		if err != nil {
 			return nil, fmt.Errorf("hub: topic %s: %w", topic, err)
 		}
@@ -593,17 +697,18 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 			if isNkt {
 				n.admitMu.Lock()
 				seq, isNew, err = n.store.AppendEvent(StoredEvent{
-					Outpoint:   op.String(),
-					Topic:      topic,
-					TxID:       txid.String(),
-					Vout:       vout,
-					Kind:       p.Kind,
-					Pub:        pub,
-					Domains:    domains,
-					Payload:    p,
-					BEEF:       rawBEEF,
-					Exp:        exp,
-					AdmittedAt: nowMs,
+					Outpoint:    op.String(),
+					Topic:       topic,
+					TxID:        txid.String(),
+					Vout:        vout,
+					Kind:        p.Kind,
+					Pub:         pub,
+					Domains:     domains,
+					Payload:     p,
+					BEEF:        rawBEEF,
+					BlockHeight: blockHeight,
+					Exp:         exp,
+					AdmittedAt:  nowMs,
 				})
 				if err != nil {
 					n.admitMu.Unlock()
@@ -630,6 +735,7 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 						Vout:       vout,
 						AdmittedAt: nowMs,
 						Payload:    p,
+						BEEF:       append([]byte(nil), rawBEEF...),
 					}, domains)
 				}
 				n.admitMu.Unlock()
@@ -648,6 +754,22 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 		}
 		inst.OutputsToAdmit = admitted
 		steak[topic] = &inst
+	}
+
+	// Mark any previously admitted outpoints spent by this verified transaction and notify SpendListeners.
+	for _, sp := range spentList {
+		if _, found, mErr := n.store.MarkOutpointSpent(sp.outpointKey); mErr == nil && found {
+			for _, ls := range n.lookups {
+				if sl, ok := ls.(module.SpendListener); ok {
+					_ = sl.OutputSpent(subCtx, &module.OutputSpent{
+						Mode:         module.SpendTxid,
+						Outpoint:     sp.outpoint,
+						Topic:        sp.topic,
+						SpendingTxid: txid,
+					})
+				}
+			}
+		}
 	}
 	return steak, nil
 }
@@ -732,11 +854,42 @@ func (n *Node) pullPeerOnce(ctx context.Context, peer string, cursor int64) int6
 	}
 	defer sseResp.Body.Close()
 	sc := bufio.NewScanner(sseResp.Body)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	var pendingID int64
 	for sc.Scan() {
 		line := sc.Text()
 		if strings.HasPrefix(line, "id: ") {
-			if id, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "id: ")), 10, 64); err == nil && id > cursor {
+			if id, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "id: ")), 10, 64); err == nil {
+				pendingID = id
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "data: ") {
+			raw := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+			var ev bstack.MarketEvent
+			if err := json.Unmarshal([]byte(raw), &ev); err == nil {
+				seq := ev.Seq
+				if seq == 0 {
+					seq = pendingID
+				}
+				if seq <= cursor {
+					continue
+				}
+				// Fast path: admit carried BEEF inline when contiguous with our cursor — zero /sync refetch!
+				if len(ev.BEEF) > 0 && ev.Topic != "" && (cursor == 0 || seq == cursor+1) {
+					if _, sErr := n.submitInternal(ctx, ev.BEEF, []string{ev.Topic}, true); sErr != nil {
+						lower := strings.ToLower(sErr.Error())
+						if strings.Contains(lower, "rate limit") || strings.Contains(lower, "busy") || strings.Contains(lower, "locked") || strings.Contains(lower, "tracker unavailable") {
+							continue
+						}
+					}
+					cursor = seq
+					_ = n.store.SetFedCursor(peer, cursor)
+					continue
+				}
+			}
+			// Fallback on cursor gap or legacy SSE peer omitting BEEF: repair gap via /sync.
+			if pendingID > cursor {
 				next := n.syncRange(ctx, peer, cursor)
 				if next > cursor {
 					cursor = next
@@ -771,9 +924,9 @@ func (n *Node) syncRange(ctx context.Context, peer string, cursor int64) int64 {
 		for _, it := range items {
 			if len(it.BEEF) > 0 && it.Topic != "" {
 				if _, sErr := n.submitInternal(ctx, it.BEEF, []string{it.Topic}, true); sErr != nil {
-					// Stop advancing federation cursor on transient storage/rate error so failed events retry cleanly.
+					// Stop advancing federation cursor on transient storage/rate/tracker errors so failed events retry cleanly.
 					lower := strings.ToLower(sErr.Error())
-					if strings.Contains(lower, "rate limit") || strings.Contains(lower, "busy") || strings.Contains(lower, "locked") {
+					if strings.Contains(lower, "rate limit") || strings.Contains(lower, "busy") || strings.Contains(lower, "locked") || strings.Contains(lower, "tracker unavailable") {
 						return cursor
 					}
 				}
@@ -827,6 +980,8 @@ func (n *Node) Handler() http.Handler {
 			code := http.StatusBadRequest
 			if strings.Contains(err.Error(), "rate limit") {
 				code = http.StatusTooManyRequests
+			} else if strings.Contains(err.Error(), "tracker unavailable") {
+				code = http.StatusServiceUnavailable
 			}
 			writeJSON(w, code, map[string]string{"error": err.Error()})
 			return
@@ -910,6 +1065,7 @@ func (n *Node) Handler() http.Handler {
 						Vout:       st.Vout,
 						AdmittedAt: st.AdmittedAt,
 						Payload:    st.Payload,
+						BEEF:       st.BEEF,
 					}
 					b, _ := json.Marshal(ev)
 					_, _ = fmt.Fprintf(w, "id: %d\nevent: market\ndata: %s\n\n", ev.Seq, b)
@@ -1111,6 +1267,17 @@ func (n *Node) Handler() http.Handler {
 		// Atomically reserve bounty slot + unique canonical HDP claim BEFORE executing payout!
 		if err := n.store.ReserveBountyClaim(b.ID, sub.HDP, sub.SellerPub, b.RewardSats); err != nil {
 			if errors.Is(err, ErrBountyDuplicate) {
+				if claim, cErr := n.store.GetBountyClaim(sub.HDP); cErr == nil && (claim.Status == "pending" || claim.Status == "broadcast") {
+					writeJSON(w, http.StatusAccepted, BountyPayoutResult{
+						Accepted:   false,
+						BountyID:   claim.BountyID,
+						RewardSats: claim.RewardSats,
+						TxID:       claim.TxID,
+						Status:     claim.Status,
+						Reason:     "bounty payout already " + claim.Status + " (awaiting confirmation)",
+					})
+					return
+				}
 				writeJSON(w, http.StatusConflict, map[string]string{"error": "duplicate fragment HDP already claimed"})
 				return
 			}
@@ -1131,7 +1298,13 @@ func (n *Node) Handler() http.Handler {
 			return
 		}
 		if res != nil && res.Accepted {
-			_ = n.store.FinalizeBountyClaim(sub.HDP, res.TxID)
+			if n.net == "main" || n.net == "testnet" {
+				_ = n.store.MarkBountyClaimBroadcast(sub.HDP, res.TxID)
+				res.Status = "broadcast"
+			} else {
+				_ = n.store.FinalizeBountyClaim(sub.HDP, res.TxID)
+				res.Status = "paid"
+			}
 		} else {
 			_ = n.store.CancelBountyClaim(b.ID, sub.HDP)
 		}

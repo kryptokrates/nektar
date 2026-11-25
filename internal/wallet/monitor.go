@@ -3,6 +3,7 @@ package wallet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,9 +12,15 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
+	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-wallet-toolbox/pkg/entity"
 	"github.com/bsv-blockchain/go-wallet-toolbox/pkg/wdk"
 )
+
+type unfailBackoffEntry struct {
+	attempts int
+	nextTry  time.Time
+}
 
 // Monitor runs go-wallet-toolbox's official storage lifecycle tasks (AbortAbandoned,
 // SendWaitingTransactions, SynchronizeTransactionStatuses, UnFail) alongside Nektar's
@@ -23,42 +30,71 @@ type Monitor struct {
 	httpCli  *http.Client
 	mu       sync.Mutex
 	lastScan time.Time
+	backoff  map[string]unfailBackoffEntry
 }
 
 func newMonitor(e *Engine) *Monitor {
 	return &Monitor{
 		engine:  e,
 		httpCli: &http.Client{Timeout: 15 * time.Second},
+		backoff: make(map[string]unfailBackoffEntry),
 	}
 }
 
 func (m *Monitor) run(ctx context.Context) {
+	// Decouple slow external scans (Desktop BRC-29 dial + WoC address sync) onto a dedicated
+	// goroutine so 15s network I/O never head-of-line blocks fast SendWaiting/CheckForProofs.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		abortTick := time.NewTicker(60 * time.Second)
+		fundTick := time.NewTicker(60 * time.Second)
+		defer abortTick.Stop()
+		defer fundTick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-abortTick.C:
+				if _, err := m.AbortAbandoned(ctx); err != nil && ctx.Err() == nil {
+					m.engine.logf("wallet monitor: AbortAbandoned warning: %v", err)
+				}
+				if _, err := ReconcilePendingBRC29(ctx, m.engine, ""); err != nil && ctx.Err() == nil {
+					m.engine.logf("wallet monitor: ReconcilePendingBRC29 warning: %v", err)
+				}
+				if m.engine.sqlDB != nil {
+					_, _ = m.engine.sqlDB.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
+				}
+			case <-fundTick.C:
+				if _, _, err := m.SyncFundAddress(ctx); err != nil && !errors.Is(err, ErrThrottled) && ctx.Err() == nil {
+					m.engine.logf("wallet monitor: SyncFundAddress warning: %v", err)
+				}
+			}
+		}
+	}()
+	defer wg.Wait()
+
 	sendTick := time.NewTicker(10 * time.Second)
 	proofTick := time.NewTicker(30 * time.Second)
-	abortTick := time.NewTicker(60 * time.Second)
-	fundTick := time.NewTicker(60 * time.Second)
 	defer sendTick.Stop()
 	defer proofTick.Stop()
-	defer abortTick.Stop()
-	defer fundTick.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-sendTick.C:
-			_, _ = m.SendWaiting(ctx)
-		case <-proofTick.C:
-			_, _ = m.CheckForProofs(ctx)
-			_, _ = m.UnFail(ctx)
-		case <-abortTick.C:
-			_, _ = m.AbortAbandoned(ctx)
-			_, _ = ReconcilePendingBRC29(ctx, m.engine, "")
-			if m.engine.sqlDB != nil {
-				_, _ = m.engine.sqlDB.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
+			if _, err := m.SendWaiting(ctx); err != nil && ctx.Err() == nil {
+				m.engine.logf("wallet monitor: SendWaiting warning: %v", err)
 			}
-		case <-fundTick.C:
-			_, _, _ = m.SyncFundAddress(ctx)
+		case <-proofTick.C:
+			if _, err := m.CheckForProofs(ctx); err != nil && ctx.Err() == nil {
+				m.engine.logf("wallet monitor: CheckForProofs warning: %v", err)
+			}
+			if _, err := m.UnFail(ctx); err != nil && ctx.Err() == nil {
+				m.engine.logf("wallet monitor: UnFail warning: %v", err)
+			}
 		}
 	}
 }
@@ -88,14 +124,18 @@ func (m *Monitor) SyncAll(ctx context.Context) (SyncReport, error) {
 
 	if n, err := m.UnFail(ctx); err == nil {
 		rep.ProvedTxs += n
+	} else if firstErr == nil {
+		firstErr = err
 	}
 
-	_, _ = ReconcilePendingBRC29(ctx, m.engine, "")
+	if _, err := ReconcilePendingBRC29(ctx, m.engine, ""); err != nil && firstErr == nil {
+		firstErr = err
+	}
 
 	added, pruned, err := m.SyncFundAddress(ctx)
 	rep.AddedOutputs = added
 	rep.PrunedSpent = pruned
-	if err != nil && firstErr == nil {
+	if err != nil && !errors.Is(err, ErrThrottled) && firstErr == nil {
 		firstErr = err
 	}
 
@@ -106,17 +146,32 @@ func (m *Monitor) SyncAll(ctx context.Context) (SyncReport, error) {
 	return rep, firstErr
 }
 
-// UnFail reconciles failed, aborted, or submission_unknown transactions against the chain:
-//   - If a valid SPV MerklePath exists on chain, revives the transaction to "completed" and
-//     restores unspent change/owned outputs to spendable=1.
-//   - If a submission_unknown transaction is found in the remote mempool, promotes it to "unproven"
-//     so CheckForProofs tracks confirmation without ever double-spending its inputs.
+// UnFail reconciles bounded recent failed/aborted and submission_unknown transactions against the chain:
+//   - Fails closed when Tracker == nil.
+//   - Requires raw tx bytes (verified sha256d == txid) + header-verified BUMP (with block_hash and
+//     merkle_root persisted in known_txes) before reviving to "completed".
+//   - When promoting submission_unknown -> unproven (from verified raw tx bytes on chain), atomically
+//     restores outputs.spendable=1, upserts user_utxos, and updates known_txes so UTXOs are never stranded.
 func (m *Monitor) UnFail(ctx context.Context) (int, error) {
 	if m.engine == nil || m.engine.sqlDB == nil {
 		return 0, nil
 	}
-	q := fmt.Sprintf(`SELECT id, tx_id, status FROM "%s" WHERE user_id = ? AND deleted_at IS NULL AND status IN ('failed','aborted','submission_unknown') AND tx_id IS NOT NULL AND tx_id != ''`, m.engine.tables.transactions)
-	rows, err := m.engine.readDB.QueryContext(ctx, q, m.engine.userID)
+	if m.engine.cfg.Tracker == nil {
+		return 0, ErrNoChain
+	}
+	// Bound scan to submission_unknown plus recent (<=24h) failed/aborted txs (max 20 per pass).
+	cutoff := time.Now().Add(-24 * time.Hour)
+	q := fmt.Sprintf(`
+		SELECT id, tx_id, status
+		FROM "%s"
+		WHERE user_id = ?
+		  AND deleted_at IS NULL
+		  AND tx_id IS NOT NULL
+		  AND tx_id != ''
+		  AND (status = 'submission_unknown' OR (status IN ('failed','aborted') AND updated_at >= ?))
+		ORDER BY updated_at DESC
+		LIMIT 20`, m.engine.tables.transactions)
+	rows, err := m.engine.readDB.QueryContext(ctx, q, m.engine.userID, cutoff)
 	if err != nil {
 		return 0, err
 	}
@@ -138,109 +193,115 @@ func (m *Monitor) UnFail(ctx context.Context) (int, error) {
 	}
 
 	revived := 0
+	now := time.Now()
 	for _, c := range cands {
-		mp, h, ok, _ := m.engine.svc.lookupProof(ctx, c.txid)
+		if !m.shouldAttemptUnfail(c.txid, now) {
+			continue
+		}
+		// Single verified proof lookup (validates ComputeRoot + IsValidRootForHeight internally).
+		mp, h, ok, pErr := m.engine.svc.lookupProof(ctx, c.txid)
+		if pErr != nil {
+			m.recordUnfailBackoff(c.txid, now)
+			continue
+		}
 		if ok && mp != nil {
 			if h == 0 {
 				h = mp.BlockHeight
 			}
-			// Verify Merkle root against headers before reviving to completed.
-			if m.engine.cfg.Tracker != nil {
-				txHash, hErr := chainhash.NewHashFromHex(c.txid)
-				if hErr != nil {
-					continue
-				}
-				root, rErr := mp.ComputeRoot(txHash)
-				if rErr != nil || root == nil {
-					continue
-				}
-				valid, vErr := m.engine.svc.IsValidRootForHeight(ctx, root, h)
-				if vErr != nil || !valid {
-					continue
-				}
-			}
-			txObj, _ := m.engine.LoadParsedTx(ctx, c.txid)
-			if txObj != nil {
-				txObj.MerklePath = mp
-				m.engine.txCache.Put(c.txid, txObj)
-			}
-			// Atomic transactional revival: update transaction, mark spent inputs, restore spendable outputs,
-			// update known_txes, and re-index user_utxos so wallet state cannot double-count or orphan change.
-			dbTx, bErr := m.engine.sqlDB.BeginTx(ctx, nil)
-			if bErr != nil {
+			txHash, hErr := chainhash.NewHashFromHex(c.txid)
+			if hErr != nil {
 				continue
 			}
-			okCommit := true
-			if _, uErr := dbTx.ExecContext(ctx,
-				fmt.Sprintf(`UPDATE "%s" SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`, m.engine.tables.transactions),
-				c.id, m.engine.userID,
-			); uErr != nil {
-				okCommit = false
+			root, rErr := mp.ComputeRoot(txHash)
+			if rErr != nil || root == nil {
+				continue
 			}
-			// Mark inputs spent by this revived mined tx as spent_by=c.id, spendable=0 and purge from user_utxos.
-			if okCommit && txObj != nil {
-				for _, in := range txObj.Inputs {
-					if in.SourceTXID == nil {
-						continue
-					}
-					srcTx := in.SourceTXID.String()
-					_, _ = dbTx.ExecContext(ctx,
-						fmt.Sprintf(`UPDATE "%s" SET spendable = 0, spent_by = ? WHERE user_id = ? AND tx_id = ? AND vout = ? AND deleted_at IS NULL`, m.engine.tables.outputs),
-						c.id, m.engine.userID, srcTx, in.SourceTxOutIndex,
-					)
-					_, _ = dbTx.ExecContext(ctx,
-						fmt.Sprintf(`DELETE FROM "%s" WHERE user_id = ? AND output_id IN (SELECT id FROM "%s" WHERE user_id = ? AND tx_id = ? AND vout = ?)`, m.engine.tables.userUTXOs, m.engine.tables.outputs),
-						m.engine.userID, m.engine.userID, srcTx, in.SourceTxOutIndex,
-					)
-				}
+			rootHex := root.String()
+			hdr, hdrErr := m.engine.svc.ChainHeaderByHeight(ctx, h)
+			if hdrErr != nil || hdr == nil || len(hdr.Hash) != 64 {
+				m.recordUnfailBackoff(c.txid, now)
+				continue
 			}
-			if okCommit {
-				if _, oErr := dbTx.ExecContext(ctx,
-					fmt.Sprintf(`UPDATE "%s" SET spendable = 1 WHERE transaction_id = ? AND user_id = ? AND spent_by IS NULL AND deleted_at IS NULL AND basket_name IN ('default','reserve','fuel','nektar funding')`, m.engine.tables.outputs),
-					c.id, m.engine.userID,
-				); oErr != nil {
-					okCommit = false
-				}
+			if !m.engine.cfg.InMemoryStore && !strings.EqualFold(hdr.MerkleRoot, rootHex) {
+				m.recordUnfailBackoff(c.txid, now)
+				continue
 			}
-			if okCommit {
-				// Re-index revived spendable outputs into user_utxos (utxo_status='mined') so coin selection sees them.
-				_, _ = dbTx.ExecContext(ctx,
-					fmt.Sprintf(`INSERT OR IGNORE INTO "%s" (user_id, output_id, basket_name, satoshis, estimated_input_size, created_at, utxo_status)
-						SELECT user_id, id, basket_name, satoshis, 148, CURRENT_TIMESTAMP, 'mined'
-						FROM "%s"
-						WHERE transaction_id = ? AND user_id = ? AND spendable = 1 AND spent_by IS NULL AND deleted_at IS NULL AND basket_name IN ('default','reserve','fuel','nektar funding')`,
-						m.engine.tables.userUTXOs, m.engine.tables.outputs),
-					c.id, m.engine.userID,
-				)
-			}
-			if okCommit {
-				if mpBytes := mp.Bytes(); len(mpBytes) > 0 {
-					if _, kErr := dbTx.ExecContext(ctx,
-						fmt.Sprintf(`UPDATE "%s" SET status = 'completed', block_height = ?, merkle_path = ? WHERE tx_id = ?`, m.engine.tables.knownTxs),
-						h, mpBytes, c.txid,
-					); kErr != nil {
-						okCommit = false
+			// Require actual verified raw tx bytes before reviving outputs and marking inputs spent!
+			txObj, _ := m.engine.LoadParsedTx(ctx, c.txid)
+			if txObj == nil && m.engine.cfg.Chain != nil {
+				if raw, rErr := m.engine.cfg.Chain.TxRaw(ctx, c.txid); rErr == nil && len(raw) > 0 {
+					if parsed, parseErr := transaction.NewTransactionFromBytes(raw); parseErr == nil && parsed.TxID().String() == c.txid {
+						txObj = parsed
 					}
 				}
 			}
-			if okCommit && dbTx.Commit() == nil {
-				revived++
-			} else {
-				_ = dbTx.Rollback()
+			if txObj == nil {
+				m.recordUnfailBackoff(c.txid, now)
+				continue
 			}
+			txObj.MerklePath = mp
+			if err := m.engine.promoteTxStatusAtomic(ctx, c.id, c.txid, StatusCompleted, txObj, mp, h, hdr.Hash, rootHex); err != nil {
+				m.recordUnfailBackoff(c.txid, now)
+				continue
+			}
+			m.engine.txCache.Put(c.txid, txObj)
+			m.clearUnfailBackoff(c.txid)
+			if m.engine.cfg.OnTxMined != nil {
+				m.engine.cfg.OnTxMined(c.txid, h, mp)
+			}
+			revived++
 			continue
 		}
-		if c.status == StatusSubmissionUnknown {
-			stRes, sErr := m.engine.svc.GetStatusForTxIDs(ctx, []string{c.txid})
-			if sErr == nil && stRes != nil && len(stRes.Results) == 1 && stRes.Results[0].Status == wdk.ResultStatusForTxIDKnown.String() {
-				_, _ = m.engine.sqlDB.ExecContext(ctx,
-					fmt.Sprintf(`UPDATE "%s" SET status = 'unproven', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND status = 'submission_unknown'`, m.engine.tables.transactions),
-					c.id, m.engine.userID,
-				)
+
+		// Not mined yet: for submission_unknown, verify actual raw tx bytes on chain (never bare WoC JSON)
+		// without re-calling lookupProof.
+		if c.status == StatusSubmissionUnknown && m.engine.cfg.Chain != nil {
+			raw, rErr := m.engine.cfg.Chain.TxRaw(ctx, c.txid)
+			if rErr == nil && len(raw) > 0 {
+				if parsed, parseErr := transaction.NewTransactionFromBytes(raw); parseErr == nil && parsed.TxID().String() == c.txid {
+					if err := m.engine.promoteTxStatusAtomic(ctx, c.id, c.txid, StatusUnproven, parsed, nil, 0, "", ""); err == nil {
+						m.clearUnfailBackoff(c.txid)
+						continue
+					}
+				}
 			}
 		}
+		m.recordUnfailBackoff(c.txid, now)
 	}
 	return revived, nil
+}
+
+func (m *Monitor) shouldAttemptUnfail(txid string, now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ent, ok := m.backoff[txid]
+	if !ok {
+		return true
+	}
+	return !now.Before(ent.nextTry)
+}
+
+func (m *Monitor) recordUnfailBackoff(txid string, now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.backoff) > 512 {
+		clear(m.backoff)
+	}
+	ent := m.backoff[txid]
+	ent.attempts++
+	shift := min(ent.attempts-1, 6)
+	wait := time.Duration(30<<shift) * time.Second
+	if wait > 30*time.Minute {
+		wait = 30 * time.Minute
+	}
+	ent.nextTry = now.Add(wait)
+	m.backoff[txid] = ent
+}
+
+func (m *Monitor) clearUnfailBackoff(txid string) {
+	m.mu.Lock()
+	delete(m.backoff, txid)
+	m.mu.Unlock()
 }
 
 // AbortAbandoned reclaims stale unsigned/unprocessed transactions and releases their reserved UTXOs
@@ -260,15 +321,14 @@ func (m *Monitor) AbortAbandoned(ctx context.Context) (int, error) {
 		Status().In(wdk.TxStatusUnsigned, wdk.TxStatusUnprocessed).
 		Count(ctx)
 
+	aborted := 0
 	if before > after {
-		aborted := int(before - after)
-		if ns, _ := m.engine.ReconcileOrphanedNoSend(ctx); ns > 0 {
-			aborted += ns
-		}
-		return aborted, nil
+		aborted = int(before - after)
 	}
-	ns, _ := m.engine.ReconcileOrphanedNoSend(ctx)
-	return ns, nil
+	if ns, err := m.engine.ReconcileOrphanedNoSend(ctx); err == nil && ns > 0 {
+		aborted += ns
+	}
+	return aborted, nil
 }
 
 // SendWaiting retries queued delayed/unprocessed transactions via go-wallet-toolbox's Provider.SendWaitingTransactions.
@@ -294,14 +354,25 @@ func (m *Monitor) SendWaiting(ctx context.Context) (int, error) {
 }
 
 // CheckForProofs polls Arcade/Chain for MerklePaths on unproven transactions via go-wallet-toolbox's
-// Provider.SynchronizeTransactionStatuses.
+// Provider.SynchronizeTransactionStatuses, evicts stale txCache entries, notifies OnTxMined listeners,
+// and wakes FuelKeeper when proven stock increases.
 func (m *Monitor) CheckForProofs(ctx context.Context) (int, error) {
 	statuses, err := m.engine.provider.SynchronizeTransactionStatuses(ctx)
 	proved := 0
 	for _, st := range statuses {
 		if st.Status == wdk.ProvenTxStatusCompleted {
 			proved++
+			// Evict stale MerklePath==nil entry from txCache and reload freshly mined tx + BUMP.
+			m.engine.txCache.Delete(st.TxID)
+			if txObj, lErr := m.engine.LoadParsedTx(ctx, st.TxID); lErr == nil && txObj != nil && txObj.MerklePath != nil {
+				if m.engine.cfg.OnTxMined != nil {
+					m.engine.cfg.OnTxMined(st.TxID, txObj.MerklePath.BlockHeight, txObj.MerklePath)
+				}
+			}
 		}
+	}
+	if proved > 0 {
+		m.engine.fuel.Wake()
 	}
 	return proved, err
 }
@@ -316,8 +387,10 @@ type wocUnspentResp struct {
 }
 
 // SyncFundAddress performs a rate-limited scan (honoring cfg.WoC Base/Key/Client and cfg.Chain)
-// for external P2PKH deposits sent to Nektar's static FundAddress(), internalizing new outputs
-// and pruning any funding outputs confirmed spent externally.
+// for external P2PKH deposits sent to Nektar's static FundAddress().
+// Indexers are used strictly for discovery: outputs are NEVER pruned from WoC omission or bare
+// Spender JSON — only verified spending transaction bytes (recomputed txid + matching input +
+// verified unlocking script or mined BUMP) may mark a BasketFunding output spent.
 func (m *Monitor) SyncFundAddress(ctx context.Context) (added int, pruned int, err error) {
 	if m.engine.cfg.WoC == nil && m.engine.cfg.Chain == nil {
 		return 0, 0, nil
@@ -326,7 +399,7 @@ func (m *Monitor) SyncFundAddress(ctx context.Context) (added int, pruned int, e
 	m.mu.Lock()
 	if time.Since(m.lastScan) < 5*time.Second {
 		m.mu.Unlock()
-		return 0, 0, nil
+		return 0, 0, ErrThrottled
 	}
 	m.lastScan = time.Now()
 	m.mu.Unlock()
@@ -394,8 +467,20 @@ func (m *Monitor) SyncFundAddress(ctx context.Context) (added int, pruned int, e
 		}
 	}
 
-	// Prune externally spent BasketFunding outputs using authoritative WoC unspent list + Chain.Spender check.
-	if haveLiveSet || m.engine.cfg.Chain != nil {
+	// Absorb newly discovered deposits into native BRC-29 "default" and wake FuelKeeper immediately.
+	if added > 0 {
+		if absorbed, aErr := m.engine.AbsorbFundingBasket(ctx); aErr != nil {
+			m.engine.logf("wallet sync: post-deposit absorb warning: %v", aErr)
+		} else if absorbed > 0 {
+			m.engine.fuel.Wake()
+		} else {
+			m.engine.fuel.Wake()
+		}
+	}
+
+	// Prune externally spent BasketFunding outputs ONLY when verified spending tx bytes prove the spend!
+	// Never prune from WoC omission or bare Chain.Spender JSON alone.
+	if m.engine.cfg.Chain != nil {
 		outs, oErr := m.engine.provider.OutputsEntity().Read().
 			UserID().Equals(m.engine.userID).
 			BasketName().Equals(BasketFunding).
@@ -411,21 +496,15 @@ func (m *Monitor) SyncFundAddress(ctx context.Context) (added int, pruned int, e
 				if haveLiveSet && liveOutpoints[key] {
 					continue
 				}
-				spentExternally := false
-				if m.engine.cfg.Chain != nil {
-					if spender, sErr := m.engine.cfg.Chain.Spender(ctx, *o.TxID, o.Vout); sErr == nil && spender != "" {
-						spentExternally = true
-					}
-				} else if haveLiveSet && o.TxStatus == wdk.TxStatusCompleted {
-					spentExternally = true
+				spentVerified, vErr := m.engine.verifyOutpointSpent(ctx, *o.TxID, o.Vout, uint64(o.Satoshis), o.LockingScript)
+				if vErr != nil || !spentVerified {
+					continue
 				}
-				if spentExternally {
-					if uErr := m.engine.provider.OutputsEntity().Update(ctx, &entity.OutputUpdateSpecification{
-						ID:        o.ID,
-						Spendable: &f,
-					}); uErr == nil {
-						pruned++
-					}
+				if uErr := m.engine.provider.OutputsEntity().Update(ctx, &entity.OutputUpdateSpecification{
+					ID:        o.ID,
+					Spendable: &f,
+				}); uErr == nil {
+					pruned++
 				}
 			}
 		}

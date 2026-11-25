@@ -34,6 +34,10 @@ func (f *FuelKeeper) Wake() {
 }
 
 func (f *FuelKeeper) run(ctx context.Context) {
+	// Warm fuel stock immediately at startup (no 15s cold-start gap).
+	if _, err := f.RunOnce(ctx); err != nil && ctx.Err() == nil {
+		f.engine.logf("wallet fuelkeeper: startup warm warning: %v", err)
+	}
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -41,14 +45,38 @@ func (f *FuelKeeper) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-f.wakeCh:
-			_, _ = f.RunOnce(ctx)
+			if _, err := f.RunOnce(ctx); err != nil && ctx.Err() == nil {
+				f.engine.logf("wallet fuelkeeper: wake refill warning: %v", err)
+			}
 		case <-ticker.C:
-			_, _ = f.RunOnce(ctx)
+			if _, err := f.RunOnce(ctx); err != nil && ctx.Err() == nil {
+				f.engine.logf("wallet fuelkeeper: periodic refill warning: %v", err)
+			}
 		}
 	}
 }
 
-// RunOnce checks whether fuel count is below low-water mark and replenishes via FanOutFuel.
+// waitSpendGuardInterval paces internal zero-external-spend fan-out rounds so consecutive
+// FanOutFuel transactions never collide with SpendGuard.MinInterval.
+func (f *FuelKeeper) waitSpendGuardInterval(ctx context.Context) error {
+	if f.engine == nil || f.engine.cfg.SpendGuardRemainingInterval == nil {
+		return nil
+	}
+	rem := f.engine.cfg.SpendGuardRemainingInterval()
+	if rem <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(rem + 5*time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// RunOnce checks whether proven/total fuel count is below low-water mark and replenishes via FanOutFuel.
 func (f *FuelKeeper) RunOnce(ctx context.Context) (int, error) {
 	if !f.engine.svc.hasBroadcaster() {
 		return 0, nil
@@ -62,12 +90,18 @@ func (f *FuelKeeper) RunOnce(ctx context.Context) (int, error) {
 	if lowWater < 1 {
 		lowWater = 1
 	}
-	if bal.FuelCount < lowWater {
+	// Gate refill on proven (mined) fuel slots when confirmed balance is available, while also
+	// enforcing total fuel low-water so live lanes never hit 0 proven slots.
+	needProvenRefill := bal.ProvenFuelCount < lowWater && bal.ConfirmedSats >= f.engine.fuelDenom*2 && bal.FuelCount < prof.FuelTarget
+	if bal.FuelCount < lowWater || needProvenRefill {
 		return f.WarmFuel(ctx, prof.FuelTarget, prof.FuelSats)
 	}
-	// Idle dust consolidation: merge fragmented small UTXOs when count reaches trigger.
+	// Idle dust consolidation: merge fragmented small UTXOs only when fuel stock is healthy.
 	if prof.DustThresholdSats > 0 && prof.DustConsolidateTrigger > 0 {
 		if dustCount := f.engine.countDustUTXOs(ctx, prof.DustThresholdSats); dustCount >= prof.DustConsolidateTrigger {
+			if err := f.waitSpendGuardInterval(ctx); err != nil {
+				return 0, err
+			}
 			if _, cErr := f.engine.Consolidate(ctx, ConsolidateArgs{
 				BelowSats: prof.DustThresholdSats,
 				MaxInputs: 100,
@@ -139,6 +173,9 @@ func (f *FuelKeeper) WarmFuel(ctx context.Context, targetCount int, _ uint64) (i
 				chunks = maxOut
 			}
 			if chunks >= 1 {
+				if err := f.waitSpendGuardInterval(ctx); err != nil {
+					return 0, err
+				}
 				_, rErr := f.engine.tb.FanOutFuel(withExternalSpend(ctx, 0), wdk.ShapedChange{
 					Basket:   BasketReserve,
 					Count:    uint64(chunks),
@@ -146,6 +183,11 @@ func (f *FuelKeeper) WarmFuel(ctx context.Context, targetCount int, _ uint64) (i
 				}, f.engine.cfg.Originator)
 				if rErr != nil {
 					return 0, fmt.Errorf("wallet fuelkeeper: fan-out reserve: %w", rErr)
+				}
+				// go-wallet-toolbox FanOutFuel queues delayed broadcast ('sending'): flush SendWaiting
+				// immediately so reserve outputs reach 'unproven'/'completed' before leaf fan-out spends them!
+				if _, sErr := f.engine.monitor.SendWaiting(ctx); sErr != nil {
+					return 0, fmt.Errorf("wallet fuelkeeper: broadcast reserve fan-out: %w", sErr)
 				}
 			}
 		}
@@ -166,7 +208,13 @@ func (f *FuelKeeper) WarmFuel(ctx context.Context, targetCount int, _ uint64) (i
 			batchFee = f.engine.estimateFeeSats(ctx, 2, batch+1) + 200
 		}
 		if batch == 0 || uint64(batch)*fuelSats+batchFee > avail {
+			if minted == 0 {
+				return 0, fmt.Errorf("%w: available %d sats < minimum fuel slot (%d + %d fee)", ErrInsufficient, avail, fuelSats, batchFee)
+			}
 			break
+		}
+		if err := f.waitSpendGuardInterval(ctx); err != nil {
+			return minted, err
 		}
 		_, lErr := f.engine.tb.FanOutFuel(withExternalSpend(ctx, 0), wdk.ShapedChange{
 			Basket:   BasketFuel,
@@ -175,9 +223,16 @@ func (f *FuelKeeper) WarmFuel(ctx context.Context, targetCount int, _ uint64) (i
 		}, f.engine.cfg.Originator)
 		if lErr != nil {
 			if minted > 0 {
-				return minted, nil
+				return minted, lErr
 			}
 			return 0, fmt.Errorf("wallet fuelkeeper: fan-out fuel: %w", lErr)
+		}
+		// Flush queued FanOutFuel immediately so minted fuel UTXOs transition out of 'sending'.
+		if _, sErr := f.engine.monitor.SendWaiting(ctx); sErr != nil {
+			if minted > 0 {
+				return minted, sErr
+			}
+			return 0, fmt.Errorf("wallet fuelkeeper: broadcast fuel fan-out: %w", sErr)
 		}
 		minted += batch
 	}

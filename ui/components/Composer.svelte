@@ -11,35 +11,47 @@
 
   let { funded, inputEl = $bindable(null), onDone, onToast }: Props = $props()
 
-  type Mode = 'remember' | 'ask' | 'buy'
-  let mode = $state<Mode>('remember')
+  type Mode = 'sell' | 'buy'
+  let mode = $state<Mode>('sell')
   let text = $state('')
   let shard = $state('notes')
+  let sellPrice = $state('50')
   let domain = $state('ops')
   let maxSats = $state('100')
   let busy = $state(false)
 
-  const placeholder = $derived(
-    mode === 'remember'
-      ? "What should your agent remember?"
-      : mode === 'ask'
-        ? 'Ask your memory for a verified answer…'
-        : 'What knowledge do you want to buy?'
+  const hint = $derived(
+    mode === 'sell'
+      ? 'Add data and set your price — other AI agents pay you in sats when they buy it.'
+      : 'Request verified data from other agents. Escrow only pays the seller when the proof checks out.'
   )
 
-  const ctaLabel = $derived(
-    busy ? 'Working…' : mode === 'remember' ? (funded ? 'Remember & Anchor' : 'Remember') : mode === 'ask' ? 'Ask' : 'Buy'
+  const placeholder = $derived(
+    mode === 'sell'
+      ? 'Paste or write the data, research, or insight you want to sell…'
+      : 'Describe the data or answer you want to buy from the network…'
   )
+
+  const ctaLabel = $derived.by(() => {
+    if (busy) return 'Working…'
+    if (mode === 'sell') {
+      const p = Math.max(1, Math.floor(Number(sellPrice) || 50))
+      return `List & Sell · ${p} sats`
+    }
+    return 'Request & Buy'
+  })
 
   async function submit() {
     const body = text.trim()
     if (!body || busy) return
     busy = true
     try {
-      if (mode === 'remember') {
-        // Automatically anchor on BSV whenever wallet is funded — zero manual anchor button!
+      if (mode === 'sell') {
+        const topic = shard.trim() || 'notes'
+        const price = Math.max(1, Math.floor(Number(sellPrice) || 50))
+        // Save & auto-anchor on BSV whenever wallet is funded, then list for sale immediately.
         const res = await postJSON<{ seq?: number; anchorTxid?: string }>('/v1/remember', {
-          shard: shard.trim() || 'notes',
+          shard: topic,
           text: body,
           autoAnchor: funded
         })
@@ -47,34 +59,19 @@
           onToast(res.data.error ?? `Save failed (${res.status})`, true)
           return
         }
-        text = ''
-        onToast(res.data.anchorTxid ? 'Saved & anchored on BSV ✓' : 'Saved to memory ✓')
-        await onDone()
-      } else if (mode === 'ask') {
-        const rec = await postJSON<{ items?: Array<{ shard: string; seq: number; text?: string }> }>('/v1/tools/recall', {
-          query: body,
-          limit: 5
+        const sellRes = await postJSON('/v1/tools/sell', {
+          shard: topic,
+          domains: [topic],
+          priceSats: price,
+          description: body.slice(0, 140)
         })
-        if (!rec.ok) {
-          onToast(rec.data.error ?? `Recall failed (${rec.status})`, true)
-          return
-        }
-        const items = rec.data.items ?? []
-        if (items.length === 0) {
-          onToast('No matching memory yet.', true)
-          return
-        }
-        const top = items[0]
-        const ans = await postJSON<{ ungrounded?: boolean }>('/v1/tools/groundedAnswer', {
-          claims: [{ text: (top.text ?? '').trim().slice(0, 200), cites: [{ shard: top.shard, seq: top.seq }] }],
-          autoAnchor: funded
-        })
-        if (!ans.ok) {
-          onToast(ans.data.error ?? `Grounding failed (${ans.status})`, true)
+        if (!sellRes.ok) {
+          onToast(sellRes.data.error ?? `Saved, but listing failed (${sellRes.status})`, true)
+          await onDone()
           return
         }
         text = ''
-        onToast(ans.data.ungrounded ? 'Could not verify answer.' : 'Verified receipt issued ✓', Boolean(ans.data.ungrounded))
+        onToast(`Listed #${topic} for ${price} sats ✓`)
         await onDone()
       } else {
         const cap = Math.max(1, Math.floor(Number(maxSats) || 100))
@@ -84,11 +81,11 @@
           maxSats: cap
         })
         if (!res.ok) {
-          onToast(res.data.error ?? `Purchase failed (${res.status})`, true)
+          onToast(res.data.error ?? `Purchase request failed (${res.status})`, true)
           return
         }
         text = ''
-        onToast(res.data.status === 'settled' ? 'Knowledge bought & verified ✓' : `Order ${res.data.status ?? 'sent'}`)
+        onToast(res.data.status === 'settled' ? 'Data bought & verified ✓' : `Request ${res.data.status ?? 'posted'}`)
         await onDone()
       }
     } catch (e) {
@@ -119,10 +116,11 @@
 
   <div class="col">
     <div class="modes">
-      <button class="m" class:on={mode === 'remember'} onclick={() => (mode = 'remember')}>Remember</button>
-      <button class="m" class:on={mode === 'ask'} onclick={() => (mode = 'ask')}>Ask</button>
-      <button class="m" class:on={mode === 'buy'} onclick={() => (mode = 'buy')}>Buy</button>
+      <button class="m" class:on={mode === 'sell'} onclick={() => (mode = 'sell')}>Sell Data</button>
+      <button class="m" class:on={mode === 'buy'} onclick={() => (mode = 'buy')}>Buy Data</button>
     </div>
+
+    <p class="hint">{hint}</p>
 
     <textarea
       bind:this={inputEl}
@@ -135,22 +133,24 @@
 
     <div class="bar">
       <div class="opts">
-        {#if mode === 'remember'}
+        {#if mode === 'sell'}
           <label class="tag-in">
-            <span>#</span>
-            <input bind:value={shard} placeholder="notes" aria-label="Shard" />
-          </label>
-          {#if funded}
-            <span class="auto-badge" title="Memories anchor onto BSV automatically">✓ Auto-anchor on</span>
-          {/if}
-        {:else if mode === 'buy'}
-          <label class="tag-in">
-            <span>#</span>
-            <input bind:value={domain} placeholder="ops" aria-label="Domain" />
+            <span class="lbl">Topic</span>
+            <input bind:value={shard} placeholder="notes" aria-label="Topic" />
           </label>
           <label class="tag-in num">
-            <span>≤</span>
-            <input type="number" min="1" bind:value={maxSats} aria-label="Max satoshis" />
+            <span class="lbl">Price</span>
+            <input type="number" min="1" bind:value={sellPrice} aria-label="Price in satoshis" />
+            <span>sats</span>
+          </label>
+        {:else}
+          <label class="tag-in">
+            <span class="lbl">Topic</span>
+            <input bind:value={domain} placeholder="ops" aria-label="Topic" />
+          </label>
+          <label class="tag-in num">
+            <span class="lbl">Max budget</span>
+            <input type="number" min="1" bind:value={maxSats} aria-label="Max budget in satoshis" />
             <span>sats</span>
           </label>
         {/if}
@@ -167,36 +167,39 @@
     border-bottom: 1px solid var(--line);
   }
   .avatar { flex-shrink: 0; padding-top: 0.1rem; }
-  .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; }
-  .modes { display: flex; gap: 0.25rem; }
+  .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.45rem; }
+  .modes { display: flex; gap: 0.3rem; flex-wrap: wrap; }
   .m {
-    background: none; border: 0; color: var(--mut2); font: inherit;
-    font-size: 0.78rem; font-weight: 700; padding: 0.2rem 0.6rem; border-radius: 999px;
-    cursor: pointer; transition: background 0.12s, color 0.12s;
+    background: none; border: 1px solid transparent; color: var(--mut2); font: inherit;
+    font-size: 0.8rem; font-weight: 700; padding: 0.28rem 0.72rem; border-radius: 999px;
+    cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s;
   }
   .m:hover { color: var(--ink); background: var(--hover); }
-  .m.on { color: var(--amber); background: rgb(247 153 27 / 13%); }
+  .m.on { color: var(--amber); background: rgb(247 153 27 / 13%); border-color: rgb(247 153 27 / 30%); }
+  .hint {
+    margin: 0; font-size: 0.78rem; line-height: 1.4; color: var(--mut);
+  }
   textarea {
     width: 100%; background: transparent; border: 0; color: var(--ink);
-    font: inherit; font-size: 1.04rem; line-height: 1.48; resize: none; padding: 0.15rem 0; outline: none;
+    font: inherit; font-size: 1.02rem; line-height: 1.48; resize: none; padding: 0.2rem 0; outline: none;
   }
   textarea::placeholder { color: var(--mut2); }
   .bar {
-    display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
-    padding-top: 0.45rem;
+    display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;
+    padding-top: 0.4rem;
   }
-  .opts { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  .opts { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
   .tag-in {
-    display: inline-flex; align-items: center; gap: 0.2rem;
+    display: inline-flex; align-items: center; gap: 0.3rem;
     background: var(--surf); border: 1px solid var(--line); border-radius: 999px;
-    padding: 0.2rem 0.6rem; font-size: 0.76rem; color: var(--mut);
+    padding: 0.22rem 0.65rem; font-size: 0.76rem; color: var(--mut);
   }
+  .lbl { color: var(--mut2); font-weight: 600; }
   .tag-in input {
     width: 68px; background: none; border: 0; color: var(--ink);
-    font: inherit; font-size: 0.76rem; outline: none;
+    font: inherit; font-size: 0.76rem; font-weight: 600; outline: none;
   }
   .tag-in.num input { width: 52px; font-variant-numeric: tabular-nums; }
-  .auto-badge { font-size: 0.74rem; color: var(--ok); font-weight: 600; }
   .post {
     background: var(--amber); color: #120e0c; border: 0; border-radius: 999px;
     padding: 0.46rem 1.15rem; font: inherit; font-size: 0.84rem; font-weight: 800;

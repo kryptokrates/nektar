@@ -20,7 +20,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/nektar 
 
 # Optional static restate-server binary for single-container durable workflows
 ARG RESTATE_VERSION=1.8.1
-RUN arch="$(dpkg --print-architecture)" \
+RUN apt-get update && apt-get install -y --no-install-recommends xz-utils \
+ && rm -rf /var/lib/apt/lists/* \
+ && arch="$(dpkg --print-architecture)" \
  && case "$arch" in amd64) t=x86_64-unknown-linux-musl ;; arm64) t=aarch64-unknown-linux-musl ;; *) echo "unsupported arch $arch"; exit 1 ;; esac \
  && name="restate-server-$t.tar.xz" \
  && base="https://github.com/restatedev/restate/releases/download/v$RESTATE_VERSION" \

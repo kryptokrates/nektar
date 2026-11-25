@@ -249,8 +249,14 @@ func (p *Port) seedTestChainCoins(ctx context.Context) error {
 	if _, err := p.testChain.Generate(testchain.Maturity+5, addr); err != nil {
 		return err
 	}
+	// Reconcile persisted pool against this fresh in-memory testchain: prune outputs
+	// from previous ephemeral sessions that do not exist on the new testchain.
+	for _, existing := range p.embedded.Pool.Outputs() {
+		if p.testChain.Tx(existing.TxID) == nil {
+			_, _ = p.embedded.Pool.Remove(existing)
+		}
+	}
 	tip := p.testChain.Height()
-	var added int
 	for _, txid := range p.testChain.Txids() {
 		mp, h, ok := p.testChain.Proof(txid)
 		if !ok || h+testchain.Maturity > tip {
@@ -264,7 +270,7 @@ func (p *Port) seedTestChainCoins(ctx context.Context) error {
 		if out0.LockingScript == nil || out0.LockingScript.String() != lockHex || out0.Satoshis == 0 {
 			continue
 		}
-		n, err := p.embedded.Pool.Add(bwallet.Output{
+		if _, err := p.embedded.Pool.Add(bwallet.Output{
 			TxID:          txid,
 			Vout:          0,
 			Satoshis:      out0.Satoshis,
@@ -273,13 +279,11 @@ func (p *Port) seedTestChainCoins(ctx context.Context) error {
 			Coinbase:      true,
 			Raw:           cbTx.Hex(),
 			Bump:          hex.EncodeToString(mp.Bytes()),
-		})
-		if err != nil {
+		}); err != nil {
 			return err
 		}
-		added += n
 	}
-	if added == 0 {
+	if p.embedded.Pool.Balance() == 0 {
 		return errors.New("testchain seeded zero mature coinbase outputs")
 	}
 	return nil

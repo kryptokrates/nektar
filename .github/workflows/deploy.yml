@@ -1,14 +1,10 @@
 name: deploy
 on:
-  push:
+  workflow_run:
+    workflows: ['release']
     branches: [master]
-    tags: ['v*']
+    types: [completed]
   workflow_dispatch:
-    inputs:
-      build_stark:
-        description: 'Rebuild the nektar-stark-build docker image (slow, ~30-60 min — only needed when tools/stark changes)'
-        type: boolean
-        default: false
 concurrency:
   group: deploy
 permissions:
@@ -16,194 +12,31 @@ permissions:
 
 jobs:
   hetzner:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - name: pull → build → restart on the Hetzner box
+      - name: pull v0.4 GHCR image & restart on Hetzner box
         env:
           KEY: ${{ secrets.HETZNER_SSH_KEY }}
           HOST: ${{ secrets.HETZNER_HOST }}
           HOSTKEY: ${{ secrets.HETZNER_HOST_KEY }}
-          BUILD_STARK: ${{ inputs.build_stark }}
-          DEPLOY_REF: ${{ github.ref_name }}
-          REF_TYPE: ${{ github.ref_type }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          # pinned host key (secrets.HETZNER_HOST_KEY = output of
-          # `ssh-keyscan <host>` taken once over a trusted path) — no TOFU
           printf '%s\n' "$HOSTKEY" > ~/.ssh/known_hosts
-          # the remote script goes over stdin via `bash -s` — a single-quoted
-          # argument would split on any stray apostrophe and leak the tail of
-          # the script onto the runner (the "units not found" incident)
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" \
-            "DEPLOY_REF='$DEPLOY_REF' REF_TYPE='$REF_TYPE' BUILD_STARK='$BUILD_STARK' bash -s" <<'REMOTE_SCRIPT'
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" bash -s <<'REMOTE_SCRIPT'
             set -e
-            # one-time mamem → nektar migration (idempotent, every step self-guarded)
-            for u in /etc/systemd/system/mamem-*.service; do
-              [ -f "$u" ] || continue
-              s=$(basename "$u" .service)
-              systemctl stop "$s" 2>/dev/null || true
-              systemctl disable "$s" 2>/dev/null || true
-            done
-            # every /opt|/var/lib|/etc/mamem* path → nektar* (merge if dest exists)
-            for p in /opt/mamem* /var/lib/mamem* /etc/mamem*; do
-              [ -e "$p" ] || continue
-              d="${p/mamem/nektar}"
-              if [ -e "$d" ]; then
-                echo "merge $p → $d"
-                cp -an "$p"/. "$d"/ && mv "$p" "$p.bak"
-              else
-                echo "move $p → $d"
-                mv "$p" "$d"
-              fi
-            done
-            [ -d /opt/nektar/.mamem ] && mv /opt/nektar/.mamem /opt/nektar/.nektar || true
-            # env files: rename var names + paths only (never blind-replace inside values)
-            for e in /etc/nektar*.env /opt/nektar/.env; do
-              [ -f "$e" ] && sed -i "s/^MAMEM_/NEKTAR_/g; s|/opt/mamem|/opt/nektar|g; s|/var/lib/mamem|/var/lib/nektar|g; s|/etc/mamem|/etc/nektar|g" "$e" || true
-            done
-            for u in /etc/systemd/system/mamem-*.service /etc/systemd/system/nektar-*.service; do
-              [ -f "$u" ] || continue
-              sed -i "s|/opt/mamem|/opt/nektar|g; s|/var/lib/mamem|/var/lib/nektar|g; s|/etc/mamem|/etc/nektar|g; s/MAMEM_/NEKTAR_/g; s/mamem/nektar/g" "$u"
-              case "$u" in
-                *mamem-*) mv "$u" "/etc/systemd/system/nektar-$(basename "$u" | sed "s/^mamem-//")" ;;
-              esac
-            done
-            systemctl daemon-reload
-            for u in /etc/systemd/system/nektar-*.service; do
-              [ -f "$u" ] || continue
-              systemctl enable "$(basename "$u" .service)"
-            done
-            for f in /etc/nginx/conf.d/*mamem* /etc/nginx/sites-enabled/*mamem*; do
-              [ -f "$f" ] && sed -i "s|/opt/mamem|/opt/nektar|g; s/mamem/nektar/g" "$f" && mv "$f" "${f/mamem/nektar}" || true
-            done
-            nginx -t 2>/dev/null && systemctl reload nginx || true
             cd /opt/nektar
-            # branch pushes deploy master; tag pushes deploy the release tag
-            if [ "$REF_TYPE" = "tag" ]; then
-              echo "deploying release tag: $DEPLOY_REF"
-              git fetch https://github.com/kryptokrates/nektar.git "refs/tags/$DEPLOY_REF"
-            else
-              echo "deploying master"
-              git fetch https://github.com/kryptokrates/nektar.git master
-            fi
-            # the box sometimes carries local commits/dirty work — reset
-            # would destroy it silently. Park everything (local commits +
-            # dirty tree) on a timestamped backup branch first.
-            if [ -n "$(git status --porcelain)" ] || [ -n "$(git log --oneline FETCH_HEAD..HEAD 2>/dev/null)" ]; then
-              b="box-local/$(date +%Y%m%d-%H%M%S)"
-              echo "local work ahead/dirty — parking on $b"
-              git checkout -b "$b"
-              git add -A
-              git -c user.name=box -c user.email=box@local commit -qm "auto-backup before deploy" || true
-              git checkout -f master 2>/dev/null || git checkout -f -
-            fi
+            git fetch https://github.com/kryptokrates/nektar.git master
             git reset --hard FETCH_HEAD
-            pnpm install --frozen-lockfile
-            # build only what the services run — the 4GB box OOM-kills full
-            # parallel tsc; contracts/zk/fuzz/e2e are dev-time, not runtime.
-            # serial: two concurrent tsc trees still peak ~1.6GB under k3s+mysql
-            pnpm --filter "@nektar/mcp..." --workspace-concurrency=1 build
-            # managed instance config — repo file is authoritative for the keys
-            # it lists; box-local keys (secrets, DATA_DIR, PORT…) untouched
-            if [ -f deploy/hetzner/nektar-http.env ]; then
-              while IFS= read -r kv; do
-                case "$kv" in \#*) continue ;; esac
-                [ -n "$kv" ] || continue
-                k="${kv%%=*}"
-                if grep -q "^$k=" /etc/nektar-http.env; then
-                  sed -i "s|^$k=.*|$kv|" /etc/nektar-http.env
-                else
-                  printf "%s\n" "$kv" >> /etc/nektar-http.env
-                fi
-              done < deploy/hetzner/nektar-http.env
-            fi
-            # the public host pair this agent (and any other operator) uses —
-            # pulls refresh :edge to the release job's latest published images
-            docker compose -p nektar-bstack-testnet -f deploy/bstack-sandbox/compose.testnet.yaml pull
-            docker compose -p nektar-bstack-testnet -f deploy/bstack-sandbox/compose.testnet.yaml up -d
-            # public endpoint: nektar-http must bind 0.0.0.0 (default is 127.0.0.1)
-            grep -q "^NEKTAR_HTTP_HOST=" /etc/nektar-http.env 2>/dev/null || echo "NEKTAR_HTTP_HOST=0.0.0.0" >> /etc/nektar-http.env
-            # --- nektar-prover: STARK HTTP shim (loopback only + token) ---
-            if [ ! -f /etc/nektar-prover.env ]; then
-              { echo PROVER_HOST=127.0.0.1; echo PROVER_PORT=8443; echo PROVER_DOCKER=1; echo "PROVER_TOKEN=$(openssl rand -hex 24)"; } > /etc/nektar-prover.env
-              chmod 600 /etc/nektar-prover.env
-            fi
-            printf "%s\n" "[Unit]" "Description=nektar STARK prover HTTP shim" "After=network.target docker.service" "Requires=docker.service" "" "[Service]" "EnvironmentFile=/etc/nektar-prover.env" "WorkingDirectory=/opt/nektar/tools/stark" "ExecStart=/usr/local/bin/node prover-server.mjs" "Restart=always" "RestartSec=5" "" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/nektar-prover.service
-            systemctl daemon-reload
-            systemctl enable --now nektar-prover
-            # restart races the instance lock heartbeat TTL — stop first,
-            # wait for the lock file to free, then start cleanly
-            systemctl stop nektar-http nektar-watch 2>/dev/null || true
-            DATA_DIR=$(grep -oE "^NEKTAR_DATA_DIR=.*" /etc/nektar-http.env 2>/dev/null | cut -d= -f2)
-            DATA_DIR=${DATA_DIR:-/opt/nektar/.nektar}
-            for i in 1 2 3 4 5 6 7 8; do
-              [ -f "$DATA_DIR/instance.lock" ] || break
-              sleep 3
+            NEKTAR_IMAGE_TAG=edge docker compose -f deploy/hub/compose.yaml pull
+            NEKTAR_IMAGE_TAG=edge docker compose -f deploy/hub/compose.yaml up -d
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              curl -sf -m 5 http://127.0.0.1:8080/v1/health && echo " <- v0.4 hub OK" && exit 0
+              sleep 2
             done
-            rm -f "$DATA_DIR/instance.lock"
-            systemctl start nektar-watch nektar-http || {
-              systemctl status nektar-watch nektar-http --no-pager -l || true
-              journalctl -u nektar-http -u nektar-watch -n 20 --no-pager || true
-              exit 1
-            }
-            sleep 3
-            systemctl is-active nektar-http nektar-watch nektar-prover
-            echo "=== bind check ==="
-            ss -tlnp | grep -E "node|MainThread|:808" || true
-            echo "=== env var names (values hidden) ==="
-            grep -oE "^[A-Z_]+" /etc/nektar-http.env 2>/dev/null || echo "no env file"
-            echo "=== http banner ==="
-            journalctl -u nektar-http -n 5 --no-pager | grep -E "nektar:|Error|error" || true
-            # the service binds NEKTAR_HTTP_PORT (env file), not necessarily
-            # 8080 — read it there first, fall back to the journal banner
-            PORT=$(grep -oE "^NEKTAR_HTTP_PORT=[0-9]+" /etc/nektar-http.env 2>/dev/null | cut -d= -f2)
-            [ -n "$PORT" ] || PORT=$(journalctl -u nektar-http -n 20 --no-pager | grep -oE "HTTP \+ MCP on :[0-9]+" | grep -oE "[0-9]+" | tail -1)
-            echo "detected port: ${PORT:-none}"
-            # a booting service needs a few seconds before the banner lands —
-            # poll the local endpoint briefly before declaring it dark
-            if [ -n "$PORT" ]; then
-              for i in 1 2 3 4 5 6 7 8 9 10; do
-                curl -sf -m 5 "http://127.0.0.1:$PORT/.well-known/nektar" >/dev/null && break
-                sleep 3
-              done
-              curl -sf -m 5 "http://127.0.0.1:$PORT/.well-known/nektar" && echo " ← local OK" || { echo "local endpoint dark — last journal:"; journalctl -u nektar-http -n 15 --no-pager; exit 1; }
-            fi
-            echo "=== prover health ==="
-            curl -sf -m 5 http://127.0.0.1:8443/health && echo " ← prover OK"
-            echo "=== STARK build (opt-in) ==="
-            if [ "$BUILD_STARK" = "true" ]; then
-              cd /opt/nektar
-              docker build -f tools/stark/Dockerfile.build -t nektar-stark-build tools/stark
-              docker images | grep nektar-stark
-            else
-              echo "skipped (set build_stark=true on dispatch to rebuild the prover image)"
-            fi
+            docker compose -f deploy/hub/compose.yaml logs --tail 30
+            exit 1
           REMOTE_SCRIPT
-      - name: verify the public endpoint from outside
-        env:
-          HOST: ${{ secrets.HETZNER_HOST }}
-          HOSTKEY: ${{ secrets.HETZNER_HOST_KEY }}
-          KEY: ${{ secrets.HETZNER_SSH_KEY }}
-        # warning-only: the deploy + service-local health check above already
-        # proved the units run — a timeout here is the box's public port
-        # mapping (firewall/security group), not a repo regression. The port
-        # is read from the env file, not hardcoded.
-        run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          printf '%s\n' "$HOSTKEY" > ~/.ssh/known_hosts
-          PORT=$(ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" "grep -oE '^NEKTAR_HTTP_PORT=[0-9]+' /etc/nektar-http.env | cut -d= -f2")
-          PORT=${PORT:-8080}
-          # the real public surface is Caddy's vhost on 443 — the first site
-          # block in the Caddyfile names the domain the app lives behind
-          DOMAIN=$(ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" "grep -m1 -oE '^[a-z0-9.-]+ \{' /etc/caddy/Caddyfile | tr -d ' {'" 2>/dev/null || true)
-          if [ -n "$DOMAIN" ]; then
-            curl -sf -m 10 "https://$DOMAIN/.well-known/nektar" >/dev/null \
-              && echo "public OK: https://$DOMAIN/.well-known/nektar" \
-              || echo "::warning::https://$DOMAIN/.well-known/nektar unreachable — Caddy/uplink issue, not a repo regression"
-          fi
-          curl -sf -m 10 "http://$HOST:$PORT/.well-known/nektar" >/dev/null && echo "direct :$PORT also reachable" || true

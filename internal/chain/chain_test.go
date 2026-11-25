@@ -86,4 +86,16 @@ func TestMemoryPortBroadcastAnchorAndSPVVerify(t *testing.T) {
 	if !res.OK || !res.Settled || res.AnchorState != "mined" {
 		t.Fatalf("expected mined SPV verification, got: %+v", res)
 	}
+
+	// Reopening the same dataDir in memory mode must preserve identity and reconcile pool cleanly!
+	port2, err := Open(ctx, Config{Network: "memory", DataDir: port.dataDir})
+	if err != nil {
+		t.Fatalf("reopen memory port on same dataDir: %v", err)
+	}
+	if port2.IdentityPubHex() != port.IdentityPubHex() {
+		t.Fatalf("identity pub changed across reopen: %s vs %s", port2.IdentityPubHex(), port.IdentityPubHex())
+	}
+	if port2.BalanceSats() == 0 {
+		t.Fatal("reopened memory port has zero balance")
+	}
 }

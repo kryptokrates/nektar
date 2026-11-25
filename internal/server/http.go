@@ -189,7 +189,15 @@ func (a *App) buildMux() http.Handler {
 	}
 	if a.cfg.MountRestate && a.mkt != nil {
 		if rh, err := a.mkt.BindRestate(restateserver.NewRestate()).Handler(); err == nil {
-			mux.Handle("/restate/", http.StripPrefix("/restate", rh))
+			mux.Handle("/restate/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				r2 := r.Clone(r.Context())
+				r2.URL.Path = strings.TrimPrefix(r.URL.Path, "/restate")
+				if r2.URL.Path == "" {
+					r2.URL.Path = "/"
+				}
+				r2.RequestURI = r2.URL.RequestURI()
+				rh.ServeHTTP(w, r2)
+			}))
 		}
 	}
 

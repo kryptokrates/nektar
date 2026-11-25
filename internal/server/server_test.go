@@ -176,4 +176,19 @@ func TestUnifiedServerRESTA2AProxyPaywallAndDashboard(t *testing.T) {
 		t.Fatalf("GET /hub/v1/health failed: %+v %v", hResp, err)
 	}
 	hResp.Body.Close()
+
+	// 8. Mounted Restate Go SDK endpoint discovery (/restate/discover) exposes all 5 services!
+	rsReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/restate/discover", nil)
+	rsReq.Header.Set("Accept", "application/vnd.restate.endpointmanifest.v3+json")
+	rsResp, err := http.DefaultClient.Do(rsReq)
+	if err != nil || rsResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /restate/discover failed: %+v %v", rsResp, err)
+	}
+	rsBody, _ := io.ReadAll(rsResp.Body)
+	rsResp.Body.Close()
+	for _, svc := range []string{"BuyerDeal", "SellerDeal", "Custody", "Tx", "AnchorCadence"} {
+		if !strings.Contains(string(rsBody), `"`+svc+`"`) {
+			t.Fatalf("/restate/discover missing %s: %s", svc, string(rsBody))
+		}
+	}
 }

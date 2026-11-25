@@ -31,29 +31,23 @@
     onShareUrl
   }: Props = $props()
 
-  type Filter = 'all' | 'memories' | 'receipts' | 'trades' | 'approvals'
-  let filter = $state<Filter>('all')
+  let approvalsOnly = $state(false)
 
   const pendingApprovals = $derived(s.automation?.pending ?? [])
+  const showingApprovalsOnly = $derived(approvalsOnly && pendingApprovals.length > 0)
 
   const entries = $derived.by(() => {
     const out: TimelineEntry[] = []
-    if (filter === 'all' || filter === 'approvals') {
-      for (const a of pendingApprovals) {
-        out.push({ kind: 'approval', sortAt: Number.MAX_SAFE_INTEGER, data: a })
-      }
+    for (const a of pendingApprovals) {
+      out.push({ kind: 'approval', sortAt: Number.MAX_SAFE_INTEGER, data: a })
     }
-    if (filter === 'all' || filter === 'memories') {
+    if (!showingApprovalsOnly) {
       for (const m of s.feed ?? []) {
         out.push({ kind: 'memory', sortAt: (m.createdAt || 0) * 1000, data: m })
       }
-    }
-    if (filter === 'all' || filter === 'receipts') {
       for (const r of s.receipts.list ?? []) {
         out.push({ kind: 'receipt', sortAt: r.at ?? 0, data: r })
       }
-    }
-    if (filter === 'all' || filter === 'trades') {
       for (const d of s.automation?.deals ?? []) {
         out.push({ kind: 'deal', sortAt: d.at ?? 0, data: d })
       }
@@ -73,14 +67,18 @@
 
 <div class="stream">
   <header class="sticky-head">
-    <div class="tabs">
-      <button class="t" class:on={filter === 'all'} onclick={() => (filter = 'all')}>All</button>
-      <button class="t" class:on={filter === 'memories'} onclick={() => (filter = 'memories')}>Memories</button>
-      <button class="t" class:on={filter === 'receipts'} onclick={() => (filter = 'receipts')}>Receipts</button>
-      <button class="t" class:on={filter === 'trades'} onclick={() => (filter = 'trades')}>Trades</button>
+    <div class="bar">
+      <h2 class="title">Activity</h2>
       {#if pendingApprovals.length > 0}
-        <button class="t warn" class:on={filter === 'approvals'} onclick={() => (filter = 'approvals')}>
-          Approvals <span class="cnt">{pendingApprovals.length}</span>
+        <button
+          class="appr-pill"
+          class:on={showingApprovalsOnly}
+          onclick={() => (approvalsOnly = !showingApprovalsOnly)}
+        >
+          {showingApprovalsOnly ? 'Show all activity' : 'Needs approval'}
+          {#if !showingApprovalsOnly}
+            <span class="cnt">{pendingApprovals.length}</span>
+          {/if}
         </button>
       {/if}
     </div>
@@ -99,8 +97,8 @@
       {#if searchQuery.trim()}
         <p>Nothing matching “{searchQuery}”.</p>
       {:else}
-        <p>Your timeline is quiet.</p>
-        <small>Post a memory above — Nektar anchors and verifies it automatically.</small>
+        <p>No activity yet.</p>
+        <small>Save a note above or ask your AI — everything it saves, answers, and trades appears here.</small>
       {/if}
     </div>
   {:else}
@@ -125,22 +123,23 @@
     background: rgb(9 8 7 / 90%); backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--line);
   }
-  .tabs { display: flex; padding: 0 0.5rem; }
-  .t {
-    flex: 1; position: relative; background: none; border: 0; color: var(--mut);
-    font: inherit; font-size: 0.86rem; font-weight: 600; padding: 0.9rem 0.5rem;
-    cursor: pointer; white-space: nowrap; transition: color 0.14s, background 0.14s;
+  .bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+    padding: 0.85rem 1.25rem;
   }
-  .t:hover { color: var(--ink); background: var(--hover); }
-  .t.on { color: var(--ink); font-weight: 700; }
-  .t.on::after {
-    content: ''; position: absolute; left: 26%; right: 26%; bottom: 0;
-    height: 2.5px; border-radius: 99px; background: var(--amber);
+  .title { margin: 0; font-size: 1rem; font-weight: 800; color: var(--ink); letter-spacing: -0.01em; }
+  .appr-pill {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    background: rgb(247 153 27 / 12%); color: var(--amber);
+    border: 1px solid rgb(247 153 27 / 35%); border-radius: 999px;
+    font: inherit; font-size: 0.78rem; font-weight: 700;
+    padding: 0.32rem 0.75rem; cursor: pointer; transition: background 0.14s, color 0.14s;
   }
-  .t.warn { color: var(--amber); }
+  .appr-pill:hover { background: rgb(247 153 27 / 20%); }
+  .appr-pill.on { background: var(--amber); color: #120e0c; border-color: var(--amber); }
   .cnt {
     background: var(--amber); color: #120e0c; font-size: 0.68rem; font-weight: 800;
-    border-radius: 999px; padding: 0.05rem 0.4rem; margin-left: 0.25rem;
+    border-radius: 999px; padding: 0.05rem 0.4rem;
   }
   .empty-feed { padding: 3.5rem 1.5rem; text-align: center; color: var(--mut); }
   .empty-feed p { margin: 0 0 0.35rem; font-size: 0.95rem; color: var(--ink); }

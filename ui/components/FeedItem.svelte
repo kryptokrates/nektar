@@ -37,7 +37,7 @@
     <div class="av av-warn">!</div>
     <div class="body">
       <div class="head">
-        <b>Approval needed</b>
+        <b>Needs approval</b>
         <span class="sats">≤ {fmtSats(a.maxExtraSats)} sats</span>
       </div>
       <p class="txt">{a.reason}</p>
@@ -60,11 +60,14 @@
     </div>
     <div class="body">
       <div class="head">
+        <b>Saved</b>
         <span class="tag">#{m.shard}</span>
         {#if m.batchN >= 0}
-          <span class="verified" title={m.settled ? 'SPV mined & verified' : 'Broadcast to BSV'}>
-            {m.settled ? 'Verified on BSV' : 'Anchored'}
+          <span class="badge ok" title={m.settled ? 'Verified on BSV blockchain' : 'Anchored on BSV'}>
+            {m.settled ? 'Verified ✓' : 'Anchored'}
           </span>
+        {:else}
+          <span class="badge muted" title="Saved locally; auto-anchors when funded">Local</span>
         {/if}
         <span class="time">{agoUnix(m.createdAt)}</span>
         <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
@@ -72,7 +75,7 @@
           <button class="more" onclick={() => (menuOpen = !menuOpen)} aria-label="More">···</button>
           {#if menuOpen}
             <div class="menu">
-              <button onclick={() => { menuOpen = false; onInspectMemory(m) }}>View cryptographic proof</button>
+              <button onclick={() => { menuOpen = false; onInspectMemory(m) }}>View proof</button>
               <button class="danger" onclick={() => { menuOpen = false; onForgetMemory(m.shard, m.seq) }}>Forget &amp; shred</button>
             </div>
           {/if}
@@ -92,15 +95,23 @@
         class:ok={verdict === 'green'}
         class:warn={verdict === 'amber'}
         class:bad={verdict === 'red'}
-        title={verdict === 'green' ? 'Cryptographically verified on BSV' : verdict === 'red' ? 'Proof check failed' : 'Verified locally, awaiting block'}
+        title={verdict === 'green' ? 'Verified against saved memories on BSV' : verdict === 'red' ? 'Verification failed' : 'Verified locally, awaiting confirmation'}
       >
         {verdict === 'red' ? '✕' : '✓'}
       </span>
     </div>
     <div class="body">
       <div class="head">
-        <b>Verified Answer</b>
+        <b>Answered</b>
         {#each r.shards as sh}<span class="tag">#{sh}</span>{/each}
+        <span
+          class="badge"
+          class:ok={verdict === 'green'}
+          class:warn={verdict === 'amber'}
+          class:bad={verdict === 'red'}
+        >
+          {verdict === 'green' ? 'Verified ✓' : verdict === 'red' ? 'Check failed' : 'Verified locally'}
+        </span>
         {#if r.sats !== null && r.sats > 0}
           <span class="sats">+{fmtSats(r.sats)} sats</span>
         {/if}
@@ -109,10 +120,10 @@
         <button
           class="share-ic"
           onclick={(e) => { e.stopPropagation(); onShareUrl(window.location.origin + r.url) }}
-          title="Copy shareable verification link"
+          title="Copy verification link"
         >↗</button>
       </div>
-      <p class="txt">{r.answer || 'Verified grounded answer'}</p>
+      <p class="txt">{r.answer || 'Verified answer'}</p>
     </div>
   </article>
 {:else}
@@ -125,7 +136,9 @@
     <div class="body">
       <div class="head">
         <b>Trade</b>
-        <span class="tag" class:oktxt={d.to === 'settled'} class:badtxt={d.to === 'failed'}>{d.to}</span>
+        <span class="badge" class:ok={d.to === 'settled'} class:bad={d.to === 'failed'} class:muted={d.to !== 'settled' && d.to !== 'failed'}>
+          {d.to === 'settled' ? 'Completed ✓' : d.to === 'failed' ? 'Failed' : d.to}
+        </span>
         <span class="time">{agoMs(d.at)}</span>
       </div>
       <p class="txt">{d.cause}</p>
@@ -156,9 +169,15 @@
     font-size: 0.86rem; margin-bottom: 0.3rem;
   }
   .tag { font-weight: 700; color: var(--amber); font-size: 0.84rem; }
-  .tag.oktxt { color: var(--ok); }
-  .tag.badtxt { color: var(--bad); }
-  .verified { font-size: 0.72rem; color: var(--ok); font-weight: 600; }
+  .badge {
+    font-size: 0.72rem; font-weight: 700; padding: 0.1rem 0.45rem;
+    border-radius: 999px; background: var(--surf); border: 1px solid var(--line);
+    color: var(--mut);
+  }
+  .badge.ok { color: var(--ok); background: rgb(34 197 94 / 10%); border-color: rgb(34 197 94 / 28%); }
+  .badge.warn { color: var(--amber); background: rgb(247 153 27 / 10%); border-color: rgb(247 153 27 / 30%); }
+  .badge.bad { color: var(--bad); background: rgb(239 68 68 / 10%); border-color: rgb(239 68 68 / 30%); }
+  .badge.muted { color: var(--mut2); }
   .sats { color: var(--ok); font-weight: 800; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
   .time { margin-left: auto; color: var(--mut2); font-size: 0.76rem; font-variant-numeric: tabular-nums; }
   .txt {

@@ -257,7 +257,7 @@ func (b *Broker) sseHostLoop(ctx context.Context, hubURL string) {
 				return
 			case <-time.After(jitter):
 			}
-			if backoff < 10*time.Second {
+			if backoff < 2*time.Second {
 				backoff *= 2
 			}
 			continue
@@ -883,8 +883,11 @@ collectLoop:
 	rec.Status = "offered"
 	_ = b.mem.DB().SaveDeal(rec)
 
-	// Split coins proactively if UTXO count is low so parallel deals never starve.
-	_ = b.mem.Chain().EnsureSplitCoins(ctx, 4, maxU64(chosen.PriceSats*2, 1000))
+	// Split coins proactively in memory mode when UTXO count is low; on live testnet/main
+	// avoid adding an extra synchronous Arcade broadcast round-trip on the critical purchase path.
+	if b.mem.Chain().Network() == "memory" {
+		_ = b.mem.Chain().EnsureSplitCoins(ctx, 4, maxU64(chosen.PriceSats*2, 1000))
+	}
 
 	// Build, SpendGuard-check, and broadcast real BSV payment to Seller's signed PayAddress!
 	payTx, payTxID, err := b.mem.Chain().SendToAddress(ctx, chosen.PayAddress, chosen.PriceSats)
@@ -993,6 +996,7 @@ collectLoop:
 	}
 
 	// 5. Commit verified knowledge into Buyer's own memory shard & record verified Seller reputation!
+	// Anchor synchronously in memory mode; on live testnet/main commit locally immediately so Want returns fast.
 	targetShard := strings.TrimSpace(req.TargetShard)
 	if targetShard == "" {
 		targetShard = "market/" + req.Domains[0]
@@ -1002,7 +1006,7 @@ collectLoop:
 		Text:       string(plaintext),
 		Source:     "market:" + shortPub(chosen.Pub),
 		Class:      req.Domains[0],
-		AutoAnchor: b.mem.Chain().BalanceSats() > 1000,
+		AutoAnchor: b.mem.Chain().Network() == "memory" && b.mem.Chain().BalanceSats() > 1000,
 	}); err != nil {
 		rec.Status = "failed"
 		rec.Error = "commit purchased fact: " + err.Error()

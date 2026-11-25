@@ -276,10 +276,21 @@ func cmdServe(args []string) error {
 		log.Printf("welcome seed warning: %v", err)
 	}
 	if rt.mem.Chain().Network() != "memory" {
-		if added, proved, sErr := rt.mem.Chain().SyncPool(ctx); sErr == nil && (added > 0 || proved > 0) {
-			log.Printf("synced %s wallet pool: +%d UTXO(s), %d proved (balance=%d sats)", rt.mem.Chain().Network(), added, proved, rt.mem.Chain().BalanceSats())
+		// Only block boot for SyncPool if wallet pool is completely empty; otherwise sync asynchronously
+		// so daemon restarts recover in <500ms even under WhatsOnChain rate limits!
+		if rt.mem.Chain().BalanceSats() == 0 {
+			syncCtx, syncCancel := context.WithTimeout(ctx, 8*time.Second)
+			if added, proved, sErr := rt.mem.Chain().SyncPool(syncCtx); sErr == nil && (added > 0 || proved > 0) {
+				log.Printf("synced %s wallet pool: +%d UTXO(s), %d proved (balance=%d sats)", rt.mem.Chain().Network(), added, proved, rt.mem.Chain().BalanceSats())
+			}
+			syncCancel()
 		}
 		go func() {
+			// Background initial sync + periodic 30s pool/proof refresh.
+			if rt.mem.Chain().BalanceSats() > 0 {
+				_, _, _ = rt.mem.Chain().SyncPool(ctx)
+				_, _ = rt.mem.RefreshAnchorProofs(ctx)
+			}
 			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
 			for {
@@ -294,7 +305,9 @@ func cmdServe(args []string) error {
 		}()
 	}
 	if rt.mem.Chain().BalanceSats() > 10_000 {
-		_ = rt.mem.Chain().EnsureSplitCoins(ctx, 4, 2000)
+		if err := rt.mem.Chain().EnsureSplitCoins(ctx, 6, 5000); err != nil {
+			log.Printf("coin split warning: %v", err)
+		}
 	}
 
 	// Optionally mount durable embedded Go Overlay Hub at /hub/ with Liquidity Engine + Bounties + Faucet!

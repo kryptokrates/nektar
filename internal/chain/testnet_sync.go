@@ -247,6 +247,13 @@ func (p *Port) SyncPool(ctx context.Context) (added int, proved int, err error) 
 			continue
 		}
 		op := fmt.Sprintf("%s:%d", u.TxHash, u.TxPos)
+		p.mu.Lock()
+		_, alreadySpentByUs := p.spentOutpoints[op]
+		p.mu.Unlock()
+		if alreadySpentByUs {
+			// Ignore lagging WoC unspent entry for an outpoint we already broadcast a spend for!
+			continue
+		}
 		liveOutpoints[op] = true
 
 		if cur, ok := existingByOutpoint[op]; ok {
@@ -301,6 +308,21 @@ func (p *Port) SyncPool(ctx context.Context) (added int, proved int, err error) 
 		}
 		if height == 0 && u.Height > 0 {
 			height = u.Height
+		}
+		// Re-check spentOutpoints & in-flight reserved coins right before Pool.Add to eliminate TOCTOU races
+		// when a spend broadcasts while SyncPool is fetching TxRaw/TxBEEF!
+		p.mu.Lock()
+		_, spentNow := p.spentOutpoints[op]
+		reservedNow := false
+		for _, rCoin := range p.reserved {
+			if rCoin.Outpoint() == op {
+				reservedNow = true
+				break
+			}
+		}
+		p.mu.Unlock()
+		if spentNow || reservedNow {
+			continue
 		}
 		n, aErr := p.embedded.Pool.Add(bwallet.Output{
 			TxID:          u.TxHash,

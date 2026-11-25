@@ -262,7 +262,7 @@ try {
     Stop-Process -Id $procs["hub"].Id -Force
     Start-Sleep -Milliseconds 500
     Start-NektarNode "hub" @("serve","--hub","--listen","127.0.0.1:18620","--public-url",$urls.hub,"--data-dir",$dirs.hub,"--network",$Network)
-    Start-Sleep -Milliseconds 1000
+    Start-Sleep -Seconds 3
     $postRestart = Run-Hermes "post-restart" $runTag
     $tradeList.Add([pscustomobject]@{ Route="[POST-HUB-KILL] Alpha(Hermes) <- Delta(A2A-NAT)"; Sats=$postRestart.priceSats; FirstOfferMs=$postRestart.firstOfferMs; TotalMs=$postRestart.totalMs; TxID=$postRestart.paymentTxid })
     Write-Host ("[OK] Post-Hub-Kill Alpha(Hermes) <- Delta(A2A-NAT) settled={0} sats | firstOffer={1}ms | total={2}ms!" -f $postRestart.priceSats, $postRestart.firstOfferMs, $postRestart.totalMs) -ForegroundColor Green

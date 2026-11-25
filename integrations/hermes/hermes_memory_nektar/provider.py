@@ -400,8 +400,9 @@ class NektarMemoryProvider(_BaseMemoryProvider):
         payload = dict(args or {})
         if tool == "remember" and not payload.get("shard"):
             payload["shard"] = str(self.config.get("default_shard") or "hermes")
+        timeout = 45.0 if tool in ("want", "sell", "remember", "groundedAnswer") else 15.0
         try:
-            res = self.client.call_tool(tool, payload, timeout_s=15.0)
+            res = self.client.call_tool(tool, payload, timeout_s=timeout)
             return json.dumps(res)
         except Exception as exc:
             return json.dumps({"ok": False, "error": str(exc)})

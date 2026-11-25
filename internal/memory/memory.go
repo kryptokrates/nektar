@@ -329,13 +329,22 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 	if err != nil {
 		return nil, err
 	}
-	tx, fee, spend, err := s.port.BuildFundedTx(ctx, []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)})
-	if err != nil {
-		return nil, err
-	}
-	txid, err := s.port.Broadcast(ctx, tx, fee, spend)
-	if err != nil {
-		return nil, err
+	var tx *transaction.Transaction
+	var txid string
+	for attempt := range 3 {
+		var fee, spend uint64
+		tx, fee, spend, err = s.port.BuildFundedTx(ctx, []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)})
+		if err != nil {
+			return nil, err
+		}
+		txid, err = s.port.Broadcast(ctx, tx, fee, spend)
+		if err != nil {
+			if attempt < 2 && (strings.Contains(err.Error(), "UTXO_SPENT") || strings.Contains(err.Error(), "spent by another transaction")) {
+				continue
+			}
+			return nil, err
+		}
+		break
 	}
 	if err := s.port.AdoptChange(tx); err != nil {
 		return nil, err

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,9 +75,11 @@ type Port struct {
 	testChain    *testchain.Chain
 	nodeChain    *nodeapi.Sources
 	woc          *nodeapi.WoC
-	settler      publish.Settler
-	httpClient   *http.Client
-	txs          map[string]*transaction.Transaction
+	settler        publish.Settler
+	httpClient     *http.Client
+	txs            map[string]*transaction.Transaction
+	reserved       map[string]bwallet.Output
+	spentOutpoints map[string]int64 // outpoints we already spent; prevents WoC indexer lag from re-adding them!
 }
 
 // Open constructs a Port for any network:
@@ -115,8 +118,10 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		mainnet:    mainnet,
 		dataDir:    dir,
 		guard:      guard,
-		httpClient: &http.Client{Timeout: 20 * time.Second},
-		txs:        make(map[string]*transaction.Transaction),
+		httpClient:     &http.Client{Timeout: 20 * time.Second},
+		txs:            make(map[string]*transaction.Transaction),
+		reserved:       make(map[string]bwallet.Output),
+		spentOutpoints: make(map[string]int64),
 	}
 
 	// Open custody: remote BRC-100 wirewallet (NEKTAR_WALLET=client) or embedded bcommon/bwallet.
@@ -224,8 +229,15 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		}
 		settleSpec := cfg.SettleSpec
 		if settleSpec == "" {
-			if def, err := publish.DefaultSettle(net); err == nil {
-				settleSpec = def
+			switch net {
+			case "testnet":
+				settleSpec = "arcade:test"
+			case "main":
+				settleSpec = "arcade:main"
+			default:
+				if def, err := publish.DefaultSettle(net); err == nil {
+					settleSpec = def
+				}
 			}
 		}
 		if settleSpec != "" {
@@ -382,20 +394,26 @@ func (p *Port) SendToAddress(ctx context.Context, address string, sats uint64) (
 	if err != nil {
 		return nil, "", fmt.Errorf("chain: p2pkh lock: %w", err)
 	}
-	tx, fee, spend, err := p.BuildFundedTx(ctx, []*transaction.TransactionOutput{
-		{Satoshis: sats, LockingScript: lock},
-	})
-	if err != nil {
-		return nil, "", err
+	for attempt := range 3 {
+		tx, fee, spend, err := p.BuildFundedTx(ctx, []*transaction.TransactionOutput{
+			{Satoshis: sats, LockingScript: lock},
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		txid, err := p.Broadcast(ctx, tx, fee, spend)
+		if err != nil {
+			if attempt < 2 && (strings.Contains(err.Error(), "UTXO_SPENT") || strings.Contains(err.Error(), "spent by another transaction")) {
+				continue
+			}
+			return nil, "", err
+		}
+		if err := p.AdoptChange(tx); err != nil {
+			return tx, txid, err
+		}
+		return tx, txid, nil
 	}
-	txid, err := p.Broadcast(ctx, tx, fee, spend)
-	if err != nil {
-		return nil, "", err
-	}
-	if err := p.AdoptChange(tx); err != nil {
-		return tx, txid, err
-	}
-	return tx, txid, nil
+	return nil, "", errors.New("chain: failed to broadcast payment after pruning stale UTXOs")
 }
 
 // Height returns the current chain tip height.
@@ -407,15 +425,50 @@ func (p *Port) Height(ctx context.Context) (uint32, error) {
 }
 
 // Broadcast enforces SpendGuard caps, then broadcasts tx on testchain or configured live node.
+// On ANY failure before broadcast succeeds, any funding UTXO reserved by BuildFundedTx is atomically returned to bwallet.Pool!
 func (p *Port) Broadcast(ctx context.Context, tx *transaction.Transaction, feeSats, spendSats uint64) (string, error) {
 	txid := tx.TxID().String()
+	returnReserved := func() {
+		p.mu.Lock()
+		coin, ok := p.reserved[txid]
+		if ok {
+			delete(p.reserved, txid)
+		}
+		p.mu.Unlock()
+		if ok && p.embedded != nil && p.embedded.Pool != nil {
+			_ = p.embedded.Pool.Return(coin)
+		}
+	}
+	clearReserved := func(markSpent bool) {
+		p.mu.Lock()
+		coin, ok := p.reserved[txid]
+		if ok {
+			delete(p.reserved, txid)
+			if markSpent {
+				p.spentOutpoints[coin.Outpoint()] = time.Now().Unix()
+			}
+		}
+		if markSpent {
+			now := time.Now().Unix()
+			for _, in := range tx.Inputs {
+				if in.SourceTXID != nil {
+					p.spentOutpoints[fmt.Sprintf("%s:%d", in.SourceTXID.String(), in.SourceTxOutIndex)] = now
+				}
+			}
+		}
+		p.mu.Unlock()
+	}
+
 	if err := p.guard.CheckAndRecord(txid, feeSats, spendSats); err != nil {
+		returnReserved()
 		return "", err
 	}
 	if p.testChain != nil {
 		if err := p.testChain.Send(tx); err != nil {
+			returnReserved()
 			return "", fmt.Errorf("chain: testchain broadcast: %w", err)
 		}
+		clearReserved(true)
 		if mp, _, ok := p.testChain.Proof(txid); ok {
 			tx.MerklePath = mp
 		}
@@ -426,11 +479,21 @@ func (p *Port) Broadcast(ctx context.Context, tx *transaction.Transaction, feeSa
 	}
 	// Live/regtest broadcast via bcommon/publish.Settler (Arcade / RPC / Teranode TCP ingress).
 	if p.settler == nil {
+		returnReserved()
 		return "", errors.New("chain: no live settler configured (set NEKTAR_SETTLE_SPEC)")
 	}
 	if err := p.settler.Submit(ctx, tx); err != nil {
+		// If the network confirms this input is ALREADY spent (UTXO_SPENT / double spend),
+		// do NOT return the stale spent coin to bwallet.Pool; mark it spent so the next attempt picks a fresh coin!
+		errStr := err.Error()
+		if strings.Contains(errStr, "UTXO_SPENT") || strings.Contains(errStr, "spent by another transaction") {
+			clearReserved(true)
+		} else {
+			returnReserved()
+		}
 		return "", fmt.Errorf("chain: %s broadcast: %w", p.settler.Name(), err)
 	}
+	clearReserved(true)
 	p.saveTxBEEF(tx)
 	p.mu.Lock()
 	p.txs[txid] = tx
@@ -569,6 +632,11 @@ func (p *Port) BuildFundedTx(ctx context.Context, outputs []*transaction.Transac
 		_ = p.embedded.Pool.Return(coin)
 		return nil, 0, 0, fmt.Errorf("chain: sign tx: %w", err)
 	}
+
+	// Track reserved input so Broadcast atomically returns it to bwallet.Pool if submission fails!
+	p.mu.Lock()
+	p.reserved[tx.TxID().String()] = coin
+	p.mu.Unlock()
 
 	// Re-add change output to bwallet.Pool once broadcast succeeds (caller calls AdoptChange).
 	_ = p2pkh.Lock

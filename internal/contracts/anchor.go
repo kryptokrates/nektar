@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/script"
@@ -35,8 +36,21 @@ type CovenantID struct {
 	ScriptHash string `json:"scriptHash"`
 }
 
-// LoadArtifact reads an embedded Rúnar JSON artifact by contract name (e.g. "NektarAnchor").
+var (
+	artifactMu    sync.RWMutex
+	artifactCache = make(map[string]*Artifact)
+	codeCache     = make(map[string][]byte)
+)
+
+// LoadArtifact reads and caches an embedded Rúnar JSON artifact by contract name (e.g. "NektarAnchor").
 func LoadArtifact(name string) (*Artifact, error) {
+	artifactMu.RLock()
+	if a, ok := artifactCache[name]; ok {
+		artifactMu.RUnlock()
+		return a, nil
+	}
+	artifactMu.RUnlock()
+
 	raw, err := artifactsFS.ReadFile("artifacts/" + name + ".json")
 	if err != nil {
 		return nil, fmt.Errorf("contracts: load %s: %w", name, err)
@@ -45,7 +59,28 @@ func LoadArtifact(name string) (*Artifact, error) {
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return nil, fmt.Errorf("contracts: parse %s: %w", name, err)
 	}
+	code, _ := hex.DecodeString(strings.TrimPrefix(a.Script, "0x"))
+	artifactMu.Lock()
+	artifactCache[name] = &a
+	codeCache[name] = code
+	artifactMu.Unlock()
 	return &a, nil
+}
+
+func loadArtifactCode(name string) ([]byte, error) {
+	artifactMu.RLock()
+	if c, ok := codeCache[name]; ok {
+		artifactMu.RUnlock()
+		return c, nil
+	}
+	artifactMu.RUnlock()
+	if _, err := LoadArtifact(name); err != nil {
+		return nil, err
+	}
+	artifactMu.RLock()
+	c := codeCache[name]
+	artifactMu.RUnlock()
+	return c, nil
 }
 
 // ID returns the canonical wire CovenantID for an artifact.
@@ -88,7 +123,7 @@ type AnchorState struct {
 // EncodeAnchorLockingScript builds the NektarAnchor locking script:
 // <compiled NektarAnchor code> OP_RETURN [0x04 "META"] <genesisOwner33> <n_le8> <size_le8> <R32> <Rp32> <len(tag)><tag> <len(pkh)><pkh>
 func EncodeAnchorLockingScript(st AnchorState) (*script.Script, error) {
-	art, err := LoadArtifact("NektarAnchor")
+	codeBytes, err := loadArtifactCode("NektarAnchor")
 	if err != nil {
 		return nil, err
 	}
@@ -102,10 +137,6 @@ func EncodeAnchorLockingScript(st AnchorState) (*script.Script, error) {
 	tag := st.Tag
 	if len(tag) == 0 {
 		tag = core.TagAnchorTag
-	}
-	codeBytes, err := hex.DecodeString(strings.TrimPrefix(art.Script, "0x"))
-	if err != nil {
-		return nil, fmt.Errorf("contracts: invalid artifact script hex: %w", err)
 	}
 	state := make([]byte, 0, 4+33+8+8+32+32+1+len(tag)+1+20)
 	if st.Metanet {
@@ -133,16 +164,11 @@ func EncodeAnchorLockingScript(st AnchorState) (*script.Script, error) {
 // DecodeNektarAnchor decodes and validates a NektarAnchor locking script's OP_RETURN state suffix
 // and verifies the code prefix matches the embedded NektarAnchor or NektarAnchorV3 artifact.
 func DecodeNektarAnchor(scriptBytes []byte) (*AnchorState, error) {
-	artV4, err := LoadArtifact("NektarAnchor")
+	codeV4, err := loadArtifactCode("NektarAnchor")
 	if err != nil {
 		return nil, err
 	}
-	artV3, _ := LoadArtifact("NektarAnchorV3")
-	codeV4, _ := hex.DecodeString(strings.TrimPrefix(artV4.Script, "0x"))
-	var codeV3 []byte
-	if artV3 != nil {
-		codeV3, _ = hex.DecodeString(strings.TrimPrefix(artV3.Script, "0x"))
-	}
+	codeV3, _ := loadArtifactCode("NektarAnchorV3")
 
 	var suffix []byte
 	switch {

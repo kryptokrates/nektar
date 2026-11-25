@@ -22,16 +22,13 @@ func EvalDatalog(programSource string) (map[string]bool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mangle: analyze: %w", err)
 	}
-	fs := factstore.NewSimpleInMemoryStore()
-	for _, fact := range info.EdbPredicates {
-		_ = fact
-	}
+	fs := factstore.NewMultiIndexedInMemoryStore()
 	for _, cl := range unit.Clauses {
 		if len(cl.Premises) == 0 {
 			fs.Add(cl.Head)
 		}
 	}
-	if err := engine.EvalProgram(info, fs, engine.WithDeterministicOrder()); err != nil {
+	if err := engine.EvalProgram(info, fs); err != nil {
 		return nil, fmt.Errorf("mangle: eval: %w", err)
 	}
 	out := make(map[string]bool)

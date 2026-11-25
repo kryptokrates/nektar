@@ -24,40 +24,36 @@
     Tier,
     {
       label: string
-      desc: string
+      tagline: string
       role: 'buyer' | 'seller' | 'both'
       maxPerDeal: number
       maxPerDay: number
       zeroConfMax: number
-      confidence: string
     }
   > = {
     easy: {
       label: 'Easy',
-      desc: 'Higher caps · 0.80 match confidence',
+      tagline: 'Fast autonomous trading',
       role: 'both',
       maxPerDeal: 5000,
       maxPerDay: 50000,
-      zeroConfMax: 2500,
-      confidence: '0.80'
+      zeroConfMax: 2500
     },
     standard: {
       label: 'Standard',
-      desc: 'Balanced caps · 0.85 match confidence',
+      tagline: 'Balanced everyday safety',
       role: 'both',
       maxPerDeal: 2000,
       maxPerDay: 20000,
-      zeroConfMax: 1000,
-      confidence: '0.85'
+      zeroConfMax: 1000
     },
     secure: {
       label: 'Secure',
-      desc: 'Tight caps, mined only · 0.92 match',
+      tagline: 'Tight caps, strictest checks',
       role: 'buyer',
       maxPerDeal: 250,
       maxPerDay: 2000,
-      zeroConfMax: 0,
-      confidence: '0.92'
+      zeroConfMax: 0
     }
   }
 
@@ -68,6 +64,8 @@
   let zeroConfMax = $state('1000')
   let domainsInput = $state('')
 
+  let showCustomize = $state(false)
+  let showRules = $state(false)
   let joinInput = $state('')
   let busy = $state(false)
   let showHubDeploy = $state(false)
@@ -82,12 +80,6 @@
     maxPerDeal = String(d.maxPerDeal)
     maxPerDay = String(d.maxPerDay)
     zeroConfMax = String(d.zeroConfMax)
-  }
-
-  function fmtMatchConf(ai?: Record<string, unknown>): string {
-    const bp = typeof ai?.minConfidenceBp === 'number' ? ai.minConfidenceBp : 0
-    if (bp <= 0) return ''
-    return `≥ ${(bp / 10000).toFixed(2)} match`
   }
 
   async function savePolicy() {
@@ -110,19 +102,19 @@
     if (s.network === 'main') {
       const ok = await onConfirm(
         'Approve Mainnet Policy',
-        `Allow up to ${fmtSats(deal)} sats/deal and ${fmtSats(day)} sats/day (${tierDefaults[selectedTier].label}) on Mainnet?`
+        `Save "${tierDefaults[selectedTier].label}" policy (${fmtSats(deal)}/deal · ${fmtSats(day)}/day) on Mainnet?`
       )
       if (!ok) return
       body.confirm = 'I_UNDERSTAND'
     }
     busy = true
     try {
-      const r = await operatorFetch('POST', '/v1/onboard/policy-preset', body, 'Save spending policy')
+      const r = await operatorFetch('POST', '/v1/onboard/policy-preset', body, 'Save policy')
       if (!r) return
       const j = (await r.json().catch(() => ({}))) as { error?: string }
       if (!r.ok) onToast(j.error ?? `Save failed (${r.status})`, true)
       else {
-        onToast(`Policy saved (${tierDefaults[selectedTier].label} · ≥ ${tierDefaults[selectedTier].confidence} match) ✓`)
+        onToast(`${tierDefaults[selectedTier].label} policy saved ✓`)
         await onRefresh()
       }
     } finally {
@@ -131,11 +123,11 @@
   }
 
   async function revokePolicy(id: string) {
-    const ok = await onConfirm('Revoke Policy', `Revoke "${id}"? Autonomous trades under this rule will pause.`)
+    const ok = await onConfirm('Revoke Rule', 'Pause autonomous trades under this rule?')
     if (!ok) return
-    const r = await operatorFetch('DELETE', `/v1/policies/${encodeURIComponent(id)}`, undefined, 'Revoke policy')
+    const r = await operatorFetch('DELETE', `/v1/policies/${encodeURIComponent(id)}`, undefined, 'Revoke rule')
     if (r && r.ok) {
-      onToast(`Revoked ${id}`)
+      onToast('Rule revoked')
       await onRefresh()
     }
   }
@@ -177,78 +169,85 @@
 
   {#if sub === 'policy'}
     <div class="pad">
-      <div class="glbl">Choose A Profile</div>
       <div class="tier-grid">
         {#each (['easy', 'standard', 'secure'] as const) as t}
           {@const d = tierDefaults[t]}
           <button class="tcard" class:on={selectedTier === t} onclick={() => applyTier(t)}>
             <div class="thead">
               <b>{d.label}</b>
-              <span class="tcap">{fmtSats(d.maxPerDeal)}s</span>
+              <span class="radio" class:on={selectedTier === t}></span>
             </div>
-            <small>{d.desc}</small>
+            <small>{d.tagline}</small>
           </button>
         {/each}
       </div>
 
-      <div class="glbl">Fine-Tune Limits</div>
-      <div class="form-card">
-        <div class="role-row">
-          <span class="flbl">Mode</span>
-          <div class="rpills">
-            <button class="rp" class:on={polRole === 'buyer'} onclick={() => (polRole = 'buyer')}>Buy only</button>
-            <button class="rp" class:on={polRole === 'seller'} onclick={() => (polRole = 'seller')}>Sell only</button>
-            <button class="rp" class:on={polRole === 'both'} onclick={() => (polRole = 'both')}>Buy &amp; Sell</button>
-          </div>
-        </div>
+      <button class="save-bar" onclick={savePolicy} disabled={busy}>
+        {busy ? 'Saving…' : `Save ${tierDefaults[selectedTier].label} Policy`}
+      </button>
 
-        <div class="num-grid">
-          <label class="field">
-            <span>Max per deal (sats)</span>
-            <input class="in" type="number" min="1" bind:value={maxPerDeal} />
-          </label>
-          <label class="field">
-            <span>Max per day (sats)</span>
-            <input class="in" type="number" min="1" bind:value={maxPerDay} />
-          </label>
-          <label class="field">
-            <span>Instant 0-conf max</span>
-            <input class="in" type="number" min="0" bind:value={zeroConfMax} />
-          </label>
-        </div>
+      <div class="group">
+        <button class="grow clickable" onclick={() => (showCustomize = !showCustomize)}>
+          <b>Customize limits</b>
+          <span class="arr">{showCustomize ? '▾' : '→'}</span>
+        </button>
 
-        <label class="field">
-          <span>Allowed topics (optional, comma-separated)</span>
-          <input class="in" bind:value={domainsInput} placeholder="Leave blank for any topic (e.g. ops, bsv, research)" />
-        </label>
-
-        <div class="factions">
-          <span class="conf-note">Automatic match confidence: <b>{tierDefaults[selectedTier].confidence}</b></span>
-          <button class="pri" onclick={savePolicy} disabled={busy}>{busy ? 'Saving…' : 'Save Policy'}</button>
-        </div>
-      </div>
-
-      {#if activePolicies.length}
-        <div class="glbl">Active Policies</div>
-        <div class="group">
-          {#each activePolicies as row}
-            {@const conf = fmtMatchConf(row.policy?.aiMatching)}
-            <div class="grow">
-              <div class="gcol">
-                <b>{row.policy?.roles?.join(' + ') || row.policyId}</b>
-                {#if row.policy}
-                  <small>
-                    ≤ {fmtSats(row.policy.limits?.maxPerDeal ?? 0)} sats/deal · ≤ {fmtSats(row.policy.limits?.maxPerDay ?? 0)} sats/day
-                    {#if (row.policy.limits?.zeroConfMax ?? 0) === 0}· mined only{/if}
-                    {#if conf}· {conf}{/if}
-                  </small>
-                {/if}
+        {#if showCustomize}
+          <div class="custom-body">
+            <div class="role-row">
+              <span class="flbl">Mode</span>
+              <div class="rpills">
+                <button class="rp" class:on={polRole === 'buyer'} onclick={() => (polRole = 'buyer')}>Buy only</button>
+                <button class="rp" class:on={polRole === 'seller'} onclick={() => (polRole = 'seller')}>Sell only</button>
+                <button class="rp" class:on={polRole === 'both'} onclick={() => (polRole = 'both')}>Buy &amp; Sell</button>
               </div>
-              <button class="rev" onclick={() => revokePolicy(row.policyId)}>Revoke</button>
             </div>
-          {/each}
-        </div>
-      {/if}
+
+            <div class="num-grid">
+              <label class="field">
+                <span>Max per deal</span>
+                <input class="in" type="number" min="1" bind:value={maxPerDeal} />
+              </label>
+              <label class="field">
+                <span>Max per day</span>
+                <input class="in" type="number" min="1" bind:value={maxPerDay} />
+              </label>
+              <label class="field">
+                <span>Instant max</span>
+                <input class="in" type="number" min="0" bind:value={zeroConfMax} />
+              </label>
+            </div>
+
+            <label class="field">
+              <span>Topics (optional)</span>
+              <input class="in" bind:value={domainsInput} placeholder="Any topic" />
+            </label>
+          </div>
+        {/if}
+
+        {#if activePolicies.length}
+          <button class="grow clickable" onclick={() => (showRules = !showRules)}>
+            <div class="gcol">
+              <b>Active rules</b>
+            </div>
+            <span class="val">{activePolicies.length} {showRules ? '▾' : '→'}</span>
+          </button>
+
+          {#if showRules}
+            {#each activePolicies as row}
+              <div class="grow subrow">
+                <div class="gcol">
+                  <b>{row.policy?.roles?.join(' & ') || 'Policy'}</b>
+                  {#if row.policy}
+                    <small>≤ {fmtSats(row.policy.limits?.maxPerDeal ?? 0)} / deal · ≤ {fmtSats(row.policy.limits?.maxPerDay ?? 0)} / day</small>
+                  {/if}
+                </div>
+                <button class="rev" onclick={() => revokePolicy(row.policyId)}>Revoke</button>
+              </div>
+            {/each}
+          {/if}
+        {/if}
+      </div>
     </div>
   {:else if sub === 'network'}
     <div class="pad">
@@ -344,33 +343,42 @@
     padding: 0.42rem 0.25rem; border-radius: 8px; cursor: pointer;
   }
   .s.on { background: #1e1b18; color: var(--ink); }
-  .pad { padding: 1rem 1.25rem 2.2rem; display: grid; gap: 0.9rem; }
+  .pad { padding: 1.25rem 1.25rem 2.2rem; display: grid; gap: 1rem; }
   .glbl {
     font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
-    color: var(--mut2); margin-top: 0.25rem;
+    color: var(--mut2); margin-top: 0.15rem;
   }
-  .tier-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.6rem; }
+  .tier-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.65rem; }
   @media (max-width: 560px) {
     .tier-grid { grid-template-columns: 1fr; }
   }
   .tcard {
     background: var(--surf); border: 1px solid var(--line); border-radius: 14px;
-    padding: 0.9rem 0.95rem; text-align: left; color: var(--ink); font: inherit;
-    display: grid; gap: 0.28rem; align-content: start; cursor: pointer;
+    padding: 1rem; text-align: left; color: var(--ink); font: inherit;
+    display: grid; gap: 0.35rem; align-content: start; cursor: pointer;
     transition: border-color 0.14s, background 0.14s;
   }
   .tcard:hover { border-color: var(--line2); background: var(--hover); }
   .tcard.on { border-color: var(--amber); background: rgb(247 153 27 / 7%); }
-  .thead { display: flex; align-items: baseline; justify-content: space-between; gap: 0.3rem; }
-  .tcard b { font-size: 0.9rem; }
-  .tcap { font-size: 0.74rem; color: var(--amber); font-weight: 700; font-variant-numeric: tabular-nums; }
-  .tcard small { color: var(--mut); font-size: 0.76rem; line-height: 1.38; }
-  .form-card {
-    background: var(--surf); border: 1px solid var(--line); border-radius: 14px;
-    padding: 1rem; display: grid; gap: 0.85rem;
+  .thead { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; }
+  .tcard b { font-size: 0.94rem; }
+  .tcard small { color: var(--mut); font-size: 0.78rem; line-height: 1.4; }
+  .radio {
+    width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--line2); flex-shrink: 0;
+  }
+  .radio.on { border-color: var(--amber); background: var(--amber); box-shadow: inset 0 0 0 3px var(--surf); }
+  .save-bar {
+    width: 100%; background: var(--amber); color: #120e0c; border: 0; border-radius: 999px;
+    padding: 0.72rem 1.2rem; font: inherit; font-size: 0.88rem; font-weight: 800; cursor: pointer;
+  }
+  .save-bar:hover:not(:disabled) { filter: brightness(1.07); }
+  .save-bar:disabled { opacity: 0.45; }
+  .custom-body {
+    padding: 0.95rem 1rem 1.05rem; border-bottom: 1px solid var(--line);
+    display: grid; gap: 0.85rem; background: rgb(0 0 0 / 18%);
   }
   .role-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
-  .flbl { font-size: 0.82rem; font-weight: 600; color: var(--mut); }
+  .flbl { font-size: 0.8rem; font-weight: 600; color: var(--mut); }
   .rpills { display: flex; gap: 0.35rem; }
   .rp {
     background: var(--bg); border: 1px solid var(--line); color: var(--mut);
@@ -381,32 +389,29 @@
   @media (max-width: 560px) {
     .num-grid { grid-template-columns: 1fr; }
   }
-  .field { display: grid; gap: 0.32rem; }
+  .field { display: grid; gap: 0.3rem; }
   .field span { font-size: 0.74rem; color: var(--mut); font-weight: 600; }
   .in {
     width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
-    color: var(--ink); padding: 0.5rem 0.72rem; font: inherit; font-size: 0.84rem;
+    color: var(--ink); padding: 0.48rem 0.7rem; font: inherit; font-size: 0.84rem;
     font-variant-numeric: tabular-nums; outline: none;
   }
   .in:focus { border-color: var(--amber); }
-  .factions { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
-  .conf-note { font-size: 0.76rem; color: var(--mut); }
-  .conf-note b { color: var(--ink); font-variant-numeric: tabular-nums; }
   .pri {
     background: var(--amber); color: #120e0c; border: 0; border-radius: 999px;
     padding: 0.5rem 1.2rem; font: inherit; font-size: 0.82rem; font-weight: 800; cursor: pointer;
   }
-  .pri:disabled { opacity: 0.45; }
   .group { background: var(--surf); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
   .grow {
     width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 0.8rem;
-    padding: 0.85rem 1rem; border-bottom: 1px solid var(--line);
+    padding: 0.88rem 1rem; border-bottom: 1px solid var(--line);
     background: none; border-left: 0; border-right: 0; border-top: 0;
     color: var(--ink); font: inherit; font-size: 0.88rem; text-align: left;
   }
   .grow:last-child { border-bottom: 0; }
   .grow.clickable { cursor: pointer; }
   .grow.clickable:hover { background: var(--hover); }
+  .subrow { padding-left: 1.25rem; background: rgb(0 0 0 / 16%); }
   .gcol { flex: 1; min-width: 0; display: grid; gap: 0.12rem; }
   .gcol small { color: var(--mut); font-size: 0.78rem; }
   .val { color: var(--mut); font-size: 0.84rem; }

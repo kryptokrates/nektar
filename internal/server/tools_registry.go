@@ -100,9 +100,16 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 	}
 	switch name {
 	case "remember":
-		var in memory.RememberInput
-		if err := json.Unmarshal(rawArgs, &in); err != nil {
+		var raw struct {
+			memory.RememberInput
+			Data string `json:"data,omitempty"`
+		}
+		if err := json.Unmarshal(rawArgs, &raw); err != nil {
 			return nil, err
+		}
+		in := raw.RememberInput
+		if in.Text == "" && raw.Data != "" {
+			in.Text = raw.Data // Hermes NektarMemoryProvider uses `data`
 		}
 		return tb.mem.Remember(ctx, in)
 
@@ -328,6 +335,7 @@ type SellToolInput struct {
 	Domain      string   `json:"domain,omitempty"`
 	PriceSats   uint64   `json:"priceSats,omitempty"`
 	Description string   `json:"description,omitempty"`
+	Desc        string   `json:"desc,omitempty"`
 	// Optional: submit directly to a Hub knowledge bounty instead of listing!
 	BountyID string `json:"bountyId,omitempty"`
 	HubURL   string `json:"hubUrl,omitempty"`
@@ -345,11 +353,15 @@ func (tb *Toolbox) ExecSell(ctx context.Context, in SellToolInput) (any, error) 
 	if len(doms) == 0 && in.Domain != "" {
 		doms = []string{in.Domain}
 	}
+	desc := in.Description
+	if desc == "" {
+		desc = in.Desc
+	}
 	return tb.broker.ArmSell(ctx, market.SellInput{
 		Shard:       in.Shard,
 		Domains:     doms,
 		PriceSats:   in.PriceSats,
-		Description: in.Description,
+		Description: desc,
 	})
 }
 
@@ -545,12 +557,16 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 		}
 	}
 	return map[string]any{
-		"ok":        overall != "red",
-		"verdict":   overall,
-		"network":   tb.mem.Chain().Network(),
-		"checks":    checks,
-		"nextSteps": nextSteps,
-		"truthNote": reasoning.TruthNote,
+		"ok":              overall != "red",
+		"verdict":         overall,
+		"network":         tb.mem.Chain().Network(),
+		"shardNames":      shards,
+		"records":         total,
+		"anchoredRecords": anchored,
+		"checks":          checks,
+		"nextSteps":       nextSteps,
+		"hints":           nextSteps,
+		"truthNote":       reasoning.TruthNote,
 	}
 }
 

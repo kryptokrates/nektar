@@ -884,7 +884,7 @@ func (a *App) handlePublicFaucet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	txid, sats, err := hub.DripFaucet(r.Context(), a.mem, in.Address, 2000, 10_000)
+	txid, sats, err := hub.DripFaucet(r.Context(), a.mem, in.Address, 5000, 25_000)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -1240,6 +1240,7 @@ func (a *App) handleA2A(w http.ResponseWriter, r *http.Request) {
 	methodMap := map[string]string{
 		"memory/recall":   "recall",
 		"memory/remember": "remember",
+		"memory/anchor":   "anchor",
 		"memory/answer":   "groundedAnswer",
 		"memory/verify":   "verifyReceipt",
 		"market/want":     "want",

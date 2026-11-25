@@ -805,6 +805,7 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 
 // ReceiptVerification is the traffic-light verdict returned by VerifyReceipt and GET /v1/verify/{token}.
 type ReceiptVerification struct {
+	OK               bool                      `json:"ok"`
 	Verdict          string                    `json:"verdict"` // green | amber | red
 	Reason           string                    `json:"reason"`
 	ReceiptHash      string                    `json:"receiptHash"`
@@ -871,12 +872,15 @@ func (s *Service) VerifyReceipt(ctx context.Context, tokenOrHash string) (*Recei
 	switch {
 	case out.CitationsMissing > 0:
 		out.Verdict = "red"
+		out.OK = false
 		out.Reason = fmt.Sprintf("%d cited fragment(s) missing or forgotten", out.CitationsMissing)
 	case out.CitationsChecked > 0 && out.CitationsMined == out.CitationsChecked:
 		out.Verdict = "green"
+		out.OK = true
 		out.Reason = "all cited fragments SPV-verified against mined anchors"
 	default:
 		out.Verdict = "amber"
+		out.OK = true
 		out.Reason = "receipt valid locally; one or more cited fragments are not yet mined"
 	}
 	return out, nil

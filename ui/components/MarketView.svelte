@@ -26,6 +26,17 @@
   const peers = $derived(s.net.peers ?? [])
   const demand = $derived(s.net.unmatchedWants ?? [])
 
+  function formatDomainTag(dm: string): string {
+    if (dm.startsWith('cluster:')) {
+      return dm
+        .slice('cluster:'.length)
+        .split('-')
+        .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : ''))
+        .join(' & ')
+    }
+    return `#${dm}`
+  }
+
   async function armSell() {
     if (!sellShard.trim() || busy) return
     busy = true
@@ -133,7 +144,7 @@
           <div class="pcol">
             <b>{p.handle || `${p.pub.slice(0, 10)}…`}</b>
             {#if p.sellDomains?.length}
-              <div class="tags">{#each p.sellDomains as dm}<span>#{dm}</span>{/each}</div>
+              <div class="tags">{#each p.sellDomains as dm}<span>{formatDomainTag(dm)}</span>{/each}</div>
             {/if}
           </div>
           <span class="role">{p.isHub ? 'Hub' : 'Agent'}</span>
@@ -153,7 +164,7 @@
       <article class="card-row">
         <div class="top">
           <b>#{m.shard}</b>
-          {#each m.domains as dm}<span class="topic">#{dm}</span>{/each}
+          {#each m.domains as dm}<span class="topic">{formatDomainTag(dm)}</span>{/each}
           <span class="price">{m.offers}</span>
           <div class="mwrap">
             <button class="more" onclick={() => (openMenu = openMenu === m.shard ? '' : m.shard)}>···</button>

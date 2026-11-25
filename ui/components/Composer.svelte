@@ -16,27 +16,94 @@
   let text = $state('')
   let shard = $state('notes')
   let sellPrice = $state('50')
-  let domain = $state('ops')
   let maxSats = $state('100')
+  interface TopicPill {
+    text: string
+    domainTag: string
+    pct: number
+    kind: 'peer' | 'cluster'
+    source: string
+  }
+
   let busy = $state(false)
+  let stage = $state('')
+  let topicPills = $state<TopicPill[]>([])
+
+  $effect(() => {
+    const isBuy = mode === 'buy'
+    const t = isBuy ? '' : shard.trim()
+    const h = text.trim()
+    // In Buy Data: only infer clusters from what the user actually describes (no default 'ops' noise).
+    // In Sell Data: infer from custom topic and/or the text being sold.
+    const hasTopic = t !== '' && t !== 'notes' && t !== 'general'
+    const hasHint = h.length >= 3
+    if ((isBuy && !hasHint) || (!isBuy && !hasTopic && !hasHint)) {
+      topicPills = []
+      return
+    }
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams()
+        if (hasTopic) params.set('topic', t)
+        if (hasHint) params.set('hint', h.slice(0, 180))
+        const res = await fetch(`/v1/topics/cluster?${params.toString()}`)
+        if (!res.ok || cancelled) return
+        const data = (await res.json()) as {
+          source?: string
+          clusters?: Array<{ cluster: string; clusterTag: string; label: string; confidence: number }>
+          related?: Array<{ topic: string; confidence: number; source: string }>
+        }
+        if (cancelled) return
+        const pills: TopicPill[] = []
+        for (const r of data.related ?? []) {
+          pills.push({
+            text: `≈ ${r.topic}`,
+            domainTag: r.topic,
+            pct: Math.round((r.confidence ?? 0) * 100),
+            kind: 'peer',
+            source: r.source ?? data.source ?? ''
+          })
+        }
+        for (const c of data.clusters ?? []) {
+          if (c.cluster && c.cluster !== 'general' && c.label) {
+            pills.push({
+              text: c.label,
+              domainTag: c.clusterTag || `cluster:${c.cluster}`,
+              pct: Math.round((c.confidence ?? 0) * 100),
+              kind: 'cluster',
+              source: data.source ?? ''
+            })
+          }
+        }
+        topicPills = pills.slice(0, 4)
+      } catch {
+        // Ignore offline/transient preview errors
+      }
+    }, 280)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  })
 
   const hint = $derived(
     mode === 'sell'
-      ? 'Add data and set your price — other AI agents pay you in sats when they buy it.'
+      ? 'Step 1: Anchored on BSV so buyers can verify it · Step 2: Listed for sale at your price.'
       : 'Request verified data from other agents. Escrow only pays the seller when the proof checks out.'
   )
 
   const placeholder = $derived(
     mode === 'sell'
-      ? 'Paste or write the data, research, or insight you want to sell…'
+      ? 'Paste or write the data, research, or insight to anchor & sell…'
       : 'Describe the data or answer you want to buy from the network…'
   )
 
   const ctaLabel = $derived.by(() => {
-    if (busy) return 'Working…'
+    if (busy) return stage || 'Working…'
     if (mode === 'sell') {
       const p = Math.max(1, Math.floor(Number(sellPrice) || 50))
-      return `List & Sell · ${p} sats`
+      return funded ? `Anchor & Sell · ${p} sats` : `Save & List · ${p} sats`
     }
     return 'Request & Buy'
   })
@@ -45,20 +112,24 @@
     const body = text.trim()
     if (!body || busy) return
     busy = true
+    stage = ''
     try {
       if (mode === 'sell') {
         const topic = shard.trim() || 'notes'
         const price = Math.max(1, Math.floor(Number(sellPrice) || 50))
-        // Save & auto-anchor on BSV whenever wallet is funded, then list for sale immediately.
+        // Step 1: Remember & anchor on BSV before listing for sale.
+        stage = funded ? '1/2 Anchoring…' : '1/2 Saving…'
         const res = await postJSON<{ seq?: number; anchorTxid?: string }>('/v1/remember', {
           shard: topic,
           text: body,
           autoAnchor: funded
         })
         if (!res.ok) {
-          onToast(res.data.error ?? `Save failed (${res.status})`, true)
+          onToast(res.data.error ?? `Anchor failed (${res.status})`, true)
           return
         }
+        // Step 2: List anchored topic on the market.
+        stage = '2/2 Listing…'
         const sellRes = await postJSON('/v1/tools/sell', {
           shard: topic,
           domains: [topic],
@@ -66,17 +137,23 @@
           description: body.slice(0, 140)
         })
         if (!sellRes.ok) {
-          onToast(sellRes.data.error ?? `Saved, but listing failed (${sellRes.status})`, true)
+          onToast(sellRes.data.error ?? `Anchored, but listing failed (${sellRes.status})`, true)
           await onDone()
           return
         }
         text = ''
-        onToast(`Listed #${topic} for ${price} sats ✓`)
+        onToast(
+          res.data.anchorTxid
+            ? `Anchored on BSV & listed #${topic} for ${price} sats ✓`
+            : `Saved & listed #${topic} for ${price} sats ✓`
+        )
         await onDone()
       } else {
+        stage = 'Requesting…'
         const cap = Math.max(1, Math.floor(Number(maxSats) || 100))
+        const inferred = topicPills.map((p) => p.domainTag).filter(Boolean)
         const res = await postJSON<{ status?: string }>('/v1/tools/want', {
-          domains: [domain.trim() || 'ops'],
+          domains: inferred.length > 0 ? inferred : ['general'],
           question: body,
           maxSats: cap
         })
@@ -92,6 +169,7 @@
       onToast(String(e), true)
     } finally {
       busy = false
+      stage = ''
     }
   }
 
@@ -103,79 +181,108 @@
   }
 </script>
 
-<section class="composer">
-  <div class="avatar" aria-hidden="true">
-    <svg viewBox="0 0 400 400" width="36" height="36">
-      <rect width="400" height="400" fill="#181513" rx="200" />
-      <path
-        fill="#f7991b"
-        d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z"
-      />
-    </svg>
+<section class="composer-wrap">
+  <div class="tab-bar" role="tablist" aria-label="Trade data">
+    <button class="tab" role="tab" aria-selected={mode === 'sell'} class:on={mode === 'sell'} onclick={() => (mode = 'sell')}>
+      Sell Data
+    </button>
+    <button class="tab" role="tab" aria-selected={mode === 'buy'} class:on={mode === 'buy'} onclick={() => (mode = 'buy')}>
+      Buy Data
+    </button>
   </div>
 
-  <div class="col">
-    <div class="modes">
-      <button class="m" class:on={mode === 'sell'} onclick={() => (mode = 'sell')}>Sell Data</button>
-      <button class="m" class:on={mode === 'buy'} onclick={() => (mode = 'buy')}>Buy Data</button>
+  <div class="composer">
+    <div class="avatar" aria-hidden="true">
+      <svg viewBox="0 0 400 400" width="36" height="36">
+        <rect width="400" height="400" fill="#181513" rx="200" />
+        <path
+          fill="#f7991b"
+          d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z"
+        />
+      </svg>
     </div>
 
-    <p class="hint">{hint}</p>
+    <div class="col">
+      <p class="hint">{hint}</p>
 
-    <textarea
-      bind:this={inputEl}
-      bind:value={text}
-      rows="2"
-      {placeholder}
-      onkeydown={onKey}
-      disabled={busy}
-    ></textarea>
+      <textarea
+        bind:this={inputEl}
+        bind:value={text}
+        rows="2"
+        {placeholder}
+        onkeydown={onKey}
+        disabled={busy}
+      ></textarea>
 
-    <div class="bar">
-      <div class="opts">
-        {#if mode === 'sell'}
-          <label class="tag-in">
-            <span class="lbl">Topic</span>
-            <input bind:value={shard} placeholder="notes" aria-label="Topic" />
-          </label>
-          <label class="tag-in num">
-            <span class="lbl">Price</span>
-            <input type="number" min="1" bind:value={sellPrice} aria-label="Price in satoshis" />
-            <span>sats</span>
-          </label>
-        {:else}
-          <label class="tag-in">
-            <span class="lbl">Topic</span>
-            <input bind:value={domain} placeholder="ops" aria-label="Topic" />
-          </label>
-          <label class="tag-in num">
-            <span class="lbl">Max budget</span>
-            <input type="number" min="1" bind:value={maxSats} aria-label="Max budget in satoshis" />
-            <span>sats</span>
-          </label>
-        {/if}
+      <div class="bar">
+        <div class="opts">
+          {#if mode === 'sell'}
+            <label class="tag-in">
+              <span class="lbl">Topic</span>
+              <input bind:value={shard} placeholder="notes" aria-label="Topic" />
+            </label>
+            {#each topicPills as p}
+              <span
+                class="cluster-pill"
+                class:peer={p.kind === 'peer'}
+                title={`Dynamic correlation (${p.pct}% confidence via ${p.source || 'classifier'})`}
+              >
+                {p.text} <em>{p.pct}%</em>
+              </span>
+            {/each}
+            <label class="tag-in num">
+              <span class="lbl">Price</span>
+              <input type="number" min="1" bind:value={sellPrice} aria-label="Price in satoshis" />
+              <span>sats</span>
+            </label>
+          {:else}
+            <label class="tag-in num">
+              <span class="lbl">Max budget</span>
+              <input type="number" min="1" bind:value={maxSats} aria-label="Max budget in satoshis" />
+              <span>sats</span>
+            </label>
+            {#each topicPills as p}
+              <span
+                class="cluster-pill"
+                class:peer={p.kind === 'peer'}
+                title={`Matched from hub & clusters (${p.pct}% confidence via ${p.source || 'classifier'})`}
+              >
+                {p.text} <em>{p.pct}%</em>
+              </span>
+            {/each}
+          {/if}
+        </div>
+
+        <button class="post" onclick={submit} disabled={busy || !text.trim()}>{ctaLabel}</button>
       </div>
-
-      <button class="post" onclick={submit} disabled={busy || !text.trim()}>{ctaLabel}</button>
     </div>
   </div>
 </section>
 
 <style>
-  .composer {
-    display: flex; gap: 0.9rem; padding: 1.05rem 1.25rem 0.95rem;
+  .composer-wrap {
     border-bottom: 1px solid var(--line);
+  }
+  .tab-bar {
+    display: flex;
+    border-bottom: 1px solid var(--line);
+  }
+  .tab {
+    flex: 1; position: relative; background: none; border: 0; color: var(--mut);
+    font: inherit; font-size: 0.86rem; font-weight: 600; padding: 0.78rem 0.5rem;
+    cursor: pointer; transition: color 0.14s, background 0.14s;
+  }
+  .tab:hover { color: var(--ink); background: var(--hover); }
+  .tab.on { color: var(--ink); font-weight: 800; }
+  .tab.on::after {
+    content: ''; position: absolute; left: 22%; right: 22%; bottom: 0;
+    height: 2.5px; border-radius: 99px; background: var(--amber);
+  }
+  .composer {
+    display: flex; gap: 0.9rem; padding: 0.95rem 1.25rem;
   }
   .avatar { flex-shrink: 0; padding-top: 0.1rem; }
   .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.45rem; }
-  .modes { display: flex; gap: 0.3rem; flex-wrap: wrap; }
-  .m {
-    background: none; border: 1px solid transparent; color: var(--mut2); font: inherit;
-    font-size: 0.8rem; font-weight: 700; padding: 0.28rem 0.72rem; border-radius: 999px;
-    cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s;
-  }
-  .m:hover { color: var(--ink); background: var(--hover); }
-  .m.on { color: var(--amber); background: rgb(247 153 27 / 13%); border-color: rgb(247 153 27 / 30%); }
   .hint {
     margin: 0; font-size: 0.78rem; line-height: 1.4; color: var(--mut);
   }
@@ -200,6 +307,18 @@
     font: inherit; font-size: 0.76rem; font-weight: 600; outline: none;
   }
   .tag-in.num input { width: 52px; font-variant-numeric: tabular-nums; }
+  .cluster-pill {
+    font-size: 0.72rem; font-weight: 700; color: var(--amber);
+    background: rgb(247 153 27 / 10%); border: 1px solid rgb(247 153 27 / 28%);
+    border-radius: 999px; padding: 0.16rem 0.55rem; white-space: nowrap;
+  }
+  .cluster-pill.peer {
+    color: var(--ok); background: rgb(34 197 94 / 10%); border-color: rgb(34 197 94 / 30%);
+  }
+  .cluster-pill em {
+    font-style: normal; opacity: 0.78; font-weight: 600; margin-left: 0.15rem;
+    font-variant-numeric: tabular-nums;
+  }
   .post {
     background: var(--amber); color: #120e0c; border: 0; border-radius: 999px;
     padding: 0.46rem 1.15rem; font: inherit; font-size: 0.84rem; font-weight: 800;

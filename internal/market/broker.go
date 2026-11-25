@@ -367,6 +367,32 @@ func (b *Broker) MatcherMetrics() MatcherMetrics {
 	}
 	return MatcherMetrics{}
 }
+
+// ActiveNetworkTopics returns deduplicated live user topics currently advertised by
+// active peers and local listings (excluding synthetic cluster:* tags) for dynamic
+// non-hierarchical Jev topic correlation.
+func (b *Broker) ActiveNetworkTopics() []string {
+	if b == nil {
+		return nil
+	}
+	var raw []string
+	if b.disc != nil {
+		for _, p := range b.disc.Peers() {
+			raw = append(raw, p.SellDomains...)
+			raw = append(raw, p.BountyDomains...)
+		}
+	}
+	if b.mem != nil && b.mem.DB() != nil {
+		if listings, err := b.mem.DB().ListSellListings(); err == nil {
+			for _, l := range listings {
+				if l.Active {
+					raw = append(raw, l.Domains...)
+				}
+			}
+		}
+	}
+	return normalizePeerTopicList("", raw)
+}
 func (b *Broker) SetPublicURL(u string) {
 	b.mu.Lock()
 	b.cfg.PublicURL = strings.TrimRight(u, "/")
@@ -814,6 +840,7 @@ func (b *Broker) ArmSell(ctx context.Context, in SellInput) (store.SellListing, 
 			norm = append(norm, d)
 		}
 	}
+	norm = ExpandDomainsWithCorrelations(ctx, b.Matcher(), norm, in.Description, b.ActiveNetworkTopics())
 	listing := store.SellListing{
 		Shard:       strings.TrimSpace(in.Shard),
 		Domains:     norm,
@@ -984,10 +1011,16 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 					continue
 				}
 			}
+			lexScore := lexicalFragmentScore(f.Text, tokens)
+			// When Jev is offline/disabled, require lexical overlap for cluster-only matches
+			// so broad cluster tags (e.g. cluster:sports-fitness) never blindly quote unrelated data.
+			if !useAI && len(tokens) > 0 && lexScore == 0 && !HasExactUserDomainOverlap(want.Domains, listing.Domains) {
+				continue
+			}
 			sellerCands = append(sellerCands, SellerCandidate{
 				Listing:      listing,
 				Fragment:     f,
-				LexicalScore: lexicalFragmentScore(f.Text, tokens),
+				LexicalScore: lexScore,
 			})
 		}
 	}
@@ -1071,13 +1104,17 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 			offerBondBEEF = bRec.BEEFHex
 		}
 	}
+	offerDomains := matched.Domains
+	if len(offerDomains) == 0 {
+		offerDomains = want.Domains
+	}
 	offer := bstack.OfferAd{
 		OfferID:        offerID,
 		WantID:         want.WantID,
 		Pub:            b.PubHex(),
 		BuyerPub:       want.Pub,
 		Net:            b.mem.Chain().Network(),
-		Domains:        want.Domains,
+		Domains:        offerDomains,
 		PriceSats:      matched.PriceSats,
 		Shard:          matched.Shard,
 		Leaf:           best.Leaf,
@@ -2091,12 +2128,13 @@ func (b *Broker) Want(ctx context.Context, req WantRequest) (*store.DealRecord, 
 		return nil, errors.New("market: no active hub hosts configured (join a hub first)")
 	}
 
+	wantDomains := ExpandDomainsWithCorrelations(ctx, b.Matcher(), req.Domains, req.Question, b.ActiveNetworkTopics())
 	wantID := fmt.Sprintf("want-%s-%s", shortPub(b.PubHex()), randIDHex())
 	want := bstack.WantAd{
 		WantID:   wantID,
 		Pub:      b.PubHex(),
 		Net:      b.mem.Chain().Network(),
-		Domains:  req.Domains,
+		Domains:  wantDomains,
 		Query:    req.Question,
 		MaxSats:  req.MaxSats,
 		Revision: 1,

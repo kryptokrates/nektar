@@ -971,6 +971,10 @@ func RankOffersWithRepAndBonds(want bstack.WantAd, offers []bstack.OfferAd, pol 
 		if !o.IsHub {
 			score += 250
 		}
+		// Prefer exact user-topic overlap over cluster-only overlap on tie.
+		if HasExactUserDomainOverlap(want.Domains, o.Domains) {
+			score += 250
+		}
 		if pol != nil {
 			pol.mu.RLock()
 			if pol.PreferredSellers[o.Pub] {

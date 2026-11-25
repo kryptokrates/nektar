@@ -786,6 +786,18 @@ func (a *App) buildMux() http.Handler {
 
 	// 6. Live A2A Market Purchase, Host Discovery, Onboarding, Faucet & Approvals!
 	mux.HandleFunc("POST /v1/market/purchase", a.handleMarketPurchase)
+	mux.Handle("GET /v1/topics/cluster", a.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		topic := strings.TrimSpace(r.URL.Query().Get("topic"))
+		hint := strings.TrimSpace(r.URL.Query().Get("hint"))
+		var matcher market.Matcher
+		var peerTopics []string
+		if a.broker != nil {
+			matcher = a.broker.Matcher()
+			peerTopics = a.broker.ActiveNetworkTopics()
+		}
+		res := market.ClassifyTopicWithPeers(r.Context(), matcher, topic, hint, peerTopics)
+		writeJSON(w, http.StatusOK, res)
+	})))
 	mux.Handle("POST /v1/hosts", a.withOperatorAuth(http.HandlerFunc(a.handleJoinHost)))
 	mux.Handle("DELETE /v1/hosts", a.withOperatorAuth(http.HandlerFunc(a.handleLeaveHost)))
 	mux.Handle("POST /v1/onboard/faucet", a.withAuth(http.HandlerFunc(a.handleOnboardFaucet)))

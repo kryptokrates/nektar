@@ -374,8 +374,20 @@ func TestHubFeeValve1SubmitValidateBeforeChargeReplayConflictAndPiggyback(t *tes
 		t.Fatalf("expected 202 ERR_PAYMENT_HELD for flagged payer unmined tx, got %d %s", rHeld.StatusCode, string(heldBody))
 	}
 
-	// Now retry the EXACT SAME txid carrying its real SPV-verified MerklePath -> must upgrade held -> claimed and return 200!
-	rUpgraded := postSubmitHTTP(t, ts.URL, wHeld, []string{lane}, payHdrHeld)
+	// Now attach the real mined BUMP from SharedMemoryChain for the EXACT SAME txid -> must upgrade held -> claimed and return 200!
+	mp, _, ok := payerPort.Proof(ctx, txidHeld)
+	if !ok || mp == nil {
+		t.Fatalf("expected SharedMemoryChain mined MerklePath for %s", txidHeld)
+	}
+	txHeld.MerklePath = mp
+	minedBytes, err := txHeld.AtomicBEEF(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	minedHdr := heldHdr
+	minedHdr.BEEFHex = hex.EncodeToString(minedBytes)
+	minedHdrJSON, _ := json.Marshal(minedHdr)
+	rUpgraded := postSubmitHTTP(t, ts.URL, wHeld, []string{lane}, string(minedHdrJSON))
 	upBody, _ := io.ReadAll(rUpgraded.Body)
 	rUpgraded.Body.Close()
 	if rUpgraded.StatusCode != http.StatusOK {
@@ -557,13 +569,13 @@ func TestHubFeeValve2MeteredEgressSSEAndSyncAndSpineGuard(t *testing.T) {
 	if syncResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 on resumed /sync, got %d", syncResp.StatusCode)
 	}
-	var syncDoc struct {
-		Events []bstack.MarketEvent `json:"events"`
+	var syncItems []hub.StoredEvent
+	if err := json.NewDecoder(syncResp.Body).Decode(&syncItems); err != nil {
+		t.Fatalf("decode /sync: %v", err)
 	}
-	_ = json.NewDecoder(syncResp.Body).Decode(&syncDoc)
 	syncResp.Body.Close()
-	if len(syncDoc.Events) != 1 {
-		t.Fatalf("expected exact 3rd remaining event after topup, got %d", len(syncDoc.Events))
+	if len(syncItems) != 1 {
+		t.Fatalf("expected exact 3rd remaining event after topup, got %d", len(syncItems))
 	}
 
 	// 6. Bilateral whitelisted Spine peer receives ALL 3 events free with 0 credits!
@@ -574,13 +586,13 @@ func TestHubFeeValve2MeteredEgressSSEAndSyncAndSpineGuard(t *testing.T) {
 	if peerResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 for bilateral Spine peer, got %d", peerResp.StatusCode)
 	}
-	var peerSync struct {
-		Events []bstack.MarketEvent `json:"events"`
+	var peerItems []hub.StoredEvent
+	if err := json.NewDecoder(peerResp.Body).Decode(&peerItems); err != nil {
+		t.Fatalf("decode peer /sync: %v", err)
 	}
-	_ = json.NewDecoder(peerResp.Body).Decode(&peerSync)
 	peerResp.Body.Close()
-	if len(peerSync.Events) != 3 {
-		t.Fatalf("expected bilateral Spine peer to receive all 3 events free, got %d", len(peerSync.Events))
+	if len(peerItems) != 3 {
+		t.Fatalf("expected bilateral Spine peer to receive all 3 events free, got %d", len(peerItems))
 	}
 
 	// 7. Anti-freerider Spine guard: auto-discovered untrusted Hub Z -> Spine ONLY pulls `dir` announcements, NEVER unpaid WantAds!
@@ -591,11 +603,16 @@ func TestHubFeeValve2MeteredEgressSSEAndSyncAndSpineGuard(t *testing.T) {
 	defer hubZ.Close()
 	hubZTS := httptest.NewServer(hubZ.Handler())
 	defer hubZTS.Close()
+	defer func() {
+		cancel()
+		hubZTS.CloseClientConnections()
+	}()
 
 	// Seed Hub Z with 1 AnnounceAd (`dir`) and 1 unpaid WantAd (`finance`).
 	ann := bstack.AnnounceAd{
 		Pub:       hex.EncodeToString(adKey.PubKey().Compressed()),
 		Net:       "memory",
+		Hosts:     []string{hubZTS.URL},
 		PublicURL: "https://untrusted-z.example",
 		Domains:   []string{"finance"},
 		Exp:       time.Now().Add(time.Hour).UnixMilli(),

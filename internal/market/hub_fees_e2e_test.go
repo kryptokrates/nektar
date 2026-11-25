@@ -236,15 +236,16 @@ func TestSpineAndLeafHubFeesMultiHubEndToEnd(t *testing.T) {
 		Domains:        []string{"ops"},
 		Question:       "How many shard slices does Spine-and-Leaf BSV overlay use?",
 		MaxSats:        100,
+		TargetShard:    "bought/ops",
 		CollectTimeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("cross-hub Want failed: %v", err)
 	}
-	if deal.Status != "settled" {
-		t.Fatalf("expected cross-hub Spine-and-Leaf deal to settle, got status=%s err=%s", deal.Status, deal.Error)
+	if deal.Status != "settled" || !strings.Contains(deal.DeliveredText, "4096") {
+		t.Fatalf("expected cross-hub Spine-and-Leaf deal to settle with 4096, got status=%s text=%q err=%s", deal.Status, deal.DeliveredText, deal.Error)
 	}
-	recalled, _ := buyerMem.Recall(ctx, memory.RecallInput{Query: "4096"})
+	recalled, _ := buyerMem.Recall(ctx, memory.RecallInput{Shard: "bought/ops"})
 	if len(recalled) == 0 || !strings.Contains(recalled[0].Text, "4096") {
 		t.Fatalf("expected Buyer memory to contain Seller's verified fact across Spine-and-Leaf, got %+v", recalled)
 	}
@@ -282,15 +283,16 @@ func TestSpineAndLeafHubFeesMultiHubEndToEnd(t *testing.T) {
 		Domains:        []string{"security"},
 		Question:       "How often does HSM attestation slot 7 rotate?",
 		MaxSats:        100,
+		TargetShard:    "bought/security",
 		CollectTimeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("NAT bbox Want failed: %v", err)
 	}
-	if natDeal.Status != "settled" {
-		t.Fatalf("expected NAT bbox deal to settle through paid /bbox/send toll, got status=%s err=%s", natDeal.Status, natDeal.Error)
+	if natDeal.Status != "settled" || !strings.Contains(natDeal.DeliveredText, "slot 7") {
+		t.Fatalf("expected NAT bbox deal to settle through paid /bbox/send toll, got status=%s text=%q err=%s", natDeal.Status, natDeal.DeliveredText, natDeal.Error)
 	}
-	natRecalled, _ := natBuyerMem.Recall(ctx, memory.RecallInput{Query: "slot 7"})
+	natRecalled, _ := natBuyerMem.Recall(ctx, memory.RecallInput{Shard: "bought/security"})
 	if len(natRecalled) == 0 || !strings.Contains(natRecalled[0].Text, "slot 7") {
 		t.Fatalf("expected NAT Buyer memory to contain NAT Seller fact, got %+v", natRecalled)
 	}

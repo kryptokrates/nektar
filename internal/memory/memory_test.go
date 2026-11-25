@@ -109,10 +109,10 @@ func TestNektarMemoryFullEndToEndLifecycle(t *testing.T) {
 	if err != nil || sec2.BorgEpoch != 2 {
 		t.Fatalf("expected epoch 2 encrypted fragment, got %+v err=%v", sec2, err)
 	}
-	// Bob must NOT see epoch 2; owner sees both!
+	// Revoked Bob must NOT decrypt any group fragments (neither epoch 1 nor epoch 2); owner sees both!
 	bobRec2, _ := svc.Recall(ctx, RecallInput{Shard: "vault", CallerPub: bobPub})
-	if len(bobRec2) != 1 || strings.Contains(bobRec2[0].Text, "Epoch 2") {
-		t.Fatalf("revoked member leaked epoch 2: %+v", bobRec2)
+	if len(bobRec2) != 0 {
+		t.Fatalf("revoked member must not decrypt any fragments after revocation, got: %+v", bobRec2)
 	}
 	ownerRec, _ := svc.Recall(ctx, RecallInput{Shard: "vault", CallerPub: ownerPub})
 	if len(ownerRec) != 2 {

@@ -43,11 +43,21 @@ void test('HTTP API: tools, public proof + checkpoint, metrics move, every route
       '/',
       '/.well-known/agent.json',
       '/.well-known/nektar',
+      '/.well-known/oauth-authorization-server',
+      '/.well-known/oauth-protected-resource',
       '/.well-known/x402',
+      '/a2a',
       '/assets/{file}',
       '/card',
       '/mcp',
+      '/oauth/authorize',
+      '/oauth/register',
+      '/oauth/token',
+      '/pair',
       '/state',
+      '/v1/adapters/{kind}',
+      '/v1/auth/session',
+      '/v1/auth/status',
       '/v1/automation/approvals/{id}',
       '/v1/automation/health',
       '/v1/automation/preflight',
@@ -59,10 +69,14 @@ void test('HTTP API: tools, public proof + checkpoint, metrics move, every route
       '/v1/health',
       '/v1/hosts',
       '/v1/metrics',
+      '/v1/onboard/faucet',
+      '/v1/onboard/hub-bundle',
+      '/v1/onboard/policy-preset',
       '/v1/openapi.json',
       '/v1/pack/{shard}',
       '/v1/pay/quote',
       '/v1/proof/{shard}/{seq}',
+      '/v1/proxy/{provider}',
       '/v1/tools',
       '/v1/tools/{name}',
       '/v1/verify',
@@ -137,7 +151,7 @@ void test('verify page: OG unfurl meta + install CTA + copyable badge markdown',
     assert.match(html, /operator <span class=mono>/, 'operator identity visible')
     assert.match(html, /<details/, 'checks stay behind collapsed details')
     assert.match(html, /v1\/badge\?r=/, 'badge markdown inside details')
-    assert.match(html, /mcp:install|git clone/, 'install command inside details')
+    assert.match(html, /nektar\.run\/install\.sh|mcp:install|git clone/, 'install command inside details')
     // the clutter stays OFF the page
     assert.doesNotMatch(html, /importShard \{from/, 'no visible import snippets')
     assert.doesNotMatch(html, /this operator: \d+ anchors/, 'no counters')

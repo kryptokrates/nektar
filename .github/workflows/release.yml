@@ -241,10 +241,10 @@ jobs:
           if-no-files-found: error
       # two personas → two asset families: the host MCP tree (agent docked to
       # a desktop wallet/client) and the VPS deploy bundle (compose + helm)
-      - name: tar + upload the deploy bundle (agent + hub — linux leg only)
+      - name: tar + upload the deploy bundle (agent + hub + templates + installers — linux leg only)
         if: runner.os == 'Linux'
         run: |
-          tar -czf nektar-deploy.tar.gz -C deploy --exclude='.env' --exclude='*/.env' agent hub
+          tar -czf nektar-deploy.tar.gz --exclude='.env' --exclude='*/.env' -C deploy agent hub -C .. install packaging
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: runner.os == 'Linux'
         with:

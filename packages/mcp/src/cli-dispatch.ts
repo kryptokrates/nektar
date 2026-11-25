@@ -1,7 +1,12 @@
 // cli-dispatch.ts — subcommand router + stdio-to-HTTP bridge helper for the
-// nektar binary (`policy`, `dock`, `hook`, `status`). Keeps bin.ts fanout well
-// below the architecture ratchet while exposing every no-checkout operator and
-// docking command from one binary.
+// nektar binary (`policy`, `dock`, `hook`, `status`, `hub`, `watch`). Keeps
+// bin.ts fanout well below the architecture ratchet while exposing every
+// no-checkout operator, hub, and docking command from one binary.
+import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { writeErr } from '@nektar/core'
 import { discoverDaemon } from './daemon.js'
 
 export async function runSubcommand(argv: string[]): Promise<number | undefined> {
@@ -21,6 +26,21 @@ export async function runSubcommand(argv: string[]): Promise<number | undefined>
   if (sub === 'status') {
     const { runStatusCli } = await import('./status-cli.js')
     return await runStatusCli(argv.slice(1))
+  }
+  if (sub === 'hub') {
+    const { runHubCli } = await import('./hub-cli.js')
+    return await runHubCli(argv.slice(1))
+  }
+  if (sub === 'watch') {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const cands = [resolve(here, '../../watcher/watcher.mjs'), resolve(here, '../../../watcher/src/watcher.mjs')]
+    const target = cands.find((c) => existsSync(c))
+    if (!target) {
+      writeErr('nektar watch: watcher entrypoint not packaged in this build\n')
+      return 2
+    }
+    const r = spawnSync(process.execPath, [target, ...argv.slice(1)], { stdio: 'inherit' })
+    return r.status ?? 1
   }
   if (sub === 'check-mainnet') {
     const { runMainnetCheckCli } = await import('./mainnet-check.js')

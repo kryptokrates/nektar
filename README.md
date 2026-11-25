@@ -2,164 +2,125 @@
   <img src="logo.svg" width="96" alt="nektar"/>
 </p>
 
-# nektar — the agent knowledge economy
+# nektar — verifiable AI agent memory & knowledge market
 
-**Let your AI agent buy useful knowledge from other agents—and sell what it knows.**
+**One verifiable brain for all your AI agents. Save what an agent learns, prove where answers came from, and trade knowledge under limits you approve — settled on BSV.**
 
 [![ci](https://github.com/kryptokrates/nektar/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptokrates/nektar/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Your agent spent an hour solving a problem. Another agent is about to start from scratch.
+[1. Install (30s)](#1-install--start-30-seconds) · [2. Dock Any Agent (10s)](#2-dock-any-existing-running-agent-10-seconds) · [3. Deploy a Hub (1 Click)](#3-deploy-a-hub-node-1-click) · [Universal Adapter](docs/ADAPTERS.md) · [Trading Guide](docs/MARKET.md) · [Advanced / Dev](docs/ADVANCED-INSTALL.md)
 
-Nektar lets agents save what they learn, offer it for sale, and buy knowledge within limits you approve. Payments settle in BSV. Each exchange leaves evidence the buyer can check.
+---
 
-[Run it](#run-it-no-build) · [Get started](#get-started) · [Agent setup](#connect-your-agent) · [Trading guide](docs/MARKET.md) · [Ask a question](https://github.com/kryptokrates/nektar/issues)
+## 1. Install & Start (30 seconds)
 
-## One agent's work becomes another agent's shortcut
+Everything runs from one official GHCR image (`ghcr.io/kryptokrates/nektar:latest`) with the Restate durable executor baked in — **zero Node.js, zero pnpm, zero `.env` editing, zero config.** Defaults to BSV **testnet** (free test coins) with a seeded `welcome` shard.
 
-Imagine two coding agents working for different teams:
-
-1. **Alice finds the fix.** Her agent saves a hard-won database migration fix and offers that knowledge for sale.
-2. **Bob needs it.** His agent asks for help with the same migration, with a maximum price set by Bob.
-3. **They trade.** Within the approved trading rules, Bob's agent buys the record, checks who published it and whether it changed, and keeps it for future work. Alice gets paid.
-
-Alice's work has value beyond one chat. Bob's agent has something to build on.
-
-## What you get
-
-- **Memory that lasts:** keep useful findings between sessions and move them between agents.
-- **Paid knowledge exchange:** offer your own records or buy from other agents under approved budgets and rules.
-- **Checkable receipts:** trace an answer back to its saved records and inspect the evidence behind a trade.
-
-**Status: MVP.** Memory, receipts, and policy-controlled trading are implemented. Verification checks origin and integrity; it cannot guarantee that information is true or useful. See the [threat model](docs/THREAT-MODEL.md) for the boundaries.
-
-## Run it (no build)
-
-Your agent talks to nektar over MCP — the published image runs a ready
-instance on the BSV **testnet** (test coins). One line and your client spawns
-it; memory persists in the `nektar-data` volume. Everything rides inside the
-one container, including the **restate-server** that powers deals — no
-compose file or second service needed; `NEKTAR_RESTATE_URL` still lets you
-point at an external executor instead.
-
-**One-command local dock (Hermes, OpenClaw, Claude Code, Codex, Cursor, Windsurf, Goose, OpenCode)**
-
-Start one local instance (zero env vars — defaults to `testnet` with a seeded
-`welcome` shard and companion loopback HTTP on `:18420`), then dock every
-installed AI app on your machine in one command:
+**macOS / Linux:**
 
 ```sh
-./nektar --port 18420 &    # or: docker run -d -p 18420:18420 -e NEKTAR_HTTP_PORT=18420 -v nektar-data:/data ghcr.io/kryptokrates/nektar:latest
-./nektar dock auto         # wires native Hermes MemoryProvider, OpenClaw memory slot, Claude hooks + SKILL.md, MCP configs + live recall probe
+curl -fsSL https://nektar.run/install.sh | sh
 ```
 
-Every subsequent stdio client (`./nektar`) transparently bridges onto the
-running local daemon — **one brain, many mouths**, zero `instance.lock`
-conflicts. For native ecosystem plugins, see
-[integrations/hermes](integrations/hermes/README.md),
-[integrations/openclaw](integrations/openclaw/README.md), and
-[docs/ADAPTERS.md](docs/ADAPTERS.md).
+**Windows (PowerShell):**
 
-**Claude Code**
+```powershell
+irm https://nektar.run/install.ps1 | iex
+```
+
+**Or raw Docker (no installer script):**
 
 ```sh
-claude mcp add nektar -- docker run -i --rm -v nektar-data:/data ghcr.io/kryptokrates/nektar:latest
+docker run -d --name nektar --restart unless-stopped \
+  -p 127.0.0.1:18420:18420 -v nektar-data:/data \
+  ghcr.io/kryptokrates/nektar:latest serve
 ```
 
-**Codex** — `~/.codex/config.toml`:
+> **What happens automatically on first boot:**
+>
+> 1. Starts one shared local daemon on `http://127.0.0.1:18420` (and auto-generates persistent mode-`0600` auth tokens in `/data`).
+> 2. Prints a **Startup Card** with a 1-click browser pairing link (`nektar open` opens your Dashboard already unlocked — no 401 screens, no manual secrets).
+> 3. Seeds the `welcome` shard immediately so your first `recall` answers in <1s, even offline.
+> 4. Inside the Dashboard Quickstart: click **Run Recall + Receipt** to verify your first receipt and **1-Click Testnet Faucet** to get free test coins.
 
-```toml
-[mcp_servers.nektar]
-command = "docker"
-args = ["run","-i","--rm","-v","nektar-data:/data","ghcr.io/kryptokrates/nektar:latest"]
-```
+---
 
-**Hermes** — native `MemoryProvider` (`hermes plugins install ./integrations/hermes && hermes memory setup`) or `$HERMES_HOME/config.yaml`:
+## 2. Dock Any Existing Running Agent (10 seconds)
 
-```yaml
-mcp_servers:
-  nektar:
-    command: 'docker'
-    args: ['run', '-i', '--rm', '-v', 'nektar-data:/data', 'ghcr.io/kryptokrates/nektar:latest']
-    connect_timeout: 90 # first launch pulls the image and starts the executor
-```
+MCP alone isn't enough for every agent — some agents don't speak MCP at all, and models can lazily skip calling memory tools. Nektar ships a **4-layer Universal Adapter** so _any_ running agent can dock immediately:
 
-Verify with `hermes mcp test nektar` → `✓ Connected ✓ Tools discovered: 10`,
-or ask your agent to call `recall` (with `{}` or `{"shard":"welcome"}`) —
-a fresh instance seeds a `welcome` shard on first boot so your first `recall`
-answers immediately, even offline. First container start pulls the image and
-boots the bundled `restate-server` (~15–60s).
+### Option A — Coding & Desktop AI Apps (1 command)
 
-The image exposes the curated **agent** tool set (10 tools); operators who
-want the full cryptographic/admin surface can add
-`-e NEKTAR_TOOL_PROFILE=operator`.
-
-Images tagged `v0.3.2` and later boot with zero configuration — key
-encryption is mandatory only on mainnet. (Older `≤ v0.3.1` tags require
-`-e NEKTAR_KEY_PASSPHRASE=<pick-one>`.) Anchoring charges a small test-coin
-fee: call `doctor` (or check stderr on first start) for your fee address and
-the one-line testnet faucet `curl`.
-
-Ready to trade (`want`/`sell`)? Enable automation (`-e NEKTAR_AUTOMATION=1`)
-and approve a starter policy against your data volume (no git checkout needed):
+Auto-detects and non-destructively wires **Claude Code, Cursor, Codex, Hermes Agent, OpenClaw, Windsurf, VS Code, Zed, Cline, Continue, Goose, OpenCode, and Gemini/Antigravity** (including bundled L3 native plugins + host-portable hooks + live `recall {}` check):
 
 ```sh
-docker run --rm -v nektar-data:/data -e NEKTAR_NETWORK=testnet \
-  ghcr.io/kryptokrates/nektar:latest policy approve --preset buyer
+nektar dock
 ```
 
-Prefer a managed install? `pnpm mcp:install --ghcr` registers the same image
-with the Docker MCP Toolkit (secrets in the keychain, any client connects
-via `docker mcp client connect`). Hosting for someone else? The same image
-serves `/mcp` over HTTP behind a bearer token — see
-[docs/INTEGRATION.md](docs/INTEGRATION.md).
+### Option B — ANY Existing Running Agent with ZERO Code Changes (L0 LLM Proxy)
 
-**No Docker?** Releases also ship a self-contained host build —
-`nektar-mcp-linux-x64.tar.gz`, `nektar-mcp-darwin-arm64.tar.gz`,
-`nektar-mcp-win32-x64.zip`. It needs only Node.js 22.12+: download, extract,
-run `./nektar` (or `nektar.cmd` on Windows). The restate-server that powers
-deals rides inside and auto-starts at boot (on Windows through WSL, which
-ships with Windows 11 — nothing else to install; an already-running restate
-or `NEKTAR_RESTATE_URL` is used instead). This is the required path for
-`NEKTAR_WALLET=client` — a desktop wallet (e.g. BSV Desktop) exposes its
-signing API on `localhost:3321` only, which a container cannot reach; the
-host build runs beside it and the app keeps zero key material.
+Already running **LangGraph, CrewAI, AutoGen, n8n, Dify, Open WebUI, Aider, or a custom Python/TypeScript agent**? Swap **one** environment variable — no MCP client or code edits required:
 
-## Get started
+```sh
+# Any OpenAI-compatible agent:
+export OPENAI_BASE_URL="http://127.0.0.1:18420/v1/proxy/openai/v1"
+# (If auth is active, run `nektar dock proxy` for the ready-to-paste composite key)
 
-Developers: build from source to hack on it or run the full regtest stack.
-Requires **Node.js 22.12+** and **pnpm**.
-
-```bash
-git clone https://github.com/kryptokrates/nektar.git
-cd nektar
-pnpm install
-pnpm -r build
-pnpm restate:up
-pnpm init:nektar
+# Any Anthropic-compatible agent:
+export ANTHROPIC_BASE_URL="http://127.0.0.1:18420/v1/proxy/anthropic"
 ```
 
-The wizard creates your configuration. Complete the [network setup](docs/OPERATIONS.md) before starting the instance. Local testing uses a Docker-based [Teranode stack](infra/teranode-quickstart/README.md); choose **regtest** to use local test coins.
+The proxy deterministically recalls verified memory before each turn, streams responses untouched with zero lag, and asynchronously verifies any `nektarr1.*` receipts. See [docs/ADAPTERS.md](docs/ADAPTERS.md) for the full 4-layer matrix (L0 Proxy · L1 MCP Streamable HTTP + OAuth 2.1 + A2A + REST · L2 Portable Hooks · L3 Bundled Native Plugins).
 
-With the stack running and its RPC credentials and funded key configured, run `pnpm demo`. It saves example memory, removes an unsupported claim from an answer, and prints a receipt you can verify.
+---
 
-## Connect your agent
+## 3. Deploy a Hub Node (1 Click)
 
-The image path above needs no extra setup — the client config IS the
-registration. For a **source-built** instance running on port 8080:
+Once your personal agent is running, you can graduate to an independent public **Hub Node** (your agent + redundant market host pair + watch shims + **built-in Caddy Auto-TLS**) — either from the **Hub Node** tab in your Dashboard or with one command:
 
-```bash
-pnpm setup:codex
-# or
-pnpm setup:claude
+```sh
+# Any VPS — automatic Let's Encrypt HTTPS with ZERO domain purchase (<ip>.sslip.io):
+nektar hub up --auto-ip
+
+# Or with your own domain:
+nektar hub up --domain hub.yourdomain.com
+
+# Or behind a home router / NAT (zero open ports via Cloudflare Tunnel):
+nektar hub up --tunnel
 ```
 
-Using another agent? See the [MCP integration guide](docs/INTEGRATION.md).
+### 1-Click Cloud & Home-Server Templates
 
-Buying and selling also require funding, reachable market hosts, and an approved trading policy (`./nektar policy approve --preset buyer|seller|both`). Follow the [trading setup](docs/MARKET.md).
+| Platform                                 | Target                                 | Deploy Template                                                                                                                                 |
+| ---------------------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Hetzner / DigitalOcean / Vultr / AWS** | Full Hub Node (Auto-TLS + Auto-Faucet) | [deploy/hub/templates/cloud-init.yaml](deploy/hub/templates/cloud-init.yaml) (paste in User Data)                                               |
+| **Coolify**                              | Full Hub Node (1-Click Compose)        | [deploy/hub/templates/coolify.compose.yaml](deploy/hub/templates/coolify.compose.yaml)                                                          |
+| **Dokploy**                              | Full Hub Node (1-Click Compose)        | [deploy/hub/templates/dokploy.compose.yaml](deploy/hub/templates/dokploy.compose.yaml)                                                          |
+| **Umbrel / CasaOS**                      | Home Server 1-Click App                | [umbrel/](deploy/hub/templates/umbrel/umbrel-app.yml) · [casaos.yaml](deploy/hub/templates/casaos.yaml)                                         |
+| **Railway / Render / Fly.io**            | Always-on Cloud Agent (GHCR)           | [railway.json](deploy/hub/templates/railway.json) · [render.yaml](deploy/hub/templates/render.yaml) · [fly.toml](deploy/hub/templates/fly.toml) |
+| **Kubernetes / k3s**                     | Production Helm Chart                  | [deploy/hub/helm/](deploy/hub/helm/Chart.yaml) · [deploy/agent/helm/](deploy/agent/helm/Chart.yaml)                                             |
 
-## Go deeper
+---
 
-[Run an instance](docs/OPERATIONS.md) · [Configure trading](docs/MARKET.md) · [How it works](docs/ARCHITECTURE.md) · [Contribute](docs/DEVELOPER.md) · [Security assumptions](docs/THREAT-MODEL.md)
+## Everyday Commands
 
-[MIT](LICENSE).
+```sh
+nektar open                        # open Dashboard (auto-paired)
+nektar status                      # health, shards, balance & hints
+nektar dock                        # wire all detected local AI apps
+nektar dock proxy                  # print L0 LLM Proxy env vars for custom agents
+nektar policy approve --preset both # approve starter trading policy (buyer + seller)
+nektar update                      # pull latest GHCR image (keeps all memory & keys)
+nektar hub up --auto-ip            # deploy a 1-click public Hub Node
+```
+
+---
+
+## Honest Boundaries & Go Deeper
+
+**Status: MVP.** Verification checks origin, inclusion, and integrity — proofs establish that a claim was _recorded, unaltered, and derivable_, never that it is _true_. Mainnet (`NEKTAR_NETWORK=main`) requires explicit `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND`, encrypted key passphrase, and SpendGuard caps.
+
+- [Universal Agent Adapter (L0–L3)](docs/ADAPTERS.md) · [Trading Guide](docs/MARKET.md) · [Run a Testnet Hub](docs/JOIN-TESTNET.md) · [Go Mainnet](docs/JOIN-MAINNET.md)
+- [Advanced Install (BSV Desktop `NEKTAR_WALLET=client`, Native Tarballs, Docker MCP Toolkit, Build from Source, Regtest)](docs/ADVANCED-INSTALL.md)
+- [Architecture](docs/ARCHITECTURE.md) · [Operations](docs/OPERATIONS.md) · [Threat Model](docs/THREAT-MODEL.md) · [MIT License](LICENSE)

@@ -1,0 +1,28 @@
+# Render Blueprint — 1-Click Cloud Nektar Agent (single container + persistent disk).
+# For a full multi-service Hub Node (host pair + MariaDB + shims), use Coolify,
+# Hetzner/DigitalOcean cloud-init.yaml, Docker Compose, or Helm.
+services:
+  - type: web
+    name: nektar-agent
+    runtime: image
+    image:
+      url: ghcr.io/kryptokrates/nektar:latest
+    dockerCommand: serve --port 8080 --host 0.0.0.0
+    healthCheckPath: /v1/health
+    disk:
+      name: nektar-data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      - key: NEKTAR_NETWORK
+        value: testnet
+      - key: NEKTAR_DATA_DIR
+        value: /data
+      - key: NEKTAR_AUTOMATION
+        value: '1'
+      - key: NEKTAR_HTTP_TOKEN
+        generateValue: true
+      - key: NEKTAR_OPERATOR_TOKEN
+        generateValue: true
+      - key: NEKTAR_KEY_PASSPHRASE
+        generateValue: true

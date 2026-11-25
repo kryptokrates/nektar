@@ -16,7 +16,9 @@ import type { AddressInfo } from 'node:net'
 // already set (shell wins).
 const nlog = mkLog('nektar')
 const bootStartedAt = Date.now()
-const argv = process.argv.slice(2)
+const rawArgv = process.argv.slice(2)
+const serveMode = rawArgv[0] === 'serve'
+const argv = serveMode ? rawArgv.slice(1) : rawArgv
 /** --flag value and --flag=value both parse — silently ignoring the = form
  *  booted the default network once already */
 const flagVal = (name: string): string | undefined => {
@@ -111,7 +113,7 @@ const hostFlag = flagVal('--host')
 const fill = (k: string, v: string | undefined): void => {
   if (v !== undefined && nektarEnv(k) === undefined) setNektarEnv(k, v)
 }
-fill('NEKTAR_HTTP_PORT', portFlag ?? sparse(dot['NEKTAR_HTTP_PORT']) ?? defs?.NEKTAR_HTTP_PORT)
+fill('NEKTAR_HTTP_PORT', portFlag ?? sparse(dot['NEKTAR_HTTP_PORT']) ?? defs?.NEKTAR_HTTP_PORT ?? (serveMode ? String(DEFAULT_DAEMON_PORT) : undefined))
 fill('NEKTAR_HTTP_HOST', hostFlag ?? sparse(dot['NEKTAR_HTTP_HOST']) ?? defs?.NEKTAR_HTTP_HOST)
 // .env spreads over profile defaults — the strict order was for the role
 // choice only; deliberate .env config beats a profile's convenience default
@@ -379,18 +381,30 @@ if (automationOn) {
 }
 const port = nektarEnv('NEKTAR_HTTP_PORT')
 const dataDirForDaemon = nektarEnv('NEKTAR_DATA_DIR') ?? '.nektar'
+const inContainer = nektarEnvFlag('NEKTAR_CONTAINER') === true || existsSync('/.dockerenv')
 let srv: ReturnType<typeof import('./http.js').createHttpApi> | undefined
 if (port) {
-  srv = (await import('./http.js')).createHttpApi(rt.mem, rt.ops)
-  const host = nektarEnv('NEKTAR_HTTP_HOST') ?? '127.0.0.1'
-  // fail-closed: a non-loopback bind with no bearer exposes every tool and
-  // operator route unauthenticated — refuse unless the operator explicitly
-  // opts into open serving
+  const host = nektarEnv('NEKTAR_HTTP_HOST') ?? (inContainer ? '0.0.0.0' : '127.0.0.1')
   const loopbackBind = host === '127.0.0.1' || host === 'localhost' || host === '::1'
-  if (!loopbackBind && nektarEnv('NEKTAR_HTTP_TOKEN') === undefined && nektarEnvFlag('NEKTAR_INSECURE_NO_AUTH') !== true)
-    throw new Error(
-      `refusing to bind ${host}:${port} without NEKTAR_HTTP_TOKEN — the tool surface would be unauthenticated (set NEKTAR_INSECURE_NO_AUTH=1 to override)`
+  let generatedTokens = false
+  if (!loopbackBind && nektarEnv('NEKTAR_HTTP_TOKEN') === undefined && nektarEnvFlag('NEKTAR_INSECURE_NO_AUTH') !== true) {
+    if (nektarEnvFlag('NEKTAR_NO_AUTO_TOKEN') === true) {
+      throw new Error(
+        `refusing to bind ${host}:${port} without NEKTAR_HTTP_TOKEN — the tool surface would be unauthenticated (set NEKTAR_INSECURE_NO_AUTH=1 to override)`
+      )
+    }
+    const { resolveOrGenerateTokens } = await import('./auth.js')
+    const gen = resolveOrGenerateTokens(dataDirForDaemon)
+    generatedTokens = gen.generatedHttp || gen.generatedOperator
+    nlog(
+      gen.generatedHttp
+        ? `auth: generated persistent HTTP + operator tokens in ${dataDirForDaemon}/ (mode 0600)`
+        : `auth: loaded persistent HTTP token from ${dataDirForDaemon}/http-token`
     )
+  }
+  const { createAuthManager } = await import('./auth.js')
+  const authMgr = createAuthManager()
+  srv = (await import('./http.js')).createHttpApi(rt.mem, rt.ops, { auth: authMgr })
   // a crashing-then-respawned agent briefly loses its port to the dying
   // process (WER holds it on Windows); retry the bind on a bounded ceiling
   // instead of letting an unhandled 'error' event kill the whole agent
@@ -407,13 +421,37 @@ if (port) {
   server.listen(Number(port), host, () => {
     const addr = server.address() as AddressInfo | null
     const boundPort = addr?.port ?? Number(port)
+    const displayBase = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://127.0.0.1:${boundPort}`
+    const httpTok = nektarEnv('NEKTAR_HTTP_TOKEN')
     writeDaemonInfo(dataDirForDaemon, {
       url: `http://127.0.0.1:${boundPort}`,
       pid: process.pid,
       network: rt.network,
-      startedAt: Date.now()
+      startedAt: Date.now(),
+      ...(httpTok ? { token: httpTok } : {})
     })
-    nlog(`HTTP + MCP on :${boundPort} (/v1, /mcp) — ready in ${Date.now() - bootStartedAt}ms`)
+    const bootMs = Date.now() - bootStartedAt
+    nlog(`HTTP + MCP on :${boundPort} (/v1, /mcp, /v1/proxy) — ready in ${bootMs}ms`)
+    const pairCode = httpTok ? authMgr.issuePairingCode('operator') : undefined
+    void (async () => {
+      try {
+        const w = (await rt.ops?.wallet?.().catch(() => undefined)) as { address?: string; balanceSats?: number } | undefined
+        const { printStartupBanner } = await import('./banner.js')
+        printStartupBanner({
+          url: displayBase,
+          network: rt.network,
+          bootMs,
+          pairCode,
+          feeAddress: w?.address,
+          balanceSats: w?.balanceSats,
+          automationOn,
+          containerMode: inContainer,
+          generatedTokens
+        })
+      } catch {
+        /* banner is non-fatal */
+      }
+    })()
   })
 } else if (nektarEnvFlag('NEKTAR_COMPANION_HTTP') !== false) {
   // stdio-mode companion loopback HTTP: keeps /v1/verify receipt links,

@@ -1,0 +1,26 @@
+version: '3.7'
+
+services:
+  app_proxy:
+    environment:
+      APP_HOST: nektar-hub_agent_1
+      APP_PORT: 18420
+      PROXY_AUTH_ADD: 'false'
+
+  agent:
+    image: ghcr.io/kryptokrates/nektar:latest
+    restart: on-failure
+    command: ['serve', '--port', '18420', '--host', '0.0.0.0']
+    environment:
+      NEKTAR_NETWORK: testnet
+      NEKTAR_DATA_DIR: /data
+      NEKTAR_AUTOMATION: '1'
+      NEKTAR_SEED_DOMAINS: '*'
+      NEKTAR_INSECURE_NO_AUTH: '0'
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:18420/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5

@@ -78,13 +78,52 @@ set_kv() { # set_kv KEY VALUE — replace the KEY=... line in .env
     printf "%s=%s\n" "$1" "$2" >>.env
   fi
 }
-for k in NEKTAR_KEY_PASSPHRASE NEKTAR_HTTP_TOKEN OVERLAY_DB_PASSWORD OVERLAY_ADMIN_TOKEN; do
+# Optional CLI flags (or env passthroughs):
+#   --domain <fqdn>      Enable built-in Caddy Auto-TLS on <fqdn>
+#   --auto-ip            Zero-domain HTTPS via <public-ip>.sslip.io + Caddy Auto-TLS
+#   --tunnel             Zero-port HTTPS via Cloudflare Quick Tunnel (behind NAT)
+#   --network <net>      testnet (default) | main (requires --confirm I_UNDERSTAND)
+#   --no-faucet          Skip automatic testnet faucet drip
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --domain) NEKTAR_PUBLIC_URL="https://${2#https://}"; shift 2 ;;
+    --domain=*) v="${1#*=}"; NEKTAR_PUBLIC_URL="https://${v#https://}"; shift ;;
+    --auto-ip) NEKTAR_AUTO_IP=1; shift ;;
+    --tunnel) NEKTAR_HUB_MODE=tunnel; shift ;;
+    --network) NEKTAR_NETWORK="$2"; shift 2 ;;
+    --network=*) NEKTAR_NETWORK="${1#*=}"; shift ;;
+    --confirm) NEKTAR_MAINNET_CONFIRM="$2"; shift 2 ;;
+    --confirm=*) NEKTAR_MAINNET_CONFIRM="${1#*=}"; shift ;;
+    --no-faucet) NEKTAR_SKIP_AUTO_FAUCET=1; shift ;;
+    *) shift ;;
+  esac
+done
+
+for k in NEKTAR_KEY_PASSPHRASE NEKTAR_HTTP_TOKEN NEKTAR_OPERATOR_TOKEN OVERLAY_DB_PASSWORD OVERLAY_ADMIN_TOKEN; do
   if grep -qE "^$k=[[:space:]]*$" .env; then
     set_kv "$k" "$(openssl rand -hex 32)"
   fi
 done
+
+# Zero-domain HTTPS via sslip.io when NEKTAR_AUTO_IP=1 (or --auto-ip)
+if [ "${NEKTAR_AUTO_IP:-0}" = "1" ] && [ -z "${NEKTAR_PUBLIC_URL:-}" ]; then
+  pub_ip="$(curl -fsS --max-time 4 https://api.ipify.org 2>/dev/null || curl -fsS --max-time 4 https://ifconfig.me/ip 2>/dev/null || true)"
+  if echo "$pub_ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    sslip="$(echo "$pub_ip" | tr '.' '-').sslip.io"
+    NEKTAR_PUBLIC_URL="https://${sslip}"
+    echo "-- auto-IP TLS host: ${NEKTAR_PUBLIC_URL}"
+  fi
+fi
+
+PROFILES=""
 if [ -n "${NEKTAR_PUBLIC_URL:-}" ]; then
   pub="${NEKTAR_PUBLIC_URL%/}"
+  dom="${pub#https://}"
+  dom="${dom#http://}"
+  dom="${dom%%/*}"
+  set_kv NEKTAR_DOMAIN "$dom"
+  set_kv NEKTAR_PUBLIC_URL "$pub"
+  PROFILES="--profile tls"
   net="${NEKTAR_NETWORK:-testnet}"
   if [ -z "${NEKTAR_MARKET_HOSTS:-}" ]; then
     if [ "$net" = "testnet" ]; then
@@ -96,6 +135,9 @@ if [ -n "${NEKTAR_PUBLIC_URL:-}" ]; then
   [ -z "${NEKTAR_PUSH_PUBLIC:-}" ] && NEKTAR_PUSH_PUBLIC="$pub"
   [ -z "${NEKTAR_WATCH_URLS:-}" ] && NEKTAR_WATCH_URLS="${pub}/watch/a,${pub}/watch/b"
   [ -z "${NEKTAR_WATCH_PUBLIC:-}" ] && NEKTAR_WATCH_PUBLIC="${pub}/watch"
+elif [ "${NEKTAR_HUB_MODE:-}" = "tunnel" ]; then
+  set_kv NEKTAR_DOMAIN ":80"
+  PROFILES="--profile tls --profile tunnel"
 fi
 for k in NEKTAR_MARKET_HOSTS NEKTAR_PUSH_PUBLIC NEKTAR_WATCH_URLS NEKTAR_WATCH_PUBLIC \
   NEKTAR_FUND_WIF NEKTAR_FUND_TXIDS NEKTAR_WAIT_FUNDING NEKTAR_INDEXER_DISCOVERY \
@@ -111,8 +153,7 @@ done
 if ! grep -qE '^NEKTAR_MARKET_HOSTS=.+,' .env; then
   set_kv NEKTAR_MARKET_HOSTS "http://localhost:18391,http://localhost:18392"
   set_kv NEKTAR_ANNOUNCE "0"
-  echo "!! NEKTAR_MARKET_HOSTS unset — booting localhost-only with ANNOUNCE=0."
-  echo "   Re-run with NEKTAR_MARKET_HOSTS=<public urls> to join the network."
+  echo "!! NEKTAR_PUBLIC_URL unset — booting localhost-only (pass --auto-ip, --domain <fqdn>, or --tunnel to publish)."
 fi
 # mainnet ack gate — same refusal the runtime enforces, caught at install time
 if grep -qE '^NEKTAR_NETWORK=main' .env; then
@@ -125,11 +166,30 @@ if grep -qE '^NEKTAR_NETWORK=main' .env; then
 fi
 
 # 4 — up
-$DOCKER compose --env-file .env up -d
+# shellcheck disable=SC2086
+$DOCKER compose $PROFILES --env-file .env up -d
+
+# 5 — wait for agent health + automatic testnet faucet drip
+http_tok="$(grep '^NEKTAR_HTTP_TOKEN=' .env | cut -d= -f2-)"
+for _ in $(seq 1 40); do
+  if curl -fsS --max-time 2 http://127.0.0.1:8080/v1/health >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+if ! grep -qE '^NEKTAR_NETWORK=main' .env && [ "${NEKTAR_SKIP_AUTO_FAUCET:-0}" != "1" ] && [ -n "$http_tok" ]; then
+  echo "-- requesting free testnet sats for this hub's fee address..."
+  curl -fsS --max-time 15 -X POST http://127.0.0.1:8080/v1/onboard/faucet \
+    -H "Authorization: Bearer $http_tok" >/dev/null 2>&1 \
+    && echo "-- ✓ testnet faucet drip requested & imported" \
+    || echo "-- · auto-faucet skipped (already funded or faucet busy — fund anytime in Dashboard)"
+fi
 echo
-echo "-- hub starting; logs:  cd $DEST && $DOCKER compose logs -f agent"
-echo "-- the agent prints 'operator fee key <address>' — send testnet sats"
-echo "   there (or NEKTAR_FUND_TXIDS=<txid> + restart if you already paid it)"
-echo "-- verify your card once announced:"
-echo "   curl -X POST http://localhost:18391/lookup -H 'content-type: application/json' \\"
-echo "     -d '{\"service\":\"ls_nektar\",\"query\":{\"announces\":{\"net\":\"testnet\"}}}'"
+echo "-- hub UP; logs:  cd $DEST && $DOCKER compose logs -f agent"
+if [ -n "${NEKTAR_PUBLIC_URL:-}" ]; then
+  echo "-- public HTTPS : ${NEKTAR_PUBLIC_URL%/}/.well-known/nektar (Caddy Auto-TLS active)"
+elif [ "${NEKTAR_HUB_MODE:-}" = "tunnel" ]; then
+  echo "-- tunnel URL   : cd $DEST && $DOCKER compose logs cloudflared | grep trycloudflare"
+fi
+echo "-- verify card  : curl -X POST http://localhost:18391/lookup -H 'content-type: application/json' \\"
+echo "                    -d '{\"service\":\"ls_nektar\",\"query\":{\"announces\":{\"net\":\"testnet\"}}}'"

@@ -3,36 +3,101 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>nektar — the computational data market</title>
-    <meta name="description" content="verifiable memory for AI agents, traded as a commodity on BSV" />
+    <title>nektar — verifiable AI agent memory &amp; knowledge market</title>
+    <meta name="description" content="One verifiable brain for every AI agent — GHCR install in 30s, dock any running agent, deploy a Hub Node in 1 click." />
     <style>
       body {
-        background: #221e1d;
+        background: #161311;
         color: #eae6e3;
-        font-family: ui-monospace, monospace;
-        max-width: 640px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        max-width: 740px;
         margin: 0 auto;
-        padding: 64px 20px;
+        padding: 48px 20px 72px;
         line-height: 1.6;
       }
       img.logo {
-        width: 84px;
+        width: 76px;
         display: block;
-        margin-bottom: 24px;
+        margin-bottom: 18px;
       }
       h1 {
         font-size: 26px;
-        margin: 0 0 8px;
-        font-weight: 600;
+        margin: 0 0 6px;
+        font-weight: 700;
+      }
+      h2 {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: #f7991b;
+        margin: 34px 0 10px;
       }
       .tag {
         color: #f7991b;
-        font-size: 15px;
-        margin-bottom: 40px;
+        font-size: 14px;
+        margin-bottom: 26px;
+      }
+      .card {
+        background: #221c18;
+        border: 1px solid #382e27;
+        border-radius: 12px;
+        padding: 16px 18px;
+        margin-bottom: 14px;
+      }
+      .tabs {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+      }
+      .tab {
+        background: #2c241f;
+        border: 1px solid #3c3129;
+        color: #b8aea5;
+        border-radius: 99px;
+        padding: 4px 11px;
+        font-size: 12px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .tab.on {
+        color: #f7991b;
+        border-color: #f7991b;
+        background: rgba(247, 153, 27, 0.12);
+      }
+      .cmd {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: #130f0d;
+        border: 1px solid #312822;
+        border-radius: 8px;
+        padding: 10px 12px;
+      }
+      .cmd code {
+        flex: 1;
+        font-size: 12.5px;
+        color: #eae6e3;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+        background: none;
+        padding: 0;
+      }
+      .copy {
+        background: #f7991b;
+        color: #221e1d;
+        border: 0;
+        border-radius: 6px;
+        padding: 5px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        font-family: inherit;
       }
       p.feat {
-        margin: 10px 0;
-        font-size: 14px;
+        margin: 8px 0;
+        font-size: 13.5px;
         color: #b8aea5;
       }
       p.feat b {
@@ -40,46 +105,113 @@
         font-weight: 600;
       }
       .links {
-        margin-top: 44px;
+        margin-top: 32px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 18px;
         font-size: 13px;
       }
       .links a {
         color: #f7991b;
         text-decoration: none;
-        margin-right: 20px;
       }
       .links a:hover {
         text-decoration: underline;
       }
       .fine {
-        margin-top: 56px;
+        margin-top: 44px;
         font-size: 11px;
         color: #6e6459;
-      }
-      code {
-        background: #2c2624;
-        padding: 1px 5px;
-        border-radius: 3px;
-        font-size: 12px;
       }
     </style>
   </head>
   <body>
     <img class="logo" src="logo.svg" alt="nektar" />
-    <h1>nektar — the computational data market</h1>
-    <div class="tag">verifiable memory for AI agents, traded as a commodity on bsv</div>
+    <h1>nektar — verifiable AI agent memory</h1>
+    <div class="tag">one shared brain for all your agents · anchored on BSV · zero-config GHCR install</div>
 
-    <p class="feat"><b>discovery by domain</b> — agents declare what they know; buyers find them by content, not endpoint</p>
-    <p class="feat"><b>signed everything</b> — catalogs, wants, offers, quotes, receipts, settlements, reputation</p>
-    <p class="feat"><b>real escrow</b> — pay-for-disclosure on bsv: verify the memory, then the money moves</p>
-    <p class="feat"><b>receipts anyone can check</b> — every answer carries a verify url; proofs make claims attributable</p>
+    <h2>1. Install &amp; start (30 seconds)</h2>
+    <div class="card">
+      <div class="tabs" id="inst-tabs">
+        <button class="tab on" data-k="unix">macOS / Linux</button>
+        <button class="tab" data-k="win">Windows (PowerShell)</button>
+        <button class="tab" data-k="docker">Raw Docker (GHCR)</button>
+      </div>
+      <div class="cmd">
+        <code id="inst-code">curl -fsSL https://nektar.run/install.sh | sh</code>
+        <button class="copy" id="inst-copy">copy</button>
+      </div>
+      <p class="feat">Pulls <b>ghcr.io/kryptokrates/nektar:latest</b> (bundled Restate, seeded welcome shard, auto-token) and opens your Dashboard.</p>
+    </div>
+
+    <h2>2. Dock any existing running agent (10 seconds)</h2>
+    <div class="card">
+      <div class="tabs" id="dock-tabs">
+        <button class="tab on" data-k="apps">Claude · Cursor · Hermes · OpenClaw · Codex · VS Code</button>
+        <button class="tab" data-k="proxy">Any Running Agent (L0 LLM Proxy)</button>
+      </div>
+      <div class="cmd">
+        <code id="dock-code">nektar dock</code>
+        <button class="copy" id="dock-copy">copy</button>
+      </div>
+      <p class="feat">MCP + portable hooks + bundled native plugins, or swap <b>OPENAI_BASE_URL</b> for zero-code docking.</p>
+    </div>
+
+    <h2>3. Graduate to a public Hub Node (1 click)</h2>
+    <div class="card">
+      <div class="cmd">
+        <code id="hub-code">nektar hub up --auto-ip</code>
+        <button class="copy" id="hub-copy">copy</button>
+      </div>
+      <p class="feat">
+        Built-in <b>Caddy Auto-TLS</b> (custom domain, zero-domain <code>sslip.io</code>, or <code>--tunnel</code> behind NAT) + 1-click templates for Coolify,
+        Hetzner/DigitalOcean Cloud-Init, Dokploy, Umbrel, CasaOS, Railway, Render &amp; Helm.
+      </p>
+    </div>
 
     <div class="links">
       <a href="https://github.com/kryptokrates/nektar">github</a>
+      <a href="https://github.com/kryptokrates/nektar/blob/master/docs/ADAPTERS.md">universal adapter</a>
+      <a href="https://github.com/kryptokrates/nektar/blob/master/docs/JOIN-TESTNET.md">deploy a hub</a>
+      <a href="/.well-known/agent.json">agent card (A2A)</a>
       <a href="/.well-known/nektar">discovery doc</a>
       <a href="/v1/health">health</a>
     </div>
 
     <p class="fine">mvp — proofs establish recorded, unaltered, derivable. never true.</p>
+
+    <script>
+      const INST = {
+        unix: 'curl -fsSL https://nektar.run/install.sh | sh',
+        win: 'irm https://nektar.run/install.ps1 | iex',
+        docker: 'docker run -d --name nektar --restart unless-stopped -p 127.0.0.1:18420:18420 -v nektar-data:/data ghcr.io/kryptokrates/nektar:latest serve'
+      }
+      const DOCK = {
+        apps: 'nektar dock',
+        proxy:
+          'export OPENAI_BASE_URL="http://127.0.0.1:18420/v1/proxy/openai/v1"\n# or Anthropic: export ANTHROPIC_BASE_URL="http://127.0.0.1:18420/v1/proxy/anthropic"'
+      }
+      function wire(tabsId, codeId, copyId, map) {
+        const el = document.getElementById(codeId)
+        const btn = document.getElementById(copyId)
+        if (tabsId) {
+          for (const b of document.querySelectorAll('#' + tabsId + ' .tab')) {
+            b.onclick = () => {
+              for (const x of document.querySelectorAll('#' + tabsId + ' .tab')) x.classList.remove('on')
+              b.classList.add('on')
+              el.textContent = map[b.dataset.k]
+            }
+          }
+        }
+        btn.onclick = async () => {
+          await navigator.clipboard.writeText(el.textContent).catch(() => {})
+          btn.textContent = '✓'
+          setTimeout(() => (btn.textContent = 'copy'), 1400)
+        }
+      }
+      wire('inst-tabs', 'inst-code', 'inst-copy', INST)
+      wire('dock-tabs', 'dock-code', 'dock-copy', DOCK)
+      wire(null, 'hub-code', 'hub-copy', null)
+    </script>
   </body>
 </html>

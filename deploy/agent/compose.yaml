@@ -1,9 +1,8 @@
-# agent — one-command nektar agent on the published image.
-#   cp .env.example .env   → edit the marked values
-#   docker compose -f deploy/agent/compose.yaml --env-file deploy/agent/.env up -d
-# Everything the agent publishes/accepts is signed + SPV-verified peer-side —
-# the hosts it talks to are untrusted plumbing, so this compose needs no
-# private infrastructure to join the market.
+# agent — single-container nektar agent on the published GHCR image.
+#   docker compose -f deploy/agent/compose.yaml up -d
+# Everything rides inside one container (including the embedded restate-server).
+# On testnet, secrets auto-generate into /data if omitted. Pass --profile tls
+# with NEKTAR_DOMAIN=agent.example.com for automatic Let's Encrypt HTTPS.
 name: nektar-agent
 services:
   agent:
@@ -12,16 +11,16 @@ services:
     image: ghcr.io/kryptokrates/nektar:${NEKTAR_IMAGE_TAG:-latest}${NEKTAR_IMAGE_DIGEST:+@${NEKTAR_IMAGE_DIGEST}}
     restart: unless-stopped
     ports:
-      # HTTP + MCP surface. /v1/lane (peer push), /.well-known/nektar, /v1/pack
-      # and /v1/verify are public by design; everything else needs the bearer.
-      - '${NEKTAR_HTTP_PORT:-8080}:8080'
+      # HTTP + MCP + L0 Proxy surface. Loopback by default unless TLS/public bind chosen.
+      - '${NEKTAR_HTTP_BIND:-0.0.0.0}:${NEKTAR_HTTP_PORT:-8080}:8080'
     environment:
       NEKTAR_NETWORK: ${NEKTAR_NETWORK:-testnet}
       NEKTAR_DATA_DIR: /data
       NEKTAR_HTTP_PORT: '8080'
       NEKTAR_HTTP_HOST: '0.0.0.0'
-      NEKTAR_KEY_PASSPHRASE: ${NEKTAR_KEY_PASSPHRASE:?set NEKTAR_KEY_PASSPHRASE in .env}
-      NEKTAR_HTTP_TOKEN: ${NEKTAR_HTTP_TOKEN:?set NEKTAR_HTTP_TOKEN in .env}
+      # optional on testnet (auto-generated into /data mode 0600 if blank); required on main
+      NEKTAR_KEY_PASSPHRASE: ${NEKTAR_KEY_PASSPHRASE:-}
+      NEKTAR_HTTP_TOKEN: ${NEKTAR_HTTP_TOKEN:-}
       NEKTAR_MODEL_ID: ${NEKTAR_MODEL_ID:-unspecified}
       NEKTAR_AUTOMATION: ${NEKTAR_AUTOMATION:-1}
       NEKTAR_UNATTENDED: ${NEKTAR_UNATTENDED:-}
@@ -37,10 +36,6 @@ services:
       NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:-}
       NEKTAR_ANNOUNCE: ${NEKTAR_ANNOUNCE:-}
       NEKTAR_SEED_DOMAINS: ${NEKTAR_SEED_DOMAINS-*}
-      # an anchored (ancestry-proven, own proof in flight) tree may serve
-      # every lane — a cold agent's first carrier rides the mint broadcast,
-      # not a block wait. Hosts without the anchored-admission patch refuse
-      # the carrier; the lane then waits for the proof like before.
       NEKTAR_ANCHORED_LANES: ${NEKTAR_ANCHORED_LANES:-all}
       NEKTAR_WATCH_URLS: ${NEKTAR_WATCH_URLS:-}
       NEKTAR_WATCH_PUBLIC: ${NEKTAR_WATCH_PUBLIC:-}
@@ -57,28 +52,52 @@ services:
       NEKTAR_MAINNET_CONFIRM: ${NEKTAR_MAINNET_CONFIRM:-}
       NEKTAR_PAYMENTS: ${NEKTAR_PAYMENTS:-}
       NEKTAR_PAID_DISCLOSURE: ${NEKTAR_PAID_DISCLOSURE:-}
-      # the durable executor is required infrastructure — without a sidecar
-      # the node refuses to boot. Service-name URI: the loopback class of
-      # container/DNS traps cannot exist on a shared compose network.
-      NEKTAR_RESTATE_URL: http://restate:8080
-      NEKTAR_RESTATE_ADMIN: http://restate:9070
-      NEKTAR_RESTATE_ENDPOINT_URI: http://agent:9080
+      # bundled restate-server starts automatically inside this container; set
+      # NEKTAR_RESTATE_URL (or --profile external-restate) only for external clusters
+      NEKTAR_RESTATE_URL: ${NEKTAR_RESTATE_URL:-}
+      NEKTAR_RESTATE_ADMIN: ${NEKTAR_RESTATE_ADMIN:-}
+      NEKTAR_RESTATE_ENDPOINT_URI: ${NEKTAR_RESTATE_ENDPOINT_URI:-}
       NEKTAR_RESTATE_IDENTITY_KEYS: ${NEKTAR_RESTATE_IDENTITY_KEYS:-}
     volumes:
-      # durable identity + wallet + journals — this volume IS the agent
+      # durable identity + wallet + journals + embedded restate-data — this volume IS the agent
       - agent-data:/data
-    depends_on:
-      restate:
-        condition: service_started
-  # the agent's private executor plane — co-located, never published.
-  # Its journals are the second durable store beside the data volume.
+  # optional external Restate sidecar (opt-in via `--profile external-restate`)
   restate:
+    profiles: [external-restate]
     image: docker.restate.dev/restatedev/restate:1.8.1
     restart: unless-stopped
     environment:
       RESTATE_NODE_NAME: nektar
     volumes:
       - restate-data:/restate-data
+  # optional Auto-TLS reverse proxy (opt-in via `--profile tls` + NEKTAR_DOMAIN)
+  caddy:
+    profiles: [tls]
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      NEKTAR_DOMAIN: ${NEKTAR_DOMAIN:-:80}
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - agent
+configs:
+  caddyfile:
+    content: |
+      {$NEKTAR_DOMAIN::80} {
+        reverse_proxy agent:8080 {
+          flush_interval -1
+        }
+      }
 volumes:
   agent-data:
   restate-data:
+  caddy-data:
+  caddy-config:

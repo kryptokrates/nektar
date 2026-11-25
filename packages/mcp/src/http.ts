@@ -10,208 +10,18 @@ import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { MerklePath } from '@bsv/sdk'
 import type { NektarMemory } from './memory.js'
-import { TOOLS, visibleTools, callTool } from './server.js'
+import { visibleTools, callTool } from './server.js'
+import { OPENAPI } from './openapi.js'
 import { badgeSvg, cardPage, dashboardState, dashboardFile, verifyPage, safeHost } from './pages.js'
+import { createAuthManager, type AuthManager } from './auth.js'
+import { buildAgentCard, handleA2aRoute } from './a2a.js'
+import { handleProxyRoute } from './proxy.js'
+import { handleOnboardRoute } from './onboard.js'
+import { handleAdaptersRoute } from './adapters-export.js'
+
+export { OPENAPI }
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))
-
-export const OPENAPI = {
-  openapi: '3.1.0',
-  info: {
-    title: 'nektar API',
-    version: '1.0.0',
-    description: 'Verifiable encrypted agent memory on BSV. Proofs establish inclusion, integrity and existence-by-time — never truth.'
-  },
-  paths: {
-    '/mcp': {
-      post: {
-        summary: 'MCP Streamable HTTP (JSON-RPC; initialize creates a session, mcp-session-id header thereafter)',
-        responses: { 200: { description: 'JSON or SSE stream' } }
-      },
-      get: { summary: 'MCP server-to-client SSE stream for a session', responses: { 200: { description: 'SSE' } } },
-      delete: { summary: 'end an MCP session', responses: { 200: { description: 'closed' } } }
-    },
-    '/v1/health': { get: { summary: 'liveness', responses: { 200: { description: 'ok' } } } },
-    '/v1/hosts': {
-      post: {
-        summary:
-          "join a market host — {url} normalizes to an origin, GETs its /.well-known/nektar as the handshake, persists to hosts.json and hot-adds the running lanes (au.addHost). Returns the host's advertised peers so one paste can bootstrap the whole join. Operator-gated.",
-        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } } },
-        responses: { 200: { description: 'joined host + discovered peers' }, 400: { description: 'bad url' }, 502: { description: 'no nektar there' } }
-      },
-      delete: {
-        summary:
-          'leave a market host — ?url= drops a saved join or blocks an env/seed host persistently (hosts.json), and splices the running lanes (au.removeHost). Operator-gated.',
-        parameters: [{ name: 'url', in: 'query', required: true, schema: { type: 'string' } }],
-        responses: { 200: { description: 'removed' }, 400: { description: 'url required' }, 404: { description: 'not a market host' } }
-      }
-    },
-    '/v1/faucet': {
-      post: {
-        summary:
-          'self-serve testnet drip — {address} → {txid, sats}. Only when the operator opts in (NEKTAR_FAUCET=1, never on main); one drip per address, daily cap — see faucet-drips.json.',
-        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { address: { type: 'string' } }, required: ['address'] } } } },
-        responses: {
-          200: { description: 'dripped' },
-          400: { description: 'bad/missing address' },
-          404: { description: 'faucet not enabled' },
-          429: { description: 'address already dripped or daily cap' }
-        }
-      }
-    },
-    '/v1/openapi.json': { get: { summary: 'this document', responses: { 200: { description: 'OpenAPI 3.1' } } } },
-    '/v1/metrics': { get: { summary: 'Prometheus metrics (text/plain 0.0.4)', responses: { 200: { description: 'metrics' } } } },
-    '/v1/tools': { get: { summary: 'list tools (same as MCP tools/list)', responses: { 200: { description: 'tool schemas' } } } },
-    '/v1/tools/{name}': {
-      post: {
-        summary: 'call a tool (same semantics as MCP tools/call); confidential reads need identity + clearance in the body',
-        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string', enum: TOOLS.map((t) => t.name) } }],
-        requestBody: { content: { 'application/json': { schema: { type: 'object' } } } },
-        responses: { 200: { description: 'tool result' }, 400: { description: 'tool error with reason' } }
-      }
-    },
-    '/v1/proof/{shard}/{seq}': {
-      get: {
-        summary: 'public proof bundle + verification result for one record',
-        parameters: [
-          { name: 'shard', in: 'path', required: true, schema: { type: 'string' } },
-          { name: 'seq', in: 'path', required: true, schema: { type: 'integer' } }
-        ],
-        responses: { 200: { description: 'bundle + result' } }
-      }
-    },
-    '/v1/zkproof/{commit}': {
-      get: {
-        summary: 'a committed ZK proof artifact by sha256 — private-cite proofs are public (they reveal nothing) so verifiers re-run them',
-        parameters: [{ name: 'commit', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { 200: { description: 'proof bytes' }, 404: { description: 'unknown/mismatched commit' } }
-      }
-    },
-    '/v1/checkpoint/{shard}': {
-      get: {
-        summary: 'latest signed checkpoint of the shard (LOG-007)',
-        parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { 200: { description: 'checkpoint + log pubkey' }, 404: { description: 'no anchor yet' } }
-      }
-    },
-    '/.well-known/nektar': {
-      get: {
-        summary: 'capability/pack discovery doc — verify base + offerable public shards (NEKTAR_PACK_SHARE=0 disables)',
-        responses: { 200: { description: 'discovery doc' }, 404: { description: 'pack sharing disabled' } }
-      }
-    },
-    '/v1/pack/{shard}': {
-      get: {
-        summary: 'serve a public shard as a portable pack (records + proof bundles) — importShard re-verifies every bundle; private/gated shards refuse',
-        parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { 200: { description: 'ShardPack JSON' }, 403: { description: 'private or level-gated' }, 404: { description: 'unknown/disabled' } }
-      }
-    },
-    '/v1/verify': {
-      get: {
-        summary:
-          'scan a receipt token — traffic-light checks that the answer receipt exists, re-hashes, is provenance-signed + anchored, and its cited fragments are anchored. JSON by default; Accept: text/html (or ?format=html) returns a check page with a QR.',
-        parameters: [{ name: 'r', in: 'query', required: true, schema: { type: 'string', description: 'receipt token nektarr1.<base64url hash>' } }],
-        responses: { 200: { description: 'check list + ok flag' }, 400: { description: 'missing/malformed token' } }
-      }
-    },
-    '/v1/badge': {
-      get: {
-        summary: 'verification label as an SVG badge — clients embed it so the verdict is always visible (green verified / red failed / grey unknown)',
-        parameters: [{ name: 'r', in: 'query', required: true, schema: { type: 'string', description: 'receipt token nektarr1.<base64url hash>' } }],
-        responses: { 200: { description: 'image/svg+xml badge' }, 400: { description: 'missing/malformed token' } }
-      }
-    },
-    '/.well-known/x402': {
-      get: {
-        summary: 'payment catalog — priced tools, scheme and network (x402 discovery doc)',
-        responses: { 200: { description: 'catalog' }, 404: { description: 'payments disabled' } }
-      }
-    },
-    '/.well-known/agent.json': {
-      get: {
-        summary: 'agent card — MCP/REST endpoints, auth requirement, capability + market flags (the join surface a foreign agent reads first)',
-        responses: { 200: { description: 'agent card' } }
-      }
-    },
-    '/card': {
-      get: {
-        summary:
-          'the agent card as a human page — public storefront rendering the well-known doc (shards for sale, proof counts, verify + join paths). The dashboard share button produces this URL (NEKTAR_PACK_SHARE=0 disables)',
-        responses: { 200: { description: 'text/html agent card' }, 404: { description: 'pack sharing disabled' } }
-      }
-    },
-    '/': {
-      get: {
-        summary: 'operator audit surface — the compiled Svelte app shell (dist/dashboard/index.html). Token-gated (non-public route).',
-        responses: { 200: { description: 'text/html dashboard' } }
-      }
-    },
-    '/state': {
-      get: {
-        summary: 'the JSON the dashboard renders — loop stage, treasury, receipts, market, network hosts + lane stock, automation queue',
-        responses: { 200: { description: 'dashboard state JSON' } }
-      }
-    },
-    '/assets/{file}': {
-      get: {
-        summary: 'the compiled dashboard bundle files (hashed, long-cached)',
-        parameters: [{ name: 'file', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { 200: { description: 'asset bytes' }, 404: { description: 'no such asset' } }
-      }
-    },
-    '/v1/pay/quote': {
-      get: {
-        summary:
-          'payment invoice for a paid tool (NEKTAR_PAYMENTS=1) — 402 + PAYMENT-REQUIRED header carrying an x402 v2 PaymentRequired; pay the invoice with a signed tx then retry the tool with payment:{invoiceId,transaction}',
-        parameters: [{ name: 'tool', in: 'query', required: true, schema: { type: 'string', enum: ['anchor', 'groundedAnswer', 'commitReceipt'] } }],
-        responses: { 402: { description: 'PaymentRequired invoice' }, 404: { description: 'payments disabled' } }
-      }
-    },
-    '/v1/automation/health': {
-      get: {
-        summary: 'automation preflight verdict — public surface is {pass} only; the full report sits behind the bearer token at /v1/automation/preflight',
-        responses: { 200: { description: '{pass: boolean}' }, 404: { description: 'automation off' } }
-      }
-    },
-    '/v1/automation/preflight': {
-      get: {
-        summary: 'full preflight report (token-gated — names hosts, reserves, policy state)',
-        responses: { 200: { description: '{pass, at, checks[]}' }, 404: { description: 'automation off' } }
-      }
-    },
-    '/v1/automation/state': {
-      get: {
-        summary: 'operation + pending-approval snapshot (token-gated)',
-        responses: { 200: { description: '{operations[], approvals[]}' }, 404: { description: 'automation off' } }
-      }
-    },
-    '/v1/automation/approvals/{id}': {
-      post: {
-        summary: 'decide a pending approval — operator-only (NEKTAR_OPERATOR_TOKEN, not the agent bearer); loopback origin only',
-        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: {
-          200: { description: 'decision recorded' },
-          400: { description: 'bad or stale approval id' },
-          403: { description: 'operator token required / bad origin' },
-          404: { description: 'automation off' }
-        }
-      }
-    },
-    '/v1/wallet': {
-      get: {
-        summary: 'fee wallet: address, balance, spend caps, runway (main only)',
-        responses: { 200: { description: 'wallet ops' }, 404: { description: 'ops not enabled' } }
-      }
-    },
-    '/v1/costs': {
-      get: {
-        summary: 'broadcast cost ledger entries (main only)',
-        responses: { 200: { description: 'cost records' }, 404: { description: 'ops not enabled' } }
-      }
-    }
-  }
-} as const
 
 /** One broadcaster tx-status payload → memory side effects. Shared by the
  *  inbound webhook route and the outbound-only /events SSE reader (runtime):
@@ -309,8 +119,10 @@ async function body(req: IncomingMessage): Promise<unknown> {
 
 export function createHttpApi(
   mem: NektarMemory,
-  ops?: { wallet?: () => Promise<unknown>; costs?: () => unknown; importFunding?: (txid: string) => Promise<unknown> }
+  ops?: { wallet?: () => Promise<unknown>; costs?: () => unknown; importFunding?: (txid: string) => Promise<unknown> },
+  httpOpts?: { auth?: AuthManager; fetchImpl?: typeof fetch; adaptersRoot?: string }
 ): Server {
+  const auth = httpOpts?.auth ?? createAuthManager()
   // MCP Streamable HTTP: one transport + McpServer per session (mcp-session-id).
   // Idle sessions are reaped — a session survives a dropped socket by design,
   // so nothing else bounds the map.
@@ -383,17 +195,30 @@ export function createHttpApi(
         }
         const url = new URL(req.url ?? '/', 'http://x')
         const p = url.pathname.split('/').filter(Boolean)
-        // NEKTAR_HTTP_TOKEN: when set, everything except the public read-only
-        // endpoints (/v1/health, /v1/verify — a QR scan can't send headers, and
-        // verification output is read-only anyway — plus /.well-known/x402,
-        // which is a discovery doc agents must find unauthenticated) requires a
-        // bearer token — the gate that makes a public bind safe. Unset =
-        // localhost-trusted behaviour (the default bind is 127.0.0.1 anyway).
-        const tok = nektarEnv('NEKTAR_HTTP_TOKEN')
+        const readJsonBody = () => body(req)
+        try {
+          if (await auth.handleRoute(req, res, url, readJsonBody)) return
+          if (handleAdaptersRoute(req, res, url, httpOpts?.adaptersRoot)) return
+        } catch (e) {
+          if (!res.headersSent) send(400, { error: (e as Error).message })
+          return
+        }
+        const st = auth.authState(req)
+        // L0 LLM Memory Proxy manages its own auth so callers can pass
+        // X-Nektar-Token or composite `nkt:<nektarToken>:<providerKey>` keys.
+        if (url.pathname.startsWith('/v1/proxy/')) {
+          try {
+            await handleProxyRoute(req, res, url, readJsonBody, { mem, alreadyAuthed: st.authed, fetchImpl: httpOpts?.fetchImpl })
+          } catch (e) {
+            if (!res.headersSent) send(500, { error: (e as Error).message })
+          }
+          return
+        }
         const publicPath =
+          url.pathname === '/' ||
+          url.pathname === '/dashboard' ||
+          url.pathname.startsWith('/assets/') ||
           url.pathname === '/v1/health' ||
-          // bare aliases — container/orchestrator probes hit /health and
-          // /healthz verbatim; liveness is a read-only signal either way
           url.pathname === '/health' ||
           url.pathname === '/healthz' ||
           url.pathname === '/v1/automation/health' ||
@@ -408,34 +233,17 @@ export function createHttpApi(
           url.pathname.startsWith('/v1/zkproof/') ||
           url.pathname === '/v1/broadcaster-callback' ||
           url.pathname === '/v1/arc-callback' ||
-          // counterparty push: the carrier's own signature/encryption is the
-          // auth — a peer can't hold our bearer; verification is identical to
-          // a host read, so no trust is added
           url.pathname === '/v1/lane' ||
-          // self-serve testnet drip — unauthenticated by design; the route
-          // itself refuses unless NEKTAR_FAUCET=1 and never on main
           url.pathname === '/v1/faucet' ||
-          // x402 invoice discovery — a paying agent can't hold our bearer;
-          // the quote is price+invoice data, the same disclosure class as
-          // /.well-known/x402
           url.pathname === '/v1/pay/quote'
-        const operatorApproval =
-          url.pathname.startsWith('/v1/automation/approvals/') &&
-          nektarEnv('NEKTAR_OPERATOR_TOKEN') &&
-          req.headers.authorization === `Bearer ${nektarEnv('NEKTAR_OPERATOR_TOKEN')}`
-        // enforcement, not just documentation: "localhost-trusted" means the
-        // peer address actually IS loopback — a no-token server still answers
-        // tool/write routes for local callers only. Non-loopback binds must
-        // carry a token (bin.ts refuses to start without one unless an
-        // explicit insecure flag is passed)
-        const authed = tok !== undefined && req.headers.authorization === `Bearer ${tok}`
-        const peer = req.socket.remoteAddress ?? ''
-        const loopback = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1'
-        if (!publicPath && !operatorApproval && !authed && !(tok === undefined && loopback)) {
+        const authed = st.authed
+        if (!publicPath && !authed) {
           return send(401, { error: 'unauthorized' })
         }
         try {
           if (url.pathname === '/mcp') return await mcp(req, res, authed)
+          if (url.pathname === '/a2a') return await handleA2aRoute(req, res, readJsonBody, mem, ops, authed)
+          if (await handleOnboardRoute(req, res, url, readJsonBody, { mem, ops, fetchImpl: httpOpts?.fetchImpl, isOperator: () => st.operator })) return
           if (req.method === 'GET' && (url.pathname === '/v1/health' || url.pathname === '/health' || url.pathname === '/healthz'))
             return send(200, { ok: true })
           if (req.method === 'POST' && url.pathname === '/v1/lane') {
@@ -555,7 +363,7 @@ export function createHttpApi(
             if (!au) return send(404, { error: 'automation not enabled' })
             const operator = nektarEnv('NEKTAR_OPERATOR_TOKEN')
             if (!operator) return send(403, { error: 'operator approvals disabled — set NEKTAR_OPERATOR_TOKEN' })
-            if (req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required (the agent bearer cannot approve)' })
+            if (!st.operator) return send(403, { error: 'operator token required (the agent bearer cannot approve)' })
             const origin = req.headers.origin
             if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return send(403, { error: 'bad origin' })
             const decisionBody = (await body(req).catch(() => ({}))) as { approve?: boolean }
@@ -576,11 +384,8 @@ export function createHttpApi(
           // running lanes via au.addHost — no restart, no env edit.
           if (req.method === 'POST' && url.pathname === '/v1/hosts') {
             const operator = nektarEnv('NEKTAR_OPERATOR_TOKEN')
-            // hard gate like the approvals route: an unset token must REFUSE,
-            // not silently open the mutation to any agent-bearer holder —
-            // blocked/added hosts persist across restarts
             if (!operator) return send(403, { error: 'host join/leave disabled — set NEKTAR_OPERATOR_TOKEN' })
-            if (req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required' })
+            if (!st.operator) return send(403, { error: 'operator token required' })
             const bu = ((await body(req).catch(() => ({}))) as { url?: unknown }).url
             const u0 = (typeof bu === 'string' ? bu : '').trim()
             if (u0 === '') return send(400, { error: 'url required' })
@@ -616,7 +421,7 @@ export function createHttpApi(
           if (req.method === 'DELETE' && url.pathname === '/v1/hosts') {
             const operator = nektarEnv('NEKTAR_OPERATOR_TOKEN')
             if (!operator) return send(403, { error: 'host join/leave disabled — set NEKTAR_OPERATOR_TOKEN' })
-            if (req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required' })
+            if (!st.operator) return send(403, { error: 'operator token required' })
             const u = (url.searchParams.get('url') ?? '').trim().replace(/\/+$/, '')
             if (u === '') return send(400, { error: 'url required' })
             if (!marketHosts().includes(u)) return send(404, { error: `${u} is not a market host` })
@@ -777,40 +582,8 @@ export function createHttpApi(
               }))
             })
           }
-          // pack sharing: any visitor may fetch a public shard's pack + discover
-          // what's offered — the viral cold-start edge (importShard re-verifies
-          // every bundle, so serving adds zero trust). NEKTAR_PACK_SHARE=0 opts out.
-          // the agent card — what a foreign agent fetches to learn how to
-          // call this instance: endpoints, auth requirement, capability
-          // flags. Read-only discovery, safe unauthenticated.
           if (req.method === 'GET' && url.pathname === '/.well-known/agent.json') {
-            const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${req.headers.host ?? 'localhost'}`
-            return send(200, {
-              name: 'nektar',
-              version: '0.2.0',
-              description: 'Verifiable, encrypted agent memory anchored on BSV — recall, proofs, and an autonomous sats marketplace over MCP',
-              network: nektarEnv('NEKTAR_NETWORK') ?? 'regtest',
-              endpoints: {
-                mcp: `${base}/mcp`,
-                tools: `${base}/v1/tools`,
-                call: `${base}/v1/tools/{name}`,
-                openapi: `${base}/v1/openapi.json`,
-                health: `${base}/v1/health`,
-                discovery: `${base}/.well-known/nektar`
-              },
-              authentication: { scheme: 'bearer', header: 'Authorization', required: nektarEnv('NEKTAR_HTTP_TOKEN') !== undefined },
-              capabilities: {
-                memory: true,
-                receipts: true,
-                market: mem.automation != null,
-                marketHosts: marketHosts()
-              },
-              join: {
-                mcp: 'any streamable-HTTP MCP client: url <mcp>, header Authorization: Bearer <token>',
-                rest: 'GET /v1/tools then POST /v1/tools/{name} with a JSON body',
-                doc: 'docs/JOIN-AGENT.md'
-              }
-            })
+            return send(200, buildAgentCard(mem, req))
           }
           if (req.method === 'GET' && url.pathname === '/.well-known/nektar') {
             if (/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })

@@ -1,0 +1,411 @@
+#!/usr/bin/env sh
+# nektar — thin GHCR-backed host CLI launcher (macOS & Linux).
+# Zero Node.js/pnpm/repo required: runs one shared ghcr.io/kryptokrates/nektar
+# container ("one brain") and docks every local AI app on the host ("many mouths").
+set -eu
+
+IMAGE="${NEKTAR_IMAGE:-ghcr.io/kryptokrates/nektar:${NEKTAR_IMAGE_TAG:-latest}}"
+CONTAINER="${NEKTAR_CONTAINER_NAME:-nektar}"
+VOLUME="${NEKTAR_VOLUME:-nektar-data}"
+PORT="${NEKTAR_HTTP_PORT:-18420}"
+NETWORK="${NEKTAR_NETWORK:-testnet}"
+STATE_DIR="${NEKTAR_HOST_DIR:-$HOME/.nektar}"
+DAEMON_JSON="$STATE_DIR/daemon.json"
+BASE_URL="http://127.0.0.1:$PORT"
+RAW_BASE="https://raw.githubusercontent.com/kryptokrates/nektar/master"
+
+usage() {
+  cat <<EOF
+nektar — verifiable AI agent memory & knowledge market (GHCR launcher)
+
+Usage:
+  nektar up                     Start (or adopt) your local nektar container on :$PORT
+  nektar open                   Open the Dashboard in your browser (authenticated)
+  nektar dock [auto|<app>|proxy] Dock Claude, Cursor, Hermes, OpenClaw, Codex, VS Code, or L0 Proxy
+  nektar status                 Check daemon health, shards, balance & next hints
+  nektar logs [-f]              Show container logs
+  nektar update                 Pull latest GHCR image and restart (keeps all data)
+  nektar down                   Stop the container (keeps nektar-data volume)
+  nektar policy ...             Approve/list/revoke trading policies inside the container
+  nektar hub up|status|down|template  Deploy or manage a 1-click public Hub Node
+  nektar exec <args...>         Run any nektar subcommand inside the container
+EOF
+}
+
+need_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    printf 'nektar: docker is required — install Docker Desktop / OrbStack / Docker Engine first.\n' >&2
+    exit 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    printf 'nektar: docker daemon is not running — start Docker and retry.\n' >&2
+    exit 1
+  fi
+}
+
+container_running() {
+  docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER"
+}
+
+container_exists() {
+  docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER"
+}
+
+sync_daemon_json() {
+  mkdir -p "$STATE_DIR"
+  tok="$(docker exec "$CONTAINER" cat /data/http-token 2>/dev/null | tr -d '\r\n' || true)"
+  op_tok="$(docker exec "$CONTAINER" cat /data/operator-token 2>/dev/null | tr -d '\r\n' || true)"
+  umask 077
+  if [ -n "$tok" ]; then
+    printf '{\n  "url": "%s",\n  "network": "%s",\n  "token": "%s",\n  "operatorToken": "%s",\n  "container": "%s"\n}\n' \
+      "$BASE_URL" "$NETWORK" "$tok" "$op_tok" "$CONTAINER" >"$DAEMON_JSON"
+  else
+    printf '{\n  "url": "%s",\n  "network": "%s",\n  "container": "%s"\n}\n' \
+      "$BASE_URL" "$NETWORK" "$CONTAINER" >"$DAEMON_JSON"
+  fi
+  chmod 600 "$DAEMON_JSON" 2>/dev/null || true
+}
+
+read_token() {
+  if [ -n "${NEKTAR_HTTP_TOKEN:-}" ]; then
+    printf '%s' "$NEKTAR_HTTP_TOKEN"
+    return
+  fi
+  if [ -f "$DAEMON_JSON" ]; then
+    sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DAEMON_JSON" | head -n1
+  fi
+}
+
+cmd_up() {
+  need_docker
+  if container_running; then
+    sync_daemon_json
+    printf 'nektar: already running at %s\n' "$BASE_URL"
+    return 0
+  fi
+  if container_exists; then
+    docker start "$CONTAINER" >/dev/null
+  else
+    printf 'nektar: pulling %s …\n' "$IMAGE"
+    docker pull "$IMAGE" >/dev/null
+    docker run -d \
+      --name "$CONTAINER" \
+      --restart unless-stopped \
+      -p "127.0.0.1:${PORT}:18420" \
+      -v "${VOLUME}:/data" \
+      -e "NEKTAR_NETWORK=${NETWORK}" \
+      -e "NEKTAR_AUTOMATION=${NEKTAR_AUTOMATION:-0}" \
+      -e "NEKTAR_MODEL_ID=${NEKTAR_MODEL_ID:-unspecified}" \
+      "$IMAGE" serve >/dev/null
+  fi
+  printf 'nektar: waiting for ready '
+  i=0
+  while [ "$i" -lt 45 ]; do
+    if curl -fsS --max-time 2 "${BASE_URL}/v1/health" >/dev/null 2>&1; then
+      printf ' ok!\n'
+      sync_daemon_json
+      docker logs --tail 25 "$CONTAINER" 2>&1 | sed -n '/╭─ nektar ready/,/╰─/p' || true
+      return 0
+    fi
+    printf '.'
+    sleep 1
+    i=$((i + 1))
+  done
+  printf '\nnektar: container did not become healthy within 45s — check: nektar logs\n' >&2
+  exit 1
+}
+
+cmd_open() {
+  cmd_up >/dev/null 2>&1 || true
+  pair_url="$(docker logs --tail 40 "$CONTAINER" 2>&1 | grep -oE "http://127\\.0\\.0\\.1:[0-9]+/pair\\?code=[a-z0-9-]+" | tail -n1 || true)"
+  target="${pair_url:-$BASE_URL}"
+  if command -v open >/dev/null 2>&1; then
+    open "$target"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$target" >/dev/null 2>&1 &
+  else
+    printf 'Open in browser: %s\n' "$target"
+  fi
+}
+
+cmd_status() {
+  tok="$(read_token)"
+  if curl -fsS --max-time 2 "${BASE_URL}/v1/health" >/dev/null 2>&1; then
+    printf 'nektar status: UP at %s (%s)\n' "$BASE_URL" "$NETWORK"
+    if [ -n "$tok" ]; then
+      curl -fsS --max-time 3 -X POST "${BASE_URL}/v1/tools/doctor" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $tok" \
+        -d '{}' 2>/dev/null || true
+      printf '\n'
+    fi
+  else
+    printf 'nektar status: STOPPED — run `nektar up` to start\n'
+    exit 1
+  fi
+}
+
+cmd_dock() {
+  if ! curl -fsS --max-time 2 "${BASE_URL}/v1/health" >/dev/null 2>&1; then
+    cmd_up
+  fi
+  tok="$(read_token)"
+  if command -v python3 >/dev/null 2>&1; then
+    NEKTAR_DOCK_BASE="$BASE_URL" NEKTAR_DOCK_TOKEN="$tok" python3 - "$@" <<'PY'
+import json, os, pathlib, re, sys, urllib.request
+
+base = os.environ["NEKTAR_DOCK_BASE"].rstrip("/")
+mcp_url = base + "/mcp"
+tok = os.environ.get("NEKTAR_DOCK_TOKEN", "").strip()
+args = sys.argv[1:]
+uninstall = "--uninstall" in args
+dry = "--dry" in args
+targets = [a.lower() for a in args if not a.startswith("-")]
+home = pathlib.Path.home()
+cwd = pathlib.Path.cwd()
+
+def fetch_json(path, payload=None):
+    hdr = {"Content-Type": "application/json"}
+    if tok:
+        hdr["Authorization"] = f"Bearer {tok}"
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(base + path, data=data, headers=hdr, method="POST" if payload is not None else "GET")
+    with urllib.request.urlopen(req, timeout=4) as r:
+        return json.loads(r.read().decode())
+
+def fetch_text(path):
+    req = urllib.request.Request(base + path)
+    with urllib.request.urlopen(req, timeout=4) as r:
+        return r.read().decode()
+
+def write_file(p, text, mode=None):
+    if dry:
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    if mode is not None:
+        os.chmod(p, mode)
+
+def install_http_hooks():
+    hdir = home / ".nektar" / "hooks"
+    auth = f'-H "Authorization: Bearer {tok}"' if tok else ""
+    ss = hdir / "session-start.sh"
+    pf = hdir / "prefetch.sh"
+    vr = hdir / "verify-receipt.sh"
+    write_file(ss, f'#!/bin/sh\ncurl -fsS --max-time 2 -X POST "{base}/v1/tools/doctor" -H "Content-Type: application/json" {auth} -d "{{}}" >/dev/null 2>&1 || exit 0\nprintf "nektar ready ({base}) — recall first, route verifiable answers through groundedAnswer; keep the receipt footer.\\n"\n', 0o755)
+    write_file(pf, f'#!/bin/sh\nresp="$(curl -fsS --max-time 2 -X POST "{base}/v1/tools/recall" -H "Content-Type: application/json" {auth} -d \'{{"limit":5}}\' 2>/dev/null)" || exit 0\ncase "$resp" in *\'"text"\'*) printf "[nektar verified memory — call recall/groundedAnswer; recorded != true]\\n" ;; esac\n', 0o755)
+    write_file(vr, f'#!/bin/sh\nif [ "$1" = "--codex" ]; then raw="$2"; codex=1; else raw="$(cat 2>/dev/null || true)"; codex=0; fi\ntok="$(printf "%s" "$raw" | grep -oE "nektarr1\\.[A-Za-z0-9_-]{{40,}}" | head -n1)"\n[ -n "$tok" ] || exit 0\nver="$(curl -fsS --max-time 3 "{base}/v1/verify?r=$tok" 2>/dev/null)" || exit 0\ncase "$ver" in *\'"ok":true\'*) exit 0 ;; esac\n[ "$codex" = "1" ] && exit 0\nprintf \'{{"decision":"block","reason":"nektar receipt verification FAILED for %s"}}\\n\' "$tok"\n', 0o755)
+    return ss, pf, vr
+
+def unpack_bundle(name, dest):
+    try:
+        b = fetch_json(f"/v1/adapters/bundle/{name}")
+        for f in b.get("files", []):
+            rel = pathlib.PurePosixPath(f["path"])
+            if rel.is_absolute() or ".." in rel.parts:
+                continue
+            write_file(dest / pathlib.Path(*rel.parts), f["content"])
+        return True
+    except Exception:
+        return False
+
+def merge_json_mcp(path, root_key, entry):
+    cfg = {}
+    if path.exists():
+        try:
+            cfg = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    bag = cfg.setdefault(root_key, {})
+    if uninstall:
+        if "nektar" in bag:
+            del bag["nektar"]
+            write_file(path, json.dumps(cfg, indent=2) + "\n")
+            return True
+        return False
+    if "nektar" not in bag:
+        bag["nektar"] = entry
+        write_file(path, json.dumps(cfg, indent=2) + "\n")
+        return True
+    return False
+
+http_entry = {"url": mcp_url, **({"headers": {"Authorization": f"Bearer {tok}"}} if tok else {})}
+
+all_checks = {
+    "hermes": (home / ".hermes").exists() or (home / ".local/share/hermes").exists(),
+    "openclaw": (home / ".openclaw").exists(),
+    "claude": (home / ".claude").exists() or (cwd / ".claude").exists(),
+    "codex": (home / ".codex").exists(),
+    "cursor": (home / ".cursor").exists(),
+    "windsurf": (home / ".codeium/windsurf").exists(),
+    "vscode": (home / ".config/Code/User").exists() or (home / "Library/Application Support/Code/User").exists(),
+    "zed": (home / ".config/zed").exists(),
+    "opencode": (home / ".config/opencode").exists(),
+    "goose": (home / ".config/goose").exists(),
+    "gemini": (home / ".gemini").exists(),
+}
+
+selected = [k for k, ok in all_checks.items() if ok] if (not targets or "auto" in targets) else targets
+print(f"nektar dock{' [dry]' if dry else ''}{' [uninstall]' if uninstall else ''} — endpoint {mcp_url}")
+
+if not selected:
+    print("  no local AI apps detected — use `nektar dock proxy` for any running agent or name a client (claude, cursor, hermes, openclaw, codex, vscode)")
+
+for c in selected:
+    if c == "proxy":
+        print("\nL0 Universal LLM Memory Proxy (zero code changes):")
+        print(f'  export OPENAI_BASE_URL="{base}/v1/proxy/openai/v1"')
+        if tok:
+            print(f'  export OPENAI_API_KEY="nkt:{tok}:$OPENAI_API_KEY"')
+        print(f'  export ANTHROPIC_BASE_URL="{base}/v1/proxy/anthropic"')
+        if tok:
+            print(f'  export ANTHROPIC_API_KEY="nkt:{tok}:$ANTHROPIC_API_KEY"')
+    elif c == "cursor":
+        ch = merge_json_mcp(home / ".cursor/mcp.json", "mcpServers", http_entry)
+        print(f"  [L1] Cursor ({'updated' if ch else 'unchanged'})")
+    elif c == "windsurf":
+        ch = merge_json_mcp(home / ".codeium/windsurf/mcp_config.json", "mcpServers", http_entry)
+        print(f"  [L1] Windsurf ({'updated' if ch else 'unchanged'})")
+    elif c == "vscode":
+        vdir = home / ("Library/Application Support/Code/User" if sys.platform == "darwin" else ".config/Code/User")
+        ch = merge_json_mcp(vdir / "mcp.json", "servers", {"type": "http", **http_entry})
+        print(f"  [L1] VS Code ({'updated' if ch else 'unchanged'})")
+    elif c == "zed":
+        ch = merge_json_mcp(home / ".config/zed/settings.json", "context_servers", http_entry)
+        print(f"  [L1] Zed ({'updated' if ch else 'unchanged'})")
+    elif c == "opencode":
+        ch = merge_json_mcp(home / ".config/opencode/opencode.json", "mcp", {"type": "remote", **http_entry})
+        print(f"  [L1] OpenCode ({'updated' if ch else 'unchanged'})")
+    elif c == "gemini":
+        ch = merge_json_mcp(home / ".gemini/settings.json", "mcpServers", {"httpUrl": mcp_url, **({"headers": {"Authorization": f"Bearer {tok}"}} if tok else {})})
+        print(f"  [L1] Gemini / Antigravity ({'updated' if ch else 'unchanged'})")
+    elif c == "claude":
+        ch = merge_json_mcp(cwd / ".mcp.json", "mcpServers", {"type": "http", **http_entry})
+        if not uninstall:
+            ss, pf, vr = install_http_hooks()
+            sp = cwd / ".claude/settings.json"
+            s = json.loads(sp.read_text()) if sp.exists() else {}
+            hooks = s.setdefault("hooks", {})
+            for ev, cmd in [("SessionStart", f'sh "{ss}"'), ("UserPromptSubmit", f'sh "{pf}"'), ("Stop", f'sh "{vr}"')]:
+                lst = hooks.setdefault(ev, [])
+                if not any(cmd in json.dumps(g) for g in lst):
+                    lst.append({"hooks": [{"type": "command", "command": cmd}]})
+                    ch = True
+            write_file(sp, json.dumps(s, indent=2) + "\n")
+            try:
+                write_file(cwd / ".claude/skills/nektar-memory/SKILL.md", fetch_text("/v1/adapters/skill.md"))
+            except Exception:
+                pass
+        print(f"  [L3] Claude Code ({'updated' if ch else 'unchanged'} — HTTP MCP + portable hooks + SKILL.md)")
+    elif c == "hermes":
+        hhome = home / ".hermes" if (home / ".hermes").exists() else home / ".local/share/hermes"
+        ok = unpack_bundle("hermes", hhome / "plugins/memory/nektar") if not uninstall else False
+        try:
+            if not uninstall:
+                write_file(hhome / "skills/nektar-memory/SKILL.md", fetch_text("/v1/adapters/skill.md"))
+        except Exception:
+            pass
+        print(f"  [L3] Hermes Agent ({'installed native MemoryProvider + SKILL.md' if ok else 'checked'})")
+    elif c == "openclaw":
+        ok = unpack_bundle("openclaw", home / ".openclaw/extensions/nektar") if not uninstall else False
+        cfg_p = home / ".openclaw/openclaw.json"
+        cfg = json.loads(cfg_p.read_text()) if cfg_p.exists() else {}
+        pl = cfg.setdefault("plugins", {})
+        entries = pl.setdefault("entries", {})
+        slots = pl.setdefault("slots", {})
+        if not uninstall:
+            entries["nektar-memory"] = {"enabled": True, "config": {"url": base, **({"token": tok} if tok else {}), "autoRecall": True, "verifyReceipts": True}}
+            if slots.get("memory") in (None, "memory-core"):
+                slots["memory"] = "nektar-memory"
+            write_file(cfg_p, json.dumps(cfg, indent=2) + "\n")
+        print(f"  [L3] OpenClaw ({'installed native memory slot' if ok else 'configured'})")
+    elif c == "codex":
+        tp = home / ".codex/config.toml"
+        txt = tp.read_text() if tp.exists() else ""
+        if not uninstall and "[mcp_servers.nektar]" not in txt:
+            _, _, vr = install_http_hooks()
+            hdr = f'http_headers = {{ "Authorization" = "Bearer {tok}" }}\n' if tok else ""
+            block = f'\n[mcp_servers.nektar]\nurl = "{mcp_url}"\n{hdr}'
+            if not re.search(r"^\s*notify\s*=", txt, re.M):
+                txt = f'notify = ["sh", "{vr}", "--codex"]\n\n' + txt
+            write_file(tp, txt.rstrip() + "\n" + block)
+            print("  [L2] Codex CLI (updated — HTTP MCP + portable notify hook)")
+        else:
+            print("  [L2] Codex CLI (unchanged)")
+    elif c == "goose":
+        gp = home / ".config/goose/config.yaml"
+        txt = gp.read_text() if gp.exists() else ""
+        if not uninstall and "nektar:" not in txt:
+            block = f'# nektar-dock-start\nextensions:\n  nektar:\n    name: nektar\n    type: streamable_http\n    uri: "{mcp_url}"\n    enabled: true\n# nektar-dock-end\n'
+            write_file(gp, (txt.rstrip() + "\n\n" if txt.strip() else "") + block)
+            print("  [L1] Goose (updated)")
+        else:
+            print("  [L1] Goose (unchanged)")
+
+if not uninstall:
+    try:
+        r = fetch_json("/v1/tools/recall", {})
+        print(f"\n  live probe: ✓ recall {{}} returned {len(r.get('items', []))} item(s) across {r.get('shards', [])}")
+    except Exception as e:
+        print(f"\n  live probe: · {e}")
+PY
+  else
+    printf 'nektar dock: python3 not found — point your MCP client to %s/mcp (Bearer token in %s)\n' "$BASE_URL" "$DAEMON_JSON"
+  fi
+}
+
+cmd_hub() {
+  sub="${1:-help}"
+  shift || true
+  case "$sub" in
+    up)
+      curl -fsSL "$RAW_BASE/deploy/hub/install.sh" | bash -s -- "$@"
+      ;;
+    down|status|logs|template|help|--help|-h)
+      need_docker
+      if container_running; then
+        docker exec "$CONTAINER" node dist/src/bin.js hub "$sub" "$@"
+      else
+        docker run --rm "$IMAGE" hub "$sub" "$@"
+      fi
+      ;;
+    *)
+      printf 'nektar hub: unknown subcommand "%s" (use up|status|logs|down|template)\n' "$sub" >&2
+      exit 2
+      ;;
+  esac
+}
+
+CMD="${1:-help}"
+shift || true
+case "$CMD" in
+  up|start|serve) cmd_up ;;
+  down|stop) need_docker; docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; printf 'nektar: stopped (volume %s preserved)\n' "$VOLUME" ;;
+  restart) need_docker; docker restart "$CONTAINER" >/dev/null; printf 'nektar: restarted\n' ;;
+  logs) need_docker; docker logs "$@" "$CONTAINER" ;;
+  open) cmd_open ;;
+  status) cmd_status ;;
+  update)
+    need_docker
+    printf 'nektar: pulling latest %s …\n' "$IMAGE"
+    docker pull "$IMAGE"
+    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    cmd_up
+    ;;
+  dock) cmd_dock "$@" ;;
+  hub) cmd_hub "$@" ;;
+  policy|doctor|check-mainnet)
+    need_docker
+    if container_running; then
+      docker exec -i "$CONTAINER" node dist/src/bin.js "$CMD" "$@"
+    else
+      docker run --rm -i -v "${VOLUME}:/data" -e "NEKTAR_NETWORK=${NETWORK}" "$IMAGE" "$CMD" "$@"
+    fi
+    ;;
+  exec)
+    need_docker
+    docker exec -i "$CONTAINER" node dist/src/bin.js "$@"
+    ;;
+  -h|--help|help) usage ;;
+  *) printf 'nektar: unknown command "%s"\n\n' "$CMD" >&2; usage >&2; exit 2 ;;
+esac

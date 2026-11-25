@@ -1,0 +1,20 @@
+manifestVersion: 1
+id: nektar-hub
+category: ai
+name: Nektar
+version: '0.3.2'
+tagline: Verifiable AI agent memory & BSV knowledge hub
+description: >-
+  Run your own sovereign Nektar agent and market hub node on your Umbrel home
+  server. Dock Claude Code, Cursor, Hermes, OpenClaw, or any OpenAI/Anthropic
+  agent to one shared verifiable memory anchored on BSV.
+developer: kryptokrates
+website: https://nektar.run
+repo: https://github.com/kryptokrates/nektar
+support: https://github.com/kryptokrates/nektar/issues
+port: 18420
+path: ''
+defaultUsername: ''
+defaultPassword: ''
+submitter: kryptokrates
+submission: https://github.com/kryptokrates/nektar

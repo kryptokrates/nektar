@@ -1,0 +1,154 @@
+# Coolify 1-Click Nektar Hub Template (GHCR)
+# In Coolify: New Resource -> Docker Compose -> Paste this file (or raw GitHub URL).
+# Coolify automatically provisions HTTPS for SERVICE_FQDN_HUB and generates every
+# SERVICE_PASSWORD_* secret with zero manual editing.
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      - SERVICE_FQDN_HUB_80
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    depends_on:
+      - agent
+      - host-a
+      - host-b
+      - watch-a
+      - watch-b
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:80/v1/health']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+  agent:
+    image: ghcr.io/kryptokrates/nektar:latest
+    restart: unless-stopped
+    environment:
+      NEKTAR_NETWORK: ${NEKTAR_NETWORK:-testnet}
+      NEKTAR_DATA_DIR: /data
+      NEKTAR_HTTP_PORT: '8080'
+      NEKTAR_HTTP_HOST: '0.0.0.0'
+      NEKTAR_AUTOMATION: '1'
+      NEKTAR_ANNOUNCE: '1'
+      NEKTAR_BFINGER_PUBLISH: '1'
+      NEKTAR_ANCHORED_LANES: 'all'
+      NEKTAR_SEED_DOMAINS: '*'
+      NEKTAR_KEY_PASSPHRASE: ${SERVICE_PASSWORD_KEYPASS}
+      NEKTAR_HTTP_TOKEN: ${SERVICE_PASSWORD_HTTPTOKEN}
+      NEKTAR_OPERATOR_TOKEN: ${SERVICE_PASSWORD_OPTOKEN}
+      NEKTAR_VERIFY_BASE: ${SERVICE_URL_HUB}
+      NEKTAR_PUSH_PUBLIC: ${SERVICE_URL_HUB}
+      NEKTAR_WATCH_URLS: ${SERVICE_URL_HUB}/watch/a,${SERVICE_URL_HUB}/watch/b
+      NEKTAR_WATCH_PUBLIC: ${SERVICE_URL_HUB}/watch
+      NEKTAR_MARKET_HOSTS: ${SERVICE_URL_HUB}/hosts/a,${SERVICE_URL_HUB}/hosts/b,https://nektar.run/hosts/a,https://nektar.run/hosts/b
+    volumes:
+      - agent-data:/data
+    depends_on:
+      - host-a
+      - host-b
+  db:
+    image: ghcr.io/kryptokrates/nektar-hub-db:latest
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: overlay
+      MARIADB_USER: overlay
+      MARIADB_PASSWORD: ${SERVICE_PASSWORD_DB}
+      MARIADB_RANDOM_ROOT_PASSWORD: 'yes'
+    command: ['--innodb-buffer-pool-size=128M', '--performance-schema=OFF']
+    healthcheck:
+      test: ['CMD-SHELL', 'mariadb-admin ping -h 127.0.0.1 -uoverlay -p$${MARIADB_PASSWORD} --silent']
+      interval: 3s
+      timeout: 2s
+      retries: 40
+    volumes:
+      - db:/var/lib/mysql
+  shim:
+    image: ghcr.io/kryptokrates/nektar-shim:latest
+    restart: unless-stopped
+    command: ['node', 'header-shim.mjs']
+    environment:
+      SHIM_PORT: '8080'
+      SHIM_MODE: live
+      SHIM_BROADCASTER: ${SHIM_BROADCASTER:-https://arcade-v2-testnet-us-1.bsvblockchain.tech}
+      SHIM_INDEX: ${SHIM_INDEX:-https://test.bananablocks.com/api/v1}
+      SHIM_CHAINTRACKS: ${SHIM_CHAINTRACKS:-https://arcade-v2-testnet-us-1.bsvblockchain.tech/chaintracks/v2}
+  watch-a:
+    image: ghcr.io/kryptokrates/nektar-shim:latest
+    restart: unless-stopped
+    command: ['node', 'watch-shim.mjs']
+    environment:
+      BACKEND: http://host-a:8080
+      PORT: '8081'
+    depends_on:
+      - host-a
+  watch-b:
+    image: ghcr.io/kryptokrates/nektar-shim:latest
+    restart: unless-stopped
+    command: ['node', 'watch-shim.mjs']
+    environment:
+      BACKEND: http://host-b:8080
+      PORT: '8081'
+    depends_on:
+      - host-b
+  host-a: &host
+    image: ghcr.io/kryptokrates/nektar-bbox-host:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      shim:
+        condition: service_started
+    environment: &hostenv
+      BBOX_OFFICES: nektar_abcdefghij
+      BLOGS_STREAMS: nektar_abcdefghij=open
+      BLOGS_STATE_DIR: /var/lib/bbox/blogs
+      BLOGS_KEEP_DAYS: '90'
+      OVERLAY_TOPICS: tm_bbox_nektar_abcdefghij,tm_log_nektar_abcdefghij,tm_finger,tm_nektar_${NEKTAR_NETWORK:-testnet}_0,tm_nektar_${NEKTAR_NETWORK:-testnet}_1,tm_nektar_${NEKTAR_NETWORK:-testnet}_2,tm_nektar_${NEKTAR_NETWORK:-testnet}_3,tm_nektar_${NEKTAR_NETWORK:-testnet}_4,tm_nektar_${NEKTAR_NETWORK:-testnet}_5,tm_nektar_${NEKTAR_NETWORK:-testnet}_6,tm_nektar_${NEKTAR_NETWORK:-testnet}_7,tm_nektar_${NEKTAR_NETWORK:-testnet}_8,tm_nektar_${NEKTAR_NETWORK:-testnet}_9,tm_nektar_${NEKTAR_NETWORK:-testnet}_a,tm_nektar_${NEKTAR_NETWORK:-testnet}_b,tm_nektar_${NEKTAR_NETWORK:-testnet}_c,tm_nektar_${NEKTAR_NETWORK:-testnet}_d,tm_nektar_${NEKTAR_NETWORK:-testnet}_e,tm_nektar_${NEKTAR_NETWORK:-testnet}_f
+      OVERLAY_MODULES: /app/modules/bbox/bbox-module.js,/app/modules/nektar/nektar-module.js,/app/modules/blogs/blogs-module.js,/app/modules/finger/finger-module.js
+      OVERLAY_CHAIN_TRACKER_URL: http://shim:8080
+      BBOX_ASSET_URL: http://shim:8080
+      OVERLAY_ADMIN_TOKEN: ${SERVICE_PASSWORD_OVERLAYADMIN}
+      NEKTAR_NETS: ${NEKTAR_NETWORK:-testnet}
+      OVERLAY_KNEX_URL: mysql://overlay:${SERVICE_PASSWORD_DB}@db:3306/overlay
+    volumes:
+      - host-state-a:/var/lib/bbox
+  host-b:
+    <<: *host
+    environment:
+      <<: *hostenv
+      OVERLAY_KNEX_URL: mysql://overlay:${SERVICE_PASSWORD_DB}@db:3306/overlay_b
+    volumes:
+      - host-state-b:/var/lib/bbox
+configs:
+  caddyfile:
+    content: |
+      :80 {
+        handle_path /hosts/a* {
+          reverse_proxy host-a:8080
+        }
+        handle_path /hosts/b* {
+          reverse_proxy host-b:8080
+        }
+        handle_path /watch/a* {
+          reverse_proxy watch-a:8081 {
+            flush_interval -1
+          }
+        }
+        handle_path /watch/b* {
+          reverse_proxy watch-b:8081 {
+            flush_interval -1
+          }
+        }
+        handle {
+          reverse_proxy agent:8080 {
+            flush_interval -1
+          }
+        }
+      }
+volumes:
+  agent-data: {}
+  db: {}
+  host-state-a: {}
+  host-state-b: {}

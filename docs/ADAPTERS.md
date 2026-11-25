@@ -1,9 +1,41 @@
-# Adapters — connect any AI client to a nektar instance
+# Adapters — Universal 4-Layer Agent Docking
 
-The universal adapter is not a library per platform — it is **one
-contract** expressed on transports every platform already speaks. Pick
-the row that matches your client; every path ends at the same tool
-surface.
+**Is MCP alone enough to dock to existing running agents? No — MCP is the L1 floor, not the whole adapter.**
+
+- MCP is **pull-only** (models lazily skip `recall` or `groundedAnswer` unless context is pushed).
+- MCP cannot inspect final outputs to catch drifted `receipt: nektarr1.*` footers.
+- Many existing running agents (LangGraph, CrewAI, AutoGen, n8n, Open WebUI, Aider, custom Python/TS daemons) **do not speak MCP at all** — they speak OpenAI/Anthropic HTTP APIs.
+
+Nektar solves this with a **4-layer Universal Adapter** backed by one frozen tool contract:
+
+| Layer  | Mechanism                                                                                                   | What it solves                                                                                                                                  | Best for                                                                                          |
+| ------ | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **L0** | **Transparent LLM Memory Proxy** (`/v1/proxy/openai/v1`, `/v1/proxy/anthropic`)                             | Swap **one env var** (`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`), zero code changes, deterministic pre-turn recall + async receipt check         | Any existing running agent (LangGraph, CrewAI, n8n, Open WebUI, Aider, custom scripts)            |
+| **L1** | **MCP Streamable HTTP (`/mcp`) + OAuth 2.1 + A2A (`/a2a`, `/.well-known/agent.json`) + REST (`/v1/tools`)** | Standardized tool discovery, hosted web connectors (claude.ai / ChatGPT via OAuth 2.1), multi-agent A2A tasks                                   | Cursor, Windsurf, VS Code, Zed, Cline, Continue, Goose, OpenCode, Gemini/Antigravity, web clients |
+| **L2** | **Host-Portable Lifecycle Hooks + `SKILL.md`** (`~/.nektar/hooks/*.{sh,ps1}` or `nektar hook`)              | Deterministic `SessionStart`, `UserPromptSubmit` prefetch, and `Stop`/`notify` receipt blocking — works with GHCR Docker with zero host Node.js | Claude Code, Codex CLI                                                                            |
+| **L3** | **Bundled Native Memory Slots** (`GET /v1/adapters/bundle/{hermes,openclaw}`)                               | Native `MemoryProvider` & `plugins.slots.memory` installed straight from the running GHCR container — zero git checkout                         | Hermes Agent, OpenClaw                                                                            |
+
+## L0 — Dock ANY Running Agent with Zero Code Changes
+
+```bash
+# OpenAI-compatible agents (LangGraph, CrewAI, AutoGen, n8n, Open WebUI, Aider, custom):
+export OPENAI_BASE_URL="http://127.0.0.1:18420/v1/proxy/openai/v1"
+# When NEKTAR_HTTP_TOKEN is active, either pass header `X-Nektar-Token: <token>`
+# OR use the composite key format that works in every black-box SDK:
+export OPENAI_API_KEY="nkt:<NEKTAR_HTTP_TOKEN>:$OPENAI_API_KEY"
+
+# Anthropic-compatible agents:
+export ANTHROPIC_BASE_URL="http://127.0.0.1:18420/v1/proxy/anthropic"
+export ANTHROPIC_API_KEY="nkt:<NEKTAR_HTTP_TOKEN>:$ANTHROPIC_API_KEY"
+```
+
+Optional headers per agent:
+
+- `X-Nektar-Shard: <name>` — scope recall/capture to one shard
+- `X-Nektar-Capture: 1` — opt-in passive turn capture (off by default)
+- `X-Nektar-Recall: 0` — disable injection for a single call
+
+Run `nektar dock proxy` anytime to print ready-to-paste exports pre-filled with your local token.
 
 ## The contract (compatibility floor)
 
@@ -26,12 +58,15 @@ surface — stable in practice, not part of the frozen floor.
 
 ## Transports
 
-| Transport           | Endpoint / command                                 | Auth                    | For                             |
-| ------------------- | -------------------------------------------------- | ----------------------- | ------------------------------- |
-| MCP Streamable HTTP | `https://<host>/mcp`                               | `Authorization: Bearer` | remote clients, hosted runtimes |
-| MCP stdio           | `docker run -i --rm … ghcr.io/kryptokrates/nektar` | —                       | local agents, per-project       |
-| REST tools          | `GET /v1/tools`, `POST /v1/tools/{name}`           | `Authorization: Bearer` | non-MCP platforms               |
-| OpenAPI             | `GET /v1/openapi.json`                             | `Authorization: Bearer` | manifest-driven registration    |
+| Transport           | Endpoint / command                                       | Auth                                     | For                                      |
+| ------------------- | -------------------------------------------------------- | ---------------------------------------- | ---------------------------------------- |
+| L0 LLM Memory Proxy | `POST /v1/proxy/openai/v1/*`, `/v1/proxy/anthropic/v1/*` | `X-Nektar-Token` or `nkt:<tok>:<key>`    | any existing OpenAI/Anthropic agent      |
+| MCP Streamable HTTP | `https://<host>/mcp`                                     | `Authorization: Bearer` or **OAuth 2.1** | remote/local MCP clients, web connectors |
+| A2A Agent Card/RPC  | `GET /.well-known/agent.json`, `POST /a2a`               | `Authorization: Bearer`                  | A2A multi-agent orchestrators            |
+| MCP stdio           | `docker run -i --rm … ghcr.io/kryptokrates/nektar`       | —                                        | ephemeral per-project stdio clients      |
+| REST tools          | `GET /v1/tools`, `POST /v1/tools/{name}`                 | `Authorization: Bearer`                  | non-MCP platforms & scripts              |
+| OpenAPI             | `GET /v1/openapi.json`                                   | `Authorization: Bearer`                  | manifest-driven registration             |
+| Bundled Adapters    | `GET /v1/adapters/manifest`, `/bundle/{hermes,openclaw}` | public read-only                         | zero-checkout L3 plugin installation     |
 
 `NEKTAR_HTTP_TOKEN` is the bearer on every remote path.
 

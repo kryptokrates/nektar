@@ -61,11 +61,28 @@ set_kv() { # set_kv KEY VALUE — replace the KEY=... line in .env
     printf "%s=%s\n" "$1" "$2" >>.env
   fi
 }
-if grep -qE '^NEKTAR_KEY_PASSPHRASE=[[:space:]]*$' .env; then
-  set_kv NEKTAR_KEY_PASSPHRASE "$(openssl rand -hex 32)"
-fi
-if grep -qE '^NEKTAR_HTTP_TOKEN=[[:space:]]*$' .env; then
-  set_kv NEKTAR_HTTP_TOKEN "$(openssl rand -hex 32)"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --domain) NEKTAR_DOMAIN="${2#https://}"; shift 2 ;;
+    --domain=*) v="${1#*=}"; NEKTAR_DOMAIN="${v#https://}"; shift ;;
+    --network) NEKTAR_NETWORK="$2"; shift 2 ;;
+    --network=*) NEKTAR_NETWORK="${1#*=}"; shift ;;
+    --confirm) NEKTAR_MAINNET_CONFIRM="$2"; shift 2 ;;
+    --confirm=*) NEKTAR_MAINNET_CONFIRM="${1#*=}"; shift ;;
+    *) shift ;;
+  esac
+done
+
+for k in NEKTAR_KEY_PASSPHRASE NEKTAR_HTTP_TOKEN NEKTAR_OPERATOR_TOKEN; do
+  if grep -qE "^$k=[[:space:]]*$" .env; then
+    set_kv "$k" "$(openssl rand -hex 32)"
+  fi
+done
+PROFILES=""
+if [ -n "${NEKTAR_DOMAIN:-}" ]; then
+  set_kv NEKTAR_DOMAIN "${NEKTAR_DOMAIN%/}"
+  set_kv NEKTAR_VERIFY_BASE "https://${NEKTAR_DOMAIN%/}"
+  PROFILES="--profile tls"
 fi
 [ -n "${NEKTAR_MARKET_HOSTS:-}" ] && set_kv NEKTAR_MARKET_HOSTS "$NEKTAR_MARKET_HOSTS"
 [ -n "${NEKTAR_PUSH_PUBLIC:-}" ] && set_kv NEKTAR_PUSH_PUBLIC "$NEKTAR_PUSH_PUBLIC"
@@ -86,9 +103,10 @@ fi
 [ -n "${NEKTAR_SEED_DOMAINS:-}" ] && set_kv NEKTAR_SEED_DOMAINS "$NEKTAR_SEED_DOMAINS"
 [ -n "${NEKTAR_ANNOUNCE:-}" ] && set_kv NEKTAR_ANNOUNCE "$NEKTAR_ANNOUNCE"
 
-# 5 — up
-$DOCKER compose --env-file .env up -d
+# 5 — up (single container with bundled restate-server + optional Caddy TLS)
+# shellcheck disable=SC2086
+$DOCKER compose $PROFILES --env-file .env up -d
 echo
 echo "-- agent starting; logs:  cd $DEST && $DOCKER compose logs -f agent"
-echo "-- health:  curl http://localhost:8080/.well-known/nektar"
-echo "-- first boot prints a fee address — fund it to activate the market"
+echo "-- health:  curl http://localhost:8080/v1/health"
+echo "-- open dashboard (use pairing URL from logs or token in $DEST/.env)"

@@ -6,10 +6,8 @@ import type { AutomationPolicy } from '@nektar/automation'
 import { passphraseFromEnv } from './keystore.js'
 import { operatorPubForDataDir } from './rtsupport.js'
 
-type PolicyPreset = 'buyer' | 'seller' | 'both'
-
-interface StarterPolicyOpts {
-  preset: PolicyPreset
+export interface StarterPolicyOpts {
+  preset: 'buyer' | 'seller' | 'both'
   network: 'regtest' | 'testnet' | 'main'
   agentPub: string
   domains?: string[]
@@ -18,7 +16,7 @@ interface StarterPolicyOpts {
   policyId?: string
 }
 
-function starterPolicy(opts: StarterPolicyOpts): AutomationPolicy {
+export function starterPolicy(opts: StarterPolicyOpts): AutomationPolicy {
   const maxSats = opts.maxSats ?? 500
   const roles: Array<'buyer' | 'seller'> = opts.preset === 'both' ? ['buyer', 'seller'] : [opts.preset]
   const domains = opts.domains && opts.domains.length > 0 ? opts.domains : ['general']

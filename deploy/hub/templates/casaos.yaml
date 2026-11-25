@@ -1,0 +1,53 @@
+# CasaOS 1-Click App Store Manifest (GHCR)
+name: nektar
+services:
+  nektar:
+    image: ghcr.io/kryptokrates/nektar:latest
+    container_name: nektar
+    restart: unless-stopped
+    command: ['serve', '--port', '18420', '--host', '0.0.0.0']
+    ports:
+      - target: 18420
+        published: '18420'
+        protocol: tcp
+    environment:
+      NEKTAR_NETWORK: testnet
+      NEKTAR_DATA_DIR: /data
+      NEKTAR_AUTOMATION: '1'
+      NEKTAR_SEED_DOMAINS: '*'
+    volumes:
+      - type: bind
+        source: /DATA/AppData/nektar
+        target: /data
+    x-casaos:
+      envs:
+        - container: NEKTAR_NETWORK
+          description:
+            en_us: BSV network (testnet or main)
+        - container: NEKTAR_AUTOMATION
+          description:
+            en_us: Set to 1 to enable the autonomous knowledge marketplace
+      ports:
+        - container: '18420'
+          description:
+            en_us: Dashboard, MCP HTTP, and L0 LLM Memory Proxy port
+      volumes:
+        - container: /data
+          description:
+            en_us: Persistent identity, SQLite memory, and Restate journals
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: nektar
+  description:
+    en_us: Verifiable, encrypted AI agent memory and knowledge market anchored on BSV.
+  tagline:
+    en_us: One verifiable brain for all your AI agents
+  developer: kryptokrates
+  author: kryptokrates
+  icon: https://nektar.run/logo.svg
+  title:
+    en_us: Nektar
+  category: AI
+  port_map: '18420'

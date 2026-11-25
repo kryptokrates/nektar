@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import AuthGate from './components/AuthGate.svelte'
+  import OnboardingCard from './components/OnboardingCard.svelte'
+  import HubTab from './components/HubTab.svelte'
 
   type Receipt = { seq: number; tool: string; sats: number | null; shards: string[]; at: number | null; url: string }
   type Host = { url: string; state: string; saved?: boolean }
@@ -29,7 +32,7 @@
     pub: string
     uptimeSec: number
     loop: { steps: { name: string; done: boolean }[]; done: number; frontier: string; next: string }
-    treasury: { sats: number; utxos: number; funded: boolean; payments: string }
+    treasury: { address?: string | null; sats: number; utxos: number; funded: boolean; payments: string }
     receipts: { count: number; earned: number; earned24h: number; amounts: number[]; list: Receipt[] }
     memory: { shards: number; records: number; anchored: number; unproven: number; coverage: number; prover: string }
     market: Shard[]
@@ -63,9 +66,10 @@
 
   let s = $state<State | null>(null)
   let err = $state('')
+  let needsAuth = $state(false)
   let live = $state(false)
   let copied = $state(false)
-  let tab = $state<'overview' | 'earnings' | 'activity' | 'network' | 'agent' | 'settings' | 'debug'>('overview')
+  let tab = $state<'overview' | 'earnings' | 'activity' | 'network' | 'hub' | 'agent' | 'settings' | 'debug'>('overview')
   let sub = $state<'policy' | 'identity' | 'hosts' | 'runtime'>('policy')
   let joinInput = $state('')
   let joinMsg = $state('')
@@ -95,7 +99,13 @@
   async function load() {
     try {
       const r = await fetch('/state')
+      if (r.status === 401) {
+        needsAuth = true
+        err = ''
+        return
+      }
       if (!r.ok) throw new Error(`state ${r.status}`)
+      needsAuth = false
       s = await r.json()
       document.title = s.receipts.earned > 0 ? `${fmt(s.receipts.earned)} sats · nektar` : 'nektar'
       err = ''
@@ -178,16 +188,44 @@
     await load()
   }
 
-  onMount(() => {
-    load()
-    const es = new EventSource('/events')
+  let es: EventSource | null = null
+  function connectEvents() {
+    es?.close()
+    es = new EventSource('/events')
     es.onopen = () => (live = true)
-    es.onmessage = () => load()
+    es.onmessage = () => void load()
     es.onerror = () => (live = false)
-    return () => es.close()
+  }
+
+  onMount(() => {
+    void (async () => {
+      // Auto-consume `#token=<secret>` from pairing URLs into an HttpOnly cookie
+      const hash = window.location.hash
+      if (hash.startsWith('#token=')) {
+        const tok = decodeURIComponent(hash.slice('#token='.length))
+        history.replaceState(null, '', window.location.pathname + window.location.search)
+        await fetch('/v1/auth/session', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token: tok })
+        }).catch(() => {})
+      }
+      await load()
+      if (!needsAuth) connectEvents()
+    })()
+    return () => es?.close()
   })
 </script>
 
+{#if needsAuth}
+  <AuthGate
+    onUnlocked={() => {
+      needsAuth = false
+      void load()
+      connectEvents()
+    }}
+  />
+{:else}
 {#if err}
   <div class="err">{err}</div>
 {/if}
@@ -227,6 +265,7 @@
         <button class="mi" class:active={tab === 'earnings'} onclick={() => (tab = 'earnings')}><svg viewBox="0 0 20 20" class="mico"><path d="M10 3v14M14.5 6H8.2a2.6 2.6 0 000 5.2h3.6a2.6 2.6 0 010 5.2H5.5" stroke="currentColor" fill="none" stroke-width="1.7" stroke-linecap="round" /></svg>Earnings</button>
         <button class="mi" class:active={tab === 'activity'} onclick={() => (tab = 'activity')}><svg viewBox="0 0 20 20" class="mico"><path d="M2.5 10h3l2-5.5 3 11 2-5.5h4.5" stroke="currentColor" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>Activity</button>
         <button class="mi" class:active={tab === 'network'} onclick={() => (tab = 'network')}><svg viewBox="0 0 20 20" class="mico"><circle cx="4.5" cy="10" r="2" fill="currentColor" /><circle cx="15" cy="5" r="2" fill="currentColor" /><circle cx="15" cy="15" r="2" fill="currentColor" /><path d="M6.5 9.3 13 5.9M6.5 10.7l6.5 3.4" stroke="currentColor" stroke-width="1.4" /></svg>Network</button>
+        <button class="mi" class:active={tab === 'hub'} onclick={() => (tab = 'hub')}><svg viewBox="0 0 20 20" class="mico"><rect x="3" y="4" width="14" height="4.5" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.5" /><rect x="3" y="11.5" width="14" height="4.5" rx="1.2" stroke="currentColor" fill="none" stroke-width="1.5" /><circle cx="6.2" cy="6.2" r="0.9" fill="currentColor" /><circle cx="6.2" cy="13.8" r="0.9" fill="currentColor" /></svg>Hub Node</button>
         <button class="mi" class:active={tab === 'agent'} onclick={() => (tab = 'agent')}><svg viewBox="0 0 20 20" class="mico"><rect x="4.5" y="7" width="11" height="9" rx="2.2" stroke="currentColor" fill="none" stroke-width="1.6" /><circle cx="8" cy="11" r="1.1" fill="currentColor" /><circle cx="12" cy="11" r="1.1" fill="currentColor" /><path d="M10 4v3" stroke="currentColor" stroke-width="1.6" /></svg>Agent</button>
         <button class="mi" class:active={tab === 'settings'} onclick={() => (tab = 'settings')}><svg viewBox="0 0 20 20" class="mico"><path d="M3 6h9M16 6h1M3 14h1M8 14h9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /><circle cx="14" cy="6" r="2" stroke="currentColor" fill="none" stroke-width="1.6" /><circle cx="6" cy="14" r="2" stroke="currentColor" fill="none" stroke-width="1.6" /></svg>Settings</button>
         <div class="msep"></div>
@@ -240,6 +279,15 @@
 
     <main class="feed">
       {#if tab === 'overview'}
+      <OnboardingCard
+        network={s.network}
+        feeAddress={s.treasury.address ?? null}
+        sats={s.treasury.sats}
+        receiptCount={s.receipts.count}
+        hasPolicy={s.settings.policies.some((p) => !p.revokedAt)}
+        onRefresh={load}
+        onOpenHub={() => (tab = 'hub')}
+      />
       <section class="hero card" id="overview">
       <div class="herorow">
         <div class="earn">
@@ -370,6 +418,10 @@
         </div>
       {/if}
 
+      {#if tab === 'hub'}
+        <HubTab network={s.network} onJoinHub={joinHost} />
+      {/if}
+
       {#if tab === 'agent'}
         <div class="card">
           <h2>Agent <small>{s.automation ? `${s.automation.ops.filter((o) => o.state === 'running').length} running` : 'idle'}</small></h2>
@@ -420,7 +472,7 @@
                 {/if}
               {/each}
             {:else}
-              <p class="empty">no policy approved yet — the agent can't trade until one is set (setPolicy via MCP)</p>
+              <p class="empty">no policy approved yet — approve a starter preset in Quickstart or run <code>nektar policy approve --preset buyer</code></p>
             {/if}
           {/if}
 
@@ -538,6 +590,7 @@
         </div>
     </aside>
   </div>
+{/if}
 {/if}
 
 <style>

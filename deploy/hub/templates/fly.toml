@@ -1,0 +1,39 @@
+# Fly.io 1-Click Cloud Nektar Agent (GHCR image + persistent volume + auto-HTTPS).
+# Deploy: fly launch --config deploy/hub/templates/fly.toml --copy-config
+app = 'nektar-agent'
+primary_region = 'fra'
+
+[build]
+  image = 'ghcr.io/kryptokrates/nektar:latest'
+
+[processes]
+  app = 'node dist/src/bin.js serve --port 8080 --host 0.0.0.0'
+
+[env]
+  NEKTAR_NETWORK = 'testnet'
+  NEKTAR_DATA_DIR = '/data'
+  NEKTAR_AUTOMATION = '1'
+  NEKTAR_SEED_DOMAINS = '*'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '30s'
+    method = 'GET'
+    path = '/v1/health'
+
+[[mounts]]
+  source = 'nektar_data'
+  destination = '/data'
+  initial_size = '5gb'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '1gb'

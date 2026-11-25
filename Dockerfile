@@ -83,6 +83,10 @@ FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23f
 WORKDIR /app
 COPY --from=build /prod /app
 COPY --from=build /app/packages/mcp/demo /app/demo
+COPY --from=build /app/packages/watcher/src /app/watcher
+COPY integrations/hermes /app/integrations/hermes
+COPY integrations/openclaw /app/integrations/openclaw
+COPY skills/nektar-memory /app/skills/nektar-memory
 # /app/restate/restate-server arrived inside /prod — where restatesidecar.ts
 # resolves the bundle (dist/src/bin.js → ../../restate). One container = the
 # whole plane: the sidecar spawns on container loopback and calls the endpoint
@@ -90,6 +94,7 @@ COPY --from=build /app/packages/mcp/demo /app/demo
 # explicit NEKTAR_RESTATE_URL still wins (compose keeps its sidecar service).
 COPY --from=stark /usr/local/bin/nektar-stark /usr/local/bin/r0vm /usr/local/bin/
 ENV NEKTAR_STARK_PROVER=/usr/local/bin/nektar-stark
+ENV NEKTAR_CONTAINER=1
 # the musl restate-server loads system root CAs via rustls-native-certs and
 # PANICS without them (slim ships none; node never noticed — it bundles its
 # own CA store). Caught by the image-leg sidecar smoke.
@@ -113,14 +118,12 @@ ENV NEKTAR_MODEL_ID=unspecified NEKTAR_BATCH=4 NEKTAR_DATA_DIR=/data NEKTAR_TOOL
 # serve every lane — a fresh instance's first carrier doesn't pay a block.
 # Unpatched hosts refuse such carriers; the lane falls back to proven-only.
 ENV NEKTAR_ANCHORED_LANES=all
+EXPOSE 18420 8080
 VOLUME /data
 LABEL io.modelcontextprotocol.server.name="io.github.nedzof/nektar"
-# health = the live process answering its own port. The old probe spawned a
-# second bin.js over MCP stdio — the instance lock refuses a second process
-# on the data dir BY DESIGN, so it could only ever report unhealthy while
-# PID 1 lived. /v1/health is the public unauthenticated route (e2e uses it
-# as the up-check); stdio-only boots (no NEKTAR_HTTP_PORT) fall back to the
-# instance.lock heartbeat being fresher than its own 20s staleness bound.
+# health = the live process answering its own port (explicit NEKTAR_HTTP_PORT,
+# daemon.json written by `serve` / companion HTTP, or instance.lock heartbeat
+# freshness for stdio-only containers).
 # hadolint ignore=DL3025
-HEALTHCHECK --interval=5m --timeout=60s --start-period=30s CMD node -e "const fs=require('fs');const p=process.env.NEKTAR_HTTP_PORT;if(p){fetch('http://127.0.0.1:'+p+'/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))}else{try{const l=JSON.parse(fs.readFileSync((process.env.NEKTAR_DATA_DIR||'/data')+'/instance.lock','utf8'));process.exit(Date.now()-l.beat<20000?0:1)}catch{process.exit(1)}}"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s CMD node -e "const fs=require('fs'),d=process.env.NEKTAR_DATA_DIR||'/data';let u=process.env.NEKTAR_HTTP_PORT?'http://127.0.0.1:'+process.env.NEKTAR_HTTP_PORT:null;if(!u){try{u=JSON.parse(fs.readFileSync(d+'/daemon.json','utf8')).url}catch{}}if(u){fetch(u+'/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))}else{try{const l=JSON.parse(fs.readFileSync(d+'/instance.lock','utf8'));process.exit(Date.now()-l.beat<20000?0:1)}catch{process.exit(1)}}"
 ENTRYPOINT ["node", "dist/src/bin.js"]

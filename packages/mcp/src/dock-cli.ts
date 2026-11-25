@@ -8,9 +8,26 @@ import { homedir, platform } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { nektarEnv, parseDotEnv, sparse, writeErr, writeOut, type EnvSource } from '@nektar/core'
+import { resolveBundledRoot, loadSkillMarkdown } from './adapters-export.js'
 import { DEFAULT_DAEMON_PORT, discoverDaemon } from './daemon.js'
+import { detectExtraClients, dockExtraClient, ensureHttpHookScripts, formatProxyDockInstructions } from './dock-hooks.js'
 
-type DockClientId = 'hermes' | 'openclaw' | 'claude' | 'claude-desktop' | 'codex' | 'cursor' | 'windsurf' | 'opencode' | 'goose'
+type DockClientId =
+  | 'hermes'
+  | 'openclaw'
+  | 'claude'
+  | 'claude-desktop'
+  | 'codex'
+  | 'cursor'
+  | 'windsurf'
+  | 'opencode'
+  | 'goose'
+  | 'vscode'
+  | 'zed'
+  | 'cline'
+  | 'continue'
+  | 'gemini'
+  | 'proxy'
 
 export interface DockIo {
   out?: (s: string) => void
@@ -33,7 +50,23 @@ interface DockActionResult {
   notes: string[]
 }
 
-const ALL_CLIENTS: readonly DockClientId[] = ['hermes', 'openclaw', 'claude', 'claude-desktop', 'codex', 'cursor', 'windsurf', 'opencode', 'goose']
+const ALL_CLIENTS: readonly DockClientId[] = [
+  'hermes',
+  'openclaw',
+  'claude',
+  'claude-desktop',
+  'codex',
+  'cursor',
+  'windsurf',
+  'opencode',
+  'goose',
+  'vscode',
+  'zed',
+  'cline',
+  'continue',
+  'gemini',
+  'proxy'
+]
 
 const RECEIPT_SNIPPET = `# nektar receipts (snippet — merge into your project CLAUDE.md)
 
@@ -57,29 +90,6 @@ URL (or scan the QR on that page) to confirm the answer was committed to
 anchored, provenance-signed memory — not that it is _true_.
 `
 
-const EMBEDDED_SKILL_MD = `---
-name: nektar-memory
-description: >
-  Use nektar verifiable, encrypted agent memory anchored on BSV. Recall
-  saved knowledge before answering factual questions, persist durable facts
-  with provenance, route verifiable answers through groundedAnswer with
-  receipt footers, and optionally buy/sell knowledge under approved policies.
----
-
-# nektar — Verifiable Agent Memory
-
-1. **Recall first:** Before answering factual questions that may be in memory,
-   call \`recall\` (omit \`shard\` to discover readable shards such as \`welcome\`).
-2. **Ground & cite:** Route verifiable answers through \`groundedAnswer\` so
-   every claim cites a verified fragment and receives a checkable receipt.
-3. **Keep the footer:** End grounded answers with the returned \`receipt:\`
-   and \`verify:\` lines — never fabricate tokens.
-4. **Remember with provenance:** When the user shares durable facts, call
-   \`remember\` with \`shard\`, \`data\`, and \`source\`.
-5. **Honest boundary:** Receipts prove content was *recorded, unaltered, and
-   derivable* — never that it is *true*.
-`
-
 const USAGE = `nektar dock — zero-config docking into installed AI apps (non-clobbering)
 
   nektar dock [auto | <client>...] [options]
@@ -94,10 +104,18 @@ Clients:
   windsurf        Windsurf (~/.codeium/windsurf/mcp_config.json)
   opencode        OpenCode (~/.config/opencode/opencode.json)
   goose           Goose (~/.config/goose/config.yaml)
+  vscode          VS Code Copilot MCP (User/mcp.json)
+  zed             Zed Editor (settings.json context_servers)
+  cline           Cline (cline_mcp_settings.json)
+  continue        Continue (~/.continue/config.yaml)
+  gemini          Gemini CLI / Antigravity (~/.gemini/settings.json)
+  proxy           L0 Transparent LLM Proxy env exports (any OpenAI/Anthropic agent)
 
 Options:
   --url <url>     Explicit nektar HTTP base URL (default: discovered or http://127.0.0.1:18420)
   --token <tok>   Bearer token if NEKTAR_HTTP_TOKEN is set on the server
+  --hook-mode <m> Hook driver: node (default) or http (zero-Node curl/PowerShell scripts for GHCR)
+  --shard <name>  Default shard hint for \`dock proxy\` (default: agent)
   --docker        Configure stdio clients to spawn ghcr.io/kryptokrates/nektar:latest
   --dir <path>    Project directory for Claude Code / Codex project-scoped files (default: cwd)
   --dry           Preview all changes without writing any files
@@ -146,6 +164,7 @@ function detectInstalledClients(home: string, cwd: string, env: EnvSource, osPla
   if (existsSync(join(home, '.codeium', 'windsurf'))) found.push('windsurf')
   if (existsSync(join(home, '.config', 'opencode'))) found.push('opencode')
   if (existsSync(join(home, '.config', 'goose'))) found.push('goose')
+  for (const extra of detectExtraClients(home, env, osPlatform)) found.push(extra)
   return found
 }
 
@@ -170,11 +189,7 @@ function writeIfLive(dry: boolean, path: string, content: string): void {
 }
 
 function skillMarkdown(repoRoot: string | undefined): string {
-  if (repoRoot) {
-    const p = join(repoRoot, 'skills', 'nektar-memory', 'SKILL.md')
-    if (existsSync(p)) return readFileSync(p, 'utf8')
-  }
-  return EMBEDDED_SKILL_MD
+  return loadSkillMarkdown(repoRoot)
 }
 
 interface DockCtx {
@@ -182,6 +197,8 @@ interface DockCtx {
   baseUrl: string
   token?: string
   docker: boolean
+  hookMode: 'node' | 'http'
+  shard: string
   dry: boolean
   uninstall: boolean
   home: string
@@ -203,8 +220,16 @@ function stdioServerSpec(ctx: DockCtx): { command: string; args: string[] } {
   return { command: 'node', args: [ctx.binPath] }
 }
 
-function hookCmd(ctx: DockCtx, sub: string): string {
-  return `node "${ctx.binPath}" hook ${sub}`
+function resolveHookCommands(ctx: DockCtx): { sessionStart: string; prefetch: string; verifyReceipt: string; verifyCodexArgs: string[] } {
+  if (ctx.hookMode === 'http') {
+    return ensureHttpHookScripts({ home: ctx.home, baseUrl: ctx.baseUrl, token: ctx.token, osPlatform: ctx.osPlatform, dry: ctx.dry })
+  }
+  return {
+    sessionStart: `node "${ctx.binPath}" hook session-start`,
+    prefetch: `node "${ctx.binPath}" hook prefetch`,
+    verifyReceipt: `node "${ctx.binPath}" hook verify-receipt`,
+    verifyCodexArgs: ['node', ctx.binPath, 'hook', 'verify-receipt', '--codex']
+  }
 }
 
 function mergeJsonMcpClient(
@@ -280,9 +305,10 @@ function dockClaude(ctx: DockCtx): DockActionResult {
   const hooks = asRecord(settings.hooks) as Record<string, HookGroup[]>
   settings.hooks = hooks
 
-  const sessionCmd = hookCmd(ctx, 'session-start')
-  const prefetchCmd = hookCmd(ctx, 'prefetch')
-  const stopCmd = hookCmd(ctx, 'verify-receipt')
+  const hookCmds = resolveHookCommands(ctx)
+  const sessionCmd = hookCmds.sessionStart
+  const prefetchCmd = hookCmds.prefetch
+  const stopCmd = hookCmds.verifyReceipt
 
   if (ctx.uninstall) {
     if (Object.hasOwn(servers, 'nektar')) {
@@ -389,8 +415,8 @@ function dockCodex(ctx: DockCtx): DockActionResult {
     return { client: 'codex', label: 'Codex CLI', level: 'L2', changed, files, notes }
   }
 
-  const escapedBin = ctx.binPath.replace(/\\/g, '\\\\')
-  const notifyLine = `notify = ["node", "${escapedBin}", "hook", "verify-receipt", "--codex"]`
+  const hookCmds = resolveHookCommands(ctx)
+  const notifyLine = `notify = [${hookCmds.verifyCodexArgs.map((a) => quoteScalar(a)).join(', ')}]`
   if (/^\s*notify\s*=/m.test(out)) {
     notes.push('notify already set — left as-is (chain with --chain if desired)')
   } else {
@@ -594,35 +620,6 @@ function dockOpenClaw(ctx: DockCtx): DockActionResult {
   return { client: 'openclaw', label: 'OpenClaw', level: 'L3', changed, files, notes }
 }
 
-function dockGoose(ctx: DockCtx): DockActionResult {
-  const cfgPath = join(ctx.home, '.config', 'goose', 'config.yaml')
-  const existing = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : ''
-  const notes: string[] = []
-  let changed = false
-
-  if (ctx.uninstall) {
-    if (existing.includes('# nektar-dock-start')) {
-      const cleaned = existing.replace(/\n?# nektar-dock-start[\s\S]*?# nektar-dock-end\n?/g, '\n').trimEnd() + '\n'
-      writeIfLive(ctx.dry, cfgPath, cleaned)
-      changed = true
-      notes.push('removed nektar extension from Goose config.yaml')
-    }
-    return { client: 'goose', label: 'Goose', level: 'L1', changed, files: [cfgPath], notes }
-  }
-
-  if (!/\bnektar:\s*\n/.test(existing) && !existing.includes('# nektar-dock-start')) {
-    const entry = `  nektar:\n    name: nektar\n    type: streamable_http\n    uri: ${quoteScalar(ctx.mcpUrl)}\n    enabled: true\n`
-    const next = /^extensions:\s*$/m.test(existing)
-      ? existing.replace(/^extensions:\s*$/m, `extensions:\n# nektar-dock-start\n${entry}# nektar-dock-end`)
-      : (existing.trimEnd() ? existing.trimEnd() + '\n\n' : '') + `# nektar-dock-start\nextensions:\n${entry}# nektar-dock-end\n`
-    writeIfLive(ctx.dry, cfgPath, next)
-    changed = true
-    notes.push(`registered Goose streamable_http extension → ${ctx.mcpUrl}`)
-  } else notes.push('Goose config.yaml already has nektar — kept')
-
-  return { client: 'goose', label: 'Goose', level: 'L1', changed, files: [cfgPath], notes }
-}
-
 export async function runDockCli(argv: string[], io: DockIo = {}): Promise<number> {
   const out = io.out ?? writeOut
   const err = io.err ?? writeErr
@@ -642,9 +639,11 @@ export async function runDockCli(argv: string[], io: DockIo = {}): Promise<numbe
   const docker = argv.includes('--docker')
   const asJson = argv.includes('--json')
   const dirFlag = readFlag(argv, '--dir')
+  const hookModeFlag = readFlag(argv, '--hook-mode')
+  const shardFlag = readFlag(argv, '--shard') ?? 'agent'
   const projectDir = resolve(dirFlag ?? cwd)
 
-  const valueFlags = new Set(['--url', '--token', '--dir'])
+  const valueFlags = new Set(['--url', '--token', '--dir', '--hook-mode', '--shard'])
   const targets: string[] = []
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
@@ -657,10 +656,10 @@ export async function runDockCli(argv: string[], io: DockIo = {}): Promise<numbe
 
   const defaultBin = fileURLToPath(new URL('./bin.js', import.meta.url))
   const binPath = io.binPath ?? defaultBin
-  const maybeRepo = io.repoRoot ?? resolve(dirname(binPath), '..', '..', '..', '..')
-  const repoRoot = existsSync(join(maybeRepo, 'integrations')) ? maybeRepo : undefined
+  const hookMode: 'node' | 'http' = hookModeFlag === 'http' || (hookModeFlag !== 'node' && docker) ? 'http' : 'node'
+  const repoRoot = io.repoRoot ?? resolveBundledRoot(import.meta.url)
 
-  const dot = existsSync(join(cwd, '.env')) ? parseDotEnv(readFileSync(join(cwd, '.env'), 'utf8')) : {}
+  const dot: Record<string, string | undefined> = existsSync(join(cwd, '.env')) ? parseDotEnv(readFileSync(join(cwd, '.env'), 'utf8')) : {}
   const discovered = await discoverDaemon({ env, fetchImpl, timeoutMs: 400 })
   const explicitUrl = readFlag(argv, '--url')
   if (explicitUrl !== undefined && !/^https?:\/\/\S+$/i.test(explicitUrl)) {
@@ -673,7 +672,7 @@ export async function runDockCli(argv: string[], io: DockIo = {}): Promise<numbe
     `http://127.0.0.1:${nektarEnv('NEKTAR_HTTP_PORT', env) ?? sparse(dot['NEKTAR_HTTP_PORT']) ?? String(DEFAULT_DAEMON_PORT)}`
   const baseUrl = rawBase.replace(/\/+$/, '')
   const mcpUrl = `${baseUrl}/mcp`
-  const token = readFlag(argv, '--token') ?? nektarEnv('NEKTAR_HTTP_TOKEN', env) ?? dot['NEKTAR_HTTP_TOKEN']
+  const token = readFlag(argv, '--token') ?? nektarEnv('NEKTAR_HTTP_TOKEN', env) ?? dot['NEKTAR_HTTP_TOKEN'] ?? discovered?.token
 
   let selected: DockClientId[]
   if (targets.length === 0 || targets.includes('auto')) {
@@ -692,6 +691,8 @@ export async function runDockCli(argv: string[], io: DockIo = {}): Promise<numbe
     baseUrl,
     token,
     docker,
+    hookMode,
+    shard: shardFlag,
     dry,
     uninstall,
     home,
@@ -704,6 +705,7 @@ export async function runDockCli(argv: string[], io: DockIo = {}): Promise<numbe
   }
 
   const results: DockActionResult[] = []
+  let showProxyBlock = false
   for (const client of selected) {
     if (client === 'hermes') results.push(dockHermes(ctx))
     else if (client === 'openclaw') results.push(dockOpenClaw(ctx))
@@ -716,7 +718,25 @@ export async function runDockCli(argv: string[], io: DockIo = {}): Promise<numbe
       results.push(mergeJsonMcpClient(ctx, 'windsurf', 'Windsurf', join(home, '.codeium', 'windsurf', 'mcp_config.json'), 'http-or-stdio'))
     else if (client === 'opencode')
       results.push(mergeJsonMcpClient(ctx, 'opencode', 'OpenCode', join(home, '.config', 'opencode', 'opencode.json'), 'opencode'))
-    else results.push(dockGoose(ctx))
+    else if (client === 'proxy') {
+      showProxyBlock = true
+      results.push({
+        client: 'proxy',
+        label: 'L0 LLM Memory Proxy',
+        level: 'L3',
+        changed: false,
+        files: [],
+        notes: [`OpenAI endpoint: ${ctx.baseUrl}/v1/proxy/openai/v1`, `Anthropic endpoint: ${ctx.baseUrl}/v1/proxy/anthropic`]
+      })
+    } else {
+      results.push(
+        dockExtraClient(client, ctx, {
+          readJson: readJsonObj,
+          readText: (p) => (existsSync(p) ? readFileSync(p, 'utf8') : ''),
+          writeLive: writeIfLive
+        })
+      )
+    }
   }
 
   // Live probe (OpenClaw pattern: verify before you trust it)
@@ -759,6 +779,9 @@ export async function runDockCli(argv: string[], io: DockIo = {}): Promise<numbe
       out(`  [${r.level}] ${r.label} (${r.changed ? (dry ? 'would update' : 'updated') : 'unchanged'})\n`)
       for (const n of r.notes) out(`        ${n}\n`)
     }
+  }
+  if (showProxyBlock) {
+    out('\n' + formatProxyDockInstructions(baseUrl, token, shardFlag))
   }
   if (!uninstall) {
     out(

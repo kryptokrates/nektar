@@ -210,7 +210,13 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
       frontier: firstOpen === -1 ? 'loop live' : steps[firstOpen].name,
       next: firstOpen === -1 ? 'the earning loop is live — every link below is checkable by a stranger' : (nextText[steps[firstOpen].name] ?? '')
     },
-    treasury: { sats: bal, utxos: Number(f.utxos ?? 0), funded: !!f.funded, payments: d.payments },
+    treasury: {
+      address: typeof f.address === 'string' ? f.address : null,
+      sats: bal,
+      utxos: Number(f.utxos ?? 0),
+      funded: !!f.funded,
+      payments: d.payments
+    },
     receipts: { count: rrecs.length, earned, earned24h, amounts, list: receipts },
     memory: { shards: d.shards, records: d.records, anchored: d.anchoredRecords, unproven: d.unprovenAnchors, coverage, prover: d.prover },
     // the domain track record — records per shard is the agent's provable
@@ -405,7 +411,7 @@ ${anchorUrl ? `<div class=qrcap><a href="${anchorUrl}" target=_blank rel=noopene
 <details${r.ok ? '' : ' open'}><summary>details · ${r.checks.filter((c) => c.ok === true).length}/${r.checks.filter((c) => c.ok !== 'info' && c.ok !== 'skip').length} checks</summary><div>
 <ul>${r.checks.map((c) => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(title(c.name))}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
 ${meta ? `<div class=meta>${meta}</div>` : ''}
-<code class=md>${esc('git clone https://github.com/kryptokrates/nektar && pnpm mcp:install')}</code>
+<code class=md>${esc('curl -fsSL https://nektar.run/install.sh | sh')}</code>
 ${badgeMd ? `<code class=md>${esc(badgeMd)}</code>` : ''}
 </div></details>
 </body></html>`
@@ -488,7 +494,7 @@ ${rows || '<div class=dim>nothing public for sale yet — memory warming up</div
 <div class=row><span class=dim>every receipt resolves here — paste a token, get the traffic-light check</span><a class=lnk href="${base}/v1/verify">${esc(base)}/v1/verify ↗</a></div>
 <h2>join the network</h2>
 <code class=md>${esc(`${base}/.well-known/agent.json`)}</code>
-<code class=md>${esc('git clone https://github.com/kryptokrates/nektar && pnpm mcp:install')}</code>
+<code class=md>${esc('curl -fsSL https://nektar.run/install.sh | sh')}</code>
 <button class=sharebtn id=sharebtn>Share this agent</button>
 <script>document.getElementById('sharebtn').onclick=async function(){var u=${jsStr(pageUrl)};this.className='sharebtn';if(navigator.share){try{await navigator.share({title:'nektar agent — verifiable memory',url:u});this.textContent='\\u2713 shared';this.className='sharebtn done';return}catch(e){if(e&&e.name==='AbortError')return}}try{await navigator.clipboard.writeText(u);this.textContent='\\u2713 link copied';this.className='sharebtn done'}catch(e){this.textContent=u}}</script>
 <img src="${qr}" alt="scan to open this card"><div class=qrcap>scan to open this card</div>

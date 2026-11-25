@@ -11,7 +11,7 @@
 // localhostForwarding mirrors the ports onto windows localhost).
 //   node tools/pack-deploy.mjs   → dist-deploy/   (node dist/src/bin.js)
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { fetchRestateBinary, RESTATE_VERSION } from './restate-fetch.mjs'
@@ -47,6 +47,26 @@ if (!fetched.installed) {
   console.warn(`no restate-server target for ${process.platform}-${process.arch} — artifact ships without the sidecar`)
 } else {
   console.log(`restate-server ${RESTATE_VERSION} (${fetched.target}) → restate/`)
+}
+
+// ─── bundled native integrations, skill & watcher ───────────────────────────
+// Ship Hermes/OpenClaw plugins, agentskills.io SKILL.md, and the watcher inside
+// the standalone tree so `nektar dock` and `nektar watch` work with zero checkout.
+for (const [srcRel, dstRel] of [
+  ['integrations/hermes', 'integrations/hermes'],
+  ['integrations/openclaw', 'integrations/openclaw'],
+  ['skills/nektar-memory', 'skills/nektar-memory'],
+  ['packages/watcher/src', 'watcher']
+]) {
+  const src = join(root, srcRel)
+  if (!existsSync(src)) continue
+  const dst = join(out, dstRel)
+  mkdirSync(dst, { recursive: true })
+  cpSync(src, dst, {
+    recursive: true,
+    force: true,
+    filter: (p) => !/[\\/](__pycache__|\.pytest_cache|tests|node_modules)([\\/]|$)/.test(p) && !p.endsWith('.pyc')
+  })
 }
 
 writeFileSync(join(out, 'nektar'), '#!/bin/sh\nexec node "$(dirname "$0")/dist/src/bin.js" "$@"\n')

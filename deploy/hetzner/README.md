@@ -6,13 +6,13 @@ checkout. `.github/workflows/deploy.yml` deploys every master push and every
 
 ## What's configured where
 
-| Layer                            | File                                                                                                               | Managed by                                                                                |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| Non-secret market/network config | `deploy/hetzner/nektar-http.env` (this repo)                                                                       | deploy.yml applies each `KEY=value` to `/etc/nektar-http.env` — edit + push = reconfigure |
-| Secrets + box-local plumbing     | `/etc/nektar-http.env` on the box (HTTP_TOKEN, KEY_PASSPHRASE, FUND_TXIDS, DATA_DIR, HTTP_PORT/HOST, VERIFY_BASE…) | box-local only — never in git                                                             |
-| Services                         | `nektar-http`, `nektar-watch`, `nektar-prover` systemd units                                                       | box + deploy.yml                                                                          |
-| Edge                             | Caddy `nektar.run` → `:8080` for `/v1`, `/.well-known`, `/mcp`, plus `/hosts/a` → `:18291`, `/hosts/b` → `:18292`  | box                                                                                       |
-| Market hosts (the quorum)        | `docker compose -p nektar-bstack-testnet -f deploy/bstack-sandbox/compose.testnet.yaml` on the box                 | this repo — the pair agents publish/read through                                          |
+| Layer                            | File                                                                                                                                                                       | Managed by                                                                                |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Non-secret market/network config | `deploy/hetzner/nektar-http.env` (this repo)                                                                                                                               | deploy.yml applies each `KEY=value` to `/etc/nektar-http.env` — edit + push = reconfigure |
+| Secrets + box-local plumbing     | `/etc/nektar-http.env` on the box (HTTP_TOKEN, KEY_PASSPHRASE, FUND_TXIDS, DATA_DIR, HTTP_PORT/HOST, VERIFY_BASE…)                                                         | box-local only — never in git                                                             |
+| Services                         | `nektar-http`, `nektar-watch`, `nektar-prover` systemd units                                                                                                               | box + deploy.yml                                                                          |
+| Edge                             | Caddy `nektar.run` → `:8080` for `/v1`, `/.well-known`, `/mcp`, `/hosts/a` → `:18291`, `/hosts/b` → `:18292`, plus `/install.sh` & `/install.ps1` → `/opt/nektar/install/` | box                                                                                       |
+| Market hosts (the quorum)        | `docker compose -p nektar-bstack-testnet -f deploy/bstack-sandbox/compose.testnet.yaml` on the box                                                                         | this repo — the pair agents publish/read through                                          |
 
 ## What the instance is right now
 

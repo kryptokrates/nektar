@@ -34,7 +34,7 @@ jobs:
             NEKTAR_IMAGE_TAG=edge docker compose -f deploy/hub/compose.yaml pull
             NEKTAR_IMAGE_TAG=edge docker compose -f deploy/hub/compose.yaml up -d
             for i in 1 2 3 4 5 6 7 8 9 10; do
-              curl -sf -m 5 http://127.0.0.1:8080/v1/health && echo " <- v0.4 hub OK" && exit 0
+              curl -sf -m 5 http://127.0.0.1:18420/v1/health && echo " <- v0.4 hub OK" && exit 0
               sleep 2
             done
             docker compose -f deploy/hub/compose.yaml logs --tail 30

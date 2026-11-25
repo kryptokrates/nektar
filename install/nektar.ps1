@@ -254,8 +254,18 @@ switch ($Command.ToLowerInvariant()) {
   'dock' { Invoke-NektarDock $Rest }
   'hub' {
     Assert-Docker
-    if (Test-ContainerRunning) { & docker exec $Container nektar hub @Rest }
-    else { & docker run --rm $Image hub @Rest }
+    $hubSub = if ($Rest.Count -gt 0) { $Rest[0] } else { 'help' }
+    $hubRest = if ($Rest.Count -gt 1) { $Rest[1..($Rest.Count - 1)] } else { @() }
+    $hubDir = if ($env:NEKTAR_HUB_DIR) { $env:NEKTAR_HUB_DIR } else { Join-Path $HOME 'nektar-hub' }
+    switch ($hubSub) {
+      'down'   { & docker compose -f (Join-Path $hubDir 'compose.yaml') --env-file (Join-Path $hubDir '.env') down @hubRest }
+      'status' { & docker compose -f (Join-Path $hubDir 'compose.yaml') --env-file (Join-Path $hubDir '.env') ps @hubRest }
+      'logs'   { & docker compose -f (Join-Path $hubDir 'compose.yaml') --env-file (Join-Path $hubDir '.env') logs @hubRest }
+      default  {
+        if (Test-ContainerRunning) { & docker exec $Container nektar hub @Rest }
+        else { & docker run --rm $Image hub @Rest }
+      }
+    }
   }
   { $_ -in @('policy', 'doctor', 'check-mainnet', 'wallet', 'remember', 'recall', 'anchor', 'verify', 'version') } {
     Assert-Docker

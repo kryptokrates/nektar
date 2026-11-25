@@ -3,6 +3,7 @@ package hub
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-sdk/transaction/chaintracker"
 	bboxmod "github.com/lightwebinc/bbox/module"
+	"github.com/lightwebinc/bcommon/guard"
 	"github.com/lightwebinc/bcommon/module"
 	bfingermod "github.com/lightwebinc/bfinger/module"
 	blogsmod "github.com/lightwebinc/blogs/module"
@@ -28,13 +30,15 @@ import (
 	bstoremod "github.com/lightwebinc/bstore/module"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/core"
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
-// BountySubmission is an agent's submission selling verified knowledge to the Hub bounty pool.
+// BountySubmission is a signed agent submission selling verified knowledge to the Hub bounty pool.
 type BountySubmission struct {
 	BountyID      string          `json:"bountyId"`
 	SellerPub     string          `json:"sellerPub"`
+	ProvenancePub string          `json:"provenancePub,omitempty"` // BRC-43 provenance pubkey matching Provenance signature & OwnerSig
 	SellerAddress string          `json:"sellerAddress"`
 	Shard         string          `json:"shard"`
 	Seq           int64           `json:"seq"`
@@ -42,6 +46,22 @@ type BountySubmission struct {
 	Text          string          `json:"text"`
 	ProvenanceHex string          `json:"provenanceHex,omitempty"`
 	ProofBundle   json.RawMessage `json:"proofBundle,omitempty"`
+	TS            int64           `json:"ts,omitempty"`
+	Sig           string          `json:"sig,omitempty"`
+	OwnerSig      string          `json:"ownerSig,omitempty"`
+}
+
+// Signable returns the canonical signable payload for BountySubmission (using canonical lowercase HDP).
+func (s BountySubmission) Signable(canonicalHDP string) map[string]any {
+	return map[string]any{
+		"action":        "bounty_submit",
+		"bountyId":      s.BountyID,
+		"hdp":           canonicalHDP,
+		"sellerPub":     s.SellerPub,
+		"provenancePub": s.ProvenancePub,
+		"sellerAddress": s.SellerAddress,
+		"ts":            s.TS,
+	}
 }
 
 // BountyPayoutResult reports the Hub's verified payment to a contributing agent.
@@ -113,6 +133,12 @@ type rateBucket struct {
 	count       int
 }
 
+const (
+	maxHubSSESubs   = 256
+	maxBboxNonces   = 16384
+	bboxSkewSeconds = 300
+)
+
 // Node is a durable, self-contained Go overlay hub serving BRC-22 /submit, BRC-24 /lookup,
 // numbered/cursored SSE /events, NAT-safe /bbox relay, /bounties, and Hub-to-Hub federation.
 type Node struct {
@@ -126,10 +152,12 @@ type Node struct {
 	lookups       map[string]module.LookupService
 	subs          map[chan bstack.MarketEvent]map[string]bool
 	rates         map[string]*rateBucket
+	bboxNonces    map[string]int64
 	maxPerMin     int
 	tracker       chaintracker.ChainTracker
 	bountyHandler BountyHandler
 	httpClient    *http.Client
+	sseClient     *http.Client
 	stopCh        chan struct{}
 	closeOnce     sync.Once
 }
@@ -160,10 +188,12 @@ func NewNode(cfg Config) (*Node, error) {
 		lookups:       make(map[string]module.LookupService),
 		subs:          make(map[chan bstack.MarketEvent]map[string]bool),
 		rates:         make(map[string]*rateBucket),
+		bboxNonces:    make(map[string]int64),
 		maxPerMin:     maxPerMin,
 		tracker:       cfg.ChainTracker,
 		bountyHandler: cfg.OnBountySubmit,
-		httpClient:    &http.Client{Timeout: 20 * time.Second},
+		httpClient:    core.SafeHTTPClientForNetwork(net, 20*time.Second),
+		sseClient:     core.SafeHTTPClientForNetwork(net, 0),
 		stopCh:        make(chan struct{}),
 	}
 
@@ -420,6 +450,12 @@ func (n *Node) broadcastEvent(ev bstack.MarketEvent, domains []string) {
 
 // Subscribe registers a channel receiving live admitted market events (optional domain filter).
 func (n *Node) Subscribe(domains ...string) (<-chan bstack.MarketEvent, func()) {
+	ch, unsub, _ := n.TrySubscribe(domains...)
+	return ch, unsub
+}
+
+// TrySubscribe registers an SSE subscriber if below maxHubSSESubs.
+func (n *Node) TrySubscribe(domains ...string) (<-chan bstack.MarketEvent, func(), bool) {
 	ch := make(chan bstack.MarketEvent, 128)
 	filter := make(map[string]bool)
 	for _, d := range domains {
@@ -428,6 +464,10 @@ func (n *Node) Subscribe(domains ...string) (<-chan bstack.MarketEvent, func()) 
 		}
 	}
 	n.mu.Lock()
+	if len(n.subs) >= maxHubSSESubs {
+		n.mu.Unlock()
+		return nil, func() {}, false
+	}
 	n.subs[ch] = filter
 	n.mu.Unlock()
 	return ch, func() {
@@ -435,7 +475,32 @@ func (n *Node) Subscribe(domains ...string) (<-chan bstack.MarketEvent, func()) 
 		delete(n.subs, ch)
 		close(ch)
 		n.mu.Unlock()
+	}, true
+}
+
+func (n *Node) claimBboxNonce(scope, nonce string, now int64) bool {
+	if strings.TrimSpace(nonce) == "" {
+		return false
 	}
+	key := scope + ":" + nonce
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.bboxNonces) >= maxBboxNonces {
+		cutoff := now - bboxSkewSeconds*2
+		for k, ts := range n.bboxNonces {
+			if ts < cutoff {
+				delete(n.bboxNonces, k)
+			}
+		}
+		if len(n.bboxNonces) >= maxBboxNonces {
+			return false
+		}
+	}
+	if _, exists := n.bboxNonces[key]; exists {
+		return false
+	}
+	n.bboxNonces[key] = now
+	return true
 }
 
 // Submit processes a BRC-22 Atomic BEEF submission against requested topics, persists durably with a monotonic seq,
@@ -444,15 +509,31 @@ func (n *Node) Submit(ctx context.Context, rawBEEF []byte, topics []string) (ove
 	if len(rawBEEF) == 0 {
 		return nil, errors.New("hub: empty BEEF body")
 	}
-	tx, err := transaction.NewTransactionFromBEEF(rawBEEF)
-	if err != nil {
+	if len(rawBEEF) > 4<<20 {
+		return nil, errors.New("hub: BEEF exceeds 4 MiB limit")
+	}
+	var tx *transaction.Transaction
+	_, parsedTx, _, err := guard.ParseBEEF(rawBEEF, guard.DefaultBound)
+	if err == nil && parsedTx != nil {
+		tx = parsedTx
+	} else if err != nil && strings.Contains(err.Error(), "no inputs") && len(rawBEEF) <= 64<<10 {
+		// Unfunded 0-input OP_FALSE OP_RETURN market carrier transactions (<= 64 KiB, <= 16 outputs).
+		t0, tErr := transaction.NewTransactionFromBEEF(rawBEEF)
+		if tErr != nil || t0 == nil || len(t0.Inputs) != 0 || len(t0.Outputs) == 0 || len(t0.Outputs) > 16 {
+			return nil, fmt.Errorf("hub: parse carrier BEEF: %w", err)
+		}
+		tx = t0
+	} else {
+		if err == nil {
+			err = errors.New("empty BEEF transaction")
+		}
 		return nil, fmt.Errorf("hub: parse BEEF: %w", err)
 	}
+	txid := tx.TxID()
 	beef := transaction.NewBeef()
 	if _, err := beef.MergeTransaction(tx); err != nil {
 		return nil, fmt.Errorf("hub: merge tx into BEEF: %w", err)
 	}
-	txid := tx.TxID()
 	subCtx := module.WithSubmission(ctx, rawBEEF)
 	steak := make(overlay.Steak)
 
@@ -604,7 +685,7 @@ func (n *Node) pullPeerOnce(ctx context.Context, peer string, cursor int64) int6
 	if err != nil {
 		return cursor
 	}
-	sseResp, err := http.DefaultClient.Do(sseReq)
+	sseResp, err := n.sseClient.Do(sseReq)
 	if err != nil || sseResp.StatusCode != http.StatusOK {
 		if sseResp != nil {
 			sseResp.Body.Close()
@@ -754,7 +835,11 @@ func (n *Node) Handler() http.Handler {
 		}
 
 		// Subscribe BEFORE replaying SQLite so zero events slip through the gap!
-		ch, unsub := n.Subscribe(doms...)
+		ch, unsub, subOK := n.TrySubscribe(doms...)
+		if !subOK {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "hub SSE subscriber limit reached"})
+			return
+		}
 		defer unsub()
 
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -830,12 +915,29 @@ func (n *Node) Handler() http.Handler {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "recipientPub, senderPub, dealId, and kind are required"})
 			return
 		}
+		now := time.Now().Unix()
+		if msg.TS < now-bboxSkewSeconds || msg.TS > now+bboxSkewSeconds {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "expired or missing bbox ts"})
+			return
+		}
+		if strings.TrimSpace(msg.Nonce) == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "bbox nonce required"})
+			return
+		}
+		if msg.Aud == "" || (r.Host != "" && !strings.EqualFold(msg.Aud, r.Host)) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "bbox aud does not match hub host"})
+			return
+		}
 		if msg.Sig == "" {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "bbox message signature required"})
 			return
 		}
 		if err := bstack.VerifyArtifact(msg.SenderPub, msg.Sig, msg.Signable()); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid bbox sender signature"})
+			return
+		}
+		if !n.claimBboxNonce("send:"+msg.SenderPub, msg.Nonce, now) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "replayed bbox message nonce"})
 			return
 		}
 		if !n.allowPubRate(msg.SenderPub) {
@@ -857,23 +959,36 @@ func (n *Node) Handler() http.Handler {
 		}
 		hdrPub := strings.TrimSpace(r.Header.Get("X-Nektar-Pub"))
 		hdrTs := strings.TrimSpace(r.Header.Get("X-Nektar-Ts"))
+		hdrNonce := strings.TrimSpace(r.Header.Get("X-Nektar-Nonce"))
 		hdrSig := strings.TrimSpace(r.Header.Get("X-Nektar-Sig"))
-		if hdrPub != pub || hdrTs == "" || hdrSig == "" {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "signed X-Nektar-Pub / X-Nektar-Ts / X-Nektar-Sig headers required for bbox inbox"})
+		if hdrPub != pub || hdrTs == "" || hdrNonce == "" || hdrSig == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "signed X-Nektar-Pub / X-Nektar-Ts / X-Nektar-Nonce / X-Nektar-Sig headers required for bbox inbox"})
 			return
 		}
 		ts, tsErr := strconv.ParseInt(hdrTs, 10, 64)
 		now := time.Now().Unix()
-		if tsErr != nil || ts < now-300 || ts > now+300 {
+		if tsErr != nil || ts < now-bboxSkewSeconds || ts > now+bboxSkewSeconds {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "expired or invalid X-Nektar-Ts"})
 			return
 		}
-		authPayload := map[string]any{"action": "bbox_inbox", "pub": pub, "ts": ts}
+		since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+		aud := strings.ToLower(strings.TrimSpace(r.Host))
+		authPayload := map[string]any{
+			"action": "bbox_inbox",
+			"pub":    pub,
+			"ts":     ts,
+			"nonce":  hdrNonce,
+			"aud":    aud,
+			"since":  since,
+		}
 		if err := bstack.VerifyArtifact(pub, hdrSig, authPayload); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid bbox inbox signature"})
 			return
 		}
-		since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+		if !n.claimBboxNonce("inbox:"+pub, hdrNonce, now) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "replayed bbox inbox nonce"})
+			return
+		}
 		msgs, err := n.store.ListBboxMessages(pub, since, 50)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -901,6 +1016,25 @@ func (n *Node) Handler() http.Handler {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hdp, text, and sellerPub are required"})
 			return
 		}
+		// Canonicalize HDP to 64 lowercase hex chars BEFORE deduplicating in SQLite!
+		hdpRaw, hErr := hex.DecodeString(strings.TrimSpace(sub.HDP))
+		if hErr != nil || len(hdpRaw) != 32 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid 32-byte hdp hex"})
+			return
+		}
+		sub.HDP = hex.EncodeToString(hdpRaw)
+
+		// Require fresh signed submission from SellerPub to prevent unauthenticated ProofBundle theft.
+		now := time.Now().Unix()
+		if sub.TS < now-bboxSkewSeconds || sub.TS > now+bboxSkewSeconds || sub.Sig == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "fresh signed bounty submission (ts + sig) required"})
+			return
+		}
+		if err := bstack.VerifyArtifact(sub.SellerPub, sub.Sig, sub.Signable(sub.HDP)); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid bounty submission signature"})
+			return
+		}
+
 		b, err := n.store.GetBounty(sub.BountyID)
 		if err != nil || !b.Active || b.Filled >= b.MaxFills {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "bounty not found or already filled"})
@@ -913,7 +1047,7 @@ func (n *Node) Handler() http.Handler {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "hub bounty buyer is not armed"})
 			return
 		}
-		// Atomically reserve bounty slot + unique HDP claim BEFORE executing payout!
+		// Atomically reserve bounty slot + unique canonical HDP claim BEFORE executing payout!
 		if err := n.store.ReserveBountyClaim(b.ID, sub.HDP, sub.SellerPub, b.RewardSats); err != nil {
 			if errors.Is(err, ErrBountyDuplicate) {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": "duplicate fragment HDP already claimed"})

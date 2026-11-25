@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -171,7 +172,40 @@ func TestServerSecurityOAuthProxyAdaptersMetricsAndBadge(t *testing.T) {
 	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
 
 	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// Direct POST without CSRF cookie/nonce must be rejected (403 Forbidden)!
+	badAuthResp, err := noRedirect.PostForm(ts.URL+"/oauth/authorize", url.Values{
+		"client_id":             {reg.ClientID},
+		"redirect_uri":          {"http://127.0.0.1/cb"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"state":                 {"st1"},
+		"token":                 {"agent-secret-tok"},
+	})
+	if err != nil || badAuthResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("POST /oauth/authorize without CSRF expected 403, got %+v %v", badAuthResp, err)
+	}
+	badAuthResp.Body.Close()
+
+	// Real browser flow: GET /oauth/authorize -> capture CSRF cookie + hidden csrf_token -> POST /oauth/authorize!
+	getURL := fmt.Sprintf("%s/oauth/authorize?client_id=%s&redirect_uri=%s&code_challenge=%s&code_challenge_method=S256&state=st1",
+		ts.URL, url.QueryEscape(reg.ClientID), url.QueryEscape("http://127.0.0.1/cb"), url.QueryEscape(challenge))
+	getResp, err := http.Get(getURL)
+	if err != nil || getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /oauth/authorize failed: %+v %v", getResp, err)
+	}
+	var csrfCookie *http.Cookie
+	for _, c := range getResp.Cookies() {
+		if c.Name == "nektar_oauth_csrf" {
+			csrfCookie = c
+		}
+	}
+	getResp.Body.Close()
+	if csrfCookie == nil || csrfCookie.Value == "" {
+		t.Fatal("expected nektar_oauth_csrf cookie on GET /oauth/authorize")
+	}
+
 	form := url.Values{
+		"csrf_token":            {csrfCookie.Value},
 		"client_id":             {reg.ClientID},
 		"redirect_uri":          {"http://127.0.0.1/cb"},
 		"code_challenge":        {challenge},
@@ -179,7 +213,10 @@ func TestServerSecurityOAuthProxyAdaptersMetricsAndBadge(t *testing.T) {
 		"state":                 {"st1"},
 		"token":                 {"agent-secret-tok"},
 	}
-	authResp, err := noRedirect.PostForm(ts.URL+"/oauth/authorize", form)
+	authReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/oauth/authorize", strings.NewReader(form.Encode()))
+	authReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	authReq.AddCookie(csrfCookie)
+	authResp, err := noRedirect.Do(authReq)
 	if err != nil || authResp.StatusCode != http.StatusFound {
 		t.Fatalf("POST /oauth/authorize expected 302, got %+v %v", authResp, err)
 	}
@@ -239,9 +276,9 @@ func TestServerSecurityOAuthProxyAdaptersMetricsAndBadge(t *testing.T) {
 		t.Fatalf("expected verified badge SVG, got: %s", string(badgeBytes))
 	}
 
-	// 6. Pair code minting -> /pair?code= sets session cookie!
+	// 6. Pair code minting requires OperatorToken -> /pair?code= sets session cookie!
 	pcReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/auth/pair-code", bytes.NewReader(nil))
-	pcReq.Header.Set("Authorization", "Bearer agent-secret-tok")
+	pcReq.Header.Set("Authorization", "Bearer op-secret-tok")
 	pcResp, err := http.DefaultClient.Do(pcReq)
 	if err != nil || pcResp.StatusCode != 200 {
 		t.Fatalf("POST /v1/auth/pair-code failed: %+v %v", pcResp, err)

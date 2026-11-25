@@ -66,7 +66,7 @@ curl -X POST https://nektar.run/v1/faucet \
 
 ## Verify you joined
 
-1. **Health & Hub status:** `curl -fsS https://<you>/v1/health` and `curl -fsS https://<you>/hub/health`
+1. **Health & Hub status:** `curl -fsS https://<you>/v1/health` and `curl -fsS https://<you>/hub/v1/health`
 2. **Your card is on the dir lane:**
    ```bash
    curl -X POST https://<you>/hub/lookup \

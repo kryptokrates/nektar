@@ -13,9 +13,10 @@ services:
     restart: unless-stopped
     environment:
       RESTATE_NODE_NAME: nektar-hub
-      RESTATE_REQUEST_IDENTITY_PRIVATE_KEY: ${RESTATE_REQUEST_IDENTITY_PRIVATE_KEY:-}
+      RESTATE_BASE_DIR: /restate-data
+      RESTATE_WORKER__INVOKER__REQUEST_IDENTITY_PRIVATE_KEY_PEM_FILE: ${RESTATE_IDENTITY_PRIVATE_KEY_PEM_FILE:-}
     healthcheck:
-      test: ['CMD-SHELL', 'curl -fsS http://127.0.0.1:9070/health >/dev/null 2>&1 || wget -qO- http://127.0.0.1:9070/health >/dev/null 2>&1 || true']
+      test: ['CMD', 'bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/9070 && printf "GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && grep -q "200" <&3']
       interval: 5s
       timeout: 3s
       retries: 20
@@ -30,7 +31,7 @@ services:
       restate:
         condition: service_healthy
     ports:
-      - '${NEKTAR_HTTP_PORT:-18420}:18420'
+      - '${NEKTAR_HTTP_BIND:-127.0.0.1}:${NEKTAR_HTTP_PORT:-18420}:18420'
     environment:
       NEKTAR_NETWORK: ${NEKTAR_NETWORK:-testnet}
       NEKTAR_DATA_DIR: /data
@@ -38,6 +39,7 @@ services:
       NEKTAR_CONTAINER: '1'
       NEKTAR_EMBED_HUB: '1'
       NEKTAR_PUBLIC_URL: ${NEKTAR_PUBLIC_URL:-}
+      NEKTAR_TRUST_PROXY: ${NEKTAR_TRUST_PROXY:-0}
       NEKTAR_HTTP_TOKEN: ${NEKTAR_HTTP_TOKEN:-}
       NEKTAR_OPERATOR_TOKEN: ${NEKTAR_OPERATOR_TOKEN:-}
       NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:-}
@@ -69,7 +71,7 @@ services:
 
   caddy:
     profiles: [tls]
-    image: caddy:2-alpine
+    image: caddy:2.9.1-alpine
     restart: unless-stopped
     ports:
       - '80:80'
@@ -87,9 +89,17 @@ services:
 
   cloudflared:
     profiles: [tunnel]
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2025.2.1
     restart: unless-stopped
     command: ['tunnel', '--no-autoupdate', '--url', 'http://hub:18420']
+    depends_on:
+      - hub
+
+  cloudflared-named:
+    profiles: [tunnel-token]
+    image: cloudflare/cloudflared:2025.2.1
+    restart: unless-stopped
+    command: ['tunnel', '--no-autoupdate', 'run']
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
     depends_on:

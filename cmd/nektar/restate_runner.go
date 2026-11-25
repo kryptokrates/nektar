@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -24,6 +25,15 @@ import (
 )
 
 const RestatePinnedVersion = "1.8.1"
+
+// restatePinnedSHA256 pins the official SHA-256 checksums for restate-server v1.8.1
+// so `nektar restate-up` never relies solely on a self-referential remote .sha256 file.
+var restatePinnedSHA256 = map[string]string{
+	"x86_64-unknown-linux-musl":  "56f12ccc54ee227657d4d8b070622849977444425184ee242a33e3ccc28bf745",
+	"aarch64-unknown-linux-musl": "7d30d4c73a6978f7b4e4a2c08163fbf4e5689c4534af013bb8fd37e003474857",
+	"aarch64-apple-darwin":       "e2ea3dce01140981fe4d15a09e53718681574d3a290f5566b1025b4a2696a3eb",
+	"x86_64-apple-darwin":        "c6c079291b6171ff34358dd94b9315d5c374fc1e2ca96b62573caf8ac047e6c0",
+}
 
 // RestateRuntimeConfig controls how Nektar starts and connects to its active Restate durable executor.
 type RestateRuntimeConfig struct {
@@ -64,17 +74,25 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 	if eng == nil {
 		return nil, noop, nil
 	}
+	// Always default to loopback 127.0.0.1:9080 even inside single-container deployments;
+	// multi-container Compose stacks pass `-restate-listen :9080` explicitly.
 	listenAddr := strings.TrimSpace(cfg.ListenAddr)
 	if listenAddr == "" {
-		if server.IsContainerEnv() {
-			listenAddr = ":9080"
-		} else {
-			listenAddr = "127.0.0.1:9080"
+		listenAddr = "127.0.0.1:9080"
+	}
+	// Fail-closed internal Restate token: auto-generate a 32-byte random token if none was provided
+	// so NektarRuntime / BuyerDeal / SellerDeal ingress handlers are NEVER unauthenticated.
+	internalTok := strings.TrimSpace(cfg.InternalToken)
+	if internalTok == "" {
+		var tokRaw [32]byte
+		if _, err := rand.Read(tokRaw[:]); err != nil {
+			return nil, noop, fmt.Errorf("restate: generate internal token: %w", err)
 		}
+		internalTok = hex.EncodeToString(tokRaw[:])
+		clear(tokRaw[:])
+		cfg.InternalToken = internalTok
 	}
-	if cfg.InternalToken != "" {
-		eng.SetInternalToken(cfg.InternalToken)
-	}
+	eng.SetInternalToken(internalTok)
 
 	// R1 fail-closed endpoint security guard: refuse non-loopback Restate service endpoints unless
 	// Request Identity v1 JWT key is configured OR operator explicitly opted into private network mode.
@@ -312,8 +330,16 @@ func pickFreeLoopbackPort(preferred int) (int, error) {
 func cmdRestateUp(args []string) error {
 	fs := flag.NewFlagSet("restate-up", flag.ExitOnError)
 	ver := fs.String("version", RestatePinnedVersion, "Pinned Restate server version")
+	shaOverride := fs.String("sha256", "", "Expected SHA-256 hex digest (required when overriding -version)")
 	destDir := fs.String("dir", "", "Install directory (default ~/.nektar/bin)")
 	_ = fs.Parse(args)
+
+	cleanVer := strings.TrimPrefix(strings.TrimSpace(*ver), "v")
+	for _, c := range cleanVer {
+		if !((c >= '0' && c <= '9') || c == '.' || c == '-' || (c >= 'a' && c <= 'z')) {
+			return fmt.Errorf("invalid -version %q", *ver)
+		}
+	}
 
 	target := ""
 	switch runtime.GOOS + "/" + runtime.GOARCH {
@@ -329,6 +355,17 @@ func cmdRestateUp(args []string) error {
 		return fmt.Errorf("automatic restate-server download is not published for %s/%s — use Docker (`docker compose -f deploy/agent/compose.yaml up -d`) or install restate-server manually and set NEKTAR_RESTATE_BIN", runtime.GOOS, runtime.GOARCH)
 	}
 
+	wantDigest := strings.ToLower(strings.TrimSpace(*shaOverride))
+	if wantDigest == "" {
+		if cleanVer != RestatePinnedVersion {
+			return fmt.Errorf("refusing unpinned restate-server version %q without explicit -sha256 (pinned version is %s)", cleanVer, RestatePinnedVersion)
+		}
+		wantDigest = restatePinnedSHA256[target]
+	}
+	if len(wantDigest) != 64 {
+		return fmt.Errorf("invalid expected sha256 digest %q", wantDigest)
+	}
+
 	dir := strings.TrimSpace(*destDir)
 	if dir == "" {
 		home, _ := os.UserHomeDir()
@@ -339,25 +376,10 @@ func cmdRestateUp(args []string) error {
 	}
 
 	archiveName := fmt.Sprintf("restate-server-%s.tar.xz", target)
-	baseURL := fmt.Sprintf("https://github.com/restatedev/restate/releases/download/v%s/", strings.TrimPrefix(*ver, "v"))
+	baseURL := fmt.Sprintf("https://github.com/restatedev/restate/releases/download/v%s/", cleanVer)
 	hc := &http.Client{Timeout: 3 * time.Minute}
 
-	// Fetch official SHA-256 checksum file first (fail-closed verification!).
-	sumResp, err := hc.Get(baseURL + archiveName + ".sha256")
-	if err != nil {
-		return fmt.Errorf("download checksum: %w", err)
-	}
-	defer sumResp.Body.Close()
-	if sumResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("checksum HTTP %d from %s", sumResp.StatusCode, baseURL+archiveName+".sha256")
-	}
-	sumRaw, _ := io.ReadAll(io.LimitReader(sumResp.Body, 4096))
-	wantSum := strings.Fields(strings.TrimSpace(string(sumRaw)))
-	if len(wantSum) == 0 || len(wantSum[0]) != 64 {
-		return fmt.Errorf("unexpected sha256 file format: %q", string(sumRaw))
-	}
-
-	fmt.Printf("Downloading restate-server v%s (%s)...\n", *ver, target)
+	fmt.Printf("Downloading restate-server v%s (%s)...\n", cleanVer, target)
 	resp, err := hc.Get(baseURL + archiveName)
 	if err != nil {
 		return fmt.Errorf("download archive: %w", err)
@@ -381,29 +403,37 @@ func cmdRestateUp(args []string) error {
 	_ = tmpArchive.Close()
 
 	gotSum := hex.EncodeToString(h.Sum(nil))
-	if !strings.EqualFold(gotSum, wantSum[0]) {
-		return fmt.Errorf("SHA-256 mismatch for %s: got %s, want %s", archiveName, gotSum, wantSum[0])
+	if !strings.EqualFold(gotSum, wantDigest) {
+		return fmt.Errorf("SHA-256 mismatch for %s: got %s, want pinned %s", archiveName, gotSum, wantDigest)
 	}
 
-	// Extract restate-server binary from verified .tar.xz archive into a temp dir, then atomically rename.
+	// Extract restate-server binary from verified .tar.xz archive into a temp dir, then verify regular file before rename.
 	extractDir, err := os.MkdirTemp(dir, "restate-extract-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(extractDir)
-	tarCmd := exec.Command("tar", "-xJf", tmpPath, "-C", extractDir)
+	tarArgs := []string{"-xJf", tmpPath, "-C", extractDir}
+	if runtime.GOOS == "linux" {
+		tarArgs = []string{"--no-same-owner", "--no-same-permissions", "-xJf", tmpPath, "-C", extractDir}
+	}
+	tarCmd := exec.Command("tar", tarArgs...)
 	if out, err := tarCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("extract %s (requires tar/xz): %w: %s", archiveName, err, strings.TrimSpace(string(out)))
 	}
 	var foundBin string
 	_ = filepath.WalkDir(extractDir, func(p string, d os.DirEntry, wErr error) error {
-		if wErr == nil && !d.IsDir() && d.Name() == "restate-server" {
+		if wErr == nil && d.Type().IsRegular() && d.Name() == "restate-server" {
 			foundBin = p
 		}
 		return nil
 	})
 	if foundBin == "" {
-		return errors.New("restate-server binary not found inside release archive")
+		return errors.New("restate-server regular binary not found inside release archive")
+	}
+	fi, err := os.Lstat(foundBin)
+	if err != nil || !fi.Mode().IsRegular() {
+		return errors.New("refusing non-regular restate-server file (symlink blocked)")
 	}
 	dstPath := filepath.Join(dir, "restate-server")
 	if err := os.Chmod(foundBin, 0o755); err != nil {
@@ -412,7 +442,7 @@ func cmdRestateUp(args []string) error {
 	if err := os.Rename(foundBin, dstPath); err != nil {
 		return err
 	}
-	fmt.Printf("Installed SHA-256 verified restate-server v%s -> %s\n", *ver, dstPath)
+	fmt.Printf("Installed pinned SHA-256 verified restate-server v%s -> %s\n", cleanVer, dstPath)
 	fmt.Println("Next: run `nektar serve` — it will automatically supervise restate-server on loopback!")
 	return nil
 }

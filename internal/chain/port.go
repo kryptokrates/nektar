@@ -270,6 +270,21 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		if err != nil {
 			return nil, fmt.Errorf("chain: dial BRC-100 wallet at %s: %w", wireURL, err)
 		}
+		netRes, err := w.GetNetwork(ctx, nil, Originator)
+		if err != nil {
+			return nil, fmt.Errorf("chain: BRC-100 wallet network check failed: %w", err)
+		}
+		wantNet := sdkwallet.NetworkTestnet
+		if mainnet {
+			wantNet = sdkwallet.NetworkMainnet
+		}
+		if netRes == nil || netRes.Network != wantNet {
+			gotNet := sdkwallet.Network("")
+			if netRes != nil {
+				gotNet = netRes.Network
+			}
+			return nil, fmt.Errorf("chain: BRC-100 client wallet network mismatch: Nektar requires %q, desktop wallet is on %q", wantNet, gotNet)
+		}
 		idPub, err := wirewallet.IdentityKeyOf(ctx, w, Originator)
 		if err != nil {
 			return nil, fmt.Errorf("chain: BRC-100 wallet identity key (is BSV Desktop unlocked?): %w", err)
@@ -1026,6 +1041,64 @@ func (p *Port) SigningPubKey(ctx context.Context) (*ec.PublicKey, error) {
 		return nil, err
 	}
 	return res.PublicKey, nil
+}
+
+// RelayExternalTx broadcasts an incoming third-party (buyer) transaction to the configured live settler
+// before releasing paid goods under zero-conf policy (does not consume the receiver's SpendGuard budget).
+func (p *Port) RelayExternalTx(ctx context.Context, tx *transaction.Transaction) error {
+	if tx == nil {
+		return errors.New("chain: nil external transaction")
+	}
+	if p.testChain != nil || p.network == "memory" {
+		return nil
+	}
+	if p.settler == nil {
+		return errors.New("chain: no live settler configured to broadcast zero-conf buyer payment")
+	}
+	return p.settler.Submit(ctx, tx)
+}
+
+// EncryptAtRest wraps sensitive local secrets (e.g. Borg epoch keys, market signing key)
+// using the node's BRC-43 wallet key (CounterpartyTypeSelf) so raw secrets are never stored in plaintext SQLite.
+func (p *Port) EncryptAtRest(ctx context.Context, keyID string, plaintext []byte) ([]byte, error) {
+	if p == nil || p.wallet == nil {
+		return nil, errors.New("chain: wallet unavailable for EncryptAtRest")
+	}
+	res, err := p.wallet.Encrypt(ctx, sdkwallet.EncryptArgs{
+		EncryptionArgs: sdkwallet.EncryptionArgs{
+			ProtocolID: sdkwallet.Protocol{SecurityLevel: sdkwallet.SecurityLevelEveryApp, Protocol: "nektar storage"},
+			KeyID:      keyID,
+			Counterparty: sdkwallet.Counterparty{
+				Type: sdkwallet.CounterpartyTypeSelf,
+			},
+		},
+		Plaintext: plaintext,
+	}, Originator)
+	if err != nil {
+		return nil, err
+	}
+	return res.Ciphertext, nil
+}
+
+// DecryptAtRest unwraps a ciphertext created by EncryptAtRest.
+func (p *Port) DecryptAtRest(ctx context.Context, keyID string, ciphertext []byte) ([]byte, error) {
+	if p == nil || p.wallet == nil {
+		return nil, errors.New("chain: wallet unavailable for DecryptAtRest")
+	}
+	res, err := p.wallet.Decrypt(ctx, sdkwallet.DecryptArgs{
+		EncryptionArgs: sdkwallet.EncryptionArgs{
+			ProtocolID: sdkwallet.Protocol{SecurityLevel: sdkwallet.SecurityLevelEveryApp, Protocol: "nektar storage"},
+			KeyID:      keyID,
+			Counterparty: sdkwallet.Counterparty{
+				Type: sdkwallet.CounterpartyTypeSelf,
+			},
+		},
+		Ciphertext: ciphertext,
+	}, Originator)
+	if err != nil {
+		return nil, err
+	}
+	return res.Plaintext, nil
 }
 
 // AnchorOutput helper creates a 1-sat output locked to a NektarAnchor script.

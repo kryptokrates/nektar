@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/memory"
+	"github.com/kryptokrates/nektar/internal/policy"
 )
 
 var proxyReceiptRe = regexp.MustCompile(`nektarr1\.[a-zA-Z0-9_-]{20,}`)
 
 func (a *App) registerProxyRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/proxy/health", func(w http.ResponseWriter, r *http.Request) {
-		ok, _ := a.resolveProxyAuth(r, "openai")
+		ok, _, _ := a.resolveProxyAuth(r, "openai")
 		if !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
@@ -40,18 +41,9 @@ func (a *App) registerProxyRoutes(mux *http.ServeMux) {
 
 // resolveProxyAuth checks X-Nektar-Token, composite `nkt:<nektarToken>:<providerKey>` in Authorization/x-api-key,
 // or standard session/Bearer auth (when APIToken is unset, loopback is open).
-// Returns (authorized, upstreamKeyOverride).
-func (a *App) resolveProxyAuth(r *http.Request, provider string) (bool, string) {
+// Returns (authorized, upstreamKeyOverride, hasOverride).
+func (a *App) resolveProxyAuth(r *http.Request, provider string) (bool, string, bool) {
 	authRequired := a.cfg.APIToken != "" || a.cfg.OperatorToken != ""
-
-	if xTok := strings.TrimSpace(r.Header.Get("X-Nektar-Token")); xTok != "" {
-		if a.tokenMatches(xTok, false) {
-			return true, ""
-		}
-		if authRequired {
-			return false, ""
-		}
-	}
 
 	var rawKey string
 	if provider == "anthropic" {
@@ -59,24 +51,48 @@ func (a *App) resolveProxyAuth(r *http.Request, provider string) (bool, string) 
 	} else if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
 		rawKey = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 	}
+
 	if strings.HasPrefix(rawKey, "nkt:") {
 		parts := strings.SplitN(rawKey, ":", 3)
 		if len(parts) == 3 {
 			nktTok, upstreamKey := parts[1], parts[2]
 			if !authRequired || a.tokenMatches(nktTok, false) {
-				return true, upstreamKey
+				return true, upstreamKey, true
 			}
-			return false, ""
+			return false, "", true
+		}
+	}
+
+	if xTok := strings.TrimSpace(r.Header.Get("X-Nektar-Token")); xTok != "" {
+		if a.tokenMatches(xTok, false) {
+			return true, "", false
+		}
+		if authRequired {
+			return false, "", false
 		}
 	}
 
 	if !authRequired {
-		return true, ""
+		return true, "", false
 	}
 	if a.tokenMatches(a.extractToken(r), false) {
-		return true, ""
+		return true, "", false
 	}
-	return false, ""
+	return false, "", false
+}
+
+func (a *App) isNektarCredential(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return false
+	}
+	if strings.HasPrefix(s, "Bearer ") {
+		s = strings.TrimSpace(strings.TrimPrefix(s, "Bearer "))
+	}
+	if strings.HasPrefix(s, "nkt:") || strings.HasPrefix(s, "nkt_at_") {
+		return true
+	}
+	return a.tokenMatches(s, false)
 }
 
 func (a *App) handleLLMProxy(w http.ResponseWriter, r *http.Request, provider, subPath string) {
@@ -84,7 +100,7 @@ func (a *App) handleLLMProxy(w http.ResponseWriter, r *http.Request, provider, s
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid proxy path"})
 		return
 	}
-	authed, upstreamKeyOverride := a.resolveProxyAuth(r, provider)
+	authed, upstreamKeyOverride, hasOverride := a.resolveProxyAuth(r, provider)
 	if !authed {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized (pass X-Nektar-Token or composite nkt:<nektarToken>:<providerKey>)"})
 		return
@@ -144,24 +160,25 @@ func (a *App) handleLLMProxy(w http.ResponseWriter, r *http.Request, provider, s
 		}
 	}
 	if provider == "anthropic" {
-		if upstreamKeyOverride != "" {
-			upReq.Header.Set("x-api-key", upstreamKeyOverride)
-		} else if v := r.Header.Get("x-api-key"); v != "" {
+		if hasOverride {
+			if upstreamKeyOverride != "" {
+				upReq.Header.Set("x-api-key", upstreamKeyOverride)
+			}
+		} else if v := r.Header.Get("x-api-key"); v != "" && !a.isNektarCredential(v) {
 			upReq.Header.Set("x-api-key", v)
 		}
 	} else {
-		if upstreamKeyOverride != "" {
-			upReq.Header.Set("Authorization", "Bearer "+upstreamKeyOverride)
-		} else if v := r.Header.Get("Authorization"); v != "" {
-			// Avoid forwarding a pure Nektar token if the caller authenticated via X-Nektar-Token.
+		if hasOverride {
+			if upstreamKeyOverride != "" {
+				upReq.Header.Set("Authorization", "Bearer "+upstreamKeyOverride)
+			}
+		} else if v := r.Header.Get("Authorization"); v != "" && !a.isNektarCredential(v) {
 			upReq.Header.Set("Authorization", v)
 		}
 	}
 
 	streamClient := &http.Client{
-		Transport: &http.Transport{
-			ResponseHeaderTimeout: 30 * time.Second,
-		},
+		Transport: a.proxyTransport,
 	}
 	if a.cfg.HTTPClient != nil && a.cfg.HTTPClient.Transport != nil {
 		streamClient.Transport = a.cfg.HTTPClient.Transport
@@ -229,17 +246,28 @@ func (a *App) handleLLMProxy(w http.ResponseWriter, r *http.Request, provider, s
 func (a *App) buildPromptMemoryContext(ctx context.Context, shard, prompt string) (string, int) {
 	rCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
 	defer cancel()
+	// External LLM disclosure: strictly Level 0 + Cedar "disclose" + never Borg-encrypted secrets.
+	proxyPrincipal := policy.Principal{Type: "Agent", ID: "llm-proxy", Level: 0}
 	_, frags, err := a.mem.RecallAllShards(rCtx, memory.RecallInput{
-		Shard: shard,
-		Query: prompt,
-		Limit: 8,
+		Shard:        shard,
+		Query:        prompt,
+		Principal:    proxyPrincipal,
+		Action:       "disclose",
+		DisallowBorg: true,
+		Limit:        8,
 	})
 	if err != nil {
 		return "", 0
 	}
 	// If prompt FTS returned 0 hits, fall back to top 4 most-recent fragments so welcome/core rules stay visible.
 	if len(frags) == 0 && strings.TrimSpace(prompt) != "" {
-		_, frags, _ = a.mem.RecallAllShards(rCtx, memory.RecallInput{Shard: shard, Limit: 4})
+		_, frags, _ = a.mem.RecallAllShards(rCtx, memory.RecallInput{
+			Shard:        shard,
+			Principal:    proxyPrincipal,
+			Action:       "disclose",
+			DisallowBorg: true,
+			Limit:        4,
+		})
 	}
 	if len(frags) == 0 {
 		return "", 0

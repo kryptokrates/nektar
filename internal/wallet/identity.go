@@ -39,6 +39,8 @@ func LoadOrCreateIdentity(dir string) (*ec.PrivateKey, error) {
 	}
 	idPath := filepath.Join(dir, "identity.json")
 	if raw, err := os.ReadFile(idPath); err == nil {
+		defer clear(raw)
+		_ = os.Chmod(idPath, 0o600)
 		var f identityFile
 		if err := json.Unmarshal(raw, &f); err != nil {
 			return nil, fmt.Errorf("wallet: parse %s: %w", idPath, err)
@@ -53,9 +55,11 @@ func LoadOrCreateIdentity(dir string) (*ec.PrivateKey, error) {
 		if f.RootKeyHex != "" {
 			keyBytes, hErr := hex.DecodeString(f.RootKeyHex)
 			if hErr != nil || len(keyBytes) != 32 {
+				clear(keyBytes)
 				return nil, fmt.Errorf("wallet: invalid rootKeyHex in %s", idPath)
 			}
 			priv, _ := ec.PrivateKeyFromBytes(keyBytes)
+			clear(keyBytes)
 			if priv == nil {
 				return nil, fmt.Errorf("wallet: invalid root key in %s", idPath)
 			}
@@ -77,10 +81,13 @@ func LoadOrCreateIdentity(dir string) (*ec.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer clear(b)
 	tmp := idPath + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("wallet: write %s: %w", tmp, err)
 	}
+	_ = os.Chmod(tmp, 0o600)
 	if err := os.Rename(tmp, idPath); err != nil {
 		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("wallet: rename %s: %w", idPath, err)

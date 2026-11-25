@@ -182,8 +182,8 @@ func NewEngine(mem *memory.Service, pol *Policy) *Engine {
 		pol = DefaultPolicy()
 	}
 	var sk *ec.PrivateKey
-	if mem != nil && mem.DB() != nil {
-		if raw, err := mem.DB().LoadOrCreateStableKey("node_market_key_v1", func() ([]byte, error) {
+	if mem != nil {
+		if raw, err := mem.LoadOrCreateProtectedKey("node_market_key_v1", func() ([]byte, error) {
 			k, err := ec.NewPrivateKey()
 			if err != nil {
 				return nil, err
@@ -191,10 +191,15 @@ func NewEngine(mem *memory.Service, pol *Policy) *Engine {
 			return k.Serialize(), nil
 		}); err == nil && len(raw) == 32 {
 			sk, _ = ec.PrivateKeyFromBytes(raw)
+			clear(raw)
 		}
 	}
 	if sk == nil {
-		sk, _ = ec.NewPrivateKey()
+		var err error
+		sk, err = ec.NewPrivateKey()
+		if err != nil {
+			panic("market: generate fallback sale key: " + err.Error())
+		}
 	}
 	if mem != nil && mem.DB() != nil {
 		pol.AttachDB(mem.DB())
@@ -231,13 +236,16 @@ func (e *Engine) SetInternalToken(tok string) {
 }
 
 func (e *Engine) checkInternalAuth(ctx restate.Context) error {
+	return e.checkInternalAuthReq(ctx.Request())
+}
+
+func (e *Engine) checkInternalAuthReq(req *restate.Request) error {
 	e.mu.RLock()
 	want := e.internalToken
 	e.mu.RUnlock()
 	if want == "" {
-		return nil
+		return restate.TerminalErrorf("nektar: internal restate auth token not configured (fail-closed)")
 	}
-	req := ctx.Request()
 	got := ""
 	if req != nil && req.Headers != nil {
 		for k, v := range req.Headers.Iter() {
@@ -477,6 +485,9 @@ type buyerVerifyResult struct {
 }
 
 func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput) (DealState, error) {
+	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
+		return DealState{}, err
+	}
 	dealID := restate.Key(ctx)
 	want := in.Want
 	if want.WantID == "" {
@@ -510,21 +521,21 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			}
 			bypass = true
 		}
-		// Only require operator approval gate for live broker trades (when no pre-supplied offers bypass it OR when policy explicitly blocks).
+		// Always enforce operator buyer approval & caps regardless of whether in.Offers were pre-supplied.
 		needsApproval := false
 		reason := ""
 		if !bypass {
 			domainErr := e.policy.CanSpendForDomains("", want.Domains, 0)
-			if len(in.Offers) == 0 && !buyerOK {
+			if !buyerOK {
 				needsApproval = true
 				reason = "no active buyer policy approved (run `nektar policy approve --preset buyer` or approve in Dashboard)"
 			} else if domainErr != nil {
 				needsApproval = true
 				reason = domainErr.Error()
-			} else if maxDeal > 0 && want.MaxSats > maxDeal && len(in.Offers) == 0 {
+			} else if maxDeal == 0 || want.MaxSats > maxDeal {
 				needsApproval = true
 				reason = fmt.Sprintf("requested maxSats (%d) exceeds buyer policy maxPerDeal (%d)", want.MaxSats, maxDeal)
-			} else if maxDay > 0 && spent+want.MaxSats > maxDay && len(in.Offers) == 0 {
+			} else if maxDay == 0 || spent+want.MaxSats > maxDay {
 				var rem uint64
 				if maxDay > spent {
 					rem = maxDay - spent
@@ -657,6 +668,23 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 		offers := in.Offers
 		var firstOfferMs int64
 		wantJSON, _ := json.Marshal(want)
+		if len(offers) > 0 {
+			// Verify cryptographically signed SaleOffer on pre-supplied offers too (never trust raw ingress input).
+			verified := make([]bstack.OfferAd, 0, len(offers))
+			for _, off := range offers {
+				if len(off.SaleOffer) > 0 {
+					var so contracts.KeyedSaleOffer
+					if json.Unmarshal(off.SaleOffer, &so) != nil {
+						continue
+					}
+					if contracts.VerifySaleOffer(&so, off.BuyerPub, off.Leaf) != nil {
+						continue
+					}
+				}
+				verified = append(verified, off)
+			}
+			offers = verified
+		}
 		if len(offers) == 0 {
 			br := e.getBroker()
 			if br == nil {
@@ -888,6 +916,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 					DerivationSuffix:  derivSuffix,
 					SenderIdentityKey: senderKey,
 				}
+				br.signPurchaseRequest(&pReq)
 				// Try direct HTTP first; if Seller is NAT-ed, fire bbox purchase_beef asynchronously
 				// and return nil so BuyerDeal suspends durably on Restate Promise("claim")!
 				pResp, dErr := br.DeliverPurchaseAsync(rctx, chosen, dealID, pReq)
@@ -1019,7 +1048,10 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			targetShard = "market/" + dom
 		}
 
-		if sig.ContentKeyHex != "" && len(chosen.SaleOffer) > 0 {
+		if strings.TrimSpace(sig.ContentKeyHex) == "" {
+			return buyerVerifyResult{NowUnix: now, FailedReason: "missing contentKeyHex in seller claim signal"}, nil
+		}
+		if len(chosen.SaleOffer) > 0 {
 			var saleOffer contracts.KeyedSaleOffer
 			if err := json.Unmarshal(chosen.SaleOffer, &saleOffer); err != nil {
 				return buyerVerifyResult{NowUnix: now, FailedReason: "decode saleOffer: " + err.Error()}, nil
@@ -1047,6 +1079,9 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			if pErr != nil {
 				return buyerVerifyResult{NowUnix: now, FailedReason: "BRC-369 key verification failed: " + pErr.Error()}, nil
 			}
+			if sig.ProofBundle == nil && chosen.Leaf != "" && e.mem != nil && e.mem.Chain().Network() != "memory" {
+				return buyerVerifyResult{NowUnix: now, FailedReason: "missing SPV ProofBundle from seller"}, nil
+			}
 			if sig.ProofBundle != nil {
 				if chosen.Leaf != "" && !strings.EqualFold(sig.ProofBundle.Leaf, chosen.Leaf) {
 					return buyerVerifyResult{NowUnix: now, FailedReason: "seller SPV ProofBundle leaf mismatches signed offer leaf"}, nil
@@ -1057,6 +1092,9 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 				}
 				if !vr.OK {
 					return buyerVerifyResult{NowUnix: now, FailedReason: fmt.Sprintf("seller SPV ProofBundle invalid (%s: %s)", vr.Reason, vr.Detail)}, nil
+				}
+				if e.mem.Chain().Network() != "memory" && !vr.Settled {
+					return buyerVerifyResult{NowUnix: now, FailedReason: "seller SPV ProofBundle is not settled in a mined block"}, nil
 				}
 			}
 			deliveredText = string(plaintext)
@@ -1128,6 +1166,9 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 }
 
 func (e *Engine) restateBuyerDeliverKey(ctx restate.WorkflowSharedContext, sig ClaimSignal) (bool, error) {
+	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
+		return false, err
+	}
 	if err := restate.Promise[ClaimSignal](ctx, "claim").Resolve(sig); err != nil {
 		return false, err
 	}
@@ -1143,6 +1184,9 @@ type sellerPrepResult struct {
 }
 
 func (e *Engine) restateSellerRun(ctx restate.WorkflowContext, in SellerDealInput) (DealState, error) {
+	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
+		return DealState{}, err
+	}
 	offerID := restate.Key(ctx)
 	dealID := "sell-" + offerID
 
@@ -1272,8 +1316,9 @@ func (e *Engine) restateSellerRun(ctx restate.WorkflowContext, in SellerDealInpu
 		return st, pErr
 	}
 
-	// Step 3: If unconfirmed payment exceeds journaled ZeroConfMax, wait on confirmation promise (R13 — no dead end!).
-	if !paySig.Confirmed && prep.ZeroConfMax > 0 && paySig.AmountSats > prep.ZeroConfMax {
+	// Step 3: If unconfirmed payment exceeds journaled ZeroConfMax (0 = fail-closed, zero-conf disabled!),
+	// wait on confirmation promise (R13 — no dead end!).
+	if !paySig.Confirmed && (prep.ZeroConfMax == 0 || paySig.AmountSats > prep.ZeroConfMax) {
 		pendNow, _ := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
 			now := time.Now().Unix()
 			e.persistDealRecord(store.DealRecord{
@@ -1351,6 +1396,9 @@ func (e *Engine) restateSellerRun(ctx restate.WorkflowContext, in SellerDealInpu
 }
 
 func (e *Engine) restateSellerDeliverPayment(ctx restate.WorkflowSharedContext, sig PaymentSignal) (bool, error) {
+	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
+		return false, err
+	}
 	if err := restate.Promise[PaymentSignal](ctx, "payment").Resolve(sig); err != nil {
 		return false, err
 	}
@@ -1358,6 +1406,9 @@ func (e *Engine) restateSellerDeliverPayment(ctx restate.WorkflowSharedContext, 
 }
 
 func (e *Engine) restateSellerConfirmPayment(ctx restate.WorkflowSharedContext, sig PaymentSignal) (bool, error) {
+	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
+		return false, err
+	}
 	sig.Confirmed = true
 	if err := restate.Promise[PaymentSignal](ctx, "payment_confirmed").Resolve(sig); err != nil {
 		return false, err
@@ -1366,6 +1417,9 @@ func (e *Engine) restateSellerConfirmPayment(ctx restate.WorkflowSharedContext, 
 }
 
 func (e *Engine) restateDealStatus(ctx restate.WorkflowSharedContext, _ restate.Void) (DealState, error) {
+	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
+		return DealState{}, err
+	}
 	return restate.Get[DealState](ctx, "state")
 }
 
@@ -1393,8 +1447,9 @@ func (e *Engine) restateCustodyReserve(ctx restate.ObjectContext, in CustodyRese
 			if err := e.policy.CanSpend(in.SellerPub, 0); err != nil && strings.Contains(err.Error(), "blocked") {
 				return CustodyReserveResult{Approved: false, Reason: err.Error()}, nil
 			}
-			maxDeal = 0
-			maxDay = 0
+			// Explicit operator override bypasses automated deal/day caps while keeping 0 fail-closed otherwise.
+			maxDeal = ^uint64(0)
+			maxDay = ^uint64(0)
 		}
 		bal := e.mem.Chain().BalanceSats()
 		if bal < in.AmountSats {
@@ -1686,9 +1741,14 @@ func (e *Engine) restateRuntimeAnchorStatus(ctx restate.Context, shard string) (
 // PrepareDirectSale creates a signed BRC-369 keyed DisclosureSale offer for (shard, seq),
 // stores the encrypted ciphertext in CHIRP (BRC-167), and returns the public offer + private reveal key k.
 func (e *Engine) PrepareDirectSale(ctx context.Context, shard string, seq int64, priceSats uint64, buyerPub string) (*contracts.KeyedSaleOffer, [32]byte, string, error) {
-	// Never disclose high-clearance fragments accidentally: market sales default to Level 0 clearance + Cedar disclose check.
+	// Never disclose high-clearance or Borg-encrypted fragments: Level 0 + DisallowBorg + Cedar disclose.
 	sellerPrincipal := policy.Principal{Type: "Agent", ID: "market-seller", Level: 0}
-	recalled, err := e.mem.Recall(ctx, memory.RecallInput{Shard: shard, Principal: sellerPrincipal})
+	recalled, err := e.mem.Recall(ctx, memory.RecallInput{
+		Shard:        shard,
+		Principal:    sellerPrincipal,
+		Action:       "disclose",
+		DisallowBorg: true,
+	})
 	if err != nil {
 		return nil, [32]byte{}, "", err
 	}
@@ -1728,10 +1788,11 @@ func (e *Engine) PrepareDirectSale(ctx context.Context, shard string, seq int64,
 		return nil, [32]byte{}, "", err
 	}
 	ctBytes, _ := hex.DecodeString(offer.CiphertextHex)
-	chirpURL, _, err := bstack.StoreChirp(e.mem.Objects(), ctBytes)
+	chirpURL, _, hashes, err := bstack.StoreChirpWithHashes(e.mem.Objects(), ctBytes)
 	if err != nil {
 		return nil, [32]byte{}, "", err
 	}
+	e.mem.AllowPublicChirpHashes(hashes...)
 	return offer, offer.ContentKey(), chirpURL, nil
 }
 

@@ -321,10 +321,9 @@ func cmdServe(args []string) error {
 	if server.IsContainerEnv() {
 		defaultListen = ":" + envOr("NEKTAR_HTTP_PORT", DefaultLocalPort)
 	}
+	// Always default Restate SDK listener to loopback 127.0.0.1:9080 so single-container deployments
+	// never trip the non-loopback identity guard; multi-container Compose stacks pass `-restate-listen :9080`.
 	defaultRestateListen := "127.0.0.1:9080"
-	if server.IsContainerEnv() {
-		defaultRestateListen = ":9080"
-	}
 	addr := fs.String("listen", defaultListen, "HTTP listen address")
 	restateAddr := fs.String("restate-listen", envOr("NEKTAR_RESTATE_LISTEN", defaultRestateListen), "Dedicated Restate HTTP/2 (h2c) endpoint address (default 127.0.0.1:9080)")
 	withHub := fs.Bool("hub", os.Getenv("NEKTAR_EMBED_HUB") == "1", "Mount embedded durable SQLite Go Overlay Hub at /hub/ with starter liquidity & bounties")
@@ -437,8 +436,16 @@ func cmdServe(args []string) error {
 
 	localBase := fmt.Sprintf("http://127.0.0.1:%d", portNum)
 	pubURL := strings.TrimRight(strings.TrimSpace(*publicURLFlag), "/")
-	if pubURL == "" && *withHub {
-		pubURL = localBase
+	if pubURL == "" {
+		// Derive public URL from standard PaaS platform env vars when present; NEVER advertise 127.0.0.1
+		// on public market lanes (empty pubURL cleanly selects NAT/bbox fallback).
+		if u := strings.TrimRight(strings.TrimSpace(os.Getenv("RENDER_EXTERNAL_URL")), "/"); u != "" {
+			pubURL = u
+		} else if d := strings.TrimSpace(os.Getenv("RAILWAY_PUBLIC_DOMAIN")); d != "" {
+			pubURL = "https://" + strings.TrimPrefix(strings.TrimPrefix(d, "https://"), "http://")
+		} else if app := strings.TrimSpace(os.Getenv("FLY_APP_NAME")); app != "" {
+			pubURL = "https://" + app + ".fly.dev"
+		}
 	}
 
 	// Merge any CLI --hosts into discovery!

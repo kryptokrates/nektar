@@ -380,9 +380,48 @@ func (e *Engine) Close() error {
 	if e.sqlDB != nil {
 		// Reclaim WAL pages cleanly on shutdown so wallet.sqlite-wal never lingers bloated on disk.
 		_, _ = e.sqlDB.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
-		return e.sqlDB.Close()
+		err := e.sqlDB.Close()
+		zeroECKey(e.rootKey)
+		zeroECKey(e.fundKey)
+		return err
 	}
+	zeroECKey(e.rootKey)
+	zeroECKey(e.fundKey)
 	return nil
+}
+
+func zeroECKey(k *ec.PrivateKey) {
+	if k != nil && k.D != nil {
+		k.D.SetInt64(0)
+	}
+}
+
+func isSafeSQLiteIdent(s string) bool {
+	if s == "" || len(s) > 128 {
+		return false
+	}
+	for i, c := range s {
+		if i == 0 {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
+				return false
+			}
+		} else if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func isHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 // discoverAndIndexToolboxTables inspects sqlite_master once after Migrate to locate the exact
@@ -400,7 +439,7 @@ func discoverAndIndexToolboxTables(db *sql.DB) toolboxTables {
 		defer rows.Close()
 		for rows.Next() {
 			var name string
-			if rows.Scan(&name) != nil {
+			if rows.Scan(&name) != nil || !isSafeSQLiteIdent(name) {
 				continue
 			}
 			switch {
@@ -1360,10 +1399,12 @@ func (e *Engine) migrateLegacyPool(ctx context.Context, walletDir, legacyFile st
 		var tx *transaction.Transaction
 		var atomicBeef []byte
 
-		if rawBeef, rErr := os.ReadFile(filepath.Join(beefDir, o.TxID+".beef")); rErr == nil && len(rawBeef) > 0 {
-			if _, parsed, _, pErr := guard.ParseBEEF(rawBeef, guard.DefaultBound); pErr == nil && parsed != nil {
-				tx = parsed
-				atomicBeef = rawBeef
+		if isHex64(o.TxID) {
+			if rawBeef, rErr := os.ReadFile(filepath.Join(beefDir, o.TxID+".beef")); rErr == nil && len(rawBeef) > 0 {
+				if _, parsed, _, pErr := guard.ParseBEEF(rawBeef, guard.DefaultBound); pErr == nil && parsed != nil {
+					tx = parsed
+					atomicBeef = rawBeef
+				}
 			}
 		}
 		if tx == nil && o.Raw != "" {

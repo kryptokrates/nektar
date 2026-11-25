@@ -90,8 +90,8 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		if len(sw.Want.Domains) == 0 || len(sw.Want.Domains) > MaxDomains {
 			return errors.New("want domains out of range")
 		}
-		if sw.Want.Exp > 0 && (sw.Want.Exp < nowMs || sw.Want.Exp > maxExp) {
-			return errors.New("want expired or lifetime too long")
+		if sw.Want.Exp <= 0 || sw.Want.Exp < nowMs || sw.Want.Exp > maxExp {
+			return errors.New("want missing exp, expired, or lifetime too long")
 		}
 		if err := VerifyArtifact(sw.Want.Pub, sw.Sig, sw.Want); err != nil {
 			return err
@@ -115,8 +115,8 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		if len(so.Offer.Domains) == 0 || len(so.Offer.Domains) > MaxDomains {
 			return errors.New("offer domains out of range")
 		}
-		if so.Offer.Exp > 0 && (so.Offer.Exp < nowMs || so.Offer.Exp > maxExp) {
-			return errors.New("offer expired or lifetime too long")
+		if so.Offer.Exp <= 0 || so.Offer.Exp < nowMs || so.Offer.Exp > maxExp {
+			return errors.New("offer missing exp, expired, or lifetime too long")
 		}
 		if err := VerifyArtifact(so.Offer.Pub, so.Sig, so.Offer); err != nil {
 			return err
@@ -137,8 +137,8 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		if expectedNet != "" && sa.Announce.Net != expectedNet {
 			return fmt.Errorf("announce net %q != %q", sa.Announce.Net, expectedNet)
 		}
-		if sa.Announce.Exp > 0 && (sa.Announce.Exp < nowMs || sa.Announce.Exp > maxExp) {
-			return errors.New("announce expired or lifetime too long")
+		if sa.Announce.Exp <= 0 || sa.Announce.Exp < nowMs || sa.Announce.Exp > maxExp {
+			return errors.New("announce missing exp, expired, or lifetime too long")
 		}
 		if err := VerifyArtifact(sa.Announce.Pub, sa.Sig, sa.Announce); err != nil {
 			return err
@@ -205,12 +205,13 @@ type MarketLookupService struct {
 	host    module.Host
 }
 
+const maxIndexedMarketRecords = 10000
+
 type indexedRecord struct {
 	seq        int64
 	outpoint   transaction.Outpoint
 	topic      string
 	payload    MarketPayload
-	beef       []byte
 	admittedAt int64
 	wantID     string
 	offerID    string
@@ -246,7 +247,6 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		outpoint:   op,
 		topic:      topic,
 		payload:    p,
-		beef:       beef,
 		admittedAt: time.Now().UnixMilli(),
 	}
 	switch p.Kind {
@@ -280,9 +280,30 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		rec.exp = sa.Announce.Exp
 	}
 	key := op.String()
+	nowMs := time.Now().UnixMilli()
 	s.mu.Lock()
 	if existing, ok := s.records[key]; ok {
 		rec.seq = existing.seq
+	} else if len(s.records) >= maxIndexedMarketRecords {
+		// Evict expired first, then oldest admitted record to keep RAM strictly bounded.
+		for k, r := range s.records {
+			if r.exp <= 0 || r.exp < nowMs {
+				delete(s.records, k)
+			}
+		}
+		if len(s.records) >= maxIndexedMarketRecords {
+			var oldestKey string
+			var oldestAt int64
+			for k, r := range s.records {
+				if oldestKey == "" || r.admittedAt < oldestAt {
+					oldestKey = k
+					oldestAt = r.admittedAt
+				}
+			}
+			if oldestKey != "" {
+				delete(s.records, oldestKey)
+			}
+		}
 	}
 	s.records[key] = rec
 	cb := s.onAdmit

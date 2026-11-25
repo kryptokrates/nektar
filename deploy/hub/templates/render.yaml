@@ -5,7 +5,7 @@ services:
     runtime: image
     image:
       url: ghcr.io/kryptokrates/nektar:latest
-    dockerCommand: serve -listen :18420 -hub
+    dockerCommand: serve -listen :18420 -restate-listen 127.0.0.1:9080 -hub
     healthCheckPath: /v1/health
     disk:
       name: nektar-data
@@ -20,7 +20,7 @@ services:
         value: '18420'
       - key: NEKTAR_EMBED_HUB
         value: '1'
-      - key: NEKTAR_AUTOMATION
+      - key: NEKTAR_TRUST_PROXY
         value: '1'
       - key: NEKTAR_API_TOKEN
         generateValue: true

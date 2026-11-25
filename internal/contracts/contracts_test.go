@@ -3,6 +3,7 @@ package contracts
 import (
 	"encoding/hex"
 	"testing"
+	"time"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 
@@ -55,7 +56,8 @@ func TestAnchorEncodeDecodeAndSaleBRC369(t *testing.T) {
 	buyer, _ := ec.NewPrivateKey()
 	buyerPub := hex.EncodeToString(buyer.PubKey().Compressed())
 	secret := []byte("Verifiable alpha insight worth 500 sats")
-	offer, err := CreateKeyedSaleOffer(priv, secret, 500, 950000, 100, 949900, buyerPub, "", false)
+	expUnix := uint64(time.Now().Add(time.Hour).Unix())
+	offer, err := CreateKeyedSaleOffer(priv, secret, 500, expUnix+3600, 100, expUnix, buyerPub, "", false)
 	if err != nil {
 		t.Fatalf("CreateKeyedSaleOffer: %v", err)
 	}

@@ -57,6 +57,9 @@ func FundFromWireWallet(ctx context.Context, wireURL string, amountSats uint64, 
 	if wireURL == "" {
 		wireURL = DefaultDesktopWireURL
 	}
+	if err := wirewallet.CheckURL(wireURL); err != nil {
+		return nil, fmt.Errorf("wallet desktop bridge: %w", err)
+	}
 	desktop, err := dialWireWallet(target.cfg.Originator, wireURL, 60*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("wallet desktop bridge: dial %s: %w", wireURL, err)
@@ -193,6 +196,9 @@ func SweepToWireWallet(ctx context.Context, wireURL string, source *Engine, over
 	}
 	if wireURL == "" {
 		wireURL = DefaultDesktopWireURL
+	}
+	if err := wirewallet.CheckURL(wireURL); err != nil {
+		return nil, fmt.Errorf("wallet desktop bridge: %w", err)
 	}
 	desktop, err := dialWireWallet(source.cfg.Originator, wireURL, 60*time.Second)
 	if err != nil {
@@ -346,6 +352,12 @@ func ReconcilePendingBRC29(ctx context.Context, e *Engine, defaultWireURL string
 			}
 			if wURL == "" {
 				wURL = DefaultDesktopWireURL
+			}
+			if cErr := wirewallet.CheckURL(wURL); cErr != nil {
+				if firstErr == nil {
+					firstErr = cErr
+				}
+				continue
 			}
 			desktop, dErr := dialWireWallet(e.cfg.Originator, wURL, 15*time.Second)
 			if dErr != nil {

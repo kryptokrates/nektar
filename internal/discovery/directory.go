@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/lightwebinc/bcommon/chirp"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
 )
@@ -74,12 +76,16 @@ type Service struct {
 
 // New constructs a discovery Service bound to mem's SQLite store & network.
 func New(mem *memory.Service, envHosts []string, hc *http.Client) *Service {
+	netName := ""
+	if mem != nil && mem.Chain() != nil {
+		netName = mem.Chain().Network()
+	}
 	if hc == nil {
-		hc = &http.Client{Timeout: 12 * time.Second}
+		hc = core.SafeHTTPClientForNetwork(netName, 12*time.Second)
 	}
 	var ak *ec.PrivateKey
-	if mem != nil && mem.DB() != nil {
-		if raw, err := mem.DB().LoadOrCreateStableKey("node_market_key_v1", func() ([]byte, error) {
+	if mem != nil {
+		if raw, err := mem.LoadOrCreateProtectedKey("node_market_key_v1", func() ([]byte, error) {
 			k, err := ec.NewPrivateKey()
 			if err != nil {
 				return nil, err
@@ -95,7 +101,7 @@ func New(mem *memory.Service, envHosts []string, hc *http.Client) *Service {
 	cleanEnv := normalizeHosts(envHosts)
 	return &Service{
 		mem:         mem,
-		network:     mem.Chain().Network(),
+		network:     netName,
 		envHosts:    cleanEnv,
 		announceKey: ak,
 		httpClient:  hc,
@@ -185,8 +191,8 @@ func (s *Service) JoinHost(ctx context.Context, rawURL string) (hubURL string, d
 		if wellKnown.Hub != "" {
 			if strings.HasPrefix(wellKnown.Hub, "/") {
 				probeURL = base + strings.TrimRight(wellKnown.Hub, "/")
-			} else {
-				probeURL = normalizeHostURL(wellKnown.Hub)
+			} else if candidate := normalizeHostURL(wellKnown.Hub); candidate != "" && sameOriginURL(base, candidate) {
+				probeURL = candidate
 			}
 		} else {
 			// Check if /hub/v1/health answers on this node.
@@ -333,6 +339,8 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 		resp.Body.Close()
 		_ = s.mem.DB().UpdateHostHealth(h, "up", time.Now().Unix())
 
+		nowMsCheck := time.Now().UnixMilli()
+		maxExpMs := nowMsCheck + bstack.MaxLifetime.Milliseconds() + 60_000
 		perHostSeen[h] = make(map[string]bool)
 		for _, ev := range ans.Result {
 			if ev.Payload.Kind != bstack.KindAnnounce {
@@ -340,6 +348,10 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 			}
 			var sa bstack.SignedAnnounce
 			if err := json.Unmarshal(ev.Payload.Body, &sa); err != nil {
+				continue
+			}
+			// Reject cross-network replay, missing/expired Exp, or unbounded Exp.
+			if sa.Announce.Net != s.network || sa.Announce.Exp <= nowMsCheck || sa.Announce.Exp > maxExpMs {
 				continue
 			}
 			if err := bstack.VerifyArtifact(sa.Announce.Pub, sa.Sig, sa.Announce); err != nil {
@@ -484,7 +496,16 @@ func (s *Service) FetchRemoteChirp(ctx context.Context, peerBaseURL, chirpURL st
 	if err != nil {
 		return nil, err
 	}
-	base := strings.TrimRight(peerBaseURL, "/")
+	base := normalizeHostURL(peerBaseURL)
+	if base == "" {
+		return nil, errors.New("discovery: invalid peerBaseURL")
+	}
+	if _, err := core.ValidateOutboundURL(base, core.SafeHTTPOpts{
+		AllowPrivate: s.network == "memory" || s.network == "regtest" || s.network == "",
+		RequireHTTPS: s.network == "main",
+	}); err != nil {
+		return nil, fmt.Errorf("discovery: blocked remote chirp host: %w", err)
+	}
 	held := make(map[[32]byte][]byte)
 	closure, err := chirp.Verify(rootHash, func(h [32]byte) ([]byte, error) {
 		if b, err := s.mem.Objects().GetObject(h); err == nil {
@@ -503,9 +524,12 @@ func (s *Service) FetchRemoteChirp(ctx context.Context, peerBaseURL, chirpURL st
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("discovery: remote chirp HTTP %d", resp.StatusCode)
 		}
-		b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		b, err := io.ReadAll(io.LimitReader(resp.Body, bstack.MaxChirpObjectBytes+1))
 		if err != nil {
 			return nil, err
+		}
+		if len(b) > bstack.MaxChirpObjectBytes {
+			return nil, fmt.Errorf("discovery: remote chirp object exceeds max %d bytes", bstack.MaxChirpObjectBytes)
 		}
 		if sha256.Sum256(b) != h {
 			return nil, errors.New("discovery: remote chirp object hash mismatch")
@@ -513,7 +537,7 @@ func (s *Service) FetchRemoteChirp(ctx context.Context, peerBaseURL, chirpURL st
 		_ = s.mem.Objects().PutObject(h, b)
 		held[h] = b
 		return b, nil
-	}, chirp.Limits{})
+	}, bstack.DefaultChirpLimits())
 	if err != nil {
 		return nil, fmt.Errorf("discovery: verify remote chirp closure: %w", err)
 	}
@@ -522,6 +546,9 @@ func (s *Service) FetchRemoteChirp(ctx context.Context, peerBaseURL, chirpURL st
 		b, ok := held[ref.Hash]
 		if !ok {
 			return nil, errors.New("discovery: missing blob in verified closure")
+		}
+		if len(out)+len(b) > bstack.MaxChirpTotalBytes {
+			return nil, fmt.Errorf("discovery: reassembled remote chirp exceeds max %d bytes", bstack.MaxChirpTotalBytes)
 		}
 		out = append(out, b...)
 	}
@@ -587,7 +614,25 @@ func normalizeHostURL(raw string) string {
 	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 		u = "https://" + u
 	}
-	return strings.TrimRight(u, "/")
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return ""
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	parsed.Scheme = scheme
+	return strings.TrimRight(parsed.String(), "/")
+}
+
+func sameOriginURL(a, b string) bool {
+	ua, err1 := url.Parse(a)
+	ub, err2 := url.Parse(b)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
 }
 
 func normalizeHosts(in []string) []string {

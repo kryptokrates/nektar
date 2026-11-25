@@ -10,6 +10,9 @@ HUB_DIR="${NEKTAR_HUB_DIR:-$HOME/nektar-hub}"
 NET="${NEKTAR_NETWORK:-testnet}"
 MODE="${NEKTAR_HUB_MODE:-domain}"
 AUTO_IP="${NEKTAR_AUTO_IP:-0}"
+if [ "${NEKTAR_TUNNEL:-0}" = "1" ]; then
+  MODE="tunnel"
+fi
 
 if [ "$NET" = "main" ] && [ "${NEKTAR_MAINNET_CONFIRM:-}" != "I_UNDERSTAND" ]; then
   echo "Refusing mainnet Hub without NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND" >&2
@@ -39,6 +42,11 @@ if [ -n "${NEKTAR_PUBLIC_URL:-}" ]; then
   DOMAIN="${NEKTAR_PUBLIC_URL#https://}"
   DOMAIN="${DOMAIN#http://}"
   DOMAIN="${DOMAIN%%/*}"
+elif [ -n "${NEKTAR_DOMAIN:-}" ] && [ "${NEKTAR_DOMAIN}" != ":80" ]; then
+  DOMAIN="${NEKTAR_DOMAIN#https://}"
+  DOMAIN="${DOMAIN#http://}"
+  DOMAIN="${DOMAIN%%/*}"
+  NEKTAR_PUBLIC_URL="https://${DOMAIN}"
 elif [ "$AUTO_IP" = "1" ] || [ "$MODE" = "auto-ip" ]; then
   IP="$(curl -fsSL https://api.ipify.org || curl -fsSL https://ifconfig.me/ip)"
   DOMAIN="${IP//./-}.sslip.io"
@@ -48,17 +56,24 @@ fi
 
 HTTP_TOK="${NEKTAR_HTTP_TOKEN:-$(gen_hex)}"
 OP_TOK="${NEKTAR_OPERATOR_TOKEN:-$(gen_hex)}"
+TRUST_PROXY="0"
+if [ -n "$DOMAIN" ] || [ "$MODE" = "tunnel" ]; then
+  TRUST_PROXY="1"
+fi
 
 cat > .env <<EOF
 NEKTAR_NETWORK=${NET}
+NEKTAR_HTTP_BIND=127.0.0.1
 NEKTAR_HTTP_PORT=18420
 NEKTAR_PUBLIC_URL=${NEKTAR_PUBLIC_URL:-}
 NEKTAR_DOMAIN=${DOMAIN:-:80}
+NEKTAR_TRUST_PROXY=${TRUST_PROXY}
 NEKTAR_HTTP_TOKEN=${HTTP_TOK}
 NEKTAR_OPERATOR_TOKEN=${OP_TOK}
 NEKTAR_HEADERS_SOURCE=$([ "$NET" = "main" ] && echo "woc:main" || echo "woc:test")
 NEKTAR_SETTLE_SPEC=$([ "$NET" = "main" ] && echo "arcade:https://arcade.gorillapool.io" || echo "")
 NEKTAR_MAINNET_CONFIRM=${NEKTAR_MAINNET_CONFIRM:-}
+CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
 EOF
 chmod 600 .env
 
@@ -66,7 +81,11 @@ PROFILES=()
 if [ -n "$DOMAIN" ]; then
   PROFILES+=(--profile tls)
 elif [ "$MODE" = "tunnel" ]; then
-  PROFILES+=(--profile tls --profile tunnel)
+  if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
+    PROFILES+=(--profile tunnel-token)
+  else
+    PROFILES+=(--profile tunnel)
+  fi
 fi
 
 docker compose -f compose.yaml --env-file .env "${PROFILES[@]}" pull

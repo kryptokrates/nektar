@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/lightwebinc/bcommon/keyed"
@@ -23,15 +24,17 @@ type SaleConfig struct {
 
 // KeyedSaleOffer pairs a BRC-369 keyed content commitment with a signed DisclosureSale offer.
 type KeyedSaleOffer struct {
-	Config        SaleConfig `json:"cfg"`
-	SellerPub     string     `json:"sellerPub"`
-	KeyCommitment string     `json:"keyCommitment"` // BRC-369 keyed.Commitment(k)
-	SaltHex       string     `json:"saltHex"`       // BRC-369 4-byte segment salt
-	CiphertextHex string     `json:"ciphertextHex"` // BRC-369 encrypted payload
-	ExpiresAt     uint64     `json:"expiresAt,omitempty"`
-	OfferSig      string     `json:"offerSig"`
-	Artifact      CovenantID `json:"artifact"`
-	Direct        bool       `json:"direct,omitempty"`
+	Config           SaleConfig `json:"cfg"`
+	SellerPub        string     `json:"sellerPub"`
+	KeyCommitment    string     `json:"keyCommitment"`    // BRC-369 keyed.Commitment(k)
+	SaltHex          string     `json:"saltHex"`          // BRC-369 4-byte segment salt
+	CiphertextHex    string     `json:"ciphertextHex"`    // BRC-369 encrypted payload (may be stripped on wire if CHIRP-offloaded)
+	CiphertextSHA256 string     `json:"ciphertextSha256,omitempty"` // SHA-256 of ciphertext (allows signature verification even when CiphertextHex is offloaded to CHIRP)
+	ExpiresAt        uint64     `json:"expiresAt,omitempty"`
+	OfferSig         string     `json:"offerSig"`
+	Artifact         CovenantID `json:"artifact"`
+	Direct           bool       `json:"direct,omitempty"`
+	Version          int        `json:"version,omitempty"` // 0/1 = legacy OfferDigest, 2 = framed OfferDigestV2
 	// Seller-only secret material (never placed on public wire offer).
 	contentKey [32]byte
 }
@@ -39,8 +42,12 @@ type KeyedSaleOffer struct {
 // ContentKey returns the raw BRC-369 32-byte content scalar for seller-side conditional release.
 func (o *KeyedSaleOffer) ContentKey() [32]byte { return o.contentKey }
 
-// OfferDigest computes the canonical SHA-256 digest binding every MITM-sensitive field.
-func OfferDigest(cfg SaleConfig, buyerPub, leafHex string, expiresAt uint64) ([]byte, error) {
+// ClearContentKey wipes the seller-side secret content key from memory.
+func (o *KeyedSaleOffer) ClearContentKey() { core.Zero32Array(&o.contentKey) }
+
+// OfferDigest computes the canonical SHA-256 digest binding every MITM-sensitive field,
+// including keyCommitment, salt, and ciphertext hash when provided.
+func OfferDigest(cfg SaleConfig, buyerPub, leafHex string, expiresAt uint64, extra ...[]byte) ([]byte, error) {
 	sellerPKH, err := hex.DecodeString(cfg.SellerPKH)
 	if err != nil {
 		return nil, err
@@ -63,7 +70,7 @@ func OfferDigest(cfg SaleConfig, buyerPub, leafHex string, expiresAt uint64) ([]
 			return nil, err
 		}
 	}
-	return core.SHA256(core.Concat(
+	parts := [][]byte{
 		sellerPKH,
 		hWrapped,
 		core.U64LE(cfg.Price),
@@ -72,7 +79,9 @@ func OfferDigest(cfg SaleConfig, buyerPub, leafHex string, expiresAt uint64) ([]
 		buyerBytes,
 		leafBytes,
 		core.U64LE(expiresAt),
-	)), nil
+	}
+	parts = append(parts, extra...)
+	return core.SHA256(core.Concat(parts...)), nil
 }
 
 // CreateKeyedSaleOffer seals plaintext under a fresh BRC-369 content key (lightwebinc/bcommon/keyed),
@@ -97,7 +106,9 @@ func CreateKeyedSaleOffer(
 		return nil, fmt.Errorf("sale: seal segment: %w", err)
 	}
 	commit := keyed.Commitment(k)
-	hWrapped := core.SHA256(k[:])
+	// F-05 native BRC-369 fair exchange: DisclosureSale verifies sha256("metanet keyed content commitment v1" || wrapped) === hWrapped
+	// directly under Bitcoin Script consensus, so hWrapped MUST equal keyed.Commitment(k) (KeyCommitment).
+	hWrapped := commit[:]
 
 	sellerPubBytes := sellerKey.PubKey().Compressed()
 	sellerPKH := hex.EncodeToString(core.Hash160(sellerPubBytes))
@@ -108,7 +119,8 @@ func CreateKeyedSaleOffer(
 		RefundAfter: refundAfter,
 		MaxFee:      maxFee,
 	}
-	digest, err := OfferDigest(cfg, buyerPub, leafHex, expiresAt)
+	ctHash := core.SHA256(ct)
+	digest, err := OfferDigest(cfg, buyerPub, leafHex, expiresAt, commit[:], salt[:], ctHash)
 	if err != nil {
 		return nil, err
 	}
@@ -121,21 +133,29 @@ func CreateKeyedSaleOffer(
 		return nil, err
 	}
 	return &KeyedSaleOffer{
-		Config:        cfg,
-		SellerPub:     hex.EncodeToString(sellerPubBytes),
-		KeyCommitment: hex.EncodeToString(commit[:]),
-		SaltHex:       hex.EncodeToString(salt[:]),
-		CiphertextHex: hex.EncodeToString(ct),
-		ExpiresAt:     expiresAt,
-		OfferSig:      hex.EncodeToString(sig.Serialize()),
-		Artifact:      art.ID(),
-		Direct:        direct,
-		contentKey:    k,
+		Config:           cfg,
+		SellerPub:        hex.EncodeToString(sellerPubBytes),
+		KeyCommitment:    hex.EncodeToString(commit[:]),
+		SaltHex:          hex.EncodeToString(salt[:]),
+		CiphertextHex:    hex.EncodeToString(ct),
+		CiphertextSHA256: hex.EncodeToString(ctHash),
+		ExpiresAt:        expiresAt,
+		OfferSig:         hex.EncodeToString(sig.Serialize()),
+		Artifact:         art.ID(),
+		Direct:           direct,
+		contentKey:       k,
 	}, nil
 }
 
-// VerifySaleOffer validates the seller's signature and DisclosureSale covenant artifact ID.
+// VerifySaleOffer validates expiry, exact cryptographic field lengths, canonical compressed pubkey,
+// low-S DER signature (binding keyCommitment, salt, and ciphertext hash), and the DisclosureSale artifact ID.
 func VerifySaleOffer(offer *KeyedSaleOffer, buyerPub, leafHex string) error {
+	if offer == nil {
+		return errors.New("sale: nil offer")
+	}
+	if offer.ExpiresAt == 0 || int64(offer.ExpiresAt) < time.Now().Unix() {
+		return errors.New("sale: offer missing expiry or expired")
+	}
 	art, err := LoadArtifact("DisclosureSale")
 	if err != nil {
 		return err
@@ -143,26 +163,63 @@ func VerifySaleOffer(offer *KeyedSaleOffer, buyerPub, leafHex string) error {
 	if offer.Artifact.ScriptHash != art.ID().ScriptHash {
 		return errors.New("sale: DisclosureSale covenant artifact hash mismatch")
 	}
-	pubBytes, err := hex.DecodeString(offer.SellerPub)
+	pub, pubBytes, err := core.ParseStrictCompressedPubKey(offer.SellerPub)
 	if err != nil {
-		return err
+		return fmt.Errorf("sale: invalid sellerPub: %w", err)
 	}
-	if hex.EncodeToString(core.Hash160(pubBytes)) != offer.Config.SellerPKH {
+	if len(offer.Config.SellerPKH) != 40 || hex.EncodeToString(core.Hash160(pubBytes)) != offer.Config.SellerPKH {
 		return errors.New("sale: sellerPkh does not match sellerPub")
 	}
-	pub, err := ec.ParsePubKey(pubBytes)
-	if err != nil {
-		return err
+	if hwBytes, hwErr := hex.DecodeString(offer.Config.HWrapped); hwErr != nil || len(hwBytes) != 32 {
+		return errors.New("sale: hWrapped must be 32-byte hex")
 	}
-	sigBytes, err := hex.DecodeString(offer.OfferSig)
-	if err != nil {
-		return err
+	// F-05 native BRC-369 fair exchange: on-chain DisclosureSale checks keyed.Commitment(wrapped) === hWrapped,
+	// so hWrapped MUST equal KeyCommitment before any buyer funds the escrow.
+	if offer.Config.HWrapped != offer.KeyCommitment {
+		return errors.New("sale: hWrapped does not match BRC-369 keyCommitment")
 	}
-	sig, err := ec.ParseDERSignature(sigBytes)
-	if err != nil {
-		return err
+	if buyerPub != "" {
+		if _, _, bErr := core.ParseStrictCompressedPubKey(buyerPub); bErr != nil {
+			return fmt.Errorf("sale: invalid buyerPub: %w", bErr)
+		}
 	}
-	digest, err := OfferDigest(offer.Config, buyerPub, leafHex, offer.ExpiresAt)
+	if leafHex != "" {
+		if lb, lErr := hex.DecodeString(leafHex); lErr != nil || len(lb) != 32 {
+			return errors.New("sale: leafHex must be 32-byte hex")
+		}
+	}
+	sig, err := core.ParseStrictLowSDER(offer.OfferSig)
+	if err != nil {
+		return fmt.Errorf("sale: invalid offerSig: %w", err)
+	}
+	commitBytes, err := hex.DecodeString(offer.KeyCommitment)
+	if err != nil || len(commitBytes) != 32 {
+		return errors.New("sale: keyCommitment must be 32-byte hex")
+	}
+	saltBytes, err := hex.DecodeString(offer.SaltHex)
+	if err != nil || len(saltBytes) != keyed.SaltLen {
+		return errors.New("sale: saltHex must be 4-byte BRC-369 salt hex")
+	}
+	var ctHash []byte
+	if offer.CiphertextHex != "" {
+		ctBytes, err := hex.DecodeString(offer.CiphertextHex)
+		if err != nil {
+			return errors.New("sale: invalid ciphertextHex")
+		}
+		ctHash = core.SHA256(ctBytes)
+		if offer.CiphertextSHA256 != "" && offer.CiphertextSHA256 != hex.EncodeToString(ctHash) {
+			return errors.New("sale: ciphertextHex does not match ciphertextSha256")
+		}
+	} else if offer.CiphertextSHA256 != "" {
+		// Offloaded >4KB CHIRP ciphertext: verify signature over committed ciphertextSha256.
+		ctHash, err = hex.DecodeString(offer.CiphertextSHA256)
+		if err != nil || len(ctHash) != 32 {
+			return errors.New("sale: invalid ciphertextSha256")
+		}
+	} else {
+		ctHash = core.SHA256(nil)
+	}
+	digest, err := OfferDigest(offer.Config, buyerPub, leafHex, offer.ExpiresAt, commitBytes, saltBytes, ctHash)
 	if err != nil {
 		return err
 	}

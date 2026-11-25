@@ -19,18 +19,18 @@ type oauthClient struct {
 	ClientID     string
 	ClientName   string
 	RedirectURIs []string
+	CreatedAt    time.Time
 }
 
 type oauthCode struct {
 	ClientID      string
 	RedirectURI   string
 	CodeChallenge string
-	Operator      bool
 	ExpiresAt     time.Time
 }
 
 type oauthAccessToken struct {
-	Operator  bool
+	ClientID  string
 	ExpiresAt time.Time
 }
 
@@ -77,7 +77,7 @@ func (a *App) handleOAuthAuthServer(w http.ResponseWriter, r *http.Request) {
 
 func allowedOAuthRedirect(raw string) bool {
 	u, err := url.Parse(raw)
-	if err != nil {
+	if err != nil || u.User != nil || u.Fragment != "" {
 		return false
 	}
 	if u.Scheme == "https" && u.Host != "" {
@@ -99,17 +99,33 @@ func (a *App) pruneOAuthLocked(now time.Time) {
 			delete(a.oauthCodes, k)
 		}
 	}
+	activeClients := make(map[string]bool)
 	for k, t := range a.oauthTokens {
 		if now.After(t.ExpiresAt) {
 			delete(a.oauthTokens, k)
+		} else if t.ClientID != "" {
+			activeClients[t.ClientID] = true
 		}
 	}
 	if len(a.oauthClients) >= maxOAuthClients {
-		for k := range a.oauthClients {
-			delete(a.oauthClients, k)
-			if len(a.oauthClients) < maxOAuthClients/2 {
+		// Evict oldest clients without active tokens first so unauthenticated registration floods
+		// cannot evict legitimate active MCP clients.
+		for len(a.oauthClients) >= maxOAuthClients {
+			var oldestID string
+			var oldestTime time.Time
+			for id, c := range a.oauthClients {
+				if activeClients[id] {
+					continue
+				}
+				if oldestID == "" || c.CreatedAt.Before(oldestTime) {
+					oldestID = id
+					oldestTime = c.CreatedAt
+				}
+			}
+			if oldestID == "" {
 				break
 			}
+			delete(a.oauthClients, oldestID)
 		}
 	}
 	if len(a.oauthCodes) >= maxOAuthCodes {
@@ -131,6 +147,10 @@ func (a *App) pruneOAuthLocked(now time.Time) {
 }
 
 func (a *App) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
+	if !a.allowOAuthRegisterIP(r) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate_limited", "error_description": "too many client registrations"})
+		return
+	}
 	var in struct {
 		ClientName   string   `json:"client_name"`
 		RedirectURIs []string `json:"redirect_uris"`
@@ -153,12 +173,21 @@ func (a *App) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 		in.ClientName = "MCP Client"
 	}
 	var b [16]byte
-	_, _ = rand.Read(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+		return
+	}
 	cid := "nkt_c_" + base64.RawURLEncoding.EncodeToString(b[:])
 
+	now := time.Now()
 	a.oauthMu.Lock()
-	a.pruneOAuthLocked(time.Now())
-	a.oauthClients[cid] = oauthClient{ClientID: cid, ClientName: in.ClientName, RedirectURIs: in.RedirectURIs}
+	a.pruneOAuthLocked(now)
+	if len(a.oauthClients) >= maxOAuthClients {
+		a.oauthMu.Unlock()
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "registration_capacity_reached"})
+		return
+	}
+	a.oauthClients[cid] = oauthClient{ClientID: cid, ClientName: in.ClientName, RedirectURIs: in.RedirectURIs, CreatedAt: now}
 	a.oauthMu.Unlock()
 
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -204,6 +233,11 @@ func readOAuthParams(r *http.Request) map[string]string {
 	return out
 }
 
+func oauthSecretKey(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
 func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 	params := readOAuthParams(r)
 	clientID := params["client_id"]
@@ -236,6 +270,21 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 	sessAuthed := !authRequired || a.tokenMatches(a.extractToken(r), false)
 
 	if r.Method == http.MethodGet {
+		var csrfRaw [16]byte
+		if _, err := rand.Read(csrfRaw[:]); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+			return
+		}
+		csrfTok := base64.RawURLEncoding.EncodeToString(csrfRaw[:])
+		http.SetCookie(w, &http.Cookie{
+			Name:     "nektar_oauth_csrf",
+			Value:    csrfTok,
+			Path:     "/oauth/authorize",
+			HttpOnly: true,
+			Secure:   isHTTPSRequest(r, a.cfg.PublicURL),
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   600,
+		})
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		tokenField := `<p style="color:#4cc26b">✓ Authenticated via active Nektar session</p>`
@@ -251,6 +300,7 @@ button{width:100%%;padding:11px;border:0;border-radius:8px;background:#f7991b;co
 <body><form class="box" method="POST" action="/oauth/authorize">
 <h1>Connect %s</h1>
 <p>Allow this client to access your Nektar MCP memory tools at <code>%s</code>.</p>
+<input type="hidden" name="csrf_token" value="%s">
 <input type="hidden" name="client_id" value="%s">
 <input type="hidden" name="redirect_uri" value="%s">
 <input type="hidden" name="state" value="%s">
@@ -259,33 +309,51 @@ button{width:100%%;padding:11px;border:0;border-radius:8px;background:#f7991b;co
 %s
 <button type="submit">Approve Connection</button></form></body></html>`,
 			html.EscapeString(client.ClientName), html.EscapeString(client.ClientName), html.EscapeString(redirectURI),
+			html.EscapeString(csrfTok),
 			html.EscapeString(clientID), html.EscapeString(redirectURI), html.EscapeString(state), html.EscapeString(challenge),
 			tokenField)
 		return
 	}
 
-	presented := strings.TrimSpace(params["token"])
-	isOp := false
-	if sessAuthed {
-		isOp = !authRequired || a.tokenMatches(a.extractToken(r), true)
-	} else if presented != "" && a.tokenMatches(presented, false) {
-		isOp = a.tokenMatches(presented, true)
-	} else {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "access_denied", "error_description": "invalid nektar token"})
+	// Verify per-request CSRF cookie + form nonce on POST /oauth/authorize to block same-site form auto-approval.
+	csrfCookie, cErr := r.Cookie("nektar_oauth_csrf")
+	csrfForm := strings.TrimSpace(params["csrf_token"])
+	if cErr != nil || csrfCookie.Value == "" || csrfForm == "" || subtle.ConstantTimeCompare([]byte(csrfCookie.Value), []byte(csrfForm)) != 1 {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid_request", "error_description": "missing or invalid oauth csrf token"})
 		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "nektar_oauth_csrf",
+		Value:    "",
+		Path:     "/oauth/authorize",
+		HttpOnly: true,
+		Secure:   isHTTPSRequest(r, a.cfg.PublicURL),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+
+	presented := strings.TrimSpace(params["token"])
+	if !sessAuthed {
+		if presented == "" || !a.tokenMatches(presented, false) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "access_denied", "error_description": "invalid nektar token"})
+			return
+		}
 	}
 
 	var b [24]byte
-	_, _ = rand.Read(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+		return
+	}
 	code := base64.RawURLEncoding.EncodeToString(b[:])
+	codeKey := oauthSecretKey(code)
 	a.oauthMu.Lock()
 	now := time.Now()
 	a.pruneOAuthLocked(now)
-	a.oauthCodes[code] = oauthCode{
+	a.oauthCodes[codeKey] = oauthCode{
 		ClientID:      clientID,
 		RedirectURI:   redirectURI,
 		CodeChallenge: challenge,
-		Operator:      isOp,
 		ExpiresAt:     now.Add(5 * time.Minute),
 	}
 	a.oauthMu.Unlock()
@@ -306,10 +374,10 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported_grant_type"})
 		return
 	}
-	code := params["code"]
+	codeKey := oauthSecretKey(params["code"])
 	a.oauthMu.Lock()
-	entry, ok := a.oauthCodes[code]
-	delete(a.oauthCodes, code)
+	entry, ok := a.oauthCodes[codeKey]
+	delete(a.oauthCodes, codeKey)
 	a.oauthMu.Unlock()
 	if !ok || time.Now().After(entry.ExpiresAt) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_grant", "error_description": "expired or unknown code"})
@@ -327,12 +395,17 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var tb [32]byte
-	_, _ = rand.Read(tb[:])
+	if _, err := rand.Read(tb[:]); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+		return
+	}
 	accessTok := "nkt_at_" + base64.RawURLEncoding.EncodeToString(tb[:])
+	tokKey := oauthSecretKey(accessTok)
 	a.oauthMu.Lock()
 	now := time.Now()
 	a.pruneOAuthLocked(now)
-	a.oauthTokens[accessTok] = oauthAccessToken{Operator: entry.Operator, ExpiresAt: now.Add(24 * time.Hour)}
+	// MCP OAuth tokens are strictly scoped to mcp:tools and NEVER grant operator privileges.
+	a.oauthTokens[tokKey] = oauthAccessToken{ClientID: entry.ClientID, ExpiresAt: now.Add(24 * time.Hour)}
 	a.oauthMu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token": accessTok,
@@ -342,20 +415,18 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) matchOAuthToken(tok string, requireOperator bool) bool {
-	if !strings.HasPrefix(tok, "nkt_at_") {
+	if requireOperator || !strings.HasPrefix(tok, "nkt_at_") {
 		return false
 	}
+	tokKey := oauthSecretKey(tok)
 	a.oauthMu.Lock()
 	defer a.oauthMu.Unlock()
-	t, ok := a.oauthTokens[tok]
+	t, ok := a.oauthTokens[tokKey]
 	if !ok {
 		return false
 	}
 	if time.Now().After(t.ExpiresAt) {
-		delete(a.oauthTokens, tok)
-		return false
-	}
-	if requireOperator && !t.Operator {
+		delete(a.oauthTokens, tokKey)
 		return false
 	}
 	return true

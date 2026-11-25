@@ -56,7 +56,7 @@ func (s *Service) ListUserShards() ([]string, error) {
 }
 
 // RecallAllShards recalls across every readable non-system shard when RecallInput.Shard is omitted,
-// returning both the discovered shard names and matching fragments (eliminating wrong-shard dead ends).
+// returning ONLY shard names visible to the caller's Principal (never leaking private shard names).
 func (s *Service) RecallAllShards(ctx context.Context, in RecallInput) ([]string, []RecalledFragment, error) {
 	shards, err := s.ListUserShards()
 	if err != nil {
@@ -64,9 +64,17 @@ func (s *Service) RecallAllShards(ctx context.Context, in RecallInput) ([]string
 	}
 	if strings.TrimSpace(in.Shard) != "" {
 		items, err := s.Recall(ctx, in)
-		return shards, items, err
+		if err != nil {
+			return nil, nil, err
+		}
+		visible := []string{}
+		if len(items) > 0 {
+			visible = []string{in.Shard}
+		}
+		return visible, items, nil
 	}
 	var combined []RecalledFragment
+	var visibleShards []string
 	remaining := in.Limit
 	for _, sh := range shards {
 		sub := in
@@ -76,9 +84,12 @@ func (s *Service) RecallAllShards(ctx context.Context, in RecallInput) ([]string
 		}
 		items, err := s.Recall(ctx, sub)
 		if err != nil {
-			return shards, nil, err
+			return visibleShards, nil, err
 		}
-		combined = append(combined, items...)
+		if len(items) > 0 {
+			visibleShards = append(visibleShards, sh)
+			combined = append(combined, items...)
+		}
 		if in.Limit > 0 {
 			remaining = in.Limit - len(combined)
 			if remaining <= 0 {
@@ -86,7 +97,7 @@ func (s *Service) RecallAllShards(ctx context.Context, in RecallInput) ([]string
 			}
 		}
 	}
-	return shards, combined, nil
+	return visibleShards, combined, nil
 }
 
 // ImportShardPackBytes verifies and imports a raw ShardPack JSON payload (used after CHIRP resolution).

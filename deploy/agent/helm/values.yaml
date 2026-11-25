@@ -13,32 +13,23 @@ image:
 network: testnet
 
 # comma-separated market hosts the agent publishes/reads through — REQUIRED.
-# Any operator works; run your own with deploy/bstack-sandbox.
 marketHosts: ''
 
-automation: true
-# auto-decide policy approvals. false = approvals queue for the operator token.
-unattended: false
 modelId: unspecified
-
-# publish the bfinger finger record so peers can resolve hosts/office/stream.
-bfingerPublish: false
-# public URL peers POST pushed carriers to — set once ingress is up, e.g.
-# https://agent.example.com/v1/lane
-pushPublic: ''
-# comma-separated long-poll watch shims (optional — plain polls are the
-# correct-by-design fallback)
-watchUrls: ''
-watchPublic: ''
-# operator-only approval token for the loopback approval endpoints
-operatorToken: ''
-# public base used to render receipt-verify links (default: this instance)
+# public base URL for direct A2A trades and receipt verification links
+publicUrl: ''
 verifyBase: ''
+trustProxy: false
+headersSource: 'woc:test'
+settleSpec: ''
+mainnetConfirm: ''
 
 secrets:
   # bearer for /mcp + private /v1 endpoints — required unless existingSecret is set
   httpToken: ''
-  # bring your own Secret instead: must carry NEKTAR_HTTP_TOKEN
+  # operator-only token for wallet/policy/approval endpoints
+  operatorToken: ''
+  # bring your own Secret instead: must carry NEKTAR_HTTP_TOKEN (and optional NEKTAR_OPERATOR_TOKEN)
   existingSecret: ''
 
 persistence:
@@ -56,10 +47,6 @@ ingress:
   host: agent.example.com
   tls: false
   # tlsSecretName: ""   # set for a manually-provisioned cert
-
-# market tuning — blank = library default
-minCollectMs: ''
-collectQuietMs: ''
 
 # SpendGuard caps — recommended on any box holding real keys
 maxFeeSatsPerTx: ''

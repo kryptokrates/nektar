@@ -63,32 +63,22 @@ spec:
               value: /data
             - name: NEKTAR_HTTP_PORT
               value: "18420"
-            - name: NEKTAR_HTTP_HOST
-              value: "0.0.0.0"
             - name: NEKTAR_MODEL_ID
               value: {{ .Values.modelId | quote }}
-            - name: NEKTAR_AUTOMATION
-              value: {{ ternary "1" "" .Values.automation | quote }}
-            - name: NEKTAR_UNATTENDED
-              value: {{ ternary "1" "" .Values.unattended | quote }}
             - name: NEKTAR_MARKET_HOSTS
               value: {{ required "marketHosts is required" .Values.marketHosts | quote }}
-            - name: NEKTAR_BFINGER_PUBLISH
-              value: {{ ternary "1" "" .Values.bfingerPublish | quote }}
-            - name: NEKTAR_PUSH_PUBLIC
-              value: {{ .Values.pushPublic | quote }}
-            - name: NEKTAR_WATCH_URLS
-              value: {{ .Values.watchUrls | quote }}
-            - name: NEKTAR_WATCH_PUBLIC
-              value: {{ .Values.watchPublic | quote }}
-            - name: NEKTAR_OPERATOR_TOKEN
-              value: {{ .Values.operatorToken | quote }}
+            - name: NEKTAR_PUBLIC_URL
+              value: {{ .Values.publicUrl | quote }}
             - name: NEKTAR_VERIFY_BASE
-              value: {{ .Values.verifyBase | quote }}
-            - name: NEKTAR_MIN_COLLECT_MS
-              value: {{ .Values.minCollectMs | quote }}
-            - name: NEKTAR_COLLECT_QUIET_MS
-              value: {{ .Values.collectQuietMs | quote }}
+              value: {{ .Values.verifyBase | default .Values.publicUrl | quote }}
+            - name: NEKTAR_TRUST_PROXY
+              value: {{ ternary "1" "0" .Values.trustProxy | quote }}
+            - name: NEKTAR_HEADERS_SOURCE
+              value: {{ .Values.headersSource | quote }}
+            - name: NEKTAR_SETTLE_SPEC
+              value: {{ .Values.settleSpec | quote }}
+            - name: NEKTAR_MAINNET_CONFIRM
+              value: {{ .Values.mainnetConfirm | quote }}
             # the executor sidecar shares this pod's net namespace — loopback
             # is CORRECT here (the one topology where it is): no DNS, no
             # routing, no host-gateway to get wrong.
@@ -100,15 +90,21 @@ spec:
               value: "http://127.0.0.1:9080"
             - name: NEKTAR_RESTATE_IDENTITY_KEY
               value: {{ .Values.restate.identityPublicKey | default "" | quote }}
-            - name: NEKTAR_MAX_FEE_SATS_PER_TX
+            - name: NEKTAR_MAX_FEE_PER_TX
               value: {{ .Values.maxFeeSatsPerTx | quote }}
-            - name: NEKTAR_MAX_SPEND_SATS_PER_DAY
+            - name: NEKTAR_MAX_SPEND_PER_DAY
               value: {{ .Values.maxSpendSatsPerDay | quote }}
             - name: NEKTAR_HTTP_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "nektar-agent.secretName" . }}
                   key: NEKTAR_HTTP_TOKEN
+            - name: NEKTAR_OPERATOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nektar-agent.secretName" . }}
+                  key: NEKTAR_OPERATOR_TOKEN
+                  optional: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
@@ -123,19 +119,22 @@ spec:
           image: "{{ .Values.restate.image.repository }}:{{ .Values.restate.image.tag }}"
           imagePullPolicy: {{ .Values.restate.image.pullPolicy }}
           securityContext:
-            # upstream image runs as root — no runAsNonRoot without a
-            # verified non-root uid; the rest of the baseline still applies
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           env:
             # both containers share the pod's localhost — the agent's own
-            # HTTP server owns :8080, so the ingress moves off it
+            # HTTP server owns :18420, ingress runs on :8111
             - name: RESTATE_INGRESS__BIND_PORT
               value: "8111"
             - name: RESTATE_NODE_NAME
               value: "nektar"
+            - name: RESTATE_BASE_DIR
+              value: "/restate-data"
           startupProbe:
             httpGet:
               path: /health
@@ -159,10 +158,12 @@ spec:
           volumeMounts:
             - name: restate-data
               mountPath: /restate-data
-            - name: tmp
+            - name: restate-tmp
               mountPath: /tmp
       volumes:
         - name: tmp
+          emptyDir: {}
+        - name: restate-tmp
           emptyDir: {}
   volumeClaimTemplates:
     - metadata:

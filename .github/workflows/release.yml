@@ -34,10 +34,12 @@ jobs:
             org.opencontainers.image.title=nektar
             org.opencontainers.image.description=Verifiable, encrypted AI agent memory anchored on BSV — single-binary Go v0.4
             org.opencontainers.image.licenses=MIT
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -58,7 +60,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
         with:
           go-version-file: go.mod
       - name: build static binary (CGO_ENABLED=0)
@@ -90,10 +92,11 @@ jobs:
         with:
           pattern: 'nektar-*'
           merge-multiple: true
-      - name: upload static binaries to GitHub Release
+      - name: generate SHA256SUMS & upload static binaries to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
+          sha256sum nektar-*.tar.gz nektar-*.zip > SHA256SUMS
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
-          gh release upload "$TAG" nektar-*.tar.gz nektar-*.zip --clobber
+          gh release upload "$TAG" nektar-*.tar.gz nektar-*.zip SHA256SUMS --clobber

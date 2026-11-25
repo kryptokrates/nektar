@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -68,7 +69,7 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		if txt == "" {
 			txt = raw.Data
 		}
-		res, err := tb.mem.Remember(ctx, memory.RememberInput{
+		in := memory.RememberInput{
 			Shard:      raw.Shard,
 			Text:       txt,
 			Source:     raw.Source,
@@ -79,7 +80,15 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 			Supersedes: raw.Supersedes,
 			AutoAnchor: raw.AutoAnchor,
 			Extra:      raw.Extra,
-		})
+		}
+		if p, disallowBorg, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
+			in.Principal = &p
+			in.CallerPub = ""
+			if disallowBorg && in.BorgGroup != "" {
+				return nil, nil, errors.New("operator token required for Borg group writes")
+			}
+		}
+		res, err := tb.mem.Remember(ctx, in)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -90,6 +99,11 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		Name:        "recall",
 		Description: "Recall active, Cedar-authorized, Borg-decrypted fragments. Omit shard to recall across all non-system shards.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in memory.RecallInput) (*mcp.CallToolResult, any, error) {
+		if p, disallowBorg, overridden := PrincipalForContext(ctx, in.Principal); overridden {
+			in.Principal = p
+			in.CallerPub = ""
+			in.DisallowBorg = disallowBorg
+		}
 		res, err := tb.ExecRecall(ctx, in)
 		if err != nil {
 			return nil, nil, err
@@ -105,7 +119,11 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		Name:        "forget",
 		Description: "Shred local plaintext/ciphertext of a fragment while preserving its on-chain Merkle commitment.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in forgetArgs) (*mcp.CallToolResult, any, error) {
-		if err := tb.mem.Forget(ctx, in.Shard, in.Seq); err != nil {
+		if p, _, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
+			if err := tb.mem.ForgetAuthorized(ctx, in.Shard, in.Seq, p); err != nil {
+				return nil, nil, err
+			}
+		} else if err := tb.mem.Forget(ctx, in.Shard, in.Seq); err != nil {
 			return nil, nil, err
 		}
 		return jsonToolResult(map[string]any{"ok": true, "shard": in.Shard, "seq": in.Seq})
@@ -115,6 +133,11 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		Name:        "groundedAnswer",
 		Description: "Verify claims against cited memory fragments (quote + Google Mangle Datalog), strip hallucinations, commit a receipt, and return the nektarr1.* verification footer.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in memory.GroundedAnswerInput) (*mcp.CallToolResult, any, error) {
+		if p, disallowBorg, overridden := PrincipalForContext(ctx, in.Principal); overridden {
+			in.Principal = p
+			in.CallerPub = ""
+			in.DisallowBorg = disallowBorg
+		}
 		res, err := tb.mem.GroundedAnswer(ctx, in)
 		if err != nil {
 			return nil, nil, err
@@ -231,6 +254,13 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 			Name:        "prove",
 			Description: "Build a self-contained SPV ProofBundle (Merkle path + NektarAnchor BEEF/BUMP) and verify it offline against headers.",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in proveArgs) (*mcp.CallToolResult, any, error) {
+			if p, _, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
+				bundle, vr, err := tb.mem.ProveAuthorized(ctx, in.Shard, in.Seq, p)
+				if err != nil {
+					return nil, nil, err
+				}
+				return jsonToolResult(map[string]any{"bundle": bundle, "verify": vr})
+			}
 			bundle, vr, err := tb.mem.Prove(ctx, in.Shard, in.Seq)
 			if err != nil {
 				return nil, nil, err

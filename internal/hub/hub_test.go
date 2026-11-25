@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -228,12 +229,18 @@ func TestHubSQLiteRestartFederationBboxAndBounties(t *testing.T) {
 		unResp.Body.Close()
 	}
 
+	u1, _ := url.Parse(ts1.URL)
+	hubAud := strings.ToLower(u1.Host)
+
 	signedMsg := BboxMessage{
 		Office:       "default",
 		RecipientPub: recipientPub,
 		SenderPub:    senderPub,
 		DealID:       "deal-nat-1",
 		Kind:         "purchase_beef",
+		TS:           time.Now().Unix(),
+		Nonce:        "nonce-send-1",
+		Aud:          hubAud,
 		Body:         json.RawMessage(`{"ok":true}`),
 	}
 	bboxSig, err := bstack.SignArtifact(senderKey, signedMsg.Signable())
@@ -248,6 +255,13 @@ func TestHubSQLiteRestartFederationBboxAndBounties(t *testing.T) {
 	}
 	bResp.Body.Close()
 
+	// Replaying the exact same signed /bbox/send nonce must return 409!
+	if repResp, err := http.Post(ts1.URL+"/bbox/send", "application/json", bytes.NewReader(bboxPayload)); err != nil || repResp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected HTTP 409 for replayed /bbox/send nonce, got err=%v resp=%+v", err, repResp)
+	} else {
+		repResp.Body.Close()
+	}
+
 	// Unsigned /bbox/inbox must return 401!
 	if unInResp, err := http.Get(ts1.URL + "/bbox/inbox?pub=" + recipientPub + "&since=0"); err != nil || unInResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected HTTP 401 for unsigned /bbox/inbox, got err=%v resp=%+v", err, unInResp)
@@ -256,13 +270,22 @@ func TestHubSQLiteRestartFederationBboxAndBounties(t *testing.T) {
 	}
 
 	tsNow := time.Now().Unix()
-	inSig, err := bstack.SignArtifact(recipientKey, map[string]any{"action": "bbox_inbox", "pub": recipientPub, "ts": tsNow})
+	inNonce := "nonce-inbox-1"
+	inSig, err := bstack.SignArtifact(recipientKey, map[string]any{
+		"action": "bbox_inbox",
+		"pub":    recipientPub,
+		"ts":     tsNow,
+		"nonce":  inNonce,
+		"aud":    hubAud,
+		"since":  int64(0),
+	})
 	if err != nil {
 		t.Fatalf("SignArtifact bbox inbox: %v", err)
 	}
 	inReq, _ := http.NewRequest(http.MethodGet, ts1.URL+"/bbox/inbox?pub="+recipientPub+"&since=0", nil)
 	inReq.Header.Set("X-Nektar-Pub", recipientPub)
 	inReq.Header.Set("X-Nektar-Ts", strconv.FormatInt(tsNow, 10))
+	inReq.Header.Set("X-Nektar-Nonce", inNonce)
 	inReq.Header.Set("X-Nektar-Sig", inSig)
 	inResp, err := http.DefaultClient.Do(inReq)
 	if err != nil || inResp.StatusCode != http.StatusOK {
@@ -277,24 +300,37 @@ func TestHubSQLiteRestartFederationBboxAndBounties(t *testing.T) {
 		t.Fatalf("expected 1 bbox message, got %+v", inbox.Messages)
 	}
 
-	// Verify bounty registration, payout handler, and duplicate-HDP rejection (HTTP 409).
+	// Verify bounty registration, payout handler, and duplicate-HDP rejection (HTTP 409) including mixed-case hex!
 	_ = node1Reopened.Store().UpsertBounty(Bounty{ID: "b-test", Domain: "ops", Question: "test", RewardSats: 100, MaxFills: 5, Active: true})
 	node1Reopened.SetBountyHandler(func(_ context.Context, b Bounty, sub BountySubmission) (*BountyPayoutResult, error) {
 		return &BountyPayoutResult{Accepted: true, BountyID: b.ID, RewardSats: b.RewardSats, TxID: "deadbeef"}, nil
 	})
-	subBody, _ := json.Marshal(BountySubmission{
+	sellerKey, _ := ec.NewPrivateKey()
+	sellerPub := hex.EncodeToString(sellerKey.PubKey().Compressed())
+	canonHDP := strings.Repeat("ab", 32)
+	sub := BountySubmission{
 		BountyID:      "b-test",
-		SellerPub:     "02cccc",
+		SellerPub:     sellerPub,
 		SellerAddress: "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
-		HDP:           "hdp-unique-1",
+		HDP:           canonHDP,
 		Text:          "verified ops fact for hub bounty",
-	})
+		TS:            time.Now().Unix(),
+	}
+	sub.Sig, err = bstack.SignArtifact(sellerKey, sub.Signable(canonHDP))
+	if err != nil {
+		t.Fatalf("SignArtifact bounty submit: %v", err)
+	}
+	subBody, _ := json.Marshal(sub)
 	r1, err := http.Post(ts1.URL+"/bounties/submit", "application/json", bytes.NewReader(subBody))
 	if err != nil || r1.StatusCode != http.StatusOK {
 		t.Fatalf("first bounty submit failed: err=%v resp=%+v", err, r1)
 	}
 	r1.Body.Close()
-	r2, err := http.Post(ts1.URL+"/bounties/submit", "application/json", bytes.NewReader(subBody))
+	// Duplicate with uppercase hex variant must ALSO collide on canonical HDP (HTTP 409).
+	subUpper := sub
+	subUpper.HDP = strings.ToUpper(canonHDP)
+	subBodyUpper, _ := json.Marshal(subUpper)
+	r2, err := http.Post(ts1.URL+"/bounties/submit", "application/json", bytes.NewReader(subBodyUpper))
 	if err != nil || r2.StatusCode != http.StatusConflict {
 		t.Fatalf("expected HTTP 409 on duplicate HDP bounty submit, got err=%v code=%d", err, r2.StatusCode)
 	}

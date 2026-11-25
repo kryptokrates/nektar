@@ -1052,7 +1052,7 @@ func (d *DB) ReserveSpendAtomic(opID string, attempt int, amountSats, maxPerDeal
 	if opID == "" {
 		return false, errors.New("store: empty opID")
 	}
-	if maxPerDeal > 0 && amountSats > maxPerDeal {
+	if maxPerDeal == 0 || amountSats > maxPerDeal {
 		return false, ErrSpendCapExceeded
 	}
 	d.mu.Lock()
@@ -1076,7 +1076,7 @@ func (d *DB) ReserveSpendAtomic(opID string, attempt int, amountSats, maxPerDeal
 	if qErr := tx.QueryRow(`SELECT value FROM kv WHERE key = ?`, dayKey).Scan(&raw); qErr == nil {
 		_ = json.Unmarshal(raw, &used)
 	}
-	if maxPerDay > 0 && used+amountSats > maxPerDay {
+	if maxPerDay == 0 || used+amountSats > maxPerDay {
 		return false, ErrSpendCapExceeded
 	}
 	next := used + amountSats

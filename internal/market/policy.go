@@ -124,10 +124,10 @@ func (p *Policy) CanSpendForDomains(sellerPub string, domains []string, sats uin
 			return fmt.Errorf("market: domain(s) %v not in policy allowedDomains", domains)
 		}
 	}
-	if maxDeal > 0 && sats > maxDeal {
+	if maxDeal == 0 || sats > maxDeal {
 		return errors.New("market: deal price exceeds maxSatsPerDeal")
 	}
-	if maxDay > 0 && spent+sats > maxDay {
+	if maxDay == 0 || spent+sats > maxDay {
 		return errors.New("market: deal exceeds daily spending cap")
 	}
 	return nil
@@ -166,7 +166,9 @@ func ApprovePolicyPreset(db *store.DB, pol *Policy, preset string, domains []str
 		approvedBy = "operator"
 	}
 	var idBytes [6]byte
-	_, _ = crand.Read(idBytes[:])
+	if _, err := crand.Read(idBytes[:]); err != nil {
+		return store.OperatorPolicyRecord{}, fmt.Errorf("market: csprng failed: %w", err)
+	}
 	rec := store.OperatorPolicyRecord{
 		PolicyID:    fmt.Sprintf("pol-%s-%s", preset, hex.EncodeToString(idBytes[:])),
 		Roles:       roles,

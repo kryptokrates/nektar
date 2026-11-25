@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/transaction"
+	"github.com/lightwebinc/bcommon/guard"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
@@ -23,6 +25,32 @@ import (
 )
 
 const ReceiptsShard = "__receipts__"
+
+// ValidateShardName enforces safe, bounded shard names and blocks external access to reserved system shards.
+func ValidateShardName(shard string, allowSystem bool) error {
+	s := strings.TrimSpace(shard)
+	if s == "" {
+		return errors.New("memory: shard name is required")
+	}
+	if len(s) > 128 {
+		return errors.New("memory: shard name exceeds 128 characters")
+	}
+	if s == ReceiptsShard {
+		if allowSystem {
+			return nil
+		}
+		return errors.New("memory: reserved system shard cannot be targeted directly")
+	}
+	if strings.Contains(s, "..") || strings.HasPrefix(s, "/") || strings.HasSuffix(s, "/") {
+		return fmt.Errorf("memory: invalid shard name %q", shard)
+	}
+	for _, c := range s {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '/' || c == '-') {
+			return fmt.Errorf("memory: invalid character in shard name %q", shard)
+		}
+	}
+	return nil
+}
 
 // Config configures a NektarMemory service instance.
 type Config struct {
@@ -41,8 +69,9 @@ type Config struct {
 //   - Google Mangle Datalog grounding + AORG + nektarr1 receipts (internal/reasoning).
 type Service struct {
 	mu            sync.RWMutex
-	shardMu       sync.Mutex
-	shardLocks    map[string]*sync.Mutex
+	shardLocks    [64]sync.Mutex
+	publicChirpMu sync.RWMutex
+	publicChirps  map[[32]byte]struct{}
 	db            *store.DB
 	port          *chain.Port
 	groups        *bstack.GroupRegistry
@@ -110,11 +139,11 @@ func New(db *store.DB, port *chain.Port, groups *bstack.GroupRegistry, objects b
 	if mid.Kind == "" {
 		mid = reasoning.ModelIdentity{Kind: "api", Provider: "nektar", Release: "v0.4"}
 	}
-	if err := groups.SetPersistence(&dbGroupStore{db: db}); err != nil {
+	if err := groups.SetPersistence(&dbGroupStore{db: db, port: port}); err != nil {
 		return nil, fmt.Errorf("memory: load borg groups: %w", err)
 	}
 	return &Service{
-		shardLocks:    make(map[string]*sync.Mutex),
+		publicChirps:  make(map[[32]byte]struct{}),
 		db:            db,
 		port:          port,
 		groups:        groups,
@@ -128,14 +157,27 @@ func New(db *store.DB, port *chain.Port, groups *bstack.GroupRegistry, objects b
 	}, nil
 }
 
-func (s *Service) lockShard(shard string) func() {
-	s.shardMu.Lock()
-	m, ok := s.shardLocks[shard]
-	if !ok {
-		m = &sync.Mutex{}
-		s.shardLocks[shard] = m
+// AllowPublicChirpHashes registers CHIRP DAG object hashes that may be fetched unauthenticated via /v1/chirp/{hash}.
+func (s *Service) AllowPublicChirpHashes(hashes ...[32]byte) {
+	s.publicChirpMu.Lock()
+	for _, h := range hashes {
+		s.publicChirps[h] = struct{}{}
 	}
-	s.shardMu.Unlock()
+	s.publicChirpMu.Unlock()
+}
+
+// IsPublicChirp reports whether hash h belongs to an intentionally published public CHIRP closure.
+func (s *Service) IsPublicChirp(h [32]byte) bool {
+	s.publicChirpMu.RLock()
+	_, ok := s.publicChirps[h]
+	s.publicChirpMu.RUnlock()
+	return ok
+}
+
+func (s *Service) lockShard(shard string) func() {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(shard))
+	m := &s.shardLocks[h.Sum32()%uint32(len(s.shardLocks))]
 	m.Lock()
 	return m.Unlock
 }
@@ -236,6 +278,9 @@ type RememberResult struct {
 func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResult, error) {
 	if strings.TrimSpace(in.Shard) == "" {
 		in.Shard = "default"
+	}
+	if err := ValidateShardName(in.Shard, false); err != nil {
+		return nil, err
 	}
 	if in.Text == "" {
 		return nil, errors.New("memory: text is required")
@@ -369,7 +414,34 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 }
 
 // Forget shreds local plaintext/ciphertext of (shard, seq) while keeping the anchored commitment.
-func (s *Service) Forget(_ context.Context, shard string, seq int64) error {
+func (s *Service) Forget(ctx context.Context, shard string, seq int64) error {
+	return s.ForgetAuthorized(ctx, shard, seq, policy.Principal{Type: "Agent", ID: "owner", Level: 100})
+}
+
+// ForgetAuthorized checks shard validity and Cedar write authorization before shredding (shard, seq).
+func (s *Service) ForgetAuthorized(_ context.Context, shard string, seq int64, principal policy.Principal) error {
+	if err := ValidateShardName(shard, false); err != nil {
+		return err
+	}
+	rec, err := s.db.GetFragment(shard, seq)
+	if err != nil {
+		return err
+	}
+	if principal.ID == "" {
+		principal = policy.Principal{Type: "Agent", ID: "owner", Level: 100}
+	}
+	if dec, aErr := s.AuthorizeAction(principal, "write", policy.Resource{
+		Type:  "Fragment",
+		ID:    fmt.Sprintf("%s#%d", rec.Shard, rec.Seq),
+		Level: int64(rec.Level),
+		Shard: rec.Shard,
+		Class: rec.Class,
+	}); aErr != nil || !dec.Allow {
+		if aErr != nil {
+			return fmt.Errorf("memory: cedar forget policy error: %w", aErr)
+		}
+		return fmt.Errorf("memory: cedar policy denied forget on %s#%d (level %d > principal level %d)", rec.Shard, rec.Seq, rec.Level, principal.Level)
+	}
 	return s.db.ForgetFragment(shard, seq)
 }
 
@@ -440,7 +512,7 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		Size:     uint64(len(leaves)),
 		R:        root,
 		Rp:       rp,
-		Tag:      core.TagAnchorTag,
+		Tag:      core.TagRPrime,
 		Metanet:  true,
 	}
 	lockScript, err := contracts.EncodeAnchorLockingScript(state)
@@ -579,6 +651,8 @@ type RecallInput struct {
 	Query             string           `json:"query,omitempty"`
 	Principal         policy.Principal `json:"principal,omitempty"`
 	CallerPub         string           `json:"callerPub,omitempty"`
+	Action            string           `json:"-"` // internal Cedar action ("read" default, or "disclose")
+	DisallowBorg      bool             `json:"-"` // internal: when true, Borg-encrypted fragments are skipped
 	IncludeSuperseded bool             `json:"includeSuperseded,omitempty"`
 	VerifySPV         bool             `json:"verifySpv,omitempty"`
 	Limit             int              `json:"limit,omitempty"`
@@ -607,12 +681,19 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 	if in.Shard == "" {
 		in.Shard = "default"
 	}
+	if err := ValidateShardName(in.Shard, false); err != nil {
+		return nil, err
+	}
 	principal := in.Principal
 	if principal.ID == "" {
 		principal = policy.Principal{Type: "Agent", ID: "owner", Level: 100}
 	}
+	action := strings.TrimSpace(in.Action)
+	if action == "" {
+		action = "read"
+	}
 	callerPub := in.CallerPub
-	if callerPub == "" {
+	if callerPub == "" && !in.DisallowBorg {
 		callerPub = s.port.IdentityPubHex()
 	}
 
@@ -651,7 +732,7 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 			continue
 		}
 		// Cedar authorization gate (native cedar-go).
-		dec, err := policy.Authorize(polText, principal, "read", policy.Resource{
+		dec, err := policy.Authorize(polText, principal, action, policy.Resource{
 			Type:  "Fragment",
 			ID:    fmt.Sprintf("%s#%d", r.Shard, r.Seq),
 			Level: int64(r.Level),
@@ -665,7 +746,7 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 		// Decrypt BRC-369 Borg-sealed fragment if encrypted.
 		plaintext := r.Data
 		if r.BorgGroup != "" {
-			if len(r.KeyedMeta) == 0 {
+			if in.DisallowBorg || callerPub == "" || len(r.KeyedMeta) == 0 {
 				continue
 			}
 			var env bstack.SealedEnvelope
@@ -678,8 +759,17 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 				continue
 			}
 			opened, err := bstack.OpenWithEpoch(&env, epochSym)
+			core.Zero32Array(&epochSym)
 			if err != nil {
 				continue
+			}
+			// Re-verify decrypted plaintext cryptographically matches committed HDP.
+			if hdpBytes, hErr := hex.DecodeString(r.HDP); hErr == nil && len(hdpBytes) == 32 && len(r.Provenance) > 0 {
+				v1 := core.SHA256(core.Concat(core.TagProv, opened, r.Provenance))
+				v2 := core.SHA256(core.Concat(core.TagProvV2, core.Field(opened), r.Provenance))
+				if !core.EqualBytes(v1, hdpBytes) && !core.EqualBytes(v2, hdpBytes) {
+					continue
+				}
 			}
 			plaintext = opened
 		}
@@ -728,9 +818,32 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 
 // Prove constructs a self-contained ProofBundle for (shard, seq) and runs full offline SPV verification.
 func (s *Service) Prove(ctx context.Context, shard string, seq int64) (*contracts.ProofBundle, *contracts.VerifyResult, error) {
+	return s.ProveAuthorized(ctx, shard, seq, policy.Principal{Type: "Agent", ID: "owner", Level: 100})
+}
+
+// ProveAuthorized enforces Cedar read authorization before constructing a ProofBundle for (shard, seq).
+func (s *Service) ProveAuthorized(ctx context.Context, shard string, seq int64, principal policy.Principal) (*contracts.ProofBundle, *contracts.VerifyResult, error) {
+	if err := ValidateShardName(shard, true); err != nil {
+		return nil, nil, err
+	}
 	rec, err := s.db.GetFragment(shard, seq)
 	if err != nil {
 		return nil, nil, err
+	}
+	if principal.ID == "" {
+		principal = policy.Principal{Type: "Agent", ID: "owner", Level: 100}
+	}
+	if dec, aErr := s.AuthorizeAction(principal, "read", policy.Resource{
+		Type:  "Fragment",
+		ID:    fmt.Sprintf("%s#%d", rec.Shard, rec.Seq),
+		Level: int64(rec.Level),
+		Shard: rec.Shard,
+		Class: rec.Class,
+	}); aErr != nil || !dec.Allow {
+		if aErr != nil {
+			return nil, nil, fmt.Errorf("memory: cedar prove policy error: %w", aErr)
+		}
+		return nil, nil, fmt.Errorf("memory: cedar policy denied prove on %s#%d", rec.Shard, rec.Seq)
 	}
 	if rec.BatchN < 0 {
 		return nil, &contracts.VerifyResult{OK: false, AnchorState: "unanchored", Reason: "fragment not yet anchored"}, nil
@@ -851,13 +964,14 @@ func (s *Service) RefreshAnchorProofs(ctx context.Context) (int, error) {
 
 // GroundedAnswerInput requests a grounded, receipt-backed answer from claims citing memory fragments.
 type GroundedAnswerInput struct {
-	Claims      []reasoning.Claim         `json:"claims"`
-	Mode        string                    `json:"mode,omitempty"` // remove (default) | flag
-	Principal   policy.Principal          `json:"principal,omitempty"`
-	CallerPub   string                    `json:"callerPub,omitempty"`
-	Delegations []reasoning.Delegation    `json:"delegations,omitempty"`
-	Payment     *reasoning.PaymentSummary `json:"payment,omitempty"`
-	AutoAnchor  bool                      `json:"autoAnchor,omitempty"`
+	Claims       []reasoning.Claim         `json:"claims"`
+	Mode         string                    `json:"mode,omitempty"` // remove (default) | flag
+	Principal    policy.Principal          `json:"principal,omitempty"`
+	CallerPub    string                    `json:"callerPub,omitempty"`
+	DisallowBorg bool                      `json:"-"`
+	Delegations  []reasoning.Delegation    `json:"delegations,omitempty"`
+	Payment      *reasoning.PaymentSummary `json:"payment,omitempty"`
+	AutoAnchor   bool                      `json:"autoAnchor,omitempty"`
 }
 
 // GroundedAnswerResult carries the grounded answer text and auditable receipt footer.
@@ -881,7 +995,7 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 		principal = policy.Principal{Type: "Agent", ID: "owner", Level: 100}
 	}
 	callerPub := in.CallerPub
-	if callerPub == "" {
+	if callerPub == "" && !in.DisallowBorg {
 		callerPub = s.port.IdentityPubHex()
 	}
 
@@ -910,6 +1024,9 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 			return false, ""
 		}
 		if r.BorgGroup != "" {
+			if in.DisallowBorg || callerPub == "" {
+				return false, ""
+			}
 			var env bstack.SealedEnvelope
 			if err := json.Unmarshal(r.KeyedMeta, &env); err != nil {
 				return false, ""
@@ -1181,15 +1298,143 @@ type ShardPackResult struct {
 	Size     int    `json:"size"`
 }
 
+// LoadOrCreateProtectedKey loads or creates a 32-byte key in SQLite wrapped at rest via BRC-43
+// wallet EncryptAtRest/DecryptAtRest (transparently migrating any legacy plaintext key, failing closed
+// on encryption errors so fresh keys are never persisted in plaintext SQLite/WAL).
+func (s *Service) LoadOrCreateProtectedKey(name string, gen func() ([]byte, error)) ([]byte, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("memory: db unavailable")
+	}
+	var encBlob struct {
+		EncHex string `json:"encHex"`
+	}
+	if ok, _ := s.db.GetJSON(name+"_enc", &encBlob); ok && encBlob.EncHex != "" {
+		if s.port == nil {
+			return nil, fmt.Errorf("memory: encrypted key %q requires active wallet port", name)
+		}
+		ct, err := hex.DecodeString(encBlob.EncHex)
+		if err != nil {
+			return nil, fmt.Errorf("memory: decode encrypted key %q: %w", name, err)
+		}
+		pt, err := s.port.DecryptAtRest(context.Background(), name, ct)
+		if err != nil || len(pt) != 32 {
+			return nil, fmt.Errorf("memory: decrypt protected key %q: %w", name, err)
+		}
+		return pt, nil
+	}
+	// Check for legacy plaintext key to migrate (never create a new plaintext key if s.port != nil).
+	var legacyHex string
+	if ok, _ := s.db.GetJSON(name, &legacyHex); ok && len(legacyHex) == 64 {
+		if raw, err := hex.DecodeString(legacyHex); err == nil && len(raw) == 32 {
+			if s.port != nil {
+				ct, encErr := s.port.EncryptAtRest(context.Background(), name, raw)
+				if encErr != nil {
+					core.ZeroBytes(raw)
+					return nil, fmt.Errorf("memory: migrate key %q at rest: %w", name, encErr)
+				}
+				if err := s.db.SetJSON(name+"_enc", map[string]string{"encHex": hex.EncodeToString(ct)}); err != nil {
+					core.ZeroBytes(raw)
+					return nil, err
+				}
+				_ = s.db.SetJSON(name, map[string]string{"migrated": "encrypted"})
+			}
+			return raw, nil
+		}
+	}
+	if s.port != nil {
+		created, err := gen()
+		if err != nil {
+			return nil, err
+		}
+		if len(created) != 32 {
+			core.ZeroBytes(created)
+			return nil, fmt.Errorf("memory: generated key %q must be 32 bytes", name)
+		}
+		ct, encErr := s.port.EncryptAtRest(context.Background(), name, created)
+		if encErr != nil {
+			core.ZeroBytes(created)
+			return nil, fmt.Errorf("memory: encrypt new key %q at rest: %w", name, encErr)
+		}
+		if err := s.db.SetJSON(name+"_enc", map[string]string{"encHex": hex.EncodeToString(ct)}); err != nil {
+			core.ZeroBytes(created)
+			return nil, err
+		}
+		return created, nil
+	}
+	return s.db.LoadOrCreateStableKey(name, gen)
+}
+
 // ExportShardPack bundles shard fragments and anchors into a content-addressed BRC-167 CHIRP closure.
-func (s *Service) ExportShardPack(_ context.Context, shard string) (*ShardPackResult, error) {
-	frags, err := s.db.ListFragments(shard)
+// For external/HTTP export, use ExportShardPackAuthorized or ExportPublicShardPack.
+func (s *Service) ExportShardPack(ctx context.Context, shard string) (*ShardPackResult, error) {
+	res, _, err := s.exportShardPackInternal(ctx, shard, policy.Principal{Type: "Agent", ID: "owner", Level: 100}, "read", false, false)
+	return res, err
+}
+
+// ExportPublicShardPack exports only active, Level-0, non-Borg, Cedar-"disclose" fragments and registers the
+// resulting CHIRP DAG object hashes in the public unauthenticated allowlist (for starter/market packs).
+func (s *Service) ExportPublicShardPack(ctx context.Context, shard string) (*ShardPackResult, error) {
+	res, hashes, err := s.exportShardPackInternal(ctx, shard, policy.Principal{Type: "Agent", ID: "public", Level: 0}, "disclose", true, true)
 	if err != nil {
 		return nil, err
 	}
+	s.AllowPublicChirpHashes(hashes...)
+	return res, nil
+}
+
+// ExportShardPackAuthorized exports only active, Cedar-authorized fragments from shard into CHIRP.
+func (s *Service) ExportShardPackAuthorized(ctx context.Context, shard string, principal policy.Principal, action string, disallowBorg bool) (*ShardPackResult, error) {
+	res, _, err := s.exportShardPackInternal(ctx, shard, principal, action, disallowBorg, true)
+	return res, err
+}
+
+func (s *Service) exportShardPackInternal(_ context.Context, shard string, principal policy.Principal, action string, disallowBorg, excludeSuperseded bool) (*ShardPackResult, [][32]byte, error) {
+	if err := ValidateShardName(shard, false); err != nil {
+		return nil, nil, err
+	}
+	if principal.ID == "" {
+		principal = policy.Principal{Type: "Agent", ID: "public", Level: 0}
+	}
+	if action == "" {
+		action = "disclose"
+	}
+	allFrags, err := s.db.ListFragments(shard)
+	if err != nil {
+		return nil, nil, err
+	}
+	superseded := make(map[int64]bool)
+	for _, r := range allFrags {
+		if r.Supersedes > 0 {
+			superseded[r.Supersedes] = true
+		}
+	}
+	s.mu.RLock()
+	polText := s.policyText
+	s.mu.RUnlock()
+
+	frags := make([]store.FragmentRecord, 0, len(allFrags))
+	for _, r := range allFrags {
+		if r.Forgotten || (excludeSuperseded && superseded[r.Seq]) {
+			continue
+		}
+		if disallowBorg && r.BorgGroup != "" {
+			continue
+		}
+		dec, aErr := policy.Authorize(polText, principal, action, policy.Resource{
+			Type:  "Fragment",
+			ID:    fmt.Sprintf("%s#%d", r.Shard, r.Seq),
+			Level: int64(r.Level),
+			Shard: r.Shard,
+			Class: r.Class,
+		})
+		if aErr != nil || !dec.Allow {
+			continue
+		}
+		frags = append(frags, r)
+	}
 	anchors, err := s.db.ListAnchors(shard)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pack := ShardPack{
 		Version:    1,
@@ -1201,18 +1446,18 @@ func (s *Service) ExportShardPack(_ context.Context, shard string) (*ShardPackRe
 	}
 	raw, err := json.Marshal(pack)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	u, root, err := bstack.StoreChirp(s.objects, raw)
+	u, root, hashes, err := bstack.StoreChirpWithHashes(s.objects, raw)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return &ShardPackResult{
 		Shard:    shard,
 		ChirpURL: u,
 		RootHex:  hex.EncodeToString(root[:]),
 		Size:     len(raw),
-	}, nil
+	}, hashes, nil
 }
 
 // ImportShardPack resolves and verifies a CHIRP shard pack closure and imports its fragments into targetShard.
@@ -1233,15 +1478,31 @@ func (s *Service) importShardPackVerified(ctx context.Context, raw []byte, targe
 	if targetShard == "" {
 		targetShard = pack.Shard
 	}
-	// Verify every claimed anchor's AnchorBEEF + Rúnar NektarAnchor state (+ header BUMP on live nets)
+	if err := ValidateShardName(targetShard, false); err != nil {
+		return 0, "", err
+	}
+	// Verify every claimed anchor's AnchorBEEF (bounded via guard.ParseBEEF) + Rúnar NektarAnchor state
+	// + contiguous ChainRp continuity from genesis + header BUMP settlement (never trusting untrusted JSON flags)
 	// and refuse overwriting any conflicting existing local anchor!
-	verifiedAnchors := make(map[int64]store.BatchAnchor, len(pack.Anchors))
-	for _, a := range pack.Anchors {
+	sortedAnchors := append([]store.BatchAnchor(nil), pack.Anchors...)
+	for i := 1; i < len(sortedAnchors); i++ {
+		for j := i; j > 0 && sortedAnchors[j].N < sortedAnchors[j-1].N; j-- {
+			sortedAnchors[j], sortedAnchors[j-1] = sortedAnchors[j-1], sortedAnchors[j]
+		}
+	}
+	verifiedAnchors := make(map[int64]store.BatchAnchor, len(sortedAnchors))
+	prevRp := core.Zero32Bytes()
+	expectedN := int64(0)
+	for _, a := range sortedAnchors {
 		if len(a.Beef) == 0 {
 			continue
 		}
-		tx, tErr := transaction.NewTransactionFromBEEF(a.Beef)
-		if tErr != nil || len(tx.Outputs) == 0 || tx.Outputs[0].LockingScript == nil {
+		// Enforce contiguous anchor numbering from genesis (no skipped N=0 or gaps bypassing ChainRp!).
+		if a.N != expectedN {
+			continue
+		}
+		_, tx, txHash, tErr := guard.ParseBEEF(a.Beef, guard.DefaultBound)
+		if tErr != nil || tx == nil || txHash == nil || len(tx.Outputs) == 0 || tx.Outputs[0].LockingScript == nil {
 			continue
 		}
 		st, dErr := contracts.DecodeNektarAnchor(*tx.Outputs[0].LockingScript)
@@ -1249,21 +1510,36 @@ func (s *Service) importShardPackVerified(ctx context.Context, raw []byte, targe
 			continue
 		}
 		if st.N != uint64(a.N) || st.Size != uint64(a.Size) || !strings.EqualFold(hex.EncodeToString(st.R), a.RootHex) ||
-			!strings.EqualFold(hex.EncodeToString(st.Rp), a.ChainedHex) || tx.TxID().String() != a.TxID {
+			!strings.EqualFold(hex.EncodeToString(st.Rp), a.ChainedHex) || txHash.String() != a.TxID {
 			continue
 		}
-		if tx.MerklePath != nil && s.port.Network() != "memory" {
-			tracker := s.port.Tracker()
-			if tracker == nil {
-				continue
-			}
-			root, rErr := tx.MerklePath.ComputeRoot(tx.TxID())
-			if rErr != nil || root == nil {
-				continue
-			}
-			valid, vErr := tracker.IsValidRootForHeight(ctx, root, tx.MerklePath.BlockHeight)
-			if vErr != nil || !valid {
-				continue
+		// Enforce sequential ChainRp linkage across every imported anchor.
+		wantTag := core.ChainRpWithTag(st.Tag, prevRp, st.R, st.Size)
+		wantLegacy := core.EqualBytes(st.Tag, core.TagAnchorTag) && core.EqualBytes(st.Rp, core.ChainRp(prevRp, st.R, st.Size))
+		if !core.EqualBytes(wantTag, st.Rp) && !wantLegacy {
+			continue
+		}
+		prevRp = st.Rp
+		expectedN = a.N + 1
+		// Derive Settled strictly from verified BUMP against header chain (never trust untrusted JSON flag!).
+		a.Settled = false
+		if tx.MerklePath != nil {
+			if s.port.Network() == "memory" {
+				a.Settled = true
+			} else {
+				tracker := s.port.Tracker()
+				if tracker == nil {
+					continue
+				}
+				root, rErr := tx.MerklePath.ComputeRoot(txHash)
+				if rErr != nil || root == nil {
+					continue
+				}
+				valid, vErr := tracker.IsValidRootForHeight(ctx, root, tx.MerklePath.BlockHeight)
+				if vErr != nil || !valid {
+					continue
+				}
+				a.Settled = true
 			}
 		}
 		a.Shard = targetShard
@@ -1273,11 +1549,74 @@ func (s *Service) importShardPackVerified(ctx context.Context, raw []byte, targe
 		verifiedAnchors[a.N] = a
 	}
 
+	// Recompute every fragment's HDP/Leaf and verify full batch Merkle root against a.RootHex
+	// before allowing any imported fragment to retain anchored (BatchN, LeafIndex, AnchorTxID) status!
+	batchValid := make(map[int64]bool, len(verifiedAnchors))
+	for batchN, a := range verifiedAnchors {
+		byIdx := make(map[int][]byte)
+		okBatch := a.Size > 0
+		for _, f := range pack.Fragments {
+			if f.BatchN != batchN {
+				continue
+			}
+			if f.LeafIndex < 0 || f.LeafIndex >= a.Size {
+				okBatch = false
+				break
+			}
+			hdpBytes, hErr := hex.DecodeString(strings.TrimSpace(f.HDP))
+			if hErr != nil || len(hdpBytes) != 32 {
+				okBatch = false
+				break
+			}
+			// Whenever plaintext Data is present for a non-forgotten, non-Borg fragment, Provenance MUST be present
+			// and HDP MUST cryptographically commit to Data+Provenance (prevents empty-provenance plaintext forgery!).
+			if len(f.Data) > 0 && !f.Forgotten && f.BorgGroup == "" {
+				if len(f.Provenance) == 0 {
+					okBatch = false
+					break
+				}
+				expectedV1 := core.SHA256(core.Concat(core.TagProv, f.Data, f.Provenance))
+				expectedV2 := core.SHA256(core.Concat(core.TagProvV2, core.Field(f.Data), f.Provenance))
+				if !core.EqualBytes(expectedV1, hdpBytes) && !core.EqualBytes(expectedV2, hdpBytes) {
+					okBatch = false
+					break
+				}
+			}
+			leafBytes := core.ComputeLeaf(core.Fragment{HDP: hdpBytes, Ciphertext: f.Ciphertext})
+			if !strings.EqualFold(f.Leaf, core.ToHex(leafBytes)) {
+				// Backward compatibility for legacy encrypted fragments committed with empty ciphertext.
+				legacyLeaf := core.ComputeLeaf(core.Fragment{HDP: hdpBytes})
+				if len(f.Ciphertext) == 0 || !strings.EqualFold(f.Leaf, core.ToHex(legacyLeaf)) {
+					okBatch = false
+					break
+				}
+				leafBytes = legacyLeaf
+			}
+			byIdx[f.LeafIndex] = leafBytes
+		}
+		if okBatch && len(byIdx) == a.Size {
+			leaves := make([][]byte, a.Size)
+			for i := 0; i < a.Size; i++ {
+				lb, ok := byIdx[i]
+				if !ok {
+					okBatch = false
+					break
+				}
+				leaves[i] = lb
+			}
+			if okBatch {
+				if root, rErr := core.MerkleRoot(leaves); rErr == nil && strings.EqualFold(core.ToHex(root), a.RootHex) {
+					batchValid[batchN] = true
+				}
+			}
+		}
+	}
+
 	imported := 0
 	for _, f := range pack.Fragments {
 		f.Shard = targetShard
 		f.Tainted = true
-		if a, hasAnchor := verifiedAnchors[f.BatchN]; !hasAnchor || f.BatchN < 0 || f.AnchorTxID != a.TxID {
+		if a, hasAnchor := verifiedAnchors[f.BatchN]; !hasAnchor || !batchValid[f.BatchN] || f.BatchN < 0 || f.AnchorTxID != a.TxID {
 			f.BatchN = -1
 			f.LeafIndex = -1
 			f.AnchorTxID = ""
@@ -1290,7 +1629,12 @@ func (s *Service) importShardPackVerified(ctx context.Context, raw []byte, targe
 }
 
 type dbGroupStore struct {
-	db *store.DB
+	db   *store.DB
+	port *chain.Port
+}
+
+type sealedEpochsBlob struct {
+	EncHex string `json:"encHex"`
 }
 
 func (g *dbGroupStore) LoadBorgGroups() ([]*bstack.BorgGroup, error) {
@@ -1312,12 +1656,31 @@ func (g *dbGroupStore) LoadBorgGroups() ([]*bstack.BorgGroup, error) {
 		_ = json.Unmarshal(r.MembersJSON, &bg.Members)
 		_ = json.Unmarshal(r.RevokedJSON, &bg.Revoked)
 		_ = json.Unmarshal(r.EpochMembersJSON, &bg.EpochMembers)
+
+		epJSON := r.EpochsJSON
+		var wrapped sealedEpochsBlob
+		if json.Unmarshal(r.EpochsJSON, &wrapped) == nil && wrapped.EncHex != "" {
+			if g.port == nil {
+				return nil, fmt.Errorf("borg: encrypted epoch keys for group %q require active wallet port", r.GroupID)
+			}
+			ct, dErr := hex.DecodeString(wrapped.EncHex)
+			if dErr != nil {
+				return nil, fmt.Errorf("borg: decode encrypted epochs for group %q: %w", r.GroupID, dErr)
+			}
+			pt, decErr := g.port.DecryptAtRest(context.Background(), "borg-group:"+r.GroupID, ct)
+			if decErr != nil {
+				return nil, fmt.Errorf("borg: decrypt epochs for group %q: %w", r.GroupID, decErr)
+			}
+			epJSON = pt
+			defer core.ZeroBytes(pt)
+		}
 		var hexEpochs map[int64]string
-		if json.Unmarshal(r.EpochsJSON, &hexEpochs) == nil {
+		if json.Unmarshal(epJSON, &hexEpochs) == nil {
 			for ep, hx := range hexEpochs {
 				if raw, decErr := hex.DecodeString(hx); decErr == nil && len(raw) == 32 {
 					var k [32]byte
 					copy(k[:], raw)
+					core.ZeroBytes(raw)
 					bg.Epochs[ep] = k
 				}
 			}
@@ -1336,13 +1699,23 @@ func (g *dbGroupStore) SaveBorgGroup(bg *bstack.BorgGroup) error {
 		hexEpochs[ep] = hex.EncodeToString(k[:])
 	}
 	epJSON, _ := json.Marshal(hexEpochs)
+	defer core.ZeroBytes(epJSON)
+	persistEpochs := epJSON
+	if g.port != nil {
+		ct, err := g.port.EncryptAtRest(context.Background(), "borg-group:"+bg.GroupID, epJSON)
+		if err != nil {
+			// Fail closed: never fall back to persisting plaintext Borg epoch symmetric keys in SQLite.
+			return fmt.Errorf("borg: encrypt epoch keys at rest for group %q: %w", bg.GroupID, err)
+		}
+		persistEpochs, _ = json.Marshal(sealedEpochsBlob{EncHex: hex.EncodeToString(ct)})
+	}
 	return g.db.SaveBorgGroup(store.BorgGroupRecord{
 		GroupID:          bg.GroupID,
 		Name:             bg.Name,
 		CurrentEpoch:     bg.CurrentEpoch,
 		MembersJSON:      memJSON,
 		RevokedJSON:      revJSON,
-		EpochsJSON:       epJSON,
+		EpochsJSON:       persistEpochs,
 		EpochMembersJSON: epMemJSON,
 	})
 }

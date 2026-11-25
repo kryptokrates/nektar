@@ -170,7 +170,8 @@ func (r *GroupRegistry) CreateGroup(groupID, name, ownerPub string) (*BorgGroup,
 	return g, nil
 }
 
-// AddMember grants pubHex membership in the current epoch.
+// AddMember grants pubHex membership in the current epoch (deduplicated).
+// Use AddMemberWithRotation when newly added members must NOT have access to prior fragments in the current epoch.
 func (r *GroupRegistry) AddMember(groupID, pubHex, role string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -183,13 +184,55 @@ func (r *GroupRegistry) AddMember(groupID, pubHex, role string) error {
 	}
 	g.Members[pubHex] = role
 	delete(g.Revoked, pubHex)
-	g.EpochMembers[g.CurrentEpoch] = append(g.EpochMembers[g.CurrentEpoch], pubHex)
+	exists := false
+	for _, m := range g.EpochMembers[g.CurrentEpoch] {
+		if m == pubHex {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		g.EpochMembers[g.CurrentEpoch] = append(g.EpochMembers[g.CurrentEpoch], pubHex)
+	}
 	if r.persist != nil {
 		if err := r.persist.SaveBorgGroup(g); err != nil {
 			return fmt.Errorf("borg: persist add member: %w", err)
 		}
 	}
 	return nil
+}
+
+// AddMemberWithRotation grants pubHex membership AND rotates to a fresh epoch with a new
+// symmetric key so newly added members cannot read prior-epoch ciphertext (backward secrecy).
+func (r *GroupRegistry) AddMemberWithRotation(groupID, pubHex, role string) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	g, ok := r.groups[groupID]
+	if !ok {
+		return 0, fmt.Errorf("borg: unknown group %q", groupID)
+	}
+	if role == "" {
+		role = "reader"
+	}
+	var nextSym [32]byte
+	if _, err := rand.Read(nextSym[:]); err != nil {
+		return 0, err
+	}
+	g.Members[pubHex] = role
+	delete(g.Revoked, pubHex)
+	g.CurrentEpoch++
+	g.Epochs[g.CurrentEpoch] = nextSym
+	members := make([]string, 0, len(g.Members))
+	for m := range g.Members {
+		members = append(members, m)
+	}
+	g.EpochMembers[g.CurrentEpoch] = members
+	if r.persist != nil {
+		if err := r.persist.SaveBorgGroup(g); err != nil {
+			return 0, fmt.Errorf("borg: persist add member with rotation: %w", err)
+		}
+	}
+	return g.CurrentEpoch, nil
 }
 
 // RevokeMember removes pubHex from groupID and IMMEDIATELY rotates to a fresh epoch
@@ -225,14 +268,20 @@ func (r *GroupRegistry) RevokeMember(groupID, pubHex string) (int64, error) {
 	return g.CurrentEpoch, nil
 }
 
-// EpochKey returns the epoch symmetric key ONLY if pubHex is currently an authorized member
-// of the group (revoked members are denied access to new epochs).
+// EpochKey returns the epoch symmetric key ONLY if pubHex is currently an active, non-revoked
+// member of the group AND was authorized for the requested epoch.
 func (r *GroupRegistry) EpochKey(groupID, pubHex string, epoch int64) ([32]byte, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	g, ok := r.groups[groupID]
 	if !ok {
 		return [32]byte{}, fmt.Errorf("borg: unknown group %q", groupID)
+	}
+	if _, active := g.Members[pubHex]; !active {
+		return [32]byte{}, fmt.Errorf("borg: %s is not an active member of %q", pubHex, groupID)
+	}
+	if _, revoked := g.Revoked[pubHex]; revoked {
+		return [32]byte{}, fmt.Errorf("borg: %s has been revoked from %q", pubHex, groupID)
 	}
 	if epoch == 0 {
 		epoch = g.CurrentEpoch
@@ -255,10 +304,30 @@ func (r *GroupRegistry) EpochKey(groupID, pubHex string, epoch int64) ([32]byte,
 	return sym, nil
 }
 
-// GetGroup returns a group summary.
+// GetGroup returns a redacted copy of the group summary (without exposing raw Epochs keys).
 func (r *GroupRegistry) GetGroup(groupID string) (*BorgGroup, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	g, ok := r.groups[groupID]
-	return g, ok
+	if !ok {
+		return nil, false
+	}
+	cp := &BorgGroup{
+		GroupID:      g.GroupID,
+		Name:         g.Name,
+		CurrentEpoch: g.CurrentEpoch,
+		Members:      make(map[string]string, len(g.Members)),
+		Revoked:      make(map[string]int64, len(g.Revoked)),
+		EpochMembers: make(map[int64][]string, len(g.EpochMembers)),
+	}
+	for k, v := range g.Members {
+		cp.Members[k] = v
+	}
+	for k, v := range g.Revoked {
+		cp.Revoked[k] = v
+	}
+	for ep, ms := range g.EpochMembers {
+		cp.EpochMembers[ep] = append([]string(nil), ms...)
+	}
+	return cp, true
 }

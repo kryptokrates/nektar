@@ -92,7 +92,7 @@ func Open(path string) (*DB, error) {
 		path = ":memory:"
 	}
 	if path != ":memory:" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, fmt.Errorf("store: mkdir: %w", err)
 		}
 	}
@@ -109,6 +109,11 @@ func Open(path string) (*DB, error) {
 	if err := d.migrate(); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if path != ":memory:" {
+		_ = os.Chmod(path, 0o600)
+		_ = os.Chmod(path+"-wal", 0o600)
+		_ = os.Chmod(path+"-shm", 0o600)
 	}
 	return d, nil
 }

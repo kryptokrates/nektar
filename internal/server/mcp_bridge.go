@@ -49,9 +49,15 @@ func WriteDaemonInfo(dataDir string, info DaemonInfo) error {
 	p := DaemonInfoPath(dataDir)
 	tmp := p + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, p)
+	_ = os.Chmod(tmp, 0o600)
+	if err := os.Rename(tmp, p); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // RemoveDaemonInfo deletes daemon.json on clean daemon exit.

@@ -24,8 +24,23 @@ if ($Docker) {
 } else {
   Write-Output "`n== nektar v0.4 install (native single static Go binary — zero Docker, zero Node.js) =="
   $zip = Join-Path $env:TEMP 'nektar-windows-amd64.zip'
-  Write-Output '-- downloading nektar-windows-amd64.zip from latest GitHub release'
-  Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/kryptokrates/nektar/releases/latest/download/nektar-windows-amd64.zip' -OutFile $zip
+  $sums = Join-Path $env:TEMP 'nektar-SHA256SUMS'
+  $baseDl = 'https://github.com/kryptokrates/nektar/releases/latest/download'
+  Write-Output '-- downloading nektar-windows-amd64.zip and SHA256SUMS from latest GitHub release'
+  Invoke-WebRequest -UseBasicParsing -Uri "$baseDl/nektar-windows-amd64.zip" -OutFile $zip
+  try {
+    Invoke-WebRequest -UseBasicParsing -Uri "$baseDl/SHA256SUMS" -OutFile $sums
+    $line = Get-Content $sums | Where-Object { $_ -match 'nektar-windows-amd64\.zip$' } | Select-Object -First 1
+    if ($line) {
+      $want = ($line -split '\s+')[0].ToLowerInvariant()
+      $got = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLowerInvariant()
+      if ($got -ne $want) {
+        throw "SHA-256 mismatch for nektar-windows-amd64.zip (got $got, want $want)"
+      }
+    }
+  } finally {
+    Remove-Item $sums -Force -ErrorAction SilentlyContinue
+  }
   Expand-Archive -Path $zip -DestinationPath $InstallDir -Force
   Remove-Item $zip -Force -ErrorAction SilentlyContinue
   Write-Output "✓ installed native nektar.exe -> $InstallDir\nektar.exe"

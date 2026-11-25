@@ -14,8 +14,8 @@ import (
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/script"
-	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-sdk/transaction/chaintracker"
+	"github.com/lightwebinc/bcommon/guard"
 
 	"github.com/kryptokrates/nektar/internal/core"
 )
@@ -137,12 +137,18 @@ func EncodeAnchorLockingScript(st AnchorState) (*script.Script, error) {
 	}
 	tag := st.Tag
 	if len(tag) == 0 {
-		tag = core.TagAnchorTag
+		tag = core.TagRPrime
 	}
-	state := make([]byte, 0, 4+33+8+8+32+32+1+len(tag)+1+20)
+	if len(tag) > 75 {
+		return nil, errors.New("contracts: anchor tag exceeds 75-byte direct push limit")
+	}
+	state := make([]byte, 0, 5+33+8+8+32+32+1+len(tag)+1+20)
 	if st.Metanet {
 		state = append(state, 0x04)
 		state = append(state, core.MetaFlag...)
+	} else {
+		// Explicit empty push so NektarAnchor v4's OP_1 OP_SPLIT metaFlag parser stays aligned.
+		state = append(state, 0x00)
 	}
 	state = append(state, ownerPubBytes...)
 	state = append(state, core.U64LE(st.N)...)
@@ -185,6 +191,8 @@ func DecodeNektarAnchor(scriptBytes []byte) (*AnchorState, error) {
 	if len(suffix) >= 5 && suffix[0] == 0x04 && core.EqualBytes(suffix[1:5], core.MetaFlag) {
 		metanet = true
 		suffix = suffix[5:]
+	} else if len(suffix) >= 1 && suffix[0] == 0x00 {
+		suffix = suffix[1:]
 	}
 	// Layout: ownerPub(33) | n(8) | size(8) | R(32) | Rp(32) | tagLen(1) | tag | pkhLen(1) | pkh
 	if len(suffix) < 115 {
@@ -279,9 +287,15 @@ func VerifyFragmentStructural(bundle ProofBundle) VerifyResult {
 	return verifyFragment(context.Background(), bundle, nil, false)
 }
 
+// MaxMerkleBatchSize caps untrusted ProofBundle.Size to prevent integer-overflow or DoS.
+const MaxMerkleBatchSize uint64 = 1 << 24
+
 func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracker.ChainTracker, checkHeaders bool) VerifyResult {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if bundle.Size == 0 || bundle.Size > MaxMerkleBatchSize {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "batch size out of bounds"}
 	}
 	if bundle.LeafIndex < 0 || uint64(bundle.LeafIndex) >= bundle.Size {
 		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "leafIndex outside batch size"}
@@ -290,22 +304,29 @@ func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracke
 		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "path height does not match committed batch size"}
 	}
 	leaf, err := hex.DecodeString(bundle.Leaf)
-	if err != nil {
-		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "invalid leaf hex"}
+	if err != nil || len(leaf) != 32 {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "leaf must be 32-byte hex"}
 	}
 	sibs := make([][]byte, len(bundle.Path))
 	for i, s := range bundle.Path {
 		b, err := hex.DecodeString(s)
-		if err != nil {
-			return VerifyResult{OK: false, Reason: "BadBundle", Detail: "invalid path sibling hex"}
+		if err != nil || len(b) != 32 {
+			return VerifyResult{OK: false, Reason: "BadBundle", Detail: "path sibling must be 32-byte hex"}
 		}
 		sibs[i] = b
 	}
-	recomputedR := core.ReconstructRoot(leaf, &core.MerkleProof{Index: bundle.LeafIndex, Siblings: sibs})
-
-	anchorTx, err := transaction.NewTransactionFromBEEF(bundle.AnchorBEEF)
+	recomputedR, err := core.ReconstructRootChecked(leaf, &core.MerkleProof{Index: bundle.LeafIndex, Siblings: sibs})
 	if err != nil {
-		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "BEEF parse: " + err.Error()}
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: err.Error()}
+	}
+
+	_, anchorTx, _, err := guard.ParseBEEF(bundle.AnchorBEEF, guard.DefaultBound)
+	if err != nil || anchorTx == nil {
+		msg := "empty transaction"
+		if err != nil {
+			msg = err.Error()
+		}
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "BEEF parse: " + msg}
 	}
 	if len(anchorTx.Outputs) == 0 || anchorTx.Outputs[0].LockingScript == nil {
 		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "anchor tx has no output 0"}
@@ -351,17 +372,21 @@ func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracke
 		!strings.EqualFold(last.R, hex.EncodeToString(state.R)) || !strings.EqualFold(last.Rp, hex.EncodeToString(state.Rp)) {
 		return VerifyResult{OK: false, Reason: "ChainInconsistent", Detail: "chainTail head mismatches on-chain anchor"}
 	}
-	prevRp := core.Zero32
+	prevRp := core.Zero32Bytes()
 	for i, link := range bundle.ChainTail {
 		if link.N != uint64(i) {
 			return VerifyResult{OK: false, Reason: "ChainInconsistent", Detail: fmt.Sprintf("gap at n=%d", i)}
 		}
 		rBytes, err1 := hex.DecodeString(link.R)
 		rpBytes, err2 := hex.DecodeString(link.Rp)
-		if err1 != nil || err2 != nil {
+		if err1 != nil || err2 != nil || len(rBytes) != 32 || len(rpBytes) != 32 {
 			return VerifyResult{OK: false, Reason: "ChainInconsistent", Detail: "invalid R/Rp hex in chainTail"}
 		}
-		if !core.EqualBytes(rpBytes, core.ChainRp(prevRp, rBytes, link.Size)) {
+		matchesTag := core.EqualBytes(rpBytes, core.ChainRpWithTag(state.Tag, prevRp, rBytes, link.Size))
+		// Legacy compatibility: anchors minted before TagRPrime unification stored TagAnchorTag on-chain
+		// while computing R' with TagRPrime.
+		matchesLegacy := core.EqualBytes(state.Tag, core.TagAnchorTag) && core.EqualBytes(rpBytes, core.ChainRp(prevRp, rBytes, link.Size))
+		if !matchesTag && !matchesLegacy {
 			return VerifyResult{OK: false, Reason: "ChainInconsistent", Detail: fmt.Sprintf("R' link broken at n=%d", i)}
 		}
 		prevRp = rpBytes

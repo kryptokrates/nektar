@@ -56,10 +56,6 @@
             "type": "ByteString"
           },
           {
-            "name": "verifierSats",
-            "type": "bigint"
-          },
-          {
             "name": "verdictSats",
             "type": "bigint"
           },
@@ -77,1071 +73,1245 @@
       }
     ]
   },
-  "script": "76ab5a7a210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ad697601687f7782012c947f758258947f75517f7c7601007e8102fd009f63756775527f77685a79827751947f7701207f517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868587f7c817c517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868587f7c817c517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868755f79a9547988607a607aad5279827701249d5e79aa5979547f7701207f75885e7a597901447f7701247f7554797e8853798277518054797e55798277518056797e58798277518059797e5a79827751805b797e7b537a7e7b7c7e7e5d795279016a537a7e7e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5979820134947f77587f75815d79945e7a9453798b5f7a93a1695c7a0376a91456790288ac7e7e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5c7a5c7a041976a9147b7e0288ac7e7c58807c7e7b7b7e7c7eaa597a820128947f7701207f7587777777777777777777",
-  "asm": "OP_DUP OP_CODESEPARATOR OP_10 OP_ROLL <0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798> OP_CHECKSIGVERIFY OP_VERIFY OP_DUP <68> OP_SPLIT OP_NIP OP_SIZE <2c> OP_SUB OP_SPLIT OP_DROP OP_SIZE OP_8 OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP OP_DUP <00> OP_CAT OP_BIN2NUM <fd00> OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_10 OP_PICK OP_SIZE OP_NIP OP_1 OP_SUB OP_SPLIT OP_NIP <20> OP_SPLIT OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_DROP OP_15 OP_PICK OP_HASH160 OP_4 OP_PICK OP_EQUALVERIFY OP_16 OP_ROLL OP_16 OP_ROLL OP_CHECKSIGVERIFY OP_2 OP_PICK OP_SIZE OP_NIP <24> OP_NUMEQUALVERIFY OP_14 OP_PICK OP_HASH256 OP_9 OP_PICK OP_4 OP_SPLIT OP_NIP <20> OP_SPLIT OP_DROP OP_EQUALVERIFY OP_14 OP_ROLL OP_9 OP_PICK <44> OP_SPLIT OP_NIP <24> OP_SPLIT OP_DROP OP_4 OP_PICK OP_CAT OP_EQUALVERIFY OP_3 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN OP_4 OP_PICK OP_CAT OP_5 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN OP_6 OP_PICK OP_CAT OP_8 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN OP_9 OP_PICK OP_CAT OP_10 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN OP_11 OP_PICK OP_CAT OP_ROT OP_3 OP_ROLL OP_CAT OP_ROT OP_SWAP OP_CAT OP_CAT OP_13 OP_PICK OP_2 OP_PICK <6a> OP_3 OP_ROLL OP_CAT OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_9 OP_PICK OP_SIZE <34> OP_SUB OP_SPLIT OP_NIP OP_8 OP_SPLIT OP_DROP OP_BIN2NUM OP_13 OP_PICK OP_SUB OP_14 OP_ROLL OP_SUB OP_3 OP_PICK OP_1ADD OP_15 OP_ROLL OP_ADD OP_LESSTHANOREQUAL OP_VERIFY OP_12 OP_ROLL <76a914> OP_6 OP_PICK <88ac> OP_CAT OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_12 OP_ROLL OP_12 OP_ROLL <1976a914> OP_ROT OP_CAT <88ac> OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_ROT OP_ROT OP_CAT OP_SWAP OP_CAT OP_HASH256 OP_9 OP_ROLL OP_SIZE <28> OP_SUB OP_SPLIT OP_NIP <20> OP_SPLIT OP_DROP OP_EQUAL OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP",
-  "buildTimestamp": "2026-11-25T06:35:33.741Z",
+  "script": "76ab597a210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ad697601687f7782012c947f758258947f75517f7c7601007e8102fd009f63756775527f77685979827751947f7701207f517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868587f7c817c517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868587f7c817c517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868755e79a95479885f7a5f7aad5279827701249d5d79aa5979547f7701207f75885d7a597901447f7701247f7554797e885379827701149d54798277014ba1695679827701209d5779827701209d5c7951a25c7951a29a6953798277518054797e55798277518056797e58798277518059797e5a79827751805b797e7b537a7e7b7c7e7e5d795279016a537a7e7e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5979820134947f77587f75815d79945e7a9453798ba1695c7a0376a91456790288ac7e7e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5c7a5c7a041976a9147b7e0288ac7e7c58807c7e7b7b7e7c7eaa597a820128947f7701207f7587777777777777777777",
+  "asm": "OP_DUP OP_CODESEPARATOR OP_9 OP_ROLL <0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798> OP_CHECKSIGVERIFY OP_VERIFY OP_DUP <68> OP_SPLIT OP_NIP OP_SIZE <2c> OP_SUB OP_SPLIT OP_DROP OP_SIZE OP_8 OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP OP_DUP <00> OP_CAT OP_BIN2NUM <fd00> OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_9 OP_PICK OP_SIZE OP_NIP OP_1 OP_SUB OP_SPLIT OP_NIP <20> OP_SPLIT OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_DROP OP_14 OP_PICK OP_HASH160 OP_4 OP_PICK OP_EQUALVERIFY OP_15 OP_ROLL OP_15 OP_ROLL OP_CHECKSIGVERIFY OP_2 OP_PICK OP_SIZE OP_NIP <24> OP_NUMEQUALVERIFY OP_13 OP_PICK OP_HASH256 OP_9 OP_PICK OP_4 OP_SPLIT OP_NIP <20> OP_SPLIT OP_DROP OP_EQUALVERIFY OP_13 OP_ROLL OP_9 OP_PICK <44> OP_SPLIT OP_NIP <24> OP_SPLIT OP_DROP OP_4 OP_PICK OP_CAT OP_EQUALVERIFY OP_3 OP_PICK OP_SIZE OP_NIP <14> OP_NUMEQUALVERIFY OP_4 OP_PICK OP_SIZE OP_NIP <4b> OP_LESSTHANOREQUAL OP_VERIFY OP_6 OP_PICK OP_SIZE OP_NIP <20> OP_NUMEQUALVERIFY OP_7 OP_PICK OP_SIZE OP_NIP <20> OP_NUMEQUALVERIFY OP_12 OP_PICK OP_1 OP_GREATERTHANOREQUAL OP_12 OP_PICK OP_1 OP_GREATERTHANOREQUAL OP_BOOLAND OP_VERIFY OP_3 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN OP_4 OP_PICK OP_CAT OP_5 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN OP_6 OP_PICK OP_CAT OP_8 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN OP_9 OP_PICK OP_CAT OP_10 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN OP_11 OP_PICK OP_CAT OP_ROT OP_3 OP_ROLL OP_CAT OP_ROT OP_SWAP OP_CAT OP_CAT OP_13 OP_PICK OP_2 OP_PICK <6a> OP_3 OP_ROLL OP_CAT OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_9 OP_PICK OP_SIZE <34> OP_SUB OP_SPLIT OP_NIP OP_8 OP_SPLIT OP_DROP OP_BIN2NUM OP_13 OP_PICK OP_SUB OP_14 OP_ROLL OP_SUB OP_3 OP_PICK OP_1ADD OP_LESSTHANOREQUAL OP_VERIFY OP_12 OP_ROLL <76a914> OP_6 OP_PICK <88ac> OP_CAT OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_12 OP_ROLL OP_12 OP_ROLL <1976a914> OP_ROT OP_CAT <88ac> OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_ROT OP_ROT OP_CAT OP_SWAP OP_CAT OP_HASH256 OP_9 OP_ROLL OP_SIZE <28> OP_SUB OP_SPLIT OP_NIP <20> OP_SPLIT OP_DROP OP_EQUAL OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP",
+  "buildTimestamp": "2026-11-25T14:46:11.045Z",
   "sourceMap": {
     "mappings": [
       {
         "opcodeIndex": 204,
         "sourceFile": "contract.ts",
-        "line": 55,
+        "line": 37,
         "column": 4
       },
       {
         "opcodeIndex": 205,
         "sourceFile": "contract.ts",
-        "line": 55,
+        "line": 37,
         "column": 4
       },
       {
         "opcodeIndex": 206,
         "sourceFile": "contract.ts",
-        "line": 55,
+        "line": 37,
         "column": 4
       },
       {
         "opcodeIndex": 207,
         "sourceFile": "contract.ts",
-        "line": 55,
+        "line": 37,
         "column": 4
       },
       {
         "opcodeIndex": 208,
         "sourceFile": "contract.ts",
-        "line": 55,
+        "line": 37,
         "column": 4
       },
       {
         "opcodeIndex": 210,
         "sourceFile": "contract.ts",
-        "line": 56,
+        "line": 38,
         "column": 4
       },
       {
         "opcodeIndex": 211,
         "sourceFile": "contract.ts",
-        "line": 56,
+        "line": 38,
         "column": 4
       },
       {
         "opcodeIndex": 212,
         "sourceFile": "contract.ts",
-        "line": 56,
+        "line": 38,
         "column": 4
       },
       {
         "opcodeIndex": 213,
         "sourceFile": "contract.ts",
-        "line": 56,
+        "line": 38,
         "column": 4
       },
       {
         "opcodeIndex": 215,
         "sourceFile": "contract.ts",
-        "line": 57,
+        "line": 39,
         "column": 4
       },
       {
         "opcodeIndex": 216,
         "sourceFile": "contract.ts",
-        "line": 57,
+        "line": 39,
         "column": 4
       },
       {
         "opcodeIndex": 217,
         "sourceFile": "contract.ts",
-        "line": 57,
+        "line": 39,
         "column": 4
       },
       {
         "opcodeIndex": 218,
         "sourceFile": "contract.ts",
-        "line": 57,
+        "line": 39,
         "column": 4
       },
       {
         "opcodeIndex": 219,
         "sourceFile": "contract.ts",
-        "line": 57,
+        "line": 39,
         "column": 4
       },
       {
         "opcodeIndex": 221,
         "sourceFile": "contract.ts",
-        "line": 58,
+        "line": 40,
         "column": 4
       },
       {
         "opcodeIndex": 222,
         "sourceFile": "contract.ts",
-        "line": 58,
+        "line": 40,
         "column": 4
       },
       {
         "opcodeIndex": 223,
         "sourceFile": "contract.ts",
-        "line": 58,
+        "line": 40,
         "column": 4
       },
       {
         "opcodeIndex": 224,
         "sourceFile": "contract.ts",
-        "line": 58,
+        "line": 40,
         "column": 4
       },
       {
         "opcodeIndex": 225,
         "sourceFile": "contract.ts",
-        "line": 58,
+        "line": 40,
         "column": 4
       },
       {
         "opcodeIndex": 226,
         "sourceFile": "contract.ts",
-        "line": 58,
+        "line": 40,
         "column": 4
       },
       {
         "opcodeIndex": 227,
         "sourceFile": "contract.ts",
-        "line": 58,
+        "line": 40,
         "column": 4
       },
       {
         "opcodeIndex": 228,
         "sourceFile": "contract.ts",
-        "line": 58,
+        "line": 40,
         "column": 4
       },
       {
         "opcodeIndex": 229,
         "sourceFile": "contract.ts",
-        "line": 58,
+        "line": 40,
         "column": 4
       },
       {
         "opcodeIndex": 230,
         "sourceFile": "contract.ts",
-        "line": 58,
+        "line": 40,
         "column": 4
       },
       {
         "opcodeIndex": 231,
         "sourceFile": "contract.ts",
-        "line": 58,
+        "line": 40,
         "column": 4
       },
       {
         "opcodeIndex": 233,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 234,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 235,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 236,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 237,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 238,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 239,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 240,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 241,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 242,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 243,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 244,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 245,
         "sourceFile": "contract.ts",
-        "line": 59,
+        "line": 41,
         "column": 4
       },
       {
         "opcodeIndex": 247,
         "sourceFile": "contract.ts",
-        "line": 60,
+        "line": 42,
         "column": 4
       },
       {
         "opcodeIndex": 248,
         "sourceFile": "contract.ts",
-        "line": 60,
+        "line": 42,
         "column": 4
       },
       {
         "opcodeIndex": 249,
         "sourceFile": "contract.ts",
-        "line": 60,
+        "line": 42,
         "column": 4
       },
       {
         "opcodeIndex": 250,
         "sourceFile": "contract.ts",
-        "line": 60,
+        "line": 42,
         "column": 4
       },
       {
         "opcodeIndex": 251,
         "sourceFile": "contract.ts",
-        "line": 60,
-        "column": 4
-      },
-      {
-        "opcodeIndex": 252,
-        "sourceFile": "contract.ts",
-        "line": 60,
+        "line": 42,
         "column": 4
       },
       {
         "opcodeIndex": 253,
         "sourceFile": "contract.ts",
-        "line": 60,
+        "line": 43,
         "column": 4
       },
       {
         "opcodeIndex": 254,
         "sourceFile": "contract.ts",
-        "line": 60,
+        "line": 43,
         "column": 4
       },
       {
         "opcodeIndex": 255,
         "sourceFile": "contract.ts",
-        "line": 60,
+        "line": 43,
         "column": 4
       },
       {
         "opcodeIndex": 256,
         "sourceFile": "contract.ts",
-        "line": 61,
+        "line": 43,
         "column": 4
       },
       {
         "opcodeIndex": 257,
         "sourceFile": "contract.ts",
-        "line": 61,
+        "line": 43,
         "column": 4
       },
       {
         "opcodeIndex": 258,
         "sourceFile": "contract.ts",
-        "line": 61,
+        "line": 43,
         "column": 4
       },
       {
         "opcodeIndex": 259,
         "sourceFile": "contract.ts",
-        "line": 61,
+        "line": 43,
         "column": 4
       },
       {
         "opcodeIndex": 260,
         "sourceFile": "contract.ts",
-        "line": 61,
+        "line": 44,
         "column": 4
       },
       {
         "opcodeIndex": 261,
         "sourceFile": "contract.ts",
-        "line": 61,
+        "line": 44,
         "column": 4
       },
       {
         "opcodeIndex": 262,
         "sourceFile": "contract.ts",
-        "line": 61,
+        "line": 44,
         "column": 4
       },
       {
         "opcodeIndex": 263,
         "sourceFile": "contract.ts",
-        "line": 61,
+        "line": 44,
         "column": 4
       },
       {
         "opcodeIndex": 264,
         "sourceFile": "contract.ts",
-        "line": 61,
-        "column": 4
-      },
-      {
-        "opcodeIndex": 265,
-        "sourceFile": "contract.ts",
-        "line": 62,
+        "line": 44,
         "column": 4
       },
       {
         "opcodeIndex": 266,
         "sourceFile": "contract.ts",
-        "line": 62,
+        "line": 45,
         "column": 4
       },
       {
         "opcodeIndex": 267,
         "sourceFile": "contract.ts",
-        "line": 62,
+        "line": 45,
         "column": 4
       },
       {
         "opcodeIndex": 268,
         "sourceFile": "contract.ts",
-        "line": 62,
+        "line": 45,
         "column": 4
       },
       {
         "opcodeIndex": 269,
         "sourceFile": "contract.ts",
-        "line": 62,
+        "line": 45,
         "column": 4
       },
       {
         "opcodeIndex": 270,
         "sourceFile": "contract.ts",
-        "line": 62,
-        "column": 4
-      },
-      {
-        "opcodeIndex": 271,
-        "sourceFile": "contract.ts",
-        "line": 62,
+        "line": 45,
         "column": 4
       },
       {
         "opcodeIndex": 272,
         "sourceFile": "contract.ts",
-        "line": 62,
+        "line": 46,
         "column": 4
       },
       {
         "opcodeIndex": 273,
         "sourceFile": "contract.ts",
-        "line": 62,
+        "line": 46,
         "column": 4
       },
       {
         "opcodeIndex": 274,
         "sourceFile": "contract.ts",
-        "line": 63,
+        "line": 46,
         "column": 4
       },
       {
         "opcodeIndex": 275,
         "sourceFile": "contract.ts",
-        "line": 63,
+        "line": 46,
         "column": 4
       },
       {
         "opcodeIndex": 276,
         "sourceFile": "contract.ts",
-        "line": 63,
+        "line": 46,
         "column": 4
       },
       {
         "opcodeIndex": 277,
         "sourceFile": "contract.ts",
-        "line": 63,
+        "line": 46,
         "column": 4
       },
       {
         "opcodeIndex": 278,
         "sourceFile": "contract.ts",
-        "line": 63,
+        "line": 46,
         "column": 4
       },
       {
         "opcodeIndex": 279,
         "sourceFile": "contract.ts",
-        "line": 63,
+        "line": 46,
         "column": 4
       },
       {
         "opcodeIndex": 280,
         "sourceFile": "contract.ts",
-        "line": 63,
+        "line": 46,
         "column": 4
       },
       {
         "opcodeIndex": 281,
         "sourceFile": "contract.ts",
-        "line": 63,
+        "line": 46,
         "column": 4
       },
       {
         "opcodeIndex": 282,
         "sourceFile": "contract.ts",
-        "line": 63,
+        "line": 47,
         "column": 4
       },
       {
         "opcodeIndex": 283,
         "sourceFile": "contract.ts",
-        "line": 64,
+        "line": 47,
         "column": 4
       },
       {
         "opcodeIndex": 284,
         "sourceFile": "contract.ts",
-        "line": 64,
+        "line": 47,
         "column": 4
       },
       {
         "opcodeIndex": 285,
         "sourceFile": "contract.ts",
-        "line": 64,
+        "line": 47,
         "column": 4
       },
       {
         "opcodeIndex": 286,
         "sourceFile": "contract.ts",
-        "line": 64,
+        "line": 47,
         "column": 4
       },
       {
         "opcodeIndex": 287,
         "sourceFile": "contract.ts",
-        "line": 64,
+        "line": 47,
         "column": 4
       },
       {
         "opcodeIndex": 288,
         "sourceFile": "contract.ts",
-        "line": 64,
+        "line": 47,
         "column": 4
       },
       {
         "opcodeIndex": 289,
         "sourceFile": "contract.ts",
-        "line": 64,
+        "line": 47,
         "column": 4
       },
       {
         "opcodeIndex": 290,
         "sourceFile": "contract.ts",
-        "line": 64,
+        "line": 47,
         "column": 4
       },
       {
         "opcodeIndex": 291,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 48,
         "column": 4
       },
       {
         "opcodeIndex": 292,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 48,
         "column": 4
       },
       {
         "opcodeIndex": 293,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 48,
         "column": 4
       },
       {
         "opcodeIndex": 294,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 48,
         "column": 4
       },
       {
         "opcodeIndex": 295,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 48,
         "column": 4
       },
       {
         "opcodeIndex": 296,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 48,
         "column": 4
       },
       {
         "opcodeIndex": 297,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 48,
         "column": 4
       },
       {
         "opcodeIndex": 298,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 48,
         "column": 4
       },
       {
         "opcodeIndex": 299,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 48,
         "column": 4
       },
       {
         "opcodeIndex": 300,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 49,
         "column": 4
       },
       {
         "opcodeIndex": 301,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 49,
         "column": 4
       },
       {
         "opcodeIndex": 302,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 49,
         "column": 4
       },
       {
         "opcodeIndex": 303,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 49,
         "column": 4
       },
       {
         "opcodeIndex": 304,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 49,
         "column": 4
       },
       {
         "opcodeIndex": 305,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 49,
         "column": 4
       },
       {
         "opcodeIndex": 306,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 49,
         "column": 4
       },
       {
         "opcodeIndex": 307,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 49,
         "column": 4
       },
       {
         "opcodeIndex": 308,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 49,
         "column": 4
       },
       {
         "opcodeIndex": 309,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 50,
         "column": 4
       },
       {
         "opcodeIndex": 310,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 50,
         "column": 4
       },
       {
         "opcodeIndex": 311,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 50,
         "column": 4
       },
       {
         "opcodeIndex": 312,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 50,
         "column": 4
       },
       {
         "opcodeIndex": 313,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 50,
         "column": 4
       },
       {
         "opcodeIndex": 314,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 50,
         "column": 4
       },
       {
         "opcodeIndex": 315,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 50,
         "column": 4
       },
       {
         "opcodeIndex": 316,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 50,
         "column": 4
       },
       {
         "opcodeIndex": 317,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 50,
         "column": 4
       },
       {
         "opcodeIndex": 318,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 51,
         "column": 4
       },
       {
         "opcodeIndex": 319,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 51,
         "column": 4
       },
       {
         "opcodeIndex": 320,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 51,
         "column": 4
       },
       {
         "opcodeIndex": 321,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 51,
         "column": 4
       },
       {
         "opcodeIndex": 322,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 51,
         "column": 4
       },
       {
         "opcodeIndex": 323,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 51,
         "column": 4
       },
       {
         "opcodeIndex": 324,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 51,
         "column": 4
       },
       {
         "opcodeIndex": 325,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 51,
         "column": 4
       },
       {
         "opcodeIndex": 326,
         "sourceFile": "contract.ts",
-        "line": 65,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 327,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 328,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 329,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 330,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 331,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 332,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 333,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 334,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 335,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 336,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 337,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 338,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 339,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 340,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 341,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 342,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 343,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 344,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 345,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 346,
+        "sourceFile": "contract.ts",
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 347,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 348,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 349,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 350,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 351,
         "sourceFile": "contract.ts",
-        "line": 66,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 352,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 353,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 354,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 355,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 356,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 357,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 358,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 359,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 360,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 361,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 52,
         "column": 4
       },
       {
         "opcodeIndex": 362,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 363,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 364,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 365,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 366,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 367,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 368,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 369,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 370,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 371,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 372,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 373,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 374,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 375,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 376,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 377,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 378,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 379,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 380,
         "sourceFile": "contract.ts",
-        "line": 67,
-        "column": 4
-      },
-      {
-        "opcodeIndex": 381,
-        "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 382,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 383,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 53,
         "column": 4
       },
       {
         "opcodeIndex": 384,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 54,
         "column": 4
       },
       {
         "opcodeIndex": 385,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 54,
         "column": 4
       },
       {
         "opcodeIndex": 386,
         "sourceFile": "contract.ts",
-        "line": 67,
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 387,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 388,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 389,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 390,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 391,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 392,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 393,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 394,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 395,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 396,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 397,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 398,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 399,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 400,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 401,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 402,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 403,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 404,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 405,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 406,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 407,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 408,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 409,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 410,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 411,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 412,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 413,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 414,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 415,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 416,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 417,
+        "sourceFile": "contract.ts",
+        "line": 54,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 418,
+        "sourceFile": "contract.ts",
+        "line": 54,
         "column": 4
       }
     ]
@@ -1278,7 +1448,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 38,
+              "line": 25,
               "column": 4
             }
           },
@@ -1290,7 +1460,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 38,
+              "line": 25,
               "column": 4
             }
           },
@@ -1302,7 +1472,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 38,
+              "line": 25,
               "column": 4
             }
           },
@@ -1314,7 +1484,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 38,
+              "line": 25,
               "column": 4
             }
           },
@@ -1326,7 +1496,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 38,
+              "line": 25,
               "column": 4
             }
           },
@@ -1338,7 +1508,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 38,
+              "line": 25,
               "column": 4
             }
           },
@@ -1350,7 +1520,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 38,
+              "line": 25,
               "column": 4
             }
           },
@@ -1362,7 +1532,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 38,
+              "line": 25,
               "column": 4
             }
           },
@@ -1384,7 +1554,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 38,
+              "line": 25,
               "column": 4
             }
           },
@@ -1396,7 +1566,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 39,
+              "line": 26,
               "column": 4
             }
           },
@@ -1409,7 +1579,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 39,
+              "line": 26,
               "column": 4
             }
           },
@@ -1421,7 +1591,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 40,
+              "line": 27,
               "column": 4
             }
           },
@@ -1434,7 +1604,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 40,
+              "line": 27,
               "column": 4
             }
           },
@@ -1446,7 +1616,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 41,
+              "line": 28,
               "column": 4
             }
           },
@@ -1459,7 +1629,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 41,
+              "line": 28,
               "column": 4
             }
           },
@@ -1471,7 +1641,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 42,
+              "line": 29,
               "column": 4
             }
           },
@@ -1484,7 +1654,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 42,
+              "line": 29,
               "column": 4
             }
           },
@@ -1496,7 +1666,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 43,
+              "line": 30,
               "column": 4
             }
           },
@@ -1509,7 +1679,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 43,
+              "line": 30,
               "column": 4
             }
           },
@@ -1521,7 +1691,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 44,
+              "line": 31,
               "column": 4
             }
           },
@@ -1534,7 +1704,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 44,
+              "line": 31,
               "column": 4
             }
           },
@@ -1546,7 +1716,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 45,
+              "line": 32,
               "column": 4
             }
           },
@@ -1559,7 +1729,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 45,
+              "line": 32,
               "column": 4
             }
           },
@@ -1571,7 +1741,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 46,
+              "line": 33,
               "column": 4
             }
           },
@@ -1584,7 +1754,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 46,
+              "line": 33,
               "column": 4
             }
           }
@@ -1605,10 +1775,6 @@
           {
             "name": "prevouts",
             "type": "ByteString"
-          },
-          {
-            "name": "verifierSats",
-            "type": "bigint"
           },
           {
             "name": "verdictSats",
@@ -1675,7 +1841,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 55,
+              "line": 37,
               "column": 4
             }
           },
@@ -1690,7 +1856,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 55,
+              "line": 37,
               "column": 4
             }
           },
@@ -1702,7 +1868,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 55,
+              "line": 37,
               "column": 4
             }
           },
@@ -1717,7 +1883,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 55,
+              "line": 37,
               "column": 4
             }
           },
@@ -1729,7 +1895,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 55,
+              "line": 37,
               "column": 4
             }
           },
@@ -1741,7 +1907,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 56,
+              "line": 38,
               "column": 4
             }
           },
@@ -1753,7 +1919,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 56,
+              "line": 38,
               "column": 4
             }
           },
@@ -1769,7 +1935,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 56,
+              "line": 38,
               "column": 4
             }
           },
@@ -1781,7 +1947,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 56,
+              "line": 38,
               "column": 4
             }
           },
@@ -1793,7 +1959,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 57,
+              "line": 39,
               "column": 4
             }
           },
@@ -1808,7 +1974,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 57,
+              "line": 39,
               "column": 4
             }
           },
@@ -1820,7 +1986,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 57,
+              "line": 39,
               "column": 4
             }
           },
@@ -1834,7 +2000,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 57,
+              "line": 39,
               "column": 4
             }
           },
@@ -1846,7 +2012,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 57,
+              "line": 39,
               "column": 4
             }
           },
@@ -1858,7 +2024,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 58,
+              "line": 40,
               "column": 4
             }
           },
@@ -1873,7 +2039,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 58,
+              "line": 40,
               "column": 4
             }
           },
@@ -1885,7 +2051,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 58,
+              "line": 40,
               "column": 4
             }
           },
@@ -1900,7 +2066,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 58,
+              "line": 40,
               "column": 4
             }
           },
@@ -1915,7 +2081,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 58,
+              "line": 40,
               "column": 4
             }
           },
@@ -1927,7 +2093,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 58,
+              "line": 40,
               "column": 4
             }
           },
@@ -1939,7 +2105,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 59,
+              "line": 41,
               "column": 4
             }
           },
@@ -1951,7 +2117,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 59,
+              "line": 41,
               "column": 4
             }
           },
@@ -1966,7 +2132,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 59,
+              "line": 41,
               "column": 4
             }
           },
@@ -1978,7 +2144,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 59,
+              "line": 41,
               "column": 4
             }
           },
@@ -1994,7 +2160,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 59,
+              "line": 41,
               "column": 4
             }
           },
@@ -2009,7 +2175,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 59,
+              "line": 41,
               "column": 4
             }
           },
@@ -2021,7 +2187,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 59,
+              "line": 41,
               "column": 4
             }
           },
@@ -2033,7 +2199,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 60,
+              "line": 42,
               "column": 4
             }
           },
@@ -2048,7 +2214,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 60,
+              "line": 42,
               "column": 4
             }
           },
@@ -2056,122 +2222,102 @@
             "name": "t34",
             "value": {
               "kind": "load_const",
-              "value": "1"
+              "value": "20"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 60,
+              "line": 42,
               "column": 4
             }
           },
           {
             "name": "t35",
             "value": {
-              "kind": "call",
-              "func": "num2bin",
-              "args": [
-                "t33",
-                "t34"
-              ]
+              "kind": "bin_op",
+              "op": "===",
+              "left": "t33",
+              "right": "t34"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 60,
+              "line": 42,
               "column": 4
             }
           },
           {
             "name": "t36",
             "value": {
-              "kind": "load_prop",
-              "name": "proverPkh"
+              "kind": "assert",
+              "value": "t35"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 60,
+              "line": 42,
               "column": 4
             }
           },
           {
             "name": "t37",
             "value": {
-              "kind": "call",
-              "func": "cat",
-              "args": [
-                "t35",
-                "t36"
-              ]
+              "kind": "load_prop",
+              "name": "queryId"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 60,
-              "column": 4
-            }
-          },
-          {
-            "name": "e1",
-            "value": {
-              "kind": "load_const",
-              "value": "@ref:t37"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 60,
+              "line": 43,
               "column": 4
             }
           },
           {
             "name": "t38",
             "value": {
-              "kind": "load_prop",
-              "name": "queryId"
+              "kind": "call",
+              "func": "len",
+              "args": [
+                "t37"
+              ]
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 61,
+              "line": 43,
               "column": 4
             }
           },
           {
             "name": "t39",
             "value": {
-              "kind": "call",
-              "func": "len",
-              "args": [
-                "t38"
-              ]
+              "kind": "load_const",
+              "value": "75"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 61,
+              "line": 43,
               "column": 4
             }
           },
           {
             "name": "t40",
             "value": {
-              "kind": "load_const",
-              "value": "1"
+              "kind": "bin_op",
+              "op": "<=",
+              "left": "t38",
+              "right": "t39"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 61,
+              "line": 43,
               "column": 4
             }
           },
           {
             "name": "t41",
             "value": {
-              "kind": "call",
-              "func": "num2bin",
-              "args": [
-                "t39",
-                "t40"
-              ]
+              "kind": "assert",
+              "value": "t40"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 61,
+              "line": 43,
               "column": 4
             }
           },
@@ -2179,11 +2325,11 @@
             "name": "t42",
             "value": {
               "kind": "load_prop",
-              "name": "queryId"
+              "name": "journalRoot"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 61,
+              "line": 44,
               "column": 4
             }
           },
@@ -2191,15 +2337,397 @@
             "name": "t43",
             "value": {
               "kind": "call",
-              "func": "cat",
+              "func": "len",
               "args": [
-                "t41",
                 "t42"
               ]
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 61,
+              "line": 44,
+              "column": 4
+            }
+          },
+          {
+            "name": "t44",
+            "value": {
+              "kind": "load_const",
+              "value": "32"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 44,
+              "column": 4
+            }
+          },
+          {
+            "name": "t45",
+            "value": {
+              "kind": "bin_op",
+              "op": "===",
+              "left": "t43",
+              "right": "t44"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 44,
+              "column": 4
+            }
+          },
+          {
+            "name": "t46",
+            "value": {
+              "kind": "assert",
+              "value": "t45"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 44,
+              "column": 4
+            }
+          },
+          {
+            "name": "t47",
+            "value": {
+              "kind": "load_prop",
+              "name": "receiptHash"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 45,
+              "column": 4
+            }
+          },
+          {
+            "name": "t48",
+            "value": {
+              "kind": "call",
+              "func": "len",
+              "args": [
+                "t47"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 45,
+              "column": 4
+            }
+          },
+          {
+            "name": "t49",
+            "value": {
+              "kind": "load_const",
+              "value": "32"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 45,
+              "column": 4
+            }
+          },
+          {
+            "name": "t50",
+            "value": {
+              "kind": "bin_op",
+              "op": "===",
+              "left": "t48",
+              "right": "t49"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 45,
+              "column": 4
+            }
+          },
+          {
+            "name": "t51",
+            "value": {
+              "kind": "assert",
+              "value": "t50"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 45,
+              "column": 4
+            }
+          },
+          {
+            "name": "t52",
+            "value": {
+              "kind": "load_param",
+              "name": "verdictSats"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 46,
+              "column": 4
+            }
+          },
+          {
+            "name": "t53",
+            "value": {
+              "kind": "load_const",
+              "value": "1"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 46,
+              "column": 4
+            }
+          },
+          {
+            "name": "t54",
+            "value": {
+              "kind": "bin_op",
+              "op": ">=",
+              "left": "t52",
+              "right": "t53"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 46,
+              "column": 4
+            }
+          },
+          {
+            "name": "t55",
+            "value": {
+              "kind": "load_param",
+              "name": "payoutSats"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 46,
+              "column": 4
+            }
+          },
+          {
+            "name": "t56",
+            "value": {
+              "kind": "load_const",
+              "value": "1"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 46,
+              "column": 4
+            }
+          },
+          {
+            "name": "t57",
+            "value": {
+              "kind": "bin_op",
+              "op": ">=",
+              "left": "t55",
+              "right": "t56"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 46,
+              "column": 4
+            }
+          },
+          {
+            "name": "t58",
+            "value": {
+              "kind": "bin_op",
+              "op": "&&",
+              "left": "t54",
+              "right": "t57"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 46,
+              "column": 4
+            }
+          },
+          {
+            "name": "t59",
+            "value": {
+              "kind": "assert",
+              "value": "t58"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 46,
+              "column": 4
+            }
+          },
+          {
+            "name": "t60",
+            "value": {
+              "kind": "load_prop",
+              "name": "proverPkh"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 47,
+              "column": 4
+            }
+          },
+          {
+            "name": "t61",
+            "value": {
+              "kind": "call",
+              "func": "len",
+              "args": [
+                "t60"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 47,
+              "column": 4
+            }
+          },
+          {
+            "name": "t62",
+            "value": {
+              "kind": "load_const",
+              "value": "1"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 47,
+              "column": 4
+            }
+          },
+          {
+            "name": "t63",
+            "value": {
+              "kind": "call",
+              "func": "num2bin",
+              "args": [
+                "t61",
+                "t62"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 47,
+              "column": 4
+            }
+          },
+          {
+            "name": "t64",
+            "value": {
+              "kind": "load_prop",
+              "name": "proverPkh"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 47,
+              "column": 4
+            }
+          },
+          {
+            "name": "t65",
+            "value": {
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t63",
+                "t64"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 47,
+              "column": 4
+            }
+          },
+          {
+            "name": "e1",
+            "value": {
+              "kind": "load_const",
+              "value": "@ref:t65"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 47,
+              "column": 4
+            }
+          },
+          {
+            "name": "t66",
+            "value": {
+              "kind": "load_prop",
+              "name": "queryId"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 48,
+              "column": 4
+            }
+          },
+          {
+            "name": "t67",
+            "value": {
+              "kind": "call",
+              "func": "len",
+              "args": [
+                "t66"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 48,
+              "column": 4
+            }
+          },
+          {
+            "name": "t68",
+            "value": {
+              "kind": "load_const",
+              "value": "1"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 48,
+              "column": 4
+            }
+          },
+          {
+            "name": "t69",
+            "value": {
+              "kind": "call",
+              "func": "num2bin",
+              "args": [
+                "t67",
+                "t68"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 48,
+              "column": 4
+            }
+          },
+          {
+            "name": "t70",
+            "value": {
+              "kind": "load_prop",
+              "name": "queryId"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 48,
+              "column": 4
+            }
+          },
+          {
+            "name": "t71",
+            "value": {
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t69",
+                "t70"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 48,
               "column": 4
             }
           },
@@ -2207,94 +2735,94 @@
             "name": "e2",
             "value": {
               "kind": "load_const",
-              "value": "@ref:t43"
+              "value": "@ref:t71"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 61,
+              "line": 48,
               "column": 4
             }
           },
           {
-            "name": "t44",
+            "name": "t72",
             "value": {
               "kind": "load_prop",
               "name": "journalRoot"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 62,
+              "line": 49,
               "column": 4
             }
           },
           {
-            "name": "t45",
+            "name": "t73",
             "value": {
               "kind": "call",
               "func": "len",
               "args": [
-                "t44"
+                "t72"
               ]
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 62,
+              "line": 49,
               "column": 4
             }
           },
           {
-            "name": "t46",
+            "name": "t74",
             "value": {
               "kind": "load_const",
               "value": "1"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 62,
+              "line": 49,
               "column": 4
             }
           },
           {
-            "name": "t47",
+            "name": "t75",
             "value": {
               "kind": "call",
               "func": "num2bin",
               "args": [
-                "t45",
-                "t46"
+                "t73",
+                "t74"
               ]
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 62,
+              "line": 49,
               "column": 4
             }
           },
           {
-            "name": "t48",
+            "name": "t76",
             "value": {
               "kind": "load_prop",
               "name": "journalRoot"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 62,
+              "line": 49,
               "column": 4
             }
           },
           {
-            "name": "t49",
+            "name": "t77",
             "value": {
               "kind": "call",
               "func": "cat",
               "args": [
-                "t47",
-                "t48"
+                "t75",
+                "t76"
               ]
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 62,
+              "line": 49,
               "column": 4
             }
           },
@@ -2302,94 +2830,94 @@
             "name": "e3",
             "value": {
               "kind": "load_const",
-              "value": "@ref:t49"
+              "value": "@ref:t77"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 62,
+              "line": 49,
               "column": 4
             }
           },
           {
-            "name": "t50",
+            "name": "t78",
             "value": {
               "kind": "load_prop",
               "name": "receiptHash"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 63,
+              "line": 50,
               "column": 4
             }
           },
           {
-            "name": "t51",
+            "name": "t79",
             "value": {
               "kind": "call",
               "func": "len",
               "args": [
-                "t50"
+                "t78"
               ]
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 63,
+              "line": 50,
               "column": 4
             }
           },
           {
-            "name": "t52",
+            "name": "t80",
             "value": {
               "kind": "load_const",
               "value": "1"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 63,
+              "line": 50,
               "column": 4
             }
           },
           {
-            "name": "t53",
+            "name": "t81",
             "value": {
               "kind": "call",
               "func": "num2bin",
               "args": [
-                "t51",
-                "t52"
+                "t79",
+                "t80"
               ]
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 63,
+              "line": 50,
               "column": 4
             }
           },
           {
-            "name": "t54",
+            "name": "t82",
             "value": {
               "kind": "load_prop",
               "name": "receiptHash"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 63,
+              "line": 50,
               "column": 4
             }
           },
           {
-            "name": "t55",
+            "name": "t83",
             "value": {
               "kind": "call",
               "func": "cat",
               "args": [
-                "t53",
-                "t54"
+                "t81",
+                "t82"
               ]
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 63,
+              "line": 50,
               "column": 4
             }
           },
@@ -2397,16 +2925,16 @@
             "name": "e4",
             "value": {
               "kind": "load_const",
-              "value": "@ref:t55"
+              "value": "@ref:t83"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 63,
+              "line": 50,
               "column": 4
             }
           },
           {
-            "name": "t56",
+            "name": "t84",
             "value": {
               "kind": "call",
               "func": "cat",
@@ -2417,394 +2945,7 @@
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 64,
-              "column": 4
-            }
-          },
-          {
-            "name": "t57",
-            "value": {
-              "kind": "call",
-              "func": "cat",
-              "args": [
-                "e3",
-                "t56"
-              ]
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 64,
-              "column": 4
-            }
-          },
-          {
-            "name": "t58",
-            "value": {
-              "kind": "call",
-              "func": "cat",
-              "args": [
-                "e4",
-                "t57"
-              ]
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 64,
-              "column": 4
-            }
-          },
-          {
-            "name": "vstate",
-            "value": {
-              "kind": "load_const",
-              "value": "@ref:t58"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 64,
-              "column": 4
-            }
-          },
-          {
-            "name": "t59",
-            "value": {
-              "kind": "load_param",
-              "name": "verdictSats"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 65,
-              "column": 4
-            }
-          },
-          {
-            "name": "t60",
-            "value": {
-              "kind": "load_prop",
-              "name": "verdictCode"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 65,
-              "column": 4
-            }
-          },
-          {
-            "name": "t61",
-            "value": {
-              "kind": "load_const",
-              "value": "6a"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 65,
-              "column": 4
-            }
-          },
-          {
-            "name": "t62",
-            "value": {
-              "kind": "call",
-              "func": "toByteString",
-              "args": [
-                "t61"
-              ]
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 65,
-              "column": 4
-            }
-          },
-          {
-            "name": "t63",
-            "value": {
-              "kind": "call",
-              "func": "cat",
-              "args": [
-                "t62",
-                "vstate"
-              ]
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 65,
-              "column": 4
-            }
-          },
-          {
-            "name": "t64",
-            "value": {
-              "kind": "call",
-              "func": "cat",
-              "args": [
-                "t60",
-                "t63"
-              ]
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 65,
-              "column": 4
-            }
-          },
-          {
-            "name": "t65",
-            "value": {
-              "kind": "add_raw_output",
-              "satoshis": "t59",
-              "scriptBytes": "t64"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 65,
-              "column": 4
-            }
-          },
-          {
-            "name": "t66",
-            "value": {
-              "kind": "load_param",
-              "name": "txPreimage"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t67",
-            "value": {
-              "kind": "call",
-              "func": "extractAmount",
-              "args": [
-                "t66"
-              ]
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t68",
-            "value": {
-              "kind": "load_param",
-              "name": "payoutSats"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t69",
-            "value": {
-              "kind": "bin_op",
-              "op": "-",
-              "left": "t67",
-              "right": "t68"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t70",
-            "value": {
-              "kind": "load_param",
-              "name": "verdictSats"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t71",
-            "value": {
-              "kind": "bin_op",
-              "op": "-",
-              "left": "t69",
-              "right": "t70"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t72",
-            "value": {
-              "kind": "load_prop",
-              "name": "maxFee"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t73",
-            "value": {
-              "kind": "load_const",
-              "value": "1"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t74",
-            "value": {
-              "kind": "bin_op",
-              "op": "+",
-              "left": "t72",
-              "right": "t73"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t75",
-            "value": {
-              "kind": "load_param",
-              "name": "verifierSats"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t76",
-            "value": {
-              "kind": "bin_op",
-              "op": "+",
-              "left": "t74",
-              "right": "t75"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t77",
-            "value": {
-              "kind": "bin_op",
-              "op": "<=",
-              "left": "t71",
-              "right": "t76"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t78",
-            "value": {
-              "kind": "assert",
-              "value": "t77"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 66,
-              "column": 4
-            }
-          },
-          {
-            "name": "t79",
-            "value": {
-              "kind": "load_param",
-              "name": "payoutSats"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 67,
-              "column": 4
-            }
-          },
-          {
-            "name": "t80",
-            "value": {
-              "kind": "load_const",
-              "value": "76a914"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 67,
-              "column": 4
-            }
-          },
-          {
-            "name": "t81",
-            "value": {
-              "kind": "call",
-              "func": "toByteString",
-              "args": [
-                "t80"
-              ]
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 67,
-              "column": 4
-            }
-          },
-          {
-            "name": "t82",
-            "value": {
-              "kind": "load_prop",
-              "name": "proverPkh"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 67,
-              "column": 4
-            }
-          },
-          {
-            "name": "t83",
-            "value": {
-              "kind": "load_const",
-              "value": "88ac"
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 67,
-              "column": 4
-            }
-          },
-          {
-            "name": "t84",
-            "value": {
-              "kind": "call",
-              "func": "toByteString",
-              "args": [
-                "t83"
-              ]
-            },
-            "sourceLoc": {
-              "file": "contract.ts",
-              "line": 67,
+              "line": 51,
               "column": 4
             }
           },
@@ -2814,13 +2955,13 @@
               "kind": "call",
               "func": "cat",
               "args": [
-                "t82",
+                "e3",
                 "t84"
               ]
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 67,
+              "line": 51,
               "column": 4
             }
           },
@@ -2830,52 +2971,77 @@
               "kind": "call",
               "func": "cat",
               "args": [
-                "t81",
+                "e4",
                 "t85"
               ]
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 67,
+              "line": 51,
+              "column": 4
+            }
+          },
+          {
+            "name": "vstate",
+            "value": {
+              "kind": "load_const",
+              "value": "@ref:t86"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 51,
               "column": 4
             }
           },
           {
             "name": "t87",
             "value": {
-              "kind": "add_raw_output",
-              "satoshis": "t79",
-              "scriptBytes": "t86"
+              "kind": "load_param",
+              "name": "verdictSats"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 67,
+              "line": 52,
               "column": 4
             }
           },
           {
             "name": "t88",
             "value": {
-              "kind": "load_param",
-              "name": "_changePKH"
+              "kind": "load_prop",
+              "name": "verdictCode"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 52,
+              "column": 4
             }
           },
           {
             "name": "t89",
             "value": {
-              "kind": "load_param",
-              "name": "_changeAmount"
+              "kind": "load_const",
+              "value": "6a"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 52,
+              "column": 4
             }
           },
           {
             "name": "t90",
             "value": {
               "kind": "call",
-              "func": "buildChangeOutput",
+              "func": "toByteString",
               "args": [
-                "t88",
                 "t89"
               ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 52,
+              "column": 4
             }
           },
           {
@@ -2884,9 +3050,14 @@
               "kind": "call",
               "func": "cat",
               "args": [
-                "t65",
-                "t87"
+                "t90",
+                "vstate"
               ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 52,
+              "column": 4
             }
           },
           {
@@ -2895,19 +3066,27 @@
               "kind": "call",
               "func": "cat",
               "args": [
-                "t91",
-                "t90"
+                "t88",
+                "t91"
               ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 52,
+              "column": 4
             }
           },
           {
             "name": "t93",
             "value": {
-              "kind": "call",
-              "func": "hash256",
-              "args": [
-                "t92"
-              ]
+              "kind": "add_raw_output",
+              "satoshis": "t87",
+              "scriptBytes": "t92"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 52,
+              "column": 4
             }
           },
           {
@@ -2915,33 +3094,356 @@
             "value": {
               "kind": "load_param",
               "name": "txPreimage"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 53,
+              "column": 4
             }
           },
           {
             "name": "t95",
             "value": {
               "kind": "call",
-              "func": "extractOutputHash",
+              "func": "extractAmount",
               "args": [
                 "t94"
               ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 53,
+              "column": 4
             }
           },
           {
             "name": "t96",
             "value": {
-              "kind": "bin_op",
-              "op": "===",
-              "left": "t93",
-              "right": "t95",
-              "result_type": "bytes"
+              "kind": "load_param",
+              "name": "payoutSats"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 53,
+              "column": 4
             }
           },
           {
             "name": "t97",
             "value": {
+              "kind": "bin_op",
+              "op": "-",
+              "left": "t95",
+              "right": "t96"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 53,
+              "column": 4
+            }
+          },
+          {
+            "name": "t98",
+            "value": {
+              "kind": "load_param",
+              "name": "verdictSats"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 53,
+              "column": 4
+            }
+          },
+          {
+            "name": "t99",
+            "value": {
+              "kind": "bin_op",
+              "op": "-",
+              "left": "t97",
+              "right": "t98"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 53,
+              "column": 4
+            }
+          },
+          {
+            "name": "t100",
+            "value": {
+              "kind": "load_prop",
+              "name": "maxFee"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 53,
+              "column": 4
+            }
+          },
+          {
+            "name": "t101",
+            "value": {
+              "kind": "load_const",
+              "value": "1"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 53,
+              "column": 4
+            }
+          },
+          {
+            "name": "t102",
+            "value": {
+              "kind": "bin_op",
+              "op": "+",
+              "left": "t100",
+              "right": "t101"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 53,
+              "column": 4
+            }
+          },
+          {
+            "name": "t103",
+            "value": {
+              "kind": "bin_op",
+              "op": "<=",
+              "left": "t99",
+              "right": "t102"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 53,
+              "column": 4
+            }
+          },
+          {
+            "name": "t104",
+            "value": {
               "kind": "assert",
-              "value": "t96"
+              "value": "t103"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 53,
+              "column": 4
+            }
+          },
+          {
+            "name": "t105",
+            "value": {
+              "kind": "load_param",
+              "name": "payoutSats"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 54,
+              "column": 4
+            }
+          },
+          {
+            "name": "t106",
+            "value": {
+              "kind": "load_const",
+              "value": "76a914"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 54,
+              "column": 4
+            }
+          },
+          {
+            "name": "t107",
+            "value": {
+              "kind": "call",
+              "func": "toByteString",
+              "args": [
+                "t106"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 54,
+              "column": 4
+            }
+          },
+          {
+            "name": "t108",
+            "value": {
+              "kind": "load_prop",
+              "name": "proverPkh"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 54,
+              "column": 4
+            }
+          },
+          {
+            "name": "t109",
+            "value": {
+              "kind": "load_const",
+              "value": "88ac"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 54,
+              "column": 4
+            }
+          },
+          {
+            "name": "t110",
+            "value": {
+              "kind": "call",
+              "func": "toByteString",
+              "args": [
+                "t109"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 54,
+              "column": 4
+            }
+          },
+          {
+            "name": "t111",
+            "value": {
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t108",
+                "t110"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 54,
+              "column": 4
+            }
+          },
+          {
+            "name": "t112",
+            "value": {
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t107",
+                "t111"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 54,
+              "column": 4
+            }
+          },
+          {
+            "name": "t113",
+            "value": {
+              "kind": "add_raw_output",
+              "satoshis": "t105",
+              "scriptBytes": "t112"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 54,
+              "column": 4
+            }
+          },
+          {
+            "name": "t114",
+            "value": {
+              "kind": "load_param",
+              "name": "_changePKH"
+            }
+          },
+          {
+            "name": "t115",
+            "value": {
+              "kind": "load_param",
+              "name": "_changeAmount"
+            }
+          },
+          {
+            "name": "t116",
+            "value": {
+              "kind": "call",
+              "func": "buildChangeOutput",
+              "args": [
+                "t114",
+                "t115"
+              ]
+            }
+          },
+          {
+            "name": "t117",
+            "value": {
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t93",
+                "t113"
+              ]
+            }
+          },
+          {
+            "name": "t118",
+            "value": {
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t117",
+                "t116"
+              ]
+            }
+          },
+          {
+            "name": "t119",
+            "value": {
+              "kind": "call",
+              "func": "hash256",
+              "args": [
+                "t118"
+              ]
+            }
+          },
+          {
+            "name": "t120",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t121",
+            "value": {
+              "kind": "call",
+              "func": "extractOutputHash",
+              "args": [
+                "t120"
+              ]
+            }
+          },
+          {
+            "name": "t122",
+            "value": {
+              "kind": "bin_op",
+              "op": "===",
+              "left": "t119",
+              "right": "t121",
+              "result_type": "bytes"
+            }
+          },
+          {
+            "name": "t123",
+            "value": {
+              "kind": "assert",
+              "value": "t122"
             }
           }
         ],

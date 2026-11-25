@@ -37,13 +37,14 @@ func Field(b []byte) []byte {
 }
 
 func takeField(b []byte, off int) ([]byte, int, error) {
-	if off+4 > len(b) {
+	if off < 0 || uint64(off)+4 > uint64(len(b)) {
 		return nil, 0, errors.New("parse: truncated field header")
 	}
-	n := int(binary.LittleEndian.Uint32(b[off : off+4]))
-	if off+4+n > len(b) {
+	u := binary.LittleEndian.Uint32(b[off : off+4])
+	if uint64(off)+4+uint64(u) > uint64(len(b)) {
 		return nil, 0, errors.New("parse: truncated field body")
 	}
+	n := int(u)
 	v := make([]byte, n)
 	copy(v, b[off+4:off+4+n])
 	return v, off + 4 + n, nil

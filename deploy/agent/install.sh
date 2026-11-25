@@ -73,7 +73,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-for k in NEKTAR_KEY_PASSPHRASE NEKTAR_HTTP_TOKEN NEKTAR_OPERATOR_TOKEN; do
+for k in NEKTAR_HTTP_TOKEN NEKTAR_OPERATOR_TOKEN; do
   if grep -qE "^$k=[[:space:]]*$" .env; then
     set_kv "$k" "$(openssl rand -hex 32)"
   fi
@@ -81,16 +81,17 @@ done
 PROFILES=""
 if [ -n "${NEKTAR_DOMAIN:-}" ]; then
   set_kv NEKTAR_DOMAIN "${NEKTAR_DOMAIN%/}"
+  set_kv NEKTAR_PUBLIC_URL "https://${NEKTAR_DOMAIN%/}"
   set_kv NEKTAR_VERIFY_BASE "https://${NEKTAR_DOMAIN%/}"
+  set_kv NEKTAR_TRUST_PROXY "1"
   PROFILES="--profile tls"
 fi
+[ -n "${NEKTAR_PUBLIC_URL:-}" ] && set_kv NEKTAR_PUBLIC_URL "$NEKTAR_PUBLIC_URL"
 [ -n "${NEKTAR_MARKET_HOSTS:-}" ] && set_kv NEKTAR_MARKET_HOSTS "$NEKTAR_MARKET_HOSTS"
-[ -n "${NEKTAR_PUSH_PUBLIC:-}" ] && set_kv NEKTAR_PUSH_PUBLIC "$NEKTAR_PUSH_PUBLIC"
-[ -n "${NEKTAR_FUND_WIF:-}" ] && set_kv NEKTAR_FUND_WIF "$NEKTAR_FUND_WIF"
-[ -n "${NEKTAR_FUND_TXIDS:-}" ] && set_kv NEKTAR_FUND_TXIDS "$NEKTAR_FUND_TXIDS"
-[ -n "${NEKTAR_WAIT_FUNDING:-}" ] && set_kv NEKTAR_WAIT_FUNDING "$NEKTAR_WAIT_FUNDING"
-[ -n "${NEKTAR_INDEXER_DISCOVERY:-}" ] && set_kv NEKTAR_INDEXER_DISCOVERY "$NEKTAR_INDEXER_DISCOVERY"
+[ -n "${NEKTAR_SEED_DOMAINS:-}" ] && set_kv NEKTAR_SEED_DOMAINS "$NEKTAR_SEED_DOMAINS"
 [ -n "${NEKTAR_NETWORK:-}" ] && set_kv NEKTAR_NETWORK "$NEKTAR_NETWORK"
+[ -n "${NEKTAR_HEADERS_SOURCE:-}" ] && set_kv NEKTAR_HEADERS_SOURCE "$NEKTAR_HEADERS_SOURCE"
+[ -n "${NEKTAR_SETTLE_SPEC:-}" ] && set_kv NEKTAR_SETTLE_SPEC "$NEKTAR_SETTLE_SPEC"
 # mainnet ack gate — same refusal the runtime enforces, caught at install time
 if grep -qE '^NEKTAR_NETWORK=main' .env; then
   if [ "${NEKTAR_MAINNET_CONFIRM:-}" != "I_UNDERSTAND" ]; then

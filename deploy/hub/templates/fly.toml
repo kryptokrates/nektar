@@ -7,14 +7,14 @@ primary_region = 'fra'
   image = 'ghcr.io/kryptokrates/nektar:latest'
 
 [processes]
-  app = 'nektar serve -listen :18420 -hub'
+  app = 'serve -listen :18420 -restate-listen 127.0.0.1:9080 -hub'
 
 [env]
   NEKTAR_NETWORK = 'testnet'
   NEKTAR_DATA_DIR = '/data'
   NEKTAR_HTTP_PORT = '18420'
   NEKTAR_EMBED_HUB = '1'
-  NEKTAR_AUTOMATION = '1'
+  NEKTAR_TRUST_PROXY = '1'
   NEKTAR_SEED_DOMAINS = '*'
 
 [http_service]

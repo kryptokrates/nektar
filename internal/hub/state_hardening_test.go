@@ -107,15 +107,20 @@ func TestBountyAtomicMaxFillsAndRejectsForgedProof(t *testing.T) {
 	ts := httptest.NewServer(node.Handler())
 	defer ts.Close()
 
-	// 1. Forged / empty ProofBundle must be rejected (HTTP 400) and NOT consume the slot!
-	forged, _ := json.Marshal(BountySubmission{
+	// 1. Forged / empty ProofBundle must be rejected (HTTP 400/401) and NOT consume the slot!
+	forgedKey, _ := ec.NewPrivateKey()
+	forgedHDP := fmt.Sprintf("%064x", 0xdeadbeef)
+	forgedSub := BountySubmission{
 		BountyID:      "b-one-slot",
-		SellerPub:     "02abcd",
+		SellerPub:     hex.EncodeToString(forgedKey.PubKey().Compressed()),
 		SellerAddress: "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
-		HDP:           "hdp-forged",
-		Text:          "unanchored spoof",
+		HDP:           forgedHDP,
+		Text:          "unanchored spoof text",
 		ProofBundle:   json.RawMessage(`{}`),
-	})
+		TS:            time.Now().Unix(),
+	}
+	forgedSub.Sig, _ = bstack.SignArtifact(forgedKey, forgedSub.Signable(forgedHDP))
+	forged, _ := json.Marshal(forgedSub)
 	resp, err := http.Post(ts.URL+"/bounties/submit", "application/json", bytes.NewReader(forged))
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +130,7 @@ func TestBountyAtomicMaxFillsAndRejectsForgedProof(t *testing.T) {
 		t.Fatalf("expected HTTP 400 on forged ProofBundle, got %d", resp.StatusCode)
 	}
 
-	// 2. 10 concurrent valid submissions against MaxFills=1 -> strictly 1 payout!
+	// 2. 10 concurrent valid signed submissions against MaxFills=1 -> strictly 1 payout!
 	var payouts atomic.Int32
 	node.SetBountyHandler(func(_ context.Context, b Bounty, sub BountySubmission) (*BountyPayoutResult, error) {
 		payouts.Add(1)
@@ -138,13 +143,18 @@ func TestBountyAtomicMaxFillsAndRejectsForgedProof(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			body, _ := json.Marshal(BountySubmission{
+			sk, _ := ec.NewPrivateKey()
+			hdp := fmt.Sprintf("%064x", i+1)
+			sub := BountySubmission{
 				BountyID:      "b-one-slot",
-				SellerPub:     fmt.Sprintf("02seller%02d", i),
+				SellerPub:     hex.EncodeToString(sk.PubKey().Compressed()),
 				SellerAddress: "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
-				HDP:           fmt.Sprintf("hdp-unique-%d", i),
+				HDP:           hdp,
 				Text:          fmt.Sprintf("fact %d", i),
-			})
+				TS:            time.Now().Unix(),
+			}
+			sub.Sig, _ = bstack.SignArtifact(sk, sub.Signable(hdp))
+			body, _ := json.Marshal(sub)
 			r, rErr := http.Post(ts.URL+"/bounties/submit", "application/json", bytes.NewReader(body))
 			if rErr == nil {
 				if r.StatusCode == http.StatusOK {

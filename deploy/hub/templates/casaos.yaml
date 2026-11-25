@@ -5,7 +5,7 @@ services:
     image: ghcr.io/kryptokrates/nektar:latest
     container_name: nektar
     restart: unless-stopped
-    command: ['serve', '-listen', ':18420', '-hub']
+    command: ['serve', '-listen', ':18420', '-restate-listen', '127.0.0.1:9080', '-hub']
     ports:
       - target: 18420
         published: '18420'
@@ -15,7 +15,7 @@ services:
       NEKTAR_DATA_DIR: /data
       NEKTAR_HTTP_PORT: '18420'
       NEKTAR_EMBED_HUB: '1'
-      NEKTAR_AUTOMATION: '1'
+      NEKTAR_PUBLIC_URL: ''
       NEKTAR_SEED_DOMAINS: '*'
     volumes:
       - type: bind
@@ -26,9 +26,9 @@ services:
         - container: NEKTAR_NETWORK
           description:
             en_us: BSV network (testnet or main)
-        - container: NEKTAR_AUTOMATION
+        - container: NEKTAR_PUBLIC_URL
           description:
-            en_us: Set to 1 to enable the autonomous knowledge marketplace
+            en_us: Optional public HTTPS URL for direct A2A trades (leave empty for NAT bbox relay)
       ports:
         - container: '18420'
           description:

@@ -3,14 +3,19 @@ package hub
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
+	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
 )
@@ -87,32 +92,65 @@ func TestBountyProofEnforcementAndSustainableResale(t *testing.T) {
 	}
 	pbRaw, _ := json.Marshal(pb)
 
+	sellerKey, _ := ec.NewPrivateKey()
+	sellerPubHex := hex.EncodeToString(sellerKey.PubKey().Compressed())
+	fragRec, err := db.GetFragment("bounty-src", rem.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provPub, err := port.SigningPubKey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provPubHex := hex.EncodeToString(provPub.Compressed())
+
+	signSub := func(s BountySubmission) BountySubmission {
+		s.SellerPub = sellerPubHex
+		s.ProvenancePub = provPubHex
+		s.TS = time.Now().Unix()
+		signable := s.Signable(s.HDP)
+		s.Sig, _ = bstack.SignArtifact(sellerKey, signable)
+		if canon, cErr := core.CanonicalJSON(signable); cErr == nil {
+			if osig, oErr := port.SignDigest(ctx, core.SHA256(canon)); oErr == nil {
+				s.OwnerSig = hex.EncodeToString(osig)
+			}
+		}
+		return s
+	}
+
 	// Tampered HDP must be rejected.
-	if resp, _ := postBounty(ts.URL, BountySubmission{
+	if resp, _ := postBounty(ts.URL, signSub(BountySubmission{
 		BountyID:      bounty.ID,
-		SellerPub:     "02deadbeef",
 		SellerAddress: addr,
 		Shard:         "bounty-src",
 		Seq:           rem.Seq,
 		HDP:           "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		Text:          "Tampered HDP",
+		ProvenanceHex: hex.EncodeToString(fragRec.Provenance),
 		ProofBundle:   pbRaw,
-	}); resp == nil || resp.StatusCode < 400 {
+	})); resp == nil || resp.StatusCode < 400 {
 		t.Fatalf("expected bounty submission with mismatched HDP to be rejected, got %+v", resp)
 	}
 
-	resp, res := postBounty(ts.URL, BountySubmission{
+	validSub := signSub(BountySubmission{
 		BountyID:      bounty.ID,
-		SellerPub:     "02deadbeef",
 		SellerAddress: addr,
 		Shard:         "bounty-src",
 		Seq:           rem.Seq,
 		HDP:           rem.HDP,
 		Text:          "Chronicle verified script opcodes activated cleanly on testnet.",
+		ProvenanceHex: hex.EncodeToString(fragRec.Provenance),
 		ProofBundle:   pbRaw,
 	})
+	resp, res := postBounty(ts.URL, validSub)
 	if resp == nil || resp.StatusCode != http.StatusOK || !res.Accepted {
 		t.Fatalf("expected valid bounty submission to succeed, got resp=%+v res=%+v", resp, res)
+	}
+	// Case/whitespace HDP duplicate bypass must be rejected with 409 Conflict!
+	dupSub := validSub
+	dupSub.HDP = " " + strings.ToUpper(rem.HDP) + " "
+	if dupResp, _ := postBounty(ts.URL, dupSub); dupResp == nil || dupResp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected uppercase/whitespace HDP duplicate to return 409, got %+v", dupResp)
 	}
 	// Verify resale listing price is positive margin (>= reward * 1.2).
 	listings, _ := db.ListSellListings()

@@ -223,21 +223,14 @@ func SignArtifact(priv *ec.PrivateKey, artifact any) (string, error) {
 	return hex.EncodeToString(sig.Serialize()), nil
 }
 
-// VerifyArtifact verifies a signature produced by SignArtifact against compressed pubHex.
+// VerifyArtifact verifies a signature produced by SignArtifact against canonical compressed pubHex,
+// rejecting uncompressed/hybrid pubkeys, non-canonical DER trailing bytes, and malleable high-S signatures.
 func VerifyArtifact(pubHex, sigHex string, artifact any) error {
-	pubBytes, err := hex.DecodeString(pubHex)
+	pub, _, err := core.ParseStrictCompressedPubKey(pubHex)
 	if err != nil {
 		return err
 	}
-	pub, err := ec.ParsePubKey(pubBytes)
-	if err != nil {
-		return err
-	}
-	sigBytes, err := hex.DecodeString(sigHex)
-	if err != nil {
-		return err
-	}
-	sig, err := ec.ParseDERSignature(sigBytes)
+	sig, err := core.ParseStrictLowSDER(sigHex)
 	if err != nil {
 		return err
 	}

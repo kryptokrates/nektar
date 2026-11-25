@@ -1,14 +1,12 @@
-// NektarAutomatonZk — AUT-005 + optional Schnorr-PoK delegation gate.
-// Same automaton logic as NektarAutomaton, but `stepZk` replaces the owner
-// signature with a Schnorr proof of knowledge of the discrete log of the
-// committed delegate point `delegateP`:
-//   e = sha256(R ‖ delegateP ‖ num2bin8(n) ‖ num2bin8(to)) — binding the
-//   proof to THIS step counter and successor state (no replay at another n).
-//   assert sha256(...)=num2bin(e,32) ∧ ecMulGen(s) == ecAdd(R, ecMul(delegateP,e))
+// NektarAutomatonZk — AUT-005 + hardened Schnorr-PoK delegation gate.
+// F-22: Strong Fiat-Shamir challenge binds domain tag, R, delegateP, contract instance
+//       (ownerPkh, deltaRoot), AND every transition parameter (n, from, sym, to, outHash).
+// F-26: Unsigned scalar decoding via bin2num(cat(challenge, 0x00)) % EC_N and strict
+//       1 <= e < EC_N, 1 <= s < EC_N canonicality bounds.
 import {
-  SmartContract, StatefulSmartContract,
-  assert, checkSig, hash256, hash160, num2bin, cat, len, sha256,
-  ecMulGen, ecAdd, ecMul, ecOnCurve,
+  StatefulSmartContract,
+  assert, checkSig, hash256, hash160, num2bin, bin2num, cat, len, sha256, toByteString,
+  ecMulGen, ecAdd, ecMul, ecOnCurve, EC_N,
   type PubKey, type Sig, type Sha256, type ByteString, type Point
 } from 'runar-lang'
 
@@ -20,7 +18,7 @@ export class NektarAutomatonZk extends StatefulSmartContract {
   lastOut: ByteString
   finalRoot: Sha256
   halted: bigint
-  delegateP: Point // committed delegate point — the prover must know its dlog
+  delegateP: Point
 
   constructor (q: bigint, deltaRoot: Sha256, ownerPkh: ByteString, n: bigint, lastOut: ByteString, finalRoot: Sha256, halted: bigint, delegateP: Point) {
     super(q, deltaRoot, ownerPkh, n, lastOut, finalRoot, halted, delegateP)
@@ -38,21 +36,23 @@ export class NektarAutomatonZk extends StatefulSmartContract {
     return dir == 1n ? hash256(cat(sib, h)) : hash256(cat(h, sib))
   }
 
-  // Schnorr-PoK gate: the caller proves knowledge of dlog(delegateP) bound to
-  // this n and successor to — no owner signature required.
-  public stepZk (commitR: Point, s: bigint, e: bigint,
+  public stepZk (commitR: Point, s: bigint,
     from: bigint, sym: bigint, to: bigint, outHash: ByteString,
     sib0: ByteString, sib1: ByteString, sib2: ByteString, sib3: ByteString,
     dir: bigint) {
     assert(this.halted == 0n)
-    assert(ecOnCurve(commitR))
-    assert(ecOnCurve(this.delegateP))
-    // challenge binds (R, P, n, to) — a replayed (R,s) at a different n fails
-    const challenge: ByteString = sha256(cat(cat(commitR, this.delegateP), cat(num2bin(this.n, 8n), num2bin(to, 8n))))
-    assert(challenge == num2bin(e, 32n))
-    assert(ecMulGen(s) == ecAdd(commitR, ecMul(this.delegateP, e)))
     assert(len(outHash) == 32n)
     assert(from == this.q)
+    assert(ecOnCurve(commitR))
+    assert(ecOnCurve(this.delegateP))
+    assert(s >= 1n && s < EC_N)
+    const domain: ByteString = toByteString('6e656b7461723a6175747a6b3a7632') // "nektar:autzk:v2"
+    const ctxBytes: ByteString = cat(cat(domain, cat(commitR, this.delegateP)), cat(this.ownerPkh, this.deltaRoot))
+    const stepBytes: ByteString = cat(cat(num2bin(this.n, 8n), num2bin(from, 8n)), cat(num2bin(sym, 8n), cat(num2bin(to, 8n), outHash)))
+    const challenge: ByteString = sha256(cat(ctxBytes, stepBytes))
+    const e: bigint = bin2num(cat(challenge, toByteString('00'))) % EC_N
+    assert(e >= 1n && e < EC_N)
+    assert(ecMulGen(s) == ecAdd(commitR, ecMul(this.delegateP, e)))
     const h0: ByteString = cat(num2bin(from, 8n), cat(num2bin(sym, 8n), num2bin(to, 8n)))
     const h1: ByteString = this.fold(h0, sib0, dir % 2n)
     const h2: ByteString = this.fold(h1, sib1, (dir / 2n) % 2n)
@@ -62,7 +62,6 @@ export class NektarAutomatonZk extends StatefulSmartContract {
     this.addOutput(1n, to, this.deltaRoot, this.ownerPkh, this.n + 1n, outHash, this.finalRoot, 0n, this.delegateP)
   }
 
-  // owner-signed path remains available alongside stepZk
   public step (sig: Sig, pubKey: PubKey,
     from: bigint, sym: bigint, to: bigint, outHash: ByteString,
     sib0: ByteString, sib1: ByteString, sib2: ByteString, sib3: ByteString,

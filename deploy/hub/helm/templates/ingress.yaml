@@ -10,10 +10,10 @@ spec:
   {{- if .Values.ingress.className }}
   ingressClassName: {{ .Values.ingress.className }}
   {{- end }}
-  {{- if and .Values.ingress.tls .Values.ingress.tlsSecretName }}
+  {{- if .Values.ingress.tls }}
   tls:
     - hosts: [{{ .Values.ingress.agentHost | quote }}]
-      secretName: {{ .Values.ingress.tlsSecretName }}
+      secretName: {{ .Values.ingress.tlsSecretName | default (printf "%s-tls" $full) }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.agentHost | quote }}

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
@@ -45,6 +46,10 @@ func NewToolbox(mem *memory.Service, mkt *market.Engine, broker *market.Broker, 
 	if disc == nil && broker != nil {
 		disc = broker.Discovery()
 	}
+	netName := ""
+	if mem != nil && mem.Chain() != nil {
+		netName = mem.Chain().Network()
+	}
 	return &Toolbox{
 		mem:        mem,
 		mkt:        mkt,
@@ -52,7 +57,7 @@ func NewToolbox(mem *memory.Service, mkt *market.Engine, broker *market.Broker, 
 		disc:       disc,
 		hubNode:    hubNode,
 		profile:    strings.ToLower(strings.TrimSpace(profile)),
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		httpClient: core.SafeHTTPClientForNetwork(netName, 15*time.Second),
 	}
 }
 
@@ -161,12 +166,24 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 				}
 			}
 		}
+		if p, disallowBorg, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
+			in.Principal = &p
+			in.CallerPub = ""
+			if disallowBorg && in.BorgGroup != "" {
+				return nil, errors.New("operator token required for Borg group writes")
+			}
+		}
 		return tb.mem.Remember(ctx, in)
 
 	case "recall":
 		var in memory.RecallInput
 		if err := json.Unmarshal(rawArgs, &in); err != nil {
 			return nil, err
+		}
+		if p, disallowBorg, overridden := PrincipalForContext(ctx, in.Principal); overridden {
+			in.Principal = p
+			in.CallerPub = ""
+			in.DisallowBorg = disallowBorg
 		}
 		return tb.ExecRecall(ctx, in)
 
@@ -178,7 +195,11 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 		if err := json.Unmarshal(rawArgs, &in); err != nil {
 			return nil, err
 		}
-		if err := tb.mem.Forget(ctx, in.Shard, in.Seq); err != nil {
+		if p, _, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
+			if err := tb.mem.ForgetAuthorized(ctx, in.Shard, in.Seq, p); err != nil {
+				return nil, err
+			}
+		} else if err := tb.mem.Forget(ctx, in.Shard, in.Seq); err != nil {
 			return nil, err
 		}
 		return map[string]any{"ok": true, "shard": in.Shard, "seq": in.Seq}, nil
@@ -187,6 +208,11 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 		var in memory.GroundedAnswerInput
 		if err := json.Unmarshal(rawArgs, &in); err != nil {
 			return nil, err
+		}
+		if p, disallowBorg, overridden := PrincipalForContext(ctx, in.Principal); overridden {
+			in.Principal = p
+			in.CallerPub = ""
+			in.DisallowBorg = disallowBorg
 		}
 		return tb.mem.GroundedAnswer(ctx, in)
 
@@ -278,6 +304,13 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 		}
 		if err := json.Unmarshal(rawArgs, &in); err != nil {
 			return nil, err
+		}
+		if p, _, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
+			bundle, vr, err := tb.mem.ProveAuthorized(ctx, in.Shard, in.Seq, p)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"bundle": bundle, "verify": vr}, nil
 		}
 		bundle, vr, err := tb.mem.Prove(ctx, in.Shard, in.Seq)
 		if err != nil {

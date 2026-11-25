@@ -1,10 +1,14 @@
 package core
 
-import "errors"
+import (
+	"errors"
+	"math/bits"
+)
 
 var (
-	ErrEmptyLeaves    = errors.New("merkle: empty leaves")
-	ErrIndexOutRange  = errors.New("merkle: index out of range")
+	ErrEmptyLeaves  = errors.New("merkle: empty leaves")
+	ErrIndexOutRange = errors.New("merkle: index out of range")
+	ErrInvalidProof = errors.New("merkle: invalid leaf, sibling length, or negative index")
 )
 
 // MerkleProof is an inclusion path for leaf at Index within a batch Merkle tree.
@@ -97,11 +101,18 @@ func ComputeMerkleProof(leaves [][]byte, index int) (*MerkleProof, error) {
 	return &MerkleProof{Index: index, Siblings: siblings}, nil
 }
 
-// ReconstructRoot folds leaf through proof.Siblings back to the Merkle root.
-func ReconstructRoot(leaf []byte, proof *MerkleProof) []byte {
+// ReconstructRootChecked strictly validates 32-byte leaf & sibling lengths and non-negative index
+// before folding leaf through proof.Siblings back to the Merkle root.
+func ReconstructRootChecked(leaf []byte, proof *MerkleProof) ([]byte, error) {
+	if proof == nil || proof.Index < 0 || len(leaf) != 32 {
+		return nil, ErrInvalidProof
+	}
 	cur := leaf
 	idx := proof.Index
 	for _, sib := range proof.Siblings {
+		if len(sib) != 32 {
+			return nil, ErrInvalidProof
+		}
 		if idx&1 == 0 {
 			cur = HashNode(cur, sib)
 		} else {
@@ -109,23 +120,37 @@ func ReconstructRoot(leaf []byte, proof *MerkleProof) []byte {
 		}
 		idx >>= 1
 	}
-	return cur
+	return cur, nil
 }
 
-// VerifyProof returns true iff leaf + proof reconstructs root.
+// ReconstructRoot folds leaf through proof.Siblings back to the Merkle root.
+// Returns nil on malformed inputs (nil proof, negative index, or non-32-byte leaf/sibling).
+func ReconstructRoot(leaf []byte, proof *MerkleProof) []byte {
+	root, err := ReconstructRootChecked(leaf, proof)
+	if err != nil {
+		return nil
+	}
+	return root
+}
+
+// VerifyProof returns true iff leaf + proof reconstructs root with valid 32-byte hashes and index >= 0.
+// Callers verifying Bitcoin odd-self-pairing trees MUST also verify tree leafCount / height against
+// an authenticated commitment (e.g. NektarAnchor.Size) to prevent CVE-2012-2459 odd-leaf duplication.
 func VerifyProof(leaf []byte, proof *MerkleProof, root []byte) bool {
-	return EqualBytes(ReconstructRoot(leaf, proof), root)
+	if len(root) != 32 {
+		return false
+	}
+	got, err := ReconstructRootChecked(leaf, proof)
+	if err != nil {
+		return false
+	}
+	return EqualBytes(got, root)
 }
 
-// HeightForLeafCount returns ceil(log2(leafCount)) (0 for <= 1).
+// HeightForLeafCount returns ceil(log2(leafCount)) (0 for <= 1) in O(1) without shift overflow.
 func HeightForLeafCount(leafCount int) int {
 	if leafCount <= 1 {
 		return 0
 	}
-	h, size := 0, 1
-	for size < leafCount {
-		size <<= 1
-		h++
-	}
-	return h
+	return bits.Len(uint(leafCount - 1))
 }

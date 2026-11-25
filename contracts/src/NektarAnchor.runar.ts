@@ -55,6 +55,7 @@ export class NektarAnchor extends StatefulSmartContract {
   public rotate (sig: Sig, pubKey: PubKey, newOwnerPkh: ByteString) {
     assert(hash160(pubKey) == this.ownerPkh)
     assert(checkSig(sig, pubKey))
+    assert(len(newOwnerPkh) == 20n)
     this.addOutput(1n, this.metaFlag, this.genesisOwner, this.n, this.size, this.R, this.Rp, this.tagRprime, newOwnerPkh)
   }
 
@@ -67,6 +68,9 @@ export class NektarAnchor extends StatefulSmartContract {
   public witnessSettle (sig: Sig, pubKey: PubKey, receiptHash: ByteString, queryId: ByteString, payeePkh: ByteString, verdictCode: ByteString, verdictSats: bigint, payoutSats: bigint, payoutPkh: ByteString) {
     assert(hash160(pubKey) == this.ownerPkh)
     assert(checkSig(sig, pubKey))
+    assert(len(payeePkh) == 20n && len(payoutPkh) == 20n)
+    assert(len(queryId) <= 75n && len(this.R) == 32n && len(receiptHash) == 32n)
+    assert(verdictSats >= 1n && payoutSats >= 1n)
     const e1 = cat(num2bin(len(payeePkh), 1n), payeePkh)
     const e2 = cat(num2bin(len(queryId), 1n), queryId)
     const e3 = cat(num2bin(len(this.R), 1n), this.R)

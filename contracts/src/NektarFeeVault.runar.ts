@@ -1,15 +1,10 @@
-import { StatefulSmartContract, assert, hash160, checkSig, cat, toByteString, type Sig, type PubKey, type ByteString, extractLocktime, extractAmount } from 'runar-lang'
+import { StatefulSmartContract, assert, hash160, checkSig, cat, toByteString, type Sig, type PubKey, type ByteString, extractLocktime, extractSequence, extractAmount } from 'runar-lang'
 
-// Covenant-enforced fee vault (idiomatic StatefulSmartContract):
-// every spend may pay at most `payAmount` to `destPkh`, subject to
-// per-tx and rolling-window caps, keeping the remainder in the contract.
-// The window transition is supplied as (newSpent, newStart) and validated
-// unconditionally — ANF state inference requires straight-line mutation.
-// The residual (real change + miner fee) is bounded by maxFee + 1 sat:
-// the injected change output's destination is caller-set, so we bound its
-// AMOUNT — change-leakage beyond maxFee+1 sat is consensus-impossible.
+// NektarFeeVault — hardened rolling-window rate-limited fee vault.
+// Enforces extractSequence < 0xffffffff and block-height locktime domain (< 500_000_000)
+// so windowCap resets cannot be spoofed via SEQUENCE_FINAL or timestamp locktimes.
 export class NektarFeeVault extends StatefulSmartContract {
-  destPkh: ByteString // 20B hash160 of the only payable address
+  destPkh: ByteString
   ownerPkh: ByteString
   perTxCap: bigint
   windowCap: bigint
@@ -31,9 +26,6 @@ export class NektarFeeVault extends StatefulSmartContract {
   }
 
   private p2pkh (pkh: ByteString): ByteString {
-    // this.buildP2PKH is declared in runar-lang but not compilable in 0.4.6
-    // (DSL whitelist: addOutput/addRawOutput/getStateScript only) — a private
-    // contract method with cat() builtins is the in-DSL equivalent.
     return cat(toByteString('76a914'), cat(pkh, toByteString('88ac')))
   }
 
@@ -41,6 +33,9 @@ export class NektarFeeVault extends StatefulSmartContract {
     assert(hash160(pubKey) === this.ownerPkh)
     assert(checkSig(sig, pubKey))
     const lt = extractLocktime(this.txPreimage)
+    assert(extractSequence(this.txPreimage) < 4294967295n)
+    assert(lt < 500000000n)
+    assert(payAmount >= 1n && contSats >= 1n)
     const expired = lt >= this.windowStart + this.windowBlocks
     assert((expired && newSpent === payAmount && newStart === lt) ||
       (!expired && newSpent === this.spentInWindow + payAmount && newStart === this.windowStart))

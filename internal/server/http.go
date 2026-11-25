@@ -27,6 +27,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
+	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/reasoning"
 	"github.com/kryptokrates/nektar/internal/store"
 )
@@ -66,10 +67,11 @@ type App struct {
 	disc       *discovery.Service
 	toolbox    *Toolbox
 	mcpSrv     *mcp.Server
-	cfg        Config
-	startedAt  time.Time
-	httpClient *http.Client
-	handler    http.Handler
+	cfg            Config
+	startedAt      time.Time
+	httpClient     *http.Client
+	proxyTransport *http.Transport
+	handler        http.Handler
 
 	evMu   sync.Mutex
 	evSubs map[chan string]struct{}
@@ -79,6 +81,9 @@ type App struct {
 
 	faucetMu  sync.Mutex
 	faucetIPs map[string][]int64
+
+	oauthRegMu  sync.Mutex
+	oauthRegIPs map[string][]int64
 
 	oauthMu      sync.Mutex
 	oauthClients map[string]oauthClient
@@ -120,9 +125,15 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 		cfg:        cfg,
 		startedAt:  time.Now(),
 		httpClient: hc,
+		proxyTransport: &http.Transport{
+			ResponseHeaderTimeout: 30 * time.Second,
+			MaxIdleConns:          64,
+			IdleConnTimeout:       90 * time.Second,
+		},
 		evSubs:       make(map[chan string]struct{}),
 		pairCodes:    make(map[string]pairTicket),
 		faucetIPs:    make(map[string][]int64),
+		oauthRegIPs:  make(map[string][]int64),
 		oauthClients: make(map[string]oauthClient),
 		oauthCodes:   make(map[string]oauthCode),
 		oauthTokens:  make(map[string]oauthAccessToken),
@@ -147,17 +158,39 @@ func (a *App) BroadcastDashboardEvent(kind string) {
 	a.evMu.Unlock()
 }
 
-// CreatePairCode mints a single-use 5-minute pairing code for `GET /pair?code=...`.
+// CreatePairCode mints a single-use 5-minute operator pairing code for `GET /pair?code=...`.
+// Must only be called from startup banner or operator-authenticated routes.
 func (a *App) CreatePairCode() string {
+	return a.CreateScopedPairCode(true)
+}
+
+// CreateScopedPairCode mints a single-use 5-minute pairing code explicitly scoped to operator or API privileges.
+func (a *App) CreateScopedPairCode(forOperator bool) string {
 	var b [16]byte
-	_, _ = rand.Read(b[:])
-	code := hex.EncodeToString(b[:])
-	tok := a.cfg.OperatorToken
-	if tok == "" {
-		tok = a.cfg.APIToken
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("server: crypto/rand failed: " + err.Error())
 	}
+	code := hex.EncodeToString(b[:])
+	clear(b[:])
+	tok := a.cfg.APIToken
+	if forOperator && a.cfg.OperatorToken != "" {
+		tok = a.cfg.OperatorToken
+	}
+	now := time.Now()
+	key := oauthSecretKey(code)
 	a.pairMu.Lock()
-	a.pairCodes[code] = pairTicket{token: tok, expires: time.Now().Add(5 * time.Minute)}
+	for k, v := range a.pairCodes {
+		if now.After(v.expires) {
+			delete(a.pairCodes, k)
+		}
+	}
+	for len(a.pairCodes) >= 256 {
+		for k := range a.pairCodes {
+			delete(a.pairCodes, k)
+			break
+		}
+	}
+	a.pairCodes[key] = pairTicket{token: tok, expires: now.Add(5 * time.Minute)}
 	a.pairMu.Unlock()
 	return code
 }
@@ -564,14 +597,13 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 func (a *App) buildMux() http.Handler {
 	mux := http.NewServeMux()
 
-	// 1. Official MCP Streamable HTTP transport (/mcp).
+	// 1. Official MCP Streamable HTTP transport (/mcp) with localhost protection & BRC-105 paywall.
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server {
 		return a.mcpSrv
 	}, &mcp.StreamableHTTPOptions{
-		Stateless:                  true,
-		DisableLocalhostProtection: true,
+		Stateless: true,
 	})
-	mux.Handle("/mcp", a.withAuth(mcpHandler))
+	mux.Handle("/mcp", a.withAuth(a.withMCPPaywall(mcpHandler)))
 
 	// 2. Auth session & 1-click pairing (/v1/auth/session, /pair).
 	mux.HandleFunc("POST /v1/auth/session", a.handleAuthSession)
@@ -592,7 +624,14 @@ func (a *App) buildMux() http.Handler {
 		writeJSON(w, http.StatusOK, BuildStatus(r.Context(), a.mem, a.mkt))
 	})))
 	mux.HandleFunc("GET /.well-known/nektar", func(w http.ResponseWriter, r *http.Request) {
-		shards, _ := a.mem.ListUserShards()
+		var publicPacks []string
+		if a.broker != nil {
+			for _, p := range a.broker.AdvertisedPacks() {
+				if p.Shard != "" {
+					publicPacks = append(publicPacks, p.Shard)
+				}
+			}
+		}
 		resp := map[string]any{
 			"version":     "0.4.0",
 			"identityPub": a.mem.Chain().IdentityPubHex(),
@@ -601,7 +640,7 @@ func (a *App) buildMux() http.Handler {
 			"verifyBase":  "/v1/verify/",
 			"mcp":         "/mcp",
 			"a2a":         "/a2a",
-			"shards":      shards,
+			"publicPacks": publicPacks,
 			"hosts":       a.disc.ActiveHosts(),
 		}
 		if a.cfg.Hub != nil {
@@ -626,7 +665,7 @@ func (a *App) buildMux() http.Handler {
 	mux.Handle("POST /v1/answer", a.withAuth(a.withPaywall("groundedAnswer", http.HandlerFunc(a.handleAnswer))))
 	mux.HandleFunc("GET /v1/verify", a.handleVerifyReceipt)
 	mux.HandleFunc("GET /v1/verify/{token}", a.handleVerifyReceipt)
-	mux.HandleFunc("GET /v1/pack/{shard}", a.handleShardPack)
+	mux.Handle("GET /v1/pack/{shard}", a.withOperatorAuth(http.HandlerFunc(a.handleShardPack)))
 	mux.HandleFunc("GET /v1/chirp/{hash}", a.handleChirpObject)
 	a.registerWalletRoutes(mux)
 
@@ -659,8 +698,8 @@ func (a *App) buildMux() http.Handler {
 		a.BroadcastDashboardEvent("policy_revoked")
 		writeJSON(w, http.StatusOK, map[string]any{"revoked": id})
 	})))
-	mux.Handle("POST /v1/auth/pair-code", a.withAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"code": a.CreatePairCode()})
+	mux.Handle("POST /v1/auth/pair-code", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"code": a.CreateScopedPairCode(true)})
 	})))
 	mux.Handle("POST /v1/automation/kill", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -747,7 +786,7 @@ func (a *App) buildMux() http.Handler {
 		})
 	}
 
-	return mux
+	return a.withBrowserOriginGuard(mux)
 }
 
 func (a *App) handleDashboardSSE(w http.ResponseWriter, r *http.Request) {
@@ -795,14 +834,25 @@ func (a *App) handleDashboardSSE(w http.ResponseWriter, r *http.Request) {
 
 func requestBaseURL(r *http.Request) string {
 	scheme := "http"
-	if strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") || r.TLS != nil {
+	if r.TLS != nil {
 		scheme = "https"
 	}
 	host := r.Host
-	if xfHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); xfHost != "" {
-		host = xfHost
+	if os.Getenv("NEKTAR_TRUST_PROXY") == "1" {
+		if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+			scheme = "https"
+		}
+		if xfHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); xfHost != "" {
+			// Take first hop if comma-separated and validate strictly before trusting.
+			if first, _, ok := strings.Cut(xfHost, ","); ok {
+				xfHost = strings.TrimSpace(first)
+			}
+			if isValidHostHeader(xfHost) {
+				host = xfHost
+			}
+		}
 	}
-	if host == "" {
+	if !isValidHostHeader(host) {
 		host = "127.0.0.1:18420"
 	}
 	return scheme + "://" + host
@@ -832,33 +882,53 @@ func (a *App) extractToken(r *http.Request) string {
 }
 
 func (a *App) withAuth(next http.Handler) http.Handler {
-	if a.cfg.APIToken == "" && a.cfg.OperatorToken == "" {
-		return next
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !a.tokenMatches(a.extractToken(r), false) {
+		if a.cfg.APIToken == "" && a.cfg.OperatorToken == "" {
+			// Unauthenticated bare-metal loopback: local owner context.
+			ctx := WithCallerAuth(r.Context(), CallerAuth{Authenticated: true, IsOperator: true})
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+		tok := a.extractToken(r)
+		if !a.tokenMatches(tok, false) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
-		next.ServeHTTP(w, r)
+		isOp := a.cfg.OperatorToken != "" && a.tokenMatches(tok, true)
+		ctx := WithCallerAuth(r.Context(), CallerAuth{Authenticated: true, IsOperator: isOp})
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
 func (a *App) withOperatorAuth(next http.Handler) http.Handler {
-	if a.cfg.OperatorToken == "" && a.cfg.APIToken == "" {
-		return next
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.cfg.OperatorToken == "" && a.cfg.APIToken == "" {
+			ctx := WithCallerAuth(r.Context(), CallerAuth{Authenticated: true, IsOperator: true})
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+		tok := a.extractToken(r)
+		// MCP OAuth tokens (nkt_at_*) are strictly scoped to mcp:tools and NEVER grant operator privileges,
+		// even when OperatorToken is unset and APIToken is configured!
+		if strings.HasPrefix(tok, "nkt_at_") {
+			if a.matchOAuthToken(tok, false) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "operator token required"})
+				return
+			}
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "operator token required"})
+			return
+		}
 		needOp := a.cfg.OperatorToken != ""
-		if !a.tokenMatches(a.extractToken(r), needOp) {
+		if !a.tokenMatches(tok, needOp) {
 			code := http.StatusUnauthorized
-			if needOp && a.tokenMatches(a.extractToken(r), false) {
+			if needOp && a.tokenMatches(tok, false) {
 				code = http.StatusForbidden
 			}
 			writeJSON(w, code, map[string]string{"error": "operator token required"})
 			return
 		}
-		next.ServeHTTP(w, r)
+		ctx := WithCallerAuth(r.Context(), CallerAuth{Authenticated: true, IsOperator: true})
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -879,6 +949,7 @@ func (a *App) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		Value:    in.Token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   isHTTPSRequest(r, a.cfg.PublicURL),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   86400 * 7,
 	})
@@ -887,10 +958,11 @@ func (a *App) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handlePair(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	codeKey := oauthSecretKey(code)
 	a.pairMu.Lock()
-	tk, ok := a.pairCodes[code]
+	tk, ok := a.pairCodes[codeKey]
 	if ok {
-		delete(a.pairCodes, code)
+		delete(a.pairCodes, codeKey)
 	}
 	a.pairMu.Unlock()
 	if !ok || time.Now().After(tk.expires) {
@@ -903,6 +975,7 @@ func (a *App) handlePair(w http.ResponseWriter, r *http.Request) {
 			Value:    tk.token,
 			Path:     "/",
 			HttpOnly: true,
+			Secure:   isHTTPSRequest(r, a.cfg.PublicURL),
 			SameSite: http.SameSiteLaxMode,
 			MaxAge:   86400 * 7,
 		})
@@ -912,23 +985,26 @@ func (a *App) handlePair(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleToolCall(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	res, err := a.toolbox.Call(r.Context(), name, raw)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if name == "recall" || name == "groundedAnswer" {
-		a.recordTTFV()
-	}
-	if name == "remember" || name == "groundedAnswer" || name == "want" || name == "sell" || name == "anchor" {
-		a.BroadcastDashboardEvent("tool:" + name)
-	}
-	writeJSON(w, http.StatusOK, res)
+	exec := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		res, err := a.toolbox.Call(r.Context(), name, raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if name == "recall" || name == "groundedAnswer" {
+			a.recordTTFV()
+		}
+		if name == "remember" || name == "groundedAnswer" || name == "want" || name == "sell" || name == "anchor" {
+			a.BroadcastDashboardEvent("tool:" + name)
+		}
+		writeJSON(w, http.StatusOK, res)
+	})
+	a.withPaywall(name, exec).ServeHTTP(w, r)
 }
 
 func (a *App) handleMarketPurchase(w http.ResponseWriter, r *http.Request) {
@@ -996,16 +1072,7 @@ func (a *App) handleOnboardFaucet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) allowFaucetIP(r *http.Request) bool {
-	ip := r.RemoteAddr
-	// Only trust X-Forwarded-For when explicitly behind a trusted reverse proxy!
-	if os.Getenv("NEKTAR_TRUST_PROXY") == "1" {
-		if xf := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xf != "" {
-			ip = strings.TrimSpace(strings.Split(xf, ",")[0])
-		}
-	}
-	if h, _, ok := strings.Cut(ip, ":"); ok && h != "" {
-		ip = h
-	}
+	ip := extractClientIP(r)
 	now := time.Now().Unix()
 	a.faucetMu.Lock()
 	defer a.faucetMu.Unlock()
@@ -1099,13 +1166,13 @@ func (a *App) handleHubBundle(w http.ResponseWriter, r *http.Request) {
 		domain = "hub.example.com"
 	}
 	cliCmd := fmt.Sprintf("nektar hub up --auto-ip --network %s", net)
-	vpsCmd := fmt.Sprintf("NEKTAR_NETWORK=%s NEKTAR_AUTO_IP=1 curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | bash", net)
+	vpsCmd := fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_NETWORK=%s NEKTAR_AUTO_IP=1 bash", net)
 	if mode == "domain" {
 		cliCmd = fmt.Sprintf("nektar hub up --domain %s --network %s", domain, net)
-		vpsCmd = fmt.Sprintf("NEKTAR_NETWORK=%s NEKTAR_DOMAIN=%s curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | bash", net, domain)
+		vpsCmd = fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_NETWORK=%s NEKTAR_DOMAIN=%s bash", net, domain)
 	} else if mode == "tunnel" {
 		cliCmd = fmt.Sprintf("nektar hub up --tunnel --network %s", net)
-		vpsCmd = fmt.Sprintf("NEKTAR_NETWORK=%s NEKTAR_TUNNEL=1 curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | bash", net)
+		vpsCmd = fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_NETWORK=%s NEKTAR_TUNNEL=1 bash", net)
 	}
 	cloudInit := fmt.Sprintf(`#cloud-config
 package_update: true
@@ -1154,14 +1221,31 @@ func (a *App) handleApprovalDecision(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"approval": appr, "deal": deal})
 }
 
+func (a *App) buildPublicCardSummary() map[string]any {
+	receipts, _ := a.mem.DB().ListReceipts(1000)
+	deals, _ := a.mem.DB().ListDeals(500)
+	var earned uint64
+	for _, d := range deals {
+		if d.Role == "seller" && d.Status == "settled" {
+			earned += d.PriceSats
+		}
+	}
+	return map[string]any{
+		"version":      "0.4.0",
+		"identityPub":  a.mem.Chain().IdentityPubHex(),
+		"network":      a.mem.Chain().Network(),
+		"receiptCount": len(receipts),
+		"earnedSats":   earned,
+		"truthNote":    reasoning.TruthNote,
+	}
+}
+
 func (a *App) handlePublicCard(w http.ResponseWriter, r *http.Request) {
-	base := requestBaseURL(r)
-	st := a.BuildDashboardState(r.Context(), base)
+	card := a.buildPublicCardSummary()
 	if strings.Contains(r.Header.Get("Accept"), "application/json") {
-		writeJSON(w, http.StatusOK, st)
+		writeJSON(w, http.StatusOK, card)
 		return
 	}
-	rcps := st["receipts"].(map[string]any)
 	idPub := a.mem.Chain().IdentityPubHex()
 	netName := a.mem.Chain().Network()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -1181,10 +1265,10 @@ pre{background:#120e0c;border:1px solid #3a2f28;border-radius:8px;padding:.75rem
 <p><small>%s</small></p></div>
 <div class="card"><h3>Run your own verifiable AI agent</h3>
 <pre>curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh &amp;&amp; nektar serve</pre></div></body></html>`,
-		rcps["count"], rcps["earned"], html.EscapeString(netName),
+		card["receiptCount"], card["earnedSats"], html.EscapeString(netName),
 		html.EscapeString(idPub),
 		html.EscapeString(netName),
-		rcps["count"], rcps["earned"], html.EscapeString(reasoning.TruthNote),
+		card["receiptCount"], card["earnedSats"], html.EscapeString(reasoning.TruthNote),
 	)
 }
 
@@ -1267,6 +1351,29 @@ func (a *App) withPaywall(toolName string, next http.Handler) http.Handler {
 				return
 			}
 
+			// On live networks, verify mined BUMP confirmation against our PoW header tracker,
+			// or require synchronous network broadcast (RelayExternalTx) of unconfirmed transactions
+			// BEFORE serving paid endpoints (prevents double-spend acceptance via swallowed InternalizeAction errors).
+			if a.mem.Chain().Network() != "memory" {
+				confirmed := false
+				if tx.MerklePath != nil {
+					if tracker := a.mem.Chain().Tracker(); tracker != nil {
+						if root, rErr := tx.MerklePath.ComputeRoot(txHash); rErr == nil && root != nil {
+							if valid, vErr := tracker.IsValidRootForHeight(r.Context(), root, tx.MerklePath.BlockHeight); vErr == nil && valid {
+								confirmed = true
+							}
+						}
+					}
+				}
+				if !confirmed {
+					if rErr := a.mem.Chain().RelayExternalTx(r.Context(), tx); rErr != nil {
+						_ = a.mem.DB().ReleasePaymentClaim(txid)
+						writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "unconfirmed payment broadcast failed: " + rErr.Error()})
+						return
+					}
+				}
+			}
+
 			var paid uint64
 			if pay.DerivationPrefix != "" && pay.DerivationSuffix != "" && pay.SenderIdentityKey != "" {
 				paid, err = a.mem.Chain().InternalizeBRC29(
@@ -1324,6 +1431,14 @@ func (a *App) handleRemember(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if p, disallowBorg, overridden := PrincipalForContext(r.Context(), policy.Principal{}); overridden {
+		in.Principal = &p
+		in.CallerPub = ""
+		if disallowBorg && in.BorgGroup != "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "operator token required for Borg group writes"})
+			return
+		}
+	}
 	res, err := a.mem.Remember(r.Context(), in)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1338,6 +1453,11 @@ func (a *App) handleRecall(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&in); err != nil && err != io.EOF {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	if p, disallowBorg, overridden := PrincipalForContext(r.Context(), in.Principal); overridden {
+		in.Principal = p
+		in.CallerPub = ""
+		in.DisallowBorg = disallowBorg
 	}
 	res, err := a.toolbox.ExecRecall(r.Context(), in)
 	if err != nil {
@@ -1373,6 +1493,11 @@ func (a *App) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(io.LimitReader(r.Body, 2<<20)).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	if p, disallowBorg, overridden := PrincipalForContext(r.Context(), in.Principal); overridden {
+		in.Principal = p
+		in.CallerPub = ""
+		in.DisallowBorg = disallowBorg
 	}
 	res, err := a.mem.GroundedAnswer(r.Context(), in)
 	if err != nil {
@@ -1448,7 +1573,7 @@ pre{background:#120e0c;border:1px solid #3a2f28;border-radius:8px;padding:.65rem
 			ver.CitationsChecked, ver.CitationsMined,
 			html.EscapeString(ver.ReceiptToken),
 			html.EscapeString(ver.TruthNote),
-			badgeURL,
+			html.EscapeString(badgeURL),
 		)
 		return
 	}
@@ -1457,7 +1582,7 @@ pre{background:#120e0c;border:1px solid #3a2f28;border-radius:8px;padding:.65rem
 
 func (a *App) handleShardPack(w http.ResponseWriter, r *http.Request) {
 	shard := r.PathValue("shard")
-	res, err := a.mem.ExportShardPack(r.Context(), shard)
+	res, err := a.mem.ExportShardPackAuthorized(r.Context(), shard, policy.Principal{Type: "Agent", ID: "owner", Level: 100}, "disclose", false)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -1474,6 +1599,16 @@ func (a *App) handleChirpObject(w http.ResponseWriter, r *http.Request) {
 	}
 	var h [32]byte
 	copy(h[:], b)
+	// Unauthenticated callers may ONLY fetch CHIRP objects explicitly published to the public allowlist
+	// (e.g. starter packs or active BRC-369 sale ciphertexts). All other objects require authentication.
+	if !a.mem.IsPublicChirp(h) {
+		if a.cfg.APIToken != "" || a.cfg.OperatorToken != "" {
+			if !a.tokenMatches(a.extractToken(r), false) {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+				return
+			}
+		}
+	}
 	obj, err := a.mem.Objects().GetObject(h)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "object not found"})
@@ -1538,16 +1673,19 @@ func (a *App) handleA2A(w http.ResponseWriter, r *http.Request) {
 	if toolName == "" {
 		toolName = rpc.Method
 	}
-	result, callErr := a.toolbox.Call(r.Context(), toolName, rpc.Params)
-	if callErr != nil {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"jsonrpc": "2.0",
-			"id":      rpc.ID,
-			"error":   map[string]any{"code": -32601, "message": callErr.Error()},
-		})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": rpc.ID, "result": result})
+	exec := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result, callErr := a.toolbox.Call(r.Context(), toolName, rpc.Params)
+		if callErr != nil {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"jsonrpc": "2.0",
+				"id":      rpc.ID,
+				"error":   map[string]any{"code": -32601, "message": callErr.Error()},
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": rpc.ID, "result": result})
+	})
+	a.withPaywall(toolName, exec).ServeHTTP(w, r)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

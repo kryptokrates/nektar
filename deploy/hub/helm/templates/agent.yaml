@@ -47,21 +47,23 @@ spec:
               value: "1"
             - name: NEKTAR_MODEL_ID
               value: {{ .Values.agent.modelId | quote }}
-            - name: NEKTAR_AUTOMATION
-              value: {{ ternary "1" "" .Values.agent.automation | quote }}
-            - name: NEKTAR_ANNOUNCE
-              value: {{ ternary "1" "" .Values.agent.announce | quote }}
             - name: NEKTAR_PUBLIC_URL
               value: {{ .Values.publicUrl | quote }}
             - name: NEKTAR_VERIFY_BASE
               value: {{ .Values.agent.verifyBase | default .Values.publicUrl | quote }}
+            - name: NEKTAR_TRUST_PROXY
+              value: {{ ternary "1" "0" .Values.trustProxy | quote }}
             - name: NEKTAR_MARKET_HOSTS
               value: {{ .Values.marketHosts | quote }}
             - name: NEKTAR_SEED_DOMAINS
               value: {{ .Values.agent.seedDomains | quote }}
-            - name: NEKTAR_MAX_FEE_SATS_PER_TX
+            - name: NEKTAR_HEADERS_SOURCE
+              value: {{ .Values.agent.headersSource | quote }}
+            - name: NEKTAR_SETTLE_SPEC
+              value: {{ .Values.agent.settleSpec | quote }}
+            - name: NEKTAR_MAX_FEE_PER_TX
               value: {{ .Values.agent.maxFeeSatsPerTx | quote }}
-            - name: NEKTAR_MAX_SPEND_SATS_PER_DAY
+            - name: NEKTAR_MAX_SPEND_PER_DAY
               value: {{ .Values.agent.maxSpendSatsPerDay | quote }}
             - name: NEKTAR_MAINNET_CONFIRM
               value: {{ .Values.agent.mainnetConfirm | quote }}
@@ -71,7 +73,9 @@ spec:
               value: "http://127.0.0.1:9070"
             - name: NEKTAR_RESTATE_ENDPOINT_URI
               value: "http://127.0.0.1:9080"
-            - name: NEKTAR_API_TOKEN
+            - name: NEKTAR_RESTATE_IDENTITY_KEY
+              value: {{ .Values.restate.identityPublicKey | default "" | quote }}
+            - name: NEKTAR_HTTP_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "nektar-hub.secretName" . }}
@@ -81,7 +85,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "nektar-hub.secretName" . }}
                   key: NEKTAR_OPERATOR_TOKEN
-                  optional: true
           ports:
             - name: http
               containerPort: 18420
@@ -114,6 +117,9 @@ spec:
           image: "{{ .Values.restate.image.repository | default "docker.restate.dev/restatedev/restate" }}:{{ .Values.restate.image.tag | default "1.8.1" }}"
           imagePullPolicy: {{ .Values.restate.image.pullPolicy | default "IfNotPresent" }}
           securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
@@ -123,6 +129,8 @@ spec:
               value: "8111"
             - name: RESTATE_NODE_NAME
               value: "nektar-hub"
+            - name: RESTATE_BASE_DIR
+              value: "/restate-data"
           startupProbe:
             httpGet:
               path: /health
@@ -141,20 +149,26 @@ spec:
               port: 9070
             periodSeconds: 10
             failureThreshold: 2
+          resources:
+            {{- toYaml .Values.restate.resources | nindent 12 }}
           volumeMounts:
             - name: restate-data
               mountPath: /restate-data
-            - name: tmp
+            - name: restate-tmp
               mountPath: /tmp
       volumes:
         - name: tmp
+          emptyDir: {}
+        - name: restate-tmp
           emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: restate-data
       spec:
         accessModes: ["ReadWriteOnce"]
-        {{- if .Values.persistence.storageClass }}
+        {{- if .Values.restate.persistence.storageClass }}
+        storageClassName: {{ .Values.restate.persistence.storageClass | quote }}
+        {{- else if .Values.persistence.storageClass }}
         storageClassName: {{ .Values.persistence.storageClass | quote }}
         {{- end }}
         resources:

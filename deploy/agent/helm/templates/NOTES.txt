@@ -5,13 +5,13 @@ nektar agent "{{ .Release.Name }}" is coming up.
   local:  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "nektar-agent.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
 
 Then:
-  health:    curl http://localhost:{{ .Values.service.port }}/.well-known/nektar
-  MCP:       http://<host>/mcp  with  Authorization: Bearer 
-  first boot prints a BRC-100 funding address — fund it or connect BSV Desktop (127.0.0.1:3321)
+  health:    curl http://localhost:{{ .Values.service.port }}/v1/health
+  MCP:       http://<host>/mcp  with  Authorization: Bearer <NEKTAR_HTTP_TOKEN>
+  first boot initializes an embedded BRC-100 wallet under /data/wallet — inspect `nektar status` or Dashboard for the funding address.
 
 {{- if .Values.ingress.enabled }}
 public:  {{ ternary "https" "http" .Values.ingress.tls }}://{{ .Values.ingress.host }}
-         set pushPublic=https://{{ .Values.ingress.host }}/v1/lane for direct push
+         set publicUrl={{ ternary "https" "http" .Values.ingress.tls }}://{{ .Values.ingress.host }} for direct A2A trades
 {{- end }}
 
 /data is the agent — the PVC holds identity, wallet and journals.

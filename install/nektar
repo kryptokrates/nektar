@@ -358,11 +358,24 @@ PY
 cmd_hub() {
   sub="${1:-help}"
   shift || true
+  hub_dir="${NEKTAR_HUB_DIR:-$HOME/nektar-hub}"
   case "$sub" in
     up)
       curl -fsSL "$RAW_BASE/deploy/hub/install.sh" | bash -s -- "$@"
       ;;
-    down|status|logs|template|help|--help|-h)
+    down)
+      need_docker
+      docker compose -f "$hub_dir/compose.yaml" --env-file "$hub_dir/.env" down "$@"
+      ;;
+    status)
+      need_docker
+      docker compose -f "$hub_dir/compose.yaml" --env-file "$hub_dir/.env" ps "$@"
+      ;;
+    logs)
+      need_docker
+      docker compose -f "$hub_dir/compose.yaml" --env-file "$hub_dir/.env" logs "$@"
+      ;;
+    template|help|--help|-h)
       need_docker
       if container_running; then
         docker exec "$CONTAINER" nektar hub "$sub" "$@"

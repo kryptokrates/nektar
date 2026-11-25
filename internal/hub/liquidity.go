@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
@@ -94,7 +96,7 @@ func ArmHubLiquidity(ctx context.Context, node *Node, mem *memory.Service, cfg L
 			if mem.Chain().BalanceSats() > 1000 {
 				_, _ = mem.AnchorShard(ctx, st.Shard)
 			}
-			if res, err := mem.ExportShardPack(ctx, st.Shard); err == nil && res != nil && res.ChirpURL != "" {
+			if res, err := mem.ExportPublicShardPack(ctx, st.Shard); err == nil && res != nil && res.ChirpURL != "" {
 				frags, _ := mem.DB().ListFragments(st.Shard)
 				state.Packs = append(state.Packs, bstack.PackRef{
 					Shard:    st.Shard,
@@ -215,7 +217,7 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 }
 
 // verifyBountyProofBundle performs full offline SPV verification of AnchorBEEF + Rúnar NektarAnchor
-// + ChainTail + header BUMP root + HDP/leaf/provenance commitment before any bounty payout.
+// + ChainTail + header BUMP root + mandatory Provenance & owner-authorship signature before any bounty payout.
 func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contracts.ProofBundle, sub BountySubmission) error {
 	if strings.TrimSpace(sub.HDP) == "" {
 		return errors.New("missing submission hdp")
@@ -224,17 +226,61 @@ func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contra
 	if err != nil || len(hdpBytes) != 32 {
 		return errors.New("invalid submission hdp hex")
 	}
-	// If provenance is provided, verify HDP cryptographically binds sub.Text + provenance!
-	if strings.TrimSpace(sub.ProvenanceHex) != "" {
-		provRaw, pErr := hex.DecodeString(strings.TrimSpace(sub.ProvenanceHex))
-		if pErr != nil {
-			return errors.New("invalid submission provenanceHex")
-		}
-		expectedHDP := core.SHA256(core.Concat(core.TagProv, []byte(sub.Text), provRaw))
-		if !core.EqualBytes(expectedHDP, hdpBytes) {
-			return errors.New("submission text/provenance does not match hdp")
-		}
+	canonicalHDP := hex.EncodeToString(hdpBytes)
+
+	// Mandatory provenanceHex: HDP must cryptographically bind sub.Text + serialized Provenance.
+	if strings.TrimSpace(sub.ProvenanceHex) == "" {
+		return errors.New("missing submission provenanceHex")
 	}
+	provRaw, pErr := hex.DecodeString(strings.TrimSpace(sub.ProvenanceHex))
+	if pErr != nil || len(provRaw) == 0 {
+		return errors.New("invalid submission provenanceHex")
+	}
+	expectedHDP := core.SHA256(core.Concat(core.TagProv, []byte(sub.Text), provRaw))
+	if !core.EqualBytes(expectedHDP, hdpBytes) {
+		return errors.New("submission text/provenance does not match hdp")
+	}
+	prov, parseErr := core.ParseProvenance(provRaw)
+	if parseErr != nil {
+		return fmt.Errorf("invalid provenance framing: %w", parseErr)
+	}
+
+	// Verify authorship binding: Provenance signature AND BountySubmission OwnerSig must both verify
+	// under the same ProvenancePub so third parties cannot replay someone else's public ProofBundle.
+	if strings.TrimSpace(sub.ProvenancePub) == "" || strings.TrimSpace(sub.OwnerSig) == "" {
+		return errors.New("missing provenancePub or ownerSig authorship proof")
+	}
+	provPubBytes, err := hex.DecodeString(strings.TrimSpace(sub.ProvenancePub))
+	if err != nil {
+		return errors.New("invalid provenancePub hex")
+	}
+	provPub, err := ec.ParsePubKey(provPubBytes)
+	if err != nil {
+		return fmt.Errorf("invalid provenancePub: %w", err)
+	}
+	provSig, err := ec.ParseDERSignature(prov.Signature)
+	if err != nil {
+		return fmt.Errorf("invalid provenance signature: %w", err)
+	}
+	if !provSig.Verify(core.ProvenanceDigest([]byte(sub.Text), prov), provPub) {
+		return errors.New("provenance signature does not verify against provenancePub")
+	}
+	ownerSigBytes, err := hex.DecodeString(strings.TrimSpace(sub.OwnerSig))
+	if err != nil {
+		return errors.New("invalid ownerSig hex")
+	}
+	ownerSig, err := ec.ParseDERSignature(ownerSigBytes)
+	if err != nil {
+		return fmt.Errorf("invalid ownerSig: %w", err)
+	}
+	signableRaw, err := core.CanonicalJSON(sub.Signable(canonicalHDP))
+	if err != nil {
+		return err
+	}
+	if !ownerSig.Verify(core.SHA256(signableRaw), provPub) {
+		return errors.New("ownerSig does not verify against provenancePub")
+	}
+
 	expectedLeaf := core.ToHex(core.ComputeLeaf(core.Fragment{HDP: hdpBytes}))
 	if !strings.EqualFold(pb.Leaf, expectedLeaf) {
 		return errors.New("proofBundle leaf does not commit to submission hdp")

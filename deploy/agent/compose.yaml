@@ -8,9 +8,10 @@ services:
     restart: unless-stopped
     environment:
       RESTATE_NODE_NAME: nektar
-      RESTATE_REQUEST_IDENTITY_PRIVATE_KEY: ${RESTATE_REQUEST_IDENTITY_PRIVATE_KEY:-}
+      RESTATE_BASE_DIR: /restate-data
+      RESTATE_WORKER__INVOKER__REQUEST_IDENTITY_PRIVATE_KEY_PEM_FILE: ${RESTATE_IDENTITY_PRIVATE_KEY_PEM_FILE:-}
     healthcheck:
-      test: ['CMD-SHELL', 'curl -fsS http://127.0.0.1:9070/health >/dev/null 2>&1 || wget -qO- http://127.0.0.1:9070/health >/dev/null 2>&1 || true']
+      test: ['CMD', 'bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/9070 && printf "GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && grep -q "200" <&3']
       interval: 5s
       timeout: 3s
       retries: 20
@@ -32,6 +33,8 @@ services:
       NEKTAR_HTTP_PORT: '18420'
       NEKTAR_CONTAINER: '1'
       NEKTAR_PUBLIC_URL: ${NEKTAR_PUBLIC_URL:-}
+      NEKTAR_VERIFY_BASE: ${NEKTAR_VERIFY_BASE:-}
+      NEKTAR_TRUST_PROXY: ${NEKTAR_TRUST_PROXY:-0}
       NEKTAR_HTTP_TOKEN: ${NEKTAR_HTTP_TOKEN:-}
       NEKTAR_OPERATOR_TOKEN: ${NEKTAR_OPERATOR_TOKEN:-}
       NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:-}
@@ -60,7 +63,7 @@ services:
 
   caddy:
     profiles: [tls]
-    image: caddy:2-alpine
+    image: caddy:2.9.1-alpine
     restart: unless-stopped
     ports:
       - '80:80'

@@ -79,7 +79,9 @@ func cmdDoctor(args []string) error {
 	if info, ok := server.DetectLiveDaemon(dir); ok {
 		out, err := callLiveTool(info, "doctor", map[string]any{})
 		if err == nil {
-			return printJSON(map[string]any{"daemon": info, "diagnosis": out})
+			redacted := *info
+			redacted.AuthToken = ""
+			return printJSON(map[string]any{"daemon": &redacted, "diagnosis": out})
 		}
 	}
 	ctx := context.Background()

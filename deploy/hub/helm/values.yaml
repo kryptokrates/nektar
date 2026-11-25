@@ -11,16 +11,17 @@ network: testnet
 
 # Public base URL of this Hub (e.g. https://hub.example.com).
 publicUrl: ''
+# Trust X-Forwarded-* headers from the cluster Ingress controller.
+trustProxy: true
 # Optional extra peer market hosts (comma-separated).
 marketHosts: ''
 
 agent:
   modelId: unspecified
-  automation: true
-  announce: true
   seedDomains: '*'
-  operatorToken: ''
   verifyBase: ''
+  headersSource: 'woc:test'
+  settleSpec: ''
   maxFeeSatsPerTx: ''
   maxSpendSatsPerDay: ''
   mainnetConfirm: ''
@@ -57,5 +58,13 @@ restate:
     repository: docker.restate.dev/restatedev/restate
     tag: '1.8.1'
     pullPolicy: IfNotPresent
+  identityPublicKey: ''
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
   persistence:
     size: 1Gi
+    storageClass: ''

@@ -1,20 +1,16 @@
-// DisclosureSale — GOAL-v7 V3: atomic payment-for-disclosure escrow,
-// the BIP-199 HTLC shape adapted to a covenant-pinned output set.
-// The BUYER funds the escrow; `buy` reveals `wrapped` on-chain in the
-// SAME tx that pays the seller — payment and disclosure settle atomically.
-// If the seller never reveals, the DEPOSITOR (buyer) reclaims the escrow
-// after `refundAfter` — the seller can never take a deposit without
-// revealing. `wrapped` is a DisclosureEnvelope ciphertext (BRC-42 to the
-// buyer), so on-chain exposure is safe; or plaintext {field,salt,path}
-// for paid public disclosure. Stateless terminal contract: both methods
-// spend the escrow once.
-//   buy:    outputs = [pay→sellerPkh (price), change→depositorPkh]
-//   refund: outputs = [pay→depositorPkh], depositor-signed, locktime-gated
+// DisclosureSale — GOAL-v7 V4: hardened atomic payment-for-disclosure escrow.
+// Security invariants enforced under consensus:
+//   - F-05: buy/buyGated verify native BRC-369 keyed.Commitment(wrapped):
+//           len(wrapped) === 32 AND sha256("metanet keyed content commitment v1" || wrapped) === hWrapped
+//           so hWrapped === KeyCommitment directly under Bitcoin Script consensus.
+//   - F-06: buy() asserts len(verdictOutpoint) === 0n so verdict-gated escrows cannot bypass buyGated().
+//   - F-02: refund() enforces extractSequence < 0xffffffff AND matching locktime domain (< or >= 500_000_000).
+//   - F-19: unsigned varint length encoding in out() + 20-byte PKH and positive changeSats checks.
 import {
   SmartContract,
   assert, checkSig, checkPreimage, extractOutputHash, extractAmount, extractLocktime,
-  extractHashPrevouts, extractOutpoint,
-  sha256, hash160, hash256, cat, len, num2bin, toByteString,
+  extractSequence, extractHashPrevouts, extractOutpoint,
+  sha256, hash160, hash256, cat, len, left, num2bin, toByteString,
   type PubKey, type Sig, type SigHashPreimage, type Sha256, type ByteString
 } from 'runar-lang'
 
@@ -39,55 +35,57 @@ export class DisclosureSale extends SmartContract {
   }
 
   private p2pkh (pkh: ByteString): ByteString {
-    // see NektarFeeVault — buildP2PKH is declared but not compilable in 0.4.6
     return cat(toByteString('76a914'), cat(pkh, toByteString('88ac')))
   }
 
   private out (sats: bigint, script: ByteString): ByteString {
-    // tx output envelope = value(8LE) + varint(scriptLen) + script — the
-    // serialization hashOutputs commits to (runar-lang has no output-builder
-    // builtin for stateless contracts in 0.4.6).
     const sl = len(script)
-    const slB = sl < 253n ? num2bin(sl, 1n) : cat(num2bin(253n, 1n), num2bin(sl, 2n))
+    const slB = sl < 253n ? left(num2bin(sl, 2n), 1n) : cat(toByteString('fd'), left(num2bin(sl, 4n), 2n))
     return cat(num2bin(sats, 8n), cat(slB, script))
   }
 
-  /** the spend itself reveals `wrapped` — bound to the committed sha256.
-   *  Change is pinned to the DEPOSITOR (post-reveal mempool snipers can't
-   *  redirect it) and the fee is bounded (the deposit can't be burned). */
+  /** Atomic ungated reveal: reveals the 32-byte BRC-369 content key `wrapped` whose
+   *  BRC-369 keyed.Commitment(wrapped) equals `hWrapped`. Refused if verdictOutpoint is set. */
   public buy (wrapped: ByteString, changeSats: bigint, txPreimage: SigHashPreimage) {
     assert(checkPreimage(txPreimage))
-    assert(sha256(wrapped) === this.hWrapped)
+    assert(len(this.verdictOutpoint) === 0n)
+    assert(len(this.sellerPkh) === 20n && len(this.depositorPkh) === 20n)
+    assert(len(wrapped) === 32n)
+    assert(sha256(cat(toByteString('6d6574616e6574206b6579656420636f6e74656e7420636f6d6d69746d656e74207631'), wrapped)) === this.hWrapped)
+    assert(changeSats >= 1n)
     assert(extractAmount(txPreimage) - this.price - changeSats <= this.maxFee)
     assert(hash256(cat(
       this.out(this.price, this.p2pkh(this.sellerPkh)),
       this.out(changeSats, this.p2pkh(this.depositorPkh)))) === extractOutputHash(txPreimage))
   }
 
-  /** GOAL-v9 consumer hook: same atomic buy, but GATED on a settled
-   *  claim — input1 must be the ClaimVerdict UTXO the depositor
-   *  committed at escrow-deploy (`verdictOutpoint` baked at construction,
-   *  i.e. the sale is created after the claim settles). The verdict's
-   *  own script then enforces the payee payout — pay-iff-settled. */
+  /** Atomic ZK-verdict-gated reveal: requires input1 == committed ClaimVerdict outpoint. */
   public buyGated (wrapped: ByteString, changeSats: bigint, prevouts: ByteString, txPreimage: SigHashPreimage) {
     assert(checkPreimage(txPreimage))
-    assert(sha256(wrapped) === this.hWrapped)
-    // exactly two inputs, input1 = the committed verdict UTXO
+    assert(len(this.verdictOutpoint) === 36n)
+    assert(len(this.sellerPkh) === 20n && len(this.depositorPkh) === 20n)
+    assert(len(wrapped) === 32n)
+    assert(sha256(cat(toByteString('6d6574616e6574206b6579656420636f6e74656e7420636f6d6d69746d656e74207631'), wrapped)) === this.hWrapped)
     assert(hash256(prevouts) === extractHashPrevouts(txPreimage))
     assert(prevouts === cat(extractOutpoint(txPreimage), this.verdictOutpoint))
+    assert(changeSats >= 1n)
     assert(extractAmount(txPreimage) - this.price - changeSats <= this.maxFee)
     assert(hash256(cat(
       this.out(this.price, this.p2pkh(this.sellerPkh)),
       this.out(changeSats, this.p2pkh(this.depositorPkh)))) === extractOutputHash(txPreimage))
   }
 
-  /** the DEPOSITOR reclaims an unrevealed escrow after the deadline —
-   *  BIP-199 refund leg: the seller can never take the deposit. */
+  /** Depositor reclaims an unrevealed escrow after refundAfter (consensus locktime enforced). */
   public refund (sig: Sig, pubKey: PubKey, changeSats: bigint, txPreimage: SigHashPreimage) {
     assert(checkPreimage(txPreimage))
+    assert(len(this.depositorPkh) === 20n)
     assert(hash160(pubKey) === this.depositorPkh)
     assert(checkSig(sig, pubKey))
-    assert(extractLocktime(txPreimage) >= this.refundAfter)
+    const lt = extractLocktime(txPreimage)
+    assert(extractSequence(txPreimage) < 4294967295n)
+    assert((this.refundAfter < 500000000n && lt < 500000000n) || (this.refundAfter >= 500000000n && lt >= 500000000n))
+    assert(lt >= this.refundAfter)
+    assert(changeSats >= 1n)
     assert(extractAmount(txPreimage) - changeSats <= this.maxFee)
     assert(hash256(this.out(changeSats, this.p2pkh(this.depositorPkh))) === extractOutputHash(txPreimage))
   }

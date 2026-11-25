@@ -291,7 +291,7 @@ func cmdHubUp(args []string) error {
 		fmt.Printf("nektar hub: resolved zero-domain TLS host -> https://%s\n", domain)
 	}
 
-	if err := os.MkdirAll(*hubDir, 0o750); err != nil {
+	if err := os.MkdirAll(*hubDir, 0o700); err != nil {
 		return err
 	}
 	composeDst := filepath.Join(*hubDir, "compose.yaml")
@@ -340,13 +340,26 @@ func cmdHubUp(args []string) error {
 		pub := "https://" + domain
 		envText = upsertEnvKV(envText, "NEKTAR_DOMAIN", domain)
 		envText = upsertEnvKV(envText, "NEKTAR_PUBLIC_URL", pub)
+		envText = upsertEnvKV(envText, "NEKTAR_TRUST_PROXY", "1")
 		profiles = append(profiles, "tls")
 	} else if *tunnel {
 		envText = upsertEnvKV(envText, "NEKTAR_DOMAIN", ":80")
-		profiles = append(profiles, "tls", "tunnel")
+		envText = upsertEnvKV(envText, "NEKTAR_TRUST_PROXY", "1")
+		if strings.TrimSpace(os.Getenv("CLOUDFLARE_TUNNEL_TOKEN")) != "" {
+			profiles = append(profiles, "tunnel-token")
+		} else {
+			profiles = append(profiles, "tunnel")
+		}
 	}
 
-	if err := os.WriteFile(envPath, []byte(envText), 0o600); err != nil {
+	tmpEnv := envPath + ".tmp"
+	if err := os.WriteFile(tmpEnv, []byte(envText), 0o600); err != nil {
+		_ = os.Remove(tmpEnv)
+		return err
+	}
+	_ = os.Chmod(tmpEnv, 0o600)
+	if err := os.Rename(tmpEnv, envPath); err != nil {
+		_ = os.Remove(tmpEnv)
 		return err
 	}
 	modeDesc := "localhost:" + DefaultLocalPort

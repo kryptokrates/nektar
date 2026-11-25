@@ -61,14 +61,25 @@ func ResolveOrGenerateTokens(dataDir, apiTok, opTok string, requireAuth bool) (h
 func readOrCreateTokenFile(path string) (string, bool) {
 	if raw, err := os.ReadFile(path); err == nil {
 		if s := strings.TrimSpace(string(raw)); len(s) >= 16 {
+			_ = os.Chmod(path, 0o600)
 			return s, false
 		}
 	}
 	var b [32]byte
-	_, _ = rand.Read(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("auth: crypto/rand failed: " + err.Error())
+	}
 	tok := hex.EncodeToString(b[:])
-	_ = os.WriteFile(path, []byte(tok+"\n"), 0o600)
-	_ = os.Chmod(path, 0o600)
+	clear(b[:])
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(tok+"\n"), 0o600); err != nil {
+		_ = os.Remove(tmp)
+		return tok, true
+	}
+	_ = os.Chmod(tmp, 0o600)
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+	}
 	return tok, true
 }
 

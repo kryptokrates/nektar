@@ -1,19 +1,11 @@
-// ClaimVerdict — GOAL-v9 §4.5 consumer hook: the covenant UTXO that
-// NektarZkClaim.settle emits (output[0]). Its STATE is the settled
-// verdict {receiptHash, journalRoot, queryId, payeePkh} — readable
-// on-chain by indexers and verifiable off-chain against the settle tx.
-// Consumers gate on it by pinning its outpoint as input1 (prevouts
-// check, same pin shape as proveStage); when it is spent, THIS script
-// enforces that the tx pays `payeePkh` — the settled prover can't be
-// tricked into burning their verdict for free, and a sale/consumer tx
-// can't execute without consuming the real verdict.
-//   authorize: outputs = [pay→payeePkh (paySats), change] (shared
-//   change with the co-spending consumer, like the stage co-spend).
+// ClaimVerdict — GOAL-v9 §4.5 hardened consumer hook.
+// F-21: authorize() requires payeePkh signature so third parties cannot destroy a
+// pinned ClaimVerdict UTXO standalone for 1 satoshi and DoS DisclosureSale.buyGated.
 import {
   StatefulSmartContract,
-  assert,
+  assert, checkSig, hash160,
   cat, toByteString,
-  type ByteString
+  type Sig, type PubKey, type ByteString
 } from 'runar-lang'
 
 export class ClaimVerdict extends StatefulSmartContract {
@@ -30,11 +22,9 @@ export class ClaimVerdict extends StatefulSmartContract {
     this.payeePkh = payeePkh
   }
 
-  /** spend the verdict — requires output[0] to pay payeePkh ≥ 1 sat.
-   *  The consumer contract enumerates the same output list, so both
-   *  hashOutputs checks pass on the shared tx. `paySats` is caller-set;
-   *  the consumer's own price check bounds it. */
-  public authorize (paySats: bigint) {
+  public authorize (sig: Sig, pubKey: PubKey, paySats: bigint) {
+    assert(hash160(pubKey) === this.payeePkh)
+    assert(checkSig(sig, pubKey))
     assert(paySats >= 1n)
     this.addRawOutput(paySats, cat(toByteString('76a914'), cat(this.payeePkh, toByteString('88ac'))))
   }

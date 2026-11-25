@@ -22,7 +22,7 @@ func (a *App) registerWalletRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/wallet/actions", a.withAuth(http.HandlerFunc(a.handleWalletActions)))
 	mux.Handle("POST /v1/wallet/sync", a.withAuth(http.HandlerFunc(a.handleWalletSync)))
 	mux.Handle("POST /v1/wallet/import", a.withAuth(http.HandlerFunc(a.handleWalletImport)))
-	mux.Handle("POST /v1/wallet/fund-desktop", a.withAuth(http.HandlerFunc(a.handleWalletFundDesktop)))
+	mux.Handle("POST /v1/wallet/fund-desktop", a.withOperatorAuth(http.HandlerFunc(a.handleWalletFundDesktop)))
 	mux.Handle("POST /v1/wallet/send", a.withOperatorAuth(http.HandlerFunc(a.handleWalletSend)))
 	mux.Handle("POST /v1/wallet/sweep", a.withOperatorAuth(http.HandlerFunc(a.handleWalletSweep)))
 	mux.Handle("POST /v1/wallet/consolidate", a.withOperatorAuth(http.HandlerFunc(a.handleWalletConsolidate)))
@@ -32,13 +32,21 @@ func (a *App) registerWalletRoutes(mux *http.ServeMux) {
 	// allowing local BSV tools or another local process to speak BRC-100 wire directly to Nektar's wallet.
 	if a.cfg.ExposeWalletWire && a.mem.Chain().WalletInterface() != nil {
 		wireHandler := wirewallet.Serve(a.mem.Chain().WalletInterface())
-		mux.Handle("/v1/wallet/wire/", http.StripPrefix("/v1/wallet/wire", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !isLoopbackRequest(r) {
-				http.Error(w, "wallet wire is strictly loopback-only", http.StatusForbidden)
+		protectedWire := a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !isStrictLoopbackWireRequest(r) {
+				http.Error(w, "wallet wire is strictly direct loopback-only", http.StatusForbidden)
 				return
 			}
+			if r.Method == http.MethodPost {
+				ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+				if ct != "" && !strings.HasPrefix(ct, "application/octet-stream") {
+					http.Error(w, "wallet wire requires application/octet-stream", http.StatusUnsupportedMediaType)
+					return
+				}
+			}
 			wireHandler.ServeHTTP(w, r)
-		})))
+		}))
+		mux.Handle("/v1/wallet/wire/", http.StripPrefix("/v1/wallet/wire", protectedWire))
 	}
 }
 
@@ -49,6 +57,22 @@ func isLoopbackRequest(r *http.Request) bool {
 	}
 	ip := net.ParseIP(strings.Trim(host, "[]"))
 	return ip != nil && ip.IsLoopback()
+}
+
+func isStrictLoopbackWireRequest(r *http.Request) bool {
+	if !isLoopbackRequest(r) {
+		return false
+	}
+	// Reject any reverse-proxied or browser cross-origin requests.
+	for _, hdr := range []string{"X-Forwarded-For", "Forwarded", "X-Real-IP", "X-Forwarded-Host", "Origin", "Referer", "Sec-Fetch-Site"} {
+		if strings.TrimSpace(r.Header.Get(hdr)) != "" {
+			return false
+		}
+	}
+	if r.Host != "" && !isLoopbackHost(r.Host) {
+		return false
+	}
+	return true
 }
 
 func (a *App) handleWalletStatus(w http.ResponseWriter, r *http.Request) {

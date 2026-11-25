@@ -201,8 +201,12 @@ func (c *RestateClient) RegisterDeployment(ctx context.Context, endpointURI stri
 // StartBuyerDealAsync submits a BuyerDeal workflow asynchronously via sdk-go/ingress (/send) and returns the invocation ID.
 // Restate Workflows are inherently idempotent by workflowID (wantID), so no idempotency-key header is attached.
 func (c *RestateClient) StartBuyerDealAsync(ctx context.Context, wantID string, in BuyerDealInput) (string, error) {
+	var opts []ingress.SendOption
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
 	sr, err := ingress.WorkflowSend[BuyerDealInput](c.Ingress, "BuyerDeal", wantID, "run").
-		Send(ctx, in)
+		Send(ctx, in, opts...)
 	if err != nil {
 		return "", fmt.Errorf("restate: start BuyerDeal %s: %w", wantID, err)
 	}
@@ -228,8 +232,12 @@ func (c *RestateClient) AttachBuyerDeal(ctx context.Context, wantID string) (*De
 
 // BuyerDealStatus queries the shared status handler of a BuyerDeal workflow.
 func (c *RestateClient) BuyerDealStatus(ctx context.Context, wantID string) (*DealState, error) {
+	var opts []ingress.RequestOption
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
 	out, err := ingress.Workflow[restate.Void, DealState](c.Ingress, "BuyerDeal", wantID, "status").
-		Request(ctx, restate.Void{})
+		Request(ctx, restate.Void{}, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -242,8 +250,12 @@ func (c *RestateClient) DeliverBuyerKey(ctx context.Context, wantID string, sig 
 	if sig.ClaimTxID == "" && len(sig.ContentKeyHex) >= 12 {
 		idem = "deliver-key:" + wantID + ":" + sig.ContentKeyHex[:12]
 	}
+	opts := []ingress.RequestOption{restate.WithIdempotencyKey(idem)}
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
 	out, err := ingress.Workflow[ClaimSignal, bool](c.Ingress, "BuyerDeal", wantID, "deliverKey").
-		Request(ctx, sig, restate.WithIdempotencyKey(idem))
+		Request(ctx, sig, opts...)
 	if err != nil {
 		return false, err
 	}
@@ -253,8 +265,12 @@ func (c *RestateClient) DeliverBuyerKey(ctx context.Context, wantID string, sig 
 // StartSellerDealAsync submits a SellerDeal workflow asynchronously via sdk-go/ingress (/send) so the producer never blocks!
 // Restate Workflows are inherently idempotent by workflowID (offerID), so no idempotency-key header is attached.
 func (c *RestateClient) StartSellerDealAsync(ctx context.Context, offerID string, in SellerDealInput) (string, error) {
+	var opts []ingress.SendOption
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
 	sr, err := ingress.WorkflowSend[SellerDealInput](c.Ingress, "SellerDeal", offerID, "run").
-		Send(ctx, in)
+		Send(ctx, in, opts...)
 	if err != nil {
 		return "", fmt.Errorf("restate: start SellerDeal %s: %w", offerID, err)
 	}
@@ -272,8 +288,12 @@ func (c *RestateClient) AttachSellerDeal(ctx context.Context, offerID string) (*
 
 // SellerDealStatus queries the shared status handler of a SellerDeal workflow.
 func (c *RestateClient) SellerDealStatus(ctx context.Context, offerID string) (*DealState, error) {
+	var opts []ingress.RequestOption
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
 	out, err := ingress.Workflow[restate.Void, DealState](c.Ingress, "SellerDeal", offerID, "status").
-		Request(ctx, restate.Void{})
+		Request(ctx, restate.Void{}, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -283,8 +303,12 @@ func (c *RestateClient) SellerDealStatus(ctx context.Context, offerID string) (*
 // DeliverSellerPayment notifies SellerDeal of buyer payment with a confirmation-aware idempotency key (R9).
 func (c *RestateClient) DeliverSellerPayment(ctx context.Context, offerID string, sig PaymentSignal) (bool, error) {
 	idem := fmt.Sprintf("deliver-pay:%s:%s:%v", offerID, sig.TxID, sig.Confirmed)
+	opts := []ingress.RequestOption{restate.WithIdempotencyKey(idem)}
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
 	out, err := ingress.Workflow[PaymentSignal, bool](c.Ingress, "SellerDeal", offerID, "deliverPayment").
-		Request(ctx, sig, restate.WithIdempotencyKey(idem))
+		Request(ctx, sig, opts...)
 	if err != nil {
 		return false, err
 	}
@@ -295,8 +319,12 @@ func (c *RestateClient) DeliverSellerPayment(ctx context.Context, offerID string
 func (c *RestateClient) ConfirmSellerPayment(ctx context.Context, offerID string, sig PaymentSignal) (bool, error) {
 	sig.Confirmed = true
 	idem := fmt.Sprintf("confirm-pay:%s:%s", offerID, sig.TxID)
+	opts := []ingress.RequestOption{restate.WithIdempotencyKey(idem)}
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
 	out, err := ingress.Workflow[PaymentSignal, bool](c.Ingress, "SellerDeal", offerID, "confirmPayment").
-		Request(ctx, sig, restate.WithIdempotencyKey(idem))
+		Request(ctx, sig, opts...)
 	if err != nil {
 		return false, err
 	}
@@ -422,6 +450,9 @@ func (c *RestateClient) RejectAwakeable(ctx context.Context, awakeableID, reason
 func (c *RestateClient) QueryInvocations(ctx context.Context, limit int) ([]RestateInvocation, error) {
 	if limit <= 0 {
 		limit = 25
+	}
+	if limit > 200 {
+		limit = 200
 	}
 	qCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()

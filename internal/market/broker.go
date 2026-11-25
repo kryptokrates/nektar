@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -503,7 +504,7 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	}
 	saleJSON, _ := json.Marshal(wireSale)
 	payAddr, _ := b.mem.Chain().FundAddress()
-	offerID := fmt.Sprintf("off-%s-%d", shortPub(b.PubHex()), time.Now().UnixNano()%1_000_000_000)
+	offerID := fmt.Sprintf("off-%s-%s", shortPub(b.PubHex()), randIDHex())
 
 	b.mu.Lock()
 	pubURL := b.cfg.PublicURL
@@ -683,7 +684,7 @@ func (b *Broker) Want(ctx context.Context, req WantRequest) (*store.DealRecord, 
 		return nil, errors.New("market: operator kill switch is engaged")
 	}
 
-	wantID := fmt.Sprintf("want-%s-%d", shortPub(b.PubHex()), time.Now().UnixNano()%1_000_000_000)
+	wantID := fmt.Sprintf("want-%s-%s", shortPub(b.PubHex()), randIDHex())
 	want := bstack.WantAd{
 		WantID:   wantID,
 		Pub:      b.PubHex(),
@@ -704,7 +705,7 @@ func (b *Broker) Want(ctx context.Context, req WantRequest) (*store.DealRecord, 
 		} else if buyerOK && maxDay > 0 && spent+req.MaxSats > maxDay {
 			reason = fmt.Sprintf("requested maxSats (%d) exceeds remaining daily cap (%d)", req.MaxSats, maxDay-spent)
 		}
-		appID := fmt.Sprintf("appr-%d", time.Now().UnixNano()%1_000_000_000)
+		appID := "appr-" + randIDHex()
 		_ = b.mem.DB().SaveApproval(store.ApprovalRecord{
 			ID:           appID,
 			DealID:       wantID,
@@ -1458,6 +1459,12 @@ func shortPub(s string) string {
 		return s
 	}
 	return s[:10]
+}
+
+func randIDHex() string {
+	var b [8]byte
+	_, _ = crand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 func maxU64(a, b uint64) uint64 {

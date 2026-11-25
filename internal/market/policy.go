@@ -1,6 +1,7 @@
 package market
 
 import (
+	crand "crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -94,8 +95,10 @@ func ApprovePolicyPreset(db *store.DB, pol *Policy, preset string, domains []str
 	if approvedBy == "" {
 		approvedBy = "operator"
 	}
+	var idBytes [6]byte
+	_, _ = crand.Read(idBytes[:])
 	rec := store.OperatorPolicyRecord{
-		PolicyID:    fmt.Sprintf("pol-%s-%d", preset, time.Now().UnixNano()%1_000_000),
+		PolicyID:    fmt.Sprintf("pol-%s-%s", preset, hex.EncodeToString(idBytes[:])),
 		Roles:       roles,
 		Domains:     domains,
 		MaxPerDeal:  2_000,

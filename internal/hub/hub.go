@@ -115,6 +115,7 @@ type rateBucket struct {
 // numbered/cursored SSE /events, NAT-safe /bbox relay, /bounties, and Hub-to-Hub federation.
 type Node struct {
 	mu            sync.RWMutex
+	admitMu       sync.Mutex // serializes AppendEvent -> broadcastEvent so SSE seq order is strictly monotonic
 	net           string
 	host          *simpleHost
 	store         *Store
@@ -427,6 +428,7 @@ func (n *Node) Submit(ctx context.Context, rawBEEF []byte, topics []string) (ove
 			isNew := true
 			nowMs := time.Now().UnixMilli()
 			if isNkt {
+				n.admitMu.Lock()
 				seq, isNew, err = n.store.AppendEvent(StoredEvent{
 					Outpoint:   op.String(),
 					Topic:      topic,
@@ -441,31 +443,44 @@ func (n *Node) Submit(ctx context.Context, rawBEEF []byte, topics []string) (ove
 					AdmittedAt: nowMs,
 				})
 				if err != nil {
+					n.admitMu.Unlock()
 					return nil, err
 				}
-			}
-			for _, ls := range n.lookups {
-				_ = ls.OutputAdmittedByTopic(subCtx, &module.OutputAdmittedByTopic{
-					Mode:          ls.AdmissionMode(),
-					Outpoint:      op,
-					Topic:         topic,
-					Satoshis:      out.Satoshis,
-					LockingScript: out.LockingScript,
-					AtomicBEEF:    rawBEEF,
-				})
-			}
-			if isNkt && n.marketLS != nil {
-				n.marketLS.SetSeq(op.String(), seq)
-			}
-			if isNkt && isNew {
-				n.broadcastEvent(bstack.MarketEvent{
-					Seq:        seq,
-					Topic:      topic,
-					TxID:       txid.String(),
-					Vout:       vout,
-					AdmittedAt: nowMs,
-					Payload:    p,
-				}, domains)
+				for _, ls := range n.lookups {
+					_ = ls.OutputAdmittedByTopic(subCtx, &module.OutputAdmittedByTopic{
+						Mode:          ls.AdmissionMode(),
+						Outpoint:      op,
+						Topic:         topic,
+						Satoshis:      out.Satoshis,
+						LockingScript: out.LockingScript,
+						AtomicBEEF:    rawBEEF,
+					})
+				}
+				if n.marketLS != nil {
+					n.marketLS.SetSeq(op.String(), seq)
+				}
+				if isNew {
+					n.broadcastEvent(bstack.MarketEvent{
+						Seq:        seq,
+						Topic:      topic,
+						TxID:       txid.String(),
+						Vout:       vout,
+						AdmittedAt: nowMs,
+						Payload:    p,
+					}, domains)
+				}
+				n.admitMu.Unlock()
+			} else {
+				for _, ls := range n.lookups {
+					_ = ls.OutputAdmittedByTopic(subCtx, &module.OutputAdmittedByTopic{
+						Mode:          ls.AdmissionMode(),
+						Outpoint:      op,
+						Topic:         topic,
+						Satoshis:      out.Satoshis,
+						LockingScript: out.LockingScript,
+						AtomicBEEF:    rawBEEF,
+					})
+				}
 			}
 		}
 		inst.OutputsToAdmit = admitted

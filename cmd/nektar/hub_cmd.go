@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,6 +26,7 @@ import (
 
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/server"
 )
@@ -45,6 +48,8 @@ Options for 'up':
   --tunnel                 Zero-port HTTPS via Cloudflare Quick Tunnel (works behind NAT)
   --network <testnet|main> Network (default: testnet; main requires --confirm I_UNDERSTAND)
   --confirm I_UNDERSTAND   Required acknowledgement for mainnet
+  --hub-role <leaf|spine>  Spine-and-Leaf topology role (default: leaf)
+  --fee-preset <preset>    Monetization preset (free|lightbsv_egress|hybrid; default: free)
   --dir <path>             Hub directory (default: ~/.nektar-hub)
   --dry                    Write .env + compose.yaml without starting Docker
   --no-join                Skip auto-joining local running agent to this new hub
@@ -75,8 +80,62 @@ func cmdHubRun(args []string) error {
 	netName := fs.String("network", envOr("NEKTAR_NETWORK", "testnet"), "Network name (memory|regtest|testnet|main)")
 	dataDir := fs.String("data-dir", "", "Data directory for hub.sqlite")
 	peersFlag := fs.String("peers", os.Getenv("NEKTAR_PEER_HUBS"), "Comma-separated sibling Hub URLs to federate with")
+	upstreamFlag := fs.String("upstream-spines", os.Getenv("NEKTAR_UPSTREAM_SPINES"), "Comma-separated Spine Hub URLs for Leaf upstream submission")
 	withLiquidity := fs.Bool("liquidity", true, "Arm Hub starter liquidity, curated shards & verified bounties")
+	hubRoleFlag := fs.String("hub-role", os.Getenv("NEKTAR_HUB_ROLE"), "Hub topology role (leaf|spine)")
+	feePresetFlag := fs.String("fee-preset", os.Getenv("NEKTAR_HUB_FEE_PRESET"), "Hub fee preset (free|lightbsv_egress|hybrid)")
+	wantFeeFlag := fs.Uint64("want-fee-sats", 0, "BRC-105 fee in satoshis for WantAd POST /submit")
+	offerFeeFlag := fs.Uint64("offer-fee-sats", 0, "BRC-105 fee in satoshis for OfferAd POST /submit")
+	announceFeeFlag := fs.Uint64("announce-fee-sats", 0, "BRC-105 fee in satoshis for AnnounceAd POST /submit")
+	bboxFeeFlag := fs.Uint64("bbox-fee-sats", 0, "BRC-105 fee in satoshis for NAT POST /bbox/send")
+	egressFeeFlag := fs.Uint64("egress-sats-per-100", 0, "Metered egress fee in satoshis per 100 market events")
+	lookupPricesFlag := fs.String("lookup-prices", os.Getenv("NEKTAR_HUB_LOOKUP_PRICES"), "Priced lookup classes (e.g. history=5,export=20)")
+	spinePeersFlag := fs.String("spine-peer-pubs", os.Getenv("NEKTAR_SPINE_PEER_PUBS"), "Comma-separated bilateral Spine peer pubkeys (settlement-free peering)")
 	_ = fs.Parse(args)
+
+	visited := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
+
+	feeSched := hub.LoadFeeSchedule(os.Getenv)
+	if visited["fee-preset"] {
+		feeSched = hub.DefaultFeeSchedule(*feePresetFlag)
+		// Re-apply explicit env vars only if not overridden by CLI flags below.
+		if envRole := strings.ToLower(strings.TrimSpace(os.Getenv("NEKTAR_HUB_ROLE"))); envRole == string(hub.RoleSpine) || envRole == string(hub.RoleLeaf) {
+			feeSched.Role = hub.HubRole(envRole)
+		}
+	}
+	if visited["hub-role"] {
+		if r := strings.ToLower(strings.TrimSpace(*hubRoleFlag)); r == string(hub.RoleSpine) || r == string(hub.RoleLeaf) {
+			feeSched.Role = hub.HubRole(r)
+		}
+	}
+	if visited["want-fee-sats"] {
+		feeSched.SubmitWantSats = *wantFeeFlag
+	}
+	if visited["offer-fee-sats"] {
+		feeSched.SubmitOfferSats = *offerFeeFlag
+	}
+	if visited["announce-fee-sats"] {
+		feeSched.SubmitAnnounceSats = *announceFeeFlag
+	}
+	if visited["bbox-fee-sats"] {
+		feeSched.BboxSendSats = *bboxFeeFlag
+	}
+	if visited["egress-sats-per-100"] {
+		feeSched.EgressSatsPer100Events = *egressFeeFlag
+	}
+	if visited["lookup-prices"] {
+		feeSched.LookupPrices = hub.ParseLookupPrices(*lookupPricesFlag)
+	}
+	if visited["spine-peer-pubs"] {
+		feeSched.SpinePeerPubs = nil
+		for _, p := range strings.Split(*spinePeersFlag, ",") {
+			if p = strings.ToLower(strings.TrimSpace(p)); p != "" {
+				feeSched.SpinePeerPubs = append(feeSched.SpinePeerPubs, p)
+			}
+		}
+	}
+	feeSched.Normalize()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -91,7 +150,7 @@ func cmdHubRun(args []string) error {
 	}
 
 	var rt *runtimeBundle
-	if *withLiquidity {
+	if *withLiquidity || feeSched.HasAnyFees() {
 		if *netName != "memory" {
 			releaseLock, lockErr := acquireInstanceLock(dir, *addr)
 			if lockErr != nil {
@@ -102,6 +161,9 @@ func cmdHubRun(args []string) error {
 		var rErr error
 		rt, rErr = openRuntime(ctx, *netName, *dataDir, envOr("NEKTAR_HUB_PORT", "18421"))
 		if rErr != nil {
+			if feeSched.HasAnyFees() {
+				return fmt.Errorf("hub: wallet runtime required when fees are enabled: %w", rErr)
+			}
 			log.Printf("hub liquidity runtime skipped: %v", rErr)
 		} else {
 			defer rt.closeFn()
@@ -112,19 +174,29 @@ func cmdHubRun(args []string) error {
 		}
 	}
 
+	var upstreamSpines []string
+	for _, s := range strings.Split(*upstreamFlag, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			upstreamSpines = append(upstreamSpines, s)
+		}
+	}
+
 	hCfg := hub.Config{
-		Network:       *netName,
-		DBPath:        dbPath,
-		EnableFinger:  true,
-		EnableBbox:    true,
-		EnableBlogs:   true,
-		EnableBorg:    true,
-		EnableBsecret: true,
-		EnableBstore:  true,
-		Getenv:        os.Getenv,
+		Network:        *netName,
+		DBPath:         dbPath,
+		EnableFinger:   true,
+		EnableBbox:     true,
+		EnableBlogs:    true,
+		EnableBorg:     true,
+		EnableBsecret:  true,
+		EnableBstore:   true,
+		Getenv:         os.Getenv,
+		Fees:           feeSched,
+		UpstreamSpines: upstreamSpines,
 	}
 	if rt != nil {
 		hCfg.ChainTracker = rt.mem.Chain().Tracker()
+		hCfg.FeeCollector = hub.NewPortFeeCollector(rt.mem.Chain())
 	} else if *netName == "main" || *netName == "testnet" {
 		headerSpec := strings.TrimSpace(os.Getenv("NEKTAR_HEADERS_SOURCE"))
 		if headerSpec == "" {
@@ -152,6 +224,22 @@ func cmdHubRun(args []string) error {
 	defer node.Close()
 
 	if rt != nil {
+		if rt.disc != nil && rt.mkt != nil && rt.mkt.Policy() != nil {
+			rt.disc.SetHubFeePolicy(rt.mkt.Policy().CanPayHubFee, rt.mkt.Policy().RecordHubFeeSpend)
+		}
+		if rt.disc != nil {
+			node.SetUpstreamSubmitter(rt.disc.SubmitBEEF)
+			node.SetEgressAuth(
+				func(action, aud string, cursor int64, domainsCSV string) (string, string, string, string, error) {
+					return discovery.SignEgressAuthHeaders(rt.disc.AnnounceKey(), action, aud, cursor, domainsCSV)
+				},
+				func(tCtx context.Context, spineURL string, minTopupSats uint64) error {
+					_, tErr := rt.disc.TopUpHubEgressCredits(tCtx, spineURL, minTopupSats, rt.disc.AnnouncePubHex())
+					return tErr
+				},
+				nil,
+			)
+		}
 		rt.mem.Chain().OnTxMined(func(txid string, height uint32, mp *transaction.MerklePath) {
 			mCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
@@ -159,6 +247,7 @@ func cmdHubRun(args []string) error {
 				_, _ = hub.RefreshHubLiquidityStock(mCtx, rt.mem)
 			}
 			_ = node.OnBountyPayoutMined(txid)
+			_ = node.OnFeePaymentMined(txid, height)
 		})
 		rt.mem.Chain().OnReorg(func(forkHeight uint32, _ []string) {
 			rCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -166,13 +255,15 @@ func cmdHubRun(args []string) error {
 			_, _ = rt.mem.HandleReorg(forkHeight)
 			_ = node.HandleReorg(rCtx, forkHeight)
 		})
-		if _, lErr := hub.ArmHubLiquidity(ctx, node, rt.mem, hub.LiquidityConfig{
-			SeedStarterShards: true,
-			ArmBounties:       true,
-			StarterPriceSats:  90,
-			BountyRewardSats:  100,
-		}); lErr != nil {
-			log.Printf("hub liquidity warning: %v", lErr)
+		if *withLiquidity {
+			if _, lErr := hub.ArmHubLiquidity(ctx, node, rt.mem, hub.LiquidityConfig{
+				SeedStarterShards: true,
+				ArmBounties:       true,
+				StarterPriceSats:  90,
+				BountyRewardSats:  100,
+			}); lErr != nil {
+				log.Printf("hub liquidity warning: %v", lErr)
+			}
 		}
 	}
 
@@ -183,7 +274,7 @@ func cmdHubRun(args []string) error {
 				peers = append(peers, p)
 			}
 		}
-		node.StartFederation(ctx, peers)
+		node.StartFederationWithTier(ctx, peers, true)
 	}
 
 	httpSrv := &http.Server{Addr: *addr, Handler: node.Handler(), ReadHeaderTimeout: 15 * time.Second}
@@ -196,8 +287,8 @@ func cmdHubRun(args []string) error {
 		defer cancel()
 		_ = httpSrv.Shutdown(shutCtx)
 	}()
-	log.Printf("nektar hub v%s listening on %s (network=%s db=%s topics=%d lookups=%d liquidity=%v)",
-		Version, *addr, *netName, dbPath, len(node.Topics()), len(node.Lookups()), rt != nil)
+	log.Printf("nektar hub v%s listening on %s (network=%s role=%s fees=%s db=%s topics=%d lookups=%d liquidity=%v)",
+		Version, *addr, *netName, feeSched.Role, feeSched.Preset, dbPath, len(node.Topics()), len(node.Lookups()), rt != nil && *withLiquidity)
 	serveErr := httpSrv.ListenAndServe()
 	if serveErr != nil && serveErr != http.ErrServerClosed {
 		stop()
@@ -255,6 +346,37 @@ func cmdHubLifecycle(sub string, args []string) error {
 	}
 	if sub == "status" {
 		fmt.Printf("\nhub dir : %s\n", *hubDir)
+		port := DefaultLocalPort
+		if raw, err := os.ReadFile(filepath.Join(*hubDir, ".env")); err == nil {
+			for _, ln := range strings.Split(string(raw), "\n") {
+				if k, v, ok := strings.Cut(strings.TrimSpace(ln), "="); ok && k == "NEKTAR_HTTP_PORT" && strings.TrimSpace(v) != "" {
+					if _, pErr := strconv.Atoi(strings.TrimSpace(v)); pErr == nil {
+						port = strings.TrimSpace(v)
+					}
+				}
+			}
+		}
+		hc := &http.Client{Timeout: 3 * time.Second}
+		for _, path := range []string{"/hub/v1/hub/earnings", "/v1/hub/earnings"} {
+			if resp, err := hc.Get("http://127.0.0.1:" + port + path); err == nil {
+				if resp.StatusCode == http.StatusOK {
+					var res struct {
+						Role     string                 `json:"role"`
+						Earnings hub.FeeEarningsSummary `json:"earnings"`
+					}
+					if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&res) == nil {
+						fmt.Printf("role    : %s\n", res.Role)
+						fmt.Printf("earned  : %d sats total (%d sats 24h, %d mined, %d unmined fast)\n",
+							res.Earnings.TotalEarnedSats, res.Earnings.Earned24hSats, res.Earnings.MinedEarnedSats, res.Earnings.UnminedFastSats)
+						fmt.Printf("egress  : %d events billed across %d account(s) (flagged payers: %d)\n",
+							res.Earnings.TotalEgressDelivered, res.Earnings.ActiveCreditAccounts, res.Earnings.FlaggedPayers)
+					}
+					resp.Body.Close()
+					break
+				}
+				resp.Body.Close()
+			}
+		}
 	}
 	return nil
 }
@@ -303,6 +425,8 @@ func cmdHubUp(args []string) error {
 	tunnel := fs.Bool("tunnel", false, "Zero-port HTTPS via Cloudflare Quick Tunnel")
 	netFlag := fs.String("network", envOr("NEKTAR_NETWORK", "testnet"), "Network (testnet|main)")
 	confirm := fs.String("confirm", os.Getenv("NEKTAR_MAINNET_CONFIRM"), "Required I_UNDERSTAND for mainnet")
+	hubRoleFlag := fs.String("hub-role", envOr("NEKTAR_HUB_ROLE", string(hub.RoleLeaf)), "Spine-and-Leaf topology role (leaf|spine)")
+	feePresetFlag := fs.String("fee-preset", envOr("NEKTAR_HUB_FEE_PRESET", hub.PresetFree), "Monetization preset (free|lightbsv_egress|hybrid)")
 	hubDir := fs.String("dir", defaultHubDir(), "Hub directory")
 	dry := fs.Bool("dry", false, "Write .env + compose.yaml without running Docker")
 	noJoin := fs.Bool("no-join", false, "Skip auto-joining local agent to this new hub")
@@ -366,6 +490,16 @@ func cmdHubUp(args []string) error {
 	}
 	envText = upsertEnvKV(envText, "NEKTAR_NETWORK", net)
 	envText = upsertEnvKV(envText, "NEKTAR_HTTP_PORT", DefaultLocalPort)
+	roleNorm := strings.ToLower(strings.TrimSpace(*hubRoleFlag))
+	if roleNorm != string(hub.RoleSpine) {
+		roleNorm = string(hub.RoleLeaf)
+	}
+	presetNorm := strings.ToLower(strings.TrimSpace(*feePresetFlag))
+	if presetNorm == "" {
+		presetNorm = hub.PresetFree
+	}
+	envText = upsertEnvKV(envText, "NEKTAR_HUB_ROLE", roleNorm)
+	envText = upsertEnvKV(envText, "NEKTAR_HUB_FEE_PRESET", presetNorm)
 	if net == "main" {
 		envText = upsertEnvKV(envText, "NEKTAR_MAINNET_CONFIRM", "I_UNDERSTAND")
 		envText = upsertEnvKV(envText, "NEKTAR_HEADERS_SOURCE", chain.DefaultHeaderSources("main"))

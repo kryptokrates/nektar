@@ -178,6 +178,25 @@ func (a *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(&b, "nektar_hub_bounties_filled_total{domain=%q} %d\n", d, byDom[d])
 			}
 		}
+		if earn, err := a.cfg.Hub.Store().FeeEarningsSummary(time.Now().Add(-24 * time.Hour).Unix()); err == nil {
+			if len(earn.ByActionSats) > 0 {
+				acts := make([]string, 0, len(earn.ByActionSats))
+				for act := range earn.ByActionSats {
+					acts = append(acts, act)
+				}
+				sort.Strings(acts)
+				fmt.Fprintln(&b, "# HELP nektar_hub_fee_earned_sats_total Total Hub operator BRC-105 fees earned by action in satoshis.")
+				fmt.Fprintln(&b, "# TYPE nektar_hub_fee_earned_sats_total counter")
+				for _, act := range acts {
+					fmt.Fprintf(&b, "nektar_hub_fee_earned_sats_total{action=%q} %d\n", act, earn.ByActionSats[act])
+				}
+			}
+			writeCounter("nektar_hub_fee_earned_total_sats", "Total Hub operator BRC-105 fees earned across all valves in satoshis.", float64(earn.TotalEarnedSats))
+			writeCounter("nektar_hub_egress_events_billed_total", "Total metered market events delivered on Hub egress streams.", float64(earn.TotalEgressDelivered))
+			writeGauge("nektar_hub_egress_active_accounts", "Active prepaid Hub egress credit accounts.", float64(earn.ActiveCreditAccounts))
+			writeGauge("nektar_hub_flagged_payers", "Payers permanently flagged for unsettleable fast payments.", float64(earn.FlaggedPayers))
+			writeGauge("nektar_hub_unmined_fast_sats", "Unmined fast-path Hub fee exposure in satoshis.", float64(earn.UnminedFastSats))
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

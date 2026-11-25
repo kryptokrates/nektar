@@ -344,14 +344,16 @@ type BalanceBreakdown struct {
 
 // SendArgs sends BSV to either a P2PKH address OR a BRC-100 identity public key (BRC-29).
 type SendArgs struct {
-	ToAddress     string   `json:"toAddress,omitempty"`
-	ToIdentityKey string   `json:"toIdentityKey,omitempty"`
-	Satoshis      uint64   `json:"satoshis"`
-	Description   string   `json:"description,omitempty"`
-	Labels        []string `json:"labels,omitempty"`
-	AcceptDelayed bool     `json:"acceptDelayed,omitempty"`
-	NoSend        bool     `json:"noSend,omitempty"`
-	OverrideGuard bool     `json:"overrideGuard,omitempty"`
+	ToAddress        string   `json:"toAddress,omitempty"`
+	ToIdentityKey    string   `json:"toIdentityKey,omitempty"`
+	DerivationPrefix string   `json:"derivationPrefix,omitempty"` // optional server-issued BRC-105 prefix
+	DerivationSuffix string   `json:"derivationSuffix,omitempty"` // optional caller-supplied suffix
+	Satoshis         uint64   `json:"satoshis"`
+	Description      string   `json:"description,omitempty"`
+	Labels           []string `json:"labels,omitempty"`
+	AcceptDelayed    bool     `json:"acceptDelayed,omitempty"`
+	NoSend           bool     `json:"noSend,omitempty"`
+	OverrideGuard    bool     `json:"overrideGuard,omitempty"`
 }
 
 // SendResult returns the signed tx, AtomicBEEF, and BRC-29 remittance (when sent to an identity key).

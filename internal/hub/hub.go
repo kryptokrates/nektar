@@ -3,6 +3,7 @@ package hub
 import (
 	"bufio"
 	"context"
+	crand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -98,6 +100,14 @@ type Config struct {
 	OnBountySubmit   BountyHandler
 	Getenv           func(string) string
 	ChainTracker     chaintracker.ChainTracker
+	Fees             FeeSchedule
+	FeeCollector     FeeCollector
+	PrefixSecret     []byte
+	UpstreamSpines   []string
+	UpstreamSubmitter func(ctx context.Context, spineURL string, beef []byte, topics []string) error
+	EgressAuthSigner  func(action, aud string, cursor int64, domainsCSV string) (pub, ts, nonce, sig string, err error)
+	OnEgressTopup     func(ctx context.Context, spineURL string, minTopupSats uint64) error
+	SubscribedDomains func() []string
 }
 
 type simpleHost struct {
@@ -147,27 +157,37 @@ const (
 // Node is a durable, self-contained Go overlay hub serving BRC-22 /submit, BRC-24 /lookup,
 // numbered/cursored SSE /events, NAT-safe /bbox relay, /bounties, and Hub-to-Hub federation.
 type Node struct {
-	mu            sync.RWMutex
-	admitMu       sync.Mutex // serializes AppendEvent -> broadcastEvent so SSE seq order is strictly monotonic
-	net           string
-	host          *simpleHost
-	store         *Store
-	marketLS      *bstack.MarketLookupService
-	topics        map[string]module.TopicManager
-	lookups       map[string]module.LookupService
-	subs          map[chan bstack.MarketEvent]map[string]bool
-	rates         map[string]*rateBucket
-	bboxNonces    map[string]int64
-	maxPerMin     int
-	tracker       chaintracker.ChainTracker
-	bountyHandler BountyHandler
-	httpClient    *http.Client
-	sseClient     *http.Client
-	stopCh       chan struct{}
-	closeOnce    sync.Once
-	sseStopCh    chan struct{}
-	sseCloseOnce sync.Once
-	wg           sync.WaitGroup
+	mu                sync.RWMutex
+	admitMu           sync.Mutex // serializes AppendEvent -> broadcastEvent so SSE seq order is strictly monotonic
+	net               string
+	host              *simpleHost
+	store             *Store
+	marketLS          *bstack.MarketLookupService
+	topics            map[string]module.TopicManager
+	lookups           map[string]module.LookupService
+	subs              map[chan bstack.MarketEvent]map[string]bool
+	rates             map[string]*rateBucket
+	bboxNonces        map[string]int64
+	maxPerMin         int
+	tracker           chaintracker.ChainTracker
+	bountyHandler     BountyHandler
+	fees              FeeSchedule
+	feeCollector      FeeCollector
+	prefixSecret      []byte
+	spinePeers        map[string]bool
+	upstreamSpines    []string
+	upstreamSubmitter func(ctx context.Context, spineURL string, beef []byte, topics []string) error
+	egressAuthSigner  func(action, aud string, cursor int64, domainsCSV string) (pub, ts, nonce, sig string, err error)
+	onEgressTopup     func(ctx context.Context, spineURL string, minTopupSats uint64) error
+	subscribedDomains func() []string
+	fedStarted        map[string]bool
+	httpClient        *http.Client
+	sseClient         *http.Client
+	stopCh            chan struct{}
+	closeOnce         sync.Once
+	sseStopCh         chan struct{}
+	sseCloseOnce      sync.Once
+	wg                sync.WaitGroup
 }
 
 // NewNode constructs an embedded durable Hub Node mounting Nektar's 16 market lanes + requested Lightweb modules.
@@ -191,22 +211,70 @@ func NewNode(cfg Config) (*Node, error) {
 	if maxPerMin <= 0 {
 		maxPerMin = 120
 	}
+	fees := cfg.Fees
+	if !fees.HasAnyFees() && fees.Role == "" && fees.Preset == "" && len(fees.SpinePeerPubs) == 0 {
+		fees = LoadFeeSchedule(getenv)
+	}
+	fees.Normalize()
+	if fees.HasAnyFees() && cfg.FeeCollector == nil {
+		_ = st.Close()
+		return nil, errors.New("hub: FeeCollector wallet is required when hub fee schedule has non-zero prices")
+	}
+	prefixSecret := append([]byte(nil), cfg.PrefixSecret...)
+	if len(prefixSecret) < 16 {
+		sec, sErr := st.GetOrCreateKV("hub_prefix_secret", func() ([]byte, error) {
+			b := make([]byte, 32)
+			if _, rErr := crand.Read(b); rErr != nil {
+				return nil, rErr
+			}
+			return b, nil
+		})
+		if sErr != nil {
+			_ = st.Close()
+			return nil, fmt.Errorf("hub: init prefix secret: %w", sErr)
+		}
+		prefixSecret = sec
+	}
+	spinePeers := make(map[string]bool, len(fees.SpinePeerPubs))
+	for _, sp := range fees.SpinePeerPubs {
+		if sp = strings.ToLower(strings.TrimSpace(sp)); sp != "" {
+			spinePeers[sp] = true
+		}
+	}
+	var upSpines []string
+	seenSpine := make(map[string]bool)
+	for _, u := range cfg.UpstreamSpines {
+		if u = strings.TrimRight(strings.TrimSpace(u), "/"); u != "" && !seenSpine[u] {
+			seenSpine[u] = true
+			upSpines = append(upSpines, u)
+		}
+	}
 	n := &Node{
-		net:           net,
-		host:          newSimpleHost(),
-		store:         st,
-		topics:        make(map[string]module.TopicManager),
-		lookups:       make(map[string]module.LookupService),
-		subs:          make(map[chan bstack.MarketEvent]map[string]bool),
-		rates:         make(map[string]*rateBucket),
-		bboxNonces:    make(map[string]int64),
-		maxPerMin:     maxPerMin,
-		tracker:       cfg.ChainTracker,
-		bountyHandler: cfg.OnBountySubmit,
-		httpClient:    core.SafeHTTPClientForNetwork(net, 20*time.Second),
-		sseClient:     core.SafeHTTPClientForNetwork(net, 0),
-		stopCh:        make(chan struct{}),
-		sseStopCh:     make(chan struct{}),
+		net:               net,
+		host:              newSimpleHost(),
+		store:             st,
+		topics:            make(map[string]module.TopicManager),
+		lookups:           make(map[string]module.LookupService),
+		subs:              make(map[chan bstack.MarketEvent]map[string]bool),
+		rates:             make(map[string]*rateBucket),
+		bboxNonces:        make(map[string]int64),
+		maxPerMin:         maxPerMin,
+		tracker:           cfg.ChainTracker,
+		bountyHandler:     cfg.OnBountySubmit,
+		fees:              fees,
+		feeCollector:      cfg.FeeCollector,
+		prefixSecret:      prefixSecret,
+		spinePeers:        spinePeers,
+		upstreamSpines:    upSpines,
+		upstreamSubmitter: cfg.UpstreamSubmitter,
+		egressAuthSigner:  cfg.EgressAuthSigner,
+		onEgressTopup:     cfg.OnEgressTopup,
+		subscribedDomains: cfg.SubscribedDomains,
+		fedStarted:        make(map[string]bool),
+		httpClient:        core.SafeHTTPClientForNetwork(net, 20*time.Second),
+		sseClient:         core.SafeHTTPClientForNetwork(net, 0),
+		stopCh:            make(chan struct{}),
+		sseStopCh:         make(chan struct{}),
 	}
 
 	// 1. Mount Nektar v0.4 market module (tm_nektar_<net>_0..f + ls_nektar) with durable SSE callback!

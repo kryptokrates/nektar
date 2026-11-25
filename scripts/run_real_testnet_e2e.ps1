@@ -28,7 +28,7 @@ $env:PATH = "$env:USERPROFILE\.local\go\bin;$env:USERPROFILE\.local\bin;$env:PAT
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $exePath  = Join-Path $repoRoot "nektar.exe"
 $hermesPy = Join-Path $repoRoot "scripts\hermes_agent_runner.py"
-$agentsJS = Join-Path $repoRoot "scripts\testnet_real_agents_e2e.mjs"
+$agentsGo = Join-Path $repoRoot "scripts\testnet_real_agents_e2e.go"
 
 if (-not $SkipBuild) {
     Write-Host "=== Building zero-CGO production nektar.exe ==="
@@ -138,9 +138,9 @@ function Run-Hermes($phase, $tag) {
 }
 
 function Run-NodeAgent($role, $phase, $argList) {
-    $allArgs = @($agentsJS, $role, $phase) + $argList
-    $out = (& node @allArgs) -join "`n"
-    if ($LASTEXITCODE -ne 0) { throw "Node agent $role ($phase) failed: $out" }
+    $allArgs = @("run", $agentsGo, $role, $phase) + $argList
+    $out = (& go @allArgs) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "Go agent $role ($phase) failed: $out" }
     return ($out | ConvertFrom-Json)
 }
 
@@ -155,7 +155,7 @@ try {
     Write-Host "=========================================================================`n"
 
     # Start local mock LLM upstream for Gamma's real L0 OpenAI & Anthropic proxy tests!
-    $mockLLM = Start-Process -FilePath "node" -ArgumentList @($agentsJS, "mock-llm", "$mockLLMPort") -PassThru -NoNewWindow
+    $mockLLM = Start-Process -FilePath "go" -ArgumentList @("run", $agentsGo, "mock-llm", "$mockLLMPort") -PassThru -NoNewWindow
     $procs["mockllm"] = $mockLLM
     Start-Sleep -Milliseconds 350
 

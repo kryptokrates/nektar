@@ -163,6 +163,11 @@ type Policy struct {
 	BlockedSellers           map[string]bool   `json:"blockedSellers,omitempty"`
 	PreferredSellers         map[string]bool   `json:"preferredSellers,omitempty"`
 	DailySpentSats           uint64            `json:"dailySpentSats"`
+	MaxHubSubmitFeeSats      uint64            `json:"maxHubSubmitFeeSats,omitempty"`
+	MaxHubBboxFeeSats        uint64            `json:"maxHubBboxFeeSats,omitempty"`
+	MaxHubEgressTopupSats    uint64            `json:"maxHubEgressTopupSats,omitempty"`
+	MaxHubFeeSatsPerDay      uint64            `json:"maxHubFeeSatsPerDay,omitempty"`
+	DailyHubFeesSpentSats    uint64            `json:"dailyHubFeesSpentSats,omitempty"`
 	BuyerApproved            bool              `json:"buyerApproved"`
 	SellerApproved           bool              `json:"sellerApproved"`
 	EscrowMode               string            `json:"escrowMode,omitempty"`    // auto (default) | always | off
@@ -287,10 +292,93 @@ func DefaultPolicy() *Policy {
 		ZeroConfMaxSats:          0, // fail-closed: 0-conf disabled until explicitly approved by operator policy
 		ZeroConfMaxAggregateSats: 0,
 		MaxUnconfirmedAncestors:  15,
+		MaxHubSubmitFeeSats:      25,
+		MaxHubBboxFeeSats:        10,
+		MaxHubEgressTopupSats:    100,
+		MaxHubFeeSatsPerDay:      500,
 		EscrowMode:               EscrowModeAuto,
 		EscrowMinSats:            DefaultEscrowMinSat,
 		BlockedSellers:           make(map[string]bool),
 		PreferredSellers:         make(map[string]bool),
+	}
+}
+
+// SetHubFeeLimits updates the operator's Hub fee caps (fail-closed against gouging hubs).
+func (p *Policy) SetHubFeeLimits(submitMax, bboxMax, egressTopupMax, dailyMax uint64) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.MaxHubSubmitFeeSats = submitMax
+	p.MaxHubBboxFeeSats = bboxMax
+	p.MaxHubEgressTopupSats = egressTopupMax
+	p.MaxHubFeeSatsPerDay = dailyMax
+	p.mu.Unlock()
+}
+
+// CanPayHubFee enforces operator Hub fee caps fail-closed before an agent or Leaf Hub auto-pays
+// a Hub 402 challenge or metered egress credit top-up.
+func (p *Policy) CanPayHubFee(action string, sats uint64) error {
+	if sats == 0 {
+		return nil
+	}
+	if p == nil {
+		return errors.New("market: no policy configured for hub fee payment")
+	}
+	p.mu.RLock()
+	db := p.db
+	kill := p.KillSwitch
+	maxSubmit := p.MaxHubSubmitFeeSats
+	maxBbox := p.MaxHubBboxFeeSats
+	maxTopup := p.MaxHubEgressTopupSats
+	maxDaily := p.MaxHubFeeSatsPerDay
+	spent := p.DailyHubFeesSpentSats
+	p.mu.RUnlock()
+	if db != nil {
+		if v, err := db.DailySpend("market_hub_fees_daily"); err == nil {
+			spent = v
+		}
+	}
+	if kill {
+		return errors.New("market: operator kill switch is engaged")
+	}
+	var perActionCap uint64
+	switch {
+	case strings.HasPrefix(action, "submit:"):
+		perActionCap = maxSubmit
+	case action == "bbox:send":
+		perActionCap = maxBbox
+	case action == "egress:topup":
+		perActionCap = maxTopup
+	case strings.HasPrefix(action, "lookup:"):
+		perActionCap = maxSubmit
+	default:
+		perActionCap = maxSubmit
+	}
+	if perActionCap == 0 || sats > perActionCap {
+		return fmt.Errorf("market: hub fee %d sats for %s exceeds policy cap %d sats", sats, action, perActionCap)
+	}
+	if maxDaily == 0 || spent+sats > maxDaily {
+		return fmt.Errorf("market: hub fee %d sats would exceed daily hub fee cap %d sats (spent=%d)", sats, maxDaily, spent)
+	}
+	return nil
+}
+
+// RecordHubFeeSpend records a completed Hub fee payment against the daily hub fee budget.
+func (p *Policy) RecordHubFeeSpend(sats uint64) {
+	if p == nil || sats == 0 {
+		return
+	}
+	p.mu.Lock()
+	p.DailyHubFeesSpentSats += sats
+	db := p.db
+	p.mu.Unlock()
+	if db != nil {
+		if next, err := db.AddDailySpend("market_hub_fees_daily", sats); err == nil {
+			p.mu.Lock()
+			p.DailyHubFeesSpentSats = next
+			p.mu.Unlock()
+		}
 	}
 }
 

@@ -2534,15 +2534,22 @@ func (e *Engine) Send(ctx context.Context, args SendArgs) (*SendResult, error) {
 			return nil, err
 		}
 	} else {
-		var preRaw, sufRaw [16]byte
-		if _, err := rand.Read(preRaw[:]); err != nil {
-			return nil, fmt.Errorf("wallet: crypto/rand failed: %w", err)
+		prefixB64 = strings.TrimSpace(args.DerivationPrefix)
+		suffixB64 = strings.TrimSpace(args.DerivationSuffix)
+		if prefixB64 == "" {
+			var preRaw [16]byte
+			if _, err := rand.Read(preRaw[:]); err != nil {
+				return nil, fmt.Errorf("wallet: crypto/rand failed: %w", err)
+			}
+			prefixB64 = base64.StdEncoding.EncodeToString(preRaw[:])
 		}
-		if _, err := rand.Read(sufRaw[:]); err != nil {
-			return nil, fmt.Errorf("wallet: crypto/rand failed: %w", err)
+		if suffixB64 == "" {
+			var sufRaw [16]byte
+			if _, err := rand.Read(sufRaw[:]); err != nil {
+				return nil, fmt.Errorf("wallet: crypto/rand failed: %w", err)
+			}
+			suffixB64 = base64.StdEncoding.EncodeToString(sufRaw[:])
 		}
-		prefixB64 = base64.StdEncoding.EncodeToString(preRaw[:])
-		suffixB64 = base64.StdEncoding.EncodeToString(sufRaw[:])
 		senderHex = e.IdentityPubHex()
 
 		recipPub, pErr := guard.ParsePubKeyHex(strings.TrimSpace(args.ToIdentityKey))

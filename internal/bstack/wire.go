@@ -125,21 +125,35 @@ type SignedAnnounce struct {
 	Sig      string     `json:"sig"`
 }
 
+// HubFeeAdvert summarizes a Hub operator's advertised fee schedule on the directory lane.
+type HubFeeAdvert struct {
+	SubmitWantSats         uint64 `json:"submitWantSats,omitempty"`
+	SubmitOfferSats        uint64 `json:"submitOfferSats,omitempty"`
+	SubmitAnnounceSats     uint64 `json:"submitAnnounceSats,omitempty"`
+	BboxSendSats           uint64 `json:"bboxSendSats,omitempty"`
+	EgressSatsPer100Events uint64 `json:"egressSatsPer100Events,omitempty"`
+	EgressMinTopupSats     uint64 `json:"egressMinTopupSats,omitempty"`
+}
+
 type AnnounceAd struct {
-	Pub           string    `json:"pub"`
-	Net           string    `json:"net"`
-	Handle        string    `json:"handle,omitempty"` // bfinger user@domain
-	PublicURL     string    `json:"publicUrl,omitempty"`
-	BboxOffice    string    `json:"bboxOffice,omitempty"`
-	Hosts         []string  `json:"hosts"`
-	Domains       []string  `json:"domains,omitempty"`
-	SellDomains   []string  `json:"sellDomains,omitempty"`
-	BountyDomains []string  `json:"bountyDomains,omitempty"`
-	Packs         []PackRef `json:"packs,omitempty"`
-	BondOutpoint  string    `json:"bondOutpoint,omitempty"`
-	BondBEEFHex   string    `json:"bondBeefHex,omitempty"`
-	IsHub         bool      `json:"isHub,omitempty"`
-	Exp           int64     `json:"exp"`
+	Pub               string        `json:"pub"`
+	Net               string        `json:"net"`
+	Handle            string        `json:"handle,omitempty"` // bfinger user@domain
+	PublicURL         string        `json:"publicUrl,omitempty"`
+	BboxOffice        string        `json:"bboxOffice,omitempty"`
+	Hosts             []string      `json:"hosts"`
+	Domains           []string      `json:"domains,omitempty"`
+	SellDomains       []string      `json:"sellDomains,omitempty"`
+	BountyDomains     []string      `json:"bountyDomains,omitempty"`
+	Packs             []PackRef     `json:"packs,omitempty"`
+	BondOutpoint      string        `json:"bondOutpoint,omitempty"`
+	BondBEEFHex       string        `json:"bondBeefHex,omitempty"`
+	IsHub             bool          `json:"isHub,omitempty"`
+	HubRole           string        `json:"hubRole,omitempty"` // spine | leaf
+	HubPayIdentityKey string        `json:"hubPayIdentityKey,omitempty"`
+	HubTermsURL       string        `json:"hubTermsUrl,omitempty"`
+	HubFees           *HubFeeAdvert `json:"hubFees,omitempty"`
+	Exp               int64         `json:"exp"`
 }
 
 // EncodePayload encodes a MarketPayload as a stock Lightweb canonical CBOR nkt1 record.

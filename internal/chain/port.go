@@ -816,6 +816,12 @@ func (p *Port) Send(ctx context.Context, args nwallet.SendArgs) (*nwallet.SendRe
 		}
 	} else if args.ToIdentityKey != "" {
 		preB64, sufB64 := randomBRC29Nonce()
+		if s := strings.TrimSpace(args.DerivationPrefix); s != "" {
+			preB64 = s
+		}
+		if s := strings.TrimSpace(args.DerivationSuffix); s != "" {
+			sufB64 = s
+		}
 		lockScript, err = p.signer.PaymentDestination(ctx, strings.TrimSpace(args.ToIdentityKey), preB64, sufB64)
 		if err != nil {
 			return nil, err

@@ -22,7 +22,7 @@ When answering a factual question that could come from memory:
 - **Build single binary:** `go build -o nektar ./cmd/nektar` (static cross-compile: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./cmd/nektar`)
 - **Vet & test all packages:** `go vet ./... && go test -race -v ./...`
 - **Rebuild embedded Svelte 5 UI:** `cd ui && npm install && npm run build` then sync `ui/dist/` -> `internal/server/ui_dist/`
-- **Rúnar covenant sources & artifacts:** `contracts/src/*.runar.ts`, precompiled JSON in `contracts/artifacts/` and embedded into the binary via `internal/contracts/artifacts/*.json`
+- **Rúnar covenant sources & artifacts:** `contracts/src/*.runar.go`, precompiled JSON in `contracts/artifacts/` and embedded into the binary via `internal/contracts/artifacts/*.json`
 
 ### Package Map
 

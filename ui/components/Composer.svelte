@@ -14,12 +14,12 @@
   type Mode = 'sell' | 'buy'
   let mode = $state<Mode>('sell')
   let text = $state('')
-  let shard = $state('notes')
   let sellPrice = $state('50')
   let maxSats = $state('100')
   interface TopicPill {
     text: string
     domainTag: string
+    shardSlug: string
     pct: number
     kind: 'peer' | 'cluster'
     source: string
@@ -30,14 +30,8 @@
   let topicPills = $state<TopicPill[]>([])
 
   $effect(() => {
-    const isBuy = mode === 'buy'
-    const t = isBuy ? '' : shard.trim()
     const h = text.trim()
-    // In Buy Data: only infer clusters from what the user actually describes (no default 'ops' noise).
-    // In Sell Data: infer from custom topic and/or the text being sold.
-    const hasTopic = t !== '' && t !== 'notes' && t !== 'general'
-    const hasHint = h.length >= 3
-    if ((isBuy && !hasHint) || (!isBuy && !hasTopic && !hasHint)) {
+    if (h.length < 3) {
       topicPills = []
       return
     }
@@ -45,8 +39,7 @@
     const timer = setTimeout(async () => {
       try {
         const params = new URLSearchParams()
-        if (hasTopic) params.set('topic', t)
-        if (hasHint) params.set('hint', h.slice(0, 180))
+        params.set('hint', h.slice(0, 180))
         const res = await fetch(`/v1/topics/cluster?${params.toString()}`)
         if (!res.ok || cancelled) return
         const data = (await res.json()) as {
@@ -60,6 +53,7 @@
           pills.push({
             text: `≈ ${r.topic}`,
             domainTag: r.topic,
+            shardSlug: r.topic,
             pct: Math.round((r.confidence ?? 0) * 100),
             kind: 'peer',
             source: r.source ?? data.source ?? ''
@@ -70,6 +64,7 @@
             pills.push({
               text: c.label,
               domainTag: c.clusterTag || `cluster:${c.cluster}`,
+              shardSlug: c.cluster,
               pct: Math.round((c.confidence ?? 0) * 100),
               kind: 'cluster',
               source: data.source ?? ''
@@ -115,7 +110,8 @@
     stage = ''
     try {
       if (mode === 'sell') {
-        const topic = shard.trim() || 'notes'
+        const inferredDomains = topicPills.map((p) => p.domainTag).filter(Boolean)
+        const topic = topicPills[0]?.shardSlug || 'notes'
         const price = Math.max(1, Math.floor(Number(sellPrice) || 50))
         // Step 1: Remember & anchor on BSV before listing for sale.
         stage = funded ? '1/2 Anchoring…' : '1/2 Saving…'
@@ -128,11 +124,11 @@
           onToast(res.data.error ?? `Anchor failed (${res.status})`, true)
           return
         }
-        // Step 2: List anchored topic on the market.
+        // Step 2: List anchored topic on the market with all inferred hub/cluster domains.
         stage = '2/2 Listing…'
         const sellRes = await postJSON('/v1/tools/sell', {
           shard: topic,
-          domains: [topic],
+          domains: inferredDomains.length > 0 ? inferredDomains : [topic],
           priceSats: price,
           description: body.slice(0, 140)
         })
@@ -217,19 +213,6 @@
       <div class="bar">
         <div class="opts">
           {#if mode === 'sell'}
-            <label class="tag-in">
-              <span class="lbl">Topic</span>
-              <input bind:value={shard} placeholder="notes" aria-label="Topic" />
-            </label>
-            {#each topicPills as p}
-              <span
-                class="cluster-pill"
-                class:peer={p.kind === 'peer'}
-                title={`Dynamic correlation (${p.pct}% confidence via ${p.source || 'classifier'})`}
-              >
-                {p.text} <em>{p.pct}%</em>
-              </span>
-            {/each}
             <label class="tag-in num">
               <span class="lbl">Price</span>
               <input type="number" min="1" bind:value={sellPrice} aria-label="Price in satoshis" />
@@ -241,16 +224,16 @@
               <input type="number" min="1" bind:value={maxSats} aria-label="Max budget in satoshis" />
               <span>sats</span>
             </label>
-            {#each topicPills as p}
-              <span
-                class="cluster-pill"
-                class:peer={p.kind === 'peer'}
-                title={`Matched from hub & clusters (${p.pct}% confidence via ${p.source || 'classifier'})`}
-              >
-                {p.text} <em>{p.pct}%</em>
-              </span>
-            {/each}
           {/if}
+          {#each topicPills as p}
+            <span
+              class="cluster-pill"
+              class:peer={p.kind === 'peer'}
+              title={`Matched from hub & clusters (${p.pct}% confidence via ${p.source || 'classifier'})`}
+            >
+              {p.text} <em>{p.pct}%</em>
+            </span>
+          {/each}
         </div>
 
         <button class="post" onclick={submit} disabled={busy || !text.trim()}>{ctaLabel}</button>

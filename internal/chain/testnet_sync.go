@@ -21,7 +21,7 @@ func SafeAtomicBEEF(tx *transaction.Transaction) ([]byte, error) {
 }
 
 // AdoptReceived credits any outputs in a counterparty's verified AtomicBEEF payment tx that pay
-// this wallet's FundScript() into wallet.sqlite (or propagates/caches in client mode).
+// this wallet's FundScript() into wallet.sqlite. Fails closed in client mode where BRC-29 remittance is required.
 func (p *Port) AdoptReceived(ctx context.Context, tx *transaction.Transaction) (uint64, error) {
 	if tx == nil {
 		return 0, nil
@@ -29,8 +29,7 @@ func (p *Port) AdoptReceived(ctx context.Context, tx *transaction.Transaction) (
 	if p.engine != nil {
 		return p.engine.AdoptReceivedTx(ctx, tx)
 	}
-	p.rememberClientTx(tx.TxID().String(), tx)
-	return 0, nil
+	return 0, errors.New("chain: static P2PKH AdoptReceived is unsupported in client wallet mode; use BRC-29 payment remittance")
 }
 
 // InternalizeBRC29 verifies and internalizes an incoming AtomicBEEF payment with BRC-29 remittance

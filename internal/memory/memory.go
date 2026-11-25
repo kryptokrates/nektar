@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -321,14 +320,11 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 	}
 	prov.Signature = sigBytes
 	provBytes := core.SerializeProvenance(prov)
-	hdp := core.ComputeHDP(data, prov)
-	frag := core.Fragment{Data: data, Provenance: prov, HDP: hdp}
-	leaf := core.ComputeLeaf(frag)
+	hdp := core.ComputeHDPV2(data, prov)
 
 	rec := store.FragmentRecord{
 		Shard:      in.Shard,
 		HDP:        core.ToHex(hdp),
-		Leaf:       core.ToHex(leaf),
 		Data:       data,
 		Provenance: provBytes,
 		Level:      in.Level,
@@ -355,8 +351,8 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 		if err != nil {
 			return nil, fmt.Errorf("memory: borg encrypt access: %w", err)
 		}
+		defer core.Zero32Array(&epochSym)
 		var contentID [32]byte
-		copy(contentID[:], sha256.New().Sum(hdp)[:32])
 		copy(contentID[:], hdp)
 		env, _, err := bstack.SealForEpoch(in.BorgGroup, epoch, epochSym, contentID, data)
 		if err != nil {
@@ -367,11 +363,19 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 			return nil, err
 		}
 		rec.Data = nil // never store plaintext alongside BRC-369 ciphertext
-		rec.Ciphertext, _ = hex.DecodeString(env.Ciphertext)
+		rec.Ciphertext, err = hex.DecodeString(env.Ciphertext)
+		if err != nil {
+			return nil, fmt.Errorf("memory: decode sealed ciphertext: %w", err)
+		}
 		rec.KeyedMeta = metaBytes
 		rec.BorgGroup = in.BorgGroup
 		rec.BorgEpoch = epoch
 	}
+
+	// F-11: compute leaf AFTER BorgGroup sealing so H(E) commits to the actual BRC-369 ciphertext!
+	frag := core.Fragment{Data: data, Provenance: prov, HDP: hdp, Ciphertext: rec.Ciphertext}
+	leaf := core.ComputeLeaf(frag)
+	rec.Leaf = core.ToHex(leaf)
 
 	stored, dedup, err := s.db.AppendFragment(rec)
 	if err != nil {
@@ -491,6 +495,37 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 	pubBytes := s.port.Signer().IdentityKey().Compressed()
 	shardID := core.ShardIDFromPubkey(pubBytes)
 
+	// Guard against clobbering an existing in-flight pending anchor for (shard, nextN):
+	// reconcile it first instead of blindly overwriting with INSERT OR REPLACE.
+	if existingPending, pErr := s.db.ListPendingAnchors(); pErr == nil {
+		for _, p := range existingPending {
+			if p.Shard == shard && p.N == nextN {
+				if p.TxID != "" {
+					mp, height, mined := s.port.Proof(ctx, p.TxID)
+					if mined && mp != nil && len(p.Beef) > 0 {
+						batch := store.BatchAnchor{
+							Shard:       p.Shard,
+							ShardID:     shardID,
+							N:           p.N,
+							Size:        len(p.Seqs),
+							RootHex:     p.RootHex,
+							ChainedHex:  p.ChainedHex,
+							TxID:        p.TxID,
+							Beef:        p.Beef,
+							Settled:     true,
+							BlockHeight: int64(height),
+							CreatedAt:   p.CreatedAt,
+						}
+						if rErr := s.db.RecordBatchAnchor(batch, p.Seqs); rErr == nil {
+							return &batch, nil
+						}
+					}
+					return nil, fmt.Errorf("memory: pending anchor (%s, n=%d, txid=%s) still awaiting reconciliation", shard, nextN, p.TxID)
+				}
+			}
+		}
+	}
+
 	// Persist pending_anchors intent BEFORE building/broadcasting so a crash after broadcast is recoverable!
 	now := time.Now().Unix()
 	if err := s.db.SavePendingAnchor(store.PendingAnchor{
@@ -530,7 +565,9 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 			return nil, err
 		}
 		if beefPre, bErr := chain.SafeAtomicBEEF(tx); bErr == nil {
-			_ = s.db.UpdatePendingAnchorTx(shard, nextN, tx.TxID().String(), beefPre)
+			if uErr := s.db.UpdatePendingAnchorTx(shard, nextN, tx.TxID().String(), beefPre); uErr != nil {
+				return nil, fmt.Errorf("memory: persist pending anchor txid: %w", uErr)
+			}
 		}
 		txid, err = s.port.Broadcast(ctx, tx, fee, spend)
 		if err != nil {
@@ -583,6 +620,7 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 }
 
 // ReconcilePendingAnchors recovers any in-flight pending_anchors persisted before a crash.
+// Never promotes an unbroadcast local 'nosend'/'failed'/'aborted' transaction as anchored.
 func (s *Service) ReconcilePendingAnchors(ctx context.Context) (int, error) {
 	pending, err := s.db.ListPendingAnchors()
 	if err != nil || len(pending) == 0 {
@@ -598,14 +636,9 @@ func (s *Service) ReconcilePendingAnchors(ctx context.Context) (int, error) {
 			unlock()
 			continue
 		}
-		// Check if transaction landed on chain or in local wallet storage.
-		mp, height, mined := s.port.Proof(ctx, p.TxID)
+		// Inspect chain proof AND durable wallet transaction status (never treat raw local NoSend tx as broadcast).
+		mined, wStatus, mp, height := s.port.TxBroadcastStatus(ctx, p.TxID)
 		tx := s.port.Tx(p.TxID)
-		if !mined && tx == nil && len(p.Beef) == 0 {
-			_ = s.db.DeletePendingAnchor(p.Shard, p.N)
-			unlock()
-			continue
-		}
 		beef := p.Beef
 		if tx != nil {
 			if mp != nil {
@@ -615,7 +648,42 @@ func (s *Service) ReconcilePendingAnchors(ctx context.Context) (int, error) {
 				beef = b
 			}
 		}
-		if len(beef) > 0 && (mined || tx != nil) {
+
+		// Local embedded wallet confirms tx was never broadcast or definitely aborted/failed: clean up cleanly!
+		if !mined && (wStatus == "nosend" || wStatus == "failed" || wStatus == "aborted" || wStatus == "unsigned" || wStatus == "unprocessed") {
+			if wStatus == "nosend" && s.port.Engine() != nil {
+				_ = s.port.Engine().AbortNoSendByTxID(ctx, p.TxID)
+			}
+			_ = s.db.DeletePendingAnchor(p.Shard, p.N)
+			unlock()
+			continue
+		}
+
+		confirmedBroadcast := mined || wStatus == "completed" || wStatus == "unproven" || wStatus == "unmined" || wStatus == "sending"
+		// If broadcast status is unknown (embedded submission_unknown or client-mode unmined after restart),
+		// re-air persisted BEEF against the live network before deciding; keep pending if network is unreachable.
+		if !confirmedBroadcast && len(beef) > 0 && s.port.Network() != "memory" {
+			if _, parsedTx, _, pErr := guard.ParseBEEF(beef, guard.DefaultBound); pErr == nil && parsedTx != nil {
+				if rErr := s.port.RelayExternalTx(ctx, parsedTx); rErr == nil {
+					confirmedBroadcast = true
+				} else {
+					lower := strings.ToLower(rErr.Error())
+					if strings.Contains(lower, "already in mempool") || strings.Contains(lower, "already known") || strings.Contains(lower, "txn-already-known") {
+						confirmedBroadcast = true
+					} else if strings.Contains(lower, "missing inputs") || strings.Contains(lower, "utxo_spent") || strings.Contains(lower, "double") {
+						_ = s.db.DeletePendingAnchor(p.Shard, p.N)
+						unlock()
+						continue
+					} else {
+						// Transient/unknown: keep pending_anchors row intact for the next reconciliation attempt.
+						unlock()
+						continue
+					}
+				}
+			}
+		}
+
+		if len(beef) > 0 && confirmedBroadcast {
 			batch := store.BatchAnchor{
 				Shard:       p.Shard,
 				ShardID:     shardID,
@@ -632,7 +700,7 @@ func (s *Service) ReconcilePendingAnchors(ctx context.Context) (int, error) {
 			if rErr := s.db.RecordBatchAnchor(batch, p.Seqs); rErr == nil {
 				recovered++
 			}
-		} else {
+		} else if len(beef) == 0 && !mined {
 			_ = s.db.DeletePendingAnchor(p.Shard, p.N)
 		}
 		unlock()
@@ -1098,6 +1166,19 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 	if err := reasoning.VerifyDelegations(rcp); err != nil {
 		return nil, err
 	}
+	// F-32: sign the receipt under core.TagReceiptSig using the node's BRC-43 signing key (matching SignDigest).
+	if signPub, pErr := s.port.SigningPubKey(ctx); pErr == nil && signPub != nil {
+		rcp.IssuerPub = hex.EncodeToString(signPub.Compressed())
+		if signDigest, dErr := reasoning.ReceiptSignDigest(rcp); dErr == nil {
+			if issuerSig, sErr := s.port.SignDigest(ctx, signDigest); sErr == nil && len(issuerSig) > 0 {
+				rcp.IssuerSig = hex.EncodeToString(issuerSig)
+			} else {
+				rcp.IssuerPub = ""
+			}
+		} else {
+			rcp.IssuerPub = ""
+		}
+	}
 	rcpHash, err := reasoning.ReceiptHash(rcp)
 	if err != nil {
 		return nil, err
@@ -1124,7 +1205,7 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 	}
 	prov.Signature = sigBytes
 	provBytes := core.SerializeProvenance(prov)
-	hdp := core.ComputeHDP(bodyJSON, prov)
+	hdp := core.ComputeHDPV2(bodyJSON, prov)
 	leaf := core.ComputeLeaf(core.Fragment{Data: bodyJSON, Provenance: prov, HDP: hdp})
 	fragRec := store.FragmentRecord{
 		Shard:      ReceiptsShard,
@@ -1187,6 +1268,7 @@ type ReceiptVerification struct {
 	CitationsChecked    int                       `json:"citationsChecked"`
 	CitationsMined      int                       `json:"citationsMined"`
 	CitationsMissing    int                       `json:"citationsMissing"`
+	CitationsInvalid    int                       `json:"citationsInvalid,omitempty"`
 	CitationsSuperseded int                       `json:"citationsSuperseded,omitempty"`
 	SupersededRefs      []string                  `json:"supersededRefs,omitempty"`
 	TruthNote           string                    `json:"truthNote"`
@@ -1220,6 +1302,9 @@ func (s *Service) VerifyReceipt(ctx context.Context, tokenOrHash string) (*Recei
 	if err := reasoning.VerifyDelegations(rcp); err != nil {
 		return &ReceiptVerification{Verdict: "red", Reason: err.Error(), ReceiptHash: h, ReceiptToken: tok, Receipt: &rcp, TruthNote: reasoning.TruthNote}, nil
 	}
+	if err := reasoning.VerifyReceiptSignature(rcp); err != nil {
+		return &ReceiptVerification{Verdict: "red", Reason: err.Error(), ReceiptHash: h, ReceiptToken: tok, Receipt: &rcp, TruthNote: reasoning.TruthNote}, nil
+	}
 
 	// Derive ReceiptAnchored live from the __receipts__ fragment's anchor_txid (so later anchoring reflects immediately!).
 	receiptAnchored := rec.AnchorTxID != ""
@@ -1248,13 +1333,21 @@ func (s *Service) VerifyReceipt(ctx context.Context, tokenOrHash string) (*Recei
 		}
 		if f.BatchN >= 0 {
 			_, vr, pErr := s.Prove(ctx, ref.Shard, ref.Seq)
-			if pErr == nil && vr != nil && vr.OK && vr.Settled {
+			if pErr != nil || vr == nil {
+				out.CitationsInvalid++
+			} else if vr.OK && vr.Settled {
 				out.CitationsMined++
+			} else if !vr.OK && vr.Reason != "Unsettled" {
+				out.CitationsInvalid++
 			}
 		}
 	}
 
 	switch {
+	case out.CitationsInvalid > 0:
+		out.Verdict = "red"
+		out.OK = false
+		out.Reason = fmt.Sprintf("%d cited fragment(s) failed cryptographic SPV proof verification", out.CitationsInvalid)
 	case out.CitationsMissing > 0:
 		out.Verdict = "red"
 		out.OK = false

@@ -14,8 +14,9 @@ type lockFileRecord struct {
 	Listen    string `json:"listen,omitempty"`
 }
 
-// acquireInstanceLock prevents two `nektar serve` processes from racing on the same SQLite/wallet dataDir.
-// Stale locks from dead processes are automatically reclaimed.
+// acquireInstanceLock acquires a kernel-managed non-blocking OS advisory lock (flock / LockFileEx)
+// on <dataDir>/instance.lock so concurrent processes cannot race on SQLite/wallet/Restate data,
+// and the OS automatically releases the lock on SIGKILL/crash with zero stale-file TOCTOU race.
 func acquireInstanceLock(dataDir, listenAddr string) (func(), error) {
 	if dataDir == "" || dataDir == ":memory:" {
 		return func() {}, nil
@@ -24,15 +25,21 @@ func acquireInstanceLock(dataDir, listenAddr string) (func(), error) {
 		return nil, fmt.Errorf("instance.lock mkdir: %w", err)
 	}
 	lockPath := filepath.Join(dataDir, "instance.lock")
-	if raw, err := os.ReadFile(lockPath); err == nil && len(raw) > 0 {
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("nektar: open %s: %w", lockPath, err)
+	}
+	if err := lockFileExclusive(f); err != nil {
 		var prev lockFileRecord
-		if json.Unmarshal(raw, &prev) == nil && prev.PID > 0 && prev.PID != os.Getpid() {
-			if isPIDAlive(prev.PID) {
-				return nil, fmt.Errorf("nektar: another daemon (pid=%d, listen=%s) is already running for %s — connect with `nektar mcp` or `nektar open`, or stop pid %d first",
-					prev.PID, prev.Listen, dataDir, prev.PID)
-			}
+		if raw, rErr := os.ReadFile(lockPath); rErr == nil {
+			_ = json.Unmarshal(raw, &prev)
 		}
-		_ = os.Remove(lockPath)
+		_ = f.Close()
+		if prev.PID > 0 {
+			return nil, fmt.Errorf("nektar: another daemon (pid=%d, listen=%s) is already running for %s — connect with `nektar mcp` or `nektar open`, or stop pid %d first",
+				prev.PID, prev.Listen, dataDir, prev.PID)
+		}
+		return nil, fmt.Errorf("nektar: another instance already holds %s (%w)", lockPath, err)
 	}
 
 	rec := lockFileRecord{
@@ -41,19 +48,13 @@ func acquireInstanceLock(dataDir, listenAddr string) (func(), error) {
 		Listen:    listenAddr,
 	}
 	b, _ := json.MarshalIndent(rec, "", "  ")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("nektar: acquire %s: %w (another instance may be starting)", lockPath, err)
-	}
+	_ = f.Truncate(0)
+	_, _ = f.Seek(0, 0)
 	_, _ = f.Write(b)
-	_ = f.Close()
+	_ = f.Sync()
 
 	return func() {
-		if raw, rErr := os.ReadFile(lockPath); rErr == nil {
-			var cur lockFileRecord
-			if json.Unmarshal(raw, &cur) == nil && cur.PID == os.Getpid() {
-				_ = os.Remove(lockPath)
-			}
-		}
+		_ = unlockFileExclusive(f)
+		_ = f.Close()
 	}, nil
 }

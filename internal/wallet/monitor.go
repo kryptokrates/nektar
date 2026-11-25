@@ -159,26 +159,74 @@ func (m *Monitor) UnFail(ctx context.Context) (int, error) {
 					continue
 				}
 			}
-			if tx, tErr := m.engine.LoadParsedTx(ctx, c.txid); tErr == nil && tx != nil {
-				tx.MerklePath = mp
-				m.engine.txCache.Put(c.txid, tx)
+			txObj, _ := m.engine.LoadParsedTx(ctx, c.txid)
+			if txObj != nil {
+				txObj.MerklePath = mp
+				m.engine.txCache.Put(c.txid, txObj)
 			}
-			_, uErr := m.engine.sqlDB.ExecContext(ctx,
+			// Atomic transactional revival: update transaction, mark spent inputs, restore spendable outputs,
+			// update known_txes, and re-index user_utxos so wallet state cannot double-count or orphan change.
+			dbTx, bErr := m.engine.sqlDB.BeginTx(ctx, nil)
+			if bErr != nil {
+				continue
+			}
+			okCommit := true
+			if _, uErr := dbTx.ExecContext(ctx,
 				fmt.Sprintf(`UPDATE "%s" SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`, m.engine.tables.transactions),
 				c.id, m.engine.userID,
-			)
-			if uErr == nil {
-				_, _ = m.engine.sqlDB.ExecContext(ctx,
-					fmt.Sprintf(`UPDATE "%s" SET spendable = 1 WHERE transaction_id = ? AND user_id = ? AND spent_by IS NULL AND deleted_at IS NULL AND basket_name IN ('default','reserve','fuel','nektar funding')`, m.engine.tables.outputs),
-					c.id, m.engine.userID,
-				)
-				if mpBytes := mp.Bytes(); len(mpBytes) > 0 {
-					_, _ = m.engine.sqlDB.ExecContext(ctx,
-						fmt.Sprintf(`UPDATE "%s" SET status = 'completed', block_height = ?, merkle_path = ? WHERE tx_id = ?`, m.engine.tables.knownTxs),
-						h, mpBytes, c.txid,
+			); uErr != nil {
+				okCommit = false
+			}
+			// Mark inputs spent by this revived mined tx as spent_by=c.id, spendable=0 and purge from user_utxos.
+			if okCommit && txObj != nil {
+				for _, in := range txObj.Inputs {
+					if in.SourceTXID == nil {
+						continue
+					}
+					srcTx := in.SourceTXID.String()
+					_, _ = dbTx.ExecContext(ctx,
+						fmt.Sprintf(`UPDATE "%s" SET spendable = 0, spent_by = ? WHERE user_id = ? AND tx_id = ? AND vout = ? AND deleted_at IS NULL`, m.engine.tables.outputs),
+						c.id, m.engine.userID, srcTx, in.SourceTxOutIndex,
+					)
+					_, _ = dbTx.ExecContext(ctx,
+						fmt.Sprintf(`DELETE FROM "%s" WHERE user_id = ? AND output_id IN (SELECT id FROM "%s" WHERE user_id = ? AND tx_id = ? AND vout = ?)`, m.engine.tables.userUTXOs, m.engine.tables.outputs),
+						m.engine.userID, m.engine.userID, srcTx, in.SourceTxOutIndex,
 					)
 				}
+			}
+			if okCommit {
+				if _, oErr := dbTx.ExecContext(ctx,
+					fmt.Sprintf(`UPDATE "%s" SET spendable = 1 WHERE transaction_id = ? AND user_id = ? AND spent_by IS NULL AND deleted_at IS NULL AND basket_name IN ('default','reserve','fuel','nektar funding')`, m.engine.tables.outputs),
+					c.id, m.engine.userID,
+				); oErr != nil {
+					okCommit = false
+				}
+			}
+			if okCommit {
+				// Re-index revived spendable outputs into user_utxos (utxo_status='mined') so coin selection sees them.
+				_, _ = dbTx.ExecContext(ctx,
+					fmt.Sprintf(`INSERT OR IGNORE INTO "%s" (user_id, output_id, basket_name, satoshis, estimated_input_size, created_at, utxo_status)
+						SELECT user_id, id, basket_name, satoshis, 148, CURRENT_TIMESTAMP, 'mined'
+						FROM "%s"
+						WHERE transaction_id = ? AND user_id = ? AND spendable = 1 AND spent_by IS NULL AND deleted_at IS NULL AND basket_name IN ('default','reserve','fuel','nektar funding')`,
+						m.engine.tables.userUTXOs, m.engine.tables.outputs),
+					c.id, m.engine.userID,
+				)
+			}
+			if okCommit {
+				if mpBytes := mp.Bytes(); len(mpBytes) > 0 {
+					if _, kErr := dbTx.ExecContext(ctx,
+						fmt.Sprintf(`UPDATE "%s" SET status = 'completed', block_height = ?, merkle_path = ? WHERE tx_id = ?`, m.engine.tables.knownTxs),
+						h, mpBytes, c.txid,
+					); kErr != nil {
+						okCommit = false
+					}
+				}
+			}
+			if okCommit && dbTx.Commit() == nil {
 				revived++
+			} else {
+				_ = dbTx.Rollback()
 			}
 			continue
 		}
@@ -213,9 +261,14 @@ func (m *Monitor) AbortAbandoned(ctx context.Context) (int, error) {
 		Count(ctx)
 
 	if before > after {
-		return int(before - after), nil
+		aborted := int(before - after)
+		if ns, _ := m.engine.ReconcileOrphanedNoSend(ctx); ns > 0 {
+			aborted += ns
+		}
+		return aborted, nil
 	}
-	return 0, nil
+	ns, _ := m.engine.ReconcileOrphanedNoSend(ctx)
+	return ns, nil
 }
 
 // SendWaiting retries queued delayed/unprocessed transactions via go-wallet-toolbox's Provider.SendWaitingTransactions.
@@ -329,7 +382,7 @@ func (m *Monitor) SyncFundAddress(ctx context.Context) (added int, pruned int, e
 				continue
 			}
 			seenTx[u.TxHash] = true
-			if m.engine.HasTx(ctx, u.TxHash) {
+			if m.engine.HasOutput(ctx, u.TxHash, u.TxPos) {
 				continue
 			}
 			res, iErr := m.engine.ImportTxID(ctx, u.TxHash)

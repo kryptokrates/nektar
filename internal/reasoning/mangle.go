@@ -11,9 +11,43 @@ import (
 	"codeberg.org/TauCeti/mangle-go/parse"
 )
 
+const (
+	// MaxMangleFacts caps input ground facts per evaluation to prevent DoS.
+	MaxMangleFacts = 4096
+	// MaxMangleRules caps trusted operator rules per evaluation.
+	MaxMangleRules = 512
+	// MaxMangleProgramBytes caps total Mangle source fed into EvalDatalog.
+	MaxMangleProgramBytes = 256 << 10
+)
+
+// ParseGroundFact parses a single candidate fact string into a ground Mangle atom.
+// Rejects any rule syntax (:-), transforms (|>), or non-ground/malformed statements so
+// untrusted memory fragments can never inject executable Datalog rules.
+func ParseGroundFact(raw string) (ast.Atom, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" || strings.Contains(s, ":-") || strings.Contains(s, "|>") || strings.ContainsAny(s, "\r\n") {
+		return ast.Atom{}, false
+	}
+	s = strings.TrimSuffix(s, ".")
+	atom, err := parse.Atom(s)
+	if err != nil {
+		return ast.Atom{}, false
+	}
+	// Ensure every argument is a ground constant (no free variables).
+	for _, arg := range atom.Args {
+		if _, isVar := arg.(ast.Variable); isVar {
+			return ast.Atom{}, false
+		}
+	}
+	return atom, true
+}
+
 // EvalDatalog runs Google Mangle (mangle-go) semi-naive stratified evaluation over
 // ground facts and rules in deterministic order, returning all derived fact strings.
 func EvalDatalog(programSource string) (map[string]bool, error) {
+	if len(programSource) > MaxMangleProgramBytes {
+		return nil, fmt.Errorf("mangle: program size %d exceeds max %d bytes", len(programSource), MaxMangleProgramBytes)
+	}
 	unit, err := parse.Unit(strings.NewReader(programSource))
 	if err != nil {
 		return nil, fmt.Errorf("mangle: parse: %w", err)
@@ -40,18 +74,25 @@ func EvalDatalog(programSource string) (map[string]bool, error) {
 }
 
 // Entails checks whether facts + rules entail goalLiteral under Mangle stratified Datalog.
+// Every element of facts is strictly validated as a ground atom via ParseGroundFact so
+// untrusted fragment text can never inject Datalog rules or break parsing.
 func Entails(facts []string, rules []string, goalLiteral string) (bool, error) {
+	if len(rules) > MaxMangleRules {
+		return false, fmt.Errorf("mangle: rule count %d exceeds max %d", len(rules), MaxMangleRules)
+	}
 	var b strings.Builder
+	factCount := 0
 	for _, f := range facts {
-		f = strings.TrimSpace(f)
-		if f == "" {
+		atom, ok := ParseGroundFact(f)
+		if !ok {
 			continue
 		}
-		if !strings.HasSuffix(f, ".") {
-			f += "."
+		factCount++
+		if factCount > MaxMangleFacts {
+			return false, fmt.Errorf("mangle: ground fact count exceeds max %d", MaxMangleFacts)
 		}
-		b.WriteString(f)
-		b.WriteByte('\n')
+		b.WriteString(atom.String())
+		b.WriteString(".\n")
 	}
 	for _, r := range rules {
 		r = strings.TrimSpace(r)

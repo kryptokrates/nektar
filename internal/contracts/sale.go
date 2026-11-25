@@ -45,8 +45,48 @@ func (o *KeyedSaleOffer) ContentKey() [32]byte { return o.contentKey }
 // ClearContentKey wipes the seller-side secret content key from memory.
 func (o *KeyedSaleOffer) ClearContentKey() { core.Zero32Array(&o.contentKey) }
 
-// OfferDigest computes the canonical SHA-256 digest binding every MITM-sensitive field,
-// including keyCommitment, salt, and ciphertext hash when provided.
+// OfferDigestV2 computes the domain-separated, length-prefixed SHA-256 digest (v2)
+// binding every MITM-sensitive offer field unambiguously (F-13).
+func OfferDigestV2(cfg SaleConfig, buyerPub, leafHex string, expiresAt uint64, keyCommit, salt, ctHash []byte) ([]byte, error) {
+	sellerPKH, err := hex.DecodeString(cfg.SellerPKH)
+	if err != nil {
+		return nil, err
+	}
+	hWrapped, err := hex.DecodeString(cfg.HWrapped)
+	if err != nil {
+		return nil, err
+	}
+	var buyerBytes []byte
+	if buyerPub != "" {
+		buyerBytes, err = hex.DecodeString(buyerPub)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var leafBytes []byte
+	if leafHex != "" {
+		leafBytes, err = hex.DecodeString(leafHex)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return core.SHA256(core.Concat(
+		[]byte("nektar:sale-offer:v2"),
+		core.Field(sellerPKH),
+		core.Field(hWrapped),
+		core.U64LE(cfg.Price),
+		core.U64LE(cfg.RefundAfter),
+		core.U64LE(cfg.MaxFee),
+		core.Field(buyerBytes),
+		core.Field(leafBytes),
+		core.U64LE(expiresAt),
+		core.Field(keyCommit),
+		core.Field(salt),
+		core.Field(ctHash),
+	)), nil
+}
+
+// OfferDigest computes the legacy v1 SHA-256 digest for backward-compatible verification of Version < 2 offers.
 func OfferDigest(cfg SaleConfig, buyerPub, leafHex string, expiresAt uint64, extra ...[]byte) ([]byte, error) {
 	sellerPKH, err := hex.DecodeString(cfg.SellerPKH)
 	if err != nil {
@@ -85,7 +125,7 @@ func OfferDigest(cfg SaleConfig, buyerPub, leafHex string, expiresAt uint64, ext
 }
 
 // CreateKeyedSaleOffer seals plaintext under a fresh BRC-369 content key (lightwebinc/bcommon/keyed),
-// commits sha256(k) into DisclosureSale's hWrapped, and signs the offer with sellerKey.
+// commits keyed.Commitment(k) into DisclosureSale's hWrapped, and signs the offer with sellerKey (v2 framed digest).
 func CreateKeyedSaleOffer(
 	sellerKey *ec.PrivateKey,
 	plaintext []byte,
@@ -120,7 +160,7 @@ func CreateKeyedSaleOffer(
 		MaxFee:      maxFee,
 	}
 	ctHash := core.SHA256(ct)
-	digest, err := OfferDigest(cfg, buyerPub, leafHex, expiresAt, commit[:], salt[:], ctHash)
+	digest, err := OfferDigestV2(cfg, buyerPub, leafHex, expiresAt, commit[:], salt[:], ctHash)
 	if err != nil {
 		return nil, err
 	}
@@ -143,6 +183,7 @@ func CreateKeyedSaleOffer(
 		OfferSig:         hex.EncodeToString(sig.Serialize()),
 		Artifact:         art.ID(),
 		Direct:           direct,
+		Version:          2,
 		contentKey:       k,
 	}, nil
 }
@@ -219,7 +260,12 @@ func VerifySaleOffer(offer *KeyedSaleOffer, buyerPub, leafHex string) error {
 	} else {
 		ctHash = core.SHA256(nil)
 	}
-	digest, err := OfferDigest(offer.Config, buyerPub, leafHex, offer.ExpiresAt, commitBytes, saltBytes, ctHash)
+	var digest []byte
+	if offer.Version >= 2 {
+		digest, err = OfferDigestV2(offer.Config, buyerPub, leafHex, offer.ExpiresAt, commitBytes, saltBytes, ctHash)
+	} else {
+		digest, err = OfferDigest(offer.Config, buyerPub, leafHex, offer.ExpiresAt, commitBytes, saltBytes, ctHash)
+	}
 	if err != nil {
 		return err
 	}
@@ -229,12 +275,15 @@ func VerifySaleOffer(offer *KeyedSaleOffer, buyerPub, leafHex string) error {
 	return nil
 }
 
-// ClaimKeyedSale verifies a released 32-byte BRC-369 content key against BOTH
-// the DisclosureSale hWrapped commitment AND the BRC-369 keyed.CheckOpened commitment,
-// then decrypts the ciphertext segment.
+// ClaimKeyedSale verifies a released 32-byte BRC-369 content key against the unified
+// DisclosureSale hWrapped == BRC-369 keyed.Commitment(k) commitment (F-05),
+// validates scalar range via keyed.CheckOpened, and decrypts the ciphertext segment.
 func ClaimKeyedSale(offer *KeyedSaleOffer, releasedKey []byte) ([]byte, error) {
-	if hex.EncodeToString(core.SHA256(releasedKey)) != offer.Config.HWrapped {
-		return nil, errors.New("sale: released key does not match covenant hWrapped")
+	if offer == nil {
+		return nil, errors.New("sale: nil offer")
+	}
+	if offer.Config.HWrapped != offer.KeyCommitment {
+		return nil, errors.New("sale: covenant hWrapped does not match BRC-369 keyCommitment")
 	}
 	commitBytes, err := hex.DecodeString(offer.KeyCommitment)
 	if err != nil || len(commitBytes) != 32 {
@@ -246,6 +295,7 @@ func ClaimKeyedSale(offer *KeyedSaleOffer, releasedKey []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sale: BRC-369 CheckOpened failed: %w", err)
 	}
+	defer core.Zero32Array(&k)
 	saltBytes, err := hex.DecodeString(offer.SaltHex)
 	if err != nil || len(saltBytes) != keyed.SaltLen {
 		return nil, errors.New("sale: invalid BRC-369 salt")

@@ -2,6 +2,7 @@ package policy
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -48,9 +49,17 @@ type Decision struct {
 
 type DecisionReceipt struct {
 	Request       string `json:"request"`
+	PrincipalType string `json:"principalType,omitempty"`
+	PrincipalID   string `json:"principalId,omitempty"`
+	Action        string `json:"action,omitempty"`
+	ResourceType  string `json:"resourceType,omitempty"`
+	ResourceShard string `json:"resourceShard,omitempty"`
+	ResourceID    string `json:"resourceId,omitempty"`
 	PolicySetHash string `json:"policySetHash"`
 	Decision      string `json:"decision"` // Allow | Deny
 	Time          int64  `json:"time"`
+	IssuerPub     string `json:"issuerPub,omitempty"`
+	Signature     string `json:"signature,omitempty"`
 }
 
 // Canonicalize parses and canonically formats a Cedar policy document using native cedar-go
@@ -106,6 +115,10 @@ func Authorize(policyText string, principal Principal, action string, resource R
 		Resource:  rUID,
 		Context:   cedar.NewRecord(nil),
 	})
+	// Fail closed on any policy evaluation error (e.g. missing attribute, type mismatch, overflow).
+	if len(diag.Errors) > 0 {
+		return Decision{Allow: false}, fmt.Errorf("policy: cedar evaluation error (%d): %s", len(diag.Errors), diag.Errors[0].Message)
+	}
 	reasons := make([]string, 0, len(diag.Reasons))
 	for _, r := range diag.Reasons {
 		reasons = append(reasons, string(r.PolicyID))
@@ -116,7 +129,8 @@ func Authorize(policyText string, principal Principal, action string, resource R
 	}, nil
 }
 
-// MakeReceipt binds an authorization decision to an anchored PolicyCommitment.
+// MakeReceipt binds an authorization decision to an anchored PolicyCommitment with
+// unambiguous structured principal/action/resource fields (F-32).
 func MakeReceipt(principal Principal, action string, resource Resource, pc *PolicyCommitment, allow bool) DecisionReceipt {
 	dec := "Deny"
 	if allow {
@@ -124,25 +138,118 @@ func MakeReceipt(principal Principal, action string, resource Resource, pc *Poli
 	}
 	return DecisionReceipt{
 		Request:       fmt.Sprintf(`%s::"%s"::%s::"%s/%s"`, principal.Type, principal.ID, action, resource.Shard, resource.ID),
+		PrincipalType: principal.Type,
+		PrincipalID:   principal.ID,
+		Action:        action,
+		ResourceType:  resource.Type,
+		ResourceShard: resource.Shard,
+		ResourceID:    resource.ID,
 		PolicySetHash: pc.Hash,
 		Decision:      dec,
 		Time:          time.Now().Unix(),
 	}
 }
 
+// DecisionReceiptDigest computes the domain-separated, length-framed digest over a DecisionReceipt's structured fields.
+func DecisionReceiptDigest(dr DecisionReceipt) []byte {
+	return core.DSHA256(core.Concat(
+		[]byte("nektar:policy-decision:v2"),
+		core.Field([]byte(dr.PrincipalType)),
+		core.Field([]byte(dr.PrincipalID)),
+		core.Field([]byte(dr.Action)),
+		core.Field([]byte(dr.ResourceType)),
+		core.Field([]byte(dr.ResourceShard)),
+		core.Field([]byte(dr.ResourceID)),
+		core.Field([]byte(dr.PolicySetHash)),
+		core.Field([]byte(dr.Decision)),
+		core.U64LE(uint64(dr.Time)),
+	))
+}
+
+// SignDecisionReceipt signs dr using issuerPubHex and a digest signer callback (preserving BRC-43 key custody).
+func SignDecisionReceipt(issuerPubHex string, signDigest func(digest []byte) ([]byte, error), dr *DecisionReceipt) error {
+	if issuerPubHex == "" || signDigest == nil || dr == nil {
+		return errors.New("policy: missing issuerPub, signer, or decision receipt")
+	}
+	if _, _, err := core.ParseStrictCompressedPubKey(issuerPubHex); err != nil {
+		return fmt.Errorf("policy: invalid issuerPub: %w", err)
+	}
+	dr.IssuerPub = issuerPubHex
+	sigBytes, err := signDigest(DecisionReceiptDigest(*dr))
+	if err != nil {
+		return err
+	}
+	dr.Signature = hex.EncodeToString(sigBytes)
+	return nil
+}
+
+// VerifyDecisionReceipt validates IssuerPub and Signature on a signed DecisionReceipt.
+func VerifyDecisionReceipt(dr DecisionReceipt) error {
+	if dr.IssuerPub == "" || dr.Signature == "" {
+		return errors.New("policy: unsigned decision receipt")
+	}
+	pub, _, err := core.ParseStrictCompressedPubKey(dr.IssuerPub)
+	if err != nil {
+		return fmt.Errorf("policy: invalid issuerPub: %w", err)
+	}
+	sig, err := core.ParseStrictLowSDER(dr.Signature)
+	if err != nil {
+		return fmt.Errorf("policy: invalid signature: %w", err)
+	}
+	if !sig.Verify(DecisionReceiptDigest(dr), pub) {
+		return errors.New("policy: invalid decision receipt signature")
+	}
+	return nil
+}
+
+const maxLevelIsolationSpan = 10000
+
 // ProveLevelIsolation performs bounded exhaustive verification confirming no principal
 // below fragmentLevel can read or disclose a fragment at fragmentLevel.
 func ProveLevelIsolation(policyText string, minLevel, fragmentLevel int64) (ok bool, checked, violations int, err error) {
+	if minLevel >= fragmentLevel {
+		return false, 0, 0, fmt.Errorf("policy: invalid level isolation range [%d, %d)", minLevel, fragmentLevel)
+	}
+	if fragmentLevel-minLevel > maxLevelIsolationSpan {
+		return false, 0, 0, fmt.Errorf("policy: level isolation span %d exceeds max %d", fragmentLevel-minLevel, maxLevelIsolationSpan)
+	}
+	ps, err := cedar.NewPolicySetFromBytes("policy.cedar", []byte(policyText))
+	if err != nil {
+		return false, 0, 0, fmt.Errorf("policy: parse cedar: %w", err)
+	}
+	pUID := cedar.NewEntityUID(cedar.EntityType("Agent"), cedar.String("probe"))
+	rUID := cedar.NewEntityUID(cedar.EntityType("Fragment"), cedar.String("f"))
+	rEnt := cedar.Entity{
+		UID: rUID,
+		Attributes: cedar.NewRecord(cedar.RecordMap{
+			"level": cedar.Long(fragmentLevel),
+			"shard": cedar.String("s"),
+			"class": cedar.String("c"),
+		}),
+	}
 	for lvl := minLevel; lvl < fragmentLevel; lvl++ {
+		entities := cedar.EntityMap{
+			pUID: cedar.Entity{
+				UID: pUID,
+				Attributes: cedar.NewRecord(cedar.RecordMap{
+					"level": cedar.Long(lvl),
+				}),
+			},
+			rUID: rEnt,
+		}
 		for _, act := range []string{"read", "disclose"} {
-			d, aErr := Authorize(policyText, Principal{Type: "Agent", ID: "probe", Level: lvl}, act, Resource{
-				Type: "Fragment", ID: "f", Level: fragmentLevel, Shard: "s", Class: "c",
+			aUID := cedar.NewEntityUID(cedar.EntityType("Action"), cedar.String(act))
+			dec, diag := ps.IsAuthorized(entities, cedar.Request{
+				Principal: pUID,
+				Action:    aUID,
+				Resource:  rUID,
+				Context:   cedar.NewRecord(nil),
 			})
-			if aErr != nil {
-				return false, checked, violations, aErr
+			if len(diag.Errors) > 0 {
+				return false, checked, violations, fmt.Errorf("policy: cedar evaluation error at level %d: %s", lvl, diag.Errors[0].Message)
 			}
 			checked++
-			if d.Allow {
+			if dec == cedar.Allow {
 				violations++
 			}
 		}

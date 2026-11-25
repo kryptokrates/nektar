@@ -42,14 +42,20 @@ func ResolveOrGenerateTokens(dataDir, apiTok, opTok string, requireAuth bool) (h
 	}
 	_ = os.MkdirAll(dataDir, 0o700)
 	if httpToken == "" {
-		tok, created := readOrCreateTokenFile(filepath.Join(dataDir, "http-token"))
+		tok, created, err := ReadOrCreateTokenFile(filepath.Join(dataDir, "http-token"))
+		if err != nil {
+			panic("auth: persist http-token: " + err.Error())
+		}
 		httpToken = tok
 		if created {
 			generated = true
 		}
 	}
 	if operatorToken == "" {
-		tok, created := readOrCreateTokenFile(filepath.Join(dataDir, "operator-token"))
+		tok, created, err := ReadOrCreateTokenFile(filepath.Join(dataDir, "operator-token"))
+		if err != nil {
+			panic("auth: persist operator-token: " + err.Error())
+		}
 		operatorToken = tok
 		if created {
 			generated = true
@@ -58,29 +64,61 @@ func ResolveOrGenerateTokens(dataDir, apiTok, opTok string, requireAuth bool) (h
 	return httpToken, operatorToken, generated
 }
 
-func readOrCreateTokenFile(path string) (string, bool) {
+// ReadOrCreateTokenFile atomically loads or creates a mode-0600 32-byte hex secret token file
+// using O_CREATE|O_EXCL to prevent TOCTOU races and fails closed if persistence fails.
+func ReadOrCreateTokenFile(path string) (string, bool, error) {
 	if raw, err := os.ReadFile(path); err == nil {
 		if s := strings.TrimSpace(string(raw)); len(s) >= 16 {
 			_ = os.Chmod(path, 0o600)
-			return s, false
+			return s, false, nil
 		}
+	} else if !os.IsNotExist(err) {
+		return "", false, fmt.Errorf("read token %s: %w", path, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", false, fmt.Errorf("mkdir for token %s: %w", path, err)
 	}
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		panic("auth: crypto/rand failed: " + err.Error())
+		return "", false, fmt.Errorf("crypto/rand failed: %w", err)
 	}
 	tok := hex.EncodeToString(b[:])
 	clear(b[:])
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(tok+"\n"), 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return tok, true
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			// Concurrent creator won the race; read the winning persisted token.
+			raw, rErr := os.ReadFile(path)
+			if rErr != nil {
+				return "", false, fmt.Errorf("re-read token %s: %w", path, rErr)
+			}
+			s := strings.TrimSpace(string(raw))
+			if len(s) < 16 {
+				return "", false, fmt.Errorf("existing token %s is invalid", path)
+			}
+			_ = os.Chmod(path, 0o600)
+			return s, false, nil
+		}
+		return "", false, fmt.Errorf("create token %s: %w", path, err)
 	}
-	_ = os.Chmod(tmp, 0o600)
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	_, wErr := f.Write([]byte(tok + "\n"))
+	sErr := f.Sync()
+	cErr := f.Close()
+	if wErr != nil {
+		_ = os.Remove(path)
+		return "", false, fmt.Errorf("write token %s: %w", path, wErr)
 	}
-	return tok, true
+	if sErr != nil {
+		_ = os.Remove(path)
+		return "", false, fmt.Errorf("sync token %s: %w", path, sErr)
+	}
+	if cErr != nil {
+		_ = os.Remove(path)
+		return "", false, fmt.Errorf("close token %s: %w", path, cErr)
+	}
+	_ = os.Chmod(path, 0o600)
+	return tok, true, nil
 }
 
 // StartupBannerOpts configures the human-readable Startup Card printed on stderr at boot.

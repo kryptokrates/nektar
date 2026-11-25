@@ -208,6 +208,15 @@ CREATE TABLE IF NOT EXISTS kv (
 	}
 	// Idempotent column migration for existing databases created before v0.4.1.
 	_, _ = d.sql.Exec(`ALTER TABLE fragments ADD COLUMN tainted INTEGER NOT NULL DEFAULT 0`)
+	// Clean up any orphaned FTS5 rows belonging to forgotten fragments (crash recovery for shredded records).
+	if _, err := d.sql.Exec(`
+		DELETE FROM fragments_fts
+		WHERE EXISTS (
+			SELECT 1 FROM fragments f
+			WHERE f.shard = fragments_fts.shard AND f.seq = fragments_fts.seq AND f.forgotten = 1
+		)`); err != nil {
+		return fmt.Errorf("store: clean forgotten fts: %w", err)
+	}
 	// Backfill FTS5 index for any existing unencrypted, unforgotten rows not yet indexed.
 	_, _ = d.sql.Exec(`
 		INSERT INTO fragments_fts (shard, seq, text)
@@ -232,8 +241,14 @@ func (d *DB) AppendFragment(rec FragmentRecord) (FragmentRecord, bool, error) {
 		return FragmentRecord{}, false, err
 	}
 
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return FragmentRecord{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var nextSeq int64
-	if err := d.sql.QueryRow(`SELECT COALESCE(MAX(seq), 0) + 1 FROM fragments WHERE shard = ?`, rec.Shard).Scan(&nextSeq); err != nil {
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(seq), 0) + 1 FROM fragments WHERE shard = ?`, rec.Shard).Scan(&nextSeq); err != nil {
 		return FragmentRecord{}, false, err
 	}
 	rec.Seq = nextSeq
@@ -244,7 +259,7 @@ func (d *DB) AppendFragment(rec FragmentRecord) (FragmentRecord, bool, error) {
 	if rec.Class == "" {
 		rec.Class = "general"
 	}
-	_, err = d.sql.Exec(`
+	_, err = tx.Exec(`
 		INSERT INTO fragments (
 			shard, seq, hdp, leaf, data, ciphertext, keyed_meta, provenance,
 			level, class, borg_group, borg_epoch, batch_n, leaf_index,
@@ -258,7 +273,12 @@ func (d *DB) AppendFragment(rec FragmentRecord) (FragmentRecord, bool, error) {
 		return FragmentRecord{}, false, err
 	}
 	if !rec.Forgotten && rec.BorgGroup == "" && len(rec.Data) > 0 {
-		_, _ = d.sql.Exec(`INSERT INTO fragments_fts (shard, seq, text) VALUES (?, ?, ?)`, rec.Shard, rec.Seq, string(rec.Data))
+		if _, err := tx.Exec(`INSERT INTO fragments_fts (shard, seq, text) VALUES (?, ?, ?)`, rec.Shard, rec.Seq, string(rec.Data)); err != nil {
+			return FragmentRecord{}, false, fmt.Errorf("store: index fragment fts: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return FragmentRecord{}, false, err
 	}
 	return rec, false, nil
 }
@@ -547,17 +567,41 @@ func (d *DB) ListShards() ([]string, error) {
 	return out, rows.Err()
 }
 
-// ForgetFragment shreds local plaintext, ciphertext, and BRC-369 keyed envelope metadata
-// while preserving the hash/Merkle commitment.
+// ForgetFragment atomically shreds local plaintext, ciphertext, BRC-369 keyed envelope metadata,
+// and its FTS5 search index entry while preserving the hash/Merkle commitment.
 func (d *DB) ForgetFragment(shard string, seq int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	_, err := d.sql.Exec(`UPDATE fragments SET data = NULL, ciphertext = NULL, keyed_meta = NULL, forgotten = 1 WHERE shard = ? AND seq = ?`, shard, seq)
+	tx, err := d.sql.Begin()
 	if err != nil {
 		return err
 	}
-	_, _ = d.sql.Exec(`DELETE FROM fragments_fts WHERE shard = ? AND seq = ?`, shard, seq)
-	return nil
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`UPDATE fragments SET data = NULL, ciphertext = NULL, keyed_meta = NULL, forgotten = 1 WHERE shard = ? AND seq = ?`, shard, seq); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM fragments_fts WHERE shard = ? AND seq = ?`, shard, seq); err != nil {
+		return fmt.Errorf("store: shred fts: %w", err)
+	}
+	return tx.Commit()
+}
+
+// CountUnsettledAnchors returns the number of broadcast batch anchors without a mined BUMP proof.
+func (d *DB) CountUnsettledAnchors() (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var n int
+	err := d.sql.QueryRow(`SELECT COUNT(*) FROM anchors WHERE settled = 0`).Scan(&n)
+	return n, err
+}
+
+// CountPendingAnchors returns the number of in-flight anchor batches awaiting broadcast completion.
+func (d *DB) CountPendingAnchors() (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var n int
+	err := d.sql.QueryRow(`SELECT COUNT(*) FROM pending_anchors`).Scan(&n)
+	return n, err
 }
 
 // RecordBatchAnchor atomically records an anchor (using strict INSERT to prevent overwriting existing N)

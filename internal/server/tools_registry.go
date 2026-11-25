@@ -323,7 +323,7 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 		if err := json.Unmarshal(rawArgs, &in); err != nil {
 			return nil, err
 		}
-		return tb.ExecBorgGroup(in)
+		return tb.ExecBorgGroupCtx(ctx, in)
 
 	case "exportPack":
 		var in struct {
@@ -331,6 +331,9 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 		}
 		if err := json.Unmarshal(rawArgs, &in); err != nil {
 			return nil, err
+		}
+		if p, disallowBorg, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
+			return tb.mem.ExportShardPackAuthorized(ctx, in.Shard, p, "disclose", disallowBorg)
 		}
 		return tb.mem.ExportShardPack(ctx, in.Shard)
 
@@ -762,6 +765,14 @@ type BorgGroupInput struct {
 	PubHex    string            `json:"pubHex,omitempty"`
 	Role      string            `json:"role,omitempty"`
 	Principal *policy.Principal `json:"principal,omitempty"`
+}
+
+// ExecBorgGroupCtx enforces operator authentication before mutating or inspecting Borg groups.
+func (tb *Toolbox) ExecBorgGroupCtx(ctx context.Context, in BorgGroupInput) (any, error) {
+	if _, _, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
+		return nil, errors.New("operator token required for borgGroup")
+	}
+	return tb.ExecBorgGroup(in)
 }
 
 func (tb *Toolbox) ExecBorgGroup(in BorgGroupInput) (any, error) {

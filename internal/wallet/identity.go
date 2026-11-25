@@ -82,17 +82,64 @@ func LoadOrCreateIdentity(dir string) (*ec.PrivateKey, error) {
 		return nil, err
 	}
 	defer clear(b)
-	tmp := idPath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return nil, fmt.Errorf("wallet: write %s: %w", tmp, err)
+	// Atomic O_CREATE|O_EXCL prevents concurrent first-boot processes from overwriting a live root key.
+	fd, err := os.OpenFile(idPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			zeroECKey(priv)
+			return loadIdentityFile(idPath)
+		}
+		return nil, fmt.Errorf("wallet: create %s: %w", idPath, err)
 	}
-	_ = os.Chmod(tmp, 0o600)
-	if err := os.Rename(tmp, idPath); err != nil {
-		_ = os.Remove(tmp)
-		return nil, fmt.Errorf("wallet: rename %s: %w", idPath, err)
+	_, wErr := fd.Write(b)
+	sErr := fd.Sync()
+	cErr := fd.Close()
+	if wErr != nil || sErr != nil || cErr != nil {
+		_ = os.Remove(idPath)
+		if wErr != nil {
+			return nil, fmt.Errorf("wallet: write %s: %w", idPath, wErr)
+		}
+		if sErr != nil {
+			return nil, fmt.Errorf("wallet: sync %s: %w", idPath, sErr)
+		}
+		return nil, fmt.Errorf("wallet: close %s: %w", idPath, cErr)
 	}
+	_ = hardenFileACL(idPath)
 	return priv, nil
+}
+
+func loadIdentityFile(idPath string) (*ec.PrivateKey, error) {
+	raw, err := os.ReadFile(idPath)
+	if err != nil {
+		return nil, fmt.Errorf("wallet: read %s: %w", idPath, err)
+	}
+	defer clear(raw)
+	_ = hardenFileACL(idPath)
+	var f identityFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return nil, fmt.Errorf("wallet: parse %s: %w", idPath, err)
+	}
+	if f.WIF != "" {
+		priv, wErr := ec.PrivateKeyFromWif(f.WIF)
+		if wErr != nil {
+			return nil, fmt.Errorf("wallet: decode wif in %s: %w", idPath, wErr)
+		}
+		return priv, nil
+	}
+	if f.RootKeyHex != "" {
+		keyBytes, hErr := hex.DecodeString(f.RootKeyHex)
+		if hErr != nil || len(keyBytes) != 32 {
+			clear(keyBytes)
+			return nil, fmt.Errorf("wallet: invalid rootKeyHex in %s", idPath)
+		}
+		priv, _ := ec.PrivateKeyFromBytes(keyBytes)
+		clear(keyBytes)
+		if priv == nil {
+			return nil, fmt.Errorf("wallet: invalid root key in %s", idPath)
+		}
+		return priv, nil
+	}
+	return nil, fmt.Errorf("wallet: %s missing wif/rootKeyHex", idPath)
 }
 
 // openPureGoGORM opens a pure-Go modernc.org/sqlite writer connection (MaxOpenConns=1 for

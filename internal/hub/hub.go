@@ -158,8 +158,11 @@ type Node struct {
 	bountyHandler BountyHandler
 	httpClient    *http.Client
 	sseClient     *http.Client
-	stopCh        chan struct{}
-	closeOnce     sync.Once
+	stopCh       chan struct{}
+	closeOnce    sync.Once
+	sseStopCh    chan struct{}
+	sseCloseOnce sync.Once
+	wg           sync.WaitGroup
 }
 
 // NewNode constructs an embedded durable Hub Node mounting Nektar's 16 market lanes + requested Lightweb modules.
@@ -195,6 +198,7 @@ func NewNode(cfg Config) (*Node, error) {
 		httpClient:    core.SafeHTTPClientForNetwork(net, 20*time.Second),
 		sseClient:     core.SafeHTTPClientForNetwork(net, 0),
 		stopCh:        make(chan struct{}),
+		sseStopCh:     make(chan struct{}),
 	}
 
 	// 1. Mount Nektar v0.4 market module (tm_nektar_<net>_0..f + ls_nektar) with durable SSE callback!
@@ -267,7 +271,11 @@ func NewNode(cfg Config) (*Node, error) {
 	}
 
 	// 5. Always-on background maintenance (expiry GC for hub_events + bbox TTL/row cap, even on standalone hubs).
-	go n.maintenanceLoop()
+	n.wg.Add(1)
+	go func() {
+		defer n.wg.Done()
+		n.maintenanceLoop()
+	}()
 
 	return n, nil
 }
@@ -299,8 +307,19 @@ func (n *Node) maintenanceLoop() {
 	}
 }
 
+// CloseSSE signals active /events SSE handlers to exit cleanly so http.Server.Shutdown does not stall.
+func (n *Node) CloseSSE() {
+	n.sseCloseOnce.Do(func() {
+		if n.sseStopCh != nil {
+			close(n.sseStopCh)
+		}
+	})
+}
+
 func (n *Node) Close() error {
+	n.CloseSSE()
 	n.closeOnce.Do(func() { close(n.stopCh) })
+	n.wg.Wait()
 	return n.store.Close()
 }
 func (n *Node) Store() *Store          { return n.store }
@@ -506,6 +525,10 @@ func (n *Node) claimBboxNonce(scope, nonce string, now int64) bool {
 // Submit processes a BRC-22 Atomic BEEF submission against requested topics, persists durably with a monotonic seq,
 // notifies lookup services, and pushes numbered SSE events.
 func (n *Node) Submit(ctx context.Context, rawBEEF []byte, topics []string) (overlay.Steak, error) {
+	return n.submitInternal(ctx, rawBEEF, topics, false)
+}
+
+func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []string, isFederation bool) (overlay.Steak, error) {
 	if len(rawBEEF) == 0 {
 		return nil, errors.New("hub: empty BEEF body")
 	}
@@ -558,7 +581,7 @@ func (n *Node) Submit(ctx context.Context, rawBEEF []byte, topics []string) (ove
 			var exp int64
 			if isNkt {
 				pub, domains, exp = extractMeta(p)
-				if !n.allowPubRate(pub) {
+				if !isFederation && !n.allowPubRate(pub) {
 					return nil, errors.New("hub: rate limit exceeded for pubkey")
 				}
 			}
@@ -649,24 +672,39 @@ func (n *Node) StartFederation(ctx context.Context, peerHubURLs []string) {
 		if peer == "" {
 			continue
 		}
-		go n.federatePeerLoop(ctx, peer)
+		n.wg.Add(1)
+		go func(p string) {
+			defer n.wg.Done()
+			n.federatePeerLoop(ctx, p)
+		}(peer)
 	}
 }
 
 func (n *Node) federatePeerLoop(ctx context.Context, peer string) {
+	fedCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-n.stopCh:
+			cancel()
+		case <-fedCtx.Done():
+		}
+	}()
 	cursor := n.store.GetFedCursor(peer)
 	for {
-		if ctx.Err() != nil {
+		if fedCtx.Err() != nil {
 			return
 		}
-		next := n.pullPeerOnce(ctx, peer, cursor)
+		next := n.pullPeerOnce(fedCtx, peer, cursor)
 		if next > cursor {
 			cursor = next
 			_ = n.store.SetFedCursor(peer, cursor)
 		}
 		backoff := time.Duration(float64(3*time.Second) * (0.5 + rand.Float64()))
 		select {
-		case <-ctx.Done():
+		case <-fedCtx.Done():
+			return
+		case <-n.stopCh:
 			return
 		case <-time.After(backoff):
 		}
@@ -732,7 +770,13 @@ func (n *Node) syncRange(ctx context.Context, peer string, cursor int64) int64 {
 		advanced := false
 		for _, it := range items {
 			if len(it.BEEF) > 0 && it.Topic != "" {
-				_, _ = n.Submit(ctx, it.BEEF, []string{it.Topic})
+				if _, sErr := n.submitInternal(ctx, it.BEEF, []string{it.Topic}, true); sErr != nil {
+					// Stop advancing federation cursor on transient storage/rate error so failed events retry cleanly.
+					lower := strings.ToLower(sErr.Error())
+					if strings.Contains(lower, "rate limit") || strings.Contains(lower, "busy") || strings.Contains(lower, "locked") {
+						return cursor
+					}
+				}
 			}
 			if it.Seq > cursor {
 				cursor = it.Seq
@@ -850,12 +894,14 @@ func (n *Node) Handler() http.Handler {
 
 		var lastSent int64 = cursor
 		if cursor >= 0 && (r.URL.Query().Has("cursor") || r.Header.Get("Last-Event-ID") != "") {
-			// Drain full backlog in paginated 200-event chunks before switching to live push!
+			// Drain full backlog in paginated 200-row chunks using raw scanned cursor so domain filtering never truncates replay!
+			scanCursor := cursor
 			for {
-				backlog, bErr := n.store.EventsSince(lastSent, doms, 200)
-				if bErr != nil || len(backlog) == 0 {
+				backlog, nextCursor, rawCount, bErr := n.store.EventsSinceScanned(scanCursor, doms, 200)
+				if bErr != nil || rawCount == 0 {
 					break
 				}
+				scanCursor = nextCursor
 				for _, st := range backlog {
 					ev := bstack.MarketEvent{
 						Seq:        st.Seq,
@@ -871,8 +917,10 @@ func (n *Node) Handler() http.Handler {
 						lastSent = ev.Seq
 					}
 				}
-				flusher.Flush()
-				if len(backlog) < 200 {
+				if len(backlog) > 0 {
+					flusher.Flush()
+				}
+				if rawCount < 200 {
 					break
 				}
 			}
@@ -883,6 +931,10 @@ func (n *Node) Handler() http.Handler {
 		for {
 			select {
 			case <-r.Context().Done():
+				return
+			case <-n.sseStopCh:
+				return
+			case <-n.stopCh:
 				return
 			case ev, ok := <-ch:
 				if !ok {
@@ -936,12 +988,13 @@ func (n *Node) Handler() http.Handler {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid bbox sender signature"})
 			return
 		}
-		if !n.claimBboxNonce("send:"+msg.SenderPub, msg.Nonce, now) {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "replayed bbox message nonce"})
-			return
-		}
+		// Rate-limit BEFORE claiming global bboxNonce slot so 1 client cannot DoS Hub-wide bbox (F6).
 		if !n.allowPubRate(msg.SenderPub) {
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+			return
+		}
+		if !n.claimBboxNonce("send:"+msg.SenderPub, msg.Nonce, now) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "replayed bbox message nonce"})
 			return
 		}
 		seq, err := n.store.SaveBboxMessage(msg)
@@ -983,6 +1036,10 @@ func (n *Node) Handler() http.Handler {
 		}
 		if err := bstack.VerifyArtifact(pub, hdrSig, authPayload); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid bbox inbox signature"})
+			return
+		}
+		if !n.allowPubRate(pub) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 			return
 		}
 		if !n.claimBboxNonce("inbox:"+pub, hdrNonce, now) {
@@ -1035,6 +1092,10 @@ func (n *Node) Handler() http.Handler {
 			return
 		}
 
+		if !n.allowPubRate(sub.SellerPub) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+			return
+		}
 		b, err := n.store.GetBounty(sub.BountyID)
 		if err != nil || !b.Active || b.Filled >= b.MaxFills {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "bounty not found or already filled"})

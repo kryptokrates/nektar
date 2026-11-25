@@ -1,6 +1,7 @@
 package chain
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-sdk/chainhash"
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
@@ -576,6 +578,14 @@ func (p *Port) Send(ctx context.Context, args nwallet.SendArgs) (*nwallet.SendRe
 		if sErr != nil {
 			return nil, sErr
 		}
+		if res.Tx != nil && lockScript != nil {
+			for idx, o := range res.Tx.Outputs {
+				if o.LockingScript != nil && bytes.Equal(*o.LockingScript, *lockScript) && o.Satoshis == args.Satoshis {
+					res.OutputIndex = uint32(idx)
+					break
+				}
+			}
+		}
 		res.DerivationPrefix = preB64
 		res.DerivationSuffix = sufB64
 		res.SenderIdentityKey = p.IdentityPubHex()
@@ -597,10 +607,13 @@ func (p *Port) clientCreateAction(ctx context.Context, outputs []*transaction.Tr
 			estFee = ef
 		}
 	}
+	var resID string
 	if !overrideGuard {
-		// Read-only cap pre-check before asking remote BRC-100 wallet to sign/broadcast.
-		if err := p.guard.Check(estFee, outTotal+estFee); err != nil {
-			return nil, err
+		// Atomically reserve daily SpendGuard budget BEFORE asking remote BRC-100 wallet to broadcast.
+		var rErr error
+		resID, rErr = p.guard.Reserve(estFee, outTotal+estFee)
+		if rErr != nil {
+			return nil, rErr
 		}
 	}
 	if desc == "" {
@@ -626,6 +639,9 @@ func (p *Port) clientCreateAction(ctx context.Context, outputs []*transaction.Tr
 		},
 	}, Originator)
 	if err != nil {
+		if resID != "" {
+			p.guard.CancelReservation(resID)
+		}
 		return nil, fmt.Errorf("chain: client wallet CreateAction: %w", err)
 	}
 	txid := actRes.Txid.String()
@@ -641,8 +657,10 @@ func (p *Port) clientCreateAction(ctx context.Context, outputs []*transaction.Tr
 		}
 	}
 	if !overrideGuard {
-		// Record real txid & fee after client wallet signs/broadcasts (idempotent on txid).
-		_ = p.guard.CheckAndRecord(txid, actualFee, outTotal+actualFee)
+		// Unconditionally commit real broadcast spend so spentToday never under-counts.
+		if cErr := p.guard.CommitReservation(resID, txid, actualFee, outTotal+actualFee); cErr != nil {
+			return nil, fmt.Errorf("chain: persist SpendGuard record for broadcast tx %s: %w", txid, cErr)
+		}
 	}
 	return &nwallet.SendResult{
 		TxID:     txid,
@@ -851,6 +869,61 @@ func (p *Port) BuildFundedTx(ctx context.Context, outputs []*transaction.Transac
 	return tx, feeSats, outTotal + feeSats, nil
 }
 
+// BuildBRC29Tx constructs a signed (NoSend in embedded mode) BRC-29 payment transaction and returns
+// its remittance metadata BEFORE broadcasting so durable workflows can persist txid + BEEF + nonces
+// atomically prior to Broadcast (eliminating double-pay and stranded remittance on crash/retry).
+// In client mode, where the remote wallet signs and broadcasts atomically, it executes Send directly
+// and sets alreadyBroadcast=true.
+func (p *Port) BuildBRC29Tx(ctx context.Context, toIdentityKey string, sats uint64, desc string) (tx *transaction.Transaction, fee, spend uint64, res *nwallet.SendResult, alreadyBroadcast bool, err error) {
+	if p.engine == nil {
+		sr, sErr := p.Send(ctx, nwallet.SendArgs{
+			ToIdentityKey: toIdentityKey,
+			Satoshis:      sats,
+			Description:   desc,
+			Labels:        []string{"market", "purchase"},
+		})
+		if sErr != nil {
+			return nil, 0, 0, nil, false, sErr
+		}
+		return sr.Tx, sr.FeeSats, sr.Satoshis + sr.FeeSats, sr, true, nil
+	}
+	preB64, sufB64 := randomBRC29Nonce()
+	lockScript, err := p.signer.PaymentDestination(ctx, strings.TrimSpace(toIdentityKey), preB64, sufB64)
+	if err != nil {
+		return nil, 0, 0, nil, false, err
+	}
+	tx, fee, spend, err = p.BuildFundedTx(ctx, []*transaction.TransactionOutput{{Satoshis: sats, LockingScript: lockScript}})
+	if err != nil {
+		return nil, 0, 0, nil, false, err
+	}
+	var outIdx uint32
+	if tx != nil && lockScript != nil {
+		for idx, o := range tx.Outputs {
+			if o.LockingScript != nil && bytes.Equal(*o.LockingScript, *lockScript) && o.Satoshis == sats {
+				outIdx = uint32(idx)
+				break
+			}
+		}
+	}
+	beef, bErr := SafeAtomicBEEF(tx)
+	if bErr != nil {
+		_ = p.engine.AbortNoSendByTxID(ctx, tx.TxID().String())
+		return nil, 0, 0, nil, false, bErr
+	}
+	return tx, fee, spend, &nwallet.SendResult{
+		TxID:              tx.TxID().String(),
+		Satoshis:          sats,
+		FeeSats:           fee,
+		BEEF:              beef,
+		BEEFHex:           hex.EncodeToString(beef),
+		Tx:                tx,
+		OutputIndex:       outIdx,
+		DerivationPrefix:  preB64,
+		DerivationSuffix:  sufB64,
+		SenderIdentityKey: p.IdentityPubHex(),
+	}, false, nil
+}
+
 // Broadcast enforces SpendGuard caps, then broadcasts tx on testchain or configured live settler.
 // On ANY failure before broadcast succeeds, reserved UTXOs are atomically rolled back via go-wallet-toolbox AbortAction!
 func (p *Port) Broadcast(ctx context.Context, tx *transaction.Transaction, feeSats, spendSats uint64) (string, error) {
@@ -875,6 +948,13 @@ func (p *Port) Broadcast(ctx context.Context, tx *transaction.Transaction, feeSa
 		delete(p.pendingNoSend, txid)
 	}
 	p.mu.Unlock()
+	// Consult durable wallet.sqlite status in addition to RAM pendingNoSend so a restart/retry
+	// between BuildFundedTx and Broadcast NEVER bypasses SendNoSendTx into raw settler.Submit.
+	if p.engine != nil && !hadNoSend {
+		if st, ok := p.engine.TxStatus(ctx, txid); ok && st == "nosend" {
+			hadNoSend = true
+		}
+	}
 
 	rollback := func() {
 		if p.engine == nil || !hadNoSend {
@@ -938,9 +1018,13 @@ func (p *Port) Broadcast(ctx context.Context, tx *transaction.Transaction, feeSa
 		return "", errors.New("chain: no live settler configured (set NEKTAR_SETTLE_SPEC)")
 	}
 	if err := p.settler.Submit(ctx, tx); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		lower := strings.ToLower(err.Error())
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+			strings.Contains(lower, "timeout") || strings.Contains(lower, "eof") ||
+			strings.Contains(lower, "http 5") || strings.Contains(lower, "connection refused") {
 			return "", fmt.Errorf("chain: %s broadcast: %w: %w", p.settler.Name(), nwallet.ErrBroadcastUnknown, err)
 		}
+		p.guard.Refund(txid)
 		return "", fmt.Errorf("chain: %s broadcast: %w", p.settler.Name(), err)
 	}
 	if p.engine != nil {
@@ -963,29 +1047,72 @@ func (p *Port) AdoptChange(tx *transaction.Transaction) error {
 	return err
 }
 
-// Proof returns the verified MerklePath + height if txid is mined.
+// Proof returns the header-verified MerklePath + height if txid is mined.
 func (p *Port) Proof(ctx context.Context, txid string) (*transaction.MerklePath, uint32, bool) {
 	if p.testChain != nil {
 		p.tcMu.Lock()
 		defer p.tcMu.Unlock()
 		return p.testChain.Proof(txid)
 	}
+	verifyProof := func(mp *transaction.MerklePath, h uint32) bool {
+		if mp == nil {
+			return false
+		}
+		if h == 0 {
+			h = mp.BlockHeight
+		}
+		if p.tracker == nil {
+			return false
+		}
+		txHash, err := chainhash.NewHashFromHex(txid)
+		if err != nil {
+			return false
+		}
+		root, err := mp.ComputeRoot(txHash)
+		if err != nil || root == nil {
+			return false
+		}
+		valid, err := p.tracker.IsValidRootForHeight(ctx, root, h)
+		return err == nil && valid
+	}
 	if p.arcade != nil {
-		if mp, h, err := p.arcade.Proof(ctx, txid); err == nil && mp != nil {
+		if mp, h, err := p.arcade.Proof(ctx, txid); err == nil && mp != nil && verifyProof(mp, h) {
+			if h == 0 {
+				h = mp.BlockHeight
+			}
 			return mp, h, true
 		}
 	}
 	if p.nodeChain != nil {
-		if mp, h, err := p.nodeChain.Proof(ctx, txid); err == nil && mp != nil {
+		if mp, h, err := p.nodeChain.Proof(ctx, txid); err == nil && mp != nil && verifyProof(mp, h) {
+			if h == 0 {
+				h = mp.BlockHeight
+			}
 			return mp, h, true
 		}
 	}
 	if p.engine != nil {
-		if tx, err := p.engine.LoadParsedTx(ctx, txid); err == nil && tx != nil && tx.MerklePath != nil {
+		if tx, err := p.engine.LoadParsedTx(ctx, txid); err == nil && tx != nil && tx.MerklePath != nil && verifyProof(tx.MerklePath, tx.MerklePath.BlockHeight) {
 			return tx.MerklePath, tx.MerklePath.BlockHeight, true
 		}
 	}
 	return nil, 0, false
+}
+
+// TxBroadcastStatus returns verified mining proof AND durable local wallet status for txid,
+// enabling crash recovery (ReconcilePendingAnchors) to distinguish unbroadcast NoSend txs from live broadcasts.
+func (p *Port) TxBroadcastStatus(ctx context.Context, txid string) (mined bool, walletStatus string, mp *transaction.MerklePath, height uint32) {
+	mp, height, mined = p.Proof(ctx, txid)
+	if p.engine != nil {
+		if st, ok := p.engine.TxStatus(ctx, txid); ok {
+			walletStatus = st
+		}
+	} else if mined {
+		walletStatus = "completed"
+	} else if p.Tx(txid) != nil {
+		walletStatus = "unproven"
+	}
+	return mined, walletStatus, mp, height
 }
 
 // Tx returns a known transaction by txid (from testchain, bounded SQLite LRU cache, or client cache).
@@ -1111,7 +1238,11 @@ func AnchorOutput(lockScript *script.Script) *transaction.TransactionOutput {
 
 func randomBRC29Nonce() (string, string) {
 	var pre, suf [16]byte
-	_, _ = rand.Read(pre[:])
-	_, _ = rand.Read(suf[:])
+	if _, err := rand.Read(pre[:]); err != nil {
+		panic("chain: crypto/rand failed: " + err.Error())
+	}
+	if _, err := rand.Read(suf[:]); err != nil {
+		panic("chain: crypto/rand failed: " + err.Error())
+	}
 	return base64.StdEncoding.EncodeToString(pre[:]), base64.StdEncoding.EncodeToString(suf[:])
 }

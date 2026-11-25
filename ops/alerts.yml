@@ -1,44 +1,49 @@
-# OPS-003 Prometheus alert rules for nektar (scrape /v1/metrics).
+# OPS-003 Prometheus alert rules for nektar v0.4 (scrape GET /v1/metrics).
+# Every metric name referenced below is verified by TestMetricsAlertsParity in internal/server.
 groups:
   - name: nektar
     rules:
-      - alert: NektarAnchorFailure
-        expr: increase(nektar_anchor_failures_total[10m]) > 0
+      - alert: NektarPendingAnchorsStuck
+        expr: nektar_pending_anchors > 0
+        for: 10m
         labels: { severity: critical }
-        annotations: { summary: 'anchor broadcast failed on shard {{ $labels.shard }}' }
-      - alert: NektarPromiseViolation
-        expr: nektar_promise_violations > 0
-        labels: { severity: critical }
-        annotations: { summary: 'inclusion promises past the max merge delay without a signed checkpoint (LOG-005)' }
-      - alert: NektarAnchorLag
-        expr: nektar_anchor_lag_ms > 300000
-        for: 5m
-        labels: { severity: warning }
-        annotations: { summary: 'oldest uncheckpointed promise older than 5 minutes' }
-      - alert: NektarUnconfirmedAnchors
-        expr: nektar_unconfirmed_anchors > 50
+        annotations: { summary: 'in-flight anchor batch stuck in pending_anchors — check broadcaster and wallet recovery' }
+      - alert: NektarUnsettledAnchorsHigh
+        expr: nektar_unsettled_anchors > 50
         for: 15m
         labels: { severity: warning }
-        annotations: { summary: 'many anchors without a BUMP — mining stalled or reorg in progress' }
-      - alert: NektarReorgSuspected
-        expr: delta(nektar_unconfirmed_anchors[5m]) > 10
+        annotations: { summary: 'many broadcast anchors without a mined BUMP — mining stalled or header sync delayed' }
+      - alert: NektarUnsettledAnchorsSpike
+        expr: delta(nektar_unsettled_anchors[5m]) > 10
         labels: { severity: warning }
-        annotations: { summary: 'unconfirmed anchors jumped — possible reorg (CHN-002 re-anchors automatically)' }
-      - alert: NektarReadRejectionsSpike
-        expr: sum(rate(nektar_rejected_reads_total[5m])) > 1
-        for: 10m
-        labels: { severity: info }
-        annotations: { summary: 'elevated withheld reads (policy, clearance, finality) — check for probing' }
+        annotations: { summary: 'unsettled anchors jumped sharply — verify broadcaster/proof refresh health' }
+      - alert: NektarUnanchoredBacklog
+        expr: nektar_unanchored_fragments > 500
+        for: 30m
+        labels: { severity: warning }
+        annotations: { summary: 'unanchored fragment backlog growing — check anchor cadence and wallet balance' }
       - alert: NektarFeeBalanceLow
         expr: nektar_fee_balance_sats < 5000
         for: 30m
         labels: { severity: warning }
-        annotations: { summary: 'operator fee key below ~5 anchors of runway — top up the printed address' }
-      - alert: NektarSpendCapHit
-        expr: increase(nektar_spend_refused_total[15m]) > 0
+        annotations: { summary: 'wallet fee balance below 5,000 sats — top up the node funding address' }
+      - alert: NektarWalletUTXOsDepleted
+        expr: nektar_wallet_utxos < 2
+        for: 15m
         labels: { severity: warning }
-        annotations: { summary: 'SpendGuard refused a broadcast ({{ $labels.reason }}) — cap or interval hit' }
-      - alert: NektarBroadcastFailures
-        expr: increase(nektar_anchor_failures_total[10m]) > 2
+        annotations: { summary: 'wallet has fewer than 2 spendable UTXOs — concurrent anchoring/trading may contend' }
+      - alert: NektarSpendGuardNearDailyCap
+        expr: nektar_spend_guard_daily_cap_sats > 0 and (nektar_spend_guard_spent_sats / nektar_spend_guard_daily_cap_sats) > 0.9
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: 'SpendGuard daily satoshi budget is >90% consumed' }
+      - alert: NektarRestateDetached
+        expr: nektar_restate_attached == 0
+        for: 5m
         labels: { severity: critical }
-        annotations: { summary: 'repeated broadcast failures — check broadcaster/WoC reachability and fee balance' }
+        annotations: { summary: 'Restate durable execution plane is detached — live market trades will refuse to execute' }
+      - alert: NektarRestartLoop
+        expr: changes(nektar_uptime_seconds[15m]) > 0 and nektar_uptime_seconds < 60
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: 'nektar daemon restarted repeatedly within 15m' }

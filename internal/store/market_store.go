@@ -43,25 +43,29 @@ type OperatorPolicyRecord struct {
 
 // DealRecord persists a buyer or seller deal across restarts with optimistic CAS revision.
 type DealRecord struct {
-	DealID          string `json:"dealId"`
-	Role            string `json:"role"`   // buyer | seller
-	Status          string `json:"status"` // open | collecting | offered | approval_pending | paid | settled | failed | expired
-	Shard           string `json:"shard,omitempty"`
-	WantJSON        []byte `json:"wantJson,omitempty"`
-	ChosenOfferJSON []byte `json:"chosenOfferJson,omitempty"`
-	PaymentTxID     string `json:"paymentTxid,omitempty"`
-	PaymentBEEF     []byte `json:"paymentBeef,omitempty"`
-	ClaimKeyHex     string `json:"claimKeyHex,omitempty"`
-	ChirpURL        string `json:"chirpUrl,omitempty"`
-	DeliveredText   string `json:"deliveredText,omitempty"`
-	CounterpartyPub string `json:"counterpartyPub,omitempty"`
-	PriceSats       uint64 `json:"priceSats"`
-	IsHubSeller     bool   `json:"isHubSeller,omitempty"`
-	FirstOfferMs    int64  `json:"firstOfferMs,omitempty"`
-	Error           string `json:"error,omitempty"`
-	Revision        int64  `json:"revision"`
-	CreatedAt       int64  `json:"createdAt"`
-	UpdatedAt       int64  `json:"updatedAt"`
+	DealID             string `json:"dealId"`
+	Role               string `json:"role"`   // buyer | seller
+	Status             string `json:"status"` // open | collecting | offered | approval_pending | paid | settled | failed | expired
+	Shard              string `json:"shard,omitempty"`
+	WantJSON           []byte `json:"wantJson,omitempty"`
+	ChosenOfferJSON    []byte `json:"chosenOfferJson,omitempty"`
+	PaymentTxID        string `json:"paymentTxid,omitempty"`
+	PaymentBEEF        []byte `json:"paymentBeef,omitempty"`
+	PaymentOutputIndex uint32 `json:"paymentOutputIndex,omitempty"`
+	PaymentDerivPrefix string `json:"paymentDerivPrefix,omitempty"`
+	PaymentDerivSuffix string `json:"paymentDerivSuffix,omitempty"`
+	PaymentSenderKey   string `json:"paymentSenderKey,omitempty"`
+	ClaimKeyHex        string `json:"claimKeyHex,omitempty"`
+	ChirpURL           string `json:"chirpUrl,omitempty"`
+	DeliveredText      string `json:"deliveredText,omitempty"`
+	CounterpartyPub    string `json:"counterpartyPub,omitempty"`
+	PriceSats          uint64 `json:"priceSats"`
+	IsHubSeller        bool   `json:"isHubSeller,omitempty"`
+	FirstOfferMs       int64  `json:"firstOfferMs,omitempty"`
+	Error              string `json:"error,omitempty"`
+	Revision           int64  `json:"revision"`
+	CreatedAt          int64  `json:"createdAt"`
+	UpdatedAt          int64  `json:"updatedAt"`
 }
 
 // Error sentinels for atomic CAS and replay-protection operations.
@@ -282,35 +286,49 @@ CREATE TABLE IF NOT EXISTS unmatched_wants (
 	if err != nil {
 		return err
 	}
-	_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN shard TEXT NOT NULL DEFAULT ''`)
-	_, _ = d.sql.Exec(`ALTER TABLE approvals ADD COLUMN awakeable_id TEXT NOT NULL DEFAULT ''`)
-	// Backfill payment_claim_inputs for any legacy payment_claims rows.
-	rows, qErr := d.sql.Query(`SELECT txid, inputs_json, claimed_at FROM payment_claims`)
-	if qErr == nil {
-		type legacyClaim struct {
-			txid      string
-			inputs    []string
-			claimedAt int64
-		}
-		var legacy []legacyClaim
-		for rows.Next() {
-			var txid string
-			var raw []byte
-			var at int64
-			if rows.Scan(&txid, &raw, &at) == nil {
-				var ins []string
-				_ = json.Unmarshal(raw, &ins)
-				legacy = append(legacy, legacyClaim{txid: txid, inputs: ins, claimedAt: at})
-			}
-		}
-		_ = rows.Close()
-		for _, c := range legacy {
-			for _, op := range c.inputs {
-				if op != "" {
-					_, _ = d.sql.Exec(`INSERT OR IGNORE INTO payment_claim_inputs (outpoint, txid, claimed_at) VALUES (?, ?, ?)`, op, c.txid, c.claimedAt)
+	var userVer int
+	_ = d.sql.QueryRow(`PRAGMA user_version`).Scan(&userVer)
+	if userVer < 2 {
+		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN shard TEXT NOT NULL DEFAULT ''`)
+		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN payment_output_index INTEGER NOT NULL DEFAULT 0`)
+		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN payment_deriv_prefix TEXT NOT NULL DEFAULT ''`)
+		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN payment_deriv_suffix TEXT NOT NULL DEFAULT ''`)
+		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN payment_sender_key TEXT NOT NULL DEFAULT ''`)
+		_, _ = d.sql.Exec(`ALTER TABLE approvals ADD COLUMN awakeable_id TEXT NOT NULL DEFAULT ''`)
+		// One-time transactional backfill of payment_claim_inputs for legacy payment_claims rows.
+		if userVer < 1 {
+			if tx, bErr := d.sql.Begin(); bErr == nil {
+				rows, qErr := tx.Query(`SELECT txid, inputs_json, claimed_at FROM payment_claims`)
+				if qErr == nil {
+					type legacyClaim struct {
+						txid      string
+						inputs    []string
+						claimedAt int64
+					}
+					var legacy []legacyClaim
+					for rows.Next() {
+						var txid string
+						var raw []byte
+						var at int64
+						if rows.Scan(&txid, &raw, &at) == nil {
+							var ins []string
+							_ = json.Unmarshal(raw, &ins)
+							legacy = append(legacy, legacyClaim{txid: txid, inputs: ins, claimedAt: at})
+						}
+					}
+					_ = rows.Close()
+					for _, c := range legacy {
+						for _, op := range c.inputs {
+							if op != "" {
+								_, _ = tx.Exec(`INSERT OR IGNORE INTO payment_claim_inputs (outpoint, txid, claimed_at) VALUES (?, ?, ?)`, op, c.txid, c.claimedAt)
+							}
+						}
+					}
 				}
+				_ = tx.Commit()
 			}
 		}
+		_, _ = d.sql.Exec(`PRAGMA user_version = 2`)
 	}
 	return nil
 }
@@ -519,9 +537,12 @@ func (d *DB) SaveDeal(rec DealRecord) error {
 	}
 	_, err := d.sql.Exec(`
 		INSERT OR REPLACE INTO deals
-		(deal_id, role, status, shard, want_json, chosen_offer_json, payment_txid, payment_beef, claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, error, revision, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(deal_id, role, status, shard, want_json, chosen_offer_json, payment_txid, payment_beef,
+		 payment_output_index, payment_deriv_prefix, payment_deriv_suffix, payment_sender_key,
+		 claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, error, revision, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.DealID, rec.Role, rec.Status, rec.Shard, rec.WantJSON, rec.ChosenOfferJSON, rec.PaymentTxID, rec.PaymentBEEF,
+		rec.PaymentOutputIndex, rec.PaymentDerivPrefix, rec.PaymentDerivSuffix, rec.PaymentSenderKey,
 		rec.ClaimKeyHex, rec.ChirpURL, rec.DeliveredText, rec.CounterpartyPub, rec.PriceSats,
 		boolToInt(rec.IsHubSeller), rec.FirstOfferMs, rec.Error, rec.Revision, rec.CreatedAt, rec.UpdatedAt)
 	return err
@@ -536,12 +557,16 @@ func (d *DB) UpdateDealCAS(rec DealRecord) (bool, error) {
 	res, err := d.sql.Exec(`
 		UPDATE deals SET
 			role = ?, status = ?, shard = ?, want_json = ?, chosen_offer_json = ?,
-			payment_txid = ?, payment_beef = ?, claim_key_hex = ?, chirp_url = ?,
+			payment_txid = ?, payment_beef = ?,
+			payment_output_index = ?, payment_deriv_prefix = ?, payment_deriv_suffix = ?, payment_sender_key = ?,
+			claim_key_hex = ?, chirp_url = ?,
 			delivered_text = ?, counterparty_pub = ?, price_sats = ?, is_hub_seller = ?,
 			first_offer_ms = ?, error = ?, revision = revision + 1, updated_at = ?
 		WHERE deal_id = ? AND revision = ?`,
 		rec.Role, rec.Status, rec.Shard, rec.WantJSON, rec.ChosenOfferJSON,
-		rec.PaymentTxID, rec.PaymentBEEF, rec.ClaimKeyHex, rec.ChirpURL,
+		rec.PaymentTxID, rec.PaymentBEEF,
+		rec.PaymentOutputIndex, rec.PaymentDerivPrefix, rec.PaymentDerivSuffix, rec.PaymentSenderKey,
+		rec.ClaimKeyHex, rec.ChirpURL,
 		rec.DeliveredText, rec.CounterpartyPub, rec.PriceSats, boolToInt(rec.IsHubSeller),
 		rec.FirstOfferMs, rec.Error, now, rec.DealID, rec.Revision)
 	if err != nil {
@@ -556,11 +581,14 @@ func (d *DB) GetDeal(dealID string) (DealRecord, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	row := d.sql.QueryRow(`
-		SELECT deal_id, role, status, shard, want_json, chosen_offer_json, payment_txid, payment_beef, claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, error, revision, created_at, updated_at
+		SELECT deal_id, role, status, shard, want_json, chosen_offer_json, payment_txid, payment_beef,
+		       COALESCE(payment_output_index, 0), COALESCE(payment_deriv_prefix, ''), COALESCE(payment_deriv_suffix, ''), COALESCE(payment_sender_key, ''),
+		       claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, error, revision, created_at, updated_at
 		FROM deals WHERE deal_id = ?`, dealID)
 	var r DealRecord
 	var hub int
 	err := row.Scan(&r.DealID, &r.Role, &r.Status, &r.Shard, &r.WantJSON, &r.ChosenOfferJSON, &r.PaymentTxID, &r.PaymentBEEF,
+		&r.PaymentOutputIndex, &r.PaymentDerivPrefix, &r.PaymentDerivSuffix, &r.PaymentSenderKey,
 		&r.ClaimKeyHex, &r.ChirpURL, &r.DeliveredText, &r.CounterpartyPub, &r.PriceSats, &hub, &r.FirstOfferMs,
 		&r.Error, &r.Revision, &r.CreatedAt, &r.UpdatedAt)
 	r.IsHubSeller = hub != 0
@@ -575,7 +603,9 @@ func (d *DB) ListDeals(limit int) ([]DealRecord, error) {
 		limit = 100
 	}
 	rows, err := d.sql.Query(`
-		SELECT deal_id, role, status, shard, want_json, chosen_offer_json, payment_txid, payment_beef, claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, error, revision, created_at, updated_at
+		SELECT deal_id, role, status, shard, want_json, chosen_offer_json, payment_txid, payment_beef,
+		       COALESCE(payment_output_index, 0), COALESCE(payment_deriv_prefix, ''), COALESCE(payment_deriv_suffix, ''), COALESCE(payment_sender_key, ''),
+		       claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, error, revision, created_at, updated_at
 		FROM deals ORDER BY updated_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -586,6 +616,7 @@ func (d *DB) ListDeals(limit int) ([]DealRecord, error) {
 		var r DealRecord
 		var hub int
 		if err := rows.Scan(&r.DealID, &r.Role, &r.Status, &r.Shard, &r.WantJSON, &r.ChosenOfferJSON, &r.PaymentTxID, &r.PaymentBEEF,
+			&r.PaymentOutputIndex, &r.PaymentDerivPrefix, &r.PaymentDerivSuffix, &r.PaymentSenderKey,
 			&r.ClaimKeyHex, &r.ChirpURL, &r.DeliveredText, &r.CounterpartyPub, &r.PriceSats, &hub, &r.FirstOfferMs,
 			&r.Error, &r.Revision, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
@@ -594,6 +625,24 @@ func (d *DB) ListDeals(limit int) ([]DealRecord, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// CountDeals returns total persisted deals in O(1) without loading payment_beef BLOBs.
+func (d *DB) CountDeals() (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var n int64
+	err := d.sql.QueryRow(`SELECT COUNT(1) FROM deals`).Scan(&n)
+	return n, err
+}
+
+// CountReceipts returns total persisted receipts in O(1) without loading body_json BLOBs.
+func (d *DB) CountReceipts() (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var n int64
+	err := d.sql.QueryRow(`SELECT COUNT(1) FROM receipts`).Scan(&n)
+	return n, err
 }
 
 // SaveApproval saves or updates a pending operator approval escalation.
@@ -678,6 +727,30 @@ func (d *DB) ConsumeApprovalOverride(id string) error {
 		return ErrApprovalNotPending
 	}
 	return nil
+}
+
+// MarkApprovalResolvedAwakeable atomically transitions a pending/approved awakeable approval directly
+// to 'consumed' (if approved) or 'denied' (if denied) so it can never be replayed via ApprovedOverrideID.
+func (d *DB) MarkApprovalResolvedAwakeable(id string, approve bool) (ApprovalRecord, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	status := "denied"
+	if approve {
+		status = "consumed"
+	}
+	now := time.Now().Unix()
+	res, err := d.sql.Exec(`UPDATE approvals SET status = ? WHERE id = ? AND status IN ('pending','approved') AND expires_at > ?`, status, id, now)
+	if err != nil {
+		return ApprovalRecord{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return ApprovalRecord{}, ErrApprovalNotPending
+	}
+	var a ApprovalRecord
+	err = d.sql.QueryRow(`SELECT id, deal_id, reason, max_extra_sats, status, COALESCE(awakeable_id,''), expires_at, created_at FROM approvals WHERE id = ?`, id).
+		Scan(&a.ID, &a.DealID, &a.Reason, &a.MaxExtraSats, &a.Status, &a.AwakeableID, &a.ExpiresAt, &a.CreatedAt)
+	return a, err
 }
 
 // RecordReputation updates verified trade counters for a seller pubkey.
@@ -1107,8 +1180,12 @@ func (d *DB) ReleaseSpendReservation(opID string, attempt int) error {
 
 	var amount uint64
 	var status string
-	if qErr := tx.QueryRow(`SELECT amount_sats, status FROM spend_reservations WHERE op_id = ? AND attempt = ?`, opID, attempt).Scan(&amount, &status); qErr != nil {
-		return nil
+	var createdAt int64
+	if qErr := tx.QueryRow(`SELECT amount_sats, status, created_at FROM spend_reservations WHERE op_id = ? AND attempt = ?`, opID, attempt).Scan(&amount, &status, &createdAt); qErr != nil {
+		if errors.Is(qErr, sql.ErrNoRows) {
+			return nil
+		}
+		return qErr
 	}
 	if status != "reserved" {
 		return nil
@@ -1116,7 +1193,11 @@ func (d *DB) ReleaseSpendReservation(opID string, attempt int) error {
 	if _, err := tx.Exec(`UPDATE spend_reservations SET status = 'released' WHERE op_id = ? AND attempt = ?`, opID, attempt); err != nil {
 		return err
 	}
-	dayKey := "market_daily_spend:" + time.Now().UTC().Format("2006-01-02")
+	refTime := time.Unix(createdAt, 0).UTC()
+	if createdAt == 0 {
+		refTime = time.Now().UTC()
+	}
+	dayKey := "market_daily_spend:" + refTime.Format("2006-01-02")
 	var used uint64
 	var raw []byte
 	if qErr := tx.QueryRow(`SELECT value FROM kv WHERE key = ?`, dayKey).Scan(&raw); qErr == nil {

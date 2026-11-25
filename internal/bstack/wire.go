@@ -209,13 +209,27 @@ func AllLanes(net string) []string {
 	return out
 }
 
-// SignArtifact canonically signs any WantAd / OfferAd / AnnounceAd with priv.
+func artifactDomainTag(artifact any) []byte {
+	switch artifact.(type) {
+	case WantAd, *WantAd:
+		return []byte("nektar:artifact:want:v2")
+	case OfferAd, *OfferAd:
+		return []byte("nektar:artifact:offer:v2")
+	case AnnounceAd, *AnnounceAd:
+		return []byte("nektar:artifact:announce:v2")
+	default:
+		return []byte("nektar:artifact:generic:v2")
+	}
+}
+
+// SignArtifact canonically signs any WantAd / OfferAd / AnnounceAd with priv under a type-specific
+// domain-separation tag (preventing cross-artifact signature replay across market wire types).
 func SignArtifact(priv *ec.PrivateKey, artifact any) (string, error) {
 	canon, err := core.CanonicalJSON(artifact)
 	if err != nil {
 		return "", err
 	}
-	digest := core.DSHA256(canon)
+	digest := core.DSHA256(core.Concat(artifactDomainTag(artifact), canon))
 	sig, err := priv.Sign(digest)
 	if err != nil {
 		return "", err
@@ -223,8 +237,9 @@ func SignArtifact(priv *ec.PrivateKey, artifact any) (string, error) {
 	return hex.EncodeToString(sig.Serialize()), nil
 }
 
-// VerifyArtifact verifies a signature produced by SignArtifact against canonical compressed pubHex,
-// rejecting uncompressed/hybrid pubkeys, non-canonical DER trailing bytes, and malleable high-S signatures.
+// VerifyArtifact verifies a domain-separated signature produced by SignArtifact against canonical
+// compressed pubHex, rejecting uncompressed/hybrid pubkeys, non-canonical DER trailing bytes,
+// malleable high-S signatures, and cross-type artifact replays.
 func VerifyArtifact(pubHex, sigHex string, artifact any) error {
 	pub, _, err := core.ParseStrictCompressedPubKey(pubHex)
 	if err != nil {
@@ -238,7 +253,8 @@ func VerifyArtifact(pubHex, sigHex string, artifact any) error {
 	if err != nil {
 		return err
 	}
-	if !sig.Verify(core.DSHA256(canon), pub) {
+	digest := core.DSHA256(core.Concat(artifactDomainTag(artifact), canon))
+	if !sig.Verify(digest, pub) {
 		return errors.New("bstack: artifact signature invalid")
 	}
 	return nil

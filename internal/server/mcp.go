@@ -271,8 +271,8 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "borgGroup",
 			Description: "Manage Borg access groups and BRC-369 epoch key rotation (create, add, revoke, get).",
-		}, func(_ context.Context, _ *mcp.CallToolRequest, in BorgGroupInput) (*mcp.CallToolResult, any, error) {
-			res, err := tb.ExecBorgGroup(in)
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in BorgGroupInput) (*mcp.CallToolResult, any, error) {
+			res, err := tb.ExecBorgGroupCtx(ctx, in)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -289,7 +289,15 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 			Name:        "exportPack",
 			Description: "Export a shard and its anchor proofs as a verified BRC-167 CHIRP closure.",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in packArgs) (*mcp.CallToolResult, any, error) {
-			res, err := tb.mem.ExportShardPack(ctx, in.Shard)
+			var (
+				res *memory.ShardPackResult
+				err error
+			)
+			if p, disallowBorg, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
+				res, err = tb.mem.ExportShardPackAuthorized(ctx, in.Shard, p, "disclose", disallowBorg)
+			} else {
+				res, err = tb.mem.ExportShardPack(ctx, in.Shard)
+			}
 			if err != nil {
 				return nil, nil, err
 			}

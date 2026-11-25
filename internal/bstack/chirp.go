@@ -204,3 +204,29 @@ func ResolveChirp(store ObjectStore, url string) ([]byte, error) {
 	}
 	return out, nil
 }
+
+// CollectChirpHashes verifies a stored chirp:// closure and returns every object hash in its DAG
+// so public packs/listings can restore their exact unauthenticated object allowlist on restart.
+func CollectChirpHashes(store ObjectStore, url string) ([][32]byte, error) {
+	rootHash, err := chirp.ParseURL(url)
+	if err != nil {
+		return nil, fmt.Errorf("chirp: parse url: %w", err)
+	}
+	seen := make(map[[32]byte]struct{})
+	hashes := make([][32]byte, 0, 8)
+	_, err = chirp.Verify(rootHash, func(h [32]byte) ([]byte, error) {
+		b, err := store.GetObject(h)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[h]; !ok {
+			seen[h] = struct{}{}
+			hashes = append(hashes, h)
+		}
+		return b, nil
+	}, DefaultChirpLimits())
+	if err != nil {
+		return nil, fmt.Errorf("chirp: verify closure: %w", err)
+	}
+	return hashes, nil
+}

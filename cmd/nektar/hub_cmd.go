@@ -88,6 +88,13 @@ func cmdHubRun(args []string) error {
 
 	var rt *runtimeBundle
 	if *withLiquidity {
+		if *netName != "memory" {
+			releaseLock, lockErr := acquireInstanceLock(dir, *addr)
+			if lockErr != nil {
+				return lockErr
+			}
+			defer releaseLock()
+		}
 		var rErr error
 		rt, rErr = openRuntime(ctx, *netName, *dataDir, envOr("NEKTAR_HUB_PORT", "18421"))
 		if rErr != nil {
@@ -96,20 +103,8 @@ func cmdHubRun(args []string) error {
 			defer rt.closeFn()
 			_, _ = rt.mem.ReconcilePendingAnchors(ctx)
 			rt.mem.Chain().StartBackground(ctx)
-			if rt.mem.Chain().Network() != "memory" {
-				go func() {
-					ticker := time.NewTicker(45 * time.Second)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-ctx.Done():
-							return
-						case <-ticker.C:
-							_, _ = rt.mem.RefreshAnchorProofs(ctx)
-						}
-					}
-				}()
-			}
+			stopRefresher := startAnchorProofRefresher(ctx, rt.mem)
+			defer stopRefresher()
 		}
 	}
 
@@ -155,17 +150,24 @@ func cmdHubRun(args []string) error {
 	}
 
 	httpSrv := &http.Server{Addr: *addr, Handler: node.Handler(), ReadHeaderTimeout: 15 * time.Second}
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
+		node.CloseSSE()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(shutCtx)
 	}()
 	log.Printf("nektar hub v%s listening on %s (network=%s db=%s topics=%d lookups=%d liquidity=%v)",
 		Version, *addr, *netName, dbPath, len(node.Topics()), len(node.Lookups()), rt != nil)
-	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
+	serveErr := httpSrv.ListenAndServe()
+	if serveErr != nil && serveErr != http.ErrServerClosed {
+		stop()
+		<-shutdownDone
+		return serveErr
 	}
+	<-shutdownDone
 	return nil
 }
 
@@ -440,7 +442,9 @@ func upsertEnvKV(content, key, val string) string {
 
 func randomHex32() string {
 	var b [32]byte
-	_, _ = rand.Read(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("hub: crypto/rand failed: " + err.Error())
+	}
 	return hex.EncodeToString(b[:])
 }
 

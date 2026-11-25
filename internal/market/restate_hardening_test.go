@@ -378,7 +378,7 @@ func TestLiveRestateServerReplayAwakeablesCustodyAndCadence(t *testing.T) {
 	offerAd := bstack.OfferAd{
 		OfferID:      "off-live-1",
 		WantID:       wantID,
-		Pub:          sellerMem.Chain().IdentityPubHex(),
+		Pub:          saleOffer.SellerPub,
 		BuyerPub:     buyerPub,
 		Net:          "memory",
 		Domains:      []string{"ops"},

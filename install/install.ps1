@@ -31,13 +31,18 @@ if ($Docker) {
   try {
     Invoke-WebRequest -UseBasicParsing -Uri "$baseDl/SHA256SUMS" -OutFile $sums
     $line = Get-Content $sums | Where-Object { $_ -match 'nektar-windows-amd64\.zip$' } | Select-Object -First 1
-    if ($line) {
-      $want = ($line -split '\s+')[0].ToLowerInvariant()
-      $got = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLowerInvariant()
-      if ($got -ne $want) {
-        throw "SHA-256 mismatch for nektar-windows-amd64.zip (got $got, want $want)"
-      }
+    if (-not $line) {
+      throw 'nektar-windows-amd64.zip missing from SHA256SUMS — refusing unverified binary'
     }
+    $want = ($line -split '\s+')[0].ToLowerInvariant()
+    if (-not $want -or $want.Length -ne 64) {
+      throw 'Invalid SHA-256 entry in SHA256SUMS — refusing unverified binary'
+    }
+    $got = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLowerInvariant()
+    if ($got -ne $want) {
+      throw "SHA-256 mismatch for nektar-windows-amd64.zip (got $got, want $want)"
+    }
+    Write-Output '✓ verified SHA-256 checksum for nektar-windows-amd64.zip'
   } finally {
     Remove-Item $sums -Force -ErrorAction SilentlyContinue
   }

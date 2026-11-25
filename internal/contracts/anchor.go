@@ -328,10 +328,11 @@ func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracke
 		}
 		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "BEEF parse: " + msg}
 	}
-	if len(anchorTx.Outputs) == 0 || anchorTx.Outputs[0].LockingScript == nil {
-		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "anchor tx has no output 0"}
+	outIdx := bundle.Anchor.OutputIndex
+	if int(outIdx) >= len(anchorTx.Outputs) || anchorTx.Outputs[outIdx].LockingScript == nil {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: fmt.Sprintf("anchor tx missing output %d", outIdx)}
 	}
-	state, err := DecodeNektarAnchor(*anchorTx.Outputs[0].LockingScript)
+	state, err := DecodeNektarAnchor(*anchorTx.Outputs[outIdx].LockingScript)
 	if err != nil {
 		return VerifyResult{OK: false, Reason: "BadBundle", Detail: err.Error()}
 	}
@@ -361,6 +362,10 @@ func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracke
 			settled = true
 			anchorState = "mined"
 		}
+	} else if checkHeaders {
+		// Fail closed on SPV verification when the transaction lacks a mined MerklePath (BUMP):
+		// structural checks pass via VerifyFragmentStructural, but unmined offline BEEFs must not return OK:true.
+		return VerifyResult{OK: false, Settled: false, AnchorState: "broadcast", Reason: "Unsettled", Detail: "anchor tx has no mined MerklePath (BUMP)"}
 	}
 
 	if len(bundle.ChainTail) == 0 {

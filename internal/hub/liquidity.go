@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 
@@ -173,24 +174,28 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 		return nil, fmt.Errorf("bounty: proofBundle verification failed: %w", err)
 	}
 
-	// Execute SpendGuard-enforced payout directly (background FuelKeeper maintains UTXO depth asynchronously).
-	_, txid, err := mem.Chain().SendToAddress(ctx, sub.SellerAddress, b.RewardSats)
-	if err != nil {
-		return nil, fmt.Errorf("bounty: payout failed: %w", err)
-	}
-
-	// Store acquired verified knowledge into Hub's curated/<domain> shard so other agents can discover & buy it!
+	// Persist acquired verified knowledge into Hub's curated/<domain> shard BEFORE broadcasting payout
+	// (AutoAnchor: false so anchor/UTXO errors or HTTP client cancel NEVER happen after SendToAddress and trigger CancelBountyClaim!).
 	curatedShard := "curated/" + b.Domain
 	rem, err := mem.Remember(ctx, memory.RememberInput{
 		Shard:      curatedShard,
 		Text:       sub.Text,
 		Source:     "bounty:" + shortID(sub.SellerPub),
 		Class:      b.Domain,
-		AutoAnchor: mem.Chain().BalanceSats() > 1000,
+		AutoAnchor: false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bounty: commit acquired fragment: %w", err)
 	}
+
+	// Execute SpendGuard-enforced payout directly (use detached context timeout so client disconnect mid-send cannot mask broadcast).
+	payCtx, payCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer payCancel()
+	_, txid, err := mem.Chain().SendToAddress(payCtx, sub.SellerAddress, b.RewardSats)
+	if err != nil {
+		return nil, fmt.Errorf("bounty: payout failed: %w", err)
+	}
+
 	// Sustainable Hub market-maker pricing: default 120% of bounty reward (or NEKTAR_HUB_RESALE_SATS override).
 	resalePrice := maxUint64((b.RewardSats*12)/10, 120)
 	if raw := strings.TrimSpace(os.Getenv("NEKTAR_HUB_RESALE_SATS")); raw != "" {
@@ -236,13 +241,14 @@ func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contra
 	if pErr != nil || len(provRaw) == 0 {
 		return errors.New("invalid submission provenanceHex")
 	}
-	expectedHDP := core.SHA256(core.Concat(core.TagProv, []byte(sub.Text), provRaw))
-	if !core.EqualBytes(expectedHDP, hdpBytes) {
-		return errors.New("submission text/provenance does not match hdp")
-	}
 	prov, parseErr := core.ParseProvenance(provRaw)
 	if parseErr != nil {
 		return fmt.Errorf("invalid provenance framing: %w", parseErr)
+	}
+	expectedHDPV2 := core.ComputeHDPV2([]byte(sub.Text), prov)
+	expectedHDPV1 := core.SHA256(core.Concat(core.TagProv, []byte(sub.Text), provRaw))
+	if !core.EqualBytes(expectedHDPV2, hdpBytes) && !core.EqualBytes(expectedHDPV1, hdpBytes) {
+		return errors.New("submission text/provenance does not match hdp")
 	}
 
 	// Verify authorship binding: Provenance signature AND BountySubmission OwnerSig must both verify

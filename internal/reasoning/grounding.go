@@ -62,10 +62,84 @@ func normText(s string) string {
 	return strings.ToLower(strings.Join(strings.Fields(s), " "))
 }
 
+var quoteStopwords = map[string]bool{
+	"a": true, "an": true, "and": true, "are": true, "as": true, "at": true,
+	"be": true, "by": true, "for": true, "from": true, "has": true, "have": true,
+	"in": true, "is": true, "it": true, "its": true, "of": true, "on": true,
+	"or": true, "that": true, "the": true, "this": true, "to": true, "was": true,
+	"were": true, "will": true, "with": true,
+}
+
+func contentTokens(s string) []string {
+	var out []string
+	var cur []rune
+	flush := func() {
+		if len(cur) > 0 {
+			tok := strings.ToLower(string(cur))
+			if len(tok) >= 2 && !quoteStopwords[tok] {
+				out = append(out, tok)
+			}
+			cur = cur[:0]
+		}
+	}
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			cur = append(cur, r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return out
+}
+
+// isMeaningfulQuote requires either >=12 normalized chars or >=2 non-stopword content tokens
+// so trivial substrings like "the" or "2025" cannot rubber-stamp unrelated claims.
+func isMeaningfulQuote(nq string) bool {
+	if len(nq) >= 12 {
+		return len(contentTokens(nq)) >= 1
+	}
+	return len(contentTokens(nq)) >= 2
+}
+
+// claimSupportedByQuotes checks that Claim.Text shares meaningful lexical overlap with
+// the verified verbatim quotes (at least 50% of unique claim content tokens, min 1).
+func claimSupportedByQuotes(claimText string, verifiedQuotes []string) bool {
+	qSet := make(map[string]bool)
+	for _, q := range verifiedQuotes {
+		for _, tok := range contentTokens(q) {
+			qSet[tok] = true
+		}
+	}
+	if len(qSet) == 0 {
+		return false
+	}
+	cToks := contentTokens(claimText)
+	if len(cToks) == 0 {
+		return false
+	}
+	seen := make(map[string]bool, len(cToks))
+	matched := 0
+	for _, tok := range cToks {
+		if seen[tok] {
+			continue
+		}
+		seen[tok] = true
+		if qSet[tok] {
+			matched++
+		}
+	}
+	unique := len(seen)
+	if unique == 0 {
+		return false
+	}
+	return matched*2 >= unique && matched >= 1
+}
+
 // Ground verifies every claim against verified cited fragments via:
 //  1. exact normalized quote substring,
-//  2. Google Mangle Datalog entailment (when Claim.Literal is provided), or
-//  3. quote-backed synthesis (verbatim substrings >= 3 chars).
+//  2. Google Mangle Datalog entailment (when Claim.Literal is provided; strictly parsed ground atoms only), or
+//  3. quote-backed synthesis (meaningful verbatim quotes with lexical overlap against Claim.Text).
 func Ground(claims []Claim, fetch FragmentFetcher, mode string, rules []string) (*GroundingReport, error) {
 	if mode == "" {
 		mode = "remove"
@@ -103,29 +177,31 @@ func Ground(claims []Claim, fetch FragmentFetcher, mode string, rules []string) 
 			kept = append(kept, c)
 			continue
 		}
-		// 2. Mangle Datalog entailment.
+		// 2. Mangle Datalog entailment (strictly parsed ground atoms; never allows rule injection from fragments).
 		if len(verifiedTexts) > 0 && c.Literal != "" {
 			var facts []string
 			for _, vt := range verifiedTexts {
 				for _, line := range strings.Split(vt, "\n") {
-					line = strings.TrimSpace(line)
-					if strings.Contains(line, "(") && strings.Contains(line, ")") {
-						facts = append(facts, line)
+					if atom, ok := ParseGroundFact(line); ok {
+						facts = append(facts, atom.String())
 					}
 				}
 			}
-			entailed, err := Entails(facts, rules, c.Literal)
-			if err == nil && entailed {
-				gc := GroundedClaim{Claim: c, Grounded: true, Reason: "grounded:entailed"}
-				out = append(out, gc)
-				kept = append(kept, c)
-				continue
+			if len(facts) > 0 {
+				entailed, err := Entails(facts, rules, c.Literal)
+				if err == nil && entailed {
+					gc := GroundedClaim{Claim: c, Grounded: true, Reason: "grounded:entailed"}
+					out = append(out, gc)
+					kept = append(kept, c)
+					continue
+				}
 			}
 		}
-		// 3. Quote-backed synthesis.
+		// 3. Quote-backed synthesis (meaningful quote + lexical overlap with Claim.Text).
 		if len(c.Quotes) > 0 {
 			allVer := true
 			allMatch := true
+			verifiedQuotes := make([]string, 0, len(c.Quotes))
 			for _, q := range c.Quotes {
 				ok, txt := fetch(FragmentRef{Shard: q.Shard, Seq: q.Seq})
 				if !ok || txt == "" {
@@ -133,9 +209,11 @@ func Ground(claims []Claim, fetch FragmentFetcher, mode string, rules []string) 
 					break
 				}
 				nq := normText(q.Quote)
-				if len(nq) < 3 || !strings.Contains(normText(txt), nq) {
+				if !isMeaningfulQuote(nq) || !strings.Contains(normText(txt), nq) {
 					allMatch = false
+					continue
 				}
+				verifiedQuotes = append(verifiedQuotes, nq)
 			}
 			if !allVer {
 				gc := GroundedClaim{Claim: c, Grounded: false, Reason: "citation-unverifiable"}
@@ -143,7 +221,7 @@ func Ground(claims []Claim, fetch FragmentFetcher, mode string, rules []string) 
 				flagged = append(flagged, gc)
 				continue
 			}
-			if allMatch {
+			if allMatch && claimSupportedByQuotes(c.Text, verifiedQuotes) {
 				gc := GroundedClaim{Claim: c, Grounded: true, Reason: "grounded:quote-backed"}
 				out = append(out, gc)
 				kept = append(kept, c)
@@ -190,6 +268,7 @@ type ModelIdentity struct {
 
 // Delegation signs sub-agent authorship over a sub-decision bound to the final answer.
 type Delegation struct {
+	Version   int    `json:"v,omitempty"` // 2 = TagDelegationV2 framed; 0/1 = legacy v1
 	Delegator string `json:"delegator"`
 	Decision  string `json:"decision"`
 	Signature string `json:"signature"`
@@ -215,6 +294,65 @@ type Receipt struct {
 	TruthNote           string          `json:"truthNote"`
 	Delegations         []Delegation    `json:"delegations,omitempty"`
 	Payment             *PaymentSummary `json:"payment,omitempty"`
+	IssuerPub           string          `json:"issuerPub,omitempty"`
+	IssuerSig           string          `json:"issuerSig,omitempty"`
+}
+
+// ReceiptSignDigest computes the domain-separated digest signed by the issuing agent (TagReceiptSig).
+func ReceiptSignDigest(r Receipt) ([]byte, error) {
+	if r.TruthNote == "" {
+		r.TruthNote = TruthNote
+	}
+	r.IssuerSig = ""
+	canon, err := core.CanonicalJSON(r)
+	if err != nil {
+		return nil, err
+	}
+	return core.DSHA256(core.Concat(core.TagReceiptSig, canon)), nil
+}
+
+// SignReceipt signs r with key under core.TagReceiptSig, populating IssuerPub and IssuerSig.
+func SignReceipt(key *ec.PrivateKey, r *Receipt) error {
+	if key == nil || r == nil {
+		return errors.New("reasoning: nil key or receipt")
+	}
+	r.IssuerPub = hex.EncodeToString(key.PubKey().Compressed())
+	digest, err := ReceiptSignDigest(*r)
+	if err != nil {
+		return err
+	}
+	sig, err := key.Sign(digest)
+	if err != nil {
+		return err
+	}
+	r.IssuerSig = hex.EncodeToString(sig.Serialize())
+	return nil
+}
+
+// VerifyReceiptSignature validates IssuerSig against IssuerPub when present on r.
+func VerifyReceiptSignature(r Receipt) error {
+	if r.IssuerPub == "" && r.IssuerSig == "" {
+		return nil
+	}
+	if r.IssuerPub == "" || r.IssuerSig == "" {
+		return errors.New("reasoning: incomplete receipt issuer signature")
+	}
+	pub, _, err := core.ParseStrictCompressedPubKey(r.IssuerPub)
+	if err != nil {
+		return fmt.Errorf("reasoning: invalid receipt issuerPub: %w", err)
+	}
+	sig, err := core.ParseStrictLowSDER(r.IssuerSig)
+	if err != nil {
+		return fmt.Errorf("reasoning: invalid receipt issuerSig: %w", err)
+	}
+	digest, err := ReceiptSignDigest(r)
+	if err != nil {
+		return err
+	}
+	if !sig.Verify(digest, pub) {
+		return errors.New("reasoning: invalid receipt issuer signature")
+	}
+	return nil
 }
 
 // ReceiptHash computes the canonical hash of r.
@@ -252,41 +390,48 @@ func ParseReceiptToken(tok string) (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
-// MakeDelegation creates a §16 delegation signature over (delegator || decision || answer).
+func delegationDigestV2(delegator, decision, answer string) []byte {
+	return core.DSHA256(core.Concat(
+		core.TagDelegationV2,
+		core.Field([]byte(delegator)),
+		core.Field([]byte(decision)),
+		core.Field([]byte(answer)),
+	))
+}
+
+// MakeDelegation creates a §16 delegation signature over length-framed (delegator, decision, answer) under TagDelegationV2.
 func MakeDelegation(key *ec.PrivateKey, decision, answer string) (Delegation, error) {
 	delegator := hex.EncodeToString(key.PubKey().Compressed())
-	msg := core.DSHA256(core.Concat(core.TagDelegation, []byte(delegator), []byte(decision), []byte(answer)))
+	msg := delegationDigestV2(delegator, decision, answer)
 	sig, err := key.Sign(msg)
 	if err != nil {
 		return Delegation{}, err
 	}
 	return Delegation{
+		Version:   2,
 		Delegator: delegator,
 		Decision:  decision,
 		Signature: hex.EncodeToString(sig.Serialize()),
 	}, nil
 }
 
-// VerifyDelegations checks every delegation signature on a receipt.
+// VerifyDelegations checks every delegation signature on a receipt using strict compressed pubkey and low-S DER rules.
 func VerifyDelegations(r Receipt) error {
 	for _, d := range r.Delegations {
-		pubBytes, err := hex.DecodeString(d.Delegator)
+		pub, _, err := core.ParseStrictCompressedPubKey(d.Delegator)
 		if err != nil {
 			return err
 		}
-		pub, err := ec.ParsePubKey(pubBytes)
+		sig, err := core.ParseStrictLowSDER(d.Signature)
 		if err != nil {
 			return err
 		}
-		sigBytes, err := hex.DecodeString(d.Signature)
-		if err != nil {
-			return err
+		var msg []byte
+		if d.Version >= 2 {
+			msg = delegationDigestV2(d.Delegator, d.Decision, r.Answer)
+		} else {
+			msg = core.DSHA256(core.Concat(core.TagDelegation, []byte(d.Delegator), []byte(d.Decision), []byte(r.Answer)))
 		}
-		sig, err := ec.ParseDERSignature(sigBytes)
-		if err != nil {
-			return err
-		}
-		msg := core.DSHA256(core.Concat(core.TagDelegation, []byte(d.Delegator), []byte(d.Decision), []byte(r.Answer)))
 		if !sig.Verify(msg, pub) {
 			return fmt.Errorf("reasoning: invalid delegation signature for %q", d.Decision)
 		}
@@ -330,9 +475,37 @@ func NewAORGraph(rules []string) *AORGraph {
 	}
 }
 
+func frameStringSlice(items []string) []byte {
+	parts := make([][]byte, 0, 1+len(items))
+	parts = append(parts, core.U32LE(uint32(len(items))))
+	for _, s := range items {
+		parts = append(parts, core.Field([]byte(s)))
+	}
+	return core.Concat(parts...)
+}
+
 func vertexHash(v Vertex) string {
-	s := fmt.Sprintf("%s|%s|%d:%d|%s", v.Phi, strings.Join(v.Sigma, ","), v.LogPos, v.Height, strings.Join(v.Context, ","))
-	return hex.EncodeToString(core.DSHA256([]byte(s)))
+	buf := core.Concat(
+		[]byte("nektar:aorg-vertex:v2"),
+		core.Field([]byte(v.Kind)),
+		core.Field([]byte(v.Phi)),
+		core.U64LE(uint64(v.LogPos)),
+		core.U32LE(v.Height),
+		core.Field([]byte(v.Refines)),
+		frameStringSlice(v.Sigma),
+		frameStringSlice(v.Context),
+	)
+	return hex.EncodeToString(core.DSHA256(buf))
+}
+
+func edgeHash(from, to, ruleTag string) string {
+	buf := core.Concat(
+		[]byte("nektar:aorg-edge:v2"),
+		core.Field([]byte(from)),
+		core.Field([]byte(to)),
+		core.Field([]byte(ruleTag)),
+	)
+	return hex.EncodeToString(core.DSHA256(buf))
 }
 
 func (g *AORGraph) ancestorsLocked(h string, out map[string]bool) {
@@ -394,7 +567,7 @@ func (g *AORGraph) Append(v Vertex, premises []string, ruleTag string) (Vertex, 
 		ruleTag = "assert"
 	}
 	for _, p := range premises {
-		eHash := hex.EncodeToString(core.DSHA256([]byte(p + "|" + v.H + "|" + ruleTag)))
+		eHash := edgeHash(p, v.H, ruleTag)
 		g.edges = append(g.edges, Edge{From: p, To: v.H, Rule: ruleTag, E: eHash})
 	}
 	return v, nil

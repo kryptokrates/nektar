@@ -38,21 +38,48 @@ func (a *App) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	writeGauge("nektar_ttfv_ms", "Milliseconds from boot to first recall or groundedAnswer (0 if none yet).", float64(a.ttfvMs.Load()))
 
 	var totalFrags, anchoredFrags int
-	var receiptCount, dealCount int
+	var unsettledAnchors, pendingAnchors int
+	var receiptCount, dealCount int64
 	if a.mem != nil && a.mem.DB() != nil {
 		totalFrags, anchoredFrags, _ = a.mem.DB().CountFragments()
-		if rcps, err := a.mem.DB().ListReceipts(10000); err == nil {
-			receiptCount = len(rcps)
-		}
-		if deals, err := a.mem.DB().ListDeals(10000); err == nil {
-			dealCount = len(deals)
-		}
+		receiptCount, _ = a.mem.DB().CountReceipts()
+		dealCount, _ = a.mem.DB().CountDeals()
+		unsettledAnchors, _ = a.mem.DB().CountUnsettledAnchors()
+		pendingAnchors, _ = a.mem.DB().CountPendingAnchors()
+	}
+	unanchoredFrags := totalFrags - anchoredFrags
+	if unanchoredFrags < 0 {
+		unanchoredFrags = 0
 	}
 	writeGauge("nektar_fragments_total", "Total active memory fragments stored.", float64(totalFrags))
 	writeGauge("nektar_anchored_fragments_total", "Total anchored memory fragments.", float64(anchoredFrags))
+	writeGauge("nektar_unanchored_fragments", "Active memory fragments not yet included in an anchor batch.", float64(unanchoredFrags))
+	writeGauge("nektar_unsettled_anchors", "Broadcast batch anchors awaiting a mined BUMP Merkle proof.", float64(unsettledAnchors))
+	writeGauge("nektar_pending_anchors", "In-flight anchor batches awaiting broadcast completion.", float64(pendingAnchors))
 	writeGauge("nektar_receipts_total", "Total issued nektarr1 receipts.", float64(receiptCount))
 	writeCounter("nektar_verify_views_total", "Total receipt verification views.", float64(a.verifyViews.Load()))
 	writeGauge("nektar_deals_total", "Total market deals recorded.", float64(dealCount))
+
+	var feeBalanceSats, spentTodaySats, dailyCapSats uint64
+	var utxoCount, spendTxCount int
+	if a.mem != nil && a.mem.Chain() != nil {
+		feeBalanceSats = a.mem.Chain().BalanceSats()
+		utxoCount = a.mem.Chain().UTXOCount()
+		if sg := a.mem.Chain().SpendGuard(); sg != nil {
+			spentTodaySats, dailyCapSats, _, spendTxCount = sg.Stats()
+		}
+	}
+	writeGauge("nektar_fee_balance_sats", "Spendable wallet balance in satoshis.", float64(feeBalanceSats))
+	writeGauge("nektar_wallet_utxos", "Spendable UTXO count in the wallet pool.", float64(utxoCount))
+	writeGauge("nektar_spend_guard_spent_sats", "Satoshis spent today under SpendGuard.", float64(spentTodaySats))
+	writeGauge("nektar_spend_guard_daily_cap_sats", "Daily satoshi spend cap enforced by SpendGuard.", float64(dailyCapSats))
+	writeCounter("nektar_spend_guard_tx_total", "Total broadcasts recorded by SpendGuard today.", float64(spendTxCount))
+
+	restateUp := 0.0
+	if a.restateClient() != nil {
+		restateUp = 1.0
+	}
+	writeGauge("nektar_restate_attached", "1 if Restate durable execution plane is attached, 0 otherwise.", restateUp)
 
 	a.evMu.Lock()
 	sseClients := len(a.evSubs)

@@ -17,11 +17,30 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
         with:
           go-version-file: go.mod
       - name: vet
         run: go vet ./...
+      - name: architectural fitness checks
+        run: |
+          set -euo pipefail
+          # 1. Verify Rúnar compiled contract artifacts match embedded binary copies byte-for-byte.
+          for f in internal/contracts/artifacts/*.json; do
+            base="$(basename "$f")"
+            if [ -f "contracts/artifacts/$base" ]; then
+              diff -u "contracts/artifacts/$base" "$f"
+            fi
+          done
+          # 2. Verify no raw ec.PrivateKey references leak into server/hub/memory/store/chain/policy/core/cmd.
+          bad="$(grep -rn 'ec\.PrivateKey' internal/ cmd/ --include='*.go' --exclude='*_test.go' \
+            | grep -vE '^internal/(wallet|bstack|contracts|discovery|market)/' \
+            | grep -v '^internal/reasoning/grounding\.go:' || true)"
+          if [ -n "$bad" ]; then
+            echo "ERROR: raw ec.PrivateKey found outside allowed signing/custody packages:"
+            echo "$bad"
+            exit 1
+          fi
       - name: unit & integration tests (race detector)
         run: go test -race -v ./...
       - name: static cross-compile smoke (CGO_ENABLED=0)
@@ -30,6 +49,61 @@ jobs:
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /tmp/nektar-darwin ./cmd/nektar
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o /tmp/nektar-win.exe ./cmd/nektar
           /tmp/nektar-linux version
+
+  crypto-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Rúnar Go covenants compile & unit tests
+        working-directory: contracts
+        run: |
+          CGO_ENABLED=0 go test -v ./...
+          CGO_ENABLED=0 go run ./cmd/compile -prototypes
+      - name: Verify compiled artifacts match committed copies
+        run: git diff --exit-code contracts/artifacts/ internal/contracts/artifacts/
+      - name: Crypto hardening & ASM invariant tests
+        run: |
+          go test -v ./internal/core -run 'TestWycheproof|TestHDPV2|TestCanonicalJSON|TestMerkleHardening'
+          go test -v ./internal/contracts -run 'TestCovenantASMInvariants|TestVerifyGrothClaimSettlement|TestOfferDigestV2'
+          go test -v ./internal/bstack -run 'TestBboxE2E|TestArtifactDomain|TestBorgGroup'
+          go test -v ./internal/reasoning -run 'TestDelegationAndReceiptHardening'
+          go test -v ./internal/policy -run 'TestDecisionReceiptSigning'
+          go test -v ./internal/memory -run 'TestHardeningEncryptedLeaf|TestShardPackRejects'
+      - name: Fuzz smoke (3s each)
+        run: |
+          go test ./internal/core -fuzz=FuzzParseFragment -fuzztime=3s
+          go test ./internal/bstack -fuzz=FuzzOpenBboxBody -fuzztime=3s
+          go test ./internal/contracts -fuzz=FuzzVerifyFragment -fuzztime=3s
+      - name: Static crypto pre-scanner & unit tests
+        run: |
+          node --test .devin/skills/crypto-audit/scripts/crypto-scan.test.mjs
+          node .devin/skills/crypto-audit/scripts/crypto-scan.mjs contracts/src --no-probe
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks secret scan
+        uses: gitleaks/gitleaks-action@cb7149b3d815035a30417f6a773c2223821c074a # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   ui-build:
     runs-on: ubuntu-latest

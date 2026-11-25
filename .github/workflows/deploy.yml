@@ -5,10 +5,16 @@ on:
     branches: [master]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      image_digest:
+        description: 'Optional sha256:... digest to deploy (defaults to latest edge digest)'
+        required: false
+        default: ''
 concurrency:
   group: deploy
 permissions:
   contents: read
+  actions: read
 
 jobs:
   hetzner:
@@ -16,27 +22,102 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: pull v0.4 GHCR image & restart on Hetzner box
+      - name: resolve verified immutable image digest & commit SHA
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          INPUT_DIGEST: ${{ inputs.image_digest }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Verify CI workflow passed for this commit before deploying (when triggered by release).
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            ci_status="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD_SHA&per_page=1" --jq '.workflow_runs[0].conclusion // "pending"')"
+            if [ "$ci_status" = "failure" ] || [ "$ci_status" = "cancelled" ]; then
+              echo "ERROR: ci.yml failed ($ci_status) for $HEAD_SHA — aborting deploy"
+              exit 1
+            fi
+            gh run download "$RUN_ID" --repo "$REPO" --name image-digest --dir /tmp/digest
+            DIGEST="$(tr -d '[:space:]' < /tmp/digest/image-digest.txt)"
+          else
+            DIGEST="$(printf '%s' "$INPUT_DIGEST" | tr -d '[:space:]')"
+          fi
+          if [ -n "$DIGEST" ] && ! printf '%s' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "ERROR: invalid image digest '$DIGEST'"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: deploy immutable digest to Hetzner with automatic health rollback
         env:
           KEY: ${{ secrets.HETZNER_SSH_KEY }}
           HOST: ${{ secrets.HETZNER_HOST }}
           HOSTKEY: ${{ secrets.HETZNER_HOST_KEY }}
+          DEPLOY_DIGEST: ${{ steps.resolve.outputs.digest }}
+          DEPLOY_SHA: ${{ steps.resolve.outputs.sha }}
         run: |
+          set -euo pipefail
           install -m 700 -d ~/.ssh
           printf '%s\n' "$KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           printf '%s\n' "$HOSTKEY" > ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" bash -s <<'REMOTE_SCRIPT'
-            set -e
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" \
+            "DEPLOY_DIGEST='$DEPLOY_DIGEST' DEPLOY_SHA='$DEPLOY_SHA' bash -s" <<'REMOTE_SCRIPT'
+            set -euo pipefail
             cd /opt/nektar
-            git fetch https://github.com/kryptokrates/nektar.git master
-            git reset --hard FETCH_HEAD
-            NEKTAR_IMAGE_TAG=edge docker compose -f deploy/hub/compose.yaml pull
-            NEKTAR_IMAGE_TAG=edge docker compose -f deploy/hub/compose.yaml up -d
-            for i in 1 2 3 4 5 6 7 8 9 10; do
-              curl -sf -m 5 http://127.0.0.1:18420/v1/health && echo " <- v0.4 hub OK" && exit 0
-              sleep 2
-            done
-            docker compose -f deploy/hub/compose.yaml logs --tail 30
+
+            PREV_SHA="$(git rev-parse HEAD || true)"
+            PREV_DIGEST=""
+            if [ -f .last_good_digest ]; then
+              PREV_DIGEST="$(tr -d '[:space:]' < .last_good_digest)"
+            fi
+
+            git fetch https://github.com/kryptokrates/nektar.git "$DEPLOY_SHA"
+            git reset --hard "$DEPLOY_SHA"
+
+            export NEKTAR_IMAGE_TAG=edge
+            export NEKTAR_IMAGE_DIGEST="$DEPLOY_DIGEST"
+
+            docker compose -f deploy/hub/compose.yaml pull hub
+            docker compose -f deploy/hub/compose.yaml up -d
+
+            check_health() {
+              for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                if curl -sf -m 5 http://127.0.0.1:18420/v1/health >/dev/null; then
+                  return 0
+                fi
+                sleep 2
+              done
+              return 1
+            }
+
+            if check_health; then
+              if [ -n "$DEPLOY_DIGEST" ]; then
+                printf '%s\n' "$DEPLOY_DIGEST" > .last_good_digest
+              fi
+              printf '%s\n' "$DEPLOY_SHA" > .last_good_sha
+              echo "v0.4 hub OK (sha=$DEPLOY_SHA digest=${DEPLOY_DIGEST:-edge})"
+              exit 0
+            fi
+
+            echo "ERROR: health check failed for sha=$DEPLOY_SHA digest=${DEPLOY_DIGEST:-edge}"
+            docker compose -f deploy/hub/compose.yaml logs --tail 40
+
+            if [ -n "$PREV_DIGEST" ] && [ -n "$PREV_SHA" ]; then
+              echo "Rolling back to previous healthy sha=$PREV_SHA digest=$PREV_DIGEST..."
+              git reset --hard "$PREV_SHA" || true
+              export NEKTAR_IMAGE_TAG=edge
+              export NEKTAR_IMAGE_DIGEST="$PREV_DIGEST"
+              docker compose -f deploy/hub/compose.yaml up -d
+              if check_health; then
+                echo "Rollback succeeded — previous healthy hub restored."
+              else
+                echo "CRITICAL: rollback health check also failed!"
+              fi
+            fi
             exit 1
           REMOTE_SCRIPT

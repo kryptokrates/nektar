@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -382,19 +384,9 @@ func cmdServe(args []string) error {
 			}
 			syncCancel()
 		}
-		go func() {
-			ticker := time.NewTicker(45 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					_, _ = rt.mem.RefreshAnchorProofs(ctx)
-				}
-			}
-		}()
 	}
+	stopRefresher := startAnchorProofRefresher(ctx, rt.mem)
+	defer stopRefresher()
 
 	// Optionally mount durable embedded Go Overlay Hub at /hub/ with Liquidity Engine + Bounties + Faucet!
 	var hubNode *hub.Node
@@ -459,6 +451,88 @@ func cmdServe(args []string) error {
 		rt.disc = discovery.New(rt.mem, extra, nil)
 	}
 
+	// Construct Broker and App BEFORE starting the Restate durable plane so any immediately
+	// replaying BuyerDeal/SellerDeal invocation always sees a live Broker and App (zero nil-broker skip).
+	var appRef atomic.Pointer[server.App]
+	broker := market.NewBroker(rt.mem, rt.mkt, rt.disc, market.BrokerConfig{
+		PublicURL:  pubURL,
+		BboxOffice: envOr("NEKTAR_BBOX_OFFICE", "default"),
+		Handle:     os.Getenv("NEKTAR_HANDLE"),
+		IsHub:      *withHub,
+		OnStateChange: func(ev string, _ any) {
+			if a := appRef.Load(); a != nil {
+				a.BroadcastDashboardEvent(ev)
+			}
+		},
+	})
+	defer broker.Stop()
+	if liqState != nil {
+		broker.SetAdvertisedPacks(liqState.Packs, liqState.BountyDomains)
+	}
+
+	rawAPITok := envOr("NEKTAR_API_TOKEN", os.Getenv("NEKTAR_HTTP_TOKEN"))
+	rawOpTok := os.Getenv("NEKTAR_OPERATOR_TOKEN")
+	requireAuth := server.IsContainerEnv() || server.IsNonLoopbackListen(*addr)
+	apiTok, opTok, genTokens := server.ResolveOrGenerateTokens(rt.dataDir, rawAPITok, rawOpTok, requireAuth)
+	restateAdminDisplay := strings.TrimSpace(os.Getenv("NEKTAR_RESTATE_ADMIN"))
+	app, err := server.NewApp(rt.mem, rt.mkt, server.Config{
+		ListenAddr:        *addr,
+		PublicURL:         pubURL,
+		APIToken:          apiTok,
+		OperatorToken:     opTok,
+		ToolProfile:       envOr("NEKTAR_TOOL_PROFILE", "operator"),
+		ToolPrices:        parseToolPricesEnv(os.Getenv("NEKTAR_TOOL_PRICES")),
+		OpenAIUpstream:    os.Getenv("NEKTAR_OPENAI_UPSTREAM"),
+		AnthropicUpstream: os.Getenv("NEKTAR_ANTHROPIC_UPSTREAM"),
+		Hub:               hubNode,
+		Discovery:         rt.disc,
+		Broker:            broker,
+		RestateAdminURL:   restateAdminDisplay,
+		ExposeWalletWire:  os.Getenv("NEKTAR_EXPOSE_WALLET_WIRE") == "1",
+	})
+	if err != nil {
+		return err
+	}
+	appRef.Store(app)
+	defer app.Close()
+
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		return err
+	}
+	actualPort := ln.Addr().(*net.TCPAddr).Port
+	actualURL := fmt.Sprintf("http://127.0.0.1:%d", actualPort)
+	if *withHub && pubURL == localBase {
+		broker.SetPublicURL(actualURL)
+	}
+
+	httpSrv := &http.Server{
+		Handler:           app.Handler(),
+		ReadHeaderTimeout: 15 * time.Second,
+	}
+	serveErrCh := make(chan error, 1)
+	go func() {
+		serveErrCh <- httpSrv.Serve(ln)
+	}()
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		<-ctx.Done()
+		app.Close()
+		if hubNode != nil {
+			hubNode.CloseSSE()
+		}
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutCtx)
+	}()
+
+	// Listener is already accepting TCP connections: self-join embedded Hub and start Broker loops before Restate.
+	if *withHub {
+		_, _, _ = rt.disc.JoinHost(ctx, actualURL+"/hub")
+	}
+	broker.Start(ctx)
+
 	// Start active Restate durable execution plane (dedicated h2c endpoint + auto-supervised or external restate-server).
 	restateClient, stopRestate, err := StartRestatePlane(ctx, rt.mkt, RestateRuntimeConfig{
 		ListenAddr:            *restateAddr,
@@ -473,12 +547,20 @@ func cmdServe(args []string) error {
 		Required:              os.Getenv("NEKTAR_RESTATE_REQUIRED") == "1",
 	})
 	if err != nil {
+		stop()
+		<-shutdownDone
 		return err
 	}
 	defer stopRestate()
 
-	anchorCadenceSec := envInt64("NEKTAR_ANCHOR_CADENCE_SEC", 300)
 	if restateClient != nil {
+		broker.SetRestateClient(restateClient)
+		if restateAdminDisplay == "" {
+			restateAdminDisplay = restateClient.AdminURL
+		}
+		app.SetRestateClient(restateClient, restateAdminDisplay)
+
+		anchorCadenceSec := envInt64("NEKTAR_ANCHOR_CADENCE_SEC", 300)
 		// Poke durable Restate AnchorCadence on Remember (short 5s dedup bucket) + re-arm any unanchored shards on boot (RT0011)!
 		rt.mem.SetOnRemember(func(shard string) {
 			go func(sh string) {
@@ -499,62 +581,6 @@ func cmdServe(args []string) error {
 		}()
 	}
 
-	var appRef *server.App
-	broker := market.NewBroker(rt.mem, rt.mkt, rt.disc, market.BrokerConfig{
-		PublicURL:     pubURL,
-		BboxOffice:    envOr("NEKTAR_BBOX_OFFICE", "default"),
-		Handle:        os.Getenv("NEKTAR_HANDLE"),
-		IsHub:         *withHub,
-		RestateClient: restateClient,
-		OnStateChange: func(ev string, _ any) {
-			if appRef != nil {
-				appRef.BroadcastDashboardEvent(ev)
-			}
-		},
-	})
-	if liqState != nil {
-		broker.SetAdvertisedPacks(liqState.Packs, liqState.BountyDomains)
-	}
-
-	rawAPITok := envOr("NEKTAR_API_TOKEN", os.Getenv("NEKTAR_HTTP_TOKEN"))
-	rawOpTok := os.Getenv("NEKTAR_OPERATOR_TOKEN")
-	requireAuth := server.IsContainerEnv() || server.IsNonLoopbackListen(*addr)
-	apiTok, opTok, genTokens := server.ResolveOrGenerateTokens(rt.dataDir, rawAPITok, rawOpTok, requireAuth)
-	restateAdminDisplay := strings.TrimSpace(os.Getenv("NEKTAR_RESTATE_ADMIN"))
-	if restateAdminDisplay == "" && restateClient != nil {
-		restateAdminDisplay = restateClient.AdminURL
-	}
-	app, err := server.NewApp(rt.mem, rt.mkt, server.Config{
-		ListenAddr:        *addr,
-		PublicURL:         pubURL,
-		APIToken:          apiTok,
-		OperatorToken:     opTok,
-		ToolProfile:       envOr("NEKTAR_TOOL_PROFILE", "operator"),
-		ToolPrices:        parseToolPricesEnv(os.Getenv("NEKTAR_TOOL_PRICES")),
-		OpenAIUpstream:    os.Getenv("NEKTAR_OPENAI_UPSTREAM"),
-		AnthropicUpstream: os.Getenv("NEKTAR_ANTHROPIC_UPSTREAM"),
-		Hub:               hubNode,
-		Discovery:         rt.disc,
-		Broker:            broker,
-		RestateClient:     restateClient,
-		RestateAdminURL:   restateAdminDisplay,
-		ExposeWalletWire:  os.Getenv("NEKTAR_EXPOSE_WALLET_WIRE") == "1",
-	})
-	if err != nil {
-		return err
-	}
-	appRef = app
-
-	ln, err := net.Listen("tcp", *addr)
-	if err != nil {
-		return err
-	}
-	actualPort := ln.Addr().(*net.TCPAddr).Port
-	actualURL := fmt.Sprintf("http://127.0.0.1:%d", actualPort)
-	if *withHub && pubURL == localBase {
-		broker.SetPublicURL(actualURL)
-	}
-
 	// Write daemon.json so `nektar mcp`, `nektar open`, `nektar hook`, `nektar dock`, and Hermes auto-discover us!
 	_ = server.WriteDaemonInfo(rt.dataDir, server.DaemonInfo{
 		PID:       os.Getpid(),
@@ -567,24 +593,10 @@ func cmdServe(args []string) error {
 	})
 	defer server.RemoveDaemonInfo(rt.dataDir)
 
-	httpSrv := &http.Server{
-		Handler:           app.Handler(),
-		ReadHeaderTimeout: 15 * time.Second,
-	}
+	var postBootWG sync.WaitGroup
+	postBootWG.Add(1)
 	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpSrv.Shutdown(shutCtx)
-	}()
-
-	// Once listener is live, self-join embedded Hub, start Broker SSE/poll/bbox loops, announce on `dir`, and seed packs!
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		if *withHub {
-			_, _, _ = rt.disc.JoinHost(ctx, actualURL+"/hub")
-		}
-		broker.Start(ctx)
+		defer postBootWG.Done()
 		_, _ = broker.AnnounceSelf(ctx)
 		if seedDoms := parseCSVEnv("NEKTAR_SEED_DOMAINS"); len(seedDoms) > 0 {
 			if n, sErr := rt.disc.SeedFromNetwork(ctx, seedDoms); sErr == nil && n > 0 {
@@ -592,6 +604,7 @@ func cmdServe(args []string) error {
 			}
 		}
 	}()
+	defer postBootWG.Wait()
 
 	pairCode := ""
 	if apiTok != "" || opTok != "" {
@@ -614,10 +627,41 @@ func cmdServe(args []string) error {
 		ContainerMode:   server.IsContainerEnv(),
 		GeneratedTokens: genTokens,
 	}))
-	if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		return err
+	serveErr := <-serveErrCh
+	if serveErr != nil && serveErr != http.ErrServerClosed {
+		stop()
+		<-shutdownDone
+		return serveErr
 	}
+	<-shutdownDone
 	return nil
+}
+
+// startAnchorProofRefresher runs one shared 45s proof-upgrade loop on live networks and returns a drainable stop function.
+func startAnchorProofRefresher(ctx context.Context, mem *memory.Service) func() {
+	if mem == nil || mem.Chain() == nil || mem.Chain().Network() == "memory" {
+		return func() {}
+	}
+	rCtx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(45 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-rCtx.Done():
+				return
+			case <-ticker.C:
+				_, _ = mem.RefreshAnchorProofs(rCtx)
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		wg.Wait()
+	}
 }
 
 func cmdMCP(args []string) error {
@@ -641,6 +685,14 @@ func cmdMCP(args []string) error {
 		}
 	}
 
+	if *netName != "memory" {
+		releaseLock, lockErr := acquireInstanceLock(dir, "mcp-stdio")
+		if lockErr != nil {
+			return lockErr
+		}
+		defer releaseLock()
+	}
+
 	rt, err := openRuntime(ctx, *netName, *dataDir, DefaultLocalPort)
 	if err != nil {
 		return err
@@ -649,20 +701,8 @@ func cmdMCP(args []string) error {
 	_, _ = rt.mem.ReconcilePendingAnchors(ctx)
 	_, _ = rt.mem.EnsureWelcome(ctx)
 	rt.mem.Chain().StartBackground(ctx)
-	if rt.mem.Chain().Network() != "memory" {
-		go func() {
-			ticker := time.NewTicker(45 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					_, _ = rt.mem.RefreshAnchorProofs(ctx)
-				}
-			}
-		}()
-	}
+	stopRefresher := startAnchorProofRefresher(ctx, rt.mem)
+	defer stopRefresher()
 
 	broker := market.NewBroker(rt.mem, rt.mkt, rt.disc, market.BrokerConfig{})
 	tb := server.NewToolbox(rt.mem, rt.mkt, broker, rt.disc, nil, envOr("NEKTAR_TOOL_PROFILE", "agent"))

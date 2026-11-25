@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -92,6 +93,11 @@ func callLiveWallet(info *server.DaemonInfo, method, path string, body any) (any
 		req.Header.Set("Content-Type", "application/json")
 	}
 	tok := strings.TrimSpace(os.Getenv("NEKTAR_OPERATOR_TOKEN"))
+	if tok == "" && info.DataDir != "" {
+		if rawOp, rErr := os.ReadFile(filepath.Join(info.DataDir, "operator-token")); rErr == nil {
+			tok = strings.TrimSpace(string(rawOp))
+		}
+	}
 	if tok == "" {
 		tok = info.AuthToken
 	}
@@ -278,9 +284,11 @@ func walletSync(args []string) error {
 	_ = fs.Parse(args)
 
 	if info, ok := server.DetectLiveDaemon(walletDirOrDefault(*dataDir)); ok && *netName == "" {
-		if out, err := callLiveWallet(info, http.MethodPost, "/v1/wallet/sync", map[string]any{}); err == nil {
-			return printJSON(out)
+		out, err := callLiveWallet(info, http.MethodPost, "/v1/wallet/sync", map[string]any{})
+		if err != nil {
+			return fmt.Errorf("live daemon sync failed (refusing concurrent local wallet open): %w", err)
 		}
+		return printJSON(out)
 	}
 	ctx := context.Background()
 	rt, err := openRuntime(ctx, *netName, *dataDir, DefaultLocalPort)

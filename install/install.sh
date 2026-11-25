@@ -54,22 +54,28 @@ else
   base_dl="https://github.com/kryptokrates/nektar/releases/latest/download"
   printf '-- downloading %s and SHA256SUMS from latest GitHub release\n' "$asset"
   curl -fsSL "$base_dl/$asset" -o "$tmp/$asset"
-  if curl -fsSL "$base_dl/SHA256SUMS" -o "$tmp/SHA256SUMS" 2>/dev/null; then
-    want_sum="$(awk -v f="$asset" '$2 == f || $2 == ("*" f) { print $1; exit }' "$tmp/SHA256SUMS")"
-    if [ -n "$want_sum" ]; then
-      if command -v sha256sum >/dev/null 2>&1; then
-        got_sum="$(sha256sum "$tmp/$asset" | awk '{print $1}')"
-      elif command -v shasum >/dev/null 2>&1; then
-        got_sum="$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')"
-      else
-        got_sum=""
-      fi
-      if [ -n "$got_sum" ] && [ "$got_sum" != "$want_sum" ]; then
-        printf 'ERROR: SHA-256 mismatch for %s (got %s, want %s)\n' "$asset" "$got_sum" "$want_sum" >&2
-        exit 1
-      fi
-    fi
+  if ! curl -fsSL "$base_dl/SHA256SUMS" -o "$tmp/SHA256SUMS"; then
+    printf 'ERROR: failed to download SHA256SUMS — refusing unverified binary\n' >&2
+    exit 1
   fi
+  want_sum="$(awk -v f="$asset" '$2 == f || $2 == ("*" f) { print $1; exit }' "$tmp/SHA256SUMS")"
+  if [ -z "$want_sum" ]; then
+    printf 'ERROR: %s missing from SHA256SUMS — refusing unverified binary\n' "$asset" >&2
+    exit 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    got_sum="$(sha256sum "$tmp/$asset" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    got_sum="$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')"
+  else
+    printf 'ERROR: neither sha256sum nor shasum is installed — cannot verify binary integrity\n' >&2
+    exit 1
+  fi
+  if [ "$got_sum" != "$want_sum" ]; then
+    printf 'ERROR: SHA-256 mismatch for %s (got %s, want %s)\n' "$asset" "$got_sum" "$want_sum" >&2
+    exit 1
+  fi
+  printf '✓ verified SHA-256 checksum for %s\n' "$asset"
   tar -xzf "$tmp/$asset" -C "$tmp"
   install -m 755 "$tmp/nektar" "$BIN_DIR/nektar"
   printf '✓ installed native nektar v0.4 → %s/nektar\n' "$BIN_DIR"

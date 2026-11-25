@@ -35,6 +35,7 @@ type RestateClient struct {
 	InternalToken string
 	HTTP          *http.Client
 	Ingress       *ingress.Client
+	AttachIngress *ingress.Client // Timeout: 0 streaming client bounded by caller ctx for long Attach* calls
 }
 
 // NewRestateClient constructs a Restate client backed by official restatedev/sdk-go/ingress
@@ -54,13 +55,16 @@ func NewRestateClientWithToken(ingressURL, adminURL, internalToken string) *Rest
 	ingressURL = strings.TrimRight(ingressURL, "/")
 	adminURL = strings.TrimRight(adminURL, "/")
 	hc := &http.Client{Timeout: 30 * time.Second}
+	attachHC := &http.Client{Timeout: 0}
 	ic := ingress.NewClient(ingressURL, ingress.WithHttpClient(hc))
+	attachIC := ingress.NewClient(ingressURL, ingress.WithHttpClient(attachHC))
 	return &RestateClient{
 		IngressURL:    ingressURL,
 		AdminURL:      adminURL,
 		InternalToken: strings.TrimSpace(internalToken),
 		HTTP:          hc,
 		Ingress:       ic,
+		AttachIngress: attachIC,
 	}
 }
 
@@ -223,7 +227,11 @@ func (c *RestateClient) StartBuyerDeal(ctx context.Context, wantID string, in Bu
 
 // AttachBuyerDeal attaches to an already-started BuyerDeal workflow via sdk-go/ingress WorkflowHandle.
 func (c *RestateClient) AttachBuyerDeal(ctx context.Context, wantID string) (*DealState, error) {
-	out, err := ingress.WorkflowHandle[DealState](c.Ingress, "BuyerDeal", wantID).Attach(ctx)
+	ic := c.AttachIngress
+	if ic == nil {
+		ic = c.Ingress
+	}
+	out, err := ingress.WorkflowHandle[DealState](ic, "BuyerDeal", wantID).Attach(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("restate: attach BuyerDeal %s: %w", wantID, err)
 	}
@@ -279,7 +287,11 @@ func (c *RestateClient) StartSellerDealAsync(ctx context.Context, offerID string
 
 // AttachSellerDeal attaches to a SellerDeal workflow result.
 func (c *RestateClient) AttachSellerDeal(ctx context.Context, offerID string) (*DealState, error) {
-	out, err := ingress.WorkflowHandle[DealState](c.Ingress, "SellerDeal", offerID).Attach(ctx)
+	ic := c.AttachIngress
+	if ic == nil {
+		ic = c.Ingress
+	}
+	out, err := ingress.WorkflowHandle[DealState](ic, "SellerDeal", offerID).Attach(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("restate: attach SellerDeal %s: %w", offerID, err)
 	}

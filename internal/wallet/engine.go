@@ -991,19 +991,90 @@ func (e *Engine) AbortNoSendByTxID(ctx context.Context, txid string) error {
 	return nil
 }
 
+// TxStatus returns the persisted go-wallet-toolbox transactions.status for txid.
+func (e *Engine) TxStatus(ctx context.Context, txid string) (string, bool) {
+	if e.readDB == nil || txid == "" {
+		return "", false
+	}
+	var st string
+	q := fmt.Sprintf(`SELECT COALESCE(status, '') FROM "%s" WHERE user_id = ? AND tx_id = ? AND deleted_at IS NULL LIMIT 1`, e.tables.transactions)
+	if err := e.readDB.QueryRowContext(ctx, q, e.userID, txid).Scan(&st); err != nil || st == "" {
+		return "", false
+	}
+	return st, true
+}
+
+// HasOutput reports whether outpoint (txid, vout) is already persisted in outputs for this user.
+func (e *Engine) HasOutput(ctx context.Context, txid string, vout uint32) bool {
+	if e.readDB == nil || txid == "" {
+		return false
+	}
+	var one int
+	q := fmt.Sprintf(`SELECT 1 FROM "%s" WHERE user_id = ? AND tx_id = ? AND vout = ? AND deleted_at IS NULL LIMIT 1`, e.tables.outputs)
+	return e.readDB.QueryRowContext(ctx, q, e.userID, txid, vout).Scan(&one) == nil
+}
+
+// findTxByLockingScript scans local outputs for a transaction containing lockScriptHex (used by ReconcilePendingBRC29
+// when a crash occurred after broadcast but before UpdatePendingBRC29Tx persisted tx_id/atomic_beef).
+func (e *Engine) findTxByLockingScript(ctx context.Context, lockScriptHex string) (string, uint32, []byte) {
+	if e.readDB == nil || lockScriptHex == "" {
+		return "", 0, nil
+	}
+	wantBytes, err := hex.DecodeString(strings.TrimSpace(lockScriptHex))
+	if err != nil || len(wantBytes) == 0 {
+		return "", 0, nil
+	}
+	q := fmt.Sprintf(`SELECT COALESCE(tx_id, ''), vout FROM "%s" WHERE user_id = ? AND deleted_at IS NULL AND tx_id IS NOT NULL AND tx_id != '' AND locking_script = ? ORDER BY id DESC LIMIT 1`, e.tables.outputs)
+	var txid string
+	var vout uint32
+	if err := e.readDB.QueryRowContext(ctx, q, e.userID, wantBytes).Scan(&txid, &vout); err != nil || txid == "" {
+		return "", 0, nil
+	}
+	tx, tErr := e.LoadParsedTx(ctx, txid)
+	if tErr != nil || tx == nil {
+		return txid, vout, nil
+	}
+	beef, _ := SafeAtomicBEEF(tx)
+	return txid, vout, beef
+}
+
+// isSpendableParentStatus returns true only for transaction states whose outputs may safely be spent as parents.
+func isSpendableParentStatus(st wdk.TxStatus) bool {
+	switch st {
+	case wdk.TxStatusCompleted, wdk.TxStatusUnproven, wdk.TxStatusSending:
+		return true
+	default:
+		return false
+	}
+}
+
 // MarkSubmissionUnknown transitions a transaction whose broadcast outcome is uncertain (timeout/EOF/5xx)
-// to status='submission_unknown' so inputs remain reserved until Monitor.UnFail confirms or proves it.
+// to status='submission_unknown' and marks its outputs unspendable atomically so inputs remain reserved
+// and child transactions cannot spend phantom outputs until Monitor.UnFail confirms or proves it.
 func (e *Engine) MarkSubmissionUnknown(ctx context.Context, txid string) error {
 	if e.sqlDB == nil || txid == "" {
 		return nil
 	}
+	tx, err := e.sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
 	q := fmt.Sprintf(`UPDATE "%s" SET status = 'submission_unknown', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND tx_id = ? AND deleted_at IS NULL AND status NOT IN ('completed','failed','aborted')`, e.tables.transactions)
-	_, err := e.sqlDB.ExecContext(ctx, q, e.userID, txid)
-	return err
+	if _, err := tx.ExecContext(ctx, q, e.userID, txid); err != nil {
+		return err
+	}
+	qOut := fmt.Sprintf(`UPDATE "%s" SET spendable = 0 WHERE user_id = ? AND tx_id = ? AND deleted_at IS NULL`, e.tables.outputs)
+	if _, err := tx.ExecContext(ctx, qOut, e.userID, txid); err != nil {
+		return err
+	}
+	qUtxo := fmt.Sprintf(`DELETE FROM "%s" WHERE user_id = ? AND output_id IN (SELECT id FROM "%s" WHERE user_id = ? AND tx_id = ?)`, e.tables.userUTXOs, e.tables.outputs)
+	_, _ = tx.ExecContext(ctx, qUtxo, e.userID, e.userID, txid)
+	return tx.Commit()
 }
 
-// ReconcileOrphanedNoSend aborts stale 'nosend' transactions older than ReservationTTL on boot
-// so inputs reserved before a process crash are never permanently locked.
+// ReconcileOrphanedNoSend aborts stale 'nosend' transactions older than ReservationTTL ONLY after
+// verifying the transaction is neither mined nor present in mempool (preventing double-spend of live txs).
 func (e *Engine) ReconcileOrphanedNoSend(ctx context.Context) (int, error) {
 	if e.readDB == nil {
 		return 0, nil
@@ -1024,6 +1095,20 @@ func (e *Engine) ReconcileOrphanedNoSend(ctx context.Context) (int, error) {
 	_ = rows.Close()
 	aborted := 0
 	for _, id := range txids {
+		// Never abort a nosend tx if it already landed on-chain or in mempool!
+		if e.svc != nil {
+			if mp, _, ok, _ := e.svc.lookupProof(ctx, id); ok && mp != nil {
+				_, _ = e.sqlDB.ExecContext(ctx, fmt.Sprintf(`UPDATE "%s" SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND tx_id = ?`, e.tables.transactions), e.userID, id)
+				continue
+			}
+			if stRes, sErr := e.svc.GetStatusForTxIDs(ctx, []string{id}); sErr != nil {
+				// Upstream unreachable: fail closed (do not abort when chain presence cannot be ruled out).
+				continue
+			} else if stRes != nil && len(stRes.Results) == 1 && stRes.Results[0].Status != wdk.ResultStatusForTxIDNotFound.String() {
+				_, _ = e.sqlDB.ExecContext(ctx, fmt.Sprintf(`UPDATE "%s" SET status = 'unproven', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND tx_id = ?`, e.tables.transactions), e.userID, id)
+				continue
+			}
+		}
 		if err := e.AbortNoSendByTxID(ctx, id); err == nil {
 			aborted++
 		}
@@ -1230,7 +1315,7 @@ func (e *Engine) reclaimPoolToDefault(ctx context.Context, neededTotal uint64) (
 		if o.SpentBy != nil || o.TxID == nil || *o.TxID == "" || o.Satoshis <= 0 || reserved[o.ID] {
 			continue
 		}
-		if o.TxStatus == wdk.TxStatusFailed || o.TxStatus == wdk.TxStatusAborted || o.TxStatus == wdk.TxStatusUnsigned || o.TxStatus == wdk.TxStatusUnprocessed {
+		if !isSpendableParentStatus(o.TxStatus) {
 			continue
 		}
 		if o.BasketName == nil {
@@ -1479,7 +1564,7 @@ func (e *Engine) Balance(ctx context.Context) (BalanceBreakdown, error) {
 			  AND o.deleted_at IS NULL
 			  AND o.spent_by IS NULL
 			  AND o.satoshis > 0
-			  AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','submission_unknown')
+			  AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','nosend','submission_unknown')
 			UNION ALL
 			SELECT
 				COALESCE(o.basket_name, '') AS basket,
@@ -1491,10 +1576,10 @@ func (e *Engine) Balance(ctx context.Context) (BalanceBreakdown, error) {
 			INNER JOIN "%s" owner ON owner.id = o.transaction_id
 			WHERE sp.user_id = ?
 			  AND sp.deleted_at IS NULL
-			  AND sp.status IN ('unsigned','unprocessed','submission_unknown')
+			  AND sp.status IN ('unsigned','unprocessed','nosend','submission_unknown')
 			  AND o.user_id = ?
 			  AND o.satoshis > 0
-			  AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','submission_unknown')
+			  AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','nosend','submission_unknown')
 		)
 		GROUP BY basket, is_reserved, is_confirmed`,
 		e.tables.outputs, e.tables.transactions, e.tables.userUTXOs,
@@ -1655,7 +1740,7 @@ func (e *Engine) ListUTXOs(ctx context.Context, basket string, spendableOnly boo
 		o.user_id = ?
 		AND o.deleted_at IS NULL
 		AND o.spent_by IS NULL
-		AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed')`)
+		AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','nosend','submission_unknown')`)
 	args := []any{e.userID}
 	if basket != "" && basket != "all" {
 		where += ` AND o.basket_name = ?`
@@ -1953,8 +2038,12 @@ func (e *Engine) Send(ctx context.Context, args SendArgs) (*SendResult, error) {
 		}
 	} else {
 		var preRaw, sufRaw [16]byte
-		_, _ = rand.Read(preRaw[:])
-		_, _ = rand.Read(sufRaw[:])
+		if _, err := rand.Read(preRaw[:]); err != nil {
+			return nil, fmt.Errorf("wallet: crypto/rand failed: %w", err)
+		}
+		if _, err := rand.Read(sufRaw[:]); err != nil {
+			return nil, fmt.Errorf("wallet: crypto/rand failed: %w", err)
+		}
 		prefixB64 = base64.StdEncoding.EncodeToString(preRaw[:])
 		suffixB64 = base64.StdEncoding.EncodeToString(sufRaw[:])
 		senderHex = e.IdentityPubHex()
@@ -2071,7 +2160,7 @@ func (e *Engine) Sweep(ctx context.Context, args SweepArgs) (*SweepResult, error
 		if o.SpentBy != nil || o.TxID == nil || *o.TxID == "" || o.Satoshis <= 0 || reservedByOut[o.ID] {
 			continue
 		}
-		if o.TxStatus == wdk.TxStatusFailed || o.TxStatus == wdk.TxStatusAborted || o.TxStatus == wdk.TxStatusUnsigned || o.TxStatus == wdk.TxStatusUnprocessed {
+		if !isSpendableParentStatus(o.TxStatus) {
 			continue
 		}
 		bName := ""
@@ -2127,8 +2216,12 @@ func (e *Engine) Sweep(ctx context.Context, args SweepArgs) (*SweepResult, error
 			return staticLock, "", "", nil
 		}
 		var preRaw, sufRaw [16]byte
-		_, _ = rand.Read(preRaw[:])
-		_, _ = rand.Read(sufRaw[:])
+		if _, err := rand.Read(preRaw[:]); err != nil {
+			return nil, "", "", fmt.Errorf("wallet: crypto/rand failed: %w", err)
+		}
+		if _, err := rand.Read(sufRaw[:]); err != nil {
+			return nil, "", "", fmt.Errorf("wallet: crypto/rand failed: %w", err)
+		}
 		preB64 := base64.StdEncoding.EncodeToString(preRaw[:])
 		sufB64 := base64.StdEncoding.EncodeToString(sufRaw[:])
 		var ls *script.Script
@@ -2475,7 +2568,7 @@ func (e *Engine) Consolidate(ctx context.Context, args ConsolidateArgs) (*Consol
 		if o.SpentBy != nil || o.TxID == nil || *o.TxID == "" || o.Satoshis <= 0 || reserved[o.ID] {
 			continue
 		}
-		if o.TxStatus == wdk.TxStatusFailed || o.TxStatus == wdk.TxStatusAborted || o.TxStatus == wdk.TxStatusUnsigned || o.TxStatus == wdk.TxStatusUnprocessed {
+		if !isSpendableParentStatus(o.TxStatus) {
 			continue
 		}
 		bName := ""
@@ -2715,7 +2808,6 @@ func (e *Engine) importTxToFundingBasket(ctx context.Context, tx *transaction.Tr
 	if len(outputs) == 0 {
 		return &ImportResult{TxID: txid}, nil
 	}
-	e.txCache.Put(txid, tx)
 	if len(atomicBeef) == 0 {
 		var err error
 		atomicBeef, err = SafeAtomicBEEF(tx)
@@ -2732,6 +2824,8 @@ func (e *Engine) importTxToFundingBasket(ctx context.Context, tx *transaction.Tr
 	if err != nil {
 		return nil, err
 	}
+	// Cache strictly AFTER InternalizeAction succeeds so a transient/0-conf failure never pins an unimported deposit.
+	e.txCache.Put(txid, tx)
 	mined := tx.MerklePath != nil
 	var height uint32
 	if mined {

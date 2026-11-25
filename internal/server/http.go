@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -19,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lightwebinc/bcommon/bwallet"
 	"github.com/lightwebinc/bcommon/guard"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -92,6 +94,10 @@ type App struct {
 
 	ttfvMs      atomic.Int64
 	verifyViews atomic.Int64
+
+	stopCh    chan struct{}
+	closeOnce sync.Once
+	restateMu sync.RWMutex
 }
 
 // NewApp wires MCP Streamable HTTP, Unified Tools API, REST API, A2A Agent Card + JSON-RPC,
@@ -137,6 +143,7 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 		oauthClients: make(map[string]oauthClient),
 		oauthCodes:   make(map[string]oauthCode),
 		oauthTokens:  make(map[string]oauthAccessToken),
+		stopCh:       make(chan struct{}),
 	}
 	app.handler = app.buildMux()
 	return app, nil
@@ -145,6 +152,31 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 func (a *App) Handler() http.Handler { return a.handler }
 func (a *App) MCP() *mcp.Server      { return a.mcpSrv }
 func (a *App) Toolbox() *Toolbox     { return a.toolbox }
+
+// Close wakes and disconnects active Dashboard SSE streams so http.Server.Shutdown drains immediately.
+func (a *App) Close() {
+	a.closeOnce.Do(func() {
+		if a.stopCh != nil {
+			close(a.stopCh)
+		}
+	})
+}
+
+// SetRestateClient attaches the active Restate client and Admin URL after Broker/HTTP initialization.
+func (a *App) SetRestateClient(rc *market.RestateClient, adminURL string) {
+	a.restateMu.Lock()
+	a.cfg.RestateClient = rc
+	if adminURL != "" {
+		a.cfg.RestateAdminURL = adminURL
+	}
+	a.restateMu.Unlock()
+}
+
+func (a *App) restateClient() *market.RestateClient {
+	a.restateMu.RLock()
+	defer a.restateMu.RUnlock()
+	return a.cfg.RestateClient
+}
 
 // BroadcastDashboardEvent wakes connected Svelte Dashboard SSE subscribers immediately.
 func (a *App) BroadcastDashboardEvent(kind string) {
@@ -819,6 +851,8 @@ func (a *App) handleDashboardSSE(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-a.stopCh:
+			return
 		case kind, ok := <-ch:
 			if !ok {
 				return
@@ -1345,6 +1379,55 @@ func (a *App) withPaywall(toolName string, next http.Handler) http.Handler {
 					inKeys = append(inKeys, fmt.Sprintf("%s:%d", in.SourceTXID.String(), in.SourceTxOutIndex))
 				}
 			}
+			// On live networks (regtest/testnet/main), strictly require BRC-29 derived invoice remittance
+			// (blocks replay of publicly visible historical mined deposits to static FundAddress()!),
+			// and validate BRC-29 locking script + paidSats >= price BEFORE ClaimPaymentAtomic or RelayExternalTx!
+			isBRC29 := pay.DerivationPrefix != "" && pay.DerivationSuffix != "" && pay.SenderIdentityKey != ""
+			if a.mem.Chain().Network() != "memory" && !isBRC29 {
+				writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 payment remittance (derivationPrefix, derivationSuffix, senderIdentityKey) is required on live networks"})
+				return
+			}
+			var expectedPaid uint64
+			if isBRC29 {
+				d := &bwallet.Derivation{
+					SecurityLevel:   int(bwallet.PaymentProtocol.SecurityLevel),
+					Protocol:        bwallet.PaymentProtocol.Protocol,
+					KeyID:           bwallet.PaymentKeyID(pay.DerivationPrefix, pay.DerivationSuffix),
+					CounterpartyHex: pay.SenderIdentityKey,
+					OwnerHex:        a.mem.Chain().IdentityPubHex(),
+				}
+				wantScript, dErr := a.mem.Chain().Signer().DerivedScript(r.Context(), d)
+				if dErr != nil {
+					writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 script derivation failed: " + dErr.Error()})
+					return
+				}
+				if uint64(pay.OutputIndex) >= uint64(len(tx.Outputs)) {
+					writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 outputIndex out of range"})
+					return
+				}
+				out := tx.Outputs[pay.OutputIndex]
+				if out.LockingScript == nil || !bytes.Equal(*out.LockingScript, *wantScript) {
+					writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 payment output does not match derived locking script"})
+					return
+				}
+				expectedPaid = out.Satoshis
+			} else {
+				fundScript, fErr := a.mem.Chain().Signer().FundScript()
+				if fErr != nil {
+					writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "fund script unavailable"})
+					return
+				}
+				for _, out := range tx.Outputs {
+					if out.LockingScript != nil && bytes.Equal(*out.LockingScript, *fundScript) {
+						expectedPaid += out.Satoshis
+					}
+				}
+			}
+			if expectedPaid < price {
+				writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": fmt.Sprintf("insufficient payment (%d < %d sats)", expectedPaid, price)})
+				return
+			}
+
 			// Atomic cross-interface SQLite payment claim registry (shared with /v1/market/purchase).
 			if err := a.mem.DB().ClaimPaymentAtomic(txid, inKeys); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]any{"error": "payment_rejected", "reason": err.Error()})
@@ -1375,27 +1458,24 @@ func (a *App) withPaywall(toolName string, next http.Handler) http.Handler {
 			}
 
 			var paid uint64
-			if pay.DerivationPrefix != "" && pay.DerivationSuffix != "" && pay.SenderIdentityKey != "" {
+			if isBRC29 {
 				paid, err = a.mem.Chain().InternalizeBRC29(
 					r.Context(), rawBeef, pay.OutputIndex,
 					pay.DerivationPrefix, pay.DerivationSuffix, pay.SenderIdentityKey,
 					"BRC-105 payment for "+toolName, []string{"brc105", toolName},
 				)
 				if err != nil {
-					_ = a.mem.DB().ReleasePaymentClaim(txid)
 					writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 payment verification failed: " + err.Error()})
 					return
 				}
 			} else {
 				paid, err = a.mem.Chain().AdoptReceived(r.Context(), tx)
 				if err != nil {
-					_ = a.mem.DB().ReleasePaymentClaim(txid)
 					writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "payment verification failed: " + err.Error()})
 					return
 				}
 			}
 			if paid < price {
-				_ = a.mem.DB().ReleasePaymentClaim(txid)
 				writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": fmt.Sprintf("insufficient payment (%d < %d sats)", paid, price)})
 				return
 			}

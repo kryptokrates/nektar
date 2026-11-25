@@ -80,16 +80,25 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 	if listenAddr == "" {
 		listenAddr = "127.0.0.1:9080"
 	}
-	// Fail-closed internal Restate token: auto-generate a 32-byte random token if none was provided
-	// so NektarRuntime / BuyerDeal / SellerDeal ingress handlers are NEVER unauthenticated.
+	// Fail-closed persistent internal Restate token: load or atomically create a mode-0600 32-byte
+	// token in <dataDir>/restate-internal-token so suspended Restate workflows survive restarts
+	// without hitting checkInternalAuthReq mismatches.
 	internalTok := strings.TrimSpace(cfg.InternalToken)
 	if internalTok == "" {
-		var tokRaw [32]byte
-		if _, err := rand.Read(tokRaw[:]); err != nil {
-			return nil, noop, fmt.Errorf("restate: generate internal token: %w", err)
+		if cfg.DataDir != "" && cfg.DataDir != ":memory:" {
+			tok, _, tErr := server.ReadOrCreateTokenFile(filepath.Join(cfg.DataDir, "restate-internal-token"))
+			if tErr != nil {
+				return nil, noop, fmt.Errorf("restate: persist internal token: %w", tErr)
+			}
+			internalTok = tok
+		} else {
+			var tokRaw [32]byte
+			if _, err := rand.Read(tokRaw[:]); err != nil {
+				return nil, noop, fmt.Errorf("restate: generate internal token: %w", err)
+			}
+			internalTok = hex.EncodeToString(tokRaw[:])
+			clear(tokRaw[:])
 		}
-		internalTok = hex.EncodeToString(tokRaw[:])
-		clear(tokRaw[:])
 		cfg.InternalToken = internalTok
 	}
 	eng.SetInternalToken(internalTok)
@@ -125,23 +134,34 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 		}
 	}()
 
-	// Wait briefly until the local h2c listener is accepting TCP connections.
+	// Wait until the local h2c listener is accepting TCP connections (ctx-aware, fail-closed on timeout).
 	_, dialPort, _ := net.SplitHostPort(listenAddr)
 	if dialPort == "" {
 		dialPort = "9080"
 	}
 	readyDeadline := time.Now().Add(4 * time.Second)
+	epReady := false
 	for time.Now().Before(readyDeadline) {
 		select {
+		case <-ctx.Done():
+			return nil, noop, ctx.Err()
 		case rErr := <-epErrCh:
 			return nil, noop, fmt.Errorf("restate SDK endpoint failed to start on %s: %w", listenAddr, rErr)
 		default:
 		}
 		if c, dErr := net.DialTimeout("tcp", "127.0.0.1:"+dialPort, 200*time.Millisecond); dErr == nil {
 			_ = c.Close()
+			epReady = true
 			break
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return nil, noop, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if !epReady {
+		return nil, noop, fmt.Errorf("restate SDK endpoint on %s did not become ready within 4s", listenAddr)
 	}
 
 	// Mode 1: External restate-server (Docker Compose / Kubernetes sidecar / standalone daemon).
@@ -188,9 +208,36 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 	if err := os.MkdirAll(restateDir, 0o750); err != nil {
 		return nil, noop, err
 	}
+	// Reclaim any orphaned restate-server child from a previous unclean SIGKILL so RocksDB lock never blocks reboot.
+	pidPath := filepath.Join(cfg.DataDir, "restate-server.pid")
+	if rawPID, pErr := os.ReadFile(pidPath); pErr == nil {
+		if oldPID, nErr := strconv.Atoi(strings.TrimSpace(string(rawPID))); nErr == nil && oldPID > 0 && oldPID != os.Getpid() && isPIDAlive(oldPID) {
+			log.Printf("reclaiming orphaned restate-server pid=%d before startup", oldPID)
+			terminatePIDGracefully(oldPID)
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) && isPIDAlive(oldPID) {
+				time.Sleep(50 * time.Millisecond)
+			}
+			if isPIDAlive(oldPID) {
+				if p, fErr := os.FindProcess(oldPID); fErr == nil {
+					_ = p.Kill()
+				}
+			}
+		}
+		_ = os.Remove(pidPath)
+	}
 
-	cmdCtx, cmdCancel := context.WithCancel(ctx)
+	// Decouple child lifecycle from parent ctx so SIGTERM does not immediately SIGKILL restate-server
+	// before httpSrv.Shutdown drains in-flight requests; stopFn performs graceful SIGTERM + bounded WaitDelay.
+	cmdCtx, cmdCancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(cmdCtx, binPath, "--base-dir", restateDir)
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			terminatePIDGracefully(cmd.Process.Pid)
+		}
+		return nil
+	}
+	cmd.WaitDelay = 3 * time.Second
 	cmd.Env = append(os.Environ(),
 		"RESTATE_NODE_NAME=nektar-local",
 		fmt.Sprintf("RESTATE_BIND_ADDRESS=127.0.0.1:%d", nodePort),
@@ -210,19 +257,25 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 		}
 		return nil, noop, fmt.Errorf("start local restate-server (%s): %w", binPath, err)
 	}
+	if cmd.Process != nil {
+		_ = os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o600)
+	}
+	childDone := make(chan error, 1)
+	go func() {
+		wErr := cmd.Wait()
+		_ = os.Remove(pidPath)
+		childDone <- wErr
+		close(childDone)
+	}()
 	stopFn := func() {
 		cmdCancel()
-		done := make(chan struct{})
-		go func() {
-			_ = cmd.Wait()
-			close(done)
-		}()
 		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
+		case <-childDone:
+		case <-time.After(4 * time.Second):
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
 			}
+			<-childDone
 		}
 		if logFile != nil {
 			_ = logFile.Close()
@@ -232,7 +285,19 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 	localIngress := fmt.Sprintf("http://127.0.0.1:%d", ingPort)
 	localAdmin := fmt.Sprintf("http://127.0.0.1:%d", admPort)
 	rc := market.NewRestateClientWithToken(localIngress, localAdmin, cfg.InternalToken)
-	if err := waitAndRegisterRestate(ctx, rc, epURI, 25*time.Second); err != nil {
+	regCtx, regCancel := context.WithCancel(ctx)
+	defer regCancel()
+	go func() {
+		select {
+		case wErr, ok := <-childDone:
+			if ok && regCtx.Err() == nil {
+				log.Printf("warning: supervised restate-server exited unexpectedly: %v", wErr)
+				regCancel()
+			}
+		case <-regCtx.Done():
+		}
+	}()
+	if err := waitAndRegisterRestate(regCtx, rc, epURI, 25*time.Second); err != nil {
 		stopFn()
 		return nil, noop, fmt.Errorf("local restate-server registration failed (%s -> %s): %w", localAdmin, epURI, err)
 	}

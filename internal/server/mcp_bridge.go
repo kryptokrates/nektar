@@ -60,9 +60,16 @@ func WriteDaemonInfo(dataDir string, info DaemonInfo) error {
 	return nil
 }
 
-// RemoveDaemonInfo deletes daemon.json on clean daemon exit.
+// RemoveDaemonInfo deletes daemon.json on clean daemon exit, only if owned by this PID.
 func RemoveDaemonInfo(dataDir string) {
-	_ = os.Remove(DaemonInfoPath(dataDir))
+	p := DaemonInfoPath(dataDir)
+	if b, err := os.ReadFile(p); err == nil {
+		var info DaemonInfo
+		if json.Unmarshal(b, &info) == nil && info.PID > 0 && info.PID != os.Getpid() {
+			return
+		}
+	}
+	_ = os.Remove(p)
 }
 
 // DetectLiveDaemon reads <dataDir>/daemon.json and verifies GET /v1/health responds within 500ms.

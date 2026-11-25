@@ -219,6 +219,17 @@ func (s *bcommonServices) PostFromBEEF(ctx context.Context, beef *transaction.Be
 				rejErr := fmt.Errorf("%w: %w", ErrSpendRejected, gErr)
 				s.setLastErr(id, rejErr)
 				postErrSinkFromCtx(ctx).record(id, rejErr)
+				if len(posted.TxIDResults) > 0 {
+					if firstErr == nil {
+						firstErr = rejErr
+					}
+					posted.TxIDResults = append(posted.TxIDResults, wdk.PostedTxID{
+						TxID:   id,
+						Result: wdk.PostedTxIDResultError,
+						Error:  rejErr,
+					})
+					continue
+				}
 				return nil, rejErr
 			}
 			guarded = true
@@ -268,6 +279,17 @@ func (s *bcommonServices) PostFromBEEF(ctx context.Context, beef *transaction.Be
 				unkErr := fmt.Errorf("%w: %w", ErrBroadcastUnknown, bErr)
 				s.setLastErr(id, unkErr)
 				postErrSinkFromCtx(ctx).record(id, unkErr)
+				if len(posted.TxIDResults) > 0 {
+					if firstErr == nil {
+						firstErr = unkErr
+					}
+					posted.TxIDResults = append(posted.TxIDResults, wdk.PostedTxID{
+						TxID:   id,
+						Result: wdk.PostedTxIDResultError,
+						Error:  unkErr,
+					})
+					continue
+				}
 				return nil, unkErr
 			default:
 				if guarded && s.cfg.SpendGuardRefund != nil && isDefiniteRejectError(lower) {
@@ -514,10 +536,12 @@ func (s *bcommonServices) GetStatusForTxIDs(ctx context.Context, txIDs []string)
 		}
 		// Never treat local RAM txCache as authoritative mempool proof — query external chain only!
 		if s.cfg.Chain != nil {
+			var upstreamErr error
 			if ks, ok := s.cfg.Chain.(interface {
 				Known(context.Context, string) (bool, error)
 			}); ok {
-				if known, kErr := ks.Known(ctx, id); kErr == nil && known {
+				known, kErr := ks.Known(ctx, id)
+				if kErr == nil && known {
 					zero := 0
 					results = append(results, wdk.TxStatusDetail{
 						TxID:   id,
@@ -526,8 +550,12 @@ func (s *bcommonServices) GetStatusForTxIDs(ctx context.Context, txIDs []string)
 					})
 					continue
 				}
+				if kErr != nil {
+					upstreamErr = kErr
+				}
 			}
-			if raw, rErr := s.cfg.Chain.TxRaw(ctx, id); rErr == nil && len(raw) > 0 {
+			raw, rErr := s.cfg.Chain.TxRaw(ctx, id)
+			if rErr == nil && len(raw) > 0 {
 				zero := 0
 				results = append(results, wdk.TxStatusDetail{
 					TxID:   id,
@@ -535,6 +563,18 @@ func (s *bcommonServices) GetStatusForTxIDs(ctx context.Context, txIDs []string)
 					Status: wdk.ResultStatusForTxIDKnown.String(),
 				})
 				continue
+			}
+			// Do not smear upstream 429/5xx/network errors into authoritative NotFound.
+			if rErr != nil {
+				lower := strings.ToLower(rErr.Error())
+				if !strings.Contains(lower, "404") && !strings.Contains(lower, "not found") && !strings.Contains(lower, "no such") {
+					return nil, fmt.Errorf("wallet services: status lookup %s: %w", id, rErr)
+				}
+			} else if upstreamErr != nil {
+				lower := strings.ToLower(upstreamErr.Error())
+				if !strings.Contains(lower, "404") && !strings.Contains(lower, "not found") && !strings.Contains(lower, "no such") {
+					return nil, fmt.Errorf("wallet services: status lookup %s: %w", id, upstreamErr)
+				}
 			}
 		}
 		results = append(results, wdk.TxStatusDetail{

@@ -59,7 +59,7 @@ func SerializeProvenance(p Provenance) []byte {
 		Field([]byte(p.ModelID)),
 	}
 	if p.Modality != nil {
-		mb, _ := json.Marshal(p.Modality)
+		mb, _ := CanonicalJSON(p.Modality)
 		parts = append(parts, Field(mb))
 	}
 	return Concat(parts...)
@@ -114,9 +114,26 @@ func ProvenanceDigest(data []byte, p Provenance) []byte {
 	return DSHA256(Concat(TagProvSig, Field(data), SerializeProvenance(unsigned)))
 }
 
-// ComputeHDP computes H(d|p) = SHA256(TagProv || d || SerializeProvenance(p)).
+// ComputeHDP computes legacy v1 H(d|p) = SHA256(TagProv || d || SerializeProvenance(p)).
 func ComputeHDP(data []byte, p Provenance) []byte {
 	return SHA256(Concat(TagProv, data, SerializeProvenance(p)))
+}
+
+// ComputeHDPV2 computes framed v2 H(d|p) = SHA256(TagProvV2 || Field(d) || SerializeProvenance(p))
+// eliminating boundary ambiguity between variable-length plaintext data and serialized provenance (F-10).
+func ComputeHDPV2(data []byte, p Provenance) []byte {
+	return SHA256(Concat(TagProvV2, Field(data), SerializeProvenance(p)))
+}
+
+// VerifyHDP checks whether hdp matches either framed v2 or legacy v1 H(d|p) over raw provBytes.
+func VerifyHDP(data, provBytes, hdp []byte) bool {
+	if len(hdp) != 32 {
+		return false
+	}
+	if EqualBytes(SHA256(Concat(TagProvV2, Field(data), provBytes)), hdp) {
+		return true
+	}
+	return EqualBytes(SHA256(Concat(TagProv, data, provBytes)), hdp)
 }
 
 // ComputeEH computes SHA256(E) (SHA256("") if empty).

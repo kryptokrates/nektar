@@ -247,6 +247,14 @@ func (s *Store) AppendEvent(ev StoredEvent) (int64, bool, error) {
 
 // EventsSince loads unexpired events with seq > cursor ordered ascending (for SSE resume & poll floor).
 func (s *Store) EventsSince(cursor int64, domainFilter []string, limit int) ([]StoredEvent, error) {
+	ev, _, _, err := s.EventsSinceScanned(cursor, domainFilter, limit)
+	return ev, err
+}
+
+// EventsSinceScanned loads up to `limit` raw rows with seq > cursor, applies optional domainFilter,
+// and returns the matched events PLUS the highest raw SQLite seq scanned and raw row count so
+// callers can paginate past non-matching domain windows without truncating backlog replay.
+func (s *Store) EventsSinceScanned(cursor int64, domainFilter []string, limit int) (events []StoredEvent, nextCursor int64, rawCount int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if limit <= 0 || limit > 1000 {
@@ -259,7 +267,7 @@ func (s *Store) EventsSince(cursor int64, domainFilter []string, limit int) ([]S
 		WHERE seq > ? AND (exp = 0 OR exp > ?)
 		ORDER BY seq ASC LIMIT ?`, cursor, nowMs, limit)
 	if err != nil {
-		return nil, err
+		return nil, cursor, 0, err
 	}
 	defer rows.Close()
 	wantDom := make(map[string]bool, len(domainFilter))
@@ -268,13 +276,18 @@ func (s *Store) EventsSince(cursor int64, domainFilter []string, limit int) ([]S
 			wantDom[d] = true
 		}
 	}
+	nextCursor = cursor
 	var out []StoredEvent
 	for rows.Next() {
 		var e StoredEvent
 		var kindStr, domJSON string
 		var pJSON []byte
 		if err := rows.Scan(&e.Seq, &e.Outpoint, &e.Topic, &e.TxID, &e.Vout, &kindStr, &e.Pub, &domJSON, &pJSON, &e.BEEF, &e.Exp, &e.AdmittedAt); err != nil {
-			return nil, err
+			return nil, nextCursor, rawCount, err
+		}
+		rawCount++
+		if e.Seq > nextCursor {
+			nextCursor = e.Seq
 		}
 		e.Kind = bstack.ArtifactKind(kindStr)
 		_ = json.Unmarshal([]byte(domJSON), &e.Domains)
@@ -284,7 +297,7 @@ func (s *Store) EventsSince(cursor int64, domainFilter []string, limit int) ([]S
 		}
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	return out, nextCursor, rawCount, rows.Err()
 }
 
 func matchesAnyDomain(doms []string, want map[string]bool) bool {

@@ -386,11 +386,14 @@ func (a *App) postProxyTurn(provider, shard, userPrompt, rawResp string, isStrea
 		if userPrompt != "" {
 			summary = "Q: " + shortStr(userPrompt, 300) + "\nA: " + shortStr(assistantText, 1200)
 		}
+		proxyPrincipal := policy.Principal{Type: "Agent", ID: "llm-proxy", Level: 0}
 		_, _ = a.mem.Remember(ctx, memory.RememberInput{
-			Shard:  targetShard,
-			Text:   summary,
-			Source: "proxy:" + provider,
-			Class:  "capture",
+			Shard:     targetShard,
+			Text:      summary,
+			Source:    "proxy:" + provider,
+			Class:     "capture",
+			Principal: &proxyPrincipal,
+			Tainted:   true,
 		})
 	}
 }

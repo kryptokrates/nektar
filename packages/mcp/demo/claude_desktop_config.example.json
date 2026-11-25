@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "nektar": {
-      "command": "node",
-      "args": ["C:/Users/nedzo/Documents/Devin/nektar/packages/mcp/dist/src/bin.js"],
-      "env": { "NEKTAR_MODEL_ID": "anthropic:claude (set the exact release id)", "NEKTAR_BATCH": "4" }
-    }
-  }
-}

@@ -5,13 +5,14 @@ on:
     tags: ['v*']
 permissions:
   contents: read
+
 jobs:
   image:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     permissions:
       contents: read
-      packages: write # ghcr push
+      packages: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -31,7 +32,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
           labels: |
             org.opencontainers.image.title=nektar
-            org.opencontainers.image.description=Verifiable, encrypted agent memory on BSV — MCP server
+            org.opencontainers.image.description=Verifiable, encrypted AI agent memory anchored on BSV — single-binary Go v0.4
             org.opencontainers.image.licenses=MIT
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -40,237 +41,59 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # rzup's GitHub API calls get a real token (secret-mounted — not in
-          # layers); gha cache restores the pinned stark toolchain layer
-          # instead of re-installing it per run
-          secrets: GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: smoke — every packaged module resolves inside the pushed image
-        run: |
-          docker run --rm --entrypoint node ghcr.io/${{ github.repository_owner }}/nektar:${{ github.ref_type == 'tag' && 'latest' || 'edge' }} --input-type=module -e "
-            import { readdirSync } from 'node:fs'
-            import { pathToFileURL } from 'node:url'
-            const dir = '/app/dist/src'
-            const files = readdirSync(dir, { recursive: true })
-              .filter((f) => f.endsWith('.js') && !f.endsWith('bin.js') && !f.endsWith('init.js'))
-            for (const f of files) await import(pathToFileURL(dir + '/' + f).href)
-            console.log('smoke: ' + files.length + ' packaged modules resolve')
-          "
-        timeout-minutes: 3
-      - name: smoke — image boots with the bundled restate sidecar
-        run: |
-          img="ghcr.io/${{ github.repository_owner }}/nektar:${{ github.ref_type == 'tag' && 'latest' || 'edge' }}"
-          cid="$(docker run -d -e NEKTAR_NETWORK=testnet "$img")"
-          ok=0
-          for _ in $(seq 1 60); do
-            if docker exec "$cid" node -e "fetch('http://127.0.0.1:19070/version').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then ok=1; break; fi
-            sleep 2
-          done
-          docker logs --tail 15 "$cid" || true
-          # the sidecar's own log holds the spawn detail the app log lacks —
-          # dump it before the container goes (debugged blind once already)
-          docker exec "$cid" cat /data/restate/restate.log 2>/dev/null | tail -20 || true
-          docker rm -f "$cid" > /dev/null
-          [ "$ok" = 1 ] || { echo 'restate sidecar did not come up inside the image'; exit 1; }
-          echo 'restate sidecar up inside the pushed image'
-        timeout-minutes: 3
 
-  # hub surfaces — derived images carrying the modules/shims/schema the
-  # compose used to bind-mount. One Dockerfile, one target per image, same
-  # tag line as the agent image so a release aligns every surface.
-  hub-images:
+  binaries:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      packages: write
+    timeout-minutes: 15
     strategy:
-      matrix:
-        target: [bbox-host, shim, hub-db]
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/nektar-${{ matrix.target }}
-          tags: |
-            type=raw,value=edge,enable=${{ github.ref_type == 'branch' }}
-            type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: deploy/images/hub.Dockerfile
-          target: ${{ matrix.target }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha,scope=hub-${{ matrix.target }}
-          cache-to: type=gha,mode=max,scope=hub-${{ matrix.target }}
-      - name: smoke — the image carries what compose used to mount
-        run: |
-          case "${{ matrix.target }}" in
-            bbox-host) test="test -f /app/modules/nektar/nektar-module.js && test -f /app/modules/bbox/bbox-module.js && test -d /app/modules/finger" ;;
-            shim) test="test -f /shim/header-shim.mjs && test -f /shim/watch-shim.mjs" ;;
-            hub-db) test="ls /docker-entrypoint-initdb.d/*.sql" ;;
-          esac
-          docker run --rm --entrypoint sh ghcr.io/${{ github.repository_owner }}/nektar-${{ matrix.target }}:edge -c "$test"
-
-  # desktop artifacts — a self-contained install tree per OS
-  # (tools/pack-deploy.mjs: pnpm deploy --prod --node-linker hoisted). This is
-  # the no-build path for HOST runs — required for NEKTAR_WALLET=client, since
-  # a desktop wallet's BRC-100 substrate binds 127.0.0.1:3321 and a container
-  # cannot reach it. sqlite3 is native → one artifact per platform. The
-  # extract→boot smoke runs on the packed file in a clean dir: it exists
-  # because the previous single-file bundle silently shipped an unresolvable
-  # createRequire('@bsv/sdk') — MODULE_NOT_FOUND on a clean machine.
-  desktop:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, artifact: nektar-mcp-linux-x64.tar.gz }
-          - { os: macos-latest, artifact: nektar-mcp-darwin-arm64.tar.gz }
-          - { os: windows-latest, artifact: nektar-mcp-win32-x64.zip }
+          - { goos: linux,   goarch: amd64, ext: '',     archive: nektar-linux-amd64.tar.gz }
+          - { goos: linux,   goarch: arm64, ext: '',     archive: nektar-linux-arm64.tar.gz }
+          - { goos: darwin,  goarch: arm64, ext: '',     archive: nektar-darwin-arm64.tar.gz }
+          - { goos: windows, goarch: amd64, ext: '.exe', archive: nektar-windows-amd64.zip }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-go@v5
         with:
-          node-version: 24
-          # no cache in a publish workflow — a poisoned store reaches release assets
-          package-manager-cache: false
-      - name: pnpm
-        run: corepack enable && corepack prepare pnpm@12.16.1 --activate
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r build
-        timeout-minutes: 10
-      - run: node tools/pack-deploy.mjs
-      - name: pack artifact (unix)
-        if: runner.os != 'Windows'
-        run: tar -czf "${{ matrix.artifact }}" -C dist-deploy .
-      - name: pack artifact (windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Compress-Archive -Path dist-deploy\* -DestinationPath "${{ matrix.artifact }}"
-      # smoke the PACKED artifact, extracted to a clean dir — resolution must
-      # not escape into the workspace's node_modules
-      - name: smoke — extract, boot, health (unix)
-        if: runner.os != 'Windows'
+          go-version-file: go.mod
+      - name: build static binary (CGO_ENABLED=0)
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
-          tmp="$RUNNER_TEMP/nektar-clean"
-          rm -rf "$tmp" && mkdir -p "$tmp/.data"
-          tar -xzf "${{ matrix.artifact }}" -C "$tmp"
-          cd "$tmp"
-          NEKTAR_NETWORK=testnet NEKTAR_DATA_DIR="$tmp/.data" NEKTAR_HTTP_PORT=18099 node dist/src/bin.js > boot.log 2>&1 &
-          pid=$!
-          ok=0
-          for i in $(seq 1 60); do
-            curl -sf http://127.0.0.1:18099/v1/health >/dev/null && { ok=1; break; }
-            sleep 1
-          done
-          # the bundled restate sidecar must have spawned — this is the
-          # marketplace plane, not just liveness; provisioning takes a few s
-          rs=0
-          for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:19070/version >/dev/null && { rs=1; break; }
-            sleep 1
-          done
-          kill "$pid" 2>/dev/null
-          cat boot.log
-          [ "$ok" = 1 ] || { echo "artifact boot smoke failed"; exit 1; }
-          [ "$rs" = 1 ] || { echo "restate sidecar did not come up"; exit 1; }
-      # the windows artifact runs its bundled linux restate-server through
-      # WSL — the runner ships WSL2 with NO distro (`wsl -e` fails), so
-      # install Ubuntu headless first. --no-launch + no reboot needed on
-      # windows-latest where the feature is already enabled.
-      - name: wsl distro for the sidecar (windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          wsl --install -d Ubuntu --no-launch
-          wsl -e true
-          if ($LASTEXITCODE -ne 0) { throw "wsl distro install did not yield a usable WSL" }
-      - name: smoke — extract, boot, health (windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $tmp = "$env:RUNNER_TEMP\nektar-clean"
-          Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory "$tmp\.data" -Force | Out-Null
-          Expand-Archive -Path "${{ matrix.artifact }}" -DestinationPath $tmp -Force
-          Set-Location $tmp
-          $env:NEKTAR_NETWORK = 'testnet'
-          $env:NEKTAR_DATA_DIR = "$tmp\.data"
-          $env:NEKTAR_HTTP_PORT = '18099'
-          $p = Start-Process node -ArgumentList 'dist/src/bin.js' -RedirectStandardOutput boot.out -RedirectStandardError boot.err -PassThru
-          $ok = $false
-          foreach ($i in 1..60) {
-            try { if ((Invoke-WebRequest http://127.0.0.1:18099/v1/health -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200) { $ok = $true; break } } catch {}
-            Start-Sleep 1
-          }
-          # the bundled restate sidecar (via WSL on windows) must answer admin
-          # before we stop the app — killing the app kills the sidecar too
-          $rsOk = $false
-          foreach ($i in 1..30) {
-            try { if ((Invoke-RestMethod http://127.0.0.1:19070/version -TimeoutSec 3).version) { $rsOk = $true; break } } catch {}
-            Start-Sleep 1
-          }
-          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-          Get-Content boot.out, boot.err -ErrorAction SilentlyContinue
-          if (-not $ok) { throw 'artifact boot smoke failed' }
-          if (-not $rsOk) { throw 'restate sidecar did not come up' }
-      - name: upload run artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
-          if-no-files-found: error
-      # two personas → two asset families: the host MCP tree (agent docked to
-      # a desktop wallet/client) and the VPS deploy bundle (compose + helm)
-      - name: tar + upload the deploy bundle (agent + hub + templates + installers — linux leg only)
-        if: runner.os == 'Linux'
-        run: |
-          tar -czf nektar-deploy.tar.gz --exclude='.env' --exclude='*/.env' -C deploy agent hub -C .. install packaging
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" -o "dist/nektar${{ matrix.ext }}" ./cmd/nektar
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            (cd dist && zip -q "../${{ matrix.archive }}" "nektar${{ matrix.ext }}")
+          else
+            tar -czf "${{ matrix.archive }}" -C dist "nektar${{ matrix.ext }}"
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: runner.os == 'Linux'
         with:
-          name: nektar-deploy-asset
-          path: nektar-deploy.tar.gz
-          if-no-files-found: error
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
 
   release-assets:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: desktop
+    needs: [image, binaries]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     permissions:
-      contents: write # gh release upload
+      contents: write
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: 'nektar-*'
           merge-multiple: true
-      - name: attach to the GitHub release
+      - name: upload static binaries to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
-          gh release upload "$TAG" nektar-mcp-*.tar.gz nektar-mcp-*.zip nektar-deploy.tar.gz --clobber
-
-      # npm-publish removed — the server ships as release assets
-      # (nektar-mcp-<platform>.*) and via the GHCR image instead
+          gh release upload "$TAG" nektar-*.tar.gz nektar-*.zip --clobber

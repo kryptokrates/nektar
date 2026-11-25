@@ -2,125 +2,86 @@
   <img src="logo.svg" width="96" alt="nektar"/>
 </p>
 
-# nektar — verifiable AI agent memory & knowledge market
+# nektar v0.4 — verifiable AI agent memory & knowledge market
 
-**One verifiable brain for all your AI agents. Save what an agent learns, prove where answers came from, and trade knowledge under limits you approve — settled on BSV.**
+**One static Go binary for all your AI agents. Save what an agent learns, encrypt shards with BRC-369 + Borg epochs, govern reads with AWS Cedar, ground answers with Google Mangle + `nektarr1.*` receipts, and trade knowledge on BSV.**
 
 [![ci](https://github.com/kryptokrates/nektar/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptokrates/nektar/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-[1. Install (30s)](#1-install--start-30-seconds) · [2. Dock Any Agent (10s)](#2-dock-any-existing-running-agent-10-seconds) · [3. Deploy a Hub (1 Click)](#3-deploy-a-hub-node-1-click) · [Universal Adapter](docs/ADAPTERS.md) · [Trading Guide](docs/MARKET.md) · [Advanced / Dev](docs/ADVANCED-INSTALL.md)
+---
+
+## What Changed in v0.4 (Radical Stack Simplification)
+
+Nektar v0.4 collapses the legacy 21-package (~58,000 LOC) TypeScript daemon and 12-container Hub stack into **one zero-CGO static Go binary** (`cmd/nektar`) built directly on the upstream Go ecosystem:
+
+- **BSV Core & Lightweb Stack (native Go):** `github.com/bsv-blockchain/go-sdk`, `go-chaintracks`, `go-overlay-services`, and `github.com/lightwebinc/{bcommon, bfinger, bbox, blogs, borg, bsecret, bstore, overlay-bridge}` (`bwallet` + `wirewallet` BRC-100 custody, `keyed` BRC-369 encryption, `chirp` BRC-167 content-addressed storage, `headers` PoW verification, `publish` settlement, `payee.Claims` 402 replay protection, and `testchain`).
+- **Policy & Reasoning (native Go, zero WASM/JVM):** `github.com/cedar-policy/cedar-go` (AWS Cedar authorization + level isolation) and `codeberg.org/TauCeti/mangle-go` (Google Mangle stratified Datalog grounding + bi-temporal AORG + `nektarr1.*` receipts).
+- **Durable Execution & MCP (native Go):** `github.com/restatedev/sdk-go` (`BuyerDeal`, `SellerDeal`, `Custody` Virtual Object) and `github.com/modelcontextprotocol/go-sdk` (stdio + Streamable HTTP `/mcp`).
+- **Embedded Assets (zero runtime deps):** Pure-Go SQLite (`modernc.org/sqlite`), embedded Rúnar Bitcoin Script covenant artifacts (`internal/contracts/artifacts/*.json`), and embedded Svelte 5 dashboard (`internal/server/ui_dist/`).
+- **Embedded Go Hub (`nektar serve -hub` or `nektar hub`):** Mounts Nektar's 16 market lanes (`tm_nektar_<net>_0..f` + `ls_nektar`) alongside Lightweb's Go overlay modules (`bfinger`, `bbox`, `blogs`, `borg`, `bsecret`, `bstore`) with native SSE `/events` push — retiring MariaDB/MySQL, `header-shim`, `watch-a`, `watch-b`, and `bbox-host`.
 
 ---
 
-## 1. Install & Start (30 seconds)
+## Quick Start
 
-Everything runs from one official GHCR image (`ghcr.io/kryptokrates/nektar:latest`) with the Restate durable executor baked in — **zero Node.js, zero pnpm, zero `.env` editing, zero config.** Defaults to BSV **testnet** (free test coins) with a seeded `welcome` shard.
-
-**macOS / Linux:**
+### Build from source (Go 1.27+, zero CGO)
 
 ```sh
-curl -fsSL https://nektar.run/install.sh | sh
+go build -o nektar ./cmd/nektar
+./nektar serve
 ```
 
-**Windows (PowerShell):**
-
-```powershell
-irm https://nektar.run/install.ps1 | iex
-```
-
-**Or raw Docker (no installer script):**
+### Run with Docker (~35 MB Alpine image)
 
 ```sh
 docker run -d --name nektar --restart unless-stopped \
-  -p 127.0.0.1:18420:18420 -v nektar-data:/data \
+  -p 127.0.0.1:8080:8080 -v nektar-data:/data \
   ghcr.io/kryptokrates/nektar:latest serve
 ```
 
-> **What happens automatically on first boot:**
->
-> 1. Starts one shared local daemon on `http://127.0.0.1:18420` (and auto-generates persistent mode-`0600` auth tokens in `/data`).
-> 2. Prints a **Startup Card** with a 1-click browser pairing link (`nektar open` opens your Dashboard already unlocked — no 401 screens, no manual secrets).
-> 3. Seeds the `welcome` shard immediately so your first `recall` answers in <1s, even offline.
-> 4. Inside the Dashboard Quickstart: click **Run Recall + Receipt** to verify your first receipt and **1-Click Testnet Faucet** to get free test coins.
+### Run a Full Hub Node (Agent + Overlay Hub + Native SSE)
+
+```sh
+./nektar serve -hub -listen :8080
+# or via Docker Compose (2 containers instead of 12):
+docker compose -f deploy/hub/compose.yaml up -d
+```
 
 ---
 
-## 2. Dock Any Existing Running Agent (10 seconds)
-
-MCP alone isn't enough for every agent — some agents don't speak MCP at all, and models can lazily skip calling memory tools. Nektar ships a **4-layer Universal Adapter** so _any_ running agent can dock immediately:
-
-### Option A — Coding & Desktop AI Apps (1 command)
-
-Auto-detects and non-destructively wires **Claude Code, Cursor, Codex, Hermes Agent, OpenClaw, Windsurf, VS Code, Zed, Cline, Continue, Goose, OpenCode, and Gemini/Antigravity** (including bundled L3 native plugins + host-portable hooks + live `recall {}` check):
+## Dock Any Agent
 
 ```sh
 nektar dock
 ```
 
-### Option B — ANY Existing Running Agent with ZERO Code Changes (L0 LLM Proxy)
-
-Already running **LangGraph, CrewAI, AutoGen, n8n, Dify, Open WebUI, Aider, or a custom Python/TypeScript agent**? Swap **one** environment variable — no MCP client or code edits required:
-
-```sh
-# Any OpenAI-compatible agent:
-export OPENAI_BASE_URL="http://127.0.0.1:18420/v1/proxy/openai/v1"
-# (If auth is active, run `nektar dock proxy` for the ready-to-paste composite key)
-
-# Any Anthropic-compatible agent:
-export ANTHROPIC_BASE_URL="http://127.0.0.1:18420/v1/proxy/anthropic"
-```
-
-The proxy deterministically recalls verified memory before each turn, streams responses untouched with zero lag, and asynchronously verifies any `nektarr1.*` receipts. See [docs/ADAPTERS.md](docs/ADAPTERS.md) for the full 4-layer matrix (L0 Proxy · L1 MCP Streamable HTTP + OAuth 2.1 + A2A + REST · L2 Portable Hooks · L3 Bundled Native Plugins).
+- **Stdio MCP (Claude Code, Claude Desktop, Cursor, Codex):** `nektar mcp`
+- **Streamable HTTP MCP:** `http://127.0.0.1:8080/mcp`
+- **L0 Zero-Code OpenAI Memory Proxy:** `OPENAI_BASE_URL=http://127.0.0.1:8080/v1/proxy/openai/v1`
+- **L0 Zero-Code Anthropic Memory Proxy:** `ANTHROPIC_BASE_URL=http://127.0.0.1:8080/v1/proxy/anthropic`
+- **A2A Agent Card & JSON-RPC:** `GET /.well-known/agent.json`, `POST /a2a`
+- **Svelte 5 Dashboard:** `http://127.0.0.1:8080/dashboard`
 
 ---
 
-## 3. Deploy a Hub Node (1 Click)
-
-Once your personal agent is running, you can graduate to an independent public **Hub Node** (your agent + redundant market host pair + watch shims + **built-in Caddy Auto-TLS**) — either from the **Hub Node** tab in your Dashboard or with one command:
+## CLI Commands
 
 ```sh
-# Any VPS — automatic Let's Encrypt HTTPS with ZERO domain purchase (<ip>.sslip.io):
-nektar hub up --auto-ip
-
-# Or with your own domain:
-nektar hub up --domain hub.yourdomain.com
-
-# Or behind a home router / NAT (zero open ports via Cloudflare Tunnel):
-nektar hub up --tunnel
-```
-
-### 1-Click Cloud & Home-Server Templates
-
-| Platform                                 | Target                                 | Deploy Template                                                                                                                                 |
-| ---------------------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Hetzner / DigitalOcean / Vultr / AWS** | Full Hub Node (Auto-TLS + Auto-Faucet) | [deploy/hub/templates/cloud-init.yaml](deploy/hub/templates/cloud-init.yaml) (paste in User Data)                                               |
-| **Coolify**                              | Full Hub Node (1-Click Compose)        | [deploy/hub/templates/coolify.compose.yaml](deploy/hub/templates/coolify.compose.yaml)                                                          |
-| **Dokploy**                              | Full Hub Node (1-Click Compose)        | [deploy/hub/templates/dokploy.compose.yaml](deploy/hub/templates/dokploy.compose.yaml)                                                          |
-| **Umbrel / CasaOS**                      | Home Server 1-Click App                | [umbrel/](deploy/hub/templates/umbrel/umbrel-app.yml) · [casaos.yaml](deploy/hub/templates/casaos.yaml)                                         |
-| **Railway / Render / Fly.io**            | Always-on Cloud Agent (GHCR)           | [railway.json](deploy/hub/templates/railway.json) · [render.yaml](deploy/hub/templates/render.yaml) · [fly.toml](deploy/hub/templates/fly.toml) |
-| **Kubernetes / k3s**                     | Production Helm Chart                  | [deploy/hub/helm/](deploy/hub/helm/Chart.yaml) · [deploy/agent/helm/](deploy/agent/helm/Chart.yaml)                                             |
-
----
-
-## Everyday Commands
-
-```sh
-nektar open                        # open Dashboard (auto-paired)
-nektar status                      # health, shards, balance & hints
-nektar dock                        # wire all detected local AI apps
-nektar dock proxy                  # print L0 LLM Proxy env vars for custom agents
-nektar policy approve --preset both # approve starter trading policy (buyer + seller)
-nektar update                      # pull latest GHCR image (keeps all memory & keys)
-nektar hub up --auto-ip            # deploy a 1-click public Hub Node
+nektar serve          # Unified HTTP + MCP + A2A + L0 Proxy + Dashboard + optional Hub/Restate
+nektar mcp            # Stdio MCP server
+nektar hub            # Standalone embedded Go Overlay Hub (tm_nektar_* + Lightweb modules + SSE)
+nektar remember       # Commit a fragment (-shard, -text, -group, -anchor)
+nektar recall         # Recall Cedar-authorized, Borg-decrypted fragments (-shard, -query, -spv)
+nektar anchor         # Anchor unanchored fragments via NektarAnchor covenant
+nektar verify         # Verify a nektarr1.* receipt offline (-token)
+nektar status         # Node identity, wallet balance, shards, policy hash, SpendGuard stats
+nektar check-mainnet  # Validate mainnet confirmation + headers + settlement gates
+nektar dock           # Print ready-to-paste MCP / L0 Proxy / A2A connection config
 ```
 
 ---
 
-## Honest Boundaries & Go Deeper
+## Honest Boundaries
 
-**Status: MVP.** Verification checks origin, inclusion, and integrity — proofs establish that a claim was _recorded, unaltered, and derivable_, never that it is _true_. Mainnet (`NEKTAR_NETWORK=main`) requires explicit `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND`, encrypted key passphrase, and SpendGuard caps.
-
-- [Universal Agent Adapter (L0–L3)](docs/ADAPTERS.md) · [Trading Guide](docs/MARKET.md) · [Run a Testnet Hub](docs/JOIN-TESTNET.md) · [Go Mainnet](docs/JOIN-MAINNET.md)
-- [Advanced Install (BSV Desktop `NEKTAR_WALLET=client`, Native Tarballs, Docker MCP Toolkit, Build from Source, Regtest)](docs/ADVANCED-INSTALL.md)
-- [Architecture](docs/ARCHITECTURE.md) · [Operations](docs/OPERATIONS.md) · [Threat Model](docs/THREAT-MODEL.md) · [MIT License](LICENSE)
+Verification checks origin, inclusion, and integrity — proofs establish that a claim was _recorded, unaltered, and derivable_, never that it is _true_. Model identity is _declared_, not zkML-proven. Mainnet (`NEKTAR_NETWORK=main`) refuses to boot without `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND` and enforces `SpendGuard` fail-closed caps before every broadcast.

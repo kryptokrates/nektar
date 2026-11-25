@@ -1,15 +1,48 @@
-# hub — an independent nektar hub in one box: your own agent + your own
-# market host pair + built-in Caddy Auto-TLS (or Cloudflare Tunnel for NAT),
-# announcing itself on the dir lane so fresh instances discover it automatically.
+# Nektar v0.4 Hub — Collapsed from 12 containers + 2x MariaDB + Node watch/header shims
+# down to ONE static Go binary hosting:
+#   - Nektar Agent (MCP + HTTP + A2A + L0 LLM Proxy + Svelte Dashboard + Restate services)
+#   - Embedded Go Overlay Hub (tm_nektar_<net>_0..f, ls_nektar, bfinger, bbox, blogs, borg, bsecret, bstore)
+#   - Native SSE /hub/events push (zero watch-shim containers, zero MySQL/MariaDB!)
 #
-#   curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_AUTO_IP=1 bash
-#   # or with your own domain:
-#   curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_PUBLIC_URL=https://hub.example bash
-#   # or behind home NAT (zero open ports):
-#   curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_HUB_MODE=tunnel bash
+#   docker compose -f deploy/hub/compose.yaml up -d
+#   docker compose -f deploy/hub/compose.yaml --profile tls up -d
 name: nektar-hub
 services:
-  # built-in Auto-TLS reverse proxy (enabled by `--profile tls` — zero manual Caddyfile)
+  hub:
+    image: ghcr.io/kryptokrates/nektar:${NEKTAR_IMAGE_TAG:-latest}${NEKTAR_IMAGE_DIGEST:+@${NEKTAR_IMAGE_DIGEST}}
+    restart: unless-stopped
+    command: ['serve', '-listen', ':8080', '-restate-listen', ':9080', '-hub']
+    ports:
+      - '${NEKTAR_HTTP_PORT:-8080}:8080'
+    environment:
+      NEKTAR_NETWORK: ${NEKTAR_NETWORK:-testnet}
+      NEKTAR_DATA_DIR: /data
+      NEKTAR_EMBED_HUB: '1'
+      NEKTAR_PUBLIC_URL: ${NEKTAR_PUBLIC_URL:-}
+      NEKTAR_API_TOKEN: ${NEKTAR_API_TOKEN:-}
+      NEKTAR_HEADERS_SOURCE: ${NEKTAR_HEADERS_SOURCE:-woc:test}
+      NEKTAR_SETTLE_SPEC: ${NEKTAR_SETTLE_SPEC:-}
+      NEKTAR_ARCADE_KEY: ${NEKTAR_ARCADE_KEY:-}
+      NEKTAR_WOC_KEY: ${NEKTAR_WOC_KEY:-}
+      NEKTAR_MAINNET_CONFIRM: ${NEKTAR_MAINNET_CONFIRM:-}
+      # Optional Lightweb Go modules mounted directly in-process when configured:
+      BBOX_OFFICES: ${BBOX_OFFICES:-}
+      BLOGS_STREAMS: ${BLOGS_STREAMS:-}
+      BORG_HALLS: ${BORG_HALLS:-}
+      BSECRET_CRYPTS: ${BSECRET_CRYPTS:-}
+      BSTORE_BUCKETS: ${BSTORE_BUCKETS:-}
+    volumes:
+      - hub-data:/data
+
+  restate:
+    profiles: [restate]
+    image: docker.restate.dev/restatedev/restate:1.8.1
+    restart: unless-stopped
+    environment:
+      RESTATE_NODE_NAME: nektar-hub
+    volumes:
+      - restate-data:/restate-data
+
   caddy:
     profiles: [tls]
     image: caddy:2-alpine
@@ -26,202 +59,29 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
-      - agent
-      - host-a
-      - host-b
-      - watch-a
-      - watch-b
-  # optional zero-port Cloudflare Tunnel (`--profile tls --profile tunnel`)
+      - hub
+
   cloudflared:
     profiles: [tunnel]
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    command: ['tunnel', '--no-autoupdate', '--url', 'http://caddy:80']
+    command: ['tunnel', '--no-autoupdate', '--url', 'http://hub:8080']
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
     depends_on:
-      - caddy
-  # optional honest challenger (`--profile watcher`)
-  watcher:
-    profiles: [watcher]
-    image: ghcr.io/kryptokrates/nektar:${NEKTAR_IMAGE_TAG:-latest}${NEKTAR_IMAGE_DIGEST:+@${NEKTAR_IMAGE_DIGEST}}
-    restart: unless-stopped
-    command: ['watch', '--claims', '/data/claims.json', '--proof-dir', '/data/proofs', '--reserve', '/data/watcher-reserve.json']
-    volumes:
-      - agent-data:/data
-  agent:
-    image: ghcr.io/kryptokrates/nektar:${NEKTAR_IMAGE_TAG:-latest}${NEKTAR_IMAGE_DIGEST:+@${NEKTAR_IMAGE_DIGEST}}
-    restart: unless-stopped
-    ports:
-      - '${NEKTAR_HTTP_PORT:-8080}:8080'
-    environment:
-      NEKTAR_NETWORK: ${NEKTAR_NETWORK:-testnet}
-      NEKTAR_DATA_DIR: /data
-      NEKTAR_HTTP_PORT: '8080'
-      NEKTAR_HTTP_HOST: '0.0.0.0'
-      NEKTAR_KEY_PASSPHRASE: ${NEKTAR_KEY_PASSPHRASE:-}
-      NEKTAR_HTTP_TOKEN: ${NEKTAR_HTTP_TOKEN:-}
-      NEKTAR_MODEL_ID: ${NEKTAR_MODEL_ID:-unspecified}
-      NEKTAR_AUTOMATION: '1'
-      NEKTAR_FUND_WIF: ${NEKTAR_FUND_WIF:-}
-      NEKTAR_FUND_TXIDS: ${NEKTAR_FUND_TXIDS:-}
-      NEKTAR_WAIT_FUNDING: ${NEKTAR_WAIT_FUNDING:-}
-      NEKTAR_INDEXER_DISCOVERY: ${NEKTAR_INDEXER_DISCOVERY:-}
-      NEKTAR_MARKET_LOCAL_HOSTS: ${NEKTAR_MARKET_LOCAL_HOSTS:-}
-      NEKTAR_MAINNET_CONFIRM: ${NEKTAR_MAINNET_CONFIRM:-}
-      NEKTAR_MAX_FEE_SATS_PER_TX: ${NEKTAR_MAX_FEE_SATS_PER_TX:-}
-      NEKTAR_MAX_SPEND_SATS_PER_DAY: ${NEKTAR_MAX_SPEND_SATS_PER_DAY:-}
-      NEKTAR_MIN_BROADCAST_INTERVAL_MS: ${NEKTAR_MIN_BROADCAST_INTERVAL_MS:-}
-      NEKTAR_ZEROCONF_MAX_SATS: ${NEKTAR_ZEROCONF_MAX_SATS:-}
-      NEKTAR_ZEROCONF_MAX_ANCESTORS: ${NEKTAR_ZEROCONF_MAX_ANCESTORS:-}
-      NEKTAR_STRICT_HEADERS: ${NEKTAR_STRICT_HEADERS:-}
-      NEKTAR_OPERATOR_TOKEN: ${NEKTAR_OPERATOR_TOKEN:-}
-      NEKTAR_VERIFY_BASE: ${NEKTAR_VERIFY_BASE:-${NEKTAR_PUBLIC_URL:-}}
-      NEKTAR_UNATTENDED: ${NEKTAR_UNATTENDED:-}
-      NEKTAR_PAYMENTS: ${NEKTAR_PAYMENTS:-}
-      NEKTAR_PAID_DISCLOSURE: ${NEKTAR_PAID_DISCLOSURE:-}
-      NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:-http://localhost:18391,http://localhost:18392}
-      NEKTAR_ANNOUNCE: ${NEKTAR_ANNOUNCE:-1}
-      NEKTAR_SEED_DOMAINS: ${NEKTAR_SEED_DOMAINS-*}
-      NEKTAR_BFINGER_PUBLISH: ${NEKTAR_BFINGER_PUBLISH:-1}
-      NEKTAR_PUSH_PUBLIC: ${NEKTAR_PUSH_PUBLIC:-}
-      NEKTAR_WATCH_URLS: ${NEKTAR_WATCH_URLS:-}
-      NEKTAR_WATCH_PUBLIC: ${NEKTAR_WATCH_PUBLIC:-}
-      NEKTAR_ANCHORED_LANES: ${NEKTAR_ANCHORED_LANES:-all}
-      NEKTAR_FAUCET: ${NEKTAR_FAUCET:-}
-      NEKTAR_FAUCET_SATS: ${NEKTAR_FAUCET_SATS:-}
-      NEKTAR_FAUCET_DAILY_SATS: ${NEKTAR_FAUCET_DAILY_SATS:-}
-    volumes:
-      - agent-data:/data
-    depends_on:
-      host-a:
-        condition: service_started
-      host-b:
-        condition: service_started
-  db:
-    image: ghcr.io/kryptokrates/nektar-hub-db:${NEKTAR_IMAGE_TAG:-latest}
-    # every dependent has restart: unless-stopped — the db needs it too or a
-    # daemon restart leaves it dead while hosts crash-loop on ENOTFOUND db.
-    # NOTE: hub-db is mariadb now — it cannot read a mysql-format volume;
-    # existing deployments must dump `overlay`/`overlay_b` before upgrading,
-    # or drop the `db` volume and let the hosts rebuild.
-    restart: unless-stopped
-    environment:
-      MARIADB_DATABASE: overlay
-      MARIADB_USER: overlay
-      MARIADB_PASSWORD: ${OVERLAY_DB_PASSWORD:?set OVERLAY_DB_PASSWORD in .env}
-      MARIADB_RANDOM_ROOT_PASSWORD: 'yes'
-    command: ['--innodb-buffer-pool-size=128M', '--performance-schema=OFF']
-    healthcheck:
-      test: ['CMD-SHELL', 'mariadb-admin ping -h 127.0.0.1 -uoverlay -p$${MARIADB_PASSWORD} --silent']
-      interval: 3s
-      timeout: 2s
-      retries: 40
-    volumes:
-      - db:/var/lib/mysql
-  shim:
-    image: ghcr.io/kryptokrates/nektar-shim:${NEKTAR_IMAGE_TAG:-latest}
-    restart: unless-stopped
-    command: ['node', 'header-shim.mjs']
-    environment:
-      SHIM_PORT: 8080
-      SHIM_MODE: live
-      # testnet defaults — on mainnet the operator supplies their own
-      # broadcaster/index/chaintracks endpoints in .env (self-hosted
-      # Teranode or a public ARC-compatible service)
-      SHIM_BROADCASTER: ${SHIM_BROADCASTER:-https://arcade-v2-testnet-us-1.bsvblockchain.tech}
-      SHIM_INDEX: ${SHIM_INDEX:-https://test.bananablocks.com/api/v1}
-      SHIM_CHAINTRACKS: ${SHIM_CHAINTRACKS:-https://arcade-v2-testnet-us-1.bsvblockchain.tech/chaintracks/v2}
-  watch-a:
-    image: ghcr.io/kryptokrates/nektar-shim:${NEKTAR_IMAGE_TAG:-latest}
-    restart: unless-stopped
-    command: ['node', 'watch-shim.mjs']
-    environment:
-      BACKEND: http://host-a:8080
-      PORT: 8081
-    depends_on:
-      host-a:
-        condition: service_started
-    ports:
-      - '${WATCH_A_PORT:-18393}:8081'
-  watch-b:
-    image: ghcr.io/kryptokrates/nektar-shim:${NEKTAR_IMAGE_TAG:-latest}
-    restart: unless-stopped
-    command: ['node', 'watch-shim.mjs']
-    environment:
-      BACKEND: http://host-b:8080
-      PORT: 8081
-    depends_on:
-      host-b:
-        condition: service_started
-    ports:
-      - '${WATCH_B_PORT:-18394}:8081'
-  host-a: &host
-    image: ghcr.io/kryptokrates/nektar-bbox-host:${NEKTAR_IMAGE_TAG:-latest}
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-      shim:
-        condition: service_started
-    environment: &hostenv
-      BBOX_OFFICES: nektar_abcdefghij
-      BLOGS_STREAMS: nektar_abcdefghij=open
-      BLOGS_STATE_DIR: /var/lib/bbox/blogs
-      BLOGS_KEEP_DAYS: 90
-      # lane topics derive from ONE knob — NEKTAR_NETWORK — so topics, the
-      # module's served nets and the agent's chain can never skew. On main
-      # the dir lane rides the same 16-nibble space (dir hashes to a nibble).
-      OVERLAY_TOPICS: tm_bbox_nektar_abcdefghij,tm_log_nektar_abcdefghij,tm_finger,tm_nektar_${NEKTAR_NETWORK:-testnet}_0,tm_nektar_${NEKTAR_NETWORK:-testnet}_1,tm_nektar_${NEKTAR_NETWORK:-testnet}_2,tm_nektar_${NEKTAR_NETWORK:-testnet}_3,tm_nektar_${NEKTAR_NETWORK:-testnet}_4,tm_nektar_${NEKTAR_NETWORK:-testnet}_5,tm_nektar_${NEKTAR_NETWORK:-testnet}_6,tm_nektar_${NEKTAR_NETWORK:-testnet}_7,tm_nektar_${NEKTAR_NETWORK:-testnet}_8,tm_nektar_${NEKTAR_NETWORK:-testnet}_9,tm_nektar_${NEKTAR_NETWORK:-testnet}_a,tm_nektar_${NEKTAR_NETWORK:-testnet}_b,tm_nektar_${NEKTAR_NETWORK:-testnet}_c,tm_nektar_${NEKTAR_NETWORK:-testnet}_d,tm_nektar_${NEKTAR_NETWORK:-testnet}_e,tm_nektar_${NEKTAR_NETWORK:-testnet}_f
-      OVERLAY_MODULES: /app/modules/bbox/bbox-module.js,/app/modules/nektar/nektar-module.js,/app/modules/blogs/blogs-module.js,/app/modules/finger/finger-module.js
-      OVERLAY_CHAIN_TRACKER_URL: http://shim:8080
-      BBOX_ASSET_URL: http://shim:8080
-      OVERLAY_ADMIN_TOKEN: ${OVERLAY_ADMIN_TOKEN:?set OVERLAY_ADMIN_TOKEN in .env}
-      NEKTAR_NETS: ${NEKTAR_NETWORK:-testnet}
-      OVERLAY_KNEX_URL: mysql://overlay:${OVERLAY_DB_PASSWORD}@db:3306/overlay
-    volumes:
-      - host-state-a:/var/lib/bbox
-    ports:
-      - '${HOST_A_PORT:-18391}:8080'
-  host-b:
-    <<: *host
-    environment:
-      <<: *hostenv
-      OVERLAY_KNEX_URL: mysql://overlay:${OVERLAY_DB_PASSWORD}@db:3306/overlay_b
-    volumes:
-      - host-state-b:/var/lib/bbox
-    ports:
-      - '${HOST_B_PORT:-18392}:8080'
+      - hub
+
 configs:
   caddyfile:
     content: |
       {$NEKTAR_DOMAIN::80} {
-        handle_path /hosts/a* {
-          reverse_proxy host-a:8080
-        }
-        handle_path /hosts/b* {
-          reverse_proxy host-b:8080
-        }
-        handle_path /watch/a* {
-          reverse_proxy watch-a:8081 {
-            flush_interval -1
-          }
-        }
-        handle_path /watch/b* {
-          reverse_proxy watch-b:8081 {
-            flush_interval -1
-          }
-        }
-        handle {
-          reverse_proxy agent:8080 {
-            flush_interval -1
-          }
+        reverse_proxy hub:8080 {
+          flush_interval -1
         }
       }
+
 volumes:
-  agent-data: {}
-  db: {}
-  host-state-a: {}
-  host-state-b: {}
+  hub-data: {}
+  restate-data: {}
   caddy-data: {}
   caddy-config: {}

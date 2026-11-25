@@ -1,76 +1,44 @@
-# agent — single-container nektar agent on the published GHCR image.
+# Nektar v0.4 Agent — Single static Go binary + optional Restate & Caddy Auto-TLS.
 #   docker compose -f deploy/agent/compose.yaml up -d
-# Everything rides inside one container (including the embedded restate-server).
-# On testnet, secrets auto-generate into /data if omitted. Pass --profile tls
-# with NEKTAR_DOMAIN=agent.example.com for automatic Let's Encrypt HTTPS.
+# Pass `--profile restate` for durable Restate market workflows, and `--profile tls` with NEKTAR_DOMAIN for Let's Encrypt HTTPS.
 name: nektar-agent
 services:
   agent:
-    # tag is human-readable only — set NEKTAR_IMAGE_DIGEST=sha256:<hex> in .env
-    # to pin the exact image bits (recommended on any box holding real keys)
     image: ghcr.io/kryptokrates/nektar:${NEKTAR_IMAGE_TAG:-latest}${NEKTAR_IMAGE_DIGEST:+@${NEKTAR_IMAGE_DIGEST}}
     restart: unless-stopped
+    command: ['serve', '-listen', ':8080', '-restate-listen', ':9080']
     ports:
-      # HTTP + MCP + L0 Proxy surface. Loopback by default unless TLS/public bind chosen.
-      - '${NEKTAR_HTTP_BIND:-0.0.0.0}:${NEKTAR_HTTP_PORT:-8080}:8080'
+      - '${NEKTAR_HTTP_BIND:-127.0.0.1}:${NEKTAR_HTTP_PORT:-8080}:8080'
     environment:
       NEKTAR_NETWORK: ${NEKTAR_NETWORK:-testnet}
       NEKTAR_DATA_DIR: /data
       NEKTAR_HTTP_PORT: '8080'
-      NEKTAR_HTTP_HOST: '0.0.0.0'
-      # optional on testnet (auto-generated into /data mode 0600 if blank); required on main
-      NEKTAR_KEY_PASSPHRASE: ${NEKTAR_KEY_PASSPHRASE:-}
-      NEKTAR_HTTP_TOKEN: ${NEKTAR_HTTP_TOKEN:-}
-      NEKTAR_MODEL_ID: ${NEKTAR_MODEL_ID:-unspecified}
-      NEKTAR_AUTOMATION: ${NEKTAR_AUTOMATION:-1}
-      NEKTAR_UNATTENDED: ${NEKTAR_UNATTENDED:-}
-      NEKTAR_FUND_WIF: ${NEKTAR_FUND_WIF:-}
-      NEKTAR_FUND_TXIDS: ${NEKTAR_FUND_TXIDS:-}
-      NEKTAR_WAIT_FUNDING: ${NEKTAR_WAIT_FUNDING:-}
-      NEKTAR_INDEXER_DISCOVERY: ${NEKTAR_INDEXER_DISCOVERY:-}
-      NEKTAR_OPERATOR_TOKEN: ${NEKTAR_OPERATOR_TOKEN:-}
-      NEKTAR_VERIFY_BASE: ${NEKTAR_VERIFY_BASE:-}
-      NEKTAR_MARKET_LOCAL_HOSTS: ${NEKTAR_MARKET_LOCAL_HOSTS:-}
-      # unset = the baked-in seed hosts for this network (testnet defaults
-      # join the public quorum); set to pin your own host pair
-      NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:-}
-      NEKTAR_ANNOUNCE: ${NEKTAR_ANNOUNCE:-}
-      NEKTAR_SEED_DOMAINS: ${NEKTAR_SEED_DOMAINS-*}
-      NEKTAR_ANCHORED_LANES: ${NEKTAR_ANCHORED_LANES:-all}
-      NEKTAR_WATCH_URLS: ${NEKTAR_WATCH_URLS:-}
-      NEKTAR_WATCH_PUBLIC: ${NEKTAR_WATCH_PUBLIC:-}
-      NEKTAR_BFINGER_PUBLISH: ${NEKTAR_BFINGER_PUBLISH:-}
-      NEKTAR_PUSH_PUBLIC: ${NEKTAR_PUSH_PUBLIC:-}
-      NEKTAR_COLLECT_QUIET_MS: ${NEKTAR_COLLECT_QUIET_MS:-}
-      NEKTAR_MIN_COLLECT_MS: ${NEKTAR_MIN_COLLECT_MS:-}
-      NEKTAR_MAX_FEE_SATS_PER_TX: ${NEKTAR_MAX_FEE_SATS_PER_TX:-}
-      NEKTAR_MAX_SPEND_SATS_PER_DAY: ${NEKTAR_MAX_SPEND_SATS_PER_DAY:-}
-      NEKTAR_MIN_BROADCAST_INTERVAL_MS: ${NEKTAR_MIN_BROADCAST_INTERVAL_MS:-}
-      NEKTAR_ZEROCONF_MAX_SATS: ${NEKTAR_ZEROCONF_MAX_SATS:-}
-      NEKTAR_ZEROCONF_MAX_ANCESTORS: ${NEKTAR_ZEROCONF_MAX_ANCESTORS:-}
-      NEKTAR_STRICT_HEADERS: ${NEKTAR_STRICT_HEADERS:-}
+      NEKTAR_PUBLIC_URL: ${NEKTAR_PUBLIC_URL:-}
+      NEKTAR_API_TOKEN: ${NEKTAR_API_TOKEN:-}
+      NEKTAR_WALLET: ${NEKTAR_WALLET:-embedded}
+      NEKTAR_HEADERS_SOURCE: ${NEKTAR_HEADERS_SOURCE:-woc:test}
+      NEKTAR_CHAIN_SPEC: ${NEKTAR_CHAIN_SPEC:-}
+      NEKTAR_SETTLE_SPEC: ${NEKTAR_SETTLE_SPEC:-}
+      NEKTAR_ARCADE_KEY: ${NEKTAR_ARCADE_KEY:-}
+      NEKTAR_WOC_KEY: ${NEKTAR_WOC_KEY:-}
+      NEKTAR_OPENAI_UPSTREAM: ${NEKTAR_OPENAI_UPSTREAM:-https://api.openai.com}
+      NEKTAR_ANTHROPIC_UPSTREAM: ${NEKTAR_ANTHROPIC_UPSTREAM:-https://api.anthropic.com}
+      NEKTAR_MAX_FEE_PER_TX: ${NEKTAR_MAX_FEE_PER_TX:-10000}
+      NEKTAR_MAX_SPEND_PER_TX: ${NEKTAR_MAX_SPEND_PER_TX:-100000}
+      NEKTAR_MAX_SPEND_PER_DAY: ${NEKTAR_MAX_SPEND_PER_DAY:-2000000}
       NEKTAR_MAINNET_CONFIRM: ${NEKTAR_MAINNET_CONFIRM:-}
-      NEKTAR_PAYMENTS: ${NEKTAR_PAYMENTS:-}
-      NEKTAR_PAID_DISCLOSURE: ${NEKTAR_PAID_DISCLOSURE:-}
-      # bundled restate-server starts automatically inside this container; set
-      # NEKTAR_RESTATE_URL (or --profile external-restate) only for external clusters
-      NEKTAR_RESTATE_URL: ${NEKTAR_RESTATE_URL:-}
-      NEKTAR_RESTATE_ADMIN: ${NEKTAR_RESTATE_ADMIN:-}
-      NEKTAR_RESTATE_ENDPOINT_URI: ${NEKTAR_RESTATE_ENDPOINT_URI:-}
-      NEKTAR_RESTATE_IDENTITY_KEYS: ${NEKTAR_RESTATE_IDENTITY_KEYS:-}
     volumes:
-      # durable identity + wallet + journals + embedded restate-data — this volume IS the agent
       - agent-data:/data
-  # optional external Restate sidecar (opt-in via `--profile external-restate`)
+
   restate:
-    profiles: [external-restate]
+    profiles: [restate]
     image: docker.restate.dev/restatedev/restate:1.8.1
     restart: unless-stopped
     environment:
       RESTATE_NODE_NAME: nektar
     volumes:
       - restate-data:/restate-data
-  # optional Auto-TLS reverse proxy (opt-in via `--profile tls` + NEKTAR_DOMAIN)
+
   caddy:
     profiles: [tls]
     image: caddy:2-alpine
@@ -88,6 +56,7 @@ services:
       - caddy-config:/config
     depends_on:
       - agent
+
 configs:
   caddyfile:
     content: |
@@ -96,6 +65,7 @@ configs:
           flush_interval -1
         }
       }
+
 volumes:
   agent-data:
   restate-data:

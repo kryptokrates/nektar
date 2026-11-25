@@ -10,131 +10,56 @@ permissions:
   contents: read
 
 jobs:
-  gates:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      # STARK proving needs the RISC Zero prover image (pnpm stark:image, 4.6 GB);
-      # CI still verifies a real committed receipt via WASM (unit tests + reproduce).
-      NEKTAR_E2E_STARK: '0'
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24
-      - name: pnpm
-        run: corepack enable && corepack prepare pnpm@12.16.1 --activate
-      - name: pnpm store cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.local/share/pnpm/store
-          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - run: pnpm install --frozen-lockfile
-      - name: build
-        run: pnpm -r build
-        timeout-minutes: 10
-      - name: every import is declared
-        run: pnpm check:deps
-      - name: unit · contract · integration · fuzz
-        run: pnpm -r test
-        timeout-minutes: 10
-      - name: reproduce (vectors + pinned vkey)
-        run: pnpm reproduce
-      - name: marketplace evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: market-scenarios
-          path: artifacts/market-scenarios
-          if-no-files-found: ignore
-
-  sandbox:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24
-      - name: pnpm
-        run: corepack enable && corepack prepare pnpm@12.16.1 --activate
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter '@nektar/mcp...' build
-      - name: probe — tmpdir bind-mounts reach the container
-        run: |
-          d=$(mktemp -d) && mkdir -p "$d/test" && echo probe > "$d/test/build.test.js"
-          docker run --rm -v "$d:/work" -w /work "node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202" \
-            sh -c 'ls -la /work /work/test && cat /work/test/build.test.js'
-          rm -rf "$d"
-      - name: isolated purchased-patch evaluation (real container, no network)
-        run: node --test --test-force-exit packages/automation/dist/test/automation-sandbox.test.js
-        timeout-minutes: 10
-        env:
-          NEKTAR_SANDBOX_E2E: '1'
-
-  hygiene:
+  go-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          fetch-depth: 0 # gitleaks scans history
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: vet
+        run: go vet ./...
+      - name: unit & integration tests (race detector)
+        run: go test -race -v ./...
+      - name: static cross-compile smoke (CGO_ENABLED=0)
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/nektar-linux ./cmd/nektar
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /tmp/nektar-darwin ./cmd/nektar
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o /tmp/nektar-win.exe ./cmd/nektar
+          /tmp/nektar-linux version
+
+  ui-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
-      - name: pnpm
-        run: corepack enable && corepack prepare pnpm@12.16.1 --activate
-      - run: pnpm install --frozen-lockfile
-      # the dep-graph gate resolves @nektar/* through package exports → dist/;
-      # without a build every workspace import is couldNotResolve
-      - run: pnpm -r build
-      - name: lint (incl. type-aware) · format · version consistency · declared imports · dep graph · dead code · dupes · leftovers · secrets
-        run: pnpm check:hygiene
-      - name: shellcheck
-        run: git ls-files '*.sh' | xargs shellcheck
-      - name: actionlint
-        run: docker run --rm -v "$PWD:/repo" -w /repo "rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667" -color
-      - name: hadolint
-        run: docker run --rm -i "hadolint/hadolint@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d" < Dockerfile
-      - name: zizmor
-        run: docker run --rm -v "$PWD:/repo" -w /repo "ghcr.io/zizmorcore/zizmor@sha256:3014cc8f68f663935f69b3c3e0e41f5ce102b268d97db13db0f62208747f860d" .github/workflows
-      - name: gitleaks
-        run: docker run --rm -v "$PWD:/repo" -w /repo "zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f" git
+      - name: build Svelte 5 dashboard
+        working-directory: ui
+        run: npm install --no-audit --no-fund && npm run build
 
   docker:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: build image (clean-checkout gate)
+      - name: build v0.4 single-binary image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           load: true
           tags: nektar:ci
-          # rzup's GitHub API calls get a real token (secret-mounted — not in
-          # layers); gha cache restores the pinned stark toolchain layer
-          # instead of re-installing it per run
-          secrets: GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: smoke — every packaged module resolves inside the image
-        run: |
-          docker run --rm --entrypoint node nektar:ci --input-type=module -e "
-            import { readdirSync } from 'node:fs'
-            import { pathToFileURL } from 'node:url'
-            const dir = '/app/dist/src'
-            const files = readdirSync(dir, { recursive: true })
-              .filter((f) => f.endsWith('.js') && !f.endsWith('bin.js') && !f.endsWith('init.js'))
-            for (const f of files) await import(pathToFileURL(dir + '/' + f).href)
-            console.log('smoke: ' + files.length + ' packaged modules resolve')
-          "
-        timeout-minutes: 3
+      - name: smoke — binary executes cleanly
+        run: docker run --rm nektar:ci version

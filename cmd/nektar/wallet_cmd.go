@@ -185,36 +185,64 @@ func walletAddress(args []string) error {
 	fs := flag.NewFlagSet("wallet address", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	netName := fs.String("network", "", "Network override")
+	showQR := fs.Bool("qr", false, "Render scannable terminal QR code for the funding address")
 	_ = fs.Parse(args)
 
-	if info, ok := server.DetectLiveDaemon(walletDirOrDefault(*dataDir)); ok && *netName == "" {
+	effectiveNet := *netName
+	if effectiveNet == "" {
+		effectiveNet = envOr("NEKTAR_NETWORK", "testnet")
+	}
+	dir := *dataDir
+	if dir == "" {
+		dir = defaultDataDirForNetwork(effectiveNet)
+	}
+
+	var netOut, addr, idPub string
+	if info, ok := server.DetectLiveDaemon(dir); ok && (*netName == "" || strings.EqualFold(info.Network, effectiveNet)) {
 		if out, err := callLiveWallet(info, http.MethodGet, "/v1/wallet", nil); err == nil {
 			if m, ok := out.(map[string]any); ok {
-				addr, _ := m["fundAddress"].(string)
-				return printJSON(map[string]any{
-					"network":     m["network"],
-					"fundAddress": addr,
-					"identityPub": m["identityPub"],
-					"uri":         "bitcoin:" + addr,
-				})
+				netOut, _ = m["network"].(string)
+				addr, _ = m["fundAddress"].(string)
+				idPub, _ = m["identityPub"].(string)
 			}
 		}
 	}
-	ctx := context.Background()
-	rt, err := openRuntime(ctx, *netName, *dataDir, DefaultLocalPort)
-	if err != nil {
-		return err
+	if addr == "" {
+		ctx := context.Background()
+		rt, err := openRuntime(ctx, *netName, *dataDir, DefaultLocalPort)
+		if err != nil {
+			return err
+		}
+		defer rt.closeFn()
+		a, err := rt.mem.Chain().FundAddress()
+		if err != nil {
+			return err
+		}
+		netOut = rt.mem.Chain().Network()
+		addr = a
+		idPub = rt.mem.Chain().IdentityPubHex()
 	}
-	defer rt.closeFn()
-	addr, err := rt.mem.Chain().FundAddress()
-	if err != nil {
-		return err
+	uri := "bitcoin:" + addr
+	if *showQR {
+		qr, err := core.RenderTerminalQR(uri)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("\nBSV %s Funding Address\n", strings.ToUpper(netOut))
+		fmt.Print(qr)
+		fmt.Printf("Address  : %s\n", addr)
+		fmt.Printf("URI      : %s\n", uri)
+		fmt.Printf("Identity : %s\n", idPub)
+		if netOut == "main" {
+			fmt.Println("Tip      : Send 5,000–10,000 real sats (~$0.003), then run `nektar wallet sync --network main`")
+		}
+		return nil
 	}
 	return printJSON(map[string]any{
-		"network":     rt.mem.Chain().Network(),
+		"network":     netOut,
 		"fundAddress": addr,
-		"identityPub": rt.mem.Chain().IdentityPubHex(),
-		"uri":         "bitcoin:" + addr,
+		"identityPub": idPub,
+		"uri":         uri,
 	})
 }
 

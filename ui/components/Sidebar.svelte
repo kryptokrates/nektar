@@ -1,28 +1,21 @@
 <script lang="ts">
   import type { NavTab } from '../lib/types'
-  import { fmtSats } from '../lib/format'
 
   interface Props {
     tab: NavTab
     live: boolean
-    network: string
-    pub: string
-    uptimeSec: number
     pendingApprovals: number
-    balanceSats: number
-    earnedSats: number
     onSelect: (t: NavTab) => void
-    onSellQuick: () => void
     onOpenPalette: () => void
   }
 
-  let { tab, live, pendingApprovals, balanceSats, earnedSats, onSelect, onSellQuick, onOpenPalette }: Props = $props()
+  let { tab, live, pendingApprovals, onSelect, onOpenPalette }: Props = $props()
 </script>
 
 <aside class="rail-left">
   <div class="top-group">
-    <button class="brand" onclick={() => onSelect('home')} title="Nektar Market">
-      <svg viewBox="0 0 400 400" width="28" height="28" class="logo">
+    <button class="brand" onclick={() => onSelect('home')} title="Nektar">
+      <svg viewBox="0 0 400 400" width="26" height="26" class="logo">
         <rect width="400" height="400" fill="#181513" rx="84" />
         <path
           fill="#f7991b"
@@ -34,7 +27,7 @@
         <path d="M 150 265.5 C 161 279 176 287 196 288 C 216 287 230 278 243 265" fill="none" stroke="#181513" stroke-width="24" stroke-linecap="round" />
       </svg>
       <span class="bname">nektar</span>
-      <span class="dot" class:off={!live} title={live ? 'Live' : 'Reconnecting'}></span>
+      <span class="dot" class:off={!live} title={live ? 'Live' : 'Offline'}></span>
     </button>
 
     <nav class="nav" aria-label="Primary">
@@ -71,29 +64,12 @@
         <span class="lbl">Node</span>
       </button>
     </nav>
-
-    <button class="cta" onclick={onSellQuick}>
-      <svg viewBox="0 0 20 20" width="15" height="15">
-        <path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
-      </svg>
-      <span class="lbl">Sell Data</span>
-    </button>
   </div>
 
-  <div class="bottom-group">
-    <button class="mini-bal" onclick={() => onSelect('wallet')} title="Open Wallet">
-      <span class="mb-lbl">WALLET</span>
-      <span class="mb-val">{fmtSats(balanceSats)} <small>sats</small></span>
-      {#if earnedSats > 0}
-        <span class="mb-earn">+{fmtSats(earnedSats)} earned</span>
-      {/if}
-    </button>
-
-    <button class="cmd-btn" onclick={onOpenPalette} title="Command Palette (Ctrl+K / ⌘K)">
-      <span class="lbl">Commands</span>
-      <kbd>⌘K</kbd>
-    </button>
-  </div>
+  <button class="cmd-btn" onclick={onOpenPalette} title="Command Palette (Ctrl+K / ⌘K)">
+    <span class="lbl">Commands</span>
+    <kbd>⌘K</kbd>
+  </button>
 </aside>
 
 <style>
@@ -104,25 +80,20 @@
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    padding: 1.1rem 0.9rem 1.1rem 0.5rem;
+    padding: 1.05rem 0.85rem 1.05rem 0.5rem;
   }
   .top-group {
     display: flex;
     flex-direction: column;
-    gap: 0.95rem;
-  }
-  .bottom-group {
-    display: flex;
-    flex-direction: column;
-    gap: 0.55rem;
+    gap: 1rem;
   }
   .brand {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.55rem;
     background: none;
     border: 0;
-    padding: 0.35rem 0.6rem;
+    padding: 0.3rem 0.55rem;
     cursor: pointer;
     color: var(--ink);
     font: inherit;
@@ -130,98 +101,48 @@
     width: fit-content;
   }
   .brand:hover { background: var(--hover); }
-  .logo { border-radius: 8px; flex-shrink: 0; }
-  .bname { font-size: 1.16rem; font-weight: 800; letter-spacing: -0.025em; }
+  .logo { border-radius: 7px; flex-shrink: 0; }
+  .bname { font-size: 1.12rem; font-weight: 800; letter-spacing: -0.025em; }
   .dot {
-    width: 7px; height: 7px; border-radius: 50%;
+    width: 6.5px; height: 6.5px; border-radius: 50%;
     background: var(--ok); box-shadow: 0 0 8px rgb(76 194 107 / 55%);
   }
   .dot.off { background: var(--bad); box-shadow: none; }
-  .nav { display: flex; flex-direction: column; gap: 0.2rem; }
+  .nav { display: flex; flex-direction: column; gap: 0.18rem; }
   .ni {
-    display: flex; align-items: center; gap: 0.85rem;
-    padding: 0.66rem 0.85rem; border-radius: 999px; border: 0; background: none;
-    color: var(--mut); font: inherit; font-size: 0.96rem; font-weight: 600;
+    display: flex; align-items: center; gap: 0.8rem;
+    padding: 0.62rem 0.8rem; border-radius: 999px; border: 0; background: none;
+    color: var(--mut); font: inherit; font-size: 0.94rem; font-weight: 600;
     cursor: pointer; text-align: left; transition: background 0.14s, color 0.14s;
   }
   .ni:hover { background: var(--hover); color: var(--ink); }
-  .ni.active { background: #161412; color: var(--ink); font-weight: 800; }
+  .ni.active { background: #161412; color: var(--ink); font-weight: 700; }
   .ni.active .ico { color: var(--amber); }
-  .ico { width: 20px; height: 20px; flex-shrink: 0; }
+  .ico { width: 19px; height: 19px; flex-shrink: 0; }
   .badge {
     margin-left: auto; background: var(--amber); color: #120e0c;
-    font-size: 0.7rem; font-weight: 800; padding: 0.08rem 0.45rem; border-radius: 999px;
+    font-size: 0.68rem; font-weight: 800; padding: 0.06rem 0.42rem; border-radius: 999px;
     font-variant-numeric: tabular-nums;
   }
-  .cta {
-    margin-top: 0.2rem;
-    display: flex; align-items: center; justify-content: center; gap: 0.42rem;
-    background: var(--amber); color: #120e0c; border: 0; border-radius: 999px;
-    padding: 0.68rem 0.95rem; font: inherit; font-size: 0.9rem; font-weight: 800;
-    cursor: pointer; transition: filter 0.14s, transform 0.1s;
-  }
-  .cta:hover { filter: brightness(1.08); }
-  .cta:active { transform: scale(0.98); }
-
-  .mini-bal {
-    display: flex;
-    flex-direction: column;
-    gap: 0.16rem;
-    background: var(--surf);
-    border: 1px solid var(--line);
-    border-radius: 13px;
-    padding: 0.72rem 0.82rem;
-    color: var(--ink);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-    transition: border-color 0.14s;
-  }
-  .mini-bal:hover { border-color: var(--amber); }
-  .mb-lbl {
-    font-size: 0.63rem;
-    font-weight: 800;
-    letter-spacing: 0.1em;
-    color: var(--mut2);
-  }
-  .mb-val {
-    font-family: ui-monospace, monospace;
-    font-size: 1.08rem;
-    font-weight: 800;
-    font-variant-numeric: tabular-nums;
-  }
-  .mb-val small {
-    font-size: 0.72rem;
-    color: var(--amber);
-    font-weight: 700;
-  }
-  .mb-earn {
-    font-family: ui-monospace, monospace;
-    font-size: 0.7rem;
-    color: var(--ok);
-    font-weight: 700;
-  }
-
   .cmd-btn {
     display: flex; align-items: center; justify-content: space-between;
     background: transparent; border: 1px solid var(--line); border-radius: 10px;
-    color: var(--mut2); padding: 0.46rem 0.75rem; font: inherit; font-size: 0.78rem;
+    color: var(--mut2); padding: 0.44rem 0.72rem; font: inherit; font-size: 0.76rem;
     cursor: pointer; transition: border-color 0.14s, color 0.14s;
   }
   .cmd-btn:hover { border-color: var(--line2); color: var(--ink); }
   .cmd-btn kbd {
     font-family: ui-monospace, monospace; font-size: 0.68rem; color: var(--mut);
-    background: var(--surf); border: 1px solid var(--line); border-radius: 5px; padding: 0.05rem 0.35rem;
+    background: var(--surf); border: 1px solid var(--line); border-radius: 5px; padding: 0.05rem 0.32rem;
   }
 
   @media (max-width: 1100px) and (min-width: 721px) {
     .rail-left { align-items: center; padding: 1rem 0.35rem; }
-    .lbl, .bname, .cmd-btn, .mini-bal { display: none; }
+    .lbl, .bname, .cmd-btn { display: none; }
     .brand { padding: 0.35rem; position: relative; }
     .dot { position: absolute; right: 2px; bottom: 2px; }
-    .ni { padding: 0.72rem; justify-content: center; position: relative; }
+    .ni { padding: 0.7rem; justify-content: center; position: relative; }
     .badge { position: absolute; top: 4px; right: 4px; padding: 0.02rem 0.32rem; }
-    .cta { width: 42px; height: 42px; padding: 0; }
   }
 
   @media (max-width: 720px) {
@@ -232,7 +153,7 @@
       align-items: center; justify-content: space-around; padding: 0 0.5rem;
     }
     .top-group { flex-direction: row; width: 100%; align-items: center; justify-content: space-around; gap: 0; }
-    .brand, .bottom-group, .cta { display: none; }
+    .brand, .cmd-btn { display: none; }
     .nav { flex-direction: row; width: 100%; justify-content: space-around; }
     .ni { flex-direction: column; gap: 0.15rem; padding: 0.35rem 0.6rem; font-size: 0.68rem; border-radius: 10px; }
   }

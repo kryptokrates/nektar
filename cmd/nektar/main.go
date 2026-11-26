@@ -93,30 +93,34 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`nektar v0.4 — Verifiable, encrypted agent memory & autonomous knowledge market on BSV
+	fmt.Println(`nektar v0.4 — Verifiable, encrypted AI agent memory & autonomous knowledge market on BSV
 
-Usage:
-  nektar serve          Start unified HTTP + MCP + A2A + L0 Proxy + Market Broker + Svelte Dashboard (default :18420)
-  nektar mcp            Run stdio MCP server (auto-bridges to live daemon if running; zero lock contention!)
-  nektar hub            Run standalone durable SQLite Overlay Hub (16 lanes + bfinger + SSE + NAT bbox + bounties)
-  nektar dock           Auto-detect & configure Claude Code, Cursor, Codex, VS Code, Windsurf, Hermes + live probe
+Get Started:
+  nektar serve          Start agent daemon + Dashboard + MCP + L0 Proxy + Market (default testnet :18420)
+                        Mainnet 1-liner: nektar serve --network main --confirm I_UNDERSTAND
   nektar open           Open the Nektar Dashboard in your browser
-  nektar doctor         Run full node health diagnosis with exact next steps
-  nektar policy         Manage operator spending/selling policies (approve --preset buyer|seller|both | list | revoke)
-  nektar peers          Discover verified peers, bfinger handles, advertised CHIRP packs & Hub bounties
-  nektar want           Buy verified knowledge live from peers or the Hub (-domains, -question, -max)
-  nektar sell           Arm a local shard for A2A selling (-shard, -domains, -price) or sell to Hub (-bounty)
-  nektar hook           Native zero-Node Claude Code / Codex hooks (session-start | prefetch | verify-receipt)
+  nektar dock           Auto-detect & wire AI apps (Claude, Cursor, Codex, VS Code, Hermes, OpenClaw…)
+  nektar wallet         Manage BRC-100 wallet (status | address [--qr] | sync | fund | send | sweep | fuel)
+
+Memory & Knowledge Market:
   nektar remember       Commit a fragment to a shard (-shard, -text, -anchor, -group)
-  nektar recall         Recall fragments (-shard optional, -query, -spv)
-  nektar anchor         Anchor unanchored fragments in a shard (-shard) or rotate ownership (anchor rotate -shard -new-owner)
-  nektar vault          Manage two-key on-chain NektarAgentVault (deploy | status | pause | resume | rotate-agent | sweep)
-  nektar bond           Manage slashable NektarCheckpointBond SLA bond (open | commit | status | seize | close)
-  nektar verify         Verify a nektarr1.* receipt token (-token)
-  nektar status         Print node identity, wallet balance, shards, policy hash, and SpendGuard state
-  nektar wallet         Manage BRC-100 wallet (status | address | utxos | actions | sync | fund | import | send | sweep | consolidate | fuel)
-  nektar restate-up     Download SHA-256 verified restate-server v1.8.1 into ~/.nektar/bin for local durable workflows
-  nektar check-mainnet  Verify mainnet safety environment gates before live launch
+  nektar recall         Recall Cedar-authorized, Borg-decrypted fragments (-shard, -query, -spv)
+  nektar anchor         Anchor unanchored fragments via NektarAnchor covenant (or anchor rotate)
+  nektar verify         Verify a nektarr1.* receipt token offline (-token)
+  nektar want           Buy verified knowledge live from peers or Hubs (-domains, -question, -max)
+  nektar sell           Arm a local shard for A2A selling (-shard, -domains, -price) or sell to Hub (-bounty)
+  nektar policy         Manage operator trading policies (approve --preset buyer|seller|both | list | revoke)
+  nektar peers          Discover verified peers, bfinger handles, CHIRP packs & Hub bounties
+
+Hub & Operations:
+  nektar hub            Deploy/manage a public Hub (up [--auto-ip|--domain|--tunnel|--native] | status | logs | down | run)
+  nektar mcp            Stdio MCP bridge (auto-connects to running daemon; zero lock contention)
+  nektar hook           Native zero-Node Claude Code / Codex hooks (session-start | prefetch | verify-receipt)
+  nektar doctor         Run full node health diagnosis with exact next steps
+  nektar check-mainnet  Verify Mainnet confirmation, dual-witness PoW headers, broadcaster & SpendGuard
+  nektar status         Print node identity, wallet balance, shards, policy hash & SpendGuard state
+  nektar vault / bond   Manage on-chain NektarAgentVault & NektarCheckpointBond covenants
+  nektar restate-up     Download SHA-256 verified restate-server v1.8.1 into ~/.nektar/bin
   nektar version        Print build version`)
 }
 
@@ -177,11 +181,21 @@ func buildJevMatcherFromEnv(network string) market.Matcher {
 }
 
 func defaultDataDir() string {
-	if v := os.Getenv("NEKTAR_DATA_DIR"); v != "" {
+	return defaultDataDirForNetwork(os.Getenv("NEKTAR_NETWORK"))
+}
+
+// defaultDataDirForNetwork isolates BSV Mainnet into ~/.nektar/main when no explicit
+// NEKTAR_DATA_DIR is configured so testnet and mainnet wallets/SQLite databases never collide.
+func defaultDataDirForNetwork(network string) string {
+	if v := strings.TrimSpace(os.Getenv("NEKTAR_DATA_DIR")); v != "" {
 		return v
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".nektar")
+	base := filepath.Join(home, ".nektar")
+	if strings.EqualFold(strings.TrimSpace(network), "main") || strings.EqualFold(strings.TrimSpace(network), "mainnet") {
+		return filepath.Join(base, "main")
+	}
+	return base
 }
 
 type runtimeBundle struct {
@@ -199,7 +213,7 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string, l
 	}
 	dir := dataDirOverride
 	if dir == "" {
-		dir = defaultDataDir()
+		dir = defaultDataDirForNetwork(net)
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err

@@ -273,14 +273,8 @@
     <Sidebar
       {tab}
       {live}
-      network={s.network}
-      pub={s.pub}
-      uptimeSec={s.uptimeSec}
       pendingApprovals={s.automation?.pending.length ?? 0}
-      balanceSats={s.treasury.sats}
-      earnedSats={s.receipts.earned}
       onSelect={(t) => (tab = t)}
-      onSellQuick={focusSell}
       onOpenPalette={() => (paletteOpen = true)}
     />
 
@@ -296,14 +290,11 @@
           bind:buyInputEl
           onSearch={(q) => (searchQuery = q)}
           onOpenPalette={() => (paletteOpen = true)}
-          onOpenDock={() => (dockOpen = true)}
           onRefresh={load}
           onToast={showToast}
           onLocalPulse={emitPulse}
           onNavigate={(t) => (tab = t)}
           onRequestFaucet={() => void requestFaucet()}
-          onApproveStarter={() => void approveStarterPolicy()}
-          onQuickRecall={() => void runQuickRecall()}
           onDecideApproval={(id, ok) => void decideApproval(id, ok)}
           onInspectDeal={(d: DealFeedEntry) => (drawer = { kind: 'deal', item: d })}
           onInspectPeer={(p: PeerInfo) => (drawer = { kind: 'peer', item: p })}
@@ -374,6 +365,7 @@
     box-sizing: border-box;
   }
   :global(:root) {
+    color-scheme: dark;
     --bg: #090807;
     --surf: #11100e;
     --hover: #171513;

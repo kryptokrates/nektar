@@ -43,12 +43,16 @@ func cmdServe(args []string) error {
 	feePresetFlag := fs.String("fee-preset", os.Getenv("NEKTAR_HUB_FEE_PRESET"), "Embedded Hub fee preset (free|lightbsv_egress|hybrid)")
 	upstreamSpinesFlag := fs.String("upstream-spines", os.Getenv("NEKTAR_UPSTREAM_SPINES"), "Comma-separated Spine Hub URLs for Leaf upstream forwarding")
 	netName := fs.String("network", "", "Network override (memory|regtest|testnet|main)")
+	confirmFlag := fs.String("confirm", "", "Mainnet acknowledgement (pass I_UNDERSTAND with --network main)")
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	ephemeral := fs.Bool("ephemeral", false, "Run with in-memory SQLite (data discarded on exit)")
 	publicURLFlag := fs.String("public-url", os.Getenv("NEKTAR_PUBLIC_URL"), "Publicly reachable HTTP base URL for direct A2A trades (empty = NAT bbox fallback)")
 	hostsFlag := fs.String("hosts", os.Getenv("NEKTAR_MARKET_HOSTS"), "Comma-separated market hub URLs to join")
 	_ = fs.Parse(args)
 
+	if strings.TrimSpace(*confirmFlag) != "" {
+		_ = os.Setenv("NEKTAR_MAINNET_CONFIRM", strings.TrimSpace(*confirmFlag))
+	}
 	if *ephemeral {
 		_ = os.Setenv("NEKTAR_EPHEMERAL", "1")
 	}
@@ -56,9 +60,13 @@ func cmdServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	effectiveNet := *netName
+	if effectiveNet == "" {
+		effectiveNet = envOr("NEKTAR_NETWORK", "testnet")
+	}
 	lockDir := *dataDir
 	if lockDir == "" {
-		lockDir = defaultDataDir()
+		lockDir = defaultDataDirForNetwork(effectiveNet)
 	}
 	if !*ephemeral {
 		releaseLock, lockErr := acquireInstanceLock(lockDir, *addr)

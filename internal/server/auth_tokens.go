@@ -157,6 +157,8 @@ func FormatStartupBanner(opts StartupBannerOpts) string {
 		hint := ""
 		if opts.BalanceSats == 0 && opts.Network == "testnet" {
 			hint = " — 1-click faucet in Dashboard"
+		} else if opts.BalanceSats == 0 && opts.Network == "main" {
+			hint = " — send 5,000–10,000 sats (~$0.003) or scan QR in Wallet tab"
 		}
 		fmt.Fprintf(&b, "│ Fee Key   : %s (%d sats)%s\n", opts.FeeAddress, opts.BalanceSats, hint)
 	}
@@ -169,5 +171,11 @@ func FormatStartupBanner(opts StartupBannerOpts) string {
 		b.WriteString("│ Dock Apps : nektar dock   (auto-wires Claude, Cursor, Hermes, OpenClaw, Codex…)\n")
 	}
 	b.WriteString("╰─\n")
+	if opts.Network == "main" && opts.BalanceSats == 0 && opts.FeeAddress != "" && !opts.ContainerMode {
+		if qr, err := core.RenderTerminalQR("bitcoin:" + opts.FeeAddress); err == nil {
+			b.WriteString("\nScan to fund BSV Mainnet wallet (recommended canary: 5,000–10,000 sats):\n")
+			b.WriteString(qr)
+		}
+	}
 	return b.String()
 }

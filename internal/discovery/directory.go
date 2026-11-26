@@ -26,7 +26,7 @@ import (
 func DefaultSeedHosts(network string) []string {
 	switch network {
 	case "testnet":
-		return []string{"https://nektar.run/hub"}
+		return []string{"https://testnet.nektar.run/hub"}
 	case "main":
 		return []string{"https://nektar.run/hub"}
 	default:

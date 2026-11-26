@@ -1,4 +1,4 @@
-# Nektar v0.1 — 5-Hub Federated Fleet under https://nektar.run/hubs/1..5
+# Nektar v0.1 — 5-Hub Federated Fleet on hub1..hub5.nektar.run
 # Each Hub runs the single Pure-Go binary + embedded Restate 1.8.1 sidecar in isolated storage,
 # federated over HTTPS with the primary Spine Hub (https://nektar.run) and all sibling hubs.
 name: nektar-fleet
@@ -18,7 +18,7 @@ x-hub-common: &hub-common
     NEKTAR_HUB_ROLE: leaf
     NEKTAR_HUB_FEE_PRESET: hybrid
     NEKTAR_UPSTREAM_SPINES: https://nektar.run
-    NEKTAR_PEER_HUBS: https://nektar.run,https://nektar.run/hubs/1,https://nektar.run/hubs/2,https://nektar.run/hubs/3,https://nektar.run/hubs/4,https://nektar.run/hubs/5
+    NEKTAR_PEER_HUBS: https://nektar.run,https://hub1.nektar.run,https://hub2.nektar.run,https://hub3.nektar.run,https://hub4.nektar.run,https://hub5.nektar.run
     NEKTAR_HEADERS_SOURCE: woc:test
     NEKTAR_SETTLE_SPEC: broadcaster:testnet
     NEKTAR_MAX_FEE_PER_TX: '2000'
@@ -34,7 +34,7 @@ services:
       - '127.0.0.1:18421:18420'
     environment:
       <<: *hub-env
-      NEKTAR_PUBLIC_URL: https://nektar.run/hubs/1
+      NEKTAR_PUBLIC_URL: https://hub1.nektar.run
       NEKTAR_SEED_DOMAINS: ops,nektar,agents
     volumes:
       - hub1-data:/data
@@ -45,7 +45,7 @@ services:
       - '127.0.0.1:18422:18420'
     environment:
       <<: *hub-env
-      NEKTAR_PUBLIC_URL: https://nektar.run/hubs/2
+      NEKTAR_PUBLIC_URL: https://hub2.nektar.run
       NEKTAR_SEED_DOMAINS: bsv,spv,runar
     volumes:
       - hub2-data:/data
@@ -56,7 +56,7 @@ services:
       - '127.0.0.1:18423:18420'
     environment:
       <<: *hub-env
-      NEKTAR_PUBLIC_URL: https://nektar.run/hubs/3
+      NEKTAR_PUBLIC_URL: https://hub3.nektar.run
       NEKTAR_SEED_DOMAINS: travel,deals,prosumer
     volumes:
       - hub3-data:/data
@@ -67,7 +67,7 @@ services:
       - '127.0.0.1:18424:18420'
     environment:
       <<: *hub-env
-      NEKTAR_PUBLIC_URL: https://nektar.run/hubs/4
+      NEKTAR_PUBLIC_URL: https://hub4.nektar.run
       NEKTAR_SEED_DOMAINS: research,workflows,ai
     volumes:
       - hub4-data:/data
@@ -78,7 +78,7 @@ services:
       - '127.0.0.1:18425:18420'
     environment:
       <<: *hub-env
-      NEKTAR_PUBLIC_URL: https://nektar.run/hubs/5
+      NEKTAR_PUBLIC_URL: https://hub5.nektar.run
       NEKTAR_SEED_DOMAINS: devops,cloud,security
     volumes:
       - hub5-data:/data

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/server"
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )

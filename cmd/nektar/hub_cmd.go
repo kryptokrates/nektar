@@ -46,12 +46,13 @@ Options for 'up':
   --domain <fqdn>          Public domain with automatic Let's Encrypt TLS via Caddy
   --auto-ip                Zero-domain HTTPS via <public-ip>.sslip.io + Caddy Auto-TLS
   --tunnel                 Zero-port HTTPS via Cloudflare Quick Tunnel (works behind NAT)
+  --native                 Zero-Docker mode: write .env + systemd service unit using this static nektar binary
   --network <testnet|main> Network (default: testnet; main requires --confirm I_UNDERSTAND)
   --confirm I_UNDERSTAND   Required acknowledgement for mainnet
   --hub-role <leaf|spine>  Spine-and-Leaf topology role (default: leaf)
-  --fee-preset <preset>    Monetization preset (free|lightbsv_egress|hybrid; default: free)
+  --fee-preset <preset>    Monetization preset (free|lightbsv_egress|hybrid; default: hybrid on main, free on testnet)
   --dir <path>             Hub directory (default: ~/.nektar-hub)
-  --dry                    Write .env + compose.yaml without starting Docker
+  --dry                    Write config files without starting Docker
   --no-join                Skip auto-joining local running agent to this new hub
 `
 
@@ -426,10 +427,11 @@ func cmdHubUp(args []string) error {
 	domainFlag := fs.String("domain", "", "Public domain with automatic Let's Encrypt TLS via Caddy")
 	autoIP := fs.Bool("auto-ip", false, "Zero-domain HTTPS via <public-ip>.sslip.io + Caddy Auto-TLS")
 	tunnel := fs.Bool("tunnel", false, "Zero-port HTTPS via Cloudflare Quick Tunnel")
+	nativeMode := fs.Bool("native", false, "Zero-Docker mode: generate .env + systemd unit for static nektar binary")
 	netFlag := fs.String("network", envOr("NEKTAR_NETWORK", "testnet"), "Network (testnet|main)")
 	confirm := fs.String("confirm", os.Getenv("NEKTAR_MAINNET_CONFIRM"), "Required I_UNDERSTAND for mainnet")
 	hubRoleFlag := fs.String("hub-role", envOr("NEKTAR_HUB_ROLE", string(hub.RoleLeaf)), "Spine-and-Leaf topology role (leaf|spine)")
-	feePresetFlag := fs.String("fee-preset", envOr("NEKTAR_HUB_FEE_PRESET", hub.PresetFree), "Monetization preset (free|lightbsv_egress|hybrid)")
+	feePresetFlag := fs.String("fee-preset", os.Getenv("NEKTAR_HUB_FEE_PRESET"), "Monetization preset (free|lightbsv_egress|hybrid)")
 	hubDir := fs.String("dir", defaultHubDir(), "Hub directory")
 	dry := fs.Bool("dry", false, "Write .env + compose.yaml without running Docker")
 	noJoin := fs.Bool("no-join", false, "Skip auto-joining local agent to this new hub")
@@ -499,17 +501,26 @@ func cmdHubUp(args []string) error {
 	}
 	presetNorm := strings.ToLower(strings.TrimSpace(*feePresetFlag))
 	if presetNorm == "" {
-		presetNorm = hub.PresetFree
+		if net == "main" {
+			presetNorm = hub.PresetHybrid
+		} else {
+			presetNorm = hub.PresetFree
+		}
 	}
 	envText = upsertEnvKV(envText, "NEKTAR_HUB_ROLE", roleNorm)
 	envText = upsertEnvKV(envText, "NEKTAR_HUB_FEE_PRESET", presetNorm)
+	seedHub := "https://testnet.nektar.run/hub"
 	if net == "main" {
+		seedHub = "https://nektar.run/hub"
 		envText = upsertEnvKV(envText, "NEKTAR_MAINNET_CONFIRM", "I_UNDERSTAND")
 		envText = upsertEnvKV(envText, "NEKTAR_HEADERS_SOURCE", chain.DefaultHeaderSources("main"))
 		envText = upsertEnvKV(envText, "NEKTAR_SETTLE_SPEC", chain.DefaultSettleSpec("main"))
 	} else {
 		envText = upsertEnvKV(envText, "NEKTAR_HEADERS_SOURCE", chain.DefaultHeaderSources("testnet"))
 		envText = upsertEnvKV(envText, "NEKTAR_SETTLE_SPEC", chain.DefaultSettleSpec("testnet"))
+	}
+	if roleNorm == string(hub.RoleLeaf) && !hasEnvKey(envText, "NEKTAR_UPSTREAM_SPINES") {
+		envText = upsertEnvKV(envText, "NEKTAR_UPSTREAM_SPINES", seedHub)
 	}
 
 	var profiles []string
@@ -545,7 +556,42 @@ func cmdHubUp(args []string) error {
 	} else if *tunnel {
 		modeDesc = "Cloudflare Tunnel"
 	}
-	fmt.Printf("nektar hub: prepared %s (%s, %s)\n", envPath, net, modeDesc)
+	fmt.Printf("nektar hub: prepared %s (%s · role=%s · fees=%s · %s)\n", envPath, net, roleNorm, presetNorm, modeDesc)
+
+	if *nativeMode {
+		exePath, _ := os.Executable()
+		if exePath == "" {
+			exePath = "/usr/local/bin/nektar"
+		}
+		unitPath := filepath.Join(*hubDir, "nektar-hub.service")
+		unitText := fmt.Sprintf(`[Unit]
+Description=Nektar v0.4 Pure-Go Hub (%s · %s)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%s
+EnvironmentFile=%s
+Environment=NEKTAR_DATA_DIR=%s/data
+ExecStart=%s serve -hub -listen 127.0.0.1:%s
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+`, net, roleNorm, *hubDir, envPath, *hubDir, exePath, DefaultLocalPort)
+		if err := os.WriteFile(unitPath, []byte(unitText), 0o644); err != nil {
+			return err
+		}
+		fmt.Printf("\n✓ Zero-Docker Hub config ready in %s\n", *hubDir)
+		fmt.Printf("  1. Run right now   : set -a && . %q && set +a && %s serve -hub -data-dir %q\n", envPath, exePath, filepath.Join(*hubDir, "data"))
+		fmt.Printf("  2. Or systemd VPS  : sudo cp %q /etc/systemd/system/ && sudo systemctl enable --now nektar-hub\n", unitPath)
+		if domain != "" {
+			fmt.Printf("  3. Reverse proxy   : caddy reverse-proxy --from %s --to 127.0.0.1:%s\n", domain, DefaultLocalPort)
+		}
+		return nil
+	}
 
 	if *dry {
 		fmt.Println("nektar hub [dry]: skipping docker compose up")
@@ -564,19 +610,56 @@ func cmdHubUp(args []string) error {
 		return err
 	}
 
+	// Poll local Hub health up to 35s so operators get immediate green confirmation + funding QR!
+	localBase := "http://127.0.0.1:" + DefaultLocalPort
+	hc := &http.Client{Timeout: 3 * time.Second}
+	var healthy bool
+	var fundAddr string
+	deadline := time.Now().Add(35 * time.Second)
+	for time.Now().Before(deadline) {
+		if resp, err := hc.Get(localBase + "/hub/v1/health"); err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				healthy = true
+				break
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if healthy {
+		if resp, err := hc.Get(localBase + "/.well-known/nektar"); err == nil {
+			var wk map[string]any
+			if json.NewDecoder(io.LimitReader(resp.Body, 32<<10)).Decode(&wk) == nil {
+				fundAddr, _ = wk["fundAddress"].(string)
+			}
+			_ = resp.Body.Close()
+		}
+	}
+
 	if domain != "" && !*noJoin {
-		if info, ok := server.DetectLiveDaemon(defaultDataDir()); ok {
+		if info, ok := server.DetectLiveDaemon(defaultDataDirForNetwork(net)); ok {
 			_, _ = callLiveAPI(info, http.MethodPost, "/v1/hosts", map[string]string{"url": "https://" + domain + "/hub"})
 		}
 	}
 
-	fmt.Printf("\nnektar hub UP in %s\n", *hubDir)
+	if healthy {
+		fmt.Printf("\n✓ nektar hub LIVE & HEALTHY in %s (%s · role=%s · fees=%s)\n", *hubDir, net, roleNorm, presetNorm)
+	} else {
+		fmt.Printf("\nnektar hub STARTED in %s (still booting — check `nektar hub logs`)\n", *hubDir)
+	}
 	fmt.Printf("  status : nektar hub status --dir %q\n", *hubDir)
 	fmt.Printf("  logs   : nektar hub logs --dir %q\n", *hubDir)
 	if domain != "" {
 		fmt.Printf("  public : https://%s/.well-known/nektar\n", domain)
+		fmt.Printf("  terms  : https://%s/hub/v1/terms\n", domain)
 	} else if *tunnel {
 		fmt.Printf("  tunnel : docker compose -f %q logs cloudflared\n", composeDst)
+	}
+	if fundAddr != "" && net == "main" {
+		fmt.Printf("  fund   : %s (send 5,000–10,000 sats for upstream Spine egress credits)\n", fundAddr)
+		if qr, err := core.RenderTerminalQR("bitcoin:" + fundAddr); err == nil {
+			fmt.Print(qr)
+		}
 	}
 	return nil
 }

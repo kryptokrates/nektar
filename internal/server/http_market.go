@@ -218,22 +218,57 @@ func (a *App) handleHubBundle(w http.ResponseWriter, r *http.Request) {
 	if mode == "" {
 		mode = "auto-ip"
 	}
-	net := r.URL.Query().Get("network")
-	if net == "" {
+	net := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("network")))
+	if net != "main" && net != "testnet" {
 		net = "testnet"
+	}
+	role := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("role")))
+	if role != "spine" {
+		role = "leaf"
+	}
+	feePreset := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("feePreset")))
+	if feePreset != "hybrid" && feePreset != "lightbsv_egress" && feePreset != "free" {
+		if net == "main" {
+			feePreset = "hybrid"
+		} else {
+			feePreset = "free"
+		}
 	}
 	domain := strings.TrimSpace(r.URL.Query().Get("domain"))
 	if domain == "" {
 		domain = "hub.example.com"
 	}
-	cliCmd := fmt.Sprintf("nektar hub up --auto-ip --network %s", net)
-	vpsCmd := fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_NETWORK=%s NEKTAR_AUTO_IP=1 bash", net)
+	confirmFlag := ""
+	confirmEnv := ""
+	if net == "main" {
+		confirmFlag = " --confirm I_UNDERSTAND"
+		confirmEnv = " NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND"
+	}
+	roleFlags := fmt.Sprintf(" --hub-role %s --fee-preset %s", role, feePreset)
+	roleEnv := fmt.Sprintf(" NEKTAR_HUB_ROLE=%s NEKTAR_HUB_FEE_PRESET=%s", role, feePreset)
+
+	cliCmd := fmt.Sprintf("nektar hub up --auto-ip --network %s%s%s", net, confirmFlag, roleFlags)
+	nativeCmd := fmt.Sprintf("nektar hub up --native --auto-ip --network %s%s%s", net, confirmFlag, roleFlags)
+	vpsCmd := fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_NETWORK=%s%s%s NEKTAR_AUTO_IP=1 bash", net, confirmEnv, roleEnv)
 	if mode == "domain" {
-		cliCmd = fmt.Sprintf("nektar hub up --domain %s --network %s", domain, net)
-		vpsCmd = fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_NETWORK=%s NEKTAR_DOMAIN=%s bash", net, domain)
+		cliCmd = fmt.Sprintf("nektar hub up --domain %s --network %s%s%s", domain, net, confirmFlag, roleFlags)
+		nativeCmd = fmt.Sprintf("nektar hub up --native --domain %s --network %s%s%s", domain, net, confirmFlag, roleFlags)
+		vpsCmd = fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_NETWORK=%s%s%s NEKTAR_DOMAIN=%s bash", net, confirmEnv, roleEnv, domain)
 	} else if mode == "tunnel" {
-		cliCmd = fmt.Sprintf("nektar hub up --tunnel --network %s", net)
-		vpsCmd = fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_NETWORK=%s NEKTAR_TUNNEL=1 bash", net)
+		cliCmd = fmt.Sprintf("nektar hub up --tunnel --network %s%s%s", net, confirmFlag, roleFlags)
+		nativeCmd = fmt.Sprintf("nektar serve --hub --network %s%s%s", net, confirmFlag, roleFlags)
+		vpsCmd = fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_NETWORK=%s%s%s NEKTAR_TUNNEL=1 bash", net, confirmEnv, roleEnv)
+	}
+	localCmd := fmt.Sprintf("nektar serve --hub --network %s%s%s", net, confirmFlag, roleFlags)
+	ciConfirm := ""
+	if net == "main" {
+		ciConfirm = "\n    export NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND"
+	}
+	ciMode := "export NEKTAR_AUTO_IP=1"
+	if mode == "domain" {
+		ciMode = "export NEKTAR_DOMAIN=" + domain
+	} else if mode == "tunnel" {
+		ciMode = "export NEKTAR_TUNNEL=1"
 	}
 	cloudInit := fmt.Sprintf(`#cloud-config
 package_update: true
@@ -241,14 +276,20 @@ packages: [curl, ca-certificates, openssl]
 runcmd:
   - |
     export NEKTAR_HUB_DIR=/opt/nektar-hub
-    export NEKTAR_NETWORK=%s
-    export NEKTAR_AUTO_IP=1
+    export NEKTAR_NETWORK=%s%s
+    export NEKTAR_HUB_ROLE=%s
+    export NEKTAR_HUB_FEE_PRESET=%s
+    %s
     curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | bash
-`, net)
+`, net, ciConfirm, role, feePreset, ciMode)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cliCommand":         cliCmd,
+		"nativeCommand":      nativeCmd,
+		"localCommand":       localCmd,
 		"vpsOneLiner":        vpsCmd,
 		"cloudInitYaml":      cloudInit,
+		"role":               role,
+		"feePreset":          feePreset,
 		"coolifyTemplateUrl": "https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/templates/coolify.compose.yaml",
 		"helmCommand":        "helm install nektar-hub deploy/hub/helm --set network=" + net + " --set publicUrl=https://" + domain,
 	})

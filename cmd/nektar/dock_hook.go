@@ -249,24 +249,41 @@ func cmdDock(args []string) error {
 	if *uninstall {
 		modeTag += " [uninstall]"
 	}
-	fmt.Printf("Nektar v%s dock%s — binary: %s · daemon: %s\n\n", Version, modeTag, exePath, liveURL)
+	fmt.Printf("Nektar v%s dock%s — binary: %s · daemon: %s\n", Version, modeTag, exePath, liveURL)
+	fmt.Println("Docking wires your AI apps into this Nektar node so they share one encrypted, verifiable memory & BSV market.")
+	fmt.Println()
+	tierName := func(lvl string) string {
+		switch lvl {
+		case "L3":
+			return "Native + Hooks"
+		case "L2":
+			return "MCP + Hooks"
+		case "L1":
+			return "MCP Tools"
+		case "L0":
+			return "Zero-Code Proxy"
+		default:
+			return lvl
+		}
+	}
 	if len(results) == 0 {
-		fmt.Printf("  no AI clients auto-detected in %s — pass explicit names: nektar dock claude cursor vscode hermes openclaw codex proxy\n", home)
+		fmt.Printf("  No AI clients auto-detected in %s.\n", home)
+		fmt.Println("  Pass an explicit app name: `nektar dock claude cursor claude-desktop vscode codex hermes openclaw proxy`")
 	} else {
 		for _, r := range results {
-			state := "unchanged"
+			state := "already docked"
 			if r.Changed {
 				if *dry {
 					state = "would update"
 				} else if *uninstall {
 					state = "removed"
 				} else {
-					state = "updated"
+					state = "docked ✓"
 				}
 			}
-			fmt.Printf("  [%s] %-16s (%s)\n", r.Level, r.Label, state)
+			fmt.Printf("  [%-14s] %-16s (%s)\n", tierName(r.Level), r.Label, state)
 			for _, n := range r.Notes {
-				fmt.Printf("         %s\n", n)
+				fmt.Printf("                    %s\n", n)
 			}
 		}
 	}
@@ -283,7 +300,7 @@ func cmdDock(args []string) error {
 			antHint = "nkt:" + tok + ":sk-ant-..."
 		}
 		fmt.Printf(`
-L0 Zero-Code LLM Memory Proxy (works with ANY OpenAI/Anthropic agent):
+Zero-Code LLM Memory Proxy (works with ANY OpenAI/Anthropic agent):
   export OPENAI_BASE_URL="%s/v1/proxy/openai/v1"
   export OPENAI_API_KEY="%s"
   export ANTHROPIC_BASE_URL="%s/v1/proxy/anthropic"
@@ -298,7 +315,13 @@ L0 Zero-Code LLM Memory Proxy (works with ANY OpenAI/Anthropic agent):
 		} else if probe != nil {
 			fmt.Printf("\nLive probe: ! WARN — daemon reachable but recall failed: %v\n", probe["note"])
 		} else {
-			fmt.Println("\nLive probe: • daemon not running yet — start with `nektar serve`")
+			fmt.Println("\nLive probe: • daemon not running yet — start with `nektar serve` (or `nektar serve --network main --confirm I_UNDERSTAND`)")
+		}
+		if len(results) > 0 && !*dry {
+			fmt.Println("\nNext:")
+			fmt.Println("  1. Restart your docked AI app (Claude / Cursor / VS Code / Codex…) to pick up the config.")
+			fmt.Println(`  2. Try asking it: "Remember that our production API runs on port 8080, then recall it with a verified receipt."`)
+			fmt.Println("  3. Revert anytime with: `nektar dock --uninstall`")
 		}
 	}
 	return nil

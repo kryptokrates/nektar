@@ -407,6 +407,7 @@ func (a *App) buildMux() http.Handler {
 	a.registerOAuthRoutes(mux)
 	a.registerAdapterRoutes(mux)
 	a.registerMetricsRoutes(mux)
+	a.registerDockAndLaunchRoutes(mux)
 
 	// 8. Embedded Overlay Hub (Restate services are NEVER exposed on the public :18420 mux — dedicated internal h2c port only!).
 	if a.cfg.Hub != nil {

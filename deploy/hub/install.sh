@@ -61,6 +61,9 @@ if [ -n "$DOMAIN" ] || [ "$MODE" = "tunnel" ]; then
   TRUST_PROXY="1"
 fi
 
+SEED_HUB="$( [ "$NET" = "main" ] && echo "https://nektar.run/hub" || echo "https://testnet.nektar.run/hub" )"
+DEFAULT_PRESET="$( [ "$NET" = "main" ] && echo "hybrid" || echo "free" )"
+
 cat > .env <<EOF
 NEKTAR_NETWORK=${NET}
 NEKTAR_HTTP_BIND=127.0.0.1
@@ -71,9 +74,9 @@ NEKTAR_TRUST_PROXY=${TRUST_PROXY}
 NEKTAR_HTTP_TOKEN=${HTTP_TOK}
 NEKTAR_OPERATOR_TOKEN=${OP_TOK}
 NEKTAR_HUB_ROLE=${NEKTAR_HUB_ROLE:-leaf}
-NEKTAR_HUB_FEE_PRESET=${NEKTAR_HUB_FEE_PRESET:-free}
-NEKTAR_PEER_HUBS=${NEKTAR_PEER_HUBS:-https://nektar.run/hub}
-NEKTAR_UPSTREAM_SPINES=${NEKTAR_UPSTREAM_SPINES:-https://nektar.run/hub}
+NEKTAR_HUB_FEE_PRESET=${NEKTAR_HUB_FEE_PRESET:-${DEFAULT_PRESET}}
+NEKTAR_PEER_HUBS=${NEKTAR_PEER_HUBS:-${SEED_HUB}}
+NEKTAR_UPSTREAM_SPINES=${NEKTAR_UPSTREAM_SPINES:-${SEED_HUB}}
 NEKTAR_SPINE_PEER_PUBS=${NEKTAR_SPINE_PEER_PUBS:-}
 NEKTAR_HEADERS_SOURCE=${NEKTAR_HEADERS_SOURCE:-$([ "$NET" = "main" ] && echo "woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2" || echo "woc:test")}
 NEKTAR_SETTLE_SPEC=${NEKTAR_SETTLE_SPEC:-$([ "$NET" = "main" ] && echo "arcade:https://arcade-v2-us-1.bsvblockchain.tech" || echo "arcade:https://arcade-testnet-us-1.bsvblockchain.tech")}

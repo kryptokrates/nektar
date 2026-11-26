@@ -20,6 +20,26 @@
   let sendSats = $state('')
   let desktopSats = $state('10000')
   let copiedAddr = $state(false)
+  let qrMode = $state<'uri' | 'raw'>('uri')
+  let qrSvg = $state('')
+  let qrPayload = $state('')
+
+  async function loadQR(mode: 'uri' | 'raw') {
+    try {
+      const r = await fetch(`/v1/wallet/qr?mode=${mode}&format=json`)
+      if (r.ok) {
+        const j = (await r.json()) as { svg?: string; payload?: string }
+        qrSvg = j.svg ?? ''
+        qrPayload = j.payload ?? ''
+      }
+    } catch {}
+  }
+
+  $effect(() => {
+    if (sheet === 'receive') {
+      void loadQR(qrMode)
+    }
+  })
 
   type WalletAction = {
     txid?: string
@@ -195,11 +215,30 @@
   </section>
 
   {#if sheet === 'receive'}
-    <section class="sheet">
-      <div class="slbl">Deposit Address</div>
+    <section class="sheet receive-sheet">
+      <div class="qr-head">
+        <div>
+          <div class="slbl">Deposit Address ({s.network === 'main' ? 'BSV Mainnet · real sats' : s.network})</div>
+          {#if s.network === 'main'}
+            <div class="qr-tip">Recommended starter float: <b>5,000–10,000 sats</b> (~$0.003)</div>
+          {/if}
+        </div>
+        <div class="qr-tabs">
+          <button class="mini" class:on={qrMode === 'uri'} onclick={() => (qrMode = 'uri')}>bitcoin: URI</button>
+          <button class="mini" class:on={qrMode === 'raw'} onclick={() => (qrMode = 'raw')}>Raw Address</button>
+        </div>
+      </div>
+
+      {#if qrSvg}
+        <div class="qr-wrap">
+          <div class="qr-box">{@html qrSvg}</div>
+        </div>
+      {/if}
+
       <div class="addr-row">
-        <code class="mono">{s.treasury.address ?? 'Initializing…'}</code>
+        <code class="mono">{qrPayload || s.treasury.address || 'Initializing…'}</code>
         <button class="mini" onclick={copyAddr}>{copiedAddr ? 'Copied ✓' : 'Copy'}</button>
+        <button class="mini" onclick={syncWallet} disabled={busy}>{busy ? 'Checking…' : 'Check Deposit'}</button>
       </div>
     </section>
   {:else if sheet === 'desktop'}
@@ -248,6 +287,18 @@
 
 <style>
   .view { display: flex; flex-direction: column; }
+  .receive-sheet { display: grid; gap: 0.7rem; }
+  .qr-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+  .qr-tip { font-size: 0.76rem; color: var(--mut); margin-top: 0.15rem; }
+  .qr-tip b { color: var(--ink); }
+  .qr-tabs { display: flex; gap: 0.35rem; }
+  .mini.on { border-color: var(--amber); color: var(--amber); background: rgb(247 153 27 / 12%); }
+  .qr-wrap { display: flex; justify-content: center; padding: 0.25rem 0; }
+  .qr-box {
+    width: 196px; height: 196px; background: #ffffff; padding: 8px;
+    border-radius: 12px; border: 1px solid var(--line2); box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+  }
+  .qr-box :global(svg) { width: 100%; height: 100%; display: block; }
   .sticky-head {
     position: sticky; top: 0; z-index: 15;
     padding: 0.9rem 1.25rem;

@@ -14,6 +14,7 @@
   import CommandPalette from './components/CommandPalette.svelte'
   import OperatorModal from './components/OperatorModal.svelte'
   import DockModal from './components/DockModal.svelte'
+  import QuickstartStrip from './components/QuickstartStrip.svelte'
 
   let s = $state<State | null>(null)
   let needsAuth = $state(false)
@@ -279,6 +280,13 @@
     />
 
     <main class="center">
+      <QuickstartStrip
+        {s}
+        onOpenDock={() => (dockOpen = true)}
+        onNavigate={(t) => (tab = t)}
+        onApproveStarter={() => void approveStarterPolicy()}
+        onRequestFaucet={() => void requestFaucet()}
+      />
       {#if tab === 'home'}
         <MarketHome
           {s}

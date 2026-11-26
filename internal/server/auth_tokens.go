@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/kryptokrates/nektar/internal/core"
 )
 
 // IsContainerEnv reports whether Nektar is running inside a Docker/OCI container.

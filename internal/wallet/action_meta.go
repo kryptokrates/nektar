@@ -14,7 +14,31 @@ const ActionPrefix = "Nektar · "
 const (
 	maxActionDescRunes = 128
 	maxActionLabelLen  = 64
+
+	// Canonical BRC-100 asset-class baskets inside BSV Desktop / go-wallet-toolbox.
+	// These hold Nektar's stateful covenant & carrier UTXOs (never splitting fungible satoshis).
+	BasketAnchors  = "nektar-anchors"
+	BasketVaults   = "nektar-vaults"
+	BasketEscrows  = "nektar-escrows"
+	BasketCarriers = "nektar-carriers"
 )
+
+// AllAssetBaskets lists Nektar's canonical BRC-100 stateful UTXO baskets in display order.
+var AllAssetBaskets = []string{
+	BasketAnchors,
+	BasketVaults,
+	BasketEscrows,
+	BasketCarriers,
+}
+
+// OutputTagSpec attaches BRC-100 basket, tags, and customInstructions metadata to an output
+// (typically output 0 for a Rúnar covenant singleton, or all outputs for a carrier tree).
+type OutputTagSpec struct {
+	Basket             string
+	Tags               []string
+	CustomInstructions string
+	ApplyToAll         bool // false => output 0 only; true => every output in the tx
+}
 
 // ActionMeta bundles the canonical human-readable BRC-100 description and structured labels
 // for a single Nektar wallet action. ALL user-facing transaction labels and descriptions
@@ -22,6 +46,70 @@ const (
 type ActionMeta struct {
 	Description string
 	Labels      []string
+}
+
+// SanitizeAgentID normalizes an agent identifier (e.g. "Claude Code", "codex", "hermes")
+// into a compact lowercase slug safe for BRC-100 labels ("agent:<slug>").
+func SanitizeAgentID(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if s == "" {
+		return ""
+	}
+	// Map common client User-Agent / MCP ClientInfo names to crisp canonical slugs.
+	switch {
+	case strings.Contains(s, "claude"):
+		return "claude"
+	case strings.Contains(s, "codex"):
+		return "codex"
+	case strings.Contains(s, "hermes"):
+		return "hermes"
+	case strings.Contains(s, "openclaw"):
+		return "openclaw"
+	case strings.Contains(s, "cursor"):
+		return "cursor"
+	case strings.Contains(s, "windsurf"):
+		return "windsurf"
+	case strings.Contains(s, "vscode") || strings.Contains(s, "visual studio"):
+		return "vscode"
+	case strings.Contains(s, "cline"):
+		return "cline"
+	case strings.Contains(s, "gemini"):
+		return "gemini"
+	}
+	var b strings.Builder
+	prevDash := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash && b.Len() > 0 {
+			b.WriteByte('-')
+			prevDash = true
+		}
+		if b.Len() >= 24 {
+			break
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+// WithAgentAttribution decorates an ActionMeta with an agent tag ("Nektar · [claude] ...")
+// and adds the "agent:<slug>" BRC-100 label for per-agent Activity filtering.
+func WithAgentAttribution(meta ActionMeta, agentID string) ActionMeta {
+	slug := SanitizeAgentID(agentID)
+	if slug == "" {
+		return meta
+	}
+	desc := NormalizeActionDescription(meta.Description)
+	tag := "[" + slug + "] "
+	rest := strings.TrimPrefix(desc, ActionPrefix)
+	if !strings.HasPrefix(rest, tag) {
+		desc = truncateRunes(ActionPrefix+tag+rest, maxActionDescRunes)
+	}
+	return ActionMeta{
+		Description: desc,
+		Labels:      NormalizeActionLabels(append(append([]string{}, meta.Labels...), "agent:"+slug)...),
+	}
 }
 
 // --- Memory Anchoring ---

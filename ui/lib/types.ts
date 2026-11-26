@@ -176,6 +176,27 @@ export type AIStatus = {
   circuitOpen?: boolean
 }
 
+export type AssetBasketItem = {
+  outpoint: string
+  txid: string
+  vout: number
+  satoshis: number
+  spendable: boolean
+  tags?: string[]
+  customInstructions?: string
+  meta?: Record<string, unknown>
+}
+
+export type AssetBasketSummary = {
+  basket: string
+  title: string
+  description: string
+  count: number
+  totalSats: number
+  items: AssetBasketItem[]
+  error?: string
+}
+
 export type State = {
   network: string
   model: string
@@ -189,11 +210,26 @@ export type State = {
     confirmedSats?: number
     unprovenSats?: number
     reservedSats?: number
+    spent?: number
+    spent24h?: number
+    dailySpent?: number
+    dailyCapSats?: number
+    perDealCapSats?: number
+    vault?: {
+      txid: string
+      sats: number
+      maxPerSpendSats: number
+      paused: boolean
+    } | null
     utxos: number
     fuelUtxos?: number
     reserveUtxos?: number
     defaultUtxos?: number
     walletMode?: string
+    custody?: 'bsv-desktop' | 'embedded' | string
+    baskets?: AssetBasketSummary[]
+    basketItems?: number
+    basketLockedSats?: number
     feeRateSatPerKB?: number
     funded: boolean
     payments: string

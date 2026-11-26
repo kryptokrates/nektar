@@ -138,10 +138,15 @@ func OpenCheckpointBond(
 		return nil, err
 	}
 	meta := nwallet.ActionOpenBond(depositSats)
-	tx, beef, fee, spend, err := port.BuildFundedTxWithMeta(ctx, []*transaction.TransactionOutput{{
+	bondSpec := &nwallet.OutputTagSpec{
+		Basket:             nwallet.BasketVaults,
+		Tags:               []string{"bond", "type:checkpoint-bond"},
+		CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"checkpoint-bond","sats":%d,"epochLen":%d,"releaseHeight":%d}`, depositSats, epochLen, st.BondReleaseHeight),
+	}
+	tx, beef, fee, spend, err := port.BuildFundedTxWithBasket(ctx, []*transaction.TransactionOutput{{
 		Satoshis:      depositSats,
 		LockingScript: lockScript,
-	}}, meta.Description, meta.Labels)
+	}}, meta.Description, meta.Labels, bondSpec)
 	if err != nil {
 		return nil, fmt.Errorf("market: build bond open tx: %w", err)
 	}

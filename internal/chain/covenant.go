@@ -148,6 +148,7 @@ type CovenantSpendRequest struct {
 	FuelFromWallet        bool    // true => add wallet BRC-29 fuel + change via CreateAction/SignAction; false => self-funded 1-input tx
 	Description           string
 	Labels                []string
+	OutputSpec            *nwallet.OutputTagSpec // optional BRC-100 asset basket + tags for covenant output(s)
 	// BuildUnlock is invoked with the assembled transaction (including wallet fuel inputs & change output if any)
 	// and must return Input 0's complete unlocking script.
 	BuildUnlock func(tx *transaction.Transaction, changePKH []byte, changeSats uint64) (*script.Script, error)
@@ -246,11 +247,11 @@ func (p *Port) BuildCovenantSpendTx(ctx context.Context, req CovenantSpendReques
 	if unlockLen == 0 {
 		unlockLen = 5120
 	}
-	desc := nwallet.NormalizeActionDescription(req.Description)
-	if strings.TrimSpace(req.Description) == "" {
-		desc = nwallet.ActionCovenantSpend().Description
+	baseDesc := req.Description
+	if strings.TrimSpace(baseDesc) == "" {
+		baseDesc = nwallet.ActionCovenantSpend().Description
 	}
-	labels := nwallet.NormalizeActionLabels(append([]string{"covenant"}, req.Labels...)...)
+	desc, labels := decorateActionWithContext(ctx, baseDesc, append([]string{"covenant"}, req.Labels...))
 	wOuts := make([]sdkwallet.CreateActionOutput, len(req.Outputs))
 	var outTotal uint64
 	for i, o := range req.Outputs {
@@ -264,6 +265,7 @@ func (p *Port) BuildCovenantSpendTx(ctx context.Context, req CovenantSpendReques
 			OutputDescription: desc,
 		}
 	}
+	applyOutputTagSpec(wOuts, req.OutputSpec)
 
 	signAndProc := false
 	randomize := false

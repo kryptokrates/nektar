@@ -464,6 +464,9 @@ func walletSend(args []string) error {
 		return err
 	}
 	defer rt.closeFn()
+	if rt.mem.Chain().WalletMode() == "client" {
+		return errors.New("direct wallet sends are disabled in BSV Desktop client mode — send funds directly from BSV Desktop (Nektar holds zero signing keys)")
+	}
 	if rt.mem.Chain().Mainnet() && *confirm != "I_UNDERSTAND" {
 		return errors.New("mainnet send requires --confirm I_UNDERSTAND")
 	}
@@ -512,6 +515,9 @@ func walletSweep(args []string) error {
 		return err
 	}
 	defer rt.closeFn()
+	if rt.mem.Chain().WalletMode() == "client" {
+		return errors.New("direct wallet sends are disabled in BSV Desktop client mode — send funds directly from BSV Desktop (Nektar holds zero signing keys)")
+	}
 	if rt.mem.Chain().Mainnet() && *confirm != "I_UNDERSTAND" {
 		return errors.New("mainnet sweep requires --confirm I_UNDERSTAND")
 	}

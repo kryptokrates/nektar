@@ -138,10 +138,15 @@ func (e *Engine) buyerPayAndDeliver(rctx restate.RunContext, dealID string, chos
 			}
 			if !fundedFromVault {
 				meta := nwallet.ActionLockEscrow(chosen.OfferID, escrowSats)
-				builtTx, builtBEEF, fee, spend, bErr := e.mem.Chain().BuildFundedTxWithMeta(rctx, []*transaction.TransactionOutput{{
+				escrowSpec := &nwallet.OutputTagSpec{
+					Basket:             nwallet.BasketEscrows,
+					Tags:               []string{"escrow", "deal:" + dealID, "offer:" + chosen.OfferID},
+					CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"escrow","dealId":%q,"offerId":%q,"price":%d,"refundAfter":%d}`, dealID, chosen.OfferID, chosen.PriceSats, refundAfter),
+				}
+				builtTx, builtBEEF, fee, spend, bErr := e.mem.Chain().BuildFundedTxWithBasket(rctx, []*transaction.TransactionOutput{{
 					Satoshis:      escrowSats,
 					LockingScript: escrowLock,
-				}}, meta.Description, meta.Labels)
+				}}, meta.Description, meta.Labels, escrowSpec)
 				if bErr != nil {
 					if errors.Is(bErr, nwallet.ErrBroadcastUnknown) {
 						return buyerPayResult{}, bErr

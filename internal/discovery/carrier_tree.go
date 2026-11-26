@@ -286,7 +286,13 @@ func (m *CarrierTreeManager) mintNewTree(ctx context.Context, protoWallet sdkwal
 		outputs[i] = &transaction.TransactionOutput{Satoshis: 1, LockingScript: fundLock}
 	}
 	treeMeta := nwallet.ActionFundCarrierTree(m.width)
-	fundTx, fundBEEF, feeSats, spendSats, err := m.port.BuildFundedTxWithMeta(ctx, outputs, treeMeta.Description, treeMeta.Labels)
+	treeSpec := &nwallet.OutputTagSpec{
+		Basket:             nwallet.BasketCarriers,
+		Tags:               []string{"carrier", "slot"},
+		CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"carrier-slot","width":%d}`, m.width),
+		ApplyToAll:         true,
+	}
+	fundTx, fundBEEF, feeSats, spendSats, err := m.port.BuildFundedTxWithBasket(ctx, outputs, treeMeta.Description, treeMeta.Labels, treeSpec)
 	if err != nil {
 		return nil, fmt.Errorf("discovery: build M=%d funding tree: %w", m.width, err)
 	}

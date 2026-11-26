@@ -250,4 +250,112 @@ func TestUniformNektarActionNaming(t *testing.T) {
 			t.Errorf("label[%d] = %q, want %q", i, labels[i], wantLabels[i])
 		}
 	}
+
+	if got := SanitizeAgentID("Claude Code v1.2"); got != "claude" {
+		t.Errorf("SanitizeAgentID(Claude Code) = %q, want claude", got)
+	}
+	if got := SanitizeAgentID("My Custom_Bot!!"); got != "my-custom-bot" {
+		t.Errorf("SanitizeAgentID(custom) = %q, want my-custom-bot", got)
+	}
+	attr := WithAgentAttribution(ActionAnchorShard("ops", 2, 3), "Claude Code")
+	if attr.Description != `Nektar · [claude] Anchor shard: "ops" (batch #2, 3 fragments)` {
+		t.Errorf("WithAgentAttribution desc = %q", attr.Description)
+	}
+	foundAgent := false
+	for _, l := range attr.Labels {
+		if l == "agent:claude" {
+			foundAgent = true
+		}
+	}
+	if !foundAgent {
+		t.Errorf("expected agent:claude label in %v", attr.Labels)
+	}
+}
+
+func TestDesktopJSONListActionsAndBasketOutputWire(t *testing.T) {
+	ctx := context.Background()
+	var gotListLabels []any
+	var gotBasket string
+	var gotCustom string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/listActions":
+			var req map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			lbls, ok := req["labels"].([]any)
+			if !ok || len(lbls) == 0 {
+				http.Error(w, "labels required", http.StatusBadRequest)
+				return
+			}
+			gotListLabels = lbls
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"totalActions": 1,
+				"actions": []map[string]any{{
+					"txid":        "7714e712eba91639bfb99f20d471f6d9c6d9285eeac8a1c458c8ff4de5955906",
+					"satoshis":    -1087,
+					"status":      "completed",
+					"isOutgoing":  true,
+					"description": `Nektar · Anchor shard: "ops" (batch #0, 1 fragment)`,
+					"labels":      []string{"nektar", "anchor", "agent:claude"},
+					"version":     1,
+					"lockTime":    0,
+				}},
+			})
+		case "/createAction":
+			var req map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			outs, _ := req["outputs"].([]any)
+			if len(outs) > 0 {
+				o0, _ := outs[0].(map[string]any)
+				gotBasket, _ = o0["basket"].(string)
+				gotCustom, _ = o0["customInstructions"].(string)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"txid": "7714e712eba91639bfb99f20d471f6d9c6d9285eeac8a1c458c8ff4de5955906",
+				"tx":   []int{1, 2, 3},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	cli := NewDesktopJSONClient(DefaultDesktopOriginator, srv.URL, srv.Client())
+	lim := uint32(10)
+	res, err := cli.ListActions(ctx, sdkwallet.ListActionsArgs{Limit: &lim}, DefaultDesktopOriginator)
+	if err != nil {
+		t.Fatalf("ListActions: %v", err)
+	}
+	if res.TotalActions != 1 || len(res.Actions) != 1 || res.Actions[0].Satoshis != -1087 {
+		t.Fatalf("unexpected ListActions result: %+v", res)
+	}
+	if len(gotListLabels) != 1 || gotListLabels[0] != "nektar" {
+		t.Fatalf("expected default label [nektar], got %v", gotListLabels)
+	}
+
+	caRes, err := cli.CreateAction(ctx, sdkwallet.CreateActionArgs{
+		Description: ActionAnchorShard("ops", 0, 1).Description,
+		Labels:      ActionAnchorShard("ops", 0, 1).Labels,
+		Outputs: []sdkwallet.CreateActionOutput{{
+			LockingScript:      []byte{0x6a, 0x04, 0x74, 0x65, 0x73, 0x74},
+			Satoshis:           1,
+			OutputDescription:  ActionAnchorShard("ops", 0, 1).Description,
+			Basket:             BasketAnchors,
+			Tags:               []string{"nektar", "anchor", "shard:ops"},
+			CustomInstructions: `{"v":1,"kind":"anchor","shard":"ops"}`,
+		}},
+	}, DefaultDesktopOriginator)
+	if err != nil {
+		t.Fatalf("CreateAction: %v", err)
+	}
+	if gotBasket != BasketAnchors || gotCustom != `{"v":1,"kind":"anchor","shard":"ops"}` || len(caRes.Tx) != 3 {
+		t.Fatalf("basket wire mismatch: basket=%q custom=%q tx=%v", gotBasket, gotCustom, caRes.Tx)
+	}
 }

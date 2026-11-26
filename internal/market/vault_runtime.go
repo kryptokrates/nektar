@@ -153,10 +153,15 @@ func DeployAgentVault(
 		return nil, err
 	}
 	meta := nwallet.ActionDeployVault(depositSats)
-	tx, beef, fee, spend, err := port.BuildFundedTxWithMeta(ctx, []*transaction.TransactionOutput{{
+	vaultSpec := &nwallet.OutputTagSpec{
+		Basket:             nwallet.BasketVaults,
+		Tags:               []string{"vault", "type:agent-vault"},
+		CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"agent-vault","sats":%d,"perTxCap":%d,"windowCap":%d,"windowBlocks":%d}`, depositSats, perTxCap, windowCap, windowBlocks),
+	}
+	tx, beef, fee, spend, err := port.BuildFundedTxWithBasket(ctx, []*transaction.TransactionOutput{{
 		Satoshis:      depositSats,
 		LockingScript: lockScript,
-	}}, meta.Description, meta.Labels)
+	}}, meta.Description, meta.Labels, vaultSpec)
 	if err != nil {
 		return nil, fmt.Errorf("market: build vault deploy tx: %w", err)
 	}

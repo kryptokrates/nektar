@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -80,11 +81,18 @@ func (a *App) extractToken(r *http.Request) string {
 	return ""
 }
 
+func attachAgentContext(r *http.Request, ctx context.Context) context.Context {
+	if agent := strings.TrimSpace(r.Header.Get("X-Nektar-Agent")); agent != "" {
+		return chain.WithAgentID(ctx, agent)
+	}
+	return ctx
+}
+
 func (a *App) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.cfg.APIToken == "" && a.cfg.OperatorToken == "" {
 			// Unauthenticated bare-metal loopback: local owner context.
-			ctx := WithCallerAuth(r.Context(), CallerAuth{Authenticated: true, IsOperator: true})
+			ctx := attachAgentContext(r, WithCallerAuth(r.Context(), CallerAuth{Authenticated: true, IsOperator: true}))
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -94,7 +102,7 @@ func (a *App) withAuth(next http.Handler) http.Handler {
 			return
 		}
 		isOp := a.cfg.OperatorToken != "" && a.tokenMatches(tok, true)
-		ctx := WithCallerAuth(r.Context(), CallerAuth{Authenticated: true, IsOperator: isOp})
+		ctx := attachAgentContext(r, WithCallerAuth(r.Context(), CallerAuth{Authenticated: true, IsOperator: isOp}))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -102,7 +110,7 @@ func (a *App) withAuth(next http.Handler) http.Handler {
 func (a *App) withOperatorAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.cfg.OperatorToken == "" && a.cfg.APIToken == "" {
-			ctx := WithCallerAuth(r.Context(), CallerAuth{Authenticated: true, IsOperator: true})
+			ctx := attachAgentContext(r, WithCallerAuth(r.Context(), CallerAuth{Authenticated: true, IsOperator: true}))
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -126,7 +134,7 @@ func (a *App) withOperatorAuth(next http.Handler) http.Handler {
 			writeJSON(w, code, map[string]string{"error": "operator token required"})
 			return
 		}
-		ctx := WithCallerAuth(r.Context(), CallerAuth{Authenticated: true, IsOperator: true})
+		ctx := attachAgentContext(r, WithCallerAuth(r.Context(), CallerAuth{Authenticated: true, IsOperator: true}))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

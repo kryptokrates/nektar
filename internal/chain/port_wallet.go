@@ -266,6 +266,10 @@ func (p *Port) clientCreateAction(ctx context.Context, outputs []*transaction.Tr
 }
 
 func (p *Port) clientCreateActionWithLabels(ctx context.Context, outputs []*transaction.TransactionOutput, desc string, labels []string, overrideGuard bool) (*nwallet.SendResult, error) {
+	return p.clientCreateActionWithSpec(ctx, outputs, desc, labels, nil, overrideGuard)
+}
+
+func (p *Port) clientCreateActionWithSpec(ctx context.Context, outputs []*transaction.TransactionOutput, desc string, labels []string, spec *nwallet.OutputTagSpec, overrideGuard bool) (*nwallet.SendResult, error) {
 	var outTotal uint64
 	for _, o := range outputs {
 		outTotal += o.Satoshis
@@ -285,8 +289,7 @@ func (p *Port) clientCreateActionWithLabels(ctx context.Context, outputs []*tran
 			return nil, rErr
 		}
 	}
-	desc = nwallet.NormalizeActionDescription(desc)
-	normLabels := nwallet.NormalizeActionLabels(labels...)
+	desc, normLabels := decorateActionWithContext(ctx, desc, labels)
 	wOuts := make([]sdkwallet.CreateActionOutput, len(outputs))
 	for i, o := range outputs {
 		wOuts[i] = sdkwallet.CreateActionOutput{
@@ -295,6 +298,7 @@ func (p *Port) clientCreateActionWithLabels(ctx context.Context, outputs []*tran
 			OutputDescription: desc,
 		}
 	}
+	applyOutputTagSpec(wOuts, spec)
 	acceptDelayed := false
 	randomize := false
 	actRes, err := p.wallet.CreateAction(ctx, sdkwallet.CreateActionArgs{

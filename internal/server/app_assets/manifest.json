@@ -42,6 +42,24 @@
         "protocolID": [2, "3241645161d8"],
         "description": "Receive and send BRC-29 peer payments"
       }
+    ],
+    "basketPermissions": [
+      {
+        "basket": "nektar-anchors",
+        "description": "Track live Rúnar NektarAnchor memory shard singletons"
+      },
+      {
+        "basket": "nektar-vaults",
+        "description": "Track funded NektarAgentVault and NektarCheckpointBond covenants"
+      },
+      {
+        "basket": "nektar-escrows",
+        "description": "Track active DisclosureSale market escrow UTXOs"
+      },
+      {
+        "basket": "nektar-carriers",
+        "description": "Track PushDrop overlay carrier announcement slots"
+      }
     ]
   }
 }

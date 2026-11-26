@@ -32,15 +32,20 @@ func (p *Port) BuildFundedTxWithBEEF(ctx context.Context, outputs []*transaction
 // BuildFundedTxWithMeta builds and signs a funded transaction with a human-readable BRC-100
 // description and structured labels (shown in BSV Desktop's Activity feed in client mode).
 func (p *Port) BuildFundedTxWithMeta(ctx context.Context, outputs []*transaction.TransactionOutput, desc string, labels []string) (*transaction.Transaction, []byte, uint64, uint64, error) {
+	return p.BuildFundedTxWithBasket(ctx, outputs, desc, labels, nil)
+}
+
+// BuildFundedTxWithBasket builds and signs a funded transaction while tagging its stateful
+// covenant or carrier output(s) into a canonical BRC-100 asset basket (e.g. nektar-anchors).
+func (p *Port) BuildFundedTxWithBasket(ctx context.Context, outputs []*transaction.TransactionOutput, desc string, labels []string, spec *nwallet.OutputTagSpec) (*transaction.Transaction, []byte, uint64, uint64, error) {
 	if len(outputs) == 0 {
 		return nil, nil, 0, 0, errors.New("chain: BuildFundedTx requires at least one output")
 	}
-	normDesc := nwallet.NormalizeActionDescription(desc)
-	normLabels := nwallet.NormalizeActionLabels(labels...)
+	normDesc, normLabels := decorateActionWithContext(ctx, desc, labels)
 
 	// Client mode: delegate cleanly to remote BRC-100 wallet.CreateAction.
 	if p.engine == nil {
-		res, err := p.clientCreateActionWithLabels(ctx, outputs, normDesc, normLabels, false)
+		res, err := p.clientCreateActionWithSpec(ctx, outputs, normDesc, normLabels, spec, false)
 		if err != nil {
 			return nil, nil, 0, 0, err
 		}
@@ -65,6 +70,7 @@ func (p *Port) BuildFundedTxWithMeta(ctx context.Context, outputs []*transaction
 			OutputDescription: normDesc,
 		}
 	}
+	applyOutputTagSpec(wOuts, spec)
 	noSend := true
 	randomize := false
 	res, err := p.engine.CreateAction(ctx, sdkwallet.CreateActionArgs{

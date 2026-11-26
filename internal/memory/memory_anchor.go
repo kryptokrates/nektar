@@ -147,6 +147,12 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 					_ = s.db.DeletePendingAnchor(shard, nextN)
 					return nil, eErr
 				}
+				anchorSpec := &nwallet.OutputTagSpec{
+					Basket: nwallet.BasketAnchors,
+					Tags:   []string{"anchor", "shard:" + shard, fmt.Sprintf("batch:%d", nextN)},
+					CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"anchor","shard":%q,"shardId":%q,"n":%d,"size":%d,"R":%q,"Rp":%q}`,
+						shard, shardID, nextN, len(leaves), hex.EncodeToString(root), hex.EncodeToString(rp)),
+				}
 				meta := nwallet.ActionAnchorAppend(shard, nextN, len(leaves))
 				cRes, cErr := s.port.BuildCovenantSpendTx(ctx, chain.CovenantSpendRequest{
 					InputTx:               prevTx,
@@ -157,6 +163,7 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 					FuelFromWallet:        true,
 					Description:           meta.Description,
 					Labels:                meta.Labels,
+					OutputSpec:            anchorSpec,
 					BuildUnlock: func(spendTx *transaction.Transaction, changePKH []byte, changeSats uint64) (*script.Script, error) {
 						return contracts.BuildAnchorAppendUnlock(
 							ctx, spendTx, 0, prevTx.Outputs[0], root, uint64(len(leaves)),
@@ -191,8 +198,14 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 			_ = s.db.DeletePendingAnchor(shard, nextN)
 			return nil, err
 		}
+		anchorSpec := &nwallet.OutputTagSpec{
+			Basket: nwallet.BasketAnchors,
+			Tags:   []string{"anchor", "shard:" + shard, fmt.Sprintf("batch:%d", nextN)},
+			CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"anchor","shard":%q,"shardId":%q,"n":%d,"size":%d,"R":%q,"Rp":%q}`,
+				shard, shardID, nextN, len(leaves), hex.EncodeToString(root), hex.EncodeToString(rp)),
+		}
 		meta := nwallet.ActionAnchorShard(shard, nextN, len(leaves))
-		tx, beef, fee, spend, err = s.port.BuildFundedTxWithMeta(ctx, []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)}, meta.Description, meta.Labels)
+		tx, beef, fee, spend, err = s.port.BuildFundedTxWithBasket(ctx, []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)}, meta.Description, meta.Labels, anchorSpec)
 		if err != nil {
 			_ = s.db.DeletePendingAnchor(shard, nextN)
 			return nil, err

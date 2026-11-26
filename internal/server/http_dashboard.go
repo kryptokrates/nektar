@@ -44,7 +44,7 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 	policies, _ := a.mem.DB().ListOperatorPolicies()
 	pendingApprs, _ := a.mem.DB().ListPendingApprovals()
 
-	var earned, earned24h uint64
+	var earned, earned24h, spent, spent24h uint64
 	cutoff24h := time.Now().Add(-24 * time.Hour).Unix()
 	amounts := make([]uint64, 0, len(rcps)+len(deals))
 	rcpList := make([]map[string]any, 0, len(rcps))
@@ -89,12 +89,43 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		})
 	}
 	for _, d := range deals {
-		if d.Role == "seller" && d.Status == "settled" && d.PriceSats > 0 && d.PaymentTxID != "" {
-			earned += d.PriceSats
-			if d.UpdatedAt >= cutoff24h {
-				earned24h += d.PriceSats
+		if d.Status == "settled" && d.PriceSats > 0 {
+			if d.Role == "seller" && d.PaymentTxID != "" {
+				earned += d.PriceSats
+				if d.UpdatedAt >= cutoff24h {
+					earned24h += d.PriceSats
+				}
+				amounts = append(amounts, d.PriceSats)
+			} else if d.Role == "buyer" {
+				spent += d.PriceSats
+				if d.UpdatedAt >= cutoff24h {
+					spent24h += d.PriceSats
+				}
 			}
-			amounts = append(amounts, d.PriceSats)
+		}
+	}
+	dailySpent, _ := a.mem.DB().DailySpend("market_daily_spend")
+	if dailySpent > spent {
+		spent = dailySpent
+	}
+	var dailyCapSats, perDealCapSats uint64
+	for _, p := range policies {
+		if p.Active {
+			if p.MaxPerDay > dailyCapSats {
+				dailyCapSats = p.MaxPerDay
+			}
+			if p.MaxPerDeal > perDealCapSats {
+				perDealCapSats = p.MaxPerDeal
+			}
+		}
+	}
+	var activeVault map[string]any
+	if vRec, _, vErr := market.LoadActiveVault(a.mem.DB()); vErr == nil && vRec != nil && vRec.Satoshis > 0 {
+		activeVault = map[string]any{
+			"txid":            vRec.TxID,
+			"sats":            vRec.Satoshis,
+			"maxPerSpendSats": vRec.State.PerTxCap,
+			"paused":          vRec.State.Paused,
 		}
 	}
 
@@ -454,6 +485,18 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		}
 	}
 
+	custody := "embedded"
+	if a.mem.Chain().WalletMode() == "client" {
+		custody = "bsv-desktop"
+	}
+	assetBaskets := a.mem.Chain().ListAssetBaskets(ctx)
+	var basketLockedSats uint64
+	var basketItems int
+	for _, b := range assetBaskets {
+		basketLockedSats += b.TotalSats
+		basketItems += b.Count
+	}
+
 	return map[string]any{
 		"network":   a.mem.Chain().Network(),
 		"model":     "nektar/v0.1-go",
@@ -467,20 +510,30 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 			"next":     nextStep,
 		},
 		"treasury": map[string]any{
-			"address":         addr,
-			"identityPub":     a.mem.Chain().IdentityPubHex(),
-			"sats":            bal,
-			"confirmedSats":   balBreakdown.ConfirmedSats,
-			"unprovenSats":    balBreakdown.UnprovenSats,
-			"reservedSats":    balBreakdown.ReservedSats,
-			"utxos":           utxos,
-			"fuelUtxos":       balBreakdown.FuelCount,
-			"reserveUtxos":    balBreakdown.ReserveCount,
-			"defaultUtxos":    balBreakdown.DefaultCount,
-			"walletMode":      a.mem.Chain().WalletMode(),
-			"feeRateSatPerKB": feeRate,
-			"funded":          bal > 0,
-			"payments":        "BRC-100 + BRC-29 + AtomicBEEF",
+			"address":          addr,
+			"identityPub":      a.mem.Chain().IdentityPubHex(),
+			"sats":             bal,
+			"confirmedSats":    balBreakdown.ConfirmedSats,
+			"unprovenSats":     balBreakdown.UnprovenSats,
+			"reservedSats":     balBreakdown.ReservedSats,
+			"spent":            spent,
+			"spent24h":         spent24h,
+			"dailySpent":       dailySpent,
+			"dailyCapSats":     dailyCapSats,
+			"perDealCapSats":   perDealCapSats,
+			"vault":            activeVault,
+			"utxos":            utxos,
+			"fuelUtxos":        balBreakdown.FuelCount,
+			"reserveUtxos":     balBreakdown.ReserveCount,
+			"defaultUtxos":     balBreakdown.DefaultCount,
+			"walletMode":       a.mem.Chain().WalletMode(),
+			"custody":          custody,
+			"baskets":          assetBaskets,
+			"basketItems":      basketItems,
+			"basketLockedSats": basketLockedSats,
+			"feeRateSatPerKB":  feeRate,
+			"funded":           bal > 0 || custody == "bsv-desktop",
+			"payments":         "BRC-100 + BRC-29 + AtomicBEEF",
 		},
 		"receipts": map[string]any{
 			"count":     len(rcps),

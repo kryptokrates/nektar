@@ -48,13 +48,45 @@
     status?: string
     description?: string
     isOutgoing?: boolean
+    labels?: string[]
   }
   let actions = $state<WalletAction[]>([])
+  let agentFilter = $state<string>('all')
+  let expandedBasket = $state<string>('')
   const spark = $derived(sparklinePath(s.receipts.amounts, 320, 44))
+  const isDesktopCustody = $derived((s.treasury.walletMode ?? 'embedded') === 'client')
+  const baskets = $derived(s.treasury.baskets ?? [])
+  const totalBasketItems = $derived(s.treasury.basketItems ?? baskets.reduce((acc, b) => acc + b.count, 0))
+  const totalBasketSats = $derived(s.treasury.basketLockedSats ?? baskets.reduce((acc, b) => acc + b.totalSats, 0))
+
+  const availableAgents = $derived.by(() => {
+    const set = new Set<string>()
+    for (const a of actions) {
+      for (const lbl of a.labels ?? []) {
+        if (lbl.startsWith('agent:') && lbl.length > 6) {
+          set.add(lbl.slice(6))
+        }
+      }
+    }
+    return Array.from(set).sort()
+  })
+
+  const filteredActions = $derived.by(() => {
+    if (agentFilter === 'all') return actions
+    const want = `agent:${agentFilter}`
+    return actions.filter((a) => (a.labels ?? []).includes(want))
+  })
+
+  function explorerTxUrl(txid: string): string {
+    if (!txid) return ''
+    if (s.network === 'main') return `https://whatsonchain.com/tx/${txid}`
+    if (s.network === 'testnet') return `https://test.whatsonchain.com/tx/${txid}`
+    return ''
+  }
 
   async function loadActions() {
     try {
-      const r = await fetch('/v1/wallet/actions?limit=25')
+      const r = await fetch('/v1/wallet/actions?limit=40')
       if (r.ok) {
         const j = (await r.json()) as { actions?: WalletAction[] }
         actions = j.actions ?? []
@@ -186,8 +218,23 @@
   <div class="wallet-grid">
     <div class="wallet-left">
       <section class="hero">
-        <div class="bal">{fmtSats(s.treasury.sats)}</div>
-        <div class="unit">satoshis {#if s.receipts.earned > 0}· <span class="ok">+{fmtSats(s.receipts.earned)} earned</span>{/if}</div>
+        {#if isDesktopCustody}
+          <div class="custody-pill">
+            <span class="dot"></span>
+            <span>BSV Desktop Custody · Zero Local Keys</span>
+          </div>
+          <div class="bal">{totalBasketItems}</div>
+          <div class="unit">
+            on-chain basket {totalBasketItems === 1 ? 'asset' : 'assets'} · {fmtSats(totalBasketSats)} locked sats
+          </div>
+          <div class="custody-note">
+            Spendable BSV balance &amp; Receive live privately inside <b>BSV Desktop</b> (:3321).
+            Nektar only reads its own labeled actions &amp; covenant baskets over BRC-100.
+          </div>
+        {:else}
+          <div class="bal">{fmtSats(s.treasury.sats)}</div>
+          <div class="unit">satoshis {#if s.receipts.earned > 0}· <span class="ok">+{fmtSats(s.receipts.earned)} earned</span>{/if}</div>
+        {/if}
 
         {#if spark.line}
           <svg viewBox="0 0 320 44" class="spark" preserveAspectRatio="none">
@@ -197,17 +244,17 @@
         {/if}
 
         <div class="circle-bar">
-          {#if s.network === 'testnet'}
+          {#if !isDesktopCustody && s.network === 'testnet'}
             <button class="cact" onclick={requestFaucet} disabled={busy}>
               <span class="ring pri">⚡</span>
               <span>Faucet</span>
             </button>
           {/if}
-          <button class="cact" onclick={() => (sheet = sheet === 'receive' ? 'none' : 'receive')}>
-            <span class="ring" class:on={sheet === 'receive'}>↓</span>
-            <span>Receive</span>
-          </button>
-          {#if (s.treasury.walletMode ?? 'embedded') === 'embedded'}
+          {#if !isDesktopCustody}
+            <button class="cact" onclick={() => (sheet = sheet === 'receive' ? 'none' : 'receive')}>
+              <span class="ring" class:on={sheet === 'receive'}>↓</span>
+              <span>Receive</span>
+            </button>
             <button class="cact" onclick={() => (sheet = sheet === 'send' ? 'none' : 'send')}>
               <span class="ring" class:on={sheet === 'send'}>↑</span>
               <span>Send</span>
@@ -223,6 +270,53 @@
           </button>
         </div>
       </section>
+
+      {#if baskets.length > 0}
+        <section class="baskets-sec">
+          <div class="section-lbl">BRC-100 Asset Baskets</div>
+          <div class="basket-list">
+            {#each baskets as b}
+              <button
+                class="basket-card"
+                class:open={expandedBasket === b.basket}
+                onclick={() => (expandedBasket = expandedBasket === b.basket ? '' : b.basket)}
+              >
+                <div class="brow">
+                  <div class="bmeta">
+                    <b>{b.title}</b>
+                    <code class="bcode">{b.basket}</code>
+                  </div>
+                  <div class="bstat">
+                    <span class="bcnt">{b.count}</span>
+                    <span class="bsats">{fmtSats(b.totalSats)} sats</span>
+                  </div>
+                </div>
+                <div class="bdesc">{b.description}</div>
+              </button>
+              {#if expandedBasket === b.basket && b.items.length > 0}
+                <div class="bitems">
+                  {#each b.items as item}
+                    <div class="bitem">
+                      <div class="bitem-l">
+                        {#if item.meta?.shard}
+                          <b>#{String(item.meta.shard)}</b>
+                          <span class="mut">batch #{String(item.meta.n ?? 0)} · {String(item.meta.size ?? 0)} frags</span>
+                        {:else if item.meta?.kind}
+                          <b>{String(item.meta.kind)}</b>
+                          <span class="mut">{shortHash(item.outpoint, 10, 6)}</span>
+                        {:else}
+                          <code class="bcode">{shortHash(item.outpoint, 10, 6)}</code>
+                        {/if}
+                      </div>
+                      <div class="bitem-r">{fmtSats(item.satoshis)} sats</div>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            {/each}
+          </div>
+        </section>
+      {/if}
 
       {#if sheet === 'receive'}
         <section class="sheet receive-sheet">
@@ -277,13 +371,32 @@
     </div>
 
     <div class="wallet-right">
-      <div class="section-lbl">Activity</div>
-      {#each actions as a}
+      <div class="act-head">
+        <div class="section-lbl">
+          Activity {#if isDesktopCustody}<span class="sync-tag">· synced with BSV Desktop</span>{/if}
+        </div>
+        {#if availableAgents.length > 0}
+          <div class="agent-pills">
+            <button class="apill" class:on={agentFilter === 'all'} onclick={() => (agentFilter = 'all')}>All</button>
+            {#each availableAgents as ag}
+              <button class="apill" class:on={agentFilter === ag} onclick={() => (agentFilter = ag)}>{ag}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+      {#each filteredActions as a}
+        {@const tx = a.txid || a.tx_id || ''}
+        {@const url = explorerTxUrl(tx)}
         <div class="txrow">
           <div class="txico" class:out={a.isOutgoing}>{a.isOutgoing ? '↑' : '↓'}</div>
           <div class="txl">
             <b>{a.description || (a.isOutgoing ? 'Sent BSV' : 'Received BSV')}</b>
-            <span class="mut">{a.status || 'settled'}</span>
+            <span class="mut">
+              {a.status || 'settled'}
+              {#if tx}
+                · {#if url}<a class="txlink" href={url} target="_blank" rel="noreferrer">{shortHash(tx, 8, 6)}</a>{:else}{shortHash(tx, 8, 6)}{/if}
+              {/if}
+            </span>
           </div>
           <div class="amt" class:out={a.isOutgoing}>
             {a.isOutgoing ? '-' : '+'}{fmtSats(Math.abs(a.satoshis ?? 0))} sats
@@ -291,8 +404,14 @@
         </div>
       {:else}
         <div class="empty">
-          <p>No transactions yet</p>
-          <small>Tap <b>Faucet</b> or <b>Receive</b> to fund automatic anchoring &amp; trades.</small>
+          <p>No Nektar transactions yet</p>
+          <small>
+            {#if isDesktopCustody}
+              Anchor a memory shard or trade knowledge — transactions signed by BSV Desktop appear here live.
+            {:else}
+              Tap <b>Faucet</b> or <b>Receive</b> to fund automatic anchoring &amp; trades.
+            {/if}
+          </small>
         </div>
       {/each}
     </div>
@@ -417,4 +536,48 @@
   .mut { color: var(--mut); font-size: 0.76rem; }
   .empty { padding: 3.5rem 1.5rem; text-align: center; color: var(--mut); }
   .empty p { margin: 0 0 0.3rem; color: var(--ink); font-size: 0.96rem; font-weight: 600; }
+  .custody-pill {
+    display: inline-flex; align-items: center; gap: 0.45rem;
+    padding: 0.28rem 0.75rem; margin-bottom: 0.85rem; border-radius: 999px;
+    font-size: 0.72rem; font-weight: 700; color: var(--ok);
+    background: rgb(76 194 107 / 12%); border: 1px solid rgb(76 194 107 / 32%);
+  }
+  .custody-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  .custody-note {
+    margin: 0.75rem auto 0; max-width: 320px; font-size: 0.76rem; line-height: 1.45; color: var(--mut);
+  }
+  .custody-note b { color: var(--ink); }
+  .baskets-sec { border-bottom: 1px solid var(--line); padding-bottom: 0.85rem; }
+  .basket-list { display: grid; gap: 0.45rem; padding: 0 1.1rem; }
+  .basket-card {
+    text-align: left; background: var(--surf); border: 1px solid var(--line);
+    border-radius: 12px; padding: 0.65rem 0.8rem; cursor: pointer; color: inherit; font: inherit;
+    transition: border-color 0.14s;
+  }
+  .basket-card:hover, .basket-card.open { border-color: var(--amber); }
+  .brow { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+  .bmeta { display: flex; flex-direction: column; gap: 0.12rem; min-width: 0; }
+  .bmeta b { font-size: 0.84rem; color: var(--ink); }
+  .bcode { font-size: 0.7rem; color: var(--amber); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .bstat { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+  .bcnt { font-size: 0.92rem; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .bsats { font-size: 0.7rem; color: var(--mut); }
+  .bdesc { margin-top: 0.3rem; font-size: 0.73rem; color: var(--mut); }
+  .bitems {
+    margin: -0.2rem 0 0.25rem; padding: 0.45rem 0.75rem; border-radius: 10px;
+    background: var(--bg); border: 1px solid var(--line); display: grid; gap: 0.4rem;
+  }
+  .bitem { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.76rem; }
+  .bitem-l { display: flex; flex-direction: column; min-width: 0; }
+  .bitem-r { font-weight: 700; color: var(--ink); white-space: nowrap; }
+  .act-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; padding-right: 1rem; }
+  .sync-tag { color: var(--ok); text-transform: none; letter-spacing: 0; font-weight: 600; }
+  .agent-pills { display: flex; gap: 0.3rem; padding-top: 0.45rem; }
+  .apill {
+    background: var(--surf); border: 1px solid var(--line); color: var(--mut);
+    border-radius: 999px; padding: 0.2rem 0.6rem; font: inherit; font-size: 0.72rem; font-weight: 700; cursor: pointer;
+  }
+  .apill.on { border-color: var(--amber); color: var(--amber); background: rgb(247 153 27 / 12%); }
+  .txlink { color: var(--amber); text-decoration: none; }
+  .txlink:hover { text-decoration: underline; }
 </style>

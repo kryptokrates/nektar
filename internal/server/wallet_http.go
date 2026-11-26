@@ -19,6 +19,7 @@ import (
 func (a *App) registerWalletRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/wallet", a.withAuth(http.HandlerFunc(a.handleWalletStatus)))
 	mux.Handle("GET /v1/wallet/desktop", a.withAuth(http.HandlerFunc(a.handleWalletDesktopProbe)))
+	mux.Handle("GET /v1/wallet/baskets", a.withAuth(http.HandlerFunc(a.handleWalletBaskets)))
 	mux.Handle("GET /v1/wallet/utxos", a.withAuth(http.HandlerFunc(a.handleWalletUTXOs)))
 	mux.Handle("GET /v1/wallet/actions", a.withAuth(http.HandlerFunc(a.handleWalletActions)))
 	mux.Handle("POST /v1/wallet/sync", a.withAuth(http.HandlerFunc(a.handleWalletSync)))
@@ -179,6 +180,29 @@ func (a *App) handleWalletUTXOs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"basket": qBasket, "total": res.TotalOutputs, "utxos": res.Outputs})
 }
 
+func (a *App) handleWalletBaskets(w http.ResponseWriter, r *http.Request) {
+	ch := a.mem.Chain()
+	custody := "embedded"
+	if ch.WalletMode() == "client" {
+		custody = "bsv-desktop"
+	}
+	baskets := ch.ListAssetBaskets(r.Context())
+	var totalItems int
+	var totalLockedSats uint64
+	for _, b := range baskets {
+		totalItems += b.Count
+		totalLockedSats += b.TotalSats
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"walletMode":      ch.WalletMode(),
+		"custody":         custody,
+		"network":         ch.Network(),
+		"totalItems":      totalItems,
+		"totalLockedSats": totalLockedSats,
+		"baskets":         baskets,
+	})
+}
+
 func (a *App) handleWalletActions(w http.ResponseWriter, r *http.Request) {
 	limit := 25
 	if lStr := r.URL.Query().Get("limit"); lStr != "" {
@@ -186,6 +210,7 @@ func (a *App) handleWalletActions(w http.ResponseWriter, r *http.Request) {
 			limit = v
 		}
 	}
+	agentFilter := nwallet.SanitizeAgentID(r.URL.Query().Get("agent"))
 	if eng := a.mem.Chain().Engine(); eng != nil {
 		txs, total, err := eng.ListRecentActions(r.Context(), limit, 0)
 		if err != nil {
@@ -196,9 +221,20 @@ func (a *App) handleWalletActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uLim := uint32(limit)
-	res, err := a.mem.Chain().WalletInterface().ListActions(r.Context(), sdkwallet.ListActionsArgs{
-		Limit: &uLim,
-	}, "nektar")
+	labels := []string{"nektar"}
+	if agentFilter != "" {
+		labels = append(labels, "agent:"+agentFilter)
+	}
+	incLabels := true
+	args := sdkwallet.ListActionsArgs{
+		Labels:        labels,
+		IncludeLabels: &incLabels,
+		Limit:         &uLim,
+	}
+	if len(labels) > 1 {
+		args.LabelQueryMode = sdkwallet.QueryModeAll
+	}
+	res, err := a.mem.Chain().WalletInterface().ListActions(r.Context(), args, nwallet.DefaultDesktopOriginator)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -320,6 +356,12 @@ func (a *App) handleWalletFundDesktop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleWalletSend(w http.ResponseWriter, r *http.Request) {
+	if a.mem.Chain().WalletMode() == "client" {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "direct wallet sends are disabled in BSV Desktop client mode — send funds directly from BSV Desktop (Nektar holds zero signing keys)",
+		})
+		return
+	}
 	var in struct {
 		ToAddress     string `json:"toAddress,omitempty"`
 		ToIdentityKey string `json:"toIdentityKey,omitempty"`

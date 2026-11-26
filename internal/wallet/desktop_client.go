@@ -449,8 +449,39 @@ func (c *DesktopJSONClient) AbortAction(ctx context.Context, args sdkwallet.Abor
 	return &res, nil
 }
 
+type desktopListActionsArgsWire struct {
+	Labels                           []string            `json:"labels"`
+	LabelQueryMode                   sdkwallet.QueryMode `json:"labelQueryMode,omitempty"`
+	IncludeLabels                    *bool               `json:"includeLabels,omitempty"`
+	IncludeInputs                    *bool               `json:"includeInputs,omitempty"`
+	IncludeInputSourceLockingScripts *bool               `json:"includeInputSourceLockingScripts,omitempty"`
+	IncludeInputUnlockingScripts     *bool               `json:"includeInputUnlockingScripts,omitempty"`
+	IncludeOutputs                   *bool               `json:"includeOutputs,omitempty"`
+	IncludeOutputLockingScripts      *bool               `json:"includeOutputLockingScripts,omitempty"`
+	Limit                            *uint32             `json:"limit,omitempty"`
+	Offset                           *uint32             `json:"offset,omitempty"`
+	SeekPermission                   *bool               `json:"seekPermission,omitempty"`
+}
+
 func (c *DesktopJSONClient) ListActions(ctx context.Context, args sdkwallet.ListActionsArgs, originator string) (*sdkwallet.ListActionsResult, error) {
-	data, err := c.call(ctx, "listActions", &args, originator)
+	labels := args.Labels
+	if len(labels) == 0 {
+		labels = []string{"nektar"}
+	}
+	wire := desktopListActionsArgsWire{
+		Labels:                           labels,
+		LabelQueryMode:                   args.LabelQueryMode,
+		IncludeLabels:                    args.IncludeLabels,
+		IncludeInputs:                    args.IncludeInputs,
+		IncludeInputSourceLockingScripts: args.IncludeInputSourceLockingScripts,
+		IncludeInputUnlockingScripts:     args.IncludeInputUnlockingScripts,
+		IncludeOutputs:                   args.IncludeOutputs,
+		IncludeOutputLockingScripts:      args.IncludeOutputLockingScripts,
+		Limit:                            args.Limit,
+		Offset:                           args.Offset,
+		SeekPermission:                   args.SeekPermission,
+	}
+	data, err := c.call(ctx, "listActions", &wire, originator)
 	if err != nil {
 		return nil, err
 	}

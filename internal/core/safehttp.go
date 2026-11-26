@@ -139,22 +139,24 @@ func SafeHTTPClient(opts SafeHTTPOpts) *http.Client {
 }
 
 // AllowPrivateOutboundForNetwork reports whether private/loopback outbound peer URLs are
-// permitted for network. Mainnet NEVER permits private/loopback peers; testnet only permits
-// them when NEKTAR_ALLOW_LOCAL_PEERS=1 is explicitly set for local multi-node testing.
+// permitted for network. Live networks (main/testnet) block private/loopback peers by default
+// and only permit them when NEKTAR_ALLOW_LOCAL_PEERS=1 is explicitly set by the operator
+// (e.g. co-located Docker Compose hubs or local multi-node clusters).
 func AllowPrivateOutboundForNetwork(network string) bool {
 	n := strings.ToLower(strings.TrimSpace(network))
-	return n == "memory" || n == "regtest" || n == "" || (n == "testnet" && os.Getenv("NEKTAR_ALLOW_LOCAL_PEERS") == "1")
+	return n == "memory" || n == "regtest" || n == "" || ((n == "testnet" || n == "main") && os.Getenv("NEKTAR_ALLOW_LOCAL_PEERS") == "1")
 }
 
 // SafeHTTPClientForNetwork returns an SSRF-hardened *http.Client calibrated to the BSV network:
 // memory/regtest allow loopback test servers; main strictly blocks private/loopback/metadata IPs
-// and enforces HTTPS; testnet blocks private/loopback by default unless NEKTAR_ALLOW_LOCAL_PEERS=1
-// is explicitly opted in for local multi-node testnet clusters.
+// and enforces HTTPS by default; testnet/main only permit local/private peers when
+// NEKTAR_ALLOW_LOCAL_PEERS=1 is explicitly opted in by the operator.
 func SafeHTTPClientForNetwork(network string, timeout time.Duration) *http.Client {
 	n := strings.ToLower(strings.TrimSpace(network))
+	allowPriv := AllowPrivateOutboundForNetwork(n)
 	return SafeHTTPClient(SafeHTTPOpts{
 		Timeout:      timeout,
-		AllowPrivate: AllowPrivateOutboundForNetwork(n),
-		RequireHTTPS: n == "main",
+		AllowPrivate: allowPriv,
+		RequireHTTPS: n == "main" && !allowPriv,
 	})
 }

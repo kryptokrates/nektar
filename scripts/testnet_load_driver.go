@@ -108,7 +108,9 @@ var httpCli = &http.Client{Timeout: 210 * time.Second}
 
 func main() {
 	binPath := flag.String("bin", "./nektar", "Path to compiled nektar binary")
-	network := flag.String("network", "testnet", "Network: testnet | memory")
+	network := flag.String("network", "testnet", "Network: testnet | main | memory")
+	confirmMainnet := flag.String("confirm-mainnet", "", "Must equal I_UNDERSTAND when -network=main")
+	sweepBack := flag.Bool("sweep-back", false, "Sweep leftover Leaf & Agent balances back to Spine after completion")
 	workDir := flag.String("work-dir", "", "Working directory containing node data dirs")
 	remembersN := flag.Int("remembers", 120, "Total concurrent remember ops in Wave 1")
 	anchorsN := flag.Int("anchors", 12, "Total anchor txs in Wave 1")
@@ -118,6 +120,12 @@ func main() {
 	useRestate := flag.Bool("restate", true, "Require live Restate v1.8.1 on all 6 trading agents")
 	reportPath := flag.String("report", "", "Optional path to write JSON scorecard")
 	flag.Parse()
+
+	isMain := *network == "main"
+	isLive := *network == "testnet" || isMain
+	if isMain && *confirmMainnet != "I_UNDERSTAND" {
+		fatal("refusing -network=main without -confirm-mainnet=I_UNDERSTAND")
+	}
 
 	if *workDir == "" {
 		d, err := os.MkdirTemp("", "nektar-load-*")
@@ -159,20 +167,42 @@ func main() {
 	commonEnv := []string{
 		"NEKTAR_WALLET_PROFILE=throughput",
 		"NEKTAR_JEV_MODE=off",
-		"NEKTAR_MAX_SPEND_SATS_PER_DAY=2000000",
-		"NEKTAR_MAX_FEE_SATS_PER_TX=15000",
-		"NEKTAR_FEE_RATE_SAT_KB=150",
 		"NEKTAR_ALLOW_LOCAL_PEERS=1",
 		"NEKTAR_ANCHOR_CADENCE_SEC=3600",
 	}
+	if isMain {
+		commonEnv = append(commonEnv,
+			"NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND",
+			"NEKTAR_SETTLE_SPEC=broadcaster:main",
+			"NEKTAR_SETTLE_DEPTH=1",
+			"NEKTAR_MAX_SPEND_SATS_PER_DAY=60000",
+			"NEKTAR_MAX_FEE_SATS_PER_TX=2000",
+			"NEKTAR_FEE_RATE_SAT_KB=100",
+		)
+	} else {
+		commonEnv = append(commonEnv,
+			"NEKTAR_MAX_SPEND_SATS_PER_DAY=2000000",
+			"NEKTAR_MAX_FEE_SATS_PER_TX=15000",
+			"NEKTAR_FEE_RATE_SAT_KB=150",
+		)
+	}
 	// When 9 processes share 1 IP against public unkeyed WhatsOnChain (3 req/s limit),
 	// run a shared read-through Chaintracks v2 header cache proxy on 127.0.0.1:18809
-	// backed 100% by real api.whatsonchain.com/v1/bsv/test block headers (paced at 2.3 req/s).
-	// Every Nektar process still verifies 100% of 80-byte PoW + Prev-linkage locally!
-	if *network == "testnet" {
-		stopHdrProxy := startWoCReadThroughHeaderProxy("127.0.0.1:18809", *workDir)
+	// backed 100% by real api.whatsonchain.com/v1/bsv/<net> block headers (paced at <2 req/s).
+	// On Mainnet, pair it with official Babbage Chaintracks v2 for strict >=2 distinct-origin PoW quorum!
+	// Every Nektar process still verifies 100% of 80-byte PoW + Prev-linkage locally.
+	if isLive {
+		wocNet := "test"
+		if isMain {
+			wocNet = "main"
+		}
+		stopHdrProxy := startWoCReadThroughHeaderProxy("127.0.0.1:18809", *workDir, wocNet)
 		defer stopHdrProxy()
-		commonEnv = append(commonEnv, "NEKTAR_HEADERS_SOURCE=chaintracks:http://127.0.0.1:18809/v2")
+		if isMain {
+			commonEnv = append(commonEnv, "NEKTAR_HEADERS_SOURCE=chaintracks:http://127.0.0.1:18809/v2,chaintracks:https://mainnet-chaintracks.babbage.systems/v2")
+		} else {
+			commonEnv = append(commonEnv, "NEKTAR_HEADERS_SOURCE=chaintracks:http://127.0.0.1:18809/v2")
+		}
 	}
 	hubEnv := append(append([]string(nil), commonEnv...), "NEKTAR_RESTATE_DISABLE=1")
 	agentEnv := append([]string(nil), commonEnv...)
@@ -345,11 +375,11 @@ func main() {
 		return w
 	}
 
-	// Sync any node with unproven UTXOs (depth > 3) so newly mined BSV Testnet blocks reset depth!
-	if *network == "testnet" {
+	// Sync any node with unproven UTXOs so newly mined BSV blocks reset depth!
+	if isLive {
 		for _, k := range allKeys {
 			w := getWallet(k)
-			if asUint64(w["maxUnprovenDepth"]) > 3 {
+			if asUint64(w["maxUnprovenDepth"]) > 3 || (isMain && asUint64(w["unprovenSats"]) > 0) {
 				if sr, sErr := httpJSON(http.MethodPost, specs[k].URL+"/v1/wallet/sync", map[string]any{}); sErr == nil {
 					fmt.Printf("  [PROOF] %-10s proved=%v confirmed=%v unproven=%v depth=%v\n",
 						k, sr["proved"], sr["confirmedSats"], sr["unprovenSats"], getWallet(k)["maxUnprovenDepth"])
@@ -358,9 +388,13 @@ func main() {
 			}
 		}
 	}
+	spineNeedMin := uint64(40000)
+	if isMain {
+		spineNeedMin = 45000
+	}
 	sw := getWallet("spine")
-	if *network == "testnet" && asUint64(sw["balanceSats"]) < 40000 {
-		fmt.Printf("  Waiting 6s past boot sync throttle, then syncing Spine wallet from BSV Testnet...\n")
+	if isLive && asUint64(sw["balanceSats"]) < spineNeedMin {
+		fmt.Printf("  Waiting 6s past boot sync throttle, then syncing Spine wallet from BSV %s...\n", strings.ToUpper(*network))
 		time.Sleep(6 * time.Second)
 		syncRes, sErr := httpJSON(http.MethodPost, specs["spine"].URL+"/v1/wallet/sync", map[string]any{})
 		if sErr != nil {
@@ -376,31 +410,51 @@ func main() {
 		fmt.Printf("  %-10s addr=%v  bal=%v (conf=%v depth=%v) utxos=%v fuel=%v\n", k, w["fundAddress"], w["balanceSats"], w["confirmedSats"], w["maxUnprovenDepth"], w["utxos"], w["fuelCount"])
 	}
 
-	if *network == "testnet" {
+	if isLive {
 		spineBal := asUint64(wallets["spine"]["balanceSats"])
-		if spineBal < 40000 {
-			fatal("Spine wallet %v needs >= 40,000 tBSV sats (currently %d)", wallets["spine"]["fundAddress"], spineBal)
+		// Count how many non-spine nodes still need funding to determine if Spine actually needs the full fan-out float.
+		leafMin, leafTarget := uint64(55000), uint64(70000)
+		agentMin, agentTarget := uint64(30000), uint64(42000)
+		if isMain {
+			leafMin, leafTarget = 4500, 6000
+			agentMin, agentTarget = 3500, 4500
 		}
-		if asUint64(wallets["spine"]["fuelCount"]) < 16 {
+		var needFanoutTotal uint64
+		for _, k := range allKeys[1:] {
+			minB, tgtB := agentMin, agentTarget
+			if k == "leaf-a" || k == "leaf-b" {
+				minB, tgtB = leafMin, leafTarget
+			}
+			if asUint64(wallets[k]["balanceSats"]) < minB {
+				needFanoutTotal += tgtB + 60
+			}
+		}
+		if spineBal < needFanoutTotal+4000 {
+			fatal("Spine wallet %v needs >= %d %s sats for fan-out + reserve (currently %d)",
+				wallets["spine"]["fundAddress"], needFanoutTotal+4000, strings.ToUpper(*network), spineBal)
+		}
+		if !isMain && asUint64(wallets["spine"]["fuelCount"]) < 16 {
 			_, _ = httpJSON(http.MethodPost, specs["spine"].URL+"/v1/wallet/fuel", map[string]any{"target": 16, "sats": 10000})
 			time.Sleep(1500 * time.Millisecond)
 		}
 
 		for _, k := range allKeys[1:] {
-			needMin := uint64(30000)
-			targetAmt := uint64(42000)
+			needMin, targetAmt := agentMin, agentTarget
 			if k == "leaf-a" || k == "leaf-b" {
-				needMin = 55000
-				targetAmt = 70000
+				needMin, targetAmt = leafMin, leafTarget
 			}
 			bal := asUint64(wallets[k]["balanceSats"])
 			if bal < needMin {
 				idPub := fmt.Sprint(wallets[k]["identityPub"])
-				sendRes, err := httpJSON(http.MethodPost, specs["spine"].URL+"/v1/wallet/send", map[string]any{
+				sendBody := map[string]any{
 					"toIdentityKey": idPub,
 					"sats":          targetAmt,
 					"description":   "load-test BRC-29 fund " + k,
-				})
+				}
+				if isMain {
+					sendBody["confirm"] = "I_UNDERSTAND"
+				}
+				sendRes, err := httpJSON(http.MethodPost, specs["spine"].URL+"/v1/wallet/send", sendBody)
 				if err != nil {
 					fatal("BRC-29 fund %s (%s): %v", k, idPub, err)
 				}
@@ -418,7 +472,7 @@ func main() {
 					fatal("BRC-29 import on %s (tx=%s): %v", k, txid, iErr)
 				}
 				w := getWallet(k)
-				fmt.Printf("  [BRC-29] spine -> %-10s +%v tBSV (bal=%v) txid=%s\n", k, impRes["sats"], w["balanceSats"], shortTx(txid))
+				fmt.Printf("  [BRC-29] spine -> %-10s +%v sats (bal=%v) txid=%s\n", k, impRes["sats"], w["balanceSats"], shortTx(txid))
 				time.Sleep(250 * time.Millisecond)
 			}
 		}
@@ -429,11 +483,22 @@ func main() {
 	for _, k := range allKeys {
 		fc := asUint64(getWallet(k)["fuelCount"])
 		wantFuel := uint64(24)
-		if k == "leaf-a" || k == "leaf-b" {
+		fuelDenom := uint64(1500)
+		if isMain {
+			wantFuel = 8
+			fuelDenom = 400
+			if k == "leaf-a" || k == "leaf-b" {
+				wantFuel = 10
+				fuelDenom = 500
+			} else if k == "spine" {
+				wantFuel = 8
+				fuelDenom = 500
+			}
+		} else if k == "leaf-a" || k == "leaf-b" {
 			wantFuel = 42
 		}
-		if k != "spine" && fc < wantFuel-4 {
-			_, _ = httpJSON(http.MethodPost, specs[k].URL+"/v1/wallet/fuel", map[string]any{"target": wantFuel, "sats": 1500})
+		if (isMain || k != "spine") && fc < wantFuel-2 {
+			_, _ = httpJSON(http.MethodPost, specs[k].URL+"/v1/wallet/fuel", map[string]any{"target": wantFuel, "sats": fuelDenom})
 			time.Sleep(300 * time.Millisecond)
 		}
 	}
@@ -446,7 +511,11 @@ func main() {
 	// Approve operator buyer+seller policy on all nodes (including Leaf Hubs for Spine fee caps!),
 	// and prune any stale legacy host (e.g. 127.0.0.1:18620) carried over from staged DBs.
 	for _, k := range allKeys {
-		if _, err := httpJSON(http.MethodPost, specs[k].URL+"/v1/onboard/policy-preset", map[string]any{"preset": "both"}); err != nil {
+		polBody := map[string]any{"preset": "both"}
+		if isMain {
+			polBody["confirm"] = "I_UNDERSTAND"
+		}
+		if _, err := httpJSON(http.MethodPost, specs[k].URL+"/v1/onboard/policy-preset", polBody); err != nil {
 			fatal("policy-preset %s: %v", k, err)
 		}
 		_, _ = httpJSON(http.MethodDelete, specs[k].URL+"/v1/hosts?url=http://127.0.0.1:18620/hub", nil)
@@ -464,7 +533,7 @@ func main() {
 	sellers := []sellSpec{
 		{Node: "alpha", Shard: "v04-ops-alpha", Domains: []string{"ops"}, Price: 40, Description: "Alpha v0.4 ops runbook", FallbackTxt: "Alpha ops runbook: zero-downtime blue-green Kubernetes rollouts use PodDisruptionBudget."},
 		{Node: "beta", Shard: "v04-ops-beta", Domains: []string{"ops"}, Price: 35, Description: "Beta v0.4 cheaper ops runbook", FallbackTxt: "Beta ops runbook: etcd snapshots rotate every 15m with zstd-3 compression."},
-		{Node: "beta", Shard: "v04-bsv-beta", Domains: []string{"bsv"}, Price: 45, Description: "Beta v0.4 BSV Broadcaster policy", FallbackTxt: "Beta BSV Broadcaster policy: BSV Broadcaster testnet accepts EF transactions at 100 sat/kB."},
+		{Node: "beta", Shard: "v04-bsv-beta", Domains: []string{"bsv"}, Price: 45, Description: "Beta v0.4 BSV Broadcaster policy", FallbackTxt: "Beta BSV Broadcaster policy: BSV Broadcaster accepts EF transactions at 100 sat/kB."},
 		{Node: "gamma", Shard: "v04-agents-gamma", Domains: []string{"agents"}, Price: 40, Description: "Gamma v0.4 multi-agent architecture", FallbackTxt: "Gamma multi-agent architecture: Cursor MCP + L0 transparent proxy + BRC-369 Borg encryption."},
 		{Node: "delta-nat", Shard: "v04-nat-delta", Domains: []string{"nat"}, Price: 35, Description: "Delta v0.4 NAT-only A2A bbox relay", FallbackTxt: "Delta NAT-only A2A agents settle paid knowledge trades over Hub /bbox store-and-forward relay with zero open ports."},
 	}
@@ -503,13 +572,13 @@ func main() {
 			fmt.Printf("  [SEED] %-10s/%-16s remembered & anchored fresh v0.4 Rúnar covenant!\n", s.Node, s.Shard)
 		} else {
 			_, _ = httpJSON(http.MethodPost, specs[s.Node].URL+"/v1/anchor", map[string]any{"shard": s.Shard})
-			fmt.Printf("  [SEED] %-10s/%-16s exists; waiting for BSV Testnet block BUMP...\n", s.Node, s.Shard)
+			fmt.Printf("  [SEED] %-10s/%-16s exists; waiting for BSV %s block BUMP...\n", s.Node, s.Shard, strings.ToUpper(*network))
 		}
 		pendingMine = append(pendingMine, s)
 	}
-	if *network == "testnet" && len(pendingMine) > 0 {
-		fmt.Printf("  Waiting for BSV Testnet block to mine %d fresh v0.4 seller covenant anchor(s)...\n", len(pendingMine))
-		mineDeadline := time.Now().Add(20 * time.Minute)
+	if isLive && len(pendingMine) > 0 {
+		fmt.Printf("  Waiting for BSV %s block to mine %d fresh v0.4 seller covenant anchor(s)...\n", strings.ToUpper(*network), len(pendingMine))
+		mineDeadline := time.Now().Add(30 * time.Minute)
 		for len(pendingMine) > 0 && time.Now().Before(mineDeadline) {
 			// Sync unique seller wallets so Monitor.CheckForProofs -> OnTxMined upgrades anchor BUMPs!
 			synced := make(map[string]bool)
@@ -522,7 +591,7 @@ func main() {
 			var still []sellSpec
 			for _, s := range pendingMine {
 				if proveShardSettled(s.Node, s.Shard) {
-					fmt.Printf("  [MINED] %-10s/%-16s BUMP verified against live BSV Testnet PoW!\n", s.Node, s.Shard)
+					fmt.Printf("  [MINED] %-10s/%-16s BUMP verified against live BSV %s PoW!\n", s.Node, s.Shard, strings.ToUpper(*network))
 				} else {
 					still = append(still, s)
 				}
@@ -533,7 +602,7 @@ func main() {
 			}
 		}
 		if len(pendingMine) > 0 {
-			fatal("timed out waiting for BSV Testnet block to mine %d seller shard(s)", len(pendingMine))
+			fatal("timed out waiting for BSV %s block to mine %d seller shard(s)", strings.ToUpper(*network), len(pendingMine))
 		}
 	}
 	for _, s := range sellers {
@@ -796,7 +865,7 @@ func main() {
 	routes := []tradeSpec{
 		{Buyer: "epsilon", Domain: "agents", Question: "Cursor MCP L0 transparent proxy Borg encryption", Route: "Epsilon(LeafA)->Gamma(LeafB) [cross-hub HTTP]", MaxSats: 120},
 		{Buyer: "alpha", Domain: "nat", Question: "NAT-only A2A agents bbox store-and-forward relay", Route: "Alpha(LeafA)->DeltaNAT(LeafB) [cross-hub /bbox]", MaxSats: 120},
-		{Buyer: "gamma", Domain: "bsv", Question: "BSV Broadcaster testnet EF transactions 100 sat", Route: "Gamma(LeafB)->Beta(LeafA) [cross-hub HTTP]", MaxSats: 120},
+		{Buyer: "gamma", Domain: "bsv", Question: "BSV Broadcaster EF transactions 100 sat", Route: "Gamma(LeafB)->Beta(LeafA) [cross-hub HTTP]", MaxSats: 120},
 		{Buyer: "zeta-nat", Domain: "ops", Question: "etcd snapshots rotate every 15m zstd compression", Route: "ZetaNAT(Spine)->Beta(LeafA) [spine->leaf]", MaxSats: 120},
 		{Buyer: "beta", Domain: "nat", Question: "NAT-only A2A agents bbox relay zero open ports", Route: "Beta(LeafA)->DeltaNAT(LeafB) [cross-hub /bbox]", MaxSats: 120},
 		{Buyer: "delta-nat", Domain: "ops", Question: "etcd snapshots rotate Kubernetes ops runbook", Route: "DeltaNAT(LeafB)->Beta(LeafA) [NAT-buyer->leaf]", MaxSats: 120},
@@ -952,8 +1021,14 @@ func main() {
 		procMu.Unlock()
 	}
 
-	// Spot-check up to 4 real Testnet txids on WhatsOnChain (paced 500ms apart to avoid 429).
-	if *network == "testnet" {
+	// Spot-check up to 4 real live txids on WhatsOnChain (paced 500ms apart to avoid 429).
+	if isLive {
+		wocSeg := "test"
+		wocExplorer := "https://test.whatsonchain.com/tx/"
+		if isMain {
+			wocSeg = "main"
+			wocExplorer = "https://whatsonchain.com/tx/"
+		}
 		var sampleTxs []string
 		if len(sc.AnchorTxIDs) > 0 {
 			sampleTxs = append(sampleTxs, sc.AnchorTxIDs[0])
@@ -967,19 +1042,36 @@ func main() {
 			}
 		}
 		for _, txid := range sampleTxs {
-			time.Sleep(500 * time.Millisecond)
-			resp, err := httpCli.Get("https://api.whatsonchain.com/v1/bsv/test/tx/hash/" + txid)
+			time.Sleep(600 * time.Millisecond)
+			resp, err := httpCli.Get("https://api.whatsonchain.com/v1/bsv/" + wocSeg + "/tx/hash/" + txid)
 			if err == nil {
 				raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 				_ = resp.Body.Close()
 				if resp.StatusCode == 200 {
 					sc.SampleVerifiedTxs[txid] = "woc_confirmed_seen_200"
-					fmt.Printf("  [WoC ] VERIFIED ON-CHAIN TESTNET: https://test.whatsonchain.com/tx/%s\n", txid)
+					fmt.Printf("  [WoC ] VERIFIED ON-CHAIN %s: %s%s\n", strings.ToUpper(*network), wocExplorer, txid)
 				} else {
 					sc.SampleVerifiedTxs[txid] = fmt.Sprintf("woc_http_%d:%s", resp.StatusCode, strings.TrimSpace(string(raw)))
-					fmt.Printf("  [WoC ] tx=%s -> HTTP %d (Arcade broadcast mempool propagation)\n", txid, resp.StatusCode)
+					fmt.Printf("  [WoC ] tx=%s -> HTTP %d (BSV Broadcaster mempool propagation)\n", txid, resp.StatusCode)
 				}
 			}
+		}
+	}
+
+	if *sweepBack && isLive {
+		spineAddr := fmt.Sprint(getWallet("spine")["fundAddress"])
+		fmt.Printf("\n=== Optional Sweep-Back to Spine (%s) ===\n", spineAddr)
+		for _, k := range allKeys[1:] {
+			swRes, swErr := httpJSON(http.MethodPost, specs[k].URL+"/v1/wallet/sweep", map[string]any{
+				"to":      spineAddr,
+				"confirm": "I_UNDERSTAND",
+			})
+			if swErr != nil {
+				fmt.Printf("  [SWEEP] %-10s skipped/warn: %v\n", k, swErr)
+			} else {
+				fmt.Printf("  [SWEEP] %-10s -> spine sats=%v tx=%v\n", k, swRes["sats"], shortTx(fmt.Sprint(swRes["txid"])))
+			}
+			time.Sleep(250 * time.Millisecond)
 		}
 	}
 
@@ -1147,11 +1239,11 @@ func fatal(format string, args ...any) {
 	os.Exit(1)
 }
 
-// startWoCReadThroughHeaderProxy serves real BSV Testnet headers fetched live from
-// api.whatsonchain.com/v1/bsv/test over a local Chaintracks v2 API with global 600ms pacing,
+// startWoCReadThroughHeaderProxy serves real BSV headers fetched live from
+// api.whatsonchain.com/v1/bsv/<wocNet> over a local Chaintracks v2 API with global 600ms pacing,
 // per-height request coalescing, and on-disk caching of immutable mined block headers so
 // 9 co-located processes never trip WoC's per-IP 3 req/s limit.
-func startWoCReadThroughHeaderProxy(listenAddr, workDir string) func() {
+func startWoCReadThroughHeaderProxy(listenAddr, workDir, wocNet string) func() {
 	var paceMu sync.Mutex
 	var nextSlot time.Time
 	wocClient := &http.Client{Timeout: 20 * time.Second}
@@ -1177,7 +1269,7 @@ func startWoCReadThroughHeaderProxy(listenAddr, workDir string) func() {
 				case <-t.C:
 				}
 			}
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.whatsonchain.com/v1/bsv/test"+path, nil)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.whatsonchain.com/v1/bsv/"+wocNet+path, nil)
 			if err != nil {
 				return nil, 0, err
 			}
@@ -1207,7 +1299,7 @@ func startWoCReadThroughHeaderProxy(listenAddr, workDir string) func() {
 
 	var cacheMu sync.RWMutex
 	hdrCache := make(map[string]json.RawMessage)
-	cacheFile := filepath.Join(workDir, "woc-testnet-headers-cache.json")
+	cacheFile := filepath.Join(workDir, fmt.Sprintf("woc-%s-headers-cache.json", wocNet))
 	if b, err := os.ReadFile(cacheFile); err == nil {
 		_ = json.Unmarshal(b, &hdrCache)
 	}

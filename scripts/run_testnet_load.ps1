@@ -10,17 +10,22 @@
   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_testnet_load.ps1 -Network memory
 #>
 param(
-    [ValidateSet("testnet", "memory")]
+    [ValidateSet("testnet", "main", "memory")]
     [string]$Network = "testnet",
+    [string]$ConfirmMainnet = "",
     [int]$Remembers = 120,
     [int]$Anchors = 12,
     [int]$Verifies = 1000,
     [int]$Trades = 24,
     [int]$TradeStaggerMs = 0,
+    [switch]$SweepBack,
     [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
+if ($Network -eq "main" -and $ConfirmMainnet -ne "I_UNDERSTAND") {
+    throw "Refusing -Network main without -ConfirmMainnet I_UNDERSTAND"
+}
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $goExe    = if (Test-Path "$env:USERPROFILE\.local\go\bin\go.exe") { "$env:USERPROFILE\.local\go\bin\go.exe" } else { "go" }
 $reportWin = Join-Path $repoRoot "testnet-load-scorecard.json"
@@ -45,7 +50,15 @@ if (-not $SkipBuild) {
 $wslRepo = "/mnt/" + $repoRoot.Substring(0,1).ToLower() + ($repoRoot.Substring(2) -replace '\\','/')
 $winHome = $env:USERPROFILE
 $wslSeed = "/mnt/" + $winHome.Substring(0,1).ToLower() + ($winHome.Substring(2) -replace '\\','/') + "/.nektar/testnet-4agent-e2e"
+$wslMainSeed = "/mnt/" + $winHome.Substring(0,1).ToLower() + ($winHome.Substring(2) -replace '\\','/') + "/.nektar/mainnet"
 $wslReport = "$wslRepo/testnet-load-scorecard.json"
+$extraFlags = ""
+if ($Network -eq "main") {
+    $extraFlags += " -confirm-mainnet=I_UNDERSTAND"
+}
+if ($SweepBack) {
+    $extraFlags += " -sweep-back=true"
+}
 
 $bash = @"
 set -euo pipefail
@@ -56,6 +69,13 @@ WORK_DIR="`$HOME/nektar-load-$Network"
 if [ "$Network" = "memory" ]; then
   rm -rf "`$WORK_DIR"
   mkdir -p "`$WORK_DIR"
+elif [ "$Network" = "main" ]; then
+  mkdir -p "`$WORK_DIR"
+  if [ ! -d "`$WORK_DIR/spine/wallet" ]; then
+    echo "Staging funded Mainnet Spine wallet from $wslMainSeed into `$WORK_DIR/spine..."
+    cp -a "$wslMainSeed" "`$WORK_DIR/spine"
+    rm -f "`$WORK_DIR"/spine/daemon.json "`$WORK_DIR"/spine/*.lock "`$WORK_DIR"/spine/restate-server.pid "`$WORK_DIR"/spine/hub.sqlite*
+  fi
 else
   mkdir -p "`$WORK_DIR"
   if [ ! -d "`$WORK_DIR/spine/wallet" ]; then
@@ -71,7 +91,12 @@ fi
 cp "$wslRepo/nektar-linux" "`$WORK_DIR/nektar"
 cp "$wslRepo/testnet-load-linux" "`$WORK_DIR/testnet-load"
 chmod +x "`$WORK_DIR/nektar" "`$WORK_DIR/testnet-load"
-"`$WORK_DIR/testnet-load" -bin "`$WORK_DIR/nektar" -network "$Network" -work-dir "`$WORK_DIR" -remembers $Remembers -anchors $Anchors -verifies $Verifies -trades $Trades -trade-stagger-ms $TradeStaggerMs -restate=true -report "$wslReport"
+"`$WORK_DIR/testnet-load" -bin "`$WORK_DIR/nektar" -network "$Network" -work-dir "`$WORK_DIR" -remembers $Remembers -anchors $Anchors -verifies $Verifies -trades $Trades -trade-stagger-ms $TradeStaggerMs -restate=true -report "$wslReport"$extraFlags
+if [ "$Network" = "main" ] && [ -d "`$WORK_DIR/spine/wallet" ]; then
+  echo "Syncing updated Mainnet Spine wallet back to $wslMainSeed/wallet..."
+  mkdir -p "$wslMainSeed/wallet"
+  cp -a "`$WORK_DIR/spine/wallet/." "$wslMainSeed/wallet/"
+fi
 "@
 
 $bash -replace "`r`n", "`n" | wsl -d Ubuntu -- bash -s

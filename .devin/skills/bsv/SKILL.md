@@ -59,8 +59,8 @@ mechanism. (See `event-arch`.)
   `merklePath`) or `GET /events?callbackToken=` SSE with `Last-Event-ID`
   resume. Both are implemented — `openHintStream`, `statusStream`,
   `handleBroadcasterStatus`.
-- **Endpoints**: testnet `arcade-v2-testnet-us-1.bsvblockchain.tech`; main
-  `arcade-{us,eu,ap}-1.bsvblockchain.tech` + `arcade.gorillapool.io`.
+- **Endpoints**: testnet `arcade-testnet-us-1.bsvblockchain.tech`; main
+  `arcade-v2-us-1.bsvblockchain.tech` + `arcade-eu-1.bsvblockchain.tech`.
   `broadcasterUrls` fans a submit across all of them — first acceptance wins.
 - **Reorg rule**: a re-mined tx pushes a **new BUMP** — replace the stored
   proof until `IMMUTABLE`. `unproveFrom` demotes dead-fork paths.

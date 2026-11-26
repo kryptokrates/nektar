@@ -15,9 +15,9 @@ func (s *bcommonServices) PostFromBEEF(ctx context.Context, beef *transaction.Be
 	if !s.hasBroadcaster() {
 		return nil, ErrNoSettler
 	}
-	name := "bcommon"
-	if s.cfg.Settler != nil {
-		name = s.cfg.Settler.Name()
+	name := "bsv-broadcaster"
+	if s.cfg.Broadcaster != nil {
+		name = s.cfg.Broadcaster.Name()
 	} else if s.cfg.Broadcast != nil {
 		name = "testchain"
 	}
@@ -101,7 +101,7 @@ func (s *bcommonServices) PostFromBEEF(ctx context.Context, beef *transaction.Be
 		if s.cfg.Broadcast != nil {
 			bErr = s.cfg.Broadcast(ctx, tx)
 		} else {
-			bErr = s.cfg.Settler.Submit(ctx, tx)
+			bErr = s.cfg.Broadcaster.Broadcast(ctx, tx)
 		}
 
 		if bErr != nil {

@@ -527,11 +527,11 @@ func (p *Port) SubmitCovenantTx(ctx context.Context, tx *transaction.Transaction
 		}
 		return txid, nil
 	}
-	if p.settler == nil {
-		return "", errors.New("chain: no live settler configured for covenant tx")
+	if p.broadcaster == nil {
+		return "", errors.New("chain: no live broadcaster configured for covenant tx")
 	}
-	if err := p.settler.Submit(ctx, tx); err != nil {
-		return "", fmt.Errorf("chain: %s covenant submit: %w", p.settler.Name(), err)
+	if err := p.broadcaster.Broadcast(ctx, tx); err != nil {
+		return "", fmt.Errorf("chain: %s covenant broadcast: %w", p.broadcaster.Name(), err)
 	}
 	if p.engine != nil {
 		p.engine.CacheTx(tx)

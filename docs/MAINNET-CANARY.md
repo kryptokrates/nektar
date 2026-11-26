@@ -39,7 +39,7 @@ export NEKTAR_MAINNET_CONFIRM="I_UNDERSTAND"
 # Default 2-of-2 live Mainnet quorum: WhatsOnChain + Babbage Chaintracks v2 (built into bcommon/headers)
 export NEKTAR_HEADERS_SOURCE="woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2"
 export NEKTAR_CHAIN_SPEC="woc:main"
-export NEKTAR_SETTLE_SPEC="arcade:https://arcade.gorillapool.io"
+export NEKTAR_SETTLE_SPEC="arcade:https://arcade-v2-us-1.bsvblockchain.tech"
 
 # Conservative canary SpendGuard caps
 export NEKTAR_MAX_FEE_SATS_PER_TX=2000

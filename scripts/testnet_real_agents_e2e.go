@@ -258,7 +258,7 @@ func runBetaCodexMCP(phase, exePath, dataDir, runTag string) error {
 		}
 		r2, err := mcp.callTool("remember", map[string]any{
 			"shard":      "codex-bsv",
-			"text":       fmt.Sprintf("CodexBeta[%s]: GorillaPool Arcade testnet accepts EF transactions at 100 sat/kB.", runTag),
+			"text":       fmt.Sprintf("CodexBeta[%s]: BSV Broadcaster testnet accepts EF transactions at 100 sat/kB.", runTag),
 			"source":     "codex:beta",
 			"autoAnchor": true,
 		})
@@ -576,7 +576,7 @@ func runDeltaA2ANAT(phase, baseURL, runTag string) error {
 		t0 := time.Now()
 		deal, err := a2aCall(baseURL, "market/want", map[string]any{
 			"domains":     []string{"bsv"},
-			"question":    "GorillaPool Arcade testnet EF 100 sat/kB",
+			"question":    "BSV Broadcaster testnet EF 100 sat/kB",
 			"maxSats":     150,
 			"targetShard": "bought/bsv",
 		})

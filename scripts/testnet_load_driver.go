@@ -464,7 +464,7 @@ func main() {
 	sellers := []sellSpec{
 		{Node: "alpha", Shard: "v04-ops-alpha", Domains: []string{"ops"}, Price: 40, Description: "Alpha v0.4 ops runbook", FallbackTxt: "Alpha ops runbook: zero-downtime blue-green Kubernetes rollouts use PodDisruptionBudget."},
 		{Node: "beta", Shard: "v04-ops-beta", Domains: []string{"ops"}, Price: 35, Description: "Beta v0.4 cheaper ops runbook", FallbackTxt: "Beta ops runbook: etcd snapshots rotate every 15m with zstd-3 compression."},
-		{Node: "beta", Shard: "v04-bsv-beta", Domains: []string{"bsv"}, Price: 45, Description: "Beta v0.4 BSV Arcade policy", FallbackTxt: "Beta BSV Arcade policy: GorillaPool Arcade testnet accepts EF transactions at 100 sat/kB."},
+		{Node: "beta", Shard: "v04-bsv-beta", Domains: []string{"bsv"}, Price: 45, Description: "Beta v0.4 BSV Broadcaster policy", FallbackTxt: "Beta BSV Broadcaster policy: BSV Broadcaster testnet accepts EF transactions at 100 sat/kB."},
 		{Node: "gamma", Shard: "v04-agents-gamma", Domains: []string{"agents"}, Price: 40, Description: "Gamma v0.4 multi-agent architecture", FallbackTxt: "Gamma multi-agent architecture: Cursor MCP + L0 transparent proxy + BRC-369 Borg encryption."},
 		{Node: "delta-nat", Shard: "v04-nat-delta", Domains: []string{"nat"}, Price: 35, Description: "Delta v0.4 NAT-only A2A bbox relay", FallbackTxt: "Delta NAT-only A2A agents settle paid knowledge trades over Hub /bbox store-and-forward relay with zero open ports."},
 	}
@@ -796,7 +796,7 @@ func main() {
 	routes := []tradeSpec{
 		{Buyer: "epsilon", Domain: "agents", Question: "Cursor MCP L0 transparent proxy Borg encryption", Route: "Epsilon(LeafA)->Gamma(LeafB) [cross-hub HTTP]", MaxSats: 120},
 		{Buyer: "alpha", Domain: "nat", Question: "NAT-only A2A agents bbox store-and-forward relay", Route: "Alpha(LeafA)->DeltaNAT(LeafB) [cross-hub /bbox]", MaxSats: 120},
-		{Buyer: "gamma", Domain: "bsv", Question: "GorillaPool Arcade testnet EF transactions 100 sat", Route: "Gamma(LeafB)->Beta(LeafA) [cross-hub HTTP]", MaxSats: 120},
+		{Buyer: "gamma", Domain: "bsv", Question: "BSV Broadcaster testnet EF transactions 100 sat", Route: "Gamma(LeafB)->Beta(LeafA) [cross-hub HTTP]", MaxSats: 120},
 		{Buyer: "zeta-nat", Domain: "ops", Question: "etcd snapshots rotate every 15m zstd compression", Route: "ZetaNAT(Spine)->Beta(LeafA) [spine->leaf]", MaxSats: 120},
 		{Buyer: "beta", Domain: "nat", Question: "NAT-only A2A agents bbox relay zero open ports", Route: "Beta(LeafA)->DeltaNAT(LeafB) [cross-hub /bbox]", MaxSats: 120},
 		{Buyer: "delta-nat", Domain: "ops", Question: "etcd snapshots rotate Kubernetes ops runbook", Route: "DeltaNAT(LeafB)->Beta(LeafA) [NAT-buyer->leaf]", MaxSats: 120},

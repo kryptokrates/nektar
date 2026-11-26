@@ -506,10 +506,10 @@ func cmdHubUp(args []string) error {
 	if net == "main" {
 		envText = upsertEnvKV(envText, "NEKTAR_MAINNET_CONFIRM", "I_UNDERSTAND")
 		envText = upsertEnvKV(envText, "NEKTAR_HEADERS_SOURCE", chain.DefaultHeaderSources("main"))
-		envText = upsertEnvKV(envText, "NEKTAR_SETTLE_SPEC", "arcade:https://arcade.gorillapool.io")
+		envText = upsertEnvKV(envText, "NEKTAR_SETTLE_SPEC", chain.DefaultSettleSpec("main"))
 	} else {
 		envText = upsertEnvKV(envText, "NEKTAR_HEADERS_SOURCE", chain.DefaultHeaderSources("testnet"))
-		envText = upsertEnvKV(envText, "NEKTAR_SETTLE_SPEC", "arcade:https://testnet.arcade.gorillapool.io")
+		envText = upsertEnvKV(envText, "NEKTAR_SETTLE_SPEC", chain.DefaultSettleSpec("testnet"))
 	}
 
 	var profiles []string

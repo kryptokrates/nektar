@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	sdkwallet "github.com/bsv-blockchain/go-sdk/wallet"
 	"github.com/lightwebinc/bcommon/nodeapi"
-	"github.com/lightwebinc/bcommon/publish"
 
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
@@ -95,10 +94,10 @@ func (p *Port) ProofChecked(ctx context.Context, txid string) (*transaction.Merk
 	}
 
 	var lastErr error
-	// 2. Ask Arcade, then nodeChain (every proof verified against independent witnessed headers).
-	if p.arcade != nil {
-		mp, h, aErr := p.arcade.Proof(ctx, txid)
-		if aErr == nil && mp != nil {
+	// 2. Ask BSV Broadcaster, then nodeChain (every proof verified against independent witnessed headers).
+	if p.broadcaster != nil {
+		mp, h, found, aErr := p.broadcaster.Proof(ctx, txid)
+		if aErr == nil && found && mp != nil {
 			valid, vErr := verifyProof(mp, h)
 			if vErr != nil {
 				return nil, 0, false, vErr
@@ -109,7 +108,7 @@ func (p *Port) ProofChecked(ctx context.Context, txid string) (*transaction.Merk
 				}
 				return mp, h, true, nil
 			}
-		} else if aErr != nil && !errors.Is(aErr, nodeapi.ErrNotMined) && !errors.Is(aErr, publish.ErrArcadeUnknown) && !errors.Is(aErr, publish.ErrArcadeRefused) {
+		} else if aErr != nil && !errors.Is(aErr, nodeapi.ErrNotMined) {
 			lastErr = aErr
 		}
 	}

@@ -49,8 +49,8 @@ Per-network primitives, all O(1) per known outpoint/txid:
 
 `NEKTAR_INDEXER_DISCOVERY=1` re-enables chain-index (bananablocks) address lookup as an opt-in
 convenience — off by default. Broadcasting is the one unavoidable external
-service (public BSV Broadcaster endpoints are no-key: `arcade-*-1.bsvblockchain.tech`,
-`arcade.gorillapool.io`); running your own Teranode (e.g. a Hetzner box) makes
+service (public BSV Broadcaster endpoints are no-key: `arcade-v2-us-1.bsvblockchain.tech`,
+`arcade-eu-1.bsvblockchain.tech`); running your own Teranode (e.g. a Hetzner box) makes
 the regtest path _literally_ the self-sovereign mainnet path — same endpoints,
 same code.
 
@@ -302,7 +302,7 @@ docker compose -f deploy/canary/compose.yaml down         # stops; state survive
      ```
      Without the confirm flag, or without a passphrase, it refuses to start. Keys (`keys.json`, `fee.key.json`) are scrypt + AES-GCM encrypted, and plaintext keys are refused.
   2. Send a small float to the address printed on stderr (`GET /v1/wallet` shows it too). UTXOs are discovered via WhatsOnChain.
-  3. Broadcasting goes to **BSV Broadcaster** (the ARC successor, formerly Arcade), GorillaPool instance `arcade.gorillapool.io`:
+  3. Broadcasting goes to **BSV Broadcaster** (the official BSV Association Teranode-native broadcaster, formerly Arcade), e.g. `arcade-v2-us-1.bsvblockchain.tech` (or `arcade-eu-1.bsvblockchain.tech`):
      - `POST /tx`; Extended Format when every parent is known, raw otherwise;
      - falls back to WhatsOnChain only on network/5xx errors;
      - fee rate `max(100 sat/kB, broadcaster policy)`;

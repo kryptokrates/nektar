@@ -8,8 +8,51 @@ import (
 	"strings"
 
 	"github.com/lightwebinc/bcommon/headers"
-	"github.com/lightwebinc/bcommon/publish"
 )
+
+// Canonical official BSV Association BSV Broadcaster (Teranode-native, formerly Arcade) public endpoints.
+const (
+	DefaultBroadcasterMainnet   = "https://arcade-v2-us-1.bsvblockchain.tech"
+	DefaultBroadcasterMainnetEU = "https://arcade-eu-1.bsvblockchain.tech"
+	DefaultBroadcasterTestnet   = "https://arcade-testnet-us-1.bsvblockchain.tech"
+)
+
+// DefaultSettleSpec returns the default BSV Broadcaster settlement spec for network.
+// Mainnet defaults to both US + EU official BSV Association BSV Broadcaster regions for
+// automatic round-robin + failover (zero GorillaPool dependency).
+func DefaultSettleSpec(network string) string {
+	switch strings.ToLower(strings.TrimSpace(network)) {
+	case "main", "mainnet":
+		return "broadcaster:" + DefaultBroadcasterMainnet + ",broadcaster:" + DefaultBroadcasterMainnetEU
+	case "testnet", "test":
+		return "broadcaster:" + DefaultBroadcasterTestnet
+	default:
+		return ""
+	}
+}
+
+// NormalizeSettleSpec expands single or comma-separated broadcaster:/arcade: shorthands to the
+// official BSV Association BSV Broadcaster endpoints (never GorillaPool).
+func NormalizeSettleSpec(spec string) string {
+	parts := splitSpecs(spec)
+	if len(parts) == 0 {
+		return ""
+	}
+	out := make([]string, 0, len(parts))
+	for _, s := range parts {
+		switch {
+		case s == "arcade:main", s == "broadcaster:main", s == "broadcaster:mainnet":
+			out = append(out, "broadcaster:"+DefaultBroadcasterMainnet, "broadcaster:"+DefaultBroadcasterMainnetEU)
+		case s == "arcade:test", s == "arcade:testnet", s == "broadcaster:test", s == "broadcaster:testnet":
+			out = append(out, "broadcaster:"+DefaultBroadcasterTestnet)
+		case strings.HasPrefix(s, "arcade:"):
+			out = append(out, "broadcaster:"+strings.TrimPrefix(s, "arcade:"))
+		default:
+			out = append(out, s)
+		}
+	}
+	return strings.Join(out, ",")
+}
 
 // DefaultSettleDepth returns the default confirmation depth for a network.
 func DefaultSettleDepth(network string) int {
@@ -61,10 +104,12 @@ func NormalizeSpecOrigin(spec string) (string, error) {
 			return "", fmt.Errorf("invalid woc network %q", s)
 		}
 		rawURL = "https://api.whatsonchain.com"
-	case s == "arcade:main":
-		rawURL = publish.ArcadeMainnet
-	case s == "arcade:test":
-		rawURL = publish.ArcadeTestnet
+	case s == "arcade:main", s == "broadcaster:main", s == "broadcaster:mainnet":
+		rawURL = DefaultBroadcasterMainnet
+	case s == "arcade:test", s == "arcade:testnet", s == "broadcaster:test", s == "broadcaster:testnet":
+		rawURL = DefaultBroadcasterTestnet
+	case strings.HasPrefix(s, "broadcaster:"):
+		rawURL = strings.TrimPrefix(s, "broadcaster:")
 	case strings.HasPrefix(s, "arcade:"):
 		rawURL = strings.TrimPrefix(s, "arcade:")
 	case strings.HasPrefix(s, "arc:"):
@@ -113,13 +158,15 @@ func ParseHeaderClient(network, singleSpec string, httpClient *http.Client) (*he
 		return nil, "", fmt.Errorf("chain: empty header source spec")
 	}
 
-	// Expand shorthand arcade:main / arcade:test and strip explicit native: prefix (regtest only).
+	// Expand shorthand broadcaster:/arcade: main/test and strip explicit native: prefix (regtest only).
 	isExplicitNative := false
 	switch {
-	case spec == "arcade:main":
-		spec = "arcade:" + publish.ArcadeMainnet
-	case spec == "arcade:test":
-		spec = "arcade:" + publish.ArcadeTestnet
+	case spec == "arcade:main", spec == "broadcaster:main", spec == "broadcaster:mainnet":
+		spec = "arcade:" + DefaultBroadcasterMainnet
+	case spec == "arcade:test", spec == "arcade:testnet", spec == "broadcaster:test", spec == "broadcaster:testnet":
+		spec = "arcade:" + DefaultBroadcasterTestnet
+	case strings.HasPrefix(spec, "broadcaster:"):
+		spec = "arcade:" + strings.TrimPrefix(spec, "broadcaster:")
 	case strings.HasPrefix(spec, "native:"):
 		isExplicitNative = true
 		spec = strings.TrimPrefix(spec, "native:")

@@ -7,83 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	sdkwallet "github.com/bsv-blockchain/go-sdk/wallet"
 	"github.com/lightwebinc/bcommon/guard"
-	"github.com/lightwebinc/bcommon/publish"
 
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
-
-// strictSettler wraps a bcommon publish.Settler so unacknowledged TCP writes and Arcade
-// RECEIVED verdict timeouts fail closed with ErrBroadcastUnknown instead of returning nil.
-type strictSettler struct {
-	inner            publish.Settler
-	arcade           *publish.Arcade
-	unconfirmedTxids sync.Map // txid -> struct{}
-}
-
-func wrapStrictSettler(s publish.Settler, arcade *publish.Arcade) publish.Settler {
-	if s == nil {
-		return nil
-	}
-	ss := &strictSettler{inner: s, arcade: arcade}
-	if arcade != nil {
-		prevNote := arcade.Note
-		arcade.Note = func(format string, args ...any) {
-			msg := fmt.Sprintf(format, args...)
-			if strings.Contains(msg, "verdict had not arrived") && len(args) > 0 {
-				if txid, ok := args[0].(string); ok && len(txid) == 64 {
-					ss.unconfirmedTxids.Store(txid, struct{}{})
-				}
-			}
-			if prevNote != nil {
-				prevNote(format, args...)
-			}
-		}
-	}
-	return ss
-}
-
-func (s *strictSettler) Name() string {
-	return s.inner.Name()
-}
-
-func (s *strictSettler) Submit(ctx context.Context, tx *transaction.Transaction) error {
-	if tx == nil {
-		return errors.New("chain: nil transaction")
-	}
-	if _, isTCP := s.inner.(*publish.TCPIngress); isTCP {
-		if err := s.inner.Submit(ctx, tx); err != nil {
-			return err
-		}
-		// TCPIngress provides zero network acceptance acknowledgement: fail closed as unknown!
-		return fmt.Errorf("%w: %s provides no acceptance acknowledgement", nwallet.ErrBroadcastUnknown, s.inner.Name())
-	}
-	txid := tx.TxID().String()
-	s.unconfirmedTxids.Delete(txid)
-	if err := s.inner.Submit(ctx, tx); err != nil {
-		return err
-	}
-	if s.arcade != nil {
-		if _, timedOut := s.unconfirmedTxids.LoadAndDelete(txid); timedOut {
-			st, stErr := s.arcade.Status(ctx, txid)
-			if stErr != nil {
-				return fmt.Errorf("%w: arcade verdict timed out for %s (%v)", nwallet.ErrBroadcastUnknown, txid, stErr)
-			}
-			if st.Refused() {
-				return fmt.Errorf("chain: arcade refused %s: %s", txid, st.Why())
-			}
-			if !st.Accepted() && !st.Mined() {
-				return fmt.Errorf("%w: arcade holds %s as %s (network verdict unconfirmed)", nwallet.ErrBroadcastUnknown, txid, st.TxStatus)
-			}
-		}
-	}
-	return nil
-}
 
 // BuildFundedTx builds and signs a transaction paying outputs using multi-input CanonicalChangeSelector
 // and dynamic feepolicy in embedded mode, OR delegates directly to wallet.CreateAction in client mode!
@@ -329,22 +260,22 @@ func (p *Port) Broadcast(ctx context.Context, tx *transaction.Transaction, feeSa
 		return txid, nil
 	}
 
-	if p.settler == nil {
+	if p.broadcaster == nil {
 		if rErr := p.guard.Refund(txid); rErr != nil {
-			return "", fmt.Errorf("chain: no live settler configured (spendguard refund failed: %w)", rErr)
+			return "", fmt.Errorf("chain: no live broadcaster configured (spendguard refund failed: %w)", rErr)
 		}
-		return "", errors.New("chain: no live settler configured (set NEKTAR_SETTLE_SPEC)")
+		return "", errors.New("chain: no live broadcaster configured (set NEKTAR_SETTLE_SPEC)")
 	}
-	if err := p.settler.Submit(ctx, tx); err != nil {
+	if err := p.broadcaster.Broadcast(ctx, tx); err != nil {
 		// Never refund SpendGuard on post-submit broadcaster error strings: treat all post-submit
 		// failures conservatively (ErrBroadcastUnknown on transport/timeout, error hint otherwise).
 		lower := strings.ToLower(err.Error())
 		if errors.Is(err, nwallet.ErrBroadcastUnknown) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
 			strings.Contains(lower, "timeout") || strings.Contains(lower, "eof") ||
 			strings.Contains(lower, "http 5") || strings.Contains(lower, "connection refused") {
-			return "", fmt.Errorf("chain: %s broadcast: %w: %w", p.settler.Name(), nwallet.ErrBroadcastUnknown, err)
+			return "", fmt.Errorf("chain: %s broadcast: %w: %w", p.broadcaster.Name(), nwallet.ErrBroadcastUnknown, err)
 		}
-		return "", fmt.Errorf("chain: %s broadcast: %w", p.settler.Name(), err)
+		return "", fmt.Errorf("chain: %s broadcast: %w", p.broadcaster.Name(), err)
 	}
 	if p.engine != nil {
 		p.engine.CacheTx(tx)
@@ -375,10 +306,10 @@ func (p *Port) RelayExternalTx(ctx context.Context, tx *transaction.Transaction)
 	if p.testChain != nil || p.network == "memory" {
 		return nil
 	}
-	if p.settler == nil {
-		return errors.New("chain: no live settler configured to broadcast zero-conf buyer payment")
+	if p.broadcaster == nil {
+		return errors.New("chain: no live broadcaster configured to broadcast zero-conf buyer payment")
 	}
-	return p.settler.Submit(ctx, tx)
+	return p.broadcaster.Broadcast(ctx, tx)
 }
 
 // AnchorOutput helper creates a 1-sat output locked to a NektarAnchor script.

@@ -226,7 +226,7 @@ func cmdCheckMainnet() error {
 	}
 	settleSpec := strings.TrimSpace(os.Getenv("NEKTAR_SETTLE_SPEC"))
 	if settleSpec == "" {
-		missing = append(missing, "NEKTAR_SETTLE_SPEC (e.g. arcade:https://arcade.gorillapool.io)")
+		missing = append(missing, fmt.Sprintf("NEKTAR_SETTLE_SPEC (e.g. %s)", chain.DefaultSettleSpec("main")))
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("mainnet gate incomplete — set: %s", strings.Join(missing, ", "))

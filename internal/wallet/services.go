@@ -83,7 +83,7 @@ func (s *bcommonServices) takeLastErr(txid string) error {
 }
 
 func (s *bcommonServices) hasBroadcaster() bool {
-	return s.cfg.Broadcast != nil || s.cfg.Settler != nil
+	return s.cfg.Broadcast != nil || s.cfg.Broadcaster != nil
 }
 
 func (s *bcommonServices) maxDepth() int {

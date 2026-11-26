@@ -20,7 +20,7 @@ verify, never trust:
 | **Executor**         | Restate sidecar — required                     | same box/pod as the agent                        | `docker.restate.dev/restatedev/restate` (upstream)                                      |
 | **Agent state**      | keys, sqlite, lane stock                       | the `agent-data` volume/PVC                      | — (your backups)                                                                        |
 | **Market hosts**     | overlay envelope transport                     | shared/public hosts, or your own                 | `ghcr.io/kryptokrates/nektar-{bbox-host,shim,hub-db}` · `nektar-deploy.tar.gz` (`hub/`) |
-| **Chain truth**      | indexers + broadcasters                        | public internet (WoC, banana, GorillaPool, TAAL) | — (SPV-verified, never trusted)                                                         |
+| **Chain truth**      | indexers + broadcasters                        | public internet (BSV Broadcaster, WoC, Chaintracks) | — (SPV-verified, never trusted)                                                         |
 | **Restate journals** | durable executor state                         | the `restate-data` volume/PVC                    | —                                                                                       |
 
 Mainnet has **no baked seed hosts** (deliberately — a single-operator seed

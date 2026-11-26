@@ -19,7 +19,6 @@ import (
 	"github.com/lightwebinc/bcommon/feepolicy"
 	"github.com/lightwebinc/bcommon/mint"
 	"github.com/lightwebinc/bcommon/nodeapi"
-	"github.com/lightwebinc/bcommon/publish"
 	"github.com/lightwebinc/bcommon/testchain"
 	"github.com/lightwebinc/bcommon/wirewallet"
 
@@ -48,10 +47,10 @@ type Config struct {
 	WalletMode               string // embedded (default) | client (BRC-100 wire on localhost:3321)
 	WalletWireURL            string // default http://127.0.0.1:3321
 	WalletProfile            string // standard (default) | throughput
-	FeeRateSatPerKB          uint64 // optional static sat/kB override (0 => live Arcade /v1/policy clamped [100,500] fallback 100)
-	HeaderSource             string // comma-separated independent PoW header witnesses (e.g. woc:main,arcade:https://arcade.gorillapool.io)
+	FeeRateSatPerKB          uint64 // optional static sat/kB override (0 => live BSV Broadcaster /policy clamped [100,500] fallback 100)
+	HeaderSource             string // comma-separated independent PoW header witnesses (e.g. woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2)
 	ChainSpec                string // nodeapi.ParseChain spec (e.g. woc:main, teranode:http://...)
-	SettleSpec               string // publish.ParseSettler spec (e.g. arcade:https://..., rpc:http://...)
+	SettleSpec               string // comma-separated BSV Broadcaster spec (e.g. broadcaster:https://arcade-v2-us-1.bsvblockchain.tech, rpc:http://...)
 	SettleDepth              int    // confirmations required before value-final settlement (0 => network default)
 	ZeroConfMaxSats          uint64 // optional per-tx 0-conf cap for direct paywalls (0 => require settleDepth)
 	ZeroConfMaxAggregateSats uint64 // optional aggregate unconfirmed exposure cap
@@ -116,12 +115,12 @@ type Port struct {
 	signer        *bwallet.Signer
 	tracker       chaintracker.ChainTracker
 	witnessed     *WitnessedTracker
-	testChain     *testchain.Chain
-	nodeChain     *nodeapi.Sources
-	woc           *nodeapi.WoC
-	settler       publish.Settler
-	arcade        *publish.Arcade
-	feeSource     feepolicy.Source
+	testChain       *testchain.Chain
+	nodeChain       *nodeapi.Sources
+	woc             *nodeapi.WoC
+	broadcaster     nwallet.Broadcaster
+	broadcasterURLs []string
+	feeSource       feepolicy.Source
 	httpClient    *http.Client
 	zeroConfWatch *ZeroConfWatch
 
@@ -234,18 +233,9 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 				chainSpec = "woc:test"
 			}
 		}
-		settleSpec := strings.TrimSpace(cfg.SettleSpec)
+		settleSpec := NormalizeSettleSpec(cfg.SettleSpec)
 		if settleSpec == "" {
-			switch netName {
-			case "testnet":
-				settleSpec = "arcade:test"
-			case "main":
-				settleSpec = "arcade:main"
-			default:
-				if def, err := publish.DefaultSettle(netName); err == nil {
-					settleSpec = def
-				}
-			}
+			settleSpec = DefaultSettleSpec(netName)
 		}
 
 		if cfg.TestTracker != nil {
@@ -283,25 +273,21 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 			p.nodeChain = src
 		}
 		if settleSpec != "" {
-			sOpts := publish.SettleOptions{
-				Key:     cfg.ArcadeKey,
+			bcast, bcastURLs, err := ParseBroadcaster(settleSpec, BroadcasterOptions{
+				APIKey:  cfg.ArcadeKey,
 				RPCUser: cfg.RPCUser,
 				RPCPass: cfg.RPCPass,
 				Client:  p.httpClient,
-			}
-			if p.nodeChain != nil {
-				sOpts.Spends = p.nodeChain
-			}
-			settler, arcade, err := publish.ParseSettler(settleSpec, sOpts)
+			})
 			if err != nil {
 				return nil, fmt.Errorf("chain: settle spec %q: %w", settleSpec, err)
 			}
-			p.settler = wrapStrictSettler(settler, arcade)
-			p.arcade = arcade
+			p.broadcaster = bcast
+			p.broadcasterURLs = bcastURLs
 		}
 	}
 
-	// Build fee policy: live Arcade /v1/policy (cached 5m, clamped [100, 500] sat/kB) or static fallback/override.
+	// Build fee policy: live BSV Broadcaster /policy (cached 5m, clamped [100, 500] sat/kB) or static fallback/override.
 	baseFees := nwallet.DefaultNetworkFees
 	if cfg.FeeRateSatPerKB > 0 {
 		baseFees.Rate = mint.Rate{Sats: cfg.FeeRateSatPerKB, Bytes: 1000}
@@ -309,10 +295,10 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 			baseFees.MaxRate = baseFees.Rate
 		}
 		p.feeSource = feepolicy.Static(baseFees)
-	} else if p.arcade != nil && p.arcade.Base != "" {
+	} else if len(p.broadcasterURLs) > 0 {
 		p.feeSource = &feepolicy.ARC{
-			URLs: []string{p.arcade.Base},
-			Key:  p.arcade.Key,
+			URLs: p.broadcasterURLs,
+			Key:  cfg.ArcadeKey,
 			Base: baseFees,
 			Min:  mint.Rate{Sats: 100, Bytes: 1000},
 			Max:  mint.Rate{Sats: 500, Bytes: 1000},
@@ -375,8 +361,7 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 			Profile:       NektarWalletProfile,
 			Tracker:       p.tracker,
 			FeeSource:     p.feeSource,
-			Settler:       p.settler,
-			Arcade:        p.arcade,
+			Broadcaster:   p.broadcaster,
 			WoC:           p.woc,
 			FuelProfile:   &prof,
 			SpendGuard: func(txid string, feeSats, spendSats uint64, overrideGuard bool) error {

@@ -9,8 +9,8 @@ shipping a pinned default.
 
 | Network | Route                                                                                           |
 | ------- | ----------------------------------------------------------------------------------------------- |
-| testnet | `https://arcade-v2-testnet-us-1.bsvblockchain.tech`                                             |
-| main    | `https://arcade-us-1.bsvblockchain.tech`, `…-eu-1…`, `…-ap-1…`, `https://arcade.gorillapool.io` |
+| testnet | `https://arcade-testnet-us-1.bsvblockchain.tech`                                                |
+| main    | `https://arcade-v2-us-1.bsvblockchain.tech`, `https://arcade-eu-1.bsvblockchain.tech`           |
 
 - The docs say plainly: _have a second route ready._ `broadcasterUrls`
   fans a submit across all of them; `broadcasterUrl` remains primary for

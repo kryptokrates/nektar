@@ -10,7 +10,7 @@ import (
 
 func TestCmdCheckMainnetEnforcesNonCircularHeaderIndependence(t *testing.T) {
 	t.Setenv("NEKTAR_MAINNET_CONFIRM", "I_UNDERSTAND")
-	t.Setenv("NEKTAR_SETTLE_SPEC", "arcade:https://arcade.gorillapool.io")
+	t.Setenv("NEKTAR_SETTLE_SPEC", chain.DefaultSettleSpec("main"))
 
 	// 1. Single circular woc:main MUST fail (#1, #2).
 	t.Setenv("NEKTAR_HEADERS_SOURCE", "woc:main")

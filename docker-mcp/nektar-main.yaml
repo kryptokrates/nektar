@@ -19,9 +19,9 @@ env:
   - name: NEKTAR_TOOL_PROFILE
     value: agent
   - name: NEKTAR_HEADERS_SOURCE
-    value: woc:main
+    value: woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2
   - name: NEKTAR_SETTLE_SPEC
-    value: arcade:https://arcade.gorillapool.io
+    value: arcade:https://arcade-v2-us-1.bsvblockchain.tech
   - name: NEKTAR_MAX_FEE_PER_TX
     value: '{{nektar.max_fee_per_tx}}'
   - name: NEKTAR_MAX_SPEND_PER_DAY

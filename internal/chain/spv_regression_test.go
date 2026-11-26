@@ -89,29 +89,54 @@ func mineStubHeader(height uint32, prev, merkleRoot chainhash.Hash, ts uint32) *
 }
 
 func TestWitnessedTrackerHeaderIndependenceAndCircularRejection(t *testing.T) {
+	// 0. DefaultSettleSpec and NormalizeSettleSpec must resolve to official BSV Association Broadcaster endpoints (never GorillaPool).
+	wantMain := "broadcaster:" + DefaultBroadcasterMainnet + ",broadcaster:" + DefaultBroadcasterMainnetEU
+	if got := DefaultSettleSpec("main"); got != wantMain || strings.Contains(strings.ToLower(got), "gorillapool") {
+		t.Fatalf("unexpected DefaultSettleSpec(main): %q (want %q)", got, wantMain)
+	}
+	wantTest := "broadcaster:" + DefaultBroadcasterTestnet
+	if got := DefaultSettleSpec("testnet"); got != wantTest || strings.Contains(strings.ToLower(got), "gorillapool") {
+		t.Fatalf("unexpected DefaultSettleSpec(testnet): %q (want %q)", got, wantTest)
+	}
+	for in, want := range map[string]string{
+		"arcade:main":                                        wantMain,
+		"broadcaster:main":                                   wantMain,
+		"broadcaster:mainnet":                                wantMain,
+		"arcade:test":                                        wantTest,
+		"arcade:testnet":                                     wantTest,
+		"broadcaster:test":                                   wantTest,
+		"broadcaster:testnet":                                wantTest,
+		"arcade:https://arcade-eu-1.bsvblockchain.tech":      "broadcaster:https://arcade-eu-1.bsvblockchain.tech",
+		"broadcaster:https://arcade-eu-1.bsvblockchain.tech": "broadcaster:https://arcade-eu-1.bsvblockchain.tech",
+	} {
+		if got := NormalizeSettleSpec(in); got != want {
+			t.Fatalf("NormalizeSettleSpec(%q) = %q, want %q", in, got, want)
+		}
+	}
+
 	// 1. Circular single-source WoC on mainnet MUST be rejected (#1, #2).
-	if err := ValidateHeaderIndependence("main", "woc:main", "woc:main", "arcade:https://arcade.gorillapool.io"); err == nil {
+	if err := ValidateHeaderIndependence("main", "woc:main", "woc:main", DefaultSettleSpec("main")); err == nil {
 		t.Fatal("expected single circular woc:main header source to be rejected")
 	}
 	// 2. Zero-PoW Native mode on mainnet/testnet MUST be rejected (#1).
-	if err := ValidateHeaderIndependence("main", "native:http://127.0.0.1:8080,woc:main", "woc:main", "arcade:https://arcade.gorillapool.io"); err == nil {
+	if err := ValidateHeaderIndependence("main", "native:http://127.0.0.1:8080,woc:main", "woc:main", DefaultSettleSpec("main")); err == nil {
 		t.Fatal("expected Native header source on mainnet to be rejected")
 	}
 	if err := ValidateHeaderIndependence("testnet", "native:http://127.0.0.1:8080", "woc:test", ""); err == nil {
 		t.Fatal("expected Native header source on testnet to be rejected")
 	}
 	// 3. Duplicate origins MUST be rejected on both mainnet and testnet (#1, #2).
-	if err := ValidateHeaderIndependence("main", "woc:main,woc:main", "woc:main", "arcade:https://arcade.gorillapool.io"); err == nil {
+	if err := ValidateHeaderIndependence("main", "woc:main,woc:main", "woc:main", DefaultSettleSpec("main")); err == nil {
 		t.Fatal("expected duplicate header witness origin to be rejected")
 	}
 	if err := ValidateHeaderIndependence("testnet", "woc:test,woc:test", "woc:test", ""); err == nil {
 		t.Fatal("expected duplicate testnet header witness origin to be rejected")
 	}
 	// 4. Default >=2 distinct-origin PoW witnesses pass independence check (#1, #2).
-	if err := ValidateHeaderIndependence("main", DefaultHeaderSources("main"), "woc:main", "arcade:https://arcade.gorillapool.io"); err != nil {
+	if err := ValidateHeaderIndependence("main", DefaultHeaderSources("main"), "woc:main", DefaultSettleSpec("main")); err != nil {
 		t.Fatalf("expected DefaultHeaderSources(main) to pass: %v", err)
 	}
-	if err := ValidateHeaderIndependence("testnet", DefaultHeaderSources("testnet"), "woc:test", "arcade:https://testnet.arcade.gorillapool.io"); err != nil {
+	if err := ValidateHeaderIndependence("testnet", DefaultHeaderSources("testnet"), "woc:test", DefaultSettleSpec("testnet")); err != nil {
 		t.Fatalf("expected DefaultHeaderSources(testnet) to pass: %v", err)
 	}
 	// 5. Regtest native: parses cleanly (#1).

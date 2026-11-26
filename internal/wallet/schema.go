@@ -12,7 +12,6 @@ import (
 	"github.com/lightwebinc/bcommon/feepolicy"
 	"github.com/lightwebinc/bcommon/mint"
 	"github.com/lightwebinc/bcommon/nodeapi"
-	"github.com/lightwebinc/bcommon/publish"
 )
 
 // Transaction lifecycle statuses aligned with BRC-100 / go-wallet-toolbox.
@@ -232,7 +231,15 @@ func FuelProfileByName(name string) FuelProfile {
 // overrideGuard is true only for explicit operator treasury sweeps.
 type SpendGuardCheck func(txid string, feeSats, spendSats uint64, overrideGuard bool) error
 
-// BroadcastFunc submits a signed transaction to the network (Settler or testchain).
+// Broadcaster is the single streamlined transaction broadcasting and proof-lookup interface
+// used across Nektar (backed on live networks by github.com/bsv-blockchain/go-sdk/transaction/broadcaster).
+type Broadcaster interface {
+	Name() string
+	Broadcast(ctx context.Context, tx *transaction.Transaction) error
+	Proof(ctx context.Context, txid string) (*transaction.MerklePath, uint32, bool, error)
+}
+
+// BroadcastFunc submits a signed transaction to the network (used for in-memory testchain/tests).
 type BroadcastFunc func(ctx context.Context, tx *transaction.Transaction) error
 
 // ProofLookupFunc resolves a mined MerklePath + block height for txid if available.
@@ -257,12 +264,11 @@ type Config struct {
 	Tracker                     chaintracker.ChainTracker // SPV header verifier & height source
 	HeaderBytes                 HeaderBytesFunc           // optional raw 80-byte header getter
 	MedianTimePast              MedianTimePastFunc        // optional consensus 11-block MTP getter
-	FeeSource                   feepolicy.Source          // live ARC/Arcade policy or static rate
-	Settler                     publish.Settler           // optional live broadcaster (Arcade / RPC / TCP)
-	Arcade                      *publish.Arcade           // optional Arcade client for fast proof lookup
+	FeeSource                   feepolicy.Source          // live BSV Broadcaster policy or static rate
+	Broadcaster                 Broadcaster               // single live BSV Broadcaster / RPC skeleton
 	Chain                       nodeapi.Chain             // optional Tx/Proof/Spend view (WoC / node)
 	WoC                         *nodeapi.WoC              // optional WhatsOnChain client for external address sync
-	Broadcast                   BroadcastFunc             // optional custom broadcaster (overrides Settler; used for testchain)
+	Broadcast                   BroadcastFunc             // optional custom broadcaster (overrides Broadcaster; used for testchain)
 	ProofLookup                 ProofLookupFunc           // optional custom proof lookup (used for testchain)
 	SpendGuard                  SpendGuardCheck           // optional fail-closed spend guard hook (enforced post-signing in PostFromBEEF)
 	SpendGuardCheck             func(feeSats, spendSats uint64) error // optional read-only pre-build cap check

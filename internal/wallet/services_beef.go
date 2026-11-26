@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-wallet-toolbox/pkg/wdk"
 	"github.com/lightwebinc/bcommon/nodeapi"
-	"github.com/lightwebinc/bcommon/publish"
 )
 
 // lookupProof resolves a MerklePath for txid and ALWAYS verifies ComputeRoot + IsValidRootForHeight
@@ -57,9 +56,9 @@ func (s *bcommonServices) lookupProof(ctx context.Context, txid string) (*transa
 	}
 
 	var lastErr error
-	if s.cfg.Arcade != nil {
-		mp, h, err := s.cfg.Arcade.Proof(ctx, txid)
-		if err == nil && mp != nil {
+	if s.cfg.Broadcaster != nil {
+		mp, h, found, err := s.cfg.Broadcaster.Proof(ctx, txid)
+		if err == nil && found && mp != nil {
 			vmp, vh, ok, vErr := verify(mp, h)
 			if vErr != nil {
 				return nil, 0, false, vErr
@@ -67,7 +66,7 @@ func (s *bcommonServices) lookupProof(ctx context.Context, txid string) (*transa
 			if ok {
 				return vmp, vh, true, nil
 			}
-		} else if err != nil && !errors.Is(err, nodeapi.ErrNotMined) && !errors.Is(err, publish.ErrArcadeUnknown) && !errors.Is(err, publish.ErrArcadeRefused) {
+		} else if err != nil && !errors.Is(err, nodeapi.ErrNotMined) {
 			lastErr = err
 		}
 	}

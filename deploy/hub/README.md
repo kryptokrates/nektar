@@ -39,5 +39,5 @@ docker compose -f compose.yaml logs -f hub
 Running a Mainnet Hub (`NEKTAR_NETWORK=main`) requires:
 1. `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND`
 2. `>= 2` independent non-circular PoW header witnesses in `NEKTAR_HEADERS_SOURCE` (verify with `nektar check-mainnet`)
-3. Explicit `NEKTAR_SETTLE_SPEC` (e.g. `arcade:https://arcade.gorillapool.io`) and SpendGuard caps (`NEKTAR_MAX_FEE_PER_TX`, `NEKTAR_MAX_SPEND_PER_DAY`)
+3. Explicit `NEKTAR_SETTLE_SPEC` (e.g. `arcade:https://arcade-v2-us-1.bsvblockchain.tech`) and SpendGuard caps (`NEKTAR_MAX_FEE_PER_TX`, `NEKTAR_MAX_SPEND_PER_DAY`)
 4. Restate v1.8.1 sidecar running (`compose.yaml` wires this automatically).

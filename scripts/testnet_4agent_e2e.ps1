@@ -245,7 +245,7 @@ try {
     Verify-WoCTestnetTx $remBetaOps.anchorTxid "beta-ops-anchor"
     $null = Invoke-Tool "beta" "sell" @{ shard="ops-fast"; domains=@("ops"); priceSats=55; description="Beta faster cheaper SRE" }
 
-    $remBetaBsv = Invoke-Tool "beta" "remember" @{ shard="bsv-spv"; text="Beta[$runTag]: GorillaPool Arcade testnet accepts EF txs at 100 sat/kB."; source="beta"; autoAnchor=$true }
+    $remBetaBsv = Invoke-Tool "beta" "remember" @{ shard="bsv-spv"; text="Beta[$runTag]: BSV Broadcaster testnet accepts EF txs at 100 sat/kB."; source="beta"; autoAnchor=$true }
     Verify-WoCTestnetTx $remBetaBsv.anchorTxid "beta-bsv-anchor"
     $null = Invoke-Tool "beta" "sell" @{ shard="bsv-spv"; domains=@("bsv"); priceSats=65; description="Beta BSV engineering" }
 
@@ -288,7 +288,7 @@ try {
     # NAT bbox Seller: Beta buys nat from NAT-only Delta (ZERO inbound ports!)
     $null = Run-Trade "beta" "nat" "NAT-only agents bbox relay" 100 "bbox relay" "Beta <- Delta-NAT (Hub bbox)"
     # NAT bbox Buyer: NAT-only Delta buys bsv from Beta
-    $null = Run-Trade "delta" "bsv" "GorillaPool Arcade testnet EF" 120 "100 sat/kB" "Delta-NAT <- Beta (direct/NAT)"
+    $null = Run-Trade "delta" "bsv" "BSV Broadcaster testnet EF" 120 "100 sat/kB" "Delta-NAT <- Beta (direct/NAT)"
 
     # 7. Stage 6: Sell-to-Hub Knowledge Bounty + Duplicate HDP 409 Check
     Write-Host "`n=== Stage 6: Sell-to-Hub Knowledge Bounties ==="

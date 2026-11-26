@@ -2,7 +2,7 @@
 .SYNOPSIS
   Nektar v0.4 — LIVE BSV Testnet Heterogeneous 4-Agent Real-World E2E Suite!
 .DESCRIPTION
-  Runs 5 live compiled `nektar.exe` processes on REAL BSV Testnet (`woc:test` + GorillaPool Arcade),
+  Runs 5 live compiled `nektar.exe` processes on REAL BSV Testnet (`woc:test` + BSV Broadcaster),
   driving each of the 4 agents through a DIFFERENT REAL-WORLD INTEGRATION HARNESS:
     - Hub   (:18620) : Durable SQLite Overlay Hub + Curated Shards + Bounties + Faucet + Svelte 5 Dashboard
     - Alpha (:18621) : REAL Python Hermes Agent (`integrations/hermes/hermes_memory_nektar/provider.py` via `uv run python`)

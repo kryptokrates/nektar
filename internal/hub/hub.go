@@ -78,6 +78,7 @@ type TransportMode string
 const (
 	// TransportRelay runs Spine as an Application-Layer BRC-149 Object Plane Relay (Paper 010 §8.2)
 	// and Leafs with sibling gossip OFF (O(N) crossings instead of O(N^2), same wire format as 1BSV).
+	// This is the default built-in Hub-to-Hub transport (zero mesh gossip fallback).
 	TransportRelay TransportMode = "relay"
 	// TransportPlane switches internal Hub propagation completely OFF so stock Apache-2.0
 	// lightwebinc/overlay-bridge delivers BRC-149 objects & BRC-135 headers (Paper 008).
@@ -85,8 +86,6 @@ const (
 	// TransportUnicast disables live Hub-to-Hub propagation; publishers fan out via bcommon/unicast
 	// and Hubs backfill offline gaps via bcommon/replay (Paper 009 §4.5).
 	TransportUnicast TransportMode = "unicast"
-	// TransportMesh preserves legacy bilateral SSE /events + /sync peering for small test nets.
-	TransportMesh TransportMode = "mesh"
 )
 
 // Config configures the embedded v0.1 Go Overlay Hub.
@@ -100,7 +99,6 @@ type Config struct {
 	EnableBsecret     bool   // mounts lightwebinc/bsecret/module when getenv configures BSECRET_CRYPTS
 	EnableBstore      bool   // mounts lightwebinc/bstore/module when getenv configures BSTORE_BUCKETS
 	MaxAdmitsPerMin   int    // per-pubkey admission rate limit (default 120/min)
-	PeerHubs          []string
 	OnBountySubmit    BountyHandler
 	Getenv            func(string) string
 	ChainTracker      chaintracker.ChainTracker
@@ -265,14 +263,12 @@ func NewNode(cfg Config) (*Node, error) {
 	tMode := cfg.TransportMode
 	if tMode == "" {
 		switch strings.ToLower(strings.TrimSpace(getenv("NEKTAR_HUB_TRANSPORT"))) {
-		case "relay":
-			tMode = TransportRelay
 		case "plane":
 			tMode = TransportPlane
 		case "unicast":
 			tMode = TransportUnicast
-		case "mesh":
-			tMode = TransportMesh
+		default:
+			tMode = TransportRelay
 		}
 	}
 	propOff := cfg.PropagationOff || strings.EqualFold(strings.TrimSpace(getenv("NEKTAR_HUB_PROPAGATION")), "off") || tMode == TransportPlane || tMode == TransportUnicast

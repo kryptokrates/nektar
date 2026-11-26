@@ -194,9 +194,9 @@ func TestSpineAndLeafHubFeesMultiHubEndToEnd(t *testing.T) {
 		gougingHub.ts.CloseClientConnections()
 	})
 
-	// Start Leaf <-> Spine federation DOWN (metered egress with auto-topup!).
-	leafA.node.StartFederationWithTier(ctx, []string{spine.ts.URL}, true)
-	leafB.node.StartFederationWithTier(ctx, []string{spine.ts.URL}, true)
+	// Start Leaf <-> Spine 1BSV BRC-149 Object Plane Relay DOWN (metered egress with auto-topup!).
+	leafA.node.StartPlaneRelay(ctx, []string{spine.ts.URL})
+	leafB.node.StartPlaneRelay(ctx, []string{spine.ts.URL})
 
 	// 5. Seller Agent 1 (connected ONLY to Leaf Hub B, with direct PublicURL so Buyer on Leaf A settles across Spine!).
 	sellerMem, sellerBroker, _ := newSharedTestNode(t, ctx, shared, []string{leafB.ts.URL}, false, true)

@@ -54,10 +54,13 @@ func TestCrossHubSixHubFederationE2E(t *testing.T) {
 		leafURLs[i] = leaves[i].ts.URL + "/hub"
 	}
 
-	// Wire bilateral Spine <-> Leaf federation across all 5 Leaf Hubs!
-	spine.hubNode.StartFederation(ctx, leafURLs)
+	// Wire pure 1BSV Spine-and-Leaf BRC-149 Object Plane across all 5 Leaf Hubs (ZERO gossip!):
+	//   - Each Leaf forwards local admissions UP once to Spine (POST /submit)
+	//   - Each Leaf receives Spine's numbered BRC-149 Object Plane stream DOWN (/plane/stream + /plane/nack)
 	for i := range 5 {
-		leaves[i].hubNode.StartFederation(ctx, []string{spineURL})
+		leaves[i].hubNode.SetUpstreamSpines([]string{spineURL})
+		leaves[i].hubNode.SetUpstreamSubmitter(leaves[i].disc.SubmitBEEF)
+		leaves[i].hubNode.StartPlaneRelay(ctx, []string{spineURL})
 	}
 
 	// 2. Spawn 5 Agents — each docked on a DIFFERENT Leaf Hub!

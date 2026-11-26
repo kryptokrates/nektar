@@ -250,25 +250,17 @@ func cmdServe(args []string) error {
 				_ = engSrv.Shutdown(sCtx)
 			}()
 		}
-		// Hub-to-Hub transport wiring (1BSV Papers 006/008/010):
-		//   - relay:   Leaf connects to Spine's BRC-149 Application-Layer Object Plane (/plane/stream + /plane/nack)
-		//   - plane:   External overlay-bridge handles live propagation; Nektar starts NO peer gossip loops
-		//   - unicast: No Hub-to-Hub gossip; publishers use unicast fan-out + explicit catch-up below
-		//   - default/mesh: Legacy SSE /events + /sync federation for backwards compatibility
+		// Hub-to-Hub transport wiring (1BSV Papers 006/008/010 — zero mesh gossip):
+		//   - relay (default): Leaf connects to Spine's BRC-149 Application-Layer Object Plane (/plane/stream + /plane/nack)
+		//   - plane:           External lightwebinc/overlay-bridge handles live propagation; Nektar propagation OFF
+		//   - unicast:         Publisher unicast fan-out + explicit BRC-24 /lookup catch-up; Hub propagation OFF
 		tMode := strings.ToLower(strings.TrimSpace(os.Getenv("NEKTAR_HUB_TRANSPORT")))
 		switch tMode {
-		case string(hub.TransportRelay):
-			if len(upstreamSpines) > 0 {
-				hubNode.StartPlaneRelay(ctx, upstreamSpines)
-			}
 		case string(hub.TransportPlane), string(hub.TransportUnicast):
 			// Propagation switched OFF by design (Paper 008 §5 / Paper 009 §4.5).
 		default:
-			if peers := parseCSVEnv("NEKTAR_PEER_HUBS"); len(peers) > 0 {
-				hubNode.StartFederationWithTier(ctx, peers, true)
-			}
 			if len(upstreamSpines) > 0 {
-				hubNode.StartFederationWithTier(ctx, upstreamSpines, true)
+				hubNode.StartPlaneRelay(ctx, upstreamSpines)
 			}
 		}
 		// Explicit offline catch-up backfill via BRC-24 /lookup (strictly separated from live propagation, Paper 008 §6).

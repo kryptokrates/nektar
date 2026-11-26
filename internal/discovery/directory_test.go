@@ -121,9 +121,9 @@ func TestThreeLayerDiscoveryFederationAndRemoteChirpSeed(t *testing.T) {
 		t.Fatalf("buyer recall after remote CHIRP seed failed: recalled=%+v err=%v", recalled, err)
 	}
 
-	// 4. Verify Hub 2 syncs Bob's announcement from Hub 1 via /sync federation!
+	// 4. Verify Hub 2 syncs Bob's announcement from Hub 1 via 1BSV BRC-149 Object Plane Relay!
 	fedCtx, cancel := context.WithCancel(ctx)
-	hub2.StartFederation(fedCtx, []string{hub1Srv.URL})
+	hub2.StartPlaneRelay(fedCtx, []string{hub1Srv.URL})
 	cancel()
 	// Verify Hub 1 SQLite persistence survives full close & reopen!
 	hub1Path := hub1Srv.URL

@@ -185,7 +185,7 @@ func TestHubSQLiteRestartFederationBboxAndBounties(t *testing.T) {
 		t.Fatal("expected SQLite-persisted want to replay over /events?cursor=0 after hub restart")
 	}
 
-	// Start Hub 2 federating from Hub 1 and verify it pulls persist-want-1 automatically!
+	// Start Hub 2 on the 1BSV BRC-149 Object Plane Relay from Hub 1 and verify it pulls persist-want-1 automatically!
 	node2, err := NewNode(Config{Network: "memory"})
 	if err != nil {
 		t.Fatalf("NewNode 2: %v", err)
@@ -193,7 +193,7 @@ func TestHubSQLiteRestartFederationBboxAndBounties(t *testing.T) {
 	defer node2.Close()
 	fedCtx, fedCancel := context.WithCancel(context.Background())
 	defer fedCancel()
-	node2.StartFederation(fedCtx, []string{ts1.URL})
+	node2.StartPlaneRelay(fedCtx, []string{ts1.URL})
 
 	deadline := time.Now().Add(4 * time.Second)
 	federated := false

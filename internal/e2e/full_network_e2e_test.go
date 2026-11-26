@@ -462,13 +462,13 @@ func TestFiveNodeFullStackSmokeMeshSecurityAndChaos(t *testing.T) {
 			t.Fatalf("Gamma SellToHub bounty-agents failed: err=%v res=%+v", err, p2)
 		}
 
-		// 7. 2-Hub Federation: Hub-2 federates from Hub-1 and automatically sees all 5 peers!
+		// 7. 2-Hub 1BSV BRC-149 Object Plane Relay: Hub-2 consumes Hub-1's plane and automatically sees all 5 peers!
 		hub2Node, err := hub.NewNode(hub.Config{Network: "memory"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer hub2Node.Close()
-		hub2Node.StartFederation(ctx, []string{hub1URL})
+		hub2Node.StartPlaneRelay(ctx, []string{hub1URL})
 		hub2TS := httptest.NewServer(hub2Node.Handler())
 		defer hub2TS.Close()
 

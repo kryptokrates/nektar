@@ -80,8 +80,7 @@ func cmdHubRun(args []string) error {
 	addr := fs.String("listen", ":"+envOr("NEKTAR_HUB_PORT", "18421"), "Hub HTTP listen address")
 	netName := fs.String("network", envOr("NEKTAR_NETWORK", "testnet"), "Network name (memory|regtest|testnet|main)")
 	dataDir := fs.String("data-dir", "", "Data directory for hub.sqlite")
-	peersFlag := fs.String("peers", os.Getenv("NEKTAR_PEER_HUBS"), "Comma-separated sibling Hub URLs to federate with")
-	upstreamFlag := fs.String("upstream-spines", os.Getenv("NEKTAR_UPSTREAM_SPINES"), "Comma-separated Spine Hub URLs for Leaf upstream submission")
+	upstreamFlag := fs.String("upstream-spines", os.Getenv("NEKTAR_UPSTREAM_SPINES"), "Comma-separated Spine Hub URLs for Leaf BRC-149 Object Plane relay & upstream submission")
 	withLiquidity := fs.Bool("liquidity", true, "Arm Hub starter liquidity, curated shards & verified bounties")
 	hubRoleFlag := fs.String("hub-role", os.Getenv("NEKTAR_HUB_ROLE"), "Hub topology role (leaf|spine)")
 	feePresetFlag := fs.String("fee-preset", os.Getenv("NEKTAR_HUB_FEE_PRESET"), "Hub fee preset (free|lightbsv_egress|hybrid)")
@@ -270,24 +269,11 @@ func cmdHubRun(args []string) error {
 
 	tMode := strings.ToLower(strings.TrimSpace(os.Getenv("NEKTAR_HUB_TRANSPORT")))
 	switch tMode {
-	case string(hub.TransportRelay):
-		if len(upstreamSpines) > 0 {
-			node.StartPlaneRelay(ctx, upstreamSpines)
-		}
 	case string(hub.TransportPlane), string(hub.TransportUnicast):
 		// Propagation switched OFF by design (1BSV Paper 008 §5 / Paper 009 §4.5).
 	default:
-		if strings.TrimSpace(*peersFlag) != "" {
-			var peers []string
-			for _, p := range strings.Split(*peersFlag, ",") {
-				if p = strings.TrimSpace(p); p != "" {
-					peers = append(peers, p)
-				}
-			}
-			node.StartFederationWithTier(ctx, peers, true)
-		}
 		if len(upstreamSpines) > 0 {
-			node.StartFederationWithTier(ctx, upstreamSpines, true)
+			node.StartPlaneRelay(ctx, upstreamSpines)
 		}
 	}
 	if catchupPeers := parseCSVEnv("NEKTAR_CATCHUP_PEERS"); len(catchupPeers) > 0 {

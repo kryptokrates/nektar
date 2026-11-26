@@ -209,6 +209,8 @@ func (n *Node) topicNameForID(tid [32]byte) string {
 
 // handlePlaneStream serves the numbered Application-Layer BRC-149 Object Plane stream
 // (GET /plane/stream?from=<seq>&topics=<csv>). Backfills missed frames > from, then pushes live.
+// When the Hub meters egress (EgressSatsPer100Events > 0), callers must authenticate via signed
+// X-Nektar-* headers and maintain positive egress credits (bilateral Spine peers are exempt).
 func (n *Node) handlePlaneStream(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -216,13 +218,38 @@ func (n *Node) handlePlaneStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fromSeq, _ := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64)
+	rawT := strings.TrimSpace(r.URL.Query().Get("topics"))
 	var topicFilter []string
 	tidFilter := make(map[[32]byte]bool)
-	if rawT := strings.TrimSpace(r.URL.Query().Get("topics")); rawT != "" {
+	if rawT != "" {
 		for _, t := range strings.Split(rawT, ",") {
 			if t = strings.TrimSpace(t); t != "" {
 				topicFilter = append(topicFilter, t)
 				tidFilter[TopicIDOf(t)] = true
+			}
+		}
+	}
+
+	msatsPerEvent := n.fees.EgressMilliSatsPerEvent()
+	metered := msatsPerEvent > 0
+	var callerPub string
+	var isSpinePeer bool
+	if metered {
+		var authErr error
+		callerPub, isSpinePeer, authErr = n.authenticateEgressCaller(r, "hub_plane", fromSeq, rawT)
+		if authErr != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": authErr.Error()})
+			return
+		}
+		if !isSpinePeer {
+			cred, _ := n.store.GetEgressCredit(callerPub)
+			if cred.BalanceMilliSats < msatsPerEvent {
+				n.writeFeeOutcome(w, ActionEgressTopup, n.fees.EgressMinTopupSats, feeCollectOutcome{
+					HTTPStatus: http.StatusPaymentRequired,
+					Code:       "ERR_PAYMENT_REQUIRED",
+					Error:      fmt.Sprintf("egress credit balance %d msats below 1-frame cost %d msats (top up >= %d sats at /v1/credits/topup)", cred.BalanceMilliSats, msatsPerEvent, n.fees.EgressMinTopupSats),
+				})
+				return
 			}
 		}
 	}
@@ -249,6 +276,14 @@ func (n *Node) handlePlaneStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	chargeOne := func() bool {
+		if !metered || isSpinePeer {
+			return true
+		}
+		_, ok, cErr := n.store.ChargeEgressEvents(callerPub, 1, msatsPerEvent)
+		return cErr == nil && ok
+	}
+
 	sentSeq := uint64(0)
 	if fromSeq > latest {
 		fromSeq = 0
@@ -258,6 +293,10 @@ func (n *Node) handlePlaneStream(w http.ResponseWriter, r *http.Request) {
 		for _, ev := range backlog {
 			if len(ev.BEEF) == 0 {
 				continue
+			}
+			if !chargeOne() {
+				flusher.Flush()
+				return
 			}
 			frameBytes, err := EncodePlaneFrame(PlaneFrame{
 				FlowSeq: uint64(ev.Seq),
@@ -288,6 +327,10 @@ func (n *Node) handlePlaneStream(w http.ResponseWriter, r *http.Request) {
 		case f := <-ch:
 			if f.FlowSeq <= sentSeq {
 				continue
+			}
+			if !chargeOne() {
+				flusher.Flush()
+				return
 			}
 			frameBytes, err := EncodePlaneFrame(f)
 			if err != nil {
@@ -403,28 +446,82 @@ func (n *Node) planeRelayLoop(ctx context.Context, spine string) {
 	}
 }
 
+func (n *Node) signPlaneEgressReq(req *http.Request, action, spineURL string, cursor int64, topicsCSV string) {
+	n.mu.RLock()
+	signer := n.egressAuthSigner
+	n.mu.RUnlock()
+	if signer == nil {
+		return
+	}
+	aud := planeHostAud(spineURL)
+	if pub, ts, nonce, sig, err := signer(action, aud, cursor, topicsCSV); err == nil && pub != "" && sig != "" {
+		req.Header.Set("X-Nektar-Pub", pub)
+		req.Header.Set("X-Nektar-Ts", ts)
+		req.Header.Set("X-Nektar-Nonce", nonce)
+		req.Header.Set("X-Nektar-Sig", sig)
+	}
+}
+
+func planeHostAud(rawURL string) string {
+	if u, err := url.Parse(strings.TrimSpace(rawURL)); err == nil && u.Host != "" {
+		return strings.ToLower(u.Host)
+	}
+	return strings.ToLower(strings.TrimSpace(rawURL))
+}
+
+func (n *Node) tryPlaneTopup(ctx context.Context, spine string, minTopup uint64) bool {
+	n.mu.RLock()
+	topupFn := n.onEgressTopup
+	n.mu.RUnlock()
+	if topupFn == nil {
+		return false
+	}
+	tCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	return topupFn(tCtx, spine, minTopup) == nil
+}
+
 func (n *Node) consumePlaneOnce(ctx context.Context, spine string, cursor uint64) uint64 {
 	elected := n.Topics()
 	topicByID := make(map[[32]byte]string, len(elected))
 	for _, t := range elected {
 		topicByID[TopicIDOf(t)] = t
 	}
+	topicsCSV := strings.Join(elected, ",")
 	u := fmt.Sprintf("%s/plane/stream?from=%d", spine, cursor)
-	if len(elected) > 0 {
-		u += "&topics=" + url.QueryEscape(strings.Join(elected, ","))
+	if topicsCSV != "" {
+		u += "&topics=" + url.QueryEscape(topicsCSV)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return cursor
+	var resp *http.Response
+	for attempt := 0; attempt < 2; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return cursor
+		}
+		n.signPlaneEgressReq(req, "hub_plane", spine, int64(cursor), topicsCSV)
+		r, err := n.sseClient.Do(req)
+		if err != nil {
+			return cursor
+		}
+		if r.StatusCode == http.StatusPaymentRequired && attempt == 0 {
+			minTopup, _ := strconv.ParseUint(strings.TrimSpace(r.Header.Get("X-BSV-Payment-Satoshis-Required")), 10, 64)
+			r.Body.Close()
+			if n.tryPlaneTopup(ctx, spine, minTopup) {
+				continue
+			}
+			return cursor
+		}
+		if r.StatusCode != http.StatusOK {
+			r.Body.Close()
+			return cursor
+		}
+		resp = r
+		break
 	}
-	resp, err := n.sseClient.Do(req)
-	if err != nil {
+	if resp == nil {
 		return cursor
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return cursor
-	}
 	if lsStr := strings.TrimSpace(resp.Header.Get("X-Nektar-Latest-Seq")); lsStr != "" {
 		if latest, pErr := strconv.ParseUint(lsStr, 10, 64); pErr == nil && latest < cursor {
 			cursor = 0

@@ -595,64 +595,19 @@ func TestHubFeeValve2MeteredEgressSSEAndSyncAndSpineGuard(t *testing.T) {
 		t.Fatalf("expected bilateral Spine peer to receive all 3 events free, got %d", len(peerItems))
 	}
 
-	// 7. Anti-freerider Spine guard: auto-discovered untrusted Hub Z -> Spine ONLY pulls `dir` announcements, NEVER unpaid WantAds!
-	hubZ, err := hub.NewNode(hub.Config{Network: "memory"})
-	if err != nil {
-		t.Fatal(err)
+	// 7. Metered BRC-149 Object Plane stream (/plane/stream) enforces the exact same Spine egress metering!
+	if respUnauth, uErr := http.Get(spineTS.URL + "/plane/stream?from=0"); uErr != nil || respUnauth.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated /plane/stream, got err=%v resp=%+v", uErr, respUnauth)
+	} else {
+		respUnauth.Body.Close()
 	}
-	defer hubZ.Close()
-	hubZTS := httptest.NewServer(hubZ.Handler())
-	defer hubZTS.Close()
-	defer func() {
-		cancel()
-		hubZ.CloseSSE()
-		hubZTS.CloseClientConnections()
-	}()
-
-	// Seed Hub Z with 1 AnnounceAd (`dir`) and 1 unpaid WantAd (`finance`).
-	ann := bstack.AnnounceAd{
-		Pub:       hex.EncodeToString(adKey.PubKey().Compressed()),
-		Net:       "memory",
-		Hosts:     []string{hubZTS.URL},
-		PublicURL: "https://untrusted-z.example",
-		Domains:   []string{"finance"},
-		Exp:       time.Now().Add(time.Hour).UnixMilli(),
+	zeroKey, _ := ec.NewPrivateKey()
+	rPlaneZero := doSignedGET("/plane/stream?from=0", "hub_plane", 0, "", zeroKey)
+	rPlaneZero.Body.Close()
+	if rPlaneZero.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("expected 402 for 0-credit /plane/stream, got %d", rPlaneZero.StatusCode)
 	}
-	annSig, _ := bstack.SignArtifact(adKey, ann)
-	annBody, _ := json.Marshal(bstack.SignedAnnounce{Announce: ann, Sig: annSig})
-	annBEEF, _ := discovery.BuildMarketBEEF(bstack.MarketPayload{Kind: bstack.KindAnnounce, Body: annBody})
-	if _, err := hubZ.Submit(ctx, annBEEF, []string{bstack.LaneOf("memory", bstack.DirDomain)}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := hubZ.Submit(ctx, makeWantBEEF(t, adKey, "sybil-unpaid-want", "finance"), []string{bstack.LaneOf("memory", "finance")}); err != nil {
-		t.Fatal(err)
-	}
-
-	// manual=false triggers RoleSpine dir-only isolation!
-	spineNode.StartFederationWithTier(ctx, []string{hubZTS.URL}, false)
-	deadline := time.Now().Add(3 * time.Second)
-	var pulledDir, pulledSybilWant bool
-	for time.Now().Before(deadline) {
-		evs, _ := spineNode.Store().EventsSince(0, nil, 100)
-		for _, ev := range evs {
-			if ev.Payload.Kind == bstack.KindAnnounce {
-				pulledDir = true
-			}
-			if ev.Payload.Kind == bstack.KindWant && strings.Contains(string(ev.Payload.Body), "sybil-unpaid-want") {
-				pulledSybilWant = true
-			}
-		}
-		if pulledDir {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if !pulledDir {
-		t.Fatal("expected Spine to pull free dir AnnounceAd from auto-discovered Hub Z")
-	}
-	if pulledSybilWant {
-		t.Fatal("RoleSpine MUST NOT pull unpaid WantAd from untrusted auto-discovered Hub Z!")
-	}
+	_ = cancel
 }
 
 func TestHubFeeValve3BboxSendAndValve4Lookup(t *testing.T) {

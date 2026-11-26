@@ -23,11 +23,7 @@ func cmdRemember(args []string) error {
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
 
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDir()
-	}
-	if info, ok := server.DetectLiveDaemon(dir); ok {
+	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "remember", map[string]any{
 			"shard":      *shard,
 			"text":       *text,
@@ -67,11 +63,7 @@ func cmdRecall(args []string) error {
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
 
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDir()
-	}
-	if info, ok := server.DetectLiveDaemon(dir); ok {
+	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "recall", map[string]any{
 			"shard":     *shard,
 			"query":     *query,
@@ -125,11 +117,7 @@ func cmdAnchor(args []string) error {
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
 
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDir()
-	}
-	if info, ok := server.DetectLiveDaemon(dir); ok {
+	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "anchor", map[string]any{"shard": *shard})
 		if err != nil {
 			return err
@@ -166,11 +154,7 @@ func cmdVerify(args []string) error {
 		return printJSON(map[string]any{"verification": vr, "receipt": rcp})
 	}
 
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDir()
-	}
-	if info, ok := server.DetectLiveDaemon(dir); ok {
+	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "verifyReceipt", map[string]any{"token": *token})
 		if err != nil {
 			return err
@@ -197,11 +181,7 @@ func cmdStatus(args []string) error {
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
 
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDir()
-	}
-	if info, ok := server.DetectLiveDaemon(dir); ok {
+	if info, ok := detectDaemon(*dataDir, ""); ok {
 		if out, err := callLiveTool(info, "status", map[string]any{}); err == nil {
 			return printJSON(out)
 		}

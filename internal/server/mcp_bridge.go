@@ -32,37 +32,88 @@ func DaemonInfoPath(dataDir string) string {
 	return filepath.Join(dataDir, "daemon.json")
 }
 
-// WriteDaemonInfo atomically writes daemon.json (mode 0600) so sibling tools can discover the running daemon.
-func WriteDaemonInfo(dataDir string, info DaemonInfo) error {
+// ActiveDaemonPointerPath returns the cross-network active-daemon pointer file (~/.nektar/active-daemon.json)
+// so zero-flag CLI commands, MCP stdio bridges, hooks, Hermes, and OpenClaw automatically find a running
+// Mainnet (~/.nektar/main) or Testnet (~/.nektar) daemon without split-brain DB creation.
+func ActiveDaemonPointerPath(home string) string {
+	if strings.TrimSpace(home) == "" {
+		home, _ = os.UserHomeDir()
+	}
+	if strings.TrimSpace(home) == "" {
+		return ""
+	}
+	return filepath.Join(home, ".nektar", "active-daemon.json")
+}
+
+func writeDaemonFileAtomic(path string, info DaemonInfo) error {
 	if info.AuthToken != "" && info.Token == "" {
 		info.Token = info.AuthToken
 	} else if info.Token != "" && info.AuthToken == "" {
 		info.AuthToken = info.Token
 	}
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
 		return err
 	}
-	p := DaemonInfoPath(dataDir)
-	tmp := p + ".tmp"
+	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
 	_ = os.Chmod(tmp, 0o600)
-	if err := os.Rename(tmp, p); err != nil {
+	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
 	return nil
 }
 
-// RemoveDaemonInfo deletes daemon.json on clean daemon exit, only if owned by this PID.
+// WriteDaemonInfo atomically writes <dataDir>/daemon.json (mode 0600) so sibling tools can discover the running daemon.
+func WriteDaemonInfo(dataDir string, info DaemonInfo) error {
+	return writeDaemonFileAtomic(DaemonInfoPath(dataDir), info)
+}
+
+// WriteActiveDaemonPointer writes ~/.nektar/active-daemon.json unless dataDir is under os.TempDir()
+// or NEKTAR_ISOLATED_DAEMON=1 (preventing test harnesses from clobbering a live user daemon pointer).
+func WriteActiveDaemonPointer(home, dataDir string, info DaemonInfo) error {
+	if os.Getenv("NEKTAR_ISOLATED_DAEMON") == "1" {
+		return nil
+	}
+	if home == "" {
+		if absDir, err := filepath.Abs(dataDir); err == nil {
+			if absTmp, tErr := filepath.Abs(os.TempDir()); tErr == nil {
+				if strings.HasPrefix(strings.ToLower(absDir), strings.ToLower(absTmp)) {
+					return nil
+				}
+			}
+		}
+	}
+	p := ActiveDaemonPointerPath(home)
+	if p == "" {
+		return nil
+	}
+	return writeDaemonFileAtomic(p, info)
+}
+
+// RemoveDaemonInfo deletes <dataDir>/daemon.json (and active-daemon.json if owned by this PID) on clean exit.
 func RemoveDaemonInfo(dataDir string) {
-	p := DaemonInfoPath(dataDir)
+	removeDaemonFileIfOwned(DaemonInfoPath(dataDir))
+	if p := ActiveDaemonPointerPath(""); p != "" {
+		removeDaemonFileIfOwned(p)
+	}
+}
+
+// RemoveActiveDaemonPointer deletes <home>/.nektar/active-daemon.json if owned by this PID.
+func RemoveActiveDaemonPointer(home string) {
+	if p := ActiveDaemonPointerPath(home); p != "" {
+		removeDaemonFileIfOwned(p)
+	}
+}
+
+func removeDaemonFileIfOwned(p string) {
 	if b, err := os.ReadFile(p); err == nil {
 		var info DaemonInfo
 		if json.Unmarshal(b, &info) == nil && info.PID > 0 && info.PID != os.Getpid() {
@@ -72,9 +123,11 @@ func RemoveDaemonInfo(dataDir string) {
 	_ = os.Remove(p)
 }
 
-// DetectLiveDaemon reads <dataDir>/daemon.json and verifies GET /v1/health responds within 500ms.
-func DetectLiveDaemon(dataDir string) (*DaemonInfo, bool) {
-	b, err := os.ReadFile(DaemonInfoPath(dataDir))
+func detectLiveDaemonAtFile(path string) (*DaemonInfo, bool) {
+	if strings.TrimSpace(path) == "" {
+		return nil, false
+	}
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, false
 	}
@@ -97,6 +150,50 @@ func DetectLiveDaemon(dataDir string) (*DaemonInfo, bool) {
 		return nil, false
 	}
 	return &info, true
+}
+
+// DetectLiveDaemon reads <dataDir>/daemon.json and verifies GET /v1/health responds within 500ms.
+func DetectLiveDaemon(dataDir string) (*DaemonInfo, bool) {
+	return detectLiveDaemonAtFile(DaemonInfoPath(dataDir))
+}
+
+// DetectAnyLiveDaemon finds the active Nektar daemon across preferredDir, ~/.nektar/active-daemon.json,
+// ~/.nektar/main/daemon.json (BSV Mainnet), and ~/.nektar/daemon.json (BSV Testnet).
+func DetectAnyLiveDaemon(preferredDir string) (*DaemonInfo, bool) {
+	home, _ := os.UserHomeDir()
+	return DetectAnyLiveDaemonInHome(home, preferredDir)
+}
+
+// DetectAnyLiveDaemonInHome is the hermetic testable core of DetectAnyLiveDaemon.
+func DetectAnyLiveDaemonInHome(home, preferredDir string) (*DaemonInfo, bool) {
+	var cands []string
+	seen := make(map[string]bool)
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return
+		}
+		clean := filepath.Clean(p)
+		key := strings.ToLower(clean)
+		if !seen[key] {
+			seen[key] = true
+			cands = append(cands, clean)
+		}
+	}
+	if strings.TrimSpace(preferredDir) != "" {
+		add(DaemonInfoPath(preferredDir))
+	}
+	if strings.TrimSpace(home) != "" {
+		add(ActiveDaemonPointerPath(home))
+		add(filepath.Join(home, ".nektar", "main", "daemon.json"))
+		add(filepath.Join(home, ".nektar", "daemon.json"))
+	}
+	for _, p := range cands {
+		if info, ok := detectLiveDaemonAtFile(p); ok {
+			return info, true
+		}
+	}
+	return nil, false
 }
 
 // RunStdioBridge proxies newline-delimited JSON-RPC stdio (stdin -> stdout) to a live daemon's

@@ -80,6 +80,13 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 	if listenAddr == "" {
 		listenAddr = "127.0.0.1:9080"
 	}
+	// In local auto-supervised mode (no external Restate & default loopback 9080), avoid port collisions
+	// when running side-by-side Mainnet + Testnet nodes or when another local tool occupies :9080.
+	if strings.TrimSpace(cfg.ExternalAdminURL) == "" && strings.TrimSpace(cfg.EndpointURI) == "" && listenAddr == "127.0.0.1:9080" {
+		if p, pErr := pickFreeLoopbackPort(9080); pErr == nil {
+			listenAddr = fmt.Sprintf("127.0.0.1:%d", p)
+		}
+	}
 	// Fail-closed persistent internal Restate token: load or atomically create a mode-0600 32-byte
 	// token in <dataDir>/restate-internal-token so suspended Restate workflows survive restarts
 	// without hitting checkInternalAuthReq mismatches.
@@ -110,6 +117,11 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 			"restate: refusing non-loopback -restate-listen %q without NEKTAR_RESTATE_IDENTITY_KEY (bind 127.0.0.1:9080, set NEKTAR_RESTATE_IDENTITY_KEY=publickeyv1_..., or set NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT=1 on a private bridge network)",
 			listenAddr,
 		)
+	}
+	// When Restate auto-start is explicitly disabled and no external Restate admin URL is configured,
+	// skip starting an unused h2c listener after enforcing the non-loopback security guard above.
+	if cfg.DisableAutoStart && strings.TrimSpace(cfg.ExternalAdminURL) == "" {
+		return nil, noop, nil
 	}
 
 	epURI, err := buildRestateEndpointURI(listenAddr, cfg.EndpointURI)
@@ -230,7 +242,26 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 	// Decouple child lifecycle from parent ctx so SIGTERM does not immediately SIGKILL restate-server
 	// before httpSrv.Shutdown drains in-flight requests; stopFn performs graceful SIGTERM + bounded WaitDelay.
 	cmdCtx, cmdCancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(cmdCtx, binPath, "--base-dir", restateDir)
+	var cmd *exec.Cmd
+	if strings.HasPrefix(binPath, "wsl:") {
+		wslBin := strings.TrimPrefix(binPath, "wsl:")
+		dirSum := sha256.Sum256([]byte(cfg.DataDir))
+		wslDataDir := fmt.Sprintf("$HOME/.nektar/restate-data/%s", hex.EncodeToString(dirSum[:8]))
+		shCmd := fmt.Sprintf(
+			`mkdir -p %s && exec env RESTATE_NODE_NAME=nektar-local RESTATE_BIND_ADDRESS=127.0.0.1:%d RESTATE_INGRESS__BIND_ADDRESS=127.0.0.1:%d RESTATE_ADMIN__BIND_ADDRESS=127.0.0.1:%d RUST_LOG=warn %q --base-dir %s`,
+			wslDataDir, nodePort, ingPort, admPort, wslBin, wslDataDir,
+		)
+		cmd = exec.CommandContext(cmdCtx, "wsl", "-e", "sh", "-c", shCmd)
+	} else {
+		cmd = exec.CommandContext(cmdCtx, binPath, "--base-dir", restateDir)
+		cmd.Env = append(os.Environ(),
+			"RESTATE_NODE_NAME=nektar-local",
+			fmt.Sprintf("RESTATE_BIND_ADDRESS=127.0.0.1:%d", nodePort),
+			fmt.Sprintf("RESTATE_INGRESS__BIND_ADDRESS=127.0.0.1:%d", ingPort),
+			fmt.Sprintf("RESTATE_ADMIN__BIND_ADDRESS=127.0.0.1:%d", admPort),
+			"RUST_LOG=warn",
+		)
+	}
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
 			terminatePIDGracefully(cmd.Process.Pid)
@@ -238,13 +269,6 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 		return nil
 	}
 	cmd.WaitDelay = 3 * time.Second
-	cmd.Env = append(os.Environ(),
-		"RESTATE_NODE_NAME=nektar-local",
-		fmt.Sprintf("RESTATE_BIND_ADDRESS=127.0.0.1:%d", nodePort),
-		fmt.Sprintf("RESTATE_INGRESS__BIND_ADDRESS=127.0.0.1:%d", ingPort),
-		fmt.Sprintf("RESTATE_ADMIN__BIND_ADDRESS=127.0.0.1:%d", admPort),
-		"RUST_LOG=warn",
-	)
 	logFile, lErr := os.OpenFile(filepath.Join(cfg.DataDir, "restate-server.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
 	if lErr == nil {
 		cmd.Stdout = logFile
@@ -373,6 +397,20 @@ func findRestateBinary() string {
 	if p, err := exec.LookPath("restate-server"); err == nil {
 		return p
 	}
+	// On Windows, transparently detect pinned Linux restate-server installed inside WSL2
+	// (WSL2 shares 127.0.0.1 loopback with Windows host).
+	if runtime.GOOS == "windows" && os.Getenv("NEKTAR_RESTATE_NO_WSL") != "1" {
+		if _, err := exec.LookPath("wsl"); err == nil {
+			pCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			out, wErr := exec.CommandContext(pCtx, "wsl", "-e", "sh", "-c", `test -x "$HOME/.nektar/bin/restate-server" && printf "%s/.nektar/bin/restate-server" "$HOME"`).Output()
+			cancel()
+			if wErr == nil {
+				if p := strings.TrimSpace(string(out)); strings.HasPrefix(p, "/") {
+					return "wsl:" + p
+				}
+			}
+		}
+	}
 	return ""
 }
 
@@ -390,8 +428,15 @@ func pickFreeLoopbackPort(preferred int) (int, error) {
 	return port, nil
 }
 
-// cmdRestateUp downloads & SHA-256 verifies the pinned restate-server v1.8.1 binary into ~/.nektar/bin/
-// so native bare-metal users get active Restate durable execution in one command without Docker.
+// ensureRestateInstalled returns an existing restate-server path or installs pinned v1.8.1
+// (native on macOS/Linux, or inside WSL2 on Windows). Safe to call non-fatally during `nektar up`.
+func ensureRestateInstalled(verbose bool) (string, error) {
+	if bin := findRestateBinary(); bin != "" {
+		return bin, nil
+	}
+	return installRestatePinned(RestatePinnedVersion, "", "", verbose)
+}
+
 func cmdRestateUp(args []string) error {
 	fs := flag.NewFlagSet("restate-up", flag.ExitOnError)
 	ver := fs.String("version", RestatePinnedVersion, "Pinned Restate server version")
@@ -399,13 +444,24 @@ func cmdRestateUp(args []string) error {
 	destDir := fs.String("dir", "", "Install directory (default ~/.nektar/bin)")
 	_ = fs.Parse(args)
 
-	cleanVer := strings.TrimPrefix(strings.TrimSpace(*ver), "v")
+	installed, err := installRestatePinned(*ver, *shaOverride, *destDir, true)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Installed pinned SHA-256 verified restate-server v%s -> %s\n", strings.TrimPrefix(strings.TrimSpace(*ver), "v"), installed)
+	fmt.Println("Next: run `nektar up` (or `nektar serve`) — it will automatically supervise restate-server on loopback!")
+	return nil
+}
+
+func installRestatePinned(ver, shaOverride, destDir string, verbose bool) (string, error) {
+	cleanVer := strings.TrimPrefix(strings.TrimSpace(ver), "v")
 	for _, c := range cleanVer {
 		if !((c >= '0' && c <= '9') || c == '.' || c == '-' || (c >= 'a' && c <= 'z')) {
-			return fmt.Errorf("invalid -version %q", *ver)
+			return "", fmt.Errorf("invalid -version %q", ver)
 		}
 	}
 
+	useWSL := false
 	target := ""
 	switch runtime.GOOS + "/" + runtime.GOARCH {
 	case "linux/amd64":
@@ -416,46 +472,69 @@ func cmdRestateUp(args []string) error {
 		target = "aarch64-apple-darwin"
 	case "darwin/amd64":
 		target = "x86_64-apple-darwin"
+	case "windows/amd64", "windows/arm64":
+		if os.Getenv("NEKTAR_RESTATE_NO_WSL") != "1" {
+			if _, err := exec.LookPath("wsl"); err == nil {
+				pCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				archOut, wErr := exec.CommandContext(pCtx, "wsl", "-e", "uname", "-m").Output()
+				cancel()
+				if wErr == nil {
+					switch strings.TrimSpace(string(archOut)) {
+					case "x86_64", "amd64":
+						target = "x86_64-unknown-linux-musl"
+						useWSL = true
+					case "aarch64", "arm64":
+						target = "aarch64-unknown-linux-musl"
+						useWSL = true
+					}
+				}
+			}
+		}
+		if !useWSL {
+			return "", fmt.Errorf("restate-server has no native Windows binary and WSL2 was not detected — install WSL2 (`wsl --install`) or use Docker (`docker compose -f deploy/agent/compose.yaml up -d`) for live BSV trades (local memory, recall & receipts work without Restate)")
+		}
 	default:
-		return fmt.Errorf("automatic restate-server download is not published for %s/%s — use Docker (`docker compose -f deploy/agent/compose.yaml up -d`) or install restate-server manually and set NEKTAR_RESTATE_BIN", runtime.GOOS, runtime.GOARCH)
+		return "", fmt.Errorf("automatic restate-server download is not published for %s/%s — use Docker (`docker compose -f deploy/agent/compose.yaml up -d`) or set NEKTAR_RESTATE_BIN", runtime.GOOS, runtime.GOARCH)
 	}
 
-	wantDigest := strings.ToLower(strings.TrimSpace(*shaOverride))
+	wantDigest := strings.ToLower(strings.TrimSpace(shaOverride))
 	if wantDigest == "" {
 		if cleanVer != RestatePinnedVersion {
-			return fmt.Errorf("refusing unpinned restate-server version %q without explicit -sha256 (pinned version is %s)", cleanVer, RestatePinnedVersion)
+			return "", fmt.Errorf("refusing unpinned restate-server version %q without explicit -sha256 (pinned version is %s)", cleanVer, RestatePinnedVersion)
 		}
 		wantDigest = restatePinnedSHA256[target]
 	}
 	if len(wantDigest) != 64 {
-		return fmt.Errorf("invalid expected sha256 digest %q", wantDigest)
+		return "", fmt.Errorf("invalid expected sha256 digest %q", wantDigest)
 	}
 
-	dir := strings.TrimSpace(*destDir)
+	dir := strings.TrimSpace(destDir)
 	if dir == "" {
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".nektar", "bin")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return "", err
 	}
 
 	archiveName := fmt.Sprintf("restate-server-%s.tar.xz", target)
 	baseURL := fmt.Sprintf("https://github.com/restatedev/restate/releases/download/v%s/", cleanVer)
 	hc := &http.Client{Timeout: 3 * time.Minute}
 
-	fmt.Printf("Downloading restate-server v%s (%s)...\n", cleanVer, target)
+	if verbose {
+		fmt.Printf("Downloading restate-server v%s (%s)...\n", cleanVer, target)
+	}
 	resp, err := hc.Get(baseURL + archiveName)
 	if err != nil {
-		return fmt.Errorf("download archive: %w", err)
+		return "", fmt.Errorf("download archive: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download archive HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("download archive HTTP %d", resp.StatusCode)
 	}
 	tmpArchive, err := os.CreateTemp(dir, "restate-*.tar.xz")
 	if err != nil {
-		return err
+		return "", err
 	}
 	tmpPath := tmpArchive.Name()
 	defer os.Remove(tmpPath)
@@ -463,19 +542,39 @@ func cmdRestateUp(args []string) error {
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(tmpArchive, h), resp.Body); err != nil {
 		_ = tmpArchive.Close()
-		return err
+		return "", err
 	}
 	_ = tmpArchive.Close()
 
 	gotSum := hex.EncodeToString(h.Sum(nil))
 	if !strings.EqualFold(gotSum, wantDigest) {
-		return fmt.Errorf("SHA-256 mismatch for %s: got %s, want pinned %s", archiveName, gotSum, wantDigest)
+		return "", fmt.Errorf("SHA-256 mismatch for %s: got %s, want pinned %s", archiveName, gotSum, wantDigest)
+	}
+
+	if useWSL {
+		f, err := os.Open(tmpPath)
+		if err != nil {
+			return "", err
+		}
+		defer f.Close()
+		extractCmd := exec.Command("wsl", "-e", "sh", "-c",
+			`set -eu; mkdir -p "$HOME/.nektar/bin"; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT; tar --no-same-owner --no-same-permissions -xJf - -C "$tmp"; bin="$(find "$tmp" -type f -name restate-server | head -n 1)"; test -n "$bin"; chmod 755 "$bin"; mv "$bin" "$HOME/.nektar/bin/restate-server"; printf "%s/.nektar/bin/restate-server" "$HOME"`)
+		extractCmd.Stdin = f
+		out, err := extractCmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("extract restate-server into WSL2: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		wslBin := strings.TrimSpace(string(out))
+		if !strings.HasPrefix(wslBin, "/") {
+			return "", fmt.Errorf("unexpected WSL2 install output: %q", wslBin)
+		}
+		return "wsl:" + wslBin, nil
 	}
 
 	// Extract restate-server binary from verified .tar.xz archive into a temp dir, then verify regular file before rename.
 	extractDir, err := os.MkdirTemp(dir, "restate-extract-*")
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer os.RemoveAll(extractDir)
 	tarArgs := []string{"-xJf", tmpPath, "-C", extractDir}
@@ -484,7 +583,7 @@ func cmdRestateUp(args []string) error {
 	}
 	tarCmd := exec.Command("tar", tarArgs...)
 	if out, err := tarCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("extract %s (requires tar/xz): %w: %s", archiveName, err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("extract %s (requires tar/xz): %w: %s", archiveName, err, strings.TrimSpace(string(out)))
 	}
 	var foundBin string
 	_ = filepath.WalkDir(extractDir, func(p string, d os.DirEntry, wErr error) error {
@@ -494,22 +593,20 @@ func cmdRestateUp(args []string) error {
 		return nil
 	})
 	if foundBin == "" {
-		return errors.New("restate-server regular binary not found inside release archive")
+		return "", errors.New("restate-server regular binary not found inside release archive")
 	}
 	fi, err := os.Lstat(foundBin)
 	if err != nil || !fi.Mode().IsRegular() {
-		return errors.New("refusing non-regular restate-server file (symlink blocked)")
+		return "", errors.New("refusing non-regular restate-server file (symlink blocked)")
 	}
 	dstPath := filepath.Join(dir, "restate-server")
 	if err := os.Chmod(foundBin, 0o755); err != nil {
-		return err
+		return "", err
 	}
 	if err := os.Rename(foundBin, dstPath); err != nil {
-		return err
+		return "", err
 	}
-	fmt.Printf("Installed pinned SHA-256 verified restate-server v%s -> %s\n", cleanVer, dstPath)
-	fmt.Println("Next: run `nektar serve` — it will automatically supervise restate-server on loopback!")
-	return nil
+	return dstPath, nil
 }
 
 func envInt64(key string, fallback int64) int64 {

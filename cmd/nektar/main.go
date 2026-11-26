@@ -20,6 +20,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/reasoning"
+	"github.com/kryptokrates/nektar/internal/server"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -40,12 +41,18 @@ func main() {
 	switch cmd {
 	case "version", "-v", "--version":
 		fmt.Printf("nektar v%s (pure-Go single binary — Lightweb bcommon + Rúnar + Cedar + Mangle + Restate + MCP)\n", Version)
+	case "up", "start":
+		err = cmdUp(args)
+	case "stop":
+		err = cmdStop(args)
 	case "serve":
 		err = cmdServe(args)
 	case "mcp":
 		err = cmdMCP(args)
 	case "hub":
 		err = cmdHub(args)
+	case "earn":
+		err = cmdEarn(args)
 	case "remember":
 		err = cmdRemember(args)
 	case "recall":
@@ -95,9 +102,11 @@ func main() {
 func printUsage() {
 	fmt.Println(`nektar v0.4 — Verifiable, encrypted AI agent memory & autonomous knowledge market on BSV
 
-Get Started:
-  nektar serve          Start agent daemon + Dashboard + MCP + L0 Proxy + Market (default testnet :18420)
-                        Mainnet 1-liner: nektar serve --network main --confirm I_UNDERSTAND
+Get Started (25 seconds, zero Docker):
+  nektar up             Start background daemon + auto-dock Claude/Codex/Hermes/OpenClaw/Cursor + live receipt check
+                        Mainnet 1-liner: nektar up --network main --confirm I_UNDERSTAND
+  nektar stop           Gracefully stop the background Nektar daemon
+  nektar serve          Run foreground daemon + Dashboard + MCP + L0 Proxy + Market (default testnet :18420)
   nektar open           Open the Nektar Dashboard in your browser
   nektar dock           Auto-detect & wire AI apps (Claude, Cursor, Codex, VS Code, Hermes, OpenClaw…)
   nektar wallet         Manage BRC-100 wallet (status | address [--qr] | sync | fund | send | sweep | fuel)
@@ -109,18 +118,19 @@ Memory & Knowledge Market:
   nektar verify         Verify a nektarr1.* receipt token offline (-token)
   nektar want           Buy verified knowledge live from peers or Hubs (-domains, -question, -max)
   nektar sell           Arm a local shard for A2A selling (-shard, -domains, -price) or sell to Hub (-bounty)
+  nektar earn           Guided seller fast-path: inspect open Hub bounties & earn sats from anchored shards
   nektar policy         Manage operator trading policies (approve --preset buyer|seller|both | list | revoke)
   nektar peers          Discover verified peers, bfinger handles, CHIRP packs & Hub bounties
 
 Hub & Operations:
   nektar hub            Deploy/manage a public Hub (up [--auto-ip|--domain|--tunnel|--native] | status | logs | down | run)
-  nektar mcp            Stdio MCP bridge (auto-connects to running daemon; zero lock contention)
+  nektar mcp            Stdio MCP bridge (auto-connects & auto-starts shared daemon; zero lock contention)
   nektar hook           Native zero-Node Claude Code / Codex hooks (session-start | prefetch | verify-receipt)
-  nektar doctor         Run full node health diagnosis with exact next steps
+  nektar doctor         Run full node health diagnosis (wallet, Restate, peers, cohort density & next steps)
   nektar check-mainnet  Verify Mainnet confirmation, dual-witness PoW headers, broadcaster & SpendGuard
   nektar status         Print node identity, wallet balance, shards, policy hash & SpendGuard state
   nektar vault / bond   Manage on-chain NektarAgentVault & NektarCheckpointBond covenants
-  nektar restate-up     Download SHA-256 verified restate-server v1.8.1 into ~/.nektar/bin
+  nektar restate-up     Download SHA-256 verified restate-server v1.8.1 (macOS, Linux, or Windows WSL2)
   nektar version        Print build version`)
 }
 
@@ -196,6 +206,25 @@ func defaultDataDirForNetwork(network string) string {
 		return filepath.Join(base, "main")
 	}
 	return base
+}
+
+// detectDaemon resolves a live Nektar daemon across explicit overrides or any active network
+// (~/.nektar/active-daemon.json, ~/.nektar/main, ~/.nektar) so Mainnet daemons are always found
+// by zero-flag CLI commands, MCP stdio bridges, and hooks.
+func detectDaemon(dataDirFlag, networkFlag string) (*server.DaemonInfo, bool) {
+	if d := strings.TrimSpace(dataDirFlag); d != "" {
+		return server.DetectLiveDaemon(d)
+	}
+	if n := strings.TrimSpace(networkFlag); n != "" {
+		return server.DetectLiveDaemon(defaultDataDirForNetwork(n))
+	}
+	if d := strings.TrimSpace(os.Getenv("NEKTAR_DATA_DIR")); d != "" {
+		return server.DetectLiveDaemon(d)
+	}
+	if n := strings.TrimSpace(os.Getenv("NEKTAR_NETWORK")); n != "" {
+		return server.DetectLiveDaemon(defaultDataDirForNetwork(n))
+	}
+	return server.DetectAnyLiveDaemon("")
 }
 
 type runtimeBundle struct {

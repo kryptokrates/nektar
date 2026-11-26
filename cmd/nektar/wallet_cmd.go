@@ -134,7 +134,7 @@ func walletStatus(args []string) error {
 	netName := fs.String("network", "", "Network override")
 	_ = fs.Parse(args)
 
-	if info, ok := server.DetectLiveDaemon(walletDirOrDefault(*dataDir)); ok && *netName == "" {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		if out, err := callLiveWallet(info, http.MethodGet, "/v1/wallet", nil); err == nil {
 			return printJSON(out)
 		}
@@ -189,17 +189,8 @@ func walletAddress(args []string) error {
 	showQR := fs.Bool("qr", false, "Render scannable terminal QR code for the funding address")
 	_ = fs.Parse(args)
 
-	effectiveNet := *netName
-	if effectiveNet == "" {
-		effectiveNet = envOr("NEKTAR_NETWORK", "testnet")
-	}
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDirForNetwork(effectiveNet)
-	}
-
 	var netOut, addr, idPub string
-	if info, ok := server.DetectLiveDaemon(dir); ok && (*netName == "" || strings.EqualFold(info.Network, effectiveNet)) {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		if out, err := callLiveWallet(info, http.MethodGet, "/v1/wallet", nil); err == nil {
 			if m, ok := out.(map[string]any); ok {
 				netOut, _ = m["network"].(string)
@@ -255,7 +246,7 @@ func walletUTXOs(args []string) error {
 	netName := fs.String("network", "", "Network override")
 	_ = fs.Parse(args)
 
-	if info, ok := server.DetectLiveDaemon(walletDirOrDefault(*dataDir)); ok && *netName == "" {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		if out, err := callLiveWallet(info, http.MethodGet, fmt.Sprintf("/v1/wallet/utxos?basket=%s&limit=%d", *basket, *limit), nil); err == nil {
 			return printJSON(out)
 		}
@@ -284,7 +275,7 @@ func walletActions(args []string) error {
 	netName := fs.String("network", "", "Network override")
 	_ = fs.Parse(args)
 
-	if info, ok := server.DetectLiveDaemon(walletDirOrDefault(*dataDir)); ok && *netName == "" {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		if out, err := callLiveWallet(info, http.MethodGet, fmt.Sprintf("/v1/wallet/actions?limit=%d", *limit), nil); err == nil {
 			return printJSON(out)
 		}
@@ -312,7 +303,7 @@ func walletSync(args []string) error {
 	netName := fs.String("network", "", "Network override")
 	_ = fs.Parse(args)
 
-	if info, ok := server.DetectLiveDaemon(walletDirOrDefault(*dataDir)); ok && *netName == "" {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		out, err := callLiveWallet(info, http.MethodPost, "/v1/wallet/sync", map[string]any{})
 		if err != nil {
 			return fmt.Errorf("live daemon sync failed (refusing concurrent local wallet open): %w", err)
@@ -358,7 +349,7 @@ func walletFund(args []string) error {
 		}
 		return walletAddress(addrArgs)
 	}
-	if info, ok := server.DetectLiveDaemon(walletDirOrDefault(*dataDir)); ok && *netName == "" {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		out, err := callLiveWallet(info, http.MethodPost, "/v1/wallet/fund-desktop", map[string]any{
 			"sats":    *sats,
 			"wireUrl": *wireURL,
@@ -408,7 +399,7 @@ func walletImport(args []string) error {
 		return errors.New("usage: nektar wallet import --beef <hex|@file> | --txid <txid>")
 	}
 
-	if info, ok := server.DetectLiveDaemon(walletDirOrDefault(*dataDir)); ok && *netName == "" {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		out, err := callLiveWallet(info, http.MethodPost, "/v1/wallet/import", map[string]any{
 			"beefHex": beefHex,
 			"txid":    txid,
@@ -455,7 +446,7 @@ func walletSend(args []string) error {
 	if strings.TrimSpace(*to) == "" || *sats == 0 {
 		return errors.New("usage: nektar wallet send --to <address|identityPub> --sats <n>")
 	}
-	if info, ok := server.DetectLiveDaemon(walletDirOrDefault(*dataDir)); ok && *netName == "" {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		out, err := callLiveWallet(info, http.MethodPost, "/v1/wallet/send", map[string]any{
 			"to":          *to,
 			"sats":        *sats,
@@ -503,7 +494,7 @@ func walletSweep(args []string) error {
 	if !*toDesktop && strings.TrimSpace(*to) == "" {
 		return errors.New("usage: nektar wallet sweep --to <address|identityPub> | --to-desktop")
 	}
-	if info, ok := server.DetectLiveDaemon(walletDirOrDefault(*dataDir)); ok && *netName == "" {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		out, err := callLiveWallet(info, http.MethodPost, "/v1/wallet/sweep", map[string]any{
 			"to":        *to,
 			"toDesktop": *toDesktop,
@@ -553,7 +544,7 @@ func walletConsolidate(args []string) error {
 	netName := fs.String("network", "", "Network override")
 	_ = fs.Parse(args)
 
-	if info, ok := server.DetectLiveDaemon(walletDirOrDefault(*dataDir)); ok && *netName == "" {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		out, err := callLiveWallet(info, http.MethodPost, "/v1/wallet/consolidate", map[string]any{
 			"belowSats": *below,
 			"maxInputs": *maxIn,
@@ -587,7 +578,7 @@ func walletFuel(args []string) error {
 	netName := fs.String("network", "", "Network override")
 	_ = fs.Parse(args)
 
-	if info, ok := server.DetectLiveDaemon(walletDirOrDefault(*dataDir)); ok && *netName == "" {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		out, err := callLiveWallet(info, http.MethodPost, "/v1/wallet/fuel", map[string]any{
 			"target": *target,
 			"sats":   *sats,

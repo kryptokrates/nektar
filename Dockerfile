@@ -11,10 +11,13 @@ RUN npm run build
 # Stage 2: Build static Go 1.27 binary with embedded UI + Rúnar covenant artifacts
 FROM golang:1.27-bookworm AS go-build
 WORKDIR /src
-COPY go.mod go.sum ./
+COPY go.mod go.sum embed_adapters.go ./
 RUN go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
+COPY integrations/hermes ./integrations/hermes
+COPY integrations/openclaw ./integrations/openclaw
+COPY skills/nektar-memory ./skills/nektar-memory
 COPY --from=ui-build /ui/dist/ ./internal/server/ui_dist/
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/nektar ./cmd/nektar
 

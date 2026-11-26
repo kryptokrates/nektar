@@ -16,8 +16,7 @@ const norm = (s) =>
     .replace(/\s+/g, ' ')
     .trim()
 
-function readDaemonInfo(dir) {
-  const p = join(dir, 'daemon.json')
+function readDaemonFile(p) {
   if (!existsSync(p)) return undefined
   try {
     const j = JSON.parse(readFileSync(p, 'utf8'))
@@ -27,6 +26,10 @@ function readDaemonInfo(dir) {
   } catch {
     return undefined
   }
+}
+
+function readDaemonInfo(dir) {
+  return readDaemonFile(join(dir, 'daemon.json'))
 }
 
 async function discoverNektar(cfg, fetchImpl = fetch) {
@@ -43,7 +46,12 @@ async function discoverNektar(cfg, fetchImpl = fetch) {
   add(cfg?.url)
   add(process.env.NEKTAR_URL)
   add(process.env.NEKTAR_DAEMON_URL)
-  for (const d of [readDaemonInfo(join(process.cwd(), '.nektar')), readDaemonInfo(join(homedir(), '.nektar'))]) {
+  for (const d of [
+    readDaemonInfo(join(process.cwd(), '.nektar')),
+    readDaemonFile(join(homedir(), '.nektar', 'active-daemon.json')),
+    readDaemonInfo(join(homedir(), '.nektar', 'main')),
+    readDaemonInfo(join(homedir(), '.nektar'))
+  ]) {
     if (d?.token && cfg && !cfg.token) cfg.token = d.token
     add(d?.url)
   }

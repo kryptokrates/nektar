@@ -1,109 +1,19 @@
 package server
 
 import (
-	"io/fs"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/kryptokrates/nektar/internal/dock"
 )
-
-const fallbackSkillMD = `---
-name: nektar-memory
-description: >
-  Use nektar verifiable, encrypted agent memory anchored on BSV. Recall saved
-  knowledge before answering factual questions, persist durable facts with
-  provenance, route verifiable answers through groundedAnswer with receipt
-  footers, and optionally buy/sell knowledge under approved policies.
----
-
-# nektar — Verifiable Agent Memory (v0.4)
-
-1. **Recall first:** Call ` + "`recall`" + ` before answering factual questions (omit ` + "`shard`" + ` to discover all shards including ` + "`welcome`" + `).
-2. **Ground & cite:** Route verifiable answers through ` + "`groundedAnswer`" + ` so every claim cites a verified fragment and receives a checkable receipt.
-3. **Keep the footer:** End grounded answers with the returned ` + "`receipt:`" + ` and ` + "`verify:`" + ` lines verbatim.
-4. **Remember with provenance:** Save durable facts via ` + "`remember`" + ` with ` + "`shard`" + `, ` + "`text`" + `, and ` + "`source`" + `.
-5. **Honest boundary:** Receipts prove content was *recorded, unaltered, and derivable* — never that it is *true*.
-`
-
-type adapterBundleFile struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
-}
-
-func resolveAdaptersRoot() string {
-	candidates := []string{
-		"/usr/local/share/nektar",
-	}
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		candidates = append(candidates, dir, filepath.Dir(dir), filepath.Join(dir, "share", "nektar"))
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, cwd, filepath.Dir(cwd), filepath.Dir(filepath.Dir(cwd)))
-	}
-	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, "integrations", "hermes")); err == nil {
-			return c
-		}
-		if _, err := os.Stat(filepath.Join(c, "integrations", "openclaw")); err == nil {
-			return c
-		}
-	}
-	return ""
-}
-
-func loadAdapterBundleFiles(root, name string) []adapterBundleFile {
-	if root == "" {
-		return nil
-	}
-	dir := filepath.Join(root, "integrations", name)
-	if _, err := os.Stat(dir); err != nil {
-		return nil
-	}
-	var out []adapterBundleFile
-	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		base := d.Name()
-		if d.IsDir() {
-			if base == "__pycache__" || base == "node_modules" || base == ".pytest_cache" || base == ".git" || base == "tests" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasSuffix(base, ".pyc") || strings.HasSuffix(base, ".pyo") {
-			return nil
-		}
-		raw, rErr := os.ReadFile(p)
-		if rErr != nil {
-			return nil
-		}
-		rel, _ := filepath.Rel(dir, p)
-		out = append(out, adapterBundleFile{Path: filepath.ToSlash(rel), Content: string(raw)})
-		return nil
-	})
-	return out
-}
-
-func loadSkillMarkdown(root string) string {
-	if root != "" {
-		if raw, err := os.ReadFile(filepath.Join(root, "skills", "nektar-memory", "SKILL.md")); err == nil && len(raw) > 0 {
-			return string(raw)
-		}
-	}
-	return fallbackSkillMD
-}
 
 func (a *App) registerAdapterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/openapi.json", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, buildOpenAPISpec(requestBaseURL(r)))
 	})
 	mux.HandleFunc("GET /v1/adapters/manifest", func(w http.ResponseWriter, _ *http.Request) {
-		root := resolveAdaptersRoot()
-		hermes := loadAdapterBundleFiles(root, "hermes")
-		openclaw := loadAdapterBundleFiles(root, "openclaw")
+		hermes := dock.BundleFiles("hermes")
+		openclaw := dock.BundleFiles("openclaw")
 		hPaths := make([]string, 0, len(hermes))
 		for _, f := range hermes {
 			hPaths = append(hPaths, f.Path)
@@ -124,7 +34,7 @@ func (a *App) registerAdapterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/adapters/skill.md", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(loadSkillMarkdown(resolveAdaptersRoot())))
+		_, _ = w.Write(dock.SkillMarkdown())
 	})
 	mux.HandleFunc("GET /v1/adapters/bundle/{name}", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
@@ -132,9 +42,9 @@ func (a *App) registerAdapterRoutes(mux *http.ServeMux) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown adapter bundle"})
 			return
 		}
-		files := loadAdapterBundleFiles(resolveAdaptersRoot(), name)
+		files := dock.BundleFiles(name)
 		if len(files) == 0 {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "adapter bundle not found in this binary/image"})
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "adapter bundle not found in this binary"})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"name": name, "files": files})
@@ -152,6 +62,7 @@ func buildOpenAPISpec(baseURL string) map[string]any {
 		"servers": []map[string]string{{"url": baseURL}},
 		"paths": map[string]any{
 			"/v1/health":                            map[string]any{"get": map[string]any{"summary": "Liveness & network probe"}},
+			"/v1/coldstart/health":                  map[string]any{"get": map[string]any{"summary": "Cold-start per-domain & cohort liquidity scorecard"}},
 			"/v1/metrics":                           map[string]any{"get": map[string]any{"summary": "Prometheus telemetry & domain liquidity metrics"}},
 			"/v1/tools":                             map[string]any{"get": map[string]any{"summary": "List active profile tools"}},
 			"/v1/tools/{name}":                      map[string]any{"post": map[string]any{"summary": "Execute any Nektar tool by name"}},

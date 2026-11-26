@@ -7,27 +7,19 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/kryptokrates/nektar/internal/dock"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/server"
 )
 
-type dockClientResult struct {
-	Client  string   `json:"client"`
-	Label   string   `json:"label"`
-	Level   string   `json:"level"`
-	Changed bool     `json:"changed"`
-	Files   []string `json:"files,omitempty"`
-	Notes   []string `json:"notes,omitempty"`
-}
-
 // cmdDock detects installed AI agent clients, merges non-clobbering L1/L2/L3 Nektar config
-// (MCP, hooks, SKILL.md, native Hermes/OpenClaw plugins, or L0 Proxy env), and runs a live `recall {}` probe.
+// (MCP, hooks, embedded SKILL.md, embedded Hermes/OpenClaw plugins, or L0 Proxy env), and runs a live receipt probe.
 func cmdDock(args []string) error {
 	fs := flag.NewFlagSet("dock", flag.ExitOnError)
 	target := fs.String("client", "auto", "Target client(s): auto|claude|claude-desktop|cursor|windsurf|vscode|zed|cline|continue|opencode|gemini|goose|codex|hermes|openclaw|proxy")
@@ -39,6 +31,7 @@ func cmdDock(args []string) error {
 	shardFlag := fs.String("shard", "", "Optional default shard hint for L0 proxy")
 	asJSON := fs.Bool("json", false, "Machine-readable JSON output")
 	dataDir := fs.String("data-dir", "", "Data directory override")
+	netName := fs.String("network", "", "Network override")
 	_ = fs.Parse(args)
 
 	var targets []string
@@ -50,14 +43,10 @@ func cmdDock(args []string) error {
 		targets = []string{strings.ToLower(strings.TrimSpace(*target))}
 	}
 
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDir()
-	}
 	liveURL := "http://127.0.0.1:" + envOr("NEKTAR_HTTP_PORT", DefaultLocalPort)
 	var liveInfo *server.DaemonInfo
 	tok := strings.TrimSpace(*tokFlag)
-	if info, ok := server.DetectLiveDaemon(dir); ok {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		liveInfo = info
 		liveURL = strings.TrimRight(info.URL, "/")
 		if tok == "" {
@@ -71,160 +60,37 @@ func cmdDock(args []string) error {
 		tok = envOr("NEKTAR_HTTP_TOKEN", os.Getenv("NEKTAR_API_TOKEN"))
 	}
 	exePath, err := os.Executable()
-	if err != nil {
+	if err != nil || exePath == "" {
 		exePath = "nektar"
 	}
 	home, _ := os.UserHomeDir()
 	mcpURL := liveURL + "/mcp"
 
-	type jsonSpec struct {
-		ID      string
-		Label   string
-		Path    string
-		RootKey string // "mcpServers" | "servers" | "context_servers" | "mcp"
-		Mode    string // "stdio" | "http" | "opencode" | "gemini"
-	}
-	jsonSpecs := []jsonSpec{
-		{ID: "claude", Label: "Claude Code", Path: filepath.Join(home, ".claude.json"), RootKey: "mcpServers", Mode: "stdio"},
-		{ID: "claude-desktop", Label: "Claude Desktop", Path: claudeDesktopPath(home), RootKey: "mcpServers", Mode: "stdio"},
-		{ID: "cursor", Label: "Cursor", Path: filepath.Join(home, ".cursor", "mcp.json"), RootKey: "mcpServers", Mode: "stdio"},
-		{ID: "windsurf", Label: "Windsurf", Path: filepath.Join(home, ".codeium", "windsurf", "mcp_config.json"), RootKey: "mcpServers", Mode: "stdio"},
-		{ID: "vscode", Label: "VS Code", Path: vscodeMCPPath(home), RootKey: "servers", Mode: "http"},
-		{ID: "zed", Label: "Zed", Path: zedSettingsPath(home), RootKey: "context_servers", Mode: "stdio"},
-		{ID: "cline", Label: "Cline", Path: clineMCPPath(home), RootKey: "mcpServers", Mode: "stdio"},
-		{ID: "continue", Label: "Continue", Path: filepath.Join(home, ".continue", "mcpServers", "nektar.json"), RootKey: "mcpServers", Mode: "stdio"},
-		{ID: "opencode", Label: "OpenCode", Path: filepath.Join(home, ".config", "opencode", "opencode.json"), RootKey: "mcp", Mode: "opencode"},
-		{ID: "gemini", Label: "Gemini CLI", Path: filepath.Join(home, ".gemini", "settings.json"), RootKey: "mcpServers", Mode: "gemini"},
-	}
+	results := dock.Apply(dock.Options{
+		Home:      home,
+		ExePath:   exePath,
+		LiveURL:   liveURL,
+		Token:     tok,
+		Dry:       *dry,
+		Uninstall: *uninstall,
+	}, targets)
 
-	selected := make(map[string]bool)
-	explicit := false
+	showProxy := false
 	for _, t := range targets {
-		if t == "" || t == "auto" {
-			continue
+		if t == "proxy" {
+			showProxy = true
 		}
-		explicit = true
-		selected[t] = true
-	}
-
-	var results []dockClientResult
-	showProxy := selected["proxy"]
-
-	for _, s := range jsonSpecs {
-		_, dirErr := os.Stat(filepath.Dir(s.Path))
-		detected := dirErr == nil
-		if explicit && !selected[s.ID] {
-			continue
-		}
-		if !explicit && !detected {
-			continue
-		}
-		res := dockClientResult{Client: s.ID, Label: s.Label, Level: "L1", Files: []string{s.Path}}
-		var entry any
-		switch s.Mode {
-		case "http":
-			e := map[string]any{"type": "http", "url": mcpURL}
-			if tok != "" {
-				e["headers"] = map[string]string{"Authorization": "Bearer " + tok}
-			}
-			entry = e
-		case "opencode":
-			e := map[string]any{"type": "remote", "url": mcpURL, "enabled": true}
-			if tok != "" {
-				e["headers"] = map[string]string{"Authorization": "Bearer " + tok}
-			}
-			entry = e
-		case "gemini":
-			e := map[string]any{"httpUrl": mcpURL}
-			if tok != "" {
-				e["headers"] = map[string]string{"Authorization": "Bearer " + tok}
-			}
-			entry = e
-		default:
-			entry = map[string]any{"command": exePath, "args": []string{"mcp"}}
-		}
-		changed, mErr := mergeOrRemoveJSONEntry(s.Path, s.RootKey, "nektar", entry, *dry, *uninstall)
-		if mErr != nil {
-			res.Notes = append(res.Notes, "error: "+mErr.Error())
-		} else {
-			res.Changed = changed
-			res.Notes = append(res.Notes, s.Path)
-		}
-		if s.ID == "claude" {
-			res.Level = "L3"
-			hPath := filepath.Join(home, ".claude", "settings.json")
-			if hChanged, hErr := wireClaudeHooks(hPath, exePath, *dry, *uninstall); hErr == nil && hChanged {
-				res.Changed = true
-				res.Files = append(res.Files, hPath)
-				res.Notes = append(res.Notes, "hooks -> "+hPath)
-			}
-			skillDst := filepath.Join(home, ".claude", "skills", "nektar-memory", "SKILL.md")
-			if sChanged, sErr := installSkillFile(skillDst, liveURL, *dry, *uninstall); sErr == nil && sChanged {
-				res.Changed = true
-				res.Files = append(res.Files, skillDst)
-				res.Notes = append(res.Notes, "skill -> "+skillDst)
-			}
-		}
-		results = append(results, res)
-	}
-
-	// Codex CLI (~/.codex/config.toml)
-	codexDir := filepath.Join(home, ".codex")
-	if (explicit && selected["codex"]) || (!explicit && dirExists(codexDir)) {
-		cfg := filepath.Join(codexDir, "config.toml")
-		changed, cErr := wireCodexToml(cfg, exePath, *dry, *uninstall)
-		r := dockClientResult{Client: "codex", Label: "Codex CLI", Level: "L2", Changed: changed, Files: []string{cfg}}
-		if cErr != nil {
-			r.Notes = append(r.Notes, "error: "+cErr.Error())
-		} else {
-			r.Notes = append(r.Notes, cfg)
-		}
-		results = append(results, r)
-	}
-
-	// Goose (~/.config/goose/config.yaml)
-	gooseDir := filepath.Join(home, ".config", "goose")
-	if (explicit && selected["goose"]) || (!explicit && dirExists(gooseDir)) {
-		cfg := filepath.Join(gooseDir, "config.yaml")
-		changed, gErr := wireGooseYaml(cfg, exePath, *dry, *uninstall)
-		r := dockClientResult{Client: "goose", Label: "Goose", Level: "L1", Changed: changed, Files: []string{cfg}}
-		if gErr != nil {
-			r.Notes = append(r.Notes, "error: "+gErr.Error())
-		} else {
-			r.Notes = append(r.Notes, cfg)
-		}
-		results = append(results, r)
-	}
-
-	// Hermes Agent (~/.hermes) — L3 native MemoryProvider plugin + skill
-	hermesDir := filepath.Join(home, ".hermes")
-	if (explicit && selected["hermes"]) || (!explicit && dirExists(hermesDir)) {
-		r := dockNativeBundle("hermes", "Hermes Agent", filepath.Join(hermesDir, "plugins", "hermes-memory-nektar"), liveURL, *dry, *uninstall)
-		results = append(results, r)
-	}
-
-	// OpenClaw (~/.openclaw) — L3 native memory slot plugin
-	ocDir := filepath.Join(home, ".openclaw")
-	if (explicit && selected["openclaw"]) || (!explicit && dirExists(ocDir)) {
-		r := dockNativeBundle("openclaw", "OpenClaw", filepath.Join(ocDir, "plugins", "nektar"), liveURL, *dry, *uninstall)
-		results = append(results, r)
-	}
-
-	if showProxy {
-		results = append(results, dockClientResult{
-			Client: "proxy",
-			Label:  "L0 LLM Memory Proxy",
-			Level:  "L0",
-			Notes:  []string{liveURL + "/v1/proxy/openai/v1", liveURL + "/v1/proxy/anthropic"},
-		})
 	}
 
 	var probe map[string]any
 	if !*uninstall && liveInfo != nil {
 		t0 := time.Now()
-		if out, err := callLiveTool(liveInfo, "recall", map[string]any{}); err == nil {
+		if out, err := callLiveAPI(liveInfo, http.MethodPost, "/v1/dock/probe", map[string]any{}); err == nil {
 			if m, ok := out.(map[string]any); ok {
-				probe = map[string]any{"ok": true, "ttfcMs": time.Since(t0).Milliseconds(), "count": m["count"], "shards": m["shards"]}
+				probe = m
+				if _, has := probe["ttfcMs"]; !has {
+					probe["ttfcMs"] = time.Since(t0).Milliseconds()
+				}
 			}
 		} else {
 			probe = map[string]any{"ok": false, "note": err.Error()}
@@ -249,44 +115,14 @@ func cmdDock(args []string) error {
 	if *uninstall {
 		modeTag += " [uninstall]"
 	}
-	fmt.Printf("Nektar v%s dock%s — binary: %s · daemon: %s\n", Version, modeTag, exePath, liveURL)
+	netTag := ""
+	if liveInfo != nil && liveInfo.Network != "" {
+		netTag = " · net: " + liveInfo.Network
+	}
+	fmt.Printf("Nektar v%s dock%s — binary: %s · daemon: %s%s\n", Version, modeTag, exePath, liveURL, netTag)
 	fmt.Println("Docking wires your AI apps into this Nektar node so they share one encrypted, verifiable memory & BSV market.")
 	fmt.Println()
-	tierName := func(lvl string) string {
-		switch lvl {
-		case "L3":
-			return "Native + Hooks"
-		case "L2":
-			return "MCP + Hooks"
-		case "L1":
-			return "MCP Tools"
-		case "L0":
-			return "Zero-Code Proxy"
-		default:
-			return lvl
-		}
-	}
-	if len(results) == 0 {
-		fmt.Printf("  No AI clients auto-detected in %s.\n", home)
-		fmt.Println("  Pass an explicit app name: `nektar dock claude cursor claude-desktop vscode codex hermes openclaw proxy`")
-	} else {
-		for _, r := range results {
-			state := "already docked"
-			if r.Changed {
-				if *dry {
-					state = "would update"
-				} else if *uninstall {
-					state = "removed"
-				} else {
-					state = "docked ✓"
-				}
-			}
-			fmt.Printf("  [%-14s] %-16s (%s)\n", tierName(r.Level), r.Label, state)
-			for _, n := range r.Notes {
-				fmt.Printf("                    %s\n", n)
-			}
-		}
-	}
+	printDockResults(results, home, *dry, *uninstall)
 
 	if showProxy || len(results) == 0 {
 		shardHint := *shardFlag
@@ -310,21 +146,74 @@ Zero-Code LLM Memory Proxy (works with ANY OpenAI/Anthropic agent):
 	}
 
 	if !*uninstall {
-		if probe != nil && probe["ok"] == true {
-			fmt.Printf("\nLive probe: ✓ PASS — recall {} answered in %vms (count=%v, shards=%v)\n", probe["ttfcMs"], probe["count"], probe["shards"])
-		} else if probe != nil {
-			fmt.Printf("\nLive probe: ! WARN — daemon reachable but recall failed: %v\n", probe["note"])
-		} else {
-			fmt.Println("\nLive probe: • daemon not running yet — start with `nektar serve` (or `nektar serve --network main --confirm I_UNDERSTAND`)")
-		}
+		printDockProbe(probe)
 		if len(results) > 0 && !*dry {
 			fmt.Println("\nNext:")
-			fmt.Println("  1. Restart your docked AI app (Claude / Cursor / VS Code / Codex…) to pick up the config.")
+			fmt.Println("  1. Restart your docked AI app (Claude / Codex / Hermes / OpenClaw / Cursor / VS Code…) to pick up the config.")
 			fmt.Println(`  2. Try asking it: "Remember that our production API runs on port 8080, then recall it with a verified receipt."`)
 			fmt.Println("  3. Revert anytime with: `nektar dock --uninstall`")
 		}
 	}
 	return nil
+}
+
+func tierDisplayName(lvl string) string {
+	switch lvl {
+	case "L3":
+		return "Native + Hooks"
+	case "L2":
+		return "MCP + Hooks"
+	case "L1":
+		return "MCP Tools"
+	case "L0":
+		return "Zero-Code Proxy"
+	default:
+		return lvl
+	}
+}
+
+func printDockResults(results []dock.ApplyResult, home string, dry, uninstall bool) {
+	if len(results) == 0 {
+		fmt.Printf("  No AI clients auto-detected in %s.\n", home)
+		fmt.Println("  Pass an explicit app name: `nektar dock claude codex hermes openclaw cursor claude-desktop vscode proxy`")
+		return
+	}
+	for _, r := range results {
+		state := "already docked"
+		if r.Error != "" {
+			state = "error"
+		} else if r.Changed {
+			if dry {
+				state = "would update"
+			} else if uninstall {
+				state = "removed"
+			} else {
+				state = "docked ✓"
+			}
+		}
+		fmt.Printf("  [%-14s] %-16s (%s)\n", tierDisplayName(r.Level), r.Label, state)
+		for _, n := range r.Notes {
+			fmt.Printf("                    %s\n", n)
+		}
+	}
+}
+
+func printDockProbe(probe map[string]any) {
+	if probe != nil && probe["ok"] == true {
+		fmt.Printf("\nLive probe: ✓ PASS — recalled %v fragment(s) in %vms (shards=%v)\n", probe["count"], probe["ttfcMs"], probe["shards"])
+		if tok, _ := probe["receiptToken"].(string); tok != "" {
+			verdict, _ := probe["verdict"].(string)
+			verifyURL, _ := probe["verifyUrl"].(string)
+			fmt.Printf("  receipt : %s (verdict=%s)\n", tok, verdict)
+			if verifyURL != "" {
+				fmt.Printf("  verify  : %s\n", verifyURL)
+			}
+		}
+	} else if probe != nil {
+		fmt.Printf("\nLive probe: ! WARN — daemon reachable but probe failed: %v\n", probe["note"])
+	} else {
+		fmt.Println("\nLive probe: • daemon not running yet — start with `nektar up` (or `nektar up --network main --confirm I_UNDERSTAND`)")
+	}
 }
 
 var receiptRe = regexp.MustCompile(`nektarr1\.[a-zA-Z0-9_-]{20,}`)
@@ -343,14 +232,10 @@ func cmdHook(args []string) error {
 	codexMode := fs.Bool("codex", false, "Codex CLI notify hook formatting")
 	verbose := fs.Bool("verbose", false, "Log hook diagnostics to stderr")
 	_ = fs.Parse(args[1:])
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDir()
-	}
 
 	switch sub {
 	case "session-start":
-		if info, ok := server.DetectLiveDaemon(dir); ok {
+		if info, ok := detectDaemon(*dataDir, ""); ok {
 			if out, err := callLiveTool(info, "recall", map[string]any{"limit": 8}); err == nil {
 				b, _ := json.Marshal(out)
 				fmt.Printf("[nektar session-start memory] %s\n", string(b))
@@ -383,14 +268,14 @@ func cmdHook(args []string) error {
 		if q == "" {
 			q = strings.TrimSpace(string(stdinBytes))
 		}
-		if info, ok := server.DetectLiveDaemon(dir); ok {
+		if info, ok := detectDaemon(*dataDir, ""); ok {
 			if out, err := callLiveTool(info, "recall", map[string]any{"query": q, "limit": 6}); err == nil {
 				b, _ := json.Marshal(out)
 				fmt.Printf("[nektar prefetch] %s\n", string(b))
 				return nil
 			}
 		} else if *verbose {
-			fmt.Fprintln(os.Stderr, "[nektar prefetch] no running daemon — start `nektar serve`")
+			fmt.Fprintln(os.Stderr, "[nektar prefetch] no running daemon — start `nektar up`")
 		}
 		return nil
 
@@ -419,7 +304,7 @@ func cmdHook(args []string) error {
 				tokens = append(tokens, t)
 			}
 		}
-		info, live := server.DetectLiveDaemon(dir)
+		info, live := detectDaemon(*dataDir, "")
 		var failedReasons []string
 		results := make([]any, 0, len(tokens))
 		for _, tok := range tokens {

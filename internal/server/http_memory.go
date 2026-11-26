@@ -80,8 +80,8 @@ pre{background:#120e0c;border:1px solid #3a2f28;border-radius:8px;padding:.75rem
 <p><strong>Network:</strong> %s · <a href="/.well-known/nektar">Discovery JSON ↗</a> · <a href="/.well-known/agent.json">A2A Card ↗</a></p>
 <p><strong>Checkable Receipts:</strong> %v · <strong>Earned:</strong> %v sats</p>
 <p><small>%s</small></p></div>
-<div class="card"><h3>Run your own verifiable AI agent</h3>
-<pre>curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh &amp;&amp; nektar serve</pre></div></body></html>`,
+<div class="card"><h3>Run your own verifiable AI agent in 25 seconds</h3>
+<pre>curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up</pre></div></body></html>`,
 		card["receiptCount"], card["earnedSats"], html.EscapeString(netName),
 		html.EscapeString(idPub),
 		html.EscapeString(netName),
@@ -224,10 +224,10 @@ pre{background:#120e0c;border:1px solid #3a2f28;border-radius:8px;padding:.65rem
 <p><strong>Answer:</strong> %s</p><p><strong>Citations:</strong> %d checked / %d mined</p>
 <p><strong>Agent:</strong> <a href="/card">View Agent Card ↗</a> · <a href="/v1/badge/%s">SVG Badge ↗</a></p>
 <p><small>%s</small></p></div>
-<div class="card"><h3>Verify your own AI agent — Install Nektar</h3>
-<p>Give Claude Code, Cursor, Hermes, OpenClaw, or any OpenAI/Anthropic agent verifiable BSV-anchored memory in 10 seconds:</p>
-<pre>curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh &amp;&amp; nektar serve</pre>
-<p><small>Embeddable badge: <code>![nektar receipt](%s)</code></small></p></div></body></html>`,
+<div class="card"><h3>Verify locally or dock your AI agent in 25 seconds</h3>
+<p>Give Claude Code, Codex CLI, Hermes Agent, OpenClaw, Cursor, or VS Code verifiable BSV-anchored memory &amp; receipts in 1 command:</p>
+<pre>curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up</pre>
+<p><small>Embeddable badge: <code>![nektar receipt](%s)</code> · <a href="https://github.com/kryptokrates/nektar">Docs &amp; Windows installer ↗</a></small></p></div></body></html>`,
 			html.EscapeString(ver.Verdict),
 			html.EscapeString(ver.Verdict),
 			html.EscapeString(ver.Reason),

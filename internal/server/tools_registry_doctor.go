@@ -67,6 +67,17 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 		})
 	}
 
+	// 2b. Restate durable execution readiness (required for live BSV market trades)
+	restateAttached := tb.broker != nil && tb.broker.RestateClient() != nil
+	if tb.mem.Chain().Network() == "memory" {
+		checks = append(checks, DoctorCheck{Name: "restate", Status: "green", Detail: "memory network — local workflow execution active"})
+	} else if restateAttached {
+		checks = append(checks, DoctorCheck{Name: "restate", Status: "green", Detail: "Restate durable execution attached (live BSV trades armed)"})
+	} else {
+		checks = append(checks, DoctorCheck{Name: "restate", Status: "amber", Detail: "Restate durable executor not attached — memory & receipts work locally, live BSV trades require Restate"})
+		nextSteps = append(nextSteps, "Run `nektar restate-up` (macOS/Linux/Windows WSL2) then `nektar stop && nektar up` to arm live BSV trading")
+	}
+
 	// 3. Operator policy check
 	policies, _ := tb.mem.DB().ListOperatorPolicies()
 	activePols := 0
@@ -200,6 +211,7 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 		"ok":                   overall != "red",
 		"verdict":              overall,
 		"network":              tb.mem.Chain().Network(),
+		"restateAttached":      restateAttached,
 		"shardNames":           shards,
 		"records":              total,
 		"anchoredRecords":      anchored,

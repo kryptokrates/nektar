@@ -162,6 +162,29 @@ class TestNektarHermesProvider(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
+    def test_discovers_mainnet_and_active_daemon_pointer(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        state = _FakeNektarState()
+        srv, url = _start_fake_server(state)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_home:
+                main_dir = Path(tmp_home) / ".nektar" / "main"
+                main_dir.mkdir(parents=True, exist_ok=True)
+                (main_dir / "daemon.json").write_text(
+                    json.dumps({"url": url, "network": "main", "authToken": "main-tok"}),
+                    encoding="utf-8",
+                )
+                with mock.patch.object(Path, "home", return_value=Path(tmp_home)):
+                    client = NektarClient()
+                    discovered = client.discover(timeout_s=0.8)
+                    self.assertEqual(discovered, url)
+                    self.assertEqual(client.token, "main-tok")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

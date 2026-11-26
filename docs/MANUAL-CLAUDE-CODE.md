@@ -1,179 +1,87 @@
-# nektar for Claude Code — the complete manual
+# Nektar v0.4 for Claude Code — 25-Second Setup & Complete Manual
 
-You're connecting your agent to a memory it **cannot silently rewrite**,
-answers that arrive **pruned to what provable records support**, and a
-receipt **anyone can check on their phone** — paid for per-call in real
-sats, with no account and no subscription.
+Connect Claude Code to encrypted, BSV-anchored verifiable memory, Google Mangle claim grounding with checkable `nektarr1.*` receipts, automatic Stop-hook verification, and policy-bounded knowledge trading — **zero Docker, zero Node.js, one static Go binary**.
 
-A live public instance runs at `https://nektar.run` on the BSV
-public testnet (real transactions, test coins).
+> **Honesty Rule:** Receipts verify that claims were **recorded, unaltered, and derivable** from anchored fragments — never that their content is objectively _true_. Model identity is _declared_, not zkML-proven.
 
 ---
 
-## What a blockchain-less AI gives you today
+## 1. Fastest Start (25 Seconds, 1 Command)
 
-- **An answer.** Maybe a citation. Nothing you can _check_ — the
-  citation asserts the source exists; it doesn't prove it.
-- **Memory in the vendor's database.** Mutable, invisible, unportable.
-  The vendor's "memory feature" can be edited, aged out, or deleted —
-  you'd never know.
-- **No record of what it said.** Yesterday's answer is gone; if the
-  model contradicts itself, there is nothing to compare.
-- **No proof for third parties.** A screenshot of a chat proves
-  nothing — it's trivially fakeable.
-- **No grounding check.** You cannot verify whether the answer came
-  from _your_ documents or was confabulated from weights.
-- **Account-based billing.** A subscription metered by the vendor, on
-  the vendor's numbers, audited by nobody.
-- **All-or-nothing sharing.** Showing someone one answer means
-  exposing the conversation around it.
-
-## What you get here instead
-
-|                      | today                      | with nektar                                                                                                                  |
-| -------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| **Memory**           | mutable, vendor-held       | append-only log; every batch anchors a Merkle root on-chain — edits break the proofs                                         |
-| **Answers**          | asserted                   | `groundedAnswer` strips every claim it can't derive from verified fragments — the answer is _pruned_ to what records support |
-| **Proof for others** | screenshots                | an anchored, signed receipt — a URL anyone opens, a QR anyone scans, no account needed                                       |
-| **Billing**          | trust our metering         | per-call atomic payment; the receipt names the settlement txid — **the receipt log IS the invoice**, publicly auditable      |
-| **Portability**      | dies with the subscription | shard keys are yours; records export and re-verify independently                                                             |
-| **Disclosure**       | show everything or nothing | prove one claim exists in memory without revealing the rest                                                                  |
-| **Trust**            | vendor says so             | receipts verify against a public ledger the service doesn't control                                                          |
-
-The honest boundary, printed on every verify page: this proves the
-answer was **committed and is derivable from sealed records** — never
-that it's _true_. Model identity is _declared_, not zkML-proven.
-
----
-
-## Pick your journey
-
-|                                      | setup                          | what you can do                                                                                                |
-| ------------------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| **A. Watch + verify**                | none                           | open a receipt link on your phone — see the whole verify surface                                               |
-| **B. Free client on the hosted box** | bearer token from the operator | `remember`, `recall`, `recall`-verified proofs, `payQuote`, 30+ tools — everything except the three paid tools |
-| **C. Paid client on the hosted box** | bearer + a funded testnet WIF  | the full arc: 402 invoice → your signed tx → receipt that names your txid                                      |
-| **D. Your own instance**             | clone + build                  | everything, offline, on the simulated chain — your own keys, your own data dir                                 |
-
-### A — Watch + verify (zero setup)
-
-Open this on your phone:
-`https://nektar.run/v1/verify?r=nektarr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI`
-
-That's a real paid-answer receipt minted on the live box: the committed
-answer, the cited records, the `paid` check naming the settlement tx.
-No login — verification is public by design.
-
-### B — Free client on the hosted box
-
-Ask me (the operator) for the **bearer token** — it gates `/mcp`, which
-is the only thing that isn't public. Then:
-
+### macOS & Linux
 ```sh
-claude mcp add --transport http nektar https://nektar.run/mcp \
-  --header "Authorization: Bearer <token>"
+curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up
 ```
 
-Add this to your project `CLAUDE.md` so the agent actually uses the
-memory instead of answering from weights (merge of
-`integrations/claude-code/CLAUDE.md`):
-
-```markdown
-## nektar
-
-When answering a factual question that could come from memory:
-
-1. Call `recall` on the relevant shard(s) first.
-2. Route the final answer through `groundedAnswer` — every claim must
-   cite a verified fragment; whatever can't be grounded is stripped.
-3. End the answer with the receipt footer the tool returns:
-   `receipt: nektarr1.<token>` / `verify: <url>`
-4. If no receipt comes back, say the answer is ungrounded — never fake
-   a footer.
+### Windows (PowerShell)
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up
 ```
 
-Try it: `remember` a fact onto a shard (`{"shard":"demo","data":"…"}`),
-wait for the batch anchor (~a minute on testnet), `recall` it — the
-record comes back **verified** with its on-chain anchor. That verified
-flag is the part no blockchain-less memory can fake.
+### Go Live on BSV Mainnet Directly
+```sh
+# macOS / Linux (isolated in ~/.nektar/main, prints terminal funding QR)
+curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up --mainnet --confirm I_UNDERSTAND
+```
 
-### C — Paid client on the hosted box
+### What `nektar up` Does Automatically (L3 Integration)
+1. **Starts a detached background daemon** on `http://127.0.0.1:18420` (survives closing your terminal; add `--install-service` to auto-start on login).
+2. **Pre-arms Restate v1.8.1** (macOS/Linux native, Windows WSL2) so live BSV knowledge trades work on Run #1.
+3. **Docks Claude Code at full L3** (non-clobbering & reversible via `nektar dock --uninstall`):
+   - `~/.claude.json` → `mcpServers.nektar` (`nektar mcp`, auto-bridges stdio to your shared Mainnet or Testnet daemon with zero SQLite lock contention across multiple Claude windows)
+   - `~/.claude/settings.json` → native zero-Node Go hooks:
+     - `SessionStart`: `nektar hook session-start`
+     - `UserPromptSubmit`: `nektar hook prefetch`
+     - `Stop`: `nektar hook verify-receipt` (blocks once if any `nektarr1.*` receipt fails verification)
+   - `~/.claude/skills/nektar-memory/SKILL.md` → teaches Claude the recall-first → `groundedAnswer` → receipt-footer workflow globally across every repo.
+4. **Runs a live end-to-end receipt probe** and prints a real verified `nektarr1.*` token + `verify:` URL.
 
-Everything in B, plus the paid tools (`anchor` 100 sats,
-`groundedAnswer`/`commitReceipt` 250 sats). You need a **testnet WIF
-with sats** — ask me and I'll send test coins to an address you
-generate (or hand you a pre-funded WIF for the demo).
+---
 
-The flow in-session:
+## 2. Verify Your First Grounded Answer (10 Seconds)
 
-1. Agent calls `groundedAnswer` → gets a **402 invoice**
-   (`{paymentRequired}` with `accepts[].extra.invoiceId`,
-   `lockingScriptHex`, `opReturn`, `amount`).
-2. You sign the payment locally — one command, needs the repo built
-   (`pnpm -r build`):
+Restart Claude Code and ask:
 
+> *"Remember that our production Postgres database runs version 16 on port 5432, then recall it with a verified receipt."*
+
+Claude calls `remember`, `recall`, and `groundedAnswer`, and ends its answer with:
+
+```
+receipt: nektarr1.<token>
+verify: http://127.0.0.1:18420/v1/verify/nektarr1.<token>
+```
+
+Open the `verify:` link in any browser to inspect the Merkle commitment, citations, and `TruthNote`.
+
+---
+
+## 3. Deploy to Autonomous BSV Trading & Earning (60 Seconds)
+
+1. **Fund your node wallet:**
+   - **Testnet:** Open `nektar open` → Wallet → **1-Click Testnet Faucet**.
+   - **Mainnet:** Scan the funding QR in `nektar open` → Wallet (or `nektar wallet address --network main --qr`) with `5,000–10,000` sats (~$0.003), then run `nektar wallet sync`.
+2. **Approve your SpendGuard trading policy:**
    ```sh
-   node tools/pay.mjs '<paste the paymentRequired JSON>' \
-     --wif <your WIF> --parent-tx-hex <funding tx hex> \
-     --parent-vout <N> --parent-sats <N>
+   nektar policy approve --preset both
+   # On Mainnet:
+   nektar policy approve --preset both --confirm I_UNDERSTAND
    ```
-
-   It prints `{ "invoiceId": …, "transaction": "<BEEF hex>" }` — the
-   agent retries the same call with `payment:` set to that object.
-   (Claude Code can run this itself as a bash step; the WIF never
-   leaves your machine — the service only sees the signed tx.)
-
-3. The service verifies the tx (pays the operator ≥ amount + carries
-   the invoice tag), broadcasts it, and the receipt **commits your
-   txid**. `verify:` link → green `paid` line, auditable on the public
-   testnet.
-
-One tx pays for exactly one call — invoice-tagged, replay-protected.
-
-### D — Your own instance
-
-```sh
-git clone https://github.com/kryptokrates/nektar && cd merkle-automaton
-pnpm install && pnpm -r build
-NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=regtest node packages/mcp/dist/src/bin.js
-claude mcp add --transport http nektar http://localhost:8080/mcp
-```
-
-`regtest` runs on the local Teranode stack (`pnpm stack:up`) — receipts mint
-and verify, anchors exist on the regtest ledger (honest caveat: they
-aren't on a public chain). Every feature works; it's the right way to
-explore before touching real coins. `NEKTAR_NETWORK=testnet` skips the
-local stack — `NEKTAR_KEY_PASSPHRASE` is optional here (it encrypts keys
-at rest; required on main). Fund the printed fee address with test coins.
+3. **Buy or sell verified knowledge directly from Claude:**
+   - Ask Claude: *"Buy verified BSV SPV notes up to 150 sats"* (calls `want`)
+   - Or earn sats from your own verified notes:
+     ```sh
+     nektar earn                                      # list open Hub bounties & local shards
+     nektar earn --bounty bounty-ops --shard notes    # anchor & submit for instant BSV payout
+     nektar sell -shard notes -domains ops -price 100 # arm 24/7 autonomous peer sales
+     ```
 
 ---
 
-## The tools you'll actually use
+## 4. Daily Commands
 
-| tool                 | what for                                                                                     |
-| -------------------- | -------------------------------------------------------------------------------------------- |
-| `remember`           | commit a fact to a shard — append-only, anchors on-chain                                     |
-| `recall`             | read a record back — `unverifiable` until its anchor is proven                               |
-| `groundedAnswer`     | answer claims, each citing a fragment; ungrounded claims stripped; returns the receipt token |
-| `commitReceipt`      | commit an externally-produced answer receipt                                                 |
-| `verifyReceipt`      | re-check a receipt token programmatically                                                    |
-| `payQuote`           | get a 402 invoice for a paid tool without calling it                                         |
-| `anchor`             | force the shard anchor now (paid — buys immediacy; batching is free)                         |
-| `modelManifest`      | declare which model answered (declared, not proven)                                          |
-| `checkpoint`/`proof` | shard Merkle root + a record's inclusion proof                                               |
-
-Full list: `tools/list` over `/mcp`, or `GET /v1/tools` on the box.
-
-## Honest boundaries — say these too
-
-- **Testnet.** Real consensus, real txs, test coins. Mainnet is the
-  same code path, gated (`NEKTAR_MAINNET_CONFIRM` + spend caps).
-- **"Accepted" ≠ "mined".** A payment shows `RECEIVED` then mines in a
-  block; chained unconfirmed spends get parked (`PENDING_RETRY`) —
-  spend confirmed utxos.
-- **Commitment ≠ truth.** The receipt proves committed + derivable.
-- **Model is declared, not proven** — zkML/TEE is the honest roadmap,
-  documented in the README.
-- **Bearer protects writes**, not reads: `/v1/verify`, `/v1/health` and
-  `/.well-known/x402` are public by design — that's what makes the
-  receipts checkable by anyone.
+| Command | Purpose |
+|---|---|
+| `nektar up` / `nektar stop` | Start or cleanly stop the shared background daemon |
+| `nektar open` | Open the Svelte 5 Dashboard with 1-click pairing |
+| `nektar doctor` | Verify memory, wallet, Restate, policy, peers & cohort density |
+| `nektar dock claude --uninstall` | Cleanly remove Nektar from `~/.claude.json`, hooks & skill |

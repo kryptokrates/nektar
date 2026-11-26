@@ -69,11 +69,7 @@ func cmdDoctor(args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDir()
-	}
-	if info, ok := server.DetectLiveDaemon(dir); ok {
+	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "doctor", map[string]any{})
 		if err == nil {
 			redacted := *info
@@ -95,11 +91,7 @@ func cmdPeers(args []string) error {
 	fs := flag.NewFlagSet("peers", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDir()
-	}
-	if info, ok := server.DetectLiveDaemon(dir); ok {
+	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "peers", map[string]any{"refresh": true})
 		if err == nil {
 			return printJSON(out)
@@ -133,11 +125,7 @@ func cmdWant(args []string) error {
 			domList = append(domList, d)
 		}
 	}
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDir()
-	}
-	if info, ok := server.DetectLiveDaemon(dir); ok {
+	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "want", map[string]any{
 			"domains":     domList,
 			"question":    *question,
@@ -170,11 +158,7 @@ func cmdSell(args []string) error {
 			domList = append(domList, d)
 		}
 	}
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDir()
-	}
-	if info, ok := server.DetectLiveDaemon(dir); ok {
+	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "sell", map[string]any{
 			"shard":       *shard,
 			"domains":     domList,
@@ -261,11 +245,7 @@ func cmdPolicy(args []string) error {
 			aiPol = candAI
 		}
 
-		dir := *dataDir
-		if dir == "" {
-			dir = defaultDataDir()
-		}
-		if info, ok := server.DetectLiveDaemon(dir); ok {
+		if info, ok := detectDaemon(*dataDir, ""); ok {
 			payload := map[string]any{
 				"preset":  *preset,
 				"domains": doms,
@@ -300,11 +280,7 @@ func cmdPolicy(args []string) error {
 		fs := flag.NewFlagSet("policy list", flag.ExitOnError)
 		dataDir := fs.String("data-dir", "", "Data directory override")
 		_ = fs.Parse(rest)
-		dir := *dataDir
-		if dir == "" {
-			dir = defaultDataDir()
-		}
-		if info, ok := server.DetectLiveDaemon(dir); ok {
+		if info, ok := detectDaemon(*dataDir, ""); ok {
 			if out, err := callLiveAPI(info, http.MethodGet, "/v1/policies", nil); err == nil {
 				return printJSON(out)
 			}
@@ -328,11 +304,7 @@ func cmdPolicy(args []string) error {
 		fs := flag.NewFlagSet("policy revoke", flag.ExitOnError)
 		dataDir := fs.String("data-dir", "", "Data directory override")
 		_ = fs.Parse(rest[1:])
-		dir := *dataDir
-		if dir == "" {
-			dir = defaultDataDir()
-		}
-		if info, ok := server.DetectLiveDaemon(dir); ok {
+		if info, ok := detectDaemon(*dataDir, ""); ok {
 			if out, err := callLiveAPI(info, http.MethodDelete, "/v1/policies/"+policyID, nil); err == nil {
 				return printJSON(out)
 			}
@@ -355,13 +327,10 @@ func cmdPolicy(args []string) error {
 func cmdOpen(args []string) error {
 	fs := flag.NewFlagSet("open", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "Data directory override")
+	netName := fs.String("network", "", "Network override")
 	_ = fs.Parse(args)
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDir()
-	}
 	u := "http://127.0.0.1:" + envOr("NEKTAR_HTTP_PORT", DefaultLocalPort)
-	if info, ok := server.DetectLiveDaemon(dir); ok {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		u = strings.TrimRight(info.URL, "/")
 		if out, err := callLiveAPI(info, http.MethodPost, "/v1/auth/pair-code", map[string]any{}); err == nil {
 			if m, ok := out.(map[string]any); ok {
@@ -372,6 +341,10 @@ func cmdOpen(args []string) error {
 		}
 	}
 	fmt.Printf("Opening Nektar Dashboard: %s\n", u)
+	return openBrowserURL(u)
+}
+
+func openBrowserURL(u string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":

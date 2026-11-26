@@ -1,8 +1,12 @@
 ﻿# nektar v0.4 zero-Docker native Windows installer:
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up -Mainnet -Confirm I_UNDERSTAND
 #   irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1 | iex
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Dock
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Docker
 param(
+  [switch]$Up,
+  [switch]$Mainnet,
+  [string]$Confirm = '',
+  [switch]$InstallService,
   [switch]$Dock,
   [switch]$Docker,
   [switch]$Native
@@ -61,13 +65,23 @@ if (-not $userPath -or ($userPath -split ';' | Where-Object { $_ -ieq $InstallDi
 
 $exe = if ($Docker) { Join-Path $InstallDir 'nektar.cmd' } else { Join-Path $InstallDir 'nektar.exe' }
 
-if ($Dock) {
+if ($Up) {
+  $upArgs = @('up')
+  if ($Mainnet) {
+    $conf = if ($Confirm) { $Confirm } elseif ($env:NEKTAR_MAINNET_CONFIRM) { $env:NEKTAR_MAINNET_CONFIRM } else { 'I_UNDERSTAND' }
+    $upArgs += @('--network', 'main', '--confirm', $conf)
+  }
+  if ($InstallService) {
+    $upArgs += '--install-service'
+  }
+  & $exe @upArgs
+} elseif ($Dock) {
   & $exe dock auto
 } else {
-  Write-Output "`nNext (zero Docker, starts in <50ms on http://127.0.0.1:18420):"
-  Write-Output "  nektar serve           # start unified agent daemon + Svelte Dashboard + MCP + Market Broker"
-  Write-Output "  nektar serve --hub     # start agent + embedded durable SQLite Overlay Hub + Bounties"
-  Write-Output "  nektar dock            # auto-wire Claude Code, Cursor, VS Code, Windsurf, Codex, Hermes, OpenClaw..."
+  Write-Output "`nNext (25 seconds to live docked agents — zero Docker):"
+  Write-Output "  nektar up              # start background daemon + Restate (WSL2) + auto-dock Claude/Codex/Hermes/OpenClaw/Cursor"
+  Write-Output "  nektar up --network main --confirm I_UNDERSTAND   # go live on BSV Mainnet"
+  Write-Output "  nektar earn            # view Hub knowledge bounties & earn BSV sats"
   Write-Output "  nektar open            # open Dashboard (1-click recall, faucet, policy presets & peers)"
-  Write-Output "  nektar doctor          # check wallet, policies, peers & SSE health`n"
+  Write-Output "  nektar doctor          # check wallet, Restate, policies, peers & cohort health`n"
 }

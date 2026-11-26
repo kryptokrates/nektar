@@ -130,66 +130,87 @@
     <h1>nektar — verifiable AI agent memory</h1>
     <div class="tag">one shared brain for all your agents · anchored on BSV · single static Go binary</div>
 
-    <h2>1. Install &amp; start (10 seconds, zero dependencies)</h2>
+    <h2>1. Install, start &amp; auto-dock in 25 seconds (zero Docker)</h2>
     <div class="card">
       <div class="tabs" id="inst-tabs">
         <button class="tab on" data-k="unix">macOS / Linux</button>
         <button class="tab" data-k="win">Windows (PowerShell)</button>
+        <button class="tab" data-k="mainnet">BSV Mainnet</button>
         <button class="tab" data-k="docker">Docker (GHCR)</button>
       </div>
       <div class="cmd">
-        <code id="inst-code">curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh &amp;&amp; nektar serve</code>
+        <code id="inst-code">curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up</code>
         <button class="copy" id="inst-copy">copy</button>
       </div>
-      <p class="feat">Installs the single zero-CGO <b>nektar v0.4</b> Go binary (embedded SQLite FTS5, BRC-100 wallet, Svelte 5 Dashboard, seeded welcome shard) — zero Docker or Node.js required.</p>
+      <p class="feat">Installs the single zero-CGO <b>nektar v0.4</b> Go binary, starts a persistent background daemon + Restate, auto-docks all detected AI apps, and verifies a live <code>nektarr1.*</code> receipt.</p>
     </div>
 
-    <h2>2. Dock any existing running agent (10 seconds)</h2>
+    <h2>2. Pick your AI agent (Claude · Codex · Hermes · OpenClaw · Cursor · Proxy)</h2>
     <div class="card">
       <div class="tabs" id="dock-tabs">
-        <button class="tab on" data-k="apps">Claude · Cursor · Hermes · OpenClaw · Codex · VS Code</button>
-        <button class="tab" data-k="proxy">Any Running Agent (L0 LLM Proxy)</button>
+        <button class="tab on" data-k="claude">Claude Code</button>
+        <button class="tab" data-k="codex">Codex CLI</button>
+        <button class="tab" data-k="hermes">Hermes Agent</button>
+        <button class="tab" data-k="openclaw">OpenClaw</button>
+        <button class="tab" data-k="ide">Cursor / VS Code</button>
+        <button class="tab" data-k="proxy">L0 LLM Proxy</button>
       </div>
       <div class="cmd">
-        <code id="dock-code">nektar dock</code>
+        <code id="dock-code">nektar up --dock claude</code>
         <button class="copy" id="dock-copy">copy</button>
       </div>
-      <p class="feat">MCP + portable hooks + bundled native plugins, or swap <b>OPENAI_BASE_URL</b> for zero-code docking.</p>
+      <p class="feat">Embedded native plugins, MCP stdio auto-bridge (Mainnet &amp; Testnet), portable Go hooks, and global <code>SKILL.md</code> — zero repo clone required.</p>
     </div>
 
-    <h2>3. Graduate to a public Hub Node (1 click)</h2>
+    <h2>3. Earn BSV sats or run a public Hub Node (60 seconds)</h2>
     <div class="card">
+      <div class="tabs" id="hub-tabs">
+        <button class="tab on" data-k="earn">Earn via Bounties</button>
+        <button class="tab" data-k="native">Zero-Docker Hub</button>
+        <button class="tab" data-k="dockerhub">Docker + Auto-TLS Hub</button>
+      </div>
       <div class="cmd">
-        <code id="hub-code">nektar hub up --auto-ip</code>
+        <code id="hub-code">nektar earn</code>
         <button class="copy" id="hub-copy">copy</button>
       </div>
       <p class="feat">
-        Built-in <b>Caddy Auto-TLS</b> (custom domain, zero-domain <code>sslip.io</code>, or <code>--tunnel</code> behind NAT) + 1-click templates for Coolify,
-        Hetzner/DigitalOcean Cloud-Init, Dokploy, Umbrel, CasaOS, Railway, Render &amp; Helm.
+        Sell anchored facts to Hub bounties (transparent published taper) or run a Spine-and-Leaf <b>hybrid BRC-105</b> Hub with built-in Caddy Auto-TLS or zero-Docker <code>systemd</code>.
       </p>
     </div>
 
     <div class="links">
       <a href="https://github.com/kryptokrates/nektar">github</a>
-      <a href="https://github.com/kryptokrates/nektar/blob/master/docs/ADAPTERS.md">universal adapter</a>
-      <a href="https://github.com/kryptokrates/nektar/blob/master/docs/JOIN-TESTNET.md">deploy a hub</a>
+      <a href="https://github.com/kryptokrates/nektar/blob/master/docs/MANUAL-CLAUDE-CODE.md">claude code</a>
+      <a href="https://github.com/kryptokrates/nektar/blob/master/docs/MANUAL-CODEX.md">codex cli</a>
+      <a href="https://github.com/kryptokrates/nektar/blob/master/docs/MANUAL-HERMES.md">hermes &amp; openclaw</a>
+      <a href="https://github.com/kryptokrates/nektar/blob/master/docs/DOCKING-AND-HUBS.md">docking &amp; hubs</a>
       <a href="/.well-known/agent.json">agent card (A2A)</a>
       <a href="/.well-known/nektar">discovery doc</a>
-      <a href="/v1/health">health</a>
+      <a href="/v1/coldstart/health">network health</a>
     </div>
 
-    <p class="fine">mvp — proofs establish recorded, unaltered, derivable. never true.</p>
+    <p class="fine">v0.4 — proofs establish recorded, unaltered, derivable. never true.</p>
 
     <script>
       const INST = {
-        unix: 'curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh && nektar serve',
-        win: 'irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1 | iex; nektar serve',
+        unix: 'curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up',
+        win: '& ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up',
+        mainnet: 'curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up --mainnet --confirm I_UNDERSTAND',
         docker: 'docker run -d --name nektar --restart unless-stopped -p 127.0.0.1:18420:18420 -v nektar-data:/data ghcr.io/kryptokrates/nektar:latest serve'
       }
       const DOCK = {
-        apps: 'nektar dock',
+        claude: 'nektar up --dock claude',
+        codex: 'nektar up --dock codex',
+        hermes: 'nektar up --dock hermes',
+        openclaw: 'nektar up --dock openclaw',
+        ide: 'nektar up --dock cursor,vscode,claude-desktop',
         proxy:
           'export OPENAI_BASE_URL="http://127.0.0.1:18420/v1/proxy/openai/v1"\n# or Anthropic: export ANTHROPIC_BASE_URL="http://127.0.0.1:18420/v1/proxy/anthropic"'
+      }
+      const HUB = {
+        earn: 'nektar earn',
+        native: 'nektar hub up --native --auto-ip --network main --confirm I_UNDERSTAND --fee-preset hybrid',
+        dockerhub: 'nektar hub up --auto-ip --network main --confirm I_UNDERSTAND --fee-preset hybrid'
       }
       function wire(tabsId, codeId, copyId, map) {
         const el = document.getElementById(codeId)
@@ -211,7 +232,7 @@
       }
       wire('inst-tabs', 'inst-code', 'inst-copy', INST)
       wire('dock-tabs', 'dock-code', 'dock-copy', DOCK)
-      wire(null, 'hub-code', 'hub-copy', null)
+      wire('hub-tabs', 'hub-code', 'hub-copy', HUB)
     </script>
   </body>
 </html>

@@ -73,6 +73,8 @@ class NektarClient:
         if self.data_dir:
             add_daemon(Path(self.data_dir) / "daemon.json")
         add_daemon(Path.cwd() / ".nektar" / "daemon.json")
+        add_daemon(Path.home() / ".nektar" / "active-daemon.json")
+        add_daemon(Path.home() / ".nektar" / "main" / "daemon.json")
         add_daemon(Path.home() / ".nektar" / "daemon.json")
         env_port = os.environ.get("NEKTAR_HTTP_PORT")
         if env_port:

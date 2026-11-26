@@ -101,6 +101,7 @@ jobs:
           - { goos: linux,   goarch: amd64, ext: '',     archive: nektar-linux-amd64.tar.gz }
           - { goos: linux,   goarch: arm64, ext: '',     archive: nektar-linux-arm64.tar.gz }
           - { goos: darwin,  goarch: arm64, ext: '',     archive: nektar-darwin-arm64.tar.gz }
+          - { goos: darwin,  goarch: amd64, ext: '',     archive: nektar-darwin-amd64.tar.gz }
           - { goos: windows, goarch: amd64, ext: '.exe', archive: nektar-windows-amd64.zip }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

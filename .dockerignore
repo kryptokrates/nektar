@@ -9,6 +9,9 @@ node_modules
 docs
 *.md
 !README.md
+!skills/nektar-memory/SKILL.md
+!integrations/hermes/README.md
+!integrations/openclaw/README.md
 .vscode
 .idea
 *.log

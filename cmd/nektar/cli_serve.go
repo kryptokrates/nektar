@@ -377,8 +377,9 @@ func cmdServe(args []string) error {
 		}()
 	}
 
-	// Write daemon.json so `nektar mcp`, `nektar open`, `nektar hook`, `nektar dock`, and Hermes auto-discover us!
-	_ = server.WriteDaemonInfo(rt.dataDir, server.DaemonInfo{
+	// Write daemon.json + active-daemon.json so `nektar mcp`, `nektar open`, `nektar hook`, `nektar dock`,
+	// Hermes, and OpenClaw auto-discover us across both Mainnet and Testnet!
+	dInfo := server.DaemonInfo{
 		PID:       os.Getpid(),
 		Port:      actualPort,
 		URL:       actualURL,
@@ -386,7 +387,9 @@ func cmdServe(args []string) error {
 		DataDir:   rt.dataDir,
 		AuthToken: apiTok,
 		StartedAt: time.Now().Unix(),
-	})
+	}
+	_ = server.WriteDaemonInfo(rt.dataDir, dInfo)
+	_ = server.WriteActiveDaemonPointer("", rt.dataDir, dInfo)
 	defer server.RemoveDaemonInfo(rt.dataDir)
 
 	var postBootWG sync.WaitGroup
@@ -394,9 +397,21 @@ func cmdServe(args []string) error {
 	go func() {
 		defer postBootWG.Done()
 		_, _ = broker.AnnounceSelf(ctx)
-		if seedDoms := parseCSVEnv("NEKTAR_SEED_DOMAINS"); len(seedDoms) > 0 {
-			if n, sErr := rt.disc.SeedFromNetwork(ctx, seedDoms); sErr == nil && n > 0 {
-				log.Printf("seeded %d verified fragment(s) from network CHIRP packs", n)
+		rawSeed := strings.TrimSpace(os.Getenv("NEKTAR_SEED_DOMAINS"))
+		var seedDoms []string
+		if strings.EqualFold(rawSeed, "off") || strings.EqualFold(rawSeed, "none") || rawSeed == "0" {
+			seedDoms = nil
+		} else if rawSeed != "" {
+			seedDoms = parseCSVEnv("NEKTAR_SEED_DOMAINS")
+		} else if rt.mem.Chain().Network() == "testnet" || rt.mem.Chain().Network() == "main" {
+			// Layer-2 cold-start auto-seeding: discover & verify curated CHIRP packs automatically on live networks.
+			seedDoms = []string{"ops", "bsv", "agents"}
+		}
+		if len(seedDoms) > 0 && rt.disc != nil && len(rt.disc.ActiveHosts()) > 0 {
+			seedCtx, seedCancel := context.WithTimeout(ctx, 15*time.Second)
+			defer seedCancel()
+			if n, sErr := rt.disc.SeedFromNetwork(seedCtx, seedDoms); sErr == nil && n > 0 {
+				log.Printf("seeded %d verified fragment(s) from network CHIRP packs (%s)", n, strings.Join(seedDoms, ","))
 			}
 		}
 	}()
@@ -472,12 +487,23 @@ func cmdMCP(args []string) error {
 
 	dir := *dataDir
 	if dir == "" {
-		dir = defaultDataDir()
+		dir = defaultDataDirForNetwork(*netName)
 	}
-	// One brain, many mouths: if a live `nektar serve` daemon is running, transparently bridge stdio -> /mcp!
+	// One brain, many mouths: transparently bridge stdio -> live daemon `/mcp` across Mainnet or Testnet!
 	if !*direct {
-		if info, ok := server.DetectLiveDaemon(dir); ok {
+		if info, ok := detectDaemon(*dataDir, *netName); ok {
 			return server.RunStdioBridge(ctx, info.URL, info.AuthToken, os.Stdin, os.Stdout)
+		}
+		// Auto-spawn a shared background daemon on demand so IDE/agent windows never collide on instance.lock!
+		if *netName != "memory" && os.Getenv("NEKTAR_MCP_NO_AUTOSTART") != "1" && os.Getenv("NEKTAR_EPHEMERAL") != "1" {
+			if info, err := ensureBackgroundDaemon(ctx, backgroundDaemonOpts{
+				Network: *netName,
+				Confirm: os.Getenv("NEKTAR_MAINNET_CONFIRM"),
+				DataDir: *dataDir,
+				Quiet:   true,
+			}); err == nil && info != nil {
+				return server.RunStdioBridge(ctx, info.URL, info.AuthToken, os.Stdin, os.Stdout)
+			}
 		}
 	}
 

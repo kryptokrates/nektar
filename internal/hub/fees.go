@@ -327,6 +327,17 @@ type EgressTerms struct {
 	BalancePath      string `json:"balancePath"`
 }
 
+// BountyTaperTerms transparently publishes the Hub's temporary launch-subsidy taper schedule
+// so sellers build on honest, predictable economics.
+type BountyTaperTerms struct {
+	Phase              string `json:"phase"`
+	InitialRewardSats  uint64 `json:"initialRewardSats"`
+	StepDownAtFills    int    `json:"stepDownAtFills"`
+	StepDownRewardSats uint64 `json:"stepDownRewardSats"`
+	MaxFillsPerDomain  int    `json:"maxFillsPerDomain"`
+	ExitCriterion      string `json:"exitCriterion"`
+}
+
 // TermsDocument is published at GET /v1/terms and GET /ls_nektar/terms.
 type TermsDocument struct {
 	Service             string            `json:"service"`
@@ -340,6 +351,7 @@ type TermsDocument struct {
 	AcceptThresholdSats uint64            `json:"acceptThresholdSats"`
 	Prefixes            map[string]string `json:"prefixes,omitempty"`
 	PrefixExpiresAt     int64             `json:"prefixExpiresAt,omitempty"`
+	BountyTaper         *BountyTaperTerms `json:"bountyTaper,omitempty"`
 }
 
 // IssuePrefix creates a stateless, standard-base64-encoded HMAC-SHA256 derivation prefix
@@ -440,6 +452,14 @@ func (n *Node) Terms() TermsDocument {
 		AcceptThresholdSats: n.fees.AcceptThresholdSats,
 		Prefixes:            prefixes,
 		PrefixExpiresAt:     exp,
+		BountyTaper: &BountyTaperTerms{
+			Phase:              "launch-seeding",
+			InitialRewardSats:  100,
+			StepDownAtFills:    25,
+			StepDownRewardSats: 50,
+			MaxFillsPerDomain:  50,
+			ExitCriterion:      "hubSupplyShare < 20% and organicSellers >= 3 per domain",
+		},
 	}
 }
 

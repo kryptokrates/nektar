@@ -12,8 +12,8 @@
   "skills": ["../skills/nektar-memory"],
   "mcpServers": {
     "nektar": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "nektar-data:/data", "-e", "NEKTAR_NETWORK=testnet", "ghcr.io/kryptokrates/nektar:latest", "mcp"]
+      "command": "nektar",
+      "args": ["mcp"]
     }
   }
 }

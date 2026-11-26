@@ -38,6 +38,9 @@ func (b *Broker) Want(ctx context.Context, req WantRequest) (*store.DealRecord, 
 	}
 
 	wantDomains := ExpandDomainsWithCorrelations(ctx, b.Matcher(), req.Domains, req.Question, b.ActiveNetworkTopics())
+	if len(wantDomains) > bstack.MaxDomains {
+		wantDomains = wantDomains[:bstack.MaxDomains]
+	}
 	wantID := fmt.Sprintf("want-%s-%s", shortPub(b.PubHex()), randIDHex())
 	want := bstack.WantAd{
 		WantID:   wantID,

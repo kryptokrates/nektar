@@ -43,6 +43,7 @@ type WantRequest struct {
 	MaxSats            uint64        `json:"maxSats"`
 	TargetShard        string        `json:"targetShard,omitempty"`
 	CollectTimeout     time.Duration `json:"collectTimeout,omitempty"`
+	StandingTTLSeconds int64         `json:"standingTtlSeconds,omitempty"`
 	ApprovedOverrideID string        `json:"approvedOverrideId,omitempty"`
 }
 

@@ -257,12 +257,14 @@ func (e *Engine) buyerRankAndMatch(rctx restate.RunContext, dealID string, want 
 				NeedsEscalation:  true,
 				EscalationReason: mDec.Reason,
 				Chosen:           &chosen,
+				Candidates:       buildTopKCandidates(chosen, ranked, 3),
 				MatchAudit:       matchAudit,
 				FirstOfferMs:     collectRes.FirstOfferMs,
 			}, nil
 		}
 	}
 
+	candidates := buildTopKCandidates(chosen, ranked, 3)
 	chosenJSON, _ := json.Marshal(chosen)
 	e.persistDealRecord(store.DealRecord{
 		DealID:          dealID,
@@ -280,9 +282,40 @@ func (e *Engine) buyerRankAndMatch(rctx restate.RunContext, dealID string, want 
 	return buyerRankResult{
 		NowUnix:      now,
 		Chosen:       &chosen,
+		Candidates:   candidates,
 		MatchAudit:   matchAudit,
 		FirstOfferMs: collectRes.FirstOfferMs,
 	}, nil
+}
+
+// buildTopKCandidates returns up to k distinct offers starting with chosen so BuyerDeal
+// can fail over deterministically to Seller #2/#3 on pre-broadcast failure without re-running Jev.
+func buildTopKCandidates(chosen bstack.OfferAd, ranked []ScoredOffer, k int) []bstack.OfferAd {
+	if k <= 0 {
+		k = 3
+	}
+	out := make([]bstack.OfferAd, 0, k)
+	seen := make(map[string]bool, k)
+	out = append(out, chosen)
+	if chosen.OfferID != "" {
+		seen[chosen.OfferID] = true
+	}
+	for _, ro := range ranked {
+		if len(out) >= k {
+			break
+		}
+		if ro.Offer.OfferID != "" && seen[ro.Offer.OfferID] {
+			continue
+		}
+		if ro.Offer.OfferID == chosen.OfferID && ro.Offer.Pub == chosen.Pub {
+			continue
+		}
+		if ro.Offer.OfferID != "" {
+			seen[ro.Offer.OfferID] = true
+		}
+		out = append(out, ro.Offer)
+	}
+	return out
 }
 
 func (e *Engine) buyerAwaitMatchEscalation(ctx restate.WorkflowContext, dealID string, chosen bstack.OfferAd, escalationReason string, approvalTimeout time.Duration, st *DealState) (bool, error) {

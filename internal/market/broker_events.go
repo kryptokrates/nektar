@@ -423,5 +423,46 @@ func (b *Broker) handleMarketEvent(ctx context.Context, ev bstack.MarketEvent) {
 			default:
 			}
 		}
+		b.dispatchOfferToStandingOrders(so.Offer)
 	}
+}
+
+// dispatchOfferToStandingOrders wakes any active durable Restate StandingOrder workflows whose
+// domain & maxSats match an incoming verified OfferAd from the Hub SSE stream.
+func (b *Broker) dispatchOfferToStandingOrders(off bstack.OfferAd) {
+	rc := b.RestateClient()
+	if rc == nil || b.mem == nil || b.mem.DB() == nil {
+		return
+	}
+	entries := LoadStandingOrderIndex(b.mem.DB())
+	if len(entries) == 0 {
+		return
+	}
+	now := time.Now().Unix()
+	var targets []string
+	for _, entry := range entries {
+		if entry.Status != "watching" || entry.OrderID == "" {
+			continue
+		}
+		if entry.ExpiresAtUnix > 0 && entry.ExpiresAtUnix <= now {
+			continue
+		}
+		if entry.MaxSats > 0 && off.PriceSats > entry.MaxSats {
+			continue
+		}
+		if !standingOrderDomainMatches(entry.Domains, off.Domains) {
+			continue
+		}
+		targets = append(targets, entry.OrderID)
+	}
+	if len(targets) == 0 {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, orderID := range targets {
+			_, _ = rc.SignalStandingOrderOffer(ctx, orderID, off)
+		}
+	}()
 }

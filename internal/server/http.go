@@ -402,6 +402,13 @@ func (a *App) buildMux() http.Handler {
 	})))
 	mux.Handle("GET /v1/onboard/hub-bundle", a.withAuth(http.HandlerFunc(a.handleHubBundle)))
 	mux.Handle("POST /v1/automation/approvals/{id}", a.withOperatorAuth(http.HandlerFunc(a.handleApprovalDecision)))
+	mux.Handle("POST /v1/market/standing", a.withOperatorAuth(http.HandlerFunc(a.handleCreateStandingOrder)))
+	mux.Handle("GET /v1/market/standing", a.withAuth(http.HandlerFunc(a.handleListStandingOrders)))
+	mux.Handle("POST /v1/market/standing/{id}/steer", a.withOperatorAuth(http.HandlerFunc(a.handleSteerStandingOrder)))
+	mux.Handle("DELETE /v1/market/standing/{id}", a.withOperatorAuth(http.HandlerFunc(a.handleCancelStandingOrder)))
+	mux.Handle("POST /v1/runtime/invocations/{id}/resume", a.withOperatorAuth(http.HandlerFunc(a.handleResumeInvocation)))
+	mux.Handle("POST /v1/runtime/invocations/{id}/restart", a.withOperatorAuth(http.HandlerFunc(a.handleRestartInvocation)))
+	mux.Handle("DELETE /v1/runtime/invocations/{id}", a.withOperatorAuth(http.HandlerFunc(a.handleKillInvocation)))
 
 	// 7. L0 Transparent LLM Memory Proxy, MCP OAuth 2.1, OpenAPI, Bundled Adapters & Prometheus Metrics.
 	a.registerProxyRoutes(mux)

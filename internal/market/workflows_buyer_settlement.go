@@ -295,6 +295,10 @@ func (e *Engine) buyerPayAndDeliver(rctx restate.RunContext, dealID string, chos
 	}
 
 	res := buyerPayResult{NowUnix: now, TxID: payTxID}
+	if escrowPayload != nil {
+		res.EscrowTxID = escrowPayload.EscrowTxID
+		res.EscrowRefundAfter = escrowPayload.RefundAfter
+	}
 	pReq := PurchaseRequest{
 		OfferID:           chosen.OfferID,
 		WantID:            dealID,

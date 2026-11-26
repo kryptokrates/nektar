@@ -25,6 +25,75 @@ func (tb *Toolbox) ExecWant(ctx context.Context, req market.WantRequest) (any, e
 	return tb.broker.Want(ctx, req)
 }
 
+type WatchKnowledgeInput struct {
+	Action        string   `json:"action,omitempty"` // create (default) | list | steer | cancel
+	OrderID       string   `json:"orderId,omitempty"`
+	Domains       []string `json:"domains,omitempty"`
+	Domain        string   `json:"domain,omitempty"`
+	Query         string   `json:"query,omitempty"`
+	MaxSats       uint64   `json:"maxSats,omitempty"`
+	TargetShard   string   `json:"targetShard,omitempty"`
+	TTLSeconds    int64    `json:"ttlSeconds,omitempty"`
+	Paused        *bool    `json:"paused,omitempty"`
+	ExtendSeconds int64    `json:"extendSeconds,omitempty"`
+	Reason        string   `json:"reason,omitempty"`
+}
+
+func (tb *Toolbox) ExecWatchKnowledge(ctx context.Context, in WatchKnowledgeInput) (any, error) {
+	if tb.broker == nil {
+		return nil, errors.New("market broker is not attached (start with `nektar serve`)")
+	}
+	action := strings.ToLower(strings.TrimSpace(in.Action))
+	if action == "" {
+		action = "create"
+	}
+	switch action {
+	case "list":
+		return map[string]any{"standingOrders": tb.broker.ListStandingOrders(ctx)}, nil
+	case "steer":
+		if strings.TrimSpace(in.OrderID) == "" {
+			return nil, errors.New("watchKnowledge steer requires orderId")
+		}
+		var maxPtr *uint64
+		if in.MaxSats > 0 {
+			v := in.MaxSats
+			maxPtr = &v
+		}
+		ok, err := tb.broker.SteerStandingOrder(ctx, in.OrderID, market.SteerStandingOrderInput{
+			MaxSats:       maxPtr,
+			Paused:        in.Paused,
+			ExtendSeconds: in.ExtendSeconds,
+			Reason:        in.Reason,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": ok, "orderId": in.OrderID}, nil
+	case "cancel":
+		if strings.TrimSpace(in.OrderID) == "" {
+			return nil, errors.New("watchKnowledge cancel requires orderId")
+		}
+		ok, err := tb.broker.CancelStandingOrder(ctx, in.OrderID, in.Reason)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": ok, "orderId": in.OrderID}, nil
+	default:
+		doms := in.Domains
+		if len(doms) == 0 && in.Domain != "" {
+			doms = []string{in.Domain}
+		}
+		return tb.broker.StartStandingOrder(ctx, market.StandingOrderInput{
+			OrderID:     in.OrderID,
+			Domains:     doms,
+			Query:       in.Query,
+			MaxSats:     in.MaxSats,
+			TargetShard: in.TargetShard,
+			TTLSeconds:  in.TTLSeconds,
+		})
+	}
+}
+
 type SellToolInput struct {
 	Shard       string   `json:"shard"`
 	Domains     []string `json:"domains,omitempty"`

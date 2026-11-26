@@ -124,9 +124,30 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 		return nil, noop, nil
 	}
 
+	// Pre-detect local restate-server binary when in auto-supervised mode so on Windows WSL2 NAT mode
+	// we can bind the h2c listener directly on the private WSL2 host gateway interface (never LAN/0.0.0.0)
+	// and register http://<wslHostIP>:<port> so WSL2 restate-server reaches Nektar without Connection refused!
+	var localBinPath string
+	if strings.TrimSpace(cfg.ExternalAdminURL) == "" && !cfg.DisableAutoStart {
+		localBinPath = findRestateBinary()
+	}
+
 	epURI, err := buildRestateEndpointURI(listenAddr, cfg.EndpointURI)
 	if err != nil {
 		return nil, noop, err
+	}
+
+	dialAddr := ""
+	if runtime.GOOS == "windows" && strings.HasPrefix(localBinPath, "wsl:") && strings.TrimSpace(cfg.EndpointURI) == "" && !server.IsNonLoopbackListen(listenAddr) {
+		if wslHostIP := detectWSLHostIP(); wslHostIP != "" && isLocalHostIP(wslHostIP) {
+			_, port, sErr := net.SplitHostPort(listenAddr)
+			if sErr == nil && port != "" {
+				listenAddr = net.JoinHostPort(wslHostIP, port)
+				epURI = fmt.Sprintf("http://%s:%s", wslHostIP, port)
+				dialAddr = listenAddr
+				log.Printf("restate: detected WSL2 NAT bridge host IP %s — binding h2c endpoint on %s", wslHostIP, listenAddr)
+			}
+		}
 	}
 
 	var idKeys []string
@@ -138,7 +159,7 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 	// Start dedicated h2c Restate Go SDK endpoint.
 	epErrCh := make(chan error, 1)
 	go func() {
-		log.Printf("nektar restate Go SDK h2c endpoint listening on %s (BuyerDeal, SellerDeal, Custody, Tx, AnchorCadence, NektarRuntime; auth=%v)",
+		log.Printf("nektar restate Go SDK h2c endpoint listening on %s (BuyerDeal, SellerDeal, StandingOrder, EscrowGuardian, Custody, Tx, AnchorCadence, NektarRuntime; auth=%v)",
 			listenAddr, len(idKeys) > 0)
 		if rErr := rSrv.Start(ctx, listenAddr); rErr != nil && ctx.Err() == nil {
 			epErrCh <- rErr
@@ -147,9 +168,12 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 	}()
 
 	// Wait until the local h2c listener is accepting TCP connections (ctx-aware, fail-closed on timeout).
-	_, dialPort, _ := net.SplitHostPort(listenAddr)
-	if dialPort == "" {
-		dialPort = "9080"
+	if dialAddr == "" {
+		_, dialPort, _ := net.SplitHostPort(listenAddr)
+		if dialPort == "" {
+			dialPort = "9080"
+		}
+		dialAddr = "127.0.0.1:" + dialPort
 	}
 	readyDeadline := time.Now().Add(4 * time.Second)
 	epReady := false
@@ -161,7 +185,7 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 			return nil, noop, fmt.Errorf("restate SDK endpoint failed to start on %s: %w", listenAddr, rErr)
 		default:
 		}
-		if c, dErr := net.DialTimeout("tcp", "127.0.0.1:"+dialPort, 200*time.Millisecond); dErr == nil {
+		if c, dErr := net.DialTimeout("tcp", dialAddr, 200*time.Millisecond); dErr == nil {
 			_ = c.Close()
 			epReady = true
 			break
@@ -194,7 +218,10 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 	if cfg.DisableAutoStart {
 		return nil, noop, nil
 	}
-	binPath := findRestateBinary()
+	binPath := localBinPath
+	if binPath == "" {
+		binPath = findRestateBinary()
+	}
 	if binPath == "" {
 		msg := "restate-server binary not found locally (run `nektar restate-up` to install pinned v" + RestatePinnedVersion + ", or set NEKTAR_RESTATE_ADMIN)"
 		if cfg.Required {
@@ -616,4 +643,47 @@ func envInt64(key string, fallback int64) int64 {
 		}
 	}
 	return fallback
+}
+
+// detectWSLHostIP queries WSL2's default IPv4 gateway IP, which in WSL2 NAT mode is the Windows host's
+// private vEthernet (WSL) adapter address (used so WSL2 restate-server can dial Nektar's h2c endpoint).
+func detectWSLHostIP() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "wsl", "-e", "sh", "-c", `ip route show default 2>/dev/null | awk '{print $3; exit}'`).Output()
+	if err != nil {
+		return ""
+	}
+	ip := net.ParseIP(strings.TrimSpace(string(out)))
+	if ip == nil || ip.To4() == nil || ip.IsLoopback() {
+		return ""
+	}
+	return ip.String()
+}
+
+// isLocalHostIP reports whether ipStr is explicitly assigned to a local network interface on this host.
+// In WSL2 NAT mode, the gateway IP belongs to the local Hyper-V vEthernet (WSL) interface (returns true).
+// In WSL2 mirrored mode, the default gateway is the physical LAN router (returns false, keeping 127.0.0.1).
+func isLocalHostIP(ipStr string) bool {
+	target := net.ParseIP(strings.TrimSpace(ipStr))
+	if target == nil {
+		return false
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		var ip net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip != nil && ip.Equal(target) {
+			return true
+		}
+	}
+	return false
 }

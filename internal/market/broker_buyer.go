@@ -64,6 +64,7 @@ func (b *Broker) Want(ctx context.Context, req WantRequest) (*store.DealRecord, 
 			TargetShard:        req.TargetShard,
 			CollectTimeout:     req.CollectTimeout,
 			WaitTimeout:        5 * time.Minute,
+			StandingTTL:        time.Duration(req.StandingTTLSeconds) * time.Second,
 			ApprovedOverrideID: req.ApprovedOverrideID,
 		}); err != nil {
 			return nil, err

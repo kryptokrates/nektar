@@ -14,6 +14,8 @@ import (
 
 	restate "github.com/restatedev/sdk-go"
 	"github.com/restatedev/sdk-go/ingress"
+
+	"github.com/kryptokrates/nektar/internal/bstack"
 )
 
 // RestateInvocation summarizes a live Restate invocation queried from sys_invocation.
@@ -94,12 +96,14 @@ func (c *RestateClient) HealthCheck(ctx context.Context) error {
 
 // expectedManifest lists every service + handler Nektar v0.1 requires on a registered deployment.
 var expectedManifest = map[string][]string{
-	"BuyerDeal":     {"deliverKey", "run", "status"},
-	"SellerDeal":    {"confirmPayment", "deliverPayment", "run", "status"},
-	"Custody":       {"balance", "release", "reserve"},
-	"Tx":            {"emit", "state"},
-	"AnchorCadence": {"status", "trigger"},
-	"NektarRuntime": {"anchorStatus", "emitTx", "triggerAnchor", "txState"},
+	"BuyerDeal":      {"deliverKey", "run", "status"},
+	"SellerDeal":     {"confirmPayment", "deliverPayment", "run", "status"},
+	"Custody":        {"balance", "release", "reserve"},
+	"Tx":             {"emit", "state"},
+	"AnchorCadence":  {"status", "trigger"},
+	"NektarRuntime":  {"anchorStatus", "emitTx", "triggerAnchor", "txState"},
+	"StandingOrder":  {"cancel", "onOffer", "run", "status", "steer"},
+	"EscrowGuardian": {"markClaimed", "run", "status"},
 }
 
 type adminDeployment struct {
@@ -209,7 +213,7 @@ func (c *RestateClient) StartBuyerDealAsync(ctx context.Context, wantID string, 
 	if hdrs := c.runtimeHeaders(); hdrs != nil {
 		opts = append(opts, restate.WithHeaders(hdrs))
 	}
-	sr, err := ingress.WorkflowSend[BuyerDealInput](c.Ingress, "BuyerDeal", wantID, "run").
+	sr, err := ingress.WorkflowSend[BuyerDealInput](c.Ingress, "BuyerDeal", wantID, "run", restate.WithScope("bsv-desktop")).
 		Send(ctx, in, opts...)
 	if err != nil {
 		return "", fmt.Errorf("restate: start BuyerDeal %s: %w", wantID, err)
@@ -341,6 +345,170 @@ func (c *RestateClient) ConfirmSellerPayment(ctx context.Context, offerID string
 		return false, err
 	}
 	return out, nil
+}
+
+// StartStandingOrderAsync launches a durable StandingOrder workflow (0%-CPU Limit-Order for Knowledge).
+func (c *RestateClient) StartStandingOrderAsync(ctx context.Context, orderID string, in StandingOrderInput) (string, error) {
+	var opts []ingress.SendOption
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
+	sr, err := ingress.WorkflowSend[StandingOrderInput](c.Ingress, "StandingOrder", orderID, "run").
+		Send(ctx, in, opts...)
+	if err != nil {
+		return "", fmt.Errorf("restate: start StandingOrder %s: %w", orderID, err)
+	}
+	return sr.Id(), nil
+}
+
+// StandingOrderStatus queries the durable state of a StandingOrder workflow.
+func (c *RestateClient) StandingOrderStatus(ctx context.Context, orderID string) (*StandingOrderState, error) {
+	var opts []ingress.RequestOption
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
+	out, err := ingress.Workflow[restate.Void, StandingOrderState](c.Ingress, "StandingOrder", orderID, "status").
+		Request(ctx, restate.Void{}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SignalStandingOrderOffer wakes a sleeping StandingOrder with a verified OfferAd via restate.Signal.
+func (c *RestateClient) SignalStandingOrderOffer(ctx context.Context, orderID string, off bstack.OfferAd) (bool, error) {
+	idem := fmt.Sprintf("so-offer:%s:%s", orderID, off.OfferID)
+	opts := []ingress.RequestOption{restate.WithIdempotencyKey(idem)}
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
+	return ingress.Workflow[bstack.OfferAd, bool](c.Ingress, "StandingOrder", orderID, "onOffer").
+		Request(ctx, off, opts...)
+}
+
+// SteerStandingOrder live-updates maxSats, pause state, or TTL on a running StandingOrder.
+func (c *RestateClient) SteerStandingOrder(ctx context.Context, orderID string, steer SteerStandingOrderInput) (bool, error) {
+	var opts []ingress.RequestOption
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
+	return ingress.Workflow[SteerStandingOrderInput, bool](c.Ingress, "StandingOrder", orderID, "steer").
+		Request(ctx, steer, opts...)
+}
+
+// CancelStandingOrder terminates a watching/paused StandingOrder cleanly.
+func (c *RestateClient) CancelStandingOrder(ctx context.Context, orderID, reason string) (bool, error) {
+	opts := []ingress.RequestOption{restate.WithIdempotencyKey("so-cancel:" + orderID)}
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
+	return ingress.Workflow[string, bool](c.Ingress, "StandingOrder", orderID, "cancel").
+		Request(ctx, reason, opts...)
+}
+
+// StartEscrowGuardianAsync arms a durable EscrowGuardian workflow keyed by escrowTxID.
+func (c *RestateClient) StartEscrowGuardianAsync(ctx context.Context, escrowTxID string, in EscrowGuardianInput) (string, error) {
+	var opts []ingress.SendOption
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
+	sr, err := ingress.WorkflowSend[EscrowGuardianInput](c.Ingress, "EscrowGuardian", escrowTxID, "run", restate.WithScope("bsv-desktop")).
+		Send(ctx, in, opts...)
+	if err != nil {
+		return "", fmt.Errorf("restate: start EscrowGuardian %s: %w", escrowTxID, err)
+	}
+	return sr.Id(), nil
+}
+
+// EscrowGuardianStatus queries the durable state of an EscrowGuardian workflow.
+func (c *RestateClient) EscrowGuardianStatus(ctx context.Context, escrowTxID string) (*EscrowGuardianState, error) {
+	var opts []ingress.RequestOption
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
+	out, err := ingress.Workflow[restate.Void, EscrowGuardianState](c.Ingress, "EscrowGuardian", escrowTxID, "status").
+		Request(ctx, restate.Void{}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// MarkEscrowGuardianClaimed disarms an armed EscrowGuardian after successful settlement.
+func (c *RestateClient) MarkEscrowGuardianClaimed(ctx context.Context, escrowTxID string) (bool, error) {
+	opts := []ingress.RequestOption{restate.WithIdempotencyKey("eg-claimed:" + escrowTxID)}
+	if hdrs := c.runtimeHeaders(); hdrs != nil {
+		opts = append(opts, restate.WithHeaders(hdrs))
+	}
+	return ingress.Workflow[restate.Void, bool](c.Ingress, "EscrowGuardian", escrowTxID, "markClaimed").
+		Request(ctx, restate.Void{}, opts...)
+}
+
+// ResumeInvocation resumes a paused Restate invocation via Admin API PATCH /invocations/{id}/resume.
+// Pairs with PauseOnMaxAttempts() so transient outages (e.g. closed BSV Desktop) never destroy in-flight deals.
+func (c *RestateClient) ResumeInvocation(ctx context.Context, invocationID string) error {
+	u := c.AdminURL + "/invocations/" + url.PathEscape(strings.TrimSpace(invocationID)) + "/resume"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("restate: resume invocation %s: %w", invocationID, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("restate: resume invocation HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
+// RestartInvocationAsNew restarts a paused/failed Restate invocation as a fresh invocation via Admin API
+// PATCH /invocations/{id}/restart-as-new and returns the new invocation ID if provided.
+func (c *RestateClient) RestartInvocationAsNew(ctx context.Context, invocationID string) (string, error) {
+	u := c.AdminURL + "/invocations/" + url.PathEscape(strings.TrimSpace(invocationID)) + "/restart-as-new"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, u, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("restate: restart invocation %s: %w", invocationID, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("restate: restart invocation HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var parsed struct {
+		NewInvocationID string `json:"new_invocation_id"`
+		ID              string `json:"id"`
+	}
+	_ = json.Unmarshal(raw, &parsed)
+	if parsed.NewInvocationID != "" {
+		return parsed.NewInvocationID, nil
+	}
+	return parsed.ID, nil
+}
+
+// KillInvocation terminates a stuck invocation via Restate Admin API PATCH /invocations/{id}/kill.
+func (c *RestateClient) KillInvocation(ctx context.Context, invocationID string) error {
+	u := c.AdminURL + "/invocations/" + url.PathEscape(strings.TrimSpace(invocationID)) + "/kill"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("restate: kill invocation %s: %w", invocationID, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("restate: kill invocation HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
 }
 
 // EmitTxEvent fires a non-blocking durable transaction lifecycle event via NektarRuntime -> private Tx VO (R1, R9).

@@ -161,21 +161,34 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 	})
 
 	type wantArgs struct {
-		Domains     []string `json:"domains,omitempty"`
-		Question    string   `json:"question"`
-		MaxSats     uint64   `json:"maxSats,omitempty"`
-		TargetShard string   `json:"targetShard,omitempty"`
+		Domains            []string `json:"domains,omitempty"`
+		Question           string   `json:"question"`
+		MaxSats            uint64   `json:"maxSats,omitempty"`
+		TargetShard        string   `json:"targetShard,omitempty"`
+		StandingTTLSeconds int64    `json:"standingTtlSeconds,omitempty"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "want",
-		Description: "Buy verified knowledge live from peer agents or the Hub over BSV AtomicBEEF + BRC-369 keyed disclosure.",
+		Description: "Buy verified knowledge live from peer agents or the Hub over BSV AtomicBEEF + BRC-369 keyed disclosure. Optionally set standingTtlSeconds to fall back to a durable StandingOrder.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in wantArgs) (*mcp.CallToolResult, any, error) {
 		res, err := tb.ExecWant(ctx, market.WantRequest{
-			Domains:     in.Domains,
-			Question:    in.Question,
-			MaxSats:     in.MaxSats,
-			TargetShard: in.TargetShard,
+			Domains:            in.Domains,
+			Question:           in.Question,
+			MaxSats:            in.MaxSats,
+			TargetShard:        in.TargetShard,
+			StandingTTLSeconds: in.StandingTTLSeconds,
 		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonToolResult(res)
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "watchKnowledge",
+		Description: "Create, list, live-steer, or cancel durable Restate StandingOrders (Limit-Orders for Knowledge) that sleep at 0% CPU until a matching offer arrives.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in WatchKnowledgeInput) (*mcp.CallToolResult, any, error) {
+		res, err := tb.ExecWatchKnowledge(ctx, in)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -32,9 +32,11 @@ type DealState struct {
 	SaleOffer    *contracts.KeyedSaleOffer `json:"saleOffer,omitempty"`
 	PaymentTxID  string                    `json:"paymentTxid,omitempty"`
 	ClaimTxID    string                    `json:"claimTxid,omitempty"`
-	ApprovalID   string                    `json:"approvalId,omitempty"`
-	AwakeableID  string                    `json:"awakeableId,omitempty"`
-	Shard        string                    `json:"shard,omitempty"`
+	ApprovalID      string                    `json:"approvalId,omitempty"`
+	AwakeableID     string                    `json:"awakeableId,omitempty"`
+	StandingOrderID string                    `json:"standingOrderId,omitempty"`
+	EscrowTxID      string                    `json:"escrowTxid,omitempty"`
+	Shard           string                    `json:"shard,omitempty"`
 	DeliveredTxt string                    `json:"deliveredText,omitempty"`
 	Error        string                    `json:"error,omitempty"`
 	UpdatedAt    int64                     `json:"updatedAt"`
@@ -55,6 +57,7 @@ type BuyerDealInput struct {
 	CollectTimeout     time.Duration    `json:"collectTimeout,omitempty"`
 	WaitTimeout        time.Duration    `json:"waitTimeout,omitempty"`
 	ApprovalTimeout    time.Duration    `json:"approvalTimeout,omitempty"`
+	StandingTTL        time.Duration    `json:"standingTtl,omitempty"`
 	ApprovedOverrideID string           `json:"approvedOverrideId,omitempty"`
 }
 
@@ -494,13 +497,33 @@ func (e *Engine) BindRestate(srv *restateserver.Restate) *restateserver.Restate 
 		Handler("triggerAnchor", restate.NewServiceHandler(e.restateRuntimeTriggerAnchor)).
 		Handler("anchorStatus", restate.NewServiceHandler(e.restateRuntimeAnchorStatus))
 
+	standingWF := restate.NewWorkflow("StandingOrder",
+		restate.WithInactivityTimeout(2*time.Minute),
+		dealRetry,
+	).
+		Handler("run", restate.NewWorkflowHandler(e.restateStandingOrderRun)).
+		Handler("onOffer", restate.NewWorkflowSharedHandler(e.restateStandingOrderOnOffer)).
+		Handler("steer", restate.NewWorkflowSharedHandler(e.restateStandingOrderSteer)).
+		Handler("cancel", restate.NewWorkflowSharedHandler(e.restateStandingOrderCancel)).
+		Handler("status", restate.NewWorkflowSharedHandler(e.restateStandingOrderStatus))
+
+	guardianWF := restate.NewWorkflow("EscrowGuardian",
+		restate.WithInactivityTimeout(2*time.Minute),
+		dealRetry,
+	).
+		Handler("run", restate.NewWorkflowHandler(e.restateEscrowGuardianRun)).
+		Handler("markClaimed", restate.NewWorkflowSharedHandler(e.restateEscrowGuardianMarkClaimed)).
+		Handler("status", restate.NewWorkflowSharedHandler(e.restateEscrowGuardianStatus))
+
 	return srv.
 		Bind(buyerWF).
 		Bind(sellerWF).
 		Bind(custodyObj).
 		Bind(txObj).
 		Bind(cadenceObj).
-		Bind(runtimeSvc)
+		Bind(runtimeSvc).
+		Bind(standingWF).
+		Bind(guardianWF)
 }
 
 func (e *Engine) restateDealStatus(ctx restate.WorkflowSharedContext, _ restate.Void) (DealState, error) {

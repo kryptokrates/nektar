@@ -322,3 +322,142 @@ func (a *App) handleApprovalDecision(w http.ResponseWriter, r *http.Request) {
 	a.BroadcastDashboardEvent("approval_decided")
 	writeJSON(w, http.StatusOK, map[string]any{"approval": appr, "deal": deal})
 }
+
+func (a *App) handleCreateStandingOrder(w http.ResponseWriter, r *http.Request) {
+	if a.broker == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "market broker not attached"})
+		return
+	}
+	var in market.StandingOrderInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16384)).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if in.AgentID == "" {
+		in.AgentID = strings.TrimSpace(r.Header.Get("X-Nektar-Agent"))
+	}
+	st, err := a.broker.StartStandingOrder(r.Context(), in)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	a.BroadcastDashboardEvent("standing_order_created")
+	writeJSON(w, http.StatusCreated, st)
+}
+
+func (a *App) handleListStandingOrders(w http.ResponseWriter, r *http.Request) {
+	if a.broker == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"standingOrders": []market.StandingOrderState{}})
+		return
+	}
+	orders := a.broker.ListStandingOrders(r.Context())
+	if orders == nil {
+		orders = []market.StandingOrderState{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"standingOrders": orders})
+}
+
+func (a *App) handleSteerStandingOrder(w http.ResponseWriter, r *http.Request) {
+	if a.broker == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "market broker not attached"})
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "order id required"})
+		return
+	}
+	var in market.SteerStandingOrderInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	ok, err := a.broker.SteerStandingOrder(r.Context(), id, in)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	a.BroadcastDashboardEvent("standing_order_steered")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": ok, "orderId": id})
+}
+
+func (a *App) handleCancelStandingOrder(w http.ResponseWriter, r *http.Request) {
+	if a.broker == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "market broker not attached"})
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "order id required"})
+		return
+	}
+	reason := strings.TrimSpace(r.URL.Query().Get("reason"))
+	if reason == "" {
+		reason = "cancelled by operator"
+	}
+	ok, err := a.broker.CancelStandingOrder(r.Context(), id, reason)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	a.BroadcastDashboardEvent("standing_order_cancelled")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": ok, "orderId": id})
+}
+
+func (a *App) handleResumeInvocation(w http.ResponseWriter, r *http.Request) {
+	rc := a.restateClient()
+	if rc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Restate durable runtime is not connected"})
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invocation id required"})
+		return
+	}
+	if err := rc.ResumeInvocation(r.Context(), id); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	a.BroadcastDashboardEvent("invocation_resumed")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "invocationId": id, "action": "resumed"})
+}
+
+func (a *App) handleRestartInvocation(w http.ResponseWriter, r *http.Request) {
+	rc := a.restateClient()
+	if rc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Restate durable runtime is not connected"})
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invocation id required"})
+		return
+	}
+	newID, err := rc.RestartInvocationAsNew(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	a.BroadcastDashboardEvent("invocation_restarted")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "invocationId": id, "newInvocationId": newID, "action": "restarted"})
+}
+
+func (a *App) handleKillInvocation(w http.ResponseWriter, r *http.Request) {
+	rc := a.restateClient()
+	if rc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Restate durable runtime is not connected"})
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invocation id required"})
+		return
+	}
+	if err := rc.KillInvocation(r.Context(), id); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	a.BroadcastDashboardEvent("invocation_killed")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "invocationId": id, "action": "killed"})
+}

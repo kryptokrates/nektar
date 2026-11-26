@@ -69,7 +69,8 @@ func (tb *Toolbox) ListTools() []ToolSpec {
 		{Name: "forget", Profile: "agent", Description: "Shred local plaintext/ciphertext of a fragment while preserving its on-chain Merkle commitment."},
 		{Name: "groundedAnswer", Profile: "agent", Description: "Verify claims against cited memory fragments (quote + Google Mangle Datalog), strip hallucinations, commit a receipt, and return the nektarr1.* verification footer."},
 		{Name: "verifyReceipt", Profile: "agent", Description: "Verify a nektarr1.* receipt token, its §16 delegations, and the SPV settlement status of every cited fragment."},
-		{Name: "want", Profile: "agent", Description: "Buy verified knowledge live from peer agents or the Hub over BSV AtomicBEEF + BRC-369 keyed disclosure."},
+		{Name: "want", Profile: "agent", Description: "Buy verified knowledge live from peer agents or the Hub over BSV AtomicBEEF + BRC-369 keyed disclosure. Set standingTtlSeconds to auto-create a durable StandingOrder if no seller is online yet."},
+		{Name: "watchKnowledge", Profile: "agent", Description: "Create, list, live-steer, or cancel durable 0%-CPU Restate StandingOrders (Limit-Orders for Knowledge) that auto-buy when a matching seller arrives."},
 		{Name: "sell", Profile: "agent", Description: "Arm a local memory shard for autonomous A2A selling, or submit a verified anchored fragment to a Hub knowledge bounty."},
 		{Name: "deals", Profile: "agent", Description: "List persisted market deals, pending operator approvals, verified seller reputation, and network liquidity metrics."},
 		{Name: "fund", Profile: "agent", Description: "Show wallet funding address, satoshi balance, UTXO count, SpendGuard caps, and optionally request a testnet faucet drip."},
@@ -224,12 +225,13 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 
 	case "want":
 		var in struct {
-			Domains     []string `json:"domains"`
-			Domain      string   `json:"domain,omitempty"`
-			Question    string   `json:"question"`
-			Query       string   `json:"query,omitempty"`
-			MaxSats     uint64   `json:"maxSats"`
-			TargetShard string   `json:"targetShard,omitempty"`
+			Domains            []string `json:"domains"`
+			Domain             string   `json:"domain,omitempty"`
+			Question           string   `json:"question"`
+			Query              string   `json:"query,omitempty"`
+			MaxSats            uint64   `json:"maxSats"`
+			TargetShard        string   `json:"targetShard,omitempty"`
+			StandingTTLSeconds int64    `json:"standingTtlSeconds,omitempty"`
 		}
 		if err := json.Unmarshal(rawArgs, &in); err != nil {
 			return nil, err
@@ -242,11 +244,19 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 			q = in.Query
 		}
 		return tb.ExecWant(ctx, market.WantRequest{
-			Domains:     in.Domains,
-			Question:    q,
-			MaxSats:     in.MaxSats,
-			TargetShard: in.TargetShard,
+			Domains:            in.Domains,
+			Question:           q,
+			MaxSats:            in.MaxSats,
+			TargetShard:        in.TargetShard,
+			StandingTTLSeconds: in.StandingTTLSeconds,
 		})
+
+	case "watchKnowledge":
+		var in WatchKnowledgeInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
+		}
+		return tb.ExecWatchKnowledge(ctx, in)
 
 	case "sell":
 		var in SellToolInput

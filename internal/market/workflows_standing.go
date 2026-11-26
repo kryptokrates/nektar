@@ -275,14 +275,12 @@ func (e *Engine) restateStandingOrderRun(ctx restate.WorkflowContext, in Standin
 				wantAd.Pub = e.mem.Chain().IdentityPubHex()
 			}
 
-			// Invoke BuyerDeal durably with BSV Desktop flow-control scope & deterministic headers.
-			var clientOpts []restate.ClientOption
-			clientOpts = append(clientOpts, restate.WithScope("bsv-desktop"))
+			// Invoke BuyerDeal durably with deterministic internal auth headers.
 			var reqOpts []restate.RequestOption
 			if hdrs := e.internalCallHeaders(); hdrs != nil {
 				reqOpts = append(reqOpts, restate.WithHeaders(hdrs))
 			}
-			dealRes, dErr := restate.Workflow[DealState](ctx, "BuyerDeal", dealID, "run", clientOpts...).
+			dealRes, dErr := restate.Workflow[DealState](ctx, "BuyerDeal", dealID, "run").
 				Request(BuyerDealInput{
 					Want:            wantAd,
 					Offers:          []bstack.OfferAd{off},

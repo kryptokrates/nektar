@@ -2,14 +2,21 @@ package market
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -279,3 +286,461 @@ func TestStandingOrderBrokerDispatchFiltersMatchingOrders(t *testing.T) {
 	// Ensure deal persistence helper isn't broken by new DealState fields.
 	_ = mem.DB().SaveDeal(store.DealRecord{DealID: "d1", Role: "buyer", Status: "settled"})
 }
+
+func startLiveRestateForTest(t *testing.T, ctx context.Context, eng *Engine, internalTok string) (rc *RestateClient, epURI string, cleanup func()) {
+	t.Helper()
+	bin := locateRestateServerBinary()
+	useWSL := false
+	if bin == "" && runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("wsl"); err == nil {
+			out, wErr := exec.CommandContext(ctx, "wsl", "-e", "sh", "-c", `test -x "$HOME/.nektar/bin/restate-server" && printf "%s/.nektar/bin/restate-server" "$HOME"`).Output()
+			if wErr == nil && strings.HasPrefix(strings.TrimSpace(string(out)), "/") {
+				bin = strings.TrimSpace(string(out))
+				useWSL = true
+			}
+		}
+	}
+	if bin == "" {
+		t.Skip("restate-server binary not available locally or in WSL2")
+	}
+
+	epPort := freeLoopbackPort(t)
+	bindHost := "127.0.0.1"
+	if useWSL {
+		if out, err := exec.CommandContext(ctx, "wsl", "-e", "sh", "-c", `ip route show default 2>/dev/null | awk '{print $3; exit}'`).Output(); err == nil {
+			if ip := net.ParseIP(strings.TrimSpace(string(out))); ip != nil && ip.To4() != nil && !ip.IsLoopback() {
+				if addrs, aErr := net.InterfaceAddrs(); aErr == nil {
+					for _, a := range addrs {
+						var lip net.IP
+						switch v := a.(type) {
+						case *net.IPNet:
+							lip = v.IP
+						case *net.IPAddr:
+							lip = v.IP
+						}
+						if lip != nil && lip.Equal(ip) {
+							bindHost = ip.String()
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	epAddr := net.JoinHostPort(bindHost, fmt.Sprintf("%d", epPort))
+	epURI = "http://" + epAddr
+
+	epCtx, epCancel := context.WithCancel(ctx)
+	go func() {
+		_ = eng.NewRestateServer().Start(epCtx, epAddr)
+	}()
+	ready := false
+	for i := 0; i < 60; i++ {
+		if c, err := net.DialTimeout("tcp", epAddr, 100*time.Millisecond); err == nil {
+			_ = c.Close()
+			ready = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !ready {
+		epCancel()
+		t.Fatalf("h2c endpoint %s never became ready", epAddr)
+	}
+
+	ingPort := freeLoopbackPort(t)
+	admPort := freeLoopbackPort(t)
+	nodePort := freeLoopbackPort(t)
+	var cmd *exec.Cmd
+	var wslDir string
+	if useWSL {
+		wslDir = fmt.Sprintf("/tmp/nektar-test-restate-%d", time.Now().UnixNano())
+		shCmd := fmt.Sprintf(
+			`mkdir -p %s && exec env RESTATE_NODE_NAME=nektar-10x-e2e RESTATE_BIND_ADDRESS=127.0.0.1:%d RESTATE_INGRESS__BIND_ADDRESS=127.0.0.1:%d RESTATE_ADMIN__BIND_ADDRESS=127.0.0.1:%d RESTATE_WORKER__INVOKER__INACTIVITY_TIMEOUT=2s RUST_LOG=warn %q --base-dir %s`,
+			wslDir, nodePort, ingPort, admPort, bin, wslDir,
+		)
+		cmd = exec.CommandContext(ctx, "wsl", "-e", "sh", "-c", shCmd)
+	} else {
+		restateData := t.TempDir()
+		cmd = exec.CommandContext(ctx, bin, "--base-dir", restateData)
+		cmd.Env = append(os.Environ(),
+			"RESTATE_NODE_NAME=nektar-10x-e2e",
+			fmt.Sprintf("RESTATE_BIND_ADDRESS=127.0.0.1:%d", nodePort),
+			fmt.Sprintf("RESTATE_INGRESS__BIND_ADDRESS=127.0.0.1:%d", ingPort),
+			fmt.Sprintf("RESTATE_ADMIN__BIND_ADDRESS=127.0.0.1:%d", admPort),
+			"RESTATE_WORKER__INVOKER__INACTIVITY_TIMEOUT=2s",
+			"RUST_LOG=warn",
+		)
+	}
+	var rsLogs strings.Builder
+	cmd.Stdout = &rsLogs
+	cmd.Stderr = &rsLogs
+	if err := cmd.Start(); err != nil {
+		epCancel()
+		t.Fatalf("start restate-server: %v", err)
+	}
+
+	ingURL := fmt.Sprintf("http://127.0.0.1:%d", ingPort)
+	admURL := fmt.Sprintf("http://127.0.0.1:%d", admPort)
+	rc = NewRestateClientWithToken(ingURL, admURL, internalTok)
+
+	healthy := false
+	for i := 0; i < 100; i++ {
+		if rc.HealthCheck(ctx) == nil {
+			healthy = true
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	if !healthy {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		epCancel()
+		t.Fatalf("restate-server never became healthy; logs:\n%s", rsLogs.String())
+	}
+	if _, err := rc.EnsureDeployment(ctx, epURI, false); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		epCancel()
+		t.Fatalf("EnsureDeployment(%s): %v\nlogs:\n%s", epURI, err, rsLogs.String())
+	}
+
+	return rc, epURI, func() {
+		if t.Failed() {
+			t.Logf("restate-server logs:\n%s", rsLogs.String())
+		}
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		epCancel()
+		if useWSL && wslDir != "" {
+			_ = exec.Command("wsl", "-e", "rm", "-rf", wslDir).Run()
+		}
+	}
+}
+
+// TestLiveRestate10xFeaturesE2E runs ALL new Restate v1.8.1 features end-to-end against a REAL
+// restate-server v1.8.1 process (NO MOCKS):
+//  1. StandingOrder: create -> live-steer pause -> ignore offer while paused -> unpause -> auto-buy & fill via BuyerDeal!
+//  2. BuyerDeal Top-K Multi-Seller Failover: Seller #1 fails pre-broadcast -> Custody released -> Seller #2 settles!
+//  3. EscrowGuardian: watching -> markClaimed disarm + already-settled auto-claim detection!
+//  4. Restate v1.8.1 Admin Invocation Controls: KillInvocation + Resume/Restart real HTTP API check!
+func TestLiveRestate10xFeaturesE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	buyerMem := newTestMemory(t)
+	sellerMem := newTestMemory(t)
+	buyerEng := NewEngine(buyerMem, DefaultPolicy())
+	sellerEng := NewEngine(sellerMem, DefaultPolicy())
+	const internalTok = "e2e-10x-secret"
+	buyerEng.SetInternalToken(internalTok)
+
+	// Attach a minimal broker to buyerEng so BuyerDeal Step 5 executes buyerPayAndDeliver (for Failover test!).
+	buyerBroker := NewBroker(buyerMem, buyerEng, nil, BrokerConfig{})
+	buyerEng.SetBroker(buyerBroker)
+
+	// Approve buyer policy for ops/bsv up to 1000 sats/deal.
+	if _, err := ApprovePolicyPreset(buyerMem.DB(), buyerEng.Policy(), "buyer", []string{"ops", "bsv"}, "e2e-test"); err != nil {
+		t.Fatal(err)
+	}
+
+	rc, _, cleanup := startLiveRestateForTest(t, ctx, buyerEng, internalTok)
+	defer cleanup()
+
+	buyerPub := buyerMem.Chain().IdentityPubHex()
+
+	// === 1. LIVE STANDING ORDER E2E (restate.Signal steer + pause + auto-buy -> filled) ===
+	remSO, err := sellerMem.Remember(ctx, memory.RememberInput{
+		Shard:      "intel-so",
+		Text:       "StandingOrder auto-bought knowledge verified on real Restate v1.8.1!",
+		AutoAnchor: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	soOffer, soKey, soChirp, err := sellerEng.PrepareDirectSale(ctx, "intel-so", remSO.Seq, 180, buyerPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	soOfferJSON, _ := json.Marshal(soOffer)
+	orderID := "so-live-e2e-1"
+	if _, err := rc.StartStandingOrderAsync(ctx, orderID, StandingOrderInput{
+		OrderID:     orderID,
+		Domains:     []string{"bsv"},
+		Query:       "live standing order test",
+		MaxSats:     150, // initially too low for 180-sat offer; will steer up to 250!
+		TargetShard: "acquired-standing",
+		TTL:         10 * time.Minute,
+		WaitTimeout: 15 * time.Second,
+	}); err != nil {
+		t.Fatalf("StartStandingOrderAsync: %v", err)
+	}
+
+	// Wait for StandingOrder to reach watching (waitingSeq=1).
+	var soSt *StandingOrderState
+	for i := 0; i < 40; i++ {
+		if st, gErr := rc.StandingOrderStatus(ctx, orderID); gErr == nil && st.Status == "watching" && st.WaitingSeq == 1 {
+			soSt = st
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if soSt == nil {
+		t.Fatalf("StandingOrder never reached watching state")
+	}
+
+	// Live-steer: pause + raise maxSats to 250.
+	pausedTrue := true
+	newMax := uint64(250)
+	if ok, err := rc.SteerStandingOrder(ctx, orderID, SteerStandingOrderInput{MaxSats: &newMax, Paused: &pausedTrue}); err != nil || !ok {
+		t.Fatalf("SteerStandingOrder pause: ok=%v err=%v", ok, err)
+	}
+	for i := 0; i < 40; i++ {
+		if st, gErr := rc.StandingOrderStatus(ctx, orderID); gErr == nil && st.Status == "paused" && st.MaxSats == 250 && st.WaitingSeq == 2 {
+			soSt = st
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if soSt.Status != "paused" || soSt.MaxSats != 250 {
+		t.Fatalf("expected paused maxSats=250, got %+v", soSt)
+	}
+
+	// Send an offer while paused — MUST be ignored (waitingSeq bumps to 3, status stays paused, attempts=0).
+	if ok, err := rc.SignalStandingOrderOffer(ctx, orderID, bstack.OfferAd{
+		OfferID: "off-ignored-while-paused", Domains: []string{"bsv"}, PriceSats: 100,
+	}); err != nil || !ok {
+		t.Fatalf("SignalStandingOrderOffer while paused: ok=%v err=%v", ok, err)
+	}
+	for i := 0; i < 40; i++ {
+		if st, gErr := rc.StandingOrderStatus(ctx, orderID); gErr == nil && st.WaitingSeq == 3 {
+			soSt = st
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if soSt.Status != "paused" || soSt.Attempts != 0 {
+		t.Fatalf("expected offer ignored while paused, got %+v", soSt)
+	}
+
+	// Unpause!
+	pausedFalse := false
+	if ok, err := rc.SteerStandingOrder(ctx, orderID, SteerStandingOrderInput{Paused: &pausedFalse}); err != nil || !ok {
+		t.Fatalf("SteerStandingOrder unpause: ok=%v err=%v", ok, err)
+	}
+	for i := 0; i < 40; i++ {
+		if st, gErr := rc.StandingOrderStatus(ctx, orderID); gErr == nil && st.Status == "watching" && st.WaitingSeq == 4 {
+			soSt = st
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if soSt.Status != "watching" {
+		t.Fatalf("expected unpaused watching, got %+v", soSt)
+	}
+
+	// Now deliver a REAL cryptographically signed OfferAd via Signal!
+	liveOfferAd := bstack.OfferAd{
+		OfferID:      "off-so-real-1",
+		Pub:          soOffer.SellerPub,
+		BuyerPub:     buyerPub,
+		Net:          "memory",
+		Domains:      []string{"bsv"},
+		PriceSats:    180,
+		Shard:        "intel-so",
+		Leaf:         remSO.Leaf,
+		ChirpURL:     soChirp,
+		KeyCommitHex: soOffer.KeyCommitment,
+		SaleOffer:    soOfferJSON,
+		Direct:       true,
+	}
+	if ok, err := rc.SignalStandingOrderOffer(ctx, orderID, liveOfferAd); err != nil || !ok {
+		t.Fatalf("SignalStandingOrderOffer live: ok=%v err=%v", ok, err)
+	}
+
+	// Wait for StandingOrder to launch BuyerDeal (dealID = "so-<orderID>-1"), then deliver key to BuyerDeal!
+	expectedDealID := "so-" + orderID + "-1"
+	for i := 0; i < 50; i++ {
+		if dst, gErr := rc.BuyerDealStatus(ctx, expectedDealID); gErr == nil && dst.Status == "offered" {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if ok, err := rc.DeliverBuyerKey(ctx, expectedDealID, ClaimSignal{
+		ClaimTxID:     "tx-so-claim-1",
+		ContentKeyHex: hex.EncodeToString(soKey[:]),
+		ChirpURL:      soChirp,
+	}); err != nil || !ok {
+		t.Fatalf("DeliverBuyerKey for StandingOrder deal %s: ok=%v err=%v", expectedDealID, ok, err)
+	}
+
+	// Verify StandingOrder transitions to "filled" with decrypted text!
+	for i := 0; i < 60; i++ {
+		if st, gErr := rc.StandingOrderStatus(ctx, orderID); gErr == nil && st.Status == "filled" {
+			soSt = st
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if soSt.Status != "filled" || !strings.Contains(soSt.DeliveredText, "StandingOrder auto-bought") {
+		t.Fatalf("expected StandingOrder filled with delivered text, got %+v", soSt)
+	}
+
+	// === 2. LIVE TOP-K MULTI-SELLER FAILOVER E2E (BuyerDeal) ===
+	remF1, err := sellerMem.Remember(ctx, memory.RememberInput{Shard: "fail-1", Text: "Seller 1 unreachable", AutoAnchor: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remF2, err := sellerMem.Remember(ctx, memory.RememberInput{Shard: "fail-2", Text: "Seller 2 failover succeeded cleanly!", AutoAnchor: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fOffer1, _, fChirp1, err := sellerEng.PrepareDirectSale(ctx, "fail-1", remF1.Seq, 100, buyerPub) // cheaper -> ranked #1!
+	if err != nil {
+		t.Fatal(err)
+	}
+	fOffer2, fKey2, fChirp2, err := sellerEng.PrepareDirectSale(ctx, "fail-2", remF2.Seq, 150, buyerPub) // ranked #2!
+	if err != nil {
+		t.Fatal(err)
+	}
+	fJSON1, _ := json.Marshal(fOffer1)
+	fJSON2, _ := json.Marshal(fOffer2)
+	failoverWantID := "want-failover-e2e-1"
+	if _, err := rc.StartBuyerDealAsync(ctx, failoverWantID, BuyerDealInput{
+		Want: bstack.WantAd{WantID: failoverWantID, Pub: buyerPub, Net: "memory", Domains: []string{"ops"}, Query: "failover test", MaxSats: 500},
+		Offers: []bstack.OfferAd{
+			{
+				OfferID:      "off-fail-1",
+				WantID:       failoverWantID,
+				Pub:          fOffer1.SellerPub,
+				BuyerPub:     buyerPub,
+				Net:          "memory",
+				Domains:      []string{"ops"},
+				PriceSats:    100,
+				PayAddress:   "invalid-bsv-address-triggers-prebroadcast-err",
+				Shard:        "fail-1",
+				Leaf:         remF1.Leaf,
+				ChirpURL:     fChirp1,
+				KeyCommitHex: fOffer1.KeyCommitment,
+				SaleOffer:    fJSON1,
+				Direct:       true,
+			},
+			{
+				OfferID:      "off-fail-2",
+				WantID:       failoverWantID,
+				Pub:          fOffer2.SellerPub,
+				BuyerPub:     buyerPub,
+				Net:          "memory",
+				Domains:      []string{"ops"},
+				PriceSats:    150,
+				Shard:        "fail-2",
+				Leaf:         remF2.Leaf,
+				ChirpURL:     fChirp2,
+				KeyCommitHex: fOffer2.KeyCommitment,
+				SaleOffer:    fJSON2,
+				Direct:       true,
+			},
+		},
+		TargetShard: "acquired-failover",
+		WaitTimeout: 15 * time.Second,
+	}); err != nil {
+		t.Fatalf("StartBuyerDealAsync failover: %v", err)
+	}
+
+	// Wait until BuyerDeal fails over from off-fail-1 to off-fail-2!
+	var foSt *DealState
+	for i := 0; i < 60; i++ {
+		if st, gErr := rc.BuyerDealStatus(ctx, failoverWantID); gErr == nil && st.ChosenOffer != nil && st.ChosenOffer.OfferID == "off-fail-2" {
+			foSt = st
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if foSt == nil || foSt.ChosenOffer == nil || foSt.ChosenOffer.OfferID != "off-fail-2" {
+		st, _ := rc.BuyerDealStatus(ctx, failoverWantID)
+		t.Fatalf("expected BuyerDeal to fail over to off-fail-2 automatically, got %+v", st)
+	}
+	if ok, err := rc.DeliverBuyerKey(ctx, failoverWantID, ClaimSignal{
+		ClaimTxID:     "tx-failover-claim-2",
+		ContentKeyHex: hex.EncodeToString(fKey2[:]),
+		ChirpURL:      fChirp2,
+	}); err != nil || !ok {
+		t.Fatalf("DeliverBuyerKey failover: ok=%v err=%v", ok, err)
+	}
+	settledFO, err := rc.AttachBuyerDeal(ctx, failoverWantID)
+	if err != nil {
+		t.Fatalf("AttachBuyerDeal failover: %v", err)
+	}
+	if settledFO.Status != "settled" || !strings.Contains(settledFO.DeliveredTxt, "Seller 2 failover succeeded") {
+		t.Fatalf("expected failover deal settled with Seller 2 text, got %+v", settledFO)
+	}
+
+	// === 3. LIVE ESCROW GUARDIAN E2E (arm -> watching -> markClaimed -> claimed) ===
+	escID := "escrow-live-tx-1"
+	if _, err := rc.StartEscrowGuardianAsync(ctx, escID, EscrowGuardianInput{
+		DealID:       "deal-escrow-open",
+		EscrowTxID:   escID,
+		RefundAfter:  uint64(time.Now().Add(1 * time.Hour).Unix()),
+		CheckEveryMs: 500,
+	}); err != nil {
+		t.Fatalf("StartEscrowGuardianAsync: %v", err)
+	}
+	for i := 0; i < 40; i++ {
+		if st, gErr := rc.EscrowGuardianStatus(ctx, escID); gErr == nil && st.Status == "watching" {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if ok, err := rc.MarkEscrowGuardianClaimed(ctx, escID); err != nil || !ok {
+		t.Fatalf("MarkEscrowGuardianClaimed: ok=%v err=%v", ok, err)
+	}
+	var egSt *EscrowGuardianState
+	for i := 0; i < 40; i++ {
+		if st, gErr := rc.EscrowGuardianStatus(ctx, escID); gErr == nil && st.Status == "claimed" {
+			egSt = st
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if egSt == nil || egSt.Status != "claimed" {
+		st, _ := rc.EscrowGuardianStatus(ctx, escID)
+		t.Fatalf("expected EscrowGuardian status=claimed, got %+v", st)
+	}
+
+	// === 4. LIVE RESTATE v1.8.1 ADMIN INVOCATION API VERIFICATION (KillInvocation on real sleeping workflow) ===
+	killOrderID := "so-live-kill-test"
+	killInvID, err := rc.StartStandingOrderAsync(ctx, killOrderID, StandingOrderInput{
+		OrderID: killOrderID,
+		Domains: []string{"ops"},
+		MaxSats: 100,
+		TTL:     1 * time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("StartStandingOrderAsync for kill test: %v", err)
+	}
+	for i := 0; i < 30; i++ {
+		if st, gErr := rc.StandingOrderStatus(ctx, killOrderID); gErr == nil && st.Status == "watching" {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := rc.KillInvocation(ctx, killInvID); err != nil {
+		t.Fatalf("LIVE Restate v1.8.1 KillInvocation(%s) failed: %v", killInvID, err)
+	}
+	// Also verify ResumeInvocation and RestartInvocationAsNew hit valid Restate v1.8.1 Admin routes (NOT 404/405!).
+	if err := rc.ResumeInvocation(ctx, killInvID); err != nil {
+		if strings.Contains(err.Error(), "HTTP 404") || strings.Contains(err.Error(), "HTTP 405") {
+			t.Fatalf("LIVE Restate v1.8.1 ResumeInvocation route/method mismatch: %v", err)
+		}
+		t.Logf("ResumeInvocation on killed invocation returned expected domain error (valid route!): %v", err)
+	}
+	if newID, err := rc.RestartInvocationAsNew(ctx, killInvID); err != nil {
+		if strings.Contains(err.Error(), "HTTP 404") || strings.Contains(err.Error(), "HTTP 405") {
+			t.Fatalf("LIVE Restate v1.8.1 RestartInvocationAsNew route/method mismatch: %v", err)
+		}
+		t.Logf("RestartInvocationAsNew returned: %v", err)
+	} else {
+		t.Logf("LIVE Restate v1.8.1 RestartInvocationAsNew succeeded! newID=%s", newID)
+	}
+}
+

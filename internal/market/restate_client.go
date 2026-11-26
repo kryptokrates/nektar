@@ -213,7 +213,7 @@ func (c *RestateClient) StartBuyerDealAsync(ctx context.Context, wantID string, 
 	if hdrs := c.runtimeHeaders(); hdrs != nil {
 		opts = append(opts, restate.WithHeaders(hdrs))
 	}
-	sr, err := ingress.WorkflowSend[BuyerDealInput](c.Ingress, "BuyerDeal", wantID, "run", restate.WithScope("bsv-desktop")).
+	sr, err := ingress.WorkflowSend[BuyerDealInput](c.Ingress, "BuyerDeal", wantID, "run").
 		Send(ctx, in, opts...)
 	if err != nil {
 		return "", fmt.Errorf("restate: start BuyerDeal %s: %w", wantID, err)
@@ -412,7 +412,7 @@ func (c *RestateClient) StartEscrowGuardianAsync(ctx context.Context, escrowTxID
 	if hdrs := c.runtimeHeaders(); hdrs != nil {
 		opts = append(opts, restate.WithHeaders(hdrs))
 	}
-	sr, err := ingress.WorkflowSend[EscrowGuardianInput](c.Ingress, "EscrowGuardian", escrowTxID, "run", restate.WithScope("bsv-desktop")).
+	sr, err := ingress.WorkflowSend[EscrowGuardianInput](c.Ingress, "EscrowGuardian", escrowTxID, "run").
 		Send(ctx, in, opts...)
 	if err != nil {
 		return "", fmt.Errorf("restate: start EscrowGuardian %s: %w", escrowTxID, err)

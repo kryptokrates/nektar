@@ -328,7 +328,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 					if hdrs := e.internalCallHeaders(); hdrs != nil {
 						gOpts = append(gOpts, restate.WithHeaders(hdrs))
 					}
-					restate.WorkflowSend(ctx, "EscrowGuardian", payRes.EscrowTxID, "run", restate.WithScope("bsv-desktop")).Send(
+					restate.WorkflowSend(ctx, "EscrowGuardian", payRes.EscrowTxID, "run").Send(
 						EscrowGuardianInput{
 							DealID:      dealID,
 							EscrowTxID:  payRes.EscrowTxID,

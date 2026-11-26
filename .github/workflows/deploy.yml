@@ -124,8 +124,13 @@ jobs:
             export NEKTAR_IMAGE_TAG=edge
             export NEKTAR_IMAGE_DIGEST="$DEPLOY_DIGEST"
 
-            docker compose -f deploy/hub/compose.yaml pull hub
-            docker compose -f deploy/hub/compose.yaml up -d
+            ENV_ARGS=(--env-file deploy/hetzner/nektar-http.env)
+            if [ -f /opt/nektar/.env ]; then
+              ENV_ARGS+=(--env-file /opt/nektar/.env)
+            fi
+
+            docker compose "${ENV_ARGS[@]}" -f deploy/hub/compose.yaml pull hub
+            docker compose "${ENV_ARGS[@]}" -f deploy/hub/compose.yaml up -d
 
             check_health() {
               for i in 1 2 3 4 5 6 7 8 9 10 11 12; do

@@ -72,6 +72,7 @@ type Service struct {
 	termsCache   *HubTermsCache
 	feeApprover  HubFeeApprover
 	feeRecorder  HubFeeRecorder
+	carrierTree  *CarrierTreeManager
 	peers        map[string]PeerInfo
 	withholdings []WithholdingWarning
 }

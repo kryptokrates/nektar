@@ -109,6 +109,20 @@ func NewWitnessedTrackerFromSpec(network, headerSpec, chainSpec, settleSpec stri
 	parts := splitSpecs(headerSpec)
 	witnesses := make([]NamedWitness, 0, len(parts))
 	for _, p := range parts {
+		if strings.HasPrefix(strings.TrimSpace(p), "anchor:") {
+			rawURL := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(p), "anchor:"))
+			orig, oErr := NormalizeSpecOrigin(p)
+			if oErr != nil {
+				return nil, fmt.Errorf("chain: header source %q: %w", p, oErr)
+			}
+			witnesses = append(witnesses, NamedWitness{
+				Name:   p,
+				Origin: orig,
+				Kind:   headers.BlockHeadersService,
+				Source: NewHeaderAnchorClient(rawURL, httpClient),
+			})
+			continue
+		}
 		hc, origin, err := ParseHeaderClient(netNorm, p, httpClient)
 		if err != nil {
 			return nil, err

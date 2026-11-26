@@ -1,0 +1,38 @@
+# Nektar Hub + stock lightwebinc/overlay-bridge sidecar (1BSV Paper 008 — Zero-Fork Object Plane)
+#
+# Usage:
+#   docker compose -f deploy/hub/compose.yaml -f deploy/hub/compose.overlay-bridge.yaml up -d
+#
+# Architecture (Paper 008 §2–5):
+#   - Nektar Hub runs with NEKTAR_HUB_TRANSPORT=plane & NEKTAR_HUB_PROPAGATION=off
+#     and exposes a bare-origin loopback engine on 127.0.0.1:18429 (/submit, /lookup, /listTopicManagers).
+#   - Stock Apache-2.0 overlay-bridge terminates the 1BSV BRC-149 BEEF Object Lane & BRC-135 Header Lane:
+#       * Feed (down):  object lane -> POST http://127.0.0.1:18429/submit (X-Topics + X-Nektar-Submit-Mode: plane)
+#       * Headers:      header lane -> serves http://127.0.0.1:9178 (/v1/tip, /v1/root/{h}, /v1/header/{hash})
+#       * Facade (up):  clients publish once to :9180/submit -> local engine first -> 1BSV multicast fabric!
+
+services:
+  hub:
+    environment:
+      NEKTAR_HUB_TRANSPORT: "plane"
+      NEKTAR_HUB_PROPAGATION: "off"
+      NEKTAR_HUB_ENGINE_LISTEN: "127.0.0.1:18429"
+      NEKTAR_HEADERS_SOURCE: "${NEKTAR_HEADERS_SOURCE:-anchor:http://127.0.0.1:9178}"
+      NEKTAR_CATCHUP_PEERS: "${NEKTAR_CATCHUP_PEERS:-https://nektar.run/hub}"
+
+  overlay-bridge:
+    image: ${OVERLAY_BRIDGE_IMAGE:-ghcr.io/lightwebinc/overlay-bridge:v0.18.1}
+    restart: unless-stopped
+    network_mode: "service:hub"
+    depends_on:
+      - hub
+    command:
+      - "-mode=all"
+      - "-engine=http://127.0.0.1:18429"
+      - "-topics-from=engine"
+      - "-topics-every=10s"
+      - "-header-anchor=${OVERLAY_BRIDGE_HEADER_ANCHOR:-https://nektar.run/hub}"
+      - "-verify=enforce"
+      - "-beef-lane=${OVERLAY_BRIDGE_BEEF_LANE:-[::]:9171}"
+      - "-header-lane=${OVERLAY_BRIDGE_HEADER_LANE:-[::]:9172}"
+      - "-metrics-addr=[::]:9179"

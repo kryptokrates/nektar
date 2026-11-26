@@ -124,6 +124,8 @@ func NormalizeSpecOrigin(spec string) (string, error) {
 		rawURL = strings.TrimPrefix(s, "rpc:")
 	case strings.HasPrefix(s, "native:"):
 		rawURL = strings.TrimPrefix(s, "native:")
+	case strings.HasPrefix(s, "anchor:"):
+		rawURL = strings.TrimPrefix(s, "anchor:")
 	case strings.HasPrefix(s, "tcp:"):
 		addr := strings.TrimPrefix(s, "tcp:")
 		if addr == "" {
@@ -226,6 +228,12 @@ func ValidateHeaderIndependence(network, headerSpec, chainSpec, settleSpec strin
 	}
 	if netNorm == "regtest" {
 		for _, p := range parts {
+			if strings.HasPrefix(p, "anchor:") {
+				if _, err := NormalizeSpecOrigin(p); err != nil {
+					return fmt.Errorf("chain: header source %q: %w", p, err)
+				}
+				continue
+			}
 			if _, _, err := ParseHeaderClient(netNorm, p, nil); err != nil {
 				return err
 			}
@@ -233,15 +241,25 @@ func ValidateHeaderIndependence(network, headerSpec, chainSpec, settleSpec strin
 		return nil
 	}
 
-	// Live network (main / testnet): require >=2 distinct-origin PoW sources, zero Native sources.
+	// Live network (main / testnet): require distinct-origin PoW sources, zero Native sources.
 	headerOrigins := make(map[string]bool, len(parts))
 	for _, p := range parts {
-		hc, origin, err := ParseHeaderClient(netNorm, p, nil)
-		if err != nil {
-			return err
-		}
-		if hc.Kind == headers.Native {
-			return fmt.Errorf("%w: Native header source %q forbidden on %s", ErrCircularHeaderAnchor, p, netNorm)
+		var origin string
+		if strings.HasPrefix(p, "anchor:") {
+			var err error
+			origin, err = NormalizeSpecOrigin(p)
+			if err != nil {
+				return fmt.Errorf("chain: header source %q: %w", p, err)
+			}
+		} else {
+			hc, orig, err := ParseHeaderClient(netNorm, p, nil)
+			if err != nil {
+				return err
+			}
+			if hc.Kind == headers.Native {
+				return fmt.Errorf("%w: Native header source %q forbidden on %s", ErrCircularHeaderAnchor, p, netNorm)
+			}
+			origin = orig
 		}
 		if headerOrigins[origin] {
 			return fmt.Errorf("%w: duplicate header witness origin %q in %q", ErrCircularHeaderAnchor, origin, headerSpec)

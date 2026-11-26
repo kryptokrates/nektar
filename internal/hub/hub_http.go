@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,12 +23,109 @@ func (n *Node) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"ok":               true,
 		"network":          n.net,
 		"hubRole":          n.fees.Role,
+		"transportMode":    n.transportMode,
+		"propagationOff":   n.propagationOff,
 		"payeeIdentityKey": n.PayeeIdentityKey(),
 		"fees":             n.fees.AdvertSummary(),
 		"topics":           n.Topics(),
 		"lookups":          n.Lookups(),
 		"activeBounties":   len(bounties),
 	})
+}
+
+// handleListTopicManagers implements the standard BRC-22 engine metadata route consumed by
+// lightwebinc/overlay-bridge (`-topics-from engine`), including ETag / 304 Not Modified support.
+func (n *Node) handleListTopicManagers(w http.ResponseWriter, r *http.Request) {
+	n.mu.RLock()
+	out := make(map[string]map[string]any, len(n.topics))
+	for name, tm := range n.topics {
+		meta := map[string]any{
+			"name":             name,
+			"shortDescription": "Nektar v0.1 overlay topic manager",
+			"version":          "0.1.0",
+		}
+		if md := tm.GetMetaData(); md != nil {
+			if md.Name != "" {
+				meta["name"] = md.Name
+			}
+			if md.Description != "" {
+				meta["shortDescription"] = md.Description
+			}
+			if md.Version != "" {
+				meta["version"] = md.Version
+			}
+			if md.Icon != "" {
+				meta["iconURL"] = md.Icon
+			}
+			if md.InfoUrl != "" {
+				meta["informationURL"] = md.InfoUrl
+			}
+		}
+		out[name] = meta
+	}
+	n.mu.RUnlock()
+	body, err := json.Marshal(out)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:8]) + `"`
+	w.Header().Set("ETag", etag)
+	if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
+// handleListLookupServiceProviders implements the standard BRC-24 engine metadata route.
+func (n *Node) handleListLookupServiceProviders(w http.ResponseWriter, r *http.Request) {
+	n.mu.RLock()
+	out := make(map[string]map[string]any, len(n.lookups))
+	for name, ls := range n.lookups {
+		meta := map[string]any{
+			"name":             name,
+			"shortDescription": "Nektar v0.1 overlay lookup service",
+			"version":          "0.1.0",
+		}
+		if md := ls.GetMetaData(); md != nil {
+			if md.Name != "" {
+				meta["name"] = md.Name
+			}
+			if md.Description != "" {
+				meta["shortDescription"] = md.Description
+			}
+			if md.Version != "" {
+				meta["version"] = md.Version
+			}
+			if md.Icon != "" {
+				meta["iconURL"] = md.Icon
+			}
+			if md.InfoUrl != "" {
+				meta["informationURL"] = md.InfoUrl
+			}
+		}
+		out[name] = meta
+	}
+	n.mu.RUnlock()
+	body, err := json.Marshal(out)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:8]) + `"`
+	w.Header().Set("ETag", etag)
+	if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 func (n *Node) handleTerms(w http.ResponseWriter, _ *http.Request) {
@@ -79,7 +177,11 @@ func (n *Node) handleSubmit(w http.ResponseWriter, r *http.Request) {
 			collectedTxID = out.TxID
 		}
 	}
-	steak, err := n.Submit(r.Context(), raw, topics)
+	// Paper 008 §12.1: honor explicit plane/historical submission mode so deliveries arriving
+	// from overlay-bridge or a BRC-149 relay never re-propagate.
+	submitMode := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Nektar-Submit-Mode")))
+	suppressProp := submitMode == "plane" || submitMode == "historical"
+	steak, err := n.submitInternal(r.Context(), raw, topics, suppressProp)
 	if err != nil {
 		if collectedTxID != "" {
 			_ = n.store.ReleaseFeeClaim(collectedTxID)

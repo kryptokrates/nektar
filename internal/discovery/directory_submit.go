@@ -149,13 +149,23 @@ func (s *Service) BuildAndSubmitMarketAd(
 		if s.mem == nil || s.mem.Chain() == nil {
 			return 0, errors.New("discovery: chain port required to mint funded PushDrop carrier on live network")
 		}
-		var piggySats uint64
-		beef, perHubPay, piggySats, err = BuildFundedMarketCarrierWithHubFees(ctx, s.mem.Chain(), priv, p, piggyTargets)
-		if err != nil {
-			return 0, err
-		}
-		if piggySats > 0 && recorder != nil {
-			recorder(piggySats)
+		if len(piggyTargets) == 0 {
+			// Paper 011 §3.2 / bcommon/producer.Trees: reuse persistent M=16 mined funding tree
+			// (16x lower miner fees, instant mined-parent BUMP, kill-switch retractable).
+			tree := s.CarrierTree(priv)
+			beef, _, _, err = tree.MintCarrier(ctx, p)
+			if err != nil {
+				return 0, err
+			}
+		} else {
+			var piggySats uint64
+			beef, perHubPay, piggySats, err = BuildFundedMarketCarrierWithHubFees(ctx, s.mem.Chain(), priv, p, piggyTargets)
+			if err != nil {
+				return 0, err
+			}
+			if piggySats > 0 && recorder != nil {
+				recorder(piggySats)
+			}
 		}
 	} else {
 		beef, err = BuildMarketBEEF(p)

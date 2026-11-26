@@ -268,17 +268,38 @@ func cmdHubRun(args []string) error {
 		}
 	}
 
-	if strings.TrimSpace(*peersFlag) != "" {
-		var peers []string
-		for _, p := range strings.Split(*peersFlag, ",") {
-			if p = strings.TrimSpace(p); p != "" {
-				peers = append(peers, p)
-			}
+	tMode := strings.ToLower(strings.TrimSpace(os.Getenv("NEKTAR_HUB_TRANSPORT")))
+	switch tMode {
+	case string(hub.TransportRelay):
+		if len(upstreamSpines) > 0 {
+			node.StartPlaneRelay(ctx, upstreamSpines)
 		}
-		node.StartFederationWithTier(ctx, peers, true)
+	case string(hub.TransportPlane), string(hub.TransportUnicast):
+		// Propagation switched OFF by design (1BSV Paper 008 §5 / Paper 009 §4.5).
+	default:
+		if strings.TrimSpace(*peersFlag) != "" {
+			var peers []string
+			for _, p := range strings.Split(*peersFlag, ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					peers = append(peers, p)
+				}
+			}
+			node.StartFederationWithTier(ctx, peers, true)
+		}
+		if len(upstreamSpines) > 0 {
+			node.StartFederationWithTier(ctx, upstreamSpines, true)
+		}
 	}
-	if len(upstreamSpines) > 0 {
-		node.StartFederationWithTier(ctx, upstreamSpines, true)
+	if catchupPeers := parseCSVEnv("NEKTAR_CATCHUP_PEERS"); len(catchupPeers) > 0 {
+		go func(peers []string) {
+			cCtx, cCancel := context.WithTimeout(ctx, 45*time.Second)
+			defer cCancel()
+			for _, cp := range peers {
+				if _, cErr := node.CatchUpFromPeer(cCtx, cp, 10); cErr != nil {
+					log.Printf("hub catchup from %s: %v", cp, cErr)
+				}
+			}
+		}(catchupPeers)
 	}
 
 	httpSrv := &http.Server{Addr: *addr, Handler: node.Handler(), ReadHeaderTimeout: 15 * time.Second}

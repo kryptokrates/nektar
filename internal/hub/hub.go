@@ -72,6 +72,23 @@ type BountyPayoutResult struct {
 // BountyHandler validates and pays an incoming BountySubmission using the Hub's memory + SpendGuard wallet.
 type BountyHandler func(ctx context.Context, b Bounty, sub BountySubmission) (*BountyPayoutResult, error)
 
+// TransportMode selects how Hub-to-Hub live propagation operates (aligned with 1BSV Papers 006/008/009/010).
+type TransportMode string
+
+const (
+	// TransportRelay runs Spine as an Application-Layer BRC-149 Object Plane Relay (Paper 010 §8.2)
+	// and Leafs with sibling gossip OFF (O(N) crossings instead of O(N^2), same wire format as 1BSV).
+	TransportRelay TransportMode = "relay"
+	// TransportPlane switches internal Hub propagation completely OFF so stock Apache-2.0
+	// lightwebinc/overlay-bridge delivers BRC-149 objects & BRC-135 headers (Paper 008).
+	TransportPlane TransportMode = "plane"
+	// TransportUnicast disables live Hub-to-Hub propagation; publishers fan out via bcommon/unicast
+	// and Hubs backfill offline gaps via bcommon/replay (Paper 009 §4.5).
+	TransportUnicast TransportMode = "unicast"
+	// TransportMesh preserves legacy bilateral SSE /events + /sync peering for small test nets.
+	TransportMesh TransportMode = "mesh"
+)
+
 // Config configures the embedded v0.1 Go Overlay Hub.
 type Config struct {
 	Network           string
@@ -87,6 +104,9 @@ type Config struct {
 	OnBountySubmit    BountyHandler
 	Getenv            func(string) string
 	ChainTracker      chaintracker.ChainTracker
+	HeaderHandler     http.Handler // optional sovereign Header Store serving /v1/tip, /v1/root/{height}, /v1/header/{hash}
+	TransportMode     TransportMode
+	PropagationOff    bool
 	Fees              FeeSchedule
 	FeeCollector      FeeCollector
 	PrefixSecret      []byte
@@ -157,6 +177,11 @@ type Node struct {
 	bboxNonces        map[string]int64
 	maxPerMin         int
 	tracker           chaintracker.ChainTracker
+	headerHandler     http.Handler
+	transportMode     TransportMode
+	propagationOff    bool
+	loopGuard         *LoopGuard
+	planeSubs         map[chan PlaneFrame]map[[32]byte]bool
 	bountyHandler     BountyHandler
 	fees              FeeSchedule
 	feeCollector      FeeCollector
@@ -237,6 +262,21 @@ func NewNode(cfg Config) (*Node, error) {
 			upSpines = append(upSpines, u)
 		}
 	}
+	tMode := cfg.TransportMode
+	if tMode == "" {
+		switch strings.ToLower(strings.TrimSpace(getenv("NEKTAR_HUB_TRANSPORT"))) {
+		case "relay":
+			tMode = TransportRelay
+		case "plane":
+			tMode = TransportPlane
+		case "unicast":
+			tMode = TransportUnicast
+		case "mesh":
+			tMode = TransportMesh
+		}
+	}
+	propOff := cfg.PropagationOff || strings.EqualFold(strings.TrimSpace(getenv("NEKTAR_HUB_PROPAGATION")), "off") || tMode == TransportPlane || tMode == TransportUnicast
+
 	n := &Node{
 		net:               net,
 		host:              newSimpleHost(),
@@ -244,10 +284,15 @@ func NewNode(cfg Config) (*Node, error) {
 		topics:            make(map[string]module.TopicManager),
 		lookups:           make(map[string]module.LookupService),
 		subs:              make(map[chan bstack.MarketEvent]map[string]bool),
+		planeSubs:         make(map[chan PlaneFrame]map[[32]byte]bool),
 		rates:             make(map[string]*rateBucket),
 		bboxNonces:        make(map[string]int64),
 		maxPerMin:         maxPerMin,
 		tracker:           cfg.ChainTracker,
+		headerHandler:     cfg.HeaderHandler,
+		transportMode:     tMode,
+		propagationOff:    propOff,
+		loopGuard:         NewLoopGuard(DefaultLoopGuardCap),
 		bountyHandler:     cfg.OnBountySubmit,
 		fees:              fees,
 		feeCollector:      cfg.FeeCollector,
@@ -532,11 +577,24 @@ func (n *Node) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/health", n.handleHealth)
 	mux.HandleFunc("GET /v1/terms", n.handleTerms)
 	mux.HandleFunc("GET /ls_nektar/terms", n.handleTerms)
+	// Standard BRC-22 / BRC-24 engine metadata routes (required by lightwebinc/overlay-bridge -topics-from engine).
+	mux.HandleFunc("GET /listTopicManagers", n.handleListTopicManagers)
+	mux.HandleFunc("GET /listLookupServiceProviders", n.handleListLookupServiceProviders)
+	// Optional Sovereign Header Store (1BSV Paper 008 §4: /v1/tip, /v1/root/{height}, /v1/header/{hash}).
+	if n.headerHandler != nil {
+		mux.Handle("GET /v1/tip", n.headerHandler)
+		mux.Handle("GET /v1/root/{height}", n.headerHandler)
+		mux.Handle("GET /v1/header/{hash}", n.headerHandler)
+	}
 	mux.HandleFunc("POST /v1/credits/topup", n.handleCreditsTopup)
 	mux.HandleFunc("GET /v1/credits/balance", n.handleCreditsBalance)
 	mux.HandleFunc("GET /v1/hub/earnings", n.handleEarnings)
 	mux.HandleFunc("POST /submit", n.handleSubmit)
 	mux.HandleFunc("POST /lookup", n.handleLookup)
+	// Application-Layer BRC-149 Object Plane Relay (1BSV Paper 006 §4.2 & Paper 010 §8.2).
+	mux.HandleFunc("GET /plane/stream", n.handlePlaneStream)
+	mux.HandleFunc("POST /plane/publish", n.handlePlanePublish)
+	mux.HandleFunc("GET /plane/nack", n.handlePlaneNACK)
 	// Numbered /sync feed for Hub-to-Hub federation & cursor gap repair (Valve 2: metered egress).
 	mux.HandleFunc("GET /sync", n.handleSync)
 	// Native numbered/cursored SSE /events?cursor=<seq>&domains=<csv> (Valve 2: metered egress with breaker!).

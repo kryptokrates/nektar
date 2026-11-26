@@ -264,6 +264,16 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string, l
 		maxDay = envUint64("NEKTAR_MAX_SPEND_SATS_PER_DAY", core.DefaultMaxSpendSatsDay)
 	}
 	minIntervalMs := envUint64("NEKTAR_MIN_BROADCAST_INTERVAL_MS", 0)
+	hdrSrc := strings.TrimSpace(os.Getenv("NEKTAR_HEADERS_SOURCE"))
+	if hdrSrc == "" {
+		if anchor := strings.TrimSpace(os.Getenv("NEKTAR_HEADER_ANCHOR")); anchor != "" {
+			if strings.HasPrefix(anchor, "anchor:") {
+				hdrSrc = anchor
+			} else {
+				hdrSrc = "anchor:" + anchor
+			}
+		}
+	}
 	port, err := chain.Open(ctx, chain.Config{
 		Network:         net,
 		DataDir:         dir,
@@ -271,7 +281,7 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string, l
 		WalletWireURL:   envOr("NEKTAR_WALLET_WIRE_URL", "http://127.0.0.1:3321"),
 		WalletProfile:   envOr("NEKTAR_WALLET_PROFILE", "standard"),
 		FeeRateSatPerKB: envUint64("NEKTAR_FEE_RATE_SAT_KB", 0),
-		HeaderSource:    os.Getenv("NEKTAR_HEADERS_SOURCE"),
+		HeaderSource:    hdrSrc,
 		ChainSpec:       os.Getenv("NEKTAR_CHAIN_SPEC"),
 		SettleSpec:      os.Getenv("NEKTAR_SETTLE_SPEC"),
 		SettleDepth:     int(envInt64("NEKTAR_SETTLE_DEPTH", 0)),

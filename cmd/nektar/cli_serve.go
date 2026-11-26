@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -146,6 +147,7 @@ func cmdServe(args []string) error {
 			EnableBstore:   true,
 			Getenv:         os.Getenv,
 			ChainTracker:   rt.mem.Chain().Tracker(),
+			HeaderHandler:  rt.mem.Chain().HeaderStoreHandler(),
 			Fees:           feeSched,
 			FeeCollector:   hub.NewPortFeeCollector(rt.mem.Chain()),
 			UpstreamSpines: upstreamSpines,
@@ -230,11 +232,56 @@ func cmdServe(args []string) error {
 			},
 			leafDomFn,
 		)
-		if peers := parseCSVEnv("NEKTAR_PEER_HUBS"); len(peers) > 0 {
-			hubNode.StartFederationWithTier(ctx, peers, true)
+		// Optional bare-origin loopback engine listener for stock lightwebinc/overlay-bridge (Paper 008 §2).
+		if engineListen := strings.TrimSpace(os.Getenv("NEKTAR_HUB_ENGINE_LISTEN")); engineListen != "" {
+			engSrv := &http.Server{
+				Addr:              engineListen,
+				Handler:           hubNode.Handler(),
+				ReadHeaderTimeout: 10 * time.Second,
+			}
+			go func() {
+				if lErr := engSrv.ListenAndServe(); lErr != nil && !errors.Is(lErr, http.ErrServerClosed) {
+					log.Printf("hub bare-origin engine listener (%s) error: %v", engineListen, lErr)
+				}
+			}()
+			defer func() {
+				sCtx, sCancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer sCancel()
+				_ = engSrv.Shutdown(sCtx)
+			}()
 		}
-		if len(upstreamSpines) > 0 {
-			hubNode.StartFederationWithTier(ctx, upstreamSpines, true)
+		// Hub-to-Hub transport wiring (1BSV Papers 006/008/010):
+		//   - relay:   Leaf connects to Spine's BRC-149 Application-Layer Object Plane (/plane/stream + /plane/nack)
+		//   - plane:   External overlay-bridge handles live propagation; Nektar starts NO peer gossip loops
+		//   - unicast: No Hub-to-Hub gossip; publishers use unicast fan-out + explicit catch-up below
+		//   - default/mesh: Legacy SSE /events + /sync federation for backwards compatibility
+		tMode := strings.ToLower(strings.TrimSpace(os.Getenv("NEKTAR_HUB_TRANSPORT")))
+		switch tMode {
+		case string(hub.TransportRelay):
+			if len(upstreamSpines) > 0 {
+				hubNode.StartPlaneRelay(ctx, upstreamSpines)
+			}
+		case string(hub.TransportPlane), string(hub.TransportUnicast):
+			// Propagation switched OFF by design (Paper 008 §5 / Paper 009 §4.5).
+		default:
+			if peers := parseCSVEnv("NEKTAR_PEER_HUBS"); len(peers) > 0 {
+				hubNode.StartFederationWithTier(ctx, peers, true)
+			}
+			if len(upstreamSpines) > 0 {
+				hubNode.StartFederationWithTier(ctx, upstreamSpines, true)
+			}
+		}
+		// Explicit offline catch-up backfill via BRC-24 /lookup (strictly separated from live propagation, Paper 008 §6).
+		if catchupPeers := parseCSVEnv("NEKTAR_CATCHUP_PEERS"); len(catchupPeers) > 0 {
+			go func(peers []string) {
+				cCtx, cCancel := context.WithTimeout(ctx, 45*time.Second)
+				defer cCancel()
+				for _, cp := range peers {
+					if _, cErr := hubNode.CatchUpFromPeer(cCtx, cp, 10); cErr != nil {
+						log.Printf("hub catchup from %s: %v", cp, cErr)
+					}
+				}
+			}(catchupPeers)
 		}
 	}
 

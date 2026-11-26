@@ -151,6 +151,16 @@ CREATE TABLE IF NOT EXISTS hub_kv (
 	key   TEXT PRIMARY KEY,
 	value BLOB NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS hub_carrier_outpoints (
+	funding_outpoint TEXT PRIMARY KEY,
+	carrier_txid     TEXT NOT NULL,
+	carrier_outpoint TEXT NOT NULL,
+	topic            TEXT NOT NULL,
+	swept_by_txid    TEXT NOT NULL DEFAULT '',
+	admitted_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hub_carrier_outpoints_txid ON hub_carrier_outpoints(carrier_txid);
 `
 	_, err := s.sql.Exec(schema)
 	if err != nil {

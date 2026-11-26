@@ -223,6 +223,134 @@ func (s *Store) PruneExpired(nowMs int64) (int64, error) {
 	return res.RowsAffected()
 }
 
+// Carrier journal errors enforcing 1BSV Paper 011 §6 (one funding output admits at most one carrier,
+// and a mined kill-switch sweep permanently retracts the carrier across restarts).
+var (
+	ErrCarrierFundingReused = errors.New("hub: carrier funding outpoint already consumed by another carrier")
+	ErrCarrierRetracted     = errors.New("hub: carrier funding outpoint was retracted by kill-switch sweep")
+)
+
+// ClaimCarrierFundingOutpoint atomically binds fundingOutpoint to carrierTxID on topic.
+// Returns nil on first claim or idempotent replay of the exact same carrierTxID.
+// Returns ErrCarrierRetracted if a kill-switch sweep already spent fundingOutpoint, or
+// ErrCarrierFundingReused if a different carrierTxID previously claimed fundingOutpoint.
+func (s *Store) ClaimCarrierFundingOutpoint(fundingOutpoint, carrierTxID, carrierOutpoint, topic string) error {
+	if fundingOutpoint == "" || carrierTxID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var existingTx, sweptBy string
+	err := s.sql.QueryRow(
+		`SELECT carrier_txid, swept_by_txid FROM hub_carrier_outpoints WHERE funding_outpoint = ?`,
+		fundingOutpoint,
+	).Scan(&existingTx, &sweptBy)
+	if err == nil {
+		if sweptBy != "" {
+			return ErrCarrierRetracted
+		}
+		if existingTx != carrierTxID {
+			return ErrCarrierFundingReused
+		}
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	_, err = s.sql.Exec(`
+		INSERT INTO hub_carrier_outpoints (funding_outpoint, carrier_txid, carrier_outpoint, topic, swept_by_txid, admitted_at)
+		VALUES (?, ?, ?, ?, '', ?)`,
+		fundingOutpoint, carrierTxID, carrierOutpoint, topic, time.Now().UnixMilli())
+	return err
+}
+
+// MarkCarrierFundingSwept records a verified mineable kill-switch sweep spending fundingOutpoint,
+// marks any previously admitted carrier in hub_events as spent=1 so it is dropped from active
+// lookups/sync, and returns the retracted carrier outpoint & topic if one was present.
+// Even if no carrier was seen yet, a tombstone row is persisted so a late carrier is refused.
+func (s *Store) MarkCarrierFundingSwept(fundingOutpoint, sweepTxID string) (carrierOutpoint, topic string, hadCarrier bool, err error) {
+	if fundingOutpoint == "" || sweepTxID == "" {
+		return "", "", false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var existingTx string
+	err = s.sql.QueryRow(
+		`SELECT carrier_txid, carrier_outpoint, topic FROM hub_carrier_outpoints WHERE funding_outpoint = ?`,
+		fundingOutpoint,
+	).Scan(&existingTx, &carrierOutpoint, &topic)
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = s.sql.Exec(`
+			INSERT INTO hub_carrier_outpoints (funding_outpoint, carrier_txid, carrier_outpoint, topic, swept_by_txid, admitted_at)
+			VALUES (?, '', '', '', ?, ?)`,
+			fundingOutpoint, sweepTxID, time.Now().UnixMilli())
+		return "", "", false, err
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	if _, err := s.sql.Exec(
+		`UPDATE hub_carrier_outpoints SET swept_by_txid = ? WHERE funding_outpoint = ?`,
+		sweepTxID, fundingOutpoint,
+	); err != nil {
+		return "", "", false, err
+	}
+	if carrierOutpoint != "" {
+		_, _ = s.sql.Exec(`UPDATE hub_events SET spent = 1 WHERE outpoint = ?`, carrierOutpoint)
+		return carrierOutpoint, topic, true, nil
+	}
+	return "", "", false, nil
+}
+
+// EventsInRange loads unexpired active events with seq >= fromSeq AND seq <= toSeq (ordered ascending)
+// for BRC-149 Application-Layer Object Plane NACK repair.
+func (s *Store) EventsInRange(fromSeq, toSeq int64, topics []string, limit int) ([]StoredEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if fromSeq < 1 {
+		fromSeq = 1
+	}
+	if toSeq < fromSeq {
+		return nil, nil
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	nowMs := time.Now().UnixMilli()
+	rows, err := s.sql.Query(`
+		SELECT seq, outpoint, topic, txid, vout, kind, pub, domains_json, payload_json, beef, COALESCE(block_height, 0), exp, admitted_at
+		FROM hub_events
+		WHERE seq >= ? AND seq <= ? AND spent = 0 AND (exp = 0 OR exp > ?)
+		ORDER BY seq ASC LIMIT ?`, fromSeq, toSeq, nowMs, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	wantTopic := make(map[string]bool, len(topics))
+	for _, t := range topics {
+		if t = strings.TrimSpace(t); t != "" {
+			wantTopic[t] = true
+		}
+	}
+	var out []StoredEvent
+	for rows.Next() {
+		var e StoredEvent
+		var kindStr, domJSON string
+		var pJSON []byte
+		if err := rows.Scan(&e.Seq, &e.Outpoint, &e.Topic, &e.TxID, &e.Vout, &kindStr, &e.Pub, &domJSON, &pJSON, &e.BEEF, &e.BlockHeight, &e.Exp, &e.AdmittedAt); err != nil {
+			return nil, err
+		}
+		if len(wantTopic) > 0 && !wantTopic[e.Topic] {
+			continue
+		}
+		e.Kind = bstack.ArtifactKind(kindStr)
+		_ = json.Unmarshal([]byte(domJSON), &e.Domains)
+		_ = json.Unmarshal(pJSON, &e.Payload)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // DomainDensityStats counts unexpired wants and offers per domain on this Hub.
 func (s *Store) DomainDensityStats() ([]DomainDensity, error) {
 	s.mu.Lock()

@@ -42,18 +42,27 @@ flowchart LR
 
 ---
 
-## Part 2: Running a Mainnet Node (60 Seconds)
+## Part 2: Running a Mainnet Node & BSV Desktop Custody (60 Seconds)
 
-```sh
-# 1. Boot on BSV Mainnet (automatically isolated in ~/.nektar/main + prints funding QR!)
-nektar serve --network main --confirm I_UNDERSTAND
+### Recommended Custody Pattern (BSV Desktop + Full BRC-100 Separation)
+- **Personal attended machine (zero spending keys in Nektar):**
+  ```sh
+  nektar up --network main --confirm I_UNDERSTAND --wallet client
+  ```
+  BSV Desktop / Metanet Desktop (`http://127.0.0.1:3321`) holds 100% of custody and enforces interactive spend consent over standard BRC-100 wire; Nektar owns memory, Cedar, Mangle, Restate, and independent SPV verification.
+- **24/7 autonomous trading or public Hub (Treasury + Hot-Float separation):**
+  ```sh
+  # 1. Boot isolated Mainnet node (~/.nektar/main) with embedded BRC-100 hot float
+  nektar up --network main --confirm I_UNDERSTAND
 
-# 2. Fund with 5,000–10,000 real sats (~$0.003) via Wallet tab QR or CLI:
-nektar wallet address --network main --qr
+  # 2. Top up SpendGuard-capped allowance from BSV Desktop in 1 click (BRC-29 + AtomicBEEF)
+  nektar wallet fund --from-desktop --sats 25000 --network main
+  # (Or scan the Wallet QR: nektar wallet address --network main --qr)
 
-# 3. Sync & verify balance:
-nektar wallet sync --network main
-```
+  # 3. Sweep 100% of balance + trading profits back into BSV Desktop anytime
+  nektar wallet sweep --to-desktop --network main --confirm I_UNDERSTAND
+  ```
+  Run `nektar doctor` (or `GET /v1/wallet/desktop`) to auto-detect BSV Desktop on `127.0.0.1:3321`.
 
 - Mainnet automatically uses **dual-witness non-circular PoW headers** (`woc:main` + Babbage `chaintracks/v2`) and **dual-region US + EU official BSV Broadcaster** (`arcade-v2-us-1.bsvblockchain.tech` + `arcade-eu-1.bsvblockchain.tech`).
 

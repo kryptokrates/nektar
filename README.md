@@ -27,9 +27,17 @@ curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/
 ```sh
 # Go live on BSV Mainnet in 1 command (isolated ~/.nektar/main + terminal funding QR + dual-witness PoW)
 curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up --mainnet --confirm I_UNDERSTAND
+
+# Or hook directly into BSV Desktop / Metanet Desktop (100% BRC-100 custody, zero spending keys in Nektar)
+nektar up --wallet client
 ```
 
 Add `--install-service` (`-InstallService` on Windows) to keep Nektar running automatically across reboots. Stop anytime with `nektar stop`.
+
+### Recommended BRC-100 Custody Pattern (Clear Separation of Concerns)
+
+- **Personal attended machine (`--wallet client`):** Zero spending keys live in Nektar — **BSV Desktop / Metanet Desktop** (`http://127.0.0.1:3321`) holds 100% of custody and signs over standard BRC-100 binary wire (`nektar up --wallet client` or `--network main --confirm I_UNDERSTAND --wallet client`).
+- **24/7 autonomous trading or public Hub (Treasury / Hot-Float separation):** Keep your main treasury in BSV Desktop, top up Nektar's SpendGuard-capped operational float in 1 click via BRC-29 + AtomicBEEF (`nektar wallet fund --from-desktop --sats 25000`), and sweep earnings back into BSV Desktop anytime (`nektar wallet sweep --to-desktop`). Run `nektar doctor` to auto-detect BSV Desktop on `:3321`.
 
 ---
 

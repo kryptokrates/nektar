@@ -7,6 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/script"
@@ -22,6 +25,69 @@ const DefaultDesktopWireURL = "http://127.0.0.1:3321"
 // dialWireWallet can be overridden in unit tests to simulate crashes between CreateAction and InternalizeAction.
 var dialWireWallet = func(originator, url string, timeout time.Duration) (sdkwallet.Interface, error) {
 	return wirewallet.Dial(originator, url, timeout)
+}
+
+// DesktopProbeStatus summarizes whether a local BRC-100 desktop wallet (BSV Desktop / Metanet Desktop)
+// is currently listening on loopback (default http://127.0.0.1:3321).
+type DesktopProbeStatus struct {
+	Available   bool   `json:"available"`
+	WireURL     string `json:"wireUrl"`
+	Network     string `json:"network,omitempty"`
+	IdentityPub string `json:"identityPub,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// ProbeDesktopWallet performs a fast non-blocking check for a local BRC-100 wallet on wireURL.
+// It checks TCP reachability first (<= 250ms) so offline machines never pay an HTTP timeout penalty.
+func ProbeDesktopWallet(ctx context.Context, wireURL string) DesktopProbeStatus {
+	if strings.TrimSpace(wireURL) == "" {
+		wireURL = DefaultDesktopWireURL
+	}
+	st := DesktopProbeStatus{WireURL: wireURL}
+	if err := wirewallet.CheckURL(wireURL); err != nil {
+		st.Error = err.Error()
+		return st
+	}
+	u, err := url.Parse(wireURL)
+	if err != nil || u.Host == "" {
+		st.Error = "invalid wire URL"
+		return st
+	}
+	hostPort := u.Host
+	if _, _, splitErr := net.SplitHostPort(hostPort); splitErr != nil {
+		if strings.EqualFold(u.Scheme, "https") {
+			hostPort = net.JoinHostPort(hostPort, "443")
+		} else {
+			hostPort = net.JoinHostPort(hostPort, "80")
+		}
+	}
+	dialer := &net.Dialer{Timeout: 250 * time.Millisecond}
+	conn, dErr := dialer.DialContext(ctx, "tcp", hostPort)
+	if dErr != nil {
+		return st
+	}
+	_ = conn.Close()
+
+	pCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	w, err := dialWireWallet("nektar", wireURL, 1500*time.Millisecond)
+	if err != nil {
+		st.Error = err.Error()
+		return st
+	}
+	netRes, err := w.GetNetwork(pCtx, nil, "nektar")
+	if err != nil {
+		st.Error = err.Error()
+		return st
+	}
+	st.Available = true
+	if netRes != nil {
+		st.Network = string(netRes.Network)
+	}
+	if idPub, idErr := wirewallet.IdentityKeyOf(pCtx, w, "nektar"); idErr == nil && idPub != nil {
+		st.IdentityPub = hex.EncodeToString(idPub.Compressed())
+	}
+	return st
 }
 
 // DesktopFundResult summarizes a 1-click BRC-29 funding transfer from BSV Desktop into Nektar.

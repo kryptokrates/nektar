@@ -15,18 +15,21 @@ import (
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/dock"
 	"github.com/kryptokrates/nektar/internal/server"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 type backgroundDaemonOpts struct {
-	Network   string
-	Confirm   string
-	Listen    string
-	DataDir   string
-	WithHub   bool
-	HubRole   string
-	FeePreset string
-	NoRestate bool
-	Quiet     bool
+	Network       string
+	Confirm       string
+	WalletMode    string
+	WalletWireURL string
+	Listen        string
+	DataDir       string
+	WithHub       bool
+	HubRole       string
+	FeePreset     string
+	NoRestate     bool
+	Quiet         bool
 }
 
 func buildServeArgs(opts backgroundDaemonOpts) []string {
@@ -36,6 +39,12 @@ func buildServeArgs(opts backgroundDaemonOpts) []string {
 	}
 	if strings.TrimSpace(opts.Confirm) != "" {
 		args = append(args, "--confirm", strings.TrimSpace(opts.Confirm))
+	}
+	if strings.TrimSpace(opts.WalletMode) != "" {
+		args = append(args, "--wallet", strings.TrimSpace(opts.WalletMode))
+	}
+	if strings.TrimSpace(opts.WalletWireURL) != "" {
+		args = append(args, "--wallet-wire-url", strings.TrimSpace(opts.WalletWireURL))
 	}
 	if strings.TrimSpace(opts.Listen) != "" {
 		args = append(args, "--listen", strings.TrimSpace(opts.Listen))
@@ -154,6 +163,8 @@ func cmdUp(args []string) error {
 	fs := flag.NewFlagSet("up", flag.ExitOnError)
 	netName := fs.String("network", "", "Network: testnet (default) | main | memory")
 	confirmFlag := fs.String("confirm", os.Getenv("NEKTAR_MAINNET_CONFIRM"), "Required I_UNDERSTAND when using --network main")
+	walletMode := fs.String("wallet", os.Getenv("NEKTAR_WALLET"), "Wallet custody mode: embedded (default) | client (BSV Desktop BRC-100 on :3321)")
+	walletWireURL := fs.String("wallet-wire-url", os.Getenv("NEKTAR_WALLET_WIRE_URL"), "BSV Desktop / BRC-100 wire URL (default http://127.0.0.1:3321)")
 	listenAddr := fs.String("listen", "", "HTTP listen address override (default 127.0.0.1:18420)")
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	withHub := fs.Bool("hub", false, "Also mount embedded Overlay Hub at /hub/")
@@ -189,15 +200,17 @@ func cmdUp(args []string) error {
 
 	// 2. Start or attach to the detached background daemon.
 	opts := backgroundDaemonOpts{
-		Network:   *netName,
-		Confirm:   *confirmFlag,
-		Listen:    *listenAddr,
-		DataDir:   *dataDir,
-		WithHub:   *withHub,
-		HubRole:   *hubRole,
-		FeePreset: *feePreset,
-		NoRestate: *noRestate,
-		Quiet:     *asJSON,
+		Network:       *netName,
+		Confirm:       *confirmFlag,
+		WalletMode:    *walletMode,
+		WalletWireURL: *walletWireURL,
+		Listen:        *listenAddr,
+		DataDir:       *dataDir,
+		WithHub:       *withHub,
+		HubRole:       *hubRole,
+		FeePreset:     *feePreset,
+		NoRestate:     *noRestate,
+		Quiet:         *asJSON,
 	}
 	info, err := ensureBackgroundDaemon(ctx, opts)
 	if err != nil {
@@ -243,16 +256,21 @@ func cmdUp(args []string) error {
 		}
 	}
 
-	// Fetch wallet summary for Mainnet QR / balance hint.
-	var fundAddr string
+	// Fetch wallet summary & live BSV Desktop presence for custody/funding guidance.
+	var fundAddr, activeWalletMode string
 	var balanceSats uint64
 	if wOut, wErr := callLiveWallet(info, http.MethodGet, "/v1/wallet", nil); wErr == nil {
 		if wm, ok := wOut.(map[string]any); ok {
 			fundAddr, _ = wm["fundAddress"].(string)
+			activeWalletMode, _ = wm["walletMode"].(string)
 			if b, ok := wm["balanceSats"].(float64); ok {
 				balanceSats = uint64(b)
 			}
 		}
+	}
+	var desktopProbe nwallet.DesktopProbeStatus
+	if info.Network != "memory" {
+		desktopProbe = nwallet.ProbeDesktopWallet(ctx, *walletWireURL)
 	}
 
 	// Generate 1-click paired dashboard URL if auth is enabled.
@@ -275,6 +293,8 @@ func cmdUp(args []string) error {
 			"restate":     restateStatus,
 			"fundAddress": fundAddr,
 			"balanceSats": balanceSats,
+			"walletMode":  activeWalletMode,
+			"desktop":     desktopProbe,
 			"dock":        dockResults,
 			"probe":       probe,
 			"servicePath": svcPath,
@@ -287,7 +307,14 @@ func cmdUp(args []string) error {
 	fmt.Printf("│ Daemon    : %s  (background · logs: %s)\n", info.URL, filepath.Join(info.DataDir, "daemon.log"))
 	fmt.Printf("│ Restate   : %s\n", restateStatus)
 	if fundAddr != "" {
-		fmt.Printf("│ Wallet    : %s (%d sats)\n", fundAddr, balanceSats)
+		custodyTag := "embedded BRC-100"
+		if activeWalletMode == "client" {
+			custodyTag = "BSV Desktop BRC-100 (zero local spending keys)"
+		}
+		fmt.Printf("│ Wallet    : %s (%d sats · %s)\n", fundAddr, balanceSats, custodyTag)
+	}
+	if activeWalletMode != "client" && desktopProbe.Available {
+		fmt.Printf("│ Desktop   : BSV Desktop detected on %s (%s) — 1-click fund: `nektar wallet fund --from-desktop --sats 25000`\n", desktopProbe.WireURL, desktopProbe.Network)
 	}
 	if svcPath != "" {
 		fmt.Printf("│ Autostart : installed -> %s\n", svcPath)
@@ -302,7 +329,7 @@ func cmdUp(args []string) error {
 	}
 	printDockProbe(probe)
 
-	if info.Network == "main" && balanceSats == 0 && fundAddr != "" {
+	if info.Network == "main" && activeWalletMode != "client" && balanceSats == 0 && fundAddr != "" {
 		if qr, qErr := core.RenderTerminalQR("bitcoin:" + fundAddr); qErr == nil {
 			fmt.Println("\nScan to fund your BSV Mainnet agent wallet (recommended starter: 5,000–10,000 sats):")
 			fmt.Print(qr)

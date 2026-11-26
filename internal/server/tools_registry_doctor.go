@@ -13,6 +13,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/reasoning"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 type DoctorCheck struct {
@@ -64,6 +65,44 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 			Name:   "anchors",
 			Status: "amber",
 			Detail: fmt.Sprintf("%d pending anchor(s), %d broadcast anchor(s) awaiting mined BUMP (settleDepth=%d)", pendingAnchors, unsettledAnchors, tb.mem.Chain().SettleDepth()),
+		})
+	}
+
+	// 2a. BSV Desktop / BRC-100 custody check (fast <=250ms loopback probe on :3321)
+	walletMode := tb.mem.Chain().WalletMode()
+	desktopProbe := nwallet.DesktopProbeStatus{WireURL: nwallet.DefaultDesktopWireURL}
+	if tb.mem.Chain().Network() != "memory" && !IsContainerEnv() {
+		desktopProbe = nwallet.ProbeDesktopWallet(ctx, nwallet.DefaultDesktopWireURL)
+	}
+	if walletMode == "client" {
+		if desktopProbe.Available {
+			checks = append(checks, DoctorCheck{
+				Name:   "bsv_desktop",
+				Status: "green",
+				Detail: fmt.Sprintf("direct BSV Desktop BRC-100 custody active on %s (%s) — zero spending keys in Nektar", desktopProbe.WireURL, desktopProbe.Network),
+			})
+		} else {
+			checks = append(checks, DoctorCheck{
+				Name:   "bsv_desktop",
+				Status: "red",
+				Detail: fmt.Sprintf("client custody mode configured but BSV Desktop not reachable on %s", desktopProbe.WireURL),
+			})
+			nextSteps = append(nextSteps, "Open and unlock BSV Desktop / Metanet Desktop on 127.0.0.1:3321")
+		}
+	} else if desktopProbe.Available {
+		checks = append(checks, DoctorCheck{
+			Name:   "bsv_desktop",
+			Status: "green",
+			Detail: fmt.Sprintf("BSV Desktop detected on %s (%s) — 1-click BRC-29 bridge ready (`nektar wallet fund --from-desktop --sats 25000` | `sweep --to-desktop`, or `--wallet client` for direct custody)", desktopProbe.WireURL, desktopProbe.Network),
+		})
+		if bal.SpendableSats == 0 {
+			nextSteps = append(nextSteps, "Fund from BSV Desktop in 1 click: `nektar wallet fund --from-desktop --sats 25000` (or restart with `nektar up --wallet client`)")
+		}
+	} else {
+		checks = append(checks, DoctorCheck{
+			Name:   "bsv_desktop",
+			Status: "green",
+			Detail: "embedded full BRC-100 wallet active (BSV Desktop not detected on 127.0.0.1:3321)",
 		})
 	}
 
@@ -211,6 +250,8 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 		"ok":                   overall != "red",
 		"verdict":              overall,
 		"network":              tb.mem.Chain().Network(),
+		"walletMode":           walletMode,
+		"desktopWallet":        desktopProbe,
 		"restateAttached":      restateAttached,
 		"shardNames":           shards,
 		"records":              total,

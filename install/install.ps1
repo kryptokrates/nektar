@@ -6,6 +6,7 @@ param(
   [switch]$Up,
   [switch]$Mainnet,
   [string]$Confirm = '',
+  [string]$Wallet = '',
   [switch]$InstallService,
   [switch]$Dock,
   [switch]$Docker,
@@ -70,6 +71,9 @@ if ($Up) {
   if ($Mainnet) {
     $conf = if ($Confirm) { $Confirm } elseif ($env:NEKTAR_MAINNET_CONFIRM) { $env:NEKTAR_MAINNET_CONFIRM } else { 'I_UNDERSTAND' }
     $upArgs += @('--network', 'main', '--confirm', $conf)
+  }
+  if ($Wallet) {
+    $upArgs += @('--wallet', $Wallet)
   }
   if ($InstallService) {
     $upArgs += '--install-service'

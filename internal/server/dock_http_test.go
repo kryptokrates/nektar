@@ -84,6 +84,18 @@ func TestDockDetectProbeWalletQRAndHubBundle(t *testing.T) {
 		t.Fatalf("expected SVG from /v1/wallet/qr, got %q", svgBuf.String()[:min(60, svgBuf.Len())])
 	}
 
+	// 3b. GET /v1/wallet/desktop probes BSV Desktop availability cleanly without hanging
+	dtResp, err := http.Get(ts.URL + "/v1/wallet/desktop?wireUrl=http://127.0.0.1:1")
+	if err != nil || dtResp.StatusCode != http.StatusOK {
+		t.Fatalf("wallet desktop probe failed: resp=%v err=%v", dtResp, err)
+	}
+	var dt map[string]any
+	_ = json.NewDecoder(dtResp.Body).Decode(&dt)
+	dtResp.Body.Close()
+	if dt["walletMode"] != "embedded" || dt["patterns"] == nil {
+		t.Fatalf("expected walletMode=embedded and custody patterns from /v1/wallet/desktop, got %+v", dt)
+	}
+
 	// 4. GET /v1/onboard/hub-bundle with Mainnet + role + feePreset
 	bunResp, err := http.Get(ts.URL + "/v1/onboard/hub-bundle?mode=auto-ip&network=main&role=leaf&feePreset=hybrid")
 	if err != nil || bunResp.StatusCode != http.StatusOK {

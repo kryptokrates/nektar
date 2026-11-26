@@ -104,7 +104,8 @@ func printUsage() {
 
 Get Started (25 seconds, zero Docker):
   nektar up             Start background daemon + auto-dock Claude/Codex/Hermes/OpenClaw/Cursor + live receipt check
-                        Mainnet 1-liner: nektar up --network main --confirm I_UNDERSTAND
+                        Mainnet 1-liner:     nektar up --network main --confirm I_UNDERSTAND
+                        BSV Desktop custody: nektar up --wallet client  (zero spending keys in Nektar)
   nektar stop           Gracefully stop the background Nektar daemon
   nektar serve          Run foreground daemon + Dashboard + MCP + L0 Proxy + Market (default testnet :18420)
   nektar open           Open the Nektar Dashboard in your browser

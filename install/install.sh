@@ -13,6 +13,7 @@ DO_DOCK=0
 USE_DOCKER=0
 USE_MAINNET=0
 MAINNET_CONFIRM="${NEKTAR_MAINNET_CONFIRM:-}"
+WALLET_MODE="${NEKTAR_WALLET:-}"
 INSTALL_SERVICE=0
 
 while [ "$#" -gt 0 ]; do
@@ -22,6 +23,13 @@ while [ "$#" -gt 0 ]; do
     --docker) USE_DOCKER=1 ;;
     --native) USE_DOCKER=0 ;;
     --mainnet|--main) USE_MAINNET=1 ;;
+    --wallet)
+      shift
+      WALLET_MODE="${1:-}"
+      ;;
+    --wallet=*)
+      WALLET_MODE="${1#--wallet=}"
+      ;;
     --confirm)
       shift
       MAINNET_CONFIRM="${1:-}"
@@ -136,6 +144,9 @@ if [ "$DO_UP" = "1" ]; then
   set -- up
   if [ "$USE_MAINNET" = "1" ]; then
     set -- "$@" --network main --confirm "${MAINNET_CONFIRM:-I_UNDERSTAND}"
+  fi
+  if [ -n "$WALLET_MODE" ]; then
+    set -- "$@" --wallet "$WALLET_MODE"
   fi
   if [ "$INSTALL_SERVICE" = "1" ]; then
     set -- "$@" --install-service

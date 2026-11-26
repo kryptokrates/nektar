@@ -45,6 +45,8 @@ func cmdServe(args []string) error {
 	upstreamSpinesFlag := fs.String("upstream-spines", os.Getenv("NEKTAR_UPSTREAM_SPINES"), "Comma-separated Spine Hub URLs for Leaf upstream forwarding")
 	netName := fs.String("network", "", "Network override (memory|regtest|testnet|main)")
 	confirmFlag := fs.String("confirm", "", "Mainnet acknowledgement (pass I_UNDERSTAND with --network main)")
+	walletModeFlag := fs.String("wallet", os.Getenv("NEKTAR_WALLET"), "Wallet custody mode: embedded (default) | client (BSV Desktop BRC-100 on :3321)")
+	walletWireFlag := fs.String("wallet-wire-url", os.Getenv("NEKTAR_WALLET_WIRE_URL"), "BSV Desktop / BRC-100 wire URL (default http://127.0.0.1:3321)")
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	ephemeral := fs.Bool("ephemeral", false, "Run with in-memory SQLite (data discarded on exit)")
 	publicURLFlag := fs.String("public-url", os.Getenv("NEKTAR_PUBLIC_URL"), "Publicly reachable HTTP base URL for direct A2A trades (empty = NAT bbox fallback)")
@@ -53,6 +55,12 @@ func cmdServe(args []string) error {
 
 	if strings.TrimSpace(*confirmFlag) != "" {
 		_ = os.Setenv("NEKTAR_MAINNET_CONFIRM", strings.TrimSpace(*confirmFlag))
+	}
+	if strings.TrimSpace(*walletModeFlag) != "" {
+		_ = os.Setenv("NEKTAR_WALLET", strings.TrimSpace(*walletModeFlag))
+	}
+	if strings.TrimSpace(*walletWireFlag) != "" {
+		_ = os.Setenv("NEKTAR_WALLET_WIRE_URL", strings.TrimSpace(*walletWireFlag))
 	}
 	if *ephemeral {
 		_ = os.Setenv("NEKTAR_EPHEMERAL", "1")
@@ -473,6 +481,7 @@ func cmdServe(args []string) error {
 		PairCode:        pairCode,
 		FeeAddress:      feeAddr,
 		BalanceSats:     rt.mem.Chain().BalanceSats(),
+		WalletMode:      rt.mem.Chain().WalletMode(),
 		WithHub:         *withHub,
 		ContainerMode:   server.IsContainerEnv(),
 		GeneratedTokens: genTokens,

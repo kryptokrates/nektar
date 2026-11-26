@@ -132,6 +132,7 @@ type StartupBannerOpts struct {
 	PairCode        string
 	FeeAddress      string
 	BalanceSats     uint64
+	WalletMode      string
 	WithHub         bool
 	ContainerMode   bool
 	GeneratedTokens bool
@@ -157,10 +158,12 @@ func FormatStartupBanner(opts StartupBannerOpts) string {
 	fmt.Fprintf(&b, "│ LLM Proxy : %s/v1/proxy/openai/v1  (any OpenAI/Anthropic agent)\n", base)
 	if opts.FeeAddress != "" {
 		hint := ""
-		if opts.BalanceSats == 0 && opts.Network == "testnet" {
-			hint = " — 1-click faucet in Dashboard"
+		if opts.WalletMode == "client" {
+			hint = " — BSV Desktop BRC-100 custody (zero local spending keys)"
+		} else if opts.BalanceSats == 0 && opts.Network == "testnet" {
+			hint = " — 1-click faucet in Dashboard or `nektar wallet fund --from-desktop`"
 		} else if opts.BalanceSats == 0 && opts.Network == "main" {
-			hint = " — send 5,000–10,000 sats (~$0.003) or scan QR in Wallet tab"
+			hint = " — scan QR, or `nektar wallet fund --from-desktop --sats 25000`"
 		}
 		fmt.Fprintf(&b, "│ Fee Key   : %s (%d sats)%s\n", opts.FeeAddress, opts.BalanceSats, hint)
 	}
@@ -173,7 +176,7 @@ func FormatStartupBanner(opts StartupBannerOpts) string {
 		b.WriteString("│ Dock Apps : nektar dock   (auto-wires Claude, Cursor, Hermes, OpenClaw, Codex…)\n")
 	}
 	b.WriteString("╰─\n")
-	if opts.Network == "main" && opts.BalanceSats == 0 && opts.FeeAddress != "" && !opts.ContainerMode {
+	if opts.Network == "main" && opts.WalletMode != "client" && opts.BalanceSats == 0 && opts.FeeAddress != "" && !opts.ContainerMode {
 		if qr, err := core.RenderTerminalQR("bitcoin:" + opts.FeeAddress); err == nil {
 			b.WriteString("\nScan to fund BSV Mainnet wallet (recommended canary: 5,000–10,000 sats):\n")
 			b.WriteString(qr)

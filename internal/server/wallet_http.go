@@ -18,6 +18,7 @@ import (
 
 func (a *App) registerWalletRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/wallet", a.withAuth(http.HandlerFunc(a.handleWalletStatus)))
+	mux.Handle("GET /v1/wallet/desktop", a.withAuth(http.HandlerFunc(a.handleWalletDesktopProbe)))
 	mux.Handle("GET /v1/wallet/utxos", a.withAuth(http.HandlerFunc(a.handleWalletUTXOs)))
 	mux.Handle("GET /v1/wallet/actions", a.withAuth(http.HandlerFunc(a.handleWalletActions)))
 	mux.Handle("POST /v1/wallet/sync", a.withAuth(http.HandlerFunc(a.handleWalletSync)))
@@ -106,6 +107,23 @@ func (a *App) handleWalletStatus(w http.ResponseWriter, r *http.Request) {
 			"maxPerDay":  maxDay,
 			"maxFee":     maxFee,
 			"txCount":    txCount,
+		},
+	})
+}
+
+func (a *App) handleWalletDesktopProbe(w http.ResponseWriter, r *http.Request) {
+	wireURL := strings.TrimSpace(r.URL.Query().Get("wireUrl"))
+	if wireURL == "" {
+		wireURL = nwallet.DefaultDesktopWireURL
+	}
+	probe := nwallet.ProbeDesktopWallet(r.Context(), wireURL)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"walletMode": a.mem.Chain().WalletMode(),
+		"network":    a.mem.Chain().Network(),
+		"desktop":    probe,
+		"patterns": map[string]string{
+			"attended":   "nektar up --wallet client   (zero spending keys in Nektar; BSV Desktop holds 100% of custody)",
+			"autonomous": "nektar wallet fund --from-desktop --sats 25000  |  nektar wallet sweep --to-desktop",
 		},
 	})
 }

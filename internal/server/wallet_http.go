@@ -81,9 +81,14 @@ func (a *App) handleWalletStatus(w http.ResponseWriter, r *http.Request) {
 	addr, _ := ch.FundAddress()
 	bal, _ := ch.Balance(r.Context())
 	spentToday, maxDay, maxFee, txCount := ch.SpendGuard().Stats()
+	custody := "embedded"
+	if ch.WalletMode() == "client" {
+		custody = "bsv-desktop"
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"network":         ch.Network(),
 		"walletMode":      ch.WalletMode(),
+		"custody":         custody,
 		"identityPub":     ch.IdentityPubHex(),
 		"fundAddress":     addr,
 		"balanceSats":     bal.SpendableSats,
@@ -150,14 +155,23 @@ func (a *App) handleWalletUTXOs(w http.ResponseWriter, r *http.Request) {
 	}
 	// Client mode fallback via BRC-100 ListOutputs.
 	uLim := uint32(limit)
-	qBasket := basket
-	if qBasket == "all" {
-		qBasket = nwallet.BasketDefault
+	baskets := []string{basket}
+	if basket == "all" {
+		baskets = []string{nwallet.BasketDefault, "nektar funding"}
 	}
-	res, err := a.mem.Chain().WalletInterface().ListOutputs(r.Context(), sdkwallet.ListOutputsArgs{
-		Basket: qBasket,
-		Limit:  &uLim,
-	}, "nektar")
+	var res *sdkwallet.ListOutputsResult
+	var err error
+	qBasket := baskets[0]
+	for _, b := range baskets {
+		qBasket = b
+		res, err = a.mem.Chain().WalletInterface().ListOutputs(r.Context(), sdkwallet.ListOutputsArgs{
+			Basket: b,
+			Limit:  &uLim,
+		}, nwallet.DefaultDesktopOriginator)
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return

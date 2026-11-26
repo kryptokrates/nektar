@@ -254,7 +254,8 @@ func (a *App) buildMux() http.Handler {
 	mux.HandleFunc("POST /v1/auth/session", a.handleAuthSession)
 	mux.HandleFunc("GET /pair", a.handlePair)
 
-	// 3. Health, discovery, public card & A2A Agent Card.
+	// 3. Health, discovery, app manifest/icons (for BSV Desktop Connected Apps), public card & A2A Agent Card.
+	a.registerAppManifestRoutes(mux)
 	healthHandler := func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":      true,

@@ -162,8 +162,10 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		}
 	}
 	walletDir := filepath.Join(dir, "wallet")
-	if err := os.MkdirAll(walletDir, 0o700); err != nil {
-		return nil, fmt.Errorf("chain: mkdir wallet: %w", err)
+	if walletMode != "client" {
+		if err := os.MkdirAll(walletDir, 0o700); err != nil {
+			return nil, fmt.Errorf("chain: mkdir wallet: %w", err)
+		}
 	}
 
 	guardOpts := cfg.SpendGuard
@@ -307,7 +309,7 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		p.feeSource = feepolicy.Static(baseFees)
 	}
 
-	// 2. Open custody: external BRC-100 wirewallet (NEKTAR_WALLET=client) OR embedded pure-Go Engine.
+	// 2. Open custody: external BRC-100 desktop wallet (NEKTAR_WALLET=client) OR embedded pure-Go Engine.
 	if walletMode == "client" {
 		if netName == "regtest" || netName == "memory" {
 			return nil, errors.New("chain: client wallet custody is for testnet/main only")
@@ -320,7 +322,7 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		if err := wirewallet.CheckURL(wireURL); err != nil {
 			return nil, fmt.Errorf("chain: BRC-100 wire URL refused: %w", err)
 		}
-		w, err := wirewallet.Dial(Originator, wireURL, 30*time.Second)
+		w, err := nwallet.DialDesktopWallet(ctx, Originator, wireURL, 30*time.Second)
 		if err != nil {
 			return nil, fmt.Errorf("chain: dial BRC-100 wallet at %s: %w", wireURL, err)
 		}

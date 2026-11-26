@@ -52,25 +52,35 @@ func (p *Port) Balance(ctx context.Context) (nwallet.BalanceBreakdown, error) {
 	}
 	// Client mode: request full transaction BEEF via ListOutputs so ConfirmedSats ONLY counts
 	// outputs backed by a BUMP verified against our witnessed ChainTracker (never trusting bare spendable flags).
+	// Note: BSV Desktop forbids third-party apps from listing its internal "default" basket (400 Bad Request),
+	// so fall back gracefully to Nektar's app basket ("nektar funding").
 	if p.wallet == nil {
 		return nwallet.BalanceBreakdown{}, errors.New("chain: client wallet not initialized")
 	}
 	limit := uint32(1000)
-	res, err := p.wallet.ListOutputs(ctx, sdkwallet.ListOutputsArgs{
-		Basket:  nwallet.BasketDefault,
-		Include: sdkwallet.OutputIncludeEntireTransactions,
-		Limit:   &limit,
-	}, Originator)
-	if err != nil {
+	var res *sdkwallet.ListOutputsResult
+	var err error
+	for _, basket := range []string{nwallet.BasketDefault, NektarWalletProfile.FundBasket} {
+		res, err = p.wallet.ListOutputs(ctx, sdkwallet.ListOutputsArgs{
+			Basket:  basket,
+			Include: sdkwallet.OutputIncludeEntireTransactions,
+			Limit:   &limit,
+		}, Originator)
+		if err == nil {
+			break
+		}
 		// Some remote wallets refuse entire transactions on large baskets; retry metadata-only and
 		// report all spendable outputs honestly as UnprovenSats (never ConfirmedSats).
 		res, err = p.wallet.ListOutputs(ctx, sdkwallet.ListOutputsArgs{
-			Basket: nwallet.BasketDefault,
+			Basket: basket,
 			Limit:  &limit,
 		}, Originator)
-		if err != nil {
-			return nwallet.BalanceBreakdown{}, err
+		if err == nil {
+			break
 		}
+	}
+	if err != nil {
+		return nwallet.BalanceBreakdown{}, err
 	}
 	var beef *transaction.Beef
 	if len(res.BEEF) > 0 {

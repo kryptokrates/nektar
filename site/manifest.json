@@ -1,0 +1,47 @@
+{
+  "name": "Nektar",
+  "short_name": "Nektar",
+  "description": "Verifiable, encrypted agent memory and AI knowledge market anchored on BSV.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#161413",
+  "theme_color": "#f7991b",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32",
+      "type": "image/x-icon"
+    }
+  ],
+  "babbage": {
+    "protocolPermissions": [
+      {
+        "protocolID": [0, "nektar fund"],
+        "description": "Derive Nektar funding receive keys"
+      },
+      {
+        "protocolID": [1, "nektar storage"],
+        "description": "Encrypt Nektar local keys at rest"
+      },
+      {
+        "protocolID": [1, "nektar provenance"],
+        "description": "Sign memory provenance and grounded receipts"
+      },
+      {
+        "protocolID": [2, "3241645161d8"],
+        "description": "Receive and send BRC-29 peer payments"
+      }
+    ]
+  }
+}

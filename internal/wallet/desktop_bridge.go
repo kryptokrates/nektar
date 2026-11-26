@@ -24,7 +24,7 @@ const DefaultDesktopWireURL = "http://127.0.0.1:3321"
 
 // dialWireWallet can be overridden in unit tests to simulate crashes between CreateAction and InternalizeAction.
 var dialWireWallet = func(originator, url string, timeout time.Duration) (sdkwallet.Interface, error) {
-	return wirewallet.Dial(originator, url, timeout)
+	return DialDesktopWallet(context.Background(), originator, url, timeout)
 }
 
 // DesktopProbeStatus summarizes whether a local BRC-100 desktop wallet (BSV Desktop / Metanet Desktop)
@@ -32,6 +32,7 @@ var dialWireWallet = func(originator, url string, timeout time.Duration) (sdkwal
 type DesktopProbeStatus struct {
 	Available   bool   `json:"available"`
 	WireURL     string `json:"wireUrl"`
+	Transport   string `json:"transport,omitempty"`
 	Network     string `json:"network,omitempty"`
 	IdentityPub string `json:"identityPub,omitempty"`
 	Error       string `json:"error,omitempty"`
@@ -68,14 +69,19 @@ func ProbeDesktopWallet(ctx context.Context, wireURL string) DesktopProbeStatus 
 	}
 	_ = conn.Close()
 
-	pCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	pCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	w, err := dialWireWallet("nektar", wireURL, 1500*time.Millisecond)
+	w, err := dialWireWallet(DefaultDesktopOriginator, wireURL, 2*time.Second)
 	if err != nil {
 		st.Error = err.Error()
 		return st
 	}
-	netRes, err := w.GetNetwork(pCtx, nil, "nektar")
+	if _, ok := w.(*DesktopJSONClient); ok {
+		st.Transport = string(DesktopTransportHTTPJSON)
+	} else {
+		st.Transport = string(DesktopTransportBinary)
+	}
+	netRes, err := w.GetNetwork(pCtx, nil, DefaultDesktopOriginator)
 	if err != nil {
 		st.Error = err.Error()
 		return st
@@ -84,7 +90,7 @@ func ProbeDesktopWallet(ctx context.Context, wireURL string) DesktopProbeStatus 
 	if netRes != nil {
 		st.Network = string(netRes.Network)
 	}
-	if idPub, idErr := wirewallet.IdentityKeyOf(pCtx, w, "nektar"); idErr == nil && idPub != nil {
+	if idPub, idErr := wirewallet.IdentityKeyOf(pCtx, w, DefaultDesktopOriginator); idErr == nil && idPub != nil {
 		st.IdentityPub = hex.EncodeToString(idPub.Compressed())
 	}
 	return st

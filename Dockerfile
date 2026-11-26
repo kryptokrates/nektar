@@ -1,15 +1,16 @@
 # Nektar v0.1 — Single-Binary Pure-Go Image (Zero Node.js runtime, Zero CGO, Zero node-gyp)
 
-# Stage 1: Build Svelte 5 Dashboard assets
-FROM node:24-alpine AS ui-build
+# Stage 1: Build Svelte 5 Dashboard assets natively on build host
+FROM --platform=$BUILDPLATFORM node:24-alpine AS ui-build
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json* ./
 RUN npm install --no-audit --no-fund
 COPY ui/ ./
 RUN npm run build
 
-# Stage 2: Build static Go 1.27 binary with embedded UI + Rúnar covenant artifacts
-FROM golang:1.27-bookworm AS go-build
+# Stage 2: Native Go 1.27 cross-compile for TARGETARCH (zero QEMU emulation slowdown)
+FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS go-build
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum embed_adapters.go ./
 RUN go mod download
@@ -19,14 +20,13 @@ COPY integrations/hermes ./integrations/hermes
 COPY integrations/openclaw ./integrations/openclaw
 COPY skills/nektar-memory ./skills/nektar-memory
 COPY --from=ui-build /ui/dist/ ./internal/server/ui_dist/
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/nektar ./cmd/nektar
+RUN CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w" -o /out/nektar ./cmd/nektar
 
 # Optional static restate-server binary for single-container durable workflows
 ARG RESTATE_VERSION=1.8.1
 RUN apt-get update && apt-get install -y --no-install-recommends xz-utils \
  && rm -rf /var/lib/apt/lists/* \
- && arch="$(dpkg --print-architecture)" \
- && case "$arch" in amd64) t=x86_64-unknown-linux-musl ;; arm64) t=aarch64-unknown-linux-musl ;; *) echo "unsupported arch $arch"; exit 1 ;; esac \
+ && case "${TARGETARCH}" in amd64) t=x86_64-unknown-linux-musl ;; arm64) t=aarch64-unknown-linux-musl ;; *) echo "unsupported arch ${TARGETARCH}"; exit 1 ;; esac \
  && name="restate-server-$t.tar.xz" \
  && base="https://github.com/restatedev/restate/releases/download/v$RESTATE_VERSION" \
  && curl -fsSL "$base/$name" -o /tmp/rs.tar.xz \

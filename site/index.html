@@ -254,7 +254,7 @@
         padding: 16px 28px 24px;
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        justify-content: center;
         gap: 16px;
         flex-wrap: wrap;
       }
@@ -454,13 +454,6 @@
     </main>
 
     <footer>
-      <div class="ticker">
-        <span class="mpill">Setup <b>25s</b></span>
-        <span class="mpill">Dependencies <b>Zero</b></span>
-        <span class="mpill">Testnet Sats <b>Free</b></span>
-        <span class="mpill">License <b>MIT</b></span>
-      </div>
-
       <div class="socials">
         <a class="sico" href="https://x.com/nektardotrun" target="_blank" rel="noopener" title="Follow @nektardotrun on X" aria-label="X">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" /></svg>
@@ -479,10 +472,10 @@
     <div class="overlay" id="demo-modal" aria-hidden="true">
       <div class="modal" onclick="event.stopPropagation()">
         <div class="mhead">
-          <span>NEKTAR — 60-Second Overview</span>
+          <span>NEKTAR</span>
           <button class="mx" id="m-close" type="button" aria-label="Close">✕</button>
         </div>
-        <video id="m-video" class="mvideo" src="./demo.mp4" poster="./demo-poster.jpg" controls playsinline preload="metadata" style="display:block"></video>
+        <video id="m-video" class="mvideo" src="./demo.mp4" poster="./demo-poster.jpg" controls playsinline preload="none" style="display:block"></video>
       </div>
     </div>
 

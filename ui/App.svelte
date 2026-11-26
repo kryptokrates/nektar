@@ -7,6 +7,7 @@
   import Sidebar from './components/Sidebar.svelte'
   import MarketHome from './components/MarketHome.svelte'
   import AgentsView from './components/AgentsView.svelte'
+  import HubsView from './components/HubsView.svelte'
   import WalletView from './components/WalletView.svelte'
   import NodeView from './components/NodeView.svelte'
   import DetailDrawer from './components/DetailDrawer.svelte'
@@ -210,6 +211,7 @@
     { id: 'sell', label: 'Anchor & sell knowledge', hint: 'Market · Right rail', run: focusSell },
     { id: 'home', label: 'Go to Market', hint: 'Home · Live Pulse', run: () => (tab = 'home') },
     { id: 'agents', label: 'Go to Agents', hint: 'Fleet & What They Know', run: () => (tab = 'agents') },
+    { id: 'hubs', label: 'Go to Hubs', hint: 'LightBSV Overlay Mesh', run: () => (tab = 'hubs') },
     { id: 'wallet', label: 'Go to Wallet', hint: 'Balance & Ledger', run: () => (tab = 'wallet') },
     { id: 'settings', label: 'Go to Settings', hint: 'Policies · Hubs · System', run: () => (tab = 'settings') },
     { id: 'dock', label: 'Dock AI agent (Claude / Cursor / Proxy / MCP)', hint: 'Agents', run: () => (dockOpen = true) },
@@ -294,6 +296,7 @@
       {tab}
       {live}
       pendingApprovals={s.automation?.pending.length ?? 0}
+      connectedHubs={s.net.hosts?.length ?? 0}
       onSelect={(t) => (tab = t)}
       onOpenPalette={() => (paletteOpen = true)}
     />
@@ -326,6 +329,7 @@
         <AgentsView
           {s}
           {live}
+          {pulse}
           {dockedApps}
           {searchQuery}
           onSearch={(q) => (searchQuery = q)}
@@ -342,6 +346,8 @@
           onDecideApproval={(id, ok) => void decideApproval(id, ok)}
           onShareUrl={(u) => void shareUrl(u)}
         />
+      {:else if tab === 'hubs'}
+        <HubsView {s} onRefresh={load} onToast={showToast} />
       {:else if tab === 'wallet'}
         <WalletView {s} onRefresh={load} onToast={showToast} onConfirm={askConfirm} />
       {:else}

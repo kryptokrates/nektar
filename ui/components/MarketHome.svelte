@@ -654,16 +654,18 @@
     min-height: 100vh;
   }
 
-  /* Minimal Top Bar */
+  /* Minimal Top Bar (pixel-locked 54px height shared with AgentsView) */
   .topbar {
     position: sticky;
     top: 0;
     z-index: 20;
+    height: 54px;
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    padding: 0.65rem 1.25rem;
+    padding: 0 1.25rem;
     background: rgb(9 8 7 / 92%);
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--line);

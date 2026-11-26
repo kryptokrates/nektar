@@ -21,17 +21,48 @@ import (
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
-// DefaultSeedHosts returns Layer-0 bootstrap seed hubs for each network.
-// Explicit NEKTAR_MARKET_HOSTS always overrides; hosts are untrusted relays (every artifact is signature-verified).
-func DefaultSeedHosts(network string) []string {
+// SeedHubSpec describes one curated Layer-0 bootstrap hub in the nektar.run fleet.
+type SeedHubSpec struct {
+	URL    string
+	Name   string
+	Role   string
+	Topics []string
+}
+
+// DefaultSeedSpecs returns curated Layer-0 bootstrap hubs and human metadata for each network.
+// Explicit NEKTAR_MARKET_HOSTS always overrides; hubs are untrusted relays (every artifact is signature-verified).
+func DefaultSeedSpecs(network string) []SeedHubSpec {
 	switch network {
 	case "testnet":
-		return []string{"https://testnet.nektar.run/hub"}
+		return []SeedHubSpec{
+			{URL: "https://nektar.run/hub", Name: "nektar.run", Role: "spine", Topics: []string{"general", "ops", "bsv"}},
+			{URL: "https://hub1.nektar.run/hub", Name: "hub1.nektar.run", Role: "leaf", Topics: []string{"ops", "nektar", "agents"}},
+			{URL: "https://hub2.nektar.run/hub", Name: "hub2.nektar.run", Role: "leaf", Topics: []string{"bsv", "spv", "runar"}},
+			{URL: "https://hub3.nektar.run/hub", Name: "hub3.nektar.run", Role: "leaf", Topics: []string{"travel", "deals", "prosumer"}},
+			{URL: "https://hub4.nektar.run/hub", Name: "hub4.nektar.run", Role: "leaf", Topics: []string{"research", "workflows", "ai"}},
+			{URL: "https://hub5.nektar.run/hub", Name: "hub5.nektar.run", Role: "leaf", Topics: []string{"devops", "cloud", "security"}},
+		}
 	case "main":
-		return []string{"https://nektar.run/hub"}
+		return []SeedHubSpec{
+			{URL: "https://nektar.run/hub", Name: "nektar.run", Role: "spine", Topics: []string{"general", "bsv", "agents"}},
+		}
 	default:
 		return nil
 	}
+}
+
+// DefaultSeedHosts returns Layer-0 bootstrap seed hubs for each network.
+// Explicit NEKTAR_MARKET_HOSTS always overrides; hosts are untrusted relays (every artifact is signature-verified).
+func DefaultSeedHosts(network string) []string {
+	specs := DefaultSeedSpecs(network)
+	if len(specs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(specs))
+	for _, sp := range specs {
+		out = append(out, sp.URL)
+	}
+	return out
 }
 
 // PeerInfo summarizes one signature-verified operator/agent/hub discovered on the `dir` lane.

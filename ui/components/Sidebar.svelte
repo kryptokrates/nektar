@@ -5,11 +5,12 @@
     tab: NavTab
     live: boolean
     pendingApprovals: number
+    connectedHubs?: number
     onSelect: (t: NavTab) => void
     onOpenPalette: () => void
   }
 
-  let { tab, live, pendingApprovals, onSelect, onOpenPalette }: Props = $props()
+  let { tab, live, pendingApprovals, connectedHubs = 0, onSelect, onOpenPalette }: Props = $props()
 </script>
 
 <aside class="rail-left">
@@ -47,6 +48,16 @@
           <path d="M10.4 9.6L7.4 14.8M13.6 9.6l3 5.2M8.5 17h7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
         </svg>
         <span class="lbl">Agents</span>
+      </button>
+
+      <button class="ni" class:active={tab === 'hubs'} onclick={() => onSelect('hubs')}>
+        <svg viewBox="0 0 24 24" class="ico">
+          <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7" />
+          <ellipse cx="12" cy="12" rx="3.8" ry="8.5" fill="none" stroke="currentColor" stroke-width="1.5" />
+          <path d="M4 12h16" stroke="currentColor" stroke-width="1.5" />
+        </svg>
+        <span class="lbl">Hubs</span>
+        {#if connectedHubs > 0}<span class="cnt">{connectedHubs}</span>{/if}
       </button>
 
       <button class="ni" class:active={tab === 'wallet'} onclick={() => onSelect('wallet')}>
@@ -124,6 +135,11 @@
   .badge {
     margin-left: auto; background: var(--amber); color: #120e0c;
     font-size: 0.68rem; font-weight: 800; padding: 0.06rem 0.42rem; border-radius: 999px;
+    font-variant-numeric: tabular-nums;
+  }
+  .cnt {
+    margin-left: auto; font-family: ui-monospace, monospace;
+    font-size: 0.7rem; font-weight: 700; color: var(--mut2);
     font-variant-numeric: tabular-nums;
   }
   .cmd-btn {

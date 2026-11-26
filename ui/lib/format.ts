@@ -2,6 +2,15 @@ export function fmtSats(n: number): string {
   return Math.round(n).toLocaleString('en-US')
 }
 
+export function fmtCompactSats(n: number): string {
+  const sign = n < 0 ? '-' : ''
+  const abs = Math.abs(n)
+  if (abs < 10_000) return `${sign}${Math.round(abs).toLocaleString('en-US')}`
+  if (abs < 1_000_000) return `${sign}${(abs / 1_000).toFixed(abs >= 100_000 ? 0 : 1)}K`
+  if (abs < 1_000_000_000) return `${sign}${(abs / 1_000_000).toFixed(abs >= 100_000_000 ? 0 : 1)}M`
+  return `${sign}${(abs / 1_000_000_000).toFixed(1)}B`
+}
+
 export function shortHost(u: string): string {
   return u.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
 }

@@ -287,7 +287,33 @@ export type DockClient = {
   note?: string
 }
 
-export type NavTab = 'home' | 'agents' | 'wallet' | 'settings'
+export type HubFeeSummary = {
+  wantSats: number
+  offerSats: number
+  bboxSats: number
+  egressSatsPer100: number
+  minTopupSats: number
+}
+
+export type HubCatalogEntry = {
+  url: string
+  name: string
+  source: 'seed' | 'joined' | 'discovered' | 'blocked' | string
+  connected: boolean
+  reachable: boolean
+  latencyMs: number
+  network?: string
+  networkMismatch?: boolean
+  role?: 'spine' | 'leaf' | string
+  feePreset?: string
+  fees?: HubFeeSummary | null
+  topics?: string[]
+  linkedHubs?: string[]
+  peersCount?: number
+  error?: string
+}
+
+export type NavTab = 'home' | 'agents' | 'hubs' | 'wallet' | 'settings'
 
 export type DrawerTarget =
   | { kind: 'memory'; item: FeedFragment }

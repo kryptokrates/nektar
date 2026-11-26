@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,8 @@ func (a *App) registerDockAndLaunchRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/dock/probe", a.withAuth(http.HandlerFunc(a.handleDockProbe)))
 	mux.Handle("GET /v1/wallet/qr", a.withAuth(http.HandlerFunc(a.handleWalletQR)))
 	mux.Handle("GET /v1/hub/inspect", a.withAuth(http.HandlerFunc(a.handleHubInspect)))
+	mux.Handle("GET /v1/hubs/directory", a.withAuth(http.HandlerFunc(a.handleHubsDirectory)))
+	mux.Handle("POST /v1/hubs/connect-all", a.withOperatorAuth(http.HandlerFunc(a.handleHubsConnectAll)))
 }
 
 func isJSONEntryDocked(cfgPath, rootKey, entryKey string) bool {
@@ -239,4 +242,53 @@ func (a *App) handleHubInspect(w http.ResponseWriter, r *http.Request) {
 		res["error"] = err.Error()
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (a *App) handleHubsDirectory(w http.ResponseWriter, r *http.Request) {
+	if a.disc == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"network":        a.mem.Chain().Network(),
+			"hubs":           []any{},
+			"connectedCount": 0,
+			"totalCount":     0,
+		})
+		return
+	}
+	force := r.URL.Query().Get("refresh") == "1" || r.URL.Query().Get("refresh") == "true"
+	hubs := a.disc.ProbeHubCatalog(r.Context(), force)
+	connectedCount := 0
+	for _, h := range hubs {
+		if h.Connected {
+			connectedCount++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"network":        a.mem.Chain().Network(),
+		"hubs":           hubs,
+		"connectedCount": connectedCount,
+		"totalCount":     len(hubs),
+	})
+}
+
+func (a *App) handleHubsConnectAll(w http.ResponseWriter, r *http.Request) {
+	if a.disc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "discovery service unavailable"})
+		return
+	}
+	connected, skipped, hubs := a.disc.ConnectAllReachable(r.Context())
+	if len(connected) > 0 {
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			_, _ = a.disc.DiscoverPeers(bgCtx, connected)
+			a.BroadcastDashboardEvent("hosts_updated")
+		}()
+	}
+	a.BroadcastDashboardEvent("hosts_updated")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"connected":      connected,
+		"skipped":        skipped,
+		"connectedCount": len(connected),
+		"hubs":           hubs,
+	})
 }

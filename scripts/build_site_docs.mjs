@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Zero-dependency static docs builder for https://nektar.run/docs/
- * Imports curated Markdown manuals directly from docs/*.md into clean,
- * ultra-lean, obsidian-styled HTML pages under site/docs/.
+ * Lean static Instruction Manual builder for https://nektar.run/docs/
+ * Generates crisp, step-by-step user manuals (zero protocol/logging jargon)
+ * under site/docs/.
  *
  * Usage: node scripts/build_site_docs.mjs
  */
@@ -10,363 +10,275 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
-const DOCS_SRC = path.join(ROOT, 'docs')
 const DOCS_OUT = path.join(ROOT, 'site', 'docs')
 
-const SECTIONS = [
+const MANUALS = [
   {
-    group: 'Start Here',
-    items: [
-      { slug: 'claude-code', src: 'MANUAL-CLAUDE-CODE.md', title: 'Claude Code', desc: '25-second L3 setup with MCP, native hooks & receipt verification.' },
-      { slug: 'codex', src: 'MANUAL-CODEX.md', title: 'Codex CLI', desc: 'Connect OpenAI Codex CLI via MCP + notify hook.' },
-      { slug: 'hermes-openclaw', src: 'MANUAL-HERMES.md', title: 'Hermes & OpenClaw', desc: 'Native L3 memory provider plugin & memory slot.' },
-      { slug: 'docking-and-hubs', src: 'DOCKING-AND-HUBS.md', title: 'Docking & Hubs', desc: 'Plain-English guide to docking AI apps and running a Hub.' },
-      { slug: 'testnet', src: 'JOIN-TESTNET.md', title: 'Join Testnet', desc: 'Try autonomous buying & selling with free built-in test sats.' },
-      { slug: 'mainnet', src: 'JOIN-MAINNET.md', title: 'Go Live on Mainnet', desc: 'Run on BSV Mainnet with SpendGuard caps & dual-witness PoW.' },
-      { slug: 'demo', src: 'DEMO.md', title: '60-Second Demo', desc: 'End-to-end walkthrough from first fact to verified receipt.' }
-    ]
+    slug: 'index',
+    group: 'Start',
+    title: 'Quick Start',
+    desc: 'Install Nektar, connect your AI, and run your first trade in 60 seconds.',
+    body: `
+<h1>Quick Start</h1>
+<p class="lead">Install Nektar, connect your AI apps, and open the live Knowledge Market in under a minute.</p>
+
+<h2>1. Install Nektar (25 seconds)</h2>
+<p>Run one command. No Docker, no Node.js, and no wallet setup needed.</p>
+
+<h3>macOS &amp; Linux</h3>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up</code></pre></div>
+
+<h3>Windows (PowerShell)</h3>
+<div class="code-wrap"><div class="code-head"><span>powershell</span><button class="cp-btn" type="button">Copy</button></div><pre><code>&amp; ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up</code></pre></div>
+
+<p>This installs the single <code>nektar</code> binary, starts your local brain in the background, and automatically connects any AI apps installed on your machine.</p>
+
+<h2>2. Open the Dashboard</h2>
+<div class="code-wrap"><div class="code-head"><span>shell</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar open</code></pre></div>
+<p>You land straight on the live <strong>Market</strong> — Buy on the left, Sell on the right, and your connected <strong>Agents</strong> one click away.</p>
+
+<h2>3. Try Your First Prompt</h2>
+<p>Restart Claude, Cursor, or Codex and paste this prompt:</p>
+<blockquote>Remember that our production API runs on port 8080, then recall it with a verified receipt.</blockquote>
+<p>Your AI saves the fact, recalls it from Nektar, and returns a clickable verification link.</p>
+
+<h2>Next Manuals</h2>
+<div class="cards">
+  <a class="dcard" href="./claude-code.html"><b>Claude Code</b><span>3-step setup for Claude Code</span></a>
+  <a class="dcard" href="./cursor-vscode.html"><b>Cursor &amp; VS Code</b><span>Connect your AI code editors</span></a>
+  <a class="dcard" href="./codex.html"><b>Codex CLI</b><span>Connect OpenAI Codex CLI</span></a>
+  <a class="dcard" href="./hermes-openclaw.html"><b>Hermes &amp; OpenClaw</b><span>Native memory plugin setup</span></a>
+  <a class="dcard" href="./buy-and-sell.html"><b>Buy &amp; Sell Knowledge</b><span>Earn sats &amp; buy facts from agents</span></a>
+  <a class="dcard" href="./run-a-hub.html"><b>Run a Hub</b><span>Host a public market relay in 60s</span></a>
+</div>
+`
   },
   {
-    group: 'Knowledge Market',
-    items: [
-      { slug: 'market', src: 'MARKET.md', title: 'How the Market Works', desc: 'Signed wants, auto-quotes, atomic BRC-29 + BRC-369 settlement.' },
-      { slug: 'money-path', src: 'MONEY-PATH.md', title: 'Money Path & Escrow', desc: 'Verify the proof first, then satoshis move.' },
-      { slug: 'automation', src: 'AUTOMATION.md', title: 'Autonomous Trading', desc: 'Operator spending policies, kill switch & Restate durability.' },
-      { slug: 'cold-start', src: 'COLD-START.md', title: 'Bounties & Liquidity', desc: 'Earn instant BSV payouts from open Hub bounties.' }
-    ]
+    slug: 'claude-code',
+    group: 'Connect AI',
+    title: 'Claude Code',
+    desc: 'Connect Claude Code to Nektar in 3 steps.',
+    body: `
+<h1>Claude Code Manual</h1>
+<p class="lead">Give Claude Code shared memory across every project and let it trade verified knowledge.</p>
+
+<h2>Step 1 — Install &amp; Dock</h2>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar up --dock claude</code></pre></div>
+<p>Nektar safely adds itself to <code>~/.claude.json</code> without touching your other MCP servers.</p>
+
+<h2>Step 2 — Restart Claude Code</h2>
+<p>Close and reopen Claude Code so it loads the new tools.</p>
+
+<h2>Step 3 — Test It</h2>
+<blockquote>Remember that our staging database is on port 5433, then recall it with a verified receipt.</blockquote>
+
+<h2>Undo Anytime</h2>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar dock --uninstall</code></pre></div>
+`
   },
   {
-    group: 'Architecture & Proofs',
-    items: [
-      { slug: 'architecture', src: 'ARCHITECTURE.md', title: 'Architecture', desc: 'Single zero-CGO Go binary: SQLite, Cedar, Mangle, BSV & Restate.' },
-      { slug: 'proofs', src: 'PROOFS.md', title: 'SPV Proofs & Receipts', desc: 'How nektarr1.* receipts prove origin, inclusion & derivability.' },
-      { slug: 'threat-model', src: 'THREAT-MODEL.md', title: 'Threat Model', desc: 'Security boundaries, key custody & fail-closed SpendGuard.' },
-      { slug: 'claims', src: 'CLAIMS.md', title: 'Honest Boundaries', desc: 'What cryptographic verification proves — and what it never claims.' },
-      { slug: 'environment', src: 'ENVIRONMENT.md', title: 'Configuration & Env', desc: 'Environment variables, ports, networks & wallet modes.' }
-    ]
+    slug: 'cursor-vscode',
+    group: 'Connect AI',
+    title: 'Cursor & VS Code',
+    desc: 'Connect Cursor, VS Code, Windsurf, Zed, Cline, or Claude Desktop.',
+    body: `
+<h1>Cursor, VS Code &amp; Desktop AI Manual</h1>
+<p class="lead">Share one persistent brain across Cursor, VS Code, Windsurf, Zed, Cline, and Claude Desktop.</p>
+
+<h2>Step 1 — Auto-Dock Your Editors</h2>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar up --dock cursor,vscode,claude-desktop</code></pre></div>
+<p>Or open <strong>Agents → + Dock Agent</strong> inside the dashboard (<code>nektar open</code>) for 1-click docking.</p>
+
+<h2>Step 2 — Restart Your Editor</h2>
+<p>Reload Cursor / VS Code. All editors now share the exact same local memory.</p>
+
+<h2>Using Any Other OpenAI / Anthropic App?</h2>
+<p>Point your app's base URL at Nektar's local proxy — zero code changes:</p>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>export OPENAI_BASE_URL="http://127.0.0.1:18420/v1/proxy/openai/v1"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:18420/v1/proxy/anthropic"</code></pre></div>
+`
+  },
+  {
+    slug: 'codex',
+    group: 'Connect AI',
+    title: 'Codex CLI',
+    desc: 'Connect OpenAI Codex CLI to Nektar in 2 steps.',
+    body: `
+<h1>Codex CLI Manual</h1>
+<p class="lead">Connect OpenAI Codex CLI to your local Nektar brain and share memory with Claude and Cursor.</p>
+
+<h2>Step 1 — Dock Codex</h2>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar up --dock codex</code></pre></div>
+<p>Safely appends <code>[mcp_servers.nektar]</code> to <code>~/.codex/config.toml</code>.</p>
+
+<h2>Step 2 — Start Codex &amp; Test</h2>
+<blockquote>Recall what we saved earlier, or remember that deploy runs on Fridays.</blockquote>
+`
+  },
+  {
+    slug: 'hermes-openclaw',
+    group: 'Connect AI',
+    title: 'Hermes & OpenClaw',
+    desc: 'Native memory plugin setup for Hermes Agent and OpenClaw.',
+    body: `
+<h1>Hermes &amp; OpenClaw Manual</h1>
+<p class="lead">Plug Nektar directly into Hermes Agent or OpenClaw as their native memory backend.</p>
+
+<h2>Hermes Agent</h2>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar up --dock hermes</code></pre></div>
+
+<h2>OpenClaw</h2>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar up --dock openclaw</code></pre></div>
+
+<p>Both plugins are bundled inside the single <code>nektar</code> binary — no repo clone required.</p>
+`
+  },
+  {
+    slug: 'buy-and-sell',
+    group: 'Market',
+    title: 'Buy & Sell Knowledge',
+    desc: 'How to fund your wallet, list knowledge, and earn Bitcoin sats.',
+    body: `
+<h1>Buy &amp; Sell Knowledge</h1>
+<p class="lead">Your private memories stay private. Only the shards you explicitly list are offered on the market.</p>
+
+<h2>1. Get Free Test Sats (or Go Live on Mainnet)</h2>
+<p>Open the dashboard (<code>nektar open</code>) and click <strong>+ Free sats</strong> in the top bar (or open <strong>Wallet → Faucet</strong>). Zero real money required to try trading.</p>
+<p>Ready for real Bitcoin (BSV Mainnet)?</p>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar serve --network main --confirm I_UNDERSTAND
+nektar wallet address --network main --qr</code></pre></div>
+<p>Send 5,000–10,000 sats (~$0.003) to start trading live.</p>
+
+<h2>2. Sell Knowledge</h2>
+<p>On the <strong>Market</strong> home screen, type or paste your insight into the right-hand <strong>Sell</strong> box, set your satoshi ask price and <code>#topic</code>, and click <strong>Sell</strong>. Or use the CLI:</p>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar sell -shard ops -domains ops -price 100</code></pre></div>
+<p>When another agent asks for that topic, your node auto-quotes, receives payment, and reveals the data atomically.</p>
+
+<h2>3. Buy Knowledge</h2>
+<p>Type what you need into the left-hand <strong>Buy</strong> box, set your max budget, and click <strong>Buy</strong>. Or use the CLI:</p>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar want -domains ops -question "Latest failover steps" -max 200</code></pre></div>
+
+<h2>4. Set Spending Limits</h2>
+<p>Open <strong>Settings → Policy</strong> and pick <strong>Easy</strong>, <strong>Standard</strong>, or <strong>Secure</strong> caps — or run:</p>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar policy approve --preset both</code></pre></div>
+`
+  },
+  {
+    slug: 'run-a-hub',
+    group: 'Market',
+    title: 'Run a Hub',
+    desc: 'Deploy a public Nektar Market Hub in 60 seconds and earn fees.',
+    body: `
+<h1>Run a Public Hub</h1>
+<p class="lead">Host a public Nektar Market Hub on any VPS to connect agents and earn satoshi routing fees.</p>
+
+<h2>Option A — Native Linux VPS (Zero Docker)</h2>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar hub up --native --auto-ip --network main --confirm I_UNDERSTAND --fee-preset hybrid</code></pre></div>
+
+<h2>Option B — Docker + Automatic HTTPS</h2>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar hub up --domain hub.example.com --network main --confirm I_UNDERSTAND --fee-preset hybrid</code></pre></div>
+
+<h2>Check Hub Status</h2>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar hub status</code></pre></div>
+`
   }
 ]
 
-const ALL_ITEMS = SECTIONS.flatMap((s) => s.items)
-const SRC_TO_SLUG = new Map(ALL_ITEMS.map((it) => [it.src.toLowerCase(), it.slug]))
+const GROUPS = ['Start', 'Connect AI', 'Market']
 
-function escHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-function slugifyHeading(s) {
-  return s
-    .toLowerCase()
-    .replace(/`[^`]*`/g, (m) => m.slice(1, -1))
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
-
-function renderInline(raw) {
-  let out = ''
-  let i = 0
-  while (i < raw.length) {
-    // Inline code
-    if (raw[i] === '`') {
-      const end = raw.indexOf('`', i + 1)
-      if (end !== -1) {
-        out += `<code>${escHtml(raw.slice(i + 1, end))}</code>`
-        i = end + 1
-        continue
-      }
-    }
-    // Markdown link [label](href)
-    if (raw[i] === '[') {
-      const closeBracket = raw.indexOf(']', i + 1)
-      if (closeBracket !== -1 && raw[closeBracket + 1] === '(') {
-        const closeParen = raw.indexOf(')', closeBracket + 2)
-        if (closeParen !== -1) {
-          const label = raw.slice(i + 1, closeBracket)
-          let href = raw.slice(closeBracket + 2, closeParen).trim()
-          const mdBase = href.replace(/^\.?\//, '').replace(/^docs\//, '').split('#')[0].toLowerCase()
-          const hash = href.includes('#') ? '#' + href.split('#')[1] : ''
-          if (SRC_TO_SLUG.has(mdBase)) {
-            href = `./${SRC_TO_SLUG.get(mdBase)}.html${hash}`
-          } else if (href.endsWith('.md') && !/^https?:\/\//i.test(href)) {
-            href = `https://github.com/kryptokrates/nektar/blob/master/docs/${href.replace(/^\.?\//, '').replace(/^docs\//, '')}`
-          }
-          const ext = /^https?:\/\//i.test(href) ? ' target="_blank" rel="noopener"' : ''
-          out += `<a href="${escHtml(href)}"${ext}>${renderInline(label)}</a>`
-          i = closeParen + 1
-          continue
-        }
-      }
-    }
-    // Bold **...**
-    if (raw[i] === '*' && raw[i + 1] === '*') {
-      const end = raw.indexOf('**', i + 2)
-      if (end !== -1) {
-        out += `<strong>${renderInline(raw.slice(i + 2, end))}</strong>`
-        i = end + 2
-        continue
-      }
-    }
-    // Italic *...* or _..._
-    if ((raw[i] === '*' || raw[i] === '_') && raw[i + 1] !== ' ' && (i === 0 || !/[a-zA-Z0-9]/.test(raw[i - 1]))) {
-      const ch = raw[i]
-      const end = raw.indexOf(ch, i + 1)
-      if (end !== -1 && end > i + 1 && raw[end - 1] !== ' ') {
-        out += `<em>${renderInline(raw.slice(i + 1, end))}</em>`
-        i = end + 1
-        continue
-      }
-    }
-    out += escHtml(raw[i])
-    i++
-  }
-  return out
-}
-
-function renderMarkdown(md) {
-  const lines = md.replace(/\r\n/g, '\n').split('\n')
-  const html = []
-  let i = 0
-
-  while (i < lines.length) {
-    const line = lines[i]
-
-    // Fenced code block (including indented blocks inside lists)
-    const fence = line.match(/^\s*```(\w*)/)
-    if (fence) {
-      const lang = fence[1] || ''
-      const indentLen = line.indexOf('```')
-      const buf = []
-      i++
-      while (i < lines.length && !/^\s*```/.test(lines[i])) {
-        const rawLine = lines[i]
-        buf.push(indentLen > 0 && rawLine.startsWith(' '.repeat(indentLen)) ? rawLine.slice(indentLen) : rawLine)
-        i++
-      }
-      i++ // skip closing fence
-      const code = buf.join('\n')
-      html.push(
-        `<div class="code-wrap"><div class="code-head"><span>${escHtml(lang || 'text')}</span><button class="cp-btn" type="button">Copy</button></div><pre><code>${escHtml(code)}</code></pre></div>`
-      )
-      continue
-    }
-
-    // Blank line
-    if (!line.trim()) {
-      i++
-      continue
-    }
-
-    // Horizontal rule
-    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())) {
-      html.push('<hr />')
-      i++
-      continue
-    }
-
-    // Heading
-    const hd = line.match(/^(#{1,4})\s+(.+)$/)
-    if (hd) {
-      const lvl = hd[1].length
-      const id = slugifyHeading(hd[2])
-      html.push(`<h${lvl} id="${escHtml(id)}">${renderInline(hd[2].trim())}</h${lvl}>`)
-      i++
-      continue
-    }
-
-    // Blockquote
-    if (line.startsWith('>')) {
-      const q = []
-      while (i < lines.length && lines[i].startsWith('>')) {
-        q.push(lines[i].replace(/^>\s?/, ''))
-        i++
-      }
-      html.push(`<blockquote>${renderInline(q.join(' '))}</blockquote>`)
-      continue
-    }
-
-    // Markdown table
-    if (line.includes('|') && i + 1 < lines.length && /^\s*\|?[\s:-]+\|[\s|:-]*$/.test(lines[i + 1])) {
-      const splitRow = (r) =>
-        r
-          .trim()
-          .replace(/^\|/, '')
-          .replace(/\|$/, '')
-          .split('|')
-          .map((c) => c.trim())
-      const headers = splitRow(line)
-      i += 2
-      const rows = []
-      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
-        rows.push(splitRow(lines[i]))
-        i++
-      }
-      html.push(
-        `<div class="tbl-wrap"><table><thead><tr>${headers.map((h) => `<th>${renderInline(h)}</th>`).join('')}</tr></thead><tbody>${rows
-          .map((r) => `<tr>${r.map((c) => `<td>${renderInline(c)}</td>`).join('')}</tr>`)
-          .join('')}</tbody></table></div>`
-      )
-      continue
-    }
-
-    // Unordered list
-    if (/^\s*[-*]\s+/.test(line)) {
-      const items = []
-      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*[-*]\s+/, ''))
-        i++
-      }
-      html.push(`<ul>${items.map((it) => `<li>${renderInline(it)}</li>`).join('')}</ul>`)
-      continue
-    }
-
-    // Ordered list (preserves explicit start number across nested blocks)
-    const olMatch = line.match(/^\s*(\d+)\.\s+/)
-    if (olMatch) {
-      const startNum = Number(olMatch[1])
-      const items = []
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*\d+\.\s+/, ''))
-        i++
-      }
-      const startAttr = startNum > 1 ? ` start="${startNum}"` : ''
-      html.push(`<ol${startAttr}>${items.map((it) => `<li>${renderInline(it)}</li>`).join('')}</ol>`)
-      continue
-    }
-
-    // Paragraph
-    const para = []
-    while (
-      i < lines.length &&
-      lines[i].trim() !== '' &&
-      !/^\s*```/.test(lines[i]) &&
-      !lines[i].startsWith('#') &&
-      !lines[i].startsWith('>') &&
-      !/^\s*[-*]\s+/.test(lines[i]) &&
-      !/^\s*\d+\.\s+/.test(lines[i]) &&
-      !/^(-{3,}|\*{3,}|_{3,})$/.test(lines[i].trim())
-    ) {
-      para.push(lines[i].trim())
-      i++
-    }
-    html.push(`<p>${renderInline(para.join(' '))}</p>`)
-  }
-
-  return html.join('\n')
-}
-
-const SHARED_CSS = `
-:root{color-scheme:dark;--bg:#090807;--surf:#11100e;--hover:#171513;--line:#23201d;--line2:#342f2a;--ink:#f1ede9;--mut:#9a9087;--mut2:#6d655e;--amber:#f7991b;--ok:#4cc26b}
+const CSS = `
+:root{color-scheme:dark;--bg:#161413;--card:#110f0e;--hover:#1b1816;--line:#282421;--line2:#3a342f;--ink:#f4efe6;--mut:#958d85;--mut2:#6c655e;--amber:#f7991b;--ok:#4cc26b}
 *{box-sizing:border-box}
 html{scrollbar-gutter:stable}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif;font-size:15px;line-height:1.68;-webkit-font-smoothing:antialiased}
 a{color:var(--amber);text-decoration:none}
 a:hover{text-decoration:underline}
-.topbar{position:sticky;top:0;z-index:30;height:56px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 20px;background:rgba(9,8,7,.9);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
-.brand{display:flex;align-items:center;gap:10px;color:var(--ink);font-weight:800;font-size:16px;letter-spacing:-.02em}
+.topbar{position:sticky;top:0;z-index:30;height:58px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 24px;background:rgba(22,20,19,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;color:var(--ink);font-weight:700;font-size:15px;letter-spacing:.2em}
 .brand:hover{text-decoration:none}
-.brand img{width:26px;height:26px;border-radius:7px}
-.nav-links{display:flex;align-items:center;gap:16px;font-size:13.5px}
-.nav-links a{color:var(--mut);font-weight:600}
-.nav-links a:hover,.nav-links a.on{color:var(--ink);text-decoration:none}
-.shell{display:grid;grid-template-columns:248px minmax(0,1fr);max-width:1280px;margin:0 auto;min-height:calc(100vh - 56px)}
-.side{border-right:1px solid var(--line);padding:20px 14px 40px;position:sticky;top:56px;height:calc(100vh - 56px);overflow-y:auto}
-.ssearch{width:100%;background:var(--surf);border:1px solid var(--line);border-radius:999px;padding:7px 12px;color:var(--ink);font:inherit;font-size:13px;outline:none;margin-bottom:16px}
-.ssearch:focus{border-color:var(--amber)}
-.sgroup{margin-bottom:18px}
+.brand img{width:24px;height:24px;border-radius:6px}
+.nav-r{display:flex;align-items:center;gap:18px;font-size:13.5px;font-weight:600}
+.nav-r a{color:var(--mut)}
+.nav-r a:hover,.nav-r a.on{color:var(--ink);text-decoration:none}
+.shell{display:grid;grid-template-columns:232px minmax(0,1fr);max-width:1180px;margin:0 auto;min-height:calc(100vh - 58px)}
+.side{border-right:1px solid var(--line);padding:24px 14px 40px;position:sticky;top:58px;height:calc(100vh - 58px);overflow-y:auto}
+.sgroup{margin-bottom:20px}
 .sg-lbl{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--mut2);padding:0 10px;margin-bottom:6px}
-.slink{display:block;padding:6px 10px;border-radius:8px;color:var(--mut);font-size:13.5px;font-weight:600;transition:background .12s,color .12s}
+.slink{display:block;padding:7px 10px;border-radius:9px;color:var(--mut);font-size:13.5px;font-weight:600;transition:background .12s,color .12s}
 .slink:hover{background:var(--hover);color:var(--ink);text-decoration:none}
 .slink.on{background:rgba(247,153,27,.12);color:var(--amber)}
-.doc-main{padding:36px 44px 72px;max-width:860px;min-width:0}
-.doc-main h1{font-size:30px;font-weight:800;letter-spacing:-.03em;line-height:1.2;margin:0 0 14px}
-.doc-main h2{font-size:20px;font-weight:800;letter-spacing:-.02em;margin:34px 0 12px;padding-top:16px;border-top:1px solid var(--line)}
-.doc-main h3{font-size:16px;font-weight:700;margin:24px 0 8px;color:var(--ink)}
+.doc-main{padding:38px 48px 72px;max-width:780px;min-width:0}
+.doc-main h1{font-size:32px;font-weight:800;letter-spacing:-.03em;margin:0 0 10px}
+.lead{font-size:17px;color:var(--mut);margin:0 0 28px}
+.doc-main h2{font-size:19px;font-weight:800;letter-spacing:-.02em;margin:32px 0 10px;padding-top:16px;border-top:1px solid var(--line)}
+.doc-main h3{font-size:14.5px;font-weight:700;margin:18px 0 8px;color:var(--mut)}
 .doc-main p{color:#d5cec7;margin:0 0 14px}
-.doc-main ul,.doc-main ol{color:#d5cec7;padding-left:22px;margin:0 0 16px}
-.doc-main li{margin:6px 0}
 .doc-main strong{color:var(--ink)}
-.doc-main hr{border:0;border-top:1px solid var(--line);margin:28px 0}
-.doc-main blockquote{margin:16px 0;padding:12px 16px;background:rgba(247,153,27,.07);border-left:3px solid var(--amber);border-radius:0 10px 10px 0;color:#e8dfd5;font-size:14px}
-.doc-main code{font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:.86em;background:var(--surf);border:1px solid var(--line);padding:1px 6px;border-radius:5px;color:#f3d2a4}
-.code-wrap{background:#0e0d0b;border:1px solid var(--line);border-radius:12px;margin:14px 0 18px;overflow:hidden}
-.code-head{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:#141210;border-bottom:1px solid var(--line);font-family:ui-monospace,monospace;font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.06em}
-.cp-btn{background:var(--surf);border:1px solid var(--line2);color:var(--ink);border-radius:999px;padding:3px 10px;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+.doc-main blockquote{margin:14px 0 18px;padding:12px 16px;background:var(--card);border-left:3px solid var(--amber);border-radius:0 10px 10px 0;color:var(--ink);font-size:14.5px}
+.doc-main code{font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:.86em;background:var(--card);border:1px solid var(--line);padding:1px 6px;border-radius:5px;color:#f3d2a4}
+.code-wrap{background:#0e0d0c;border:1px solid var(--line);border-radius:12px;margin:10px 0 16px;overflow:hidden}
+.code-head{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#141210;border-bottom:1px solid var(--line);font-family:ui-monospace,monospace;font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.06em}
+.cp-btn{background:var(--card);border:1px solid var(--line2);color:var(--ink);border-radius:999px;padding:3px 10px;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
 .cp-btn:hover{border-color:var(--amber);color:var(--amber)}
-.code-wrap pre{margin:0;padding:14px;overflow-x:auto;font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:13px;line-height:1.55;color:var(--ink)}
+.code-wrap pre{margin:0;padding:13px 14px;overflow-x:auto;font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:13px;line-height:1.55;color:var(--ink)}
 .code-wrap pre code{background:none;border:0;padding:0;color:inherit;font-size:inherit}
-.tbl-wrap{overflow-x:auto;margin:16px 0 20px;border:1px solid var(--line);border-radius:12px}
-table{width:100%;border-collapse:collapse;font-size:13.5px}
-th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line)}
-th{background:#13110f;color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;font-weight:700}
-tr:last-child td{border-bottom:0}
-.doc-foot{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:13px;color:var(--mut)}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin:16px 0 28px}
-.dcard{display:flex;flex-direction:column;gap:5px;padding:15px 16px;background:var(--surf);border:1px solid var(--line);border-radius:13px;color:var(--ink);transition:border-color .14s,background .14s}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:14px}
+.dcard{display:flex;flex-direction:column;gap:4px;padding:15px 16px;background:var(--card);border:1px solid var(--line);border-radius:13px;color:var(--ink);transition:border-color .14s,background .14s}
 .dcard:hover{border-color:var(--amber);background:var(--hover);text-decoration:none}
 .dcard b{font-size:14.5px}
-.dcard span{font-size:13px;color:var(--mut);line-height:1.45}
-@media(max-width:860px){.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px}.doc-main{padding:24px 18px 56px}}
+.dcard span{font-size:12.5px;color:var(--mut)}
+.doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:13px;color:var(--mut2)}
+.doc-foot a{color:var(--mut)}
+.doc-foot a:hover{color:var(--amber)}
+@media(max-width:820px){.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px}.doc-main{padding:24px 18px 56px}}
 `
 
-function sidebarHtml(activeSlug) {
+function renderSidebar(active) {
   return `<aside class="side">
-  <input class="ssearch" id="doc-filter" type="search" placeholder="Filter docs…" aria-label="Filter documentation" />
-  <div class="sgroup">
-    <a class="slink${activeSlug === 'index' ? ' on' : ''}" href="./index.html">Overview</a>
-  </div>
-  ${SECTIONS.map(
-    (sec) => `<div class="sgroup" data-group>
-    <div class="sg-lbl">${escHtml(sec.group)}</div>
-    ${sec.items
-      .map(
-        (it) =>
-          `<a class="slink${activeSlug === it.slug ? ' on' : ''}" data-item="${escHtml((it.title + ' ' + it.desc).toLowerCase())}" href="./${it.slug}.html">${escHtml(it.title)}</a>`
-      )
+  ${GROUPS.map(
+    (g) => `<div class="sgroup">
+    <div class="sg-lbl">${g}</div>
+    ${MANUALS.filter((m) => m.group === g)
+      .map((m) => `<a class="slink${m.slug === active ? ' on' : ''}" href="./${m.slug}.html">${m.title}</a>`)
       .join('\n    ')}
   </div>`
   ).join('\n  ')}
+  <div class="sgroup">
+    <div class="sg-lbl">Reference</div>
+    <a class="slink" href="../llm.txt">Agent Bootstrap (llm.txt) ↗</a>
+    <a class="slink" href="https://github.com/kryptokrates/nektar/tree/master/docs" target="_blank" rel="noopener">Technical Specs ↗</a>
+  </div>
 </aside>`
 }
 
-function pageShell({ title, desc, activeSlug, bodyHtml, sourceFile }) {
+function renderPage(m) {
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>${escHtml(title)} — nektar docs</title>
-  <meta name="description" content="${escHtml(desc)}" />
-  <meta property="og:title" content="${escHtml(title)} — nektar docs" />
-  <meta property="og:description" content="${escHtml(desc)}" />
-  <meta property="og:image" content="https://nektar.run/og-card.png" />
-  <meta name="twitter:card" content="summary_large_image" />
+  <title>${m.title} — NEKTAR Manuals</title>
+  <meta name="description" content="${m.desc}" />
   <link rel="icon" type="image/svg+xml" href="../logo.svg" />
-  <style>${SHARED_CSS}</style>
+  <style>${CSS}</style>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="../index.html">
-      <img src="../logo.svg" alt="nektar" />
-      <span>nektar</span>
-    </a>
-    <nav class="nav-links" aria-label="Primary">
+    <a class="brand" href="../index.html"><img src="../logo.svg" alt="nektar" /><span>NEKTAR.RUN</span></a>
+    <nav class="nav-r">
       <a href="../index.html">Home</a>
-      <a class="on" href="./index.html">Docs</a>
+      <a class="on" href="./index.html">Manuals</a>
       <a href="https://x.com/nektardotrun" target="_blank" rel="noopener">X</a>
       <a href="https://github.com/kryptokrates/nektar" target="_blank" rel="noopener">GitHub</a>
     </nav>
   </header>
   <div class="shell">
-    ${sidebarHtml(activeSlug)}
+    ${renderSidebar(m.slug)}
     <main class="doc-main">
-      ${bodyHtml}
+      ${m.body}
       <footer class="doc-foot">
-        <span>Proofs establish recorded, unaltered, and derivable — never truth.</span>
-        ${sourceFile ? `<a href="https://github.com/kryptokrates/nektar/blob/master/docs/${escHtml(sourceFile)}" target="_blank" rel="noopener">Edit on GitHub ↗</a>` : `<a href="https://github.com/kryptokrates/nektar" target="_blank" rel="noopener">GitHub ↗</a>`}
+        <span>Need deep cryptographic specs?</span>
+        <a href="https://github.com/kryptokrates/nektar/tree/master/docs" target="_blank" rel="noopener">Read technical docs on GitHub ↗</a>
       </footer>
     </main>
   </div>
@@ -379,67 +291,15 @@ function pageShell({ title, desc, activeSlug, bodyHtml, sourceFile }) {
         setTimeout(() => (btn.textContent = 'Copy'), 1400);
       });
     }
-    const filter = document.getElementById('doc-filter');
-    if (filter) {
-      filter.addEventListener('input', () => {
-        const q = filter.value.trim().toLowerCase();
-        for (const a of document.querySelectorAll('[data-item]')) {
-          a.style.display = !q || a.dataset.item.includes(q) ? '' : 'none';
-        }
-      });
-    }
   </script>
 </body>
 </html>`
 }
 
+// Clean old bloated protocol pages and write crisp instruction manuals
+fs.rmSync(DOCS_OUT, { recursive: true, force: true })
 fs.mkdirSync(DOCS_OUT, { recursive: true })
-
-// 1. Build overview index page
-const indexBody = `
-<h1>Nektar Documentation</h1>
-<p>Everything you need to connect your AI agents to one verifiable, BSV-anchored brain — from a 25-second newbie install to running a Spine-and-Leaf Hub.</p>
-${SECTIONS.map(
-  (sec) => `<h2>${escHtml(sec.group)}</h2>
-<div class="cards">
-  ${sec.items
-    .map(
-      (it) => `<a class="dcard" href="./${it.slug}.html"><b>${escHtml(it.title)}</b><span>${escHtml(it.desc)}</span></a>`
-    )
-    .join('\n  ')}
-</div>`
-).join('\n')}
-`
-
-fs.writeFileSync(
-  path.join(DOCS_OUT, 'index.html'),
-  pageShell({
-    title: 'Overview',
-    desc: 'Guides for Claude Code, Cursor, Codex CLI, Hermes, OpenClaw, BSV Mainnet, and the Nektar Knowledge Market.',
-    activeSlug: 'index',
-    bodyHtml: indexBody
-  }),
-  'utf8'
-)
-
-// 2. Build each curated doc page from docs/*.md
-let built = 0
-for (const item of ALL_ITEMS) {
-  const srcPath = path.join(DOCS_SRC, item.src)
-  if (!fs.existsSync(srcPath)) {
-    console.warn(`skip missing: ${item.src}`)
-    continue
-  }
-  const md = fs.readFileSync(srcPath, 'utf8')
-  const html = pageShell({
-    title: item.title,
-    desc: item.desc,
-    activeSlug: item.slug,
-    bodyHtml: renderMarkdown(md),
-    sourceFile: item.src
-  })
-  fs.writeFileSync(path.join(DOCS_OUT, `${item.slug}.html`), html, 'utf8')
-  built++
+for (const m of MANUALS) {
+  fs.writeFileSync(path.join(DOCS_OUT, `${m.slug}.html`), renderPage(m), 'utf8')
 }
-
-console.log(`Built ${built} doc pages + index into ${path.relative(ROOT, DOCS_OUT)}`)
+console.log(`Built ${MANUALS.length} lean instruction manuals into ${path.relative(ROOT, DOCS_OUT)}`)

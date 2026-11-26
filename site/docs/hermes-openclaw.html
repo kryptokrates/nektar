@@ -3,155 +3,106 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Hermes &amp; OpenClaw — nektar docs</title>
-  <meta name="description" content="Native L3 memory provider plugin &amp; memory slot." />
-  <meta property="og:title" content="Hermes &amp; OpenClaw — nektar docs" />
-  <meta property="og:description" content="Native L3 memory provider plugin &amp; memory slot." />
-  <meta property="og:image" content="https://nektar.run/og-card.png" />
-  <meta name="twitter:card" content="summary_large_image" />
+  <title>Hermes & OpenClaw — NEKTAR Manuals</title>
+  <meta name="description" content="Native memory plugin setup for Hermes Agent and OpenClaw." />
   <link rel="icon" type="image/svg+xml" href="../logo.svg" />
   <style>
-:root{color-scheme:dark;--bg:#090807;--surf:#11100e;--hover:#171513;--line:#23201d;--line2:#342f2a;--ink:#f1ede9;--mut:#9a9087;--mut2:#6d655e;--amber:#f7991b;--ok:#4cc26b}
+:root{color-scheme:dark;--bg:#161413;--card:#110f0e;--hover:#1b1816;--line:#282421;--line2:#3a342f;--ink:#f4efe6;--mut:#958d85;--mut2:#6c655e;--amber:#f7991b;--ok:#4cc26b}
 *{box-sizing:border-box}
 html{scrollbar-gutter:stable}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif;font-size:15px;line-height:1.68;-webkit-font-smoothing:antialiased}
 a{color:var(--amber);text-decoration:none}
 a:hover{text-decoration:underline}
-.topbar{position:sticky;top:0;z-index:30;height:56px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 20px;background:rgba(9,8,7,.9);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
-.brand{display:flex;align-items:center;gap:10px;color:var(--ink);font-weight:800;font-size:16px;letter-spacing:-.02em}
+.topbar{position:sticky;top:0;z-index:30;height:58px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 24px;background:rgba(22,20,19,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;color:var(--ink);font-weight:700;font-size:15px;letter-spacing:.2em}
 .brand:hover{text-decoration:none}
-.brand img{width:26px;height:26px;border-radius:7px}
-.nav-links{display:flex;align-items:center;gap:16px;font-size:13.5px}
-.nav-links a{color:var(--mut);font-weight:600}
-.nav-links a:hover,.nav-links a.on{color:var(--ink);text-decoration:none}
-.shell{display:grid;grid-template-columns:248px minmax(0,1fr);max-width:1280px;margin:0 auto;min-height:calc(100vh - 56px)}
-.side{border-right:1px solid var(--line);padding:20px 14px 40px;position:sticky;top:56px;height:calc(100vh - 56px);overflow-y:auto}
-.ssearch{width:100%;background:var(--surf);border:1px solid var(--line);border-radius:999px;padding:7px 12px;color:var(--ink);font:inherit;font-size:13px;outline:none;margin-bottom:16px}
-.ssearch:focus{border-color:var(--amber)}
-.sgroup{margin-bottom:18px}
+.brand img{width:24px;height:24px;border-radius:6px}
+.nav-r{display:flex;align-items:center;gap:18px;font-size:13.5px;font-weight:600}
+.nav-r a{color:var(--mut)}
+.nav-r a:hover,.nav-r a.on{color:var(--ink);text-decoration:none}
+.shell{display:grid;grid-template-columns:232px minmax(0,1fr);max-width:1180px;margin:0 auto;min-height:calc(100vh - 58px)}
+.side{border-right:1px solid var(--line);padding:24px 14px 40px;position:sticky;top:58px;height:calc(100vh - 58px);overflow-y:auto}
+.sgroup{margin-bottom:20px}
 .sg-lbl{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--mut2);padding:0 10px;margin-bottom:6px}
-.slink{display:block;padding:6px 10px;border-radius:8px;color:var(--mut);font-size:13.5px;font-weight:600;transition:background .12s,color .12s}
+.slink{display:block;padding:7px 10px;border-radius:9px;color:var(--mut);font-size:13.5px;font-weight:600;transition:background .12s,color .12s}
 .slink:hover{background:var(--hover);color:var(--ink);text-decoration:none}
 .slink.on{background:rgba(247,153,27,.12);color:var(--amber)}
-.doc-main{padding:36px 44px 72px;max-width:860px;min-width:0}
-.doc-main h1{font-size:30px;font-weight:800;letter-spacing:-.03em;line-height:1.2;margin:0 0 14px}
-.doc-main h2{font-size:20px;font-weight:800;letter-spacing:-.02em;margin:34px 0 12px;padding-top:16px;border-top:1px solid var(--line)}
-.doc-main h3{font-size:16px;font-weight:700;margin:24px 0 8px;color:var(--ink)}
+.doc-main{padding:38px 48px 72px;max-width:780px;min-width:0}
+.doc-main h1{font-size:32px;font-weight:800;letter-spacing:-.03em;margin:0 0 10px}
+.lead{font-size:17px;color:var(--mut);margin:0 0 28px}
+.doc-main h2{font-size:19px;font-weight:800;letter-spacing:-.02em;margin:32px 0 10px;padding-top:16px;border-top:1px solid var(--line)}
+.doc-main h3{font-size:14.5px;font-weight:700;margin:18px 0 8px;color:var(--mut)}
 .doc-main p{color:#d5cec7;margin:0 0 14px}
-.doc-main ul,.doc-main ol{color:#d5cec7;padding-left:22px;margin:0 0 16px}
-.doc-main li{margin:6px 0}
 .doc-main strong{color:var(--ink)}
-.doc-main hr{border:0;border-top:1px solid var(--line);margin:28px 0}
-.doc-main blockquote{margin:16px 0;padding:12px 16px;background:rgba(247,153,27,.07);border-left:3px solid var(--amber);border-radius:0 10px 10px 0;color:#e8dfd5;font-size:14px}
-.doc-main code{font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:.86em;background:var(--surf);border:1px solid var(--line);padding:1px 6px;border-radius:5px;color:#f3d2a4}
-.code-wrap{background:#0e0d0b;border:1px solid var(--line);border-radius:12px;margin:14px 0 18px;overflow:hidden}
-.code-head{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:#141210;border-bottom:1px solid var(--line);font-family:ui-monospace,monospace;font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.06em}
-.cp-btn{background:var(--surf);border:1px solid var(--line2);color:var(--ink);border-radius:999px;padding:3px 10px;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+.doc-main blockquote{margin:14px 0 18px;padding:12px 16px;background:var(--card);border-left:3px solid var(--amber);border-radius:0 10px 10px 0;color:var(--ink);font-size:14.5px}
+.doc-main code{font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:.86em;background:var(--card);border:1px solid var(--line);padding:1px 6px;border-radius:5px;color:#f3d2a4}
+.code-wrap{background:#0e0d0c;border:1px solid var(--line);border-radius:12px;margin:10px 0 16px;overflow:hidden}
+.code-head{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#141210;border-bottom:1px solid var(--line);font-family:ui-monospace,monospace;font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.06em}
+.cp-btn{background:var(--card);border:1px solid var(--line2);color:var(--ink);border-radius:999px;padding:3px 10px;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
 .cp-btn:hover{border-color:var(--amber);color:var(--amber)}
-.code-wrap pre{margin:0;padding:14px;overflow-x:auto;font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:13px;line-height:1.55;color:var(--ink)}
+.code-wrap pre{margin:0;padding:13px 14px;overflow-x:auto;font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:13px;line-height:1.55;color:var(--ink)}
 .code-wrap pre code{background:none;border:0;padding:0;color:inherit;font-size:inherit}
-.tbl-wrap{overflow-x:auto;margin:16px 0 20px;border:1px solid var(--line);border-radius:12px}
-table{width:100%;border-collapse:collapse;font-size:13.5px}
-th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line)}
-th{background:#13110f;color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;font-weight:700}
-tr:last-child td{border-bottom:0}
-.doc-foot{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:13px;color:var(--mut)}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin:16px 0 28px}
-.dcard{display:flex;flex-direction:column;gap:5px;padding:15px 16px;background:var(--surf);border:1px solid var(--line);border-radius:13px;color:var(--ink);transition:border-color .14s,background .14s}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:14px}
+.dcard{display:flex;flex-direction:column;gap:4px;padding:15px 16px;background:var(--card);border:1px solid var(--line);border-radius:13px;color:var(--ink);transition:border-color .14s,background .14s}
 .dcard:hover{border-color:var(--amber);background:var(--hover);text-decoration:none}
 .dcard b{font-size:14.5px}
-.dcard span{font-size:13px;color:var(--mut);line-height:1.45}
-@media(max-width:860px){.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px}.doc-main{padding:24px 18px 56px}}
+.dcard span{font-size:12.5px;color:var(--mut)}
+.doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:13px;color:var(--mut2)}
+.doc-foot a{color:var(--mut)}
+.doc-foot a:hover{color:var(--amber)}
+@media(max-width:820px){.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px}.doc-main{padding:24px 18px 56px}}
 </style>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="../index.html">
-      <img src="../logo.svg" alt="nektar" />
-      <span>nektar</span>
-    </a>
-    <nav class="nav-links" aria-label="Primary">
+    <a class="brand" href="../index.html"><img src="../logo.svg" alt="nektar" /><span>NEKTAR.RUN</span></a>
+    <nav class="nav-r">
       <a href="../index.html">Home</a>
-      <a class="on" href="./index.html">Docs</a>
+      <a class="on" href="./index.html">Manuals</a>
       <a href="https://x.com/nektardotrun" target="_blank" rel="noopener">X</a>
       <a href="https://github.com/kryptokrates/nektar" target="_blank" rel="noopener">GitHub</a>
     </nav>
   </header>
   <div class="shell">
     <aside class="side">
-  <input class="ssearch" id="doc-filter" type="search" placeholder="Filter docs…" aria-label="Filter documentation" />
   <div class="sgroup">
-    <a class="slink" href="./index.html">Overview</a>
+    <div class="sg-lbl">Start</div>
+    <a class="slink" href="./index.html">Quick Start</a>
   </div>
-  <div class="sgroup" data-group>
-    <div class="sg-lbl">Start Here</div>
-    <a class="slink" data-item="claude code 25-second l3 setup with mcp, native hooks &amp; receipt verification." href="./claude-code.html">Claude Code</a>
-    <a class="slink" data-item="codex cli connect openai codex cli via mcp + notify hook." href="./codex.html">Codex CLI</a>
-    <a class="slink on" data-item="hermes &amp; openclaw native l3 memory provider plugin &amp; memory slot." href="./hermes-openclaw.html">Hermes &amp; OpenClaw</a>
-    <a class="slink" data-item="docking &amp; hubs plain-english guide to docking ai apps and running a hub." href="./docking-and-hubs.html">Docking &amp; Hubs</a>
-    <a class="slink" data-item="join testnet try autonomous buying &amp; selling with free built-in test sats." href="./testnet.html">Join Testnet</a>
-    <a class="slink" data-item="go live on mainnet run on bsv mainnet with spendguard caps &amp; dual-witness pow." href="./mainnet.html">Go Live on Mainnet</a>
-    <a class="slink" data-item="60-second demo end-to-end walkthrough from first fact to verified receipt." href="./demo.html">60-Second Demo</a>
+  <div class="sgroup">
+    <div class="sg-lbl">Connect AI</div>
+    <a class="slink" href="./claude-code.html">Claude Code</a>
+    <a class="slink" href="./cursor-vscode.html">Cursor & VS Code</a>
+    <a class="slink" href="./codex.html">Codex CLI</a>
+    <a class="slink on" href="./hermes-openclaw.html">Hermes & OpenClaw</a>
   </div>
-  <div class="sgroup" data-group>
-    <div class="sg-lbl">Knowledge Market</div>
-    <a class="slink" data-item="how the market works signed wants, auto-quotes, atomic brc-29 + brc-369 settlement." href="./market.html">How the Market Works</a>
-    <a class="slink" data-item="money path &amp; escrow verify the proof first, then satoshis move." href="./money-path.html">Money Path &amp; Escrow</a>
-    <a class="slink" data-item="autonomous trading operator spending policies, kill switch &amp; restate durability." href="./automation.html">Autonomous Trading</a>
-    <a class="slink" data-item="bounties &amp; liquidity earn instant bsv payouts from open hub bounties." href="./cold-start.html">Bounties &amp; Liquidity</a>
+  <div class="sgroup">
+    <div class="sg-lbl">Market</div>
+    <a class="slink" href="./buy-and-sell.html">Buy & Sell Knowledge</a>
+    <a class="slink" href="./run-a-hub.html">Run a Hub</a>
   </div>
-  <div class="sgroup" data-group>
-    <div class="sg-lbl">Architecture &amp; Proofs</div>
-    <a class="slink" data-item="architecture single zero-cgo go binary: sqlite, cedar, mangle, bsv &amp; restate." href="./architecture.html">Architecture</a>
-    <a class="slink" data-item="spv proofs &amp; receipts how nektarr1.* receipts prove origin, inclusion &amp; derivability." href="./proofs.html">SPV Proofs &amp; Receipts</a>
-    <a class="slink" data-item="threat model security boundaries, key custody &amp; fail-closed spendguard." href="./threat-model.html">Threat Model</a>
-    <a class="slink" data-item="honest boundaries what cryptographic verification proves — and what it never claims." href="./claims.html">Honest Boundaries</a>
-    <a class="slink" data-item="configuration &amp; env environment variables, ports, networks &amp; wallet modes." href="./environment.html">Configuration &amp; Env</a>
+  <div class="sgroup">
+    <div class="sg-lbl">Reference</div>
+    <a class="slink" href="../llm.txt">Agent Bootstrap (llm.txt) ↗</a>
+    <a class="slink" href="https://github.com/kryptokrates/nektar/tree/master/docs" target="_blank" rel="noopener">Technical Specs ↗</a>
   </div>
 </aside>
     <main class="doc-main">
-      <h1 id="nektar-v0-4-for-hermes-agent-openclaw-30-second-native-l3-setup">Nektar v0.4 for Hermes Agent &amp; OpenClaw — 30-Second Native L3 Setup</h1>
-<p>Dock Nektar directly into <strong>Hermes Agent</strong>'s native <code>MemoryProvider</code> slot or <strong>OpenClaw</strong>'s native <code>plugins.slots.memory</code> slot — giving always-on autonomous agents pre-turn verified recall, mirrored memory anchoring, background receipt verification, and autonomous BSV knowledge trading.</p>
-<p><strong>Zero repo clone, zero <code>pip install</code>, zero Docker:</strong> the Hermes and OpenClaw plugins are <code>//go:embed</code>'d directly inside the static <code>nektar</code> Go binary.</p>
-<hr />
-<h2 id="1-fastest-start-30-seconds-1-command">1. Fastest Start (30 Seconds, 1 Command)</h2>
-<h3 id="macos-linux">macOS &amp; Linux</h3>
-<div class="code-wrap"><div class="code-head"><span>sh</span><button class="cp-btn" type="button">Copy</button></div><pre><code>curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up</code></pre></div>
-<h3 id="windows-powershell">Windows (PowerShell)</h3>
-<div class="code-wrap"><div class="code-head"><span>powershell</span><button class="cp-btn" type="button">Copy</button></div><pre><code>&amp; ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up</code></pre></div>
-<p>*(Already installed <code>nektar</code>? Run <code>nektar up --dock hermes</code> or <code>nektar up --dock openclaw</code>, or click <strong>Dock</strong> inside the Dashboard at <code>nektar open</code>.)*</p>
-<hr />
-<h2 id="2-what-gets-wired-automatically">2. What Gets Wired Automatically</h2>
-<h3 id="hermes-agent-hermes">Hermes Agent (<code>~/.hermes</code>)</h3>
-<ol><li>Extracts the embedded <code>hermes-memory-nektar</code> Python package into <code>~/.hermes/plugins/hermes-memory-nektar/</code> (stdlib-only HTTP client — zero external Python dependencies).</li><li>Installs <code>~/.hermes/skills/nektar-memory/SKILL.md</code>.</li><li>Safely enables <code>memory:\n  provider: nektar</code> in <code>~/.hermes/config.yaml</code> (preserving existing keys and saving a one-time backup at <code>config.yaml.nektar.bak</code>).</li><li>Auto-discovers your active Mainnet or Testnet daemon via <code>~/.nektar/active-daemon.json</code>, <code>~/.nektar/main/daemon.json</code>, and <code>~/.nektar/daemon.json</code>.</li></ol>
-<p>Verify inside Hermes:</p>
-<div class="code-wrap"><div class="code-head"><span>sh</span><button class="cp-btn" type="button">Copy</button></div><pre><code>hermes memory status</code></pre></div>
-<h3 id="openclaw-openclaw">OpenClaw (<code>~/.openclaw</code>)</h3>
-<ol><li>Extracts the embedded ESM memory plugin into <code>~/.openclaw/plugins/nektar/</code>.</li><li>Non-destructively merges <code>~/.openclaw/openclaw.json</code>:</li></ol>
-<ul><li><code>plugins.slots.memory = &quot;nektar-memory&quot;</code></li><li>Adds <code>&quot;nektar-memory&quot;</code> to <code>plugins.allow</code> and plugin path to <code>plugins.load.paths</code></li><li>Enables <code>autoRecall: true</code> and <code>verifyReceipts: true</code> under <code>plugins.entries.nektar-memory</code></li></ul>
-<ol start="3"><li>Auto-discovers your active Mainnet or Testnet daemon via <code>~/.nektar/active-daemon.json</code> and <code>main/daemon.json</code>.</li></ol>
-<p>Verify inside OpenClaw:</p>
-<div class="code-wrap"><div class="code-head"><span>sh</span><button class="cp-btn" type="button">Copy</button></div><pre><code>openclaw plugins list
-openclaw doctor</code></pre></div>
-<hr />
-<h2 id="3-deploy-to-autonomous-24-7-bsv-knowledge-trading">3. Deploy to Autonomous 24/7 BSV Knowledge Trading</h2>
-<p>Hermes and OpenClaw agents shine as continuous buyers and sellers:</p>
-<div class="code-wrap"><div class="code-head"><span>sh</span><button class="cp-btn" type="button">Copy</button></div><pre><code># 1. Keep Nektar running across reboots
-nektar up --install-service
+      
+<h1>Hermes &amp; OpenClaw Manual</h1>
+<p class="lead">Plug Nektar directly into Hermes Agent or OpenClaw as their native memory backend.</p>
 
-# 2. Fund wallet (Testnet 1-click faucet in `nektar open`, or Mainnet QR:)
-nektar wallet address --network main --qr
+<h2>Hermes Agent</h2>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar up --dock hermes</code></pre></div>
 
-# 3. Approve bounded SpendGuard trading policy
-nektar policy approve --preset both
+<h2>OpenClaw</h2>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar up --dock openclaw</code></pre></div>
 
-# 4. Arm local shards to earn BSV automatically or fulfill Hub bounties
-nektar earn
-nektar sell -shard hermes -domains ops,agents -price 100</code></pre></div>
-<p>Revert cleanly anytime with <code>nektar dock hermes --uninstall</code> or <code>nektar dock openclaw --uninstall</code>.</p>
+<p>Both plugins are bundled inside the single <code>nektar</code> binary — no repo clone required.</p>
+
       <footer class="doc-foot">
-        <span>Proofs establish recorded, unaltered, and derivable — never truth.</span>
-        <a href="https://github.com/kryptokrates/nektar/blob/master/docs/MANUAL-HERMES.md" target="_blank" rel="noopener">Edit on GitHub ↗</a>
+        <span>Need deep cryptographic specs?</span>
+        <a href="https://github.com/kryptokrates/nektar/tree/master/docs" target="_blank" rel="noopener">Read technical docs on GitHub ↗</a>
       </footer>
     </main>
   </div>
@@ -162,15 +113,6 @@ nektar sell -shard hermes -domains ops,agents -price 100</code></pre></div>
         await navigator.clipboard.writeText(code).catch(() => {});
         btn.textContent = 'Copied ✓';
         setTimeout(() => (btn.textContent = 'Copy'), 1400);
-      });
-    }
-    const filter = document.getElementById('doc-filter');
-    if (filter) {
-      filter.addEventListener('input', () => {
-        const q = filter.value.trim().toLowerCase();
-        for (const a of document.querySelectorAll('[data-item]')) {
-          a.style.display = !q || a.dataset.item.includes(q) ? '' : 'none';
-        }
       });
     }
   </script>

@@ -1,10 +1,13 @@
 package contracts
 
 import (
+	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/script"
@@ -330,4 +333,37 @@ func SignDigestLowS(priv *ec.PrivateKey, digest []byte, flag sighash.Flag) ([]by
 		return nil, err
 	}
 	return CanonicalizeLowSDERWithFlag(sig.Serialize(), flag)
+}
+
+// NewOperatorKeySigner constructs a CovenantSighashSigner from a cold operator WIF or 32-byte hex key
+// inside the allowed internal/contracts signing boundary so cmd/nektar never touches raw ec.PrivateKey.
+func NewOperatorKeySigner(wif, keyHex string) (CovenantSighashSigner, error) {
+	var priv *ec.PrivateKey
+	switch {
+	case strings.TrimSpace(wif) != "":
+		var err error
+		priv, err = ec.PrivateKeyFromWif(strings.TrimSpace(wif))
+		if err != nil {
+			return nil, fmt.Errorf("vault: invalid operator WIF: %w", err)
+		}
+	case strings.TrimSpace(keyHex) != "":
+		raw, err := hex.DecodeString(strings.TrimPrefix(strings.TrimSpace(keyHex), "0x"))
+		if err != nil || len(raw) != 32 {
+			return nil, errors.New("vault: operator-key-hex must be 32-byte hex")
+		}
+		priv, _ = ec.PrivateKeyFromBytes(raw)
+		clear(raw)
+		if priv == nil {
+			return nil, errors.New("vault: invalid operator private key")
+		}
+	default:
+		return nil, errors.New("vault: cold operator key required (-operator-wif / NEKTAR_OPERATOR_WIF or -operator-key-hex)")
+	}
+	return func(_ context.Context, _ []byte, sighash32 []byte) ([]byte, []byte, error) {
+		sig, err := SignDigestLowS(priv, sighash32, sighash.AllForkID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return sig, priv.PubKey().Compressed(), nil
+	}, nil
 }

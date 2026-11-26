@@ -69,7 +69,7 @@ jobs:
           CGO_ENABLED=0 go test -v ./...
           CGO_ENABLED=0 go run ./cmd/compile -prototypes
       - name: Verify compiled artifacts match committed copies
-        run: git diff --exit-code contracts/artifacts/ internal/contracts/artifacts/
+        run: git diff -I '"buildTimestamp":' --exit-code contracts/artifacts/ internal/contracts/artifacts/
       - name: Crypto hardening & ASM invariant tests
         run: |
           go test -v ./internal/core -run 'TestWycheproof|TestHDPV2|TestCanonicalJSON|TestMerkleHardening'
@@ -101,7 +101,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: gitleaks secret scan
-        uses: gitleaks/gitleaks-action@cb7149b3d815035a30417f6a773c2223821c074a # v2.3.9
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

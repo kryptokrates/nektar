@@ -163,7 +163,7 @@ func cmdUp(args []string) error {
 	fs := flag.NewFlagSet("up", flag.ExitOnError)
 	netName := fs.String("network", "", "Network: testnet (default) | main | memory")
 	confirmFlag := fs.String("confirm", os.Getenv("NEKTAR_MAINNET_CONFIRM"), "Required I_UNDERSTAND when using --network main")
-	walletMode := fs.String("wallet", os.Getenv("NEKTAR_WALLET"), "Wallet custody mode: embedded (default) | client (BSV Desktop BRC-100 on :3321)")
+	walletMode := fs.String("wallet", os.Getenv("NEKTAR_WALLET"), "Wallet custody mode: auto (default: BSV Desktop if running on :3321, else embedded) | client | embedded")
 	walletWireURL := fs.String("wallet-wire-url", os.Getenv("NEKTAR_WALLET_WIRE_URL"), "BSV Desktop / BRC-100 wire URL (default http://127.0.0.1:3321)")
 	listenAddr := fs.String("listen", "", "HTTP listen address override (default 127.0.0.1:18420)")
 	dataDir := fs.String("data-dir", "", "Data directory override")

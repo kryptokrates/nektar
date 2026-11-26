@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/
 # Go live on BSV Mainnet in 1 command (isolated ~/.nektar/main + terminal funding QR + dual-witness PoW)
 curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up --mainnet --confirm I_UNDERSTAND
 
-# Or hook directly into BSV Desktop / Metanet Desktop (100% BRC-100 custody, zero spending keys in Nektar)
+# Or enforce strict BSV Desktop / Metanet Desktop custody (auto-selected by default when BSV Desktop is open!)
 nektar up --wallet client
 ```
 
@@ -36,8 +36,9 @@ Add `--install-service` (`-InstallService` on Windows) to keep Nektar running au
 
 ### Recommended BRC-100 Custody Pattern (Clear Separation of Concerns)
 
-- **Personal attended machine (`--wallet client`):** Zero spending keys live in Nektar — **BSV Desktop / Metanet Desktop** (`http://127.0.0.1:3321`) holds 100% of custody and signs over standard BRC-100 binary wire (`nektar up --wallet client` or `--network main --confirm I_UNDERSTAND --wallet client`).
-- **24/7 autonomous trading or public Hub (Treasury / Hot-Float separation):** Keep your main treasury in BSV Desktop, top up Nektar's SpendGuard-capped operational float in 1 click via BRC-29 + AtomicBEEF (`nektar wallet fund --from-desktop --sats 25000`), and sweep earnings back into BSV Desktop anytime (`nektar wallet sweep --to-desktop`). Run `nektar doctor` to auto-detect BSV Desktop on `:3321`.
+- **Automatic desktop-first default (`--wallet auto`, default on `testnet`/`main`):** On a fresh data directory, Nektar checks `http://127.0.0.1:3321` (`<= 250ms` when offline). If **BSV Desktop / Metanet Desktop** is open and on the matching network, Nektar **automatically uses `client` mode** — zero local `wallet/` directory or spending keys are created, and the choice is persisted stickily in `wallet-mode.json` so restarts never silently flip identity keys. If BSV Desktop is absent (headless VPS, Docker, CI, or new users), it falls back cleanly to the SpendGuard-capped embedded hot wallet.
+- **Personal attended machine (`--wallet client`):** Strict fail-closed BSV Desktop custody — refuses to start if BSV Desktop isn't unlocked on `:3321`.
+- **24/7 autonomous trading or public Hub (`--wallet embedded`, Treasury / Hot-Float separation):** Keep your main treasury in BSV Desktop, top up Nektar's SpendGuard-capped operational float in 1 click via BRC-29 + AtomicBEEF (`nektar wallet fund --from-desktop --sats 25000`), and sweep earnings back into BSV Desktop anytime (`nektar wallet sweep --to-desktop`). Run `nektar doctor` to inspect live BSV Desktop connectivity.
 
 ---
 

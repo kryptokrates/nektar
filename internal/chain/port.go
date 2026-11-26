@@ -148,10 +148,6 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		return nil, errors.New("chain: mainnet requires NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND")
 	}
 	mainnet := netName == "main"
-	walletMode := strings.ToLower(strings.TrimSpace(cfg.WalletMode))
-	if walletMode == "" {
-		walletMode = "embedded"
-	}
 
 	dir := cfg.DataDir
 	if dir == "" {
@@ -160,6 +156,14 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	wireURL := strings.TrimSpace(cfg.WalletWireURL)
+	if wireURL == "" {
+		wireURL = nwallet.DefaultDesktopWireURL
+	}
+	walletMode, stickyMode, err := resolveWalletMode(ctx, dir, netName, cfg.WalletMode, wireURL)
+	if err != nil {
+		return nil, err
 	}
 	walletDir := filepath.Join(dir, "wallet")
 	if walletMode != "client" {
@@ -328,6 +332,9 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		}
 		netRes, err := w.GetNetwork(ctx, nil, Originator)
 		if err != nil {
+			if stickyMode {
+				return nil, fmt.Errorf("chain: this node is bound to BSV Desktop (client custody at %s), but BSV Desktop is not reachable — open & unlock BSV Desktop or use a fresh --data-dir with --wallet embedded (%w)", wireURL, err)
+			}
 			return nil, fmt.Errorf("chain: BRC-100 wallet network check failed: %w", err)
 		}
 		wantNet := sdkwallet.NetworkTestnet
@@ -353,6 +360,7 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 			Mainnet:    mainnet,
 			Profile:    NektarWalletProfile,
 		}
+		persistWalletModeMarker(dir, "client", wireURL, netName)
 	} else {
 		prof := nwallet.FuelProfileByName(cfg.WalletProfile)
 		wCfg := nwallet.Config{
@@ -411,6 +419,7 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		p.engine = eng
 		p.wallet = eng
 		p.signer = eng.Signer()
+		persistWalletModeMarker(dir, "embedded", "", netName)
 	}
 
 	// 3. Seed mature test coins when running in memory mode.

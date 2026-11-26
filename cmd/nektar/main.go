@@ -278,7 +278,7 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string, l
 	port, err := chain.Open(ctx, chain.Config{
 		Network:         net,
 		DataDir:         dir,
-		WalletMode:      envOr("NEKTAR_WALLET", "embedded"),
+		WalletMode:      envOr("NEKTAR_WALLET", "auto"),
 		WalletWireURL:   envOr("NEKTAR_WALLET_WIRE_URL", "http://127.0.0.1:3321"),
 		WalletProfile:   envOr("NEKTAR_WALLET_PROFILE", "standard"),
 		FeeRateSatPerKB: envUint64("NEKTAR_FEE_RATE_SAT_KB", 0),

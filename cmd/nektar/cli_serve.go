@@ -45,7 +45,7 @@ func cmdServe(args []string) error {
 	upstreamSpinesFlag := fs.String("upstream-spines", os.Getenv("NEKTAR_UPSTREAM_SPINES"), "Comma-separated Spine Hub URLs for Leaf upstream forwarding")
 	netName := fs.String("network", "", "Network override (memory|regtest|testnet|main)")
 	confirmFlag := fs.String("confirm", "", "Mainnet acknowledgement (pass I_UNDERSTAND with --network main)")
-	walletModeFlag := fs.String("wallet", os.Getenv("NEKTAR_WALLET"), "Wallet custody mode: embedded (default) | client (BSV Desktop BRC-100 on :3321)")
+	walletModeFlag := fs.String("wallet", os.Getenv("NEKTAR_WALLET"), "Wallet custody mode: auto (default: BSV Desktop if running on :3321, else embedded) | client | embedded")
 	walletWireFlag := fs.String("wallet-wire-url", os.Getenv("NEKTAR_WALLET_WIRE_URL"), "BSV Desktop / BRC-100 wire URL (default http://127.0.0.1:3321)")
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	ephemeral := fs.Bool("ephemeral", false, "Run with in-memory SQLite (data discarded on exit)")

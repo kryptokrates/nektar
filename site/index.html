@@ -116,14 +116,16 @@
       .emblem {
         width: 112px;
         height: 112px;
-        border-radius: 50%;
-        background: radial-gradient(circle at 32% 28%, #ffb23f, #f7991b 55%, #de6c0a 100%);
-        box-shadow: 0 0 0 9px rgba(247, 153, 27, 0.11), 0 18px 46px rgba(0, 0, 0, 0.45);
+        border-radius: 28px;
+        background: #221e1d;
+        border: 1px solid rgba(247, 153, 27, 0.28);
+        box-shadow: 0 0 0 8px rgba(247, 153, 27, 0.09), 0 18px 46px rgba(0, 0, 0, 0.45);
+        overflow: hidden;
         display: grid;
         place-items: center;
         flex-shrink: 0;
       }
-      .emblem svg { width: 64px; height: 64px; }
+      .emblem img { width: 100%; height: 100%; display: block; }
       h1 {
         margin: 0;
         font-size: clamp(58px, 8.5vw, 98px);
@@ -374,8 +376,7 @@
         header { padding: 14px 18px; }
         .mid-nav { display: none; }
         .lockup { gap: 16px; }
-        .emblem { width: 76px; height: 76px; }
-        .emblem svg { width: 44px; height: 44px; }
+        .emblem { width: 76px; height: 76px; border-radius: 20px; }
         .cards { grid-template-columns: 1fr; max-width: 380px; }
         footer { justify-content: center; }
       }
@@ -397,14 +398,8 @@
 
     <main>
       <div class="lockup">
-        <div class="emblem" aria-hidden="true">
-          <svg viewBox="0 0 400 400">
-            <path
-              fill="#161413"
-              d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z"
-            />
-            <circle cx="307" cy="78" r="38" fill="#161413" />
-          </svg>
+        <div class="emblem">
+          <img src="./logo.svg" alt="Nektar" />
         </div>
         <h1>NEKTAR</h1>
       </div>
@@ -480,48 +475,14 @@
       </div>
     </footer>
 
-    <!-- Live Interactive Pulse / Drop-in 1-min Video Modal -->
+    <!-- 1-Minute Explainer Video Modal -->
     <div class="overlay" id="demo-modal" aria-hidden="true">
       <div class="modal" onclick="event.stopPropagation()">
         <div class="mhead">
-          <span>How Nektar Clears Knowledge</span>
-          <div class="mctrls">
-            <button class="mbtn" id="m-buy" type="button">+ Buy</button>
-            <button class="mbtn" id="m-sell" type="button">+ Sell</button>
-            <button class="mbtn pri" id="m-clear" type="button">⚡ Clear Trade</button>
-            <button class="mx" id="m-close" type="button" aria-label="Close">✕</button>
-          </div>
+          <span>NEKTAR — 60-Second Overview</span>
+          <button class="mx" id="m-close" type="button" aria-label="Close">✕</button>
         </div>
-        <!-- Set window.NEKTAR_DEMO_VIDEO = './demo.mp4' to swap in a 1-min video -->
-        <video id="m-video" class="mvideo" controls playsinline></video>
-        <svg id="m-svg" viewBox="0 0 920 310" class="msvg" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <radialGradient id="mgb" cx="14%" cy="46%" r="42%"><stop offset="0%" stop-color="#4cc26b" stop-opacity="0.16"/><stop offset="100%" stop-color="#4cc26b" stop-opacity="0"/></radialGradient>
-            <radialGradient id="mgs" cx="86%" cy="46%" r="42%"><stop offset="0%" stop-color="#f7991b" stop-opacity="0.16"/><stop offset="100%" stop-color="#f7991b" stop-opacity="0"/></radialGradient>
-            <linearGradient id="mhex" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#1a1714"/><stop offset="100%" stop-color="#0f0e0c"/></linearGradient>
-            <linearGradient id="mfb" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#4cc26b" stop-opacity="0.2"/><stop offset="100%" stop-color="#4cc26b" stop-opacity="0.92"/></linearGradient>
-            <linearGradient id="mfs" x1="100%" y1="0%" x2="0%" y2="0%"><stop offset="0%" stop-color="#f7991b" stop-opacity="0.2"/><stop offset="100%" stop-color="#f7991b" stop-opacity="0.92"/></linearGradient>
-            <marker id="mab" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M 2 2 Q 5.2 4.3 7.5 5 Q 5.2 5.7 2 8" fill="none" stroke="#4cc26b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
-            <marker id="mas" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M 2 2 Q 5.2 4.3 7.5 5 Q 5.2 5.7 2 8" fill="none" stroke="#f7991b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
-          </defs>
-          <rect width="920" height="310" fill="#090807"/>
-          <rect width="920" height="310" fill="url(#mgb)"/>
-          <rect width="920" height="310" fill="url(#mgs)"/>
-          <text x="26" y="34" fill="#4cc26b" font-size="11" font-weight="800" letter-spacing="0.1em" font-family="system-ui, sans-serif">BUYS</text>
-          <text x="894" y="34" text-anchor="end" fill="#f7991b" font-size="11" font-weight="800" letter-spacing="0.1em" font-family="system-ui, sans-serif">SELLS</text>
-          <g id="mg-arrows"></g>
-          <g id="mg-bars"></g>
-          <g id="mg-fx"></g>
-          <g transform="translate(460, 158)">
-            <circle r="76" fill="none" stroke="#1e1b18" stroke-width="3.5"/>
-            <path d="M 0 -76 A 76 76 0 0 0 0 76" fill="none" stroke="#4cc26b" stroke-width="3.5" stroke-linecap="round"/>
-            <path d="M 0 -76 A 76 76 0 0 1 0 76" fill="none" stroke="#f7991b" stroke-width="3.5" stroke-linecap="round"/>
-            <circle id="mg-shock" r="64" fill="none" stroke="#ffd479" stroke-width="2.4" opacity="0"/>
-            <path d="M -13.5,-57.2 Q 0,-65 13.5,-57.2 L 42.8,-40.3 Q 56.3,-32.5 56.3,-16.9 L 56.3,16.9 Q 56.3,32.5 42.8,40.3 L 13.5,57.2 Q 0,65 -13.5,57.2 L -42.8,40.3 Q -56.3,32.5 -56.3,16.9 L -56.3,-16.9 Q -56.3,-32.5 -42.8,-40.3 Z" fill="url(#mhex)" stroke="#332e29" stroke-width="1.5"/>
-            <text id="mg-sats" x="0" y="6" text-anchor="middle" fill="#f1ede9" font-size="24" font-weight="800" font-family="ui-monospace, monospace">14,820</text>
-            <text x="0" y="26" text-anchor="middle" fill="#7d746b" font-size="10" font-weight="700" letter-spacing="0.08em" font-family="system-ui, sans-serif">SATS CLEARED</text>
-          </g>
-        </svg>
+        <video id="m-video" class="mvideo" src="./demo.mp4" poster="./demo-poster.jpg" controls playsinline preload="metadata" style="display:block"></video>
       </div>
     </div>
 
@@ -567,104 +528,23 @@
       cardInstall.onclick = copyInstall
       cardInstall.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); copyInstall() } }
 
-      // Interactive Demo Modal
+      // 1-Minute Video Modal
       const overlay = document.getElementById('demo-modal')
       const mVideo = document.getElementById('m-video')
-      const mSvg = document.getElementById('m-svg')
-      const NS = 'http://www.w3.org/2000/svg'
-      const el = (t, a = {}) => { const n = document.createElementNS(NS, t); for (const [k, v] of Object.entries(a)) n.setAttribute(k, v); return n }
-      const BUYS = [{ t: '#bsv-mempool', s: 650 }, { t: '#ops-runbook', s: 480 }, { t: '#defi-rates', s: 520 }]
-      const SELLS = [{ t: '#bsv-mempool', s: 120 }, { t: '#ops-runbook', s: 150 }, { t: '#defi-rates', s: 210 }]
-      let cleared = 14820
-      let demoTimer = null
-
-      function drawModal() {
-        const ga = document.getElementById('mg-arrows')
-        const gb = document.getElementById('mg-bars')
-        ga.innerHTML = ''; gb.innerHTML = ''
-        BUYS.forEach((b, i) => {
-          const y = 78 + i * 64, w = 210, x1 = 26 + w + 6, tx = 372, ty = 158 + (i - 1) * 18
-          ga.appendChild(el('path', { d: `M ${x1} ${y + 16} C ${x1 + 65} ${y + 16}, ${tx - 55} ${ty}, ${tx} ${ty}`, fill: 'none', stroke: 'url(#mfb)', 'stroke-width': '1.6', 'stroke-linecap': 'round', 'marker-end': 'url(#mab)' }))
-          gb.appendChild(el('rect', { x: 26, y, width: w, height: 32, rx: 9, fill: '#4cc26b', 'fill-opacity': '0.14', stroke: '#233b2a' }))
-          const t1 = el('text', { x: 40, y: y + 20, fill: '#f1ede9', 'font-size': '13', 'font-weight': '700', 'font-family': 'system-ui, sans-serif' }); t1.textContent = b.t
-          const t2 = el('text', { x: 224, y: y + 20, 'text-anchor': 'end', fill: '#4cc26b', 'font-size': '12', 'font-weight': '800', 'font-family': 'ui-monospace, monospace' }); t2.textContent = b.s + 's'
-          gb.append(t1, t2)
-        })
-        SELLS.forEach((s, i) => {
-          const y = 78 + i * 64, w = 210, x = 894 - w, x1 = x - 6, tx = 548, ty = 158 + (i - 1) * 18
-          ga.appendChild(el('path', { d: `M ${x1} ${y + 16} C ${x1 - 65} ${y + 16}, ${tx + 55} ${ty}, ${tx} ${ty}`, fill: 'none', stroke: 'url(#mfs)', 'stroke-width': '1.6', 'stroke-linecap': 'round', 'marker-end': 'url(#mas)' }))
-          gb.appendChild(el('rect', { x, y, width: w, height: 32, rx: 9, fill: '#f7991b', 'fill-opacity': '0.14', stroke: '#3f2e18' }))
-          const t1 = el('text', { x: x + 12, y: y + 20, fill: '#f7991b', 'font-size': '12', 'font-weight': '800', 'font-family': 'ui-monospace, monospace' }); t1.textContent = s.s + 's'
-          const t2 = el('text', { x: 880, y: y + 20, 'text-anchor': 'end', fill: '#f1ede9', 'font-size': '13', 'font-weight': '700', 'font-family': 'system-ui, sans-serif' }); t2.textContent = s.t
-          gb.append(t1, t2)
-        })
-      }
-
-      function comet(side, idx, onHit) {
-        const isBuy = side === 'buy'
-        const i = idx ?? Math.floor(Math.random() * 3)
-        const x0 = isBuy ? 242 : 678, y0 = 94 + i * 64
-        const cx1 = isBuy ? x0 + 80 : x0 - 80, cx2 = isBuy ? 390 : 530
-        const color = isBuy ? '#4cc26b' : '#f7991b'
-        const fx = document.getElementById('mg-fx')
-        const dot = el('circle', { r: 5, fill: color })
-        fx.appendChild(dot)
-        const s0 = performance.now()
-        function step(now) {
-          const t = Math.min(1, (now - s0) / 560), e = 1 - Math.pow(1 - t, 2.2), u = 1 - e
-          dot.setAttribute('cx', (u*u*u*x0 + 3*u*u*e*cx1 + 3*u*e*e*cx2 + e*e*e*460).toFixed(1))
-          dot.setAttribute('cy', (u*u*u*y0 + 3*u*u*e*y0 + 3*u*e*e*158 + e*e*e*158).toFixed(1))
-          if (t < 1) requestAnimationFrame(step)
-          else { dot.remove(); if (onHit) onHit() }
-        }
-        requestAnimationFrame(step)
-      }
-
-      function clearModalTrade() {
-        const i = Math.floor(Math.random() * 3)
-        let n = 0
-        const hit = () => {
-          if (++n < 2) return
-          cleared += SELLS[i].s
-          document.getElementById('mg-sats').textContent = cleared.toLocaleString('en-US')
-          const sw = document.getElementById('mg-shock'), s0 = performance.now()
-          function w(now) {
-            const t = Math.min(1, (now - s0) / 650)
-            sw.setAttribute('r', (64 + t * 50).toFixed(1))
-            sw.setAttribute('opacity', (0.9 * (1 - t)).toFixed(2))
-            if (t < 1) requestAnimationFrame(w)
-          }
-          requestAnimationFrame(w)
-        }
-        comet('buy', i, hit); comet('sell', i, hit)
-      }
-
       function openDemo() {
         overlay.classList.add('open')
         overlay.setAttribute('aria-hidden', 'false')
-        if (window.NEKTAR_DEMO_VIDEO) {
-          mVideo.src = window.NEKTAR_DEMO_VIDEO
-          mVideo.style.display = 'block'
-          mSvg.style.display = 'none'
-          mVideo.play().catch(() => {})
-        } else {
-          drawModal()
-          clearModalTrade()
-          demoTimer = setInterval(clearModalTrade, 2200)
-        }
+        mVideo.currentTime = 0
+        mVideo.play().catch(() => {})
       }
       function closeDemo() {
         overlay.classList.remove('open')
         overlay.setAttribute('aria-hidden', 'true')
         mVideo.pause()
-        if (demoTimer) { clearInterval(demoTimer); demoTimer = null }
       }
       document.getElementById('card-demo').onclick = openDemo
       document.getElementById('m-close').onclick = closeDemo
       overlay.onclick = closeDemo
-      document.getElementById('m-buy').onclick = () => comet('buy')
-      document.getElementById('m-sell').onclick = () => comet('sell')
-      document.getElementById('m-clear').onclick = clearModalTrade
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDemo() })
     </script>
   </body>

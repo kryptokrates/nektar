@@ -13,10 +13,15 @@
   <rect width="1200" height="630" fill="#161413"/>
   <rect width="1200" height="630" fill="url(#og-e)"/>
   <g transform="translate(362, 165)">
-    <circle cx="64" cy="64" r="64" fill="#f7991b"/>
-    <circle cx="64" cy="64" r="74" fill="none" stroke="#f7991b" stroke-opacity="0.18" stroke-width="10"/>
-    <path fill="#161413" transform="translate(26,26) scale(0.19)" d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z"/>
-    <circle cx="84" cy="41" r="7" fill="#161413"/>
+    <rect x="-8" y="-8" width="144" height="144" rx="38" fill="none" stroke="#f7991b" stroke-opacity="0.14" stroke-width="10"/>
+    <rect width="128" height="128" rx="32" fill="#221e1d" stroke="#f7991b" stroke-opacity="0.3" stroke-width="1.5"/>
+    <g transform="scale(0.32)">
+      <path fill="#f7991b" d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z"/>
+      <circle cx="307" cy="78" r="38" fill="#f7991b"/>
+      <ellipse cx="163" cy="190" rx="20" ry="21" fill="#221e1d"/>
+      <ellipse cx="231" cy="190" rx="20" ry="21" fill="#221e1d"/>
+      <path d="M 150 265.5 C 161 279 176 287 196 288 C 216 287 230 278 243 265" fill="none" stroke="#221e1d" stroke-width="24" stroke-linecap="round"/>
+    </g>
     <text x="158" y="96" fill="#f4efe6" font-size="92" font-weight="600" letter-spacing="-0.04em" font-family="system-ui, sans-serif">NEKTAR</text>
   </g>
   <text x="600" y="392" text-anchor="middle" fill="url(#og-g)" font-size="64" font-weight="800" letter-spacing="-0.03em" font-family="system-ui, sans-serif">The AI Knowledge Market</text>

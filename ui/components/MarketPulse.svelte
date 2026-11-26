@@ -180,7 +180,7 @@
     return Math.min(0.85, Math.max(0.15, b / (b + sl)))
   })
 
-  const ringR = 68
+  const ringR = 70
   const ringCirc = 2 * Math.PI * ringR
   const buyArcLen = $derived(ringCirc * buyShare)
   const sellArcLen = $derived(ringCirc * (1 - buyShare))
@@ -189,26 +189,48 @@
   const coreX = 460
   const coreY = 114
   const rowY = (i: number) => 46 + i * 33
-  const calcBuyW = (b: WingBar) => 116 + Math.round((Math.max(b.sats, maxBuySats * 0.25) / maxBuySats) * 144)
+  const calcBuyW = (b: WingBar) => 116 + Math.round((Math.max(b.sats, maxBuySats * 0.25) / maxBuySats) * 138)
   const calcSellW = (b: WingBar) =>
-    b.sats > 0 ? 116 + Math.round((Math.max(b.sats, maxSellSats * 0.25) / maxSellSats) * 144) : 140
+    b.sats > 0 ? 116 + Math.round((Math.max(b.sats, maxSellSats * 0.25) / maxSellSats) * 138) : 138
 
-  const bridges = $derived.by(() => {
-    const list: Array<{ topic: string; d: string }> = []
-    buyBars.forEach((b, bi) => {
-      const si = sellBars.findIndex((sl) => sl.normTopic === b.normTopic)
-      if (si === -1) return
-      const x1 = 24 + calcBuyW(b)
-      const y1 = rowY(bi) + 13
-      const x2 = 896 - calcSellW(sellBars[si])
-      const y2 = rowY(si) + 13
-      list.push({
+  // Smooth C1 rounded-corner hexagon path (radius 60, corner fillet t=0.24)
+  const smoothHexPath =
+    'M -12.47,-52.80 Q 0,-60 12.47,-52.80 L 39.49,-37.20 Q 51.96,-30 51.96,-15.60 L 51.96,15.60 Q 51.96,30 39.49,37.20 L 12.47,52.80 Q 0,60 -12.47,52.80 L -39.49,37.20 Q -51.96,30 -51.96,15.60 L -51.96,-15.60 Q -51.96,-30 -39.49,-37.20 Z'
+
+  // Smooth curved flow arrows from every active Buy & Sell bar toward the rounded Hex Core
+  const buyFlowArrows = $derived.by(() =>
+    buyBars.map((b, i) => {
+      const x1 = 24 + calcBuyW(b) + 6
+      const y1 = rowY(i) + 13
+      const tx = coreX - ringR - 12
+      const ty = coreY + (i - (buyBars.length - 1) / 2) * 11
+      const c1x = x1 + (tx - x1) * 0.48
+      const c2x = x1 + (tx - x1) * 0.62
+      return {
+        id: b.id,
         topic: b.normTopic,
-        d: `M ${x1} ${y1} C ${x1 + 90} ${y1}, 396 ${coreY}, ${coreX} ${coreY} C 524 ${coreY}, ${x2 - 90} ${y2}, ${x2} ${y2}`
-      })
+        matched: sellBars.some((sl) => sl.normTopic === b.normTopic),
+        d: `M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${c1x.toFixed(1)} ${y1.toFixed(1)}, ${c2x.toFixed(1)} ${ty.toFixed(1)}, ${tx.toFixed(1)} ${ty.toFixed(1)}`
+      }
     })
-    return list
-  })
+  )
+
+  const sellFlowArrows = $derived.by(() =>
+    sellBars.map((b, i) => {
+      const x1 = 896 - calcSellW(b) - 6
+      const y1 = rowY(i) + 13
+      const tx = coreX + ringR + 12
+      const ty = coreY + (i - (sellBars.length - 1) / 2) * 11
+      const c1x = x1 - (x1 - tx) * 0.48
+      const c2x = x1 - (x1 - tx) * 0.62
+      return {
+        id: b.id,
+        topic: b.normTopic,
+        matched: buyBars.some((bl) => bl.normTopic === b.normTopic),
+        d: `M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${c1x.toFixed(1)} ${y1.toFixed(1)}, ${c2x.toFixed(1)} ${ty.toFixed(1)}, ${tx.toFixed(1)} ${ty.toFixed(1)}`
+      }
+    })
+  )
 
   interface HeartbeatSlot {
     buy: number
@@ -240,7 +262,7 @@
   let hoverLabel = $state<string | null>(null)
 
   let comets = $state<Comet[]>([])
-  let shockwaveR = $state(58)
+  let shockwaveR = $state(62)
   let shockwaveOpacity = $state(0)
   let flashText = $state('')
   let flashVisible = $state(false)
@@ -272,12 +294,12 @@
       const surviving: ActiveComet[] = []
       for (const c of activeComets) {
         const t = Math.min(1, (now - c.start) / c.dur)
-        const ease = 1 - Math.pow(1 - t, 2.2)
+        const ease = 1 - Math.pow(1 - t, 2.4)
         const u = 1 - ease
         const x = u * u * u * c.x0 + 3 * u * u * ease * c.cx1 + 3 * u * ease * ease * c.cx2 + ease * ease * ease * coreX
         const y = u * u * u * c.y0 + 3 * u * u * ease * c.y0 + 3 * u * ease * ease * coreY + ease * ease * ease * coreY
         c.pts.push([x, y])
-        if (c.pts.length > 10) c.pts.shift()
+        if (c.pts.length > 12) c.pts.shift()
         if (t < 1) {
           surviving.push(c)
           nextRendered.push({
@@ -285,7 +307,7 @@
             x,
             y,
             tail: c.pts.length > 1 ? c.pts.map((p, k) => `${k ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ') : '',
-            opacity: 1 - t * 0.3,
+            opacity: 1 - t * 0.28,
             color: c.color
           })
           keepRunning = true
@@ -300,9 +322,9 @@
     }
 
     if (activeShockStart !== null) {
-      const t = Math.min(1, (now - activeShockStart) / 700)
-      shockwaveR = 58 + t * 48
-      shockwaveOpacity = 0.9 * (1 - t)
+      const t = Math.min(1, (now - activeShockStart) / 720)
+      shockwaveR = 62 + t * 50
+      shockwaveOpacity = 0.88 * (1 - t)
       if (t < 1) {
         keepRunning = true
       } else {
@@ -338,10 +360,10 @@
       id: nextCometId++,
       x0,
       y0,
-      cx1: isBuy ? x0 + 90 : x0 - 90,
-      cx2: isBuy ? 396 : 524,
+      cx1: isBuy ? x0 + 96 : x0 - 96,
+      cx2: isBuy ? 390 : 530,
       start: performance.now(),
-      dur: 600,
+      dur: 620,
       color: isBuy ? '#4cc26b' : '#f7991b',
       pts: [],
       onArrive
@@ -422,11 +444,15 @@
         <stop offset="0%" stop-color="#f7991b" stop-opacity="0.13" />
         <stop offset="100%" stop-color="#f7991b" stop-opacity="0" />
       </radialGradient>
-      <radialGradient id="np-glow-core" cx="50%" cy="42%" r="20%">
+      <radialGradient id="np-glow-core" cx="50%" cy="42%" r="22%">
         <stop offset="0%" stop-color="#f7991b" stop-opacity="0.18" />
         <stop offset="60%" stop-color="#4cc26b" stop-opacity="0.05" />
         <stop offset="100%" stop-color="#090807" stop-opacity="0" />
       </radialGradient>
+      <linearGradient id="np-hex-fill" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="#191613" />
+        <stop offset="100%" stop-color="#0f0e0c" />
+      </linearGradient>
       <linearGradient id="np-bar-buy" x1="0%" y1="0%" x2="100%" y2="0%">
         <stop offset="0%" stop-color="#4cc26b" stop-opacity="0.08" />
         <stop offset="100%" stop-color="#4cc26b" stop-opacity="0.42" />
@@ -435,11 +461,29 @@
         <stop offset="0%" stop-color="#f7991b" stop-opacity="0.08" />
         <stop offset="100%" stop-color="#f7991b" stop-opacity="0.44" />
       </linearGradient>
-      <linearGradient id="np-bridge" x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" stop-color="#4cc26b" />
-        <stop offset="50%" stop-color="#ffd479" />
-        <stop offset="100%" stop-color="#f7991b" />
+      <linearGradient id="np-flow-buy" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#4cc26b" stop-opacity="0.2" />
+        <stop offset="100%" stop-color="#4cc26b" stop-opacity="0.92" />
       </linearGradient>
+      <linearGradient id="np-flow-sell" x1="100%" y1="0%" x2="0%" y2="0%">
+        <stop offset="0%" stop-color="#f7991b" stop-opacity="0.2" />
+        <stop offset="100%" stop-color="#f7991b" stop-opacity="0.92" />
+      </linearGradient>
+
+      <!-- Smooth rounded chevron arrow markers -->
+      <marker id="np-arr-buy" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+        <path d="M 2 2 Q 5.2 4.3 7.5 5 Q 5.2 5.7 2 8" fill="none" stroke="#4cc26b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+      </marker>
+      <marker id="np-arr-sell" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+        <path d="M 2 2 Q 5.2 4.3 7.5 5 Q 5.2 5.7 2 8" fill="none" stroke="#f7991b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+      </marker>
+      <marker id="np-arr-buy-dim" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M 2 2 Q 5.2 4.3 7.5 5 Q 5.2 5.7 2 8" fill="none" stroke="#4cc26b" stroke-opacity="0.45" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+      </marker>
+      <marker id="np-arr-sell-dim" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M 2 2 Q 5.2 4.3 7.5 5 Q 5.2 5.7 2 8" fill="none" stroke="#f7991b" stroke-opacity="0.45" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+      </marker>
+
       <filter id="np-neon" x="-40%" y="-40%" width="180%" height="180%">
         <feGaussianBlur stdDeviation="2.8" result="blur" />
         <feMerge>
@@ -449,13 +493,13 @@
       </filter>
     </defs>
 
-    <!-- Pure Obsidian Canvas (no noisy grid or header bars) -->
+    <!-- Pure Obsidian Canvas -->
     <rect width="920" height="268" fill="#090807" />
     <rect width="920" height="218" fill="url(#np-glow-buy)" />
     <rect width="920" height="218" fill="url(#np-glow-sell)" />
     <rect width="920" height="218" fill="url(#np-glow-core)" />
 
-    <!-- Minimal Wing Titles (generous vertical clearance) -->
+    <!-- Minimal Wing Titles -->
     <text x="24" y="28" fill="#4cc26b" font-size="10.5" font-weight="800" letter-spacing="0.1em" font-family="system-ui, sans-serif">
       BUYS
     </text>
@@ -463,7 +507,7 @@
       SELLS
     </text>
 
-    <!-- Center-Top Ephemeral Hover / Settlement Pill (open sky, zero line collision) -->
+    <!-- Ephemeral Hover / Settlement Pill -->
     {#if hoverLabel || (flashVisible && flashText)}
       <g transform="translate(460, 22)">
         <rect x="-150" y="-11" width="300" height="22" rx="11" fill="#171412" stroke={flashVisible ? '#f7991b' : '#2f2a25'} />
@@ -473,15 +517,34 @@
       </g>
     {/if}
 
-    <!-- Topic Match Bridges -->
-    {#each bridges as br}
+    <!-- Smooth Curved Flow Arrows (Buy -> Core, Sell -> Core) -->
+    {#each buyFlowArrows as a (a.id)}
+      {@const focused = activeTopic === a.topic}
+      {@const dimmed = activeTopic !== null && !focused}
       <path
-        d={br.d}
+        d={a.d}
         fill="none"
-        stroke="url(#np-bridge)"
-        stroke-width={activeTopic === br.topic ? 2.2 : 1.1}
-        stroke-opacity={activeTopic ? (activeTopic === br.topic ? 0.92 : 0.08) : 0.25}
-        class="bridge"
+        stroke="url(#np-flow-buy)"
+        stroke-width={focused ? 2.1 : a.matched ? 1.6 : 1.3}
+        stroke-linecap="round"
+        stroke-opacity={dimmed ? 0.12 : focused ? 0.96 : a.matched ? 0.78 : 0.52}
+        marker-end={focused || a.matched ? 'url(#np-arr-buy)' : 'url(#np-arr-buy-dim)'}
+        class="flow-arrow"
+      />
+    {/each}
+
+    {#each sellFlowArrows as a (a.id)}
+      {@const focused = activeTopic === a.topic}
+      {@const dimmed = activeTopic !== null && !focused}
+      <path
+        d={a.d}
+        fill="none"
+        stroke="url(#np-flow-sell)"
+        stroke-width={focused ? 2.1 : a.matched ? 1.6 : 1.3}
+        stroke-linecap="round"
+        stroke-opacity={dimmed ? 0.12 : focused ? 0.96 : a.matched ? 0.78 : 0.52}
+        marker-end={focused || a.matched ? 'url(#np-arr-sell)' : 'url(#np-arr-sell-dim)'}
+        class="flow-arrow"
       />
     {/each}
 
@@ -512,11 +575,10 @@
           {y}
           width={w}
           height="26"
-          rx="6"
+          rx="8"
           fill="url(#np-bar-buy)"
           stroke={activeTopic === b.normTopic ? '#4cc26b' : '#1f3325'}
         />
-        <circle cx={24 + w} cy={y + 13} r="3" fill="#4cc26b" />
         <text x="34" y={y + 17} fill="#f1ede9" font-size="11.5" font-weight="700" font-family="system-ui, sans-serif">
           {b.topic.slice(0, 16)}
         </text>
@@ -554,11 +616,10 @@
           {y}
           width={w}
           height="26"
-          rx="6"
+          rx="8"
           fill="url(#np-bar-sell)"
           stroke={activeTopic === b.normTopic ? '#f7991b' : '#382917'}
         />
-        <circle cx={x} cy={y + 13} r="3" fill="#f7991b" />
         <text x={x + 10} y={y + 17} fill="#f7991b" font-size="11" font-weight="800" font-family="ui-monospace, monospace">
           {b.sats > 0 ? `${fmtSats(b.sats)}s` : ''}
         </text>
@@ -571,12 +632,12 @@
     <!-- Kinetic Comets -->
     {#each comets as c (c.id)}
       {#if c.tail}
-        <path d={c.tail} fill="none" stroke={c.color} stroke-width="2.4" stroke-linecap="round" opacity={c.opacity * 0.75} />
+        <path d={c.tail} fill="none" stroke={c.color} stroke-width="2.4" stroke-linecap="round" opacity={c.opacity * 0.72} />
       {/if}
-      <circle cx={c.x} cy={c.y} r="4.5" fill={c.color} opacity={c.opacity} filter="url(#np-neon)" />
+      <circle cx={c.x} cy={c.y} r="4.4" fill={c.color} opacity={c.opacity} filter="url(#np-neon)" />
     {/each}
 
-    <!-- Center Hexagonal Clearing Core (Ultra-Clean) -->
+    <!-- Center Smooth Rounded Hexagon Clearing Core -->
     <g transform={`translate(${coreX}, ${coreY})`}>
       <circle r={ringR} fill="none" stroke="#1e1b18" stroke-width="3.2" />
       <circle
@@ -605,7 +666,10 @@
         <circle r={shockwaveR} fill="none" stroke="#ffd479" stroke-width="2.2" opacity={shockwaveOpacity} />
       {/if}
 
-      <polygon points="0,-58 50.2,-29 50.2,29 0,58 -50.2,29 -50.2,-29" fill="#11100e" stroke="#302b26" stroke-width="1.4" />
+      <!-- Silky C1 Rounded Hexagon -->
+      <path d={smoothHexPath} fill="url(#np-hex-fill)" stroke="#332e29" stroke-width="1.4" stroke-linejoin="round" />
+      <path d={smoothHexPath} transform="scale(0.92)" fill="none" stroke="#f7991b" stroke-opacity="0.14" stroke-width="1" />
+
       <path
         fill="#f7991b"
         transform="translate(-7,-38) scale(0.036)"
@@ -620,7 +684,7 @@
       <circle cx="0" cy="42" r="2.8" fill={live ? '#4cc26b' : '#e5534b'} class:live-dot={live} />
     </g>
 
-    <!-- Silent Bottom Dual-Polarity Pulse Strip (Zero text clutter!) -->
+    <!-- Silent Bottom Dual-Polarity Pulse Strip -->
     <line x1="0" y1="218" x2="920" y2="218" stroke="#1e1b18" stroke-width="1" />
     <rect x="0" y="219" width="920" height="49" fill="#0c0b09" />
     <line x1="24" y1="243" x2="896" y2="243" stroke="#1f1c19" stroke-width="1" />
@@ -629,13 +693,13 @@
       {@const x = 24 + i * 20}
       {@const fade = 0.28 + (i / heartbeatSlots.length) * 0.68}
       {#if slot.buy > 0}
-        <rect {x} y={242 - slot.buy} width="9" height={slot.buy} rx="2" fill="#4cc26b" opacity={fade} />
+        <rect {x} y={242 - slot.buy} width="9" height={slot.buy} rx="2.5" fill="#4cc26b" opacity={fade} />
       {/if}
       {#if slot.sell > 0}
-        <rect {x} y="244" width="9" height={slot.sell} rx="2" fill="#f7991b" opacity={fade} />
+        <rect {x} y="244" width="9" height={slot.sell} rx="2.5" fill="#f7991b" opacity={fade} />
       {/if}
       {#if slot.settled}
-        <polygon points={`${x + 4.5},238 ${x + 9},243 ${x + 4.5},248 ${x},243`} fill="#ffd479" filter="url(#np-neon)" />
+        <circle cx={x + 4.5} cy="243" r="3.6" fill="#ffd479" filter="url(#np-neon)" />
       {/if}
     {/each}
   </svg>
@@ -656,7 +720,7 @@
     cursor: pointer;
     transition: opacity 0.16s ease;
   }
-  .bridge {
+  .flow-arrow {
     transition: stroke-opacity 0.18s ease, stroke-width 0.18s ease;
   }
   @keyframes np-pulse {

@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import type { State } from '../lib/types'
   import { operatorFetch } from '../lib/api'
-  import { fmtSats, shortHash } from '../lib/format'
+  import { fmtSats, shortHash, sparklinePath } from '../lib/format'
 
   interface Props {
     s: State
@@ -50,6 +50,7 @@
     isOutgoing?: boolean
   }
   let actions = $state<WalletAction[]>([])
+  const spark = $derived(sparklinePath(s.receipts.amounts, 320, 44))
 
   async function loadActions() {
     try {
@@ -182,111 +183,144 @@
     <h1>Wallet</h1>
   </header>
 
-  <section class="hero">
-    <div class="bal">{fmtSats(s.treasury.sats)}</div>
-    <div class="unit">satoshis {#if s.receipts.earned > 0}· <span class="ok">+{fmtSats(s.receipts.earned)} earned</span>{/if}</div>
+  <div class="wallet-grid">
+    <div class="wallet-left">
+      <section class="hero">
+        <div class="bal">{fmtSats(s.treasury.sats)}</div>
+        <div class="unit">satoshis {#if s.receipts.earned > 0}· <span class="ok">+{fmtSats(s.receipts.earned)} earned</span>{/if}</div>
 
-    <div class="circle-bar">
-      {#if s.network === 'testnet'}
-        <button class="cact" onclick={requestFaucet} disabled={busy}>
-          <span class="ring pri">⚡</span>
-          <span>Faucet</span>
-        </button>
-      {/if}
-      <button class="cact" onclick={() => (sheet = sheet === 'receive' ? 'none' : 'receive')}>
-        <span class="ring" class:on={sheet === 'receive'}>↓</span>
-        <span>Receive</span>
-      </button>
-      {#if (s.treasury.walletMode ?? 'embedded') === 'embedded'}
-        <button class="cact" onclick={() => (sheet = sheet === 'send' ? 'none' : 'send')}>
-          <span class="ring" class:on={sheet === 'send'}>↑</span>
-          <span>Send</span>
-        </button>
-        <button class="cact" onclick={() => (sheet = sheet === 'desktop' ? 'none' : 'desktop')}>
-          <span class="ring" class:on={sheet === 'desktop'}>◈</span>
-          <span>Desktop</span>
-        </button>
-      {/if}
-      <button class="cact" onclick={syncWallet} disabled={busy}>
-        <span class="ring">↻</span>
-        <span>{busy ? '…' : 'Sync'}</span>
-      </button>
-    </div>
-  </section>
+        {#if spark.line}
+          <svg viewBox="0 0 320 44" class="spark" preserveAspectRatio="none">
+            <path d={spark.fill} fill="rgb(76 194 107 / 14%)" />
+            <path d={spark.line} fill="none" stroke="#4cc26b" stroke-width="2" stroke-linejoin="round" />
+          </svg>
+        {/if}
 
-  {#if sheet === 'receive'}
-    <section class="sheet receive-sheet">
-      <div class="qr-head">
-        <div>
-          <div class="slbl">Deposit Address ({s.network === 'main' ? 'BSV Mainnet · real sats' : s.network})</div>
-          {#if s.network === 'main'}
-            <div class="qr-tip">Recommended starter float: <b>5,000–10,000 sats</b> (~$0.003)</div>
+        <div class="circle-bar">
+          {#if s.network === 'testnet'}
+            <button class="cact" onclick={requestFaucet} disabled={busy}>
+              <span class="ring pri">⚡</span>
+              <span>Faucet</span>
+            </button>
           {/if}
+          <button class="cact" onclick={() => (sheet = sheet === 'receive' ? 'none' : 'receive')}>
+            <span class="ring" class:on={sheet === 'receive'}>↓</span>
+            <span>Receive</span>
+          </button>
+          {#if (s.treasury.walletMode ?? 'embedded') === 'embedded'}
+            <button class="cact" onclick={() => (sheet = sheet === 'send' ? 'none' : 'send')}>
+              <span class="ring" class:on={sheet === 'send'}>↑</span>
+              <span>Send</span>
+            </button>
+            <button class="cact" onclick={() => (sheet = sheet === 'desktop' ? 'none' : 'desktop')}>
+              <span class="ring" class:on={sheet === 'desktop'}>◈</span>
+              <span>Desktop</span>
+            </button>
+          {/if}
+          <button class="cact" onclick={syncWallet} disabled={busy}>
+            <span class="ring">↻</span>
+            <span>{busy ? '…' : 'Sync'}</span>
+          </button>
         </div>
-        <div class="qr-tabs">
-          <button class="mini" class:on={qrMode === 'uri'} onclick={() => (qrMode = 'uri')}>bitcoin: URI</button>
-          <button class="mini" class:on={qrMode === 'raw'} onclick={() => (qrMode = 'raw')}>Raw Address</button>
-        </div>
-      </div>
+      </section>
 
-      {#if qrSvg}
-        <div class="qr-wrap">
-          <div class="qr-box">{@html qrSvg}</div>
-        </div>
+      {#if sheet === 'receive'}
+        <section class="sheet receive-sheet">
+          <div class="qr-head">
+            <div>
+              <div class="slbl">Deposit Address ({s.network === 'main' ? 'BSV Mainnet · real sats' : s.network})</div>
+              {#if s.network === 'main'}
+                <div class="qr-tip">Recommended starter float: <b>5,000–10,000 sats</b> (~$0.003)</div>
+              {/if}
+            </div>
+            <div class="qr-tabs">
+              <button class="mini" class:on={qrMode === 'uri'} onclick={() => (qrMode = 'uri')}>bitcoin: URI</button>
+              <button class="mini" class:on={qrMode === 'raw'} onclick={() => (qrMode = 'raw')}>Raw Address</button>
+            </div>
+          </div>
+
+          {#if qrSvg}
+            <div class="qr-wrap">
+              <div class="qr-box">{@html qrSvg}</div>
+            </div>
+          {/if}
+
+          <div class="addr-row">
+            <code class="mono">{qrPayload || s.treasury.address || 'Initializing…'}</code>
+            <button class="mini" onclick={copyAddr}>{copiedAddr ? 'Copied ✓' : 'Copy'}</button>
+            <button class="mini" onclick={syncWallet} disabled={busy}>{busy ? 'Checking…' : 'Check Deposit'}</button>
+          </div>
+        </section>
+      {:else if sheet === 'desktop'}
+        <section class="sheet">
+          <div class="slbl">Top Up from BSV Desktop</div>
+          <div class="srow">
+            <input class="in" type="number" min="100" bind:value={desktopSats} placeholder="Satoshis" />
+            <button class="pri-btn" onclick={fundDesktop} disabled={busy}>Transfer</button>
+          </div>
+        </section>
+      {:else if sheet === 'send'}
+        <section class="sheet">
+          <div class="slbl">Send Satoshis</div>
+          <input class="in" bind:value={sendTo} placeholder="BSV address or identity key" />
+          <div class="srow">
+            <input class="in" type="number" min="1" bind:value={sendSats} placeholder="Amount (sats)" />
+            <button class="pri-btn" onclick={sendFunds} disabled={busy}>Send</button>
+          </div>
+          <div class="sweep-links">
+            <button class="txt-btn" onclick={() => sweepAll(false)} disabled={busy}>Sweep all to address</button>
+            <span>·</span>
+            <button class="txt-btn" onclick={() => sweepAll(true)} disabled={busy}>Sweep to BSV Desktop</button>
+          </div>
+        </section>
       {/if}
-
-      <div class="addr-row">
-        <code class="mono">{qrPayload || s.treasury.address || 'Initializing…'}</code>
-        <button class="mini" onclick={copyAddr}>{copiedAddr ? 'Copied ✓' : 'Copy'}</button>
-        <button class="mini" onclick={syncWallet} disabled={busy}>{busy ? 'Checking…' : 'Check Deposit'}</button>
-      </div>
-    </section>
-  {:else if sheet === 'desktop'}
-    <section class="sheet">
-      <div class="slbl">Top Up from BSV Desktop</div>
-      <div class="srow">
-        <input class="in" type="number" min="100" bind:value={desktopSats} placeholder="Satoshis" />
-        <button class="pri-btn" onclick={fundDesktop} disabled={busy}>Transfer</button>
-      </div>
-    </section>
-  {:else if sheet === 'send'}
-    <section class="sheet">
-      <div class="slbl">Send Satoshis</div>
-      <input class="in" bind:value={sendTo} placeholder="BSV address or identity key" />
-      <div class="srow">
-        <input class="in" type="number" min="1" bind:value={sendSats} placeholder="Amount (sats)" />
-        <button class="pri-btn" onclick={sendFunds} disabled={busy}>Send</button>
-      </div>
-      <div class="sweep-links">
-        <button class="txt-btn" onclick={() => sweepAll(false)} disabled={busy}>Sweep all to address</button>
-        <span>·</span>
-        <button class="txt-btn" onclick={() => sweepAll(true)} disabled={busy}>Sweep to BSV Desktop</button>
-      </div>
-    </section>
-  {/if}
-
-  <div class="section-lbl">Activity</div>
-  {#each actions as a}
-    <div class="txrow">
-      <div class="txico" class:out={a.isOutgoing}>{a.isOutgoing ? '↑' : '↓'}</div>
-      <div class="txl">
-        <b>{a.description || (a.isOutgoing ? 'Sent BSV' : 'Received BSV')}</b>
-        <span class="mut">{a.status || 'settled'}</span>
-      </div>
-      <div class="amt" class:out={a.isOutgoing}>
-        {a.isOutgoing ? '-' : '+'}{fmtSats(Math.abs(a.satoshis ?? 0))} sats
-      </div>
     </div>
-  {:else}
-    <div class="empty">
-      <p>No transactions yet</p>
-      <small>Tap <b>Faucet</b> or <b>Receive</b> above to fund automatic anchoring &amp; trades.</small>
+
+    <div class="wallet-right">
+      <div class="section-lbl">Activity</div>
+      {#each actions as a}
+        <div class="txrow">
+          <div class="txico" class:out={a.isOutgoing}>{a.isOutgoing ? '↑' : '↓'}</div>
+          <div class="txl">
+            <b>{a.description || (a.isOutgoing ? 'Sent BSV' : 'Received BSV')}</b>
+            <span class="mut">{a.status || 'settled'}</span>
+          </div>
+          <div class="amt" class:out={a.isOutgoing}>
+            {a.isOutgoing ? '-' : '+'}{fmtSats(Math.abs(a.satoshis ?? 0))} sats
+          </div>
+        </div>
+      {:else}
+        <div class="empty">
+          <p>No transactions yet</p>
+          <small>Tap <b>Faucet</b> or <b>Receive</b> to fund automatic anchoring &amp; trades.</small>
+        </div>
+      {/each}
     </div>
-  {/each}
+  </div>
 </div>
 
 <style>
-  .view { display: flex; flex-direction: column; }
+  .view { display: flex; flex-direction: column; min-height: 100vh; }
+  .wallet-grid {
+    display: grid;
+    grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+    flex: 1;
+  }
+  .wallet-left {
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+  }
+  .wallet-right {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .spark { display: block; width: 100%; max-width: 300px; height: 40px; margin: 0.9rem auto 0; }
+  @media (max-width: 900px) {
+    .wallet-grid { grid-template-columns: 1fr; }
+    .wallet-left { border-right: 0; }
+  }
   .receive-sheet { display: grid; gap: 0.7rem; }
   .qr-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
   .qr-tip { font-size: 0.76rem; color: var(--mut); margin-top: 0.15rem; }

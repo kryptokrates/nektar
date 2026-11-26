@@ -157,7 +157,7 @@
 <div class="view">
   <header class="sticky-head">
     <div class="toprow">
-      <h1>Node</h1>
+      <h1>Settings</h1>
       <button class="dock-btn" onclick={onOpenDock}>Dock Agent</button>
     </div>
     <div class="seg">
@@ -343,7 +343,7 @@
     padding: 0.42rem 0.25rem; border-radius: 8px; cursor: pointer;
   }
   .s.on { background: #1e1b18; color: var(--ink); }
-  .pad { padding: 1.25rem 1.25rem 2.2rem; display: grid; gap: 1rem; }
+  .pad { padding: 1.35rem 1.5rem 2.4rem; display: grid; gap: 1rem; width: 100%; }
   .glbl {
     font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
     color: var(--mut2); margin-top: 0.15rem;

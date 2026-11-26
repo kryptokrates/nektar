@@ -1,28 +1,29 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import type { DealFeedEntry, DrawerTarget, FeedFragment, MarketTapeEvent, NavTab, PeerInfo, PulseSignal, Receipt, State } from './lib/types'
+  import type { DealFeedEntry, DockClient, DrawerTarget, FeedFragment, MarketTapeEvent, NavTab, PeerInfo, PulseSignal, Receipt, State } from './lib/types'
   import { fmtSats } from './lib/format'
   import { operatorFetch, postJSON, registerOperatorPrompter } from './lib/api'
   import AuthGate from './components/AuthGate.svelte'
   import Sidebar from './components/Sidebar.svelte'
   import MarketHome from './components/MarketHome.svelte'
-  import FeedView from './components/FeedView.svelte'
+  import AgentsView from './components/AgentsView.svelte'
   import WalletView from './components/WalletView.svelte'
   import NodeView from './components/NodeView.svelte'
-  import RightRail from './components/RightRail.svelte'
   import DetailDrawer from './components/DetailDrawer.svelte'
   import CommandPalette from './components/CommandPalette.svelte'
   import OperatorModal from './components/OperatorModal.svelte'
   import DockModal from './components/DockModal.svelte'
-  import QuickstartStrip from './components/QuickstartStrip.svelte'
 
   let s = $state<State | null>(null)
+  let dockedApps = $state<DockClient[]>([])
   let needsAuth = $state(false)
   let live = $state(false)
   let tab = $state<NavTab>('home')
   let searchQuery = $state('')
   let sellInputEl = $state<HTMLTextAreaElement | null>(null)
   let buyInputEl = $state<HTMLTextAreaElement | null>(null)
+  let prefillBuy = $state<{ domain: string; sats: number; seq: number } | null>(null)
+  let prefillSeq = 0
   let drawer = $state<DrawerTarget>(null)
   let paletteOpen = $state(false)
   let dockOpen = $state(false)
@@ -71,6 +72,16 @@
     })
   }
 
+  async function loadDock() {
+    try {
+      const r = await fetch('/v1/dock/detect')
+      if (r.ok) {
+        const j = (await r.json()) as { clients?: DockClient[] }
+        dockedApps = j.clients ?? []
+      }
+    } catch {}
+  }
+
   async function load() {
     try {
       const r = await fetch('/state')
@@ -103,6 +114,12 @@
   function focusBuy() {
     tab = 'home'
     setTimeout(() => buyInputEl?.focus(), 25)
+  }
+
+  function quickBuyTopic(domain: string, sats: number) {
+    tab = 'home'
+    prefillSeq += 1
+    prefillBuy = { domain, sats, seq: prefillSeq }
   }
 
   async function runQuickRecall() {
@@ -189,13 +206,13 @@
   }
 
   const commands = $derived([
-    { id: 'buy', label: 'Buy verified data', hint: 'Market Home · Left rail', run: focusBuy },
-    { id: 'sell', label: 'Anchor & sell knowledge', hint: 'Market Home · Right rail', run: focusSell },
-    { id: 'home', label: 'Go to Market (Home)', hint: 'Live Clearing Pulse', run: () => (tab = 'home') },
-    { id: 'memory', label: 'Go to Memory Vault', hint: 'Saved facts & receipts', run: () => (tab = 'memory') },
+    { id: 'buy', label: 'Buy verified data', hint: 'Market · Left rail', run: focusBuy },
+    { id: 'sell', label: 'Anchor & sell knowledge', hint: 'Market · Right rail', run: focusSell },
+    { id: 'home', label: 'Go to Market', hint: 'Home · Live Pulse', run: () => (tab = 'home') },
+    { id: 'agents', label: 'Go to Agents', hint: 'Fleet & What They Know', run: () => (tab = 'agents') },
     { id: 'wallet', label: 'Go to Wallet', hint: 'Balance & Ledger', run: () => (tab = 'wallet') },
-    { id: 'node', label: 'Go to Node & Diagnostics', hint: 'Policies · Hosts · Hub', run: () => (tab = 'node') },
-    { id: 'dock', label: 'Dock AI agent (Claude / Cursor / Proxy / MCP)', hint: 'Setup', run: () => (dockOpen = true) },
+    { id: 'settings', label: 'Go to Settings', hint: 'Policies · Hubs · System', run: () => (tab = 'settings') },
+    { id: 'dock', label: 'Dock AI agent (Claude / Cursor / Proxy / MCP)', hint: 'Agents', run: () => (dockOpen = true) },
     { id: 'recall', label: 'Run verified recall + receipt', hint: 'Grounding check', run: () => void runQuickRecall() },
     ...(s?.network === 'testnet'
       ? [{ id: 'faucet', label: 'Request Testnet Faucet sats', hint: 'Free test BSV', run: () => void requestFaucet() }]
@@ -246,15 +263,16 @@
         }).catch(() => {})
       }
       await load()
-      if (!needsAuth) connectEvents()
+      if (!needsAuth) {
+        connectEvents()
+        void loadDock()
+      }
     })()
     return () => {
       es?.close()
       if (loadDebounce) clearTimeout(loadDebounce)
     }
   })
-
-  const isMarketHome = $derived(tab === 'home')
 </script>
 
 <svelte:window onkeydown={onGlobalKey} />
@@ -264,13 +282,14 @@
     onUnlocked={() => {
       needsAuth = false
       void load()
+      void loadDock()
       connectEvents()
     }}
   />
 {:else if !s}
   <div class="boot">loading nektar…</div>
 {:else}
-  <div class="shell" class:market-wide={isMarketHome}>
+  <div class="shell">
     <Sidebar
       {tab}
       {live}
@@ -280,20 +299,15 @@
     />
 
     <main class="center">
-      <QuickstartStrip
-        {s}
-        onOpenDock={() => (dockOpen = true)}
-        onNavigate={(t) => (tab = t)}
-        onApproveStarter={() => void approveStarterPolicy()}
-        onRequestFaucet={() => void requestFaucet()}
-      />
       {#if tab === 'home'}
         <MarketHome
           {s}
           {live}
           {pulse}
+          {dockedApps}
           {searchQuery}
           {faucetBusy}
+          {prefillBuy}
           bind:sellInputEl
           bind:buyInputEl
           onSearch={(q) => (searchQuery = q)}
@@ -308,15 +322,22 @@
           onInspectPeer={(p: PeerInfo) => (drawer = { kind: 'peer', item: p })}
           onInspectReceipt={(r: Receipt) => (drawer = { kind: 'receipt', item: r })}
         />
-      {:else if tab === 'memory'}
-        <FeedView
+      {:else if tab === 'agents'}
+        <AgentsView
           {s}
+          {live}
+          {dockedApps}
           {searchQuery}
+          onSearch={(q) => (searchQuery = q)}
+          onOpenDock={() => (dockOpen = true)}
           onRefresh={load}
+          onRefreshDock={loadDock}
           onToast={showToast}
+          onQuickBuyTopic={quickBuyTopic}
           onInspectMemory={(m: FeedFragment) => (drawer = { kind: 'memory', item: m })}
           onInspectReceipt={(r: Receipt) => (drawer = { kind: 'receipt', item: r })}
           onInspectDeal={(d: DealFeedEntry) => (drawer = { kind: 'deal', item: d })}
+          onInspectPeer={(p: PeerInfo) => (drawer = { kind: 'peer', item: p })}
           onForgetMemory={(sh, seq) => void forgetMemory(sh, seq)}
           onDecideApproval={(id, ok) => void decideApproval(id, ok)}
           onShareUrl={(u) => void shareUrl(u)}
@@ -327,26 +348,17 @@
         <NodeView {s} {live} onRefresh={load} onToast={showToast} onConfirm={askConfirm} onOpenDock={() => (dockOpen = true)} />
       {/if}
     </main>
-
-    {#if !isMarketHome}
-      <RightRail
-        {s}
-        {searchQuery}
-        {faucetBusy}
-        onSearch={(q) => (searchQuery = q)}
-        onOpenPalette={() => (paletteOpen = true)}
-        onOpenDock={() => (dockOpen = true)}
-        onQuickRecall={() => void runQuickRecall()}
-        onRequestFaucet={() => void requestFaucet()}
-        onApproveStarter={() => void approveStarterPolicy()}
-        onNavigate={(t) => (tab = t)}
-      />
-    {/if}
   </div>
 
   <DetailDrawer target={drawer} onClose={() => (drawer = null)} />
   <CommandPalette open={paletteOpen} {commands} onClose={() => (paletteOpen = false)} />
-  <DockModal open={dockOpen} onClose={() => (dockOpen = false)} />
+  <DockModal
+    open={dockOpen}
+    onClose={() => {
+      dockOpen = false
+      void loadDock()
+    }}
+  />
   <OperatorModal
     mode={modalMode}
     title={modalTitle}
@@ -369,6 +381,9 @@
 {/if}
 
 <style>
+  :global(html) {
+    scrollbar-gutter: stable;
+  }
   :global(*) {
     box-sizing: border-box;
   }
@@ -397,6 +412,15 @@
   :global(.mono) {
     font-family: ui-monospace, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace;
   }
+  :global(input[type='number']) {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+  :global(input[type='number']::-webkit-outer-spin-button),
+  :global(input[type='number']::-webkit-inner-spin-button) {
+    -webkit-appearance: none;
+    margin: 0;
+  }
   .boot {
     display: grid;
     place-items: center;
@@ -404,18 +428,14 @@
     color: var(--mut);
     font-size: 0.9rem;
   }
+  /* Unified Full-Width Geometry Across Market, Agents, Wallet & Settings */
   .shell {
     display: grid;
-    grid-template-columns: 204px minmax(0, 680px) 290px;
-    justify-content: center;
+    grid-template-columns: 204px minmax(0, 1fr);
     min-height: 100vh;
-    max-width: 1260px;
+    max-width: 1420px;
     margin: 0 auto;
     padding: 0 0.75rem;
-  }
-  .shell.market-wide {
-    grid-template-columns: 204px minmax(0, 1fr);
-    max-width: 1420px;
   }
   .center {
     min-width: 0;
@@ -445,20 +465,12 @@
 
   @media (max-width: 1100px) and (min-width: 721px) {
     .shell {
-      grid-template-columns: 68px minmax(0, 640px) 260px;
+      grid-template-columns: 68px minmax(0, 1fr);
       padding: 0 0.5rem;
-    }
-    .shell.market-wide {
-      grid-template-columns: 68px minmax(0, 1fr);
-    }
-  }
-  @media (max-width: 1020px) {
-    .shell {
-      grid-template-columns: 68px minmax(0, 1fr);
     }
   }
   @media (max-width: 720px) {
-    .shell, .shell.market-wide {
+    .shell {
       grid-template-columns: 1fr;
       padding: 0 0 60px;
     }

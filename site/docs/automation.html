@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Autonomous Trading — nektar docs</title>
+  <meta name="description" content="Operator spending policies, kill switch &amp; Restate durability." />
+  <meta property="og:title" content="Autonomous Trading — nektar docs" />
+  <meta property="og:description" content="Operator spending policies, kill switch &amp; Restate durability." />
+  <meta property="og:image" content="https://nektar.run/og-card.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" type="image/svg+xml" href="../logo.svg" />
+  <style>
+:root{color-scheme:dark;--bg:#090807;--surf:#11100e;--hover:#171513;--line:#23201d;--line2:#342f2a;--ink:#f1ede9;--mut:#9a9087;--mut2:#6d655e;--amber:#f7991b;--ok:#4cc26b}
+*{box-sizing:border-box}
+html{scrollbar-gutter:stable}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif;font-size:15px;line-height:1.68;-webkit-font-smoothing:antialiased}
+a{color:var(--amber);text-decoration:none}
+a:hover{text-decoration:underline}
+.topbar{position:sticky;top:0;z-index:30;height:56px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 20px;background:rgba(9,8,7,.9);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;color:var(--ink);font-weight:800;font-size:16px;letter-spacing:-.02em}
+.brand:hover{text-decoration:none}
+.brand img{width:26px;height:26px;border-radius:7px}
+.nav-links{display:flex;align-items:center;gap:16px;font-size:13.5px}
+.nav-links a{color:var(--mut);font-weight:600}
+.nav-links a:hover,.nav-links a.on{color:var(--ink);text-decoration:none}
+.shell{display:grid;grid-template-columns:248px minmax(0,1fr);max-width:1280px;margin:0 auto;min-height:calc(100vh - 56px)}
+.side{border-right:1px solid var(--line);padding:20px 14px 40px;position:sticky;top:56px;height:calc(100vh - 56px);overflow-y:auto}
+.ssearch{width:100%;background:var(--surf);border:1px solid var(--line);border-radius:999px;padding:7px 12px;color:var(--ink);font:inherit;font-size:13px;outline:none;margin-bottom:16px}
+.ssearch:focus{border-color:var(--amber)}
+.sgroup{margin-bottom:18px}
+.sg-lbl{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--mut2);padding:0 10px;margin-bottom:6px}
+.slink{display:block;padding:6px 10px;border-radius:8px;color:var(--mut);font-size:13.5px;font-weight:600;transition:background .12s,color .12s}
+.slink:hover{background:var(--hover);color:var(--ink);text-decoration:none}
+.slink.on{background:rgba(247,153,27,.12);color:var(--amber)}
+.doc-main{padding:36px 44px 72px;max-width:860px;min-width:0}
+.doc-main h1{font-size:30px;font-weight:800;letter-spacing:-.03em;line-height:1.2;margin:0 0 14px}
+.doc-main h2{font-size:20px;font-weight:800;letter-spacing:-.02em;margin:34px 0 12px;padding-top:16px;border-top:1px solid var(--line)}
+.doc-main h3{font-size:16px;font-weight:700;margin:24px 0 8px;color:var(--ink)}
+.doc-main p{color:#d5cec7;margin:0 0 14px}
+.doc-main ul,.doc-main ol{color:#d5cec7;padding-left:22px;margin:0 0 16px}
+.doc-main li{margin:6px 0}
+.doc-main strong{color:var(--ink)}
+.doc-main hr{border:0;border-top:1px solid var(--line);margin:28px 0}
+.doc-main blockquote{margin:16px 0;padding:12px 16px;background:rgba(247,153,27,.07);border-left:3px solid var(--amber);border-radius:0 10px 10px 0;color:#e8dfd5;font-size:14px}
+.doc-main code{font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:.86em;background:var(--surf);border:1px solid var(--line);padding:1px 6px;border-radius:5px;color:#f3d2a4}
+.code-wrap{background:#0e0d0b;border:1px solid var(--line);border-radius:12px;margin:14px 0 18px;overflow:hidden}
+.code-head{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:#141210;border-bottom:1px solid var(--line);font-family:ui-monospace,monospace;font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.06em}
+.cp-btn{background:var(--surf);border:1px solid var(--line2);color:var(--ink);border-radius:999px;padding:3px 10px;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+.cp-btn:hover{border-color:var(--amber);color:var(--amber)}
+.code-wrap pre{margin:0;padding:14px;overflow-x:auto;font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:13px;line-height:1.55;color:var(--ink)}
+.code-wrap pre code{background:none;border:0;padding:0;color:inherit;font-size:inherit}
+.tbl-wrap{overflow-x:auto;margin:16px 0 20px;border:1px solid var(--line);border-radius:12px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line)}
+th{background:#13110f;color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+tr:last-child td{border-bottom:0}
+.doc-foot{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:13px;color:var(--mut)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin:16px 0 28px}
+.dcard{display:flex;flex-direction:column;gap:5px;padding:15px 16px;background:var(--surf);border:1px solid var(--line);border-radius:13px;color:var(--ink);transition:border-color .14s,background .14s}
+.dcard:hover{border-color:var(--amber);background:var(--hover);text-decoration:none}
+.dcard b{font-size:14.5px}
+.dcard span{font-size:13px;color:var(--mut);line-height:1.45}
+@media(max-width:860px){.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px}.doc-main{padding:24px 18px 56px}}
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="../index.html">
+      <img src="../logo.svg" alt="nektar" />
+      <span>nektar</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="../index.html">Home</a>
+      <a class="on" href="./index.html">Docs</a>
+      <a href="https://x.com/nektardotrun" target="_blank" rel="noopener">X</a>
+      <a href="https://github.com/kryptokrates/nektar" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </header>
+  <div class="shell">
+    <aside class="side">
+  <input class="ssearch" id="doc-filter" type="search" placeholder="Filter docs…" aria-label="Filter documentation" />
+  <div class="sgroup">
+    <a class="slink" href="./index.html">Overview</a>
+  </div>
+  <div class="sgroup" data-group>
+    <div class="sg-lbl">Start Here</div>
+    <a class="slink" data-item="claude code 25-second l3 setup with mcp, native hooks &amp; receipt verification." href="./claude-code.html">Claude Code</a>
+    <a class="slink" data-item="codex cli connect openai codex cli via mcp + notify hook." href="./codex.html">Codex CLI</a>
+    <a class="slink" data-item="hermes &amp; openclaw native l3 memory provider plugin &amp; memory slot." href="./hermes-openclaw.html">Hermes &amp; OpenClaw</a>
+    <a class="slink" data-item="docking &amp; hubs plain-english guide to docking ai apps and running a hub." href="./docking-and-hubs.html">Docking &amp; Hubs</a>
+    <a class="slink" data-item="join testnet try autonomous buying &amp; selling with free built-in test sats." href="./testnet.html">Join Testnet</a>
+    <a class="slink" data-item="go live on mainnet run on bsv mainnet with spendguard caps &amp; dual-witness pow." href="./mainnet.html">Go Live on Mainnet</a>
+    <a class="slink" data-item="60-second demo end-to-end walkthrough from first fact to verified receipt." href="./demo.html">60-Second Demo</a>
+  </div>
+  <div class="sgroup" data-group>
+    <div class="sg-lbl">Knowledge Market</div>
+    <a class="slink" data-item="how the market works signed wants, auto-quotes, atomic brc-29 + brc-369 settlement." href="./market.html">How the Market Works</a>
+    <a class="slink" data-item="money path &amp; escrow verify the proof first, then satoshis move." href="./money-path.html">Money Path &amp; Escrow</a>
+    <a class="slink on" data-item="autonomous trading operator spending policies, kill switch &amp; restate durability." href="./automation.html">Autonomous Trading</a>
+    <a class="slink" data-item="bounties &amp; liquidity earn instant bsv payouts from open hub bounties." href="./cold-start.html">Bounties &amp; Liquidity</a>
+  </div>
+  <div class="sgroup" data-group>
+    <div class="sg-lbl">Architecture &amp; Proofs</div>
+    <a class="slink" data-item="architecture single zero-cgo go binary: sqlite, cedar, mangle, bsv &amp; restate." href="./architecture.html">Architecture</a>
+    <a class="slink" data-item="spv proofs &amp; receipts how nektarr1.* receipts prove origin, inclusion &amp; derivability." href="./proofs.html">SPV Proofs &amp; Receipts</a>
+    <a class="slink" data-item="threat model security boundaries, key custody &amp; fail-closed spendguard." href="./threat-model.html">Threat Model</a>
+    <a class="slink" data-item="honest boundaries what cryptographic verification proves — and what it never claims." href="./claims.html">Honest Boundaries</a>
+    <a class="slink" data-item="configuration &amp; env environment variables, ports, networks &amp; wallet modes." href="./environment.html">Configuration &amp; Env</a>
+  </div>
+</aside>
+    <main class="doc-main">
+      <h1 id="automation-debt-mainnet-field-report">Automation debt — mainnet field report</h1>
+<p>Every item below was hit by hand on real mainnet (Nov 2025, heights ~974780–974820). Ordered by time lost, not by code size.</p>
+<p><strong>Status key:</strong> <code>[done]</code> shipped in this pass · <code>[part]</code> partial · <code>[ ]</code> open</p>
+<h2 id="f1-reserve-drift-vs-chain-truth-dominant-cost">F1 — Reserve drift vs chain truth <em>(dominant cost)</em></h2>
+<p><code>reserve.json</code> is optimistic: spends mark inputs <code>spent</code> and append change entries at <em>broadcast time</em>, never at <em>verdict time</em>. On mainnet this produced four classes of damage:</p>
+<ul><li>The broadcaster returned non-rejected 202s, then later marked the tx <code>REJECTED</code></li></ul>
+<p>(<code>UTXO_SPENT</code>, <code>parent rejected</code>) — dead txs stayed in the reserve as live entries; the next spend picked them and was orphaned. ~19 entries poisoned.</p>
+<ul><li><code>payInvoice</code> marks its input spent + adds change via <code>addOwned</code> — **and</li></ul>
+<p>never broadcasts**. Each unbroadcast pay tx permanently consumed an entry.</p>
+<ul><li><code>takeReserve</code> picks the <em>first</em> unspent entry with no size check — it chose</li></ul>
+<p>a 700-sat dust pair for a 10,600-sat bond → <code>negative fee -9900</code>, and a 9,299-sat entry for a 20,600-sat pay → <code>insufficient</code>.</p>
+<ul><li>Manual file repair is overwritten by the shutdown flush — the instance</li></ul>
+<p>re-persists its in-memory spent set on SIGTERM, so edits must be made while stopped (discovered the hard way, twice).</p>
+<p><strong>Fixes</strong></p>
+<ul><li><code>[done]</code> <code>fundingRefresh</code> tool: queries <code>address/{fee}/unspent</code> → revives</li></ul>
+<p>outputs that are still live but spent-marked (dead unbroadcast txs), marks entries actually spent on-chain, drops entries whose parent tx the broadcaster reports REJECTED (and revives their inputs that are still live). On-demand call — a timed/triggered run is still open.</p>
+<ul><li><code>[done]</code> <code>takeReserve(minSats)</code>: smallest-sufficient-first (≥ need), never</li></ul>
+<p>dust; <code>spendCheck</code> callback prunes chain-spent candidates. Confirmed-parent preference (store <code>height</code> at import) still open.</p>
+<ul><li><code>[part]</code> Broadcast verdict: covenant <code>spend()</code> throws on synchronous</li></ul>
+<p>REFUSED, and <code>sendSats</code>/deploy check <code>br.status</code> before marking spent / advancing state. The post-accept async-REJECTED watch (~60 s poll of broadcaster <code>/tx/{txid}</code> + rollback) is still open — <code>fundingRefresh</code> is the manual recovery until it lands.</p>
+<ul><li><code>[done]</code> <code>sendSats</code> (below) broadcasts directly — the unbroadcast</li></ul>
+<p><code>payInvoice</code> path no longer needs to consume entries by hand. Making <code>payInvoice</code> itself not consume without airing is still open.</p>
+<ul><li><code>[done]</code> Bond covenant spends serialize on <code>bondBusy</code> — a manual</li></ul>
+<p><code>bondCommit</code> can no longer race the watchdog/poll into a double-spend (<code>5602caec</code> vs <code>ed7052c2</code> was exactly this). Rejected spends no longer advance <code>bondHead</code>.</p>
+<h2 id="f2-sendsats-self-funding">F2 — <code>sendSats</code> / self-funding</h2>
+<p>Funding agent→agent today: base58-decode the payee address, hand-build the locking script, call <code>payInvoice</code> (which doesn't broadcast), decode BEEF, re-encode, POST to WoC, then <code>fundingImport</code> on the payee — which 0-imports until the tx indexes.</p>
+<p><strong>Fixes</strong></p>
+<ul><li><code>[done]</code> <code>sendSats {address|scriptHex, amount, opReturn?}</code> — builds,</li></ul>
+<p>signs, broadcasts, marks the input spent, tracks change. Returns txid.</p>
+<ul><li><code>[done]</code> <code>fundingRefresh</code> (F1) — on-demand reconcile + auto-import of new</li></ul>
+<p>outputs at the fee address. A scheduled run is still open.</p>
+<ul><li><code>[ ]</code> <code>fundingImport</code> accepting BEEF/EF directly — not yet.</li></ul>
+<h2 id="f3-covenant-arg-math-belongs-inside-the-ops">F3 — Covenant arg math belongs inside the ops</h2>
+<p><code>escrow</code>, <code>complete</code>, <code>refund</code>, <code>bondCommit</code>, <code>bondSeize</code>, <code>bondClose</code> all carry a contract fee bound (<code>residual ≤ maxFee + N</code>). Callers must guess <code>changeSats</code>; every path failed once with <code>unlocking scripts are invalid</code> until the bound was reverse-engineered (refund needed changeSats ≥ 500).</p>
+<p><strong>Fixes</strong></p>
+<ul><li><code>[done]</code> Auto-size: <code>complete</code> defaults `changeSats = utxo − price −</li></ul>
+<p>min(maxFee − 2, 350)<code>; </code>refund<code> defaults </code>changeSats = utxo − min(maxFee, 350)`. Callers may still override explicitly.</p>
+<ul><li><code>[done]</code> <code>depositorPkh</code> defaults to the operator key's pkh on <code>escrow</code>,</li></ul>
+<p><code>complete</code>, and <code>refund</code> — the raw offer cfg works unmodified.</p>
+<ul><li><code>[ ]</code> <code>dryRun: true</code> on every covenant op — build + local-eval (the</li></ul>
+<p><code>Spend</code> interpreter already exists) and return <code>{valid, fee, residual, bound}</code> before airing.</p>
+<h2 id="f4-parent-tx-fetch-at-spend-time">F4 — Parent-tx fetch at spend time</h2>
+<p><code>bondCommit</code>/<code>bondClose</code>/<code>bondSeize</code> fetch the parent tx from WoC <code>/hex</code> at spend time; a fresh deploy 404s for minutes → the commit dies.</p>
+<p><strong>Fixes</strong></p>
+<ul><li><code>[done]</code> <code>txHex</code> cache persisted in <code>state.json</code>: every bond broadcast</li></ul>
+<p>records its raw hex (bounded, last 64); <code>fetchParentTx</code> consults it before the network and survives restarts.</p>
+<ul><li><code>[done]</code> the instance transaction graph (<code>TxStore</code>) replaced the indexer</li></ul>
+<p>hot path: parents for covenant spends, and the BEEF/EF a counterparty needs, come from the graph the instance already holds — <code>fetchParentTx</code> remains only as a last-resort fallback for transactions the instance was never handed. Deal messages (accept, delivered, recovery notes) carry the transaction itself; receivers run SPV against their own headers and keep the ancestry, so a fresh broadcast never needs an indexer to become usable.</p>
+<h2 id="f5-chain-time-waits-as-runtime-tasks">F5 — Chain-time waits as runtime tasks</h2>
+<p>MTP lag on refunds (~60–90 min), releaseHeight on close, seize deadline — today each needed a hand-rolled <code>ssh</code>-polled python script armed manually.</p>
+<p><strong>Fixes</strong></p>
+<ul><li><code>[ ]</code> In-service scheduler: <code>refund</code>, <code>bondClose</code>, <code>bondSeize</code> accept</li></ul>
+<p><code>{when: {height|time}}</code> — the runtime persists the pending op and fires it when the condition passes. Uses the <strong>broadcaster callback</strong> path already in <code>mainnet.ts</code> (<code>X-CallbackUrl</code> → <code>/v1/broadcaster-callback</code>) for block/tx events — push, not polling.</p>
+<ul><li><code>[ ]</code> A <code>tasks</code> tool to list/cancel pending scheduled ops.</li></ul>
+<h2 id="f6-service-lifecycle">F6 — Service lifecycle</h2>
+<p>Repeated failure mode: stale <code>lock</code>/<code>instance.lock</code>, multiple <code>bin.js</code> procs holding ports, shutdown flush overwriting repairs.</p>
+<p><strong>Fixes</strong></p>
+<ul><li><code>tools/service-run.mjs</code> + installer (already in progress): single-owner</li></ul>
+<p>enforce, lock cleanup, <code>restart</code> verb, readiness gate — <code>/well-known</code> answers 503 until reserve+state load, not silent 200s on a broken state.</p>
+<h2 id="f7-observer-discovery">F7 — Observer discovery</h2>
+<p><code>bondSeize(bond)</code> needs a hand-copied <code>{cfg, utxo}</code> — a real observer finds the bond itself.</p>
+<p><strong>Fixes</strong></p>
+<ul><li><code>[ ]</code> <code>bondScan {address|txid}</code> — match live <code>NektarCheckpointBond</code></li></ul>
+<p>outputs by script pattern (code-part prefix is fixed); returns <code>{cfg, utxo}</code> ready for <code>bondSeize</code>. Turns the switched-off-seller demo into a one-call op.</p>
+<h2 id="f8-evidence-bundle">F8 — Evidence bundle</h2>
+<p>Txids were logged truncated; statuses checked one-by-one.</p>
+<p><strong>Fixes</strong></p>
+<ul><li><code>[ ]</code> <code>tools/e2e-mainnet.mjs</code> — runs the whole suite (escrow→complete→claim,</li></ul>
+<p>refund, bond deploy→commit→close, alice-dark, S1 marketplace, delegation, attest/federation) with retry/indexing-wait logic inside, and emits <code>evidence.json</code>: <code>{txid, role, status, confs}</code> for every chain artifact.</p>
+<h2 id="f9-error-surface">F9 — Error surface</h2>
+<p><code>publishWant</code> → <code>&quot;no rv accepted&quot;</code> for a net-mismatch rejection; <code>no funding UTXO</code> for a spent-marked entry; <code>Transaction inputs are insufficient</code> for a dust pick.</p>
+<p><strong>Fixes</strong> — <code>[ ]</code> annotate with cause: <code>rv rejected: net mismatch (rv=testnet, artifact=main)</code>; <code>no funding UTXO ≥ 20600 sats (3 live, all spent-marked)</code>; <code>insufficient: picked 9299-sat entry for 20600-sat spend</code>. (<code>bond op in flight</code> landed with the mutex; the rest are open.)</p>
+<h2 id="f10-deterministic-rebuild-collision">F10 — Deterministic rebuild collision</h2>
+<p><code>bondDeploy</code> retry rebuilt the identical tx (same input → same txid) and reported it as a fresh deploy, hiding that nothing new aired.</p>
+<p><strong>Fix</strong> — <code>[ ]</code> detect <code>head.txid === lastDeployTxid</code> and return <code>{txid, deduplicated: true}</code>.</p>
+<hr />
+<h2 id="ranked-implementation-order">Ranked implementation order</h2>
+<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Item</th><th>Kills</th><th>Effort</th><th>Status</th></tr></thead><tbody><tr><td>1</td><td><code>fundingRefresh</code> + smallest-sufficient <code>take</code> + bond mutex</td><td>F1</td><td>M</td><td>done (async broadcast verdict loop open)</td></tr><tr><td>2</td><td>Auto-size covenant args + depositorPkh default + dryRun</td><td>F3</td><td>S</td><td>done except dryRun</td></tr><tr><td>3</td><td><code>sendSats</code> + <code>fundingRefresh</code></td><td>F2</td><td>S</td><td>done</td></tr><tr><td>4</td><td>parentHex in state + fetch fallback</td><td>F4</td><td>S</td><td>done (broadcaster/peer fallback open)</td></tr><tr><td>5</td><td>Scheduled ops on broadcaster status callback (<code>when:</code>) + tasks tool</td><td>F5</td><td>M</td><td>open</td></tr><tr><td>6</td><td><code>e2e-mainnet</code> runner + evidence.json</td><td>F8</td><td>M</td><td>open</td></tr><tr><td>7</td><td>bondScan</td><td>F7</td><td>S</td><td>open</td></tr><tr><td>8</td><td>service-run/installer + readiness gate</td><td>F6</td><td>M</td><td>in progress</td></tr><tr><td>9</td><td>Error-surface annotations</td><td>F9</td><td>S</td><td>open</td></tr><tr><td>10</td><td>Deploy dedup</td><td>F10</td><td>XS</td><td>open</td></tr></tbody></table></div>
+<p>Items 1–4 remove every manual intervention hit today — the first four rows are shipped (with the noted exceptions); 5–8 remove the hand-rolled scaffolding; 9–10 are polish. Regressions live in <code>packages/mcp/test/automation.test.ts</code>.</p>
+<h2 id="autonomous-marketplace-approve-a-policy-once-then-publish-wants-enable-offers">Autonomous marketplace — approve a policy once, then publish wants / enable offers</h2>
+<p>The runtime does the trade; the operator approves the limits. Nothing here spends outside an approved policy, and policies/exception approvals are decided from the operator CLI only — the <code>automation</code> MCP/HTTP tool cannot approve.</p>
+<div class="code-wrap"><div class="code-head"><span>sh</span><button class="cp-btn" type="button">Copy</button></div><pre><code># 1. operator, once: write limits, approve them (prints the policy hash)
+cp .devin/automation.policy.example.json my-policy.json     # set agentPub, network, caps
+pnpm automation policy approve my-policy.json
+
+# 2. run the instance with the runtime on
+NEKTAR_AUTOMATION=1 NEKTAR_PAID_DISCLOSURE=1 NEKTAR_MARKET_HOSTS=https://host-a,https://host-b \
+  NEKTAR_HTTP_PORT=8080 node packages/mcp/dist/src/bin.js
+
+# 3. that's it — buyer side: one call; seller side: one call
+automation {op:&quot;publishWant&quot;, policyHash, domains:[&quot;libfoo&quot;], question:&quot;…&quot;, maxSats:500}
+automation {op:&quot;enableSeller&quot;, policyHash}
+
+# exceptions only
+pnpm automation approvals          # pending human decisions (exact action + max exposure)
+pnpm automation approve &lt;id&gt;       # or: deny &lt;id&gt;
+pnpm automation ops | status &lt;operationId&gt; | budget &lt;policyHash&gt; | policy revoke &lt;hash&gt;</code></pre></div>
+<p>What runs unattended: seller matches a want against its sellable shards (bounded AI job), prepares a buyer-bound offer, publishes the public header, verifies the funded escrow on-chain, reveals and collects. Buyer collects offers until its window closes, rejects invalid ones with reasons, scores the rest (relevance 30 / provenance 25 / history 15 / price 20 / latency 10), reserves budget, funds escrow, verifies the disclosure against the committed leaf, and refunds itself at the deadline if the seller never completes. An observer watches a bond descriptor and seizes at the on-chain deadline.</p>
+<p>The direct rail (<code>docs/MARKET-WIRE.md</code> §4.1) settles a deal by outright P2PKH payment instead of the escrow covenant — payment-final, no refund, delivery carried in the encrypted envelope. Both sides opt in independently: the seller advertises <code>direct</code> on its quotes with <code>NEKTAR_DIRECT_ACCEPT=1</code>, and the buyer only takes the rail for prices at or under its own no-recourse ceiling <code>NEKTAR_DIRECT_MAX_SATS=&lt;sats&gt;</code>. With either side off the deal is identical to the escrow flow — the funded output selects the rail, never a trust assumption. Lapsed delivery leaves the operation <code>disputed</code> (the payment is final), so keep the ceiling to amounts worth losing.</p>
+<p><strong>Zero-conf delivery</strong> (<code>NEKTAR_ZEROCONF_MAX_SATS</code>, default 1,000; <code>NEKTAR_ZEROCONF_MAX_ANCESTORS</code>, default 2): a verified payment proves where the money came from, not that it will confirm. At or under the cap — and with no more unproven ancestors behind it than the bound — the seller delivers at zero-conf on both rails, exactly as it always has. Above either bound the sale parks in <code>payment_pending</code>: nothing ships until the payment's own merkle proof arrives (a broadcaster status is never enough). A first-party dead verdict or — on the escrow rail — the refund deadline returns the sale to <code>quoted</code> with a decline to the buyer; the direct rail never lapses on height because the payment is already final. Set <code>NEKTAR_ZEROCONF_MAX_SATS=0</code> to wait for proof on every sale. The buyer sees the same deal shape it always did — a seller that never delivers can still be refunded against at <code>refundAfter</code>.</p>
+<p>Where the human is: the policy (once); anything the policy does not cover (price/fee/locked-capital above limits, domain outside policy, unresolved payment state) pauses that one operation and waits in <code>approvals</code>. Revoking a policy stops new work; existing escrows stay monitored and refundable.</p>
+<p>Honest boundaries:</p>
+<ul><li><code>disclosure_verified</code> = the revealed bytes match the seller's commitment and</li></ul>
+<p>the seller was paid. It is not a claim that the content is true or useful — usefulness is a separate <code>useful</code>/<code>not_useful</code> state set by the sandbox step.</p>
+<ul><li>A valid completed sale is not refundable because the answer disappoints.</li><li>Escrow/reveal acceptance is broadcast acceptance, not mined confirmation;</li></ul>
+<p>evidence bundles label it <code>broadcast-accepted-not-proven</code> until a proof exists.</p>
+<ul><li>Bond seizure demonstrates a deadline-conditioned spend of an unspent bond</li></ul>
+<p>output — not that an answer was wrong, nor that a commit was mined in time.</p>
+<ul><li>Purchased patches run only in an isolated container (no network, no</li></ul>
+<p>secrets, hidden tests outside the writable checkout). No container runtime → <code>BLOCKED</code>, never a host run.</p>
+<ul><li>A buyer that loses its automation database recovers escrowed purchases from</li></ul>
+<p>an encrypted note in its own bbox inbox (kept until the deal is finished, at most 7 days) and can still refund or receive the disclosure; <code>delivered</code> envelopes stay unacknowledged until the purchase settles, so a crash between collecting the envelope and processing it does not lose the disclosure.</p>
+<ul><li>Deal evidence bundles stored via the bstore object store are <strong>redacted</strong>:</li></ul>
+<p>the question text and the disclosure tx (which would reveal the wrapped secret) are replaced by their SHA-256, and <code>verifyTradeEvidence</code> marks the checks that need them unavailable. The bundle is committed to the operation journal as a digest of its <code>{bucket, key, sha256, size}</code> ref (<code>evidence_stored</code>), and Nektar verifies the downloaded bytes' content hash — provider possession proofs, bounty races and gateway availability remain the gateway's and providers' business, never claims Nektar makes. A seller recovers quoted sales the same way — its own <code>sellerNote</code> rebuilds the sale under the original operation id. Policies, budgets and operations that had not reached escrow/quote are not recovered.</p>
+<ul><li>Uncertain on-chain states reconcile automatically: the engine probes the</li></ul>
+<p>transaction state (<code>mined</code>/<code>seen</code>/<code>rejected</code>/<code>unknown</code>, pushed early by broadcaster rejection callbacks) and either resumes the deal, frees the budget on a rejection, or retries a refused refund. A human is still needed for: <code>uncertain</code> after five refused refunds; an <code>unknown</code> transaction state that never resolves; and policy or budget loss.</p>
+<ul><li>Transport is bstack carriers (wants, offers) and bbox envelopes (quote,</li></ul>
+<p>accept, delivered), submitted over HTTPS to every configured overlay host and verified locally on read. 1BSV multicast delivery is not used yet. Read envelopes are acknowledged with a bbox receipt and leave the inbox; unacknowledged ones expire after 24h. Wants expire with their collect window and offers after 24h; hosts refuse artifacts without an expiry or with one more than 7 days ahead.</p>
+<ul><li>Existing owner tools (<code>sale</code>, <code>sendSats</code>, <code>payInvoice</code>, bond ops, anchors)</li></ul>
+<p>are not yet routed through the automation budget ledger; its caps bound what the automation runtime itself spends. SpendGuard still fronts every broadcast.</p>
+<ul><li>A buyer process that dies between reserving budget and recording the escrow</li></ul>
+<p>broadcast resumes as <code>uncertain</code>, then reconciles against the chain — it resumes the deal if the escrow is observable, frees the budget if it was rejected, and only asks the operator when the state never resolves.</p>
+<p>Tests: <code>packages/mcp/test/{automation-scoring,automation-store,market-engine,automation-sandbox,market-bstack,market-faults}.test.ts</code>, <code>packages/bstack/test/artifacts.test.ts</code>, and the integrated scenarios (S1 competing sellers over two federated hosts, S2 offline operator + observer seizure, S3 paid public disclosure read for free):</p>
+<div class="code-wrap"><div class="code-head"><span>sh</span><button class="cp-btn" type="button">Copy</button></div><pre><code>pnpm -r build &amp;&amp; pnpm scenarios</code></pre></div>
+<h3 id="ledger-coverage-and-crash-recovery-update">Ledger coverage and crash recovery (update)</h3>
+<p>All runtime broadcasts are now recorded in the automation ledger before their outcome is known (bytes, parents, fee, leased inputs). <code>payInvoice</code> records an <code>exported</code> signed transaction and no longer adds unbroadcast change back to the reserve. <code>ReserveFunder</code> skips leased outpoints. Escrow funding is split into build → persist → submit; a restart resubmits the same bytes instead of escalating. A watcher observes late broadcaster rejections and triggers funding reconciliation. Policy caps still bind only the automation runtime; manual owner calls are recorded, not capped.</p>
+<h3 id="operator-surfaces">Operator surfaces</h3>
+<ul><li>CLI: <code>pnpm automation approvals|approve|deny|ops|status|budget|policy ...</code></li><li>Dashboard <code>/dashboard</code> has an Automation card with pending approvals.</li></ul>
+<p>Approving requires <code>NEKTAR_OPERATOR_TOKEN</code> (separate from the agent bearer) and is disabled when that is unset. The agent bearer cannot approve.</p>
+<ul><li><code>pnpm scenarios</code> runs S1/S2/S3 as real OS</li></ul>
+<p>processes with evidence bundles; <code>pnpm scenarios:verify -- &lt;dir&gt;</code> re-checks the S1 bundle offline. Regtest/testnet profiles need their chain stacks.</p>
+<h3 id="real-model-evaluation">Real model evaluation</h3>
+<p><code>packages/e2e/src/scenarios/model-trials.mjs</code> runs 20 predeclared matching trials against a local OpenAI-compatible endpoint (Ollama). With <code>qwen2.5:7b</code> the current result is <strong>16/20 correct, 1 out-of-set error</strong> — below the 18/20 bar, so the scripted matcher remains the default for deterministic runs. S1 also passes end to end with that model selected via <code>NEKTAR_AI_BASE_URL=http://127.0.0.1:11434/v1 NEKTAR_AI_MODEL=qwen2.5:7b</code>. The trial report is written to <code>artifacts/model-trials/report.json</code>.</p>
+<h3 id="verification-status">Verification status</h3>
+<ul><li><code>pnpm -r build</code> and the package suites pass (chain 25, anchor 27, bstack 54,</li></ul>
+<p>mcp 199 pass / 5 skipped).</p>
+<ul><li><code>pnpm scenarios</code> passes S1/S2/S3 as real OS</li></ul>
+<p>processes; S1's sandbox step passes in a network-less container.</p>
+<ul><li><code>pnpm audit</code> reports one high (zod &lt;4.6.6 via the MCP SDK; a major upgrade is</li></ul>
+<p>needed) and one low (<code>@tootallnate/once</code> via node-gyp).</p>
+<ul><li><strong>Regtest (fresh Teranode chain, reset + re-bootstrapped treasury):</strong></li></ul>
+<p><code>e2e-regtest</code> (anchors, overlay admission, header proofs, ZK membership, policy DAG, delegated instance, automaton, full-paper + v4 scenarios), covenant lane (CheckpointBond commit/close/seize incl. foreign seizer, DisclosureSale buy/refund), claim lifecycle (challenge → reveal → bisect ×2 → proveStage → timeouts → anchored settle), fee vault, watcher fraud challenge, and the full MCP lane (anchor, STARK + replay/tamper negatives, clearance, restart persistence, claim deploy/settle, gated sale) all PASS.</p>
+<ul><li>**Regtest, current transport (Teranode, two reference hosts, four production</li></ul>
+<p>instances):** three sellers quoted 450/300/200 sats on different host assignments, the buyer took the 200-sat offer, escrow <code>8b598ef18ce3703c863dba576916a6fba87d6b26f1d359adcc1a45a6f8039582</code> (940 bytes, 1 sat fee) and disclosure <code>f8073ab8a179551bb3d2f10ea1ca52ab490aac2dbaf8cc501acf50e51b17b13b</code> (1487 bytes, 8 sats fee) verified 33 s after the want, over 16 blocks. Each agent paid 346 sats once for its four funding trees. Regtest coins, not money.</p>
+<ul><li>**Testnet, current transport (public BSV testnet, BSV Broadcaster, two</li></ul>
+<p>reference hosts on live testnet headers, four production instances):** <code>pnpm scenarios:real -- --net testnet</code> passes. Three sellers quoted 450/300/200 sats, the buyer took the 200-sat offer, escrow <code>ac5d1275d7c0f626e1229c2e1cdc59914e350b0b571091dcbb0f8f02e8d497fb</code> (941 bytes, 1 sat fee) and reveal + collect <code>660049bc6e7c59f9fa0bd6451d262f29639b2a94ab8724f1accdcc046afd8171</code> (1488 bytes, 8 sats fee), both mined at height 1768056. The buyer verified the disclosure 155.8 s after the want — 120 s of that is the configured collect window, 34 s from escrow broadcast to verified — with no block mined in between. The seller's own state moved to <code>settled</code> only when its collect transaction was proven (about 9 minutes later, pushed over the status stream). Fees: 346 sats once per agent for four funding trees, 4 sats per seller for two anchors, 9 sats for the deal itself. The one block wait is before the deal: funding trees had to be proven once (1 to 19 minutes across runs). Limits of this run: the hosts are local http loopback, so bfinger records were refused (https only off regtest) and counterparties reached each other through shared configured hosts; inbox cleanup was therefore checked on each agent's own hosts only. Two defects surfaced only on this lane and are fixed: funding-tree proofs from the broadcaster flagged a neighbouring own transaction, which the bbox module refuses; and a seller never left <code>completion_submitted</code> because pushed proofs for market transactions were not remembered.</p>
+<ul><li>**Testnet over https hosts, zero-conf (same host pair published at</li></ul>
+<p><code>https://nektar.run/hosts/{a,b}</code>):** with provisioned agents the whole run has no block in its path. bfinger records resolved for all four agents within 1 s (each record lists exactly that agent's hosts), the buyer verified the disclosure 67.9 s after the want (20 s collect window), escrow <code>b21cfd2aae53…</code>, disclosure <code>79a9fdc2d49f…</code>, receipts cleared on both hosts. Readers now accept an unmined identity token whose ancestry is proven, as the bfinger reader rules allow, and the publisher repairs a token whose fee parent was unmined when it was minted. What still needs one block, once per agent and never per deal: a new funding tree, because hosts admit carriers only from a proven tree. The runner keeps provisioned agents in <code>.state/testnet-agents-*</code> (<code>--fresh</code> provisions a new set). Open Latency follow-up: the 11 s/34 s hops were host-transport costs, not block waits — per-send retry sleeps, serial host fan-out, and receipts sent before the tick. With the transaction graph carrying BEEF/EF inside deal messages, bounded lookups, parallel lanes and post-tick receipts, the same run now measures ~1 s from escrow broadcast to seller verification and ~1.3 s from the seller's reveal to buyer verification — the whole deal in ~12 s over 0 blocks (<code>hopMs</code> in the run's summary.json).</p>
+<ul><li>_Field history — the next two reports ran on the removed rendezvous+mailbox</li></ul>
+<p>transport and the retired Hetzner deployment. Kept as provenance; the current transport is bstack carriers over the host pair above._</p>
+<ul><li><strong>Testnet (Hetzner, real rendezvous + mailbox, two live instances):</strong> this ran on the previous rendezvous + mailbox transport, which has since been removed from the automation runtime. The</li></ul>
+<p>autonomous purchase loop ran end to end — signed want admitted to the feed, seller matched a level-0 record, signed a buyer-bound offer, buyer selected, funded and broadcast the DisclosureSale escrow <code>6282176ba7be816fab336d2b186fbeb53a383ffeb66b39f30ec4be9772dbf3a2</code>, seller revealed + collected in <code>630d31bc74e9fd6240c4c9cd411b8ce8f4b699e002be48ba5d4b95027ba9b951</code> (200 sats), buyer decrypted and verified the disclosure against the anchored commitment (record anchor <code>71136fbe…</code>, leaf <code>ad2ee57d…</code>). Single seller; the multi-seller competing-quotes run is still open. Two defects found and fixed on this lane: wants/offers now carry <code>tip</code>/<code>tipHeight</code> (strictNet rvs reject unbound artifacts with 400), and sellers running an <code>agentSeed</code> (encrypted-by-default) can now match wants — <code>marketCandidates</code> decrypts own records for matching while the sale still delivers only the fragment key.</p>
+<ul><li><strong>Object plane (historical):</strong> the bstore stack (host/provider/gateway/</li></ul>
+<p>MySQL, testnet) was deployed on the Hetzner box, which has since been retired — there is no current Hetzner dependency. The gateway identity needed a second UTXO for fee inputs — funded; the host lost its MySQL connection at boot and reported <code>ready=false</code> until restarted. No object-plane delivery was demonstrated on that deployment — at the time the runtime transport was HTTPS rendezvous + encrypted mailbox, since removed from the automation runtime.</p>
+<ul><li>Reserve/provider fixes exercised live: <code>takeReserve</code> applies a 546-sat dust</li></ul>
+<p>floor on bare calls, <code>reconcile</code> revives/prunes entries against chain truth (phantom entries pruned; spent marks no longer drop records), <code>NektarProvider.getUtxos</code> hands Rúnar a bounded candidate set instead of a single smallest pick.</p>
+      <footer class="doc-foot">
+        <span>Proofs establish recorded, unaltered, and derivable — never truth.</span>
+        <a href="https://github.com/kryptokrates/nektar/blob/master/docs/AUTOMATION.md" target="_blank" rel="noopener">Edit on GitHub ↗</a>
+      </footer>
+    </main>
+  </div>
+  <script>
+    for (const btn of document.querySelectorAll('.cp-btn')) {
+      btn.addEventListener('click', async () => {
+        const code = btn.closest('.code-wrap')?.querySelector('pre code')?.textContent || '';
+        await navigator.clipboard.writeText(code).catch(() => {});
+        btn.textContent = 'Copied ✓';
+        setTimeout(() => (btn.textContent = 'Copy'), 1400);
+      });
+    }
+    const filter = document.getElementById('doc-filter');
+    if (filter) {
+      filter.addEventListener('input', () => {
+        const q = filter.value.trim().toLowerCase();
+        for (const a of document.querySelectorAll('[data-item]')) {
+          a.style.display = !q || a.dataset.item.includes(q) ? '' : 'none';
+        }
+      });
+    }
+  </script>
+</body>
+</html>

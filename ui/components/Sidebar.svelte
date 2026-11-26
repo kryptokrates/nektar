@@ -39,12 +39,14 @@
         {#if pendingApprovals > 0}<span class="badge">{pendingApprovals}</span>{/if}
       </button>
 
-      <button class="ni" class:active={tab === 'memory'} onclick={() => onSelect('memory')}>
+      <button class="ni" class:active={tab === 'agents'} onclick={() => onSelect('agents')}>
         <svg viewBox="0 0 24 24" class="ico">
-          <path d="M12 4L3.5 8.5 12 13l8.5-4.5L12 4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
-          <path d="M3.5 12.5L12 17l8.5-4.5M3.5 16.5L12 21l8.5-4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          <circle cx="12" cy="7" r="3" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <circle cx="6" cy="17" r="2.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <circle cx="18" cy="17" r="2.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path d="M10.4 9.6L7.4 14.8M13.6 9.6l3 5.2M8.5 17h7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
         </svg>
-        <span class="lbl">Memory</span>
+        <span class="lbl">Agents</span>
       </button>
 
       <button class="ni" class:active={tab === 'wallet'} onclick={() => onSelect('wallet')}>
@@ -56,12 +58,12 @@
         <span class="lbl">Wallet</span>
       </button>
 
-      <button class="ni" class:active={tab === 'node'} onclick={() => onSelect('node')}>
+      <button class="ni" class:active={tab === 'settings'} onclick={() => onSelect('settings')}>
         <svg viewBox="0 0 24 24" class="ico">
           <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8" />
           <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
         </svg>
-        <span class="lbl">Node</span>
+        <span class="lbl">Settings</span>
       </button>
     </nav>
   </div>

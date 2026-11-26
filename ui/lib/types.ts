@@ -238,7 +238,20 @@ export type State = {
   }
 }
 
-export type NavTab = 'home' | 'memory' | 'wallet' | 'node'
+export type DockClient = {
+  id: string
+  label: string
+  tier: string
+  tierLabel: string
+  summary: string
+  configPath: string
+  detected: boolean
+  docked: boolean
+  oneClick: boolean
+  note?: string
+}
+
+export type NavTab = 'home' | 'agents' | 'wallet' | 'settings'
 
 export type DrawerTarget =
   | { kind: 'memory'; item: FeedFragment }

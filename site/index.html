@@ -2,237 +2,1116 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>nektar — verifiable AI agent memory &amp; knowledge market</title>
-    <meta name="description" content="One verifiable brain for every AI agent — single Go binary install in 10s, dock any running agent, deploy a Hub Node in 1 click." />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>nektar — one verifiable brain for all your AI agents</title>
+    <meta
+      name="description"
+      content="Dock Claude, Cursor, Codex, or any LLM in 25 seconds. Encrypted local memory anchored on BSV with checkable receipts and autonomous satoshi trading."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://nektar.run/" />
+    <meta property="og:title" content="nektar — one verifiable brain for all your AI agents" />
+    <meta
+      property="og:description"
+      content="Dock Claude, Cursor &amp; Codex in 25 seconds. Anchor facts on BSV, verify answers with cryptographic receipts, and let your agents earn sats."
+    />
+    <meta property="og:image" content="https://nektar.run/og-card.svg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@nektardotrun" />
+    <meta name="twitter:title" content="nektar — one verifiable brain for all your AI agents" />
+    <meta
+      name="twitter:description"
+      content="One zero-CGO Go binary. 25-second setup. Verifiable AI agent memory that trades knowledge for sats on BSV."
+    />
+    <meta name="twitter:image" content="https://nektar.run/og-card.svg" />
+    <link rel="icon" type="image/svg+xml" href="./logo.svg" />
     <style>
-      body {
-        background: #161311;
-        color: #eae6e3;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        max-width: 740px;
-        margin: 0 auto;
-        padding: 48px 20px 72px;
-        line-height: 1.6;
+      :root {
+        color-scheme: dark;
+        --bg: #090807;
+        --surf: #11100e;
+        --hover: #171513;
+        --line: #23201d;
+        --line2: #342f2a;
+        --ink: #f1ede9;
+        --mut: #9a9087;
+        --mut2: #6d655e;
+        --amber: #f7991b;
+        --ok: #4cc26b;
       }
-      img.logo {
-        width: 76px;
-        display: block;
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
+        font-size: 15px;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+        background-image:
+          radial-gradient(ellipse 60% 34% at 22% 0%, rgba(76, 194, 107, 0.08), transparent 70%),
+          radial-gradient(ellipse 60% 34% at 78% 0%, rgba(247, 153, 27, 0.1), transparent 70%);
+      }
+      a { color: inherit; text-decoration: none; }
+      .mono { font-family: ui-monospace, 'Cascadia Mono', SFMono-Regular, Consolas, monospace; }
+
+      /* Minimal Sticky Nav */
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        height: 58px;
+        background: rgba(9, 8, 7, 0.86);
+        backdrop-filter: blur(14px);
+        border-bottom: 1px solid var(--line);
+      }
+      .nav-in {
+        max-width: 1080px;
+        height: 100%;
+        margin: 0 auto;
+        padding: 0 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 17px;
+        font-weight: 800;
+        letter-spacing: -0.025em;
+      }
+      .brand img { width: 26px; height: 26px; border-radius: 7px; }
+      .nav-r {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        font-size: 13.5px;
+        font-weight: 600;
+      }
+      .nav-link { color: var(--mut); transition: color 0.14s; }
+      .nav-link:hover { color: var(--ink); }
+      .icon-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        background: var(--surf);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 5px 12px;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--ink);
+        transition: border-color 0.14s, background 0.14s;
+      }
+      .icon-pill:hover { border-color: var(--line2); background: var(--hover); }
+      .icon-pill svg { width: 14px; height: 14px; flex-shrink: 0; }
+      .stars { color: var(--amber); font-family: ui-monospace, monospace; font-size: 12px; }
+
+      /* Main Container */
+      .wrap {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 46px 20px 80px;
+      }
+
+      /* Hero */
+      .hero {
+        text-align: center;
+        max-width: 780px;
+        margin: 0 auto 30px;
+      }
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 12px;
+        border-radius: 999px;
+        background: var(--surf);
+        border: 1px solid var(--line);
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--mut);
         margin-bottom: 18px;
       }
+      .edot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--ok);
+        box-shadow: 0 0 8px rgba(76, 194, 107, 0.7);
+      }
       h1 {
-        font-size: 26px;
-        margin: 0 0 6px;
-        font-weight: 700;
+        margin: 0 0 14px;
+        font-size: clamp(34px, 5.4vw, 56px);
+        font-weight: 800;
+        line-height: 1.07;
+        letter-spacing: -0.035em;
       }
-      h2 {
-        font-size: 13px;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        color: #f7991b;
-        margin: 34px 0 10px;
+      h1 em {
+        font-style: normal;
+        background: linear-gradient(90deg, #f7991b 0%, #ffd479 50%, #4cc26b 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
       }
-      .tag {
-        color: #f7991b;
-        font-size: 14px;
-        margin-bottom: 26px;
+      .sub {
+        margin: 0 auto 24px;
+        max-width: 620px;
+        font-size: 17px;
+        color: var(--mut);
+        line-height: 1.55;
       }
-      .card {
-        background: #221c18;
-        border: 1px solid #382e27;
-        border-radius: 12px;
-        padding: 16px 18px;
-        margin-bottom: 14px;
+
+      /* Zero-Friction OS-Auto-Detect Installer */
+      .install-box {
+        max-width: 840px;
+        margin: 0 auto;
+        background: var(--surf);
+        border: 1px solid var(--line2);
+        border-radius: 16px;
+        padding: 12px 14px 14px;
+        box-shadow: 0 22px 60px rgba(0, 0, 0, 0.5);
+        text-align: left;
       }
-      .tabs {
+      .inst-head {
         display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
         margin-bottom: 10px;
+        flex-wrap: wrap;
       }
-      .tab {
-        background: #2c241f;
-        border: 1px solid #3c3129;
-        color: #b8aea5;
-        border-radius: 99px;
+      .pills { display: flex; gap: 6px; flex-wrap: wrap; }
+      .pill {
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--mut);
+        border-radius: 999px;
         padding: 4px 11px;
-        font-size: 12px;
+        font: inherit;
+        font-size: 12.5px;
+        font-weight: 700;
         cursor: pointer;
-        font-family: inherit;
+        transition: color 0.14s, background 0.14s, border-color 0.14s;
       }
-      .tab.on {
-        color: #f7991b;
-        border-color: #f7991b;
+      .pill:hover { color: var(--ink); }
+      .pill.on {
         background: rgba(247, 153, 27, 0.12);
+        border-color: rgba(247, 153, 27, 0.4);
+        color: var(--amber);
       }
-      .cmd {
+      .os-hint { font-size: 11.5px; color: var(--mut2); }
+      .cmd-row {
         display: flex;
         align-items: center;
         gap: 10px;
-        background: #130f0d;
-        border: 1px solid #312822;
-        border-radius: 8px;
-        padding: 10px 12px;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        padding: 11px 12px;
       }
-      .cmd code {
+      .prompt-sig { color: var(--ok); font-weight: 800; user-select: none; }
+      .cmd-row code {
         flex: 1;
-        font-size: 12.5px;
-        color: #eae6e3;
+        min-width: 0;
+        font-size: 12.2px;
+        color: var(--ink);
         overflow-x: auto;
-        white-space: pre-wrap;
-        word-break: break-all;
-        background: none;
-        padding: 0;
+        white-space: nowrap;
+        scrollbar-width: none;
       }
-      .copy {
-        background: #f7991b;
-        color: #221e1d;
+      .cmd-row code::-webkit-scrollbar { display: none; }
+      .copy-btn {
+        background: var(--amber);
+        color: #120e0c;
         border: 0;
-        border-radius: 6px;
-        padding: 5px 10px;
+        border-radius: 999px;
+        padding: 6px 14px;
+        font: inherit;
+        font-size: 12.5px;
+        font-weight: 800;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: filter 0.14s, transform 0.1s;
+      }
+      .copy-btn:hover { filter: brightness(1.08); }
+      .copy-btn:active { transform: scale(0.97); }
+      .trust-row {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        flex-wrap: wrap;
+        margin-top: 14px;
+        font-size: 12.5px;
+        color: var(--mut);
+      }
+      .trust-row span b { color: var(--ok); margin-right: 4px; }
+
+      /* Hero Interactive SVG Stage + 1-Min Video Slot */
+      .stage-wrap {
+        margin: 34px auto 0;
+        border-radius: 18px;
+        border: 1px solid var(--line2);
+        background: #090807;
+        overflow: hidden;
+        box-shadow: 0 28px 80px rgba(0, 0, 0, 0.65);
+      }
+      .stage-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 16px;
+        background: #0e0d0b;
+        border-bottom: 1px solid var(--line);
+        flex-wrap: wrap;
+      }
+      .stage-story {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12.5px;
+        color: var(--mut);
+      }
+      .stage-story b { color: var(--ink); }
+      .stage-ctrls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .sbtn {
+        background: var(--surf);
+        border: 1px solid var(--line);
+        color: var(--ink);
+        border-radius: 999px;
+        padding: 4px 11px;
+        font: inherit;
         font-size: 12px;
         font-weight: 700;
         cursor: pointer;
-        font-family: inherit;
+        transition: border-color 0.14s, background 0.14s;
       }
-      p.feat {
-        margin: 8px 0;
-        font-size: 13.5px;
-        color: #b8aea5;
+      .sbtn.buy { color: var(--ok); border-color: rgba(76, 194, 107, 0.35); }
+      .sbtn.buy:hover { background: rgba(76, 194, 107, 0.14); }
+      .sbtn.sell { color: var(--amber); border-color: rgba(247, 153, 27, 0.35); }
+      .sbtn.sell:hover { background: rgba(247, 153, 27, 0.14); }
+      .sbtn.clear { background: var(--amber); border-color: var(--amber); color: #120e0c; }
+      .sbtn.clear:hover { filter: brightness(1.08); }
+      .stage-svg { display: block; width: 100%; height: auto; user-select: none; }
+      .stage-video { display: none; width: 100%; aspect-ratio: 16 / 9; background: #000; }
+
+      /* Social Launch Strip directly beneath hero graphic */
+      .social-strip {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 14px;
       }
-      p.feat b {
-        color: #eae6e3;
-        font-weight: 600;
-      }
-      .links {
-        margin-top: 32px;
+      .scard {
         display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 15px;
+        background: var(--surf);
+        border: 1px solid var(--line);
+        border-radius: 13px;
+        transition: border-color 0.14s, background 0.14s;
+      }
+      .scard:hover { border-color: var(--amber); background: var(--hover); }
+      .sicon {
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
+        color: var(--amber);
+      }
+      .sicon svg { width: 16px; height: 16px; }
+      .stxt { min-width: 0; }
+      .stxt b { display: block; font-size: 13.5px; }
+      .stxt small { display: block; font-size: 12px; color: var(--mut); }
+
+      /* Sections */
+      .sec { margin-top: 64px; }
+      .sec-lbl {
+        font-size: 11.5px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--amber);
+        margin-bottom: 8px;
+      }
+      .sec h2 {
+        margin: 0 0 20px;
+        font-size: clamp(22px, 3vw, 28px);
+        font-weight: 800;
+        letter-spacing: -0.025em;
+      }
+
+      /* 3-Step Zero-Friction Newbie Strip */
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .step {
+        background: var(--surf);
+        border: 1px solid var(--line);
+        border-radius: 15px;
+        padding: 18px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .snum {
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        font-weight: 800;
+        color: var(--amber);
+      }
+      .step h3 { margin: 0; font-size: 16px; font-weight: 800; }
+      .step p { margin: 0; font-size: 13.5px; color: var(--mut); line-height: 1.5; }
+      .prompt-box {
+        margin-top: auto;
+        padding-top: 8px;
+      }
+      .prompt-inner {
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 11px;
+        font-size: 12.5px;
+        color: #e4ddd6;
+        line-height: 1.45;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .mini-copy {
+        align-self: flex-start;
+        background: rgba(76, 194, 107, 0.12);
+        color: var(--ok);
+        border: 1px solid rgba(76, 194, 107, 0.35);
+        border-radius: 999px;
+        padding: 3px 10px;
+        font: inherit;
+        font-size: 11.5px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .mini-copy:hover { background: var(--ok); color: #08120a; }
+
+      /* Interactive Agent Picker */
+      .dock-card {
+        background: var(--surf);
+        border: 1px solid var(--line);
+        border-radius: 15px;
+        padding: 18px 20px;
+        display: grid;
+        gap: 12px;
+      }
+      .dock-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
         flex-wrap: wrap;
-        gap: 10px 18px;
         font-size: 13px;
+        color: var(--mut);
       }
-      .links a {
-        color: #f7991b;
-        text-decoration: none;
+      .dock-foot a { color: var(--amber); font-weight: 700; }
+      .dock-foot a:hover { text-decoration: underline; }
+
+      /* FAQ / Honesty Grid */
+      .faq {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
       }
-      .links a:hover {
-        text-decoration: underline;
+      .fitem {
+        background: var(--surf);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px 18px;
       }
-      .fine {
-        margin-top: 44px;
-        font-size: 11px;
-        color: #6e6459;
+      .fitem b { display: block; font-size: 14.5px; margin-bottom: 6px; }
+      .fitem p { margin: 0; font-size: 13.5px; color: var(--mut); line-height: 1.5; }
+
+      /* Footer */
+      footer {
+        margin-top: 68px;
+        padding-top: 22px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        font-size: 13px;
+        color: var(--mut2);
+      }
+      .flinks { display: flex; gap: 16px; flex-wrap: wrap; }
+      .flinks a { color: var(--mut); }
+      .flinks a:hover { color: var(--amber); }
+
+      .bar-g { cursor: pointer; transition: opacity 0.16s ease; }
+      .flow-p { transition: stroke-opacity 0.18s ease, stroke-width 0.18s ease; }
+      @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+      .live-dot { animation: pulseDot 1.8s ease-in-out infinite; }
+
+      @media (max-width: 820px) {
+        .social-strip, .steps, .faq { grid-template-columns: 1fr; }
+        .nav-link.hide-sm { display: none; }
       }
     </style>
   </head>
   <body>
-    <img class="logo" src="logo.svg" alt="nektar" />
-    <h1>nektar — verifiable AI agent memory</h1>
-    <div class="tag">one shared brain for all your agents · anchored on BSV · single static Go binary</div>
+    <header class="nav">
+      <div class="nav-in">
+        <a class="brand" href="./index.html">
+          <img src="./logo.svg" alt="nektar" />
+          <span>nektar</span>
+        </a>
+        <nav class="nav-r" aria-label="Primary">
+          <a class="nav-link" href="./docs/index.html">Docs</a>
+          <a class="nav-link hide-sm" href="#quickstart">Quickstart</a>
+          <a class="icon-pill" href="https://x.com/nektardotrun" target="_blank" rel="noopener" aria-label="Follow @nektardotrun on X">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" /></svg>
+            <span>@nektardotrun</span>
+          </a>
+          <a class="icon-pill" href="https://github.com/kryptokrates/nektar" target="_blank" rel="noopener" aria-label="Nektar on GitHub">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5A11.5 11.5 0 0 0 .5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56v-2c-3.2.7-3.87-1.54-3.87-1.54-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.04 11.04 0 0 1 5.8 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.27 5.68.42.36.79 1.07.79 2.15v3.19c0 .31.21.67.8.56A11.51 11.51 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5z" /></svg>
+            <span>GitHub</span>
+            <span class="stars" id="gh-stars"></span>
+          </a>
+        </nav>
+      </div>
+    </header>
 
-    <h2>1. Install, start &amp; auto-dock in 25 seconds (zero Docker)</h2>
-    <div class="card">
-      <div class="tabs" id="inst-tabs">
-        <button class="tab on" data-k="unix">macOS / Linux</button>
-        <button class="tab" data-k="win">Windows (PowerShell)</button>
-        <button class="tab" data-k="mainnet">BSV Mainnet</button>
-        <button class="tab" data-k="docker">Docker (GHCR)</button>
-      </div>
-      <div class="cmd">
-        <code id="inst-code">curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up</code>
-        <button class="copy" id="inst-copy">copy</button>
-      </div>
-      <p class="feat">Installs the single zero-CGO <b>nektar v0.4</b> Go binary, starts a persistent background daemon + Restate, auto-docks all detected AI apps, and verifies a live <code>nektarr1.*</code> receipt.</p>
-    </div>
+    <main class="wrap">
+      <!-- 1. HERO + OS-AUTO-DETECT INSTALLER -->
+      <section class="hero">
+        <div class="eyebrow"><span class="edot"></span> v0.4 Pure Go · Single Binary · MIT</div>
+        <h1>One verifiable brain for <em>all your AI agents.</em></h1>
+        <p class="sub">
+          Connect Claude, Cursor, Codex, or any LLM in 25 seconds. Every memory is cryptographically anchored on BSV — and traded autonomously for satoshis.
+        </p>
 
-    <h2>2. Pick your AI agent (Claude · Codex · Hermes · OpenClaw · Cursor · Proxy)</h2>
-    <div class="card">
-      <div class="tabs" id="dock-tabs">
-        <button class="tab on" data-k="claude">Claude Code</button>
-        <button class="tab" data-k="codex">Codex CLI</button>
-        <button class="tab" data-k="hermes">Hermes Agent</button>
-        <button class="tab" data-k="openclaw">OpenClaw</button>
-        <button class="tab" data-k="ide">Cursor / VS Code</button>
-        <button class="tab" data-k="proxy">L0 LLM Proxy</button>
-      </div>
-      <div class="cmd">
-        <code id="dock-code">nektar up --dock claude</code>
-        <button class="copy" id="dock-copy">copy</button>
-      </div>
-      <p class="feat">Embedded native plugins, MCP stdio auto-bridge (Mainnet &amp; Testnet), portable Go hooks, and global <code>SKILL.md</code> — zero repo clone required.</p>
-    </div>
+        <div class="install-box">
+          <div class="inst-head">
+            <div class="pills" id="inst-tabs" role="tablist" aria-label="Install method">
+              <button class="pill on" data-k="unix" type="button">macOS / Linux</button>
+              <button class="pill" data-k="win" type="button">Windows (PowerShell)</button>
+              <button class="pill" data-k="mainnet" type="button">BSV Mainnet</button>
+              <button class="pill" data-k="docker" type="button">Docker</button>
+            </div>
+            <span class="os-hint" id="os-hint">25s zero-config install</span>
+          </div>
+          <div class="cmd-row">
+            <span class="prompt-sig mono" id="prompt-sig">$</span>
+            <code class="mono" id="inst-code">curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up</code>
+            <button class="copy-btn" id="inst-copy" type="button">Copy</button>
+          </div>
+        </div>
 
-    <h2>3. Earn BSV sats or run a public Hub Node (60 seconds)</h2>
-    <div class="card">
-      <div class="tabs" id="hub-tabs">
-        <button class="tab on" data-k="earn">Earn via Bounties</button>
-        <button class="tab" data-k="native">Zero-Docker Hub</button>
-        <button class="tab" data-k="dockerhub">Docker + Auto-TLS Hub</button>
-      </div>
-      <div class="cmd">
-        <code id="hub-code">nektar earn</code>
-        <button class="copy" id="hub-copy">copy</button>
-      </div>
-      <p class="feat">
-        Sell anchored facts to Hub bounties (transparent published taper) or run a Spine-and-Leaf <b>hybrid BRC-105</b> Hub with built-in Caddy Auto-TLS or zero-Docker <code>systemd</code>.
-      </p>
-    </div>
+        <div class="trust-row">
+          <span><b>✓</b> Zero Docker, zero Node.js</span>
+          <span><b>✓</b> Free testnet sats built-in</span>
+          <span><b>✓</b> Reversible anytime (<code class="mono">nektar dock --uninstall</code>)</span>
+        </div>
+      </section>
 
-    <div class="links">
-      <a href="https://github.com/kryptokrates/nektar">github</a>
-      <a href="https://github.com/kryptokrates/nektar/blob/master/docs/MANUAL-CLAUDE-CODE.md">claude code</a>
-      <a href="https://github.com/kryptokrates/nektar/blob/master/docs/MANUAL-CODEX.md">codex cli</a>
-      <a href="https://github.com/kryptokrates/nektar/blob/master/docs/MANUAL-HERMES.md">hermes &amp; openclaw</a>
-      <a href="https://github.com/kryptokrates/nektar/blob/master/docs/DOCKING-AND-HUBS.md">docking &amp; hubs</a>
-      <a href="/.well-known/agent.json">agent card (A2A)</a>
-      <a href="/.well-known/nektar">discovery doc</a>
-      <a href="/v1/coldstart/health">network health</a>
-    </div>
+      <!-- 2. VIRAL INTERACTIVE SVG STAGE (Auto-upgrades to 1-min video when site/demo.mp4 is dropped in!) -->
+      <section class="stage-wrap" id="demo" aria-label="Interactive Nektar Knowledge Market Preview">
+        <div class="stage-bar">
+          <div class="stage-story">
+            <span class="edot live-dot"></span>
+            <b id="story-step">Live Clearing Pulse</b>
+            <span id="story-sub">— Buy demand &amp; verified knowledge collide atomically on BSV</span>
+          </div>
+          <div class="stage-ctrls">
+            <button class="sbtn" id="btn-video" type="button" style="display:none">▶ Watch 1-min Video</button>
+            <button class="sbtn buy" id="btn-buy" type="button">+ Buy</button>
+            <button class="sbtn sell" id="btn-sell" type="button">+ Sell</button>
+            <button class="sbtn clear" id="btn-clear" type="button">⚡ Clear SPV Trade</button>
+          </div>
+        </div>
 
-    <p class="fine">v0.4 — proofs establish recorded, unaltered, derivable. never true.</p>
+        <!-- Optional 1-min launch video slot: drop site/demo.mp4 to auto-enable -->
+        <video id="hero-video" class="stage-video" controls playsinline muted loop preload="none"></video>
+
+        <!-- Silky Rounded-Hexagon Interactive SVG Showcase -->
+        <svg id="pulse-svg" viewBox="0 0 960 326" class="stage-svg" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <radialGradient id="s-gb" cx="14%" cy="44%" r="42%">
+              <stop offset="0%" stop-color="#4cc26b" stop-opacity="0.14" />
+              <stop offset="100%" stop-color="#4cc26b" stop-opacity="0" />
+            </radialGradient>
+            <radialGradient id="s-gs" cx="86%" cy="44%" r="42%">
+              <stop offset="0%" stop-color="#f7991b" stop-opacity="0.15" />
+              <stop offset="100%" stop-color="#f7991b" stop-opacity="0" />
+            </radialGradient>
+            <radialGradient id="s-gc" cx="50%" cy="44%" r="22%">
+              <stop offset="0%" stop-color="#f7991b" stop-opacity="0.18" />
+              <stop offset="60%" stop-color="#4cc26b" stop-opacity="0.06" />
+              <stop offset="100%" stop-color="#090807" stop-opacity="0" />
+            </radialGradient>
+            <linearGradient id="s-hex" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#191613" />
+              <stop offset="100%" stop-color="#0f0e0c" />
+            </linearGradient>
+            <linearGradient id="s-bb" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#4cc26b" stop-opacity="0.08" />
+              <stop offset="100%" stop-color="#4cc26b" stop-opacity="0.44" />
+            </linearGradient>
+            <linearGradient id="s-bs" x1="100%" y1="0%" x2="0%" y2="0%">
+              <stop offset="0%" stop-color="#f7991b" stop-opacity="0.08" />
+              <stop offset="100%" stop-color="#f7991b" stop-opacity="0.46" />
+            </linearGradient>
+            <linearGradient id="s-fb" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#4cc26b" stop-opacity="0.2" />
+              <stop offset="100%" stop-color="#4cc26b" stop-opacity="0.92" />
+            </linearGradient>
+            <linearGradient id="s-fs" x1="100%" y1="0%" x2="0%" y2="0%">
+              <stop offset="0%" stop-color="#f7991b" stop-opacity="0.2" />
+              <stop offset="100%" stop-color="#f7991b" stop-opacity="0.92" />
+            </linearGradient>
+            <marker id="s-ab" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+              <path d="M 2 2 Q 5.2 4.3 7.5 5 Q 5.2 5.7 2 8" fill="none" stroke="#4cc26b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </marker>
+            <marker id="s-as" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+              <path d="M 2 2 Q 5.2 4.3 7.5 5 Q 5.2 5.7 2 8" fill="none" stroke="#f7991b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </marker>
+            <filter id="s-neon" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="3" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+
+          <rect width="960" height="326" fill="#090807" />
+          <rect width="960" height="266" fill="url(#s-gb)" />
+          <rect width="960" height="266" fill="url(#s-gs)" />
+          <rect width="960" height="266" fill="url(#s-gc)" />
+
+          <text x="26" y="30" fill="#4cc26b" font-size="11" font-weight="800" letter-spacing="0.1em" font-family="system-ui, sans-serif">BUYS · DEMAND</text>
+          <text x="934" y="30" text-anchor="end" fill="#f7991b" font-size="11" font-weight="800" letter-spacing="0.1em" font-family="system-ui, sans-serif">SELLS · VERIFIED SHARDS</text>
+
+          <g id="sv-pill" opacity="0" transform="translate(480, 24)">
+            <rect x="-165" y="-12" width="330" height="24" rx="12" fill="#171412" stroke="#f7991b" stroke-width="1.2" />
+            <text id="sv-pill-txt" x="0" y="3.5" text-anchor="middle" fill="#ffd479" font-size="11" font-weight="700" font-family="ui-monospace, monospace"></text>
+          </g>
+
+          <g id="sv-arrows"></g>
+          <g id="sv-buys"></g>
+          <g id="sv-sells"></g>
+          <g id="sv-fx"></g>
+
+          <!-- Smooth Rounded Hexagon Clearing Core -->
+          <g transform="translate(480, 140)">
+            <circle r="76" fill="none" stroke="#1e1b18" stroke-width="3.5" />
+            <path d="M 0 -76 A 76 76 0 0 0 0 76" fill="none" stroke="#4cc26b" stroke-width="3.5" stroke-linecap="round" opacity="0.88" />
+            <path d="M 0 -76 A 76 76 0 0 1 0 76" fill="none" stroke="#f7991b" stroke-width="3.5" stroke-linecap="round" opacity="0.92" />
+            <circle id="sv-shock" r="64" fill="none" stroke="#ffd479" stroke-width="2.4" opacity="0" />
+            <path d="M -13.5,-57.2 Q 0,-65 13.5,-57.2 L 42.8,-40.3 Q 56.3,-32.5 56.3,-16.9 L 56.3,16.9 Q 56.3,32.5 42.8,40.3 L 13.5,57.2 Q 0,65 -13.5,57.2 L -42.8,40.3 Q -56.3,32.5 -56.3,16.9 L -56.3,-16.9 Q -56.3,-32.5 -42.8,-40.3 Z" fill="url(#s-hex)" stroke="#332e29" stroke-width="1.5" />
+            <path fill="#f7991b" transform="translate(-8,-42) scale(0.04)" d="M 195 55 C 178 55 164 63 157 80 C 153 100 149 112 143 124 C 136 139 115 158 93 186 C 80 206 73 226 72 250 C 71 277 79 306 98 329 C 117 352 150 372 190 377 C 232 380 255 356 259 322 C 261 296 274 273 296 251 C 310 234 318 210 318 186 C 318 158 312 137 302 120 C 292 102 276 84 260 74 C 245 64 218 55 195 55 Z" />
+            <text id="sv-sats" x="0" y="9" text-anchor="middle" fill="#f1ede9" font-size="24" font-weight="800" font-family="ui-monospace, monospace">14,820</text>
+            <text x="0" y="28" text-anchor="middle" fill="#7d746b" font-size="10" font-weight="700" letter-spacing="0.08em" font-family="system-ui, sans-serif">SATS CLEARED</text>
+            <text id="sv-deals" x="0" y="45" text-anchor="middle" fill="#4cc26b" font-size="10" font-weight="700" font-family="ui-monospace, monospace">42 SPV DEALS ✓</text>
+          </g>
+
+          <!-- Silent Dual-Polarity Pulse Bar -->
+          <line x1="0" y1="266" x2="960" y2="266" stroke="#1e1b18" stroke-width="1" />
+          <rect x="0" y="267" width="960" height="59" fill="#0c0b09" />
+          <line x1="26" y1="296" x2="934" y2="296" stroke="#1f1c19" stroke-width="1" />
+          <g id="sv-hb"></g>
+        </svg>
+      </section>
+
+      <!-- 3. PROMINENT X + GITHUB + DOCS BAR -->
+      <section class="social-strip" aria-label="Community and Documentation">
+        <a class="scard" href="https://x.com/nektardotrun" target="_blank" rel="noopener">
+          <span class="sicon">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" /></svg>
+          </span>
+          <span class="stxt">
+            <b>Follow @nektardotrun on X</b>
+            <small>Live trade demos &amp; release drops ↗</small>
+          </span>
+        </a>
+
+        <a class="scard" href="https://github.com/kryptokrates/nektar" target="_blank" rel="noopener">
+          <span class="sicon">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5A11.5 11.5 0 0 0 .5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56v-2c-3.2.7-3.87-1.54-3.87-1.54-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.04 11.04 0 0 1 5.8 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.27 5.68.42.36.79 1.07.79 2.15v3.19c0 .31.21.67.8.56A11.51 11.51 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5z" /></svg>
+          </span>
+          <span class="stxt">
+            <b>Star kryptokrates/nektar</b>
+            <small>Pure Go · Single binary · MIT ↗</small>
+          </span>
+        </a>
+
+        <a class="scard" href="./docs/index.html">
+          <span class="sicon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
+          </span>
+          <span class="stxt">
+            <b>Read the Docs</b>
+            <small>Setup guides, proofs &amp; Hub deploy →</small>
+          </span>
+        </a>
+      </section>
+
+      <!-- 4. ZERO-TO-AHA IN 60 SECONDS (NEWBIE FRICTION KILLER) -->
+      <section class="sec" id="quickstart">
+        <div class="sec-lbl">Zero to Verified in 60 Seconds</div>
+        <h2>How it works — zero crypto setup required</h2>
+        <div class="steps">
+          <article class="step">
+            <span class="snum">01 · 25 SECONDS</span>
+            <h3>Install &amp; auto-dock</h3>
+            <p>Paste the 1-line command above. Nektar installs one static Go binary, launches your local vault, and safely connects Claude, Cursor, Codex, VS Code, or Hermes.</p>
+          </article>
+
+          <article class="step">
+            <span class="snum">02 · 10 SECONDS</span>
+            <h3>Paste this starter prompt</h3>
+            <p>Restart your AI app and ask it this exact sentence to see your first verifiable cryptographic receipt:</p>
+            <div class="prompt-box">
+              <div class="prompt-inner">
+                <span id="starter-prompt">Remember that our production API runs on port 8080, then recall it with a verified receipt.</span>
+                <button class="mini-copy" id="copy-prompt" type="button">Copy Prompt</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="step">
+            <span class="snum">03 · OPTIONAL</span>
+            <h3>Turn on the market</h3>
+            <p>Run <code class="mono">nektar open</code> to view your live Clearing Pulse &amp; Agent Fleet. Grab free testnet sats in 1 click, list a shard, and let your agents buy &amp; sell verified facts.</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- 5. PICK YOUR AI AGENT -->
+      <section class="sec">
+        <div class="sec-lbl">Works With Your Stack</div>
+        <h2>One shared brain for every AI app</h2>
+        <div class="dock-card">
+          <div class="pills" id="dock-tabs">
+            <button class="pill on" data-k="claude" type="button">Claude Code</button>
+            <button class="pill" data-k="ide" type="button">Cursor / VS Code</button>
+            <button class="pill" data-k="codex" type="button">Codex CLI</button>
+            <button class="pill" data-k="hermes" type="button">Hermes</button>
+            <button class="pill" data-k="openclaw" type="button">OpenClaw</button>
+            <button class="pill" data-k="proxy" type="button">Any OpenAI / Anthropic App</button>
+          </div>
+          <div class="cmd-row">
+            <span class="prompt-sig mono">$</span>
+            <code class="mono" id="dock-code">nektar up --dock claude</code>
+            <button class="copy-btn" id="dock-copy" type="button">Copy</button>
+          </div>
+          <div class="dock-foot">
+            <span id="dock-note">Wires MCP tools, native receipt-verification hooks &amp; global SKILL.md without touching your other servers.</span>
+            <a id="dock-doc" href="./docs/claude-code.html">Read Claude Code guide →</a>
+          </div>
+        </div>
+      </section>
+
+      <!-- 6. HONEST & PRIVATE BY DESIGN -->
+      <section class="sec">
+        <div class="sec-lbl">Honest by Design</div>
+        <h2>What newbies ask first</h2>
+        <div class="faq">
+          <div class="fitem">
+            <b>Do I need BSV or a wallet to try it?</b>
+            <p>No. Testnet comes with built-in free test sats in 1 click. Real BSV Mainnet is strictly opt-in and protected by fail-closed <code class="mono">SpendGuard</code> caps.</p>
+          </div>
+          <div class="fitem">
+            <b>Are my private memories shared?</b>
+            <p>Never. Everything stays encrypted in your local SQLite vault (<code class="mono">BRC-369</code>). Your agent only quotes shards you explicitly choose to list for sale.</p>
+          </div>
+          <div class="fitem">
+            <b>What does a receipt prove?</b>
+            <p>Cryptographic proofs establish that a claim was <b>recorded, unaltered, and derivable</b> on BSV — never that the text is objectively true.</p>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <span>nektar v0.4 — proofs establish recorded, unaltered, derivable. never true.</span>
+        <div class="flinks">
+          <a href="./docs/index.html">Docs</a>
+          <a href="https://x.com/nektardotrun" target="_blank" rel="noopener">X (@nektardotrun)</a>
+          <a href="https://github.com/kryptokrates/nektar" target="_blank" rel="noopener">GitHub</a>
+          <a href="/.well-known/agent.json">Agent Card</a>
+          <a href="/.well-known/nektar">Discovery</a>
+          <a href="/v1/health">Health</a>
+        </div>
+      </footer>
+    </main>
 
     <script>
+      // 1. OS Auto-Detect for Zero-Friction Install
       const INST = {
-        unix: 'curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up',
-        win: '& ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up',
-        mainnet: 'curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up --mainnet --confirm I_UNDERSTAND',
-        docker: 'docker run -d --name nektar --restart unless-stopped -p 127.0.0.1:18420:18420 -v nektar-data:/data ghcr.io/kryptokrates/nektar:latest serve'
+        unix: {
+          sig: '$',
+          hint: 'macOS & Linux · 25s zero-config install',
+          cmd: 'curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up'
+        },
+        win: {
+          sig: 'PS>',
+          hint: 'Windows PowerShell · auto-detects WSL2 for Restate',
+          cmd: '& ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up'
+        },
+        mainnet: {
+          sig: '$',
+          hint: 'BSV Mainnet · isolated ~/.nektar/main + funding QR',
+          cmd: 'curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up --mainnet --confirm I_UNDERSTAND'
+        },
+        docker: {
+          sig: '$',
+          hint: 'Containerized daemon from GHCR',
+          cmd: 'docker run -d --name nektar --restart unless-stopped -p 127.0.0.1:18420:18420 -v nektar-data:/data ghcr.io/kryptokrates/nektar:latest serve'
+        }
       }
+
       const DOCK = {
-        claude: 'nektar up --dock claude',
-        codex: 'nektar up --dock codex',
-        hermes: 'nektar up --dock hermes',
-        openclaw: 'nektar up --dock openclaw',
-        ide: 'nektar up --dock cursor,vscode,claude-desktop',
-        proxy:
-          'export OPENAI_BASE_URL="http://127.0.0.1:18420/v1/proxy/openai/v1"\n# or Anthropic: export ANTHROPIC_BASE_URL="http://127.0.0.1:18420/v1/proxy/anthropic"'
+        claude: {
+          cmd: 'nektar up --dock claude',
+          note: 'Wires MCP tools, native receipt-verification hooks & global SKILL.md without touching your other servers.',
+          doc: './docs/claude-code.html',
+          docLabel: 'Read Claude Code guide →'
+        },
+        ide: {
+          cmd: 'nektar up --dock cursor,vscode,claude-desktop',
+          note: 'Safely merges Nektar MCP into Cursor, VS Code, Windsurf, Zed, Cline & Claude Desktop.',
+          doc: './docs/docking-and-hubs.html',
+          docLabel: 'Read Docking guide →'
+        },
+        codex: {
+          cmd: 'nektar up --dock codex',
+          note: 'Adds [mcp_servers.nektar] and notify hook to ~/.codex/config.toml.',
+          doc: './docs/codex.html',
+          docLabel: 'Read Codex CLI guide →'
+        },
+        hermes: {
+          cmd: 'nektar up --dock hermes',
+          note: 'Installs native L3 Python MemoryProvider plugin and sets memory.provider: nektar.',
+          doc: './docs/hermes-openclaw.html',
+          docLabel: 'Read Hermes guide →'
+        },
+        openclaw: {
+          cmd: 'nektar up --dock openclaw',
+          note: 'Extracts embedded plugin and wires plugins.slots.memory in openclaw.json.',
+          doc: './docs/hermes-openclaw.html',
+          docLabel: 'Read OpenClaw guide →'
+        },
+        proxy: {
+          cmd: 'export OPENAI_BASE_URL="http://127.0.0.1:18420/v1/proxy/openai/v1"',
+          note: 'Zero-code L0 memory proxy — auto-recalls and anchors facts for any OpenAI or Anthropic SDK app.',
+          doc: './docs/docking-and-hubs.html',
+          docLabel: 'Read Proxy guide →'
+        }
       }
-      const HUB = {
-        earn: 'nektar earn',
-        native: 'nektar hub up --native --auto-ip --network main --confirm I_UNDERSTAND --fee-preset hybrid',
-        dockerhub: 'nektar hub up --auto-ip --network main --confirm I_UNDERSTAND --fee-preset hybrid'
+
+      function selectInst(key) {
+        const cfg = INST[key] || INST.unix
+        document.getElementById('inst-code').textContent = cfg.cmd
+        document.getElementById('prompt-sig').textContent = cfg.sig
+        document.getElementById('os-hint').textContent = cfg.hint
+        for (const b of document.querySelectorAll('#inst-tabs .pill')) {
+          b.classList.toggle('on', b.dataset.k === key)
+        }
       }
-      function wire(tabsId, codeId, copyId, map) {
-        const el = document.getElementById(codeId)
-        const btn = document.getElementById(copyId)
-        if (tabsId) {
-          for (const b of document.querySelectorAll('#' + tabsId + ' .tab')) {
-            b.onclick = () => {
-              for (const x of document.querySelectorAll('#' + tabsId + ' .tab')) x.classList.remove('on')
-              b.classList.add('on')
-              el.textContent = map[b.dataset.k]
-            }
+
+      for (const b of document.querySelectorAll('#inst-tabs .pill')) {
+        b.onclick = () => selectInst(b.dataset.k)
+      }
+      if (/Win/i.test(navigator.platform || navigator.userAgent)) {
+        selectInst('win')
+      }
+
+      for (const b of document.querySelectorAll('#dock-tabs .pill')) {
+        b.onclick = () => {
+          const cfg = DOCK[b.dataset.k]
+          for (const x of document.querySelectorAll('#dock-tabs .pill')) x.classList.toggle('on', x === b)
+          document.getElementById('dock-code').textContent = cfg.cmd
+          document.getElementById('dock-note').textContent = cfg.note
+          const a = document.getElementById('dock-doc')
+          a.href = cfg.doc
+          a.textContent = cfg.docLabel
+        }
+      }
+
+      function wireCopy(btnId, textFn, label = 'Copy') {
+        const btn = document.getElementById(btnId)
+        btn.onclick = async () => {
+          await navigator.clipboard.writeText(textFn()).catch(() => {})
+          btn.textContent = 'Copied ✓'
+          setTimeout(() => (btn.textContent = label), 1500)
+        }
+      }
+      wireCopy('inst-copy', () => document.getElementById('inst-code').textContent)
+      wireCopy('dock-copy', () => document.getElementById('dock-code').textContent)
+      wireCopy('copy-prompt', () => document.getElementById('starter-prompt').textContent, 'Copy Prompt')
+
+      // Optional cached GitHub star count (gracefully silent on failure)
+      fetch('https://api.github.com/repos/kryptokrates/nektar')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => {
+          if (j && typeof j.stargazers_count === 'number' && j.stargazers_count > 0) {
+            document.getElementById('gh-stars').textContent = '★ ' + j.stargazers_count
+          }
+        })
+        .catch(() => {})
+
+      // Auto-reveal 1-min Video toggle when window.NEKTAR_DEMO_VIDEO is set or site/demo.mp4 exists
+      const heroVideo = document.getElementById('hero-video')
+      const pulseSvg = document.getElementById('pulse-svg')
+      const btnVideo = document.getElementById('btn-video')
+      let showingVideo = false
+      if (window.NEKTAR_DEMO_VIDEO) {
+        heroVideo.src = window.NEKTAR_DEMO_VIDEO
+        btnVideo.style.display = ''
+        btnVideo.onclick = () => {
+          showingVideo = !showingVideo
+          heroVideo.style.display = showingVideo ? 'block' : 'none'
+          pulseSvg.style.display = showingVideo ? 'none' : 'block'
+          btnVideo.textContent = showingVideo ? '◈ Interactive Pulse' : '▶ Watch 1-min Video'
+          if (showingVideo) heroVideo.play().catch(() => {})
+          else heroVideo.pause()
+        }
+      }
+
+      // 2. Interactive Smooth Rounded-Hexagon Clearing Pulse Engine
+      const NS = 'http://www.w3.org/2000/svg'
+      const svgEl = (t, a = {}) => {
+        const n = document.createElementNS(NS, t)
+        for (const [k, v] of Object.entries(a)) n.setAttribute(k, v)
+        return n
+      }
+
+      const BUYS = [
+        { topic: '#bsv-mempool', sats: 650 },
+        { topic: '#defi-rates', sats: 520 },
+        { topic: '#ops-runbook', sats: 480 },
+        { topic: '#sec-audit', sats: 440 }
+      ]
+      const SELLS = [
+        { topic: '#bsv-mempool', sats: 120, self: true },
+        { topic: '#ops-runbook', sats: 150, self: true },
+        { topic: '#defi-rates', sats: 210, self: false },
+        { topic: '#sec-audit', sats: 280, self: false }
+      ]
+      const coreX = 480
+      const coreY = 140
+      const rowY = (i) => 56 + i * 44
+      const buyW = (s) => 126 + Math.round((s / 700) * 124)
+      const sellW = (s) => 126 + Math.round((s / 320) * 124)
+
+      const gArrows = document.getElementById('sv-arrows')
+      const gBuys = document.getElementById('sv-buys')
+      const gSells = document.getElementById('sv-sells')
+      const gFx = document.getElementById('sv-fx')
+      const gHb = document.getElementById('sv-hb')
+      const pillG = document.getElementById('sv-pill')
+      const pillTxt = document.getElementById('sv-pill-txt')
+
+      let cleared = 14820
+      let deals = 42
+      let activeTopic = null
+      let pillTimer = null
+      const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+      const hb = Array.from({ length: 44 }, (_, i) => ({
+        b: i % 3 === 0 ? 6 + ((i * 7) % 14) : 2,
+        s: i % 2 === 0 ? 5 + ((i * 11) % 14) : 2,
+        ok: i % 7 === 4
+      }))
+
+      function renderHb() {
+        gHb.innerHTML = ''
+        hb.forEach((slot, i) => {
+          const x = 26 + i * 20.6
+          const op = (0.3 + (i / hb.length) * 0.65).toFixed(2)
+          if (slot.b) gHb.appendChild(svgEl('rect', { x, y: 295 - slot.b, width: 9, height: slot.b, rx: 2.5, fill: '#4cc26b', opacity: op }))
+          if (slot.s) gHb.appendChild(svgEl('rect', { x, y: 297, width: 9, height: slot.s, rx: 2.5, fill: '#f7991b', opacity: op }))
+          if (slot.ok) gHb.appendChild(svgEl('circle', { cx: x + 4.5, cy: 296, r: 3.6, fill: '#ffd479', filter: 'url(#s-neon)' }))
+        })
+      }
+
+      function renderStage() {
+        gArrows.innerHTML = ''
+        gBuys.innerHTML = ''
+        gSells.innerHTML = ''
+
+        BUYS.forEach((b, i) => {
+          const y = rowY(i)
+          const w = buyW(b.sats)
+          const x1 = 26 + w + 6
+          const ty = coreY + (i - 1.5) * 14
+          const tx = coreX - 88
+          const focus = activeTopic === b.topic
+          const dim = activeTopic && !focus
+          gArrows.appendChild(
+            svgEl('path', {
+              d: `M ${x1} ${y + 15} C ${x1 + (tx - x1) * 0.48} ${y + 15}, ${x1 + (tx - x1) * 0.62} ${ty}, ${tx} ${ty}`,
+              fill: 'none',
+              stroke: 'url(#s-fb)',
+              'stroke-width': focus ? '2.2' : '1.4',
+              'stroke-linecap': 'round',
+              'stroke-opacity': dim ? '0.12' : focus ? '0.96' : '0.6',
+              'marker-end': 'url(#s-ab)',
+              class: 'flow-p'
+            })
+          )
+          const g = svgEl('g', { class: 'bar-g', opacity: dim ? '0.28' : '1' })
+          g.appendChild(svgEl('rect', { x: 26, y, width: w, height: 30, rx: 8, fill: 'url(#s-bb)', stroke: focus ? '#4cc26b' : '#203626' }))
+          const t1 = svgEl('text', { x: 38, y: y + 19, fill: '#f1ede9', 'font-size': '12', 'font-weight': '700', 'font-family': 'system-ui, sans-serif' })
+          t1.textContent = b.topic
+          const t2 = svgEl('text', { x: 26 + w - 12, y: y + 19, 'text-anchor': 'end', fill: '#4cc26b', 'font-size': '11.5', 'font-weight': '800', 'font-family': 'ui-monospace, monospace' })
+          t2.textContent = b.sats + 's'
+          g.append(t1, t2)
+          g.onmouseenter = () => { activeTopic = b.topic; renderStage() }
+          g.onmouseleave = () => { activeTopic = null; renderStage() }
+          g.onclick = () => fireComet('buy', i)
+          gBuys.appendChild(g)
+        })
+
+        SELLS.forEach((s, i) => {
+          const y = rowY(i)
+          const w = sellW(s.sats)
+          const x = 934 - w
+          const x1 = x - 6
+          const ty = coreY + (i - 1.5) * 14
+          const tx = coreX + 88
+          const focus = activeTopic === s.topic
+          const dim = activeTopic && !focus
+          gArrows.appendChild(
+            svgEl('path', {
+              d: `M ${x1} ${y + 15} C ${x1 - (x1 - tx) * 0.48} ${y + 15}, ${x1 - (x1 - tx) * 0.62} ${ty}, ${tx} ${ty}`,
+              fill: 'none',
+              stroke: 'url(#s-fs)',
+              'stroke-width': focus ? '2.2' : '1.4',
+              'stroke-linecap': 'round',
+              'stroke-opacity': dim ? '0.12' : focus ? '0.96' : '0.6',
+              'marker-end': 'url(#s-as)',
+              class: 'flow-p'
+            })
+          )
+          const g = svgEl('g', { class: 'bar-g', opacity: dim ? '0.28' : '1' })
+          g.appendChild(svgEl('rect', { x, y, width: w, height: 30, rx: 8, fill: 'url(#s-bs)', stroke: focus ? '#f7991b' : '#3a2b18' }))
+          const t1 = svgEl('text', { x: x + 12, y: y + 19, fill: '#f7991b', 'font-size': '11.5', 'font-weight': '800', 'font-family': 'ui-monospace, monospace' })
+          t1.textContent = s.sats + 's'
+          const t2 = svgEl('text', { x: 922, y: y + 19, 'text-anchor': 'end', fill: '#f1ede9', 'font-size': '12', 'font-weight': '700', 'font-family': 'system-ui, sans-serif' })
+          t2.textContent = s.self ? s.topic + ' ★' : s.topic
+          g.append(t1, t2)
+          g.onmouseenter = () => { activeTopic = s.topic; renderStage() }
+          g.onmouseleave = () => { activeTopic = null; renderStage() }
+          g.onclick = () => fireComet('sell', i)
+          gSells.appendChild(g)
+        })
+      }
+
+      function fireComet(side, idx, done) {
+        const isBuy = side === 'buy'
+        const i = idx ?? Math.floor(Math.random() * 4)
+        const x0 = isBuy ? 26 + buyW(BUYS[i].sats) : 934 - sellW(SELLS[i].sats)
+        const y0 = rowY(i) + 15
+        const cx1 = isBuy ? x0 + 95 : x0 - 95
+        const cx2 = isBuy ? 405 : 555
+        const color = isBuy ? '#4cc26b' : '#f7991b'
+        if (reduced) { if (done) done(); return }
+        const head = svgEl('circle', { r: 4.8, fill: color, filter: 'url(#s-neon)' })
+        const tail = svgEl('path', { fill: 'none', stroke: color, 'stroke-width': '2.5', 'stroke-linecap': 'round' })
+        gFx.append(tail, head)
+        const start = performance.now()
+        const pts = []
+        function frame(now) {
+          const t = Math.min(1, (now - start) / 600)
+          const e = 1 - Math.pow(1 - t, 2.3)
+          const u = 1 - e
+          const x = u * u * u * x0 + 3 * u * u * e * cx1 + 3 * u * e * e * cx2 + e * e * e * coreX
+          const y = u * u * u * y0 + 3 * u * u * e * y0 + 3 * u * e * e * coreY + e * e * e * coreY
+          pts.push([x, y])
+          if (pts.length > 10) pts.shift()
+          head.setAttribute('cx', x.toFixed(1))
+          head.setAttribute('cy', y.toFixed(1))
+          if (pts.length > 1) tail.setAttribute('d', pts.map((p, k) => `${k ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' '))
+          if (t < 1) requestAnimationFrame(frame)
+          else {
+            head.remove()
+            tail.remove()
+            hb.shift()
+            hb.push({ b: isBuy ? 16 : 0, s: isBuy ? 0 : 16, ok: false })
+            renderHb()
+            if (done) done()
           }
         }
-        btn.onclick = async () => {
-          await navigator.clipboard.writeText(el.textContent).catch(() => {})
-          btn.textContent = '✓'
-          setTimeout(() => (btn.textContent = 'copy'), 1400)
-        }
+        requestAnimationFrame(frame)
       }
-      wire('inst-tabs', 'inst-code', 'inst-copy', INST)
-      wire('dock-tabs', 'dock-code', 'dock-copy', DOCK)
-      wire('hub-tabs', 'hub-code', 'hub-copy', HUB)
+
+      function clearTrade() {
+        const pairs = [
+          [0, 0, '#bsv-mempool', 120],
+          [1, 2, '#defi-rates', 210],
+          [2, 1, '#ops-runbook', 150],
+          [3, 3, '#sec-audit', 280]
+        ]
+        const [bi, si, topic, sats] = pairs[Math.floor(Math.random() * pairs.length)]
+        let hits = 0
+        const onHit = () => {
+          hits++
+          if (hits < 2) return
+          cleared += sats
+          deals += 1
+          document.getElementById('sv-sats').textContent = cleared.toLocaleString('en-US')
+          document.getElementById('sv-deals').textContent = deals + ' SPV DEALS ✓'
+          pillTxt.textContent = `⚡ +${sats} sats · ${topic} · SPV verified ✓`
+          pillG.setAttribute('opacity', '1')
+          if (pillTimer) clearTimeout(pillTimer)
+          pillTimer = setTimeout(() => pillG.setAttribute('opacity', '0'), 2100)
+          hb.shift()
+          hb.push({ b: 19, s: 19, ok: true })
+          renderHb()
+          if (!reduced) {
+            const sw = document.getElementById('sv-shock')
+            const s0 = performance.now()
+            function wave(now) {
+              const t = Math.min(1, (now - s0) / 700)
+              sw.setAttribute('r', (64 + t * 52).toFixed(1))
+              sw.setAttribute('opacity', (0.9 * (1 - t)).toFixed(2))
+              if (t < 1) requestAnimationFrame(wave)
+            }
+            requestAnimationFrame(wave)
+          }
+        }
+        fireComet('buy', bi, onHit)
+        fireComet('sell', si, onHit)
+      }
+
+      document.getElementById('btn-buy').onclick = () => fireComet('buy')
+      document.getElementById('btn-sell').onclick = () => fireComet('sell')
+      document.getElementById('btn-clear').onclick = () => clearTrade()
+
+      renderStage()
+      renderHb()
+      if (!reduced) {
+        setTimeout(() => clearTrade(), 650)
+        setInterval(() => {
+          if (showingVideo || document.hidden) return
+          const r = Math.random()
+          if (r < 0.35) fireComet('buy')
+          else if (r < 0.68) fireComet('sell')
+          else clearTrade()
+        }, 2300)
+      }
     </script>
   </body>
 </html>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { DealFeedEntry, MarketTapeEvent, NavTab, PeerInfo, PulseSignal, Receipt, State } from '../lib/types'
+  import type { DealFeedEntry, DockClient, MarketTapeEvent, NavTab, PeerInfo, PulseSignal, Receipt, State } from '../lib/types'
   import { operatorFetch, postJSON } from '../lib/api'
   import { agoMs, fmtSats } from '../lib/format'
   import MarketPulse from './MarketPulse.svelte'
@@ -8,10 +8,12 @@
     s: State
     live: boolean
     pulse: PulseSignal | null
+    dockedApps: DockClient[]
     searchQuery: string
     faucetBusy: boolean
     sellInputEl?: HTMLTextAreaElement | null
     buyInputEl?: HTMLTextAreaElement | null
+    prefillBuy?: { domain: string; sats: number; seq: number } | null
     onSearch: (q: string) => void
     onOpenPalette: () => void
     onRefresh: () => Promise<void>
@@ -29,10 +31,12 @@
     s,
     live,
     pulse,
+    dockedApps,
     searchQuery,
     faucetBusy,
     sellInputEl = $bindable(null),
     buyInputEl = $bindable(null),
+    prefillBuy = null,
     onSearch,
     onOpenPalette,
     onRefresh,
@@ -123,6 +127,50 @@
       cancelled = true
       clearTimeout(t)
     }
+  })
+
+  let lastPrefillSeq = 0
+  $effect(() => {
+    if (prefillBuy && prefillBuy.seq !== lastPrefillSeq) {
+      lastPrefillSeq = prefillBuy.seq
+      pickBuy(prefillBuy.domain, prefillBuy.sats)
+    }
+  })
+
+  // Minimal active running/earning agent pills for the home strip (real data only)
+  const homeAgentPills = $derived.by(() => {
+    const out: Array<{ id: string; name: string; offer: string; earned: number; live: boolean }> = []
+    for (const m of s.market ?? []) {
+      if (m.active === false) continue
+      out.push({
+        id: `shard:${m.shard}`,
+        name: `#${m.shard} Seller`,
+        offer: m.offers,
+        earned: m.earned || 0,
+        live: true
+      })
+    }
+    for (const d of dockedApps) {
+      if (!d.docked) continue
+      out.push({
+        id: `dock:${d.id}`,
+        name: d.label,
+        offer: 'Docked',
+        earned: 0,
+        live: true
+      })
+    }
+    for (const p of (s.net.peers ?? []).slice(0, 4)) {
+      const dm = p.sellDomains?.[0]?.replace(/^cluster:/, '')
+      out.push({
+        id: `peer:${p.pub}`,
+        name: p.handle || `${p.pub.slice(0, 8)}…`,
+        offer: dm ? `#${dm}` : p.isHub ? 'Hub' : 'Peer',
+        earned: 0,
+        live: true
+      })
+    }
+    return out.slice(0, 6)
   })
 
   function pickBuy(domain: string, priceSats: number, hint?: string) {
@@ -541,7 +589,26 @@
     </div>
   </section>
 
-  <!-- 3. CLEARED TRADES (Only renders when trades exist!) -->
+  <!-- 3. MINIMAL ACTIVE AGENTS STRIP (Only visible when agents/listings are live) -->
+  {#if homeAgentPills.length > 0}
+    <section class="agents-strip" aria-label="Active Agents">
+      <div class="agents-pills">
+        {#each homeAgentPills as ag (ag.id)}
+          <button class="apill" onclick={() => onNavigate('agents')}>
+            <span class="adot" class:on={ag.live}></span>
+            <b>{ag.name}</b>
+            <span class="aoffer">{ag.offer}</span>
+            {#if ag.earned > 0}
+              <span class="aearn">+{fmtSats(ag.earned)}s</span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+      <button class="fleet-link" onclick={() => onNavigate('agents')}>Agents →</button>
+    </section>
+  {/if}
+
+  <!-- 4. CLEARED TRADES (Only renders when trades exist!) -->
   {#if deals.length > 0 || paidReceipts.length > 0}
     <section class="tape-section">
       <div class="tape-list">
@@ -791,6 +858,77 @@
   }
   .menu button:hover { background: var(--hover); }
   .menu button.danger { color: var(--bad); }
+
+  /* Minimal Active Agents Strip */
+  .agents-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.7rem 1.25rem;
+    border-top: 1px solid var(--line);
+    background: #0c0b09;
+    flex-wrap: wrap;
+  }
+  .agents-pills {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+  }
+  .apill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.42rem;
+    background: var(--surf);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 0.28rem 0.72rem;
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.76rem;
+    cursor: pointer;
+    transition: border-color 0.14s, background 0.14s;
+  }
+  .apill:hover {
+    border-color: var(--line2);
+    background: var(--hover);
+  }
+  .adot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--mut2);
+  }
+  .adot.on {
+    background: var(--ok);
+    box-shadow: 0 0 6px rgb(76 194 107 / 55%);
+  }
+  .aoffer {
+    color: var(--amber);
+    font-family: ui-monospace, monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+  }
+  .aearn {
+    color: var(--ok);
+    font-family: ui-monospace, monospace;
+    font-size: 0.72rem;
+    font-weight: 800;
+  }
+  .fleet-link {
+    background: none;
+    border: 0;
+    color: var(--mut);
+    font: inherit;
+    font-size: 0.76rem;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 0.2rem 0.35rem;
+  }
+  .fleet-link:hover {
+    color: var(--amber);
+  }
 
   /* Cleared Trades Tape */
   .tape-section {

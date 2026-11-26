@@ -10,6 +10,11 @@ on:
         description: 'Optional sha256:... digest to deploy (defaults to latest edge digest)'
         required: false
         default: ''
+      site_only:
+        description: 'Only sync https://nektar.run static site/ (skip hub container pull)'
+        required: false
+        type: boolean
+        default: false
 concurrency:
   group: deploy
 permissions:
@@ -59,6 +64,7 @@ jobs:
           HOSTKEY: ${{ secrets.HETZNER_HOST_KEY }}
           DEPLOY_DIGEST: ${{ steps.resolve.outputs.digest }}
           DEPLOY_SHA: ${{ steps.resolve.outputs.sha }}
+          SITE_ONLY: ${{ inputs.site_only || false }}
         run: |
           set -euo pipefail
           install -m 700 -d ~/.ssh
@@ -66,7 +72,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           printf '%s\n' "$HOSTKEY" > ~/.ssh/known_hosts
           ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" \
-            "DEPLOY_DIGEST='$DEPLOY_DIGEST' DEPLOY_SHA='$DEPLOY_SHA' bash -s" <<'REMOTE_SCRIPT'
+            "DEPLOY_DIGEST='$DEPLOY_DIGEST' DEPLOY_SHA='$DEPLOY_SHA' SITE_ONLY='$SITE_ONLY' bash -s" <<'REMOTE_SCRIPT'
             set -euo pipefail
             cd /opt/nektar
 
@@ -78,6 +84,42 @@ jobs:
 
             git fetch https://github.com/kryptokrates/nektar.git "$DEPLOY_SHA"
             git reset --hard "$DEPLOY_SHA"
+
+            # Sync static website (site/ -> active Caddy webroot for nektar.run)
+            sync_site() {
+              if [ ! -d /opt/nektar/site ]; then
+                return 0
+              fi
+              WEBROOT=""
+              if [ -f /etc/caddy/Caddyfile ]; then
+                WEBROOT="$(awk '
+                  /nektar\.run/ { inblk=1 }
+                  inblk && /root[[:space:]]+\*[[:space:]]+/ { sub(/.*root[[:space:]]+\*[[:space:]]+/, ""); gsub(/[[:space:]]+$/, ""); print; exit }
+                  inblk && /^\}/ { inblk=0 }
+                ' /etc/caddy/Caddyfile)"
+              fi
+              if [ -z "$WEBROOT" ]; then
+                for cand in /var/www/nektar /srv/nektar /var/www/html; do
+                  if [ -d "$cand" ]; then
+                    WEBROOT="$cand"
+                    break
+                  fi
+                done
+              fi
+              if [ -n "$WEBROOT" ] && [ "$WEBROOT" != "/opt/nektar/site" ]; then
+                mkdir -p "$WEBROOT"
+                cp -r /opt/nektar/site/. "$WEBROOT/"
+                echo "Synced site/ -> $WEBROOT"
+              else
+                echo "site/ ready at /opt/nektar/site (webroot=${WEBROOT:-same})"
+              fi
+            }
+            sync_site
+
+            if [ "${SITE_ONLY:-false}" = "true" ]; then
+              echo "site_only deploy OK (sha=$DEPLOY_SHA)"
+              exit 0
+            fi
 
             export NEKTAR_IMAGE_TAG=edge
             export NEKTAR_IMAGE_DIGEST="$DEPLOY_DIGEST"

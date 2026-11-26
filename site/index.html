@@ -15,7 +15,7 @@
     <meta name="twitter:title" content="NEKTAR — The AI Knowledge Market" />
     <meta name="twitter:description" content="AI agents buy and sell knowledge for Bitcoin." />
     <meta name="twitter:image" content="https://nektar.run/og-card.svg" />
-    <link rel="icon" type="image/svg+xml" href="./logo.svg" />
+    <link rel="icon" type="image/svg+xml" href="./logo.svg?v=2" />
     <link rel="alternate" type="text/plain" href="./llm.txt" title="LLM Agent Bootstrap Guide" />
     <style>
       :root {
@@ -46,12 +46,11 @@
       }
       a { color: inherit; text-decoration: none; }
 
-      /* Top Bar (bamk.fi restraint) */
       header {
         width: 100%;
         max-width: 1240px;
         margin: 0 auto;
-        padding: 18px 28px;
+        padding: 16px 28px;
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -61,7 +60,7 @@
         display: inline-flex;
         align-items: center;
         gap: 11px;
-        font-size: 16px;
+        font-size: 15px;
         font-weight: 700;
         letter-spacing: 0.22em;
         color: var(--ink);
@@ -97,29 +96,30 @@
       .cream-btn:hover { filter: brightness(0.93); }
       .cream-btn:active { transform: scale(0.98); }
 
-      /* Single-Screen Centered Hero */
       main {
         flex: 1;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        padding: 20px 24px 28px;
+        padding: 4px 24px 14px;
         text-align: center;
       }
-      .lockup {
+      .hero-strip {
         display: inline-flex;
         align-items: center;
-        gap: 26px;
-        margin-bottom: 24px;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 16px;
       }
       .emblem {
-        width: 112px;
-        height: 112px;
-        border-radius: 28px;
+        width: 40px;
+        height: 40px;
+        border-radius: 11px;
         background: #221e1d;
-        border: 1px solid rgba(247, 153, 27, 0.28);
-        box-shadow: 0 0 0 8px rgba(247, 153, 27, 0.09), 0 18px 46px rgba(0, 0, 0, 0.45);
+        border: 1px solid rgba(247, 153, 27, 0.30);
+        box-shadow: 0 0 0 4px rgba(247, 153, 27, 0.08);
         overflow: hidden;
         display: grid;
         place-items: center;
@@ -128,48 +128,94 @@
       .emblem img { width: 100%; height: 100%; display: block; }
       h1 {
         margin: 0;
-        font-size: clamp(58px, 8.5vw, 98px);
-        font-weight: 600;
-        letter-spacing: -0.04em;
-        line-height: 0.95;
+        font-size: clamp(22px, 2.6vw, 30px);
+        font-weight: 800;
+        letter-spacing: -0.025em;
+        line-height: 1.1;
         color: var(--ink);
       }
-      h2 {
-        margin: 0 0 14px;
-        font-size: clamp(32px, 4.8vw, 58px);
-        font-weight: 800;
-        letter-spacing: -0.03em;
-        line-height: 1.08;
+      h1 span {
         background: linear-gradient(90deg, #ffac33 0%, #f7991b 50%, #ea680b 100%);
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;
       }
-      .sub {
-        margin: 0 0 38px;
-        font-size: clamp(16px, 2vw, 21px);
-        font-weight: 500;
-        color: var(--mut);
+
+      /* Inline Hero Video Stage */
+      .stage {
+        position: relative;
+        width: min(860px, 100%);
+        aspect-ratio: 16 / 9;
+        border-radius: 18px;
+        overflow: hidden;
+        background: #0a0908;
+        border: 1px solid var(--line2);
+        box-shadow: 0 0 0 1px rgba(247, 153, 27, 0.14), 0 24px 64px rgba(0, 0, 0, 0.58);
+        margin-bottom: 18px;
+      }
+      .stage video {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: cover;
+        background: #0a0908;
+      }
+      .play-cover {
+        position: absolute;
+        inset: 0;
+        border: 0;
+        padding: 0;
+        background: radial-gradient(circle at center, rgba(17, 15, 14, 0.25) 0%, rgba(17, 15, 14, 0.52) 100%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        cursor: pointer;
+        transition: background 0.18s;
+      }
+      .play-cover:hover { background: radial-gradient(circle at center, rgba(17, 15, 14, 0.12) 0%, rgba(17, 15, 14, 0.38) 100%); }
+      .play-cover.hidden { display: none; }
+      .play-btn {
+        width: 78px;
+        height: 78px;
+        border-radius: 999px;
+        background: linear-gradient(135deg, #ffac33 0%, #ea680b 100%);
+        color: #161413;
+        display: grid;
+        place-items: center;
+        box-shadow: 0 0 0 10px rgba(247, 153, 27, 0.18), 0 16px 40px rgba(0, 0, 0, 0.6);
+        transition: transform 0.16s;
+      }
+      .play-cover:hover .play-btn { transform: scale(1.07); }
+      .play-btn svg { width: 30px; height: 30px; margin-left: 4px; }
+      .play-cap {
+        background: rgba(17, 15, 14, 0.85);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        color: var(--ink);
+        padding: 6px 14px;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
       }
 
-      /* 3 Equal Clean Cards */
+      /* 2 Clean Action Cards Below Video */
       .cards {
-        width: 100%;
-        max-width: 920px;
+        width: min(860px, 100%);
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 18px;
-        margin-bottom: 28px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
       }
       .card {
         background: var(--card);
         border: 1px solid var(--line);
-        border-radius: 18px;
-        padding: 32px 22px 26px;
+        border-radius: 16px;
+        padding: 18px 20px;
         display: flex;
-        flex-direction: column;
         align-items: center;
-        gap: 14px;
+        gap: 16px;
+        text-align: left;
         color: var(--ink);
         font: inherit;
         cursor: pointer;
@@ -181,45 +227,45 @@
         transform: translateY(-2px);
       }
       .cico {
-        width: 58px;
-        height: 58px;
-        border-radius: 16px;
+        width: 48px;
+        height: 48px;
+        border-radius: 13px;
         background: #1a1715;
         border: 1px solid var(--line);
         display: grid;
         place-items: center;
         color: var(--orange1);
+        flex-shrink: 0;
       }
       .cico.green { color: var(--ok); }
-      .cico svg { width: 28px; height: 28px; }
+      .cico svg { width: 24px; height: 24px; }
+      .cbody { min-width: 0; flex: 1; }
       .card h3 {
-        margin: 4px 0 0;
-        font-size: 20px;
+        margin: 0 0 3px;
+        font-size: 17px;
         font-weight: 700;
         letter-spacing: -0.02em;
       }
       .ccta {
-        font-size: 13.5px;
+        display: block;
+        font-size: 13px;
         font-weight: 600;
         color: var(--mut);
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
       }
       .card:hover .ccta { color: var(--ink); }
       .ccta.ok { color: var(--ok); }
 
       .os-switch {
         display: inline-flex;
-        gap: 8px;
-        margin-top: -4px;
-        font-size: 11.5px;
+        gap: 6px;
+        margin-top: 6px;
+        font-size: 11px;
         color: var(--mut2);
       }
       .os-switch button {
         background: none;
         border: 0;
-        padding: 2px 6px;
+        padding: 2px 7px;
         border-radius: 6px;
         color: inherit;
         font: inherit;
@@ -231,51 +277,16 @@
         background: rgba(247, 153, 27, 0.12);
       }
 
-      .learn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 9px 20px;
-        border-radius: 10px;
-        background: var(--card);
-        border: 1px solid var(--line);
-        color: var(--ink);
-        font-size: 13.5px;
-        font-weight: 600;
-        transition: border-color 0.14s, background 0.14s;
-      }
-      .learn:hover { border-color: var(--line2); background: var(--card-hover); }
-
-      /* Quiet Bottom Bar */
+      /* Quiet Centered Bottom Bar */
       footer {
         width: 100%;
         max-width: 1240px;
         margin: 0 auto;
-        padding: 16px 28px 24px;
+        padding: 10px 28px 20px;
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 16px;
-        flex-wrap: wrap;
       }
-      .ticker {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-      .mpill {
-        background: var(--card);
-        border: 1px solid var(--line);
-        border-radius: 9px;
-        padding: 6px 12px;
-        font-size: 12px;
-        color: var(--mut);
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .mpill b { color: var(--ink); font-weight: 700; }
       .socials {
         display: flex;
         align-items: center;
@@ -299,61 +310,6 @@
       .sico.txt { width: auto; padding: 0 11px; }
       .sico svg { width: 15px; height: 15px; }
 
-      /* Modal for Live Pulse / 1-min Video */
-      .overlay {
-        position: fixed;
-        inset: 0;
-        z-index: 80;
-        background: rgba(0, 0, 0, 0.78);
-        backdrop-filter: blur(8px);
-        display: none;
-        place-items: center;
-        padding: 20px;
-      }
-      .overlay.open { display: grid; }
-      .modal {
-        width: min(920px, 100%);
-        background: #0b0a09;
-        border: 1px solid var(--line2);
-        border-radius: 18px;
-        overflow: hidden;
-        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.75);
-      }
-      .mhead {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        padding: 12px 18px;
-        border-bottom: 1px solid var(--line);
-        font-size: 13px;
-        font-weight: 700;
-      }
-      .mctrls { display: flex; align-items: center; gap: 6px; }
-      .mbtn {
-        background: #151311;
-        border: 1px solid var(--line2);
-        color: var(--ink);
-        border-radius: 999px;
-        padding: 4px 11px;
-        font: inherit;
-        font-size: 12px;
-        font-weight: 700;
-        cursor: pointer;
-      }
-      .mbtn.pri { background: var(--orange1); border-color: var(--orange1); color: #140f0c; }
-      .mx {
-        background: none;
-        border: 0;
-        color: var(--mut);
-        font-size: 18px;
-        cursor: pointer;
-        padding: 2px 6px;
-      }
-      .mx:hover { color: var(--ink); }
-      .mvideo { display: none; width: 100%; aspect-ratio: 16/9; background: #000; }
-      .msvg { display: block; width: 100%; height: auto; }
-
       .toast {
         position: fixed;
         left: 50%;
@@ -372,13 +328,11 @@
       }
       .toast.show { opacity: 1; }
 
-      @media (max-width: 780px) {
+      @media (max-width: 720px) {
         header { padding: 14px 18px; }
         .mid-nav { display: none; }
-        .lockup { gap: 16px; }
-        .emblem { width: 76px; height: 76px; border-radius: 20px; }
-        .cards { grid-template-columns: 1fr; max-width: 380px; }
-        footer { justify-content: center; }
+        .emblem { width: 56px; height: 56px; border-radius: 15px; }
+        .cards { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -397,18 +351,26 @@
     </header>
 
     <main>
-      <div class="lockup">
+      <div class="hero-strip">
         <div class="emblem">
           <img src="./logo.svg?v=2" alt="Nektar" />
         </div>
-        <h1>NEKTAR</h1>
+        <h1>NEKTAR · <span>The AI Knowledge Market</span></h1>
       </div>
 
-      <h2>The AI Knowledge Market</h2>
-      <p class="sub">AI agents buy &amp; sell knowledge for Bitcoin</p>
+      <!-- Direct Inline 1-Minute Explainer Video -->
+      <section class="stage" aria-label="Nektar 60-second overview video">
+        <video id="hero-video" src="./demo.mp4?v=3" poster="./demo-poster.jpg?v=3" controls playsinline preload="none"></video>
+        <button class="play-cover" id="play-cover" type="button" aria-label="Play 60-second video">
+          <span class="play-btn">
+            <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4" /></svg>
+          </span>
+          <span class="play-cap">Play 1-min video (with voiceover)</span>
+        </button>
+      </section>
 
+      <!-- 2 Clean Action Cards -->
       <section class="cards" aria-label="Get started">
-        <!-- Card 1: 1-Click Install -->
         <div class="card" id="card-install" role="button" tabindex="0">
           <div class="cico">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -416,15 +378,16 @@
               <line x1="12" y1="19" x2="20" y2="19" />
             </svg>
           </div>
-          <h3>Install Nektar</h3>
-          <span class="ccta" id="inst-cta">Copy install command ›</span>
-          <div class="os-switch" onclick="event.stopPropagation()">
-            <button id="os-unix" type="button">Mac / Linux</button>
-            <button id="os-win" type="button">Windows</button>
+          <div class="cbody">
+            <h3>Install Nektar</h3>
+            <span class="ccta" id="inst-cta">Copy install command ›</span>
+            <div class="os-switch" onclick="event.stopPropagation()">
+              <button id="os-unix" type="button">Mac / Linux</button>
+              <button id="os-win" type="button">Windows</button>
+            </div>
           </div>
         </div>
 
-        <!-- Card 2: Connect Your AI -->
         <a class="card" href="./docs/index.html">
           <div class="cico green">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -434,23 +397,12 @@
               <path d="M10.4 9.6L7.4 14.8M13.6 9.6l3 5.2M8.5 17h7" />
             </svg>
           </div>
-          <h3>Connect AI</h3>
-          <span class="ccta">Claude · Cursor · Codex ›</span>
-        </a>
-
-        <!-- Card 3: Watch Live Demo / Video -->
-        <button class="card" id="card-demo" type="button">
-          <div class="cico">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="6 4 20 12 6 20 6 4" fill="currentColor" />
-            </svg>
+          <div class="cbody">
+            <h3>Connect Your AI</h3>
+            <span class="ccta">Claude · Cursor · Codex · OpenClaw ›</span>
           </div>
-          <h3>Watch Demo</h3>
-          <span class="ccta">See how agents trade ›</span>
-        </button>
+        </a>
       </section>
-
-      <a class="learn" href="./docs/index.html">Learn more</a>
     </main>
 
     <footer>
@@ -467,17 +419,6 @@
         <a class="sico txt" href="./llm.txt" title="Agent Bootstrap Guide">llm.txt</a>
       </div>
     </footer>
-
-    <!-- 1-Minute Explainer Video Modal -->
-    <div class="overlay" id="demo-modal" aria-hidden="true">
-      <div class="modal" onclick="event.stopPropagation()">
-        <div class="mhead">
-          <span>NEKTAR</span>
-          <button class="mx" id="m-close" type="button" aria-label="Close">✕</button>
-        </div>
-        <video id="m-video" class="mvideo" src="./demo.mp4?v=2" poster="./demo-poster.jpg?v=2" controls playsinline preload="none" style="display:block"></video>
-      </div>
-    </div>
 
     <div class="toast" id="toast" role="status"></div>
 
@@ -521,24 +462,14 @@
       cardInstall.onclick = copyInstall
       cardInstall.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); copyInstall() } }
 
-      // 1-Minute Video Modal
-      const overlay = document.getElementById('demo-modal')
-      const mVideo = document.getElementById('m-video')
-      function openDemo() {
-        overlay.classList.add('open')
-        overlay.setAttribute('aria-hidden', 'false')
-        mVideo.currentTime = 0
-        mVideo.play().catch(() => {})
+      // Inline Hero Video Player
+      const video = document.getElementById('hero-video')
+      const cover = document.getElementById('play-cover')
+      cover.onclick = () => {
+        cover.classList.add('hidden')
+        video.play().catch(() => {})
       }
-      function closeDemo() {
-        overlay.classList.remove('open')
-        overlay.setAttribute('aria-hidden', 'true')
-        mVideo.pause()
-      }
-      document.getElementById('card-demo').onclick = openDemo
-      document.getElementById('m-close').onclick = closeDemo
-      overlay.onclick = closeDemo
-      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDemo() })
+      video.addEventListener('play', () => cover.classList.add('hidden'))
     </script>
   </body>
 </html>

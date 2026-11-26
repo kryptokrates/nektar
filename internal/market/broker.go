@@ -573,7 +573,8 @@ func (b *Broker) RecordMarketTape(event string, ev MarketTapeEvent) {
 	if len(b.marketTape) > maxMarketTapeEvents {
 		b.marketTape = append([]MarketTapeEvent(nil), b.marketTape[len(b.marketTape)-maxMarketTapeEvents:]...)
 	}
-	listeners := append([]func(string, MarketTapeEvent)(nil), b.tapeListeners...)
+	listeners := make([]func(event string, ev MarketTapeEvent), len(b.tapeListeners))
+	copy(listeners, b.tapeListeners)
 	b.mu.Unlock()
 	for _, fn := range listeners {
 		fn(event, ev)

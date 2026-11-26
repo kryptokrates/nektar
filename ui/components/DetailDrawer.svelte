@@ -110,9 +110,14 @@
           {/if}
         {:else if target.kind === 'deal'}
           {@const d = target.item}
+          {#if d.deliveredText}<p class="quote">{d.deliveredText}</p>{/if}
           <div class="kv">
             <span>Deal ID</span><span class="mono">{d.op}</span>
+            {#if d.role}<span>Side</span><span>{d.role === 'seller' ? 'Sell' : 'Buy'}</span>{/if}
+            {#if d.shard}<span>Shard</span><span>#{d.shard}</span>{/if}
+            {#if d.priceSats}<span>Amount</span><span>{fmtSats(d.priceSats)} sats</span>{/if}
             <span>Status</span><span>{d.to}</span>
+            {#if d.paymentTxid}<span>TxID</span><span class="mono">{shortHash(d.paymentTxid, 14, 10)}</span>{/if}
             <span>Detail</span><span>{d.cause}</span>
           </div>
           {#if d.matchAudit}

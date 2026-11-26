@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import type { DealFeedEntry, DrawerTarget, FeedFragment, NavTab, PeerInfo, Receipt, State } from './lib/types'
+  import type { DealFeedEntry, DrawerTarget, FeedFragment, MarketTapeEvent, NavTab, PeerInfo, PulseSignal, Receipt, State } from './lib/types'
   import { fmtSats } from './lib/format'
   import { operatorFetch, postJSON, registerOperatorPrompter } from './lib/api'
   import AuthGate from './components/AuthGate.svelte'
   import Sidebar from './components/Sidebar.svelte'
+  import MarketHome from './components/MarketHome.svelte'
   import FeedView from './components/FeedView.svelte'
-  import MarketView from './components/MarketView.svelte'
   import WalletView from './components/WalletView.svelte'
   import NodeView from './components/NodeView.svelte'
   import RightRail from './components/RightRail.svelte'
@@ -20,13 +20,24 @@
   let live = $state(false)
   let tab = $state<NavTab>('home')
   let searchQuery = $state('')
-  let composerEl = $state<HTMLTextAreaElement | null>(null)
+  let sellInputEl = $state<HTMLTextAreaElement | null>(null)
+  let buyInputEl = $state<HTMLTextAreaElement | null>(null)
   let drawer = $state<DrawerTarget>(null)
   let paletteOpen = $state(false)
   let dockOpen = $state(false)
   let faucetBusy = $state(false)
   let toast = $state<{ msg: string; isErr: boolean } | null>(null)
   let toastTimer: ReturnType<typeof setTimeout> | null = null
+
+  // Real-time SSE market pulse signal for kinetic animations
+  let pulse = $state<PulseSignal | null>(null)
+  let pulseSeq = 0
+  let loadDebounce: ReturnType<typeof setTimeout> | null = null
+
+  function emitPulse(event: string, tape?: MarketTapeEvent) {
+    pulseSeq += 1
+    pulse = { seq: pulseSeq, event, ts: Date.now(), tape }
+  }
 
   // In-app operator token & confirm modal state (zero window.prompt / window.confirm)
   let modalMode = $state<'none' | 'token' | 'confirm'>('none')
@@ -75,9 +86,22 @@
     }
   }
 
-  function focusComposer() {
+  function scheduleLoad() {
+    if (loadDebounce) clearTimeout(loadDebounce)
+    loadDebounce = setTimeout(() => {
+      loadDebounce = null
+      void load()
+    }, 180)
+  }
+
+  function focusSell() {
     tab = 'home'
-    setTimeout(() => composerEl?.focus(), 20)
+    setTimeout(() => sellInputEl?.focus(), 25)
+  }
+
+  function focusBuy() {
+    tab = 'home'
+    setTimeout(() => buyInputEl?.focus(), 25)
   }
 
   async function runQuickRecall() {
@@ -94,7 +118,7 @@
       if (g.ok) showToast('Issued first verifiable receipt ✓')
       else showToast(g.data.error ?? 'Grounding failed', true)
     } else {
-      showToast('No memories yet — write one in the composer above.', true)
+      showToast('No memories yet — sell or save a fact first.', true)
     }
     await load()
   }
@@ -132,15 +156,6 @@
     }
   }
 
-  async function anchorShard(shard: string) {
-    const r = await postJSON<{ anchor?: { txid?: string } }>('/v1/anchor', { shard })
-    if (!r.ok) showToast(r.data.error ?? `Anchor failed (${r.status})`, true)
-    else {
-      showToast(r.data.anchor?.txid ? `Anchored #${shard} on BSV ✓` : `Nothing unanchored in #${shard}`)
-      await load()
-    }
-  }
-
   async function forgetMemory(shard: string, seq: number) {
     const ok = await askConfirm('Forget & Shred Memory', `Shred local plaintext of #${shard}:${seq}? On-chain hash stays intact.`)
     if (!ok) return
@@ -173,13 +188,14 @@
   }
 
   const commands = $derived([
-    { id: 'compose', label: 'Remember a fact', hint: 'Home composer', run: focusComposer },
-    { id: 'recall', label: 'Run verified recall + receipt', hint: 'welcome shard', run: () => void runQuickRecall() },
-    { id: 'dock', label: 'Dock AI agent (Claude / Cursor / Proxy / MCP)', hint: 'Setup', run: () => (dockOpen = true) },
-    { id: 'home', label: 'Go to Home Feed', hint: 'Timeline', run: () => (tab = 'home') },
-    { id: 'market', label: 'Go to Market', hint: 'Bounties & Peers', run: () => (tab = 'market') },
+    { id: 'buy', label: 'Buy verified data', hint: 'Market Home · Left rail', run: focusBuy },
+    { id: 'sell', label: 'Anchor & sell knowledge', hint: 'Market Home · Right rail', run: focusSell },
+    { id: 'home', label: 'Go to Market (Home)', hint: 'Live Clearing Pulse', run: () => (tab = 'home') },
+    { id: 'memory', label: 'Go to Memory Vault', hint: 'Saved facts & receipts', run: () => (tab = 'memory') },
     { id: 'wallet', label: 'Go to Wallet', hint: 'Balance & Ledger', run: () => (tab = 'wallet') },
     { id: 'node', label: 'Go to Node & Diagnostics', hint: 'Policies · Hosts · Hub', run: () => (tab = 'node') },
+    { id: 'dock', label: 'Dock AI agent (Claude / Cursor / Proxy / MCP)', hint: 'Setup', run: () => (dockOpen = true) },
+    { id: 'recall', label: 'Run verified recall + receipt', hint: 'Grounding check', run: () => void runQuickRecall() },
     ...(s?.network === 'testnet'
       ? [{ id: 'faucet', label: 'Request Testnet Faucet sats', hint: 'Free test BSV', run: () => void requestFaucet() }]
       : []),
@@ -194,7 +210,17 @@
     es?.close()
     es = new EventSource('/events')
     es.onopen = () => (live = true)
-    es.onmessage = () => void load()
+    es.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data) as { event?: string; tape?: MarketTapeEvent }
+        if (msg.event && msg.event !== 'connected') {
+          emitPulse(msg.event, msg.tape)
+          scheduleLoad()
+        }
+      } catch {
+        scheduleLoad()
+      }
+    }
     es.onerror = () => (live = false)
   }
 
@@ -221,8 +247,13 @@
       await load()
       if (!needsAuth) connectEvents()
     })()
-    return () => es?.close()
+    return () => {
+      es?.close()
+      if (loadDebounce) clearTimeout(loadDebounce)
+    }
   })
+
+  const isMarketHome = $derived(tab === 'home')
 </script>
 
 <svelte:window onkeydown={onGlobalKey} />
@@ -238,7 +269,7 @@
 {:else if !s}
   <div class="boot">loading nektar…</div>
 {:else}
-  <div class="shell">
+  <div class="shell" class:market-wide={isMarketHome}>
     <Sidebar
       {tab}
       {live}
@@ -246,17 +277,42 @@
       pub={s.pub}
       uptimeSec={s.uptimeSec}
       pendingApprovals={s.automation?.pending.length ?? 0}
+      balanceSats={s.treasury.sats}
+      earnedSats={s.receipts.earned}
       onSelect={(t) => (tab = t)}
-      onCompose={focusComposer}
+      onSellQuick={focusSell}
       onOpenPalette={() => (paletteOpen = true)}
     />
 
     <main class="center">
       {#if tab === 'home'}
+        <MarketHome
+          {s}
+          {live}
+          {pulse}
+          {searchQuery}
+          {faucetBusy}
+          bind:sellInputEl
+          bind:buyInputEl
+          onSearch={(q) => (searchQuery = q)}
+          onOpenPalette={() => (paletteOpen = true)}
+          onOpenDock={() => (dockOpen = true)}
+          onRefresh={load}
+          onToast={showToast}
+          onLocalPulse={emitPulse}
+          onNavigate={(t) => (tab = t)}
+          onRequestFaucet={() => void requestFaucet()}
+          onApproveStarter={() => void approveStarterPolicy()}
+          onQuickRecall={() => void runQuickRecall()}
+          onDecideApproval={(id, ok) => void decideApproval(id, ok)}
+          onInspectDeal={(d: DealFeedEntry) => (drawer = { kind: 'deal', item: d })}
+          onInspectPeer={(p: PeerInfo) => (drawer = { kind: 'peer', item: p })}
+          onInspectReceipt={(r: Receipt) => (drawer = { kind: 'receipt', item: r })}
+        />
+      {:else if tab === 'memory'}
         <FeedView
           {s}
           {searchQuery}
-          bind:composerEl
           onRefresh={load}
           onToast={showToast}
           onInspectMemory={(m: FeedFragment) => (drawer = { kind: 'memory', item: m })}
@@ -266,13 +322,6 @@
           onDecideApproval={(id, ok) => void decideApproval(id, ok)}
           onShareUrl={(u) => void shareUrl(u)}
         />
-      {:else if tab === 'market'}
-        <MarketView
-          {s}
-          onRefresh={load}
-          onToast={showToast}
-          onInspectPeer={(p: PeerInfo) => (drawer = { kind: 'peer', item: p })}
-        />
       {:else if tab === 'wallet'}
         <WalletView {s} onRefresh={load} onToast={showToast} onConfirm={askConfirm} />
       {:else}
@@ -280,18 +329,20 @@
       {/if}
     </main>
 
-    <RightRail
-      {s}
-      {searchQuery}
-      {faucetBusy}
-      onSearch={(q) => (searchQuery = q)}
-      onOpenPalette={() => (paletteOpen = true)}
-      onOpenDock={() => (dockOpen = true)}
-      onQuickRecall={() => void runQuickRecall()}
-      onRequestFaucet={() => void requestFaucet()}
-      onApproveStarter={() => void approveStarterPolicy()}
-      onNavigate={(t) => (tab = t)}
-    />
+    {#if !isMarketHome}
+      <RightRail
+        {s}
+        {searchQuery}
+        {faucetBusy}
+        onSearch={(q) => (searchQuery = q)}
+        onOpenPalette={() => (paletteOpen = true)}
+        onOpenDock={() => (dockOpen = true)}
+        onQuickRecall={() => void runQuickRecall()}
+        onRequestFaucet={() => void requestFaucet()}
+        onApproveStarter={() => void approveStarterPolicy()}
+        onNavigate={(t) => (tab = t)}
+      />
+    {/if}
   </div>
 
   <DetailDrawer target={drawer} onClose={() => (drawer = null)} />
@@ -355,12 +406,16 @@
   }
   .shell {
     display: grid;
-    grid-template-columns: 216px minmax(0, 620px) 304px;
+    grid-template-columns: 204px minmax(0, 680px) 290px;
     justify-content: center;
     min-height: 100vh;
-    max-width: 1200px;
+    max-width: 1260px;
     margin: 0 auto;
     padding: 0 0.75rem;
+  }
+  .shell.market-wide {
+    grid-template-columns: 204px minmax(0, 1fr);
+    max-width: 1420px;
   }
   .center {
     min-width: 0;
@@ -390,8 +445,11 @@
 
   @media (max-width: 1100px) and (min-width: 721px) {
     .shell {
-      grid-template-columns: 68px minmax(0, 620px) 270px;
+      grid-template-columns: 68px minmax(0, 640px) 260px;
       padding: 0 0.5rem;
+    }
+    .shell.market-wide {
+      grid-template-columns: 68px minmax(0, 1fr);
     }
   }
   @media (max-width: 1020px) {
@@ -400,7 +458,7 @@
     }
   }
   @media (max-width: 720px) {
-    .shell {
+    .shell, .shell.market-wide {
       grid-template-columns: 1fr;
       padding: 0 0 60px;
     }

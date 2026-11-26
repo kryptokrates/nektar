@@ -12,10 +12,18 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	"github.com/bsv-blockchain/go-sdk/transaction"
+
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/chain"
+	"github.com/kryptokrates/nektar/internal/contracts"
+	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
 )
@@ -743,4 +751,413 @@ func TestLiveRestate10xFeaturesE2E(t *testing.T) {
 		t.Logf("LIVE Restate v1.8.1 RestartInvocationAsNew succeeded! newID=%s", newID)
 	}
 }
+
+// TestLiveAuditFixesE2E verifies all critical audit fixes LIVE against real restate-server v1.8.1:
+//  1. EscrowGuardian per-escrow isolation + REAL Chronicle-VM DisclosureSale.Refund() broadcast
+//     (Escrow B refunds while Guardian A stays watching, then Guardian A refunds Escrow A!).
+//  2. StandingOrder lossless concurrent inbox (2 offers fired simultaneously -> zero dropped offers!).
+//  3. BuyerDeal Custody cap failover (Seller #1 denied by Custody/global/reserve daily cap ->
+//     BuyerDeal automatically fails over to cheaper Seller #2 on Attempt 2 and settles!).
+func TestLiveAuditFixesE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	buyerMem := newTestMemory(t)
+	sellerMem := newTestMemory(t)
+	buyerEng := NewEngine(buyerMem, DefaultPolicy())
+	sellerEng := NewEngine(sellerMem, DefaultPolicy())
+	const internalTok = "e2e-audit-fixes-tok"
+	buyerEng.SetInternalToken(internalTok)
+
+	buyerBroker := NewBroker(buyerMem, buyerEng, nil, BrokerConfig{})
+	buyerEng.SetBroker(buyerBroker)
+
+	// Approve buyer policy with maxPerDeal=500, maxPerDay=500.
+	if _, err := ApprovePolicyCustom(buyerMem.DB(), buyerEng.Policy(), "buyer", []string{"ops", "bsv"}, &PolicyLimitsOverride{
+		MaxPerDeal: 500,
+		MaxPerDay:  500,
+	}, "audit-e2e", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	rc, _, cleanup := startLiveRestateForTest(t, ctx, buyerEng, internalTok)
+	defer cleanup()
+
+	buyerPub := buyerMem.Chain().IdentityPubHex()
+
+	// === 1. ESCROW GUARDIAN ISOLATION + REAL DisclosureSale.Refund() BROADCAST ===
+	lockRealEscrow := func(dealID string, refundAfter uint64) (string, EscrowObligationPayload) {
+		t.Helper()
+		depPKH, err := buyerMem.Chain().FundPKH(ctx)
+		if err != nil {
+			t.Fatalf("FundPKH: %v", err)
+		}
+		sellerKey, _ := ec.NewPrivateKey()
+		sellerPKH := core.Hash160(sellerKey.PubKey().Compressed())
+		hWrapped := core.DSHA256([]byte("secret-key-" + dealID))
+		params := contracts.DisclosureSaleParams{
+			SellerPKH:    sellerPKH,
+			Price:        1200,
+			HWrapped:     hWrapped,
+			RefundAfter:  refundAfter,
+			MaxFee:       500,
+			DepositorPKH: depPKH,
+		}
+		lockScript, err := contracts.EncodeDisclosureSaleLockingScript(params)
+		if err != nil {
+			t.Fatalf("EncodeDisclosureSaleLockingScript: %v", err)
+		}
+		escSats := params.RequiredEscrowSatoshis() + 100
+		tx, beef, fee, spend, err := buyerMem.Chain().BuildFundedTxWithBasket(ctx, []*transaction.TransactionOutput{{
+			Satoshis:      escSats,
+			LockingScript: lockScript,
+		}}, "test escrow "+dealID, []string{"escrow"}, nil)
+		if err != nil {
+			t.Fatalf("BuildFundedTx: %v", err)
+		}
+		if _, err := buyerMem.Chain().Broadcast(ctx, tx, fee, spend); err != nil {
+			t.Fatalf("Broadcast escrow: %v", err)
+		}
+		if len(beef) == 0 {
+			beef, _ = chain.SafeAtomicBEEF(tx)
+		}
+		txid := tx.TxID().String()
+		payload := EscrowObligationPayload{
+			OfferID:      "off-" + dealID,
+			EscrowTxID:   txid,
+			EscrowVout:   0,
+			EscrowBEEF:   hex.EncodeToString(beef),
+			SellerPKH:    hex.EncodeToString(sellerPKH),
+			DepositorPKH: hex.EncodeToString(depPKH),
+			Price:        1200,
+			HWrapped:     hex.EncodeToString(hWrapped),
+			RefundAfter:  refundAfter,
+			MaxFee:       500,
+		}
+		_ = buyerMem.DB().SaveDeal(store.DealRecord{DealID: dealID, Role: "buyer", Status: "paid_awaiting_reveal", PaymentTxID: txid})
+		if err := RecordRevealOwedWithEscrow(buyerMem.DB(), dealID, hex.EncodeToString(sellerKey.PubKey().Compressed()), txid, 1200, int64(refundAfter), &payload); err != nil {
+			t.Fatalf("RecordRevealOwedWithEscrow: %v", err)
+		}
+		return txid, payload
+	}
+
+	now := time.Now().Unix()
+	escrowATxID, _ := lockRealEscrow("deal-esc-A", uint64(now+3))  // refunds in 3s
+	escrowBTxID, _ := lockRealEscrow("deal-esc-B", uint64(now-60)) // already refundable NOW!
+
+	// Arm Guardian A BEFORE Escrow B is reconciled!
+	if _, err := rc.StartEscrowGuardianAsync(ctx, escrowATxID, EscrowGuardianInput{
+		DealID:       "deal-esc-A",
+		EscrowTxID:   escrowATxID,
+		RefundAfter:  uint64(now + 3),
+		CheckEveryMs: 300,
+	}); err != nil {
+		t.Fatalf("StartEscrowGuardianAsync A: %v", err)
+	}
+	// Verify Guardian A is watching and did NOT falsely steal Escrow B's refund!
+	time.Sleep(800 * time.Millisecond)
+	stA1, err := rc.EscrowGuardianStatus(ctx, escrowATxID)
+	if err != nil {
+		t.Fatalf("EscrowGuardianStatus A (early): %v", err)
+	}
+	if stA1.Status != "watching" {
+		t.Fatalf("CROSS-ESCROW CONTAMINATION: Guardian A exited early as %q (refundTx=%s) while Escrow B was refundable!", stA1.Status, stA1.RefundTxID)
+	}
+	// Now reconcile Escrow B separately and confirm Escrow B refunds cleanly!
+	repB, err := ReconcileSingleEscrowObligation(ctx, buyerMem.DB(), buyerMem.Chain(), "deal-esc-B", escrowBTxID, time.Now().Unix())
+	if err != nil || repB.RefundsBroadcast != 1 || len(repB.RefundTxIDs) != 1 {
+		t.Fatalf("expected Escrow B to refund cleanly via ReconcileSingleEscrowObligation, got rep=%+v err=%v", repB, err)
+	}
+	refundBTxID := repB.RefundTxIDs[0]
+
+	// Wait for Escrow A's RefundAfter (+3s) to elapse and prove Guardian A broadcasts Escrow A's OWN real Refund tx!
+	var stAFinal *EscrowGuardianState
+	for i := 0; i < 40; i++ {
+		if st, gErr := rc.EscrowGuardianStatus(ctx, escrowATxID); gErr == nil && st.Status == "refunded" {
+			stAFinal = st
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if stAFinal == nil || stAFinal.Status != "refunded" || stAFinal.RefundTxID == "" {
+		st, _ := rc.EscrowGuardianStatus(ctx, escrowATxID)
+		t.Fatalf("expected Guardian A to broadcast real DisclosureSale.Refund(), got %+v", st)
+	}
+	if stAFinal.RefundTxID == refundBTxID {
+		t.Fatalf("Guardian A reported Escrow B's refundTxID %s instead of its own!", refundBTxID)
+	}
+
+	// === 2. STANDING ORDER LOSSLESS CONCURRENT SIGNAL BURST ===
+	remBurst, err := sellerMem.Remember(ctx, memory.RememberInput{
+		Shard:      "intel-burst",
+		Text:       "Concurrent burst offer #2 survived lossless inbox!",
+		AutoAnchor: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bOffer, bKey, bChirp, err := sellerEng.PrepareDirectSale(ctx, "intel-burst", remBurst.Seq, 120, buyerPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bOfferJSON, _ := json.Marshal(bOffer)
+	burstOrderID := "so-burst-e2e-1"
+	if _, err := rc.StartStandingOrderAsync(ctx, burstOrderID, StandingOrderInput{
+		OrderID:     burstOrderID,
+		Domains:     []string{"bsv"},
+		Query:       "burst test",
+		MaxSats:     200,
+		TargetShard: "acquired-burst",
+		TTL:         10 * time.Minute,
+		WaitTimeout: 15 * time.Second,
+	}); err != nil {
+		t.Fatalf("StartStandingOrderAsync burst: %v", err)
+	}
+	for i := 0; i < 40; i++ {
+		if st, gErr := rc.StandingOrderStatus(ctx, burstOrderID); gErr == nil && st.Status == "watching" {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// Fire 2 offers CONCURRENTLY in parallel goroutines (Offer #1 too expensive, Offer #2 valid)!
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = rc.SignalStandingOrderOffer(ctx, burstOrderID, bstack.OfferAd{
+			OfferID: "off-burst-expensive", Domains: []string{"bsv"}, PriceSats: 999,
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = rc.SignalStandingOrderOffer(ctx, burstOrderID, bstack.OfferAd{
+			OfferID:      "off-burst-valid",
+			Pub:          bOffer.SellerPub,
+			BuyerPub:     buyerPub,
+			Net:          "memory",
+			Domains:      []string{"bsv"},
+			PriceSats:    120,
+			Shard:        "intel-burst",
+			Leaf:         remBurst.Leaf,
+			ChirpURL:     bChirp,
+			KeyCommitHex: bOffer.KeyCommitment,
+			SaleOffer:    bOfferJSON,
+			Direct:       true,
+		})
+	}()
+	wg.Wait()
+
+	burstDealID := "so-" + burstOrderID + "-1"
+	for i := 0; i < 50; i++ {
+		if dst, gErr := rc.BuyerDealStatus(ctx, burstDealID); gErr == nil && dst.Status == "offered" {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if ok, err := rc.DeliverBuyerKey(ctx, burstDealID, ClaimSignal{
+		ClaimTxID:     "tx-burst-claim",
+		ContentKeyHex: hex.EncodeToString(bKey[:]),
+		ChirpURL:      bChirp,
+	}); err != nil || !ok {
+		t.Fatalf("DeliverBuyerKey burst: ok=%v err=%v", ok, err)
+	}
+	var burstFinal *StandingOrderState
+	for i := 0; i < 50; i++ {
+		if st, gErr := rc.StandingOrderStatus(ctx, burstOrderID); gErr == nil && st.Status == "filled" {
+			burstFinal = st
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if burstFinal == nil || burstFinal.Status != "filled" || burstFinal.Fills != 1 || !strings.Contains(burstFinal.DeliveredText, "survived lossless inbox") {
+		st, _ := rc.StandingOrderStatus(ctx, burstOrderID)
+		t.Fatalf("expected burst StandingOrder filled (zero dropped offers), got %+v", st)
+	}
+
+	// === 3. BUYER DEAL CUSTODY DAILY-CAP FAILOVER (Seller #1 denied by Custody -> Seller #2 succeeds!) ===
+	// Simulate a real concurrent deal consuming 230 sats of the 500-sat daily cap right after Step 1
+	// (inside Step 3b Matcher), leaving 150 sats remaining in Custody (500 - 120 burst - 230 concurrent):
+	// Seller #1 (250 sats, ranked #1) is DENIED by Custody/global/reserve Attempt 1 -> BuyerDeal MUST
+	// automatically fail over to cheaper Seller #2 (100 sats <= 150 rem) on Attempt 2 and settle!
+	var capRaceOnce sync.Once
+	buyerEng.SetMatcher(&capRaceTestMatcher{
+		onMatch: func() {
+			capRaceOnce.Do(func() {
+				_, _ = buyerMem.DB().ReserveSpendAtomic("concurrent-deal-spent", 1, 230, 500, 500)
+			})
+		},
+	})
+	defer buyerEng.SetMatcher(nil)
+	remCap1, _ := sellerMem.Remember(ctx, memory.RememberInput{Shard: "cap-1", Text: "Too expensive for remaining Custody cap", AutoAnchor: true})
+	cOffer1, _, cChirp1, err := sellerEng.PrepareDirectSale(ctx, "cap-1", remCap1.Seq, 250, buyerPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sellerMem2 := newTestMemory(t)
+	sellerEng2 := NewEngine(sellerMem2, DefaultPolicy())
+	remCap2b, _ := sellerMem2.Remember(ctx, memory.RememberInput{Shard: "cap-2", Text: "Cheaper Seller #2 fits under Custody daily cap!", AutoAnchor: true})
+	cOffer2, cKey2, cChirp2, err := sellerEng2.PrepareDirectSale(ctx, "cap-2", remCap2b.Seq, 100, buyerPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Boost Seller #1 reputation so deterministic ranking puts Seller #1 (250 sats) at index 0 above Seller #2 (100 sats)!
+	for i := 0; i < 10; i++ {
+		_ = buyerMem.DB().RecordReputation(cOffer1.SellerPub, true, 50)
+	}
+	cJSON1, _ := json.Marshal(cOffer1)
+	cJSON2, _ := json.Marshal(cOffer2)
+	capWantID := "want-custody-cap-failover-1"
+	if _, err := rc.StartBuyerDealAsync(ctx, capWantID, BuyerDealInput{
+		Want: bstack.WantAd{WantID: capWantID, Pub: buyerPub, Net: "memory", Domains: []string{"ops"}, Query: "cap failover", MaxSats: 250},
+		Offers: []bstack.OfferAd{
+			{
+				OfferID:      "off-cap-1-over",
+				WantID:       capWantID,
+				Pub:          cOffer1.SellerPub,
+				BuyerPub:     buyerPub,
+				Net:          "memory",
+				Domains:      []string{"ops"},
+				PriceSats:    250,
+				Shard:        "cap-1",
+				Leaf:         remCap1.Leaf,
+				ChirpURL:     cChirp1,
+				KeyCommitHex: cOffer1.KeyCommitment,
+				SaleOffer:    cJSON1,
+				Direct:       true,
+			},
+			{
+				OfferID:      "off-cap-2-fits",
+				WantID:       capWantID,
+				Pub:          cOffer2.SellerPub,
+				BuyerPub:     buyerPub,
+				Net:          "memory",
+				Domains:      []string{"ops"},
+				PriceSats:    100,
+				Shard:        "cap-2",
+				Leaf:         remCap2b.Leaf,
+				ChirpURL:     cChirp2,
+				KeyCommitHex: cOffer2.KeyCommitment,
+				SaleOffer:    cJSON2,
+				Direct:       true,
+			},
+		},
+		TargetShard: "acquired-cap-failover",
+		WaitTimeout: 15 * time.Second,
+	}); err != nil {
+		t.Fatalf("StartBuyerDealAsync cap failover: %v", err)
+	}
+	var capSt *DealState
+	for i := 0; i < 50; i++ {
+		if dst, gErr := rc.BuyerDealStatus(ctx, capWantID); gErr == nil && dst.ChosenOffer != nil && dst.ChosenOffer.OfferID == "off-cap-2-fits" {
+			capSt = dst
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if capSt == nil || capSt.ChosenOffer == nil || capSt.ChosenOffer.OfferID != "off-cap-2-fits" {
+		st, _ := rc.BuyerDealStatus(ctx, capWantID)
+		t.Fatalf("expected BuyerDeal to fail over from Custody-denied Seller #1 to Seller #2, got %+v", st)
+	}
+	if ok, err := rc.DeliverBuyerKey(ctx, capWantID, ClaimSignal{
+		ClaimTxID:     "tx-cap-failover-claim",
+		ContentKeyHex: hex.EncodeToString(cKey2[:]),
+		ChirpURL:      cChirp2,
+	}); err != nil || !ok {
+		t.Fatalf("DeliverBuyerKey cap failover: ok=%v err=%v", ok, err)
+	}
+	capRes, err := rc.AttachBuyerDeal(ctx, capWantID)
+	if err != nil || capRes.Status != "settled" || !strings.Contains(capRes.DeliveredTxt, "Cheaper Seller #2") {
+		t.Fatalf("expected cap failover deal settled with Seller #2, got res=%+v err=%v", capRes, err)
+	}
+}
+
+// TestStandingOrderKindAnnounceTriggersWantAd verifies that a verified KindAnnounce from a newly
+// arrived seller with matching SellDomains triggers a rate-limited WantAd broadcast for watching StandingOrders.
+func TestStandingOrderKindAnnounceTriggersWantAd(t *testing.T) {
+	mem := newTestMemory(t)
+	eng := NewEngine(mem, DefaultPolicy())
+
+	var mu sync.Mutex
+	var submits int
+	hubSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/submit") {
+			mu.Lock()
+			submits++
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"success"}`))
+	}))
+	defer hubSrv.Close()
+
+	disc := discovery.New(mem, []string{hubSrv.URL}, hubSrv.Client())
+	br := NewBroker(mem, eng, disc, BrokerConfig{HTTPClient: hubSrv.Client()})
+
+	now := time.Now().Unix()
+	eng.upsertStandingOrderIndex(StandingOrderState{
+		OrderID:       "so-announce-1",
+		Status:        "watching",
+		Domains:       []string{"bsv"},
+		Query:         "need live bsv fees",
+		MaxSats:       250,
+		ExpiresAtUnix: now + 3600,
+		UpdatedAt:     now,
+	})
+
+	sellerKey, _ := ec.NewPrivateKey()
+	ann := bstack.AnnounceAd{
+		Pub:         hex.EncodeToString(sellerKey.PubKey().Compressed()),
+		Net:         "memory",
+		SellDomains: []string{"bsv", "ops"},
+		Hosts:       []string{hubSrv.URL},
+		Exp:         time.Now().Add(30 * time.Minute).UnixMilli(),
+	}
+	// Trigger twice rapidly — first must submit a WantAd, second must be rate-limited (5m)!
+	br.dispatchAnnounceToStandingOrders(ann)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := submits
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	br.dispatchAnnounceToStandingOrders(ann)
+	time.Sleep(150 * time.Millisecond)
+
+	mu.Lock()
+	got := submits
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("expected exactly 1 WantAd broadcast (rate-limited on duplicate announce), got %d", got)
+	}
+}
+
+type capRaceTestMatcher struct {
+	onMatch func()
+}
+
+func (m *capRaceTestMatcher) DefaultMode() string { return "gated" }
+func (m *capRaceTestMatcher) MatchOffersForBuyer(_ context.Context, _ bstack.WantAd, ranked []ScoredOffer, _ map[string]store.SellerReputation, _ *Policy) BuyerMatchDecision {
+	if m.onMatch != nil {
+		m.onMatch()
+	}
+	if len(ranked) == 0 {
+		return BuyerMatchDecision{Verdict: "reject"}
+	}
+	chosen := ranked[0].Offer
+	return BuyerMatchDecision{Verdict: "allow", Ranked: ranked, Chosen: &chosen}
+}
+func (m *capRaceTestMatcher) MatchWantForSeller(_ context.Context, _ bstack.WantAd, candidates []SellerCandidate, _ *Policy) SellerMatchDecision {
+	if len(candidates) == 0 {
+		return SellerMatchDecision{}
+	}
+	cp := candidates[0]
+	return SellerMatchDecision{Approved: true, Chosen: &cp}
+}
+func (m *capRaceTestMatcher) MetricsSnapshot() MatcherMetrics { return MatcherMetrics{} }
+
 

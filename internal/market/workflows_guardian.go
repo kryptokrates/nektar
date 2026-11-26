@@ -74,7 +74,8 @@ func (e *Engine) restateEscrowGuardianRun(ctx restate.WorkflowContext, in Escrow
 					return escrowCheckResult{NowUnix: now, Done: true, Status: "claimed"}, nil
 				}
 			}
-			rep, rErr := ReconcileEscrowObligations(rctx, e.mem.DB(), e.mem.Chain(), now)
+			// Reconcile STRICTLY this escrowTxID (never cross-contaminate with other open escrows!).
+			rep, rErr := ReconcileSingleEscrowObligation(rctx, e.mem.DB(), e.mem.Chain(), in.DealID, escTxID, now)
 			if rErr != nil {
 				return escrowCheckResult{NowUnix: now, NextWaitSec: int64(checkEvery.Seconds()), Error: rErr.Error()}, nil
 			}
@@ -88,7 +89,10 @@ func (e *Engine) restateEscrowGuardianRun(ctx restate.WorkflowContext, in Escrow
 				}
 				return escrowCheckResult{NowUnix: now, Done: true, Status: "refunded", RefundTxID: refTx}, nil
 			}
-			// Compute smart sleep duration: if unix timestamp locktime is still in the future, sleep directly until RefundAfter!
+			// Compute smart sleep duration for BOTH Bitcoin locktime domains:
+			//  - Unix timestamp (>= 500M): sleep directly until RefundAfter
+			//  - Block height (< 500M): estimate blocks remaining * 60s clamped to [60s, 600s]
+			//    so multi-day/multi-week block-height locktimes never exhaust the loop cap.
 			waitSec := int64(checkEvery.Seconds())
 			if waitSec <= 0 {
 				waitSec = 1
@@ -97,6 +101,16 @@ func (e *Engine) restateEscrowGuardianRun(ctx restate.WorkflowContext, in Escrow
 				rem := int64(in.RefundAfter) - now
 				if rem > waitSec {
 					waitSec = rem
+				}
+			} else if in.RefundAfter > 0 && in.RefundAfter < 500_000_000 {
+				if curHeight, hErr := e.mem.Chain().Height(rctx); hErr == nil && uint64(curHeight) < in.RefundAfter {
+					est := int64(in.RefundAfter-uint64(curHeight)) * 60
+					if est > 600 {
+						est = 600
+					}
+					if est > waitSec {
+						waitSec = est
+					}
 				}
 			}
 			return escrowCheckResult{NowUnix: now, Done: false, Status: "watching", NextWaitSec: waitSec}, nil

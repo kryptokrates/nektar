@@ -244,7 +244,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 				return st, cErr
 			}
 			if !res.Approved {
-				if hasNext && strings.Contains(strings.ToLower(res.Reason), "blocked") {
+				if hasNext && !strings.Contains(strings.ToLower(res.Reason), "kill switch") {
 					continue
 				}
 				stepName := "buyer_custody_denied"

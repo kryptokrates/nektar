@@ -436,6 +436,13 @@ func (a *App) handleRestartInvocation(w http.ResponseWriter, r *http.Request) {
 	}
 	newID, err := rc.RestartInvocationAsNew(r.Context(), id)
 	if err != nil {
+		if strings.Contains(err.Error(), "HTTP 422") || strings.Contains(strings.ToLower(err.Error()), "restarting workflows is not supported") {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+				"error": err.Error(),
+				"hint":  "Restate v1.8 supports restart-as-new only for Services and Virtual Objects (NektarRuntime, Custody, Tx, AnchorCadence); use POST /v1/runtime/invocations/{id}/resume for paused Workflows.",
+			})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

@@ -171,13 +171,14 @@ type RuntimeAnchorTriggerInput struct {
 // SQLite (`deals`, `approvals`, `pending_sales`, `spend_reservations`) is the single verdict authority;
 // Restate provides durable execution, retries, awakeables, and timers.
 type Engine struct {
-	mu            sync.RWMutex
-	mem           *memory.Service
-	policy        *Policy
-	saleKey       *ec.PrivateKey // persistent node key signing DisclosureSale offers
-	broker        *Broker
-	matcher       Matcher
-	internalToken string
+	mu              sync.RWMutex
+	standingInboxMu sync.Mutex
+	mem             *memory.Service
+	policy          *Policy
+	saleKey         *ec.PrivateKey // persistent node key signing DisclosureSale offers
+	broker          *Broker
+	matcher         Matcher
+	internalToken   string
 }
 
 func NewEngine(mem *memory.Service, pol *Policy) *Engine {

@@ -34,6 +34,7 @@ type WatchKnowledgeInput struct {
 	MaxSats       uint64   `json:"maxSats,omitempty"`
 	TargetShard   string   `json:"targetShard,omitempty"`
 	TTLSeconds    int64    `json:"ttlSeconds,omitempty"`
+	MaxFills      int      `json:"maxFills,omitempty"`
 	Paused        *bool    `json:"paused,omitempty"`
 	ExtendSeconds int64    `json:"extendSeconds,omitempty"`
 	Reason        string   `json:"reason,omitempty"`
@@ -90,6 +91,7 @@ func (tb *Toolbox) ExecWatchKnowledge(ctx context.Context, in WatchKnowledgeInpu
 			MaxSats:     in.MaxSats,
 			TargetShard: in.TargetShard,
 			TTLSeconds:  in.TTLSeconds,
+			MaxFills:    in.MaxFills,
 		})
 	}
 }

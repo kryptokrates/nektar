@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/lightwebinc/bcommon/guard"
@@ -282,6 +283,17 @@ func ReconcileObligations(_ context.Context, db *store.DB, isTxSettled func(txid
 //  2. Otherwise, once RefundAfter has elapsed (block height or unix timestamp domain), constructs,
 //     Chronicle-VM-verifies, and broadcasts DisclosureSale.Refund() returning funds to DepositorPKH!
 func ReconcileEscrowObligations(ctx context.Context, db *store.DB, port *chain.Port, nowUnix int64) (ObligationReconcileReport, error) {
+	return reconcileEscrowObligationsFiltered(ctx, db, port, "", "", nowUnix)
+}
+
+// ReconcileSingleEscrowObligation performs autonomous on-chain DisclosureSale recovery strictly for one
+// escrowTxID (and optional dealID), preventing concurrent EscrowGuardian workflows from observing or
+// claiming another escrow's refund or key extraction.
+func ReconcileSingleEscrowObligation(ctx context.Context, db *store.DB, port *chain.Port, dealID, escrowTxID string, nowUnix int64) (ObligationReconcileReport, error) {
+	return reconcileEscrowObligationsFiltered(ctx, db, port, strings.TrimSpace(dealID), strings.TrimSpace(escrowTxID), nowUnix)
+}
+
+func reconcileEscrowObligationsFiltered(ctx context.Context, db *store.DB, port *chain.Port, filterDealID, filterEscrowTxID string, nowUnix int64) (ObligationReconcileReport, error) {
 	var rep ObligationReconcileReport
 	if db == nil || port == nil {
 		return rep, nil
@@ -302,92 +314,102 @@ func ReconcileEscrowObligations(ctx context.Context, db *store.DB, port *chain.P
 		if json.Unmarshal(ob.PayloadJSON, &esc) != nil || esc.EscrowTxID == "" || esc.EscrowBEEF == "" {
 			continue
 		}
-		rep.Checked++
-
-		// 1. Check if Seller already spent the escrow on-chain via DisclosureSale.Buy(k)!
-		if spendTx, vin, found := port.FindSpendingTx(ctx, esc.EscrowTxID, esc.EscrowVout); found && spendTx != nil {
-			if revealedK, kErr := contracts.ExtractRevealedKeyFromBuyTx(spendTx, vin, esc.HWrapped); kErr == nil {
-				if deal, dErr := db.GetDeal(ob.DealID); dErr == nil {
-					deal.ClaimKeyHex = hex.EncodeToString(revealedK)
-					if deal.Status == "paid_awaiting_reveal" || deal.Status == "expired" || deal.Status == "failed" {
-						deal.Status = "key_extracted_onchain"
-						deal.Error = ""
-					}
-					_, _ = db.UpdateDealCAS(deal)
-				}
-				_ = db.FulfillObligation(ob.ID)
-				_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRevealOwed))
-				_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRefundClaimable))
-				rep.Fulfilled++
-				rep.KeysExtractedOnChain++
-				continue
-			}
-		}
-
-		// 2. Check if RefundAfter has elapsed in its matching F-02 locktime domain.
-		var lockTime uint32
-		readyForRefund := false
-		if esc.RefundAfter < 500_000_000 {
-			if uint64(curHeight) >= esc.RefundAfter {
-				lockTime = curHeight
-				readyForRefund = true
-			}
-		} else {
-			if uint64(nowUnix) >= esc.RefundAfter {
-				lockTime = uint32(nowUnix)
-				readyForRefund = true
-			}
-		}
-		if !readyForRefund {
-			rep.StillOpen++
+		if filterEscrowTxID != "" && !strings.EqualFold(esc.EscrowTxID, filterEscrowTxID) {
 			continue
 		}
-
-		params, pErr := esc.toParams()
-		if pErr != nil {
-			_ = db.UpdateObligationStatus(ob.ID, "open", "invalid escrow params: "+pErr.Error(), true)
-			rep.StillOpen++
+		if filterDealID != "" && filterEscrowTxID == "" && ob.DealID != filterDealID {
 			continue
 		}
-		rawBEEF, dErr := hex.DecodeString(esc.EscrowBEEF)
-		if dErr != nil {
-			_ = db.UpdateObligationStatus(ob.ID, "open", "corrupt escrow BEEF hex", true)
-			rep.StillOpen++
-			continue
-		}
-		_, escrowTx, _, bErr := guard.ParseBEEF(rawBEEF, guard.DefaultBound)
-		if bErr != nil || escrowTx == nil {
-			_ = db.UpdateObligationStatus(ob.ID, "open", "parse escrow BEEF failed", true)
-			rep.StillOpen++
-			continue
-		}
-
-		refundTx, rErr := contracts.BuildDisclosureSaleRefundTx(
-			ctx, escrowTx, esc.EscrowVout, params, lockTime, 0, port.SignCovenantSighash,
-		)
-		if rErr != nil {
-			_ = db.UpdateObligationStatus(ob.ID, "open", "build Refund tx: "+rErr.Error(), true)
-			rep.StillOpen++
-			continue
-		}
-		refundTxID, sErr := port.SubmitCovenantTx(ctx, refundTx)
-		if sErr != nil {
-			_ = db.UpdateObligationStatus(ob.ID, "open", "broadcast Refund tx: "+sErr.Error(), true)
-			rep.StillOpen++
-			continue
-		}
-		_, _ = port.AdoptReceived(ctx, refundTx)
-		if deal, dErr := db.GetDeal(ob.DealID); dErr == nil && deal.Status != "settled" {
-			deal.Status = "refunded"
-			deal.Error = "refund_txid=" + refundTxID
-			_, _ = db.UpdateDealCAS(deal)
-		}
-		_ = db.FulfillObligation(ob.ID)
-		_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRevealOwed))
-		_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRefundClaimable))
-		rep.Fulfilled++
-		rep.RefundsBroadcast++
-		rep.RefundTxIDs = append(rep.RefundTxIDs, refundTxID)
+		reconcileOneEscrow(ctx, db, port, ob, esc, curHeight, nowUnix, &rep)
 	}
 	return rep, nil
+}
+
+func reconcileOneEscrow(ctx context.Context, db *store.DB, port *chain.Port, ob store.ObligationRecord, esc EscrowObligationPayload, curHeight uint32, nowUnix int64, rep *ObligationReconcileReport) {
+	rep.Checked++
+
+	// 1. Check if Seller already spent the escrow on-chain via DisclosureSale.Buy(k)!
+	if spendTx, vin, found := port.FindSpendingTx(ctx, esc.EscrowTxID, esc.EscrowVout); found && spendTx != nil {
+		if revealedK, kErr := contracts.ExtractRevealedKeyFromBuyTx(spendTx, vin, esc.HWrapped); kErr == nil {
+			if deal, dErr := db.GetDeal(ob.DealID); dErr == nil {
+				deal.ClaimKeyHex = hex.EncodeToString(revealedK)
+				if deal.Status == "paid_awaiting_reveal" || deal.Status == "expired" || deal.Status == "failed" {
+					deal.Status = "key_extracted_onchain"
+					deal.Error = ""
+				}
+				_, _ = db.UpdateDealCAS(deal)
+			}
+			_ = db.FulfillObligation(ob.ID)
+			_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRevealOwed))
+			_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRefundClaimable))
+			rep.Fulfilled++
+			rep.KeysExtractedOnChain++
+			return
+		}
+	}
+
+	// 2. Check if RefundAfter has elapsed in its matching F-02 locktime domain.
+	var lockTime uint32
+	readyForRefund := false
+	if esc.RefundAfter < 500_000_000 {
+		if uint64(curHeight) >= esc.RefundAfter {
+			lockTime = curHeight
+			readyForRefund = true
+		}
+	} else {
+		if uint64(nowUnix) >= esc.RefundAfter {
+			lockTime = uint32(nowUnix)
+			readyForRefund = true
+		}
+	}
+	if !readyForRefund {
+		rep.StillOpen++
+		return
+	}
+
+	params, pErr := esc.toParams()
+	if pErr != nil {
+		_ = db.UpdateObligationStatus(ob.ID, "open", "invalid escrow params: "+pErr.Error(), true)
+		rep.StillOpen++
+		return
+	}
+	rawBEEF, dErr := hex.DecodeString(esc.EscrowBEEF)
+	if dErr != nil {
+		_ = db.UpdateObligationStatus(ob.ID, "open", "corrupt escrow BEEF hex", true)
+		rep.StillOpen++
+		return
+	}
+	_, escrowTx, _, bErr := guard.ParseBEEF(rawBEEF, guard.DefaultBound)
+	if bErr != nil || escrowTx == nil {
+		_ = db.UpdateObligationStatus(ob.ID, "open", "parse escrow BEEF failed", true)
+		rep.StillOpen++
+		return
+	}
+
+	refundTx, rErr := contracts.BuildDisclosureSaleRefundTx(
+		ctx, escrowTx, esc.EscrowVout, params, lockTime, 0, port.SignCovenantSighash,
+	)
+	if rErr != nil {
+		_ = db.UpdateObligationStatus(ob.ID, "open", "build Refund tx: "+rErr.Error(), true)
+		rep.StillOpen++
+		return
+	}
+	refundTxID, sErr := port.SubmitCovenantTx(ctx, refundTx)
+	if sErr != nil {
+		_ = db.UpdateObligationStatus(ob.ID, "open", "broadcast Refund tx: "+sErr.Error(), true)
+		rep.StillOpen++
+		return
+	}
+	_, _ = port.AdoptReceived(ctx, refundTx)
+	if deal, dErr := db.GetDeal(ob.DealID); dErr == nil && deal.Status != "settled" {
+		deal.Status = "refunded"
+		deal.Error = "refund_txid=" + refundTxID
+		_, _ = db.UpdateDealCAS(deal)
+	}
+	_ = db.FulfillObligation(ob.ID)
+	_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRevealOwed))
+	_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRefundClaimable))
+	rep.Fulfilled++
+	rep.RefundsBroadcast++
+	rep.RefundTxIDs = append(rep.RefundTxIDs, refundTxID)
 }

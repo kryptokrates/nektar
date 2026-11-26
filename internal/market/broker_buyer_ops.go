@@ -415,3 +415,43 @@ func (b *Broker) CancelStandingOrder(ctx context.Context, orderID, reason string
 	}
 	return ok, err
 }
+
+// PublishWantForStandingOrder signs and broadcasts a KindWant across active hubs so currently online
+// or newly announced sellers quote OfferAds that wake the sleeping StandingOrder.
+func (b *Broker) PublishWantForStandingOrder(ctx context.Context, orderID string, domains []string, query string, maxSats uint64) error {
+	if b == nil || b.disc == nil || b.mem == nil || b.mem.Chain() == nil || b.engine == nil || b.engine.saleKey == nil {
+		return nil
+	}
+	hosts := b.disc.ActiveHosts()
+	if len(hosts) == 0 {
+		return nil
+	}
+	if len(domains) == 0 {
+		domains = []string{"ops"}
+	}
+	q := strings.TrimSpace(query)
+	if q == "" {
+		q = "standing order: " + strings.Join(domains, ",")
+	}
+	want := bstack.WantAd{
+		WantID:   fmt.Sprintf("sow-%s-%s", shortPub(orderID), randIDHex()[:8]),
+		Pub:      b.PubHex(),
+		Net:      b.mem.Chain().Network(),
+		Domains:  domains,
+		Query:    q,
+		MaxSats:  maxSats,
+		Revision: 1,
+		Exp:      time.Now().Add(30 * time.Minute).UnixMilli(),
+	}
+	sig, err := bstack.SignArtifact(b.engine.saleKey, want)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(bstack.SignedWant{Want: want, Sig: sig})
+	if err != nil {
+		return err
+	}
+	topics := lanesForDomains(want.Net, want.Domains)
+	_, err = b.disc.BuildAndSubmitMarketAd(ctx, b.engine.saleKey, bstack.MarketPayload{Kind: bstack.KindWant, Body: body}, hosts, topics)
+	return err
+}

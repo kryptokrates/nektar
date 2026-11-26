@@ -177,6 +177,7 @@ type Broker struct {
 	activeLoops          map[string]context.CancelFunc
 	seenWants            map[string]int64 // wantID -> seenUnix (bounded)
 	seenBboxNonces       map[string]int64 // sender:nonce -> seenUnix (bounded replay guard)
+	announceWantSeen     map[string]int64 // orderID:sellerPub -> lastWantUnix (5m rate limit)
 	packs                []bstack.PackRef
 	bountyDoms           []string
 	marketTape           []MarketTapeEvent

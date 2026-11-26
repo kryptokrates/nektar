@@ -424,7 +424,76 @@ func (b *Broker) handleMarketEvent(ctx context.Context, ev bstack.MarketEvent) {
 			}
 		}
 		b.dispatchOfferToStandingOrders(so.Offer)
+
+	case bstack.KindAnnounce:
+		var sa bstack.SignedAnnounce
+		if err := json.Unmarshal(payload.Body, &sa); err != nil {
+			return
+		}
+		if sa.Announce.Net != myNet || sa.Announce.Exp <= nowMs || sa.Announce.Exp > maxExpMs {
+			return
+		}
+		if sa.Announce.Pub == "" || sa.Announce.Pub == b.PubHex() {
+			return
+		}
+		if err := bstack.VerifyArtifact(sa.Announce.Pub, sa.Sig, sa.Announce); err != nil {
+			return
+		}
+		b.dispatchAnnounceToStandingOrders(sa.Announce)
 	}
+}
+
+// dispatchAnnounceToStandingOrders triggers a rate-limited WantAd broadcast (max 1x per 5m per order+seller)
+// whenever a newly announced seller advertises SellDomains matching an active watching StandingOrder.
+func (b *Broker) dispatchAnnounceToStandingOrders(ann bstack.AnnounceAd) {
+	if b.mem == nil || b.mem.DB() == nil || len(ann.SellDomains) == 0 {
+		return
+	}
+	entries := LoadStandingOrderIndex(b.mem.DB())
+	if len(entries) == 0 {
+		return
+	}
+	now := time.Now().Unix()
+	var matched []StandingOrderIndexEntry
+	b.mu.Lock()
+	if b.announceWantSeen == nil {
+		b.announceWantSeen = make(map[string]int64)
+	}
+	if len(b.announceWantSeen) >= 2048 {
+		for k, ts := range b.announceWantSeen {
+			if now-ts > 600 {
+				delete(b.announceWantSeen, k)
+			}
+		}
+	}
+	for _, entry := range entries {
+		if entry.Status != "watching" || entry.OrderID == "" {
+			continue
+		}
+		if entry.ExpiresAtUnix > 0 && entry.ExpiresAtUnix <= now {
+			continue
+		}
+		if !standingOrderDomainMatches(entry.Domains, ann.SellDomains) {
+			continue
+		}
+		rateKey := entry.OrderID + ":" + ann.Pub
+		if last, ok := b.announceWantSeen[rateKey]; ok && now-last < 300 {
+			continue
+		}
+		b.announceWantSeen[rateKey] = now
+		matched = append(matched, entry)
+	}
+	b.mu.Unlock()
+	if len(matched) == 0 {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		for _, entry := range matched {
+			_ = b.PublishWantForStandingOrder(ctx, entry.OrderID, entry.Domains, entry.Query, entry.MaxSats)
+		}
+	}()
 }
 
 // dispatchOfferToStandingOrders wakes any active durable Restate StandingOrder workflows whose

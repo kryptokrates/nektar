@@ -1,4 +1,4 @@
-# Smell catalog — nektar v0.4 Pure-Go
+# Smell catalog — nektar v0.1 Pure-Go
 
 Seven canonical architectural smells (Lippert/Rook, arc42) + nektar-specific
 `S1–S10`. Every finding must attach measured evidence from `measurement.md`.

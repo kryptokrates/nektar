@@ -142,7 +142,7 @@ jobs:
                 printf '%s\n' "$DEPLOY_DIGEST" > .last_good_digest
               fi
               printf '%s\n' "$DEPLOY_SHA" > .last_good_sha
-              echo "v0.4 hub OK (sha=$DEPLOY_SHA digest=${DEPLOY_DIGEST:-edge})"
+              echo "v0.1 hub OK (sha=$DEPLOY_SHA digest=${DEPLOY_DIGEST:-edge})"
               exit 0
             fi
 

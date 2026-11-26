@@ -1,6 +1,6 @@
 # merge into ~/.codex/config.toml
 
-# ── nektar v0.4 MCP server (native Go binary — auto-bridges to running `nektar serve` daemon!) ──
+# ── nektar v0.1 MCP server (native Go binary — auto-bridges to running `nektar serve` daemon!) ──
 # Start the daemon once:  nektar serve   (listens on http://127.0.0.1:18420)
 # Or use stdio directly (zero SQLite lock contention when daemon is running):
 [mcp_servers.nektar]

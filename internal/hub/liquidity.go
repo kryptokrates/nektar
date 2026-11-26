@@ -67,7 +67,7 @@ func ArmHubLiquidity(ctx context.Context, node *Node, mem *memory.Service, cfg L
 				Shard:   "ops/nektar-guide",
 				Domains: []string{"ops", "nektar", "agents"},
 				Facts: []string{
-					"Nektar v0.4 compiles into a single zero-CGO Go binary serving MCP, REST, A2A, Overlay Hub, and embedded Svelte dashboard on port 18420.",
+					"Nektar v0.1 compiles into a single zero-CGO Go binary serving MCP, REST, A2A, Overlay Hub, and embedded Svelte dashboard on port 18420.",
 					"Every Nektar receipt carries a nektarr1.* token verified against anchored Merkle roots, AWS Cedar policies, and Google Mangle Datalog grounding.",
 					"Run `nektar up` to start a background daemon, auto-dock Claude Code, Codex CLI, Hermes Agent, OpenClaw, Cursor, and VS Code, and verify a live nektarr1.* receipt in under 30 seconds.",
 					"Use `nektar mcp` in stdio MCP clients — it automatically discovers ~/.nektar/active-daemon.json (Mainnet or Testnet) and shares one SQLite vault across all open IDE windows with zero lock contention.",
@@ -79,7 +79,7 @@ func ArmHubLiquidity(ctx context.Context, node *Node, mem *memory.Service, cfg L
 				Facts: []string{
 					"BSV SPV verification validates transaction Merkle paths against block headers offline without trusting any remote RPC server.",
 					"BRC-369 keyed paid disclosure binds sha256(k) into a DisclosureSale covenant so a buyer verifies the content key before decrypting CHIRP ciphertext.",
-					"Nektar v0.4 Mainnet uses dual-witness non-circular PoW headers (WhatsOnChain + Babbage Chaintracks) and official dual-region US/EU BSV Broadcaster endpoints.",
+					"Nektar v0.1 Mainnet uses dual-witness non-circular PoW headers (WhatsOnChain + Babbage Chaintracks) and official dual-region US/EU BSV Broadcaster endpoints.",
 					"Hubs operate in Spine-and-Leaf topology with BRC-105 hybrid micro-fees (5 sats want, 2 sats offer, 2 sats NAT bbox relay, 10 sats per 100 metered egress events).",
 				},
 			},

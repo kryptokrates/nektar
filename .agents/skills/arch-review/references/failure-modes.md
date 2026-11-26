@@ -1,4 +1,4 @@
-# failure-modes — runtime-structure lens (nektar v0.4 Pure-Go)
+# failure-modes — runtime-structure lens (nektar v0.1 Pure-Go)
 
 Load for Phase 2's runtime hunt. The static `go list` graph shows where failure
 can travel; this catalog hunts where the running Go daemon breaks under crash,

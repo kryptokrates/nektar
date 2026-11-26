@@ -1,4 +1,4 @@
-nektar-hub v0.4 installed as {{ .Release.Name }}.
+nektar-hub v0.1 installed as {{ .Release.Name }}.
 
 Workload:
   {{ include "nektar-hub.fullname" . }}-hub      single-binary Go Agent + embedded 16-lane SQLite Overlay Hub (:18420)

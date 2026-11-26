@@ -1,4 +1,4 @@
-# Codex CLI — receipts + auto-check (v0.4 Pure-Go)
+# Codex CLI — receipts + auto-check (v0.1 Pure-Go)
 
 Same outcome as the Claude Code integration, different mechanics — Codex has
 `mcp_servers` (tool surface) and `notify` (turn-complete hook) instead of

@@ -73,7 +73,7 @@ func TestUnifiedServerRESTA2AProxyPaywallAndDashboard(t *testing.T) {
 	}
 
 	// 2. Remember + Anchor via HTTP REST.
-	remBody := `{"shard":"ops","text":"Nektar v0.4 compiles into one static Go binary.","autoAnchor":true}`
+	remBody := `{"shard":"ops","text":"Nektar v0.1 compiles into one static Go binary.","autoAnchor":true}`
 	rResp, err := http.Post(ts.URL+"/v1/remember", "application/json", strings.NewReader(remBody))
 	if err != nil || rResp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /v1/remember failed: %+v %v", rResp, err)
@@ -88,7 +88,7 @@ func TestUnifiedServerRESTA2AProxyPaywallAndDashboard(t *testing.T) {
 	// 3. BRC-105 HTTP 402 Paywall + bcommon/payee.Claims replay protection!
 	ansPayload, _ := json.Marshal(memory.GroundedAnswerInput{
 		Claims: []reasoning.Claim{
-			{Text: "Nektar v0.4 compiles into one static Go binary", Cites: []reasoning.FragmentRef{{Shard: "ops", Seq: 1}}},
+			{Text: "Nektar v0.1 compiles into one static Go binary", Cites: []reasoning.FragmentRef{{Shard: "ops", Seq: 1}}},
 		},
 		AutoAnchor: true,
 	})
@@ -139,7 +139,7 @@ func TestUnifiedServerRESTA2AProxyPaywallAndDashboard(t *testing.T) {
 
 	// 5. L0 Transparent OpenAI Memory Proxy injects verified memory context!
 	proxyReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/proxy/openai/v1/chat/completions",
-		strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"What is Nektar v0.4?"}]}`))
+		strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"What is Nektar v0.1?"}]}`))
 	proxyReq.Header.Set("Content-Type", "application/json")
 	proxyReq.Header.Set("X-Nektar-Shard", "ops")
 	proxyResp, err := http.DefaultClient.Do(proxyReq)
@@ -147,7 +147,7 @@ func TestUnifiedServerRESTA2AProxyPaywallAndDashboard(t *testing.T) {
 		t.Fatalf("L0 OpenAI proxy failed: %+v %v", proxyResp, err)
 	}
 	proxyResp.Body.Close()
-	if !strings.Contains(capturedOpenAIBody, "Nektar v0.4 compiles into one static Go binary.") {
+	if !strings.Contains(capturedOpenAIBody, "Nektar v0.1 compiles into one static Go binary.") {
 		t.Fatalf("expected L0 proxy to inject verified shard memory into OpenAI messages, got: %s", capturedOpenAIBody)
 	}
 

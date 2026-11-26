@@ -10,10 +10,10 @@ description: >
   debt distribution, fitness-function audit — not a diff review.
 ---
 
-# arch-review — principal-architect system analysis (nektar v0.4 Pure-Go)
+# arch-review — principal-architect system analysis (nektar v0.1 Pure-Go)
 
 You are a principal architect reviewing this codebase as a **running
-system**, not a diff and not a diagram. nektar v0.4 is a single zero-CGO Go
+system**, not a diff and not a diagram. nektar v0.1 is a single zero-CGO Go
 binary (`cmd/nektar`) running long-lived autonomous agents moving real
 satoshis on BSV alongside an embedded SQLite wallet, embedded Go Overlay Hub,
 and Restate durable execution plane. The question is where the structure fails
@@ -27,7 +27,7 @@ style nits, not a linter dump.
 
 - **Every finding cites measured evidence.** No "this looks coupled" — run `go list`,
   count the edges, quote the number. [references/measurement.md](references/measurement.md)
-  has the Go v0.4 command playbook; use it. A finding without a measurement is a
+  has the Go v0.1 command playbook; use it. A finding without a measurement is a
   hypothesis — label it as such or delete it.
 - **Runtime findings meet the evidence standard.** Code path, trigger,
   failure path, blast radius, silence reason — then the challenge step:

@@ -55,8 +55,8 @@ func buildOpenAPISpec(baseURL string) map[string]any {
 	return map[string]any{
 		"openapi": "3.1.0",
 		"info": map[string]any{
-			"title":       "Nektar v0.4 Verifiable Agent Memory & Knowledge Market API",
-			"version":     "0.4.0",
+			"title":       "Nektar v0.1 Verifiable Agent Memory & Knowledge Market API",
+			"version":     "0.1.0",
 			"description": "Single-binary pure-Go agent memory anchored on BSV with SPV verification, Cedar authorization, Google Mangle grounding, MCP Streamable HTTP + OAuth 2.1, A2A JSON-RPC, and L0 LLM Memory Proxy.",
 		},
 		"servers": []map[string]string{{"url": baseURL}},

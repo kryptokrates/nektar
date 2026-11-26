@@ -81,7 +81,7 @@ type CitationEdge struct {
 	ReceiptHash string `json:"receiptHash"`
 }
 
-// DB wraps pure-Go SQLite (modernc.org/sqlite, zero CGO) for all Nektar v0.4 local state.
+// DB wraps pure-Go SQLite (modernc.org/sqlite, zero CGO) for all Nektar v0.1 local state.
 type DB struct {
 	mu   sync.Mutex
 	sql  *sql.DB

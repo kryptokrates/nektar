@@ -1,4 +1,4 @@
-# Measurement playbook — nektar v0.4 Pure-Go
+# Measurement playbook — nektar v0.1 Pure-Go
 
 Run these from the repo root before judging. Capture output verbatim — evidence
 travels with every finding. **Zero rows is a command failure, not a finding.**

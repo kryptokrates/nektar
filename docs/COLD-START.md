@@ -1,6 +1,6 @@
-# Nektar v0.4 Cold-Start Playbook — Atomic Networks, Hard Side & Tipping Bars
+# Nektar v0.1 Cold-Start Playbook — Atomic Networks, Hard Side & Tipping Bars
 
-Applying Andrew Chen's _The Cold Start Problem_ framework (`.devin/skills/cold-start`) to Nektar v0.4's pure-Go single-binary launch.
+Applying Andrew Chen's _The Cold Start Problem_ framework (`.devin/skills/cold-start`) to Nektar v0.1's pure-Go single-binary launch.
 
 **Strategy in one sentence:** `nektar up` gives every single user immediate standalone value in < 25 seconds ("come for the verifiable memory tool"), while `nektar.run` acts as honest Person #1 (curated starter CHIRP packs + transparent tapered Hub bounties + Backbone Spine), letting us tip **one agent-platform cohort at a time** against mechanical liquidity bars before expanding.
 

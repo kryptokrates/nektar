@@ -1,8 +1,8 @@
-# Nektar v0.4 — Small-Sats Mainnet Canary Runbook
+# Nektar v0.1 — Small-Sats Mainnet Canary Runbook
 
 > **Honesty Rule:** Nektar proofs establish **recorded + unaltered + derivable by block time** — never that a memory's content is true, and model identity is *declared*, not zkML-proven.
 
-This runbook takes a v0.4 Pure-Go Nektar node or Spine-and-Leaf Hub from Testnet verification to a controlled **5,000–10,000 satoshi** live BSV Mainnet canary with strict fail-closed custody, multi-witness PoW header validation, and Restate v1.8.1 durable execution.
+This runbook takes a v0.1 Pure-Go Nektar node or Spine-and-Leaf Hub from Testnet verification to a controlled **5,000–10,000 satoshi** live BSV Mainnet canary with strict fail-closed custody, multi-witness PoW header validation, and Restate v1.8.1 durable execution.
 
 ---
 

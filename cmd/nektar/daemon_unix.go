@@ -76,7 +76,7 @@ func installUserAutostart(exePath string, serveArgs []string, dataDir string) (s
 		quotedArgs = append(quotedArgs, fmt.Sprintf("%q", a))
 	}
 	unit := fmt.Sprintf(`[Unit]
-Description=Nektar v0.4 Verifiable AI Agent Memory Daemon
+Description=Nektar v0.1 Verifiable AI Agent Memory Daemon
 After=network-online.target
 
 [Service]

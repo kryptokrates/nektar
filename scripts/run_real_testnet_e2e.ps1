@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  Nektar v0.4 — LIVE BSV Testnet Heterogeneous 4-Agent Real-World E2E Suite!
+  Nektar v0.1 — LIVE BSV Testnet Heterogeneous 4-Agent Real-World E2E Suite!
 .DESCRIPTION
   Runs 5 live compiled `nektar.exe` processes on REAL BSV Testnet (`woc:test` + BSV Broadcaster),
   driving each of the 4 agents through a DIFFERENT REAL-WORLD INTEGRATION HARNESS:
@@ -146,7 +146,7 @@ function Run-NodeAgent($role, $phase, $argList) {
 
 try {
     Write-Host "`n========================================================================="
-    Write-Host " NEKTAR v0.4 — LIVE $($Network.ToUpper()) HETEROGENEOUS 4-AGENT REAL-WORLD E2E"
+    Write-Host " NEKTAR v0.1 — LIVE $($Network.ToUpper()) HETEROGENEOUS 4-AGENT REAL-WORLD E2E"
     Write-Host "   Hub   (:18620) = Durable SQLite Overlay Hub + Bounties + Svelte 5 UI"
     Write-Host "   Alpha (:18621) = REAL Python Hermes Agent (NektarMemoryProvider)"
     Write-Host "   Beta  (:18622) = REAL Claude Code / Codex stdio MCP + native hooks"

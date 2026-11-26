@@ -112,7 +112,7 @@ func Open(cfg Config) (*Engine, error) {
 			FundProtocol:   sdkwallet.Protocol{SecurityLevel: sdkwallet.SecurityLevelEveryAppAndCounterparty, Protocol: "nektar fund"},
 			FundKeyID:      "nektar-fund",
 			FundBasket:     BasketFunding,
-			Version:        "0.4.0",
+			Version:        "0.1.0",
 			LegacyPoolFile: "nektar-pool.json",
 		}
 	}

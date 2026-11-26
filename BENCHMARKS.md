@@ -1,4 +1,4 @@
-# nektar v0.4 benchmarks (measured)
+# nektar v0.1 benchmarks (measured)
 
 Measured on the exact same machine as v0.3 (`Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz ×12, 16 GiB`, Windows amd64) via:
 
@@ -6,9 +6,9 @@ Measured on the exact same machine as v0.3 (`Intel(R) Core(TM) i7-9750H CPU @ 2.
 go test -v ./internal/memory -run=^$ -bench=. -benchmem -benchtime=1s
 ```
 
-## Go v0.4 vs. TypeScript v0.3 (Same Hardware)
+## Go v0.1 vs. TypeScript v0.3 (Same Hardware)
 
-| Operation | v0.3 TypeScript (Node 24) | v0.4 Go (Go 1.27, zero CGO) | Speedup |
+| Operation | v0.3 TypeScript (Node 24) | v0.1 Go (Go 1.27, zero CGO) | Speedup |
 |---|---:|---:|---:|
 | **Remember** (unanchored, signed + SQLite) | `3.470 ms/op` (288 op/s) | **`0.469 ms/op`** (2,130 op/s) | **7.4× faster** |
 | **Anchor append** (funded `NektarAnchor` tx + full script verify) | `55.622 ms/op` (18 op/s) | **`10.188 ms/op`** (98 op/s) | **5.5× faster** |
@@ -20,7 +20,7 @@ go test -v ./internal/memory -run=^$ -bench=. -benchmem -benchtime=1s
 
 ## System, Build & Deployment Footprint
 
-| Metric | v0.3 TypeScript | v0.4 Pure-Go |
+| Metric | v0.3 TypeScript | v0.1 Pure-Go |
 |---|---|---|
 | **Local full build** | multi-minute `pnpm -r build` | **`2.2s`** (`CGO_ENABLED=0`) |
 | **Release artifact** | Node 24 + `node_modules` + native `sqlite3` per OS | **One `27.4 MB` static binary** |

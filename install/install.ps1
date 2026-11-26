@@ -1,4 +1,4 @@
-﻿# nektar v0.4 zero-Docker native Windows installer:
+﻿# nektar v0.1 zero-Docker native Windows installer:
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up -Mainnet -Confirm I_UNDERSTAND
 #   irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1 | iex
@@ -19,14 +19,14 @@ $InstallDir = if ($env:NEKTAR_BIN_DIR) { $env:NEKTAR_BIN_DIR } else { Join-Path 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
 if ($Docker) {
-  Write-Output "`n== nektar v0.4 install (Docker / GHCR opt-in, Windows) =="
+  Write-Output "`n== nektar v0.1 install (Docker / GHCR opt-in, Windows) =="
   if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw 'Docker Desktop is required for -Docker mode. Re-run without -Docker for the zero-dependency native Go binary.'
   }
   Invoke-WebRequest -UseBasicParsing -Uri "$RawBase/install/nektar.ps1" -OutFile (Join-Path $InstallDir 'nektar.ps1')
   Invoke-WebRequest -UseBasicParsing -Uri "$RawBase/install/nektar.cmd" -OutFile (Join-Path $InstallDir 'nektar.cmd')
 } else {
-  Write-Output "`n== nektar v0.4 install (native single static Go binary — zero Docker, zero Node.js) =="
+  Write-Output "`n== nektar v0.1 install (native single static Go binary — zero Docker, zero Node.js) =="
   $zip = Join-Path $env:TEMP 'nektar-windows-amd64.zip'
   $sums = Join-Path $env:TEMP 'nektar-SHA256SUMS'
   $baseDl = 'https://github.com/kryptokrates/nektar/releases/latest/download'

@@ -1,4 +1,4 @@
-# nektar v0.4 — agent instructions
+# nektar v0.1 — agent instructions
 
 Verifiable, encrypted agent memory anchored on BSV — compiled as a single zero-CGO Go 1.27 binary (`cmd/nektar`).
 
@@ -17,7 +17,7 @@ When answering a factual question that could come from memory:
 4. If no receipt comes back, say the answer is ungrounded — never fake a
    footer; verifiers check real tokens only.
 
-## Project Architecture & Commands (v0.4 Pure-Go Core)
+## Project Architecture & Commands (v0.1 Pure-Go Core)
 
 - **Build single binary:** `go build -o nektar ./cmd/nektar` (static cross-compile: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./cmd/nektar`)
 - **Vet & test all packages:** `go vet ./... && go test -race -v ./...`

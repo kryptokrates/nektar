@@ -181,7 +181,7 @@ func TestColdStartDashboardParityPairingAndStdioMCPBridge(t *testing.T) {
 	bunBody, _ := io.ReadAll(bunResp.Body)
 	bunResp.Body.Close()
 	if !strings.Contains(string(bunBody), "nektar hub up --auto-ip") {
-		t.Fatalf("expected v0.4 hub CLI command in hub-bundle, got %s", string(bunBody))
+		t.Fatalf("expected v0.1 hub CLI command in hub-bundle, got %s", string(bunBody))
 	}
 
 	// Join self /hub via POST /v1/hosts!

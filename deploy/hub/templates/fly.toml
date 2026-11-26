@@ -1,4 +1,4 @@
-# Fly.io 1-Click Cloud Nektar v0.4 Hub (single Go binary + persistent volume + auto-HTTPS).
+# Fly.io 1-Click Cloud Nektar v0.1 Hub (single Go binary + persistent volume + auto-HTTPS).
 # Deploy: fly launch --config deploy/hub/templates/fly.toml --copy-config
 app = 'nektar-hub'
 primary_region = 'fra'

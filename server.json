@@ -7,7 +7,7 @@
     "url": "https://github.com/kryptokrates/nektar",
     "source": "github"
   },
-  "version": "0.4.0",
+  "version": "0.1.0",
   "packages": [
     {
       "registryType": "oci",

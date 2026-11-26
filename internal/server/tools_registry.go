@@ -82,7 +82,7 @@ func (tb *Toolbox) ListTools() []ToolSpec {
 		{Name: "exportPack", Profile: "operator", Description: "Export a shard and its anchor proofs as a verified BRC-167 CHIRP closure."},
 		{Name: "importPack", Profile: "operator", Description: "Import and verify a local or remote BRC-167 CHIRP shard pack closure into a local shard."},
 		{Name: "authorize", Profile: "operator", Description: "Evaluate the active native Cedar policy set for a principal, action, and resource."},
-		{Name: "status", Profile: "operator", Description: "Return Nektar v0.4 node status: identity, network, wallet balance, shards, SpendGuard, policy hash, and market deals."},
+		{Name: "status", Profile: "operator", Description: "Return Nektar v0.1 node status: identity, network, wallet balance, shards, SpendGuard, policy hash, and market deals."},
 	}
 	if tb.profile == "agent" {
 		out := make([]ToolSpec, 0, 10)

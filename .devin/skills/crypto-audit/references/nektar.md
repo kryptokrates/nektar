@@ -1,4 +1,4 @@
-# Nektar v0.4 Cryptographic Surface & Calibration
+# Nektar v0.1 Cryptographic Surface & Calibration
 
 Load this reference when running `crypto-audit` on `github.com/kryptokrates/nektar`.
 It maps every cryptographic package, covenant, test vector, and project-specific

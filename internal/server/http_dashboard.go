@@ -456,7 +456,7 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 
 	return map[string]any{
 		"network":   a.mem.Chain().Network(),
-		"model":     "nektar/v0.4-go",
+		"model":     "nektar/v0.1-go",
 		"pub":       shortStr(a.mem.Chain().IdentityPubHex(), 20),
 		"uptimeSec": int64(time.Since(a.startedAt).Seconds()),
 		"hub":       hubState,

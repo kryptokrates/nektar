@@ -104,7 +104,7 @@ fi
 [ -n "${NEKTAR_SEED_DOMAINS:-}" ] && set_kv NEKTAR_SEED_DOMAINS "$NEKTAR_SEED_DOMAINS"
 [ -n "${NEKTAR_ANNOUNCE:-}" ] && set_kv NEKTAR_ANNOUNCE "$NEKTAR_ANNOUNCE"
 
-# 5 — up (single v0.4 Go binary container + optional Caddy TLS)
+# 5 — up (single v0.1 Go binary container + optional Caddy TLS)
 # shellcheck disable=SC2086
 $DOCKER compose $PROFILES --env-file .env up -d
 echo

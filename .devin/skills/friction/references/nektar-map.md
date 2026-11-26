@@ -1,7 +1,7 @@
-# nektar v0.4 (Pure-Go) — Live Friction Map
+# nektar v0.1 (Pure-Go) — Live Friction Map
 
 The six journeys that decide whether an underdog network gets adopted,
-what each pays in the three currencies (Time, Effort, Knowledge) in **v0.4 Pure-Go**,
+what each pays in the three currencies (Time, Effort, Knowledge) in **v0.1 Pure-Go**,
 and where every friction cliff was killed or bounded.
 
 ## Table of Contents
@@ -54,7 +54,7 @@ and where every friction cliff was killed or bounded.
 **First value:** policy preset approved → `want → quote → AtomicBEEF/BRC-29 → BRC-369 key reveal → tainted commit`.
 **Artifact:** `internal/market/{broker,workflows,policy}.go`, `internal/hub/liquidity.go`, `internal/store/market_store.go`.
 
-| Failure Mode / Cliff                   | Fix Landed in v0.4                                                                                          |
+| Failure Mode / Cliff                   | Fix Landed in v0.1                                                                                          |
 | -------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | Ephemeral keys invalidated deals/peers | Persistent `node_market_key_v1` shared by `Engine` & `discovery.Service` across restarts                    |
 | In-flight sales/claims lost on restart | `pending_sales`, `payment_claims`, `borg_groups`, `market_daily_spend`, and `bbox_cursor` persisted in SQLite|
@@ -68,7 +68,7 @@ and where every friction cliff was killed or bounded.
 **First value:** operator self-diagnoses in one command (`nektar status` / `nektar doctor` / `/v1/metrics`).
 **Artifact:** `cmd/nektar/lock*.go`, `internal/server/{tools_registry,metrics,http}.go`.
 
-| Failure                                | Before                                   | Now in v0.4                                                                                   |
+| Failure                                | Before                                   | Now in v0.1                                                                                   |
 | -------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Concurrent daemon on same SQLite dir   | Silent DB corruption / lock race         | `instance.lock` with cross-platform PID liveness check + clear `nektar mcp`/`nektar open` hint|
 | Unauth remote exposure                 | `APIToken==""` ran open on `0.0.0.0`     | Auto-generates mode-0600 `http-token` & `operator-token` on non-loopback or container boot    |

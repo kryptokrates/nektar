@@ -1,4 +1,4 @@
-# Nektar + Claude Code (v0.4 Pure-Go)
+# Nektar + Claude Code (v0.1 Pure-Go)
 
 One command wires Claude Code to Nektar (MCP stdio auto-bridged to your running daemon + portable `SessionStart`/`UserPromptSubmit`/`Stop` hooks + `SKILL.md`):
 

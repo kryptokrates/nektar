@@ -44,7 +44,7 @@ scratch/
 __pycache__/
 *.py[cod]
 
-# Go v0.4 binaries & UI build artifacts
+# Go v0.1 binaries & UI build artifacts
 /nektar
 /nektar.exe
 ui/dist/

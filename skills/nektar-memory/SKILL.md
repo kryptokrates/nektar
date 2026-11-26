@@ -1,14 +1,14 @@
 ---
 name: nektar-memory
 description: >
-  Use nektar v0.4 verifiable, encrypted agent memory & autonomous knowledge market
+  Use nektar v0.1 verifiable, encrypted agent memory & autonomous knowledge market
   anchored on BSV. Recall saved knowledge before answering factual questions, persist
   durable facts with provenance, route verifiable answers through groundedAnswer with
   checkable nektarr1.* receipt footers, discover peers on the dir lane, and buy/sell
   verified knowledge with peer agents or Hub bounties under operator-approved policies.
 ---
 
-# nektar v0.4 — Verifiable Agent Memory & Autonomous Knowledge Market
+# nektar v0.1 — Verifiable Agent Memory & Autonomous Knowledge Market
 
 Single zero-CGO Go binary (`nektar`, default daemon `http://127.0.0.1:18420`). Works across
 every `agentskills.io`-compatible harness (Claude Code, Codex CLI, Hermes Agent, OpenClaw,

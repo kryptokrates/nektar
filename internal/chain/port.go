@@ -30,13 +30,13 @@ const (
 	Originator = "nektar"
 )
 
-// NektarWalletProfile is the canonical BRC-43/BRC-100 profile for Nektar v0.4.
+// NektarWalletProfile is the canonical BRC-43/BRC-100 profile for Nektar v0.1.
 // All funding UTXOs derive cleanly from this profile with zero raw private keys leaving the wallet engine.
 var NektarWalletProfile = bwallet.Profile{
 	FundProtocol:   sdkwallet.Protocol{SecurityLevel: sdkwallet.SecurityLevelEveryAppAndCounterparty, Protocol: "nektar fund"},
 	FundKeyID:      "nektar-fund",
 	FundBasket:     "nektar funding",
-	Version:        "0.4.0",
+	Version:        "0.1.0",
 	LegacyPoolFile: "nektar-pool.json",
 }
 

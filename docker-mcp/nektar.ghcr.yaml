@@ -9,7 +9,7 @@ volumes:
   - nektar-data:/data
 description: >-
   Encrypted, provenance-bearing agent memory anchored on public BSV testnet
-  (v0.4 Pure-Go single binary). Tools: remember, recall, forget, groundedAnswer,
+  (v0.1 Pure-Go single binary). Tools: remember, recall, forget, groundedAnswer,
   verifyReceipt, want, sell, deals, fund, doctor. Proofs show what was recorded
   and unaltered — never that it is true.
 env:

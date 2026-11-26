@@ -35,7 +35,7 @@ const hubRawBase = "https://raw.githubusercontent.com/kryptokrates/nektar/master
 
 const hubUsage = `nektar hub — 1-command Hub Node deployment, graduation & standalone overlay server
 
-  nektar hub up [options]               pull GHCR v0.4 Hub stack, auto-configure TLS & start
+  nektar hub up [options]               pull GHCR v0.1 Hub stack, auto-configure TLS & start
   nektar hub status [--dir <path>]      inspect hub containers, health & announced card
   nektar hub logs [--dir <path>]        follow hub logs
   nektar hub down [--dir <path>]        stop hub containers (volumes & keys preserved)
@@ -565,7 +565,7 @@ func cmdHubUp(args []string) error {
 		}
 		unitPath := filepath.Join(*hubDir, "nektar-hub.service")
 		unitText := fmt.Sprintf(`[Unit]
-Description=Nektar v0.4 Pure-Go Hub (%s · %s)
+Description=Nektar v0.1 Pure-Go Hub (%s · %s)
 After=network-online.target
 Wants=network-online.target
 

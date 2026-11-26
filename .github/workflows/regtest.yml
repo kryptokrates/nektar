@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
         with:
           go-version-file: go.mod
-      - name: vet & v0.4 Pure-Go end-to-end suite (race detector)
+      - name: vet & v0.1 Pure-Go end-to-end suite (race detector)
         run: |
           go vet ./...
           go test -race -v -count=1 ./internal/e2e/... ./internal/market/... ./internal/wallet/...

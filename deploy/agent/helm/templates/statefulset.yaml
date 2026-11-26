@@ -18,7 +18,7 @@ spec:
       # the agent never calls the k8s API — don't hand it a token it can't use
       automountServiceAccountToken: false
       securityContext:
-        # v0.4 Go image runs as non-root nektar user (uid 10001)
+        # v0.1 Go image runs as non-root nektar user (uid 10001)
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault

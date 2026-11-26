@@ -1,4 +1,4 @@
-# Nektar v0.4 — Single-Binary Pure-Go Image (Zero Node.js runtime, Zero CGO, Zero node-gyp)
+# Nektar v0.1 — Single-Binary Pure-Go Image (Zero Node.js runtime, Zero CGO, Zero node-gyp)
 
 # Stage 1: Build Svelte 5 Dashboard assets
 FROM node:24-alpine AS ui-build

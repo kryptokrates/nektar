@@ -607,7 +607,7 @@ func TestMigrateLegacyWalletJSON(t *testing.T) {
 		FundProtocol:   sdkwallet.Protocol{SecurityLevel: sdkwallet.SecurityLevelEveryAppAndCounterparty, Protocol: "nektar fund"},
 		FundKeyID:      "nektar-fund",
 		FundBasket:     "nektar funding",
-		Version:        "0.4.0",
+		Version:        "0.1.0",
 		LegacyPoolFile: "nektar-pool.json",
 	}
 	// Create an old bcommon/bwallet embedded wallet & seed one mature coinbase in wallet.json!

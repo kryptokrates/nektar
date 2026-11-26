@@ -1,4 +1,4 @@
-# Coolify 1-Click Nektar v0.4 Hub Template (Pure-Go single binary + active Restate durable executor)
+# Coolify 1-Click Nektar v0.1 Hub Template (Pure-Go single binary + active Restate durable executor)
 # In Coolify: New Resource -> Docker Compose -> Paste this file (or raw GitHub URL).
 # Coolify automatically provisions HTTPS for SERVICE_FQDN_HUB and generates every
 # SERVICE_PASSWORD_* secret with zero manual editing.

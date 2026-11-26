@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  Nektar v0.4 — Real BSV Testnet Spine-and-Leaf Heavy Load & Chaos Runner (WSL2 + Restate v1.8.1).
+  Nektar v0.1 — Real BSV Testnet Spine-and-Leaf Heavy Load & Chaos Runner (WSL2 + Restate v1.8.1).
 .DESCRIPTION
   Cross-compiles zero-CGO Linux `nektar` + `testnet_load_driver`, stages the funded local
   Testnet Spine & mined seller shards onto native WSL2 ext4 (avoiding 9p SQLite lock quirks),

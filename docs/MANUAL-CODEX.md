@@ -1,4 +1,4 @@
-# Nektar v0.4 for Codex CLI — 25-Second Setup & Complete Manual
+# Nektar v0.1 for Codex CLI — 25-Second Setup & Complete Manual
 
 Give OpenAI Codex CLI encrypted, BSV-anchored memory, automatic turn-complete receipt verification, global `SKILL.md` grounding rules, and autonomous knowledge trading — **zero Docker, zero Node.js, one static Go binary**.
 

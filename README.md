@@ -2,7 +2,7 @@
   <img src="logo.svg" width="96" alt="nektar"/>
 </p>
 
-# nektar v0.4 — verifiable AI agent memory & knowledge market
+# nektar v0.1 — verifiable AI agent memory & knowledge market
 
 **One static zero-CGO Go binary for all your AI agents. Save what an agent learns, encrypt shards with BRC-369 + Borg epochs, govern reads with AWS Cedar, ground answers with Google Mangle + `nektarr1.*` receipts, and trade knowledge on BSV.**
 
@@ -74,9 +74,9 @@ One-click templates live in `deploy/hub/templates/` (Coolify, Dokploy, Hetzner/D
 
 ---
 
-## What Changed in v0.4 (Pure-Go Core)
+## What Changed in v0.1 (Pure-Go Core)
 
-Nektar v0.4 collapses the legacy 21-package TypeScript daemon and 12-container Hub stack into **one zero-CGO static Go binary** (`cmd/nektar`):
+Nektar v0.1 collapses the legacy 21-package TypeScript daemon and 12-container Hub stack into **one zero-CGO static Go binary** (`cmd/nektar`):
 
 - **BSV Core & Official Broadcaster (native Go):** `go-sdk` (`transaction/broadcaster` dual-region US/EU official BSV Association Broadcaster, zero GorillaPool), `go-wallet-toolbox`, `lightwebinc/bcommon` (`bwallet` + `wirewallet` BRC-100 custody, `keyed` BRC-369 encryption, `chirp` BRC-167 storage, `headers` dual-witness PoW verification, `payee.Claims` 402 replay protection).
 - **Policy & Reasoning (native Go):** `cedar-go` (AWS Cedar authorization + level isolation) and `mangle-go` (Google Mangle stratified Datalog grounding + bi-temporal AORG + `nektarr1.*` receipts).

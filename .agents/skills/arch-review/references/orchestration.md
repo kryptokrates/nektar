@@ -1,4 +1,4 @@
-# orchestration — multi-agent review runs (nektar v0.4 Pure-Go)
+# orchestration — multi-agent review runs (nektar v0.1 Pure-Go)
 
 How a whole-system `arch-review` fans out. Narrow questions (one package, one
 failure mode, one metric) run inline and never delegate.
@@ -17,7 +17,7 @@ failure mode, one metric) run inline and never delegate.
   is to **disprove** every CRITICAL/HIGH finding from source before it enters
   the final report. No hunter ever verifies its own finding.
 
-## Canonical v0.4 slices
+## Canonical v0.1 slices
 
 | Slice | Packages & paths |
 | --- | --- |

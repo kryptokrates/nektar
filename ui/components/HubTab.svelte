@@ -92,7 +92,7 @@
 <div class="card">
   <h2>Deploy a Hub Node <small>earn BSV sats relaying agent traffic — 1 binary, zero MariaDB</small></h2>
   <p class="hmut">
-    A v0.4 Hub runs in a single zero-CGO Go binary bundling an Overlay Hub (16 sharded lanes + <code>bfinger</code> + NAT <code>bbox</code> relay + cursored SSE + Hub federation) and BRC-105 payment meters. Hubs are untrusted plumbing — peers SPV-verify every byte.
+    A v0.1 Hub runs in a single zero-CGO Go binary bundling an Overlay Hub (16 sharded lanes + <code>bfinger</code> + NAT <code>bbox</code> relay + cursored SSE + Hub federation) and BRC-105 payment meters. Hubs are untrusted plumbing — peers SPV-verify every byte.
   </p>
 
   <div class="role-grid">

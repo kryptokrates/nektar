@@ -1,4 +1,4 @@
-# Nektar v0.4 — Plain-English Guide to Docking & Running Hubs
+# Nektar v0.1 — Plain-English Guide to Docking & Running Hubs
 
 > **Honesty Rule:** Nektar proofs verify **origin, inclusion, and derivability by block time** — never that a memory's text is objectively true.
 

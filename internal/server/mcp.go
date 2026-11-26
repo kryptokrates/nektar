@@ -23,7 +23,7 @@ func NewMCPServer(mem *memory.Service, mkt *market.Engine) *mcp.Server {
 func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "nektar",
-		Version: "0.4.0",
+		Version: "0.1.0",
 	}, &mcp.ServerOptions{
 		Instructions: "When answering factual questions from memory: (1) call recall first (omit shard to discover shards including 'welcome'); (2) route verifiable answers through groundedAnswer citing verified fragments; (3) preserve the returned receipt: and verify: footer verbatim; (4) never fabricate receipts — proofs show recorded + unaltered + derivable, never truth.",
 	})
@@ -354,7 +354,7 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "status",
-			Description: "Return Nektar v0.4 node status: identity, network, wallet balance, shards, SpendGuard, policy hash, and market deals.",
+			Description: "Return Nektar v0.1 node status: identity, network, wallet balance, shards, SpendGuard, policy hash, and market deals.",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 			st := BuildStatus(ctx, tb.mem, tb.mkt)
 			return jsonToolResult(st)

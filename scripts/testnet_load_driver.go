@@ -1,6 +1,6 @@
 //go:build testnetload
 
-// Nektar v0.4 — Real BSV Testnet Spine-and-Leaf Heavy Load & Chaos Harness (Pure Go, zero external deps).
+// Nektar v0.1 — Real BSV Testnet Spine-and-Leaf Heavy Load & Chaos Harness (Pure Go, zero external deps).
 //
 // Launches 9 real compiled `nektar` processes + live auto-supervised `restate-server v1.8.1`:
 //   - Spine Hub S  (:18810) : --hub --hub-role spine --fee-preset hybrid
@@ -331,7 +331,7 @@ func main() {
 	}
 
 	fmt.Printf("\n===========================================================================\n")
-	fmt.Printf(" NEKTAR v0.4 — SPINE-AND-LEAF HEAVY LOAD & CHAOS TEST (%s)\n", strings.ToUpper(*network))
+	fmt.Printf(" NEKTAR v0.1 — SPINE-AND-LEAF HEAVY LOAD & CHAOS TEST (%s)\n", strings.ToUpper(*network))
 	fmt.Printf(" 1 Spine (:18810) + 2 Leaves (:18811,:18812) + 6 Agents (:18820..:18825)\n")
 	fmt.Printf(" Restate v1.8.1 Required: %v | WorkDir: %s\n", *useRestate, *workDir)
 	fmt.Printf("===========================================================================\n\n")
@@ -521,7 +521,7 @@ func main() {
 		_, _ = httpJSON(http.MethodDelete, specs[k].URL+"/v1/hosts?url=http://127.0.0.1:18620/hub", nil)
 	}
 
-	// Ensure v0.4 Rúnar-covenant seller shards exist, are anchored, AND have verified mined BUMPs!
+	// Ensure v0.1 Rúnar-covenant seller shards exist, are anchored, AND have verified mined BUMPs!
 	type sellSpec struct {
 		Node        string
 		Shard       string
@@ -531,11 +531,11 @@ func main() {
 		FallbackTxt string
 	}
 	sellers := []sellSpec{
-		{Node: "alpha", Shard: "v04-ops-alpha", Domains: []string{"ops"}, Price: 40, Description: "Alpha v0.4 ops runbook", FallbackTxt: "Alpha ops runbook: zero-downtime blue-green Kubernetes rollouts use PodDisruptionBudget."},
-		{Node: "beta", Shard: "v04-ops-beta", Domains: []string{"ops"}, Price: 35, Description: "Beta v0.4 cheaper ops runbook", FallbackTxt: "Beta ops runbook: etcd snapshots rotate every 15m with zstd-3 compression."},
-		{Node: "beta", Shard: "v04-bsv-beta", Domains: []string{"bsv"}, Price: 45, Description: "Beta v0.4 BSV Broadcaster policy", FallbackTxt: "Beta BSV Broadcaster policy: BSV Broadcaster accepts EF transactions at 100 sat/kB."},
-		{Node: "gamma", Shard: "v04-agents-gamma", Domains: []string{"agents"}, Price: 40, Description: "Gamma v0.4 multi-agent architecture", FallbackTxt: "Gamma multi-agent architecture: Cursor MCP + L0 transparent proxy + BRC-369 Borg encryption."},
-		{Node: "delta-nat", Shard: "v04-nat-delta", Domains: []string{"nat"}, Price: 35, Description: "Delta v0.4 NAT-only A2A bbox relay", FallbackTxt: "Delta NAT-only A2A agents settle paid knowledge trades over Hub /bbox store-and-forward relay with zero open ports."},
+		{Node: "alpha", Shard: "v04-ops-alpha", Domains: []string{"ops"}, Price: 40, Description: "Alpha v0.1 ops runbook", FallbackTxt: "Alpha ops runbook: zero-downtime blue-green Kubernetes rollouts use PodDisruptionBudget."},
+		{Node: "beta", Shard: "v04-ops-beta", Domains: []string{"ops"}, Price: 35, Description: "Beta v0.1 cheaper ops runbook", FallbackTxt: "Beta ops runbook: etcd snapshots rotate every 15m with zstd-3 compression."},
+		{Node: "beta", Shard: "v04-bsv-beta", Domains: []string{"bsv"}, Price: 45, Description: "Beta v0.1 BSV Broadcaster policy", FallbackTxt: "Beta BSV Broadcaster policy: BSV Broadcaster accepts EF transactions at 100 sat/kB."},
+		{Node: "gamma", Shard: "v04-agents-gamma", Domains: []string{"agents"}, Price: 40, Description: "Gamma v0.1 multi-agent architecture", FallbackTxt: "Gamma multi-agent architecture: Cursor MCP + L0 transparent proxy + BRC-369 Borg encryption."},
+		{Node: "delta-nat", Shard: "v04-nat-delta", Domains: []string{"nat"}, Price: 35, Description: "Delta v0.1 NAT-only A2A bbox relay", FallbackTxt: "Delta NAT-only A2A agents settle paid knowledge trades over Hub /bbox store-and-forward relay with zero open ports."},
 	}
 	proveShardSettled := func(nodeKey, shard string) bool {
 		res, err := httpJSON(http.MethodPost, specs[nodeKey].URL+"/v1/tools/prove", map[string]any{"shard": shard, "seq": 1})
@@ -550,7 +550,7 @@ func main() {
 	var pendingMine []sellSpec
 	for _, s := range sellers {
 		if proveShardSettled(s.Node, s.Shard) {
-			fmt.Printf("  [SEED] %-10s/%-16s already v0.4 SPV-mined & verified!\n", s.Node, s.Shard)
+			fmt.Printf("  [SEED] %-10s/%-16s already v0.1 SPV-mined & verified!\n", s.Node, s.Shard)
 			continue
 		}
 		// Check if fragment #1 already exists (just awaiting block confirmation); otherwise remember + anchor it.
@@ -569,7 +569,7 @@ func main() {
 			}
 			// Trigger explicit anchor in case cadence didn't fire yet (ignore empty/already-anchored).
 			_, _ = httpJSON(http.MethodPost, specs[s.Node].URL+"/v1/anchor", map[string]any{"shard": s.Shard})
-			fmt.Printf("  [SEED] %-10s/%-16s remembered & anchored fresh v0.4 Rúnar covenant!\n", s.Node, s.Shard)
+			fmt.Printf("  [SEED] %-10s/%-16s remembered & anchored fresh v0.1 Rúnar covenant!\n", s.Node, s.Shard)
 		} else {
 			_, _ = httpJSON(http.MethodPost, specs[s.Node].URL+"/v1/anchor", map[string]any{"shard": s.Shard})
 			fmt.Printf("  [SEED] %-10s/%-16s exists; waiting for BSV %s block BUMP...\n", s.Node, s.Shard, strings.ToUpper(*network))
@@ -577,7 +577,7 @@ func main() {
 		pendingMine = append(pendingMine, s)
 	}
 	if isLive && len(pendingMine) > 0 {
-		fmt.Printf("  Waiting for BSV %s block to mine %d fresh v0.4 seller covenant anchor(s)...\n", strings.ToUpper(*network), len(pendingMine))
+		fmt.Printf("  Waiting for BSV %s block to mine %d fresh v0.1 seller covenant anchor(s)...\n", strings.ToUpper(*network), len(pendingMine))
 		mineDeadline := time.Now().Add(30 * time.Minute)
 		for len(pendingMine) > 0 && time.Now().Before(mineDeadline) {
 			// Sync unique seller wallets so Monitor.CheckForProofs -> OnTxMined upgrades anchor BUMPs!
@@ -734,7 +734,7 @@ func main() {
 	sc.AnchorP95Ms = percentile(ancLat, 95)
 	fmt.Printf("[WAVE 1b] Anchors  : %d/%d OK | p50=%dms p95=%dms | txids=%d\n", sc.AnchorsOK, sc.AnchorsTotal, sc.AnchorP50Ms, sc.AnchorP95Ms, len(sc.AnchorTxIDs))
 
-	// 1c. 1,000 Offline SPV Recall Verifications against v0.4 mined shards!
+	// 1c. 1,000 Offline SPV Recall Verifications against v0.1 mined shards!
 	spvTargets := []struct{ node, shard string }{
 		{"alpha", "v04-ops-alpha"},
 		{"beta", "v04-ops-beta"},

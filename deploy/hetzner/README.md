@@ -1,6 +1,6 @@
-# Hetzner — `nektar.run` Production Hub Configuration (v0.4 Pure-Go)
+# Hetzner — `nektar.run` Production Hub Configuration (v0.1 Pure-Go)
 
-`nektar.run` runs the single-binary v0.4 Pure-Go Hub + Restate v1.8.1 sidecar via `deploy/hub/compose.yaml`, deployed automatically on every green `release` build by `.github/workflows/deploy.yml` with immutable image digests and automatic `/v1/health` rollback.
+`nektar.run` runs the single-binary v0.1 Pure-Go Hub + Restate v1.8.1 sidecar via `deploy/hub/compose.yaml`, deployed automatically on every green `release` build by `.github/workflows/deploy.yml` with immutable image digests and automatic `/v1/health` rollback.
 
 | Layer | Location | Managed by |
 | --- | --- | --- |

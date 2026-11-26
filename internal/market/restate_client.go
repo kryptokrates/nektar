@@ -92,7 +92,7 @@ func (c *RestateClient) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// expectedManifest lists every service + handler Nektar v0.4 requires on a registered deployment.
+// expectedManifest lists every service + handler Nektar v0.1 requires on a registered deployment.
 var expectedManifest = map[string][]string{
 	"BuyerDeal":     {"deliverKey", "run", "status"},
 	"SellerDeal":    {"confirmPayment", "deliverPayment", "run", "status"},

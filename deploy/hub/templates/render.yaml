@@ -1,4 +1,4 @@
-# Render Blueprint — 1-Click Cloud Nektar v0.4 Agent + Embedded Hub (single binary + disk).
+# Render Blueprint — 1-Click Cloud Nektar v0.1 Agent + Embedded Hub (single binary + disk).
 services:
   - type: web
     name: nektar-hub

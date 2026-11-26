@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# nektar v0.4 zero-Docker native installer (macOS & Linux):
+# nektar v0.1 zero-Docker native installer (macOS & Linux):
 #   curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up
 #   curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up --mainnet --confirm I_UNDERSTAND
 #   curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --dock
@@ -47,7 +47,7 @@ done
 mkdir -p "$BIN_DIR"
 
 if [ "$USE_DOCKER" = "1" ]; then
-  printf '\n== nektar v0.4 install (Docker / GHCR opt-in) ==\n'
+  printf '\n== nektar v0.1 install (Docker / GHCR opt-in) ==\n'
   if ! command -v docker >/dev/null 2>&1; then
     printf 'Docker is required for --docker mode. Re-run without --docker for the zero-dependency native Go binary.\n' >&2
     exit 1
@@ -56,7 +56,7 @@ if [ "$USE_DOCKER" = "1" ]; then
   chmod 755 "$BIN_DIR/nektar"
   printf '✓ installed Docker launcher → %s/nektar\n' "$BIN_DIR"
 else
-  printf '\n== nektar v0.4 install (native single static Go binary — zero Docker, zero Node.js) ==\n'
+  printf '\n== nektar v0.1 install (native single static Go binary — zero Docker, zero Node.js) ==\n'
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
   arch="$(uname -m)"
   case "${os}-${arch}" in
@@ -98,7 +98,7 @@ else
   printf '✓ verified SHA-256 checksum for %s\n' "$asset"
   tar -xzf "$tmp/$asset" -C "$tmp"
   install -m 755 "$tmp/nektar" "$BIN_DIR/nektar"
-  printf '✓ installed native nektar v0.4 → %s/nektar\n' "$BIN_DIR"
+  printf '✓ installed native nektar v0.1 → %s/nektar\n' "$BIN_DIR"
 fi
 
 # Persist BIN_DIR in user shell profile idempotently so `nektar` works immediately in future terminals.

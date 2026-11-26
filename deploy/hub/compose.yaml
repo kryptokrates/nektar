@@ -1,4 +1,4 @@
-# Nektar v0.4 Hub — Single static Pure-Go binary + active Restate durable executor hosting:
+# Nektar v0.1 Hub — Single static Pure-Go binary + active Restate durable executor hosting:
 #   - Nektar Agent (MCP + HTTP + A2A + L0 LLM Proxy + Svelte 5 Dashboard + Restate services)
 #   - Embedded Go Overlay Hub (tm_nektar_<net>_0..f, ls_nektar, bfinger, bbox, blogs, borg, bsecret, bstore)
 #   - Native SSE /hub/events push, curated starter liquidity, verified bounties & testnet faucet

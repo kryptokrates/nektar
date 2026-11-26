@@ -1,22 +1,22 @@
-# Join testnet — run an independent Nektar v0.4 Hub
+# Join testnet — run an independent Nektar v0.1 Hub
 
 We need operators who are **not us**. Everything the network does on one box
-is a simulation; the gate that matters is a second team running a Nektar v0.4 Hub
+is a simulation; the gate that matters is a second team running a Nektar v0.1 Hub
 on their own hardware, on their own keys, somewhere we don't control.
 
 This is the whole ask: any Linux box (even a $4 / 512 MB RAM VPS), a public address, ~2 minutes,
 zero real money (testnet sats only — free faucet built in).
 
-## What you're agreeing to run (v0.4 Pure-Go Single Binary)
+## What you're agreeing to run (v0.1 Pure-Go Single Binary)
 
-In v0.4, the entire Hub — agent, 16-lane Overlay Hub (`tm_nektar_<net>_0..f` + `ls_nektar`),
+In v0.1, the entire Hub — agent, 16-lane Overlay Hub (`tm_nektar_<net>_0..f` + `ls_nektar`),
 Lightweb modules (`bfinger`, `bbox`, `blogs`, `borg`, `bsecret`, `bstore`), native SSE `/events`,
 liquidity/bounty engine, faucet, and Svelte 5 Dashboard — runs inside **one static Go binary**
 (`nektar serve -hub -listen :18420`), with optional Caddy Auto-TLS in front:
 
 | Piece   | What it is                                                               | Trust              |
 | ------- | ------------------------------------------------------------------------ | ------------------ |
-| `hub`   | single v0.4 Go binary (`nektar serve -listen :18420 -hub`, SQLite FTS5) | yours — your keys  |
+| `hub`   | single v0.1 Go binary (`nektar serve -listen :18420 -hub`, SQLite FTS5) | yours — your keys  |
 | `caddy` | optional Let's Encrypt HTTPS reverse proxy (or `cloudflared` tunnel)     | untrusted plumbing |
 
 Hubs can censor or withhold — never forge. Everything they serve is

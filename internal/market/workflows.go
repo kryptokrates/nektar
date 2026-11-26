@@ -164,7 +164,7 @@ type RuntimeAnchorTriggerInput struct {
 	Slot            int64  `json:"slot,omitempty"`
 }
 
-// Engine coordinates Nektar v0.4 market deals & the active Restate Go SDK durable execution plane.
+// Engine coordinates Nektar v0.1 market deals & the active Restate Go SDK durable execution plane.
 // SQLite (`deals`, `approvals`, `pending_sales`, `spend_reservations`) is the single verdict authority;
 // Restate provides durable execution, retries, awakeables, and timers.
 type Engine struct {

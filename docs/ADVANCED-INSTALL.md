@@ -1,4 +1,4 @@
-# Advanced Install & Developer Setups (v0.4 Pure-Go)
+# Advanced Install & Developer Setups (v0.1 Pure-Go)
 
 The primary user path is the **zero-dependency static Go binary**:
 `curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh`

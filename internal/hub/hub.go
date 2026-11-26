@@ -72,7 +72,7 @@ type BountyPayoutResult struct {
 // BountyHandler validates and pays an incoming BountySubmission using the Hub's memory + SpendGuard wallet.
 type BountyHandler func(ctx context.Context, b Bounty, sub BountySubmission) (*BountyPayoutResult, error)
 
-// Config configures the embedded v0.4 Go Overlay Hub.
+// Config configures the embedded v0.1 Go Overlay Hub.
 type Config struct {
 	Network           string
 	DBPath            string // durable SQLite path (empty -> ":memory:")
@@ -266,7 +266,7 @@ func NewNode(cfg Config) (*Node, error) {
 		sseStopCh:         make(chan struct{}),
 	}
 
-	// 1. Mount Nektar v0.4 market module (tm_nektar_<net>_0..f + ls_nektar) with durable SSE callback!
+	// 1. Mount Nektar v0.1 market module (tm_nektar_<net>_0..f + ls_nektar) with durable SSE callback!
 	nktMod, err := bstack.NewMarketModule(net, n.onMarketAdmit)(n.host)
 	if err != nil {
 		_ = st.Close()

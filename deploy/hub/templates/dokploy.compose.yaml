@@ -1,4 +1,4 @@
-# Dokploy 1-Click Nektar v0.4 Hub Template (Pure-Go single binary + active Restate durable executor)
+# Dokploy 1-Click Nektar v0.1 Hub Template (Pure-Go single binary + active Restate durable executor)
 # In Dokploy: Projects -> Add Service -> Compose -> paste this file, set
 # HUB_DOMAIN to your domain (Dokploy Traefik terminates TLS on hub:18420).
 services:

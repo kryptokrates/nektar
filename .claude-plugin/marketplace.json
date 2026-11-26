@@ -10,7 +10,7 @@
       "name": "nektar",
       "source": "./.claude-plugin",
       "description": "Verifiable BSV-anchored agent memory, checkable receipts, and policy-gated knowledge trading (zero-config testnet boot).",
-      "version": "0.4.0",
+      "version": "0.1.0",
       "category": "memory"
     }
   ]

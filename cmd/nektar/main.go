@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	Version          = "0.4.0"
+	Version          = "0.1.0"
 	DefaultLocalPort = "18420"
 )
 
@@ -100,7 +100,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`nektar v0.4 — Verifiable, encrypted AI agent memory & autonomous knowledge market on BSV
+	fmt.Println(`nektar v0.1 — Verifiable, encrypted AI agent memory & autonomous knowledge market on BSV
 
 Get Started (25 seconds, zero Docker):
   nektar up             Start background daemon + auto-dock Claude/Codex/Hermes/OpenClaw/Cursor + live receipt check

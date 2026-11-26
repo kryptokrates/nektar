@@ -1,4 +1,4 @@
-# nektar-hub v0.4 — single-binary Pure-Go Agent + embedded 16-lane SQLite Overlay Hub.
+# nektar-hub v0.1 — single-binary Pure-Go Agent + embedded 16-lane SQLite Overlay Hub.
 images:
   agent:
     repository: ghcr.io/kryptokrates/nektar

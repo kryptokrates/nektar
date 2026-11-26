@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nektar v0.4 1-command Hub installer (Ubuntu/Debian/macOS VPS):
+# Nektar v0.1 1-command Hub installer (Ubuntu/Debian/macOS VPS):
 #   curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_PUBLIC_URL=https://hub.example.com bash
 #   curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_AUTO_IP=1 bash
 #   curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | NEKTAR_HUB_MODE=tunnel bash
@@ -100,7 +100,7 @@ docker compose -f compose.yaml --env-file .env "${PROFILES[@]}" pull
 docker compose -f compose.yaml --env-file .env "${PROFILES[@]}" up -d
 
 echo ""
-echo "✓ Nektar v0.4 Hub running in ${HUB_DIR}"
+echo "✓ Nektar v0.1 Hub running in ${HUB_DIR}"
 if [ -n "$DOMAIN" ]; then
   echo "  Public URL : https://${DOMAIN}"
   echo "  Discovery  : https://${DOMAIN}/.well-known/nektar"

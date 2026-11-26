@@ -26,7 +26,7 @@ import (
 //go:embed all:ui_dist
 var uiDistFS embed.FS
 
-// Config configures the unified v0.4 HTTP / MCP / A2A / L0-Proxy / Dashboard / Hub / Restate server.
+// Config configures the unified v0.1 HTTP / MCP / A2A / L0-Proxy / Dashboard / Hub / Restate server.
 type Config struct {
 	ListenAddr        string
 	PublicURL         string
@@ -50,7 +50,7 @@ type pairTicket struct {
 	expires time.Time
 }
 
-// App bundles all Nektar v0.4 HTTP interfaces into one net/http Handler.
+// App bundles all Nektar v0.1 HTTP interfaces into one net/http Handler.
 type App struct {
 	mem            *memory.Service
 	mkt            *market.Engine
@@ -216,7 +216,7 @@ func BuildStatus(ctx context.Context, mem *memory.Service, mkt *market.Engine) m
 	}
 	spentToday, maxDay, maxFee, txCount := mem.Chain().SpendGuard().Stats()
 	return map[string]any{
-		"version":     "0.4.0",
+		"version":     "0.1.0",
 		"runtime":     "go-single-binary",
 		"network":     mem.Chain().Network(),
 		"height":      h,
@@ -258,7 +258,7 @@ func (a *App) buildMux() http.Handler {
 	healthHandler := func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":      true,
-			"version": "0.4.0",
+			"version": "0.1.0",
 			"network": a.mem.Chain().Network(),
 		})
 	}
@@ -278,7 +278,7 @@ func (a *App) buildMux() http.Handler {
 			}
 		}
 		resp := map[string]any{
-			"version":     "0.4.0",
+			"version":     "0.1.0",
 			"identityPub": a.mem.Chain().IdentityPubHex(),
 			"network":     a.mem.Chain().Network(),
 			"packBase":    "/v1/pack/",

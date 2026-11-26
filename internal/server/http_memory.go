@@ -48,7 +48,7 @@ func (a *App) buildPublicCardSummary() map[string]any {
 		}
 	}
 	return map[string]any{
-		"version":      "0.4.0",
+		"version":      "0.1.0",
 		"identityPub":  a.mem.Chain().IdentityPubHex(),
 		"network":      a.mem.Chain().Network(),
 		"receiptCount": len(receipts),
@@ -68,14 +68,14 @@ func (a *App) handlePublicCard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>Nektar Agent Card</title>
-<meta property="og:title" content="Nektar v0.4 Verifiable AI Agent">
+<meta property="og:title" content="Nektar v0.1 Verifiable AI Agent">
 <meta property="og:description" content="%v checkable receipts · %v sats earned on BSV %s">
 <meta name="twitter:card" content="summary">
 <style>body{font-family:system-ui,sans-serif;max-width:680px;margin:2rem auto;padding:1rem;background:#120e0c;color:#ece7e4}
 .card{background:#211b17;border:1px solid #3a2f28;border-radius:14px;padding:1.5rem;margin-bottom:1rem}
 h1{color:#f7991b;margin-top:0}code{color:#f7991b;word-break:break-all}a{color:#f7991b}
 pre{background:#120e0c;border:1px solid #3a2f28;border-radius:8px;padding:.75rem;overflow-x:auto;font-size:.82rem}</style></head><body>
-<div class="card"><h1>Nektar v0.4 Verifiable Agent</h1>
+<div class="card"><h1>Nektar v0.1 Verifiable Agent</h1>
 <p><strong>Identity:</strong> <code>%s</code></p>
 <p><strong>Network:</strong> %s · <a href="/.well-known/nektar">Discovery JSON ↗</a> · <a href="/.well-known/agent.json">A2A Card ↗</a></p>
 <p><strong>Checkable Receipts:</strong> %v · <strong>Earned:</strong> %v sats</p>
@@ -293,7 +293,7 @@ func (a *App) handleAgentCard(w http.ResponseWriter, r *http.Request) {
 		"name":        "nektar",
 		"displayName": "Nektar Verifiable Memory Agent",
 		"description": "BSV-anchored, BRC-369 encrypted, Cedar-governed, Google Mangle grounded agent memory node.",
-		"version":     "0.4.0",
+		"version":     "0.1.0",
 		"url":         base + "/a2a",
 		"identityPub": a.mem.Chain().IdentityPubHex(),
 		"capabilities": map[string]bool{

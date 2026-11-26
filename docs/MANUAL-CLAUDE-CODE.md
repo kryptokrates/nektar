@@ -1,4 +1,4 @@
-# Nektar v0.4 for Claude Code — 25-Second Setup & Complete Manual
+# Nektar v0.1 for Claude Code — 25-Second Setup & Complete Manual
 
 Connect Claude Code to encrypted, BSV-anchored verifiable memory, Google Mangle claim grounding with checkable `nektarr1.*` receipts, automatic Stop-hook verification, and policy-bounded knowledge trading — **zero Docker, zero Node.js, one static Go binary**.
 

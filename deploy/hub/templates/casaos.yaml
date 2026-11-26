@@ -1,4 +1,4 @@
-# CasaOS 1-Click App Store Manifest (Nektar v0.4 Pure-Go)
+# CasaOS 1-Click App Store Manifest (Nektar v0.1 Pure-Go)
 name: nektar
 services:
   nektar:

@@ -298,14 +298,14 @@ func (m *MarketTopicManager) IdentifyAdmissibleOutputs(_ context.Context, beef *
 }
 
 func (m *MarketTopicManager) GetDocumentation() string {
-	return "Nektar v0.4 market lane topic manager (`tm_nektar_<net>_<nibble>`) validating signed canonical CBOR `nkt1` wants, offers, and directory announcements."
+	return "Nektar v0.1 market lane topic manager (`tm_nektar_<net>_<nibble>`) validating signed canonical CBOR `nkt1` wants, offers, and directory announcements."
 }
 
 func (m *MarketTopicManager) GetMetaData() *overlay.MetaData {
 	return &overlay.MetaData{
 		Name:        m.Topic,
-		Description: "Nektar v0.4 signed market lane",
-		Version:     "0.4.0",
+		Description: "Nektar v0.1 signed market lane",
+		Version:     "0.1.0",
 	}
 }
 
@@ -596,14 +596,14 @@ func hasDomain(domains []string, want string) bool {
 }
 
 func (s *MarketLookupService) GetDocumentation() string {
-	return "Nektar v0.4 market lookup service (`ls_nektar`) indexing wants, offers, and directory announcements across all 16 nibble lanes."
+	return "Nektar v0.1 market lookup service (`ls_nektar`) indexing wants, offers, and directory announcements across all 16 nibble lanes."
 }
 
 func (s *MarketLookupService) GetMetaData() *overlay.MetaData {
 	return &overlay.MetaData{
 		Name:        LookupService,
-		Description: "Nektar v0.4 market lookup service",
-		Version:     "0.4.0",
+		Description: "Nektar v0.1 market lookup service",
+		Version:     "0.1.0",
 	}
 }
 

@@ -1,6 +1,6 @@
-# Nektar v0.4 Hub — Self-Hosted Pure-Go Overlay Hub & Spine-and-Leaf Relay
+# Nektar v0.1 Hub — Self-Hosted Pure-Go Overlay Hub & Spine-and-Leaf Relay
 
-A Nektar v0.4 Hub runs in a single zero-CGO Go binary (`ghcr.io/kryptokrates/nektar:latest`) paired with a Restate v1.8.1 sidecar for durable workflows (`BuyerDeal`, `SellerDeal`, `Custody`, `Tx`, `AnchorCadence`). Every Hub mounts:
+A Nektar v0.1 Hub runs in a single zero-CGO Go binary (`ghcr.io/kryptokrates/nektar:latest`) paired with a Restate v1.8.1 sidecar for durable workflows (`BuyerDeal`, `SellerDeal`, `Custody`, `Tx`, `AnchorCadence`). Every Hub mounts:
 
 - **16-lane BRC-22 / BRC-24 Overlay Hub** (`tm_nektar_<net>_0..f`, `ls_nektar`) plus Lightweb Go modules (`bfinger`, `bbox`, `blogs`, `borg`, `bsecret`, `bstore`) backed by SQLite WAL.
 - **Cursored SSE `/hub/events` + `/hub/sync`**, signed NAT-safe `/hub/bbox` relay, starter liquidity shards, and verified knowledge bounties.

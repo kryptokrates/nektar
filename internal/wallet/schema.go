@@ -55,7 +55,7 @@ const (
 	// DefaultTxCacheSize bounds the in-memory parsed transaction LRU cache.
 	DefaultTxCacheSize = 512
 	// WalletVersion is returned by BRC-100 GetVersion.
-	WalletVersion = "nektar-toolbox-0.4.0"
+	WalletVersion = "nektar-toolbox-0.1.0"
 )
 
 // Standard errors returned by the wallet engine.

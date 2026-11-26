@@ -18,7 +18,7 @@ Output per site: `<site> keeps breaking because <missing abstraction>; the move 
 
 ## Remediation patterns
 
-| Pattern | When the finding is… | Concrete Go v0.4 move |
+| Pattern | When the finding is… | Concrete Go v0.1 move |
 | --- | --- | --- |
 | Extract deep module | Convergent implementations with same contract | Single helper/method in `core`/`chain`/`store`; thin callers |
 | Delete legacy twin | Dual runtime engines or dual payment rails | Enforce Restate-only & BRC-29-only on live networks |

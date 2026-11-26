@@ -65,7 +65,7 @@ type Config struct {
 	ModelID       reasoning.ModelIdentity
 }
 
-// Service is the unified v0.4 NektarMemory engine composing:
+// Service is the unified v0.1 NektarMemory engine composing:
 //   - pure-Go SQLite persistence (internal/store),
 //   - BSV chain + BRC-100 custody + SpendGuard (internal/chain),
 //   - Rúnar NektarAnchor + SPV verification (internal/contracts),
@@ -142,7 +142,7 @@ func New(db *store.DB, port *chain.Port, groups *bstack.GroupRegistry, objects b
 	}
 	mid := cfg.ModelID
 	if mid.Kind == "" {
-		mid = reasoning.ModelIdentity{Kind: "api", Provider: "nektar", Release: "v0.4"}
+		mid = reasoning.ModelIdentity{Kind: "api", Provider: "nektar", Release: "v0.1"}
 	}
 	if err := groups.SetPersistence(&dbGroupStore{db: db, port: port}); err != nil {
 		return nil, fmt.Errorf("memory: load borg groups: %w", err)

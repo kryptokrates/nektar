@@ -1,4 +1,4 @@
-# OPS-003 Prometheus alert rules for nektar v0.4 (scrape GET /v1/metrics).
+# OPS-003 Prometheus alert rules for nektar v0.1 (scrape GET /v1/metrics).
 # Every metric name referenced below is verified by TestMetricsAlertsParity in internal/server.
 groups:
   - name: nektar

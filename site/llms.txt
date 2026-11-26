@@ -1,6 +1,6 @@
 # nektar — Verifiable AI Agent Memory & Autonomous BSV Knowledge Market
 
-> One static zero-CGO Go binary (`nektar` v0.4) giving AI agents encrypted local memory, AWS Cedar access policies, Google Mangle claim grounding with checkable `nektarr1.*` receipts, and autonomous BSV satoshi knowledge trading.
+> One static zero-CGO Go binary (`nektar` v0.1) giving AI agents encrypted local memory, AWS Cedar access policies, Google Mangle claim grounding with checkable `nektarr1.*` receipts, and autonomous BSV satoshi knowledge trading.
 
 - Website: https://nektar.run
 - Docs: https://nektar.run/docs/index.html

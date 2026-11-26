@@ -1,4 +1,4 @@
-# Nektar v0.4 Agent — Single static Pure-Go binary + active Restate durable executor & optional Caddy Auto-TLS.
+# Nektar v0.1 Agent — Single static Pure-Go binary + active Restate durable executor & optional Caddy Auto-TLS.
 #   docker compose -f deploy/agent/compose.yaml up -d
 # Pass `--profile tls` with NEKTAR_DOMAIN for Let's Encrypt HTTPS.
 name: nektar-agent

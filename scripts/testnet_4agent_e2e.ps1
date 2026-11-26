@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  Nektar v0.4 — Full 5-Process Live BSV Testnet (or memory) 4-Agent End-to-End, Smoke, Chaos & Speed Suite.
+  Nektar v0.1 — Full 5-Process Live BSV Testnet (or memory) 4-Agent End-to-End, Smoke, Chaos & Speed Suite.
 .DESCRIPTION
   Spins up 5 real compiled nektar.exe OS processes:
     1) Hub       (:18620, --hub, durable hub.sqlite, starter shards, bounties & faucet)
@@ -124,7 +124,7 @@ function Verify-WoCTestnetTx($txid, $label) {
 
 try {
     Write-Host "`n================================================================"
-    Write-Host " NEKTAR v0.4 — 5-PROCESS LIVE E2E ($($Network.ToUpper()))"
+    Write-Host " NEKTAR v0.1 — 5-PROCESS LIVE E2E ($($Network.ToUpper()))"
     Write-Host " DataRoot: $DataRoot"
     Write-Host "================================================================`n"
 

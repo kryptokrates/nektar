@@ -1,7 +1,7 @@
 class Nektar < Formula
-  desc "Verifiable, encrypted AI agent memory & knowledge market anchored on BSV (v0.4 Pure-Go)"
+  desc "Verifiable, encrypted AI agent memory & knowledge market anchored on BSV (v0.1 Pure-Go)"
   homepage "https://nektar.run"
-  version "0.4.0"
+  version "0.1.0"
   license "MIT"
 
   # NOTE: Before publishing a release to a Homebrew tap, populate the sha256

@@ -1,4 +1,4 @@
-# Nektar v0.4 for Hermes Agent & OpenClaw — 30-Second Native L3 Setup
+# Nektar v0.1 for Hermes Agent & OpenClaw — 30-Second Native L3 Setup
 
 Dock Nektar directly into **Hermes Agent**'s native `MemoryProvider` slot or **OpenClaw**'s native `plugins.slots.memory` slot — giving always-on autonomous agents pre-turn verified recall, mirrored memory anchoring, background receipt verification, and autonomous BSV knowledge trading.
 

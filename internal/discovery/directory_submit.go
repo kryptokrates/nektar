@@ -18,6 +18,7 @@ import (
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 // BuildMarketBEEF encodes a MarketPayload into an OP_FALSE OP_RETURN AtomicBEEF transaction for Hub /submit
@@ -57,9 +58,10 @@ func BuildFundedMarketCarrierBEEF(ctx context.Context, port *chain.Port, priv *e
 	if err != nil {
 		return nil, fmt.Errorf("discovery: derive carrier funding lock: %w", err)
 	}
-	fundTx, _, feeSats, spendSats, err := port.BuildFundedTxWithBEEF(ctx, []*transaction.TransactionOutput{
+	dirMeta := nwallet.ActionPublishDirectory()
+	fundTx, _, feeSats, spendSats, err := port.BuildFundedTxWithMeta(ctx, []*transaction.TransactionOutput{
 		{Satoshis: 1, LockingScript: fundLock},
-	})
+	}, dirMeta.Description, dirMeta.Labels)
 	if err != nil {
 		return nil, fmt.Errorf("discovery: build carrier funding tx: %w", err)
 	}

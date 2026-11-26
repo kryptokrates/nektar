@@ -223,3 +223,31 @@ func TestDialDesktopWalletHTTPJSONRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestUniformNektarActionNaming(t *testing.T) {
+	if got := FormatActionDescription("Anchor shard", `"desktop-demo" (batch #0, 1 fragment)`); got != `Nektar · Anchor shard: "desktop-demo" (batch #0, 1 fragment)` {
+		t.Fatalf("FormatActionDescription = %q", got)
+	}
+	cases := map[string]string{
+		"":                         "Nektar · Transaction",
+		"nektar funded tx":         "Nektar · Transaction",
+		"nektar hub fee advertise": "Nektar · Hub fee advertise",
+		"market purchase off_123":  "Nektar · Market purchase off_123",
+		"Nektar · Anchor shard":    "Nektar · Anchor shard",
+	}
+	for in, want := range cases {
+		if got := NormalizeActionDescription(in); got != want {
+			t.Errorf("NormalizeActionDescription(%q) = %q, want %q", in, got, want)
+		}
+	}
+	labels := NormalizeActionLabels("Anchor", "nektar", "anchor", "  Market ")
+	wantLabels := []string{"nektar", "anchor", "market"}
+	if len(labels) != len(wantLabels) {
+		t.Fatalf("NormalizeActionLabels = %v, want %v", labels, wantLabels)
+	}
+	for i := range wantLabels {
+		if labels[i] != wantLabels[i] {
+			t.Errorf("label[%d] = %q, want %q", i, labels[i], wantLabels[i])
+		}
+	}
+}

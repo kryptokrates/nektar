@@ -137,10 +137,11 @@ func (e *Engine) buyerPayAndDeliver(rctx restate.RunContext, dealID string, chos
 				}
 			}
 			if !fundedFromVault {
-				builtTx, builtBEEF, fee, spend, bErr := e.mem.Chain().BuildFundedTxWithBEEF(rctx, []*transaction.TransactionOutput{{
+				meta := nwallet.ActionLockEscrow(chosen.OfferID, escrowSats)
+				builtTx, builtBEEF, fee, spend, bErr := e.mem.Chain().BuildFundedTxWithMeta(rctx, []*transaction.TransactionOutput{{
 					Satoshis:      escrowSats,
 					LockingScript: escrowLock,
-				}})
+				}}, meta.Description, meta.Labels)
 				if bErr != nil {
 					if errors.Is(bErr, nwallet.ErrBroadcastUnknown) {
 						return buyerPayResult{}, bErr
@@ -198,7 +199,8 @@ func (e *Engine) buyerPayAndDeliver(rctx restate.RunContext, dealID string, chos
 		} else if chosen.PayIdentityKey != "" {
 			// Pre-build signed NoSend BRC-29 tx and persist txid + BEEF + remittance metadata BEFORE broadcast
 			// so neither crashes nor ErrBroadcastUnknown retries can ever double-pay or lose BRC-29 nonces!
-			builtTx, fee, spend, sendRes, alreadyBroadcast, bErr := e.mem.Chain().BuildBRC29Tx(rctx, chosen.PayIdentityKey, chosen.PriceSats, "market purchase "+chosen.OfferID)
+			buyMeta := nwallet.ActionBuyKnowledge(chosen.OfferID, chosen.PriceSats)
+			builtTx, fee, spend, sendRes, alreadyBroadcast, bErr := e.mem.Chain().BuildBRC29Tx(rctx, chosen.PayIdentityKey, chosen.PriceSats, buyMeta.Description)
 			if bErr != nil {
 				if errors.Is(bErr, nwallet.ErrBroadcastUnknown) {
 					return buyerPayResult{}, bErr

@@ -267,7 +267,7 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 	sendRes, err := mem.Chain().Send(payCtx, nwallet.SendArgs{
 		ToAddress:   sub.SellerAddress,
 		Satoshis:    b.RewardSats,
-		Description: "nektar hub bounty payout " + b.ID,
+		Description: nwallet.ActionPayHubBounty(b.ID).Description,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bounty: payout failed: %w", err)
@@ -434,7 +434,7 @@ func DripFaucetBEEF(ctx context.Context, mem *memory.Service, address string, dr
 	sendRes, err := mem.Chain().Send(ctx, nwallet.SendArgs{
 		ToAddress:   address,
 		Satoshis:    dripSats,
-		Description: "nektar hub faucet drip",
+		Description: nwallet.ActionHubFaucetDrip().Description,
 	})
 	if err != nil {
 		if !errors.Is(err, nwallet.ErrBroadcastUnknown) {

@@ -19,20 +19,28 @@ import (
 // BuildFundedTx builds and signs a transaction paying outputs using multi-input CanonicalChangeSelector
 // and dynamic feepolicy in embedded mode, OR delegates directly to wallet.CreateAction in client mode!
 func (p *Port) BuildFundedTx(ctx context.Context, outputs []*transaction.TransactionOutput) (*transaction.Transaction, uint64, uint64, error) {
-	tx, _, fee, spend, err := p.BuildFundedTxWithBEEF(ctx, outputs)
+	tx, _, fee, spend, err := p.BuildFundedTxWithMeta(ctx, outputs, "", nil)
 	return tx, fee, spend, err
 }
 
 // BuildFundedTxWithBEEF preserves the strict AtomicBEEF bytes produced by go-wallet-toolbox directly
 // without discarding and re-encoding through an allowPartial=true fallback.
 func (p *Port) BuildFundedTxWithBEEF(ctx context.Context, outputs []*transaction.TransactionOutput) (*transaction.Transaction, []byte, uint64, uint64, error) {
+	return p.BuildFundedTxWithMeta(ctx, outputs, "", nil)
+}
+
+// BuildFundedTxWithMeta builds and signs a funded transaction with a human-readable BRC-100
+// description and structured labels (shown in BSV Desktop's Activity feed in client mode).
+func (p *Port) BuildFundedTxWithMeta(ctx context.Context, outputs []*transaction.TransactionOutput, desc string, labels []string) (*transaction.Transaction, []byte, uint64, uint64, error) {
 	if len(outputs) == 0 {
 		return nil, nil, 0, 0, errors.New("chain: BuildFundedTx requires at least one output")
 	}
+	normDesc := nwallet.NormalizeActionDescription(desc)
+	normLabels := nwallet.NormalizeActionLabels(labels...)
 
 	// Client mode: delegate cleanly to remote BRC-100 wallet.CreateAction.
 	if p.engine == nil {
-		res, err := p.clientCreateAction(ctx, outputs, "nektar funded tx", false)
+		res, err := p.clientCreateActionWithLabels(ctx, outputs, normDesc, normLabels, false)
 		if err != nil {
 			return nil, nil, 0, 0, err
 		}
@@ -54,14 +62,14 @@ func (p *Port) BuildFundedTxWithBEEF(ctx context.Context, outputs []*transaction
 		wOuts[i] = sdkwallet.CreateActionOutput{
 			LockingScript:     append([]byte(nil), (*o.LockingScript)...),
 			Satoshis:          o.Satoshis,
-			OutputDescription: "nektar funded output",
+			OutputDescription: normDesc,
 		}
 	}
 	noSend := true
 	randomize := false
 	res, err := p.engine.CreateAction(ctx, sdkwallet.CreateActionArgs{
-		Description: "nektar funded tx",
-		Labels:      []string{"funded"},
+		Description: normDesc,
+		Labels:      normLabels,
 		Outputs:     wOuts,
 		Options: &sdkwallet.CreateActionOptions{
 			NoSend:           &noSend,
@@ -128,7 +136,7 @@ func (p *Port) BuildBRC29Tx(ctx context.Context, toIdentityKey string, sats uint
 	if err != nil {
 		return nil, 0, 0, nil, false, err
 	}
-	tx, beef, fee, spend, err := p.BuildFundedTxWithBEEF(ctx, []*transaction.TransactionOutput{{Satoshis: sats, LockingScript: lockScript}})
+	tx, beef, fee, spend, err := p.BuildFundedTxWithMeta(ctx, []*transaction.TransactionOutput{{Satoshis: sats, LockingScript: lockScript}}, desc, []string{"market", "purchase", "brc29"})
 	if err != nil {
 		return nil, 0, 0, nil, false, err
 	}

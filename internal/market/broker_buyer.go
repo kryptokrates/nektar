@@ -360,10 +360,11 @@ collectLoop:
 	_ = b.mem.DB().SaveDeal(rec)
 
 	// Build, SpendGuard-check, and broadcast BSV payment (preferring BRC-29 derived key when Seller advertises PayIdentityKey).
+	buyMeta := nwallet.ActionBuyKnowledge(chosen.OfferID, chosen.PriceSats)
 	sendArgs := nwallet.SendArgs{
 		Satoshis:    chosen.PriceSats,
-		Description: "market purchase " + chosen.OfferID,
-		Labels:      []string{"market", "purchase"},
+		Description: buyMeta.Description,
+		Labels:      buyMeta.Labels,
 	}
 	if chosen.PayIdentityKey != "" {
 		sendArgs.ToIdentityKey = chosen.PayIdentityKey

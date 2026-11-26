@@ -17,6 +17,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/store"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 const agentVaultKVKey = "agent_vault_utxo"
@@ -151,10 +152,11 @@ func DeployAgentVault(
 	if err != nil {
 		return nil, err
 	}
-	tx, beef, fee, spend, err := port.BuildFundedTxWithBEEF(ctx, []*transaction.TransactionOutput{{
+	meta := nwallet.ActionDeployVault(depositSats)
+	tx, beef, fee, spend, err := port.BuildFundedTxWithMeta(ctx, []*transaction.TransactionOutput{{
 		Satoshis:      depositSats,
 		LockingScript: lockScript,
-	}})
+	}}, meta.Description, meta.Labels)
 	if err != nil {
 		return nil, fmt.Errorf("market: build vault deploy tx: %w", err)
 	}

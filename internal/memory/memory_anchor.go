@@ -147,6 +147,7 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 					_ = s.db.DeletePendingAnchor(shard, nextN)
 					return nil, eErr
 				}
+				meta := nwallet.ActionAnchorAppend(shard, nextN, len(leaves))
 				cRes, cErr := s.port.BuildCovenantSpendTx(ctx, chain.CovenantSpendRequest{
 					InputTx:               prevTx,
 					InputBEEF:             last.Beef,
@@ -154,8 +155,8 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 					Outputs:               []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)},
 					UnlockingScriptLength: 5200,
 					FuelFromWallet:        true,
-					Description:           fmt.Sprintf("nektar anchor append %s#%d", shard, nextN),
-					Labels:                []string{"anchor", "append"},
+					Description:           meta.Description,
+					Labels:                meta.Labels,
 					BuildUnlock: func(spendTx *transaction.Transaction, changePKH []byte, changeSats uint64) (*script.Script, error) {
 						return contracts.BuildAnchorAppendUnlock(
 							ctx, spendTx, 0, prevTx.Outputs[0], root, uint64(len(leaves)),
@@ -190,7 +191,8 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 			_ = s.db.DeletePendingAnchor(shard, nextN)
 			return nil, err
 		}
-		tx, beef, fee, spend, err = s.port.BuildFundedTxWithBEEF(ctx, []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)})
+		meta := nwallet.ActionAnchorShard(shard, nextN, len(leaves))
+		tx, beef, fee, spend, err = s.port.BuildFundedTxWithMeta(ctx, []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)}, meta.Description, meta.Labels)
 		if err != nil {
 			_ = s.db.DeletePendingAnchor(shard, nextN)
 			return nil, err

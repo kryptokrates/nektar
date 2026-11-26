@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 // FundPubKey returns the compressed public key for Nektar's canonical BRC-43 funding key
@@ -244,14 +246,11 @@ func (p *Port) BuildCovenantSpendTx(ctx context.Context, req CovenantSpendReques
 	if unlockLen == 0 {
 		unlockLen = 5120
 	}
-	desc := req.Description
-	if desc == "" {
-		desc = "nektar covenant spend"
+	desc := nwallet.NormalizeActionDescription(req.Description)
+	if strings.TrimSpace(req.Description) == "" {
+		desc = nwallet.ActionCovenantSpend().Description
 	}
-	labels := req.Labels
-	if len(labels) == 0 {
-		labels = []string{"nektar", "covenant"}
-	}
+	labels := nwallet.NormalizeActionLabels(append([]string{"covenant"}, req.Labels...)...)
 	wOuts := make([]sdkwallet.CreateActionOutput, len(req.Outputs))
 	var outTotal uint64
 	for i, o := range req.Outputs {

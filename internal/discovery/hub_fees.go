@@ -212,7 +212,8 @@ func BuildFundedMarketCarrierWithHubFees(
 		totalFeeSats += t.AmountSats
 	}
 
-	fundTx, fundBEEF, feeSats, spendSats, err := port.BuildFundedTxWithBEEF(ctx, outputs)
+	feeMeta := nwallet.ActionPublishDirectoryWithFee(totalFeeSats)
+	fundTx, fundBEEF, feeSats, spendSats, err := port.BuildFundedTxWithMeta(ctx, outputs, feeMeta.Description, feeMeta.Labels)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("discovery: build carrier funding tx: %w", err)
 	}
@@ -287,12 +288,13 @@ func BuildStandaloneHubPayment(ctx context.Context, port *chain.Port, payeePub, 
 	if payeePub == "" || prefixB64 == "" || amountSats == 0 {
 		return "", "", errors.New("discovery: payeePub, derivationPrefix, and amountSats > 0 required")
 	}
+	hubFeeMeta := nwallet.ActionPayHubFee(action, amountSats)
 	res, err := port.Send(ctx, nwallet.SendArgs{
 		ToIdentityKey:    strings.TrimSpace(payeePub),
 		DerivationPrefix: strings.TrimSpace(prefixB64),
 		Satoshis:         amountSats,
-		Description:      "nektar hub fee " + action,
-		Labels:           []string{"nektar", "hub-fee", action},
+		Description:      hubFeeMeta.Description,
+		Labels:           hubFeeMeta.Labels,
 	})
 	if err != nil {
 		return "", "", err

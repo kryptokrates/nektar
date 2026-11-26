@@ -17,6 +17,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/store"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 const (
@@ -220,7 +221,8 @@ func (m *CarrierTreeManager) RetractCarrier(ctx context.Context, treeTxID string
 	sweepTx.Inputs[0].SequenceNumber = transaction.MaxTxInSequenceNum
 	// Fund fee from wallet so the sweep mines cleanly on live BSV networks.
 	feeOutputs := []*transaction.TransactionOutput{{Satoshis: 1, LockingScript: fundLock}}
-	funded, _, feeSats, spendSats, fErr := m.port.BuildFundedTxWithBEEF(ctx, feeOutputs)
+	sweepMeta := nwallet.ActionSweepCarrierSlot()
+	funded, _, feeSats, spendSats, fErr := m.port.BuildFundedTxWithMeta(ctx, feeOutputs, sweepMeta.Description, sweepMeta.Labels)
 	if fErr != nil {
 		// Fallback for memory/regtest zero-fee tombstone sweep.
 		sweepTx.AddOutput(&transaction.TransactionOutput{Satoshis: fundTx.Outputs[vout].Satoshis, LockingScript: fundLock})
@@ -283,7 +285,8 @@ func (m *CarrierTreeManager) mintNewTree(ctx context.Context, protoWallet sdkwal
 	for i := range outputs {
 		outputs[i] = &transaction.TransactionOutput{Satoshis: 1, LockingScript: fundLock}
 	}
-	fundTx, fundBEEF, feeSats, spendSats, err := m.port.BuildFundedTxWithBEEF(ctx, outputs)
+	treeMeta := nwallet.ActionFundCarrierTree(m.width)
+	fundTx, fundBEEF, feeSats, spendSats, err := m.port.BuildFundedTxWithMeta(ctx, outputs, treeMeta.Description, treeMeta.Labels)
 	if err != nil {
 		return nil, fmt.Errorf("discovery: build M=%d funding tree: %w", m.width, err)
 	}

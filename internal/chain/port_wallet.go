@@ -233,7 +233,7 @@ func (p *Port) Send(ctx context.Context, args nwallet.SendArgs) (*nwallet.SendRe
 		if err != nil {
 			return nil, err
 		}
-		res, sErr := p.clientCreateAction(ctx, []*transaction.TransactionOutput{{Satoshis: args.Satoshis, LockingScript: lockScript}}, args.Description, args.OverrideGuard)
+		res, sErr := p.clientCreateActionWithLabels(ctx, []*transaction.TransactionOutput{{Satoshis: args.Satoshis, LockingScript: lockScript}}, args.Description, append([]string{"brc29"}, args.Labels...), args.OverrideGuard)
 		if sErr != nil {
 			return nil, sErr
 		}
@@ -258,10 +258,14 @@ func (p *Port) Send(ctx context.Context, args nwallet.SendArgs) (*nwallet.SendRe
 	} else {
 		return nil, errors.New("chain: toAddress or toIdentityKey required")
 	}
-	return p.clientCreateAction(ctx, []*transaction.TransactionOutput{{Satoshis: args.Satoshis, LockingScript: lockScript}}, args.Description, args.OverrideGuard)
+	return p.clientCreateActionWithLabels(ctx, []*transaction.TransactionOutput{{Satoshis: args.Satoshis, LockingScript: lockScript}}, args.Description, args.Labels, args.OverrideGuard)
 }
 
 func (p *Port) clientCreateAction(ctx context.Context, outputs []*transaction.TransactionOutput, desc string, overrideGuard bool) (*nwallet.SendResult, error) {
+	return p.clientCreateActionWithLabels(ctx, outputs, desc, nil, overrideGuard)
+}
+
+func (p *Port) clientCreateActionWithLabels(ctx context.Context, outputs []*transaction.TransactionOutput, desc string, labels []string, overrideGuard bool) (*nwallet.SendResult, error) {
 	var outTotal uint64
 	for _, o := range outputs {
 		outTotal += o.Satoshis
@@ -281,9 +285,8 @@ func (p *Port) clientCreateAction(ctx context.Context, outputs []*transaction.Tr
 			return nil, rErr
 		}
 	}
-	if desc == "" {
-		desc = "nektar client wallet action"
-	}
+	desc = nwallet.NormalizeActionDescription(desc)
+	normLabels := nwallet.NormalizeActionLabels(labels...)
 	wOuts := make([]sdkwallet.CreateActionOutput, len(outputs))
 	for i, o := range outputs {
 		wOuts[i] = sdkwallet.CreateActionOutput{
@@ -296,7 +299,7 @@ func (p *Port) clientCreateAction(ctx context.Context, outputs []*transaction.Tr
 	randomize := false
 	actRes, err := p.wallet.CreateAction(ctx, sdkwallet.CreateActionArgs{
 		Description: desc,
-		Labels:      []string{"nektar"},
+		Labels:      normLabels,
 		Outputs:     wOuts,
 		Options: &sdkwallet.CreateActionOptions{
 			AcceptDelayedBroadcast: &acceptDelayed,
@@ -460,10 +463,12 @@ func (p *Port) SendToAddress(ctx context.Context, address string, sats uint64) (
 	if sats == 0 {
 		return nil, "", errors.New("chain: send amount must be > 0")
 	}
+	sendMeta := nwallet.ActionSendBSV(sats)
 	res, err := p.Send(ctx, nwallet.SendArgs{
 		ToAddress:   address,
 		Satoshis:    sats,
-		Description: "nektar payment",
+		Description: sendMeta.Description,
+		Labels:      sendMeta.Labels,
 	})
 	if err != nil {
 		return nil, "", err

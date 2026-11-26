@@ -201,13 +201,14 @@ func FundFromWireWallet(ctx context.Context, wireURL string, amountSats uint64, 
 	// Ask BSV Desktop to fund, sign, and broadcast (AcceptDelayedBroadcast=false so AtomicBEEF is live).
 	acceptDelayed := false
 	randomize := false
+	fundMeta := ActionFundAgentWallet(amountSats)
 	actRes, err := desktop.CreateAction(ctx, sdkwallet.CreateActionArgs{
-		Description: fmt.Sprintf("Fund Nektar agent wallet (%d sats)", amountSats),
-		Labels:      []string{"nektar", "fund"},
+		Description: fundMeta.Description,
+		Labels:      fundMeta.Labels,
 		Outputs: []sdkwallet.CreateActionOutput{{
 			LockingScript:     *lockScript,
 			Satoshis:          amountSats,
-			OutputDescription: "BRC-29 funding payment to Nektar",
+			OutputDescription: ActionFundAgentWalletOutput(amountSats).Description,
 		}},
 		Options: &sdkwallet.CreateActionOptions{
 			AcceptDelayedBroadcast: &acceptDelayed,
@@ -309,7 +310,7 @@ func SweepToWireWallet(ctx context.Context, wireURL string, source *Engine, over
 	sweepRes, err := source.Sweep(ctx, SweepArgs{
 		ToIdentityKey: desktopHex,
 		WireURL:       wireURL,
-		Description:   "Sweep Nektar wallet to BSV Desktop",
+		Description:   ActionSweepAgentWallet().Description,
 		MaxPerTx:      DefaultSweepChunkInputs,
 		OverrideGuard: overrideGuard,
 	})
@@ -333,10 +334,11 @@ func SweepToWireWallet(ctx context.Context, wireURL string, source *Engine, over
 		if err1 != nil || err2 != nil {
 			return out, fmt.Errorf("wallet desktop bridge: invalid BRC-29 remittance encoding for sweep %s", rem.TxID)
 		}
+		recvMeta := ActionReceiveSweptFunds()
 		intRes, iErr := desktop.InternalizeAction(ctx, sdkwallet.InternalizeActionArgs{
 			Tx:          sweepRes.BEEFs[i],
-			Description: "Swept funds from Nektar agent wallet",
-			Labels:      []string{"nektar", "sweep"},
+			Description: recvMeta.Description,
+			Labels:      recvMeta.Labels,
 			Outputs: []sdkwallet.InternalizeOutput{{
 				OutputIndex: rem.OutputIndex,
 				Protocol:    sdkwallet.InternalizeProtocolWalletPayment,

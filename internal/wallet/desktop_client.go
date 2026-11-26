@@ -364,14 +364,32 @@ type desktopCreateActionResultWire struct {
 }
 
 func (c *DesktopJSONClient) CreateAction(ctx context.Context, args sdkwallet.CreateActionArgs, originator string) (*sdkwallet.CreateActionResult, error) {
+	desc := NormalizeActionDescription(args.Description)
+	outs := make([]sdkwallet.CreateActionOutput, len(args.Outputs))
+	for i, o := range args.Outputs {
+		o.OutputDescription = NormalizeActionDescription(o.OutputDescription)
+		if o.OutputDescription == ActionPrefix+"Transaction" {
+			o.OutputDescription = desc
+		}
+		outs[i] = o
+	}
+	ins := make([]sdkwallet.CreateActionInput, len(args.Inputs))
+	for i, in := range args.Inputs {
+		if strings.TrimSpace(in.InputDescription) != "" {
+			in.InputDescription = NormalizeActionDescription(in.InputDescription)
+		} else {
+			in.InputDescription = desc
+		}
+		ins[i] = in
+	}
 	wire := desktopCreateActionArgsWire{
-		Description: args.Description,
+		Description: desc,
 		InputBEEF:   sdkwallet.BytesList(args.InputBEEF),
-		Inputs:      args.Inputs,
-		Outputs:     args.Outputs,
+		Inputs:      ins,
+		Outputs:     outs,
 		LockTime:    args.LockTime,
 		Version:     args.Version,
-		Labels:      args.Labels,
+		Labels:      NormalizeActionLabels(args.Labels...),
 		Options:     args.Options,
 	}
 	data, err := c.call(ctx, "createAction", &wire, originator)
@@ -444,6 +462,8 @@ func (c *DesktopJSONClient) ListActions(ctx context.Context, args sdkwallet.List
 }
 
 func (c *DesktopJSONClient) InternalizeAction(ctx context.Context, args sdkwallet.InternalizeActionArgs, originator string) (*sdkwallet.InternalizeActionResult, error) {
+	args.Description = NormalizeActionDescription(args.Description)
+	args.Labels = NormalizeActionLabels(args.Labels...)
 	data, err := c.call(ctx, "internalizeAction", &args, originator)
 	if err != nil {
 		return nil, err

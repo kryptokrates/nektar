@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -217,7 +218,7 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 	}
 	dealFeed := make([]map[string]any, 0, len(deals))
 	for i, d := range deals {
-		if i >= 12 {
+		if i >= 24 {
 			break
 		}
 		cause := d.Error
@@ -225,10 +226,15 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 			cause = fmt.Sprintf("%s · %d sats", d.Role, d.PriceSats)
 		}
 		entry := map[string]any{
-			"op":    d.DealID,
-			"at":    d.UpdatedAt * 1000,
-			"to":    d.Status,
-			"cause": cause,
+			"op":            d.DealID,
+			"at":            d.UpdatedAt * 1000,
+			"to":            d.Status,
+			"cause":         cause,
+			"role":          d.Role,
+			"priceSats":     d.PriceSats,
+			"shard":         d.Shard,
+			"paymentTxid":   d.PaymentTxID,
+			"deliveredText": shortStr(d.DeliveredText, 180),
 		}
 		if len(d.MatchAuditJSON) > 0 {
 			var ma market.MatchAudit
@@ -237,6 +243,65 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 			}
 		}
 		dealFeed = append(dealFeed, entry)
+	}
+
+	// Unified real-time market tape (live verified hub wants/offers + persisted local deals, newest first).
+	tapeSeen := make(map[string]bool)
+	marketTape := make([]market.MarketTapeEvent, 0, 60)
+	if a.broker != nil {
+		for _, ev := range a.broker.RecentMarketEvents(48) {
+			if ev.ID != "" && tapeSeen[ev.ID] {
+				continue
+			}
+			if ev.ID != "" {
+				tapeSeen[ev.ID] = true
+			}
+			marketTape = append(marketTape, ev)
+		}
+	}
+	for i, d := range deals {
+		if i >= 32 {
+			break
+		}
+		if d.DealID != "" && tapeSeen[d.DealID] {
+			continue
+		}
+		if d.DealID != "" {
+			tapeSeen[d.DealID] = true
+		}
+		side := "buy"
+		if d.Role == "seller" {
+			side = "sell"
+		}
+		var doms []string
+		if d.Shard != "" {
+			doms = []string{d.Shard}
+		}
+		summary := shortStr(strings.TrimSpace(d.DeliveredText), 140)
+		if summary == "" {
+			summary = d.Error
+		}
+		if summary == "" && d.Shard != "" {
+			summary = "#" + d.Shard
+		}
+		marketTape = append(marketTape, market.MarketTapeEvent{
+			ID:      d.DealID,
+			Kind:    "deal",
+			Side:    side,
+			Domains: doms,
+			Summary: summary,
+			Sats:    d.PriceSats,
+			Shard:   d.Shard,
+			Status:  d.Status,
+			IsSelf:  true,
+			At:      d.UpdatedAt * 1000,
+		})
+	}
+	sort.SliceStable(marketTape, func(i, j int) bool {
+		return marketTape[i].At > marketTape[j].At
+	})
+	if len(marketTape) > 60 {
+		marketTape = marketTape[:60]
 	}
 	rtExecutor := "unattached"
 	rtPending := make([]map[string]any, 0)
@@ -432,9 +497,10 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 			"coverage": coverage,
 			"prover":   "SPV + Rúnar + Mangle",
 		},
-		"feed":   feedRows,
-		"ai":     aiStatus,
-		"market": marketRows,
+		"feed":       feedRows,
+		"ai":         aiStatus,
+		"market":     marketRows,
+		"marketTape": marketTape,
 		"net": map[string]any{
 			"hosts":          hostRows,
 			"seeds":          discovery.DefaultSeedHosts(a.mem.Chain().Network()),
@@ -480,7 +546,7 @@ func (a *App) handleDashboardSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
-	ch := make(chan string, 16)
+	ch := make(chan []byte, 32)
 	a.evMu.Lock()
 	a.evSubs[ch] = struct{}{}
 	a.evMu.Unlock()
@@ -506,11 +572,11 @@ func (a *App) handleDashboardSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-a.stopCh:
 			return
-		case kind, ok := <-ch:
+		case frame, ok := <-ch:
 			if !ok {
 				return
 			}
-			_, _ = fmt.Fprintf(w, "data: {\"event\":%q}\n\n", kind)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", frame)
 			flusher.Flush()
 		case <-keepalive.C:
 			_, _ = fmt.Fprint(w, ": ping\n\n")

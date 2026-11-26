@@ -416,8 +416,8 @@ func main() {
 		leafMin, leafTarget := uint64(55000), uint64(70000)
 		agentMin, agentTarget := uint64(30000), uint64(42000)
 		if isMain {
-			leafMin, leafTarget = 4500, 6000
-			agentMin, agentTarget = 3500, 4500
+			leafMin, leafTarget = 3000, 5000
+			agentMin, agentTarget = 2000, 3500
 		}
 		var needFanoutTotal uint64
 		for _, k := range allKeys[1:] {
@@ -485,11 +485,11 @@ func main() {
 		wantFuel := uint64(24)
 		fuelDenom := uint64(1500)
 		if isMain {
-			wantFuel = 8
-			fuelDenom = 400
+			wantFuel = 6
+			fuelDenom = 350
 			if k == "leaf-a" || k == "leaf-b" {
-				wantFuel = 10
-				fuelDenom = 500
+				wantFuel = 8
+				fuelDenom = 400
 			} else if k == "spine" {
 				wantFuel = 8
 				fuelDenom = 500

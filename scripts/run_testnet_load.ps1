@@ -97,6 +97,7 @@ if [ "$Network" = "main" ] && [ -d "`$WORK_DIR/spine/wallet" ]; then
   mkdir -p "$wslMainSeed/wallet"
   cp -a "`$WORK_DIR/spine/wallet/." "$wslMainSeed/wallet/"
 fi
+
 "@
 
 $bash -replace "`r`n", "`n" | wsl -d Ubuntu -- bash -s

@@ -356,6 +356,17 @@ func (b *Broker) handleMarketEvent(ctx context.Context, ev bstack.MarketEvent) {
 		}
 		b.seenWants[sw.Want.WantID] = nowUnix
 		b.mu.Unlock()
+		b.RecordMarketTape("market_want", MarketTapeEvent{
+			ID:      sw.Want.WantID,
+			Kind:    "want",
+			Side:    "buy",
+			Domains: append([]string(nil), sw.Want.Domains...),
+			Summary: sw.Want.Query,
+			Sats:    sw.Want.MaxSats,
+			Pub:     shortPub(sw.Want.Pub),
+			Status:  "open",
+			At:      nowMs,
+		})
 		b.wg.Add(1)
 		go func(w bstack.WantAd) {
 			defer b.wg.Done()
@@ -387,6 +398,22 @@ func (b *Broker) handleMarketEvent(ctx context.Context, ev bstack.MarketEvent) {
 		if so.Offer.BuyerPub != "" && so.Offer.BuyerPub != b.PubHex() {
 			return
 		}
+		summary := strings.TrimSpace(so.Offer.Description)
+		if summary == "" {
+			summary = so.Offer.Shard
+		}
+		b.RecordMarketTape("market_offer", MarketTapeEvent{
+			ID:      so.Offer.OfferID,
+			Kind:    "offer",
+			Side:    "sell",
+			Domains: append([]string(nil), so.Offer.Domains...),
+			Summary: summary,
+			Sats:    so.Offer.PriceSats,
+			Pub:     shortPub(so.Offer.Pub),
+			Shard:   so.Offer.Shard,
+			Status:  "quoted",
+			At:      nowMs,
+		})
 		b.mu.RLock()
 		ch := b.offerInbox[so.Offer.WantID]
 		b.mu.RUnlock()

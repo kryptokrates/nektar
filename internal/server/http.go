@@ -65,7 +65,7 @@ type App struct {
 	handler        http.Handler
 
 	evMu   sync.Mutex
-	evSubs map[chan string]struct{}
+	evSubs map[chan []byte]struct{}
 
 	pairMu    sync.Mutex
 	pairCodes map[string]pairTicket
@@ -125,7 +125,7 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 			MaxIdleConns:          64,
 			IdleConnTimeout:       90 * time.Second,
 		},
-		evSubs:       make(map[chan string]struct{}),
+		evSubs:       make(map[chan []byte]struct{}),
 		pairCodes:    make(map[string]pairTicket),
 		faucetIPs:    make(map[string][]int64),
 		oauthRegIPs:  make(map[string][]int64),
@@ -133,6 +133,12 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 		oauthCodes:   make(map[string]oauthCode),
 		oauthTokens:  make(map[string]oauthAccessToken),
 		stopCh:       make(chan struct{}),
+	}
+	if cfg.Broker != nil {
+		cfg.Broker.OnMarketTape(func(event string, ev market.MarketTapeEvent) {
+			evCopy := ev
+			app.BroadcastDashboardPayload(event, &evCopy)
+		})
 	}
 	app.handler = app.buildMux()
 	return app, nil
@@ -167,12 +173,31 @@ func (a *App) restateClient() *market.RestateClient {
 	return a.cfg.RestateClient
 }
 
+type dashboardSSEFrame struct {
+	Event string                  `json:"event"`
+	Ts    int64                   `json:"ts"`
+	Tape  *market.MarketTapeEvent `json:"tape,omitempty"`
+}
+
 // BroadcastDashboardEvent wakes connected Svelte Dashboard SSE subscribers immediately.
 func (a *App) BroadcastDashboardEvent(kind string) {
+	a.BroadcastDashboardPayload(kind, nil)
+}
+
+// BroadcastDashboardPayload pushes a typed live SSE frame (with optional market tape event) to dashboard subscribers.
+func (a *App) BroadcastDashboardPayload(kind string, tape *market.MarketTapeEvent) {
+	raw, err := json.Marshal(dashboardSSEFrame{
+		Event: kind,
+		Ts:    time.Now().UnixMilli(),
+		Tape:  tape,
+	})
+	if err != nil {
+		return
+	}
 	a.evMu.Lock()
 	for ch := range a.evSubs {
 		select {
-		case ch <- kind:
+		case ch <- raw:
 		default:
 		}
 	}

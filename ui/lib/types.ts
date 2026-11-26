@@ -54,6 +54,11 @@ export type DealFeedEntry = {
   at: number
   to: string
   cause: string
+  role?: 'buyer' | 'seller' | string
+  priceSats?: number
+  shard?: string
+  paymentTxid?: string
+  deliveredText?: string
   matchAudit?: {
     mode?: string
     action?: string
@@ -62,6 +67,27 @@ export type DealFeedEntry = {
     reason?: string
     fallback?: boolean
   }
+}
+
+export type MarketTapeEvent = {
+  id: string
+  kind: 'want' | 'offer' | 'deal' | string
+  side: 'buy' | 'sell' | 'clear' | string
+  domains?: string[]
+  summary?: string
+  sats: number
+  pub?: string
+  shard?: string
+  status?: string
+  isSelf?: boolean
+  at: number
+}
+
+export type PulseSignal = {
+  seq: number
+  event: string
+  ts: number
+  tape?: MarketTapeEvent
 }
 
 export type WaitRow = {
@@ -177,6 +203,7 @@ export type State = {
   feed?: FeedFragment[]
   ai?: AIStatus | null
   market: ListedShard[]
+  marketTape?: MarketTapeEvent[]
   net: {
     hosts: Host[]
     seeds: string[]
@@ -211,7 +238,7 @@ export type State = {
   }
 }
 
-export type NavTab = 'home' | 'market' | 'wallet' | 'node'
+export type NavTab = 'home' | 'memory' | 'wallet' | 'node'
 
 export type DrawerTarget =
   | { kind: 'memory'; item: FeedFragment }

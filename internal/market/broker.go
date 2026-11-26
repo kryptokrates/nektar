@@ -130,11 +130,28 @@ type pendingSale struct {
 	Settled     bool
 }
 
+// MarketTapeEvent is one verified live market flow event (want, offer, or deal)
+// surfaced to the real-time dashboard SSE stream and /state snapshot.
+type MarketTapeEvent struct {
+	ID      string   `json:"id"`
+	Kind    string   `json:"kind"` // want | offer | deal
+	Side    string   `json:"side"` // buy | sell | clear
+	Domains []string `json:"domains,omitempty"`
+	Summary string   `json:"summary,omitempty"`
+	Sats    uint64   `json:"sats"`
+	Pub     string   `json:"pub,omitempty"`
+	Shard   string   `json:"shard,omitempty"`
+	Status  string   `json:"status,omitempty"`
+	IsSelf  bool     `json:"isSelf,omitempty"`
+	At      int64    `json:"at"` // unix ms
+}
+
 const (
 	maxPendingSalesTotal    = 128
 	maxPendingSalesPerBuyer = 16
 	maxSeenBboxNonces       = 8192
 	maxConcurrentQuotes     = 16
+	maxMarketTapeEvents     = 64
 )
 
 // Broker drives real autonomous agent-to-agent and agent-to-Hub knowledge trading over live HTTP/SSE + NAT bbox.
@@ -161,6 +178,8 @@ type Broker struct {
 	seenBboxNonces       map[string]int64 // sender:nonce -> seenUnix (bounded replay guard)
 	packs                []bstack.PackRef
 	bountyDoms           []string
+	marketTape           []MarketTapeEvent
+	tapeListeners        []func(event string, ev MarketTapeEvent)
 
 	cursorMu sync.Mutex
 
@@ -529,6 +548,59 @@ func (b *Broker) notify(event string, payload any) {
 	if b.cfg.OnStateChange != nil {
 		b.cfg.OnStateChange(event, payload)
 	}
+}
+
+// OnMarketTape registers a live callback invoked whenever a verified want/offer/deal enters the market tape.
+func (b *Broker) OnMarketTape(fn func(event string, ev MarketTapeEvent)) {
+	if b == nil || fn == nil {
+		return
+	}
+	b.mu.Lock()
+	b.tapeListeners = append(b.tapeListeners, fn)
+	b.mu.Unlock()
+}
+
+// RecordMarketTape appends a verified event to the bounded ring buffer and notifies live listeners.
+func (b *Broker) RecordMarketTape(event string, ev MarketTapeEvent) {
+	if b == nil {
+		return
+	}
+	if ev.At == 0 {
+		ev.At = time.Now().UnixMilli()
+	}
+	b.mu.Lock()
+	b.marketTape = append(b.marketTape, ev)
+	if len(b.marketTape) > maxMarketTapeEvents {
+		b.marketTape = append([]MarketTapeEvent(nil), b.marketTape[len(b.marketTape)-maxMarketTapeEvents:]...)
+	}
+	listeners := append([]func(string, MarketTapeEvent)(nil), b.tapeListeners...)
+	b.mu.Unlock()
+	for _, fn := range listeners {
+		fn(event, ev)
+	}
+}
+
+// RecentMarketEvents returns up to limit newest verified market tape events (newest first).
+func (b *Broker) RecentMarketEvents(limit int) []MarketTapeEvent {
+	if b == nil {
+		return nil
+	}
+	if limit <= 0 || limit > maxMarketTapeEvents {
+		limit = maxMarketTapeEvents
+	}
+	b.mu.RLock()
+	n := len(b.marketTape)
+	if n == 0 {
+		b.mu.RUnlock()
+		return nil
+	}
+	count := min(n, limit)
+	out := make([]MarketTapeEvent, 0, count)
+	for i := n - 1; i >= n-count; i-- {
+		out = append(out, b.marketTape[i])
+	}
+	b.mu.RUnlock()
+	return out
 }
 
 func lanesForDomains(net string, domains []string) []string {

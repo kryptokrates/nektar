@@ -84,6 +84,12 @@ func (b *Broker) saveCursor(hubURL string, seq int64) {
 	}
 }
 
+func (b *Broker) resetCursor(hubURL string, seq int64) {
+	b.cursorMu.Lock()
+	defer b.cursorMu.Unlock()
+	_ = b.mem.DB().SetJSON("hub_cursor:"+hubURL, seq)
+}
+
 func (b *Broker) attachHubEgressAuth(req *http.Request, action, hubURL string, cursor int64, domainsCSV string) {
 	if b == nil || b.engine == nil || b.engine.saleKey == nil {
 		return
@@ -145,6 +151,12 @@ func (b *Broker) sseHostLoop(ctx context.Context, hubURL string) {
 			continue
 		}
 		backoff = 250 * time.Millisecond
+		if lsStr := strings.TrimSpace(resp.Header.Get("X-Nektar-Latest-Seq")); lsStr != "" {
+			if latest, pErr := strconv.ParseInt(lsStr, 10, 64); pErr == nil && latest < cursor {
+				b.resetCursor(hubURL, 0)
+			}
+		}
+		b.sseConnected.Add(1)
 		sc := bufio.NewScanner(resp.Body)
 		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		var pendingEvent string
@@ -158,6 +170,11 @@ func (b *Broker) sseHostLoop(ctx context.Context, hubURL string) {
 				continue
 			}
 			raw := strings.TrimPrefix(line, "data: ")
+			if pendingEvent == "cursor_reset" {
+				pendingEvent = ""
+				b.resetCursor(hubURL, 0)
+				continue
+			}
 			if pendingEvent == "payment_required" {
 				pendingEvent = ""
 				var pr struct {
@@ -216,6 +233,12 @@ func (b *Broker) pollHostOnce(ctx context.Context, hubURL string) {
 		}
 		if resp == nil {
 			return
+		}
+		if lsStr := strings.TrimSpace(resp.Header.Get("X-Nektar-Latest-Seq")); lsStr != "" {
+			if latest, pErr := strconv.ParseInt(lsStr, 10, 64); pErr == nil && latest < cursor {
+				b.resetCursor(hubURL, 0)
+				cursor = 0
+			}
 		}
 		var items []hub.StoredEvent
 		dErr := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&items)
@@ -333,7 +356,19 @@ func (b *Broker) handleMarketEvent(ctx context.Context, ev bstack.MarketEvent) {
 		}
 		b.seenWants[sw.Want.WantID] = nowUnix
 		b.mu.Unlock()
-		go b.autoQuoteWant(ctx, sw.Want)
+		b.wg.Add(1)
+		go func(w bstack.WantAd) {
+			defer b.wg.Done()
+			if b.quoteSem != nil {
+				select {
+				case b.quoteSem <- struct{}{}:
+					defer func() { <-b.quoteSem }()
+				case <-ctx.Done():
+					return
+				}
+			}
+			b.autoQuoteWant(ctx, w)
+		}(sw.Want)
 
 	case bstack.KindOffer:
 		var so bstack.SignedOffer

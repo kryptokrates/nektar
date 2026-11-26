@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 )
 
@@ -46,6 +47,45 @@ func randNonceHex() string {
 	return hex.EncodeToString(b[:])
 }
 
+// peerBboxHosts returns the target peer's advertised Hub URLs (from federated `dir` AnnounceAds)
+// followed by fallbackHosts, deduplicated, so cross-hub NAT /bbox messages reach the peer's Hub directly!
+func (b *Broker) peerBboxHosts(ctx context.Context, peerPub string, fallbackHosts []string) []string {
+	peerPub = strings.ToLower(strings.TrimSpace(peerPub))
+	seen := make(map[string]bool)
+	var out []string
+	add := func(u string) {
+		u = strings.TrimRight(strings.TrimSpace(u), "/")
+		if u != "" && !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	findPeer := func(peers []discovery.PeerInfo) bool {
+		for _, p := range peers {
+			if strings.EqualFold(p.Pub, peerPub) && len(p.Hosts) > 0 {
+				for _, h := range p.Hosts {
+					add(h)
+				}
+				return true
+			}
+		}
+		return false
+	}
+	if b.disc != nil && peerPub != "" {
+		if !findPeer(b.disc.Peers()) {
+			dCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+			if fresh, err := b.disc.DiscoverPeers(dCtx, nil); err == nil {
+				_ = findPeer(fresh)
+			}
+			cancel()
+		}
+	}
+	for _, h := range fallbackHosts {
+		add(h)
+	}
+	return out
+}
+
 // DeliverPurchaseAsync delivers a buyer's AtomicBEEF payment to Seller.
 // Direct HTTP returns the seller's immediate PurchaseResponse; NAT bbox sends purchase_beef
 // and returns (nil, nil) immediately so Restate BuyerDeal suspends durably on Promise("claim")!
@@ -70,7 +110,7 @@ func (b *Broker) DeliverPurchaseAsync(ctx context.Context, chosen bstack.OfferAd
 		}
 	}
 	if chosen.BboxOffice != "" {
-		hosts := b.disc.ActiveHosts()
+		hosts := b.peerBboxHosts(ctx, chosen.Pub, b.disc.ActiveHosts())
 		b.mu.Lock()
 		b.bboxExpected[pReq.OfferID] = chosen.Pub
 		b.bboxWantByOffer[pReq.OfferID] = dealID
@@ -353,28 +393,42 @@ func (b *Broker) handleBboxMessage(ctx context.Context, hubURL string, m hub.Bbo
 		if encErr != nil {
 			return encErr
 		}
-		replyMsg := hub.BboxMessage{
-			Office:       m.Office,
-			RecipientPub: m.SenderPub,
-			SenderPub:    b.PubHex(),
-			DealID:       m.DealID,
-			Kind:         "reveal_key",
-			TS:           time.Now().Unix(),
-			Nonce:        randNonceHex(),
-			Aud:          hubAudience(hubURL),
-			Body:         sealedReply,
+		replyHosts := b.peerBboxHosts(ctx, m.SenderPub, []string{hubURL})
+		var lastReplyErr error
+		delivered := false
+		for _, rh := range replyHosts {
+			replyMsg := hub.BboxMessage{
+				Office:       m.Office,
+				RecipientPub: m.SenderPub,
+				SenderPub:    b.PubHex(),
+				DealID:       m.DealID,
+				Kind:         "reveal_key",
+				TS:           time.Now().Unix(),
+				Nonce:        randNonceHex(),
+				Aud:          hubAudience(rh),
+				Body:         sealedReply,
+			}
+			if sig, sErr := bstack.SignArtifact(b.engine.saleKey, replyMsg.Signable()); sErr == nil {
+				replyMsg.Sig = sig
+			}
+			env, _ := json.Marshal(replyMsg)
+			resp, dErr := b.disc.PostJSONWithHub402(ctx, strings.TrimRight(rh, "/")+"/bbox/send", "bbox:send", env)
+			if dErr != nil {
+				lastReplyErr = dErr
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode < 300 {
+				delivered = true
+				break
+			}
+			lastReplyErr = fmt.Errorf("bbox reveal_key send HTTP %d", resp.StatusCode)
 		}
-		if sig, sErr := bstack.SignArtifact(b.engine.saleKey, replyMsg.Signable()); sErr == nil {
-			replyMsg.Sig = sig
-		}
-		env, _ := json.Marshal(replyMsg)
-		resp, dErr := b.disc.PostJSONWithHub402(ctx, strings.TrimRight(hubURL, "/")+"/bbox/send", "bbox:send", env)
-		if dErr != nil {
-			return dErr
-		}
-		resp.Body.Close()
-		if resp.StatusCode >= 300 {
-			return fmt.Errorf("bbox reveal_key send HTTP %d", resp.StatusCode)
+		if !delivered {
+			if lastReplyErr != nil {
+				return lastReplyErr
+			}
+			return errors.New("bbox reveal_key send failed on all candidate hubs")
 		}
 		_ = b.claimSeenBboxNonce(m.SenderPub, m.Nonce, now)
 	case "reveal_key":

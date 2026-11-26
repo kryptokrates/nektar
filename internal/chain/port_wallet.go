@@ -36,7 +36,9 @@ func (p *Port) FeeRateSatPerKB(ctx context.Context) uint64 {
 		return p.engine.FeeRateSatPerKB(ctx)
 	}
 	if p.feeSource != nil {
-		if f, err := p.feeSource.Fees(ctx); err == nil && !f.Rate.IsZero() && f.Rate.Bytes > 0 {
+		fCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		if f, err := p.feeSource.Fees(fCtx); err == nil && !f.Rate.IsZero() && f.Rate.Bytes > 0 {
 			return (f.Rate.Sats*1000 + f.Rate.Bytes - 1) / f.Rate.Bytes
 		}
 	}

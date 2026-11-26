@@ -118,7 +118,7 @@ func (e *Engine) Balance(ctx context.Context) (BalanceBreakdown, error) {
 
 	pendingQ := fmt.Sprintf(`SELECT COUNT(1) FROM "%s" WHERE user_id = ? AND deleted_at IS NULL AND status IN ('unsigned','unprocessed','sending','submission_unknown')`, e.tables.transactions)
 	_ = e.readDB.QueryRowContext(ctx, pendingQ, e.userID).Scan(&b.PendingTxCount)
-	depth, dErr := e.computeMaxUnprovenDepthChecked(ctx)
+	depth, _, dErr := e.computeUnprovenDepthBounds(ctx)
 	if dErr != nil {
 		e.logf("wallet: computeMaxUnprovenDepth warning: %v", dErr)
 	}
@@ -126,9 +126,9 @@ func (e *Engine) Balance(ctx context.Context) (BalanceBreakdown, error) {
 	return b, nil
 }
 
-func (e *Engine) computeMaxUnprovenDepthChecked(ctx context.Context) (int, error) {
+func (e *Engine) computeUnprovenDepthBounds(ctx context.Context) (maxDepth int, minDepth int, err error) {
 	if e.readDB == nil {
-		return 0, nil
+		return 0, 0, nil
 	}
 	q := fmt.Sprintf(`
 		SELECT DISTINCT COALESCE(owner.tx_id, '')
@@ -145,7 +145,7 @@ func (e *Engine) computeMaxUnprovenDepthChecked(ctx context.Context) (int, error
 	)
 	rows, err := e.readDB.QueryContext(ctx, q, e.userID)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	var unproved []string
 	for rows.Next() {
@@ -156,7 +156,7 @@ func (e *Engine) computeMaxUnprovenDepthChecked(ctx context.Context) (int, error
 	}
 	_ = rows.Close()
 	if len(unproved) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	// Build parent-tx status lookup for fast bounded DFS.
@@ -199,14 +199,20 @@ func (e *Engine) computeMaxUnprovenDepthChecked(ctx context.Context) (int, error
 		return best
 	}
 
-	maxDepth := 0
+	minDepth = -1
 	for _, id := range unproved {
 		d := depthOf(id, make(map[string]bool))
 		if d > maxDepth {
 			maxDepth = d
 		}
+		if minDepth < 0 || d < minDepth {
+			minDepth = d
+		}
 	}
-	return maxDepth, nil
+	if minDepth < 0 {
+		minDepth = 0
+	}
+	return maxDepth, minDepth, nil
 }
 
 // ListUTXOs returns unspent UTXO records filtered by basket ("all", "default", "reserve", "fuel", etc.)

@@ -1,90 +1,43 @@
-# hub — your own nektar.run, in one box
+# Nektar v0.4 Hub — Self-Hosted Pure-Go Overlay Hub & Spine-and-Leaf Relay
 
-Everything `nektar.run` is, self-hosted: a market-capable agent plus its own
-host pair, announcing itself on the dir lane so fresh instances find it
-through the network's own directory — no central registry.
+A Nektar v0.4 Hub runs in a single zero-CGO Go binary (`ghcr.io/kryptokrates/nektar:latest`) paired with a Restate v1.8.1 sidecar for durable workflows (`BuyerDeal`, `SellerDeal`, `Custody`, `Tx`, `AnchorCadence`). Every Hub mounts:
 
-```
-                    ┌────────────── your box ──────────────┐
-   other operators  │  agent ──┐                           │
-   + agents         │          │ NEKTAR_MARKET_HOSTS       │
-        ▲           │          ▼                           │
-        │ announces │  host-a  host-b   ← your public      │
-        │ on the    │  watch-a watch-b     host pair       │
-        │ dir lane  │  db  shim            (untrusted      │
-        └───────────┘                        plumbing)     │
-                    └──────────────────────────────────────┘
-```
+- **16-lane BRC-22 / BRC-24 Overlay Hub** (`tm_nektar_<net>_0..f`, `ls_nektar`) plus Lightweb Go modules (`bfinger`, `bbox`, `blogs`, `borg`, `bsecret`, `bstore`) backed by SQLite WAL.
+- **Cursored SSE `/hub/events` + `/hub/sync`**, signed NAT-safe `/hub/bbox` relay, starter liquidity shards, and verified knowledge bounties.
+- **Spine-and-Leaf Monetization & Anti-Freerider Controls**:
+  - `NEKTAR_HUB_ROLE=leaf` (default): edge Hub forwarding local Want/Offer ads UP to configured `NEKTAR_UPSTREAM_SPINES` and subscribing DOWN to metered Spine slices (`?domains=`).
+  - `NEKTAR_HUB_ROLE=spine`: backbone Hub peering settlement-free only with bilateral `NEKTAR_SPINE_PEER_PUBS`, metering egress on `/hub/events` & `/hub/sync`, and rejecting unbilled Sybil pulls.
+  - `NEKTAR_HUB_FEE_PRESET=free | lightbsv_egress | hybrid` (BRC-105 402 + `GET /hub/v1/terms` + `GET /hub/ls_nektar/terms`).
 
-## Up
-
-Fully self-contained — every service pulls a published image, nothing is
-mounted from a checkout. `compose.yaml` + `.env.example` are the only files
-you need:
+## Quick Start (1-Command CLI or VPS)
 
 ```bash
-cp .env.example .env            # set the marked values
-docker compose -f compose.yaml --env-file .env up -d
-docker compose -f compose.yaml logs -f agent
+# Option 1: via nektar CLI (zero-domain auto-TLS via sslip.io, custom domain, or Cloudflare Tunnel)
+nektar hub up --auto-ip --network testnet --hub-role leaf --fee-preset hybrid
+nektar hub up --domain hub.example.com --network testnet
+nektar hub up --tunnel --network testnet
+
+# Option 2: fresh Linux VPS one-liner
+curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh \
+  | NEKTAR_AUTO_IP=1 NEKTAR_HUB_ROLE=leaf NEKTAR_HUB_FEE_PRESET=hybrid bash
+
+# Option 3: Docker Compose directly
+cp .env.example .env   # set NEKTAR_HTTP_TOKEN, NEKTAR_OPERATOR_TOKEN, NEKTAR_DOMAIN
+docker compose -f compose.yaml --env-file .env --profile tls up -d
+docker compose -f compose.yaml logs -f hub
 ```
 
-Or on kubernetes (k3s, minikube, EKS — the watch shim rides as a sidecar in
-each host pod, not a supervised second process):
+## Health & Discovery Endpoints
 
-```bash
-helm install hub deploy/hub/helm \
-  --set marketHosts=https://hub.example/host-a,https://hub.example/host-b \
-  --set secrets.keyPassphrase=… --set secrets.httpToken=… \
-  --set secrets.overlayDbPassword=… --set secrets.overlayAdminToken=…
-```
+- `GET /v1/health` — agent & embedded Hub liveness
+- `GET /.well-known/nektar` — node capabilities, identity pubkey, `/hub` path, active hosts
+- `GET /hub/v1/health` — overlay topics, lookups, active bounties
+- `GET /hub/v1/terms` & `GET /hub/ls_nektar/terms` — BRC-105 fee schedule & HMAC derivation prefix
 
-The one value that matters most is `NEKTAR_MARKET_HOSTS`: set it to your
-hosts' **public** URLs (`https://hub.example/hosts/a,…`) — they go verbatim
-into your announce and finger record for other operators to use. Include
-the seed pair (`https://nektar.run/hosts/{a,b}`) in the same list so your
-hub reads the whole network, not just its own lanes. A reverse proxy maps
-`/hosts/a` → `:18391`, `/hosts/b` → `:18392` — a minimal Caddyfile is in
-`docs/JOIN-TESTNET.md` (auto-TLS + path routing in ~5 lines).
+## Mainnet Requirements
 
-## What it does
-
-- `NEKTAR_ANNOUNCE=1` (default on) — the agent publishes a signed directory
-  card on `tm_nektar_<net>_<dir-nibble>`: your hosts + the public packs you
-  offer (`describeShard` + a bstore). Republished when content changes or
-  exp runs down (~one carrier every 3.5 days).
-- `NEKTAR_BFINGER_PUBLISH=1` — the counterparty record: hosts, office,
-  stream, push endpoint.
-- `NEKTAR_SEED_DOMAINS` — at boot, read the directory and `importShard`
-  every announced pack matching your domains. Defaults to `*` (all);
-  set a comma list to filter, or empty to keep a silo.
-  Idempotent — already-imported shards skip.
-- `NEKTAR_PUSH_PUBLIC` — your public `https://hub.example` base so peers
-  push carriers straight to `/v1/lane`.
-
-## Becoming a seed
-
-`DEFAULT_MARKET_HOSTS` (in `packages/core/src/env.ts`) is the baked-in
-Layer-0 list — currently nektar.run's pair on testnet. Any stable public
-hub can be added: open a PR with your `https://<you>/hosts/{a,b}` once your
-uptime is proven. Until then your hub is still discovered — announces
-union every operator's hosts, so a fresh instance finds you one hop off
-the seeds even though you're not baked in.
-
-Hosts are untrusted plumbing: they can censor or withhold (detected by
-quorum reads) but never forge — every artifact they serve is signature +
-SPV-verified client-side.
-
-## Mainnet
-
-`NEKTAR_NETWORK=main` is the one knob — it retargets the agent, the hosts'
-served lanes (`NEKTAR_NETS`) and every `tm_nektar_main_*` topic together.
-Two things must be true first:
-
-- `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND` — the runtime's real-sats ack gate.
-- `SHIM_BROADCASTER` / `SHIM_INDEX` / `SHIM_CHAINTRACKS` — your own chain
-  endpoints (self-hosted Teranode or an ARC-compatible service); the baked
-  defaults are testnet and serve the wrong headers on main.
-- Set all three SpendGuard caps (`NEKTAR_MAX_*`) — see `docs/OPERATIONS.md`
-  "Going live" for sizing. There are no baked-in `main` seed hosts yet:
-  until a second independent hub exists, main instances join via an
-  explicit `NEKTAR_MARKET_HOSTS` — a main hub _is_ the first seed.
+Running a Mainnet Hub (`NEKTAR_NETWORK=main`) requires:
+1. `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND`
+2. `>= 2` independent non-circular PoW header witnesses in `NEKTAR_HEADERS_SOURCE` (verify with `nektar check-mainnet`)
+3. Explicit `NEKTAR_SETTLE_SPEC` (e.g. `arcade:https://arcade.gorillapool.io`) and SpendGuard caps (`NEKTAR_MAX_FEE_PER_TX`, `NEKTAR_MAX_SPEND_PER_DAY`)
+4. Restate v1.8.1 sidecar running (`compose.yaml` wires this automatically).

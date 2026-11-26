@@ -116,6 +116,11 @@ func (m *Monitor) SyncAll(ctx context.Context) (SyncReport, error) {
 		rep.SentWaiting = n
 	}
 
+	// Clear go-wallet-toolbox's cached last_block watermark on explicit SyncAll so a prior
+	// transient indexer error cannot poison manual `wallet sync` until the next block mines.
+	if m.engine != nil && m.engine.sqlDB != nil {
+		_, _ = m.engine.sqlDB.ExecContext(ctx, `DELETE FROM bsv_key_values WHERE key = 'synchronize_tx_statuses_last_block'`)
+	}
 	if n, err := m.CheckForProofs(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	} else {

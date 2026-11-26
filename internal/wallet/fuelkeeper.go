@@ -90,6 +90,14 @@ func (f *FuelKeeper) RunOnce(ctx context.Context) (int, error) {
 	if lowWater < 1 {
 		lowWater = 1
 	}
+	// On live wallets with zero confirmed balance, never cannibalize unconfirmed change chains
+	// past 1/3 of MaxUnprovenDepth so real user/hub transactions keep ample depth headroom.
+	if !f.engine.cfg.InMemoryStore && bal.ConfirmedSats == 0 && f.engine.cfg.MaxUnprovenDepth > 0 {
+		fuelDepthCap := max(3, f.engine.cfg.MaxUnprovenDepth/3)
+		if bal.MaxUnprovenDepth >= fuelDepthCap && bal.FuelCount >= 2 {
+			return 0, nil
+		}
+	}
 	// Gate refill on proven (mined) fuel slots when confirmed balance is available, while also
 	// enforcing total fuel low-water so live lanes never hit 0 proven slots.
 	needProvenRefill := bal.ProvenFuelCount < lowWater && bal.ConfirmedSats >= f.engine.fuelDenom*2 && bal.FuelCount < prof.FuelTarget
@@ -201,13 +209,24 @@ func (f *FuelKeeper) WarmFuel(ctx context.Context, targetCount int, _ uint64) (i
 		if bErr != nil {
 			return minted, bErr
 		}
+		if minted > 0 && !f.engine.cfg.InMemoryStore && balNow.ConfirmedSats == 0 && f.engine.cfg.MaxUnprovenDepth > 0 {
+			// Avoid chaining multiple unconfirmed fan-out rounds off a single unconfirmed change chain.
+			break
+		}
 		avail := balNow.ReserveSats + balNow.DefaultSats
 		batchFee := f.engine.estimateFeeSats(ctx, 2, batch+1) + 200
-		for batch > 1 && uint64(batch)*fuelSats+batchFee > avail {
-			batch /= 2
-			batchFee = f.engine.estimateFeeSats(ctx, 2, batch+1) + 200
+		if avail > batchFee && uint64(batch)*fuelSats+batchFee > avail {
+			maxFit := int((avail - batchFee) / fuelSats)
+			if maxFit < batch {
+				batch = maxFit
+			}
+			batchFee = f.engine.estimateFeeSats(ctx, 2, max(1, batch)+1) + 200
+			for batch > 1 && uint64(batch)*fuelSats+batchFee > avail {
+				batch--
+				batchFee = f.engine.estimateFeeSats(ctx, 2, batch+1) + 200
+			}
 		}
-		if batch == 0 || uint64(batch)*fuelSats+batchFee > avail {
+		if batch <= 0 || uint64(batch)*fuelSats+batchFee > avail {
 			if minted == 0 {
 				return 0, fmt.Errorf("%w: available %d sats < minimum fuel slot (%d + %d fee)", ErrInsufficient, avail, fuelSats, batchFee)
 			}

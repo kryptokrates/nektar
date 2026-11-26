@@ -107,6 +107,7 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("store: open: %w", err)
 	}
 	db.SetMaxOpenConns(1)
+	_, _ = db.Exec(`PRAGMA busy_timeout = 5000`)
 	d := &DB{sql: db, path: path}
 	if err := d.migrate(); err != nil {
 		_ = db.Close()

@@ -89,20 +89,23 @@ func mineStubHeader(height uint32, prev, merkleRoot chainhash.Hash, ts uint32) *
 }
 
 func TestWitnessedTrackerHeaderIndependenceAndCircularRejection(t *testing.T) {
-	// 1. Circular single-source WoC on mainnet/testnet MUST be rejected (#1, #2).
+	// 1. Circular single-source WoC on mainnet MUST be rejected (#1, #2).
 	if err := ValidateHeaderIndependence("main", "woc:main", "woc:main", "arcade:https://arcade.gorillapool.io"); err == nil {
 		t.Fatal("expected single circular woc:main header source to be rejected")
-	}
-	if err := ValidateHeaderIndependence("testnet", "woc:test", "woc:test", ""); err == nil {
-		t.Fatal("expected single circular woc:test header source to be rejected")
 	}
 	// 2. Zero-PoW Native mode on mainnet/testnet MUST be rejected (#1).
 	if err := ValidateHeaderIndependence("main", "native:http://127.0.0.1:8080,woc:main", "woc:main", "arcade:https://arcade.gorillapool.io"); err == nil {
 		t.Fatal("expected Native header source on mainnet to be rejected")
 	}
-	// 3. Duplicate origins MUST be rejected (#1, #2).
+	if err := ValidateHeaderIndependence("testnet", "native:http://127.0.0.1:8080", "woc:test", ""); err == nil {
+		t.Fatal("expected Native header source on testnet to be rejected")
+	}
+	// 3. Duplicate origins MUST be rejected on both mainnet and testnet (#1, #2).
 	if err := ValidateHeaderIndependence("main", "woc:main,woc:main", "woc:main", "arcade:https://arcade.gorillapool.io"); err == nil {
 		t.Fatal("expected duplicate header witness origin to be rejected")
+	}
+	if err := ValidateHeaderIndependence("testnet", "woc:test,woc:test", "woc:test", ""); err == nil {
+		t.Fatal("expected duplicate testnet header witness origin to be rejected")
 	}
 	// 4. Default >=2 distinct-origin PoW witnesses pass independence check (#1, #2).
 	if err := ValidateHeaderIndependence("main", DefaultHeaderSources("main"), "woc:main", "arcade:https://arcade.gorillapool.io"); err != nil {

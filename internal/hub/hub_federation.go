@@ -181,6 +181,12 @@ func (n *Node) pullPeerOnce(ctx context.Context, peer string, cursor int64, manu
 		return cursor
 	}
 	defer sseResp.Body.Close()
+	if lsStr := strings.TrimSpace(sseResp.Header.Get("X-Nektar-Latest-Seq")); lsStr != "" {
+		if latest, pErr := strconv.ParseInt(lsStr, 10, 64); pErr == nil && latest < cursor {
+			cursor = 0
+			_ = n.store.SetFedCursor(peer, 0)
+		}
+	}
 	sc := bufio.NewScanner(sseResp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	var pendingID int64
@@ -199,6 +205,12 @@ func (n *Node) pullPeerOnce(ctx context.Context, peer string, cursor int64, manu
 		}
 		if strings.HasPrefix(line, "data: ") {
 			raw := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+			if pendingEvent == "cursor_reset" {
+				pendingEvent = ""
+				cursor = 0
+				_ = n.store.SetFedCursor(peer, 0)
+				continue
+			}
 			if pendingEvent == "payment_required" {
 				pendingEvent = ""
 				var pr struct {
@@ -283,6 +295,12 @@ func (n *Node) syncRange(ctx context.Context, peer string, cursor int64, domains
 		}
 		if resp == nil {
 			return cursor
+		}
+		if lsStr := strings.TrimSpace(resp.Header.Get("X-Nektar-Latest-Seq")); lsStr != "" {
+			if latest, pErr := strconv.ParseInt(lsStr, 10, 64); pErr == nil && latest < cursor {
+				cursor = 0
+				_ = n.store.SetFedCursor(peer, 0)
+			}
 		}
 		var items []StoredEvent
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&items)

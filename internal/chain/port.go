@@ -183,6 +183,10 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 	}
 	clientTxDir := filepath.Join(dir, "client-txs")
 
+	httpCli := &http.Client{Timeout: 20 * time.Second}
+	if strings.TrimSpace(cfg.WoCKey) == "" && netName != "memory" && netName != "regtest" {
+		httpCli.Transport = newWoCPacingTransport(http.DefaultTransport, 400*time.Millisecond)
+	}
 	p := &Port{
 		tcMu:             &sync.Mutex{},
 		network:          netName,
@@ -196,7 +200,7 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		zeroConfAgg:      cfg.ZeroConfMaxAggregateSats,
 		maxUnconfAnc:     maxUnconfAnc,
 		guard:            guardInst,
-		httpClient:       &http.Client{Timeout: 20 * time.Second},
+		httpClient:       httpCli,
 		zeroConfWatch:    NewZeroConfWatch(),
 		pendingNoSend:    make(map[string]string),
 		clientBuilt:      make(map[string]*transaction.Transaction),
@@ -258,10 +262,12 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 
 		if netName == "testnet" {
 			if w, wErr := nodeapi.NewWoC("test", cfg.WoCKey); wErr == nil {
+				w.Client = p.httpClient
 				p.woc = w
 			}
 		} else if netName == "main" {
 			if w, wErr := nodeapi.NewWoC("main", cfg.WoCKey); wErr == nil {
+				w.Client = p.httpClient
 				p.woc = w
 			}
 		}

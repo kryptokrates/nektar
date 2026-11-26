@@ -605,6 +605,7 @@ func TestHubFeeValve2MeteredEgressSSEAndSyncAndSpineGuard(t *testing.T) {
 	defer hubZTS.Close()
 	defer func() {
 		cancel()
+		hubZ.CloseSSE()
 		hubZTS.CloseClientConnections()
 	}()
 

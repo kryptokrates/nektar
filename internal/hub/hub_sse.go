@@ -95,6 +95,12 @@ func (n *Node) handleSync(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	latestSeq := n.store.LatestSeq()
+	w.Header().Set("X-Nektar-Latest-Seq", strconv.FormatInt(latestSeq, 10))
+	if cursor > latestSeq {
+		// Hub DB was reset/migrated so client cursor is ahead of the entire log; resync cleanly from 0.
+		cursor = 0
+	}
 	items, err := n.store.EventsSince(cursor, doms, 200)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -181,10 +187,20 @@ func (n *Node) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	defer unsub()
 
+	latestSeq := n.store.LatestSeq()
+	cursorReset := cursor > latestSeq
+	if cursorReset {
+		cursor = 0
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Nektar-Latest-Seq", strconv.FormatInt(latestSeq, 10))
 	w.WriteHeader(http.StatusOK)
+	if cursorReset {
+		_, _ = fmt.Fprintf(w, "event: cursor_reset\ndata: {\"latestSeq\":%d}\n\n", latestSeq)
+	}
 	flusher.Flush()
 
 	emitPaymentRequired := func(rem int64) {

@@ -72,11 +72,14 @@ func (e *Engine) createActionGuarded(ctx context.Context, args sdkwallet.CreateA
 		}
 	}
 
-	// Enforce MaxUnprovenDepth as a real spend cap on live networks when only deep unproven UTXOs exist.
+	// Enforce MaxUnprovenDepth as a real spend cap on live networks when ONLY deep unproven UTXOs exist
+	// (check minDepth so one stale deep dust UTXO never bricks a wallet holding fresh shallow UTXOs).
 	if !e.cfg.InMemoryStore && !isSignLater && !isPureSendWith && e.cfg.MaxUnprovenDepth > 0 {
 		if bal, bErr := e.Balance(ctx); bErr == nil && bal.ConfirmedSats == 0 && bal.MaxUnprovenDepth >= e.cfg.MaxUnprovenDepth {
-			return nil, fmt.Errorf("%w: active unproven chain depth %d reached policy cap %d (wait for a block confirmation)",
-				ErrDepthExceeded, bal.MaxUnprovenDepth, e.cfg.MaxUnprovenDepth)
+			if _, minDepth, dErr := e.computeUnprovenDepthBounds(ctx); dErr == nil && minDepth >= e.cfg.MaxUnprovenDepth {
+				return nil, fmt.Errorf("%w: active unproven chain depth %d reached policy cap %d (wait for a block confirmation)",
+					ErrDepthExceeded, minDepth, e.cfg.MaxUnprovenDepth)
+			}
 		}
 	}
 
@@ -99,13 +102,18 @@ func (e *Engine) createActionGuarded(ctx context.Context, args sdkwallet.CreateA
 	}
 
 	ctx, errSink := withPostErrSink(ctx)
-	res, err := e.tb.CreateAction(ctx, args, orig)
+	callTBCreate := func() (*sdkwallet.CreateActionResult, error) {
+		e.actionMu.Lock()
+		defer e.actionMu.Unlock()
+		return e.tb.CreateAction(ctx, args, orig)
+	}
+	res, err := callTBCreate()
 	if err != nil && isNotEnoughFunds(err) && !isPureSendWith && e.svc.hasBroadcaster() {
 		// 1. If static FundAddress() deposits are waiting in BasketFunding, absorb into native BRC-29 "default".
 		if absorbed, aErr := e.AbsorbFundingBasket(ctx); aErr != nil {
 			e.logf("wallet: CreateAction funding-basket absorb failed: %v", aErr)
 		} else if absorbed > 0 {
-			res, err = e.tb.CreateAction(ctx, args, orig)
+			res, err = callTBCreate()
 		}
 		// 2. If funds are split across StrategyThroughput baskets (default + reserve + fuel) such that no
 		// single basket covers this action alone, reclaim just enough reserve/fuel into "default" and retry!
@@ -119,7 +127,7 @@ func (e *Engine) createActionGuarded(ctx context.Context, args sdkwallet.CreateA
 			if reclaimed, rErr := e.reclaimPoolToDefault(ctx, needed+e.estimateFeeSats(ctx, 4, len(args.Outputs)+1)); rErr != nil {
 				e.logf("wallet: CreateAction pool reclaim failed: %v", rErr)
 			} else if reclaimed > 0 {
-				res, err = e.tb.CreateAction(ctx, args, orig)
+				res, err = callTBCreate()
 			}
 		}
 	}
@@ -229,28 +237,43 @@ func countUnminedAncestors(tx *transaction.Transaction, capLimit int) int {
 	if tx == nil || tx.MerklePath != nil {
 		return 0
 	}
-	seen := make(map[string]bool)
-	var walk func(cur *transaction.Transaction)
-	walk = func(cur *transaction.Transaction) {
-		if cur == nil || cur.MerklePath != nil || len(seen) >= capLimit {
-			return
+	maxNodes := capLimit * 8
+	if maxNodes < 128 {
+		maxNodes = 128
+	}
+	memo := make(map[string]int)
+	visiting := make(map[string]bool)
+	var depthOf func(cur *transaction.Transaction) int
+	depthOf = func(cur *transaction.Transaction) int {
+		if cur == nil || cur.MerklePath != nil {
+			return 0
 		}
 		id := cur.TxID().String()
-		if seen[id] {
-			return
+		if d, ok := memo[id]; ok {
+			return d
 		}
-		seen[id] = true
+		if visiting[id] || len(memo) >= maxNodes {
+			return capLimit
+		}
+		visiting[id] = true
+		best := 1
 		for _, in := range cur.Inputs {
 			if in != nil && in.SourceTransaction != nil && in.SourceTransaction.MerklePath == nil {
-				walk(in.SourceTransaction)
-				if len(seen) >= capLimit {
-					return
+				pd := depthOf(in.SourceTransaction)
+				if pd+1 > best {
+					best = pd + 1
+				}
+				if best >= capLimit {
+					best = capLimit
+					break
 				}
 			}
 		}
+		delete(visiting, id)
+		memo[id] = best
+		return best
 	}
-	walk(tx)
-	return len(seen)
+	return depthOf(tx)
 }
 
 func (e *Engine) ListOutputs(ctx context.Context, args sdkwallet.ListOutputsArgs, originator string) (*sdkwallet.ListOutputsResult, error) {

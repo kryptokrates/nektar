@@ -3,7 +3,7 @@ version: '3.7'
 services:
   app_proxy:
     environment:
-      APP_HOST: nektar-hub_agent_1
+      APP_HOST: agent
       APP_PORT: 18420
       PROXY_AUTH_ADD: 'false'
 

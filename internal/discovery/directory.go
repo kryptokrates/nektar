@@ -83,7 +83,7 @@ func New(mem *memory.Service, envHosts []string, hc *http.Client) *Service {
 		netName = mem.Chain().Network()
 	}
 	if hc == nil {
-		hc = core.SafeHTTPClientForNetwork(netName, 12*time.Second)
+		hc = core.SafeHTTPClientForNetwork(netName, 30*time.Second)
 	}
 	var ak *ec.PrivateKey
 	if mem != nil {

@@ -134,6 +134,7 @@ const (
 	maxPendingSalesTotal    = 128
 	maxPendingSalesPerBuyer = 16
 	maxSeenBboxNonces       = 8192
+	maxConcurrentQuotes     = 16
 )
 
 // Broker drives real autonomous agent-to-agent and agent-to-Hub knowledge trading over live HTTP/SSE + NAT bbox.
@@ -144,6 +145,7 @@ type Broker struct {
 	cfg        BrokerConfig
 	httpClient *http.Client
 	sseClient  *http.Client
+	quoteSem   chan struct{}
 
 	mu                   sync.RWMutex
 	restate              *RestateClient
@@ -167,9 +169,10 @@ type Broker struct {
 	stopCancel context.CancelFunc
 	wg         sync.WaitGroup
 
-	sseWakes  atomic.Int64
-	pollWakes atomic.Int64
-	bboxWakes atomic.Int64
+	sseConnected atomic.Int64
+	sseWakes     atomic.Int64
+	pollWakes    atomic.Int64
+	bboxWakes    atomic.Int64
 }
 
 // NewBroker constructs a live Broker attached to mem, engine, and disc, syncing persisted operator policies.
@@ -178,7 +181,14 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 		cfg.BboxOffice = "default"
 	}
 	if cfg.CollectTimeout <= 0 {
-		cfg.CollectTimeout = 4 * time.Second
+		if mem != nil && mem.Chain() != nil && (mem.Chain().Network() == "main" || mem.Chain().Network() == "testnet") {
+			// Live BSV cross-hub Spine-and-Leaf round-trips involve 2-4 real Arcade broadcasts
+			// (Want -> Leaf -> Spine -> Seller -> Offer -> Leaf -> Spine -> Buyer); first offer
+			// still short-circuits via GraceTimeout (200ms) so fast local quotes add zero delay.
+			cfg.CollectTimeout = 45 * time.Second
+		} else {
+			cfg.CollectTimeout = 4 * time.Second
+		}
 	}
 	if cfg.GraceTimeout <= 0 {
 		if cfg.Matcher != nil && cfg.Matcher.DefaultMode() != AIModeOff {
@@ -204,6 +214,7 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 		cfg:                  cfg,
 		httpClient:           hc,
 		sseClient:            sseHC,
+		quoteSem:             make(chan struct{}, maxConcurrentQuotes),
 		restate:              cfg.RestateClient,
 		matcher:              cfg.Matcher,
 		pendingSales:         make(map[string]*pendingSale),
@@ -227,6 +238,26 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 	}
 	b.restorePersistedState()
 	return b
+}
+
+// WaitConnected blocks until at least minHosts SSE hub streams have completed HTTP 200 handshake
+// (or timeout/ctx expires), eliminating brittle sleep races in tests and rapid startups.
+func (b *Broker) WaitConnected(ctx context.Context, minHosts int64, timeout time.Duration) bool {
+	if minHosts <= 0 {
+		return true
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if b.sseConnected.Load() >= minHosts {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(15 * time.Millisecond):
+		}
+	}
+	return b.sseConnected.Load() >= minHosts
 }
 
 func (b *Broker) restorePersistedState() {

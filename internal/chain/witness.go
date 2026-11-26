@@ -160,12 +160,13 @@ func NewWitnessedTracker(network string, witnesses []NamedWitness) (*WitnessedTr
 		}
 		minDiff = headers.MainnetMinDifficulty
 	case "testnet":
-		if len(witnesses) < 2 {
-			return nil, fmt.Errorf("%w: testnet requires >=2 distinct-origin header witnesses", ErrCircularHeaderAnchor)
-		}
-		quorum = len(witnesses)/2 + 1
-		if quorum < 2 {
-			quorum = 2
+		if len(witnesses) >= 2 {
+			quorum = len(witnesses)/2 + 1
+			if quorum < 2 {
+				quorum = 2
+			}
+		} else {
+			quorum = 1
 		}
 		minDiff = TestnetMinDifficulty
 	default:

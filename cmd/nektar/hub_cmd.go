@@ -276,6 +276,9 @@ func cmdHubRun(args []string) error {
 		}
 		node.StartFederationWithTier(ctx, peers, true)
 	}
+	if len(upstreamSpines) > 0 {
+		node.StartFederationWithTier(ctx, upstreamSpines, true)
+	}
 
 	httpSrv := &http.Server{Addr: *addr, Handler: node.Handler(), ReadHeaderTimeout: 15 * time.Second}
 	shutdownDone := make(chan struct{})

@@ -320,7 +320,7 @@ func (s *Service) FetchRemoteChirp(ctx context.Context, peerBaseURL, chirpURL st
 		return nil, errors.New("discovery: invalid peerBaseURL")
 	}
 	if _, err := core.ValidateOutboundURL(base, core.SafeHTTPOpts{
-		AllowPrivate: s.network == "memory" || s.network == "regtest" || s.network == "",
+		AllowPrivate: core.AllowPrivateOutboundForNetwork(s.network),
 		RequireHTTPS: s.network == "main",
 	}); err != nil {
 		return nil, fmt.Errorf("discovery: blocked remote chirp host: %w", err)

@@ -70,8 +70,13 @@ NEKTAR_DOMAIN=${DOMAIN:-:80}
 NEKTAR_TRUST_PROXY=${TRUST_PROXY}
 NEKTAR_HTTP_TOKEN=${HTTP_TOK}
 NEKTAR_OPERATOR_TOKEN=${OP_TOK}
-NEKTAR_HEADERS_SOURCE=$([ "$NET" = "main" ] && echo "woc:main" || echo "woc:test")
-NEKTAR_SETTLE_SPEC=$([ "$NET" = "main" ] && echo "arcade:https://arcade.gorillapool.io" || echo "")
+NEKTAR_HUB_ROLE=${NEKTAR_HUB_ROLE:-leaf}
+NEKTAR_HUB_FEE_PRESET=${NEKTAR_HUB_FEE_PRESET:-free}
+NEKTAR_PEER_HUBS=${NEKTAR_PEER_HUBS:-https://nektar.run/hub}
+NEKTAR_UPSTREAM_SPINES=${NEKTAR_UPSTREAM_SPINES:-https://nektar.run/hub}
+NEKTAR_SPINE_PEER_PUBS=${NEKTAR_SPINE_PEER_PUBS:-}
+NEKTAR_HEADERS_SOURCE=${NEKTAR_HEADERS_SOURCE:-$([ "$NET" = "main" ] && echo "woc:main" || echo "woc:test")}
+NEKTAR_SETTLE_SPEC=${NEKTAR_SETTLE_SPEC:-$([ "$NET" = "main" ] && echo "arcade:https://arcade.gorillapool.io" || echo "arcade:https://testnet.arcade.gorillapool.io")}
 NEKTAR_MAINNET_CONFIRM=${NEKTAR_MAINNET_CONFIRM:-}
 CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
 EOF

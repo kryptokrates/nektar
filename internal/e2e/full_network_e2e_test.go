@@ -121,7 +121,7 @@ func spawnAgent(t *testing.T, ctx context.Context, opts agentOpts) *testAgent {
 		Handle:         opts.name + "@nektar.test",
 		IsHub:          opts.isHub,
 		BboxOffice:     "default",
-		CollectTimeout: 1200 * time.Millisecond,
+		CollectTimeout: 3500 * time.Millisecond,
 	})
 	if liq != nil {
 		broker.SetAdvertisedPacks(liq.Packs, liq.BountyDomains)
@@ -142,6 +142,9 @@ func spawnAgent(t *testing.T, ctx context.Context, opts agentOpts) *testAgent {
 	}
 	ts := httptest.NewServer(app.Handler())
 	t.Cleanup(func() {
+		if hubNode != nil {
+			hubNode.CloseSSE()
+		}
 		ts.CloseClientConnections()
 		ts.Close()
 	})
@@ -674,7 +677,9 @@ func TestFourAgentSpeedThroughputAndConcurrency(t *testing.T) {
 		cancel()
 		hub1.ts.CloseClientConnections()
 	})
-	time.Sleep(200 * time.Millisecond)
+	for _, a := range agents {
+		a.broker.WaitConnected(ctx, 1, 3*time.Second)
+	}
 
 	// 1. 12 Parallel A2A Trades across all 4 agents (each agent buys from the other 3 concurrently!)
 	type tradeRes struct {

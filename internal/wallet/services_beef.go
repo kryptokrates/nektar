@@ -237,7 +237,11 @@ func (s *bcommonServices) fetchHydratedTx(
 	}
 
 	if tx.MerklePath == nil && s.cfg.Tracker != nil {
-		if mp, _, found, lErr := s.lookupProof(ctx, txID); lErr == nil && found && mp != nil {
+		mp, _, found, lErr := s.lookupProof(ctx, txID)
+		if lErr != nil {
+			return nil, fmt.Errorf("wallet services: lookup proof %s: %w", txID, lErr)
+		}
+		if found && mp != nil {
 			tx.MerklePath = mp
 		}
 	}
@@ -282,18 +286,31 @@ func (s *bcommonServices) GetStatusForTxIDs(ctx context.Context, txIDs []string)
 	}
 
 	results := make([]wdk.TxStatusDetail, 0, len(txIDs))
+	var firstErr error
 	for _, id := range txIDs {
+		if ctx.Err() != nil {
+			if firstErr == nil {
+				firstErr = ctx.Err()
+			}
+			break
+		}
 		mp, h, ok, pErr := s.lookupProof(ctx, id)
 		if pErr != nil {
-			return nil, pErr
+			if firstErr == nil {
+				firstErr = pErr
+			}
+			continue
 		}
 		if ok && mp != nil {
 			if h == 0 {
 				h = mp.BlockHeight
 			}
 			if tip < h {
-				// Witnessed tip lags BUMP height; fail closed rather than fabricating depth = 1.
-				return nil, fmt.Errorf("wallet services: witnessed tip %d trails proof height %d for %s", tip, h, id)
+				// Witnessed tip lags BUMP height; fail closed for this tx rather than fabricating depth = 1.
+				if firstErr == nil {
+					firstErr = fmt.Errorf("wallet services: witnessed tip %d trails proof height %d for %s", tip, h, id)
+				}
+				continue
 			}
 			depth := int(tip-h) + 1
 			results = append(results, wdk.TxStatusDetail{
@@ -314,13 +331,19 @@ func (s *bcommonServices) GetStatusForTxIDs(ctx context.Context, txIDs []string)
 				})
 				continue
 			}
-			return nil, fmt.Errorf("%w: cannot check mempool presence for %s without chain client", ErrNoChain, id)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%w: cannot check mempool presence for %s without chain client", ErrNoChain, id)
+			}
+			continue
 		}
 		raw, rErr := s.cfg.Chain.TxRaw(ctx, id)
 		if rErr == nil && len(raw) > 0 {
 			parsed, parseErr := transaction.NewTransactionFromBytes(raw)
 			if parseErr != nil || parsed.TxID().String() != id {
-				return nil, fmt.Errorf("wallet services: raw tx hash mismatch for %s", id)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("wallet services: raw tx hash mismatch for %s", id)
+				}
+				continue
 			}
 			zero := 0
 			results = append(results, wdk.TxStatusDetail{
@@ -333,13 +356,19 @@ func (s *bcommonServices) GetStatusForTxIDs(ctx context.Context, txIDs []string)
 		if rErr != nil {
 			lower := strings.ToLower(rErr.Error())
 			if !strings.Contains(lower, "404") && !strings.Contains(lower, "not found") && !strings.Contains(lower, "no such") {
-				return nil, fmt.Errorf("wallet services: status lookup %s: %w", id, rErr)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("wallet services: status lookup %s: %w", id, rErr)
+				}
+				continue
 			}
 		}
 		results = append(results, wdk.TxStatusDetail{
 			TxID:   id,
 			Status: wdk.ResultStatusForTxIDNotFound.String(),
 		})
+	}
+	if len(results) == 0 && firstErr != nil {
+		return nil, firstErr
 	}
 	return &wdk.GetStatusForTxIDsResult{
 		Name:    "bcommon",

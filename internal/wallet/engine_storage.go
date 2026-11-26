@@ -332,7 +332,7 @@ func (e *Engine) LoadParsedTx(ctx context.Context, txid string) (*transaction.Tr
 		return tx, nil
 	}
 	loader := e.svc.dbLoader(ctx)
-	if beef, err := e.provider.GetBeefForTransaction(ctx, txid, wdk.StorageGetBeefOptions{}); err == nil && beef != nil {
+	if beef, err := e.provider.GetBeefForTransaction(ctx, txid, wdk.StorageGetBeefOptions{IgnoreServices: true}); err == nil && beef != nil {
 		if tx := beef.FindTransaction(txid); tx != nil {
 			hydrateInputs(tx, beef, e.txCache, loader, 0, e.cfg.MaxUnprovenDepth)
 			e.txCache.Put(txid, tx)

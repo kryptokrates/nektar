@@ -164,6 +164,7 @@ type Node struct {
 	spinePeers        map[string]bool
 	upstreamSpines    []string
 	upstreamSubmitter func(ctx context.Context, spineURL string, beef []byte, topics []string) error
+	upstreamSem       chan struct{}
 	egressAuthSigner  func(action, aud string, cursor int64, domainsCSV string) (pub, ts, nonce, sig string, err error)
 	onEgressTopup     func(ctx context.Context, spineURL string, minTopupSats uint64) error
 	subscribedDomains func() []string
@@ -254,6 +255,7 @@ func NewNode(cfg Config) (*Node, error) {
 		spinePeers:        spinePeers,
 		upstreamSpines:    upSpines,
 		upstreamSubmitter: cfg.UpstreamSubmitter,
+		upstreamSem:       make(chan struct{}, 3),
 		egressAuthSigner:  cfg.EgressAuthSigner,
 		onEgressTopup:     cfg.OnEgressTopup,
 		subscribedDomains: cfg.SubscribedDomains,

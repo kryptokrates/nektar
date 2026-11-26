@@ -92,6 +92,7 @@ type Engine struct {
 	monitor *Monitor
 
 	absorbMu sync.Mutex
+	actionMu sync.Mutex
 	bgCancel context.CancelFunc
 	bgWG     sync.WaitGroup
 	closeMu  sync.Mutex
@@ -480,7 +481,9 @@ func (e *Engine) FuelDenom() uint64       { return e.fuelDenom }
 // FeeRateSatPerKB returns the live Arcade /v1/policy sat/kB rate (or static fallback).
 func (e *Engine) FeeRateSatPerKB(ctx context.Context) uint64 {
 	if e.cfg.FeeSource != nil {
-		if f, err := e.cfg.FeeSource.Fees(ctx); err == nil && !f.Rate.IsZero() && f.Rate.Bytes > 0 {
+		fCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		if f, err := e.cfg.FeeSource.Fees(fCtx); err == nil && !f.Rate.IsZero() && f.Rate.Bytes > 0 {
 			return (f.Rate.Sats*1000 + f.Rate.Bytes - 1) / f.Rate.Bytes
 		}
 	}

@@ -336,3 +336,31 @@ func TestHubSQLiteRestartFederationBboxAndBounties(t *testing.T) {
 	}
 	r2.Body.Close()
 }
+
+func TestHubCloseDrainsActiveSSEImmediately(t *testing.T) {
+	node, err := NewNode(Config{Network: "memory"})
+	if err != nil {
+		t.Fatalf("NewNode: %v", err)
+	}
+	ts := httptest.NewServer(node.Handler())
+
+	sseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(sseCtx, http.MethodGet, ts.URL+"/events", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /events failed: resp=%+v err=%v", resp, err)
+	}
+	defer resp.Body.Close()
+
+	start := time.Now()
+	node.CloseSSE()
+	ts.CloseClientConnections()
+	ts.Close()
+	if err := node.Close(); err != nil {
+		t.Fatalf("node.Close: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("expected active SSE drain & close in <2s, took %v", elapsed)
+	}
+}

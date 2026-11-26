@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -310,12 +311,18 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	pb, vr, pErr := b.mem.Prove(ctx, matched.Shard, best.Seq)
 	if b.mem.Chain().Network() != "memory" {
 		if pErr != nil || pb == nil || !vr.OK || !vr.Settled {
+			var reason, detail string
+			if vr != nil {
+				reason, detail = vr.Reason, vr.Detail
+			}
+			log.Printf("market: skip quote want=%s shard=%s#%d: prove err=%v ok=%v settled=%v reason=%q detail=%q", want.WantID, matched.Shard, best.Seq, pErr, vr != nil && vr.OK, vr != nil && vr.Settled, reason, detail)
 			return // never quote an unmined/unsettled fragment on live networks
 		}
 	}
 
 	saleOffer, revealKey, chirpURL, err := b.engine.PrepareDirectSale(ctx, matched.Shard, best.Seq, matched.PriceSats, want.Pub)
 	if err != nil {
+		log.Printf("market: PrepareDirectSale want=%s shard=%s#%d failed: %v", want.WantID, matched.Shard, best.Seq, err)
 		return
 	}
 	// Keep OfferAd wire payload compact under MaxPayload (16KB): strip ciphertext if > 4KB (buyer fetches via CHIRP).
@@ -348,9 +355,18 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 			offerBondBEEF = bRec.BEEFHex
 		}
 	}
-	offerDomains := matched.Domains
-	if len(offerDomains) == 0 {
-		offerDomains = want.Domains
+	// Include both matched listing domains and want domains (capped at bstack.MaxDomains) so
+	// OfferAd topics ALWAYS satisfy Hub topicMatchesDomains() and reach the buyer's want lanes!
+	domSeen := make(map[string]bool)
+	offerDomains := make([]string, 0, len(want.Domains)+len(matched.Domains))
+	for _, d := range append(append([]string(nil), want.Domains...), matched.Domains...) {
+		if d = strings.ToLower(strings.TrimSpace(d)); d != "" && !domSeen[d] {
+			domSeen[d] = true
+			offerDomains = append(offerDomains, d)
+			if len(offerDomains) >= bstack.MaxDomains {
+				break
+			}
+		}
 	}
 	offer := bstack.OfferAd{
 		OfferID:        offerID,
@@ -455,8 +471,10 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		ExpiresAt:       int64(saleOffer.ExpiresAt),
 	})
 
-	topics := lanesForDomains(offer.Net, want.Domains)
-	_, _ = b.disc.BuildAndSubmitMarketAd(ctx, b.engine.saleKey, offerPayload, b.disc.ActiveHosts(), topics)
+	topics := lanesForDomains(offer.Net, offer.Domains)
+	if subN, subErr := b.disc.BuildAndSubmitMarketAd(ctx, b.engine.saleKey, offerPayload, b.disc.ActiveHosts(), topics); subN == 0 && subErr != nil {
+		log.Printf("market: submit OfferAd %s (want=%s) failed: %v", offerID, want.WantID, subErr)
+	}
 	// Start durable Restate SellerDeal workflow asynchronously (/send — never blocks SSE consumer!).
 	if rc := b.RestateClient(); rc != nil {
 		go func(oid string, w bstack.WantAd, sh string, sq int64, price uint64, bpub string, so *contracts.KeyedSaleOffer, rk [32]byte, cu string, bundle *contracts.ProofBundle) {

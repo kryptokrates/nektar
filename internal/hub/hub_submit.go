@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -411,10 +412,34 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 			beefCopy := append([]byte(nil), rawBEEF...)
 			topicsCopy := append([]string(nil), forwardTopics...)
 			go func() {
+				if n.upstreamSem != nil {
+					select {
+					case n.upstreamSem <- struct{}{}:
+						defer func() { <-n.upstreamSem }()
+					case <-n.stopCh:
+						return
+					}
+				}
 				for _, sp := range spines {
-					upCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-					_ = subFn(upCtx, sp, beefCopy, topicsCopy)
-					cancel()
+					for attempt := 0; attempt < 2; attempt++ {
+						upCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						uErr := subFn(upCtx, sp, beefCopy, topicsCopy)
+						cancel()
+						if uErr == nil {
+							break
+						}
+						lower := strings.ToLower(uErr.Error())
+						if attempt == 0 && (strings.Contains(lower, "deadline") || strings.Contains(lower, "busy") || strings.Contains(lower, "locked") || strings.Contains(lower, "429")) {
+							select {
+							case <-n.stopCh:
+								return
+							case <-time.After(1 * time.Second):
+							}
+							continue
+						}
+						log.Printf("hub: upstream push to %s (%v) failed: %v", sp, topicsCopy, uErr)
+						break
+					}
 				}
 			}()
 		}

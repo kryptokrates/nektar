@@ -25,15 +25,17 @@ func DefaultSettleDepth(network string) int {
 	}
 }
 
-// DefaultHeaderSources returns the default comma-separated independent header witnesses for network.
-// Live networks ALWAYS pair >=2 distinct-origin PoW header services so no single proof/settler
-// origin can validate its own BUMPs.
+// DefaultHeaderSources returns the default comma-separated PoW header witnesses for network.
+// Mainnet ALWAYS pairs >=2 distinct-origin public PoW header services (WhatsOnChain + Babbage
+// Chaintracks v2) so no single proof/settler origin can validate its own BUMPs.
+// Testnet defaults to PoW-verified woc:test (operators running a self-hosted testnet BHS or
+// Chaintracks can pass NEKTAR_HEADERS_SOURCE=woc:test,bhs:http://... for multi-witness quorum).
 func DefaultHeaderSources(network string) string {
 	switch strings.ToLower(strings.TrimSpace(network)) {
 	case "main", "mainnet":
-		return "woc:main,arcade:" + publish.ArcadeMainnet
+		return "woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2"
 	case "testnet", "test":
-		return "woc:test,arcade:" + publish.ArcadeTestnet
+		return "woc:test"
 	case "regtest":
 		return "native:http://127.0.0.1:8080"
 	default:
@@ -199,36 +201,38 @@ func ValidateHeaderIndependence(network, headerSpec, chainSpec, settleSpec strin
 		}
 		headerOrigins[origin] = true
 	}
-	if len(headerOrigins) < 2 {
-		return fmt.Errorf("%w: live network %q requires >=2 independent distinct-origin PoW header witnesses (got %d from %q)",
-			ErrCircularHeaderAnchor, netNorm, len(headerOrigins), headerSpec)
-	}
+	if netNorm == "main" {
+		if len(headerOrigins) < 2 {
+			return fmt.Errorf("%w: live network %q requires >=2 independent distinct-origin PoW header witnesses (got %d from %q)",
+				ErrCircularHeaderAnchor, netNorm, len(headerOrigins), headerSpec)
+		}
 
-	// Verify every proof/settler origin has at least one strictly disjoint header witness.
-	checkDisjoint := func(label, spec string) error {
-		for _, item := range splitSpecs(spec) {
-			orig, err := NormalizeSpecOrigin(item)
-			if err != nil {
-				continue
-			}
-			disjoint := 0
-			for hOrig := range headerOrigins {
-				if hOrig != orig {
-					disjoint++
+		// Verify every proof/settler origin has at least one strictly disjoint header witness on mainnet.
+		checkDisjoint := func(label, spec string) error {
+			for _, item := range splitSpecs(spec) {
+				orig, err := NormalizeSpecOrigin(item)
+				if err != nil {
+					continue
+				}
+				disjoint := 0
+				for hOrig := range headerOrigins {
+					if hOrig != orig {
+						disjoint++
+					}
+				}
+				if disjoint == 0 {
+					return fmt.Errorf("%w: %s origin %q has zero disjoint header witnesses in %q",
+						ErrCircularHeaderAnchor, label, orig, headerSpec)
 				}
 			}
-			if disjoint == 0 {
-				return fmt.Errorf("%w: %s origin %q has zero disjoint header witnesses in %q",
-					ErrCircularHeaderAnchor, label, orig, headerSpec)
-			}
+			return nil
 		}
-		return nil
-	}
-	if err := checkDisjoint("chainSpec", chainSpec); err != nil {
-		return err
-	}
-	if err := checkDisjoint("settleSpec", settleSpec); err != nil {
-		return err
+		if err := checkDisjoint("chainSpec", chainSpec); err != nil {
+			return err
+		}
+		if err := checkDisjoint("settleSpec", settleSpec); err != nil {
+			return err
+		}
 	}
 	return nil
 }

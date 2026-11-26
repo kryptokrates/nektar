@@ -416,35 +416,50 @@ func hydrateStrictFromBeef(tx *transaction.Transaction, beef *transaction.Beef, 
 	return nil
 }
 
+// countUnconfirmedAncestors computes the longest unconfirmed ancestor chain depth (1 + max parent depth)
+// with a bounded total-node DoS cap so multi-input merge DAGs of shallow depth are never misclassified
+// as exceeding the linear ancestor depth cap while huge DAGs still fail closed.
 func countUnconfirmedAncestors(tx *transaction.Transaction, capLimit int) int {
 	if tx == nil || tx.MerklePath != nil {
 		return 0
 	}
-	seen := make(map[string]bool)
-	var walk func(cur *transaction.Transaction) int
-	walk = func(cur *transaction.Transaction) int {
+	maxNodes := capLimit * 8
+	if maxNodes < 128 {
+		maxNodes = 128
+	}
+	memo := make(map[string]int)
+	visiting := make(map[string]bool)
+	var depthOf func(cur *transaction.Transaction) int
+	depthOf = func(cur *transaction.Transaction) int {
 		if cur == nil || cur.MerklePath != nil {
 			return 0
 		}
 		id := cur.TxID().String()
-		if seen[id] {
-			return 0
+		if d, ok := memo[id]; ok {
+			return d
 		}
-		seen[id] = true
-		if len(seen) >= capLimit {
-			return len(seen)
+		if visiting[id] || len(memo) >= maxNodes {
+			return capLimit
 		}
+		visiting[id] = true
+		best := 1
 		for _, in := range cur.Inputs {
 			if in != nil && in.SourceTransaction != nil && in.SourceTransaction.MerklePath == nil {
-				walk(in.SourceTransaction)
-				if len(seen) >= capLimit {
-					return len(seen)
+				pd := depthOf(in.SourceTransaction)
+				if pd+1 > best {
+					best = pd + 1
+				}
+				if best >= capLimit {
+					best = capLimit
+					break
 				}
 			}
 		}
-		return len(seen)
+		delete(visiting, id)
+		memo[id] = best
+		return best
 	}
-	return walk(tx)
+	return depthOf(tx)
 }
 
 func collectInputOutpoints(tx *transaction.Transaction) []string {

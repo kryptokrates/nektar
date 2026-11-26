@@ -227,6 +227,10 @@ func (s *Service) SubmitBEEFWithPayment(ctx context.Context, hubURL string, beef
 		}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusAccepted {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("hub submit HTTP 202 (payment held awaiting confirmation): %s", strings.TrimSpace(string(msg)))
+	}
 	if resp.StatusCode >= 300 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return fmt.Errorf("hub submit HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))

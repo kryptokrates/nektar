@@ -108,6 +108,7 @@ func cmdServe(args []string) error {
 	// Optionally mount durable embedded Go Overlay Hub at /hub/ with Liquidity Engine + Bounties + Faucet!
 	var hubNode *hub.Node
 	var liqState *hub.LiquidityState
+	var upstreamSpines []string
 	if *withHub {
 		hubDBPath := filepath.Join(rt.dataDir, "hub.sqlite")
 		if rt.mem.Chain().Network() == "memory" && *dataDir == "" && os.Getenv("NEKTAR_DATA_DIR") == "" {
@@ -121,7 +122,6 @@ func cmdServe(args []string) error {
 			feeSched.Role = hub.HubRole(hr)
 		}
 		feeSched.Normalize()
-		var upstreamSpines []string
 		for _, s := range strings.Split(*upstreamSpinesFlag, ",") {
 			if s = strings.TrimSpace(s); s != "" {
 				upstreamSpines = append(upstreamSpines, s)
@@ -204,7 +204,14 @@ func cmdServe(args []string) error {
 		broker.SetAdvertisedPacks(liqState.Packs, liqState.BountyDomains)
 	}
 	if hubNode != nil {
+		if rt.disc != nil && rt.mkt != nil && rt.mkt.Policy() != nil {
+			rt.disc.SetHubFeePolicy(rt.mkt.Policy().CanPayHubFee, rt.mkt.Policy().RecordHubFeeSpend)
+		}
 		hubNode.SetUpstreamSubmitter(rt.disc.SubmitBEEF)
+		var leafDomFn func() []string
+		if doms := parseCSVEnv("NEKTAR_HUB_DOMAINS"); len(doms) > 0 {
+			leafDomFn = func() []string { return doms }
+		}
 		hubNode.SetEgressAuth(
 			func(action, aud string, cursor int64, domainsCSV string) (string, string, string, string, error) {
 				return discovery.SignEgressAuthHeaders(rt.disc.AnnounceKey(), action, aud, cursor, domainsCSV)
@@ -213,10 +220,13 @@ func cmdServe(args []string) error {
 				_, tErr := rt.disc.TopUpHubEgressCredits(tCtx, spineURL, minTopupSats, rt.disc.AnnouncePubHex())
 				return tErr
 			},
-			broker.ActiveDomains,
+			leafDomFn,
 		)
 		if peers := parseCSVEnv("NEKTAR_PEER_HUBS"); len(peers) > 0 {
 			hubNode.StartFederationWithTier(ctx, peers, true)
+		}
+		if len(upstreamSpines) > 0 {
+			hubNode.StartFederationWithTier(ctx, upstreamSpines, true)
 		}
 	}
 

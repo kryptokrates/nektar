@@ -226,7 +226,9 @@ func TestSpineAndLeafHubFeesMultiHubEndToEnd(t *testing.T) {
 		t.Fatalf("buyer approve policy: %v", err)
 	}
 	buyerBroker.Start(ctx)
-	time.Sleep(250 * time.Millisecond) // let Leaf <-> Spine & Agent <-> Leaf SSE attach
+	buyerBroker.WaitConnected(ctx, 1, 3*time.Second)
+	sellerBroker.WaitConnected(ctx, 1, 3*time.Second)
+	time.Sleep(150 * time.Millisecond) // let Leaf <-> Spine SSE attach
 
 	// Execute cross-hub trade:
 	// Buyer -> Leaf A (3 sats) -> Spine S (5 sats) -> Leaf B (paid Spine egress) -> Seller
@@ -245,7 +247,10 @@ func TestSpineAndLeafHubFeesMultiHubEndToEnd(t *testing.T) {
 	if deal.Status != "settled" || !strings.Contains(deal.DeliveredText, "4096") {
 		t.Fatalf("expected cross-hub Spine-and-Leaf deal to settle with 4096, got status=%s text=%q err=%s", deal.Status, deal.DeliveredText, deal.Error)
 	}
-	recalled, _ := buyerMem.Recall(ctx, memory.RecallInput{Shard: "bought/ops"})
+	recalled, rErr := buyerMem.Recall(ctx, memory.RecallInput{Shard: "bought/ops"})
+	if rErr != nil {
+		t.Fatalf("buyerMem.Recall(bought/ops) failed: %v", rErr)
+	}
 	if len(recalled) == 0 || !strings.Contains(recalled[0].Text, "4096") {
 		t.Fatalf("expected Buyer memory to contain Seller's verified fact across Spine-and-Leaf, got %+v", recalled)
 	}

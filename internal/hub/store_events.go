@@ -139,6 +139,15 @@ func (s *Store) EvictEventsFromHeight(forkHeight uint32) ([]StoredEvent, error) 
 	return evicted, nil
 }
 
+// LatestSeq returns the highest monotonic sequence number persisted in hub_events (0 if empty).
+func (s *Store) LatestSeq() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var latest int64
+	_ = s.sql.QueryRow(`SELECT COALESCE(MAX(seq), 0) FROM hub_events`).Scan(&latest)
+	return latest
+}
+
 // EventsSince loads unexpired events with seq > cursor ordered ascending (for SSE resume & poll floor).
 func (s *Store) EventsSince(cursor int64, domainFilter []string, limit int) ([]StoredEvent, error) {
 	ev, _, _, err := s.EventsSinceScanned(cursor, domainFilter, limit)

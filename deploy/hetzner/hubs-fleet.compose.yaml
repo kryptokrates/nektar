@@ -17,8 +17,8 @@ x-hub-common: &hub-common
     NEKTAR_TRUST_PROXY: '1'
     NEKTAR_HUB_ROLE: leaf
     NEKTAR_HUB_FEE_PRESET: hybrid
-    NEKTAR_UPSTREAM_SPINES: https://nektar.run
-    NEKTAR_PEER_HUBS: https://nektar.run,https://hub1.nektar.run,https://hub2.nektar.run,https://hub3.nektar.run,https://hub4.nektar.run,https://hub5.nektar.run
+    NEKTAR_UPSTREAM_SPINES: https://nektar.run/hub
+    NEKTAR_PEER_HUBS: https://nektar.run/hub,https://hub1.nektar.run/hub,https://hub2.nektar.run/hub,https://hub3.nektar.run/hub,https://hub4.nektar.run/hub,https://hub5.nektar.run/hub
     NEKTAR_HEADERS_SOURCE: woc:test
     NEKTAR_SETTLE_SPEC: broadcaster:testnet
     NEKTAR_MAX_FEE_PER_TX: '2000'

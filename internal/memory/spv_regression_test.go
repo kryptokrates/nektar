@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
@@ -62,13 +61,20 @@ func TestAnchorShardEmbedsVerifiedBUMPAndHandleReorgClearsProof(t *testing.T) {
 		t.Fatalf("expected Prove() to return OK=true Settled=true, got vr=%+v err=%v", vr, err)
 	}
 
-	// Verify HandleReorg clears settled=0 for anchors at or above forkHeight (Finding #13)!
+	// Verify HandleReorg clears settled=0 and strips orphaned MerklePath from anchors.beef!
 	cleared, err := svc.HandleReorg(uint32(anchor.BlockHeight))
 	if err != nil || cleared != 1 {
 		t.Fatalf("expected HandleReorg to clear 1 anchor at height %d, got cleared=%d err=%v", anchor.BlockHeight, cleared, err)
 	}
 	if settled, _ := db.IsAnchorSettled(anchor.TxID); settled {
 		t.Fatal("expected anchor to be unsettled after HandleReorg")
+	}
+	reorgedAnchors, err := db.ListAnchors("spv-test")
+	if err != nil || len(reorgedAnchors) != 1 {
+		t.Fatalf("ListAnchors after HandleReorg: len=%d err=%v", len(reorgedAnchors), err)
+	}
+	if reorgedTx, pErr := transaction.NewTransactionFromBEEF(reorgedAnchors[0].Beef); pErr != nil || reorgedTx == nil || reorgedTx.MerklePath != nil {
+		t.Fatalf("expected HandleReorg to strip orphaned MerklePath from anchors.beef, got mp=%v err=%v", reorgedTx.MerklePath, pErr)
 	}
 
 	// Verify Stage 3 fix_ok:false invariant (#28): unmined VerifyFragmentCtx keeps OK=false Reason="Unsettled"
@@ -107,5 +113,4 @@ func TestAnchorShardEmbedsVerifiedBUMPAndHandleReorgClearsProof(t *testing.T) {
 	if vrOutage.OK || vrOutage.Reason != "TrackerUnavailable" {
 		t.Fatalf("expected TrackerUnavailable on tracker outage, got %+v", vrOutage)
 	}
-	_ = strings.TrimSpace("")
 }

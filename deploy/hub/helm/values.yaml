@@ -20,7 +20,7 @@ agent:
   modelId: unspecified
   seedDomains: '*'
   verifyBase: ''
-  headersSource: 'woc:test'
+  headersSource: ''
   settleSpec: ''
   maxFeeSatsPerTx: ''
   maxSpendSatsPerDay: ''

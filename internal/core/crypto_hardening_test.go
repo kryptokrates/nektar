@@ -97,10 +97,10 @@ func TestHDPV2CollisionResistance(t *testing.T) {
 	if !VerifyHDP([]byte("ab"), SerializeProvenance(p1), h1) {
 		t.Fatal("VerifyHDP failed on valid v2 HDP")
 	}
-	// Legacy v1 still verifies cleanly during rollout.
-	legacy := ComputeHDP([]byte("ab"), p1)
-	if !VerifyHDP([]byte("ab"), SerializeProvenance(p1), legacy) {
-		t.Fatal("VerifyHDP failed on valid legacy v1 HDP")
+	// Legacy unframed v1 HDP (nektar:prov:v1) MUST be rejected now that framed v2 is the sole format.
+	legacyUnframed := SHA256(Concat([]byte("nektar:prov:v1"), []byte("ab"), SerializeProvenance(p1)))
+	if VerifyHDP([]byte("ab"), SerializeProvenance(p1), legacyUnframed) {
+		t.Fatal("VerifyHDP must reject legacy unframed v1 HDP")
 	}
 	if VerifyHDP([]byte("tampered"), SerializeProvenance(p1), h1) {
 		t.Fatal("VerifyHDP accepted tampered data")

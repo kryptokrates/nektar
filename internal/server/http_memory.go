@@ -68,20 +68,31 @@ func (a *App) handlePublicCard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>Nektar Agent Card</title>
-<meta property="og:title" content="Nektar v0.1 Verifiable AI Agent">
-<meta property="og:description" content="%v checkable receipts · %v sats earned on BSV %s">
-<meta name="twitter:card" content="summary">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Nektar">
+<meta property="og:title" content="Nektar v0.1 — Verifiable AI Agent">
+<meta property="og:description" content="%v checkable receipts · %v sats earned on BSV %s — One shared, verifiable brain for all your AI agents.">
+<meta property="og:image" content="https://nektar.run/og-card.jpg?v=2">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@nektardotrun">
+<meta name="twitter:title" content="Nektar v0.1 — Verifiable AI Agent">
+<meta name="twitter:description" content="%v checkable receipts · %v sats earned on BSV %s — One shared, verifiable brain for all your AI agents.">
+<meta name="twitter:image" content="https://nektar.run/og-card.jpg?v=2">
 <style>body{font-family:system-ui,sans-serif;max-width:680px;margin:2rem auto;padding:1rem;background:#120e0c;color:#ece7e4}
 .card{background:#211b17;border:1px solid #3a2f28;border-radius:14px;padding:1.5rem;margin-bottom:1rem}
-h1{color:#f7991b;margin-top:0}code{color:#f7991b;word-break:break-all}a{color:#f7991b}
+h1{color:#f7991b;margin:0 0 .4rem}.sub{color:#a89a8e;margin-top:0}code{color:#f7991b;word-break:break-all}a{color:#f7991b}
 pre{background:#120e0c;border:1px solid #3a2f28;border-radius:8px;padding:.75rem;overflow-x:auto;font-size:.82rem}</style></head><body>
 <div class="card"><h1>Nektar v0.1 Verifiable Agent</h1>
+<p class="sub">One shared, verifiable brain for all your AI agents — encrypted, Git-versioned memory &amp; BSV knowledge market.</p>
 <p><strong>Identity:</strong> <code>%s</code></p>
 <p><strong>Network:</strong> %s · <a href="/.well-known/nektar">Discovery JSON ↗</a> · <a href="/.well-known/agent.json">A2A Card ↗</a></p>
 <p><strong>Checkable Receipts:</strong> %v · <strong>Earned:</strong> %v sats</p>
 <p><small>%s</small></p></div>
-<div class="card"><h3>Run your own verifiable AI agent in 25 seconds</h3>
-<pre>curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up</pre></div></body></html>`,
+<div class="card"><h3>Dock your AI agents in 25 seconds</h3>
+<p>Give Claude Code, Cursor, Codex, Hermes, OpenClaw, and 9 more AI clients shared, verifiable memory &amp; receipts in 1 command:</p>
+<pre>curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up</pre>
+<p><small><a href="https://nektar.run">nektar.run ↗</a> · <a href="https://github.com/kryptokrates/nektar">GitHub &amp; Windows installer ↗</a></small></p></div></body></html>`,
+		card["receiptCount"], card["earnedSats"], html.EscapeString(netName),
 		card["receiptCount"], card["earnedSats"], html.EscapeString(netName),
 		html.EscapeString(idPub),
 		html.EscapeString(netName),
@@ -95,11 +106,17 @@ func (a *App) handleRemember(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if p, disallowBorg, overridden := PrincipalForContext(r.Context(), policy.Principal{}); overridden {
+	cc := CallerContextFor(r.Context(), policy.Principal{})
+	if cc.FromHTTP {
+		p := cc.Principal
 		in.Principal = &p
 		in.CallerPub = ""
-		if disallowBorg && in.BorgGroup != "" {
+		if cc.DisallowBorg && in.BorgGroup != "" {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "operator token required for Borg group writes"})
+			return
+		}
+		if !cc.IsOperator && in.AutoAnchor {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "operator token required for autoAnchor"})
 			return
 		}
 	}
@@ -118,11 +135,6 @@ func (a *App) handleRecall(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if p, disallowBorg, overridden := PrincipalForContext(r.Context(), in.Principal); overridden {
-		in.Principal = p
-		in.CallerPub = ""
-		in.DisallowBorg = disallowBorg
-	}
 	res, err := a.toolbox.ExecRecall(r.Context(), in)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -132,38 +144,13 @@ func (a *App) handleRecall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-func (a *App) handleAnchor(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Shard string `json:"shard"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if in.Shard == "" {
-		in.Shard = "default"
-	}
-	res, err := a.mem.AnchorShard(r.Context(), in.Shard)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	a.BroadcastDashboardEvent("anchor")
-	writeJSON(w, http.StatusOK, map[string]any{"anchor": res})
-}
-
 func (a *App) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	var in memory.GroundedAnswerInput
 	if err := json.NewDecoder(io.LimitReader(r.Body, 2<<20)).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if p, disallowBorg, overridden := PrincipalForContext(r.Context(), in.Principal); overridden {
-		in.Principal = p
-		in.CallerPub = ""
-		in.DisallowBorg = disallowBorg
-	}
-	res, err := a.mem.GroundedAnswer(r.Context(), in)
+	res, err := a.toolbox.ExecGroundedAnswer(r.Context(), in)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -178,9 +165,6 @@ func (a *App) handleVerifyReceipt(w http.ResponseWriter, r *http.Request) {
 	tok := strings.TrimSpace(r.PathValue("token"))
 	if tok == "" {
 		tok = strings.TrimSpace(r.URL.Query().Get("r"))
-	}
-	if tok == "" {
-		tok = strings.TrimSpace(r.URL.Query().Get("token"))
 	}
 	ver, err := a.mem.VerifyReceipt(r.Context(), tok)
 	if err != nil {
@@ -209,9 +193,16 @@ func (a *App) handleVerifyReceipt(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>Nektar Receipt Verification — %s</title>
-<meta property="og:title" content="Nektar Receipt: %s">
-<meta property="og:description" content="%s">
-<meta name="twitter:card" content="summary">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Nektar">
+<meta property="og:title" content="Nektar Receipt (%s) — Verifiable AI Answer">
+<meta property="og:description" content="%s — Verified by Nektar: one shared, verifiable brain for all your AI agents.">
+<meta property="og:image" content="https://nektar.run/og-card.jpg?v=2">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@nektardotrun">
+<meta name="twitter:title" content="Nektar Receipt (%s) — Verifiable AI Answer">
+<meta name="twitter:description" content="%s — Verified by Nektar: one shared, verifiable brain for all your AI agents.">
+<meta name="twitter:image" content="https://nektar.run/og-card.jpg?v=2">
 <style>body{font-family:system-ui,sans-serif;max-width:740px;margin:2rem auto;padding:1rem;background:#120e0c;color:#ece7e4}
 .badge{display:inline-block;padding:.35rem .8rem;border-radius:999px;font-weight:700;text-transform:uppercase;background:%s;color:#fff}
 .card{background:#211b17;border:1px solid #3a2f28;border-radius:12px;padding:1.25rem;margin-top:1rem}
@@ -224,11 +215,13 @@ pre{background:#120e0c;border:1px solid #3a2f28;border-radius:8px;padding:.65rem
 <p><strong>Answer:</strong> %s</p><p><strong>Citations:</strong> %d checked / %d mined</p>
 <p><strong>Agent:</strong> <a href="/card">View Agent Card ↗</a> · <a href="/v1/badge/%s">SVG Badge ↗</a></p>
 <p><small>%s</small></p></div>
-<div class="card"><h3>Verify locally or dock your AI agent in 25 seconds</h3>
-<p>Give Claude Code, Codex CLI, Hermes Agent, OpenClaw, Cursor, or VS Code verifiable BSV-anchored memory &amp; receipts in 1 command:</p>
+<div class="card"><h3>Verify locally or dock your AI agents in 25 seconds</h3>
+<p>One shared, verifiable brain for Claude Code, Cursor, Codex, Hermes, OpenClaw, and 9 more AI clients — encrypted, Git-versioned memory &amp; cryptographic receipts in 1 command:</p>
 <pre>curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up</pre>
-<p><small>Embeddable badge: <code>![nektar receipt](%s)</code> · <a href="https://github.com/kryptokrates/nektar">Docs &amp; Windows installer ↗</a></small></p></div></body></html>`,
+<p><small>Embeddable badge: <code>![nektar receipt](%s)</code> · <a href="https://nektar.run">nektar.run ↗</a> · <a href="https://github.com/kryptokrates/nektar">GitHub &amp; Windows installer ↗</a></small></p></div></body></html>`,
 			html.EscapeString(ver.Verdict),
+			html.EscapeString(ver.Verdict),
+			html.EscapeString(ver.Reason),
 			html.EscapeString(ver.Verdict),
 			html.EscapeString(ver.Reason),
 			color, html.EscapeString(ver.Verdict), supWarn,
@@ -292,17 +285,22 @@ func (a *App) handleAgentCard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":        "nektar",
 		"displayName": "Nektar Verifiable Memory Agent",
-		"description": "BSV-anchored, BRC-369 encrypted, Cedar-governed, Google Mangle grounded agent memory node.",
+		"description": "One shared, verifiable brain for all your AI agents — encrypted, Git-compatible Memory Repos anchored on BSV with AWS Cedar policies, Google Mangle nektarr1.* receipts, 14 dockable AI clients, and autonomous BRC-369 knowledge trading.",
 		"version":     "0.1.0",
+		"homepage":    "https://nektar.run",
+		"repository":  "https://github.com/kryptokrates/nektar",
 		"url":         base + "/a2a",
 		"identityPub": a.mem.Chain().IdentityPubHex(),
+		"truthNote":   reasoning.TruthNote,
 		"capabilities": map[string]bool{
 			"streaming":               true,
 			"verifiableReceipts":      true,
+			"gitMemoryRepos":          true,
 			"paidKnowledgeDisclosure": true,
 		},
 		"skills": []map[string]string{
 			{"id": "memory.recall", "name": "Verified Recall", "description": "Recall SPV-verified, Cedar-authorized fragments."},
+			{"id": "memory.repo", "name": "Git Memory Repos", "description": "Clone, branch, diff, blame, and merge BSV UTXO-anchored Memory Repos over MCP or Git Smart HTTP."},
 			{"id": "memory.answer", "name": "Grounded Answer", "description": "Produce Mangle-grounded answers with nektarr1.* receipts."},
 			{"id": "memory.verify", "name": "Verify Receipt", "description": "Verify a nektarr1.* receipt offline."},
 			{"id": "market.want", "name": "Buy Verified Knowledge", "description": "Buy BRC-369 disclosed knowledge over AtomicBEEF."},

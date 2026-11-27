@@ -68,23 +68,108 @@ func callLiveTool(info *server.DaemonInfo, tool string, args any) (any, error) {
 func cmdDoctor(args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "Data directory override")
+	netName := fs.String("network", "", "Network override (testnet|main|memory)")
+	asJSON := fs.Bool("json", false, "Machine-readable JSON output")
 	_ = fs.Parse(args)
-	if info, ok := detectDaemon(*dataDir, ""); ok {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		out, err := callLiveTool(info, "doctor", map[string]any{})
 		if err == nil {
 			redacted := *info
 			redacted.AuthToken = ""
-			return printJSON(map[string]any{"daemon": &redacted, "diagnosis": out})
+			redacted.Token = ""
+			if *asJSON {
+				return printJSON(map[string]any{"daemon": &redacted, "diagnosis": out})
+			}
+			printDoctorHuman(&redacted, out)
+			return nil
+		}
+	}
+	effectiveNet := strings.TrimSpace(*netName)
+	if effectiveNet == "" {
+		effectiveNet = envOr("NEKTAR_NETWORK", "testnet")
+	}
+	dir := strings.TrimSpace(*dataDir)
+	if dir == "" {
+		dir = defaultDataDirForNetwork(effectiveNet)
+	}
+	dbPath := filepath.Join(dir, "nektar.sqlite")
+	if effectiveNet != "memory" {
+		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+			uninit := map[string]any{
+				"ok":        false,
+				"verdict":   "amber",
+				"running":   false,
+				"network":   effectiveNet,
+				"dataDir":   dir,
+				"checks":    []map[string]string{{"name": "daemon", "status": "amber", "detail": fmt.Sprintf("no running daemon and no database yet at %s", dir)}},
+				"nextSteps": []string{"Start your node with `nektar up` (or `nektar up --network main --confirm I_UNDERSTAND`)"},
+			}
+			if *asJSON {
+				return printJSON(uninit)
+			}
+			printDoctorHuman(nil, uninit)
+			return nil
 		}
 	}
 	ctx := context.Background()
-	rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
+	rt, err := openRuntime(ctx, *netName, *dataDir, DefaultLocalPort)
 	if err != nil {
 		return err
 	}
 	defer rt.closeFn()
 	tb := server.NewToolbox(rt.mem, rt.mkt, nil, rt.disc, nil, "operator")
-	return printJSON(tb.ExecDoctor(ctx))
+	diag := tb.ExecDoctor(ctx)
+	if *asJSON {
+		return printJSON(diag)
+	}
+	printDoctorHuman(nil, diag)
+	return nil
+}
+
+func printDoctorHuman(daemon *server.DaemonInfo, raw any) {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		_ = printJSON(raw)
+		return
+	}
+	verdict, _ := m["verdict"].(string)
+	if verdict == "" {
+		verdict = "unknown"
+	}
+	netName, _ := m["network"].(string)
+	var b strings.Builder
+	if daemon != nil {
+		fmt.Fprintf(&b, "nektar doctor [%s] — daemon UP at %s (%s · pid %d)\n", strings.ToUpper(verdict), daemon.URL, daemon.Network, daemon.PID)
+	} else {
+		fmt.Fprintf(&b, "nektar doctor [%s] — daemon STOPPED (offline check · %s)\n", strings.ToUpper(verdict), netName)
+	}
+	if checks, ok := m["checks"].([]any); ok {
+		for _, c := range checks {
+			cm, _ := c.(map[string]any)
+			st := strings.ToUpper(fmt.Sprint(cm["status"]))
+			fmt.Fprintf(&b, "  [%-5s] %-20s %s\n", st, fmt.Sprint(cm["name"]), fmt.Sprint(cm["detail"]))
+		}
+	} else if checks, ok := m["checks"].([]server.DoctorCheck); ok {
+		for _, c := range checks {
+			fmt.Fprintf(&b, "  [%-5s] %-20s %s\n", strings.ToUpper(c.Status), c.Name, c.Detail)
+		}
+	} else if checks, ok := m["checks"].([]map[string]string); ok {
+		for _, c := range checks {
+			fmt.Fprintf(&b, "  [%-5s] %-20s %s\n", strings.ToUpper(c["status"]), c["name"], c["detail"])
+		}
+	}
+	if steps, ok := m["nextSteps"].([]any); ok && len(steps) > 0 {
+		b.WriteString("\nNext:\n")
+		for _, s := range steps {
+			fmt.Fprintf(&b, "  • %s\n", fmt.Sprint(s))
+		}
+	} else if steps, ok := m["nextSteps"].([]string); ok && len(steps) > 0 {
+		b.WriteString("\nNext:\n")
+		for _, s := range steps {
+			fmt.Fprintf(&b, "  • %s\n", s)
+		}
+	}
+	fmt.Print(formatConsoleText(b.String()))
 }
 
 func cmdPeers(args []string) error {
@@ -328,15 +413,30 @@ func cmdOpen(args []string) error {
 	fs := flag.NewFlagSet("open", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	netName := fs.String("network", "", "Network override")
+	startFlag := fs.Bool("start", false, "Auto-start the background daemon if not running")
 	_ = fs.Parse(args)
-	u := "http://127.0.0.1:" + envOr("NEKTAR_HTTP_PORT", DefaultLocalPort)
-	if info, ok := detectDaemon(*dataDir, *netName); ok {
-		u = strings.TrimRight(info.URL, "/")
-		if out, err := callLiveAPI(info, http.MethodPost, "/v1/auth/pair-code", map[string]any{}); err == nil {
-			if m, ok := out.(map[string]any); ok {
-				if code, _ := m["code"].(string); code != "" {
-					u = u + "/pair?code=" + code
-				}
+	info, ok := detectDaemon(*dataDir, *netName)
+	if !ok || info == nil {
+		if !*startFlag {
+			return errors.New("no running nektar daemon found — start one with `nektar up` (or run `nektar open --start`)")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		started, err := ensureBackgroundDaemon(ctx, backgroundDaemonOpts{
+			Network: *netName,
+			Confirm: os.Getenv("NEKTAR_MAINNET_CONFIRM"),
+			DataDir: *dataDir,
+		})
+		if err != nil {
+			return err
+		}
+		info = started
+	}
+	u := strings.TrimRight(info.URL, "/")
+	if out, err := callLiveAPI(info, http.MethodPost, "/v1/auth/pair-code", map[string]any{}); err == nil {
+		if m, ok := out.(map[string]any); ok {
+			if code, _ := m["code"].(string); code != "" {
+				u = u + "/pair?code=" + code
 			}
 		}
 	}

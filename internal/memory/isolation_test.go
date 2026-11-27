@@ -10,6 +10,7 @@ import (
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
+	"github.com/kryptokrates/nektar/internal/memrepo"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -58,7 +59,7 @@ func TestShardValidationAndPackVerificationHardening(t *testing.T) {
 		t.Fatalf("valid PutObject failed: %v", err)
 	}
 
-	// 3. ExportShardPack -> tamper fragment text / fake Settled -> ImportShardPack must fail!
+	// 3. ExportShardPack (.nkt Capsule) -> tamper fragment text / strip BEEF / legacy flat JSON -> Import MUST fail closed!
 	if _, err := mem.Remember(ctx, RememberInput{
 		Shard:      "clean",
 		Text:       "original verified memory fragment",
@@ -74,61 +75,49 @@ func TestShardValidationAndPackVerificationHardening(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveChirp: %v", err)
 	}
-	var pack ShardPack
-	if err := json.Unmarshal(packRaw, &pack); err != nil {
-		t.Fatalf("unmarshal pack: %v", err)
+	capObj, err := memrepo.DecodeCapsule(packRaw)
+	if err != nil {
+		t.Fatalf("DecodeCapsule: %v", err)
 	}
 
-	// Tamper fragment Data while keeping original HDP/Leaf -> anchor status MUST be stripped (BatchN=-1, AnchorTxID="")!
-	tampered := pack
-	tampered.Fragments = append([]store.FragmentRecord(nil), pack.Fragments...)
+	// Tamper fragment Data while keeping original HDP/Leaf -> capsule verification MUST fail closed!
+	tampered := *capObj
+	tampered.Fragments = append([]store.FragmentRecord(nil), capObj.Fragments...)
 	tampered.Fragments[0].Data = []byte("FORGED TEXT")
-	tamperedJSON, _ := json.Marshal(tampered)
+	tamperedRaw, _ := memrepo.EncodeCapsule(&tampered)
 
 	db2, _ := store.Open(":memory:")
 	defer db2.Close()
 	port2, _ := chain.Open(ctx, chain.Config{Network: "memory", DataDir: t.TempDir()})
 	mem2, _ := New(db2, port2, bstack.NewGroupRegistry(), bstack.NewMemoryObjectStore(), Config{})
 
-	if _, _, err := mem2.importShardPackVerified(ctx, tamperedJSON, "imported-tampered"); err != nil {
-		t.Fatalf("importShardPackVerified tampered: %v", err)
+	if _, _, err := mem2.ImportShardPackBytesCtx(ctx, tamperedRaw, "imported-tampered"); err == nil {
+		t.Fatal("expected tampered capsule import to fail closed")
 	}
-	tamperedFrags, err := db2.ListFragments("imported-tampered")
-	if err != nil || len(tamperedFrags) != 1 {
-		t.Fatalf("ListFragments imported-tampered: len=%d err=%v", len(tamperedFrags), err)
+	if tamperedFrags, _ := db2.ListFragments("imported-tampered"); len(tamperedFrags) != 0 {
+		t.Fatalf("expected 0 persisted fragments after rejected tampered capsule, got %d", len(tamperedFrags))
 	}
-	if tamperedFrags[0].BatchN != -1 || tamperedFrags[0].AnchorTxID != "" || !tamperedFrags[0].Tainted {
-		t.Fatalf("expected tampered fragment to lose anchored status and remain tainted, got %+v", tamperedFrags[0])
+
+	// Legacy flat JSON ShardPack v1 MUST be rejected!
+	if _, _, err := mem2.ImportShardPackBytesCtx(ctx, []byte(`{"version":1,"shard":"clean","fragments":[]}`), "legacy-shard"); err == nil {
+		t.Fatal("expected legacy flat JSON ShardPack v1 to be rejected")
 	}
 
 	// Import into reserved __receipts__ must fail!
-	if _, _, err := mem2.importShardPackVerified(ctx, packRaw, ReceiptsShard); err == nil {
-		t.Fatal("expected importShardPackVerified into __receipts__ to fail")
+	if _, _, err := mem2.ImportShardPackBytesCtx(ctx, packRaw, ReceiptsShard); err == nil {
+		t.Fatal("expected ImportShardPackBytesCtx into __receipts__ to fail")
 	}
 
-	// Forged Settled=true without a valid BUMP/BEEF must NEVER be trusted as settled!
-	unsettledPack := pack
-	unsettledPack.Anchors = append([]store.BatchAnchor(nil), pack.Anchors...)
-	if len(unsettledPack.Anchors) > 0 {
-		unsettledPack.Anchors[0].Settled = true
-		unsettledPack.Anchors[0].Beef = nil // stripped proof
+	// Forged Settled=true with stripped BEEF MUST fail closed (anchors without AtomicBEEF cannot be verified)!
+	unsettled := *capObj
+	unsettled.Anchors = append([]store.BatchAnchor(nil), capObj.Anchors...)
+	if len(unsettled.Anchors) > 0 {
+		unsettled.Anchors[0].Settled = true
+		unsettled.Anchors[0].Beef = nil
 	}
-	unsettledJSON, _ := json.Marshal(unsettledPack)
-	n, _, err := mem2.importShardPackVerified(ctx, unsettledJSON, "imported-unsettled")
-	if err != nil {
-		t.Fatalf("importShardPackVerified with stripped BEEF should import fragments but skip unverified anchors, got err=%v", err)
-	}
-	if n != 1 {
-		t.Fatalf("expected 1 imported fragment, got %d", n)
-	}
-	anchors, err := db2.ListAnchors("imported-unsettled")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, a := range anchors {
-		if a.Settled {
-			t.Fatalf("imported anchor without verified BEEF/BUMP must NOT be marked Settled=true: %+v", a)
-		}
+	unsettledRaw, _ := memrepo.EncodeCapsule(&unsettled)
+	if _, _, err := mem2.ImportShardPackBytesCtx(ctx, unsettledRaw, "imported-unsettled"); err == nil {
+		t.Fatal("expected capsule with stripped anchor BEEF to fail closed")
 	}
 
 	// 4. Encrypted Borg group epoch key round-trip survives DB reload and is NOT plaintext JSON in SQLite!

@@ -1,6 +1,7 @@
 package reasoning
 
 import (
+	"encoding/hex"
 	"testing"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
@@ -13,9 +14,9 @@ func TestDelegationAndReceiptHardening(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPrivateKey: %v", err)
 	}
-	del, err := MakeDelegation(key, "sub-a", "answer-bc")
+	del, err := makeTestDelegation(key, "sub-a", "answer-bc")
 	if err != nil {
-		t.Fatalf("MakeDelegation: %v", err)
+		t.Fatalf("makeTestDelegation: %v", err)
 	}
 	if del.Version != 2 {
 		t.Fatalf("expected Delegation Version=2, got %d", del.Version)
@@ -46,9 +47,16 @@ func TestDelegationAndReceiptHardening(t *testing.T) {
 	}
 
 	// F-32: Receipt signing and tamper rejection.
-	if err := SignReceipt(key, &rcp); err != nil {
-		t.Fatalf("SignReceipt: %v", err)
+	rcp.IssuerPub = hex.EncodeToString(key.PubKey().Compressed())
+	digest, err := ReceiptSignDigest(rcp)
+	if err != nil {
+		t.Fatalf("ReceiptSignDigest: %v", err)
 	}
+	sig, err := key.Sign(digest)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	rcp.IssuerSig = hex.EncodeToString(sig.Serialize())
 	if err := VerifyReceiptSignature(rcp); err != nil {
 		t.Fatalf("VerifyReceiptSignature valid failed: %v", err)
 	}
@@ -57,18 +65,10 @@ func TestDelegationAndReceiptHardening(t *testing.T) {
 	if err := VerifyReceiptSignature(tampered); err == nil {
 		t.Fatal("F-32: tampered receipt passed VerifyReceiptSignature!")
 	}
-
-	// F-12: AORG vertexHash & edgeHash delimiter collision resistance.
-	v1 := Vertex{Kind: "episode", Phi: "a|b", LogPos: 1, Context: []string{"c"}}
-	v2 := Vertex{Kind: "episode", Phi: "a", Sigma: []string{"b"}, LogPos: 1, Context: []string{"c"}}
-	if vertexHash(v1) == vertexHash(v2) {
-		t.Fatal("F-12: AORG vertexHash collided across '|' delimiter")
-	}
-	v3 := Vertex{Kind: "axiom", Phi: "a|b", LogPos: 1, Context: []string{"c"}}
-	if vertexHash(v1) == vertexHash(v3) {
-		t.Fatal("F-12: AORG vertexHash failed to bind Kind")
-	}
-	if edgeHash("a|b", "c", "r") == edgeHash("a", "b|c", "r") {
-		t.Fatal("F-12: AORG edgeHash collided across '|' delimiter")
+	unsigned := rcp
+	unsigned.IssuerPub = ""
+	unsigned.IssuerSig = ""
+	if err := VerifyReceiptSignature(unsigned); err == nil {
+		t.Fatal("F7: unsigned receipt passed VerifyReceiptSignature!")
 	}
 }

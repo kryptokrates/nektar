@@ -72,3 +72,14 @@ func TestQuoteBackedRequiresMeaningfulOverlap(t *testing.T) {
 		t.Fatalf("expected genuine quote-backed synthesis to pass, got %+v", rep.Claims[2])
 	}
 }
+
+func TestParseGroundFactRejectsNestedApplyFnVariables(t *testing.T) {
+	// Nested variable inside ApplyFn must be rejected by ParseGroundFact.
+	if _, ok := ParseGroundFact(`score(fn:plus(1, X))`); ok {
+		t.Fatal("expected ParseGroundFact to reject nested variable inside ApplyFn")
+	}
+	// Purely ground ApplyFn constant arguments remain valid.
+	if _, ok := ParseGroundFact(`score(fn:plus(1, 2))`); !ok {
+		t.Fatal("expected ParseGroundFact to accept ground ApplyFn constant terms")
+	}
+}

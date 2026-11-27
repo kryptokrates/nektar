@@ -36,7 +36,7 @@ services:
       NEKTAR_OPERATOR_TOKEN: ${NEKTAR_OPERATOR_TOKEN:-}
       NEKTAR_PUBLIC_URL: https://${HUB_DOMAIN:?set HUB_DOMAIN}
       NEKTAR_VERIFY_BASE: https://${HUB_DOMAIN}
-      NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:-https://nektar.run/hub}
+      NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:-https://testnet.nektar.run/hub}
       NEKTAR_RESTATE_URL: http://restate:8080
       NEKTAR_RESTATE_ADMIN: http://restate:9070
       NEKTAR_RESTATE_ENDPOINT_URI: http://hub:9080

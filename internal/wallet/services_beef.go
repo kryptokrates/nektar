@@ -44,6 +44,29 @@ func (s *bcommonServices) lookupProof(ctx context.Context, txid string) (*transa
 		return mp, h, true, nil
 	}
 
+	// 0. Check locally held verified proof FIRST (avoid unnecessary remote refetches).
+	if cachedTx, ok := s.txCache.Get(txid); ok && cachedTx != nil && cachedTx.MerklePath != nil {
+		vmp, vh, valid, vErr := verify(cachedTx.MerklePath, cachedTx.MerklePath.BlockHeight)
+		if vErr != nil {
+			return nil, 0, false, vErr
+		}
+		if valid {
+			return vmp, vh, true, nil
+		}
+	}
+	if s.loadTxFromDB != nil {
+		if dbTx := s.loadTxFromDB(ctx, txid); dbTx != nil && dbTx.MerklePath != nil {
+			vmp, vh, valid, vErr := verify(dbTx.MerklePath, dbTx.MerklePath.BlockHeight)
+			if vErr != nil {
+				return nil, 0, false, vErr
+			}
+			if valid {
+				s.txCache.Put(txid, dbTx)
+				return vmp, vh, true, nil
+			}
+		}
+	}
+
 	if s.cfg.ProofLookup != nil {
 		mp, h, ok, err := s.cfg.ProofLookup(ctx, txid)
 		if err != nil {
@@ -80,7 +103,10 @@ func (s *bcommonServices) lookupProof(ctx context.Context, txid string) (*transa
 			if ok {
 				return vmp, vh, true, nil
 			}
-		} else if err != nil && !errors.Is(err, nodeapi.ErrNotMined) {
+		} else if err == nil || errors.Is(err, nodeapi.ErrNotMined) {
+			// Authoritative not-mined answer from Chain.Proof clears any prior broadcaster outage error.
+			lastErr = nil
+		} else {
 			lastErr = err
 		}
 	}
@@ -179,11 +205,7 @@ func (s *bcommonServices) GetBEEF(ctx context.Context, txID string, knownTxIDs [
 		}
 	}
 
-	known := make(map[string]struct{}, len(knownTxIDs))
-	for _, k := range knownTxIDs {
-		known[k] = struct{}{}
-	}
-	tx, err := s.fetchHydratedTx(ctx, txID, known, make(map[string]bool), 0)
+	tx, err := s.fetchHydratedTx(ctx, txID, make(map[string]bool), 0)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +222,6 @@ func (s *bcommonServices) GetBEEF(ctx context.Context, txID string, knownTxIDs [
 func (s *bcommonServices) fetchHydratedTx(
 	ctx context.Context,
 	txID string,
-	known map[string]struct{},
 	visiting map[string]bool,
 	depth int,
 ) (*transaction.Transaction, error) {
@@ -256,16 +277,18 @@ func (s *bcommonServices) fetchHydratedTx(
 		}
 		pid := in.SourceTXID.String()
 		if in.SourceTransaction == nil {
-			ptx, pErr := s.fetchHydratedTx(ctx, pid, known, visiting, depth+1)
+			ptx, pErr := s.fetchHydratedTx(ctx, pid, visiting, depth+1)
 			if pErr != nil {
 				return nil, fmt.Errorf("wallet services: hydrate parent %s of %s: %w", pid, txID, pErr)
 			}
 			in.SourceTransaction = ptx
 		} else if in.SourceTransaction.MerklePath == nil {
 			// Ensure already-attached unmined parent is itself fully hydrated back to mined BUMPs.
-			if _, pErr := s.fetchHydratedTx(ctx, pid, known, visiting, depth+1); pErr != nil {
+			ptx, pErr := s.fetchHydratedTx(ctx, pid, visiting, depth+1)
+			if pErr != nil {
 				return nil, fmt.Errorf("wallet services: hydrate ancestor %s of %s: %w", pid, txID, pErr)
 			}
+			in.SourceTransaction = ptx
 		}
 	}
 	s.txCache.Put(txID, tx)
@@ -352,19 +375,22 @@ func (s *bcommonServices) GetStatusForTxIDs(ctx context.Context, txIDs []string)
 			})
 			continue
 		}
-		if rErr != nil {
-			lower := strings.ToLower(rErr.Error())
-			if !strings.Contains(lower, "404") && !strings.Contains(lower, "not found") && !strings.Contains(lower, "no such") {
-				if firstErr == nil {
-					firstErr = fmt.Errorf("wallet services: status lookup %s: %w", id, rErr)
-				}
-				continue
+		// Never treat single-host silence, 404, or empty raw bytes as proof of non-existence on live networks
+		// (spv/absence-as-proof): record error/omit so callers retry rather than aborting a live transaction.
+		if s.cfg.InMemoryStore {
+			results = append(results, wdk.TxStatusDetail{
+				TxID:   id,
+				Status: wdk.ResultStatusForTxIDNotFound.String(),
+			})
+			continue
+		}
+		if firstErr == nil {
+			if rErr != nil {
+				firstErr = fmt.Errorf("wallet services: status lookup %s unconfirmed by single host: %w", id, rErr)
+			} else {
+				firstErr = fmt.Errorf("wallet services: status lookup %s returned empty raw tx", id)
 			}
 		}
-		results = append(results, wdk.TxStatusDetail{
-			TxID:   id,
-			Status: wdk.ResultStatusForTxIDNotFound.String(),
-		})
 	}
 	if len(results) == 0 && firstErr != nil {
 		return nil, firstErr

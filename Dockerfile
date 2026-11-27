@@ -22,20 +22,23 @@ COPY skills/nektar-memory ./skills/nektar-memory
 COPY --from=ui-build /ui/dist/ ./internal/server/ui_dist/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w" -o /out/nektar ./cmd/nektar
 
-# Optional static restate-server binary for single-container durable workflows
+# Optional static restate-server binary for single-container durable workflows (pinned SHA-256)
 ARG RESTATE_VERSION=1.8.1
 RUN apt-get update && apt-get install -y --no-install-recommends xz-utils \
  && rm -rf /var/lib/apt/lists/* \
- && case "${TARGETARCH}" in amd64) t=x86_64-unknown-linux-musl ;; arm64) t=aarch64-unknown-linux-musl ;; *) echo "unsupported arch ${TARGETARCH}"; exit 1 ;; esac \
+ && case "${TARGETARCH}" in \
+      amd64) t=x86_64-unknown-linux-musl;  sha=56f12ccc54ee227657d4d8b070622849977444425184ee242a33e3ccc28bf745 ;; \
+      arm64) t=aarch64-unknown-linux-musl; sha=7d30d4c73a6978f7b4e4a2c08163fbf4e5689c4534af013bb8fd37e003474857 ;; \
+      *) echo "unsupported arch ${TARGETARCH}"; exit 1 ;; \
+    esac \
  && name="restate-server-$t.tar.xz" \
  && base="https://github.com/restatedev/restate/releases/download/v$RESTATE_VERSION" \
  && curl -fsSL "$base/$name" -o /tmp/rs.tar.xz \
- && curl -fsSL "$base/$name.sha256" -o /tmp/rs.sha \
- && echo "$(cut -d' ' -f1 /tmp/rs.sha)  /tmp/rs.tar.xz" | sha256sum -c - \
+ && echo "$sha  /tmp/rs.tar.xz" | sha256sum -c - \
  && tar -xJf /tmp/rs.tar.xz -C /tmp \
  && cp "/tmp/restate-server-$t/restate-server" /out/restate-server \
  && chmod 755 /out/restate-server \
- && rm -rf /tmp/rs.tar.xz /tmp/rs.sha "/tmp/restate-server-$t"
+ && rm -rf /tmp/rs.tar.xz "/tmp/restate-server-$t"
 
 # Stage 3: Minimal Alpine runtime (~35 MB total)
 FROM alpine:3.21

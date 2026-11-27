@@ -2,8 +2,10 @@ package chain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -169,13 +171,6 @@ func (b *BSVBroadcaster) Name() string {
 	return fmt.Sprintf("broadcaster:%s(+%d)", b.urls[0], len(b.urls)-1)
 }
 
-// URLs returns the configured BSV Broadcaster base URLs.
-func (b *BSVBroadcaster) URLs() []string {
-	out := make([]string, len(b.urls))
-	copy(out, b.urls)
-	return out
-}
-
 // Broadcast submits tx using the official go-sdk broadcaster.Arc client across configured
 // endpoints (round-robin start + automatic failover on transport/timeout/429/5xx errors).
 // Returns immediately once the BSV Broadcaster accepts the transaction (no blocking 15s poll).
@@ -204,10 +199,7 @@ func (b *BSVBroadcaster) Broadcast(ctx context.Context, tx *transaction.Transact
 			continue
 		}
 		// Treat idempotent "already known" responses as broadcast success.
-		descLower := strings.ToLower(failure.Description)
-		if strings.Contains(descLower, "already in mempool") ||
-			strings.Contains(descLower, "already known") ||
-			strings.Contains(descLower, "txn-already-known") {
+		if nwallet.IsAlreadyKnownBroadcastError(errors.New(failure.Description)) {
 			return nil
 		}
 		if isRetryableBroadcasterFailure(failure) {
@@ -224,35 +216,79 @@ func (b *BSVBroadcaster) Broadcast(ctx context.Context, tx *transaction.Transact
 	return fmt.Errorf("%w: broadcast failed", nwallet.ErrBroadcastUnknown)
 }
 
-// Proof queries configured BSV Broadcaster endpoints (GET /tx/{txid}) via go-sdk broadcaster.Arc.Status
-// for a mined BUMP MerklePath. Returns (nil, 0, false, nil) when the tx is unmined or unknown.
+type arcStatusPayload struct {
+	MerklePath  string `json:"merklePath"`
+	BlockHeight uint32 `json:"blockHeight"`
+	TxStatus    string `json:"txStatus"`
+}
+
+// Proof queries configured BSV Broadcaster endpoints (ctx-aware GET /tx/{txid}) for a mined
+// BUMP MerklePath. HTTP 404 or a valid JSON status with empty merklePath counts as an
+// authoritative not-mined answer so fallback Chain.Proof is never poisoned by lastErr.
 func (b *BSVBroadcaster) Proof(ctx context.Context, txid string) (*transaction.MerklePath, uint32, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if ctx.Err() != nil {
 		return nil, 0, false, ctx.Err()
 	}
 	var lastErr error
 	answered := false
 	for _, ep := range b.endpoints {
+		if ep == nil {
+			continue
+		}
 		if ctx.Err() != nil {
 			return nil, 0, false, ctx.Err()
 		}
-		resp, err := ep.Status(txid)
+		reqURL := strings.TrimRight(ep.ApiUrl, "/") + "/tx/" + url.PathEscape(txid)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 		if err != nil {
-			// 404 or non-JSON unknown responses are treated as not-found on this endpoint;
-			// record error only if every endpoint fails to answer cleanly.
 			lastErr = err
 			continue
 		}
-		answered = true
-		if resp == nil || strings.TrimSpace(resp.MerklePath) == "" {
+		req.Header.Set("Accept", "application/json")
+		if ep.ApiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+ep.ApiKey)
+		}
+		cli := ep.Client
+		if cli == nil {
+			cli = http.DefaultClient
+		}
+		resp, err := cli.Do(req)
+		if err != nil {
+			lastErr = err
 			continue
 		}
-		mp, pErr := transaction.NewMerklePathFromHex(resp.MerklePath)
+		body, rErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		_ = resp.Body.Close()
+		if rErr != nil {
+			lastErr = rErr
+			continue
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			answered = true
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("broadcaster %s status HTTP %d for %s", ep.ApiUrl, resp.StatusCode, txid)
+			continue
+		}
+		var st arcStatusPayload
+		if jErr := json.Unmarshal(body, &st); jErr != nil {
+			lastErr = fmt.Errorf("broadcaster %s decode status for %s: %w", ep.ApiUrl, txid, jErr)
+			continue
+		}
+		answered = true
+		if strings.TrimSpace(st.MerklePath) == "" {
+			continue
+		}
+		mp, pErr := transaction.NewMerklePathFromHex(st.MerklePath)
 		if pErr != nil {
 			lastErr = fmt.Errorf("broadcaster %s invalid merklePath for %s: %w", ep.ApiUrl, txid, pErr)
 			continue
 		}
-		h := resp.BlockHeight
+		h := st.BlockHeight
 		if h == 0 {
 			h = mp.BlockHeight
 		}
@@ -261,7 +297,6 @@ func (b *BSVBroadcaster) Proof(ctx context.Context, txid string) (*transaction.M
 	if answered {
 		return nil, 0, false, nil
 	}
-	// If every endpoint returned a 404/non-JSON body rather than a real network outage, don't block fallback to Chain.Proof.
 	return nil, 0, false, lastErr
 }
 
@@ -273,15 +308,5 @@ func isRetryableBroadcasterFailure(f *transaction.BroadcastFailure) bool {
 	case "429", "500", "502", "503", "504", "ERR_INVALID_RESPONSE":
 		return true
 	}
-	low := strings.ToLower(f.Description)
-	for _, tok := range []string{
-		"timeout", "deadline exceeded", "eof", "connection reset", "connection refused",
-		"broken pipe", "temporary failure", "too many requests", "service unavailable",
-		"bad gateway", "gateway timeout", "context canceled",
-	} {
-		if strings.Contains(low, tok) {
-			return true
-		}
-	}
-	return false
+	return nwallet.IsUncertainBroadcastError(errors.New(f.Description))
 }

@@ -50,4 +50,16 @@ func TestDecisionReceiptSigningAndFraming(t *testing.T) {
 	if err := VerifyDecisionReceipt(shifted); err == nil {
 		t.Fatal("F-32: field-shifted DecisionReceipt verified")
 	}
+
+	// Default entity type normalization in MakeReceipt must match authorizeWithContext ("Agent"/"Fragment").
+	drDefault := MakeReceipt(
+		Principal{ID: "bob", Level: 1},
+		"read",
+		Resource{ID: "2", Shard: "s1", Level: 0},
+		pc,
+		true,
+	)
+	if drDefault.PrincipalType != "Agent" || drDefault.ResourceType != "Fragment" {
+		t.Fatalf("expected MakeReceipt default types Agent/Fragment, got %q/%q", drDefault.PrincipalType, drDefault.ResourceType)
+	}
 }

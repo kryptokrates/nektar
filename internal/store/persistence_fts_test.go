@@ -51,6 +51,10 @@ func TestFTS5SearchAndForgetSync(t *testing.T) {
 	if len(hitsAfter) != 0 {
 		t.Fatalf("expected 0 hits after ForgetFragment, got %+v", hitsAfter)
 	}
+	gotForgotten, err := db.GetFragment("ops", r1.Seq)
+	if err != nil || !gotForgotten.Forgotten || len(gotForgotten.Data) != 0 {
+		t.Fatalf("expected shredded forgotten record, got %+v err=%v", gotForgotten, err)
+	}
 }
 
 func TestPersistenceAcrossReopen(t *testing.T) {
@@ -87,8 +91,8 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	}
 
 	// 4. PaymentClaim + UnmatchedWant + DailySpend persistence.
-	if err := db.SavePaymentClaim("tx-claim-1", []string{"in1:0"}); err != nil {
-		t.Fatalf("SavePaymentClaim: %v", err)
+	if err := db.ClaimPaymentAtomic("tx-claim-1", []string{"in1:0"}); err != nil {
+		t.Fatalf("ClaimPaymentAtomic: %v", err)
 	}
 	if err := db.RecordUnmatchedWant(UnmatchedWantRecord{WantID: "w-q1", Domain: "quantum", Query: "stabilizer codes?", MaxSats: 500}); err != nil {
 		t.Fatalf("RecordUnmatchedWant: %v", err)

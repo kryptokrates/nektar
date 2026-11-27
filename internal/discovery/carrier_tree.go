@@ -1,31 +1,33 @@
 package discovery
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-sdk/chainhash"
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	sdkwallet "github.com/bsv-blockchain/go-sdk/wallet"
-	"github.com/lightwebinc/bcommon/carrier"
+	"github.com/lightwebinc/bcommon/guard"
 
-	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/store"
-	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 const (
 	// DefaultFundingTreeWidth matches 1BSV Paper 011 §9 (16 equal-valued outputs per mined tree:
 	// 1 miner fee funds 16 carriers, and every carrier inherits the tree's mined BUMP).
 	DefaultFundingTreeWidth = 16
-	// DefaultFundingTreeAheadThreshold pre-mints the next 16-output tree when <=4 outputs remain.
-	DefaultFundingTreeAheadThreshold = 4
+	// DefaultFundingTreeAheadThreshold pre-mints the next 16-output tree when <=8 outputs remain
+	// so the Ahead tree has ample time to mine before Active exhausts.
+	DefaultFundingTreeAheadThreshold = DefaultFundingTreeWidth / 2
+	maxRetiredFundingTrees           = 8
+	retiredFundingTreeMaxAgeSec      = 72 * 3600
 	carrierTreeKVKey                 = "carrier_funding_tree_v1"
 )
 
@@ -40,23 +42,30 @@ type FundingTreeRecord struct {
 	CreatedAt int64    `json:"createdAt"`
 }
 
-// FundingTreeState holds the active funding tree plus an optional background pre-minted next tree.
+// FundingTreeState holds the active funding tree, an optional background pre-minted next tree,
+// and recently rotated trees retained so RetractCarrier can always sweep live carriers.
 type FundingTreeState struct {
-	Active *FundingTreeRecord `json:"active,omitempty"`
-	Ahead  *FundingTreeRecord `json:"ahead,omitempty"`
+	Active  *FundingTreeRecord   `json:"active,omitempty"`
+	Ahead   *FundingTreeRecord   `json:"ahead,omitempty"`
+	Pending *FundingTreeRecord   `json:"pending,omitempty"`
+	Retired []*FundingTreeRecord `json:"retired,omitempty"`
 }
 
 // CarrierTreeManager manages M=16 carrier funding trees with background Ahead pre-minting and
 // mined kill-switch sweeps (carrier.Sweep) for cryptographic ad retraction.
 type CarrierTreeManager struct {
-	mu      sync.Mutex
-	port    *chain.Port
-	db      *store.DB
-	priv    *ec.PrivateKey
-	width   int
-	aheadAt int
-	state   FundingTreeState
-	minting bool
+	mu        sync.Mutex
+	mintMu    sync.Mutex
+	port      *chain.Port
+	db        *store.DB
+	priv      *ec.PrivateKey
+	width     int
+	aheadAt   int
+	state     FundingTreeState
+	minting   bool
+	stopCh    chan struct{}
+	closeOnce sync.Once
+	wg        sync.WaitGroup
 }
 
 // NewCarrierTreeManager opens or initializes a persistent M=16 carrier funding tree manager.
@@ -67,11 +76,25 @@ func NewCarrierTreeManager(port *chain.Port, db *store.DB, priv *ec.PrivateKey) 
 		priv:    priv,
 		width:   DefaultFundingTreeWidth,
 		aheadAt: DefaultFundingTreeAheadThreshold,
+		stopCh:  make(chan struct{}),
 	}
 	if db != nil {
 		_, _ = db.GetJSON(carrierTreeKVKey, &m.state)
 	}
 	return m
+}
+
+// Close stops background pre-minting goroutines and waits for them to exit cleanly.
+func (m *CarrierTreeManager) Close() {
+	if m == nil {
+		return
+	}
+	m.closeOnce.Do(func() {
+		if m.stopCh != nil {
+			close(m.stopCh)
+		}
+	})
+	m.wg.Wait()
 }
 
 func (m *CarrierTreeManager) saveLocked() {
@@ -81,173 +104,145 @@ func (m *CarrierTreeManager) saveLocked() {
 	_ = m.db.SetJSON(carrierTreeKVKey, m.state)
 }
 
-// MintCarrier allocates the next unused funding output from the active M=16 funding tree
-// (minting a fresh 16-output tree when empty, adopting Ahead when available, and kicking off
-// background Ahead pre-minting once remaining outputs <= 4), then mints an unmineable
-// bcommon/carrier AtomicBEEF spending that output.
-//
-// Returns the AtomicBEEF, the consumed funding outpoint ("<txid>.<vout>") so the caller can
-// later invoke RetractCarrier(fundingOutpoint), and the carrier txid.
-func (m *CarrierTreeManager) MintCarrier(ctx context.Context, p bstack.MarketPayload) (beef []byte, fundingOutpoint string, carrierTxID string, err error) {
-	if m.port == nil || m.priv == nil {
-		return nil, "", "", errors.New("discovery: carrier tree requires chain port and signing key")
+func (m *CarrierTreeManager) retireActiveLocked() {
+	if m.state.Active == nil {
+		return
 	}
-	cborBytes, err := bstack.EncodePayload(p)
-	if err != nil {
-		return nil, "", "", err
-	}
-	protoWallet, err := sdkwallet.NewCompletedProtoWallet(m.priv)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("discovery: init carrier wallet: %w", err)
-	}
-
-	m.mu.Lock()
-	// Adopt pre-minted Ahead tree if Active is empty/exhausted.
-	if m.state.Active == nil || m.state.Active.NextIndex >= len(m.state.Active.Vouts) {
-		if m.state.Ahead != nil && m.state.Ahead.NextIndex < len(m.state.Ahead.Vouts) {
-			m.state.Active = m.state.Ahead
-			m.state.Ahead = nil
-			m.saveLocked()
+	old := m.state.Active
+	now := time.Now().Unix()
+	filtered := make([]*FundingTreeRecord, 0, len(m.state.Retired)+1)
+	for _, r := range m.state.Retired {
+		if r == nil || r.TxID == "" || r.TxID == old.TxID {
+			continue
 		}
-	}
-	needMint := m.state.Active == nil || m.state.Active.NextIndex >= len(m.state.Active.Vouts)
-	m.mu.Unlock()
-
-	if needMint {
-		rec, mErr := m.mintNewTree(ctx, protoWallet)
-		if mErr != nil {
-			return nil, "", "", mErr
+		if r.CreatedAt > 0 && now-r.CreatedAt > retiredFundingTreeMaxAgeSec {
+			continue
 		}
-		m.mu.Lock()
-		m.state.Active = rec
-		m.saveLocked()
-		m.mu.Unlock()
+		filtered = append(filtered, r)
 	}
-
-	m.mu.Lock()
-	active := m.state.Active
-	if active == nil || active.NextIndex >= len(active.Vouts) {
-		m.mu.Unlock()
-		return nil, "", "", errors.New("discovery: funding tree exhausted")
+	filtered = append(filtered, old)
+	if len(filtered) > maxRetiredFundingTrees {
+		filtered = filtered[len(filtered)-maxRetiredFundingTrees:]
 	}
-	vout := active.Vouts[active.NextIndex]
-	active.NextIndex++
-	remaining := len(active.Vouts) - active.NextIndex
-	beefHex := active.BEEFHex
-	treeTxID := active.TxID
-	shouldPreMint := remaining <= m.aheadAt && m.state.Ahead == nil && !m.minting
-	if shouldPreMint {
-		m.minting = true
-	}
-	m.saveLocked()
-	m.mu.Unlock()
-
-	if shouldPreMint {
-		go func() {
-			bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			pw, pErr := sdkwallet.NewCompletedProtoWallet(m.priv)
-			var aheadRec *FundingTreeRecord
-			if pErr == nil {
-				aheadRec, _ = m.mintNewTree(bgCtx, pw)
-			}
-			m.mu.Lock()
-			if aheadRec != nil && m.state.Ahead == nil {
-				m.state.Ahead = aheadRec
-				m.saveLocked()
-			}
-			m.minting = false
-			m.mu.Unlock()
-		}()
-	}
-
-	// Refresh mined BUMP into the funding tree tx if it has since mined (so every carrier carries a mined proof!).
-	fundTx, err := m.loadOrUpgradeTreeTx(ctx, treeTxID, beefHex)
-	if err != nil {
-		return nil, "", "", err
-	}
-	carrierTx, err := carrier.Mint(ctx, protoWallet, bstack.Originator, bstack.MarketCarrierParams, cborBytes, fundTx, vout)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("discovery: mint PushDrop carrier: %w", err)
-	}
-	if len(carrierTx.Inputs) > 0 && carrierTx.Inputs[0].SourceTransaction == nil {
-		carrierTx.Inputs[0].SourceTransaction = fundTx
-	}
-	beef, err = carrierTx.AtomicBEEF(false)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("discovery: encode carrier AtomicBEEF: %w", err)
-	}
-	return beef, fmt.Sprintf("%s.%d", treeTxID, vout), carrierTx.TxID().String(), nil
+	m.state.Retired = filtered
 }
 
-// RetractCarrier executes the 1BSV Paper 011 §3.2 kill switch: builds, signs, and broadcasts a
-// mineable transaction spending the carrier's funding output (fundingTxID:vout) back to a final
-// tombstone output so every conforming Hub evicts the retracted carrier permanently.
-func (m *CarrierTreeManager) RetractCarrier(ctx context.Context, treeTxID string, vout uint32) (sweepTxID string, sweepBEEF []byte, err error) {
+func (m *CarrierTreeManager) allTreesLocked() []*FundingTreeRecord {
+	out := make([]*FundingTreeRecord, 0, 3+len(m.state.Retired))
+	if m.state.Active != nil {
+		out = append(out, m.state.Active)
+	}
+	if m.state.Ahead != nil {
+		out = append(out, m.state.Ahead)
+	}
+	if m.state.Pending != nil {
+		out = append(out, m.state.Pending)
+	}
+	out = append(out, m.state.Retired...)
+	return out
+}
+
+// WarmStock pre-mints Active (and Ahead) carrier funding trees on boot so the first MintCarrier
+// does not stall waiting for funding-tree construction or mining.
+func (m *CarrierTreeManager) WarmStock(ctx context.Context) error {
 	if m.port == nil || m.priv == nil {
-		return "", nil, errors.New("discovery: carrier tree requires chain port and signing key")
+		return errors.New("discovery: carrier tree requires chain port and signing key")
 	}
 	protoWallet, err := sdkwallet.NewCompletedProtoWallet(m.priv)
 	if err != nil {
-		return "", nil, err
+		return fmt.Errorf("discovery: init carrier wallet: %w", err)
+	}
+	if err := m.ensureActiveTree(ctx, protoWallet); err != nil {
+		return err
+	}
+	if err := m.ensureAheadTree(ctx, protoWallet); err != nil {
+		log.Printf("discovery: carrier tree WarmStock ahead pre-mint failed: %v", err)
+	}
+	return nil
+}
+
+// OnTxMined asynchronously attaches a verified BUMP to any locally held Active, Ahead, or Retired
+// funding tree matching txid, so MintCarrier never hits the network on the hot path.
+func (m *CarrierTreeManager) OnTxMined(txid string, height uint32, mp *transaction.MerklePath) {
+	if m == nil || txid == "" || mp == nil {
+		return
+	}
+	if m.port != nil && m.port.Tracker() != nil {
+		txHash, err := chainhash.NewHashFromHex(txid)
+		if err != nil {
+			return
+		}
+		root, err := mp.ComputeRoot(txHash)
+		if err != nil || root == nil {
+			return
+		}
+		ok, err := m.port.Tracker().IsValidRootForHeight(context.Background(), root, height)
+		if err != nil || !ok {
+			return
+		}
 	}
 	m.mu.Lock()
-	var beefHex string
-	if m.state.Active != nil && m.state.Active.TxID == treeTxID {
-		beefHex = m.state.Active.BEEFHex
-	} else if m.state.Ahead != nil && m.state.Ahead.TxID == treeTxID {
-		beefHex = m.state.Ahead.BEEFHex
-	}
-	m.mu.Unlock()
-	if beefHex == "" {
-		return "", nil, fmt.Errorf("discovery: funding tree %s not held locally", treeTxID)
-	}
-	fundTx, err := m.loadOrUpgradeTreeTx(ctx, treeTxID, beefHex)
-	if err != nil {
-		return "", nil, err
-	}
-	if int(vout) >= len(fundTx.Outputs) {
-		return "", nil, fmt.Errorf("discovery: funding vout %d out of range", vout)
-	}
-	// Build a mineable (LockTime=0, Sequence=0xFFFFFFFF) kill-switch sweep spending fundTx:vout.
-	fundLock, err := carrier.FundingLock(ctx, protoWallet, bstack.Originator, bstack.MarketCarrierParams)
-	if err != nil {
-		return "", nil, err
-	}
-	unlocker := bstack.MarketCarrierParams.Derivation.Unlocker(ctx, protoWallet, bstack.Originator)
-	sweepTx := transaction.NewTransaction()
-	sweepTx.LockTime = 0
-	sweepTx.AddInputFromTx(fundTx, vout, unlocker)
-	sweepTx.Inputs[0].SequenceNumber = transaction.MaxTxInSequenceNum
-	// Fund fee from wallet so the sweep mines cleanly on live BSV networks.
-	feeOutputs := []*transaction.TransactionOutput{{Satoshis: 1, LockingScript: fundLock}}
-	sweepMeta := nwallet.ActionSweepCarrierSlot()
-	funded, _, feeSats, spendSats, fErr := m.port.BuildFundedTxWithMeta(ctx, feeOutputs, sweepMeta.Description, sweepMeta.Labels)
-	if fErr != nil {
-		// Fallback for memory/regtest zero-fee tombstone sweep.
-		sweepTx.AddOutput(&transaction.TransactionOutput{Satoshis: fundTx.Outputs[vout].Satoshis, LockingScript: fundLock})
-		if sErr := sweepTx.Sign(); sErr != nil {
-			return "", nil, fmt.Errorf("discovery: sign kill-switch sweep: %w", sErr)
+	defer m.mu.Unlock()
+	changed := false
+	for _, rec := range m.allTreesLocked() {
+		if rec == nil || rec.TxID != txid {
+			continue
 		}
-		sb, bErr := sweepTx.AtomicBEEF(false)
-		if bErr != nil {
-			return "", nil, bErr
+		raw, err := hex.DecodeString(rec.BEEFHex)
+		if err != nil {
+			continue
 		}
-		return sweepTx.TxID().String(), sb, nil
+		_, tx, _, err := guard.ParseBEEF(raw, guard.DefaultBound)
+		if err != nil || tx == nil {
+			continue
+		}
+		tx.MerklePath = mp
+		upgraded, err := tx.AtomicBEEF(false)
+		if err != nil {
+			continue
+		}
+		rec.BEEFHex = hex.EncodeToString(upgraded)
+		rec.Mined = true
+		changed = true
 	}
-	// Attach the funding input + wallet inputs into a single mineable sweep transaction.
-	_ = funded
-	_ = feeSats
-	_ = spendSats
-	sweepTx.AddOutput(&transaction.TransactionOutput{Satoshis: fundTx.Outputs[vout].Satoshis, LockingScript: fundLock})
-	if err := sweepTx.Sign(); err != nil {
-		return "", nil, fmt.Errorf("discovery: sign kill-switch sweep: %w", err)
+	if changed {
+		m.saveLocked()
 	}
-	sweepBEEF, err = sweepTx.AtomicBEEF(false)
-	if err != nil {
-		return "", nil, err
+}
+
+// HandleReorg strips any cached BUMP at block height >= forkHeight from Active, Ahead, and Retired
+// funding trees so orphaned proofs are never re-emitted on subsequent carriers.
+func (m *CarrierTreeManager) HandleReorg(forkHeight uint32) {
+	if m == nil || forkHeight == 0 {
+		return
 	}
-	return sweepTx.TxID().String(), sweepBEEF, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	changed := false
+	for _, rec := range m.allTreesLocked() {
+		if rec == nil || rec.BEEFHex == "" {
+			continue
+		}
+		raw, err := hex.DecodeString(rec.BEEFHex)
+		if err != nil {
+			continue
+		}
+		_, tx, _, err := guard.ParseBEEF(raw, guard.DefaultBound)
+		if err != nil || tx == nil || tx.MerklePath == nil {
+			continue
+		}
+		if tx.MerklePath.BlockHeight >= forkHeight {
+			tx.MerklePath = nil
+			if downgraded, dErr := tx.AtomicBEEF(false); dErr == nil {
+				rec.BEEFHex = hex.EncodeToString(downgraded)
+			}
+			rec.Mined = false
+			changed = true
+		}
+	}
+	if changed {
+		m.saveLocked()
+	}
 }
 
 // CarrierTree returns (lazily initializing) the Service's persistent M=16 funding tree manager.
@@ -274,78 +269,4 @@ func (m *CarrierTreeManager) State() FundingTreeState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.state
-}
-
-func (m *CarrierTreeManager) mintNewTree(ctx context.Context, protoWallet sdkwallet.Interface) (*FundingTreeRecord, error) {
-	fundLock, err := carrier.FundingLock(ctx, protoWallet, bstack.Originator, bstack.MarketCarrierParams)
-	if err != nil {
-		return nil, fmt.Errorf("discovery: derive carrier funding lock: %w", err)
-	}
-	outputs := make([]*transaction.TransactionOutput, m.width)
-	for i := range outputs {
-		outputs[i] = &transaction.TransactionOutput{Satoshis: 1, LockingScript: fundLock}
-	}
-	treeMeta := nwallet.ActionFundCarrierTree(m.width)
-	treeSpec := &nwallet.OutputTagSpec{
-		Basket:             nwallet.BasketCarriers,
-		Tags:               []string{"carrier", "slot"},
-		CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"carrier-slot","width":%d}`, m.width),
-		ApplyToAll:         true,
-	}
-	fundTx, fundBEEF, feeSats, spendSats, err := m.port.BuildFundedTxWithBasket(ctx, outputs, treeMeta.Description, treeMeta.Labels, treeSpec)
-	if err != nil {
-		return nil, fmt.Errorf("discovery: build M=%d funding tree: %w", m.width, err)
-	}
-	if _, err := m.port.Broadcast(ctx, fundTx, feeSats, spendSats); err != nil {
-		return nil, fmt.Errorf("discovery: broadcast M=%d funding tree: %w", m.width, err)
-	}
-	if len(fundBEEF) == 0 {
-		fundBEEF, err = fundTx.AtomicBEEF(false)
-		if err != nil {
-			return nil, fmt.Errorf("discovery: encode funding tree BEEF: %w", err)
-		}
-	}
-	var vouts []uint32
-	for i, o := range fundTx.Outputs {
-		if o != nil && o.LockingScript != nil && bytes.Equal(*o.LockingScript, *fundLock) {
-			vouts = append(vouts, uint32(i))
-		}
-	}
-	if len(vouts) == 0 {
-		return nil, errors.New("discovery: funding tree contains zero funding outputs")
-	}
-	return &FundingTreeRecord{
-		TxID:      fundTx.TxID().String(),
-		BEEFHex:   hex.EncodeToString(fundBEEF),
-		Vouts:     vouts,
-		NextIndex: 0,
-		Mined:     fundTx.MerklePath != nil,
-		CreatedAt: time.Now().Unix(),
-	}, nil
-}
-
-func (m *CarrierTreeManager) loadOrUpgradeTreeTx(ctx context.Context, txid, beefHex string) (*transaction.Transaction, error) {
-	raw, err := hex.DecodeString(beefHex)
-	if err != nil {
-		return nil, fmt.Errorf("discovery: decode stored funding tree BEEF: %w", err)
-	}
-	tx, err := transaction.NewTransactionFromBEEF(raw)
-	if err != nil {
-		return nil, fmt.Errorf("discovery: parse funding tree BEEF: %w", err)
-	}
-	if tx.MerklePath == nil && m.port != nil {
-		if mp, _, ok, pErr := m.port.ProofChecked(ctx, txid); pErr == nil && ok && mp != nil {
-			tx.MerklePath = mp
-			if upgraded, uErr := tx.AtomicBEEF(false); uErr == nil {
-				m.mu.Lock()
-				if m.state.Active != nil && m.state.Active.TxID == txid {
-					m.state.Active.BEEFHex = hex.EncodeToString(upgraded)
-					m.state.Active.Mined = true
-					m.saveLocked()
-				}
-				m.mu.Unlock()
-			}
-		}
-	}
-	return tx, nil
 }

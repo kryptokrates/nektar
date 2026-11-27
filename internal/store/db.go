@@ -7,34 +7,41 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	_ "modernc.org/sqlite"
 )
 
-// FragmentRecord is one persisted append-only row in a memory shard.
+// FragmentRecord is one persisted append-only row in a memory repo / shard.
 type FragmentRecord struct {
-	Shard      string `json:"shard"`
-	Seq        int64  `json:"seq"`
-	HDP        string `json:"hdp"`
-	Leaf       string `json:"leaf"`
-	PrevLeaf   string `json:"prevLeaf,omitempty"`
-	ChainHash  string `json:"chainHash,omitempty"`
-	Data       []byte `json:"data,omitempty"`
-	Ciphertext []byte `json:"ciphertext,omitempty"`
-	KeyedMeta  []byte `json:"keyedMeta,omitempty"` // BRC-369 keyed envelope metadata
-	Provenance []byte `json:"provenance"`
-	Level      int    `json:"level"`
-	Class      string `json:"class"`
-	BorgGroup  string `json:"borgGroup,omitempty"`
-	BorgEpoch  int64  `json:"borgEpoch,omitempty"`
-	BatchN     int64  `json:"batchN"`
-	LeafIndex  int    `json:"leafIndex"`
-	AnchorTxID string `json:"anchorTxid,omitempty"`
-	Supersedes int64  `json:"supersedes,omitempty"`
-	Forgotten  bool   `json:"forgotten,omitempty"`
-	Tainted    bool   `json:"tainted,omitempty"`
-	CreatedAt  int64  `json:"createdAt"`
+	Shard         string `json:"shard"`
+	Seq           int64  `json:"seq"`
+	HDP           string `json:"hdp"`
+	Leaf          string `json:"leaf"`
+	PrevLeaf      string `json:"prevLeaf,omitempty"`
+	ChainHash     string `json:"chainHash,omitempty"`
+	Data          []byte `json:"data,omitempty"`
+	Ciphertext    []byte `json:"ciphertext,omitempty"`
+	KeyedMeta     []byte `json:"keyedMeta,omitempty"` // BRC-369 keyed envelope metadata
+	Provenance    []byte `json:"provenance"`
+	Level         int    `json:"level"`
+	Class         string `json:"class"`
+	BorgGroup     string `json:"borgGroup,omitempty"`
+	BorgEpoch     int64  `json:"borgEpoch,omitempty"`
+	BatchN        int64  `json:"batchN"`
+	LeafIndex     int    `json:"leafIndex"`
+	AnchorTxID    string `json:"anchorTxid,omitempty"`
+	Supersedes    int64  `json:"supersedes,omitempty"`
+	Forgotten     bool   `json:"forgotten,omitempty"`
+	Tainted       bool   `json:"tainted,omitempty"`
+	CreatedAt     int64  `json:"createdAt"`
+	Path          string `json:"path,omitempty"`
+	MediaType     string `json:"mediaType,omitempty"`
+	ChirpURL      string `json:"chirpUrl,omitempty"`
+	ContentSHA256 string `json:"contentSha256,omitempty"`
+	MPERoot       string `json:"mpeRoot,omitempty"`
+	CommitHash    string `json:"commitHash,omitempty"`
 }
 
 // BatchAnchor tracks one closed & anchored batch for a shard.
@@ -57,6 +64,7 @@ type BatchAnchor struct {
 type PendingAnchor struct {
 	Shard      string  `json:"shard"`
 	N          int64   `json:"n"`
+	Kind       string  `json:"kind,omitempty"` // "append" (default) | "rotate"
 	Seqs       []int64 `json:"seqs"`
 	RootHex    string  `json:"R"`
 	ChainedHex string  `json:"Rp"`
@@ -123,28 +131,39 @@ func Open(path string) (*DB, error) {
 
 func (d *DB) Close() error { return d.sql.Close() }
 
+// Conn returns the underlying *sql.DB handle (for diagnostics and tamper-detection tests).
+func (d *DB) Conn() *sql.DB { return d.sql }
+
 func (d *DB) migrate() error {
 	const schema = `
 CREATE TABLE IF NOT EXISTS fragments (
-	shard        TEXT NOT NULL,
-	seq          INTEGER NOT NULL,
-	hdp          TEXT NOT NULL,
-	leaf         TEXT NOT NULL,
-	data         BLOB,
-	ciphertext   BLOB,
-	keyed_meta   BLOB,
-	provenance   BLOB NOT NULL,
-	level        INTEGER NOT NULL DEFAULT 0,
-	class        TEXT NOT NULL DEFAULT 'general',
-	borg_group   TEXT NOT NULL DEFAULT '',
-	borg_epoch   INTEGER NOT NULL DEFAULT 0,
-	batch_n      INTEGER NOT NULL DEFAULT -1,
-	leaf_index   INTEGER NOT NULL DEFAULT -1,
-	anchor_txid  TEXT NOT NULL DEFAULT '',
-	supersedes   INTEGER NOT NULL DEFAULT 0,
-	forgotten    INTEGER NOT NULL DEFAULT 0,
-	tainted      INTEGER NOT NULL DEFAULT 0,
-	created_at   INTEGER NOT NULL,
+	shard          TEXT NOT NULL,
+	seq            INTEGER NOT NULL,
+	hdp            TEXT NOT NULL,
+	leaf           TEXT NOT NULL,
+	prev_leaf      TEXT NOT NULL DEFAULT '',
+	chain_hash     TEXT NOT NULL DEFAULT '',
+	data           BLOB,
+	ciphertext     BLOB,
+	keyed_meta     BLOB,
+	provenance     BLOB NOT NULL,
+	level          INTEGER NOT NULL DEFAULT 0,
+	class          TEXT NOT NULL DEFAULT 'general',
+	borg_group     TEXT NOT NULL DEFAULT '',
+	borg_epoch     INTEGER NOT NULL DEFAULT 0,
+	batch_n        INTEGER NOT NULL DEFAULT -1,
+	leaf_index     INTEGER NOT NULL DEFAULT -1,
+	anchor_txid    TEXT NOT NULL DEFAULT '',
+	supersedes     INTEGER NOT NULL DEFAULT 0,
+	forgotten      INTEGER NOT NULL DEFAULT 0,
+	tainted        INTEGER NOT NULL DEFAULT 0,
+	path           TEXT NOT NULL DEFAULT '',
+	media_type     TEXT NOT NULL DEFAULT '',
+	chirp_url      TEXT NOT NULL DEFAULT '',
+	content_sha256 TEXT NOT NULL DEFAULT '',
+	mpe_root       TEXT NOT NULL DEFAULT '',
+	commit_hash    TEXT NOT NULL DEFAULT '',
+	created_at     INTEGER NOT NULL,
 	PRIMARY KEY (shard, seq),
 	UNIQUE (shard, hdp)
 );
@@ -176,6 +195,7 @@ CREATE TABLE IF NOT EXISTS anchors (
 CREATE TABLE IF NOT EXISTS pending_anchors (
 	shard       TEXT NOT NULL,
 	n           INTEGER NOT NULL,
+	kind        TEXT NOT NULL DEFAULT 'append',
 	seqs_json   BLOB NOT NULL,
 	root_hex    TEXT NOT NULL,
 	chained_hex TEXT NOT NULL,
@@ -209,10 +229,6 @@ CREATE TABLE IF NOT EXISTS kv (
 	if err != nil {
 		return err
 	}
-	// Idempotent column migrations for existing databases.
-	_, _ = d.sql.Exec(`ALTER TABLE fragments ADD COLUMN tainted INTEGER NOT NULL DEFAULT 0`)
-	_, _ = d.sql.Exec(`ALTER TABLE fragments ADD COLUMN prev_leaf TEXT NOT NULL DEFAULT ''`)
-	_, _ = d.sql.Exec(`ALTER TABLE fragments ADD COLUMN chain_hash TEXT NOT NULL DEFAULT ''`)
 	// Clean up any orphaned FTS5 rows belonging to forgotten fragments (crash recovery for shredded records).
 	if _, err := d.sql.Exec(`
 		DELETE FROM fragments_fts
@@ -222,14 +238,46 @@ CREATE TABLE IF NOT EXISTS kv (
 		)`); err != nil {
 		return fmt.Errorf("store: clean forgotten fts: %w", err)
 	}
-	// Backfill FTS5 index for any existing unencrypted, unforgotten rows not yet indexed.
-	_, _ = d.sql.Exec(`
-		INSERT INTO fragments_fts (shard, seq, text)
-		SELECT f.shard, f.seq, CAST(f.data AS TEXT)
-		FROM fragments f
-		WHERE f.forgotten = 0 AND f.borg_group = '' AND f.data IS NOT NULL AND length(f.data) > 0
-		  AND NOT EXISTS (SELECT 1 FROM fragments_fts ft WHERE ft.shard = f.shard AND ft.seq = f.seq)`)
+	if err := d.migrateMemRepo(); err != nil {
+		return err
+	}
 	return d.migrateMarket()
+}
+
+// ensureColumnTx inspects PRAGMA table_info(table) inside tx and adds column only if absent,
+// failing closed on any real SQLite error instead of swallowing ALTER TABLE failures.
+func ensureColumnTx(tx *sql.Tx, table, column, colDef string) error {
+	rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if strings.EqualFold(name, column) {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	_, err = tx.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + colDef)
+	return err
 }
 
 // SetJSON stores arbitrary JSON state under key.

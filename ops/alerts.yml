@@ -43,7 +43,7 @@ groups:
         labels: { severity: critical }
         annotations: { summary: 'Restate durable execution plane is detached — live market trades will refuse to execute' }
       - alert: NektarRestartLoop
-        expr: changes(nektar_uptime_seconds[15m]) > 0 and nektar_uptime_seconds < 60
-        for: 5m
+        expr: resets(nektar_uptime_seconds[15m]) >= 2
+        for: 1m
         labels: { severity: critical }
         annotations: { summary: 'nektar daemon restarted repeatedly within 15m' }

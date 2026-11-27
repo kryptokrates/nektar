@@ -179,6 +179,9 @@ func (a *App) handleLLMProxy(w http.ResponseWriter, r *http.Request, provider, s
 
 	streamClient := &http.Client{
 		Transport: a.proxyTransport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 	if a.cfg.HTTPClient != nil && a.cfg.HTTPClient.Transport != nil {
 		streamClient.Transport = a.cfg.HTTPClient.Transport
@@ -220,7 +223,9 @@ func (a *App) handleLLMProxy(w http.ResponseWriter, r *http.Request, provider, s
 	for {
 		n, rErr := resp.Body.Read(buf)
 		if n > 0 {
-			_, _ = w.Write(buf[:n])
+			if _, wErr := w.Write(buf[:n]); wErr != nil {
+				break
+			}
 			if isStream && flusher != nil {
 				flusher.Flush()
 			}
@@ -239,7 +244,9 @@ func (a *App) handleLLMProxy(w http.ResponseWriter, r *http.Request, provider, s
 
 	if isInferencePost && resp.StatusCode >= 200 && resp.StatusCode < 300 && teed.Len() > 0 {
 		rawResp := teed.String()
-		go a.postProxyTurn(provider, shard, userPrompt, rawResp, isStream, captureOn)
+		a.goBackground(func(bgCtx context.Context) {
+			a.postProxyTurn(bgCtx, provider, shard, userPrompt, rawResp, isStream, captureOn)
+		})
 	}
 }
 
@@ -364,12 +371,12 @@ func injectProxyMemory(provider, subPath string, payload map[string]any, block s
 	}}, msgs...)
 }
 
-func (a *App) postProxyTurn(provider, shard, userPrompt, rawResp string, isStream, captureOn bool) {
+func (a *App) postProxyTurn(parentCtx context.Context, provider, shard, userPrompt, rawResp string, isStream, captureOn bool) {
 	assistantText := extractAssistantText(provider, rawResp, isStream)
 	if assistantText == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
 	defer cancel()
 
 	// Async receipt verification telemetry for any nektarr1.* tokens emitted by the model.

@@ -1,530 +1,152 @@
-# Operations guide (DOC-002)
+# Operations Guide — Nektar v0.1 (Pure-Go)
 
-## Prerequisites
+> **Honesty Rule:** Proofs establish **recorded, unaltered, and derivable by block time** — never that a memory's content is true, and model identity is *declared*, not zkML-proven.
 
-- Node 24, pnpm 12 (`corepack enable`), Docker Desktop (Teranode stack, TLC, Cedar SymCC, Rust oracle, mermaid-cli).
-- `pnpm install` (lockfile pinned; one `@bsv/sdk` 4.0.1 via `overrides`).
+---
 
-## Regtest stack
+## 1. Prerequisites & Build (Zero CGO, Single Binary)
 
-```sh
-pnpm stack:up      # Teranode v0.16.0 quickstart (infra/teranode-quickstart)
-pnpm stack:down
-```
-
-| Service            | Port                          | Used for                                                 |
-| ------------------ | ----------------------------- | -------------------------------------------------------- |
-| propagation (HTTP) | 8833                          | broadcasting txs (**not** 8084, which is internal gRPC)  |
-| asset API          | 8090 (basic auth = RPC creds) | `/api/v1/block_legacy/:hash` for BUMPs                   |
-| RPC                | 9292                          | headers (`getblockheader`), mining (`generatetoaddress`) |
-
-Credentials: `infra/teranode-quickstart/.env` (`rpc_pass`) and `nektar/.env` (`NEKTAR_REGTEST_WIF`). Both are gitignored and loaded automatically by the regtest e2e.
-
-Bootstrap the operator wallet with `node packages/mcp/dist/src/init.js` — it writes `NEKTAR_REGTEST_WIF` to `.env` (never prints it) and shows the regtest address. `--network=regtest` additionally verifies reserve funding on the running stack and prints the exact `generatetoaddress` funding command if empty; `--force` rotates (old-key UTXOs do not follow — rotate only on a quiet chain); `NEKTAR_ENV_FILE` overrides the target env file.
-
-## Funding (treasury chain)
-
-- One outpoint is persisted in `.state/treasury.json`. Each regtest run splits it into 120 fresh outputs; a per-run reserve (`.state/reserve-run.json`) starts empty.
-- If the treasury is missing, it is bootstrapped from an early coinbase.
-- The **funding key is separate from every owner key**: shards and automata have their own owner keys, and one funder pays fees.
-
-### Tracked-set model (no indexer dependency)
-
-Nektar deliberately does **not** scan the chain or query address indexes —
-both scale with total network volume. Instead it only ever spends outpoints
-it already knows: outputs **it created** (splits, change — recorded at
-construction) or outputs **handed to it** (`NEKTAR_FUND_TXIDS=<txid>` /
-`hex:<rawtx>`, `init.js --fund-txid=<txid>`). This is the SPV model the BSV
-Association's own SPV Wallet specifies: counterparties exchange transactions
-directly (BEEF/BRC-62, BUMP/BRC-74), verifiable against block headers —
-global address indexes are explicitly excluded for scale reasons.
-
-Per-network primitives, all O(1) per known outpoint/txid:
-
-| need            | regtest (Teranode)                                                                                   | mainnet                                                                                             |
-| --------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| tx mined?       | `asset /merkle_proof/<txid>` (404 = pending)                                                         | BSV Broadcaster `GET /tx/<txid>` → `merklePath` (BRC-74 BUMP)                                       |
-| outpoint spent? | `asset /utxo/<txid>?vout=N` (binary record; 0x01 = spent + spending txid) — wired into `takeReserve` | our ledger: we're the only spender — a spend is spent iff _our_ spend tx mined (broadcaster status) |
-| funding         | `init --fund-txid` → `getrawtransaction` → record outputs paying our key                             | `NEKTAR_FUND_TXIDS=<txid>` or `hex:<rawtx>` (fully offline)                                         |
-
-`NEKTAR_INDEXER_DISCOVERY=1` re-enables chain-index (bananablocks) address lookup as an opt-in
-convenience — off by default. Broadcasting is the one unavoidable external
-service (public BSV Broadcaster endpoints are no-key: `arcade-v2-us-1.bsvblockchain.tech`,
-`arcade-eu-1.bsvblockchain.tech`); running your own Teranode (e.g. a Hetzner box) makes
-the regtest path _literally_ the self-sovereign mainnet path — same endpoints,
-same code.
-
-**Index drift is real, and it is why the tracked set is the default.** On
-testnet we watched a public index's per-address utxo view serve a mined-spent
-output as unspent _and_ drop an entire funded address to zero within the same
-hour (rate-limit windows included); the tx record's own `spent_txid` was the
-only honest field. Every nektar spend path treats an index answer as a hint:
-a positive spend claim is believed only after the named spender's bytes name
-the outpoint, and an unreachable index revives/adopts nothing — never a chain
-claim.
-
-**Bootstrap funding UX (live networks):** `NEKTAR_WAIT_FUNDING=1` prints a
-terminal QR of the operator fee address at startup and holds boot until a
-few sats land (`NEKTAR_WAIT_FUNDING_MS` caps it, default 30 min — then it
-boots unfunded with the usual warning). Detection during the wait uses
-whatever is configured: `NEKTAR_FUND_TXIDS`, indexer discovery, or the p2p
-`pay` listener (which now auto-imports funding to the fee key instead of
-only logging the txid). Once: the QR never re-fires on the confirm tick.
-
-**Funding imports ride SpendGuard.** An unmined `NEKTAR_FUND_TXIDS` import
-internalizes zeroconf — the wallet broadcasts the funding tx itself — and that
-broadcast counts the received value as foreign spend against
-`NEKTAR_MAX_SPEND_SATS_PER_DAY` (a 150k funding needs ≥150k headroom for that
-day). A refused internalize stays retryable (broadcast failure classifies as a
-service error, never a tx failure). `hex:<rawtx>` of an _already-mined_ funding
-tx takes the proven path — no broadcast, no cap hit — so prefer pre-confirmed
-funding when the cap is tight.
-
-## Gates (run in this order; each has a short, bounded runtime)
+- **Go 1.27+** (zero CGO required — pure-Go SQLite via `modernc.org/sqlite`)
+- **Node.js 24+** *(only if rebuilding the embedded Svelte 5 Dashboard UI under `ui/`)*
+- **Optional:** Docker / Compose for containerized Hub/Agent stacks (`deploy/hub/`, `deploy/agent/`)
 
 ```sh
-pnpm -r build                      # all packages (contracts recompile the Rúnar artifacts)
-pnpm check:deps                    # every import is a declared dependency
-pnpm -r test                       # unit · contract · integration · fuzz (≤10 s per test)
-pnpm reproduce                     # vectors/core.json identical; pinned STARK program id verifies the committed real receipt
-pnpm e2e                           # offline story + v2 + P10/P14/v4 + full-paper scenario (~11 s)
-NEKTAR_NETWORK=regtest pnpm e2e     # same on Teranode (~2 min; run 3× for sign-off)
-node packages/e2e/dist/src/e2e-vault-regtest.js      # V1 FeeVault covenant on Teranode (fund→spend→continuation, over-cap refused)
-node packages/e2e/dist/src/e2e-covenants-regtest.js  # V2 CheckpointBond + V3 DisclosureSale covenants on Teranode
-pnpm formal                        # TLC model check of the AORG invariants (+ mutant caught)
-pnpm cedar:symcc                   # SymCC + cvc5 proof of level isolation (+ mutant refuted)
-pnpm smt:vectors > vectors/smt-rust.json   # regenerate the Rust SMT oracle vectors
-node tools/check-mermaid.mjs docs/*.md README.md   # every diagram renders
-pnpm bench                         # writes BENCHMARKS.md (measured)
-docker build -t nektar:local .      # clean-checkout gate (install → build → reproduce)
+# Build native static binary
+go build -o nektar ./cmd/nektar
+
+# Static cross-compile (Linux / Windows)
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o nektar ./cmd/nektar
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o nektar.exe ./cmd/nektar
+
+# Rebuild embedded Svelte 5 Dashboard UI (only when editing ui/)
+cd ui && npm install && npm run build
+# Sync ui/dist/ -> internal/server/ui_dist/ before rebuilding the Go binary
 ```
 
-## Running the MCP server
+---
 
-The MCP server now runs on the official SDK, with stdio and Streamable HTTP at `/mcp`. It has persistent `NEKTAR_NETWORK=regtest` mode with a confirmer, and installs through Docker MCP Toolkit with `pnpm mcp:install` / `pnpm mcp:smoke`. Full guide: [INTEGRATION.md](INTEGRATION.md). Live check of the production runtime with a restart: `node packages/mcp/demo/regtest-runtime.mjs`.
+## 2. Verification & CI Gates
 
 ```sh
-node packages/mcp/dist/src/bin.js              # stdio; offline demo chain that mines per tx
-NODE_OPTIONS="--max-old-space-size=512" node packages/mcp/dist/src/bin.js  # cap the agent's heap — use on small hosts (4 GB and under); RSS is driven by heap + NEKTAR_BATCH, not the image
-node packages/mcp/demo/client.mjs              # scripted agent session
-NEKTAR_LLM_URL=http://localhost:11434/v1 NEKTAR_LLM_MODEL=qwen2.5 node packages/mcp/demo/client.mjs   # model-driven
-docker compose run --rm -i nektar-mcp           # containerised
+go vet ./...
+go test -race -count=1 ./...
 ```
 
-Claude Desktop: copy `packages/mcp/demo/claude_desktop_config.example.json` into your Claude config and set `NEKTAR_MODEL_ID` to the exact provider release id (AGT-011).
-
-## HTTP API, metrics, alerts
-
-```ts
-import { createHttpApi, FileSecurityStore, NektarMemory } from '@nektar/mcp'
-const mem = new NektarMemory(chain, funder, fundKey, {
-  securityStore: new FileSecurityStore('.state/security.json'), // replay protection survives restarts
-  requireSignedProvenance: true,
-  finalityDepth: 6,
-  maxMergeDelayMs: 600_000,
-  batchPolicy: { maxLeaves: 1024, maxAgeMs: 60_000, maxBytes: 4_000_000 }
-})
-createHttpApi(mem).listen(8080)
-setInterval(() => mem.flushDue(), 5_000) // interval/byte/cost batch closing
-```
-
-| Route                                    | Purpose                                                                                                                            |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /v1/health`                         | liveness                                                                                                                           |
-| `GET /v1/openapi.json`                   | OpenAPI 3.1                                                                                                                        |
-| `GET /v1/metrics`                        | Prometheus: anchors, anchor failures, unconfirmed anchors, anchor lag, promise violations, proof latency, withheld reads by reason |
-| `GET /v1/tools`, `POST /v1/tools/{name}` | same tools as MCP                                                                                                                  |
-| `GET /v1/proof/{shard}/{seq}`            | public proof bundle + result                                                                                                       |
-| `GET /v1/checkpoint/{shard}`             | latest signed checkpoint + log pubkey                                                                                              |
-
-Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sbom.cdx.json`. Cross-implementation vectors: `pnpm smt:vectors`, `pnpm curve:vectors`.
-
-## Market hosts (overlay)
-
-Instances reach each other through overlay hosts listed in `NEKTAR_MARKET_HOSTS`. A host is a reference bstack overlay host running four modules: nektar (`tm_nektar_<network>_0..f`, `ls_nektar`), bbox (`tm_bbox_*`, `ls_bbox`), blogs (`tm_log_*`, `ls_log`) and bfinger (`tm_finger`, `ls_finger`). It is a replaceable relay, never a trust root: it admits only artifacts that verify (signature, network, lane, proven funding tree, expiry within 7 days) and every reader re-verifies what it returns. Hosts do not sync with each other; run at least two under different operators so withholding by one is detected.
-
-| Compose file                                 | Chain                                      | Hosts                       |
-| -------------------------------------------- | ------------------------------------------ | --------------------------- |
-| `deploy/bstack-sandbox/compose.yaml`         | devchain (no real coin)                    | `127.0.0.1:18091`           |
-| `deploy/bstack-sandbox/compose.regtest.yaml` | local Teranode regtest                     | `127.0.0.1:18191`, `:18192` |
-| `deploy/bstack-sandbox/compose.testnet.yaml` | public testnet headers via the header shim | `127.0.0.1:18291`, `:18292` |
-
-Images are pinned by digest. Module bundles are build artifacts; see `deploy/bstack-sandbox/README.md`. Host state is MySQL; nothing a host stores is authoritative.
-
-`pnpm scenarios:real` runs the three-seller deal (four production instances, two hosts) against the regtest pair and writes `summary.json` plus a per-agent `tx-log.jsonl` under `.state/run-real-*`.
-
-### Directory + bootstrap
-
-`NEKTAR_MARKET_HOSTS` is optional: unset, the instance uses `DEFAULT_MARKET_HOSTS` (baked-in seed hosts per network — untrusted entry points; `packages/core/src/env.ts`). An explicit list wins outright so private silos can exclude the seeds.
-
-Operators who set `NEKTAR_ANNOUNCE=1` publish a signed **directory card** (`kind=3` announce, prefix `nektar:market:announce:1\n`) on the reserved `dir` lane `tm_nektar_<net>_<nibble('dir')>` — `{pub, hosts[], packs[{shard, domains?, store|packUrl}]}` — republished on content change, when `exp` enters its last half, or — while its funding tree is unproven — on a 4-minute keep-alive inside the host's 10-minute `FUNDING_PROOF_MS` eviction window (stops the moment the tree proves; after an agent restart the first upkeep pass republishes unconditionally). `ls_nektar {announces: {net}}` enumerates live operators; a reader unions their hosts (https-screened on public nets) and can `importShard` offered packs — the zero-config join: seeds → announces → discovered hosts → seeded memory, no registry. `NEKTAR_SEED_DOMAINS` runs that import at boot — defaults to `*` (every announced pack) in the published image and deploy composes; set it to a comma list (`ops,teranode`) to filter, or empty to keep a silo. Already-imported shards skip.
-
-Note on unproven funding ancestry: a carrier admitted before its funding tree's BUMP lands carries a 10-minute host-side deadline (`FUNDING_PROOF_MS`) — on a slow-mining stretch the entry evicts until the publisher re-pushes (the announce keep-alive re-announces inside the window while the tree is unproven, `republishProved` re-records the entry once the tree proves, and a restart republishes on the first upkeep pass). A carrier whose funding ancestry has a _permanent_ gap — a parent mint that was killed before broadcast, a dropped draft — can never pass host SPV verification, so upkeep reaps it: after the same missing parent is observed on two consecutive passes, the tree is dropped from the ledger and every carrier it funded is deleted from the journal (logged `dead-ancestry: dropped <kind> tree … unservable parent …`) instead of retrying forever; stock then refills from live funding. One missed lookup never reaps — a transient index gap or a parent still propagating keeps its slot. Two announced operators on one box prove the wire and the union path; they do NOT prove operator independence — that gate is a second team running `deploy/hub/` on their own infrastructure.
-
-`deploy/hub/` is the all-in-one operator box (agent + host pair, announce on by default). `deploy/agent/` is the agent-only path — now zero-config on testnet.
-
-### Going live (mainnet)
-
-`NEKTAR_NETWORK=main` refuses to boot without `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND` — the deploy templates carry the knob and `deploy/agent/install.sh` enforces it at install time.
-
-- **Custody** — `NEKTAR_WALLET=toolbox` (default) derives the embedded wallet from `NEKTAR_FUND_WIF`/`NEKTAR_FUND_MNEMONIC`: headless-friendly, the WIF is the box's root secret. `NEKTAR_WALLET=client` delegates every signature to an external BRC-100 substrate (e.g. Metanet Desktop) — the app holds zero key material, but needs that substrate reachable, so it's the desktop path, not a server path.
-- **Spend caps** — on a box holding real keys set all three explicitly: `NEKTAR_MAX_FEE_SATS_PER_TX`, `NEKTAR_MAX_SPEND_SATS_PER_DAY`, `NEKTAR_MIN_BROADCAST_INTERVAL_MS` (defaults 1000 / 20000 / 250). Every funded spend — anchors, announce carriers, tree mints, escrow — routes through SpendGuard; refusals surface as `nektar_spend_refused_total` (`NektarSpendCapHit` alert) and `NektarFeeBalanceLow` covers anchor runway. Size the daily cap to the expected cadence: anchors + ~2 announce carriers/week + finger republish + tree refills — the regtest soak showed mint bursts alone can eat a 10k/day cap.
-- **Bootstrap** — `DEFAULT_MARKET_HOSTS` has no `main` entry by design: one operator's pair would be a fake plural seed. Until ≥2 independently operated public mainnet hosts exist, a main instance resolves `[]` (single-player) unless `NEKTAR_MARKET_HOSTS` names hosts explicitly — join an operator you know, or run `deploy/hub/` and be the first seed.
-- **Announce + seed on main** — `NEKTAR_ANNOUNCE=1` costs ~1 carrier/3.5d and makes you enumerable; it stays opt-in. `NEKTAR_SEED_DOMAINS` imports land in the anchored log — each costs a share of the next anchor batch; it defaults to `*` in the deploy path — set it empty to keep a silo.
-- **Gate list** — `docs/JOIN-MAINNET.md` separates the executable checks (build, `pnpm test:testnet`, beefcat conformance, engine-admission probe, kill-switch/backup/rotation drills) from the gates that can't be compressed (5-day soak, ≥1 external independent operator, one watched end-to-end escrow). An unchecked gate in the second column means not mainnet-ready.
-- **Contention knobs** — `NEKTAR_RESERVE_OUTS`/`NEKTAR_RESERVE_OUT_SATS` (default 2 × ~2×`NEKTAR_DEAL_FLOOR_SATS`): upkeep keeps that many medium self-pay outputs so a tree mint and a deal escrow never contend for one dominant UTXO. `NEKTAR_TREE_RESERVE_SATS` (default 2000) is the change a tree mint's take must leave behind — a utxo-size floor, not a cost; small treasuries lower it (~200–500 still covers fee + usable change, below ~100 the change strands). `NEKTAR_WANT_EXTEND_MS` (default 120000) lets a live buyer want republish at each collection boundary — a seller under load can answer in a later window instead of hitting `no_qualifying_offer`; the want's own `exp` still ends the deal. `NEKTAR_DELIVER_BOUND_MS` (default 45000) bounds one outbox delivery: the pump drains the due batch through a small worker pool so a dead host's leg overlaps instead of serializing, and a leg that never settles retries transport-classed (`deliver bound … exceeded` in the log) rather than parking its worker — raise it only if a legit send's two legs exceed the default on a slow link.
-
-### Confirmations without polling
-
-Broadcasts go to the BSV Broadcaster (`NEKTAR_BROADCASTER_URL`, fanned across `NEKTAR_BROADCASTER_URLS` + the built-in defaults — first acceptance wins). Status arrives by push: as a webhook at `/v1/broadcaster-callback` when `NEKTAR_CALLBACK_URL` is set (bearer `NEKTAR_CALLBACK_TOKEN`), or over the broadcaster's status stream when it is not — the instance then needs no inbound port. The stream rotates across every configured broadcaster: an auth-refusing endpoint (a keyless TAAL route) yields to the next one, so pushed statuses work without `NEKTAR_BROADCASTER_API_KEY`; set it and even the keyed route serves. Reconnects resume from `<dataDir>/sse-cursor` (per-endpoint — a switch resets the cursor); its token is generated once into `<dataDir>/callback-token`. Both paths share one handler: a status is a hint until its merkle path validates against the instance's own headers.
-
-## Object storage (bstore)
-
-Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Lightweb's storage market) instead of relying on the built-in HTTP origin. Writing to bstore is Go-only (`bstore s3d`), so Nektar acts as an S3 client — SigV4, path-style — to a gateway the **deployment operator runs and pays for**. With no store configured the feature is off and nothing else changes (`/v1/pack/{shard}` remains the pack path).
-
-| Env                                                     | Meaning                                                                          |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `NEKTAR_BSTORE_S3_URL`                                  | gateway base URL (e.g. `http://127.0.0.1:9000` for the quickstart `s3d`)         |
-| `NEKTAR_BSTORE_BUCKET`                                  | S3 bucket name — the bstore bucket id with `-` for `_` (e.g. `packs-psbqmkflww`) |
-| `NEKTAR_BSTORE_ACCESS_KEY` / `NEKTAR_BSTORE_SECRET_KEY` | SigV4 credentials — or `NEKTAR_BSTORE_SECRET_KEY_FILE` for a file-held secret    |
-
-- Buyer ops reaching `disclosure_verified` store a **redacted** evidence bundle at `evidence/<network>/<operationId>.json` (question and disclosure tx become SHA-256 digests — no plaintext or wrapped secret leaves the node) and commit the `{bucket, key, sha256, size}` ref into the op via an `evidence_stored` event, which the deal journal then anchors. `deals {operationId}` shows `evidence: {ref, stored: true}`; the operator tool `evidence {ref | operationId}` fetches and re-verifies.
-- `describeShard`/`sell` on a PUBLIC shard also PUT the shard pack at `packs/<network>/<shardId>/<sha256>.json` and publish the ref in `/.well-known/nektar` (`store` field) — `importShard {store}` fetches it.
-- Every stored object also gets a **CHIRP copy** at `chirp/<sha256(blob)>` plus a `chirp://<identifier>` ref on the stored `ObjectRef` (`ref.chirp`, `ref.endpoint`). One shared resolution order covers packs, evidence and ZK proofs (`fetchObjectByRef`): CHIRP via the signed client → CHIRP unsigned against the ref's endpoint → keyed object signed → keyed object unsigned — so the operator origin is only a fallback, never a required hop, and a ref carrying `endpoint` resolves with **no credentials at all** when the gateway serves public reads.
-- `delivered` envelopes now carry the pack's stock plaintext `refs[]` (`{url, sha256, length}` — https only, per stock admission) so a buyer resolves deal evidence through the store, not the seller's origin. Receipts/attestations carry `proofStore: {endpoint, bucket}` next to `proofCommit`: proof bytes sit at `chirp/<commit>` (the blob key IS the digest), so a verifier resolves them origin-free and re-runs verification with no `/v1/zkproof` call.
-- **Gateway posture:** configure the bucket for public (unsigned) reads — every consumer path above has a working unsigned leg; signed reads remain for operators with credentials.
-- Public packs are additionally committed as the **`nektar-packs` store** on the operator's bfinger record `refs` — each pack a kind-5 sub-record (its carrier commitment is the member), a kind-6 manifest listing members once count > 1, `refs.head` pointing at the manifest. A reader with only the operator pubkey walks `ls_finger` → `refs` → `{identityKey, carrier: head}` → members — no origin or `/.well-known` dependency.
-- **What Nektar verifies:** every read goes through `getVerified` — object size ≤ 8 MiB, optional expected size, and SHA-256 equal to the stored ref — before evidence checks or pack re-verification run; CHIRP reads additionally verify the closure (`verifyClosure`) over content-hashed nodes. A wrong or tampered object is refused, never trusted.
-- **What Nektar does not verify or operate:** provider possession proofs (CHIRP closures as bstore's internal proof protocol), bounty races/claims, provider settlement, and gateway availability or honesty — those are the gateway's and providers' business. The gateway's ETag is not an MD5; Nektar's own SHA-256 is the only integrity check relied on.
-
-## Transaction log
-
-`NEKTAR_TX_LOG=<path>` appends one JSON line per successful broadcast (all networks): `{t, txid, bytes, inSats, outSats, feeSats}` — `t` is a millisecond timestamp, `bytes` the raw transaction length, `inSats`/`outSats` the summed input/output values, `feeSats` their difference. `inSats`/`feeSats` are `null` when a source transaction is missing. Write failures are ignored; nothing else about broadcast behavior changes.
-
-## Operator drills
-
-### Kill-switch drill (new-spend stop)
-
-`automation/kill.ts` is the operator's hard stop for **new** spends. Either trigger works:
-
-- `NEKTAR_KILL=1` (or `true`/`yes`) in the environment
-- a `KILL` file at `<NEKTAR_DATA_DIR>/KILL` (or `NEKTAR_KILL_FILE=<path>`)
-
-The flag is consulted at every new-deal entry point — `publishWant`, `acceptOffer`, `enableSeller`, watch creation, and want/offer ingress — each throws `killed: operator stop flag is set`. It **fails closed**: a configured flag that cannot be read counts as stopped; only `ENOENT` is the running state. In-flight work is untouched: open escrows still settle, refund deadlines still fire, outbox retries keep draining — the stop never strands money.
-
-Drill:
-
-1. With the agent idle, `touch $NEKTAR_DATA_DIR/KILL` (or restart with `NEKTAR_KILL=1`).
-2. Try a new want — expect `killed: operator stop flag is set`. `enableSeller` refuses the same way. `/state` still serves; preflight reports the kill source.
-3. Fund a deal first, _then_ set the flag mid-flight — the escrow must still reach `completion_submitted`/`settled` or `refunded`. Nothing in the settle/refund path consults the flag.
-4. `rm $NEKTAR_DATA_DIR/KILL` — new wants are accepted on the next call; no restart needed (the flag is re-checked per entry point).
-
-### Fund-key + treasury handling
-
-- **The fund key is separate from every owner key.** It lives in `fee.key.json` under `NEKTAR_DATA_DIR` (scrypt + AES-GCM with `NEKTAR_KEY_PASSPHRASE`; plaintext keys are refused at boot). It pays anchor/deal fees only — shard ownership never depends on it, but losing it strands the funding float.
-- **`keyLockFile` per address.** `acquireLock(keyLockFile(pkh))` serializes every process that would spend from the same fund key — two nektar instances on one key refuse each other rather than racing spends. A dead owner's lock is displaced once its heartbeat goes stale (see instance.lock below).
-- **Top-up (`fundToolbox`).** When the funder reports `no spendable output >= N`, ingest foreign P2PKH outpoints with `fundToolbox(tb, [{txid, vout, tx}], srcKey)`: it builds the input BEEF from the source txs, calls the wallet's `createAction` with a `NEKTAR_BASKET` output, and broadcasts synchronously (`acceptDelayedBroadcast:false` — a queued wallet tx would hide the basket output). Precondition: every source tx must carry a merklePath (`trustSelf:'known'`).
-- **`.state` treasury files (test tooling):** `treasury.json` holds one outpoint, re-split into fresh outputs per run; `reserve.json`/`reserve-run.json` are the draw pool; `leases.json` is the cross-process lease table (5-minute TTL, deleted rows are expired, not stolen). `regtest-fund.mjs` output or swept agent leftovers (`sweep-agents.mjs`) keep it topped up — mining new treasury on an aged chain is hopeless once the subsidy collapses.
-- **The 1M bootstrap parent.** Preflight mints a 1,000,000-sat parent output (`preflight.ts`) so the very first tree/split has a spendable ancestor before any real funding exists — if preflight's funding check degrades, confirm that parent outpoint exists and is unspent.
-- **Rotation:** `init.js --force` rewrites `NEKTAR_REGTEST_WIF` (old-key UTXOs do **not** follow — rotate only on a quiet chain, then sweep). Fund-key rotation on live networks = create the new key, `NEKTAR_FUND_TXIDS` the sweep tx into it, repoint the passphrase-protected `fee.key.json`, verify `ops.fundingAddress()`/`GET /v1/wallet`, then retire the old key. Never rotate while a deal leg is mid-flight.
-
-### Restart under load
-
-- **`instance.lock`** in `NEKTAR_DATA_DIR` is a heartbeat lock — `{owner: "<pid>@<host>", beat: <ms>}`, rewritten on the live tick. A second process on the same data dir waits while the owner pid is alive and the beat is <20s old — the boot polls up to ~25s for the beat to go stale rather than crash-looping (a container recreate carries the predecessor's lock on the bind mount and can't pid-probe it). A dead local pid is displaced immediately; a remote/unverifiable owner (shared filesystem) is displaced only once the beat goes stale — never delete the file to force it, stop the owning process instead. The `ops` tool's `fix:true` repairs a corrupt or stale lock; a live lock is reported `refused`, not removed.
-- **WAL recovery is free.** `automation.sqlite`, `lanes.sqlite`, `records.sqlite` run WAL — a kill -9 mid-transaction rolls back cleanly on next open; no rebuild step.
-- **Lost wakes are recovered from persisted deadlines, not memory.** Every wait the process armed lives in the db (`due_at`, `next_at`, `next_reconcile_at`, journal/outbox rows). On boot the durable executor re-queues journaled invocations; the self-arming cadence legs (`dealfan.tick`, `transport.drain`, `upkeep`, `watchdog`, `watches`) re-arm at their ceilings; `reconcileOps` re-scans `funding_failed`/`refunded` ops past cooldown; `resubmitTick` re-airs `prepared`/`submission_unknown` intents. A restart can therefore only _delay_ work by one cadence ceiling — a wake that a crash ate is re-derived from the store, never lost. If an op looks wedged after restart, read `waitingOn()` for its outbox rows (`deferClass`/`nextAt`/`lastError`) before assuming a lost wake — a deferred row names its own blocker.
-
-### Canonical boot — the canary stack
-
-One compose project puts the agent(s), the Restate sidecar(s) and the market hosts on a single Docker network — every address is a service name, so the `host.docker.internal`/IPv6/loopback trap class cannot exist:
+Key subsystem verification commands:
 
 ```sh
-docker compose -f deploy/canary/compose.yaml up -d        # whole stack
-docker compose -f deploy/canary/compose.yaml logs -f seller
-docker compose -f deploy/canary/compose.yaml down         # stops; state survives
+# Core crypto, SpendGuard, contracts & offline SPV verification
+go test -race -v ./internal/core/... ./internal/contracts/... ./internal/chain/...
+
+# Wallet BRC-100 engine, UTXO baskets & reconciliation
+go test -race -v ./internal/wallet/...
+
+# Memory, Cedar isolation, Mangle grounding, MemRepo & SQLite store
+go test -race -v ./internal/store/... ./internal/memrepo/... ./internal/memory/... ./internal/policy/... ./internal/reasoning/...
+
+# Market broker, Restate durable workflows, Hub BRC-105 fees & Server auth/MCP
+go test -race -v ./internal/market/... ./internal/hub/... ./internal/server/... ./cmd/nektar/...
+
+# Mainnet safety gate preflight (exits 0 only when confirm + >=2 non-circular PoW witnesses + settle spec are valid)
+NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND \
+NEKTAR_HEADERS_SOURCE="woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2" \
+NEKTAR_SETTLE_SPEC="broadcaster:main" \
+  nektar check-mainnet
 ```
 
-- `deploy/canary/.env` (gitignored) carries `NEKTAR_KEY_PASSPHRASE` + the two `NEKTAR_*_HTTP_TOKEN`s — compose hard-fails without them.
-- `seller`/`buyer` services bind-mount `.nektar-main`/`.nektar-buyer` → `/data`. **The bind mounts are the agents** — identity, treasury, journals. Back up with any file tool; never `rm` them.
-- `restate`/`restate-buyer` keep their journals on named volumes — `docker compose down` survives; `down -v` would orphan armed sends on purpose only.
-- Two nodes → two sidecars (`restate` + `restate-buyer`) — never share one.
-- The image: `docker build -t nektar:canary .` after source changes (`--secret id=GITHUB_TOKEN,env=GH_TOKEN` feeds the stark stage's GitHub fetch).
-- Kubernetes would buy nothing here the compose network doesn't already give — same service-DNS model; revisit when the stack needs more than one box.
+---
 
-### Executor plane (Restate sidecar)
+## 3. Running & Operating a Node
 
-- **The plane is required for every boot, automation on or off.** `bin.ts` runs `ensureRestate` before the runtime opens: `NEKTAR_RESTATE_URL` wins → a live admin (:19070 then :9070) is adopted → the bundled `restate-server` spawns (release artifacts only; on Windows through `wsl.exe` — needs WSL with a distro: `wsl --install -d Ubuntu`). If none of those yields a plane the process logs `RESTATE_REQUIRED` and exits 2 _before the data dir opens or the instance lock is taken_ — there is no memory-only degrade because the tx object, confirmer cadence and records watcher all sit on the journaled plane. Three ways to provide one: set `NEKTAR_RESTATE_URL` to a running ingress, run the release artifact (it bundles `restate-server`), or start Restate yourself.
-- **Advertise a URI the sidecar can actually dial.** `NEKTAR_RESTATE_ENDPOINT_URI` defaults to `http://127.0.0.1:9080` — correct only when the restate server is a _host process_. A **containerized sidecar cannot dial loopback**: the URI resolves inside the container. On Docker Desktop use the host-gateway IPv4 (`http://192.168.65.254:<port>`). Avoid `host.docker.internal` — its DNS can answer an unroutable IPv6 ULA on Docker Desktop, and a resolved-but-unroutable address is worse than a refused one (registration succeeds because the _admin_ call works; every delivery then retries into `RT0010 network unreachable`). Registration logs the advertised URI plus this hint when it is loopback.
-- **Paused invocations wedge keys silently.** Services run `retryPolicy { maxAttempts: 30, onMaxAttempts: 'pause' }` — a leg that exhausts delivery retries is _paused_, and every later send on that virtual-object key queues behind it forever. Symptom: ticks stop running while `call`/`send` time out. Self-heal: the endpoint resumes paused invocations that never ran user code (`journal_size <= 1`) or whose last failure is delivery-shaped — at registration and on a 60s floor; deterministic failures stay paused (the breaker's job). Detection: `GET /state` → `automation.rt.paused`, the `restate-plane` preflight check (`automationDoctor`, watchdog tier), or `restate invocations list` on the admin port. Manual recovery: `restate invocations resume --yes <id>` (resumes on the deployment it started on — after re-registering a fixed endpoint, pass `--deployment <new-id>`; a never-started invocation has no pinned deployment and resumes onto the live one). Deleting a dead deployment (`DELETE /deployments/<id>?force=true`) clears everything still pinned to it.
-- **Two nodes need two sidecars.** Service names (`nektar-dealfan` etc.) are fixed — a second node's registration steals the first's manifest routing and its invocations land on the wrong store. One sidecar per node, each with its own `NEKTAR_RESTATE_URL`/`ADMIN`/`ENDPOINT_URI`/`ENDPOINT_PORT` quad.
-- **A self-deal needs two agent _identities_, not one node.** The seller refuses wants whose `pub` is its own (`w.pub === this.me`) — a single node can never see its own want. Boot a second data dir for the buyer (own keys, own sidecar, own policy) and let the two meet on the same market hosts.
-- **Keep `scoring.collectMs` ≥ 5000.** The buyer republishes a still-live want at every collection boundary for its `wantExtendMs` life — a 1s window queues ~120 `publish-want` rows and drowns the drain. Policy approval rejects anything below 5000.
+### Foreground vs. Background Daemon
 
-## Troubleshooting
+```sh
+# Flagship 1-command background start + Restate + auto-dock + live receipt check:
+nektar up                                              # testnet (~/.nektar, :18420)
+nektar up --network main --confirm I_UNDERSTAND        # mainnet (~/.nektar/main, :18420)
+nektar up --install-service                            # install per-user login autostart
 
-| Symptom                                                                       | Cause                                                                                                                                                       | Fix                                                                                                                                                                                                                                        |
-| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `RT0010` / `h2 pool connection error: network unreachable` in the sidecar log | the advertised endpoint URI resolves to something the container cannot route (loopback, unroutable IPv6 `host.docker.internal`)                             | re-register with a container-routable `NEKTAR_RESTATE_ENDPOINT_URI` (`192.168.65.254` on Docker Desktop); delete the stale deployment, then `restate invocations resume --yes` the paused heads                                            |
-| deal ticks stop; `call`/`send` time out, nothing on the hosts                 | paused invocations wedging object FIFOs                                                                                                                     | `GET /state` → `rt.paused` / `automationDoctor` `restate-plane` → `restate invocations resume --yes <id>`                                                                                                                                  |
-| want `collecting` forever, zero offers, seller silent                         | buyer and seller are the same node (`w.pub === this.me` refusal)                                                                                            | run a second identity; check the log for `want <id> refused — self-published`                                                                                                                                                              |
-| `publish-want` rows flood the outbox; hosts log `tm refuse reason=exp`        | `scoring.collectMs` far below an offer round-trip republishes the want each window                                                                          | approve a policy with `collectMs` ≥ 5000; rows already queued drain/dead-letter on their own                                                                                                                                               |
-| `tm refuse reason=exp` at the host                                            | envelope body expiry passed in transit — stale queue, wrong clocks, or a wedge upstream                                                                     | harmless for replayed stale rows; on fresh envelopes check sender/receiver clock skew and the drain                                                                                                                                        |
-| `TX_MISSING_PARENT`                                                           | propagation race in a burst                                                                                                                                 | handled: identical re-broadcast with backoff; persistent → check that the parent was accepted                                                                                                                                              |
-| `no Merkle proof at height`                                                   | asset API indexes a just-mined block with lag                                                                                                               | handled: bounded retry; the mined height is read from the block header, not the tracker                                                                                                                                                    |
-| proofs stay unverified / `no corroborated header at height …` in the log      | the second header source (index) is unreachable or rate-limited; strict mode refuses to anchor proofs on one source — an outage is a retry, never a verdict | restore the index/witness source; or knowingly set `NEKTAR_STRICT_HEADERS=0` (single-source proofs, not recommended)                                                                                                                       |
-| `reserve dry: no funding UTXO available`                                      | treasury exhausted                                                                                                                                          | re-run (the treasury re-splits) or delete `.state/treasury.json` to re-bootstrap                                                                                                                                                           |
-| `script[serializedBytes] is not a function`                                   | two `@bsv/sdk` versions in the graph                                                                                                                        | `pnpm why @bsv/sdk` must show one version; keep the `overrides` in `pnpm-workspace.yaml`                                                                                                                                                   |
-| `SCRIPT_INVALID … OP_EQUALVERIFY` on a new Rúnar method                       | runar 0.4.6 miscompiles (see migration-log)                                                                                                                 | distinct `const`s instead of reassigned `let`; every method continues state                                                                                                                                                                |
-| Record proof reports `settled:false` / `anchorState:'broadcast'`              | anchor broadcast but no BUMP attached yet                                                                                                                   | normal at 0-conf — the record is _anchored_ (locally verified); `settled` upgrades when the confirmer attaches the BUMP. A `NotMined`/`BEEFInvalid` result from the STARK-anchored verifiers still means a genuinely missing or bogus BUMP |
-| finality stuck at 1 confirmation on regtest                                   | `getblockchaininfo.blocks` lags `generatetoaddress`                                                                                                         | the tracker's `tipHeight` uses the mined header height                                                                                                                                                                                     |
-| Long-running command                                                          | a bug, not slowness                                                                                                                                         | stop, inspect, fix; never extend timeouts                                                                                                                                                                                                  |
+# Stop cleanly (add --uninstall-service to remove login autostart):
+nektar stop
+nektar stop --uninstall-service
 
-## Backups
+# Foreground server (for systemd / Docker / debugging):
+nektar serve --listen 127.0.0.1:18420
+nektar serve --hub --listen :18420                     # with embedded 16-lane Overlay Hub at /hub/
+```
 
-- `.state/` (treasury, reserve) must be backed up per environment; it holds funded outpoints.
-- **Wallet custody migration (reserve.json → wallet.sqlite).** The file
-  reserve (`reserve.json`) is no longer the coin book — `NEKTAR_WALLET=toolbox`
-  (default) holds funding UTXOs in `wallet.sqlite` and `NEKTAR_WALLET=client`
-  holds them in the external wallet. The file only seeds the wallet once at
-  boot. Operators moving an existing data dir forward: stop the server,
-  delete `reserve.json`, restart — the wallet re-discovers its spendable set
-  from chain (funding imports are idempotent). `NEKTAR_WALLET=legacy` was
-  removed; starting with it fails fast. Back up `wallet.sqlite` the way you
-  backed up `reserve.json`.
-- Shard stores: `MemoryShardStore` is in-process. For persistence use the file/sqlite stores (`packages/log`) and back them up with the overlay sqlite files. The anchored roots let you detect any restore that lost or altered records.
-- Revocations, the challenge registry and issued ZK membership queries persist via `FileSecurityStore` in the runtime (`NEKTAR_DATA_DIR`). The in-process demo server keeps them in memory.
-- **Mainnet (MVP) runbook.** The operator pays all anchor fees from a capped fee key; readers and verifiers pay nothing.
-  1. Start:
-     ```sh
-     NEKTAR_NETWORK=main NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND \
-     NEKTAR_KEY_PASSPHRASE_FILE=/run/secrets/pass NEKTAR_DATA_DIR=/data \
-     node packages/mcp/dist/src/bin.js --http 8080
-     ```
-     Without the confirm flag, or without a passphrase, it refuses to start. Keys (`keys.json`, `fee.key.json`) are scrypt + AES-GCM encrypted, and plaintext keys are refused.
-  2. Send a small float to the address printed on stderr (`GET /v1/wallet` shows it too). UTXOs are discovered via WhatsOnChain.
-  3. Broadcasting goes to **BSV Broadcaster** (the official BSV Association Teranode-native broadcaster, formerly Arcade), e.g. `arcade-v2-us-1.bsvblockchain.tech` (or `arcade-eu-1.bsvblockchain.tech`):
-     - `POST /tx`; Extended Format when every parent is known, raw otherwise;
-     - falls back to WhatsOnChain only on network/5xx errors;
-     - fee rate `max(100 sat/kB, broadcaster policy)`;
-     - headers and SPV from Chaintracks (PoW-verifiable, no key) with the chain index as second source; BUMPs from the broadcaster first, else the index TSC proof; raw-tx pulls (`/tx/{txid}/hex`) come from the index, and `hex:` funding imports + `NEKTAR_FUND_TXIDS` bypass it entirely; finality depth 6;
-     - a 200/202 means accepted. The anchor chain continues immediately, and the BUMP is attached in the background once the transaction is mined.
+### Custody & Funding Operations
 
-     **Status delivery — webhook mode.** With `NEKTAR_CALLBACK_URL` set, every broadcast carries `X-CallbackUrl`; the broadcaster pushes each status transition (`SEEN_ON_NETWORK` → `MINED`/`IMMUTABLE`, or `REJECTED`/`DOUBLE_SPEND_ATTEMPTED`) to `POST {url}/v1/broadcaster-callback`. When `NEKTAR_CALLBACK_TOKEN` is set it is sent as `X-CallbackToken` and the route requires it back as `Authorization: Bearer`. The URL must be publicly routable.
+- **Desktop-first default (`--wallet auto`):** If BSV Desktop / Metanet Desktop is unlocked on `http://127.0.0.1:3321` for the matching network, Nektar selects `client` custody automatically and stores zero local spending keys. Otherwise it uses the embedded BRC-100 SQLite wallet under `<dataDir>/wallet/`.
+- **Strict desktop custody:** `nektar up --wallet client` (refused on `memory`/`regtest`).
+- **Treasury / hot-float flow (embedded wallet):**
+  ```sh
+  nektar wallet status
+  nektar wallet address --qr
+  nektar wallet fund --from-desktop --sats 25000
+  nektar wallet sync
+  nektar wallet fuel
+  nektar wallet sweep --to-desktop --network main --confirm I_UNDERSTAND
+  ```
 
-     **Status delivery — stream mode.** Without a callback URL the instance pulls the same statuses from `GET {broadcaster}/events?callbackToken=<token>` — an SSE stream, outbound-only, no inbound port needed. The token is `NEKTAR_CALLBACK_TOKEN` or a per-instance random value persisted to `<data dir>/callback-token` (0600); submissions carry it as `X-CallbackToken` so the stream only sees this instance's transactions. Reconnects resume via `Last-Event-ID`, with the last delivered id persisted in `<data dir>/sse-cursor`. Both modes feed the same handler: a `MINED`/`IMMUTABLE` BUMP is verified against the instance's own tracker before it confirms — a status is a hint, never proof.
+### Health, Metrics & Self-Diagnosis
 
-  4. Hard caps, enforced before every broadcast and fail-closed:
-     - `NEKTAR_MAX_FEE_SATS_PER_TX` (1000)
-     - `NEKTAR_MAX_SPEND_SATS_PER_DAY` (20000)
-     - `NEKTAR_MIN_BROADCAST_INTERVAL_MS` (10000)
-       4b. **Consensus-enforced caps (GOAL-v7 V1, optional):** `NEKTAR_FEE_VAULT`
-       routes anchor funding through the `NektarFeeVault` covenant — caps are
-       enforced by node script eval, not just the local SpendGuard. Value is
-       inline JSON or `@/path/to.json`:
-       `{"perTxCap":1000,"windowCap":20000,"windowBlocks":144,"maxFee":10,"fundSats":500,"vaultSats":50000}`.
-       On first start it deploys the vault (one tx, `vaultSats` locked) from the
-       reserve; each anchor then mints a `fundSats`-capped P2PKH funding out.
-       The vault utxo + minted outs persist in `NEKTAR_DATA_DIR/vault-utxo.json`
-       (back it up with `.state/`). A covenant spend that violates per-tx /
-       rolling-window / fee caps is refused by the network (TX_INVALID) —
-       independent of local config. Reserve outs the vault did not mint are
-       never used for anchoring while this is set.
-  5. Measured at 100 sat/kB: genesis 1,143 B / 115 sats, append 3,315 B / 332 sats, rotate 2,904 B / 291 sats.
-  6. Monitor `GET /v1/wallet` (balance, runway), `GET /v1/costs`, and the alerts `NektarFeeBalanceLow`, `NektarSpendCapHit` and `NektarBroadcastFailures`.
-  7. Back up `NEKTAR_DATA_DIR` (keys, state, reserve, spend ledger, records) **and** the passphrase. Losing either loses the shard ownership keys.
-  8. Smoke without spending: `pnpm main:readonly`.
-- **Paid disclosure (GOAL-v7 V3, opt-in, BIP-199 escrow):**
-  `NEKTAR_PAID_DISCLOSURE=1` exposes the consolidated `sale` tool — one
-  state machine, `op: offer|offerMemory|escrow|complete|refund|claim`
-  (SDK tool list and HTTP `/v1/tools` both honour the gate; the
-  dispatcher refuses `sale` when unset). The escrow is **buyer-funded**
-  — the seller can never take a deposit without revealing:
-  1. `sale op=offer` (seller): wraps a value to a buyer pubkey (BRC-42;
-     omit `buyerPub` for public plaintext) and returns the covenant cfg +
-     committed `wrapped` + `sellerPub`/`offerSig` — the seller's signed
-     offer attestation (§16/17 delegation signature; the buyer verifies
-     it before funding). `op=offerMemory` is the memory-bound variant —
-     plaintext records sell `serializeFragment` bytes (`mode:"fragment"`);
-     **encrypted records sell the fragment key** (`mode:"key"` — the §7
-     decryption capability + ciphertext + provenance). The returned
-     `commitment {leaf, hdp, anchorTxid, authorPub, level, batchR, proof}`
-     carries the inclusion evidence π_i.
-  2. `sale op=escrow` (buyer): pass `offer {sellerPub, offerSig, commitment}`
-     to verify the signed offer (refuses MITM-swapped cfgs) and the
-     leaf's inclusion path before funding; then completes the cfg with
-     its own `depositorPkh` and funds
-     `DisclosureSaleHost(cfg).lockingScript()` from the operator key.
-     Deposit should be `price + maxFee + change margin`.
-  3. `sale op=complete` (seller): spends the escrow via `buy` — `wrapped` is
-     revealed on-chain in the same tx that pays the seller exactly
-     `price` and returns change to the depositor. The covenant pins the
-     change destination and bounds the fee (`maxFee`), so the completer
-     cannot reroute or burn the deposit.
-  4. `sale op=claim` (buyer): re-parses that buy tx, re-checks
-     `sha256(wrapped)==hWrapped` and unwraps to the operator key. For
-     `mode:"fragment"` it recomputes `computeLeaf(parseFragment(payload))`;
-     for `mode:"key"` it decrypts with the sold key and recomputes
-     `computeLeaf({d,p,hdp,E})`. Both verify the leaf against the
-     commitment and check the provenance σ (`authorVerified`) when the
-     record carries an author key + signature.
-  5. `sale op=refund` (buyer): if the seller never completes, the depositor
-     reclaims the escrow after `refundAfter` — depositor-signed,
-     locktime-gated.
-     GOAL-v8 additions: offers carry `expiresAt` (inside the signature —
-     expired offers are refused at verification AND before escrow funding),
-     and `sale op=escrow` refuses a `refundAfter` that isn't safely in the
-     future (`> currentHeight + margin`) before any deposit is made.
-     Threat note: `wrapped` is public on-chain — private mode relies on
-     BRC-42 ECDH confidentiality; the covenant binds payment↔reveal but
-     cannot prevent the buyer reselling the plaintext afterwards, nor a
-     third party front-running a _public_ payload they saw in the mempool.
-- **Public shard packs (cold-start sharing, on by default):**
-  `GET /v1/pack/{shard}` serves a public shard's portable pack — every
-  record's plaintext + provenance + its anchor `ProofBundle`, the same
-  object `exportShard` returns plus a shareable `packUrl`.
-  `GET /.well-known/nektar` is the discovery doc: `{verifyBase,
-publicShards:[{shard, records, packUrl, import}]}` enumerating what the
-  operator offers (private shards, `__*` system shards, and shards holding
-  level>0 records are never listed). `NEKTAR_PACK_SHARE=0` disables both.
-  The importer calls `importShard {from: "<base>", shard: "<name>"}` (or
-  `{packUrl}`) — the fetched pack is parsed and **every bundle re-verifies
-  against the local chain view**; tampered or cross-network packs land in
-  `unverifiable`, never trusted, and the import event is anchored on
-  `__imports__`. Remote fetch is http(s) only — the zero-trust import path
-  makes a hostile pack a reporting entry, not a compromise.
-- **Private shards (owner-declared, automatic proof selection):**
-  `remember(…, private:true)` sets a monotone `private` flag on the shard
-  — persisted in the state store, it survives restarts and can never be
-  un-set (`private:false` on a private shard is refused). Public shards
-  keep the ordinary Merkle+BEEF citation path. A private shard: `prove`
-  refuses outright; `groundedAnswer`/`commitReceipt` **auto-prove** a
-  bare private cite — the service self-issues a `zkQuery`, runs
-  `proveMembership` (real RISC Zero STARK, ~50 s), verifies it, and
-  commits the cite **redacted** — or, when the caller supplies
-  `{zk:{queryId, proof}}`, runs `verifyMembership` on that instead
-  (single-use `zkQuery` per cite). When it passes, the ref commits as
-  `{private:true, hdp, anchorTxid}` — the fragment hash and anchor stay
-  auditable, the shard name never reaches the anchored receipt.
-  `/v1/verify` renders it as "Cited record — private shard
-  (ZK-verified)". Fail-closed: a missing or invalid proof strips the
-  claim rather than leak the cite. The accepted proof becomes a public
-  artifact: committed as `proofCommit` (sha256) inside the redacted ref
-  and fetchable at `GET /v1/zkproof/<commit>` — a verifier re-runs the
-  STARK itself (`reverifyMembershipBytes` — peek mode; the committed
-  proof is already consumed, the tombstone proves it was issued and
-  used exactly once). Missing artifact → the private cite cannot be
-  marked verified. This is a _privacy_ policy on the data, not a caller
-  preference — and like all proofs here it attests membership, never
-  truth.
-- **Model-execution attestation (`attestInference` tool):** nChain
-  ai_inference-style — the shipped Groth16 proof of a quantized
-  784×16×10 MLP binds the single public statement
-  `poseidon(input ‖ output ‖ poseidon(model))`, re-derivable off-chain
-  by `packages/zk/src/poseidon-toy.ts` (bit-exact). Three receipt
-  states: **declared** (modelManifest only) → **statement-attested**
-  (`modelAttestation` embedded, validated at commit — a statement that
-  does not re-derive is refused) → **attested+anchored** (the DEFAULT —
-  `attestInference` anchors `sha256(proof)` in a ~300 B OP_RETURN
-  attestation tx, serves the proof at `/v1/zkproof/<commit>`, and
-  `verifyReceipt` re-fetches the bytes + re-checks the anchored
-  commitment) → **consensus-verified** (`onchain:true` — the ~398 KB
-  in-script verifier is deployed + spent; Wright §18 "executable
-  on-chain if necessary", i.e. the dispute/showcase rail, ~440 KB total;
-  regtest-proven via `e2e-grothinf-regtest.mjs`, public testnet-mined via
-  `e2e-grothinf-testnet.mjs` at h1766667). `commitReceipt` and
-  `groundedAnswer` also accept `{attestInference:{…}}` to auto-attest in
-  one call. Artifacts come from
-  `tools/groth16-spike/spike_groth16_aiinf.py` (emits
-  `lock-aiinf.hex`/`unlock-aiinf.hex` into `tools/groth16-spike/out/`;
-  override dir via `NEKTAR_GROTH16_OUT`). Only the canned demo vector
-  has a proof — LLM inference stays declared. Dev trusted setup,
-  nChain toy params, Research License — regtest-grade, non-commercial.
-- **Paid service (opt-in, BRC-166-style atomic settlement):**
-  `NEKTAR_PAYMENTS=1` + `NEKTAR_OPERATOR_WIF` gates `anchor`,
-  `groundedAnswer`, `commitReceipt` and the prover tools
-  (`proveMembership`, `proveSubset`, `proveDerivation`,
-  `attestMembership`) behind a per-call P2PKH payment —
-  the x402 `exact` profile, no wallet ecosystem: the caller signs a whole
-  raw tx and hands it over, we verify + broadcast. **Startup is
-  fail-closed**: `openRuntime` refuses to boot with `NEKTAR_PAYMENTS=1`
-  unless `NEKTAR_OPERATOR_WIF` is set and parses as a valid WIF — an
-  invoice to a missing address can never settle. The WIF is used for its
-  ADDRESS only (never signs, never leaves the box); startup logs
-  `nektar: payments on — settling to <addr>`. Prices:
-  `NEKTAR_PRICE_ANCHOR_SATS` (default 100),
-  `NEKTAR_PRICE_GROUNDEDANSWER_SATS` / `NEKTAR_PRICE_COMMITRECEIPT_SATS`
-  (default 250), `NEKTAR_PRICE_PROVEMEMBERSHIP_SATS` /
-  `NEKTAR_PRICE_PROVESUBSET_SATS` / `NEKTAR_PRICE_PROVEDERIVATION_SATS` /
-  `NEKTAR_PRICE_ATTESTMEMBERSHIP_SATS` /
-  `NEKTAR_PRICE_ATTESTINFERENCE_SATS` (default 500 — the prover tier;
-  proving is ~50 s of CPU, `attestMembership`/`attestInference` also
-  spend reserve outpoints), or `NEKTAR_PRICE_SATS` for all. Verifier-side
-  tools (`verifyMembership`, `verifyCombined`, `verifySubset`,
-  `verifyDerivation`, `verifyAttestation`, `zkQuery`, `verifyReceipt`)
-  are never gated — a verifier pays to _get_ a proof, never to check one.
-  Flow: unpaid call → `402`-shaped `{paymentRequired}` invoice (also
-  `GET /v1/pay/quote?tool=…` → real HTTP 402 + `PAYMENT-REQUIRED`
-  header; `GET /.well-known/x402` → the priced-tool catalog for
-  discovery). The caller's tx must (a) pay `lockingScriptHex`/`payTo` ≥
-  amount and (b) carry `OP_FALSE OP_RETURN nektarpay:<invoiceId>` — the
-  tag binds the payment to THAT call, publicly auditable from the tx
-  alone. Retry with `payment:{invoiceId,transaction}` → the tx is
-  verified + broadcast and the **receipt commits the settlement txid** —
-  the "signed usage receipt" names what paid for it; `/v1/verify` shows a
-  `paid` check line (receipts minted before enabling payments will show
-  unpaid → failed while the flag is on). One tx pays for exactly one
-  call: consumed invoices and txids are refused by the stock
-  `LedgerReceiver` — one line per accepted payment in
-  `<dataDir>/payments.jsonl` (the stock `LedgerFile` name and line
-  format, so a Lightweb host reads the same file); a legacy
-  `payments.json` txid list is migrated in on first run.
-  `payment.transaction` accepts raw hex **or BEEF** (AtomicBEEF too) —
-  BEEF is the right choice: funding parents travel inline, which the
-  `verifyScripts` and Teranode Extended Format both want.
-  `payclient.ts` (`buildPaymentTx`) is the reference client: payer WIF +
-  spendable utxos in → signed BEEF hex out; any WIF-capable signer works
-  the same way.
-  Verified on a real chain by `packages/e2e/src/e2e-pay.mjs`:
-  `NEKTAR_NETWORK=regtest node packages/e2e/src/e2e-pay.mjs` (local
-  Teranode) — payer funding tx, 402 invoice, signed settlement broadcast
-  by real consensus, receipt commits the txid, `paid` check green,
-  replay rejected.
-  `packages/e2e/src/e2e-pay-remote.mjs` drives a DEPLOYED server over
-  the public wire (`NEKTAR_REMOTE_URL` + `NEKTAR_HTTP_TOKEN`): MCP
-  remember → auto-anchor → 402 → locally signed BEEF settlement →
-  public `/v1/verify` → tx visible via BSV Broadcaster.
-  Regtest caveat: settlement is recorded on the local chain, not
-  consensus-validated — real payment semantics need a live network.
-- **Access audit log (GOAL-v8 D6, opt-in):** `NEKTAR_ACCESS_LOG=1`
-  appends timestamped `{event:'decrypt'|'traverse', shard, seq, caller}`
-  records to the `__access__` shard, which anchors like any other shard.
-  **Off by default** — the log is plaintext and records who read what;
-  enable only where that tradeoff is acceptable. `logAccess()` is the
-  public entry for callers that traverse outside `memory` (graph walks).
-- **Anchored identity ledger (GOAL-v8 D4):** every `rotate` now also
-  writes the `RotationCert` to the `__identity__` shard and anchors it.
-  `rotationChainProof(shard)` returns the genesis owner + per-cert
-  inclusion evidence; `verifyAnchoredRotationChain` (reasoning)
-  replays the chain for third parties — no state-dir trust needed.
-- **Anchor authorship σ_n (GOAL-v8 D5):**
-  `extractAnchorAuthorship(spendTx, spentAnchorScript)` (contracts)
-  pulls `{ownerPub, sig, preimage}` out of an anchor spend and verifies
-  `sig` over `sha256(preimage)` — the discrete Appendix-D artifact.
-- **Derived-content level floor (GOAL-v8 D2):** `remember` accepts
-  `premiseRefs` — the stored level is floored at `max(cited levels)`.
-  `revise` inherits the base's level automatically.
-- **Receipt model binding (GOAL-v8 D7):** configure
-  `model:{id, params, weightsHash}` on the instance; receipts carry it
-  (plus per-call `modelParams`) inside the signed digest.
-- Testnet (`NEKTAR_NETWORK=testnet` — test coins):
-  - Endpoints: BSV Broadcaster (ARC-compatible) `https://arcade-v2-testnet-us-1.bsvblockchain.tech`, bananablocks index `https://test.bananablocks.com/api/v1`, optional ChainTracks for the tip. Same live code path as `main` — SpendGuard caps, encrypted keys, index merkle paths.
-  - Differences from main: **no** `NEKTAR_MAINNET_CONFIRM` needed; fee floor is 1 sat/kB (broadcaster policy is 0 — we never send zero-fee txs); testnet address/WIF encoding (fee key prints as `m…`/`n…`); confirm interval 30 s.
-  - Read-only smoke (no spend): `pnpm testnet:readonly` — broadcaster policy, index tip, header root check, and a real merkle path for a txid passed as argv verified with `merklePath.verify(txid, tracker)`.
-  - Funded pilot: `NEKTAR_DATA_DIR=.live-pilot NEKTAR_KEY_PASSPHRASE=… NEKTAR_NETWORK=testnet pnpm live:pilot` — remember→anchor→BUMP→prove→append→rotate→restart-no-fork, with explorer links and per-tx fees from `ops.costs()`.
-  - **Failure modes observed live (2026-11-18 soak)**:
-    - _Host `/submit` storms of `AbortError` at ~10s cadence_: the header shim's 2-of-2 root corroboration was starving — WhatsOnChain rate-limits shared/NAT egress (429s), so `/v1/root/<h>` 404'd and every BUMP verify stalled. `SHIM_SINGLE_OK=1` in `compose.testnet.yaml` serves the lone chaintracks answer (degraded but still SPV-verified); check `docker logs <shim>` for `only <source> answered — refusing` before blaming hosts.
-    - _Host `/submit` failing `missing an associated source transaction` on a fixed txid_: a journaled `finger:token:*` bundle whose fee-parent ancestry was never fetchable — the frozen beef can never verify, and the preServe loop replayed it every pass (~80 poisoned rows accumulated). Durable fix: serve paths now heal-then-skip gapped bundles (`beefGaps`/`servable` in `bstack/finger.ts`). Triage: scan `bstack_carriers` for unproven entries naming absent parents, `delete` those rows — the re-serve loop skips missing seqs.
-- ZK proving:
-  - **The nektar Docker image ships the prover** (`/usr/local/bin/nektar-stark` + `r0vm`, `NEKTAR_STARK_PROVER` preset). Its build stage fails if the rebuilt program id differs from the pinned one.
-  - Outside Docker, use the `nektar-stark-build` image (`pnpm stark:image` + `pnpm stark:build`) or point `NEKTAR_STARK_PROVER` at a native binary.
-  - Verification needs none of this (WASM in Node).
+```sh
+nektar doctor                 # human-readable [GREEN]/[AMBER]/[RED] checks + next commands
+nektar doctor --json          # machine-readable JSON
+nektar status                 # identity, balance, shards, policy hash, SpendGuard counters
+nektar open                   # open paired Dashboard in browser (pass --start to auto-boot)
+```
+
+HTTP observability endpoints (port `18420`):
+
+- `GET /v1/health` (`/health`, `/healthz`) — public liveness probe
+- `GET /v1/metrics` — Prometheus 0.0.4 metrics (`nektar_uptime_seconds`, `nektar_ttfv_ms`, `nektar_fragments_total`, `nektar_unsettled_anchors`, `nektar_fee_balance_sats`, `nektar_spend_guard_*`, `nektar_restate_attached`, `nektar_hub_*`)
+- `GET /v1/coldstart/health` — domain density, fill rate, organic sellers, and bounty taper state
+- `GET /v1/verify/{token}` & `GET /v1/badge/{token}` — public receipt verifier (JSON/HTML + SVG badge)
+
+---
+
+## 4. Emergency Controls & Backup / Recovery
+
+### Kill Switch
+
+Immediately blocks all autonomous market spending:
+
+```sh
+# Via API (requires operator token if auth is enabled):
+curl -X POST http://127.0.0.1:18420/v1/automation/kill \
+  -H "Content-Type: application/json" \
+  -d '{"enabled":true}'
+
+# Or filesystem sentinel (checked on boot & runtime):
+touch ~/.nektar/KILL          # global emergency stop (honored by testnet AND ~/.nektar/main)
+touch ~/.nektar/main/KILL     # mainnet-only sentinel
+```
+
+### Backup & Restore
+
+Back up the entire data directory (`~/.nektar` on testnet, `~/.nektar/main` on mainnet, or `/data` in Docker/Helm):
+- `nektar.sqlite` (fragments, FTS5 index, anchors, receipts, deals, policies, MemRepo commits)
+- `wallet/` (BRC-100 embedded wallet identity & UTXO state — absent in `client` mode)
+- `objects/` (content-addressed CHIRP blobs & capsules)
+- `http-token`, `operator-token`, `restate-internal-token`, `wallet-mode.json`
+- `restate-data/` (Restate v1.8.1 durable workflow journals)
+
+Stop the daemon (`nektar stop`) before taking a cold filesystem snapshot, or use SQLite online backup. On restore, start `nektar serve` / `nektar up` — pending anchor crash journals and surviving commercial obligations reconcile automatically on boot.
+
+---
+
+## 5. Hub Operations (`nektar hub`)
+
+```sh
+nektar hub up --auto-ip --network testnet
+nektar hub up --domain hub.example.com --network main --confirm I_UNDERSTAND --fee-preset hybrid
+nektar hub up --native --auto-ip --network main --confirm I_UNDERSTAND --fee-preset hybrid
+
+nektar hub status             # works for both Docker Compose and --native systemd Hubs (~/.nektar-hub)
+nektar hub logs
+nektar hub down
+```
+
+See [DOCKING-AND-HUBS.md](DOCKING-AND-HUBS.md), [JOIN-TESTNET.md](JOIN-TESTNET.md), and [MAINNET-CANARY.md](MAINNET-CANARY.md) for full Hub and Mainnet runbooks.

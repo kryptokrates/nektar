@@ -1,5 +1,5 @@
 name: nektar
-version: '0.3.2'
+version: '0.1.0'
 description: 'Verifiable, encrypted agent memory anchored on BSV with checkable receipts and policy-controlled knowledge trading.'
 requires_hermes: '>=0.20.0'
 capabilities:

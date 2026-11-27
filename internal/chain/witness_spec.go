@@ -69,16 +69,14 @@ func DefaultSettleDepth(network string) int {
 }
 
 // DefaultHeaderSources returns the default comma-separated PoW header witnesses for network.
-// Mainnet ALWAYS pairs >=2 distinct-origin public PoW header services (WhatsOnChain + Babbage
-// Chaintracks v2) so no single proof/settler origin can validate its own BUMPs.
-// Testnet defaults to PoW-verified woc:test (operators running a self-hosted testnet BHS or
-// Chaintracks can pass NEKTAR_HEADERS_SOURCE=woc:test,bhs:http://... for multi-witness quorum).
+// Both mainnet and testnet ALWAYS pair >=2 distinct-origin public PoW header services
+// (WhatsOnChain + Babbage Chaintracks v2) so no single proof/settler origin can validate its own BUMPs.
 func DefaultHeaderSources(network string) string {
 	switch strings.ToLower(strings.TrimSpace(network)) {
 	case "main", "mainnet":
 		return "woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2"
 	case "testnet", "test":
-		return "woc:test"
+		return "woc:test,chaintracks:https://testnet-chaintracks.babbage.systems/v2"
 	case "regtest":
 		return "native:http://127.0.0.1:8080"
 	default:
@@ -266,13 +264,13 @@ func ValidateHeaderIndependence(network, headerSpec, chainSpec, settleSpec strin
 		}
 		headerOrigins[origin] = true
 	}
-	if netNorm == "main" {
+	if netNorm == "main" || netNorm == "testnet" {
 		if len(headerOrigins) < 2 {
 			return fmt.Errorf("%w: live network %q requires >=2 independent distinct-origin PoW header witnesses (got %d from %q)",
 				ErrCircularHeaderAnchor, netNorm, len(headerOrigins), headerSpec)
 		}
 
-		// Verify every proof/settler origin has at least one strictly disjoint header witness on mainnet.
+		// Verify every proof/settler origin has at least one strictly disjoint header witness on live networks.
 		checkDisjoint := func(label, spec string) error {
 			for _, item := range splitSpecs(spec) {
 				orig, err := NormalizeSpecOrigin(item)

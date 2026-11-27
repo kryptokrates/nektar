@@ -3,7 +3,10 @@
   import type { HubCatalogEntry, State } from '../lib/types'
   import { operatorFetch } from '../lib/api'
   import { shortHost } from '../lib/format'
+  import HubMeshGraph from './HubMeshGraph.svelte'
   import HubTab from './HubTab.svelte'
+  import HubsViewInspector from './HubsViewInspector.svelte'
+  import { collectHubTopics } from './HubsViewModel'
 
   interface Props {
     s: State
@@ -13,36 +16,31 @@
 
   let { s, onRefresh, onToast }: Props = $props()
 
+  let graphRef = $state<{ shareSnapshot: (filename?: string) => Promise<void> } | null>(null)
   let hubs = $state<HubCatalogEntry[]>([])
   let loading = $state(true)
   let refreshing = $state(false)
   let connectingAll = $state(false)
   let busyURL = $state('')
+  let selectedURL = $state('')
+  let activeTopic = $state('__all__')
   let addOpen = $state(false)
   let addInput = $state('')
   let addInputEl = $state<HTMLInputElement | null>(null)
   let showDeploy = $state(false)
 
   const connectedCount = $derived(hubs.filter((h) => h.connected).length)
-  const reachableCount = $derived(hubs.filter((h) => h.reachable && !h.networkMismatch).length)
   const quorumActive = $derived(hubs.filter((h) => h.connected && h.reachable).length >= 2)
 
-  function prettyFee(preset?: string): string {
-    if (!preset) return ''
-    if (preset === 'free') return 'Free'
-    if (preset === 'lightbsv_egress') return 'Egress'
-    if (preset === 'hybrid') return 'Hybrid'
-    return preset
-  }
+  // Ensure a hub is always selected once the catalog loads so the Inspector Bar is immediately informative
+  $effect(() => {
+    if (hubs.length > 0 && (!selectedURL || !hubs.some((h) => h.url === selectedURL))) {
+      selectedURL = hubs[0].url
+    }
+  })
 
-  function prettyTopic(raw: string): string {
-    const clean = raw.replace(/^cluster:/, '').replace(/^#/, '').trim()
-    if (!clean) return ''
-    return clean
-      .split(/[-_]+/)
-      .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : ''))
-      .join(' ')
-  }
+  const selectedHub = $derived(hubs.find((h) => h.url === selectedURL) ?? hubs[0] ?? null)
+  const allTopics = $derived(collectHubTopics(hubs))
 
   async function loadDirectory(force = false) {
     if (force) refreshing = true
@@ -123,6 +121,10 @@
     if (addOpen) setTimeout(() => addInputEl?.focus(), 20)
   }
 
+  function toggleTopic(slug: string) {
+    activeTopic = activeTopic === slug ? '__all__' : slug
+  }
+
   onMount(() => {
     void loadDirectory(false)
   })
@@ -136,12 +138,15 @@
       <span class="net-pill">{s.network}</span>
       {#if !loading}
         <span class="mesh-stat" class:ok={quorumActive}>
-          {connectedCount}/{hubs.length} connected{quorumActive ? ' · Quorum ✓' : ''}
+          {connectedCount}/{hubs.length}{quorumActive ? ' · Quorum ✓' : ''}
         </span>
       {/if}
     </div>
     <div class="tright">
-      <button class="ghost-btn" onclick={() => loadDirectory(true)} disabled={refreshing}>
+      <button class="ghost-btn" onclick={() => graphRef?.shareSnapshot('nektar-hub-mesh.png')} title="Copy 2x PNG mesh card for X / Twitter">
+        Share Card ↗
+      </button>
+      <button class="ghost-btn" onclick={() => loadDirectory(true)} disabled={refreshing} title="Re-probe latencies and terms">
         {refreshing ? 'Probing…' : 'Refresh'}
       </button>
       <button class="ghost-btn" class:open={addOpen} onclick={toggleAdd}>
@@ -172,92 +177,49 @@
     </div>
   {/if}
 
-  <!-- Clean LightBSV Hub Directory -->
-  <section class="dir">
-    <div class="dir-head">
-      <span>OVERLAY HUB DIRECTORY</span>
-      <span class="dir-sub">
-        {#if loading}
-          Probing live hubs…
-        {:else if reachableCount > 0}
-          {reachableCount} reachable on {s.network}
-        {:else}
-          {hubs.length} listed · untrusted relays (every proof SPV-verified)
-        {/if}
-      </span>
+  <!-- 1. INTERACTIVE D3-FORCE LIGHTBSV MESH CONSTELLATION -->
+  {#if loading && hubs.length === 0}
+    <div class="loading-stage">Probing LightBSV overlay mesh…</div>
+  {:else}
+    <HubMeshGraph
+      bind:this={graphRef}
+      {hubs}
+      network={s.network}
+      {selectedURL}
+      {activeTopic}
+      onSelectHub={(u) => (selectedURL = u)}
+      {onToast}
+    />
+  {/if}
+
+  <!-- 2. 1-LINE TOPIC SPOTLIGHT RIBBON (Click any topic to illuminate its hosting hubs in the mesh) -->
+  {#if allTopics.length > 0}
+    <div class="ribbon" role="toolbar" aria-label="Spotlight hubs by topic">
+      <button class="rchip" class:on={activeTopic === '__all__'} onclick={() => (activeTopic = '__all__')}>
+        All Hubs <span>{hubs.length}</span>
+      </button>
+      {#each allTopics as t (t.slug)}
+        <button class="rchip" class:on={activeTopic === t.slug} onclick={() => toggleTopic(t.slug)}>
+          {t.label} <span>{t.count}</span>
+        </button>
+      {/each}
     </div>
+  {/if}
 
-    {#if loading && hubs.length === 0}
-      <div class="empty">Probing nektar.run fleet &amp; discovered hubs…</div>
-    {:else if hubs.length === 0}
-      <div class="empty">No hubs found yet. Click <b>+ Add Hub</b> to join any Nektar Hub.</div>
-    {:else}
-      <div class="list">
-        {#each hubs as h (h.url)}
-          {@const isBusy = busyURL === h.url}
-          <div class="row" class:muted={h.networkMismatch}>
-            <span
-              class="dot"
-              class:live={h.connected && h.reachable}
-              class:ready={!h.connected && h.reachable && !h.networkMismatch}
-              class:down={h.connected && !h.reachable}
-              title={h.connected ? (h.reachable ? 'Connected & live' : 'Connected (unreachable)') : h.reachable ? 'Reachable' : 'Offline'}
-            ></span>
+  <!-- 3. FOCUSED SELECTED HUB INSPECTOR DOCK (Exact Satoshi Fees + Topics + 1-Click Toggle) -->
+  {#if selectedHub}
+    <HubsViewInspector
+      hub={selectedHub}
+      {busyURL}
+      {activeTopic}
+      onJoinHub={joinHub}
+      onLeaveHub={leaveHub}
+      onToggleTopic={toggleTopic}
+      onSelectHub={(u) => (selectedURL = u)}
+    />
+  {/if}
 
-            <div class="main">
-              <div class="top-line">
-                <b class="hname">{h.name}</b>
-                {#if h.role}
-                  <span class="role" class:spine={h.role === 'spine'}>{h.role === 'spine' ? 'Spine' : 'Leaf'}</span>
-                {/if}
-                {#if h.source === 'discovered'}
-                  <span class="src-tag">Community</span>
-                {/if}
-                {#if h.networkMismatch}
-                  <span class="warn-tag">{h.network || 'other net'}</span>
-                {/if}
-              </div>
-
-              {#if h.topics?.length}
-                <div class="topics">
-                  {#each h.topics.slice(0, 4) as t}
-                    {@const lbl = prettyTopic(t)}
-                    {#if lbl}<span>{lbl}</span>{/if}
-                  {/each}
-                </div>
-              {/if}
-            </div>
-
-            <div class="meta">
-              {#if h.reachable && h.latencyMs > 0}
-                <span class="lat">{h.latencyMs}ms</span>
-              {:else if !h.networkMismatch}
-                <span class="lat off">Offline</span>
-              {/if}
-
-              {#if prettyFee(h.feePreset)}
-                <span class="fee">{prettyFee(h.feePreset)}</span>
-              {/if}
-
-              {#if h.connected}
-                <button class="act connected" onclick={() => leaveHub(h.url)} disabled={isBusy} title="Click to disconnect">
-                  {isBusy ? '…' : 'Connected ✓'}
-                </button>
-              {:else if h.networkMismatch}
-                <span class="net-note">{h.network} only</span>
-              {:else}
-                <button class="act" onclick={() => joinHub(h.url)} disabled={isBusy}>
-                  {isBusy ? '…' : 'Connect'}
-                </button>
-              {/if}
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-  </section>
-
-  <!-- Collapsible Run Your Own Hub Footer -->
+  <!-- 4. QUIET COLLAPSIBLE RUN YOUR OWN HUB FOOTER -->
   <section class="deploy-foot">
     <button class="deploy-toggle" onclick={() => (showDeploy = !showDeploy)}>
       <span>Run your own Nektar Hub</span>
@@ -294,14 +256,14 @@
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--line);
   }
-  .tleft { display: flex; align-items: center; gap: 0.65rem; min-width: 0; }
+  .tleft { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
   h1 { margin: 0; font-size: 1.06rem; font-weight: 800; letter-spacing: -0.02em; }
   .net-pill {
     font-family: ui-monospace, monospace; font-size: 0.68rem; font-weight: 700;
     color: var(--mut); background: var(--surf); border: 1px solid var(--line);
     border-radius: 999px; padding: 0.12rem 0.5rem; text-transform: uppercase;
   }
-  .mesh-stat { font-size: 0.76rem; color: var(--mut); font-weight: 600; white-space: nowrap; }
+  .mesh-stat { font-size: 0.76rem; color: var(--mut); font-weight: 700; white-space: nowrap; }
   .mesh-stat.ok { color: var(--ok); }
   .tright { display: flex; align-items: center; gap: 0.45rem; flex-shrink: 0; }
 
@@ -334,91 +296,34 @@
   }
   .add-row input::placeholder { color: var(--mut2); }
 
-  /* Directory */
-  .dir { display: flex; flex-direction: column; flex: 1; }
-  .dir-head {
-    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
-    padding: 0.72rem 1.25rem;
+  .loading-stage {
+    height: 360px; display: grid; place-items: center;
+    background: #090807; border-bottom: 1px solid var(--line);
+    color: var(--mut); font-size: 0.86rem;
+  }
+
+  /* Topic Spotlight Ribbon */
+  .ribbon {
+    display: flex; align-items: center; gap: 0.4rem;
+    padding: 0.7rem 1.25rem;
     border-bottom: 1px solid var(--line);
-    font-size: 0.7rem; font-weight: 800; letter-spacing: 0.09em; color: var(--mut2);
+    overflow-x: auto;
+    scrollbar-width: none;
   }
-  .dir-sub { letter-spacing: 0; font-weight: 600; color: var(--mut); font-size: 0.74rem; }
-
-  .list { display: flex; flex-direction: column; }
-  .row {
-    display: flex; align-items: center; gap: 0.85rem;
-    padding: 0.88rem 1.25rem;
-    border-bottom: 1px solid var(--line);
-    transition: background 0.12s;
-  }
-  .row:hover { background: var(--hover); }
-  .row.muted { opacity: 0.72; }
-
-  .dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--mut2); flex-shrink: 0;
-  }
-  .dot.live { background: var(--ok); box-shadow: 0 0 8px rgb(76 194 107 / 55%); }
-  .dot.ready { background: transparent; border: 2px solid var(--ok); box-sizing: border-box; }
-  .dot.down { background: var(--bad); }
-
-  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.22rem; }
-  .top-line { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
-  .hname { font-size: 0.92rem; font-weight: 800; color: var(--ink); letter-spacing: -0.01em; }
-  .role {
-    font-size: 0.66rem; font-weight: 700; color: var(--mut);
-    background: var(--surf); border: 1px solid var(--line);
-    border-radius: 999px; padding: 0.06rem 0.46rem;
-  }
-  .role.spine { color: var(--amber); border-color: rgb(247 153 27 / 32%); background: rgb(247 153 27 / 10%); }
-  .src-tag {
-    font-size: 0.66rem; font-weight: 700; color: var(--ok);
-    background: rgb(76 194 107 / 10%); border: 1px solid rgb(76 194 107 / 28%);
-    border-radius: 999px; padding: 0.06rem 0.46rem;
-  }
-  .warn-tag {
-    font-family: ui-monospace, monospace; font-size: 0.66rem; font-weight: 700;
-    color: var(--mut2); background: var(--bg); border: 1px solid var(--line);
-    border-radius: 999px; padding: 0.06rem 0.46rem;
-  }
-
-  .topics { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  .topics span { font-size: 0.74rem; color: var(--mut); }
-  .topics span:not(:last-child)::after { content: '·'; margin-left: 0.4rem; color: var(--line2); }
-
-  .meta { display: flex; align-items: center; gap: 0.7rem; flex-shrink: 0; }
-  .lat {
-    font-family: ui-monospace, monospace; font-size: 0.74rem; font-weight: 700;
-    color: var(--ok); font-variant-numeric: tabular-nums;
-  }
-  .lat.off { color: var(--mut2); font-weight: 600; }
-  .fee {
-    font-size: 0.72rem; font-weight: 600; color: var(--mut);
-    background: var(--surf); border: 1px solid var(--line);
-    border-radius: 999px; padding: 0.12rem 0.5rem;
-  }
-  .act {
-    background: transparent; color: var(--ink); border: 1px solid var(--line2);
-    border-radius: 999px; padding: 0.3rem 0.82rem; font: inherit;
+  .ribbon::-webkit-scrollbar { display: none; }
+  .rchip {
+    display: inline-flex; align-items: center; gap: 0.32rem; flex-shrink: 0;
+    background: var(--surf); border: 1px solid var(--line); border-radius: 999px;
+    padding: 0.24rem 0.7rem; color: var(--mut); font: inherit;
     font-size: 0.75rem; font-weight: 700; cursor: pointer;
     transition: border-color 0.14s, color 0.14s, background 0.14s;
   }
-  .act:hover:not(:disabled) { border-color: var(--amber); color: var(--amber); }
-  .act.connected {
-    color: var(--ok); border-color: rgb(76 194 107 / 32%); background: rgb(76 194 107 / 8%);
+  .rchip:hover { color: var(--ink); border-color: var(--line2); }
+  .rchip.on {
+    color: var(--amber); border-color: rgb(247 153 27 / 42%);
+    background: rgb(247 153 27 / 10%);
   }
-  .act.connected:hover:not(:disabled) {
-    color: var(--bad); border-color: rgb(229 83 75 / 40%); background: rgb(229 83 75 / 8%);
-  }
-  .act:disabled { opacity: 0.4; cursor: default; }
-  .net-note { font-size: 0.72rem; color: var(--mut2); font-family: ui-monospace, monospace; }
-
-  .empty {
-    padding: 3rem 1.25rem;
-    text-align: center;
-    color: var(--mut);
-    font-size: 0.86rem;
-  }
+  .rchip span { font-family: ui-monospace, monospace; font-size: 0.68rem; opacity: 0.7; }
 
   /* Quiet Collapsible Deploy Footer */
   .deploy-foot { border-top: 1px solid var(--line); }

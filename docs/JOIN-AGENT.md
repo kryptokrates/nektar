@@ -1,149 +1,102 @@
-# Join as an agent — connect to a nektar instance
+# Join as an agent — connect to a Nektar v0.1 instance
 
-This doc is for the agent side: your agent (Hermes, OpenClaw, a script, any
-MCP client) connecting to a running nektar instance — its own sidecar or
-someone else's — over HTTP.
+> **Honesty Rule:** Proofs establish **recorded, unaltered, and derivable by block time** — never that a memory's text is objectively true. Model identity is *declared*, not zkML-proven.
 
-The operator/hub path (running market hosts and quorum infrastructure) is
-in `JOIN-TESTNET.md` / `JOIN-MAINNET.md`. You don't need any of that to call
-tools — one URL and one bearer token is the whole join.
+This guide covers connecting any AI agent (Claude Code, Codex CLI, Hermes, OpenClaw, Cursor, VS Code, scripts, or any MCP/OpenAI/Anthropic client) to a running Nektar v0.1 Pure-Go instance on `:18420`.
 
-## The card
+For running a public Hub node, see [JOIN-TESTNET.md](JOIN-TESTNET.md) and [DOCKING-AND-HUBS.md](DOCKING-AND-HUBS.md).
 
-Every instance publishes a discovery doc:
+## 1. One-Command Local Boot & Dock (Zero Docker, Zero Node.js)
 
-```
-GET http://<instance>:8080/.well-known/agent.json
+```sh
+# Install & start background daemon + Restate + auto-dock detected AI apps + live receipt check:
+curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up
 ```
 
-It answers: MCP endpoint, REST tool surface, whether a bearer is required,
-network (`regtest|testnet|main`), and market capability. Fetch it first —
-everything below is derived from it.
+Or if `nektar` is already installed:
 
-## Two ways to call
-
-### 1. MCP — streamable HTTP (preferred)
-
-Any MCP client that speaks streamable HTTP + custom headers:
-
-```
-url:     http://<instance>:8080/mcp
-header:  Authorization: Bearer <token>   # only if the card says required
+```sh
+nektar up            # background daemon on 127.0.0.1:18420 (testnet + seeded welcome shard)
+nektar dock auto     # detects installed AI apps, wires native plugins/MCP/hooks, probes recall {}
+nektar open          # opens Dashboard with a fresh 1-click pairing code
 ```
 
-The `initialize` response returns an instructions block teaching the
-receipt protocol on connect — the agent learns how to verify answers from
-the handshake itself.
+Every docked client shares **one local brain** (`http://127.0.0.1:18420`, discovered via `~/.nektar/active-daemon.json`) with zero `instance.lock` contention.
 
-### 2. REST — one POST per tool
+## 2. Discovery Card
 
-```
-GET  http://<instance>:8080/v1/tools            # tool list (same as MCP's)
-POST http://<instance>:8080/v1/tools/<name>     # JSON body = the tool args
-GET  http://<instance>:8080/v1/openapi.json     # the OpenAPI spec
-```
+Every instance publishes its discovery metadata publicly:
 
-## One-command local dock
-
-On a local machine with Hermes, OpenClaw, Claude Code, Codex, Cursor, Windsurf,
-Claude Desktop, OpenCode, or Goose installed:
-
-```bash
-./nektar --port 18420 &    # single local daemon (zero env vars → testnet + welcome shard)
-./nektar dock auto         # detects installed apps, wires native plugins/MCP/hooks, probes recall {}
+```sh
+curl -fsS http://127.0.0.1:18420/.well-known/nektar
+curl -fsS http://127.0.0.1:18420/.well-known/agent.json
 ```
 
-## Framework paste blocks
+## 3. Connect via MCP, REST, or L0 Proxy
 
-### Hermes (native `MemoryProvider` or MCP)
+### MCP — Streamable HTTP (`/mcp`) or Auto-Bridged Stdio (`nektar mcp`)
 
-**Native memory slot (ambient prefetch + `MEMORY.md` mirroring):**
-
-```bash
-hermes plugins install ./integrations/hermes
-hermes memory setup        # select "nektar" — auto-discovers localhost:18420
-hermes memory status
+```text
+url:     http://<instance>:18420/mcp
+header:  Authorization: Bearer <NEKTAR_HTTP_TOKEN>   # required on non-loopback / container instances
 ```
 
-**Or MCP (`$HERMES_HOME/config.yaml`):**
+For stdio-only MCP clients, run `nektar mcp` — it automatically discovers and bridges to the shared local daemon over HTTP (and auto-starts the daemon if stopped) with zero SQLite lock conflicts.
 
-```yaml
-# ~/.hermes/config.yaml  (or ~/.local/share/hermes/config.yaml)
-mcp_servers:
-  nektar:
-    url: http://<instance>:18420/mcp
-    headers:
-      Authorization: Bearer <token>
+### REST — Unified Tools API
+
+```sh
+GET  http://<instance>:18420/v1/tools            # active tool catalog
+POST http://<instance>:18420/v1/tools/<name>     # JSON body = tool args
+GET  http://<instance>:18420/v1/openapi.json     # OpenAPI 3.1 schema
 ```
 
-Then `hermes mcp test nektar` → `✓ Connected ✓ Tools discovered: 10`, and
-`hermes -z "use the nektar fund tool"` makes real calls.
+Example first verified recall from the seeded `welcome` shard:
 
-### OpenClaw (native `plugins.slots.memory` or MCP)
-
-```bash
-nektar dock openclaw       # or: openclaw plugins install ./integrations/openclaw
-```
-
-### curl (verified)
-
-```bash
-# initialize
-curl -s http://<instance>:8080/mcp \
-  -H 'Authorization: Bearer <token>' \
+```sh
+curl -fsS http://127.0.0.1:18420/v1/tools/recall \
   -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"you","version":"1"}}}'
+  -d '{}'
 ```
 
-REST is simpler for scripts — no session handshake:
+### L0 Transparent LLM Memory Proxy (Zero Code Changes)
 
-```bash
-curl -s http://<instance>:8080/v1/tools/deals \
-  -H 'Authorization: Bearer <token>' \
-  -H 'Content-Type: application/json' -d '{}'
+Point any OpenAI- or Anthropic-compatible SDK or agent at Nektar:
+
+```sh
+export OPENAI_BASE_URL="http://127.0.0.1:18420/v1/proxy/openai/v1"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:18420/v1/proxy/anthropic"
+# On token-protected instances, wrap your upstream API key:
+# export OPENAI_API_KEY="nkt:<NEKTAR_HTTP_TOKEN>:$OPENAI_API_KEY"
 ```
 
-### OpenClaw / other agents
+## 4. Native Harness Slots (L2 / L3)
 
-Any MCP-capable agent config takes the same two fields: `url: <mcp endpoint>`
-plus `Authorization: Bearer <token>` when the card's `authentication.required`
-is true. If the client only supports stdio, run a local sidecar instance
-(`NEKTAR_PROFILE=testnet node packages/mcp/dist/src/bin.js`) — stdio needs no
-token.
+- **Claude Code (L3):** `nektar dock claude` (wires MCP + portable `nektar hook` `SessionStart`/`UserPromptSubmit`/`Stop` + `SKILL.md`) — see [MANUAL-CLAUDE-CODE.md](MANUAL-CLAUDE-CODE.md).
+- **Codex CLI (L2):** `nektar dock codex` (wires `~/.codex/config.toml` + `notify` hook + `SKILL.md`) — see [MANUAL-CODEX.md](MANUAL-CODEX.md).
+- **Hermes Agent (L3):** `nektar dock hermes` (extracts embedded Python `MemoryProvider` + `SKILL.md`) — see [MANUAL-HERMES.md](MANUAL-HERMES.md).
+- **OpenClaw (L3):** `nektar dock openclaw` (extracts embedded plugin into `plugins.slots.memory`) — see [MANUAL-HERMES.md](MANUAL-HERMES.md).
 
-## The tool surface
+## 5. Tool Surface
 
-Agent-profile clients see ten tools: `remember`, `recall`, `groundedAnswer`,
-`verifyReceipt`, `want`, `sell`, `deals`, `fund`, `doctor`,
-`automationDoctor`. `NEKTAR_TOOL_PROFILE=operator` on the instance exposes
-the full set. Call `recall {}` (or `{"shard":"welcome"}`) for your first
-verified read from the seeded `welcome` shard. See [docs/ADAPTERS.md](ADAPTERS.md)
-for the frozen contract and additional client paste blocks.
+- **`agent` profile:** `remember`, `recall`, `forget`, `groundedAnswer`, `verifyReceipt`, `want`, `watchKnowledge`, `sell`, `deals`, `fund`, `doctor`, `peers`, `repo`.
+- **`operator` profile (default on `nektar serve`):** adds `anchor`, `prove`, `borgGroup`, `exportPack`, `importPack`, `authorize`, `status`.
 
-## Buying and selling (market)
+Control the exposed profile with `NEKTAR_TOOL_PROFILE=agent|operator`.
 
-Memory calls (`remember`/`recall`/`groundedAnswer`) work on any instance.
-Market calls need `NEKTAR_AUTOMATION=1` and an operator-approved policy
-(`nektar policy approve --preset buyer|seller|both` on Docker/host builds, or
-`pnpm automation policy approve <file>` in a source checkout):
+## 6. Buying & Selling Knowledge on the Market
 
-- `want {domains, question, maxSats}` — publish a buy intent; the engine
-  collects offers and settles escrow itself.
-- `sell {shard, domains, priceSats}` — arm a seller on a shard; needs an
-  approved policy carrying `disclosure.paid: true` (or
-  `NEKTAR_PAID_DISCLOSURE=1` as an operator override).
-- `deals` — every op joined with wallet-ledger chain state.
-- `fund` — spendable balance, runway, and the upkeep-vs-deal spend split.
-- `doctor` / `automationDoctor` — preflight checks (funding, broadcaster,
-  hosts, budget).
+Memory tools (`remember`, `recall`, `groundedAnswer`, `verifyReceipt`, `repo`) work out of the box on any node. Autonomous BSV market trades require an active Restate v1.8.1 executor (`nektar up` bootstraps it automatically) and an explicit operator policy preset:
 
-Errors are honest: a refused call says exactly what to approve or set.
+```sh
+nektar policy approve --preset buyer    # or: seller | both
+nektar sell -shard notes -domains ops -price 100
+nektar want -domains ops -question "How do we verify BSV anchors?" -max 200
+```
 
-## Probing
+## 7. Health & Diagnostics
 
-`GET /v1/health` (and bare `/health`, `/healthz`) is public liveness —
-`{ok:true}` when the instance serves. Discovery docs
-(`/.well-known/agent.json`, `/.well-known/nektar`, `/.well-known/x402`) and
-receipt verification (`/v1/verify`) are public too; everything else is
-bearer-gated when the operator set a token.
+- `GET /v1/health` (and `/health`, `/healthz`) — public liveness (`{"ok":true,"version":"0.1.0","network":"..."}`)
+- `GET /v1/metrics` — Prometheus 0.0.4 metrics (`nektar_ttfv_ms`, wallet, SpendGuard, Restate, Hub density)
+- `nektar doctor` — human-readable node diagnosis with exact next commands (`--json` for scripts)
+- `nektar status` — identity, wallet balance, shards, policy hash, and SpendGuard counters (`--json` for scripts)

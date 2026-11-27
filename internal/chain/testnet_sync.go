@@ -13,9 +13,7 @@ import (
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
-// SafeAtomicBEEF encodes tx as a strict BRC-95 AtomicBEEF (allowPartial=false), falling back
-// to allowPartial=true only when spending an external unconfirmed faucet output whose remote
-// ancestor BUMP has not yet mined.
+// SafeAtomicBEEF encodes tx as a strict BRC-95 AtomicBEEF (allowPartial=false).
 func SafeAtomicBEEF(tx *transaction.Transaction) ([]byte, error) {
 	return nwallet.SafeAtomicBEEF(tx)
 }
@@ -91,15 +89,6 @@ func (p *Port) InternalizeBRC29(ctx context.Context, beef []byte, outputIndex ui
 		return 0, errors.New("chain: wallet rejected BRC-29 payment internalization")
 	}
 	return tx.Outputs[outputIndex].Satoshis, nil
-}
-
-// SyncPool runs Monitor's complete reconciliation pass (AbortAbandoned + SendWaiting + CheckForProofs + SyncFundAddress).
-func (p *Port) SyncPool(ctx context.Context) (added int, proved int, err error) {
-	if p.engine == nil {
-		return 0, 0, nil
-	}
-	rep, err := p.engine.Monitor().SyncAll(ctx)
-	return rep.AddedOutputs, rep.ProvedTxs, err
 }
 
 // SyncFull returns the complete SyncReport from Monitor.

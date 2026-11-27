@@ -122,12 +122,11 @@ func TestHubFeesTermsAndPrefixValidation(t *testing.T) {
 	ts := httptest.NewServer(node.Handler())
 
 	t1 := fetchTermsHTTP(t, ts.URL, "/v1/terms")
-	t2 := fetchTermsHTTP(t, ts.URL, "/ls_nektar/terms")
 
-	if t1.HubRole != hub.RoleSpine || t2.HubRole != hub.RoleSpine {
-		t.Fatalf("expected spine role in both terms endpoints, got %q / %q", t1.HubRole, t2.HubRole)
+	if t1.HubRole != hub.RoleSpine {
+		t.Fatalf("expected spine role in terms endpoint, got %q", t1.HubRole)
 	}
-	if t1.PayeeIdentityKey != hubPort.IdentityPubHex() || t2.PayeeIdentityKey != hubPort.IdentityPubHex() {
+	if t1.PayeeIdentityKey != hubPort.IdentityPubHex() {
 		t.Fatalf("payee identity key mismatch")
 	}
 	if t1.Fees[hub.ActionSubmitWant] != 5 || t1.Fees[hub.ActionSubmitOffer] != 2 || t1.Fees[hub.ActionBboxSend] != 2 {
@@ -763,5 +762,164 @@ func TestHubFeeValve3BboxSendAndValve4Lookup(t *testing.T) {
 	if earn.TotalEarnedSats != 28 || earn.ByActionSats[hub.ActionBboxSend] != 3 ||
 		earn.ByActionSats[hub.ActionLookupPrefix+"history"] != 5 || earn.ByActionSats[hub.ActionLookupPrefix+"export"] != 20 {
 		t.Fatalf("unexpected earnings for Valves 3 & 4: %+v", earn)
+	}
+}
+
+func TestHubPlanePublishValve1AndPlaneNACKValve2Enforcement(t *testing.T) {
+	ctx := context.Background()
+	shared := chain.NewSharedMemoryChain()
+	hubPort := openMemoryPort(t, shared)
+	payerPort := openMemoryPort(t, shared)
+	adKey, _ := ec.NewPrivateKey()
+	lane := bstack.LaneOf("memory", "ops")
+
+	fs := hub.FeeSchedule{
+		Role:                   hub.RoleSpine,
+		SubmitWantSats:         5,
+		EgressSatsPer100Events: 100, // 1000 msats (1 sat) per frame
+		EgressMinTopupSats:     2,
+	}
+	node, err := hub.NewNode(hub.Config{
+		Network:      "memory",
+		Fees:         fs,
+		FeeCollector: hub.NewPortFeeCollector(hubPort),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close()
+	ts := httptest.NewServer(node.Handler())
+	defer ts.Close()
+
+	// 1. POST /plane/publish without payment -> 402 Payment Required (no longer bypasses Valve 1!).
+	w1 := makeWantBEEF(t, adKey, "plane-want-1", "ops")
+	rec1, err := hub.EncodeBRC149Record(lane, w1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postPlane := func(body []byte, payHdr string, signKey *ec.PrivateKey) *http.Response {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/plane/publish", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/vnd.nektar.brc149")
+		if payHdr != "" {
+			req.Header.Set("X-BSV-Payment", payHdr)
+		}
+		if signKey != nil {
+			pub, tsStr, nonce, sig, sErr := discovery.SignEgressAuthHeaders(signKey, "hub_plane_publish", ts.URL, 0, lane)
+			if sErr != nil {
+				t.Fatal(sErr)
+			}
+			req.Header.Set("X-Nektar-Pub", pub)
+			req.Header.Set("X-Nektar-Ts", tsStr)
+			req.Header.Set("X-Nektar-Nonce", nonce)
+			req.Header.Set("X-Nektar-Sig", sig)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	r402 := postPlane(rec1, "", nil)
+	pref := r402.Header.Get("X-BSV-Payment-Derivation-Prefix")
+	r402.Body.Close()
+	if r402.StatusCode != http.StatusPaymentRequired || pref == "" {
+		t.Fatalf("expected 402 on unpaid POST /plane/publish, got %d", r402.StatusCode)
+	}
+
+	// Paid POST /plane/publish -> 200 OK.
+	payHdr, _, err := discovery.BuildStandaloneHubPayment(ctx, payerPort, hubPort.IdentityPubHex(), pref, hub.ActionSubmitWant, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rPaid := postPlane(rec1, payHdr, nil)
+	paidBody, _ := io.ReadAll(rPaid.Body)
+	rPaid.Body.Close()
+	if rPaid.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on paid POST /plane/publish, got %d: %s", rPaid.StatusCode, string(paidBody))
+	}
+
+	// Bilateral Spine peer -> exempt from Valve 1 on POST /plane/publish!
+	spinePeerKey, _ := ec.NewPrivateKey()
+	spinePeerPub := hex.EncodeToString(spinePeerKey.PubKey().Compressed())
+	node.AddSpinePeerPub(spinePeerPub)
+	w2 := makeWantBEEF(t, adKey, "plane-want-2", "ops")
+	rec2, _ := hub.EncodeBRC149Record(lane, w2)
+	rPeer := postPlane(rec2, "", spinePeerKey)
+	peerBody, _ := io.ReadAll(rPeer.Body)
+	rPeer.Body.Close()
+	if rPeer.StatusCode != http.StatusOK {
+		t.Fatalf("expected bilateral Spine peer exempt on POST /plane/publish, got %d: %s", rPeer.StatusCode, string(peerBody))
+	}
+
+	// 2. GET /plane/nack without auth -> 401 Unauthorized.
+	rNackUnauth, err := http.Get(ts.URL + "/plane/nack?from=1&to=10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rNackUnauth.Body.Close()
+	if rNackUnauth.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 on unauthenticated GET /plane/nack, got %d", rNackUnauth.StatusCode)
+	}
+
+	// Authenticated 0-credit caller -> 402 Payment Required on GET /plane/nack.
+	subKey, _ := ec.NewPrivateKey()
+	subPub := hex.EncodeToString(subKey.PubKey().Compressed())
+	doSignedNack := func(from, to int64, topicsCSV string, key *ec.PrivateKey) *http.Response {
+		u := fmt.Sprintf("%s/plane/nack?from=%d&to=%d", ts.URL, from, to)
+		if topicsCSV != "" {
+			u += "&topics=" + url.QueryEscape(topicsCSV)
+		}
+		pub, tsStr, nonce, sig, sErr := discovery.SignEgressAuthHeaders(key, "hub_plane_nack", ts.URL, from, topicsCSV)
+		if sErr != nil {
+			t.Fatal(sErr)
+		}
+		req, _ := http.NewRequest(http.MethodGet, u, nil)
+		req.Header.Set("X-Nektar-Pub", pub)
+		req.Header.Set("X-Nektar-Ts", tsStr)
+		req.Header.Set("X-Nektar-Nonce", nonce)
+		req.Header.Set("X-Nektar-Sig", sig)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	rNackZero := doSignedNack(1, 10, "", subKey)
+	rNackZero.Body.Close()
+	if rNackZero.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("expected 402 on 0-credit GET /plane/nack, got %d", rNackZero.StatusCode)
+	}
+
+	// Fund 2 sats (2000 msats = 2 frames) -> GET /plane/nack returns 2 frames and deducts 2000 msats!
+	if _, err := node.Store().CreditEgressMilliSats(subPub, 2000, 2); err != nil {
+		t.Fatal(err)
+	}
+	rNackOK := doSignedNack(1, 10, "", subKey)
+	nackBytes, _ := io.ReadAll(rNackOK.Body)
+	rNackOK.Body.Close()
+	if rNackOK.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on funded GET /plane/nack, got %d: %s", rNackOK.StatusCode, string(nackBytes))
+	}
+	rd := bytes.NewReader(nackBytes)
+	framesRead := 0
+	for {
+		if _, fErr := hub.DecodePlaneFrame(rd, hub.MaxPlaneObjectLen); fErr != nil {
+			break
+		}
+		framesRead++
+	}
+	if framesRead != 2 {
+		t.Fatalf("expected 2 frames from funded /plane/nack, got %d", framesRead)
+	}
+	credAfter, err := node.Store().GetEgressCredit(subPub)
+	if err != nil || credAfter.BalanceMilliSats != 0 || credAfter.TotalEventsDelivered != 2 {
+		t.Fatalf("expected 2000 msats deducted for 2 nack frames, got %+v err=%v", credAfter, err)
+	}
+
+	// Bilateral Spine peer gets /plane/nack free with 0 credits.
+	rNackPeer := doSignedNack(1, 10, "", spinePeerKey)
+	rNackPeer.Body.Close()
+	if rNackPeer.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for bilateral Spine peer on GET /plane/nack, got %d", rNackPeer.StatusCode)
 	}
 }

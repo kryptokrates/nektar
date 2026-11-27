@@ -121,10 +121,17 @@ func ensureBackgroundDaemon(ctx context.Context, opts backgroundDaemonOpts) (*se
 		exited <- cmd.Wait()
 	}()
 
-	deadline := time.Now().Add(20 * time.Second)
+	const readyTimeout = 40 * time.Second
+	deadline := time.Now().Add(readyTimeout)
+	progressShown := false
+	startWait := time.Now()
 	for time.Now().Before(deadline) {
 		if info, ok := server.DetectLiveDaemon(dir); ok {
 			return info, nil
+		}
+		if !opts.Quiet && !progressShown && time.Since(startWait) >= 1500*time.Millisecond {
+			fmt.Fprintf(os.Stderr, "• Starting nektar daemon (waiting up to %s for /v1/health)…\n", readyTimeout)
+			progressShown = true
 		}
 		select {
 		case <-ctx.Done():
@@ -138,7 +145,11 @@ func ensureBackgroundDaemon(ctx context.Context, opts backgroundDaemonOpts) (*se
 		case <-time.After(80 * time.Millisecond):
 		}
 	}
-	return nil, fmt.Errorf("daemon did not become ready within 10s (see %s)", logPath)
+	tail := readTailText(logPath, 600)
+	if tail != "" {
+		return nil, fmt.Errorf("daemon did not become ready within %s (see %s):\n%s", readyTimeout, logPath, tail)
+	}
+	return nil, fmt.Errorf("daemon did not become ready within %s (see %s)", readyTimeout, logPath)
 }
 
 func readTailText(path string, maxBytes int) string {
@@ -153,11 +164,11 @@ func readTailText(path string, maxBytes int) string {
 }
 
 // cmdUp is the flagship 1-command onboarding path (`nektar up`):
-//   1. Ensures pinned restate-server v1.8.1 is available (non-fatal if offline)
-//   2. Starts (or attaches to) the detached background Nektar daemon
-//   3. Auto-docks all detected AI apps (Claude, Codex, Hermes, OpenClaw, Cursor, VS Code…)
-//   4. Runs a live remember/recall/groundedAnswer/verifyReceipt probe (Magic Moment #1)
-//   5. Prints Mainnet funding QR if needed and opens the paired Dashboard
+//  1. Ensures pinned restate-server v1.8.1 is available (non-fatal if offline)
+//  2. Starts (or attaches to) the detached background Nektar daemon
+//  3. Auto-docks all detected AI apps (Claude, Codex, Hermes, OpenClaw, Cursor, VS Code…)
+//  4. Runs a live remember/recall/groundedAnswer/verifyReceipt probe (Magic Moment #1)
+//  5. Prints Mainnet funding QR if needed and opens the paired Dashboard
 func cmdUp(args []string) error {
 	t0 := time.Now()
 	fs := flag.NewFlagSet("up", flag.ExitOnError)
@@ -198,7 +209,7 @@ func cmdUp(args []string) error {
 		}
 	}
 
-	// 2. Start or attach to the detached background daemon.
+	// 2. Start or attach to the detached background daemon (or hand off to OS service manager if --install-service).
 	opts := backgroundDaemonOpts{
 		Network:       *netName,
 		Confirm:       *confirmFlag,
@@ -212,16 +223,68 @@ func cmdUp(args []string) error {
 		NoRestate:     *noRestate,
 		Quiet:         *asJSON,
 	}
-	info, err := ensureBackgroundDaemon(ctx, opts)
-	if err != nil {
-		return err
-	}
-
-	// 3. Auto-dock detected AI clients via the unified embedded internal/dock engine.
 	exePath, _ := os.Executable()
 	if exePath == "" {
 		exePath = "nektar"
 	}
+	effectiveNet := strings.TrimSpace(opts.Network)
+	if effectiveNet == "" {
+		effectiveNet = envOr("NEKTAR_NETWORK", "testnet")
+	}
+	targetDir := strings.TrimSpace(opts.DataDir)
+	if targetDir == "" {
+		targetDir = defaultDataDirForNetwork(effectiveNet)
+	}
+	if strings.EqualFold(effectiveNet, "main") || strings.EqualFold(effectiveNet, "mainnet") {
+		confirm := strings.TrimSpace(opts.Confirm)
+		if confirm == "" {
+			confirm = strings.TrimSpace(os.Getenv("NEKTAR_MAINNET_CONFIRM"))
+		}
+		if confirm != "I_UNDERSTAND" {
+			return errors.New("mainnet requires --confirm I_UNDERSTAND (e.g. `nektar up --network main --confirm I_UNDERSTAND`)")
+		}
+	}
+
+	svcPath := ""
+	svcErr := ""
+	var info *server.DaemonInfo
+	var err error
+	if *installSvc {
+		_ = os.MkdirAll(targetDir, 0o750)
+		// If a detached daemon is already running and the OS service manager will own the lifecycle,
+		// stop the detached process first so launchd/systemd does not collide on instance.lock.
+		if existing, ok := server.DetectLiveDaemon(targetDir); ok && existing != nil && existing.PID > 0 {
+			terminatePIDGracefully(existing.PID)
+			stopDeadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(stopDeadline) && isPIDAlive(existing.PID) {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+		p, startedBySvc, iErr := installUserAutostart(exePath, buildServeArgs(opts), targetDir)
+		if iErr != nil {
+			svcErr = iErr.Error()
+		} else {
+			svcPath = p
+			if startedBySvc {
+				waitUntil := time.Now().Add(10 * time.Second)
+				for time.Now().Before(waitUntil) {
+					if dInfo, ok := server.DetectLiveDaemon(targetDir); ok {
+						info = dInfo
+						break
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+			}
+		}
+	}
+	if info == nil {
+		info, err = ensureBackgroundDaemon(ctx, opts)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 3. Auto-dock detected AI clients via the unified embedded internal/dock engine.
 	home, _ := os.UserHomeDir()
 	var dockResults []dock.ApplyResult
 	if !*noDock {
@@ -243,17 +306,6 @@ func cmdUp(args []string) error {
 	var probe map[string]any
 	if out, pErr := callLiveAPI(info, http.MethodPost, "/v1/dock/probe", map[string]any{}); pErr == nil {
 		probe, _ = out.(map[string]any)
-	}
-
-	// 5. Optional login autostart service installation.
-	svcPath := ""
-	svcErr := ""
-	if *installSvc {
-		if p, iErr := installUserAutostart(exePath, buildServeArgs(opts), info.DataDir); iErr != nil {
-			svcErr = iErr.Error()
-		} else {
-			svcPath = p
-		}
 	}
 
 	// Fetch wallet summary & live BSV Desktop presence for custody/funding guidance.
@@ -302,26 +354,28 @@ func cmdUp(args []string) error {
 		})
 	}
 
-	fmt.Printf("\n╭─ nektar v%s UP (%s · pid %d · ready in %dms)\n", Version, info.Network, info.PID, elapsedMs)
-	fmt.Printf("│ Dashboard : %s\n", dashURL)
-	fmt.Printf("│ Daemon    : %s  (background · logs: %s)\n", info.URL, filepath.Join(info.DataDir, "daemon.log"))
-	fmt.Printf("│ Restate   : %s\n", restateStatus)
+	var card strings.Builder
+	fmt.Fprintf(&card, "\n╭─ nektar v%s UP (%s · pid %d · ready in %dms)\n", Version, info.Network, info.PID, elapsedMs)
+	fmt.Fprintf(&card, "│ Dashboard : %s\n", dashURL)
+	fmt.Fprintf(&card, "│ Daemon    : %s  (background · logs: %s)\n", info.URL, filepath.Join(info.DataDir, "daemon.log"))
+	fmt.Fprintf(&card, "│ Restate   : %s\n", restateStatus)
 	if fundAddr != "" {
 		custodyTag := "embedded BRC-100"
 		if activeWalletMode == "client" {
 			custodyTag = "BSV Desktop BRC-100 (zero local spending keys)"
 		}
-		fmt.Printf("│ Wallet    : %s (%d sats · %s)\n", fundAddr, balanceSats, custodyTag)
+		fmt.Fprintf(&card, "│ Wallet    : %s (%d sats · %s)\n", fundAddr, balanceSats, custodyTag)
 	}
 	if activeWalletMode != "client" && desktopProbe.Available {
-		fmt.Printf("│ Desktop   : BSV Desktop detected on %s (%s) — 1-click fund: `nektar wallet fund --from-desktop --sats 25000`\n", desktopProbe.WireURL, desktopProbe.Network)
+		fmt.Fprintf(&card, "│ Desktop   : BSV Desktop detected on %s (%s) — 1-click fund: `nektar wallet fund --from-desktop --sats 25000`\n", desktopProbe.WireURL, desktopProbe.Network)
 	}
 	if svcPath != "" {
-		fmt.Printf("│ Autostart : installed -> %s\n", svcPath)
+		fmt.Fprintf(&card, "│ Autostart : installed -> %s  (remove with `nektar stop --uninstall-service`)\n", svcPath)
 	} else if svcErr != "" {
-		fmt.Printf("│ Autostart : warning (%s)\n", svcErr)
+		fmt.Fprintf(&card, "│ Autostart : warning (%s)\n", svcErr)
 	}
-	fmt.Println("╰─")
+	card.WriteString("╰─\n")
+	fmt.Print(formatConsoleText(card.String()))
 
 	if !*noDock {
 		fmt.Println("\nDocked AI Apps:")
@@ -339,7 +393,7 @@ func cmdUp(args []string) error {
 	fmt.Println("\nNext:")
 	fmt.Println("  1. Restart your docked AI app (Claude Code / Codex / Hermes / OpenClaw / Cursor / VS Code).")
 	fmt.Println(`  2. Ask it: "Remember our production API runs on port 8080, then recall it with a verified receipt."`)
-	fmt.Println("  3. Stop anytime with `nektar stop` · Check health with `nektar doctor` · Earn sats with `nektar earn`")
+	fmt.Println(formatConsoleText("  3. Stop anytime with `nektar stop` · Check health with `nektar doctor` · Earn sats with `nektar earn`"))
 
 	if !*noOpen && os.Getenv("CI") == "" && os.Getenv("NO_BROWSER") == "" && os.Getenv("SSH_CONNECTION") == "" {
 		_ = openBrowserURL(dashURL)
@@ -347,16 +401,34 @@ func cmdUp(args []string) error {
 	return nil
 }
 
-// cmdStop gracefully terminates the running background Nektar daemon.
+// cmdStop gracefully terminates the running background Nektar daemon and optionally removes login autostart.
 func cmdStop(args []string) error {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	netName := fs.String("network", "", "Network override")
+	uninstallSvc := fs.Bool("uninstall-service", false, "Also disable and remove the per-user login autostart service")
 	_ = fs.Parse(args)
+
+	if *uninstallSvc {
+		removed, err := uninstallUserAutostart()
+		if err != nil {
+			return fmt.Errorf("uninstall autostart service: %w", err)
+		}
+		if removed != "" {
+			fmt.Printf("Removed autostart service: %s\n", removed)
+		} else {
+			fmt.Println("No autostart service installed.")
+		}
+	} else {
+		// Stop OS service manager first so launchd KeepAlive / systemd Restart does not respawn after stop.
+		stopUserAutostart()
+	}
 
 	info, ok := detectDaemon(*dataDir, *netName)
 	if !ok || info == nil {
-		fmt.Println("nektar stop: no running daemon found")
+		if !*uninstallSvc {
+			fmt.Println("nektar stop: no running daemon found")
+		}
 		return nil
 	}
 	if info.PID <= 0 {

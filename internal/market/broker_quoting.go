@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -12,145 +11,11 @@ import (
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
-	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/store"
 )
-
-// ArmSell persists a SellListing, anchors the shard if spendable coins exist, and re-announces on `dir`.
-func (b *Broker) ArmSell(ctx context.Context, in SellInput) (store.SellListing, error) {
-	if strings.TrimSpace(in.Shard) == "" {
-		return store.SellListing{}, errors.New("market: shard is required")
-	}
-	if len(in.Domains) == 0 {
-		in.Domains = []string{"general"}
-	}
-	if in.PriceSats == 0 {
-		in.PriceSats = 100
-	}
-	norm := make([]string, 0, len(in.Domains))
-	for _, d := range in.Domains {
-		if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
-			norm = append(norm, d)
-		}
-	}
-	norm = ExpandDomainsWithCorrelations(ctx, b.Matcher(), norm, in.Description, b.ActiveNetworkTopics())
-	listing := store.SellListing{
-		Shard:       strings.TrimSpace(in.Shard),
-		Domains:     norm,
-		PriceSats:   in.PriceSats,
-		Description: in.Description,
-		Active:      true,
-		CreatedAt:   time.Now().Unix(),
-	}
-	if err := b.mem.DB().SaveSellListing(listing); err != nil {
-		return store.SellListing{}, err
-	}
-	if b.mem.Chain().BalanceSats() > 1000 {
-		_, _ = b.mem.AnchorShard(ctx, listing.Shard)
-	}
-	_, _ = b.AnnounceSelf(ctx)
-	b.notify("sell_armed", listing)
-	return listing, nil
-}
-
-// AnnounceSelf publishes this node's signed AnnounceAd to the enumerable `dir` lane across active hubs.
-func (b *Broker) AnnounceSelf(ctx context.Context) (int, error) {
-	listings, _ := b.mem.DB().ListSellListings()
-	domSeen := make(map[string]bool)
-	var sellDoms []string
-	for _, l := range listings {
-		if !l.Active {
-			continue
-		}
-		for _, d := range l.Domains {
-			if !domSeen[d] {
-				domSeen[d] = true
-				sellDoms = append(sellDoms, d)
-			}
-		}
-	}
-	b.mu.RLock()
-	pubURL := b.cfg.PublicURL
-	office := b.cfg.BboxOffice
-	handle := b.cfg.Handle
-	isHub := b.cfg.IsHub
-	packs := append([]bstack.PackRef(nil), b.packs...)
-	bountyDoms := append([]string(nil), b.bountyDoms...)
-	b.mu.RUnlock()
-
-	var bondOutpoint, bondBEEF string
-	if bRec, _, bErr := LoadActiveBond(b.mem.DB()); bErr == nil && bRec != nil && !bRec.State.Seized {
-		bondOutpoint = bRec.Outpoint()
-		if len(bRec.BEEFHex) <= 8192 {
-			bondBEEF = bRec.BEEFHex
-		}
-	}
-
-	var hubRole, hubPayKey, hubTermsURL string
-	var hubFees *bstack.HubFeeAdvert
-	if b.cfg.Hub != nil {
-		isHub = true
-		fs := b.cfg.Hub.FeeSchedule()
-		hubRole = string(fs.Role)
-		hubPayKey = b.cfg.Hub.PayeeIdentityKey()
-		hubFees = fs.AdvertSummary()
-		if pubURL != "" {
-			base := strings.TrimRight(pubURL, "/")
-			if strings.HasSuffix(base, "/hub") {
-				hubTermsURL = base + "/v1/terms"
-			} else {
-				hubTermsURL = base + "/hub/v1/terms"
-			}
-		}
-	}
-
-	return b.disc.PublishAnnounce(ctx, bstack.AnnounceAd{
-		Handle:            handle,
-		PublicURL:         pubURL,
-		BboxOffice:        office,
-		Domains:           sellDoms,
-		SellDomains:       sellDoms,
-		BountyDomains:     bountyDoms,
-		Packs:             packs,
-		BondOutpoint:      bondOutpoint,
-		BondBEEFHex:       bondBEEF,
-		IsHub:             isHub,
-		HubRole:           hubRole,
-		HubPayIdentityKey: hubPayKey,
-		HubTermsURL:       hubTermsURL,
-		HubFees:           hubFees,
-	})
-}
-
-// ActiveDomains returns this node's active sell & bounty domains for Leaf-to-Spine interest signaling.
-func (b *Broker) ActiveDomains() []string {
-	listings, _ := b.mem.DB().ListSellListings()
-	seen := make(map[string]bool)
-	var out []string
-	for _, l := range listings {
-		if !l.Active {
-			continue
-		}
-		for _, d := range l.Domains {
-			if d = strings.ToLower(strings.TrimSpace(d)); d != "" && !seen[d] {
-				seen[d] = true
-				out = append(out, d)
-			}
-		}
-	}
-	b.mu.RLock()
-	for _, d := range b.bountyDoms {
-		if d = strings.ToLower(strings.TrimSpace(d)); d != "" && !seen[d] {
-			seen[d] = true
-			out = append(out, d)
-		}
-	}
-	b.mu.RUnlock()
-	return out
-}
 
 // autoQuoteWant inspects an incoming verified WantAd and automatically quotes our best matching anchored fragment.
 func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
@@ -237,9 +102,10 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 			continue
 		}
 		for _, f := range frags {
-			// On live networks, only quote pre-mined anchored fragments so buyers never pay and then fail SPV!
+			// On live networks, require an anchor tx (mined or 0-conf carried first-party BEEF);
+			// Prove() below enforces full SPV verification of either mined BUMP or carried ancestry.
 			if b.mem.Chain().Network() != "memory" {
-				if f.AnchorTxID == "" || f.AnchorState != "mined" {
+				if f.AnchorTxID == "" {
 					continue
 				}
 			}
@@ -458,6 +324,11 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	if pb != nil {
 		pbJSON, _ = json.Marshal(pb)
 	}
+	sealedRevealKey, sealErr := b.sealKeyAtRest(ctx, hex.EncodeToString(revealKey[:]))
+	if sealErr != nil {
+		log.Printf("market: seal pending sale key for offer %s failed: %v", offerID, sealErr)
+		return
+	}
 	_ = b.mem.DB().SavePendingSale(store.PendingSaleRecord{
 		OfferID:         offerID,
 		WantID:          want.WantID,
@@ -465,7 +336,7 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		Shard:           matched.Shard,
 		Seq:             best.Seq,
 		SaleOfferJSON:   fullSaleJSON,
-		RevealKeyHex:    b.sealKeyAtRest(ctx, hex.EncodeToString(revealKey[:])),
+		RevealKeyHex:    sealedRevealKey,
 		ChirpURL:        chirpURL,
 		ProofBundleJSON: pbJSON,
 		ExpiresAt:       int64(saleOffer.ExpiresAt),
@@ -477,9 +348,8 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	}
 	// Start durable Restate SellerDeal workflow asynchronously (/send — never blocks SSE consumer!).
 	if rc := b.RestateClient(); rc != nil {
-		go func(oid string, w bstack.WantAd, sh string, sq int64, price uint64, bpub string, so *contracts.KeyedSaleOffer, rk [32]byte, cu string, bundle *contracts.ProofBundle) {
-			sCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
+		oid, w, sh, sq, price, bpub, so, rk, cu, bundle := offerID, want, matched.Shard, best.Seq, matched.PriceSats, want.Pub, saleOffer, revealKey, chirpURL, pb
+		b.spawnTracked(10*time.Second, func(sCtx context.Context) {
 			_, _ = rc.StartSellerDealAsync(sCtx, oid, SellerDealInput{
 				Want:            w,
 				Shard:           sh,
@@ -491,7 +361,7 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 				ChirpURL:        cu,
 				ProofBundle:     bundle,
 			})
-		}(offerID, want, matched.Shard, best.Seq, matched.PriceSats, want.Pub, saleOffer, revealKey, chirpURL, pb)
+		})
 	}
 }
 

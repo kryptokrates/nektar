@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/lightwebinc/bcommon/headers"
@@ -34,25 +33,26 @@ func (s *stubHeaderWitness) IsValidRootForHeight(_ context.Context, root *chainh
 
 func TestSovereignHeaderStoreAndAnchorClient(t *testing.T) {
 	ctx := context.Background()
-	var root100, hash100 chainhash.Hash
+	var root100 chainhash.Hash
 	root100[0] = 0xAA
 	root100[31] = 0x55
-	hash100[0] = 0x11
-	hash100[31] = 0x99
 
+	hdrMap := make(map[uint32]headers.Header)
+	var prev chainhash.Hash
+	for h := uint32(94); h <= 100; h++ {
+		var mr chainhash.Hash
+		if h == 100 {
+			mr = root100
+		} else {
+			mr[0] = byte(h)
+		}
+		hdr := mineStubHeader(h, prev, mr, 1700000000+h*600)
+		hdrMap[h] = *hdr
+		prev = hdr.Hash
+	}
 	stub := &stubHeaderWitness{
 		tip: 100,
-		hdr: map[uint32]headers.Header{
-			100: {
-				Height:     100,
-				Hash:       hash100,
-				MerkleRoot: root100,
-				Version:    1,
-				Time:       1700000000,
-				Bits:       0x1d00ffff,
-				Nonce:      42,
-			},
-		},
+		hdr: hdrMap,
 	}
 	wt, err := NewWitnessedTracker("regtest", []NamedWitness{{
 		Name:   "stub",
@@ -63,13 +63,9 @@ func TestSovereignHeaderStoreAndAnchorClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWitnessedTracker: %v", err)
 	}
-	// Seed WitnessedTracker cache directly to avoid external PoW difficulty requirement on synthetic header.
-	now := time.Now()
-	wt.mu.Lock()
-	wt.cache[100] = cachedHeader{hdr: stub.hdr[100], fetchedAt: now}
-	wt.cachedTip = 100
-	wt.cachedTipAt = now
-	wt.mu.Unlock()
+	if _, err := wt.HeaderAt(ctx, 100); err != nil {
+		t.Fatalf("warm WitnessedTracker HeaderAt(100): %v", err)
+	}
 
 	port := &Port{witnessed: wt, tracker: wt}
 	ts := httptest.NewServer(port.HeaderStoreHandler())
@@ -96,8 +92,11 @@ func TestSovereignHeaderStoreAndAnchorClient(t *testing.T) {
 }
 
 func TestValidateHeaderIndependenceAnchor(t *testing.T) {
-	if err := ValidateHeaderIndependence("testnet", "anchor:https://nektar.run/hub", "woc:test", "broadcaster:test"); err != nil {
-		t.Fatalf("testnet anchor validation failed: %v", err)
+	if err := ValidateHeaderIndependence("testnet", "anchor:https://nektar.run/hub,woc:test", "woc:test", "broadcaster:test"); err != nil {
+		t.Fatalf("testnet anchor+woc validation failed: %v", err)
+	}
+	if err := ValidateHeaderIndependence("testnet", "anchor:https://nektar.run/hub", "woc:test", "broadcaster:test"); err == nil {
+		t.Fatalf("expected single-witness anchor-only testnet validation to fail closed")
 	}
 	if err := ValidateHeaderIndependence("main", "anchor:https://nektar.run/hub,woc:main", "woc:main", "broadcaster:main"); err != nil {
 		t.Fatalf("mainnet anchor+woc validation failed: %v", err)

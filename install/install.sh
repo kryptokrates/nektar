@@ -52,6 +52,11 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+if [ "$USE_MAINNET" = "1" ] && [ "$MAINNET_CONFIRM" != "I_UNDERSTAND" ]; then
+  printf 'ERROR: --mainnet spends REAL BSV and requires explicit --confirm I_UNDERSTAND (or NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND).\n' >&2
+  exit 2
+fi
+
 mkdir -p "$BIN_DIR"
 
 if [ "$USE_DOCKER" = "1" ]; then
@@ -143,7 +148,11 @@ esac
 if [ "$DO_UP" = "1" ]; then
   set -- up
   if [ "$USE_MAINNET" = "1" ]; then
-    set -- "$@" --network main --confirm "${MAINNET_CONFIRM:-I_UNDERSTAND}"
+    if [ "$MAINNET_CONFIRM" != "I_UNDERSTAND" ]; then
+      printf 'ERROR: --mainnet spends REAL BSV and requires explicit --confirm I_UNDERSTAND (or NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND).\n' >&2
+      exit 2
+    fi
+    set -- "$@" --network main --confirm "$MAINNET_CONFIRM"
   fi
   if [ -n "$WALLET_MODE" ]; then
     set -- "$@" --wallet "$WALLET_MODE"

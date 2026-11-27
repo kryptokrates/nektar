@@ -111,7 +111,8 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 		nowMsCheck := nowTime.UnixMilli()
 		maxExpMs := nowMsCheck + bstack.MaxLifetime.Milliseconds() + 60_000
 		isLive := s.network == "main" || s.network == "testnet"
-		perHostSeen[h] = make(map[string]bool)
+		hostSeen := make(map[string]bool)
+		hostIncomplete := false
 		for _, ev := range ans.Result {
 			payload := ev.Payload
 			if isLive && len(ev.BEEF) == 0 {
@@ -122,8 +123,8 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 				_, parsedTx, _, pErr := guard.ParseBEEF(ev.BEEF, guard.DefaultBound)
 				if pErr == nil && parsedTx != nil {
 					tx = parsedTx
-				} else if !isLive {
-					if t0, tErr := transaction.NewTransactionFromBEEF(ev.BEEF); tErr == nil && t0 != nil {
+				} else if !isLive && pErr != nil && strings.Contains(pErr.Error(), "no inputs") && len(ev.BEEF) <= 64<<10 {
+					if t0, tErr := transaction.NewTransactionFromBEEF(ev.BEEF); tErr == nil && t0 != nil && len(t0.Inputs) == 0 {
 						tx = t0
 					}
 				}
@@ -136,9 +137,16 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 						continue
 					}
 					if s.mem == nil || s.mem.Chain() == nil || s.mem.Chain().Tracker() == nil {
+						hostIncomplete = true
 						continue
 					}
-					if verdict, _ := verify.Check(ctx, tx, s.mem.Chain().Tracker()); verdict != verify.Passed {
+					verdict, vErr := verify.Check(ctx, tx, s.mem.Chain().Tracker())
+					if verdict == verify.Transport {
+						// Tracker outage is an unknown verification state, never peer absence or forgery.
+						hostIncomplete = true
+						continue
+					}
+					if verdict != verify.Passed || vErr != nil {
 						continue
 					}
 					payload = verifiedPayload
@@ -164,7 +172,7 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 			if err := bstack.VerifyArtifact(sa.Announce.Pub, sa.Sig, sa.Announce); err != nil {
 				continue // reject spoofed/invalid announce!
 			}
-			perHostSeen[h][sa.Announce.Pub] = true
+			hostSeen[sa.Announce.Pub] = true
 			existing, ok := byPub[sa.Announce.Pub]
 			if !ok || sa.Announce.Exp > existing.Exp {
 				seenHosts := []string{h}
@@ -192,6 +200,9 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 			} else {
 				existing.SeenOnHosts = appendUnique(existing.SeenOnHosts, h)
 			}
+		}
+		if !hostIncomplete {
+			perHostSeen[h] = hostSeen
 		}
 	}
 

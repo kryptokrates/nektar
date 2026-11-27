@@ -96,9 +96,13 @@ func (b *Broker) SellToHub(ctx context.Context, hubURL, bountyID, shard string, 
 	if err != nil {
 		return nil, err
 	}
-	var provHex string
-	if rec, gErr := b.mem.DB().GetFragment(shard, target.Seq); gErr == nil && len(rec.Provenance) > 0 {
-		provHex = hex.EncodeToString(rec.Provenance)
+	var provHex, mpeRootHex, contentSHA256Hex string
+	if rec, gErr := b.mem.DB().GetFragment(shard, target.Seq); gErr == nil {
+		if len(rec.Provenance) > 0 {
+			provHex = hex.EncodeToString(rec.Provenance)
+		}
+		mpeRootHex = rec.MPERoot
+		contentSHA256Hex = rec.ContentSHA256
 	}
 	provPub, err := b.mem.Chain().SigningPubKey(ctx)
 	if err != nil {
@@ -113,6 +117,8 @@ func (b *Broker) SellToHub(ctx context.Context, hubURL, bountyID, shard string, 
 		Shard:         shard,
 		Seq:           target.Seq,
 		HDP:           canonicalHDP,
+		MPERoot:       mpeRootHex,
+		ContentSHA256: contentSHA256Hex,
 		Text:          target.Text,
 		ProvenanceHex: provHex,
 		ProofBundle:   pbRaw,
@@ -139,7 +145,28 @@ func (b *Broker) SellToHub(ctx context.Context, hubURL, bountyID, shard string, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("hub bounty submit rejected (HTTP %d)", resp.StatusCode)
+		rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		reason := strings.TrimSpace(string(rawBody))
+		var errPayload struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(rawBody, &errPayload) == nil && strings.TrimSpace(errPayload.Error) != "" {
+			reason = strings.TrimSpace(errPayload.Error)
+		}
+		if reason == "" {
+			return nil, fmt.Errorf("hub bounty submit rejected (HTTP %d)", resp.StatusCode)
+		}
+		hint := ""
+		low := strings.ToLower(reason)
+		switch {
+		case strings.Contains(low, "not yet mined") || strings.Contains(low, "not settled") || strings.Contains(low, "unmined"):
+			hint = " — wait for the fragment's anchor transaction to mine, then retry"
+		case strings.Contains(low, "duplicate"):
+			hint = " — this fragment was already sold to this hub; remember a new fragment first"
+		case strings.Contains(low, "exhausted") || strings.Contains(low, "budget") || strings.Contains(low, "cap"):
+			hint = " — this hub's bounty budget is full; try another hub or arm a direct sell listing"
+		}
+		return nil, fmt.Errorf("hub bounty submit rejected (HTTP %d): %s%s", resp.StatusCode, reason, hint)
 	}
 	var out hub.BountyPayoutResult
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&out); err != nil {

@@ -154,23 +154,3 @@ func (d *DB) CountObligations() (open int, overdue int, err error) {
 		FROM obligations`).Scan(&open, &overdue)
 	return open, overdue, err
 }
-
-// ListSellerReputations returns all persisted seller reputation rows for deterministic book reconciliation.
-func (d *DB) ListSellerReputations() ([]SellerReputation, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`SELECT seller_pub, settled_deals, failed_deals, total_sats, last_settled_at FROM reputation ORDER BY seller_pub ASC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []SellerReputation
-	for rows.Next() {
-		var r SellerReputation
-		if err := rows.Scan(&r.SellerPub, &r.SettledDeals, &r.FailedDeals, &r.TotalSats, &r.LastSettledAt); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}

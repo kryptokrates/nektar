@@ -1,8 +1,10 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 )
 
 // HostRecord tracks a configured, discovered, or user-blocked market hub host URL.
@@ -103,13 +105,6 @@ type SellerReputation struct {
 	LastSettledAt int64  `json:"lastSettledAt"`
 }
 
-// FaucetClaim tracks per-address testnet faucet drips to prevent drain abuse.
-type FaucetClaim struct {
-	Address     string `json:"address"`
-	TotalSats   uint64 `json:"totalSats"`
-	LastClaimAt int64  `json:"lastClaimAt"`
-}
-
 // BorgGroupRecord persists a Borg group and its epoch keys in SQLite.
 type BorgGroupRecord struct {
 	GroupID          string `json:"groupId"`
@@ -173,38 +168,49 @@ CREATE TABLE IF NOT EXISTS sell_listings (
 );
 
 CREATE TABLE IF NOT EXISTS operator_policies (
-	policy_id     TEXT PRIMARY KEY,
-	policy_hash   TEXT NOT NULL,
-	roles_json    TEXT NOT NULL DEFAULT '[]',
-	domains_json  TEXT NOT NULL DEFAULT '[]',
-	max_per_deal  INTEGER NOT NULL DEFAULT 0,
-	max_per_day   INTEGER NOT NULL DEFAULT 0,
-	zero_conf_max INTEGER NOT NULL DEFAULT 0,
-	active        INTEGER NOT NULL DEFAULT 1,
-	approved_by   TEXT NOT NULL DEFAULT 'operator',
-	approved_at   INTEGER NOT NULL,
-	revoked_at    INTEGER NOT NULL DEFAULT 0
+	policy_id      TEXT PRIMARY KEY,
+	policy_hash    TEXT NOT NULL,
+	roles_json     TEXT NOT NULL DEFAULT '[]',
+	domains_json   TEXT NOT NULL DEFAULT '[]',
+	max_per_deal   INTEGER NOT NULL DEFAULT 0,
+	max_per_day    INTEGER NOT NULL DEFAULT 0,
+	zero_conf_max  INTEGER NOT NULL DEFAULT 0,
+	ai_policy_json TEXT NOT NULL DEFAULT '',
+	operator_pub   TEXT NOT NULL DEFAULT '',
+	operator_sig   TEXT NOT NULL DEFAULT '',
+	active         INTEGER NOT NULL DEFAULT 1,
+	approved_by    TEXT NOT NULL DEFAULT 'operator',
+	approved_at    INTEGER NOT NULL,
+	revoked_at     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS deals (
-	deal_id           TEXT PRIMARY KEY,
-	role              TEXT NOT NULL,
-	status            TEXT NOT NULL,
-	want_json         BLOB,
-	chosen_offer_json BLOB,
-	payment_txid      TEXT NOT NULL DEFAULT '',
-	payment_beef      BLOB,
-	claim_key_hex     TEXT NOT NULL DEFAULT '',
-	chirp_url         TEXT NOT NULL DEFAULT '',
-	delivered_text    TEXT NOT NULL DEFAULT '',
-	counterparty_pub  TEXT NOT NULL DEFAULT '',
-	price_sats        INTEGER NOT NULL DEFAULT 0,
-	is_hub_seller     INTEGER NOT NULL DEFAULT 0,
-	first_offer_ms    INTEGER NOT NULL DEFAULT 0,
-	error             TEXT NOT NULL DEFAULT '',
-	revision          INTEGER NOT NULL DEFAULT 1,
-	created_at        INTEGER NOT NULL,
-	updated_at        INTEGER NOT NULL
+	deal_id              TEXT PRIMARY KEY,
+	role                 TEXT NOT NULL,
+	status               TEXT NOT NULL,
+	shard                TEXT NOT NULL DEFAULT '',
+	want_json            BLOB,
+	chosen_offer_json    BLOB,
+	match_audit_json     BLOB,
+	deal_receipt_json    BLOB,
+	payment_txid         TEXT NOT NULL DEFAULT '',
+	payment_beef         BLOB,
+	payment_output_index INTEGER NOT NULL DEFAULT 0,
+	payment_deriv_prefix TEXT NOT NULL DEFAULT '',
+	payment_deriv_suffix TEXT NOT NULL DEFAULT '',
+	payment_sender_key   TEXT NOT NULL DEFAULT '',
+	claim_key_hex        TEXT NOT NULL DEFAULT '',
+	chirp_url            TEXT NOT NULL DEFAULT '',
+	delivered_text       TEXT NOT NULL DEFAULT '',
+	counterparty_pub     TEXT NOT NULL DEFAULT '',
+	price_sats           INTEGER NOT NULL DEFAULT 0,
+	is_hub_seller        INTEGER NOT NULL DEFAULT 0,
+	first_offer_ms       INTEGER NOT NULL DEFAULT 0,
+	confirm_height       INTEGER NOT NULL DEFAULT 0,
+	error                TEXT NOT NULL DEFAULT '',
+	revision             INTEGER NOT NULL DEFAULT 1,
+	created_at           INTEGER NOT NULL,
+	updated_at           INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS approvals (
@@ -213,6 +219,7 @@ CREATE TABLE IF NOT EXISTS approvals (
 	reason         TEXT NOT NULL,
 	max_extra_sats INTEGER NOT NULL DEFAULT 0,
 	status         TEXT NOT NULL DEFAULT 'pending',
+	awakeable_id   TEXT NOT NULL DEFAULT '',
 	expires_at     INTEGER NOT NULL,
 	created_at     INTEGER NOT NULL
 );
@@ -310,63 +317,117 @@ CREATE INDEX IF NOT EXISTS idx_obligations_status ON obligations(status, deadlin
 		return err
 	}
 	var userVer int
-	_ = d.sql.QueryRow(`PRAGMA user_version`).Scan(&userVer)
+	if err := d.sql.QueryRow(`PRAGMA user_version`).Scan(&userVer); err != nil {
+		return fmt.Errorf("store: read user_version: %w", err)
+	}
+	runVersionStep := func(target int, fn func(tx *sql.Tx) error) error {
+		tx, err := d.sql.Begin()
+		if err != nil {
+			return fmt.Errorf("store: begin market migration v%d: %w", target, err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		if err := fn(tx); err != nil {
+			return fmt.Errorf("store: market migration v%d: %w", target, err)
+		}
+		if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, target)); err != nil {
+			return fmt.Errorf("store: set user_version=%d: %w", target, err)
+		}
+		return tx.Commit()
+	}
 	if userVer < 2 {
-		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN shard TEXT NOT NULL DEFAULT ''`)
-		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN payment_output_index INTEGER NOT NULL DEFAULT 0`)
-		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN payment_deriv_prefix TEXT NOT NULL DEFAULT ''`)
-		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN payment_deriv_suffix TEXT NOT NULL DEFAULT ''`)
-		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN payment_sender_key TEXT NOT NULL DEFAULT ''`)
-		_, _ = d.sql.Exec(`ALTER TABLE approvals ADD COLUMN awakeable_id TEXT NOT NULL DEFAULT ''`)
-		// One-time transactional backfill of payment_claim_inputs for legacy payment_claims rows.
-		if userVer < 1 {
-			if tx, bErr := d.sql.Begin(); bErr == nil {
-				rows, qErr := tx.Query(`SELECT txid, inputs_json, claimed_at FROM payment_claims`)
-				if qErr == nil {
-					type legacyClaim struct {
-						txid      string
-						inputs    []string
-						claimedAt int64
+		if err := runVersionStep(2, func(tx *sql.Tx) error {
+			cols := []struct{ table, col, def string }{
+				{"deals", "shard", "TEXT NOT NULL DEFAULT ''"},
+				{"deals", "payment_output_index", "INTEGER NOT NULL DEFAULT 0"},
+				{"deals", "payment_deriv_prefix", "TEXT NOT NULL DEFAULT ''"},
+				{"deals", "payment_deriv_suffix", "TEXT NOT NULL DEFAULT ''"},
+				{"deals", "payment_sender_key", "TEXT NOT NULL DEFAULT ''"},
+				{"approvals", "awakeable_id", "TEXT NOT NULL DEFAULT ''"},
+			}
+			for _, c := range cols {
+				if err := ensureColumnTx(tx, c.table, c.col, c.def); err != nil {
+					return err
+				}
+			}
+			if userVer < 1 {
+				rows, err := tx.Query(`SELECT txid, inputs_json, claimed_at FROM payment_claims`)
+				if err != nil {
+					return err
+				}
+				type legacyClaim struct {
+					txid      string
+					inputs    []string
+					claimedAt int64
+				}
+				var legacy []legacyClaim
+				for rows.Next() {
+					var txid string
+					var raw []byte
+					var at int64
+					if err := rows.Scan(&txid, &raw, &at); err != nil {
+						_ = rows.Close()
+						return err
 					}
-					var legacy []legacyClaim
-					for rows.Next() {
-						var txid string
-						var raw []byte
-						var at int64
-						if rows.Scan(&txid, &raw, &at) == nil {
-							var ins []string
-							_ = json.Unmarshal(raw, &ins)
-							legacy = append(legacy, legacyClaim{txid: txid, inputs: ins, claimedAt: at})
+					var ins []string
+					if len(raw) > 0 {
+						if err := json.Unmarshal(raw, &ins); err != nil {
+							_ = rows.Close()
+							return fmt.Errorf("parse payment_claims inputs for %s: %w", txid, err)
 						}
 					}
+					legacy = append(legacy, legacyClaim{txid: txid, inputs: ins, claimedAt: at})
+				}
+				if err := rows.Err(); err != nil {
 					_ = rows.Close()
-					for _, c := range legacy {
-						for _, op := range c.inputs {
-							if op != "" {
-								_, _ = tx.Exec(`INSERT OR IGNORE INTO payment_claim_inputs (outpoint, txid, claimed_at) VALUES (?, ?, ?)`, op, c.txid, c.claimedAt)
+					return err
+				}
+				if err := rows.Close(); err != nil {
+					return err
+				}
+				for _, c := range legacy {
+					for _, op := range c.inputs {
+						if op != "" {
+							if _, err := tx.Exec(`INSERT OR IGNORE INTO payment_claim_inputs (outpoint, txid, claimed_at) VALUES (?, ?, ?)`, op, c.txid, c.claimedAt); err != nil {
+								return err
 							}
 						}
 					}
 				}
-				_ = tx.Commit()
 			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		_, _ = d.sql.Exec(`PRAGMA user_version = 2`)
 	}
 	if userVer < 3 {
-		_, _ = d.sql.Exec(`ALTER TABLE operator_policies ADD COLUMN ai_policy_json TEXT NOT NULL DEFAULT ''`)
-		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN match_audit_json BLOB`)
-		_, _ = d.sql.Exec(`PRAGMA user_version = 3`)
+		if err := runVersionStep(3, func(tx *sql.Tx) error {
+			if err := ensureColumnTx(tx, "operator_policies", "ai_policy_json", "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+			return ensureColumnTx(tx, "deals", "match_audit_json", "BLOB")
+		}); err != nil {
+			return err
+		}
 	}
 	if userVer < 4 {
-		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN confirm_height INTEGER NOT NULL DEFAULT 0`)
-		_, _ = d.sql.Exec(`PRAGMA user_version = 4`)
+		if err := runVersionStep(4, func(tx *sql.Tx) error {
+			return ensureColumnTx(tx, "deals", "confirm_height", "INTEGER NOT NULL DEFAULT 0")
+		}); err != nil {
+			return err
+		}
 	}
 	if userVer < 5 {
-		_, _ = d.sql.Exec(`ALTER TABLE operator_policies ADD COLUMN operator_pub TEXT NOT NULL DEFAULT ''`)
-		_, _ = d.sql.Exec(`ALTER TABLE operator_policies ADD COLUMN operator_sig TEXT NOT NULL DEFAULT ''`)
-		_, _ = d.sql.Exec(`ALTER TABLE deals ADD COLUMN deal_receipt_json BLOB`)
-		_, _ = d.sql.Exec(`PRAGMA user_version = 5`)
+		if err := runVersionStep(5, func(tx *sql.Tx) error {
+			if err := ensureColumnTx(tx, "operator_policies", "operator_pub", "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+			if err := ensureColumnTx(tx, "operator_policies", "operator_sig", "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+			return ensureColumnTx(tx, "deals", "deal_receipt_json", "BLOB")
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

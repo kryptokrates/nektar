@@ -4,8 +4,7 @@
 // ZK membership is proven over R_n itself (ADR-020, STARK over SHA-256).
 //   shard = hash160(genesisOwner) — immutable, embedded in code.
 //   ANC-006 (GOAL-v6 S6.2): the state payload's FIRST push is the Metanet
-//   flag 0x4D455441 ("META"). Flagged scripts decode alongside flag-absent
-//   v3 anchors (decodeNektarAnchor accepts both artifacts).
+//   flag 0x4D455441 ("META") required by DecodeNektarAnchor.
 //   append(sig, pubKey, newR, newSize):
 //     hash160(pubKey) == ownerPkh AND checkSig(sig, pubKey) AND continuation
 //     carries n+1, size=newSize, R=newR, Rp' = hash256(TAG‖Rp‖newR‖size_le8),

@@ -115,7 +115,7 @@ func ReconcileBooks(db *store.DB, guard *core.SpendGuard, now time.Time) (*BookR
 
 	// Reputation roll-forward invariant: recorded SellerReputation.TotalSats should not be below
 	// observed settled buyer deals for that seller (catches lost reputation accounting).
-	if reps, err := db.ListSellerReputations(); err == nil {
+	if reps, err := db.ListReputations(); err == nil {
 		repByPub := make(map[string]store.SellerReputation, len(reps))
 		for _, r := range reps {
 			repByPub[r.SellerPub] = r

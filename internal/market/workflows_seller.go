@@ -72,6 +72,16 @@ func (e *Engine) restateSellerRun(ctx restate.WorkflowContext, in SellerDealInpu
 
 		// Persist durable pending_sales + deals row so revealKey survives seller restarts (R11)!
 		// Preserve settled flag if fast HandlePurchase already settled before SellerDeal Step 1 ran.
+		sealSellerKey := func() (string, error) {
+			if br := e.getBroker(); br != nil {
+				return br.sealKeyAtRest(rctx, revealKeyHex)
+			}
+			return e.sealKeyAtRest(rctx, revealKeyHex)
+		}
+		sealedReveal, sealErr := sealSellerKey()
+		if sealErr != nil {
+			return sellerPrepResult{}, sealErr
+		}
 		alreadySettled := false
 		if e.mem != nil && e.mem.DB() != nil {
 			if existingDeal, gErr := e.mem.DB().GetDeal(dealID); gErr == nil && existingDeal.Status == "settled" {
@@ -81,10 +91,6 @@ func (e *Engine) restateSellerRun(ctx restate.WorkflowContext, in SellerDealInpu
 			var pbJSON []byte
 			if pb != nil {
 				pbJSON, _ = json.Marshal(pb)
-			}
-			sealedReveal := revealKeyHex
-			if e.broker != nil {
-				sealedReveal = e.broker.sealKeyAtRest(ctx, revealKeyHex)
 			}
 			_ = e.mem.DB().SavePendingSale(store.PendingSaleRecord{
 				OfferID:         offerID,
@@ -101,17 +107,13 @@ func (e *Engine) restateSellerRun(ctx restate.WorkflowContext, in SellerDealInpu
 			})
 		}
 		wantJSON, _ := json.Marshal(in.Want)
-		sealedClaim := revealKeyHex
-		if e.broker != nil {
-			sealedClaim = e.broker.sealKeyAtRest(ctx, revealKeyHex)
-		}
 		e.persistDealRecord(store.DealRecord{
 			DealID:          dealID,
 			Role:            "seller",
 			Status:          "offered",
 			Shard:           in.Shard,
 			WantJSON:        wantJSON,
-			ClaimKeyHex:     sealedClaim,
+			ClaimKeyHex:     sealedReveal,
 			ChirpURL:        chirpURL,
 			CounterpartyPub: in.BuyerPub,
 			PriceSats:       in.PriceSats,
@@ -256,6 +258,21 @@ func (e *Engine) restateSellerDeliverPayment(ctx restate.WorkflowSharedContext, 
 	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
 		return false, err
 	}
+	// Never trust caller-asserted sig.Confirmed on live networks without verifying a header-checked MerklePath.
+	if sig.Confirmed && e.mem != nil && e.mem.Chain() != nil && e.mem.Chain().Network() != "memory" {
+		if sig.MerklePathHex == "" {
+			sig.Confirmed = false
+		} else {
+			bh, vErr := restate.Run(ctx, func(rctx restate.RunContext) (uint32, error) {
+				return e.verifyMerklePathProof(rctx, sig.TxID, sig.MerklePathHex, true)
+			}, restate.WithName("seller_deliver_payment_verify_bump"))
+			if vErr != nil {
+				sig.Confirmed = false
+			} else {
+				sig.BlockHeight = bh
+			}
+		}
+	}
 	if err := restate.Promise[PaymentSignal](ctx, "payment").Resolve(sig); err != nil {
 		return false, err
 	}
@@ -267,7 +284,9 @@ func (e *Engine) restateSellerConfirmPayment(ctx restate.WorkflowSharedContext, 
 		return false, err
 	}
 	if e.mem != nil && e.mem.Chain() != nil && e.mem.Chain().Network() != "memory" {
-		bh, vErr := e.verifyMerklePathProof(ctx, sig.TxID, sig.MerklePathHex, true)
+		bh, vErr := restate.Run(ctx, func(rctx restate.RunContext) (uint32, error) {
+			return e.verifyMerklePathProof(rctx, sig.TxID, sig.MerklePathHex, true)
+		}, restate.WithName("seller_confirm_payment_verify_bump"))
 		if vErr != nil {
 			return false, vErr
 		}
@@ -390,9 +409,6 @@ func ExecuteAtomicKnowledgeTrade(
 	payTxID, err := buyer.mem.Chain().Broadcast(ctx, payTx, fee, spend)
 	if err != nil {
 		return nil, fmt.Errorf("market: buyer broadcast payment: %w", err)
-	}
-	if err := buyer.mem.Chain().AdoptChange(payTx); err != nil {
-		return nil, err
 	}
 	buyer.policy.RecordSpend(priceSats)
 

@@ -6,9 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
-
-	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 
 	"github.com/kryptokrates/nektar/internal/core"
 )
@@ -129,11 +126,7 @@ func claimSupportedByQuotes(claimText string, verifiedQuotes []string) bool {
 			matched++
 		}
 	}
-	unique := len(seen)
-	if unique == 0 {
-		return false
-	}
-	return matched*2 >= unique && matched >= 1
+	return matched*2 >= len(seen)
 }
 
 // Ground verifies every claim against verified cited fragments via:
@@ -241,10 +234,7 @@ func Ground(claims []Claim, fetch FragmentFetcher, mode string, rules []string) 
 		flagged = append(flagged, gc)
 	}
 
-	if mode == "flag" {
-		kept = claims
-	}
-	reportHash, err := core.HashOf(map[string]any{"mode": mode, "claims": out})
+	reportHash, err := core.HashOf(map[string]any{"mode": "remove", "claims": out})
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +242,7 @@ func Ground(claims []Claim, fetch FragmentFetcher, mode string, rules []string) 
 		Claims:     out,
 		Kept:       kept,
 		Flagged:    flagged,
-		Mode:       mode,
+		Mode:       "remove",
 		ReportHash: reportHash,
 	}, nil
 }
@@ -280,6 +270,7 @@ type PaymentSummary struct {
 	AmountSats uint64 `json:"amountSats"`
 	PayTo      string `json:"payTo"`
 	InvoiceID  string `json:"invoiceId"`
+	BEEFHex    string `json:"beefHex,omitempty"`
 }
 
 // Receipt is the committed, auditable answer artifact hashed into nektarr1.<token>.
@@ -311,31 +302,10 @@ func ReceiptSignDigest(r Receipt) ([]byte, error) {
 	return core.DSHA256(core.Concat(core.TagReceiptSig, canon)), nil
 }
 
-// SignReceipt signs r with key under core.TagReceiptSig, populating IssuerPub and IssuerSig.
-func SignReceipt(key *ec.PrivateKey, r *Receipt) error {
-	if key == nil || r == nil {
-		return errors.New("reasoning: nil key or receipt")
-	}
-	r.IssuerPub = hex.EncodeToString(key.PubKey().Compressed())
-	digest, err := ReceiptSignDigest(*r)
-	if err != nil {
-		return err
-	}
-	sig, err := key.Sign(digest)
-	if err != nil {
-		return err
-	}
-	r.IssuerSig = hex.EncodeToString(sig.Serialize())
-	return nil
-}
-
-// VerifyReceiptSignature validates IssuerSig against IssuerPub when present on r.
+// VerifyReceiptSignature strictly validates IssuerSig against IssuerPub on r (unsigned receipts are rejected).
 func VerifyReceiptSignature(r Receipt) error {
-	if r.IssuerPub == "" && r.IssuerSig == "" {
-		return nil
-	}
 	if r.IssuerPub == "" || r.IssuerSig == "" {
-		return errors.New("reasoning: incomplete receipt issuer signature")
+		return errors.New("reasoning: receipt missing required issuer signature")
 	}
 	pub, _, err := core.ParseStrictCompressedPubKey(r.IssuerPub)
 	if err != nil {
@@ -399,22 +369,6 @@ func delegationDigestV2(delegator, decision, answer string) []byte {
 	))
 }
 
-// MakeDelegation creates a §16 delegation signature over length-framed (delegator, decision, answer) under TagDelegationV2.
-func MakeDelegation(key *ec.PrivateKey, decision, answer string) (Delegation, error) {
-	delegator := hex.EncodeToString(key.PubKey().Compressed())
-	msg := delegationDigestV2(delegator, decision, answer)
-	sig, err := key.Sign(msg)
-	if err != nil {
-		return Delegation{}, err
-	}
-	return Delegation{
-		Version:   2,
-		Delegator: delegator,
-		Decision:  decision,
-		Signature: hex.EncodeToString(sig.Serialize()),
-	}, nil
-}
-
 // VerifyDelegations checks every delegation signature on a receipt using strict compressed pubkey and low-S DER rules.
 func VerifyDelegations(r Receipt) error {
 	for _, d := range r.Delegations {
@@ -426,223 +380,13 @@ func VerifyDelegations(r Receipt) error {
 		if err != nil {
 			return err
 		}
-		var msg []byte
-		if d.Version >= 2 {
-			msg = delegationDigestV2(d.Delegator, d.Decision, r.Answer)
-		} else {
-			msg = core.DSHA256(core.Concat(core.TagDelegation, []byte(d.Delegator), []byte(d.Decision), []byte(r.Answer)))
+		if d.Version < 2 {
+			return fmt.Errorf("reasoning: unsupported legacy delegation version %d (v2 required)", d.Version)
 		}
+		msg := delegationDigestV2(d.Delegator, d.Decision, r.Answer)
 		if !sig.Verify(msg, pub) {
 			return fmt.Errorf("reasoning: invalid delegation signature for %q", d.Decision)
 		}
 	}
 	return nil
-}
-
-// AORG — Append-Only Reasoning Graph (bi-temporal, acyclic, Mangle-justified).
-
-type Vertex struct {
-	Kind    string   `json:"kind"` // episode | axiom | empirical | derived | refinement
-	Phi     string   `json:"phi"`
-	LogPos  int64    `json:"logPos"`
-	Height  uint32   `json:"height,omitempty"`
-	Context []string `json:"context"`
-	Sigma   []string `json:"sigma,omitempty"`
-	H       string   `json:"h"`
-	Refines string   `json:"refines,omitempty"`
-}
-
-type Edge struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-	Rule string `json:"rule"`
-	E    string `json:"e"`
-}
-
-type AORGraph struct {
-	mu        sync.RWMutex
-	vertices  map[string]Vertex
-	edges     []Edge
-	invalidAt map[string]int64
-	rules     []string
-}
-
-func NewAORGraph(rules []string) *AORGraph {
-	return &AORGraph{
-		vertices:  make(map[string]Vertex),
-		invalidAt: make(map[string]int64),
-		rules:     append([]string(nil), rules...),
-	}
-}
-
-func frameStringSlice(items []string) []byte {
-	parts := make([][]byte, 0, 1+len(items))
-	parts = append(parts, core.U32LE(uint32(len(items))))
-	for _, s := range items {
-		parts = append(parts, core.Field([]byte(s)))
-	}
-	return core.Concat(parts...)
-}
-
-func vertexHash(v Vertex) string {
-	buf := core.Concat(
-		[]byte("nektar:aorg-vertex:v2"),
-		core.Field([]byte(v.Kind)),
-		core.Field([]byte(v.Phi)),
-		core.U64LE(uint64(v.LogPos)),
-		core.U32LE(v.Height),
-		core.Field([]byte(v.Refines)),
-		frameStringSlice(v.Sigma),
-		frameStringSlice(v.Context),
-	)
-	return hex.EncodeToString(core.DSHA256(buf))
-}
-
-func edgeHash(from, to, ruleTag string) string {
-	buf := core.Concat(
-		[]byte("nektar:aorg-edge:v2"),
-		core.Field([]byte(from)),
-		core.Field([]byte(to)),
-		core.Field([]byte(ruleTag)),
-	)
-	return hex.EncodeToString(core.DSHA256(buf))
-}
-
-func (g *AORGraph) ancestorsLocked(h string, out map[string]bool) {
-	if out[h] {
-		return
-	}
-	out[h] = true
-	for _, e := range g.edges {
-		if e.To == h {
-			g.ancestorsLocked(e.From, out)
-		}
-	}
-}
-
-// Append enforces acyclicity, Mangle justifiability (for derived vertices),
-// episode traceability, and bi-temporal refinement invalidation.
-func (g *AORGraph) Append(v Vertex, premises []string, ruleTag string) (Vertex, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for _, p := range premises {
-		if _, ok := g.vertices[p]; !ok {
-			return Vertex{}, fmt.Errorf("aorg: unknown premise %s", p)
-		}
-	}
-	v.H = vertexHash(v)
-	if _, dup := g.vertices[v.H]; dup {
-		return Vertex{}, errors.New("aorg: duplicate vertex")
-	}
-	if v.Kind == "derived" {
-		premFacts := make([]string, 0, len(premises))
-		closure := make(map[string]bool)
-		for _, p := range premises {
-			premFacts = append(premFacts, g.vertices[p].Phi)
-			g.ancestorsLocked(p, closure)
-		}
-		hasEpisode := false
-		for h := range closure {
-			if g.vertices[h].Kind == "episode" {
-				hasEpisode = true
-				break
-			}
-		}
-		if !hasEpisode {
-			return Vertex{}, errors.New("aorg: traceability violated (no episode ancestor)")
-		}
-		ok, err := Entails(premFacts, g.rules, v.Phi)
-		if err != nil || !ok {
-			return Vertex{}, fmt.Errorf("aorg: Mangle rule set does not justify %q (err=%v)", v.Phi, err)
-		}
-	}
-	if v.Kind == "refinement" {
-		if v.Refines == "" {
-			return Vertex{}, errors.New("aorg: refinement missing refines target")
-		}
-		g.invalidAt[v.Refines] = v.LogPos
-	}
-	g.vertices[v.H] = v
-	if ruleTag == "" {
-		ruleTag = "assert"
-	}
-	for _, p := range premises {
-		eHash := edgeHash(p, v.H, ruleTag)
-		g.edges = append(g.edges, Edge{From: p, To: v.H, Rule: ruleTag, E: eHash})
-	}
-	return v, nil
-}
-
-// AORGSnapshot serializes an AORGraph for durable SQLite persistence across restarts.
-type AORGSnapshot struct {
-	Vertices  map[string]Vertex `json:"vertices"`
-	Edges     []Edge            `json:"edges"`
-	InvalidAt map[string]int64  `json:"invalidAt"`
-	Rules     []string          `json:"rules"`
-}
-
-// AddRules appends Datalog rules to the graph without wiping existing vertices or edges.
-func (g *AORGraph) AddRules(rules ...string) {
-	g.mu.Lock()
-	g.rules = append(g.rules, rules...)
-	g.mu.Unlock()
-}
-
-// Snapshot returns a deep copy of the graph suitable for JSON persistence.
-func (g *AORGraph) Snapshot() AORGSnapshot {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	verts := make(map[string]Vertex, len(g.vertices))
-	for k, v := range g.vertices {
-		verts[k] = v
-	}
-	inv := make(map[string]int64, len(g.invalidAt))
-	for k, v := range g.invalidAt {
-		inv[k] = v
-	}
-	return AORGSnapshot{
-		Vertices:  verts,
-		Edges:     append([]Edge(nil), g.edges...),
-		InvalidAt: inv,
-		Rules:     append([]string(nil), g.rules...),
-	}
-}
-
-// Restore loads a persisted AORGSnapshot into g.
-func (g *AORGraph) Restore(snap AORGSnapshot) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if snap.Vertices != nil {
-		g.vertices = make(map[string]Vertex, len(snap.Vertices))
-		for k, v := range snap.Vertices {
-			g.vertices[k] = v
-		}
-	}
-	g.edges = append([]Edge(nil), snap.Edges...)
-	if snap.InvalidAt != nil {
-		g.invalidAt = make(map[string]int64, len(snap.InvalidAt))
-		for k, v := range snap.InvalidAt {
-			g.invalidAt[k] = v
-		}
-	}
-	if len(snap.Rules) > 0 {
-		g.rules = append([]string(nil), snap.Rules...)
-	}
-}
-
-// CurrentView returns all vertices valid at logical time atLogPos (bi-temporal projection).
-func (g *AORGraph) CurrentView(atLogPos int64) []Vertex {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	out := make([]Vertex, 0, len(g.vertices))
-	for _, v := range g.vertices {
-		if v.LogPos > atLogPos {
-			continue
-		}
-		if inv, has := g.invalidAt[v.H]; has && inv <= atLogPos {
-			continue
-		}
-		out = append(out, v)
-	}
-	return out
 }

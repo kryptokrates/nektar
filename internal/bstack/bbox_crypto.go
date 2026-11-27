@@ -19,7 +19,7 @@ import (
 // BboxSealedBody is the authenticated E2E-encrypted envelope stored inside BboxMessage.Body.
 // Intermediate NAT relay Hubs see only ciphertext and never learn BRC-369 content keys or payment BEEFs.
 type BboxSealedBody struct {
-	V      int    `json:"v"`      // protocol version (2 = HKDF-SHA256 + framed AAD; 1 = legacy SHA-256 KDF)
+	V      int    `json:"v"`      // protocol version (strictly 2 = HKDF-SHA256 + framed AAD)
 	EphPub string `json:"ephPub"` // 33-byte compressed ephemeral secp256k1 pubkey hex
 	Nonce  string `json:"nonce"`  // 12-byte AES-GCM nonce hex
 	CT     string `json:"ct"`     // AES-256-GCM ciphertext+tag hex
@@ -38,11 +38,6 @@ func BboxAAD(office, senderPub, recipientPub, dealID, kind string) []byte {
 	)
 }
 
-// BboxAADv1 returns the legacy v1 pipe-delimited AAD for backward-compatible decryption of v1 envelopes.
-func BboxAADv1(office, senderPub, recipientPub, dealID, kind string) []byte {
-	return []byte("nektar/bbox-e2e/v1|" + office + "|" + senderPub + "|" + recipientPub + "|" + dealID + "|" + kind)
-}
-
 // deriveBboxAEADKeyV2 derives a 32-byte AES-256-GCM key via RFC 5869 HKDF-SHA256 (stdlib crypto/hkdf).
 func deriveBboxAEADKeyV2(sharedCompressed, ephPub, recipientPub, aad []byte) ([32]byte, error) {
 	var out [32]byte
@@ -56,19 +51,6 @@ func deriveBboxAEADKeyV2(sharedCompressed, ephPub, recipientPub, aad []byte) ([3
 	copy(out[:], derived)
 	core.ZeroBytes(derived)
 	return out, nil
-}
-
-// deriveBboxAEADKeyV1 preserves legacy v1 decryption compatibility for envelopes with V == 1.
-func deriveBboxAEADKeyV1(sharedX []byte, ephPub, recipientPub []byte, aad []byte) [32]byte {
-	h := sha256.New()
-	_, _ = h.Write([]byte("nektar/bbox-kdf/v1"))
-	_, _ = h.Write(sharedX)
-	_, _ = h.Write(ephPub)
-	_, _ = h.Write(recipientPub)
-	_, _ = h.Write(aad)
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
 }
 
 // SealBboxBody encrypts plaintext end-to-end to recipientPubHex using ephemeral secp256k1 ECDH,
@@ -127,7 +109,7 @@ func SealBboxBody(recipientPubHex string, aad, plaintext []byte) (json.RawMessag
 	return json.RawMessage(raw), nil
 }
 
-// OpenBboxBody decrypts an E2E-encrypted BboxSealedBody (v2 HKDF-SHA256 or legacy v1)
+// OpenBboxBody decrypts an E2E-encrypted v2 BboxSealedBody (HKDF-SHA256 + length-framed AAD)
 // using recipientKey and verifies AAD binding, zeroizing intermediate ECDH/AEAD secrets.
 func OpenBboxBody(recipientKey *ec.PrivateKey, aad []byte, raw json.RawMessage) ([]byte, error) {
 	if recipientKey == nil {
@@ -137,8 +119,8 @@ func OpenBboxBody(recipientKey *ec.PrivateKey, aad []byte, raw json.RawMessage) 
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, fmt.Errorf("bbox e2e: parse envelope: %w", err)
 	}
-	if (env.V != 2 && env.V != 1) || env.EphPub == "" || env.Nonce == "" || env.CT == "" {
-		return nil, errors.New("bbox e2e: plaintext or malformed bbox envelope rejected")
+	if env.V != 2 || env.EphPub == "" || env.Nonce == "" || env.CT == "" {
+		return nil, errors.New("bbox e2e: non-v2, plaintext, or malformed bbox envelope rejected")
 	}
 	ephPub, ephCompressed, err := core.ParseStrictCompressedPubKey(env.EphPub)
 	if err != nil {
@@ -159,14 +141,9 @@ func OpenBboxBody(recipientKey *ec.PrivateKey, aad []byte, raw json.RawMessage) 
 	sharedBytes := shared.Compressed()
 	defer core.ZeroBytes(sharedBytes)
 
-	var key [32]byte
-	if env.V == 2 {
-		key, err = deriveBboxAEADKeyV2(sharedBytes, ephCompressed, recipientKey.PubKey().Compressed(), aad)
-		if err != nil {
-			return nil, fmt.Errorf("bbox e2e: hkdf: %w", err)
-		}
-	} else {
-		key = deriveBboxAEADKeyV1(sharedBytes, ephCompressed, recipientKey.PubKey().Compressed(), aad)
+	key, err := deriveBboxAEADKeyV2(sharedBytes, ephCompressed, recipientKey.PubKey().Compressed(), aad)
+	if err != nil {
+		return nil, fmt.Errorf("bbox e2e: hkdf: %w", err)
 	}
 	defer core.Zero32Array(&key)
 

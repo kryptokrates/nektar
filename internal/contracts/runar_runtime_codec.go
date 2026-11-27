@@ -99,7 +99,7 @@ func EncodeScriptInt(n int64) []byte {
 	neg := n < 0
 	var u uint64
 	if neg {
-		u = uint64(-n)
+		u = uint64(-(n + 1)) + 1 // overflow-safe for math.MinInt64
 	} else {
 		u = uint64(n)
 	}
@@ -120,22 +120,54 @@ func EncodeScriptInt(n int64) []byte {
 	return EncodePushData(buf)
 }
 
-// EncodeNum2Bin encodes n as a fixed-width little-endian sign-magnitude byte slice (matching OP_NUM2BIN).
-func EncodeNum2Bin(n int64, width int) []byte {
-	buf := make([]byte, width)
+func encodeNum2BinChecked(n int64, width int) ([]byte, error) {
+	if width <= 0 {
+		return nil, fmt.Errorf("contracts: num2bin width %d must be > 0", width)
+	}
 	neg := n < 0
 	var u uint64
 	if neg {
-		u = uint64(-n)
+		u = uint64(-(n + 1)) + 1 // overflow-safe for math.MinInt64 (= 1<<63)
 	} else {
 		u = uint64(n)
 	}
+	// Sign-magnitude uses the MSB of buf[width-1] for the sign bit, leaving (width*8 - 1) magnitude bits.
+	if width <= 8 {
+		maxMag := (uint64(1) << (uint(width)*8 - 1)) - 1
+		if u > maxMag {
+			return nil, fmt.Errorf("contracts: integer %d overflows %d-byte sign-magnitude num2bin", n, width)
+		}
+	}
+	buf := make([]byte, width)
 	for i := 0; i < width && u > 0; i++ {
 		buf[i] = byte(u & 0xff)
 		u >>= 8
 	}
-	if neg && width > 0 {
+	if neg {
 		buf[width-1] |= 0x80
+	}
+	return buf, nil
+}
+
+// EncodeNum2Bin encodes n as a fixed-width little-endian sign-magnitude byte slice (matching OP_NUM2BIN).
+// Handles math.MinInt64 safely without signed negation overflow and clamps out-of-width values
+// rather than silently wrapping to negative zero.
+func EncodeNum2Bin(n int64, width int) []byte {
+	if width <= 0 {
+		return nil
+	}
+	if buf, err := encodeNum2BinChecked(n, width); err == nil {
+		return buf
+	}
+	// Saturate to the maximum representable signed magnitude for this width instead of truncating into -0.
+	buf := make([]byte, width)
+	for i := 0; i < width-1; i++ {
+		buf[i] = 0xff
+	}
+	if n < 0 {
+		buf[width-1] = 0xff // sign bit (0x80) | max 7-bit magnitude (0x7f)
+	} else {
+		buf[width-1] = 0x7f
 	}
 	return buf
 }
@@ -265,7 +297,11 @@ func encodeStateFieldValue(name, typ string, val any) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("contracts: state field %q (%s): %w", name, typ, err)
 		}
-		return EncodeNum2Bin(n, 8), nil
+		enc, err := encodeNum2BinChecked(n, 8)
+		if err != nil {
+			return nil, fmt.Errorf("contracts: state field %q (%s): %w", name, typ, err)
+		}
+		return enc, nil
 	case "bool", "boolean":
 		b, ok := val.(bool)
 		if !ok {

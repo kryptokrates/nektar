@@ -23,12 +23,18 @@ type Provenance struct {
 	Modality  *Modality `json:"modality,omitempty"`
 }
 
-// Fragment is the canonical unit of Nektar verifiable memory: (d, p, H(d|p), E(d)).
+// Fragment is the canonical unit of Nektar verifiable memory: (d, p, H(d|p), E(d)),
+// optionally enriched with a tree path, volumetric CHIRP content commitment, and L1-bound MPE root.
 type Fragment struct {
-	Data       []byte     `json:"d"`
-	Provenance Provenance `json:"p"`
-	HDP        []byte     `json:"hdp,omitempty"`
-	Ciphertext []byte     `json:"E,omitempty"`
+	Data          []byte     `json:"d"`
+	Provenance    Provenance `json:"p"`
+	HDP           []byte     `json:"hdp,omitempty"`
+	Ciphertext    []byte     `json:"E,omitempty"`
+	Path          string     `json:"path,omitempty"`
+	MediaType     string     `json:"mediaType,omitempty"`
+	ChirpURL      string     `json:"chirpUrl,omitempty"`
+	ContentSHA256 []byte     `json:"contentSha256,omitempty"`
+	MPERoot       []byte     `json:"mpeRoot,omitempty"`
 }
 
 // Field prefixes b with its uint32 little-endian length.
@@ -114,26 +120,18 @@ func ProvenanceDigest(data []byte, p Provenance) []byte {
 	return DSHA256(Concat(TagProvSig, Field(data), SerializeProvenance(unsigned)))
 }
 
-// ComputeHDP computes legacy v1 H(d|p) = SHA256(TagProv || d || SerializeProvenance(p)).
-func ComputeHDP(data []byte, p Provenance) []byte {
-	return SHA256(Concat(TagProv, data, SerializeProvenance(p)))
-}
-
 // ComputeHDPV2 computes framed v2 H(d|p) = SHA256(TagProvV2 || Field(d) || SerializeProvenance(p))
 // eliminating boundary ambiguity between variable-length plaintext data and serialized provenance (F-10).
 func ComputeHDPV2(data []byte, p Provenance) []byte {
 	return SHA256(Concat(TagProvV2, Field(data), SerializeProvenance(p)))
 }
 
-// VerifyHDP checks whether hdp matches either framed v2 or legacy v1 H(d|p) over raw provBytes.
+// VerifyHDP checks whether hdp matches canonical length-framed v2 H(d|p) over raw provBytes.
 func VerifyHDP(data, provBytes, hdp []byte) bool {
 	if len(hdp) != 32 {
 		return false
 	}
-	if EqualBytes(SHA256(Concat(TagProvV2, Field(data), provBytes)), hdp) {
-		return true
-	}
-	return EqualBytes(SHA256(Concat(TagProv, data, provBytes)), hdp)
+	return EqualBytes(SHA256(Concat(TagProvV2, Field(data), provBytes)), hdp)
 }
 
 // ComputeEH computes SHA256(E) (SHA256("") if empty).
@@ -141,20 +139,30 @@ func ComputeEH(ciphertext []byte) []byte {
 	return SHA256(ciphertext)
 }
 
-// ComputeLeaf computes leaf = SHA256(TagLeaf || H(d|p) || H(E)).
-func ComputeLeaf(f Fragment) []byte {
+// ComputeLeafV2 computes the sole canonical L1-bound leaf committing to framed H(d|p), H(E),
+// the 32-byte MPE root (binding selective-disclosure proofs directly to the anchored BSV Merkle root),
+// and the 32-byte volumetric content SHA-256 (0x00*32 when no external CHIRP blob is attached).
+func ComputeLeafV2(f Fragment) []byte {
 	hdp := f.HDP
 	if len(hdp) == 0 {
-		hdp = ComputeHDP(f.Data, f.Provenance)
+		hdp = ComputeHDPV2(f.Data, f.Provenance)
 	}
-	return SHA256(Concat(TagLeaf, hdp, ComputeEH(f.Ciphertext)))
+	mpeRoot := Zero32Bytes()
+	if len(f.MPERoot) == 32 {
+		copy(mpeRoot, f.MPERoot)
+	}
+	contentHash := Zero32Bytes()
+	if len(f.ContentSHA256) == 32 {
+		copy(contentHash, f.ContentSHA256)
+	}
+	return SHA256(Concat(TagLeafV2, hdp, ComputeEH(f.Ciphertext), mpeRoot, contentHash))
 }
 
 // SerializeFragment encodes (d | prov | hdp | E) with u32le length framing.
 func SerializeFragment(f Fragment) []byte {
 	hdp := f.HDP
 	if len(hdp) == 0 {
-		hdp = ComputeHDP(f.Data, f.Provenance)
+		hdp = ComputeHDPV2(f.Data, f.Provenance)
 	}
 	return Concat(
 		Field(f.Data),

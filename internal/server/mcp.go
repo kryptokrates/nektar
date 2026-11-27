@@ -2,15 +2,12 @@ package server
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
-	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/reasoning"
 )
 
@@ -19,77 +16,24 @@ func NewMCPServer(mem *memory.Service, mkt *market.Engine) *mcp.Server {
 	return NewMCPServerWithToolbox(NewToolbox(mem, mkt, nil, nil, nil, "operator"))
 }
 
-// NewMCPServerWithToolbox binds every tool in the configured profile (`agent` = focused 10 tools; `operator` = all 18).
+// NewMCPServerWithToolbox binds every tool in the configured profile (`agent` = focused default; `operator` = all tools),
+// plus Git-native Memory Repo MCP Resource Templates and Prompts.
 func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "nektar",
 		Version: "0.1.0",
 	}, &mcp.ServerOptions{
-		Instructions: "When answering factual questions from memory: (1) call recall first (omit shard to discover shards including 'welcome'); (2) route verifiable answers through groundedAnswer citing verified fragments; (3) preserve the returned receipt: and verify: footer verbatim; (4) never fabricate receipts — proofs show recorded + unaltered + derivable, never truth.",
+		Instructions: "When answering factual questions from memory: (1) call recall first (omit shard/repo to discover repos including 'welcome'; pass branch or atCommit for time-travel); (2) use the unified 'repo' tool (list|log|show|tree|read|diff|blame|verify|commit|rm|branch|fork|merge|cherryPick|revert|tag|export|import|prove|rotate) or nektar://repo/... resources for Git-native UTXO-anchored memory repos; (3) route verifiable answers through groundedAnswer citing verified fragments and preserve the returned receipt: and verify: footer verbatim; (4) never fabricate receipts — proofs show recorded + unaltered + derivable with unbroken NektarAnchor UTXO lineage, never truth.",
 	})
 
-	srv.AddResource(&mcp.Resource{
-		URI:         "nektar://welcome",
-		Name:        "Nektar Welcome Memory",
-		Description: "Seeded starter memory fragments and usage instructions.",
-		MIMEType:    "application/json",
-	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-		res, err := tb.ExecRecall(ctx, memory.RecallInput{Shard: "welcome", Limit: 20})
-		if err != nil {
-			return nil, err
-		}
-		b, _ := json.MarshalIndent(res, "", "  ")
-		return &mcp.ReadResourceResult{
-			Contents: []*mcp.ResourceContents{{
-				URI:      req.Params.URI,
-				MIMEType: "application/json",
-				Text:     string(b),
-			}},
-		}, nil
-	})
+	registerMCPResourcesAndPrompts(srv, tb)
 
-	// --- Core 10-tool Agent Profile ---
-	type mcpRememberArgs struct {
-		Shard      string            `json:"shard,omitempty"`
-		Text       string            `json:"text,omitempty"`
-		Data       string            `json:"data,omitempty"`
-		Source     string            `json:"source,omitempty"`
-		Level      int               `json:"level,omitempty"`
-		Class      string            `json:"class,omitempty"`
-		BorgGroup  string            `json:"borgGroup,omitempty"`
-		CallerPub  string            `json:"callerPub,omitempty"`
-		Supersedes int64             `json:"supersedes,omitempty"`
-		AutoAnchor bool              `json:"autoAnchor,omitempty"`
-		Extra      map[string]string `json:"extra,omitempty"`
-	}
+	// --- Core Agent Profile Tools (all routed through canonical Toolbox.Exec* methods) ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "remember",
-		Description: "Commit a provenance-signed memory fragment into a shard, optionally BRC-369 encrypting to a Borg group and/or anchoring on BSV.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, raw mcpRememberArgs) (*mcp.CallToolResult, any, error) {
-		txt := raw.Text
-		if txt == "" {
-			txt = raw.Data
-		}
-		in := memory.RememberInput{
-			Shard:      raw.Shard,
-			Text:       txt,
-			Source:     raw.Source,
-			Level:      raw.Level,
-			Class:      raw.Class,
-			BorgGroup:  raw.BorgGroup,
-			CallerPub:  raw.CallerPub,
-			Supersedes: raw.Supersedes,
-			AutoAnchor: raw.AutoAnchor,
-			Extra:      raw.Extra,
-		}
-		if p, disallowBorg, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
-			in.Principal = &p
-			in.CallerPub = ""
-			if disallowBorg && in.BorgGroup != "" {
-				return nil, nil, errors.New("operator token required for Borg group writes")
-			}
-		}
-		res, err := tb.mem.Remember(ctx, in)
+		Description: "Commit or edit a provenance-signed memory file/fragment in a Memory Repo (supports branch, path, volumetric blobBase64/chirpUrl, BRC-369 Borg encryption, L1-bound TagLeafV2 MPE, and NektarAnchor UTXO anchoring).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, raw RememberToolInput) (*mcp.CallToolResult, any, error) {
+		res, err := tb.ExecRemember(ctx, raw)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -98,14 +42,20 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "recall",
-		Description: "Recall active, Cedar-authorized, Borg-decrypted fragments. Omit shard to recall across all non-system shards.",
+		Description: "Recall active, Cedar-authorized, Borg-decrypted fragments. Omit shard/repo to search across all repos; pass branch or atCommit (SHA/prefix/tag) for epistemic time-travel recall.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in memory.RecallInput) (*mcp.CallToolResult, any, error) {
-		if p, disallowBorg, overridden := PrincipalForContext(ctx, in.Principal); overridden {
-			in.Principal = p
-			in.CallerPub = ""
-			in.DisallowBorg = disallowBorg
-		}
 		res, err := tb.ExecRecall(ctx, in)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonToolResult(res)
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "repo",
+		Description: "Full Git + SingularGrit Memory Repo tool anchored via strict BSV NektarAnchor UTXO lineage (action: list|log|show|tree|read|diff|blame|verify|commit|rm|branch|fork|merge|cherryPick|revert|tag|export|import|prove|rotate).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in RepoToolInput) (*mcp.CallToolResult, any, error) {
+		res, err := tb.ExecRepo(ctx, in)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -120,26 +70,18 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		Name:        "forget",
 		Description: "Shred local plaintext/ciphertext of a fragment while preserving its on-chain Merkle commitment.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in forgetArgs) (*mcp.CallToolResult, any, error) {
-		if p, _, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
-			if err := tb.mem.ForgetAuthorized(ctx, in.Shard, in.Seq, p); err != nil {
-				return nil, nil, err
-			}
-		} else if err := tb.mem.Forget(ctx, in.Shard, in.Seq); err != nil {
+		res, err := tb.ExecForget(ctx, in.Shard, in.Seq)
+		if err != nil {
 			return nil, nil, err
 		}
-		return jsonToolResult(map[string]any{"ok": true, "shard": in.Shard, "seq": in.Seq})
+		return jsonToolResult(res)
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "groundedAnswer",
 		Description: "Verify claims against cited memory fragments (quote + Google Mangle Datalog), strip hallucinations, commit a receipt, and return the nektarr1.* verification footer.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in memory.GroundedAnswerInput) (*mcp.CallToolResult, any, error) {
-		if p, disallowBorg, overridden := PrincipalForContext(ctx, in.Principal); overridden {
-			in.Principal = p
-			in.CallerPub = ""
-			in.DisallowBorg = disallowBorg
-		}
-		res, err := tb.mem.GroundedAnswer(ctx, in)
+		res, err := tb.ExecGroundedAnswer(ctx, in)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -153,31 +95,18 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		Name:        "verifyReceipt",
 		Description: "Verify a nektarr1.* receipt token, its §16 delegations, and the SPV settlement status of every cited fragment.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in verifyArgs) (*mcp.CallToolResult, any, error) {
-		res, err := tb.mem.VerifyReceipt(ctx, in.Token)
+		res, err := tb.ExecVerifyReceipt(ctx, in.Token)
 		if err != nil {
 			return nil, nil, err
 		}
 		return jsonToolResult(res)
 	})
 
-	type wantArgs struct {
-		Domains            []string `json:"domains,omitempty"`
-		Question           string   `json:"question"`
-		MaxSats            uint64   `json:"maxSats,omitempty"`
-		TargetShard        string   `json:"targetShard,omitempty"`
-		StandingTTLSeconds int64    `json:"standingTtlSeconds,omitempty"`
-	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "want",
 		Description: "Buy verified knowledge live from peer agents or the Hub over BSV AtomicBEEF + BRC-369 keyed disclosure. Optionally set standingTtlSeconds to fall back to a durable StandingOrder.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in wantArgs) (*mcp.CallToolResult, any, error) {
-		res, err := tb.ExecWant(ctx, market.WantRequest{
-			Domains:            in.Domains,
-			Question:           in.Question,
-			MaxSats:            in.MaxSats,
-			TargetShard:        in.TargetShard,
-			StandingTTLSeconds: in.StandingTTLSeconds,
-		})
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in WantToolInput) (*mcp.CallToolResult, any, error) {
+		res, err := tb.ExecWantTool(ctx, in)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -231,18 +160,18 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		return jsonToolResult(tb.ExecDoctor(ctx))
 	})
 
+	type peersArgs struct {
+		Refresh bool `json:"refresh,omitempty"`
+	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "peers",
+		Description: "Discover signature-verified peers, handles, sell domains, CHIRP capsules, and active Hub bounties.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in peersArgs) (*mcp.CallToolResult, any, error) {
+		return jsonToolResult(tb.ExecPeers(ctx, in.Refresh))
+	})
+
 	// --- Operator Profile Tools ---
 	if tb.Profile() != "agent" {
-		type peersArgs struct {
-			Refresh bool `json:"refresh,omitempty"`
-		}
-		mcp.AddTool(srv, &mcp.Tool{
-			Name:        "peers",
-			Description: "Discover signature-verified peers, handles, sell domains, CHIRP packs, and active Hub bounties.",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, in peersArgs) (*mcp.CallToolResult, any, error) {
-			return jsonToolResult(tb.ExecPeers(ctx, in.Refresh))
-		})
-
 		type anchorArgs struct {
 			Shard string `json:"shard"`
 		}
@@ -250,14 +179,11 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 			Name:        "anchor",
 			Description: "Anchor all unanchored fragments in a shard onto BSV via the NektarAnchor Rúnar covenant (guarded by SpendGuard).",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in anchorArgs) (*mcp.CallToolResult, any, error) {
-			a, err := tb.mem.AnchorShard(ctx, in.Shard)
+			res, err := tb.ExecAnchor(ctx, in.Shard)
 			if err != nil {
 				return nil, nil, err
 			}
-			if a == nil {
-				return jsonToolResult(map[string]any{"ok": true, "anchored": false, "reason": "nothing unanchored"})
-			}
-			return jsonToolResult(a)
+			return jsonToolResult(res)
 		})
 
 		type proveArgs struct {
@@ -268,18 +194,11 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 			Name:        "prove",
 			Description: "Build a self-contained SPV ProofBundle (Merkle path + NektarAnchor BEEF/BUMP) and verify it offline against headers.",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in proveArgs) (*mcp.CallToolResult, any, error) {
-			if p, _, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
-				bundle, vr, err := tb.mem.ProveAuthorized(ctx, in.Shard, in.Seq, p)
-				if err != nil {
-					return nil, nil, err
-				}
-				return jsonToolResult(map[string]any{"bundle": bundle, "verify": vr})
-			}
-			bundle, vr, err := tb.mem.Prove(ctx, in.Shard, in.Seq)
+			res, err := tb.ExecProve(ctx, in.Shard, in.Seq)
 			if err != nil {
 				return nil, nil, err
 			}
-			return jsonToolResult(map[string]any{"bundle": bundle, "verify": vr})
+			return jsonToolResult(res)
 		})
 
 		mcp.AddTool(srv, &mcp.Tool{
@@ -293,25 +212,11 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 			return jsonToolResult(res)
 		})
 
-		type packArgs struct {
-			Shard       string `json:"shard"`
-			ChirpURL    string `json:"chirpUrl,omitempty"`
-			TargetShard string `json:"targetShard,omitempty"`
-			PeerURL     string `json:"peerUrl,omitempty"`
-		}
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "exportPack",
-			Description: "Export a shard and its anchor proofs as a verified BRC-167 CHIRP closure.",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, in packArgs) (*mcp.CallToolResult, any, error) {
-			var (
-				res *memory.ShardPackResult
-				err error
-			)
-			if p, disallowBorg, overridden := PrincipalForContext(ctx, policy.Principal{}); overridden {
-				res, err = tb.mem.ExportShardPackAuthorized(ctx, in.Shard, p, "disclose", disallowBorg)
-			} else {
-				res, err = tb.mem.ExportShardPack(ctx, in.Shard)
-			}
+			Description: "Export a Memory Repo as a self-verifying .nkt CHIRP Capsule closure.",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in PackToolInput) (*mcp.CallToolResult, any, error) {
+			res, err := tb.ExecExportPack(ctx, in.Shard)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -320,54 +225,29 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "importPack",
-			Description: "Import and verify a local or remote BRC-167 CHIRP shard pack closure into a local shard.",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, in packArgs) (*mcp.CallToolResult, any, error) {
-			if in.PeerURL != "" && tb.disc != nil {
-				raw, err := tb.disc.FetchRemoteChirp(ctx, in.PeerURL, in.ChirpURL)
-				if err != nil {
-					return nil, nil, err
-				}
-				n, sh, err := tb.mem.ImportShardPackBytes(raw, in.TargetShard)
-				if err != nil {
-					return nil, nil, err
-				}
-				return jsonToolResult(map[string]any{"imported": n, "shard": sh})
-			}
-			n, err := tb.mem.ImportShardPack(ctx, in.ChirpURL, in.TargetShard)
+			Description: "Import and verify a local or remote .nkt CHIRP Capsule into a local Memory Repo.",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in PackToolInput) (*mcp.CallToolResult, any, error) {
+			res, err := tb.ExecImportPack(ctx, in)
 			if err != nil {
 				return nil, nil, err
 			}
-			return jsonToolResult(map[string]any{"imported": n, "shard": in.TargetShard})
+			return jsonToolResult(res)
 		})
 
-		type authArgs struct {
-			Principal policy.Principal `json:"principal"`
-			Action    string           `json:"action"`
-			Resource  policy.Resource  `json:"resource"`
-		}
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "authorize",
 			Description: "Evaluate the active native Cedar policy set for a principal, action, and resource.",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, in authArgs) (*mcp.CallToolResult, any, error) {
-			pc := tb.mem.PolicyCommit()
-			dec, err := policy.Authorize(pc.Text, in.Principal, in.Action, in.Resource)
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in AuthorizeToolInput) (*mcp.CallToolResult, any, error) {
+			res, err := tb.ExecAuthorize(ctx, in)
 			if err != nil {
 				return nil, nil, err
 			}
-			rcp := policy.MakeReceipt(in.Principal, in.Action, in.Resource, pc, dec.Allow)
-			if tb.mem.Chain() != nil {
-				if pub, pErr := tb.mem.Chain().SigningPubKey(ctx); pErr == nil && pub != nil {
-					_ = policy.SignDecisionReceipt(hex.EncodeToString(pub.Compressed()), func(digest []byte) ([]byte, error) {
-						return tb.mem.Chain().SignDigest(ctx, digest)
-					}, &rcp)
-				}
-			}
-			return jsonToolResult(map[string]any{"decision": dec, "receipt": rcp})
+			return jsonToolResult(res)
 		})
 
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "status",
-			Description: "Return Nektar v0.1 node status: identity, network, wallet balance, shards, SpendGuard, policy hash, and market deals.",
+			Description: "Return Nektar v0.1 node status: identity, network, wallet balance, repos, SpendGuard, policy hash, and market deals.",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 			st := BuildStatus(ctx, tb.mem, tb.mkt)
 			return jsonToolResult(st)

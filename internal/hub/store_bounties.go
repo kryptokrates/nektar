@@ -89,15 +89,6 @@ func (s *Store) GetBounty(id string) (Bounty, error) {
 	return b, err
 }
 
-// HasBountyClaim reports whether an HDP digest was already paid by the bounty pool.
-func (s *Store) HasBountyClaim(hdp string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var n int
-	err := s.sql.QueryRow(`SELECT COUNT(*) FROM hub_bounty_claims WHERE hdp = ?`, hdp).Scan(&n)
-	return n > 0, err
-}
-
 var (
 	ErrBountyFilled    = errors.New("hub: bounty not found, inactive, or already filled")
 	ErrBountyDuplicate = errors.New("hub: duplicate fragment HDP already claimed")
@@ -125,7 +116,10 @@ func (s *Store) ReserveBountyClaim(bountyID, hdp, sellerPub string, rewardSats u
 		INSERT INTO hub_bounty_claims (hdp, bounty_id, seller_pub, txid, reward_sats, status, created_at)
 		VALUES (?, ?, ?, '', ?, 'pending', ?)`,
 		hdp, bountyID, sellerPub, rewardSats, time.Now().Unix()); err != nil {
-		return ErrBountyDuplicate
+		if isSQLiteConstraintErr(err) {
+			return ErrBountyDuplicate
+		}
+		return err
 	}
 	return tx.Commit()
 }
@@ -184,27 +178,6 @@ func (s *Store) CancelBountyClaim(bountyID, hdp string) error {
 	n, _ := res.RowsAffected()
 	if n == 1 {
 		_, _ = tx.Exec(`UPDATE hub_bounties SET filled = CASE WHEN filled > 0 THEN filled - 1 ELSE 0 END WHERE id = ?`, bountyID)
-	}
-	return tx.Commit()
-}
-
-// RecordBountyClaim atomically records a paid bounty claim and increments the bounty's filled count.
-func (s *Store) RecordBountyClaim(bountyID, hdp, sellerPub, txid string, rewardSats uint64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	tx, err := s.sql.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`
-		INSERT INTO hub_bounty_claims (hdp, bounty_id, seller_pub, txid, reward_sats, status, created_at)
-		VALUES (?, ?, ?, ?, ?, 'paid', ?)`,
-		hdp, bountyID, sellerPub, txid, rewardSats, time.Now().Unix()); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`UPDATE hub_bounties SET filled = filled + 1 WHERE id = ?`, bountyID); err != nil {
-		return err
 	}
 	return tx.Commit()
 }

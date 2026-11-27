@@ -12,35 +12,24 @@ import (
 // Domain-separation tags — every hash in Nektar is domain-tagged so digests
 // never collide across layers or protocols.
 var (
-	TagLeaf         = []byte("nektar:leaf:v1")
+	TagLeafV2       = []byte("nektar:leaf:v2")
+	TagCommitV1     = []byte("nektar:commit:v1")
+	TagTreeV1       = []byte("nektar:tree:v1")
+	TagBlobV1       = []byte("nektar:blob:v1")
 	TagRPrime       = []byte("nektar:rprime:v1")
-	TagProv         = []byte("nektar:prov:v1")
 	TagProvV2       = []byte("nektar:prov:v2")
-	TagPromise      = []byte("nektar:promise:v1")
 	TagProvSig      = []byte("nektar:provsig:v1")
-	TagCheckpoint   = []byte("nektar:checkpoint:v1")
 	TagReceiptSig   = []byte("nektar:rcptsig:v1")
-	TagDelegation   = []byte("nektar:delegation:v1")
 	TagDelegationV2 = []byte("nektar:delegation:v2")
-	TagAnchorTag    = []byte("nektar-rprime")
 
 	// MetaFlag is the 4-byte Metanet prefix ("META") pushed at the start of NektarAnchor state.
 	MetaFlag = []byte{0x4d, 0x45, 0x54, 0x41}
-
-	// Zero32 is the 32-byte genesis previous chained root (R'_-1). Callers MUST NOT mutate it;
-	// prefer Zero32Bytes() for a freshly allocated slice.
-	Zero32 = make([]byte, 32)
 )
 
 // Zero32Bytes returns a freshly allocated 32-byte zero slice for genesis R'_-1.
 func Zero32Bytes() []byte {
 	return make([]byte, 32)
 }
-
-const (
-	AnchorProto   = "nektar"
-	AnchorVersion = 1
-)
 
 // SHA256 computes single SHA-256.
 func SHA256(b []byte) []byte {
@@ -100,11 +89,6 @@ func EqualBytes(a, b []byte) bool {
 // ToHex encodes bytes as lowercase hex.
 func ToHex(b []byte) string {
 	return hex.EncodeToString(b)
-}
-
-// FromHex decodes hex into bytes.
-func FromHex(s string) ([]byte, error) {
-	return hex.DecodeString(s)
 }
 
 // ChainRpWithTag computes R'_n = DSHA256(tag || prevRp || R || u64le(size)).

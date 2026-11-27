@@ -1,127 +1,77 @@
-# Join mainnet (DOC-004)
+# Join Mainnet — Nektar v0.1 (Pure-Go) Gate Checklist
 
-The path from "works on testnet" to "holds real money". Every gate below is
-either **executable** (a command or drill you run and record) or
-**time/external** (it cannot be compressed — no amount of code substitutes).
-An unchecked time/external gate means _not mainnet-ready_, regardless of how
-green the executable column is.
+> **Honesty Rule:** Proofs establish **recorded, unaltered, and derivable by block time** — never that a memory's content is true, and model identity is *declared*, not zkML-proven.
 
-## Executable gates
+This checklist governs moving a v0.1 Pure-Go Nektar node or Hub from testnet to real BSV Mainnet sats. For the hands-on 5,000–10,000 sat canary walkthrough, see [MAINNET-CANARY.md](MAINNET-CANARY.md).
 
-| #   | Gate                          | Command / procedure                                                                                                                                                                        | Evidence to keep                                                                                                                                                                                                                                                                                                                  |
-| --- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| E1  | Full build + hygiene          | `pnpm -r build && pnpm check:hygiene`                                                                                                                                                      | clean run                                                                                                                                                                                                                                                                                                                         |
-| E2  | Package tests                 | `pnpm --filter @nektar/mcp test` (memory tier; slow tier included)                                                                                                                         | all pass incl. `want-TTL`, `reserve`, `announce keep-alive`                                                                                                                                                                                                                                                                       |
-| E3  | Live testnet suite            | `pnpm test:testnet`                                                                                                                                                                        | want→offer→escrow→disclosure→settlement completes; zero-conf paths exercised                                                                                                                                                                                                                                                      |
-| E4  | Beefcat conformance (regtest) | `docker compose -f deploy/bstack-sandbox/compose.regtest.yaml --profile conformance run --rm beefcat`                                                                                      | **PASS 2026-11-18** — phase 3 `REFUSED-BUMP` (foreign-chain refusal); phase 4 skipped (no `generatetoaddress` on the aged chain)                                                                                                                                                                                                  |
-| E5  | Beefcat conformance (testnet) | `docker compose -f deploy/bstack-sandbox/compose.testnet.yaml --profile conformance run --rm beefcat`                                                                                      | **PASS 2026-11-18** — same REFUSED-BUMP                                                                                                                                                                                                                                                                                           |
-| E6  | Vendored engine admission     | probe `bbox` host `/submit` with a foreign-chain-BUMP carrier — admission must refuse                                                                                                      | **PASS 2026-11-18** — `400 Invalid merkle path for transaction …` on testnet host-a: the vendored image verifies parent BUMPs against its own headers at admission (garbage → decode refusal, mutated bytes → integrity refusal — three distinct gates)                                                                           |
-| E7  | Kill-switch reachable         | `NEKTAR_KILL=1` (or the configured file) — a running agent must refuse new deals and park in-flight spends                                                                                 | observed transition                                                                                                                                                                                                                                                                                                               |
-| E8  | Backup drill                  | restore `dataDir` (sqlite + keys) onto a fresh machine; agent resumes ops and its announce/card republishes                                                                                | restored agent answers a `status` call and re-announces                                                                                                                                                                                                                                                                           |
-| E9  | Key-rotation drill            | rotate `NEKTAR_FUND_WIF` on a quiet chain; confirm old-key UTXOs are swept and new deals fund from new keys                                                                                | old reserve empty, new txs spendable                                                                                                                                                                                                                                                                                              |
-| E10 | Preflight + reserve           | boot agent; confirm reserve mediums exist (`funds.outs()` ≥ `NEKTAR_RESERVE_OUTS` at `NEKTAR_RESERVE_OUT_SATS`) and `automation: reserve:` log shows a split or no-op                      | log line                                                                                                                                                                                                                                                                                                                          |
-| E11 | Anchored carrier admission    | `node tools/tn-anchored-probe.mjs` — 3-tx BEEF (unproven tree, proven grandparent) must admit on a patched host; unrelated-tx padding must refuse; foreign-chain carrier must still refuse | **PASS 2026-11-18** — anchored carrier `outputsToAdmit:[0]` on testnet host-a; unrelated tx → `beef: transactions the carrier does not descend from`; foreign chain → `400 Invalid merkle path`. Patch: `deploy/bstack-sandbox/modules/bbox/bbox-module.js` + `patches/@lightwebinc__bbox-host.patch`; upstream diff in `../bbox` |
+Every gate below is either **executable** (verified by a command you run and record) or **time/external** (cannot be compressed by code). An unchecked external gate means *not mainnet-ready*, regardless of green unit tests.
 
-## Time/external gates — cannot be faked
+---
 
-(Gate IDs are `X#` — `T#`/`R#` names belong to the testnet suite tests.)
+## 1. Executable Gates (Pure-Go v0.1)
 
-| #   | Gate                                            | Requirement                                                                                                       | Why it can't be skipped                                                                            |
-| --- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| X1  | **5-day soak**                                  | ≥120h continuous operation on testnet with deals flowing; no wedged ops, no reserve exhaustion, no lost announces | cadence bugs (eviction windows, TTL edges, keep-alive gaps) only surface on wall-clock time        |
-| X2  | **≥1 external independent operator**            | a second team runs `deploy/hub/` on their own infrastructure — NOT a second agent on the same box                 | same-box proves the wire, not independence: clock skew, NAT, real latency, independent key custody |
-| X3  | **≥2 announced hosts for DEFAULT_MARKET_HOSTS** | `DEFAULT_MARKET_HOSTS` stays empty on `main` until ≥2 independent operators announce                              | a hardcoded single bootstrap is a centralized registry with extra steps                            |
-| X4  | **One real escrow watched end-to-end**          | quote→accept→escrow→disclosure→settle (or refund) on live coins, logs kept                                        | every prior BLOCKER lived on this path                                                             |
+| # | Gate | Command / Procedure | Pass Criterion |
+|---|---|---|---|
+| **E1** | Vet, build & race tests | `go vet ./... && go test -race -count=1 ./...` | All Go packages green with `-race` |
+| **E2** | Static cross-compile | `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./cmd/nektar` (and `GOOS=windows`) | Zero-CGO single binary builds cleanly |
+| **E3** | Mainnet safety gate | `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND NEKTAR_HEADERS_SOURCE="woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2" NEKTAR_SETTLE_SPEC="broadcaster:main" nektar check-mainnet` | Exits `0` with `>= 2` distinct-origin non-circular PoW header witnesses |
+| **E4** | Mainnet refusal without confirm | `nektar serve --network main` (without `--confirm I_UNDERSTAND`) | Fails closed before opening wallet or HTTP listener |
+| **E5** | Dual-witness & SPV hardening | `go test -race -v ./internal/chain/... ./internal/contracts/...` | REFUSED-BUMP foreign-chain rejection, tracker-outage 503 separation, and offline SPV verification pass |
+| **E6** | Kill-switch drill | `POST /v1/automation/kill {"enabled":true}` or `touch ~/.nektar/main/KILL` (or global `touch ~/.nektar/KILL`) | New market trades refused immediately; SpendGuard caps remain enforced |
+| **E7** | Backup & restore drill | Copy `~/.nektar/main` (`nektar.sqlite`, `wallet/`, tokens) to a fresh host and boot `nektar serve --network main --confirm I_UNDERSTAND` | Node resumes with identical `identityPub`, balance, shards, and re-announces |
+| **E8** | Restate v1.8.1 durable plane | `nektar restate-up` (or Compose/Helm `restate:1.8.1` sidecar) + `NEKTAR_RESTATE_REQUIRED=1` | `nektar doctor` shows `restate` **GREEN** (`nektar_restate_attached 1`) |
+| **E9** | Custody separation | Personal machine: `nektar up --network main --confirm I_UNDERSTAND --wallet client` (BSV Desktop on `:3321`, zero spending keys in Nektar). Headless 24/7 node: `--wallet embedded` with small SpendGuard hot float funded via `nektar wallet fund --from-desktop --sats 25000` and swept via `nektar wallet sweep --to-desktop --network main --confirm I_UNDERSTAND` | Confirmed custody mode in `nektar doctor` (`walletMode`) and `wallet-mode.json` |
+| **E10** | Hub BRC-105 fee & replay gate | `go test -race ./internal/hub/...` + live `curl -i https://<hub>/hub/sync?cursor=0` | Returns HTTP `402 Payment Required` when fees enabled; double-spend / replay rejected |
 
-### Operating the X1 soak
+---
 
-Two persistent agents with warmed lane stock (`node tools/tn-warmup.mjs`
-first), `NEKTAR_WATCH_URLS` pointed at each other's `/watch` endpoint, and a
-deal loop on a jittered cadence: publish a want, wait for `settled` (or a
-clean refund), repeat. Record per leg:
+## 2. Time / External Gates (Cannot Be Faked)
 
-- `deal N: <ms>` wall times — p50/max regressions are findings, not noise
-- `upkeep <ms>` lines — a leg over its bound logs `exceeded … abandoning`;
-  an abandon is a finding to file, not a pass
-- `box submit failed` / `unreachable` rates — one dead host is survivable
-  (suite R1 proves it), sustained refusal is not
-- reserve medium count over time — exhaustion means a funding-lane leak
-- outbox depth — rows should deliver or dead-letter (~10 attempts), never
-  accrue
+| # | Gate | Requirement | Why It Cannot Be Skipped |
+|---|---|---|---|
+| **X1** | **5-day testnet soak** | >= 120h continuous operation with live anchoring & deals; no wedged Restate workflows, no UTXO fuel exhaustion, no silent stalls | TTL edges, keep-alive intervals, proof compaction, and rate limits only surface on wall-clock time |
+| **X2** | **>= 1 independent external Hub operator** | A second team deploys `deploy/hub/` (or `nektar hub up --native`) on their own box with their own keys and PoW header witnesses | Proves real latency, clock skew, NAT bbox relay, and independent SPV verification |
+| **X3** | **Real Mainnet canary anchor + SPV** | Anchor 1 fragment on Mainnet (`nektar remember -shard canary -text "..." -anchor`), wait 1 block, verify `nektar recall -shard canary -spv` (`spvVerified: true`) | Exercises live US/EU BSV Broadcaster + dual-witness Chaintracks/WoC BUMP proof end-to-end |
+| **X4** | **One real Mainnet trade watched to settlement** | Small-sats `want -> quote -> AtomicBEEF/BRC-29 -> BRC-369 key reveal -> DealReceipt` verified via `nektar verify -token <nektardr1...>` | Exercises live payment settlement, replay registry, and bilateral receipt verification |
 
-Abort and file when: a deal leg hits its 120s phase bound repeatedly on a
-healthy network, the same upkeep phase abandons three passes in a row, or an
-agent writes no sqlite/events for >10min (the suite's
-`[suite quiet <n>s]` heartbeat is the same signal, scaled).
+---
 
-### Onboarding the X2 operator
-
-Hand them `docs/JOIN-TESTNET.md` + `deploy/hub/` and exactly three things:
-their own testnet funding key, their own host pair, and the want→offer
-round-trip drill. Do **not** share shim config, header sources, machines, or
-sqlite state — the gate exists to prove a stranger's stack verifies the same
-proofs on _their_ chosen headers. Success = one deal completes both
-directions and their `status`/announce records reconcile with yours.
-
-## Day-one mainnet caps
+## 3. Recommended Day-One Mainnet Configuration
 
 ```sh
-# custody — client (external BRC-100 substrate, zero local keys) or toolbox+WIF
-NEKTAR_WALLET=client            # or: toolbox + NEKTAR_FUND_WIF
-NEKTAR_FUND_WIF=<small-stakes key only>
+# Isolated Mainnet data directory (~/.nektar/main by default)
+export NEKTAR_NETWORK="main"
+export NEKTAR_MAINNET_CONFIRM="I_UNDERSTAND"
 
-# spend ceilings — set all three, always
-NEKTAR_MAX_SPEND_SATS_PER_DAY=<small>
-NEKTAR_DEAL_FLOOR_SATS=<floor>
-NEKTAR_FINALITY_DEPTH=<explicit, default 6 on main>
+# Custody: auto (uses BSV Desktop on :3321 if open, else embedded) | client | embedded
+export NEKTAR_WALLET="auto"
 
-# direct rail — off unless opted in
-# NEKTAR_DIRECT_ACCEPT=1        # leave unset
-NEKTAR_DIRECT_ACCEPT_MAX_SATS=<low>
+# Dual-witness non-circular PoW headers (automatically used by default on main when left unset)
+# export NEKTAR_HEADERS_SOURCE="woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2"
+# export NEKTAR_SETTLE_SPEC="broadcaster:main"
 
-# zero-conf delivery — the no-recourse cap on BOTH rails (defaults shown);
-# above it a sale holds in payment_pending until the payment's own proof
-NEKTAR_ZEROCONF_MAX_SATS=1000
-NEKTAR_ZEROCONF_MAX_ANCESTORS=2
+# Conservative SpendGuard caps (enforced fail-closed before every broadcast)
+export NEKTAR_MAX_FEE_SATS_PER_TX=2000
+export NEKTAR_MAX_SPEND_SATS_PER_DAY=10000
+export NEKTAR_SETTLE_DEPTH=6
 
-# reserve + want knobs shipped for the T2/T4 fixes
-NEKTAR_RESERVE_OUTS=2            # medium outputs held so mints never eat the only deal coin
-NEKTAR_RESERVE_OUT_SATS=<2x floor>
-NEKTAR_TREE_RESERVE_SATS=2000    # change each mint take must leave — lower it for a small treasury, below ~100 the change strands
-NEKTAR_WANT_EXTEND_MS=120000     # want lives past one collect window; buyer republishes instead of expiring
+# Require Restate v1.8.1 durable workflows on live networks
+export NEKTAR_RESTATE_REQUIRED=1
+
+# Optional: pin off-box cold operator pubkey so hot agent cannot weaken spending policies
+# export NEKTAR_OPERATOR_PUBKEY="02<66-hex-compressed-pubkey>"
 ```
 
-First live run: one small deal, watch it to `settled` (or a clean refund),
-then one more. Only then raise `NEKTAR_MAX_SPEND_SATS_PER_DAY`.
+Start in 1 command:
 
-## What the runtime now guarantees (and does not)
+```sh
+nektar up --network main --confirm I_UNDERSTAND
+nektar doctor --network main
+```
 
-**Fixed for this gate set** — a live buyer's want republishes at each
-collection boundary while `exp` remains (`want_republished` event, same
-signed record, offers still match); upkeep denominates one dominant UTXO
-into `NEKTAR_RESERVE_OUTS` medium outputs so a tree mint and a deal escrow
-never contend for the same coin; a directory card whose funding tree sits
-unproven re-announces on a 4-minute keep-alive inside the host's 10-minute
-`FUNDING_PROOF_MS` eviction window and stops once the tree proves.
+---
 
-**Event layer** — deal passes are wake-driven: each agent long-polls its
-`/watch` stream and an inbound lane item fires `rt.deals()` immediately;
-polling stays only as a bounded fallback (measured: T1 p50 41s→23s on
-testnet, T3 confirms notifies arrive and the watched path beats the polled
-one). Every deal leg and each upkeep phase is time-bounded — a hung leg logs
-its phase name and frees the single-flight instead of silently wedging the
-loop forever (`upkeep(finger) exceeded … abandoning` is how a live stall now
-surfaces).
+## 4. What Mainnet Guarantees — and Does Not
 
-**Finger plane** — token bundles are gated on servability before submit:
-ancestry gaps heal against fetched sources and permanently-gapped bundles
-skip instead of resubmitting frozen-invalid beef forever (a poisoned journal
-starved live deals until evicted). EF-parsed sparse-output stubs are
-detached before BEEF serialization — the `null.satoshis` crash class. The
-full-chain re-serve amortizes to bounded batches per upkeep so a deep
-history can't park a pass for minutes.
-
-**Not guaranteed** — counterparty uptime, mempool/mining cadence on main,
-host-side admission policy beyond the vendored engines, and every
-time/external gate above. Zero-conf progression stays bounded by verified
-ancestry; nothing here relaxes a proof check to buy latency.
+- **Guaranteed:** fail-closed `NEKTAR_MAINNET_CONFIRM` gate; SpendGuard per-tx and daily satoshi caps; dual-witness non-circular PoW header validation (no single-origin circular header trust); atomic SQLite payment replay protection; Restate v1.8.1 durable deal recovery across crashes; isolated `~/.nektar/main` data directory.
+- **Not guaranteed:** counterparty uptime, BSV block cadence, external indexer availability, or objective truth of stored memory text (`TruthNote` always applies).

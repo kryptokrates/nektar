@@ -4,184 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
-	"time"
 
 	"github.com/bsv-blockchain/go-sdk/spv"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-sdk/transaction/chaintracker"
 	"github.com/lightwebinc/bcommon/guard"
+
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
-
-const (
-	// DefaultMaxUnconfirmedAncestors bounds counterparty 0-conf unmined ancestor chains.
-	DefaultMaxUnconfirmedAncestors = 15
-)
-
-var (
-	// ErrTrackerUnavailable indicates a header tracker transport/quorum outage (retryable, never 0-conf fallback).
-	ErrTrackerUnavailable = errors.New("chain: header tracker unavailable")
-	// ErrRefusedBUMP indicates a carried MerklePath failed verification against witnessed block headers.
-	ErrRefusedBUMP = errors.New("chain: REFUSED-BUMP merkle path invalid")
-	// ErrZeroConfCapExceeded indicates a 0-conf payment exceeded per-tx, aggregate, or ancestor policy caps.
-	ErrZeroConfCapExceeded = errors.New("chain: zero-conf policy cap exceeded")
-	// ErrInsufficientDepth indicates a mined transaction has not reached the required confirmation depth.
-	ErrInsufficientDepth = errors.New("chain: mined transaction below required settleDepth")
-	// ErrConflictDetected indicates a competing spend was observed for a watched 0-conf input outpoint.
-	ErrConflictDetected = errors.New("chain: conflicting double-spend detected on watched input")
-)
-
-type watchedZeroConf struct {
-	txid       string
-	amountSats uint64
-	inputs     []string
-	addedAt    time.Time
-	conflict   bool
-}
-
-// ZeroConfWatch tracks aggregate unconfirmed counterparty payment exposure and detects
-// competing input spends (conflict watch) until each tx settles at settleDepth.
-type ZeroConfWatch struct {
-	mu          sync.Mutex
-	byTxID      map[string]*watchedZeroConf
-	byOutpoint  map[string]string // "txid:vout" -> watching txid
-	conflicts   map[string]string // conflicted txid -> competing txid
-	exposure    uint64
-	defaultTTL  time.Duration
-}
-
-// NewZeroConfWatch creates a thread-safe 0-conf exposure and conflict tracker.
-func NewZeroConfWatch() *ZeroConfWatch {
-	return &ZeroConfWatch{
-		byTxID:     make(map[string]*watchedZeroConf),
-		byOutpoint: make(map[string]string),
-		conflicts:  make(map[string]string),
-		defaultTTL: 2 * time.Hour,
-	}
-}
-
-// CheckAndTrack enforces conflict-freedom and aggregate unconfirmed exposure cap before accepting a 0-conf payment.
-// If maxAggregateSats > 0 and adding amountSats would exceed it, returns ErrZeroConfCapExceeded without tracking.
-func (w *ZeroConfWatch) CheckAndTrack(txid string, amountSats uint64, inputs []string, maxAggregateSats uint64) error {
-	if w == nil || txid == "" {
-		return nil
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.pruneExpiredLocked(time.Now())
-
-	if comp, conflicted := w.conflicts[txid]; conflicted {
-		return fmt.Errorf("%w: tx %s conflicts with %s", ErrConflictDetected, txid, comp)
-	}
-	if _, already := w.byTxID[txid]; already {
-		return nil
-	}
-	for _, op := range inputs {
-		if op == "" {
-			continue
-		}
-		if other, exists := w.byOutpoint[op]; exists && other != txid {
-			w.conflicts[txid] = other
-			w.conflicts[other] = txid
-			if rec := w.byTxID[other]; rec != nil {
-				rec.conflict = true
-			}
-			return fmt.Errorf("%w: outpoint %s already spent by %s", ErrConflictDetected, op, other)
-		}
-	}
-	if maxAggregateSats > 0 && w.exposure+amountSats > maxAggregateSats {
-		return fmt.Errorf("%w: aggregate unconfirmed exposure %d + %d exceeds cap %d sats",
-			ErrZeroConfCapExceeded, w.exposure, amountSats, maxAggregateSats)
-	}
-	rec := &watchedZeroConf{
-		txid:       txid,
-		amountSats: amountSats,
-		inputs:     append([]string(nil), inputs...),
-		addedAt:    time.Now(),
-	}
-	w.byTxID[txid] = rec
-	w.exposure += amountSats
-	for _, op := range inputs {
-		if op != "" {
-			w.byOutpoint[op] = txid
-		}
-	}
-	return nil
-}
-
-// MarkSettled removes txid from active 0-conf exposure once it reaches settleDepth.
-func (w *ZeroConfWatch) MarkSettled(txid string) {
-	if w == nil || txid == "" {
-		return
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.removeLocked(txid)
-}
-
-// RecordConflict flags txid (or any tx spending outpoint) as conflicted.
-func (w *ZeroConfWatch) RecordConflict(outpoint, competingTxID string) {
-	if w == nil || outpoint == "" {
-		return
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if other, ok := w.byOutpoint[outpoint]; ok && other != competingTxID {
-		w.conflicts[other] = competingTxID
-		w.conflicts[competingTxID] = other
-		if rec := w.byTxID[other]; rec != nil {
-			rec.conflict = true
-		}
-	}
-}
-
-// HasConflict reports whether txid has any observed competing spend.
-func (w *ZeroConfWatch) HasConflict(txid string) bool {
-	if w == nil || txid == "" {
-		return false
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	_, ok := w.conflicts[txid]
-	return ok
-}
-
-// Exposure returns current aggregate unconfirmed sats and active watched tx count.
-func (w *ZeroConfWatch) Exposure() (sats uint64, count int) {
-	if w == nil {
-		return 0, 0
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.pruneExpiredLocked(time.Now())
-	return w.exposure, len(w.byTxID)
-}
-
-func (w *ZeroConfWatch) removeLocked(txid string) {
-	rec, ok := w.byTxID[txid]
-	if !ok {
-		return
-	}
-	if w.exposure >= rec.amountSats {
-		w.exposure -= rec.amountSats
-	} else {
-		w.exposure = 0
-	}
-	for _, op := range rec.inputs {
-		if w.byOutpoint[op] == txid {
-			delete(w.byOutpoint, op)
-		}
-	}
-	delete(w.byTxID, txid)
-}
-
-func (w *ZeroConfWatch) pruneExpiredLocked(now time.Time) {
-	for txid, rec := range w.byTxID {
-		if now.Sub(rec.addedAt) > w.defaultTTL {
-			w.removeLocked(txid)
-		}
-	}
-}
 
 // PaymentVerifyOpts configures strict SPV verification of an incoming counterparty BEEF payment.
 type PaymentVerifyOpts struct {
@@ -307,7 +137,7 @@ func VerifyCounterpartyPaymentBEEF(
 	}
 
 	// Step 3: Evaluate bounded 0-conf policy (ancestor depth, conflict watch, per-tx & aggregate caps).
-	res.UnconfirmedAncestors = countUnconfirmedAncestors(tx, opts.MaxUnconfirmedAncestors+2)
+	res.UnconfirmedAncestors = nwallet.CountUnminedAncestors(tx, opts.MaxUnconfirmedAncestors+2)
 	inputs := collectInputOutpoints(tx)
 	if opts.ConflictWatch != nil && opts.ConflictWatch.HasConflict(txid) {
 		return nil, fmt.Errorf("%w: tx %s", ErrConflictDetected, txid)
@@ -333,6 +163,11 @@ func VerifyCounterpartyPaymentBEEF(
 		maxAgg = opts.ZeroConfMaxSats * 4
 	}
 	if opts.ConflictWatch != nil {
+		if opts.SettleDepth > 1 && tracker != nil {
+			if tip, tErr := tracker.CurrentHeight(ctx); tErr == nil && tip > 0 {
+				opts.ConflictWatch.SweepSettled(tip, opts.SettleDepth)
+			}
+		}
 		if opts.TrackOnZeroConf {
 			if cErr := opts.ConflictWatch.CheckAndTrack(txid, opts.ExpectedAmountSats, inputs, maxAgg); cErr != nil {
 				if errors.Is(cErr, ErrConflictDetected) {
@@ -414,52 +249,6 @@ func hydrateStrictFromBeef(tx *transaction.Transaction, beef *transaction.Beef, 
 		}
 	}
 	return nil
-}
-
-// countUnconfirmedAncestors computes the longest unconfirmed ancestor chain depth (1 + max parent depth)
-// with a bounded total-node DoS cap so multi-input merge DAGs of shallow depth are never misclassified
-// as exceeding the linear ancestor depth cap while huge DAGs still fail closed.
-func countUnconfirmedAncestors(tx *transaction.Transaction, capLimit int) int {
-	if tx == nil || tx.MerklePath != nil {
-		return 0
-	}
-	maxNodes := capLimit * 8
-	if maxNodes < 128 {
-		maxNodes = 128
-	}
-	memo := make(map[string]int)
-	visiting := make(map[string]bool)
-	var depthOf func(cur *transaction.Transaction) int
-	depthOf = func(cur *transaction.Transaction) int {
-		if cur == nil || cur.MerklePath != nil {
-			return 0
-		}
-		id := cur.TxID().String()
-		if d, ok := memo[id]; ok {
-			return d
-		}
-		if visiting[id] || len(memo) >= maxNodes {
-			return capLimit
-		}
-		visiting[id] = true
-		best := 1
-		for _, in := range cur.Inputs {
-			if in != nil && in.SourceTransaction != nil && in.SourceTransaction.MerklePath == nil {
-				pd := depthOf(in.SourceTransaction)
-				if pd+1 > best {
-					best = pd + 1
-				}
-				if best >= capLimit {
-					best = capLimit
-					break
-				}
-			}
-		}
-		delete(visiting, id)
-		memo[id] = best
-		return best
-	}
-	return depthOf(tx)
 }
 
 func collectInputOutpoints(tx *transaction.Transaction) []string {

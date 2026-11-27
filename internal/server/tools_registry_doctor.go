@@ -107,7 +107,7 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 	}
 
 	// 2b. Restate durable execution readiness (required for live BSV market trades)
-	restateAttached := tb.broker != nil && tb.broker.RestateClient() != nil
+	restateAttached := tb.broker != nil && tb.broker.RestateClient() != nil && tb.isRestateAlive()
 	if tb.mem.Chain().Network() == "memory" {
 		checks = append(checks, DoctorCheck{Name: "restate", Status: "green", Detail: "memory network — local workflow execution active"})
 	} else if restateAttached {

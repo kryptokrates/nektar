@@ -166,7 +166,8 @@ Always rehearse the emergency controls while the balance is small:
 curl -X POST http://127.0.0.1:18420/v1/automation/kill \
   -H "Content-Type: application/json" \
   -d '{"enabled":true}'
-# Or drop a filesystem sentinel: touch ~/.nektar/KILL
+# Or drop a filesystem sentinel in your Mainnet data dir (global ~/.nektar/KILL is also honored):
+#   touch ~/.nektar/main/KILL   (or: touch ~/.nektar/KILL)
 
 # 2. If using NektarAgentVault, test on-chain pause & sweep
 nektar vault pause

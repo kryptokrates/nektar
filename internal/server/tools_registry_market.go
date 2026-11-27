@@ -187,7 +187,9 @@ func (tb *Toolbox) ExecFund(ctx context.Context, in FundToolInput) (map[string]a
 
 	var syncedAdded, syncedProved, upgradedAnchors int
 	if in.Sync {
-		syncedAdded, syncedProved, _ = ch.SyncPool(ctx)
+		if rep, sErr := ch.SyncFull(ctx); sErr == nil {
+			syncedAdded, syncedProved = rep.AddedOutputs, rep.ProvedTxs
+		}
 		upgradedAnchors, _ = tb.mem.RefreshAnchorProofs(ctx)
 	}
 	bal, _ := ch.Balance(ctx)

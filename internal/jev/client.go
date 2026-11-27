@@ -3,14 +3,11 @@ package jev
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -40,12 +37,11 @@ type Config struct {
 	Timeout            time.Duration // default 2500ms
 	MaxConcurrent      int           // default 4
 	RatePerMinute      int           // default 60
-	DailyInputTokenCap int64         // default 2_000_000 (0 = unlimited)
+	DailyInputTokenCap int64         // default 2_000_000 (negative = unlimited)
 	CacheTTL           time.Duration // default 5m
 	CacheSize          int           // default 512
 	CircuitThreshold   int           // default 5 consecutive failures
 	CircuitCooldown    time.Duration // default 30s
-	HTTPClient         *http.Client  // optional test override
 	Now                func() time.Time
 }
 
@@ -61,7 +57,6 @@ type Client struct {
 	endpointURL   string
 	endpointHost  string
 	model         string
-	network       string
 	httpClient    *http.Client
 	sem           chan struct{}
 	limiter       *rate.Limiter
@@ -81,85 +76,6 @@ type Client struct {
 	cache        map[string]cacheEntry
 
 	cacheHits atomic.Int64
-}
-
-func isHostedThirdPartyHost(host string) bool {
-	h := strings.ToLower(strings.TrimSpace(host))
-	return h == "typesafe.ai" || strings.HasSuffix(h, ".typesafe.ai") ||
-		h == "openrouter.ai" || strings.HasSuffix(h, ".openrouter.ai")
-}
-
-func isLoopbackHost(host string) bool {
-	h := strings.ToLower(strings.Trim(strings.TrimSpace(host), "[]"))
-	if h == "localhost" {
-		return true
-	}
-	if addr, err := netip.ParseAddr(h); err == nil {
-		return addr.Unmap().IsLoopback()
-	}
-	return false
-}
-
-// loopbackHTTPClient strictly pins dials to verified loopback IPs (127.0.0.1 / ::1) and blocks
-// redirects and proxy inheritance so local open-weight sidecars work safely on all networks including main.
-func loopbackHTTPClient(timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{
-		Timeout:   5 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}
-	tr := &http.Transport{
-		Proxy:                 nil,
-		MaxIdleConns:          32,
-		IdleConnTimeout:       60 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, fmt.Errorf("jev: invalid loopback dial address %q: %w", addr, err)
-			}
-			low := strings.ToLower(strings.Trim(host, "[]"))
-			if !isLoopbackHost(low) {
-				return nil, fmt.Errorf("jev: non-loopback host %q rejected by loopback client", host)
-			}
-			ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", low)
-			if err != nil || len(ips) == 0 {
-				return nil, fmt.Errorf("jev: resolve loopback host %q: %w", host, err)
-			}
-			for _, ip := range ips {
-				if !ip.Unmap().IsLoopback() {
-					return nil, fmt.Errorf("jev: resolved non-loopback IP %s for %q", ip.String(), host)
-				}
-			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].Unmap().String(), port))
-		},
-	}
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: tr,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return errors.New("jev: redirects are disabled for local open-weight endpoints")
-		},
-	}
-}
-
-// ResolveEndpoint normalizes an optional self-hosted baseURL into a concrete System One POST endpoint.
-func ResolveEndpoint(baseURL string) (string, error) {
-	raw := strings.TrimSpace(baseURL)
-	if raw == "" {
-		return DefaultBaseURL, nil
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("jev: invalid base URL %q", raw)
-	}
-	if isHostedThirdPartyHost(u.Hostname()) {
-		return "", fmt.Errorf("%w: %q", ErrHostedProviderDisallowed, u.Hostname())
-	}
-	path := strings.TrimRight(u.Path, "/")
-	if path == "" || path == "/v1" {
-		u.Path = "/v1/systemone"
-	}
-	return u.String(), nil
 }
 
 // NewClient constructs a hardened, keyless client for a self-hosted open-weight System One server.
@@ -187,10 +103,7 @@ func NewClient(cfg Config) (*Client, error) {
 	netName := strings.ToLower(strings.TrimSpace(cfg.Network))
 	var hc *http.Client
 	if isLoopbackHost(u.Hostname()) {
-		hc = cfg.HTTPClient
-		if hc == nil {
-			hc = loopbackHTTPClient(timeout)
-		}
+		hc = loopbackHTTPClient(timeout)
 	} else {
 		safeOpts := core.SafeHTTPOpts{
 			Timeout:      timeout,
@@ -200,10 +113,7 @@ func NewClient(cfg Config) (*Client, error) {
 		if _, err := core.ValidateOutboundURL(endpoint, safeOpts); err != nil {
 			return nil, fmt.Errorf("jev: invalid endpoint: %w", err)
 		}
-		hc = cfg.HTTPClient
-		if hc == nil {
-			hc = core.SafeHTTPClient(safeOpts)
-		}
+		hc = core.SafeHTTPClient(safeOpts)
 	}
 	model := strings.TrimSpace(cfg.Model)
 	if model == "" {
@@ -251,7 +161,6 @@ func NewClient(cfg Config) (*Client, error) {
 		endpointURL:   endpoint,
 		endpointHost:  strings.ToLower(u.Hostname()),
 		model:         model,
-		network:       netName,
 		httpClient:    hc,
 		sem:           make(chan struct{}, maxConc),
 		limiter:       rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), burst),
@@ -269,9 +178,6 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	return c, nil
 }
-
-// EndpointHost returns the lowercase hostname of the configured Jev endpoint.
-func (c *Client) EndpointHost() string { return c.endpointHost }
 
 // Model returns the default configured model identifier.
 func (c *Client) Model() string { return c.model }
@@ -490,12 +396,4 @@ func (c *Client) recordSuccess(cacheKey string, resp *Response) {
 		}
 	}
 	c.mu.Unlock()
-}
-
-func requestCacheKey(req Request) (string, error) {
-	canon, err := core.CanonicalJSON(req)
-	if err != nil {
-		return "", fmt.Errorf("jev: canonicalize cache key: %w", err)
-	}
-	return hex.EncodeToString(core.SHA256(canon)), nil
 }

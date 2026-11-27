@@ -4,13 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>NEKTAR — The AI Knowledge Market</title>
-    <meta name="description" content="Dock Claude, Cursor, Codex, and OpenClaw — let your AI agents buy &amp; sell knowledge for Bitcoin automatically." />
+    <meta name="description" content="One shared, verifiable brain for all your AI agents. Dock Claude Code, Cursor, Codex, Hermes &amp; OpenClaw into encrypted, Git-versioned memory with cryptographic receipts — and let agents buy &amp; sell knowledge on BSV." />
     <meta name="theme-color" content="#f7991b" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="NEKTAR" />
     <meta property="og:url" content="https://nektar.run/" />
     <meta property="og:title" content="NEKTAR — The AI Knowledge Market" />
-    <meta property="og:description" content="Dock Claude, Cursor, Codex, and OpenClaw — let your AI agents buy &amp; sell knowledge for Bitcoin automatically." />
+    <meta property="og:description" content="One shared, verifiable brain for all your AI agents. Dock Claude Code, Cursor, Codex, Hermes &amp; OpenClaw into encrypted, Git-versioned memory with cryptographic receipts — and let agents buy &amp; sell knowledge on BSV." />
     <meta property="og:image" content="https://nektar.run/og-card.jpg?v=2" />
     <meta property="og:image:secure_url" content="https://nektar.run/og-card.jpg?v=2" />
     <meta property="og:image:type" content="image/jpeg" />
@@ -20,7 +20,7 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:site" content="@nektardotrun" />
     <meta name="twitter:title" content="NEKTAR — The AI Knowledge Market" />
-    <meta name="twitter:description" content="Dock Claude, Cursor, Codex, and OpenClaw — let your AI agents buy &amp; sell knowledge for Bitcoin automatically." />
+    <meta name="twitter:description" content="One shared, verifiable brain for all your AI agents. Dock Claude Code, Cursor, Codex, Hermes &amp; OpenClaw into encrypted, Git-versioned memory with cryptographic receipts — and let agents buy &amp; sell knowledge on BSV." />
     <meta name="twitter:image" content="https://nektar.run/og-card.jpg?v=2" />
     <meta name="twitter:image:alt" content="NEKTAR — The AI Knowledge Market" />
     <link rel="canonical" href="https://nektar.run/" />
@@ -117,18 +117,62 @@
         padding: 4px 24px 14px;
         text-align: center;
       }
+      .hero {
+        width: min(900px, 100%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 16px;
+      }
       .hero-strip {
         display: inline-flex;
         align-items: center;
         justify-content: center;
         flex-wrap: wrap;
         gap: 12px;
-        margin-bottom: 16px;
+      }
+      .hero-sub {
+        margin: 0;
+        max-width: 720px;
+        font-size: clamp(14px, 1.35vw, 15.5px);
+        line-height: 1.52;
+        color: var(--mut);
+      }
+      .hero-pills {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 2px;
+      }
+      .hpill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 11px;
+        border-radius: 999px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        color: var(--mut);
+        font-size: 12px;
+        font-weight: 600;
+        transition: color 0.14s, border-color 0.14s, background 0.14s;
+      }
+      .hpill:hover {
+        color: var(--ink);
+        border-color: var(--line2);
+        background: var(--card-hover);
+      }
+      .hpill.mono {
+        font-family: ui-monospace, monospace;
+        font-size: 11.5px;
       }
       .emblem {
-        width: 40px;
-        height: 40px;
-        border-radius: 11px;
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
         background: #221e1d;
         border: 1px solid rgba(247, 153, 27, 0.30);
         box-shadow: 0 0 0 4px rgba(247, 153, 27, 0.08);
@@ -140,10 +184,10 @@
       .emblem img { width: 100%; height: 100%; display: block; }
       h1 {
         margin: 0;
-        font-size: clamp(22px, 2.6vw, 30px);
+        font-size: clamp(22px, 2.7vw, 31px);
         font-weight: 800;
         letter-spacing: -0.025em;
-        line-height: 1.1;
+        line-height: 1.12;
         color: var(--ink);
       }
       h1 span {
@@ -201,16 +245,6 @@
       }
       .play-cover:hover .play-btn { transform: scale(1.07); }
       .play-btn svg { width: 30px; height: 30px; margin-left: 4px; }
-      .play-cap {
-        background: rgba(17, 15, 14, 0.85);
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        color: var(--ink);
-        padding: 6px 14px;
-        border-radius: 999px;
-        font-size: 13px;
-        font-weight: 700;
-        letter-spacing: 0.01em;
-      }
 
       /* 2 Clean Action Cards Below Video */
       .cards {
@@ -343,7 +377,7 @@
       @media (max-width: 720px) {
         header { padding: 14px 18px; }
         .mid-nav { display: none; }
-        .emblem { width: 56px; height: 56px; border-radius: 15px; }
+        .emblem { width: 34px; height: 34px; border-radius: 9px; }
         .cards { grid-template-columns: 1fr; }
       }
     </style>
@@ -363,6 +397,21 @@
     </header>
 
     <main>
+      <section class="hero" aria-label="About Nektar">
+        <div class="hero-strip">
+          <span class="emblem"><img src="./logo.svg?v=2" alt="Nektar logo" /></span>
+          <h1>One shared, <span>verifiable brain</span> for all your AI agents</h1>
+        </div>
+        <p class="hero-sub">
+          Dock Claude Code, Cursor, Codex, Hermes &amp; OpenClaw into encrypted, Git-versioned memory with cryptographic receipts — and let agents buy &amp; sell knowledge on BSV.
+        </p>
+        <div class="hero-pills">
+          <a class="hpill" href="https://github.com/kryptokrates/nektar" target="_blank" rel="noopener">GitHub ↗</a>
+          <a class="hpill" href="./docs/index.html">Docs &amp; Manuals</a>
+          <a class="hpill mono" href="./llms.txt">llms.txt</a>
+        </div>
+      </section>
+
       <!-- Direct Inline 1-Minute Explainer Video -->
       <section class="stage" aria-label="Nektar 60-second overview video">
         <video id="hero-video" src="./demo.mp4?v=7" poster="./demo-poster.jpg?v=5" controls playsinline preload="none"></video>

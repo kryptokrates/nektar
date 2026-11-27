@@ -7,51 +7,11 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/lightwebinc/bcommon/headers"
 )
-
-// CheckReorg actively checks cached near-tip headers against witnesses, evicting any orphaned
-// entries and invoking registered OnReorg callbacks if a chain fork occurred.
-func (t *WitnessedTracker) CheckReorg(ctx context.Context) (bool, uint32, error) {
-	if t.isNativeOnly() {
-		return false, 0, nil
-	}
-	t.mu.RLock()
-	var cachedTip uint32
-	for h := range t.cache {
-		if h > cachedTip {
-			cachedTip = h
-		}
-	}
-	prevEntry, hasPrev := t.cache[cachedTip]
-	t.mu.RUnlock()
-	if !hasPrev || cachedTip == 0 {
-		return false, 0, nil
-	}
-	fresh, err := t.fetchConsensusHeader(ctx, cachedTip)
-	if err != nil {
-		if errors.Is(err, headers.ErrUnknownHeight) {
-			// Chain shortened below cachedTip: walk back until witnesses hold a height.
-			for h := cachedTip - 1; h > 0 && cachedTip-h <= t.reorgWindow; h-- {
-				if f, fErr := t.fetchConsensusHeader(ctx, h); fErr == nil {
-					forkH := t.handleReorg(ctx, h, f)
-					return true, forkH, nil
-				}
-			}
-			return false, 0, nil
-		}
-		return false, 0, err
-	}
-	if fresh.hdr.Hash == prevEntry.hdr.Hash {
-		return false, 0, nil
-	}
-	forkH := t.handleReorg(ctx, cachedTip, fresh)
-	return true, forkH, nil
-}
 
 func (t *WitnessedTracker) isNativeOnly() bool {
 	return len(t.witnesses) == 1 && t.witnesses[0].Kind == headers.Native
@@ -189,31 +149,34 @@ func (t *WitnessedTracker) fetchAndLinkHeader(ctx context.Context, height uint32
 }
 
 func (t *WitnessedTracker) fetchConsensusHeader(ctx context.Context, height uint32) (cachedHeader, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	type wRes struct {
 		entry cachedHeader
 		err   error
 	}
-	results := make([]wRes, len(t.witnesses))
-	var wg sync.WaitGroup
-	for i, w := range t.witnesses {
-		wg.Add(1)
-		go func(idx int, witness NamedWitness) {
-			defer wg.Done()
-			hdr, err := witness.Source.HeaderAt(ctx, height)
+	qCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	resCh := make(chan wRes, len(t.witnesses))
+	for _, w := range t.witnesses {
+		go func(witness NamedWitness) {
+			hdr, err := witness.Source.HeaderAt(qCtx, height)
 			if err != nil {
-				results[idx] = wRes{err: fmt.Errorf("%s: %w", witness.Name, err)}
+				resCh <- wRes{err: fmt.Errorf("%s: %w", witness.Name, err)}
 				return
 			}
 			if hdr == nil {
-				results[idx] = wRes{err: fmt.Errorf("%s: %w", witness.Name, headers.ErrUnknownHeight)}
+				resCh <- wRes{err: fmt.Errorf("%s: %w", witness.Name, headers.ErrUnknownHeight)}
 				return
 			}
 			raw, work, pErr := verifyHeaderLocalPoW(hdr, height, t.minDifficulty)
 			if pErr != nil {
-				results[idx] = wRes{err: fmt.Errorf("%s: %w", witness.Name, pErr)}
+				resCh <- wRes{err: fmt.Errorf("%s: %w", witness.Name, pErr)}
 				return
 			}
-			results[idx] = wRes{
+			resCh <- wRes{
 				entry: cachedHeader{
 					hdr:       *hdr,
 					raw:       raw,
@@ -221,39 +184,54 @@ func (t *WitnessedTracker) fetchConsensusHeader(ctx context.Context, height uint
 					fetchedAt: time.Now(),
 				},
 			}
-		}(i, w)
+		}(w)
 	}
-	wg.Wait()
 
 	type bucket struct {
 		entry cachedHeader
 		count int
 	}
 	byRaw := make(map[[80]byte]*bucket, len(t.witnesses))
+	var best *bucket
 	unknownCount := 0
 	var errs []error
-	for _, r := range results {
+	for received := 0; received < len(t.witnesses); received++ {
+		r := <-resCh
 		if r.err != nil {
 			if errors.Is(r.err, headers.ErrUnknownHeight) {
 				unknownCount++
+				if unknownCount >= t.quorum {
+					cancel()
+					return cachedHeader{}, fmt.Errorf("%w: height %d", headers.ErrUnknownHeight, height)
+				}
 			}
 			errs = append(errs, r.err)
-			continue
+		} else {
+			b := byRaw[r.entry.raw]
+			if b == nil {
+				b = &bucket{entry: r.entry}
+				byRaw[r.entry.raw] = b
+			}
+			b.count++
+			if best == nil || b.count > best.count {
+				best = b
+			}
+			if best.count >= t.quorum {
+				cancel()
+				return best.entry, nil
+			}
 		}
-		b := byRaw[r.entry.raw]
-		if b == nil {
-			b = &bucket{entry: r.entry}
-			byRaw[r.entry.raw] = b
+		remaining := len(t.witnesses) - received - 1
+		bestCount := 0
+		if best != nil {
+			bestCount = best.count
 		}
-		b.count++
+		if bestCount+remaining < t.quorum && unknownCount+remaining < t.quorum {
+			cancel()
+			break
+		}
 	}
 
-	var best *bucket
-	for _, b := range byRaw {
-		if best == nil || b.count > best.count {
-			best = b
-		}
-	}
 	if best != nil && best.count >= t.quorum {
 		return best.entry, nil
 	}

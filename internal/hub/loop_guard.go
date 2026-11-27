@@ -44,7 +44,7 @@ func ObjectKey(rawBEEF []byte, topic string) [32]byte {
 	return sha256.Sum256(buf[:])
 }
 
-// Seen reports whether (rawBEEF, topic) is currently in the guard window.
+// Seen reports whether (rawBEEF, topic) is already present in the guard without mutating it.
 func (g *LoopGuard) Seen(rawBEEF []byte, topic string) bool {
 	if g == nil || len(rawBEEF) == 0 {
 		return false
@@ -54,14 +54,6 @@ func (g *LoopGuard) Seen(rawBEEF []byte, topic string) bool {
 	_, ok := g.seen[k]
 	g.mu.Unlock()
 	return ok
-}
-
-// Mark records (rawBEEF, topic) in the guard window, evicting the oldest entry if full.
-func (g *LoopGuard) Mark(rawBEEF []byte, topic string) {
-	if g == nil || len(rawBEEF) == 0 {
-		return
-	}
-	g.markKey(ObjectKey(rawBEEF, topic))
 }
 
 // MarkIfUnseen atomically checks whether (rawBEEF, topic) was unseen and marks it.
@@ -78,25 +70,6 @@ func (g *LoopGuard) MarkIfUnseen(rawBEEF []byte, topic string) bool {
 	}
 	g.insertLocked(k)
 	return true
-}
-
-// Len returns the number of entries currently tracked.
-func (g *LoopGuard) Len() int {
-	if g == nil {
-		return 0
-	}
-	g.mu.Lock()
-	n := len(g.seen)
-	g.mu.Unlock()
-	return n
-}
-
-func (g *LoopGuard) markKey(k [32]byte) {
-	g.mu.Lock()
-	if _, ok := g.seen[k]; !ok {
-		g.insertLocked(k)
-	}
-	g.mu.Unlock()
 }
 
 func (g *LoopGuard) insertLocked(k [32]byte) {

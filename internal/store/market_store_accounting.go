@@ -2,10 +2,39 @@ package store
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
+
+func isConstraintErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "constraint") || strings.Contains(low, "unique")
+}
+
+// readKVUint64Tx reads a uint64 counter from kv inside tx.
+// Missing rows return (0, nil); any DB error or malformed JSON fails closed.
+func readKVUint64Tx(tx *sql.Tx, key string) (uint64, error) {
+	var raw []byte
+	err := tx.QueryRow(`SELECT value FROM kv WHERE key = ?`, key).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("store: read kv %s: %w", key, err)
+	}
+	var v uint64
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return 0, fmt.Errorf("store: corrupt kv counter %s: %w", key, err)
+	}
+	return v, nil
+}
 
 // ClaimPaymentAtomic atomically claims txid and all of its spent input outpoints inside one
 // SQLite transaction. Shared by BOTH HTTP 402 paywall and /v1/market/purchase so a payment tx
@@ -22,16 +51,25 @@ func (d *DB) ClaimPaymentAtomic(txid string, inputs []string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	now := time.Now().Unix()
-	b, _ := json.Marshal(inputs)
+	b, err := json.Marshal(inputs)
+	if err != nil {
+		return fmt.Errorf("store: marshal payment inputs: %w", err)
+	}
 	if _, err := tx.Exec(`INSERT INTO payment_claims (txid, inputs_json, claimed_at) VALUES (?, ?, ?)`, txid, b, now); err != nil {
-		return ErrPaymentClaimReplay
+		if isConstraintErr(err) {
+			return ErrPaymentClaimReplay
+		}
+		return err
 	}
 	for _, op := range inputs {
 		if op == "" {
 			continue
 		}
 		if _, err := tx.Exec(`INSERT INTO payment_claim_inputs (outpoint, txid, claimed_at) VALUES (?, ?, ?)`, op, txid, now); err != nil {
-			return ErrPaymentClaimConflict
+			if isConstraintErr(err) {
+				return ErrPaymentClaimConflict
+			}
+			return err
 		}
 	}
 	return tx.Commit()
@@ -50,21 +88,13 @@ func (d *DB) ReleasePaymentClaim(txid string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	_, _ = tx.Exec(`DELETE FROM payment_claim_inputs WHERE txid = ?`, txid)
-	_, err = tx.Exec(`DELETE FROM payment_claims WHERE txid = ?`, txid)
-	if err != nil {
+	if _, err := tx.Exec(`DELETE FROM payment_claim_inputs WHERE txid = ?`, txid); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM payment_claims WHERE txid = ?`, txid); err != nil {
 		return err
 	}
 	return tx.Commit()
-}
-
-// SavePaymentClaim persists a claimed payment txid and its spent inputs (legacy helper; prefer ClaimPaymentAtomic).
-func (d *DB) SavePaymentClaim(txid string, inputs []string) error {
-	err := d.ClaimPaymentAtomic(txid, inputs)
-	if errors.Is(err, ErrPaymentClaimReplay) {
-		return nil
-	}
-	return err
 }
 
 // ListPaymentClaims loads persisted payment claims for replay protection across restarts
@@ -92,40 +122,14 @@ func (d *DB) ListPaymentClaims(limits ...int) ([]PaymentClaimRecord, error) {
 		if err := rows.Scan(&r.TxID, &raw, &r.ClaimedAt); err != nil {
 			return nil, err
 		}
-		_ = json.Unmarshal(raw, &r.Inputs)
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &r.Inputs); err != nil {
+				return nil, fmt.Errorf("store: corrupt payment claim inputs for %s: %w", r.TxID, err)
+			}
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-// GetFaucetClaim loads the last faucet claim for an address.
-func (d *DB) GetFaucetClaim(address string) (FaucetClaim, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	var c FaucetClaim
-	err := d.sql.QueryRow(`SELECT address, total_sats, last_claim_at FROM faucet_claims WHERE address = ?`, address).
-		Scan(&c.Address, &c.TotalSats, &c.LastClaimAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return FaucetClaim{Address: address}, nil
-	}
-	return c, err
-}
-
-// RecordFaucetClaim records a completed testnet faucet drip to address,
-// resetting the per-address 24h rolling accumulator once 86400s have elapsed.
-func (d *DB) RecordFaucetClaim(address string, sats uint64) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	now := time.Now().Unix()
-	_, err := d.sql.Exec(`
-		INSERT INTO faucet_claims (address, total_sats, last_claim_at) VALUES (?, ?, ?)
-		ON CONFLICT(address) DO UPDATE SET
-			total_sats = CASE WHEN excluded.last_claim_at - faucet_claims.last_claim_at >= 86400
-				THEN excluded.total_sats
-				ELSE faucet_claims.total_sats + excluded.total_sats END,
-			last_claim_at = excluded.last_claim_at`,
-		address, sats, now)
-	return err
 }
 
 // ReserveFaucetDrip atomically verifies and reserves BOTH per-address 24h cap and global UTC-day cap
@@ -141,28 +145,34 @@ func (d *DB) ReserveFaucetDrip(address string, dripSats, perAddressCap, globalCa
 
 	now := time.Now().Unix()
 	dayKey := "faucet_global_daily:" + time.Now().UTC().Format("2006-01-02")
-	var globalUsed uint64
-	var raw []byte
-	if qErr := tx.QueryRow(`SELECT value FROM kv WHERE key = ?`, dayKey).Scan(&raw); qErr == nil {
-		_ = json.Unmarshal(raw, &globalUsed)
+	globalUsed, err := readKVUint64Tx(tx, dayKey)
+	if err != nil {
+		return err
 	}
-	if globalCap > 0 && globalUsed+dripSats > globalCap {
+	if globalCap > 0 && (dripSats > globalCap || globalUsed > globalCap-dripSats) {
 		return ErrFaucetCapExceeded
 	}
 
 	var prevSats uint64
 	var lastAt int64
-	if qErr := tx.QueryRow(`SELECT total_sats, last_claim_at FROM faucet_claims WHERE address = ?`, address).Scan(&prevSats, &lastAt); qErr == nil {
+	qErr := tx.QueryRow(`SELECT total_sats, last_claim_at FROM faucet_claims WHERE address = ?`, address).Scan(&prevSats, &lastAt)
+	if qErr != nil && !errors.Is(qErr, sql.ErrNoRows) {
+		return fmt.Errorf("store: read faucet claim for %s: %w", address, qErr)
+	}
+	if qErr == nil {
 		if now-lastAt >= 86400 {
 			prevSats = 0
 		}
-		if perAddressCap > 0 && prevSats+dripSats > perAddressCap {
+		if perAddressCap > 0 && (dripSats > perAddressCap || prevSats > perAddressCap-dripSats) {
 			return ErrFaucetCapExceeded
 		}
 	}
 
 	nextGlobal := globalUsed + dripSats
-	gb, _ := json.Marshal(nextGlobal)
+	gb, err := json.Marshal(nextGlobal)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`, dayKey, gb); err != nil {
 		return err
 	}
@@ -183,28 +193,38 @@ func (d *DB) RefundFaucetDrip(address string, dripSats uint64) error {
 	defer func() { _ = tx.Rollback() }()
 
 	dayKey := "faucet_global_daily:" + time.Now().UTC().Format("2006-01-02")
-	var globalUsed uint64
-	var raw []byte
-	if qErr := tx.QueryRow(`SELECT value FROM kv WHERE key = ?`, dayKey).Scan(&raw); qErr == nil {
-		_ = json.Unmarshal(raw, &globalUsed)
+	globalUsed, err := readKVUint64Tx(tx, dayKey)
+	if err != nil {
+		return err
 	}
 	if globalUsed >= dripSats {
 		globalUsed -= dripSats
 	} else {
 		globalUsed = 0
 	}
-	gb, _ := json.Marshal(globalUsed)
-	_, _ = tx.Exec(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`, dayKey, gb)
+	gb, err := json.Marshal(globalUsed)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`, dayKey, gb); err != nil {
+		return err
+	}
 
 	var prevSats uint64
 	var lastAt int64
-	if qErr := tx.QueryRow(`SELECT total_sats, last_claim_at FROM faucet_claims WHERE address = ?`, address).Scan(&prevSats, &lastAt); qErr == nil {
+	qErr := tx.QueryRow(`SELECT total_sats, last_claim_at FROM faucet_claims WHERE address = ?`, address).Scan(&prevSats, &lastAt)
+	if qErr != nil && !errors.Is(qErr, sql.ErrNoRows) {
+		return fmt.Errorf("store: read faucet claim for refund %s: %w", address, qErr)
+	}
+	if qErr == nil {
 		if prevSats >= dripSats {
 			prevSats -= dripSats
 		} else {
 			prevSats = 0
 		}
-		_, _ = tx.Exec(`UPDATE faucet_claims SET total_sats = ? WHERE address = ?`, prevSats, address)
+		if _, err := tx.Exec(`UPDATE faucet_claims SET total_sats = ? WHERE address = ?`, prevSats, address); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -227,23 +247,27 @@ func (d *DB) ReserveSpendAtomic(opID string, attempt int, amountSats, maxPerDeal
 	defer func() { _ = tx.Rollback() }()
 
 	var existingStatus string
-	if qErr := tx.QueryRow(`SELECT status FROM spend_reservations WHERE op_id = ? AND attempt = ?`, opID, attempt).Scan(&existingStatus); qErr == nil {
-		if existingStatus == "reserved" {
-			return true, nil
-		}
+	qErr := tx.QueryRow(`SELECT status FROM spend_reservations WHERE op_id = ? AND attempt = ?`, opID, attempt).Scan(&existingStatus)
+	if qErr != nil && !errors.Is(qErr, sql.ErrNoRows) {
+		return false, fmt.Errorf("store: check spend reservation %s#%d: %w", opID, attempt, qErr)
+	}
+	if qErr == nil && existingStatus == "reserved" {
+		return true, nil
 	}
 
 	dayKey := "market_daily_spend:" + time.Now().UTC().Format("2006-01-02")
-	var used uint64
-	var raw []byte
-	if qErr := tx.QueryRow(`SELECT value FROM kv WHERE key = ?`, dayKey).Scan(&raw); qErr == nil {
-		_ = json.Unmarshal(raw, &used)
+	used, err := readKVUint64Tx(tx, dayKey)
+	if err != nil {
+		return false, err
 	}
-	if maxPerDay == 0 || used+amountSats > maxPerDay {
+	if maxPerDay == 0 || amountSats > maxPerDay || used > maxPerDay-amountSats {
 		return false, ErrSpendCapExceeded
 	}
 	next := used + amountSats
-	nb, _ := json.Marshal(next)
+	nb, err := json.Marshal(next)
+	if err != nil {
+		return false, err
+	}
 	if _, err := tx.Exec(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`, dayKey, nb); err != nil {
 		return false, err
 	}
@@ -288,17 +312,19 @@ func (d *DB) ReleaseSpendReservation(opID string, attempt int) error {
 		refTime = time.Now().UTC()
 	}
 	dayKey := "market_daily_spend:" + refTime.Format("2006-01-02")
-	var used uint64
-	var raw []byte
-	if qErr := tx.QueryRow(`SELECT value FROM kv WHERE key = ?`, dayKey).Scan(&raw); qErr == nil {
-		_ = json.Unmarshal(raw, &used)
+	used, err := readKVUint64Tx(tx, dayKey)
+	if err != nil {
+		return err
 	}
 	if used >= amount {
 		used -= amount
 	} else {
 		used = 0
 	}
-	nb, _ := json.Marshal(used)
+	nb, err := json.Marshal(used)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`, dayKey, nb); err != nil {
 		return err
 	}
@@ -326,13 +352,15 @@ func (d *DB) AddDailySpend(prefix string, delta uint64) (uint64, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 	key := prefix + ":" + time.Now().UTC().Format("2006-01-02")
-	var cur uint64
-	var raw []byte
-	if qErr := tx.QueryRow(`SELECT value FROM kv WHERE key = ?`, key).Scan(&raw); qErr == nil {
-		_ = json.Unmarshal(raw, &cur)
+	cur, err := readKVUint64Tx(tx, key)
+	if err != nil {
+		return 0, err
 	}
 	next := cur + delta
-	nb, _ := json.Marshal(next)
+	nb, err := json.Marshal(next)
+	if err != nil {
+		return 0, err
+	}
 	if _, err := tx.Exec(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`, key, nb); err != nil {
 		return 0, err
 	}
@@ -341,57 +369,59 @@ func (d *DB) AddDailySpend(prefix string, delta uint64) (uint64, error) {
 
 // LoadOrCreateStableKey loads or generates a persistent 32-byte hex private key in KV
 // so market offers and directory announcements keep a stable pubkey across restarts.
+// Serialized under d.mu inside one SQLite transaction so concurrent boots never generate
+// conflicting keys, and fails closed on read/corrupt errors without overwriting existing keys.
 func (d *DB) LoadOrCreateStableKey(keyName string, gen func() ([]byte, error)) ([]byte, error) {
-	var hexKey string
-	ok, err := d.GetJSON(keyName, &hexKey)
-	if err == nil && ok && len(hexKey) == 64 {
-		var raw [32]byte
-		if n, decErr := decodeHex32(hexKey, raw[:]); decErr == nil && n == 32 {
-			return raw[:], nil
-		}
+	if keyName == "" || gen == nil {
+		return nil, errors.New("store: keyName and generator are required")
 	}
-	created, err := gen()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("store: begin stable key %s: %w", keyName, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var rawJSON []byte
+	qErr := tx.QueryRow(`SELECT value FROM kv WHERE key = ?`, keyName).Scan(&rawJSON)
+	if qErr == nil {
+		var hexKey string
+		if uErr := json.Unmarshal(rawJSON, &hexKey); uErr != nil {
+			return nil, fmt.Errorf("store: decode stable key %s: %w", keyName, uErr)
+		}
+		if len(hexKey) != 64 {
+			return nil, fmt.Errorf("store: corrupt stable key %s (len=%d)", keyName, len(hexKey))
+		}
+		raw, decErr := hex.DecodeString(hexKey)
+		if decErr != nil || len(raw) != 32 {
+			return nil, fmt.Errorf("store: corrupt stable key hex %s: %w", keyName, decErr)
+		}
+		return raw, nil
+	}
+	if !errors.Is(qErr, sql.ErrNoRows) {
+		return nil, fmt.Errorf("store: read stable key %s: %w", keyName, qErr)
+	}
+
+	raw, err := gen()
 	if err != nil {
 		return nil, err
 	}
-	_ = d.SetJSON(keyName, encodeHex(created))
-	return created, nil
-}
-
-func decodeHex32(s string, dst []byte) (int, error) {
-	if len(s) != 64 || len(dst) < 32 {
-		return 0, errors.New("invalid 32-byte hex")
+	if len(raw) != 32 {
+		return nil, fmt.Errorf("store: stable key %s must be 32 bytes (got %d)", keyName, len(raw))
 	}
-	for i := 0; i < 32; i++ {
-		hi := fromHexChar(s[2*i])
-		lo := fromHexChar(s[2*i+1])
-		if hi > 15 || lo > 15 {
-			return 0, errors.New("invalid hex char")
-		}
-		dst[i] = (hi << 4) | lo
+	encoded, err := json.Marshal(hex.EncodeToString(raw))
+	if err != nil {
+		return nil, err
 	}
-	return 32, nil
-}
-
-func fromHexChar(c byte) byte {
-	switch {
-	case c >= '0' && c <= '9':
-		return c - '0'
-	case c >= 'a' && c <= 'f':
-		return c - 'a' + 10
-	case c >= 'A' && c <= 'F':
-		return c - 'A' + 10
-	default:
-		return 255
+	if _, err := tx.Exec(`INSERT INTO kv (key, value) VALUES (?, ?)`, keyName, encoded); err != nil {
+		return nil, fmt.Errorf("store: persist stable key %s: %w", keyName, err)
 	}
-}
-
-func encodeHex(b []byte) string {
-	const digits = "0123456789abcdef"
-	out := make([]byte, len(b)*2)
-	for i, v := range b {
-		out[2*i] = digits[v>>4]
-		out[2*i+1] = digits[v&0x0f]
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("store: commit stable key %s: %w", keyName, err)
 	}
-	return string(out)
+	cp := make([]byte, 32)
+	copy(cp, raw)
+	return cp, nil
 }

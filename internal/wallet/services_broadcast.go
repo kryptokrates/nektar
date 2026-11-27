@@ -48,7 +48,7 @@ func (s *bcommonServices) PostFromBEEF(ctx context.Context, beef *transaction.Be
 
 		// Single post-signing SpendGuard chokepoint for outgoing spends.
 		if !incoming && s.cfg.SpendGuard != nil && !isOverrideGuard(ctx) {
-			feeSats := computeTxFee(tx)
+			feeSats := ComputeTxFee(tx)
 			var outSum uint64
 			for _, o := range tx.Outputs {
 				outSum += o.Satoshis
@@ -81,7 +81,7 @@ func (s *bcommonServices) PostFromBEEF(ctx context.Context, beef *transaction.Be
 			if gErr := s.cfg.SpendGuard(id, feeSats, spendSats, false); gErr != nil {
 				rejErr := fmt.Errorf("%w: %w", ErrSpendRejected, gErr)
 				s.setLastErr(id, rejErr)
-				postErrSinkFromCtx(ctx).record(id, rejErr)
+				postErrSinkFromCtx(ctx).recordPreBroadcast(id, rejErr)
 				if len(posted.TxIDResults) > 0 {
 					if firstErr == nil {
 						firstErr = rejErr
@@ -105,16 +105,15 @@ func (s *bcommonServices) PostFromBEEF(ctx context.Context, beef *transaction.Be
 		}
 
 		if bErr != nil {
-			lower := strings.ToLower(bErr.Error())
 			switch {
-			case strings.Contains(lower, "already in mempool") || strings.Contains(lower, "already known") || strings.Contains(lower, "txn-already-known"):
+			case IsAlreadyKnownBroadcastError(bErr):
 				s.txCache.Put(id, tx)
 				posted.TxIDResults = append(posted.TxIDResults, wdk.PostedTxID{
 					TxID:         id,
 					Result:       wdk.PostedTxIDResultAlreadyKnown,
 					AlreadyKnown: true,
 				})
-			case isUncertainBroadcastError(bErr):
+			case IsUncertainBroadcastError(bErr):
 				// Transport/timeout/5xx/TCP/Arcade-RECEIVED-timeout: outcome is UNKNOWN.
 				// Never refund SpendGuard or release UTXO reservations.
 				unkErr := fmt.Errorf("%w: %w", ErrBroadcastUnknown, bErr)
@@ -191,9 +190,22 @@ func isNotEnoughFunds(err error) bool {
 	return strings.Contains(low, "not enough funds") || strings.Contains(low, "insufficient")
 }
 
-// isUncertainBroadcastError reports whether err is a timeout, canceled context, network transport
-// failure, or 5xx response where the transaction MAY have been accepted by the network.
-func isUncertainBroadcastError(err error) bool {
+// IsAlreadyKnownBroadcastError reports whether err indicates the transaction is already accepted
+// in the network mempool. This is the single canonical classifier shared by wallet and chain.
+func IsAlreadyKnownBroadcastError(err error) bool {
+	if err == nil {
+		return false
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "already in mempool") ||
+		strings.Contains(low, "already known") ||
+		strings.Contains(low, "txn-already-known")
+}
+
+// IsUncertainBroadcastError reports whether err is a timeout, canceled context, network transport
+// failure, rate-limit (429), or 5xx response where the transaction MAY have been accepted by the
+// network. This is the single canonical classifier shared by wallet and chain.
+func IsUncertainBroadcastError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -207,7 +219,8 @@ func isUncertainBroadcastError(err error) bool {
 	low := strings.ToLower(err.Error())
 	for _, tok := range []string{
 		"timeout", "deadline exceeded", "eof", "connection reset", "connection refused",
-		"broken pipe", "http 500", "http 502", "http 503", "http 504", "status 500", "status 502", "status 503", "status 504",
+		"broken pipe", "http 5", "status 5", "http 429", "status 429",
+		"too many requests", "service unavailable", "bad gateway", "gateway timeout",
 		"temporary failure", "context canceled",
 	} {
 		if strings.Contains(low, tok) {

@@ -106,13 +106,6 @@ func RemoveDaemonInfo(dataDir string) {
 	}
 }
 
-// RemoveActiveDaemonPointer deletes <home>/.nektar/active-daemon.json if owned by this PID.
-func RemoveActiveDaemonPointer(home string) {
-	if p := ActiveDaemonPointerPath(home); p != "" {
-		removeDaemonFileIfOwned(p)
-	}
-}
-
 func removeDaemonFileIfOwned(p string) {
 	if b, err := os.ReadFile(p); err == nil {
 		var info DaemonInfo
@@ -196,6 +189,83 @@ func DetectAnyLiveDaemonInHome(home, preferredDir string) (*DaemonInfo, bool) {
 	return nil, false
 }
 
+var detectLiveDaemonFn = DetectAnyLiveDaemon
+
+func extractJSONRPCID(raw []byte) (json.RawMessage, bool) {
+	var env struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if json.Unmarshal(raw, &env) != nil || len(bytes.TrimSpace(env.ID)) == 0 {
+		return nil, false
+	}
+	return bytes.TrimSpace(env.ID), true
+}
+
+func isValidJSONRPCFrame(raw []byte) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return false
+	}
+	if trimmed[0] == '{' {
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(trimmed, &obj) != nil {
+			return false
+		}
+		_, hasVer := obj["jsonrpc"]
+		return hasVer
+	}
+	if trimmed[0] == '[' {
+		var arr []map[string]json.RawMessage
+		if json.Unmarshal(trimmed, &arr) != nil || len(arr) == 0 {
+			return false
+		}
+		_, hasVer := arr[0]["jsonrpc"]
+		return hasVer
+	}
+	return false
+}
+
+func writeJSONRPCBridgeError(out io.Writer, id json.RawMessage, code int, message string) {
+	var idVal any
+	if len(id) > 0 {
+		idVal = id
+	}
+	frame, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      idVal,
+		"error": map[string]any{
+			"code":    code,
+			"message": message,
+		},
+	})
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintln(out, string(frame))
+}
+
+func summarizeBridgeHTTPError(status int, body []byte) string {
+	trimmed := bytes.TrimSpace(body)
+	var j struct {
+		Error string `json:"error"`
+		Hint  string `json:"hint"`
+	}
+	if json.Unmarshal(trimmed, &j) == nil && strings.TrimSpace(j.Error) != "" {
+		if strings.TrimSpace(j.Hint) != "" {
+			return fmt.Sprintf("HTTP %d: %s (%s)", status, j.Error, j.Hint)
+		}
+		return fmt.Sprintf("HTTP %d: %s", status, j.Error)
+	}
+	msg := strings.TrimSpace(string(trimmed))
+	if len(msg) > 200 {
+		msg = msg[:200] + "..."
+	}
+	if msg == "" {
+		return fmt.Sprintf("HTTP %d from nektar daemon", status)
+	}
+	return fmt.Sprintf("HTTP %d: %s", status, msg)
+}
+
 // RunStdioBridge proxies newline-delimited JSON-RPC stdio (stdin -> stdout) to a live daemon's
 // Streamable HTTP `/mcp` endpoint so Claude Code, Cursor, Codex, and Hermes share one daemon seamlessly.
 func RunStdioBridge(ctx context.Context, daemonURL, bearerToken string, in io.Reader, out io.Writer) error {
@@ -203,6 +273,19 @@ func RunStdioBridge(ctx context.Context, daemonURL, bearerToken string, in io.Re
 	hc := &http.Client{Timeout: 60 * time.Second}
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+
+	doPost := func(line string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader([]byte(line)))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if bearerToken != "" {
+			req.Header.Set("Authorization", "Bearer "+bearerToken)
+		}
+		return hc.Do(req)
+	}
 
 	for sc.Scan() {
 		if ctx.Err() != nil {
@@ -212,41 +295,61 @@ func RunStdioBridge(ctx context.Context, daemonURL, bearerToken string, in io.Re
 		if line == "" {
 			continue
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader([]byte(line)))
+		reqID, hasID := extractJSONRPCID([]byte(line))
+
+		resp, err := doPost(line)
 		if err != nil {
-			return err
+			// On connection refused / daemon restart, re-discover the live daemon once and retry.
+			if info, ok := detectLiveDaemonFn(""); ok && info != nil && strings.TrimSpace(info.URL) != "" {
+				endpoint = strings.TrimRight(info.URL, "/") + "/mcp"
+				if info.AuthToken != "" {
+					bearerToken = info.AuthToken
+				} else if info.Token != "" {
+					bearerToken = info.Token
+				}
+				resp, err = doPost(line)
+			}
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-		if bearerToken != "" {
-			req.Header.Set("Authorization", "Bearer "+bearerToken)
-		}
-		resp, err := hc.Do(req)
 		if err != nil {
-			// Return a valid JSON-RPC error frame instead of crashing stdio.
-			_, _ = fmt.Fprintf(out, `{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":%q}}`+"\n", err.Error())
+			if hasID {
+				writeJSONRPCBridgeError(out, reqID, -32000, err.Error())
+			}
 			continue
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 		ct := resp.Header.Get("Content-Type")
+		status := resp.StatusCode
 		resp.Body.Close()
 
-		// Notifications (202 Accepted or empty body) produce no stdout frame.
-		if resp.StatusCode == http.StatusAccepted || len(bytes.TrimSpace(body)) == 0 {
+		// Notifications (202 Accepted or empty 2xx body) produce no stdout frame.
+		if status == http.StatusAccepted || (status >= 200 && status < 300 && len(bytes.TrimSpace(body)) == 0) {
+			continue
+		}
+		if status < 200 || status >= 300 {
+			if hasID {
+				writeJSONRPCBridgeError(out, reqID, -32000, summarizeBridgeHTTPError(status, body))
+			}
 			continue
 		}
 		if strings.Contains(ct, "text/event-stream") {
 			for _, ln := range strings.Split(string(body), "\n") {
 				if strings.HasPrefix(ln, "data: ") {
 					payload := strings.TrimSpace(strings.TrimPrefix(ln, "data: "))
-					if payload != "" {
+					if payload != "" && isValidJSONRPCFrame([]byte(payload)) {
 						_, _ = fmt.Fprintln(out, payload)
 					}
 				}
 			}
 			continue
 		}
-		_, _ = fmt.Fprintln(out, strings.TrimSpace(string(body)))
+		trimmed := bytes.TrimSpace(body)
+		if !isValidJSONRPCFrame(trimmed) {
+			if hasID {
+				writeJSONRPCBridgeError(out, reqID, -32000, "non-JSON-RPC response from nektar daemon: "+summarizeBridgeHTTPError(status, trimmed))
+			}
+			continue
+		}
+		_, _ = fmt.Fprintln(out, string(trimmed))
 	}
 	return sc.Err()
 }

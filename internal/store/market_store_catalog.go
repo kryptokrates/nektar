@@ -90,14 +90,6 @@ func (d *DB) BlockHost(url string) error {
 	return d.UpsertHost(HostRecord{URL: url, State: "down", Source: "blocked", Blocked: true, LastSeen: time.Now().Unix()})
 }
 
-// DeleteHost removes a host URL from persisted storage.
-func (d *DB) DeleteHost(url string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	_, err := d.sql.Exec(`DELETE FROM hosts WHERE url = ?`, url)
-	return err
-}
-
 // ListHosts returns all persisted hosts ordered by URL.
 func (d *DB) ListHosts() ([]HostRecord, error) {
 	d.mu.Lock()

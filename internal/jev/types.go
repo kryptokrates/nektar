@@ -131,16 +131,14 @@ func (a Answer) ConfidenceValue() (float64, bool) {
 
 // Usage reports token consumption for a System One evaluation call.
 type Usage struct {
-	InputTokens  int     `json:"input_tokens"`
-	OutputTokens int     `json:"output_tokens"`
-	Cost         float64 `json:"cost,omitempty"`
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
 }
 
 // Response is the full System One API response.
 type Response struct {
 	Model     string            `json:"model"`
 	RequestID string            `json:"request_id,omitempty"`
-	Provider  string            `json:"provider,omitempty"`
 	Answers   map[string]Answer `json:"answers"`
 	Usage     Usage             `json:"usage"`
 }

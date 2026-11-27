@@ -40,9 +40,24 @@ jobs:
           set -euo pipefail
           # Verify CI workflow passed for this commit before deploying (when triggered by release).
           if [ "$EVENT_NAME" = "workflow_run" ]; then
-            ci_status="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD_SHA&per_page=1" --jq '.workflow_runs[0].conclusion // "pending"')"
-            if [ "$ci_status" = "failure" ] || [ "$ci_status" = "cancelled" ]; then
-              echo "ERROR: ci.yml failed ($ci_status) for $HEAD_SHA — aborting deploy"
+            ci_run_status=""
+            ci_status=""
+            for _ in $(seq 1 12); do
+              ci_info="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD_SHA&per_page=1" \
+                --jq 'if (.workflow_runs | length) == 0 then "missing missing" else "\(.workflow_runs[0].status // "unknown") \(.workflow_runs[0].conclusion // "pending")" end')"
+              ci_run_status="${ci_info%% *}"
+              ci_status="${ci_info#* }"
+              if [ "$ci_status" = "success" ]; then
+                break
+              fi
+              if [ "$ci_run_status" != "queued" ] && [ "$ci_run_status" != "in_progress" ] && [ "$ci_run_status" != "waiting" ] && [ "$ci_run_status" != "requested" ] && [ "$ci_run_status" != "pending" ]; then
+                break
+              fi
+              echo "Waiting for ci.yml on $HEAD_SHA (status=$ci_run_status, conclusion=$ci_status)..."
+              sleep 15
+            done
+            if [ "$ci_status" != "success" ]; then
+              echo "ERROR: ci.yml did not succeed for $HEAD_SHA (status=$ci_run_status, conclusion=$ci_status) — aborting deploy"
               exit 1
             fi
             gh run download "$RUN_ID" --repo "$REPO" --name image-digest --dir /tmp/digest
@@ -152,14 +167,16 @@ jobs:
             fi
 
             echo "ERROR: health check failed for sha=$DEPLOY_SHA digest=${DEPLOY_DIGEST:-edge}"
-            docker compose -f deploy/hub/compose.yaml logs --tail 40
+            docker compose "${ENV_ARGS[@]}" -f deploy/hub/compose.yaml logs --tail 40 || true
 
             if [ -n "$PREV_DIGEST" ] && [ -n "$PREV_SHA" ]; then
               echo "Rolling back to previous healthy sha=$PREV_SHA digest=$PREV_DIGEST..."
               git reset --hard "$PREV_SHA" || true
+              sync_site || true
               export NEKTAR_IMAGE_TAG=edge
               export NEKTAR_IMAGE_DIGEST="$PREV_DIGEST"
-              docker compose -f deploy/hub/compose.yaml up -d
+              docker compose "${ENV_ARGS[@]}" -f deploy/hub/compose.yaml pull hub || true
+              docker compose "${ENV_ARGS[@]}" -f deploy/hub/compose.yaml up -d
               if check_health; then
                 echo "Rollback succeeded — previous healthy hub restored."
               else

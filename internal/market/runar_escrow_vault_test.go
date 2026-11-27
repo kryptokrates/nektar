@@ -268,12 +268,12 @@ func TestDisclosureSaleSellerGhostAutoRefundE2E(t *testing.T) {
 		t.Fatalf("EncodeDisclosureSaleLockingScript: %v", err)
 	}
 	escrowSats := params.RequiredEscrowSatoshis() + 100
-	escrowTx, escrowBEEF, fee, spend, err := port.BuildFundedTxWithBEEF(ctx, []*transaction.TransactionOutput{{
+	escrowTx, escrowBEEF, fee, spend, err := port.BuildFundedTxWithMeta(ctx, []*transaction.TransactionOutput{{
 		Satoshis:      escrowSats,
 		LockingScript: escrowLock,
-	}})
+	}}, "", nil)
 	if err != nil {
-		t.Fatalf("BuildFundedTxWithBEEF: %v", err)
+		t.Fatalf("BuildFundedTxWithMeta: %v", err)
 	}
 	if _, err := port.Broadcast(ctx, escrowTx, fee, spend); err != nil {
 		t.Fatalf("Broadcast escrow: %v", err)

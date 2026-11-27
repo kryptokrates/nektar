@@ -16,15 +16,17 @@ import (
 
 // Transaction lifecycle statuses aligned with BRC-100 / go-wallet-toolbox.
 const (
-	StatusUnsigned          = "unsigned"
-	StatusUnprocessed       = "unprocessed"
-	StatusSending           = "sending"
 	StatusSubmissionUnknown = "submission_unknown"
 	StatusUnproven          = "unproven"
 	StatusCompleted         = "completed"
-	StatusNoSend            = "nosend"
 	StatusFailed            = "failed"
 	StatusAborted           = "aborted"
+
+	// Canonical SQL status sets shared across Balance, ListUTXOs, countDustUTXOs, PendingTxCount,
+	// and computeUnprovenDepthBounds so spendable/pending telemetry never drifts across call sites.
+	sqlNonSpendableParentStatuses = `'failed','aborted','unsigned','unprocessed','nosend','sending','submission_unknown'`
+	sqlPendingTxStatuses          = `'unsigned','unprocessed','nosend','sending','submission_unknown'`
+	sqlSpendableUnprovenStatuses  = `'unproven'`
 )
 
 // Standard spending baskets managed by go-wallet-toolbox StrategyThroughput plus Nektar's static funding basket.
@@ -44,8 +46,6 @@ const (
 )
 
 const (
-	// CoinbaseMaturity matches BSV consensus coinbase maturity (100 blocks).
-	CoinbaseMaturity = 100
 	// DefaultMaxUnprovenDepth caps reported/monitored 0-conf chain depth.
 	DefaultMaxUnprovenDepth = 15
 	// DefaultSweepChunkInputs caps explicit inputs per sweep chunk transaction.
@@ -60,12 +60,10 @@ const (
 
 // Standard errors returned by the wallet engine.
 var (
-	ErrNotSupported    = errors.New("wallet: method not supported by embedded wallet")
-	ErrInsufficient    = errors.New("wallet: insufficient spendable funds")
-	ErrNoChain         = errors.New("wallet: no chain tracker configured")
-	ErrNoSettler       = errors.New("wallet: no transaction broadcaster configured")
-	ErrActionNotFound  = errors.New("wallet: action reference not found")
-	ErrInvalidArgs     = errors.New("wallet: invalid arguments")
+	ErrInsufficient     = errors.New("wallet: insufficient spendable funds")
+	ErrNoChain          = errors.New("wallet: no chain tracker configured")
+	ErrNoSettler        = errors.New("wallet: no transaction broadcaster configured")
+	ErrInvalidArgs      = errors.New("wallet: invalid arguments")
 	ErrNetworkMismatch  = errors.New("wallet: network mismatch between local and remote wallet")
 	ErrSpendRejected    = errors.New("wallet: spend rejected by policy")
 	ErrBroadcastUnknown = errors.New("wallet: broadcast outcome unknown (timeout or transport failure)")
@@ -79,9 +77,10 @@ type ctxKeyPostErrSink struct{}
 type ctxKeyIncomingInternalize struct{}
 
 type postErrSink struct {
-	mu   sync.Mutex
-	txid string
-	err  error
+	mu           sync.Mutex
+	txid         string
+	err          error
+	preBroadcast bool
 }
 
 func (p *postErrSink) record(txid string, err error) {
@@ -91,6 +90,18 @@ func (p *postErrSink) record(txid string, err error) {
 	p.mu.Lock()
 	p.txid = txid
 	p.err = err
+	p.preBroadcast = false
+	p.mu.Unlock()
+}
+
+func (p *postErrSink) recordPreBroadcast(txid string, err error) {
+	if p == nil || err == nil {
+		return
+	}
+	p.mu.Lock()
+	p.txid = txid
+	p.err = err
+	p.preBroadcast = true
 	p.mu.Unlock()
 }
 
@@ -101,6 +112,15 @@ func (p *postErrSink) get() (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.txid, p.err
+}
+
+func (p *postErrSink) isPreBroadcast() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.preBroadcast
 }
 
 func withPostErrSink(ctx context.Context) (context.Context, *postErrSink) {
@@ -272,13 +292,11 @@ type Config struct {
 	ProofLookup                 ProofLookupFunc           // optional custom proof lookup (used for testchain)
 	SpendGuard                  SpendGuardCheck           // optional fail-closed spend guard hook (enforced post-signing in PostFromBEEF)
 	SpendGuardCheck             func(feeSats, spendSats uint64) error // optional read-only pre-build cap check
-	SpendGuardRefund            func(txid string) error   // optional pre-broadcast refund hook on pre-submit local refusal
 	SpendGuardRemainingInterval func() time.Duration      // optional min-interval remaining time for FuelKeeper pacing
 	OnTxMined                   TxMinedHook               // optional callback invoked when Monitor verifies a mined BUMP
 	SettleDepth                 int                       // confirmations before finalizing proofs / BlocksDelay (>=1 on live)
 	FuelProfile                 *FuelProfile              // nil => StandardFuelProfile()
 	MaxUnprovenDepth            int                       // 0 => DefaultMaxUnprovenDepth (15)
-	MaxInputsPerTx              int                       // reserved for caller compatibility
 	ReservationTTL              time.Duration             // 0 => DefaultReservationTTL (5m)
 	TxCacheSize                 int                       // 0 => DefaultTxCacheSize (512)
 	Logger                      func(format string, args ...any)

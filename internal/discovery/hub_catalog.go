@@ -52,20 +52,8 @@ type hubCatalogCache struct {
 	at      time.Time
 }
 
-var (
-	catalogCacheMu sync.Mutex
-	catalogCaches  = make(map[*Service]*hubCatalogCache)
-)
-
 func (s *Service) getCatalogCache() *hubCatalogCache {
-	catalogCacheMu.Lock()
-	defer catalogCacheMu.Unlock()
-	c, ok := catalogCaches[s]
-	if !ok {
-		c = &hubCatalogCache{}
-		catalogCaches[s] = c
-	}
-	return c
+	return &s.catalogCache
 }
 
 func hostDisplayName(rawURL string) string {

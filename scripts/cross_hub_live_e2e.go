@@ -77,7 +77,7 @@ func main() {
 	spineFlag := flag.String("spine", "https://nektar.run", "Primary Spine Hub base URL")
 	hubsFlag := flag.String("hubs", "https://hub1.nektar.run,https://hub2.nektar.run,https://hub3.nektar.run,https://hub4.nektar.run,https://hub5.nektar.run", "Comma-separated 5 Leaf Hub base URLs")
 	testnetAlias := flag.String("testnet-alias", "https://testnet.nektar.run", "Default testnet seed alias")
-	resolveIP := flag.String("resolve-ip", "167.233.174.91", "Fallback IP for *.nektar.run if local DNS has stale NXDOMAIN cache")
+	resolveIP := flag.String("resolve-ip", os.Getenv("NEKTAR_RESOLVE_IP"), "Optional fallback IP for *.nektar.run if local DNS has stale NXDOMAIN cache (or set NEKTAR_RESOLVE_IP)")
 	treasuryDir := flag.String("treasury-dir", filepath.Join(os.Getenv("USERPROFILE"), ".nektar", "testnet-4agent-e2e", "hub"), "Local funded BSV testnet wallet dir for funding ephemeral test agents")
 	reportPath := flag.String("report", "", "Optional JSON report output path")
 	flag.Parse()

@@ -47,15 +47,22 @@ func (s *Service) CommitSystemAuditRecord(
 	}
 	provBytes := core.SerializeProvenance(prov)
 	hdp := core.ComputeHDPV2(data, prov)
-	leaf := core.ComputeLeaf(core.Fragment{
+	hdpHex := core.ToHex(hdp)
+	mpe, mErr := buildCommittedFragmentMPE(shard, hdpHex, prov, 0, class, "", "", "", core.ToHex(core.SHA256(data)))
+	if mErr != nil || mpe == nil {
+		return nil, nil, fmt.Errorf("memory: build %s audit MPE: %w", shard, mErr)
+	}
+	leaf := core.ComputeLeafV2(core.Fragment{
 		Data:       data,
 		Provenance: prov,
 		HDP:        hdp,
+		MPERoot:    mpe.Root,
 	})
 	rec := store.FragmentRecord{
 		Shard:      shard,
-		HDP:        core.ToHex(hdp),
+		HDP:        hdpHex,
 		Leaf:       core.ToHex(leaf),
+		MPERoot:    mpe.RootHex,
 		Data:       data,
 		Provenance: provBytes,
 		Class:      class,

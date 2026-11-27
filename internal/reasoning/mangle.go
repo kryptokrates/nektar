@@ -18,11 +18,32 @@ const (
 	MaxMangleRules = 512
 	// MaxMangleProgramBytes caps total Mangle source fed into EvalDatalog.
 	MaxMangleProgramBytes = 256 << 10
+	// MaxMangleDerivedFacts caps newly derived facts inside EvalProgram to prevent blowup DoS.
+	MaxMangleDerivedFacts = 16384
 )
 
+func isGroundBaseTerm(t ast.BaseTerm) bool {
+	switch v := t.(type) {
+	case ast.Constant:
+		return true
+	case ast.Variable:
+		return false
+	case ast.ApplyFn:
+		for _, arg := range v.Args {
+			if !isGroundBaseTerm(arg) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 // ParseGroundFact parses a single candidate fact string into a ground Mangle atom.
-// Rejects any rule syntax (:-), transforms (|>), or non-ground/malformed statements so
-// untrusted memory fragments can never inject executable Datalog rules.
+// Rejects any rule syntax (:-), transforms (|>), or non-ground/malformed statements (including
+// variables nested inside ApplyFn terms) so untrusted memory fragments can never inject
+// executable Datalog rules or break analysis.
 func ParseGroundFact(raw string) (ast.Atom, bool) {
 	s := strings.TrimSpace(raw)
 	if s == "" || strings.Contains(s, ":-") || strings.Contains(s, "|>") || strings.ContainsAny(s, "\r\n") {
@@ -33,9 +54,9 @@ func ParseGroundFact(raw string) (ast.Atom, bool) {
 	if err != nil {
 		return ast.Atom{}, false
 	}
-	// Ensure every argument is a ground constant (no free variables).
+	// Ensure every argument is recursively ground (no top-level or nested ApplyFn variables).
 	for _, arg := range atom.Args {
-		if _, isVar := arg.(ast.Variable); isVar {
+		if !isGroundBaseTerm(arg) {
 			return ast.Atom{}, false
 		}
 	}
@@ -62,7 +83,7 @@ func EvalDatalog(programSource string) (map[string]bool, error) {
 			fs.Add(cl.Head)
 		}
 	}
-	if err := engine.EvalProgram(info, fs); err != nil {
+	if err := engine.EvalProgram(info, fs, engine.WithCreatedFactLimit(MaxMangleDerivedFacts)); err != nil {
 		return nil, fmt.Errorf("mangle: eval: %w", err)
 	}
 	out := make(map[string]bool)

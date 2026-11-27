@@ -77,8 +77,41 @@ function Get-LocalToken {
   return $null
 }
 
-function Invoke-NektarUp {
+function Get-OperatorToken {
+  if ($env:NEKTAR_OPERATOR_TOKEN) { return $env:NEKTAR_OPERATOR_TOKEN }
+  if (Test-Path $DaemonJson) {
+    try {
+      $j = Get-Content -Raw $DaemonJson | ConvertFrom-Json
+      if ($j.operatorToken) { return $j.operatorToken }
+      if ($j.token) { return $j.token }
+    } catch {}
+  }
+  return Get-LocalToken
+}
+
+function Invoke-NektarUp([string[]]$UpArgs = @()) {
   Assert-Docker
+  $confirm = if ($env:NEKTAR_MAINNET_CONFIRM) { $env:NEKTAR_MAINNET_CONFIRM } else { '' }
+  $wallet = if ($env:NEKTAR_WALLET) { $env:NEKTAR_WALLET } else { 'embedded' }
+  for ($idx = 0; $idx -lt $UpArgs.Count; $idx++) {
+    $a = $UpArgs[$idx]
+    switch -Wildcard ($a) {
+      '--network' { if ($idx + 1 -lt $UpArgs.Count) { $idx++; $Network = $UpArgs[$idx] } }
+      '--network=*' { $Network = $a.Substring(10) }
+      '--mainnet' { $Network = 'main' }
+      '--main' { $Network = 'main' }
+      '--confirm' { if ($idx + 1 -lt $UpArgs.Count) { $idx++; $confirm = $UpArgs[$idx] } }
+      '--confirm=*' { $confirm = $a.Substring(10) }
+      '--wallet' { if ($idx + 1 -lt $UpArgs.Count) { $idx++; $wallet = $UpArgs[$idx] } }
+      '--wallet=*' { $wallet = $a.Substring(9) }
+    }
+  }
+  if ($Network -eq 'main' -or $Network -eq 'mainnet') {
+    $Network = 'main'
+    if ($confirm -ne 'I_UNDERSTAND') {
+      throw 'nektar: refusing Mainnet without --confirm I_UNDERSTAND (or $env:NEKTAR_MAINNET_CONFIRM="I_UNDERSTAND")'
+    }
+  }
   if (Test-ContainerRunning) {
     Sync-DaemonJson
     Write-Output "nektar: already running at $BaseUrl"
@@ -89,11 +122,10 @@ function Invoke-NektarUp {
   } else {
     Write-Output "nektar: pulling $Image ..."
     $null = docker pull $Image
-    $auto = if ($env:NEKTAR_AUTOMATION) { $env:NEKTAR_AUTOMATION } else { '0' }
     $model = if ($env:NEKTAR_MODEL_ID) { $env:NEKTAR_MODEL_ID } else { 'unspecified' }
     $null = docker run -d --name $Container --restart unless-stopped `
       -p "127.0.0.1:${Port}:18420" -v "${Volume}:/data" `
-      -e "NEKTAR_NETWORK=$Network" -e "NEKTAR_HTTP_PORT=18420" -e "NEKTAR_AUTOMATION=$auto" -e "NEKTAR_MODEL_ID=$model" `
+      -e "NEKTAR_NETWORK=$Network" -e "NEKTAR_MAINNET_CONFIRM=$confirm" -e "NEKTAR_WALLET=$wallet" -e "NEKTAR_HTTP_PORT=18420" -e "NEKTAR_MODEL_ID=$model" `
       $Image serve -listen :18420
   }
   Write-Host -NoNewline 'nektar: waiting for ready '
@@ -220,14 +252,21 @@ function Invoke-NektarDock([string[]]$DockArgs) {
 }
 
 switch ($Command.ToLowerInvariant()) {
-  { $_ -in @('up', 'start', 'serve') } { Invoke-NektarUp }
+  { $_ -in @('up', 'start', 'serve') } { Invoke-NektarUp $Rest }
   { $_ -in @('down', 'stop') } { Assert-Docker; $null = docker rm -f $Container 2>$null; Write-Output "nektar: stopped (volume $Volume preserved)" }
   'restart' { Assert-Docker; $null = docker restart $Container; Write-Output 'nektar: restarted' }
   'logs' { Assert-Docker; & docker logs @Rest $Container }
   'open' {
-    try { $null = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "$BaseUrl/v1/health" } catch { Invoke-NektarUp }
-    $logs = (docker logs --tail 40 $Container 2>&1) -join "`n"
-    $target = if ($logs -match '(http://127\.0\.0\.1:\d+/pair\?code=[a-z0-9-]+)') { $Matches[1] } else { $BaseUrl }
+    try { $null = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "$BaseUrl/v1/health" } catch { Invoke-NektarUp @() }
+    Sync-DaemonJson
+    $target = $BaseUrl
+    $opTok = Get-OperatorToken
+    if ($opTok) {
+      try {
+        $pair = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/auth/pair-code" -Headers @{ 'Content-Type' = 'application/json'; 'Authorization' = "Bearer $opTok" } -Body '{}' -TimeoutSec 3
+        if ($pair.code) { $target = "$BaseUrl/pair?code=$($pair.code)" }
+      } catch {}
+    }
     Start-Process $target
   }
   'status' {
@@ -238,7 +277,8 @@ switch ($Command.ToLowerInvariant()) {
       $hdr = @{ 'Content-Type' = 'application/json' }
       if ($tok) { $hdr['Authorization'] = "Bearer $tok" }
       $doc = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/tools/doctor" -Headers $hdr -Body '{}' -TimeoutSec 3
-      Write-Output "  memory : $($doc.records) record(s) across $($doc.shards) shard(s) [$($doc.shardNames -join ', ')]"
+      $shardList = @($doc.shardNames)
+      Write-Output "  memory : $($doc.records) record(s) across $($shardList.Count) shard(s) [$($shardList -join ', ')]"
     } catch {
       Write-Output 'nektar status: STOPPED — run `nektar up` to start'
       exit 1
@@ -249,14 +289,14 @@ switch ($Command.ToLowerInvariant()) {
     Write-Output "nektar: pulling latest $Image ..."
     & docker pull $Image
     $null = docker rm -f $Container 2>$null
-    Invoke-NektarUp
+    Invoke-NektarUp $Rest
   }
   'dock' { Invoke-NektarDock $Rest }
   'hub' {
     Assert-Docker
     $hubSub = if ($Rest.Count -gt 0) { $Rest[0] } else { 'help' }
     $hubRest = if ($Rest.Count -gt 1) { $Rest[1..($Rest.Count - 1)] } else { @() }
-    $hubDir = if ($env:NEKTAR_HUB_DIR) { $env:NEKTAR_HUB_DIR } else { Join-Path $HOME 'nektar-hub' }
+    $hubDir = if ($env:NEKTAR_HUB_DIR) { $env:NEKTAR_HUB_DIR } elseif ((Test-Path (Join-Path $HOME '.nektar-hub')) -or -not (Test-Path (Join-Path $HOME 'nektar-hub'))) { Join-Path $HOME '.nektar-hub' } else { Join-Path $HOME 'nektar-hub' }
     switch ($hubSub) {
       'down'   { & docker compose -f (Join-Path $hubDir 'compose.yaml') --env-file (Join-Path $hubDir '.env') down @hubRest }
       'status' { & docker compose -f (Join-Path $hubDir 'compose.yaml') --env-file (Join-Path $hubDir '.env') ps @hubRest }

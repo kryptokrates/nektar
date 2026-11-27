@@ -54,6 +54,7 @@ func newSharedTestNode(t *testing.T, ctx context.Context, shared *chain.SharedMe
 		IsHub:          isHub,
 		CollectTimeout: 3 * time.Second,
 	})
+	t.Cleanup(market.AttachTestRestate(broker))
 	if !withPublicHTTP {
 		return mem, broker, nil
 	}
@@ -135,7 +136,6 @@ func newPaidHubHarness(t *testing.T, ctx context.Context, shared *chain.SharedMe
 			_, tErr := disc.TopUpHubEgressCredits(tCtx, spineURL, minTopupSats, disc.AnnouncePubHex())
 			return tErr
 		},
-		nil,
 	)
 	ts := httptest.NewServer(node.Handler())
 	t.Cleanup(func() {

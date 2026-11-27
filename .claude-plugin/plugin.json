@@ -9,7 +9,8 @@
   "repository": "https://github.com/kryptokrates/nektar",
   "license": "MIT",
   "keywords": ["memory", "mcp", "verifiable", "receipts", "bsv", "knowledge-market"],
-  "skills": ["../skills/nektar-memory"],
+  "skills": ["./skills/nektar-memory"],
+  "hooks": "./.claude-plugin/hooks/hooks.json",
   "mcpServers": {
     "nektar": {
       "command": "nektar",

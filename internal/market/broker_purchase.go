@@ -1,7 +1,6 @@
 package market
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -10,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lightwebinc/bcommon/bwallet"
 	"github.com/lightwebinc/bcommon/guard"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
@@ -78,19 +76,6 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		return nil, errors.New("market: payment txid mismatch vs AtomicBEEF")
 	}
 
-	// Refresh ProofBundle from memory store so buyer receives the freshest mined BUMP (not a stale quote snapshot).
-	refreshProof := func(s *pendingSale) *contracts.ProofBundle {
-		if s == nil {
-			return nil
-		}
-		if s.Shard != "" && s.Seq > 0 {
-			if freshPB, vr, pErr := b.mem.Prove(ctx, s.Shard, s.Seq); pErr == nil && freshPB != nil && vr.OK {
-				s.ProofBundle = freshPB
-			}
-		}
-		return s.ProofBundle
-	}
-
 	// Idempotent key re-reveal on buyer retry for the EXACT same payment txid!
 	if existing, gErr := b.mem.DB().GetDeal("sell-" + sale.OfferID); gErr == nil && existing.Status == "settled" {
 		if existing.PaymentTxID == txid {
@@ -106,7 +91,7 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 				ContentKeyHex: keyHex,
 				CiphertextHex: sale.SaleOffer.CiphertextHex,
 				ChirpURL:      sale.ChirpURL,
-				ProofBundle:   refreshProof(sale),
+				ProofBundle:   b.refreshPendingSaleProof(ctx, sale),
 			}, nil
 		}
 		return nil, errors.New("market: offer already settled with a different payment txid")
@@ -123,113 +108,9 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		}, nil
 	}
 
-	// Verify payment transaction pays >= Offer.Price via DisclosureSale on-chain escrow OR BRC-29 derived key
-	// (strictly required on live networks to prevent replay of publicly visible historical deposits to static FundAddress()).
-	isEscrow := req.EscrowMode
-	isBRC29 := !isEscrow && req.DerivationPrefix != "" && req.DerivationSuffix != "" && req.SenderIdentityKey != ""
-	if !isEscrow && !isBRC29 && b.mem.Chain().Network() != "memory" {
-		return nil, errors.New("market: DisclosureSale escrow or BRC-29 payment remittance is required on live networks")
-	}
-	var paidSats uint64
-	var escrowParams contracts.DisclosureSaleParams
-	if isEscrow {
-		if uint64(req.OutputIndex) >= uint64(len(tx.Outputs)) {
-			return nil, fmt.Errorf("market: escrow outputIndex %d out of range", req.OutputIndex)
-		}
-		depPKH, dErr := hex.DecodeString(strings.TrimSpace(req.DepositorPKH))
-		if dErr != nil || len(depPKH) != 20 {
-			return nil, errors.New("market: escrow requires 20-byte hex depositorPkh")
-		}
-		sellerPKH, sErr := hex.DecodeString(strings.TrimSpace(req.EscrowSellerPKH))
-		if sErr != nil || len(sellerPKH) != 20 {
-			return nil, errors.New("market: escrow requires 20-byte hex escrowSellerPkh")
-		}
-		// Verify EscrowSellerPKH belongs to THIS seller (either our wallet FundPKH or our signed offer SellerPKH)!
-		sellerPKHMatches := false
-		if myFundPKH, fErr := b.mem.Chain().FundPKH(ctx); fErr == nil && bytes.Equal(myFundPKH, sellerPKH) {
-			sellerPKHMatches = true
-		}
-		if offerPKH, oErr := hex.DecodeString(sale.SaleOffer.Config.SellerPKH); oErr == nil && bytes.Equal(offerPKH, sellerPKH) {
-			sellerPKHMatches = true
-		}
-		if !sellerPKHMatches {
-			return nil, errors.New("market: escrowSellerPkh does not belong to this seller")
-		}
-		hWrappedBytes, hwErr := hex.DecodeString(sale.SaleOffer.Config.HWrapped)
-		if hwErr != nil || len(hWrappedBytes) != 32 {
-			return nil, errors.New("market: seller offer has invalid hWrapped")
-		}
-		maxFee := req.EscrowMaxFee
-		if maxFee < 100 || maxFee > 5000 {
-			return nil, fmt.Errorf("market: escrow maxFee %d outside safe range [100, 5000]", maxFee)
-		}
-		refundAfter := req.EscrowRefundAfter
-		if refundAfter == 0 {
-			refundAfter = sale.SaleOffer.Config.RefundAfter
-		}
-		// Ensure RefundAfter has safe headroom so buyer cannot front-run our Buy() with an immediate Refund()!
-		if refundAfter < 500_000_000 {
-			if curH, hErr := b.mem.Chain().Height(ctx); hErr == nil && refundAfter <= uint64(curH)+1 {
-				return nil, fmt.Errorf("market: escrow refundAfter height %d too close to tip %d", refundAfter, curH)
-			}
-		} else if int64(refundAfter) <= nowUnix+60 {
-			return nil, fmt.Errorf("market: escrow refundAfter timestamp %d too close to now %d", refundAfter, nowUnix)
-		}
-		escrowParams = contracts.DisclosureSaleParams{
-			SellerPKH:    sellerPKH,
-			Price:        sale.SaleOffer.Config.Price,
-			HWrapped:     hWrappedBytes,
-			RefundAfter:  refundAfter,
-			MaxFee:       maxFee,
-			DepositorPKH: depPKH,
-		}
-		expectedEscrowLock, eErr := contracts.EncodeDisclosureSaleLockingScript(escrowParams)
-		if eErr != nil {
-			return nil, fmt.Errorf("market: encode DisclosureSale escrow: %w", eErr)
-		}
-		out := tx.Outputs[req.OutputIndex]
-		if out == nil || out.LockingScript == nil || !bytes.Equal(*out.LockingScript, *expectedEscrowLock) {
-			return nil, errors.New("market: escrow output locking script does not match committed DisclosureSale covenant")
-		}
-		if out.Satoshis < escrowParams.RequiredEscrowSatoshis() {
-			return nil, fmt.Errorf("market: escrow balance %d < required %d (price + maxFee + 1)",
-				out.Satoshis, escrowParams.RequiredEscrowSatoshis())
-		}
-		paidSats = sale.SaleOffer.Config.Price
-	} else if isBRC29 {
-		d := &bwallet.Derivation{
-			SecurityLevel:   int(bwallet.PaymentProtocol.SecurityLevel),
-			Protocol:        bwallet.PaymentProtocol.Protocol,
-			KeyID:           bwallet.PaymentKeyID(req.DerivationPrefix, req.DerivationSuffix),
-			CounterpartyHex: req.SenderIdentityKey,
-			OwnerHex:        b.mem.Chain().IdentityPubHex(),
-		}
-		wantScript, dErr := b.mem.Chain().Signer().DerivedScript(ctx, d)
-		if dErr != nil {
-			return nil, fmt.Errorf("market: derive BRC-29 script: %w", dErr)
-		}
-		if uint64(req.OutputIndex) >= uint64(len(tx.Outputs)) {
-			return nil, fmt.Errorf("market: BRC-29 outputIndex %d out of range", req.OutputIndex)
-		}
-		out := tx.Outputs[req.OutputIndex]
-		if out.LockingScript == nil || !bytes.Equal(*out.LockingScript, *wantScript) {
-			return nil, errors.New("market: payment output does not match BRC-29 derivation")
-		}
-		paidSats = out.Satoshis
-	} else {
-		fundScript, err := b.mem.Chain().Signer().FundScript()
-		if err != nil {
-			return nil, err
-		}
-		fundHex := fundScript.String()
-		for _, out := range tx.Outputs {
-			if out.LockingScript != nil && out.LockingScript.String() == fundHex {
-				paidSats += out.Satoshis
-			}
-		}
-	}
-	if paidSats < sale.SaleOffer.Config.Price {
-		return nil, fmt.Errorf("market: insufficient payment (%d < %d sats)", paidSats, sale.SaleOffer.Config.Price)
+	isEscrow, isBRC29, paidSats, escrowParams, err := b.verifyPurchasePaymentOutput(ctx, req, sale, tx, nowUnix)
+	if err != nil {
+		return nil, err
 	}
 
 	// Full consensus SPV verification (spv.Verify + REFUSED-BUMP + tracker outage separation + settleDepth +
@@ -297,11 +178,6 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 				_ = b.mem.DB().ReleasePaymentClaim(txid)
 				return nil, fmt.Errorf("market: internalize BRC-29 payment: %w", iErr)
 			}
-		} else if !isEscrow {
-			if _, aErr := b.mem.Chain().AdoptReceived(ctx, tx); aErr != nil {
-				_ = b.mem.DB().ReleasePaymentClaim(txid)
-				return nil, fmt.Errorf("market: adopt received payment: %w", aErr)
-			}
 		}
 	}
 
@@ -349,30 +225,42 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 			BboxOffice:    b.cfg.BboxOffice,
 			CreatedAt:     time.Now().Unix(),
 		}
+		if isEscrow {
+			entry.IsEscrow = true
+			entry.EscrowVout = req.OutputIndex
+			entry.EscrowBEEFHex = strings.TrimSpace(req.PaymentBEEFHex)
+			entry.EscrowSellerPKH = hex.EncodeToString(escrowParams.SellerPKH)
+			entry.DepositorPKH = hex.EncodeToString(escrowParams.DepositorPKH)
+			entry.EscrowRefundAfter = escrowParams.RefundAfter
+			entry.EscrowMaxFee = escrowParams.MaxFee
+		}
 		b.mu.Lock()
 		b.pendingConfirmations[txid] = entry
 		b.mu.Unlock()
 		_ = b.mem.DB().SetJSON("pending_confirm:"+txid, entry)
-		_ = b.mem.DB().SaveDeal(store.DealRecord{
+		sealedPendingKey, sealErr := b.sealKeyAtRest(ctx, hex.EncodeToString(sale.RevealKey[:]))
+		if sealErr != nil {
+			return nil, sealErr
+		}
+		b.engine.persistDealRecord(store.DealRecord{
 			DealID:          "sell-" + sale.OfferID,
 			Role:            "seller",
 			Status:          "payment_pending",
 			Shard:           sale.Shard,
 			PaymentTxID:     txid,
 			PaymentBEEF:     beefBytes,
-			ClaimKeyHex:     b.sealKeyAtRest(ctx, hex.EncodeToString(sale.RevealKey[:])),
+			ClaimKeyHex:     sealedPendingKey,
 			ChirpURL:        sale.ChirpURL,
 			CounterpartyPub: req.BuyerPub,
 			PriceSats:       sale.SaleOffer.Config.Price,
 			IsHubSeller:     b.cfg.IsHub,
 		})
 		if rc := b.RestateClient(); rc != nil {
-			go func(oid, tid, sh string, sats uint64) {
-				sCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				_, _ = rc.DeliverSellerPayment(sCtx, oid, PaymentSignal{TxID: tid, AmountSats: sats, Confirmed: false})
+			oid, tid, sh, sats := sale.OfferID, txid, sale.Shard, paidSats
+			b.spawnTracked(10*time.Second, func(sCtx context.Context) {
+				_, _ = rc.DeliverSellerPaymentAsync(sCtx, oid, PaymentSignal{TxID: tid, AmountSats: sats, Confirmed: false})
 				_, _ = rc.EmitTxEvent(sCtx, tid, TxEventInput{Kind: "broadcast", Shard: sh, Detail: "seller-sale-pending:" + oid})
-			}(sale.OfferID, txid, sale.Shard, paidSats)
+			})
 		}
 		return &PurchaseResponse{
 			OK:            true,
@@ -384,16 +272,16 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		}, nil
 	}
 
-	freshPB := refreshProof(sale)
+	freshPB := b.refreshPendingSaleProof(ctx, sale)
 	// Mark settled & persist durable Seller DealRecord!
 	b.mu.Lock()
 	sale.Settled = true
 	b.mu.Unlock()
-	// Build seller-signed third-entry DealReceipt (bilateral countersignature completed by buyer).
+	// Build seller-signed third-entry DealReceipt using market saleKey (matching OfferAd.Pub and req.BuyerPub)
+	// so Buyer can countersign bilaterally without mutating BuyerPub or invalidating SellerSig!
 	var sellerReceipt *DealReceipt
 	var sellerReceiptJSON []byte
-	if sPub, pErr := b.mem.Chain().SigningPubKey(ctx); pErr == nil && sPub != nil {
-		sellerSignPub := hex.EncodeToString(sPub.Compressed())
+	if sellerSignPub := b.engine.salePubHex(); sellerSignPub != "" {
 		dr := DealReceipt{
 			Version:            1,
 			DealID:             sale.WantID,
@@ -410,14 +298,18 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		if freshPB != nil {
 			dr.FragmentLeaf = freshPB.Leaf
 		}
-		if sErr := SignDealReceiptSeller(ctx, sellerSignPub, b.mem.Chain().SignDigest, &dr); sErr == nil {
+		if sErr := SignDealReceiptSeller(ctx, sellerSignPub, b.engine.signSaleDigest, &dr); sErr == nil {
 			sellerReceipt = &dr
 			sellerReceiptJSON, _ = json.Marshal(dr)
 		}
 	}
 
+	sealedClaimKey, sealErr := b.sealKeyAtRest(ctx, hex.EncodeToString(sale.RevealKey[:]))
+	if sealErr != nil {
+		return nil, sealErr
+	}
 	_ = b.mem.DB().MarkPendingSaleSettled(sale.OfferID)
-	_ = b.mem.DB().SaveDeal(store.DealRecord{
+	b.engine.persistDealRecord(store.DealRecord{
 		DealID:          "sell-" + sale.OfferID,
 		Role:            "seller",
 		Status:          "settled",
@@ -425,7 +317,7 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		DealReceiptJSON: sellerReceiptJSON,
 		PaymentTxID:     txid,
 		PaymentBEEF:     beefBytes,
-		ClaimKeyHex:     b.sealKeyAtRest(ctx, hex.EncodeToString(sale.RevealKey[:])),
+		ClaimKeyHex:     sealedClaimKey,
 		ChirpURL:        sale.ChirpURL,
 		CounterpartyPub: req.BuyerPub,
 		PriceSats:       sale.SaleOffer.Config.Price,
@@ -449,12 +341,11 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		mpHex = tx.MerklePath.Hex()
 	}
 	if rc := b.RestateClient(); rc != nil {
-		go func(oid, tid, sh, mp string, sats uint64, conf bool, bh uint32) {
-			sCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			_, _ = rc.DeliverSellerPayment(sCtx, oid, PaymentSignal{TxID: tid, AmountSats: sats, Confirmed: conf, BlockHeight: bh, MerklePathHex: mp})
+		oid, tid, sh, mp, sats, conf, bh := sale.OfferID, txid, sale.Shard, mpHex, paidSats, confirmed, confirmHeight
+		b.spawnTracked(10*time.Second, func(sCtx context.Context) {
+			_, _ = rc.DeliverSellerPaymentAsync(sCtx, oid, PaymentSignal{TxID: tid, AmountSats: sats, Confirmed: conf, BlockHeight: bh, MerklePathHex: mp})
 			_, _ = rc.EmitTxEvent(sCtx, tid, TxEventInput{Kind: "broadcast", Shard: sh, Detail: "seller-sale:" + oid})
-		}(sale.OfferID, txid, sale.Shard, mpHex, paidSats, confirmed, confirmHeight)
+		})
 	}
 
 	return &PurchaseResponse{
@@ -470,34 +361,4 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		ProofBundle:    freshPB,
 		DealReceipt:    sellerReceipt,
 	}, nil
-}
-
-// AcceptDealReceiptCountersig verifies and persists a buyer-countersigned bilateral DealReceipt on Seller's book,
-// fulfilling Seller's receipt_countersig_owed obligation.
-func (b *Broker) AcceptDealReceiptCountersig(rcp DealReceipt) error {
-	if vr := VerifyDealReceipt(rcp, true); !vr.OK || !vr.Bilateral {
-		return fmt.Errorf("market: invalid bilateral deal receipt: %s", vr.Error)
-	}
-	matchesLocal := strings.EqualFold(rcp.SellerPub, b.PubHex())
-	if !matchesLocal {
-		if sPub, err := b.mem.Chain().SigningPubKey(context.Background()); err == nil && sPub != nil {
-			matchesLocal = strings.EqualFold(rcp.SellerPub, hex.EncodeToString(sPub.Compressed()))
-		}
-	}
-	if !matchesLocal {
-		return errors.New("market: deal receipt sellerPub does not match local node")
-	}
-	raw, err := json.Marshal(rcp)
-	if err != nil {
-		return err
-	}
-	dealID := "sell-" + rcp.OfferID
-	b.engine.persistDealRecord(store.DealRecord{
-		DealID:          dealID,
-		Role:            "seller",
-		Status:          "settled",
-		DealReceiptJSON: raw,
-	})
-	_ = FulfillCountersigOwed(b.mem.DB(), dealID)
-	return nil
 }

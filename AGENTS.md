@@ -35,16 +35,17 @@ When answering a factual question that could come from memory:
 - `internal/discovery` — verified peer directory announcements, multi-host quorum withholding detection, bfinger handle resolution, and remote CHIRP closure fetching
 - `internal/policy` — native AWS Cedar authorizer (`github.com/cedar-policy/cedar-go`) with fail-closed diagnostics, canonical policy commitments, decision receipts, and bounded level-isolation verification
 - `internal/reasoning` — native Google Mangle stratified Datalog (`codeberg.org/TauCeti/mangle-go`), claim grounding (quote + ground-atom Mangle + overlap-checked quote-backed synthesis), bi-temporal AORG, `nektarr1.*` receipts, and §16 delegations
-- `internal/memory` — unified `NektarMemory` domain service (`Remember`, `Forget`, `AnchorShard`, `ReconcilePendingAnchors`, `Recall`, `Prove`, `GroundedAnswer`, `VerifyReceipt`, `OnRevision`, CHIRP shard packs)
-- `internal/market` — deterministic bps offer ranking, operator spending policy + kill switch, Restate Go SDK durable workflows (`BuyerDeal`, `SellerDeal`, `AnchorCadence`, `Custody`) as the sole live-network deal engine, and atomic BRC-29 + BRC-369 knowledge trades
+- `internal/memrepo` — Git-compatible content-addressed Memory Repo objects (`CommitObject`, `TreeObject`, `BlobObject`), pure-Go `go-git/v5` projection/diff/blame/line-level diff3 merge, `.nkt` CHIRP Memory Capsule codec & offline SPV verifier, and `.git` workspace checkout
+- `internal/memory` — unified `NektarMemory` domain service (`Remember`, `Forget`, `AnchorShard`, `ReconcilePendingAnchors`, `Recall`, `Prove`, `GroundedAnswer`, `VerifyReceipt`, `OnRevision`, Memory Repo CRUD/merge/branch/tag/capsule export-import, CHIRP shard packs)
+- `internal/market` — deterministic bps offer ranking, operator spending policy + kill switch, Restate Go SDK durable workflows (`BuyerDeal`, `SellerDeal`, `StandingOrder`, `EscrowGuardian`, `AnchorCadence`, `Custody`) as the sole live-network deal engine, and atomic BRC-29 + BRC-369 knowledge trades
 - `internal/hub` — embedded Go Overlay Hub mounting `tm_nektar_<net>_0..f`/`ls_nektar` alongside Lightweb's Go modules (`bfinger`, `bbox`, `blogs`, `borg`, `bsecret`, `bstore`) with native SSE `/events` push and liquidity bounties
 - `internal/server` — official `modelcontextprotocol/go-sdk` stdio + Streamable HTTP `/mcp`, REST API, A2A (`/.well-known/agent.json`, `/a2a`), L0 transparent OpenAI/Anthropic LLM memory proxy, BRC-105/402 BRC-29-verified paid-tool gate, `/v1/metrics`, and `//go:embed all:ui_dist` Svelte 5 dashboard
-- `cmd/nektar` — single-binary CLI (`serve`, `mcp`, `hub`, `wallet`, `remember`, `recall`, `anchor`, `verify`, `status`, `check-mainnet`, `dock`, `version`) with OS advisory instance locking and managed `restate-server` sidecar
+- `cmd/nektar` — single-binary CLI (`serve`, `mcp`, `hub`, `wallet`, `repo`, `remember`, `recall`, `anchor`, `verify`, `status`, `check-mainnet`, `dock`, `version`) with OS advisory instance locking and managed `restate-server` sidecar
 
 ## Key Custody (`NEKTAR_WALLET`)
 
-- **`embedded` (default):** `lightwebinc/bcommon/bwallet` BRC-100 embedded wallet (`identity.json` + atomic `wallet.json` pool under `NEKTAR_DATA_DIR/wallet`). Keys are derived internally under BRC-43; raw private keys never leave `bwallet`.
-- **`client`:** `lightwebinc/bcommon/wirewallet` over loopback `http://127.0.0.1:3321` (BSV Desktop / Metanet Desktop) for attended testnet/mainnet nodes. Refused on `memory`/`regtest`.
+- **`embedded` (default):** `internal/wallet` pure-Go BRC-100 SQLite wallet engine (`go-wallet-toolbox` backed by `NEKTAR_DATA_DIR/wallet/wallet.sqlite` + BRC-43/BRC-29 key derivation, UTXO basket/pool management, and ARC/BEEF broadcast reconciliation). Raw private keys never leave `internal/wallet`.
+- **`client`:** `lightwebinc/bcommon/wirewallet` over loopback `http://127.0.0.1:3321` (BSV Desktop / Metanet Desktop) for attended testnet/mainnet nodes, guarded by `SpendGuard`. Refused on `memory`/`regtest`.
 
 ## Honesty Rule
 

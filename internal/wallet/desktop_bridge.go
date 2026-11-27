@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -38,6 +37,36 @@ type DesktopProbeStatus struct {
 	Error       string `json:"error,omitempty"`
 }
 
+// isLoopbackTCPReachable performs a fast non-blocking TCP connect check (<= timeout) against wireURL
+// so offline BSV Desktop instances fail fast instead of stalling Monitor for 15s.
+func isLoopbackTCPReachable(ctx context.Context, wireURL string, timeout time.Duration) bool {
+	u, err := url.Parse(wireURL)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	hostPort := u.Host
+	if _, _, splitErr := net.SplitHostPort(hostPort); splitErr != nil {
+		if strings.EqualFold(u.Scheme, "https") {
+			hostPort = net.JoinHostPort(hostPort, "443")
+		} else {
+			hostPort = net.JoinHostPort(hostPort, "80")
+		}
+	}
+	if timeout <= 0 {
+		timeout = 250 * time.Millisecond
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	dialer := &net.Dialer{Timeout: timeout}
+	conn, dErr := dialer.DialContext(ctx, "tcp", hostPort)
+	if dErr != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 // ProbeDesktopWallet performs a fast non-blocking check for a local BRC-100 wallet on wireURL.
 // It checks TCP reachability first (<= 250ms) so offline machines never pay an HTTP timeout penalty.
 func ProbeDesktopWallet(ctx context.Context, wireURL string) DesktopProbeStatus {
@@ -49,25 +78,13 @@ func ProbeDesktopWallet(ctx context.Context, wireURL string) DesktopProbeStatus 
 		st.Error = err.Error()
 		return st
 	}
-	u, err := url.Parse(wireURL)
-	if err != nil || u.Host == "" {
+	if u, err := url.Parse(wireURL); err != nil || u.Host == "" {
 		st.Error = "invalid wire URL"
 		return st
 	}
-	hostPort := u.Host
-	if _, _, splitErr := net.SplitHostPort(hostPort); splitErr != nil {
-		if strings.EqualFold(u.Scheme, "https") {
-			hostPort = net.JoinHostPort(hostPort, "443")
-		} else {
-			hostPort = net.JoinHostPort(hostPort, "80")
-		}
-	}
-	dialer := &net.Dialer{Timeout: 250 * time.Millisecond}
-	conn, dErr := dialer.DialContext(ctx, "tcp", hostPort)
-	if dErr != nil {
+	if !isLoopbackTCPReachable(ctx, wireURL, 250*time.Millisecond) {
 		return st
 	}
-	_ = conn.Close()
 
 	pCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -216,19 +233,27 @@ func FundFromWireWallet(ctx context.Context, wireURL string, amountSats uint64, 
 		},
 	}, target.cfg.Originator)
 	if err != nil {
+		if !IsUncertainBroadcastError(err) {
+			// Definite pre-broadcast refusal (e.g. user cancelled prompt, insufficient funds): remove pending row.
+			_ = target.DeletePendingBRC29(ctx, pendingID)
+		}
 		return nil, fmt.Errorf("wallet desktop bridge: desktop CreateAction: %w", err)
 	}
 	txidStr := actRes.Txid.String()
 	if len(actRes.Tx) == 0 {
 		// Persist the broadcast txid BEFORE returning so ReconcilePendingBRC29 can recover via chain BEEF!
-		_ = target.UpdatePendingBRC29Tx(ctx, pendingID, txidStr, 0, nil, amountSats)
+		if uErr := target.UpdatePendingBRC29Tx(ctx, pendingID, txidStr, 0, nil, amountSats); uErr != nil {
+			target.logf("wallet desktop bridge: persist empty-BEEF txid %s (pending %d): %v", txidStr, pendingID, uErr)
+		}
 		return nil, fmt.Errorf("wallet desktop bridge: desktop CreateAction returned empty AtomicBEEF (txid %s persisted for recovery)", txidStr)
 	}
 
 	// Locate exact output index matching our derived locking script (fail closed on parse/match failure; never default outIdx=0).
 	_, parsedTx, _, pErr := guard.ParseBEEF(actRes.Tx, guard.DefaultBound)
 	if pErr != nil || parsedTx == nil {
-		_ = target.UpdatePendingBRC29Tx(ctx, pendingID, txidStr, 0, actRes.Tx, amountSats)
+		if uErr := target.UpdatePendingBRC29Tx(ctx, pendingID, txidStr, 0, actRes.Tx, amountSats); uErr != nil {
+			target.logf("wallet desktop bridge: persist unparsed BEEF %s (pending %d): %v", txidStr, pendingID, uErr)
+		}
 		return nil, fmt.Errorf("wallet desktop bridge: parse desktop AtomicBEEF for %s: %v", txidStr, pErr)
 	}
 	var outIdx uint32
@@ -241,10 +266,14 @@ func FundFromWireWallet(ctx context.Context, wireURL string, amountSats uint64, 
 		}
 	}
 	if !matched {
-		_ = target.UpdatePendingBRC29Tx(ctx, pendingID, txidStr, 0, actRes.Tx, amountSats)
+		if uErr := target.UpdatePendingBRC29Tx(ctx, pendingID, txidStr, 0, actRes.Tx, amountSats); uErr != nil {
+			target.logf("wallet desktop bridge: persist unmatched BEEF %s (pending %d): %v", txidStr, pendingID, uErr)
+		}
 		return nil, fmt.Errorf("wallet desktop bridge: broadcast tx %s missing expected BRC-29 output script", txidStr)
 	}
-	_ = target.UpdatePendingBRC29Tx(ctx, pendingID, txidStr, outIdx, actRes.Tx, amountSats)
+	if uErr := target.UpdatePendingBRC29Tx(ctx, pendingID, txidStr, outIdx, actRes.Tx, amountSats); uErr != nil {
+		target.logf("wallet desktop bridge: update pending BRC-29 %d (%s): %v", pendingID, txidStr, uErr)
+	}
 
 	// Immediately internalize AtomicBEEF + BRC-29 remittance into target Engine!
 	intRes, err := target.InternalizeAction(WithIncomingInternalize(ctx), sdkwallet.InternalizeActionArgs{
@@ -267,7 +296,9 @@ func FundFromWireWallet(ctx context.Context, wireURL string, amountSats uint64, 
 	if intRes == nil || !intRes.Accepted {
 		return nil, fmt.Errorf("wallet desktop bridge: Nektar rejected internalization of desktop fund tx %s", txidStr)
 	}
-	_ = target.MarkPendingBRC29Done(ctx, pendingID)
+	if mErr := target.MarkPendingBRC29Done(ctx, pendingID); mErr != nil {
+		target.logf("wallet desktop bridge: mark pending BRC-29 fund %d done (%s): %v", pendingID, txidStr, mErr)
+	}
 	target.fuel.Wake()
 
 	return &DesktopFundResult{
@@ -355,180 +386,12 @@ func SweepToWireWallet(ctx context.Context, wireURL string, source *Engine, over
 		if intRes == nil || !intRes.Accepted {
 			return out, fmt.Errorf("wallet desktop bridge: desktop rejected internalization for sweep %s", rem.TxID)
 		}
-		_ = source.MarkPendingBRC29DoneByTx(ctx, rem.TxID, rem.OutputIndex)
+		if mErr := source.MarkPendingBRC29DoneByTx(ctx, rem.TxID, rem.OutputIndex); mErr != nil {
+			source.logf("wallet desktop bridge: mark pending BRC-29 sweep done (%s:%d): %v", rem.TxID, rem.OutputIndex, mErr)
+		}
 		out.Internalized++
 	}
 	return out, nil
-}
-
-// ReconcilePendingBRC29 replays any persisted pending BRC-29 desktop fund/sweep transfers
-// that were interrupted by a crash or transient network failure between broadcast and internalization.
-func ReconcilePendingBRC29(ctx context.Context, e *Engine, defaultWireURL string) (int, error) {
-	if e == nil {
-		return 0, nil
-	}
-	pending, err := e.ListPendingBRC29(ctx)
-	if err != nil || len(pending) == 0 {
-		return 0, err
-	}
-	reconciled := 0
-	var firstErr error
-	for _, rec := range pending {
-		preRaw, err1 := base64.StdEncoding.DecodeString(rec.DerivationPrefix)
-		sufRaw, err2 := base64.StdEncoding.DecodeString(rec.DerivationSuffix)
-		if err1 != nil || err2 != nil {
-			continue
-		}
-		switch rec.Direction {
-		case "fund":
-			beef := rec.AtomicBEEF
-			outIdx := rec.OutputIndex
-			txID := rec.TxID
-			// Recover pre-UpdatePendingBRC29Tx crash by scanning local/chain outputs matching LockingScriptHex.
-			if len(beef) == 0 && txID == "" && rec.LockingScriptHex != "" {
-				if foundTxID, foundVout, foundBeef := e.findTxByLockingScript(ctx, rec.LockingScriptHex); foundTxID != "" {
-					txID = foundTxID
-					outIdx = foundVout
-					beef = foundBeef
-					_ = e.UpdatePendingBRC29Tx(ctx, rec.ID, txID, outIdx, beef, rec.Satoshis)
-				}
-			}
-			if len(beef) == 0 && txID != "" {
-				if tx, tErr := e.LoadParsedTx(ctx, txID); tErr == nil && tx != nil {
-					beef, _ = SafeAtomicBEEF(tx)
-				}
-				if len(beef) == 0 {
-					if bObj, bErr := e.svc.GetBEEF(ctx, txID, nil); bErr == nil && bObj != nil {
-						if tx := bObj.FindTransaction(txID); tx != nil {
-							beef, _ = SafeAtomicBEEF(tx)
-							if rec.LockingScriptHex != "" {
-								if wantLS, hErr := hex.DecodeString(rec.LockingScriptHex); hErr == nil {
-									for idx, o := range tx.Outputs {
-										if o.LockingScript != nil && string(*o.LockingScript) == string(wantLS) {
-											outIdx = uint32(idx)
-											break
-										}
-									}
-								}
-							}
-							_ = e.UpdatePendingBRC29Tx(ctx, rec.ID, txID, outIdx, beef, rec.Satoshis)
-						}
-					}
-				}
-			}
-			if len(beef) == 0 {
-				continue
-			}
-			// Skip cleanly if output is already internalized in wallet storage.
-			if txID != "" {
-				if existing, cErr := e.provider.OutputsEntity().Read().UserID().Equals(e.userID).TxID().Equals(txID).Vout().Equals(outIdx).Count(ctx); cErr == nil && existing > 0 {
-					_ = e.MarkPendingBRC29Done(ctx, rec.ID)
-					reconciled++
-					continue
-				}
-			}
-			senderPub, pErr := guard.ParsePubKeyHex(rec.CounterpartyPub)
-			if pErr != nil {
-				if firstErr == nil {
-					firstErr = pErr
-				}
-				continue
-			}
-			intRes, iErr := e.InternalizeAction(ctx, sdkwallet.InternalizeActionArgs{
-				Tx:          beef,
-				Description: "Recovered BRC-29 funding payment from BSV Desktop",
-				Labels:      []string{"desktop-fund", "brc29", "recovered"},
-				Outputs: []sdkwallet.InternalizeOutput{{
-					OutputIndex: outIdx,
-					Protocol:    sdkwallet.InternalizeProtocolWalletPayment,
-					PaymentRemittance: &sdkwallet.Payment{
-						DerivationPrefix:  preRaw,
-						DerivationSuffix:  sufRaw,
-						SenderIdentityKey: senderPub,
-					},
-				}},
-			}, e.cfg.Originator)
-			if iErr != nil || intRes == nil || !intRes.Accepted {
-				if iErr == nil {
-					iErr = errors.New("wallet: InternalizeAction declined BRC-29 fund recovery")
-				}
-				if firstErr == nil {
-					firstErr = iErr
-				}
-				continue
-			}
-			_ = e.MarkPendingBRC29Done(ctx, rec.ID)
-			reconciled++
-
-		case "sweep":
-			beef := rec.AtomicBEEF
-			outIdx := rec.OutputIndex
-			txID := rec.TxID
-			// Recover pre-UpdatePendingBRC29Tx crash by scanning wallet.sqlite outputs matching LockingScriptHex.
-			if len(beef) == 0 && txID == "" && rec.LockingScriptHex != "" {
-				if foundTxID, foundVout, foundBeef := e.findTxByLockingScript(ctx, rec.LockingScriptHex); foundTxID != "" {
-					txID = foundTxID
-					outIdx = foundVout
-					beef = foundBeef
-					_ = e.UpdatePendingBRC29Tx(ctx, rec.ID, txID, outIdx, beef, rec.Satoshis)
-				}
-			}
-			if len(beef) == 0 && txID != "" {
-				if tx, tErr := e.LoadParsedTx(ctx, txID); tErr == nil && tx != nil {
-					beef, _ = SafeAtomicBEEF(tx)
-				}
-			}
-			if len(beef) == 0 {
-				continue
-			}
-			wURL := rec.WireURL
-			if wURL == "" {
-				wURL = defaultWireURL
-			}
-			if wURL == "" {
-				wURL = DefaultDesktopWireURL
-			}
-			if cErr := wirewallet.CheckURL(wURL); cErr != nil {
-				if firstErr == nil {
-					firstErr = cErr
-				}
-				continue
-			}
-			desktop, dErr := dialWireWallet(e.cfg.Originator, wURL, 15*time.Second)
-			if dErr != nil {
-				if firstErr == nil {
-					firstErr = dErr
-				}
-				continue
-			}
-			intRes, iErr := desktop.InternalizeAction(ctx, sdkwallet.InternalizeActionArgs{
-				Tx:          beef,
-				Description: "Recovered swept funds from Nektar agent wallet",
-				Labels:      []string{"nektar", "sweep", "recovered"},
-				Outputs: []sdkwallet.InternalizeOutput{{
-					OutputIndex: outIdx,
-					Protocol:    sdkwallet.InternalizeProtocolWalletPayment,
-					PaymentRemittance: &sdkwallet.Payment{
-						DerivationPrefix:  preRaw,
-						DerivationSuffix:  sufRaw,
-						SenderIdentityKey: e.IdentityKey(),
-					},
-				}},
-			}, e.cfg.Originator)
-			if iErr != nil || intRes == nil || !intRes.Accepted {
-				if iErr == nil {
-					iErr = errors.New("wallet: remote desktop declined BRC-29 sweep internalization")
-				}
-				if firstErr == nil {
-					firstErr = iErr
-				}
-				continue
-			}
-			_ = e.MarkPendingBRC29Done(ctx, rec.ID)
-			reconciled++
-		}
-	}
-	return reconciled, firstErr
 }
 
 func checkMatchingNetwork(ctx context.Context, remote sdkwallet.Interface, localMainnet bool, originator string) error {

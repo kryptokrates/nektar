@@ -3,6 +3,7 @@ package hub
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,12 +24,6 @@ func (n *Node) broadcastEvent(ev bstack.MarketEvent, domains []string) {
 		}
 	}
 	n.mu.RUnlock()
-}
-
-// Subscribe registers a channel receiving live admitted market events (optional domain filter).
-func (n *Node) Subscribe(domains ...string) (<-chan bstack.MarketEvent, func()) {
-	ch, unsub, _ := n.TrySubscribe(domains...)
-	return ch, unsub
 }
 
 // TrySubscribe registers an SSE subscriber if below maxHubSSESubs.
@@ -80,11 +75,19 @@ func (n *Node) handleSync(w http.ResponseWriter, r *http.Request) {
 				n.writeFeeOutcome(w, ActionEgressTopup, n.fees.EgressMinTopupSats, out)
 				return
 			}
-			_, _ = n.store.CreditEgressMilliSats(callerPub, int64(out.PaidSats)*1000, out.PaidSats)
+			if _, cErr := n.store.CreditEgressMilliSats(callerPub, int64(out.PaidSats)*1000, out.PaidSats); cErr != nil {
+				log.Printf("hub: CreditEgressMilliSats failed on /sync txid=%s payer=%s: %v", out.TxID, callerPub, cErr)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to credit egress balance: " + cErr.Error()})
+				return
+			}
 		}
 		// Require at least 1 event worth of credit upfront so 0-credit free-riders cannot poll /sync endlessly.
 		if !isSpinePeer {
-			cred, _ := n.store.GetEgressCredit(callerPub)
+			cred, gErr := n.store.GetEgressCredit(callerPub)
+			if gErr != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "egress credit lookup failed: " + gErr.Error()})
+				return
+			}
 			if cred.BalanceMilliSats < msatsPerEvent {
 				n.writeFeeOutcome(w, ActionEgressTopup, n.fees.EgressMinTopupSats, feeCollectOutcome{
 					HTTPStatus: http.StatusPaymentRequired,
@@ -101,11 +104,31 @@ func (n *Node) handleSync(w http.ResponseWriter, r *http.Request) {
 		// Hub DB was reset/migrated so client cursor is ahead of the entire log; resync cleanly from 0.
 		cursor = 0
 	}
-	items, err := n.store.EventsSince(cursor, doms, 200)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	const syncPageSize = 200
+	scanCursor := cursor
+	var items []StoredEvent
+	totalRaw := 0
+	for pages := 0; pages < 25; pages++ {
+		chunk, nextCursor, rawCount, err := n.store.EventsSinceScanned(scanCursor, doms, syncPageSize)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		totalRaw += rawCount
+		if nextCursor > scanCursor {
+			scanCursor = nextCursor
+		}
+		items = append(items, chunk...)
+		if rawCount < syncPageSize || len(doms) == 0 || len(items) >= syncPageSize {
+			break
+		}
 	}
+	if len(items) > syncPageSize {
+		items = items[:syncPageSize]
+		scanCursor = items[len(items)-1].Seq
+	}
+	w.Header().Set("X-Nektar-Next-Cursor", strconv.FormatInt(scanCursor, 10))
+	w.Header().Set("X-Nektar-Raw-Count", strconv.Itoa(totalRaw))
 	if metered && !isSpinePeer {
 		var billable int64
 		for _, it := range items {
@@ -164,10 +187,18 @@ func (n *Node) handleEvents(w http.ResponseWriter, r *http.Request) {
 				n.writeFeeOutcome(w, ActionEgressTopup, n.fees.EgressMinTopupSats, out)
 				return
 			}
-			_, _ = n.store.CreditEgressMilliSats(callerPub, int64(out.PaidSats)*1000, out.PaidSats)
+			if _, cErr := n.store.CreditEgressMilliSats(callerPub, int64(out.PaidSats)*1000, out.PaidSats); cErr != nil {
+				log.Printf("hub: CreditEgressMilliSats failed on /events txid=%s payer=%s: %v", out.TxID, callerPub, cErr)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to credit egress balance: " + cErr.Error()})
+				return
+			}
 		}
 		if !isSpinePeer {
-			cred, _ := n.store.GetEgressCredit(callerPub)
+			cred, gErr := n.store.GetEgressCredit(callerPub)
+			if gErr != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "egress credit lookup failed: " + gErr.Error()})
+				return
+			}
 			if cred.BalanceMilliSats < msatsPerEvent {
 				n.writeFeeOutcome(w, ActionEgressTopup, n.fees.EgressMinTopupSats, feeCollectOutcome{
 					HTTPStatus: http.StatusPaymentRequired,
@@ -215,6 +246,14 @@ func (n *Node) handleEvents(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, "event: payment_required\ndata: %s\n\n", msg)
 		flusher.Flush()
 	}
+	emitStreamError := func(code, errMsg string) {
+		msg, _ := json.Marshal(map[string]any{
+			"code":  code,
+			"error": errMsg,
+		})
+		_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", msg)
+		flusher.Flush()
+	}
 
 	var lastSent int64 = cursor
 	if cursor >= 0 && (r.URL.Query().Has("cursor") || r.Header.Get("Last-Event-ID") != "") {
@@ -228,7 +267,12 @@ func (n *Node) handleEvents(w http.ResponseWriter, r *http.Request) {
 			scanCursor = nextCursor
 			for _, st := range backlog {
 				if metered && !isSpinePeer && st.Kind != bstack.KindAnnounce {
-					rem, ok, _ := n.store.ChargeEgressEvents(callerPub, 1, msatsPerEvent)
+					rem, ok, cErr := n.store.ChargeEgressEvents(callerPub, 1, msatsPerEvent)
+					if cErr != nil {
+						log.Printf("hub: ChargeEgressEvents failed on /events backlog payer=%s: %v", callerPub, cErr)
+						emitStreamError("ERR_HUB_STORE_UNAVAILABLE", cErr.Error())
+						return
+					}
 					if !ok {
 						emitPaymentRequired(rem)
 						return
@@ -276,7 +320,12 @@ func (n *Node) handleEvents(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if metered && !isSpinePeer && ev.Payload.Kind != bstack.KindAnnounce {
-				rem, ok, _ := n.store.ChargeEgressEvents(callerPub, 1, msatsPerEvent)
+				rem, ok, cErr := n.store.ChargeEgressEvents(callerPub, 1, msatsPerEvent)
+				if cErr != nil {
+					log.Printf("hub: ChargeEgressEvents failed on /events live payer=%s: %v", callerPub, cErr)
+					emitStreamError("ERR_HUB_STORE_UNAVAILABLE", cErr.Error())
+					return
+				}
 				if !ok {
 					emitPaymentRequired(rem)
 					return

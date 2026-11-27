@@ -20,7 +20,7 @@ export function shortHash(h: string, head = 10, tail = 6): string {
   return `${h.slice(0, head)}…${h.slice(-tail)}`
 }
 
-export function agoSec(sec: number): string {
+function agoSec(sec: number): string {
   if (sec < 60) return `${Math.max(0, Math.floor(sec))}s`
   const m = Math.floor(sec / 60)
   if (m < 60) return `${m}m`

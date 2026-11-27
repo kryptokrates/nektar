@@ -164,25 +164,19 @@ func NewWitnessedTracker(network string, witnesses []NamedWitness) (*WitnessedTr
 	quorum := 1
 	minDiff := 0.0
 	switch netNorm {
-	case "main":
+	case "main", "testnet":
 		if len(witnesses) < 2 {
-			return nil, fmt.Errorf("%w: mainnet requires >=2 distinct-origin header witnesses", ErrCircularHeaderAnchor)
+			return nil, fmt.Errorf("%w: live network %q requires >=2 distinct-origin header witnesses", ErrCircularHeaderAnchor, netNorm)
 		}
 		quorum = len(witnesses)/2 + 1
 		if quorum < 2 {
 			quorum = 2
 		}
-		minDiff = headers.MainnetMinDifficulty
-	case "testnet":
-		if len(witnesses) >= 2 {
-			quorum = len(witnesses)/2 + 1
-			if quorum < 2 {
-				quorum = 2
-			}
+		if netNorm == "main" {
+			minDiff = headers.MainnetMinDifficulty
 		} else {
-			quorum = 1
+			minDiff = TestnetMinDifficulty
 		}
-		minDiff = TestnetMinDifficulty
 	default:
 		if len(witnesses) >= 2 {
 			quorum = len(witnesses)/2 + 1
@@ -204,12 +198,6 @@ func NewWitnessedTracker(network string, witnesses []NamedWitness) (*WitnessedTr
 
 // Network returns the normalized network name ("main", "testnet", "regtest", "memory").
 func (t *WitnessedTracker) Network() string { return t.network }
-
-// WitnessCount returns the number of configured independent witnesses.
-func (t *WitnessedTracker) WitnessCount() int { return len(t.witnesses) }
-
-// Quorum returns the minimum number of agreeing distinct-origin witnesses required.
-func (t *WitnessedTracker) Quorum() int { return t.quorum }
 
 // OnReorg registers a callback invoked whenever a header fork/reorg is detected.
 func (t *WitnessedTracker) OnReorg(fn ReorgHandler) {
@@ -310,10 +298,30 @@ func (t *WitnessedTracker) IsValidRootForHeight(ctx context.Context, root *chain
 	return entry.hdr.MerkleRoot == *root, nil
 }
 
-// CurrentHeight queries all witnesses for their tip, requires quorum agreement within maxTipSkew,
-// verifies the conservative tip's 80-byte PoW header (never trusting bare JSON heights), and triggers
-// reorg detection when the tip regresses or changes hash.
+func findQuorumTipCluster(heights []uint32, quorum int, maxSkew uint32) (uint32, bool) {
+	if len(heights) < quorum || quorum <= 0 {
+		return 0, false
+	}
+	sorted := append([]uint32(nil), heights...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	for i := len(sorted) - 1; i >= quorum-1; i-- {
+		low := sorted[i-quorum+1]
+		high := sorted[i]
+		if high-low <= maxSkew {
+			return low, true
+		}
+	}
+	return 0, false
+}
+
+// CurrentHeight queries all witnesses for their tip, returns immediately once a quorum cluster agrees
+// within maxTipSkew (or quorum becomes impossible) while canceling slow stragglers, verifies the
+// conservative tip's 80-byte PoW header (never trusting bare JSON heights), and triggers reorg
+// detection when the tip regresses or changes hash.
 func (t *WitnessedTracker) CurrentHeight(ctx context.Context) (uint32, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if t.isNativeOnly() {
 		h, err := t.witnesses[0].Source.CurrentHeight(ctx)
 		if err != nil {
@@ -338,54 +346,58 @@ func (t *WitnessedTracker) CurrentHeight(ctx context.Context) (uint32, error) {
 		h   uint32
 		err error
 	}
-	results := make([]res, len(t.witnesses))
-	var wg sync.WaitGroup
-	for i, w := range t.witnesses {
-		wg.Add(1)
-		go func(idx int, witness NamedWitness) {
-			defer wg.Done()
-			h, err := witness.Source.CurrentHeight(ctx)
-			results[idx] = res{h: h, err: err}
-		}(i, w)
+	qCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	resCh := make(chan res, len(t.witnesses))
+	for _, w := range t.witnesses {
+		go func(witness NamedWitness) {
+			h, err := witness.Source.CurrentHeight(qCtx)
+			resCh <- res{h: h, err: err}
+		}(w)
 	}
-	wg.Wait()
 
 	var heights []uint32
 	var errs []error
-	for _, r := range results {
+	var tip uint32
+	foundCluster := false
+	for received := 0; received < len(t.witnesses); received++ {
+		r := <-resCh
 		if r.err != nil {
 			errs = append(errs, r.err)
-			continue
-		}
-		if r.h == 0 {
+		} else if r.h == 0 {
 			errs = append(errs, errors.New("witness reported height 0"))
-			continue
+		} else {
+			heights = append(heights, r.h)
+			if qTip, ok := findQuorumTipCluster(heights, t.quorum, defaultMaxTipSkew); ok {
+				tip = qTip
+				foundCluster = true
+				cancel()
+				break
+			}
 		}
-		heights = append(heights, r.h)
+		remaining := len(t.witnesses) - received - 1
+		if len(heights)+remaining < t.quorum {
+			cancel()
+			break
+		}
 	}
 	if len(heights) < t.quorum {
 		return 0, fmt.Errorf("%w: got %d/%d tip heights (%w)", ErrHeaderQuorumUnavailable, len(heights), t.quorum, errors.Join(errs...))
 	}
-	sort.Slice(heights, func(i, j int) bool { return heights[i] < heights[j] })
-
-	// Find largest cluster within defaultMaxTipSkew of size >= quorum and take its conservative min.
-	var tip uint32
-	foundCluster := false
-	for i := len(heights) - 1; i >= t.quorum-1; i-- {
-		low := heights[i-t.quorum+1]
-		high := heights[i]
-		if high-low <= defaultMaxTipSkew {
-			tip = low
-			foundCluster = true
-			break
-		}
-	}
 	if !foundCluster {
-		return 0, fmt.Errorf("%w: witness tip heights diverge excessively: %v", ErrHeaderDisagreement, heights)
+		var ok bool
+		tip, ok = findQuorumTipCluster(heights, t.quorum, defaultMaxTipSkew)
+		if !ok {
+			sort.Slice(heights, func(i, j int) bool { return heights[i] < heights[j] })
+			return 0, fmt.Errorf("%w: witness tip heights diverge excessively: %v", ErrHeaderDisagreement, heights)
+		}
 	}
 
 	// Verify the tip header's PoW and Prev-linkage rather than trusting a bare JSON integer.
-	entry, reorgHandled, err := t.fetchAndLinkHeader(ctx, tip, false)
+	// useCache=true fetches tip itself fresh while reusing already-verified cached ancestors,
+	// automatically falling back to uncached linkWindow refetch if Prev-hash linkage diverges.
+	entry, reorgHandled, err := t.fetchAndLinkHeader(ctx, tip, true)
 	if err != nil {
 		return 0, fmt.Errorf("chain: verify tip header %d: %w", tip, err)
 	}
@@ -416,30 +428,6 @@ func (t *WitnessedTracker) CurrentHeight(ctx context.Context) (uint32, error) {
 	t.cachedTipAt = time.Now()
 	t.mu.Unlock()
 	return tip, nil
-}
-
-// VerifyDepth checks that root is valid at height AND has at least minDepth confirmations
-// against the witnessed chain tip. Returns (depth, meetsDepth, err).
-func (t *WitnessedTracker) VerifyDepth(ctx context.Context, root *chainhash.Hash, height uint32, minDepth int) (int, bool, error) {
-	if minDepth < 1 {
-		minDepth = 1
-	}
-	valid, err := t.IsValidRootForHeight(ctx, root, height)
-	if err != nil {
-		return 0, false, err
-	}
-	if !valid {
-		return 0, false, nil
-	}
-	tip, err := t.CurrentHeight(ctx)
-	if err != nil {
-		return 0, false, err
-	}
-	if tip < height {
-		return 0, false, nil
-	}
-	depth := int(tip-height) + 1
-	return depth, depth >= minDepth, nil
 }
 
 // MedianTimePast implements spv.MedianTimePastProvider by computing Bitcoin's consensus

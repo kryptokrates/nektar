@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/lightwebinc/bcommon/guard"
@@ -154,7 +155,6 @@ func OpenCheckpointBond(
 	if err != nil {
 		return nil, fmt.Errorf("market: broadcast bond open tx: %w", err)
 	}
-	_ = port.AdoptChange(tx)
 	if fresh, bErr := chain.SafeAtomicBEEF(tx); bErr == nil && len(fresh) > 0 {
 		beef = fresh
 	}
@@ -293,11 +293,49 @@ func CloseActiveBond(ctx context.Context, db *store.DB, port *chain.Port) (strin
 	return txid, closeTx.Outputs[0].Satoshis, nil
 }
 
+// CompactBondWithBUMP attaches a verified mined MerklePath to the persisted active bond UTXO
+// and re-encodes its AtomicBEEF so pruned ancestors drop out once the bond tx mines.
+func CompactBondWithBUMP(ctx context.Context, db *store.DB, port *chain.Port, txid string, mp *transaction.MerklePath) {
+	if db == nil || txid == "" || mp == nil {
+		return
+	}
+	if port != nil && port.Network() != "memory" && port.Tracker() != nil {
+		txH, err := chainhash.NewHashFromHex(txid)
+		if err != nil || txH == nil {
+			return
+		}
+		root, err := mp.ComputeRoot(txH)
+		if err != nil || root == nil {
+			return
+		}
+		ok, err := port.Tracker().IsValidRootForHeight(ctx, root, mp.BlockHeight)
+		if err != nil || !ok {
+			return
+		}
+	}
+	checkpointBondMu.Lock()
+	defer checkpointBondMu.Unlock()
+	rec, tx, err := LoadActiveBond(db)
+	if err != nil || rec == nil || tx == nil || !strings.EqualFold(rec.TxID, txid) {
+		return
+	}
+	tx.MerklePath = mp
+	compacted, err := chain.SafeAtomicBEEF(tx)
+	if err != nil || len(compacted) == 0 {
+		return
+	}
+	rec.BEEFHex = hex.EncodeToString(compacted)
+	_ = SaveActiveBond(db, *rec)
+}
+
 // VerifyOfferBondSats SPV-verifies an OfferAd's advertised NektarCheckpointBond (BondOutpoint + BondBEEFHex),
 // binding OperatorPKH to the offer's PayAddress (preventing stolen/copied bond spoofing) and checking
 // that the bond is active (!Seized), un-expired, and valid against port's ChainTracker!
 // Returns verified bond satoshis (0 on any missing, invalid, seized, expired, or unowned bond).
 func VerifyOfferBondSats(ctx context.Context, offer bstack.OfferAd, port *chain.Port) uint64 {
+	if port == nil {
+		return 0
+	}
 	if strings.TrimSpace(offer.BondOutpoint) == "" || strings.TrimSpace(offer.BondBEEFHex) == "" {
 		return 0
 	}
@@ -319,13 +357,12 @@ func VerifyOfferBondSats(ctx context.Context, offer bstack.OfferAd, port *chain.
 			expectedOpPKH = append([]byte(nil), addr.PublicKeyHash...)
 		}
 	}
-	checkHeaders := port != nil && port.Network() != "memory"
-	if port == nil {
-		vr := contracts.VerifyCheckpointBondBEEF(ctx, beef, uint32(vout64), expectedOpPKH, nil, false)
-		if !vr.OK || !strings.EqualFold(vr.TxID, parts[0]) {
-			return 0
-		}
-		return vr.BondSats
+	if len(expectedOpPKH) != 20 {
+		return 0
+	}
+	checkHeaders := port.Network() != "memory"
+	if checkHeaders && port.Tracker() == nil {
+		return 0
 	}
 	vr := contracts.VerifyCheckpointBondBEEF(ctx, beef, uint32(vout64), expectedOpPKH, port.Tracker(), checkHeaders)
 	if !vr.OK || !strings.EqualFold(vr.TxID, parts[0]) {

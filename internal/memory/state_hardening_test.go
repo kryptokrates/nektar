@@ -179,24 +179,14 @@ func TestPolicyRulesAndAORGPersistAcrossRestartAndAddRulesPreservesVertices(t *t
 	if err != nil {
 		t.Fatalf("SetPolicy: %v", err)
 	}
-	v1, err := svc1.AppendAORGVertex(reasoning.Vertex{
-		Kind:   "empirical",
-		Phi:    "initial_fact(a).",
-		LogPos: 1,
-	}, nil, "seed")
-	if err != nil {
-		t.Fatalf("AppendAORGVertex: %v", err)
-	}
-	// AddRules must NOT wipe existing AORG vertex v1!
-	svc1.AddRules(`derived(X) :- initial_fact(X).`)
-	if len(svc1.AORG().Snapshot().Vertices) != 1 {
-		t.Fatalf("AddRules wiped AORG vertices! got %d", len(svc1.AORG().Snapshot().Vertices))
+	if err := svc1.AddRules(`derived(X) :- initial_fact(X).`); err != nil {
+		t.Fatalf("AddRules: %v", err)
 	}
 
 	_ = port1.Close()
 	_ = db1.Close()
 
-	// Reopen on the same SQLite DB and verify Cedar policy, Mangle rules, and AORG vertices survived restart!
+	// Reopen on the same SQLite DB and verify Cedar policy and Mangle rules survived restart!
 	db2, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -214,9 +204,8 @@ func TestPolicyRulesAndAORGPersistAcrossRestartAndAddRulesPreservesVertices(t *t
 	if svc2.PolicyCommit().Hash != pc1.Hash {
 		t.Fatalf("expected persisted Cedar policy hash %s, got %s", pc1.Hash, svc2.PolicyCommit().Hash)
 	}
-	snap2 := svc2.AORG().Snapshot()
-	if _, ok := snap2.Vertices[v1.H]; len(snap2.Vertices) != 1 || !ok {
-		t.Fatalf("expected persisted AORG vertex %s after restart, got %+v", v1.H, snap2.Vertices)
+	if len(svc2.rules) == 0 {
+		t.Fatalf("expected persisted Mangle rules after restart, got none")
 	}
 }
 
@@ -255,7 +244,7 @@ func TestRefreshAnchorProofsRejectsForgedBUMP(t *testing.T) {
 
 	// Record an unsettled batch anchor with a nonexistent txid -> RefreshAnchorProofs must keep settled=0.
 	fakeTxID := core.ToHex(core.DSHA256([]byte("forged-anchor-tx")))
-	if err := db.SaveBatchAnchor(store.BatchAnchor{
+	if err := db.SaveBatchAnchorStrict(store.BatchAnchor{
 		Shard:      "forged",
 		ShardID:    "sid",
 		N:          1,
@@ -277,5 +266,72 @@ func TestRefreshAnchorProofsRejectsForgedBUMP(t *testing.T) {
 	ba, _ := db.ListAnchors("forged")
 	if len(ba) != 1 || ba[0].Settled {
 		t.Fatalf("forged/unproved anchor must never be marked settled=true: %+v", ba)
+	}
+}
+
+func TestProtectedKeySerializationFailClosedAndHookDrain(t *testing.T) {
+	ctx := context.Background()
+	svc, db, _ := newHardeningService(t)
+
+	// 1. Concurrent LoadOrCreateProtectedKey must yield one identical 32-byte key.
+	const workers = 6
+	keys := make([]string, workers)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		idx := i
+		go func() {
+			defer wg.Done()
+			k, err := svc.LoadOrCreateProtectedKey("test_protected_key", func() ([]byte, error) {
+				b := make([]byte, 32)
+				b[0] = byte(idx + 1)
+				return b, nil
+			})
+			if err != nil {
+				t.Errorf("LoadOrCreateProtectedKey(%d): %v", idx, err)
+				return
+			}
+			keys[idx] = string(k)
+		}()
+	}
+	wg.Wait()
+	for i := 1; i < workers; i++ {
+		if keys[0] != keys[i] {
+			t.Fatalf("concurrent LoadOrCreateProtectedKey diverged between worker 0 and %d", i)
+		}
+	}
+
+	// 2. Corrupt encrypted key record must fail closed without overwriting.
+	if err := db.SetJSON("corrupt_prot_enc", map[string]string{"encHex": ""}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.LoadOrCreateProtectedKey("corrupt_prot", func() ([]byte, error) {
+		return make([]byte, 32), nil
+	}); err == nil {
+		t.Fatal("expected LoadOrCreateProtectedKey to fail closed on corrupt _enc entry")
+	}
+
+	// 3. Service.Close() must drain in-flight onRemember hooks cleanly.
+	var hookDone atomic.Bool
+	started := make(chan struct{})
+	release := make(chan struct{})
+	svc.SetOnRemember(func(shard string) {
+		close(started)
+		<-release
+		hookDone.Store(true)
+	})
+	if _, err := svc.Remember(ctx, RememberInput{Shard: "hook-test", Text: "trigger hook"}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	closeDone := make(chan struct{})
+	go func() {
+		_ = svc.Close()
+		close(closeDone)
+	}()
+	close(release)
+	<-closeDone
+	if !hookDone.Load() {
+		t.Fatal("expected Service.Close() to wait for onRemember hook completion")
 	}
 }

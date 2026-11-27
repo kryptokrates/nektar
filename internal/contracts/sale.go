@@ -34,7 +34,7 @@ type KeyedSaleOffer struct {
 	OfferSig         string     `json:"offerSig"`
 	Artifact         CovenantID `json:"artifact"`
 	Direct           bool       `json:"direct,omitempty"`
-	Version          int        `json:"version,omitempty"` // 0/1 = legacy OfferDigest, 2 = framed OfferDigestV2
+	Version          int        `json:"version,omitempty"` // must be >= 2 (framed OfferDigestV2)
 	// Seller-only secret material (never placed on public wire offer).
 	contentKey [32]byte
 }
@@ -84,44 +84,6 @@ func OfferDigestV2(cfg SaleConfig, buyerPub, leafHex string, expiresAt uint64, k
 		core.Field(salt),
 		core.Field(ctHash),
 	)), nil
-}
-
-// OfferDigest computes the legacy v1 SHA-256 digest for backward-compatible verification of Version < 2 offers.
-func OfferDigest(cfg SaleConfig, buyerPub, leafHex string, expiresAt uint64, extra ...[]byte) ([]byte, error) {
-	sellerPKH, err := hex.DecodeString(cfg.SellerPKH)
-	if err != nil {
-		return nil, err
-	}
-	hWrapped, err := hex.DecodeString(cfg.HWrapped)
-	if err != nil {
-		return nil, err
-	}
-	buyerBytes := []byte{0x00}
-	if buyerPub != "" {
-		buyerBytes, err = hex.DecodeString(buyerPub)
-		if err != nil {
-			return nil, err
-		}
-	}
-	leafBytes := make([]byte, 32)
-	if leafHex != "" {
-		leafBytes, err = hex.DecodeString(leafHex)
-		if err != nil {
-			return nil, err
-		}
-	}
-	parts := [][]byte{
-		sellerPKH,
-		hWrapped,
-		core.U64LE(cfg.Price),
-		core.U64LE(cfg.RefundAfter),
-		core.U64LE(cfg.MaxFee),
-		buyerBytes,
-		leafBytes,
-		core.U64LE(expiresAt),
-	}
-	parts = append(parts, extra...)
-	return core.SHA256(core.Concat(parts...)), nil
 }
 
 // CreateKeyedSaleOffer seals plaintext under a fresh BRC-369 content key (lightwebinc/bcommon/keyed),
@@ -258,14 +220,12 @@ func VerifySaleOffer(offer *KeyedSaleOffer, buyerPub, leafHex string) error {
 			return errors.New("sale: invalid ciphertextSha256")
 		}
 	} else {
-		ctHash = core.SHA256(nil)
+		return errors.New("sale: offer must include ciphertextHex or ciphertextSha256")
 	}
-	var digest []byte
-	if offer.Version >= 2 {
-		digest, err = OfferDigestV2(offer.Config, buyerPub, leafHex, offer.ExpiresAt, commitBytes, saltBytes, ctHash)
-	} else {
-		digest, err = OfferDigest(offer.Config, buyerPub, leafHex, offer.ExpiresAt, commitBytes, saltBytes, ctHash)
+	if offer.Version < 2 {
+		return fmt.Errorf("sale: unsupported legacy offer version %d (v2 required)", offer.Version)
 	}
+	digest, err := OfferDigestV2(offer.Config, buyerPub, leafHex, offer.ExpiresAt, commitBytes, saltBytes, ctHash)
 	if err != nil {
 		return err
 	}

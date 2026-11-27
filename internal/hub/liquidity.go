@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
-
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
@@ -29,8 +27,6 @@ type LiquidityConfig struct {
 	ArmBounties       bool
 	StarterPriceSats  uint64 // default 50
 	BountyRewardSats  uint64 // default 100
-	FaucetDripSats    uint64 // default 2000
-	FaucetDailyCap    uint64 // default 10000
 }
 
 // LiquidityState summarizes what ArmHubLiquidity seeded and armed on startup.
@@ -112,7 +108,9 @@ func ArmHubLiquidity(ctx context.Context, node *Node, mem *memory.Service, cfg L
 			}
 			isLive := mem.Chain().Network() != "memory"
 			hasMined := !isLive || shardHasMinedAnchor(mem, st.Shard)
-			if hasMined {
+			// Export free starter CHIRP pack immediately once an anchor BEEF exists (even at 0-conf);
+			// RefreshHubLiquidityStock re-exports with the embedded mined BUMP as soon as it mines.
+			if hasMined || shardHasAnchorBEEF(mem, st.Shard) {
 				if res, err := mem.ExportPublicShardPack(ctx, st.Shard); err == nil && res != nil && res.ChirpURL != "" {
 					frags, _ := mem.DB().ListFragments(st.Shard)
 					state.Packs = append(state.Packs, bstack.PackRef{
@@ -183,6 +181,24 @@ func shardHasMinedAnchor(mem *memory.Service, shard string) bool {
 	}
 	for _, a := range anchors {
 		if a.Settled && len(a.Beef) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// shardHasAnchorBEEF returns true iff shard has at least one anchor row carrying a non-empty BEEF
+// (including 0-conf carried first-party ancestry prior to mining).
+func shardHasAnchorBEEF(mem *memory.Service, shard string) bool {
+	if mem == nil || mem.DB() == nil {
+		return false
+	}
+	anchors, err := mem.DB().ListAnchors(shard)
+	if err != nil {
+		return false
+	}
+	for _, a := range anchors {
+		if len(a.Beef) > 0 {
 			return true
 		}
 	}
@@ -325,9 +341,8 @@ func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contra
 		return fmt.Errorf("invalid provenance framing: %w", parseErr)
 	}
 	expectedHDPV2 := core.ComputeHDPV2([]byte(sub.Text), prov)
-	expectedHDPV1 := core.SHA256(core.Concat(core.TagProv, []byte(sub.Text), provRaw))
-	if !core.EqualBytes(expectedHDPV2, hdpBytes) && !core.EqualBytes(expectedHDPV1, hdpBytes) {
-		return errors.New("submission text/provenance does not match hdp")
+	if !core.EqualBytes(expectedHDPV2, hdpBytes) {
+		return errors.New("submission text/provenance does not match framed v2 hdp")
 	}
 
 	// Verify authorship binding: Provenance signature AND BountySubmission OwnerSig must both verify
@@ -335,26 +350,18 @@ func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contra
 	if strings.TrimSpace(sub.ProvenancePub) == "" || strings.TrimSpace(sub.OwnerSig) == "" {
 		return errors.New("missing provenancePub or ownerSig authorship proof")
 	}
-	provPubBytes, err := hex.DecodeString(strings.TrimSpace(sub.ProvenancePub))
-	if err != nil {
-		return errors.New("invalid provenancePub hex")
-	}
-	provPub, err := ec.ParsePubKey(provPubBytes)
+	provPub, _, err := core.ParseStrictCompressedPubKey(strings.TrimSpace(sub.ProvenancePub))
 	if err != nil {
 		return fmt.Errorf("invalid provenancePub: %w", err)
 	}
-	provSig, err := ec.ParseDERSignature(prov.Signature)
+	provSig, err := core.ParseStrictLowSDER(hex.EncodeToString(prov.Signature))
 	if err != nil {
 		return fmt.Errorf("invalid provenance signature: %w", err)
 	}
 	if !provSig.Verify(core.ProvenanceDigest([]byte(sub.Text), prov), provPub) {
 		return errors.New("provenance signature does not verify against provenancePub")
 	}
-	ownerSigBytes, err := hex.DecodeString(strings.TrimSpace(sub.OwnerSig))
-	if err != nil {
-		return errors.New("invalid ownerSig hex")
-	}
-	ownerSig, err := ec.ParseDERSignature(ownerSigBytes)
+	ownerSig, err := core.ParseStrictLowSDER(strings.TrimSpace(sub.OwnerSig))
 	if err != nil {
 		return fmt.Errorf("invalid ownerSig: %w", err)
 	}
@@ -366,9 +373,25 @@ func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contra
 		return errors.New("ownerSig does not verify against provenancePub")
 	}
 
-	expectedLeaf := core.ToHex(core.ComputeLeaf(core.Fragment{HDP: hdpBytes}))
+	mpeBytes, mErr := hex.DecodeString(strings.TrimSpace(sub.MPERoot))
+	if mErr != nil || len(mpeBytes) != 32 {
+		return errors.New("missing or invalid 32-byte submission mpeRoot")
+	}
+	var contentBytes []byte
+	if strings.TrimSpace(sub.ContentSHA256) != "" {
+		var cErr error
+		contentBytes, cErr = hex.DecodeString(strings.TrimSpace(sub.ContentSHA256))
+		if cErr != nil || len(contentBytes) != 32 {
+			return errors.New("invalid 32-byte submission contentSha256")
+		}
+	}
+	expectedLeaf := core.ToHex(core.ComputeLeafV2(core.Fragment{
+		HDP:           hdpBytes,
+		MPERoot:       mpeBytes,
+		ContentSHA256: contentBytes,
+	}))
 	if !strings.EqualFold(pb.Leaf, expectedLeaf) {
-		return errors.New("proofBundle leaf does not commit to submission hdp")
+		return errors.New("proofBundle TagLeafV2 does not commit to submission hdp + mpeRoot")
 	}
 	if len(pb.AnchorBEEF) == 0 {
 		return errors.New("proofBundle missing anchorBEEF")
@@ -394,12 +417,6 @@ func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contra
 		return errors.New("proofBundle anchor must be mined and SPV-verified against block headers on live networks")
 	}
 	return nil
-}
-
-// DripFaucet sends a rate-limited starter testnet/memory drip to address (STRICTLY refused on mainnet!).
-func DripFaucet(ctx context.Context, mem *memory.Service, address string, dripSats, perAddressCap uint64) (txid string, sent uint64, err error) {
-	txid, _, sent, err = DripFaucetBEEF(ctx, mem, address, dripSats, perAddressCap)
-	return txid, sent, err
 }
 
 // DripFaucetBEEF sends a rate-limited starter testnet/memory drip to address and returns the full

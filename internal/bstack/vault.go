@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/lightwebinc/bcommon/keyed"
+
+	"github.com/kryptokrates/nektar/internal/core"
 )
 
 const ShardKeyDomain = "nektar:bsecret:shard:v1"
@@ -88,6 +90,7 @@ func OpenWithEpoch(env *SealedEnvelope, epochSym [32]byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vault: BRC-369 unwrap/commitment check failed: %w", err)
 	}
+	defer core.Zero32Array(&k)
 	return keyed.OpenSegment(k, salt, ct)
 }
 
@@ -170,6 +173,31 @@ func (r *GroupRegistry) CreateGroup(groupID, name, ownerPub string) (*BorgGroup,
 	return g, nil
 }
 
+func cloneBorgGroup(g *BorgGroup) *BorgGroup {
+	cp := &BorgGroup{
+		GroupID:      g.GroupID,
+		Name:         g.Name,
+		CurrentEpoch: g.CurrentEpoch,
+		Members:      make(map[string]string, len(g.Members)),
+		Revoked:      make(map[string]int64, len(g.Revoked)),
+		Epochs:       make(map[int64][32]byte, len(g.Epochs)),
+		EpochMembers: make(map[int64][]string, len(g.EpochMembers)),
+	}
+	for k, v := range g.Members {
+		cp.Members[k] = v
+	}
+	for k, v := range g.Revoked {
+		cp.Revoked[k] = v
+	}
+	for ep, sym := range g.Epochs {
+		cp.Epochs[ep] = sym
+	}
+	for ep, ms := range g.EpochMembers {
+		cp.EpochMembers[ep] = append([]string(nil), ms...)
+	}
+	return cp
+}
+
 // AddMember grants pubHex membership in the current epoch (deduplicated).
 // Use AddMemberWithRotation when newly added members must NOT have access to prior fragments in the current epoch.
 func (r *GroupRegistry) AddMember(groupID, pubHex, role string) error {
@@ -182,57 +210,26 @@ func (r *GroupRegistry) AddMember(groupID, pubHex, role string) error {
 	if role == "" {
 		role = "reader"
 	}
-	g.Members[pubHex] = role
-	delete(g.Revoked, pubHex)
+	next := cloneBorgGroup(g)
+	next.Members[pubHex] = role
+	delete(next.Revoked, pubHex)
 	exists := false
-	for _, m := range g.EpochMembers[g.CurrentEpoch] {
+	for _, m := range next.EpochMembers[next.CurrentEpoch] {
 		if m == pubHex {
 			exists = true
 			break
 		}
 	}
 	if !exists {
-		g.EpochMembers[g.CurrentEpoch] = append(g.EpochMembers[g.CurrentEpoch], pubHex)
+		next.EpochMembers[next.CurrentEpoch] = append(next.EpochMembers[next.CurrentEpoch], pubHex)
 	}
 	if r.persist != nil {
-		if err := r.persist.SaveBorgGroup(g); err != nil {
+		if err := r.persist.SaveBorgGroup(next); err != nil {
 			return fmt.Errorf("borg: persist add member: %w", err)
 		}
 	}
+	r.groups[groupID] = next
 	return nil
-}
-
-// AddMemberWithRotation grants pubHex membership AND rotates to a fresh epoch with a new
-// symmetric key so newly added members cannot read prior-epoch ciphertext (backward secrecy).
-func (r *GroupRegistry) AddMemberWithRotation(groupID, pubHex, role string) (int64, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	g, ok := r.groups[groupID]
-	if !ok {
-		return 0, fmt.Errorf("borg: unknown group %q", groupID)
-	}
-	if role == "" {
-		role = "reader"
-	}
-	var nextSym [32]byte
-	if _, err := rand.Read(nextSym[:]); err != nil {
-		return 0, err
-	}
-	g.Members[pubHex] = role
-	delete(g.Revoked, pubHex)
-	g.CurrentEpoch++
-	g.Epochs[g.CurrentEpoch] = nextSym
-	members := make([]string, 0, len(g.Members))
-	for m := range g.Members {
-		members = append(members, m)
-	}
-	g.EpochMembers[g.CurrentEpoch] = members
-	if r.persist != nil {
-		if err := r.persist.SaveBorgGroup(g); err != nil {
-			return 0, fmt.Errorf("borg: persist add member with rotation: %w", err)
-		}
-	}
-	return g.CurrentEpoch, nil
 }
 
 // RevokeMember removes pubHex from groupID and IMMEDIATELY rotates to a fresh epoch
@@ -247,25 +244,28 @@ func (r *GroupRegistry) RevokeMember(groupID, pubHex string) (int64, error) {
 	if _, member := g.Members[pubHex]; !member {
 		return 0, fmt.Errorf("borg: %s is not a member of %q", pubHex, groupID)
 	}
-	delete(g.Members, pubHex)
-	g.Revoked[pubHex] = time.Now().Unix()
 	var nextSym [32]byte
 	if _, err := rand.Read(nextSym[:]); err != nil {
 		return 0, err
 	}
-	g.CurrentEpoch++
-	g.Epochs[g.CurrentEpoch] = nextSym
-	remaining := make([]string, 0, len(g.Members))
-	for m := range g.Members {
+	next := cloneBorgGroup(g)
+	delete(next.Members, pubHex)
+	next.Revoked[pubHex] = time.Now().Unix()
+	next.CurrentEpoch++
+	next.Epochs[next.CurrentEpoch] = nextSym
+	remaining := make([]string, 0, len(next.Members))
+	for m := range next.Members {
 		remaining = append(remaining, m)
 	}
-	g.EpochMembers[g.CurrentEpoch] = remaining
+	next.EpochMembers[next.CurrentEpoch] = remaining
 	if r.persist != nil {
-		if err := r.persist.SaveBorgGroup(g); err != nil {
+		if err := r.persist.SaveBorgGroup(next); err != nil {
+			core.Zero32Array(&nextSym)
 			return 0, fmt.Errorf("borg: persist revoke: %w", err)
 		}
 	}
-	return g.CurrentEpoch, nil
+	r.groups[groupID] = next
+	return next.CurrentEpoch, nil
 }
 
 // EpochKey returns the epoch symmetric key ONLY if pubHex is currently an active, non-revoked

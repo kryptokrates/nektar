@@ -15,11 +15,10 @@ import (
 
 // SafeHTTPOpts configures SSRF-hardened outbound HTTP clients for peer, hub, CHIRP, and federation calls.
 type SafeHTTPOpts struct {
-	Timeout         time.Duration
-	AllowPrivate    bool // strictly true ONLY for local memory/regtest networks
-	RequireHTTPS    bool // true on mainnet
-	MaxRedirects    int  // 0 disables cross-origin redirects
-	AllowAnyPort    bool
+	Timeout      time.Duration
+	AllowPrivate bool // strictly true ONLY for local memory/regtest networks
+	RequireHTTPS bool // true on mainnet
+	MaxRedirects int  // 0 disables cross-origin redirects (up to 3 same-origin hops); < 0 disables all redirects
 }
 
 // IsBlockedOutboundIP reports whether addr is loopback, private (RFC1918/ULA), link-local/metadata,
@@ -75,8 +74,25 @@ func ValidateOutboundURL(rawURL string, opts SafeHTTPOpts) (*url.URL, error) {
 	return u, nil
 }
 
-// SafeHTTPClient returns an *http.Client whose DialContext resolves DNS and blocks private/loopback/metadata
-// IPs (pinning the resolved IP to prevent DNS-rebinding TOCTOU) and re-validates every redirect hop.
+type safeRoundTripper struct {
+	base http.RoundTripper
+	opts SafeHTTPOpts
+}
+
+func (s *safeRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil || req.URL == nil {
+		return nil, errors.New("safehttp: nil request or url")
+	}
+	if _, err := ValidateOutboundURL(req.URL.String(), s.opts); err != nil {
+		return nil, err
+	}
+	return s.base.RoundTrip(req)
+}
+
+// SafeHTTPClient returns an *http.Client whose RoundTripper validates every request URL
+// (including RequireHTTPS, userinfo, and local suffixes), whose DialContext resolves DNS and
+// blocks private/loopback/metadata IPs (pinning the validated IP to prevent DNS-rebinding TOCTOU),
+// and whose CheckRedirect re-validates every redirect hop.
 func SafeHTTPClient(opts SafeHTTPOpts) *http.Client {
 	dialer := &net.Dialer{
 		Timeout:   10 * time.Second,
@@ -109,26 +125,45 @@ func SafeHTTPClient(opts SafeHTTPOpts) *http.Client {
 					return nil, fmt.Errorf("safehttp: resolved blocked IP %s for host %q", ip.String(), host)
 				}
 			}
-			// Dial the first validated IP directly to eliminate DNS rebinding TOCTOU.
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].Unmap().String(), port))
+			// Dial validated IPs directly (trying each on failure for dual-stack resilience)
+			// while eliminating DNS rebinding TOCTOU.
+			var lastErr error
+			for _, ip := range ips {
+				conn, dErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
+				if dErr == nil {
+					return conn, nil
+				}
+				lastErr = dErr
+				if ctx.Err() != nil {
+					break
+				}
+			}
+			return nil, lastErr
 		},
 	}
 	maxRedir := opts.MaxRedirects
-	if maxRedir <= 0 {
+	if maxRedir == 0 {
 		maxRedir = 3
 	}
 	return &http.Client{
 		Timeout:   opts.Timeout,
-		Transport: tr,
+		Transport: &safeRoundTripper{base: tr, opts: opts},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if opts.MaxRedirects < 0 {
+				return errors.New("safehttp: redirects disabled")
+			}
 			if len(via) >= maxRedir {
 				return errors.New("safehttp: too many redirects")
 			}
 			if _, err := ValidateOutboundURL(req.URL.String(), opts); err != nil {
 				return err
 			}
-			// Strip Authorization / custom Nektar auth headers on cross-origin redirects.
-			if len(via) > 0 && !strings.EqualFold(via[0].URL.Host, req.URL.Host) {
+			isCrossOrigin := len(via) > 0 && !strings.EqualFold(via[0].URL.Host, req.URL.Host)
+			if isCrossOrigin {
+				if opts.MaxRedirects == 0 {
+					return errors.New("safehttp: cross-origin redirect blocked")
+				}
+				// Strip Authorization / custom Nektar auth headers on cross-origin redirects.
 				req.Header.Del("Authorization")
 				req.Header.Del("X-Nektar-Sig")
 				req.Header.Del("X-Nektar-Token")
@@ -139,12 +174,12 @@ func SafeHTTPClient(opts SafeHTTPOpts) *http.Client {
 }
 
 // AllowPrivateOutboundForNetwork reports whether private/loopback outbound peer URLs are
-// permitted for network. Live networks (main/testnet) block private/loopback peers by default
-// and only permit them when NEKTAR_ALLOW_LOCAL_PEERS=1 is explicitly set by the operator
-// (e.g. co-located Docker Compose hubs or local multi-node clusters).
+// permitted for network. Live networks (main/testnet) and empty/unknown network names block
+// private/loopback peers by default; testnet/main permit them only when NEKTAR_ALLOW_LOCAL_PEERS=1
+// is explicitly set by the operator (e.g. co-located Docker Compose hubs or local multi-node clusters).
 func AllowPrivateOutboundForNetwork(network string) bool {
 	n := strings.ToLower(strings.TrimSpace(network))
-	return n == "memory" || n == "regtest" || n == "" || ((n == "testnet" || n == "main") && os.Getenv("NEKTAR_ALLOW_LOCAL_PEERS") == "1")
+	return n == "memory" || n == "regtest" || ((n == "testnet" || n == "main") && os.Getenv("NEKTAR_ALLOW_LOCAL_PEERS") == "1")
 }
 
 // SafeHTTPClientForNetwork returns an SSRF-hardened *http.Client calibrated to the BSV network:

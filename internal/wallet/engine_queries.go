@@ -33,7 +33,7 @@ func (e *Engine) Balance(ctx context.Context) (BalanceBreakdown, error) {
 			  AND o.deleted_at IS NULL
 			  AND o.spent_by IS NULL
 			  AND o.satoshis > 0
-			  AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','nosend','sending','submission_unknown')
+			  AND owner.status NOT IN (`+sqlNonSpendableParentStatuses+`)
 			UNION ALL
 			SELECT
 				COALESCE(o.basket_name, '') AS basket,
@@ -45,10 +45,10 @@ func (e *Engine) Balance(ctx context.Context) (BalanceBreakdown, error) {
 			INNER JOIN "%s" owner ON owner.id = o.transaction_id
 			WHERE sp.user_id = ?
 			  AND sp.deleted_at IS NULL
-			  AND sp.status IN ('unsigned','unprocessed','nosend','sending','submission_unknown')
+			  AND sp.status IN (`+sqlPendingTxStatuses+`)
 			  AND o.user_id = ?
 			  AND o.satoshis > 0
-			  AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','nosend','sending','submission_unknown')
+			  AND owner.status NOT IN (`+sqlNonSpendableParentStatuses+`)
 		)
 		GROUP BY basket, is_reserved, is_confirmed`,
 		e.tables.outputs, e.tables.transactions, e.tables.userUTXOs,
@@ -116,7 +116,7 @@ func (e *Engine) Balance(ctx context.Context) (BalanceBreakdown, error) {
 		return b, err
 	}
 
-	pendingQ := fmt.Sprintf(`SELECT COUNT(1) FROM "%s" WHERE user_id = ? AND deleted_at IS NULL AND status IN ('unsigned','unprocessed','sending','submission_unknown')`, e.tables.transactions)
+	pendingQ := fmt.Sprintf(`SELECT COUNT(1) FROM "%s" WHERE user_id = ? AND deleted_at IS NULL AND status IN (`+sqlPendingTxStatuses+`)`, e.tables.transactions)
 	_ = e.readDB.QueryRowContext(ctx, pendingQ, e.userID).Scan(&b.PendingTxCount)
 	depth, _, dErr := e.computeUnprovenDepthBounds(ctx)
 	if dErr != nil {
@@ -138,7 +138,7 @@ func (e *Engine) computeUnprovenDepthBounds(ctx context.Context) (maxDepth int, 
 		  AND o.deleted_at IS NULL
 		  AND o.spent_by IS NULL
 		  AND o.satoshis > 0
-		  AND owner.status IN ('unproven','sending','nosend')
+		  AND owner.status IN (`+sqlSpendableUnprovenStatuses+`)
 		  AND owner.tx_id IS NOT NULL
 		  AND owner.tx_id != ''`,
 		e.tables.outputs, e.tables.transactions,
@@ -221,11 +221,11 @@ func (e *Engine) ListUTXOs(ctx context.Context, basket string, spendableOnly boo
 	if limit <= 0 {
 		limit = 100
 	}
-	where := fmt.Sprintf(`
+	where := `
 		o.user_id = ?
 		AND o.deleted_at IS NULL
 		AND o.spent_by IS NULL
-		AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','nosend','submission_unknown')`)
+		AND owner.status NOT IN (` + sqlNonSpendableParentStatuses + `)`
 	args := []any{e.userID}
 	if basket != "" && basket != "all" {
 		where += ` AND o.basket_name = ?`
@@ -391,7 +391,7 @@ func (e *Engine) ListRecentActions(ctx context.Context, limit, offset int) ([]Tx
 			} else if txid != "" {
 				// Fallback to in-memory LRU only (0 SQL!) if tx spent external non-wallet inputs.
 				if cached, ok := e.txCache.Get(txid); ok && cached != nil {
-					feeSats = computeTxFee(cached)
+					feeSats = ComputeTxFee(cached)
 				}
 			}
 		}

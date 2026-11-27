@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -266,5 +265,4 @@ func TestPerfMixedReadWriteLoad(t *testing.T) {
 	if goroutinesEnd > goroutinesStart+8 {
 		t.Fatalf("possible goroutine leak: start=%d end=%d", goroutinesStart, goroutinesEnd)
 	}
-	_ = fmt.Sprintf("ok")
 }

@@ -1,7 +1,6 @@
 package market
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -11,54 +10,6 @@ import (
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/store"
 )
-
-type buyerPolicyEval struct {
-	NowUnix        int64  `json:"nowUnix"`
-	KillSwitch     bool   `json:"killSwitch"`
-	NeedsApproval  bool   `json:"needsApproval"`
-	ApprovalReason string `json:"approvalReason,omitempty"`
-	BypassPolicy   bool   `json:"bypassPolicy"`
-}
-
-type buyerCollectResult struct {
-	NowUnix        int64            `json:"nowUnix"`
-	NoOffers       bool             `json:"noOffers"`
-	PolicyRejected bool             `json:"policyRejected"`
-	Error          string           `json:"error,omitempty"`
-	Offers         []bstack.OfferAd `json:"offers,omitempty"`
-	FirstOfferMs   int64            `json:"firstOfferMs"`
-}
-
-type buyerRankResult struct {
-	NowUnix          int64            `json:"nowUnix"`
-	NoOffers         bool             `json:"noOffers"`
-	PolicyRejected   bool             `json:"policyRejected"`
-	NeedsEscalation  bool             `json:"needsEscalation,omitempty"`
-	EscalationReason string           `json:"escalationReason,omitempty"`
-	Error            string           `json:"error,omitempty"`
-	Chosen           *bstack.OfferAd  `json:"chosen,omitempty"`
-	Candidates       []bstack.OfferAd `json:"candidates,omitempty"`
-	MatchAudit       *MatchAudit      `json:"matchAudit,omitempty"`
-	FirstOfferMs     int64            `json:"firstOfferMs"`
-}
-
-type buyerPayResult struct {
-	NowUnix           int64        `json:"nowUnix"`
-	TxID              string       `json:"txid,omitempty"`
-	EscrowTxID        string       `json:"escrowTxid,omitempty"`
-	EscrowRefundAfter uint64       `json:"escrowRefundAfter,omitempty"`
-	PreBroadcastErr   string       `json:"preBroadcastErr,omitempty"`
-	ImmediateClaim    *ClaimSignal `json:"immediateClaim,omitempty"`
-	DeliveryErr       string       `json:"deliveryErr,omitempty"`
-}
-
-type buyerVerifyResult struct {
-	NowUnix       int64        `json:"nowUnix"`
-	DeliveredText string       `json:"deliveredText,omitempty"`
-	TargetShard   string       `json:"targetShard,omitempty"`
-	DealReceipt   *DealReceipt `json:"dealReceipt,omitempty"`
-	FailedReason  string       `json:"failedReason,omitempty"`
-}
 
 func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput) (DealState, error) {
 	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
@@ -109,15 +60,13 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 		return st, err
 	}
 	// Parallel Multi-Hub Fan-Out (restate.RunAsync + restate.WaitIter): if initial collect found no offers
-	// and multiple active hubs are configured, query every hub in parallel and collect deterministically!
-	if collectRes.NoOffers && len(in.Offers) == 0 {
-		if br := e.getBroker(); br != nil && br.Discovery() != nil {
-			if hosts := br.Discovery().ActiveHosts(); len(hosts) > 1 {
-				if extra := e.buyerLookupMultiHubParallel(ctx, br, hosts, dealID, want); len(extra) > 0 {
-					collectRes.Offers = extra
-					collectRes.NoOffers = false
-					collectRes.Error = ""
-				}
+	// and multiple active hubs were journaled inside buyer_collect_offers, query every hub in parallel deterministically!
+	if collectRes.NoOffers && len(in.Offers) == 0 && len(collectRes.ActiveHosts) > 1 {
+		if br := e.getBroker(); br != nil {
+			if extra := e.buyerLookupMultiHubParallel(ctx, br, collectRes.ActiveHosts, dealID, want); len(extra) > 0 {
+				collectRes.Offers = extra
+				collectRes.NoOffers = false
+				collectRes.Error = ""
 			}
 		}
 	}
@@ -223,6 +172,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 		chosenCopy := cand
 		st.ChosenOffer = &chosenCopy
 		st.ChirpURL = chosen.ChirpURL
+		st.ClaimPromise = claimPromiseName(attempt)
 		if attempt > 1 {
 			st.Status = "offered"
 			st.Error = ""
@@ -271,6 +221,8 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 
 		// Step 5: Live on-chain payment + purchase delivery (when Seller advertised a pay target).
 		var immediateClaim *ClaimSignal
+		var awaitingConfirm bool
+		var requiredDepth int
 		if chosen.PayAddress != "" || chosen.PayIdentityKey != "" {
 			payStep := "buyer_pay_and_deliver"
 			if attempt > 1 {
@@ -359,6 +311,8 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 				return st, nil
 			}
 			immediateClaim = payRes.ImmediateClaim
+			awaitingConfirm = payRes.AwaitingConfirmation
+			requiredDepth = payRes.RequiredDepth
 		}
 
 		// Step 6: Obtain ClaimSignal (either synchronously returned or via Restate durable Promise("claim")).
@@ -370,7 +324,23 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			if timeout <= 0 {
 				timeout = 5 * time.Minute
 			}
-			claimFut := restate.Promise[ClaimSignal](ctx, "claim")
+			if awaitingConfirm {
+				minConfirmWait := 2 * time.Hour
+				if requiredDepth > 0 {
+					if depthWait := time.Duration(requiredDepth) * 30 * time.Minute; depthWait > minConfirmWait {
+						minConfirmWait = depthWait
+					}
+				}
+				if timeout < minConfirmWait {
+					timeout = minConfirmWait
+				}
+			}
+			claimName := claimPromiseName(attempt)
+			if st.ClaimPromise != claimName {
+				st.ClaimPromise = claimName
+				restate.Set(ctx, "state", st)
+			}
+			claimFut := restate.Promise[ClaimSignal](ctx, claimName)
 			sleepFut := restate.After(ctx, timeout)
 			winner, cancelErr := restate.WaitFirst(ctx, claimFut, sleepFut)
 			if cancelErr != nil {
@@ -378,7 +348,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 			}
 			if winner == sleepFut {
 				// R13: explicitly reject promise on expiry so late deliverKey calls fail honestly!
-				_ = restate.Promise[ClaimSignal](ctx, "claim").Reject(restate.TerminalErrorf("deal %s expired waiting for seller key reveal", dealID))
+				_ = restate.Promise[ClaimSignal](ctx, claimName).Reject(restate.TerminalErrorf("deal %s expired waiting for seller key reveal", dealID))
 				expNow, _ := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
 					now := time.Now().Unix()
 					if st.PaymentTxID != "" && e.mem != nil && e.mem.DB() != nil {
@@ -465,152 +435,22 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 	return st, nil
 }
 
-// buyerLookupMultiHubParallel fans out per-hub offer lookups concurrently via restate.RunAsync
-// and collects results in deterministic completion order via restate.WaitIter.
-func (e *Engine) buyerLookupMultiHubParallel(ctx restate.WorkflowContext, br *Broker, hosts []string, dealID string, want bstack.WantAd) []bstack.OfferAd {
-	futs := make([]restate.Future, 0, len(hosts))
-	typed := make([]restate.RunAsyncFuture[[]bstack.OfferAd], 0, len(hosts))
-	for i, h := range hosts {
-		host := h
-		fut := restate.RunAsync(ctx, func(rctx restate.RunContext) ([]bstack.OfferAd, error) {
-			return br.LookupOffersSingleHost(rctx, host, dealID, want.Pub), nil
-		}, restate.WithName(fmt.Sprintf("buyer_lookup_hub_%d", i)))
-		futs = append(futs, fut)
-		typed = append(typed, fut)
+func claimPromiseName(attempt int) string {
+	if attempt <= 1 {
+		return "claim"
 	}
-	seen := make(map[string]bool)
-	var out []bstack.OfferAd
-	for fut, err := range restate.Wait(ctx, futs...) {
-		if err != nil {
-			continue
-		}
-		for _, tf := range typed {
-			if tf == fut {
-				if batch, rErr := tf.Result(); rErr == nil {
-					for _, off := range batch {
-						if off.OfferID != "" && seen[off.OfferID] {
-							continue
-						}
-						if off.OfferID != "" {
-							seen[off.OfferID] = true
-						}
-						out = append(out, off)
-					}
-				}
-				break
-			}
-		}
-	}
-	return out
-}
-
-func (e *Engine) buyerAwaitPolicyApproval(ctx restate.WorkflowContext, dealID string, want bstack.WantAd, approvalReason string, approvalTimeout time.Duration, st *DealState) (bool, error) {
-	apprTimeout := approvalTimeout
-	if apprTimeout <= 0 {
-		apprTimeout = 15 * time.Minute
-	}
-	apprAwk := restate.Awakeable[ApprovalDecision](ctx)
-	apprID := "appr-" + strings.ReplaceAll(restate.UUID(ctx).String(), "-", "")[:16]
-	awkID := apprAwk.Id()
-
-	_, pErr := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
-		now := time.Now().Unix()
-		wantJSON, _ := json.Marshal(want)
-		if e.mem != nil && e.mem.DB() != nil {
-			_ = e.mem.DB().SaveApproval(store.ApprovalRecord{
-				ID:           apprID,
-				DealID:       dealID,
-				Reason:       approvalReason,
-				MaxExtraSats: want.MaxSats,
-				Status:       "pending",
-				AwakeableID:  awkID,
-				ExpiresAt:    now + int64(apprTimeout.Seconds()),
-			})
-		}
-		e.persistDealRecord(store.DealRecord{
-			DealID:    dealID,
-			Role:      "buyer",
-			Status:    "approval_pending",
-			WantJSON:  wantJSON,
-			PriceSats: want.MaxSats,
-			Error:     approvalReason + " [approvalId=" + apprID + "]",
-		})
-		if br := e.getBroker(); br != nil {
-			br.notify("approval_pending", map[string]any{"approvalId": apprID, "dealId": dealID, "reason": approvalReason, "awakeableId": awkID})
-		}
-		return now, nil
-	}, restate.WithName("buyer_persist_approval"))
-	if pErr != nil {
-		return false, pErr
-	}
-
-	st.Status = "approval_pending"
-	st.ApprovalID = apprID
-	st.AwakeableID = awkID
-	st.Error = approvalReason + " [approvalId=" + apprID + "]"
-	restate.Set(ctx, "state", *st)
-
-	apprTimer := restate.After(ctx, apprTimeout)
-	winner, waitErr := restate.WaitFirst(ctx, apprAwk, apprTimer)
-	if waitErr != nil {
-		return false, waitErr
-	}
-	if winner == apprTimer {
-		expNow, _ := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
-			now := time.Now().Unix()
-			e.persistDealRecord(store.DealRecord{
-				DealID: dealID,
-				Role:   "buyer",
-				Status: "expired",
-				Error:  "approval timed out",
-			})
-			return now, nil
-		}, restate.WithName("buyer_approval_expired"))
-		st.Status = "expired"
-		st.Error = "approval timed out"
-		st.UpdatedAt = expNow
-		restate.Set(ctx, "state", *st)
-		return false, nil
-	}
-	dec, dErr := apprAwk.Result()
-	if dErr != nil || !dec.Approved {
-		reason := "denied by operator"
-		if dErr != nil {
-			reason = dErr.Error()
-		} else if dec.Reason != "" {
-			reason = dec.Reason
-		}
-		denyNow, _ := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
-			now := time.Now().Unix()
-			e.persistDealRecord(store.DealRecord{
-				DealID: dealID,
-				Role:   "buyer",
-				Status: "failed",
-				Error:  reason,
-			})
-			return now, nil
-		}, restate.WithName("buyer_approval_denied"))
-		st.Status = "failed"
-		st.Error = reason
-		st.UpdatedAt = denyNow
-		restate.Set(ctx, "state", *st)
-		return false, nil
-	}
-	// Mark the awakeable approval 'consumed' in SQLite so it can NEVER be replayed via ApprovedOverrideID.
-	_, _ = restate.Run(ctx, func(_ restate.RunContext) (bool, error) {
-		if e.mem != nil && e.mem.DB() != nil && st.ApprovalID != "" {
-			_, _ = e.mem.DB().MarkApprovalResolvedAwakeable(st.ApprovalID, true)
-		}
-		return true, nil
-	}, restate.WithName("buyer_approval_consume"))
-	return true, nil
+	return fmt.Sprintf("claim_%d", attempt)
 }
 
 func (e *Engine) restateBuyerDeliverKey(ctx restate.WorkflowSharedContext, sig ClaimSignal) (bool, error) {
 	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
 		return false, err
 	}
-	if err := restate.Promise[ClaimSignal](ctx, "claim").Resolve(sig); err != nil {
+	claimName := "claim"
+	if st, err := restate.Get[DealState](ctx, "state"); err == nil && st.ClaimPromise != "" {
+		claimName = st.ClaimPromise
+	}
+	if err := restate.Promise[ClaimSignal](ctx, claimName).Resolve(sig); err != nil {
 		return false, err
 	}
 	return true, nil

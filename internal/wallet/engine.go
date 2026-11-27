@@ -91,9 +91,11 @@ type Engine struct {
 	fuel    *FuelKeeper
 	monitor *Monitor
 
-	absorbMu sync.Mutex
-	actionMu sync.Mutex
-	bgCancel context.CancelFunc
+	absorbMu       sync.Mutex
+	actionMu       sync.Mutex
+	brc29BackoffMu sync.Mutex
+	brc29Backoff   map[int64]unfailBackoffEntry
+	bgCancel       context.CancelFunc
 	bgWG     sync.WaitGroup
 	closeMu  sync.Mutex
 	closed   bool
@@ -102,7 +104,7 @@ type Engine struct {
 var _ sdkwallet.Interface = (*Engine)(nil)
 
 // Open initializes identity.json, pure-Go modernc.org/sqlite + GORM, go-wallet-toolbox StorageProvider
-// (with StrategyThroughput enabled), and *toolboxwallet.Wallet, and migrates any legacy wallet.json.
+// (with StrategyThroughput enabled), and *toolboxwallet.Wallet.
 func Open(cfg Config) (*Engine, error) {
 	if cfg.Originator == "" {
 		cfg.Originator = "nektar"
@@ -189,13 +191,12 @@ func Open(cfg Config) (*Engine, error) {
 		minAgeSec = 1
 	}
 
+	// Attach first-party BUMPs immediately on the first mined block (D6) so fuel stock, anchor proofs,
+	// and change UTXOs never stall for extra blocks; value-final SettleDepth is enforced separately at
+	// counterparty settlement seams (VerifyCounterpartyPaymentBEEF, ZeroConfWatch, Broker, Hub bounties).
 	blocksDelay := uint(0)
 	if !cfg.InMemoryStore {
-		if cfg.SettleDepth > 0 {
-			blocksDelay = uint(cfg.SettleDepth)
-		} else {
-			blocksDelay = 1
-		}
+		blocksDelay = 1
 	}
 
 	tbLogger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -275,8 +276,9 @@ func Open(cfg Config) (*Engine, error) {
 		txCache:    txCache,
 		svc:        svc,
 		provider:   provider,
-		tb:         tbWallet,
-		userID:     userResp.User.UserID,
+		tb:           tbWallet,
+		userID:       userResp.User.UserID,
+		brc29Backoff: make(map[int64]unfailBackoffEntry),
 	}
 	e.signer = &bwallet.Signer{
 		Interface:  e,
@@ -439,8 +441,6 @@ func (e *Engine) logf(format string, args ...any) {
 }
 
 // Public accessors.
-func (e *Engine) Toolbox() *toolboxwallet.Wallet     { return e.tb }
-func (e *Engine) Provider() *storage.Provider        { return e.provider }
 func (e *Engine) Tracker() chaintracker.ChainTracker { return e.cfg.Tracker }
 func (e *Engine) IdentityKey() *ec.PublicKey         { return e.rootKey.PubKey() }
 func (e *Engine) IdentityPubHex() string             { return hex.EncodeToString(e.rootKey.PubKey().Compressed()) }

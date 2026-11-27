@@ -12,11 +12,20 @@ func (d *DB) SaveBatchAnchorStrict(anchor BatchAnchor) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var existingID, existingRoot, existingTx string
-	err := d.sql.QueryRow(`SELECT shard_id, root_hex, txid FROM anchors WHERE shard = ? AND n = ?`, anchor.Shard, anchor.N).
-		Scan(&existingID, &existingRoot, &existingTx)
+	var existingSettled, existingBeefLen int
+	err := d.sql.QueryRow(`SELECT shard_id, root_hex, txid, settled, length(beef) FROM anchors WHERE shard = ? AND n = ?`, anchor.Shard, anchor.N).
+		Scan(&existingID, &existingRoot, &existingTx, &existingSettled, &existingBeefLen)
 	if err == nil {
 		if existingID != anchor.ShardID || existingRoot != anchor.RootHex || existingTx != anchor.TxID {
 			return fmt.Errorf("store: conflicting local anchor already exists for %s#%d", anchor.Shard, anchor.N)
+		}
+		// Upgrade unsettled or proofless local anchor when incoming anchor carries verified mined BUMP/BEEF (D3/D6).
+		if len(anchor.Beef) > 0 && ((existingSettled == 0 && anchor.Settled) || existingBeefLen == 0) {
+			_, uErr := d.sql.Exec(
+				`UPDATE anchors SET beef = ?, settled = ?, block_height = ? WHERE shard = ? AND n = ?`,
+				anchor.Beef, boolToInt(anchor.Settled || existingSettled != 0), anchor.BlockHeight, anchor.Shard, anchor.N,
+			)
+			return uErr
 		}
 		return nil
 	}
@@ -32,20 +41,22 @@ func (d *DB) SaveBatchAnchorStrict(anchor BatchAnchor) error {
 	return err
 }
 
-// SaveBatchAnchor inserts or updates a batch anchor without mutating fragment rows (prefer SaveBatchAnchorStrict for imports).
-func (d *DB) SaveBatchAnchor(anchor BatchAnchor) error {
-	return d.SaveBatchAnchorStrict(anchor)
-}
-
-// SavePendingAnchor persists an in-flight anchor batch BEFORE broadcast.
+// SavePendingAnchor persists an in-flight anchor batch or rotation BEFORE broadcast.
 func (d *DB) SavePendingAnchor(p PendingAnchor) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	seqsJSON, _ := json.Marshal(p.Seqs)
-	_, err := d.sql.Exec(`
-		INSERT OR REPLACE INTO pending_anchors (shard, n, seqs_json, root_hex, chained_hex, txid, beef, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Shard, p.N, seqsJSON, p.RootHex, p.ChainedHex, p.TxID, p.Beef, p.CreatedAt)
+	kind := p.Kind
+	if kind == "" {
+		kind = "append"
+	}
+	seqsJSON, err := json.Marshal(p.Seqs)
+	if err != nil {
+		return err
+	}
+	_, err = d.sql.Exec(`
+		INSERT OR REPLACE INTO pending_anchors (shard, n, kind, seqs_json, root_hex, chained_hex, txid, beef, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Shard, p.N, kind, seqsJSON, p.RootHex, p.ChainedHex, p.TxID, p.Beef, p.CreatedAt)
 	return err
 }
 
@@ -69,7 +80,7 @@ func (d *DB) DeletePendingAnchor(shard string, n int64) error {
 func (d *DB) ListPendingAnchors() ([]PendingAnchor, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`SELECT shard, n, seqs_json, root_hex, chained_hex, txid, beef, created_at FROM pending_anchors ORDER BY created_at ASC`)
+	rows, err := d.sql.Query(`SELECT shard, n, COALESCE(kind, 'append'), seqs_json, root_hex, chained_hex, txid, beef, created_at FROM pending_anchors ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -78,10 +89,17 @@ func (d *DB) ListPendingAnchors() ([]PendingAnchor, error) {
 	for rows.Next() {
 		var p PendingAnchor
 		var seqsRaw []byte
-		if err := rows.Scan(&p.Shard, &p.N, &seqsRaw, &p.RootHex, &p.ChainedHex, &p.TxID, &p.Beef, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.Shard, &p.N, &p.Kind, &seqsRaw, &p.RootHex, &p.ChainedHex, &p.TxID, &p.Beef, &p.CreatedAt); err != nil {
 			return nil, err
 		}
-		_ = json.Unmarshal(seqsRaw, &p.Seqs)
+		if p.Kind == "" {
+			p.Kind = "append"
+		}
+		if len(seqsRaw) > 0 {
+			if err := json.Unmarshal(seqsRaw, &p.Seqs); err != nil {
+				return nil, fmt.Errorf("store: decode pending_anchor seqs %s#%d: %w", p.Shard, p.N, err)
+			}
+		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -106,7 +124,8 @@ func (d *DB) CountPendingAnchors() (int, error) {
 }
 
 // RecordBatchAnchor atomically records an anchor (using strict INSERT to prevent overwriting existing N)
-// and binds seqs to (batchN, leafIndex, txid).
+// and binds fragments, mem_commits, receipts (when shard == "__receipts__"), and clears pending_anchors
+// in ONE SQLite transaction.
 func (d *DB) RecordBatchAnchor(anchor BatchAnchor, seqs []int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -132,8 +151,24 @@ func (d *DB) RecordBatchAnchor(anchor BatchAnchor, seqs []int64) error {
 		); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(
+			`UPDATE mem_commits SET anchor_txid = ?, anchor_n = ? WHERE repo = ? AND seq = ?`,
+			anchor.TxID, anchor.N, anchor.Shard, seq,
+		); err != nil {
+			return err
+		}
+		if anchor.Shard == "__receipts__" {
+			if _, err := tx.Exec(
+				`UPDATE receipts SET anchor_txid = ? WHERE shard_seq = ?`,
+				anchor.TxID, seq,
+			); err != nil {
+				return err
+			}
+		}
 	}
-	_, _ = tx.Exec(`DELETE FROM pending_anchors WHERE shard = ? AND n = ?`, anchor.Shard, anchor.N)
+	if _, err := tx.Exec(`DELETE FROM pending_anchors WHERE shard = ? AND n = ?`, anchor.Shard, anchor.N); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -162,6 +197,15 @@ func (d *DB) UpdateAnchorHead(shard string, n int64, newTxID string, newBeef []b
 	if _, err := tx.Exec(`UPDATE fragments SET anchor_txid = ? WHERE shard = ? AND batch_n = ?`, newTxID, shard, n); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`UPDATE mem_commits SET anchor_txid = ? WHERE repo = ? AND anchor_n = ?`, newTxID, shard, n); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE mem_tags SET anchor_txid = ? WHERE repo = ? AND anchor_n = ?`, newTxID, shard, n); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM pending_anchors WHERE shard = ? AND n = ?`, shard, n); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -181,6 +225,30 @@ func (d *DB) ListAnchors(shard string) ([]BatchAnchor, error) {
 		var a BatchAnchor
 		var settled int
 		if err := rows.Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.TxID, &a.Beef, &settled, &a.BlockHeight, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		a.Settled = settled != 0
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ListAnchorSummaries returns anchor metadata for shard ordered by n ascending WITHOUT loading BEEF blobs.
+func (d *DB) ListAnchorSummaries(shard string) ([]BatchAnchor, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rows, err := d.sql.Query(`
+		SELECT shard, shard_id, n, size, root_hex, chained_hex, txid, settled, block_height, created_at
+		FROM anchors WHERE shard = ? ORDER BY n ASC`, shard)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BatchAnchor
+	for rows.Next() {
+		var a BatchAnchor
+		var settled int
+		if err := rows.Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.TxID, &settled, &a.BlockHeight, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		a.Settled = settled != 0
@@ -225,16 +293,69 @@ func (d *DB) UpdateAnchorProof(shard string, n int64, beef []byte, blockHeight i
 // ClearAnchorProofsFrom rolls back settled anchors at or above forkHeight after a chain reorg
 // so RefreshAnchorProofs re-acquires valid post-reorg BUMPs instead of serving orphaned proofs.
 func (d *DB) ClearAnchorProofsFrom(forkHeight int64) (int64, error) {
+	return d.ClearAnchorProofsFromWithStrip(forkHeight, nil)
+}
+
+// ClearAnchorProofsFromWithStrip atomically rolls back settled anchors at or above forkHeight
+// and, when stripBeef != nil, strips orphaned MerklePath proofs from anchors.beef inside the
+// same SQLite transaction so offline verifiers see Unsettled instead of BEEFInvalid.
+func (d *DB) ClearAnchorProofsFromWithStrip(forkHeight int64, stripBeef func([]byte) []byte) (int64, error) {
 	if forkHeight <= 0 {
 		return 0, nil
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	res, err := d.sql.Exec(`UPDATE anchors SET settled = 0, block_height = 0 WHERE settled = 1 AND block_height >= ?`, forkHeight)
+	if stripBeef == nil {
+		res, err := d.sql.Exec(`UPDATE anchors SET settled = 0, block_height = 0 WHERE settled = 1 AND block_height >= ?`, forkHeight)
+		if err != nil {
+			return 0, err
+		}
+		return res.RowsAffected()
+	}
+	tx, err := d.sql.Begin()
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.Query(`SELECT shard, n, beef FROM anchors WHERE settled = 1 AND block_height >= ?`, forkHeight)
+	if err != nil {
+		return 0, err
+	}
+	type anchorRow struct {
+		shard string
+		n     int64
+		beef  []byte
+	}
+	var affected []anchorRow
+	for rows.Next() {
+		var r anchorRow
+		if err := rows.Scan(&r.shard, &r.n, &r.beef); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		affected = append(affected, r)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	for _, r := range affected {
+		cleaned := stripBeef(r.beef)
+		if _, err := tx.Exec(
+			`UPDATE anchors SET settled = 0, block_height = 0, beef = ? WHERE shard = ? AND n = ?`,
+			cleaned, r.shard, r.n,
+		); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int64(len(affected)), nil
 }
 
 // IsAnchorSettled reports whether txid corresponds to a settled batch anchor carrying persisted BEEF.
@@ -272,8 +393,8 @@ func (d *DB) GetAnchorByTxID(txid string) (BatchAnchor, bool, error) {
 	return a, true, nil
 }
 
-// CommitReceiptAtomic atomically appends the __receipts__ fragment, persists the receipts row,
-// and records all citation edges inside a single SQLite transaction.
+// CommitReceiptAtomic atomically appends the __receipts__ fragment (including prev_leaf/chain_hash),
+// persists the receipts row, and records all citation edges inside a single SQLite transaction.
 func (d *DB) CommitReceiptAtomic(frag FragmentRecord, rec ReceiptRecord, cites []CitationEdge) (FragmentRecord, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -283,38 +404,14 @@ func (d *DB) CommitReceiptAtomic(frag FragmentRecord, rec ReceiptRecord, cites [
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var existingSeq int64
-	err = tx.QueryRow(`SELECT seq FROM fragments WHERE shard = ? AND hdp = ?`, frag.Shard, frag.HDP).Scan(&existingSeq)
-	if err == nil {
-		frag.Seq = existingSeq
-	} else if errors.Is(err, sql.ErrNoRows) {
-		var nextSeq int64
-		if err := tx.QueryRow(`SELECT COALESCE(MAX(seq), 0) + 1 FROM fragments WHERE shard = ?`, frag.Shard).Scan(&nextSeq); err != nil {
-			return FragmentRecord{}, err
-		}
-		frag.Seq = nextSeq
-		if frag.BatchN == 0 && frag.AnchorTxID == "" {
-			frag.BatchN = -1
-			frag.LeafIndex = -1
-		}
-		if frag.Class == "" {
-			frag.Class = "receipt"
-		}
-		if _, err := tx.Exec(`
-			INSERT INTO fragments (
-				shard, seq, hdp, leaf, data, ciphertext, keyed_meta, provenance,
-				level, class, borg_group, borg_epoch, batch_n, leaf_index,
-				anchor_txid, supersedes, forgotten, tainted, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			frag.Shard, frag.Seq, frag.HDP, frag.Leaf, frag.Data, frag.Ciphertext, frag.KeyedMeta, frag.Provenance,
-			frag.Level, frag.Class, frag.BorgGroup, frag.BorgEpoch, frag.BatchN, frag.LeafIndex,
-			frag.AnchorTxID, frag.Supersedes, boolToInt(frag.Forgotten), boolToInt(frag.Tainted), frag.CreatedAt,
-		); err != nil {
-			return FragmentRecord{}, err
-		}
-	} else {
+	if frag.Class == "" {
+		frag.Class = "receipt"
+	}
+	appended, _, err := appendFragmentTx(tx, frag)
+	if err != nil {
 		return FragmentRecord{}, err
 	}
+	frag = appended
 
 	rec.ShardSeq = frag.Seq
 	if _, err := tx.Exec(`
@@ -342,31 +439,6 @@ func (d *DB) UpdateReceiptAnchor(shardSeq int64, anchorTxID string) error {
 	defer d.mu.Unlock()
 	_, err := d.sql.Exec(`UPDATE receipts SET anchor_txid = ? WHERE shard_seq = ?`, anchorTxID, shardSeq)
 	return err
-}
-
-// SaveReceipt persists a committed receipt and its citation edges.
-func (d *DB) SaveReceipt(rec ReceiptRecord, cites []CitationEdge) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	tx, err := d.sql.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`
-		INSERT OR REPLACE INTO receipts (receipt_hash, shard_seq, body_json, anchor_txid, created_at)
-		VALUES (?, ?, ?, ?, ?)`,
-		rec.ReceiptHash, rec.ShardSeq, rec.BodyJSON, rec.AnchorTxID, rec.CreatedAt,
-	); err != nil {
-		return err
-	}
-	for _, c := range cites {
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO citations (shard, seq, receipt_hash) VALUES (?, ?, ?)`,
-			c.Shard, c.Seq, c.ReceiptHash); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
 }
 
 // GetReceipt looks up a receipt by its 64-hex hash.

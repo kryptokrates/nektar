@@ -39,6 +39,7 @@ func newTestNode(t *testing.T, ctx context.Context, envHosts []string, isHub boo
 		IsHub:          isHub,
 		CollectTimeout: 1200 * time.Millisecond,
 	})
+	t.Cleanup(market.AttachTestRestate(broker))
 
 	if !withPublicHTTP {
 		return mem, broker, nil
@@ -243,7 +244,7 @@ func TestLiveThreeNodeA2AHubBountyAndNATBboxMarket(t *testing.T) {
 
 	// 5. Verify Hub Testnet Faucet rate-limited drip works!
 	buyerAddr, _ := buyerMem.Chain().FundAddress()
-	fTxID, sentSats, err := hub.DripFaucet(ctx, hubMem, buyerAddr, 500, 1000)
+	fTxID, _, sentSats, err := hub.DripFaucetBEEF(ctx, hubMem, buyerAddr, 500, 1000)
 	if err != nil || fTxID == "" || sentSats != 500 {
 		t.Fatalf("DripFaucet failed: tx=%s sats=%d err=%v", fTxID, sentSats, err)
 	}

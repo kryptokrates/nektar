@@ -6,13 +6,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
-	"time"
 
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
 )
+
+var hubBundleDomainRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
 
 func (a *App) handleMarketPurchase(w http.ResponseWriter, r *http.Request) {
 	if a.broker == nil {
@@ -90,37 +92,7 @@ func (a *App) handleOnboardFaucet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) allowFaucetIP(r *http.Request) bool {
-	ip := extractClientIP(r)
-	now := time.Now().Unix()
-	a.faucetMu.Lock()
-	defer a.faucetMu.Unlock()
-	if len(a.faucetIPs) > 4096 {
-		for k, times := range a.faucetIPs {
-			active := false
-			for _, ts := range times {
-				if now-ts < 3600 {
-					active = true
-					break
-				}
-			}
-			if !active {
-				delete(a.faucetIPs, k)
-			}
-		}
-	}
-	prev := a.faucetIPs[ip]
-	kept := prev[:0]
-	for _, ts := range prev {
-		if now-ts < 3600 {
-			kept = append(kept, ts)
-		}
-	}
-	if len(kept) >= 5 {
-		a.faucetIPs[ip] = kept
-		return false
-	}
-	a.faucetIPs[ip] = append(kept, now)
-	return true
+	return allowRateLimitedIP(&a.faucetMu, a.faucetIPs, &a.faucetLastPrune, extractClientIP(r), 5, 3600, maxRateLimitKeys)
 }
 
 func (a *App) handlePublicFaucet(w http.ResponseWriter, r *http.Request) {
@@ -234,9 +206,16 @@ func (a *App) handleHubBundle(w http.ResponseWriter, r *http.Request) {
 			feePreset = "free"
 		}
 	}
+	if strings.Contains(r.URL.RawQuery, ";") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid domain hostname"})
+		return
+	}
 	domain := strings.TrimSpace(r.URL.Query().Get("domain"))
 	if domain == "" {
 		domain = "hub.example.com"
+	} else if len(domain) > 253 || !hubBundleDomainRe.MatchString(domain) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid domain hostname"})
+		return
 	}
 	confirmFlag := ""
 	confirmEnv := ""
@@ -461,9 +440,24 @@ func (a *App) handleKillInvocation(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invocation id required"})
 		return
 	}
+	var killedStandingOrderID string
+	if invs, lErr := rc.QueryInvocations(r.Context(), 200); lErr == nil {
+		for _, inv := range invs {
+			if inv.ID == id {
+				parts := strings.Split(strings.TrimPrefix(inv.Target, "/"), "/")
+				if len(parts) >= 2 && parts[0] == "StandingOrder" && parts[1] != "" {
+					killedStandingOrderID = parts[1]
+				}
+				break
+			}
+		}
+	}
 	if err := rc.KillInvocation(r.Context(), id); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	if killedStandingOrderID != "" && a.mem != nil && a.mem.DB() != nil {
+		market.MarkStandingOrderKilled(a.mem.DB(), killedStandingOrderID)
 	}
 	a.BroadcastDashboardEvent("invocation_killed")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "invocationId": id, "action": "killed"})

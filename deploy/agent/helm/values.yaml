@@ -20,7 +20,7 @@ modelId: unspecified
 publicUrl: ''
 verifyBase: ''
 trustProxy: false
-headersSource: 'woc:test'
+headersSource: ''
 settleSpec: ''
 mainnetConfirm: ''
 

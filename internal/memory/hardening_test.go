@@ -3,13 +3,13 @@ package memory
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"path/filepath"
 	"testing"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/memrepo"
 	"github.com/kryptokrates/nektar/internal/reasoning"
 	"github.com/kryptokrates/nektar/internal/store"
 )
@@ -41,7 +41,7 @@ func TestHardeningEncryptedLeafAndSignedReceipt(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newTestMemoryService(t)
 
-	// F-11: Borg-encrypted fragment leaf MUST commit to H(E) (non-empty ciphertext), not SHA256("").
+	// F-11: Borg-encrypted fragment TagLeafV2 MUST commit to H(E) (non-empty ciphertext) + MPERoot, not SHA256("").
 	res, err := svc.Remember(ctx, RememberInput{
 		Shard:     "sec",
 		Text:      "classified quarterly forecast alpha",
@@ -58,10 +58,22 @@ func TestHardeningEncryptedLeafAndSignedReceipt(t *testing.T) {
 		t.Fatal("expected non-empty BRC-369 ciphertext")
 	}
 	hdpBytes, _ := hex.DecodeString(rec.HDP)
-	wantLeaf := core.ToHex(core.ComputeLeaf(core.Fragment{HDP: hdpBytes, Ciphertext: rec.Ciphertext}))
-	emptyCTLeaf := core.ToHex(core.ComputeLeaf(core.Fragment{HDP: hdpBytes, Ciphertext: nil}))
+	mpeBytes, _ := hex.DecodeString(rec.MPERoot)
+	contentBytes, _ := hex.DecodeString(rec.ContentSHA256)
+	wantLeaf := core.ToHex(core.ComputeLeafV2(core.Fragment{
+		HDP:           hdpBytes,
+		Ciphertext:    rec.Ciphertext,
+		MPERoot:       mpeBytes,
+		ContentSHA256: contentBytes,
+	}))
+	emptyCTLeaf := core.ToHex(core.ComputeLeafV2(core.Fragment{
+		HDP:           hdpBytes,
+		Ciphertext:    nil,
+		MPERoot:       mpeBytes,
+		ContentSHA256: contentBytes,
+	}))
 	if rec.Leaf != wantLeaf || rec.Leaf == emptyCTLeaf {
-		t.Fatalf("F-11: leaf did not commit to ciphertext: got=%s want=%s emptyCT=%s", rec.Leaf, wantLeaf, emptyCTLeaf)
+		t.Fatalf("F-11: TagLeafV2 did not commit to ciphertext: got=%s want=%s emptyCT=%s", rec.Leaf, wantLeaf, emptyCTLeaf)
 	}
 
 	// F-32: GroundedAnswer signs Receipt under TagReceiptSig and VerifyReceipt verifies it.
@@ -91,7 +103,7 @@ func TestHardeningEncryptedLeafAndSignedReceipt(t *testing.T) {
 }
 
 // TestShardPackRejectsEmptyProvenanceForgery verifies F-09: stripping Provenance from an anchored
-// shard pack fragment MUST strip its anchored status on import (never trust unverified plaintext!).
+// .nkt capsule fragment MUST fail closed on import (never accept unverified plaintext!).
 func TestShardPackRejectsEmptyProvenanceForgery(t *testing.T) {
 	ctx := context.Background()
 	src, _ := newTestMemoryService(t)
@@ -110,30 +122,29 @@ func TestShardPackRejectsEmptyProvenanceForgery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveChirp: %v", err)
 	}
-	var pack ShardPack
-	if err := json.Unmarshal(raw, &pack); err != nil {
-		t.Fatalf("unmarshal pack: %v", err)
+	capObj, err := memrepo.DecodeCapsule(raw)
+	if err != nil {
+		t.Fatalf("DecodeCapsule: %v", err)
 	}
-	if len(pack.Fragments) != 1 || pack.Fragments[0].BatchN < 0 {
-		t.Fatalf("expected 1 anchored fragment in exported pack, got %+v", pack.Fragments)
+	if len(capObj.Fragments) != 1 || capObj.Fragments[0].BatchN < 0 {
+		t.Fatalf("expected 1 anchored fragment in exported capsule, got %+v", capObj.Fragments)
 	}
-	pack.Fragments[0].Data = []byte("forged plaintext without provenance")
-	pack.Fragments[0].Provenance = []byte{}
-	tamperedRaw, _ := json.Marshal(pack)
+	capObj.Fragments[0].Data = []byte("forged plaintext without provenance")
+	capObj.Fragments[0].Provenance = []byte{}
+	tamperedRaw, err := memrepo.EncodeCapsule(capObj)
+	if err != nil {
+		t.Fatalf("EncodeCapsule: %v", err)
+	}
 
 	dst, _ := newTestMemoryService(t)
-	_, importedShard, err := dst.importShardPackVerified(ctx, tamperedRaw, "imported-legit")
-	if err != nil {
-		t.Fatalf("importShardPackVerified: %v", err)
+	if _, _, err := dst.ImportShardPackBytesCtx(ctx, tamperedRaw, "imported-legit"); err == nil {
+		t.Fatal("F-09 REGRESSION: expected tampered empty-provenance capsule import to fail closed")
 	}
-	frags, err := dst.DB().ListFragments(importedShard)
+	frags, err := dst.DB().ListFragments("imported-legit")
 	if err != nil {
 		t.Fatalf("ListFragments: err=%v", err)
 	}
-	// Either the forged empty-provenance fragment was dropped or its anchored status was stripped.
-	for _, f := range frags {
-		if f.BatchN != -1 || f.AnchorTxID != "" {
-			t.Fatalf("F-09 REGRESSION: empty-provenance forged fragment retained anchored status! BatchN=%d AnchorTxID=%q", f.BatchN, f.AnchorTxID)
-		}
+	if len(frags) != 0 {
+		t.Fatalf("F-09 REGRESSION: forged capsule left %d fragments persisted locally", len(frags))
 	}
 }

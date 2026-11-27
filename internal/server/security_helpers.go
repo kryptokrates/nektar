@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/policy"
@@ -38,18 +39,55 @@ func CallerAuthFromContext(ctx context.Context) (CallerAuth, bool) {
 	return v, ok
 }
 
-// PrincipalForContext derives a Cedar Principal strictly from server-side authentication context.
-// When called over HTTP/MCP/A2A (CallerAuth present), untrusted JSON principal/level/callerPub
-// fields are ignored so low-privilege tokens cannot escalate clearance or spoof Borg members.
-func PrincipalForContext(ctx context.Context, fallback policy.Principal) (principal policy.Principal, disallowBorg bool, overridden bool) {
+// CallerContext carries typed server-verified authorization context derived strictly
+// from authentication middleware (never from untrusted JSON fields).
+type CallerContext struct {
+	Principal    policy.Principal
+	IsOperator   bool
+	DisallowBorg bool
+	FromHTTP     bool
+}
+
+// CallerContextFor derives a typed CallerContext strictly from server-side authentication context.
+// When called over HTTP/MCP/A2A (CallerAuth present), FromHTTP is true and untrusted JSON
+// principal/level/callerPub fields are ignored so low-privilege tokens cannot escalate clearance
+// or spoof Borg members. Unauthenticated bare-metal loopback preserves IsOperator=true (owner Level 100),
+// while agent APIToken and OAuth nkt_at_* tokens receive IsOperator=false (agent Level 0, DisallowBorg=true).
+func CallerContextFor(ctx context.Context, fallback policy.Principal) CallerContext {
 	auth, ok := CallerAuthFromContext(ctx)
 	if !ok {
-		return fallback, false, false
+		if fallback.ID == "" {
+			fallback = policy.Principal{Type: "Agent", ID: "owner", Level: 100}
+		}
+		return CallerContext{
+			Principal:    fallback,
+			IsOperator:   true,
+			DisallowBorg: false,
+			FromHTTP:     false,
+		}
 	}
 	if auth.IsOperator {
-		return policy.Principal{Type: "Agent", ID: "owner", Level: 100}, false, true
+		return CallerContext{
+			Principal:    policy.Principal{Type: "Agent", ID: "owner", Level: 100},
+			IsOperator:   true,
+			DisallowBorg: false,
+			FromHTTP:     true,
+		}
 	}
-	return policy.Principal{Type: "Agent", ID: "agent", Level: 0}, true, true
+	return CallerContext{
+		Principal:    policy.Principal{Type: "Agent", ID: "agent", Level: 0},
+		IsOperator:   false,
+		DisallowBorg: true,
+		FromHTTP:     true,
+	}
+}
+
+func isLoopbackURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return isLoopbackHost(u.Host)
 }
 
 func isHTTPSRequest(r *http.Request, publicURL string) bool {
@@ -151,38 +189,77 @@ func extractClientIP(r *http.Request) string {
 	return remoteHost
 }
 
-func (a *App) allowOAuthRegisterIP(r *http.Request) bool {
-	ip := extractClientIP(r)
+const maxRateLimitKeys = 4096
+
+// normalizeRateLimitIP maps IPv6 addresses onto their /64 prefix so a single residential
+// or cloud IPv6 allocation cannot bypass per-IP rate limits or exhaust memory via /128 rotation.
+func normalizeRateLimitIP(ip string) string {
+	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if addr.Is6() {
+		return netip.PrefixFrom(addr, 64).Masked().String()
+	}
+	return addr.String()
+}
+
+// allowRateLimitedIP enforces a sliding-window per-IP rate limit with IPv6 /64 normalization,
+// amortized expired-key pruning (preventing O(N^2) scans), and a hard map cap (fail-closed 429).
+func allowRateLimitedIP(mu *sync.Mutex, buckets map[string][]int64, lastPrune *int64, rawIP string, limit int, windowSec int64, maxKeys int) bool {
+	ip := normalizeRateLimitIP(rawIP)
 	now := time.Now().Unix()
-	a.oauthRegMu.Lock()
-	defer a.oauthRegMu.Unlock()
-	if len(a.oauthRegIPs) > 4096 {
-		for k, times := range a.oauthRegIPs {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if maxKeys <= 0 {
+		maxKeys = maxRateLimitKeys
+	}
+	pruneExpired := func() {
+		for k, times := range buckets {
 			active := false
 			for _, ts := range times {
-				if now-ts < 3600 {
+				if now-ts < windowSec {
 					active = true
 					break
 				}
 			}
 			if !active {
-				delete(a.oauthRegIPs, k)
+				delete(buckets, k)
 			}
 		}
+		if lastPrune != nil {
+			*lastPrune = now
+		}
 	}
-	prev := a.oauthRegIPs[ip]
+
+	prev, exists := buckets[ip]
+	if !exists && len(buckets) >= maxKeys {
+		if lastPrune == nil || *lastPrune == 0 || now-*lastPrune >= 60 {
+			pruneExpired()
+		}
+		if len(buckets) >= maxKeys {
+			return false
+		}
+	}
+
 	kept := prev[:0]
 	for _, ts := range prev {
-		if now-ts < 3600 {
+		if now-ts < windowSec {
 			kept = append(kept, ts)
 		}
 	}
-	if len(kept) >= 20 {
-		a.oauthRegIPs[ip] = kept
+	if len(kept) >= limit {
+		buckets[ip] = kept
 		return false
 	}
-	a.oauthRegIPs[ip] = append(kept, now)
+	buckets[ip] = append(kept, now)
 	return true
+}
+
+func (a *App) allowOAuthRegisterIP(r *http.Request) bool {
+	return allowRateLimitedIP(&a.oauthRegMu, a.oauthRegIPs, &a.oauthRegLastPrune, extractClientIP(r), 20, 3600, maxRateLimitKeys)
 }
 
 func (a *App) isAllowedOrigin(origin string, r *http.Request) bool {
@@ -250,10 +327,16 @@ func (a *App) withBrowserOriginGuard(next http.Handler) http.Handler {
 					strings.HasPrefix(p, "/v1/tools/") ||
 					strings.HasPrefix(p, "/v1/auth/") ||
 					strings.HasPrefix(p, "/v1/market/listings/") ||
+					strings.HasPrefix(p, "/v1/market/standing") ||
+					strings.HasPrefix(p, "/v1/repos/") ||
+					strings.HasPrefix(p, "/v1/dock/") ||
+					strings.HasPrefix(p, "/v1/hubs/") ||
+					strings.HasPrefix(p, "/v1/runtime/") ||
 					p == "/v1/remember" || p == "/v1/recall" || p == "/v1/anchor" || p == "/v1/answer" || p == "/a2a"
 				if isJSONMutation && r.ContentLength != 0 {
 					ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
-					if ct != "" && !strings.HasPrefix(ct, "application/json") {
+					allowOctet := p == "/v1/repos/import" || p == "/v1/repos/inspect-capsule"
+					if ct != "" && !strings.HasPrefix(ct, "application/json") && !(allowOctet && strings.HasPrefix(ct, "application/octet-stream")) {
 						writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "Content-Type must be application/json"})
 						return
 					}
@@ -265,7 +348,27 @@ func (a *App) withBrowserOriginGuard(next http.Handler) http.Handler {
 	})
 }
 
-// withMCPPaywall inspects Streamable HTTP /mcp JSON-RPC tool calls and enforces configured
+func (a *App) mcpPaywallKey(method, name, uri string) string {
+	switch method {
+	case "tools/call":
+		if name != "" && a.cfg.ToolPrices[name] > 0 {
+			return name
+		}
+	case "resources/read":
+		if a.cfg.ToolPrices["resources/read"] > 0 {
+			return "resources/read"
+		}
+		if uri == "nektar://welcome" && a.cfg.ToolPrices["recall"] > 0 {
+			return "recall"
+		}
+		if (uri == "nektar://repos" || strings.HasPrefix(uri, "nektar://repo/")) && a.cfg.ToolPrices["repo"] > 0 {
+			return "repo"
+		}
+	}
+	return ""
+}
+
+// withMCPPaywall inspects Streamable HTTP /mcp JSON-RPC tool and resource calls and enforces configured
 // NEKTAR_TOOL_PRICES via the exact same BRC-105 / HTTP 402 paywall used by REST /v1/* routes.
 func (a *App) withMCPPaywall(next http.Handler) http.Handler {
 	if len(a.cfg.ToolPrices) == 0 {
@@ -286,19 +389,20 @@ func (a *App) withMCPPaywall(next http.Handler) http.Handler {
 			Method string `json:"method"`
 			Params struct {
 				Name string `json:"name"`
+				URI  string `json:"uri"`
 			} `json:"params"`
 		}
 		trimmed := bytes.TrimSpace(raw)
 		if len(trimmed) > 0 && trimmed[0] == '[' {
-			// Inspect JSON-RPC batch arrays so paid tools cannot bypass the MCP paywall via batching.
+			// Inspect JSON-RPC batch arrays so paid tools/resources cannot bypass the MCP paywall via batching.
 			var batch []mcpRPC
 			if json.Unmarshal(trimmed, &batch) != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "malformed JSON-RPC batch"})
 				return
 			}
 			for _, item := range batch {
-				if item.Method == "tools/call" && item.Params.Name != "" && a.cfg.ToolPrices[item.Params.Name] > 0 {
-					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "batched paid MCP tool calls are not permitted; submit one request per paid tool call"})
+				if a.mcpPaywallKey(item.Method, item.Params.Name, item.Params.URI) != "" {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "batched paid MCP tool or resource calls are not permitted; submit one request per paid call"})
 					return
 				}
 			}
@@ -306,9 +410,9 @@ func (a *App) withMCPPaywall(next http.Handler) http.Handler {
 			return
 		}
 		var rpc mcpRPC
-		if json.Unmarshal(trimmed, &rpc) == nil && rpc.Method == "tools/call" && rpc.Params.Name != "" {
-			if a.cfg.ToolPrices[rpc.Params.Name] > 0 {
-				a.withPaywall(rpc.Params.Name, next).ServeHTTP(w, r)
+		if json.Unmarshal(trimmed, &rpc) == nil {
+			if pricedKey := a.mcpPaywallKey(rpc.Method, rpc.Params.Name, rpc.Params.URI); pricedKey != "" {
+				a.withPaywall(pricedKey, next).ServeHTTP(w, r)
 				return
 			}
 		}

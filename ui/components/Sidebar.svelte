@@ -4,13 +4,15 @@
   interface Props {
     tab: NavTab
     live: boolean
+    aboutActive?: boolean
     pendingApprovals: number
     connectedHubs?: number
     onSelect: (t: NavTab) => void
     onOpenPalette: () => void
+    onOpenAbout: () => void
   }
 
-  let { tab, live, pendingApprovals, connectedHubs = 0, onSelect, onOpenPalette }: Props = $props()
+  let { tab, live, aboutActive = false, pendingApprovals, connectedHubs = 0, onSelect, onOpenPalette, onOpenAbout }: Props = $props()
 </script>
 
 <aside class="rail-left">
@@ -79,10 +81,17 @@
     </nav>
   </div>
 
-  <button class="cmd-btn" onclick={onOpenPalette} title="Command Palette (Ctrl+K / ⌘K)">
-    <span class="lbl">Commands</span>
-    <kbd>⌘K</kbd>
-  </button>
+  <div class="foot-group">
+    <button class="cmd-btn" onclick={onOpenPalette} title="Command Palette (Ctrl+K / ⌘K)">
+      <span class="lbl">Commands</span>
+      <kbd>⌘K</kbd>
+    </button>
+    <button class="about-btn" class:active={aboutActive} onclick={onOpenAbout} title="About Nektar (Settings → System)">
+      <span class="about-ver">v0.1</span>
+      <span class="about-sep" aria-hidden="true">·</span>
+      <span>About</span>
+    </button>
+  </div>
 </aside>
 
 <style>
@@ -142,6 +151,11 @@
     font-size: 0.7rem; font-weight: 700; color: var(--mut2);
     font-variant-numeric: tabular-nums;
   }
+  .foot-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
   .cmd-btn {
     display: flex; align-items: center; justify-content: space-between;
     background: transparent; border: 1px solid var(--line); border-radius: 10px;
@@ -153,10 +167,33 @@
     font-family: ui-monospace, monospace; font-size: 0.68rem; color: var(--mut);
     background: var(--surf); border: 1px solid var(--line); border-radius: 5px; padding: 0.05rem 0.32rem;
   }
+  .about-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.32rem;
+    width: fit-content;
+    background: none;
+    border: 0;
+    border-radius: 8px;
+    padding: 0.24rem 0.5rem;
+    color: var(--mut2);
+    font: inherit;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color 0.14s, background 0.14s;
+  }
+  .about-btn:hover { color: var(--ink); background: var(--hover); }
+  .about-btn.active { color: var(--amber); }
+  .about-ver {
+    font-family: ui-monospace, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace;
+    font-size: 0.69rem;
+  }
+  .about-sep { opacity: 0.55; }
 
   @media (max-width: 1100px) and (min-width: 721px) {
     .rail-left { align-items: center; padding: 1rem 0.35rem; }
-    .lbl, .bname, .cmd-btn { display: none; }
+    .lbl, .bname, .foot-group { display: none; }
     .brand { padding: 0.35rem; position: relative; }
     .dot { position: absolute; right: 2px; bottom: 2px; }
     .ni { padding: 0.7rem; justify-content: center; position: relative; }
@@ -171,7 +208,7 @@
       align-items: center; justify-content: space-around; padding: 0 0.5rem;
     }
     .top-group { flex-direction: row; width: 100%; align-items: center; justify-content: space-around; gap: 0; }
-    .brand, .cmd-btn { display: none; }
+    .brand, .foot-group { display: none; }
     .nav { flex-direction: row; width: 100%; justify-content: space-around; }
     .ni { flex-direction: column; gap: 0.15rem; padding: 0.35rem 0.6rem; font-size: 0.68rem; border-radius: 10px; }
   }

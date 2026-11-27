@@ -253,13 +253,6 @@ func ActionSendBSV(sats uint64) ActionMeta {
 	}
 }
 
-func ActionReceiveBRC29() ActionMeta {
-	return ActionMeta{
-		Description: FormatActionDescription("Receive payment", "BRC-29"),
-		Labels:      NormalizeActionLabels("receive", "brc29"),
-	}
-}
-
 // --- Formatting & Normalization Helpers ---
 
 // FormatActionDescription builds a uniform BRC-100 description:

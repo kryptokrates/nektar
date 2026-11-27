@@ -82,9 +82,16 @@ func cmdRecall(args []string) error {
 	}
 	defer rt.closeFn()
 
+	_, _ = rt.mem.EnsureWelcome(ctx)
 	shards, items, err := rt.mem.RecallAllShards(ctx, memory.RecallInput{Shard: *shard, Query: *query, VerifySPV: *spv})
 	if err != nil {
 		return err
+	}
+	if shards == nil {
+		shards = []string{}
+	}
+	if items == nil {
+		items = []memory.RecalledFragment{}
 	}
 	return printJSON(map[string]any{"shards": shards, "items": items, "count": len(items)})
 }
@@ -179,20 +186,77 @@ func cmdVerify(args []string) error {
 func cmdStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "Data directory override")
+	netName := fs.String("network", "", "Network override (testnet|main|memory)")
+	asJSON := fs.Bool("json", false, "Machine-readable JSON output")
 	_ = fs.Parse(args)
 
-	if info, ok := detectDaemon(*dataDir, ""); ok {
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		if out, err := callLiveTool(info, "status", map[string]any{}); err == nil {
-			return printJSON(out)
+			if *asJSON {
+				return printJSON(out)
+			}
+			printStatusHuman(info, out)
+			return nil
+		}
+	}
+	effectiveNet := strings.TrimSpace(*netName)
+	if effectiveNet == "" {
+		effectiveNet = envOr("NEKTAR_NETWORK", "testnet")
+	}
+	dir := strings.TrimSpace(*dataDir)
+	if dir == "" {
+		dir = defaultDataDirForNetwork(effectiveNet)
+	}
+	if effectiveNet != "memory" {
+		if _, err := os.Stat(dir + string(os.PathSeparator) + "nektar.sqlite"); os.IsNotExist(err) {
+			stopped := map[string]any{
+				"running": false,
+				"network": effectiveNet,
+				"dataDir": dir,
+				"next":    "Start your node with `nektar up` (or `nektar up --network main --confirm I_UNDERSTAND`)",
+			}
+			if *asJSON {
+				return printJSON(stopped)
+			}
+			fmt.Printf("nektar status: STOPPED (uninitialized · %s · %s)\n  Next: run `nektar up`\n", effectiveNet, dir)
+			return nil
 		}
 	}
 	ctx := context.Background()
-	rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
+	rt, err := openRuntime(ctx, *netName, *dataDir, DefaultLocalPort)
 	if err != nil {
 		return err
 	}
 	defer rt.closeFn()
-	return printJSON(server.BuildStatus(ctx, rt.mem, rt.mkt))
+	st := server.BuildStatus(ctx, rt.mem, rt.mkt)
+	if *asJSON {
+		return printJSON(st)
+	}
+	printStatusHuman(nil, st)
+	return nil
+}
+
+func printStatusHuman(daemon *server.DaemonInfo, raw any) {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		_ = printJSON(raw)
+		return
+	}
+	var b strings.Builder
+	if daemon != nil {
+		fmt.Fprintf(&b, "nektar status: UP at %s (%s · pid %d)\n", daemon.URL, m["network"], daemon.PID)
+	} else {
+		fmt.Fprintf(&b, "nektar status: STOPPED (offline snapshot · %s)\n", m["network"])
+	}
+	fmt.Fprintf(&b, "  identity : %v\n", m["identityPub"])
+	fmt.Fprintf(&b, "  wallet   : %v (%v sats · %v UTXO(s))\n", m["fundAddress"], m["balanceSats"], m["utxos"])
+	fmt.Fprintf(&b, "  shards   : %v\n", m["shards"])
+	fmt.Fprintf(&b, "  policy   : %v\n", m["policyHash"])
+	if sg, ok := m["spendGuard"].(map[string]any); ok {
+		fmt.Fprintf(&b, "  guard    : %v/%v sats today (maxFee=%v, txCount=%v)\n",
+			sg["spentToday"], sg["maxPerDay"], sg["maxFee"], sg["txCount"])
+	}
+	fmt.Print(formatConsoleText(b.String()))
 }
 
 func cmdCheckMainnet() error {

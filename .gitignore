@@ -8,13 +8,7 @@ node_modules/
 .state.json
 .state/
 .nektar*
-tools/stark/target/
-tools/stark/verifier-wasm/target/
-tools/stark/vectors.jsonl
-spikes/.state.json
 dist/
-docs/formal/.tools/
-docs/formal/states/
 # third-party clones — fetched by infra/README.md (pinned commits)
 infra/arcade/
 infra/teranode-quickstart/
@@ -23,19 +17,10 @@ infra/wallet-services/
 contracts/artifacts/NektarAutomatonZk.json
 internal/contracts/artifacts/NektarAutomatonZk.json
 *.tmp
-codex-receipts.log
 # agent boot/session output — never commit run artifacts
 *.log
 *.err
-# ad-hoc session scratch (lint dumps, revert lists, census output)
-/.lint-out.json
-/.lint-ta.json
-/.revert.txt
-/.touched.txt
-/.unused-sites.txt
-/dist-deploy/
 .tools/
-test/fixtures/swarm-keys/
 # rendered media pipeline output
 artifacts/nektar-video/
 
@@ -47,5 +32,6 @@ __pycache__/
 # Go v0.1 binaries & UI build artifacts
 /nektar
 /nektar.exe
+/nektar-*.exe
 ui/dist/
 ui/node_modules/

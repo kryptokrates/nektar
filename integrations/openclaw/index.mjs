@@ -32,38 +32,50 @@ function readDaemonInfo(dir) {
   return readDaemonFile(join(dir, 'daemon.json'))
 }
 
-async function discoverNektar(cfg, fetchImpl = fetch) {
-  const seen = new Set()
+function readDaemonPointers(home = homedir(), cwd = process.cwd()) {
+  return [
+    readDaemonInfo(join(cwd, '.nektar')),
+    readDaemonFile(join(home, '.nektar', 'active-daemon.json')),
+    readDaemonInfo(join(home, '.nektar', 'main')),
+    readDaemonInfo(join(home, '.nektar'))
+  ].filter(Boolean)
+}
+
+export async function discoverNektar(cfg, fetchImpl = fetch, opts = {}) {
+  const explicitToken = (cfg?.token ?? process.env.NEKTAR_HTTP_TOKEN ?? '').trim() || undefined
+  const seen = new Map()
   const candidates = []
-  const add = (u) => {
+  const add = (u, tok) => {
     if (!u) return
     const clean = String(u).trim().replace(/\/+$/, '')
-    if (clean && !seen.has(clean)) {
-      seen.add(clean)
-      candidates.push(clean)
+    if (!clean) return
+    const resolvedTok = explicitToken ?? (tok ? String(tok).trim() || undefined : undefined)
+    if (seen.has(clean)) {
+      const existing = seen.get(clean)
+      if (!existing.token && resolvedTok) existing.token = resolvedTok
+      return
     }
+    const entry = { url: clean, token: resolvedTok }
+    seen.set(clean, entry)
+    candidates.push(entry)
   }
-  add(cfg?.url)
-  add(process.env.NEKTAR_URL)
-  add(process.env.NEKTAR_DAEMON_URL)
-  for (const d of [
-    readDaemonInfo(join(process.cwd(), '.nektar')),
-    readDaemonFile(join(homedir(), '.nektar', 'active-daemon.json')),
-    readDaemonInfo(join(homedir(), '.nektar', 'main')),
-    readDaemonInfo(join(homedir(), '.nektar'))
-  ]) {
-    if (d?.token && cfg && !cfg.token) cfg.token = d.token
-    add(d?.url)
-  }
-  if (process.env.NEKTAR_HTTP_PORT) add(`http://127.0.0.1:${process.env.NEKTAR_HTTP_PORT}`)
-  for (const p of DEFAULT_PORTS) add(`http://127.0.0.1:${p}`)
 
-  for (const base of candidates) {
+  add(cfg?.url, explicitToken)
+  add(process.env.NEKTAR_URL, explicitToken)
+  add(process.env.NEKTAR_DAEMON_URL, explicitToken)
+  for (const d of readDaemonPointers(opts.home, opts.cwd)) {
+    // Pair each URL with its own daemon.json token — never latch a stale daemon's token onto another candidate.
+    add(d.url, d.token)
+  }
+  if (process.env.NEKTAR_HTTP_PORT) add(`http://127.0.0.1:${process.env.NEKTAR_HTTP_PORT}`, explicitToken)
+  for (const p of DEFAULT_PORTS) add(`http://127.0.0.1:${p}`, explicitToken)
+
+  for (const cand of candidates) {
     try {
-      const r = await fetchImpl(`${base}/.well-known/agent.json`, { signal: AbortSignal.timeout(500) })
+      const r = await fetchImpl(`${cand.url}/.well-known/agent.json`, { signal: AbortSignal.timeout(500) })
       if (!r.ok) continue
       const card = await r.json()
-      if (card?.name === 'nektar') return base
+      if (card?.name === 'nektar') return { url: cand.url, token: cand.token }
     } catch {
       /* try next */
     }
@@ -97,12 +109,191 @@ async function callNektarTool(baseUrl, token, tool, args, timeoutMs = 4000, fetc
     body: JSON.stringify(args ?? {}),
     signal: AbortSignal.timeout(timeoutMs)
   })
-  if (!r.ok) throw new Error(`nektar ${tool} failed (HTTP ${r.status})`)
+  if (!r.ok) {
+    const err = new Error(`nektar ${tool} failed (HTTP ${r.status})`)
+    err.status = r.status
+    throw err
+  }
   return await r.json()
 }
 
+export const NEKTAR_OPENCLAW_TOOL_DEFS = [
+  {
+    name: 'nektar_recall',
+    remoteName: 'recall',
+    description: 'Recall verified fragments from nektar memory (supports query, limit, shard, repo, branch, atCommit).',
+    parameters: {
+      type: 'object',
+      properties: {
+        shard: { type: 'string', description: 'Optional shard/repo name; omit to recall across all readable shards.' },
+        repo: { type: 'string', description: 'Optional Memory Repo name alias for shard.' },
+        branch: { type: 'string', description: 'Optional branch name (default: main).' },
+        atCommit: { type: 'string', description: 'Optional commit hash for epistemic time-travel recall.' },
+        query: { type: 'string', description: 'Optional FTS5 search query to rank relevant memories.' },
+        limit: { type: 'integer', description: 'Maximum number of fragments to return.' },
+        includeSuperseded: { type: 'boolean', description: 'Include superseded records.' }
+      }
+    }
+  },
+  {
+    name: 'nektar_remember',
+    remoteName: 'remember',
+    description: 'Persist a durable fact or file into nektar verifiable memory with provenance (supports text/data, path, supersedes, autoAnchor).',
+    parameters: {
+      type: 'object',
+      properties: {
+        shard: { type: 'string', description: 'Target shard or repo name.' },
+        repo: { type: 'string', description: 'Optional Memory Repo alias for shard.' },
+        text: { type: 'string', description: 'Fact or file content to persist.' },
+        data: { type: 'string', description: 'Alias for text.' },
+        path: { type: 'string', description: 'Optional file path inside the memory repo.' },
+        branch: { type: 'string', description: 'Optional branch name.' },
+        commitMessage: { type: 'string', description: 'Optional commit message.' },
+        source: { type: 'string', description: 'Provenance source tag.' },
+        supersedes: { type: 'integer', description: 'Optional prior seq superseded by this fact.' },
+        autoAnchor: { type: 'boolean', description: 'Anchor on BSV immediately if wallet is funded.' }
+      }
+    }
+  },
+  {
+    name: 'nektar_forget',
+    remoteName: 'forget',
+    description: 'Shred local plaintext of a fragment while preserving its on-chain Merkle commitment.',
+    parameters: {
+      type: 'object',
+      properties: {
+        shard: { type: 'string', description: 'Shard name.' },
+        seq: { type: 'integer', description: 'Fragment sequence number.' },
+        reason: { type: 'string', description: 'Optional audit reason.' }
+      },
+      required: ['shard', 'seq']
+    }
+  },
+  {
+    name: 'nektar_grounded_answer',
+    remoteName: 'groundedAnswer',
+    description: 'Produce a grounded answer citing verified fragments with a checkable nektarr1.* receipt footer.',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'Question being answered.' },
+        claims: {
+          type: 'array',
+          description: 'Claims to ground against verified fragments.',
+          items: {
+            type: 'object',
+            properties: {
+              text: { type: 'string' },
+              cites: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: { shard: { type: 'string' }, seq: { type: 'integer' } },
+                  required: ['shard', 'seq']
+                }
+              }
+            },
+            required: ['text', 'cites']
+          }
+        }
+      },
+      required: ['claims']
+    }
+  },
+  {
+    name: 'nektar_verify_receipt',
+    remoteName: 'verifyReceipt',
+    description: 'Verify a nektarr1.<token> answer receipt and the SPV status of every cited fragment.',
+    parameters: {
+      type: 'object',
+      properties: {
+        token: { type: 'string', description: 'Full nektarr1.<token> string.' }
+      },
+      required: ['token']
+    }
+  },
+  {
+    name: 'nektar_repo',
+    remoteName: 'repo',
+    description: 'Full Git + SingularGrit Memory Repo operations anchored on BSV (action: list|log|show|tree|read|diff|blame|verify|commit|rm|branch|fork|merge|cherryPick|revert|tag|export|import|prove|rotate).',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', description: 'Repo operation to execute.' },
+        repo: { type: 'string', description: 'Target Memory Repo name.' },
+        branch: { type: 'string', description: 'Branch name (default: main).' },
+        path: { type: 'string', description: 'File path for read/commit/rm/blame.' },
+        text: { type: 'string', description: 'File content for commit.' },
+        commit: { type: 'string', description: 'Commit SHA for show/diff/revert/tag/prove.' },
+        from: { type: 'string', description: 'Base ref/branch for diff/branch.' },
+        to: { type: 'string', description: 'Target ref/branch for diff.' },
+        sourceBranch: { type: 'string', description: 'Source branch for merge.' },
+        targetBranch: { type: 'string', description: 'Target branch for merge.' },
+        newRepo: { type: 'string', description: 'Destination repo name for fork.' },
+        tag: { type: 'string', description: 'Tag name.' },
+        message: { type: 'string', description: 'Commit or tag message.' },
+        autoAnchor: { type: 'boolean', description: 'Anchor on BSV immediately if wallet is funded.' }
+      },
+      required: ['action']
+    }
+  },
+  {
+    name: 'nektar_want',
+    remoteName: 'want',
+    description: 'Publish a policy-bounded knowledge buy want on the nektar BSV market.',
+    parameters: {
+      type: 'object',
+      properties: {
+        domains: { type: 'array', items: { type: 'string' }, description: 'Topic domains to buy.' },
+        question: { type: 'string', description: 'Specific verified question/facts desired.' },
+        maxSats: { type: 'integer', description: 'Maximum satoshis willing to pay.' },
+        standingTtlSeconds: { type: 'integer', description: 'Optional TTL to create a StandingOrder if no seller is online.' }
+      },
+      required: ['domains', 'maxSats']
+    }
+  },
+  {
+    name: 'nektar_sell',
+    remoteName: 'sell',
+    description: 'List a shard for sale under an operator-approved seller policy, or submit a fragment to a Hub bounty.',
+    parameters: {
+      type: 'object',
+      properties: {
+        shard: { type: 'string', description: 'Local shard name to sell.' },
+        domains: { type: 'array', items: { type: 'string' }, description: 'Topic domains for discovery.' },
+        priceSats: { type: 'integer', description: 'Ask price in satoshis.' },
+        description: { type: 'string', description: 'Short listing description.' },
+        bountyId: { type: 'string', description: 'Optional Hub bounty ID to fulfill.' },
+        seq: { type: 'integer', description: 'Fragment seq when submitting to a Hub bounty.' }
+      },
+      required: ['shard']
+    }
+  },
+  {
+    name: 'nektar_deals',
+    remoteName: 'deals',
+    description: 'Inspect active and completed nektar knowledge trades and pending approvals.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operationId: { type: 'string', description: 'Optional operation ID to inspect.' }
+      }
+    }
+  },
+  {
+    name: 'nektar_doctor',
+    remoteName: 'doctor',
+    description: 'Check nektar instance health, shards, funding balance, and next-step hints.',
+    parameters: {
+      type: 'object',
+      properties: {}
+    }
+  }
+]
+
 export function createNektarOpenClawPlugin(opts = {}) {
   const fetchImpl = opts.fetchImpl ?? fetch
+  const discoveryOpts = { home: opts.home, cwd: opts.cwd }
   return {
     id: 'nektar-memory',
     name: 'nektar Verifiable Memory',
@@ -110,7 +301,7 @@ export function createNektarOpenClawPlugin(opts = {}) {
 
     register(api) {
       const cfg = api.pluginConfig ?? api.config ?? {}
-      const token = cfg.token ?? process.env.NEKTAR_HTTP_TOKEN
+      const explicitToken = (cfg.token ?? process.env.NEKTAR_HTTP_TOKEN ?? '').trim() || undefined
       const defaultShard = cfg.defaultShard ?? 'openclaw'
       const autoRecall = cfg.autoRecall !== false
       const verifyReceipts = cfg.verifyReceipts !== false
@@ -118,11 +309,39 @@ export function createNektarOpenClawPlugin(opts = {}) {
       const prefetchTimeoutMs = Number(cfg.prefetchTimeoutMs ?? 800)
       const prefetchMaxChars = Number(cfg.prefetchMaxChars ?? 1600)
 
-      let cachedUrl = cfg.url ? String(cfg.url).replace(/\/+$/, '') : undefined
-      const resolveUrl = async () => {
-        if (cachedUrl) return cachedUrl
-        cachedUrl = await discoverNektar(cfg, fetchImpl)
-        return cachedUrl
+      let cachedConn = undefined
+      const resolveConnection = async (forceRefresh = false) => {
+        if (cachedConn && !forceRefresh) return cachedConn
+        const discovered = await discoverNektar(cfg, fetchImpl, discoveryOpts)
+        if (discovered) {
+          cachedConn = discovered
+          return cachedConn
+        }
+        if (cfg.url) {
+          const clean = String(cfg.url).trim().replace(/\/+$/, '')
+          const matched = readDaemonPointers(discoveryOpts.home, discoveryOpts.cwd).find((d) => d.url === clean)
+          cachedConn = { url: clean, token: explicitToken ?? matched?.token }
+          return cachedConn
+        }
+        cachedConn = undefined
+        return undefined
+      }
+
+      const callWithRetry = async (tool, args, timeoutMs) => {
+        let conn = await resolveConnection(false)
+        if (!conn) throw new Error('nektar daemon not reachable — start with `nektar serve`')
+        try {
+          return await callNektarTool(conn.url, conn.token, tool, args, timeoutMs, fetchImpl)
+        } catch (err) {
+          // On 401 or transient connection failure, re-discover active-daemon.json + token once.
+          if (err?.status === 401 || err?.status === undefined) {
+            const refreshed = await resolveConnection(true)
+            if (refreshed && (refreshed.url !== conn.url || refreshed.token !== conn.token)) {
+              return await callNektarTool(refreshed.url, refreshed.token, tool, args, timeoutMs, fetchImpl)
+            }
+          }
+          throw err
+        }
       }
 
       if (typeof api.registerContextEngine === 'function') {
@@ -136,12 +355,10 @@ export function createNektarOpenClawPlugin(opts = {}) {
         api.on(
           'before_prompt_build',
           async (event) => {
-            const base = await resolveUrl()
-            if (!base) return undefined
             const query = String(event?.prompt ?? event?.message ?? event?.userMessage ?? '')
             try {
               const payload = query.trim() ? { query: query.trim(), limit: 5 } : { limit: 5 }
-              const res = await callNektarTool(base, token, 'recall', payload, prefetchTimeoutMs, fetchImpl)
+              const res = await callWithRetry('recall', payload, prefetchTimeoutMs)
               const picks = rankItems(res?.items, query, 5)
               if (picks.length === 0) return undefined
               const lines = ['[nektar verified memory — cite via nektar_grounded_answer; proofs show recorded+unaltered, not truth]']
@@ -172,8 +389,9 @@ export function createNektarOpenClawPlugin(opts = {}) {
           'agent_end',
           async (event) => {
             const assistantText = String(event?.assistantMessage ?? event?.output ?? event?.response ?? '')
-            const base = await resolveUrl()
-            if (!base) return
+            const conn = await resolveConnection(false)
+            if (!conn) return
+            const base = conn.url
             if (verifyReceipts && assistantText) {
               const tokens = [...new Set(assistantText.match(RECEIPT_RE) ?? [])].slice(0, 3)
               let verifyBase = base
@@ -206,17 +424,14 @@ export function createNektarOpenClawPlugin(opts = {}) {
               const userText = String(event?.userMessage ?? event?.prompt ?? '').trim()
               if (userText && assistantText.trim()) {
                 try {
-                  await callNektarTool(
-                    base,
-                    token,
+                  await callWithRetry(
                     'remember',
                     {
                       shard: defaultShard,
                       data: `Q: ${userText.slice(0, 300)}\nA: ${assistantText.trim().slice(0, 500)}`,
                       source: `openclaw:turn:${event?.sessionId ?? 'session'}`
                     },
-                    3000,
-                    fetchImpl
+                    3000
                   )
                 } catch {
                   /* fail-open */
@@ -230,27 +445,19 @@ export function createNektarOpenClawPlugin(opts = {}) {
 
       // 3. Native tool registration (works even without separate MCP config)
       if (typeof api.registerTool === 'function') {
-        const defs = [
-          ['nektar_recall', 'recall', 'Recall verified fragments from nektar memory (supports query, limit, shard).'],
-          ['nektar_remember', 'remember', 'Persist a durable fact into nektar verifiable memory with provenance (supports supersedes).'],
-          ['nektar_forget', 'forget', 'Append a tombstone hiding an earlier record from active recall views without deleting history.'],
-          ['nektar_grounded_answer', 'groundedAnswer', 'Produce a grounded answer citing verified fragments with a checkable receipt footer.'],
-          ['nektar_verify_receipt', 'verifyReceipt', 'Verify a nektarr1.<token> answer receipt.'],
-          ['nektar_want', 'want', 'Publish a policy-bounded knowledge buy want on the nektar BSV market.'],
-          ['nektar_sell', 'sell', 'List a shard for sale under an operator-approved seller policy.'],
-          ['nektar_deals', 'deals', 'Inspect active and completed nektar knowledge trades.'],
-          ['nektar_doctor', 'doctor', 'Check nektar instance health, shards, funding balance, and next-step hints.']
-        ]
-        for (const [toolName, remoteName, description] of defs) {
+        for (const def of NEKTAR_OPENCLAW_TOOL_DEFS) {
           api.registerTool({
-            name: toolName,
-            description,
+            name: def.name,
+            description: def.description,
+            parameters: def.parameters,
             execute: async (args) => {
-              const base = await resolveUrl()
-              if (!base) return { ok: false, error: 'nektar daemon not reachable — start with `nektar serve`' }
-              const payload = { ...args }
-              if (remoteName === 'remember' && !payload.shard) payload.shard = defaultShard
-              return await callNektarTool(base, token, remoteName, payload, 15_000, fetchImpl)
+              const payload = { ...(args ?? {}) }
+              if (def.remoteName === 'remember' && !payload.shard && !payload.repo) payload.shard = defaultShard
+              try {
+                return await callWithRetry(def.remoteName, payload, 15_000)
+              } catch (err) {
+                return { ok: false, error: err instanceof Error ? err.message : String(err) }
+              }
             }
           })
         }

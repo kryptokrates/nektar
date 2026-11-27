@@ -58,9 +58,8 @@ func (s *Service) ListUserShards() ([]string, error) {
 // RecallAllShards recalls across every readable non-system shard when RecallInput.Shard is omitted,
 // returning ONLY shard names visible to the caller's Principal (never leaking private shard names).
 func (s *Service) RecallAllShards(ctx context.Context, in RecallInput) ([]string, []RecalledFragment, error) {
-	shards, err := s.ListUserShards()
-	if err != nil {
-		return nil, nil, err
+	if in.Shard == "" && strings.TrimSpace(in.Repo) != "" {
+		in.Shard = strings.TrimSpace(in.Repo)
 	}
 	if strings.TrimSpace(in.Shard) != "" {
 		items, err := s.Recall(ctx, in)
@@ -72,6 +71,10 @@ func (s *Service) RecallAllShards(ctx context.Context, in RecallInput) ([]string
 			visible = []string{in.Shard}
 		}
 		return visible, items, nil
+	}
+	shards, err := s.ListUserShards()
+	if err != nil {
+		return nil, nil, err
 	}
 	var combined []RecalledFragment
 	var visibleShards []string
@@ -98,9 +101,4 @@ func (s *Service) RecallAllShards(ctx context.Context, in RecallInput) ([]string
 		}
 	}
 	return visibleShards, combined, nil
-}
-
-// ImportShardPackBytes verifies and imports a raw ShardPack JSON payload (used after CHIRP resolution).
-func (s *Service) ImportShardPackBytes(raw []byte, targetShard string) (int, string, error) {
-	return s.importShardPackVerified(context.Background(), raw, targetShard)
 }

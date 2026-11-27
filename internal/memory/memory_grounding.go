@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -90,7 +91,11 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 				return false, ""
 			}
 			pt, err := bstack.OpenWithEpoch(&env, epochSym)
+			core.Zero32Array(&epochSym)
 			if err != nil {
+				return false, ""
+			}
+			if hdpBytes, hErr := hex.DecodeString(r.HDP); hErr != nil || len(hdpBytes) != 32 || len(r.Provenance) == 0 || !core.VerifyHDP(pt, r.Provenance, hdpBytes) {
 				return false, ""
 			}
 			return true, string(pt)
@@ -152,19 +157,27 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 	if err := reasoning.VerifyDelegations(rcp); err != nil {
 		return nil, err
 	}
-	// F-32: sign the receipt under core.TagReceiptSig using the node's BRC-43 signing key (matching SignDigest).
-	if signPub, pErr := s.port.SigningPubKey(ctx); pErr == nil && signPub != nil {
-		rcp.IssuerPub = hex.EncodeToString(signPub.Compressed())
-		if signDigest, dErr := reasoning.ReceiptSignDigest(rcp); dErr == nil {
-			if issuerSig, sErr := s.port.SignDigest(ctx, signDigest); sErr == nil && len(issuerSig) > 0 {
-				rcp.IssuerSig = hex.EncodeToString(issuerSig)
-			} else {
-				rcp.IssuerPub = ""
-			}
-		} else {
-			rcp.IssuerPub = ""
+	// F-32: strictly sign every receipt under core.TagReceiptSig using the node's BRC-43 signing key (fail closed).
+	signPub, pErr := s.port.SigningPubKey(ctx)
+	if pErr != nil || signPub == nil {
+		if pErr == nil {
+			pErr = errors.New("nil signing public key")
 		}
+		return nil, fmt.Errorf("memory: load receipt signing key: %w", pErr)
 	}
+	rcp.IssuerPub = hex.EncodeToString(signPub.Compressed())
+	signDigest, dErr := reasoning.ReceiptSignDigest(rcp)
+	if dErr != nil {
+		return nil, fmt.Errorf("memory: compute receipt sign digest: %w", dErr)
+	}
+	issuerSig, sErr := s.port.SignDigest(ctx, signDigest)
+	if sErr != nil || len(issuerSig) == 0 {
+		if sErr == nil {
+			sErr = errors.New("empty signature")
+		}
+		return nil, fmt.Errorf("memory: sign receipt: %w", sErr)
+	}
+	rcp.IssuerSig = hex.EncodeToString(issuerSig)
 	rcpHash, err := reasoning.ReceiptHash(rcp)
 	if err != nil {
 		return nil, err
@@ -192,11 +205,22 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 	prov.Signature = sigBytes
 	provBytes := core.SerializeProvenance(prov)
 	hdp := core.ComputeHDPV2(bodyJSON, prov)
-	leaf := core.ComputeLeaf(core.Fragment{Data: bodyJSON, Provenance: prov, HDP: hdp})
+	hdpHex := core.ToHex(hdp)
+	mpe, mErr := buildCommittedFragmentMPE(ReceiptsShard, hdpHex, prov, 0, "receipt", "", "", "", core.ToHex(core.SHA256(bodyJSON)))
+	if mErr != nil || mpe == nil {
+		return nil, fmt.Errorf("memory: build receipt L1 MPE: %w", mErr)
+	}
+	leaf := core.ComputeLeafV2(core.Fragment{
+		Data:       bodyJSON,
+		Provenance: prov,
+		HDP:        hdp,
+		MPERoot:    mpe.Root,
+	})
 	fragRec := store.FragmentRecord{
 		Shard:      ReceiptsShard,
-		HDP:        core.ToHex(hdp),
+		HDP:        hdpHex,
 		Leaf:       core.ToHex(leaf),
+		MPERoot:    mpe.RootHex,
 		Data:       bodyJSON,
 		Provenance: provBytes,
 		Class:      "receipt",
@@ -208,12 +232,11 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 	for _, r := range refs {
 		cites = append(cites, store.CitationEdge{Shard: r.Shard, Seq: r.Seq, ReceiptHash: rcpHash})
 	}
-	storedFrag, err := s.db.CommitReceiptAtomic(fragRec, store.ReceiptRecord{
+	if _, err := s.db.CommitReceiptAtomic(fragRec, store.ReceiptRecord{
 		ReceiptHash: rcpHash,
 		BodyJSON:    bodyJSON,
 		CreatedAt:   now,
-	}, cites)
-	if err != nil {
+	}, cites); err != nil {
 		return nil, err
 	}
 	var anchorTxID string
@@ -222,7 +245,6 @@ func (s *Service) GroundedAnswer(ctx context.Context, in GroundedAnswerInput) (*
 			return nil, aErr
 		} else if a != nil {
 			anchorTxID = a.TxID
-			_ = s.db.UpdateReceiptAnchor(storedFrag.Seq, anchorTxID)
 		}
 	}
 
@@ -293,16 +315,11 @@ func (s *Service) VerifyReceipt(ctx context.Context, tokenOrHash string) (*Recei
 		return &ReceiptVerification{Verdict: "red", Reason: err.Error(), ReceiptHash: h, ReceiptToken: tok, Receipt: &rcp, TruthNote: reasoning.TruthNote}, nil
 	}
 
-	// Derive ReceiptAnchored strictly from settled=1 anchors (with embedded BUMP), never bare anchor_txid != "".
-	anchorTxID := rec.AnchorTxID
-	if anchorTxID == "" && rec.ShardSeq > 0 {
-		if rf, rfErr := s.db.GetFragment(ReceiptsShard, rec.ShardSeq); rfErr == nil && rf.AnchorTxID != "" {
-			anchorTxID = rf.AnchorTxID
-		}
-	}
+	// Derive ReceiptAnchored strictly from live SPV BUMP verification against the witnessed ChainTracker
+	// (never trusting a bare local DB settled=1 flag without header verification).
 	receiptAnchored := false
-	if anchorTxID != "" {
-		if settled, sErr := s.db.IsAnchorSettled(anchorTxID); sErr == nil && settled {
+	if rec.ShardSeq > 0 {
+		if _, rvr, _, rpErr := s.proveWithMemo(ctx, ReceiptsShard, rec.ShardSeq, policy.Principal{Type: "Agent", ID: "owner", Level: 100}, nil); rpErr == nil && rvr != nil && rvr.OK && rvr.Settled {
 			receiptAnchored = true
 		}
 	}

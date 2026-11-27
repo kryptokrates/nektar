@@ -2,9 +2,6 @@ package bstack
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"testing"
@@ -12,7 +9,7 @@ import (
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 )
 
-// TestBboxE2EHKDFAndAADFraming verifies F-29 (HKDF-SHA256 v2, framed AAD collision resistance, v1 compat).
+// TestBboxE2EHKDFAndAADFraming verifies F-29 (HKDF-SHA256 v2, framed AAD collision resistance, strict v2-only).
 func TestBboxE2EHKDFAndAADFraming(t *testing.T) {
 	recPriv, err := ec.NewPrivateKey()
 	if err != nil {
@@ -49,25 +46,15 @@ func TestBboxE2EHKDFAndAADFraming(t *testing.T) {
 	if _, err := OpenBboxBody(recPriv, aad2, sealed); err == nil {
 		t.Fatal("OpenBboxBody accepted mismatched AAD")
 	}
-	// Legacy V=1 envelope still decrypts for backward compatibility.
-	ephPriv, _ := ec.NewPrivateKey()
-	shared, _ := ephPriv.DeriveSharedSecret(recPriv.PubKey())
-	aadV1 := BboxAADv1("off", "sender", recPubHex, "deal1", "kind")
-	keyV1 := deriveBboxAEADKeyV1(shared.Compressed(), ephPriv.PubKey().Compressed(), recPriv.PubKey().Compressed(), aadV1)
-	blk, _ := aes.NewCipher(keyV1[:])
-	gcm, _ := cipher.NewGCM(blk)
-	var nonce [12]byte
-	_, _ = rand.Read(nonce[:])
-	ct := gcm.Seal(nil, nonce[:], plaintext, aadV1)
+	// Legacy V=1 envelopes MUST be rejected (strict v2-only).
 	v1Raw, _ := json.Marshal(BboxSealedBody{
 		V:      1,
-		EphPub: hex.EncodeToString(ephPriv.PubKey().Compressed()),
-		Nonce:  hex.EncodeToString(nonce[:]),
-		CT:     hex.EncodeToString(ct),
+		EphPub: env.EphPub,
+		Nonce:  env.Nonce,
+		CT:     env.CT,
 	})
-	gotV1, err := OpenBboxBody(recPriv, aadV1, v1Raw)
-	if err != nil || !bytes.Equal(gotV1, plaintext) {
-		t.Fatalf("OpenBboxBody v1 compat failed: err=%v", err)
+	if _, err := OpenBboxBody(recPriv, aad1, v1Raw); err == nil {
+		t.Fatal("OpenBboxBody accepted legacy V=1 envelope")
 	}
 }
 

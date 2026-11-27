@@ -1,6 +1,6 @@
 {
   "name": "@nektar/openclaw",
-  "version": "0.3.2",
+  "version": "0.1.0",
   "description": "OpenClaw native memory slot plugin for nektar — verifiable BSV-anchored memory, checkable receipts, and policy-gated knowledge trading.",
   "license": "MIT",
   "type": "module",

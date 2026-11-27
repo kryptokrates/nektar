@@ -17,6 +17,14 @@ $ErrorActionPreference = 'Stop'
 $RawBase = if ($env:NEKTAR_RAW_BASE) { $env:NEKTAR_RAW_BASE } else { 'https://raw.githubusercontent.com/kryptokrates/nektar/master' }
 $InstallDir = if ($env:NEKTAR_BIN_DIR) { $env:NEKTAR_BIN_DIR } else { Join-Path $env:LOCALAPPDATA 'nektar' }
 
+if ($Mainnet) {
+  $conf = if ($Confirm) { $Confirm } else { $env:NEKTAR_MAINNET_CONFIRM }
+  if ($conf -ne 'I_UNDERSTAND') {
+    [Console]::Error.WriteLine('ERROR: -Mainnet spends REAL BSV and requires explicit -Confirm I_UNDERSTAND (or $env:NEKTAR_MAINNET_CONFIRM="I_UNDERSTAND").')
+    exit 2
+  }
+}
+
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
 if ($Docker) {
@@ -69,7 +77,11 @@ $exe = if ($Docker) { Join-Path $InstallDir 'nektar.cmd' } else { Join-Path $Ins
 if ($Up) {
   $upArgs = @('up')
   if ($Mainnet) {
-    $conf = if ($Confirm) { $Confirm } elseif ($env:NEKTAR_MAINNET_CONFIRM) { $env:NEKTAR_MAINNET_CONFIRM } else { 'I_UNDERSTAND' }
+    $conf = if ($Confirm) { $Confirm } else { $env:NEKTAR_MAINNET_CONFIRM }
+    if ($conf -ne 'I_UNDERSTAND') {
+      [Console]::Error.WriteLine('ERROR: -Mainnet spends REAL BSV and requires explicit -Confirm I_UNDERSTAND (or $env:NEKTAR_MAINNET_CONFIRM="I_UNDERSTAND").')
+      exit 2
+    }
     $upArgs += @('--network', 'main', '--confirm', $conf)
   }
   if ($Wallet) {

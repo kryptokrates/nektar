@@ -84,8 +84,8 @@ func (e *Engine) restateCustodyRelease(ctx restate.ObjectContext, in CustodyRele
 }
 
 func (e *Engine) restateCustodyBalance(ctx restate.ObjectSharedContext, _ restate.Void) (uint64, error) {
-	return restate.Run(ctx, func(_ restate.RunContext) (uint64, error) {
-		return e.mem.Chain().BalanceSats(), nil
+	return restate.Run(ctx, func(rctx restate.RunContext) (uint64, error) {
+		return e.mem.Chain().BalanceChecked(rctx)
 	}, restate.WithName("custody_balance"))
 }
 

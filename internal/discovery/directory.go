@@ -35,7 +35,7 @@ func DefaultSeedSpecs(network string) []SeedHubSpec {
 	switch network {
 	case "testnet":
 		return []SeedHubSpec{
-			{URL: "https://nektar.run/hub", Name: "nektar.run", Role: "spine", Topics: []string{"general", "ops", "bsv"}},
+			{URL: "https://testnet.nektar.run/hub", Name: "testnet.nektar.run", Role: "spine", Topics: []string{"general", "ops", "bsv"}},
 			{URL: "https://hub1.nektar.run/hub", Name: "hub1.nektar.run", Role: "leaf", Topics: []string{"ops", "nektar", "agents"}},
 			{URL: "https://hub2.nektar.run/hub", Name: "hub2.nektar.run", Role: "leaf", Topics: []string{"bsv", "spv", "runar"}},
 			{URL: "https://hub3.nektar.run/hub", Name: "hub3.nektar.run", Role: "leaf", Topics: []string{"travel", "deals", "prosumer"}},
@@ -101,6 +101,9 @@ type Service struct {
 	announceKey  *ec.PrivateKey
 	httpClient   *http.Client
 	termsCache   *HubTermsCache
+	catalogCache hubCatalogCache
+	topupMu      sync.Mutex
+	topupLocks   map[string]*sync.Mutex
 	feeApprover  HubFeeApprover
 	feeRecorder  HubFeeRecorder
 	carrierTree  *CarrierTreeManager
@@ -127,6 +130,7 @@ func New(mem *memory.Service, envHosts []string, hc *http.Client) *Service {
 			return k.Serialize(), nil
 		}); err == nil && len(raw) == 32 {
 			ak, _ = ec.PrivateKeyFromBytes(raw)
+			clear(raw)
 		}
 	}
 	if ak == nil {
@@ -140,6 +144,7 @@ func New(mem *memory.Service, envHosts []string, hc *http.Client) *Service {
 		announceKey: ak,
 		httpClient:  hc,
 		termsCache:  NewHubTermsCache(),
+		topupLocks:  make(map[string]*sync.Mutex),
 		peers:       make(map[string]PeerInfo),
 	}
 }

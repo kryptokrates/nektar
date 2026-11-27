@@ -2,6 +2,7 @@
   "name": "nektar-dashboard-ui",
   "private": true,
   "version": "0.1.0",
+  "description": "One shared, verifiable brain for all your AI agents — encrypted, Git-versioned memory & BSV knowledge market.",
   "type": "module",
   "scripts": {
     "dev": "vite",

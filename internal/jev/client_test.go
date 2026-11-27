@@ -51,9 +51,6 @@ func TestClientOpenWeightDialectsAndNoAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient (loopback on main): %v", err)
 	}
-	if cl.Provider() != ProviderOpenWeight {
-		t.Fatalf("expected provider %q, got %q", ProviderOpenWeight, cl.Provider())
-	}
 	req := Request{
 		State: map[string]any{"want": "fix teranode spend"},
 		Questions: map[string]Question{

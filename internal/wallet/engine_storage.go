@@ -194,7 +194,7 @@ func (e *Engine) countDustUTXOs(ctx context.Context, belowSats uint64) int {
 		  AND o.satoshis > 0
 		  AND o.satoshis <= ?
 		  AND o.basket_name IN ('default','fuel')
-		  AND owner.status NOT IN ('failed','aborted','unsigned','unprocessed','submission_unknown')`,
+		  AND owner.status NOT IN (`+sqlNonSpendableParentStatuses+`)`,
 		e.tables.outputs, e.tables.transactions, e.tables.userUTXOs,
 	)
 	var cnt int
@@ -242,6 +242,17 @@ func (e *Engine) MarkPendingBRC29Done(ctx context.Context, id int64) error {
 		return nil
 	}
 	_, err := e.sqlDB.ExecContext(ctx, `UPDATE nektar_pending_brc29 SET status = 'done', updated_at = ? WHERE id = ?`, time.Now().Unix(), id)
+	return err
+}
+
+// DeletePendingBRC29 deletes a pending BRC-29 journal row after a definite pre-broadcast failure
+// (e.g. user rejected BSV Desktop prompt or SpendGuard pre-flight refusal) so stale rows never
+// stall Monitor's reconciliation pass.
+func (e *Engine) DeletePendingBRC29(ctx context.Context, id int64) error {
+	if e.sqlDB == nil || id <= 0 {
+		return nil
+	}
+	_, err := e.sqlDB.ExecContext(ctx, `DELETE FROM nektar_pending_brc29 WHERE id = ?`, id)
 	return err
 }
 
@@ -297,7 +308,7 @@ func (e *Engine) HasOutput(ctx context.Context, txid string, vout uint32) bool {
 		return false
 	}
 	var one int
-	q := fmt.Sprintf(`SELECT 1 FROM "%s" WHERE user_id = ? AND tx_id = ? AND vout = ? AND deleted_at IS NULL LIMIT 1`, e.tables.outputs)
+	q := fmt.Sprintf(`SELECT 1 FROM "%s" o INNER JOIN "%s" t ON t.id = o.transaction_id WHERE o.user_id = ? AND t.tx_id = ? AND o.vout = ? AND o.deleted_at IS NULL AND t.deleted_at IS NULL LIMIT 1`, e.tables.outputs, e.tables.transactions)
 	return e.readDB.QueryRowContext(ctx, q, e.userID, txid, vout).Scan(&one) == nil
 }
 
@@ -311,7 +322,7 @@ func (e *Engine) findTxByLockingScript(ctx context.Context, lockScriptHex string
 	if err != nil || len(wantBytes) == 0 {
 		return "", 0, nil
 	}
-	q := fmt.Sprintf(`SELECT COALESCE(tx_id, ''), vout FROM "%s" WHERE user_id = ? AND deleted_at IS NULL AND tx_id IS NOT NULL AND tx_id != '' AND locking_script = ? ORDER BY id DESC LIMIT 1`, e.tables.outputs)
+	q := fmt.Sprintf(`SELECT COALESCE(t.tx_id, ''), o.vout FROM "%s" o INNER JOIN "%s" t ON t.id = o.transaction_id WHERE o.user_id = ? AND o.deleted_at IS NULL AND t.deleted_at IS NULL AND t.tx_id IS NOT NULL AND t.tx_id != '' AND o.locking_script = ? ORDER BY o.id DESC LIMIT 1`, e.tables.outputs, e.tables.transactions)
 	var txid string
 	var vout uint32
 	if err := e.readDB.QueryRowContext(ctx, q, e.userID, wantBytes).Scan(&txid, &vout); err != nil || txid == "" {
@@ -370,24 +381,17 @@ func (e *Engine) CacheTx(tx *transaction.Transaction) {
 	}
 }
 
-func (e *Engine) HasTx(ctx context.Context, txid string) bool {
-	if _, ok := e.txCache.Get(txid); ok {
-		return true
-	}
-	n, err := e.provider.KnownTxEntity().Read().TxID(txid).Count(ctx)
-	return err == nil && n > 0
-}
-
 // TxFeeSats computes the exact fee paid by a wallet transaction from its hydrated inputs/outputs.
 func (e *Engine) TxFeeSats(ctx context.Context, txid string) uint64 {
 	tx, err := e.LoadParsedTx(ctx, txid)
 	if err != nil || tx == nil {
 		return 0
 	}
-	return computeTxFee(tx)
+	return ComputeTxFee(tx)
 }
 
-func computeTxFee(tx *transaction.Transaction) uint64 {
+// ComputeTxFee computes the exact fee paid by a hydrated transaction (inTotal - outTotal, or 0 if incomplete).
+func ComputeTxFee(tx *transaction.Transaction) uint64 {
 	if tx == nil {
 		return 0
 	}

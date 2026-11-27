@@ -7,16 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/bsv-blockchain/go-sdk/overlay/lookup"
 	"github.com/lightwebinc/bcommon/guard"
 
-	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 )
 
@@ -139,9 +135,28 @@ func (n *Node) verifyAndCollectFee(ctx context.Context, action, kind string, pri
 	}
 	payerPub := strings.ToLower(strings.TrimSpace(pay.SenderIdentityKey))
 
+	// Serialize exposure check + claim + ledger recording so concurrent 0-conf payments cannot bypass AcceptPayerLimitSats / AcceptTotalLimitSats.
+	n.feeCollectMu.Lock()
+	defer n.feeCollectMu.Unlock()
+
 	// Check Lightweb acceptance policy: flagged payer OR over fast threshold/payer/total exposure -> require mined.
-	flagged, flagReason, _ := n.store.IsPayerFlagged(payerPub)
-	payerExp, totalExp, _ := n.store.UnminedFastExposure(payerPub, int64(n.fees.AcceptWindow.Seconds()))
+	// Fail closed on store errors so broken DB state can never permit 0-conf fast acceptance.
+	flagged, flagReason, flagErr := n.store.IsPayerFlagged(payerPub)
+	if flagErr != nil {
+		return feeCollectOutcome{
+			HTTPStatus: http.StatusServiceUnavailable,
+			Code:       "ERR_HUB_STORE_UNAVAILABLE",
+			Error:      fmt.Sprintf("payer risk lookup failed: %v", flagErr),
+		}
+	}
+	payerExp, totalExp, expErr := n.store.UnminedFastExposure(payerPub, int64(n.fees.AcceptWindow.Seconds()))
+	if expErr != nil {
+		return feeCollectOutcome{
+			HTTPStatus: http.StatusServiceUnavailable,
+			Code:       "ERR_HUB_STORE_UNAVAILABLE",
+			Error:      fmt.Sprintf("unmined exposure lookup failed: %v", expErr),
+		}
+	}
 	holdReason := ""
 	if flagged {
 		holdReason = "payer flagged for prior unsettleable payment: " + flagReason
@@ -299,194 +314,18 @@ func mapClaimErr(err error, txid string) feeCollectOutcome {
 			TxID:       txid,
 		}
 	}
+	if errors.Is(err, ErrFeePaymentReplayed) {
+		return feeCollectOutcome{
+			HTTPStatus: http.StatusConflict,
+			Code:       "ERR_PAYMENT_REPLAYED",
+			Error:      err.Error(),
+			TxID:       txid,
+		}
+	}
 	return feeCollectOutcome{
-		HTTPStatus: http.StatusConflict,
-		Code:       "ERR_PAYMENT_REPLAYED",
+		HTTPStatus: http.StatusServiceUnavailable,
+		Code:       "ERR_HUB_STORE_UNAVAILABLE",
 		Error:      err.Error(),
 		TxID:       txid,
 	}
-}
-
-// writeFeeOutcome writes standard Lightweb/BRC-105 challenge headers & JSON body for non-200 fee outcomes.
-func (n *Node) writeFeeOutcome(w http.ResponseWriter, action string, priceSats uint64, out feeCollectOutcome) {
-	if out.HTTPStatus == http.StatusPaymentRequired {
-		prefix := n.IssuePrefix(action, priceSats, time.Now())
-		payeePub := n.PayeeIdentityKey()
-		w.Header().Set("X-BSV-Payment-Version", "1.0")
-		w.Header().Set("X-BSV-Payment-Protocol", "BRC-105")
-		w.Header().Set("X-BSV-Payment-Satoshis-Required", strconv.FormatUint(priceSats, 10))
-		w.Header().Set("X-BSV-Payment-Amount", strconv.FormatUint(priceSats, 10))
-		w.Header().Set("X-BSV-Payment-Derivation-Prefix", prefix)
-		w.Header().Set("X-BSV-Payment-Identity", payeePub)
-		writeJSON(w, http.StatusPaymentRequired, map[string]any{
-			"status":           "error",
-			"code":             out.Code,
-			"error":            out.Error,
-			"action":           action,
-			"amountSats":       priceSats,
-			"identityKey":      payeePub,
-			"derivationPrefix": prefix,
-			"termsPath":        "/v1/terms",
-			"topupPath":        "/v1/credits/topup",
-		})
-		return
-	}
-	body := map[string]any{
-		"status": "error",
-		"code":   out.Code,
-		"error":  out.Error,
-		"action": action,
-	}
-	if out.TxID != "" {
-		body["txid"] = out.TxID
-	}
-	if out.HTTPStatus == http.StatusAccepted {
-		body["held"] = true
-	}
-	writeJSON(w, out.HTTPStatus, body)
-}
-
-// authenticateEgressCaller verifies signed X-Nektar-Pub / X-Nektar-Ts / X-Nektar-Nonce / X-Nektar-Sig headers
-// on metered GET /events and GET /sync requests (same replay-safe contract as GET /bbox/inbox).
-func (n *Node) authenticateEgressCaller(r *http.Request, action string, cursor int64, domainsCSV string) (pub string, isSpinePeer bool, err error) {
-	hdrPub := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Nektar-Pub")))
-	hdrTs := strings.TrimSpace(r.Header.Get("X-Nektar-Ts"))
-	hdrNonce := strings.TrimSpace(r.Header.Get("X-Nektar-Nonce"))
-	hdrSig := strings.TrimSpace(r.Header.Get("X-Nektar-Sig"))
-	if hdrPub == "" || hdrTs == "" || hdrNonce == "" || hdrSig == "" {
-		return "", false, errors.New("signed X-Nektar-Pub / X-Nektar-Ts / X-Nektar-Nonce / X-Nektar-Sig headers required for metered hub egress")
-	}
-	ts, tsErr := strconv.ParseInt(hdrTs, 10, 64)
-	now := time.Now().Unix()
-	if tsErr != nil || ts < now-bboxSkewSeconds || ts > now+bboxSkewSeconds {
-		return "", false, errors.New("expired or invalid X-Nektar-Ts")
-	}
-	aud := strings.ToLower(strings.TrimSpace(r.Host))
-	authPayload := map[string]any{
-		"action":  action,
-		"pub":     hdrPub,
-		"ts":      ts,
-		"nonce":   hdrNonce,
-		"aud":     aud,
-		"cursor":  cursor,
-		"domains": strings.ToLower(strings.TrimSpace(domainsCSV)),
-	}
-	if vErr := bstack.VerifyArtifact(hdrPub, hdrSig, authPayload); vErr != nil {
-		return "", false, errors.New("invalid hub egress signature")
-	}
-	if !n.claimBboxNonce("egress:"+action+":"+hdrPub, hdrNonce, now) {
-		return "", false, errors.New("replayed hub egress nonce")
-	}
-	return hdrPub, n.IsSpinePeer(hdrPub), nil
-}
-
-// domainsOnlyDir reports whether the caller explicitly requested ONLY the free `dir` discovery lane.
-func domainsOnlyDir(doms []string) bool {
-	if len(doms) == 0 {
-		return false
-	}
-	for _, d := range doms {
-		if !strings.EqualFold(strings.TrimSpace(d), bstack.DirDomain) {
-			return false
-		}
-	}
-	return true
-}
-
-// classifyLookupClass determines the pricing class for a BRC-24 ls_nektar lookup question.
-// Standard live queries are "live" (free); historical cursor walks are "history"; large unscoped dumps are "export".
-func classifyLookupClass(q *lookup.LookupQuestion) string {
-	if q == nil || q.Service != bstack.LookupService || len(q.Query) == 0 {
-		return "live"
-	}
-	var raw map[string]any
-	if json.Unmarshal(q.Query, &raw) == nil {
-		if cls, ok := raw["class"].(string); ok && strings.TrimSpace(cls) != "" {
-			return strings.ToLower(strings.TrimSpace(cls))
-		}
-	}
-	var mq bstack.MarketQuery
-	if json.Unmarshal(q.Query, &mq) != nil {
-		return "live"
-	}
-	if mq.Kind == bstack.KindAnnounce && strings.EqualFold(strings.TrimSpace(mq.Domain), bstack.DirDomain) {
-		return "live"
-	}
-	if mq.SinceMs > 0 || mq.SinceSeq > 0 {
-		return "history"
-	}
-	if mq.Limit > 100 && mq.WantID == "" && mq.OfferID == "" && mq.Domain == "" && mq.Pub == "" {
-		return "export"
-	}
-	return "live"
-}
-
-func (n *Node) handleCreditsTopup(w http.ResponseWriter, r *http.Request) {
-	minTopup := n.fees.EgressMinTopupSats
-	if minTopup == 0 {
-		minTopup = defaultMinTopupSats
-	}
-	// Optional JSON body may name a beneficiary pubkey (defaults to BRC-29 senderIdentityKey).
-	var body struct {
-		PayerPub string `json:"payerPub,omitempty"`
-	}
-	if r.Body != nil {
-		raw, _ := io.ReadAll(io.LimitReader(r.Body, 16<<10))
-		if len(bytes.TrimSpace(raw)) > 0 {
-			_ = json.Unmarshal(raw, &body)
-		}
-	}
-	out := n.verifyAndCollectFee(r.Context(), ActionEgressTopup, "egress", minTopup, r.Header.Get("X-BSV-Payment"))
-	if out.HTTPStatus != http.StatusOK {
-		n.writeFeeOutcome(w, ActionEgressTopup, minTopup, out)
-		return
-	}
-	creditPub := strings.ToLower(strings.TrimSpace(body.PayerPub))
-	if creditPub == "" {
-		creditPub = out.PayerPub
-	}
-	cred, err := n.store.CreditEgressMilliSats(creditPub, int64(out.PaidSats)*1000, out.PaidSats)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	var eventsRemaining int64
-	if perEv := n.fees.EgressMilliSatsPerEvent(); perEv > 0 {
-		eventsRemaining = cred.BalanceMilliSats / perEv
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":               true,
-		"txid":             out.TxID,
-		"payerPub":         cred.PayerPub,
-		"creditedSats":     out.PaidSats,
-		"balanceMilliSats": cred.BalanceMilliSats,
-		"eventsRemaining":  eventsRemaining,
-		"decision":         out.Decision,
-	})
-}
-
-func (n *Node) handleCreditsBalance(w http.ResponseWriter, r *http.Request) {
-	pub := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("pub")))
-	if pub == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pub query parameter required"})
-		return
-	}
-	cred, err := n.store.GetEgressCredit(pub)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	var eventsRemaining int64
-	if perEv := n.fees.EgressMilliSatsPerEvent(); perEv > 0 {
-		eventsRemaining = cred.BalanceMilliSats / perEv
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"payerPub":             cred.PayerPub,
-		"balanceMilliSats":     cred.BalanceMilliSats,
-		"totalFundedSats":      cred.TotalFundedSats,
-		"totalEventsDelivered": cred.TotalEventsDelivered,
-		"eventsRemaining":      eventsRemaining,
-		"satsPer100Events":     n.fees.EgressSatsPer100Events,
-		"minTopupSats":         n.fees.EgressMinTopupSats,
-	})
 }

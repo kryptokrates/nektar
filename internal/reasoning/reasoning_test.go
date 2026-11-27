@@ -1,10 +1,26 @@
 package reasoning
 
 import (
+	"encoding/hex"
 	"testing"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 )
+
+func makeTestDelegation(key *ec.PrivateKey, decision, answer string) (Delegation, error) {
+	delegator := hex.EncodeToString(key.PubKey().Compressed())
+	msg := delegationDigestV2(delegator, decision, answer)
+	sig, err := key.Sign(msg)
+	if err != nil {
+		return Delegation{}, err
+	}
+	return Delegation{
+		Version:   2,
+		Delegator: delegator,
+		Decision:  decision,
+		Signature: hex.EncodeToString(sig.Serialize()),
+	}, nil
+}
 
 func TestMangleGroundingAORGAndReceipts(t *testing.T) {
 	// 1. Mangle Datalog entailment.
@@ -43,7 +59,7 @@ func TestMangleGroundingAORGAndReceipts(t *testing.T) {
 
 	// 3. Receipt token roundtrip + §16 delegation verification.
 	key, _ := ec.NewPrivateKey()
-	del, err := MakeDelegation(key, "verified ops", "BSV Chronicle activated at block 943816")
+	del, err := makeTestDelegation(key, "verified ops", "BSV Chronicle activated at block 943816")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,25 +87,5 @@ func TestMangleGroundingAORGAndReceipts(t *testing.T) {
 	parsed, err := ParseReceiptToken(tok)
 	if err != nil || parsed != h {
 		t.Fatalf("ParseReceiptToken mismatch: got %s want %s err=%v", parsed, h, err)
-	}
-
-	// 4. Bi-temporal AORG with Mangle justifiability.
-	g := NewAORGraph([]string{`derived_fact(X) :- episode_fact(X).`})
-	ep, err := g.Append(Vertex{Kind: "episode", Phi: `episode_fact("v1")`, LogPos: 1, Context: []string{"ops"}}, nil, "observe")
-	if err != nil {
-		t.Fatalf("append episode: %v", err)
-	}
-	der, err := g.Append(Vertex{Kind: "derived", Phi: `derived_fact("v1")`, LogPos: 2, Context: []string{"ops"}}, []string{ep.H}, "r1")
-	if err != nil {
-		t.Fatalf("append derived: %v", err)
-	}
-	if _, err := g.Append(Vertex{Kind: "refinement", Phi: `episode_fact("v2")`, LogPos: 3, Refines: ep.H, Context: []string{"ops"}}, []string{ep.H}, "refine"); err != nil {
-		t.Fatalf("append refinement: %v", err)
-	}
-	if len(g.CurrentView(2)) != 2 {
-		t.Fatalf("at logPos 2 expected 2 active vertices (ep + der), got %d", len(g.CurrentView(2)))
-	}
-	if len(g.CurrentView(3)) != 2 {
-		t.Fatalf("at logPos 3 expected ep invalidated (der + refinement active), got %d (der=%s)", len(g.CurrentView(3)), der.H)
 	}
 }

@@ -23,12 +23,6 @@ func (p *Port) BuildFundedTx(ctx context.Context, outputs []*transaction.Transac
 	return tx, fee, spend, err
 }
 
-// BuildFundedTxWithBEEF preserves the strict AtomicBEEF bytes produced by go-wallet-toolbox directly
-// without discarding and re-encoding through an allowPartial=true fallback.
-func (p *Port) BuildFundedTxWithBEEF(ctx context.Context, outputs []*transaction.TransactionOutput) (*transaction.Transaction, []byte, uint64, uint64, error) {
-	return p.BuildFundedTxWithMeta(ctx, outputs, "", nil)
-}
-
 // BuildFundedTxWithMeta builds and signs a funded transaction with a human-readable BRC-100
 // description and structured labels (shown in BSV Desktop's Activity feed in client mode).
 func (p *Port) BuildFundedTxWithMeta(ctx context.Context, outputs []*transaction.TransactionOutput, desc string, labels []string) (*transaction.Transaction, []byte, uint64, uint64, error) {
@@ -283,10 +277,7 @@ func (p *Port) Broadcast(ctx context.Context, tx *transaction.Transaction, feeSa
 	if err := p.broadcaster.Broadcast(ctx, tx); err != nil {
 		// Never refund SpendGuard on post-submit broadcaster error strings: treat all post-submit
 		// failures conservatively (ErrBroadcastUnknown on transport/timeout, error hint otherwise).
-		lower := strings.ToLower(err.Error())
-		if errors.Is(err, nwallet.ErrBroadcastUnknown) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
-			strings.Contains(lower, "timeout") || strings.Contains(lower, "eof") ||
-			strings.Contains(lower, "http 5") || strings.Contains(lower, "connection refused") {
+		if nwallet.IsUncertainBroadcastError(err) {
 			return "", fmt.Errorf("chain: %s broadcast: %w: %w", p.broadcaster.Name(), nwallet.ErrBroadcastUnknown, err)
 		}
 		return "", fmt.Errorf("chain: %s broadcast: %w", p.broadcaster.Name(), err)
@@ -296,19 +287,6 @@ func (p *Port) Broadcast(ctx context.Context, tx *transaction.Transaction, feeSa
 		p.engine.FuelKeeper().Wake()
 	}
 	return txid, nil
-}
-
-// AdoptChange is preserved for backwards compatibility with callers that run BuildFundedTx -> Broadcast -> AdoptChange.
-// Wallet-built transactions already persist change outputs atomically in go-wallet-toolbox storage.
-func (p *Port) AdoptChange(tx *transaction.Transaction) error {
-	if p.engine == nil || tx == nil {
-		return nil
-	}
-	if p.engine.HasTx(context.Background(), tx.TxID().String()) {
-		return nil
-	}
-	_, err := p.engine.AdoptReceivedTx(context.Background(), tx)
-	return err
 }
 
 // RelayExternalTx broadcasts an incoming third-party (buyer) transaction to the configured live settler

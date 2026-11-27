@@ -179,7 +179,9 @@ func SignDealReceiptSeller(ctx context.Context, sellerPub string, signDigest fun
 	return nil
 }
 
-// SignDealReceiptBuyer countersigns r using the buyer's BRC-43 digest signer.
+// SignDealReceiptBuyer countersigns r using the buyer's digest signer.
+// When r already carries SellerSig, BuyerPub MUST match the seller-signed BuyerPub so countersigning
+// never mutates BuyerPub/FieldsRoot and invalidates SellerSig.
 func SignDealReceiptBuyer(ctx context.Context, buyerPub string, signDigest func(context.Context, []byte) ([]byte, error), r *DealReceipt) error {
 	if r == nil || buyerPub == "" || signDigest == nil {
 		return errors.New("deal-receipt: missing receipt, buyerPub, or signer")
@@ -187,7 +189,12 @@ func SignDealReceiptBuyer(ctx context.Context, buyerPub string, signDigest func(
 	if _, _, err := core.ParseStrictCompressedPubKey(buyerPub); err != nil {
 		return fmt.Errorf("deal-receipt: invalid buyerPub: %w", err)
 	}
-	r.BuyerPub = buyerPub
+	if r.SellerSig != "" && r.BuyerPub != "" && !strings.EqualFold(r.BuyerPub, buyerPub) {
+		return fmt.Errorf("deal-receipt: buyerPub %s mismatches seller-signed buyerPub %s", buyerPub, r.BuyerPub)
+	}
+	if r.BuyerPub == "" {
+		r.BuyerPub = buyerPub
+	}
 	if err := r.FinalizeFieldsRoot(); err != nil {
 		return err
 	}

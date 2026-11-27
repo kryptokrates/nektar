@@ -4,12 +4,41 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	cedar "github.com/cedar-policy/cedar-go"
 
 	"github.com/kryptokrates/nektar/internal/core"
 )
+
+const maxCachedPolicySets = 64
+
+var (
+	policyCacheMu sync.RWMutex
+	policyCache   = make(map[string]*cedar.PolicySet, 8)
+)
+
+func parsePolicySetCached(policyText string) (*cedar.PolicySet, error) {
+	policyCacheMu.RLock()
+	if ps, ok := policyCache[policyText]; ok {
+		policyCacheMu.RUnlock()
+		return ps, nil
+	}
+	policyCacheMu.RUnlock()
+
+	ps, err := cedar.NewPolicySetFromBytes("policy.cedar", []byte(policyText))
+	if err != nil {
+		return nil, fmt.Errorf("policy: parse cedar: %w", err)
+	}
+	policyCacheMu.Lock()
+	if len(policyCache) >= maxCachedPolicySets {
+		policyCache = make(map[string]*cedar.PolicySet, 8)
+	}
+	policyCache[policyText] = ps
+	policyCacheMu.Unlock()
+	return ps, nil
+}
 
 // DefaultPolicySet grants agents access to fragments at or below their proven clearance level.
 const DefaultPolicySet = `
@@ -129,9 +158,9 @@ func AuthorizeMatch(policyText string, principal Principal, action string, resou
 }
 
 func authorizeWithContext(policyText string, principal Principal, action string, resource Resource, reqCtx cedar.Record) (Decision, error) {
-	ps, err := cedar.NewPolicySetFromBytes("policy.cedar", []byte(policyText))
+	ps, err := parsePolicySetCached(policyText)
 	if err != nil {
-		return Decision{}, fmt.Errorf("policy: parse cedar: %w", err)
+		return Decision{}, err
 	}
 	pType := principal.Type
 	if pType == "" {
@@ -183,18 +212,27 @@ func authorizeWithContext(policyText string, principal Principal, action string,
 }
 
 // MakeReceipt binds an authorization decision to an anchored PolicyCommitment with
-// unambiguous structured principal/action/resource fields (F-32).
+// unambiguous structured principal/action/resource fields (F-32), normalizing default
+// entity types ("Agent" / "Fragment") identically to authorizeWithContext.
 func MakeReceipt(principal Principal, action string, resource Resource, pc *PolicyCommitment, allow bool) DecisionReceipt {
 	dec := "Deny"
 	if allow {
 		dec = "Allow"
 	}
+	pType := principal.Type
+	if pType == "" {
+		pType = "Agent"
+	}
+	rType := resource.Type
+	if rType == "" {
+		rType = "Fragment"
+	}
 	return DecisionReceipt{
-		Request:       fmt.Sprintf(`%s::"%s"::%s::"%s/%s"`, principal.Type, principal.ID, action, resource.Shard, resource.ID),
-		PrincipalType: principal.Type,
+		Request:       fmt.Sprintf(`%s::"%s"::%s::"%s/%s"`, pType, principal.ID, action, resource.Shard, resource.ID),
+		PrincipalType: pType,
 		PrincipalID:   principal.ID,
 		Action:        action,
-		ResourceType:  resource.Type,
+		ResourceType:  rType,
 		ResourceShard: resource.Shard,
 		ResourceID:    resource.ID,
 		PolicySetHash: pc.Hash,
@@ -266,9 +304,9 @@ func ProveLevelIsolation(policyText string, minLevel, fragmentLevel int64) (ok b
 	if fragmentLevel-minLevel > maxLevelIsolationSpan {
 		return false, 0, 0, fmt.Errorf("policy: level isolation span %d exceeds max %d", fragmentLevel-minLevel, maxLevelIsolationSpan)
 	}
-	ps, err := cedar.NewPolicySetFromBytes("policy.cedar", []byte(policyText))
+	ps, err := parsePolicySetCached(policyText)
 	if err != nil {
-		return false, 0, 0, fmt.Errorf("policy: parse cedar: %w", err)
+		return false, 0, 0, err
 	}
 	pUID := cedar.NewEntityUID(cedar.EntityType("Agent"), cedar.String("probe"))
 	rUID := cedar.NewEntityUID(cedar.EntityType("Fragment"), cedar.String("f"))

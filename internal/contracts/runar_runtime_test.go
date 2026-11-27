@@ -48,7 +48,7 @@ func TestNektarAnchorChronicleVM(t *testing.T) {
 
 	// Genesis anchor (n=0).
 	r0 := core.SHA256([]byte("batch-0-root"))
-	rp0 := core.ChainRp(core.Zero32, r0, 3)
+	rp0 := core.ChainRp(core.Zero32Bytes(), r0, 3)
 	st0 := AnchorState{
 		Shard:    core.ShardIDFromPubkey(pub1),
 		OwnerPub: hex.EncodeToString(pub1),
@@ -436,7 +436,13 @@ func TestNektarAgentVaultAndAtomicEscrowCompositionChronicleVM(t *testing.T) {
 		nextSt := *vault2State
 		nextSt.SpentInWindow = newSpent
 		nextSt.WindowStart = newStart
-		nextLock, _ := EncodeAgentVaultLockingScript(nextSt)
+		nextLock, encErr := EncodeAgentVaultLockingScript(nextSt)
+		if encErr != nil || nextLock == nil {
+			nextLock, encErr = BuildStatefulLockingScript(art, nil, nextSt.toStateMap())
+			if encErr != nil {
+				t.Fatalf("build raw adversarial AgentVault locking script (%s): %v", name, encErr)
+			}
+		}
 		badTx := transaction.NewTransaction()
 		badTx.LockTime = lt
 		badTx.AddInput(&transaction.TransactionInput{SourceTXID: vaultTx2.TxID(), SourceTxOutIndex: 0, SourceTransaction: vaultTx2, SequenceNumber: seq})

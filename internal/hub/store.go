@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,8 +24,9 @@ func OpenStore(path string) (*Store, error) {
 	if path == "" {
 		path = ":memory:"
 	}
+	origPath := path
 	if path != ":memory:" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, fmt.Errorf("hub store: mkdir: %w", err)
 		}
 		path = path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
@@ -38,6 +40,11 @@ func OpenStore(path string) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if origPath != ":memory:" {
+		_ = os.Chmod(origPath, 0o600)
+		_ = os.Chmod(origPath+"-wal", 0o600)
+		_ = os.Chmod(origPath+"-shm", 0o600)
 	}
 	return s, nil
 }
@@ -58,6 +65,8 @@ CREATE TABLE IF NOT EXISTS hub_events (
 	payload_json BLOB NOT NULL,
 	beef         BLOB,
 	exp          INTEGER NOT NULL DEFAULT 0,
+	spent        INTEGER NOT NULL DEFAULT 0,
+	block_height INTEGER NOT NULL DEFAULT 0,
 	admitted_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_hub_events_exp ON hub_events(exp);
@@ -70,6 +79,10 @@ CREATE TABLE IF NOT EXISTS hub_bbox (
 	deal_id       TEXT NOT NULL,
 	kind          TEXT NOT NULL,
 	body_json     BLOB NOT NULL,
+	sig           TEXT NOT NULL DEFAULT '',
+	ts            INTEGER NOT NULL DEFAULT 0,
+	nonce         TEXT NOT NULL DEFAULT '',
+	aud           TEXT NOT NULL DEFAULT '',
 	created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_hub_bbox_recip ON hub_bbox(recipient_pub, seq);
@@ -162,19 +175,89 @@ CREATE TABLE IF NOT EXISTS hub_carrier_outpoints (
 );
 CREATE INDEX IF NOT EXISTS idx_hub_carrier_outpoints_txid ON hub_carrier_outpoints(carrier_txid);
 `
-	_, err := s.sql.Exec(schema)
+	tx, err := s.sql.Begin()
 	if err != nil {
-		return err
+		return fmt.Errorf("hub store: begin migrate: %w", err)
 	}
-	_, _ = s.sql.Exec(`ALTER TABLE hub_bounty_claims ADD COLUMN status TEXT NOT NULL DEFAULT 'paid'`)
-	_, _ = s.sql.Exec(`ALTER TABLE hub_bbox ADD COLUMN sig TEXT NOT NULL DEFAULT ''`)
-	_, _ = s.sql.Exec(`ALTER TABLE hub_bbox ADD COLUMN ts INTEGER NOT NULL DEFAULT 0`)
-	_, _ = s.sql.Exec(`ALTER TABLE hub_bbox ADD COLUMN nonce TEXT NOT NULL DEFAULT ''`)
-	_, _ = s.sql.Exec(`ALTER TABLE hub_bbox ADD COLUMN aud TEXT NOT NULL DEFAULT ''`)
-	_, _ = s.sql.Exec(`ALTER TABLE hub_events ADD COLUMN spent INTEGER NOT NULL DEFAULT 0`)
-	_, _ = s.sql.Exec(`ALTER TABLE hub_events ADD COLUMN block_height INTEGER NOT NULL DEFAULT 0`)
-	_, _ = s.sql.Exec(`CREATE INDEX IF NOT EXISTS idx_hub_events_height ON hub_events(block_height)`)
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("hub store: base schema: %w", err)
+	}
+	migrations := []struct {
+		table string
+		cols  []columnSpec
+	}{
+		{"hub_bounty_claims", []columnSpec{
+			{name: "status", def: "TEXT NOT NULL DEFAULT 'paid'"},
+		}},
+		{"hub_bbox", []columnSpec{
+			{name: "sig", def: "TEXT NOT NULL DEFAULT ''"},
+			{name: "ts", def: "INTEGER NOT NULL DEFAULT 0"},
+			{name: "nonce", def: "TEXT NOT NULL DEFAULT ''"},
+			{name: "aud", def: "TEXT NOT NULL DEFAULT ''"},
+		}},
+		{"hub_events", []columnSpec{
+			{name: "spent", def: "INTEGER NOT NULL DEFAULT 0"},
+			{name: "block_height", def: "INTEGER NOT NULL DEFAULT 0"},
+		}},
+	}
+	for _, m := range migrations {
+		if err := ensureColumnsTx(tx, m.table, m.cols); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_hub_events_height ON hub_events(block_height)`); err != nil {
+		return fmt.Errorf("hub store: idx_hub_events_height: %w", err)
+	}
+	return tx.Commit()
+}
+
+type columnSpec struct {
+	name string
+	def  string
+}
+
+func ensureColumnsTx(tx *sql.Tx, table string, cols []columnSpec) error {
+	rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return fmt.Errorf("hub store: table_info(%s): %w", table, err)
+	}
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if sErr := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); sErr != nil {
+			_ = rows.Close()
+			return fmt.Errorf("hub store: scan table_info(%s): %w", table, sErr)
+		}
+		existing[strings.ToLower(name)] = true
+	}
+	if rErr := rows.Err(); rErr != nil {
+		_ = rows.Close()
+		return fmt.Errorf("hub store: iter table_info(%s): %w", table, rErr)
+	}
+	if cErr := rows.Close(); cErr != nil {
+		return fmt.Errorf("hub store: close table_info(%s): %w", table, cErr)
+	}
+	for _, col := range cols {
+		if existing[strings.ToLower(col.name)] {
+			continue
+		}
+		if _, aErr := tx.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + col.name + ` ` + col.def); aErr != nil {
+			return fmt.Errorf("hub store: add column %s.%s: %w", table, col.name, aErr)
+		}
+	}
 	return nil
+}
+
+func isSQLiteConstraintErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "constraint failed") || strings.Contains(msg, "sqlite_constraint")
 }
 
 // GetFedCursor loads the persisted federation cursor for peer.

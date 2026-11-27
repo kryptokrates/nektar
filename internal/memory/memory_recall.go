@@ -14,9 +14,13 @@ import (
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
-// RecallInput specifies a shard recall query (omit Shard to search across all non-system shards).
+// RecallInput specifies a shard/repo recall query (omit Shard/Repo to search across all non-system repos).
+// Optionally pass Branch or AtCommit (commit hash/prefix or tag name) for epistemic time-travel recall.
 type RecallInput struct {
 	Shard             string           `json:"shard,omitempty"`
+	Repo              string           `json:"repo,omitempty"`     // alias for Shard
+	Branch            string           `json:"branch,omitempty"`   // optional branch (defaults to main)
+	AtCommit          string           `json:"atCommit,omitempty"` // optional historical commit SHA/prefix or tag for time-travel recall
 	Query             string           `json:"query,omitempty"`
 	Principal         policy.Principal `json:"principal,omitempty"`
 	CallerPub         string           `json:"callerPub,omitempty"`
@@ -31,6 +35,8 @@ type RecallInput struct {
 type RecalledFragment struct {
 	Shard       string                  `json:"shard"`
 	Seq         int64                   `json:"seq"`
+	Path        string                  `json:"path,omitempty"`
+	CommitHash  string                  `json:"commitHash,omitempty"`
 	Text        string                  `json:"text"`
 	HDP         string                  `json:"hdp"`
 	Leaf        string                  `json:"leaf"`
@@ -45,13 +51,21 @@ type RecalledFragment struct {
 	CreatedAt   int64                   `json:"createdAt"`
 }
 
-// Recall returns active, Cedar-authorized, Borg-decrypted fragments from shard.
+// Recall returns active, Cedar-authorized, Borg-decrypted fragments from shard/repo.
+// When AtCommit (or a non-main Branch) is specified, performs epistemic time-travel recall
+// against the exact immutable TreeObject at that commit/branch.
 func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragment, error) {
+	if in.Shard == "" && strings.TrimSpace(in.Repo) != "" {
+		in.Shard = strings.TrimSpace(in.Repo)
+	}
 	if in.Shard == "" {
 		in.Shard = "default"
 	}
 	if err := ValidateShardName(in.Shard, false); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(in.AtCommit) != "" || (strings.TrimSpace(in.Branch) != "" && strings.TrimSpace(in.Branch) != "main") {
+		return s.recallAtCommit(ctx, in)
 	}
 	principal := in.Principal
 	if principal.ID == "" {
@@ -144,11 +158,9 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 			if err != nil {
 				continue
 			}
-			// Re-verify decrypted plaintext cryptographically matches committed HDP.
+			// Re-verify decrypted plaintext cryptographically matches canonical framed v2 HDP.
 			if hdpBytes, hErr := hex.DecodeString(r.HDP); hErr == nil && len(hdpBytes) == 32 && len(r.Provenance) > 0 {
-				v1 := core.SHA256(core.Concat(core.TagProv, opened, r.Provenance))
-				v2 := core.SHA256(core.Concat(core.TagProvV2, core.Field(opened), r.Provenance))
-				if !core.EqualBytes(v1, hdpBytes) && !core.EqualBytes(v2, hdpBytes) {
+				if !core.VerifyHDP(opened, r.Provenance, hdpBytes) {
 					continue
 				}
 			}
@@ -277,6 +289,7 @@ func (s *Service) proveWithMemo(ctx context.Context, shard string, seq int64, pr
 			Size:        uint64(a.Size),
 			R:           a.RootHex,
 			Rp:          a.ChainedHex,
+			AnchorBEEF:  a.Beef,
 		}
 		if a.N <= rec.BatchN {
 			tail = append(tail, link)
@@ -308,6 +321,10 @@ func (s *Service) proveWithMemo(ctx context.Context, shard string, seq int64, pr
 		ChainTail:  tail,
 		AnchorBEEF: target.Beef,
 	}
-	vr, outMemo := contracts.VerifyFragmentWithMemo(ctx, *bundle, s.port.Tracker(), 1, memo)
+	minDepth := 1
+	if s.port != nil && s.port.SettleDepth() > 0 {
+		minDepth = s.port.SettleDepth()
+	}
+	vr, outMemo := contracts.VerifyFragmentWithMemo(ctx, *bundle, s.port.Tracker(), minDepth, memo)
 	return bundle, &vr, outMemo, nil
 }

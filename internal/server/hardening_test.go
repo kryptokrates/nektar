@@ -101,9 +101,9 @@ func TestServerSecurityOAuthProxyAdaptersMetricsAndBadge(t *testing.T) {
 	ts := httptest.NewServer(app.Handler())
 	defer ts.Close()
 
-	// 1. Auth gates on /v1/status, /v1/wallet, and POST /a2a; /healthz remains public.
-	if resp, err := http.Get(ts.URL + "/healthz"); err != nil || resp.StatusCode != 200 {
-		t.Fatalf("GET /healthz expected 200, got %+v %v", resp, err)
+	// 1. Auth gates on /v1/status, /v1/wallet, and POST /a2a; /v1/health remains public.
+	if resp, err := http.Get(ts.URL + "/v1/health"); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("GET /v1/health expected 200, got %+v %v", resp, err)
 	}
 	for _, p := range []string{"/v1/status", "/v1/wallet"} {
 		resp, _ := http.Get(ts.URL + p)

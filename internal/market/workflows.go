@@ -1,8 +1,11 @@
 package market
 
 import (
+	"context"
 	"crypto/subtle"
-	"encoding/json"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -11,161 +14,10 @@ import (
 	restate "github.com/restatedev/sdk-go"
 	restateserver "github.com/restatedev/sdk-go/server"
 
-	"github.com/kryptokrates/nektar/internal/bstack"
-	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/memory"
-	"github.com/kryptokrates/nektar/internal/store"
 )
 
 const internalTokenHeader = "x-nektar-internal-token"
-
-// DealState records the durable lifecycle of one buyer or seller deal.
-type DealState struct {
-	DealID       string                    `json:"dealId"`
-	Role         string                    `json:"role"`   // buyer | seller
-	Status       string                    `json:"status"` // open | approval_pending | collecting | offered | payment_pending | paid_awaiting_reveal | claimed | settled | failed | expired
-	Want         bstack.WantAd             `json:"want"`
-	ChosenOffer  *bstack.OfferAd           `json:"chosenOffer,omitempty"`
-	MatchAudit   *MatchAudit               `json:"matchAudit,omitempty"`
-	DealReceipt  *DealReceipt              `json:"dealReceipt,omitempty"`
-	ChirpURL     string                    `json:"chirpUrl,omitempty"`
-	SaleOffer    *contracts.KeyedSaleOffer `json:"saleOffer,omitempty"`
-	PaymentTxID  string                    `json:"paymentTxid,omitempty"`
-	ClaimTxID    string                    `json:"claimTxid,omitempty"`
-	ApprovalID      string                    `json:"approvalId,omitempty"`
-	AwakeableID     string                    `json:"awakeableId,omitempty"`
-	StandingOrderID string                    `json:"standingOrderId,omitempty"`
-	EscrowTxID      string                    `json:"escrowTxid,omitempty"`
-	Shard           string                    `json:"shard,omitempty"`
-	DeliveredTxt string                    `json:"deliveredText,omitempty"`
-	Error        string                    `json:"error,omitempty"`
-	UpdatedAt    int64                     `json:"updatedAt"`
-}
-
-// ApprovalDecision resolves a suspended BuyerDeal approval awakeable.
-type ApprovalDecision struct {
-	Approved  bool   `json:"approved"`
-	DecidedBy string `json:"decidedBy,omitempty"`
-	Reason    string `json:"reason,omitempty"`
-}
-
-// BuyerDealInput starts a Restate BuyerDeal workflow keyed by WantID.
-type BuyerDealInput struct {
-	Want               bstack.WantAd    `json:"want"`
-	Offers             []bstack.OfferAd `json:"offers,omitempty"`
-	TargetShard        string           `json:"targetShard,omitempty"`
-	CollectTimeout     time.Duration    `json:"collectTimeout,omitempty"`
-	WaitTimeout        time.Duration    `json:"waitTimeout,omitempty"`
-	ApprovalTimeout    time.Duration    `json:"approvalTimeout,omitempty"`
-	StandingTTL        time.Duration    `json:"standingTtl,omitempty"`
-	ApprovedOverrideID string           `json:"approvedOverrideId,omitempty"`
-}
-
-// SellerDealInput starts a Restate SellerDeal workflow keyed by OfferID.
-type SellerDealInput struct {
-	Want            bstack.WantAd             `json:"want"`
-	Shard           string                    `json:"shard"`
-	Seq             int64                     `json:"seq"`
-	PriceSats       uint64                    `json:"priceSats"`
-	BuyerPub        string                    `json:"buyerPub"`
-	OfferTTL        time.Duration             `json:"offerTtl,omitempty"`
-	ConfirmTimeout  time.Duration             `json:"confirmTimeout,omitempty"`
-	PreCreatedOffer *contracts.KeyedSaleOffer `json:"preCreatedOffer,omitempty"`
-	RevealKeyHex    string                    `json:"revealKeyHex,omitempty"`
-	ChirpURL        string                    `json:"chirpUrl,omitempty"`
-	ProofBundle     *contracts.ProofBundle    `json:"proofBundle,omitempty"`
-}
-
-// PaymentSignal delivers a buyer's payment txid + optional verified BUMP proof to a waiting SellerDeal workflow.
-type PaymentSignal struct {
-	TxID          string `json:"txid"`
-	AmountSats    uint64 `json:"amountSats"`
-	Confirmed     bool   `json:"confirmed"`
-	BlockHeight   uint32 `json:"blockHeight,omitempty"`
-	MerklePathHex string `json:"merklePathHex,omitempty"`
-}
-
-// ClaimSignal delivers the seller's BRC-369 revealed content key k to a waiting BuyerDeal workflow.
-type ClaimSignal struct {
-	ClaimTxID      string                 `json:"claimTxid"`
-	ClaimTxBEEFHex string                 `json:"claimTxBeefHex,omitempty"`
-	ContentKeyHex  string                 `json:"contentKeyHex"`
-	CiphertextHex  string                 `json:"ciphertextHex,omitempty"`
-	ChirpURL       string                 `json:"chirpUrl,omitempty"`
-	ProofBundle    *contracts.ProofBundle `json:"proofBundle,omitempty"`
-	DealReceipt    *DealReceipt           `json:"dealReceipt,omitempty"`
-}
-
-// CustodyReserveInput serializes global spend reservation through the private Restate Custody Virtual Object.
-type CustodyReserveInput struct {
-	OperationID  string   `json:"operationId"`
-	Attempt      int      `json:"attempt"`
-	SellerPub    string   `json:"sellerPub,omitempty"`
-	Domains      []string `json:"domains,omitempty"`
-	AmountSats   uint64   `json:"amountSats"`
-	BypassPolicy bool     `json:"bypassPolicy,omitempty"`
-}
-
-// CustodyReleaseInput releases a reserved (OperationID, Attempt) on definitive pre-broadcast failure.
-type CustodyReleaseInput struct {
-	OperationID string `json:"operationId"`
-	Attempt     int    `json:"attempt"`
-}
-
-// CustodyReserveResult reports a serialized reservation from Custody.
-type CustodyReserveResult struct {
-	Approved        bool   `json:"approved"`
-	AlreadyReserved bool   `json:"alreadyReserved,omitempty"`
-	BalanceSats     uint64 `json:"balanceSats"`
-	Reason          string `json:"reason,omitempty"`
-}
-
-// TxEventInput records a durable transaction lifecycle transition on the private Restate Tx Virtual Object.
-type TxEventInput struct {
-	Kind          string `json:"kind"` // prepared | submission_unknown | broadcast | mempool | mined | reorged | failed | aborted
-	Shard         string `json:"shard,omitempty"`
-	BlockHeight   uint32 `json:"blockHeight,omitempty"`
-	MerklePathHex string `json:"merklePathHex,omitempty"`
-	Detail        string `json:"detail,omitempty"`
-	ObservedAt    int64  `json:"observedAt,omitempty"`
-}
-
-// TxState is the durable state stored per txid inside the Restate Tx Virtual Object.
-type TxState struct {
-	TxID        string         `json:"txid"`
-	Status      string         `json:"status"`
-	BlockHeight uint32         `json:"blockHeight,omitempty"`
-	Events      []TxEventInput `json:"events"`
-	UpdatedAt   int64          `json:"updatedAt"`
-}
-
-// AnchorCadenceInput triggers a durable shard anchor check on the private AnchorCadence Virtual Object.
-type AnchorCadenceInput struct {
-	IntervalSeconds int64 `json:"intervalSeconds,omitempty"`
-}
-
-// AnchorCadenceState summarizes the latest durable anchor cadence run for a shard.
-type AnchorCadenceState struct {
-	Shard          string `json:"shard"`
-	LastTxID       string `json:"lastTxid,omitempty"`
-	LastRunAt      int64  `json:"lastRunAt"`
-	AnchorRuns     int64  `json:"anchorRuns"`
-	NextSlot       int64  `json:"nextSlot,omitempty"`
-	DeferredReason string `json:"deferredReason,omitempty"`
-}
-
-// RuntimeTxEmitInput dispatches a Tx event from the authenticated NektarRuntime gateway to the private Tx VO.
-type RuntimeTxEmitInput struct {
-	TxID  string       `json:"txid"`
-	Event TxEventInput `json:"event"`
-}
-
-// RuntimeAnchorTriggerInput dispatches an AnchorCadence poke from NektarRuntime to the private AnchorCadence VO.
-type RuntimeAnchorTriggerInput struct {
-	Shard           string `json:"shard"`
-	IntervalSeconds int64  `json:"intervalSeconds,omitempty"`
-	Slot            int64  `json:"slot,omitempty"`
-}
 
 // Engine coordinates Nektar v0.1 market deals & the active Restate Go SDK durable execution plane.
 // SQLite (`deals`, `approvals`, `pending_sales`, `spend_reservations`) is the single verdict authority;
@@ -173,6 +25,7 @@ type RuntimeAnchorTriggerInput struct {
 type Engine struct {
 	mu              sync.RWMutex
 	standingInboxMu sync.Mutex
+	standingIndexMu sync.Mutex
 	mem             *memory.Service
 	policy          *Policy
 	saleKey         *ec.PrivateKey // persistent node key signing DisclosureSale offers
@@ -232,6 +85,50 @@ func (e *Engine) getBroker() *Broker {
 	return b
 }
 
+func (e *Engine) salePubHex() string {
+	if e != nil && e.saleKey != nil {
+		return hex.EncodeToString(e.saleKey.PubKey().Compressed())
+	}
+	if e != nil && e.mem != nil && e.mem.Chain() != nil {
+		if pub, err := e.mem.Chain().SigningPubKey(context.Background()); err == nil && pub != nil {
+			return hex.EncodeToString(pub.Compressed())
+		}
+		return e.mem.Chain().IdentityPubHex()
+	}
+	return ""
+}
+
+func (e *Engine) signSaleDigest(ctx context.Context, digest []byte) ([]byte, error) {
+	if e != nil && e.saleKey != nil {
+		sig, err := e.saleKey.Sign(digest)
+		if err != nil {
+			return nil, err
+		}
+		return sig.Serialize(), nil
+	}
+	if e != nil && e.mem != nil && e.mem.Chain() != nil {
+		return e.mem.Chain().SignDigest(ctx, digest)
+	}
+	return nil, errors.New("market: no signing key available")
+}
+
+func (e *Engine) sealKeyAtRest(ctx context.Context, keyHex string) (string, error) {
+	if keyHex == "" || strings.HasPrefix(keyHex, marketKeyEncPrefix) {
+		return keyHex, nil
+	}
+	if e == nil || e.mem == nil || e.mem.Chain() == nil {
+		return "", errors.New("market: chain port unavailable to encrypt key at rest")
+	}
+	ct, err := e.mem.Chain().EncryptAtRest(ctx, "market-reveal-key", []byte(keyHex))
+	if err != nil || len(ct) == 0 {
+		if err == nil {
+			err = errors.New("empty ciphertext")
+		}
+		return "", fmt.Errorf("market: encrypt key at rest: %w", err)
+	}
+	return marketKeyEncPrefix + hex.EncodeToString(ct), nil
+}
+
 // SetMatcher attaches an optional Jev System One semantic Matcher for Restate workflows.
 func (e *Engine) SetMatcher(m Matcher) {
 	e.mu.Lock()
@@ -278,135 +175,6 @@ func (e *Engine) checkInternalAuthReq(req *restate.Request) error {
 		return restate.TerminalErrorf("nektar: unauthorized internal restate call")
 	}
 	return nil
-}
-
-// ListDeals reads durable deal records directly from SQLite (single verdict authority — zero RAM shadow store).
-func (e *Engine) ListDeals() []DealState {
-	if e.mem == nil || e.mem.DB() == nil {
-		return nil
-	}
-	recs, err := e.mem.DB().ListDeals(100)
-	if err != nil {
-		return nil
-	}
-	out := make([]DealState, 0, len(recs))
-	for _, r := range recs {
-		out = append(out, dealStateFromRecord(r))
-	}
-	return out
-}
-
-func dealStateFromRecord(r store.DealRecord) DealState {
-	st := DealState{
-		DealID:       r.DealID,
-		Role:         r.Role,
-		Status:       r.Status,
-		ChirpURL:     r.ChirpURL,
-		PaymentTxID:  r.PaymentTxID,
-		Shard:        r.Shard,
-		DeliveredTxt: r.DeliveredText,
-		Error:        r.Error,
-		UpdatedAt:    r.UpdatedAt,
-	}
-	if len(r.WantJSON) > 0 {
-		_ = json.Unmarshal(r.WantJSON, &st.Want)
-	}
-	if len(r.ChosenOfferJSON) > 0 {
-		var off bstack.OfferAd
-		if json.Unmarshal(r.ChosenOfferJSON, &off) == nil {
-			st.ChosenOffer = &off
-		}
-	}
-	if len(r.MatchAuditJSON) > 0 {
-		var ma MatchAudit
-		if json.Unmarshal(r.MatchAuditJSON, &ma) == nil {
-			st.MatchAudit = &ma
-		}
-	}
-	if len(r.DealReceiptJSON) > 0 {
-		var dr DealReceipt
-		if json.Unmarshal(r.DealReceiptJSON, &dr) == nil {
-			st.DealReceipt = &dr
-		}
-	}
-	return st
-}
-
-// persistDealRecord performs CAS-protected update on existing SQLite deals or inserts if new,
-// enforcing monotonic terminal protection so a 'settled' deal never regresses to 'offered'/'expired'.
-func (e *Engine) persistDealRecord(rec store.DealRecord) {
-	if e.mem == nil || e.mem.DB() == nil || rec.DealID == "" {
-		return
-	}
-	existing, err := e.mem.DB().GetDeal(rec.DealID)
-	if err != nil {
-		_ = e.mem.DB().SaveDeal(rec)
-		return
-	}
-	// Monotonicity guard: once a deal is settled, never regress status back to pre-settlement states
-	// EXCEPT on explicit verified chain reorg rollback ("reorged").
-	if existing.Status == "settled" && rec.Status != "settled" && rec.Status != "reorged" {
-		rec.Status = "settled"
-		if rec.Error != "" && existing.Error == "" {
-			rec.Error = ""
-		}
-	}
-	// Preserve fields already committed in earlier stages if not overwritten.
-	if len(rec.WantJSON) == 0 {
-		rec.WantJSON = existing.WantJSON
-	}
-	if len(rec.ChosenOfferJSON) == 0 {
-		rec.ChosenOfferJSON = existing.ChosenOfferJSON
-	}
-	if len(rec.MatchAuditJSON) == 0 {
-		rec.MatchAuditJSON = existing.MatchAuditJSON
-	}
-	if len(rec.DealReceiptJSON) == 0 {
-		rec.DealReceiptJSON = existing.DealReceiptJSON
-	}
-	if rec.PaymentTxID == "" {
-		rec.PaymentTxID = existing.PaymentTxID
-	}
-	if len(rec.PaymentBEEF) == 0 {
-		rec.PaymentBEEF = existing.PaymentBEEF
-	}
-	if rec.PaymentDerivPrefix == "" {
-		rec.PaymentOutputIndex = existing.PaymentOutputIndex
-		rec.PaymentDerivPrefix = existing.PaymentDerivPrefix
-		rec.PaymentDerivSuffix = existing.PaymentDerivSuffix
-		rec.PaymentSenderKey = existing.PaymentSenderKey
-	}
-	if rec.ClaimKeyHex == "" {
-		rec.ClaimKeyHex = existing.ClaimKeyHex
-	}
-	if rec.ChirpURL == "" {
-		rec.ChirpURL = existing.ChirpURL
-	}
-	if rec.CounterpartyPub == "" {
-		rec.CounterpartyPub = existing.CounterpartyPub
-	}
-	if rec.PriceSats == 0 {
-		rec.PriceSats = existing.PriceSats
-	}
-	if rec.FirstOfferMs == 0 {
-		rec.FirstOfferMs = existing.FirstOfferMs
-	}
-	if rec.Shard == "" {
-		rec.Shard = existing.Shard
-	}
-	rec.CreatedAt = existing.CreatedAt
-	rec.Revision = existing.Revision
-	if ok, casErr := e.mem.DB().UpdateDealCAS(rec); casErr != nil || !ok {
-		// Re-read once on concurrent modification and retry CAS cleanly.
-		if latest, gErr := e.mem.DB().GetDeal(rec.DealID); gErr == nil {
-			if latest.Status == "settled" && rec.Status != "settled" && rec.Status != "reorged" {
-				rec.Status = "settled"
-			}
-			rec.Revision = latest.Revision
-			rec.CreatedAt = latest.CreatedAt
-			_, _ = e.mem.DB().UpdateDealCAS(rec)
-		}
-	}
 }
 
 // NewRestateServer creates the dedicated h2c Restate service endpoint with optional Request Identity v1 JWT verification.

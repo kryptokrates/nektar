@@ -45,14 +45,6 @@ func TestThreeLayerDiscoveryFederationAndRemoteChirpSeed(t *testing.T) {
 	hub1Srv := httptest.NewServer(hub1.Handler())
 	defer hub1Srv.Close()
 
-	hub2, err := hub.NewNode(hub.Config{Network: "memory", DBPath: t.TempDir() + "/hub2.sqlite", EnableFinger: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer hub2.Close()
-	hub2Srv := httptest.NewServer(hub2.Handler())
-	defer hub2Srv.Close()
-
 	// 2. Seed Seller Agent B with a domain shard & serve its CHIRP objects over HTTP!
 	sellerMem := newNodeMem(t)
 	if _, err := sellerMem.Remember(ctx, memory.RememberInput{
@@ -120,13 +112,4 @@ func TestThreeLayerDiscoveryFederationAndRemoteChirpSeed(t *testing.T) {
 	if err != nil || len(recalled) != 1 {
 		t.Fatalf("buyer recall after remote CHIRP seed failed: recalled=%+v err=%v", recalled, err)
 	}
-
-	// 4. Verify Hub 2 syncs Bob's announcement from Hub 1 via 1BSV BRC-149 Object Plane Relay!
-	fedCtx, cancel := context.WithCancel(ctx)
-	hub2.StartPlaneRelay(fedCtx, []string{hub1Srv.URL})
-	cancel()
-	// Verify Hub 1 SQLite persistence survives full close & reopen!
-	hub1Path := hub1Srv.URL
-	_ = hub1Path
-	_ = hub2Srv.URL
 }

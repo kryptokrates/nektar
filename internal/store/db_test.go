@@ -60,14 +60,20 @@ func TestStoreCRUDAndAnchors(t *testing.T) {
 		t.Fatalf("expected 0 unanchored after anchor, got %d", len(unanchored))
 	}
 
-	if err := db.SaveReceipt(ReceiptRecord{
+	if _, err := db.CommitReceiptAtomic(FragmentRecord{
+		Shard:      "__receipts__",
+		HDP:        "rhdp1",
+		Leaf:       "rleaf1",
+		Data:       []byte(`{"answer":"ok"}`),
+		Provenance: []byte("rprov1"),
+		CreatedAt:  time.Now().Unix(),
+	}, ReceiptRecord{
 		ReceiptHash: "rhash1",
-		ShardSeq:    1,
 		BodyJSON:    []byte(`{"answer":"ok"}`),
 		AnchorTxID:  "tx0",
 		CreatedAt:   time.Now().Unix(),
 	}, []CitationEdge{{Shard: "alpha", Seq: 1, ReceiptHash: "rhash1"}}); err != nil {
-		t.Fatalf("SaveReceipt: %v", err)
+		t.Fatalf("CommitReceiptAtomic: %v", err)
 	}
 	cites, err := db.CitingReceipts("alpha", 1)
 	if err != nil || len(cites) != 1 || cites[0] != "rhash1" {

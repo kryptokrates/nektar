@@ -205,3 +205,154 @@ func TestDockAllFlagshipClientsInstallIdempotentAndUninstall(t *testing.T) {
 		t.Fatalf("uninstall clobbered existing plugin in openclaw.json: %s", string(ocAfter))
 	}
 }
+
+func TestDockStdioBridgeForVSCodeOpenCodeGemini(t *testing.T) {
+	home := t.TempDir()
+	fakeExe := "/usr/local/bin/nektar"
+	opts := Options{
+		Home:    home,
+		ExePath: fakeExe,
+		LiveURL: "http://127.0.0.1:18420",
+		Token:   "secret-ephemeral-tok",
+	}
+	res := Apply(opts, []string{"vscode", "opencode", "gemini"})
+	if len(res) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(res))
+	}
+	for _, r := range res {
+		if r.Error != "" || !r.Changed {
+			t.Fatalf("unexpected result for %s: %+v", r.Client, r)
+		}
+		raw, err := os.ReadFile(r.Files[0])
+		if err != nil {
+			t.Fatalf("read %s: %v", r.Files[0], err)
+		}
+		s := string(raw)
+		if strings.Contains(s, "secret-ephemeral-tok") || strings.Contains(s, "18420") {
+			t.Fatalf("%s config should use stdio bridge without hardcoded token/port, got:\n%s", r.Client, s)
+		}
+		if !strings.Contains(s, fakeExe) || !strings.Contains(s, `"mcp"`) {
+			t.Fatalf("%s config missing stdio nektar mcp command, got:\n%s", r.Client, s)
+		}
+	}
+}
+
+func TestDockGooseMergesExistingExtensionsWithoutDuplicateKey(t *testing.T) {
+	home := t.TempDir()
+	gooseDir := filepath.Join(home, ".config", "goose")
+	if err := os.MkdirAll(gooseDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(gooseDir, "config.yaml")
+	initial := "GOOSE_PROVIDER: anthropic\nextensions:\n  developer:\n    enabled: true\n    type: builtin\n"
+	if err := os.WriteFile(cfgPath, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := Options{Home: home, ExePath: "/usr/local/bin/nektar"}
+	res := Apply(opts, []string{"goose"})
+	if len(res) != 1 || res[0].Error != "" || !res[0].Changed {
+		t.Fatalf("unexpected goose dock result: %+v", res)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	afterStr := string(after)
+	if strings.Count(afterStr, "\nextensions:")+strings.Count("\n"+afterStr, "\nextensions:") != 1 {
+		// Count top-level extensions: occurrences cleanly
+		count := 0
+		for _, ln := range strings.Split(afterStr, "\n") {
+			if strings.HasPrefix(ln, "extensions:") {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("expected exactly 1 top-level extensions: key, got %d:\n%s", count, afterStr)
+		}
+	}
+	if !strings.Contains(afterStr, "  nektar:\n") || !strings.Contains(afterStr, "  developer:\n") {
+		t.Fatalf("expected both nektar and sibling developer under extensions:\n%s", afterStr)
+	}
+
+	// Idempotent 2nd run
+	res2 := Apply(opts, []string{"goose"})
+	if res2[0].Changed {
+		t.Fatalf("expected idempotent 2nd goose dock to report Changed=false")
+	}
+
+	// Clean uninstall restores original structure without touching sibling
+	opts.Uninstall = true
+	resUn := Apply(opts, []string{"goose"})
+	if !resUn[0].Changed {
+		t.Fatalf("expected goose uninstall to report Changed=true")
+	}
+	afterUn, _ := os.ReadFile(cfgPath)
+	if strings.Contains(string(afterUn), "nektar") || !strings.Contains(string(afterUn), "developer:") {
+		t.Fatalf("unexpected goose config after uninstall:\n%s", string(afterUn))
+	}
+}
+
+func TestDockHermesExistingMemoryUninstallAndRestore(t *testing.T) {
+	home := t.TempDir()
+	hermesDir := filepath.Join(home, ".hermes")
+	if err := os.MkdirAll(hermesDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(hermesDir, "config.yaml")
+	initial := "model:\n  name: claude\nmemory:\n  provider: sqlite\n  max_tokens: 2048\n"
+	if err := os.WriteFile(cfgPath, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := Options{Home: home, ExePath: "/usr/local/bin/nektar"}
+	res := Apply(opts, []string{"hermes"})
+	if len(res) != 1 || res[0].Error != "" || !res[0].Changed {
+		t.Fatalf("unexpected hermes dock result: %+v", res)
+	}
+	installed, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(installed), "provider: nektar") || !strings.Contains(string(installed), "max_tokens: 2048") {
+		t.Fatalf("unexpected hermes config after dock:\n%s", string(installed))
+	}
+
+	// Uninstall must remove provider: nektar and restore prior provider: sqlite!
+	opts.Uninstall = true
+	resUn := Apply(opts, []string{"hermes"})
+	if !resUn[0].Changed {
+		t.Fatalf("expected hermes uninstall Changed=true")
+	}
+	afterUn, _ := os.ReadFile(cfgPath)
+	if strings.Contains(string(afterUn), "provider: nektar") {
+		t.Fatalf("hermes uninstall left broken provider: nektar:\n%s", string(afterUn))
+	}
+	if !strings.Contains(string(afterUn), "provider: sqlite") || !strings.Contains(string(afterUn), "max_tokens: 2048") {
+		t.Fatalf("hermes uninstall did not restore prior provider and sibling keys:\n%s", string(afterUn))
+	}
+}
+
+func TestDockOpenClawLoopbackAutoDiscoveryAndCleanUninstallNoNulls(t *testing.T) {
+	home := t.TempDir()
+	ocDir := filepath.Join(home, ".openclaw")
+	if err := os.MkdirAll(ocDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(ocDir, "openclaw.json")
+
+	opts := Options{Home: home, ExePath: "/usr/local/bin/nektar", LiveURL: "http://127.0.0.1:18420"}
+	res := Apply(opts, []string{"openclaw"})
+	if len(res) != 1 || res[0].Error != "" || !res[0].Changed {
+		t.Fatalf("unexpected openclaw dock result: %+v", res)
+	}
+	raw, _ := os.ReadFile(cfgPath)
+	if strings.Contains(string(raw), `"url"`) {
+		t.Fatalf("loopback openclaw dock must omit static url so active-daemon.json discovery runs, got:\n%s", string(raw))
+	}
+
+	// Uninstall when nektar-memory was the sole plugin must not write JSON null arrays!
+	opts.Uninstall = true
+	resUn := Apply(opts, []string{"openclaw"})
+	if !resUn[0].Changed {
+		t.Fatalf("expected openclaw uninstall Changed=true")
+	}
+	afterUn, _ := os.ReadFile(cfgPath)
+	if strings.Contains(string(afterUn), "null") {
+		t.Fatalf("openclaw uninstall emitted JSON null:\n%s", string(afterUn))
+	}
+}

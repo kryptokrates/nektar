@@ -74,4 +74,50 @@ func TestSafeHTTPBlocksPrivateMetadataAndLoopback(t *testing.T) {
 		t.Fatalf("expected memory SafeHTTPClient to reach local test server: %v", err)
 	}
 	resp.Body.Close()
+
+	// Empty/unknown network must fail closed (never allow private outbound).
+	if AllowPrivateOutboundForNetwork("") {
+		t.Fatal("expected AllowPrivateOutboundForNetwork(\"\") == false")
+	}
+	if AllowPrivateOutboundForNetwork("unknown-net") {
+		t.Fatal("expected AllowPrivateOutboundForNetwork(\"unknown-net\") == false")
+	}
+
+	// SafeHTTPClient RoundTripper must enforce RequireHTTPS on the initial request (not only redirects).
+	httpsClient := SafeHTTPClient(SafeHTTPOpts{Timeout: 2 * time.Second, AllowPrivate: true, RequireHTTPS: true})
+	if resp, err := httpsClient.Get(srv.URL); err == nil {
+		resp.Body.Close()
+		t.Fatal("expected RequireHTTPS client to reject initial plaintext http:// request")
+	}
+
+	// MaxRedirects < 0 must disable all redirects; MaxRedirects == 0 must allow same-origin and block cross-origin.
+	var targetURL string
+	redirSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/same":
+			http.Redirect(w, r, "/ok", http.StatusFound)
+		case "/cross":
+			http.Redirect(w, r, targetURL, http.StatusFound)
+		default:
+			_, _ = w.Write([]byte("ok"))
+		}
+	}))
+	defer redirSrv.Close()
+	targetURL = srv.URL
+
+	noRedirClient := SafeHTTPClient(SafeHTTPOpts{Timeout: 2 * time.Second, AllowPrivate: true, MaxRedirects: -1})
+	if resp, err := noRedirClient.Get(redirSrv.URL + "/same"); err == nil {
+		resp.Body.Close()
+		t.Fatal("expected MaxRedirects < 0 to block redirect")
+	}
+	sameOriginClient := SafeHTTPClient(SafeHTTPOpts{Timeout: 2 * time.Second, AllowPrivate: true, MaxRedirects: 0})
+	if resp, err := sameOriginClient.Get(redirSrv.URL + "/same"); err != nil {
+		t.Fatalf("expected MaxRedirects == 0 to permit same-origin redirect: %v", err)
+	} else {
+		resp.Body.Close()
+	}
+	if resp, err := sameOriginClient.Get(redirSrv.URL + "/cross"); err == nil {
+		resp.Body.Close()
+		t.Fatal("expected MaxRedirects == 0 to block cross-origin redirect")
+	}
 }

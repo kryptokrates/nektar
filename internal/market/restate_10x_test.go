@@ -228,12 +228,15 @@ func TestStandingOrderBrokerDispatchFiltersMatchingOrders(t *testing.T) {
 	mem := newTestMemory(t)
 	eng := NewEngine(mem, DefaultPolicy())
 
+	var sigMu sync.Mutex
 	var signaledPaths []string
 	ingSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sigMu.Lock()
 		signaledPaths = append(signaledPaths, r.URL.Path)
+		sigMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`true`))
+		_, _ = w.Write([]byte(`{"id":"inv-test-1","status":"Accepted"}`))
 	}))
 	defer ingSrv.Close()
 
@@ -284,11 +287,20 @@ func TestStandingOrderBrokerDispatchFiltersMatchingOrders(t *testing.T) {
 
 	// Wait briefly for async goroutine dispatch.
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && len(signaledPaths) == 0 {
+	for time.Now().Before(deadline) {
+		sigMu.Lock()
+		n := len(signaledPaths)
+		sigMu.Unlock()
+		if n > 0 {
+			break
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if len(signaledPaths) != 1 || !strings.Contains(signaledPaths[0], "/StandingOrder/so-match/onOffer") {
-		t.Fatalf("expected only so-match to be signaled, got %v", signaledPaths)
+	sigMu.Lock()
+	gotPaths := append([]string(nil), signaledPaths...)
+	sigMu.Unlock()
+	if len(gotPaths) != 1 || !strings.Contains(gotPaths[0], "/StandingOrder/so-match/onOffer") {
+		t.Fatalf("expected only so-match to be signaled, got %v", gotPaths)
 	}
 
 	// Ensure deal persistence helper isn't broken by new DealState fields.
@@ -354,6 +366,14 @@ func startLiveRestateForTest(t *testing.T, ctx context.Context, eng *Engine, int
 	if !ready {
 		epCancel()
 		t.Fatalf("h2c endpoint %s never became ready", epAddr)
+	}
+	if useWSL {
+		probe := exec.CommandContext(ctx, "wsl", "-e", "bash", "-c",
+			fmt.Sprintf("timeout 2 bash -c 'exec 3<>/dev/tcp/%s/%d' 2>/dev/null", bindHost, epPort))
+		if err := probe.Run(); err != nil {
+			epCancel()
+			t.Skipf("WSL2 cannot reach Windows host test port %s (Windows Firewall likely blocking ephemeral test binary on vEthernet (WSL)): %v", epAddr, err)
+		}
 	}
 
 	ingPort := freeLoopbackPort(t)
@@ -504,7 +524,7 @@ func TestLiveRestate10xFeaturesE2E(t *testing.T) {
 		t.Fatalf("SteerStandingOrder pause: ok=%v err=%v", ok, err)
 	}
 	for i := 0; i < 40; i++ {
-		if st, gErr := rc.StandingOrderStatus(ctx, orderID); gErr == nil && st.Status == "paused" && st.MaxSats == 250 && st.WaitingSeq == 2 {
+		if st, gErr := rc.StandingOrderStatus(ctx, orderID); gErr == nil && st.Status == "paused" && st.MaxSats == 250 && st.WaitingSeq >= 2 {
 			soSt = st
 			break
 		}
@@ -514,20 +534,20 @@ func TestLiveRestate10xFeaturesE2E(t *testing.T) {
 		t.Fatalf("expected paused maxSats=250, got %+v", soSt)
 	}
 
-	// Send an offer while paused — MUST be ignored (waitingSeq bumps to 3, status stays paused, attempts=0).
+	// Send an offer while paused — MUST be ignored (event processed, status stays paused, attempts=0).
 	if ok, err := rc.SignalStandingOrderOffer(ctx, orderID, bstack.OfferAd{
 		OfferID: "off-ignored-while-paused", Domains: []string{"bsv"}, PriceSats: 100,
 	}); err != nil || !ok {
 		t.Fatalf("SignalStandingOrderOffer while paused: ok=%v err=%v", ok, err)
 	}
 	for i := 0; i < 40; i++ {
-		if st, gErr := rc.StandingOrderStatus(ctx, orderID); gErr == nil && st.WaitingSeq == 3 {
+		if st, gErr := rc.StandingOrderStatus(ctx, orderID); gErr == nil && st.LastProcessedSeq >= 2 {
 			soSt = st
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if soSt.Status != "paused" || soSt.Attempts != 0 {
+	if soSt.Status != "paused" || soSt.Attempts != 0 || soSt.LastProcessedSeq < 2 {
 		t.Fatalf("expected offer ignored while paused, got %+v", soSt)
 	}
 
@@ -537,7 +557,7 @@ func TestLiveRestate10xFeaturesE2E(t *testing.T) {
 		t.Fatalf("SteerStandingOrder unpause: ok=%v err=%v", ok, err)
 	}
 	for i := 0; i < 40; i++ {
-		if st, gErr := rc.StandingOrderStatus(ctx, orderID); gErr == nil && st.Status == "watching" && st.WaitingSeq == 4 {
+		if st, gErr := rc.StandingOrderStatus(ctx, orderID); gErr == nil && st.Status == "watching" && st.LastProcessedSeq >= 3 {
 			soSt = st
 			break
 		}
@@ -842,26 +862,42 @@ func TestLiveAuditFixesE2E(t *testing.T) {
 	}
 
 	now := time.Now().Unix()
-	escrowATxID, _ := lockRealEscrow("deal-esc-A", uint64(now+3))  // refunds in 3s
+	escrowATxID, _ := lockRealEscrow("deal-esc-A", uint64(now+15)) // refunds in 15s (headroom for Restate startup under load)
 	escrowBTxID, _ := lockRealEscrow("deal-esc-B", uint64(now-60)) // already refundable NOW!
 
 	// Arm Guardian A BEFORE Escrow B is reconciled!
 	if _, err := rc.StartEscrowGuardianAsync(ctx, escrowATxID, EscrowGuardianInput{
 		DealID:       "deal-esc-A",
 		EscrowTxID:   escrowATxID,
-		RefundAfter:  uint64(now + 3),
+		RefundAfter:  uint64(now + 15),
 		CheckEveryMs: 300,
 	}); err != nil {
 		t.Fatalf("StartEscrowGuardianAsync A: %v", err)
 	}
-	// Verify Guardian A is watching and did NOT falsely steal Escrow B's refund!
-	time.Sleep(800 * time.Millisecond)
-	stA1, err := rc.EscrowGuardianStatus(ctx, escrowATxID)
-	if err != nil {
-		t.Fatalf("EscrowGuardianStatus A (early): %v", err)
+	// Verify Guardian A enters watching and stays watching across multiple check ticks without stealing Escrow B's refund!
+	var stA1 *EscrowGuardianState
+	for i := 0; i < 50; i++ {
+		if st, gErr := rc.EscrowGuardianStatus(ctx, escrowATxID); gErr == nil && st.Status != "" {
+			stA1 = st
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	if stA1.Status != "watching" {
-		t.Fatalf("CROSS-ESCROW CONTAMINATION: Guardian A exited early as %q (refundTx=%s) while Escrow B was refundable!", stA1.Status, stA1.RefundTxID)
+	if stA1 == nil || stA1.Status != "watching" {
+		gotStatus := ""
+		gotRefund := ""
+		if stA1 != nil {
+			gotStatus, gotRefund = stA1.Status, stA1.RefundTxID
+		}
+		t.Fatalf("CROSS-ESCROW CONTAMINATION: Guardian A exited early as %q (refundTx=%s) while Escrow B was refundable!", gotStatus, gotRefund)
+	}
+	time.Sleep(700 * time.Millisecond)
+	stA2, err := rc.EscrowGuardianStatus(ctx, escrowATxID)
+	if err != nil {
+		t.Fatalf("EscrowGuardianStatus A (after check ticks): %v", err)
+	}
+	if stA2.Status != "watching" {
+		t.Fatalf("CROSS-ESCROW CONTAMINATION: Guardian A exited early as %q (refundTx=%s) while Escrow B was refundable!", stA2.Status, stA2.RefundTxID)
 	}
 	// Now reconcile Escrow B separately and confirm Escrow B refunds cleanly!
 	repB, err := ReconcileSingleEscrowObligation(ctx, buyerMem.DB(), buyerMem.Chain(), "deal-esc-B", escrowBTxID, time.Now().Unix())
@@ -870,9 +906,9 @@ func TestLiveAuditFixesE2E(t *testing.T) {
 	}
 	refundBTxID := repB.RefundTxIDs[0]
 
-	// Wait for Escrow A's RefundAfter (+3s) to elapse and prove Guardian A broadcasts Escrow A's OWN real Refund tx!
+	// Wait for Escrow A's RefundAfter (+15s) to elapse and prove Guardian A broadcasts Escrow A's OWN real Refund tx!
 	var stAFinal *EscrowGuardianState
-	for i := 0; i < 40; i++ {
+	for i := 0; i < 100; i++ {
 		if st, gErr := rc.EscrowGuardianStatus(ctx, escrowATxID); gErr == nil && st.Status == "refunded" {
 			stAFinal = st
 			break

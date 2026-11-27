@@ -238,5 +238,5 @@ func VerifyAnchorUTXOLineage(prevTx, nextTx *transaction.Transaction) error {
 	} else {
 		return fmt.Errorf("contracts: anchor lineage non-monotonic n: prev=%d next=%d", prevSt.N, nextSt.N)
 	}
-	return VerifyInputScriptChronicle(nextTx, 0, prevTx.Outputs[0])
+	return VerifyInputScriptChronicleConsensus(nextTx, 0, prevTx.Outputs[0])
 }

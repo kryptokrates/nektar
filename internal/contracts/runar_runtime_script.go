@@ -17,25 +17,6 @@ import (
 	"github.com/kryptokrates/nektar/internal/core"
 )
 
-// FindFirstOpReturn walks scriptBytes at real opcode boundaries and returns the byte offset
-// of the first OP_RETURN (0x6a), or -1 if none exists.
-func FindFirstOpReturn(scriptBytes []byte) int {
-	off := 0
-	n := len(scriptBytes)
-	for off < n {
-		op := scriptBytes[off]
-		if op == 0x6a {
-			return off
-		}
-		next, ok := advanceScriptOpcode(scriptBytes, off)
-		if !ok {
-			return -1
-		}
-		off = next
-	}
-	return -1
-}
-
 // FindCodeSepOffsets walks scriptBytes at real opcode boundaries (stopping at OP_RETURN)
 // and returns the byte offsets of every OP_CODESEPARATOR (0xab).
 func FindCodeSepOffsets(scriptBytes []byte) []int {
@@ -159,22 +140,6 @@ func ComputeOpPushTxPreimage(
 		LockingScript: &sc,
 	})
 	return tmp.CalcInputPreimage(uint32(inputIdx), sigHashFlag)
-}
-
-// ComputeInputSigHash returns DSHA256(BIP-143 preimage) — the exact 32-byte digest signed by ECDSA OP_CHECKSIG.
-func ComputeInputSigHash(
-	tx *transaction.Transaction,
-	inputIdx int,
-	prevLockScript []byte,
-	prevSats uint64,
-	codeSepOffset int,
-	sigHashFlag sighash.Flag,
-) ([]byte, error) {
-	preimage, err := ComputeOpPushTxPreimage(tx, inputIdx, prevLockScript, prevSats, codeSepOffset, sigHashFlag)
-	if err != nil {
-		return nil, err
-	}
-	return core.DSHA256(preimage), nil
 }
 
 // BuildMethodUnlockingScript constructs the exact push-only unlocking script for invoking methodName on art.
@@ -307,19 +272,35 @@ func ExtractP2PKH(lockScript []byte) ([]byte, bool) {
 var secp256k1N, _ = new(big.Int).SetString("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
 var secp256k1HalfN = new(big.Int).Rsh(secp256k1N, 1)
 
-// CanonicalizeLowSDERWithFlag ensures a DER ECDSA signature satisfies BSV low-S and appends the sighash flag byte.
+// CanonicalizeLowSDERWithFlag validates strict DER encoding (rejecting trailing bytes and
+// non-minimal encodings), enforces BSV low-S via core.ParseStrictLowSDER, and appends the sighash flag byte.
 func CanonicalizeLowSDERWithFlag(derSig []byte, flag sighash.Flag) ([]byte, error) {
 	if flag == 0 {
 		flag = sighash.AllForkID
 	}
-	sig, err := ec.ParseDERSignature(derSig)
-	if err != nil {
+	if len(derSig) < 8 || len(derSig) > 73 {
+		return nil, fmt.Errorf("contracts: parse DER signature: %w", core.ErrNonCanonicalDER)
+	}
+	if sig, err := core.ParseStrictLowSDER(hex.EncodeToString(derSig)); err == nil {
+		return append(sig.Serialize(), byte(flag)), nil
+	} else if !errors.Is(err, core.ErrHighSSignature) {
 		return nil, fmt.Errorf("contracts: parse DER signature: %w", err)
+	}
+	// Canonicalize valid high-S DER signature into low-S, then verify strict low-S DER output.
+	sig, err := ec.ParseDERSignature(derSig)
+	if err != nil || sig == nil || sig.R == nil || sig.S == nil {
+		return nil, fmt.Errorf("contracts: parse DER signature: %w", core.ErrNonCanonicalDER)
+	}
+	if !core.EqualBytes(derSig, sig.Serialize()) || sig.R.Sign() <= 0 || sig.R.Cmp(secp256k1N) >= 0 || sig.S.Sign() <= 0 || sig.S.Cmp(secp256k1N) >= 0 {
+		return nil, fmt.Errorf("contracts: parse DER signature: %w", core.ErrNonCanonicalDER)
 	}
 	if sig.S.Cmp(secp256k1HalfN) > 0 {
 		sig.S = new(big.Int).Sub(secp256k1N, sig.S)
 	}
 	out := sig.Serialize()
+	if _, err := core.ParseStrictLowSDER(hex.EncodeToString(out)); err != nil {
+		return nil, fmt.Errorf("contracts: canonicalize low-S DER signature: %w", err)
+	}
 	return append(out, byte(flag)), nil
 }
 
@@ -348,6 +329,7 @@ func NewOperatorKeySigner(wif, keyHex string) (CovenantSighashSigner, error) {
 		}
 	case strings.TrimSpace(keyHex) != "":
 		raw, err := hex.DecodeString(strings.TrimPrefix(strings.TrimSpace(keyHex), "0x"))
+		defer core.ZeroBytes(raw)
 		if err != nil || len(raw) != 32 {
 			return nil, errors.New("vault: operator-key-hex must be 32-byte hex")
 		}

@@ -160,7 +160,7 @@ func (a *App) handleColdStartHealth(w http.ResponseWriter, _ *http.Request) {
 
 	receiptCount, _ := a.mem.DB().CountReceipts()
 	dealCount, _ := a.mem.DB().CountDeals()
-	restateAttached := a.restateClient() != nil || (a.broker != nil && a.broker.RestateClient() != nil)
+	restateAttached := (a.restateClient() != nil || (a.broker != nil && a.broker.RestateClient() != nil)) && a.isRestateAlive()
 
 	overallStatus := "forming"
 	if liveDomains > 0 && fillRate >= bars.FillRateMin && zeroRate < bars.ZeroRateMax && hubSupplyShare < bars.HubSupplyShareMax {

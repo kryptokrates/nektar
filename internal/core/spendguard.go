@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -47,6 +48,19 @@ type SpendRecord struct {
 
 // SpendGuard is the mandatory fail-closed spend circuit breaker sitting in
 // front of every live transaction broadcaster.
+type spendReservation struct {
+	amount    uint64
+	dayKey    string
+	createdAt time.Time
+}
+
+func addSaturatingUint64(a, b uint64) uint64 {
+	if a > math.MaxUint64-b {
+		return math.MaxUint64
+	}
+	return a + b
+}
+
 type SpendGuard struct {
 	mu            sync.Mutex
 	maxFeePerTx   uint64
@@ -60,7 +74,7 @@ type SpendGuard struct {
 	lastBroadcast time.Time
 	records       []SpendRecord
 	txIndex       map[string]struct{}
-	reservations  map[string]uint64
+	reservations  map[string]spendReservation
 	resSeq        uint64
 	corruptErr    error
 }
@@ -92,7 +106,7 @@ func NewSpendGuard(opts SpendGuardOpts) *SpendGuard {
 		now:          nowFn,
 		dayKey:       nowFn().UTC().Format("2006-01-02"),
 		txIndex:      make(map[string]struct{}),
-		reservations: make(map[string]uint64),
+		reservations: make(map[string]spendReservation),
 	}
 	g.load()
 	return g
@@ -183,7 +197,27 @@ func (g *SpendGuard) rollDayLocked(now time.Time) {
 		g.spentToday = 0
 		g.records = nil
 		clear(g.txIndex)
+		// Evict prior-day reservations (e.g. leaked by uncertain RPC timeouts) and recompute reservedToday.
+		var activeReserved uint64
+		for id, res := range g.reservations {
+			if res.dayKey != today {
+				delete(g.reservations, id)
+				continue
+			}
+			activeReserved = addSaturatingUint64(activeReserved, res.amount)
+		}
+		g.reservedToday = activeReserved
 	}
+}
+
+func (g *SpendGuard) effectiveLastBroadcastLocked() time.Time {
+	last := g.lastBroadcast
+	for _, res := range g.reservations {
+		if res.createdAt.After(last) {
+			last = res.createdAt
+		}
+	}
+	return last
 }
 
 func (g *SpendGuard) checkLocked(now time.Time, feeSats, spendSats uint64) (uint64, error) {
@@ -197,11 +231,14 @@ func (g *SpendGuard) checkLocked(now time.Time, feeSats, spendSats uint64) (uint
 	if totalSpend < feeSats {
 		totalSpend = feeSats
 	}
-	if g.spentToday+g.reservedToday+totalSpend > g.maxSpendDay {
-		return 0, fmt.Errorf("%w: (%d + %d + %d > %d sats)", ErrDailyCapExceeded, g.spentToday, g.reservedToday, totalSpend, g.maxSpendDay)
+	if g.spentToday > g.maxSpendDay ||
+		g.reservedToday > g.maxSpendDay-g.spentToday ||
+		totalSpend > g.maxSpendDay-g.spentToday-g.reservedToday {
+		return 0, fmt.Errorf("%w: (spent=%d + reserved=%d [%d active] + request=%d > cap=%d sats)", ErrDailyCapExceeded, g.spentToday, g.reservedToday, len(g.reservations), totalSpend, g.maxSpendDay)
 	}
-	if g.minInterval > 0 && !g.lastBroadcast.IsZero() {
-		if elapsed := now.Sub(g.lastBroadcast); elapsed < g.minInterval {
+	lastActivity := g.effectiveLastBroadcastLocked()
+	if g.minInterval > 0 && !lastActivity.IsZero() {
+		if elapsed := now.Sub(lastActivity); elapsed < g.minInterval {
 			rem := (g.minInterval - elapsed).Round(time.Millisecond)
 			return 0, fmt.Errorf("%w (retry after %s)", ErrMinInterval, rem)
 		}
@@ -210,7 +247,7 @@ func (g *SpendGuard) checkLocked(now time.Time, feeSats, spendSats uint64) (uint
 }
 
 // Reserve atomically reserves daily spend budget before a remote client-wallet CreateAction RPC,
-// eliminating concurrent TOCTOU races across overlapping sends.
+// eliminating concurrent TOCTOU races across overlapping sends and enforcing MinInterval spacing.
 func (g *SpendGuard) Reserve(feeSats, spendSats uint64) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -222,8 +259,8 @@ func (g *SpendGuard) Reserve(feeSats, spendSats uint64) (string, error) {
 	}
 	g.resSeq++
 	id := fmt.Sprintf("res-%d", g.resSeq)
-	g.reservations[id] = totalSpend
-	g.reservedToday += totalSpend
+	g.reservations[id] = spendReservation{amount: totalSpend, dayKey: g.dayKey, createdAt: now}
+	g.reservedToday = addSaturatingUint64(g.reservedToday, totalSpend)
 	return id, nil
 }
 
@@ -234,10 +271,10 @@ func (g *SpendGuard) CancelReservation(resID string) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if amt, ok := g.reservations[resID]; ok {
+	if res, ok := g.reservations[resID]; ok {
 		delete(g.reservations, resID)
-		if g.reservedToday >= amt {
-			g.reservedToday -= amt
+		if g.reservedToday >= res.amount {
+			g.reservedToday -= res.amount
 		} else {
 			g.reservedToday = 0
 		}
@@ -249,10 +286,10 @@ func (g *SpendGuard) CancelReservation(resID string) {
 func (g *SpendGuard) CommitReservation(resID, txid string, actualFee, actualSpend uint64) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if amt, ok := g.reservations[resID]; ok {
+	if res, ok := g.reservations[resID]; ok {
 		delete(g.reservations, resID)
-		if g.reservedToday >= amt {
-			g.reservedToday -= amt
+		if g.reservedToday >= res.amount {
+			g.reservedToday -= res.amount
 		} else {
 			g.reservedToday = 0
 		}
@@ -268,7 +305,7 @@ func (g *SpendGuard) CommitReservation(resID, txid string, actualFee, actualSpen
 	if totalSpend < actualFee {
 		totalSpend = actualFee
 	}
-	g.spentToday += totalSpend
+	g.spentToday = addSaturatingUint64(g.spentToday, totalSpend)
 	g.lastBroadcast = now
 	g.records = append(g.records, SpendRecord{
 		TxID:      txid,
@@ -316,7 +353,7 @@ func (g *SpendGuard) CheckAndRecord(txid string, feeSats, spendSats uint64) erro
 	prevLast := g.lastBroadcast
 	prevLen := len(g.records)
 
-	g.spentToday += totalSpend
+	g.spentToday = addSaturatingUint64(g.spentToday, totalSpend)
 	g.lastBroadcast = now
 	g.records = append(g.records, SpendRecord{
 		TxID:      txid,
@@ -383,10 +420,11 @@ func (g *SpendGuard) MinInterval() time.Duration {
 func (g *SpendGuard) RemainingInterval() time.Duration {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.minInterval <= 0 || g.lastBroadcast.IsZero() {
+	lastActivity := g.effectiveLastBroadcastLocked()
+	if g.minInterval <= 0 || lastActivity.IsZero() {
 		return 0
 	}
-	if rem := g.minInterval - g.now().Sub(g.lastBroadcast); rem > 0 {
+	if rem := g.minInterval - g.now().Sub(lastActivity); rem > 0 {
 		return rem
 	}
 	return 0

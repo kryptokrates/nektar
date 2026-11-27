@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -10,20 +9,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/bsv-blockchain/go-sdk/transaction"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
-	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/server"
 )
 
@@ -96,7 +90,24 @@ func cmdServe(args []string) error {
 	if nRec, rErr := rt.mem.ReconcilePendingAnchors(ctx); rErr == nil && nRec > 0 {
 		log.Printf("reconciled %d pending shard anchor(s) from crash journal", nRec)
 	}
-	if obRep, oErr := market.ReconcileObligations(ctx, rt.mem.DB(), nil, time.Now().Unix()); oErr == nil && obRep.Checked > 0 {
+	var isTxSettled func(txid string) bool
+	if rt.mem != nil && rt.mem.Chain() != nil && rt.mem.Chain().Network() != "memory" {
+		isTxSettled = func(txid string) bool {
+			pCtx, pCancel := context.WithTimeout(ctx, 10*time.Second)
+			defer pCancel()
+			mp, bh, ok, pErr := rt.mem.Chain().ProofChecked(pCtx, txid)
+			if pErr != nil || !ok || mp == nil {
+				return false
+			}
+			depth := rt.mem.Chain().SettleDepth()
+			if depth <= 0 {
+				depth = 1
+			}
+			tip, hErr := rt.mem.Chain().Height(pCtx)
+			return hErr == nil && tip >= bh && int(tip-bh)+1 >= depth
+		}
+	}
+	if obRep, oErr := market.ReconcileObligations(ctx, rt.mem.DB(), isTxSettled, time.Now().Unix()); oErr == nil && obRep.Checked > 0 {
 		log.Printf("reconciled %d surviving commercial obligation(s): fulfilled=%d overdue=%d refundClaimable=%d open=%d",
 			obRep.Checked, obRep.Fulfilled, obRep.MarkedOverdue, obRep.RefundClaimable, obRep.StillOpen)
 	}
@@ -109,15 +120,24 @@ func cmdServe(args []string) error {
 	// and Monitor (SendWaiting, CheckForProofs + BEEF compaction, AbortAbandoned, AddressSync).
 	rt.mem.Chain().StartBackground(ctx)
 
-	if rt.mem.Chain().Network() != "memory" {
-		// Only block boot briefly if wallet is empty; Monitor handles ongoing sync & proof upgrades asynchronously!
-		if rt.mem.Chain().BalanceSats() == 0 {
-			syncCtx, syncCancel := context.WithTimeout(ctx, 8*time.Second)
-			if added, proved, sErr := rt.mem.Chain().SyncPool(syncCtx); sErr == nil && (added > 0 || proved > 0) {
-				log.Printf("synced %s wallet: +%d UTXO(s), %d proved (balance=%d sats)", rt.mem.Chain().Network(), added, proved, rt.mem.Chain().BalanceSats())
+	var postBootWG sync.WaitGroup
+	bgCtx, cancelBG := context.WithCancel(ctx)
+	defer func() {
+		cancelBG()
+		postBootWG.Wait()
+	}()
+	if rt.mem.Chain().Network() != "memory" && rt.mem.Chain().BalanceSats() == 0 {
+		// Run initial wallet sync asynchronously so zero-env cold boot opens HTTP/MCP in <100ms
+		// instead of silently blocking up to 8s on empty fresh wallets.
+		postBootWG.Add(1)
+		go func() {
+			defer postBootWG.Done()
+			syncCtx, syncCancel := context.WithTimeout(bgCtx, 8*time.Second)
+			defer syncCancel()
+			if rep, sErr := rt.mem.Chain().SyncFull(syncCtx); sErr == nil && (rep.AddedOutputs > 0 || rep.ProvedTxs > 0) {
+				log.Printf("synced %s wallet: +%d UTXO(s), %d proved (balance=%d sats)", rt.mem.Chain().Network(), rep.AddedOutputs, rep.ProvedTxs, rt.mem.Chain().BalanceSats())
 			}
-			syncCancel()
-		}
+		}()
 	}
 	stopRefresher := startAnchorProofRefresher(ctx, rt.mem)
 	defer stopRefresher()
@@ -127,52 +147,11 @@ func cmdServe(args []string) error {
 	var liqState *hub.LiquidityState
 	var upstreamSpines []string
 	if *withHub {
-		hubDBPath := filepath.Join(rt.dataDir, "hub.sqlite")
-		if rt.mem.Chain().Network() == "memory" && *dataDir == "" && os.Getenv("NEKTAR_DATA_DIR") == "" {
-			hubDBPath = ":memory:"
-		}
-		feeSched := hub.LoadFeeSchedule(os.Getenv)
-		if fp := strings.TrimSpace(*feePresetFlag); fp != "" && fp != strings.TrimSpace(os.Getenv("NEKTAR_HUB_FEE_PRESET")) {
-			feeSched = hub.DefaultFeeSchedule(fp)
-		}
-		if hr := strings.ToLower(strings.TrimSpace(*hubRoleFlag)); hr == string(hub.RoleSpine) || hr == string(hub.RoleLeaf) {
-			feeSched.Role = hub.HubRole(hr)
-		}
-		feeSched.Normalize()
-		for _, s := range strings.Split(*upstreamSpinesFlag, ",") {
-			if s = strings.TrimSpace(s); s != "" {
-				upstreamSpines = append(upstreamSpines, s)
-			}
-		}
-		hubNode, err = hub.NewNode(hub.Config{
-			Network:        rt.mem.Chain().Network(),
-			DBPath:         hubDBPath,
-			EnableFinger:   true,
-			EnableBbox:     true,
-			EnableBlogs:    true,
-			EnableBorg:     true,
-			EnableBsecret:  true,
-			EnableBstore:   true,
-			Getenv:         os.Getenv,
-			ChainTracker:   rt.mem.Chain().Tracker(),
-			HeaderHandler:  rt.mem.Chain().HeaderStoreHandler(),
-			Fees:           feeSched,
-			FeeCollector:   hub.NewPortFeeCollector(rt.mem.Chain()),
-			UpstreamSpines: upstreamSpines,
-		})
+		hubNode, liqState, upstreamSpines, err = initEmbeddedHub(ctx, rt, *dataDir, *hubRoleFlag, *feePresetFlag, *upstreamSpinesFlag)
 		if err != nil {
 			return err
 		}
 		defer hubNode.Close()
-		liqState, err = hub.ArmHubLiquidity(ctx, hubNode, rt.mem, hub.LiquidityConfig{
-			SeedStarterShards: true,
-			ArmBounties:       true,
-			StarterPriceSats:  90,
-			BountyRewardSats:  100,
-		})
-		if err != nil {
-			log.Printf("hub liquidity warning: %v", err)
-		}
 	}
 
 	localBase := fmt.Sprintf("http://127.0.0.1:%d", portNum)
@@ -222,70 +201,11 @@ func cmdServe(args []string) error {
 		broker.SetAdvertisedPacks(liqState.Packs, liqState.BountyDomains)
 	}
 	if hubNode != nil {
-		if rt.disc != nil && rt.mkt != nil && rt.mkt.Policy() != nil {
-			rt.disc.SetHubFeePolicy(rt.mkt.Policy().CanPayHubFee, rt.mkt.Policy().RecordHubFeeSpend)
-		}
-		hubNode.SetUpstreamSubmitter(rt.disc.SubmitBEEF)
-		var leafDomFn func() []string
-		if doms := parseCSVEnv("NEKTAR_HUB_DOMAINS"); len(doms) > 0 {
-			leafDomFn = func() []string { return doms }
-		}
-		hubNode.SetEgressAuth(
-			func(action, aud string, cursor int64, domainsCSV string) (string, string, string, string, error) {
-				return discovery.SignEgressAuthHeaders(rt.disc.AnnounceKey(), action, aud, cursor, domainsCSV)
-			},
-			func(tCtx context.Context, spineURL string, minTopupSats uint64) error {
-				_, tErr := rt.disc.TopUpHubEgressCredits(tCtx, spineURL, minTopupSats, rt.disc.AnnouncePubHex())
-				return tErr
-			},
-			leafDomFn,
-		)
-		// Optional bare-origin loopback engine listener for stock lightwebinc/overlay-bridge (Paper 008 §2).
-		if engineListen := strings.TrimSpace(os.Getenv("NEKTAR_HUB_ENGINE_LISTEN")); engineListen != "" {
-			engSrv := &http.Server{
-				Addr:              engineListen,
-				Handler:           hubNode.Handler(),
-				ReadHeaderTimeout: 10 * time.Second,
-			}
-			go func() {
-				if lErr := engSrv.ListenAndServe(); lErr != nil && !errors.Is(lErr, http.ErrServerClosed) {
-					log.Printf("hub bare-origin engine listener (%s) error: %v", engineListen, lErr)
-				}
-			}()
-			defer func() {
-				sCtx, sCancel := context.WithTimeout(context.Background(), 3*time.Second)
-				defer sCancel()
-				_ = engSrv.Shutdown(sCtx)
-			}()
-		}
-		// Hub-to-Hub transport wiring (1BSV Papers 006/008/010 — zero mesh gossip):
-		//   - relay (default): Leaf connects to Spine's BRC-149 Application-Layer Object Plane (/plane/stream + /plane/nack)
-		//   - plane:           External lightwebinc/overlay-bridge handles live propagation; Nektar propagation OFF
-		//   - unicast:         Publisher unicast fan-out + explicit BRC-24 /lookup catch-up; Hub propagation OFF
-		tMode := strings.ToLower(strings.TrimSpace(os.Getenv("NEKTAR_HUB_TRANSPORT")))
-		switch tMode {
-		case string(hub.TransportPlane), string(hub.TransportUnicast):
-			// Propagation switched OFF by design (Paper 008 §5 / Paper 009 §4.5).
-		default:
-			if len(upstreamSpines) > 0 {
-				hubNode.StartPlaneRelay(ctx, upstreamSpines)
-			}
-		}
-		// Explicit offline catch-up backfill via BRC-24 /lookup (strictly separated from live propagation, Paper 008 §6).
-		if catchupPeers := parseCSVEnv("NEKTAR_CATCHUP_PEERS"); len(catchupPeers) > 0 {
-			go func(peers []string) {
-				cCtx, cCancel := context.WithTimeout(ctx, 45*time.Second)
-				defer cCancel()
-				for _, cp := range peers {
-					if _, cErr := hubNode.CatchUpFromPeer(cCtx, cp, 10); cErr != nil {
-						log.Printf("hub catchup from %s: %v", cp, cErr)
-					}
-				}
-			}(catchupPeers)
-		}
+		stopEngineSrv := wireEmbeddedHub(ctx, rt, hubNode, upstreamSpines)
+		defer stopEngineSrv()
 	}
 
-	rawAPITok := envOr("NEKTAR_API_TOKEN", os.Getenv("NEKTAR_HTTP_TOKEN"))
+	rawAPITok := os.Getenv("NEKTAR_API_TOKEN")
 	rawOpTok := os.Getenv("NEKTAR_OPERATOR_TOKEN")
 	requireAuth := server.IsContainerEnv() || server.IsNonLoopbackListen(*addr)
 	apiTok, opTok, genTokens := server.ResolveOrGenerateTokens(rt.dataDir, rawAPITok, rawOpTok, requireAuth)
@@ -293,6 +213,7 @@ func cmdServe(args []string) error {
 	app, err := server.NewApp(rt.mem, rt.mkt, server.Config{
 		ListenAddr:        *addr,
 		PublicURL:         pubURL,
+		DataDir:           rt.dataDir,
 		APIToken:          apiTok,
 		OperatorToken:     opTok,
 		ToolProfile:       envOr("NEKTAR_TOOL_PROFILE", "operator"),
@@ -321,9 +242,14 @@ func cmdServe(args []string) error {
 		broker.SetPublicURL(actualURL)
 	}
 
+	drainCtx, cancelDrain := context.WithCancel(context.Background())
+	defer cancelDrain()
 	httpSrv := &http.Server{
 		Handler:           app.Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
+		BaseContext: func(net.Listener) context.Context {
+			return drainCtx
+		},
 	}
 	serveErrCh := make(chan error, 1)
 	go func() {
@@ -340,43 +266,19 @@ func cmdServe(args []string) error {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(shutCtx)
+		cancelDrain()
 	}()
 
 	// Listener is already accepting TCP connections: self-join embedded Hub and start Broker loops before Restate.
 	if *withHub {
 		_, _, _ = rt.disc.JoinHost(ctx, actualURL+"/hub")
 	}
-	// Wire Monitor verified-BUMP OnTxMined & WitnessedTracker OnReorg callbacks across memory, market broker, and hub!
-	rt.mem.Chain().OnTxMined(func(txid string, height uint32, mp *transaction.MerklePath) {
-		mCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		if _, err := rt.mem.RefreshAnchorProofByTxID(mCtx, txid, height, mp); err == nil && hubNode != nil {
-			if packs, rErr := hub.RefreshHubLiquidityStock(mCtx, rt.mem); rErr == nil && len(packs) > 0 {
-				var bountyDoms []string
-				if liqState != nil {
-					bountyDoms = liqState.BountyDomains
-				}
-				broker.SetAdvertisedPacks(packs, bountyDoms)
-			}
-		}
-		broker.OnPaymentTxMined(mCtx, txid, height, mp)
-		if hubNode != nil {
-			_ = hubNode.OnBountyPayoutMined(txid)
-			_ = hubNode.OnFeePaymentMined(txid, height)
-		}
-	})
-	rt.mem.Chain().OnReorg(func(forkHeight uint32, _ []string) {
-		rCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		_, _ = rt.mem.HandleReorg(forkHeight)
-		broker.HandleReorg(rCtx, forkHeight)
-		if hubNode != nil {
-			_ = hubNode.HandleReorg(rCtx, forkHeight)
-		}
-	})
+	wireChainCallbacks(ctx, rt, broker, hubNode, liqState)
 	broker.Start(ctx)
 
 	// Start active Restate durable execution plane (dedicated h2c endpoint + auto-supervised or external restate-server).
+	var restateAlive atomic.Bool
+	restateAlive.Store(true)
 	restateClient, stopRestate, err := StartRestatePlane(ctx, rt.mkt, RestateRuntimeConfig{
 		ListenAddr:            *restateAddr,
 		DataDir:               rt.dataDir,
@@ -388,6 +290,10 @@ func cmdServe(args []string) error {
 		InternalToken:         os.Getenv("NEKTAR_RESTATE_INTERNAL_TOKEN"),
 		DisableAutoStart:      os.Getenv("NEKTAR_RESTATE_DISABLE") == "1",
 		Required:              os.Getenv("NEKTAR_RESTATE_REQUIRED") == "1",
+		OnUnexpectedExit: func(error) {
+			restateAlive.Store(false)
+			app.BroadcastDashboardEvent("restate_exited")
+		},
 	})
 	if err != nil {
 		stop()
@@ -396,33 +302,8 @@ func cmdServe(args []string) error {
 	}
 	defer stopRestate()
 
-	if restateClient != nil {
-		broker.SetRestateClient(restateClient)
-		if restateAdminDisplay == "" {
-			restateAdminDisplay = restateClient.AdminURL
-		}
-		app.SetRestateClient(restateClient, restateAdminDisplay)
-
-		anchorCadenceSec := envInt64("NEKTAR_ANCHOR_CADENCE_SEC", 300)
-		// Poke durable Restate AnchorCadence on Remember (short 5s dedup bucket) + re-arm any unanchored shards on boot (RT0011)!
-		rt.mem.SetOnRemember(func(shard string) {
-			go func(sh string) {
-				pCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_, _ = restateClient.TriggerAnchorCadence(pCtx, sh, anchorCadenceSec)
-			}(shard)
-		})
-		go func() {
-			shards, _ := rt.mem.DB().ListShards()
-			for _, sh := range shards {
-				if un, uErr := rt.mem.DB().ListUnanchored(sh); uErr == nil && len(un) > 0 {
-					pCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-					_, _ = restateClient.TriggerAnchorCadence(pCtx, sh, anchorCadenceSec)
-					cancel()
-				}
-			}
-		}()
-	}
+	stopRestateHooks := attachRestateClient(ctx, rt, broker, app, restateClient, restateAdminDisplay, restateAlive.Load)
+	defer stopRestateHooks()
 
 	// Write daemon.json + active-daemon.json so `nektar mcp`, `nektar open`, `nektar hook`, `nektar dock`,
 	// Hermes, and OpenClaw auto-discover us across both Mainnet and Testnet!
@@ -439,30 +320,11 @@ func cmdServe(args []string) error {
 	_ = server.WriteActiveDaemonPointer("", rt.dataDir, dInfo)
 	defer server.RemoveDaemonInfo(rt.dataDir)
 
-	var postBootWG sync.WaitGroup
 	postBootWG.Add(1)
 	go func() {
 		defer postBootWG.Done()
-		_, _ = broker.AnnounceSelf(ctx)
-		rawSeed := strings.TrimSpace(os.Getenv("NEKTAR_SEED_DOMAINS"))
-		var seedDoms []string
-		if strings.EqualFold(rawSeed, "off") || strings.EqualFold(rawSeed, "none") || rawSeed == "0" {
-			seedDoms = nil
-		} else if rawSeed != "" {
-			seedDoms = parseCSVEnv("NEKTAR_SEED_DOMAINS")
-		} else if rt.mem.Chain().Network() == "testnet" || rt.mem.Chain().Network() == "main" {
-			// Layer-2 cold-start auto-seeding: discover & verify curated CHIRP packs automatically on live networks.
-			seedDoms = []string{"ops", "bsv", "agents"}
-		}
-		if len(seedDoms) > 0 && rt.disc != nil && len(rt.disc.ActiveHosts()) > 0 {
-			seedCtx, seedCancel := context.WithTimeout(ctx, 15*time.Second)
-			defer seedCancel()
-			if n, sErr := rt.disc.SeedFromNetwork(seedCtx, seedDoms); sErr == nil && n > 0 {
-				log.Printf("seeded %d verified fragment(s) from network CHIRP packs (%s)", n, strings.Join(seedDoms, ","))
-			}
-		}
+		runPostBootDiscovery(bgCtx, rt, broker)
 	}()
-	defer postBootWG.Wait()
 
 	pairCode := ""
 	if apiTok != "" || opTok != "" {
@@ -473,7 +335,7 @@ func cmdServe(args []string) error {
 	if pubURL != "" && !strings.Contains(pubURL, "127.0.0.1") {
 		bannerURL = pubURL
 	}
-	fmt.Fprint(os.Stderr, server.FormatStartupBanner(server.StartupBannerOpts{
+	fmt.Fprint(os.Stderr, formatConsoleText(server.FormatStartupBanner(server.StartupBannerOpts{
 		Version:         Version,
 		URL:             bannerURL,
 		Network:         rt.mem.Chain().Network(),
@@ -485,7 +347,7 @@ func cmdServe(args []string) error {
 		WithHub:         *withHub,
 		ContainerMode:   server.IsContainerEnv(),
 		GeneratedTokens: genTokens,
-	}))
+	})))
 	serveErr := <-serveErrCh
 	if serveErr != nil && serveErr != http.ErrServerClosed {
 		stop()
@@ -494,90 +356,4 @@ func cmdServe(args []string) error {
 	}
 	<-shutdownDone
 	return nil
-}
-
-// startAnchorProofRefresher runs one shared 45s proof-upgrade loop on live networks and returns a drainable stop function.
-func startAnchorProofRefresher(ctx context.Context, mem *memory.Service) func() {
-	if mem == nil || mem.Chain() == nil || mem.Chain().Network() == "memory" {
-		return func() {}
-	}
-	rCtx, cancel := context.WithCancel(ctx)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(45 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-rCtx.Done():
-				return
-			case <-ticker.C:
-				_, _ = mem.RefreshAnchorProofs(rCtx)
-			}
-		}
-	}()
-	return func() {
-		cancel()
-		wg.Wait()
-	}
-}
-
-func cmdMCP(args []string) error {
-	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
-	netName := fs.String("network", "", "Network override")
-	dataDir := fs.String("data-dir", "", "Data directory override")
-	direct := fs.Bool("direct", false, "Force in-process stdio MCP instead of bridging to a running daemon")
-	_ = fs.Parse(args)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	dir := *dataDir
-	if dir == "" {
-		dir = defaultDataDirForNetwork(*netName)
-	}
-	// One brain, many mouths: transparently bridge stdio -> live daemon `/mcp` across Mainnet or Testnet!
-	if !*direct {
-		if info, ok := detectDaemon(*dataDir, *netName); ok {
-			return server.RunStdioBridge(ctx, info.URL, info.AuthToken, os.Stdin, os.Stdout)
-		}
-		// Auto-spawn a shared background daemon on demand so IDE/agent windows never collide on instance.lock!
-		if *netName != "memory" && os.Getenv("NEKTAR_MCP_NO_AUTOSTART") != "1" && os.Getenv("NEKTAR_EPHEMERAL") != "1" {
-			if info, err := ensureBackgroundDaemon(ctx, backgroundDaemonOpts{
-				Network: *netName,
-				Confirm: os.Getenv("NEKTAR_MAINNET_CONFIRM"),
-				DataDir: *dataDir,
-				Quiet:   true,
-			}); err == nil && info != nil {
-				return server.RunStdioBridge(ctx, info.URL, info.AuthToken, os.Stdin, os.Stdout)
-			}
-		}
-	}
-
-	if *netName != "memory" {
-		releaseLock, lockErr := acquireInstanceLock(dir, "mcp-stdio")
-		if lockErr != nil {
-			return lockErr
-		}
-		defer releaseLock()
-	}
-
-	rt, err := openRuntime(ctx, *netName, *dataDir, DefaultLocalPort)
-	if err != nil {
-		return err
-	}
-	defer rt.closeFn()
-	_, _ = rt.mem.ReconcilePendingAnchors(ctx)
-	_, _ = rt.mem.EnsureWelcome(ctx)
-	rt.mem.Chain().StartBackground(ctx)
-	stopRefresher := startAnchorProofRefresher(ctx, rt.mem)
-	defer stopRefresher()
-
-	broker := market.NewBroker(rt.mem, rt.mkt, rt.disc, market.BrokerConfig{
-		Matcher: buildJevMatcherFromEnv(rt.mem.Chain().Network()),
-	})
-	tb := server.NewToolbox(rt.mem, rt.mkt, broker, rt.disc, nil, envOr("NEKTAR_TOOL_PROFILE", "agent"))
-	srv := server.NewMCPServerWithToolbox(tb)
-	return srv.Run(ctx, &mcp.StdioTransport{})
 }

@@ -13,16 +13,12 @@ import (
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
-	sdkwallet "github.com/bsv-blockchain/go-sdk/wallet"
-	"github.com/lightwebinc/bcommon/carrier"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
-	"github.com/kryptokrates/nektar/internal/chain"
-	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 // BuildMarketBEEF encodes a MarketPayload into an OP_FALSE OP_RETURN AtomicBEEF transaction for Hub /submit
-// (memory/regtest test mode only; live networks require BuildFundedMarketCarrierBEEF).
+// (memory/regtest test mode only; live networks use CarrierTreeManager.MintCarrier / BuildFundedMarketCarrierWithHubFees).
 func BuildMarketBEEF(p bstack.MarketPayload) ([]byte, error) {
 	cborBytes, err := bstack.EncodePayload(p)
 	if err != nil {
@@ -34,64 +30,6 @@ func BuildMarketBEEF(p bstack.MarketPayload) ([]byte, error) {
 	tx := transaction.NewTransaction()
 	tx.AddOutput(&transaction.TransactionOutput{Satoshis: 0, LockingScript: ls})
 	return tx.AtomicBEEF(false)
-}
-
-// BuildFundedMarketCarrierBEEF mints a funded, non-mineable (LockTime=2100, Sequence=0) PushDrop carrier
-// transaction via lightwebinc/bcommon/carrier whose funding input carries full SPV ancestry up to mined BUMPs.
-// Satisfies all REFUSED-* checks in MarketTopicManager and verify.Check on live networks.
-func BuildFundedMarketCarrierBEEF(ctx context.Context, port *chain.Port, priv *ec.PrivateKey, p bstack.MarketPayload) ([]byte, error) {
-	if port == nil {
-		return nil, errors.New("discovery: chain port required for funded market carrier")
-	}
-	if priv == nil {
-		return nil, errors.New("discovery: signing key required for funded market carrier")
-	}
-	cborBytes, err := bstack.EncodePayload(p)
-	if err != nil {
-		return nil, err
-	}
-	protoWallet, err := sdkwallet.NewCompletedProtoWallet(priv)
-	if err != nil {
-		return nil, fmt.Errorf("discovery: init carrier signer wallet: %w", err)
-	}
-	fundLock, err := carrier.FundingLock(ctx, protoWallet, bstack.Originator, bstack.MarketCarrierParams)
-	if err != nil {
-		return nil, fmt.Errorf("discovery: derive carrier funding lock: %w", err)
-	}
-	dirMeta := nwallet.ActionPublishDirectory()
-	fundTx, _, feeSats, spendSats, err := port.BuildFundedTxWithMeta(ctx, []*transaction.TransactionOutput{
-		{Satoshis: 1, LockingScript: fundLock},
-	}, dirMeta.Description, dirMeta.Labels)
-	if err != nil {
-		return nil, fmt.Errorf("discovery: build carrier funding tx: %w", err)
-	}
-	if _, err := port.Broadcast(ctx, fundTx, feeSats, spendSats); err != nil {
-		return nil, fmt.Errorf("discovery: broadcast carrier funding tx: %w", err)
-	}
-	var fundVout uint32
-	foundOut := false
-	for i, o := range fundTx.Outputs {
-		if o != nil && o.LockingScript != nil && bytes.Equal(*o.LockingScript, *fundLock) {
-			fundVout = uint32(i)
-			foundOut = true
-			break
-		}
-	}
-	if !foundOut {
-		return nil, errors.New("discovery: carrier funding output not found in built transaction")
-	}
-	carrierTx, err := carrier.Mint(ctx, protoWallet, bstack.Originator, bstack.MarketCarrierParams, cborBytes, fundTx, fundVout)
-	if err != nil {
-		return nil, fmt.Errorf("discovery: mint PushDrop carrier: %w", err)
-	}
-	if len(carrierTx.Inputs) > 0 && carrierTx.Inputs[0].SourceTransaction == nil {
-		carrierTx.Inputs[0].SourceTransaction = fundTx
-	}
-	beef, err := carrierTx.AtomicBEEF(false)
-	if err != nil {
-		return nil, fmt.Errorf("discovery: encode carrier AtomicBEEF: %w", err)
-	}
-	return beef, nil
 }
 
 // BuildAndSubmitMarketAd builds a market artifact BEEF and submits it to all eligible hosts,
@@ -116,6 +54,7 @@ func (s *Service) BuildAndSubmitMarketAd(
 	isLive := s.network == "main" || s.network == "testnet"
 	var eligibleHosts []string
 	var piggyTargets []HubPiggybackTarget
+	var plannedFeeSats uint64
 	for _, h := range hosts {
 		hu := normalizeHostURL(h)
 		if hu == "" {
@@ -124,9 +63,11 @@ func (s *Service) BuildAndSubmitMarketAd(
 		if terms, tErr := s.FetchHubTerms(ctx, hu, false); tErr == nil {
 			fee := terms.Fees[action]
 			if fee > 0 {
-				if approver == nil || approver(action, fee) != nil {
+				// Check both per-hub fee AND cumulative planned spend across all target hubs!
+				if approver == nil || approver(action, fee) != nil || approver(action, plannedFeeSats+fee) != nil {
 					continue // skip gouging/over-policy hub fail-closed before spending a single sat!
 				}
+				plannedFeeSats += fee
 				if isLive && terms.PayeeIdentityKey != "" && terms.Prefixes[action] != "" {
 					piggyTargets = append(piggyTargets, HubPiggybackTarget{
 						HubURL:           hu,

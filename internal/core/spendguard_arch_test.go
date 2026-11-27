@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,5 +107,41 @@ func TestSpendGuardMinIntervalIncludesRetryAfterAndRefundRollsBackOnPersistError
 	spent, _, _, count := sg.Stats()
 	if spent != 200 || count != 1 {
 		t.Fatalf("expected failed Refund to preserve in-memory state, got spent=%d count=%d", spent, count)
+	}
+}
+
+func TestSpendGuardOverflowAndConcurrentReserveMinInterval(t *testing.T) {
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	sg := NewSpendGuard(SpendGuardOpts{
+		MaxFeeSatsPerTx: 1000,
+		MaxSpendSatsDay: 5000,
+		MinInterval:     2 * time.Second,
+		Now:             func() time.Time { return now },
+	})
+
+	// Extreme uint64 spendSats must not wrap around spentToday+reservedToday+totalSpend.
+	if err := sg.Check(100, math.MaxUint64); !errors.Is(err, ErrDailyCapExceeded) {
+		t.Fatalf("expected ErrDailyCapExceeded on uint64 max spend, got %v", err)
+	}
+	if _, err := sg.Reserve(100, math.MaxUint64-10); !errors.Is(err, ErrDailyCapExceeded) {
+		t.Fatalf("expected ErrDailyCapExceeded on near-max uint64 Reserve, got %v", err)
+	}
+
+	// Reserve must stamp reservation time so concurrent sends cannot burst past MinInterval.
+	res1, err := sg.Reserve(100, 500)
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	now = now.Add(500 * time.Millisecond)
+	if _, err := sg.Reserve(100, 500); !errors.Is(err, ErrMinInterval) {
+		t.Fatalf("expected second Reserve within MinInterval to fail with ErrMinInterval, got %v", err)
+	}
+	if rem := sg.RemainingInterval(); rem != 1500*time.Millisecond {
+		t.Fatalf("expected RemainingInterval=1.5s while res1 active, got %s", rem)
+	}
+	// Canceling res1 releases both budget and reservation interval lock.
+	sg.CancelReservation(res1)
+	if _, err := sg.Reserve(100, 500); err != nil {
+		t.Fatalf("expected Reserve to succeed after CancelReservation, got %v", err)
 	}
 }

@@ -8,85 +8,7 @@ import (
 	restate "github.com/restatedev/sdk-go"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
-	"github.com/kryptokrates/nektar/internal/store"
 )
-
-const (
-	standingOrdersKVKey      = "standing_orders_v1"
-	standingOrderInboxPrefix = "standing_order_inbox_v1:"
-)
-
-// StandingOrderInput starts a durable, crash-proof, live-steerable StandingOrder workflow
-// ("Limit-Order for Knowledge") keyed by orderID. It sleeps at 0% CPU until a matching
-// OfferAd arrives via durable inbox + restate.Signal, or until steered/cancelled/expired.
-type StandingOrderInput struct {
-	OrderID         string        `json:"orderId,omitempty"`
-	Domains         []string      `json:"domains"`
-	Query           string        `json:"query,omitempty"`
-	MaxSats         uint64        `json:"maxSats"`
-	TargetShard     string        `json:"targetShard,omitempty"`
-	AgentID         string        `json:"agentId,omitempty"`
-	TTL             time.Duration `json:"ttl,omitempty"`
-	TTLSeconds      int64         `json:"ttlSeconds,omitempty"`
-	MaxFills        int           `json:"maxFills,omitempty"` // default 1 (one-shot limit order); >1 for recurring (max 50)
-	MaxAttempts     int           `json:"maxAttempts,omitempty"`
-	WaitTimeout     time.Duration `json:"waitTimeout,omitempty"`
-	ApprovalTimeout time.Duration `json:"approvalTimeout,omitempty"`
-}
-
-// SteerStandingOrderInput live-steers a running StandingOrder without restarting it.
-type SteerStandingOrderInput struct {
-	MaxSats       *uint64 `json:"maxSats,omitempty"`
-	Paused        *bool   `json:"paused,omitempty"`
-	ExtendSeconds int64   `json:"extendSeconds,omitempty"`
-	Reason        string  `json:"reason,omitempty"`
-}
-
-type standingOrderEvent struct {
-	Kind   string                   `json:"kind"` // offer | steer | cancel
-	Offer  *bstack.OfferAd          `json:"offer,omitempty"`
-	Steer  *SteerStandingOrderInput `json:"steer,omitempty"`
-	Reason string                   `json:"reason,omitempty"`
-}
-
-// StandingOrderState is the durable state persisted inside Restate & mirrored in SQLite KV
-// so the Broker's SSE loop knows which orders to wake without polling Restate.
-type StandingOrderState struct {
-	OrderID       string   `json:"orderId"`
-	InvocationID  string   `json:"invocationId,omitempty"`
-	WaitingSeq    int      `json:"waitingSeq"`
-	Status        string   `json:"status"` // watching | paused | matching | filled | cancelled | expired
-	Domains       []string `json:"domains"`
-	Query         string   `json:"query,omitempty"`
-	MaxSats       uint64   `json:"maxSats"`
-	TargetShard   string   `json:"targetShard,omitempty"`
-	AgentID       string   `json:"agentId,omitempty"`
-	ExpiresAtUnix int64    `json:"expiresAtUnix"`
-	OffersSeen    int      `json:"offersSeen"`
-	Attempts      int      `json:"attempts"`
-	Fills         int      `json:"fills"`
-	MaxFills      int      `json:"maxFills"`
-	LastDealID    string   `json:"lastDealId,omitempty"`
-	PaymentTxID   string   `json:"paymentTxid,omitempty"`
-	DeliveredText string   `json:"deliveredText,omitempty"`
-	Error         string   `json:"error,omitempty"`
-	CreatedAt     int64    `json:"createdAt"`
-	UpdatedAt     int64    `json:"updatedAt"`
-}
-
-// StandingOrderIndexEntry is the lightweight active-order record stored in SQLite KV
-// so Hub SSE events match and wake sleeping Restate StandingOrders in O(N_active).
-type StandingOrderIndexEntry struct {
-	OrderID       string   `json:"orderId"`
-	Domains       []string `json:"domains"`
-	Query         string   `json:"query,omitempty"`
-	MaxSats       uint64   `json:"maxSats"`
-	TargetShard   string   `json:"targetShard,omitempty"`
-	AgentID       string   `json:"agentId,omitempty"`
-	Status        string   `json:"status"`
-	ExpiresAtUnix int64    `json:"expiresAtUnix"`
-	UpdatedAt     int64    `json:"updatedAt"`
-}
 
 func (e *Engine) restateStandingOrderRun(ctx restate.WorkflowContext, in StandingOrderInput) (StandingOrderState, error) {
 	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
@@ -181,11 +103,12 @@ func (e *Engine) restateStandingOrderRun(ctx restate.WorkflowContext, in Standin
 			break
 		}
 
-		// Drain any queued events BEFORE sleeping so concurrent offers/steers that arrived during
-		// previous processing or in the same millisecond are NEVER dropped!
+		// Peek queued events non-destructively BEFORE sleeping so a crash before Restate journals
+		// the batch NEVER drops events! Events are acknowledged only after durable state update.
 		drainStep++
+		afterSeq := st.LastProcessedSeq
 		batch, dErr := restate.Run(ctx, func(_ restate.RunContext) ([]standingOrderEvent, error) {
-			return e.drainStandingOrderEvents(orderID), nil
+			return e.peekStandingOrderEvents(orderID, afterSeq), nil
 		}, restate.WithName(fmt.Sprintf("standing_drain_inbox_%d", drainStep)))
 		if dErr != nil {
 			return st, dErr
@@ -214,8 +137,24 @@ func (e *Engine) restateStandingOrderRun(ctx restate.WorkflowContext, in Standin
 			}
 			st.WaitingSeq++
 			restate.Set(ctx, "state", st)
-			// Loop back to drain ALL events that arrived before or with this wake signal!
+			// Loop back to peek ALL events that arrived before or with this wake signal!
 			continue
+		}
+
+		// Record monotonic cursor BEFORE acknowledging SQLite inbox so replay never re-processes or drops events.
+		var batchMaxSeq int64 = st.LastProcessedSeq
+		for _, ev := range batch {
+			if ev.Seq > batchMaxSeq {
+				batchMaxSeq = ev.Seq
+			}
+		}
+		if batchMaxSeq > st.LastProcessedSeq {
+			st.LastProcessedSeq = batchMaxSeq
+			restate.Set(ctx, "state", st)
+			_, _ = restate.Run(ctx, func(_ restate.RunContext) (bool, error) {
+				e.ackStandingOrderEvents(orderID, batchMaxSeq)
+				return true, nil
+			}, restate.WithName(fmt.Sprintf("standing_ack_inbox_%d", drainStep)))
 		}
 
 		// Process every drained event in deterministic FIFO order.
@@ -373,7 +312,16 @@ func (e *Engine) restateStandingOrderOnOffer(ctx restate.WorkflowSharedContext, 
 	}
 	orderID := restate.Key(ctx)
 	st, err := restate.Get[StandingOrderState](ctx, "state")
-	if err != nil || st.InvocationID == "" || (st.Status != "watching" && st.Status != "paused" && st.Status != "matching") {
+	if err != nil || st.InvocationID == "" {
+		// Workflow is still initializing state: enqueue durably AND return retryable error so
+		// idempotency keys never cache a permanent false no-op before initial restate.Set commits!
+		_, _ = restate.Run(ctx, func(_ restate.RunContext) (bool, error) {
+			e.enqueueStandingOrderEvent(orderID, standingOrderEvent{Kind: "offer", Offer: &off})
+			return true, nil
+		}, restate.WithName("standing_enqueue_offer_early"))
+		return false, fmt.Errorf("standing order %s initializing, retry", orderID)
+	}
+	if st.Status != "watching" && st.Status != "paused" && st.Status != "matching" {
 		return false, nil
 	}
 	if _, err := restate.Run(ctx, func(_ restate.RunContext) (bool, error) {
@@ -382,7 +330,10 @@ func (e *Engine) restateStandingOrderOnOffer(ctx restate.WorkflowSharedContext, 
 	}, restate.WithName("standing_enqueue_offer")); err != nil {
 		return false, err
 	}
+	// Resolve BOTH wake_<WaitingSeq> and wake_<WaitingSeq+1> so a concurrent wake transition
+	// between drain and WaitFirst can NEVER strand an already-enqueued event until TTL!
 	restate.ResolveSignal(ctx, st.InvocationID, fmt.Sprintf("wake_%d", st.WaitingSeq), true)
+	restate.ResolveSignal(ctx, st.InvocationID, fmt.Sprintf("wake_%d", st.WaitingSeq+1), true)
 	return true, nil
 }
 
@@ -392,7 +343,14 @@ func (e *Engine) restateStandingOrderSteer(ctx restate.WorkflowSharedContext, st
 	}
 	orderID := restate.Key(ctx)
 	st, err := restate.Get[StandingOrderState](ctx, "state")
-	if err != nil || st.InvocationID == "" || (st.Status != "watching" && st.Status != "paused" && st.Status != "matching") {
+	if err != nil || st.InvocationID == "" {
+		_, _ = restate.Run(ctx, func(_ restate.RunContext) (bool, error) {
+			e.enqueueStandingOrderEvent(orderID, standingOrderEvent{Kind: "steer", Steer: &steer})
+			return true, nil
+		}, restate.WithName("standing_enqueue_steer_early"))
+		return false, fmt.Errorf("standing order %s initializing, retry", orderID)
+	}
+	if st.Status != "watching" && st.Status != "paused" && st.Status != "matching" {
 		return false, nil
 	}
 	if _, err := restate.Run(ctx, func(_ restate.RunContext) (bool, error) {
@@ -402,6 +360,7 @@ func (e *Engine) restateStandingOrderSteer(ctx restate.WorkflowSharedContext, st
 		return false, err
 	}
 	restate.ResolveSignal(ctx, st.InvocationID, fmt.Sprintf("wake_%d", st.WaitingSeq), true)
+	restate.ResolveSignal(ctx, st.InvocationID, fmt.Sprintf("wake_%d", st.WaitingSeq+1), true)
 	return true, nil
 }
 
@@ -411,7 +370,14 @@ func (e *Engine) restateStandingOrderCancel(ctx restate.WorkflowSharedContext, r
 	}
 	orderID := restate.Key(ctx)
 	st, err := restate.Get[StandingOrderState](ctx, "state")
-	if err != nil || st.InvocationID == "" || (st.Status != "watching" && st.Status != "paused" && st.Status != "matching") {
+	if err != nil || st.InvocationID == "" {
+		_, _ = restate.Run(ctx, func(_ restate.RunContext) (bool, error) {
+			e.enqueueStandingOrderEvent(orderID, standingOrderEvent{Kind: "cancel", Reason: reason})
+			return true, nil
+		}, restate.WithName("standing_enqueue_cancel_early"))
+		return false, fmt.Errorf("standing order %s initializing, retry", orderID)
+	}
+	if st.Status != "watching" && st.Status != "paused" && st.Status != "matching" {
 		return false, nil
 	}
 	if _, err := restate.Run(ctx, func(_ restate.RunContext) (bool, error) {
@@ -421,6 +387,7 @@ func (e *Engine) restateStandingOrderCancel(ctx restate.WorkflowSharedContext, r
 		return false, err
 	}
 	restate.ResolveSignal(ctx, st.InvocationID, fmt.Sprintf("wake_%d", st.WaitingSeq), true)
+	restate.ResolveSignal(ctx, st.InvocationID, fmt.Sprintf("wake_%d", st.WaitingSeq+1), true)
 	return true, nil
 }
 
@@ -429,127 +396,4 @@ func (e *Engine) restateStandingOrderStatus(ctx restate.WorkflowSharedContext, _
 		return StandingOrderState{}, err
 	}
 	return restate.Get[StandingOrderState](ctx, "state")
-}
-
-func (e *Engine) enqueueStandingOrderEvent(orderID string, ev standingOrderEvent) {
-	if e.mem == nil || e.mem.DB() == nil || orderID == "" {
-		return
-	}
-	e.standingInboxMu.Lock()
-	defer e.standingInboxMu.Unlock()
-	key := standingOrderInboxPrefix + orderID
-	var q []standingOrderEvent
-	_, _ = e.mem.DB().GetJSON(key, &q)
-	if ev.Kind == "offer" && ev.Offer != nil && ev.Offer.OfferID != "" {
-		for _, prev := range q {
-			if prev.Kind == "offer" && prev.Offer != nil && prev.Offer.OfferID == ev.Offer.OfferID {
-				return // idempotent dedup
-			}
-		}
-	}
-	if len(q) >= 64 {
-		q = q[len(q)-63:]
-	}
-	q = append(q, ev)
-	_ = e.mem.DB().SetJSON(key, q)
-}
-
-func (e *Engine) drainStandingOrderEvents(orderID string) []standingOrderEvent {
-	if e.mem == nil || e.mem.DB() == nil || orderID == "" {
-		return nil
-	}
-	e.standingInboxMu.Lock()
-	defer e.standingInboxMu.Unlock()
-	key := standingOrderInboxPrefix + orderID
-	var q []standingOrderEvent
-	ok, err := e.mem.DB().GetJSON(key, &q)
-	if err != nil || !ok || len(q) == 0 {
-		return nil
-	}
-	_ = e.mem.DB().SetJSON(key, []standingOrderEvent{})
-	return q
-}
-
-func (e *Engine) clearStandingOrderInbox(orderID string) {
-	if e.mem == nil || e.mem.DB() == nil || orderID == "" {
-		return
-	}
-	e.standingInboxMu.Lock()
-	defer e.standingInboxMu.Unlock()
-	_ = e.mem.DB().SetJSON(standingOrderInboxPrefix+orderID, []standingOrderEvent{})
-}
-
-func standingOrderDomainMatches(wantDomains, offerDomains []string) bool {
-	if len(wantDomains) == 0 || len(offerDomains) == 0 {
-		return true
-	}
-	for _, wd := range wantDomains {
-		w := strings.ToLower(strings.TrimSpace(wd))
-		if w == "" || w == "*" {
-			return true
-		}
-		for _, od := range offerDomains {
-			if strings.EqualFold(w, strings.TrimSpace(od)) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (e *Engine) internalCallHeaders() map[string]string {
-	e.mu.RLock()
-	tok := e.internalToken
-	e.mu.RUnlock()
-	if tok == "" {
-		return nil
-	}
-	return map[string]string{internalTokenHeader: tok}
-}
-
-func (e *Engine) upsertStandingOrderIndex(st StandingOrderState) {
-	if e.mem == nil || e.mem.DB() == nil || st.OrderID == "" {
-		return
-	}
-	list := LoadStandingOrderIndex(e.mem.DB())
-	entry := StandingOrderIndexEntry{
-		OrderID:       st.OrderID,
-		Domains:       st.Domains,
-		Query:         st.Query,
-		MaxSats:       st.MaxSats,
-		TargetShard:   st.TargetShard,
-		AgentID:       st.AgentID,
-		Status:        st.Status,
-		ExpiresAtUnix: st.ExpiresAtUnix,
-		UpdatedAt:     st.UpdatedAt,
-	}
-	found := false
-	for i := range list {
-		if list[i].OrderID == st.OrderID {
-			list[i] = entry
-			found = true
-			break
-		}
-	}
-	if !found {
-		list = append(list, entry)
-	}
-	// Keep at most 128 most recent standing order entries in KV.
-	if len(list) > 128 {
-		list = list[len(list)-128:]
-	}
-	_ = e.mem.DB().SetJSON(standingOrdersKVKey, list)
-}
-
-// LoadStandingOrderIndex returns persisted StandingOrder index entries from SQLite KV.
-func LoadStandingOrderIndex(db *store.DB) []StandingOrderIndexEntry {
-	if db == nil {
-		return nil
-	}
-	var list []StandingOrderIndexEntry
-	ok, err := db.GetJSON(standingOrdersKVKey, &list)
-	if err != nil || !ok {
-		return nil
-	}
-	return list
 }

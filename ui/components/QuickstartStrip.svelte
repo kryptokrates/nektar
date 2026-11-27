@@ -1,21 +1,22 @@
 <script lang="ts">
-  import type { NavTab, State } from '../lib/types'
+  import type { DockClient, NavTab, State } from '../lib/types'
 
   interface Props {
     s: State
+    dockedApps?: DockClient[]
     onOpenDock: () => void
     onNavigate: (tab: NavTab) => void
     onApproveStarter: () => void
     onRequestFaucet: () => void
   }
 
-  let { s, onOpenDock, onNavigate, onApproveStarter, onRequestFaucet }: Props = $props()
+  let { s, dockedApps = [], onOpenDock, onNavigate, onApproveStarter, onRequestFaucet }: Props = $props()
   let dismissed = $state(typeof localStorage !== 'undefined' && localStorage.getItem('nektar_qs_dismissed') === '1')
 
-  const funded = $derived((s.treasury?.sats ?? 0) > 0)
-  const policyReady = $derived((s.policies?.length ?? 0) > 0)
-  const hasMemories = $derived((s.memories?.length ?? 0) > 1)
-  const allDone = $derived(funded && policyReady && hasMemories)
+  const funded = $derived(Boolean(s.treasury?.funded) || (s.treasury?.sats ?? 0) > 0)
+  const policyReady = $derived((s.settings?.policies ?? []).some((p) => p.active && !p.revokedAt))
+  const appDocked = $derived(dockedApps.some((c) => c.docked) || (s.memory?.records ?? 0) > 1)
+  const allDone = $derived(funded && policyReady && appDocked)
 
   function dismiss() {
     dismissed = true
@@ -32,8 +33,8 @@
       <button class="qx" onclick={dismiss} title="Dismiss">✕</button>
     </div>
     <div class="steps">
-      <button class="step" class:done={hasMemories} onclick={onOpenDock}>
-        <span class="num">{hasMemories ? '✓' : '1'}</span>
+      <button class="step" class:done={appDocked} onclick={onOpenDock}>
+        <span class="num">{appDocked ? '✓' : '1'}</span>
         <span>
           <b>Dock your AI app</b>
           <small>1-click Claude, Cursor, VS Code, Codex or L0 Proxy</small>

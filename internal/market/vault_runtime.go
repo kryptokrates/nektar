@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/lightwebinc/bcommon/guard"
@@ -100,6 +101,41 @@ func ClearActiveVault(db *store.DB) error {
 	return db.SetJSON(agentVaultKVKey, LiveVaultRecord{})
 }
 
+// CompactVaultWithBUMP attaches a verified mined MerklePath to the persisted active vault UTXO
+// and re-encodes its AtomicBEEF so pruned ancestors drop out once the vault tx mines.
+func CompactVaultWithBUMP(ctx context.Context, db *store.DB, port *chain.Port, txid string, mp *transaction.MerklePath) {
+	if db == nil || txid == "" || mp == nil {
+		return
+	}
+	if port != nil && port.Network() != "memory" && port.Tracker() != nil {
+		txH, err := chainhash.NewHashFromHex(txid)
+		if err != nil || txH == nil {
+			return
+		}
+		root, err := mp.ComputeRoot(txH)
+		if err != nil || root == nil {
+			return
+		}
+		ok, err := port.Tracker().IsValidRootForHeight(ctx, root, mp.BlockHeight)
+		if err != nil || !ok {
+			return
+		}
+	}
+	agentVaultMu.Lock()
+	defer agentVaultMu.Unlock()
+	rec, tx, err := LoadActiveVault(db)
+	if err != nil || rec == nil || tx == nil || !strings.EqualFold(rec.TxID, txid) {
+		return
+	}
+	tx.MerklePath = mp
+	compacted, err := chain.SafeAtomicBEEF(tx)
+	if err != nil || len(compacted) == 0 {
+		return
+	}
+	rec.BEEFHex = hex.EncodeToString(compacted)
+	_ = SaveActiveVault(db, *rec)
+}
+
 // DeployAgentVault funds and broadcasts a fresh two-key consensus-enforced NektarAgentVault UTXO,
 // separating cold operator authority (operatorPubOrPKHHex) from the local hot agent key (port.FundPKH).
 func DeployAgentVault(
@@ -133,10 +169,14 @@ func DeployAgentVault(
 	if maxFee == 0 {
 		maxFee = 600
 	}
-	var startHeight uint64
-	if h, hErr := port.Height(ctx); hErr == nil && h < 500_000_000 {
-		startHeight = uint64(h)
+	h, hErr := port.Height(ctx)
+	if hErr != nil {
+		return nil, fmt.Errorf("market: fetch block height for vault windowStart: %w", hErr)
 	}
+	if h >= 500_000_000 || (port.Network() != "memory" && h == 0) {
+		return nil, fmt.Errorf("market: invalid block height %d for vault windowStart", h)
+	}
+	startHeight := uint64(h)
 	st := contracts.AgentVaultState{
 		OperatorPKH:   opPKH,
 		AgentPKH:      agentPKH,
@@ -169,7 +209,6 @@ func DeployAgentVault(
 	if err != nil {
 		return nil, fmt.Errorf("market: broadcast vault deploy tx: %w", err)
 	}
-	_ = port.AdoptChange(tx)
 	if fresh, bErr := chain.SafeAtomicBEEF(tx); bErr == nil && len(fresh) > 0 {
 		beef = fresh
 	}
@@ -216,7 +255,7 @@ func SpendActiveVault(
 	}
 	h, err := port.Height(ctx)
 	if err != nil {
-		h = uint32(rec.State.WindowStart)
+		return nil, nil, 0, 0, nil, fmt.Errorf("market: read witnessed chain height for vault spend: %w", err)
 	}
 	if uint64(h) < rec.State.WindowStart {
 		h = uint32(rec.State.WindowStart)
@@ -229,6 +268,10 @@ func SpendActiveVault(
 		return nil, nil, 0, 0, nil, err
 	}
 	txid := spendTx.TxID().String()
+	beef, err = chain.SafeAtomicBEEF(spendTx)
+	if err != nil {
+		return nil, nil, 0, 0, nil, fmt.Errorf("market: encode vault spend AtomicBEEF: %w", err)
+	}
 	if sg := port.SpendGuard(); sg != nil {
 		if gErr := sg.CheckAndRecord(txid, feeSats, payAmount+feeSats); gErr != nil {
 			return nil, nil, 0, 0, nil, gErr
@@ -238,11 +281,13 @@ func SpendActiveVault(
 		if sg := port.SpendGuard(); sg != nil && port.Network() == "memory" {
 			_ = sg.Refund(txid)
 		}
+		if errors.Is(bErr, nwallet.ErrBroadcastUnknown) {
+			return spendTx, beef, 1, feeSats, nil, bErr
+		}
 		return nil, nil, 0, 0, nil, bErr
 	}
-	beef, err = chain.SafeAtomicBEEF(spendTx)
-	if err != nil {
-		return nil, nil, 0, 0, nil, fmt.Errorf("market: encode vault spend AtomicBEEF: %w", err)
+	if freshBEEF, fErr := chain.SafeAtomicBEEF(spendTx); fErr == nil && len(freshBEEF) > 0 {
+		beef = freshBEEF
 	}
 	updated := LiveVaultRecord{
 		TxID:      txid,
@@ -253,7 +298,7 @@ func SpendActiveVault(
 		UpdatedAt: time.Now().Unix(),
 	}
 	if err := SaveActiveVault(db, updated); err != nil {
-		return nil, nil, 0, 0, nil, err
+		return spendTx, beef, 1, feeSats, nil, err
 	}
 	return spendTx, beef, 1, feeSats, &updated, nil
 }

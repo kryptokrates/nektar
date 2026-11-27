@@ -37,6 +37,21 @@ func (s AgentVaultState) Validate() error {
 	if s.PerTxCap == 0 || s.WindowCap < s.PerTxCap || s.WindowBlocks == 0 || s.MaxFee == 0 {
 		return errors.New("contracts: vault caps/window/maxFee must be positive with windowCap >= perTxCap")
 	}
+	if s.WindowStart == 0 || s.WindowStart >= 500_000_000 {
+		return fmt.Errorf("contracts: vault windowStart %d must be in block-height domain (1..499999999)", s.WindowStart)
+	}
+	return nil
+}
+
+// ValidateForHeight validates state invariants and verifies WindowStart is anchored to a valid
+// non-zero block height (preventing WindowStart=0 single-block rolling-window reset attacks).
+func (s AgentVaultState) ValidateForHeight(currentHeight uint32) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	if currentHeight > 0 && s.WindowStart > uint64(currentHeight) {
+		return fmt.Errorf("contracts: vault windowStart %d exceeds current chain height %d", s.WindowStart, currentHeight)
+	}
 	return nil
 }
 

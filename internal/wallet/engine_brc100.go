@@ -101,19 +101,13 @@ func (e *Engine) createActionGuarded(ctx context.Context, args sdkwallet.CreateA
 		}
 	}
 
-	ctx, errSink := withPostErrSink(ctx)
-	callTBCreate := func() (*sdkwallet.CreateActionResult, error) {
-		e.actionMu.Lock()
-		defer e.actionMu.Unlock()
-		return e.tb.CreateAction(ctx, args, orig)
-	}
-	res, err := callTBCreate()
+	res, err := e.callTBCreateAction(ctx, args, orig)
 	if err != nil && isNotEnoughFunds(err) && !isPureSendWith && e.svc.hasBroadcaster() {
 		// 1. If static FundAddress() deposits are waiting in BasketFunding, absorb into native BRC-29 "default".
 		if absorbed, aErr := e.AbsorbFundingBasket(ctx); aErr != nil {
 			e.logf("wallet: CreateAction funding-basket absorb failed: %v", aErr)
 		} else if absorbed > 0 {
-			res, err = callTBCreate()
+			res, err = e.callTBCreateAction(ctx, args, orig)
 		}
 		// 2. If funds are split across StrategyThroughput baskets (default + reserve + fuel) such that no
 		// single basket covers this action alone, reclaim just enough reserve/fuel into "default" and retry!
@@ -127,20 +121,11 @@ func (e *Engine) createActionGuarded(ctx context.Context, args sdkwallet.CreateA
 			if reclaimed, rErr := e.reclaimPoolToDefault(ctx, needed+e.estimateFeeSats(ctx, 4, len(args.Outputs)+1)); rErr != nil {
 				e.logf("wallet: CreateAction pool reclaim failed: %v", rErr)
 			} else if reclaimed > 0 {
-				res, err = callTBCreate()
+				res, err = e.callTBCreateAction(ctx, args, orig)
 			}
 		}
 	}
 	if err != nil {
-		if sinkTxID, sinkErr := errSink.get(); sinkErr != nil {
-			if errors.Is(sinkErr, ErrBroadcastUnknown) && sinkTxID != "" {
-				_ = e.MarkSubmissionUnknown(ctx, sinkTxID)
-			}
-			return nil, fmt.Errorf("%w (%v)", sinkErr, err)
-		}
-		if errors.Is(err, ErrBroadcastUnknown) && res != nil && !res.Txid.IsEqual(&chainhash.Hash{}) {
-			_ = e.MarkSubmissionUnknown(ctx, res.Txid.String())
-		}
 		return nil, err
 	}
 
@@ -158,7 +143,41 @@ func (e *Engine) createActionGuarded(ctx context.Context, args sdkwallet.CreateA
 	return res, nil
 }
 
-func (e *Engine) SignAction(ctx context.Context, args sdkwallet.SignActionArgs, originator string) (*sdkwallet.SignActionResult, error) {
+// callTBCreateAction is the single serialized chokepoint around e.tb.CreateAction.
+// It serializes UTXO reservation under e.actionMu, attaches a postErrSink, and fail-closes
+// uncertain broadcasts via MarkSubmissionUnknown.
+func (e *Engine) callTBCreateAction(ctx context.Context, args sdkwallet.CreateActionArgs, originator string) (*sdkwallet.CreateActionResult, error) {
+	orig := e.normalizeOrig(originator)
+	callCtx, errSink := withPostErrSink(ctx)
+	e.actionMu.Lock()
+	res, err := e.tb.CreateAction(callCtx, args, orig)
+	e.actionMu.Unlock()
+	if sinkTxID, sinkErr := errSink.get(); sinkErr != nil {
+		if errors.Is(sinkErr, ErrBroadcastUnknown) && sinkTxID != "" {
+			_ = e.MarkSubmissionUnknown(ctx, sinkTxID)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w (%v)", sinkErr, err)
+		}
+		return nil, sinkErr
+	}
+	if err != nil {
+		if errors.Is(err, ErrBroadcastUnknown) && res != nil && !res.Txid.IsEqual(&chainhash.Hash{}) {
+			_ = e.MarkSubmissionUnknown(ctx, res.Txid.String())
+		}
+		return nil, err
+	}
+	return res, nil
+}
+
+// signActionGuarded is the single chokepoint around e.tb.SignAction.
+// It attaches a postErrSink, marks uncertain broadcasts as submission_unknown, and caches signed txs.
+func (e *Engine) signActionGuarded(ctx context.Context, args sdkwallet.SignActionArgs, originator string, wakeFuel bool) (*sdkwallet.SignActionResult, error) {
+	res, _, err := e.signActionGuardedWithOrigin(ctx, args, originator, wakeFuel)
+	return res, err
+}
+
+func (e *Engine) signActionGuardedWithOrigin(ctx context.Context, args sdkwallet.SignActionArgs, originator string, wakeFuel bool) (*sdkwallet.SignActionResult, bool, error) {
 	if args.Options == nil {
 		args.Options = &sdkwallet.SignActionOptions{}
 	}
@@ -166,24 +185,80 @@ func (e *Engine) SignAction(ctx context.Context, args sdkwallet.SignActionArgs, 
 		d := e.profile.DefaultAcceptDelayed
 		args.Options.AcceptDelayedBroadcast = &d
 	}
-	ctx, errSink := withPostErrSink(ctx)
-	res, err := e.tb.SignAction(ctx, args, e.normalizeOrig(originator))
-	if err != nil {
-		if sinkTxID, sinkErr := errSink.get(); sinkErr != nil {
-			if errors.Is(sinkErr, ErrBroadcastUnknown) && sinkTxID != "" {
-				_ = e.MarkSubmissionUnknown(ctx, sinkTxID)
-			}
-			return nil, fmt.Errorf("%w (%v)", sinkErr, err)
+	callCtx, errSink := withPostErrSink(ctx)
+	res, err := e.tb.SignAction(callCtx, args, e.normalizeOrig(originator))
+	if sinkTxID, sinkErr := errSink.get(); sinkErr != nil {
+		if errors.Is(sinkErr, ErrBroadcastUnknown) && sinkTxID != "" {
+			_ = e.MarkSubmissionUnknown(ctx, sinkTxID)
 		}
-		return nil, err
+		preBroadcast := errSink.isPreBroadcast()
+		if err != nil {
+			return nil, preBroadcast, fmt.Errorf("%w (%v)", sinkErr, err)
+		}
+		return nil, preBroadcast, sinkErr
+	}
+	if err != nil {
+		if errors.Is(err, ErrBroadcastUnknown) && res != nil && !res.Txid.IsEqual(&chainhash.Hash{}) {
+			_ = e.MarkSubmissionUnknown(ctx, res.Txid.String())
+		}
+		return nil, !IsUncertainBroadcastError(err), err
 	}
 	if res != nil && len(res.Tx) > 0 {
 		if _, parsed, _, pErr := guard.ParseBEEF(res.Tx, guard.DefaultBound); pErr == nil && parsed != nil {
 			e.txCache.Put(parsed.TxID().String(), parsed)
 		}
 	}
-	e.fuel.Wake()
+	if wakeFuel {
+		e.fuel.Wake()
+	}
+	return res, false, nil
+}
+
+// runExplicitSignAction executes the two-phase CreateAction(SignAndProcess=false) -> custom input signing ->
+// SignAction lifecycle through the single guarded chokepoints (actionMu, postErrSink, MarkSubmissionUnknown).
+func (e *Engine) runExplicitSignAction(
+	ctx context.Context,
+	createArgs sdkwallet.CreateActionArgs,
+	signCtx context.Context,
+	buildSpends func(tx *transaction.Transaction) (map[uint32]sdkwallet.SignActionSpend, error),
+	acceptDelayed bool,
+	wakeFuel bool,
+) (*sdkwallet.SignActionResult, error) {
+	created, err := e.callTBCreateAction(ctx, createArgs, e.cfg.Originator)
+	if err != nil {
+		return nil, err
+	}
+	if created == nil || created.SignableTransaction == nil {
+		return nil, errors.New("wallet: CreateAction did not return SignableTransaction")
+	}
+	tx, err := transaction.NewTransactionFromBEEF(created.SignableTransaction.Tx)
+	if err != nil {
+		_, _ = e.tb.AbortAction(ctx, sdkwallet.AbortActionArgs{Reference: created.SignableTransaction.Reference}, e.cfg.Originator)
+		return nil, err
+	}
+	spends, err := buildSpends(tx)
+	if err != nil {
+		_, _ = e.tb.AbortAction(ctx, sdkwallet.AbortActionArgs{Reference: created.SignableTransaction.Reference}, e.cfg.Originator)
+		return nil, err
+	}
+	res, preBroadcast, err := e.signActionGuardedWithOrigin(signCtx, sdkwallet.SignActionArgs{
+		Reference: created.SignableTransaction.Reference,
+		Spends:    spends,
+		Options: &sdkwallet.SignActionOptions{
+			AcceptDelayedBroadcast: &acceptDelayed,
+		},
+	}, e.cfg.Originator, wakeFuel)
+	if err != nil {
+		if preBroadcast && !IsUncertainBroadcastError(err) {
+			_, _ = e.tb.AbortAction(ctx, sdkwallet.AbortActionArgs{Reference: created.SignableTransaction.Reference}, e.cfg.Originator)
+		}
+		return nil, err
+	}
 	return res, nil
+}
+
+func (e *Engine) SignAction(ctx context.Context, args sdkwallet.SignActionArgs, originator string) (*sdkwallet.SignActionResult, error) {
+	return e.signActionGuarded(ctx, args, originator, true)
 }
 
 func (e *Engine) AbortAction(ctx context.Context, args sdkwallet.AbortActionArgs, originator string) (*sdkwallet.AbortActionResult, error) {
@@ -209,7 +284,7 @@ func (e *Engine) InternalizeAction(ctx context.Context, args sdkwallet.Internali
 	if parsed.MerklePath == nil {
 		hydrateInputs(parsed, parsedBeef, e.txCache, e.svc.dbLoader(ctx), 0, e.cfg.MaxUnprovenDepth)
 		if !e.cfg.InMemoryStore && e.cfg.MaxUnprovenDepth > 0 {
-			if depth := countUnminedAncestors(parsed, e.cfg.MaxUnprovenDepth+2); depth > e.cfg.MaxUnprovenDepth {
+			if depth := CountUnminedAncestors(parsed, e.cfg.MaxUnprovenDepth+2); depth > e.cfg.MaxUnprovenDepth {
 				return nil, fmt.Errorf("%w: incoming tx %s has %d unconfirmed ancestors (max %d)", ErrDepthExceeded, parsed.TxID().String(), depth, e.cfg.MaxUnprovenDepth)
 			}
 		}
@@ -233,7 +308,8 @@ func (e *Engine) InternalizeAction(ctx context.Context, args sdkwallet.Internali
 	return res, nil
 }
 
-func countUnminedAncestors(tx *transaction.Transaction, capLimit int) int {
+// CountUnminedAncestors returns the maximum unmined ancestor chain depth rooted at tx, capped at capLimit.
+func CountUnminedAncestors(tx *transaction.Transaction, capLimit int) int {
 	if tx == nil || tx.MerklePath != nil {
 		return 0
 	}

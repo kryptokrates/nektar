@@ -6,7 +6,13 @@
 set -euo pipefail
 
 RAW_BASE="${NEKTAR_RAW_BASE:-https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub}"
-HUB_DIR="${NEKTAR_HUB_DIR:-$HOME/nektar-hub}"
+if [ -n "${NEKTAR_HUB_DIR:-}" ]; then
+  HUB_DIR="$NEKTAR_HUB_DIR"
+elif [ -d "$HOME/.nektar-hub" ] || [ ! -d "$HOME/nektar-hub" ]; then
+  HUB_DIR="$HOME/.nektar-hub"
+else
+  HUB_DIR="$HOME/nektar-hub"
+fi
 NET="${NEKTAR_NETWORK:-testnet}"
 MODE="${NEKTAR_HUB_MODE:-domain}"
 AUTO_IP="${NEKTAR_AUTO_IP:-0}"
@@ -21,8 +27,15 @@ fi
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "== Installing Docker Engine =="
-  curl -fsSL https://get.docker.com | sh
+  if [ "$(id -u)" -eq 0 ]; then
+    curl -fsSL https://get.docker.com | sh
+  else
+    curl -fsSL https://get.docker.com | sudo sh
+  fi
 fi
+
+DOCKER="docker"
+docker version >/dev/null 2>&1 || DOCKER="sudo docker"
 
 mkdir -p "$HUB_DIR"
 cd "$HUB_DIR"
@@ -34,6 +47,12 @@ gen_hex() {
     openssl rand -hex 32
   else
     head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+  fi
+}
+
+read_existing_env() {
+  if [ -f .env ]; then
+    awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' .env
   fi
 }
 
@@ -54,8 +73,10 @@ elif [ "$AUTO_IP" = "1" ] || [ "$MODE" = "auto-ip" ]; then
   echo "== Resolved zero-domain TLS host: ${NEKTAR_PUBLIC_URL} =="
 fi
 
-HTTP_TOK="${NEKTAR_HTTP_TOKEN:-$(gen_hex)}"
-OP_TOK="${NEKTAR_OPERATOR_TOKEN:-$(gen_hex)}"
+EXISTING_HTTP_TOK="$(read_existing_env NEKTAR_HTTP_TOKEN || true)"
+EXISTING_OP_TOK="$(read_existing_env NEKTAR_OPERATOR_TOKEN || true)"
+HTTP_TOK="${NEKTAR_HTTP_TOKEN:-${EXISTING_HTTP_TOK:-$(gen_hex)}}"
+OP_TOK="${NEKTAR_OPERATOR_TOKEN:-${EXISTING_OP_TOK:-$(gen_hex)}}"
 TRUST_PROXY="0"
 if [ -n "$DOMAIN" ] || [ "$MODE" = "tunnel" ]; then
   TRUST_PROXY="1"
@@ -79,8 +100,8 @@ NEKTAR_HUB_FEE_PRESET=${NEKTAR_HUB_FEE_PRESET:-${DEFAULT_PRESET}}
 NEKTAR_UPSTREAM_SPINES=${NEKTAR_UPSTREAM_SPINES:-${SEED_HUB}}
 NEKTAR_CATCHUP_PEERS=${NEKTAR_CATCHUP_PEERS:-${SEED_HUB}}
 NEKTAR_SPINE_PEER_PUBS=${NEKTAR_SPINE_PEER_PUBS:-}
-NEKTAR_HEADERS_SOURCE=${NEKTAR_HEADERS_SOURCE:-$([ "$NET" = "main" ] && echo "woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2" || echo "woc:test")}
-NEKTAR_SETTLE_SPEC=${NEKTAR_SETTLE_SPEC:-$([ "$NET" = "main" ] && echo "arcade:https://arcade-v2-us-1.bsvblockchain.tech" || echo "arcade:https://arcade-testnet-us-1.bsvblockchain.tech")}
+NEKTAR_HEADERS_SOURCE=${NEKTAR_HEADERS_SOURCE:-}
+NEKTAR_SETTLE_SPEC=${NEKTAR_SETTLE_SPEC:-}
 NEKTAR_MAINNET_CONFIRM=${NEKTAR_MAINNET_CONFIRM:-}
 CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
 EOF
@@ -97,8 +118,8 @@ elif [ "$MODE" = "tunnel" ]; then
   fi
 fi
 
-docker compose -f compose.yaml --env-file .env "${PROFILES[@]}" pull
-docker compose -f compose.yaml --env-file .env "${PROFILES[@]}" up -d
+$DOCKER compose -f compose.yaml --env-file .env "${PROFILES[@]}" pull
+$DOCKER compose -f compose.yaml --env-file .env "${PROFILES[@]}" up -d
 
 echo ""
 echo "✓ Nektar v0.1 Hub running in ${HUB_DIR}"

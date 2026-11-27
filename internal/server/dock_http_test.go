@@ -13,6 +13,7 @@ import (
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
+	"github.com/kryptokrates/nektar/internal/dock"
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
@@ -109,16 +110,16 @@ func TestDockDetectProbeWalletQRAndHubBundle(t *testing.T) {
 		t.Fatalf("expected mainnet confirm & fee-preset in cliCommand, got %q", cliCmd)
 	}
 
-	// 5. dockMergeJSON roundtrip (install + uninstall without clobbering sibling servers)
+	// 5. dock.MergeOrRemoveJSONEntry roundtrip (install + uninstall without clobbering sibling servers)
 	cfgPath := filepath.Join(t.TempDir(), "mcp.json")
 	_ = os.WriteFile(cfgPath, []byte(`{"mcpServers":{"other":{"command":"foo"}}}`), 0o600)
-	changed, err := dockMergeJSON(cfgPath, "mcpServers", "nektar", map[string]any{"command": "nektar", "args": []string{"mcp"}}, false)
-	if err != nil || !changed || !isJSONEntryDocked(cfgPath, "mcpServers", "nektar") {
-		t.Fatalf("expected dockMergeJSON install to succeed, changed=%v err=%v", changed, err)
+	changed, err := dock.MergeOrRemoveJSONEntry(cfgPath, "mcpServers", "nektar", map[string]any{"command": "nektar", "args": []string{"mcp"}}, false, false)
+	if err != nil || !changed || !dock.IsJSONEntryDocked(cfgPath, "mcpServers", "nektar") {
+		t.Fatalf("expected dock.MergeOrRemoveJSONEntry install to succeed, changed=%v err=%v", changed, err)
 	}
-	changed, err = dockMergeJSON(cfgPath, "mcpServers", "nektar", nil, true)
-	if err != nil || !changed || isJSONEntryDocked(cfgPath, "mcpServers", "nektar") {
-		t.Fatalf("expected dockMergeJSON uninstall to succeed, changed=%v err=%v", changed, err)
+	changed, err = dock.MergeOrRemoveJSONEntry(cfgPath, "mcpServers", "nektar", nil, false, true)
+	if err != nil || !changed || dock.IsJSONEntryDocked(cfgPath, "mcpServers", "nektar") {
+		t.Fatalf("expected dock.MergeOrRemoveJSONEntry uninstall to succeed, changed=%v err=%v", changed, err)
 	}
 	rawAfter, _ := os.ReadFile(cfgPath)
 	if !strings.Contains(string(rawAfter), `"other"`) {

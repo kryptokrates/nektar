@@ -103,7 +103,10 @@ func (s *Store) ClaimFeePaymentAtomic(txid string, inputs []string, action, paye
 			continue
 		}
 		if _, iErr := tx.Exec(`INSERT INTO hub_fee_claim_inputs (outpoint, txid, created_at) VALUES (?, ?, ?)`, op, txid, now); iErr != nil {
-			return ErrFeePaymentConflict
+			if isSQLiteConstraintErr(iErr) {
+				return ErrFeePaymentConflict
+			}
+			return iErr
 		}
 	}
 
@@ -112,7 +115,10 @@ func (s *Store) ClaimFeePaymentAtomic(txid string, inputs []string, action, paye
 		INSERT INTO hub_fee_claims (txid, input_outpoints_json, action, payer_pub, sats, status, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		txid, string(inJSON), action, strings.ToLower(strings.TrimSpace(payerPub)), sats, status, now); err != nil {
-		return ErrFeePaymentReplayed
+		if isSQLiteConstraintErr(err) {
+			return ErrFeePaymentReplayed
+		}
+		return err
 	}
 	return tx.Commit()
 }
@@ -297,7 +303,9 @@ func (s *Store) ChargeEgressEvents(payerPub string, eventCount, msatsPerEvent in
 	}
 	n, _ := res.RowsAffected()
 	var bal int64
-	_ = s.sql.QueryRow(`SELECT COALESCE(balance_msats, 0) FROM hub_egress_credits WHERE payer_pub = ?`, payerPub).Scan(&bal)
+	if qErr := s.sql.QueryRow(`SELECT COALESCE(balance_msats, 0) FROM hub_egress_credits WHERE payer_pub = ?`, payerPub).Scan(&bal); qErr != nil && !errors.Is(qErr, sql.ErrNoRows) {
+		return 0, false, qErr
+	}
 	return bal, n == 1, nil
 }
 

@@ -50,6 +50,7 @@
       </svg>
       <div>
         <h1>Unlock nektar</h1>
+        <p class="gtag">One shared, verifiable brain for all your AI agents — encrypted, Git-versioned memory &amp; BSV knowledge market.</p>
         <p class="gmut">Enter your HTTP or operator token, or run <code>nektar open</code> for one-click pairing.</p>
       </div>
     </div>
@@ -96,10 +97,16 @@
     font-size: 1.25rem;
     color: #ece7e4;
   }
+  .gtag {
+    margin: 0.25rem 0 0;
+    font-size: 0.83rem;
+    color: #d6ccc3;
+    line-height: 1.4;
+  }
   .gmut,
   .ghint {
-    margin: 0.25rem 0 0;
-    font-size: 0.82rem;
+    margin: 0.32rem 0 0;
+    font-size: 0.8rem;
     color: #a89a8e;
     line-height: 1.45;
   }

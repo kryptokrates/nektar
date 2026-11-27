@@ -76,8 +76,46 @@ read_token() {
   fi
 }
 
+read_operator_token() {
+  if [ -n "${NEKTAR_OPERATOR_TOKEN:-}" ]; then
+    printf '%s' "$NEKTAR_OPERATOR_TOKEN"
+    return
+  fi
+  if [ -f "$DAEMON_JSON" ]; then
+    op="$(sed -n 's/.*"operatorToken"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DAEMON_JSON" | head -n1)"
+    if [ -n "$op" ]; then
+      printf '%s' "$op"
+      return
+    fi
+  fi
+  read_token
+}
+
 cmd_up() {
   need_docker
+  CONFIRM="${NEKTAR_MAINNET_CONFIRM:-}"
+  WALLET="${NEKTAR_WALLET:-}"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --network) shift; NETWORK="${1:-$NETWORK}" ;;
+      --network=*) NETWORK="${1#--network=}" ;;
+      --mainnet|--main) NETWORK="main" ;;
+      --confirm) shift; CONFIRM="${1:-}" ;;
+      --confirm=*) CONFIRM="${1#--confirm=}" ;;
+      --wallet) shift; WALLET="${1:-}" ;;
+      --wallet=*) WALLET="${1#--wallet=}" ;;
+      --install-service) ;;
+      *) ;;
+    esac
+    shift || true
+  done
+  if [ "$NETWORK" = "main" ] || [ "$NETWORK" = "mainnet" ]; then
+    NETWORK="main"
+    if [ "$CONFIRM" != "I_UNDERSTAND" ]; then
+      printf 'nektar: refusing Mainnet without --confirm I_UNDERSTAND (or NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND)\n' >&2
+      exit 2
+    fi
+  fi
   if container_running; then
     sync_daemon_json
     printf 'nektar: already running at %s\n' "$BASE_URL"
@@ -94,8 +132,9 @@ cmd_up() {
       -p "127.0.0.1:${PORT}:18420" \
       -v "${VOLUME}:/data" \
       -e "NEKTAR_NETWORK=${NETWORK}" \
+      -e "NEKTAR_MAINNET_CONFIRM=${CONFIRM}" \
+      -e "NEKTAR_WALLET=${WALLET:-embedded}" \
       -e "NEKTAR_HTTP_PORT=18420" \
-      -e "NEKTAR_AUTOMATION=${NEKTAR_AUTOMATION:-0}" \
       -e "NEKTAR_MODEL_ID=${NEKTAR_MODEL_ID:-unspecified}" \
       "$IMAGE" serve -listen :18420 >/dev/null
   fi
@@ -117,9 +156,21 @@ cmd_up() {
 }
 
 cmd_open() {
-  cmd_up >/dev/null 2>&1 || true
-  pair_url="$(docker logs --tail 40 "$CONTAINER" 2>&1 | grep -oE "http://127\\.0\\.0\\.1:[0-9]+/pair\\?code=[a-z0-9-]+" | tail -n1 || true)"
-  target="${pair_url:-$BASE_URL}"
+  if ! curl -fsS --max-time 2 "${BASE_URL}/v1/health" >/dev/null 2>&1; then
+    cmd_up
+  fi
+  sync_daemon_json
+  op_tok="$(read_operator_token)"
+  target="$BASE_URL"
+  if [ -n "$op_tok" ]; then
+    code="$(curl -fsS --max-time 3 -X POST "${BASE_URL}/v1/auth/pair-code" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $op_tok" \
+      -d '{}' 2>/dev/null | sed -n 's/.*"code"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1 || true)"
+    if [ -n "$code" ]; then
+      target="${BASE_URL}/pair?code=${code}"
+    fi
+  fi
   if command -v open >/dev/null 2>&1; then
     open "$target"
   elif command -v xdg-open >/dev/null 2>&1; then
@@ -358,7 +409,13 @@ PY
 cmd_hub() {
   sub="${1:-help}"
   shift || true
-  hub_dir="${NEKTAR_HUB_DIR:-$HOME/nektar-hub}"
+  if [ -n "${NEKTAR_HUB_DIR:-}" ]; then
+    hub_dir="$NEKTAR_HUB_DIR"
+  elif [ -d "$HOME/.nektar-hub" ] || [ ! -d "$HOME/nektar-hub" ]; then
+    hub_dir="$HOME/.nektar-hub"
+  else
+    hub_dir="$HOME/nektar-hub"
+  fi
   case "$sub" in
     up)
       curl -fsSL "$RAW_BASE/deploy/hub/install.sh" | bash -s -- "$@"
@@ -393,7 +450,7 @@ cmd_hub() {
 CMD="${1:-help}"
 shift || true
 case "$CMD" in
-  up|start|serve) cmd_up ;;
+  up|start|serve) cmd_up "$@" ;;
   down|stop) need_docker; docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; printf 'nektar: stopped (volume %s preserved)\n' "$VOLUME" ;;
   restart) need_docker; docker restart "$CONTAINER" >/dev/null; printf 'nektar: restarted\n' ;;
   logs) need_docker; docker logs "$@" "$CONTAINER" ;;

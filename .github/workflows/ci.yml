@@ -118,6 +118,13 @@ jobs:
       - name: build Svelte 5 dashboard
         working-directory: ui
         run: npm install --no-audit --no-fund && npm run build
+      - name: verify embedded UI parity (ui/dist vs internal/server/ui_dist)
+        run: |
+          set -euo pipefail
+          if ! diff -rq ui/dist internal/server/ui_dist; then
+            echo "ERROR: internal/server/ui_dist is out of sync with ui/dist — rebuild UI and sync ui/dist/ -> internal/server/ui_dist/"
+            exit 1
+          fi
 
   docker:
     runs-on: ubuntu-latest

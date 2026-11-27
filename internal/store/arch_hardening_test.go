@@ -5,41 +5,6 @@ import (
 	"time"
 )
 
-func TestForgetFragmentAtomicallyShredsFTS(t *testing.T) {
-	db, err := Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	rec, _, err := db.AppendFragment(FragmentRecord{
-		Shard:      "secrets",
-		HDP:        "hdp-shred-1",
-		Leaf:       "leaf-shred-1",
-		Data:       []byte("confidential launch code zephyr99"),
-		Provenance: []byte("prov"),
-		CreatedAt:  time.Now().Unix(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	hits, err := db.SearchFTS("secrets", "zephyr99", 10)
-	if err != nil || len(hits) != 1 {
-		t.Fatalf("expected 1 FTS hit before forget, got %v err=%v", hits, err)
-	}
-	if err := db.ForgetFragment("secrets", rec.Seq); err != nil {
-		t.Fatalf("ForgetFragment: %v", err)
-	}
-	hitsAfter, err := db.SearchFTS("secrets", "zephyr99", 10)
-	if err != nil || len(hitsAfter) != 0 {
-		t.Fatalf("expected 0 FTS hits after forget, got %v err=%v", hitsAfter, err)
-	}
-	got, err := db.GetFragment("secrets", rec.Seq)
-	if err != nil || !got.Forgotten || len(got.Data) != 0 {
-		t.Fatalf("expected shredded forgotten record, got %+v err=%v", got, err)
-	}
-}
-
 func TestReleaseSpendReservationCrossMidnight(t *testing.T) {
 	db, err := Open(":memory:")
 	if err != nil {

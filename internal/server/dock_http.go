@@ -13,6 +13,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/dock"
 	"github.com/kryptokrates/nektar/internal/memory"
+	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/reasoning"
 )
 
@@ -29,22 +30,10 @@ func (a *App) registerDockAndLaunchRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/hubs/connect-all", a.withOperatorAuth(http.HandlerFunc(a.handleHubsConnectAll)))
 }
 
-func isJSONEntryDocked(cfgPath, rootKey, entryKey string) bool {
-	return dock.IsJSONEntryDocked(cfgPath, rootKey, entryKey)
-}
-
-func dockMergeJSON(cfgPath, rootKey, entryKey string, val any, uninstall bool) (bool, error) {
-	return dock.MergeOrRemoveJSONEntry(cfgPath, rootKey, entryKey, val, false, uninstall)
-}
-
-func detectAllDockClients(home string) []DockClientStatus {
-	return dock.DetectAll(home)
-}
-
 func (a *App) handleDockDetect(w http.ResponseWriter, r *http.Request) {
 	home, _ := os.UserHomeDir()
 	base := requestBaseURL(r)
-	clients := detectAllDockClients(home)
+	clients := dock.DetectAll(home)
 	detectedCount := 0
 	dockedCount := 0
 	for _, c := range clients {
@@ -116,7 +105,7 @@ func (a *App) handleDockApply(w http.ResponseWriter, r *http.Request) {
 		"updated":  updated,
 		"errors":   errs,
 		"results":  results,
-		"clients":  detectAllDockClients(home),
+		"clients":  dock.DetectAll(home),
 		"nextStep": "Restart your docked AI app (Claude, Codex, Hermes, OpenClaw, Cursor, VS Code…) to load Nektar, then try the sample prompt.",
 	})
 }
@@ -125,7 +114,13 @@ func (a *App) handleDockProbe(w http.ResponseWriter, r *http.Request) {
 	t0 := time.Now()
 	ctx := r.Context()
 	_, _ = a.mem.EnsureWelcome(ctx)
-	shards, items, _ := a.mem.RecallAllShards(ctx, memory.RecallInput{Limit: 8})
+	cc := CallerContextFor(ctx, policy.Principal{})
+	recallIn := memory.RecallInput{Limit: 8}
+	if cc.FromHTTP {
+		recallIn.Principal = cc.Principal
+		recallIn.DisallowBorg = cc.DisallowBorg
+	}
+	shards, items, _ := a.mem.RecallAllShards(ctx, recallIn)
 
 	out := map[string]any{
 		"ok":           true,
@@ -142,14 +137,19 @@ func (a *App) handleDockProbe(w http.ResponseWriter, r *http.Request) {
 		if len(snippet) > 90 {
 			snippet = snippet[:90]
 		}
-		if ga, gErr := a.mem.GroundedAnswer(ctx, memory.GroundedAnswerInput{
+		gaIn := memory.GroundedAnswerInput{
 			Claims: []reasoning.Claim{
 				{
 					Text:  snippet,
 					Cites: []reasoning.FragmentRef{{Shard: first.Shard, Seq: first.Seq}},
 				},
 			},
-		}); gErr == nil && ga != nil && ga.ReceiptToken != "" {
+		}
+		if cc.FromHTTP {
+			gaIn.Principal = cc.Principal
+			gaIn.DisallowBorg = cc.DisallowBorg
+		}
+		if ga, gErr := a.mem.GroundedAnswer(ctx, gaIn); gErr == nil && ga != nil && ga.ReceiptToken != "" {
 			a.recordTTFV()
 			out["receiptToken"] = ga.ReceiptToken
 			out["verifyUrl"] = ga.VerifyURL
@@ -219,7 +219,11 @@ func (a *App) handleHubInspect(w http.ResponseWriter, r *http.Request) {
 			if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&wk) == nil {
 				res["reachable"] = true
 				res["network"] = wk["network"]
-				res["pub"] = wk["pub"]
+				if pub, ok := wk["identityPub"].(string); ok && pub != "" {
+					res["pub"] = pub
+				} else {
+					res["pub"] = wk["pub"]
+				}
 				res["publicUrl"] = wk["publicUrl"]
 			}
 		}
@@ -277,12 +281,12 @@ func (a *App) handleHubsConnectAll(w http.ResponseWriter, r *http.Request) {
 	}
 	connected, skipped, hubs := a.disc.ConnectAllReachable(r.Context())
 	if len(connected) > 0 {
-		go func() {
-			bgCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		a.goBackground(func(parentCtx context.Context) {
+			bgCtx, cancel := context.WithTimeout(parentCtx, 8*time.Second)
 			defer cancel()
 			_, _ = a.disc.DiscoverPeers(bgCtx, connected)
 			a.BroadcastDashboardEvent("hosts_updated")
-		}()
+		})
 	}
 	a.BroadcastDashboardEvent("hosts_updated")
 	writeJSON(w, http.StatusOK, map[string]any{

@@ -80,7 +80,17 @@ func (p *Port) ProofChecked(ctx context.Context, txid string) (*transaction.Merk
 		return valid, nil
 	}
 
-	// 1. Check locally held verified proof FIRST (avoid unnecessary network refetch).
+	// 1. Check locally held verified proof FIRST (reorg-evicting proofCache + embedded engine).
+	if cached := p.getProofCache(txid); cached != nil {
+		valid, vErr := verifyProof(cached, cached.BlockHeight)
+		if vErr != nil {
+			return nil, 0, false, vErr
+		}
+		if valid {
+			return cached, cached.BlockHeight, true, nil
+		}
+		p.deleteProofCache(txid)
+	}
 	if p.engine != nil {
 		if tx, lErr := p.engine.LoadParsedTx(ctx, txid); lErr == nil && tx != nil && tx.MerklePath != nil {
 			valid, vErr := verifyProof(tx.MerklePath, tx.MerklePath.BlockHeight)
@@ -88,6 +98,7 @@ func (p *Port) ProofChecked(ctx context.Context, txid string) (*transaction.Merk
 				return nil, 0, false, vErr
 			}
 			if valid {
+				p.putProofCache(txid, tx.MerklePath)
 				return tx.MerklePath, tx.MerklePath.BlockHeight, true, nil
 			}
 		}
@@ -106,6 +117,7 @@ func (p *Port) ProofChecked(ctx context.Context, txid string) (*transaction.Merk
 				if h == 0 {
 					h = mp.BlockHeight
 				}
+				p.putProofCache(txid, mp)
 				return mp, h, true, nil
 			}
 		} else if aErr != nil && !errors.Is(aErr, nodeapi.ErrNotMined) {
@@ -123,25 +135,68 @@ func (p *Port) ProofChecked(ctx context.Context, txid string) (*transaction.Merk
 				if h == 0 {
 					h = mp.BlockHeight
 				}
+				p.putProofCache(txid, mp)
 				return mp, h, true, nil
 			}
-		} else if cErr != nil && !errors.Is(cErr, nodeapi.ErrNotMined) {
+		} else if cErr == nil || errors.Is(cErr, nodeapi.ErrNotMined) {
+			// Authoritative not-mined answer from fallback Chain.Proof clears any earlier broadcaster outage error.
+			lastErr = nil
+		} else {
 			lastErr = cErr
 		}
 	}
 	return nil, 0, false, lastErr
 }
 
+func (p *Port) getProofCache(txid string) *transaction.MerklePath {
+	p.proofCacheMu.RLock()
+	mp := p.proofCache[txid]
+	p.proofCacheMu.RUnlock()
+	return mp
+}
+
+func (p *Port) putProofCache(txid string, mp *transaction.MerklePath) {
+	if txid == "" || mp == nil {
+		return
+	}
+	p.proofCacheMu.Lock()
+	if p.proofCache == nil {
+		p.proofCache = make(map[string]*transaction.MerklePath, 64)
+	}
+	if len(p.proofCache) >= 2048 {
+		clear(p.proofCache)
+	}
+	p.proofCache[txid] = mp
+	p.proofCacheMu.Unlock()
+}
+
+func (p *Port) deleteProofCache(txid string) {
+	p.proofCacheMu.Lock()
+	delete(p.proofCache, txid)
+	p.proofCacheMu.Unlock()
+}
+
+func (p *Port) evictProofCacheFrom(forkHeight uint32) {
+	p.proofCacheMu.Lock()
+	for txid, mp := range p.proofCache {
+		if mp == nil || mp.BlockHeight >= forkHeight {
+			delete(p.proofCache, txid)
+		}
+	}
+	p.proofCacheMu.Unlock()
+}
+
 // Proof returns the header-verified MerklePath + height if txid is mined.
+// Callers that must distinguish tracker outages from not-mined MUST call ProofChecked.
 func (p *Port) Proof(ctx context.Context, txid string) (*transaction.MerklePath, uint32, bool) {
 	mp, h, ok, _ := p.ProofChecked(ctx, txid)
 	return mp, h, ok
 }
 
-// TxBroadcastStatus returns verified mining proof AND durable local wallet status for txid,
-// enabling crash recovery (ReconcilePendingAnchors) to distinguish unbroadcast NoSend txs from live broadcasts.
-func (p *Port) TxBroadcastStatus(ctx context.Context, txid string) (mined bool, walletStatus string, mp *transaction.MerklePath, height uint32) {
-	mp, height, mined, _ = p.ProofChecked(ctx, txid)
+// TxBroadcastStatus returns verified mining proof, durable local wallet status, and any header/proof
+// lookup error for txid, ensuring tracker outages are never collapsed to not-mined.
+func (p *Port) TxBroadcastStatus(ctx context.Context, txid string) (mined bool, walletStatus string, mp *transaction.MerklePath, height uint32, err error) {
+	mp, height, mined, err = p.ProofChecked(ctx, txid)
 	if p.engine != nil {
 		if st, ok := p.engine.TxStatus(ctx, txid); ok {
 			walletStatus = st
@@ -151,7 +206,7 @@ func (p *Port) TxBroadcastStatus(ctx context.Context, txid string) (mined bool, 
 	} else if p.Tx(txid) != nil {
 		walletStatus = "unproven"
 	}
-	return mined, walletStatus, mp, height
+	return mined, walletStatus, mp, height, err
 }
 
 // Tx returns a known transaction by txid (from testchain, bounded SQLite LRU cache, or durable client cache).
@@ -206,6 +261,35 @@ func (p *Port) SigningPubKey(ctx context.Context) (*ec.PublicKey, error) {
 	}, Originator)
 	if err != nil {
 		return nil, err
+	}
+	return res.PublicKey, nil
+}
+
+// DeriveRepoGenesisPubKey derives a deterministic, repository-and-branch-scoped BRC-43 compressed
+// public key used as the immutable GenesisOwner identity of that repo's on-chain NektarAnchor UTXO chain.
+// This ensures every Memory Repo (e.g. "bsv", "ops", "welcome") has its own distinct on-chain ShardID
+// without exposing raw private keys outside the BRC-100 wallet engine.
+func (p *Port) DeriveRepoGenesisPubKey(ctx context.Context, repo, branch string) (*ec.PublicKey, error) {
+	if p == nil || p.signer == nil {
+		return nil, errors.New("chain: signer unavailable for DeriveRepoGenesisPubKey")
+	}
+	if repo == "" {
+		repo = "default"
+	}
+	if branch == "" {
+		branch = "main"
+	}
+	res, err := p.signer.GetPublicKey(ctx, sdkwallet.GetPublicKeyArgs{
+		EncryptionArgs: sdkwallet.EncryptionArgs{
+			ProtocolID: sdkwallet.Protocol{SecurityLevel: sdkwallet.SecurityLevelEveryApp, Protocol: "nektar repo"},
+			KeyID:      repo + ":" + branch,
+			Counterparty: sdkwallet.Counterparty{
+				Type: sdkwallet.CounterpartyTypeSelf,
+			},
+		},
+	}, Originator)
+	if err != nil {
+		return nil, fmt.Errorf("chain: derive repo genesis pubkey (%s:%s): %w", repo, branch, err)
 	}
 	return res.PublicKey, nil
 }

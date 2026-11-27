@@ -55,6 +55,8 @@ func main() {
 		err = cmdEarn(args)
 	case "remember":
 		err = cmdRemember(args)
+	case "repo":
+		err = cmdRepo(args)
 	case "recall":
 		err = cmdRecall(args)
 	case "anchor":
@@ -113,7 +115,8 @@ Get Started (25 seconds, zero Docker):
   nektar wallet         Manage BRC-100 wallet (status | address [--qr] | sync | fund | send | sweep | fuel)
 
 Memory & Knowledge Market:
-  nektar remember       Commit a fragment to a shard (-shard, -text, -anchor, -group)
+  nektar remember       Commit a fragment to a Memory Repo (-shard, -text, -anchor, -group)
+  nektar repo           Git-compatible BSV Memory Repos (list | log | tree | diff | commit | branch | merge | export | import | verify | checkout)
   nektar recall         Recall Cedar-authorized, Borg-decrypted fragments (-shard, -query, -spv)
   nektar anchor         Anchor unanchored fragments via NektarAnchor covenant (or anchor rotate)
   nektar verify         Verify a nektarr1.* receipt token offline (-token)
@@ -266,15 +269,6 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string, l
 	}
 	minIntervalMs := envUint64("NEKTAR_MIN_BROADCAST_INTERVAL_MS", 0)
 	hdrSrc := strings.TrimSpace(os.Getenv("NEKTAR_HEADERS_SOURCE"))
-	if hdrSrc == "" {
-		if anchor := strings.TrimSpace(os.Getenv("NEKTAR_HEADER_ANCHOR")); anchor != "" {
-			if strings.HasPrefix(anchor, "anchor:") {
-				hdrSrc = anchor
-			} else {
-				hdrSrc = "anchor:" + anchor
-			}
-		}
-	}
 	port, err := chain.Open(ctx, chain.Config{
 		Network:         net,
 		DataDir:         dir,
@@ -334,7 +328,11 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string, l
 	if pinnedOp := strings.TrimSpace(os.Getenv("NEKTAR_OPERATOR_PUBKEY")); pinnedOp != "" {
 		mkt.Policy().SetPinnedOperatorPub(pinnedOp)
 	}
-	_ = market.SyncPolicyFromDB(db, mkt.Policy())
+	if err := market.SyncPolicyFromDB(db, mkt.Policy()); err != nil {
+		_ = port.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("sync operator policies from db: %w", err)
+	}
 	if killActive(dir) {
 		mkt.Policy().SetKillSwitch(true)
 	}
@@ -358,6 +356,14 @@ func killActive(dataDir string) bool {
 	if dataDir != "" {
 		if _, err := os.Stat(filepath.Join(dataDir, "KILL")); err == nil {
 			return true
+		}
+		// Global emergency stop: if running isolated Mainnet under ~/.nektar/main, also honor parent ~/.nektar/KILL.
+		clean := filepath.Clean(dataDir)
+		parent := filepath.Dir(clean)
+		if strings.EqualFold(filepath.Base(clean), "main") && strings.EqualFold(filepath.Base(parent), ".nektar") {
+			if _, err := os.Stat(filepath.Join(parent, "KILL")); err == nil {
+				return true
+			}
 		}
 	}
 	return false

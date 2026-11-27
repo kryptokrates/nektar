@@ -9,8 +9,7 @@
 #
 #   NEKTAR_MARKET_HOSTS=http://host-a:8080,http://host-b:8080 ./install.sh
 #
-# Optional passthroughs: NEKTAR_PUSH_PUBLIC, NEKTAR_FUND_WIF, NEKTAR_NETWORK,
-# NEKTAR_SEED_DOMAINS, NEKTAR_ANNOUNCE,
+# Optional passthroughs: NEKTAR_PUBLIC_URL, NEKTAR_NETWORK, NEKTAR_SEED_DOMAINS,
 # NEKTAR_AGENT_DIR (default ~/nektar-agent), NEKTAR_AGENT_BRANCH.
 #
 # NEKTAR_NETWORK=main additionally requires NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND
@@ -100,9 +99,11 @@ if grep -qE '^NEKTAR_NETWORK=main' .env; then
     exit 1
   fi
   set_kv NEKTAR_MAINNET_CONFIRM "I_UNDERSTAND"
+  # Never carry a stale testnet header source into a mainnet .env; empty auto-selects dual-witness PoW defaults.
+  if [ -z "${NEKTAR_HEADERS_SOURCE:-}" ] && grep -qE '^NEKTAR_HEADERS_SOURCE=woc:test[[:space:]]*$' .env; then
+    set_kv NEKTAR_HEADERS_SOURCE ""
+  fi
 fi
-[ -n "${NEKTAR_SEED_DOMAINS:-}" ] && set_kv NEKTAR_SEED_DOMAINS "$NEKTAR_SEED_DOMAINS"
-[ -n "${NEKTAR_ANNOUNCE:-}" ] && set_kv NEKTAR_ANNOUNCE "$NEKTAR_ANNOUNCE"
 
 # 5 — up (single v0.1 Go binary container + optional Caddy TLS)
 # shellcheck disable=SC2086

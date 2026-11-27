@@ -100,7 +100,7 @@ func (a *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	restateUp := 0.0
-	if a.restateClient() != nil {
+	if a.restateClient() != nil && a.isRestateAlive() {
 		restateUp = 1.0
 	}
 	writeGauge("nektar_restate_attached", "1 if Restate durable execution plane is attached, 0 otherwise.", restateUp)

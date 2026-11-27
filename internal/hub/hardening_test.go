@@ -132,12 +132,28 @@ func TestBountyProofEnforcementAndSustainableResale(t *testing.T) {
 		t.Fatalf("expected bounty submission with mismatched HDP to be rejected, got %+v", resp)
 	}
 
+	// Missing MPERoot MUST be rejected (TagLeafV2 L1 binding is mandatory).
+	if resp, _ := postBounty(ts.URL, signSub(BountySubmission{
+		BountyID:      bounty.ID,
+		SellerAddress: addr,
+		Shard:         "bounty-src",
+		Seq:           rem.Seq,
+		HDP:           rem.HDP,
+		Text:          "Chronicle verified script opcodes activated cleanly on testnet.",
+		ProvenanceHex: hex.EncodeToString(fragRec.Provenance),
+		ProofBundle:   pbRaw,
+	})); resp == nil || resp.StatusCode < 400 {
+		t.Fatalf("expected bounty submission without mpeRoot to be rejected, got %+v", resp)
+	}
+
 	validSub := signSub(BountySubmission{
 		BountyID:      bounty.ID,
 		SellerAddress: addr,
 		Shard:         "bounty-src",
 		Seq:           rem.Seq,
 		HDP:           rem.HDP,
+		MPERoot:       fragRec.MPERoot,
+		ContentSHA256: fragRec.ContentSHA256,
 		Text:          "Chronicle verified script opcodes activated cleanly on testnet.",
 		ProvenanceHex: hex.EncodeToString(fragRec.Provenance),
 		ProofBundle:   pbRaw,
@@ -194,11 +210,11 @@ func TestPruneBboxAndGlobalFaucetCap(t *testing.T) {
 	port, _ := chain.Open(ctx, chain.Config{Network: "memory", DataDir: t.TempDir()})
 	mem, _ := memory.New(db, port, bstack.NewGroupRegistry(), bstack.NewMemoryObjectStore(), memory.Config{})
 	addr, _ := port.FundAddress()
-	if _, _, err := DripFaucet(ctx, mem, addr, 2000, 10_000); err != nil {
+	if _, _, _, err := DripFaucetBEEF(ctx, mem, addr, 2000, 10_000); err != nil {
 		t.Fatalf("first drip failed: %v", err)
 	}
 	// Second drip to another address exceeds 3000 daily cap (2000+2000 > 3000).
-	if _, _, err := DripFaucet(ctx, mem, "mfaFakeAddress222222222222222222", 2000, 10_000); err == nil {
+	if _, _, _, err := DripFaucetBEEF(ctx, mem, "mfaFakeAddress222222222222222222", 2000, 10_000); err == nil {
 		t.Fatal("expected global daily faucet cap to reject second drip")
 	}
 }

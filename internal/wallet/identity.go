@@ -3,8 +3,8 @@ package wallet
 import (
 	"container/list"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,7 +24,6 @@ import (
 // Nektar wallets preserve their exact root key, identity pubkey, and BRC-43 funding address.
 type identityFile struct {
 	WIF         string `json:"wif,omitempty"`
-	RootKeyHex  string `json:"rootKeyHex,omitempty"`
 	IdentityPub string `json:"identityPub,omitempty"`
 }
 
@@ -38,36 +37,10 @@ func LoadOrCreateIdentity(dir string) (*ec.PrivateKey, error) {
 		return nil, fmt.Errorf("wallet: mkdir %s: %w", dir, err)
 	}
 	idPath := filepath.Join(dir, "identity.json")
-	if raw, err := os.ReadFile(idPath); err == nil {
-		defer clear(raw)
-		_ = os.Chmod(idPath, 0o600)
-		var f identityFile
-		if err := json.Unmarshal(raw, &f); err != nil {
-			return nil, fmt.Errorf("wallet: parse %s: %w", idPath, err)
-		}
-		if f.WIF != "" {
-			priv, wErr := ec.PrivateKeyFromWif(f.WIF)
-			if wErr != nil {
-				return nil, fmt.Errorf("wallet: decode wif in %s: %w", idPath, wErr)
-			}
-			return priv, nil
-		}
-		if f.RootKeyHex != "" {
-			keyBytes, hErr := hex.DecodeString(f.RootKeyHex)
-			if hErr != nil || len(keyBytes) != 32 {
-				clear(keyBytes)
-				return nil, fmt.Errorf("wallet: invalid rootKeyHex in %s", idPath)
-			}
-			priv, _ := ec.PrivateKeyFromBytes(keyBytes)
-			clear(keyBytes)
-			if priv == nil {
-				return nil, fmt.Errorf("wallet: invalid root key in %s", idPath)
-			}
-			return priv, nil
-		}
-		return nil, fmt.Errorf("wallet: %s missing wif/rootKeyHex", idPath)
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("wallet: read %s: %w", idPath, err)
+	if priv, err := loadIdentityFile(idPath); err == nil {
+		return priv, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
 	}
 
 	priv, err := ec.NewPrivateKey()
@@ -104,7 +77,9 @@ func LoadOrCreateIdentity(dir string) (*ec.PrivateKey, error) {
 		}
 		return nil, fmt.Errorf("wallet: close %s: %w", idPath, cErr)
 	}
-	_ = hardenFileACL(idPath)
+	if err := hardenFileACL(idPath); err != nil {
+		return nil, fmt.Errorf("wallet: harden ACL on %s: %w", idPath, err)
+	}
 	return priv, nil
 }
 
@@ -114,7 +89,9 @@ func loadIdentityFile(idPath string) (*ec.PrivateKey, error) {
 		return nil, fmt.Errorf("wallet: read %s: %w", idPath, err)
 	}
 	defer clear(raw)
-	_ = hardenFileACL(idPath)
+	if err := hardenFileACL(idPath); err != nil {
+		return nil, fmt.Errorf("wallet: harden ACL on %s: %w", idPath, err)
+	}
 	var f identityFile
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return nil, fmt.Errorf("wallet: parse %s: %w", idPath, err)
@@ -126,20 +103,7 @@ func loadIdentityFile(idPath string) (*ec.PrivateKey, error) {
 		}
 		return priv, nil
 	}
-	if f.RootKeyHex != "" {
-		keyBytes, hErr := hex.DecodeString(f.RootKeyHex)
-		if hErr != nil || len(keyBytes) != 32 {
-			clear(keyBytes)
-			return nil, fmt.Errorf("wallet: invalid rootKeyHex in %s", idPath)
-		}
-		priv, _ := ec.PrivateKeyFromBytes(keyBytes)
-		clear(keyBytes)
-		if priv == nil {
-			return nil, fmt.Errorf("wallet: invalid root key in %s", idPath)
-		}
-		return priv, nil
-	}
-	return nil, fmt.Errorf("wallet: %s missing wif/rootKeyHex", idPath)
+	return nil, fmt.Errorf("wallet: %s missing wif", idPath)
 }
 
 // openPureGoGORM opens a pure-Go modernc.org/sqlite writer connection (MaxOpenConns=1 for
@@ -173,6 +137,12 @@ func openPureGoGORM(dbPath string, inMemory bool) (*sql.DB, *sql.DB, *gorm.DB, e
 	if err := sqlDB.Ping(); err != nil {
 		_ = sqlDB.Close()
 		return nil, nil, nil, fmt.Errorf("wallet: ping modernc sqlite: %w", err)
+	}
+	if !isMem {
+		if err := hardenFileACL(dbPath); err != nil {
+			_ = sqlDB.Close()
+			return nil, nil, nil, fmt.Errorf("wallet: harden ACL on %s: %w", dbPath, err)
+		}
 	}
 
 	gormDB, err := gorm.Open(sqlite.Dialector{

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/kryptokrates/nektar/internal/server"
 )
 
 type lockFileRecord struct {
@@ -35,11 +37,20 @@ func acquireInstanceLock(dataDir, listenAddr string) (func(), error) {
 			_ = json.Unmarshal(raw, &prev)
 		}
 		_ = f.Close()
+		if prev.PID <= 0 {
+			if raw, dErr := os.ReadFile(server.DaemonInfoPath(dataDir)); dErr == nil {
+				var dInfo server.DaemonInfo
+				if json.Unmarshal(raw, &dInfo) == nil && dInfo.PID > 0 {
+					prev.PID = dInfo.PID
+					prev.Listen = dInfo.URL
+				}
+			}
+		}
 		if prev.PID > 0 {
-			return nil, fmt.Errorf("nektar: another daemon (pid=%d, listen=%s) is already running for %s — connect with `nektar mcp` or `nektar open`, or stop pid %d first",
+			return nil, fmt.Errorf("nektar: another daemon (pid=%d, listen=%s) is already running for %s — connect with `nektar mcp` or `nektar open`, or stop it with `nektar stop` (pid %d)",
 				prev.PID, prev.Listen, dataDir, prev.PID)
 		}
-		return nil, fmt.Errorf("nektar: another instance already holds %s (%w)", lockPath, err)
+		return nil, fmt.Errorf("nektar: another instance already holds %s — connect with `nektar mcp` or `nektar open`, or stop it with `nektar stop` (%w)", lockPath, err)
 	}
 
 	rec := lockFileRecord{

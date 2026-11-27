@@ -12,6 +12,176 @@ export type FeedFragment = {
   settled?: boolean
   tainted?: boolean
   createdAt: number
+  path?: string
+  mediaType?: string
+  chirpUrl?: string
+  mpeRoot?: string
+  commitHash?: string
+}
+
+export type RepoAnchorSummary = {
+  n: number
+  size: number
+  txid: string
+  R: string
+  Rp: string
+  settled: boolean
+  blockHeight: number
+  createdAt: number
+}
+
+export type RepoTag = {
+  repo: string
+  tag: string
+  commitHash: string
+  anchorTxid?: string
+  anchorN: number
+  message?: string
+  authorPub?: string
+  signature?: string
+  createdAt: number
+}
+
+export type UnifiedDiffLine = {
+  op: ' ' | '+' | '-' | string
+  text: string
+}
+
+export type UnifiedFileDiff = {
+  status: 'added' | 'modified' | 'deleted' | string
+  path: string
+  binary?: boolean
+  additions: number
+  deletions: number
+  lines?: UnifiedDiffLine[]
+}
+
+export type BlameLine = {
+  lineNo: number
+  text: string
+  commitHash: string
+  authorPub?: string
+  modelId?: string
+  timestamp: number
+  anchorTxid?: string
+  anchorN: number
+}
+
+export type MergeConflict = {
+  path: string
+  baseText?: string
+  oursText?: string
+  theirsText?: string
+  binary?: boolean
+}
+
+export type CapsuleVerifyReport = {
+  ok: boolean
+  repo: string
+  branch: string
+  headCommit: string
+  commitsVerified: number
+  treesVerified: number
+  blobsVerified: number
+  anchorsVerified: number
+  settledAnchors: number
+  genesisShardId?: string
+  reason?: string
+}
+
+export type TreeDiffEntry = {
+  kind: 'added' | 'modified' | 'deleted' | string
+  path: string
+  oldBlobHash?: string
+  newBlobHash?: string
+}
+
+export type CapsuleInspectResult = {
+  repo: string
+  branch: string
+  genesisPub?: string
+  genesisShardId?: string
+  ownerPub?: string
+  headCommit?: string
+  exportedAt: number
+  verification: CapsuleVerifyReport
+  commits: RepoCommit[]
+  tree?: { treeHash?: string; entries?: RepoTreeEntry[] }
+  blobs?: Record<string, RepoBlob>
+  anchors?: RepoAnchorSummary[]
+  localExists: boolean
+  diffVsLocal?: TreeDiffEntry[]
+}
+
+export type RepoSummary = {
+  repo: string
+  branch: string
+  branches: string[]
+  tags?: RepoTag[]
+  genesisPub?: string
+  genesisShardId?: string
+  headCommit?: string
+  commitCount: number
+  fileCount: number
+  fragmentCount: number
+  anchorCount: number
+  settledAnchors: number
+  headAnchorTxid?: string
+  headAnchorN: number
+  updatedAt: number
+  latestMessage?: string
+  anchors?: RepoAnchorSummary[]
+}
+
+export type RepoParentRef = {
+  commitHash: string
+  anchorTxid?: string
+  anchorVout?: number
+  repoGenesis?: string
+}
+
+export type RepoCommit = {
+  v: number
+  commitHash: string
+  repo: string
+  branch: string
+  seq?: number
+  parents?: RepoParentRef[]
+  treeHash: string
+  mpeRoot: string
+  authorPub: string
+  modelId: string
+  policyCommit?: string
+  message: string
+  timestamp: number
+  signature: string
+  anchorTxid?: string
+  anchorN: number
+  fragmentLeaf?: string
+}
+
+export type RepoTreeEntry = {
+  mode: string
+  path: string
+  blobHash: string
+  mediaType: string
+  size: number
+  contentSha256: string
+  chirpUrl?: string
+  encrypted?: boolean
+}
+
+export type RepoBlob = {
+  blobHash: string
+  path: string
+  mediaType: string
+  size: number
+  contentSha256: string
+  inline?: string
+  chirpUrl?: string
+  encrypted?: boolean
+  borgGroup?: string
+  borgEpoch?: number
 }
 
 export type Receipt = {
@@ -235,7 +405,8 @@ export type State = {
     payments: string
   }
   receipts: { count: number; earned: number; earned24h: number; amounts: number[]; list: Receipt[] }
-  memory: { shards: number; records: number; anchored: number; unproven: number; coverage: number; prover: string }
+  memory: { shards: number; repos?: number; records: number; anchored: number; unproven: number; coverage: number; prover: string }
+  repos?: RepoSummary[]
   feed?: FeedFragment[]
   ai?: AIStatus | null
   market: ListedShard[]

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"math/big"
 	"strings"
 	"sync"
 	"testing"
@@ -12,7 +11,6 @@ import (
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/lightwebinc/bcommon/headers"
-	"github.com/lightwebinc/bcommon/testchain"
 
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
@@ -230,7 +228,6 @@ func TestWitnessedTrackerQuorumPrevLinkageReorgAndMTP(t *testing.T) {
 	if _, err := wt.HeaderAt(ctx, 12); !errors.Is(err, ErrHeaderDisagreement) {
 		t.Fatalf("expected ErrHeaderDisagreement on conflicting witnesses, got %v", err)
 	}
-	_ = big.NewInt(0)
 }
 
 func TestVerifyCounterpartyPaymentBEEFStrictSPVCapsAndConflictWatch(t *testing.T) {
@@ -352,6 +349,4 @@ func TestVerifyCounterpartyPaymentBEEFStrictSPVCapsAndConflictWatch(t *testing.T
 	if exp != 0 || cnt != 0 {
 		t.Fatalf("expected exposure=0 count=0 after MarkSettled, got %d/%d", exp, cnt)
 	}
-	_ = strings.TrimSpace("")
-	_ = testchain.Maturity
 }

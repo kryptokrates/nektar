@@ -20,7 +20,7 @@ func TestFragmentRoundtripAndMerkle(t *testing.T) {
 		Provenance: p,
 		Ciphertext: []byte{0xaa, 0xbb, 0xcc},
 	}
-	f.HDP = ComputeHDP(f.Data, f.Provenance)
+	f.HDP = ComputeHDPV2(f.Data, f.Provenance)
 
 	enc := SerializeFragment(f)
 	dec, err := ParseFragment(enc)
@@ -38,7 +38,7 @@ func TestFragmentRoundtripAndMerkle(t *testing.T) {
 	for count := 1; count <= 17; count++ {
 		leaves := make([][]byte, count)
 		for i := range count {
-			lf := ComputeLeaf(Fragment{
+			lf := ComputeLeafV2(Fragment{
 				Data:       []byte{byte(i), byte(count)},
 				Provenance: Provenance{Source: "s", Time: int64(i), ModelID: "m"},
 			})
@@ -71,7 +71,7 @@ func TestCanonicalJSONAndChainRp(t *testing.T) {
 	if string(a) != `{"a":{"y":"hi","z":1},"b":2}` {
 		t.Fatalf("unexpected canonical json: %s", string(a))
 	}
-	rp0 := ChainRp(Zero32, SHA256([]byte("r0")), 3)
+	rp0 := ChainRp(Zero32Bytes(), SHA256([]byte("r0")), 3)
 	rp1 := ChainRp(rp0, SHA256([]byte("r1")), 5)
 	if len(rp0) != 32 || len(rp1) != 32 || EqualBytes(rp0, rp1) {
 		t.Fatalf("bad chained roots: %s / %s", hex.EncodeToString(rp0), hex.EncodeToString(rp1))

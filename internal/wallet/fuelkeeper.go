@@ -184,11 +184,13 @@ func (f *FuelKeeper) WarmFuel(ctx context.Context, targetCount int, _ uint64) (i
 				if err := f.waitSpendGuardInterval(ctx); err != nil {
 					return 0, err
 				}
+				f.engine.actionMu.Lock()
 				_, rErr := f.engine.tb.FanOutFuel(withExternalSpend(ctx, 0), wdk.ShapedChange{
 					Basket:   BasketReserve,
 					Count:    uint64(chunks),
 					Satoshis: primitives.SatoshiValue(chunkSats),
 				}, f.engine.cfg.Originator)
+				f.engine.actionMu.Unlock()
 				if rErr != nil {
 					return 0, fmt.Errorf("wallet fuelkeeper: fan-out reserve: %w", rErr)
 				}
@@ -235,11 +237,13 @@ func (f *FuelKeeper) WarmFuel(ctx context.Context, targetCount int, _ uint64) (i
 		if err := f.waitSpendGuardInterval(ctx); err != nil {
 			return minted, err
 		}
+		f.engine.actionMu.Lock()
 		_, lErr := f.engine.tb.FanOutFuel(withExternalSpend(ctx, 0), wdk.ShapedChange{
 			Basket:   BasketFuel,
 			Count:    uint64(batch),
 			Satoshis: primitives.SatoshiValue(fuelSats),
 		}, f.engine.cfg.Originator)
+		f.engine.actionMu.Unlock()
 		if lErr != nil {
 			if minted > 0 {
 				return minted, lErr

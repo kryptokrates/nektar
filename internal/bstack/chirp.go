@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/lightwebinc/bcommon/chirp"
@@ -39,9 +40,10 @@ func DefaultChirpLimits() chirp.Limits {
 
 // FileObjectStore stores CHIRP objects on disk under <dir>/chirp/<sha256hex>.
 type FileObjectStore struct {
-	mu       sync.RWMutex
-	dir      string
-	maxBytes int64
+	mu        sync.RWMutex
+	dir       string
+	maxBytes  int64
+	usedBytes int64
 }
 
 func NewFileObjectStore(dir string) (*FileObjectStore, error) {
@@ -49,7 +51,18 @@ func NewFileObjectStore(dir string) (*FileObjectStore, error) {
 	if err := os.MkdirAll(cdir, 0o750); err != nil {
 		return nil, err
 	}
-	return &FileObjectStore{dir: cdir, maxBytes: DefaultChirpStoreQuotaBytes}, nil
+	var used int64
+	if entries, err := os.ReadDir(cdir); err == nil {
+		for _, ent := range entries {
+			if strings.HasSuffix(ent.Name(), ".tmp") {
+				continue
+			}
+			if info, iErr := ent.Info(); iErr == nil && info.Mode().IsRegular() {
+				used += info.Size()
+			}
+		}
+	}
+	return &FileObjectStore{dir: cdir, maxBytes: DefaultChirpStoreQuotaBytes, usedBytes: used}, nil
 }
 
 func (s *FileObjectStore) PutObject(hash [32]byte, data []byte) error {
@@ -65,24 +78,19 @@ func (s *FileObjectStore) PutObject(hash [32]byte, data []byte) error {
 	if _, err := os.Stat(p); err == nil {
 		return nil
 	}
-	if s.maxBytes > 0 {
-		var used int64
-		if entries, err := os.ReadDir(s.dir); err == nil {
-			for _, ent := range entries {
-				if info, iErr := ent.Info(); iErr == nil && info.Mode().IsRegular() {
-					used += info.Size()
-				}
-			}
-		}
-		if used+int64(len(data)) > s.maxBytes {
-			return fmt.Errorf("chirp: object store quota exceeded (%d + %d > %d)", used, len(data), s.maxBytes)
-		}
+	if s.maxBytes > 0 && s.usedBytes+int64(len(data)) > s.maxBytes {
+		return fmt.Errorf("chirp: object store quota exceeded (%d + %d > %d)", s.usedBytes, len(data), s.maxBytes)
 	}
 	tmp := p + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o640); err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	if err := os.Rename(tmp, p); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	s.usedBytes += int64(len(data))
+	return nil
 }
 
 func (s *FileObjectStore) GetObject(hash [32]byte) ([]byte, error) {
@@ -97,6 +105,29 @@ func (s *FileObjectStore) GetObject(hash [32]byte) ([]byte, error) {
 		return nil, fmt.Errorf("chirp: stored object size %d exceeds max %d", info.Size(), MaxChirpObjectBytes)
 	}
 	return os.ReadFile(p)
+}
+
+// DeleteObject removes hash from disk and updates quota accounting (used by Forget() shredding).
+func (s *FileObjectStore) DeleteObject(hash [32]byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := filepath.Join(s.dir, hex.EncodeToString(hash[:]))
+	info, err := os.Stat(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if s.usedBytes >= info.Size() {
+		s.usedBytes -= info.Size()
+	} else {
+		s.usedBytes = 0
+	}
+	return nil
 }
 
 // MemoryObjectStore is an in-memory CHIRP object store for fast tests.
@@ -136,11 +167,39 @@ func (s *MemoryObjectStore) GetObject(hash [32]byte) ([]byte, error) {
 	return cp, nil
 }
 
-// StoreChirp splits content into a canonical BRC-167 CHIRP Merkle tree (bcommon/chirp),
-// writes blobs -> branches -> root bottom-up, and returns the chirp:// URL and root hash.
-func StoreChirp(store ObjectStore, content []byte) (string, [32]byte, error) {
-	u, root, _, err := StoreChirpWithHashes(store, content)
-	return u, root, err
+// DeleteObject removes hash from the in-memory store (used by Forget() shredding).
+func (s *MemoryObjectStore) DeleteObject(hash [32]byte) error {
+	s.mu.Lock()
+	delete(s.objs, hash)
+	s.mu.Unlock()
+	return nil
+}
+
+// ObjectDeleter is an optional extension implemented by CHIRP stores that support shredding objects.
+type ObjectDeleter interface {
+	DeleteObject(hash [32]byte) error
+}
+
+// DeleteChirp collects all DAG hashes referenced by url and deletes them from store if it implements ObjectDeleter.
+func DeleteChirp(store ObjectStore, url string) ([][32]byte, error) {
+	if store == nil || strings.TrimSpace(url) == "" {
+		return nil, nil
+	}
+	hashes, err := CollectChirpHashes(store, url)
+	if err != nil {
+		// Fall back to deleting at least the root hash if the closure is already partial.
+		if rootHash, pErr := chirp.ParseURL(url); pErr == nil {
+			hashes = [][32]byte{rootHash}
+		} else {
+			return nil, err
+		}
+	}
+	if del, ok := store.(ObjectDeleter); ok {
+		for _, h := range hashes {
+			_ = del.DeleteObject(h)
+		}
+	}
+	return hashes, nil
 }
 
 // StoreChirpWithHashes stores a CHIRP closure and returns every object hash in the DAG

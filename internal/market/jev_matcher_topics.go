@@ -11,16 +11,6 @@ import (
 	"github.com/kryptokrates/nektar/internal/jev"
 )
 
-// ClassifyTopicCluster classifies a free-form user topic (and optional short hint)
-// into its top canonical cluster in a single System One forward pass.
-func (m *JevMatcher) ClassifyTopicCluster(ctx context.Context, topic, hint string) (string, float64, bool) {
-	soft, ok := m.ClassifyTopicSoft(ctx, topic, hint)
-	if !ok || len(soft) == 0 {
-		return "", 0, false
-	}
-	return soft[0].Cluster, soft[0].Confidence, true
-}
-
 // ClassifyTopicSoft returns a soft multi-membership probability distribution over
 // CanonicalClusters (all clusters with probability >= softClusterMinConfidence, up to top 3)
 // in ONE System One forward pass, avoiding rigid single-parent hierarchies.

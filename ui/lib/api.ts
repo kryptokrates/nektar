@@ -1,4 +1,4 @@
-export type OperatorPrompter = (reason: string) => Promise<string | null>
+type OperatorPrompter = (reason: string) => Promise<string | null>
 
 let prompter: OperatorPrompter | null = null
 
@@ -6,7 +6,7 @@ export function registerOperatorPrompter(fn: OperatorPrompter) {
   prompter = fn
 }
 
-export function getStoredOperatorToken(): string | undefined {
+function getStoredOperatorToken(): string | undefined {
   try {
     return sessionStorage.getItem('nektar-operator-token') ?? undefined
   } catch {
@@ -14,7 +14,7 @@ export function getStoredOperatorToken(): string | undefined {
   }
 }
 
-export function setStoredOperatorToken(tok: string) {
+function setStoredOperatorToken(tok: string) {
   try {
     sessionStorage.setItem('nektar-operator-token', tok)
   } catch {}
@@ -45,6 +45,18 @@ export async function operatorFetch(
     res = await exec(tok)
   }
   return res
+}
+
+export async function operatorJSON<T = Record<string, unknown>>(
+  method: string,
+  url: string,
+  payload?: Record<string, unknown>,
+  reason = 'Operator authorization required'
+): Promise<{ ok: boolean; status: number; data: T & { error?: string } } | null> {
+  const res = await operatorFetch(method, url, payload, reason)
+  if (!res) return null
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string }
+  return { ok: res.ok, status: res.status, data }
 }
 
 export async function postJSON<T = Record<string, unknown>>(

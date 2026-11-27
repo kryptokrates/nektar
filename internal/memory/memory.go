@@ -3,21 +3,27 @@ package memory
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
-	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/memrepo"
 	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/reasoning"
 	"github.com/kryptokrates/nektar/internal/store"
 )
+
+type cachedGoGitProjection struct {
+	proj    *memrepo.GoGitProjection
+	commits []memrepo.CommitObject
+	trees   map[string]memrepo.TreeObject
+	blobs   map[string]memrepo.BlobObject
+}
 
 const (
 	ReceiptsShard = "__receipts__"
@@ -74,9 +80,13 @@ type Config struct {
 //   - Google Mangle Datalog grounding + AORG + nektarr1 receipts (internal/reasoning).
 type Service struct {
 	mu            sync.RWMutex
+	keyMu         sync.Mutex
+	hookWG        sync.WaitGroup
 	shardLocks    [64]sync.Mutex
 	publicChirpMu sync.RWMutex
 	publicChirps  map[[32]byte]struct{}
+	projCacheMu   sync.RWMutex
+	projCache     map[string]*cachedGoGitProjection
 	db            *store.DB
 	port          *chain.Port
 	groups        *bstack.GroupRegistry
@@ -86,7 +96,6 @@ type Service struct {
 	rules         []string
 	verifyBaseURL string
 	modelID       reasoning.ModelIdentity
-	aorg          *reasoning.AORGraph
 	onRemember    func(shard string)
 }
 
@@ -128,14 +137,6 @@ func New(db *store.DB, port *chain.Port, groups *bstack.GroupRegistry, objects b
 			rules = savedRules
 		}
 	}
-	aorg := reasoning.NewAORGraph(rules)
-	var aorgSnap reasoning.AORGSnapshot
-	if ok, _ := db.GetJSON("aorg_state_v1", &aorgSnap); ok && len(aorgSnap.Vertices) > 0 {
-		aorg.Restore(aorgSnap)
-		if len(rules) > 0 {
-			aorg.AddRules(rules...)
-		}
-	}
 	baseURL := strings.TrimRight(cfg.VerifyBaseURL, "/")
 	if baseURL == "" {
 		baseURL = "http://127.0.0.1:18420/v1/verify"
@@ -147,8 +148,19 @@ func New(db *store.DB, port *chain.Port, groups *bstack.GroupRegistry, objects b
 	if err := groups.SetPersistence(&dbGroupStore{db: db, port: port}); err != nil {
 		return nil, fmt.Errorf("memory: load borg groups: %w", err)
 	}
-	return &Service{
-		publicChirps:  make(map[[32]byte]struct{}),
+	pubChirps := make(map[[32]byte]struct{})
+	var savedPub []string
+	if ok, _ := db.GetJSON("public_chirp_hashes_v1", &savedPub); ok {
+		for _, hx := range savedPub {
+			if b, err := hex.DecodeString(strings.TrimSpace(hx)); err == nil && len(b) == 32 {
+				var arr [32]byte
+				copy(arr[:], b)
+				pubChirps[arr] = struct{}{}
+			}
+		}
+	}
+	svc := &Service{
+		publicChirps:  pubChirps,
 		db:            db,
 		port:          port,
 		groups:        groups,
@@ -158,17 +170,67 @@ func New(db *store.DB, port *chain.Port, groups *bstack.GroupRegistry, objects b
 		rules:         rules,
 		verifyBaseURL: baseURL,
 		modelID:       mid,
-		aorg:          aorg,
-	}, nil
+	}
+	if err := svc.backfillLegacyRepos(context.Background()); err != nil {
+		return nil, fmt.Errorf("memory: backfill legacy repos: %w", err)
+	}
+	return svc, nil
 }
 
-// AllowPublicChirpHashes registers CHIRP DAG object hashes that may be fetched unauthenticated via /v1/chirp/{hash}.
+// AllowPublicChirpHashes registers CHIRP DAG object hashes that may be fetched unauthenticated via /v1/chirp/{hash}
+// and persists the allowlist in SQLite so intentionally published packs survive daemon restarts.
 func (s *Service) AllowPublicChirpHashes(hashes ...[32]byte) {
+	if len(hashes) == 0 {
+		return
+	}
 	s.publicChirpMu.Lock()
+	added := false
 	for _, h := range hashes {
-		s.publicChirps[h] = struct{}{}
+		if _, exists := s.publicChirps[h]; !exists {
+			s.publicChirps[h] = struct{}{}
+			added = true
+		}
+	}
+	var persist []string
+	if added && s.db != nil {
+		persist = make([]string, 0, len(s.publicChirps))
+		for h := range s.publicChirps {
+			persist = append(persist, hex.EncodeToString(h[:]))
+		}
+		sort.Strings(persist)
 	}
 	s.publicChirpMu.Unlock()
+	if added && s.db != nil {
+		_ = s.db.SetJSON("public_chirp_hashes_v1", persist)
+	}
+}
+
+// RevokePublicChirpHashes removes CHIRP DAG object hashes from the public unauthenticated allowlist
+// and updates SQLite persistence (called when shredding forgotten fragments).
+func (s *Service) RevokePublicChirpHashes(hashes ...[32]byte) {
+	if len(hashes) == 0 {
+		return
+	}
+	s.publicChirpMu.Lock()
+	removed := false
+	for _, h := range hashes {
+		if _, exists := s.publicChirps[h]; exists {
+			delete(s.publicChirps, h)
+			removed = true
+		}
+	}
+	var persist []string
+	if removed && s.db != nil {
+		persist = make([]string, 0, len(s.publicChirps))
+		for h := range s.publicChirps {
+			persist = append(persist, hex.EncodeToString(h[:]))
+		}
+		sort.Strings(persist)
+	}
+	s.publicChirpMu.Unlock()
+	if removed && s.db != nil {
+		_ = s.db.SetJSON("public_chirp_hashes_v1", persist)
+	}
 }
 
 // IsPublicChirp reports whether hash h belongs to an intentionally published public CHIRP closure.
@@ -195,11 +257,31 @@ func (s *Service) SetOnRemember(fn func(shard string)) {
 	s.mu.Unlock()
 }
 
+func (s *Service) notifyRemember(shard string) {
+	if IsSystemShard(shard) {
+		return
+	}
+	s.mu.RLock()
+	hook := s.onRemember
+	s.mu.RUnlock()
+	if hook != nil {
+		go hook(shard)
+	}
+}
+
+// Close waits for all in-flight asynchronous onRemember hooks to finish draining.
+func (s *Service) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.hookWG.Wait()
+	return nil
+}
+
 func (s *Service) DB() *store.DB                 { return s.db }
 func (s *Service) Chain() *chain.Port            { return s.port }
 func (s *Service) Groups() *bstack.GroupRegistry { return s.groups }
 func (s *Service) Objects() bstack.ObjectStore   { return s.objects }
-func (s *Service) AORG() *reasoning.AORGraph     { return s.aorg }
 func (s *Service) PolicyCommit() *policy.PolicyCommitment {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -207,37 +289,35 @@ func (s *Service) PolicyCommit() *policy.PolicyCommitment {
 }
 
 // SetPolicy updates the active Cedar policy set atomically and persists it to SQLite.
+// Fails closed if SQLite persistence fails so RAM and disk never diverge.
 func (s *Service) SetPolicy(name, text string) (*policy.PolicyCommitment, error) {
 	pc, err := policy.Canonicalize(name, text)
 	if err != nil {
 		return nil, err
 	}
+	if err := s.db.SetJSON("cedar_policy_v1", map[string]string{"name": name, "text": text}); err != nil {
+		return nil, fmt.Errorf("memory: persist cedar policy: %w", err)
+	}
 	s.mu.Lock()
 	s.policyText = text
 	s.policyCommit = pc
 	s.mu.Unlock()
-	_ = s.db.SetJSON("cedar_policy_v1", map[string]string{"name": name, "text": text})
 	return pc, nil
 }
 
-// AddRules appends Mangle Datalog rules without wiping existing AORG vertices, and persists rules to SQLite.
-func (s *Service) AddRules(rules ...string) {
+// AddRules appends Mangle Datalog rules and persists rules to SQLite.
+// Fails closed if SQLite persistence fails so RAM and disk never diverge.
+func (s *Service) AddRules(rules ...string) error {
 	s.mu.Lock()
-	s.rules = append(s.rules, rules...)
-	allRules := append([]string(nil), s.rules...)
-	s.aorg.AddRules(rules...)
+	nextRules := append(append([]string(nil), s.rules...), rules...)
 	s.mu.Unlock()
-	_ = s.db.SetJSON("mangle_rules_v1", allRules)
-}
-
-// AppendAORGVertex appends a vertex to the AORGraph and persists the graph snapshot to SQLite.
-func (s *Service) AppendAORGVertex(v reasoning.Vertex, premises []string, ruleTag string) (reasoning.Vertex, error) {
-	out, err := s.aorg.Append(v, premises, ruleTag)
-	if err != nil {
-		return reasoning.Vertex{}, err
+	if err := s.db.SetJSON("mangle_rules_v1", nextRules); err != nil {
+		return fmt.Errorf("memory: persist mangle rules: %w", err)
 	}
-	_ = s.db.SetJSON("aorg_state_v1", s.aorg.Snapshot())
-	return out, nil
+	s.mu.Lock()
+	s.rules = nextRules
+	s.mu.Unlock()
+	return nil
 }
 
 // AuthorizeAction evaluates the active Cedar policy for any action ("read"|"write"|"disclose"|"rotate"|"revoke").
@@ -246,211 +326,4 @@ func (s *Service) AuthorizeAction(principal policy.Principal, action string, res
 	polText := s.policyText
 	s.mu.RUnlock()
 	return policy.Authorize(polText, principal, action, resource)
-}
-
-// RememberInput describes a fragment to persist into a shard.
-type RememberInput struct {
-	Shard      string            `json:"shard"`
-	Text       string            `json:"text"`
-	Source     string            `json:"source,omitempty"`
-	Level      int               `json:"level,omitempty"`
-	Class      string            `json:"class,omitempty"`
-	BorgGroup  string            `json:"borgGroup,omitempty"` // if set, seals via BRC-369 keyed under group epoch
-	CallerPub  string            `json:"callerPub,omitempty"`
-	Principal  *policy.Principal `json:"principal,omitempty"`
-	Supersedes int64             `json:"supersedes,omitempty"`
-	Tainted    bool              `json:"tainted,omitempty"`
-	AutoAnchor bool              `json:"autoAnchor,omitempty"`
-	Extra      map[string]string `json:"extra,omitempty"`
-}
-
-// RememberResult summarizes a persisted fragment.
-type RememberResult struct {
-	Shard            string   `json:"shard"`
-	Seq              int64    `json:"seq"`
-	HDP              string   `json:"hdp"`
-	Leaf             string   `json:"leaf"`
-	Encrypted        bool     `json:"encrypted"`
-	BorgGroup        string   `json:"borgGroup,omitempty"`
-	BorgEpoch        int64    `json:"borgEpoch,omitempty"`
-	Dedup            bool     `json:"dedup"`
-	AnchorTxID       string   `json:"anchorTxid,omitempty"`
-	ImpactedReceipts []string `json:"impactedReceipts,omitempty"`
-}
-
-// Remember commits a provenance-signed fragment to a shard, optionally BRC-369 encrypting it
-// to a Borg group epoch and/or anchoring immediately on-chain.
-func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResult, error) {
-	if strings.TrimSpace(in.Shard) == "" {
-		in.Shard = "default"
-	}
-	if err := ValidateShardName(in.Shard, false); err != nil {
-		return nil, err
-	}
-	if in.Text == "" {
-		return nil, errors.New("memory: text is required")
-	}
-	// Cedar write-gate enforcement (default owner level 100 when Principal omitted).
-	writePrincipal := policy.Principal{Type: "Agent", ID: "owner", Level: 100}
-	if in.Principal != nil && in.Principal.ID != "" {
-		writePrincipal = *in.Principal
-	}
-	if dec, err := s.AuthorizeAction(writePrincipal, "write", policy.Resource{
-		Type:  "Fragment",
-		ID:    in.Shard + "#new",
-		Level: int64(in.Level),
-		Shard: in.Shard,
-		Class: in.Class,
-	}); err != nil || !dec.Allow {
-		if err != nil {
-			return nil, fmt.Errorf("memory: cedar write policy error: %w", err)
-		}
-		return nil, fmt.Errorf("memory: cedar policy denied write to shard %q (level %d > principal level %d)", in.Shard, in.Level, writePrincipal.Level)
-	}
-	src := in.Source
-	if src == "" {
-		src = "agent"
-	}
-	now := time.Now().Unix()
-	prov := core.Provenance{
-		Source:  src,
-		Time:    now,
-		ModelID: s.modelID.Provider + "/" + s.modelID.Release,
-	}
-	data := []byte(in.Text)
-
-	// Provenance signature via BRC-43 wallet key (zero raw key exposure).
-	sigBytes, err := s.port.SignDigest(ctx, core.ProvenanceDigest(data, prov))
-	if err != nil {
-		return nil, fmt.Errorf("memory: sign provenance: %w", err)
-	}
-	prov.Signature = sigBytes
-	provBytes := core.SerializeProvenance(prov)
-	hdp := core.ComputeHDPV2(data, prov)
-
-	rec := store.FragmentRecord{
-		Shard:      in.Shard,
-		HDP:        core.ToHex(hdp),
-		Data:       data,
-		Provenance: provBytes,
-		Level:      in.Level,
-		Class:      in.Class,
-		Supersedes: in.Supersedes,
-		Tainted:    in.Tainted,
-		CreatedAt:  now,
-	}
-
-	if in.BorgGroup != "" {
-		caller := in.CallerPub
-		if caller == "" {
-			caller = s.port.IdentityPubHex()
-		}
-		grp, ok := s.groups.GetGroup(in.BorgGroup)
-		if !ok {
-			grp, err = s.groups.CreateGroup(in.BorgGroup, in.BorgGroup, caller)
-			if err != nil {
-				return nil, err
-			}
-		}
-		epoch := grp.CurrentEpoch
-		epochSym, err := s.groups.EpochKey(in.BorgGroup, caller, epoch)
-		if err != nil {
-			return nil, fmt.Errorf("memory: borg encrypt access: %w", err)
-		}
-		defer core.Zero32Array(&epochSym)
-		var contentID [32]byte
-		copy(contentID[:], hdp)
-		env, _, err := bstack.SealForEpoch(in.BorgGroup, epoch, epochSym, contentID, data)
-		if err != nil {
-			return nil, err
-		}
-		metaBytes, err := json.Marshal(env)
-		if err != nil {
-			return nil, err
-		}
-		rec.Data = nil // never store plaintext alongside BRC-369 ciphertext
-		rec.Ciphertext, err = hex.DecodeString(env.Ciphertext)
-		if err != nil {
-			return nil, fmt.Errorf("memory: decode sealed ciphertext: %w", err)
-		}
-		rec.KeyedMeta = metaBytes
-		rec.BorgGroup = in.BorgGroup
-		rec.BorgEpoch = epoch
-	}
-
-	// F-11: compute leaf AFTER BorgGroup sealing so H(E) commits to the actual BRC-369 ciphertext!
-	frag := core.Fragment{Data: data, Provenance: prov, HDP: hdp, Ciphertext: rec.Ciphertext}
-	leaf := core.ComputeLeaf(frag)
-	rec.Leaf = core.ToHex(leaf)
-
-	stored, dedup, err := s.db.AppendFragment(rec)
-	if err != nil {
-		return nil, err
-	}
-
-	var impacted []string
-	if in.Supersedes > 0 && !dedup {
-		impacted, _ = s.OnRevision(ctx, in.Shard, in.Supersedes)
-	}
-
-	var anchorTxID string
-	if in.AutoAnchor {
-		if a, err := s.AnchorShard(ctx, in.Shard); err == nil && a != nil {
-			anchorTxID = a.TxID
-		} else if err != nil {
-			return nil, err
-		}
-	} else if !dedup && !IsSystemShard(in.Shard) {
-		s.mu.RLock()
-		hook := s.onRemember
-		s.mu.RUnlock()
-		if hook != nil {
-			go hook(in.Shard)
-		}
-	}
-
-	return &RememberResult{
-		Shard:            stored.Shard,
-		Seq:              stored.Seq,
-		HDP:              stored.HDP,
-		Leaf:             stored.Leaf,
-		Encrypted:        stored.BorgGroup != "",
-		BorgGroup:        stored.BorgGroup,
-		BorgEpoch:        stored.BorgEpoch,
-		Dedup:            dedup,
-		AnchorTxID:       anchorTxID,
-		ImpactedReceipts: impacted,
-	}, nil
-}
-
-// Forget shreds local plaintext/ciphertext of (shard, seq) while keeping the anchored commitment.
-func (s *Service) Forget(ctx context.Context, shard string, seq int64) error {
-	return s.ForgetAuthorized(ctx, shard, seq, policy.Principal{Type: "Agent", ID: "owner", Level: 100})
-}
-
-// ForgetAuthorized checks shard validity and Cedar write authorization before shredding (shard, seq).
-func (s *Service) ForgetAuthorized(_ context.Context, shard string, seq int64, principal policy.Principal) error {
-	if err := ValidateShardName(shard, false); err != nil {
-		return err
-	}
-	rec, err := s.db.GetFragment(shard, seq)
-	if err != nil {
-		return err
-	}
-	if principal.ID == "" {
-		principal = policy.Principal{Type: "Agent", ID: "owner", Level: 100}
-	}
-	if dec, aErr := s.AuthorizeAction(principal, "write", policy.Resource{
-		Type:  "Fragment",
-		ID:    fmt.Sprintf("%s#%d", rec.Shard, rec.Seq),
-		Level: int64(rec.Level),
-		Shard: rec.Shard,
-		Class: rec.Class,
-	}); aErr != nil || !dec.Allow {
-		if aErr != nil {
-			return fmt.Errorf("memory: cedar forget policy error: %w", aErr)
-		}
-		return fmt.Errorf("memory: cedar policy denied forget on %s#%d (level %d > principal level %d)", rec.Shard, rec.Seq, rec.Level, principal.Level)
-	}
-	return s.db.ForgetFragment(shard, seq)
 }

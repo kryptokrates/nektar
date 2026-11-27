@@ -36,6 +36,7 @@ type oauthAccessToken struct {
 
 func (a *App) registerOAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource", a.handleOAuthProtectedResource)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", a.handleOAuthProtectedResource)
 	mux.HandleFunc("GET /.well-known/oauth-authorization-server", a.handleOAuthAuthServer)
 	mux.HandleFunc("POST /oauth/register", a.handleOAuthRegister)
 	mux.HandleFunc("GET /oauth/authorize", a.handleOAuthAuthorize)
@@ -269,7 +270,7 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 	authRequired := a.cfg.APIToken != "" || a.cfg.OperatorToken != ""
 	sessAuthed := !authRequired || a.tokenMatches(a.extractToken(r), false)
 
-	if r.Method == http.MethodGet {
+	renderForm := func(status int, errMsg string) {
 		var csrfRaw [16]byte
 		if _, err := rand.Read(csrfRaw[:]); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
@@ -286,7 +287,11 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 			MaxAge:   600,
 		})
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(status)
+		errBanner := ""
+		if errMsg != "" {
+			errBanner = fmt.Sprintf(`<div class="err">%s</div>`, html.EscapeString(errMsg))
+		}
 		tokenField := `<p style="color:#4cc26b">✓ Authenticated via active Nektar session</p>`
 		if !sessAuthed {
 			tokenField = `<label style="font-size:12.5px;color:#a89a8e">Nektar access token (NEKTAR_HTTP_TOKEN)</label><input type="password" name="token" required placeholder="paste token from startup banner">`
@@ -295,11 +300,13 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 <style>body{background:#120e0c;color:#ece7e4;font:15px/1.5 system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:16px}
 .box{background:#211b17;border:1px solid #3a2f28;border-radius:14px;padding:24px;max-width:420px;width:100%%}
 h1{font-size:18px;margin:0 0 8px;color:#f7991b}p{color:#a89a8e;font-size:13.5px}
+.err{background:rgba(220,38,38,.16);border:1px solid #dc2626;border-radius:8px;padding:10px 12px;color:#fca5a5;font-size:13px;margin:10px 0}
 input{width:100%%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid #3a2f28;background:#120e0c;color:#ece7e4;margin:10px 0 14px;font-family:ui-monospace,monospace}
 button{width:100%%;padding:11px;border:0;border-radius:8px;background:#f7991b;color:#221e1d;font-weight:700;cursor:pointer}</style></head>
 <body><form class="box" method="POST" action="/oauth/authorize">
 <h1>Connect %s</h1>
 <p>Allow this client to access your Nektar MCP memory tools at <code>%s</code>.</p>
+%s
 <input type="hidden" name="csrf_token" value="%s">
 <input type="hidden" name="client_id" value="%s">
 <input type="hidden" name="redirect_uri" value="%s">
@@ -309,9 +316,14 @@ button{width:100%%;padding:11px;border:0;border-radius:8px;background:#f7991b;co
 %s
 <button type="submit">Approve Connection</button></form></body></html>`,
 			html.EscapeString(client.ClientName), html.EscapeString(client.ClientName), html.EscapeString(redirectURI),
+			errBanner,
 			html.EscapeString(csrfTok),
 			html.EscapeString(clientID), html.EscapeString(redirectURI), html.EscapeString(state), html.EscapeString(challenge),
 			tokenField)
+	}
+
+	if r.Method == http.MethodGet {
+		renderForm(http.StatusOK, "")
 		return
 	}
 
@@ -335,7 +347,16 @@ button{width:100%%;padding:11px;border:0;border-radius:8px;background:#f7991b;co
 	presented := strings.TrimSpace(params["token"])
 	if !sessAuthed {
 		if presented == "" || !a.tokenMatches(presented, false) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "access_denied", "error_description": "invalid nektar token"})
+			if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/json") &&
+				!strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{
+					"error":             "access_denied",
+					"error_description": "invalid nektar token",
+					"hint":              "Paste the token from ~/.nektar/http-token or startup banner, or run 'nektar open' first.",
+				})
+				return
+			}
+			renderForm(http.StatusUnauthorized, "Invalid Nektar access token. Check ~/.nektar/http-token (or startup banner) and try again.")
 			return
 		}
 	}

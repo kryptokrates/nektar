@@ -24,7 +24,6 @@ func cmdDock(args []string) error {
 	fs := flag.NewFlagSet("dock", flag.ExitOnError)
 	target := fs.String("client", "auto", "Target client(s): auto|claude|claude-desktop|cursor|windsurf|vscode|zed|cline|continue|opencode|gemini|goose|codex|hermes|openclaw|proxy")
 	dry := fs.Bool("dry", false, "Preview changes without writing files")
-	_ = fs.Bool("write", true, "Write changes directly (default true; pass --dry to preview)")
 	uninstall := fs.Bool("uninstall", false, "Remove Nektar entries cleanly while leaving sibling configs untouched")
 	urlFlag := fs.String("url", "", "Override daemon HTTP base URL")
 	tokFlag := fs.String("token", "", "Override bearer token")
@@ -237,21 +236,38 @@ func cmdHook(args []string) error {
 	case "session-start":
 		if info, ok := detectDaemon(*dataDir, ""); ok {
 			if out, err := callLiveTool(info, "recall", map[string]any{"limit": 8}); err == nil {
-				b, _ := json.Marshal(out)
-				fmt.Printf("[nektar session-start memory] %s\n", string(b))
+				if txt := formatHookMemoryBullets("nektar session-start memory", out); txt != "" {
+					fmt.Print(txt)
+				}
 				return nil
 			}
 		}
+		dir := strings.TrimSpace(*dataDir)
+		if dir == "" {
+			dir = defaultDataDir()
+		}
+		releaseLock, lockErr := acquireInstanceLock(dir, "hook-session-start")
+		if lockErr != nil {
+			if *verbose {
+				fmt.Fprintf(os.Stderr, "[nektar session-start] skipped offline fallback (daemon lock busy): %v\n", lockErr)
+			}
+			return nil
+		}
+		defer releaseLock()
 		ctx := context.Background()
 		rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
 		if err != nil {
+			if *verbose {
+				fmt.Fprintf(os.Stderr, "[nektar session-start] offline open skipped: %v\n", err)
+			}
 			return nil
 		}
 		defer rt.closeFn()
 		_, _ = rt.mem.EnsureWelcome(ctx)
 		shards, items, _ := rt.mem.RecallAllShards(ctx, memory.RecallInput{Limit: 8})
-		b, _ := json.Marshal(map[string]any{"shards": shards, "items": items})
-		fmt.Printf("[nektar session-start memory] %s\n", string(b))
+		if txt := formatHookMemoryBullets("nektar session-start memory", map[string]any{"shards": shards, "items": items}); txt != "" {
+			fmt.Print(txt)
+		}
 		return nil
 
 	case "prefetch":
@@ -270,12 +286,34 @@ func cmdHook(args []string) error {
 		}
 		if info, ok := detectDaemon(*dataDir, ""); ok {
 			if out, err := callLiveTool(info, "recall", map[string]any{"query": q, "limit": 6}); err == nil {
-				b, _ := json.Marshal(out)
-				fmt.Printf("[nektar prefetch] %s\n", string(b))
+				if txt := formatHookMemoryBullets("nektar prefetch", out); txt != "" {
+					fmt.Print(txt)
+				}
 				return nil
 			}
-		} else if *verbose {
-			fmt.Fprintln(os.Stderr, "[nektar prefetch] no running daemon — start `nektar up`")
+		} else {
+			// Guarded offline fallback only when an existing SQLite DB is present and unlocked.
+			dir := strings.TrimSpace(*dataDir)
+			if dir == "" {
+				dir = defaultDataDir()
+			}
+			if _, sErr := os.Stat(dir + string(os.PathSeparator) + "nektar.sqlite"); sErr == nil {
+				if releaseLock, lockErr := acquireInstanceLock(dir, "hook-prefetch"); lockErr == nil {
+					ctx := context.Background()
+					if rt, rErr := openRuntime(ctx, "", *dataDir, DefaultLocalPort); rErr == nil {
+						shards, items, _ := rt.mem.RecallAllShards(ctx, memory.RecallInput{Query: q, Limit: 6})
+						rt.closeFn()
+						if txt := formatHookMemoryBullets("nektar prefetch", map[string]any{"shards": shards, "items": items}); txt != "" {
+							fmt.Print(txt)
+						}
+					}
+					releaseLock()
+					return nil
+				}
+			}
+			if *verbose {
+				fmt.Fprintln(os.Stderr, "[nektar prefetch] no running daemon — start `nektar up`")
+			}
 		}
 		return nil
 
@@ -368,4 +406,36 @@ func cmdHook(args []string) error {
 	default:
 		return fmt.Errorf("unknown hook subcommand %q (use session-start, prefetch, or verify-receipt)", sub)
 	}
+}
+
+// formatHookMemoryBullets renders recalled fragments as compact, model-friendly `[shard:seq]` bullet lines
+// (matching Hermes/OpenClaw ambient context framing) instead of dumping raw JSON blobs into prompt context.
+func formatHookMemoryBullets(header string, raw any) string {
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return ""
+	}
+	var parsed struct {
+		Items []struct {
+			Shard string `json:"shard"`
+			Seq   int64  `json:"seq"`
+			Text  string `json:"text"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(b, &parsed) != nil || len(parsed.Items) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "[%s — verified memory; recorded != true]\n", header)
+	for _, it := range parsed.Items {
+		txt := strings.Join(strings.Fields(strings.TrimSpace(it.Text)), " ")
+		if len(txt) > 220 {
+			txt = txt[:220] + "..."
+		}
+		if txt == "" {
+			continue
+		}
+		fmt.Fprintf(&sb, "- [%s:%d] %s\n", it.Shard, it.Seq, txt)
+	}
+	return sb.String()
 }

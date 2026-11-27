@@ -29,11 +29,6 @@ type MerkleTree struct {
 	Levels [][][]byte
 }
 
-// HashLeaf hashes a raw item as a double-SHA-256 Merkle leaf.
-func HashLeaf(item []byte) []byte {
-	return DSHA256(item)
-}
-
 // HashNode hashes a pair of sibling nodes: DSHA256(left || right).
 func HashNode(left, right []byte) []byte {
 	return DSHA256(Concat(left, right))
@@ -130,16 +125,6 @@ func ReconstructRootChecked(leaf []byte, proof *MerkleProof) ([]byte, error) {
 		idx >>= 1
 	}
 	return cur, nil
-}
-
-// ReconstructRoot folds leaf through proof.Siblings back to the Merkle root.
-// Returns nil on malformed inputs (nil proof, negative index, or non-32-byte leaf/sibling).
-func ReconstructRoot(leaf []byte, proof *MerkleProof) []byte {
-	root, err := ReconstructRootChecked(leaf, proof)
-	if err != nil {
-		return nil
-	}
-	return root
 }
 
 // VerifyProof returns true iff leaf + proof reconstructs root with valid 32-byte hashes and index >= 0.

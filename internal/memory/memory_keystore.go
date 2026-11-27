@@ -15,15 +15,29 @@ import (
 
 // LoadOrCreateProtectedKey loads or creates a 32-byte key in SQLite wrapped at rest via BRC-43
 // wallet EncryptAtRest/DecryptAtRest (transparently migrating any legacy plaintext key, failing closed
-// on encryption errors so fresh keys are never persisted in plaintext SQLite/WAL).
+// on read or encryption errors so existing keys are never overwritten and fresh keys are never
+// persisted in plaintext SQLite/WAL). Serialized under s.keyMu to eliminate concurrent TOCTOU races.
 func (s *Service) LoadOrCreateProtectedKey(name string, gen func() ([]byte, error)) ([]byte, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("memory: db unavailable")
 	}
+	if name == "" || gen == nil {
+		return nil, errors.New("memory: key name and generator are required")
+	}
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+
 	var encBlob struct {
 		EncHex string `json:"encHex"`
 	}
-	if ok, _ := s.db.GetJSON(name+"_enc", &encBlob); ok && encBlob.EncHex != "" {
+	ok, err := s.db.GetJSON(name+"_enc", &encBlob)
+	if err != nil {
+		return nil, fmt.Errorf("memory: read encrypted key %q: %w", name, err)
+	}
+	if ok {
+		if encBlob.EncHex == "" {
+			return nil, fmt.Errorf("memory: corrupt encrypted key %q (empty encHex)", name)
+		}
 		if s.port == nil {
 			return nil, fmt.Errorf("memory: encrypted key %q requires active wallet port", name)
 		}
@@ -36,25 +50,6 @@ func (s *Service) LoadOrCreateProtectedKey(name string, gen func() ([]byte, erro
 			return nil, fmt.Errorf("memory: decrypt protected key %q: %w", name, err)
 		}
 		return pt, nil
-	}
-	// Check for legacy plaintext key to migrate (never create a new plaintext key if s.port != nil).
-	var legacyHex string
-	if ok, _ := s.db.GetJSON(name, &legacyHex); ok && len(legacyHex) == 64 {
-		if raw, err := hex.DecodeString(legacyHex); err == nil && len(raw) == 32 {
-			if s.port != nil {
-				ct, encErr := s.port.EncryptAtRest(context.Background(), name, raw)
-				if encErr != nil {
-					core.ZeroBytes(raw)
-					return nil, fmt.Errorf("memory: migrate key %q at rest: %w", name, encErr)
-				}
-				if err := s.db.SetJSON(name+"_enc", map[string]string{"encHex": hex.EncodeToString(ct)}); err != nil {
-					core.ZeroBytes(raw)
-					return nil, err
-				}
-				_ = s.db.SetJSON(name, map[string]string{"migrated": "encrypted"})
-			}
-			return raw, nil
-		}
 	}
 	if s.port != nil {
 		created, err := gen()
@@ -76,7 +71,7 @@ func (s *Service) LoadOrCreateProtectedKey(name string, gen func() ([]byte, erro
 		}
 		return created, nil
 	}
-	return s.db.LoadOrCreateStableKey(name, gen)
+	return nil, fmt.Errorf("memory: chain port required for encrypted key storage (%s)", name)
 }
 
 type dbGroupStore struct {
@@ -108,25 +103,24 @@ func (g *dbGroupStore) LoadBorgGroups() ([]*bstack.BorgGroup, error) {
 		_ = json.Unmarshal(r.RevokedJSON, &bg.Revoked)
 		_ = json.Unmarshal(r.EpochMembersJSON, &bg.EpochMembers)
 
-		epJSON := r.EpochsJSON
 		var wrapped sealedEpochsBlob
-		if json.Unmarshal(r.EpochsJSON, &wrapped) == nil && wrapped.EncHex != "" {
-			if g.port == nil {
-				return nil, fmt.Errorf("borg: encrypted epoch keys for group %q require active wallet port", r.GroupID)
-			}
-			ct, dErr := hex.DecodeString(wrapped.EncHex)
-			if dErr != nil {
-				return nil, fmt.Errorf("borg: decode encrypted epochs for group %q: %w", r.GroupID, dErr)
-			}
-			pt, decErr := g.port.DecryptAtRest(context.Background(), "borg-group:"+r.GroupID, ct)
-			if decErr != nil {
-				return nil, fmt.Errorf("borg: decrypt epochs for group %q: %w", r.GroupID, decErr)
-			}
-			epJSON = pt
-			defer core.ZeroBytes(pt)
+		if err := json.Unmarshal(r.EpochsJSON, &wrapped); err != nil || wrapped.EncHex == "" {
+			return nil, fmt.Errorf("borg: epochs for group %q must be sealed at rest (encHex required)", r.GroupID)
 		}
+		if g.port == nil {
+			return nil, fmt.Errorf("borg: encrypted epoch keys for group %q require active wallet port", r.GroupID)
+		}
+		ct, dErr := hex.DecodeString(wrapped.EncHex)
+		if dErr != nil {
+			return nil, fmt.Errorf("borg: decode encrypted epochs for group %q: %w", r.GroupID, dErr)
+		}
+		pt, decErr := g.port.DecryptAtRest(context.Background(), "borg-group:"+r.GroupID, ct)
+		if decErr != nil {
+			return nil, fmt.Errorf("borg: decrypt epochs for group %q: %w", r.GroupID, decErr)
+		}
+		defer core.ZeroBytes(pt)
 		var hexEpochs map[int64]string
-		if json.Unmarshal(epJSON, &hexEpochs) == nil {
+		if json.Unmarshal(pt, &hexEpochs) == nil {
 			for ep, hx := range hexEpochs {
 				if raw, decErr := hex.DecodeString(hx); decErr == nil && len(raw) == 32 {
 					var k [32]byte
@@ -151,15 +145,15 @@ func (g *dbGroupStore) SaveBorgGroup(bg *bstack.BorgGroup) error {
 	}
 	epJSON, _ := json.Marshal(hexEpochs)
 	defer core.ZeroBytes(epJSON)
-	persistEpochs := epJSON
-	if g.port != nil {
-		ct, err := g.port.EncryptAtRest(context.Background(), "borg-group:"+bg.GroupID, epJSON)
-		if err != nil {
-			// Fail closed: never fall back to persisting plaintext Borg epoch symmetric keys in SQLite.
-			return fmt.Errorf("borg: encrypt epoch keys at rest for group %q: %w", bg.GroupID, err)
-		}
-		persistEpochs, _ = json.Marshal(sealedEpochsBlob{EncHex: hex.EncodeToString(ct)})
+	if g.port == nil {
+		return fmt.Errorf("borg: wallet port required to encrypt epoch keys for group %q", bg.GroupID)
 	}
+	ct, err := g.port.EncryptAtRest(context.Background(), "borg-group:"+bg.GroupID, epJSON)
+	if err != nil {
+		// Fail closed: never fall back to persisting plaintext Borg epoch symmetric keys in SQLite.
+		return fmt.Errorf("borg: encrypt epoch keys at rest for group %q: %w", bg.GroupID, err)
+	}
+	persistEpochs, _ := json.Marshal(sealedEpochsBlob{EncHex: hex.EncodeToString(ct)})
 	return g.db.SaveBorgGroup(store.BorgGroupRecord{
 		GroupID:          bg.GroupID,
 		Name:             bg.Name,

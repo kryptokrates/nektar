@@ -41,6 +41,7 @@ type EscrowObligationPayload struct {
 	HWrapped     string `json:"hWrapped"`
 	RefundAfter  uint64 `json:"refundAfter"`
 	MaxFee       uint64 `json:"maxFee"`
+	RefundTxID   string `json:"refundTxid,omitempty"`
 }
 
 func (e EscrowObligationPayload) toParams() (contracts.DisclosureSaleParams, error) {
@@ -153,14 +154,6 @@ func RecordProofUpgradeOwed(db *store.DB, dealID, role, counterparty, txid strin
 	})
 }
 
-// FulfillProofUpgradeOwed marks a proof_upgrade_owed obligation fulfilled once mined BUMP lands.
-func FulfillProofUpgradeOwed(db *store.DB, dealID string) error {
-	if db == nil || dealID == "" {
-		return nil
-	}
-	return db.FulfillObligation(ObligationID(dealID, ObligationProofUpgradeOwed))
-}
-
 // ObligationReconcileReport summarizes one durable obligations reconciliation sweep.
 type ObligationReconcileReport struct {
 	Checked              int      `json:"checked"`
@@ -169,7 +162,11 @@ type ObligationReconcileReport struct {
 	RefundClaimable      int      `json:"refundClaimable"`
 	StillOpen            int      `json:"stillOpen"`
 	KeysExtractedOnChain int      `json:"keysExtractedOnChain,omitempty"`
+	ExtractedKeyHex      string   `json:"extractedKeyHex,omitempty"`
+	ExtractedClaimTxID   string   `json:"extractedClaimTxid,omitempty"`
 	RefundsBroadcast     int      `json:"refundsBroadcast,omitempty"`
+	RefundsSettled       int      `json:"refundsSettled,omitempty"`
+	RefundPendingTxID    string   `json:"refundPendingTxid,omitempty"`
 	RefundTxIDs          []string `json:"refundTxids,omitempty"`
 }
 
@@ -177,7 +174,7 @@ type ObligationReconcileReport struct {
 //   - fulfills reveal_owed if the corresponding deal is settled,
 //   - transitions expired reveal_owed into overdue + creates a durable refund_claimable obligation,
 //   - fulfills receipt_countersig_owed if the deal already holds a verified bilateral DealReceipt,
-//   - fulfills proof_upgrade_owed when isTxSettled(txid) returns true (or anchor/deal confirmHeight > 0).
+//   - fulfills proof_upgrade_owed when isTxSettled(txid) confirms a verified BUMP at SettleDepth.
 func ReconcileObligations(_ context.Context, db *store.DB, isTxSettled func(txid string) bool, nowUnix int64) (ObligationReconcileReport, error) {
 	var rep ObligationReconcileReport
 	if db == nil {
@@ -240,16 +237,21 @@ func ReconcileObligations(_ context.Context, db *store.DB, isTxSettled func(txid
 
 		case ObligationProofUpgradeOwed:
 			settled := false
-			if dealErr == nil && deal.ConfirmHeight > 0 {
-				settled = true
-			}
-			if !settled && ob.TxID != "" {
-				if ok, _ := db.IsAnchorSettled(ob.TxID); ok {
+			if isTxSettled != nil {
+				// Live/wired path: require verified BUMP at SettleDepth via isTxSettled; never trust bare ConfirmHeight.
+				if ob.TxID != "" && isTxSettled(ob.TxID) {
 					settled = true
 				}
-			}
-			if !settled && ob.TxID != "" && isTxSettled != nil && isTxSettled(ob.TxID) {
-				settled = true
+			} else {
+				// Offline/unit-test fallback when no chain verifier callback is supplied.
+				if dealErr == nil && deal.ConfirmHeight > 0 {
+					settled = true
+				}
+				if !settled && ob.TxID != "" {
+					if ok, _ := db.IsAnchorSettled(ob.TxID); ok {
+						settled = true
+					}
+				}
 			}
 			if settled {
 				_ = db.FulfillObligation(ob.ID)
@@ -281,7 +283,8 @@ func ReconcileObligations(_ context.Context, db *store.DB, isTxSettled func(txid
 //     dropping the HTTP connection), extracts `k` via ExtractRevealedKeyFromBuyTx, stores it on the
 //     buyer's deal record, and fulfills the obligation.
 //  2. Otherwise, once RefundAfter has elapsed (block height or unix timestamp domain), constructs,
-//     Chronicle-VM-verifies, and broadcasts DisclosureSale.Refund() returning funds to DepositorPKH!
+//     Chronicle-VM-verifies, and broadcasts DisclosureSale.Refund() returning funds to DepositorPKH,
+//     and keeps the obligation open until the refund tx mines to SettleDepth!
 func ReconcileEscrowObligations(ctx context.Context, db *store.DB, port *chain.Port, nowUnix int64) (ObligationReconcileReport, error) {
 	return reconcileEscrowObligationsFiltered(ctx, db, port, "", "", nowUnix)
 }
@@ -329,11 +332,19 @@ func reconcileOneEscrow(ctx context.Context, db *store.DB, port *chain.Port, ob 
 	rep.Checked++
 
 	// 1. Check if Seller already spent the escrow on-chain via DisclosureSale.Buy(k)!
-	if spendTx, vin, found := port.FindSpendingTx(ctx, esc.EscrowTxID, esc.EscrowVout); found && spendTx != nil {
+	// Fail closed on spender-lookup transport errors: never treat an outage as unspent or race a Refund().
+	spendTx, vin, found, fErr := port.FindSpendingTx(ctx, esc.EscrowTxID, esc.EscrowVout)
+	if fErr != nil {
+		_ = db.UpdateObligationStatus(ob.ID, "open", "spender lookup unavailable: "+fErr.Error(), true)
+		rep.StillOpen++
+		return
+	}
+	if found && spendTx != nil {
 		if revealedK, kErr := contracts.ExtractRevealedKeyFromBuyTx(spendTx, vin, esc.HWrapped); kErr == nil {
+			keyHex := hex.EncodeToString(revealedK)
 			if deal, dErr := db.GetDeal(ob.DealID); dErr == nil {
-				deal.ClaimKeyHex = hex.EncodeToString(revealedK)
-				if deal.Status == "paid_awaiting_reveal" || deal.Status == "expired" || deal.Status == "failed" {
+				deal.ClaimKeyHex = keyHex
+				if deal.Status == "paid_awaiting_reveal" || deal.Status == "expired" || deal.Status == "failed" || deal.Status == "refund_broadcast" {
 					deal.Status = "key_extracted_onchain"
 					deal.Error = ""
 				}
@@ -344,8 +355,47 @@ func reconcileOneEscrow(ctx context.Context, db *store.DB, port *chain.Port, ob 
 			_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRefundClaimable))
 			rep.Fulfilled++
 			rep.KeysExtractedOnChain++
+			if rep.ExtractedKeyHex == "" {
+				rep.ExtractedKeyHex = keyHex
+				rep.ExtractedClaimTxID = spendTx.TxID().String()
+			}
 			return
 		}
+	}
+
+	// 1b. If a Refund() tx was already broadcast on a live network, wait until it mines to SettleDepth
+	// before fulfilling the obligation and marking the deal refunded.
+	if esc.RefundTxID != "" {
+		refundSettled := port.Network() == "memory"
+		if !refundSettled {
+			mp, bh, ok, pErr := port.ProofChecked(ctx, esc.RefundTxID)
+			if pErr == nil && ok && mp != nil {
+				depth := port.SettleDepth()
+				if depth <= 0 {
+					depth = 1
+				}
+				if tip, tErr := port.Height(ctx); tErr == nil && tip >= bh && int(tip-bh)+1 >= depth {
+					refundSettled = true
+				}
+			}
+		}
+		if refundSettled {
+			if deal, dErr := db.GetDeal(ob.DealID); dErr == nil && deal.Status != "settled" {
+				deal.Status = "refunded"
+				deal.Error = "refund_txid=" + esc.RefundTxID
+				_, _ = db.UpdateDealCAS(deal)
+			}
+			_ = db.FulfillObligation(ob.ID)
+			_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRevealOwed))
+			_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRefundClaimable))
+			rep.Fulfilled++
+			rep.RefundsSettled++
+			rep.RefundTxIDs = append(rep.RefundTxIDs, esc.RefundTxID)
+			return
+		}
+		rep.RefundPendingTxID = esc.RefundTxID
+		rep.StillOpen++
+		return
 	}
 
 	// 2. Check if RefundAfter has elapsed in its matching F-02 locktime domain.
@@ -401,15 +451,35 @@ func reconcileOneEscrow(ctx context.Context, db *store.DB, port *chain.Port, ob 
 		return
 	}
 	_, _ = port.AdoptReceived(ctx, refundTx)
+	if port.Network() == "memory" {
+		if deal, dErr := db.GetDeal(ob.DealID); dErr == nil && deal.Status != "settled" {
+			deal.Status = "refunded"
+			deal.Error = "refund_txid=" + refundTxID
+			_, _ = db.UpdateDealCAS(deal)
+		}
+		_ = db.FulfillObligation(ob.ID)
+		_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRevealOwed))
+		_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRefundClaimable))
+		rep.Fulfilled++
+		rep.RefundsBroadcast++
+		rep.RefundsSettled++
+		rep.RefundTxIDs = append(rep.RefundTxIDs, refundTxID)
+		return
+	}
+	// On live networks, persist refundTxID and keep obligations open until mined to SettleDepth.
+	esc.RefundTxID = refundTxID
+	if updatedPayload, mErr := json.Marshal(esc); mErr == nil {
+		ob.PayloadJSON = updatedPayload
+		ob.LastError = "refund broadcast; awaiting mined BUMP confirmation"
+		_ = db.UpsertObligation(ob)
+	}
 	if deal, dErr := db.GetDeal(ob.DealID); dErr == nil && deal.Status != "settled" {
-		deal.Status = "refunded"
+		deal.Status = "refund_broadcast"
 		deal.Error = "refund_txid=" + refundTxID
 		_, _ = db.UpdateDealCAS(deal)
 	}
-	_ = db.FulfillObligation(ob.ID)
-	_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRevealOwed))
-	_ = db.FulfillObligation(ObligationID(ob.DealID, ObligationRefundClaimable))
-	rep.Fulfilled++
 	rep.RefundsBroadcast++
+	rep.RefundPendingTxID = refundTxID
 	rep.RefundTxIDs = append(rep.RefundTxIDs, refundTxID)
+	rep.StillOpen++
 }

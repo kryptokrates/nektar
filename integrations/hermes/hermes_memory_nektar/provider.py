@@ -250,17 +250,17 @@ class NektarMemoryProvider(_BaseMemoryProvider):
                 "type": "function",
                 "function": {
                     "name": "nektar_remember",
-                    "description": "Persist a durable fact into nektar verifiable memory with provenance (optionally superseding an older seq).",
+                    "description": "Persist a durable fact into nektar verifiable memory with provenance (provide `text` or `data`; optionally supersede an older seq).",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "shard": {"type": "string"},
-                            "text": {"type": "string"},
+                            "text": {"type": "string", "description": "Fact or file content to persist (alias: data)"},
                             "data": {"type": "string", "description": "Alias for text"},
+                            "path": {"type": "string", "description": "Optional file path inside the memory repo"},
                             "source": {"type": "string"},
                             "supersedes": {"type": "integer", "description": "Optional prior fragment seq in this shard superseded by this fact"},
                         },
-                        "required": ["data"],
                     },
                 },
             },
@@ -371,6 +371,33 @@ class NektarMemoryProvider(_BaseMemoryProvider):
             {
                 "type": "function",
                 "function": {
+                    "name": "nektar_repo",
+                    "description": "Full Git + SingularGrit Memory Repo operations anchored on BSV (action: list|log|show|tree|read|diff|blame|verify|commit|rm|branch|fork|merge|cherryPick|revert|tag|export|import|prove|rotate).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "description": "Repo action to execute"},
+                            "repo": {"type": "string", "description": "Target Memory Repo name"},
+                            "branch": {"type": "string", "description": "Branch name (default: main)"},
+                            "path": {"type": "string", "description": "File path for read/commit/rm/blame"},
+                            "text": {"type": "string", "description": "File content for commit"},
+                            "commit": {"type": "string", "description": "Commit SHA"},
+                            "from": {"type": "string", "description": "Base ref/branch for diff/branch"},
+                            "to": {"type": "string", "description": "Target ref/branch for diff"},
+                            "sourceBranch": {"type": "string", "description": "Source branch for merge"},
+                            "targetBranch": {"type": "string", "description": "Target branch for merge"},
+                            "newRepo": {"type": "string", "description": "Destination repo name for fork"},
+                            "tag": {"type": "string", "description": "Tag name"},
+                            "message": {"type": "string", "description": "Commit or tag message"},
+                            "autoAnchor": {"type": "boolean", "description": "Anchor on BSV immediately if funded"},
+                        },
+                        "required": ["action"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "nektar_doctor",
                     "description": "Check nektar instance health, shards, funding balance, and next-step hints.",
                     "parameters": {"type": "object", "properties": {}},
@@ -385,6 +412,7 @@ class NektarMemoryProvider(_BaseMemoryProvider):
             "nektar_forget": "forget",
             "nektar_grounded_answer": "groundedAnswer",
             "nektar_verify_receipt": "verifyReceipt",
+            "nektar_repo": "repo",
             "nektar_want": "want",
             "nektar_sell": "sell",
             "nektar_deals": "deals",
@@ -394,9 +422,9 @@ class NektarMemoryProvider(_BaseMemoryProvider):
         if not tool:
             return json.dumps({"ok": False, "error": f"unknown nektar tool: {name}"})
         payload = dict(args or {})
-        if tool == "remember" and not payload.get("shard"):
+        if tool == "remember" and not payload.get("shard") and not payload.get("repo"):
             payload["shard"] = str(self.config.get("default_shard") or "hermes")
-        timeout = 45.0 if tool in ("want", "sell", "remember", "groundedAnswer") else 15.0
+        timeout = 45.0 if tool in ("want", "sell", "remember", "groundedAnswer", "repo") else 15.0
         try:
             res = self.client.call_tool(tool, payload, timeout_s=timeout)
             return json.dumps(res)

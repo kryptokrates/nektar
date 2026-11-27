@@ -185,6 +185,56 @@ class TestNektarHermesProvider(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
+    def test_stale_daemon_json_token_does_not_poison_live_daemon(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        state = _FakeNektarState()
+        srv, url = _start_fake_server(state)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_home, tempfile.TemporaryDirectory() as tmp_cwd:
+                # Stale cwd/.nektar/daemon.json points to a dead port with a stale token.
+                stale_dir = Path(tmp_cwd) / ".nektar"
+                stale_dir.mkdir(parents=True, exist_ok=True)
+                (stale_dir / "daemon.json").write_text(
+                    json.dumps({"url": "http://127.0.0.1:1", "authToken": "stale-wrong-tok"}),
+                    encoding="utf-8",
+                )
+                # Live active-daemon.json points to our live server with the live token.
+                live_dir = Path(tmp_home) / ".nektar"
+                live_dir.mkdir(parents=True, exist_ok=True)
+                (live_dir / "active-daemon.json").write_text(
+                    json.dumps({"url": url, "authToken": "live-good-tok"}),
+                    encoding="utf-8",
+                )
+                with (
+                    mock.patch.object(Path, "home", return_value=Path(tmp_home)),
+                    mock.patch.object(Path, "cwd", return_value=Path(tmp_cwd)),
+                ):
+                    client = NektarClient()
+                    discovered = client.discover(timeout_s=0.8)
+                    self.assertEqual(discovered, url)
+                    self.assertEqual(client.token, "live-good-tok")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_remember_accepts_text_and_repo_tool_is_exposed(self) -> None:
+        state = _FakeNektarState()
+        srv, url = _start_fake_server(state)
+        try:
+            provider = NektarMemoryProvider(config={"url": url, "default_shard": "hermes"})
+            provider.initialize(session_id="s-text")
+            schemas = {s["function"]["name"]: s["function"] for s in provider.get_tool_schemas()}
+            self.assertIn("nektar_repo", schemas)
+            self.assertNotIn("required", schemas["nektar_remember"]["parameters"])
+            res = json.loads(provider.handle_tool_call("nektar_remember", {"text": "Saved via text field"}))
+            self.assertEqual(res["shard"], "hermes")
+            self.assertEqual(state.remembered[-1]["text"], "Saved via text field")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

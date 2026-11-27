@@ -1,8 +1,10 @@
 package market
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -71,7 +73,7 @@ func (e *Engine) buyerEvalPolicy(dealID string, want bstack.WantAd, approvedOver
 	}, nil
 }
 
-func (e *Engine) buyerCollectOffers(rctx restate.RunContext, dealID string, want bstack.WantAd, in BuyerDealInput) (buyerCollectResult, error) {
+func (e *Engine) buyerCollectOffers(rctx context.Context, dealID string, want bstack.WantAd, in BuyerDealInput) (buyerCollectResult, error) {
 	now := time.Now().Unix()
 	offers := in.Offers
 	var firstOfferMs int64
@@ -107,6 +109,7 @@ func (e *Engine) buyerCollectOffers(rctx restate.RunContext, dealID string, want
 		}
 		offers = verified
 	}
+	var activeHosts []string
 	if len(offers) == 0 {
 		br := e.getBroker()
 		if br == nil {
@@ -118,6 +121,10 @@ func (e *Engine) buyerCollectOffers(rctx restate.RunContext, dealID string, want
 				Error:    "no eligible offers under policy",
 			})
 			return buyerCollectResult{NowUnix: now, PolicyRejected: true, Error: "no eligible offers under policy"}, nil
+		}
+		if br.Discovery() != nil {
+			activeHosts = append([]string(nil), br.Discovery().ActiveHosts()...)
+			sort.Strings(activeHosts)
 		}
 		e.persistDealRecord(store.DealRecord{
 			DealID:   dealID,
@@ -159,17 +166,18 @@ func (e *Engine) buyerCollectOffers(rctx restate.RunContext, dealID string, want
 				WantJSON: wantJSON,
 				Error:    msg,
 			})
-			return buyerCollectResult{NowUnix: now, NoOffers: true, Error: msg}, nil
+			return buyerCollectResult{NowUnix: now, NoOffers: true, ActiveHosts: activeHosts, Error: msg}, nil
 		}
 	}
 	return buyerCollectResult{
 		NowUnix:      now,
 		Offers:       offers,
+		ActiveHosts:  activeHosts,
 		FirstOfferMs: firstOfferMs,
 	}, nil
 }
 
-func (e *Engine) buyerRankAndMatch(rctx restate.RunContext, dealID string, want bstack.WantAd, collectRes buyerCollectResult, bypassPolicy bool) (buyerRankResult, error) {
+func (e *Engine) buyerRankAndMatch(rctx context.Context, dealID string, want bstack.WantAd, collectRes buyerCollectResult, bypassPolicy bool) (buyerRankResult, error) {
 	now := time.Now().Unix()
 	wantJSON, _ := json.Marshal(want)
 	if e.mem != nil && e.mem.DB() != nil {

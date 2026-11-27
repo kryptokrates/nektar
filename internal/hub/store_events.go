@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -35,12 +36,21 @@ type DomainDensity struct {
 }
 
 // AppendEvent durably stores an admitted output and returns its monotonic seq and whether it was new.
+// If the outpoint already exists and the incoming event carries a newer mined block height or
+// refreshed BEEF bytes (e.g. a newly attached BUMP), the stored row is upgraded in place.
 func (s *Store) AppendEvent(ev StoredEvent) (int64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var existingSeq int64
-	err := s.sql.QueryRow(`SELECT seq FROM hub_events WHERE outpoint = ?`, ev.Outpoint).Scan(&existingSeq)
+	var existingHeight int64
+	var existingBEEF []byte
+	err := s.sql.QueryRow(`SELECT seq, COALESCE(block_height, 0), beef FROM hub_events WHERE outpoint = ?`, ev.Outpoint).Scan(&existingSeq, &existingHeight, &existingBEEF)
 	if err == nil {
+		if len(ev.BEEF) > 0 && (ev.BlockHeight > existingHeight || (ev.BlockHeight > 0 && !bytes.Equal(existingBEEF, ev.BEEF))) {
+			if _, uErr := s.sql.Exec(`UPDATE hub_events SET beef = ?, block_height = ? WHERE outpoint = ?`, ev.BEEF, ev.BlockHeight, ev.Outpoint); uErr != nil {
+				return existingSeq, false, uErr
+			}
+		}
 		return existingSeq, false, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -305,13 +315,21 @@ func (s *Store) MarkCarrierFundingSwept(fundingOutpoint, sweepTxID string) (carr
 // EventsInRange loads unexpired active events with seq >= fromSeq AND seq <= toSeq (ordered ascending)
 // for BRC-149 Application-Layer Object Plane NACK repair.
 func (s *Store) EventsInRange(fromSeq, toSeq int64, topics []string, limit int) ([]StoredEvent, error) {
+	ev, _, _, err := s.EventsInRangeScanned(fromSeq, toSeq, topics, limit)
+	return ev, err
+}
+
+// EventsInRangeScanned loads up to `limit` raw rows with seq in [fromSeq, toSeq], applies optional
+// topic filtering, and returns the matched events PLUS the highest raw SQLite seq scanned and raw row count
+// so BRC-149 plane backfill can paginate past 500 frames and non-matching topics without truncation.
+func (s *Store) EventsInRangeScanned(fromSeq, toSeq int64, topics []string, limit int) (events []StoredEvent, nextSeq int64, rawCount int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if fromSeq < 1 {
 		fromSeq = 1
 	}
 	if toSeq < fromSeq {
-		return nil, nil
+		return nil, fromSeq - 1, 0, nil
 	}
 	if limit <= 0 || limit > 1000 {
 		limit = 200
@@ -323,7 +341,7 @@ func (s *Store) EventsInRange(fromSeq, toSeq int64, topics []string, limit int) 
 		WHERE seq >= ? AND seq <= ? AND spent = 0 AND (exp = 0 OR exp > ?)
 		ORDER BY seq ASC LIMIT ?`, fromSeq, toSeq, nowMs, limit)
 	if err != nil {
-		return nil, err
+		return nil, fromSeq - 1, 0, err
 	}
 	defer rows.Close()
 	wantTopic := make(map[string]bool, len(topics))
@@ -332,13 +350,18 @@ func (s *Store) EventsInRange(fromSeq, toSeq int64, topics []string, limit int) 
 			wantTopic[t] = true
 		}
 	}
+	nextSeq = fromSeq - 1
 	var out []StoredEvent
 	for rows.Next() {
 		var e StoredEvent
 		var kindStr, domJSON string
 		var pJSON []byte
 		if err := rows.Scan(&e.Seq, &e.Outpoint, &e.Topic, &e.TxID, &e.Vout, &kindStr, &e.Pub, &domJSON, &pJSON, &e.BEEF, &e.BlockHeight, &e.Exp, &e.AdmittedAt); err != nil {
-			return nil, err
+			return nil, nextSeq, rawCount, err
+		}
+		rawCount++
+		if e.Seq > nextSeq {
+			nextSeq = e.Seq
 		}
 		if len(wantTopic) > 0 && !wantTopic[e.Topic] {
 			continue
@@ -348,7 +371,7 @@ func (s *Store) EventsInRange(fromSeq, toSeq int64, topics []string, limit int) 
 		_ = json.Unmarshal(pJSON, &e.Payload)
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	return out, nextSeq, rawCount, rows.Err()
 }
 
 // DomainDensityStats counts unexpired wants and offers per domain on this Hub.

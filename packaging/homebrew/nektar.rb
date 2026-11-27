@@ -11,6 +11,10 @@ class Nektar < Formula
       url "https://github.com/kryptokrates/nektar/releases/download/v#{version}/nektar-darwin-arm64.tar.gz"
       # sha256 "<populated from v#{version}/SHA256SUMS>"
     end
+    on_intel do
+      url "https://github.com/kryptokrates/nektar/releases/download/v#{version}/nektar-darwin-amd64.tar.gz"
+      # sha256 "<populated from v#{version}/SHA256SUMS>"
+    end
   end
 
   on_linux do

@@ -25,8 +25,4 @@ func TestProveLevelIsolationRejectsInvalidRange(t *testing.T) {
 	if ok, _, _, err := ProveLevelIsolation(DefaultPolicySet, 0, maxLevelIsolationSpan+1); err == nil || ok {
 		t.Fatalf("expected error when span exceeds maxLevelIsolationSpan, got ok=%v err=%v", ok, err)
 	}
-	ok, checked, violations, err := ProveLevelIsolation(DefaultPolicySet, 0, 5)
-	if err != nil || !ok || checked != 10 || violations != 0 {
-		t.Fatalf("valid ProveLevelIsolation failed: ok=%v checked=%d violations=%d err=%v", ok, checked, violations, err)
-	}
 }

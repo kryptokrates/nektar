@@ -1,22 +1,10 @@
 <script lang="ts">
+  import type { DockClient } from '../lib/types'
   import { operatorFetch } from '../lib/api'
 
   interface Props {
     open: boolean
     onClose: () => void
-  }
-
-  type DockClient = {
-    id: string
-    label: string
-    tier: string
-    tierLabel: string
-    summary: string
-    configPath: string
-    detected: boolean
-    docked: boolean
-    oneClick: boolean
-    note?: string
   }
 
   type DetectResp = {
@@ -197,12 +185,29 @@
               </div>
             {/each}
           </div>
+
+          {#if otherClients.length > 0}
+            <details class="more-apps">
+              <summary>Other supported apps ({otherClients.length})</summary>
+              <div class="chip-grid">
+                {#each otherClients as c}
+                  <button
+                    class="chip"
+                    disabled={busyId !== ''}
+                    onclick={() => (c.oneClick ? applyDock(c.id, false) : copy(c.id, c.note ?? `nektar dock ${c.id}`))}
+                  >
+                    + {c.label}
+                  </button>
+                {/each}
+              </div>
+            </details>
+          {/if}
         {:else if !loading}
           <div class="empty-box">
             <p class="mut">No local IDE config folders auto-detected. Run <code>nektar dock &lt;app&gt;</code> or click Dock below:</p>
             <div class="chip-grid">
-              {#each otherClients.slice(0, 8) as c}
-                <button class="chip" onclick={() => (c.oneClick ? applyDock(c.id, false) : copy(c.id, c.note ?? `nektar dock ${c.id}`))}>
+              {#each otherClients as c}
+                <button class="chip" disabled={busyId !== ''} onclick={() => (c.oneClick ? applyDock(c.id, false) : copy(c.id, c.note ?? `nektar dock ${c.id}`))}>
                   + {c.label}
                 </button>
               {/each}
@@ -226,14 +231,14 @@
       {:else if mode === 'proxy'}
         <div class="explain">
           <b>Works with ANY OpenAI or Anthropic app (zero code changes):</b><br />
-          <code>Your Agent → Nektar L0 Proxy (auto-recall + auto-remember) → OpenAI / Anthropic</code>
+          <code>Your Agent → Nektar L0 Proxy (auto-recall; opt-in capture via X-Nektar-Capture: 1) → OpenAI / Anthropic</code>
         </div>
         <div class="codebox">
           <pre>{proxySnippet}</pre>
           <button class="pri" onclick={() => copy('proxy', proxySnippet)}>{copied === 'proxy' ? 'Copied ✓' : 'Copy'}</button>
         </div>
         <p class="mut">
-          Every prompt automatically recalls verified local memories and optionally captures new facts. Set <code>X-Nektar-Shard: my-project</code> to isolate shards.
+          Every prompt automatically recalls verified local memories. Raw turn capture is off by default — send <code>X-Nektar-Capture: 1</code> to opt in, or <code>X-Nektar-Shard: my-project</code> to isolate shards. When daemon auth is enabled, pass <code>X-Nektar-Token: &lt;token&gt;</code> (or prefix your API key as <code>nkt:&lt;token&gt;:&lt;providerKey&gt;</code>).
         </p>
       {:else}
         <div class="explain">
@@ -313,6 +318,13 @@
   .tryhead { display: flex; align-items: center; justify-content: space-between; font-size: 0.76rem; color: var(--mut); }
   .trytxt { font-size: 0.8rem; color: var(--ink); font-style: italic; }
   .empty-box { display: grid; gap: 0.55rem; }
+  .more-apps {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 0.5rem 0.7rem;
+  }
+  .more-apps summary {
+    cursor: pointer; font-size: 0.76rem; font-weight: 700; color: var(--mut); user-select: none;
+  }
+  .more-apps[open] summary { margin-bottom: 0.5rem; color: var(--ink); }
   .chip-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; }
   .chip {
     background: var(--surf); border: 1px solid var(--line); color: var(--ink);

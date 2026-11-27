@@ -172,8 +172,8 @@ func TestMPESelectiveDisclosureAndTamperResistance(t *testing.T) {
 }
 
 func FuzzMerkleProofForgery(f *testing.F) {
-	seedLeaf := HashLeaf([]byte("seed-leaf"))
-	seedSib := HashLeaf([]byte("seed-sib"))
+	seedLeaf := DSHA256([]byte("seed-leaf"))
+	seedSib := DSHA256([]byte("seed-sib"))
 	seedRoot := HashNode(seedLeaf, seedSib)
 	f.Add(seedLeaf, seedSib, seedRoot, 0)
 	f.Fuzz(func(t *testing.T, leaf, sib, root []byte, idx int) {

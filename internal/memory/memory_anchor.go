@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/script"
@@ -51,7 +50,7 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 	if err != nil {
 		return nil, err
 	}
-	prevRp := core.Zero32
+	prevRp := core.Zero32Bytes()
 	var nextN int64
 	if len(anchors) > 0 {
 		last := anchors[len(anchors)-1]
@@ -62,8 +61,10 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		}
 	}
 	rp := core.ChainRp(prevRp, root, uint64(len(leaves)))
-	pubBytes := s.port.Signer().IdentityKey().Compressed()
-	shardID := core.ShardIDFromPubkey(pubBytes)
+	genesisPubHex, shardID, err := s.resolveRepoGenesis(ctx, shard, anchors)
+	if err != nil {
+		return nil, err
+	}
 
 	// Guard against clobbering an existing in-flight pending anchor for (shard, nextN):
 	// run per-shard reconciliation directly so confirmed-broadcast first-party anchors promote
@@ -105,6 +106,7 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		return nil, fmt.Errorf("memory: persist pending anchor: %w", err)
 	}
 
+	pubBytes := s.port.Signer().IdentityKey().Compressed()
 	ownerPKH := core.Hash160(pubBytes)
 	if fpkh, fErr := s.port.FundPKH(ctx); fErr == nil && len(fpkh) == 20 {
 		ownerPKH = fpkh
@@ -117,11 +119,11 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		spend uint64
 	)
 
-	// Consensus-linearized NektarAnchor singleton UTXO chain (Wave 1):
-	// When a prior spendable NektarAnchor v4 UTXO exists for this shard, spend last.TxID:0 via
-	// NektarAnchor.Append() (Input 0 = prior anchor, Input 1+ = wallet fuel, Output 0 = new anchor,
-	// Output 1 = change), verified by the post-Chronicle Bitcoin Script VM before broadcast!
-	spentSingleton := false
+	// STRICT UTXO LINEAGE ONLY:
+	// - Genesis (n == 0): mint a spendable META NektarAnchor covenant UTXO under the repo's unique BRC-43 GenesisOwner.
+	// - Successor (n >= 1): MUST spend last.TxID:0 via NektarAnchor.Append() (Input 0 = prior anchor UTXO,
+	//   Input 1+ = wallet fuel, Output 0 = successor anchor UTXO, Output 1 = change), verified by the
+	//   post-Chronicle Bitcoin Script VM before broadcast. No disconnected fallback UTXO is permitted.
 	if len(anchors) > 0 {
 		last := anchors[len(anchors)-1]
 		var prevTx *transaction.Transaction
@@ -133,60 +135,71 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		if prevTx == nil && last.TxID != "" {
 			prevTx = s.port.Tx(last.TxID)
 		}
-		if prevTx != nil && len(prevTx.Outputs) > 0 && prevTx.Outputs[0] != nil && prevTx.Outputs[0].LockingScript != nil &&
-			contracts.IsSpendableNektarAnchorScript(*prevTx.Outputs[0].LockingScript) {
-			prevSt, dErr := contracts.DecodeNektarAnchor(*prevTx.Outputs[0].LockingScript)
-			if dErr == nil && prevSt.Shard == shardID && prevSt.N == uint64(last.N) {
-				nextSt, nErr := contracts.NextAnchorState(*prevSt, root, uint64(len(leaves)))
-				if nErr != nil {
-					_ = s.db.DeletePendingAnchor(shard, nextN)
-					return nil, nErr
-				}
-				lockScript, eErr := contracts.EncodeAnchorLockingScript(nextSt)
-				if eErr != nil {
-					_ = s.db.DeletePendingAnchor(shard, nextN)
-					return nil, eErr
-				}
-				anchorSpec := &nwallet.OutputTagSpec{
-					Basket: nwallet.BasketAnchors,
-					Tags:   []string{"anchor", "shard:" + shard, fmt.Sprintf("batch:%d", nextN)},
-					CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"anchor","shard":%q,"shardId":%q,"n":%d,"size":%d,"R":%q,"Rp":%q}`,
-						shard, shardID, nextN, len(leaves), hex.EncodeToString(root), hex.EncodeToString(rp)),
-				}
-				meta := nwallet.ActionAnchorAppend(shard, nextN, len(leaves))
-				cRes, cErr := s.port.BuildCovenantSpendTx(ctx, chain.CovenantSpendRequest{
-					InputTx:               prevTx,
-					InputBEEF:             last.Beef,
-					InputVout:             0,
-					Outputs:               []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)},
-					UnlockingScriptLength: 5200,
-					FuelFromWallet:        true,
-					Description:           meta.Description,
-					Labels:                meta.Labels,
-					OutputSpec:            anchorSpec,
-					BuildUnlock: func(spendTx *transaction.Transaction, changePKH []byte, changeSats uint64) (*script.Script, error) {
-						return contracts.BuildAnchorAppendUnlock(
-							ctx, spendTx, 0, prevTx.Outputs[0], root, uint64(len(leaves)),
-							changePKH, changeSats, s.port.SignCovenantSighash,
-						)
-					},
-				})
-				if cErr != nil {
-					_ = s.db.DeletePendingAnchor(shard, nextN)
-					return nil, fmt.Errorf("memory: NektarAnchor.Append (%s, n=%d): %w", shard, nextN, cErr)
-				}
-				tx, beef, fee, spend = cRes.Tx, cRes.BEEF, cRes.FeeSats, cRes.SpendSats
-				spentSingleton = true
-			}
+		if prevTx == nil || len(prevTx.Outputs) == 0 || prevTx.Outputs[0] == nil || prevTx.Outputs[0].LockingScript == nil {
+			_ = s.db.DeletePendingAnchor(shard, nextN)
+			return nil, fmt.Errorf("memory: cannot append anchor (%s, n=%d): prior NektarAnchor UTXO %s:0 unavailable", shard, nextN, last.TxID)
 		}
-	}
-
-	if !spentSingleton {
+		if !contracts.IsSpendableNektarAnchorScript(*prevTx.Outputs[0].LockingScript) {
+			_ = s.db.DeletePendingAnchor(shard, nextN)
+			return nil, fmt.Errorf("memory: cannot append anchor (%s, n=%d): prior output %s:0 is not a spendable NektarAnchor UTXO", shard, nextN, last.TxID)
+		}
+		prevSt, dErr := contracts.DecodeNektarAnchor(*prevTx.Outputs[0].LockingScript)
+		if dErr != nil {
+			_ = s.db.DeletePendingAnchor(shard, nextN)
+			return nil, fmt.Errorf("memory: decode prior anchor (%s, n=%d): %w", shard, nextN, dErr)
+		}
+		if prevSt.Shard != shardID || prevSt.N != uint64(last.N) {
+			_ = s.db.DeletePendingAnchor(shard, nextN)
+			return nil, fmt.Errorf("memory: prior anchor state mismatch (%s, got shard=%s n=%d want shard=%s n=%d)", shard, prevSt.Shard, prevSt.N, shardID, last.N)
+		}
+		nextSt, nErr := contracts.NextAnchorState(*prevSt, root, uint64(len(leaves)))
+		if nErr != nil {
+			_ = s.db.DeletePendingAnchor(shard, nextN)
+			return nil, nErr
+		}
+		lockScript, eErr := contracts.EncodeAnchorLockingScript(nextSt)
+		if eErr != nil {
+			_ = s.db.DeletePendingAnchor(shard, nextN)
+			return nil, eErr
+		}
+		anchorSpec := &nwallet.OutputTagSpec{
+			Basket: nwallet.BasketAnchors,
+			Tags:   []string{"anchor", "shard:" + shard, fmt.Sprintf("batch:%d", nextN)},
+			CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"anchor","shard":%q,"shardId":%q,"n":%d,"size":%d,"R":%q,"Rp":%q}`,
+				shard, shardID, nextN, len(leaves), hex.EncodeToString(root), hex.EncodeToString(rp)),
+		}
+		meta := nwallet.ActionAnchorAppend(shard, nextN, len(leaves))
+		cRes, cErr := s.port.BuildCovenantSpendTx(ctx, chain.CovenantSpendRequest{
+			InputTx:               prevTx,
+			InputBEEF:             last.Beef,
+			InputVout:             0,
+			Outputs:               []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)},
+			UnlockingScriptLength: 5200,
+			FuelFromWallet:        true,
+			Description:           meta.Description,
+			Labels:                meta.Labels,
+			OutputSpec:            anchorSpec,
+			BuildUnlock: func(spendTx *transaction.Transaction, changePKH []byte, changeSats uint64) (*script.Script, error) {
+				return contracts.BuildAnchorAppendUnlock(
+					ctx, spendTx, 0, prevTx.Outputs[0], root, uint64(len(leaves)),
+					changePKH, changeSats, s.port.SignCovenantSighash,
+				)
+			},
+		})
+		if cErr != nil {
+			// Never delete pending_anchors on ErrBroadcastUnknown (client-mode SignAction may have broadcast).
+			if !errors.Is(cErr, nwallet.ErrBroadcastUnknown) {
+				_ = s.db.DeletePendingAnchor(shard, nextN)
+			}
+			return nil, fmt.Errorf("memory: NektarAnchor.Append (%s, n=%d): %w", shard, nextN, cErr)
+		}
+		tx, beef, fee, spend = cRes.Tx, cRes.BEEF, cRes.FeeSats, cRes.SpendSats
+	} else {
 		state := contracts.AnchorState{
 			Shard:    shardID,
-			OwnerPub: s.port.IdentityPubHex(),
+			OwnerPub: genesisPubHex,
 			OwnerPKH: ownerPKH,
-			N:        uint64(nextN),
+			N:        0,
 			Size:     uint64(len(leaves)),
 			R:        root,
 			Rp:       rp,
@@ -200,14 +213,17 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		}
 		anchorSpec := &nwallet.OutputTagSpec{
 			Basket: nwallet.BasketAnchors,
-			Tags:   []string{"anchor", "shard:" + shard, fmt.Sprintf("batch:%d", nextN)},
-			CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"anchor","shard":%q,"shardId":%q,"n":%d,"size":%d,"R":%q,"Rp":%q}`,
-				shard, shardID, nextN, len(leaves), hex.EncodeToString(root), hex.EncodeToString(rp)),
+			Tags:   []string{"anchor", "shard:" + shard, "batch:0"},
+			CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"anchor","shard":%q,"shardId":%q,"n":0,"size":%d,"R":%q,"Rp":%q}`,
+				shard, shardID, len(leaves), hex.EncodeToString(root), hex.EncodeToString(rp)),
 		}
-		meta := nwallet.ActionAnchorShard(shard, nextN, len(leaves))
+		meta := nwallet.ActionAnchorShard(shard, 0, len(leaves))
 		tx, beef, fee, spend, err = s.port.BuildFundedTxWithBasket(ctx, []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)}, meta.Description, meta.Labels, anchorSpec)
 		if err != nil {
-			_ = s.db.DeletePendingAnchor(shard, nextN)
+			// Never delete pending_anchors on ErrBroadcastUnknown (client-mode CreateAction may have broadcast).
+			if !errors.Is(err, nwallet.ErrBroadcastUnknown) {
+				_ = s.db.DeletePendingAnchor(shard, nextN)
+			}
 			return nil, err
 		}
 	}
@@ -221,9 +237,6 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		if errors.Is(err, nwallet.ErrSpendRejected) {
 			_ = s.db.DeletePendingAnchor(shard, nextN)
 		}
-		return nil, err
-	}
-	if err := s.port.AdoptChange(tx); err != nil {
 		return nil, err
 	}
 
@@ -261,130 +274,49 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 	if err := s.db.RecordBatchAnchor(batch, seqs); err != nil {
 		return nil, err
 	}
-	if shard == ReceiptsShard {
-		for _, seq := range seqs {
-			_ = s.db.UpdateReceiptAnchor(seq, txid)
-		}
-	}
 	return &batch, nil
 }
 
-// RotateShardOwner executes an on-chain NektarAnchor.Rotate() spend transferring shard anchor
-// ownership from the current ownerPkh to newOwnerPubOrPKHHex (33-byte compressed pubkey hex
-// or 20-byte PKH hex), preserving n, R, Rp, and immutable GenesisOwner shard identity.
-func (s *Service) RotateShardOwner(ctx context.Context, shard string, newOwnerPubOrPKHHex string) (*store.BatchAnchor, error) {
-	unlock := s.lockShard(shard)
-	defer unlock()
-
-	newOwnerHex := strings.TrimPrefix(strings.TrimSpace(newOwnerPubOrPKHHex), "0x")
-	rawNew, err := hex.DecodeString(newOwnerHex)
-	if err != nil {
-		return nil, fmt.Errorf("memory: invalid newOwner hex: %w", err)
-	}
-	var newOwnerPKH []byte
-	switch len(rawNew) {
-	case 20:
-		newOwnerPKH = rawNew
-	case 33:
-		if _, _, pErr := core.ParseStrictCompressedPubKey(newOwnerHex); pErr != nil {
-			return nil, fmt.Errorf("memory: invalid newOwner compressed pubkey: %w", pErr)
+// resolveRepoGenesis returns the immutable 33-byte GenesisOwner pubkey hex and its 20-byte
+// ShardID (hash160) for shard. Existing anchored shards preserve their established GenesisOwner;
+// fresh Memory Repos derive a unique repo-scoped BRC-43 public key via Port.DeriveRepoGenesisPubKey
+// so separate repositories never collide on-chain under one shared ShardID. Fails closed on derivation errors.
+func (s *Service) resolveRepoGenesis(ctx context.Context, shard string, existingAnchors []store.BatchAnchor) (string, string, error) {
+	// 1. Preserve established on-chain GenesisOwner if this shard already has anchors.
+	for _, a := range existingAnchors {
+		if len(a.Beef) > 0 {
+			if _, parsed, _, err := guard.ParseBEEF(a.Beef, guard.DefaultBound); err == nil && parsed != nil &&
+				len(parsed.Outputs) > 0 && parsed.Outputs[0] != nil && parsed.Outputs[0].LockingScript != nil {
+				if st, dErr := contracts.DecodeNektarAnchor(*parsed.Outputs[0].LockingScript); dErr == nil && st.OwnerPub != "" {
+					return st.OwnerPub, st.Shard, nil
+				}
+			}
 		}
-		newOwnerPKH = core.Hash160(rawNew)
-	default:
-		return nil, fmt.Errorf("memory: newOwner must be 33-byte compressed pubkey hex or 20-byte PKH hex (got %d bytes)", len(rawNew))
-	}
-
-	anchors, err := s.db.ListAnchors(shard)
-	if err != nil {
-		return nil, err
-	}
-	if len(anchors) == 0 {
-		return nil, fmt.Errorf("memory: shard %q has no existing anchor to rotate", shard)
-	}
-	last := anchors[len(anchors)-1]
-	var prevTx *transaction.Transaction
-	if len(last.Beef) > 0 {
-		if _, parsed, _, pErr := guard.ParseBEEF(last.Beef, guard.DefaultBound); pErr == nil && parsed != nil {
-			prevTx = parsed
+		if a.ShardID != "" {
+			return s.port.IdentityPubHex(), a.ShardID, nil
 		}
 	}
-	if prevTx == nil {
-		prevTx = s.port.Tx(last.TxID)
+	// 2. Reuse persisted branch genesis identity if already derived for this repo.
+	if br, err := s.db.GetMemBranch(shard, "main"); err == nil && br.GenesisPub != "" && br.GenesisShardID != "" {
+		return br.GenesisPub, br.GenesisShardID, nil
 	}
-	if prevTx == nil || len(prevTx.Outputs) == 0 || prevTx.Outputs[0] == nil || prevTx.Outputs[0].LockingScript == nil {
-		return nil, fmt.Errorf("memory: prior anchor tx %s unavailable for Rotate", last.TxID)
-	}
-	if !contracts.IsSpendableNektarAnchorScript(*prevTx.Outputs[0].LockingScript) {
-		return nil, fmt.Errorf("memory: prior anchor %s is a legacy non-spendable anchor (re-anchor a fresh shard)", last.TxID)
-	}
-	prevSt, err := contracts.DecodeNektarAnchor(*prevTx.Outputs[0].LockingScript)
+	// 3. Derive a unique per-repo BRC-43 genesis public key (fail closed on signer/derivation error!).
+	pub, err := s.port.DeriveRepoGenesisPubKey(ctx, shard, "main")
 	if err != nil {
-		return nil, err
+		return "", "", fmt.Errorf("memory: derive repo genesis pubkey for %q: %w", shard, err)
 	}
-	rotSt, err := contracts.RotatedAnchorState(*prevSt, newOwnerPKH)
-	if err != nil {
-		return nil, err
+	if pub == nil {
+		return "", "", fmt.Errorf("memory: empty repo genesis pubkey for %q", shard)
 	}
-	rotLock, err := contracts.EncodeAnchorLockingScript(rotSt)
-	if err != nil {
-		return nil, err
-	}
-
-	cRes, err := s.port.BuildCovenantSpendTx(ctx, chain.CovenantSpendRequest{
-		InputTx:               prevTx,
-		InputBEEF:             last.Beef,
-		InputVout:             0,
-		Outputs:               []*transaction.TransactionOutput{chain.AnchorOutput(rotLock)},
-		UnlockingScriptLength: 5200,
-		FuelFromWallet:        true,
-		Description:           fmt.Sprintf("nektar anchor rotate %s#%d", shard, last.N),
-		Labels:                []string{"anchor", "rotate"},
-		BuildUnlock: func(spendTx *transaction.Transaction, changePKH []byte, changeSats uint64) (*script.Script, error) {
-			return contracts.BuildAnchorRotateUnlock(
-				ctx, spendTx, 0, prevTx.Outputs[0], newOwnerPKH,
-				changePKH, changeSats, s.port.SignCovenantSighash,
-			)
-		},
+	pubBytes := pub.Compressed()
+	pubHex := hex.EncodeToString(pubBytes)
+	sid := core.ShardIDFromPubkey(pubBytes)
+	_ = s.db.UpsertMemBranch(store.MemBranchRow{
+		Repo:           shard,
+		Branch:         "main",
+		GenesisPub:     pubHex,
+		GenesisShardID: sid,
+		UpdatedAt:      time.Now().Unix(),
 	})
-	if err != nil {
-		return nil, fmt.Errorf("memory: NektarAnchor.Rotate: %w", err)
-	}
-	txid, err := s.port.Broadcast(ctx, cRes.Tx, cRes.FeeSats, cRes.SpendSats)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.port.AdoptChange(cRes.Tx); err != nil {
-		return nil, err
-	}
-	beef := cRes.BEEF
-	var settled bool
-	var height int64
-	if cRes.Tx.MerklePath != nil {
-		beef, settled, height = s.embedVerifiedAnchorBUMP(ctx, txid, beef, cRes.Tx, cRes.Tx.MerklePath, cRes.Tx.MerklePath.BlockHeight)
-	} else if s.port.Network() == "memory" {
-		if mp, h, ok := s.port.Proof(ctx, txid); ok && mp != nil {
-			beef, settled, height = s.embedVerifiedAnchorBUMP(ctx, txid, beef, cRes.Tx, mp, h)
-		}
-	}
-	if len(beef) == 0 {
-		var bErr error
-		beef, bErr = chain.SafeAtomicBEEF(cRes.Tx)
-		if bErr != nil {
-			return nil, fmt.Errorf("memory: encode rotated anchor AtomicBEEF: %w", bErr)
-		}
-	}
-	if err := s.db.UpdateAnchorHead(shard, last.N, txid, beef, settled, height); err != nil {
-		return nil, err
-	}
-	updated := last
-	updated.TxID = txid
-	updated.Beef = beef
-	updated.Settled = settled
-	updated.BlockHeight = height
-	return &updated, nil
-}
-
-func shardIdentifier(shard string, pubBytes []byte) string {
-	h := core.DSHA256(core.Concat([]byte("nektar/shard/v1"), pubBytes, []byte(shard)))
-	return core.ToHex(h)
+	return pubHex, sid, nil
 }

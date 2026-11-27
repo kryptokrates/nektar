@@ -126,7 +126,7 @@ func hasLegacyEmbeddedWallet(dir string) bool {
 		return false
 	}
 	wDir := filepath.Join(dir, "wallet")
-	for _, name := range []string{"wallet.sqlite", "identity.json", "wallet.json"} {
+	for _, name := range []string{"wallet.sqlite", "identity.json"} {
 		if st, err := os.Stat(filepath.Join(wDir, name)); err == nil && !st.IsDir() {
 			return true
 		}

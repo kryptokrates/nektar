@@ -59,7 +59,7 @@ No key to generate manually — the Hub creates its own persistent BRC-100 embed
 wallet on first boot under `/data/wallet/`. Self-serve testnet sats:
 
 ```bash
-curl -X POST https://nektar.run/v1/faucet \
+curl -X POST https://testnet.nektar.run/v1/faucet \
   -H 'content-type: application/json' \
   -d '{"address":"<your funding address from nektar status>"}'
 ```
@@ -76,7 +76,7 @@ curl -X POST https://nektar.run/v1/faucet \
 3. **Connect your AI clients:**
    ```bash
    claude mcp add --transport http nektar https://<you>/mcp \
-     --header "Authorization: Bearer <NEKTAR_API_TOKEN>"
+     --header "Authorization: Bearer <NEKTAR_HTTP_TOKEN>"
    ```
    Or inspect `/v1/openapi.json` and `/v1/metrics` (Prometheus).
 

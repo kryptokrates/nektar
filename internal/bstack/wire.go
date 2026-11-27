@@ -220,15 +220,6 @@ func LaneOf(net, domain string) string {
 	return fmt.Sprintf("tm_nektar_%s_%s", net, LaneNibble(domain))
 }
 
-// AllLanes returns all 16 nibble topics for a network.
-func AllLanes(net string) []string {
-	out := make([]string, 16)
-	for i := range 16 {
-		out[i] = fmt.Sprintf("tm_nektar_%s_%x", net, i)
-	}
-	return out
-}
-
 func artifactDomainTag(artifact any) []byte {
 	switch artifact.(type) {
 	case WantAd, *WantAd:

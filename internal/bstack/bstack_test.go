@@ -94,9 +94,9 @@ func TestMarketWireBorgVaultAndChirp(t *testing.T) {
 	// 3. BRC-167 CHIRP content-addressed store & closure verification.
 	objStore := NewMemoryObjectStore()
 	payload := []byte("verified shard pack bytes packed via BRC-167 CHIRP")
-	url, _, err := StoreChirp(objStore, payload)
+	url, _, _, err := StoreChirpWithHashes(objStore, payload)
 	if err != nil {
-		t.Fatalf("StoreChirp: %v", err)
+		t.Fatalf("StoreChirpWithHashes: %v", err)
 	}
 	got, err := ResolveChirp(objStore, url)
 	if err != nil || string(got) != string(payload) {

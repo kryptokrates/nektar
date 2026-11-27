@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
@@ -157,12 +156,12 @@ func sovereignJSONFromHeader(hdr *headers.Header, raw []byte) SovereignHeaderJSO
 // HeaderAnchorClient is a PoW-verifying HeaderWitnessSource + ChainTracker client that anchors
 // against a Spine Hub's Sovereign Header Store (or lightwebinc/overlay-bridge's /v1/tip &
 // /v1/root/{height} header server), eliminating per-Hub third-party API rate limits.
+// It performs local 80-byte PoW verification on every fetched header and delegates reorg-aware
+// caching to WitnessedTracker (never caching orphaned headers indefinitely).
 type HeaderAnchorClient struct {
-	BaseURL string
-	Client  *http.Client
-
-	mu    sync.RWMutex
-	cache map[uint32]headers.Header
+	BaseURL       string
+	Client        *http.Client
+	MinDifficulty float64
 }
 
 var (
@@ -179,7 +178,6 @@ func NewHeaderAnchorClient(baseURL string, cli *http.Client) *HeaderAnchorClient
 	return &HeaderAnchorClient{
 		BaseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		Client:  cli,
-		cache:   make(map[uint32]headers.Header, 128),
 	}
 }
 
@@ -204,14 +202,6 @@ func (c *HeaderAnchorClient) CurrentHeight(ctx context.Context) (uint32, error) 
 }
 
 func (c *HeaderAnchorClient) HeaderAt(ctx context.Context, height uint32) (*headers.Header, error) {
-	c.mu.RLock()
-	if cached, ok := c.cache[height]; ok {
-		c.mu.RUnlock()
-		cp := cached
-		return &cp, nil
-	}
-	c.mu.RUnlock()
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/v1/root/%d", c.BaseURL, height), nil)
 	if err != nil {
 		return nil, err
@@ -256,12 +246,18 @@ func (c *HeaderAnchorClient) HeaderAt(ctx context.Context, height uint32) (*head
 			hdr.Prev = *ph
 		}
 	}
-	c.mu.Lock()
-	if len(c.cache) > 10000 {
-		clear(c.cache)
+	// Always compute and verify local 80-byte PoW before accepting any remote header JSON.
+	if out.Bits != 0 || out.RawHex != "" || c.MinDifficulty > 0 {
+		raw80, _, pErr := verifyHeaderLocalPoW(&hdr, height, c.MinDifficulty)
+		if pErr != nil {
+			return nil, fmt.Errorf("header anchor %s/v1/root/%d failed local PoW check: %w", c.BaseURL, height, pErr)
+		}
+		if out.RawHex != "" && !strings.EqualFold(strings.TrimSpace(out.RawHex), hex.EncodeToString(raw80[:])) {
+			return nil, fmt.Errorf("header anchor %s/v1/root/%d rawHex mismatch", c.BaseURL, height)
+		}
+	} else {
+		return nil, fmt.Errorf("header anchor %s/v1/root/%d missing PoW header fields (bits/rawHex)", c.BaseURL, height)
 	}
-	c.cache[height] = hdr
-	c.mu.Unlock()
 	cp := hdr
 	return &cp, nil
 }

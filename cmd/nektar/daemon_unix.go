@@ -20,16 +20,18 @@ func detachCmd(cmd *exec.Cmd) {
 
 // installUserAutostart installs a per-user background service (macOS launchd or Linux systemd --user)
 // so Nektar stays alive across reboots for docked AI apps with zero root permissions required.
-func installUserAutostart(exePath string, serveArgs []string, dataDir string) (string, error) {
+// Returns (serviceFilePath, startedByServiceManager, err). When startedByServiceManager is true,
+// the OS service manager owns the daemon lifecycle so callers must not spawn a duplicate child.
+func installUserAutostart(exePath string, serveArgs []string, dataDir string) (string, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	logPath := filepath.Join(dataDir, "daemon.log")
 	if runtime.GOOS == "darwin" {
 		plistDir := filepath.Join(home, "Library", "LaunchAgents")
 		if err := os.MkdirAll(plistDir, 0o755); err != nil {
-			return "", err
+			return "", false, err
 		}
 		plistPath := filepath.Join(plistDir, "run.nektar.agent.plist")
 		var argLines strings.Builder
@@ -58,16 +60,16 @@ func installUserAutostart(exePath string, serveArgs []string, dataDir string) (s
 </plist>
 `, argLines.String(), xmlEscape(logPath), xmlEscape(logPath))
 		if err := os.WriteFile(plistPath, []byte(plist), 0o644); err != nil {
-			return "", err
+			return "", false, err
 		}
 		_ = exec.Command("launchctl", "unload", plistPath).Run()
-		_ = exec.Command("launchctl", "load", "-w", plistPath).Run()
-		return plistPath, nil
+		started := exec.Command("launchctl", "load", "-w", plistPath).Run() == nil
+		return plistPath, started, nil
 	}
 
 	unitDir := filepath.Join(home, ".config", "systemd", "user")
 	if err := os.MkdirAll(unitDir, 0o755); err != nil {
-		return "", err
+		return "", false, err
 	}
 	unitPath := filepath.Join(unitDir, "nektar.service")
 	quotedArgs := make([]string, 0, len(serveArgs)+1)
@@ -89,11 +91,64 @@ RestartSec=3
 WantedBy=default.target
 `, strings.Join(quotedArgs, " "))
 	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
-		return "", err
+		return "", false, err
 	}
 	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
-	_ = exec.Command("systemctl", "--user", "enable", "nektar.service").Run()
+	started := exec.Command("systemctl", "--user", "enable", "--now", "nektar.service").Run() == nil
+	return unitPath, started, nil
+}
+
+// stopUserAutostart stops the per-user login service (without removing it) so `nektar stop`
+// is not immediately reversed by launchd KeepAlive or systemd Restart.
+func stopUserAutostart() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	if runtime.GOOS == "darwin" {
+		plistPath := filepath.Join(home, "Library", "LaunchAgents", "run.nektar.agent.plist")
+		if _, err := os.Stat(plistPath); err == nil {
+			_ = exec.Command("launchctl", "unload", plistPath).Run()
+		}
+		return
+	}
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "nektar.service")
+	if _, err := os.Stat(unitPath); err == nil {
+		_ = exec.Command("systemctl", "--user", "stop", "nektar.service").Run()
+	}
+}
+
+// uninstallUserAutostart stops, disables, and removes the per-user login autostart service.
+func uninstallUserAutostart() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if runtime.GOOS == "darwin" {
+		plistPath := filepath.Join(home, "Library", "LaunchAgents", "run.nektar.agent.plist")
+		if _, err := os.Stat(plistPath); os.IsNotExist(err) {
+			return "", nil
+		}
+		_ = exec.Command("launchctl", "unload", "-w", plistPath).Run()
+		if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {
+			return plistPath, err
+		}
+		return plistPath, nil
+	}
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "nektar.service")
+	if _, err := os.Stat(unitPath); os.IsNotExist(err) {
+		return "", nil
+	}
+	_ = exec.Command("systemctl", "--user", "disable", "--now", "nektar.service").Run()
+	if err := os.Remove(unitPath); err != nil && !os.IsNotExist(err) {
+		return unitPath, err
+	}
+	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
 	return unitPath, nil
+}
+
+func formatConsoleText(s string) string {
+	return s
 }
 
 func xmlEscape(s string) string {

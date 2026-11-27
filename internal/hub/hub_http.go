@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/bsv-blockchain/go-sdk/overlay"
 	"github.com/bsv-blockchain/go-sdk/overlay/lookup"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
@@ -33,38 +35,34 @@ func (n *Node) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// handleListTopicManagers implements the standard BRC-22 engine metadata route consumed by
-// lightwebinc/overlay-bridge (`-topics-from engine`), including ETag / 304 Not Modified support.
-func (n *Node) handleListTopicManagers(w http.ResponseWriter, r *http.Request) {
-	n.mu.RLock()
-	out := make(map[string]map[string]any, len(n.topics))
-	for name, tm := range n.topics {
-		meta := map[string]any{
-			"name":             name,
-			"shortDescription": "Nektar v0.1 overlay topic manager",
-			"version":          "0.1.0",
-		}
-		if md := tm.GetMetaData(); md != nil {
-			if md.Name != "" {
-				meta["name"] = md.Name
-			}
-			if md.Description != "" {
-				meta["shortDescription"] = md.Description
-			}
-			if md.Version != "" {
-				meta["version"] = md.Version
-			}
-			if md.Icon != "" {
-				meta["iconURL"] = md.Icon
-			}
-			if md.InfoUrl != "" {
-				meta["informationURL"] = md.InfoUrl
-			}
-		}
-		out[name] = meta
+func formatOverlayMeta(name, defaultDesc string, md *overlay.MetaData) map[string]any {
+	meta := map[string]any{
+		"name":             name,
+		"shortDescription": defaultDesc,
+		"version":          "0.1.0",
 	}
-	n.mu.RUnlock()
-	body, err := json.Marshal(out)
+	if md != nil {
+		if md.Name != "" {
+			meta["name"] = md.Name
+		}
+		if md.Description != "" {
+			meta["shortDescription"] = md.Description
+		}
+		if md.Version != "" {
+			meta["version"] = md.Version
+		}
+		if md.Icon != "" {
+			meta["iconURL"] = md.Icon
+		}
+		if md.InfoUrl != "" {
+			meta["informationURL"] = md.InfoUrl
+		}
+	}
+	return meta
+}
+
+func writeJSONWithETag(w http.ResponseWriter, r *http.Request, v any) {
+	body, err := json.Marshal(v)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -81,51 +79,27 @@ func (n *Node) handleListTopicManagers(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
+// handleListTopicManagers implements the standard BRC-22 engine metadata route consumed by
+// lightwebinc/overlay-bridge (`-topics-from engine`), including ETag / 304 Not Modified support.
+func (n *Node) handleListTopicManagers(w http.ResponseWriter, r *http.Request) {
+	n.mu.RLock()
+	out := make(map[string]map[string]any, len(n.topics))
+	for name, tm := range n.topics {
+		out[name] = formatOverlayMeta(name, "Nektar v0.1 overlay topic manager", tm.GetMetaData())
+	}
+	n.mu.RUnlock()
+	writeJSONWithETag(w, r, out)
+}
+
 // handleListLookupServiceProviders implements the standard BRC-24 engine metadata route.
 func (n *Node) handleListLookupServiceProviders(w http.ResponseWriter, r *http.Request) {
 	n.mu.RLock()
 	out := make(map[string]map[string]any, len(n.lookups))
 	for name, ls := range n.lookups {
-		meta := map[string]any{
-			"name":             name,
-			"shortDescription": "Nektar v0.1 overlay lookup service",
-			"version":          "0.1.0",
-		}
-		if md := ls.GetMetaData(); md != nil {
-			if md.Name != "" {
-				meta["name"] = md.Name
-			}
-			if md.Description != "" {
-				meta["shortDescription"] = md.Description
-			}
-			if md.Version != "" {
-				meta["version"] = md.Version
-			}
-			if md.Icon != "" {
-				meta["iconURL"] = md.Icon
-			}
-			if md.InfoUrl != "" {
-				meta["informationURL"] = md.InfoUrl
-			}
-		}
-		out[name] = meta
+		out[name] = formatOverlayMeta(name, "Nektar v0.1 overlay lookup service", ls.GetMetaData())
 	}
 	n.mu.RUnlock()
-	body, err := json.Marshal(out)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	sum := sha256.Sum256(body)
-	etag := `"` + hex.EncodeToString(sum[:8]) + `"`
-	w.Header().Set("ETag", etag)
-	if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	writeJSONWithETag(w, r, out)
 }
 
 func (n *Node) handleTerms(w http.ResponseWriter, _ *http.Request) {
@@ -161,21 +135,9 @@ func (n *Node) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		topics = n.Topics()
 	}
 	// Valve 1 (Validate-before-charge): classify & validate market payload before asking for or claiming payment!
-	var collectedTxID string
-	if n.fees.SubmitWantSats > 0 || n.fees.SubmitOfferSats > 0 || n.fees.SubmitAnnounceSats > 0 {
-		kind, cErr := n.classifySubmitPayload(raw, topics)
-		if cErr != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": cErr.Error()})
-			return
-		}
-		if price, action := n.fees.FeeForKind(kind); price > 0 {
-			out := n.verifyAndCollectFee(r.Context(), action, string(kind), price, r.Header.Get("X-BSV-Payment"))
-			if out.HTTPStatus != http.StatusOK {
-				n.writeFeeOutcome(w, action, price, out)
-				return
-			}
-			collectedTxID = out.TxID
-		}
+	collectedTxID, ok := n.enforceSubmitFee(w, r, "hub_submit", raw, topics)
+	if !ok {
+		return
 	}
 	// Paper 008 §12.1: honor explicit plane/historical submission mode so deliveries arriving
 	// from overlay-bridge or a BRC-149 relay never re-propagate.
@@ -260,15 +222,26 @@ func (n *Node) handleBboxSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
-	// Valve 3: enforce unbypassable NAT relay toll AFTER validating sender signature (never charge invalid msgs!).
+	// Check replayed nonce BEFORE charging Valve 3 fee so replayed messages never consume a payment,
+	// while preserving unpaid 402 challenge retries (PostJSONWithHub402 resends the same body + nonce with X-BSV-Payment).
+	if n.hasBboxNonce("send:"+msg.SenderPub, msg.Nonce) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "replayed bbox message nonce"})
+		return
+	}
+	// Valve 3: enforce unbypassable NAT relay toll AFTER validating sender signature & replay check.
+	var collectedTxID string
 	if n.fees.BboxSendSats > 0 {
 		out := n.verifyAndCollectFee(r.Context(), ActionBboxSend, msg.Kind, n.fees.BboxSendSats, r.Header.Get("X-BSV-Payment"))
 		if out.HTTPStatus != http.StatusOK {
 			n.writeFeeOutcome(w, ActionBboxSend, n.fees.BboxSendSats, out)
 			return
 		}
+		collectedTxID = out.TxID
 	}
 	if !n.claimBboxNonce("send:"+msg.SenderPub, msg.Nonce, now) {
+		if collectedTxID != "" {
+			_ = n.store.ReleaseFeeClaim(collectedTxID)
+		}
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "replayed bbox message nonce"})
 		return
 	}
@@ -419,14 +392,32 @@ func (n *Node) handleBountiesSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	if res != nil && res.Accepted {
 		if n.net == "main" || n.net == "testnet" {
-			_ = n.store.MarkBountyClaimBroadcast(sub.HDP, res.TxID)
+			if mErr := n.store.MarkBountyClaimBroadcast(sub.HDP, res.TxID); mErr != nil {
+				log.Printf("hub: MarkBountyClaimBroadcast failed hdp=%s txid=%s: %v", sub.HDP, res.TxID, mErr)
+				writeJSON(w, http.StatusInternalServerError, map[string]any{
+					"error":  "bounty payout broadcast succeeded but failed to record broadcast state: " + mErr.Error(),
+					"txid":   res.TxID,
+					"status": "pending",
+				})
+				return
+			}
 			res.Status = "broadcast"
 		} else {
-			_ = n.store.FinalizeBountyClaim(sub.HDP, res.TxID)
+			if fErr := n.store.FinalizeBountyClaim(sub.HDP, res.TxID); fErr != nil {
+				log.Printf("hub: FinalizeBountyClaim failed hdp=%s txid=%s: %v", sub.HDP, res.TxID, fErr)
+				writeJSON(w, http.StatusInternalServerError, map[string]any{
+					"error":  "bounty payout succeeded but failed to finalize claim state: " + fErr.Error(),
+					"txid":   res.TxID,
+					"status": "pending",
+				})
+				return
+			}
 			res.Status = "paid"
 		}
 	} else {
-		_ = n.store.CancelBountyClaim(b.ID, sub.HDP)
+		if cErr := n.store.CancelBountyClaim(b.ID, sub.HDP); cErr != nil {
+			log.Printf("hub: CancelBountyClaim failed bounty=%s hdp=%s: %v", b.ID, sub.HDP, cErr)
+		}
 	}
 	writeJSON(w, http.StatusOK, res)
 }

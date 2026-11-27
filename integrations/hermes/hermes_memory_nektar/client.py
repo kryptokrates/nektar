@@ -36,40 +36,47 @@ class NektarClient:
         data_dir: str | None = None,
     ) -> None:
         self.explicit_url = (url or "").strip().rstrip("/") or None
-        self.token = (token or os.environ.get("NEKTAR_HTTP_TOKEN") or "").strip() or None
+        self.explicit_token = (token or os.environ.get("NEKTAR_HTTP_TOKEN") or "").strip() or None
+        self.token: str | None = self.explicit_token
         self.data_dir = data_dir or os.environ.get("NEKTAR_DATA_DIR")
         self.base_url: str | None = self.explicit_url
         self.card: dict[str, Any] | None = None
 
-    def _headers(self, json_body: bool = False) -> dict[str, str]:
+    def _headers(self, json_body: bool = False, token_override: str | None = None) -> dict[str, str]:
         h: dict[str, str] = {"Accept": "application/json"}
         if json_body:
             h["Content-Type"] = "application/json"
-        if self.token:
-            h["Authorization"] = f"Bearer {self.token}"
+        tok = token_override if token_override is not None else self.token
+        if tok:
+            h["Authorization"] = f"Bearer {tok}"
         return h
 
-    def _candidate_urls(self) -> list[str]:
-        seen: set[str] = set()
-        out: list[str] = []
+    def _candidates(self) -> list[tuple[str, str | None]]:
+        by_url: dict[str, int] = {}
+        out: list[tuple[str, str | None]] = []
 
-        def add(u: str | None) -> None:
+        def add(u: str | None, tok: str | None = None) -> None:
             if not u:
                 return
             norm = u.strip().rstrip("/")
-            if norm and norm not in seen:
-                seen.add(norm)
-                out.append(norm)
+            if not norm:
+                return
+            resolved_tok = self.explicit_token or (tok.strip() if isinstance(tok, str) and tok.strip() else None)
+            if norm in by_url:
+                idx = by_url[norm]
+                if out[idx][1] is None and resolved_tok is not None:
+                    out[idx] = (norm, resolved_tok)
+                return
+            by_url[norm] = len(out)
+            out.append((norm, resolved_tok))
 
         def add_daemon(path: Path) -> None:
             u, tok = _read_daemon_json(path)
-            if tok and not self.token:
-                self.token = tok
-            add(u)
+            add(u, tok)
 
-        add(self.explicit_url)
-        add(os.environ.get("NEKTAR_URL"))
-        add(os.environ.get("NEKTAR_DAEMON_URL"))
+        add(self.explicit_url, self.explicit_token)
+        add(os.environ.get("NEKTAR_URL"), self.explicit_token)
+        add(os.environ.get("NEKTAR_DAEMON_URL"), self.explicit_token)
         if self.data_dir:
             add_daemon(Path(self.data_dir) / "daemon.json")
         add_daemon(Path.cwd() / ".nektar" / "daemon.json")
@@ -78,21 +85,28 @@ class NektarClient:
         add_daemon(Path.home() / ".nektar" / "daemon.json")
         env_port = os.environ.get("NEKTAR_HTTP_PORT")
         if env_port:
-            add(f"http://127.0.0.1:{env_port}")
+            add(f"http://127.0.0.1:{env_port}", self.explicit_token)
         for p in DEFAULT_PORTS:
-            add(f"http://127.0.0.1:{p}")
+            add(f"http://127.0.0.1:{p}", self.explicit_token)
         return out
 
+    def _candidate_urls(self) -> list[str]:
+        return [u for u, _ in self._candidates()]
+
     def discover(self, timeout_s: float = 0.6) -> str | None:
-        for base in self._candidate_urls():
+        for base, cand_token in self._candidates():
             try:
-                req = request.Request(f"{base}/.well-known/agent.json", headers=self._headers())
+                req = request.Request(
+                    f"{base}/.well-known/agent.json",
+                    headers=self._headers(token_override=cand_token or ""),
+                )
                 with request.urlopen(req, timeout=timeout_s) as resp:
                     if resp.status != 200:
                         continue
                     card = json.loads(resp.read().decode("utf-8"))
                     if isinstance(card, dict) and card.get("name") == "nektar":
                         self.base_url = base
+                        self.token = self.explicit_token or cand_token
                         self.card = card
                         return base
             except Exception:
@@ -111,17 +125,31 @@ class NektarClient:
                 "nektar daemon not reachable — start it with `nektar serve` or set NEKTAR_URL"
             )
         payload = json.dumps(args or {}).encode("utf-8")
-        req = request.Request(
-            f"{base}/v1/tools/{parse.quote(name, safe='')}",
-            data=payload,
-            headers=self._headers(json_body=True),
-            method="POST",
-        )
-        try:
+
+        def _do_request(target_base: str) -> dict[str, Any]:
+            req = request.Request(
+                f"{target_base}/v1/tools/{parse.quote(name, safe='')}",
+                data=payload,
+                headers=self._headers(json_body=True),
+                method="POST",
+            )
             with request.urlopen(req, timeout=timeout_s) as resp:
                 raw = resp.read().decode("utf-8")
                 return json.loads(raw) if raw else {}
+
+        try:
+            return _do_request(base)
         except error.HTTPError as exc:
+            if exc.code == 401 and not self.explicit_token:
+                # Re-discover active-daemon.json once in case daemon restarted with a new authToken.
+                prev_tok = self.token
+                refreshed = self.discover(timeout_s=min(timeout_s, 0.5))
+                if refreshed and (refreshed != base or self.token != prev_tok):
+                    try:
+                        return _do_request(refreshed)
+                    except error.HTTPError as exc2:
+                        body2 = exc2.read().decode("utf-8", errors="replace")
+                        raise RuntimeError(f"nektar {name} failed (HTTP {exc2.code}): {body2[:200]}") from exc2
             body = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"nektar {name} failed (HTTP {exc.code}): {body[:200]}") from exc
 

@@ -87,7 +87,7 @@ func cmdVault(args []string) error {
 		opHex := fs.String("operator-key-hex", os.Getenv("NEKTAR_OPERATOR_KEY_HEX"), "Cold operator 32-byte private key hex")
 		dataDir := fs.String("data-dir", "", "Data directory override")
 		_ = fs.Parse(rest)
-		signer, err := loadOperatorVaultSigner(*opWIF, *opHex)
+		signer, err := contracts.NewOperatorKeySigner(*opWIF, *opHex)
 		if err != nil {
 			return err
 		}
@@ -119,7 +119,7 @@ func cmdVault(args []string) error {
 		if err != nil {
 			return err
 		}
-		signer, err := loadOperatorVaultSigner(*opWIF, *opHex)
+		signer, err := contracts.NewOperatorKeySigner(*opWIF, *opHex)
 		if err != nil {
 			return err
 		}
@@ -150,7 +150,7 @@ func cmdVault(args []string) error {
 		if err != nil {
 			return err
 		}
-		signer, err := loadOperatorVaultSigner(*opWIF, *opHex)
+		signer, err := contracts.NewOperatorKeySigner(*opWIF, *opHex)
 		if err != nil {
 			return err
 		}
@@ -168,10 +168,6 @@ func cmdVault(args []string) error {
 	default:
 		return fmt.Errorf("unknown vault subcommand %q (use deploy|status|pause|resume|rotate-agent|sweep)", sub)
 	}
-}
-
-func loadOperatorVaultSigner(wif, keyHex string) (contracts.CovenantSighashSigner, error) {
-	return contracts.NewOperatorKeySigner(wif, keyHex)
 }
 
 func parseDestAddressOrPKH(to string) ([]byte, error) {

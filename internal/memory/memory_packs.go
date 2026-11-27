@@ -3,33 +3,17 @@ package memory
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/lightwebinc/bcommon/guard"
-
 	"github.com/kryptokrates/nektar/internal/bstack"
-	"github.com/kryptokrates/nektar/internal/chain"
-	"github.com/kryptokrates/nektar/internal/contracts"
-	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/memrepo"
 	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
-// ShardPack is a portable, CHIRP-addressed shard snapshot with fragments and anchor proofs.
-type ShardPack struct {
-	Version    int                    `json:"version"`
-	Shard      string                 `json:"shard"`
-	OwnerPub   string                 `json:"ownerPub"`
-	ExportedAt int64                  `json:"exportedAt"`
-	Fragments  []store.FragmentRecord `json:"fragments"`
-	Anchors    []store.BatchAnchor    `json:"anchors"`
-}
-
-// ShardPackResult describes an exported BRC-167 CHIRP shard pack.
+// ShardPackResult describes an exported self-verifying .nkt CHIRP Memory Capsule closure.
 type ShardPackResult struct {
 	Shard    string `json:"shard"`
 	ChirpURL string `json:"chirpUrl"`
@@ -37,17 +21,18 @@ type ShardPackResult struct {
 	Size     int    `json:"size"`
 }
 
-// ExportShardPack bundles shard fragments and anchors into a content-addressed BRC-167 CHIRP closure.
-// For external/HTTP export, use ExportShardPackAuthorized or ExportPublicShardPack.
+// ExportShardPack exports a Memory Repo as a self-verifying .nkt CHIRP Memory Capsule
+// (Git/Metanet Commit DAG + volumetric blobs + NektarAnchor UTXO lineage BEEF proofs).
+// Legacy flat JSON ShardPack v1 has been removed; .nkt Capsules are the sole portable format.
 func (s *Service) ExportShardPack(ctx context.Context, shard string) (*ShardPackResult, error) {
-	res, _, err := s.exportShardPackInternal(ctx, shard, policy.Principal{Type: "Agent", ID: "owner", Level: 100}, "read", false, false)
+	res, _, err := s.exportCapsuleAuthorized(ctx, shard, policy.Principal{Type: "Agent", ID: "owner", Level: 100}, "read", false, false)
 	return res, err
 }
 
-// ExportPublicShardPack exports only active, Level-0, non-Borg, Cedar-"disclose" fragments and registers the
-// resulting CHIRP DAG object hashes in the public unauthenticated allowlist (for starter/market packs).
+// ExportPublicShardPack exports only active, Level-0, non-Borg, Cedar-"disclose" fragments as a
+// self-verifying .nkt CHIRP Capsule and registers its DAG object hashes for unauthenticated reads.
 func (s *Service) ExportPublicShardPack(ctx context.Context, shard string) (*ShardPackResult, error) {
-	res, hashes, err := s.exportShardPackInternal(ctx, shard, policy.Principal{Type: "Agent", ID: "public", Level: 0}, "disclose", true, true)
+	res, hashes, err := s.exportCapsuleAuthorized(ctx, shard, policy.Principal{Type: "Agent", ID: "public", Level: 0}, "disclose", true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -55,13 +40,14 @@ func (s *Service) ExportPublicShardPack(ctx context.Context, shard string) (*Sha
 	return res, nil
 }
 
-// ExportShardPackAuthorized exports only active, Cedar-authorized fragments from shard into CHIRP.
+// ExportShardPackAuthorized exports only active, Cedar-authorized fragments from shard as a
+// self-verifying .nkt CHIRP Memory Capsule.
 func (s *Service) ExportShardPackAuthorized(ctx context.Context, shard string, principal policy.Principal, action string, disallowBorg bool) (*ShardPackResult, error) {
-	res, _, err := s.exportShardPackInternal(ctx, shard, principal, action, disallowBorg, true)
+	res, _, err := s.exportCapsuleAuthorized(ctx, shard, principal, action, disallowBorg, true)
 	return res, err
 }
 
-func (s *Service) exportShardPackInternal(_ context.Context, shard string, principal policy.Principal, action string, disallowBorg, excludeSuperseded bool) (*ShardPackResult, [][32]byte, error) {
+func (s *Service) exportCapsuleAuthorized(ctx context.Context, shard string, principal policy.Principal, action string, disallowBorg, excludeSuperseded bool) (*ShardPackResult, [][32]byte, error) {
 	if err := ValidateShardName(shard, false); err != nil {
 		return nil, nil, err
 	}
@@ -71,6 +57,7 @@ func (s *Service) exportShardPackInternal(_ context.Context, shard string, princ
 	if action == "" {
 		action = "disclose"
 	}
+
 	allFrags, err := s.db.ListFragments(shard)
 	if err != nil {
 		return nil, nil, err
@@ -105,224 +92,137 @@ func (s *Service) exportShardPackInternal(_ context.Context, shard string, princ
 		}
 		frags = append(frags, r)
 	}
+
+	// Build a policy-filtered .nkt MemoryCapsule preserving all authorized commits, trees, blobs, and UTXO anchors.
+	filtered := len(frags) != len(allFrags)
+	var headCommitHash string
+	if br, bErr := s.db.GetMemBranch(shard, memrepo.DefaultBranch); bErr == nil {
+		headCommitHash = br.HeadCommit
+	}
+	var commits []memrepo.CommitObject
+	trees := make(map[string]memrepo.TreeObject)
+	blobs := make(map[string]memrepo.BlobObject)
+	var chirpHashes [][32]byte
+
+	if !filtered {
+		commits = s.collectReachableCommitsTopo(headCommitHash, "")
+		trees, blobs, chirpHashes = s.collectCommitDAGObjects(shard, commits, principal, disallowBorg, true)
+	} else {
+		// Policy-filtered export: assemble a clean authorized snapshot tree so restricted fragments never leak via parent trees.
+		entries := make([]memrepo.TreeEntry, 0, len(frags))
+		for _, r := range frags {
+			relPath := r.Path
+			if relPath == "" {
+				relPath = fmt.Sprintf("facts/%04d.md", r.Seq)
+			}
+			b, hs, bErr := memrepo.BuildBlob(s.objects, relPath, r.MediaType, r.Data, false)
+			if bErr != nil || b == nil {
+				continue
+			}
+			if r.ChirpURL != "" && b.ChirpURL == "" {
+				b.ChirpURL = r.ChirpURL
+				b.BlobHash, _ = memrepo.ComputeBlobHash(*b)
+			}
+			chirpHashes = append(chirpHashes, hs...)
+			blobs[b.BlobHash] = *b
+			entries = append(entries, memrepo.TreeEntry{
+				Mode:          "100644",
+				Path:          b.Path,
+				BlobHash:      b.BlobHash,
+				MediaType:     b.MediaType,
+				Size:          b.Size,
+				ContentSHA256: b.ContentSHA256,
+				ChirpURL:      b.ChirpURL,
+			})
+		}
+		if tr, tErr := memrepo.BuildTree(entries); tErr == nil && tr != nil {
+			trees[tr.TreeHash] = *tr
+			if c, cErr := memrepo.FinalizeCommit(memrepo.CommitObject{
+				Version:      1,
+				Repo:         shard,
+				Branch:       memrepo.DefaultBranch,
+				TreeHash:     tr.TreeHash,
+				AuthorPub:    s.commitAuthorPubHex(ctx),
+				ModelID:      s.modelID.Provider + "/" + s.modelID.Release,
+				PolicyCommit: s.PolicyCommit().Hash,
+				Message:      fmt.Sprintf("Authorized capsule export (%d entries)", len(entries)),
+				Timestamp:    time.Now().Unix(),
+				AnchorN:      -1,
+			}, func(digest []byte) ([]byte, error) {
+				return s.port.SignDigest(ctx, digest)
+			}); cErr == nil {
+				commits = []memrepo.CommitObject{c}
+				headCommitHash = c.CommitHash
+			}
+		}
+	}
+
 	anchors, err := s.db.ListAnchors(shard)
 	if err != nil {
 		return nil, nil, err
 	}
-	pack := ShardPack{
-		Version:    1,
-		Shard:      shard,
-		OwnerPub:   s.port.IdentityPubHex(),
-		ExportedAt: time.Now().Unix(),
-		Fragments:  frags,
-		Anchors:    anchors,
+	genPub, genID, _ := s.resolveRepoGenesis(ctx, shard, anchors)
+	if len(commits) > 0 {
+		headCommitHash = commits[len(commits)-1].CommitHash
 	}
-	raw, err := json.Marshal(pack)
+	cap := &memrepo.MemoryCapsule{
+		Format:         memrepo.CapsuleFormatVersion,
+		Repo:           shard,
+		Branch:         memrepo.DefaultBranch,
+		GenesisPub:     genPub,
+		GenesisShardID: genID,
+		OwnerPub:       s.port.IdentityPubHex(),
+		HeadCommit:     headCommitHash,
+		ExportedAt:     time.Now().Unix(),
+		Commits:        commits,
+		Trees:          trees,
+		Blobs:          blobs,
+		Anchors:        anchors,
+		Fragments:      frags,
+		BatchProofs:    s.buildCapsuleBatchProofs(shard, anchors, frags, commits),
+	}
+	raw, err := memrepo.EncodeCapsule(cap)
 	if err != nil {
 		return nil, nil, err
 	}
-	u, root, hashes, err := bstack.StoreChirpWithHashes(s.objects, raw)
+	u, root, packHashes, err := bstack.StoreChirpWithHashes(s.objects, raw)
 	if err != nil {
 		return nil, nil, err
 	}
+	chirpHashes = append(chirpHashes, packHashes...)
 	return &ShardPackResult{
 		Shard:    shard,
 		ChirpURL: u,
 		RootHex:  hex.EncodeToString(root[:]),
 		Size:     len(raw),
-	}, hashes, nil
+	}, chirpHashes, nil
 }
 
-// ImportShardPack resolves and verifies a CHIRP shard pack closure and imports its fragments into targetShard.
+// ImportShardPack resolves and strictly verifies a .nkt CHIRP Memory Capsule (enforcing
+// NektarAnchor UTXO spend lineage) and forks/merges it into targetShard.
 func (s *Service) ImportShardPack(ctx context.Context, chirpURL, targetShard string) (int, error) {
 	raw, err := bstack.ResolveChirp(s.objects, chirpURL)
 	if err != nil {
 		return 0, err
 	}
-	n, _, err := s.importShardPackVerified(ctx, raw, targetShard)
+	n, _, err := s.ImportShardPackBytesCtx(ctx, raw, targetShard)
 	return n, err
 }
 
-func (s *Service) importShardPackVerified(ctx context.Context, raw []byte, targetShard string) (int, string, error) {
-	var pack ShardPack
-	if err := json.Unmarshal(raw, &pack); err != nil {
-		return 0, "", fmt.Errorf("memory: decode shard pack: %w", err)
-	}
-	if targetShard == "" {
-		targetShard = pack.Shard
-	}
-	if err := ValidateShardName(targetShard, false); err != nil {
-		return 0, "", err
-	}
-	// Verify every claimed anchor's AnchorBEEF (bounded via guard.ParseBEEF) + Rúnar NektarAnchor state
-	// + contiguous ChainRp continuity from genesis + header BUMP settlement (never trusting untrusted JSON flags)
-	// and refuse overwriting any conflicting existing local anchor!
-	sortedAnchors := append([]store.BatchAnchor(nil), pack.Anchors...)
-	for i := 1; i < len(sortedAnchors); i++ {
-		for j := i; j > 0 && sortedAnchors[j].N < sortedAnchors[j-1].N; j-- {
-			sortedAnchors[j], sortedAnchors[j-1] = sortedAnchors[j-1], sortedAnchors[j]
-		}
-	}
-	verifiedAnchors := make(map[int64]store.BatchAnchor, len(sortedAnchors))
-	prevRp := core.Zero32Bytes()
-	expectedN := int64(0)
-	tracker := s.port.Tracker()
-	for _, a := range sortedAnchors {
-		if len(a.Beef) == 0 {
-			break
-		}
-		// Enforce contiguous anchor numbering from genesis (no skipped N=0 or gaps bypassing ChainRp!).
-		if a.N != expectedN {
-			break
-		}
-		parsedBeef, tx, txHash, tErr := guard.ParseBEEF(a.Beef, guard.DefaultBound)
-		if tErr != nil || tx == nil || txHash == nil || len(tx.Outputs) == 0 || tx.Outputs[0].LockingScript == nil {
-			break
-		}
-		st, dErr := contracts.DecodeNektarAnchor(*tx.Outputs[0].LockingScript)
-		if dErr != nil {
-			break
-		}
-		if st.N != uint64(a.N) || st.Size != uint64(a.Size) || !strings.EqualFold(hex.EncodeToString(st.R), a.RootHex) ||
-			!strings.EqualFold(hex.EncodeToString(st.Rp), a.ChainedHex) || txHash.String() != a.TxID {
-			break
-		}
-		// Enforce sequential ChainRp linkage across every imported anchor.
-		wantTag := core.ChainRpWithTag(st.Tag, prevRp, st.R, st.Size)
-		wantLegacy := core.EqualBytes(st.Tag, core.TagAnchorTag) && core.EqualBytes(st.Rp, core.ChainRp(prevRp, st.R, st.Size))
-		if !core.EqualBytes(wantTag, st.Rp) && !wantLegacy {
-			break
-		}
-		// Derive Settled and BlockHeight strictly from verified BUMP or full carried-ancestry SPV
-		// BEFORE advancing prevRp/expectedN or persisting anything. Never trust untrusted JSON flags/heights!
-		a.Settled = false
-		a.BlockHeight = 0
-		if tx.MerklePath != nil {
-			root, rErr := tx.MerklePath.ComputeRoot(txHash)
-			if rErr != nil || root == nil {
-				break
-			}
-			if s.port.Network() == "memory" {
-				// Even in memory mode, ComputeRoot already ran above; check tracker if same chain or mark settled.
-				a.Settled = true
-				a.BlockHeight = int64(tx.MerklePath.BlockHeight)
-			} else {
-				if tracker == nil {
-					return 0, targetShard, fmt.Errorf("memory: import shard pack requires chain tracker for anchor %d: %w", a.N, chain.ErrTrackerUnavailable)
-				}
-				valid, vErr := tracker.IsValidRootForHeight(ctx, root, tx.MerklePath.BlockHeight)
-				if vErr != nil {
-					// Return retryable error on tracker outage instead of silently dropping valid anchors and corrupting ChainTail!
-					return 0, targetShard, fmt.Errorf("memory: header tracker unavailable verifying imported anchor %d: %w", a.N, vErr)
-				}
-				if !valid {
-					break
-				}
-				a.Settled = true
-				a.BlockHeight = int64(tx.MerklePath.BlockHeight)
-			}
-		} else {
-			// Unmined pack anchor: MUST pass full spv.Verify of carried input ancestry (reject pathless/unproven anchors!).
-			if s.port.Network() != "memory" {
-				if tracker == nil {
-					return 0, targetShard, fmt.Errorf("memory: import shard pack requires chain tracker for unmined anchor %d: %w", a.N, chain.ErrTrackerUnavailable)
-				}
-				if sErr := chain.VerifyTransactionSPV(ctx, tx, parsedBeef, tracker); sErr != nil {
-					if errors.Is(sErr, chain.ErrTrackerUnavailable) {
-						return 0, targetShard, fmt.Errorf("memory: header tracker unavailable verifying unmined anchor %d: %w", a.N, sErr)
-					}
-					break
-				}
-			} else if tracker != nil {
-				if sErr := chain.VerifyTransactionSPV(ctx, tx, parsedBeef, tracker); sErr != nil {
-					break
-				}
-			}
-		}
-		a.Shard = targetShard
-		if err := s.db.SaveBatchAnchorStrict(a); err != nil {
-			return 0, targetShard, fmt.Errorf("memory: import shard pack anchor conflict: %w", err)
-		}
-		prevRp = st.Rp
-		expectedN = a.N + 1
-		verifiedAnchors[a.N] = a
-	}
+// ImportShardPackBytes verifies and imports raw .nkt Memory Capsule bytes into targetShard.
+func (s *Service) ImportShardPackBytes(raw []byte, targetShard string) (int, string, error) {
+	return s.ImportShardPackBytesCtx(context.Background(), raw, targetShard)
+}
 
-	// Recompute every fragment's HDP/Leaf and verify full batch Merkle root against a.RootHex
-	// before allowing any imported fragment to retain anchored (BatchN, LeafIndex, AnchorTxID) status!
-	batchValid := make(map[int64]bool, len(verifiedAnchors))
-	for batchN, a := range verifiedAnchors {
-		byIdx := make(map[int][]byte)
-		okBatch := a.Size > 0
-		for _, f := range pack.Fragments {
-			if f.BatchN != batchN {
-				continue
-			}
-			if f.LeafIndex < 0 || f.LeafIndex >= a.Size {
-				okBatch = false
-				break
-			}
-			hdpBytes, hErr := hex.DecodeString(strings.TrimSpace(f.HDP))
-			if hErr != nil || len(hdpBytes) != 32 {
-				okBatch = false
-				break
-			}
-			// Whenever plaintext Data is present for a non-forgotten, non-Borg fragment, Provenance MUST be present
-			// and HDP MUST cryptographically commit to Data+Provenance (prevents empty-provenance plaintext forgery!).
-			if len(f.Data) > 0 && !f.Forgotten && f.BorgGroup == "" {
-				if len(f.Provenance) == 0 {
-					okBatch = false
-					break
-				}
-				expectedV1 := core.SHA256(core.Concat(core.TagProv, f.Data, f.Provenance))
-				expectedV2 := core.SHA256(core.Concat(core.TagProvV2, core.Field(f.Data), f.Provenance))
-				if !core.EqualBytes(expectedV1, hdpBytes) && !core.EqualBytes(expectedV2, hdpBytes) {
-					okBatch = false
-					break
-				}
-			}
-			leafBytes := core.ComputeLeaf(core.Fragment{HDP: hdpBytes, Ciphertext: f.Ciphertext})
-			if !strings.EqualFold(f.Leaf, core.ToHex(leafBytes)) {
-				// Backward compatibility for legacy encrypted fragments committed with empty ciphertext.
-				legacyLeaf := core.ComputeLeaf(core.Fragment{HDP: hdpBytes})
-				if len(f.Ciphertext) == 0 || !strings.EqualFold(f.Leaf, core.ToHex(legacyLeaf)) {
-					okBatch = false
-					break
-				}
-				leafBytes = legacyLeaf
-			}
-			byIdx[f.LeafIndex] = leafBytes
-		}
-		if okBatch && len(byIdx) == a.Size {
-			leaves := make([][]byte, a.Size)
-			for i := 0; i < a.Size; i++ {
-				lb, ok := byIdx[i]
-				if !ok {
-					okBatch = false
-					break
-				}
-				leaves[i] = lb
-			}
-			if okBatch {
-				if root, rErr := core.MerkleRoot(leaves); rErr == nil && strings.EqualFold(core.ToHex(root), a.RootHex) {
-					batchValid[batchN] = true
-				}
-			}
-		}
+// ImportShardPackBytesCtx strictly decodes and verifies a .nkt Memory Capsule (rejecting legacy
+// flat JSON packs without UTXO-lineage capsule framing) and imports it into targetShard.
+func (s *Service) ImportShardPackBytesCtx(ctx context.Context, raw []byte, targetShard string) (int, string, error) {
+	if !memrepo.IsCapsuleBytes(raw) {
+		return 0, targetShard, errors.New("memory: legacy flat ShardPack format is unsupported; only self-verifying .nkt Memory Capsules with UTXO lineage are accepted")
 	}
-
-	imported := 0
-	for _, f := range pack.Fragments {
-		f.Shard = targetShard
-		f.Tainted = true
-		if a, hasAnchor := verifiedAnchors[f.BatchN]; !hasAnchor || !batchValid[f.BatchN] || f.BatchN < 0 || f.AnchorTxID != a.TxID {
-			f.BatchN = -1
-			f.LeafIndex = -1
-			f.AnchorTxID = ""
-		}
-		if _, dedup, err := s.db.AppendFragment(f); err == nil && !dedup {
-			imported++
-		}
+	res, err := s.ImportCapsule(ctx, raw, "", targetShard, memrepo.DefaultBranch, true)
+	if err != nil {
+		return 0, targetShard, err
 	}
-	return imported, targetShard, nil
+	return res.ImportedFrags, res.Repo, nil
 }

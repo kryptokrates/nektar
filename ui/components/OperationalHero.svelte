@@ -114,9 +114,6 @@
   .dim { color: var(--mut2); font-size: 0.74rem; }
   .sep { color: var(--line2); }
 
-  .pii { color: var(--ok); font-weight: 600; font-size: 0.75rem; }
-  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
-
   .acts {
     display: flex;
     align-items: center;

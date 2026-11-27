@@ -25,7 +25,7 @@ jobs:
   hetzner:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: resolve verified immutable image digest & commit SHA
         id: resolve
@@ -42,7 +42,7 @@ jobs:
           if [ "$EVENT_NAME" = "workflow_run" ]; then
             ci_run_status=""
             ci_status=""
-            for _ in $(seq 1 12); do
+            for _ in $(seq 1 40); do
               ci_info="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD_SHA&per_page=1" \
                 --jq 'if (.workflow_runs | length) == 0 then "missing missing" else "\(.workflow_runs[0].status // "unknown") \(.workflow_runs[0].conclusion // "pending")" end')"
               ci_run_status="${ci_info%% *}"

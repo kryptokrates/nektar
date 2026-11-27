@@ -69,13 +69,14 @@ func DefaultSettleDepth(network string) int {
 }
 
 // DefaultHeaderSources returns the default comma-separated PoW header witnesses for network.
-// Mainnet pairs 3 distinct-origin public PoW header services (WhatsOnChain + Babbage Chaintracks v2 +
-// BSV Association Arcade Chaintracks v2) for automatic 2-of-3 quorum with early slow-straggler
-// cancellation; testnet pairs 2 distinct-origin witnesses (WhatsOnChain + Arcade Testnet).
+// Mainnet pairs 3 distinct-origin public PoW header services (WhatsOnChain + BSV Association
+// US Arcade Chaintracks v2 + BSV Association EU Arcade Chaintracks v2) for automatic 2-of-3
+// quorum with early slow-straggler cancellation and zero Babbage dependency; testnet pairs
+// 2 distinct-origin witnesses (WhatsOnChain + Arcade Testnet).
 func DefaultHeaderSources(network string) string {
 	switch strings.ToLower(strings.TrimSpace(network)) {
 	case "main", "mainnet":
-		return "woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2,arcade:" + DefaultBroadcasterMainnet
+		return "woc:main,arcade:" + DefaultBroadcasterMainnet + ",arcade:" + DefaultBroadcasterMainnetEU
 	case "testnet", "test":
 		return "woc:test,arcade:" + DefaultBroadcasterTestnet
 	case "regtest":

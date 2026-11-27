@@ -49,7 +49,7 @@ go test -race -v ./internal/market/... ./internal/hub/... ./internal/server/... 
 
 # Mainnet safety gate preflight (exits 0 only when confirm + >=2 non-circular PoW witnesses + settle spec are valid)
 NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND \
-NEKTAR_HEADERS_SOURCE="woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2" \
+NEKTAR_HEADERS_SOURCE="woc:main,arcade:https://arcade-v2-us-1.bsvblockchain.tech,arcade:https://arcade-eu-1.bsvblockchain.tech" \
 NEKTAR_SETTLE_SPEC="broadcaster:main" \
   nektar check-mainnet
 ```

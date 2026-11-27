@@ -59,7 +59,7 @@ services:
       NEKTAR_HUB_LOOKUP_PRICES: ${NEKTAR_HUB_LOOKUP_PRICES:-}
       NEKTAR_SPINE_PEER_PUBS: ${NEKTAR_SPINE_PEER_PUBS:-}
       NEKTAR_SEED_DOMAINS: ${NEKTAR_SEED_DOMAINS:-}
-      NEKTAR_HEADERS_SOURCE: ${NEKTAR_HEADERS_SOURCE:-woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2,arcade:https://arcade-v2-us-1.bsvblockchain.tech}
+      NEKTAR_HEADERS_SOURCE: ${NEKTAR_HEADERS_SOURCE:-woc:main,arcade:https://arcade-v2-us-1.bsvblockchain.tech,arcade:https://arcade-eu-1.bsvblockchain.tech}
       NEKTAR_SETTLE_SPEC: ${NEKTAR_SETTLE_SPEC:-broadcaster:main}
       NEKTAR_SETTLE_DEPTH: ${NEKTAR_SETTLE_DEPTH:-6}
       NEKTAR_WALLET_PROFILE: ${NEKTAR_WALLET_PROFILE:-standard}

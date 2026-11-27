@@ -186,7 +186,7 @@ func TestMainnetDefaultHeaderSourcesThreeWitnessTwoOfThreeQuorum(t *testing.T) {
 	down := failingWitness{err: ErrHeaderQuorumUnavailable}
 	wt3, err := NewWitnessedTracker("main", []NamedWitness{
 		{Name: "woc:main", Origin: "https://api.whatsonchain.com", Kind: headers.WhatsOnChain, Source: w1},
-		{Name: "chaintracks:babbage", Origin: "https://mainnet-chaintracks.babbage.systems", Kind: headers.Chaintracks, Source: down},
+		{Name: "arcade:eu-1", Origin: "https://arcade-eu-1.bsvblockchain.tech", Kind: headers.Arcade, Source: down},
 		{Name: "arcade:v2-us-1", Origin: "https://arcade-v2-us-1.bsvblockchain.tech", Kind: headers.Arcade, Source: w2},
 	})
 	if err != nil {

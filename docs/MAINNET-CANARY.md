@@ -36,8 +36,8 @@ export NEKTAR_NETWORK="main"
 export NEKTAR_MAINNET_CONFIRM="I_UNDERSTAND"
 
 # >= 2 distinct-origin, non-circular PoW header witnesses (zero-PoW Native header endpoints are forbidden!)
-# Default 2-of-3 live Mainnet quorum: WhatsOnChain + Babbage Chaintracks v2 + BSV Association Arcade v2
-export NEKTAR_HEADERS_SOURCE="woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2,arcade:https://arcade-v2-us-1.bsvblockchain.tech"
+# Default 2-of-3 live Mainnet quorum: WhatsOnChain + official US & EU BSV Association Arcade Chaintracks v2
+export NEKTAR_HEADERS_SOURCE="woc:main,arcade:https://arcade-v2-us-1.bsvblockchain.tech,arcade:https://arcade-eu-1.bsvblockchain.tech"
 export NEKTAR_CHAIN_SPEC="woc:main"
 export NEKTAR_SETTLE_SPEC="broadcaster:main"
 

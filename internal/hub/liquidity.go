@@ -76,7 +76,7 @@ func ArmHubLiquidity(ctx context.Context, node *Node, mem *memory.Service, cfg L
 				Facts: []string{
 					"BSV SPV verification validates transaction Merkle paths against block headers offline without trusting any remote RPC server.",
 					"BRC-369 keyed paid disclosure binds sha256(k) into a DisclosureSale covenant so a buyer verifies the content key before decrypting CHIRP ciphertext.",
-					"Nektar v0.1 Mainnet uses dual-witness non-circular PoW headers (WhatsOnChain + Babbage Chaintracks) and official dual-region US/EU BSV Broadcaster endpoints.",
+					"Nektar v0.1 Mainnet uses 2-of-3 non-circular PoW header witnesses (WhatsOnChain + official US/EU BSV Association Arcade Chaintracks v2) and official dual-region US/EU BSV Broadcaster endpoints.",
 					"Hubs operate in Spine-and-Leaf topology with BRC-105 hybrid micro-fees (5 sats want, 2 sats offer, 2 sats NAT bbox relay, 10 sats per 100 metered egress events).",
 				},
 			},

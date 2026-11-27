@@ -189,7 +189,7 @@ func main() {
 	// When 9 processes share 1 IP against public unkeyed WhatsOnChain (3 req/s limit),
 	// run a shared read-through Chaintracks v2 header cache proxy on 127.0.0.1:18809
 	// backed 100% by real api.whatsonchain.com/v1/bsv/<net> block headers (paced at <2 req/s).
-	// On Mainnet, pair it with official Babbage Chaintracks v2 for strict >=2 distinct-origin PoW quorum!
+	// On Mainnet, pair it with official BSV Association Arcade Chaintracks v2 for strict >=2 distinct-origin PoW quorum!
 	// Every Nektar process still verifies 100% of 80-byte PoW + Prev-linkage locally.
 	if isLive {
 		wocNet := "test"
@@ -199,7 +199,7 @@ func main() {
 		stopHdrProxy := startWoCReadThroughHeaderProxy("127.0.0.1:18809", *workDir, wocNet)
 		defer stopHdrProxy()
 		if isMain {
-			commonEnv = append(commonEnv, "NEKTAR_HEADERS_SOURCE=chaintracks:http://127.0.0.1:18809/v2,chaintracks:https://mainnet-chaintracks.babbage.systems/v2")
+			commonEnv = append(commonEnv, "NEKTAR_HEADERS_SOURCE=chaintracks:http://127.0.0.1:18809/v2,arcade:https://arcade-v2-us-1.bsvblockchain.tech,arcade:https://arcade-eu-1.bsvblockchain.tech")
 		} else {
 			commonEnv = append(commonEnv, "NEKTAR_HEADERS_SOURCE=chaintracks:http://127.0.0.1:18809/v2")
 		}

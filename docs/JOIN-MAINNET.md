@@ -14,7 +14,7 @@ Every gate below is either **executable** (verified by a command you run and rec
 |---|---|---|---|
 | **E1** | Vet, build & race tests | `go vet ./... && go test -race -count=1 ./...` | All Go packages green with `-race` |
 | **E2** | Static cross-compile | `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./cmd/nektar` (and `GOOS=windows`) | Zero-CGO single binary builds cleanly |
-| **E3** | Mainnet safety gate | `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND NEKTAR_HEADERS_SOURCE="woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2,arcade:https://arcade-v2-us-1.bsvblockchain.tech" NEKTAR_SETTLE_SPEC="broadcaster:main" nektar check-mainnet` | Exits `0` with `>= 2` distinct-origin non-circular PoW header witnesses (default 2-of-3 quorum) |
+| **E3** | Mainnet safety gate | `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND NEKTAR_HEADERS_SOURCE="woc:main,arcade:https://arcade-v2-us-1.bsvblockchain.tech,arcade:https://arcade-eu-1.bsvblockchain.tech" NEKTAR_SETTLE_SPEC="broadcaster:main" nektar check-mainnet` | Exits `0` with `>= 2` distinct-origin non-circular PoW header witnesses (default 2-of-3 quorum) |
 | **E4** | Mainnet refusal without confirm | `nektar serve --network main` (without `--confirm I_UNDERSTAND`) | Fails closed before opening wallet or HTTP listener |
 | **E5** | Dual-witness & SPV hardening | `go test -race -v ./internal/chain/... ./internal/contracts/...` | REFUSED-BUMP foreign-chain rejection, tracker-outage 503 separation, and offline SPV verification pass |
 | **E6** | Kill-switch drill | `POST /v1/automation/kill {"enabled":true}` or `touch ~/.nektar/main/KILL` (or global `touch ~/.nektar/KILL`) | New market trades refused immediately; SpendGuard caps remain enforced |
@@ -46,8 +46,8 @@ export NEKTAR_MAINNET_CONFIRM="I_UNDERSTAND"
 # Custody: auto (uses BSV Desktop on :3321 if open, else embedded) | client | embedded
 export NEKTAR_WALLET="auto"
 
-# Dual-witness non-circular PoW headers (automatically uses 2-of-3 quorum on main when left unset)
-# export NEKTAR_HEADERS_SOURCE="woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2,arcade:https://arcade-v2-us-1.bsvblockchain.tech"
+# Multi-witness non-circular PoW headers (automatically uses 2-of-3 quorum on main when left unset)
+# export NEKTAR_HEADERS_SOURCE="woc:main,arcade:https://arcade-v2-us-1.bsvblockchain.tech,arcade:https://arcade-eu-1.bsvblockchain.tech"
 # export NEKTAR_SETTLE_SPEC="broadcaster:main"
 
 # Conservative SpendGuard caps (enforced fail-closed before every broadcast)

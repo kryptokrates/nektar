@@ -64,7 +64,7 @@ flowchart LR
   ```
   Run `nektar doctor` (or `GET /v1/wallet/desktop`) to auto-detect BSV Desktop on `127.0.0.1:3321`.
 
-- Mainnet automatically uses **dual-witness non-circular PoW headers** (`woc:main` + Babbage `chaintracks/v2`) and **dual-region US + EU official BSV Broadcaster** (`arcade-v2-us-1.bsvblockchain.tech` + `arcade-eu-1.bsvblockchain.tech`).
+- Mainnet automatically uses **2-of-3 non-circular PoW headers** (`woc:main` + US/EU official BSV Association Arcade `chaintracks/v2`) and **dual-region US + EU official BSV Broadcaster** (`arcade-v2-us-1.bsvblockchain.tech` + `arcade-eu-1.bsvblockchain.tech`).
 
 ---
 

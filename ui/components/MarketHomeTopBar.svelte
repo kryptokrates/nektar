@@ -55,7 +55,7 @@
         {faucetBusy ? 'Loading…' : '+ Free sats'}
       </button>
     {/if}
-    <button class="bal-pill" onclick={() => onNavigate('wallet')} title="Wallet">
+    <button class="bal-pill" onclick={() => onNavigate('wallet')} title="Chain & Vault (UTXOs, BRC-29, Covenants)">
       <span class="bval">{fmtSats(sats)}</span>
       <span class="bunit">sats</span>
     </button>

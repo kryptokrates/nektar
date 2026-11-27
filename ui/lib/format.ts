@@ -11,6 +11,32 @@ export function fmtCompactSats(n: number): string {
   return `${sign}${(abs / 1_000_000_000).toFixed(1)}B`
 }
 
+export function fmtTokens(n: number): string {
+  const abs = Math.abs(n)
+  if (abs < 1_000) return `${Math.round(n)}`
+  if (abs < 1_000_000) return `${(n / 1_000).toFixed(abs >= 100_000 ? 0 : 1)}k`
+  return `${(n / 1_000_000).toFixed(2)}M`
+}
+
+export function fmtUsdCents(cents: number): string {
+  const sign = cents < 0 ? '-' : ''
+  const abs = Math.abs(cents) / 100
+  return `${sign}$${abs.toFixed(2)}`
+}
+
+export function fmtSatsUsd(sats: number, bsvUsd = 50): string {
+  const sign = sats < 0 ? '-' : ''
+  const usd = (Math.abs(sats) / 100_000_000) * bsvUsd
+  if (usd === 0) return '$0.00'
+  if (usd < 0.01) return `${sign}$${usd.toFixed(4)}`
+  return `${sign}$${usd.toFixed(2)}`
+}
+
+export function fmtBpPct(bp: number): string {
+  const clamped = Math.max(0, Math.min(10000, bp))
+  return `${Math.round(clamped / 100)}%`
+}
+
 export function shortHost(u: string): string {
   return u.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
 }

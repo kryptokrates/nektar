@@ -367,6 +367,123 @@ export type AssetBasketSummary = {
   error?: string
 }
 
+export type EconomicsSummary = {
+  tokensIn: number
+  tokensOut: number
+  tokensSaved: number
+  earnedSats: number
+  spentSats: number
+  netSats: number
+  factsBought: number
+  factsSold: number
+  workBounties: number
+  estSavedUsdCents: number
+}
+
+export type EconomicsState = {
+  today: EconomicsSummary
+  allTime: EconomicsSummary
+}
+
+export type ReputationVector6D = {
+  subjectPub: string
+  ontologyId: string
+  accBp: number
+  consBp: number
+  dispBp: number
+  predBp: number
+  collabBp: number
+  provBp: number
+  eigenTrustBp: number
+  compositeBp: number
+  directDeals: number
+  attestCount: number
+  updatedAt: number
+}
+
+export type ReputationAttestation = {
+  attestHash: string
+  role: 'buyer_rates_seller' | 'seller_rates_buyer' | string
+  issuerPub: string
+  subjectPub: string
+  ontologyId: string
+  dealId: string
+  dealReceiptHash: string
+  token: string
+  evidenceHash?: string
+  accBp: number
+  consBp: number
+  dispBp: number
+  predBp: number
+  collabBp: number
+  provBp: number
+  compositeBp: number
+  createdAt: number
+}
+
+export type DealOutcome = {
+  dealId: string
+  subjectPub: string
+  ontologyId: string
+  exitCode: number
+  note?: string
+  recordedAt: number
+}
+
+export type ReputationState = {
+  ontologyId: string
+  ontologies: string[]
+  vectors: ReputationVector6D[]
+  attestations: ReputationAttestation[]
+  outcomes: DealOutcome[]
+  trustedSellers?: string[] | null
+  priorityBuyers?: string[] | null
+  sybilOrUntrusted?: string[] | null
+  advisoryNote: string
+}
+
+export type DistillQuarantine = {
+  id: string
+  shard: string
+  seq: number
+  ruleId: string
+  contentHash: string
+  createdAt: number
+}
+
+export type SleepCycleState = {
+  status?: string
+  lastRunAt?: number
+  totalRuns?: number
+  totalDistilled?: number
+  totalQuarantined?: number
+  totalDropped?: number
+  totalSuperseded?: number
+  priceDecayed?: number
+  lastError?: string
+}
+
+export type DistillState = {
+  distilledCount: number
+  quarantinedCount: number
+  quarantined: DistillQuarantine[]
+  marketShards: string[]
+  idleSeconds: number
+  lastCycle?: SleepCycleState
+}
+
+export type MicroEarnerState = {
+  enabled: boolean
+  status: 'funded_idle' | 'earning' | 'disabled' | 'error' | string
+  targetFloatSats: number
+  balanceSats: number
+  earnedSatsTotal: number
+  tasksCompleted: number
+  bountiesSubmitted: number
+  lastRunAt: number
+  lastError?: string
+}
+
 export type State = {
   network: string
   model: string
@@ -411,6 +528,10 @@ export type State = {
   ai?: AIStatus | null
   market: ListedShard[]
   marketTape?: MarketTapeEvent[]
+  economics?: EconomicsState
+  reputation?: ReputationState
+  distill?: DistillState
+  microEarner?: MicroEarnerState
   net: {
     hosts: Host[]
     seeds: string[]

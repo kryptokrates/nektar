@@ -78,7 +78,8 @@
 
 <div class="view">
   <header class="sticky-head">
-    <h1>Wallet</h1>
+    <h1>Chain &amp; Vault</h1>
+    <p class="vault-sub">BSV UTXOs, AtomicBEEF, BRC-29 &amp; Rúnar Covenants (Advanced)</p>
   </header>
 
   <div class="wallet-grid">
@@ -180,6 +181,7 @@
     border-bottom: 1px solid var(--line);
   }
   h1 { margin: 0; font-size: 1.15rem; font-weight: 800; letter-spacing: -0.02em; }
+  .vault-sub { margin: 0.15rem 0 0; font-size: 0.72rem; color: var(--mut2); }
   .hero {
     padding: 2.2rem 1.25rem 1.7rem; text-align: center;
     border-bottom: 1px solid var(--line);

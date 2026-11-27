@@ -3,6 +3,9 @@
   import MarketPulse from './MarketPulse.svelte'
   import MarketHomeTopBar from './MarketHomeTopBar.svelte'
   import QuickstartStrip from './QuickstartStrip.svelte'
+  import OperationalHero from './OperationalHero.svelte'
+  import SleepCycleCard from './SleepCycleCard.svelte'
+  import ReputationRadar from './ReputationRadar.svelte'
   import MarketHomeBuyCol from './MarketHomeBuyCol.svelte'
   import MarketHomeSellCol from './MarketHomeSellCol.svelte'
   import MarketHomeTape from './MarketHomeTape.svelte'
@@ -147,6 +150,9 @@
     {onRequestFaucet}
   />
 
+  <!-- 0. ZERO-CRYPTO OPERATIONAL HERO -->
+  <OperationalHero {s} {onRefresh} {onToast} {onNavigate} />
+
   <!-- 1. VIRAL HERO: CLEAN NEKTAR CLEARING PULSE -->
   <MarketPulse {s} {live} {pulse} onPickBuy={pickBuy} onPickSell={pickSell} />
 
@@ -183,6 +189,17 @@
     />
   </section>
 
+  <!-- 3. AUTONOMOUS ENGINE: SLEEPCYCLE PII GATE + 6D REPUTATION RADAR -->
+  <section class="auto-deck" aria-label="Autonomous engine status">
+    <SleepCycleCard
+      distill={s.distill}
+      microEarner={s.microEarner}
+      {onRefresh}
+      {onToast}
+    />
+    <ReputationRadar reputation={s.reputation} />
+  </section>
+
   <MarketHomeTape
     {homeAgentPills}
     {deals}
@@ -207,7 +224,15 @@
     flex: 1;
   }
 
+  .auto-deck {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0.9rem;
+    padding: 0.95rem 1.25rem;
+    border-top: 1px solid var(--line);
+  }
+
   @media (max-width: 820px) {
-    .dual-deck { grid-template-columns: 1fr; }
+    .dual-deck, .auto-deck { grid-template-columns: 1fr; }
   }
 </style>

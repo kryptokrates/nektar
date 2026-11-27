@@ -68,7 +68,7 @@
           <path d="M16 12.5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
           <circle cx="16.5" cy="12.5" r="1" fill="currentColor" />
         </svg>
-        <span class="lbl">Wallet</span>
+        <span class="lbl">Chain &amp; Vault</span>
       </button>
 
       <button class="ni" class:active={tab === 'settings'} onclick={() => onSelect('settings')}>

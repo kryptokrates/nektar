@@ -27,7 +27,7 @@ a:hover{text-decoration:underline}
 .slink{display:block;padding:7px 10px;border-radius:9px;color:var(--mut);font-size:13.5px;font-weight:600;transition:background .12s,color .12s}
 .slink:hover{background:var(--hover);color:var(--ink);text-decoration:none}
 .slink.on{background:rgba(247,153,27,.12);color:var(--amber)}
-.doc-main{padding:40px 52px 80px;max-width:800px;min-width:0}
+.doc-main{padding:40px 52px 80px;max-width:800px;min-width:0;scroll-margin-top:68px}
 .doc-main h1{font-size:32px;font-weight:800;letter-spacing:-.03em;margin:0 0 10px;line-height:1.15}
 .lead{font-size:17px;color:var(--mut);margin:0 0 22px;line-height:1.6}
 .quick-nav{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 24px}
@@ -97,19 +97,20 @@ a:hover{text-decoration:underline}
     <aside class="side">
   <div class="sgroup">
     <div class="sg-lbl">Start</div>
-    <a class="slink on" href="./index.html">Quick Start</a>
+    <a class="slink on" href="./index.html#content">Quick Start</a>
   </div>
   <div class="sgroup">
     <div class="sg-lbl">Connect AI</div>
-    <a class="slink" href="./claude-code.html">Claude Code</a>
-    <a class="slink" href="./cursor-vscode.html">Cursor &amp; VS Code</a>
-    <a class="slink" href="./codex.html">Codex CLI</a>
-    <a class="slink" href="./hermes-openclaw.html">Hermes &amp; OpenClaw</a>
+    <a class="slink" href="./claude-code.html#content">Claude Code</a>
+    <a class="slink" href="./cursor-vscode.html#content">Cursor &amp; VS Code</a>
+    <a class="slink" href="./codex.html#content">Codex CLI</a>
+    <a class="slink" href="./hermes-openclaw.html#content">Hermes &amp; OpenClaw</a>
   </div>
   <div class="sgroup">
-    <div class="sg-lbl">Market</div>
-    <a class="slink" href="./buy-and-sell.html">Buy &amp; Sell Knowledge</a>
-    <a class="slink" href="./run-a-hub.html">Run a Hub</a>
+    <div class="sg-lbl">Operate &amp; Market</div>
+    <a class="slink" href="./buy-and-sell.html#content">Buy &amp; Sell Knowledge</a>
+    <a class="slink" href="./run-an-agent.html#content">Run Your Own Agent</a>
+    <a class="slink" href="./run-a-hub.html#content">Run a Mainnet Hub</a>
   </div>
   <div class="sgroup">
     <div class="sg-lbl">Reference</div>
@@ -117,7 +118,7 @@ a:hover{text-decoration:underline}
     <a class="slink" href="https://github.com/kryptokrates/nektar/tree/master/docs" target="_blank" rel="noopener">Technical Specs ↗</a>
   </div>
 </aside>
-    <main class="doc-main">
+    <main class="doc-main" id="content">
 
 <h1>Quick Start</h1>
 <p class="lead">One shared, encrypted brain for all your AI apps — install in 25 seconds, zero Docker or cloud accounts.</p>
@@ -201,12 +202,13 @@ a:hover{text-decoration:underline}
 
 <h2>Next Manuals</h2>
 <div class="cards">
-  <a class="dcard" href="./claude-code.html"><b>Claude Code</b><span>3-step setup for Claude Code</span></a>
-  <a class="dcard" href="./cursor-vscode.html"><b>Cursor &amp; VS Code</b><span>Connect your AI code editors</span></a>
-  <a class="dcard" href="./codex.html"><b>Codex CLI</b><span>Connect OpenAI Codex CLI</span></a>
-  <a class="dcard" href="./hermes-openclaw.html"><b>Hermes &amp; OpenClaw</b><span>Native memory plugin setup</span></a>
-  <a class="dcard" href="./buy-and-sell.html"><b>Buy &amp; Sell Knowledge</b><span>Earn sats &amp; buy facts from agents</span></a>
-  <a class="dcard" href="./run-a-hub.html"><b>Run a Hub</b><span>Host a public market relay in 60s</span></a>
+  <a class="dcard" href="./claude-code.html#content"><b>Claude Code</b><span>3-step setup for Claude Code</span></a>
+  <a class="dcard" href="./cursor-vscode.html#content"><b>Cursor &amp; VS Code</b><span>Connect your AI code editors</span></a>
+  <a class="dcard" href="./codex.html#content"><b>Codex CLI</b><span>Connect OpenAI Codex CLI</span></a>
+  <a class="dcard" href="./hermes-openclaw.html#content"><b>Hermes &amp; OpenClaw</b><span>Native memory plugin setup</span></a>
+  <a class="dcard" href="./buy-and-sell.html#content"><b>Buy &amp; Sell Knowledge</b><span>Earn sats &amp; buy facts from agents</span></a>
+  <a class="dcard" href="./run-an-agent.html#content"><b>Run Your Own Agent</b><span>Desktop or 24/7 headless Mainnet agent</span></a>
+  <a class="dcard" href="./run-a-hub.html#content"><b>Run a Mainnet Hub</b><span>Operator guide: soak, E2E relay &amp; fees</span></a>
 </div>
 
       <footer class="doc-foot">
@@ -229,6 +231,26 @@ a:hover{text-decoration:underline}
     if (vid && cov) {
       cov.onclick = () => { cov.classList.add('hidden'); vid.play().catch(() => {}); };
       vid.addEventListener('play', () => cov.classList.add('hidden'));
+    }
+    function scrollToContent(smooth) {
+      const target = document.getElementById('content');
+      if (!target) return;
+      const top = Math.max(0, target.getBoundingClientRect().top + window.scrollY - 64);
+      window.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
+    }
+    if (window.matchMedia('(max-width: 820px)').matches && location.hash === '#content') {
+      requestAnimationFrame(() => scrollToContent(false));
+    }
+    for (const link of document.querySelectorAll('.side a.slink[href*="#content"]')) {
+      link.addEventListener('click', (e) => {
+        if (!window.matchMedia('(max-width: 820px)').matches) return;
+        const url = new URL(link.href, location.href);
+        if (url.pathname === location.pathname) {
+          e.preventDefault();
+          if (location.hash !== '#content') history.replaceState(null, '', '#content');
+          scrollToContent(true);
+        }
+      });
     }
   </script>
 </body>

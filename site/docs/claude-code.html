@@ -9,7 +9,7 @@
   <style>
 :root{color-scheme:dark;--bg:#161413;--card:#110f0e;--hover:#1b1816;--line:#282421;--line2:#3a342f;--ink:#f4efe6;--mut:#958d85;--mut2:#6c655e;--amber:#f7991b;--ok:#4cc26b}
 *{box-sizing:border-box}
-html{scrollbar-gutter:stable}
+html{scrollbar-gutter:stable;scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif;font-size:15px;line-height:1.68;-webkit-font-smoothing:antialiased}
 a{color:var(--amber);text-decoration:none}
 a:hover{text-decoration:underline}
@@ -27,7 +27,7 @@ a:hover{text-decoration:underline}
 .slink{display:block;padding:7px 10px;border-radius:9px;color:var(--mut);font-size:13.5px;font-weight:600;transition:background .12s,color .12s}
 .slink:hover{background:var(--hover);color:var(--ink);text-decoration:none}
 .slink.on{background:rgba(247,153,27,.12);color:var(--amber)}
-.doc-main{padding:38px 48px 72px;max-width:780px;min-width:0}
+.doc-main{padding:38px 48px 72px;max-width:780px;min-width:0;scroll-margin-top:68px}
 .doc-main h1{font-size:32px;font-weight:800;letter-spacing:-.03em;margin:0 0 10px}
 .lead{font-size:17px;color:var(--mut);margin:0 0 28px}
 .doc-main h2{font-size:19px;font-weight:800;letter-spacing:-.02em;margin:32px 0 10px;padding-top:16px;border-top:1px solid var(--line)}
@@ -67,19 +67,20 @@ a:hover{text-decoration:underline}
     <aside class="side">
   <div class="sgroup">
     <div class="sg-lbl">Start</div>
-    <a class="slink" href="./index.html">Quick Start</a>
+    <a class="slink" href="./index.html#content">Quick Start</a>
   </div>
   <div class="sgroup">
     <div class="sg-lbl">Connect AI</div>
-    <a class="slink on" href="./claude-code.html">Claude Code</a>
-    <a class="slink" href="./cursor-vscode.html">Cursor & VS Code</a>
-    <a class="slink" href="./codex.html">Codex CLI</a>
-    <a class="slink" href="./hermes-openclaw.html">Hermes & OpenClaw</a>
+    <a class="slink on" href="./claude-code.html#content">Claude Code</a>
+    <a class="slink" href="./cursor-vscode.html#content">Cursor &amp; VS Code</a>
+    <a class="slink" href="./codex.html#content">Codex CLI</a>
+    <a class="slink" href="./hermes-openclaw.html#content">Hermes &amp; OpenClaw</a>
   </div>
   <div class="sgroup">
-    <div class="sg-lbl">Market</div>
-    <a class="slink" href="./buy-and-sell.html">Buy & Sell Knowledge</a>
-    <a class="slink" href="./run-a-hub.html">Run a Hub</a>
+    <div class="sg-lbl">Operate &amp; Market</div>
+    <a class="slink" href="./buy-and-sell.html#content">Buy &amp; Sell Knowledge</a>
+    <a class="slink" href="./run-an-agent.html#content">Run Your Own Agent</a>
+    <a class="slink" href="./run-a-hub.html#content">Run a Mainnet Hub</a>
   </div>
   <div class="sgroup">
     <div class="sg-lbl">Reference</div>
@@ -87,7 +88,7 @@ a:hover{text-decoration:underline}
     <a class="slink" href="https://github.com/kryptokrates/nektar/tree/master/docs" target="_blank" rel="noopener">Technical Specs ↗</a>
   </div>
 </aside>
-    <main class="doc-main">
+    <main class="doc-main" id="content">
       
 <h1>Claude Code Manual</h1>
 <p class="lead">Give Claude Code shared memory across every project and let it trade verified knowledge.</p>
@@ -118,6 +119,26 @@ a:hover{text-decoration:underline}
         await navigator.clipboard.writeText(code).catch(() => {});
         btn.textContent = 'Copied ✓';
         setTimeout(() => (btn.textContent = 'Copy'), 1400);
+      });
+    }
+    function scrollToContent(smooth) {
+      const target = document.getElementById('content');
+      if (!target) return;
+      const top = Math.max(0, target.getBoundingClientRect().top + window.scrollY - 64);
+      window.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
+    }
+    if (window.matchMedia('(max-width: 820px)').matches && location.hash === '#content') {
+      requestAnimationFrame(() => scrollToContent(false));
+    }
+    for (const link of document.querySelectorAll('.side a.slink[href*="#content"]')) {
+      link.addEventListener('click', (e) => {
+        if (!window.matchMedia('(max-width: 820px)').matches) return;
+        const url = new URL(link.href, location.href);
+        if (url.pathname === location.pathname) {
+          e.preventDefault();
+          if (location.hash !== '#content') history.replaceState(null, '', '#content');
+          scrollToContent(true);
+        }
       });
     }
   </script>

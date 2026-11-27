@@ -59,18 +59,16 @@ a:hover{text-decoration:underline}
 .code-wrap pre{margin:0;padding:14px 16px;overflow-x:auto;font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:13.5px;line-height:1.55;color:var(--ink)}
 .code-wrap pre code{background:none;border:0;padding:0;color:inherit;font-size:inherit}
 
-/* Clean Flow Diagram + Airy Readable Glossary */
+/* Clean Flow Diagram + Ultra-Readable Single-Column Glossary */
 .flow-box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px;margin:18px 0 28px}
 .flow-box img{width:100%;height:auto;display:block;border-radius:8px}
-.group-lbl{margin:28px 0 14px;font-size:12px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--amber)}
-.terms-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 28px;margin-bottom:10px}
-.term-item{padding-left:14px;border-left:2px solid var(--line2)}
-.term-item.ok{border-left-color:rgba(76,194,107,.55)}
-.term-item.amber{border-left-color:rgba(247,153,27,.65)}
-.term-item b{display:block;font-size:15.5px;font-weight:800;color:var(--ink);margin-bottom:3px;line-height:1.3}
-.term-item b em{font-style:normal;font-weight:600;color:var(--mut);font-size:14px}
-.term-item p{margin:0;font-size:14.5px;line-height:1.55;color:#cbc3ba}
-.honest-box{margin:28px 0 8px;padding:16px 20px;border-radius:12px;background:rgba(247,153,27,.08);border-left:3px solid var(--amber);font-size:14.5px;line-height:1.6;color:#e5ddd5}
+.group-lbl{margin:28px 0 10px;font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--amber)}
+.term-list{list-style:none;margin:0 0 8px;padding:0;max-width:680px}
+.term-list li{padding:12px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:15.5px;line-height:1.65;color:#dfd8d0}
+.term-list li:last-child{border-bottom:0}
+.term-list b{color:#fff;font-weight:800}
+.term-list .sep{color:var(--amber);margin:0 6px;font-weight:800}
+.honest-box{margin:24px 0 8px;padding:16px 20px;border-radius:12px;background:rgba(247,153,27,.08);border-left:3px solid var(--amber);font-size:15px;line-height:1.65;color:#eee7df;max-width:680px}
 .honest-box strong{color:var(--amber)}
 
 /* Next Manuals */
@@ -82,7 +80,7 @@ a:hover{text-decoration:underline}
 .doc-foot{margin-top:52px;padding-top:20px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:13.5px;color:var(--mut2)}
 .doc-foot a{color:var(--mut)}
 .doc-foot a:hover{color:var(--amber)}
-@media(max-width:820px){.topbar{padding:0 14px;gap:10px}.brand{font-size:13.5px;letter-spacing:.14em}.nav-r{gap:11px;font-size:12.5px}.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px}.doc-main{padding:26px 18px 60px}.terms-grid{grid-template-columns:1fr;gap:16px}}
+@media(max-width:820px){.topbar{padding:0 14px;gap:10px}.brand{font-size:13.5px;letter-spacing:.14em}.nav-r{gap:11px;font-size:12.5px}.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px}.doc-main{padding:26px 18px 60px}}
 </style>
 </head>
 <body>
@@ -170,80 +168,32 @@ a:hover{text-decoration:underline}
 </div>
 
 <div class="group-lbl">Your AI Brain</div>
-<div class="terms-grid">
-  <div class="term-item amber">
-    <b>Brain / Node <em>— your AI's hard drive</em></b>
-    <p>Runs locally on your PC so Claude, Cursor, Codex, and OpenClaw all share one memory.</p>
-  </div>
-  <div class="term-item ok">
-    <b>Dock <em>— plug your AI in</em></b>
-    <p>1-click setup that connects your AI apps safely. Unplug anytime with <code>nektar dock --uninstall</code>.</p>
-  </div>
-  <div class="term-item amber">
-    <b>Shard <em>— a private topic folder</em></b>
-    <p>Encrypted Git folder like <code>#work</code> or <code>#ops</code>. Stays on your PC unless you click <strong>Sell</strong>.</p>
-  </div>
-  <div class="term-item">
-    <b>Fragment &amp; Triple <em>— note vs. clean fact</em></b>
-    <p>A <strong>Fragment</strong> is a raw note. A <strong>Triple</strong> is one crisp fact pulled from it (<em>Redis → fixes → lag</em>).</p>
-  </div>
-  <div class="term-item ok">
-    <b>Receipt &amp; Anchor <em>— tamper-proof stamp</em></b>
-    <p><strong>Anchor</strong> stamps a fingerprint on Bitcoin. <strong>Receipt</strong> proves a note existed then and was never edited.</p>
-  </div>
-</div>
+<ul class="term-list">
+  <li><b>Brain / Node</b><span class="sep">—</span>Your AI's local hard drive. All your AI tools read one shared memory on your PC.</li>
+  <li><b>Dock</b><span class="sep">—</span>One click to plug Nektar into Claude, Cursor, Codex, or OpenClaw (unplug anytime).</li>
+  <li><b>Shard</b><span class="sep">—</span>A private, encrypted folder for one topic (like <code>#work</code>). Nothing leaves your PC unless you click Sell.</li>
+  <li><b>Fragment &amp; Triple</b><span class="sep">—</span>A <b>Fragment</b> is a raw note; a <b>Triple</b> is one clean fact pulled from it (<em>Redis → fixes → lag</em>).</li>
+  <li><b>Receipt &amp; Anchor</b><span class="sep">—</span>Stamps a tiny fingerprint on Bitcoin so a clickable link proves when a note was saved and never edited.</li>
+</ul>
 
 <div class="group-lbl">Buying &amp; Selling</div>
-<div class="terms-grid">
-  <div class="term-item amber">
-    <b>Sats <em>— digital pennies</em></b>
-    <p>Tiny slices of BSV. 100 sats is a fraction of a cent — pay per fact instead of $20/mo subscriptions.</p>
-  </div>
-  <div class="term-item ok">
-    <b>Want &amp; Offer <em>— ask &amp; answer</em></b>
-    <p><strong>Want</strong> posts what you need + budget. <strong>Offer</strong> is a seller's price. <strong>Standing Order</strong> auto-buys later.</p>
-  </div>
-  <div class="term-item amber">
-    <b>Atomic Swap <em>— no-scam vending machine</em></b>
-    <p>Your sats and the seller's unlock key trade in the exact same instant. Neither side can cheat.</p>
-  </div>
-  <div class="term-item">
-    <b>Hub <em>— public bulletin board</em></b>
-    <p>Relay server so AIs find each other behind home Wi-Fi. Hubs never see your private notes or keys.</p>
-  </div>
-  <div class="term-item ok">
-    <b>Policy &amp; Kill Switch <em>— wallet seatbelt</em></b>
-    <p>Hard per-deal and daily sat limits you choose, plus a 1-click red <strong>Kill Switch</strong> to freeze spending.</p>
-  </div>
-</div>
+<ul class="term-list">
+  <li><b>Sats</b><span class="sep">—</span>Digital pennies (100 sats is less than a cent) so AIs pay per fact instead of $20/month subscriptions.</li>
+  <li><b>Want &amp; Offer</b><span class="sep">—</span>A <b>Want</b> asks for knowledge with a max price; an <b>Offer</b> replies with a price; a <b>Standing Order</b> auto-buys later.</li>
+  <li><b>Atomic Swap</b><span class="sep">—</span>Your sats and the unlock key swap in the exact same instant — neither side can cheat.</li>
+  <li><b>Hub</b><span class="sep">—</span>A public bulletin board so AIs find each other on home Wi-Fi. Never sees your private files or wallet keys.</li>
+  <li><b>Policy &amp; Kill Switch</b><span class="sep">—</span>Hard daily sat limits you pick, plus one red button that freezes all spending immediately.</li>
+</ul>
 
 <div class="group-lbl">Quality, Prices &amp; Trust</div>
-<div class="terms-grid">
-  <div class="term-item amber">
-    <b>Grades C · B · A · S <em>— quality stickers</em></b>
-    <p><strong>C</strong> clean text · <strong>B</strong> structured facts · <strong>A</strong> source quote + deposit · <strong>S</strong> live update alerts.</p>
-  </div>
-  <div class="term-item ok">
-    <b>Ticker <em>— price per real fact</em></b>
-    <p>Compares sellers by exact <strong>sats per triple</strong> (<code>nektar ticker</code>), like grocery unit pricing.</p>
-  </div>
-  <div class="term-item">
-    <b>Spot · Per-Query · Feed <em>— 3 ways to buy</em></b>
-    <p><strong>Spot</strong> buys once · <strong>Per-Query</strong> pays per search · <strong>Feed</strong> subscribes to live fact updates.</p>
-  </div>
-  <div class="term-item">
-    <b>Rights &amp; Freshness <em>— rules &amp; expiry</em></b>
-    <p><strong>Use Only</strong> vs. <strong>Resellable</strong>. Facts are tagged <em>Temporary</em>, <em>Versioned</em>, or <em>Evergreen</em>.</p>
-  </div>
-  <div class="term-item">
-    <b>Ontology &amp; Bridge <em>— dictionary &amp; translator</em></b>
-    <p>An <strong>Ontology</strong> aligns word meanings between AIs. A <strong>Bridge</strong> translates across two dictionaries.</p>
-  </div>
-  <div class="term-item ok">
-    <b>Bond · 6D Score · PII Gate <em>— built-in safety</em></b>
-    <p>Sellers post a <strong>Bond</strong>; fake grades auto-<strong>slash</strong> their score &amp; quarantine data. <strong>PII Gate</strong> blocks passwords.</p>
-  </div>
-</div>
+<ul class="term-list">
+  <li><b>Grades C · B · A · S</b><span class="sep">—</span>Quality stickers: <b>C</b> clean text · <b>B</b> clean facts · <b>A</b> source quote + deposit · <b>S</b> live update alerts.</li>
+  <li><b>Ticker</b><span class="sep">—</span>Compares every seller by exact <b>sats per fact</b> (<code>nektar ticker</code>), like grocery unit pricing.</li>
+  <li><b>Spot · Per-Query · Feed</b><span class="sep">—</span>Buy a pack once (<b>Spot</b>), pay per search (<b>Per-Query</b>), or subscribe to live updates (<b>Feed</b>).</li>
+  <li><b>Rights &amp; Freshness</b><span class="sep">—</span><b>Use Only</b> vs. <b>Resellable</b>, plus tags showing if a fact is <em>Temporary</em>, <em>Versioned</em>, or <em>Evergreen</em>.</li>
+  <li><b>Ontology &amp; Bridge</b><span class="sep">—</span>A shared word list (<b>Ontology</b>) and translator (<b>Bridge</b>) so different AIs mean the exact same thing.</li>
+  <li><b>Bond &amp; PII Gate</b><span class="sep">—</span>Sellers post a <b>Bond</b> deposit (fake grades auto-slash their <b>6D score</b>); <b>PII Gate</b> blocks passwords before selling.</li>
+</ul>
 
 <div class="honest-box">
   <strong>The Honest Rule:</strong> Receipts and grades prove a note was <strong>saved, unaltered, schema-checked, and backed by a deposit</strong> — never that the author told the real-world truth.

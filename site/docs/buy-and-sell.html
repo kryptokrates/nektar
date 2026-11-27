@@ -50,7 +50,7 @@ a:hover{text-decoration:underline}
 .doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:13px;color:var(--mut2)}
 .doc-foot a{color:var(--mut)}
 .doc-foot a:hover{color:var(--amber)}
-@media(max-width:820px){.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px}.doc-main{padding:24px 18px 56px}}
+@media(max-width:820px){.topbar{padding:0 14px;gap:10px}.brand{font-size:13.5px;letter-spacing:.14em}.nav-r{gap:11px;font-size:12.5px}.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px}.doc-main{padding:24px 18px 56px}}
 </style>
 </head>
 <body>
@@ -68,6 +68,7 @@ a:hover{text-decoration:underline}
   <div class="sgroup">
     <div class="sg-lbl">Start</div>
     <a class="slink" href="./index.html">Quick Start</a>
+    <a class="slink" href="./how-it-works.html">How It Works (Glossary)</a>
   </div>
   <div class="sgroup">
     <div class="sg-lbl">Connect AI</div>
@@ -108,7 +109,34 @@ nektar wallet address --network main --qr</code></pre></div>
 <p>Type what you need into the left-hand <strong>Buy</strong> box, set your max budget, and click <strong>Buy</strong>. Or use the CLI:</p>
 <div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar want -domains ops -question "Latest failover steps" -max 200</code></pre></div>
 
-<h2>4. Set Spending Limits</h2>
+<h2>4. Understand Quality Grades, Unit Prices &amp; 3 Ways to Buy</h2>
+<p>Every listing uses <strong>NMU-1</strong> quality stickers and grocery-style <strong>sats per fact</strong> pricing so you never guess what you are paying for (<a href="./how-it-works.html#trust">see full picture glossary →</a>).</p>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:14px 0 18px">
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px">
+    <img src="../img/term-grades.svg" alt="Quality grades C, B, A, S" style="width:100%;height:auto;display:block;border-radius:8px;margin-bottom:8px" />
+    <strong style="font-size:13.5px;display:block">Grades C · B · A · S</strong>
+    <span style="font-size:12.5px;color:var(--mut)">C = clean text · B = structured facts · A = quoted + Bond · S = live updates.</span>
+  </div>
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px">
+    <img src="../img/term-ticker.svg" alt="Commodity ticker sats per triple" style="width:100%;height:auto;display:block;border-radius:8px;margin-bottom:8px" />
+    <strong style="font-size:13.5px;display:block">Ticker (sats / triple)</strong>
+    <span style="font-size:12.5px;color:var(--mut)">Compare sellers by exact sats per real fact with <code>nektar ticker</code>.</span>
+  </div>
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px">
+    <img src="../img/term-modes.svg" alt="Spot, Per-Query, and Feed modes" style="width:100%;height:auto;display:block;border-radius:8px;margin-bottom:8px" />
+    <strong style="font-size:13.5px;display:block">Spot · Per-Query · Feed</strong>
+    <span style="font-size:12.5px;color:var(--mut)">Enable all 3 on one shard: buy once, pay per search, or live feed.</span>
+  </div>
+</div>
+
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code># Compare live sats/triple prices across sellers:
+nektar ticker
+
+# Sell one shard as Spot + Per-Query (402) + 30-day Live Feed at once:
+nektar sell -shard ops -domains ops -price 10 -per-unit -query-price 15 -sub-price 500 -sub-days 30</code></pre></div>
+
+<h2>5. Set Spending Limits</h2>
 <p>Open <strong>Settings → Policy</strong> and pick <strong>Easy</strong>, <strong>Standard</strong>, or <strong>Secure</strong> caps — or run:</p>
 <div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar policy approve --preset both</code></pre></div>
 

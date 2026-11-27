@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 140" role="img" aria-label="Sats are tiny digital pennies so AI agents can pay fractions of a cent per fact">
+  <title>Sats — Digital Pennies</title>
+  <rect width="320" height="140" rx="12" fill="#151211"/>
+  <!-- Big coin left -->
+  <circle cx="72" cy="64" r="30" fill="#231c15" stroke="#f7991b" stroke-width="2.2"/>
+  <text x="72" y="71" text-anchor="middle" font-family="ui-monospace,monospace" font-size="22" font-weight="900" fill="#f7991b">₿</text>
+  <!-- Split arrows -->
+  <path d="M108 64 h30" stroke="#958d85" stroke-width="2"/>
+  <polygon points="136,59 146,64 136,69" fill="#958d85"/>
+  <!-- Tiny penny drops -->
+  <g fill="rgba(247,153,27,0.18)" stroke="#f7991b" stroke-width="1.5">
+    <circle cx="174" cy="46" r="13"/>
+    <circle cx="208" cy="46" r="13"/>
+    <circle cx="174" cy="82" r="13"/>
+    <circle cx="208" cy="82" r="13"/>
+  </g>
+  <g font-family="ui-monospace,monospace" font-size="9" font-weight="800" fill="#f7991b" text-anchor="middle">
+    <text x="174" y="49">sat</text>
+    <text x="208" y="49">sat</text>
+    <text x="174" y="85">sat</text>
+    <text x="208" y="85">sat</text>
+  </g>
+  <!-- Price callout -->
+  <rect x="232" y="40" width="74" height="48" rx="9" fill="#1e1a17" stroke="#4cc26b" stroke-width="1.4"/>
+  <text x="269" y="60" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" font-weight="800" fill="#4cc26b">100 sats</text>
+  <text x="269" y="76" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#958d85">&lt; 1 cent</text>
+  <text x="160" y="124" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#6c655e">Pay per fact — no $20/mo subscriptions</text>
+</svg>

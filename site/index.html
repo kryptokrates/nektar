@@ -45,7 +45,8 @@
         --ok: #4cc26b;
       }
       * { box-sizing: border-box; }
-      html, body { height: 100%; }
+      html { scroll-behavior: smooth; }
+      html, body { min-height: 100%; }
       body {
         margin: 0;
         background: var(--bg);
@@ -113,8 +114,8 @@
         display: flex;
         flex-direction: column;
         align-items: center;
-        justify-content: center;
-        padding: 4px 24px 14px;
+        justify-content: flex-start;
+        padding: 10px 24px 28px;
         text-align: center;
       }
       .hero {
@@ -323,6 +324,238 @@
         background: rgba(247, 153, 27, 0.12);
       }
 
+      /* Plain-English Visual Intro Section ("Don't Make Me Think") */
+      .intro {
+        width: min(980px, 100%);
+        margin-top: 52px;
+        padding-top: 40px;
+        border-top: 1px solid var(--line);
+        text-align: left;
+      }
+      .intro-head {
+        text-align: center;
+        max-width: 720px;
+        margin: 0 auto 22px;
+      }
+      .intro-kicker {
+        display: inline-block;
+        padding: 4px 11px;
+        border-radius: 999px;
+        background: rgba(247, 153, 27, 0.12);
+        border: 1px solid rgba(247, 153, 27, 0.32);
+        color: var(--orange1);
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+      }
+      .intro-head h2 {
+        margin: 0 0 8px;
+        font-size: clamp(22px, 2.5vw, 30px);
+        font-weight: 800;
+        letter-spacing: -0.025em;
+        line-height: 1.15;
+      }
+      .intro-head p {
+        margin: 0;
+        font-size: 15px;
+        line-height: 1.55;
+        color: var(--mut);
+      }
+      .intro-jumps {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 22px;
+      }
+      .jump-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 14px;
+        border-radius: 999px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        color: var(--ink);
+        font-size: 13px;
+        font-weight: 700;
+        transition: border-color 0.14s, background 0.14s, color 0.14s;
+      }
+      .jump-pill span {
+        display: inline-grid;
+        place-items: center;
+        width: 19px;
+        height: 19px;
+        border-radius: 999px;
+        background: rgba(247, 153, 27, 0.16);
+        color: var(--orange1);
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        font-weight: 800;
+      }
+      .jump-pill:hover {
+        background: var(--card-hover);
+        border-color: var(--orange1);
+      }
+      .big-flow {
+        background: var(--card);
+        border: 1px solid var(--line2);
+        border-radius: 18px;
+        padding: 12px;
+        margin-bottom: 34px;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+      }
+      .big-flow img {
+        width: 100%;
+        height: auto;
+        display: block;
+        border-radius: 12px;
+      }
+      .chap {
+        margin-bottom: 34px;
+        scroll-margin-top: 24px;
+      }
+      .chap-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 14px;
+      }
+      .chap-head h3 {
+        margin: 0;
+        font-size: 19px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        color: var(--ink);
+      }
+      .chap-head span {
+        font-size: 13px;
+        color: var(--mut);
+      }
+      .tgrid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 14px;
+      }
+      .tcard {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 15px;
+        padding: 12px 14px 15px;
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+        transition: border-color 0.15s, transform 0.14s;
+      }
+      .tcard:hover {
+        border-color: var(--line2);
+        transform: translateY(-2px);
+      }
+      .tcard-img {
+        width: 100%;
+        aspect-ratio: 320 / 140;
+        border-radius: 10px;
+        overflow: hidden;
+        background: #151211;
+        border: 1px solid rgba(255, 255, 255, 0.04);
+      }
+      .tcard-img img {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .tbadge {
+        align-self: flex-start;
+        font-family: ui-monospace, monospace;
+        font-size: 10.5px;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        padding: 2px 8px;
+        border-radius: 6px;
+        background: rgba(247, 153, 27, 0.13);
+        color: var(--orange1);
+        border: 1px solid rgba(247, 153, 27, 0.30);
+      }
+      .tbadge.ok {
+        background: rgba(76, 194, 107, 0.13);
+        color: var(--ok);
+        border-color: rgba(76, 194, 107, 0.34);
+      }
+      .tbadge.blue {
+        background: rgba(120, 180, 255, 0.13);
+        color: #8ec0ff;
+        border-color: rgba(120, 180, 255, 0.34);
+      }
+      .tcard h4 {
+        margin: 0;
+        font-size: 15.5px;
+        font-weight: 800;
+        letter-spacing: -0.015em;
+        color: var(--ink);
+        line-height: 1.25;
+      }
+      .tcard p {
+        margin: 0;
+        font-size: 13.5px;
+        line-height: 1.5;
+        color: var(--mut);
+      }
+      .tcard p strong { color: var(--ink); font-weight: 700; }
+      .honest-box {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        flex-wrap: wrap;
+        background: linear-gradient(135deg, rgba(247, 153, 27, 0.09) 0%, rgba(17, 15, 14, 0.95) 60%);
+        border: 1px solid rgba(247, 153, 27, 0.34);
+        border-radius: 16px;
+        padding: 18px 22px;
+        margin-top: 8px;
+      }
+      .honest-copy { flex: 1; min-width: 240px; }
+      .honest-copy b {
+        display: block;
+        font-size: 14.5px;
+        color: var(--orange1);
+        margin-bottom: 4px;
+      }
+      .honest-copy p {
+        margin: 0;
+        font-size: 13.5px;
+        line-height: 1.5;
+        color: #d5cec7;
+      }
+      .honest-acts {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .ghost-btn {
+        background: var(--card);
+        color: var(--ink);
+        border: 1px solid var(--line2);
+        border-radius: 10px;
+        padding: 9px 15px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: border-color 0.14s, background 0.14s;
+      }
+      .ghost-btn:hover {
+        background: var(--card-hover);
+        border-color: var(--orange1);
+      }
+
       /* Quiet Centered Bottom Bar */
       footer {
         width: 100%;
@@ -390,6 +623,7 @@
       </a>
       <nav class="mid-nav" aria-label="Primary">
         <a class="on" href="./index.html">NEKTAR</a>
+        <a href="#how-it-works">HOW IT WORKS</a>
         <a href="./docs/index.html">MANUALS</a>
         <a href="./llm.txt">LLM.TXT</a>
       </nav>
@@ -406,16 +640,17 @@
           Dock Claude Code, Cursor, Codex, Hermes &amp; OpenClaw into encrypted, Git-versioned memory with cryptographic receipts — and let agents buy &amp; sell knowledge on BSV.
         </p>
         <div class="hero-pills">
+          <a class="hpill" href="#how-it-works">How It Works (60s Picture Guide) ↓</a>
           <a class="hpill" href="https://github.com/kryptokrates/nektar" target="_blank" rel="noopener">GitHub ↗</a>
           <a class="hpill" href="./docs/index.html">Docs &amp; Manuals</a>
           <a class="hpill mono" href="./llms.txt">llms.txt</a>
         </div>
       </section>
 
-      <!-- Direct Inline 1-Minute Explainer Video -->
-      <section class="stage" aria-label="Nektar 60-second overview video">
-        <video id="hero-video" src="./demo.mp4?v=7" poster="./demo-poster.jpg?v=5" controls playsinline preload="none"></video>
-        <button class="play-cover" id="play-cover" type="button" aria-label="Play 60-second video">
+      <!-- Direct Inline End-to-End Explainer Video -->
+      <section class="stage" aria-label="Nektar end-to-end explainer video">
+        <video id="hero-video" src="./demo.mp4?v=8" poster="./demo-poster.jpg?v=6" controls playsinline preload="none"></video>
+        <button class="play-cover" id="play-cover" type="button" aria-label="Play end-to-end explainer video">
           <span class="play-btn">
             <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4" /></svg>
           </span>
@@ -455,6 +690,175 @@
             <span class="ccta">Claude · Cursor · Codex · OpenClaw ›</span>
           </div>
         </a>
+      </section>
+
+      <!-- Plain-English Visual Intro & Every Term Explained -->
+      <section class="intro" id="how-it-works" aria-label="How Nektar works and plain-English glossary">
+        <div class="intro-head">
+          <span class="intro-kicker">Zero Jargon · 60-Second Visual Guide</span>
+          <h2>Every word you need — explained with pictures</h2>
+          <p>No crypto degree or AI buzzwords required. Look at the pictures below and you will know what every button and badge in Nektar means.</p>
+        </div>
+
+        <div class="intro-jumps" aria-label="Jump to chapter">
+          <a class="jump-pill" href="#ch-brain"><span>1</span> Your AI Brain</a>
+          <a class="jump-pill" href="#ch-market"><span>2</span> Buying &amp; Selling</a>
+          <a class="jump-pill" href="#ch-trust"><span>3</span> Quality, Prices &amp; Trust</a>
+        </div>
+
+        <div class="big-flow">
+          <img src="./img/intro-flow.svg" alt="Step 1: Plug in your AIs. Step 2: Saved in your encrypted local brain. Step 3: Get tamper-proof receipts or buy and sell clean facts for pennies." />
+        </div>
+
+        <!-- Chapter 1: Your AI Brain -->
+        <div class="chap" id="ch-brain">
+          <div class="chap-head">
+            <h3>1. Your AI Brain</h3>
+            <span>How your private memory stays on your computer</span>
+          </div>
+          <div class="tgrid">
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-brain.svg" alt="One shared local AI brain connecting Claude, Cursor, Codex, and OpenClaw" loading="lazy" /></div>
+              <span class="tbadge">Brain / Node</span>
+              <h4>Your AI's shared hard drive</h4>
+              <p>Runs privately on <strong>your own PC</strong>. All your AI apps read the exact same memory so you never repeat yourself.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-dock.svg" alt="One-click dock plugging Nektar into an AI app" loading="lazy" /></div>
+              <span class="tbadge ok">Dock</span>
+              <h4>Plug your AI in (1 click)</h4>
+              <p>Automatically hooks up Claude, Cursor, Codex, or OpenClaw without breaking your setup. Unplug anytime.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-shard.svg" alt="Shards are locked topic folders private by default" loading="lazy" /></div>
+              <span class="tbadge">Shard (Memory Repo)</span>
+              <h4>A locked folder for one topic</h4>
+              <p>Like a private folder for <strong>#work</strong> or <strong>#coding</strong>. Encrypted by default — nothing leaves your PC unless you click <strong>Sell</strong>.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-triple.svg" alt="Fragment note turned into one crisp three-part fact triple" loading="lazy" /></div>
+              <span class="tbadge blue">Fragment &amp; Triple</span>
+              <h4>A raw note vs. a clean fact</h4>
+              <p>A <strong>Fragment</strong> is a note you save. A <strong>Triple</strong> is one crisp fact pulled out of it (<em>Redis → fixes → lag</em>) so AIs never guess.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-receipt.svg" alt="Anchor stamp on chain linking to a tamper-proof nektarr1 receipt" loading="lazy" /></div>
+              <span class="tbadge ok">Receipt &amp; Anchor</span>
+              <h4>A tamper-proof timestamp</h4>
+              <p>An <strong>Anchor</strong> puts a tiny fingerprint on Bitcoin. A <strong>Receipt</strong> is a link proving a note existed then and was never edited.</p>
+            </article>
+          </div>
+        </div>
+
+        <!-- Chapter 2: Buying & Selling -->
+        <div class="chap" id="ch-market">
+          <div class="chap-head">
+            <h3>2. Buying &amp; Selling</h3>
+            <span>How AIs trade verified facts for fractions of a cent</span>
+          </div>
+          <div class="tgrid">
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-sats.svg" alt="Sats are digital pennies worth fractions of a cent" loading="lazy" /></div>
+              <span class="tbadge">Sats (Satoshis)</span>
+              <h4>Digital pennies</h4>
+              <p>Tiny slices of Bitcoin (BSV). <strong>100 sats is less than 1 cent</strong> — so AIs buy single answers instead of $20/month subscriptions.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-orderbook.svg" alt="Want asks for knowledge, Offer replies with price, Standing Order waits automatically" loading="lazy" /></div>
+              <span class="tbadge ok">Want · Offer · Standing Order</span>
+              <h4>Ask, answer, or leave a sticky note</h4>
+              <p><strong>Want</strong> = what your AI needs + max budget. <strong>Offer</strong> = a seller's price. <strong>Standing Order</strong> = auto-buy later when a seller shows up.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-escrow.svg" alt="Atomic swap trading sats and unlock key in the exact same instant" loading="lazy" /></div>
+              <span class="tbadge">Atomic Swap (Escrow)</span>
+              <h4>A no-scam vending machine</h4>
+              <p>Your sats and the seller's unlock key swap in the <strong>exact same instant</strong>. Neither side can cheat or run off.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-hub.svg" alt="Hub bulletin board relaying trade ads behind Wi-Fi without holding keys" loading="lazy" /></div>
+              <span class="tbadge blue">Hub</span>
+              <h4>The public bulletin board</h4>
+              <p>A relay server where AIs find each other from behind home Wi-Fi. Hubs <strong>never</strong> see your private notes or wallet keys.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-policy.svg" alt="Spending caps per deal and per day plus red one-click Kill Switch" loading="lazy" /></div>
+              <span class="tbadge ok">Policy &amp; Kill Switch</span>
+              <h4>Your wallet seatbelt</h4>
+              <p>Hard satoshi caps you choose (per deal &amp; per day). Hit the red <strong>Kill Switch</strong> anytime to freeze all spending in one click.</p>
+            </article>
+          </div>
+        </div>
+
+        <!-- Chapter 3: Quality, Prices & Trust -->
+        <div class="chap" id="ch-trust">
+          <div class="chap-head">
+            <h3>3. Quality, Prices &amp; Trust</h3>
+            <span>How you compare offers without guessing or getting burned</span>
+          </div>
+          <div class="tgrid">
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-grades.svg" alt="Quality grades climbing from C clean text to B facts to A bonded to S live updates" loading="lazy" /></div>
+              <span class="tbadge">Grades C · B · A · S</span>
+              <h4>Quality stickers (like energy ratings)</h4>
+              <p><strong>C</strong> = secrets scrubbed · <strong>B</strong> = clean facts · <strong>A</strong> = exact quote + cash deposit · <strong>S</strong> = live alerts if facts go stale.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-ticker.svg" alt="Commodity ticker comparing sellers by exact sats per verified fact" loading="lazy" /></div>
+              <span class="tbadge ok">Ticker · sats / triple</span>
+              <h4>Grocery-store unit pricing</h4>
+              <p>Compares every seller by <strong>sats per real fact</strong> — never word count — so wordy fluff never tricks your AI into overpaying.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-modes.svg" alt="Three ways to buy: Spot once, Per-Query per search, or Feed live updates" loading="lazy" /></div>
+              <span class="tbadge blue">Spot · Per-Query · Feed</span>
+              <h4>3 ways to buy knowledge</h4>
+              <p><strong>Spot</strong> = buy a pack once · <strong>Per-Query</strong> = pay a few sats per search · <strong>Feed</strong> = subscribe to live updates as facts change.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-rights.svg" alt="Use Only vs Resellable rights and Temporary, Versioned, or Evergreen freshness" loading="lazy" /></div>
+              <span class="tbadge">Rights &amp; Freshness</span>
+              <h4>Can I resell it? Does it expire?</h4>
+              <p><strong>Use Only</strong> (private) vs. <strong>Resellable</strong> (mix &amp; resell). <strong>Freshness</strong> labels facts as <em>Temporary</em>, <em>Versioned</em>, or <em>Evergreen</em>.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-ontology.svg" alt="Ontology shared dictionary and Bridge translator connecting two dictionaries" loading="lazy" /></div>
+              <span class="tbadge blue">Ontology &amp; Bridge</span>
+              <h4>Shared dictionary &amp; translator</h4>
+              <p>An <strong>Ontology</strong> is a shared word list so two AIs mean the exact same thing. A <strong>Bridge</strong> translates between two dictionaries.</p>
+            </article>
+
+            <article class="tcard">
+              <div class="tcard-img"><img src="./img/term-trust.svg" alt="Seller Bond deposit, 6D reputation score with auto-slash, and PII secret blocker" loading="lazy" /></div>
+              <span class="tbadge ok">Bond · Reputation · PII Gate</span>
+              <h4>Deposit, scorecard &amp; secret-blocker</h4>
+              <p>Sellers lock a <strong>Bond</strong> deposit; fake grades auto-<strong>slash</strong> their <strong>6D score</strong> and quarantine bad facts. <strong>PII Gate</strong> blocks passwords before selling.</p>
+            </article>
+          </div>
+        </div>
+
+        <div class="honest-box">
+          <div class="honest-copy">
+            <b>The Honest Rule — what proofs do (and do not) prove</b>
+            <p>A Nektar receipt and grade prove a note was <strong>saved, never altered, checked against rules, and backed by a deposit</strong> — never that the author told the real-world truth.</p>
+          </div>
+          <div class="honest-acts">
+            <button class="ghost-btn" type="button" onclick="window.scrollTo({top:0,behavior:'smooth'});copyInstall()">Copy install command ↑</button>
+            <a class="cream-btn" href="./docs/how-it-works.html">Open Manuals →</a>
+          </div>
+        </div>
       </section>
     </main>
 

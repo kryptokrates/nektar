@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 140" role="img" aria-label="A fragment is a messy text note turned into a crisp three-part fact triple">
+  <title>Fragment vs Verified Triple</title>
+  <rect width="320" height="140" rx="12" fill="#151211"/>
+  <!-- Left: Messy Note (Fragment) -->
+  <rect x="16" y="24" width="94" height="82" rx="9" fill="#1e1a17" stroke="#3a342f" stroke-width="1.5"/>
+  <text x="63" y="42" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9.5" font-weight="800" fill="#958d85">FRAGMENT</text>
+  <rect x="28" y="52" width="70" height="6" rx="3" fill="#463f39"/>
+  <rect x="28" y="64" width="58" height="6" rx="3" fill="#463f39"/>
+  <rect x="28" y="76" width="66" height="6" rx="3" fill="#463f39"/>
+  <rect x="28" y="88" width="44" height="6" rx="3" fill="#463f39"/>
+
+  <!-- Arrow -->
+  <line x1="116" y1="65" x2="140" y2="65" stroke="#f7991b" stroke-width="2.2"/>
+  <polygon points="139,60 149,65 139,70" fill="#f7991b"/>
+
+  <!-- Right: Clean Triple -->
+  <rect x="154" y="24" width="150" height="82" rx="9" fill="#1d1a16" stroke="#78b4ff" stroke-width="1.6"/>
+  <text x="229" y="42" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9.5" font-weight="800" fill="#78b4ff">1 VERIFIED TRIPLE</text>
+
+  <rect x="164" y="54" width="44" height="24" rx="6" fill="#25211d" stroke="#4a433c"/>
+  <text x="186" y="70" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9.5" font-weight="700" fill="#f4efe6">Redis</text>
+
+  <rect x="212" y="54" width="36" height="24" rx="6" fill="rgba(247,153,27,0.18)" stroke="rgba(247,153,27,0.5)"/>
+  <text x="230" y="70" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" font-weight="800" fill="#f7991b">fixes</text>
+
+  <rect x="252" y="54" width="44" height="24" rx="6" fill="#25211d" stroke="#4a433c"/>
+  <text x="274" y="70" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9.5" font-weight="700" fill="#4cc26b">lag</text>
+
+  <text x="229" y="96" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#958d85">Subject → Link → Object</text>
+  <text x="160" y="126" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#6c655e">No rambling fluff — just crisp facts</text>
+</svg>

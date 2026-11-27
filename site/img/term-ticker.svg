@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 140" role="img" aria-label="Commodity ticker compares sellers by exact sats per verified fact just like grocery unit pricing">
+  <title>Commodity Ticker — sats per triple</title>
+  <rect width="320" height="140" rx="12" fill="#151211"/>
+  <!-- Seller 1: Better unit price -->
+  <rect x="16" y="18" width="288" height="44" rx="9" fill="#152119" stroke="#4cc26b" stroke-width="1.6"/>
+  <rect x="26" y="30" width="22" height="20" rx="5" fill="rgba(76,194,107,0.22)"/>
+  <text x="37" y="44" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" font-weight="900" fill="#4cc26b">A</text>
+  <text x="58" y="38" font-family="system-ui,-apple-system,sans-serif" font-size="11" font-weight="700" fill="#f4efe6">100 sats ÷ 20 facts</text>
+  <text x="58" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="9.5" fill="#4cc26b">Best unit value ✓</text>
+  <text x="292" y="45" text-anchor="end" font-family="ui-monospace,monospace" font-size="13" font-weight="900" fill="#4cc26b">5 sat/fact</text>
+
+  <!-- Seller 2: Worse unit price -->
+  <rect x="16" y="72" width="288" height="44" rx="9" fill="#1e1a17" stroke="#3a342f" stroke-width="1.4"/>
+  <rect x="26" y="84" width="22" height="20" rx="5" fill="rgba(255,255,255,0.08)"/>
+  <text x="37" y="98" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" font-weight="900" fill="#958d85">C</text>
+  <text x="58" y="92" font-family="system-ui,-apple-system,sans-serif" font-size="11" font-weight="700" fill="#d5cec7">80 sats ÷ 2 facts</text>
+  <text x="58" y="106" font-family="system-ui,-apple-system,sans-serif" font-size="9.5" fill="#958d85">Looks cheaper, costs 8× more</text>
+  <text x="292" y="99" text-anchor="end" font-family="ui-monospace,monospace" font-size="13" font-weight="800" fill="#958d85">40 sat/fact</text>
+</svg>

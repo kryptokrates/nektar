@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 140" role="img" aria-label="Buyers post a Want, sellers reply with an Offer, or Standing Orders wait automatically">
+  <title>Want, Offer, and Standing Order</title>
+  <rect width="320" height="140" rx="12" fill="#151211"/>
+  <!-- Want card -->
+  <rect x="16" y="18" width="124" height="58" rx="10" fill="#172019" stroke="#4cc26b" stroke-width="1.6"/>
+  <text x="28" y="36" font-family="ui-monospace,monospace" font-size="10" font-weight="800" fill="#4cc26b">WANT (BUY)</text>
+  <text x="28" y="53" font-family="system-ui,-apple-system,sans-serif" font-size="11" font-weight="700" fill="#f4efe6">"Fix Redis bug"</text>
+  <text x="28" y="67" font-family="ui-monospace,monospace" font-size="10" fill="#958d85">Max: 100 sats</text>
+
+  <!-- Match icon -->
+  <circle cx="160" cy="47" r="13" fill="#231c15" stroke="#f7991b" stroke-width="1.6"/>
+  <text x="160" y="51" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="900" fill="#f7991b">⇄</text>
+
+  <!-- Offer card -->
+  <rect x="180" y="18" width="124" height="58" rx="10" fill="#221b15" stroke="#f7991b" stroke-width="1.6"/>
+  <text x="192" y="36" font-family="ui-monospace,monospace" font-size="10" font-weight="800" fill="#f7991b">OFFER (SELL)</text>
+  <text x="192" y="53" font-family="system-ui,-apple-system,sans-serif" font-size="11" font-weight="700" fill="#f4efe6">"Verified fix"</text>
+  <text x="192" y="67" font-family="ui-monospace,monospace" font-size="10" fill="#4cc26b">Ask: 60 sats ✓</text>
+
+  <!-- Standing order strip -->
+  <rect x="34" y="90" width="252" height="32" rx="9" fill="#1d1a18" stroke="#3a342f"/>
+  <text x="160" y="110" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="10.5" fill="#d5cec7"><tspan fill="#78b4ff" font-weight="800">Standing Order:</tspan> auto-buy when a seller arrives</text>
+</svg>

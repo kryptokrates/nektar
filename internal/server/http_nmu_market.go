@@ -129,10 +129,15 @@ func (a *App) handleMarketQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sellerMarketPub := a.mem.Chain().IdentityPubHex()
+	if a.mkt != nil && a.mkt.SalePubHex() != "" {
+		sellerMarketPub = a.mkt.SalePubHex()
+	}
 	txid, paid, senderPub, ok := a.verifyBRC105Payment(w, r, "market_query:"+shard, listing.QueryPriceSats, map[string]any{
 		"shard":       shard,
 		"pricingMode": string(nmu.ModePerQuery),
 		"usageRights": string(nmu.EffectiveRights(nmu.UsageRights(listing.UsageRights))),
+		"sellerPub":   sellerMarketPub,
 	})
 	if !ok {
 		return
@@ -339,12 +344,17 @@ func (a *App) handleMarketSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sellerSubPub := a.mem.Chain().IdentityPubHex()
+	if a.mkt != nil && a.mkt.SalePubHex() != "" {
+		sellerSubPub = a.mkt.SalePubHex()
+	}
 	durSec := listing.EffectiveSubscriptionDurationSec()
 	txid, paid, _, ok := a.verifyBRC105Payment(w, r, "market_subscription:"+shard, listing.SubscriptionPriceSats, map[string]any{
 		"shard":           shard,
 		"pricingMode":     string(nmu.ModeSubscription),
 		"subscriptionSec": durSec,
 		"usageRights":     string(nmu.EffectiveRights(nmu.UsageRights(listing.UsageRights))),
+		"sellerPub":       sellerSubPub,
 	})
 	if !ok {
 		return

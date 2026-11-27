@@ -33,9 +33,11 @@ type RecallInput struct {
 	Action            string             `json:"-"` // internal Cedar action ("read" default, or "disclose")
 	DisallowBorg      bool               `json:"-"` // internal: when true, Borg-encrypted fragments are skipped
 	DisallowPrivate   bool               `json:"-"` // internal: when true, CLKA-encrypted fragments are skipped
-	IncludeSuperseded bool               `json:"includeSuperseded,omitempty"`
-	VerifySPV         bool               `json:"verifySpv,omitempty"`
-	Limit             int                `json:"limit,omitempty"`
+	IncludeSuperseded   bool   `json:"includeSuperseded,omitempty"`
+	VerifySPV           bool   `json:"verifySpv,omitempty"`
+	Limit               int    `json:"limit,omitempty"`
+	AllowMarketFallback bool   `json:"allowMarketFallback,omitempty"` // opt-in per_query 402 fallback on local recall miss
+	MaxFallbackSats     uint64 `json:"maxFallbackSats,omitempty"`     // optional satoshi cap for per_query fallback
 }
 
 // RecalledFragment is one authorized, decrypted, optionally SPV-verified fragment.

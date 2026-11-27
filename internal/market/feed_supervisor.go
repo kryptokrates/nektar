@@ -3,6 +3,8 @@ package market
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -333,13 +335,13 @@ func (s *SubscriptionSupervisor) SubscribePeer(ctx context.Context, req Subscrib
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusPaymentRequired {
-		requiredSats, payeePub, derivPrefix, parseErr := parseBRC105Challenge(resp)
+		requiredSats, payeePub, derivPrefix, challengeSellerPub, parseErr := parseBRC105Challenge(resp)
 		_ = resp.Body.Close()
 		if parseErr != nil {
 			return nil, parseErr
 		}
-		if req.SellerPub != "" && !strings.EqualFold(payeePub, req.SellerPub) {
-			return nil, fmt.Errorf("market: 402 payee mismatch (expected %s, got %s)", req.SellerPub, payeePub)
+		if req.SellerPub != "" && challengeSellerPub != "" && !strings.EqualFold(challengeSellerPub, req.SellerPub) {
+			return nil, fmt.Errorf("market: 402 sellerPub mismatch (expected %s, got %s)", req.SellerPub, challengeSellerPub)
 		}
 		if req.MaxSats > 0 && requiredSats > req.MaxSats {
 			return nil, fmt.Errorf("market: subscription price %d sats exceeds cap %d sats", requiredSats, req.MaxSats)
@@ -641,14 +643,15 @@ func (w *gradeSFeedWorker) handleEvent(ctx context.Context, sub store.ShardSubsc
 	}
 }
 
-func parseBRC105Challenge(resp *http.Response) (amountSats uint64, payeePub, derivPrefix string, err error) {
+func parseBRC105Challenge(resp *http.Response) (amountSats uint64, payeePub, derivPrefix, sellerPub string, err error) {
 	if resp == nil {
-		return 0, "", "", errors.New("market: nil 402 response")
+		return 0, "", "", "", errors.New("market: nil 402 response")
 	}
 	var body struct {
 		AmountSats       uint64 `json:"amountSats"`
 		IdentityKey      string `json:"identityKey"`
 		DerivationPrefix string `json:"derivationPrefix"`
+		SellerPub        string `json:"sellerPub"`
 	}
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	_ = json.Unmarshal(raw, &body)
@@ -667,8 +670,16 @@ func parseBRC105Challenge(resp *http.Response) (amountSats uint64, payeePub, der
 	if derivPrefix == "" {
 		derivPrefix = strings.TrimSpace(body.DerivationPrefix)
 	}
-	if amountSats == 0 || payeePub == "" || derivPrefix == "" {
-		return 0, "", "", fmt.Errorf("market: incomplete BRC-105 402 challenge (sats=%d payee=%v prefix=%v)", amountSats, payeePub != "", derivPrefix != "")
+	if derivPrefix == "" {
+		var rnd [16]byte
+		if _, rErr := crand.Read(rnd[:]); rErr != nil {
+			return 0, "", "", "", fmt.Errorf("market: generate derivation prefix: %w", rErr)
+		}
+		derivPrefix = base64.StdEncoding.EncodeToString(rnd[:])
 	}
-	return amountSats, strings.ToLower(payeePub), derivPrefix, nil
+	sellerPub = strings.ToLower(strings.TrimSpace(body.SellerPub))
+	if amountSats == 0 || payeePub == "" {
+		return 0, "", "", "", fmt.Errorf("market: incomplete BRC-105 402 challenge (sats=%d payee=%v)", amountSats, payeePub != "")
+	}
+	return amountSats, strings.ToLower(payeePub), derivPrefix, sellerPub, nil
 }

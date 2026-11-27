@@ -3,12 +3,24 @@ package market
 import (
 	"errors"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/kryptokrates/nektar/internal/store"
 )
+
+// PolicyAutonomyConfig controls opt-in unattended market loops (fail-closed false by default).
+type PolicyAutonomyConfig struct {
+	AutoQueryOnMiss       bool   `json:"autoQueryOnMiss"`
+	MaxAutoQuerySats      uint64 `json:"maxAutoQuerySats"`      // default 50 sats/query
+	AutoWantOnMiss        bool   `json:"autoWantOnMiss"`
+	AutoWantMissThreshold int    `json:"autoWantMissThreshold"` // default 3 misses in 24h
+	AutoWantMaxPerDay     int    `json:"autoWantMaxPerDay"`     // default 3 auto-wants/24h
+	AutoWantBudgetSats    uint64 `json:"autoWantBudgetSats"`    // default 500 sats max per auto-want
+}
 
 // Policy constrains automated agent market spending and selling.
 // Fail-closed: if KillSwitch is set or price exceeds caps, deals are refused.
@@ -32,9 +44,10 @@ type Policy struct {
 	DailyHubFeesSpentSats    uint64            `json:"dailyHubFeesSpentSats,omitempty"`
 	BuyerApproved            bool              `json:"buyerApproved"`
 	SellerApproved           bool              `json:"sellerApproved"`
-	EscrowMode               string            `json:"escrowMode,omitempty"`    // auto (default) | always | off
-	EscrowMinSats            uint64            `json:"escrowMinSats,omitempty"` // default 500 sats in auto mode
-	AIMatching               *AIMatchingPolicy `json:"aiMatching,omitempty"`
+	EscrowMode               string               `json:"escrowMode,omitempty"`    // auto (default) | always | off
+	EscrowMinSats            uint64               `json:"escrowMinSats,omitempty"` // default 500 sats in auto mode
+	AIMatching               *AIMatchingPolicy    `json:"aiMatching,omitempty"`
+	Autonomy                 PolicyAutonomyConfig `json:"autonomy"`
 	pinnedOperatorPub        string
 	activePolicyHash         string
 	tamperedPolicies         int
@@ -134,7 +147,82 @@ func (p *Policy) AttachDB(db *store.DB) {
 	if ok, err := db.GetJSON("market_kill_switch", &killed); err == nil && ok && killed {
 		p.KillSwitch = true
 	}
+	var autoCfg PolicyAutonomyConfig
+	if ok, err := db.GetJSON("market_autonomy_config_v1", &autoCfg); err == nil && ok {
+		p.Autonomy = normalizeAutonomyConfig(autoCfg)
+	}
 	p.mu.Unlock()
+}
+
+func normalizeAutonomyConfig(c PolicyAutonomyConfig) PolicyAutonomyConfig {
+	if c.MaxAutoQuerySats == 0 {
+		c.MaxAutoQuerySats = 50
+	}
+	if c.AutoWantMissThreshold <= 0 {
+		c.AutoWantMissThreshold = 3
+	}
+	if c.AutoWantMaxPerDay <= 0 {
+		c.AutoWantMaxPerDay = 3
+	}
+	if c.AutoWantBudgetSats == 0 {
+		c.AutoWantBudgetSats = 500
+	}
+	return c
+}
+
+// AutonomyConfig returns effective opt-in settings for unattended per_query fallback and SleepCycle auto-wants.
+// Both flags default fail-closed to false unless explicitly enabled in persisted policy or environment.
+func (p *Policy) AutonomyConfig() PolicyAutonomyConfig {
+	var c PolicyAutonomyConfig
+	if p != nil {
+		p.mu.RLock()
+		c = p.Autonomy
+		p.mu.RUnlock()
+	}
+	c = normalizeAutonomyConfig(c)
+	if !c.AutoQueryOnMiss && os.Getenv("NEKTAR_AUTO_QUERY_ON_MISS") == "1" {
+		c.AutoQueryOnMiss = true
+	}
+	if raw := strings.TrimSpace(os.Getenv("NEKTAR_AUTO_QUERY_MAX_SATS")); raw != "" {
+		if v, err := strconv.ParseUint(raw, 10, 64); err == nil && v > 0 {
+			c.MaxAutoQuerySats = v
+		}
+	}
+	if !c.AutoWantOnMiss && os.Getenv("NEKTAR_AUTO_WANT_ON_MISS") == "1" {
+		c.AutoWantOnMiss = true
+	}
+	if raw := strings.TrimSpace(os.Getenv("NEKTAR_AUTO_WANT_BUDGET_SATS")); raw != "" {
+		if v, err := strconv.ParseUint(raw, 10, 64); err == nil && v > 0 {
+			c.AutoWantBudgetSats = v
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("NEKTAR_AUTO_WANT_MISS_THRESHOLD")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			c.AutoWantMissThreshold = v
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("NEKTAR_AUTO_WANT_MAX_PER_DAY")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			c.AutoWantMaxPerDay = v
+		}
+	}
+	return c
+}
+
+// SetAutonomyConfig updates opt-in autonomy settings atomically and persists them to SQLite KV when attached.
+func (p *Policy) SetAutonomyConfig(cfg PolicyAutonomyConfig) error {
+	if p == nil {
+		return nil
+	}
+	norm := normalizeAutonomyConfig(cfg)
+	p.mu.Lock()
+	p.Autonomy = norm
+	db := p.db
+	p.mu.Unlock()
+	if db != nil {
+		return db.SetJSON("market_autonomy_config_v1", norm)
+	}
+	return nil
 }
 
 func DefaultPolicy() *Policy {

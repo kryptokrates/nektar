@@ -132,8 +132,8 @@ func (d *Distiller) RunCycle(ctx context.Context, opts RunOpts) (*CycleSummary, 
 				shards = append(shards, sh)
 			}
 		}
+		sort.Strings(shards)
 	}
-	sort.Strings(shards)
 
 	touchedMarkets := make(map[string]string) // marketShard -> ontologyID
 	eval := d.cfg.JevEval

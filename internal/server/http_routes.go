@@ -166,7 +166,27 @@ func (a *App) buildMux() http.Handler {
 		if a.broker != nil && a.broker.Subscriptions() != nil {
 			resp["subscriptions"] = a.broker.Subscriptions().Status()
 		}
+		if a.mkt != nil && a.mkt.Policy() != nil {
+			resp["policyAutonomy"] = a.mkt.Policy().AutonomyConfig()
+		}
 		writeJSON(w, http.StatusOK, resp)
+	})))
+	mux.Handle("POST /v1/autonomy/config", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in market.PolicyAutonomyConfig
+		if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if a.mkt == nil || a.mkt.Policy() == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "market policy unavailable"})
+			return
+		}
+		if err := a.mkt.Policy().SetAutonomyConfig(in); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		a.BroadcastDashboardEvent("autonomy_config_updated")
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "policyAutonomy": a.mkt.Policy().AutonomyConfig()})
 	})))
 	mux.Handle("POST /v1/autonomy/reset", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if a.watchdog != nil {

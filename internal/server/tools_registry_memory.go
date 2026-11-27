@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/lattice"
@@ -511,12 +512,73 @@ func (tb *Toolbox) ExecRecall(ctx context.Context, in memory.RecallInput) (map[s
 	if shards == nil {
 		shards = []string{}
 	}
-	return map[string]any{
+	var marketFallback map[string]any
+	if len(items) == 0 && strings.TrimSpace(in.Query) != "" {
+		if tb.broker != nil {
+			fbRes, _ := tb.broker.QueryFallbackOnRecallMiss(ctx, market.FallbackRecallRequest{
+				Shard:       in.Shard,
+				Query:       in.Query,
+				MaxSats:     in.MaxFallbackSats,
+				Limit:       in.Limit,
+				ForceEnable: in.AllowMarketFallback,
+			})
+			if fbRes != nil && len(fbRes.Items) > 0 {
+				recalledFB, _ := tb.mem.Recall(ctx, memory.RecallInput{
+					Shard:        fbRes.TargetShard,
+					Query:        in.Query,
+					Principal:    in.Principal,
+					DisallowBorg: in.DisallowBorg,
+					Limit:        max(in.Limit, len(fbRes.Items)),
+				})
+				if len(recalledFB) > 0 {
+					items = recalledFB
+					shards = append(shards, fbRes.TargetShard)
+				} else {
+					for i, qit := range fbRes.Items {
+						var seq int64
+						if i < len(fbRes.StoredSeqs) {
+							seq = fbRes.StoredSeqs[i]
+						}
+						items = append(items, memory.RecalledFragment{
+							Shard:      fbRes.TargetShard,
+							Seq:        seq,
+							Text:       qit.Text,
+							HDP:        qit.HDP,
+							Leaf:       qit.Leaf,
+							AnchorTxID: qit.AnchorTxID,
+							Tainted:    true,
+							OntologyID: qit.OntologyID,
+							NMU:        qit.NMU,
+						})
+					}
+					shards = append(shards, fbRes.TargetShard)
+				}
+				marketFallback = map[string]any{
+					"used":             true,
+					"sellerPub":        fbRes.SellerPub,
+					"sourceShard":      fbRes.Shard,
+					"targetShard":      fbRes.TargetShard,
+					"paidSats":         fbRes.PaidSats,
+					"paymentTxid":      fbRes.PaymentTxID,
+					"dealReceiptToken": fbRes.DealReceiptToken,
+					"spvVerifiedCount": fbRes.SPVVerifiedCount,
+				}
+			}
+		}
+		if len(items) == 0 && len(strings.TrimSpace(in.Query)) >= 8 && tb.mem != nil && tb.mem.DB() != nil {
+			_ = tb.mem.DB().RecordRecallMiss(in.Shard, in.Query, time.Now().Unix())
+		}
+	}
+	resp := map[string]any{
 		"shards":    shards,
 		"items":     items,
 		"fragments": items,
 		"count":     len(items),
-	}, nil
+	}
+	if marketFallback != nil {
+		resp["marketFallback"] = marketFallback
+	}
+	return resp, nil
 }
 
 type BorgGroupInput struct {

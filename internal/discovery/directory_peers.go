@@ -248,6 +248,7 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 }
 
 // Peers returns all currently known unexpired verified peers.
+// Peers returns all non-expired verified peers currently cached in memory.
 func (s *Service) Peers() []PeerInfo {
 	nowMs := time.Now().UnixMilli()
 	s.mu.RLock()
@@ -260,6 +261,21 @@ func (s *Service) Peers() []PeerInfo {
 		out = append(out, p)
 	}
 	return out
+}
+
+// UpsertPeer registers or refreshes a verified peer entry in memory (used by direct peer sync and tests).
+func (s *Service) UpsertPeer(p PeerInfo) {
+	if s == nil || strings.TrimSpace(p.Pub) == "" {
+		return
+	}
+	pub := strings.ToLower(strings.TrimSpace(p.Pub))
+	p.Pub = pub
+	s.mu.Lock()
+	if s.peers == nil {
+		s.peers = make(map[string]PeerInfo)
+	}
+	s.peers[pub] = p
+	s.mu.Unlock()
 }
 
 // ResolveHandle looks up a peer by its bfinger handle (e.g. "alice@nektar.run") or pubkey prefix.

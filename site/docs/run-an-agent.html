@@ -147,6 +147,8 @@ nektar wallet sweep --to-desktop --network main --confirm I_UNDERSTAND</code></p
 
 <div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>export NEKTAR_NETWORK="main"
 export NEKTAR_MAINNET_CONFIRM="I_UNDERSTAND"
+export NEKTAR_HEADERS_SOURCE="woc:main,arcade:https://arcade-v2-us-1.bsvblockchain.tech,arcade:https://arcade-eu-1.bsvblockchain.tech"
+export NEKTAR_SETTLE_SPEC="broadcaster:main"
 export NEKTAR_MAX_FEE_SATS_PER_TX=2000
 export NEKTAR_MAX_SPEND_SATS_PER_DAY=10000
 export NEKTAR_RESTATE_REQUIRED=1
@@ -220,35 +222,6 @@ touch ~/.nektar/main/KILL</code></pre></div>
       </footer>
     </main>
   </div>
-  <script>
-    for (const btn of document.querySelectorAll('.cp-btn')) {
-      btn.addEventListener('click', async () => {
-        const code = btn.closest('.code-wrap')?.querySelector('pre code')?.textContent || '';
-        await navigator.clipboard.writeText(code).catch(() => {});
-        btn.textContent = 'Copied ✓';
-        setTimeout(() => (btn.textContent = 'Copy'), 1400);
-      });
-    }
-    function scrollToContent(smooth) {
-      const target = document.getElementById('content');
-      if (!target) return;
-      const top = Math.max(0, target.getBoundingClientRect().top + window.scrollY - 64);
-      window.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
-    }
-    if (window.matchMedia('(max-width: 820px)').matches && location.hash === '#content') {
-      requestAnimationFrame(() => scrollToContent(false));
-    }
-    for (const link of document.querySelectorAll('.side a.slink[href*="#content"]')) {
-      link.addEventListener('click', (e) => {
-        if (!window.matchMedia('(max-width: 820px)').matches) return;
-        const url = new URL(link.href, location.href);
-        if (url.pathname === location.pathname) {
-          e.preventDefault();
-          if (location.hash !== '#content') history.replaceState(null, '', '#content');
-          scrollToContent(true);
-        }
-      });
-    }
-  </script>
+  <script src="./docs.js?v=1" defer></script>
 </body>
 </html>

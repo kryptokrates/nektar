@@ -112,35 +112,6 @@ a:hover{text-decoration:underline}
       </footer>
     </main>
   </div>
-  <script>
-    for (const btn of document.querySelectorAll('.cp-btn')) {
-      btn.addEventListener('click', async () => {
-        const code = btn.closest('.code-wrap')?.querySelector('pre code')?.textContent || '';
-        await navigator.clipboard.writeText(code).catch(() => {});
-        btn.textContent = 'Copied ✓';
-        setTimeout(() => (btn.textContent = 'Copy'), 1400);
-      });
-    }
-    function scrollToContent(smooth) {
-      const target = document.getElementById('content');
-      if (!target) return;
-      const top = Math.max(0, target.getBoundingClientRect().top + window.scrollY - 64);
-      window.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
-    }
-    if (window.matchMedia('(max-width: 820px)').matches && location.hash === '#content') {
-      requestAnimationFrame(() => scrollToContent(false));
-    }
-    for (const link of document.querySelectorAll('.side a.slink[href*="#content"]')) {
-      link.addEventListener('click', (e) => {
-        if (!window.matchMedia('(max-width: 820px)').matches) return;
-        const url = new URL(link.href, location.href);
-        if (url.pathname === location.pathname) {
-          e.preventDefault();
-          if (location.hash !== '#content') history.replaceState(null, '', '#content');
-          scrollToContent(true);
-        }
-      });
-    }
-  </script>
+  <script src="./docs.js?v=1" defer></script>
 </body>
 </html>

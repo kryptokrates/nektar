@@ -403,8 +403,32 @@ func cmdHook(args []string) error {
 		}
 		return printJSON(map[string]any{"verified": results})
 
+	case "outcome":
+		ofs := flag.NewFlagSet("hook outcome", flag.ExitOnError)
+		exitCode := ofs.Int("exit-code", 0, "Task/test exit code (0 = success, non-zero = failure)")
+		dealID := ofs.String("deal-id", "", "Optional settled deal ID (defaults to latest settled buyer deal)")
+		note := ofs.String("note", "", "Optional short note describing outcome")
+		oDataDir := ofs.String("data-dir", *dataDir, "Data directory override")
+		_ = ofs.Parse(fs.Args())
+		info, live := detectDaemon(*oDataDir, "")
+		if !live || info == nil {
+			return nil
+		}
+		out, err := callLiveAPI(info, http.MethodPost, "/v1/reputation/outcome", map[string]any{
+			"dealId":   strings.TrimSpace(*dealID),
+			"exitCode": *exitCode,
+			"note":     strings.TrimSpace(*note),
+		})
+		if err != nil {
+			if *verbose {
+				fmt.Fprintf(os.Stderr, "[nektar hook outcome] %v\n", err)
+			}
+			return nil
+		}
+		return printJSON(out)
+
 	default:
-		return fmt.Errorf("unknown hook subcommand %q (use session-start, prefetch, or verify-receipt)", sub)
+		return fmt.Errorf("unknown hook subcommand %q (use session-start, prefetch, verify-receipt, or outcome)", sub)
 	}
 }
 

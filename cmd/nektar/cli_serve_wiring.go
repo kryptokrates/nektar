@@ -245,6 +245,41 @@ func attachRestateClient(
 			}
 		}
 	})
+
+	// Background Restate SleepCycle (idle PII-scrubbing distillation & dynamic price decay)
+	// and zero-sat MicroEarner (auto-parks at 0% CPU once wallet float >= target).
+	sleepSec := envInt64("NEKTAR_SLEEP_INTERVAL_SEC", market.DefaultSleepIntervalSec)
+	if sleepSec < 30 {
+		sleepSec = 30
+	}
+	targetFloat := uint64(envInt64("NEKTAR_MICROEARNER_TARGET_SATS", int64(market.DefaultMicroEarnerFloatSats)))
+	spawnHook(func(hCtx context.Context) {
+		sleepTicker := time.NewTicker(time.Duration(sleepSec) * time.Second)
+		earnTicker := time.NewTicker(5 * time.Minute)
+		defer sleepTicker.Stop()
+		defer earnTicker.Stop()
+		for {
+			select {
+			case <-hCtx.Done():
+				return
+			case <-sleepTicker.C:
+				sCtx, cancel := context.WithTimeout(hCtx, 30*time.Second)
+				_, _ = restateClient.TriggerSleepCycleAsync(sCtx, market.SleepCycleInput{
+					IdleThresholdSeconds: market.DefaultSleepIdleSeconds,
+					AutoAnchor:           true,
+				})
+				cancel()
+			case <-earnTicker.C:
+				if rt.mem.Chain().WalletMode() == "embedded" && rt.mem.Chain().BalanceSats() < targetFloat {
+					eCtx, cancel := context.WithTimeout(hCtx, 30*time.Second)
+					_, _ = restateClient.RunMicroEarner(eCtx, market.MicroEarnerInput{
+						TargetFloatSats: targetFloat,
+					})
+					cancel()
+				}
+			}
+		}
+	})
 	return func() {
 		hookMu.Lock()
 		hookClosed = true

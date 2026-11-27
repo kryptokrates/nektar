@@ -75,6 +75,8 @@ func main() {
 		err = cmdWant(args)
 	case "sell":
 		err = cmdSell(args)
+	case "distill":
+		err = cmdDistill(args)
 	case "policy":
 		err = cmdPolicy(args)
 	case "wallet":

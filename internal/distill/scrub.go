@@ -451,7 +451,7 @@ var piiScrubRules = []piiRule{
 	{id: "git-ssh-remote", re: regexp.MustCompile(`\bgit@[A-Za-z0-9._-]+:[A-Za-z0-9._/-]+(?:\.git)?\b`), replacement: "<git-remote>"},
 }
 
-var ephemeralChatterRe = regexp.MustCompile(`(?i)^(?:ran tests?|failed on line \d+|fixed typo|retry(?:ing)?|ok|done|wip|checkpoint|todo|testing)\b[\s.!?:,-]*$`)
+var ephemeralChatterRe = regexp.MustCompile(`(?i)^(?:(?:ran tests?|failed on line \d+|fixed typo|retry(?:ing)?|ok|done|wip|checkpoint|todo|testing)[\s.!?:,-]*)+$`)
 
 // Scrub executes the fail-closed secret & PII gate.
 // 1. Any secret caught by explicit hard rules, BIP-39 mnemonic heuristic, entropy-assignment check,

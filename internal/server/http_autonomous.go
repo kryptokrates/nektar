@@ -306,10 +306,3 @@ func (a *App) buildDashboardAutonomous(_ context.Context, cutoff24h int64) dashb
 		microEarner: market.LoadMicroEarnerState(a.mem),
 	}
 }
-
-func (a *App) restateClient() *market.RestateClient {
-	a.mu.RLock()
-	rc := a.restate
-	a.mu.RUnlock()
-	return rc
-}

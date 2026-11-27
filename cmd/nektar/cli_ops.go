@@ -233,6 +233,11 @@ func cmdSell(args []string) error {
 	domains := fs.String("domains", "ops", "Comma-separated market domains")
 	price := fs.Uint64("price", 100, "Price in satoshis")
 	desc := fs.String("desc", "", "Short listing description")
+	ontologyID := fs.String("ontology", "", "Optional pinned OntologyID")
+	allowRaw := fs.Bool("allow-raw", false, "Explicitly permit selling non-distilled raw fragments (still scrubbed for secrets)")
+	dynamic := fs.Bool("dynamic", false, "Enable adaptive token-arbitrage dynamic pricing")
+	floor := fs.Uint64("floor", 0, "Optional dynamic price floor in satoshis")
+	ceiling := fs.Uint64("ceiling", 0, "Optional dynamic price ceiling in satoshis")
 	bountyID := fs.String("bounty", "", "Optional Hub bounty ID to sell directly TO the Hub")
 	hubURL := fs.String("hub", "", "Optional Hub URL when submitting a bounty")
 	seq := fs.Int64("seq", 0, "Optional fragment seq when submitting a Hub bounty")
@@ -247,13 +252,18 @@ func cmdSell(args []string) error {
 	}
 	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "sell", map[string]any{
-			"shard":       *shard,
-			"domains":     domList,
-			"priceSats":   *price,
-			"description": *desc,
-			"bountyId":    *bountyID,
-			"hubUrl":      *hubURL,
-			"seq":         *seq,
+			"shard":          *shard,
+			"domains":        domList,
+			"priceSats":      *price,
+			"description":    *desc,
+			"ontologyId":     strings.TrimSpace(*ontologyID),
+			"allowRaw":       *allowRaw,
+			"dynamicPricing": *dynamic,
+			"floorSats":      *floor,
+			"ceilingSats":    *ceiling,
+			"bountyId":       *bountyID,
+			"hubUrl":         *hubURL,
+			"seq":            *seq,
 		})
 		if err != nil {
 			return err
@@ -261,6 +271,37 @@ func cmdSell(args []string) error {
 		return printJSON(out)
 	}
 	return errors.New("no live nektar daemon found — start one with `nektar serve` first")
+}
+
+func cmdDistill(args []string) error {
+	fs := flag.NewFlagSet("distill", flag.ExitOnError)
+	shards := fs.String("shards", "", "Optional comma-separated working shards to distill")
+	maxBatch := fs.Int("max-batch", 32, "Maximum fragments to process in this pass")
+	autoAnchor := fs.Bool("anchor", true, "Anchor newly distilled market-* shards when wallet is funded")
+	autoList := fs.Bool("list", false, "Auto-list newly distilled market-* shards on the market")
+	dataDir := fs.String("data-dir", "", "Data directory override")
+	_ = fs.Parse(args)
+
+	var shardList []string
+	for _, s := range strings.Split(*shards, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			shardList = append(shardList, s)
+		}
+	}
+	if info, ok := detectDaemon(*dataDir, ""); ok {
+		out, err := callLiveAPI(info, http.MethodPost, "/v1/distill/run", map[string]any{
+			"shards":     shardList,
+			"maxBatch":   *maxBatch,
+			"autoAnchor": *autoAnchor,
+			"autoList":   *autoList,
+			"force":      true,
+		})
+		if err != nil {
+			return err
+		}
+		return printJSON(out)
+	}
+	return errors.New("no live nektar daemon found — start one with `nektar up` first")
 }
 
 func cmdPolicy(args []string) error {

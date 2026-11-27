@@ -4,12 +4,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"strings"
 )
 
 // cmdEarn is the hard-side seller activation fast path (`nektar earn`):
-// lists open Hub knowledge bounties alongside your local shards, and optionally anchors + submits
-// a shard fragment directly to a Hub bounty for an instant BSV AtomicBEEF payout.
+// lists open Hub knowledge bounties alongside your local shards, optionally runs the zero-sat
+// MicroEarner (`--auto`), or anchors + submits a shard fragment directly to a Hub bounty.
 func cmdEarn(args []string) error {
 	fs := flag.NewFlagSet("earn", flag.ExitOnError)
 	bountyID := fs.String("bounty", "", "Hub bounty ID to fulfill (e.g. bounty-ops, bounty-bsv, bounty-agents)")
@@ -17,6 +18,8 @@ func cmdEarn(args []string) error {
 	seq := fs.Int64("seq", 0, "Optional fragment seq within -shard (defaults to latest)")
 	hubURL := fs.String("hub", "", "Optional target Hub URL override")
 	autoAnchor := fs.Bool("anchor", true, "Anchor -shard automatically if unanchored before submitting")
+	autoEarn := fs.Bool("auto", false, "Run zero-sat MicroEarner immediately to earn starter float from Hub work/sponsored bounties")
+	targetFloat := fs.Uint64("target-float", 2000, "Target starter float in sats for --auto MicroEarner")
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	netName := fs.String("network", "", "Network override")
 	asJSON := fs.Bool("json", false, "Machine-readable JSON output")
@@ -25,6 +28,23 @@ func cmdEarn(args []string) error {
 	info, ok := detectDaemon(*dataDir, *netName)
 	if !ok || info == nil {
 		return errors.New("no live nektar daemon found — start one in 1 command with `nektar up` first")
+	}
+
+	if *autoEarn {
+		en := true
+		out, err := callLiveAPI(info, http.MethodPost, "/v1/microearner/toggle", map[string]any{
+			"enabled":         &en,
+			"targetFloatSats": *targetFloat,
+			"runNow":          true,
+		})
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return printJSON(out)
+		}
+		fmt.Println("✓ Zero-sat MicroEarner cycle completed:")
+		return printJSON(out)
 	}
 
 	// Mode 1: Direct submission to a specific Hub bounty.

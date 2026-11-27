@@ -243,12 +243,10 @@ func (a *App) handleLLMProxy(w http.ResponseWriter, r *http.Request, provider, s
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(rewritten)
-		if captureOn {
-			rawResp := string(rewritten)
-			a.goBackground(func(bgCtx context.Context) {
-				a.postProxyTurn(bgCtx, provider, shard, userPrompt, rawResp, false, captureOn)
-			})
-		}
+		rawResp := string(rewritten)
+		a.goBackground(func(bgCtx context.Context) {
+			a.postProxyTurn(bgCtx, provider, shard, userPrompt, rawResp, false, captureOn, memoryHits)
+		})
 		return
 	}
 
@@ -283,7 +281,7 @@ func (a *App) handleLLMProxy(w http.ResponseWriter, r *http.Request, provider, s
 	if isInferencePost && resp.StatusCode >= 200 && resp.StatusCode < 300 && teed.Len() > 0 {
 		rawResp := teed.String()
 		a.goBackground(func(bgCtx context.Context) {
-			a.postProxyTurn(bgCtx, provider, shard, userPrompt, rawResp, isStream, captureOn)
+			a.postProxyTurn(bgCtx, provider, shard, userPrompt, rawResp, isStream, captureOn, memoryHits)
 		})
 	}
 }
@@ -409,8 +407,36 @@ func injectProxyMemory(provider, subPath string, payload map[string]any, block s
 	}}, msgs...)
 }
 
-func (a *App) postProxyTurn(parentCtx context.Context, provider, shard, userPrompt, rawResp string, isStream, captureOn bool) {
+func (a *App) postProxyTurn(parentCtx context.Context, provider, shard, userPrompt, rawResp string, isStream, captureOn bool, memoryHits int) {
+	// Parse provider token usage telemetry (OpenAI & Anthropic, streaming & non-streaming)
+	// and record conservative token-savings attribution when memory context hits were injected.
+	inTok, outTok := extractProxyUsage(provider, rawResp, isStream)
 	assistantText := extractAssistantText(provider, rawResp, isStream)
+	if inTok == 0 && outTok == 0 && assistantText != "" {
+		tc := market.DefaultTokenCounter()
+		inTok = int64(tc.CountTokens(userPrompt))
+		outTok = int64(tc.CountTokens(assistantText))
+	}
+	if a.mem != nil && a.mem.DB() != nil && (inTok > 0 || outTok > 0 || memoryHits > 0) {
+		var saved int64
+		if memoryHits > 0 {
+			// Conservative attribution: each injected verified fragment saves ~350 re-discovery/reasoning tokens,
+			// capped conservatively relative to request size (or baseline 350*hits when usage unavailable).
+			saved = int64(memoryHits) * 350
+			if inTok > 0 && saved > inTok*2 {
+				saved = inTok * 2
+			}
+		}
+		_ = a.mem.DB().RecordEconomicsEvent(store.EconomicsEventRow{
+			Kind:        "proxy_usage",
+			TokensIn:    inTok,
+			TokensOut:   outTok,
+			TokensSaved: saved,
+			Shard:       shard,
+			Provider:    provider,
+			CreatedAt:   time.Now().Unix(),
+		})
+	}
 	if assistantText == "" {
 		return
 	}
@@ -441,6 +467,78 @@ func (a *App) postProxyTurn(parentCtx context.Context, provider, shard, userProm
 			Tainted:   true,
 		})
 	}
+}
+
+func jsonInt64Field(m map[string]any, key string) int64 {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	default:
+		return 0
+	}
+}
+
+// extractProxyUsage extracts exact (inputTokens, outputTokens) from OpenAI or Anthropic JSON or SSE payloads.
+func extractProxyUsage(_ string, raw string, isStream bool) (int64, int64) {
+	var inTok, outTok int64
+	parseUsageObj := func(u map[string]any) {
+		if u == nil {
+			return
+		}
+		if v := jsonInt64Field(u, "prompt_tokens"); v > inTok {
+			inTok = v
+		}
+		if v := jsonInt64Field(u, "input_tokens"); v > inTok {
+			inTok = v
+		}
+		if v := jsonInt64Field(u, "completion_tokens"); v > outTok {
+			outTok = v
+		}
+		if v := jsonInt64Field(u, "output_tokens"); v > outTok {
+			outTok = v
+		}
+	}
+	if isStream {
+		for _, line := range strings.Split(raw, "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "" || data == "[DONE]" {
+				continue
+			}
+			var ev map[string]any
+			if json.Unmarshal([]byte(data), &ev) != nil {
+				continue
+			}
+			if u, ok := ev["usage"].(map[string]any); ok {
+				parseUsageObj(u)
+			}
+			if msg, ok := ev["message"].(map[string]any); ok {
+				if u, ok := msg["usage"].(map[string]any); ok {
+					parseUsageObj(u)
+				}
+			}
+		}
+		return inTok, outTok
+	}
+	var obj map[string]any
+	if json.Unmarshal([]byte(raw), &obj) != nil {
+		return 0, 0
+	}
+	if u, ok := obj["usage"].(map[string]any); ok {
+		parseUsageObj(u)
+	}
+	return inTok, outTok
 }
 
 func extractAssistantText(provider, raw string, isStream bool) string {

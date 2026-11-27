@@ -95,6 +95,10 @@ func main() {
 		err = cmdOpen(args)
 	case "restate-up":
 		err = cmdRestateUp(args)
+	case "backup":
+		err = cmdBackup(args)
+	case "service":
+		err = cmdService(args)
 	case "check-mainnet":
 		err = cmdCheckMainnet()
 	default:
@@ -142,6 +146,8 @@ Hub & Operations:
   nektar check-mainnet  Verify Mainnet confirmation, dual-witness PoW headers, broadcaster & SpendGuard
   nektar status         Print node identity, wallet balance, shards, policy hash & SpendGuard state
   nektar vault / bond   Manage on-chain NektarAgentVault & NektarCheckpointBond covenants
+  nektar backup         BRC-42 encrypted WAL-safe SQLite backups (now | verify | restore | status)
+  nektar service        Cross-platform OS daemon supervision (install | start | stop | restart | status | uninstall)
   nektar restate-up     Download SHA-256 verified restate-server v1.8.1 (macOS, Linux, or Windows WSL2)
   nektar version        Print build version`)
 }

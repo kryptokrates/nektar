@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/autonomy"
+	"github.com/kryptokrates/nektar/internal/backup"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
@@ -208,6 +209,33 @@ func cmdServeWithContext(parentCtx context.Context, args []string) error {
 	watchdog.Start(ctx)
 	defer watchdog.Stop()
 
+	backupSink, bSinkErr := backup.NewSinkFromEnv(rt.mem.Chain().Network())
+	if bSinkErr != nil {
+		log.Printf("encrypted backup sink misconfigured (disabled): %v", bSinkErr)
+	}
+	backupMgr := backup.NewManager(backup.Config{
+		DB:       rt.mem.DB(),
+		Port:     rt.mem.Chain(),
+		DataDir:  rt.dataDir,
+		Sink:     backupSink,
+		Interval: backup.ParseIntervalEnv(os.Getenv("NEKTAR_BACKUP_INTERVAL")),
+		Keep:     backup.ParseKeepEnv(os.Getenv("NEKTAR_BACKUP_KEEP")),
+		OnComplete: func(st backup.Status) {
+			if st.LastError != "" {
+				log.Printf("encrypted backup error (%s): %s", st.Target, st.LastError)
+			} else {
+				log.Printf("encrypted backup completed: %s (%d bytes)", st.LastLocation, st.LastSizeBytes)
+			}
+			if a := appRef.Load(); a != nil {
+				a.BroadcastDashboardEvent("backup_completed")
+			}
+		},
+	})
+	if backupSink != nil {
+		backupMgr.Start(ctx)
+		defer backupMgr.Stop()
+	}
+
 	jevMatcher := buildJevMatcherFromEnv(rt.mem.Chain().Network())
 	broker := market.NewBroker(rt.mem, rt.mkt, rt.disc, market.BrokerConfig{
 		PublicURL:  pubURL,
@@ -251,6 +279,7 @@ func cmdServeWithContext(parentCtx context.Context, args []string) error {
 		Discovery:         rt.disc,
 		Broker:            broker,
 		Watchdog:          watchdog,
+		Backup:            backupMgr,
 		RestateAdminURL:   restateAdminDisplay,
 		ExposeWalletWire:  os.Getenv("NEKTAR_EXPOSE_WALLET_WIRE") == "1",
 	})

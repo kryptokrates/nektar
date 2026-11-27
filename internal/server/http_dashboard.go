@@ -253,6 +253,9 @@ func (a *App) buildDashboardAutonomy() map[string]any {
 	if a.broker != nil && a.broker.Subscriptions() != nil {
 		out["subscriptions"] = a.broker.Subscriptions().Status()
 	}
+	if a.backupMgr != nil {
+		out["backup"] = a.backupMgr.Status()
+	}
 	return out
 }
 

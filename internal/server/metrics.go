@@ -115,6 +115,12 @@ func (a *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		writeCounter("nektar_subscriptions_events_total", "Total Grade S subscription SSE events applied locally.", float64(sst.EventsTotal))
 		writeCounter("nektar_subscriptions_slashes_total", "Total Grade S dead-feed slashing attestations emitted.", float64(sst.SlashesTotal))
 	}
+	if a.backupMgr != nil {
+		bst := a.backupMgr.Status()
+		writeGauge("nektar_backup_last_unix", "Unix timestamp of the last successful encrypted state backup.", float64(bst.LastBackupAt))
+		writeGauge("nektar_backup_size_bytes", "Byte size of the last encrypted backup archive.", float64(bst.LastSizeBytes))
+		writeCounter("nektar_backup_total", "Total completed encrypted state backups.", float64(bst.TotalBackups))
+	}
 
 	restateUp := 0.0
 	if a.restateClient() != nil && a.isRestateAlive() {

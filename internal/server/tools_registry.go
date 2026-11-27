@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/autonomy"
+	"github.com/kryptokrates/nektar/internal/backup"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
@@ -32,6 +33,7 @@ type Toolbox struct {
 	disc           *discovery.Service
 	hubNode        *hub.Node
 	watchdog       *autonomy.Watchdog
+	backupMgr      *backup.Manager
 	profile        string // "agent" (focused 10-tool default) | "operator" (all 18 tools)
 	httpClient     *http.Client
 	restateMu      sync.RWMutex
@@ -84,6 +86,20 @@ func (tb *Toolbox) currentWatchdog() *autonomy.Watchdog {
 		return tb.broker.Watchdog()
 	}
 	return w
+}
+
+// SetBackup attaches the encrypted backup manager for doctor diagnostics.
+func (tb *Toolbox) SetBackup(b *backup.Manager) {
+	tb.restateMu.Lock()
+	tb.backupMgr = b
+	tb.restateMu.Unlock()
+}
+
+func (tb *Toolbox) currentBackup() *backup.Manager {
+	tb.restateMu.RLock()
+	b := tb.backupMgr
+	tb.restateMu.RUnlock()
+	return b
 }
 
 func (tb *Toolbox) isRestateAlive() bool {

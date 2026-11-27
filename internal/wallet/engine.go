@@ -489,3 +489,23 @@ func (e *Engine) FeeRateSatPerKB(ctx context.Context) uint64 {
 	}
 	return 100
 }
+
+// SnapshotTo writes an atomic, WAL-safe point-in-time snapshot of wallet.sqlite to dstPath
+// using SQLite VACUUM INTO without ever exposing raw private keys (which remain solely in identity.json).
+func (e *Engine) SnapshotTo(ctx context.Context, dstPath string) error {
+	if e == nil {
+		return errors.New("wallet: nil engine")
+	}
+	if dstPath == "" {
+		return errors.New("wallet: snapshot destination path required")
+	}
+	e.closeMu.Lock()
+	closed := e.closed
+	db := e.sqlDB
+	e.closeMu.Unlock()
+	if closed || db == nil {
+		return errors.New("wallet: database closed")
+	}
+	_, err := db.ExecContext(ctx, `VACUUM INTO ?`, filepath.Clean(dstPath))
+	return err
+}

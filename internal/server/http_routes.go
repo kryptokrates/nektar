@@ -169,7 +169,23 @@ func (a *App) buildMux() http.Handler {
 		if a.mkt != nil && a.mkt.Policy() != nil {
 			resp["policyAutonomy"] = a.mkt.Policy().AutonomyConfig()
 		}
+		if a.backupMgr != nil {
+			resp["backup"] = a.backupMgr.Status()
+		}
 		writeJSON(w, http.StatusOK, resp)
+	})))
+	mux.Handle("POST /v1/autonomy/backup", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.backupMgr == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "backup sink not configured (set NEKTAR_BACKUP_DIR or NEKTAR_BACKUP_S3_BUCKET)"})
+			return
+		}
+		res, err := a.backupMgr.BackupNow(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		a.BroadcastDashboardEvent("backup_completed")
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "result": res, "status": a.backupMgr.Status()})
 	})))
 	mux.Handle("POST /v1/autonomy/config", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var in market.PolicyAutonomyConfig

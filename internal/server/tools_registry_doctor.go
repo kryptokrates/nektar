@@ -268,6 +268,26 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 			Detail: fmt.Sprintf("running=%v active=%d events=%d slashes=%d", sst.Running, sst.ActiveCount, sst.EventsTotal, sst.SlashesTotal),
 		})
 	}
+	if bm := tb.currentBackup(); bm != nil {
+		bst := bm.Status()
+		st := "green"
+		detail := fmt.Sprintf("configured=%v target=%s total=%d lastBytes=%d", bst.Configured, bst.Target, bst.TotalBackups, bst.LastSizeBytes)
+		if !bst.Configured {
+			if tb.mem.Chain().Network() == "main" {
+				st = "amber"
+				nextSteps = append(nextSteps, "Set NEKTAR_BACKUP_DIR or NEKTAR_BACKUP_S3_BUCKET to enable scheduled BRC-42 encrypted SQLite state backups.")
+			}
+			detail = "disabled (set NEKTAR_BACKUP_DIR or NEKTAR_BACKUP_S3_BUCKET)"
+		} else if bst.LastError != "" {
+			st = "red"
+			detail += " lastError=" + bst.LastError
+			nextSteps = append(nextSteps, "Automated encrypted backup failed ("+bst.LastError+"). Run `nektar backup now` to verify target credentials/disk space.")
+		} else if bst.LastBackupAt > 0 && bst.IntervalSec > 0 && time.Now().Unix()-bst.LastBackupAt > bst.IntervalSec*2 {
+			st = "amber"
+			detail += fmt.Sprintf(" staleAgeSec=%d", time.Now().Unix()-bst.LastBackupAt)
+		}
+		checks = append(checks, DoctorCheck{Name: "encrypted_backup", Status: st, Detail: detail})
+	}
 
 	overall := "green"
 	for _, c := range checks {

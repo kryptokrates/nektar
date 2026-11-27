@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/kryptokrates/nektar/internal/autonomy"
+	"github.com/kryptokrates/nektar/internal/backup"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
@@ -41,6 +42,7 @@ type Config struct {
 	Discovery         *discovery.Service
 	Broker            *market.Broker
 	Watchdog          *autonomy.Watchdog  // optional SNTP clock-skew & spend anomaly safety watchdog
+	Backup            *backup.Manager     // optional scheduled encrypted state backup manager
 	RestateClient     *market.RestateClient // active Restate Ingress/Admin client (restate-server)
 	RestateAdminURL   string
 	ExposeWalletWire  bool // opt-in loopback-only BRC-100 wire at /v1/wallet/wire/
@@ -59,6 +61,7 @@ type App struct {
 	broker         *market.Broker
 	disc           *discovery.Service
 	watchdog       *autonomy.Watchdog
+	backupMgr      *backup.Manager
 	toolbox        *Toolbox
 	mcpSrv         *mcp.Server
 	cfg            Config
@@ -133,12 +136,16 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 	if wd != nil {
 		tb.SetWatchdog(wd)
 	}
+	if cfg.Backup != nil {
+		tb.SetBackup(cfg.Backup)
+	}
 	app := &App{
 		mem:        mem,
 		mkt:        mkt,
 		broker:     cfg.Broker,
 		disc:       disc,
 		watchdog:   wd,
+		backupMgr:  cfg.Backup,
 		toolbox:    tb,
 		mcpSrv:     NewMCPServerWithToolbox(tb),
 		cfg:        cfg,

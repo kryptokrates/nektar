@@ -36,7 +36,8 @@ func main() {
 	}
 
 	for _, name := range productionContracts {
-		srcPath := filepath.Join(*srcDir, name+".runar.go")
+		// Normalize to POSIX slashes so compiled artifact sourceLoc paths are identical across Windows, macOS, and Linux.
+		srcPath := filepath.ToSlash(filepath.Join(*srcDir, name+".runar.go"))
 		art, err := compiler.CompileFromSource(srcPath)
 		if err != nil {
 			fatalf("compile %s (%s): %v", name, srcPath, err)

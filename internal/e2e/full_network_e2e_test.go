@@ -373,28 +373,28 @@ func TestFiveNodeFullStackSmokeMeshSecurityAndChaos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = alpha.broker.ArmSell(ctx, market.SellInput{Shard: "ops-infra", Domains: []string{"ops"}, PriceSats: 70})
+	_, _ = alpha.broker.ArmSell(ctx, market.SellInput{Shard: "ops-infra", Domains: []string{"ops"}, PriceSats: 70, AllowRaw: true})
 
 	// Beta competes with Alpha on "ops" at a LOWER price (55 sats) AND sells "bsv"!
 	_, _ = beta.mem.Remember(ctx, memory.RememberInput{
 		Shard: "ops-fast", Text: "Beta SRE: Kubernetes etcd quorum snapshots rotate every 15m with zstd level 3.", Source: "beta", AutoAnchor: true,
 	})
-	_, _ = beta.broker.ArmSell(ctx, market.SellInput{Shard: "ops-fast", Domains: []string{"ops"}, PriceSats: 55})
+	_, _ = beta.broker.ArmSell(ctx, market.SellInput{Shard: "ops-fast", Domains: []string{"ops"}, PriceSats: 55, AllowRaw: true})
 	_, _ = beta.mem.Remember(ctx, memory.RememberInput{
 		Shard: "bsv-spv", Text: "Beta BSV: Teranode ARC accepts Extended Format transactions with 100 sat/kB fee.", Source: "beta", AutoAnchor: true,
 	})
-	_, _ = beta.broker.ArmSell(ctx, market.SellInput{Shard: "bsv-spv", Domains: []string{"bsv"}, PriceSats: 65})
+	_, _ = beta.broker.ArmSell(ctx, market.SellInput{Shard: "bsv-spv", Domains: []string{"bsv"}, PriceSats: 65, AllowRaw: true})
 
 	remGamma, _ := gamma.mem.Remember(ctx, memory.RememberInput{
 		Shard: "agents-ai", Text: "Gamma AI: MCP Streamable HTTP supports stateless fan-out across concurrent tool calls.", Source: "gamma", AutoAnchor: true,
 	})
-	_, _ = gamma.broker.ArmSell(ctx, market.SellInput{Shard: "agents-ai", Domains: []string{"agents"}, PriceSats: 60})
+	_, _ = gamma.broker.ArmSell(ctx, market.SellInput{Shard: "agents-ai", Domains: []string{"agents"}, PriceSats: 60, AllowRaw: true})
 
 	// NAT-only Delta (ZERO public HTTP URL!) sells "nat" purely through Hub /bbox relay!
 	_, _ = deltaNAT.mem.Remember(ctx, memory.RememberInput{
 		Shard: "nat-edge", Text: "Delta NAT: Zero-port agents trade atomically over Hub bbox store-and-forward.", Source: "delta", AutoAnchor: true,
 	})
-	_, _ = deltaNAT.broker.ArmSell(ctx, market.SellInput{Shard: "nat-edge", Domains: []string{"nat"}, PriceSats: 50})
+	_, _ = deltaNAT.broker.ArmSell(ctx, market.SellInput{Shard: "nat-edge", Domains: []string{"nat"}, PriceSats: 50, AllowRaw: true})
 
 	// Start all 5 brokers & announce all 5 nodes on the signed `dir` lane!
 	for _, n := range []*testAgent{hub1, alpha, beta, gamma, deltaNAT} {
@@ -672,7 +672,7 @@ func TestFourAgentSpeedThroughputAndConcurrency(t *testing.T) {
 		_, _ = a.mem.Remember(ctx, memory.RememberInput{
 			Shard: "prod", Text: fmt.Sprintf("Agent %d verified domain %s benchmark payload.", i, domains[i]), AutoAnchor: true,
 		})
-		_, _ = a.broker.ArmSell(ctx, market.SellInput{Shard: "prod", Domains: []string{domains[i]}, PriceSats: 40})
+		_, _ = a.broker.ArmSell(ctx, market.SellInput{Shard: "prod", Domains: []string{domains[i]}, PriceSats: 40, AllowRaw: true})
 		a.broker.Start(ctx)
 		_, _ = a.broker.AnnounceSelf(ctx)
 		agents[i] = a

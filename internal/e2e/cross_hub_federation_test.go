@@ -103,7 +103,7 @@ func TestCrossHubSixHubFederationE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent1 remember: %v", err)
 	}
-	if _, err := agent1.broker.ArmSell(ctx, market.SellInput{Shard: "travel/rebook", Domains: []string{"travel"}, PriceSats: 110}); err != nil {
+	if _, err := agent1.broker.ArmSell(ctx, market.SellInput{Shard: "travel/rebook", Domains: []string{"travel"}, PriceSats: 110, AllowRaw: true}); err != nil {
 		t.Fatalf("agent1 ArmSell: %v", err)
 	}
 
@@ -116,7 +116,7 @@ func TestCrossHubSixHubFederationE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent2 remember: %v", err)
 	}
-	if _, err := agent2.broker.ArmSell(ctx, market.SellInput{Shard: "travel/expensive", Domains: []string{"travel"}, PriceSats: 220}); err != nil {
+	if _, err := agent2.broker.ArmSell(ctx, market.SellInput{Shard: "travel/expensive", Domains: []string{"travel"}, PriceSats: 220, AllowRaw: true}); err != nil {
 		t.Fatalf("agent2 ArmSell: %v", err)
 	}
 
@@ -129,7 +129,7 @@ func TestCrossHubSixHubFederationE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent4 remember: %v", err)
 	}
-	if _, err := agent4.broker.ArmSell(ctx, market.SellInput{Shard: "prosumer/deals", Domains: []string{"prosumer"}, PriceSats: 85}); err != nil {
+	if _, err := agent4.broker.ArmSell(ctx, market.SellInput{Shard: "prosumer/deals", Domains: []string{"prosumer"}, PriceSats: 85, AllowRaw: true}); err != nil {
 		t.Fatalf("agent4 ArmSell: %v", err)
 	}
 

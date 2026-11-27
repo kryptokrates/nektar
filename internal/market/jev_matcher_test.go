@@ -87,12 +87,12 @@ forbid (
 
 	// Arm both listings under domain "ops" (ops/docker listed first to prove no first-listing blindness!).
 	if err := mem.DB().SaveSellListing(store.SellListing{
-		Shard: "ops/docker", Domains: []string{"ops"}, PriceSats: 100, Description: "Docker compose tips", Active: true, CreatedAt: time.Now().Unix() + 10,
+		Shard: "ops/docker", Domains: []string{"ops"}, PriceSats: 100, Description: "Docker compose tips", AllowRaw: true, Active: true, CreatedAt: time.Now().Unix() + 10,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := mem.DB().SaveSellListing(store.SellListing{
-		Shard: "ops/teranode", Domains: []string{"ops"}, PriceSats: 150, Description: "Teranode UTXO reconciliation runbook", Active: true, CreatedAt: time.Now().Unix(),
+		Shard: "ops/teranode", Domains: []string{"ops"}, PriceSats: 150, Description: "Teranode UTXO reconciliation runbook", AllowRaw: true, Active: true, CreatedAt: time.Now().Unix(),
 	}); err != nil {
 		t.Fatal(err)
 	}

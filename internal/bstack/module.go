@@ -17,6 +17,8 @@ import (
 	"github.com/lightwebinc/bcommon/carrier"
 	"github.com/lightwebinc/bcommon/module"
 	"github.com/lightwebinc/bcommon/record"
+
+	"github.com/kryptokrates/nektar/internal/nmu"
 )
 
 // MarketEvent is emitted whenever the Nektar overlay LookupService admits a verified market artifact.
@@ -99,6 +101,9 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		if err := validateOptionalHash32("want ontologyId", sw.Want.OntologyID); err != nil {
 			return err
 		}
+		if err := nmu.ValidateWantFilters(sw.Want.MinGrade, sw.Want.FreshnessClass, sw.Want.RequiredRights, sw.Want.PricingMode); err != nil {
+			return fmt.Errorf("want %w", err)
+		}
 		if sw.Want.Exp <= 0 || sw.Want.Exp < nowMs || sw.Want.Exp > maxExp {
 			return errors.New("want missing exp, expired, or lifetime too long")
 		}
@@ -127,6 +132,20 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		}
 		if err := validateOptionalHash32("offer edgesRoot", so.Offer.EdgesRoot); err != nil {
 			return err
+		}
+		if err := nmu.ValidateOfferSpec(nmu.Spec{
+			Grade:           nmu.Grade(so.Offer.Grade),
+			UnitCount:       so.Offer.UnitCount,
+			SatsPer1kUnits:  so.Offer.SatsPer1kUnits,
+			FreshnessClass:  nmu.FreshnessClass(so.Offer.FreshnessClass),
+			ValidUntilUnix:  so.Offer.ValidUntilUnix,
+			SubjectVersion:  so.Offer.SubjectVersion,
+			UsageRights:     nmu.UsageRights(so.Offer.UsageRights),
+			PricingMode:     nmu.PricingMode(so.Offer.PricingMode),
+			SubscriptionSec: so.Offer.SubscriptionSec,
+			FeedURL:         so.Offer.FeedURL,
+		}, so.Offer.PriceSats); err != nil {
+			return fmt.Errorf("offer %w", err)
 		}
 		if expectedNet != "" && so.Offer.Net != expectedNet {
 			return fmt.Errorf("offer net %q != %q", so.Offer.Net, expectedNet)
@@ -175,6 +194,9 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 				return err
 			}
 			if err := validateOptionalHash32("pack targetOntologyId", pk.TargetOntologyID); err != nil {
+				return err
+			}
+			if err := validatePackRefNMU(pk); err != nil {
 				return err
 			}
 		}
@@ -257,6 +279,52 @@ func validateOptionalHash32(label, val string) error {
 	b, err := hex.DecodeString(s)
 	if err != nil || len(b) != 32 {
 		return fmt.Errorf("%s must be 32-byte hex", label)
+	}
+	return nil
+}
+
+func validatePackRefNMU(pk PackRef) error {
+	if pk.Grade != "" {
+		g := nmu.NormalizeGrade(pk.Grade)
+		if !nmu.ValidGrade(g) {
+			return fmt.Errorf("pack invalid grade %q", pk.Grade)
+		}
+		if g == nmu.GradeS && strings.TrimSpace(pk.FeedEndpoint) == "" {
+			return errors.New("pack grade S requires feedEndpoint")
+		}
+	}
+	if pk.UnitCount > nmu.MaxUnitCount {
+		return fmt.Errorf("pack unitCount %d exceeds max %d", pk.UnitCount, nmu.MaxUnitCount)
+	}
+	if pk.PricingMode != "" && !nmu.ValidPricingMode(nmu.NormalizePricingMode(pk.PricingMode)) {
+		return fmt.Errorf("pack invalid pricingMode %q", pk.PricingMode)
+	}
+	if len(pk.EnabledModes) > 3 {
+		return errors.New("pack enabledModes exceeds max 3")
+	}
+	for _, m := range pk.EnabledModes {
+		if !nmu.ValidPricingMode(nmu.NormalizePricingMode(m)) {
+			return fmt.Errorf("pack invalid enabledMode %q", m)
+		}
+	}
+	if pk.FreshnessClass != "" && !nmu.ValidFreshness(nmu.NormalizeFreshness(pk.FreshnessClass)) {
+		return fmt.Errorf("pack invalid freshnessClass %q", pk.FreshnessClass)
+	}
+	if pk.UsageRights != "" && !nmu.ValidRights(nmu.NormalizeRights(pk.UsageRights)) {
+		return fmt.Errorf("pack invalid usageRights %q", pk.UsageRights)
+	}
+	if pk.SubscriptionSec < 0 {
+		return errors.New("pack subscriptionSec cannot be negative")
+	}
+	if len(pk.QueryEndpoint) > nmu.MaxFeedURLLen || len(pk.FeedEndpoint) > nmu.MaxFeedURLLen {
+		return errors.New("pack endpoint exceeds max length")
+	}
+	if pk.SatsPer1kUnits > 0 && pk.PriceSats > 0 {
+		want := nmu.ComputeSatsPer1kUnits(pk.PriceSats, pk.UnitCount)
+		if pk.SatsPer1kUnits != want {
+			return fmt.Errorf("pack satsPer1kUnits %d does not match priceSats=%d unitCount=%d (want %d)",
+				pk.SatsPer1kUnits, pk.PriceSats, pk.UnitCount, want)
+		}
 	}
 	return nil
 }

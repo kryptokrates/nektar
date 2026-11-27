@@ -710,3 +710,16 @@ func (c *CompiledOntology) AllowedRelations(subjectClass, objectClass string) []
 	}
 	return byObj[objectClass]
 }
+
+// PredicateSet returns the exact set of TBox relation IDs declared in this compiled ontology,
+// used by NMU-1 anti-stuffing triple counting so unknown noise predicates never inflate UnitCount.
+func (c *CompiledOntology) PredicateSet() map[string]struct{} {
+	if c == nil || len(c.RelsByID) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(c.RelsByID))
+	for id := range c.RelsByID {
+		out[id] = struct{}{}
+	}
+	return out
+}

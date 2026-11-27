@@ -14,6 +14,8 @@ import (
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/lightwebinc/bcommon/module"
+
+	"github.com/kryptokrates/nektar/internal/nmu"
 )
 
 // MarketLookupService implements lightwebinc/bcommon/module.LookupService + SpendListener + Restorer
@@ -42,6 +44,11 @@ type indexedRecord struct {
 	domains           []string
 	ontologyIDs       []string
 	targetOntologyIDs []string
+	grades            []nmu.Grade
+	pricingModes      []nmu.PricingMode
+	usageRights       []nmu.UsageRights
+	freshnessClasses  []nmu.FreshnessClass
+	minSatsPer1kUnits uint64
 	exp               int64
 }
 
@@ -86,6 +93,15 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		if oid := strings.ToLower(strings.TrimSpace(sw.Want.OntologyID)); oid != "" {
 			rec.ontologyIDs = []string{oid}
 		}
+		if g := nmu.NormalizeGrade(sw.Want.MinGrade); g != "" {
+			rec.grades = []nmu.Grade{g}
+		}
+		rec.pricingModes = []nmu.PricingMode{nmu.EffectivePricingMode(nmu.PricingMode(sw.Want.PricingMode))}
+		rec.usageRights = []nmu.UsageRights{nmu.EffectiveRights(nmu.UsageRights(sw.Want.RequiredRights))}
+		if fc := nmu.NormalizeFreshness(sw.Want.FreshnessClass); fc != "" {
+			rec.freshnessClasses = []nmu.FreshnessClass{fc}
+		}
+		rec.minSatsPer1kUnits = sw.Want.MaxSatsPer1kUnits
 		rec.exp = sw.Want.Exp
 	case KindOffer:
 		var so SignedOffer
@@ -99,6 +115,19 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		rec.domains = so.Offer.Domains
 		if oid := strings.ToLower(strings.TrimSpace(so.Offer.OntologyID)); oid != "" {
 			rec.ontologyIDs = []string{oid}
+		}
+		if g := nmu.NormalizeGrade(so.Offer.Grade); g != "" {
+			rec.grades = []nmu.Grade{g}
+		}
+		rec.pricingModes = []nmu.PricingMode{nmu.EffectivePricingMode(nmu.PricingMode(so.Offer.PricingMode))}
+		rec.usageRights = []nmu.UsageRights{nmu.EffectiveRights(nmu.UsageRights(so.Offer.UsageRights))}
+		if fc := nmu.NormalizeFreshness(so.Offer.FreshnessClass); fc != "" {
+			rec.freshnessClasses = []nmu.FreshnessClass{fc}
+		}
+		if so.Offer.SatsPer1kUnits > 0 {
+			rec.minSatsPer1kUnits = so.Offer.SatsPer1kUnits
+		} else if so.Offer.PriceSats > 0 {
+			rec.minSatsPer1kUnits = nmu.ComputeSatsPer1kUnits(so.Offer.PriceSats, so.Offer.UnitCount)
 		}
 		rec.exp = so.Offer.Exp
 	case KindAnnounce:
@@ -114,6 +143,31 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 			}
 			if tid := strings.ToLower(strings.TrimSpace(pk.TargetOntologyID)); tid != "" {
 				rec.targetOntologyIDs = append(rec.targetOntologyIDs, tid)
+			}
+			if g := nmu.NormalizeGrade(pk.Grade); g != "" {
+				rec.grades = append(rec.grades, g)
+			}
+			if len(pk.EnabledModes) > 0 {
+				for _, m := range pk.EnabledModes {
+					if pm := nmu.NormalizePricingMode(m); nmu.ValidPricingMode(pm) {
+						rec.pricingModes = append(rec.pricingModes, pm)
+					}
+				}
+			} else if pk.PricingMode != "" {
+				rec.pricingModes = append(rec.pricingModes, nmu.EffectivePricingMode(nmu.PricingMode(pk.PricingMode)))
+			} else {
+				rec.pricingModes = append(rec.pricingModes, nmu.ModeSpot)
+			}
+			rec.usageRights = append(rec.usageRights, nmu.EffectiveRights(nmu.UsageRights(pk.UsageRights)))
+			if fc := nmu.NormalizeFreshness(pk.FreshnessClass); fc != "" {
+				rec.freshnessClasses = append(rec.freshnessClasses, fc)
+			}
+			rate := pk.SatsPer1kUnits
+			if rate == 0 && pk.PriceSats > 0 {
+				rate = nmu.ComputeSatsPer1kUnits(pk.PriceSats, pk.UnitCount)
+			}
+			if rate > 0 && (rec.minSatsPer1kUnits == 0 || rate < rec.minSatsPer1kUnits) {
+				rec.minSatsPer1kUnits = rate
 			}
 		}
 		rec.exp = sa.Announce.Exp
@@ -243,18 +297,23 @@ func (s *MarketLookupService) Restore(_ context.Context, outputs []module.Output
 
 // MarketQuery is the structured JSON query accepted by `ls_nektar`.
 type MarketQuery struct {
-	Kind             ArtifactKind `json:"kind,omitempty"`
-	WantID           string       `json:"wantId,omitempty"`
-	OfferID          string       `json:"offerId,omitempty"`
-	Domain           string       `json:"domain,omitempty"`
-	OntologyID       string       `json:"ontologyId,omitempty"`
-	TargetOntologyID string       `json:"targetOntologyId,omitempty"`
-	Pub              string       `json:"pub,omitempty"`
-	BuyerPub         string       `json:"buyerPub,omitempty"`
-	SubjectPub       string       `json:"subjectPub,omitempty"`
-	SinceMs          int64        `json:"sinceMs,omitempty"`
-	SinceSeq         int64        `json:"sinceSeq,omitempty"`
-	Limit            int          `json:"limit,omitempty"`
+	Kind              ArtifactKind `json:"kind,omitempty"`
+	WantID            string       `json:"wantId,omitempty"`
+	OfferID           string       `json:"offerId,omitempty"`
+	Domain            string       `json:"domain,omitempty"`
+	OntologyID        string       `json:"ontologyId,omitempty"`
+	TargetOntologyID  string       `json:"targetOntologyId,omitempty"`
+	MinGrade          string       `json:"minGrade,omitempty"`
+	PricingMode       string       `json:"pricingMode,omitempty"`
+	UsageRights       string       `json:"usageRights,omitempty"`
+	FreshnessClass    string       `json:"freshnessClass,omitempty"`
+	MaxSatsPer1kUnits uint64       `json:"maxSatsPer1kUnits,omitempty"`
+	Pub               string       `json:"pub,omitempty"`
+	BuyerPub          string       `json:"buyerPub,omitempty"`
+	SubjectPub        string       `json:"subjectPub,omitempty"`
+	SinceMs           int64        `json:"sinceMs,omitempty"`
+	SinceSeq          int64        `json:"sinceSeq,omitempty"`
+	Limit             int          `json:"limit,omitempty"`
 }
 
 func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQuestion) (*lookup.LookupAnswer, error) {
@@ -271,6 +330,10 @@ func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQ
 	domLower := strings.ToLower(strings.TrimSpace(q.Domain))
 	ontLower := strings.ToLower(strings.TrimSpace(q.OntologyID))
 	tgtOntLower := strings.ToLower(strings.TrimSpace(q.TargetOntologyID))
+	minGrade := nmu.NormalizeGrade(q.MinGrade)
+	wantMode := nmu.NormalizePricingMode(q.PricingMode)
+	wantRights := nmu.NormalizeRights(q.UsageRights)
+	wantFresh := nmu.NormalizeFreshness(q.FreshnessClass)
 
 	s.mu.RLock()
 	var matched []indexedRecord
@@ -309,6 +372,21 @@ func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQ
 			continue
 		}
 		if tgtOntLower != "" && !hasDomain(rec.targetOntologyIDs, tgtOntLower) {
+			continue
+		}
+		if minGrade != "" && !matchesMinGrade(rec.grades, minGrade) {
+			continue
+		}
+		if wantMode != "" && !matchesPricingMode(rec.pricingModes, wantMode) {
+			continue
+		}
+		if wantRights != "" && !matchesUsageRights(rec.usageRights, wantRights) {
+			continue
+		}
+		if wantFresh != "" && !matchesFreshness(rec.freshnessClasses, wantFresh) {
+			continue
+		}
+		if q.MaxSatsPer1kUnits > 0 && (rec.minSatsPer1kUnits == 0 || rec.minSatsPer1kUnits > q.MaxSatsPer1kUnits) {
 			continue
 		}
 		matched = append(matched, rec)
@@ -356,6 +434,42 @@ func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQ
 func hasDomain(domains []string, want string) bool {
 	for _, d := range domains {
 		if strings.ToLower(strings.TrimSpace(d)) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesMinGrade(grades []nmu.Grade, min nmu.Grade) bool {
+	for _, g := range grades {
+		if nmu.MeetsMinGrade(g, min) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesPricingMode(modes []nmu.PricingMode, want nmu.PricingMode) bool {
+	for _, m := range modes {
+		if m == want {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesUsageRights(rights []nmu.UsageRights, want nmu.UsageRights) bool {
+	for _, r := range rights {
+		if nmu.MeetsRequiredRights(r, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesFreshness(classes []nmu.FreshnessClass, want nmu.FreshnessClass) bool {
+	for _, c := range classes {
+		if c == want {
 			return true
 		}
 	}

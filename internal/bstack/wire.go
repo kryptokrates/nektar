@@ -68,15 +68,20 @@ type SignedWant struct {
 }
 
 type WantAd struct {
-	WantID     string   `json:"wantId"`
-	Pub        string   `json:"pub"`
-	Net        string   `json:"net"`
-	Domains    []string `json:"domains"`
-	Query      string   `json:"query"`
-	OntologyID string   `json:"ontologyId,omitempty"` // optional 32-byte hex committed TBox OntologyID
-	MaxSats    uint64   `json:"maxSats"`
-	Revision   int      `json:"revision"`
-	Exp        int64    `json:"exp"` // unix ms
+	WantID            string   `json:"wantId"`
+	Pub               string   `json:"pub"`
+	Net               string   `json:"net"`
+	Domains           []string `json:"domains"`
+	Query             string   `json:"query"`
+	OntologyID        string   `json:"ontologyId,omitempty"`        // optional 32-byte hex committed TBox OntologyID
+	MaxSats           uint64   `json:"maxSats"`
+	MinGrade          string   `json:"minGrade,omitempty"`          // NMU-1 minimum grade: C | B | A | S
+	MaxSatsPer1kUnits uint64   `json:"maxSatsPer1kUnits,omitempty"` // NMU-1 max normalized unit price (milli-sats/triple)
+	FreshnessClass    string   `json:"freshnessClass,omitempty"`    // NMU-1: ephemeral | versioned | evergreen
+	RequiredRights    string   `json:"requiredRights,omitempty"`    // NMU-1: inference_only | distill_resellable
+	PricingMode       string   `json:"pricingMode,omitempty"`       // NMU-1: spot | per_query | subscription
+	Revision          int      `json:"revision"`
+	Exp               int64    `json:"exp"` // unix ms
 }
 
 // SignedOffer advertises a seller's signed quote answering a WantAd.
@@ -86,43 +91,66 @@ type SignedOffer struct {
 }
 
 type OfferAd struct {
-	OfferID        string          `json:"offerId"`
-	WantID         string          `json:"wantId"`
-	Pub            string          `json:"pub"`
-	BuyerPub       string          `json:"buyerPub"`
-	Net            string          `json:"net"`
-	Domains        []string        `json:"domains"`
-	PriceSats      uint64          `json:"priceSats"`
-	Shard          string          `json:"shard,omitempty"`
-	Leaf           string          `json:"leaf,omitempty"`
-	OntologyID     string          `json:"ontologyId,omitempty"` // optional 32-byte hex TBox OntologyID
-	EdgesRoot      string          `json:"edgesRoot,omitempty"`  // optional 32-byte hex accepted-edge Merkle root
-	ChirpURL       string          `json:"chirpUrl,omitempty"`
-	KeyCommitHex   string          `json:"keyCommitHex,omitempty"`
-	PayAddress     string          `json:"payAddress,omitempty"`
-	PayIdentityKey string          `json:"payIdentityKey,omitempty"`
-	SellerURL      string          `json:"sellerUrl,omitempty"`
-	BboxOffice     string          `json:"bboxOffice,omitempty"`
-	SaleOffer      json.RawMessage `json:"saleOffer,omitempty"`
-	Description    string          `json:"description,omitempty"`
-	Tags           []string        `json:"tags,omitempty"`
-	BondOutpoint   string          `json:"bondOutpoint,omitempty"`
-	BondBEEFHex    string          `json:"bondBeefHex,omitempty"`
-	IsHub          bool            `json:"isHub,omitempty"`
-	Direct         bool            `json:"direct,omitempty"`
-	Revision       int             `json:"revision"`
-	Exp            int64           `json:"exp"`
+	OfferID         string          `json:"offerId"`
+	WantID          string          `json:"wantId"`
+	Pub             string          `json:"pub"`
+	BuyerPub        string          `json:"buyerPub"`
+	Net             string          `json:"net"`
+	Domains         []string        `json:"domains"`
+	PriceSats       uint64          `json:"priceSats"`
+	Grade           string          `json:"grade,omitempty"`           // NMU-1 commodity grade: C | B | A | S
+	UnitCount       uint32          `json:"unitCount,omitempty"`       // NMU-1 verified unique triples (or 1 text unit for C)
+	SatsPer1kUnits  uint64          `json:"satsPer1kUnits,omitempty"`  // NMU-1 exact (priceSats*1000)/max(1,unitCount)
+	FreshnessClass  string          `json:"freshnessClass,omitempty"`  // NMU-1: ephemeral | versioned | evergreen
+	ValidUntilUnix  int64           `json:"validUntilUnix,omitempty"`  // NMU-1 unix seconds TTL for ephemeral units
+	SubjectVersion  string          `json:"subjectVersion,omitempty"`  // NMU-1 version pin (e.g. "go-1.27.4")
+	UsageRights     string          `json:"usageRights,omitempty"`     // NMU-1: inference_only | distill_resellable
+	PricingMode     string          `json:"pricingMode,omitempty"`     // NMU-1: spot | per_query | subscription
+	SubscriptionSec int64           `json:"subscriptionSec,omitempty"` // NMU-1 duration seconds when pricingMode==subscription
+	FeedURL         string          `json:"feedUrl,omitempty"`         // NMU-1 live SSE supersession endpoint (Grade S / subscription)
+	Shard           string          `json:"shard,omitempty"`
+	Leaf            string          `json:"leaf,omitempty"`
+	OntologyID      string          `json:"ontologyId,omitempty"` // optional 32-byte hex TBox OntologyID
+	EdgesRoot       string          `json:"edgesRoot,omitempty"`  // optional 32-byte hex accepted-edge Merkle root
+	ChirpURL        string          `json:"chirpUrl,omitempty"`
+	KeyCommitHex    string          `json:"keyCommitHex,omitempty"`
+	PayAddress      string          `json:"payAddress,omitempty"`
+	PayIdentityKey  string          `json:"payIdentityKey,omitempty"`
+	SellerURL       string          `json:"sellerUrl,omitempty"`
+	BboxOffice      string          `json:"bboxOffice,omitempty"`
+	SaleOffer       json.RawMessage `json:"saleOffer,omitempty"`
+	Description     string          `json:"description,omitempty"`
+	Tags            []string        `json:"tags,omitempty"`
+	BondOutpoint    string          `json:"bondOutpoint,omitempty"`
+	BondBEEFHex     string          `json:"bondBeefHex,omitempty"`
+	IsHub           bool            `json:"isHub,omitempty"`
+	Direct          bool            `json:"direct,omitempty"`
+	Revision        int             `json:"revision"`
+	Exp             int64           `json:"exp"`
 }
 
 // PackRef advertises a content-addressed CHIRP shard pack (or ontology/bridge repo) in a signed AnnounceAd.
 type PackRef struct {
-	Shard            string   `json:"shard"`
-	Domains          []string `json:"domains,omitempty"`
-	ChirpURL         string   `json:"chirpUrl"`
-	RootHex          string   `json:"rootHex,omitempty"`
-	OntologyID       string   `json:"ontologyId,omitempty"`
-	TargetOntologyID string   `json:"targetOntologyId,omitempty"` // populated for cross-ontology Bridge Shards
-	Count            int      `json:"count,omitempty"`
+	Shard                 string   `json:"shard"`
+	Domains               []string `json:"domains,omitempty"`
+	ChirpURL              string   `json:"chirpUrl"`
+	RootHex               string   `json:"rootHex,omitempty"`
+	OntologyID            string   `json:"ontologyId,omitempty"`
+	TargetOntologyID      string   `json:"targetOntologyId,omitempty"` // populated for cross-ontology Bridge Shards
+	Count                 int      `json:"count,omitempty"`
+	Grade                 string   `json:"grade,omitempty"`                 // NMU-1 highest provable grade in shard
+	UnitCount             uint32   `json:"unitCount,omitempty"`             // NMU-1 verified units per pack/average
+	PricingMode           string   `json:"pricingMode,omitempty"`           // primary pricing mode (spot | per_query | subscription)
+	EnabledModes          []string `json:"enabledModes,omitempty"`          // independent enabled modes for multi-mode listings
+	PriceSats             uint64   `json:"priceSats,omitempty"`             // spot ask in sats
+	SatsPer1kUnits        uint64   `json:"satsPer1kUnits,omitempty"`        // normalized spot unit price (milli-sats/triple)
+	QueryPriceSats        uint64   `json:"queryPriceSats,omitempty"`        // per_query metered recall ask (BRC-105 402)
+	SubscriptionPriceSats uint64   `json:"subscriptionPriceSats,omitempty"` // subscription feed ask
+	SubscriptionSec       int64    `json:"subscriptionSec,omitempty"`       // subscription window duration in seconds
+	FreshnessClass        string   `json:"freshnessClass,omitempty"`
+	UsageRights           string   `json:"usageRights,omitempty"`
+	QueryEndpoint         string   `json:"queryEndpoint,omitempty"` // POST /v1/market/query URL
+	FeedEndpoint          string   `json:"feedEndpoint,omitempty"`  // GET /v1/market/feeds/{shard} SSE URL
 }
 
 // SignedAnnounce advertises an operator/hub node on the enumerable dir lane.

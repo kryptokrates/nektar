@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Quick Start &amp; How It Works — NEKTAR Manuals</title>
-  <meta name="description" content="Watch the 80-second end-to-end overview, learn every Nektar term in plain English, and install in 25 seconds." />
+  <title>Quick Start — NEKTAR Manuals</title>
+  <meta name="description" content="Watch the 80-second end-to-end overview, install Nektar in 25 seconds, and read every term in plain English." />
   <link rel="icon" type="image/svg+xml" href="../logo.svg" />
   <style>
-:root{color-scheme:dark;--bg:#161413;--card:#110f0e;--hover:#1b1816;--line:#282421;--line2:#3a342f;--ink:#f4efe6;--mut:#958d85;--mut2:#6c655e;--amber:#f7991b;--ok:#4cc26b}
+:root{color-scheme:dark;--bg:#161413;--card:#110f0e;--hover:#1b1816;--line:#282421;--line2:#3a342f;--ink:#f4efe6;--mut:#a69e96;--mut2:#7a726a;--amber:#f7991b;--ok:#4cc26b}
 *{box-sizing:border-box}
 html{scrollbar-gutter:stable;scroll-behavior:smooth}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif;font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif;font-size:15.5px;line-height:1.7;-webkit-font-smoothing:antialiased}
 a{color:var(--amber);text-decoration:none}
 a:hover{text-decoration:underline}
-.topbar{position:sticky;top:0;z-index:30;height:58px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 24px;background:rgba(22,20,19,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.topbar{position:sticky;top:0;z-index:30;height:58px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 24px;background:rgba(22,20,19,.94);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:10px;color:var(--ink);font-weight:700;font-size:15px;letter-spacing:.2em}
 .brand:hover{text-decoration:none}
 .brand img{width:24px;height:24px;border-radius:6px}
@@ -27,51 +27,62 @@ a:hover{text-decoration:underline}
 .slink{display:block;padding:7px 10px;border-radius:9px;color:var(--mut);font-size:13.5px;font-weight:600;transition:background .12s,color .12s}
 .slink:hover{background:var(--hover);color:var(--ink);text-decoration:none}
 .slink.on{background:rgba(247,153,27,.12);color:var(--amber)}
-.doc-main{padding:36px 48px 72px;max-width:820px;min-width:0}
-.doc-main h1{font-size:30px;font-weight:800;letter-spacing:-.03em;margin:0 0 8px}
-.lead{font-size:16px;color:var(--mut);margin:0 0 22px}
-.doc-main h2{font-size:19px;font-weight:800;letter-spacing:-.02em;margin:30px 0 10px;padding-top:16px;border-top:1px solid var(--line)}
-.doc-main h3{font-size:14.5px;font-weight:700;margin:16px 0 6px;color:var(--mut)}
-.doc-main p{color:#d5cec7;margin:0 0 13px}
+.doc-main{padding:40px 52px 80px;max-width:800px;min-width:0}
+.doc-main h1{font-size:32px;font-weight:800;letter-spacing:-.03em;margin:0 0 10px;line-height:1.15}
+.lead{font-size:17px;color:var(--mut);margin:0 0 22px;line-height:1.6}
+.quick-nav{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 24px}
+.qpill{display:inline-flex;align-items:center;padding:6px 13px;border-radius:999px;background:var(--card);border:1px solid var(--line);color:var(--ink);font-size:13px;font-weight:600;transition:border-color .14s,background .14s}
+.qpill:hover{border-color:var(--amber);background:var(--hover);text-decoration:none}
+.doc-main h2{font-size:21px;font-weight:800;letter-spacing:-.02em;margin:44px 0 12px;padding-top:22px;border-top:1px solid var(--line);scroll-margin-top:76px}
+.doc-main h3{font-size:14.5px;font-weight:700;margin:20px 0 8px;color:var(--mut)}
+.doc-main p{color:#dcd5ce;margin:0 0 16px}
 .doc-main strong{color:var(--ink)}
-.doc-main blockquote{margin:14px 0 18px;padding:12px 16px;background:var(--card);border-left:3px solid var(--amber);border-radius:0 10px 10px 0;color:var(--ink);font-size:14.5px}
-.doc-main code{font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:.86em;background:var(--card);border:1px solid var(--line);padding:1px 6px;border-radius:5px;color:#f3d2a4}
-.video-stage{position:relative;width:100%;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:#0a0908;border:1px solid var(--line2);margin:0 0 16px;box-shadow:0 16px 44px rgba(0,0,0,.45)}
+.doc-main blockquote{margin:16px 0 20px;padding:14px 18px;background:var(--card);border-left:3px solid var(--amber);border-radius:0 10px 10px 0;color:var(--ink);font-size:15px}
+.doc-main code{font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:.86em;background:var(--card);border:1px solid var(--line);padding:2px 7px;border-radius:5px;color:#f3d2a4}
+
+/* Video Player */
+.video-stage{position:relative;width:100%;aspect-ratio:16/9;border-radius:15px;overflow:hidden;background:#0a0908;border:1px solid var(--line2);margin:0 0 12px;box-shadow:0 16px 44px rgba(0,0,0,.45)}
 .video-stage video{width:100%;height:100%;display:block;object-fit:cover;background:#0a0908}
-.play-cover{position:absolute;inset:0;border:0;padding:0;background:radial-gradient(circle at center,rgba(17,15,14,.18) 0%,rgba(17,15,14,.52) 100%);display:grid;place-items:center;cursor:pointer;transition:background .16s}
-.play-cover:hover{background:radial-gradient(circle at center,rgba(17,15,14,.08) 0%,rgba(17,15,14,.36) 100%)}
+.play-cover{position:absolute;inset:0;border:0;padding:0;background:radial-gradient(circle at center,rgba(17,15,14,.16) 0%,rgba(17,15,14,.52) 100%);display:grid;place-items:center;cursor:pointer;transition:background .16s}
+.play-cover:hover{background:radial-gradient(circle at center,rgba(17,15,14,.06) 0%,rgba(17,15,14,.34) 100%)}
 .play-cover.hidden{display:none}
-.play-btn{width:68px;height:68px;border-radius:999px;background:linear-gradient(135deg,#ffac33 0%,#ea680b 100%);color:#161413;display:grid;place-items:center;box-shadow:0 0 0 8px rgba(247,153,27,.18),0 12px 32px rgba(0,0,0,.55);transition:transform .14s}
+.play-btn{width:70px;height:70px;border-radius:999px;background:linear-gradient(135deg,#ffac33 0%,#ea680b 100%);color:#161413;display:grid;place-items:center;box-shadow:0 0 0 9px rgba(247,153,27,.18),0 14px 36px rgba(0,0,0,.55);transition:transform .14s}
 .play-cover:hover .play-btn{transform:scale(1.06)}
 .play-btn svg{width:26px;height:26px;margin-left:3px}
-.flow-box{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:8px;margin:0 0 18px}
-.flow-box img{width:100%;height:auto;display:block;border-radius:8px}
-.gloss{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:13px;overflow:hidden;background:var(--card);margin:10px 0 14px}
-.g-cat{padding:7px 14px;background:#161311;border-bottom:1px solid var(--line);font-family:ui-monospace,monospace;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--amber)}
-.g-row{display:grid;grid-template-columns:192px minmax(0,1fr);gap:12px;align-items:baseline;padding:9px 14px;border-bottom:1px solid rgba(255,255,255,.04);font-size:13.5px;line-height:1.45}
-.g-row:last-child{border-bottom:0}
-.g-term{display:inline-flex;align-items:center;gap:7px;font-weight:800;color:var(--ink)}
-.g-term svg{width:15px;height:15px;color:var(--amber);flex-shrink:0}
-.g-term.ok svg{color:var(--ok)}
-.g-def{color:#c9c1b8}
-.g-def strong{color:var(--ink)}
-.honest-line{margin:10px 0 0;padding:10px 14px;border-radius:10px;background:rgba(247,153,27,.07);border:1px solid rgba(247,153,27,.28);font-size:13px;color:#d5cec7}
-.honest-line strong{color:var(--amber)}
-.code-wrap{background:#0e0d0c;border:1px solid var(--line);border-radius:12px;margin:10px 0 16px;overflow:hidden}
-.code-head{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#141210;border-bottom:1px solid var(--line);font-family:ui-monospace,monospace;font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.06em}
-.cp-btn{background:var(--card);border:1px solid var(--line2);color:var(--ink);border-radius:999px;padding:3px 10px;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+.vid-cap{font-size:13.5px;color:var(--mut);margin:0 0 8px}
+
+/* Code Blocks */
+.code-wrap{background:#0e0d0c;border:1px solid var(--line);border-radius:12px;margin:10px 0 18px;overflow:hidden}
+.code-head{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;background:#141210;border-bottom:1px solid var(--line);font-family:ui-monospace,monospace;font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.06em}
+.cp-btn{background:var(--card);border:1px solid var(--line2);color:var(--ink);border-radius:999px;padding:3px 11px;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
 .cp-btn:hover{border-color:var(--amber);color:var(--amber)}
-.code-wrap pre{margin:0;padding:13px 14px;overflow-x:auto;font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:13px;line-height:1.55;color:var(--ink)}
+.code-wrap pre{margin:0;padding:14px 16px;overflow-x:auto;font-family:ui-monospace,'Cascadia Mono',SFMono-Regular,Consolas,monospace;font-size:13.5px;line-height:1.55;color:var(--ink)}
 .code-wrap pre code{background:none;border:0;padding:0;color:inherit;font-size:inherit}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:14px}
-.dcard{display:flex;flex-direction:column;gap:4px;padding:15px 16px;background:var(--card);border:1px solid var(--line);border-radius:13px;color:var(--ink);transition:border-color .14s,background .14s}
+
+/* Clean Flow Diagram + Airy Readable Glossary */
+.flow-box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px;margin:18px 0 28px}
+.flow-box img{width:100%;height:auto;display:block;border-radius:8px}
+.group-lbl{margin:28px 0 14px;font-size:12px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--amber)}
+.terms-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 28px;margin-bottom:10px}
+.term-item{padding-left:14px;border-left:2px solid var(--line2)}
+.term-item.ok{border-left-color:rgba(76,194,107,.55)}
+.term-item.amber{border-left-color:rgba(247,153,27,.65)}
+.term-item b{display:block;font-size:15.5px;font-weight:800;color:var(--ink);margin-bottom:3px;line-height:1.3}
+.term-item b em{font-style:normal;font-weight:600;color:var(--mut);font-size:14px}
+.term-item p{margin:0;font-size:14.5px;line-height:1.55;color:#cbc3ba}
+.honest-box{margin:28px 0 8px;padding:16px 20px;border-radius:12px;background:rgba(247,153,27,.08);border-left:3px solid var(--amber);font-size:14.5px;line-height:1.6;color:#e5ddd5}
+.honest-box strong{color:var(--amber)}
+
+/* Next Manuals */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:16px}
+.dcard{display:flex;flex-direction:column;gap:4px;padding:16px 18px;background:var(--card);border:1px solid var(--line);border-radius:13px;color:var(--ink);transition:border-color .14s,background .14s}
 .dcard:hover{border-color:var(--amber);background:var(--hover);text-decoration:none}
 .dcard b{font-size:14.5px}
-.dcard span{font-size:12.5px;color:var(--mut)}
-.doc-foot{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:13px;color:var(--mut2)}
+.dcard span{font-size:13px;color:var(--mut)}
+.doc-foot{margin-top:52px;padding-top:20px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:13.5px;color:var(--mut2)}
 .doc-foot a{color:var(--mut)}
 .doc-foot a:hover{color:var(--amber)}
-@media(max-width:820px){.topbar{padding:0 14px;gap:10px}.brand{font-size:13.5px;letter-spacing:.14em}.nav-r{gap:11px;font-size:12.5px}.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px}.doc-main{padding:24px 16px 56px}.g-row{grid-template-columns:1fr;gap:3px}}
+@media(max-width:820px){.topbar{padding:0 14px;gap:10px}.brand{font-size:13.5px;letter-spacing:.14em}.nav-r{gap:11px;font-size:12.5px}.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px}.doc-main{padding:26px 18px 60px}.terms-grid{grid-template-columns:1fr;gap:16px}}
 </style>
 </head>
 <body>
@@ -110,102 +121,28 @@ a:hover{text-decoration:underline}
 </aside>
     <main class="doc-main">
 
-<h1>How Nektar Works &amp; Quick Start</h1>
-<p class="lead">Watch the 80-second end-to-end overview, skim every word in plain English, then install in 25 seconds.</p>
+<h1>Quick Start</h1>
+<p class="lead">One shared, encrypted brain for all your AI apps — install in 25 seconds, zero Docker or cloud accounts.</p>
 
-<!-- End-to-End Explainer Video -->
+<div class="quick-nav">
+  <a class="qpill" href="#install">1. Install</a>
+  <a class="qpill" href="#dashboard">2. Open Dashboard</a>
+  <a class="qpill" href="#first-prompt">3. First Prompt</a>
+  <a class="qpill" href="#how-it-works">How It Works &amp; Terms ↓</a>
+</div>
+
+<!-- 80-Second End-to-End Video -->
 <div class="video-stage">
   <video id="doc-video" src="./explainer.mp4?v=1" poster="./explainer-poster.jpg?v=1" controls playsinline preload="none"></video>
-  <button class="play-cover" id="doc-play" type="button" aria-label="Play end-to-end explainer video">
+  <button class="play-cover" id="doc-play" type="button" aria-label="Play 80-second end-to-end overview">
     <span class="play-btn">
       <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4" /></svg>
     </span>
   </button>
 </div>
+<p class="vid-cap">80-second end-to-end walkthrough: local brain, receipts, buying &amp; selling facts, quality grades, and safety controls.</p>
 
-<!-- One Clean 3-Step Visual Diagram -->
-<div class="flow-box">
-  <img src="../img/intro-flow.svg" alt="Step 1: Plug in your AIs. Step 2: Saved in your encrypted local brain. Step 3: Tamper-proof receipts or optional knowledge market." />
-</div>
-
-<!-- Ultra-Lean Plain-English Glossary -->
-<div class="gloss" id="terms">
-  <div class="g-cat">1. Your AI Brain</div>
-  <div class="g-row">
-    <span class="g-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 21 7 21 17 12 22 3 17 3 7"/></svg>Brain / Node</span>
-    <span class="g-def"><strong>Your AI's shared hard drive</strong> on your own PC. Claude, Cursor, Codex &amp; OpenClaw all read the same memory.</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a6 6 0 0 1-12 0V8z"/></svg>Dock</span>
-    <span class="g-def"><strong>1-click plug-in</strong> that wires your AI apps into Nektar automatically. Unplug anytime with <code>nektar dock --uninstall</code>.</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Shard (Repo)</span>
-    <span class="g-def"><strong>A locked folder for one topic</strong> (e.g. <code>#work</code>, <code>#ops</code>). Encrypted on disk — never leaves your PC unless you click <strong>Sell</strong>.</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9M13.5 9l3 3-3 3"/></svg>Fragment &amp; Triple</span>
-    <span class="g-def">A <strong>Fragment</strong> is a raw note. A <strong>Triple</strong> is one crisp fact pulled from it (<em>Redis → fixes → lag</em>).</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><rect x="3" y="4" width="18" height="16" rx="3"/></svg>Receipt &amp; Anchor</span>
-    <span class="g-def">An <strong>Anchor</strong> puts a tiny fingerprint on Bitcoin. A <strong>Receipt</strong> (<code>nektarr1</code>) proves a note existed then and was never edited.</span>
-  </div>
-
-  <div class="g-cat">2. Buying &amp; Selling</div>
-  <div class="g-row">
-    <span class="g-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4.5"/></svg>Sats</span>
-    <span class="g-def"><strong>Digital pennies</strong> (slices of BSV). 100 sats is a fraction of a cent — buy single facts instead of $20/mo subscriptions.</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 7h10l-3-3M17 17H7l3 3"/></svg>Want · Offer · Order</span>
-    <span class="g-def"><strong>Want</strong> = what your AI needs + budget. <strong>Offer</strong> = seller's ask. <strong>Standing Order</strong> = auto-buy later when a seller shows up.</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Atomic Swap</span>
-    <span class="g-def"><strong>A no-scam vending machine:</strong> your sats and the unlock key swap in the exact same instant — neither side can cheat.</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>Hub</span>
-    <span class="g-def"><strong>The public bulletin board</strong> where AIs find each other behind home Wi-Fi. Hubs never see your private notes or keys.</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Policy &amp; Kill Switch</span>
-    <span class="g-def"><strong>Your wallet seatbelt:</strong> hard per-deal &amp; daily sat caps, plus a 1-click red <strong>Kill Switch</strong> to freeze all spending.</span>
-  </div>
-
-  <div class="g-cat">3. Quality, Prices &amp; Trust</div>
-  <div class="g-row">
-    <span class="g-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4v-5H4zm6 0h4v-9h-4zm6 0h4V6h-4z"/></svg>Grades C · B · A · S</span>
-    <span class="g-def"><strong>Machine-checked quality stickers:</strong> <strong>C</strong> = secrets scrubbed · <strong>B</strong> = clean facts · <strong>A</strong> = source quote + deposit · <strong>S</strong> = live update alerts.</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/></svg>Ticker (sats/triple)</span>
-    <span class="g-def"><strong>Grocery-store unit pricing:</strong> compares every seller by exact <strong>sats per real fact</strong> (run <code>nektar ticker</code>), never word count.</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="18" cy="12" r="2"/></svg>Spot · Query · Feed</span>
-    <span class="g-def"><strong>3 ways to buy:</strong> <strong>Spot</strong> (buy pack once), <strong>Per-Query</strong> (pay per search), or <strong>Feed</strong> (subscribe to live updates).</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Rights &amp; Freshness</span>
-    <span class="g-def"><strong>Use Only</strong> (private) vs. <strong>Resellable</strong> (mix &amp; resell). Facts are marked <em>Temporary</em>, <em>Versioned</em>, or <em>Evergreen</em>.</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/></svg>Ontology &amp; Bridge</span>
-    <span class="g-def"><strong>Shared dictionary &amp; translator:</strong> an <strong>Ontology</strong> aligns word meanings; a <strong>Bridge</strong> translates between two dictionaries.</span>
-  </div>
-  <div class="g-row">
-    <span class="g-term ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 20 7 20 17 12 22 4 17 4 7"/><path d="M9 12l2 2 4-4"/></svg>Bond · 6D · PII Gate</span>
-    <span class="g-def">Sellers lock a <strong>Bond</strong> deposit; fake grades auto-<strong>slash</strong> their <strong>6D score</strong> &amp; quarantine bad data. <strong>PII Gate</strong> blocks passwords before selling.</span>
-  </div>
-</div>
-
-<div class="honest-line">
-  <strong>Honest Rule:</strong> Receipts &amp; grades prove a note was <strong>saved, unaltered, schema-checked, and backed by a deposit</strong> — never that the author told the real-world truth.
-</div>
-
-<h2>1. Install Nektar (25 seconds)</h2>
+<h2 id="install">1. Install Nektar (25 seconds)</h2>
 <p>Run one command. No Docker, no Node.js, and no wallet setup needed.</p>
 
 <h3>macOS &amp; Linux</h3>
@@ -214,16 +151,103 @@ a:hover{text-decoration:underline}
 <h3>Windows (PowerShell)</h3>
 <div class="code-wrap"><div class="code-head"><span>powershell</span><button class="cp-btn" type="button">Copy</button></div><pre><code>&amp; ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up</code></pre></div>
 
-<p>This installs the single <code>nektar</code> binary, starts your local brain in the background, and automatically connects any AI apps installed on your machine.</p>
+<p>This installs the single <code>nektar</code> binary, starts your private local brain in the background, and automatically plugs into your installed AI apps.</p>
 
-<h2>2. Open the Dashboard</h2>
+<h2 id="dashboard">2. Open the Dashboard</h2>
 <div class="code-wrap"><div class="code-head"><span>shell</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar open</code></pre></div>
 <p>You land straight on the live <strong>Market</strong> — Buy on the left, Sell on the right, and your connected <strong>Agents</strong> one click away.</p>
 
-<h2>3. Try Your First Prompt</h2>
+<h2 id="first-prompt">3. Try Your First Prompt</h2>
 <p>Restart Claude, Cursor, or Codex and paste this prompt:</p>
 <blockquote>Remember that our production API runs on port 8080, then recall it with a verified receipt.</blockquote>
 <p>Your AI saves the fact, recalls it from Nektar, and returns a clickable verification link.</p>
+
+<h2 id="how-it-works">How It Works — Every Word in Plain English</h2>
+<p>Zero crypto or AI jargon. Everything you will see in the dashboard or CLI, explained in one sentence each.</p>
+
+<div class="flow-box">
+  <img src="../img/intro-flow.svg" alt="Step 1: Plug in your AIs. Step 2: Saved in your encrypted local brain. Step 3: Tamper-proof receipts or optional knowledge market." />
+</div>
+
+<div class="group-lbl">Your AI Brain</div>
+<div class="terms-grid">
+  <div class="term-item amber">
+    <b>Brain / Node <em>— your AI's hard drive</em></b>
+    <p>Runs locally on your PC so Claude, Cursor, Codex, and OpenClaw all share one memory.</p>
+  </div>
+  <div class="term-item ok">
+    <b>Dock <em>— plug your AI in</em></b>
+    <p>1-click setup that connects your AI apps safely. Unplug anytime with <code>nektar dock --uninstall</code>.</p>
+  </div>
+  <div class="term-item amber">
+    <b>Shard <em>— a private topic folder</em></b>
+    <p>Encrypted Git folder like <code>#work</code> or <code>#ops</code>. Stays on your PC unless you click <strong>Sell</strong>.</p>
+  </div>
+  <div class="term-item">
+    <b>Fragment &amp; Triple <em>— note vs. clean fact</em></b>
+    <p>A <strong>Fragment</strong> is a raw note. A <strong>Triple</strong> is one crisp fact pulled from it (<em>Redis → fixes → lag</em>).</p>
+  </div>
+  <div class="term-item ok">
+    <b>Receipt &amp; Anchor <em>— tamper-proof stamp</em></b>
+    <p><strong>Anchor</strong> stamps a fingerprint on Bitcoin. <strong>Receipt</strong> proves a note existed then and was never edited.</p>
+  </div>
+</div>
+
+<div class="group-lbl">Buying &amp; Selling</div>
+<div class="terms-grid">
+  <div class="term-item amber">
+    <b>Sats <em>— digital pennies</em></b>
+    <p>Tiny slices of BSV. 100 sats is a fraction of a cent — pay per fact instead of $20/mo subscriptions.</p>
+  </div>
+  <div class="term-item ok">
+    <b>Want &amp; Offer <em>— ask &amp; answer</em></b>
+    <p><strong>Want</strong> posts what you need + budget. <strong>Offer</strong> is a seller's price. <strong>Standing Order</strong> auto-buys later.</p>
+  </div>
+  <div class="term-item amber">
+    <b>Atomic Swap <em>— no-scam vending machine</em></b>
+    <p>Your sats and the seller's unlock key trade in the exact same instant. Neither side can cheat.</p>
+  </div>
+  <div class="term-item">
+    <b>Hub <em>— public bulletin board</em></b>
+    <p>Relay server so AIs find each other behind home Wi-Fi. Hubs never see your private notes or keys.</p>
+  </div>
+  <div class="term-item ok">
+    <b>Policy &amp; Kill Switch <em>— wallet seatbelt</em></b>
+    <p>Hard per-deal and daily sat limits you choose, plus a 1-click red <strong>Kill Switch</strong> to freeze spending.</p>
+  </div>
+</div>
+
+<div class="group-lbl">Quality, Prices &amp; Trust</div>
+<div class="terms-grid">
+  <div class="term-item amber">
+    <b>Grades C · B · A · S <em>— quality stickers</em></b>
+    <p><strong>C</strong> clean text · <strong>B</strong> structured facts · <strong>A</strong> source quote + deposit · <strong>S</strong> live update alerts.</p>
+  </div>
+  <div class="term-item ok">
+    <b>Ticker <em>— price per real fact</em></b>
+    <p>Compares sellers by exact <strong>sats per triple</strong> (<code>nektar ticker</code>), like grocery unit pricing.</p>
+  </div>
+  <div class="term-item">
+    <b>Spot · Per-Query · Feed <em>— 3 ways to buy</em></b>
+    <p><strong>Spot</strong> buys once · <strong>Per-Query</strong> pays per search · <strong>Feed</strong> subscribes to live fact updates.</p>
+  </div>
+  <div class="term-item">
+    <b>Rights &amp; Freshness <em>— rules &amp; expiry</em></b>
+    <p><strong>Use Only</strong> vs. <strong>Resellable</strong>. Facts are tagged <em>Temporary</em>, <em>Versioned</em>, or <em>Evergreen</em>.</p>
+  </div>
+  <div class="term-item">
+    <b>Ontology &amp; Bridge <em>— dictionary &amp; translator</em></b>
+    <p>An <strong>Ontology</strong> aligns word meanings between AIs. A <strong>Bridge</strong> translates across two dictionaries.</p>
+  </div>
+  <div class="term-item ok">
+    <b>Bond · 6D Score · PII Gate <em>— built-in safety</em></b>
+    <p>Sellers post a <strong>Bond</strong>; fake grades auto-<strong>slash</strong> their score &amp; quarantine data. <strong>PII Gate</strong> blocks passwords.</p>
+  </div>
+</div>
+
+<div class="honest-box">
+  <strong>The Honest Rule:</strong> Receipts and grades prove a note was <strong>saved, unaltered, schema-checked, and backed by a deposit</strong> — never that the author told the real-world truth.
+</div>
 
 <h2>Next Manuals</h2>
 <div class="cards">

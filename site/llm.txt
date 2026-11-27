@@ -167,13 +167,21 @@ NMU-1 standardizes AI memory as a machine-verifiable commodity with **zero float
   - `NektarAgentVault`: On-chain rolling-window & per-tx spending cap vault (`nektar vault`).
   - `NektarCheckpointBond`: On-chain time-locked seller collateral bond (`nektar bond`) required for NMU-1 Grades A & S.
 
+### Unattended Mainnet Autonomy & Operational Hardening
+- **SNTP Clock-Skew Guard & Anomaly Circuit Breaker (`internal/autonomy`):** Queries 3 independent SNTP pools (`github.com/beevik/ntp`, median offset with automatic HTTP `Date` fallback when UDP/123 is blocked). Warns at `>=15s` drift and **pauses autonomous spending fail-closed** at `>=25s` (well inside the `±60s` Grade S SSE replay guard), requiring 2 consecutive `<10s` checks to recover. Pairs with `github.com/sony/gobreaker/v2` circuit breakers that trip on consecutive autonomous spend failures, dead-feed slashing bursts, or misbehaving `per_query` peer sellers; wired directly into `SpendGuard`, `nektar doctor`, `/state`, `/v1/metrics`, and `POST /v1/autonomy/reset`.
+- **Reboot-Resilient Grade S Subscription Supervisor (`internal/market`):** `github.com/thejerf/suture/v4` supervision tree + `github.com/cenkalti/backoff/v5` jittered exponential reconnects reload all active unexpired buyer subscriptions from SQLite (`user_version = 10`) on boot/wake, resume from persisted `last_seq`, apply `fragment_distilled` and `fragment_superseded` locally without duplicates, and emit `nektarrep1.*` dead-feed slashing attestations if a paid seller vanishes before `expiresAt`.
+- **Opt-In `per_query` 402 Buyer Recall Fallback (`internal/market/query_client.go`):** Disabled (`false`, fail-closed) by default. When explicitly enabled (`NEKTAR_AUTO_QUERY_ON_MISS=1`, `POST /v1/autonomy/config`, or per-call `allowMarketFallback: true`), local recall misses automatically query top-ranked `per_query` sellers over BRC-105 HTTP 402 within `SpendGuard` & `maxAutoQuerySats` caps, verify seller identity (anti-MITM), `DealReceipt`, and offline SPV `ProofBundle`, scrub text, and cache results locally marked `Tainted: true` with `usageRights` preserved.
+- **Closed-Loop `SleepCycle` Supply/Demand Triggers:** Demand-prioritizes working shards matching recent overlay `unmatched_wants` before alphabetical distillation, re-announces newly listed `market-*` shards to Hubs, and (strictly opt-in via `NEKTAR_AUTO_WANT_ON_MISS=1` / `autoWantOnMiss: true`) promotes repeated local `recall_misses` into bounded 24h `StandingOrder`s / `WantAd`s with daily count and satoshi caps.
+- **BRC-42 Envelope-Encrypted State Backups (`internal/backup`):** Scheduled WAL-safe `VACUUM INTO` snapshots of `nektar.sqlite` + embedded `wallet/wallet.sqlite` + `spend-guard.json` compressed with pure-Go `zstd` (`github.com/klauspost/compress/zstd`) and encrypted with AES-256-GCM using an ephemeral 32-byte DEK wrapped via BRC-100 `wallet.Encrypt` (works across both `embedded` and BSV Desktop `client` custody; raw private keys never leave `internal/wallet`). Writes atomically to local directories (`NEKTAR_BACKUP_DIR`) or any S3 / Cloudflare R2 / Backblaze B2 / MinIO bucket via zero-dependency stdlib AWS SigV4 (`NEKTAR_BACKUP_S3_BUCKET`) with retention pruning.
+- **Cross-Platform OS Daemon Supervision (`nektar service`):** Powered by pure-Go `github.com/kardianos/service`, installing and controlling native `systemd` (Linux), `launchd` (macOS), and Windows Services with restart-on-failure and `--confirm I_UNDERSTAND` mainnet gating.
+
 ---
 
 ## 8. Unified MCP / REST / A2A Tool Catalog (`GET /v1/tools`, `POST /v1/tools/{name}`, `/mcp`)
 
 ### Agent Profile (Default Focused Set — `NEKTAR_TOOL_PROFILE=agent`)
 - `remember` — Commit text, triples, or volumetric blob (`shard/repo`, `branch`, `path`, `text`, `blobBase64`, `chirpUrl`, `public`, `borgGroup`, `ontology`, `ontologyStrict`, `modality`, `refines`, `supersedes`, `freshnessClass`, `validUntilUnix`, `subjectVersion`, `usageRights`, `autoAnchor`).
-- `recall` — Recall Cedar-authorized, CLKA/Borg-decrypted fragments (`shard`, `branch`, `atCommit`, `query`, `verifySpv`, `limit`).
+- `recall` — Recall Cedar-authorized, CLKA/Borg-decrypted fragments (`shard`, `branch`, `atCommit`, `query`, `verifySpv`, `limit`, optional opt-in `allowMarketFallback`, `maxFallbackSats`).
 - `forget` — Atomically shred local plaintext, ciphertext, edges, and metadata (`shard`, `seq`).
 - `groundedAnswer` — Verify claims via quote + Google Mangle Datalog + ontology/bridge rules, strip hallucinations, return `nektarr1.*` receipt & verify footer.
 - `verifyReceipt` — Offline verify `nektarr1.*` token, §16 delegations, `RuleRef`s, and SPV settlement status.
@@ -209,6 +217,8 @@ nektar status [--json]                           # identity, wallet, shards, pol
 nektar doctor [--json]                           # full health diagnosis + next steps
 nektar check-mainnet                             # verify mainnet confirm, dual PoW headers, broadcaster & caps
 nektar restate-up                                # download SHA-256 verified restate-server v1.8.1
+nektar backup <now|verify|restore|status>        # BRC-42 encrypted WAL-safe SQLite backups (local or S3/R2/B2)
+nektar service <install|start|stop|restart|status|uninstall> # native systemd / launchd / Windows Service supervision
 
 # Memory, Git Repos, Ontologies & Proofs
 nektar remember -shard ops -text "..." [-ontology ont-ops] [-freshness versioned] [-subject-version go-1.27] [-rights inference_only] [-public] [-anchor]
@@ -262,6 +272,8 @@ nektar hub <up --native|--domain|--auto-ip | status | logs | down | run>
 - `GET  /v1/topics/cluster?hint=<text>`, `POST /v1/distill/run`
 - `POST /v1/onboard/faucet`, `POST /v1/onboard/policy-preset`, `GET /v1/policies`, `DELETE /v1/policies/{id}`
 - `POST /v1/automation/kill`, `POST /v1/automation/approvals/{id}`
+- `GET  /v1/autonomy/status` — Watchdog clock-skew/breaker status, active Grade S subscriptions, opt-in policy config & backup telemetry
+- `POST /v1/autonomy/config`, `POST /v1/autonomy/reset`, `POST /v1/autonomy/backup` (operator-authenticated)
 - `POST /v1/hosts`, `DELETE /v1/hosts`
 
 ### Public Spine Overlay Hub (`https://nektar.run/hub/*`)
@@ -282,6 +294,8 @@ Zero variables are required for local testnet boot (`nektar up`). Key overrides:
 - **Server & Auth:** `NEKTAR_HTTP_PORT` (`18420`), `NEKTAR_PUBLIC_URL`, `NEKTAR_HTTP_TOKEN`, `NEKTAR_OPERATOR_TOKEN`, `NEKTAR_OPERATOR_PUBKEY`, `NEKTAR_TOOL_PROFILE` (`operator`|`agent`), `NEKTAR_TOOL_PRICES`.
 - **Jev System One Evaluator (Optional):** `NEKTAR_JEV_MODE` (`gated`|`advisory`|`strict`|`off`), `NEKTAR_JEV_BASE_URL`, `NEKTAR_JEV_MODEL`, `NEKTAR_JEV_PRIVACY`, `NEKTAR_JEV_TIMEOUT_MS`.
 - **Hub & Restate:** `NEKTAR_MARKET_HOSTS`, `NEKTAR_EMBED_HUB`, `NEKTAR_HUB_ROLE` (`leaf`|`spine`), `NEKTAR_HUB_FEE_PRESET` (`free`|`lightbsv_egress`|`hybrid`), `NEKTAR_RESTATE_URL`, `NEKTAR_RESTATE_ADMIN`.
+- **Autonomy Watchdog & Opt-In Market Loops:** `NEKTAR_NTP_SERVERS` (default `time.cloudflare.com,pool.ntp.org,time.google.com`), `NEKTAR_AUTO_QUERY_ON_MISS` (`0` default), `NEKTAR_AUTO_QUERY_MAX_SATS` (`50`), `NEKTAR_AUTO_WANT_ON_MISS` (`0` default), `NEKTAR_AUTO_WANT_BUDGET_SATS` (`500`), `NEKTAR_AUTO_WANT_MISS_THRESHOLD` (`3`), `NEKTAR_AUTO_WANT_MAX_PER_DAY` (`3`).
+- **Encrypted Automated Backups:** `NEKTAR_BACKUP_DIR`, `NEKTAR_BACKUP_INTERVAL` (`6h`), `NEKTAR_BACKUP_KEEP` (`14`), `NEKTAR_BACKUP_S3_BUCKET`, `NEKTAR_BACKUP_S3_ENDPOINT`, `NEKTAR_BACKUP_S3_REGION` (`us-east-1`), `NEKTAR_BACKUP_S3_PREFIX`, `NEKTAR_BACKUP_S3_ACCESS_KEY`, `NEKTAR_BACKUP_S3_SECRET_KEY`.
 
 ---
 

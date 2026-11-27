@@ -75,6 +75,8 @@ func main() {
 		err = cmdWant(args)
 	case "sell":
 		err = cmdSell(args)
+	case "ticker":
+		err = cmdTicker(args)
 	case "distill":
 		err = cmdDistill(args)
 	case "policy":
@@ -125,8 +127,9 @@ Memory & Knowledge Market:
   nektar recall         Recall Cedar-authorized, Borg-decrypted fragments (-shard, -query, -spv)
   nektar anchor         Anchor unanchored fragments via NektarAnchor covenant (or anchor rotate)
   nektar verify         Verify a nektarr1.* receipt token offline (-token)
-  nektar want           Buy verified knowledge live from peers or Hubs (-domains, -question, -max)
-  nektar sell           Arm a local shard for A2A selling (-shard, -domains, -price) or sell to Hub (-bounty)
+  nektar want           Buy verified knowledge live from peers or Hubs (-domains, -question, -max, -min-grade, -max-sats-per-1k)
+  nektar sell           Arm a shard for multi-mode NMU-1 selling (-shard, -price, -per-unit, -query-price, -sub-price) or Hub (-bounty)
+  nektar ticker         Show standardized NMU-1 Commodity Ticker (sats/triple by ontology, grade S/A/B/C, and pricing mode)
   nektar earn           Guided seller fast-path: inspect open Hub bounties & earn sats from anchored shards
   nektar policy         Manage operator trading policies (approve --preset buyer|seller|both | list | revoke)
   nektar peers          Discover verified peers, bfinger handles, CHIRP packs & Hub bounties

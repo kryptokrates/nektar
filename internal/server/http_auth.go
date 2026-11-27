@@ -263,179 +263,192 @@ func (a *App) withPaywall(toolName string, next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hdr := strings.TrimSpace(r.Header.Get("X-BSV-Payment"))
-		addr, _ := a.mem.Chain().FundAddress()
-		idPub := a.mem.Chain().IdentityPubHex()
-		if hdr == "" {
-			w.Header().Set("X-BSV-Payment-Satoshis-Required", strconv.FormatUint(price, 10))
-			w.Header().Set("X-BSV-Payment-Destination", addr)
-			w.Header().Set("X-BSV-Payment-Identity", idPub)
-			w.Header().Set("X-BSV-Payment-Protocol", "BRC-105")
-			writeJSON(w, http.StatusPaymentRequired, map[string]any{
-				"error":       "payment_required",
-				"tool":        toolName,
-				"amountSats":  price,
-				"destination": addr,
-				"identityKey": idPub,
-			})
+		if _, _, _, ok := a.verifyBRC105Payment(w, r, toolName, price, map[string]any{"tool": toolName}); !ok {
 			return
 		}
-		var pay BRC105PaymentHeader
-		if err := json.Unmarshal([]byte(hdr), &pay); err != nil {
-			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "invalid X-BSV-Payment header"})
-			return
-		}
-
-		// Canonical verified AtomicBEEF + BRC-29 payment path on all live networks.
-		// Lightweight `{txid, amountSats, inputs}` claims are accepted ONLY on the in-memory test network.
-		if pay.BEEFHex == "" {
-			if a.mem.Chain().Network() != "memory" {
-				writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "beefHex payment transaction is required on live networks"})
-				return
-			}
-			if pay.TxID == "" || pay.AmountSats < price {
-				writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "invalid or insufficient X-BSV-Payment"})
-				return
-			}
-			if err := a.mem.DB().ClaimPaymentAtomic(pay.TxID, pay.Inputs); err != nil {
-				writeJSON(w, http.StatusConflict, map[string]any{
-					"error":  "payment_rejected",
-					"reason": err.Error(),
-				})
-				return
-			}
-			next.ServeHTTP(w, r)
-			return
-		}
-		rawBeef, err := hex.DecodeString(strings.TrimSpace(pay.BEEFHex))
-		if err != nil {
-			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "invalid X-BSV-Payment beefHex"})
-			return
-		}
-		_, tx, txHash, err := guard.ParseBEEF(rawBeef, guard.DefaultBound)
-		if err != nil || tx == nil || txHash == nil {
-			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "unparseable X-BSV-Payment AtomicBEEF"})
-			return
-		}
-		txid := txHash.String()
-		inKeys := make([]string, 0, len(tx.Inputs))
-		for _, in := range tx.Inputs {
-			if in.SourceTXID != nil {
-				inKeys = append(inKeys, fmt.Sprintf("%s:%d", in.SourceTXID.String(), in.SourceTxOutIndex))
-			}
-		}
-		isBRC29 := pay.DerivationPrefix != "" && pay.DerivationSuffix != "" && pay.SenderIdentityKey != ""
-		if !isBRC29 {
-			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 payment remittance (derivationPrefix, derivationSuffix, senderIdentityKey) is required"})
-			return
-		}
-		d := &bwallet.Derivation{
-			SecurityLevel:   int(bwallet.PaymentProtocol.SecurityLevel),
-			Protocol:        bwallet.PaymentProtocol.Protocol,
-			KeyID:           bwallet.PaymentKeyID(pay.DerivationPrefix, pay.DerivationSuffix),
-			CounterpartyHex: pay.SenderIdentityKey,
-			OwnerHex:        a.mem.Chain().IdentityPubHex(),
-		}
-		wantScript, dErr := a.mem.Chain().Signer().DerivedScript(r.Context(), d)
-		if dErr != nil {
-			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 script derivation failed: " + dErr.Error()})
-			return
-		}
-		if uint64(pay.OutputIndex) >= uint64(len(tx.Outputs)) {
-			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 outputIndex out of range"})
-			return
-		}
-		out := tx.Outputs[pay.OutputIndex]
-		if out.LockingScript == nil || !bytes.Equal(*out.LockingScript, *wantScript) {
-			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 payment output does not match derived locking script"})
-			return
-		}
-		expectedPaid := out.Satoshis
-		if expectedPaid < price {
-			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": fmt.Sprintf("insufficient payment (%d < %d sats)", expectedPaid, price)})
-			return
-		}
-
-		// Full consensus SPV verification (spv.Verify + REFUSED-BUMP + tracker outage separation + settleDepth +
-		// per-tx/aggregate 0-conf caps + maxUnconfirmedAncestors + conflict watch) BEFORE replay claim or broadcast!
-		var settledAtDepth bool
-		if a.mem.Chain().Network() != "memory" {
-			var pol *market.Policy
-			if a.mkt != nil {
-				pol = a.mkt.Policy()
-			}
-			zeroConfMax, zeroConfAgg, maxAnc := resolvePaywallZeroConfLimits(
-				a.mem.Chain().ZeroConfMaxSats(),
-				a.mem.Chain().ZeroConfMaxAggregateSats(),
-				a.mem.Chain().MaxUnconfirmedAncestors(),
-				pol,
-			)
-			ver, vErr := chain.VerifyCounterpartyPaymentBEEF(r.Context(), rawBeef, a.mem.Chain().Tracker(), chain.PaymentVerifyOpts{
-				ExpectedAmountSats:       price,
-				MaxUnconfirmedAncestors:  maxAnc,
-				ZeroConfMaxSats:          zeroConfMax,
-				ZeroConfMaxAggregateSats: zeroConfAgg,
-				SettleDepth:              a.mem.Chain().SettleDepth(),
-				AllowZeroConf:            zeroConfMax > 0,
-				ConflictWatch:            a.mem.Chain().ZeroConfWatch(),
-				TrackOnZeroConf:          true,
-			})
-			if vErr != nil {
-				if errors.Is(vErr, chain.ErrTrackerUnavailable) {
-					writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "header tracker unavailable: " + vErr.Error()})
-					return
-				}
-				if errors.Is(vErr, chain.ErrConflictDetected) {
-					writeJSON(w, http.StatusConflict, map[string]any{"error": "payment_conflict", "reason": vErr.Error()})
-					return
-				}
-				writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "payment SPV verification failed: " + vErr.Error()})
-				return
-			}
-			if ver.NeedsConfirmation {
-				writeJSON(w, http.StatusPaymentRequired, map[string]any{
-					"error":         "confirmation_required",
-					"reason":        ver.EscalationReason,
-					"requiredDepth": a.mem.Chain().SettleDepth(),
-					"txid":          txid,
-				})
-				return
-			}
-			settledAtDepth = ver.SettledAtDepth
-		}
-
-		// Atomic cross-interface SQLite payment claim registry (shared with /v1/market/purchase).
-		if err := a.mem.DB().ClaimPaymentAtomic(txid, inKeys); err != nil {
-			writeJSON(w, http.StatusConflict, map[string]any{"error": "payment_rejected", "reason": err.Error()})
-			return
-		}
-
-		// Broadcast unmined payment once without double-broadcasting or poisoning seller SpendGuard:
-		// in embedded BRC-29 mode, InternalizeBRC29 performs SPV + single WithIncomingInternalize broadcast.
-		if a.mem.Chain().Network() != "memory" && !settledAtDepth && a.mem.Chain().WalletMode() != "embedded" {
-			if rErr := a.mem.Chain().RelayExternalTx(r.Context(), tx); rErr != nil {
-				_ = a.mem.DB().ReleasePaymentClaim(txid)
-				writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "unconfirmed payment broadcast failed: " + rErr.Error()})
-				return
-			}
-		}
-
-		paid, err := a.mem.Chain().InternalizeBRC29(
-			r.Context(), rawBeef, pay.OutputIndex,
-			pay.DerivationPrefix, pay.DerivationSuffix, pay.SenderIdentityKey,
-			"BRC-105 payment for "+toolName, []string{"brc105", toolName},
-		)
-		if err != nil {
-			_ = a.mem.DB().ReleasePaymentClaim(txid)
-			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 payment verification failed: " + err.Error()})
-			return
-		}
-		if paid < price {
-			_ = a.mem.DB().ReleasePaymentClaim(txid)
-			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": fmt.Sprintf("insufficient payment (%d < %d sats)", paid, price)})
-			return
-		}
-		a.BroadcastDashboardEvent("wallet_payment")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// verifyBRC105Payment enforces HTTP 402 BRC-105 + BRC-29 payment verification with atomic
+// replay protection (`ClaimPaymentAtomic`) and consensus SPV checks on live networks.
+// On failure or missing header, it writes the appropriate HTTP 402/409/503 JSON response and returns ok=false.
+func (a *App) verifyBRC105Payment(
+	w http.ResponseWriter,
+	r *http.Request,
+	label string,
+	price uint64,
+	extraChallenge map[string]any,
+) (txid string, paid uint64, senderPub string, ok bool) {
+	hdr := strings.TrimSpace(r.Header.Get("X-BSV-Payment"))
+	addr, _ := a.mem.Chain().FundAddress()
+	idPub := a.mem.Chain().IdentityPubHex()
+	if hdr == "" {
+		w.Header().Set("X-BSV-Payment-Satoshis-Required", strconv.FormatUint(price, 10))
+		w.Header().Set("X-BSV-Payment-Destination", addr)
+		w.Header().Set("X-BSV-Payment-Identity", idPub)
+		w.Header().Set("X-BSV-Payment-Protocol", "BRC-105")
+		body := map[string]any{
+			"error":       "payment_required",
+			"amountSats":  price,
+			"destination": addr,
+			"identityKey": idPub,
+		}
+		for k, v := range extraChallenge {
+			body[k] = v
+		}
+		writeJSON(w, http.StatusPaymentRequired, body)
+		return "", 0, "", false
+	}
+	var pay BRC105PaymentHeader
+	if err := json.Unmarshal([]byte(hdr), &pay); err != nil {
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "invalid X-BSV-Payment header"})
+		return "", 0, "", false
+	}
+
+	// Canonical verified AtomicBEEF + BRC-29 payment path on all live networks.
+	// Lightweight `{txid, amountSats, inputs}` claims are accepted ONLY on the in-memory test network.
+	if pay.BEEFHex == "" {
+		if a.mem.Chain().Network() != "memory" {
+			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "beefHex payment transaction is required on live networks"})
+			return "", 0, "", false
+		}
+		if pay.TxID == "" || pay.AmountSats < price {
+			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "invalid or insufficient X-BSV-Payment"})
+			return "", 0, "", false
+		}
+		if err := a.mem.DB().ClaimPaymentAtomic(pay.TxID, pay.Inputs); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":  "payment_rejected",
+				"reason": err.Error(),
+			})
+			return "", 0, "", false
+		}
+		return strings.ToLower(strings.TrimSpace(pay.TxID)), pay.AmountSats, strings.ToLower(strings.TrimSpace(pay.SenderIdentityKey)), true
+	}
+	rawBeef, err := hex.DecodeString(strings.TrimSpace(pay.BEEFHex))
+	if err != nil {
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "invalid X-BSV-Payment beefHex"})
+		return "", 0, "", false
+	}
+	_, tx, txHash, err := guard.ParseBEEF(rawBeef, guard.DefaultBound)
+	if err != nil || tx == nil || txHash == nil {
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "unparseable X-BSV-Payment AtomicBEEF"})
+		return "", 0, "", false
+	}
+	txid = txHash.String()
+	inKeys := make([]string, 0, len(tx.Inputs))
+	for _, in := range tx.Inputs {
+		if in.SourceTXID != nil {
+			inKeys = append(inKeys, fmt.Sprintf("%s:%d", in.SourceTXID.String(), in.SourceTxOutIndex))
+		}
+	}
+	isBRC29 := pay.DerivationPrefix != "" && pay.DerivationSuffix != "" && pay.SenderIdentityKey != ""
+	if !isBRC29 {
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 payment remittance (derivationPrefix, derivationSuffix, senderIdentityKey) is required"})
+		return "", 0, "", false
+	}
+	d := &bwallet.Derivation{
+		SecurityLevel:   int(bwallet.PaymentProtocol.SecurityLevel),
+		Protocol:        bwallet.PaymentProtocol.Protocol,
+		KeyID:           bwallet.PaymentKeyID(pay.DerivationPrefix, pay.DerivationSuffix),
+		CounterpartyHex: pay.SenderIdentityKey,
+		OwnerHex:        a.mem.Chain().IdentityPubHex(),
+	}
+	wantScript, dErr := a.mem.Chain().Signer().DerivedScript(r.Context(), d)
+	if dErr != nil {
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 script derivation failed: " + dErr.Error()})
+		return "", 0, "", false
+	}
+	if uint64(pay.OutputIndex) >= uint64(len(tx.Outputs)) {
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 outputIndex out of range"})
+		return "", 0, "", false
+	}
+	out := tx.Outputs[pay.OutputIndex]
+	if out.LockingScript == nil || !bytes.Equal(*out.LockingScript, *wantScript) {
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 payment output does not match derived locking script"})
+		return "", 0, "", false
+	}
+	expectedPaid := out.Satoshis
+	if expectedPaid < price {
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": fmt.Sprintf("insufficient payment (%d < %d sats)", expectedPaid, price)})
+		return "", 0, "", false
+	}
+
+	var settledAtDepth bool
+	if a.mem.Chain().Network() != "memory" {
+		var pol *market.Policy
+		if a.mkt != nil {
+			pol = a.mkt.Policy()
+		}
+		zeroConfMax, zeroConfAgg, maxAnc := resolvePaywallZeroConfLimits(
+			a.mem.Chain().ZeroConfMaxSats(),
+			a.mem.Chain().ZeroConfMaxAggregateSats(),
+			a.mem.Chain().MaxUnconfirmedAncestors(),
+			pol,
+		)
+		ver, vErr := chain.VerifyCounterpartyPaymentBEEF(r.Context(), rawBeef, a.mem.Chain().Tracker(), chain.PaymentVerifyOpts{
+			ExpectedAmountSats:       price,
+			MaxUnconfirmedAncestors:  maxAnc,
+			ZeroConfMaxSats:          zeroConfMax,
+			ZeroConfMaxAggregateSats: zeroConfAgg,
+			SettleDepth:              a.mem.Chain().SettleDepth(),
+			AllowZeroConf:            zeroConfMax > 0,
+			ConflictWatch:            a.mem.Chain().ZeroConfWatch(),
+			TrackOnZeroConf:          true,
+		})
+		if vErr != nil {
+			if errors.Is(vErr, chain.ErrTrackerUnavailable) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "header tracker unavailable: " + vErr.Error()})
+				return "", 0, "", false
+			}
+			if errors.Is(vErr, chain.ErrConflictDetected) {
+				writeJSON(w, http.StatusConflict, map[string]any{"error": "payment_conflict", "reason": vErr.Error()})
+				return "", 0, "", false
+			}
+			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "payment SPV verification failed: " + vErr.Error()})
+			return "", 0, "", false
+		}
+		if ver.NeedsConfirmation {
+			writeJSON(w, http.StatusPaymentRequired, map[string]any{
+				"error":         "confirmation_required",
+				"reason":        ver.EscalationReason,
+				"requiredDepth": a.mem.Chain().SettleDepth(),
+				"txid":          txid,
+			})
+			return "", 0, "", false
+		}
+		settledAtDepth = ver.SettledAtDepth
+	}
+
+	if err := a.mem.DB().ClaimPaymentAtomic(txid, inKeys); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "payment_rejected", "reason": err.Error()})
+		return "", 0, "", false
+	}
+
+	if a.mem.Chain().Network() != "memory" && !settledAtDepth && a.mem.Chain().WalletMode() != "embedded" {
+		if rErr := a.mem.Chain().RelayExternalTx(r.Context(), tx); rErr != nil {
+			_ = a.mem.DB().ReleasePaymentClaim(txid)
+			writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "unconfirmed payment broadcast failed: " + rErr.Error()})
+			return "", 0, "", false
+		}
+	}
+
+	paid, err = a.mem.Chain().InternalizeBRC29(
+		r.Context(), rawBeef, pay.OutputIndex,
+		pay.DerivationPrefix, pay.DerivationSuffix, pay.SenderIdentityKey,
+		"BRC-105 payment for "+label, []string{"brc105", label},
+	)
+	if err != nil {
+		_ = a.mem.DB().ReleasePaymentClaim(txid)
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BRC-29 payment verification failed: " + err.Error()})
+		return "", 0, "", false
+	}
+	if paid < price {
+		_ = a.mem.DB().ReleasePaymentClaim(txid)
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": fmt.Sprintf("insufficient payment (%d < %d sats)", paid, price)})
+		return "", 0, "", false
+	}
+	a.BroadcastDashboardEvent("wallet_payment")
+	return txid, paid, strings.ToLower(strings.TrimSpace(pay.SenderIdentityKey)), true
 }

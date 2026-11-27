@@ -4,6 +4,7 @@
 
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
+  import type { ReputationVector6D } from '../lib/types'
   import HoneycombDefs from './HoneycombDefs.svelte'
   import HoneycombWings from './HoneycombWings.svelte'
   import HoneycombCoreStrip from './HoneycombCoreStrip.svelte'
@@ -40,6 +41,9 @@
     heartbeats?: StageHeartbeat[]
     footerStats?: StageStatItem[]
     footerBrand?: string
+    repVector?: ReputationVector6D | null
+    repTrusted?: boolean
+    repUntrusted?: boolean
     onHoverChange?: (side: 'left' | 'right' | null, id: string | null) => void
     onToast?: (msg: string, isErr?: boolean) => void
   }
@@ -60,6 +64,9 @@
     heartbeats,
     footerStats,
     footerBrand = 'NEKTAR · BSV AGENT ECONOMY',
+    repVector = null,
+    repTrusted = false,
+    repUntrusted = false,
     onHoverChange,
     onToast
   }: Props = $props()
@@ -234,6 +241,10 @@
       {heartbeats}
       {footerStats}
       {footerBrand}
+      {repVector}
+      {repTrusted}
+      {repUntrusted}
+      onCoreHover={(lbl) => (hoverLabel = lbl)}
     />
   </svg>
 </section>

@@ -202,7 +202,8 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		"distill":     econSec.distill,
 		"microEarner": econSec.microEarner,
 		"market":      netSec.marketRows,
-		"marketTape": autoSec.marketTape,
+		"ticker":      a.BuildCommodityTicker(ctx, TickerFilter{}),
+		"marketTape":  autoSec.marketTape,
 		"net": map[string]any{
 			"hosts":          netSec.hostRows,
 			"seeds":          discovery.DefaultSeedHosts(a.mem.Chain().Network()),

@@ -3,6 +3,7 @@
   import type { HubCatalogEntry, State } from '../lib/types'
   import { operatorFetch } from '../lib/api'
   import { shortHost } from '../lib/format'
+  import { selectCoreRepVector } from '../lib/reputationHex'
   import HubMeshGraph from './HubMeshGraph.svelte'
   import HubTab from './HubTab.svelte'
   import HubsViewInspector from './HubsViewInspector.svelte'
@@ -41,6 +42,7 @@
 
   const selectedHub = $derived(hubs.find((h) => h.url === selectedURL) ?? hubs[0] ?? null)
   const allTopics = $derived(collectHubTopics(hubs))
+  const coreRep = $derived(selectCoreRepVector(s.reputation, s.pub))
 
   async function loadDirectory(force = false) {
     if (force) refreshing = true
@@ -187,6 +189,9 @@
       network={s.network}
       {selectedURL}
       {activeTopic}
+      repVector={coreRep.vector}
+      repTrusted={coreRep.trusted}
+      repUntrusted={coreRep.untrusted}
       onSelectHub={(u) => (selectedURL = u)}
       {onToast}
     />

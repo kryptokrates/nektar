@@ -137,9 +137,20 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "sell",
-		Description: "Arm a local memory shard for autonomous A2A selling, or submit a verified fragment to a Hub bounty when bountyId is set.",
+		Description: "Arm a local memory shard for multi-mode NMU-1 autonomous selling (spot, per_query 402, subscription SSE feed), or submit a verified fragment to a Hub bounty when bountyId is set.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in SellToolInput) (*mcp.CallToolResult, any, error) {
 		res, err := tb.ExecSell(ctx, in)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonToolResult(res)
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "marketContract",
+		Description: "Query the standardized NMU-1 Commodity Ticker (sats/triple grouped by ontology, grade S/A/B/C, and pricing mode) or list/revoke active shard feed subscriptions (action: ticker|subscriptions|revokeSubscription).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in MarketContractInput) (*mcp.CallToolResult, any, error) {
+		res, err := tb.ExecMarketContract(ctx, in)
 		if err != nil {
 			return nil, nil, err
 		}

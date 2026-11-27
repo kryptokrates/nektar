@@ -287,6 +287,38 @@ export type ListedShard = {
   earned: number
   offers: string
   active?: boolean
+  grade?: 'S' | 'A' | 'B' | 'C' | string
+  unitCount?: number
+  modes?: string[]
+  priceSats?: number
+  pricePerUnit?: boolean
+  queryPriceSats?: number
+  subscriptionPriceSats?: number
+  freshnessClass?: string
+  usageRights?: string
+}
+
+export type CommodityTickerRow = {
+  ontologyId: string
+  grade: 'S' | 'A' | 'B' | 'C' | string
+  pricingMode: 'spot' | 'per_query' | 'subscription' | string
+  minSatsPer1kUnits: number
+  medianSatsPer1kUnits: number
+  minSatsPerTriple: string
+  medianSatsPerTriple: string
+  minAskSats: number
+  activeOffers: number
+  bondedSellers: number
+  liveFeeds: number
+  totalUnitsAvailable: number
+  domains?: string[]
+  sampleShards?: string[]
+}
+
+export type CommodityTickerResponse = {
+  rows: CommodityTickerRow[]
+  updatedAt: number
+  advisoryNote: string
 }
 
 export type PeerInfo = {
@@ -527,6 +559,7 @@ export type State = {
   feed?: FeedFragment[]
   ai?: AIStatus | null
   market: ListedShard[]
+  ticker?: CommodityTickerResponse
   marketTape?: MarketTapeEvent[]
   economics?: EconomicsState
   reputation?: ReputationState

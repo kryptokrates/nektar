@@ -78,14 +78,15 @@ func (tb *Toolbox) isRestateAlive() bool {
 func (tb *Toolbox) ListTools() []ToolSpec {
 	all := []ToolSpec{
 		// Core 10-tool agent profile (default cognitive-load budget):
-		{Name: "remember", Profile: "agent", Description: "Commit a provenance-signed memory fragment into a shard, optionally BRC-369 encrypting to a Borg group and/or anchoring on BSV."},
+		{Name: "remember", Profile: "agent", Description: "Commit a provenance-signed memory fragment into a shard with optional NMU-1 freshness/rights metadata, BRC-369 Borg group encryption, and/or BSV anchoring."},
 		{Name: "recall", Profile: "agent", Description: "Recall active, Cedar-authorized, Borg-decrypted fragments. Omit shard to recall across all non-system shards."},
 		{Name: "forget", Profile: "agent", Description: "Shred local plaintext/ciphertext of a fragment while preserving its on-chain Merkle commitment."},
 		{Name: "groundedAnswer", Profile: "agent", Description: "Verify claims against cited memory fragments (quote + Google Mangle Datalog), strip hallucinations, commit a receipt, and return the nektarr1.* verification footer."},
 		{Name: "verifyReceipt", Profile: "agent", Description: "Verify a nektarr1.* receipt token, its §16 delegations, and the SPV settlement status of every cited fragment."},
-		{Name: "want", Profile: "agent", Description: "Buy verified knowledge live from peer agents or the Hub over BSV AtomicBEEF + BRC-369 keyed disclosure. Set standingTtlSeconds to auto-create a durable StandingOrder if no seller is online yet."},
-		{Name: "watchKnowledge", Profile: "agent", Description: "Create, list, live-steer, or cancel durable 0%-CPU Restate StandingOrders (Limit-Orders for Knowledge) that auto-buy when a matching seller arrives."},
-		{Name: "sell", Profile: "agent", Description: "Arm a local memory shard for autonomous A2A selling, or submit a verified anchored fragment to a Hub knowledge bounty."},
+		{Name: "want", Profile: "agent", Description: "Buy verified knowledge live from peer agents or the Hub over BSV AtomicBEEF + BRC-369 keyed disclosure with NMU-1 grade, maxSatsPer1kUnits, freshness, rights, and mode filters. Set standingTtlSeconds to auto-create a durable StandingOrder."},
+		{Name: "watchKnowledge", Profile: "agent", Description: "Create, list, live-steer, or cancel durable 0%-CPU Restate StandingOrders (Limit-Orders for Knowledge) with NMU-1 commodity filters that auto-buy when a matching seller arrives."},
+		{Name: "sell", Profile: "agent", Description: "Arm a local memory shard for multi-mode NMU-1 selling (spot, per_query 402, subscription SSE feed), or submit a verified anchored fragment to a Hub knowledge bounty."},
+		{Name: "marketContract", Profile: "agent", Description: "Inspect the live NMU-1 Commodity Ticker (sats/triple by ontology, grade, and pricing mode) or manage paid shard feed subscriptions (action: ticker|subscriptions|revokeSubscription)."},
 		{Name: "deals", Profile: "agent", Description: "List persisted market deals, pending operator approvals, verified seller reputation, and network liquidity metrics."},
 		{Name: "fund", Profile: "agent", Description: "Show wallet funding address, satoshi balance, UTXO count, SpendGuard caps, and optionally request a testnet faucet drip."},
 		{Name: "doctor", Profile: "agent", Description: "Run a complete self-diagnosis (SQLite, wallet, hosts, peers, policies, SSE vs poll health, welcome shard) with exact next steps."},
@@ -162,6 +163,12 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 			return nil, err
 		}
 		return tb.ExecSell(ctx, in)
+	case "marketContract":
+		var in MarketContractInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
+		}
+		return tb.ExecMarketContract(ctx, in)
 	case "deals":
 		return tb.ExecDeals(ctx), nil
 	case "fund":

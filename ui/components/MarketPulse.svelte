@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { MarketTapeEvent, PulseSignal, State } from '../lib/types'
   import { fmtSats } from '../lib/format'
+  import { selectCoreRepVector } from '../lib/reputationHex'
   import HoneycombStage, { type StageBar, type StageHeartbeat } from './HoneycombStage.svelte'
 
   interface Props {
@@ -12,6 +13,8 @@
   }
 
   let { s, live, pulse, onPickBuy, onPickSell }: Props = $props()
+
+  const coreRep = $derived(selectCoreRepVector(s.reputation, s.pub))
 
   interface WingBar {
     id: string
@@ -218,5 +221,8 @@
   ringLeftShare={buyShare}
   {live}
   heartbeats={heartbeatSlots}
+  repVector={coreRep.vector}
+  repTrusted={coreRep.trusted}
+  repUntrusted={coreRep.untrusted}
   onHoverChange={handleHover}
 />

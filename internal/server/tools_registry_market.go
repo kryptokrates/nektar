@@ -16,6 +16,8 @@ import (
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
+	"github.com/kryptokrates/nektar/internal/policy"
+	"github.com/kryptokrates/nektar/internal/store"
 )
 
 func (tb *Toolbox) ExecWant(ctx context.Context, req market.WantRequest) (any, error) {
@@ -26,20 +28,25 @@ func (tb *Toolbox) ExecWant(ctx context.Context, req market.WantRequest) (any, e
 }
 
 type WatchKnowledgeInput struct {
-	Action        string   `json:"action,omitempty"` // create (default) | list | steer | cancel
-	OrderID       string   `json:"orderId,omitempty"`
-	Domains       []string `json:"domains,omitempty"`
-	Domain        string   `json:"domain,omitempty"`
-	Query         string   `json:"query,omitempty"`
-	OntologyID    string   `json:"ontologyId,omitempty"`
-	AllowBridge   bool     `json:"allowBridge,omitempty"`
-	MaxSats       uint64   `json:"maxSats,omitempty"`
-	TargetShard   string   `json:"targetShard,omitempty"`
-	TTLSeconds    int64    `json:"ttlSeconds,omitempty"`
-	MaxFills      int      `json:"maxFills,omitempty"`
-	Paused        *bool    `json:"paused,omitempty"`
-	ExtendSeconds int64    `json:"extendSeconds,omitempty"`
-	Reason        string   `json:"reason,omitempty"`
+	Action            string   `json:"action,omitempty"` // create (default) | list | steer | cancel
+	OrderID           string   `json:"orderId,omitempty"`
+	Domains           []string `json:"domains,omitempty"`
+	Domain            string   `json:"domain,omitempty"`
+	Query             string   `json:"query,omitempty"`
+	OntologyID        string   `json:"ontologyId,omitempty"`
+	AllowBridge       bool     `json:"allowBridge,omitempty"`
+	MaxSats           uint64   `json:"maxSats,omitempty"`
+	MinGrade          string   `json:"minGrade,omitempty"`
+	MaxSatsPer1kUnits uint64   `json:"maxSatsPer1kUnits,omitempty"`
+	FreshnessClass    string   `json:"freshnessClass,omitempty"`
+	RequiredRights    string   `json:"requiredRights,omitempty"`
+	PricingMode       string   `json:"pricingMode,omitempty"`
+	TargetShard       string   `json:"targetShard,omitempty"`
+	TTLSeconds        int64    `json:"ttlSeconds,omitempty"`
+	MaxFills          int      `json:"maxFills,omitempty"`
+	Paused            *bool    `json:"paused,omitempty"`
+	ExtendSeconds     int64    `json:"extendSeconds,omitempty"`
+	Reason            string   `json:"reason,omitempty"`
 }
 
 func (tb *Toolbox) ExecWatchKnowledge(ctx context.Context, in WatchKnowledgeInput) (any, error) {
@@ -87,31 +94,43 @@ func (tb *Toolbox) ExecWatchKnowledge(ctx context.Context, in WatchKnowledgeInpu
 			doms = []string{in.Domain}
 		}
 		return tb.broker.StartStandingOrder(ctx, market.StandingOrderInput{
-			OrderID:     in.OrderID,
-			Domains:     doms,
-			Query:       in.Query,
-			OntologyID:  in.OntologyID,
-			AllowBridge: in.AllowBridge,
-			MaxSats:     in.MaxSats,
-			TargetShard: in.TargetShard,
-			TTLSeconds:  in.TTLSeconds,
-			MaxFills:    in.MaxFills,
+			OrderID:           in.OrderID,
+			Domains:           doms,
+			Query:             in.Query,
+			OntologyID:        in.OntologyID,
+			AllowBridge:       in.AllowBridge,
+			MaxSats:           in.MaxSats,
+			MinGrade:          in.MinGrade,
+			MaxSatsPer1kUnits: in.MaxSatsPer1kUnits,
+			FreshnessClass:    in.FreshnessClass,
+			RequiredRights:    in.RequiredRights,
+			PricingMode:       in.PricingMode,
+			TargetShard:       in.TargetShard,
+			TTLSeconds:        in.TTLSeconds,
+			MaxFills:          in.MaxFills,
 		})
 	}
 }
 
 type SellToolInput struct {
-	Shard          string   `json:"shard"`
-	Domains        []string `json:"domains,omitempty"`
-	Domain         string   `json:"domain,omitempty"`
-	PriceSats      uint64   `json:"priceSats,omitempty"`
-	Description    string   `json:"description,omitempty"`
-	Desc           string   `json:"desc,omitempty"`
-	OntologyID     string   `json:"ontologyId,omitempty"`
-	AllowRaw       bool     `json:"allowRaw,omitempty"`
-	DynamicPricing bool     `json:"dynamicPricing,omitempty"`
-	FloorSats      uint64   `json:"floorSats,omitempty"`
-	CeilingSats    uint64   `json:"ceilingSats,omitempty"`
+	Shard                   string   `json:"shard"`
+	Domains                 []string `json:"domains,omitempty"`
+	Domain                  string   `json:"domain,omitempty"`
+	PriceSats               uint64   `json:"priceSats,omitempty"`
+	PricePerUnit            bool     `json:"pricePerUnit,omitempty"`
+	QueryPriceSats          uint64   `json:"queryPriceSats,omitempty"`
+	SubscriptionPriceSats   uint64   `json:"subscriptionPriceSats,omitempty"`
+	SubscriptionDurationSec int64    `json:"subscriptionDurationSec,omitempty"`
+	FreshnessClass          string   `json:"freshnessClass,omitempty"`
+	UsageRights             string   `json:"usageRights,omitempty"`
+	MinAdvertisedGrade      string   `json:"minAdvertisedGrade,omitempty"`
+	Description             string   `json:"description,omitempty"`
+	Desc                    string   `json:"desc,omitempty"`
+	OntologyID              string   `json:"ontologyId,omitempty"`
+	AllowRaw                bool     `json:"allowRaw,omitempty"`
+	DynamicPricing          bool     `json:"dynamicPricing,omitempty"`
+	FloorSats               uint64   `json:"floorSats,omitempty"`
+	CeilingSats             uint64   `json:"ceilingSats,omitempty"`
 	// Optional: submit directly to a Hub knowledge bounty instead of listing!
 	BountyID string `json:"bountyId,omitempty"`
 	HubURL   string `json:"hubUrl,omitempty"`
@@ -134,16 +153,78 @@ func (tb *Toolbox) ExecSell(ctx context.Context, in SellToolInput) (any, error) 
 		desc = in.Desc
 	}
 	return tb.broker.ArmSell(ctx, market.SellInput{
-		Shard:          in.Shard,
-		Domains:        doms,
-		PriceSats:      in.PriceSats,
-		Description:    desc,
-		OntologyID:     in.OntologyID,
-		AllowRaw:       in.AllowRaw,
-		DynamicPricing: in.DynamicPricing,
-		FloorSats:      in.FloorSats,
-		CeilingSats:    in.CeilingSats,
+		Shard:                   in.Shard,
+		Domains:                 doms,
+		PriceSats:               in.PriceSats,
+		PricePerUnit:            in.PricePerUnit,
+		QueryPriceSats:          in.QueryPriceSats,
+		SubscriptionPriceSats:   in.SubscriptionPriceSats,
+		SubscriptionDurationSec: in.SubscriptionDurationSec,
+		FreshnessClass:          in.FreshnessClass,
+		UsageRights:             in.UsageRights,
+		MinAdvertisedGrade:      in.MinAdvertisedGrade,
+		Description:             desc,
+		OntologyID:              in.OntologyID,
+		AllowRaw:                in.AllowRaw,
+		DynamicPricing:          in.DynamicPricing,
+		FloorSats:               in.FloorSats,
+		CeilingSats:             in.CeilingSats,
 	})
+}
+
+// MarketContractInput drives the unified NMU-1 `marketContract` tool (ticker | subscriptions | revokeSubscription).
+type MarketContractInput struct {
+	Action      string `json:"action,omitempty"` // ticker (default) | subscriptions | revokeSubscription
+	OntologyID  string `json:"ontologyId,omitempty"`
+	Grade       string `json:"grade,omitempty"`
+	PricingMode string `json:"pricingMode,omitempty"`
+	Domain      string `json:"domain,omitempty"`
+	Shard       string `json:"shard,omitempty"`
+	SubID       string `json:"subId,omitempty"`
+}
+
+func (tb *Toolbox) ExecMarketContract(ctx context.Context, in MarketContractInput) (any, error) {
+	action := strings.ToLower(strings.TrimSpace(in.Action))
+	if action == "" {
+		action = "ticker"
+	}
+	switch action {
+	case "ticker":
+		pubURL := ""
+		if tb.broker != nil {
+			pubURL = tb.broker.PublicURL()
+		}
+		return BuildCommodityTickerFrom(ctx, tb.mem, tb.disc, tb.hubNode, pubURL, TickerFilter{
+			OntologyID:  in.OntologyID,
+			Grade:       in.Grade,
+			PricingMode: in.PricingMode,
+			Domain:      in.Domain,
+		}), nil
+	case "subscriptions":
+		subs, err := tb.mem.DB().ListActiveSubscriptions(strings.TrimSpace(in.Shard), 0)
+		if err != nil {
+			return nil, err
+		}
+		if subs == nil {
+			subs = []store.ShardSubscription{}
+		}
+		return map[string]any{"subscriptions": subs, "count": len(subs)}, nil
+	case "revokesubscription", "revoke_subscription":
+		cc := CallerContextFor(ctx, policy.Principal{})
+		if cc.FromHTTP && !cc.IsOperator {
+			return nil, errors.New("operator token required to revoke a shard subscription")
+		}
+		subID := strings.TrimSpace(in.SubID)
+		if subID == "" {
+			return nil, errors.New("marketContract revokeSubscription requires subId")
+		}
+		if err := tb.mem.DB().RevokeShardSubscription(subID); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true, "revoked": subID}, nil
+	default:
+		return nil, fmt.Errorf("unknown marketContract action %q (use ticker, subscriptions, or revokeSubscription)", in.Action)
+	}
 }
 
 func (tb *Toolbox) ExecDeals(_ context.Context) map[string]any {

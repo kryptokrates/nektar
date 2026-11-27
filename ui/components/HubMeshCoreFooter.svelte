@@ -1,6 +1,9 @@
 <svelte:options namespace="svg" />
 
 <script lang="ts">
+  import type { ReputationVector6D } from '../lib/types'
+  import { formatRepTooltip } from '../lib/reputationHex'
+  import HexReputationOverlay from './HexReputationOverlay.svelte'
   import { MESH_CX, MESH_CY, MESH_DROPLET_PATH, MESH_HEX_PATH, MESH_W } from './HubMeshModel'
 
   interface Props {
@@ -11,16 +14,32 @@
     quorumOK: boolean
     avgPingMs: number
     totalTopics: number
+    repVector?: ReputationVector6D | null
+    repTrusted?: boolean
+    repUntrusted?: boolean
   }
 
-  let { uid, network, connectedCount, totalHubs, quorumOK, avgPingMs, totalTopics }: Props = $props()
+  let {
+    uid,
+    network,
+    connectedCount,
+    totalHubs,
+    quorumOK,
+    avgPingMs,
+    totalTopics,
+    repVector = null,
+    repTrusted = false,
+    repUntrusted = false
+  }: Props = $props()
 </script>
 
 <!-- 4. CENTER NODE: YOUR NODE (Rounded Honeycomb Core) -->
 <g transform={`translate(${MESH_CX}, ${MESH_CY})`}>
+  <title>{formatRepTooltip(repVector)}</title>
   <circle r="50" fill="none" stroke={quorumOK ? '#4cc26b' : '#f7991b'} stroke-width="2.4" stroke-opacity="0.72" />
   <circle r="57" fill="none" stroke={quorumOK ? '#4cc26b' : '#f7991b'} stroke-width="1" stroke-opacity="0.22" class="pulse-ring" />
   <path d={MESH_HEX_PATH} fill={`url(#${uid}-hex)`} stroke="#36312c" stroke-width="1.4" stroke-linejoin="round" />
+  <HexReputationOverlay radius={35} vector={repVector} trusted={repTrusted} untrusted={repUntrusted} />
   <path fill="#f7991b" transform="translate(-5.5,-27) scale(0.028)" d={MESH_DROPLET_PATH} />
   <text x="0" y="6" text-anchor="middle" fill="#f1ede9" font-size="14" font-weight="800" font-family="ui-monospace, monospace">
     {connectedCount}/{totalHubs}

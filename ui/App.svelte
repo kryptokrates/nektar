@@ -337,6 +337,7 @@
     bind:this={overlaysRef}
     {dragDepth}
     {drawer}
+    reputation={s.reputation}
     {paletteOpen}
     {commands}
     {capsuleFile}

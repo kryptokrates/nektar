@@ -67,6 +67,9 @@ type App struct {
 	evMu   sync.Mutex
 	evSubs map[chan []byte]struct{}
 
+	feedMu   sync.Mutex
+	feedSubs map[string]map[chan shardFeedFrame]struct{}
+
 	pairMu    sync.Mutex
 	pairCodes map[string]pairTicket
 
@@ -136,6 +139,7 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 			IdleConnTimeout:       90 * time.Second,
 		},
 		evSubs:       make(map[chan []byte]struct{}),
+		feedSubs:     make(map[string]map[chan shardFeedFrame]struct{}),
 		pairCodes:    make(map[string]pairTicket),
 		faucetIPs:    make(map[string][]int64),
 		oauthRegIPs:  make(map[string][]int64),
@@ -150,6 +154,11 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 		cfg.Broker.OnMarketTape(func(event string, ev market.MarketTapeEvent) {
 			evCopy := ev
 			app.BroadcastDashboardPayload(event, &evCopy)
+		})
+	}
+	if mem != nil {
+		mem.SetOnSupersede(func(ev memory.SupersessionEvent) {
+			app.BroadcastShardFeedEvent(ev.Shard, "fragment_superseded", ev)
 		})
 	}
 	app.handler = app.buildMux()

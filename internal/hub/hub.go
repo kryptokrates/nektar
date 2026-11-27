@@ -311,6 +311,14 @@ func (n *Node) Close() error {
 	return n.store.Close()
 }
 
+// MarketLookup returns the mounted ls_nektar lookup service (if initialized) for local ticker and index queries.
+func (n *Node) MarketLookup() *bstack.MarketLookupService {
+	if n == nil {
+		return nil
+	}
+	return n.marketLS
+}
+
 // Handler returns the HTTP handler exposing BRC-22 /submit, BRC-24 /lookup, numbered/cursored SSE /events,
 // /sync federation feed, NAT-safe /bbox relay, /bounties, and /v1/health.
 func (n *Node) Handler() http.Handler {

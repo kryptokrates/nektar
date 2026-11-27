@@ -58,9 +58,24 @@
   let zeroConfMax = $state('1000')
   let domainsInput = $state('')
 
-  let showCustomize = $state(false)
+  // Editable autonomous runtime parameters (Auto-Float & SleepCycle)
+  let targetFloatSats = $state('2000')
+  let sleepIdleSec = $state('120')
+  let sleepBatch = $state('25')
+  let autoFloatEnabled = $state(false)
+  let autoFloatInit = false
+  $effect(() => {
+    if (!autoFloatInit && s.microEarner) {
+      autoFloatInit = true
+      autoFloatEnabled = Boolean(s.microEarner.enabled)
+      if (s.microEarner.targetFloatSats > 0) targetFloatSats = String(s.microEarner.targetFloatSats)
+    }
+  })
+
+  let showCustomize = $state(true)
   let showRules = $state(false)
   let busy = $state(false)
+  let distillBusy = $state(false)
 
   const activePolicies = $derived(s.settings.policies.filter((p) => !p.revokedAt))
 
@@ -77,6 +92,7 @@
     const deal = Math.max(1, Math.floor(Number(maxPerDeal) || 0))
     const day = Math.max(deal, Math.floor(Number(maxPerDay) || deal))
     const zc = Math.max(0, Math.floor(Number(zeroConfMax) || 0))
+    const floatTarget = Math.max(100, Math.floor(Number(targetFloatSats) || 2000))
     const domains = domainsInput
       .split(',')
       .map((x) => x.trim())
@@ -103,13 +119,44 @@
       const r = await operatorFetch('POST', '/v1/onboard/policy-preset', body, 'Save policy')
       if (!r) return
       const j = (await r.json().catch(() => ({}))) as { error?: string }
-      if (!r.ok) onToast(j.error ?? `Save failed (${r.status})`, true)
+      if (!r.ok) {
+        onToast(j.error ?? `Save failed (${r.status})`, true)
+        return
+      }
+      // Also persist Auto-Float limit & toggle alongside policy limits
+      await operatorFetch(
+        'POST',
+        '/v1/microearner/toggle',
+        { enabled: autoFloatEnabled, targetFloatSats: floatTarget, runNow: false },
+        'Update Auto-Float settings'
+      )
+      onToast(`${tierDefaults[selectedTier].label} policy & limits saved ✓`)
+      await onRefresh()
+    } finally {
+      busy = false
+    }
+  }
+
+  async function runDistillNow() {
+    distillBusy = true
+    try {
+      const idleSec = Math.max(0, Math.floor(Number(sleepIdleSec) || 120))
+      const maxBatch = Math.max(1, Math.floor(Number(sleepBatch) || 25))
+      const r = await operatorFetch(
+        'POST',
+        '/v1/distill/run',
+        { idleThresholdSeconds: idleSec, maxBatch, autoAnchor: true, autoList: true, force: true },
+        'Run SleepCycle distillation'
+      )
+      if (!r) return
+      const j = (await r.json().catch(() => ({}))) as { totalDistilled?: number; totalQuarantined?: number; error?: string }
+      if (!r.ok) onToast(j.error ?? `Distill failed (${r.status})`, true)
       else {
-        onToast(`${tierDefaults[selectedTier].label} policy saved ✓`)
+        onToast(`Distilled ${j.totalDistilled ?? 0} · Blocked ${j.totalQuarantined ?? 0} ✓`)
         await onRefresh()
       }
     } finally {
-      busy = false
+      distillBusy = false
     }
   }
 
@@ -172,6 +219,33 @@
             <span>Instant max</span>
             <input class="in" type="number" min="0" bind:value={zeroConfMax} />
           </label>
+        </div>
+
+        <div class="num-grid">
+          <label class="field">
+            <span>Auto-Float target (sats)</span>
+            <input class="in" type="number" min="100" bind:value={targetFloatSats} />
+          </label>
+          <label class="field">
+            <span>SleepCycle idle (sec)</span>
+            <input class="in" type="number" min="0" bind:value={sleepIdleSec} />
+          </label>
+          <label class="field">
+            <span>SleepCycle batch</span>
+            <input class="in" type="number" min="1" bind:value={sleepBatch} />
+          </label>
+        </div>
+
+        <div class="role-row">
+          <span class="flbl">Automation</span>
+          <div class="rpills">
+            <button class="rp" class:on={autoFloatEnabled} onclick={() => (autoFloatEnabled = !autoFloatEnabled)}>
+              Auto-Float: {autoFloatEnabled ? 'ON' : 'OFF'}
+            </button>
+            <button class="rp" onclick={runDistillNow} disabled={distillBusy}>
+              {distillBusy ? 'Distilling…' : 'Run SleepCycle'}
+            </button>
+          </div>
         </div>
 
         <label class="field">

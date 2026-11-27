@@ -98,8 +98,12 @@ func (a *App) buildMux() http.Handler {
 	a.registerRepoRoutes(mux)
 	a.registerWalletRoutes(mux)
 
-	// 6. Live A2A Market Purchase, Host Discovery, Onboarding, Faucet & Approvals!
+	// 6. Live A2A Market Purchase, NMU-1 Metered Recall / Subscriptions / Grade S Feeds / Ticker, Host Discovery, Onboarding, Faucet & Approvals!
 	mux.HandleFunc("POST /v1/market/purchase", a.handleMarketPurchase)
+	mux.HandleFunc("POST /v1/market/query", a.handleMarketQuery)
+	mux.HandleFunc("POST /v1/market/subscriptions", a.handleMarketSubscribe)
+	mux.HandleFunc("GET /v1/market/feeds/{shard}", a.handleMarketFeedSSE)
+	mux.HandleFunc("GET /v1/market/ticker", a.handleMarketTicker)
 	mux.Handle("GET /v1/topics/cluster", a.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		topic := strings.TrimSpace(r.URL.Query().Get("topic"))
 		hint := strings.TrimSpace(r.URL.Query().Get("hint"))

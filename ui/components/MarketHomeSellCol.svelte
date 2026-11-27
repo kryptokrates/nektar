@@ -1,12 +1,15 @@
 <script lang="ts">
-  import type { ListedShard, MarketTapeEvent, PeerInfo } from '../lib/types'
+  import type { ListedShard, MarketTapeEvent, PeerInfo, ReputationState } from '../lib/types'
   import { operatorFetch, postJSON } from '../lib/api'
   import { fmtSats } from '../lib/format'
+  import { findPeerRepVector } from '../lib/reputationHex'
+  import MiniHexRep from './MiniHexRep.svelte'
   import { fetchTopicPills, type TopicPill } from './MarketHomeHelpers'
 
   interface Props {
     funded: boolean
     sellerPolicyReady?: boolean
+    reputation?: ReputationState
     sellText?: string
     sellDomain?: string
     sellPrice?: string
@@ -23,6 +26,7 @@
   let {
     funded,
     sellerPolicyReady = true,
+    reputation,
     sellText = $bindable(''),
     sellDomain = $bindable(''),
     sellPrice = $bindable('50'),
@@ -199,8 +203,16 @@
         {@const statusWarn = m.active !== false && (!sellerPolicyReady || !funded)}
         <article class="book-row self-row">
           <div class="row-top">
+            {#if m.grade}
+              <span class="nmu-grade g-{m.grade.toLowerCase()}" title="NMU-1 Grade {m.grade}">{m.grade}</span>
+            {/if}
             <span class="tag sell">#{m.shard}</span>
             <span class="stat-inline" class:warn={statusWarn}>{statusLabel} · {m.works} sold</span>
+            {#if m.modes && m.modes.length > 0}
+              {#each m.modes as mode}
+                <span class="mode-chip">{mode === 'subscription' ? 'sub' : mode}</span>
+              {/each}
+            {/if}
             <span class="price sell">{m.offers}</span>
             <div class="mwrap">
               <button class="more" onclick={() => (openMenu = openMenu === m.shard ? '' : m.shard)} aria-label="Options">···</button>
@@ -219,9 +231,11 @@
 
       {#each peers as p}
         {@const firstDom = p.sellDomains?.[0] ?? ''}
+        {@const peerRep = findPeerRepVector(reputation, p.pub)}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
         <article class="book-row peer-row" onclick={() => onInspectPeer(p)}>
           <div class="row-top">
+            <MiniHexRep size={20} vector={peerRep.vector} trusted={peerRep.trusted} untrusted={peerRep.untrusted} />
             <b class="pname">{p.handle || `${p.pub.slice(0, 10)}…`}</b>
             {#if firstDom}
               <span class="stat-inline">#{firstDom.replace(/^cluster:/, '')}</span>
@@ -326,6 +340,19 @@
   .row-top { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
   .tag { font-size: 0.84rem; font-weight: 800; }
   .tag.sell { color: var(--amber); }
+  .nmu-grade {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; border-radius: 4px; padding: 0 0.25rem;
+    font-family: ui-monospace, monospace; font-size: 0.68rem; font-weight: 900;
+  }
+  .nmu-grade.g-s { background: rgb(247 153 27 / 22%); color: var(--amber); border: 1px solid rgb(247 153 27 / 55%); }
+  .nmu-grade.g-a { background: rgb(76 194 107 / 18%); color: var(--ok); border: 1px solid rgb(76 194 107 / 45%); }
+  .nmu-grade.g-b { background: rgb(120 170 255 / 16%); color: #8ec0ff; border: 1px solid rgb(120 170 255 / 38%); }
+  .nmu-grade.g-c { background: rgb(255 255 255 / 6%); color: var(--mut); border: 1px solid var(--line); }
+  .mode-chip {
+    font-family: ui-monospace, monospace; font-size: 0.64rem; font-weight: 700;
+    color: var(--mut); border: 1px solid var(--line); border-radius: 999px; padding: 0.05rem 0.38rem;
+  }
   .stat-inline { font-size: 0.74rem; color: var(--mut); }
   .stat-inline.warn { color: var(--amber); font-weight: 600; }
   .price {

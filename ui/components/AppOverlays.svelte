@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { DrawerTarget } from '../lib/types'
+  import type { DrawerTarget, ReputationState } from '../lib/types'
   import type { AppCommandItem } from '../lib/appActions'
   import DetailDrawer from './DetailDrawer.svelte'
   import CommandPalette from './CommandPalette.svelte'
@@ -10,6 +10,7 @@
   interface Props {
     dragDepth: number
     drawer: DrawerTarget
+    reputation?: ReputationState
     paletteOpen: boolean
     commands: AppCommandItem[]
     capsuleFile: File | null
@@ -33,6 +34,7 @@
   let {
     dragDepth,
     drawer,
+    reputation,
     paletteOpen,
     commands,
     capsuleFile,
@@ -81,7 +83,7 @@
   </div>
 {/if}
 
-<DetailDrawer target={drawer} onClose={onCloseDrawer} />
+<DetailDrawer target={drawer} {reputation} onClose={onCloseDrawer} />
 <CommandPalette open={paletteOpen} {commands} onClose={onClosePalette} />
 <CapsuleInspectorModal
   file={capsuleFile}

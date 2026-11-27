@@ -1,6 +1,9 @@
 <svelte:options namespace="svg" />
 
 <script lang="ts">
+  import type { ReputationVector6D } from '../lib/types'
+  import { formatRepHoverSummary } from '../lib/reputationHex'
+  import HexReputationOverlay from './HexReputationOverlay.svelte'
   import {
     CORE_X,
     CORE_Y,
@@ -25,6 +28,10 @@
     heartbeats?: StageHeartbeat[]
     footerStats?: StageStatItem[]
     footerBrand: string
+    repVector?: ReputationVector6D | null
+    repTrusted?: boolean
+    repUntrusted?: boolean
+    onCoreHover?: (label: string | null) => void
   }
 
   let {
@@ -39,12 +46,21 @@
     live,
     heartbeats,
     footerStats,
-    footerBrand
+    footerBrand,
+    repVector = null,
+    repTrusted = false,
+    repUntrusted = false,
+    onCoreHover
   }: Props = $props()
 </script>
 
 <!-- Center Smooth Rounded Hexagon Core (Pixel-Locked at 460, 114) -->
-<g transform={`translate(${CORE_X}, ${CORE_Y})`}>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<g
+  transform={`translate(${CORE_X}, ${CORE_Y})`}
+  onmouseenter={() => onCoreHover?.(formatRepHoverSummary(repVector))}
+  onmouseleave={() => onCoreHover?.(null)}
+>
   <circle r={RING_R} fill="none" stroke="#1e1b18" stroke-width="3.2" />
   <circle
     r={RING_R}
@@ -73,6 +89,7 @@
   {/if}
 
   <path d={SMOOTH_HEX_PATH} fill={`url(#${uid}-hex)`} stroke="#332e29" stroke-width="1.4" stroke-linejoin="round" />
+  <HexReputationOverlay radius={51} vector={repVector} trusted={repTrusted} untrusted={repUntrusted} />
   <path d={SMOOTH_HEX_PATH} transform="scale(0.92)" fill="none" stroke="#f7991b" stroke-opacity="0.14" stroke-width="1" />
 
   <path fill="#f7991b" transform="translate(-7,-38) scale(0.036)" d={NEKTAR_DROPLET_PATH} />

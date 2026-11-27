@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -198,6 +199,11 @@ func cmdWant(args []string) error {
 	question := fs.String("question", "", "Knowledge question to buy")
 	ontologyID := fs.String("ontology", "", "Optional 64-hex OntologyID pin")
 	maxSats := fs.Uint64("max", 200, "Max satoshis to pay")
+	minGrade := fs.String("min-grade", "", "Minimum NMU-1 commodity grade (S|A|B|C)")
+	maxSatsPer1k := fs.Uint64("max-sats-per-1k", 0, "Max normalized unit price in sats per 1000 verified triples (milli-sats/triple)")
+	freshness := fs.String("freshness", "", "Required freshness class (ephemeral|versioned|evergreen)")
+	rights := fs.String("rights", "", "Required usage rights (inference_only|distill_resellable)")
+	mode := fs.String("mode", "", "Preferred pricing contract mode (spot|per_query|subscription)")
 	targetShard := fs.String("shard", "", "Target shard to store purchased knowledge")
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
@@ -213,11 +219,16 @@ func cmdWant(args []string) error {
 	}
 	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "want", map[string]any{
-			"domains":     domList,
-			"question":    *question,
-			"ontologyId":  strings.TrimSpace(*ontologyID),
-			"maxSats":     *maxSats,
-			"targetShard": *targetShard,
+			"domains":           domList,
+			"question":          *question,
+			"ontologyId":        strings.TrimSpace(*ontologyID),
+			"maxSats":           *maxSats,
+			"minGrade":          strings.TrimSpace(*minGrade),
+			"maxSatsPer1kUnits": *maxSatsPer1k,
+			"freshnessClass":    strings.TrimSpace(*freshness),
+			"requiredRights":    strings.TrimSpace(*rights),
+			"pricingMode":       strings.TrimSpace(*mode),
+			"targetShard":       *targetShard,
 		})
 		if err != nil {
 			return err
@@ -231,7 +242,14 @@ func cmdSell(args []string) error {
 	fs := flag.NewFlagSet("sell", flag.ExitOnError)
 	shard := fs.String("shard", "default", "Local shard to sell")
 	domains := fs.String("domains", "ops", "Comma-separated market domains")
-	price := fs.Uint64("price", 100, "Price in satoshis")
+	price := fs.Uint64("price", 100, "Spot price in satoshis (0 disables spot when -query-price or -sub-price is set)")
+	perUnit := fs.Bool("per-unit", false, "Interpret -price as sats per verified triple (unit pricing)")
+	queryPrice := fs.Uint64("query-price", 0, "Enable NMU-1 per_query BRC-105 HTTP 402 recall at this satoshi price")
+	subPrice := fs.Uint64("sub-price", 0, "Enable NMU-1 subscription SSE feed (Grade S SLA) at this satoshi price")
+	subDays := fs.Int64("sub-days", 30, "Subscription window length in days when -sub-price > 0")
+	freshness := fs.String("freshness", "", "Default NMU-1 freshness class (ephemeral|versioned|evergreen)")
+	rights := fs.String("rights", "", "NMU-1 usage rights (inference_only|distill_resellable)")
+	minGrade := fs.String("min-grade", "", "Optional advertised grade cap/floor (S|A|B|C)")
 	desc := fs.String("desc", "", "Short listing description")
 	ontologyID := fs.String("ontology", "", "Optional pinned OntologyID")
 	allowRaw := fs.Bool("allow-raw", false, "Explicitly permit selling non-distilled raw fragments (still scrubbed for secrets)")
@@ -250,20 +268,31 @@ func cmdSell(args []string) error {
 			domList = append(domList, d)
 		}
 	}
+	var subDurSec int64
+	if *subPrice > 0 && *subDays > 0 {
+		subDurSec = *subDays * 86400
+	}
 	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "sell", map[string]any{
-			"shard":          *shard,
-			"domains":        domList,
-			"priceSats":      *price,
-			"description":    *desc,
-			"ontologyId":     strings.TrimSpace(*ontologyID),
-			"allowRaw":       *allowRaw,
-			"dynamicPricing": *dynamic,
-			"floorSats":      *floor,
-			"ceilingSats":    *ceiling,
-			"bountyId":       *bountyID,
-			"hubUrl":         *hubURL,
-			"seq":            *seq,
+			"shard":                   *shard,
+			"domains":                 domList,
+			"priceSats":               *price,
+			"pricePerUnit":            *perUnit,
+			"queryPriceSats":          *queryPrice,
+			"subscriptionPriceSats":   *subPrice,
+			"subscriptionDurationSec": subDurSec,
+			"freshnessClass":          strings.TrimSpace(*freshness),
+			"usageRights":             strings.TrimSpace(*rights),
+			"minAdvertisedGrade":      strings.TrimSpace(*minGrade),
+			"description":             *desc,
+			"ontologyId":              strings.TrimSpace(*ontologyID),
+			"allowRaw":                *allowRaw,
+			"dynamicPricing":          *dynamic,
+			"floorSats":               *floor,
+			"ceilingSats":             *ceiling,
+			"bountyId":                *bountyID,
+			"hubUrl":                  *hubURL,
+			"seq":                     *seq,
 		})
 		if err != nil {
 			return err
@@ -271,6 +300,92 @@ func cmdSell(args []string) error {
 		return printJSON(out)
 	}
 	return errors.New("no live nektar daemon found — start one with `nektar serve` first")
+}
+
+func cmdTicker(args []string) error {
+	fs := flag.NewFlagSet("ticker", flag.ExitOnError)
+	ontologyID := fs.String("ontology", "", "Filter by 64-hex OntologyID (or 'unpinned')")
+	grade := fs.String("grade", "", "Filter by NMU-1 grade (S|A|B|C)")
+	mode := fs.String("mode", "", "Filter by pricing mode (spot|per_query|subscription)")
+	domain := fs.String("domain", "", "Filter by market domain")
+	asJSON := fs.Bool("json", false, "Machine-readable JSON output")
+	dataDir := fs.String("data-dir", "", "Data directory override")
+	netName := fs.String("network", "", "Network override")
+	_ = fs.Parse(args)
+
+	if info, ok := detectDaemon(*dataDir, *netName); ok {
+		q := url.Values{}
+		if v := strings.TrimSpace(*ontologyID); v != "" {
+			q.Set("ontologyId", v)
+		}
+		if v := strings.TrimSpace(*grade); v != "" {
+			q.Set("grade", v)
+		}
+		if v := strings.TrimSpace(*mode); v != "" {
+			q.Set("pricingMode", v)
+		}
+		if v := strings.TrimSpace(*domain); v != "" {
+			q.Set("domain", v)
+		}
+		path := "/v1/market/ticker"
+		if enc := q.Encode(); enc != "" {
+			path += "?" + enc
+		}
+		out, err := callLiveAPI(info, http.MethodGet, path, nil)
+		if err == nil {
+			if *asJSON {
+				return printJSON(out)
+			}
+			var parsed server.CommodityTickerResponse
+			if b, mErr := json.Marshal(out); mErr == nil && json.Unmarshal(b, &parsed) == nil {
+				printTickerHuman(parsed)
+				return nil
+			}
+			return printJSON(out)
+		}
+	}
+
+	ctx := context.Background()
+	rt, err := openRuntime(ctx, *netName, *dataDir, DefaultLocalPort)
+	if err != nil {
+		return err
+	}
+	defer rt.closeFn()
+	resp := server.BuildCommodityTickerFrom(ctx, rt.mem, rt.disc, nil, "", server.TickerFilter{
+		OntologyID:  strings.TrimSpace(*ontologyID),
+		Grade:       strings.TrimSpace(*grade),
+		PricingMode: strings.TrimSpace(*mode),
+		Domain:      strings.TrimSpace(*domain),
+	})
+	if *asJSON {
+		return printJSON(resp)
+	}
+	printTickerHuman(resp)
+	return nil
+}
+
+func printTickerHuman(resp server.CommodityTickerResponse) {
+	var b strings.Builder
+	b.WriteString("NEKTAR NMU-1 COMMODITY TICKER (Standardized Knowledge Unit Quotes)\n")
+	if len(resp.Rows) == 0 {
+		b.WriteString("  (no active NMU-1 quotes found — list a shard with `nektar sell` or join a Hub)\n")
+	} else {
+		fmt.Fprintf(&b, "  %-16s %-5s %-12s %12s %12s %9s %7s %8s %9s\n",
+			"ONTOLOGY", "GRADE", "MODE", "MIN s/triple", "MED s/triple", "MIN ASK", "OFFERS", "UNITS", "BOND/FEED")
+		for _, r := range resp.Rows {
+			ont := r.OntologyID
+			if len(ont) > 14 && ont != "unpinned" {
+				ont = ont[:8] + ".." + ont[len(ont)-4:]
+			}
+			fmt.Fprintf(&b, "  %-16s %-5s %-12s %12s %12s %6d sat %7d %8d %4d/%-4d\n",
+				ont, r.Grade, r.PricingMode, r.MinSatsPerTriple, r.MedianSatsPerTriple,
+				r.MinAskSats, r.ActiveOffers, r.TotalUnitsAvailable, r.BondedSellers, r.LiveFeeds)
+		}
+	}
+	if resp.AdvisoryNote != "" {
+		fmt.Fprintf(&b, "\nNote: %s\n", resp.AdvisoryNote)
+	}
+	fmt.Print(formatConsoleText(b.String()))
 }
 
 func cmdDistill(args []string) error {

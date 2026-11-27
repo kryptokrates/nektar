@@ -1,14 +1,17 @@
 <script lang="ts">
-  import type { DrawerTarget } from '../lib/types'
+  import type { DrawerTarget, ReputationState } from '../lib/types'
   import { postJSON } from '../lib/api'
-  import { fmtSats, shortHash } from '../lib/format'
+  import { fmtBpPct, fmtSats, shortHash } from '../lib/format'
+  import { findPeerRepVector } from '../lib/reputationHex'
+  import MiniHexRep from './MiniHexRep.svelte'
 
   interface Props {
     target: DrawerTarget
+    reputation?: ReputationState
     onClose: () => void
   }
 
-  let { target, onClose }: Props = $props()
+  let { target, reputation, onClose }: Props = $props()
 
   let loading = $state(false)
   let detail = $state<Record<string, unknown> | null>(null)
@@ -129,12 +132,24 @@
           {/if}
         {:else}
           {@const p = target.item}
+          {@const peerRep = findPeerRepVector(reputation, p.pub)}
+          <div style="display:flex;align-items:center;gap:1rem;">
+            <MiniHexRep size={112} vector={peerRep.vector} trusted={peerRep.trusted} untrusted={peerRep.untrusted} showLabels />
+            <div class="kv" style="flex:1;">
+              <span>6D Score</span><span>{peerRep.vector ? fmtBpPct(peerRep.vector.compositeBp) : 'No deals yet'}</span>
+              {#if peerRep.vector}
+                <span>EigenTrust</span><span>{fmtBpPct(peerRep.vector.eigenTrustBp)}</span>
+                <span>Deals</span><span>{peerRep.vector.directDeals} ({peerRep.vector.attestCount} attests)</span>
+              {/if}
+            </div>
+          </div>
           <div class="kv">
             <span>Handle</span><span>{p.handle || '—'}</span>
             <span>Pubkey</span><span class="mono">{shortHash(p.pub, 14, 10)}</span>
             <span>Transport</span><span>{p.publicUrl || p.bboxOffice || 'NAT bbox'}</span>
             <span>Domains</span><span>{(p.sellDomains ?? []).join(', ') || '—'}</span>
           </div>
+          <p class="note">Advisory 6D reputation derived from signed bilateral deal receipts — proves signed history, not objective truth.</p>
         {/if}
       </div>
     </aside>

@@ -90,3 +90,15 @@ Every variable below is read directly by the single zero-CGO Go binary (`cmd/nek
 | `NEKTAR_HUB_SUBMIT_*_SATS` / `NEKTAR_HUB_BBOX_SEND_SATS` / `NEKTAR_HUB_EGRESS_*` / `NEKTAR_HUB_LOOKUP_PRICES` | Preset defaults | Per-valve BRC-105 Hub fee overrides | `internal/hub/fees.go` |
 | `NEKTAR_HUB_RESALE_SATS` / `NEKTAR_FAUCET_DAILY_CAP` | `120` / `50000` | Hub liquidity resale floor and daily testnet faucet cap | `internal/hub/liquidity.go` |
 | `NEKTAR_JEV_MODE` / `NEKTAR_JEV_BASE_URL` / `NEKTAR_JEV_MODEL` / `NEKTAR_JEV_PRIVACY` / `NEKTAR_JEV_TIMEOUT_MS` / `NEKTAR_JEV_ALLOWED_HOSTS` | `gated` / local / `disclosable_preview` / `2500` | Optional self-hosted open-weight Jev System One evaluator backing semantic market matching AND JevGraph ontology extraction/alignment (degrades to deterministic ranking / `jev_offline` review candidates unless `-ontology-strict`) | `cmd/nektar/main.go`, `internal/jev/types.go`, `internal/jevgraph` |
+
+---
+
+## NMU-1 Commodity Standard (Zero-Env Defaults)
+
+NMU-1 requires **zero new environment variables** — all commodity pricing, grading, and contract endpoints operate out-of-the-box with deterministic integer arithmetic:
+
+- **Canonical Unit & Quote:** 1 Verified Triple (deduplicated via `TagTripleV1`, restricted to predicates declared in the pinned `OntologyManifest`, capped at 8 per `(subject, predicate)` pair). Quotes normalize to integer `satsPer1kUnits` (milli-sats per triple, zero floats).
+- **Deterministic Grades:** `C` (PII-scrubbed text) → `B` (distilled, ontology-pinned, Mangle-consistent triples) → `A` (Grade B + verbatim L1 MPE `EdgesRoot` + active `NektarCheckpointBond`) → `S` (Grade A + authenticated `±60s` replay-protected SSE supersession feed at `GET /v1/market/feeds/{shard}`).
+- **Multi-Mode Contracts on Any Listing:** `spot` (`-price`, optional `-per-unit`), `per_query` metered recall (`-query-price`, `POST /v1/market/query` over BRC-105 HTTP 402), and `subscription` Shard Feeds (`-sub-price` / `-sub-days`, `POST /v1/market/subscriptions` + `GET /v1/market/feeds/{shard}`).
+- **Commodity Ticker:** `GET /v1/market/ticker`, CLI `nektar ticker`, MCP `marketContract` (`action: "ticker"|"subscriptions"|"revokeSubscription"`), and the embedded Dashboard Commodity Ticker strip.
+

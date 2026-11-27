@@ -2,6 +2,7 @@
   import type { DealFeedEntry, DockClient, FeedFragment, PeerInfo, PulseSignal, Receipt, RepoSummary, State } from '../lib/types'
   import { operatorFetch } from '../lib/api'
   import { fmtCompactSats } from '../lib/format'
+  import { selectCoreRepVector } from '../lib/reputationHex'
   import HoneycombStage from './HoneycombStage.svelte'
   import RepoCommitDrawer from './RepoCommitDrawer.svelte'
   import AgentsApprovalsBanner from './AgentsApprovalsBanner.svelte'
@@ -109,6 +110,7 @@
     })
   )
   const stageFooterStats = $derived(buildStageFooterStats(financials))
+  const coreRep = $derived(selectCoreRepVector(s.reputation, s.pub))
   const rows = $derived(deriveVaultRows(s, selectedTopic, searchQuery))
 
   let lastPulseSeq = 0
@@ -182,6 +184,9 @@
     ringMuted={!hasFlow}
     {live}
     footerStats={stageFooterStats}
+    repVector={coreRep.vector}
+    repTrusted={coreRep.trusted}
+    repUntrusted={coreRep.untrusted}
     {onToast}
   />
 

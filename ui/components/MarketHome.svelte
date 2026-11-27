@@ -1,11 +1,10 @@
 <script lang="ts">
   import type { DealFeedEntry, DockClient, MarketTapeEvent, NavTab, PeerInfo, PulseSignal, Receipt, State } from '../lib/types'
   import MarketPulse from './MarketPulse.svelte'
+  import CommodityTicker from './CommodityTicker.svelte'
   import MarketHomeTopBar from './MarketHomeTopBar.svelte'
   import QuickstartStrip from './QuickstartStrip.svelte'
   import OperationalHero from './OperationalHero.svelte'
-  import SleepCycleCard from './SleepCycleCard.svelte'
-  import ReputationRadar from './ReputationRadar.svelte'
   import MarketHomeBuyCol from './MarketHomeBuyCol.svelte'
   import MarketHomeSellCol from './MarketHomeSellCol.svelte'
   import MarketHomeTape from './MarketHomeTape.svelte'
@@ -150,11 +149,14 @@
     {onRequestFaucet}
   />
 
-  <!-- 0. ZERO-CRYPTO OPERATIONAL HERO -->
-  <OperationalHero {s} {onRefresh} {onToast} {onNavigate} />
+  <!-- 0. ZERO-CRYPTO OPERATIONAL STRIP -->
+  <OperationalHero {s} {onRefresh} {onToast} />
 
-  <!-- 1. VIRAL HERO: CLEAN NEKTAR CLEARING PULSE -->
+  <!-- 1. VIRAL HERO: CLEAN NEKTAR CLEARING PULSE (6D Reputation embedded in center Sechseck) -->
   <MarketPulse {s} {live} {pulse} onPickBuy={pickBuy} onPickSell={pickSell} />
+
+  <!-- 1.5. NMU-1 STANDARDIZED COMMODITY TICKER -->
+  <CommodityTicker ticker={s.ticker} onPickBuy={pickBuy} />
 
   <!-- 2. TABLESS SIDE-BY-SIDE BUY & SELL -->
   <section class="dual-deck">
@@ -175,6 +177,7 @@
     <MarketHomeSellCol
       funded={s.treasury.funded}
       {sellerPolicyReady}
+      reputation={s.reputation}
       bind:sellText
       bind:sellDomain
       bind:sellPrice
@@ -187,17 +190,6 @@
       onPickBuy={pickBuy}
       {onInspectPeer}
     />
-  </section>
-
-  <!-- 3. AUTONOMOUS ENGINE: SLEEPCYCLE PII GATE + 6D REPUTATION RADAR -->
-  <section class="auto-deck" aria-label="Autonomous engine status">
-    <SleepCycleCard
-      distill={s.distill}
-      microEarner={s.microEarner}
-      {onRefresh}
-      {onToast}
-    />
-    <ReputationRadar reputation={s.reputation} />
   </section>
 
   <MarketHomeTape
@@ -224,15 +216,7 @@
     flex: 1;
   }
 
-  .auto-deck {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 0.9rem;
-    padding: 0.95rem 1.25rem;
-    border-top: 1px solid var(--line);
-  }
-
   @media (max-width: 820px) {
-    .dual-deck, .auto-deck { grid-template-columns: 1fr; }
+    .dual-deck { grid-template-columns: 1fr; }
   }
 </style>

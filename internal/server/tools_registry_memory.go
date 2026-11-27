@@ -42,6 +42,10 @@ type RememberToolInput struct {
 	CallerPub      string                `json:"callerPub,omitempty"`
 	Supersedes     int64                 `json:"supersedes,omitempty"`
 	AutoAnchor     bool                  `json:"autoAnchor,omitempty"`
+	FreshnessClass string                `json:"freshnessClass,omitempty"`
+	ValidUntilUnix int64                 `json:"validUntilUnix,omitempty"`
+	SubjectVersion string                `json:"subjectVersion,omitempty"`
+	UsageRights    string                `json:"usageRights,omitempty"`
 	Extra          map[string]string     `json:"extra,omitempty"`
 }
 
@@ -92,6 +96,11 @@ type WantToolInput struct {
 	Query              string   `json:"query,omitempty"`
 	OntologyID         string   `json:"ontologyId,omitempty"`
 	MaxSats            uint64   `json:"maxSats,omitempty"`
+	MinGrade           string   `json:"minGrade,omitempty"`
+	MaxSatsPer1kUnits  uint64   `json:"maxSatsPer1kUnits,omitempty"`
+	FreshnessClass     string   `json:"freshnessClass,omitempty"`
+	RequiredRights     string   `json:"requiredRights,omitempty"`
+	PricingMode        string   `json:"pricingMode,omitempty"`
 	TargetShard        string   `json:"targetShard,omitempty"`
 	StandingTTLSeconds int64    `json:"standingTtlSeconds,omitempty"`
 }
@@ -151,6 +160,10 @@ func (tb *Toolbox) ExecRemember(ctx context.Context, raw RememberToolInput) (*me
 		CallerPub:      raw.CallerPub,
 		Supersedes:     raw.Supersedes,
 		AutoAnchor:     raw.AutoAnchor,
+		FreshnessClass: raw.FreshnessClass,
+		ValidUntilUnix: raw.ValidUntilUnix,
+		SubjectVersion: raw.SubjectVersion,
+		UsageRights:    raw.UsageRights,
 		Extra:          raw.Extra,
 	}
 	cc := CallerContextFor(ctx, policy.Principal{})
@@ -193,6 +206,10 @@ func (tb *Toolbox) callRememberTool(ctx context.Context, rawArgs json.RawMessage
 		CallerPub      string                `json:"callerPub,omitempty"`
 		Supersedes     json.RawMessage       `json:"supersedes,omitempty"`
 		AutoAnchor     bool                  `json:"autoAnchor,omitempty"`
+		FreshnessClass string                `json:"freshnessClass,omitempty"`
+		ValidUntilUnix int64                 `json:"validUntilUnix,omitempty"`
+		SubjectVersion string                `json:"subjectVersion,omitempty"`
+		UsageRights    string                `json:"usageRights,omitempty"`
 		Extra          map[string]string     `json:"extra,omitempty"`
 	}
 	if err := json.Unmarshal(rawArgs, &wire); err != nil {
@@ -221,6 +238,10 @@ func (tb *Toolbox) callRememberTool(ctx context.Context, rawArgs json.RawMessage
 		Triples:        wire.Triples,
 		CallerPub:      wire.CallerPub,
 		AutoAnchor:     wire.AutoAnchor,
+		FreshnessClass: wire.FreshnessClass,
+		ValidUntilUnix: wire.ValidUntilUnix,
+		SubjectVersion: wire.SubjectVersion,
+		UsageRights:    wire.UsageRights,
 		Extra:          wire.Extra,
 	}
 	if len(wire.Supersedes) > 0 && string(wire.Supersedes) != "null" {
@@ -324,6 +345,11 @@ func (tb *Toolbox) ExecWantTool(ctx context.Context, in WantToolInput) (any, err
 		Question:           q,
 		OntologyID:         in.OntologyID,
 		MaxSats:            in.MaxSats,
+		MinGrade:           in.MinGrade,
+		MaxSatsPer1kUnits:  in.MaxSatsPer1kUnits,
+		FreshnessClass:     in.FreshnessClass,
+		RequiredRights:     in.RequiredRights,
+		PricingMode:        in.PricingMode,
 		TargetShard:        in.TargetShard,
 		StandingTTLSeconds: in.StandingTTLSeconds,
 	})

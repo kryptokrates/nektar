@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import type { Simulation } from 'd3-force'
-  import type { HubCatalogEntry } from '../lib/types'
+  import type { HubCatalogEntry, ReputationVector6D } from '../lib/types'
   import HubMeshNodesLayer from './HubMeshNodesLayer.svelte'
   import HubMeshCoreFooter from './HubMeshCoreFooter.svelte'
   import {
@@ -24,11 +24,24 @@
     network: string
     selectedURL: string
     activeTopic: string
+    repVector?: ReputationVector6D | null
+    repTrusted?: boolean
+    repUntrusted?: boolean
     onSelectHub: (url: string) => void
     onToast?: (msg: string, isErr?: boolean) => void
   }
 
-  let { hubs, network, selectedURL, activeTopic, onSelectHub, onToast }: Props = $props()
+  let {
+    hubs,
+    network,
+    selectedURL,
+    activeTopic,
+    repVector = null,
+    repTrusted = false,
+    repUntrusted = false,
+    onSelectHub,
+    onToast
+  }: Props = $props()
 
   let svgEl: SVGSVGElement | null = null
 
@@ -207,6 +220,9 @@
       quorumOK={metrics.quorumOK}
       avgPingMs={metrics.avgPingMs}
       totalTopics={metrics.totalTopics}
+      {repVector}
+      {repTrusted}
+      {repUntrusted}
     />
   </svg>
 </section>

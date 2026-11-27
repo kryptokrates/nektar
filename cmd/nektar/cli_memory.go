@@ -22,6 +22,10 @@ func cmdRemember(args []string) error {
 	publicFlag := fs.Bool("public", false, "Opt out of private-by-default CLKA encryption")
 	ontology := fs.String("ontology", "", "Optional committed domain ontology repo (ont-<domain>) or 64-hex OntologyID for JevGraph extraction")
 	ontologyStrict := fs.Bool("ontology-strict", false, "Fail closed on -ontology writes if Jev System One evaluator is offline")
+	freshness := fs.String("freshness", "", "Optional NMU-1 freshness class: ephemeral | versioned | evergreen")
+	validUntil := fs.Int64("valid-until", 0, "Optional Unix timestamp expiry for ephemeral/versioned facts")
+	subjectVersion := fs.String("subject-version", "", "Optional subject version tag (e.g. go-1.27, sdk-v1.7.8)")
+	rights := fs.String("rights", "", "Optional NMU-1 usage rights: inference_only | distill_resellable")
 	anchor := fs.Bool("anchor", false, "Anchor immediately on BSV")
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
@@ -34,6 +38,10 @@ func cmdRemember(args []string) error {
 			"public":         *publicFlag,
 			"ontology":       *ontology,
 			"ontologyStrict": *ontologyStrict,
+			"freshnessClass": strings.TrimSpace(*freshness),
+			"validUntilUnix": *validUntil,
+			"subjectVersion": strings.TrimSpace(*subjectVersion),
+			"usageRights":    strings.TrimSpace(*rights),
 			"autoAnchor":     *anchor,
 		})
 		if err != nil {
@@ -56,6 +64,10 @@ func cmdRemember(args []string) error {
 		Public:         *publicFlag,
 		Ontology:       *ontology,
 		OntologyStrict: *ontologyStrict,
+		FreshnessClass: strings.TrimSpace(*freshness),
+		ValidUntilUnix: *validUntil,
+		SubjectVersion: strings.TrimSpace(*subjectVersion),
+		UsageRights:    strings.TrimSpace(*rights),
 		AutoAnchor:     *anchor,
 	})
 	if err != nil {

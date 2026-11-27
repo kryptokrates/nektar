@@ -11,6 +11,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
+	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/reasoning"
 	"github.com/kryptokrates/nektar/internal/store"
 )
@@ -160,18 +161,59 @@ type dashboardNetSection struct {
 }
 
 func (a *App) buildDashboardMarketAndNet(ctx context.Context, listings []store.SellListing) dashboardNetSection {
+	hasActiveBond := false
+	if bRec, _, bErr := market.LoadActiveBond(a.mem.DB()); bErr == nil && bRec != nil && !bRec.State.Seized {
+		hasActiveBond = true
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(a.cfg.PublicURL), "/")
 	marketRows := make([]map[string]any, 0, len(listings))
 	for _, l := range listings {
 		frags, _ := a.mem.DB().ListFragments(l.Shard)
 		works, shardEarned, _ := a.mem.DB().SellerShardStats(l.Shard)
+		feedEP := ""
+		if baseURL != "" && l.SupportsMode(nmu.ModeSubscription) {
+			feedEP = baseURL + "/v1/market/feeds/" + l.Shard
+		}
+		bestGrade, totalUnits, _, _ := a.summarizeLocalListing(ctx, l, hasActiveBond, feedEP)
+		enabled := l.EnabledModes()
+		modeStrs := make([]string, 0, len(enabled))
+		offerParts := make([]string, 0, len(enabled))
+		for _, m := range enabled {
+			modeStrs = append(modeStrs, string(m))
+			switch m {
+			case nmu.ModeSpot:
+				if l.PricePerUnit {
+					offerParts = append(offerParts, fmt.Sprintf("%d sats/u", l.PriceSats))
+				} else {
+					offerParts = append(offerParts, fmt.Sprintf("%d sats", l.PriceSats))
+				}
+			case nmu.ModePerQuery:
+				offerParts = append(offerParts, fmt.Sprintf("%d/q", l.QueryPriceSats))
+			case nmu.ModeSubscription:
+				offerParts = append(offerParts, fmt.Sprintf("%d/sub", l.SubscriptionPriceSats))
+			}
+		}
+		offerSummary := strings.Join(offerParts, " · ")
+		if offerSummary == "" {
+			offerSummary = fmt.Sprintf("%d sats", l.PriceSats)
+		}
 		marketRows = append(marketRows, map[string]any{
-			"shard":   l.Shard,
-			"domains": l.Domains,
-			"records": len(frags),
-			"works":   works,
-			"earned":  shardEarned,
-			"active":  l.Active,
-			"offers":  fmt.Sprintf("%d sats", l.PriceSats),
+			"shard":                 l.Shard,
+			"domains":               l.Domains,
+			"records":               len(frags),
+			"works":                 works,
+			"earned":                shardEarned,
+			"active":                l.Active,
+			"offers":                offerSummary,
+			"grade":                 string(bestGrade),
+			"unitCount":             totalUnits,
+			"modes":                 modeStrs,
+			"priceSats":             l.PriceSats,
+			"pricePerUnit":          l.PricePerUnit,
+			"queryPriceSats":        l.QueryPriceSats,
+			"subscriptionPriceSats": l.SubscriptionPriceSats,
+			"freshnessClass":        l.FreshnessClass,
+			"usageRights":           string(nmu.EffectiveRights(nmu.UsageRights(l.UsageRights))),
 		})
 	}
 	unmatchedWants, _ := a.mem.DB().ListUnmatchedWants(20)

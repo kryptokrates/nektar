@@ -37,6 +37,15 @@ export function fmtBpPct(bp: number): string {
   return `${Math.round(clamped / 100)}%`
 }
 
+export function fmtSatsPerTriple(satsPer1kUnits: number): string {
+  if (!Number.isFinite(satsPer1kUnits) || satsPer1kUnits <= 0) return '0'
+  const whole = Math.floor(satsPer1kUnits / 1000)
+  const frac = Math.round(satsPer1kUnits % 1000)
+  if (frac === 0) return `${whole}`
+  const pad = String(frac).padStart(3, '0').replace(/0+$/, '')
+  return `${whole}.${pad}`
+}
+
 export function shortHost(u: string): string {
   return u.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
 }

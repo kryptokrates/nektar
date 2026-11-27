@@ -76,10 +76,12 @@ func TestNektarAnchorMethods(t *testing.T) {
 		Size:         10,
 		R:            r0,
 		Rp:           rp0,
+		StateHash:    runar.Sha256("state0"),
+		MmrRoot:      runar.Sha256("mmr0"),
 		TagRprime:    runar.ByteString("nektar:rprime:v1"),
 		OwnerPkh:     pkh,
 	}
-	c.Append(sig, pub, runar.Sha256("r1"), 20)
+	c.Append(sig, pub, runar.Sha256("r1"), 20, runar.Sha256("meta1"), runar.Sha256("mmr1"))
 	if len(c.Outputs()) != 1 {
 		t.Fatalf("Append: expected 1 output, got %d", len(c.Outputs()))
 	}

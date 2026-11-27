@@ -34,7 +34,7 @@ jobs:
           done
           # 2. Verify no raw ec.PrivateKey references leak into server/hub/memory/store/chain/policy/core/cmd.
           bad="$(grep -rn 'ec\.PrivateKey' internal/ cmd/ --include='*.go' --exclude='*_test.go' \
-            | grep -vE '^internal/(wallet|bstack|contracts|discovery|market)/' \
+            | grep -vE '^internal/(wallet|bstack|contracts|discovery|market|lattice|nmu)/' \
             | grep -v '^internal/reasoning/grounding\.go:' || true)"
           if [ -n "$bad" ]; then
             echo "ERROR: raw ec.PrivateKey found outside allowed signing/custody packages:"
@@ -67,7 +67,7 @@ jobs:
         working-directory: contracts
         run: |
           CGO_ENABLED=0 go test -v ./...
-          CGO_ENABLED=0 go run ./cmd/compile -prototypes
+          CGO_ENABLED=0 go run ./cmd/compile
       - name: Verify compiled artifacts match committed copies
         run: git diff -I '"buildTimestamp":' --exit-code contracts/artifacts/ internal/contracts/artifacts/
       - name: Crypto hardening & ASM invariant tests

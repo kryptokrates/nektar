@@ -70,6 +70,19 @@ func ValidateShardName(shard string, allowSystem bool) error {
 	return nil
 }
 
+// SupersessionEvent notifies subscribers (Grade S live SSE feeds) when a new fragment supersedes an older one.
+type SupersessionEvent struct {
+	Shard         string `json:"shard"`
+	NewSeq        int64  `json:"newSeq"`
+	NewLeaf       string `json:"newLeaf"`
+	NewHDP        string `json:"newHdp"`
+	SupersededSeq int64  `json:"supersededSeq"`
+	OntologyID    string `json:"ontologyId,omitempty"`
+	EdgesRoot     string `json:"edgesRoot,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+	Timestamp     int64  `json:"timestamp"`
+}
+
 // Config configures a NektarMemory service instance.
 type Config struct {
 	PolicyText    string
@@ -117,7 +130,8 @@ type Service struct {
 	ontologyHead   string
 	verifyBaseURL  string
 	modelID        reasoning.ModelIdentity
-	onRemember     func(shard string)
+	onRemember       func(shard string)
+	onSupersede      func(ev SupersessionEvent)
 	jevEval          jev.Evaluator
 	ontCacheMu       sync.RWMutex
 	ontCache         map[string]*jevgraph.CompiledOntology
@@ -412,6 +426,14 @@ func (s *Service) lockShard(shard string) func() {
 func (s *Service) SetOnRemember(fn func(shard string)) {
 	s.mu.Lock()
 	s.onRemember = fn
+	s.mu.Unlock()
+}
+
+// SetOnSupersede registers an optional hook invoked whenever a non-dedup fragment supersedes
+// an older fragment via Supersedes or core.RefinementSupersedes (powering Grade S live SSE feeds).
+func (s *Service) SetOnSupersede(fn func(ev SupersessionEvent)) {
+	s.mu.Lock()
+	s.onSupersede = fn
 	s.mu.Unlock()
 }
 

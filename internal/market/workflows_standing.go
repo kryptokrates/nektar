@@ -8,6 +8,7 @@ import (
 	restate "github.com/restatedev/sdk-go"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/reputation"
 )
 
@@ -99,6 +100,11 @@ func (e *Engine) restateStandingOrderRun(ctx restate.WorkflowContext, in Standin
 		AllowBridge:            in.AllowBridge,
 		RequireTrustedOrBonded: reqTrust,
 		MaxSats:                maxSats,
+		MinGrade:               string(nmu.NormalizeGrade(in.MinGrade)),
+		MaxSatsPer1kUnits:      in.MaxSatsPer1kUnits,
+		FreshnessClass:         string(nmu.NormalizeFreshness(in.FreshnessClass)),
+		RequiredRights:         string(nmu.NormalizeRights(in.RequiredRights)),
+		PricingMode:            string(nmu.NormalizePricingMode(in.PricingMode)),
 		TargetShard:            strings.TrimSpace(in.TargetShard),
 		AgentID:                strings.TrimSpace(in.AgentID),
 		ExpiresAtUnix:          initNow + int64(ttl.Seconds()),
@@ -111,7 +117,7 @@ func (e *Engine) restateStandingOrderRun(ctx restate.WorkflowContext, in Standin
 		e.upsertStandingOrderIndex(st)
 		// Publish an initial WantAd across active hubs so currently online sellers quote immediately.
 		if br := e.getBroker(); br != nil {
-			_ = br.PublishWantForStandingOrder(rctx, orderID, doms, st.Query, st.OntologyID, st.MaxSats)
+			_ = br.PublishWantForStandingOrderNMU(rctx, st)
 		}
 		return true, nil
 	}, restate.WithName("standing_order_register_and_announce"))
@@ -251,6 +257,11 @@ func (e *Engine) restateStandingOrderRun(ctx restate.WorkflowContext, in Standin
 					restate.Set(ctx, "state", st)
 					continue
 				}
+				if !standingOrderNMUMatches(st.MinGrade, st.MaxSatsPer1kUnits, st.FreshnessClass, st.RequiredRights, st.PricingMode, off, nowUnix) {
+					st.UpdatedAt = nowUnix
+					restate.Set(ctx, "state", st)
+					continue
+				}
 				if st.OntologyID != "" {
 					ontOK, oErr := restate.Run(ctx, func(rctx restate.RunContext) (bool, error) {
 						return standingOrderOntologyMatches(rctx, e.mem, st.OntologyID, st.AllowBridge, off.OntologyID), nil
@@ -314,12 +325,17 @@ func (e *Engine) restateStandingOrderRun(ctx restate.WorkflowContext, in Standin
 				restate.Set(ctx, "state", st)
 
 				wantAd := bstack.WantAd{
-					WantID:     dealID,
-					Domains:    st.Domains,
-					Query:      st.Query,
-					OntologyID: st.OntologyID,
-					MaxSats:    st.MaxSats,
-					Pub:        off.BuyerPub,
+					WantID:            dealID,
+					Domains:           st.Domains,
+					Query:             st.Query,
+					OntologyID:        st.OntologyID,
+					MaxSats:           st.MaxSats,
+					MinGrade:          st.MinGrade,
+					MaxSatsPer1kUnits: st.MaxSatsPer1kUnits,
+					FreshnessClass:    st.FreshnessClass,
+					RequiredRights:    st.RequiredRights,
+					PricingMode:       st.PricingMode,
+					Pub:               off.BuyerPub,
 				}
 				if wantAd.Pub == "" && e.mem != nil && e.mem.Chain() != nil {
 					wantAd.Pub = e.mem.Chain().IdentityPubHex()

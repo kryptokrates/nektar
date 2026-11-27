@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -22,6 +23,9 @@ func (b *Broker) Want(ctx context.Context, req WantRequest) (*store.DealRecord, 
 	}
 	if strings.TrimSpace(req.Question) == "" {
 		return nil, errors.New("market: question is required")
+	}
+	if err := nmu.ValidateWantFilters(req.MinGrade, req.FreshnessClass, req.RequiredRights, req.PricingMode); err != nil {
+		return nil, err
 	}
 	if req.MaxSats == 0 {
 		var maxPolicyDeal uint64 = 500
@@ -55,15 +59,20 @@ func (b *Broker) Want(ctx context.Context, req WantRequest) (*store.DealRecord, 
 	}
 	wantID := fmt.Sprintf("want-%s-%s", shortPub(b.PubHex()), randIDHex())
 	want := bstack.WantAd{
-		WantID:     wantID,
-		Pub:        b.PubHex(),
-		Net:        b.mem.Chain().Network(),
-		Domains:    wantDomains,
-		Query:      req.Question,
-		OntologyID: strings.ToLower(strings.TrimSpace(req.OntologyID)),
-		MaxSats:    req.MaxSats,
-		Revision:   1,
-		Exp:        time.Now().Add(30 * time.Minute).UnixMilli(),
+		WantID:            wantID,
+		Pub:               b.PubHex(),
+		Net:               b.mem.Chain().Network(),
+		Domains:           wantDomains,
+		Query:             req.Question,
+		OntologyID:        strings.ToLower(strings.TrimSpace(req.OntologyID)),
+		MaxSats:           req.MaxSats,
+		MinGrade:          string(nmu.NormalizeGrade(req.MinGrade)),
+		MaxSatsPer1kUnits: req.MaxSatsPer1kUnits,
+		FreshnessClass:    string(nmu.NormalizeFreshness(req.FreshnessClass)),
+		RequiredRights:    string(nmu.NormalizeRights(req.RequiredRights)),
+		PricingMode:       string(nmu.NormalizePricingMode(req.PricingMode)),
+		Revision:          1,
+		Exp:               time.Now().Add(30 * time.Minute).UnixMilli(),
 	}
 
 	// Fail closed immediately before launching a Restate workflow when operator kill switch is engaged.

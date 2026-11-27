@@ -5,7 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/kryptokrates/nektar/internal/nmu"
 )
+
+// DefaultSubscriptionDurationSec is the default 7-day Shard Feed subscription window.
+const DefaultSubscriptionDurationSec int64 = 7 * 86400
 
 // HostRecord tracks a configured, discovered, or user-blocked market hub host URL.
 type HostRecord struct {
@@ -17,16 +22,62 @@ type HostRecord struct {
 }
 
 // SellListing persists a shard offered for sale on the knowledge market.
+// Multi-mode by design: PriceSats > 0 (spot), QueryPriceSats > 0 (per_query), and
+// SubscriptionPriceSats > 0 (subscription) operate as independent enabled contract modes on the same shard.
 type SellListing struct {
-	Shard              string   `json:"shard"`
-	Domains            []string `json:"domains"`
-	PriceSats          uint64   `json:"priceSats"`
-	Description        string   `json:"description,omitempty"`
-	OntologyID         string   `json:"ontologyId,omitempty"`
-	AllowRaw           bool     `json:"allowRaw,omitempty"`
-	DynamicPricingJSON []byte   `json:"dynamicPricingJson,omitempty"`
-	Active             bool     `json:"active"`
-	CreatedAt          int64    `json:"createdAt"`
+	Shard                   string   `json:"shard"`
+	Domains                 []string `json:"domains"`
+	PriceSats               uint64   `json:"priceSats"`
+	PricePerUnit            bool     `json:"pricePerUnit,omitempty"`            // when true, PriceSats is satsPer1kUnits (milli-sats per triple)
+	QueryPriceSats          uint64   `json:"queryPriceSats,omitempty"`          // > 0 enables per_query BRC-105 HTTP 402 metered recall
+	SubscriptionPriceSats   uint64   `json:"subscriptionPriceSats,omitempty"`   // > 0 enables subscription SSE Shard Feed & Grade S updates
+	SubscriptionDurationSec int64    `json:"subscriptionDurationSec,omitempty"` // duration seconds (defaults to 7 days when SubscriptionPriceSats > 0)
+	FreshnessClass          string   `json:"freshnessClass,omitempty"`          // default ephemeral | versioned | evergreen
+	UsageRights             string   `json:"usageRights,omitempty"`             // inference_only | distill_resellable
+	MinAdvertisedGrade      string   `json:"minAdvertisedGrade,omitempty"`      // optional minimum grade floor (C | B | A | S)
+	Description             string   `json:"description,omitempty"`
+	OntologyID              string   `json:"ontologyId,omitempty"`
+	AllowRaw                bool     `json:"allowRaw,omitempty"`
+	DynamicPricingJSON      []byte   `json:"dynamicPricingJson,omitempty"`
+	Active                  bool     `json:"active"`
+	CreatedAt               int64    `json:"createdAt"`
+}
+
+// EnabledModes returns all independently enabled NMU-1 pricing modes on this SellListing.
+func (l SellListing) EnabledModes() []nmu.PricingMode {
+	var modes []nmu.PricingMode
+	if l.PriceSats > 0 {
+		modes = append(modes, nmu.ModeSpot)
+	}
+	if l.QueryPriceSats > 0 {
+		modes = append(modes, nmu.ModePerQuery)
+	}
+	if l.SubscriptionPriceSats > 0 {
+		modes = append(modes, nmu.ModeSubscription)
+	}
+	if len(modes) == 0 {
+		modes = []nmu.PricingMode{nmu.ModeSpot}
+	}
+	return modes
+}
+
+// SupportsMode reports whether this SellListing serves the requested NMU-1 contract mode.
+func (l SellListing) SupportsMode(mode nmu.PricingMode) bool {
+	target := nmu.EffectivePricingMode(mode)
+	for _, m := range l.EnabledModes() {
+		if m == target {
+			return true
+		}
+	}
+	return false
+}
+
+// EffectiveSubscriptionDurationSec returns SubscriptionDurationSec or the 7-day default.
+func (l SellListing) EffectiveSubscriptionDurationSec() int64 {
+	if l.SubscriptionDurationSec > 0 {
+		return l.SubscriptionDurationSec
+	}
+	return DefaultSubscriptionDurationSec
 }
 
 // OperatorPolicyRecord persists an operator-approved market spending/selling policy.
@@ -444,6 +495,11 @@ CREATE INDEX IF NOT EXISTS idx_obligations_status ON obligations(status, deadlin
 	}
 	if userVer < 8 {
 		if err := runVersionStep(8, migrateEconomicsTx); err != nil {
+			return err
+		}
+	}
+	if userVer < 9 {
+		if err := runVersionStep(9, migrateNMUTx); err != nil {
 			return err
 		}
 	}

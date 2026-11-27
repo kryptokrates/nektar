@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/nmu"
 )
 
 // StartStandingOrder launches a durable 0%-CPU Restate StandingOrder workflow ("Limit-Order for Knowledge").
@@ -19,6 +20,9 @@ func (b *Broker) StartStandingOrder(ctx context.Context, in StandingOrderInput) 
 	}
 	if len(in.Domains) == 0 {
 		in.Domains = []string{"ops"}
+	}
+	if err := nmu.ValidateWantFilters(in.MinGrade, in.FreshnessClass, in.RequiredRights, in.PricingMode); err != nil {
+		return nil, err
 	}
 	if in.OrderID == "" {
 		in.OrderID = fmt.Sprintf("so-%s-%s", shortPub(b.PubHex()), randIDHex())
@@ -43,20 +47,25 @@ func (b *Broker) StartStandingOrder(ctx context.Context, in StandingOrderInput) 
 		ttlSec = 86400
 	}
 	st := StandingOrderState{
-		OrderID:       in.OrderID,
-		InvocationID:  invID,
-		WaitingSeq:    1,
-		Status:        "watching",
-		Domains:       in.Domains,
-		Query:         strings.TrimSpace(in.Query),
-		OntologyID:    strings.ToLower(strings.TrimSpace(in.OntologyID)),
-		AllowBridge:   in.AllowBridge,
-		MaxSats:       in.MaxSats,
-		TargetShard:   strings.TrimSpace(in.TargetShard),
-		AgentID:       strings.TrimSpace(in.AgentID),
-		ExpiresAtUnix: now + ttlSec,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		OrderID:           in.OrderID,
+		InvocationID:      invID,
+		WaitingSeq:        1,
+		Status:            "watching",
+		Domains:           in.Domains,
+		Query:             strings.TrimSpace(in.Query),
+		OntologyID:        strings.ToLower(strings.TrimSpace(in.OntologyID)),
+		AllowBridge:       in.AllowBridge,
+		MaxSats:           in.MaxSats,
+		MinGrade:          string(nmu.NormalizeGrade(in.MinGrade)),
+		MaxSatsPer1kUnits: in.MaxSatsPer1kUnits,
+		FreshnessClass:    string(nmu.NormalizeFreshness(in.FreshnessClass)),
+		RequiredRights:    string(nmu.NormalizeRights(in.RequiredRights)),
+		PricingMode:       string(nmu.NormalizePricingMode(in.PricingMode)),
+		TargetShard:       strings.TrimSpace(in.TargetShard),
+		AgentID:           strings.TrimSpace(in.AgentID),
+		ExpiresAtUnix:     now + ttlSec,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 	b.engine.upsertStandingOrderIndex(st)
 	b.notify("standing_order_created", map[string]any{"orderId": st.OrderID, "domains": st.Domains, "maxSats": st.MaxSats})
@@ -82,17 +91,22 @@ func (b *Broker) ListStandingOrders(ctx context.Context) []StandingOrderState {
 			}
 		}
 		out = append(out, StandingOrderState{
-			OrderID:       e.OrderID,
-			Status:        e.Status,
-			Domains:       e.Domains,
-			Query:         e.Query,
-			OntologyID:    e.OntologyID,
-			AllowBridge:   e.AllowBridge,
-			MaxSats:       e.MaxSats,
-			TargetShard:   e.TargetShard,
-			AgentID:       e.AgentID,
-			ExpiresAtUnix: e.ExpiresAtUnix,
-			UpdatedAt:     e.UpdatedAt,
+			OrderID:           e.OrderID,
+			Status:            e.Status,
+			Domains:           e.Domains,
+			Query:             e.Query,
+			OntologyID:        e.OntologyID,
+			AllowBridge:       e.AllowBridge,
+			MaxSats:           e.MaxSats,
+			MinGrade:          e.MinGrade,
+			MaxSatsPer1kUnits: e.MaxSatsPer1kUnits,
+			FreshnessClass:    e.FreshnessClass,
+			RequiredRights:    e.RequiredRights,
+			PricingMode:       e.PricingMode,
+			TargetShard:       e.TargetShard,
+			AgentID:           e.AgentID,
+			ExpiresAtUnix:     e.ExpiresAtUnix,
+			UpdatedAt:         e.UpdatedAt,
 		})
 	}
 	return out
@@ -127,6 +141,17 @@ func (b *Broker) CancelStandingOrder(ctx context.Context, orderID, reason string
 // PublishWantForStandingOrder signs and broadcasts a KindWant across active hubs so currently online
 // or newly announced sellers quote OfferAds that wake the sleeping StandingOrder.
 func (b *Broker) PublishWantForStandingOrder(ctx context.Context, orderID string, domains []string, query, ontologyID string, maxSats uint64) error {
+	return b.PublishWantForStandingOrderNMU(ctx, StandingOrderState{
+		OrderID:    orderID,
+		Domains:    domains,
+		Query:      query,
+		OntologyID: ontologyID,
+		MaxSats:    maxSats,
+	})
+}
+
+// PublishWantForStandingOrderNMU broadcasts a StandingOrder WantAd carrying all NMU-1 commodity filters.
+func (b *Broker) PublishWantForStandingOrderNMU(ctx context.Context, st StandingOrderState) error {
 	if b == nil || b.disc == nil || b.mem == nil || b.mem.Chain() == nil || b.engine == nil || b.engine.saleKey == nil {
 		return nil
 	}
@@ -134,23 +159,29 @@ func (b *Broker) PublishWantForStandingOrder(ctx context.Context, orderID string
 	if len(hosts) == 0 {
 		return nil
 	}
+	domains := st.Domains
 	if len(domains) == 0 {
 		domains = []string{"ops"}
 	}
-	q := strings.TrimSpace(query)
+	q := strings.TrimSpace(st.Query)
 	if q == "" {
 		q = "standing order: " + strings.Join(domains, ",")
 	}
 	want := bstack.WantAd{
-		WantID:     fmt.Sprintf("sow-%s-%s", shortPub(orderID), randIDHex()[:8]),
-		Pub:        b.PubHex(),
-		Net:        b.mem.Chain().Network(),
-		Domains:    domains,
-		Query:      q,
-		OntologyID: strings.ToLower(strings.TrimSpace(ontologyID)),
-		MaxSats:    maxSats,
-		Revision:   1,
-		Exp:        time.Now().Add(30 * time.Minute).UnixMilli(),
+		WantID:            fmt.Sprintf("sow-%s-%s", shortPub(st.OrderID), randIDHex()[:8]),
+		Pub:               b.PubHex(),
+		Net:               b.mem.Chain().Network(),
+		Domains:           domains,
+		Query:             q,
+		OntologyID:        strings.ToLower(strings.TrimSpace(st.OntologyID)),
+		MaxSats:           st.MaxSats,
+		MinGrade:          string(nmu.NormalizeGrade(st.MinGrade)),
+		MaxSatsPer1kUnits: st.MaxSatsPer1kUnits,
+		FreshnessClass:    string(nmu.NormalizeFreshness(st.FreshnessClass)),
+		RequiredRights:    string(nmu.NormalizeRights(st.RequiredRights)),
+		PricingMode:       string(nmu.NormalizePricingMode(st.PricingMode)),
+		Revision:          1,
+		Exp:               time.Now().Add(30 * time.Minute).UnixMilli(),
 	}
 	sig, err := bstack.SignArtifact(b.engine.saleKey, want)
 	if err != nil {
@@ -163,4 +194,26 @@ func (b *Broker) PublishWantForStandingOrder(ctx context.Context, orderID string
 	topics := lanesForDomains(want.Net, want.Domains)
 	_, err = b.disc.BuildAndSubmitMarketAd(ctx, b.engine.saleKey, bstack.MarketPayload{Kind: bstack.KindWant, Body: body}, hosts, topics)
 	return err
+}
+
+func standingOrderNMUMatches(minGrade string, maxSatsPer1k uint64, freshness, reqRights, mode string, off bstack.OfferAd, nowUnix int64) bool {
+	if nmu.IsExpired(nmu.FreshnessClass(off.FreshnessClass), off.ValidUntilUnix, nowUnix) {
+		return false
+	}
+	if mg := nmu.NormalizeGrade(minGrade); mg != "" && !nmu.MeetsMinGrade(nmu.Grade(off.Grade), mg) {
+		return false
+	}
+	if rr := nmu.NormalizeRights(reqRights); rr != "" && !nmu.MeetsRequiredRights(nmu.UsageRights(off.UsageRights), rr) {
+		return false
+	}
+	if fc := nmu.NormalizeFreshness(freshness); fc != "" && nmu.NormalizeFreshness(off.FreshnessClass) != fc {
+		return false
+	}
+	if pm := nmu.NormalizePricingMode(mode); pm != "" && nmu.EffectivePricingMode(nmu.PricingMode(off.PricingMode)) != pm {
+		return false
+	}
+	if maxSatsPer1k > 0 && effectiveOfferUnitRate(off) > maxSatsPer1k {
+		return false
+	}
+	return true
 }

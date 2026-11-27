@@ -293,6 +293,7 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 			PaymentTxID:        txid,
 			PaymentOutputIndex: req.OutputIndex,
 			KeyCommitment:      sale.SaleOffer.KeyCommitment,
+			NMU:                sale.OfferNMU,
 			SettledAt:          time.Now().Unix(),
 		}
 		if freshPB != nil {

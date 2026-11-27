@@ -365,6 +365,9 @@ func (d *DB) ForgetFragment(shard string, seq int64) error {
 	if _, err := tx.Exec(`DELETE FROM fragment_graph_meta WHERE shard = ? AND seq = ?`, shard, seq); err != nil {
 		return fmt.Errorf("store: shred fragment_graph_meta: %w", err)
 	}
+	if _, err := tx.Exec(`DELETE FROM fragment_nmu_meta WHERE shard = ? AND seq = ?`, shard, seq); err != nil {
+		return fmt.Errorf("store: shred fragment_nmu_meta: %w", err)
+	}
 	if commitHash != "" {
 		if _, err := tx.Exec(`UPDATE mem_commits SET message = '[shredded]' WHERE commit_hash = ?`, commitHash); err != nil {
 			return fmt.Errorf("store: shred commit message: %w", err)

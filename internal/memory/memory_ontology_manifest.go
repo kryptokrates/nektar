@@ -71,6 +71,7 @@ func (s *Service) CommitOntology(ctx context.Context, man reasoning.OntologyMani
 	if s.db != nil {
 		_, _ = s.db.GetJSON(manifestOntologyKVKey, &reg)
 		reg[ontID] = ref
+		reg[fin.Hash] = ref
 		reg[repo] = ref
 		reg[fin.Domain] = ref
 		_ = s.db.SetJSON(manifestOntologyKVKey, reg)
@@ -80,6 +81,26 @@ func (s *Service) CommitOntology(ctx context.Context, man reasoning.OntologyMani
 		Manifest: *fin,
 		Rules:    rules,
 	}, nil
+}
+
+// ResolveOntologyPredicateSet returns the exact declared predicate set for ontID if this node holds
+// the matching JevGraph CompiledOntology or reasoning.OntologyManifest locally, else nil.
+func (s *Service) ResolveOntologyPredicateSet(ctx context.Context, ontID string) map[string]struct{} {
+	key := strings.TrimSpace(ontID)
+	if key == "" {
+		return nil
+	}
+	if comp, _, err := s.LoadDomainOntology(ctx, key); err == nil && comp != nil {
+		if ps := comp.PredicateSet(); len(ps) > 0 {
+			return ps
+		}
+	}
+	if loaded, err := s.ResolveOntology(ctx, key); err == nil && loaded != nil {
+		if ps := loaded.Manifest.PredicateSet(); len(ps) > 0 {
+			return ps
+		}
+	}
+	return nil
 }
 
 // ResolveOntology resolves a committed reasoning.OntologyManifest by domain, `ont-<domain>` repo name, or canonical OntologyID.

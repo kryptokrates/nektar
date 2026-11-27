@@ -80,15 +80,20 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 				sendOpts = append(sendOpts, restate.WithHeaders(hdrs))
 			}
 			restate.WorkflowSend(ctx, "StandingOrder", orderID, "run").Send(StandingOrderInput{
-				OrderID:         orderID,
-				Domains:         want.Domains,
-				Query:           want.Query,
-				OntologyID:      want.OntologyID,
-				MaxSats:         want.MaxSats,
-				TargetShard:     in.TargetShard,
-				TTL:             in.StandingTTL,
-				WaitTimeout:     in.WaitTimeout,
-				ApprovalTimeout: in.ApprovalTimeout,
+				OrderID:           orderID,
+				Domains:           want.Domains,
+				Query:             want.Query,
+				OntologyID:        want.OntologyID,
+				MaxSats:           want.MaxSats,
+				MinGrade:          want.MinGrade,
+				MaxSatsPer1kUnits: want.MaxSatsPer1kUnits,
+				FreshnessClass:    want.FreshnessClass,
+				RequiredRights:    want.RequiredRights,
+				PricingMode:       want.PricingMode,
+				TargetShard:       in.TargetShard,
+				TTL:               in.StandingTTL,
+				WaitTimeout:       in.WaitTimeout,
+				ApprovalTimeout:   in.ApprovalTimeout,
 			}, sendOpts...)
 			st.Status = "watching"
 			st.StandingOrderID = orderID

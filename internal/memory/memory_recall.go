@@ -13,6 +13,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/lattice"
 	"github.com/kryptokrates/nektar/internal/memrepo"
+	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/store"
 )
@@ -60,6 +61,8 @@ type RecalledFragment struct {
 	Tainted        bool                    `json:"tainted,omitempty"`
 	Distilled      bool                    `json:"distilled,omitempty"`
 	OntologyID     string                  `json:"ontologyId,omitempty"`
+	NMU            *nmu.Spec               `json:"nmu,omitempty"`
+	GradeMismatch  bool                    `json:"gradeMismatch,omitempty"`
 	SPV            *contracts.VerifyResult `json:"spv,omitempty"`
 	CreatedAt      int64                   `json:"createdAt"`
 }
@@ -371,6 +374,19 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 			Distilled:      r.Distilled,
 			OntologyID:     r.OntologyID,
 			CreatedAt:      r.CreatedAt,
+		}
+		if nm, nmErr := s.db.GetFragmentNMUMeta(r.Shard, r.Seq); nmErr == nil && nm != nil {
+			item.NMU = &nmu.Spec{
+				Version:        nmu.SpecVersion,
+				Grade:          nmu.Grade(nm.Grade),
+				UnitCount:      nm.UnitCount,
+				FreshnessClass: nmu.FreshnessClass(nm.FreshnessClass),
+				ValidUntilUnix: nm.ValidUntilUnix,
+				SubjectVersion: nm.SubjectVersion,
+				UsageRights:    nmu.EffectiveRights(nmu.UsageRights(nm.UsageRights)),
+				AdvisoryNote:   nmu.AdvisoryNMUNote,
+			}
+			item.GradeMismatch = nm.GradeMismatch
 		}
 		if r.BatchN < 0 {
 			item.AnchorState = "unanchored"

@@ -304,7 +304,18 @@ func (b *Broker) dispatchAnnounceToStandingOrders(ann bstack.AnnounceAd) {
 	}
 	b.spawnTracked(15*time.Second, func(ctx context.Context) {
 		for _, entry := range matched {
-			_ = b.PublishWantForStandingOrder(ctx, entry.OrderID, entry.Domains, entry.Query, entry.OntologyID, entry.MaxSats)
+			_ = b.PublishWantForStandingOrderNMU(ctx, StandingOrderState{
+				OrderID:           entry.OrderID,
+				Domains:           entry.Domains,
+				Query:             entry.Query,
+				OntologyID:        entry.OntologyID,
+				MaxSats:           entry.MaxSats,
+				MinGrade:          entry.MinGrade,
+				MaxSatsPer1kUnits: entry.MaxSatsPer1kUnits,
+				FreshnessClass:    entry.FreshnessClass,
+				RequiredRights:    entry.RequiredRights,
+				PricingMode:       entry.PricingMode,
+			})
 		}
 	})
 }
@@ -336,6 +347,9 @@ func (b *Broker) dispatchOfferToStandingOrders(off bstack.OfferAd) {
 			continue
 		}
 		if !standingOrderOntologyMatches(context.Background(), b.mem, entry.OntologyID, entry.AllowBridge, off.OntologyID) {
+			continue
+		}
+		if !standingOrderNMUMatches(entry.MinGrade, entry.MaxSatsPer1kUnits, entry.FreshnessClass, entry.RequiredRights, entry.PricingMode, off, now) {
 			continue
 		}
 		targets = append(targets, entry.OrderID)

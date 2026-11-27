@@ -14,6 +14,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/hub"
+	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -40,6 +41,11 @@ type WantRequest struct {
 	EstTokensSaved     uint64        `json:"estTokensSaved,omitempty"` // optional token-arbitrage hint when MaxSats == 0
 	TargetShard        string        `json:"targetShard,omitempty"`
 	OntologyID         string        `json:"ontologyId,omitempty"` // optional 64-hex OntologyID filter
+	MinGrade           string        `json:"minGrade,omitempty"`
+	MaxSatsPer1kUnits  uint64        `json:"maxSatsPer1kUnits,omitempty"`
+	FreshnessClass     string        `json:"freshnessClass,omitempty"`
+	RequiredRights     string        `json:"requiredRights,omitempty"`
+	PricingMode        string        `json:"pricingMode,omitempty"`
 	CollectTimeout     time.Duration `json:"collectTimeout,omitempty"`
 	StandingTTLSeconds int64         `json:"standingTtlSeconds,omitempty"`
 	ApprovedOverrideID string        `json:"approvedOverrideId,omitempty"`
@@ -47,15 +53,22 @@ type WantRequest struct {
 
 // SellInput arms a local memory shard for autonomous quoting & selling on the market.
 type SellInput struct {
-	Shard          string   `json:"shard"`
-	Domains        []string `json:"domains"`
-	PriceSats      uint64   `json:"priceSats"`
-	Description    string   `json:"description,omitempty"`
-	OntologyID     string   `json:"ontologyId,omitempty"`
-	AllowRaw       bool     `json:"allowRaw,omitempty"` // explicit operator bypass for non-distilled raw shards
-	DynamicPricing bool     `json:"dynamicPricing,omitempty"`
-	FloorSats      uint64   `json:"floorSats,omitempty"`
-	CeilingSats    uint64   `json:"ceilingSats,omitempty"`
+	Shard                   string   `json:"shard"`
+	Domains                 []string `json:"domains"`
+	PriceSats               uint64   `json:"priceSats"`
+	PricePerUnit            bool     `json:"pricePerUnit,omitempty"`
+	QueryPriceSats          uint64   `json:"queryPriceSats,omitempty"`
+	SubscriptionPriceSats   uint64   `json:"subscriptionPriceSats,omitempty"`
+	SubscriptionDurationSec int64    `json:"subscriptionDurationSec,omitempty"`
+	FreshnessClass          string   `json:"freshnessClass,omitempty"`
+	UsageRights             string   `json:"usageRights,omitempty"`
+	MinAdvertisedGrade      string   `json:"minAdvertisedGrade,omitempty"`
+	Description             string   `json:"description,omitempty"`
+	OntologyID              string   `json:"ontologyId,omitempty"`
+	AllowRaw                bool     `json:"allowRaw,omitempty"` // explicit operator bypass for non-distilled raw shards
+	DynamicPricing          bool     `json:"dynamicPricing,omitempty"`
+	FloorSats               uint64   `json:"floorSats,omitempty"`
+	CeilingSats             uint64   `json:"ceilingSats,omitempty"`
 }
 
 // PurchaseRequest is sent from Buyer to Seller (via direct HTTP POST /v1/market/purchase OR Hub NAT /bbox/send).
@@ -136,6 +149,7 @@ type pendingSale struct {
 	Shard       string
 	Seq         int64
 	SaleOffer   *contracts.KeyedSaleOffer
+	OfferNMU    *nmu.Spec
 	RevealKey   [32]byte
 	ChirpURL    string
 	ProofBundle *contracts.ProofBundle

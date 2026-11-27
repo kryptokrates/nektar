@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/policy"
 )
 
@@ -43,7 +44,8 @@ type DealReceipt struct {
 	PaymentOutputIndex uint32                  `json:"paymentOutputIndex,omitempty"`
 	KeyCommitment      string                  `json:"keyCommitment"`
 	FragmentLeaf       string                  `json:"fragmentLeaf,omitempty"`
-	FieldsRoot         string                  `json:"fieldsRoot"` // MPE root over canonical receipt fields for selective audit disclosure
+	NMU                *nmu.Spec               `json:"nmu,omitempty"` // non-repudiable NMU-1 commodity terms bound into FieldsRoot
+	FieldsRoot         string                  `json:"fieldsRoot"`    // MPE root over canonical receipt fields for selective audit disclosure
 	SettledAt          int64                   `json:"settledAt"`
 	SellerSig          string                  `json:"sellerSig,omitempty"` // low-S DER signature by SellerPub over DealReceiptDigest
 	BuyerSig           string                  `json:"buyerSig,omitempty"`  // low-S DER countersignature by BuyerPub over DealReceiptDigest
@@ -91,6 +93,35 @@ func (r DealReceipt) CanonicalFields() map[string][]byte {
 	if r.CedarDecision != nil {
 		m["cedarPolicySetHash"] = []byte(r.CedarDecision.PolicySetHash)
 		m["cedarDecision"] = []byte(r.CedarDecision.Decision)
+	}
+	if r.NMU != nil && !r.NMU.IsEmpty() {
+		if r.NMU.Grade != "" {
+			m["nmuGrade"] = []byte(nmu.NormalizeGrade(string(r.NMU.Grade)))
+		}
+		if r.NMU.UnitCount > 0 {
+			m["nmuUnitCount"] = []byte(strconv.FormatUint(uint64(r.NMU.UnitCount), 10))
+		}
+		if r.NMU.SatsPer1kUnits > 0 {
+			m["nmuSatsPer1kUnits"] = []byte(strconv.FormatUint(r.NMU.SatsPer1kUnits, 10))
+		}
+		if r.NMU.FreshnessClass != "" {
+			m["nmuFreshnessClass"] = []byte(nmu.NormalizeFreshness(string(r.NMU.FreshnessClass)))
+		}
+		if r.NMU.ValidUntilUnix > 0 {
+			m["nmuValidUntilUnix"] = []byte(strconv.FormatInt(r.NMU.ValidUntilUnix, 10))
+		}
+		if r.NMU.SubjectVersion != "" {
+			m["nmuSubjectVersion"] = []byte(r.NMU.SubjectVersion)
+		}
+		if r.NMU.UsageRights != "" {
+			m["nmuUsageRights"] = []byte(nmu.EffectiveRights(r.NMU.UsageRights))
+		}
+		if r.NMU.PricingMode != "" {
+			m["nmuPricingMode"] = []byte(nmu.EffectivePricingMode(r.NMU.PricingMode))
+		}
+		if r.NMU.FeedURL != "" {
+			m["nmuFeedUrl"] = []byte(r.NMU.FeedURL)
+		}
 	}
 	return m
 }

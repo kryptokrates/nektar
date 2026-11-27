@@ -16,6 +16,11 @@ type BuyerEvalInput struct {
 	RefundOrTimeout       bool
 	DeliveryLatencyMs     int64
 	GroundedTriples       int
+	GradeMismatch         bool  // NMU-1 post-reveal grade/unit shortfall or expiry violation
+	SlashAccCapBP         int64 // optional cap for AccBP when GradeMismatch is true (default 2000)
+	SlashDispCapBP        int64 // optional cap for DispBP when GradeMismatch is true (default 2500)
+	SlashProvCapBP        int64 // optional cap for ProvBP when GradeMismatch is true (default 2500)
+	FeedDroppedEarly      bool  // Grade S subscription feed returned 404/410/5xx or dropped before expires_at
 }
 
 // EvaluatePurchasedFragment deterministically scores a seller across all 6 reputation dimensions
@@ -93,6 +98,47 @@ func EvaluatePurchasedFragment(in BuyerEvalInput) Vector6D {
 		prov += 1000
 	}
 	prov = ClampBP(prov)
+
+	// NMU-1 post-reveal grade inflation slashing: cap AccBP, DispBP, ProvBP, and CollabBP
+	// so dishonest sellers lose Grade S/A ranking bonuses and trigger Mangle trust exclusion.
+	if in.GradeMismatch {
+		accCap := in.SlashAccCapBP
+		if accCap <= 0 {
+			accCap = 2000
+		}
+		dispCap := in.SlashDispCapBP
+		if dispCap <= 0 {
+			dispCap = 2500
+		}
+		provCap := in.SlashProvCapBP
+		if provCap <= 0 {
+			provCap = 2500
+		}
+		if acc > accCap {
+			acc = accCap
+		}
+		if disp > dispCap {
+			disp = dispCap
+		}
+		if prov > provCap {
+			prov = provCap
+		}
+		if collab > 3000 {
+			collab = 3000
+		}
+		if pred > 3000 {
+			pred = 3000
+		}
+	}
+	// Grade S dead-feed penalty when a paid subscription stream drops/404s before expires_at.
+	if in.FeedDroppedEarly {
+		if disp > 2500 {
+			disp = 2500
+		}
+		if collab > 3500 {
+			collab = 3500
+		}
+	}
 
 	return Vector6D{
 		SubjectPub:  in.SellerPub,

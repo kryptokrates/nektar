@@ -15,6 +15,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/jevgraph"
 	"github.com/kryptokrates/nektar/internal/memrepo"
+	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/reasoning"
 	"github.com/kryptokrates/nektar/internal/store"
@@ -52,6 +53,14 @@ type RememberInput struct {
 	OntologyStrict    bool                     `json:"ontologyStrict,omitempty"` // fail closed if Jev evaluator is offline
 	EntityHints       []jevgraph.EntityEntry   `json:"entityHints,omitempty"`
 	PreExtractedEdges []jevgraph.ExtractedEdge `json:"preExtractedEdges,omitempty"`
+	DistilledEdges    []jevgraph.ExtractedEdge `json:"distilledEdges,omitempty"` // verbatim-span edges produced by SleepCycle distillation
+	NMU               *nmu.Spec                `json:"nmu,omitempty"`            // optional NMU-1 commodity metadata
+	FreshnessClass    string                   `json:"freshnessClass,omitempty"`
+	ValidUntilUnix    int64                    `json:"validUntilUnix,omitempty"`
+	SubjectVersion    string                   `json:"subjectVersion,omitempty"`
+	UsageRights       string                   `json:"usageRights,omitempty"`
+	GradeMismatch     bool                     `json:"gradeMismatch,omitempty"`   // true when buyer post-reveal verification flagged downgrade
+	QuarantineEdges   bool                     `json:"quarantineEdges,omitempty"` // when true, skip indexing untrusted edges into knowledge_edges
 }
 
 // RememberResult summarizes a persisted, Git-committed, automaton-transitioned fragment.
@@ -81,6 +90,7 @@ type RememberResult struct {
 	OntologyID       string                     `json:"ontologyId,omitempty"`
 	EdgesRoot        string                     `json:"edgesRoot,omitempty"`
 	Extraction       *jevgraph.ExtractionResult `json:"extraction,omitempty"`
+	NMU              *nmu.Spec                  `json:"nmu,omitempty"`
 }
 
 // Remember commits a provenance-signed fragment (text, semantic triples, or volumetric blob) into a
@@ -338,9 +348,10 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 
 	// Build L1 MPE commitment over fragment metadata (including final chirpURL and optional JevGraph commitment).
 	var (
-		ontologyID    string
-		edgesRoot     string
-		extractionRes *jevgraph.ExtractionResult
+		ontologyID        string
+		edgesRoot         string
+		extractionRes     *jevgraph.ExtractionResult
+		allowedPredicates map[string]struct{}
 	)
 	if strings.TrimSpace(in.Ontology) != "" {
 		compiledOnt, _, oErr := s.LoadDomainOntology(ctx, in.Ontology)
@@ -348,6 +359,7 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 			return nil, fmt.Errorf("memory: load domain ontology %q: %w", in.Ontology, oErr)
 		}
 		ontologyID = compiledOnt.ID
+		allowedPredicates = compiledOnt.PredicateSet()
 		existingTriples := s.activeShardTriples(in.Shard, ontologyID)
 
 		if len(in.PreExtractedEdges) > 0 {
@@ -407,6 +419,46 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 			extractionRes = res
 			edgesRoot = res.EdgesRoot
 		}
+	} else if len(in.DistilledEdges) > 0 {
+		// Bridge SleepCycle distilled triples + verbatim spans into unified L1 MPE EdgesRoot & knowledge_edges.
+		if in.Extra != nil && strings.TrimSpace(in.Extra["ontologyId"]) != "" {
+			ontologyID = strings.ToLower(strings.TrimSpace(in.Extra["ontologyId"]))
+		}
+		var accepted []jevgraph.ExtractedEdge
+		for _, de := range in.DistilledEdges {
+			if ontologyID == "" && de.OntologyID != "" {
+				ontologyID = strings.ToLower(strings.TrimSpace(de.OntologyID))
+			}
+			fin, tErr := reasoning.FinalizeTriple(de.Triple)
+			if tErr != nil {
+				continue
+			}
+			de.Triple = fin
+			if de.OntologyID == "" {
+				de.OntologyID = ontologyID
+			}
+			if de.Status == "" {
+				de.Status = jevgraph.EdgeAccepted
+			}
+			if de.Status == jevgraph.EdgeAccepted {
+				accepted = append(accepted, de)
+			}
+		}
+		if len(accepted) > 0 {
+			er, rErr := jevgraph.ComputeEdgesRoot(accepted)
+			if rErr != nil {
+				return nil, fmt.Errorf("memory: compute distilled edges root: %w", rErr)
+			}
+			edgesRoot = er
+			extractionRes = &jevgraph.ExtractionResult{
+				OntologyID:      ontologyID,
+				ExtractorStatus: "distilled",
+				Edges:           accepted,
+				AcceptedCount:   len(accepted),
+				EdgesRoot:       er,
+				AdvisoryNote:    jevgraph.AdvisoryExtractionNote,
+			}
+		}
 	}
 
 	dataHashHex := hex.EncodeToString(core.SHA256(data))
@@ -428,6 +480,100 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 	if len(in.Triples) > 0 {
 		if rawTriples, tErr := json.Marshal(in.Triples); tErr == nil {
 			rec.TriplesJSON = rawTriples
+		}
+	} else if extractionRes != nil && len(extractionRes.Edges) > 0 && !in.QuarantineEdges {
+		var acceptedTriples []reasoning.Triple
+		for _, e := range extractionRes.Edges {
+			if e.Status == jevgraph.EdgeAccepted {
+				acceptedTriples = append(acceptedTriples, e.Triple)
+			}
+		}
+		if len(acceptedTriples) > 0 {
+			if rawTriples, tErr := json.Marshal(acceptedTriples); tErr == nil {
+				rec.TriplesJSON = rawTriples
+			}
+		}
+	}
+
+	// Resolve optional NMU-1 commodity metadata (validate enums, compute verified triple count & local grade).
+	var computedNMU *nmu.Spec
+	nmuInput := in.NMU
+	if nmuInput == nil && (strings.TrimSpace(in.FreshnessClass) != "" || in.ValidUntilUnix > 0 || strings.TrimSpace(in.SubjectVersion) != "" || strings.TrimSpace(in.UsageRights) != "" || in.GradeMismatch) {
+		nmuInput = &nmu.Spec{
+			Version:        nmu.SpecVersion,
+			FreshnessClass: nmu.NormalizeFreshness(in.FreshnessClass),
+			ValidUntilUnix: in.ValidUntilUnix,
+			SubjectVersion: strings.TrimSpace(in.SubjectVersion),
+			UsageRights:    nmu.NormalizeRights(in.UsageRights),
+		}
+	}
+	if nmuInput != nil {
+		specCopy := *nmuInput
+		if specCopy.FreshnessClass == "" && strings.TrimSpace(in.FreshnessClass) != "" {
+			specCopy.FreshnessClass = nmu.NormalizeFreshness(in.FreshnessClass)
+		}
+		if specCopy.ValidUntilUnix == 0 && in.ValidUntilUnix > 0 {
+			specCopy.ValidUntilUnix = in.ValidUntilUnix
+		}
+		if specCopy.SubjectVersion == "" && strings.TrimSpace(in.SubjectVersion) != "" {
+			specCopy.SubjectVersion = strings.TrimSpace(in.SubjectVersion)
+		}
+		if specCopy.UsageRights == "" && strings.TrimSpace(in.UsageRights) != "" {
+			specCopy.UsageRights = nmu.NormalizeRights(in.UsageRights)
+		}
+		if specCopy.FreshnessClass != "" && !nmu.ValidFreshness(nmu.NormalizeFreshness(string(specCopy.FreshnessClass))) {
+			return nil, fmt.Errorf("memory: invalid nmu freshnessClass %q", specCopy.FreshnessClass)
+		}
+		if specCopy.UsageRights != "" && !nmu.ValidRights(nmu.NormalizeRights(string(specCopy.UsageRights))) {
+			return nil, fmt.Errorf("memory: invalid nmu usageRights %q", specCopy.UsageRights)
+		}
+		if len(specCopy.SubjectVersion) > nmu.MaxSubjectVersionLen {
+			return nil, fmt.Errorf("memory: nmu subjectVersion exceeds %d bytes", nmu.MaxSubjectVersionLen)
+		}
+		specCopy.Version = nmu.SpecVersion
+		specCopy.UsageRights = nmu.EffectiveRights(specCopy.UsageRights)
+		specCopy.AdvisoryNote = nmu.AdvisoryNMUNote
+		computedNMU = &specCopy
+	}
+	if !IsSystemShard(in.Shard) && (computedNMU != nil || in.Distilled || extractionRes != nil || len(in.Triples) > 0) {
+		if computedNMU == nil {
+			computedNMU = &nmu.Spec{
+				Version:      nmu.SpecVersion,
+				UsageRights:  nmu.RightsInferenceOnly,
+				AdvisoryNote: nmu.AdvisoryNMUNote,
+			}
+		}
+		var allTriples []reasoning.Triple
+		if len(in.Triples) > 0 {
+			allTriples = append(allTriples, in.Triples...)
+		}
+		if extractionRes != nil {
+			for _, e := range extractionRes.Edges {
+				if e.Status == jevgraph.EdgeAccepted {
+					allTriples = append(allTriples, e.Triple)
+				}
+			}
+		}
+		if allowedPredicates == nil && rec.OntologyID != "" {
+			allowedPredicates = s.ResolveOntologyPredicateSet(ctx, rec.OntologyID)
+		}
+		if computedNMU.Grade == "" || computedNMU.UnitCount == 0 {
+			cls := nmu.ClassifyFragmentGrade(nmu.FragmentGradeInput{
+				HasCleanText:           strings.TrimSpace(in.Text) != "" || len(data) > 0,
+				Distilled:              in.Distilled || extractionRes != nil,
+				OntologyID:             rec.OntologyID,
+				Triples:                allTriples,
+				AllowedPredicates:      allowedPredicates,
+				MangleConsistent:       !in.GradeMismatch,
+				EdgesRoot:              edgesRoot,
+				MPEHasOntologyAndEdges: rec.OntologyID != "" && edgesRoot != "",
+			})
+			if computedNMU.Grade == "" {
+				computedNMU.Grade = cls.Grade
+			}
+			if computedNMU.UnitCount == 0 {
+				computedNMU.UnitCount = cls.UnitCount
+			}
 		}
 	}
 
@@ -669,8 +815,8 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 			if mErr := rtx.SaveFragmentGraphMeta(stored.Shard, stored.Seq, ontologyID, edgesRoot); mErr != nil {
 				return mErr
 			}
-			// Never persist plaintext extracted triples into SQLite for Borg-group secrets!
-			if extractionRes != nil && in.BorgGroup == "" && len(extractionRes.Edges) > 0 {
+			// Never persist plaintext extracted triples into SQLite for Borg-group secrets OR quarantined mismatched purchases!
+			if extractionRes != nil && in.BorgGroup == "" && !in.QuarantineEdges && len(extractionRes.Edges) > 0 {
 				rows := make([]store.KnowledgeEdgeRow, 0, len(extractionRes.Edges))
 				for _, e := range extractionRes.Edges {
 					rows = append(rows, edgeToStoreRow(stored.Shard, stored.Seq, now, e))
@@ -678,6 +824,22 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 				if kErr := rtx.SaveKnowledgeEdges(rows); kErr != nil {
 					return kErr
 				}
+			}
+		}
+		if !dedup && computedNMU != nil {
+			if nErr := rtx.SaveFragmentNMUMeta(store.FragmentNMUMeta{
+				Shard:          stored.Shard,
+				Seq:            stored.Seq,
+				Grade:          string(computedNMU.Grade),
+				UnitCount:      computedNMU.UnitCount,
+				FreshnessClass: string(computedNMU.FreshnessClass),
+				ValidUntilUnix: computedNMU.ValidUntilUnix,
+				SubjectVersion: computedNMU.SubjectVersion,
+				UsageRights:    string(nmu.EffectiveRights(computedNMU.UsageRights)),
+				GradeMismatch:  in.GradeMismatch,
+				UpdatedAt:      now,
+			}); nErr != nil {
+				return nErr
 			}
 		}
 		return nil
@@ -689,13 +851,38 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 
 	var impacted []string
 	if !dedup {
-		// Notify OnRevision for legacy Supersedes AND any signed RefinementSupersedes edge.
+		// Notify OnRevision AND Grade S live SSE OnSupersede hooks for legacy Supersedes & RefinementSupersedes edges.
+		s.mu.RLock()
+		supHook := s.onSupersede
+		s.mu.RUnlock()
+		fireSup := func(targetShard string, targetSeq int64, reason string) {
+			if supHook == nil || IsSystemShard(targetShard) {
+				return
+			}
+			ev := SupersessionEvent{
+				Shard:         targetShard,
+				NewSeq:        stored.Seq,
+				NewLeaf:       stored.Leaf,
+				NewHDP:        stored.HDP,
+				SupersededSeq: targetSeq,
+				OntologyID:    rec.OntologyID,
+				EdgesRoot:     edgesRoot,
+				Reason:        reason,
+				Timestamp:     now,
+			}
+			s.hookWG.Add(1)
+			go func(e SupersessionEvent) {
+				defer s.hookWG.Done()
+				supHook(e)
+			}(ev)
+		}
 		seenSup := make(map[string]bool)
 		if in.Supersedes > 0 {
 			seenSup[fmt.Sprintf("%s#%d", in.Shard, in.Supersedes)] = true
 			if imp, err := s.OnRevision(ctx, in.Shard, in.Supersedes); err == nil {
 				impacted = append(impacted, imp...)
 			}
+			fireSup(in.Shard, in.Supersedes, "superseded")
 		}
 		for _, e := range resolvedRefines {
 			if e.Kind == core.RefinementSupersedes && e.TargetSeq > 0 {
@@ -705,6 +892,7 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 					if imp, err := s.OnRevision(ctx, e.TargetShard, e.TargetSeq); err == nil {
 						impacted = append(impacted, imp...)
 					}
+					fireSup(e.TargetShard, e.TargetSeq, e.Reason)
 				}
 			}
 		}
@@ -753,8 +941,9 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 		Dedup:            dedup,
 		AnchorTxID:       anchorTxID,
 		ImpactedReceipts: impacted,
-		OntologyID:       ontologyID,
+		OntologyID:       rec.OntologyID,
 		EdgesRoot:        edgesRoot,
 		Extraction:       extractionRes,
+		NMU:              computedNMU,
 	}, nil
 }

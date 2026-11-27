@@ -25,6 +25,11 @@ type StandingOrderInput struct {
 	OntologyID             string        `json:"ontologyId,omitempty"`  // optional 64-hex OntologyID pin
 	AllowBridge            bool          `json:"allowBridge,omitempty"` // accept foreign OntologyID when a committed Bridge Shard exists
 	MaxSats                uint64        `json:"maxSats"`
+	MinGrade               string        `json:"minGrade,omitempty"`
+	MaxSatsPer1kUnits      uint64        `json:"maxSatsPer1kUnits,omitempty"`
+	FreshnessClass         string        `json:"freshnessClass,omitempty"`
+	RequiredRights         string        `json:"requiredRights,omitempty"`
+	PricingMode            string        `json:"pricingMode,omitempty"`
 	RequireTrustedOrBonded bool          `json:"requireTrustedOrBonded,omitempty"` // enforce Mangle trusted_seller/2 gate
 	AllowUntrusted         bool          `json:"allowUntrusted,omitempty"`         // opt out of default live-network trust gate
 	TargetShard            string        `json:"targetShard,omitempty"`
@@ -67,7 +72,12 @@ type StandingOrderState struct {
 	AllowBridge            bool     `json:"allowBridge,omitempty"`
 	RequireTrustedOrBonded bool     `json:"requireTrustedOrBonded,omitempty"`
 	MaxSats                uint64   `json:"maxSats"`
-	TargetShard      string   `json:"targetShard,omitempty"`
+	MinGrade               string   `json:"minGrade,omitempty"`
+	MaxSatsPer1kUnits      uint64   `json:"maxSatsPer1kUnits,omitempty"`
+	FreshnessClass         string   `json:"freshnessClass,omitempty"`
+	RequiredRights         string   `json:"requiredRights,omitempty"`
+	PricingMode            string   `json:"pricingMode,omitempty"`
+	TargetShard            string   `json:"targetShard,omitempty"`
 	AgentID          string   `json:"agentId,omitempty"`
 	ExpiresAtUnix    int64    `json:"expiresAtUnix"`
 	OffersSeen       int      `json:"offersSeen"`
@@ -85,17 +95,22 @@ type StandingOrderState struct {
 // StandingOrderIndexEntry is the lightweight active-order record stored in SQLite KV
 // so Hub SSE events match and wake sleeping Restate StandingOrders in O(N_active).
 type StandingOrderIndexEntry struct {
-	OrderID       string   `json:"orderId"`
-	Domains       []string `json:"domains"`
-	Query         string   `json:"query,omitempty"`
-	OntologyID    string   `json:"ontologyId,omitempty"`
-	AllowBridge   bool     `json:"allowBridge,omitempty"`
-	MaxSats       uint64   `json:"maxSats"`
-	TargetShard   string   `json:"targetShard,omitempty"`
-	AgentID       string   `json:"agentId,omitempty"`
-	Status        string   `json:"status"`
-	ExpiresAtUnix int64    `json:"expiresAtUnix"`
-	UpdatedAt     int64    `json:"updatedAt"`
+	OrderID           string   `json:"orderId"`
+	Domains           []string `json:"domains"`
+	Query             string   `json:"query,omitempty"`
+	OntologyID        string   `json:"ontologyId,omitempty"`
+	AllowBridge       bool     `json:"allowBridge,omitempty"`
+	MaxSats           uint64   `json:"maxSats"`
+	MinGrade          string   `json:"minGrade,omitempty"`
+	MaxSatsPer1kUnits uint64   `json:"maxSatsPer1kUnits,omitempty"`
+	FreshnessClass    string   `json:"freshnessClass,omitempty"`
+	RequiredRights    string   `json:"requiredRights,omitempty"`
+	PricingMode       string   `json:"pricingMode,omitempty"`
+	TargetShard       string   `json:"targetShard,omitempty"`
+	AgentID           string   `json:"agentId,omitempty"`
+	Status            string   `json:"status"`
+	ExpiresAtUnix     int64    `json:"expiresAtUnix"`
+	UpdatedAt         int64    `json:"updatedAt"`
 }
 
 func (e *Engine) enqueueStandingOrderEvent(orderID string, ev standingOrderEvent) {
@@ -279,17 +294,22 @@ func (e *Engine) upsertStandingOrderIndex(st StandingOrderState) {
 	defer e.standingIndexMu.Unlock()
 	list := LoadStandingOrderIndex(e.mem.DB())
 	entry := StandingOrderIndexEntry{
-		OrderID:       st.OrderID,
-		Domains:       st.Domains,
-		Query:         st.Query,
-		OntologyID:    st.OntologyID,
-		AllowBridge:   st.AllowBridge,
-		MaxSats:       st.MaxSats,
-		TargetShard:   st.TargetShard,
-		AgentID:       st.AgentID,
-		Status:        st.Status,
-		ExpiresAtUnix: st.ExpiresAtUnix,
-		UpdatedAt:     st.UpdatedAt,
+		OrderID:           st.OrderID,
+		Domains:           st.Domains,
+		Query:             st.Query,
+		OntologyID:        st.OntologyID,
+		AllowBridge:       st.AllowBridge,
+		MaxSats:           st.MaxSats,
+		MinGrade:          st.MinGrade,
+		MaxSatsPer1kUnits: st.MaxSatsPer1kUnits,
+		FreshnessClass:    st.FreshnessClass,
+		RequiredRights:    st.RequiredRights,
+		PricingMode:       st.PricingMode,
+		TargetShard:       st.TargetShard,
+		AgentID:           st.AgentID,
+		Status:            st.Status,
+		ExpiresAtUnix:     st.ExpiresAtUnix,
+		UpdatedAt:         st.UpdatedAt,
 	}
 	found := false
 	for i := range list {

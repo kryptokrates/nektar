@@ -187,6 +187,20 @@ func ComputeOntologyManifestHash(m OntologyManifest) (string, error) {
 	return hex.EncodeToString(h), nil
 }
 
+// PredicateSet returns the exact set of declared predicate IDs in m for NMU-1 anti-stuffing checks.
+func (m OntologyManifest) PredicateSet() map[string]struct{} {
+	if len(m.Predicates) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(m.Predicates))
+	for _, p := range m.Predicates {
+		if id := strings.TrimSpace(p.ID); id != "" {
+			out[id] = struct{}{}
+		}
+	}
+	return out
+}
+
 // EffectiveAxioms expands Predicate domain/range declarations alongside explicit Axioms.
 func (m OntologyManifest) EffectiveAxioms() []OntologyAxiom {
 	norm := NormalizeOntologyManifest(m)

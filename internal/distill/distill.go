@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/jev"
+	"github.com/kryptokrates/nektar/internal/jevgraph"
 	"github.com/kryptokrates/nektar/internal/memory"
+	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/reasoning"
 	"github.com/kryptokrates/nektar/internal/store"
@@ -23,14 +26,20 @@ const (
 	MarketShardPrefix      = "market-"
 )
 
+var (
+	reDistillVersionPin = regexp.MustCompile(`(?i)\b(v\d+\.\d+(?:\.\d+)?|go\s*\d+\.\d+(?:\.\d+)?|cve-\d{4}-\d{4,7}|sdk\s*v?\d+\.\d+)\b`)
+	reDistillEphemeral  = regexp.MustCompile(`(?i)\b(outage|incident|degraded|downtime|hotfix|workaround today|temporary|currently down)\b`)
+)
+
 // Config configures the autonomous SleepCycle distillation & consolidation pipeline.
 type Config struct {
-	DefaultDomain    string        // fallback ontology domain (default "ops")
-	MaxBatch         int           // max raw fragments processed per cycle (default 32)
-	AutoAnchor       bool          // anchor newly distilled market-<domain> shards when wallet funded
-	AutoList         bool          // automatically arm market-<domain> SellListings (with AllowRaw: false)
-	DefaultPriceSats uint64        // initial dynamic ask price for newly created market-* listings (default 50)
-	JevEval          jev.Evaluator // optional self-hosted Jev evaluator (falls back deterministically offline)
+	DefaultDomain      string          // fallback ontology domain (default "ops")
+	MaxBatch           int             // max raw fragments processed per cycle (default 32)
+	AutoAnchor         bool            // anchor newly distilled market-<domain> shards when wallet funded
+	AutoList           bool            // automatically arm market-<domain> SellListings (with AllowRaw: false)
+	DefaultPriceSats   uint64          // initial dynamic ask price for newly created market-* listings (default 50)
+	DefaultUsageRights nmu.UsageRights // default usage rights stamped on newly distilled fragments (default inference_only)
+	JevEval            jev.Evaluator   // optional self-hosted Jev evaluator (falls back deterministically offline)
 }
 
 // RunOpts configures one invocation of Distiller.RunCycle.
@@ -174,9 +183,23 @@ func (d *Distiller) RunCycle(ctx context.Context, opts RunOpts) (*CycleSummary, 
 			if frag.Seq > maxSeenSeq {
 				maxSeenSeq = frag.Seq
 			}
-			// Never promote high-clearance, Borg-group, or tainted external market fragments back onto the market.
-			if frag.Level > 0 || frag.BorgGroup != "" || frag.Tainted {
+			// Never promote high-clearance or Borg-group fragments onto the market.
+			if frag.Level > 0 || frag.BorgGroup != "" {
 				continue
+			}
+			// Enforce NMU-1 UsageRights on purchased (Tainted) fragments:
+			// strictly block inference_only or grade-mismatched purchases; allow distill_resellable ONLY with provenance link.
+			var licensedSourceRef *core.RefinementEdge
+			if frag.Tainted {
+				if frag.GradeMismatch || frag.NMU == nil || nmu.EffectiveRights(frag.NMU.UsageRights) != nmu.RightsDistillResellable {
+					continue
+				}
+				licensedSourceRef = &core.RefinementEdge{
+					Kind:        core.RefinementRefines,
+					TargetShard: shard,
+					TargetSeq:   frag.Seq,
+					Reason:      "distilled_from_licensed_source",
+				}
 			}
 
 			// Stage 1: Fail-Closed Secret & PII Gate (gitleaks + explicit rules + PII/path redaction).
@@ -223,13 +246,46 @@ func (d *Distiller) RunCycle(ctx context.Context, opts RunOpts) (*CycleSummary, 
 			}
 
 			triples := make([]reasoning.Triple, 0, len(graphRes.Triples))
+			distilledEdges := make([]jevgraph.ExtractedEdge, 0, len(graphRes.Triples))
 			for _, st := range graphRes.Triples {
 				triples = append(triples, st.Triple)
+				// Bridge Distill <-> JevGraph: preserve exact verbatim source quote spans so L1 MPE binds EdgesRoot!
+				ev := buildDistilledEvidenceSpan(cleanText, st.Evidence)
+				distilledEdges = append(distilledEdges, jevgraph.ExtractedEdge{
+					Triple:     st.Triple,
+					OntologyID: ontID,
+					Status:     jevgraph.EdgeAccepted,
+					Reason:     "distilled:" + st.Extractor,
+					Evidence:   ev,
+					Provenance: jevgraph.ExtractionProvenance{
+						Extractor:    "sleep-cycle:" + st.Extractor,
+						ConfidenceBP: st.ConfidenceBP,
+						MarginBP:     st.ConfidenceBP,
+						SupportBP:    st.ConfidenceBP,
+						AdvisoryNote: jevgraph.AdvisoryExtractionNote,
+					},
+				})
+			}
+
+			// Infer NMU-1 freshness class, version pin, and usage rights for the distilled unit.
+			freshClass, subjVer, validUntil := inferFreshnessAndVersion(cleanText, now)
+			rights := nmu.EffectiveRights(d.cfg.DefaultUsageRights)
+			if frag.NMU != nil && frag.NMU.FreshnessClass != "" {
+				freshClass = nmu.NormalizeFreshness(string(frag.NMU.FreshnessClass))
+				if frag.NMU.ValidUntilUnix > 0 {
+					validUntil = frag.NMU.ValidUntilUnix
+				}
+				if frag.NMU.SubjectVersion != "" {
+					subjVer = frag.NMU.SubjectVersion
+				}
 			}
 
 			// Stage 3: Bi-temporal AORG supersession check against active facts in market-<domain>.
 			supSeq := d.findSupersededMarketSeq(marketShard, triples)
 			var refines []core.RefinementEdge
+			if licensedSourceRef != nil {
+				refines = append(refines, *licensedSourceRef)
+			}
 			if supSeq > 0 {
 				refines = append(refines, core.RefinementEdge{
 					Kind:        core.RefinementSupersedes,
@@ -240,18 +296,26 @@ func (d *Distiller) RunCycle(ctx context.Context, opts RunOpts) (*CycleSummary, 
 
 			// Stage 4: Commit distilled, PII-clean, ontology-pinned fragment to market-<domain>.
 			rem, mErr := d.mem.Remember(ctx, memory.RememberInput{
-				Shard:         marketShard,
-				Text:          cleanText,
-				Triples:       triples,
-				CommitMessage: fmt.Sprintf("distill: %s#%d -> %s (%d triples)", shard, frag.Seq, marketShard, len(triples)),
-				Source:        "sleep-cycle:" + shard,
-				Class:         "distilled:" + domain,
-				Level:         0,
-				Public:        true,
-				Distilled:     true,
-				Supersedes:    supSeq,
-				Refines:       refines,
-				Extra:         map[string]string{"ontologyId": ontID},
+				Shard:          marketShard,
+				Text:           cleanText,
+				Triples:        triples,
+				DistilledEdges: distilledEdges,
+				CommitMessage:  fmt.Sprintf("distill: %s#%d -> %s (%d triples)", shard, frag.Seq, marketShard, len(triples)),
+				Source:         "sleep-cycle:" + shard,
+				Class:          "distilled:" + domain,
+				Level:          0,
+				Public:         true,
+				Distilled:      true,
+				Supersedes:     supSeq,
+				Refines:        refines,
+				NMU: &nmu.Spec{
+					Version:        nmu.SpecVersion,
+					FreshnessClass: freshClass,
+					ValidUntilUnix: validUntil,
+					SubjectVersion: subjVer,
+					UsageRights:    rights,
+				},
+				Extra: map[string]string{"ontologyId": ontID},
 			})
 			if mErr != nil {
 				sum.Errors = append(sum.Errors, fmt.Sprintf("%s#%d: commit market: %v", shard, frag.Seq, mErr))
@@ -316,17 +380,61 @@ func (d *Distiller) RunCycle(ctx context.Context, opts RunOpts) (*CycleSummary, 
 
 func (d *Distiller) resolveOrEnsureOntology(ctx context.Context, domain string) (reasoning.OntologyManifest, string) {
 	if loaded, err := d.mem.ResolveOntology(ctx, domain); err == nil && loaded != nil {
+		if loaded.Manifest.Hash != "" {
+			return loaded.Manifest, loaded.Manifest.Hash
+		}
 		return loaded.Manifest, loaded.Ref.OntologyID
 	}
 	man := reasoning.DefaultOntologyManifest(domain)
 	if loaded, err := d.mem.CommitOntology(ctx, man, false); err == nil && loaded != nil {
+		if loaded.Manifest.Hash != "" {
+			return loaded.Manifest, loaded.Manifest.Hash
+		}
 		return loaded.Manifest, loaded.Ref.OntologyID
 	}
 	fin, _, _, err := reasoning.FinalizeOntologyManifest(man)
 	if err == nil && fin != nil {
-		return *fin, reasoning.CanonicalOntologyID(domain, "", fin.Hash)
+		return *fin, fin.Hash
 	}
 	return man, ""
+}
+
+func buildDistilledEvidenceSpan(cleanText string, ev jev.EvidenceSpan) jevgraph.EvidenceSpan {
+	if ev.StartByte >= 0 && ev.EndByte > ev.StartByte && ev.EndByte <= len(cleanText) && cleanText[ev.StartByte:ev.EndByte] == ev.Quote {
+		return jevgraph.EvidenceSpan{
+			Quote:       ev.Quote,
+			StartOffset: ev.StartByte,
+			EndOffset:   ev.EndByte,
+		}
+	}
+	if ev.Quote != "" {
+		if idx := strings.Index(cleanText, ev.Quote); idx >= 0 {
+			return jevgraph.EvidenceSpan{
+				Quote:       ev.Quote,
+				StartOffset: idx,
+				EndOffset:   idx + len(ev.Quote),
+			}
+		}
+	}
+	return jevgraph.EvidenceSpan{
+		Quote:       cleanText,
+		StartOffset: 0,
+		EndOffset:   len(cleanText),
+	}
+}
+
+func inferFreshnessAndVersion(cleanText string, nowUnix int64) (nmu.FreshnessClass, string, int64) {
+	if reDistillEphemeral.MatchString(cleanText) {
+		return nmu.FreshnessEphemeral, "", nowUnix + 7*86400
+	}
+	if m := reDistillVersionPin.FindString(cleanText); m != "" {
+		ver := strings.TrimSpace(m)
+		if len(ver) > nmu.MaxSubjectVersionLen {
+			ver = ver[:nmu.MaxSubjectVersionLen]
+		}
+		return nmu.FreshnessVersioned, ver, 0
+	}
+	return nmu.FreshnessEvergreen, "", 0
 }
 
 func (d *Distiller) findSupersededMarketSeq(marketShard string, incoming []reasoning.Triple) int64 {

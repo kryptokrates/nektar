@@ -11,6 +11,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/distill"
 	"github.com/kryptokrates/nektar/internal/memory"
+	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/store"
 )
@@ -68,7 +69,10 @@ func (b *Broker) ArmSell(ctx context.Context, in SellInput) (ArmSellResult, erro
 	if len(in.Domains) == 0 {
 		in.Domains = []string{"general"}
 	}
-	if in.PriceSats == 0 {
+	if err := nmu.ValidateWantFilters(in.MinAdvertisedGrade, in.FreshnessClass, in.UsageRights, ""); err != nil {
+		return ArmSellResult{}, err
+	}
+	if in.PriceSats == 0 && in.QueryPriceSats == 0 && in.SubscriptionPriceSats == 0 {
 		in.PriceSats = 100
 	}
 	norm := make([]string, 0, len(in.Domains))
@@ -82,6 +86,7 @@ func (b *Broker) ArmSell(ctx context.Context, in SellInput) (ArmSellResult, erro
 	if in.DynamicPricing {
 		dp := DynamicPriceState{
 			Enabled:          true,
+			PerUnitMode:      in.PricePerUnit,
 			FloorSats:        in.FloorSats,
 			CeilingSats:      in.CeilingSats,
 			CurrentPriceSats: in.PriceSats,
@@ -90,16 +95,27 @@ func (b *Broker) ArmSell(ctx context.Context, in SellInput) (ArmSellResult, erro
 		dp.normalize(in.PriceSats)
 		dynJSON, _ = json.Marshal(dp)
 	}
+	subDur := in.SubscriptionDurationSec
+	if in.SubscriptionPriceSats > 0 && subDur <= 0 {
+		subDur = store.DefaultSubscriptionDurationSec
+	}
 	listing := store.SellListing{
-		Shard:              shard,
-		Domains:            norm,
-		PriceSats:          in.PriceSats,
-		Description:        in.Description,
-		OntologyID:         strings.ToLower(strings.TrimSpace(in.OntologyID)),
-		AllowRaw:           in.AllowRaw,
-		DynamicPricingJSON: dynJSON,
-		Active:             true,
-		CreatedAt:          time.Now().Unix(),
+		Shard:                   shard,
+		Domains:                 norm,
+		PriceSats:               in.PriceSats,
+		PricePerUnit:            in.PricePerUnit,
+		QueryPriceSats:          in.QueryPriceSats,
+		SubscriptionPriceSats:   in.SubscriptionPriceSats,
+		SubscriptionDurationSec: subDur,
+		FreshnessClass:          string(nmu.NormalizeFreshness(in.FreshnessClass)),
+		UsageRights:             string(nmu.EffectiveRights(nmu.UsageRights(in.UsageRights))),
+		MinAdvertisedGrade:      string(nmu.NormalizeGrade(in.MinAdvertisedGrade)),
+		Description:             in.Description,
+		OntologyID:              strings.ToLower(strings.TrimSpace(in.OntologyID)),
+		AllowRaw:                in.AllowRaw,
+		DynamicPricingJSON:      dynJSON,
+		Active:                  true,
+		CreatedAt:               time.Now().Unix(),
 	}
 	if err := b.mem.DB().SaveSellListing(listing); err != nil {
 		return ArmSellResult{}, err
@@ -181,10 +197,88 @@ func (b *Broker) AnnounceSelf(ctx context.Context) (int, error) {
 	b.mu.RUnlock()
 
 	var bondOutpoint, bondBEEF string
+	hasActiveBond := false
 	if bRec, _, bErr := LoadActiveBond(b.mem.DB()); bErr == nil && bRec != nil && !bRec.State.Seized {
+		hasActiveBond = true
 		bondOutpoint = bRec.Outpoint()
 		if len(bRec.BEEFHex) <= 8192 {
 			bondBEEF = bRec.BEEFHex
+		}
+	}
+
+	// Enrich AnnounceAd.Packs with multi-mode NMU-1 summaries for active listings so ls_nektar &
+	// GET /v1/market/ticker discover spot, per_query, and subscription markets cleanly.
+	packIdx := make(map[string]int, len(packs))
+	for i, p := range packs {
+		packIdx[p.Shard] = i
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(pubURL), "/")
+	for _, l := range listings {
+		if !l.Active {
+			continue
+		}
+		modes := l.EnabledModes()
+		modeStrs := make([]string, len(modes))
+		for i, m := range modes {
+			modeStrs[i] = string(m)
+		}
+		var queryEP, feedEP string
+		if baseURL != "" {
+			if l.SupportsMode(nmu.ModePerQuery) {
+				queryEP = baseURL + "/v1/market/query"
+			}
+			if l.SupportsMode(nmu.ModeSubscription) {
+				feedEP = baseURL + "/v1/market/feeds/" + l.Shard
+			}
+		}
+		bestGrade, avgUnits, fragCount, fragOnt := b.summarizeListingNMU(ctx, l, hasActiveBond, feedEP)
+		ontID := strings.ToLower(strings.TrimSpace(l.OntologyID))
+		if ontID == "" {
+			ontID = fragOnt
+		}
+		if len(ontID) != 64 {
+			ontID = ""
+		}
+		var spotPrice, unitRate uint64
+		if l.PriceSats > 0 {
+			dp := ParseDynamicPriceState(l.DynamicPricingJSON, l.PriceSats)
+			dp.PerUnitMode = l.PricePerUnit || dp.PerUnitMode
+			spotPrice, unitRate = dp.QuoteForFactPack(l.PriceSats, avgUnits, false, 0)
+		}
+		ref := bstack.PackRef{
+			Shard:                 l.Shard,
+			Domains:               append([]string(nil), l.Domains...),
+			OntologyID:            ontID,
+			Count:                 fragCount,
+			Grade:                 string(bestGrade),
+			UnitCount:             avgUnits,
+			PricingMode:           modeStrs[0],
+			EnabledModes:          modeStrs,
+			PriceSats:             spotPrice,
+			SatsPer1kUnits:        unitRate,
+			QueryPriceSats:        l.QueryPriceSats,
+			SubscriptionPriceSats: l.SubscriptionPriceSats,
+			SubscriptionSec:       l.EffectiveSubscriptionDurationSec(),
+			FreshnessClass:        l.FreshnessClass,
+			UsageRights:           string(nmu.EffectiveRights(nmu.UsageRights(l.UsageRights))),
+			QueryEndpoint:         queryEP,
+			FeedEndpoint:          feedEP,
+		}
+		if idx, exists := packIdx[l.Shard]; exists {
+			if ref.ChirpURL == "" {
+				ref.ChirpURL = packs[idx].ChirpURL
+			}
+			if ref.RootHex == "" {
+				ref.RootHex = packs[idx].RootHex
+			}
+			if ref.OntologyID == "" {
+				ref.OntologyID = packs[idx].OntologyID
+			}
+			ref.TargetOntologyID = packs[idx].TargetOntologyID
+			packs[idx] = ref
+		} else if len(packs) < 16 {
+			packIdx[l.Shard] = len(packs)
+			packs = append(packs, ref)
 		}
 	}
 
@@ -222,4 +316,44 @@ func (b *Broker) AnnounceSelf(ctx context.Context) (int, error) {
 		HubTermsURL:       hubTermsURL,
 		HubFees:           hubFees,
 	})
+}
+
+func (b *Broker) summarizeListingNMU(ctx context.Context, l store.SellListing, hasActiveBond bool, feedEP string) (bestGrade nmu.Grade, avgUnits uint32, count int, ontID string) {
+	if b == nil || b.mem == nil || b.mem.DB() == nil {
+		return "", 1, 0, ""
+	}
+	frags, err := b.mem.DB().ListFragments(l.Shard)
+	if err != nil {
+		return "", 1, 0, ""
+	}
+	var totalUnits uint64
+	for _, f := range frags {
+		if f.Forgotten {
+			continue
+		}
+		count++
+		cls, fOnt, _ := b.classifyFragmentForMarket(ctx, f.Shard, f.Seq, f.Distilled, f.OntologyID, hasActiveBond, feedEP)
+		if ontID == "" && len(fOnt) == 64 {
+			ontID = fOnt
+		}
+		if nmu.GradeRank(cls.Grade) > nmu.GradeRank(bestGrade) {
+			bestGrade = cls.Grade
+		}
+		u := cls.UnitCount
+		if u == 0 {
+			u = 1
+		}
+		totalUnits += uint64(u)
+	}
+	if count == 0 {
+		return "", 1, 0, ontID
+	}
+	avg := totalUnits / uint64(count)
+	if avg == 0 {
+		avg = 1
+	}
+	if avg > uint64(nmu.MaxUnitCount) {
+		avg = uint64(nmu.MaxUnitCount)
+	}
+	return bestGrade, uint32(avg), count, ontID
 }

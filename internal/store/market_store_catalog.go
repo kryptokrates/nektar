@@ -1,7 +1,10 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"strings"
 	"time"
 )
 
@@ -119,34 +122,76 @@ func (d *DB) SaveSellListing(l SellListing) error {
 	if l.CreatedAt == 0 {
 		l.CreatedAt = time.Now().Unix()
 	}
+	usageRights := strings.ToLower(strings.TrimSpace(l.UsageRights))
+	if usageRights == "" {
+		usageRights = "inference_only"
+	}
 	doms, _ := json.Marshal(l.Domains)
 	_, err := d.sql.Exec(`
-		INSERT OR REPLACE INTO sell_listings (shard, domains_json, price_sats, description, ontology_id, allow_raw, dynamic_pricing_json, active, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		l.Shard, string(doms), l.PriceSats, l.Description, l.OntologyID, boolToInt(l.AllowRaw), l.DynamicPricingJSON, boolToInt(l.Active), l.CreatedAt)
+		INSERT OR REPLACE INTO sell_listings (
+			shard, domains_json, price_sats, price_per_unit, query_price_sats, subscription_price_sats,
+			subscription_duration_sec, freshness_class, usage_rights, min_advertised_grade,
+			description, ontology_id, allow_raw, dynamic_pricing_json, active, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		l.Shard, string(doms), l.PriceSats, boolToInt(l.PricePerUnit), l.QueryPriceSats, l.SubscriptionPriceSats,
+		l.SubscriptionDurationSec, strings.ToLower(strings.TrimSpace(l.FreshnessClass)), usageRights,
+		strings.ToUpper(strings.TrimSpace(l.MinAdvertisedGrade)),
+		l.Description, l.OntologyID, boolToInt(l.AllowRaw), l.DynamicPricingJSON, boolToInt(l.Active), l.CreatedAt)
 	return err
+}
+
+func scanSellListing(s scanner) (SellListing, error) {
+	var l SellListing
+	var domJSON string
+	var pricePerUnit, allowRaw, active int
+	if err := s.Scan(
+		&l.Shard, &domJSON, &l.PriceSats, &pricePerUnit, &l.QueryPriceSats, &l.SubscriptionPriceSats,
+		&l.SubscriptionDurationSec, &l.FreshnessClass, &l.UsageRights, &l.MinAdvertisedGrade,
+		&l.Description, &l.OntologyID, &allowRaw, &l.DynamicPricingJSON, &active, &l.CreatedAt,
+	); err != nil {
+		return SellListing{}, err
+	}
+	_ = json.Unmarshal([]byte(domJSON), &l.Domains)
+	l.PricePerUnit = pricePerUnit != 0
+	l.AllowRaw = allowRaw != 0
+	l.Active = active != 0
+	return l, nil
+}
+
+const sellListingSelectCols = `shard, domains_json, price_sats, COALESCE(price_per_unit, 0),
+	COALESCE(query_price_sats, 0), COALESCE(subscription_price_sats, 0), COALESCE(subscription_duration_sec, 0),
+	COALESCE(freshness_class, ''), COALESCE(usage_rights, 'inference_only'), COALESCE(min_advertised_grade, ''),
+	description, COALESCE(ontology_id, ''), COALESCE(allow_raw, 0), dynamic_pricing_json, active, created_at`
+
+// GetSellListing returns the SellListing for shard, or (nil, nil) if not listed.
+func (d *DB) GetSellListing(shard string) (*SellListing, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	l, err := scanSellListing(d.sql.QueryRow(`SELECT `+sellListingSelectCols+` FROM sell_listings WHERE shard = ?`, shard))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &l, nil
 }
 
 // ListSellListings returns all persisted sell listings.
 func (d *DB) ListSellListings() ([]SellListing, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`SELECT shard, domains_json, price_sats, description, COALESCE(ontology_id, ''), COALESCE(allow_raw, 0), dynamic_pricing_json, active, created_at FROM sell_listings ORDER BY created_at DESC`)
+	rows, err := d.sql.Query(`SELECT ` + sellListingSelectCols + ` FROM sell_listings ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []SellListing
 	for rows.Next() {
-		var l SellListing
-		var domJSON string
-		var allowRaw, active int
-		if err := rows.Scan(&l.Shard, &domJSON, &l.PriceSats, &l.Description, &l.OntologyID, &allowRaw, &l.DynamicPricingJSON, &active, &l.CreatedAt); err != nil {
+		l, err := scanSellListing(rows)
+		if err != nil {
 			return nil, err
 		}
-		_ = json.Unmarshal([]byte(domJSON), &l.Domains)
-		l.AllowRaw = allowRaw != 0
-		l.Active = active != 0
 		out = append(out, l)
 	}
 	return out, rows.Err()

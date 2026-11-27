@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"unicode"
+
+	"github.com/kryptokrates/nektar/internal/nmu"
 )
 
 const (
@@ -173,9 +175,117 @@ func ComputeAutoBidSats(in ArbitrageBidInput) ArbitrageBidResult {
 	}
 }
 
+// GradeWeightBP returns the deterministic integer-bps quality multiplier for an NMU-1 Grade.
+func GradeWeightBP(g nmu.Grade) int64 {
+	switch nmu.NormalizeGrade(string(g)) {
+	case nmu.GradeS:
+		return 10000
+	case nmu.GradeA:
+		return 9000
+	case nmu.GradeB:
+		return 7500
+	default:
+		return 5000
+	}
+}
+
+// RightsMultiplierBP returns the deterministic integer-bps pricing multiplier for NMU-1 UsageRights.
+func RightsMultiplierBP(r nmu.UsageRights) int64 {
+	if nmu.EffectiveRights(r) == nmu.RightsDistillResellable {
+		return 12500
+	}
+	return 10000
+}
+
+// FreshnessDecayBP returns a deterministic integer-bps value factor [0..10000] based on NMU-1 freshness.
+// Expired units return 0; ephemeral units decay smoothly as they approach ValidUntilUnix over a 7-day window.
+func FreshnessDecayBP(fc nmu.FreshnessClass, validUntilUnix, nowUnix int64) int64 {
+	if nmu.IsExpired(fc, validUntilUnix, nowUnix) {
+		return 0
+	}
+	if nmu.NormalizeFreshness(string(fc)) == nmu.FreshnessEphemeral && validUntilUnix > 0 && nowUnix > 0 {
+		remaining := validUntilUnix - nowUnix
+		const fullWindow int64 = 7 * 86400
+		if remaining >= fullWindow {
+			return 10000
+		}
+		bp := (remaining * 10000) / fullWindow
+		if bp < 2000 {
+			return 2000
+		}
+		return bp
+	}
+	return 10000
+}
+
+// UnitArbitrageBidInput extends ArbitrageBidInput with NMU-1 grade, rights, freshness, and expected unit count.
+type UnitArbitrageBidInput struct {
+	ArbitrageBidInput
+	TargetGrade    nmu.Grade
+	DesiredRights  nmu.UsageRights
+	FreshnessClass nmu.FreshnessClass
+	ValidUntilUnix int64
+	NowUnix        int64
+	ExpectedUnits  uint32 // expected verified triples in pack (default 1)
+}
+
+// UnitArbitrageBidResult reports both total satoshi bid cap and normalized milli-sats/triple bid cap.
+type UnitArbitrageBidResult struct {
+	ArbitrageBidResult
+	MaxSatsPer1kUnits uint64 `json:"maxSatsPer1kUnits"`
+	GradeWeightBP     int64  `json:"gradeWeightBp"`
+	RightsMultBP      int64  `json:"rightsMultBp"`
+	FreshnessDecayBP  int64  `json:"freshnessDecayBp"`
+}
+
+// ComputeUnitAutoBid computes a deterministic integer-bps total bid AND normalized satsPer1kUnits ceiling
+// adjusted by NMU-1 Grade, UsageRights, and FreshnessClass (always <= MaxPolicyDealSats).
+func ComputeUnitAutoBid(in UnitArbitrageBidInput) UnitArbitrageBidResult {
+	base := ComputeAutoBidSats(in.ArbitrageBidInput)
+	gw := GradeWeightBP(in.TargetGrade)
+	rm := RightsMultiplierBP(in.DesiredRights)
+	fd := FreshnessDecayBP(in.FreshnessClass, in.ValidUntilUnix, in.NowUnix)
+
+	bid := base.MaxBidSats
+	if fd == 0 {
+		bid = 0
+	} else {
+		bid = (bid * uint64(gw)) / 10000
+		bid = (bid * uint64(rm)) / 10000
+		bid = (bid * uint64(fd)) / 10000
+		minBid := in.MinBidSats
+		if minBid == 0 {
+			minBid = 1
+		}
+		if bid < minBid {
+			bid = minBid
+		}
+	}
+	capped := base.CappedByPolicy
+	if in.MaxPolicyDealSats > 0 && bid > in.MaxPolicyDealSats {
+		bid = in.MaxPolicyDealSats
+		capped = true
+	}
+	units := in.ExpectedUnits
+	if units == 0 {
+		units = 1
+	}
+	res := base
+	res.MaxBidSats = bid
+	res.CappedByPolicy = capped
+	return UnitArbitrageBidResult{
+		ArbitrageBidResult: res,
+		MaxSatsPer1kUnits:  nmu.ComputeSatsPer1kUnits(bid, units),
+		GradeWeightBP:      gw,
+		RightsMultBP:       rm,
+		FreshnessDecayBP:   fd,
+	}
+}
+
 // DynamicPriceState persists per-listing adaptive pricing parameters in sell_listings.dynamic_pricing_json.
 type DynamicPriceState struct {
 	Enabled          bool   `json:"enabled"`
+	PerUnitMode      bool   `json:"perUnitMode,omitempty"` // when true, CurrentPriceSats is satsPer1kUnits (milli-sats/triple)
 	FloorSats        uint64 `json:"floorSats"`
 	CeilingSats      uint64 `json:"ceilingSats"`
 	CurrentPriceSats uint64 `json:"currentPriceSats"`
@@ -257,6 +367,23 @@ func (s DynamicPriceState) QuotePriceForBuyer(basePrice uint64, buyerPriority bo
 		}
 	}
 	return price
+}
+
+// QuoteForFactPack computes both total sats and normalized satsPer1kUnits for a fragment containing unitCount verified units.
+// When PerUnitMode is true, basePrice / CurrentPriceSats represents a satsPer1kUnits rate (milli-sats per triple);
+// otherwise it represents a flat per-fragment price normalized by unitCount.
+func (s DynamicPriceState) QuoteForFactPack(basePrice uint64, unitCount uint32, buyerPriority bool, buyerCollabBP int64) (totalSats uint64, satsPer1kUnits uint64) {
+	units := unitCount
+	if units == 0 {
+		units = 1
+	}
+	if s.PerUnitMode {
+		unitRate := s.QuotePriceForBuyer(basePrice, buyerPriority, buyerCollabBP)
+		totalSats = nmu.ComputeTotalSatsForUnits(unitRate, units)
+		return totalSats, nmu.ComputeSatsPer1kUnits(totalSats, units)
+	}
+	totalSats = s.QuotePriceForBuyer(basePrice, buyerPriority, buyerCollabBP)
+	return totalSats, nmu.ComputeSatsPer1kUnits(totalSats, units)
 }
 
 // OnDemandHit ratchets CurrentPriceSats upward on a settled sale (+5%..+10% scaled by seller

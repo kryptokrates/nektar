@@ -113,7 +113,8 @@ func (n *Node) authenticateEgressCaller(r *http.Request, action string, cursor i
 	if !n.claimBboxNonce("egress:"+action+":"+hdrPub, hdrNonce, now) {
 		return "", false, errors.New("replayed hub egress nonce")
 	}
-	return hdrPub, n.IsSpinePeer(hdrPub), nil
+	isSelf := n.PayeeIdentityKey() != "" && strings.EqualFold(hdrPub, n.PayeeIdentityKey())
+	return hdrPub, isSelf || n.IsSpinePeer(hdrPub), nil
 }
 
 // domainsOnlyDir reports whether the caller explicitly requested ONLY the free `dir` discovery lane.

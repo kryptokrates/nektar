@@ -465,10 +465,9 @@ func SetMicroEarnerEnabled(mem *memory.Service, enabled bool, targetFloatSats ui
 	return st
 }
 
+// MicroEarner is registered WithIngressPrivate(true) and invoked only via the authenticated NektarRuntime gateway
+// (Restate strips caller HTTP headers on internal service-to-service Object calls, matching AnchorCadence/Tx/EpistemicShard).
 func (e *Engine) restateMicroEarnerRun(ctx restate.ObjectContext, in MicroEarnerInput) (MicroEarnerState, error) {
-	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
-		return MicroEarnerState{}, err
-	}
 	prev, _ := restate.Get[MicroEarnerState](ctx, "state")
 	if prev.LastRunAt > 0 && !prev.Enabled {
 		prev.Status = "disabled"
@@ -492,9 +491,6 @@ func (e *Engine) restateMicroEarnerRun(ctx restate.ObjectContext, in MicroEarner
 }
 
 func (e *Engine) restateMicroEarnerToggle(ctx restate.ObjectContext, in MicroEarnerToggleInput) (MicroEarnerState, error) {
-	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
-		return MicroEarnerState{}, err
-	}
 	st, err := restate.Run(ctx, func(_ restate.RunContext) (MicroEarnerState, error) {
 		return SetMicroEarnerEnabled(e.mem, in.Enabled, in.TargetFloatSats), nil
 	}, restate.WithName("microearner_toggle"))
@@ -506,8 +502,5 @@ func (e *Engine) restateMicroEarnerToggle(ctx restate.ObjectContext, in MicroEar
 }
 
 func (e *Engine) restateMicroEarnerStatus(ctx restate.ObjectSharedContext, _ restate.Void) (MicroEarnerState, error) {
-	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
-		return MicroEarnerState{}, err
-	}
 	return restate.Get[MicroEarnerState](ctx, "state")
 }

@@ -44,7 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends xz-utils \
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates wget \
  && adduser -D -u 10001 nektar \
- && mkdir -p /data && chown nektar:nektar /data
+ && mkdir -p /data /backups && chown nektar:nektar /data /backups
 COPY --from=go-build /out/nektar /usr/local/bin/nektar
 COPY --from=go-build /out/restate-server /usr/local/bin/restate-server
 COPY integrations/hermes /usr/local/share/nektar/integrations/hermes

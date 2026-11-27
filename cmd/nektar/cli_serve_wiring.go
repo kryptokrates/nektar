@@ -76,6 +76,13 @@ func initEmbeddedHub(
 
 func wireEmbeddedHub(ctx context.Context, rt *runtimeBundle, hubNode *hub.Node, upstreamSpines []string) func() {
 	cleanup := func() {}
+	// Exempt this node's own local discovery & market keys from paying BRC-105 fees to its own embedded Hub.
+	if rt.disc != nil {
+		hubNode.AddSpinePeerPub(rt.disc.AnnouncePubHex())
+	}
+	if rt.mkt != nil {
+		hubNode.AddSpinePeerPub(rt.mkt.SalePubHex())
+	}
 	if rt.disc != nil && rt.mkt != nil && rt.mkt.Policy() != nil {
 		rt.disc.SetHubFeePolicy(rt.mkt.Policy().CanPayHubFee, rt.mkt.Policy().RecordHubFeeSpend)
 	}

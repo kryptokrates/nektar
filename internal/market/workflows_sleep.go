@@ -311,10 +311,9 @@ func (e *Engine) applyDynamicPriceIdleDecay(nowUnix int64) int {
 	return decayed
 }
 
+// SleepCycle is registered WithIngressPrivate(true) and invoked only via the authenticated NektarRuntime gateway
+// (Restate strips caller HTTP headers on internal service-to-service Object calls, matching AnchorCadence/Tx/EpistemicShard).
 func (e *Engine) restateSleepCycleRun(ctx restate.ObjectContext, in SleepCycleInput) (SleepCycleState, error) {
-	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
-		return SleepCycleState{}, err
-	}
 	prev, _ := restate.Get[SleepCycleState](ctx, "state")
 	res, err := restate.Run(ctx, func(rctx restate.RunContext) (SleepCycleState, error) {
 		out, rErr := e.RunSleepCycle(rctx, in)
@@ -351,8 +350,5 @@ func (e *Engine) restateSleepCycleTriggerNow(ctx restate.ObjectContext, in Sleep
 }
 
 func (e *Engine) restateSleepCycleStatus(ctx restate.ObjectSharedContext, _ restate.Void) (SleepCycleState, error) {
-	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
-		return SleepCycleState{}, err
-	}
 	return restate.Get[SleepCycleState](ctx, "state")
 }

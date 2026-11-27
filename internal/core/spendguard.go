@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -77,6 +78,30 @@ type SpendGuard struct {
 	reservations  map[string]spendReservation
 	resSeq        uint64
 	corruptErr    error
+	preCheck      atomic.Pointer[func() error]
+}
+
+// SetPreCheck registers an optional fail-closed external pre-spend gate (e.g. autonomy Watchdog
+// clock-skew & circuit-breaker guard) checked before Reserve, Check, and CheckAndRecord.
+func (g *SpendGuard) SetPreCheck(fn func() error) {
+	if g == nil {
+		return
+	}
+	if fn == nil {
+		g.preCheck.Store(nil)
+		return
+	}
+	g.preCheck.Store(&fn)
+}
+
+func (g *SpendGuard) runPreCheck() error {
+	if g == nil {
+		return nil
+	}
+	if p := g.preCheck.Load(); p != nil && *p != nil {
+		return (*p)()
+	}
+	return nil
 }
 
 type spendState struct {
@@ -249,6 +274,9 @@ func (g *SpendGuard) checkLocked(now time.Time, feeSats, spendSats uint64) (uint
 // Reserve atomically reserves daily spend budget before a remote client-wallet CreateAction RPC,
 // eliminating concurrent TOCTOU races across overlapping sends and enforcing MinInterval spacing.
 func (g *SpendGuard) Reserve(feeSats, spendSats uint64) (string, error) {
+	if err := g.runPreCheck(); err != nil {
+		return "", err
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()
@@ -321,6 +349,9 @@ func (g *SpendGuard) CommitReservation(resID, txid string, actualFee, actualSpen
 
 // Check validates caps without mutating spentToday (safe for pre-build fast-fail checks).
 func (g *SpendGuard) Check(feeSats, spendSats uint64) error {
+	if err := g.runPreCheck(); err != nil {
+		return err
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()
@@ -332,6 +363,9 @@ func (g *SpendGuard) Check(feeSats, spendSats uint64) error {
 // CheckAndRecord enforces fee cap, daily cap, and rate limit before recording a spend.
 // Fails closed if persisting spend-guard.json fails, rolling back the in-memory delta.
 func (g *SpendGuard) CheckAndRecord(txid string, feeSats, spendSats uint64) error {
+	if err := g.runPreCheck(); err != nil {
+		return err
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()

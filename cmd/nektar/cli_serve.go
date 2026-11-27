@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kryptokrates/nektar/internal/autonomy"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
@@ -22,8 +23,15 @@ import (
 )
 
 func cmdServe(args []string) error {
+	return cmdServeWithContext(context.Background(), args)
+}
+
+func cmdServeWithContext(parentCtx context.Context, args []string) error {
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
 	bootStart := time.Now()
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	defaultListen := "127.0.0.1:" + envOr("NEKTAR_HTTP_PORT", DefaultLocalPort)
 	if server.IsContainerEnv() {
 		defaultListen = ":" + envOr("NEKTAR_HTTP_PORT", DefaultLocalPort)
@@ -45,7 +53,9 @@ func cmdServe(args []string) error {
 	ephemeral := fs.Bool("ephemeral", false, "Run with in-memory SQLite (data discarded on exit)")
 	publicURLFlag := fs.String("public-url", os.Getenv("NEKTAR_PUBLIC_URL"), "Publicly reachable HTTP base URL for direct A2A trades (empty = NAT bbox fallback)")
 	hostsFlag := fs.String("hosts", os.Getenv("NEKTAR_MARKET_HOSTS"), "Comma-separated market hub URLs to join")
-	_ = fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	if strings.TrimSpace(*confirmFlag) != "" {
 		_ = os.Setenv("NEKTAR_MAINNET_CONFIRM", strings.TrimSpace(*confirmFlag))
@@ -60,7 +70,7 @@ func cmdServe(args []string) error {
 		_ = os.Setenv("NEKTAR_EPHEMERAL", "1")
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(parentCtx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	effectiveNet := *netName
@@ -182,6 +192,22 @@ func cmdServe(args []string) error {
 	// Construct Broker and App BEFORE starting the Restate durable plane so any immediately
 	// replaying BuyerDeal/SellerDeal invocation always sees a live Broker and App (zero nil-broker skip).
 	var appRef atomic.Pointer[server.App]
+	watchdog := autonomy.NewWatchdog(autonomy.DefaultConfigFromEnv(
+		rt.mem.Chain().Network(),
+		rt.disc.ActiveHosts(),
+		func(reason string) {
+			log.Printf("autonomy watchdog tripped: %s", reason)
+			if a := appRef.Load(); a != nil {
+				a.BroadcastDashboardEvent("autonomy_tripped")
+			}
+		},
+	))
+	if sg := rt.mem.Chain().SpendGuard(); sg != nil {
+		sg.SetPreCheck(watchdog.AllowAutonomousSpend)
+	}
+	watchdog.Start(ctx)
+	defer watchdog.Stop()
+
 	jevMatcher := buildJevMatcherFromEnv(rt.mem.Chain().Network())
 	broker := market.NewBroker(rt.mem, rt.mkt, rt.disc, market.BrokerConfig{
 		PublicURL:  pubURL,
@@ -190,6 +216,7 @@ func cmdServe(args []string) error {
 		IsHub:      *withHub,
 		Hub:        hubNode,
 		Matcher:    jevMatcher,
+		Watchdog:   watchdog,
 		OnStateChange: func(ev string, _ any) {
 			if a := appRef.Load(); a != nil {
 				a.BroadcastDashboardEvent(ev)
@@ -223,6 +250,7 @@ func cmdServe(args []string) error {
 		Hub:               hubNode,
 		Discovery:         rt.disc,
 		Broker:            broker,
+		Watchdog:          watchdog,
 		RestateAdminURL:   restateAdminDisplay,
 		ExposeWalletWire:  os.Getenv("NEKTAR_EXPOSE_WALLET_WIRE") == "1",
 	})

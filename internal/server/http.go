@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/kryptokrates/nektar/internal/autonomy"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
@@ -39,6 +40,7 @@ type Config struct {
 	Hub               *hub.Node         // optional embedded Go overlay hub mounted under /hub/
 	Discovery         *discovery.Service
 	Broker            *market.Broker
+	Watchdog          *autonomy.Watchdog  // optional SNTP clock-skew & spend anomaly safety watchdog
 	RestateClient     *market.RestateClient // active Restate Ingress/Admin client (restate-server)
 	RestateAdminURL   string
 	ExposeWalletWire  bool // opt-in loopback-only BRC-100 wire at /v1/wallet/wire/
@@ -56,6 +58,7 @@ type App struct {
 	mkt            *market.Engine
 	broker         *market.Broker
 	disc           *discovery.Service
+	watchdog       *autonomy.Watchdog
 	toolbox        *Toolbox
 	mcpSrv         *mcp.Server
 	cfg            Config
@@ -123,11 +126,19 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 	}
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	tb := NewToolbox(mem, mkt, cfg.Broker, disc, cfg.Hub, cfg.ToolProfile)
+	wd := cfg.Watchdog
+	if wd == nil && cfg.Broker != nil {
+		wd = cfg.Broker.Watchdog()
+	}
+	if wd != nil {
+		tb.SetWatchdog(wd)
+	}
 	app := &App{
 		mem:        mem,
 		mkt:        mkt,
 		broker:     cfg.Broker,
 		disc:       disc,
+		watchdog:   wd,
 		toolbox:    tb,
 		mcpSrv:     NewMCPServerWithToolbox(tb),
 		cfg:        cfg,

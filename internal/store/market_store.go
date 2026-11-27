@@ -503,5 +503,10 @@ CREATE INDEX IF NOT EXISTS idx_obligations_status ON obligations(status, deadlin
 			return err
 		}
 	}
+	if userVer < 10 {
+		if err := runVersionStep(10, migrateAutonomyTx); err != nil {
+			return err
+		}
+	}
 	return nil
 }

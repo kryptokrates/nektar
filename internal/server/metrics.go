@@ -98,6 +98,23 @@ func (a *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if a.mkt != nil {
 		writeGauge("nektar_policy_tampered_total", "Active operator policy rows rejected for hash or signature tamper.", float64(a.mkt.Policy().TamperedPoliciesCount()))
 	}
+	if a.watchdog != nil {
+		wst := a.watchdog.Status()
+		paused := 0.0
+		if wst.SpendPaused {
+			paused = 1.0
+		}
+		writeGauge("nektar_autonomy_clock_offset_ms", "Median SNTP clock offset in milliseconds.", float64(wst.ClockOffsetMs))
+		writeGauge("nektar_autonomy_spend_paused", "1 if Watchdog has paused autonomous spending, 0 otherwise.", paused)
+		writeGauge("nektar_autonomy_slash_events_window", "Dead-feed slashing events recorded in the active breaker window.", float64(wst.SlashEventsWindow))
+		writeGauge("nektar_autonomy_isolated_peers", "Number of per_query peer sellers currently isolated by circuit breaker.", float64(len(wst.IsolatedPeers)))
+	}
+	if a.broker != nil && a.broker.Subscriptions() != nil {
+		sst := a.broker.Subscriptions().Status()
+		writeGauge("nektar_subscriptions_active", "Active supervised Grade S buyer subscriptions.", float64(sst.ActiveCount))
+		writeCounter("nektar_subscriptions_events_total", "Total Grade S subscription SSE events applied locally.", float64(sst.EventsTotal))
+		writeCounter("nektar_subscriptions_slashes_total", "Total Grade S dead-feed slashing attestations emitted.", float64(sst.SlashesTotal))
+	}
 
 	restateUp := 0.0
 	if a.restateClient() != nil && a.isRestateAlive() {

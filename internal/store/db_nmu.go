@@ -22,20 +22,29 @@ type FragmentNMUMeta struct {
 	UpdatedAt      int64  `json:"updatedAt,omitempty"`
 }
 
-// ShardSubscription persists a paid time-windowed Shard Feed subscription (and Grade S update SLA).
+// ShardSubscription persists a paid time-windowed Shard Feed subscription (and Grade S update SLA)
+// for both sellers (role="seller") and buyers (role="buyer", restart/sleep-resilient supervision).
 type ShardSubscription struct {
-	SubID       string `json:"subId"`
-	Shard       string `json:"shard"`
-	BuyerPub    string `json:"buyerPub"`
-	SellerPub   string `json:"sellerPub,omitempty"`
-	PricingMode string `json:"pricingMode"` // "subscription"
-	PriceSats   uint64 `json:"priceSats"`
-	PaymentTxID string `json:"paymentTxid"`
-	UsageRights string `json:"usageRights"`
-	StartedAt   int64  `json:"startedAt"`
-	ExpiresAt   int64  `json:"expiresAt"`
-	LastSeq     int64  `json:"lastSeq"`
-	Active      bool   `json:"active"`
+	SubID           string   `json:"subId"`
+	Role            string   `json:"role,omitempty"` // "seller" (default) | "buyer"
+	Shard           string   `json:"shard"`
+	BuyerPub        string   `json:"buyerPub"`
+	SellerPub       string   `json:"sellerPub,omitempty"`
+	PricingMode     string   `json:"pricingMode"` // "subscription"
+	PriceSats       uint64   `json:"priceSats"`
+	PaymentTxID     string   `json:"paymentTxid"`
+	UsageRights     string   `json:"usageRights"`
+	StartedAt       int64    `json:"startedAt"`
+	ExpiresAt       int64    `json:"expiresAt"`
+	LastSeq         int64    `json:"lastSeq"`
+	Active          bool     `json:"active"`
+	FeedURL         string   `json:"feedUrl,omitempty"`
+	OntologyID      string   `json:"ontologyId,omitempty"`
+	Domains         []string `json:"domains,omitempty"`
+	TargetShard     string   `json:"targetShard,omitempty"`
+	DealReceiptJSON []byte   `json:"dealReceiptJson,omitempty"`
+	Slashed         bool     `json:"slashed,omitempty"`
+	LastEventAt     int64    `json:"lastEventAt,omitempty"`
 }
 
 func migrateNMUTx(tx *sql.Tx) error {
@@ -223,24 +232,12 @@ func (d *DB) CreateShardSubscription(sub ShardSubscription) error {
 	return err
 }
 
-func scanShardSubscription(s scanner) (ShardSubscription, error) {
-	var sub ShardSubscription
-	var active int
-	err := s.Scan(
-		&sub.SubID, &sub.Shard, &sub.BuyerPub, &sub.SellerPub, &sub.PricingMode,
-		&sub.PriceSats, &sub.PaymentTxID, &sub.UsageRights, &sub.StartedAt,
-		&sub.ExpiresAt, &sub.LastSeq, &active,
-	)
-	sub.Active = active != 0
-	return sub, err
-}
-
 // GetShardSubscription fetches one subscription by subId.
 func (d *DB) GetShardSubscription(subID string) (*ShardSubscription, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	sub, err := scanShardSubscription(d.sql.QueryRow(`
-		SELECT sub_id, shard, buyer_pub, seller_pub, pricing_mode, price_sats, payment_txid, usage_rights, started_at, expires_at, last_seq, active
+	sub, err := scanShardSubscriptionFull(d.sql.QueryRow(`
+		SELECT `+shardSubSelectCols+`
 		FROM shard_subscriptions WHERE sub_id = ?`, subID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -255,8 +252,8 @@ func (d *DB) GetShardSubscription(subID string) (*ShardSubscription, error) {
 func (d *DB) GetShardSubscriptionByPaymentTx(txid string) (*ShardSubscription, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	sub, err := scanShardSubscription(d.sql.QueryRow(`
-		SELECT sub_id, shard, buyer_pub, seller_pub, pricing_mode, price_sats, payment_txid, usage_rights, started_at, expires_at, last_seq, active
+	sub, err := scanShardSubscriptionFull(d.sql.QueryRow(`
+		SELECT `+shardSubSelectCols+`
 		FROM shard_subscriptions WHERE payment_txid = ?`, strings.ToLower(strings.TrimSpace(txid))))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -278,11 +275,11 @@ func (d *DB) ListActiveSubscriptions(shard string, nowUnix int64) ([]ShardSubscr
 	var err error
 	if strings.TrimSpace(shard) != "" {
 		rows, err = d.sql.Query(`
-			SELECT sub_id, shard, buyer_pub, seller_pub, pricing_mode, price_sats, payment_txid, usage_rights, started_at, expires_at, last_seq, active
+			SELECT `+shardSubSelectCols+`
 			FROM shard_subscriptions WHERE shard = ? AND active = 1 AND expires_at > ? ORDER BY started_at DESC`, shard, nowUnix)
 	} else {
 		rows, err = d.sql.Query(`
-			SELECT sub_id, shard, buyer_pub, seller_pub, pricing_mode, price_sats, payment_txid, usage_rights, started_at, expires_at, last_seq, active
+			SELECT `+shardSubSelectCols+`
 			FROM shard_subscriptions WHERE active = 1 AND expires_at > ? ORDER BY started_at DESC`, nowUnix)
 	}
 	if err != nil {
@@ -291,7 +288,7 @@ func (d *DB) ListActiveSubscriptions(shard string, nowUnix int64) ([]ShardSubscr
 	defer rows.Close()
 	var out []ShardSubscription
 	for rows.Next() {
-		sub, err := scanShardSubscription(rows)
+		sub, err := scanShardSubscriptionFull(rows)
 		if err != nil {
 			return nil, err
 		}

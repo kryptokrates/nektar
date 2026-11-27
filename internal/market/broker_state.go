@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kryptokrates/nektar/internal/autonomy"
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
@@ -29,8 +30,9 @@ type BrokerConfig struct {
 	GraceTimeout   time.Duration // wait after first offer for competing quotes (default 200ms, or 500ms with AI matcher)
 	OnStateChange  func(event string, payload any)
 	HTTPClient     *http.Client
-	RestateClient  *RestateClient // active Restate durable executor client (BuyerDeal, SellerDeal, Custody, Tx, AnchorCadence)
-	Matcher        Matcher        // optional Jev System One semantic matcher
+	RestateClient  *RestateClient     // active Restate durable executor client (BuyerDeal, SellerDeal, Custody, Tx, AnchorCadence)
+	Matcher        Matcher            // optional Jev System One semantic matcher
+	Watchdog       *autonomy.Watchdog // optional clock-skew & spend anomaly safety watchdog
 }
 
 // WantRequest describes a buyer's live knowledge purchase request across active hubs.

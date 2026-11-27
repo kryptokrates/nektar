@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff/v5"
+
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/reputation"
@@ -49,10 +51,13 @@ type SubscriptionStreamConfig struct {
 	Domains       []string
 	ExpiresAtUnix int64
 	SinceSeq      int64
-	DealReceipt   *DealReceipt
-	HTTPClient    *http.Client
-	MaxRetries    int           // default 1 reconnect retry before penalizing dead feed
-	RetryBackoff  time.Duration // default 100ms
+	DealReceipt     *DealReceipt
+	HTTPClient      *http.Client
+	MaxRetries      int           // default 1 reconnect retry before penalizing dead feed
+	RetryBackoff    time.Duration // initial jittered backoff interval (default 100ms)
+	MaxRetryBackoff time.Duration // max jittered backoff cap (default 60s)
+	OnSeqAdvance    func(seq int64)
+	OnSlash         func(sellerPub, reason string)
 }
 
 // ErrDeadSubscriptionFeed is returned when a paid subscription feed returns 404/410/5xx or drops
@@ -83,9 +88,28 @@ func (e *Engine) StreamShardSubscription(
 	if maxRetries <= 0 {
 		maxRetries = 1
 	}
-	backoff := cfg.RetryBackoff
-	if backoff <= 0 {
-		backoff = 100 * time.Millisecond
+	initBackoff := cfg.RetryBackoff
+	if initBackoff <= 0 {
+		initBackoff = 100 * time.Millisecond
+	}
+	maxBackoff := cfg.MaxRetryBackoff
+	if maxBackoff <= 0 {
+		maxBackoff = 60 * time.Second
+	}
+	if maxBackoff < initBackoff {
+		maxBackoff = initBackoff
+	}
+	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = initBackoff
+	bo.MaxInterval = maxBackoff
+	bo.RandomizationFactor = 0.3
+	bo.Reset()
+	nextWait := func() time.Duration {
+		d := bo.NextBackOff()
+		if d == backoff.Stop || d <= 0 {
+			return initBackoff
+		}
+		return d
 	}
 
 	lastSeq := cfg.SinceSeq
@@ -130,13 +154,13 @@ func (e *Engine) StreamShardSubscription(
 			}
 			failures++
 			if failures > maxRetries {
-				e.slashDeadSubscriptionFeed(ctx, cfg)
+				e.slashDeadSubscriptionFeed(ctx, cfg, err.Error())
 				return fmt.Errorf("%w: %v", ErrDeadSubscriptionFeed, err)
 			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(backoff):
+			case <-time.After(nextWait()):
 			}
 			continue
 		}
@@ -145,13 +169,13 @@ func (e *Engine) StreamShardSubscription(
 			_ = resp.Body.Close()
 			failures++
 			if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone || failures > maxRetries {
-				e.slashDeadSubscriptionFeed(ctx, cfg)
+				e.slashDeadSubscriptionFeed(ctx, cfg, fmt.Sprintf("HTTP %d", resp.StatusCode))
 				return fmt.Errorf("%w: HTTP %d", ErrDeadSubscriptionFeed, resp.StatusCode)
 			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(backoff):
+			case <-time.After(nextWait()):
 			}
 			continue
 		}
@@ -160,6 +184,9 @@ func (e *Engine) StreamShardSubscription(
 			_ = resp.Body.Close()
 			return fmt.Errorf("market: feed HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
 		}
+		// Successful SSE connection resets exponential backoff and transient failure counter.
+		bo.Reset()
+		failures = 0
 
 		// Stream SSE frames cleanly.
 		expiredCleanly := false
@@ -184,6 +211,7 @@ func (e *Engine) StreamShardSubscription(
 				Seq    int64 `json:"seq"`
 				NewSeq int64 `json:"newSeq"`
 			}
+			prevSeq := lastSeq
 			if json.Unmarshal(raw, &seqPeek) == nil {
 				if seqPeek.Seq > lastSeq {
 					lastSeq = seqPeek.Seq
@@ -194,6 +222,9 @@ func (e *Engine) StreamShardSubscription(
 			}
 			if onEvent != nil {
 				onEvent(evName, raw)
+			}
+			if lastSeq > prevSeq && cfg.OnSeqAdvance != nil {
+				cfg.OnSeqAdvance(lastSeq)
 			}
 			curEvent = ""
 			dataLines = dataLines[:0]
@@ -226,36 +257,42 @@ func (e *Engine) StreamShardSubscription(
 		// Stream dropped prematurely before ExpiresAtUnix!
 		failures++
 		if failures > maxRetries {
-			e.slashDeadSubscriptionFeed(ctx, cfg)
-			return fmt.Errorf("%w: stream closed prematurely before expiresAt=%d", ErrDeadSubscriptionFeed, cfg.ExpiresAtUnix)
+			reason := fmt.Sprintf("stream closed prematurely before expiresAt=%d", cfg.ExpiresAtUnix)
+			e.slashDeadSubscriptionFeed(ctx, cfg, reason)
+			return fmt.Errorf("%w: %s", ErrDeadSubscriptionFeed, reason)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(backoff):
+		case <-time.After(nextWait()):
 		}
 	}
 }
 
-func (e *Engine) slashDeadSubscriptionFeed(ctx context.Context, cfg SubscriptionStreamConfig) {
-	if e == nil || e.mem == nil || e.mem.DB() == nil || cfg.DealReceipt == nil {
+func (e *Engine) slashDeadSubscriptionFeed(ctx context.Context, cfg SubscriptionStreamConfig, reason string) {
+	if e == nil || e.mem == nil || e.mem.DB() == nil {
 		return
 	}
-	dr := *cfg.DealReceipt
-	if dr.BuyerSig == "" && e.saleKey != nil {
-		_ = SignDealReceiptBuyer(ctx, e.salePubHex(), e.signSaleDigest, &dr)
-	}
 	sellerPub := strings.TrimSpace(cfg.SellerPub)
-	if sellerPub == "" {
-		sellerPub = dr.SellerPub
+	if cfg.DealReceipt != nil {
+		dr := *cfg.DealReceipt
+		if dr.BuyerSig == "" && e.saleKey != nil {
+			_ = SignDealReceiptBuyer(ctx, e.salePubHex(), e.signSaleDigest, &dr)
+		}
+		if sellerPub == "" {
+			sellerPub = dr.SellerPub
+		}
+		scores := reputation.EvaluatePurchasedFragment(reputation.BuyerEvalInput{
+			SellerPub:         sellerPub,
+			OntologyID:        cfg.OntologyID,
+			SPVVerified:       true,
+			MPEVerified:       true,
+			HasPinnedOntology: cfg.OntologyID != "",
+			FeedDroppedEarly:  true,
+		})
+		_, _ = e.EmitPostDealAttestation(ctx, reputation.RoleBuyerRatesSeller, dr, cfg.OntologyID, scores, cfg.Domains)
 	}
-	scores := reputation.EvaluatePurchasedFragment(reputation.BuyerEvalInput{
-		SellerPub:         sellerPub,
-		OntologyID:        cfg.OntologyID,
-		SPVVerified:       true,
-		MPEVerified:       true,
-		HasPinnedOntology: cfg.OntologyID != "",
-		FeedDroppedEarly:  true,
-	})
-	_, _ = e.EmitPostDealAttestation(ctx, reputation.RoleBuyerRatesSeller, dr, cfg.OntologyID, scores, cfg.Domains)
+	if cfg.OnSlash != nil {
+		cfg.OnSlash(sellerPub, reason)
+	}
 }

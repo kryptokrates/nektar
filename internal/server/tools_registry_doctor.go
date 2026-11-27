@@ -235,6 +235,39 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 		}
 		checks = append(checks, DoctorCheck{Name: "book_reconciliation", Status: st, Detail: detail})
 	}
+	if wd := tb.currentWatchdog(); wd != nil {
+		wst := wd.Status()
+		clkStatus := "green"
+		if wst.ClockStatus == "warn" || wst.ClockStatus == "degraded-http-date" {
+			clkStatus = "amber"
+		} else if wst.ClockStatus == "tripped" {
+			clkStatus = "red"
+			nextSteps = append(nextSteps, "Sync your system clock (NTP/chrony/w32tm) so offset stays well within ±25s of UTC, or run POST /v1/autonomy/reset after fixing time.")
+		}
+		checks = append(checks, DoctorCheck{
+			Name:   "clock_skew_guard",
+			Status: clkStatus,
+			Detail: fmt.Sprintf("status=%s offsetMs=%d server=%s", wst.ClockStatus, wst.ClockOffsetMs, wst.ClockServer),
+		})
+		brkStatus := "green"
+		brkDetail := fmt.Sprintf("breaker=%s slashesInWindow=%d isolatedPeers=%d", wst.SpendBreakerState, wst.SlashEventsWindow, len(wst.IsolatedPeers))
+		if wst.SpendPaused {
+			brkStatus = "red"
+			brkDetail += " pausedReason=" + wst.PausedReason
+			nextSteps = append(nextSteps, "Autonomous spend is paused by Watchdog ("+wst.PausedReason+"). Inspect recent deals/clock and reset via POST /v1/autonomy/reset when resolved.")
+		} else if len(wst.IsolatedPeers) > 0 || wst.SlashEventsWindow > 0 {
+			brkStatus = "amber"
+		}
+		checks = append(checks, DoctorCheck{Name: "autonomy_watchdog", Status: brkStatus, Detail: brkDetail})
+	}
+	if tb.broker != nil && tb.broker.Subscriptions() != nil {
+		sst := tb.broker.Subscriptions().Status()
+		checks = append(checks, DoctorCheck{
+			Name:   "grade_s_subscriptions",
+			Status: "green",
+			Detail: fmt.Sprintf("running=%v active=%d events=%d slashes=%d", sst.Running, sst.ActiveCount, sst.EventsTotal, sst.SlashesTotal),
+		})
+	}
 
 	overall := "green"
 	for _, c := range checks {

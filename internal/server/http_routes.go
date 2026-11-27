@@ -158,6 +158,27 @@ func (a *App) buildMux() http.Handler {
 		a.BroadcastDashboardEvent("kill_switch")
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "killSwitch": in.Enabled})
 	})))
+	mux.Handle("GET /v1/autonomy/status", a.withAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := map[string]any{"ok": true}
+		if a.watchdog != nil {
+			resp["watchdog"] = a.watchdog.Status()
+		}
+		if a.broker != nil && a.broker.Subscriptions() != nil {
+			resp["subscriptions"] = a.broker.Subscriptions().Status()
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})))
+	mux.Handle("POST /v1/autonomy/reset", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if a.watchdog != nil {
+			a.watchdog.ManualReset()
+		}
+		a.BroadcastDashboardEvent("autonomy_reset")
+		resp := map[string]any{"ok": true}
+		if a.watchdog != nil {
+			resp["watchdog"] = a.watchdog.Status()
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})))
 	mux.Handle("DELETE /v1/market/listings/{shard}", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		shard := strings.TrimSpace(r.PathValue("shard"))
 		if shard == "" {

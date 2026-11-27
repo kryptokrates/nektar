@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kryptokrates/nektar/internal/autonomy"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
@@ -30,6 +31,7 @@ type Toolbox struct {
 	broker         *market.Broker
 	disc           *discovery.Service
 	hubNode        *hub.Node
+	watchdog       *autonomy.Watchdog
 	profile        string // "agent" (focused 10-tool default) | "operator" (all 18 tools)
 	httpClient     *http.Client
 	restateMu      sync.RWMutex
@@ -65,6 +67,23 @@ func (tb *Toolbox) SetRestateLiveness(aliveFn func() bool) {
 	tb.restateMu.Lock()
 	tb.restateAliveFn = aliveFn
 	tb.restateMu.Unlock()
+}
+
+// SetWatchdog attaches the autonomy clock-skew & spend-breaker Watchdog for doctor diagnostics.
+func (tb *Toolbox) SetWatchdog(w *autonomy.Watchdog) {
+	tb.restateMu.Lock()
+	tb.watchdog = w
+	tb.restateMu.Unlock()
+}
+
+func (tb *Toolbox) currentWatchdog() *autonomy.Watchdog {
+	tb.restateMu.RLock()
+	w := tb.watchdog
+	tb.restateMu.RUnlock()
+	if w == nil && tb.broker != nil {
+		return tb.broker.Watchdog()
+	}
+	return w
 }
 
 func (tb *Toolbox) isRestateAlive() bool {

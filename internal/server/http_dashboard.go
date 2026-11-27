@@ -201,6 +201,7 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		"reputation":  econSec.reputation,
 		"distill":     econSec.distill,
 		"microEarner": econSec.microEarner,
+		"autonomy":    a.buildDashboardAutonomy(),
 		"market":      netSec.marketRows,
 		"ticker":      a.BuildCommodityTicker(ctx, TickerFilter{}),
 		"marketTape":  autoSec.marketTape,
@@ -241,6 +242,18 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 			},
 		},
 	}
+}
+
+// buildDashboardAutonomy exposes live Watchdog (NTP clock-skew + circuit breaker) and Grade S subscription supervision status.
+func (a *App) buildDashboardAutonomy() map[string]any {
+	out := map[string]any{}
+	if a.watchdog != nil {
+		out["watchdog"] = a.watchdog.Status()
+	}
+	if a.broker != nil && a.broker.Subscriptions() != nil {
+		out["subscriptions"] = a.broker.Subscriptions().Status()
+	}
+	return out
 }
 
 // buildDashboardFeed builds the recent memory stream for the live Home timeline with automatic SPV settlement state.

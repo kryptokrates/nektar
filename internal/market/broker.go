@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kryptokrates/nektar/internal/autonomy"
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
@@ -41,6 +42,8 @@ type Broker struct {
 	mu                   sync.RWMutex
 	restate              *RestateClient
 	matcher              Matcher
+	watchdog             *autonomy.Watchdog
+	subSup               *SubscriptionSupervisor
 	pendingSales         map[string]*pendingSale
 	pendingConfirmations map[string]*pendingConfirmEntry // txid -> over-cap payment waiting for settleDepth
 	offerInbox           map[string]chan bstack.OfferAd
@@ -114,6 +117,7 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 		bgSem:                make(chan struct{}, 32),
 		restate:              cfg.RestateClient,
 		matcher:              cfg.Matcher,
+		watchdog:             cfg.Watchdog,
 		pendingSales:         make(map[string]*pendingSale),
 		pendingConfirmations: make(map[string]*pendingConfirmEntry),
 		offerInbox:           make(map[string]chan bstack.OfferAd),
@@ -134,6 +138,15 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 			disc.SetHubFeePolicy(engine.Policy().CanPayHubFee, engine.Policy().RecordHubFeeSpend)
 		}
 	}
+	b.subSup = NewSubscriptionSupervisor(mem, engine, SubscriptionSupervisorConfig{
+		Watchdog:   cfg.Watchdog,
+		HTTPClient: sseHC,
+		OnUpdate: func(ev, subID string) {
+			if cfg.OnStateChange != nil {
+				cfg.OnStateChange(ev, map[string]string{"subId": subID})
+			}
+		},
+	})
 	b.restorePersistedState()
 	return b
 }
@@ -160,6 +173,32 @@ func (b *Broker) WaitConnected(ctx context.Context, minHosts int64, timeout time
 
 func (b *Broker) Engine() *Engine               { return b.engine }
 func (b *Broker) Discovery() *discovery.Service { return b.disc }
+func (b *Broker) Subscriptions() *SubscriptionSupervisor {
+	if b == nil {
+		return nil
+	}
+	return b.subSup
+}
+func (b *Broker) Watchdog() *autonomy.Watchdog {
+	if b == nil {
+		return nil
+	}
+	b.mu.RLock()
+	w := b.watchdog
+	b.mu.RUnlock()
+	return w
+}
+func (b *Broker) SetWatchdog(w *autonomy.Watchdog) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.watchdog = w
+	b.mu.Unlock()
+	if b.subSup != nil {
+		b.subSup.SetWatchdog(w)
+	}
+}
 func (b *Broker) PubHex() string                { return hex.EncodeToString(b.engine.saleKey.PubKey().Compressed()) }
 func (b *Broker) PublicURL() string             { return strings.TrimRight(b.cfg.PublicURL, "/") }
 func (b *Broker) SetRestateClient(rc *RestateClient) {
@@ -256,6 +295,9 @@ func (b *Broker) Start(ctx context.Context) {
 	b.startMu.Unlock()
 
 	b.ensureHostLoops(runCtx)
+	if b.subSup != nil {
+		_ = b.subSup.Start(runCtx)
+	}
 	b.wg.Add(4)
 	go func() {
 		defer b.wg.Done()
@@ -329,6 +371,9 @@ func (b *Broker) Stop() {
 	b.startMu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if b.subSup != nil {
+		b.subSup.Stop()
 	}
 	b.mu.Lock()
 	for h, c := range b.activeLoops {

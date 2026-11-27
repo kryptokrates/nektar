@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"testing"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
@@ -66,5 +67,22 @@ func TestStartRestatePlaneSingleContainerDefaultAndFailClosedGuard(t *testing.T)
 		if len(sum) != 64 {
 			t.Errorf("restatePinnedSHA256[%q] missing or invalid length %d", target, len(sum))
 		}
+	}
+}
+
+func TestPickFreePortOnHostSkipsOccupiedPort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	busyPort := ln.Addr().(*net.TCPAddr).Port
+
+	got, err := pickFreePortOnHost("127.0.0.1", busyPort)
+	if err != nil {
+		t.Fatalf("pickFreePortOnHost: %v", err)
+	}
+	if got == busyPort || got <= 0 {
+		t.Fatalf("expected free port != occupied %d, got %d", busyPort, got)
 	}
 }

@@ -69,12 +69,13 @@ func DefaultSettleDepth(network string) int {
 }
 
 // DefaultHeaderSources returns the default comma-separated PoW header witnesses for network.
-// Both mainnet and testnet ALWAYS pair >=2 distinct-origin public PoW header services
-// (WhatsOnChain + Chaintracks v2) so no single proof/settler origin can validate its own BUMPs.
+// Mainnet pairs 3 distinct-origin public PoW header services (WhatsOnChain + Babbage Chaintracks v2 +
+// BSV Association Arcade Chaintracks v2) for automatic 2-of-3 quorum with early slow-straggler
+// cancellation; testnet pairs 2 distinct-origin witnesses (WhatsOnChain + Arcade Testnet).
 func DefaultHeaderSources(network string) string {
 	switch strings.ToLower(strings.TrimSpace(network)) {
 	case "main", "mainnet":
-		return "woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2"
+		return "woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2,arcade:" + DefaultBroadcasterMainnet
 	case "testnet", "test":
 		return "woc:test,arcade:" + DefaultBroadcasterTestnet
 	case "regtest":

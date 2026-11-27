@@ -68,12 +68,16 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 	// Always default to loopback 127.0.0.1:9080 even inside single-container deployments;
 	// multi-container Compose stacks pass `-restate-listen :9080` explicitly.
 	listenAddr := strings.TrimSpace(cfg.ListenAddr)
+	autoPickPort := false
 	if listenAddr == "" {
 		listenAddr = "127.0.0.1:9080"
+		autoPickPort = true
+	} else if listenAddr == "127.0.0.1:9080" {
+		autoPickPort = true
 	}
 	// In local auto-supervised mode (no external Restate & default loopback 9080), avoid port collisions
 	// when running side-by-side Mainnet + Testnet nodes or when another local tool occupies :9080.
-	if strings.TrimSpace(cfg.ExternalAdminURL) == "" && strings.TrimSpace(cfg.EndpointURI) == "" && listenAddr == "127.0.0.1:9080" {
+	if strings.TrimSpace(cfg.ExternalAdminURL) == "" && strings.TrimSpace(cfg.EndpointURI) == "" && autoPickPort {
 		if p, pErr := pickFreeLoopbackPort(9080); pErr == nil {
 			listenAddr = fmt.Sprintf("127.0.0.1:%d", p)
 		}
@@ -133,6 +137,14 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 		if wslHostIP := detectWSLHostIP(); wslHostIP != "" && isLocalHostIP(wslHostIP) {
 			_, port, sErr := net.SplitHostPort(listenAddr)
 			if sErr == nil && port != "" {
+				// Probe the actual WSL2 bridge host IP (not 127.0.0.1) so side-by-side Windows daemons
+				// never collide on <wslHostIP>:9080 when another Nektar instance already holds it.
+				if autoPickPort {
+					prefPort, _ := strconv.Atoi(port)
+					if freePort, fErr := pickFreePortOnHost(wslHostIP, prefPort); fErr == nil {
+						port = strconv.Itoa(freePort)
+					}
+				}
 				listenAddr = net.JoinHostPort(wslHostIP, port)
 				epURI = fmt.Sprintf("http://%s:%s", wslHostIP, port)
 				dialAddr = listenAddr
@@ -194,6 +206,20 @@ func StartRestatePlane(ctx context.Context, eng *market.Engine, cfg RestateRunti
 		}
 		if c, dErr := net.DialTimeout("tcp", dialAddr, 200*time.Millisecond); dErr == nil {
 			_ = c.Close()
+			// Yield briefly to ensure our own rSrv.Start goroutine did not exit with a bind error
+			// masked by another process already listening on dialAddr.
+			select {
+			case rErr := <-epErrCh:
+				stopEndpoint()
+				return nil, noop, fmt.Errorf("restate SDK endpoint failed to start on %s: %w", listenAddr, rErr)
+			case <-time.After(35 * time.Millisecond):
+			}
+			select {
+			case rErr := <-epErrCh:
+				stopEndpoint()
+				return nil, noop, fmt.Errorf("restate SDK endpoint failed to start on %s: %w", listenAddr, rErr)
+			default:
+			}
 			epReady = true
 			break
 		}
@@ -420,11 +446,20 @@ func deriveIngressURL(adminURL string) string {
 }
 
 func pickFreeLoopbackPort(preferred int) (int, error) {
-	if ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", preferred)); err == nil {
-		_ = ln.Close()
-		return preferred, nil
+	return pickFreePortOnHost("127.0.0.1", preferred)
+}
+
+func pickFreePortOnHost(host string, preferred int) (int, error) {
+	if host == "" {
+		host = "127.0.0.1"
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if preferred > 0 {
+		if ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(preferred))); err == nil {
+			_ = ln.Close()
+			return preferred, nil
+		}
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
 	if err != nil {
 		return 0, err
 	}

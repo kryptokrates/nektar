@@ -46,7 +46,7 @@ type Config struct {
 	WalletWireURL            string // default http://127.0.0.1:3321
 	WalletProfile            string // standard (default) | throughput
 	FeeRateSatPerKB          uint64 // optional static sat/kB override (0 => live BSV Broadcaster /policy clamped [100,500] fallback 100)
-	HeaderSource             string // comma-separated independent PoW header witnesses (e.g. woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2)
+	HeaderSource             string // comma-separated independent PoW header witnesses (default 2-of-3 on main: woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2,arcade:https://arcade-v2-us-1.bsvblockchain.tech)
 	ChainSpec                string // nodeapi.ParseChain spec (e.g. woc:main, teranode:http://...)
 	SettleSpec               string // comma-separated BSV Broadcaster spec (e.g. broadcaster:https://arcade-v2-us-1.bsvblockchain.tech, rpc:http://...)
 	SettleDepth              int    // confirmations required before value-final settlement (0 => network default)

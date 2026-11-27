@@ -143,6 +143,68 @@ func TestWitnessedTrackerHeaderIndependenceAndCircularRejection(t *testing.T) {
 	}
 }
 
+type failingWitness struct {
+	err error
+}
+
+func (f failingWitness) HeaderAt(context.Context, uint32) (*headers.Header, error) {
+	return nil, f.err
+}
+func (f failingWitness) CurrentHeight(context.Context) (uint32, error) {
+	return 0, f.err
+}
+func (f failingWitness) IsValidRootForHeight(context.Context, *chainhash.Hash, uint32) (bool, error) {
+	return false, f.err
+}
+
+func TestMainnetDefaultHeaderSourcesThreeWitnessTwoOfThreeQuorum(t *testing.T) {
+	wt, err := NewWitnessedTrackerFromSpec("main", DefaultHeaderSources("main"), "woc:main", DefaultSettleSpec("main"), nil)
+	if err != nil {
+		t.Fatalf("NewWitnessedTrackerFromSpec(main default): %v", err)
+	}
+	if len(wt.witnesses) != 3 {
+		t.Fatalf("expected 3 distinct-origin Mainnet header witnesses, got %d (%v)", len(wt.witnesses), DefaultHeaderSources("main"))
+	}
+	if wt.quorum != 2 {
+		t.Fatalf("expected 2-of-3 quorum for 3 Mainnet witnesses, got %d", wt.quorum)
+	}
+
+	// Prove 2-of-3 outage resilience: if any 1 of 3 witnesses fails (e.g. DNS NXDOMAIN / 503),
+	// the remaining 2 still satisfy CurrentHeight, HeaderAt, and IsValidRootForHeight.
+	ctx := context.Background()
+	w1 := &stubWitness{headers: make(map[uint32]*headers.Header), tip: 10}
+	w2 := &stubWitness{headers: make(map[uint32]*headers.Header), tip: 10}
+	var prev chainhash.Hash
+	for h := uint32(0); h <= 10; h++ {
+		mr := chainhash.DoubleHashH([]byte{byte(h), 0x77})
+		hdr := mineStubHeader(h, prev, mr, 1_700_000_000+h*600)
+		w1.headers[h] = hdr
+		cp := *hdr
+		w2.headers[h] = &cp
+		prev = hdr.Hash
+	}
+	down := failingWitness{err: ErrHeaderQuorumUnavailable}
+	wt3, err := NewWitnessedTracker("main", []NamedWitness{
+		{Name: "woc:main", Origin: "https://api.whatsonchain.com", Kind: headers.WhatsOnChain, Source: w1},
+		{Name: "chaintracks:babbage", Origin: "https://mainnet-chaintracks.babbage.systems", Kind: headers.Chaintracks, Source: down},
+		{Name: "arcade:v2-us-1", Origin: "https://arcade-v2-us-1.bsvblockchain.tech", Kind: headers.Arcade, Source: w2},
+	})
+	if err != nil {
+		t.Fatalf("NewWitnessedTracker(3): %v", err)
+	}
+	if wt3.quorum != 2 {
+		t.Fatalf("expected quorum=2, got %d", wt3.quorum)
+	}
+	wt3.minDifficulty = 0
+	if tip, err := wt3.CurrentHeight(ctx); err != nil || tip != 10 {
+		t.Fatalf("expected 2-of-3 CurrentHeight=10 with 1 witness down, got tip=%d err=%v", tip, err)
+	}
+	mr10 := w1.headers[10].MerkleRoot
+	if ok, err := wt3.IsValidRootForHeight(ctx, &mr10, 10); err != nil || !ok {
+		t.Fatalf("expected 2-of-3 IsValidRootForHeight=true with 1 witness down, got ok=%v err=%v", ok, err)
+	}
+}
+
 func TestWitnessedTrackerQuorumPrevLinkageReorgAndMTP(t *testing.T) {
 	ctx := context.Background()
 	w1 := &stubWitness{headers: make(map[uint32]*headers.Header), tip: 15}

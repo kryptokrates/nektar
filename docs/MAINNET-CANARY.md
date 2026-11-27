@@ -36,10 +36,10 @@ export NEKTAR_NETWORK="main"
 export NEKTAR_MAINNET_CONFIRM="I_UNDERSTAND"
 
 # >= 2 distinct-origin, non-circular PoW header witnesses (zero-PoW Native header endpoints are forbidden!)
-# Default 2-of-2 live Mainnet quorum: WhatsOnChain + Babbage Chaintracks v2 (built into bcommon/headers)
-export NEKTAR_HEADERS_SOURCE="woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2"
+# Default 2-of-3 live Mainnet quorum: WhatsOnChain + Babbage Chaintracks v2 + BSV Association Arcade v2
+export NEKTAR_HEADERS_SOURCE="woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2,arcade:https://arcade-v2-us-1.bsvblockchain.tech"
 export NEKTAR_CHAIN_SPEC="woc:main"
-export NEKTAR_SETTLE_SPEC="arcade:https://arcade-v2-us-1.bsvblockchain.tech"
+export NEKTAR_SETTLE_SPEC="broadcaster:main"
 
 # Conservative canary SpendGuard caps
 export NEKTAR_MAX_FEE_SATS_PER_TX=2000

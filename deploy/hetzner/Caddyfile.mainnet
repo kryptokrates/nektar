@@ -1,0 +1,37 @@
+# Hetzner host /etc/caddy/Caddyfile — Side-by-side Mainnet (nektar.run) + Testnet (testnet.nektar.run)
+#
+# Mainnet Spine Hub listens on 127.0.0.1:18422 (deploy/hetzner/compose.mainnet.yaml)
+# Testnet Spine Hub listens on 127.0.0.1:18420 (deploy/hub/compose.yaml)
+# flush_interval -1 is required for live SSE (/hub/events and /v1/market/feeds/*).
+
+nektar.run {
+	encode zstd gzip
+
+	@api path /hub/* /v1/* /mcp /a2a /.well-known/*
+	handle @api {
+		reverse_proxy 127.0.0.1:18422 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		root * /opt/nektar/site
+		file_server
+	}
+}
+
+testnet.nektar.run {
+	encode zstd gzip
+
+	@api path /hub/* /v1/* /mcp /a2a /.well-known/*
+	handle @api {
+		reverse_proxy 127.0.0.1:18420 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		root * /opt/nektar/site
+		file_server
+	}
+}

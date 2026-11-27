@@ -187,6 +187,24 @@ func (a *App) buildMux() http.Handler {
 		a.BroadcastDashboardEvent("backup_completed")
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "result": res, "status": a.backupMgr.Status()})
 	})))
+	mux.Handle("POST /v1/autonomy/subscribe", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in market.SubscribePeerRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 16384)).Decode(&in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if a.broker == nil || a.broker.Subscriptions() == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "subscription supervisor unavailable"})
+			return
+		}
+		sub, err := a.broker.Subscriptions().SubscribePeer(r.Context(), in)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		a.BroadcastDashboardEvent("subscription_activated")
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "subscription": sub, "supervisor": a.broker.Subscriptions().Status()})
+	})))
 	mux.Handle("POST /v1/autonomy/config", a.withOperatorAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var in market.PolicyAutonomyConfig
 		if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&in); err != nil {

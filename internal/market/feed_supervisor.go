@@ -340,8 +340,8 @@ func (s *SubscriptionSupervisor) SubscribePeer(ctx context.Context, req Subscrib
 		if parseErr != nil {
 			return nil, parseErr
 		}
-		if req.SellerPub != "" && challengeSellerPub != "" && !strings.EqualFold(challengeSellerPub, req.SellerPub) {
-			return nil, fmt.Errorf("market: 402 sellerPub mismatch (expected %s, got %s)", req.SellerPub, challengeSellerPub)
+		if err := verifyBRC105ChallengeIdentity(req.SellerPub, challengeSellerPub, payeePub); err != nil {
+			return nil, err
 		}
 		if req.MaxSats > 0 && requiredSats > req.MaxSats {
 			return nil, fmt.Errorf("market: subscription price %d sats exceeds cap %d sats", requiredSats, req.MaxSats)

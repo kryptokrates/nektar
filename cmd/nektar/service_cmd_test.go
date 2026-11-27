@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -80,5 +81,68 @@ func TestServiceProgramStartStopLifecycle(t *testing.T) {
 	}
 	if !stopped.Load() {
 		t.Fatal("expected serveFn context to cancel and drain on Stop")
+	}
+}
+
+func TestBuildServiceConfigExcludesS3SecretAndUsesEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NEKTAR_BACKUP_S3_ACCESS_KEY", "AKIA_TEST_KEY")
+	t.Setenv("NEKTAR_BACKUP_S3_SECRET_KEY", "super-secret-s3-value")
+
+	cfg, err := buildServiceConfig(serviceInstallOpts{
+		Network:    "testnet",
+		DataDir:    dir,
+		Executable: "/usr/local/bin/nektar",
+	})
+	if err != nil {
+		t.Fatalf("buildServiceConfig: %v", err)
+	}
+	if _, leaked := cfg.EnvVars["NEKTAR_BACKUP_S3_SECRET_KEY"]; leaked {
+		t.Fatalf("SECURITY VIOLATION: NEKTAR_BACKUP_S3_SECRET_KEY must NOT be embedded in OS service EnvVars")
+	}
+	envPath := cfg.EnvVars["NEKTAR_SERVICE_ENV_FILE"]
+	if envPath == "" {
+		t.Fatal("expected NEKTAR_SERVICE_ENV_FILE to be set when S3 secret is configured")
+	}
+	if err := writeServiceSecretsEnvFile(envPath); err != nil {
+		t.Fatalf("writeServiceSecretsEnvFile: %v", err)
+	}
+	// Clear process env and verify loadServiceEnvFile restores the secret cleanly.
+	t.Setenv("NEKTAR_BACKUP_S3_SECRET_KEY", "")
+	if err := loadServiceEnvFile(envPath); err != nil {
+		t.Fatalf("loadServiceEnvFile: %v", err)
+	}
+	if got := strings.TrimSpace(envOr("NEKTAR_BACKUP_S3_SECRET_KEY", "")); got != "super-secret-s3-value" {
+		t.Fatalf("expected loaded S3 secret, got %q", got)
+	}
+}
+
+func TestRestoreFileAtomicReplacesSQLiteAndClearsWAL(t *testing.T) {
+	dir := t.TempDir()
+	dst := dir + "/nektar.sqlite"
+	if err := restoreFileAtomic(dst, []byte("old-db"), true); err != nil {
+		t.Fatalf("initial restoreFileAtomic: %v", err)
+	}
+	if err := restoreFileAtomic(dst+"-wal", []byte("stale-wal"), false); err != nil {
+		t.Fatalf("seed wal: %v", err)
+	}
+	if err := restoreFileAtomic(dst+"-shm", []byte("stale-shm"), false); err != nil {
+		t.Fatalf("seed shm: %v", err)
+	}
+	if err := restoreFileAtomic(dst, []byte("new-db-bytes"), true); err != nil {
+		t.Fatalf("overwrite restoreFileAtomic: %v", err)
+	}
+	if _, err := os.Stat(dst + "-wal"); !os.IsNotExist(err) {
+		t.Fatalf("expected stale -wal to be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(dst + "-shm"); !os.IsNotExist(err) {
+		t.Fatalf("expected stale -shm to be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(dst + ".restore.tmp"); !os.IsNotExist(err) {
+		t.Fatalf("expected .restore.tmp to be renamed away, stat err=%v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil || string(got) != "new-db-bytes" {
+		t.Fatalf("expected restored bytes, got %q err=%v", string(got), err)
 	}
 }

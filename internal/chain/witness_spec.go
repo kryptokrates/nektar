@@ -70,13 +70,13 @@ func DefaultSettleDepth(network string) int {
 
 // DefaultHeaderSources returns the default comma-separated PoW header witnesses for network.
 // Both mainnet and testnet ALWAYS pair >=2 distinct-origin public PoW header services
-// (WhatsOnChain + Babbage Chaintracks v2) so no single proof/settler origin can validate its own BUMPs.
+// (WhatsOnChain + Chaintracks v2) so no single proof/settler origin can validate its own BUMPs.
 func DefaultHeaderSources(network string) string {
 	switch strings.ToLower(strings.TrimSpace(network)) {
 	case "main", "mainnet":
 		return "woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2"
 	case "testnet", "test":
-		return "woc:test,chaintracks:https://testnet-chaintracks.babbage.systems/v2"
+		return "woc:test,chaintracks:" + DefaultBroadcasterTestnet + "/chaintracks/v2"
 	case "regtest":
 		return "native:http://127.0.0.1:8080"
 	default:

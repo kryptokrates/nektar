@@ -250,15 +250,8 @@ func cmdBackupRestore(args []string) error {
 			continue
 		}
 		dst := filepath.Join(targetDir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		if err := restoreFileAtomic(dst, data, strings.HasSuffix(rel, ".sqlite")); err != nil {
 			return err
-		}
-		if err := os.WriteFile(dst, data, 0o600); err != nil {
-			return err
-		}
-		if strings.HasSuffix(rel, ".sqlite") {
-			_ = os.Remove(dst + "-wal")
-			_ = os.Remove(dst + "-shm")
 		}
 	}
 
@@ -269,6 +262,43 @@ func cmdBackupRestore(args []string) error {
 		"nextSteps": "Start nektar serve/up normally to verify restored state.",
 	}, "", "  ")
 	fmt.Println(string(enc))
+	return nil
+}
+
+// restoreFileAtomic removes stale SQLite WAL/SHM sidecars before swapping the target file
+// via <dst>.restore.tmp + fsync + os.Rename so an interrupted restore never leaves a
+// half-written database or config file behind.
+func restoreFileAtomic(dst string, data []byte, isSQLite bool) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	if isSQLite {
+		_ = os.Remove(dst + "-wal")
+		_ = os.Remove(dst + "-shm")
+	}
+	tmp := dst + ".restore.tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
 	return nil
 }
 

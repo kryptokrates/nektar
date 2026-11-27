@@ -169,9 +169,10 @@ func (b *Broker) QueryPeer402(ctx context.Context, req PeerQueryRequest) (*PeerQ
 			if parseErr != nil {
 				return parseErr
 			}
-			// Fail-closed anti-MITM check: challenge sellerPub (when declared) MUST match directory-signed peer identity.
-			if sellerPub != "" && challengeSellerPub != "" && !strings.EqualFold(challengeSellerPub, sellerPub) {
-				return fmt.Errorf("market: 402 sellerPub identity mismatch (expected %s, got %s)", sellerPub, challengeSellerPub)
+			// Fail-closed anti-MITM check: challenge sellerPub (when declared) OR payeePub (when sellerPub is omitted)
+			// MUST match the directory-signed peer identity.
+			if err := verifyBRC105ChallengeIdentity(sellerPub, challengeSellerPub, payeePub); err != nil {
+				return err
 			}
 			if sellerPub == "" && challengeSellerPub != "" {
 				sellerPub = challengeSellerPub
@@ -525,4 +526,27 @@ func packMatchesDomains(pk bstack.PackRef, want map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+// verifyBRC105ChallengeIdentity enforces fail-closed anti-MITM binding between a directory-signed
+// expectedSellerPub and the HTTP 402 challenge. If the optional JSON sellerPub field is declared,
+// it must match expectedSellerPub; if omitted, payeePub itself must match expectedSellerPub so a
+// malicious server or MITM cannot redirect payment to a foreign key by stripping sellerPub.
+func verifyBRC105ChallengeIdentity(expectedSellerPub, challengeSellerPub, payeePub string) error {
+	expected := strings.ToLower(strings.TrimSpace(expectedSellerPub))
+	if expected == "" {
+		return nil
+	}
+	declared := strings.ToLower(strings.TrimSpace(challengeSellerPub))
+	if declared != "" {
+		if !strings.EqualFold(declared, expected) {
+			return fmt.Errorf("market: 402 sellerPub identity mismatch (expected %s, got %s)", expected, declared)
+		}
+		return nil
+	}
+	payee := strings.ToLower(strings.TrimSpace(payeePub))
+	if payee == "" || !strings.EqualFold(payee, expected) {
+		return fmt.Errorf("market: 402 payeePub identity mismatch with omitted sellerPub (expected %s, got %s)", expected, payee)
+	}
+	return nil
 }

@@ -172,15 +172,20 @@ func (tb *Toolbox) ExecSell(ctx context.Context, in SellToolInput) (any, error) 
 	})
 }
 
-// MarketContractInput drives the unified NMU-1 `marketContract` tool (ticker | subscriptions | revokeSubscription).
+// MarketContractInput drives the unified NMU-1 `marketContract` tool (ticker | subscriptions | subscribe | revokeSubscription).
 type MarketContractInput struct {
-	Action      string `json:"action,omitempty"` // ticker (default) | subscriptions | revokeSubscription
-	OntologyID  string `json:"ontologyId,omitempty"`
-	Grade       string `json:"grade,omitempty"`
-	PricingMode string `json:"pricingMode,omitempty"`
-	Domain      string `json:"domain,omitempty"`
-	Shard       string `json:"shard,omitempty"`
-	SubID       string `json:"subId,omitempty"`
+	Action      string   `json:"action,omitempty"` // ticker (default) | subscriptions | subscribe | revokeSubscription
+	OntologyID  string   `json:"ontologyId,omitempty"`
+	Grade       string   `json:"grade,omitempty"`
+	PricingMode string   `json:"pricingMode,omitempty"`
+	Domain      string   `json:"domain,omitempty"`
+	Domains     []string `json:"domains,omitempty"`
+	Shard       string   `json:"shard,omitempty"`
+	TargetShard string   `json:"targetShard,omitempty"`
+	PeerURL     string   `json:"peerUrl,omitempty"`
+	SellerPub   string   `json:"sellerPub,omitempty"`
+	MaxSats     uint64   `json:"maxSats,omitempty"`
+	SubID       string   `json:"subId,omitempty"`
 }
 
 func (tb *Toolbox) ExecMarketContract(ctx context.Context, in MarketContractInput) (any, error) {
@@ -209,6 +214,27 @@ func (tb *Toolbox) ExecMarketContract(ctx context.Context, in MarketContractInpu
 			subs = []store.ShardSubscription{}
 		}
 		return map[string]any{"subscriptions": subs, "count": len(subs)}, nil
+	case "subscribe":
+		if tb.broker == nil || tb.broker.Subscriptions() == nil {
+			return nil, errors.New("marketContract subscribe requires an active market broker")
+		}
+		doms := append([]string(nil), in.Domains...)
+		if len(doms) == 0 && strings.TrimSpace(in.Domain) != "" {
+			doms = []string{strings.TrimSpace(in.Domain)}
+		}
+		sub, err := tb.broker.Subscriptions().SubscribePeer(ctx, market.SubscribePeerRequest{
+			PeerBaseURL: in.PeerURL,
+			SellerPub:   in.SellerPub,
+			Shard:       in.Shard,
+			TargetShard: in.TargetShard,
+			OntologyID:  in.OntologyID,
+			Domains:     doms,
+			MaxSats:     in.MaxSats,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true, "subscription": sub}, nil
 	case "revokesubscription", "revoke_subscription":
 		cc := CallerContextFor(ctx, policy.Principal{})
 		if cc.FromHTTP && !cc.IsOperator {

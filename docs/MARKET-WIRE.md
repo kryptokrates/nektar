@@ -204,3 +204,24 @@ Hard rules:
 - A seller reaching `completing` broadcasts `buy` itself — no signature
   needed from the buyer (the preimage IS the claim credential).
 - `uncertain` is operator-visible, never silently settled.
+
+## 9. Ontology Pinning (RFC-001) & NMU-1 Commodity Extensions (RFC-002)
+
+Pure-Go `v0.1` (`internal/bstack/{wire,module,module_lookup}.go`, `internal/nmu`, `internal/server/http_nmu_market.go`) extends `nkt1` and HTTP settlement with backward-compatible optional fields — see [RFC-001](rfcs/RFC-001-jevgraph-ontology.md) and [RFC-002](rfcs/RFC-002-nmu1-commodity-standard.md) for normative specs:
+
+- **Ontology Pinning (RFC-001):**
+  - `WantAd`: optional `ontologyId` (64-hex `TagOntologyV1` hash).
+  - `OfferAd`: optional `ontologyId` and `edgesRoot` (64-hex Merkle root over accepted `TagTripleV1` triples).
+  - `PackRef`: optional `ontologyId` and `targetOntologyId` (for Bridge Shards).
+- **NMU-1 Commodity Fields (RFC-002):**
+  - `WantAd`: optional `minGrade` (`S|A|B|C`), `maxSatsPer1kUnits` (integer milli-sats per verified triple), `freshnessClass` (`ephemeral|versioned|evergreen`), `requiredRights` (`inference_only|distill_resellable`), `pricingMode` (`spot|per_query|subscription`).
+  - `OfferAd`: optional `grade`, `unitCount` (`0..4096`), `satsPer1kUnits`, `freshnessClass`, `validUntilUnix`, `subjectVersion`, `usageRights`, `pricingMode`, `subscriptionSec`, `feedUrl`.
+  - `PackRef`: optional `grade`, `unitCount`, `satsPer1kUnits`, `pricingMode`, `enabledModes[]`, `queryPriceSats`, `subscriptionPriceSats`, `subscriptionSec`, `freshnessClass`, `usageRights`, `feedEndpoint`.
+  - **Overlay Validation:** `tm_nektar_<net>_*` rejects malformed grades, unknown enums, `unitCount > 4096`, `satsPer1kUnits` inconsistent with `(priceSats, unitCount)`, and invalid `feedUrl` values fail-closed.
+  - **`ls_nektar` Lookup Filters:** `MarketQuery` supports `ontologyId`, `minGrade`, `maxSatsPer1kUnits`, `freshnessClass`, `requiredRights`, and `pricingMode`.
+- **Multi-Mode HTTP Contracts & Ticker:**
+  - `POST /v1/market/query` — `per_query` metered recall over BRC-105 HTTP 402 returning verified items + signed `nektardr1.*` receipt.
+  - `POST /v1/market/subscriptions` — `subscription` activation over BRC-105 HTTP 402 returning `subId`, `feedUrl`, and signed `nektardr1.*` receipt.
+  - `GET /v1/market/feeds/{shard}` — authenticated SSE Shard Feed pushing `fragment_distilled` and Grade S `fragment_superseded` events; requires `X-Nektar-Sub-ID`, `X-Nektar-Pub`, `X-Nektar-TS` (`±60s` replay window), and `X-Nektar-Sig` over `DSHA256("nektar:feed-auth:v1" || "GET|/v1/market/feeds/{shard}|{subId}|{ts}")`.
+  - `GET /v1/market/ticker` — zero-float Commodity Ticker aggregating live quotes by `(ontologyId, grade, pricingMode)`.
+

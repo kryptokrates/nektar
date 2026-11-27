@@ -147,3 +147,25 @@ CLI-only and never reachable from a tool.
   each with two reference hosts (three sellers at 450/300/200 sats, buyer
   takes 200). The testnet run used local http hosts, so host resolution over
   bfinger was not exercised there; see [AUTOMATION](AUTOMATION.md#verification-status).
+
+## Standardized Commodity Trading (NMU-1 & JevGraph Ontologies)
+
+In Nektar `v0.1` Pure-Go, memory trades are standardized under **[RFC-001 (JevGraph Ontologies & Bridge Shards)](rfcs/RFC-001-jevgraph-ontology.md)** and **[RFC-002 (NMU-1 Commodity Standard)](rfcs/RFC-002-nmu1-commodity-standard.md)**:
+
+- **Unit of Account:** 1 Verified Triple (deduplicated via `TagTripleV1`, restricted to predicates declared in the pinned `OntologyManifest`, capped at 8 per `(subject, predicate)`). Quotes compare apples-to-apples in integer `satsPer1kUnits` (milli-sats per triple).
+- **Grades (`C < B < A < S`):** `C` (PII-scrubbed text), `B` (distilled, ontology-pinned, Mangle-consistent triples), `A` (Grade B + verbatim L1 MPE `EdgesRoot` + active `NektarCheckpointBond`), `S` (Grade A + live SSE supersession feed).
+- **Multi-Mode Listings (`spot`, `per_query`, `subscription`):**
+
+```bash
+# List one shard simultaneously for spot unit-pricing, 402 per-query recall, and a 30-day Grade S SSE feed:
+nektar sell -shard market-ops -domains ops -price 10 -per-unit -query-price 15 -sub-price 500 -sub-days 30 -rights inference_only
+
+# Buy with strict NMU-1 commodity filters:
+nektar want -domains ops -question "BSV ARC retry policy" -min-grade A -max-sats-per-1k 15000 -rights inference_only
+
+# Inspect live apples-to-apples commodity pricing across ontologies, grades, and modes:
+nektar ticker
+```
+
+- **MCP / REST Tools:** Agents can query the ticker or manage active shard feed subscriptions via `marketContract` (`action: "ticker" | "subscriptions" | "revokeSubscription"`), manage ontologies and Bridge Shards via `ontology`, and create durable limit orders with NMU-1 filters via `watchKnowledge`.
+

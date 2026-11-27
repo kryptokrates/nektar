@@ -1,6 +1,6 @@
 # `nektar.run` — Hetzner Mainnet Spine Hub Cutover & Rollback Runbook
 
-This runbook brings up the **Mainnet Spine Hub** on `https://nektar.run` (`127.0.0.1:18422`) side-by-side with the existing Testnet Hub on `https://testnet.nektar.run` (`127.0.0.1:18420`), using strictly isolated Docker volumes (`hub-mainnet-data`, `hub-mainnet-backups`, `restate-mainnet-data`) and zero changes to live Testnet CI until cutover is verified.
+This runbook brings up the **Mainnet Spine Hub** on `https://nektar.run` (`127.0.0.1:18430`) side-by-side with the existing Testnet Hub on `https://testnet.nektar.run` (`127.0.0.1:18420`) and fleet hubs (`18421..18425`), using strictly isolated Docker volumes (`hub-mainnet-data`, `hub-mainnet-backups`, `restate-mainnet-data`) and zero changes to live Testnet CI until cutover is verified.
 
 ---
 
@@ -70,23 +70,23 @@ docker compose \
 set -a && source /opt/nektar/.env.mainnet && set +a
 
 # 1. Network == main & healthy
-curl -fsS http://127.0.0.1:18422/v1/health
-curl -fsS http://127.0.0.1:18422/hub/v1/health
+curl -fsS http://127.0.0.1:18430/v1/health
+curl -fsS http://127.0.0.1:18430/hub/v1/health
 
 # 2. Spine role + hybrid BRC-105 fee schedule active
-curl -fsS http://127.0.0.1:18422/hub/v1/terms
+curl -fsS http://127.0.0.1:18430/hub/v1/terms
 
 # 3. Anti-freerider HTTP 402 gate active on /hub/sync
-curl -i http://127.0.0.1:18422/hub/sync?cursor=0
+curl -i http://127.0.0.1:18430/hub/sync?cursor=0
 # Expect: HTTP/1.1 402 Payment Required + X-BSV-Payment-Satoshis-Required
 
 # 4. Doctor all green (restate, clock_skew_guard, autonomy_watchdog, encrypted_backup)
-curl -fsS -X POST http://127.0.0.1:18422/v1/tools/doctor \
+curl -fsS -X POST http://127.0.0.1:18430/v1/tools/doctor \
   -H "Authorization: Bearer $NEKTAR_OPERATOR_TOKEN" \
   -H "Content-Type: application/json" -d '{}'
 
 # 5. Get Mainnet funding address & send 5,000-10,000 real canary sats
-curl -fsS http://127.0.0.1:18422/v1/wallet \
+curl -fsS http://127.0.0.1:18430/v1/wallet \
   -H "Authorization: Bearer $NEKTAR_OPERATOR_TOKEN"
 ```
 
@@ -115,7 +115,7 @@ If anything looks wrong, revert Caddy to Testnet in 2 seconds without losing Mai
 sudo cp /etc/caddy/Caddyfile.pre-mainnet.bak /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 # Optional: engage kill switch on Mainnet container immediately
-curl -X POST http://127.0.0.1:18422/v1/automation/kill \
+curl -X POST http://127.0.0.1:18430/v1/automation/kill \
   -H "Authorization: Bearer $NEKTAR_OPERATOR_TOKEN" \
   -H "Content-Type: application/json" -d '{"enabled":true}'
 ```

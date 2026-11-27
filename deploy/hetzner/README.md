@@ -8,7 +8,7 @@
 | Testnet secrets & tokens | `/opt/nektar/.env` (box-local only — never in git) | Operator |
 | **Mainnet Spine Hub config (side-by-side)** | `deploy/hetzner/nektar-mainnet.env` + `deploy/hetzner/compose.mainnet.yaml` | Git / operator cutover ([MAINNET-CUTOVER.md](MAINNET-CUTOVER.md)) |
 | **Mainnet secrets & confirmation** | `/opt/nektar/.env.mainnet` (`chmod 600` — never in git) | Operator |
-| Caddy side-by-side routing | `deploy/hetzner/Caddyfile.mainnet` (`nektar.run` -> `:18422` Mainnet, `testnet.nektar.run` -> `:18420` Testnet) | Operator (`flush_interval -1` for SSE) |
+| Caddy side-by-side routing | `deploy/hetzner/Caddyfile.mainnet` (`nektar.run` -> `:18430` Mainnet, `testnet.nektar.run` -> `:18420` Testnet) | Operator (`flush_interval -1` for SSE) |
 | Public surfaces | `https://nektar.run/.well-known/nektar`, `/hub/v1/health`, `/hub/v1/terms`, `/v1/verify` | Caddy reverse proxy |
 
 Check live status:

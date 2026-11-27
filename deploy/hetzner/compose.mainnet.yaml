@@ -34,7 +34,7 @@ services:
       restate:
         condition: service_healthy
     ports:
-      - '${NEKTAR_HTTP_BIND:-127.0.0.1}:${NEKTAR_HTTP_PORT:-18422}:18420'
+      - '${NEKTAR_HTTP_BIND:-127.0.0.1}:${NEKTAR_HTTP_PORT:-18430}:18420'
     environment:
       NEKTAR_NETWORK: ${NEKTAR_NETWORK:-main}
       NEKTAR_MAINNET_CONFIRM: ${NEKTAR_MAINNET_CONFIRM:-}

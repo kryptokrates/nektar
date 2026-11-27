@@ -1,37 +1,107 @@
-# Hetzner host /etc/caddy/Caddyfile — Side-by-side Mainnet (nektar.run) + Testnet (testnet.nektar.run)
+# Hetzner host /etc/caddy/Caddyfile — Side-by-side Mainnet (nektar.run) + Testnet (testnet.nektar.run) + Fleet (hub1..5)
 #
-# Mainnet Spine Hub listens on 127.0.0.1:18422 (deploy/hetzner/compose.mainnet.yaml)
+# Mainnet Spine Hub listens on 127.0.0.1:18430 (deploy/hetzner/compose.mainnet.yaml)
 # Testnet Spine Hub listens on 127.0.0.1:18420 (deploy/hub/compose.yaml)
+# Fleet hubs 1..5 listen on 127.0.0.1:18421..18425 (deploy/hetzner/hubs-fleet.compose.yaml)
 # flush_interval -1 is required for live SSE (/hub/events and /v1/market/feeds/*).
 
 nektar.run {
-	encode zstd gzip
-
-	@api path /hub/* /v1/* /mcp /a2a /.well-known/*
-	handle @api {
-		reverse_proxy 127.0.0.1:18422 {
+	handle_path /hubs/1* {
+		reverse_proxy localhost:18421 {
 			flush_interval -1
 		}
 	}
-
+	handle_path /hubs/2* {
+		reverse_proxy localhost:18422 {
+			flush_interval -1
+		}
+	}
+	handle_path /hubs/3* {
+		reverse_proxy localhost:18423 {
+			flush_interval -1
+		}
+	}
+	handle_path /hubs/4* {
+		reverse_proxy localhost:18424 {
+			flush_interval -1
+		}
+	}
+	handle_path /hubs/5* {
+		reverse_proxy localhost:18425 {
+			flush_interval -1
+		}
+	}
+	handle /v1/* {
+		reverse_proxy localhost:18430 {
+			flush_interval -1
+		}
+	}
+	handle /.well-known/* {
+		reverse_proxy localhost:18430
+	}
+	handle /mcp* {
+		reverse_proxy localhost:18430 {
+			flush_interval -1
+		}
+	}
+	handle /hub/* {
+		reverse_proxy localhost:18430 {
+			flush_interval -1
+		}
+	}
+	handle /events {
+		reverse_proxy localhost:18430 {
+			flush_interval -1
+		}
+	}
+	handle /a2a* {
+		reverse_proxy localhost:18430
+	}
 	handle {
-		root * /opt/nektar/site
+		root * /var/www/nektar
+		header Cache-Control "no-cache"
 		file_server
 	}
 }
 
-testnet.nektar.run {
-	encode zstd gzip
-
-	@api path /hub/* /v1/* /mcp /a2a /.well-known/*
-	handle @api {
-		reverse_proxy 127.0.0.1:18420 {
-			flush_interval -1
-		}
+hub1.nektar.run {
+	reverse_proxy localhost:18421 {
+		flush_interval -1
 	}
+}
 
-	handle {
-		root * /opt/nektar/site
-		file_server
+hub2.nektar.run {
+	reverse_proxy localhost:18422 {
+		flush_interval -1
+	}
+}
+
+hub3.nektar.run {
+	reverse_proxy localhost:18423 {
+		flush_interval -1
+	}
+}
+
+hub4.nektar.run {
+	reverse_proxy localhost:18424 {
+		flush_interval -1
+	}
+}
+
+hub5.nektar.run {
+	reverse_proxy localhost:18425 {
+		flush_interval -1
+	}
+}
+
+rv.nektar.run {
+	reverse_proxy localhost:18421 {
+		flush_interval -1
+	}
+}
+
+testnet.nektar.run {
+	reverse_proxy localhost:18420 {
+		flush_interval -1
 	}
 }

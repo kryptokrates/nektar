@@ -239,6 +239,9 @@ CREATE TABLE IF NOT EXISTS kv (
 	if err != nil {
 		return err
 	}
+	if err := d.ensureCoreColumns(); err != nil {
+		return err
+	}
 	// Clean up any orphaned FTS5 rows belonging to forgotten fragments (crash recovery for shredded records).
 	if _, err := d.sql.Exec(`
 		DELETE FROM fragments_fts
@@ -258,6 +261,47 @@ CREATE TABLE IF NOT EXISTS kv (
 		return err
 	}
 	return d.migrateMarket()
+}
+
+// ensureCoreColumns idempotently backfills every evolved column on the core tables
+// (fragments, anchors, pending_anchors, receipts) when upgrading an existing SQLite DB.
+func (d *DB) ensureCoreColumns() error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	cols := []struct{ table, col, def string }{
+		{"fragments", "prev_leaf", "TEXT NOT NULL DEFAULT ''"},
+		{"fragments", "chain_hash", "TEXT NOT NULL DEFAULT ''"},
+		{"fragments", "borg_group", "TEXT NOT NULL DEFAULT ''"},
+		{"fragments", "borg_epoch", "INTEGER NOT NULL DEFAULT 0"},
+		{"fragments", "batch_n", "INTEGER NOT NULL DEFAULT -1"},
+		{"fragments", "leaf_index", "INTEGER NOT NULL DEFAULT -1"},
+		{"fragments", "anchor_txid", "TEXT NOT NULL DEFAULT ''"},
+		{"fragments", "supersedes", "INTEGER NOT NULL DEFAULT 0"},
+		{"fragments", "forgotten", "INTEGER NOT NULL DEFAULT 0"},
+		{"fragments", "tainted", "INTEGER NOT NULL DEFAULT 0"},
+		{"fragments", "path", "TEXT NOT NULL DEFAULT ''"},
+		{"fragments", "media_type", "TEXT NOT NULL DEFAULT ''"},
+		{"fragments", "chirp_url", "TEXT NOT NULL DEFAULT ''"},
+		{"fragments", "content_sha256", "TEXT NOT NULL DEFAULT ''"},
+		{"fragments", "mpe_root", "TEXT NOT NULL DEFAULT ''"},
+		{"fragments", "commit_hash", "TEXT NOT NULL DEFAULT ''"},
+		{"anchors", "beef", "BLOB"},
+		{"anchors", "settled", "INTEGER NOT NULL DEFAULT 0"},
+		{"anchors", "block_height", "INTEGER NOT NULL DEFAULT 0"},
+		{"pending_anchors", "kind", "TEXT NOT NULL DEFAULT 'append'"},
+		{"pending_anchors", "txid", "TEXT NOT NULL DEFAULT ''"},
+		{"pending_anchors", "beef", "BLOB"},
+		{"receipts", "anchor_txid", "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, c := range cols {
+		if err := ensureColumnTx(tx, c.table, c.col, c.def); err != nil {
+			return fmt.Errorf("store: ensure %s.%s: %w", c.table, c.col, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // ensureColumnTx inspects PRAGMA table_info(table) inside tx and adds column only if absent,

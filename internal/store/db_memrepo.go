@@ -143,6 +143,12 @@ CREATE TABLE IF NOT EXISTS mem_tags (
 	if err := ensureColumnTx(tx, "mem_commits", "ontology_commit", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("store: migrate mem_commits.ontology_commit: %w", err)
 	}
+	if err := ensureColumnTx(tx, "mem_branches", "genesis_pub", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("store: migrate mem_branches.genesis_pub: %w", err)
+	}
+	if err := ensureColumnTx(tx, "mem_branches", "genesis_shard_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("store: migrate mem_branches.genesis_shard_id: %w", err)
+	}
 	return tx.Commit()
 }
 

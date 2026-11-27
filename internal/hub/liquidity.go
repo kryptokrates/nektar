@@ -14,6 +14,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/distill"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
@@ -95,10 +96,12 @@ func ArmHubLiquidity(ctx context.Context, node *Node, mem *memory.Service, cfg L
 			if len(existing) == 0 {
 				for _, txt := range st.Facts {
 					_, _ = mem.Remember(ctx, memory.RememberInput{
-						Shard:  st.Shard,
-						Text:   txt,
-						Source: "hub:curated",
-						Class:  "guide",
+						Shard:     st.Shard,
+						Text:      txt,
+						Source:    "hub:curated",
+						Class:     "guide",
+						Public:    true,
+						Distilled: true,
 					})
 				}
 			}
@@ -141,12 +144,13 @@ func ArmHubLiquidity(ctx context.Context, node *Node, mem *memory.Service, cfg L
 		}
 	}
 
-	// 2. Register default domain bounties & arm the verified Bounty Buyer handler!
+	// 2. Register default domain bounties (including a Hub-sponsored 0-sat starter bounty) & arm handlers!
 	if cfg.ArmBounties {
 		defaultBounties := []Bounty{
 			{ID: "bounty-ops", Domain: "ops", Question: "Verified DevOps, deployment, or infrastructure runbook facts", RewardSats: cfg.BountyRewardSats, MaxFills: 50, Active: true},
 			{ID: "bounty-bsv", Domain: "bsv", Question: "Verified BSV protocol, SPV, Rúnar, or overlay engineering facts", RewardSats: cfg.BountyRewardSats, MaxFills: 50, Active: true},
 			{ID: "bounty-agents", Domain: "agents", Question: "Verified MCP, A2A, tool-use, or agent orchestration knowledge", RewardSats: cfg.BountyRewardSats, MaxFills: 50, Active: true},
+			{ID: "bounty-starter-sponsored", Domain: "ops", Question: "Zero-sat cold-start sponsored bounty: PII-clean distilled engineering fact (Hub anchors and pays net of anchor fee)", RewardSats: cfg.BountyRewardSats, MaxFills: 50, Sponsored: true, AnchorFeeReserveSats: 5, Active: true},
 		}
 		for _, b := range defaultBounties {
 			if _, err := node.Store().GetBounty(b.ID); err != nil {
@@ -156,6 +160,7 @@ func ArmHubLiquidity(ctx context.Context, node *Node, mem *memory.Service, cfg L
 		node.SetBountyHandler(func(bCtx context.Context, b Bounty, sub BountySubmission) (*BountyPayoutResult, error) {
 			return handleVerifiedBounty(bCtx, mem, b, sub)
 		})
+		node.SetWorkHandler(makeDefaultWorkHandler(mem))
 		bounties, _ := node.Store().ListBounties(true)
 		state.Bounties = bounties
 		bDomSeen := make(map[string]bool)
@@ -240,7 +245,8 @@ func RefreshHubLiquidityStock(ctx context.Context, mem *memory.Service) ([]bstac
 	return packs, nil
 }
 
-// handleVerifiedBounty verifies a contributing agent's ProofBundle + Merkle inclusion at settleDepth,
+// handleVerifiedBounty verifies a contributing agent's ProofBundle + Merkle inclusion at settleDepth
+// (or verifies cryptographic authorship + fail-closed PII scrub on Hub-sponsored 0-sat bounties),
 // pays their BSV address via SpendGuard-enforced Port.Send returning full AtomicBEEF, and commits
 // the verified fact into curated/<domain>.
 func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, sub BountySubmission) (*BountyPayoutResult, error) {
@@ -250,27 +256,64 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 	if len(strings.TrimSpace(sub.Text)) < 12 {
 		return nil, errors.New("bounty: fragment text too short to qualify")
 	}
-	// Mandatory SPV / Merkle ProofBundle — never pay unverified text submissions.
-	if len(sub.ProofBundle) == 0 {
-		return nil, errors.New("bounty: anchored proofBundle is required for payout")
+	// Fail-closed secret & PII gate on EVERY Hub bounty submission (never ingest or resell leaked secrets!).
+	scrubRes := distill.Scrub(sub.Text)
+	if scrubRes.Verdict == distill.ScrubBlocked {
+		ruleID := "secret-detected"
+		if len(scrubRes.BlockedRules) > 0 {
+			ruleID = scrubRes.BlockedRules[0]
+		}
+		return nil, fmt.Errorf("bounty: rejected by fail-closed secret/PII scrubber (%s)", ruleID)
 	}
-	var pb contracts.ProofBundle
-	if err := json.Unmarshal(sub.ProofBundle, &pb); err != nil {
-		return nil, fmt.Errorf("bounty: invalid proofBundle JSON: %w", err)
+	if b.Sponsored && scrubRes.Verdict == distill.ScrubDroppedLowSignal {
+		return nil, errors.New("bounty: rejected low-signal ephemeral chatter on sponsored bounty")
 	}
-	if err := verifyBountyProofBundle(ctx, mem, pb, sub); err != nil {
-		return nil, fmt.Errorf("bounty: proofBundle verification failed: %w", err)
+
+	commitText := sub.Text
+	payoutSats := b.RewardSats
+	autoAnchor := false
+
+	if b.Sponsored && len(sub.ProofBundle) == 0 {
+		// Track B (Zero-Sat Hub-Sponsored Knowledge Bounty):
+		// Verify cryptographic authorship (HDP + ProvenanceSig + OwnerSig), scrub PII, Hub anchors on its UTXO pool,
+		// and pays RewardSats minus AnchorFeeReserveSats via AtomicBEEF!
+		if err := verifyBountyAuthorship(sub); err != nil {
+			return nil, fmt.Errorf("bounty: sponsored authorship verification failed: %w", err)
+		}
+		if scrubRes.SanitizedText != "" {
+			commitText = scrubRes.SanitizedText
+		}
+		if b.AnchorFeeReserveSats > 0 && payoutSats > b.AnchorFeeReserveSats {
+			payoutSats -= b.AnchorFeeReserveSats
+		} else if b.AnchorFeeReserveSats > 0 {
+			payoutSats = 1
+		}
+		autoAnchor = mem.Chain().BalanceSats() > 1000
+	} else {
+		// Mandatory SPV / Merkle ProofBundle — never pay unverified text submissions.
+		if len(sub.ProofBundle) == 0 {
+			return nil, errors.New("bounty: anchored proofBundle is required for payout")
+		}
+		var pb contracts.ProofBundle
+		if err := json.Unmarshal(sub.ProofBundle, &pb); err != nil {
+			return nil, fmt.Errorf("bounty: invalid proofBundle JSON: %w", err)
+		}
+		if err := verifyBountyProofBundle(ctx, mem, pb, sub); err != nil {
+			return nil, fmt.Errorf("bounty: proofBundle verification failed: %w", err)
+		}
 	}
 
 	// Persist acquired verified knowledge into Hub's curated/<domain> shard BEFORE broadcasting payout
-	// (AutoAnchor: false so anchor/UTXO errors or HTTP client cancel NEVER happen after Send and trigger CancelBountyClaim!).
+	// (for standard bounties AutoAnchor is false so anchor errors never occur after Send).
 	curatedShard := "curated/" + b.Domain
 	rem, err := mem.Remember(ctx, memory.RememberInput{
 		Shard:      curatedShard,
-		Text:       sub.Text,
+		Text:       commitText,
 		Source:     "bounty:" + shortID(sub.SellerPub),
 		Class:      b.Domain,
-		AutoAnchor: false,
+		Public:     true,
+		Distilled:  true,
+		AutoAnchor: autoAnchor,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bounty: commit acquired fragment: %w", err)
@@ -282,7 +325,7 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 	defer payCancel()
 	sendRes, err := mem.Chain().Send(payCtx, nwallet.SendArgs{
 		ToAddress:   sub.SellerAddress,
-		Satoshis:    b.RewardSats,
+		Satoshis:    payoutSats,
 		Description: nwallet.ActionPayHubBounty(b.ID).Description,
 	})
 	if err != nil {
@@ -308,12 +351,61 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 	return &BountyPayoutResult{
 		Accepted:   true,
 		BountyID:   b.ID,
-		RewardSats: b.RewardSats,
+		RewardSats: payoutSats,
 		TxID:       sendRes.TxID,
 		BEEFHex:    sendRes.BEEFHex,
 		Shard:      curatedShard,
 		Seq:        rem.Seq,
 	}, nil
+}
+
+// verifyBountyAuthorship verifies HDP framing, Provenance signature, and OwnerSig for Hub-sponsored 0-sat bounties.
+func verifyBountyAuthorship(sub BountySubmission) error {
+	hdpBytes, err := hex.DecodeString(strings.TrimSpace(sub.HDP))
+	if err != nil || len(hdpBytes) != 32 {
+		return errors.New("invalid submission hdp hex")
+	}
+	canonicalHDP := hex.EncodeToString(hdpBytes)
+	if strings.TrimSpace(sub.ProvenanceHex) == "" {
+		return errors.New("missing submission provenanceHex")
+	}
+	provRaw, pErr := hex.DecodeString(strings.TrimSpace(sub.ProvenanceHex))
+	if pErr != nil || len(provRaw) == 0 {
+		return errors.New("invalid submission provenanceHex")
+	}
+	prov, parseErr := core.ParseProvenance(provRaw)
+	if parseErr != nil {
+		return fmt.Errorf("invalid provenance framing: %w", parseErr)
+	}
+	if !core.EqualBytes(core.ComputeHDPV2([]byte(sub.Text), prov), hdpBytes) {
+		return errors.New("submission text/provenance does not match framed v2 hdp")
+	}
+	if strings.TrimSpace(sub.ProvenancePub) == "" || strings.TrimSpace(sub.OwnerSig) == "" {
+		return errors.New("missing provenancePub or ownerSig authorship proof")
+	}
+	provPub, _, err := core.ParseStrictCompressedPubKey(strings.TrimSpace(sub.ProvenancePub))
+	if err != nil {
+		return fmt.Errorf("invalid provenancePub: %w", err)
+	}
+	provSig, err := core.ParseStrictLowSDER(hex.EncodeToString(prov.Signature))
+	if err != nil {
+		return fmt.Errorf("invalid provenance signature: %w", err)
+	}
+	if !provSig.Verify(core.ProvenanceDigest([]byte(sub.Text), prov), provPub) {
+		return errors.New("provenance signature does not verify against provenancePub")
+	}
+	ownerSig, err := core.ParseStrictLowSDER(strings.TrimSpace(sub.OwnerSig))
+	if err != nil {
+		return fmt.Errorf("invalid ownerSig: %w", err)
+	}
+	signableRaw, err := core.CanonicalJSON(sub.Signable(canonicalHDP))
+	if err != nil {
+		return err
+	}
+	if !ownerSig.Verify(core.SHA256(signableRaw), provPub) {
+		return errors.New("ownerSig does not verify against provenancePub")
+	}
+	return nil
 }
 
 // verifyBountyProofBundle performs full offline SPV verification of AnchorBEEF + Rúnar NektarAnchor
@@ -385,13 +477,33 @@ func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contra
 			return errors.New("invalid 32-byte submission contentSha256")
 		}
 	}
-	expectedLeaf := core.ToHex(core.ComputeLeafV2(core.Fragment{
-		HDP:           hdpBytes,
-		MPERoot:       mpeBytes,
-		ContentSHA256: contentBytes,
+	var commitBytes, transBytes []byte
+	if strings.TrimSpace(sub.CommitHash) != "" {
+		if cb, err := hex.DecodeString(strings.TrimSpace(sub.CommitHash)); err == nil && len(cb) == 32 {
+			commitBytes = cb
+		}
+	}
+	if strings.TrimSpace(sub.TransitionHash) != "" {
+		if tb, err := hex.DecodeString(strings.TrimSpace(sub.TransitionHash)); err == nil && len(tb) == 32 {
+			transBytes = tb
+		}
+	}
+	var ctBytes []byte
+	if strings.TrimSpace(sub.CiphertextHex) != "" {
+		if b, err := hex.DecodeString(strings.TrimSpace(sub.CiphertextHex)); err == nil {
+			ctBytes = b
+		}
+	}
+	expectedLeaf := core.ToHex(core.ComputeLeaf(core.Fragment{
+		HDP:            hdpBytes,
+		Ciphertext:     ctBytes,
+		MPERoot:        mpeBytes,
+		ContentSHA256:  contentBytes,
+		CommitHash:     commitBytes,
+		TransitionHash: transBytes,
 	}))
 	if !strings.EqualFold(pb.Leaf, expectedLeaf) {
-		return errors.New("proofBundle TagLeafV2 does not commit to submission hdp + mpeRoot")
+		return errors.New("proofBundle leaf does not commit to submission hdp + mpeRoot")
 	}
 	if len(pb.AnchorBEEF) == 0 {
 		return errors.New("proofBundle missing anchorBEEF")

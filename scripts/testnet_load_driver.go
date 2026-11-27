@@ -69,39 +69,39 @@ type tradeResult struct {
 }
 
 type scorecard struct {
-	Network            string                 `json:"network"`
-	RestateEnabled     bool                   `json:"restateEnabled"`
-	StartedAt          string                 `json:"startedAt"`
-	DurationSec        float64                `json:"durationSec"`
-	RemembersOK        int                    `json:"remembersOk"`
-	RemembersTotal     int                    `json:"remembersTotal"`
-	RememberP50Ms      int64                  `json:"rememberP50Ms"`
-	RememberP95Ms      int64                  `json:"rememberP95Ms"`
-	AnchorsOK          int                    `json:"anchorsOk"`
-	AnchorsTotal       int                    `json:"anchorsTotal"`
-	AnchorTxIDs        []string               `json:"anchorTxids"`
-	AnchorP50Ms        int64                  `json:"anchorP50Ms"`
-	AnchorP95Ms        int64                  `json:"anchorP95Ms"`
-	SPVVerifiesOK      int                    `json:"spvVerifiesOk"`
-	SPVVerifiesTotal   int                    `json:"spvVerifiesTotal"`
-	SPVThroughputPerS  float64                `json:"spvThroughputPerSec"`
-	SPVP95Ms           int64                  `json:"spvP95Ms"`
-	FreeRiderBlocked   bool                   `json:"freeRiderBlocked402"`
-	GougingHubBlocked  bool                   `json:"gougingHubBlocked"`
-	TradesSettled      int                    `json:"tradesSettled"`
-	TradesTotal        int                    `json:"tradesTotal"`
-	TradeP50Ms         int64                  `json:"tradeP50Ms"`
-	TradeP95Ms         int64                  `json:"tradeP95Ms"`
-	TradeP99Ms         int64                  `json:"tradeP99Ms"`
-	ChaosLeafRecovery  bool                   `json:"chaosLeafRecovery"`
-	ChaosSpineRecovery bool                   `json:"chaosSpineRecovery"`
-	PostChaosTradesOK  int                    `json:"postChaosTradesOk"`
-	HubEarnings        map[string]any         `json:"hubEarnings"`
-	ProcessRSSMB       map[string]float64     `json:"processRssMb,omitempty"`
-	SampleVerifiedTxs  map[string]string      `json:"sampleVerifiedTxs,omitempty"`
-	FundingTxIDs       []string               `json:"fundingTxids,omitempty"`
-	Trades             []tradeResult          `json:"trades"`
-	Failures           []string               `json:"failures,omitempty"`
+	Network            string             `json:"network"`
+	RestateEnabled     bool               `json:"restateEnabled"`
+	StartedAt          string             `json:"startedAt"`
+	DurationSec        float64            `json:"durationSec"`
+	RemembersOK        int                `json:"remembersOk"`
+	RemembersTotal     int                `json:"remembersTotal"`
+	RememberP50Ms      int64              `json:"rememberP50Ms"`
+	RememberP95Ms      int64              `json:"rememberP95Ms"`
+	AnchorsOK          int                `json:"anchorsOk"`
+	AnchorsTotal       int                `json:"anchorsTotal"`
+	AnchorTxIDs        []string           `json:"anchorTxids"`
+	AnchorP50Ms        int64              `json:"anchorP50Ms"`
+	AnchorP95Ms        int64              `json:"anchorP95Ms"`
+	SPVVerifiesOK      int                `json:"spvVerifiesOk"`
+	SPVVerifiesTotal   int                `json:"spvVerifiesTotal"`
+	SPVThroughputPerS  float64            `json:"spvThroughputPerSec"`
+	SPVP95Ms           int64              `json:"spvP95Ms"`
+	FreeRiderBlocked   bool               `json:"freeRiderBlocked402"`
+	GougingHubBlocked  bool               `json:"gougingHubBlocked"`
+	TradesSettled      int                `json:"tradesSettled"`
+	TradesTotal        int                `json:"tradesTotal"`
+	TradeP50Ms         int64              `json:"tradeP50Ms"`
+	TradeP95Ms         int64              `json:"tradeP95Ms"`
+	TradeP99Ms         int64              `json:"tradeP99Ms"`
+	ChaosLeafRecovery  bool               `json:"chaosLeafRecovery"`
+	ChaosSpineRecovery bool               `json:"chaosSpineRecovery"`
+	PostChaosTradesOK  int                `json:"postChaosTradesOk"`
+	HubEarnings        map[string]any     `json:"hubEarnings"`
+	ProcessRSSMB       map[string]float64 `json:"processRssMb,omitempty"`
+	SampleVerifiedTxs  map[string]string  `json:"sampleVerifiedTxs,omitempty"`
+	FundingTxIDs       []string           `json:"fundingTxids,omitempty"`
+	Trades             []tradeResult      `json:"trades"`
+	Failures           []string           `json:"failures,omitempty"`
 }
 
 var httpCli = &http.Client{Timeout: 210 * time.Second}
@@ -568,10 +568,10 @@ func main() {
 				fatal("seed %s/%s: %v", s.Node, s.Shard, err)
 			}
 			// Trigger explicit anchor in case cadence didn't fire yet (ignore empty/already-anchored).
-			_, _ = httpJSON(http.MethodPost, specs[s.Node].URL+"/v1/anchor", map[string]any{"shard": s.Shard})
+			_, _ = httpJSON(http.MethodPost, specs[s.Node].URL+"/v1/tools/anchor", map[string]any{"shard": s.Shard})
 			fmt.Printf("  [SEED] %-10s/%-16s remembered & anchored fresh v0.1 Rúnar covenant!\n", s.Node, s.Shard)
 		} else {
-			_, _ = httpJSON(http.MethodPost, specs[s.Node].URL+"/v1/anchor", map[string]any{"shard": s.Shard})
+			_, _ = httpJSON(http.MethodPost, specs[s.Node].URL+"/v1/tools/anchor", map[string]any{"shard": s.Shard})
 			fmt.Printf("  [SEED] %-10s/%-16s exists; waiting for BSV %s block BUMP...\n", s.Node, s.Shard, strings.ToUpper(*network))
 		}
 		pendingMine = append(pendingMine, s)
@@ -682,7 +682,7 @@ func main() {
 				defer wg.Done()
 				sh := fmt.Sprintf("load-%s-%d", runTag, shardIdx)
 				t0 := time.Now()
-				res, err := httpJSON(http.MethodPost, specs[nodeKey].URL+"/v1/anchor", map[string]any{"shard": sh})
+				res, err := httpJSON(http.MethodPost, specs[nodeKey].URL+"/v1/tools/anchor", map[string]any{"shard": sh})
 				ms := time.Since(t0).Milliseconds()
 				ancMu.Lock()
 				if err == nil {
@@ -1168,7 +1168,7 @@ func percentile(vals []int64, p int) int64 {
 	}
 	cp := append([]int64(nil), vals...)
 	sort.Slice(cp, func(i, j int) bool { return cp[i] < cp[j] })
-	idx := (len(cp)*p + 99) / 100 - 1
+	idx := (len(cp)*p+99)/100 - 1
 	if idx < 0 {
 		idx = 0
 	}

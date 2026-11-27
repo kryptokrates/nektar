@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/reputation"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -20,21 +21,23 @@ type ScoredOffer struct {
 	Reason          string         `json:"reason"`
 }
 
-// RankOffers scores and sorts offers deterministically in integer basis points.
-func RankOffers(want bstack.WantAd, offers []bstack.OfferAd, pol *Policy) []ScoredOffer {
-	return RankOffersWithRep(want, offers, pol, nil)
-}
-
-// RankOffersWithRep adds a verified seller-reputation integer bps bonus (up to +1000 bp)
-// derived strictly from locally verified settled vs failed trades in SQLite.
-func RankOffersWithRep(want bstack.WantAd, offers []bstack.OfferAd, pol *Policy, reps map[string]store.SellerReputation) []ScoredOffer {
-	return RankOffersWithRepAndBonds(want, offers, pol, reps, nil)
-}
-
-// RankOffersWithRepAndBonds extends RankOffersWithRep with a deterministic SPV-verified
-// NektarCheckpointBond stake bonus (up to +750 bp for active un-seized bonds >= 1000 sats)
-// to defeat free Sybil quote spam.
+// RankOffersWithRepAndBonds scores and sorts offers deterministically in integer basis points,
+// combining verified local seller reputation (up to +1000 bp) and SPV-verified NektarCheckpointBond
+// stake bonus (up to +750 bp for active un-seized bonds >= 1000 sats) to defeat free Sybil quote spam.
 func RankOffersWithRepAndBonds(want bstack.WantAd, offers []bstack.OfferAd, pol *Policy, reps map[string]store.SellerReputation, verifiedBondSats map[string]uint64) []ScoredOffer {
+	return RankOffersWith6DReputation(want, offers, pol, reps, nil, verifiedBondSats)
+}
+
+// RankOffersWith6DReputation scores and sorts offers using deterministic integer basis points,
+// incorporating ontology-scoped 6D reputation vectors and Personalized EigenTrust alongside bonds.
+func RankOffersWith6DReputation(
+	want bstack.WantAd,
+	offers []bstack.OfferAd,
+	pol *Policy,
+	reps map[string]store.SellerReputation,
+	rep6D map[string]reputation.Vector6D,
+	verifiedBondSats map[string]uint64,
+) []ScoredOffer {
 	var ranked []ScoredOffer
 	for _, o := range offers {
 		if want.Net == "main" || want.Net == "testnet" {
@@ -87,6 +90,19 @@ func RankOffersWithRepAndBonds(want bstack.WantAd, offers []bstack.OfferAd, pol 
 						repBonus -= (r.FailedDeals * 500) / total
 					}
 					score += repBonus
+				}
+			}
+		}
+		if rep6D != nil {
+			if v, ok := rep6D[strings.ToLower(strings.TrimSpace(o.Pub))]; ok {
+				// Ontology-scoped 6D + Personalized EigenTrust bonus (up to +1200 bp); zero for disconnected Sybils!
+				if v.EigenTrustBP > 0 && v.CompositeBP > 0 {
+					weighted := (v.CompositeBP * v.EigenTrustBP) / reputation.MaxBP
+					score += (weighted * 1200) / reputation.MaxBP
+				}
+				// Sharp penalty for verified low accuracy or dispute history.
+				if v.AttestCount > 0 && (v.AccBP < 4000 || v.DispBP < 4000) {
+					score -= 1500
 				}
 			}
 		}

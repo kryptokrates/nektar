@@ -62,11 +62,11 @@ func (rt *RepoTx) SaveMemCommit(r MemCommitRow) error {
 	_, err := rt.tx.Exec(`
 		INSERT OR IGNORE INTO mem_commits (
 			commit_hash, repo, branch, origin_repo, origin_branch, seq, tree_hash, mpe_root, parents_json,
-			author_pub, model_id, policy_commit, message, timestamp, signature,
+			author_pub, model_id, policy_commit, ontology_commit, message, timestamp, signature,
 			anchor_txid, anchor_n, fragment_leaf, git_meta_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.CommitHash, r.Repo, r.Branch, r.OriginRepo, r.OriginBranch, r.Seq, r.TreeHash, r.MPERoot, r.ParentsJSON,
-		r.AuthorPub, r.ModelID, r.PolicyCommit, r.Message, r.Timestamp, r.Signature,
+		r.AuthorPub, r.ModelID, r.PolicyCommit, r.OntologyCommit, r.Message, r.Timestamp, r.Signature,
 		r.AnchorTxID, r.AnchorN, r.FragmentLeaf, r.GitMetaJSON,
 	)
 	return err
@@ -184,10 +184,10 @@ func (rt *RepoTx) SaveBatchAnchorStrict(anchor BatchAnchor) error {
 		return err
 	}
 	_, err = rt.tx.Exec(`
-		INSERT INTO anchors (shard, shard_id, n, size, root_hex, chained_hex, txid, beef, settled, block_height, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO anchors (shard, shard_id, n, size, root_hex, chained_hex, state_hash, mmr_root, txid, beef, settled, block_height, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		anchor.Shard, anchor.ShardID, anchor.N, anchor.Size, anchor.RootHex, anchor.ChainedHex,
-		anchor.TxID, anchor.Beef, boolToInt(anchor.Settled), anchor.BlockHeight, anchor.CreatedAt,
+		anchor.StateHash, anchor.MmrRoot, anchor.TxID, anchor.Beef, boolToInt(anchor.Settled), anchor.BlockHeight, anchor.CreatedAt,
 	)
 	return err
 }

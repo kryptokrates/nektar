@@ -8,6 +8,7 @@ import (
 	restate "github.com/restatedev/sdk-go"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/reputation"
 )
 
 func (e *Engine) restateStandingOrderRun(ctx restate.WorkflowContext, in StandingOrderInput) (StandingOrderState, error) {
@@ -62,27 +63,55 @@ func (e *Engine) restateStandingOrderRun(ctx restate.WorkflowContext, in Standin
 		doms = []string{"ops"}
 	}
 
+	reqTrust := in.RequireTrustedOrBonded
+	if !in.AllowUntrusted && e.mem != nil && e.mem.Chain() != nil {
+		net := e.mem.Chain().Network()
+		if net == "main" || net == "testnet" {
+			reqTrust = true
+		}
+	}
+	maxSats := in.MaxSats
+	if maxSats == 0 {
+		var maxPolicyDeal uint64 = 500
+		if e.policy != nil {
+			_, mpd, _, _, _, _, _ := e.policy.Snapshot()
+			if mpd > 0 {
+				maxPolicyDeal = mpd
+			}
+		}
+		qTok := uint64(DefaultTokenCounter().CountTokens(in.Query))
+		bid := ComputeAutoBidSats(ArbitrageBidInput{
+			EstTokensSaved:    DefaultEstimatedReasoningTokens + qTok*10,
+			MaxPolicyDealSats: maxPolicyDeal,
+			SellerBonded:      true,
+		})
+		maxSats = bid.MaxBidSats
+	}
+
 	st := StandingOrderState{
-		OrderID:       orderID,
-		InvocationID:  invID,
-		WaitingSeq:    1,
-		Status:        "watching",
-		Domains:       doms,
-		Query:         strings.TrimSpace(in.Query),
-		MaxSats:       in.MaxSats,
-		TargetShard:   strings.TrimSpace(in.TargetShard),
-		AgentID:       strings.TrimSpace(in.AgentID),
-		ExpiresAtUnix: initNow + int64(ttl.Seconds()),
-		MaxFills:      maxFills,
-		CreatedAt:     initNow,
-		UpdatedAt:     initNow,
+		OrderID:                orderID,
+		InvocationID:           invID,
+		WaitingSeq:             1,
+		Status:                 "watching",
+		Domains:                doms,
+		Query:                  strings.TrimSpace(in.Query),
+		OntologyID:             strings.ToLower(strings.TrimSpace(in.OntologyID)),
+		AllowBridge:            in.AllowBridge,
+		RequireTrustedOrBonded: reqTrust,
+		MaxSats:                maxSats,
+		TargetShard:            strings.TrimSpace(in.TargetShard),
+		AgentID:                strings.TrimSpace(in.AgentID),
+		ExpiresAtUnix:          initNow + int64(ttl.Seconds()),
+		MaxFills:               maxFills,
+		CreatedAt:              initNow,
+		UpdatedAt:              initNow,
 	}
 	restate.Set(ctx, "state", st)
 	_, _ = restate.Run(ctx, func(rctx restate.RunContext) (bool, error) {
 		e.upsertStandingOrderIndex(st)
 		// Publish an initial WantAd across active hubs so currently online sellers quote immediately.
 		if br := e.getBroker(); br != nil {
-			_ = br.PublishWantForStandingOrder(rctx, orderID, doms, st.Query, st.MaxSats)
+			_ = br.PublishWantForStandingOrder(rctx, orderID, doms, st.Query, st.OntologyID, st.MaxSats)
 		}
 		return true, nil
 	}, restate.WithName("standing_order_register_and_announce"))
@@ -222,6 +251,53 @@ func (e *Engine) restateStandingOrderRun(ctx restate.WorkflowContext, in Standin
 					restate.Set(ctx, "state", st)
 					continue
 				}
+				if st.OntologyID != "" {
+					ontOK, oErr := restate.Run(ctx, func(rctx restate.RunContext) (bool, error) {
+						return standingOrderOntologyMatches(rctx, e.mem, st.OntologyID, st.AllowBridge, off.OntologyID), nil
+					}, restate.WithName(fmt.Sprintf("standing_ont_match_%d_%d", drainStep, st.OffersSeen)))
+					if oErr != nil || !ontOK {
+						st.UpdatedAt = nowUnix
+						restate.Set(ctx, "state", st)
+						continue
+					}
+				}
+				// Automated Sybil & reputation guard via Google Mangle stratified Datalog:
+				// always block sybil_or_untrusted sellers; when RequireTrustedOrBonded is enabled,
+				// auto-spend ONLY with Mangle trusted_seller/2 peers (bonded or above 6D+EigenTrust threshold) or Hub makers.
+				trustOK, tErr := restate.Run(ctx, func(rctx restate.RunContext) (bool, error) {
+					if off.IsHub || e.mem == nil || e.mem.DB() == nil || off.Pub == "" {
+						return true, nil
+					}
+					var bonds []reputation.PeerBondInfo
+					if off.BondOutpoint != "" && off.BondBEEFHex != "" {
+						if bSats := VerifyOfferBondSats(rctx, off, e.mem.Chain()); bSats > 0 {
+							bonds = append(bonds, reputation.PeerBondInfo{
+								Pub: off.Pub, BondSats: bSats, Status: "active",
+							})
+						}
+					}
+					evalOnt := st.OntologyID
+					if evalOnt == "" {
+						evalOnt = off.OntologyID
+					}
+					tEval, _, err := EvaluateTrustForOntology(e.mem.DB(), e.salePubHex(), evalOnt, e.policy, bonds, nil)
+					if err != nil || tEval == nil {
+						return !st.RequireTrustedOrBonded, nil
+					}
+					pubLower := strings.ToLower(strings.TrimSpace(off.Pub))
+					if tEval.SybilOrUntrusted[pubLower] {
+						return false, nil
+					}
+					if st.RequireTrustedOrBonded && !tEval.TrustedSellers[pubLower] {
+						return false, nil
+					}
+					return true, nil
+				}, restate.WithName(fmt.Sprintf("standing_trust_gate_%d_%d", drainStep, st.OffersSeen)))
+				if tErr != nil || !trustOK {
+					st.UpdatedAt = nowUnix
+					restate.Set(ctx, "state", st)
+					continue
+				}
 				if st.Attempts >= maxAttempts {
 					st.Status = "expired"
 					st.Error = fmt.Sprintf("standing order reached max attempts (%d)", maxAttempts)
@@ -238,11 +314,12 @@ func (e *Engine) restateStandingOrderRun(ctx restate.WorkflowContext, in Standin
 				restate.Set(ctx, "state", st)
 
 				wantAd := bstack.WantAd{
-					WantID:  dealID,
-					Domains: st.Domains,
-					Query:   st.Query,
-					MaxSats: st.MaxSats,
-					Pub:     off.BuyerPub,
+					WantID:     dealID,
+					Domains:    st.Domains,
+					Query:      st.Query,
+					OntologyID: st.OntologyID,
+					MaxSats:    st.MaxSats,
+					Pub:        off.BuyerPub,
 				}
 				if wantAd.Pub == "" && e.mem != nil && e.mem.Chain() != nil {
 					wantAd.Pub = e.mem.Chain().IdentityPubHex()

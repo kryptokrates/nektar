@@ -49,6 +49,8 @@ func (b *Broker) StartStandingOrder(ctx context.Context, in StandingOrderInput) 
 		Status:        "watching",
 		Domains:       in.Domains,
 		Query:         strings.TrimSpace(in.Query),
+		OntologyID:    strings.ToLower(strings.TrimSpace(in.OntologyID)),
+		AllowBridge:   in.AllowBridge,
 		MaxSats:       in.MaxSats,
 		TargetShard:   strings.TrimSpace(in.TargetShard),
 		AgentID:       strings.TrimSpace(in.AgentID),
@@ -84,6 +86,8 @@ func (b *Broker) ListStandingOrders(ctx context.Context) []StandingOrderState {
 			Status:        e.Status,
 			Domains:       e.Domains,
 			Query:         e.Query,
+			OntologyID:    e.OntologyID,
+			AllowBridge:   e.AllowBridge,
 			MaxSats:       e.MaxSats,
 			TargetShard:   e.TargetShard,
 			AgentID:       e.AgentID,
@@ -122,7 +126,7 @@ func (b *Broker) CancelStandingOrder(ctx context.Context, orderID, reason string
 
 // PublishWantForStandingOrder signs and broadcasts a KindWant across active hubs so currently online
 // or newly announced sellers quote OfferAds that wake the sleeping StandingOrder.
-func (b *Broker) PublishWantForStandingOrder(ctx context.Context, orderID string, domains []string, query string, maxSats uint64) error {
+func (b *Broker) PublishWantForStandingOrder(ctx context.Context, orderID string, domains []string, query, ontologyID string, maxSats uint64) error {
 	if b == nil || b.disc == nil || b.mem == nil || b.mem.Chain() == nil || b.engine == nil || b.engine.saleKey == nil {
 		return nil
 	}
@@ -138,14 +142,15 @@ func (b *Broker) PublishWantForStandingOrder(ctx context.Context, orderID string
 		q = "standing order: " + strings.Join(domains, ",")
 	}
 	want := bstack.WantAd{
-		WantID:   fmt.Sprintf("sow-%s-%s", shortPub(orderID), randIDHex()[:8]),
-		Pub:      b.PubHex(),
-		Net:      b.mem.Chain().Network(),
-		Domains:  domains,
-		Query:    q,
-		MaxSats:  maxSats,
-		Revision: 1,
-		Exp:      time.Now().Add(30 * time.Minute).UnixMilli(),
+		WantID:     fmt.Sprintf("sow-%s-%s", shortPub(orderID), randIDHex()[:8]),
+		Pub:        b.PubHex(),
+		Net:        b.mem.Chain().Network(),
+		Domains:    domains,
+		Query:      q,
+		OntologyID: strings.ToLower(strings.TrimSpace(ontologyID)),
+		MaxSats:    maxSats,
+		Revision:   1,
+		Exp:        time.Now().Add(30 * time.Minute).UnixMilli(),
 	}
 	sig, err := bstack.SignArtifact(b.engine.saleKey, want)
 	if err != nil {

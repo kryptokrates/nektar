@@ -14,11 +14,13 @@ import (
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/store"
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 // AnchorShard commits all unanchored fragments in shard into a real NektarAnchor BSV transaction,
+// enforcing Merkle Automaton StateHash (Q_n) chaining and O(log N) MmrRoot accumulation on-chain,
 // serialized per-shard with durable pre-broadcast pending_anchors persistence, guarded by SpendGuard.
 func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAnchor, error) {
 	unlock := s.lockShard(shard)
@@ -51,7 +53,17 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		return nil, err
 	}
 	prevRp := core.Zero32Bytes()
+	prevStateQ := core.Zero32Bytes()
 	var nextN int64
+	mmr, _ := core.NewMMR(nil)
+	for _, a := range anchors {
+		if rb, rErr := hex.DecodeString(a.RootHex); rErr == nil && len(rb) == 32 {
+			_, _ = mmr.Append(rb)
+		}
+	}
+	_, _ = mmr.Append(root)
+	mmrRoot := mmr.Root()
+
 	if len(anchors) > 0 {
 		last := anchors[len(anchors)-1]
 		nextN = last.N + 1
@@ -59,8 +71,34 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		if err != nil {
 			return nil, err
 		}
+		if last.StateHash != "" {
+			if sq, sErr := hex.DecodeString(last.StateHash); sErr == nil && len(sq) == 32 {
+				prevStateQ = sq
+			}
+		}
 	}
 	rp := core.ChainRp(prevRp, root, uint64(len(leaves)))
+
+	// Compute canonical batchMetaHash binding latest treeHash, active Cedar policyCommit, and ontologyHead.
+	var treeHashBytes, policyHashBytes, ontologyHashBytes []byte
+	if latestCommits, cErr := s.db.ListMemCommits(shard, "", 1); cErr == nil && len(latestCommits) > 0 && latestCommits[0].TreeHash != "" {
+		if tb, err := hex.DecodeString(latestCommits[0].TreeHash); err == nil && len(tb) == 32 {
+			treeHashBytes = tb
+		}
+	}
+	if pc := s.PolicyCommit(); pc != nil && pc.Hash != "" {
+		if pb, err := hex.DecodeString(pc.Hash); err == nil && len(pb) == 32 {
+			policyHashBytes = pb
+		}
+	}
+	if oh := s.OntologyHead(); oh != "" {
+		if ob, err := hex.DecodeString(oh); err == nil && len(ob) == 32 {
+			ontologyHashBytes = ob
+		}
+	}
+	batchMetaHash := core.ComputeBatchMetaHash(treeHashBytes, policyHashBytes, ontologyHashBytes)
+	nextStateQ := core.ChainStateQ(prevStateQ, root, batchMetaHash, mmrRoot)
+
 	genesisPubHex, shardID, err := s.resolveRepoGenesis(ctx, shard, anchors)
 	if err != nil {
 		return nil, err
@@ -81,11 +119,9 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 					return nil, recErr
 				}
 				if recBatch != nil {
-					// Previous batch (shard, nextN) was recorded! Return it cleanly.
 					return recBatch, nil
 				}
 				if cleaned {
-					// Confirmed unbroadcast local nosend/aborted/failed row was cleaned up; proceed to build fresh batch.
 					break
 				}
 				return nil, fmt.Errorf("memory: pending anchor (%s, n=%d, txid=%s, walletStatus=%q) still awaiting reconciliation", shard, nextN, p.TxID, wStatus)
@@ -101,6 +137,8 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		Seqs:       seqs,
 		RootHex:    core.ToHex(root),
 		ChainedHex: core.ToHex(rp),
+		StateHash:  core.ToHex(nextStateQ),
+		MmrRoot:    core.ToHex(mmrRoot),
 		CreatedAt:  now,
 	}); err != nil {
 		return nil, fmt.Errorf("memory: persist pending anchor: %w", err)
@@ -152,11 +190,13 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 			_ = s.db.DeletePendingAnchor(shard, nextN)
 			return nil, fmt.Errorf("memory: prior anchor state mismatch (%s, got shard=%s n=%d want shard=%s n=%d)", shard, prevSt.Shard, prevSt.N, shardID, last.N)
 		}
-		nextSt, nErr := contracts.NextAnchorState(*prevSt, root, uint64(len(leaves)))
+		// Compute nextStateQ directly from the on-chain prevSt.StateHash so script consensus always matches.
+		nextSt, nErr := contracts.NextAnchorState(*prevSt, root, uint64(len(leaves)), batchMetaHash, mmrRoot)
 		if nErr != nil {
 			_ = s.db.DeletePendingAnchor(shard, nextN)
 			return nil, nErr
 		}
+		nextStateQ = nextSt.StateHash
 		lockScript, eErr := contracts.EncodeAnchorLockingScript(nextSt)
 		if eErr != nil {
 			_ = s.db.DeletePendingAnchor(shard, nextN)
@@ -165,8 +205,8 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		anchorSpec := &nwallet.OutputTagSpec{
 			Basket: nwallet.BasketAnchors,
 			Tags:   []string{"anchor", "shard:" + shard, fmt.Sprintf("batch:%d", nextN)},
-			CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"anchor","shard":%q,"shardId":%q,"n":%d,"size":%d,"R":%q,"Rp":%q}`,
-				shard, shardID, nextN, len(leaves), hex.EncodeToString(root), hex.EncodeToString(rp)),
+			CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"anchor","shard":%q,"shardId":%q,"n":%d,"size":%d,"R":%q,"Rp":%q,"Q":%q,"mmr":%q}`,
+				shard, shardID, nextN, len(leaves), hex.EncodeToString(root), hex.EncodeToString(rp), hex.EncodeToString(nextStateQ), hex.EncodeToString(mmrRoot)),
 		}
 		meta := nwallet.ActionAnchorAppend(shard, nextN, len(leaves))
 		cRes, cErr := s.port.BuildCovenantSpendTx(ctx, chain.CovenantSpendRequest{
@@ -174,7 +214,7 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 			InputBEEF:             last.Beef,
 			InputVout:             0,
 			Outputs:               []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)},
-			UnlockingScriptLength: 5200,
+			UnlockingScriptLength: 5600,
 			FuelFromWallet:        true,
 			Description:           meta.Description,
 			Labels:                meta.Labels,
@@ -182,12 +222,12 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 			BuildUnlock: func(spendTx *transaction.Transaction, changePKH []byte, changeSats uint64) (*script.Script, error) {
 				return contracts.BuildAnchorAppendUnlock(
 					ctx, spendTx, 0, prevTx.Outputs[0], root, uint64(len(leaves)),
+					batchMetaHash, mmrRoot,
 					changePKH, changeSats, s.port.SignCovenantSighash,
 				)
 			},
 		})
 		if cErr != nil {
-			// Never delete pending_anchors on ErrBroadcastUnknown (client-mode SignAction may have broadcast).
 			if !errors.Is(cErr, nwallet.ErrBroadcastUnknown) {
 				_ = s.db.DeletePendingAnchor(shard, nextN)
 			}
@@ -196,15 +236,17 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		tx, beef, fee, spend = cRes.Tx, cRes.BEEF, cRes.FeeSats, cRes.SpendSats
 	} else {
 		state := contracts.AnchorState{
-			Shard:    shardID,
-			OwnerPub: genesisPubHex,
-			OwnerPKH: ownerPKH,
-			N:        0,
-			Size:     uint64(len(leaves)),
-			R:        root,
-			Rp:       rp,
-			Tag:      core.TagRPrime,
-			Metanet:  true,
+			Shard:     shardID,
+			OwnerPub:  genesisPubHex,
+			OwnerPKH:  ownerPKH,
+			N:         0,
+			Size:      uint64(len(leaves)),
+			R:         root,
+			Rp:        rp,
+			StateHash: nextStateQ,
+			MmrRoot:   mmrRoot,
+			Tag:       core.TagRPrime,
+			Metanet:   true,
 		}
 		lockScript, err := contracts.EncodeAnchorLockingScript(state)
 		if err != nil {
@@ -214,13 +256,12 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		anchorSpec := &nwallet.OutputTagSpec{
 			Basket: nwallet.BasketAnchors,
 			Tags:   []string{"anchor", "shard:" + shard, "batch:0"},
-			CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"anchor","shard":%q,"shardId":%q,"n":0,"size":%d,"R":%q,"Rp":%q}`,
-				shard, shardID, len(leaves), hex.EncodeToString(root), hex.EncodeToString(rp)),
+			CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"anchor","shard":%q,"shardId":%q,"n":0,"size":%d,"R":%q,"Rp":%q,"Q":%q,"mmr":%q}`,
+				shard, shardID, len(leaves), hex.EncodeToString(root), hex.EncodeToString(rp), hex.EncodeToString(nextStateQ), hex.EncodeToString(mmrRoot)),
 		}
 		meta := nwallet.ActionAnchorShard(shard, 0, len(leaves))
 		tx, beef, fee, spend, err = s.port.BuildFundedTxWithBasket(ctx, []*transaction.TransactionOutput{chain.AnchorOutput(lockScript)}, meta.Description, meta.Labels, anchorSpec)
 		if err != nil {
-			// Never delete pending_anchors on ErrBroadcastUnknown (client-mode CreateAction may have broadcast).
 			if !errors.Is(err, nwallet.ErrBroadcastUnknown) {
 				_ = s.db.DeletePendingAnchor(shard, nextN)
 			}
@@ -232,16 +273,12 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 	}
 	txid, err := s.port.Broadcast(ctx, tx, fee, spend)
 	if err != nil {
-		// Only delete pending_anchors on genuine local pre-broadcast refusal (SpendGuard cap).
-		// On ANY post-submit broadcaster error or ErrBroadcastUnknown, keep pending_anchors intact for reconciliation!
 		if errors.Is(err, nwallet.ErrSpendRejected) {
 			_ = s.db.DeletePendingAnchor(shard, nextN)
 		}
 		return nil, err
 	}
 
-	// Only check instant post-broadcast proof in memory mode (or when Broadcast already attached a BUMP).
-	// On live networks, skip the wasted 1ms-after-broadcast proof lookup; RefreshAnchorProofs upgrades once mined.
 	var settled bool
 	var height int64
 	if tx.MerklePath != nil {
@@ -265,6 +302,8 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 		Size:        len(leaves),
 		RootHex:     core.ToHex(root),
 		ChainedHex:  core.ToHex(rp),
+		StateHash:   core.ToHex(nextStateQ),
+		MmrRoot:     core.ToHex(mmrRoot),
 		TxID:        txid,
 		Beef:        beef,
 		Settled:     settled,
@@ -277,12 +316,156 @@ func (s *Service) AnchorShard(ctx context.Context, shard string) (*store.BatchAn
 	return &batch, nil
 }
 
+// ProveCompact constructs an O(log N) MMR CompactProofBundle proving (shard, seq) directly against
+// the shard's latest head NektarAnchor UTXO without shipping an O(N) ChainTail.
+func (s *Service) ProveCompact(ctx context.Context, shard string, seq int64) (*contracts.CompactProofBundle, *contracts.VerifyResult, error) {
+	return s.ProveCompactAuthorized(ctx, shard, seq, ownerPrincipal())
+}
+
+// ProveCompactAuthorized enforces Cedar read authorization before constructing an O(log N) CompactProofBundle.
+func (s *Service) ProveCompactAuthorized(ctx context.Context, shard string, seq int64, principal policy.Principal) (*contracts.CompactProofBundle, *contracts.VerifyResult, error) {
+	if err := ValidateShardName(shard, isOperatorPrincipal(principal)); err != nil {
+		return nil, nil, err
+	}
+	rec, err := s.db.GetFragment(shard, seq)
+	if err != nil {
+		return nil, nil, err
+	}
+	if principal.ID == "" {
+		principal = ownerPrincipal()
+	}
+	if dec, aErr := s.AuthorizeAction(principal, "read", policy.Resource{
+		Type:  "Fragment",
+		ID:    fmt.Sprintf("%s#%d", rec.Shard, rec.Seq),
+		Level: int64(rec.Level),
+		Shard: rec.Shard,
+		Class: rec.Class,
+	}); aErr != nil || !dec.Allow {
+		if aErr != nil {
+			return nil, nil, fmt.Errorf("memory: cedar compact-prove policy error: %w", aErr)
+		}
+		return nil, nil, fmt.Errorf("memory: cedar policy denied compact-prove on %s#%d", rec.Shard, rec.Seq)
+	}
+	if rec.BatchN < 0 {
+		return nil, &contracts.VerifyResult{OK: false, AnchorState: "unanchored", Reason: "fragment not yet anchored"}, nil
+	}
+	batchFrags, err := s.db.ListBatchFragments(shard, rec.BatchN)
+	if err != nil {
+		return nil, nil, err
+	}
+	leaves := make([][]byte, len(batchFrags))
+	for i, f := range batchFrags {
+		lb, dErr := hex.DecodeString(f.Leaf)
+		if dErr != nil {
+			return nil, nil, dErr
+		}
+		leaves[i] = lb
+	}
+	mp, err := core.ComputeMerkleProof(leaves, rec.LeafIndex)
+	if err != nil {
+		return nil, nil, err
+	}
+	pathHex := make([]string, len(mp.Siblings))
+	for i, p := range mp.Siblings {
+		pathHex[i] = core.ToHex(p)
+	}
+	anchors, err := s.db.ListAnchors(shard)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(anchors) == 0 {
+		return nil, nil, fmt.Errorf("memory: no anchors for shard %q", shard)
+	}
+	mmr, _ := core.NewMMR(nil)
+	var target *store.BatchAnchor
+	for i := range anchors {
+		rb, rErr := hex.DecodeString(anchors[i].RootHex)
+		if rErr != nil || len(rb) != 32 {
+			return nil, nil, fmt.Errorf("memory: invalid anchor root hex at batch %d", anchors[i].N)
+		}
+		if _, aErr := mmr.Append(rb); aErr != nil {
+			return nil, nil, aErr
+		}
+		if anchors[i].N == rec.BatchN {
+			cp := anchors[i]
+			target = &cp
+		}
+	}
+	if target == nil {
+		return nil, nil, fmt.Errorf("memory: missing anchor batch %d for shard %q", rec.BatchN, shard)
+	}
+	mmrProof, err := mmr.ProveInclusion(uint64(rec.BatchN))
+	if err != nil {
+		return nil, nil, err
+	}
+	head := anchors[len(anchors)-1]
+	bundle := &contracts.CompactProofBundle{
+		Version:   1,
+		Shard:     head.ShardID,
+		BatchN:    uint64(target.N),
+		BatchSize: uint64(target.Size),
+		BatchRoot: target.RootHex,
+		Leaf:      rec.Leaf,
+		LeafIndex: rec.LeafIndex,
+		BatchPath: pathHex,
+		MMRProof:  mmrProof,
+		HeadAnchor: contracts.AnchorLink{
+			TxID:        head.TxID,
+			OutputIndex: 0,
+			N:           uint64(head.N),
+			Size:        uint64(head.Size),
+			R:           head.RootHex,
+			Rp:          head.ChainedHex,
+			StateHash:   head.StateHash,
+			MmrRoot:     head.MmrRoot,
+		},
+		HeadAnchorBEEF: head.Beef,
+	}
+	minDepth := 1
+	if s.port != nil && s.port.SettleDepth() > 0 {
+		minDepth = s.port.SettleDepth()
+	}
+	vr := contracts.VerifyFragmentCompact(ctx, *bundle, s.port.Tracker(), minDepth)
+	return bundle, &vr, nil
+}
+
+// ConsistencyProof constructs an O(log N) MMR consistency proof proving that shard's history at
+// anchor batch fromN (inclusive, 1-based prefix count = fromN+1) is an unmodified prefix of toN.
+func (s *Service) ConsistencyProof(shard string, fromN, toN int64) (*core.MMRConsistencyProof, error) {
+	if err := ValidateShardName(shard, true); err != nil {
+		return nil, err
+	}
+	anchors, err := s.db.ListAnchors(shard)
+	if err != nil {
+		return nil, err
+	}
+	if len(anchors) == 0 {
+		return nil, fmt.Errorf("memory: shard %q has no anchors", shard)
+	}
+	if toN < 0 {
+		toN = anchors[len(anchors)-1].N
+	}
+	if fromN < 0 || fromN > toN || int(toN) >= len(anchors) {
+		return nil, fmt.Errorf("memory: invalid consistency range [%d..%d] (anchor count %d)", fromN, toN, len(anchors))
+	}
+	mmr, _ := core.NewMMR(nil)
+	for i := int64(0); i <= toN; i++ {
+		rb, rErr := hex.DecodeString(anchors[i].RootHex)
+		if rErr != nil || len(rb) != 32 {
+			return nil, fmt.Errorf("memory: invalid anchor root at batch %d", i)
+		}
+		if _, aErr := mmr.Append(rb); aErr != nil {
+			return nil, aErr
+		}
+	}
+	return mmr.ProveConsistency(uint64(fromN+1), uint64(toN+1))
+}
+
 // resolveRepoGenesis returns the immutable 33-byte GenesisOwner pubkey hex and its 20-byte
 // ShardID (hash160) for shard. Existing anchored shards preserve their established GenesisOwner;
 // fresh Memory Repos derive a unique repo-scoped BRC-43 public key via Port.DeriveRepoGenesisPubKey
 // so separate repositories never collide on-chain under one shared ShardID. Fails closed on derivation errors.
 func (s *Service) resolveRepoGenesis(ctx context.Context, shard string, existingAnchors []store.BatchAnchor) (string, string, error) {
-	// 1. Preserve established on-chain GenesisOwner if this shard already has anchors.
 	for _, a := range existingAnchors {
 		if len(a.Beef) > 0 {
 			if _, parsed, _, err := guard.ParseBEEF(a.Beef, guard.DefaultBound); err == nil && parsed != nil &&
@@ -296,11 +479,9 @@ func (s *Service) resolveRepoGenesis(ctx context.Context, shard string, existing
 			return s.port.IdentityPubHex(), a.ShardID, nil
 		}
 	}
-	// 2. Reuse persisted branch genesis identity if already derived for this repo.
 	if br, err := s.db.GetMemBranch(shard, "main"); err == nil && br.GenesisPub != "" && br.GenesisShardID != "" {
 		return br.GenesisPub, br.GenesisShardID, nil
 	}
-	// 3. Derive a unique per-repo BRC-43 genesis public key (fail closed on signer/derivation error!).
 	pub, err := s.port.DeriveRepoGenesisPubKey(ctx, shard, "main")
 	if err != nil {
 		return "", "", fmt.Errorf("memory: derive repo genesis pubkey for %q: %w", shard, err)

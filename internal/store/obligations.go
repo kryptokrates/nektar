@@ -9,16 +9,16 @@ import (
 // ObligationRecord tracks a surviving commercial obligation across agent restarts,
 // session disconnects, and software upgrades ("The Agent Has Left. The Obligation Has Not.").
 type ObligationRecord struct {
-	ID             string `json:"id"`                       // deterministic idempotency key e.g. "ob:<dealId>:<kind>"
+	ID             string `json:"id"` // deterministic idempotency key e.g. "ob:<dealId>:<kind>"
 	DealID         string `json:"dealId"`
-	Role           string `json:"role"`                     // buyer | seller
-	Kind           string `json:"kind"`                     // reveal_owed | receipt_countersig_owed | proof_upgrade_owed | refund_claimable
+	Role           string `json:"role"` // buyer | seller
+	Kind           string `json:"kind"` // reveal_owed | receipt_countersig_owed | proof_upgrade_owed | refund_claimable
 	Counterparty   string `json:"counterparty,omitempty"`
 	AmountSats     uint64 `json:"amountSats,omitempty"`
 	TxID           string `json:"txid,omitempty"`
 	DeadlineUnix   int64  `json:"deadlineUnix,omitempty"`
 	DeadlineHeight int64  `json:"deadlineHeight,omitempty"`
-	Status         string `json:"status"`                   // open | fulfilled | overdue | cancelled
+	Status         string `json:"status"` // open | fulfilled | overdue | cancelled
 	PayloadJSON    []byte `json:"payloadJson,omitempty"`
 	Attempts       int    `json:"attempts,omitempty"`
 	LastError      string `json:"lastError,omitempty"`

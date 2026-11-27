@@ -32,8 +32,10 @@ type commitSnapshotOpts struct {
 	// PreservedEntries are pre-built TreeEntries (e.g. untouched encrypted or imported CHIRP blobs)
 	// copied verbatim into the new tree without re-hashing or writing plaintext blobs.
 	PreservedEntries map[string]memrepo.TreeEntry
-	// ExistingEntries carries prior Level/Class metadata for plaintext files whose bytes are updated/kept.
+	// ExistingEntries carries prior Level/Class/Encrypted metadata for files whose bytes are updated/kept.
 	ExistingEntries map[string]memrepo.TreeEntry
+	// ExistingByContent maps "path\x00contentSha256" -> exact persisted TreeEntry so unchanged CLKA blobs keep their BlobHash.
+	ExistingByContent map[string]memrepo.TreeEntry
 	// GitMeta preserves client-pushed Git author/committer/message so BuildGoGitRepo reproduces exact OIDs.
 	GitMeta *memrepo.GitCommitMeta
 	// CallerHoldsLock indicates caller already holds s.lockShard(repo).
@@ -46,7 +48,7 @@ type commitSnapshotOpts struct {
 
 // ApplyPushedGitCommits ingests one or more fast-forward Git commits unpacked from a Smart HTTP
 // `git-receive-pack` push, enforcing Cedar write policy, signing every commit with BRC-43,
-// binding L1 TagLeafV2 MPE roots, and anchoring the pushed batch in ONE NektarAnchor.Append() spend.
+// binding L1 leaf MPE roots, and anchoring the pushed batch in ONE NektarAnchor.Append() spend.
 func (s *Service) ApplyPushedGitCommits(
 	ctx context.Context,
 	repo, branch string,
@@ -153,7 +155,7 @@ func (s *Service) ApplyPushedGitCommits(
 	return out, nil
 }
 
-// commitFileSnapshot atomically persists a full tree snapshot, records a signed L1-MPE TagLeafV2
+// commitFileSnapshot atomically persists a full tree snapshot, records a signed L1-MPE canonical leaf
 // fragment record for anchoring, signs the CommitObject, updates the branch head, and optionally anchors.
 func (s *Service) commitFileSnapshot(
 	ctx context.Context,
@@ -211,13 +213,48 @@ func (s *Service) commitFileSnapshotWithOpts(
 		if _, isPreserved := entriesByPath[normP]; isPreserved {
 			continue
 		}
-		b, _, err := memrepo.BuildBlob(s.objects, normP, "", raw, len(raw) > memrepo.InlineBlobMaxBytes)
-		if err != nil {
-			return nil, "", err
-		}
-		if prev, ok := existing[normP]; ok {
+		prev, hasPrev := existing[normP]
+		var b *memrepo.BlobObject
+		if hasPrev && prev.Encrypted && s.lattice != nil {
+			// Preserve unchanged CLKA-encrypted blobs byte-for-byte so diffs stay minimal and CHIRP URLs stay intact;
+			// only re-seal with a fresh envelope when merged plaintext actually changed.
+			sum := sha256.Sum256(raw)
+			sumHex := hex.EncodeToString(sum[:])
+			if opts != nil && len(opts.ExistingByContent) > 0 {
+				if exact, ok := opts.ExistingByContent[normP+"\x00"+sumHex]; ok && exact.BlobHash != "" {
+					entriesByPath[normP] = exact
+					continue
+				}
+			}
+			if prev.ContentSHA256 != "" && strings.EqualFold(prev.ContentSHA256, sumHex) && prev.BlobHash != "" {
+				entriesByPath[normP] = prev
+				continue
+			}
+			cls := prev.Class
+			if cls == "" {
+				cls = "general"
+			}
+			env, ck, sErr := s.lattice.SealFragment(ctx, repo, prev.Level, cls, sum, raw)
+			core.Zero32Array(&ck)
+			if sErr != nil {
+				return nil, "", fmt.Errorf("memory: re-seal merged file %q: %w", normP, sErr)
+			}
+			km, _ := json.Marshal(env)
+			b, err = memrepo.BuildEncryptedBlobWithLattice(normP, "", int64(len(raw)), hex.EncodeToString(sum[:]), "", "", 0, env.Epoch, km)
+			if err != nil {
+				return nil, "", err
+			}
 			b.Level = prev.Level
-			b.Class = prev.Class
+			b.Class = cls
+		} else {
+			b, _, err = memrepo.BuildBlob(s.objects, normP, "", raw, len(raw) > memrepo.InlineBlobMaxBytes)
+			if err != nil {
+				return nil, "", err
+			}
+			if hasPrev {
+				b.Level = prev.Level
+				b.Class = prev.Class
+			}
 		}
 		blobsToSave = append(blobsToSave, b)
 		entriesByPath[normP] = memrepo.TreeEntry{
@@ -252,8 +289,8 @@ func (s *Service) commitFileSnapshotWithOpts(
 		msg = fmt.Sprintf("Update tree (%d files)", len(entries))
 	}
 
-	// Record a canonical L1-MPE TagLeafV2 fragment representing this tree transition so AnchorShard
-	// commits this exact treeHash & message into the NektarAnchor singleton UTXO chain!
+	// Record a canonical L1-MPE unified TagLeaf fragment representing this tree transition so AnchorShard
+	// commits this exact treeHash, commitHash, and transitionHash into the NektarAnchor singleton UTXO chain!
 	payload := []byte(fmt.Sprintf("%s\ntree:%s\nfiles:%d", msg, tr.TreeHash, len(entries)))
 	prov := core.Provenance{
 		Source:  "git:" + class,
@@ -273,15 +310,15 @@ func (s *Service) commitFileSnapshotWithOpts(
 	if mErr != nil || mpe == nil {
 		return nil, "", fmt.Errorf("memory: build commit fragment MPE: %w", mErr)
 	}
-	leaf := core.ComputeLeafV2(core.Fragment{
-		Data:       payload,
-		Provenance: prov,
-		HDP:        hdp,
-		MPERoot:    mpe.Root,
-	})
 
 	anchors, _ := s.db.ListAnchors(repo)
 	genPub, genID, _ := s.resolveRepoGenesis(ctx, repo, anchors)
+	authorPubHex := s.commitAuthorPubHex(ctx)
+	policyHashHex := ""
+	if pc := s.PolicyCommit(); pc != nil {
+		policyHashHex = pc.Hash
+	}
+	ontologyHashHex := s.OntologyHead()
 
 	callerHoldsLock := opts != nil && opts.CallerHoldsLock
 	var unlockShard func()
@@ -308,43 +345,91 @@ func (s *Service) commitFileSnapshotWithOpts(
 		} else if curBr, bErr := rtx.GetMemBranch(repo, branch); bErr == nil {
 			expectedHead = curBr.HeadCommit
 		}
-		stored, _, err := rtx.AppendFragment(store.FragmentRecord{
-			Shard:      repo,
-			HDP:        hdpHex,
-			Leaf:       core.ToHex(leaf),
-			MPERoot:    mpe.RootHex,
-			Data:       payload,
-			Provenance: provBytes,
-			Level:      0,
-			Class:      class,
-			BatchN:     -1,
-			LeafIndex:  -1,
-			CreatedAt:  now,
-		})
-		if err != nil {
-			return err
+		nextSeq, sErr := rtx.NextFragmentSeq(repo)
+		if sErr != nil {
+			return sErr
 		}
+		prevQHex, qErr := rtx.LatestStateQ(repo)
+		if qErr != nil {
+			return qErr
+		}
+		prevQBytes := core.Zero32Bytes()
+		if prevQHex != "" {
+			if b, dErr := hex.DecodeString(prevQHex); dErr == nil && len(b) == 32 {
+				prevQBytes = b
+			}
+		}
+
 		finalized, err := memrepo.FinalizeCommit(memrepo.CommitObject{
-			Version:      1,
-			Repo:         repo,
-			Branch:       branch,
-			Seq:          stored.Seq,
-			Parents:      parents,
-			TreeHash:     tr.TreeHash,
-			AuthorPub:    s.commitAuthorPubHex(ctx),
-			ModelID:      s.modelID.Provider + "/" + s.modelID.Release,
-			PolicyCommit: s.PolicyCommit().Hash,
-			Message:      msg,
-			Timestamp:    now,
-			AnchorN:      -1,
-			FragmentLeaf: stored.Leaf,
-			GitMeta:      gitMeta,
+			Version:        1,
+			Repo:           repo,
+			Branch:         branch,
+			Seq:            nextSeq,
+			Parents:        parents,
+			TreeHash:       tr.TreeHash,
+			AuthorPub:      authorPubHex,
+			ModelID:        s.modelID.Provider + "/" + s.modelID.Release,
+			PolicyCommit:   policyHashHex,
+			OntologyCommit: ontologyHashHex,
+			Message:        msg,
+			Timestamp:      now,
+			AnchorN:        -1,
+			GitMeta:        gitMeta,
 		}, func(digest []byte) ([]byte, error) {
 			return s.port.SignDigest(ctx, digest)
 		})
 		if err != nil {
 			return err
 		}
+
+		commitHashBytes, _ := hex.DecodeString(finalized.CommitHash)
+		treeHashBytes, _ := hex.DecodeString(tr.TreeHash)
+		var polBytes, ontBytes []byte
+		if policyHashHex != "" {
+			polBytes, _ = hex.DecodeString(policyHashHex)
+		}
+		if ontologyHashHex != "" {
+			ontBytes, _ = hex.DecodeString(ontologyHashHex)
+		}
+		nextQBytes, qnErr := core.NextStepStateQ(prevQBytes, hdp, commitHashBytes, treeHashBytes, polBytes, ontBytes, now)
+		if qnErr != nil {
+			return fmt.Errorf("memory: compute commit stateQ: %w", qnErr)
+		}
+		trRec := core.TransitionRecord{
+			Version:      1,
+			Shard:        repo,
+			Seq:          nextSeq,
+			PrevStateQ:   prevQBytes,
+			InputDigest:  hdp,
+			NextStateQ:   nextQBytes,
+			CommitHash:   commitHashBytes,
+			TreeHash:     treeHashBytes,
+			PolicyHash:   polBytes,
+			OntologyHash: ontBytes,
+			Timestamp:    now,
+		}
+		trHashBytes, trErr := core.ComputeTransitionHash(trRec)
+		if trErr != nil {
+			return fmt.Errorf("memory: compute commit transition hash: %w", trErr)
+		}
+		trRec.Hash = trHashBytes
+		trCBOR, trErr := core.EncodeTransitionCBOR(trRec)
+		if trErr != nil {
+			return fmt.Errorf("memory: encode commit transition CBOR: %w", trErr)
+		}
+		transitionHashHex := core.ToHex(trHashBytes)
+
+		leaf := core.ComputeLeaf(core.Fragment{
+			Data:           payload,
+			Provenance:     prov,
+			HDP:            hdp,
+			MPERoot:        mpe.Root,
+			CommitHash:     commitHashBytes,
+			TransitionHash: trHashBytes,
+		})
+		leafHex := core.ToHex(leaf)
+		finalized.FragmentLeaf = leafHex
+
 		if err := rtx.SaveMemCommit(rowFromCommit(finalized)); err != nil {
 			return err
 		}
@@ -358,7 +443,37 @@ func (s *Service) commitFileSnapshotWithOpts(
 		}, expectedHead); err != nil {
 			return err
 		}
-		if err := rtx.UpdateFragmentCommitHash(repo, stored.Seq, finalized.CommitHash); err != nil {
+		if err := rtx.SaveTransition(store.TransitionRow{
+			Shard:        repo,
+			Seq:          nextSeq,
+			Hash:         transitionHashHex,
+			PrevQ:        core.ToHex(prevQBytes),
+			NextQ:        core.ToHex(nextQBytes),
+			CommitHash:   finalized.CommitHash,
+			TreeHash:     tr.TreeHash,
+			PolicyHash:   policyHashHex,
+			OntologyHash: ontologyHashHex,
+			BodyCBOR:     trCBOR,
+			CreatedAt:    now,
+		}); err != nil {
+			return err
+		}
+		if _, _, err := rtx.AppendFragment(store.FragmentRecord{
+			Shard:          repo,
+			HDP:            hdpHex,
+			Leaf:           leafHex,
+			MPERoot:        mpe.RootHex,
+			CommitHash:     finalized.CommitHash,
+			TransitionHash: transitionHashHex,
+			Data:           payload,
+			Provenance:     provBytes,
+			Level:          0,
+			Class:          class,
+			Public:         true,
+			BatchN:         -1,
+			LeafIndex:      -1,
+			CreatedAt:      now,
+		}); err != nil {
 			return err
 		}
 		c = finalized

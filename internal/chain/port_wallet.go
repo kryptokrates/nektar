@@ -165,15 +165,6 @@ func (p *Port) UTXOCount() int {
 	return bal.SpendableCount
 }
 
-// EnsureSplitCoins warms up the fuel basket via FuelKeeper (embedded mode; no-op in client mode).
-func (p *Port) EnsureSplitCoins(ctx context.Context, targetCount int, splitSats uint64) error {
-	if p.engine == nil || targetCount <= 1 || splitSats == 0 {
-		return nil
-	}
-	_, err := p.engine.FuelKeeper().WarmFuel(ctx, targetCount, splitSats)
-	return err
-}
-
 // Sweep sweeps 100% of spendable funds in embedded mode to a P2PKH address or BRC-100 identity key.
 func (p *Port) Sweep(ctx context.Context, args nwallet.SweepArgs) (*nwallet.SweepResult, error) {
 	if p.engine == nil {

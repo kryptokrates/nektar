@@ -54,6 +54,7 @@ type CapsuleVerifyReport struct {
 	CommitsVerified int             `json:"commitsVerified"`
 	TreesVerified   int             `json:"treesVerified"`
 	BlobsVerified   int             `json:"blobsVerified"`
+	EdgesVerified   int             `json:"edgesVerified,omitempty"`
 	AnchorsVerified int             `json:"anchorsVerified"`
 	SettledAnchors  int             `json:"settledAnchors"`
 	SettledByN      map[int64]bool  `json:"-"`

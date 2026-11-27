@@ -115,19 +115,21 @@ func ListArtifacts() []string {
 
 // AnchorState is the on-chain state committed in a NektarAnchor locking script.
 type AnchorState struct {
-	Shard    string `json:"shard"`
-	OwnerPub string `json:"ownerPub"`
-	OwnerPKH []byte `json:"ownerPkh"`
-	N        uint64 `json:"n"`
-	Size     uint64 `json:"size"`
-	R        []byte `json:"R"`
-	Rp       []byte `json:"Rp"`
-	Tag      []byte `json:"tag"`
-	Metanet  bool   `json:"metanet"`
+	Shard     string `json:"shard"`
+	OwnerPub  string `json:"ownerPub"`
+	OwnerPKH  []byte `json:"ownerPkh"`
+	N         uint64 `json:"n"`
+	Size      uint64 `json:"size"`
+	R         []byte `json:"R"`
+	Rp        []byte `json:"Rp"`
+	StateHash []byte `json:"stateHash"` // Q_n: consensus-enforced epistemic automaton state hash
+	MmrRoot   []byte `json:"mmrRoot"`   // O(log N) MMR root over R_0..R_n
+	Tag       []byte `json:"tag"`
+	Metanet   bool   `json:"metanet"`
 }
 
 // EncodeAnchorLockingScript builds the L1-spendable NektarAnchor locking script:
-// <patched NektarAnchor code> OP_RETURN [0x04 "META"] <genesisOwner33> <n_le8> <size_le8> <R32> <Rp32> <len(tag)><tag> <len(pkh)><pkh>
+// <patched NektarAnchor code> OP_RETURN [0x04 "META"] <genesisOwner33> <n_le8> <size_le8> <R32> <Rp32> <StateHash32> <MmrRoot32> <len(tag)><tag> <len(pkh)><pkh>
 func EncodeAnchorLockingScript(st AnchorState) (*script.Script, error) {
 	codeBytes, err := loadPatchedAnchorCode()
 	if err != nil {
@@ -137,8 +139,8 @@ func EncodeAnchorLockingScript(st AnchorState) (*script.Script, error) {
 	if err != nil || len(ownerPubBytes) != 33 {
 		return nil, errors.New("contracts: ownerPub must be 33-byte compressed hex")
 	}
-	if len(st.R) != 32 || len(st.Rp) != 32 || len(st.OwnerPKH) != 20 {
-		return nil, errors.New("contracts: invalid R/Rp/ownerPkh lengths")
+	if len(st.R) != 32 || len(st.Rp) != 32 || len(st.StateHash) != 32 || len(st.MmrRoot) != 32 || len(st.OwnerPKH) != 20 {
+		return nil, errors.New("contracts: invalid R/Rp/stateHash/mmrRoot/ownerPkh lengths")
 	}
 	tag := st.Tag
 	if len(tag) == 0 {
@@ -147,12 +149,12 @@ func EncodeAnchorLockingScript(st AnchorState) (*script.Script, error) {
 	if len(tag) > 75 {
 		return nil, errors.New("contracts: anchor tag exceeds 75-byte direct push limit")
 	}
-	state := make([]byte, 0, 5+33+8+8+32+32+1+len(tag)+1+20)
+	state := make([]byte, 0, 5+33+8+8+32+32+32+32+1+len(tag)+1+20)
 	if st.Metanet {
 		state = append(state, 0x04)
 		state = append(state, core.MetaFlag...)
 	} else {
-		// Explicit empty push so NektarAnchor v4's OP_1 OP_SPLIT metaFlag parser stays aligned.
+		// Explicit empty push so NektarAnchor's OP_1 OP_SPLIT metaFlag parser stays aligned.
 		state = append(state, 0x00)
 	}
 	state = append(state, ownerPubBytes...)
@@ -160,6 +162,8 @@ func EncodeAnchorLockingScript(st AnchorState) (*script.Script, error) {
 	state = append(state, core.U64LE(st.Size)...)
 	state = append(state, st.R...)
 	state = append(state, st.Rp...)
+	state = append(state, st.StateHash...)
+	state = append(state, st.MmrRoot...)
 	state = append(state, byte(len(tag)))
 	state = append(state, tag...)
 	state = append(state, byte(len(st.OwnerPKH)))
@@ -174,24 +178,22 @@ func EncodeAnchorLockingScript(st AnchorState) (*script.Script, error) {
 }
 
 // DecodeNektarAnchor decodes and validates a canonical L1-spendable META NektarAnchor locking script.
-// Non-spendable legacy artifacts (NektarAnchorV3, unpatched v4), non-Metanet scripts, and legacy
-// TagAnchorTag payloads are strictly rejected so UTXO spend lineage is the sole anchor format.
 func DecodeNektarAnchor(scriptBytes []byte) (*AnchorState, error) {
-	codeV4Patched, err := loadPatchedAnchorCode()
+	codePatched, err := loadPatchedAnchorCode()
 	if err != nil {
 		return nil, err
 	}
-	if len(scriptBytes) <= len(codeV4Patched) || !core.EqualBytes(scriptBytes[:len(codeV4Patched)], codeV4Patched) || scriptBytes[len(codeV4Patched)] != 0x6a {
+	if len(scriptBytes) <= len(codePatched) || !core.EqualBytes(scriptBytes[:len(codePatched)], codePatched) || scriptBytes[len(codePatched)] != 0x6a {
 		return nil, errors.New("contracts: locking script is not a spendable META NektarAnchor covenant")
 	}
-	suffix := scriptBytes[len(codeV4Patched)+1:]
+	suffix := scriptBytes[len(codePatched)+1:]
 
 	if len(suffix) < 5 || suffix[0] != 0x04 || !core.EqualBytes(suffix[1:5], core.MetaFlag) {
 		return nil, errors.New("contracts: NektarAnchor requires canonical META flag prefix")
 	}
 	suffix = suffix[5:]
-	// Layout: ownerPub(33) | n(8) | size(8) | R(32) | Rp(32) | tagLen(1) | tag | pkhLen(1) | pkh
-	if len(suffix) < 115 {
+	// Layout: ownerPub(33) | n(8) | size(8) | R(32) | Rp(32) | StateHash(32) | MmrRoot(32) | tagLen(1) | tag | pkhLen(1) | pkh
+	if len(suffix) < 179 {
 		return nil, errors.New("contracts: anchor state suffix too short")
 	}
 	ownerPub := suffix[0:33]
@@ -202,12 +204,14 @@ func DecodeNektarAnchor(scriptBytes []byte) (*AnchorState, error) {
 	size := binary.LittleEndian.Uint64(suffix[41:49])
 	r := append([]byte(nil), suffix[49:81]...)
 	rp := append([]byte(nil), suffix[81:113]...)
-	tagLen := int(suffix[113])
-	if 114+tagLen+1 > len(suffix) {
+	stateHash := append([]byte(nil), suffix[113:145]...)
+	mmrRoot := append([]byte(nil), suffix[145:177]...)
+	tagLen := int(suffix[177])
+	if 178+tagLen+1 > len(suffix) {
 		return nil, errors.New("contracts: truncated anchor tag")
 	}
-	tag := append([]byte(nil), suffix[114:114+tagLen]...)
-	pkhOff := 114 + tagLen
+	tag := append([]byte(nil), suffix[178:178+tagLen]...)
+	pkhOff := 178 + tagLen
 	pkhLen := int(suffix[pkhOff])
 	if pkhLen != 20 || pkhOff+1+pkhLen != len(suffix) {
 		return nil, errors.New("contracts: invalid ownerPkh length (must be 20 bytes)")
@@ -218,15 +222,17 @@ func DecodeNektarAnchor(scriptBytes []byte) (*AnchorState, error) {
 	}
 
 	return &AnchorState{
-		Shard:    core.ShardIDFromPubkey(ownerPub),
-		OwnerPub: hex.EncodeToString(ownerPub),
-		OwnerPKH: pkh,
-		N:        n,
-		Size:     size,
-		R:        r,
-		Rp:       rp,
-		Tag:      tag,
-		Metanet:  true,
+		Shard:     core.ShardIDFromPubkey(ownerPub),
+		OwnerPub:  hex.EncodeToString(ownerPub),
+		OwnerPKH:  pkh,
+		N:         n,
+		Size:      size,
+		R:         r,
+		Rp:        rp,
+		StateHash: stateHash,
+		MmrRoot:   mmrRoot,
+		Tag:       tag,
+		Metanet:   true,
 	}, nil
 }
 
@@ -238,7 +244,26 @@ type AnchorLink struct {
 	Size        uint64 `json:"size"`
 	R           string `json:"R"`
 	Rp          string `json:"Rp"`
+	StateHash   string `json:"stateHash,omitempty"`
+	MmrRoot     string `json:"mmrRoot,omitempty"`
 	AnchorBEEF  []byte `json:"anchorBeef,omitempty"`
+}
+
+// CompactProofBundle proves any historical fragment against the shard's HEAD NektarAnchor UTXO
+// in O(log N) bytes via an MMR inclusion proof (Leaf -> BatchR -> MMRProof -> HeadAnchor.MmrRoot -> BUMP -> Headers),
+// eliminating O(N) ChainTail BEEF transfers for light verifiers.
+type CompactProofBundle struct {
+	Version        int                     `json:"version"`
+	Shard          string                  `json:"shard"`
+	BatchN         uint64                  `json:"batchN"`
+	BatchSize      uint64                  `json:"batchSize"`
+	BatchRoot      string                  `json:"batchRoot"`
+	Leaf           string                  `json:"leaf"`
+	LeafIndex      int                     `json:"leafIndex"`
+	BatchPath      []string                `json:"batchPath"`
+	MMRProof       *core.MMRInclusionProof `json:"mmrProof"`
+	HeadAnchor     AnchorLink              `json:"headAnchor"`
+	HeadAnchorBEEF []byte                  `json:"headAnchorBEEF"`
 }
 
 // ProofBundle is the self-contained SPV proof for one memory fragment:

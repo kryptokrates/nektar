@@ -96,9 +96,9 @@ type Engine struct {
 	brc29BackoffMu sync.Mutex
 	brc29Backoff   map[int64]unfailBackoffEntry
 	bgCancel       context.CancelFunc
-	bgWG     sync.WaitGroup
-	closeMu  sync.Mutex
-	closed   bool
+	bgWG           sync.WaitGroup
+	closeMu        sync.Mutex
+	closed         bool
 }
 
 var _ sdkwallet.Interface = (*Engine)(nil)
@@ -260,22 +260,22 @@ func Open(cfg Config) (*Engine, error) {
 	}
 
 	e := &Engine{
-		cfg:        cfg,
-		profile:    prof,
-		fuelDenom:  utxoCfg.Throughput.DenominationSatoshis,
-		fanoutMax:  utxoCfg.Throughput.FanoutOutputsPerTx,
-		rootKey:    rootKey,
-		keyDeriver: deriver,
-		fundKey:    fundKey,
-		fundAddr:   fundAddrObj.AddressString,
-		fundScript: fundScript,
-		sqlDB:      sqlDB,
-		readDB:     readDB,
-		gormDB:     gormDB,
-		tables:     tables,
-		txCache:    txCache,
-		svc:        svc,
-		provider:   provider,
+		cfg:          cfg,
+		profile:      prof,
+		fuelDenom:    utxoCfg.Throughput.DenominationSatoshis,
+		fanoutMax:    utxoCfg.Throughput.FanoutOutputsPerTx,
+		rootKey:      rootKey,
+		keyDeriver:   deriver,
+		fundKey:      fundKey,
+		fundAddr:     fundAddrObj.AddressString,
+		fundScript:   fundScript,
+		sqlDB:        sqlDB,
+		readDB:       readDB,
+		gormDB:       gormDB,
+		tables:       tables,
+		txCache:      txCache,
+		svc:          svc,
+		provider:     provider,
 		tb:           tbWallet,
 		userID:       userResp.User.UserID,
 		brc29Backoff: make(map[int64]unfailBackoffEntry),

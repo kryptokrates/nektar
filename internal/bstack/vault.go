@@ -98,13 +98,13 @@ func OpenWithEpoch(env *SealedEnvelope, epochSym [32]byte) ([]byte, error) {
 // Removing any member forces an epoch bump with a brand-new symmetric key (bsecret revocation pattern),
 // permanently retiring custom SMT revocation shards.
 type BorgGroup struct {
-	GroupID      string              `json:"groupId"`
-	Name         string              `json:"name"`
-	CurrentEpoch int64               `json:"currentEpoch"`
-	Members      map[string]string   `json:"members"` // pubHex -> role (owner|writer|reader)
-	Revoked      map[string]int64    `json:"revoked"` // pubHex -> revokedAt unix
-	Epochs       map[int64][32]byte  `json:"-"`       // epoch -> symmetric key (kept local/wrapped)
-	EpochMembers map[int64][]string  `json:"epochMembers"`
+	GroupID      string             `json:"groupId"`
+	Name         string             `json:"name"`
+	CurrentEpoch int64              `json:"currentEpoch"`
+	Members      map[string]string  `json:"members"` // pubHex -> role (owner|writer|reader)
+	Revoked      map[string]int64   `json:"revoked"` // pubHex -> revokedAt unix
+	Epochs       map[int64][32]byte `json:"-"`       // epoch -> symmetric key (kept local/wrapped)
+	EpochMembers map[int64][]string `json:"epochMembers"`
 }
 
 // GroupPersistence persists BorgGroup state + epoch keys across restarts.

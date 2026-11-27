@@ -16,11 +16,11 @@ import (
 // CatchUpResult summarizes one bounded BRC-24 /lookup backfill pass from an explicit sibling Hub
 // (strictly separated from live BRC-149 propagation, per 1BSV Paper 008 §6 & bcommon/replay).
 type CatchUpResult struct {
-	Peer      string `json:"peer"`
-	Fetched   int    `json:"fetched"`
-	Admitted  int    `json:"admitted"`
-	Skipped   int    `json:"skipped"`
-	LastSeq   int64  `json:"lastSeq"`
+	Peer     string `json:"peer"`
+	Fetched  int    `json:"fetched"`
+	Admitted int    `json:"admitted"`
+	Skipped  int    `json:"skipped"`
+	LastSeq  int64  `json:"lastSeq"`
 }
 
 // CatchUpFromPeer runs a bounded, cursor-resumable BRC-24 POST /lookup catch-up walk against

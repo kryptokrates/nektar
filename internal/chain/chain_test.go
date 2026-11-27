@@ -30,22 +30,27 @@ func TestMemoryPortBroadcastAnchorAndSPVVerify(t *testing.T) {
 
 	// Build and broadcast a real NektarAnchor tx onto bcommon/testchain, then SPV-verify a fragment!
 	pubBytes := port.Signer().IdentityKey().Compressed()
-	leaf := core.ComputeLeafV2(core.Fragment{
+	leaf := core.ComputeLeaf(core.Fragment{
 		Data:       []byte("first anchored Go fact"),
 		Provenance: core.Provenance{Source: "go-test", Time: 1730000000, ModelID: "test"},
 	})
 	root, _ := core.MerkleRoot([][]byte{leaf})
 	rp := core.ChainRp(core.Zero32Bytes(), root, 1)
+	mmr0, _ := core.NewMMR([][]byte{root})
+	meta0 := core.ComputeBatchMetaHash(core.Zero32Bytes(), core.Zero32Bytes(), core.Zero32Bytes())
+	q0 := core.ChainStateQ(core.Zero32Bytes(), root, meta0, mmr0.Root())
 	state := contracts.AnchorState{
-		Shard:    core.ShardIDFromPubkey(pubBytes),
-		OwnerPub: port.IdentityPubHex(),
-		OwnerPKH: core.Hash160(pubBytes),
-		N:        0,
-		Size:     1,
-		R:        root,
-		Rp:       rp,
-		Tag:      core.TagRPrime,
-		Metanet:  true,
+		Shard:     core.ShardIDFromPubkey(pubBytes),
+		OwnerPub:  port.IdentityPubHex(),
+		OwnerPKH:  core.Hash160(pubBytes),
+		N:         0,
+		Size:      1,
+		R:         root,
+		Rp:        rp,
+		StateHash: q0,
+		MmrRoot:   mmr0.Root(),
+		Tag:       core.TagRPrime,
+		Metanet:   true,
 	}
 	lockScript, err := contracts.EncodeAnchorLockingScript(state)
 	if err != nil {

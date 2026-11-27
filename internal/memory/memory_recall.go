@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -10,51 +11,244 @@ import (
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/lattice"
+	"github.com/kryptokrates/nektar/internal/memrepo"
 	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
 // RecallInput specifies a shard/repo recall query (omit Shard/Repo to search across all non-system repos).
-// Optionally pass Branch or AtCommit (commit hash/prefix or tag name) for epistemic time-travel recall.
+// Optionally pass Branch or AtCommit (commit hash/prefix or tag name) for epistemic time-travel recall,
+// or Clearance for strict offline CLKA cryptographic lattice decryption.
 type RecallInput struct {
-	Shard             string           `json:"shard,omitempty"`
-	Repo              string           `json:"repo,omitempty"`     // alias for Shard
-	Branch            string           `json:"branch,omitempty"`   // optional branch (defaults to main)
-	AtCommit          string           `json:"atCommit,omitempty"` // optional historical commit SHA/prefix or tag for time-travel recall
-	Query             string           `json:"query,omitempty"`
-	Principal         policy.Principal `json:"principal,omitempty"`
-	CallerPub         string           `json:"callerPub,omitempty"`
-	Action            string           `json:"-"` // internal Cedar action ("read" default, or "disclose")
-	DisallowBorg      bool             `json:"-"` // internal: when true, Borg-encrypted fragments are skipped
-	IncludeSuperseded bool             `json:"includeSuperseded,omitempty"`
-	VerifySPV         bool             `json:"verifySpv,omitempty"`
-	Limit             int              `json:"limit,omitempty"`
+	Shard             string             `json:"shard,omitempty"`
+	Repo              string             `json:"repo,omitempty"`     // alias for Shard
+	Branch            string             `json:"branch,omitempty"`   // optional branch (defaults to main)
+	AtCommit          string             `json:"atCommit,omitempty"` // optional historical commit SHA/prefix or tag for time-travel recall
+	Query             string             `json:"query,omitempty"`
+	Principal         policy.Principal   `json:"principal,omitempty"`
+	Clearance         *lattice.Clearance `json:"clearance,omitempty"`
+	CallerPub         string             `json:"callerPub,omitempty"`
+	Action            string             `json:"-"` // internal Cedar action ("read" default, or "disclose")
+	DisallowBorg      bool               `json:"-"` // internal: when true, Borg-encrypted fragments are skipped
+	DisallowPrivate   bool               `json:"-"` // internal: when true, CLKA-encrypted fragments are skipped
+	IncludeSuperseded bool               `json:"includeSuperseded,omitempty"`
+	VerifySPV         bool               `json:"verifySpv,omitempty"`
+	Limit             int                `json:"limit,omitempty"`
 }
 
 // RecalledFragment is one authorized, decrypted, optionally SPV-verified fragment.
 type RecalledFragment struct {
-	Shard       string                  `json:"shard"`
-	Seq         int64                   `json:"seq"`
-	Path        string                  `json:"path,omitempty"`
-	CommitHash  string                  `json:"commitHash,omitempty"`
-	Text        string                  `json:"text"`
-	HDP         string                  `json:"hdp"`
-	Leaf        string                  `json:"leaf"`
-	Level       int                     `json:"level"`
-	Class       string                  `json:"class"`
-	BorgGroup   string                  `json:"borgGroup,omitempty"`
-	BorgEpoch   int64                   `json:"borgEpoch,omitempty"`
-	AnchorTxID  string                  `json:"anchorTxid,omitempty"`
-	AnchorState string                  `json:"anchorState,omitempty"`
-	Tainted     bool                    `json:"tainted,omitempty"`
-	SPV         *contracts.VerifyResult `json:"spv,omitempty"`
-	CreatedAt   int64                   `json:"createdAt"`
+	Shard          string                  `json:"shard"`
+	Seq            int64                   `json:"seq"`
+	Path           string                  `json:"path,omitempty"`
+	CommitHash     string                  `json:"commitHash,omitempty"`
+	TransitionHash string                  `json:"transitionHash,omitempty"`
+	Text           string                  `json:"text"`
+	HDP            string                  `json:"hdp"`
+	Leaf           string                  `json:"leaf"`
+	Level          int                     `json:"level"`
+	Class          string                  `json:"class"`
+	Public         bool                    `json:"public,omitempty"`
+	LatticeEpoch   uint64                  `json:"latticeEpoch,omitempty"`
+	BorgGroup      string                  `json:"borgGroup,omitempty"`
+	BorgEpoch      int64                   `json:"borgEpoch,omitempty"`
+	Modality       *core.Modality          `json:"modality,omitempty"`
+	Refines        []core.RefinementEdge   `json:"refines,omitempty"`
+	AnchorTxID     string                  `json:"anchorTxid,omitempty"`
+	AnchorState    string                  `json:"anchorState,omitempty"`
+	Tainted        bool                    `json:"tainted,omitempty"`
+	Distilled      bool                    `json:"distilled,omitempty"`
+	OntologyID     string                  `json:"ontologyId,omitempty"`
+	SPV            *contracts.VerifyResult `json:"spv,omitempty"`
+	CreatedAt      int64                   `json:"createdAt"`
 }
 
-// Recall returns active, Cedar-authorized, Borg-decrypted fragments from shard/repo.
+// openFragmentPlaintext decrypts a Borg- or CLKA-encrypted fragment (or returns public plaintext)
+// and cryptographically verifies core.VerifyHDP(plaintext, r.Provenance, hdpBytes). Fails closed on any error.
+func (s *Service) openFragmentPlaintext(
+	ctx context.Context,
+	r store.FragmentRecord,
+	principal policy.Principal,
+	callerPub string,
+	clearance *lattice.Clearance,
+	disallowBorg, disallowPrivate bool,
+) ([]byte, bool) {
+	if r.Forgotten {
+		return nil, false
+	}
+	hdpBytes, hErr := hex.DecodeString(strings.TrimSpace(r.HDP))
+	if hErr != nil || len(hdpBytes) != 32 {
+		return nil, false
+	}
+	var plaintext []byte
+	switch {
+	case r.BorgGroup != "":
+		if disallowBorg || callerPub == "" || len(r.KeyedMeta) == 0 {
+			return nil, false
+		}
+		var env bstack.SealedEnvelope
+		if err := json.Unmarshal(r.KeyedMeta, &env); err != nil {
+			return nil, false
+		}
+		epochSym, err := s.groups.EpochKey(r.BorgGroup, callerPub, r.BorgEpoch)
+		if err != nil {
+			return nil, false
+		}
+		opened, err := bstack.OpenWithEpoch(&env, epochSym)
+		core.Zero32Array(&epochSym)
+		if err != nil {
+			return nil, false
+		}
+		plaintext = opened
+	case r.LatticeEpoch > 0:
+		if disallowPrivate || len(r.KeyedMeta) == 0 {
+			return nil, false
+		}
+		var env lattice.SealedEnvelope
+		if err := json.Unmarshal(r.KeyedMeta, &env); err != nil {
+			return nil, false
+		}
+		var opened []byte
+		var err error
+		if clearance != nil {
+			var man *lattice.Manifest
+			if s.lattice != nil {
+				man, _ = s.lattice.BuildManifest(ctx, env.Shard, env.Epoch)
+			}
+			opened, err = lattice.OpenWithClearance(&env, clearance, man)
+		} else if s.lattice != nil {
+			opened, err = s.lattice.OpenFragmentForPrincipal(ctx, &env, int(principal.Level))
+		} else {
+			return nil, false
+		}
+		if err != nil {
+			return nil, false
+		}
+		plaintext = opened
+	default:
+		plaintext = r.Data
+	}
+
+	if len(r.Provenance) > 0 && !core.VerifyHDP(plaintext, r.Provenance, hdpBytes) {
+		return nil, false
+	}
+	return plaintext, true
+}
+
+// OpenBlobAuthorized ephemerally decrypts an authorized CLKA BlobObject (or returns public blob bytes)
+// for principal while never persisting plaintext to disk/SQLite/CHIRP. BorgGroup secrets require explicit group access.
+func (s *Service) OpenBlobAuthorized(ctx context.Context, b memrepo.BlobObject, principal policy.Principal, disallowBorg bool) ([]byte, bool) {
+	if principal.ID == "" {
+		principal = ownerPrincipal()
+	}
+	return s.openBlobPlaintext(ctx, b, principal, "", nil, disallowBorg, false)
+}
+
+// openBlobPlaintext decrypts an encrypted BlobObject (BorgGroup or CLKA) ephemerally in memory
+// and verifies ContentSHA256. Never writes plaintext to disk/SQLite/CHIRP.
+func (s *Service) openBlobPlaintext(
+	ctx context.Context,
+	b memrepo.BlobObject,
+	principal policy.Principal,
+	callerPub string,
+	clearance *lattice.Clearance,
+	disallowBorg, disallowPrivate bool,
+) ([]byte, bool) {
+	if b.Forgotten {
+		return nil, false
+	}
+	if !b.Encrypted {
+		if len(b.Inline) > 0 {
+			if b.ContentSHA256 != "" {
+				sum := sha256.Sum256(b.Inline)
+				if !strings.EqualFold(hex.EncodeToString(sum[:]), b.ContentSHA256) {
+					return nil, false
+				}
+			}
+			return b.Inline, true
+		}
+		if b.ChirpURL != "" && s.objects != nil {
+			if resolved, rErr := bstack.ResolveChirp(s.objects, b.ChirpURL); rErr == nil {
+				if b.ContentSHA256 != "" {
+					sum := sha256.Sum256(resolved)
+					if !strings.EqualFold(hex.EncodeToString(sum[:]), b.ContentSHA256) {
+						return nil, false
+					}
+				}
+				return resolved, true
+			}
+		}
+		return nil, false
+	}
+	if len(b.KeyedMeta) == 0 {
+		return nil, false
+	}
+	var opened []byte
+	if b.BorgGroup != "" {
+		if disallowBorg || callerPub == "" {
+			return nil, false
+		}
+		var env bstack.SealedEnvelope
+		if jErr := json.Unmarshal(b.KeyedMeta, &env); jErr != nil {
+			return nil, false
+		}
+		if env.GroupID != b.BorgGroup || env.Epoch != b.BorgEpoch {
+			return nil, false
+		}
+		epochSym, kErr := s.groups.EpochKey(b.BorgGroup, callerPub, b.BorgEpoch)
+		if kErr != nil {
+			return nil, false
+		}
+		var oErr error
+		opened, oErr = bstack.OpenWithEpoch(&env, epochSym)
+		core.Zero32Array(&epochSym)
+		if oErr != nil {
+			return nil, false
+		}
+	} else if b.LatticeEpoch > 0 {
+		if disallowPrivate {
+			return nil, false
+		}
+		var env lattice.SealedEnvelope
+		if jErr := json.Unmarshal(b.KeyedMeta, &env); jErr != nil {
+			return nil, false
+		}
+		if env.Epoch != b.LatticeEpoch {
+			return nil, false
+		}
+		var oErr error
+		if clearance != nil {
+			var man *lattice.Manifest
+			if s.lattice != nil {
+				man, _ = s.lattice.BuildManifest(ctx, env.Shard, env.Epoch)
+			}
+			opened, oErr = lattice.OpenWithClearance(&env, clearance, man)
+		} else if s.lattice != nil {
+			opened, oErr = s.lattice.OpenFragmentForPrincipal(ctx, &env, int(principal.Level))
+		} else {
+			return nil, false
+		}
+		if oErr != nil {
+			return nil, false
+		}
+	} else {
+		return nil, false
+	}
+	if b.ContentSHA256 != "" {
+		sum := sha256.Sum256(opened)
+		if !strings.EqualFold(hex.EncodeToString(sum[:]), b.ContentSHA256) {
+			return nil, false
+		}
+	}
+	return opened, true
+}
+
+// Recall returns active, Cedar-authorized, CLKA/Borg-decrypted fragments from shard/repo.
 // When AtCommit (or a non-main Branch) is specified, performs epistemic time-travel recall
 // against the exact immutable TreeObject at that commit/branch.
 func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragment, error) {
+	s.TouchActivity()
 	if in.Shard == "" && strings.TrimSpace(in.Repo) != "" {
 		in.Shard = strings.TrimSpace(in.Repo)
 	}
@@ -84,12 +278,7 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 	if err != nil {
 		return nil, err
 	}
-	superseded := make(map[int64]bool)
-	for _, r := range records {
-		if r.Supersedes > 0 {
-			superseded[r.Supersedes] = true
-		}
-	}
+	superseded := s.CollectSupersededSeqs(in.Shard)
 
 	s.mu.RLock()
 	polText := s.policyText
@@ -106,7 +295,6 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 		}
 	}
 	var out []RecalledFragment
-	// Load batch anchors once to report honest mined vs broadcast state and memoize per-batch SPV verification.
 	anchorSettled := make(map[int64]bool)
 	if shardAnchors, aErr := s.db.ListAnchors(in.Shard); aErr == nil {
 		for _, a := range shardAnchors {
@@ -123,7 +311,7 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 		if r.Forgotten {
 			continue
 		}
-		if !in.IncludeSuperseded && superseded[r.Seq] {
+		if !in.IncludeSuperseded && superseded[r.Seq] > 0 {
 			continue
 		}
 		// Cedar authorization gate (native cedar-go).
@@ -138,33 +326,10 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 			continue
 		}
 
-		// Decrypt BRC-369 Borg-sealed fragment if encrypted.
-		plaintext := r.Data
-		if r.BorgGroup != "" {
-			if in.DisallowBorg || callerPub == "" || len(r.KeyedMeta) == 0 {
-				continue
-			}
-			var env bstack.SealedEnvelope
-			if err := json.Unmarshal(r.KeyedMeta, &env); err != nil {
-				continue
-			}
-			epochSym, err := s.groups.EpochKey(r.BorgGroup, callerPub, r.BorgEpoch)
-			if err != nil {
-				// Revoked or non-member: fail closed!
-				continue
-			}
-			opened, err := bstack.OpenWithEpoch(&env, epochSym)
-			core.Zero32Array(&epochSym)
-			if err != nil {
-				continue
-			}
-			// Re-verify decrypted plaintext cryptographically matches canonical framed v2 HDP.
-			if hdpBytes, hErr := hex.DecodeString(r.HDP); hErr == nil && len(hdpBytes) == 32 && len(r.Provenance) > 0 {
-				if !core.VerifyHDP(opened, r.Provenance, hdpBytes) {
-					continue
-				}
-			}
-			plaintext = opened
+		// Cryptographic opening + framed v2 HDP verification (CLKA, BorgGroup, or public).
+		plaintext, ok := s.openFragmentPlaintext(ctx, r, principal, callerPub, in.Clearance, in.DisallowBorg, in.DisallowPrivate)
+		if !ok {
+			continue
 		}
 
 		text := string(plaintext)
@@ -175,19 +340,37 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 			}
 		}
 
+		var mod *core.Modality
+		var refines []core.RefinementEdge
+		if len(r.Provenance) > 0 {
+			if prov, pErr := core.ParseProvenance(r.Provenance); pErr == nil {
+				mod = prov.Modality
+				refines = prov.Refines
+			}
+		}
+
 		item := RecalledFragment{
-			Shard:      r.Shard,
-			Seq:        r.Seq,
-			Text:       text,
-			HDP:        r.HDP,
-			Leaf:       r.Leaf,
-			Level:      r.Level,
-			Class:      r.Class,
-			BorgGroup:  r.BorgGroup,
-			BorgEpoch:  r.BorgEpoch,
-			AnchorTxID: r.AnchorTxID,
-			Tainted:    r.Tainted,
-			CreatedAt:  r.CreatedAt,
+			Shard:          r.Shard,
+			Seq:            r.Seq,
+			Path:           r.Path,
+			CommitHash:     r.CommitHash,
+			TransitionHash: r.TransitionHash,
+			Text:           text,
+			HDP:            r.HDP,
+			Leaf:           r.Leaf,
+			Level:          r.Level,
+			Class:          r.Class,
+			Public:         r.Public,
+			LatticeEpoch:   r.LatticeEpoch,
+			BorgGroup:      r.BorgGroup,
+			BorgEpoch:      r.BorgEpoch,
+			Modality:       mod,
+			Refines:        refines,
+			AnchorTxID:     r.AnchorTxID,
+			Tainted:        r.Tainted,
+			Distilled:      r.Distilled,
+			OntologyID:     r.OntologyID,
+			CreatedAt:      r.CreatedAt,
 		}
 		if r.BatchN < 0 {
 			item.AnchorState = "unanchored"
@@ -289,6 +472,8 @@ func (s *Service) proveWithMemo(ctx context.Context, shard string, seq int64, pr
 			Size:        uint64(a.Size),
 			R:           a.RootHex,
 			Rp:          a.ChainedHex,
+			StateHash:   a.StateHash,
+			MmrRoot:     a.MmrRoot,
 			AnchorBEEF:  a.Beef,
 		}
 		if a.N <= rec.BatchN {
@@ -317,6 +502,8 @@ func (s *Service) proveWithMemo(ctx context.Context, shard string, seq int64, pr
 			Size:        uint64(target.Size),
 			R:           target.RootHex,
 			Rp:          target.ChainedHex,
+			StateHash:   target.StateHash,
+			MmrRoot:     target.MmrRoot,
 		},
 		ChainTail:  tail,
 		AnchorBEEF: target.Beef,

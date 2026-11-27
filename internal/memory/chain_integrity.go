@@ -16,24 +16,29 @@ import (
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
-// ShardChainReport summarizes local hash-chain, leaf-hash, and anchor-chain integrity for one shard.
+// ShardChainReport summarizes local hash-chain, leaf-hash, automaton-transition, and anchor-chain integrity for one shard.
 type ShardChainReport struct {
-	Shard         string `json:"shard"`
-	OK            bool   `json:"ok"`
-	FragmentCount int    `json:"fragmentCount"`
-	VerifiedCount int    `json:"verifiedCount"`
-	BrokenSeq     int64  `json:"brokenSeq,omitempty"`
-	Reason        string `json:"reason,omitempty"`
-	HeadChainHash string `json:"headChainHash,omitempty"`
-	AnchorCount   int    `json:"anchorCount"`
-	AnchorsOK     bool   `json:"anchorsOk"`
+	Shard           string `json:"shard"`
+	OK              bool   `json:"ok"`
+	FragmentCount   int    `json:"fragmentCount"`
+	VerifiedCount   int    `json:"verifiedCount"`
+	TransitionCount int    `json:"transitionCount,omitempty"`
+	HeadStateQ      string `json:"headStateQ,omitempty"`
+	HeadMmrRoot     string `json:"headMmrRoot,omitempty"`
+	BrokenSeq       int64  `json:"brokenSeq,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	HeadChainHash   string `json:"headChainHash,omitempty"`
+	AnchorCount     int    `json:"anchorCount"`
+	AnchorsOK       bool   `json:"anchorsOk"`
 }
 
-// VerifyShardChain walks every fragment in shard in ascending seq order and verifies:
+// VerifyShardChain walks every fragment, transition, and anchor in shard in ascending order and verifies:
 //  1. Unbroken seq continuity (catches silent SQLite deletion/insertion/reordering before anchoring),
-//  2. PrevLeaf and ChainHash linkage via store.ComputeFragmentChainHash (for chain-tagged records),
-//  3. L1-bound TagLeafV2 recomputation (core.ComputeLeafV2) and framed v2 HDP verification on non-forgotten fragments,
-//  4. Strict NektarAnchor singleton UTXO spend lineage (tx_{n-1}:0 -> tx_n:0) & R' chain continuity across persisted anchors.
+//  2. PrevLeaf and ChainHash linkage via store.ComputeFragmentChainHash,
+//  3. Unified L1-bound core.ComputeLeaf recomputation (binding HDP, H(E), MPERoot, ContentSHA256, CommitHash, TransitionHash)
+//     and framed v2 HDP verification on non-forgotten plaintext fragments (plus plaintext-injection detection on CLKA rows),
+//  4. Canonical CBOR Merkle Automaton transition chain continuity (prev_q -> next_q),
+//  5. Strict NektarAnchor singleton UTXO spend lineage (tx_{n-1}:0 -> tx_n:0), R' chaining, StateHash (Q_n), and MMR root continuity.
 func (s *Service) VerifyShardChain(shard string) (*ShardChainReport, error) {
 	return s.VerifyShardChainAuthorized(shard, ownerPrincipal())
 }
@@ -87,7 +92,7 @@ func (s *Service) VerifyShardChainAuthorized(shard string, principal policy.Prin
 		}
 		prevChain = f.ChainHash
 
-		// Verify local plaintext/ciphertext L1-bound TagLeafV2 commitment on non-forgotten rows.
+		// Verify local plaintext/ciphertext unified L1-bound leaf commitment on non-forgotten rows.
 		if !f.Forgotten {
 			hdpBytes, hErr := hex.DecodeString(f.HDP)
 			if hErr != nil || len(hdpBytes) != 32 {
@@ -96,7 +101,13 @@ func (s *Service) VerifyShardChainAuthorized(shard string, principal policy.Prin
 				rep.Reason = fmt.Sprintf("invalid 32-byte HDP hex at seq %d", f.Seq)
 				return rep, nil
 			}
-			if f.BorgGroup == "" && len(f.Data) > 0 && len(f.Provenance) > 0 {
+			if f.LatticeEpoch > 0 && len(f.Data) > 0 {
+				rep.OK = false
+				rep.BrokenSeq = f.Seq
+				rep.Reason = fmt.Sprintf("unexpected plaintext data injected into CLKA-encrypted fragment at seq %d", f.Seq)
+				return rep, nil
+			}
+			if f.BorgGroup == "" && f.LatticeEpoch == 0 && len(f.Data) > 0 && len(f.Provenance) > 0 {
 				if !core.VerifyHDP(f.Data, f.Provenance, hdpBytes) {
 					rep.OK = false
 					rep.BrokenSeq = f.Seq
@@ -111,16 +122,24 @@ func (s *Service) VerifyShardChainAuthorized(shard string, principal policy.Prin
 				rep.Reason = fmt.Sprintf("missing 32-byte L1 MPE root at seq %d", f.Seq)
 				return rep, nil
 			}
-			var contentBytes []byte
+			var contentBytes, commitBytes, transBytes []byte
 			if f.ContentSHA256 != "" {
 				contentBytes, _ = hex.DecodeString(f.ContentSHA256)
 			}
-			recomputedLeaf := core.ToHex(core.ComputeLeafV2(core.Fragment{
-				Data:          f.Data,
-				HDP:           hdpBytes,
-				Ciphertext:    f.Ciphertext,
-				MPERoot:       mpeBytes,
-				ContentSHA256: contentBytes,
+			if f.CommitHash != "" {
+				commitBytes, _ = hex.DecodeString(f.CommitHash)
+			}
+			if f.TransitionHash != "" {
+				transBytes, _ = hex.DecodeString(f.TransitionHash)
+			}
+			recomputedLeaf := core.ToHex(core.ComputeLeaf(core.Fragment{
+				Data:           f.Data,
+				HDP:            hdpBytes,
+				Ciphertext:     f.Ciphertext,
+				MPERoot:        mpeBytes,
+				ContentSHA256:  contentBytes,
+				CommitHash:     commitBytes,
+				TransitionHash: transBytes,
 			}))
 			if recomputedLeaf != f.Leaf {
 				rep.OK = false
@@ -136,12 +155,42 @@ func (s *Service) VerifyShardChainAuthorized(shard string, principal policy.Prin
 	}
 	rep.HeadChainHash = prevChain
 
+	// Verify Merkle Automaton transitions chain if present.
+	if transitions, tErr := s.db.ListTransitions(shard, len(frags)+16); tErr == nil && len(transitions) > 0 {
+		rep.TransitionCount = len(transitions)
+		expectedPrevQ := core.ToHex(core.Zero32Bytes())
+		for _, tr := range transitions {
+			if !strings.EqualFold(tr.PrevQ, expectedPrevQ) {
+				rep.OK = false
+				rep.BrokenSeq = tr.Seq
+				rep.Reason = fmt.Sprintf("automaton transition prev_q broken at seq %d", tr.Seq)
+				return rep, nil
+			}
+			dec, dErr := core.DecodeTransitionCBOR(tr.BodyCBOR)
+			if dErr != nil {
+				rep.OK = false
+				rep.BrokenSeq = tr.Seq
+				rep.Reason = fmt.Sprintf("corrupt transition CBOR at seq %d: %v", tr.Seq, dErr)
+				return rep, nil
+			}
+			if !strings.EqualFold(core.ToHex(dec.Hash), tr.Hash) {
+				rep.OK = false
+				rep.BrokenSeq = tr.Seq
+				rep.Reason = fmt.Sprintf("transition hash mismatch at seq %d", tr.Seq)
+				return rep, nil
+			}
+			expectedPrevQ = tr.NextQ
+		}
+		rep.HeadStateQ = expectedPrevQ
+	}
+
 	anchors, err := s.db.ListAnchors(shard)
 	if err != nil {
 		return nil, err
 	}
 	rep.AnchorCount = len(anchors)
 	prevRp := core.Zero32Bytes()
+	mmr, _ := core.NewMMR(nil)
 	var prevAnchorTx *transaction.Transaction
 	var genesisShard, genesisOwnerPub string
 	for i, a := range anchors {
@@ -166,6 +215,14 @@ func (s *Service) VerifyShardChainAuthorized(shard string, principal policy.Prin
 			rep.Reason = fmt.Sprintf("anchor Rp chain mismatch at n=%d", a.N)
 			return rep, nil
 		}
+		if _, mErr := mmr.Append(rBytes); mErr != nil {
+			rep.OK = false
+			rep.AnchorsOK = false
+			rep.Reason = fmt.Sprintf("anchor MMR append error at n=%d: %v", a.N, mErr)
+			return rep, nil
+		}
+		wantMmr := mmr.Root()
+
 		if len(a.Beef) == 0 {
 			rep.OK = false
 			rep.AnchorsOK = false
@@ -193,10 +250,17 @@ func (s *Service) VerifyShardChainAuthorized(shard string, principal policy.Prin
 			return rep, nil
 		}
 		if st.N != uint64(a.N) || st.Size != uint64(a.Size) ||
-			!core.EqualBytes(st.R, rBytes) || !core.EqualBytes(st.Rp, rpBytes) {
+			!core.EqualBytes(st.R, rBytes) || !core.EqualBytes(st.Rp, rpBytes) ||
+			!core.EqualBytes(st.MmrRoot, wantMmr) {
 			rep.OK = false
 			rep.AnchorsOK = false
-			rep.Reason = fmt.Sprintf("anchor n=%d locking script state mismatches persisted batch anchor", a.N)
+			rep.Reason = fmt.Sprintf("anchor n=%d locking script state mismatches persisted batch anchor or MMR root", a.N)
+			return rep, nil
+		}
+		if a.StateHash != "" && !strings.EqualFold(core.ToHex(st.StateHash), a.StateHash) {
+			rep.OK = false
+			rep.AnchorsOK = false
+			rep.Reason = fmt.Sprintf("anchor n=%d on-chain StateHash Q_n mismatches persisted anchor", a.N)
 			return rep, nil
 		}
 		if genesisShard == "" {
@@ -218,6 +282,10 @@ func (s *Service) VerifyShardChainAuthorized(shard string, principal policy.Prin
 		}
 		prevAnchorTx = curTx
 		prevRp = rpBytes
+		rep.HeadMmrRoot = core.ToHex(wantMmr)
+		if len(st.StateHash) == 32 {
+			rep.HeadStateQ = core.ToHex(st.StateHash)
+		}
 	}
 
 	return rep, nil
@@ -250,6 +318,8 @@ type FragmentFieldProof struct {
 	HDP            string                         `json:"hdp"`
 	CiphertextHash string                         `json:"ciphertextHash"`
 	ContentSHA256  string                         `json:"contentSha256,omitempty"`
+	CommitHash     string                         `json:"commitHash,omitempty"`
+	TransitionHash string                         `json:"transitionHash,omitempty"`
 	FieldsRoot     string                         `json:"fieldsRoot"`
 	Anchored       bool                           `json:"anchored"`
 	Proof          *core.SelectiveDisclosureProof `json:"proof"`
@@ -258,7 +328,6 @@ type FragmentFieldProof struct {
 
 // ProveFragmentFields builds an L1-bound MPE proof over fragment (shard, seq) metadata and discloses
 // ONLY the requested fields, strictly requiring an anchored NektarAnchor UTXO ProofBundle.
-// Unanchored/dynamic off-chain MPE proofs are strictly rejected.
 func (s *Service) ProveFragmentFields(ctx context.Context, shard string, seq int64, fields []string) (*FragmentFieldProof, error) {
 	return s.ProveFragmentFieldsAuthorized(ctx, shard, seq, fields, ownerPrincipal())
 }
@@ -305,9 +374,14 @@ func (s *Service) ProveFragmentFieldsAuthorized(ctx context.Context, shard strin
 		dataHash = f.ContentSHA256
 	} else if len(f.Data) > 0 {
 		dataHash = hex.EncodeToString(core.SHA256(f.Data))
+	} else if f.LatticeEpoch > 0 || f.BorgGroup != "" {
+		if pt, ok := s.openFragmentPlaintext(ctx, f, principal, s.port.IdentityPubHex(), nil, false, false); ok {
+			dataHash = hex.EncodeToString(core.SHA256(pt))
+		}
 	}
 
-	mpe, err := buildCommittedFragmentMPE(f.Shard, f.HDP, prov, f.Level, f.Class, f.Path, f.MediaType, f.ChirpURL, dataHash)
+	ontID, edgesRoot, _ := s.db.GetFragmentGraphMeta(f.Shard, f.Seq)
+	mpe, err := buildCommittedFragmentMPEWithGraph(f.Shard, f.HDP, prov, f.Level, f.Class, f.Path, f.MediaType, f.ChirpURL, dataHash, ontID, edgesRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -332,6 +406,8 @@ func (s *Service) ProveFragmentFieldsAuthorized(ctx context.Context, shard strin
 		HDP:            f.HDP,
 		CiphertextHash: hex.EncodeToString(core.ComputeEH(f.Ciphertext)),
 		ContentSHA256:  f.ContentSHA256,
+		CommitHash:     f.CommitHash,
+		TransitionHash: f.TransitionHash,
 		FieldsRoot:     mpe.RootHex,
 		Anchored:       true,
 		Proof:          sdp,

@@ -332,7 +332,15 @@ func TestRCA6_RevertAndCherryPickAutoMergeNonOverlappingLines(t *testing.T) {
 	var got string
 	for _, e := range tr.Entries {
 		if e.Path == "doc.txt" {
-			got = string(blobs[e.BlobHash].Inline)
+			b := blobs[e.BlobHash]
+			if !b.Encrypted || len(b.Inline) != 0 {
+				t.Fatalf("expected reverted CLKA blob to stay encrypted at rest, got encrypted=%v inlineLen=%d", b.Encrypted, len(b.Inline))
+			}
+			pt, ok := svc.OpenBlobAuthorized(ctx, b, ownerPrincipal(), false)
+			if !ok {
+				t.Fatal("OpenBlobAuthorized failed on reverted CLKA blob")
+			}
+			got = string(pt)
 		}
 	}
 	want := "line1\nline2\nline3\nline4\nLINE5_MOD\n"

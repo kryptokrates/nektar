@@ -88,6 +88,10 @@ type Node struct {
 	loopGuard         *LoopGuard
 	planeSubs         map[chan PlaneFrame]map[[32]byte]bool
 	bountyHandler     BountyHandler
+	workHandler       WorkHandler
+	workTasks         map[string]WorkTask
+	workPerPubCapSats uint64
+	workGlobalCapSats uint64
 	fees              FeeSchedule
 	feeCollector      FeeCollector
 	prefixSecret      []byte
@@ -341,5 +345,8 @@ func (n *Node) Handler() http.Handler {
 	// Hub knowledge bounties — lets organic agents sell verified domain facts directly TO the Hub!
 	mux.HandleFunc("GET /bounties", n.handleBountiesList)
 	mux.HandleFunc("POST /bounties/submit", n.handleBountiesSubmit)
+	// Zero-sat verifiable Hub work bounties — lets fresh 0-sat nodes earn their initial BSV float!
+	mux.HandleFunc("GET /work-bounties", n.handleWorkBountiesList)
+	mux.HandleFunc("POST /work-bounties/submit", n.handleWorkBountiesSubmit)
 	return mux
 }

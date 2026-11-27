@@ -15,12 +15,12 @@ func TestSPVMarketPolicyDefaultsLeafEnforcementAndReorgTransitions(t *testing.T)
 		t.Fatalf("expected DefaultPolicy ZeroConfMaxSats=0 (fail-closed) and positive maxAncestors, got perDeal=%d agg=%d maxAnc=%d", perDeal, agg, maxAnc)
 	}
 
-	// 2. RankOffersWithRep rejects OfferAds missing 32-byte hex Leaf on live networks (#3).
+	// 2. RankOffersWithRepAndBonds rejects OfferAds missing 32-byte hex Leaf on live networks (#3).
 	wantLive := bstack.WantAd{WantID: "w-live", Net: "main", MaxSats: 1000}
-	ranked := RankOffersWithRep(wantLive, []bstack.OfferAd{
+	ranked := RankOffersWithRepAndBonds(wantLive, []bstack.OfferAd{
 		{OfferID: "bad-empty-leaf", Pub: "02aa", PriceSats: 100, Leaf: ""},
 		{OfferID: "good-leaf", Pub: "02bb", PriceSats: 200, Leaf: strings.Repeat("ab", 32)},
-	}, nil, nil)
+	}, nil, nil, nil)
 	if len(ranked) != 1 || ranked[0].Offer.OfferID != "good-leaf" {
 		t.Fatalf("expected live RankOffersWithRep to filter out empty-Leaf offer, got %+v", ranked)
 	}

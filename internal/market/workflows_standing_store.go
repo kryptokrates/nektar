@@ -1,10 +1,12 @@
 package market
 
 import (
+	"context"
 	"strings"
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -17,18 +19,22 @@ const (
 // ("Limit-Order for Knowledge") keyed by orderID. It sleeps at 0% CPU until a matching
 // OfferAd arrives via durable inbox + restate.Signal, or until steered/cancelled/expired.
 type StandingOrderInput struct {
-	OrderID         string        `json:"orderId,omitempty"`
-	Domains         []string      `json:"domains"`
-	Query           string        `json:"query,omitempty"`
-	MaxSats         uint64        `json:"maxSats"`
-	TargetShard     string        `json:"targetShard,omitempty"`
-	AgentID         string        `json:"agentId,omitempty"`
-	TTL             time.Duration `json:"ttl,omitempty"`
-	TTLSeconds      int64         `json:"ttlSeconds,omitempty"`
-	MaxFills        int           `json:"maxFills,omitempty"` // default 1 (one-shot limit order); >1 for recurring (max 50)
-	MaxAttempts     int           `json:"maxAttempts,omitempty"`
-	WaitTimeout     time.Duration `json:"waitTimeout,omitempty"`
-	ApprovalTimeout time.Duration `json:"approvalTimeout,omitempty"`
+	OrderID                string        `json:"orderId,omitempty"`
+	Domains                []string      `json:"domains"`
+	Query                  string        `json:"query,omitempty"`
+	OntologyID             string        `json:"ontologyId,omitempty"`  // optional 64-hex OntologyID pin
+	AllowBridge            bool          `json:"allowBridge,omitempty"` // accept foreign OntologyID when a committed Bridge Shard exists
+	MaxSats                uint64        `json:"maxSats"`
+	RequireTrustedOrBonded bool          `json:"requireTrustedOrBonded,omitempty"` // enforce Mangle trusted_seller/2 gate
+	AllowUntrusted         bool          `json:"allowUntrusted,omitempty"`         // opt out of default live-network trust gate
+	TargetShard            string        `json:"targetShard,omitempty"`
+	AgentID                string        `json:"agentId,omitempty"`
+	TTL                    time.Duration `json:"ttl,omitempty"`
+	TTLSeconds             int64         `json:"ttlSeconds,omitempty"`
+	MaxFills               int           `json:"maxFills,omitempty"` // default 1 (one-shot limit order); >1 for recurring (max 50)
+	MaxAttempts            int           `json:"maxAttempts,omitempty"`
+	WaitTimeout            time.Duration `json:"waitTimeout,omitempty"`
+	ApprovalTimeout        time.Duration `json:"approvalTimeout,omitempty"`
 }
 
 // SteerStandingOrderInput live-steers a running StandingOrder without restarting it.
@@ -57,7 +63,10 @@ type StandingOrderState struct {
 	Status           string   `json:"status"` // watching | paused | matching | filled | cancelled | expired
 	Domains          []string `json:"domains"`
 	Query            string   `json:"query,omitempty"`
-	MaxSats          uint64   `json:"maxSats"`
+	OntologyID             string   `json:"ontologyId,omitempty"`
+	AllowBridge            bool     `json:"allowBridge,omitempty"`
+	RequireTrustedOrBonded bool     `json:"requireTrustedOrBonded,omitempty"`
+	MaxSats                uint64   `json:"maxSats"`
 	TargetShard      string   `json:"targetShard,omitempty"`
 	AgentID          string   `json:"agentId,omitempty"`
 	ExpiresAtUnix    int64    `json:"expiresAtUnix"`
@@ -79,6 +88,8 @@ type StandingOrderIndexEntry struct {
 	OrderID       string   `json:"orderId"`
 	Domains       []string `json:"domains"`
 	Query         string   `json:"query,omitempty"`
+	OntologyID    string   `json:"ontologyId,omitempty"`
+	AllowBridge   bool     `json:"allowBridge,omitempty"`
 	MaxSats       uint64   `json:"maxSats"`
 	TargetShard   string   `json:"targetShard,omitempty"`
 	AgentID       string   `json:"agentId,omitempty"`
@@ -230,6 +241,26 @@ func standingOrderDomainMatches(wantDomains, offerDomains []string) bool {
 	return false
 }
 
+func standingOrderOntologyMatches(ctx context.Context, mem *memory.Service, wantOntID string, allowBridge bool, offerOntID string) bool {
+	want := strings.ToLower(strings.TrimSpace(wantOntID))
+	if want == "" {
+		return true
+	}
+	offer := strings.ToLower(strings.TrimSpace(offerOntID))
+	if offer == "" {
+		return false
+	}
+	if want == offer {
+		return true
+	}
+	if allowBridge && mem != nil {
+		if _, rules, err := mem.LoadBridgeRulesBetween(ctx, offer, want); err == nil && len(rules) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *Engine) internalCallHeaders() map[string]string {
 	e.mu.RLock()
 	tok := e.internalToken
@@ -251,6 +282,8 @@ func (e *Engine) upsertStandingOrderIndex(st StandingOrderState) {
 		OrderID:       st.OrderID,
 		Domains:       st.Domains,
 		Query:         st.Query,
+		OntologyID:    st.OntologyID,
+		AllowBridge:   st.AllowBridge,
 		MaxSats:       st.MaxSats,
 		TargetShard:   st.TargetShard,
 		AgentID:       st.AgentID,

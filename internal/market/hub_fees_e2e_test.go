@@ -215,6 +215,7 @@ func TestSpineAndLeafHubFeesMultiHubEndToEnd(t *testing.T) {
 		Shard:     "spine-ops",
 		Domains:   []string{"ops"},
 		PriceSats: 60,
+		AllowRaw:  true,
 	}); err != nil {
 		t.Fatalf("seller ArmSell: %v", err)
 	}
@@ -272,6 +273,7 @@ func TestSpineAndLeafHubFeesMultiHubEndToEnd(t *testing.T) {
 		Shard:     "nat-sec",
 		Domains:   []string{"security"},
 		PriceSats: 55,
+		AllowRaw:  true,
 	}); err != nil {
 		t.Fatalf("natSeller ArmSell: %v", err)
 	}
@@ -350,4 +352,3 @@ func TestSpineAndLeafHubFeesMultiHubEndToEnd(t *testing.T) {
 			gougingEarn, gougingHub.port.BalanceSats(), gougingHub.startBal)
 	}
 }
-

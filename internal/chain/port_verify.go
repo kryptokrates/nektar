@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
@@ -11,6 +12,7 @@ import (
 	sdkwallet "github.com/bsv-blockchain/go-sdk/wallet"
 	"github.com/lightwebinc/bcommon/nodeapi"
 
+	"github.com/kryptokrates/nektar/internal/core"
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
@@ -335,4 +337,39 @@ func (p *Port) DecryptAtRest(ctx context.Context, keyID string, ciphertext []byt
 		return nil, err
 	}
 	return res.Plaintext, nil
+}
+
+// DeriveLatticeRoot derives a deterministic 32-byte Cryptographic Lattice Key Assignment (CLKA)
+// root seed for (shard, epoch) strictly inside BRC-100 wallet custody via CreateHMAC so raw
+// private keys never leave internal/wallet (embedded) or BSV Desktop (client).
+func (p *Port) DeriveLatticeRoot(ctx context.Context, shard string, epoch uint64) ([32]byte, error) {
+	var out [32]byte
+	if p == nil || p.wallet == nil {
+		return out, errors.New("chain: wallet unavailable for DeriveLatticeRoot")
+	}
+	if strings.TrimSpace(shard) == "" {
+		shard = "default"
+	}
+	if epoch == 0 {
+		epoch = 1
+	}
+	data := core.Concat([]byte("nektar:lattice:root:v1"), core.Field([]byte(shard)), core.U64LE(epoch))
+	res, err := p.wallet.CreateHMAC(ctx, sdkwallet.CreateHMACArgs{
+		EncryptionArgs: sdkwallet.EncryptionArgs{
+			ProtocolID: sdkwallet.Protocol{SecurityLevel: sdkwallet.SecurityLevelEveryApp, Protocol: "nektar lattice"},
+			KeyID:      fmt.Sprintf("%s:%d", shard, epoch),
+			Counterparty: sdkwallet.Counterparty{
+				Type: sdkwallet.CounterpartyTypeSelf,
+			},
+		},
+		Data: data,
+	}, Originator)
+	if err != nil {
+		return out, fmt.Errorf("chain: derive lattice root (%s epoch %d): %w", shard, epoch, err)
+	}
+	if len(res.HMAC) != 32 {
+		return out, fmt.Errorf("chain: unexpected lattice HMAC length %d", len(res.HMAC))
+	}
+	copy(out[:], res.HMAC[:])
+	return out, nil
 }

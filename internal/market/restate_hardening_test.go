@@ -44,12 +44,12 @@ func TestRestateManifestSecurityAndPolicyReset(t *testing.T) {
 	}
 	var manifest struct {
 		Services []struct {
-			Name                       string `json:"name"`
-			IngressPrivate             bool   `json:"ingressPrivate"`
-			InactivityTimeout          int64  `json:"inactivityTimeout"`
-			RetryPolicyMaxAttempts     int    `json:"retryPolicyMaxAttempts"`
-			RetryPolicyOnMaxAttempts   string `json:"retryPolicyOnMaxAttempts"`
-			Handlers                   []struct {
+			Name                     string `json:"name"`
+			IngressPrivate           bool   `json:"ingressPrivate"`
+			InactivityTimeout        int64  `json:"inactivityTimeout"`
+			RetryPolicyMaxAttempts   int    `json:"retryPolicyMaxAttempts"`
+			RetryPolicyOnMaxAttempts string `json:"retryPolicyOnMaxAttempts"`
+			Handlers                 []struct {
 				Name string `json:"name"`
 			} `json:"handlers"`
 		} `json:"services"`
@@ -58,19 +58,19 @@ func TestRestateManifestSecurityAndPolicyReset(t *testing.T) {
 		t.Fatalf("unmarshal v4 manifest: %v (%s)", err, rec.Body.String())
 	}
 	byName := make(map[string]struct {
-		priv    bool
-		inact   int64
-		maxAtt  int
-		onMax   string
-		hCount  int
+		priv   bool
+		inact  int64
+		maxAtt int
+		onMax  string
+		hCount int
 	})
 	for _, s := range manifest.Services {
 		byName[s.Name] = struct {
-			priv    bool
-			inact   int64
-			maxAtt  int
-			onMax   string
-			hCount  int
+			priv   bool
+			inact  int64
+			maxAtt int
+			onMax  string
+			hCount int
 		}{s.IngressPrivate, s.InactivityTimeout, s.RetryPolicyMaxAttempts, s.RetryPolicyOnMaxAttempts, len(s.Handlers)}
 	}
 	// R1: Custody, Tx, AnchorCadence MUST be ingressPrivate:true!

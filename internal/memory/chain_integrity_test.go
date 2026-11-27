@@ -83,7 +83,7 @@ func TestPerFragmentHashChainAndTamperDetection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProveFragmentFields: %v", err)
 	}
-	if vr := contracts.VerifyAnchoredMPEProof(ctx, fp.HDP, fp.CiphertextHash, fp.ContentSHA256, fp.FieldsRoot, fp.Proof, *fp.ProofBundle, svc.port.Tracker()); !vr.OK {
+	if vr := contracts.VerifyAnchoredMPEProof(ctx, fp.HDP, fp.CiphertextHash, fp.ContentSHA256, fp.FieldsRoot, fp.CommitHash, fp.TransitionHash, fp.Proof, *fp.ProofBundle, svc.port.Tracker()); !vr.OK {
 		t.Fatalf("VerifyAnchoredMPEProof: %+v", vr)
 	}
 	for _, f := range fp.Proof.Fields {
@@ -98,14 +98,15 @@ func TestPerFragmentHashChainAndTamperDetection(t *testing.T) {
 	badProof.Fields = append([]core.DisclosedField(nil), fp.Proof.Fields...)
 	badProof.Fields[0].Value = []byte("forged-class")
 	badFP.Proof = &badProof
-	if vr := contracts.VerifyAnchoredMPEProof(ctx, badFP.HDP, badFP.CiphertextHash, badFP.ContentSHA256, badFP.FieldsRoot, badFP.Proof, *badFP.ProofBundle, svc.port.Tracker()); vr.OK {
+	if vr := contracts.VerifyAnchoredMPEProof(ctx, badFP.HDP, badFP.CiphertextHash, badFP.ContentSHA256, badFP.FieldsRoot, badFP.CommitHash, badFP.TransitionHash, badFP.Proof, *badFP.ProofBundle, svc.port.Tracker()); vr.OK {
 		t.Fatal("expected tampered selective disclosure proof to fail")
 	}
 
 	// 4. Directly tamper with an unanchored row's plaintext in SQLite -> VerifyShardChain MUST catch it!
 	if _, err := svc.Remember(ctx, RememberInput{
-		Shard: "audit-shard",
-		Text:  "ephemeral secret to be shredded",
+		Shard:  "audit-shard",
+		Text:   "ephemeral secret to be shredded",
+		Public: true,
 	}); err != nil {
 		t.Fatal(err)
 	}

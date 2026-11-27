@@ -196,6 +196,7 @@ func cmdWant(args []string) error {
 	fs := flag.NewFlagSet("want", flag.ExitOnError)
 	domains := fs.String("domains", "ops", "Comma-separated market domains")
 	question := fs.String("question", "", "Knowledge question to buy")
+	ontologyID := fs.String("ontology", "", "Optional 64-hex OntologyID pin")
 	maxSats := fs.Uint64("max", 200, "Max satoshis to pay")
 	targetShard := fs.String("shard", "", "Target shard to store purchased knowledge")
 	dataDir := fs.String("data-dir", "", "Data directory override")
@@ -214,6 +215,7 @@ func cmdWant(args []string) error {
 		out, err := callLiveTool(info, "want", map[string]any{
 			"domains":     domList,
 			"question":    *question,
+			"ontologyId":  strings.TrimSpace(*ontologyID),
 			"maxSats":     *maxSats,
 			"targetShard": *targetShard,
 		})

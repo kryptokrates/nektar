@@ -34,17 +34,22 @@ func TestAnchorEncodeDecodeAndSaleBRC369(t *testing.T) {
 	pkh := core.Hash160(pubBytes)
 	r0 := core.SHA256([]byte("batch0"))
 	rp0 := core.ChainRp(core.Zero32Bytes(), r0, 4)
+	mmr0, _ := core.NewMMR([][]byte{r0})
+	meta0 := core.ComputeBatchMetaHash(core.SHA256([]byte("tree0")), core.SHA256([]byte("pol0")), core.Zero32Bytes())
+	q0 := core.ChainStateQ(core.Zero32Bytes(), r0, meta0, mmr0.Root())
 
 	st := AnchorState{
-		Shard:    core.ShardIDFromPubkey(pubBytes),
-		OwnerPub: hex.EncodeToString(pubBytes),
-		OwnerPKH: pkh,
-		N:        0,
-		Size:     4,
-		R:        r0,
-		Rp:       rp0,
-		Tag:      core.TagRPrime,
-		Metanet:  true,
+		Shard:     core.ShardIDFromPubkey(pubBytes),
+		OwnerPub:  hex.EncodeToString(pubBytes),
+		OwnerPKH:  pkh,
+		N:         0,
+		Size:      4,
+		R:         r0,
+		Rp:        rp0,
+		StateHash: q0,
+		MmrRoot:   mmr0.Root(),
+		Tag:       core.TagRPrime,
+		Metanet:   true,
 	}
 	lockScript, err := EncodeAnchorLockingScript(st)
 	if err != nil {
@@ -54,7 +59,8 @@ func TestAnchorEncodeDecodeAndSaleBRC369(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeNektarAnchor: %v", err)
 	}
-	if dec.Shard != st.Shard || dec.N != 0 || dec.Size != 4 || !dec.Metanet || !core.EqualBytes(dec.Rp, rp0) {
+	if dec.Shard != st.Shard || dec.N != 0 || dec.Size != 4 || !dec.Metanet || !core.EqualBytes(dec.Rp, rp0) ||
+		!core.EqualBytes(dec.StateHash, q0) || !core.EqualBytes(dec.MmrRoot, mmr0.Root()) {
 		t.Fatalf("decoded state mismatch: %+v", dec)
 	}
 	// Non-Metanet and legacy TagAnchorTag scripts MUST fail closed.

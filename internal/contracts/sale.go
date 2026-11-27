@@ -26,9 +26,9 @@ type SaleConfig struct {
 type KeyedSaleOffer struct {
 	Config           SaleConfig `json:"cfg"`
 	SellerPub        string     `json:"sellerPub"`
-	KeyCommitment    string     `json:"keyCommitment"`    // BRC-369 keyed.Commitment(k)
-	SaltHex          string     `json:"saltHex"`          // BRC-369 4-byte segment salt
-	CiphertextHex    string     `json:"ciphertextHex"`    // BRC-369 encrypted payload (may be stripped on wire if CHIRP-offloaded)
+	KeyCommitment    string     `json:"keyCommitment"`              // BRC-369 keyed.Commitment(k)
+	SaltHex          string     `json:"saltHex"`                    // BRC-369 4-byte segment salt
+	CiphertextHex    string     `json:"ciphertextHex"`              // BRC-369 encrypted payload (may be stripped on wire if CHIRP-offloaded)
 	CiphertextSHA256 string     `json:"ciphertextSha256,omitempty"` // SHA-256 of ciphertext (allows signature verification even when CiphertextHex is offloaded to CHIRP)
 	ExpiresAt        uint64     `json:"expiresAt,omitempty"`
 	OfferSig         string     `json:"offerSig"`

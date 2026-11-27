@@ -2,11 +2,14 @@ package market
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/distill"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/store"
@@ -20,10 +23,47 @@ type ArmSellResult struct {
 	BlockedReasons []string `json:"blockedReasons,omitempty"`
 }
 
-// ArmSell persists a SellListing, anchors the shard if spendable coins exist, and re-announces on `dir`.
+// ArmSell persists a SellListing, runs fail-closed secret/PII scrubbing across all fragments in the shard,
+// anchors the shard if spendable coins exist, and re-announces on `dir`.
 func (b *Broker) ArmSell(ctx context.Context, in SellInput) (ArmSellResult, error) {
 	if strings.TrimSpace(in.Shard) == "" {
 		return ArmSellResult{}, errors.New("market: shard is required")
+	}
+	shard := strings.TrimSpace(in.Shard)
+	// Fail-closed secret/PII scrub BEFORE arming any shard for sale!
+	hasUndistilled := false
+	hasAnyFrag := false
+	if b.mem != nil {
+		if frags, rErr := b.mem.Recall(ctx, memory.RecallInput{
+			Shard:        shard,
+			Principal:    policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
+			Action:       "disclose",
+			DisallowBorg: true,
+		}); rErr == nil {
+			for _, f := range frags {
+				hasAnyFrag = true
+				sr := distill.Scrub(f.Text)
+				if sr.Verdict == distill.ScrubBlocked {
+					ruleID := "secret-detected"
+					if len(sr.BlockedRules) > 0 {
+						ruleID = sr.BlockedRules[0]
+					}
+					if b.mem.DB() != nil {
+						_ = b.mem.DB().RecordDistillQuarantine(store.DistillQuarantineRecord{
+							ID:          fmt.Sprintf("sell-%s-%d-%s", shard, f.Seq, ruleID),
+							Shard:       shard,
+							Seq:         f.Seq,
+							RuleID:      ruleID,
+							ContentHash: sr.ContentHashHex,
+						})
+					}
+					return ArmSellResult{}, fmt.Errorf("market: cannot arm shard %q for sale — secret/PII blocked by rule %s (run `nektar distill` to sanitize)", shard, ruleID)
+				}
+				if !f.Distilled {
+					hasUndistilled = true
+				}
+			}
+		}
 	}
 	if len(in.Domains) == 0 {
 		in.Domains = []string{"general"}
@@ -38,13 +78,28 @@ func (b *Broker) ArmSell(ctx context.Context, in SellInput) (ArmSellResult, erro
 		}
 	}
 	norm = ExpandDomainsWithCorrelations(ctx, b.Matcher(), norm, in.Description, b.ActiveNetworkTopics())
+	var dynJSON []byte
+	if in.DynamicPricing {
+		dp := DynamicPriceState{
+			Enabled:          true,
+			FloorSats:        in.FloorSats,
+			CeilingSats:      in.CeilingSats,
+			CurrentPriceSats: in.PriceSats,
+			DecayIntervalSec: DefaultDecayIntervalSec,
+		}
+		dp.normalize(in.PriceSats)
+		dynJSON, _ = json.Marshal(dp)
+	}
 	listing := store.SellListing{
-		Shard:       strings.TrimSpace(in.Shard),
-		Domains:     norm,
-		PriceSats:   in.PriceSats,
-		Description: in.Description,
-		Active:      true,
-		CreatedAt:   time.Now().Unix(),
+		Shard:              shard,
+		Domains:            norm,
+		PriceSats:          in.PriceSats,
+		Description:        in.Description,
+		OntologyID:         strings.ToLower(strings.TrimSpace(in.OntologyID)),
+		AllowRaw:           in.AllowRaw,
+		DynamicPricingJSON: dynJSON,
+		Active:             true,
+		CreatedAt:          time.Now().Unix(),
 	}
 	if err := b.mem.DB().SaveSellListing(listing); err != nil {
 		return ArmSellResult{}, err
@@ -55,6 +110,9 @@ func (b *Broker) ArmSell(ctx context.Context, in SellInput) (ArmSellResult, erro
 	_, _ = b.AnnounceSelf(ctx)
 
 	var blocked []string
+	if hasAnyFrag && hasUndistilled && !in.AllowRaw {
+		blocked = append(blocked, "raw_shard_requires_distill_or_allow_raw")
+	}
 	if b.engine != nil && b.engine.Policy() != nil {
 		_ = SyncPolicyFromDB(b.mem.DB(), b.engine.Policy())
 		kill, _, _, _, _, _, sellerOK := b.engine.Policy().Snapshot()

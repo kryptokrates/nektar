@@ -244,7 +244,9 @@ func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracke
 			}
 			if curSt.Shard != state.Shard || curSt.OwnerPub != state.OwnerPub ||
 				curSt.N != link.N || curSt.Size != link.Size ||
-				!core.EqualBytes(curSt.R, rBytes) || !core.EqualBytes(curSt.Rp, rpBytes) {
+				!core.EqualBytes(curSt.R, rBytes) || !core.EqualBytes(curSt.Rp, rpBytes) ||
+				(link.StateHash != "" && !strings.EqualFold(hex.EncodeToString(curSt.StateHash), link.StateHash)) ||
+				(link.MmrRoot != "" && !strings.EqualFold(hex.EncodeToString(curSt.MmrRoot), link.MmrRoot)) {
 				return VerifyResult{OK: false, Reason: "ChainInconsistent", Detail: fmt.Sprintf("chainTail tx at n=%d locking script state mismatches link fields", i)}
 			}
 		}
@@ -352,7 +354,8 @@ func verifyFragment(ctx context.Context, bundle ProofBundle, tracker chaintracke
 
 // VerifyAnchoredMPEProof verifies a complete L1-bound selective-disclosure proof offline:
 //  1. Verifies every disclosed field inside proof against mpeRootHex (WO 2022/100946 MPE).
-//  2. Recomputes ComputeLeafV2(HDP, CiphertextHash, MPERoot, ContentSHA256) and confirms it matches bundle.Leaf.
+//  2. Recomputes ComputeLeaf(HDP, CiphertextHash, MPERoot, ContentSHA256, CommitHash, TransitionHash)
+//     and confirms it matches bundle.Leaf.
 //  3. Runs full SPV VerifyFragmentCtx(bundle, tracker) proving bundle.Leaf -> R_n -> NektarAnchor UTXO -> BUMP -> headers.
 func VerifyAnchoredMPEProof(
 	ctx context.Context,
@@ -360,6 +363,8 @@ func VerifyAnchoredMPEProof(
 	ciphertextHashHex string,
 	contentSHA256Hex string,
 	mpeRootHex string,
+	commitHashHex string,
+	transitionHashHex string,
 	proof *core.SelectiveDisclosureProof,
 	bundle ProofBundle,
 	tracker chaintracker.ChainTracker,
@@ -391,9 +396,120 @@ func VerifyAnchoredMPEProof(
 		}
 		contentHash = b
 	}
-	expectedLeaf := core.SHA256(core.Concat(core.TagLeafV2, hdp, eh, mpeRoot, contentHash))
+	commitHash := core.Zero32Bytes()
+	if s := strings.TrimSpace(commitHashHex); s != "" {
+		b, dErr := hex.DecodeString(s)
+		if dErr != nil || len(b) != 32 {
+			return VerifyResult{OK: false, Reason: "BadBundle", Detail: "commitHashHex must be 32-byte hex"}
+		}
+		commitHash = b
+	}
+	transHash := core.Zero32Bytes()
+	if s := strings.TrimSpace(transitionHashHex); s != "" {
+		b, dErr := hex.DecodeString(s)
+		if dErr != nil || len(b) != 32 {
+			return VerifyResult{OK: false, Reason: "BadBundle", Detail: "transitionHashHex must be 32-byte hex"}
+		}
+		transHash = b
+	}
+	expectedLeaf := core.SHA256(core.Concat(core.TagLeaf, hdp, eh, mpeRoot, contentHash, commitHash, transHash))
 	if !strings.EqualFold(bundle.Leaf, hex.EncodeToString(expectedLeaf)) {
-		return VerifyResult{OK: false, Reason: "MPELeafMismatch", Detail: "MPE root is not committed inside anchored v2 leaf"}
+		return VerifyResult{OK: false, Reason: "MPELeafMismatch", Detail: "MPE/commit/transition root is not committed inside anchored leaf"}
 	}
 	return VerifyFragmentCtx(ctx, bundle, tracker)
+}
+
+// VerifyFragmentCompact verifies any historical fragment against the shard's HEAD NektarAnchor
+// in O(log N) bytes via: Leaf -> BatchR -> MMRInclusionProof -> HeadAnchor.MmrRoot -> BUMP -> BlockHeaders.
+func VerifyFragmentCompact(ctx context.Context, bundle CompactProofBundle, tracker chaintracker.ChainTracker, minDepth int) VerifyResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if minDepth <= 0 {
+		minDepth = 1
+	}
+	if bundle.BatchSize == 0 || bundle.BatchSize > MaxMerkleBatchSize {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "batch size out of bounds"}
+	}
+	if bundle.LeafIndex < 0 || uint64(bundle.LeafIndex) >= bundle.BatchSize || len(bundle.BatchPath) != core.HeightForLeafCount(int(bundle.BatchSize)) {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "invalid leafIndex or batchPath height"}
+	}
+	leaf, err := hex.DecodeString(bundle.Leaf)
+	if err != nil || len(leaf) != 32 {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "leaf must be 32-byte hex"}
+	}
+	sibs := make([][]byte, len(bundle.BatchPath))
+	for i, s := range bundle.BatchPath {
+		b, dErr := hex.DecodeString(s)
+		if dErr != nil || len(b) != 32 {
+			return VerifyResult{OK: false, Reason: "BadBundle", Detail: "invalid batchPath sibling hex"}
+		}
+		sibs[i] = b
+	}
+	recomputedR, err := core.ReconstructRootChecked(leaf, &core.MerkleProof{Index: bundle.LeafIndex, Siblings: sibs})
+	if err != nil {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: err.Error()}
+	}
+	if bundle.BatchRoot != "" && !strings.EqualFold(bundle.BatchRoot, hex.EncodeToString(recomputedR)) {
+		return VerifyResult{OK: false, Reason: "LeafPathMismatch", Detail: "recomputed batch R mismatches batchRoot"}
+	}
+
+	parsedBeef, headTx, _, err := guard.ParseBEEF(bundle.HeadAnchorBEEF, guard.DefaultBound)
+	if err != nil || headTx == nil {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "invalid headAnchorBEEF"}
+	}
+	outIdx := bundle.HeadAnchor.OutputIndex
+	if int(outIdx) >= len(headTx.Outputs) || headTx.Outputs[outIdx] == nil || headTx.Outputs[outIdx].LockingScript == nil {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: "headAnchor missing output"}
+	}
+	headState, err := DecodeNektarAnchor(*headTx.Outputs[outIdx].LockingScript)
+	if err != nil {
+		return VerifyResult{OK: false, Reason: "BadBundle", Detail: err.Error()}
+	}
+	if headState.Shard != bundle.Shard || headState.N != bundle.HeadAnchor.N || headTx.TxID().String() != bundle.HeadAnchor.TxID {
+		return VerifyResult{OK: false, Reason: "AnchorFieldMismatch", Detail: "headAnchor shard/n/txid mismatch"}
+	}
+	if bundle.MMRProof == nil || bundle.MMRProof.LeafIndex != bundle.BatchN || bundle.MMRProof.LeafCount != headState.N+1 {
+		return VerifyResult{OK: false, Reason: "MMRInvalid", Detail: "MMR proof index/count does not match headAnchor N+1"}
+	}
+	if err := core.VerifyMMRInclusion(recomputedR, bundle.MMRProof, headState.MmrRoot); err != nil {
+		return VerifyResult{OK: false, Reason: "MMRInvalid", Detail: err.Error()}
+	}
+	if headTx.MerklePath == nil {
+		ancestryOK := false
+		if tracker != nil && hydrateAnchorInputs(headTx, parsedBeef, make(map[string]bool)) {
+			if ok, sErr := spv.Verify(ctx, headTx, tracker, nil); sErr == nil && ok {
+				ancestryOK = true
+			}
+		}
+		return VerifyResult{OK: false, Settled: false, AncestryVerified: ancestryOK, AnchorState: "broadcast", Reason: "Unsettled", Detail: "head anchor tx has no mined MerklePath"}
+	}
+	if tracker == nil {
+		return VerifyResult{OK: false, Reason: "TrackerUnavailable", Detail: "no chain tracker configured"}
+	}
+	root, err := headTx.MerklePath.ComputeRoot(headTx.TxID())
+	if err != nil {
+		return VerifyResult{OK: false, Reason: "BEEFInvalid", Detail: err.Error()}
+	}
+	valid, err := tracker.IsValidRootForHeight(ctx, root, headTx.MerklePath.BlockHeight)
+	if err != nil {
+		return VerifyResult{OK: false, AnchorState: "broadcast", BlockHeight: headTx.MerklePath.BlockHeight, Reason: "TrackerUnavailable", Detail: err.Error()}
+	}
+	if !valid {
+		return VerifyResult{OK: false, AnchorState: "broadcast", BlockHeight: headTx.MerklePath.BlockHeight, Reason: "BEEFInvalid", Detail: "BUMP root not valid in header chain"}
+	}
+	depth := 1
+	if minDepth > 1 {
+		tip, tErr := tracker.CurrentHeight(ctx)
+		if tErr != nil {
+			return VerifyResult{OK: false, AnchorState: "mined", BlockHeight: headTx.MerklePath.BlockHeight, Reason: "TrackerUnavailable", Detail: tErr.Error()}
+		}
+		if tip >= headTx.MerklePath.BlockHeight {
+			depth = int(tip-headTx.MerklePath.BlockHeight) + 1
+		}
+		if depth < minDepth {
+			return VerifyResult{OK: false, AnchorState: "mined", BlockHeight: headTx.MerklePath.BlockHeight, Depth: depth, Reason: "InsufficientDepth"}
+		}
+	}
+	return VerifyResult{OK: true, Settled: true, AncestryVerified: true, AnchorState: "mined", BlockHeight: headTx.MerklePath.BlockHeight, Depth: depth}
 }

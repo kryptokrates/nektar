@@ -40,7 +40,8 @@ var expectedManifest = map[string][]string{
 	"Custody":        {"balance", "release", "reserve"},
 	"Tx":             {"emit", "state"},
 	"AnchorCadence":  {"status", "trigger"},
-	"NektarRuntime":  {"anchorStatus", "emitTx", "triggerAnchor", "txState"},
+	"EpistemicShard": {"anchor", "state", "transition"},
+	"NektarRuntime":  {"anchorStatus", "emitTx", "epistemicAnchor", "epistemicState", "epistemicTransition", "triggerAnchor", "txState"},
 	"StandingOrder":  {"cancel", "onOffer", "run", "status", "steer"},
 	"EscrowGuardian": {"markClaimed", "run", "status"},
 }

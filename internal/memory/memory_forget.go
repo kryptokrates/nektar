@@ -19,6 +19,7 @@ func (s *Service) buildFragmentBlob(
 	chirpURL, contentSHAHex string,
 	borgGroup string,
 	borgEpoch int64,
+	latticeEpoch uint64,
 	keyedMeta []byte,
 	level int,
 	class string,
@@ -27,14 +28,14 @@ func (s *Service) buildFragmentBlob(
 	if len(rawBlob) > 0 {
 		payload = rawBlob
 	}
-	if borgGroup != "" {
-		// Encrypted fragments MUST NEVER store plaintext inline or write plaintext to CHIRP.
+	if borgGroup != "" || latticeEpoch > 0 {
+		// Encrypted fragments (BorgGroup or CLKA) MUST NEVER store plaintext inline or write plaintext to CHIRP.
 		shaHex := contentSHAHex
 		if shaHex == "" && len(payload) > 0 {
 			sum := sha256.Sum256(payload)
 			shaHex = hex.EncodeToString(sum[:])
 		}
-		b, err := memrepo.BuildEncryptedBlob(relPath, mediaType, int64(len(payload)), shaHex, borgGroup, borgEpoch, keyedMeta)
+		b, err := memrepo.BuildEncryptedBlobWithLattice(relPath, mediaType, int64(len(payload)), shaHex, chirpURL, borgGroup, borgEpoch, latticeEpoch, keyedMeta)
 		if err != nil {
 			return nil, err
 		}
@@ -60,7 +61,11 @@ func (s *Service) buildFragmentBlob(
 }
 
 func buildCommittedFragmentMPE(shard, hdpHex string, prov core.Provenance, level int, class, relPath, mediaType, chirpURL, dataHashHex string) (*core.MPE, error) {
-	return core.BuildMPE(map[string][]byte{
+	return buildCommittedFragmentMPEWithGraph(shard, hdpHex, prov, level, class, relPath, mediaType, chirpURL, dataHashHex, "", "")
+}
+
+func buildCommittedFragmentMPEWithGraph(shard, hdpHex string, prov core.Provenance, level int, class, relPath, mediaType, chirpURL, dataHashHex, ontologyID, edgesRoot string) (*core.MPE, error) {
+	fields := map[string][]byte{
 		"shard":      []byte(shard),
 		"hdp":        []byte(hdpHex),
 		"source":     []byte(prov.Source),
@@ -73,7 +78,14 @@ func buildCommittedFragmentMPE(shard, hdpHex string, prov core.Provenance, level
 		"chirpUrl":   []byte(chirpURL),
 		"signature":  []byte(hex.EncodeToString(prov.Signature)),
 		"dataSha256": []byte(dataHashHex),
-	})
+	}
+	if ontologyID != "" {
+		fields["ontologyId"] = []byte(ontologyID)
+	}
+	if edgesRoot != "" {
+		fields["edgesRoot"] = []byte(edgesRoot)
+	}
+	return core.BuildMPE(fields)
 }
 
 // Forget shreds local plaintext/ciphertext of (shard, seq) while keeping the anchored commitment.

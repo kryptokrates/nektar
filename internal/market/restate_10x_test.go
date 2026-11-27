@@ -1195,5 +1195,3 @@ func (m *capRaceTestMatcher) MatchWantForSeller(_ context.Context, _ bstack.Want
 	return SellerMatchDecision{Approved: true, Chosen: &cp}
 }
 func (m *capRaceTestMatcher) MetricsSnapshot() MatcherMetrics { return MatcherMetrics{} }
-
-

@@ -12,11 +12,22 @@ import (
 // Domain-separation tags — every hash in Nektar is domain-tagged so digests
 // never collide across layers or protocols.
 var (
-	TagLeafV2       = []byte("nektar:leaf:v2")
+	TagLeaf         = []byte("nektar:leaf:v1")
 	TagCommitV1     = []byte("nektar:commit:v1")
 	TagTreeV1       = []byte("nektar:tree:v1")
 	TagBlobV1       = []byte("nektar:blob:v1")
 	TagRPrime       = []byte("nektar:rprime:v1")
+	TagBatchMeta    = []byte("nektar:batch-meta:v1")
+	TagStateQ       = []byte("nektar:state-q:v1")
+	TagTransitionV1 = []byte("nektar:transition:v1")
+	TagMMRNode      = []byte("nektar:mmr:node:v1")
+	TagMMRBag       = []byte("nektar:mmr:bag:v1")
+	TagTripleV1           = []byte("nektar:triple:v1")
+	TagOntologyV1         = []byte("nektar:ontology:v1")
+	TagOntologyManifestV1 = []byte("nektar:ont-manifest:v1")
+	TagRepAttestV1        = []byte("nektar:rep-attest:v1")
+	TagWorkBountyV1       = []byte("nektar:work-bounty:v1")
+	TagLatticeDown        = []byte("nektar:lattice:down:v1")
 	TagProvV2       = []byte("nektar:prov:v2")
 	TagProvSig      = []byte("nektar:provsig:v1")
 	TagReceiptSig   = []byte("nektar:rcptsig:v1")
@@ -99,4 +110,25 @@ func ChainRpWithTag(tag, prevRp, r []byte, size uint64) []byte {
 // ChainRp computes R'_n = DSHA256(TagRPrime || prevRp || R || u64le(size)).
 func ChainRp(prevRp, r []byte, size uint64) []byte {
 	return ChainRpWithTag(TagRPrime, prevRp, r, size)
+}
+
+func pad32(b []byte) []byte {
+	out := make([]byte, 32)
+	if len(b) == 32 {
+		copy(out, b)
+	}
+	return out
+}
+
+// ComputeBatchMetaHash computes the domain-separated 32-byte commitment over the Git tree head,
+// active Cedar policy commitment, and active ontology shard head at anchor time.
+func ComputeBatchMetaHash(treeHash, policyHash, ontologyHash []byte) []byte {
+	return DSHA256(Concat(TagBatchMeta, pad32(treeHash), pad32(policyHash), pad32(ontologyHash)))
+}
+
+// ChainStateQ computes the consensus-enforced NektarAnchor Merkle Automaton state hash:
+// Q_n = DSHA256(prevQ32 || newR32 || batchMetaHash32 || newMmrRoot32).
+// Matches NektarAnchor.Append() on-chain byte-for-byte.
+func ChainStateQ(prevQ, newR, batchMetaHash, newMmrRoot []byte) []byte {
+	return DSHA256(Concat(pad32(prevQ), pad32(newR), pad32(batchMetaHash), pad32(newMmrRoot)))
 }

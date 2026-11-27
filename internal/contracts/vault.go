@@ -125,6 +125,7 @@ func DecodeAgentVault(scriptBytes []byte) (*AgentVaultState, error) {
 // NektarAgentVault.AgentSpend() transaction spending vaultTx:vaultVout into:
 //   - Output 0: continued NektarAgentVault with updated SpentInWindow / WindowStart
 //   - Output 1: payAmount sats locked to destScript (e.g. a DisclosureSale escrow OR P2PKH!)
+//
 // Enforces F-02 consensus locktime (nSequence=0xfffffffe, nLockTime=blockHeight < 500_000_000).
 func BuildAgentVaultSpendTx(
 	ctx context.Context,

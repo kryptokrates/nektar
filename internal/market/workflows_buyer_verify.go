@@ -11,6 +11,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/memrepo"
+	"github.com/kryptokrates/nektar/internal/reputation"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -62,6 +63,15 @@ func (e *Engine) buyerVerifyAndCommit(
 				RepoGenesis: sig.ProofBundle.Shard,
 			})
 		}
+		var targetOntology string
+		for _, cand := range []string{strings.TrimSpace(chosen.OntologyID), strings.TrimSpace(want.OntologyID)} {
+			if cand != "" {
+				if _, _, lErr := e.mem.LoadDomainOntology(rctx, cand); lErr == nil {
+					targetOntology = cand
+					break
+				}
+			}
+		}
 		if _, rErr := e.mem.Remember(rctx, memory.RememberInput{
 			Shard:         targetShard,
 			Path:          fmt.Sprintf("market/%s-%s-%d.md", dom, shortPub(chosen.Pub), now),
@@ -71,6 +81,7 @@ func (e *Engine) buyerVerifyAndCommit(
 			ExtraParents:  extraParents,
 			Source:        "market:" + shortPub(chosen.Pub),
 			Class:         "market:" + dom,
+			Ontology:      targetOntology,
 			Tainted:       true, // F10: purchased external knowledge is ALWAYS marked tainted!
 			AutoAnchor:    e.mem.Chain().Network() == "memory" && e.mem.Chain().BalanceSats() > 1000,
 		}); rErr != nil {
@@ -147,6 +158,37 @@ func (e *Engine) buyerVerifyAndCommit(
 	}
 	if e.mem != nil && e.mem.DB() != nil {
 		_ = FulfillRevealOwed(e.mem.DB(), dealID)
+		// Record token-arbitrage buy economics event (conservative saved-token estimate).
+		estSaved := int64(DefaultTokenCounter().CountTokens(deliveredText)) * 8
+		if estSaved < 500 {
+			estSaved = 500
+		}
+		_ = e.mem.DB().RecordEconomicsEvent(store.EconomicsEventRow{
+			Kind:        "deal_buy",
+			TokensSaved: estSaved,
+			SatsDelta:   -int64(chosen.PriceSats),
+			OntologyID:  reputation.NormalizeOntologyID(chosen.OntologyID),
+			Shard:       targetShard,
+			DealID:      dealID,
+			CreatedAt:   now,
+		})
+		// Automated post-purchase 6D evaluation & bilateral nektarrep1.* attestation emission.
+		if dealReceipt != nil && chosen.Pub != "" {
+			ontID := chosen.OntologyID
+			if ontID == "" {
+				ontID = want.OntologyID
+			}
+			scores := reputation.EvaluatePurchasedFragment(reputation.BuyerEvalInput{
+				SellerPub:         chosen.Pub,
+				OntologyID:        ontID,
+				SPVVerified:       sig.ProofBundle != nil,
+				MPEVerified:       true,
+				HasEvidenceSpans:  chosen.EdgesRoot != "",
+				HasPinnedOntology: ontID != "",
+				SellerBonded:      chosen.BondOutpoint != "",
+			})
+			_, _ = e.EmitPostDealAttestation(rctx, reputation.RoleBuyerRatesSeller, *dealReceipt, ontID, scores, want.Domains)
+		}
 	}
 	e.persistDealRecord(store.DealRecord{
 		DealID:          dealID,

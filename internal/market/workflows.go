@@ -257,6 +257,33 @@ func (e *Engine) BindRestate(srv *restateserver.Restate) *restateserver.Restate 
 		Handler("trigger", restate.NewObjectHandler(e.restateAnchorCadenceTrigger)).
 		Handler("status", restate.NewObjectSharedHandler(e.restateAnchorCadenceStatus))
 
+	epistemicObj := restate.NewObject("EpistemicShard",
+		restate.WithIngressPrivate(true),
+		restate.WithInactivityTimeout(3*time.Minute),
+		floorRetry,
+	).
+		Handler("transition", restate.NewObjectHandler(e.restateEpistemicTransition)).
+		Handler("anchor", restate.NewObjectHandler(e.restateEpistemicAnchor)).
+		Handler("state", restate.NewObjectSharedHandler(e.restateEpistemicState))
+
+	sleepObj := restate.NewObject("SleepCycle",
+		restate.WithIngressPrivate(true),
+		restate.WithInactivityTimeout(5*time.Minute),
+		floorRetry,
+	).
+		Handler("run", restate.NewObjectHandler(e.restateSleepCycleRun)).
+		Handler("triggerNow", restate.NewObjectHandler(e.restateSleepCycleTriggerNow)).
+		Handler("status", restate.NewObjectSharedHandler(e.restateSleepCycleStatus))
+
+	microEarnerObj := restate.NewObject("MicroEarner",
+		restate.WithIngressPrivate(true),
+		restate.WithInactivityTimeout(5*time.Minute),
+		floorRetry,
+	).
+		Handler("run", restate.NewObjectHandler(e.restateMicroEarnerRun)).
+		Handler("toggle", restate.NewObjectHandler(e.restateMicroEarnerToggle)).
+		Handler("status", restate.NewObjectSharedHandler(e.restateMicroEarnerStatus))
+
 	runtimeSvc := restate.NewService("NektarRuntime",
 		restate.WithInactivityTimeout(1*time.Minute),
 		dealRetry,
@@ -264,7 +291,15 @@ func (e *Engine) BindRestate(srv *restateserver.Restate) *restateserver.Restate 
 		Handler("emitTx", restate.NewServiceHandler(e.restateRuntimeEmitTx)).
 		Handler("txState", restate.NewServiceHandler(e.restateRuntimeTxState)).
 		Handler("triggerAnchor", restate.NewServiceHandler(e.restateRuntimeTriggerAnchor)).
-		Handler("anchorStatus", restate.NewServiceHandler(e.restateRuntimeAnchorStatus))
+		Handler("anchorStatus", restate.NewServiceHandler(e.restateRuntimeAnchorStatus)).
+		Handler("epistemicTransition", restate.NewServiceHandler(e.restateRuntimeEpistemicTransition)).
+		Handler("epistemicAnchor", restate.NewServiceHandler(e.restateRuntimeEpistemicAnchor)).
+		Handler("epistemicState", restate.NewServiceHandler(e.restateRuntimeEpistemicState)).
+		Handler("triggerSleep", restate.NewServiceHandler(e.restateRuntimeTriggerSleep)).
+		Handler("sleepStatus", restate.NewServiceHandler(e.restateRuntimeSleepStatus)).
+		Handler("runMicroEarner", restate.NewServiceHandler(e.restateRuntimeRunMicroEarner)).
+		Handler("toggleMicroEarner", restate.NewServiceHandler(e.restateRuntimeToggleMicroEarner)).
+		Handler("microEarnerStatus", restate.NewServiceHandler(e.restateRuntimeMicroEarnerStatus))
 
 	standingWF := restate.NewWorkflow("StandingOrder",
 		restate.WithInactivityTimeout(2*time.Minute),
@@ -290,6 +325,9 @@ func (e *Engine) BindRestate(srv *restateserver.Restate) *restateserver.Restate 
 		Bind(custodyObj).
 		Bind(txObj).
 		Bind(cadenceObj).
+		Bind(epistemicObj).
+		Bind(sleepObj).
+		Bind(microEarnerObj).
 		Bind(runtimeSvc).
 		Bind(standingWF).
 		Bind(guardianWF)

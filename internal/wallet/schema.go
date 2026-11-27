@@ -137,9 +137,9 @@ func postErrSinkFromCtx(ctx context.Context) *postErrSink {
 }
 
 type externalSpendHint struct {
-	set       bool
-	sweepAll  bool
-	sats      uint64
+	set      bool
+	sweepAll bool
+	sats     uint64
 }
 
 // WithOverrideGuard marks a context as an explicit operator treasury sweep allowed to bypass SpendGuard.
@@ -276,47 +276,47 @@ type TxMinedHook func(txid string, height uint32, mp *transaction.MerklePath)
 
 // Config configures a pure-Go BRC-100 Engine backed by go-wallet-toolbox + modernc.org/sqlite.
 type Config struct {
-	Dir                         string                    // directory holding identity.json & wallet.sqlite (empty => in-memory)
-	InMemoryStore               bool                      // keep identity.json in Dir, run SQLite in-memory (ideal for ephemeral memory testchain)
-	Mainnet                     bool                      // true for mainnet, false for testnet/regtest/memory
-	Originator                  string                    // BRC-100 originator (default "nektar")
-	Profile                     bwallet.Profile           // BRC-43 static funding derivation profile
-	Tracker                     chaintracker.ChainTracker // SPV header verifier & height source
-	HeaderBytes                 HeaderBytesFunc           // optional raw 80-byte header getter
-	MedianTimePast              MedianTimePastFunc        // optional consensus 11-block MTP getter
-	FeeSource                   feepolicy.Source          // live BSV Broadcaster policy or static rate
-	Broadcaster                 Broadcaster               // single live BSV Broadcaster / RPC skeleton
-	Chain                       nodeapi.Chain             // optional Tx/Proof/Spend view (WoC / node)
-	WoC                         *nodeapi.WoC              // optional WhatsOnChain client for external address sync
-	Broadcast                   BroadcastFunc             // optional custom broadcaster (overrides Broadcaster; used for testchain)
-	ProofLookup                 ProofLookupFunc           // optional custom proof lookup (used for testchain)
-	SpendGuard                  SpendGuardCheck           // optional fail-closed spend guard hook (enforced post-signing in PostFromBEEF)
+	Dir                         string                                // directory holding identity.json & wallet.sqlite (empty => in-memory)
+	InMemoryStore               bool                                  // keep identity.json in Dir, run SQLite in-memory (ideal for ephemeral memory testchain)
+	Mainnet                     bool                                  // true for mainnet, false for testnet/regtest/memory
+	Originator                  string                                // BRC-100 originator (default "nektar")
+	Profile                     bwallet.Profile                       // BRC-43 static funding derivation profile
+	Tracker                     chaintracker.ChainTracker             // SPV header verifier & height source
+	HeaderBytes                 HeaderBytesFunc                       // optional raw 80-byte header getter
+	MedianTimePast              MedianTimePastFunc                    // optional consensus 11-block MTP getter
+	FeeSource                   feepolicy.Source                      // live BSV Broadcaster policy or static rate
+	Broadcaster                 Broadcaster                           // single live BSV Broadcaster / RPC skeleton
+	Chain                       nodeapi.Chain                         // optional Tx/Proof/Spend view (WoC / node)
+	WoC                         *nodeapi.WoC                          // optional WhatsOnChain client for external address sync
+	Broadcast                   BroadcastFunc                         // optional custom broadcaster (overrides Broadcaster; used for testchain)
+	ProofLookup                 ProofLookupFunc                       // optional custom proof lookup (used for testchain)
+	SpendGuard                  SpendGuardCheck                       // optional fail-closed spend guard hook (enforced post-signing in PostFromBEEF)
 	SpendGuardCheck             func(feeSats, spendSats uint64) error // optional read-only pre-build cap check
-	SpendGuardRemainingInterval func() time.Duration      // optional min-interval remaining time for FuelKeeper pacing
-	OnTxMined                   TxMinedHook               // optional callback invoked when Monitor verifies a mined BUMP
-	SettleDepth                 int                       // confirmations before finalizing proofs / BlocksDelay (>=1 on live)
-	FuelProfile                 *FuelProfile              // nil => StandardFuelProfile()
-	MaxUnprovenDepth            int                       // 0 => DefaultMaxUnprovenDepth (15)
-	ReservationTTL              time.Duration             // 0 => DefaultReservationTTL (5m)
-	TxCacheSize                 int                       // 0 => DefaultTxCacheSize (512)
+	SpendGuardRemainingInterval func() time.Duration                  // optional min-interval remaining time for FuelKeeper pacing
+	OnTxMined                   TxMinedHook                           // optional callback invoked when Monitor verifies a mined BUMP
+	SettleDepth                 int                                   // confirmations before finalizing proofs / BlocksDelay (>=1 on live)
+	FuelProfile                 *FuelProfile                          // nil => StandardFuelProfile()
+	MaxUnprovenDepth            int                                   // 0 => DefaultMaxUnprovenDepth (15)
+	ReservationTTL              time.Duration                         // 0 => DefaultReservationTTL (5m)
+	TxCacheSize                 int                                   // 0 => DefaultTxCacheSize (512)
 	Logger                      func(format string, args ...any)
 }
 
 // TxRecord is one transaction record returned by ListRecentActions / HTTP API / CLI.
 type TxRecord struct {
-	TxID              string   `json:"txid"`
-	Reference         string   `json:"reference,omitempty"`
-	Status            string   `json:"status"`
-	IsOutgoing        bool     `json:"isOutgoing"`
-	Satoshis          int64    `json:"satoshis"`
-	FeeSats           uint64   `json:"feeSats"`
-	Description       string   `json:"description"`
-	Labels            []string `json:"labels,omitempty"`
-	Version           uint32   `json:"version"`
-	LockTime          uint32   `json:"lockTime"`
-	BlockHeight       uint32   `json:"blockHeight"`
-	CreatedAt         int64    `json:"createdAt"`
-	UpdatedAt         int64    `json:"updatedAt"`
+	TxID        string   `json:"txid"`
+	Reference   string   `json:"reference,omitempty"`
+	Status      string   `json:"status"`
+	IsOutgoing  bool     `json:"isOutgoing"`
+	Satoshis    int64    `json:"satoshis"`
+	FeeSats     uint64   `json:"feeSats"`
+	Description string   `json:"description"`
+	Labels      []string `json:"labels,omitempty"`
+	Version     uint32   `json:"version"`
+	LockTime    uint32   `json:"lockTime"`
+	BlockHeight uint32   `json:"blockHeight"`
+	CreatedAt   int64    `json:"createdAt"`
+	UpdatedAt   int64    `json:"updatedAt"`
 }
 
 // OutputRecord is one UTXO record returned by ListUTXOs / HTTP API / CLI.

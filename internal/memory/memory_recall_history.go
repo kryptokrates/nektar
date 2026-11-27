@@ -2,19 +2,14 @@ package memory
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 
-	"github.com/kryptokrates/nektar/internal/bstack"
-	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/policy"
 )
 
 // recallAtCommit performs epistemic time-travel recall against the immutable TreeObject & Blobs
-// at in.AtCommit (commit SHA/prefix or tag) or in.Branch, enforcing Cedar authorization and Borg decryption.
+// at in.AtCommit (commit SHA/prefix or tag) or in.Branch, enforcing Cedar authorization and CLKA/Borg decryption.
 func (s *Service) recallAtCommit(ctx context.Context, in RecallInput) ([]RecalledFragment, error) {
 	ref := strings.TrimSpace(in.AtCommit)
 	if ref == "" {
@@ -84,54 +79,12 @@ func (s *Service) recallAtCommit(ctx context.Context, in RecallInput) ([]Recalle
 		if aErr != nil || !dec.Allow {
 			continue
 		}
-		var plaintext []byte
-		if b.Encrypted {
-			if in.DisallowBorg || callerPub == "" || len(b.KeyedMeta) == 0 {
-				continue
-			}
-			var env bstack.SealedEnvelope
-			if jErr := json.Unmarshal(b.KeyedMeta, &env); jErr != nil {
-				continue
-			}
-			// Verify sealed envelope group/epoch binding matches BlobObject metadata (MED-12).
-			if (b.BorgGroup != "" && env.GroupID != b.BorgGroup) || env.Epoch != b.BorgEpoch {
-				continue
-			}
-			epochSym, kErr := s.groups.EpochKey(b.BorgGroup, callerPub, b.BorgEpoch)
-			if kErr != nil {
-				continue
-			}
-			opened, oErr := bstack.OpenWithEpoch(&env, epochSym)
-			core.Zero32Array(&epochSym)
-			if oErr != nil {
-				continue
-			}
-			if b.ContentSHA256 != "" {
-				sum := sha256.Sum256(opened)
-				if !strings.EqualFold(hex.EncodeToString(sum[:]), b.ContentSHA256) {
-					continue
-				}
-			}
-			plaintext = opened
-		} else if len(b.Inline) > 0 {
-			if b.ContentSHA256 != "" {
-				sum := sha256.Sum256(b.Inline)
-				if !strings.EqualFold(hex.EncodeToString(sum[:]), b.ContentSHA256) {
-					continue
-				}
-			}
-			plaintext = b.Inline
-		} else if b.ChirpURL != "" {
-			if resolved, rErr := bstack.ResolveChirp(s.objects, b.ChirpURL); rErr == nil {
-				if b.ContentSHA256 != "" {
-					sum := sha256.Sum256(resolved)
-					if !strings.EqualFold(hex.EncodeToString(sum[:]), b.ContentSHA256) {
-						continue
-					}
-				}
-				plaintext = resolved
-			} else {
+		plaintext, opened := s.openBlobPlaintext(ctx, b, principal, callerPub, in.Clearance, in.DisallowBorg, in.DisallowPrivate)
+		if !opened {
+			if !b.Encrypted && b.ChirpURL != "" {
 				plaintext = []byte(fmt.Sprintf("[chirp:%s %d bytes]", b.ChirpURL, b.Size))
+			} else {
+				continue
 			}
 		}
 		txt := string(plaintext)
@@ -139,20 +92,22 @@ func (s *Service) recallAtCommit(ctx context.Context, in RecallInput) ([]Recalle
 			continue
 		}
 		out = append(out, RecalledFragment{
-			Shard:       in.Shard,
-			Seq:         int64(idx + 1),
-			Path:        e.Path,
-			CommitHash:  c.CommitHash,
-			Text:        txt,
-			HDP:         b.ContentSHA256,
-			Leaf:        c.FragmentLeaf,
-			Level:       lvl,
-			Class:       cls,
-			BorgGroup:   b.BorgGroup,
-			BorgEpoch:   b.BorgEpoch,
-			AnchorTxID:  c.AnchorTxID,
-			AnchorState: anchorState,
-			CreatedAt:   c.Timestamp,
+			Shard:        in.Shard,
+			Seq:          int64(idx + 1),
+			Path:         e.Path,
+			CommitHash:   c.CommitHash,
+			Text:         txt,
+			HDP:          b.ContentSHA256,
+			Leaf:         c.FragmentLeaf,
+			Level:        lvl,
+			Class:        cls,
+			Public:       !b.Encrypted,
+			LatticeEpoch: b.LatticeEpoch,
+			BorgGroup:    b.BorgGroup,
+			BorgEpoch:    b.BorgEpoch,
+			AnchorTxID:   c.AnchorTxID,
+			AnchorState:  anchorState,
+			CreatedAt:    c.Timestamp,
 		})
 		if in.Limit > 0 && len(out) >= in.Limit {
 			break

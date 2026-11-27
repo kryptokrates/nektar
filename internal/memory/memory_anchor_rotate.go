@@ -119,6 +119,8 @@ func (s *Service) RotateShardOwner(ctx context.Context, shard string, newOwnerPu
 		Kind:       "rotate",
 		RootHex:    last.RootHex,
 		ChainedHex: last.ChainedHex,
+		StateHash:  last.StateHash,
+		MmrRoot:    last.MmrRoot,
 		TxID:       rotTxID,
 		Beef:       preBroadcastBeef,
 		CreatedAt:  time.Now().Unix(),

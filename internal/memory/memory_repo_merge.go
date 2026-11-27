@@ -34,21 +34,38 @@ type MergeBranchResult struct {
 	AnchorTxID     string                  `json:"anchorTxid,omitempty"`
 }
 
-func collectExistingMeta(trees map[string]memrepo.TreeObject, hashes ...string) map[string]memrepo.TreeEntry {
-	out := make(map[string]memrepo.TreeEntry)
+// collectStoredTreeMeta loads the REAL persisted TreeObjects from SQLite (preserving true Encrypted/CLKA
+// flags, BlobHash, ContentSHA256, and CHIRP URLs instead of ephemeral decrypted go-git projection entries).
+// Returns both per-path highest-level metadata (for re-sealing modified files at the right level/class)
+// and per-(path, contentSha256) exact entries so unchanged CLKA blobs are reused byte-for-byte on merge/revert/cherry-pick.
+func (s *Service) collectStoredTreeMeta(fallback map[string]memrepo.TreeObject, hashes ...string) (map[string]memrepo.TreeEntry, map[string]memrepo.TreeEntry) {
+	byPath := make(map[string]memrepo.TreeEntry)
+	byContent := make(map[string]memrepo.TreeEntry)
 	for _, h := range hashes {
 		if h == "" {
 			continue
 		}
-		if tr, ok := trees[h]; ok {
-			for _, e := range tr.Entries {
-				if prev, exists := out[e.Path]; !exists || e.Level > prev.Level {
-					out[e.Path] = e
+		var tr memrepo.TreeObject
+		if loaded, err := s.loadTreeObject(h); err == nil && loaded != nil {
+			tr = *loaded
+		} else if fb, ok := fallback[h]; ok {
+			tr = fb
+		} else {
+			continue
+		}
+		for _, e := range tr.Entries {
+			if prev, exists := byPath[e.Path]; !exists || e.Level > prev.Level || (e.Encrypted && !prev.Encrypted) {
+				byPath[e.Path] = e
+			}
+			if e.ContentSHA256 != "" && e.BlobHash != "" {
+				key := e.Path + "\x00" + strings.ToLower(e.ContentSHA256)
+				if prev, exists := byContent[key]; !exists || (e.Encrypted && !prev.Encrypted) {
+					byContent[key] = e
 				}
 			}
 		}
 	}
-	return out
+	return byPath, byContent
 }
 
 // MergeBranchWithOptions performs a true LCA 3-way merge using go-git/v5 Commit.MergeBase().
@@ -131,12 +148,14 @@ func (s *Service) MergeBranchWithOptions(ctx context.Context, in MergeBranchInpu
 	}
 	parents = append(parents, memrepo.ParentRef{CommitHash: srcCommit.CommitHash, AnchorTxID: srcCommit.AnchorTxID})
 
+	existingByPath, existingByContent := s.collectStoredTreeMeta(trees, dstTreeHash, srcCommit.TreeHash)
 	commit, _, err := s.commitFileSnapshotWithOpts(ctx, in.Repo, dstName, mergeRes.MergedFiles, parents, msg, "merge", false, in.Principal, &commitSnapshotOpts{
-		PreservedEntries: mergeRes.PreservedEncrypted,
-		ExistingEntries:  collectExistingMeta(trees, dstTreeHash, srcCommit.TreeHash),
-		CallerHoldsLock:  true,
-		ExpectedHead:     dstHash,
-		HasExpectedHead:  true,
+		PreservedEntries:  mergeRes.PreservedEncrypted,
+		ExistingEntries:   existingByPath,
+		ExistingByContent: existingByContent,
+		CallerHoldsLock:   true,
+		ExpectedHead:      dstHash,
+		HasExpectedHead:   true,
 	})
 	release()
 	if err != nil {
@@ -295,12 +314,14 @@ func (s *Service) RevertCommit(ctx context.Context, repo, branch, commitRef stri
 	}
 	msg := fmt.Sprintf("Revert %q (%s)", summarizeCommitText(target.Message, short), short)
 	parents := []memrepo.ParentRef{{CommitHash: headC.CommitHash, AnchorTxID: headC.AnchorTxID}}
+	existingByPath, existingByContent := s.collectStoredTreeMeta(trees, headC.TreeHash, target.TreeHash)
 	c, _, err := s.commitFileSnapshotWithOpts(ctx, repo, brName, res.MergedFiles, parents, msg, "revert", false, principal, &commitSnapshotOpts{
-		PreservedEntries: res.PreservedEncrypted,
-		ExistingEntries:  collectExistingMeta(trees, headC.TreeHash, target.TreeHash),
-		CallerHoldsLock:  true,
-		ExpectedHead:     headC.CommitHash,
-		HasExpectedHead:  true,
+		PreservedEntries:  res.PreservedEncrypted,
+		ExistingEntries:   existingByPath,
+		ExistingByContent: existingByContent,
+		CallerHoldsLock:   true,
+		ExpectedHead:      headC.CommitHash,
+		HasExpectedHead:   true,
 	})
 	release()
 	if err != nil {
@@ -376,12 +397,14 @@ func (s *Service) CherryPickCommit(ctx context.Context, repo, targetBranch, comm
 	if headC != nil {
 		parents = append(parents, memrepo.ParentRef{CommitHash: headC.CommitHash, AnchorTxID: headC.AnchorTxID})
 	}
+	existingByPath, existingByContent := s.collectStoredTreeMeta(trees, oursTreeHash, target.TreeHash)
 	c, _, err := s.commitFileSnapshotWithOpts(ctx, repo, brName, res.MergedFiles, parents, msg, "cherry-pick", false, principal, &commitSnapshotOpts{
-		PreservedEntries: res.PreservedEncrypted,
-		ExistingEntries:  collectExistingMeta(trees, oursTreeHash, target.TreeHash),
-		CallerHoldsLock:  true,
-		ExpectedHead:     oursHash,
-		HasExpectedHead:  true,
+		PreservedEntries:  res.PreservedEncrypted,
+		ExistingEntries:   existingByPath,
+		ExistingByContent: existingByContent,
+		CallerHoldsLock:   true,
+		ExpectedHead:      oursHash,
+		HasExpectedHead:   true,
 	})
 	release()
 	if err != nil {

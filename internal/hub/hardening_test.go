@@ -132,7 +132,7 @@ func TestBountyProofEnforcementAndSustainableResale(t *testing.T) {
 		t.Fatalf("expected bounty submission with mismatched HDP to be rejected, got %+v", resp)
 	}
 
-	// Missing MPERoot MUST be rejected (TagLeafV2 L1 binding is mandatory).
+	// Missing MPERoot MUST be rejected (canonical leaf L1 binding is mandatory).
 	if resp, _ := postBounty(ts.URL, signSub(BountySubmission{
 		BountyID:      bounty.ID,
 		SellerAddress: addr,
@@ -147,16 +147,19 @@ func TestBountyProofEnforcementAndSustainableResale(t *testing.T) {
 	}
 
 	validSub := signSub(BountySubmission{
-		BountyID:      bounty.ID,
-		SellerAddress: addr,
-		Shard:         "bounty-src",
-		Seq:           rem.Seq,
-		HDP:           rem.HDP,
-		MPERoot:       fragRec.MPERoot,
-		ContentSHA256: fragRec.ContentSHA256,
-		Text:          "Chronicle verified script opcodes activated cleanly on testnet.",
-		ProvenanceHex: hex.EncodeToString(fragRec.Provenance),
-		ProofBundle:   pbRaw,
+		BountyID:       bounty.ID,
+		SellerAddress:  addr,
+		Shard:          "bounty-src",
+		Seq:            rem.Seq,
+		HDP:            rem.HDP,
+		MPERoot:        fragRec.MPERoot,
+		ContentSHA256:  fragRec.ContentSHA256,
+		CommitHash:     fragRec.CommitHash,
+		TransitionHash: fragRec.TransitionHash,
+		CiphertextHex:  hex.EncodeToString(fragRec.Ciphertext),
+		Text:           "Chronicle verified script opcodes activated cleanly on testnet.",
+		ProvenanceHex:  hex.EncodeToString(fragRec.Provenance),
+		ProofBundle:    pbRaw,
 	})
 	resp, res := postBounty(ts.URL, validSub)
 	if resp == nil || resp.StatusCode != http.StatusOK || !res.Accepted {

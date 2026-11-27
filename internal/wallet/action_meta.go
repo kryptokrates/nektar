@@ -258,6 +258,7 @@ func ActionSendBSV(sats uint64) ActionMeta {
 // FormatActionDescription builds a uniform BRC-100 description:
 //   - "Nektar · <action>: <detail>" when detail is non-empty
 //   - "Nektar · <action>" when detail is empty
+//
 // Truncated safely to stay well within BRC-100's [5, 200] character bounds.
 func FormatActionDescription(action, detail string) string {
 	act := cleanActionText(action)

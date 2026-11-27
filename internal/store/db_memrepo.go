@@ -18,16 +18,17 @@ type MemCommitRow struct {
 	TreeHash     string
 	MPERoot      string
 	ParentsJSON  []byte
-	AuthorPub    string
-	ModelID      string
-	PolicyCommit string
-	Message      string
-	Timestamp    int64
-	Signature    string
-	AnchorTxID   string
-	AnchorN      int64
-	FragmentLeaf string
-	GitMetaJSON  []byte
+	AuthorPub      string
+	ModelID        string
+	PolicyCommit   string
+	OntologyCommit string
+	Message        string
+	Timestamp      int64
+	Signature      string
+	AnchorTxID     string
+	AnchorN        int64
+	FragmentLeaf   string
+	GitMetaJSON    []byte
 }
 
 // MemObjectRow is one content-addressed blob or tree record for mem_objects.
@@ -78,18 +79,19 @@ CREATE TABLE IF NOT EXISTS mem_commits (
 	tree_hash     TEXT NOT NULL,
 	mpe_root      TEXT NOT NULL,
 	parents_json  BLOB NOT NULL,
-	author_pub    TEXT NOT NULL,
-	model_id      TEXT NOT NULL,
-	policy_commit TEXT NOT NULL DEFAULT '',
-	message       TEXT NOT NULL DEFAULT '',
-	timestamp     INTEGER NOT NULL,
-	signature     TEXT NOT NULL DEFAULT '',
-	anchor_txid   TEXT NOT NULL DEFAULT '',
-	anchor_n      INTEGER NOT NULL DEFAULT -1,
-	fragment_leaf TEXT NOT NULL DEFAULT '',
-	git_meta_json BLOB,
-	origin_repo   TEXT NOT NULL DEFAULT '',
-	origin_branch TEXT NOT NULL DEFAULT ''
+	author_pub      TEXT NOT NULL,
+	model_id        TEXT NOT NULL,
+	policy_commit   TEXT NOT NULL DEFAULT '',
+	ontology_commit TEXT NOT NULL DEFAULT '',
+	message         TEXT NOT NULL DEFAULT '',
+	timestamp       INTEGER NOT NULL,
+	signature       TEXT NOT NULL DEFAULT '',
+	anchor_txid     TEXT NOT NULL DEFAULT '',
+	anchor_n        INTEGER NOT NULL DEFAULT -1,
+	fragment_leaf   TEXT NOT NULL DEFAULT '',
+	git_meta_json   BLOB,
+	origin_repo     TEXT NOT NULL DEFAULT '',
+	origin_branch   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_mem_commits_repo_branch ON mem_commits(repo, branch, timestamp DESC, seq DESC);
 CREATE INDEX IF NOT EXISTS idx_mem_commits_repo_ts ON mem_commits(repo, timestamp DESC, seq DESC);
@@ -138,11 +140,14 @@ CREATE TABLE IF NOT EXISTS mem_tags (
 	if err := ensureColumnTx(tx, "mem_commits", "origin_branch", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("store: migrate mem_commits.origin_branch: %w", err)
 	}
+	if err := ensureColumnTx(tx, "mem_commits", "ontology_commit", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("store: migrate mem_commits.ontology_commit: %w", err)
+	}
 	return tx.Commit()
 }
 
 const memCommitSelectCols = `commit_hash, repo, branch, origin_repo, origin_branch, seq, tree_hash, mpe_root, parents_json,
-		       author_pub, model_id, policy_commit, message, timestamp, signature,
+		       author_pub, model_id, policy_commit, COALESCE(ontology_commit, ''), message, timestamp, signature,
 		       anchor_txid, anchor_n, fragment_leaf, git_meta_json`
 
 // PutMemObject stores an immutable content-addressed TreeObject or BlobObject JSON record.
@@ -176,11 +181,11 @@ func (d *DB) SaveMemCommit(r MemCommitRow) error {
 	_, err := d.sql.Exec(`
 		INSERT OR IGNORE INTO mem_commits (
 			commit_hash, repo, branch, origin_repo, origin_branch, seq, tree_hash, mpe_root, parents_json,
-			author_pub, model_id, policy_commit, message, timestamp, signature,
+			author_pub, model_id, policy_commit, ontology_commit, message, timestamp, signature,
 			anchor_txid, anchor_n, fragment_leaf, git_meta_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.CommitHash, r.Repo, r.Branch, r.OriginRepo, r.OriginBranch, r.Seq, r.TreeHash, r.MPERoot, r.ParentsJSON,
-		r.AuthorPub, r.ModelID, r.PolicyCommit, r.Message, r.Timestamp, r.Signature,
+		r.AuthorPub, r.ModelID, r.PolicyCommit, r.OntologyCommit, r.Message, r.Timestamp, r.Signature,
 		r.AnchorTxID, r.AnchorN, r.FragmentLeaf, r.GitMetaJSON,
 	)
 	return err
@@ -333,7 +338,7 @@ func scanMemCommit(s scanner) (MemCommitRow, error) {
 	var r MemCommitRow
 	err := s.Scan(
 		&r.CommitHash, &r.Repo, &r.Branch, &r.OriginRepo, &r.OriginBranch, &r.Seq, &r.TreeHash, &r.MPERoot, &r.ParentsJSON,
-		&r.AuthorPub, &r.ModelID, &r.PolicyCommit, &r.Message, &r.Timestamp, &r.Signature,
+		&r.AuthorPub, &r.ModelID, &r.PolicyCommit, &r.OntologyCommit, &r.Message, &r.Timestamp, &r.Signature,
 		&r.AnchorTxID, &r.AnchorN, &r.FragmentLeaf, &r.GitMetaJSON,
 	)
 	return r, err

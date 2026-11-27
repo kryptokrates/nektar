@@ -28,18 +28,21 @@ type MarketLookupService struct {
 const maxIndexedMarketRecords = 10000
 
 type indexedRecord struct {
-	seq        int64
-	outpoint   transaction.Outpoint
-	topic      string
-	payload    MarketPayload
-	beef       []byte
-	admittedAt int64
-	wantID     string
-	offerID    string
-	pub        string
-	buyerPub   string
-	domains    []string
-	exp        int64
+	seq               int64
+	outpoint          transaction.Outpoint
+	topic             string
+	payload           MarketPayload
+	beef              []byte
+	admittedAt        int64
+	wantID            string
+	offerID           string
+	pub               string
+	buyerPub          string
+	subjectPub        string
+	domains           []string
+	ontologyIDs       []string
+	targetOntologyIDs []string
+	exp               int64
 }
 
 // NewMarketLookupService creates an ls_nektar lookup service with an optional live admission callback (for Hub SSE).
@@ -80,6 +83,9 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		rec.wantID = sw.Want.WantID
 		rec.pub = sw.Want.Pub
 		rec.domains = sw.Want.Domains
+		if oid := strings.ToLower(strings.TrimSpace(sw.Want.OntologyID)); oid != "" {
+			rec.ontologyIDs = []string{oid}
+		}
 		rec.exp = sw.Want.Exp
 	case KindOffer:
 		var so SignedOffer
@@ -91,6 +97,9 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		rec.pub = so.Offer.Pub
 		rec.buyerPub = so.Offer.BuyerPub
 		rec.domains = so.Offer.Domains
+		if oid := strings.ToLower(strings.TrimSpace(so.Offer.OntologyID)); oid != "" {
+			rec.ontologyIDs = []string{oid}
+		}
 		rec.exp = so.Offer.Exp
 	case KindAnnounce:
 		var sa SignedAnnounce
@@ -99,7 +108,27 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		}
 		rec.pub = sa.Announce.Pub
 		rec.domains = append([]string{DirDomain}, sa.Announce.Domains...)
+		for _, pk := range sa.Announce.Packs {
+			if oid := strings.ToLower(strings.TrimSpace(pk.OntologyID)); oid != "" {
+				rec.ontologyIDs = append(rec.ontologyIDs, oid)
+			}
+			if tid := strings.ToLower(strings.TrimSpace(pk.TargetOntologyID)); tid != "" {
+				rec.targetOntologyIDs = append(rec.targetOntologyIDs, tid)
+			}
+		}
 		rec.exp = sa.Announce.Exp
+	case KindAttestation:
+		var sat SignedAttestation
+		if err := json.Unmarshal(p.Body, &sat); err != nil {
+			return err
+		}
+		rec.pub = sat.Attestation.Pub
+		rec.subjectPub = sat.Attestation.SubjectPub
+		rec.domains = append([]string{DirDomain}, sat.Attestation.Domains...)
+		if oid := strings.ToLower(strings.TrimSpace(sat.Attestation.OntologyID)); oid != "" {
+			rec.ontologyIDs = []string{oid}
+		}
+		rec.exp = sat.Attestation.Exp
 	}
 	key := op.String()
 	nowMs := time.Now().UnixMilli()
@@ -214,15 +243,18 @@ func (s *MarketLookupService) Restore(_ context.Context, outputs []module.Output
 
 // MarketQuery is the structured JSON query accepted by `ls_nektar`.
 type MarketQuery struct {
-	Kind     ArtifactKind `json:"kind,omitempty"`
-	WantID   string       `json:"wantId,omitempty"`
-	OfferID  string       `json:"offerId,omitempty"`
-	Domain   string       `json:"domain,omitempty"`
-	Pub      string       `json:"pub,omitempty"`
-	BuyerPub string       `json:"buyerPub,omitempty"`
-	SinceMs  int64        `json:"sinceMs,omitempty"`
-	SinceSeq int64        `json:"sinceSeq,omitempty"`
-	Limit    int          `json:"limit,omitempty"`
+	Kind             ArtifactKind `json:"kind,omitempty"`
+	WantID           string       `json:"wantId,omitempty"`
+	OfferID          string       `json:"offerId,omitempty"`
+	Domain           string       `json:"domain,omitempty"`
+	OntologyID       string       `json:"ontologyId,omitempty"`
+	TargetOntologyID string       `json:"targetOntologyId,omitempty"`
+	Pub              string       `json:"pub,omitempty"`
+	BuyerPub         string       `json:"buyerPub,omitempty"`
+	SubjectPub       string       `json:"subjectPub,omitempty"`
+	SinceMs          int64        `json:"sinceMs,omitempty"`
+	SinceSeq         int64        `json:"sinceSeq,omitempty"`
+	Limit            int          `json:"limit,omitempty"`
 }
 
 func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQuestion) (*lookup.LookupAnswer, error) {
@@ -237,6 +269,8 @@ func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQ
 	}
 	nowMs := time.Now().UnixMilli()
 	domLower := strings.ToLower(strings.TrimSpace(q.Domain))
+	ontLower := strings.ToLower(strings.TrimSpace(q.OntologyID))
+	tgtOntLower := strings.ToLower(strings.TrimSpace(q.TargetOntologyID))
 
 	s.mu.RLock()
 	var matched []indexedRecord
@@ -259,6 +293,9 @@ func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQ
 		if q.BuyerPub != "" && rec.buyerPub != q.BuyerPub {
 			continue
 		}
+		if q.SubjectPub != "" && !strings.EqualFold(rec.subjectPub, q.SubjectPub) {
+			continue
+		}
 		if q.SinceMs > 0 && rec.admittedAt < q.SinceMs {
 			continue
 		}
@@ -266,6 +303,12 @@ func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQ
 			continue
 		}
 		if domLower != "" && !hasDomain(rec.domains, domLower) {
+			continue
+		}
+		if ontLower != "" && !hasDomain(rec.ontologyIDs, ontLower) {
+			continue
+		}
+		if tgtOntLower != "" && !hasDomain(rec.targetOntologyIDs, tgtOntLower) {
 			continue
 		}
 		matched = append(matched, rec)

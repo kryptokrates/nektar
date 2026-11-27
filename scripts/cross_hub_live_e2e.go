@@ -7,7 +7,8 @@
 // MCP stdio bridge, online & offline nektarr1.* receipt verification, and fail-closed security.
 //
 // Usage:
-//   go run ./scripts/cross_hub_live_e2e.go
+//
+//	go run ./scripts/cross_hub_live_e2e.go
 package main
 
 import (

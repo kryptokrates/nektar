@@ -57,6 +57,8 @@ func main() {
 		err = cmdRemember(args)
 	case "repo":
 		err = cmdRepo(args)
+	case "ontology":
+		err = cmdOntology(args)
 	case "recall":
 		err = cmdRecall(args)
 	case "anchor":
@@ -115,8 +117,9 @@ Get Started (25 seconds, zero Docker):
   nektar wallet         Manage BRC-100 wallet (status | address [--qr] | sync | fund | send | sweep | fuel)
 
 Memory & Knowledge Market:
-  nektar remember       Commit a fragment to a Memory Repo (-shard, -text, -anchor, -group)
+  nektar remember       Commit a fragment to a Memory Repo (-shard, -text, -ontology, -anchor, -group)
   nektar repo           Git-compatible BSV Memory Repos (list | log | tree | diff | commit | branch | merge | export | import | verify | checkout)
+  nektar ontology       Manage domain TBox ontologies, Bridge Shards & JevGraph extraction (init | list | show | validate | extract | edges | review | align)
   nektar recall         Recall Cedar-authorized, Borg-decrypted fragments (-shard, -query, -spv)
   nektar anchor         Anchor unanchored fragments via NektarAnchor covenant (or anchor rotate)
   nektar verify         Verify a nektarr1.* receipt token offline (-token)
@@ -168,10 +171,10 @@ func parseCSVEnv(key string) []string {
 	return out
 }
 
-func buildJevMatcherFromEnv(network string) market.Matcher {
+func buildJevClientFromEnv(network string) (*jev.Client, string, string) {
 	mode := strings.ToLower(strings.TrimSpace(envOr("NEKTAR_JEV_MODE", market.AIModeGated)))
 	if mode == market.AIModeOff {
-		return nil
+		return nil, mode, ""
 	}
 	timeoutMs := envUint64("NEKTAR_JEV_TIMEOUT_MS", 2500)
 	cl, err := jev.NewClient(jev.Config{
@@ -182,10 +185,18 @@ func buildJevMatcherFromEnv(network string) market.Matcher {
 		Timeout:      time.Duration(timeoutMs) * time.Millisecond,
 	})
 	if err != nil {
-		log.Printf("openweight matcher disabled: %v", err)
-		return nil
+		log.Printf("openweight jev client disabled: %v", err)
+		return nil, mode, ""
 	}
 	privacy := envOr("NEKTAR_JEV_PRIVACY", market.PrivacyDisclosablePreview)
+	return cl, mode, privacy
+}
+
+func buildJevMatcherFromEnv(network string) market.Matcher {
+	cl, mode, privacy := buildJevClientFromEnv(network)
+	if cl == nil {
+		return nil
+	}
 	log.Printf("openweight matcher armed: endpoint=%s model=%s mode=%s privacy=%s (local keyless; falls back cleanly if offline)",
 		cl.Health().Endpoint, cl.Model(), mode, privacy)
 	return market.NewJevMatcher(cl, market.JevMatcherOptions{
@@ -312,6 +323,7 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string, l
 		}
 	}
 	modelRelease := envOr("NEKTAR_MODEL_RELEASE", envOr("NEKTAR_MODEL_ID", Version))
+	jevClient, _, _ := buildJevClientFromEnv(net)
 	mem, err := memory.New(db, port, bstack.NewGroupRegistry(), objStore, memory.Config{
 		VerifyBaseURL: verifyBase,
 		ModelID: reasoning.ModelIdentity{
@@ -319,6 +331,7 @@ func openRuntime(ctx context.Context, networkOverride, dataDirOverride string, l
 			Provider: envOr("NEKTAR_MODEL_PROVIDER", "nektar"),
 			Release:  modelRelease,
 		},
+		JevEvaluator: jevClient,
 	})
 	if err != nil {
 		_ = db.Close()

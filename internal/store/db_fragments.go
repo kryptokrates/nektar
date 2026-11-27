@@ -62,19 +62,21 @@ func appendFragmentTx(tx *sql.Tx, rec FragmentRecord) (FragmentRecord, bool, err
 	_, err = tx.Exec(`
 		INSERT INTO fragments (
 			shard, seq, hdp, leaf, prev_leaf, chain_hash, data, ciphertext, keyed_meta, provenance,
-			level, class, borg_group, borg_epoch, batch_n, leaf_index,
+			level, class, borg_group, borg_epoch, lattice_epoch, public_flag, batch_n, leaf_index,
 			anchor_txid, supersedes, forgotten, tainted, created_at,
-			path, media_type, chirp_url, content_sha256, mpe_root, commit_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			path, media_type, chirp_url, content_sha256, mpe_root, commit_hash, transition_hash,
+			distilled, ontology_id, triples_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Shard, rec.Seq, rec.HDP, rec.Leaf, rec.PrevLeaf, rec.ChainHash, rec.Data, rec.Ciphertext, rec.KeyedMeta, rec.Provenance,
-		rec.Level, rec.Class, rec.BorgGroup, rec.BorgEpoch, rec.BatchN, rec.LeafIndex,
+		rec.Level, rec.Class, rec.BorgGroup, rec.BorgEpoch, rec.LatticeEpoch, boolToInt(rec.Public), rec.BatchN, rec.LeafIndex,
 		rec.AnchorTxID, rec.Supersedes, boolToInt(rec.Forgotten), boolToInt(rec.Tainted), rec.CreatedAt,
-		rec.Path, rec.MediaType, rec.ChirpURL, rec.ContentSHA256, rec.MPERoot, rec.CommitHash,
+		rec.Path, rec.MediaType, rec.ChirpURL, rec.ContentSHA256, rec.MPERoot, rec.CommitHash, rec.TransitionHash,
+		boolToInt(rec.Distilled), rec.OntologyID, rec.TriplesJSON,
 	)
 	if err != nil {
 		return FragmentRecord{}, false, err
 	}
-	if !rec.Forgotten && rec.BorgGroup == "" && len(rec.Data) > 0 {
+	if !rec.Forgotten && rec.BorgGroup == "" && rec.LatticeEpoch == 0 && len(rec.Data) > 0 {
 		if _, err := tx.Exec(`INSERT INTO fragments_fts (shard, seq, text) VALUES (?, ?, ?)`, rec.Shard, rec.Seq, string(rec.Data)); err != nil {
 			return FragmentRecord{}, false, fmt.Errorf("store: index fragment fts: %w", err)
 		}
@@ -132,7 +134,7 @@ func (d *DB) SearchFTS(shard, query string, limit int) ([]struct {
 	} else {
 		rows, err = d.sql.Query(`
 			SELECT shard, seq FROM fragments_fts
-			WHERE shard != '__receipts__' AND fragments_fts MATCH ?
+			WHERE shard NOT IN ('__receipts__', '__deals__', '__policies__', '__ontology__') AND fragments_fts MATCH ?
 			ORDER BY bm25(fragments_fts) ASC LIMIT ?`, ftsQ, limit)
 	}
 	if err != nil {
@@ -199,10 +201,11 @@ func (d *DB) SupersededBy(shard string, seq int64) (int64, error) {
 }
 
 const fragmentSelectCols = `shard, seq, hdp, leaf, COALESCE(prev_leaf, ''), COALESCE(chain_hash, ''), data, ciphertext, keyed_meta, provenance,
-		       level, class, borg_group, borg_epoch, batch_n, leaf_index,
+		       level, class, borg_group, borg_epoch, COALESCE(lattice_epoch, 0), COALESCE(public_flag, 0), batch_n, leaf_index,
 		       anchor_txid, supersedes, forgotten, tainted, created_at,
 		       COALESCE(path, ''), COALESCE(media_type, ''), COALESCE(chirp_url, ''),
-		       COALESCE(content_sha256, ''), COALESCE(mpe_root, ''), COALESCE(commit_hash, '')`
+		       COALESCE(content_sha256, ''), COALESCE(mpe_root, ''), COALESCE(commit_hash, ''), COALESCE(transition_hash, ''),
+		       COALESCE(distilled, 0), COALESCE(ontology_id, ''), triples_json`
 
 func (d *DB) getByHDP(shard, hdp string) (FragmentRecord, error) {
 	row := d.sql.QueryRow(`SELECT `+fragmentSelectCols+` FROM fragments WHERE shard = ? AND hdp = ?`, shard, hdp)
@@ -245,7 +248,7 @@ func (d *DB) ListRecentFragments(limit int) ([]FragmentRecord, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rows, err := d.sql.Query(`SELECT `+fragmentSelectCols+` FROM fragments
-		WHERE shard != '__receipts__' AND forgotten = 0
+		WHERE shard NOT IN ('__receipts__', '__deals__', '__policies__', '__ontology__') AND forgotten = 0
 		ORDER BY created_at DESC, seq DESC
 		LIMIT ?`, limit)
 	if err != nil {
@@ -356,6 +359,12 @@ func (d *DB) ForgetFragment(shard string, seq int64) error {
 	if _, err := tx.Exec(`DELETE FROM fragments_fts WHERE shard = ? AND seq = ?`, shard, seq); err != nil {
 		return fmt.Errorf("store: shred fts: %w", err)
 	}
+	if _, err := tx.Exec(`DELETE FROM knowledge_edges WHERE shard = ? AND seq = ?`, shard, seq); err != nil {
+		return fmt.Errorf("store: shred knowledge_edges: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM fragment_graph_meta WHERE shard = ? AND seq = ?`, shard, seq); err != nil {
+		return fmt.Errorf("store: shred fragment_graph_meta: %w", err)
+	}
 	if commitHash != "" {
 		if _, err := tx.Exec(`UPDATE mem_commits SET message = '[shredded]' WHERE commit_hash = ?`, commitHash); err != nil {
 			return fmt.Errorf("store: shred commit message: %w", err)
@@ -405,11 +414,21 @@ func shredMemObjectsForFragmentTx(tx *sql.Tx, shard string, seq int64, commitHas
 				if json.Unmarshal(treeRaw, &tree) == nil {
 					defaultPathMD := fmt.Sprintf("facts/%04d.md", seq)
 					defaultPathTxt := fmt.Sprintf("facts/%d.txt", seq)
+					sidecarFor := func(p string) string {
+						if p == "" {
+							return ""
+						}
+						return "graph/" + p + ".edges.json"
+					}
+					sidecarFrag := sidecarFor(fragPath)
+					sidecarMD := sidecarFor(defaultPathMD)
+					sidecarTxt := sidecarFor(defaultPathTxt)
 					for _, e := range tree.Entries {
 						if e.BlobHash == "" {
 							continue
 						}
-						if (fragPath != "" && e.Path == fragPath) || e.Path == defaultPathMD || e.Path == defaultPathTxt {
+						if (fragPath != "" && e.Path == fragPath) || e.Path == defaultPathMD || e.Path == defaultPathTxt ||
+							(sidecarFrag != "" && e.Path == sidecarFrag) || e.Path == sidecarMD || e.Path == sidecarTxt {
 							blobHashes[e.BlobHash] = true
 						}
 					}
@@ -462,14 +481,17 @@ func shredMemObjectsForFragmentTx(tx *sql.Tx, shard string, seq int64, commitHas
 
 func scanFragment(s scanner) (FragmentRecord, error) {
 	var r FragmentRecord
-	var forgotten, tainted int
+	var forgotten, tainted, pubFlag, distilled int
 	err := s.Scan(
 		&r.Shard, &r.Seq, &r.HDP, &r.Leaf, &r.PrevLeaf, &r.ChainHash, &r.Data, &r.Ciphertext, &r.KeyedMeta, &r.Provenance,
-		&r.Level, &r.Class, &r.BorgGroup, &r.BorgEpoch, &r.BatchN, &r.LeafIndex,
+		&r.Level, &r.Class, &r.BorgGroup, &r.BorgEpoch, &r.LatticeEpoch, &pubFlag, &r.BatchN, &r.LeafIndex,
 		&r.AnchorTxID, &r.Supersedes, &forgotten, &tainted, &r.CreatedAt,
-		&r.Path, &r.MediaType, &r.ChirpURL, &r.ContentSHA256, &r.MPERoot, &r.CommitHash,
+		&r.Path, &r.MediaType, &r.ChirpURL, &r.ContentSHA256, &r.MPERoot, &r.CommitHash, &r.TransitionHash,
+		&distilled, &r.OntologyID, &r.TriplesJSON,
 	)
+	r.Public = pubFlag != 0
 	r.Forgotten = forgotten != 0
 	r.Tainted = tainted != 0
+	r.Distilled = distilled != 0
 	return r, err
 }

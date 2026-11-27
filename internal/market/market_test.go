@@ -95,11 +95,11 @@ func TestRestateGoSDKServicesClientAndAtomicKnowledgeTrade(t *testing.T) {
 
 	// 3. Deterministic bps ranking & kill-switch refusal.
 	want := bstack.WantAd{WantID: "w1", MaxSats: 1000}
-	ranked := RankOffers(want, []bstack.OfferAd{
+	ranked := RankOffersWithRepAndBonds(want, []bstack.OfferAd{
 		{OfferID: "expensive", Pub: "s1", PriceSats: 900},
 		{OfferID: "best", Pub: "s2", PriceSats: 200, Direct: true, KeyCommitHex: "aa", ChirpURL: "chirp://x"},
 		{OfferID: "overcap", Pub: "s3", PriceSats: 5000},
-	}, buyer.Policy())
+	}, buyer.Policy(), nil, nil)
 	if len(ranked) != 2 || ranked[0].Offer.OfferID != "best" {
 		t.Fatalf("unexpected ranking: %+v", ranked)
 	}

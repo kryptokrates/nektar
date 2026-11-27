@@ -32,6 +32,9 @@ func cmdRepoCommit(args []string) error {
 	msg := fs.String("m", "", "commit message")
 	anchor := fs.Bool("anchor", false, "anchor immediately on BSV via NektarAnchor")
 	group := fs.String("group", "", "optional Borg group for BRC-369 encryption")
+	publicFlag := fs.Bool("public", false, "opt out of private-by-default CLKA encryption")
+	ontology := fs.String("ontology", "", "optional committed domain ontology (ont-<domain> or 64-hex OntologyID) for JevGraph extraction")
+	ontologyStrict := fs.Bool("ontology-strict", false, "fail closed on -ontology commit if Jev evaluator is offline")
 	dataDir := fs.String("data-dir", "", "data directory override")
 	netName := fs.String("network", "", "network override")
 	pos, err := parseRepoArgs(fs, args)
@@ -39,7 +42,7 @@ func cmdRepoCommit(args []string) error {
 		return err
 	}
 	if len(pos) == 0 {
-		return errors.New("usage: nektar repo commit <repo> -text \"...\" | -file <path> [-path repo/file.md] [-branch main] [-m msg] [-anchor]")
+		return errors.New("usage: nektar repo commit <repo> -text \"...\" | -file <path> [-path repo/file.md] [-branch main] [-m msg] [-ontology ont-<domain>] [-anchor]")
 	}
 	repo := pos[0]
 
@@ -58,14 +61,17 @@ func cmdRepoCommit(args []string) error {
 
 	if info, ok := detectDaemon(*dataDir, *netName); ok {
 		payload := map[string]any{
-			"action":     "commit",
-			"repo":       repo,
-			"branch":     *branch,
-			"path":       targetPath,
-			"text":       *text,
-			"message":    *msg,
-			"borgGroup":  *group,
-			"autoAnchor": *anchor,
+			"action":         "commit",
+			"repo":           repo,
+			"branch":         *branch,
+			"path":           targetPath,
+			"text":           *text,
+			"message":        *msg,
+			"borgGroup":      *group,
+			"public":         *publicFlag,
+			"ontology":       *ontology,
+			"ontologyStrict": *ontologyStrict,
+			"autoAnchor":     *anchor,
 		}
 		if len(blob) > 0 {
 			payload["blobBase64"] = base64.StdEncoding.EncodeToString(blob)
@@ -74,7 +80,7 @@ func cmdRepoCommit(args []string) error {
 		if err != nil {
 			return err
 		}
-		return printRepoJSON(out)
+		return printJSON(out)
 	}
 
 	dir := resolveRepoDataDir(*dataDir, *netName)
@@ -86,19 +92,22 @@ func cmdRepoCommit(args []string) error {
 	defer cleanup()
 
 	res, err := mem.Remember(ctx, memory.RememberInput{
-		Shard:         repo,
-		Branch:        *branch,
-		Path:          targetPath,
-		Text:          *text,
-		Blob:          blob,
-		CommitMessage: *msg,
-		BorgGroup:     *group,
-		AutoAnchor:    *anchor,
+		Shard:          repo,
+		Branch:         *branch,
+		Path:           targetPath,
+		Text:           *text,
+		Blob:           blob,
+		CommitMessage:  *msg,
+		BorgGroup:      *group,
+		Public:         *publicFlag,
+		Ontology:       *ontology,
+		OntologyStrict: *ontologyStrict,
+		AutoAnchor:     *anchor,
 	})
 	if err != nil {
 		return err
 	}
-	return printRepoJSON(res)
+	return printJSON(res)
 }
 
 func cmdRepoBranch(args []string) error {
@@ -125,7 +134,7 @@ func cmdRepoBranch(args []string) error {
 		if err != nil {
 			return err
 		}
-		return printRepoJSON(out)
+		return printJSON(out)
 	}
 
 	dir := resolveRepoDataDir(*dataDir, *netName)
@@ -140,7 +149,7 @@ func cmdRepoBranch(args []string) error {
 	if err != nil {
 		return err
 	}
-	return printRepoJSON(br)
+	return printJSON(br)
 }
 
 func cmdRepoMerge(args []string) error {
@@ -169,7 +178,7 @@ func cmdRepoMerge(args []string) error {
 		if err != nil {
 			return err
 		}
-		return printRepoJSON(out)
+		return printJSON(out)
 	}
 
 	dir := resolveRepoDataDir(*dataDir, *netName)
@@ -184,7 +193,7 @@ func cmdRepoMerge(args []string) error {
 	if err != nil {
 		return err
 	}
-	return printRepoJSON(c)
+	return printJSON(c)
 }
 
 func downloadLiveCapsule(info *server.DaemonInfo, repo, branch, since string) ([]byte, error) {
@@ -252,7 +261,7 @@ func cmdRepoExport(args []string) error {
 			if err := os.WriteFile(*outFile, raw, 0o640); err != nil {
 				return err
 			}
-			return printRepoJSON(map[string]any{"ok": true, "repo": repo, "branch": *branch, "out": *outFile, "bytes": len(raw)})
+			return printJSON(map[string]any{"ok": true, "repo": repo, "branch": *branch, "out": *outFile, "bytes": len(raw)})
 		}
 		out, err := callLiveTool(info, "repo", map[string]any{
 			"action": "export",
@@ -263,7 +272,7 @@ func cmdRepoExport(args []string) error {
 		if err != nil {
 			return err
 		}
-		return printRepoJSON(out)
+		return printJSON(out)
 	}
 
 	dir := resolveRepoDataDir(*dataDir, *netName)
@@ -283,7 +292,7 @@ func cmdRepoExport(args []string) error {
 			return err
 		}
 	}
-	return printRepoJSON(res)
+	return printJSON(res)
 }
 
 func cmdRepoImport(args []string) error {
@@ -329,7 +338,7 @@ func cmdRepoImport(args []string) error {
 		if err != nil {
 			return err
 		}
-		return printRepoJSON(out)
+		return printJSON(out)
 	}
 
 	dir := resolveRepoDataDir(*dataDir, *netName)
@@ -344,7 +353,7 @@ func cmdRepoImport(args []string) error {
 	if err != nil {
 		return err
 	}
-	return printRepoJSON(res)
+	return printJSON(res)
 }
 
 func cmdRepoVerify(args []string) error {
@@ -405,7 +414,7 @@ func cmdRepoVerify(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := printRepoJSON(rep); err != nil {
+	if err := printJSON(rep); err != nil {
 		return err
 	}
 	if !rep.OK {
@@ -445,7 +454,7 @@ func cmdRepoCheckout(args []string) error {
 			if err != nil {
 				return err
 			}
-			return printRepoJSON(out)
+			return printJSON(out)
 		}
 	} else if info, ok := detectDaemon(*dataDir, *netName); ok {
 		raw, err := downloadLiveCapsule(info, repo, *branch, "")
@@ -460,7 +469,7 @@ func cmdRepoCheckout(args []string) error {
 		if err != nil {
 			return err
 		}
-		return printRepoJSON(res)
+		return printJSON(res)
 	}
 
 	ctx := context.Background()
@@ -474,5 +483,5 @@ func cmdRepoCheckout(args []string) error {
 	if err != nil {
 		return err
 	}
-	return printRepoJSON(res)
+	return printJSON(res)
 }

@@ -71,8 +71,15 @@ func (s *Service) filterTreeForPrincipal(
 		if hasB && b.Forgotten {
 			continue
 		}
-		if disallowBorg && (e.Encrypted || (hasB && b.Encrypted)) {
-			continue
+		if disallowBorg {
+			// DisallowBorg always blocks Borg-group secrets; if blob metadata is missing and entry is encrypted, fail closed.
+			if hasB {
+				if b.BorgGroup != "" {
+					continue
+				}
+			} else if e.Encrypted {
+				continue
+			}
 		}
 		lvl := e.Level
 		if hasB && b.Level > lvl {
@@ -107,37 +114,64 @@ func (s *Service) filterTreeForPrincipal(
 	return filtered, keptBlobs
 }
 
-// recordFragmentCommitTx appends a signed Git/Metanet CommitObject inside an active RepoTx.
-func (s *Service) recordFragmentCommitTx(
+// prepareFragmentCommitTx writes blob & tree objects inside rtx and finalizes a signed CommitObject
+// WITHOUT saving the commit row or advancing the branch head yet, allowing Remember() to include
+// CommitHash and TransitionHash directly inside core.ComputeLeaf before committing atomically!
+func (s *Service) prepareFragmentCommitTx(
 	ctx context.Context,
 	rtx *store.RepoTx,
-	stored store.FragmentRecord,
+	shard string,
+	seq int64,
+	now int64,
 	blob *memrepo.BlobObject,
 	branch, message string,
 	extraParents []memrepo.ParentRef,
-	genPub, genID string,
-) (memrepo.CommitObject, error) {
+	authorPubHex, policyCommit, ontologyCommit string,
+) (memrepo.CommitObject, string, error) {
+	return s.prepareFragmentCommitWithExtrasTx(ctx, rtx, shard, seq, now, blob, nil, branch, message, extraParents, authorPubHex, policyCommit, ontologyCommit)
+}
+
+func (s *Service) prepareFragmentCommitWithExtrasTx(
+	ctx context.Context,
+	rtx *store.RepoTx,
+	shard string,
+	seq int64,
+	now int64,
+	blob *memrepo.BlobObject,
+	extraBlobs []*memrepo.BlobObject,
+	branch, message string,
+	extraParents []memrepo.ParentRef,
+	authorPubHex, policyCommit, ontologyCommit string,
+) (memrepo.CommitObject, string, error) {
 	brName, err := memrepo.NormalizeBranch(branch)
 	if err != nil {
 		brName = memrepo.DefaultBranch
 	}
-	now := stored.CreatedAt
 	if now == 0 {
 		now = time.Now().Unix()
 	}
-	blobRaw, err := json.Marshal(blob)
-	if err != nil {
-		return memrepo.CommitObject{}, err
+	allBlobs := make([]*memrepo.BlobObject, 0, 1+len(extraBlobs))
+	allBlobs = append(allBlobs, blob)
+	for _, eb := range extraBlobs {
+		if eb != nil {
+			allBlobs = append(allBlobs, eb)
+		}
 	}
-	if err := rtx.PutMemObject(blob.BlobHash, "blob", blobRaw, now); err != nil {
-		return memrepo.CommitObject{}, err
+	for _, b := range allBlobs {
+		blobRaw, mErr := json.Marshal(b)
+		if mErr != nil {
+			return memrepo.CommitObject{}, "", mErr
+		}
+		if err := rtx.PutMemObject(b.BlobHash, "blob", blobRaw, now); err != nil {
+			return memrepo.CommitObject{}, "", err
+		}
 	}
 
 	entriesByPath := make(map[string]memrepo.TreeEntry)
 	var parents []memrepo.ParentRef
 	var expectedHead string
 
-	if br, bErr := rtx.GetMemBranch(stored.Shard, brName); bErr == nil && br.HeadCommit != "" {
+	if br, bErr := rtx.GetMemBranch(shard, brName); bErr == nil && br.HeadCommit != "" {
 		expectedHead = br.HeadCommit
 		if prevRow, rErr := rtx.GetMemCommit(br.HeadCommit); rErr == nil {
 			prevC := commitFromRow(prevRow)
@@ -157,17 +191,19 @@ func (s *Service) recordFragmentCommitTx(
 	}
 	parents = append(parents, extraParents...)
 
-	entriesByPath[blob.Path] = memrepo.TreeEntry{
-		Mode:          "100644",
-		Path:          blob.Path,
-		BlobHash:      blob.BlobHash,
-		MediaType:     blob.MediaType,
-		Size:          blob.Size,
-		ContentSHA256: blob.ContentSHA256,
-		ChirpURL:      blob.ChirpURL,
-		Encrypted:     blob.Encrypted,
-		Level:         blob.Level,
-		Class:         blob.Class,
+	for _, b := range allBlobs {
+		entriesByPath[b.Path] = memrepo.TreeEntry{
+			Mode:          "100644",
+			Path:          b.Path,
+			BlobHash:      b.BlobHash,
+			MediaType:     b.MediaType,
+			Size:          b.Size,
+			ContentSHA256: b.ContentSHA256,
+			ChirpURL:      b.ChirpURL,
+			Encrypted:     b.Encrypted,
+			Level:         b.Level,
+			Class:         b.Class,
+		}
 	}
 	entries := make([]memrepo.TreeEntry, 0, len(entriesByPath))
 	for _, e := range entriesByPath {
@@ -175,41 +211,65 @@ func (s *Service) recordFragmentCommitTx(
 	}
 	tr, err := memrepo.BuildTree(entries)
 	if err != nil {
-		return memrepo.CommitObject{}, err
+		return memrepo.CommitObject{}, "", err
 	}
 	treeRaw, err := json.Marshal(tr)
 	if err != nil {
-		return memrepo.CommitObject{}, err
+		return memrepo.CommitObject{}, "", err
 	}
 	if err := rtx.PutMemObject(tr.TreeHash, "tree", treeRaw, now); err != nil {
-		return memrepo.CommitObject{}, err
+		return memrepo.CommitObject{}, "", err
 	}
 
 	msg := strings.TrimSpace(message)
 	if msg == "" {
-		msg = fmt.Sprintf("Commit %s (#%d)", blob.Path, stored.Seq)
+		msg = fmt.Sprintf("Commit %s (#%d)", blob.Path, seq)
 	}
 	c, err := memrepo.FinalizeCommit(memrepo.CommitObject{
-		Version:      1,
-		Repo:         stored.Shard,
-		Branch:       brName,
-		Seq:          stored.Seq,
-		Parents:      parents,
-		TreeHash:     tr.TreeHash,
-		AuthorPub:    s.commitAuthorPubHex(ctx),
-		ModelID:      s.modelID.Provider + "/" + s.modelID.Release,
-		PolicyCommit: s.PolicyCommit().Hash,
-		Message:      msg,
-		Timestamp:    now,
-		AnchorTxID:   stored.AnchorTxID,
-		AnchorN:      stored.BatchN,
-		FragmentLeaf: stored.Leaf,
+		Version:        1,
+		Repo:           shard,
+		Branch:         brName,
+		Seq:            seq,
+		Parents:        parents,
+		TreeHash:       tr.TreeHash,
+		AuthorPub:      authorPubHex,
+		ModelID:        s.modelID.Provider + "/" + s.modelID.Release,
+		PolicyCommit:   policyCommit,
+		OntologyCommit: ontologyCommit,
+		Message:        msg,
+		Timestamp:      now,
+		AnchorN:        -1,
 	}, func(digest []byte) ([]byte, error) {
 		return s.port.SignDigest(ctx, digest)
 	})
 	if err != nil {
+		return memrepo.CommitObject{}, "", err
+	}
+	return c, expectedHead, nil
+}
+
+// recordFragmentCommitTx appends a signed Git/Metanet CommitObject inside an active RepoTx
+// (used by backfillLegacyRepos for pre-existing fragments).
+func (s *Service) recordFragmentCommitTx(
+	ctx context.Context,
+	rtx *store.RepoTx,
+	stored store.FragmentRecord,
+	blob *memrepo.BlobObject,
+	branch, message string,
+	extraParents []memrepo.ParentRef,
+	genPub, genID string,
+) (memrepo.CommitObject, error) {
+	c, expectedHead, err := s.prepareFragmentCommitTx(
+		ctx, rtx, stored.Shard, stored.Seq, stored.CreatedAt,
+		blob, branch, message, extraParents,
+		s.commitAuthorPubHex(ctx), s.PolicyCommit().Hash, s.OntologyHead(),
+	)
+	if err != nil {
 		return memrepo.CommitObject{}, err
 	}
+	c.AnchorTxID = stored.AnchorTxID
+	c.AnchorN = stored.BatchN
+	c.FragmentLeaf = stored.Leaf
 	if err := rtx.SaveMemCommit(rowFromCommit(c)); err != nil {
 		return memrepo.CommitObject{}, err
 	}
@@ -266,11 +326,14 @@ func (s *Service) backfillLegacyRepos(ctx context.Context) error {
 				if relPath == "" {
 					relPath = fmt.Sprintf("facts/%04d.md", f.Seq)
 				}
-				blob, bErr := s.buildFragmentBlob(relPath, f.MediaType, f.Data, nil, f.ChirpURL, f.ContentSHA256, f.BorgGroup, f.BorgEpoch, f.KeyedMeta, f.Level, f.Class)
+				blob, bErr := s.buildFragmentBlob(relPath, f.MediaType, f.Data, nil, f.ChirpURL, f.ContentSHA256, f.BorgGroup, f.BorgEpoch, f.LatticeEpoch, f.KeyedMeta, f.Level, f.Class)
 				if bErr != nil {
 					return bErr
 				}
 				msg := summarizeCommitText(string(f.Data), relPath)
+				if f.BorgGroup != "" || f.LatticeEpoch > 0 {
+					msg = fmt.Sprintf("encrypted commit (%s)", relPath)
+				}
 				if _, err := s.recordFragmentCommitTx(ctx, rtx, f, blob, memrepo.DefaultBranch, msg, nil, genPub, genID); err != nil {
 					return err
 				}
@@ -321,23 +384,24 @@ func rowFromCommit(c memrepo.CommitObject) store.MemCommitRow {
 		gitMetaJSON, _ = json.Marshal(c.GitMeta)
 	}
 	return store.MemCommitRow{
-		CommitHash:   c.CommitHash,
-		Repo:         c.Repo,
-		Branch:       c.Branch,
-		Seq:          c.Seq,
-		TreeHash:     c.TreeHash,
-		MPERoot:      c.MPERoot,
-		ParentsJSON:  pJSON,
-		AuthorPub:    c.AuthorPub,
-		ModelID:      c.ModelID,
-		PolicyCommit: c.PolicyCommit,
-		Message:      c.Message,
-		Timestamp:    c.Timestamp,
-		Signature:    c.Signature,
-		AnchorTxID:   c.AnchorTxID,
-		AnchorN:      c.AnchorN,
-		FragmentLeaf: c.FragmentLeaf,
-		GitMetaJSON:  gitMetaJSON,
+		CommitHash:     c.CommitHash,
+		Repo:           c.Repo,
+		Branch:         c.Branch,
+		Seq:            c.Seq,
+		TreeHash:       c.TreeHash,
+		MPERoot:        c.MPERoot,
+		ParentsJSON:    pJSON,
+		AuthorPub:      c.AuthorPub,
+		ModelID:        c.ModelID,
+		PolicyCommit:   c.PolicyCommit,
+		OntologyCommit: c.OntologyCommit,
+		Message:        c.Message,
+		Timestamp:      c.Timestamp,
+		Signature:      c.Signature,
+		AnchorTxID:     c.AnchorTxID,
+		AnchorN:        c.AnchorN,
+		FragmentLeaf:   c.FragmentLeaf,
+		GitMetaJSON:    gitMetaJSON,
 	}
 }
 
@@ -362,24 +426,25 @@ func commitFromRow(r store.MemCommitRow) memrepo.CommitObject {
 		signedBranch = r.OriginBranch
 	}
 	return memrepo.CommitObject{
-		Version:      1,
-		CommitHash:   r.CommitHash,
-		Repo:         signedRepo,
-		Branch:       signedBranch,
-		Seq:          r.Seq,
-		Parents:      parents,
-		TreeHash:     r.TreeHash,
-		MPERoot:      r.MPERoot,
-		AuthorPub:    r.AuthorPub,
-		ModelID:      r.ModelID,
-		PolicyCommit: r.PolicyCommit,
-		Message:      r.Message,
-		Timestamp:    r.Timestamp,
-		Signature:    r.Signature,
-		AnchorTxID:   r.AnchorTxID,
-		AnchorN:      r.AnchorN,
-		FragmentLeaf: r.FragmentLeaf,
-		GitMeta:      gitMeta,
+		Version:        1,
+		CommitHash:     r.CommitHash,
+		Repo:           signedRepo,
+		Branch:         signedBranch,
+		Seq:            r.Seq,
+		Parents:        parents,
+		TreeHash:       r.TreeHash,
+		MPERoot:        r.MPERoot,
+		AuthorPub:      r.AuthorPub,
+		ModelID:        r.ModelID,
+		PolicyCommit:   r.PolicyCommit,
+		OntologyCommit: r.OntologyCommit,
+		Message:        r.Message,
+		Timestamp:      r.Timestamp,
+		Signature:      r.Signature,
+		AnchorTxID:     r.AnchorTxID,
+		AnchorN:        r.AnchorN,
+		FragmentLeaf:   r.FragmentLeaf,
+		GitMeta:        gitMeta,
 	}
 }
 

@@ -15,9 +15,9 @@ const (
 var (
 	tagMPEV1 = []byte("nektar:mpe:v1")
 
-	ErrEmptyMPE       = errors.New("mpe: at least one field is required")
+	ErrEmptyMPE        = errors.New("mpe: at least one field is required")
 	ErrMPEFieldMissing = errors.New("mpe: requested field not present")
-	ErrMPEVerify      = errors.New("mpe: selective disclosure proof verification failed")
+	ErrMPEVerify       = errors.New("mpe: selective disclosure proof verification failed")
 )
 
 // MPEFieldLeaf computes the domain-separated double-SHA-256 leaf hash for a named field (key, val).

@@ -75,12 +75,20 @@ func TestThreeWayMergeAutoMergeAndConflicts(t *testing.T) {
 		t.Fatalf("expected docs/spec.md in AutoMerged, got %v", mRes.AutoMerged)
 	}
 
-	// Verify BOTH disjoint edits exist in merged main tree!
+	// Verify BOTH disjoint edits exist in merged main tree (and blob stays CLKA-encrypted at rest)!
 	_, tr, blobs, err := svc.RepoTree(ctx, "spec", "main", "")
 	if err != nil || tr == nil || len(tr.Entries) != 1 {
 		t.Fatalf("RepoTree after auto-merge failed: err=%v tr=%+v", err, tr)
 	}
-	mergedText := string(memrepo.ResolveBlobBytes(blobs[tr.Entries[0].BlobHash], svc.Objects()))
+	mergedBlob := blobs[tr.Entries[0].BlobHash]
+	if !mergedBlob.Encrypted || len(mergedBlob.Inline) != 0 {
+		t.Fatalf("expected merged CLKA blob to stay encrypted at rest with zero inline plaintext, got encrypted=%v inlineLen=%d", mergedBlob.Encrypted, len(mergedBlob.Inline))
+	}
+	mergedRaw, ok := svc.OpenBlobAuthorized(ctx, mergedBlob, ownerPrincipal(), false)
+	if !ok {
+		t.Fatal("OpenBlobAuthorized failed to decrypt owner's merged CLKA blob")
+	}
+	mergedText := string(mergedRaw)
 	if !strings.Contains(mergedText, "line 1: Nektar Title") || !strings.Contains(mergedText, "line 5: Signed BSV Footer") {
 		t.Fatalf("merged content missing expected disjoint edits:\n%s", mergedText)
 	}

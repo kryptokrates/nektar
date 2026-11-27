@@ -19,10 +19,13 @@ type BountySubmission struct {
 	SellerAddress string          `json:"sellerAddress"`
 	Shard         string          `json:"shard"`
 	Seq           int64           `json:"seq"`
-	HDP           string          `json:"hdp"`
-	MPERoot       string          `json:"mpeRoot,omitempty"`
-	ContentSHA256 string          `json:"contentSha256,omitempty"`
-	Text          string          `json:"text"`
+	HDP            string          `json:"hdp"`
+	MPERoot        string          `json:"mpeRoot,omitempty"`
+	ContentSHA256  string          `json:"contentSha256,omitempty"`
+	CommitHash     string          `json:"commitHash,omitempty"`
+	TransitionHash string          `json:"transitionHash,omitempty"`
+	CiphertextHex  string          `json:"ciphertextHex,omitempty"`
+	Text           string          `json:"text"`
 	ProvenanceHex string          `json:"provenanceHex,omitempty"`
 	ProofBundle   json.RawMessage `json:"proofBundle,omitempty"`
 	TS            int64           `json:"ts,omitempty"`

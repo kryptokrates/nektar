@@ -71,4 +71,24 @@ forbid (
 	}); err != nil || dec.Allow {
 		t.Fatalf("expected AuthorizeMatch forbid on >500 sat unproven seller, got %+v err=%v", dec, err)
 	}
+
+	// Fail-closed Action::"sell" distillation gate:
+	// raw fragments are denied by default, distilled fragments are allowed, and explicit allowRawOverride permits Level-0 raw.
+	seller := Principal{Type: "Agent", ID: "market-seller", Level: 0}
+	rawFrag := Resource{Type: "Fragment", ID: "work#1", Level: 0, Shard: "work", Class: "general", Distilled: false}
+	distFrag := Resource{Type: "Fragment", ID: "market-ops#1", Level: 0, Shard: "market-ops", Class: "distilled", Distilled: true}
+	highFrag := Resource{Type: "Fragment", ID: "secret#1", Level: 2, Shard: "secret", Class: "secret", Distilled: true}
+
+	if dec, err := AuthorizeSell(DefaultPolicySet, seller, rawFrag, false); err != nil || dec.Allow {
+		t.Fatalf("expected Action::sell DENIED for raw undistilled fragment, got %+v err=%v", dec, err)
+	}
+	if dec, err := AuthorizeSell(DefaultPolicySet, seller, distFrag, false); err != nil || !dec.Allow {
+		t.Fatalf("expected Action::sell ALLOWED for distilled Level-0 fragment, got %+v err=%v", dec, err)
+	}
+	if dec, err := AuthorizeSell(DefaultPolicySet, seller, rawFrag, true); err != nil || !dec.Allow {
+		t.Fatalf("expected Action::sell ALLOWED with explicit allowRawOverride, got %+v err=%v", dec, err)
+	}
+	if dec, err := AuthorizeSell(DefaultPolicySet, seller, highFrag, true); err != nil || dec.Allow {
+		t.Fatalf("expected Action::sell DENIED when resource.level > principal.level, got %+v err=%v", dec, err)
+	}
 }

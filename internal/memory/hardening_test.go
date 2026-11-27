@@ -41,7 +41,7 @@ func TestHardeningEncryptedLeafAndSignedReceipt(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newTestMemoryService(t)
 
-	// F-11: Borg-encrypted fragment TagLeafV2 MUST commit to H(E) (non-empty ciphertext) + MPERoot, not SHA256("").
+	// F-11: Borg-encrypted fragment leaf MUST commit to H(E) (non-empty ciphertext) + MPERoot, not SHA256("").
 	res, err := svc.Remember(ctx, RememberInput{
 		Shard:     "sec",
 		Text:      "classified quarterly forecast alpha",
@@ -60,20 +60,26 @@ func TestHardeningEncryptedLeafAndSignedReceipt(t *testing.T) {
 	hdpBytes, _ := hex.DecodeString(rec.HDP)
 	mpeBytes, _ := hex.DecodeString(rec.MPERoot)
 	contentBytes, _ := hex.DecodeString(rec.ContentSHA256)
-	wantLeaf := core.ToHex(core.ComputeLeafV2(core.Fragment{
-		HDP:           hdpBytes,
-		Ciphertext:    rec.Ciphertext,
-		MPERoot:       mpeBytes,
-		ContentSHA256: contentBytes,
+	commitBytes, _ := hex.DecodeString(rec.CommitHash)
+	transBytes, _ := hex.DecodeString(rec.TransitionHash)
+	wantLeaf := core.ToHex(core.ComputeLeaf(core.Fragment{
+		HDP:            hdpBytes,
+		Ciphertext:     rec.Ciphertext,
+		MPERoot:        mpeBytes,
+		ContentSHA256:  contentBytes,
+		CommitHash:     commitBytes,
+		TransitionHash: transBytes,
 	}))
-	emptyCTLeaf := core.ToHex(core.ComputeLeafV2(core.Fragment{
-		HDP:           hdpBytes,
-		Ciphertext:    nil,
-		MPERoot:       mpeBytes,
-		ContentSHA256: contentBytes,
+	emptyCTLeaf := core.ToHex(core.ComputeLeaf(core.Fragment{
+		HDP:            hdpBytes,
+		Ciphertext:     nil,
+		MPERoot:        mpeBytes,
+		ContentSHA256:  contentBytes,
+		CommitHash:     commitBytes,
+		TransitionHash: transBytes,
 	}))
 	if rec.Leaf != wantLeaf || rec.Leaf == emptyCTLeaf {
-		t.Fatalf("F-11: TagLeafV2 did not commit to ciphertext: got=%s want=%s emptyCT=%s", rec.Leaf, wantLeaf, emptyCTLeaf)
+		t.Fatalf("F-11: TagLeaf did not commit to ciphertext: got=%s want=%s emptyCT=%s", rec.Leaf, wantLeaf, emptyCTLeaf)
 	}
 
 	// F-32: GroundedAnswer signs Receipt under TagReceiptSig and VerifyReceipt verifies it.
@@ -110,6 +116,7 @@ func TestShardPackRejectsEmptyProvenanceForgery(t *testing.T) {
 	if _, err := src.Remember(ctx, RememberInput{
 		Shard:      "legit",
 		Text:       "original anchored memory",
+		Public:     true,
 		AutoAnchor: true,
 	}); err != nil {
 		t.Fatalf("Remember+AutoAnchor: %v", err)

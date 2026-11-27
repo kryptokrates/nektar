@@ -2,9 +2,13 @@ package core
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/lightwebinc/bcommon/cbor"
 )
 
 // Modality qualifies a fragment's epistemic, deontic, or temporal scope.
@@ -13,28 +17,207 @@ type Modality struct {
 	Qualifier string `json:"qualifier"`
 }
 
+// RefinementKind classifies a cryptographically committed refinement edge (K_i -> K_j) in the Knowledge DAG.
+type RefinementKind string
+
+const (
+	RefinementRefines      RefinementKind = "refines"
+	RefinementSupersedes   RefinementKind = "supersedes"
+	RefinementQualifies    RefinementKind = "qualifies"
+	RefinementContradicts  RefinementKind = "contradicts"
+	RefinementCorroborates RefinementKind = "corroborates"
+)
+
+// ValidRefinementKind reports whether k is one of the canonical DAG refinement edge kinds.
+func ValidRefinementKind(k RefinementKind) bool {
+	switch k {
+	case RefinementRefines, RefinementSupersedes, RefinementQualifies, RefinementContradicts, RefinementCorroborates:
+		return true
+	default:
+		return false
+	}
+}
+
+// RefinementEdge cryptographically binds a new fragment K_j to an existing committed fragment K_i
+// via K_i's 32-byte HDP and Leaf digests, making Knowledge DAG lineage L1-immutable (Paper §7).
+type RefinementEdge struct {
+	TargetShard string         `json:"targetShard"`
+	TargetSeq   int64          `json:"targetSeq,omitempty"`
+	TargetHDP   string         `json:"targetHdp"`  // 32-byte lowercase hex H(d_i || p_i)
+	TargetLeaf  string         `json:"targetLeaf"` // 32-byte lowercase hex Leaf_i
+	Kind        RefinementKind `json:"kind"`
+	Reason      string         `json:"reason,omitempty"`
+}
+
+// Validate checks canonical formatting of a RefinementEdge before signing/committing.
+func (e RefinementEdge) Validate() error {
+	if strings.TrimSpace(e.TargetShard) == "" {
+		return errors.New("core: refinement edge missing targetShard")
+	}
+	if !ValidRefinementKind(e.Kind) {
+		return fmt.Errorf("core: invalid refinement kind %q", e.Kind)
+	}
+	if h, err := hex.DecodeString(strings.TrimSpace(e.TargetHDP)); err != nil || len(h) != 32 {
+		return fmt.Errorf("core: refinement edge targetHdp must be 32-byte hex")
+	}
+	if l, err := hex.DecodeString(strings.TrimSpace(e.TargetLeaf)); err != nil || len(l) != 32 {
+		return fmt.Errorf("core: refinement edge targetLeaf must be 32-byte hex")
+	}
+	return nil
+}
+
 // Provenance binds source identity, timestamp, originator signature, model ID,
-// and optional modality into a fragment's commitment hash.
+// optional modality, and cryptographically committed Knowledge DAG refinement edges into H(d|p).
 type Provenance struct {
-	Source    string    `json:"source"`
-	Time      int64     `json:"time"` // unix seconds
-	Signature []byte    `json:"signature"`
-	ModelID   string    `json:"modelId"`
-	Modality  *Modality `json:"modality,omitempty"`
+	Source    string           `json:"source"`
+	Time      int64            `json:"time"` // unix seconds
+	Signature []byte           `json:"signature"`
+	ModelID   string           `json:"modelId"`
+	Modality  *Modality        `json:"modality,omitempty"`
+	Refines   []RefinementEdge `json:"refines,omitempty"`
+}
+
+// TransitionRecord encodes one deterministic step (q_i, sigma, q_j, t, h_i) of the extended
+// Merkle Automaton A' = (Q, Sigma, delta, q_0, F, T) in canonical RFC 8949 CBOR (Paper §2–§3).
+type TransitionRecord struct {
+	Version      uint64 `json:"v"`
+	Shard        string `json:"shard"`
+	Seq          int64  `json:"seq"`
+	PrevStateQ   []byte `json:"prevQ"`                  // 32B q_i
+	InputDigest  []byte `json:"inputDigest"`            // 32B H(sigma)
+	NextStateQ   []byte `json:"nextQ"`                  // 32B q_j
+	CommitHash   []byte `json:"commitHash,omitempty"`   // 32B Git CommitObject hash
+	TreeHash     []byte `json:"treeHash,omitempty"`     // 32B Git TreeObject hash
+	PolicyHash   []byte `json:"policyHash,omitempty"`   // 32B active Cedar PolicyCommitment hash
+	OntologyHash []byte `json:"ontologyHash,omitempty"` // 32B active __ontology__ head chain hash
+	Timestamp    int64  `json:"t"`
+	Hash         []byte `json:"h,omitempty"` // 32B DSHA256(TagTransitionV1 || CBOR(body))
+}
+
+func (tr TransitionRecord) cborBody() cbor.Map {
+	v := tr.Version
+	if v == 0 {
+		v = 1
+	}
+	return cbor.Map{
+		{Key: uint64(0), Val: v},
+		{Key: uint64(1), Val: tr.Shard},
+		{Key: uint64(2), Val: tr.Seq},
+		{Key: uint64(3), Val: pad32(tr.PrevStateQ)},
+		{Key: uint64(4), Val: pad32(tr.InputDigest)},
+		{Key: uint64(5), Val: pad32(tr.NextStateQ)},
+		{Key: uint64(6), Val: pad32(tr.CommitHash)},
+		{Key: uint64(7), Val: pad32(tr.TreeHash)},
+		{Key: uint64(8), Val: pad32(tr.PolicyHash)},
+		{Key: uint64(9), Val: pad32(tr.OntologyHash)},
+		{Key: uint64(10), Val: tr.Timestamp},
+	}
+}
+
+// ComputeTransitionHash deterministically hashes tr using canonical RFC 8949 CBOR.
+func ComputeTransitionHash(tr TransitionRecord) ([]byte, error) {
+	return HashCBOR(TagTransitionV1, tr.cborBody())
+}
+
+// NextStepStateQ computes the deterministic per-transition automaton state q_j from q_i and inputs.
+func NextStepStateQ(prevQ, inputDigest, commitHash, treeHash, policyHash, ontologyHash []byte, timestamp int64) ([]byte, error) {
+	return HashCBOR(TagStateQ, cbor.Map{
+		{Key: uint64(0), Val: pad32(prevQ)},
+		{Key: uint64(1), Val: pad32(inputDigest)},
+		{Key: uint64(2), Val: pad32(commitHash)},
+		{Key: uint64(3), Val: pad32(treeHash)},
+		{Key: uint64(4), Val: pad32(policyHash)},
+		{Key: uint64(5), Val: pad32(ontologyHash)},
+		{Key: uint64(6), Val: timestamp},
+	})
+}
+
+// EncodeTransitionCBOR serializes tr (including its Hash) into canonical RFC 8949 CBOR.
+func EncodeTransitionCBOR(tr TransitionRecord) ([]byte, error) {
+	h := tr.Hash
+	if len(h) != 32 {
+		var err error
+		h, err = ComputeTransitionHash(tr)
+		if err != nil {
+			return nil, err
+		}
+	}
+	m := append(tr.cborBody(), cbor.Pair{Key: uint64(11), Val: h})
+	return EncodeCBOR(m)
+}
+
+// DecodeTransitionCBOR strictly decodes and verifies a canonical CBOR TransitionRecord.
+func DecodeTransitionCBOR(raw []byte) (TransitionRecord, error) {
+	v, err := DecodeCBOR(raw)
+	if err != nil {
+		return TransitionRecord{}, fmt.Errorf("transition: decode cbor: %w", err)
+	}
+	m, err := CBORMapToUintMap(v)
+	if err != nil {
+		return TransitionRecord{}, fmt.Errorf("transition: %w", err)
+	}
+	var tr TransitionRecord
+	if tr.Version, err = cborUint(m, 0); err != nil {
+		return TransitionRecord{}, err
+	}
+	if tr.Shard, err = cborText(m, 1); err != nil {
+		return TransitionRecord{}, err
+	}
+	if tr.Seq, err = cborInt(m, 2); err != nil {
+		return TransitionRecord{}, err
+	}
+	if tr.PrevStateQ, err = cborBytes(m, 3); err != nil {
+		return TransitionRecord{}, err
+	}
+	if tr.InputDigest, err = cborBytes(m, 4); err != nil {
+		return TransitionRecord{}, err
+	}
+	if tr.NextStateQ, err = cborBytes(m, 5); err != nil {
+		return TransitionRecord{}, err
+	}
+	if tr.CommitHash, err = cborBytes(m, 6); err != nil {
+		return TransitionRecord{}, err
+	}
+	if tr.TreeHash, err = cborBytes(m, 7); err != nil {
+		return TransitionRecord{}, err
+	}
+	if tr.PolicyHash, err = cborBytes(m, 8); err != nil {
+		return TransitionRecord{}, err
+	}
+	if tr.OntologyHash, err = cborBytes(m, 9); err != nil {
+		return TransitionRecord{}, err
+	}
+	if tr.Timestamp, err = cborInt(m, 10); err != nil {
+		return TransitionRecord{}, err
+	}
+	if tr.Hash, err = cborBytes(m, 11); err != nil {
+		return TransitionRecord{}, err
+	}
+	want, err := ComputeTransitionHash(tr)
+	if err != nil {
+		return TransitionRecord{}, err
+	}
+	if !EqualBytes(want, tr.Hash) {
+		return TransitionRecord{}, errors.New("transition: hash mismatch")
+	}
+	return tr, nil
 }
 
 // Fragment is the canonical unit of Nektar verifiable memory: (d, p, H(d|p), E(d)),
-// optionally enriched with a tree path, volumetric CHIRP content commitment, and L1-bound MPE root.
+// optionally enriched with a tree path, volumetric CHIRP content commitment, L1-bound MPE root,
+// and v3 bidirectional Git CommitHash + Automaton TransitionHash commitments.
 type Fragment struct {
-	Data          []byte     `json:"d"`
-	Provenance    Provenance `json:"p"`
-	HDP           []byte     `json:"hdp,omitempty"`
-	Ciphertext    []byte     `json:"E,omitempty"`
-	Path          string     `json:"path,omitempty"`
-	MediaType     string     `json:"mediaType,omitempty"`
-	ChirpURL      string     `json:"chirpUrl,omitempty"`
-	ContentSHA256 []byte     `json:"contentSha256,omitempty"`
-	MPERoot       []byte     `json:"mpeRoot,omitempty"`
+	Data           []byte     `json:"d"`
+	Provenance     Provenance `json:"p"`
+	HDP            []byte     `json:"hdp,omitempty"`
+	Ciphertext     []byte     `json:"E,omitempty"`
+	Path           string     `json:"path,omitempty"`
+	MediaType      string     `json:"mediaType,omitempty"`
+	ChirpURL       string     `json:"chirpUrl,omitempty"`
+	ContentSHA256  []byte     `json:"contentSha256,omitempty"`
+	MPERoot        []byte     `json:"mpeRoot,omitempty"`
+	CommitHash     []byte     `json:"commitHash,omitempty"`     // 32B Git CommitObject hash bound into LeafV3
+	TransitionHash []byte     `json:"transitionHash,omitempty"` // 32B Automaton TransitionRecord hash bound into LeafV3
 }
 
 // Field prefixes b with its uint32 little-endian length.
@@ -56,7 +239,65 @@ func takeField(b []byte, off int) ([]byte, int, error) {
 	return v, off + 4 + n, nil
 }
 
+func encodeRefinesCBOR(edges []RefinementEdge) ([]byte, error) {
+	arr := make([]cbor.Value, len(edges))
+	for i, e := range edges {
+		arr[i] = cbor.Map{
+			{Key: uint64(0), Val: e.TargetShard},
+			{Key: uint64(1), Val: e.TargetSeq},
+			{Key: uint64(2), Val: strings.ToLower(strings.TrimSpace(e.TargetHDP))},
+			{Key: uint64(3), Val: strings.ToLower(strings.TrimSpace(e.TargetLeaf))},
+			{Key: uint64(4), Val: string(e.Kind)},
+			{Key: uint64(5), Val: e.Reason},
+		}
+	}
+	return EncodeCBOR(arr)
+}
+
+func decodeRefinesCBOR(raw []byte) ([]RefinementEdge, error) {
+	v, err := DecodeCBOR(raw)
+	if err != nil {
+		return nil, err
+	}
+	arr, ok := v.([]cbor.Value)
+	if !ok {
+		return nil, errors.New("parse: refines expected CBOR array")
+	}
+	out := make([]RefinementEdge, len(arr))
+	for i, item := range arr {
+		m, err := CBORMapToUintMap(item)
+		if err != nil {
+			return nil, err
+		}
+		var e RefinementEdge
+		if e.TargetShard, err = cborText(m, 0); err != nil {
+			return nil, err
+		}
+		if e.TargetSeq, err = cborInt(m, 1); err != nil {
+			return nil, err
+		}
+		if e.TargetHDP, err = cborText(m, 2); err != nil {
+			return nil, err
+		}
+		if e.TargetLeaf, err = cborText(m, 3); err != nil {
+			return nil, err
+		}
+		kindStr, err := cborText(m, 4)
+		if err != nil {
+			return nil, err
+		}
+		e.Kind = RefinementKind(kindStr)
+		if e.Reason, err = cborText(m, 5); err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
 // SerializeProvenance produces the exact canonical binary encoding of p.
+// When Refines is empty, output is byte-identical to v0.1; when Refines is present,
+// an explicit modality slot (empty if nil) is followed by canonical CBOR RefinementEdges.
 func SerializeProvenance(p Provenance) []byte {
 	parts := [][]byte{
 		Field([]byte(p.Source)),
@@ -64,9 +305,16 @@ func SerializeProvenance(p Provenance) []byte {
 		Field(p.Signature),
 		Field([]byte(p.ModelID)),
 	}
-	if p.Modality != nil {
-		mb, _ := CanonicalJSON(p.Modality)
+	if p.Modality != nil || len(p.Refines) > 0 {
+		var mb []byte
+		if p.Modality != nil {
+			mb, _ = CanonicalJSON(p.Modality)
+		}
 		parts = append(parts, Field(mb))
+	}
+	if len(p.Refines) > 0 {
+		rb, _ := encodeRefinesCBOR(p.Refines)
+		parts = append(parts, Field(rb))
 	}
 	return Concat(parts...)
 }
@@ -96,18 +344,32 @@ func ParseProvenance(b []byte) (Provenance, error) {
 		ModelID:   string(mid),
 	}
 	if next < len(b) {
-		mb, end, err := takeField(b, next)
+		mb, afterMod, err := takeField(b, next)
+		if err != nil {
+			return Provenance{}, err
+		}
+		if len(mb) > 0 {
+			var m Modality
+			if err := json.Unmarshal(mb, &m); err != nil {
+				return Provenance{}, fmt.Errorf("parse: modality: %w", err)
+			}
+			p.Modality = &m
+		}
+		next = afterMod
+	}
+	if next < len(b) {
+		rb, end, err := takeField(b, next)
 		if err != nil {
 			return Provenance{}, err
 		}
 		if end != len(b) {
 			return Provenance{}, errors.New("parse: trailing bytes in provenance")
 		}
-		var m Modality
-		if err := json.Unmarshal(mb, &m); err != nil {
-			return Provenance{}, fmt.Errorf("parse: modality: %w", err)
+		edges, err := decodeRefinesCBOR(rb)
+		if err != nil {
+			return Provenance{}, fmt.Errorf("parse: refines: %w", err)
 		}
-		p.Modality = &m
+		p.Refines = edges
 	}
 	return p, nil
 }
@@ -139,70 +401,21 @@ func ComputeEH(ciphertext []byte) []byte {
 	return SHA256(ciphertext)
 }
 
-// ComputeLeafV2 computes the sole canonical L1-bound leaf committing to framed H(d|p), H(E),
-// the 32-byte MPE root (binding selective-disclosure proofs directly to the anchored BSV Merkle root),
-// and the 32-byte volumetric content SHA-256 (0x00*32 when no external CHIRP blob is attached).
-func ComputeLeafV2(f Fragment) []byte {
+// ComputeLeaf computes the sole canonical L1-bound Merkle Automaton leaf committing to:
+// H(d|p) (including Refines & Modality), H(E), MPERoot, ContentSHA256, Git CommitHash, and TransitionHash.
+// Collapses the split-brain between linear fragments, Git Memory Repo DAG, and Automaton transitions.
+func ComputeLeaf(f Fragment) []byte {
 	hdp := f.HDP
 	if len(hdp) == 0 {
 		hdp = ComputeHDPV2(f.Data, f.Provenance)
 	}
-	mpeRoot := Zero32Bytes()
-	if len(f.MPERoot) == 32 {
-		copy(mpeRoot, f.MPERoot)
-	}
-	contentHash := Zero32Bytes()
-	if len(f.ContentSHA256) == 32 {
-		copy(contentHash, f.ContentSHA256)
-	}
-	return SHA256(Concat(TagLeafV2, hdp, ComputeEH(f.Ciphertext), mpeRoot, contentHash))
-}
-
-// SerializeFragment encodes (d | prov | hdp | E) with u32le length framing.
-func SerializeFragment(f Fragment) []byte {
-	hdp := f.HDP
-	if len(hdp) == 0 {
-		hdp = ComputeHDPV2(f.Data, f.Provenance)
-	}
-	return Concat(
-		Field(f.Data),
-		Field(SerializeProvenance(f.Provenance)),
-		Field(hdp),
-		Field(f.Ciphertext),
-	)
-}
-
-// ParseFragment decodes SerializeFragment bytes.
-func ParseFragment(b []byte) (Fragment, error) {
-	d, next, err := takeField(b, 0)
-	if err != nil {
-		return Fragment{}, err
-	}
-	pv, next, err := takeField(b, next)
-	if err != nil {
-		return Fragment{}, err
-	}
-	hd, next, err := takeField(b, next)
-	if err != nil {
-		return Fragment{}, err
-	}
-	ev, end, err := takeField(b, next)
-	if err != nil {
-		return Fragment{}, err
-	}
-	if end != len(b) {
-		return Fragment{}, errors.New("parse: trailing bytes in fragment")
-	}
-	p, err := ParseProvenance(pv)
-	if err != nil {
-		return Fragment{}, err
-	}
-	f := Fragment{Data: d, Provenance: p}
-	if len(hd) > 0 {
-		f.HDP = hd
-	}
-	if len(ev) > 0 {
-		f.Ciphertext = ev
-	}
-	return f, nil
+	return SHA256(Concat(
+		TagLeaf,
+		pad32(hdp),
+		ComputeEH(f.Ciphertext),
+		pad32(f.MPERoot),
+		pad32(f.ContentSHA256),
+		pad32(f.CommitHash),
+		pad32(f.TransitionHash),
+	))
 }

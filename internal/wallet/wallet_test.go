@@ -352,11 +352,11 @@ func TestWalletConcurrentLoad(t *testing.T) {
 
 	destAddr, _ := randomTestAddress(t)
 	var (
-		wg         sync.WaitGroup
-		succeeded  atomic.Int64
-		totalSent  atomic.Uint64
-		errMu      sync.Mutex
-		errs       []error
+		wg        sync.WaitGroup
+		succeeded atomic.Int64
+		totalSent atomic.Uint64
+		errMu     sync.Mutex
+		errs      []error
 	)
 	start := time.Now()
 	for w := 0; w < workers; w++ {

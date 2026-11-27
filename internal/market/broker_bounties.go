@@ -18,6 +18,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/distill"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/policy"
@@ -78,6 +79,13 @@ func (b *Broker) SellToHub(ctx context.Context, hubURL, bountyID, shard string, 
 	if target == nil {
 		return nil, fmt.Errorf("market: fragment %s#%d not found or unauthorized for external disclosure", shard, seq)
 	}
+	if sr := distill.Scrub(target.Text); sr.Verdict == distill.ScrubBlocked {
+		ruleID := "secret-detected"
+		if len(sr.BlockedRules) > 0 {
+			ruleID = sr.BlockedRules[0]
+		}
+		return nil, fmt.Errorf("market: fragment %s#%d blocked from Hub bounty by fail-closed secret/PII scrubber (%s)", shard, target.Seq, ruleID)
+	}
 	if target.AnchorTxID == "" && netName == "memory" && b.mem.Chain().BalanceSats() > 1000 {
 		_, _ = b.mem.AnchorShard(ctx, shard)
 	}
@@ -96,13 +104,18 @@ func (b *Broker) SellToHub(ctx context.Context, hubURL, bountyID, shard string, 
 	if err != nil {
 		return nil, err
 	}
-	var provHex, mpeRootHex, contentSHA256Hex string
+	var provHex, mpeRootHex, contentSHA256Hex, commitHashHex, transitionHashHex, ctHex string
 	if rec, gErr := b.mem.DB().GetFragment(shard, target.Seq); gErr == nil {
 		if len(rec.Provenance) > 0 {
 			provHex = hex.EncodeToString(rec.Provenance)
 		}
 		mpeRootHex = rec.MPERoot
 		contentSHA256Hex = rec.ContentSHA256
+		commitHashHex = rec.CommitHash
+		transitionHashHex = rec.TransitionHash
+		if len(rec.Ciphertext) > 0 {
+			ctHex = hex.EncodeToString(rec.Ciphertext)
+		}
 	}
 	provPub, err := b.mem.Chain().SigningPubKey(ctx)
 	if err != nil {
@@ -110,19 +123,22 @@ func (b *Broker) SellToHub(ctx context.Context, hubURL, bountyID, shard string, 
 	}
 	canonicalHDP := strings.ToLower(strings.TrimSpace(target.HDP))
 	sub := hub.BountySubmission{
-		BountyID:      bountyID,
-		SellerPub:     b.PubHex(),
-		ProvenancePub: hex.EncodeToString(provPub.Compressed()),
-		SellerAddress: addr,
-		Shard:         shard,
-		Seq:           target.Seq,
-		HDP:           canonicalHDP,
-		MPERoot:       mpeRootHex,
-		ContentSHA256: contentSHA256Hex,
-		Text:          target.Text,
-		ProvenanceHex: provHex,
-		ProofBundle:   pbRaw,
-		TS:            time.Now().Unix(),
+		BountyID:       bountyID,
+		SellerPub:      b.PubHex(),
+		ProvenancePub:  hex.EncodeToString(provPub.Compressed()),
+		SellerAddress:  addr,
+		Shard:          shard,
+		Seq:            target.Seq,
+		HDP:            canonicalHDP,
+		MPERoot:        mpeRootHex,
+		ContentSHA256:  contentSHA256Hex,
+		CommitHash:     commitHashHex,
+		TransitionHash: transitionHashHex,
+		CiphertextHex:  ctHex,
+		Text:           target.Text,
+		ProvenanceHex:  provHex,
+		ProofBundle:    pbRaw,
+		TS:             time.Now().Unix(),
 	}
 	signable := sub.Signable(canonicalHDP)
 	if sig, sErr := bstack.SignArtifact(b.engine.saleKey, signable); sErr == nil {

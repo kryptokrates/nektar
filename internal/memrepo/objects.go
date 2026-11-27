@@ -44,6 +44,7 @@ type BlobObject struct {
 	Encrypted     bool   `json:"encrypted,omitempty"`
 	BorgGroup     string `json:"borgGroup,omitempty"`
 	BorgEpoch     int64  `json:"borgEpoch,omitempty"`
+	LatticeEpoch  uint64 `json:"latticeEpoch,omitempty"`
 	KeyedMeta     []byte `json:"keyedMeta,omitempty"`
 	Level         int    `json:"level,omitempty"`
 	Class         string `json:"class,omitempty"`
@@ -96,10 +97,11 @@ type CommitObject struct {
 	Parents      []ParentRef    `json:"parents,omitempty"`
 	TreeHash     string         `json:"treeHash"`
 	MPERoot      string         `json:"mpeRoot"`
-	AuthorPub    string         `json:"authorPub"`
-	ModelID      string         `json:"modelId"`
-	PolicyCommit string         `json:"policyCommit,omitempty"`
-	Message      string         `json:"message"`
+	AuthorPub      string         `json:"authorPub"`
+	ModelID        string         `json:"modelId"`
+	PolicyCommit   string         `json:"policyCommit,omitempty"`
+	OntologyCommit string         `json:"ontologyCommit,omitempty"`
+	Message        string         `json:"message"`
 	Timestamp    int64          `json:"timestamp"`
 	Signature    string         `json:"signature"`
 	AnchorTxID   string         `json:"anchorTxid,omitempty"`
@@ -238,9 +240,15 @@ func BuildBlob(objects bstack.ObjectStore, relPath, mediaType string, raw []byte
 	return b, chirpHashes, nil
 }
 
-// BuildEncryptedBlob constructs a canonical content-addressed BlobObject for a Borg-encrypted
+// BuildEncryptedBlob constructs a canonical content-addressed BlobObject for a Borg- or CLKA-encrypted
 // fragment WITHOUT ever storing plaintext inline or writing plaintext bytes to CHIRP.
 func BuildEncryptedBlob(relPath, mediaType string, size int64, contentSHA256Hex, borgGroup string, borgEpoch int64, keyedMeta []byte) (*BlobObject, error) {
+	return BuildEncryptedBlobWithLattice(relPath, mediaType, size, contentSHA256Hex, "", borgGroup, borgEpoch, 0, keyedMeta)
+}
+
+// BuildEncryptedBlobWithLattice constructs a canonical content-addressed BlobObject for an encrypted
+// fragment (BorgGroup or CLKA lattice epoch), optionally referencing encrypted volumetric ciphertext via chirpURL.
+func BuildEncryptedBlobWithLattice(relPath, mediaType string, size int64, contentSHA256Hex, chirpURL, borgGroup string, borgEpoch int64, latticeEpoch uint64, keyedMeta []byte) (*BlobObject, error) {
 	normPath, err := NormalizePath(relPath)
 	if err != nil {
 		return nil, err
@@ -258,9 +266,11 @@ func BuildEncryptedBlob(relPath, mediaType string, size int64, contentSHA256Hex,
 		MediaType:     mediaType,
 		Size:          size,
 		ContentSHA256: contentSHA256Hex,
+		ChirpURL:      strings.TrimSpace(chirpURL),
 		Encrypted:     true,
 		BorgGroup:     borgGroup,
 		BorgEpoch:     borgEpoch,
+		LatticeEpoch:  latticeEpoch,
 		KeyedMeta:     kmCopy,
 	}
 	h, err := ComputeBlobHash(*b)
@@ -287,6 +297,7 @@ func ComputeBlobHash(b BlobObject) (string, error) {
 		Encrypted       bool   `json:"encrypted,omitempty"`
 		BorgGroup       string `json:"borgGroup,omitempty"`
 		BorgEpoch       int64  `json:"borgEpoch,omitempty"`
+		LatticeEpoch    uint64 `json:"latticeEpoch,omitempty"`
 		KeyedMetaSHA256 string `json:"keyedMetaSha256,omitempty"`
 	}{
 		Path:            b.Path,
@@ -297,6 +308,7 @@ func ComputeBlobHash(b BlobObject) (string, error) {
 		Encrypted:       b.Encrypted,
 		BorgGroup:       b.BorgGroup,
 		BorgEpoch:       b.BorgEpoch,
+		LatticeEpoch:    b.LatticeEpoch,
 		KeyedMetaSHA256: keyedMetaSHA,
 	}
 	raw, err := core.CanonicalJSON(canon)

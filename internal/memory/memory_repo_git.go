@@ -170,6 +170,39 @@ func (s *Service) BuildRepoGoGitProjectionAuthorized(ctx context.Context, repo s
 	}
 	trees, blobs, _ := s.collectCommitDAGObjects(repo, commits, principal, disallowBorg, false)
 
+	// Ephemerally decrypt authorized CLKA blobs in memory for go-git projection (Myers diffs,
+	// git blame, 3-way diff3 merges, revert, cherry-pick) while NEVER writing plaintext to SQLite/CHIRP.
+	// Unauthorized levels fail closed inside OpenFragmentForPrincipal and remain encrypted opaque blobs!
+	projTrees := make(map[string]memrepo.TreeObject, len(trees))
+	projBlobs := make(map[string]memrepo.BlobObject, len(blobs))
+	decryptedHashes := make(map[string]bool)
+	for bh, b := range blobs {
+		if b.Encrypted && b.BorgGroup == "" && b.LatticeEpoch > 0 && len(b.KeyedMeta) > 0 {
+			if pt, ok := s.openBlobPlaintext(ctx, b, principal, "", nil, disallowBorg, false); ok {
+				cp := b
+				cp.Encrypted = false
+				cp.Inline = pt
+				projBlobs[bh] = cp
+				decryptedHashes[bh] = true
+				continue
+			}
+		}
+		projBlobs[bh] = b
+	}
+	for th, tr := range trees {
+		cp := memrepo.TreeObject{
+			TreeHash: tr.TreeHash,
+			Entries:  make([]memrepo.TreeEntry, len(tr.Entries)),
+		}
+		for i, e := range tr.Entries {
+			if decryptedHashes[e.BlobHash] {
+				e.Encrypted = false
+			}
+			cp.Entries[i] = e
+		}
+		projTrees[th] = cp
+	}
+
 	branches := make([]memrepo.BranchRef, 0, len(brRows))
 	for _, b := range brRows {
 		branches = append(branches, memrepo.BranchRef{
@@ -187,7 +220,7 @@ func (s *Service) BuildRepoGoGitProjectionAuthorized(ctx context.Context, repo s
 		tags = append(tags, tagFromRow(tg))
 	}
 
-	proj, err := memrepo.BuildGoGitRepo(commits, trees, blobs, branches, tags, s.objects)
+	proj, err := memrepo.BuildGoGitRepo(commits, projTrees, projBlobs, branches, tags, s.objects)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -199,12 +232,12 @@ func (s *Service) BuildRepoGoGitProjectionAuthorized(ctx context.Context, repo s
 	s.projCache[cacheKey] = &cachedGoGitProjection{
 		proj:    proj,
 		commits: commits,
-		trees:   trees,
-		blobs:   blobs,
+		trees:   projTrees,
+		blobs:   projBlobs,
 	}
 	s.projCacheMu.Unlock()
 
-	return proj, commits, trees, blobs, nil
+	return proj, commits, projTrees, projBlobs, nil
 }
 
 // RepoDiffPatch computes Myers unified line-by-line diffs between fromRef and toRef via go-git/v5.
@@ -303,7 +336,19 @@ func (s *Service) ForkRepo(ctx context.Context, sourceRepo, sourceBranch, newRep
 	files := make(map[string][]byte, len(srcTree.Entries))
 	existingEntries := make(map[string]memrepo.TreeEntry, len(srcTree.Entries))
 	for _, e := range srcTree.Entries {
-		if b, ok := srcBlobs[e.BlobHash]; ok && !b.Encrypted && !b.Forgotten {
+		b, ok := srcBlobs[e.BlobHash]
+		if !ok || b.Forgotten || b.BorgGroup != "" {
+			continue
+		}
+		if b.Encrypted && b.LatticeEpoch > 0 {
+			if pt, opened := s.openBlobPlaintext(ctx, b, readPrincipal, "", nil, true, false); opened {
+				files[e.Path] = pt
+				e.Encrypted = true
+				existingEntries[e.Path] = e
+			}
+			continue
+		}
+		if !b.Encrypted {
 			files[e.Path] = memrepo.ResolveBlobBytes(b, s.objects)
 			existingEntries[e.Path] = e
 		}

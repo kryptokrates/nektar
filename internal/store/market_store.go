@@ -18,12 +18,15 @@ type HostRecord struct {
 
 // SellListing persists a shard offered for sale on the knowledge market.
 type SellListing struct {
-	Shard       string   `json:"shard"`
-	Domains     []string `json:"domains"`
-	PriceSats   uint64   `json:"priceSats"`
-	Description string   `json:"description,omitempty"`
-	Active      bool     `json:"active"`
-	CreatedAt   int64    `json:"createdAt"`
+	Shard              string   `json:"shard"`
+	Domains            []string `json:"domains"`
+	PriceSats          uint64   `json:"priceSats"`
+	Description        string   `json:"description,omitempty"`
+	OntologyID         string   `json:"ontologyId,omitempty"`
+	AllowRaw           bool     `json:"allowRaw,omitempty"`
+	DynamicPricingJSON []byte   `json:"dynamicPricingJson,omitempty"`
+	Active             bool     `json:"active"`
+	CreatedAt          int64    `json:"createdAt"`
 }
 
 // OperatorPolicyRecord persists an operator-approved market spending/selling policy.
@@ -426,6 +429,21 @@ CREATE INDEX IF NOT EXISTS idx_obligations_status ON obligations(status, deadlin
 			}
 			return ensureColumnTx(tx, "deals", "deal_receipt_json", "BLOB")
 		}); err != nil {
+			return err
+		}
+	}
+	if userVer < 6 {
+		if err := runVersionStep(6, migrateDistillTx); err != nil {
+			return err
+		}
+	}
+	if userVer < 7 {
+		if err := runVersionStep(7, migrateReputationTx); err != nil {
+			return err
+		}
+	}
+	if userVer < 8 {
+		if err := runVersionStep(8, migrateEconomicsTx); err != nil {
 			return err
 		}
 	}

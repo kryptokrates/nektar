@@ -31,7 +31,7 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 	// --- Core Agent Profile Tools (all routed through canonical Toolbox.Exec* methods) ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "remember",
-		Description: "Commit or edit a provenance-signed memory file/fragment in a Memory Repo (supports branch, path, volumetric blobBase64/chirpUrl, BRC-369 Borg encryption, L1-bound TagLeafV2 MPE, and NektarAnchor UTXO anchoring).",
+		Description: "Commit or edit a provenance-signed memory fragment/file in a Memory Repo (CLKA private-by-default unless public:true, supports branch, path, triples, modality, signed DAG refines edges, volumetric blobBase64/chirpUrl, BRC-369 Borg encryption, unified TagLeaf MPE+Commit+Transition, and NektarAnchor UTXO anchoring).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, raw RememberToolInput) (*mcp.CallToolResult, any, error) {
 		res, err := tb.ExecRemember(ctx, raw)
 		if err != nil {
@@ -56,6 +56,17 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		Description: "Full Git + SingularGrit Memory Repo tool anchored via strict BSV NektarAnchor UTXO lineage (action: list|log|show|tree|read|diff|blame|verify|commit|rm|branch|fork|merge|cherryPick|revert|tag|export|import|prove|rotate).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in RepoToolInput) (*mcp.CallToolResult, any, error) {
 		res, err := tb.ExecRepo(ctx, in)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonToolResult(res)
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "ontology",
+		Description: "Manage committed domain TBox ontologies (ont-<domain>), cross-ontology Bridge Shards, bounded JevGraph ABox extraction, and Mangle-gated edge review (action: init|list|show|validate|extract|edges|review|align).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in OntologyToolInput) (*mcp.CallToolResult, any, error) {
+		res, err := tb.ExecOntology(ctx, in)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -170,8 +181,74 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		return jsonToolResult(tb.ExecPeers(ctx, in.Refresh))
 	})
 
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "lineage",
+		Description: "Inspect the verified cryptographic Knowledge DAG (ancestors, descendants, signed refines/supersedes edges, and modality) for a fragment.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in LineageToolInput) (*mcp.CallToolResult, any, error) {
+		res, err := tb.ExecLineage(ctx, in)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonToolResult(res)
+	})
+
 	// --- Operator Profile Tools ---
 	if tb.Profile() != "agent" {
+		mcp.AddTool(srv, &mcp.Tool{
+			Name:        "commitOntology",
+			Description: "Compile and commit DL-Lite / OWL 2 RL / deontic axioms into the immutable __ontology__ shard (Memory as Law).",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in CommitOntologyInput) (*mcp.CallToolResult, any, error) {
+			res, err := tb.ExecCommitOntology(ctx, in)
+			if err != nil {
+				return nil, nil, err
+			}
+			return jsonToolResult(res)
+		})
+
+		mcp.AddTool(srv, &mcp.Tool{
+			Name:        "provisionClearance",
+			Description: "Provision a downward-only CLKA clearance bundle (+ manifest, optionally ECDH-sealed to a recipient pubkey) for a shard.",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in ProvisionClearanceInput) (*mcp.CallToolResult, any, error) {
+			res, err := tb.ExecProvisionClearance(ctx, in)
+			if err != nil {
+				return nil, nil, err
+			}
+			return jsonToolResult(res)
+		})
+
+		mcp.AddTool(srv, &mcp.Tool{
+			Name:        "rotateLattice",
+			Description: "Rotate a shard's CLKA encryption epoch for forward secrecy.",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in RotateLatticeInput) (*mcp.CallToolResult, any, error) {
+			res, err := tb.ExecRotateLattice(ctx, in)
+			if err != nil {
+				return nil, nil, err
+			}
+			return jsonToolResult(res)
+		})
+
+		mcp.AddTool(srv, &mcp.Tool{
+			Name:        "compactProve",
+			Description: "Build and SPV-verify an O(log N) MMR CompactProofBundle proving a fragment directly against the head NektarAnchor UTXO.",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in CompactProveInput) (*mcp.CallToolResult, any, error) {
+			res, err := tb.ExecCompactProve(ctx, in)
+			if err != nil {
+				return nil, nil, err
+			}
+			return jsonToolResult(res)
+		})
+
+		mcp.AddTool(srv, &mcp.Tool{
+			Name:        "consistencyProof",
+			Description: "Build an O(log N) MMR append-only consistency proof proving anchor batch fromN is an unaltered prefix of batch toN.",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in ConsistencyProofInput) (*mcp.CallToolResult, any, error) {
+			res, err := tb.ExecConsistencyProof(ctx, in)
+			if err != nil {
+				return nil, nil, err
+			}
+			return jsonToolResult(res)
+		})
+
 		type anchorArgs struct {
 			Shard string `json:"shard"`
 		}

@@ -52,7 +52,7 @@ func (s *Service) CommitSystemAuditRecord(
 	if mErr != nil || mpe == nil {
 		return nil, nil, fmt.Errorf("memory: build %s audit MPE: %w", shard, mErr)
 	}
-	leaf := core.ComputeLeafV2(core.Fragment{
+	leaf := core.ComputeLeaf(core.Fragment{
 		Data:       data,
 		Provenance: prov,
 		HDP:        hdp,
@@ -66,6 +66,7 @@ func (s *Service) CommitSystemAuditRecord(
 		Data:       data,
 		Provenance: provBytes,
 		Class:      class,
+		Public:     true,
 		BatchN:     -1,
 		LeafIndex:  -1,
 		CreatedAt:  now,

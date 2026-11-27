@@ -31,6 +31,8 @@ type WatchKnowledgeInput struct {
 	Domains       []string `json:"domains,omitempty"`
 	Domain        string   `json:"domain,omitempty"`
 	Query         string   `json:"query,omitempty"`
+	OntologyID    string   `json:"ontologyId,omitempty"`
+	AllowBridge   bool     `json:"allowBridge,omitempty"`
 	MaxSats       uint64   `json:"maxSats,omitempty"`
 	TargetShard   string   `json:"targetShard,omitempty"`
 	TTLSeconds    int64    `json:"ttlSeconds,omitempty"`
@@ -88,6 +90,8 @@ func (tb *Toolbox) ExecWatchKnowledge(ctx context.Context, in WatchKnowledgeInpu
 			OrderID:     in.OrderID,
 			Domains:     doms,
 			Query:       in.Query,
+			OntologyID:  in.OntologyID,
+			AllowBridge: in.AllowBridge,
 			MaxSats:     in.MaxSats,
 			TargetShard: in.TargetShard,
 			TTLSeconds:  in.TTLSeconds,
@@ -97,12 +101,17 @@ func (tb *Toolbox) ExecWatchKnowledge(ctx context.Context, in WatchKnowledgeInpu
 }
 
 type SellToolInput struct {
-	Shard       string   `json:"shard"`
-	Domains     []string `json:"domains,omitempty"`
-	Domain      string   `json:"domain,omitempty"`
-	PriceSats   uint64   `json:"priceSats,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Desc        string   `json:"desc,omitempty"`
+	Shard          string   `json:"shard"`
+	Domains        []string `json:"domains,omitempty"`
+	Domain         string   `json:"domain,omitempty"`
+	PriceSats      uint64   `json:"priceSats,omitempty"`
+	Description    string   `json:"description,omitempty"`
+	Desc           string   `json:"desc,omitempty"`
+	OntologyID     string   `json:"ontologyId,omitempty"`
+	AllowRaw       bool     `json:"allowRaw,omitempty"`
+	DynamicPricing bool     `json:"dynamicPricing,omitempty"`
+	FloorSats      uint64   `json:"floorSats,omitempty"`
+	CeilingSats    uint64   `json:"ceilingSats,omitempty"`
 	// Optional: submit directly to a Hub knowledge bounty instead of listing!
 	BountyID string `json:"bountyId,omitempty"`
 	HubURL   string `json:"hubUrl,omitempty"`
@@ -125,10 +134,15 @@ func (tb *Toolbox) ExecSell(ctx context.Context, in SellToolInput) (any, error) 
 		desc = in.Desc
 	}
 	return tb.broker.ArmSell(ctx, market.SellInput{
-		Shard:       in.Shard,
-		Domains:     doms,
-		PriceSats:   in.PriceSats,
-		Description: desc,
+		Shard:          in.Shard,
+		Domains:        doms,
+		PriceSats:      in.PriceSats,
+		Description:    desc,
+		OntologyID:     in.OntologyID,
+		AllowRaw:       in.AllowRaw,
+		DynamicPricing: in.DynamicPricing,
+		FloorSats:      in.FloorSats,
+		CeilingSats:    in.CeilingSats,
 	})
 }
 

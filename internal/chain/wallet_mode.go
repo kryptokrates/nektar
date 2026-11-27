@@ -31,10 +31,10 @@ type walletModeMarker struct {
 //   - Empty (""): defaults to "embedded" so Go library callers & unit tests stay hermetic.
 //   - "auto" (CLI default on testnet/main):
 //     1. If <dir>/wallet-mode.json already exists, stick to its recorded mode (fail closed if
-//        pinned to "client" and BSV Desktop is currently closed — never silently create a local wallet).
+//     pinned to "client" and BSV Desktop is currently closed — never silently create a local wallet).
 //     2. If legacy embedded wallet files already exist in <dir>/wallet/, stick to "embedded".
 //     3. On a fresh data dir, fast-probe BSV Desktop on wireURL (<= 250ms when offline); if running,
-//        unlocked, and on the matching network, choose "client" (zero local wallet); else "embedded".
+//     unlocked, and on the matching network, choose "client" (zero local wallet); else "embedded".
 func resolveWalletMode(ctx context.Context, dir, netName, requestedMode, wireURL string) (mode string, stickyFromDisk bool, err error) {
 	req := strings.ToLower(strings.TrimSpace(requestedMode))
 	if req == "" {

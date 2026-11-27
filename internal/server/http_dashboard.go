@@ -60,6 +60,7 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 
 	netSec := a.buildDashboardMarketAndNet(ctx, listings)
 	autoSec := a.buildDashboardAutomation(ctx, deals, listings, pendingApprs)
+	econSec := a.buildDashboardAutonomous(ctx, cutoff24h)
 
 	steps := []map[string]any{
 		{"name": "memory seeded", "done": totalRecs > 0},
@@ -247,10 +248,12 @@ func (a *App) buildDashboardFeed() []map[string]any {
 	recentFrags, _ := a.mem.DB().ListRecentFragments(30)
 	feedRows := make([]map[string]any, 0, len(recentFrags))
 	for _, f := range recentFrags {
-		encrypted := f.BorgGroup != ""
+		encrypted := f.BorgGroup != "" || f.LatticeEpoch > 0
 		txt := ""
-		if encrypted {
+		if f.BorgGroup != "" {
 			txt = fmt.Sprintf("[encrypted · borg:%s · epoch %d]", f.BorgGroup, f.BorgEpoch)
+		} else if f.LatticeEpoch > 0 {
+			txt = fmt.Sprintf("[encrypted · clka · L%d · epoch %d]", f.Level, f.LatticeEpoch)
 		} else {
 			txt = shortStr(string(f.Data), 500)
 		}

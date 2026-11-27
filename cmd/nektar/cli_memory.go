@@ -19,16 +19,22 @@ func cmdRemember(args []string) error {
 	shard := fs.String("shard", "default", "Target shard name")
 	text := fs.String("text", "", "Memory fragment text")
 	group := fs.String("group", "", "Optional Borg group ID for BRC-369 encryption")
+	publicFlag := fs.Bool("public", false, "Opt out of private-by-default CLKA encryption")
+	ontology := fs.String("ontology", "", "Optional committed domain ontology repo (ont-<domain>) or 64-hex OntologyID for JevGraph extraction")
+	ontologyStrict := fs.Bool("ontology-strict", false, "Fail closed on -ontology writes if Jev System One evaluator is offline")
 	anchor := fs.Bool("anchor", false, "Anchor immediately on BSV")
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
 
 	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "remember", map[string]any{
-			"shard":      *shard,
-			"text":       *text,
-			"borgGroup":  *group,
-			"autoAnchor": *anchor,
+			"shard":          *shard,
+			"text":           *text,
+			"borgGroup":      *group,
+			"public":         *publicFlag,
+			"ontology":       *ontology,
+			"ontologyStrict": *ontologyStrict,
+			"autoAnchor":     *anchor,
 		})
 		if err != nil {
 			return err
@@ -44,10 +50,13 @@ func cmdRemember(args []string) error {
 	defer rt.closeFn()
 
 	res, err := rt.mem.Remember(ctx, memory.RememberInput{
-		Shard:      *shard,
-		Text:       *text,
-		BorgGroup:  *group,
-		AutoAnchor: *anchor,
+		Shard:          *shard,
+		Text:           *text,
+		BorgGroup:      *group,
+		Public:         *publicFlag,
+		Ontology:       *ontology,
+		OntologyStrict: *ontologyStrict,
+		AutoAnchor:     *anchor,
 	})
 	if err != nil {
 		return err

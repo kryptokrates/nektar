@@ -32,6 +32,7 @@ func (s *Service) EnsureWelcome(ctx context.Context) (bool, error) {
 			Text:   txt,
 			Source: "nektar:welcome",
 			Class:  "guide",
+			Public: true,
 		}); err != nil {
 			return false, fmt.Errorf("welcome seed: %w", err)
 		}

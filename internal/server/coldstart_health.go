@@ -22,11 +22,11 @@ type DomainDensityHealth struct {
 
 // ColdStartBars documents the explicit mechanical thresholds defining a tipped atomic network.
 type ColdStartBars struct {
-	FillRateMin          float64 `json:"fillRateMin"`
-	ZeroRateMax          float64 `json:"zeroRateMax"`
-	MedianTimeToOfferMs  int64   `json:"medianTimeToOfferMs"`
-	OrganicSellersMin    int     `json:"organicSellersMin"`
-	HubSupplyShareMax    float64 `json:"hubSupplyShareMax"`
+	FillRateMin         float64 `json:"fillRateMin"`
+	ZeroRateMax         float64 `json:"zeroRateMax"`
+	MedianTimeToOfferMs int64   `json:"medianTimeToOfferMs"`
+	OrganicSellersMin   int     `json:"organicSellersMin"`
+	HubSupplyShareMax   float64 `json:"hubSupplyShareMax"`
 }
 
 // DefaultColdStartBars returns the written liquidity bars from docs/COLD-START.md.

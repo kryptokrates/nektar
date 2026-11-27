@@ -416,8 +416,16 @@ func AttachTestRestate(broker *Broker) func() {
 	})
 	mux.HandleFunc("POST /restate/awakeables/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
 		awkID := r.PathValue("id")
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("read awakeable payload: %v", err), http.StatusBadRequest)
+			return
+		}
 		var approved bool
-		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&approved); err != nil {
+		var dec ApprovalDecision
+		if json.Unmarshal(raw, &dec) == nil {
+			approved = dec.Approved
+		} else if err := json.Unmarshal(raw, &approved); err != nil {
 			http.Error(w, fmt.Sprintf("decode awakeable payload: %v", err), http.StatusBadRequest)
 			return
 		}

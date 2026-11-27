@@ -129,6 +129,7 @@ func TestLiveThreeNodeA2AHubBountyAndNATBboxMarket(t *testing.T) {
 		Shard:     "ops-runbooks",
 		Domains:   []string{"ops"},
 		PriceSats: 60,
+		AllowRaw:  true,
 	}); err != nil {
 		t.Fatalf("seller ArmSell: %v", err)
 	}
@@ -223,6 +224,7 @@ func TestLiveThreeNodeA2AHubBountyAndNATBboxMarket(t *testing.T) {
 		Shard:     "quantum-notes",
 		Domains:   []string{"crypto"},
 		PriceSats: 55,
+		AllowRaw:  true,
 	}); err != nil {
 		t.Fatal(err)
 	}

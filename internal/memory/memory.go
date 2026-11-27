@@ -3,15 +3,21 @@ package memory
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
+	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/jev"
+	"github.com/kryptokrates/nektar/internal/jevgraph"
+	"github.com/kryptokrates/nektar/internal/lattice"
 	"github.com/kryptokrates/nektar/internal/memrepo"
 	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/reasoning"
@@ -29,12 +35,13 @@ const (
 	ReceiptsShard = "__receipts__"
 	DealsShard    = "__deals__"
 	PoliciesShard = "__policies__"
+	OntologyShard = "__ontology__"
 )
 
 // IsSystemShard reports whether shard is a reserved internal audit shard anchored by NektarAnchor.
 func IsSystemShard(shard string) bool {
 	s := strings.TrimSpace(shard)
-	return s == ReceiptsShard || s == DealsShard || s == PoliciesShard
+	return s == ReceiptsShard || s == DealsShard || s == PoliciesShard || s == OntologyShard
 }
 
 // ValidateShardName enforces safe, bounded shard names and blocks external access to reserved system shards.
@@ -69,34 +76,52 @@ type Config struct {
 	DatalogRules  []string
 	VerifyBaseURL string // e.g. http://127.0.0.1:8080/v1/verify
 	ModelID       reasoning.ModelIdentity
+	JevEvaluator  jev.Evaluator
+}
+
+// OntologyCommitResult summarizes a batch of DL-Lite / OWL 2 RL / deontic axioms committed to __ontology__.
+type OntologyCommitResult struct {
+	OntologyHead string                    `json:"ontologyHead"`
+	Axioms       []reasoning.OntologyAxiom `json:"axioms"`
+	RuleRefs     []reasoning.FragmentRef   `json:"ruleRefs"`
+	AnchorTxID   string                    `json:"anchorTxid,omitempty"`
 }
 
 // Service is the unified v0.1 NektarMemory engine composing:
 //   - pure-Go SQLite persistence (internal/store),
 //   - BSV chain + BRC-100 custody + SpendGuard (internal/chain),
-//   - Rúnar NektarAnchor + SPV verification (internal/contracts),
+//   - Rúnar NektarAnchor Merkle Automaton + SPV/MMR verification (internal/contracts),
+//   - Cryptographic Lattice Key Assignment (CLKA) private-by-default encryption (internal/lattice),
 //   - Lightweb Borg/BRC-369 encryption + CHIRP object storage (internal/bstack),
-//   - native AWS Cedar authorization (internal/policy),
-//   - Google Mangle Datalog grounding + AORG + nektarr1 receipts (internal/reasoning).
+//   - native AWS Cedar authorization anchored in __policies__ (internal/policy),
+//   - Google Mangle Datalog + DL-Lite/OWL 2 RL ontology in __ontology__ + proof-carrying nektarr1 receipts (internal/reasoning).
 type Service struct {
-	mu            sync.RWMutex
-	keyMu         sync.Mutex
-	hookWG        sync.WaitGroup
-	shardLocks    [64]sync.Mutex
-	publicChirpMu sync.RWMutex
-	publicChirps  map[[32]byte]struct{}
-	projCacheMu   sync.RWMutex
-	projCache     map[string]*cachedGoGitProjection
-	db            *store.DB
-	port          *chain.Port
-	groups        *bstack.GroupRegistry
-	objects       bstack.ObjectStore
-	policyText    string
-	policyCommit  *policy.PolicyCommitment
-	rules         []string
-	verifyBaseURL string
-	modelID       reasoning.ModelIdentity
-	onRemember    func(shard string)
+	mu             sync.RWMutex
+	keyMu          sync.Mutex
+	hookWG         sync.WaitGroup
+	shardLocks     [64]sync.Mutex
+	publicChirpMu  sync.RWMutex
+	publicChirps   map[[32]byte]struct{}
+	projCacheMu    sync.RWMutex
+	projCache      map[string]*cachedGoGitProjection
+	db             *store.DB
+	port           *chain.Port
+	groups         *bstack.GroupRegistry
+	lattice        *lattice.Manager
+	objects        bstack.ObjectStore
+	policyText     string
+	policyCommit   *policy.PolicyCommitment
+	policyRef      *reasoning.FragmentRef
+	rules          []string
+	committedRules []reasoning.CommittedRule
+	ontologyHead   string
+	verifyBaseURL  string
+	modelID        reasoning.ModelIdentity
+	onRemember     func(shard string)
+	jevEval          jev.Evaluator
+	ontCacheMu       sync.RWMutex
+	ontCache         map[string]*jevgraph.CompiledOntology
+	lastActivityUnix atomic.Int64
 }
 
 // New constructs a NektarMemory Service.
@@ -148,6 +173,10 @@ func New(db *store.DB, port *chain.Port, groups *bstack.GroupRegistry, objects b
 	if err := groups.SetPersistence(&dbGroupStore{db: db, port: port}); err != nil {
 		return nil, fmt.Errorf("memory: load borg groups: %w", err)
 	}
+	latMgr := lattice.NewManager(port.DeriveLatticeRoot)
+	if err := latMgr.SetPersistence(db); err != nil {
+		return nil, fmt.Errorf("memory: load lattice states: %w", err)
+	}
 	pubChirps := make(map[[32]byte]struct{})
 	var savedPub []string
 	if ok, _ := db.GetJSON("public_chirp_hashes_v1", &savedPub); ok {
@@ -164,17 +193,146 @@ func New(db *store.DB, port *chain.Port, groups *bstack.GroupRegistry, objects b
 		db:            db,
 		port:          port,
 		groups:        groups,
+		lattice:       latMgr,
 		objects:       objects,
 		policyText:    pol,
 		policyCommit:  pc,
 		rules:         rules,
 		verifyBaseURL: baseURL,
 		modelID:       mid,
+		jevEval:       cfg.JevEvaluator,
+		ontCache:      make(map[string]*jevgraph.CompiledOntology),
+	}
+	if err := svc.hydrateLawShards(context.Background(), polName, pol, pc, rules); err != nil {
+		return nil, fmt.Errorf("memory: hydrate law shards: %w", err)
 	}
 	if err := svc.backfillLegacyRepos(context.Background()); err != nil {
 		return nil, fmt.Errorf("memory: backfill legacy repos: %w", err)
 	}
 	return svc, nil
+}
+
+// hydrateLawShards loads previously committed __policies__ and __ontology__ fragments on startup
+// and ensures the active Cedar policy and any configured Mangle rules are committed as immutable memory.
+func (s *Service) hydrateLawShards(ctx context.Context, polName, polText string, pc *policy.PolicyCommitment, initRules []string) error {
+	// 1. Hydrate __policies__ ref matching pc.Hash (or commit initial policy if absent).
+	if polFrags, err := s.db.ListFragments(PoliciesShard); err == nil {
+		for i := len(polFrags) - 1; i >= 0; i-- {
+			f := polFrags[i]
+			if f.Forgotten || len(f.Data) == 0 {
+				continue
+			}
+			var rec struct {
+				Hash string `json:"hash"`
+			}
+			if json.Unmarshal(f.Data, &rec) == nil && strings.EqualFold(rec.Hash, pc.Hash) {
+				s.policyRef = &reasoning.FragmentRef{Shard: PoliciesShard, Seq: f.Seq}
+				break
+			}
+		}
+	}
+	if s.policyRef == nil {
+		stored, _, err := s.CommitSystemAuditRecord(ctx, PoliciesShard, "cedar-policy", map[string]any{
+			"name":      polName,
+			"hash":      pc.Hash,
+			"canonical": pc.Text,
+		}, false)
+		if err != nil {
+			return fmt.Errorf("commit initial policy to %s: %w", PoliciesShard, err)
+		}
+		if stored != nil {
+			s.policyRef = &reasoning.FragmentRef{Shard: PoliciesShard, Seq: stored.Seq}
+		}
+	}
+
+	// 2. Hydrate __ontology__ committed rules.
+	seenRuleHash := make(map[string]bool)
+	if ontFrags, err := s.db.ListFragments(OntologyShard); err == nil {
+		for _, f := range ontFrags {
+			if f.Forgotten || len(f.Data) == 0 {
+				continue
+			}
+			var ax struct {
+				CompiledRule  string   `json:"compiledRule"`
+				CompiledRules []string `json:"compiledRules"`
+				RuleText      string   `json:"ruleText"`
+				RuleHash      string   `json:"ruleHash"`
+			}
+			if json.Unmarshal(f.Data, &ax) != nil {
+				continue
+			}
+			var list []string
+			if len(ax.CompiledRules) > 0 {
+				list = ax.CompiledRules
+			} else if strings.TrimSpace(ax.CompiledRule) != "" {
+				list = []string{strings.TrimSpace(ax.CompiledRule)}
+			} else if strings.TrimSpace(ax.RuleText) != "" {
+				list = []string{strings.TrimSpace(ax.RuleText)}
+			}
+			for _, rText := range list {
+				rText = strings.TrimSpace(rText)
+				if rText == "" {
+					continue
+				}
+				rh := reasoning.ComputeRuleHash(rText)
+				if seenRuleHash[rh] {
+					continue
+				}
+				seenRuleHash[rh] = true
+				ref := reasoning.FragmentRef{Shard: OntologyShard, Seq: f.Seq}
+				s.committedRules = append(s.committedRules, reasoning.CommittedRule{
+					RuleText: rText,
+					Ref:      &ref,
+					RuleHash: rh,
+				})
+			}
+		}
+	}
+	// Ensure any initial rules from Config or kv are committed into __ontology__.
+	for _, r := range initRules {
+		trimmed := strings.TrimSpace(r)
+		if trimmed == "" {
+			continue
+		}
+		rh := reasoning.ComputeRuleHash(trimmed)
+		if seenRuleHash[rh] {
+			continue
+		}
+		stored, _, err := s.CommitSystemAuditRecord(ctx, OntologyShard, "mangle-rule", map[string]any{
+			"kind":          string(reasoning.AxiomMangleRule),
+			"compiledRule":  trimmed,
+			"compiledRules": []string{trimmed},
+			"ruleHash":      rh,
+		}, false)
+		if err != nil {
+			return fmt.Errorf("commit initial rule to %s: %w", OntologyShard, err)
+		}
+		seenRuleHash[rh] = true
+		ref := reasoning.FragmentRef{Shard: OntologyShard, Seq: stored.Seq}
+		s.committedRules = append(s.committedRules, reasoning.CommittedRule{
+			RuleText: trimmed,
+			Ref:      &ref,
+			RuleHash: rh,
+		})
+	}
+	s.syncRulesFromCommittedLocked()
+	return nil
+}
+
+func (s *Service) syncRulesFromCommittedLocked() {
+	rules := make([]string, 0, len(s.committedRules))
+	var headBuf []byte
+	headBuf = append(headBuf, core.TagOntologyV1...)
+	for _, cr := range s.committedRules {
+		rules = append(rules, cr.RuleText)
+		headBuf = append(headBuf, []byte(cr.RuleHash)...)
+	}
+	s.rules = rules
+	if len(s.committedRules) == 0 {
+		s.ontologyHead = ""
+	} else {
+		s.ontologyHead = core.ToHex(core.SHA256(headBuf))
+	}
 }
 
 // AllowPublicChirpHashes registers CHIRP DAG object hashes that may be fetched unauthenticated via /v1/chirp/{hash}
@@ -281,19 +439,67 @@ func (s *Service) Close() error {
 func (s *Service) DB() *store.DB                 { return s.db }
 func (s *Service) Chain() *chain.Port            { return s.port }
 func (s *Service) Groups() *bstack.GroupRegistry { return s.groups }
+func (s *Service) Lattice() *lattice.Manager     { return s.lattice }
 func (s *Service) Objects() bstack.ObjectStore   { return s.objects }
+
+// SetJevEvaluator attaches or replaces the self-hosted System One evaluator used by JevGraph extraction & alignment.
+func (s *Service) SetJevEvaluator(eval jev.Evaluator) {
+	s.mu.Lock()
+	s.jevEval = eval
+	s.mu.Unlock()
+}
+
+// JevEvaluator returns the configured System One evaluator, or nil when running offline/deterministic.
+func (s *Service) JevEvaluator() jev.Evaluator {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.jevEval
+}
+
 func (s *Service) PolicyCommit() *policy.PolicyCommitment {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.policyCommit
 }
 
-// SetPolicy updates the active Cedar policy set atomically and persists it to SQLite.
-// Fails closed if SQLite persistence fails so RAM and disk never diverge.
+func (s *Service) PolicyRef() *reasoning.FragmentRef {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.policyRef == nil {
+		return nil
+	}
+	cp := *s.policyRef
+	return &cp
+}
+
+func (s *Service) OntologyHead() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ontologyHead
+}
+
+func (s *Service) CommittedRules() []reasoning.CommittedRule {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]reasoning.CommittedRule, len(s.committedRules))
+	copy(out, s.committedRules)
+	return out
+}
+
+// SetPolicy updates the active Cedar policy set atomically, commits it into the __policies__ audit
+// shard as immutable verifiable memory, and persists it to SQLite. Fails closed on any error.
 func (s *Service) SetPolicy(name, text string) (*policy.PolicyCommitment, error) {
 	pc, err := policy.Canonicalize(name, text)
 	if err != nil {
 		return nil, err
+	}
+	stored, _, err := s.CommitSystemAuditRecord(context.Background(), PoliciesShard, "cedar-policy", map[string]any{
+		"name":      name,
+		"hash":      pc.Hash,
+		"canonical": pc.Text,
+	}, false)
+	if err != nil {
+		return nil, fmt.Errorf("memory: commit cedar policy to %s: %w", PoliciesShard, err)
 	}
 	if err := s.db.SetJSON("cedar_policy_v1", map[string]string{"name": name, "text": text}); err != nil {
 		return nil, fmt.Errorf("memory: persist cedar policy: %w", err)
@@ -301,23 +507,172 @@ func (s *Service) SetPolicy(name, text string) (*policy.PolicyCommitment, error)
 	s.mu.Lock()
 	s.policyText = text
 	s.policyCommit = pc
+	if stored != nil {
+		s.policyRef = &reasoning.FragmentRef{Shard: PoliciesShard, Seq: stored.Seq}
+	}
 	s.mu.Unlock()
 	return pc, nil
 }
 
-// AddRules appends Mangle Datalog rules and persists rules to SQLite.
-// Fails closed if SQLite persistence fails so RAM and disk never diverge.
+// AddRules appends Mangle Datalog rules, commits each rule as an immutable fragment in __ontology__,
+// and persists rules to SQLite. Fails closed on any error so RAM and disk never diverge.
 func (s *Service) AddRules(rules ...string) error {
+	ctx := context.Background()
+	var added []reasoning.CommittedRule
+	for _, r := range rules {
+		trimmed := strings.TrimSpace(r)
+		if trimmed == "" {
+			continue
+		}
+		rh := reasoning.ComputeRuleHash(trimmed)
+		stored, _, err := s.CommitSystemAuditRecord(ctx, OntologyShard, "mangle-rule", map[string]any{
+			"kind":          string(reasoning.AxiomMangleRule),
+			"compiledRule":  trimmed,
+			"compiledRules": []string{trimmed},
+			"ruleHash":      rh,
+		}, false)
+		if err != nil {
+			return fmt.Errorf("memory: commit rule to %s: %w", OntologyShard, err)
+		}
+		ref := reasoning.FragmentRef{Shard: OntologyShard, Seq: stored.Seq}
+		added = append(added, reasoning.CommittedRule{
+			RuleText: trimmed,
+			Ref:      &ref,
+			RuleHash: rh,
+		})
+	}
 	s.mu.Lock()
-	nextRules := append(append([]string(nil), s.rules...), rules...)
+	seen := make(map[string]bool, len(s.committedRules))
+	for _, cr := range s.committedRules {
+		seen[cr.RuleHash] = true
+	}
+	nextCommitted := append([]reasoning.CommittedRule(nil), s.committedRules...)
+	for _, cr := range added {
+		if !seen[cr.RuleHash] {
+			seen[cr.RuleHash] = true
+			nextCommitted = append(nextCommitted, cr)
+		}
+	}
+	nextRules := make([]string, 0, len(nextCommitted))
+	for _, cr := range nextCommitted {
+		nextRules = append(nextRules, cr.RuleText)
+	}
 	s.mu.Unlock()
+
 	if err := s.db.SetJSON("mangle_rules_v1", nextRules); err != nil {
 		return fmt.Errorf("memory: persist mangle rules: %w", err)
 	}
 	s.mu.Lock()
-	s.rules = nextRules
+	s.committedRules = nextCommitted
+	s.syncRulesFromCommittedLocked()
 	s.mu.Unlock()
 	return nil
+}
+
+// CommitOntologyAxioms compiles DL-Lite / OWL 2 RL / deontic axioms into stratified Mangle rules,
+// verifies consistency, commits each axiom into __ontology__, updates OntologyHead, and optionally anchors __ontology__.
+func (s *Service) CommitOntologyAxioms(ctx context.Context, axioms []reasoning.OntologyAxiom, autoAnchor bool) (*OntologyCommitResult, error) {
+	if len(axioms) == 0 {
+		return nil, errors.New("memory: at least one ontology axiom is required")
+	}
+	type compiledAx struct {
+		axiom reasoning.OntologyAxiom
+		rules []string
+	}
+	finalized := make([]reasoning.OntologyAxiom, 0, len(axioms))
+	compiledList := make([]compiledAx, 0, len(axioms))
+	var allCompiledRules []string
+	for i, ax := range axioms {
+		f, rules, err := reasoning.FinalizeAxiom(ax)
+		if err != nil {
+			return nil, fmt.Errorf("memory: axiom %d invalid: %w", i, err)
+		}
+		finalized = append(finalized, f)
+		compiledList = append(compiledList, compiledAx{axiom: f, rules: rules})
+		allCompiledRules = append(allCompiledRules, rules...)
+	}
+	if rep, err := reasoning.CheckOntologyConsistency(nil, allCompiledRules); err != nil {
+		return nil, fmt.Errorf("memory: ontology consistency check failed: %w", err)
+	} else if rep != nil && !rep.Consistent {
+		return nil, fmt.Errorf("memory: inconsistent ontology (conflicts=%v violations=%v)", rep.Conflicts, rep.DeonticViolations)
+	}
+
+	var added []reasoning.CommittedRule
+	var refs []reasoning.FragmentRef
+	for _, item := range compiledList {
+		ax := item.axiom
+		primaryRule := ""
+		if len(item.rules) > 0 {
+			primaryRule = item.rules[0]
+		}
+		stored, _, err := s.CommitSystemAuditRecord(ctx, OntologyShard, "ontology-axiom", map[string]any{
+			"id":            ax.ID,
+			"kind":          string(ax.Kind),
+			"subject":       ax.Subject,
+			"object":        ax.Object,
+			"ruleText":      ax.RuleText,
+			"compiledRule":  primaryRule,
+			"compiledRules": item.rules,
+			"axiomHash":     ax.Hash,
+		}, false)
+		if err != nil {
+			return nil, fmt.Errorf("memory: commit axiom to %s: %w", OntologyShard, err)
+		}
+		ref := reasoning.FragmentRef{Shard: OntologyShard, Seq: stored.Seq}
+		refs = append(refs, ref)
+		for _, rt := range item.rules {
+			rc := ref
+			added = append(added, reasoning.CommittedRule{
+				RuleText: rt,
+				Ref:      &rc,
+				RuleHash: reasoning.ComputeRuleHash(rt),
+			})
+		}
+	}
+
+	s.mu.Lock()
+	seen := make(map[string]bool, len(s.committedRules))
+	for _, cr := range s.committedRules {
+		seen[cr.RuleHash] = true
+	}
+	nextCommitted := append([]reasoning.CommittedRule(nil), s.committedRules...)
+	for _, cr := range added {
+		if !seen[cr.RuleHash] {
+			seen[cr.RuleHash] = true
+			nextCommitted = append(nextCommitted, cr)
+		}
+	}
+	nextRules := make([]string, 0, len(nextCommitted))
+	for _, cr := range nextCommitted {
+		nextRules = append(nextRules, cr.RuleText)
+	}
+	s.mu.Unlock()
+
+	if err := s.db.SetJSON("mangle_rules_v1", nextRules); err != nil {
+		return nil, fmt.Errorf("memory: persist ontology rules: %w", err)
+	}
+	s.mu.Lock()
+	s.committedRules = nextCommitted
+	s.syncRulesFromCommittedLocked()
+	head := s.ontologyHead
+	s.mu.Unlock()
+
+	var anchorTxID string
+	if autoAnchor && s.port != nil {
+		batch, err := s.AnchorShard(ctx, OntologyShard)
+		if err != nil {
+			return nil, err
+		}
+		if batch != nil {
+			anchorTxID = batch.TxID
+		}
+	}
+	return &OntologyCommitResult{
+		OntologyHead: head,
+		Axioms:       finalized,
+		RuleRefs:     refs,
+		AnchorTxID:   anchorTxID,
+	}, nil
 }
 
 // AuthorizeAction evaluates the active Cedar policy for any action ("read"|"write"|"disclose"|"rotate"|"revoke").

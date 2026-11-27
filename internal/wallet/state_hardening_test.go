@@ -246,7 +246,7 @@ func TestBalanceDisjointFundingAndWarmFuelDenom(t *testing.T) {
 
 type failingProofBroadcaster struct{}
 
-func (failingProofBroadcaster) Name() string                                          { return "failing-bcast" }
+func (failingProofBroadcaster) Name() string                                              { return "failing-bcast" }
 func (failingProofBroadcaster) Broadcast(context.Context, *transaction.Transaction) error { return nil }
 func (failingProofBroadcaster) Proof(context.Context, string) (*transaction.MerklePath, uint32, bool, error) {
 	return nil, 0, false, errors.New("HTTP 503 broadcaster unavailable")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/jevgraph"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -61,7 +63,8 @@ func verifyCapsuleObjects(cap *MemoryCapsule, objects bstack.ObjectStore, rep *C
 		rep.BlobsVerified++
 	}
 
-	// 2. Verify every TreeObject hash & blob references.
+	// 2. Verify every TreeObject hash, blob references, and any JevGraph edge sidecars offline.
+	verifiedSidecars := make(map[string]bool)
 	for k, tr := range cap.Trees {
 		rebuilt, err := BuildTree(tr.Entries)
 		if err != nil || !strings.EqualFold(rebuilt.TreeHash, tr.TreeHash) || !strings.EqualFold(k, tr.TreeHash) {
@@ -69,7 +72,9 @@ func verifyCapsuleObjects(cap *MemoryCapsule, objects bstack.ObjectStore, rep *C
 			rep.Reason = fmt.Sprintf("tree hash mismatch for %s", k)
 			return false
 		}
+		entryByPath := make(map[string]TreeEntry, len(tr.Entries))
 		for _, e := range tr.Entries {
+			entryByPath[e.Path] = e
 			if b, ok := cap.Blobs[e.BlobHash]; ok {
 				if !strings.EqualFold(b.ContentSHA256, e.ContentSHA256) {
 					rep.OK = false
@@ -77,6 +82,52 @@ func verifyCapsuleObjects(cap *MemoryCapsule, objects bstack.ObjectStore, rep *C
 					return false
 				}
 			}
+		}
+		for _, e := range tr.Entries {
+			if !strings.HasPrefix(e.Path, "graph/") || !strings.HasSuffix(e.Path, ".edges.json") {
+				continue
+			}
+			if verifiedSidecars[e.BlobHash] {
+				continue
+			}
+			sb, ok := cap.Blobs[e.BlobHash]
+			if !ok || sb.Encrypted || sb.Forgotten {
+				continue
+			}
+			rawSidecar := ResolveBlobBytes(sb, objects)
+			if len(rawSidecar) == 0 {
+				continue
+			}
+			var sidecar jevgraph.EdgeSidecar
+			if err := json.Unmarshal(rawSidecar, &sidecar); err != nil {
+				rep.OK = false
+				rep.Reason = fmt.Sprintf("graph sidecar %q invalid JSON: %v", e.Path, err)
+				return false
+			}
+			srcEntry, hasSrc := entryByPath[sidecar.SourcePath]
+			if !hasSrc {
+				rep.OK = false
+				rep.Reason = fmt.Sprintf("graph sidecar %q references missing source %q", e.Path, sidecar.SourcePath)
+				return false
+			}
+			srcBlob, hasBlob := cap.Blobs[srcEntry.BlobHash]
+			if !hasBlob || srcBlob.Encrypted || srcBlob.Forgotten {
+				verifiedSidecars[e.BlobHash] = true
+				continue
+			}
+			srcBytes := ResolveBlobBytes(srcBlob, objects)
+			if len(srcBytes) == 0 && srcBlob.ChirpURL != "" && objects == nil {
+				verifiedSidecars[e.BlobHash] = true
+				continue
+			}
+			nEdges, vErr := jevgraph.VerifySidecar(srcBytes, sidecar)
+			if vErr != nil {
+				rep.OK = false
+				rep.Reason = fmt.Sprintf("graph sidecar %q verification failed: %v", e.Path, vErr)
+				return false
+			}
+			rep.EdgesVerified += nEdges
+			verifiedSidecars[e.BlobHash] = true
 		}
 		rep.TreesVerified++
 	}
@@ -163,6 +214,8 @@ func verifyCapsuleAnchors(
 		if st.N != uint64(a.N) || st.Size != uint64(a.Size) ||
 			!strings.EqualFold(hex.EncodeToString(st.R), a.RootHex) ||
 			!strings.EqualFold(hex.EncodeToString(st.Rp), a.ChainedHex) ||
+			(a.StateHash != "" && !strings.EqualFold(hex.EncodeToString(st.StateHash), a.StateHash)) ||
+			(a.MmrRoot != "" && !strings.EqualFold(hex.EncodeToString(st.MmrRoot), a.MmrRoot)) ||
 			txHash.String() != a.TxID {
 			rep.OK = false
 			rep.Reason = fmt.Sprintf("anchor n=%d state mismatch vs NektarAnchor output", a.N)
@@ -231,7 +284,7 @@ func verifyCapsuleAnchors(
 
 func verifyCapsuleFragmentsAndBatches(cap *MemoryCapsule, rep *CapsuleVerifyReport) {
 	// 5. Verify every fragment record in cap.Fragments: framed v2 HDP, mandatory provenance on plaintext,
-	//    L1-bound TagLeafV2 commitment, AND cryptographic Merkle inclusion against verified NektarAnchor R_n / Size!
+	//    L1-bound TagLeaf commitment, AND cryptographic Merkle inclusion against verified NektarAnchor R_n / Size!
 	anchorByN := make(map[int64]store.BatchAnchor, len(cap.Anchors))
 	for _, a := range cap.Anchors {
 		anchorByN[a.N] = a
@@ -247,7 +300,7 @@ func verifyCapsuleFragmentsAndBatches(cap *MemoryCapsule, rep *CapsuleVerifyRepo
 			rep.Reason = fmt.Sprintf("fragment seq=%d invalid 32-byte HDP", f.Seq)
 			return
 		}
-		if f.BorgGroup == "" {
+		if f.BorgGroup == "" && f.LatticeEpoch == 0 {
 			if len(f.Provenance) == 0 {
 				rep.OK = false
 				rep.Reason = fmt.Sprintf("fragment seq=%d missing provenance bytes", f.Seq)
@@ -258,6 +311,10 @@ func verifyCapsuleFragmentsAndBatches(cap *MemoryCapsule, rep *CapsuleVerifyRepo
 				rep.Reason = fmt.Sprintf("fragment seq=%d plaintext/provenance HDP tamper detected", f.Seq)
 				return
 			}
+		} else if len(f.Data) > 0 {
+			rep.OK = false
+			rep.Reason = fmt.Sprintf("fragment seq=%d plaintext injection on encrypted fragment", f.Seq)
+			return
 		}
 		mpeBytes, mErr := hex.DecodeString(strings.TrimSpace(f.MPERoot))
 		if mErr != nil || len(mpeBytes) != 32 {
@@ -265,7 +322,7 @@ func verifyCapsuleFragmentsAndBatches(cap *MemoryCapsule, rep *CapsuleVerifyRepo
 			rep.Reason = fmt.Sprintf("fragment seq=%d missing 32-byte L1 MPE root", f.Seq)
 			return
 		}
-		var contentBytes []byte
+		var contentBytes, commitBytes, transBytes []byte
 		if strings.TrimSpace(f.ContentSHA256) != "" {
 			var cErr error
 			contentBytes, cErr = hex.DecodeString(strings.TrimSpace(f.ContentSHA256))
@@ -275,15 +332,27 @@ func verifyCapsuleFragmentsAndBatches(cap *MemoryCapsule, rep *CapsuleVerifyRepo
 				return
 			}
 		}
-		wantLeaf := core.ToHex(core.ComputeLeafV2(core.Fragment{
-			HDP:           hdpBytes,
-			Ciphertext:    f.Ciphertext,
-			MPERoot:       mpeBytes,
-			ContentSHA256: contentBytes,
+		if strings.TrimSpace(f.CommitHash) != "" {
+			if cb, cErr := hex.DecodeString(strings.TrimSpace(f.CommitHash)); cErr == nil && len(cb) == 32 {
+				commitBytes = cb
+			}
+		}
+		if strings.TrimSpace(f.TransitionHash) != "" {
+			if tb, tErr := hex.DecodeString(strings.TrimSpace(f.TransitionHash)); tErr == nil && len(tb) == 32 {
+				transBytes = tb
+			}
+		}
+		wantLeaf := core.ToHex(core.ComputeLeaf(core.Fragment{
+			HDP:            hdpBytes,
+			Ciphertext:     f.Ciphertext,
+			MPERoot:        mpeBytes,
+			ContentSHA256:  contentBytes,
+			CommitHash:     commitBytes,
+			TransitionHash: transBytes,
 		}))
 		if !strings.EqualFold(f.Leaf, wantLeaf) {
 			rep.OK = false
-			rep.Reason = fmt.Sprintf("fragment seq=%d TagLeafV2 mismatch", f.Seq)
+			rep.Reason = fmt.Sprintf("fragment seq=%d leaf commitment mismatch", f.Seq)
 			return
 		}
 		if f.BatchN >= 0 {

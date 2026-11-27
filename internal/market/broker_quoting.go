@@ -12,8 +12,10 @@ import (
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/distill"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/policy"
+	"github.com/kryptokrates/nektar/internal/reputation"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -102,10 +104,40 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 			continue
 		}
 		for _, f := range frags {
+			// Fail-closed Cedar Action::"sell" distillation gate (resource.distilled == true unless listing.AllowRaw).
+			if dec, aErr := b.mem.AuthorizeSell(
+				policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
+				policy.Resource{
+					Type:      "Fragment",
+					ID:        fmt.Sprintf("%s#%d", f.Shard, f.Seq),
+					Level:     int64(f.Level),
+					Shard:     f.Shard,
+					Class:     f.Class,
+					Distilled: f.Distilled,
+				},
+				listing.AllowRaw,
+			); aErr != nil || !dec.Allow {
+				continue
+			}
+			// Fail-closed PII & secret scrubber before ANY fragment can be quoted externally.
+			if sr := distill.Scrub(f.Text); sr.Verdict == distill.ScrubBlocked {
+				continue
+			}
 			// On live networks, require an anchor tx (mined or 0-conf carried first-party BEEF);
 			// Prove() below enforces full SPV verification of either mined BUMP or carried ancestry.
 			if b.mem.Chain().Network() != "memory" {
 				if f.AnchorTxID == "" {
+					continue
+				}
+			}
+			// Ontology pin filtering: when the buyer pinned want.OntologyID, quote ONLY fragments conforming
+			// to that exact ontology (or bridged to it via a locally committed Bridge Shard).
+			if want.OntologyID != "" {
+				fragOntID, _, _ := b.mem.DB().GetFragmentGraphMeta(f.Shard, f.Seq)
+				if fragOntID == "" {
+					fragOntID, _ = b.mem.DB().FragmentOntologyID(f.Shard, f.Seq)
+				}
+				if !standingOrderOntologyMatches(ctx, b.mem, want.OntologyID, true, fragOntID) {
 					continue
 				}
 			}
@@ -186,7 +218,28 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		}
 	}
 
-	saleOffer, revealKey, chirpURL, err := b.engine.PrepareDirectSale(ctx, matched.Shard, best.Seq, matched.PriceSats, want.Pub)
+	quotePrice := matched.PriceSats
+	if len(matched.DynamicPricingJSON) > 0 || (b.mem != nil && b.mem.DB() != nil && want.Pub != "") {
+		dp := ParseDynamicPriceState(matched.DynamicPricingJSON, matched.PriceSats)
+		buyerPriority := false
+		var buyerCollabBP int64
+		if b.mem != nil && b.mem.DB() != nil && want.Pub != "" {
+			evalOnt := reputation.NormalizeOntologyID(want.OntologyID)
+			if tEval, vecs, tErr := EvaluateTrustForOntology(b.mem.DB(), b.PubHex(), evalOnt, b.engine.Policy(), nil, nil); tErr == nil && tEval != nil {
+				bPub := strings.ToLower(strings.TrimSpace(want.Pub))
+				buyerPriority = tEval.PriorityBuyers[bPub]
+				if v, ok := vecs[bPub]; ok {
+					buyerCollabBP = v.CollabBP
+				}
+			}
+		}
+		quotePrice = dp.QuotePriceForBuyer(matched.PriceSats, buyerPriority, buyerCollabBP)
+		if want.MaxSats > 0 && quotePrice > want.MaxSats {
+			return
+		}
+	}
+
+	saleOffer, revealKey, chirpURL, err := b.engine.PrepareDirectSale(ctx, matched.Shard, best.Seq, quotePrice, want.Pub)
 	if err != nil {
 		log.Printf("market: PrepareDirectSale want=%s shard=%s#%d failed: %v", want.WantID, matched.Shard, best.Seq, err)
 		return
@@ -234,6 +287,10 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 			}
 		}
 	}
+	bestOntID, bestEdgesRoot, _ := b.mem.DB().GetFragmentGraphMeta(matched.Shard, best.Seq)
+	if bestOntID == "" {
+		bestOntID, _ = b.mem.DB().FragmentOntologyID(matched.Shard, best.Seq)
+	}
 	offer := bstack.OfferAd{
 		OfferID:        offerID,
 		WantID:         want.WantID,
@@ -241,9 +298,11 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		BuyerPub:       want.Pub,
 		Net:            b.mem.Chain().Network(),
 		Domains:        offerDomains,
-		PriceSats:      matched.PriceSats,
+		PriceSats:      quotePrice,
 		Shard:          matched.Shard,
 		Leaf:           best.Leaf,
+		OntologyID:     bestOntID,
+		EdgesRoot:      bestEdgesRoot,
 		ChirpURL:       chirpURL,
 		KeyCommitHex:   saleOffer.KeyCommitment,
 		PayAddress:     payAddr,
@@ -348,7 +407,7 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	}
 	// Start durable Restate SellerDeal workflow asynchronously (/send — never blocks SSE consumer!).
 	if rc := b.RestateClient(); rc != nil {
-		oid, w, sh, sq, price, bpub, so, rk, cu, bundle := offerID, want, matched.Shard, best.Seq, matched.PriceSats, want.Pub, saleOffer, revealKey, chirpURL, pb
+		oid, w, sh, sq, price, bpub, so, rk, cu, bundle := offerID, want, matched.Shard, best.Seq, quotePrice, want.Pub, saleOffer, revealKey, chirpURL, pb
 		b.spawnTracked(10*time.Second, func(sCtx context.Context) {
 			_, _ = rc.StartSellerDealAsync(sCtx, oid, SellerDealInput{
 				Want:            w,

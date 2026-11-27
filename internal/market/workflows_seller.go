@@ -15,6 +15,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/policy"
+	"github.com/kryptokrates/nektar/internal/reputation"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -230,10 +231,48 @@ func (e *Engine) restateSellerRun(ctx restate.WorkflowContext, in SellerDealInpu
 	}
 
 	// Step 4: Settle seller deal durably in SQLite inside restate.Run.
-	settleNow, sErr := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
+	settleNow, sErr := restate.Run(ctx, func(rctx restate.RunContext) (int64, error) {
 		now := time.Now().Unix()
 		if e.mem != nil && e.mem.DB() != nil {
 			_ = e.mem.DB().MarkPendingSaleSettled(offerID)
+			_ = e.mem.DB().RecordEconomicsEvent(store.EconomicsEventRow{
+				Kind:       "deal_sell",
+				SatsDelta:  int64(in.PriceSats),
+				OntologyID: reputation.NormalizeOntologyID(in.Want.OntologyID),
+				Shard:      in.Shard,
+				DealID:     dealID,
+				CreatedAt:  now,
+			})
+			// Dynamic pricing upward ratchet on demand hit (clamped to [FloorSats, CeilingSats]).
+			if listings, lErr := e.mem.DB().ListSellListings(); lErr == nil {
+				for _, l := range listings {
+					if l.Shard == in.Shard && len(l.DynamicPricingJSON) > 0 {
+						dp := ParseDynamicPriceState(l.DynamicPricingJSON, l.PriceSats)
+						var sellerComp int64 = 7500
+						if r6, rErr := e.mem.DB().GetReputation6D(e.salePubHex(), reputation.NormalizeOntologyID(in.Want.OntologyID)); rErr == nil && r6.CompositeBP > 0 {
+							sellerComp = r6.CompositeBP
+						}
+						nextPrice := dp.OnDemandHit(l.PriceSats, sellerComp, now)
+						if rawDyn, mErr := json.Marshal(dp); mErr == nil {
+							_ = e.mem.DB().UpdateSellListingPricing(l.Shard, nextPrice, rawDyn)
+						}
+						break
+					}
+				}
+			}
+			// Bilateral seller_rates_buyer attestation if a deal receipt is recorded on this seller deal.
+			if dRec, gErr := e.mem.DB().GetDeal(dealID); gErr == nil && len(dRec.DealReceiptJSON) > 0 {
+				var dr DealReceipt
+				if json.Unmarshal(dRec.DealReceiptJSON, &dr) == nil && dr.DealID != "" && dr.BuyerPub != "" {
+					bScores := reputation.EvaluateBuyerCollaboration(reputation.SellerEvalInput{
+						BuyerPub:          dr.BuyerPub,
+						OntologyID:        in.Want.OntologyID,
+						HasPinnedOntology: in.Want.OntologyID != "",
+						CleanFirstPay:     true,
+					})
+					_, _ = e.EmitPostDealAttestation(rctx, reputation.RoleSellerRatesBuyer, dr, in.Want.OntologyID, bScores, in.Want.Domains)
+				}
+			}
 		}
 		e.persistDealRecord(store.DealRecord{
 			DealID:      dealID,

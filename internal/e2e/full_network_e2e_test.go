@@ -76,7 +76,9 @@ func spawnAgent(t *testing.T, ctx context.Context, opts agentOpts) *testAgent {
 		t.Fatalf("%s chain.Open: %v", opts.name, err)
 	}
 	// Pre-split coins so concurrent trades never starve!
-	_ = port.EnsureSplitCoins(ctx, 12, 5000)
+	if port.Engine() != nil {
+		_, _ = port.Engine().FuelKeeper().WarmFuel(ctx, 12, 5000)
+	}
 
 	objStore, err := bstack.NewFileObjectStore(dir)
 	if err != nil {
@@ -123,6 +125,7 @@ func spawnAgent(t *testing.T, ctx context.Context, opts agentOpts) *testAgent {
 		BboxOffice:     "default",
 		CollectTimeout: 3500 * time.Millisecond,
 	})
+	t.Cleanup(market.AttachTestRestate(broker))
 	if liq != nil {
 		broker.SetAdvertisedPacks(liq.Packs, liq.BountyDomains)
 	}
@@ -663,7 +666,9 @@ func TestFourAgentSpeedThroughputAndConcurrency(t *testing.T) {
 		a := spawnAgent(t, ctx, agentOpts{name: fmt.Sprintf("perf-%d", i), hubURLs: []string{hubURL}})
 		_, _ = market.ApprovePolicyPreset(a.mem.DB(), a.mkt.Policy(), "both", nil, "perf")
 		// Pre-split 20 coins so parallel trades never wait on UTXO lock!
-		_ = a.mem.Chain().EnsureSplitCoins(ctx, 20, 2000)
+		if a.mem.Chain().Engine() != nil {
+			_, _ = a.mem.Chain().Engine().FuelKeeper().WarmFuel(ctx, 20, 2000)
+		}
 		_, _ = a.mem.Remember(ctx, memory.RememberInput{
 			Shard: "prod", Text: fmt.Sprintf("Agent %d verified domain %s benchmark payload.", i, domains[i]), AutoAnchor: true,
 		})

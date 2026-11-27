@@ -83,7 +83,7 @@ func TestPerRepoGenesisIsolationAndL1BoundMPE(t *testing.T) {
 	if !fp.Anchored || fp.ProofBundle == nil {
 		t.Fatalf("expected L1-anchored MPE proof with ProofBundle, got anchored=%v bundle=%v", fp.Anchored, fp.ProofBundle != nil)
 	}
-	vr := contracts.VerifyAnchoredMPEProof(ctx, fp.HDP, fp.CiphertextHash, fp.ContentSHA256, fp.FieldsRoot, fp.Proof, *fp.ProofBundle, port.Tracker())
+	vr := contracts.VerifyAnchoredMPEProof(ctx, fp.HDP, fp.CiphertextHash, fp.ContentSHA256, fp.FieldsRoot, fp.CommitHash, fp.TransitionHash, fp.Proof, *fp.ProofBundle, port.Tracker())
 	if !vr.OK || !vr.Settled {
 		t.Fatalf("VerifyAnchoredMPEProof failed: %+v", vr)
 	}
@@ -92,7 +92,7 @@ func TestPerRepoGenesisIsolationAndL1BoundMPE(t *testing.T) {
 	tamperedFields := append([]core.DisclosedField(nil), fp.Proof.Fields...)
 	tamperedFields[0].Value = []byte("forged")
 	tampered.Fields = tamperedFields
-	if badVR := contracts.VerifyAnchoredMPEProof(ctx, fp.HDP, fp.CiphertextHash, fp.ContentSHA256, fp.FieldsRoot, &tampered, *fp.ProofBundle, port.Tracker()); badVR.OK {
+	if badVR := contracts.VerifyAnchoredMPEProof(ctx, fp.HDP, fp.CiphertextHash, fp.ContentSHA256, fp.FieldsRoot, fp.CommitHash, fp.TransitionHash, &tampered, *fp.ProofBundle, port.Tracker()); badVR.OK {
 		t.Fatal("VerifyAnchoredMPEProof accepted tampered disclosed field!")
 	}
 
@@ -279,15 +279,17 @@ func TestStrictUTXOLineageFailClosed(t *testing.T) {
 	}
 	ownerPubBytes := port.Signer().IdentityKey().Compressed()
 	forgedState := contracts.AnchorState{
-		Shard:    a0.ShardID,
-		OwnerPub: hex.EncodeToString(genPub.Compressed()),
-		OwnerPKH: core.Hash160(ownerPubBytes),
-		N:        1,
-		Size:     1,
-		R:        root1,
-		Rp:       rp1,
-		Tag:      core.TagRPrime,
-		Metanet:  true,
+		Shard:     a0.ShardID,
+		OwnerPub:  hex.EncodeToString(genPub.Compressed()),
+		OwnerPKH:  core.Hash160(ownerPubBytes),
+		N:         1,
+		Size:      1,
+		R:         root1,
+		Rp:        rp1,
+		StateHash: core.Zero32Bytes(),
+		MmrRoot:   core.Zero32Bytes(),
+		Tag:       core.TagRPrime,
+		Metanet:   true,
 	}
 	forgedScript, err := contracts.EncodeAnchorLockingScript(forgedState)
 	if err != nil {

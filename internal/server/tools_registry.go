@@ -97,11 +97,18 @@ func (tb *Toolbox) ListTools() []ToolSpec {
 		{Name: "exportPack", Profile: "operator", Description: "Export a shard and its anchor proofs as a verified BRC-167 CHIRP closure."},
 		{Name: "importPack", Profile: "operator", Description: "Import and verify a local or remote BRC-167 CHIRP shard pack closure into a local shard."},
 		{Name: "repo", Profile: "agent", Description: "Full Git + SingularGrit Memory Repo tool anchored via strict BSV NektarAnchor UTXO lineage (action: list|log|show|tree|read|diff|blame|verify|commit|rm|branch|fork|merge|cherryPick|revert|tag|export|import|prove|rotate)."},
+		{Name: "ontology", Profile: "agent", Description: "Manage committed domain TBox ontologies (ont-<domain>), cross-ontology Bridge Shards, bounded JevGraph ABox extraction, and Mangle-gated edge review (action: init|list|show|validate|extract|edges|review|align)."},
+		{Name: "lineage", Profile: "agent", Description: "Inspect the verified cryptographic Knowledge DAG (ancestors, descendants, signed refinement/supersedes edges, and modality) for a fragment."},
+		{Name: "commitOntology", Profile: "operator", Description: "Compile and commit DL-Lite / OWL 2 RL / deontic axioms into the immutable __ontology__ shard (Memory as Law)."},
+		{Name: "provisionClearance", Profile: "operator", Description: "Provision a downward-only CLKA clearance bundle (+ public manifest, optionally ECDH-sealed to a recipient pubkey) for a shard."},
+		{Name: "rotateLattice", Profile: "operator", Description: "Rotate a shard's CLKA encryption epoch for forward secrecy (revoking prior-epoch clearances for future writes)."},
+		{Name: "compactProve", Profile: "operator", Description: "Build and SPV-verify an O(log N) MMR CompactProofBundle proving a fragment against the shard's head NektarAnchor UTXO."},
+		{Name: "consistencyProof", Profile: "operator", Description: "Build an O(log N) MMR consistency proof proving anchor batch fromN is an unaltered prefix of batch toN."},
 		{Name: "authorize", Profile: "operator", Description: "Evaluate the active native Cedar policy set for a principal, action, and resource."},
 		{Name: "status", Profile: "operator", Description: "Return Nektar v0.1 node status: identity, network, wallet balance, shards, SpendGuard, policy hash, and market deals."},
 	}
 	if tb.profile == "agent" {
-		out := make([]ToolSpec, 0, 13)
+		out := make([]ToolSpec, 0, 14)
 		for _, t := range all {
 			if t.Profile == "agent" {
 				out = append(out, t)
@@ -195,6 +202,48 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 			return nil, err
 		}
 		return tb.ExecRepo(ctx, in)
+	case "ontology":
+		var in OntologyToolInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
+		}
+		return tb.ExecOntology(ctx, in)
+	case "lineage":
+		var in LineageToolInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
+		}
+		return tb.ExecLineage(ctx, in)
+	case "commitOntology":
+		var in CommitOntologyInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
+		}
+		return tb.ExecCommitOntology(ctx, in)
+	case "provisionClearance":
+		var in ProvisionClearanceInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
+		}
+		return tb.ExecProvisionClearance(ctx, in)
+	case "rotateLattice":
+		var in RotateLatticeInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
+		}
+		return tb.ExecRotateLattice(ctx, in)
+	case "compactProve":
+		var in CompactProveInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
+		}
+		return tb.ExecCompactProve(ctx, in)
+	case "consistencyProof":
+		var in ConsistencyProofInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
+		}
+		return tb.ExecConsistencyProof(ctx, in)
 	default:
 		return nil, fmt.Errorf("unknown tool %q", name)
 	}

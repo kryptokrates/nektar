@@ -33,10 +33,10 @@ func (d *DB) SaveBatchAnchorStrict(anchor BatchAnchor) error {
 		return err
 	}
 	_, err = d.sql.Exec(`
-		INSERT INTO anchors (shard, shard_id, n, size, root_hex, chained_hex, txid, beef, settled, block_height, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO anchors (shard, shard_id, n, size, root_hex, chained_hex, state_hash, mmr_root, txid, beef, settled, block_height, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		anchor.Shard, anchor.ShardID, anchor.N, anchor.Size, anchor.RootHex, anchor.ChainedHex,
-		anchor.TxID, anchor.Beef, boolToInt(anchor.Settled), anchor.BlockHeight, anchor.CreatedAt,
+		anchor.StateHash, anchor.MmrRoot, anchor.TxID, anchor.Beef, boolToInt(anchor.Settled), anchor.BlockHeight, anchor.CreatedAt,
 	)
 	return err
 }
@@ -54,9 +54,9 @@ func (d *DB) SavePendingAnchor(p PendingAnchor) error {
 		return err
 	}
 	_, err = d.sql.Exec(`
-		INSERT OR REPLACE INTO pending_anchors (shard, n, kind, seqs_json, root_hex, chained_hex, txid, beef, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Shard, p.N, kind, seqsJSON, p.RootHex, p.ChainedHex, p.TxID, p.Beef, p.CreatedAt)
+		INSERT OR REPLACE INTO pending_anchors (shard, n, kind, seqs_json, root_hex, chained_hex, state_hash, mmr_root, txid, beef, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Shard, p.N, kind, seqsJSON, p.RootHex, p.ChainedHex, p.StateHash, p.MmrRoot, p.TxID, p.Beef, p.CreatedAt)
 	return err
 }
 
@@ -80,7 +80,7 @@ func (d *DB) DeletePendingAnchor(shard string, n int64) error {
 func (d *DB) ListPendingAnchors() ([]PendingAnchor, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`SELECT shard, n, COALESCE(kind, 'append'), seqs_json, root_hex, chained_hex, txid, beef, created_at FROM pending_anchors ORDER BY created_at ASC`)
+	rows, err := d.sql.Query(`SELECT shard, n, COALESCE(kind, 'append'), seqs_json, root_hex, chained_hex, COALESCE(state_hash, ''), COALESCE(mmr_root, ''), txid, beef, created_at FROM pending_anchors ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func (d *DB) ListPendingAnchors() ([]PendingAnchor, error) {
 	for rows.Next() {
 		var p PendingAnchor
 		var seqsRaw []byte
-		if err := rows.Scan(&p.Shard, &p.N, &p.Kind, &seqsRaw, &p.RootHex, &p.ChainedHex, &p.TxID, &p.Beef, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.Shard, &p.N, &p.Kind, &seqsRaw, &p.RootHex, &p.ChainedHex, &p.StateHash, &p.MmrRoot, &p.TxID, &p.Beef, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		if p.Kind == "" {
@@ -136,10 +136,10 @@ func (d *DB) RecordBatchAnchor(anchor BatchAnchor, seqs []int64) error {
 	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.Exec(`
-		INSERT INTO anchors (shard, shard_id, n, size, root_hex, chained_hex, txid, beef, settled, block_height, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO anchors (shard, shard_id, n, size, root_hex, chained_hex, state_hash, mmr_root, txid, beef, settled, block_height, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		anchor.Shard, anchor.ShardID, anchor.N, anchor.Size, anchor.RootHex, anchor.ChainedHex,
-		anchor.TxID, anchor.Beef, boolToInt(anchor.Settled), anchor.BlockHeight, anchor.CreatedAt,
+		anchor.StateHash, anchor.MmrRoot, anchor.TxID, anchor.Beef, boolToInt(anchor.Settled), anchor.BlockHeight, anchor.CreatedAt,
 	)
 	if err != nil {
 		return err
@@ -214,7 +214,7 @@ func (d *DB) ListAnchors(shard string) ([]BatchAnchor, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rows, err := d.sql.Query(`
-		SELECT shard, shard_id, n, size, root_hex, chained_hex, txid, beef, settled, block_height, created_at
+		SELECT shard, shard_id, n, size, root_hex, chained_hex, COALESCE(state_hash, ''), COALESCE(mmr_root, ''), txid, beef, settled, block_height, created_at
 		FROM anchors WHERE shard = ? ORDER BY n ASC`, shard)
 	if err != nil {
 		return nil, err
@@ -224,7 +224,7 @@ func (d *DB) ListAnchors(shard string) ([]BatchAnchor, error) {
 	for rows.Next() {
 		var a BatchAnchor
 		var settled int
-		if err := rows.Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.TxID, &a.Beef, &settled, &a.BlockHeight, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.StateHash, &a.MmrRoot, &a.TxID, &a.Beef, &settled, &a.BlockHeight, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		a.Settled = settled != 0
@@ -238,7 +238,7 @@ func (d *DB) ListAnchorSummaries(shard string) ([]BatchAnchor, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rows, err := d.sql.Query(`
-		SELECT shard, shard_id, n, size, root_hex, chained_hex, txid, settled, block_height, created_at
+		SELECT shard, shard_id, n, size, root_hex, chained_hex, COALESCE(state_hash, ''), COALESCE(mmr_root, ''), txid, settled, block_height, created_at
 		FROM anchors WHERE shard = ? ORDER BY n ASC`, shard)
 	if err != nil {
 		return nil, err
@@ -248,7 +248,7 @@ func (d *DB) ListAnchorSummaries(shard string) ([]BatchAnchor, error) {
 	for rows.Next() {
 		var a BatchAnchor
 		var settled int
-		if err := rows.Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.TxID, &settled, &a.BlockHeight, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.StateHash, &a.MmrRoot, &a.TxID, &settled, &a.BlockHeight, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		a.Settled = settled != 0
@@ -262,7 +262,7 @@ func (d *DB) ListUnsettledAnchors() ([]BatchAnchor, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rows, err := d.sql.Query(`
-		SELECT shard, shard_id, n, size, root_hex, chained_hex, txid, beef, settled, block_height, created_at
+		SELECT shard, shard_id, n, size, root_hex, chained_hex, COALESCE(state_hash, ''), COALESCE(mmr_root, ''), txid, beef, settled, block_height, created_at
 		FROM anchors WHERE settled = 0 ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
@@ -272,7 +272,7 @@ func (d *DB) ListUnsettledAnchors() ([]BatchAnchor, error) {
 	for rows.Next() {
 		var a BatchAnchor
 		var settled int
-		if err := rows.Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.TxID, &a.Beef, &settled, &a.BlockHeight, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.StateHash, &a.MmrRoot, &a.TxID, &a.Beef, &settled, &a.BlockHeight, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		a.Settled = settled != 0
@@ -380,9 +380,9 @@ func (d *DB) GetAnchorByTxID(txid string) (BatchAnchor, bool, error) {
 	var a BatchAnchor
 	var settled int
 	err := d.sql.QueryRow(`
-		SELECT shard, shard_id, n, size, root_hex, chained_hex, txid, beef, settled, block_height, created_at
+		SELECT shard, shard_id, n, size, root_hex, chained_hex, COALESCE(state_hash, ''), COALESCE(mmr_root, ''), txid, beef, settled, block_height, created_at
 		FROM anchors WHERE txid = ? LIMIT 1`, txid).
-		Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.TxID, &a.Beef, &settled, &a.BlockHeight, &a.CreatedAt)
+		Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.StateHash, &a.MmrRoot, &a.TxID, &a.Beef, &settled, &a.BlockHeight, &a.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return BatchAnchor{}, false, nil
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/lightwebinc/bcommon/verify"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/reputation"
 )
 
 // verifyMarketEventBEEF validates carried BEEF bytes on an incoming Hub MarketEvent before trusting its payload.
@@ -196,6 +197,50 @@ func (b *Broker) dispatchVerifiedMarketEvent(ctx context.Context, payload bstack
 			return
 		}
 		b.dispatchAnnounceToStandingOrders(sa.Announce)
+
+	case bstack.KindAttestation:
+		var sat bstack.SignedAttestation
+		if err := json.Unmarshal(payload.Body, &sat); err != nil {
+			return
+		}
+		ad := sat.Attestation
+		if ad.Net != myNet || ad.Exp <= nowMs || ad.Exp > maxExpMs {
+			return
+		}
+		if err := bstack.VerifyArtifact(ad.Pub, sat.Sig, ad); err != nil {
+			return
+		}
+		att, decErr := reputation.DecodeAttestationToken(ad.Token)
+		if decErr != nil {
+			return
+		}
+		if !strings.EqualFold(att.IssuerPub, ad.Pub) || !strings.EqualFold(att.SubjectPub, ad.SubjectPub) {
+			return
+		}
+		var pinned map[string]bool
+		if b.engine != nil && b.engine.Policy() != nil {
+			pol := b.engine.Policy()
+			pol.mu.RLock()
+			pinned = make(map[string]bool, len(pol.PreferredSellers))
+			for p, ok := range pol.PreferredSellers {
+				if ok {
+					pinned[strings.ToLower(strings.TrimSpace(p))] = true
+				}
+			}
+			pol.mu.RUnlock()
+		}
+		if b.mem != nil && b.mem.DB() != nil {
+			if rErr := RecordAndRecomputeAttestation(b.mem.DB(), b.PubHex(), att, nil, pinned); rErr == nil {
+				b.notify("reputation_attestation", map[string]any{
+					"attestHash":  att.AttestHash,
+					"role":        att.Role,
+					"issuerPub":   shortPub(att.IssuerPub),
+					"subjectPub":  shortPub(att.SubjectPub),
+					"ontologyId":  att.OntologyID,
+					"compositeBp": att.Scores.CompositeBP,
+				})
+			}
+		}
 	}
 }
 
@@ -259,7 +304,7 @@ func (b *Broker) dispatchAnnounceToStandingOrders(ann bstack.AnnounceAd) {
 	}
 	b.spawnTracked(15*time.Second, func(ctx context.Context) {
 		for _, entry := range matched {
-			_ = b.PublishWantForStandingOrder(ctx, entry.OrderID, entry.Domains, entry.Query, entry.MaxSats)
+			_ = b.PublishWantForStandingOrder(ctx, entry.OrderID, entry.Domains, entry.Query, entry.OntologyID, entry.MaxSats)
 		}
 	})
 }
@@ -288,6 +333,9 @@ func (b *Broker) dispatchOfferToStandingOrders(off bstack.OfferAd) {
 			continue
 		}
 		if !standingOrderDomainMatches(entry.Domains, off.Domains) {
+			continue
+		}
+		if !standingOrderOntologyMatches(context.Background(), b.mem, entry.OntologyID, entry.AllowBridge, off.OntologyID) {
 			continue
 		}
 		targets = append(targets, entry.OrderID)

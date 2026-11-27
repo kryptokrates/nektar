@@ -42,11 +42,14 @@ type RepoToolInput struct {
 	BatchN        int64             `json:"batchN,omitempty"`
 	Seqs          []int64           `json:"seqs,omitempty"`
 	Fields        []string          `json:"fields,omitempty"`
-	NewOwner      string            `json:"newOwner,omitempty"`
-	BorgGroup     string            `json:"borgGroup,omitempty"`
-	Level         int               `json:"level,omitempty"`
-	AutoAnchor    bool              `json:"autoAnchor,omitempty"`
-	Limit         int               `json:"limit,omitempty"`
+	NewOwner       string            `json:"newOwner,omitempty"`
+	BorgGroup      string            `json:"borgGroup,omitempty"`
+	Public         bool              `json:"public,omitempty"`
+	Ontology       string            `json:"ontology,omitempty"`
+	OntologyStrict bool              `json:"ontologyStrict,omitempty"`
+	Level          int               `json:"level,omitempty"`
+	AutoAnchor     bool              `json:"autoAnchor,omitempty"`
+	Limit          int               `json:"limit,omitempty"`
 }
 
 // ExecRepo executes every Git-native & SingularGrit Memory Repo operation from one shared entry point.
@@ -139,6 +142,11 @@ func (tb *Toolbox) ExecRepo(ctx context.Context, in RepoToolInput) (any, error) 
 			if !b.Encrypted {
 				raw := memrepo.ResolveBlobBytes(b, tb.mem.Objects())
 				out["text"] = string(raw)
+			} else if b.BorgGroup == "" && b.LatticeEpoch > 0 {
+				out["latticeEpoch"] = b.LatticeEpoch
+				if pt, ok := tb.mem.OpenBlobAuthorized(ctx, b, cc.Principal, cc.DisallowBorg); ok {
+					out["text"] = string(pt)
+				}
 			} else {
 				out["borgGroup"] = b.BorgGroup
 				out["borgEpoch"] = b.BorgEpoch
@@ -199,18 +207,21 @@ func (tb *Toolbox) ExecRepo(ctx context.Context, in RepoToolInput) (any, error) 
 			return nil, errors.New("operator token required for autoAnchor")
 		}
 		return tb.mem.Remember(ctx, memory.RememberInput{
-			Shard:         repo,
-			Branch:        in.Branch,
-			Path:          in.Path,
-			MediaType:     in.MediaType,
-			Text:          in.Text,
-			Blob:          blob,
-			ChirpURL:      in.ChirpURL,
-			CommitMessage: in.Message,
-			BorgGroup:     in.BorgGroup,
-			Level:         in.Level,
-			Principal:     principalPtr,
-			AutoAnchor:    in.AutoAnchor,
+			Shard:          repo,
+			Branch:         in.Branch,
+			Path:           in.Path,
+			MediaType:      in.MediaType,
+			Text:           in.Text,
+			Blob:           blob,
+			ChirpURL:       in.ChirpURL,
+			CommitMessage:  in.Message,
+			BorgGroup:      in.BorgGroup,
+			Public:         in.Public,
+			Ontology:       in.Ontology,
+			OntologyStrict: in.OntologyStrict,
+			Level:          in.Level,
+			Principal:      principalPtr,
+			AutoAnchor:     in.AutoAnchor,
 		})
 
 	case "rm", "delete":

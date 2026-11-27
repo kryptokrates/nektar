@@ -272,7 +272,7 @@
       "outArity": 1
     }
   ],
-  "buildTimestamp": "2026-11-25T17:51:49Z",
+  "buildTimestamp": "2026-11-27T06:09:31Z",
   "anf": {
     "contractName": "NektarAgentVault",
     "properties": [
@@ -362,7 +362,7 @@
               "name": "operatorPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -374,7 +374,7 @@
               "name": "agentPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -386,7 +386,7 @@
               "name": "perTxCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -398,7 +398,7 @@
               "name": "windowCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -410,7 +410,7 @@
               "name": "windowBlocks"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -422,7 +422,7 @@
               "name": "maxFee"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -442,7 +442,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -454,7 +454,7 @@
               "name": "operatorPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -467,7 +467,7 @@
               "value": "t7"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -479,7 +479,7 @@
               "name": "agentPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -492,7 +492,7 @@
               "value": "t9"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -504,7 +504,7 @@
               "name": "perTxCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -517,7 +517,7 @@
               "value": "t11"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -529,7 +529,7 @@
               "name": "windowCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -542,7 +542,7 @@
               "value": "t13"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -554,7 +554,7 @@
               "name": "windowBlocks"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -567,7 +567,7 @@
               "value": "t15"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -579,7 +579,7 @@
               "name": "maxFee"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -592,7 +592,7 @@
               "value": "t17"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 15,
               "column": 22
             }
@@ -616,7 +616,7 @@
               "value": "76a914"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 35,
               "column": 1
             }
@@ -628,7 +628,7 @@
               "name": "pkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 35,
               "column": 1
             }
@@ -640,7 +640,7 @@
               "value": "88ac"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 35,
               "column": 1
             }
@@ -656,7 +656,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 35,
               "column": 1
             }
@@ -672,7 +672,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 35,
               "column": 1
             }
@@ -807,7 +807,7 @@
               "name": "paused"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 49,
               "column": 1
             }
@@ -819,7 +819,7 @@
               "value": 0
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 49,
               "column": 1
             }
@@ -833,7 +833,7 @@
               "right": "t11"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 49,
               "column": 1
             }
@@ -845,7 +845,7 @@
               "value": "t12"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 49,
               "column": 1
             }
@@ -857,7 +857,7 @@
               "name": "operatorPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 50,
               "column": 1
             }
@@ -872,7 +872,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 50,
               "column": 1
             }
@@ -884,7 +884,7 @@
               "value": 20
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 50,
               "column": 1
             }
@@ -898,7 +898,7 @@
               "right": "t16"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 50,
               "column": 1
             }
@@ -954,7 +954,7 @@
               ]
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 50,
               "column": 1
             }
@@ -966,7 +966,7 @@
               "value": "t23"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 50,
               "column": 1
             }
@@ -978,7 +978,7 @@
               "name": "pubKey"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 51,
               "column": 1
             }
@@ -993,7 +993,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 51,
               "column": 1
             }
@@ -1005,7 +1005,7 @@
               "name": "agentPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 51,
               "column": 1
             }
@@ -1020,7 +1020,7 @@
               "right": "t27"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 51,
               "column": 1
             }
@@ -1032,7 +1032,7 @@
               "value": "t28"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 51,
               "column": 1
             }
@@ -1044,7 +1044,7 @@
               "name": "sig"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 52,
               "column": 1
             }
@@ -1056,7 +1056,7 @@
               "name": "pubKey"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 52,
               "column": 1
             }
@@ -1072,7 +1072,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 52,
               "column": 1
             }
@@ -1084,7 +1084,7 @@
               "value": "t32"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 52,
               "column": 1
             }
@@ -1096,7 +1096,7 @@
               "name": "txPreimage"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 53,
               "column": 1
             }
@@ -1111,7 +1111,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 53,
               "column": 1
             }
@@ -1123,7 +1123,7 @@
               "value": "@ref:t35"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 53,
               "column": 1
             }
@@ -1135,7 +1135,7 @@
               "name": "txPreimage"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 54,
               "column": 1
             }
@@ -1150,7 +1150,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 54,
               "column": 1
             }
@@ -1162,7 +1162,7 @@
               "value": 4294967295
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 54,
               "column": 1
             }
@@ -1176,7 +1176,7 @@
               "right": "t38"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 54,
               "column": 1
             }
@@ -1188,7 +1188,7 @@
               "value": "t39"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 54,
               "column": 1
             }
@@ -1200,7 +1200,7 @@
               "value": 500000000
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 55,
               "column": 1
             }
@@ -1214,7 +1214,7 @@
               "right": "t41"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 55,
               "column": 1
             }
@@ -1226,7 +1226,7 @@
               "value": "t42"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 55,
               "column": 1
             }
@@ -1238,7 +1238,7 @@
               "name": "windowStart"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 56,
               "column": 1
             }
@@ -1252,7 +1252,7 @@
               "right": "t44"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 56,
               "column": 1
             }
@@ -1264,7 +1264,7 @@
               "value": "t45"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 56,
               "column": 1
             }
@@ -1276,7 +1276,7 @@
               "name": "payAmount"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 57,
               "column": 1
             }
@@ -1288,7 +1288,7 @@
               "value": 1
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 57,
               "column": 1
             }
@@ -1302,7 +1302,7 @@
               "right": "t48"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 57,
               "column": 1
             }
@@ -1348,7 +1348,7 @@
               ]
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 57,
               "column": 1
             }
@@ -1360,7 +1360,7 @@
               "value": "t54"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 57,
               "column": 1
             }
@@ -1372,7 +1372,7 @@
               "name": "destScript"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 58,
               "column": 1
             }
@@ -1387,7 +1387,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 58,
               "column": 1
             }
@@ -1399,7 +1399,7 @@
               "value": 1
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 58,
               "column": 1
             }
@@ -1413,7 +1413,7 @@
               "right": "t58"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 58,
               "column": 1
             }
@@ -1425,7 +1425,7 @@
               "value": "t59"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 58,
               "column": 1
             }
@@ -1437,7 +1437,7 @@
               "name": "windowStart"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 59,
               "column": 1
             }
@@ -1449,7 +1449,7 @@
               "name": "windowBlocks"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 59,
               "column": 1
             }
@@ -1463,7 +1463,7 @@
               "right": "t62"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 59,
               "column": 1
             }
@@ -1477,7 +1477,7 @@
               "right": "t63"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 59,
               "column": 1
             }
@@ -1489,7 +1489,7 @@
               "value": "@ref:t64"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 59,
               "column": 1
             }
@@ -1535,7 +1535,7 @@
               ]
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 60,
               "column": 1
             }
@@ -1574,7 +1574,7 @@
               ]
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 60,
               "column": 1
             }
@@ -1703,7 +1703,7 @@
               ]
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 60,
               "column": 1
             }
@@ -1715,7 +1715,7 @@
               "value": "t88"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 60,
               "column": 1
             }
@@ -1727,7 +1727,7 @@
               "name": "newSpent"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 62,
               "column": 1
             }
@@ -1739,7 +1739,7 @@
               "name": "windowCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 62,
               "column": 1
             }
@@ -1753,7 +1753,7 @@
               "right": "t91"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 62,
               "column": 1
             }
@@ -1765,7 +1765,7 @@
               "value": "t92"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 62,
               "column": 1
             }
@@ -1777,7 +1777,7 @@
               "name": "payAmount"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 63,
               "column": 1
             }
@@ -1789,7 +1789,7 @@
               "name": "perTxCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 63,
               "column": 1
             }
@@ -1803,7 +1803,7 @@
               "right": "t95"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 63,
               "column": 1
             }
@@ -1815,7 +1815,7 @@
               "value": "t96"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 63,
               "column": 1
             }
@@ -1827,7 +1827,7 @@
               "name": "txPreimage"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 64,
               "column": 1
             }
@@ -1842,7 +1842,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 64,
               "column": 1
             }
@@ -1854,7 +1854,7 @@
               "value": "@ref:t99"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 64,
               "column": 1
             }
@@ -1866,7 +1866,7 @@
               "name": "contSats"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 65,
               "column": 1
             }
@@ -1878,7 +1878,7 @@
               "name": "payAmount"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 65,
               "column": 1
             }
@@ -1892,7 +1892,7 @@
               "right": "t101"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 65,
               "column": 1
             }
@@ -1906,7 +1906,7 @@
               "right": "t102"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 65,
               "column": 1
             }
@@ -1918,7 +1918,7 @@
               "value": "t103"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 65,
               "column": 1
             }
@@ -1930,7 +1930,7 @@
               "name": "contSats"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 66,
               "column": 1
             }
@@ -1944,7 +1944,7 @@
               "right": "t105"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 66,
               "column": 1
             }
@@ -1956,7 +1956,7 @@
               "name": "payAmount"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 66,
               "column": 1
             }
@@ -1970,7 +1970,7 @@
               "right": "t107"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 66,
               "column": 1
             }
@@ -1982,7 +1982,7 @@
               "name": "maxFee"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 66,
               "column": 1
             }
@@ -1996,7 +1996,7 @@
               "right": "t109"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 66,
               "column": 1
             }
@@ -2008,7 +2008,7 @@
               "value": "t110"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 66,
               "column": 1
             }
@@ -2020,7 +2020,7 @@
               "name": "newSpent"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 67,
               "column": 1
             }
@@ -2033,7 +2033,7 @@
               "value": "t112"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 67,
               "column": 1
             }
@@ -2045,7 +2045,7 @@
               "name": "newStart"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 68,
               "column": 1
             }
@@ -2058,7 +2058,7 @@
               "value": "t114"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 68,
               "column": 1
             }
@@ -2070,7 +2070,7 @@
               "name": "contSats"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 69,
               "column": 1
             }
@@ -2082,7 +2082,7 @@
               "name": "operatorPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 69,
               "column": 1
             }
@@ -2094,7 +2094,7 @@
               "name": "agentPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 69,
               "column": 1
             }
@@ -2106,7 +2106,7 @@
               "name": "perTxCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 69,
               "column": 1
             }
@@ -2118,7 +2118,7 @@
               "name": "windowCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 69,
               "column": 1
             }
@@ -2130,7 +2130,7 @@
               "name": "windowBlocks"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 69,
               "column": 1
             }
@@ -2142,7 +2142,7 @@
               "name": "maxFee"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 69,
               "column": 1
             }
@@ -2154,7 +2154,7 @@
               "name": "spentInWindow"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 69,
               "column": 1
             }
@@ -2166,7 +2166,7 @@
               "name": "windowStart"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 69,
               "column": 1
             }
@@ -2178,7 +2178,7 @@
               "name": "paused"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 69,
               "column": 1
             }
@@ -2202,7 +2202,7 @@
               ]
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 69,
               "column": 1
             }
@@ -2214,7 +2214,7 @@
               "name": "payAmount"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 70,
               "column": 1
             }
@@ -2226,7 +2226,7 @@
               "name": "destScript"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 70,
               "column": 1
             }
@@ -2239,7 +2239,7 @@
               "scriptBytes": "t128"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 70,
               "column": 1
             }
@@ -2508,7 +2508,7 @@
               "name": "operatorPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 86,
               "column": 1
             }
@@ -2523,7 +2523,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 86,
               "column": 1
             }
@@ -2535,7 +2535,7 @@
               "value": 20
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 86,
               "column": 1
             }
@@ -2549,7 +2549,7 @@
               "right": "t12"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 86,
               "column": 1
             }
@@ -2561,7 +2561,7 @@
               "value": "t13"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 86,
               "column": 1
             }
@@ -2573,7 +2573,7 @@
               "name": "pubKey"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 87,
               "column": 1
             }
@@ -2588,7 +2588,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 87,
               "column": 1
             }
@@ -2600,7 +2600,7 @@
               "name": "operatorPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 87,
               "column": 1
             }
@@ -2615,7 +2615,7 @@
               "right": "t17"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 87,
               "column": 1
             }
@@ -2627,7 +2627,7 @@
               "value": "t18"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 87,
               "column": 1
             }
@@ -2639,7 +2639,7 @@
               "name": "sig"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 88,
               "column": 1
             }
@@ -2651,7 +2651,7 @@
               "name": "pubKey"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 88,
               "column": 1
             }
@@ -2667,7 +2667,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 88,
               "column": 1
             }
@@ -2679,7 +2679,7 @@
               "value": "t22"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 88,
               "column": 1
             }
@@ -2691,7 +2691,7 @@
               "name": "newAgentPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 89,
               "column": 1
             }
@@ -2706,7 +2706,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 89,
               "column": 1
             }
@@ -2718,7 +2718,7 @@
               "value": 20
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 89,
               "column": 1
             }
@@ -2732,7 +2732,7 @@
               "right": "t26"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 89,
               "column": 1
             }
@@ -2744,7 +2744,7 @@
               "value": "t27"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 89,
               "column": 1
             }
@@ -2756,7 +2756,7 @@
               "name": "newPerTxCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 90,
               "column": 1
             }
@@ -2768,7 +2768,7 @@
               "value": 1
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 90,
               "column": 1
             }
@@ -2782,7 +2782,7 @@
               "right": "t30"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 90,
               "column": 1
             }
@@ -2828,7 +2828,7 @@
               ]
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 90,
               "column": 1
             }
@@ -2874,7 +2874,7 @@
               ]
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 90,
               "column": 1
             }
@@ -2920,7 +2920,7 @@
               ]
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 90,
               "column": 1
             }
@@ -2932,7 +2932,7 @@
               "value": "t46"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 90,
               "column": 1
             }
@@ -2944,7 +2944,7 @@
               "name": "newPaused"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 91,
               "column": 1
             }
@@ -2956,7 +2956,7 @@
               "value": 0
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 91,
               "column": 1
             }
@@ -2970,7 +2970,7 @@
               "right": "t49"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 91,
               "column": 1
             }
@@ -3016,7 +3016,7 @@
               ]
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 91,
               "column": 1
             }
@@ -3028,7 +3028,7 @@
               "value": "t55"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 91,
               "column": 1
             }
@@ -3040,7 +3040,7 @@
               "name": "contSats"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 92,
               "column": 1
             }
@@ -3052,7 +3052,7 @@
               "value": 1
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 92,
               "column": 1
             }
@@ -3066,7 +3066,7 @@
               "right": "t58"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 92,
               "column": 1
             }
@@ -3078,7 +3078,7 @@
               "value": "t59"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 92,
               "column": 1
             }
@@ -3090,7 +3090,7 @@
               "name": "newAgentPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 93,
               "column": 1
             }
@@ -3103,7 +3103,7 @@
               "value": "t61"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 93,
               "column": 1
             }
@@ -3115,7 +3115,7 @@
               "name": "newPerTxCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 94,
               "column": 1
             }
@@ -3128,7 +3128,7 @@
               "value": "t63"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 94,
               "column": 1
             }
@@ -3140,7 +3140,7 @@
               "name": "newWindowCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 95,
               "column": 1
             }
@@ -3153,7 +3153,7 @@
               "value": "t65"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 95,
               "column": 1
             }
@@ -3165,7 +3165,7 @@
               "name": "newWindowBlocks"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 96,
               "column": 1
             }
@@ -3178,7 +3178,7 @@
               "value": "t67"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 96,
               "column": 1
             }
@@ -3190,7 +3190,7 @@
               "name": "newMaxFee"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 97,
               "column": 1
             }
@@ -3203,7 +3203,7 @@
               "value": "t69"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 97,
               "column": 1
             }
@@ -3215,7 +3215,7 @@
               "name": "newPaused"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 98,
               "column": 1
             }
@@ -3228,7 +3228,7 @@
               "value": "t71"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 98,
               "column": 1
             }
@@ -3240,7 +3240,7 @@
               "name": "contSats"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 99,
               "column": 1
             }
@@ -3252,7 +3252,7 @@
               "name": "operatorPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 99,
               "column": 1
             }
@@ -3264,7 +3264,7 @@
               "name": "agentPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 99,
               "column": 1
             }
@@ -3276,7 +3276,7 @@
               "name": "perTxCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 99,
               "column": 1
             }
@@ -3288,7 +3288,7 @@
               "name": "windowCap"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 99,
               "column": 1
             }
@@ -3300,7 +3300,7 @@
               "name": "windowBlocks"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 99,
               "column": 1
             }
@@ -3312,7 +3312,7 @@
               "name": "maxFee"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 99,
               "column": 1
             }
@@ -3324,7 +3324,7 @@
               "name": "spentInWindow"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 99,
               "column": 1
             }
@@ -3336,7 +3336,7 @@
               "name": "windowStart"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 99,
               "column": 1
             }
@@ -3348,7 +3348,7 @@
               "name": "paused"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 99,
               "column": 1
             }
@@ -3372,7 +3372,7 @@
               ]
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 99,
               "column": 1
             }
@@ -3610,7 +3610,7 @@
               "name": "operatorPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 109,
               "column": 1
             }
@@ -3625,7 +3625,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 109,
               "column": 1
             }
@@ -3637,7 +3637,7 @@
               "value": 20
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 109,
               "column": 1
             }
@@ -3651,7 +3651,7 @@
               "right": "t12"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 109,
               "column": 1
             }
@@ -3663,7 +3663,7 @@
               "value": "t13"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 109,
               "column": 1
             }
@@ -3675,7 +3675,7 @@
               "name": "pubKey"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 110,
               "column": 1
             }
@@ -3690,7 +3690,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 110,
               "column": 1
             }
@@ -3702,7 +3702,7 @@
               "name": "operatorPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 110,
               "column": 1
             }
@@ -3717,7 +3717,7 @@
               "right": "t17"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 110,
               "column": 1
             }
@@ -3729,7 +3729,7 @@
               "value": "t18"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 110,
               "column": 1
             }
@@ -3741,7 +3741,7 @@
               "name": "sig"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 111,
               "column": 1
             }
@@ -3753,7 +3753,7 @@
               "name": "pubKey"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 111,
               "column": 1
             }
@@ -3769,7 +3769,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 111,
               "column": 1
             }
@@ -3781,7 +3781,7 @@
               "value": "t22"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 111,
               "column": 1
             }
@@ -3793,7 +3793,7 @@
               "name": "destPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 112,
               "column": 1
             }
@@ -3808,7 +3808,7 @@
               "kind": "call"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 112,
               "column": 1
             }
@@ -3820,7 +3820,7 @@
               "value": 20
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 112,
               "column": 1
             }
@@ -3834,7 +3834,7 @@
               "right": "t26"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 112,
               "column": 1
             }
@@ -3846,7 +3846,7 @@
               "value": "t27"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 112,
               "column": 1
             }
@@ -3858,7 +3858,7 @@
               "name": "sweepSats"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 113,
               "column": 1
             }
@@ -3870,7 +3870,7 @@
               "value": 1
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 113,
               "column": 1
             }
@@ -3884,7 +3884,7 @@
               "right": "t30"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 113,
               "column": 1
             }
@@ -3896,7 +3896,7 @@
               "value": "t31"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 113,
               "column": 1
             }
@@ -3908,7 +3908,7 @@
               "name": "sweepSats"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 114,
               "column": 1
             }
@@ -3920,7 +3920,7 @@
               "name": "destPkh"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 114,
               "column": 1
             }
@@ -3932,7 +3932,7 @@
               "value": "@this"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 114,
               "column": 1
             }
@@ -3948,7 +3948,7 @@
               "object": "t35"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 114,
               "column": 1
             }
@@ -3961,7 +3961,7 @@
               "scriptBytes": "t36"
             },
             "sourceLoc": {
-              "file": "src/NektarAgentVault.runar.go",
+              "file": "src\\NektarAgentVault.runar.go",
               "line": 114,
               "column": 1
             }

@@ -97,13 +97,13 @@ func TestWitnessedTrackerHeaderIndependenceAndCircularRejection(t *testing.T) {
 		t.Fatalf("unexpected DefaultSettleSpec(testnet): %q (want %q)", got, wantTest)
 	}
 	for in, want := range map[string]string{
-		"arcade:main":                                        wantMain,
-		"broadcaster:main":                                   wantMain,
-		"broadcaster:mainnet":                                wantMain,
-		"arcade:test":                                        wantTest,
-		"arcade:testnet":                                     wantTest,
-		"broadcaster:test":                                   wantTest,
-		"broadcaster:testnet":                                wantTest,
+		"arcade:main":         wantMain,
+		"broadcaster:main":    wantMain,
+		"broadcaster:mainnet": wantMain,
+		"arcade:test":         wantTest,
+		"arcade:testnet":      wantTest,
+		"broadcaster:test":    wantTest,
+		"broadcaster:testnet": wantTest,
 		"arcade:https://arcade-eu-1.bsvblockchain.tech":      "broadcaster:https://arcade-eu-1.bsvblockchain.tech",
 		"broadcaster:https://arcade-eu-1.bsvblockchain.tech": "broadcaster:https://arcade-eu-1.bsvblockchain.tech",
 	} {

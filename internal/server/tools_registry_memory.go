@@ -9,31 +9,79 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/lattice"
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/policy"
+	"github.com/kryptokrates/nektar/internal/reasoning"
 )
 
 // RememberToolInput is the canonical input schema shared by MCP, REST /v1/tools/remember, and A2A.
 type RememberToolInput struct {
-	Shard         string            `json:"shard,omitempty"`
-	Repo          string            `json:"repo,omitempty"`
-	Branch        string            `json:"branch,omitempty"`
-	Path          string            `json:"path,omitempty"`
-	MediaType     string            `json:"mediaType,omitempty"`
-	Text          string            `json:"text,omitempty"`
-	Data          string            `json:"data,omitempty"`
-	BlobBase64    string            `json:"blobBase64,omitempty"`
-	ChirpURL      string            `json:"chirpUrl,omitempty"`
-	CommitMessage string            `json:"commitMessage,omitempty"`
-	Source        string            `json:"source,omitempty"`
-	Level         int               `json:"level,omitempty"`
-	Class         string            `json:"class,omitempty"`
-	BorgGroup     string            `json:"borgGroup,omitempty"`
-	CallerPub     string            `json:"callerPub,omitempty"`
-	Supersedes    int64             `json:"supersedes,omitempty"`
-	AutoAnchor    bool              `json:"autoAnchor,omitempty"`
-	Extra         map[string]string `json:"extra,omitempty"`
+	Shard         string                `json:"shard,omitempty"`
+	Repo          string                `json:"repo,omitempty"`
+	Branch        string                `json:"branch,omitempty"`
+	Path          string                `json:"path,omitempty"`
+	MediaType     string                `json:"mediaType,omitempty"`
+	Text          string                `json:"text,omitempty"`
+	Data          string                `json:"data,omitempty"`
+	BlobBase64    string                `json:"blobBase64,omitempty"`
+	ChirpURL      string                `json:"chirpUrl,omitempty"`
+	CommitMessage string                `json:"commitMessage,omitempty"`
+	Source        string                `json:"source,omitempty"`
+	Level          int                   `json:"level,omitempty"`
+	Class          string                `json:"class,omitempty"`
+	Public         bool                  `json:"public,omitempty"`
+	Ontology       string                `json:"ontology,omitempty"`
+	OntologyStrict bool                  `json:"ontologyStrict,omitempty"`
+	BorgGroup      string                `json:"borgGroup,omitempty"`
+	Modality       *core.Modality        `json:"modality,omitempty"`
+	Refines        []core.RefinementEdge `json:"refines,omitempty"`
+	Triples        []reasoning.Triple    `json:"triples,omitempty"`
+	CallerPub      string                `json:"callerPub,omitempty"`
+	Supersedes     int64                 `json:"supersedes,omitempty"`
+	AutoAnchor     bool                  `json:"autoAnchor,omitempty"`
+	Extra          map[string]string     `json:"extra,omitempty"`
+}
+
+// CommitOntologyInput commits DL-Lite / OWL 2 RL / deontic axioms into the __ontology__ system shard.
+type CommitOntologyInput struct {
+	Axioms     []reasoning.OntologyAxiom `json:"axioms"`
+	AutoAnchor bool                      `json:"autoAnchor,omitempty"`
+}
+
+// LineageToolInput queries the verified cryptographic Knowledge DAG rooted at (shard, seq).
+type LineageToolInput struct {
+	Shard string `json:"shard"`
+	Seq   int64  `json:"seq"`
+}
+
+// ProvisionClearanceInput derives a downward-only CLKA clearance bundle for (shard, maxLevel, domains).
+type ProvisionClearanceInput struct {
+	Shard           string               `json:"shard"`
+	MaxLevel        int                  `json:"maxLevel"`
+	Domains         []string             `json:"domains,omitempty"`
+	DomainEdges     []lattice.DomainEdge `json:"domainEdges,omitempty"`
+	RecipientPubHex string               `json:"recipientPubHex,omitempty"`
+}
+
+// RotateLatticeInput bumps a shard's CLKA epoch for forward secrecy.
+type RotateLatticeInput struct {
+	Shard string `json:"shard"`
+}
+
+// CompactProveInput constructs an O(log N) MMR CompactProofBundle against the head anchor UTXO.
+type CompactProveInput struct {
+	Shard string `json:"shard"`
+	Seq   int64  `json:"seq"`
+}
+
+// ConsistencyProofInput constructs an O(log N) MMR append-only consistency proof between batch fromN and toN.
+type ConsistencyProofInput struct {
+	Shard string `json:"shard"`
+	FromN int64  `json:"fromN"`
+	ToN   int64  `json:"toN"`
 }
 
 // WantToolInput is the canonical input schema shared by MCP, REST /v1/tools/want, and A2A.
@@ -42,6 +90,7 @@ type WantToolInput struct {
 	Domain             string   `json:"domain,omitempty"`
 	Question           string   `json:"question,omitempty"`
 	Query              string   `json:"query,omitempty"`
+	OntologyID         string   `json:"ontologyId,omitempty"`
 	MaxSats            uint64   `json:"maxSats,omitempty"`
 	TargetShard        string   `json:"targetShard,omitempty"`
 	StandingTTLSeconds int64    `json:"standingTtlSeconds,omitempty"`
@@ -81,22 +130,28 @@ func (tb *Toolbox) ExecRemember(ctx context.Context, raw RememberToolInput) (*me
 		txt = raw.Data // Hermes NektarMemoryProvider uses `data`
 	}
 	in := memory.RememberInput{
-		Shard:         shard,
-		Branch:        raw.Branch,
-		Path:          raw.Path,
-		MediaType:     raw.MediaType,
-		Text:          txt,
-		Blob:          blob,
-		ChirpURL:      raw.ChirpURL,
-		CommitMessage: raw.CommitMessage,
-		Source:        raw.Source,
-		Level:         raw.Level,
-		Class:         raw.Class,
-		BorgGroup:     raw.BorgGroup,
-		CallerPub:     raw.CallerPub,
-		Supersedes:    raw.Supersedes,
-		AutoAnchor:    raw.AutoAnchor,
-		Extra:         raw.Extra,
+		Shard:          shard,
+		Branch:         raw.Branch,
+		Path:           raw.Path,
+		MediaType:      raw.MediaType,
+		Text:           txt,
+		Blob:           blob,
+		ChirpURL:       raw.ChirpURL,
+		CommitMessage:  raw.CommitMessage,
+		Source:         raw.Source,
+		Level:          raw.Level,
+		Class:          raw.Class,
+		Public:         raw.Public,
+		Ontology:       raw.Ontology,
+		OntologyStrict: raw.OntologyStrict,
+		BorgGroup:      raw.BorgGroup,
+		Modality:       raw.Modality,
+		Refines:        raw.Refines,
+		Triples:        raw.Triples,
+		CallerPub:      raw.CallerPub,
+		Supersedes:     raw.Supersedes,
+		AutoAnchor:     raw.AutoAnchor,
+		Extra:          raw.Extra,
 	}
 	cc := CallerContextFor(ctx, policy.Principal{})
 	if cc.FromHTTP {
@@ -115,46 +170,58 @@ func (tb *Toolbox) ExecRemember(ctx context.Context, raw RememberToolInput) (*me
 
 func (tb *Toolbox) callRememberTool(ctx context.Context, rawArgs json.RawMessage) (any, error) {
 	var wire struct {
-		Shard         string            `json:"shard,omitempty"`
-		Repo          string            `json:"repo,omitempty"`
-		Branch        string            `json:"branch,omitempty"`
-		Path          string            `json:"path,omitempty"`
-		MediaType     string            `json:"mediaType,omitempty"`
-		Text          string            `json:"text,omitempty"`
-		Data          string            `json:"data,omitempty"`
-		BlobBase64    string            `json:"blobBase64,omitempty"`
-		ChirpURL      string            `json:"chirpUrl,omitempty"`
-		CommitMessage string            `json:"commitMessage,omitempty"`
-		Source        string            `json:"source,omitempty"`
-		Level         int               `json:"level,omitempty"`
-		Class         string            `json:"class,omitempty"`
-		BorgGroup     string            `json:"borgGroup,omitempty"`
-		CallerPub     string            `json:"callerPub,omitempty"`
-		Supersedes    json.RawMessage   `json:"supersedes,omitempty"`
-		AutoAnchor    bool              `json:"autoAnchor,omitempty"`
-		Extra         map[string]string `json:"extra,omitempty"`
+		Shard          string                `json:"shard,omitempty"`
+		Repo           string                `json:"repo,omitempty"`
+		Branch         string                `json:"branch,omitempty"`
+		Path           string                `json:"path,omitempty"`
+		MediaType      string                `json:"mediaType,omitempty"`
+		Text           string                `json:"text,omitempty"`
+		Data           string                `json:"data,omitempty"`
+		BlobBase64     string                `json:"blobBase64,omitempty"`
+		ChirpURL       string                `json:"chirpUrl,omitempty"`
+		CommitMessage  string                `json:"commitMessage,omitempty"`
+		Source         string                `json:"source,omitempty"`
+		Level          int                   `json:"level,omitempty"`
+		Class          string                `json:"class,omitempty"`
+		Public         bool                  `json:"public,omitempty"`
+		Ontology       string                `json:"ontology,omitempty"`
+		OntologyStrict bool                  `json:"ontologyStrict,omitempty"`
+		BorgGroup      string                `json:"borgGroup,omitempty"`
+		Modality       *core.Modality        `json:"modality,omitempty"`
+		Refines        []core.RefinementEdge `json:"refines,omitempty"`
+		Triples        []reasoning.Triple    `json:"triples,omitempty"`
+		CallerPub      string                `json:"callerPub,omitempty"`
+		Supersedes     json.RawMessage       `json:"supersedes,omitempty"`
+		AutoAnchor     bool                  `json:"autoAnchor,omitempty"`
+		Extra          map[string]string     `json:"extra,omitempty"`
 	}
 	if err := json.Unmarshal(rawArgs, &wire); err != nil {
 		return nil, err
 	}
 	in := RememberToolInput{
-		Shard:         wire.Shard,
-		Repo:          wire.Repo,
-		Branch:        wire.Branch,
-		Path:          wire.Path,
-		MediaType:     wire.MediaType,
-		Text:          wire.Text,
-		Data:          wire.Data,
-		BlobBase64:    wire.BlobBase64,
-		ChirpURL:      wire.ChirpURL,
-		CommitMessage: wire.CommitMessage,
-		Source:        wire.Source,
-		Level:         wire.Level,
-		Class:         wire.Class,
-		BorgGroup:     wire.BorgGroup,
-		CallerPub:     wire.CallerPub,
-		AutoAnchor:    wire.AutoAnchor,
-		Extra:         wire.Extra,
+		Shard:          wire.Shard,
+		Repo:           wire.Repo,
+		Branch:         wire.Branch,
+		Path:           wire.Path,
+		MediaType:      wire.MediaType,
+		Text:           wire.Text,
+		Data:           wire.Data,
+		BlobBase64:     wire.BlobBase64,
+		ChirpURL:       wire.ChirpURL,
+		CommitMessage:  wire.CommitMessage,
+		Source:         wire.Source,
+		Level:          wire.Level,
+		Class:          wire.Class,
+		Public:         wire.Public,
+		Ontology:       wire.Ontology,
+		OntologyStrict: wire.OntologyStrict,
+		BorgGroup:      wire.BorgGroup,
+		Modality:       wire.Modality,
+		Refines:        wire.Refines,
+		Triples:        wire.Triples,
+		CallerPub:      wire.CallerPub,
+		AutoAnchor:     wire.AutoAnchor,
+		Extra:          wire.Extra,
 	}
 	if len(wire.Supersedes) > 0 && string(wire.Supersedes) != "null" {
 		var seq int64
@@ -255,6 +322,7 @@ func (tb *Toolbox) ExecWantTool(ctx context.Context, in WantToolInput) (any, err
 	return tb.ExecWant(ctx, market.WantRequest{
 		Domains:            doms,
 		Question:           q,
+		OntologyID:         in.OntologyID,
 		MaxSats:            in.MaxSats,
 		TargetShard:        in.TargetShard,
 		StandingTTLSeconds: in.StandingTTLSeconds,
@@ -480,4 +548,112 @@ func (tb *Toolbox) ExecBorgGroupCtx(ctx context.Context, in BorgGroupInput) (any
 		}
 		return g, nil
 	}
+}
+
+// ExecCommitOntology compiles and commits DL-Lite / OWL 2 RL / deontic axioms into __ontology__.
+func (tb *Toolbox) ExecCommitOntology(ctx context.Context, in CommitOntologyInput) (*memory.OntologyCommitResult, error) {
+	cc := CallerContextFor(ctx, policy.Principal{})
+	if cc.FromHTTP && !cc.IsOperator {
+		return nil, errors.New("operator token required for commitOntology")
+	}
+	return tb.mem.CommitOntologyAxioms(ctx, in.Axioms, in.AutoAnchor)
+}
+
+// ExecLineage returns the verified cryptographic Knowledge DAG for (shard, seq).
+func (tb *Toolbox) ExecLineage(ctx context.Context, in LineageToolInput) (*memory.LineageReport, error) {
+	cc := CallerContextFor(ctx, policy.Principal{})
+	if cc.FromHTTP {
+		return tb.mem.LineageAuthorized(ctx, in.Shard, in.Seq, cc.Principal)
+	}
+	return tb.mem.Lineage(ctx, in.Shard, in.Seq)
+}
+
+// ExecProvisionClearance derives a downward-only CLKA clearance bundle (+ manifest) for a shard,
+// optionally setting the shard's ontological domain hierarchy and/or sealing the bundle via ECDH.
+func (tb *Toolbox) ExecProvisionClearance(ctx context.Context, in ProvisionClearanceInput) (map[string]any, error) {
+	cc := CallerContextFor(ctx, policy.Principal{})
+	if cc.FromHTTP && !cc.IsOperator {
+		return nil, errors.New("operator token required for provisionClearance")
+	}
+	shard := strings.TrimSpace(in.Shard)
+	if shard == "" {
+		shard = "default"
+	}
+	if err := memory.ValidateShardName(shard, false); err != nil {
+		return nil, err
+	}
+	if len(in.DomainEdges) > 0 {
+		if err := tb.mem.Lattice().SetDomainHierarchy(shard, in.DomainEdges); err != nil {
+			return nil, err
+		}
+	}
+	clr, man, err := tb.mem.Lattice().ProvisionClearance(ctx, shard, in.MaxLevel, in.Domains)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"shard":    shard,
+		"epoch":    clr.Epoch,
+		"manifest": man,
+	}
+	if recPub := strings.TrimSpace(in.RecipientPubHex); recPub != "" {
+		sealed, sErr := lattice.SealClearanceForRecipient(recPub, clr)
+		if sErr != nil {
+			return nil, sErr
+		}
+		out["sealedClearance"] = sealed
+	} else {
+		out["clearance"] = clr
+	}
+	return out, nil
+}
+
+// ExecRotateLattice bumps a shard's CLKA encryption epoch for forward secrecy.
+func (tb *Toolbox) ExecRotateLattice(ctx context.Context, in RotateLatticeInput) (map[string]any, error) {
+	cc := CallerContextFor(ctx, policy.Principal{})
+	if cc.FromHTTP && !cc.IsOperator {
+		return nil, errors.New("operator token required for rotateLattice")
+	}
+	shard := strings.TrimSpace(in.Shard)
+	if shard == "" {
+		shard = "default"
+	}
+	if err := memory.ValidateShardName(shard, false); err != nil {
+		return nil, err
+	}
+	ep, err := tb.mem.Lattice().RotateEpoch(shard)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"shard": shard, "epoch": ep}, nil
+}
+
+// ExecCompactProve builds and SPV-verifies an O(log N) MMR CompactProofBundle.
+func (tb *Toolbox) ExecCompactProve(ctx context.Context, in CompactProveInput) (map[string]any, error) {
+	cc := CallerContextFor(ctx, policy.Principal{})
+	if cc.FromHTTP {
+		bundle, vr, err := tb.mem.ProveCompactAuthorized(ctx, in.Shard, in.Seq, cc.Principal)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"bundle": bundle, "verify": vr}, nil
+	}
+	bundle, vr, err := tb.mem.ProveCompact(ctx, in.Shard, in.Seq)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"bundle": bundle, "verify": vr}, nil
+}
+
+// ExecConsistencyProof builds an O(log N) MMR consistency proof between anchor batches fromN and toN.
+func (tb *Toolbox) ExecConsistencyProof(ctx context.Context, in ConsistencyProofInput) (map[string]any, error) {
+	cc := CallerContextFor(ctx, policy.Principal{})
+	if cc.FromHTTP && !cc.IsOperator && memory.IsSystemShard(in.Shard) {
+		return nil, errors.New("operator token required for system shard consistency proof")
+	}
+	cp, err := tb.mem.ConsistencyProof(in.Shard, in.FromN, in.ToN)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"shard": in.Shard, "proof": cp}, nil
 }

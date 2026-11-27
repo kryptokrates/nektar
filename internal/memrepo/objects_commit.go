@@ -19,46 +19,49 @@ func BuildCommitMPE(c CommitObject) (*core.MPE, error) {
 		return nil, err
 	}
 	fields := map[string][]byte{
-		"repo":         []byte(c.Repo),
-		"branch":       []byte(c.Branch),
-		"treeHash":     []byte(c.TreeHash),
-		"parents":      parentBytes,
-		"authorPub":    []byte(c.AuthorPub),
-		"modelId":      []byte(c.ModelID),
-		"policyCommit": []byte(c.PolicyCommit),
-		"message":      []byte(c.Message),
-		"timestamp":    []byte(strconv.FormatInt(c.Timestamp, 10)),
+		"repo":           []byte(c.Repo),
+		"branch":         []byte(c.Branch),
+		"treeHash":       []byte(c.TreeHash),
+		"parents":        parentBytes,
+		"authorPub":      []byte(c.AuthorPub),
+		"modelId":        []byte(c.ModelID),
+		"policyCommit":   []byte(c.PolicyCommit),
+		"ontologyCommit": []byte(c.OntologyCommit),
+		"message":        []byte(c.Message),
+		"timestamp":      []byte(strconv.FormatInt(c.Timestamp, 10)),
 	}
 	return core.BuildMPE(fields)
 }
 
 type commitSignable struct {
-	Version      int         `json:"v"`
-	Repo         string      `json:"repo"`
-	Branch       string      `json:"branch"`
-	Parents      []ParentRef `json:"parents,omitempty"`
-	TreeHash     string      `json:"treeHash"`
-	MPERoot      string      `json:"mpeRoot"`
-	AuthorPub    string      `json:"authorPub"`
-	ModelID      string      `json:"modelId"`
-	PolicyCommit string      `json:"policyCommit,omitempty"`
-	Message      string      `json:"message"`
-	Timestamp    int64       `json:"timestamp"`
+	Version        int         `json:"v"`
+	Repo           string      `json:"repo"`
+	Branch         string      `json:"branch"`
+	Parents        []ParentRef `json:"parents,omitempty"`
+	TreeHash       string      `json:"treeHash"`
+	MPERoot        string      `json:"mpeRoot"`
+	AuthorPub      string      `json:"authorPub"`
+	ModelID        string      `json:"modelId"`
+	PolicyCommit   string      `json:"policyCommit,omitempty"`
+	OntologyCommit string      `json:"ontologyCommit,omitempty"`
+	Message        string      `json:"message"`
+	Timestamp      int64       `json:"timestamp"`
 }
 
 func toCommitSignable(c CommitObject) commitSignable {
 	return commitSignable{
-		Version:      c.Version,
-		Repo:         c.Repo,
-		Branch:       c.Branch,
-		Parents:      c.Parents,
-		TreeHash:     c.TreeHash,
-		MPERoot:      c.MPERoot,
-		AuthorPub:    c.AuthorPub,
-		ModelID:      c.ModelID,
-		PolicyCommit: c.PolicyCommit,
-		Message:      c.Message,
-		Timestamp:    c.Timestamp,
+		Version:        c.Version,
+		Repo:           c.Repo,
+		Branch:         c.Branch,
+		Parents:        c.Parents,
+		TreeHash:       c.TreeHash,
+		MPERoot:        c.MPERoot,
+		AuthorPub:      c.AuthorPub,
+		ModelID:        c.ModelID,
+		PolicyCommit:   c.PolicyCommit,
+		OntologyCommit: c.OntologyCommit,
+		Message:        c.Message,
+		Timestamp:      c.Timestamp,
 	}
 }
 

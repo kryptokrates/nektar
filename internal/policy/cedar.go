@@ -40,7 +40,8 @@ func parsePolicySetCached(policyText string) (*cedar.PolicySet, error) {
 	return ps, nil
 }
 
-// DefaultPolicySet grants agents access to fragments at or below their proven clearance level.
+// DefaultPolicySet grants agents access to fragments at or below their proven clearance level,
+// and enforces fail-closed distillation on Action::"sell" unless explicit operator allowRawOverride is set.
 const DefaultPolicySet = `
 permit (
   principal,
@@ -48,6 +49,21 @@ permit (
   resource
 ) when {
   principal.level >= resource.level
+};
+permit (
+  principal,
+  action == Action::"sell",
+  resource
+) when {
+  principal.level >= resource.level &&
+  (resource.distilled || (context has allowRawOverride && context.allowRawOverride == true))
+};
+forbid (
+  principal,
+  action == Action::"sell",
+  resource
+) when {
+  !resource.distilled && !(context has allowRawOverride && context.allowRawOverride == true)
 };
 `
 
@@ -70,27 +86,32 @@ var JevMatcherPrincipal = Principal{
 // MatchContext carries deterministic integer-bps match signals into Cedar Request.Context
 // for optional operator-authored post-match market policies (monotonic tightening only).
 type MatchContext struct {
-	Role         string `json:"role"` // buyer | seller
-	RelevanceBP  int64  `json:"relevanceBp"`
-	ConfidenceBP int64  `json:"confidenceBp"`
-	AbuseProbBP  int64  `json:"abuseProbBp"`
-	PolicyFitBP  int64  `json:"policyFitBp"`
-	PriceSats    int64  `json:"priceSats"`
-	MaxSats      int64  `json:"maxSats"`
-	SettledDeals int64  `json:"settledDeals"`
-	FailedDeals  int64  `json:"failedDeals"`
-	IsHub        bool   `json:"isHub"`
-	Direct       bool   `json:"direct"`
-	RiskFlag     string `json:"riskFlag"`
-	Domain       string `json:"domain"`
+	Role          string `json:"role"` // buyer | seller
+	RelevanceBP   int64  `json:"relevanceBp"`
+	ConfidenceBP  int64  `json:"confidenceBp"`
+	AbuseProbBP   int64  `json:"abuseProbBp"`
+	PolicyFitBP   int64  `json:"policyFitBp"`
+	PriceSats     int64  `json:"priceSats"`
+	MaxSats       int64  `json:"maxSats"`
+	SettledDeals  int64  `json:"settledDeals"`
+	FailedDeals   int64  `json:"failedDeals"`
+	DomainTrustBP int64  `json:"domainTrustBp"`
+	AccBP         int64  `json:"accBp"`
+	DispBP        int64  `json:"dispBp"`
+	EigenTrustBP  int64  `json:"eigenTrustBp"`
+	IsHub         bool   `json:"isHub"`
+	Direct        bool   `json:"direct"`
+	RiskFlag      string `json:"riskFlag"`
+	Domain        string `json:"domain"`
 }
 
 type Resource struct {
-	Type  string `json:"type"` // Fragment
-	ID    string `json:"id"`
-	Level int64  `json:"level"`
-	Shard string `json:"shard"`
-	Class string `json:"class"`
+	Type      string `json:"type"` // Fragment
+	ID        string `json:"id"`
+	Level     int64  `json:"level"`
+	Shard     string `json:"shard"`
+	Class     string `json:"class"`
+	Distilled bool   `json:"distilled,omitempty"`
 }
 
 type PolicyCommitment struct {
@@ -136,23 +157,36 @@ func Authorize(policyText string, principal Principal, action string, resource R
 	return authorizeWithContext(policyText, principal, action, resource, cedar.NewRecord(nil))
 }
 
+// AuthorizeSell evaluates Action::"sell" under fail-closed Cedar rules enforcing resource.distilled == true
+// unless explicit operator allowRawOverride is supplied.
+func AuthorizeSell(policyText string, principal Principal, resource Resource, allowRawOverride bool) (Decision, error) {
+	ctxRec := cedar.NewRecord(cedar.RecordMap{
+		"allowRawOverride": cedar.Boolean(allowRawOverride),
+	})
+	return authorizeWithContext(policyText, principal, "sell", resource, ctxRec)
+}
+
 // AuthorizeMatch evaluates an operator-authored Cedar market policy with deterministic
 // integer-bps MatchContext attributes (zero float non-determinism; fail-closed on diag.Errors).
 func AuthorizeMatch(policyText string, principal Principal, action string, resource Resource, mctx MatchContext) (Decision, error) {
 	ctxRec := cedar.NewRecord(cedar.RecordMap{
-		"role":         cedar.String(mctx.Role),
-		"relevanceBp":  cedar.Long(mctx.RelevanceBP),
-		"confidenceBp": cedar.Long(mctx.ConfidenceBP),
-		"abuseProbBp":  cedar.Long(mctx.AbuseProbBP),
-		"policyFitBp":  cedar.Long(mctx.PolicyFitBP),
-		"priceSats":    cedar.Long(mctx.PriceSats),
-		"maxSats":      cedar.Long(mctx.MaxSats),
-		"settledDeals": cedar.Long(mctx.SettledDeals),
-		"failedDeals":  cedar.Long(mctx.FailedDeals),
-		"isHub":        cedar.Boolean(mctx.IsHub),
-		"direct":       cedar.Boolean(mctx.Direct),
-		"riskFlag":     cedar.String(mctx.RiskFlag),
-		"domain":       cedar.String(mctx.Domain),
+		"role":          cedar.String(mctx.Role),
+		"relevanceBp":   cedar.Long(mctx.RelevanceBP),
+		"confidenceBp":  cedar.Long(mctx.ConfidenceBP),
+		"abuseProbBp":   cedar.Long(mctx.AbuseProbBP),
+		"policyFitBp":   cedar.Long(mctx.PolicyFitBP),
+		"priceSats":     cedar.Long(mctx.PriceSats),
+		"maxSats":       cedar.Long(mctx.MaxSats),
+		"settledDeals":  cedar.Long(mctx.SettledDeals),
+		"failedDeals":   cedar.Long(mctx.FailedDeals),
+		"domainTrustBp": cedar.Long(mctx.DomainTrustBP),
+		"accBp":         cedar.Long(mctx.AccBP),
+		"dispBp":        cedar.Long(mctx.DispBP),
+		"eigenTrustBp":  cedar.Long(mctx.EigenTrustBP),
+		"isHub":         cedar.Boolean(mctx.IsHub),
+		"direct":        cedar.Boolean(mctx.Direct),
+		"riskFlag":      cedar.String(mctx.RiskFlag),
+		"domain":        cedar.String(mctx.Domain),
 	})
 	return authorizeWithContext(policyText, principal, action, resource, ctxRec)
 }
@@ -184,9 +218,10 @@ func authorizeWithContext(policyText string, principal Principal, action string,
 		rUID: cedar.Entity{
 			UID: rUID,
 			Attributes: cedar.NewRecord(cedar.RecordMap{
-				"level": cedar.Long(resource.Level),
-				"shard": cedar.String(resource.Shard),
-				"class": cedar.String(resource.Class),
+				"level":     cedar.Long(resource.Level),
+				"shard":     cedar.String(resource.Shard),
+				"class":     cedar.String(resource.Class),
+				"distilled": cedar.Boolean(resource.Distilled),
 			}),
 		},
 	}
@@ -313,9 +348,10 @@ func ProveLevelIsolation(policyText string, minLevel, fragmentLevel int64) (ok b
 	rEnt := cedar.Entity{
 		UID: rUID,
 		Attributes: cedar.NewRecord(cedar.RecordMap{
-			"level": cedar.Long(fragmentLevel),
-			"shard": cedar.String("s"),
-			"class": cedar.String("c"),
+			"level":     cedar.Long(fragmentLevel),
+			"shard":     cedar.String("s"),
+			"class":     cedar.String("c"),
+			"distilled": cedar.Boolean(true),
 		}),
 	}
 	for lvl := minLevel; lvl < fragmentLevel; lvl++ {

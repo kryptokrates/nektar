@@ -121,9 +121,9 @@ func (d *DB) SaveSellListing(l SellListing) error {
 	}
 	doms, _ := json.Marshal(l.Domains)
 	_, err := d.sql.Exec(`
-		INSERT OR REPLACE INTO sell_listings (shard, domains_json, price_sats, description, active, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		l.Shard, string(doms), l.PriceSats, l.Description, boolToInt(l.Active), l.CreatedAt)
+		INSERT OR REPLACE INTO sell_listings (shard, domains_json, price_sats, description, ontology_id, allow_raw, dynamic_pricing_json, active, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		l.Shard, string(doms), l.PriceSats, l.Description, l.OntologyID, boolToInt(l.AllowRaw), l.DynamicPricingJSON, boolToInt(l.Active), l.CreatedAt)
 	return err
 }
 
@@ -131,7 +131,7 @@ func (d *DB) SaveSellListing(l SellListing) error {
 func (d *DB) ListSellListings() ([]SellListing, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`SELECT shard, domains_json, price_sats, description, active, created_at FROM sell_listings ORDER BY created_at DESC`)
+	rows, err := d.sql.Query(`SELECT shard, domains_json, price_sats, description, COALESCE(ontology_id, ''), COALESCE(allow_raw, 0), dynamic_pricing_json, active, created_at FROM sell_listings ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -140,15 +140,24 @@ func (d *DB) ListSellListings() ([]SellListing, error) {
 	for rows.Next() {
 		var l SellListing
 		var domJSON string
-		var active int
-		if err := rows.Scan(&l.Shard, &domJSON, &l.PriceSats, &l.Description, &active, &l.CreatedAt); err != nil {
+		var allowRaw, active int
+		if err := rows.Scan(&l.Shard, &domJSON, &l.PriceSats, &l.Description, &l.OntologyID, &allowRaw, &l.DynamicPricingJSON, &active, &l.CreatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(domJSON), &l.Domains)
+		l.AllowRaw = allowRaw != 0
 		l.Active = active != 0
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+// UpdateSellListingPricing updates dynamic pricing state and active price for a shard listing.
+func (d *DB) UpdateSellListingPricing(shard string, priceSats uint64, dynJSON []byte) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.sql.Exec(`UPDATE sell_listings SET price_sats = ?, dynamic_pricing_json = ? WHERE shard = ?`, priceSats, dynJSON, shard)
+	return err
 }
 
 // DeleteSellListing removes a shard listing from the market.

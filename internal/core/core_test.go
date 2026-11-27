@@ -22,23 +22,26 @@ func TestFragmentRoundtripAndMerkle(t *testing.T) {
 	}
 	f.HDP = ComputeHDPV2(f.Data, f.Provenance)
 
-	enc := SerializeFragment(f)
-	dec, err := ParseFragment(enc)
+	provBytes := SerializeProvenance(p)
+	decP, err := ParseProvenance(provBytes)
 	if err != nil {
-		t.Fatalf("ParseFragment failed: %v", err)
+		t.Fatalf("ParseProvenance failed: %v", err)
 	}
-	if !EqualBytes(dec.Data, f.Data) || !EqualBytes(dec.HDP, f.HDP) || !EqualBytes(dec.Ciphertext, f.Ciphertext) {
-		t.Fatalf("fragment roundtrip mismatch")
+	if decP.Source != p.Source || decP.Time != p.Time || !EqualBytes(decP.Signature, p.Signature) || decP.ModelID != p.ModelID {
+		t.Fatalf("provenance roundtrip mismatch: %+v", decP)
 	}
-	if dec.Provenance.Modality == nil || dec.Provenance.Modality.Qualifier != p.Modality.Qualifier {
-		t.Fatalf("modality roundtrip mismatch: %+v", dec.Provenance.Modality)
+	if decP.Modality == nil || decP.Modality.Qualifier != p.Modality.Qualifier {
+		t.Fatalf("modality roundtrip mismatch: %+v", decP.Modality)
+	}
+	if !VerifyHDP(f.Data, provBytes, f.HDP) {
+		t.Fatalf("VerifyHDP failed on canonical v2 H(d|p)")
 	}
 
 	// Verify Merkle proofs across all odd and even leaf counts 1..17.
 	for count := 1; count <= 17; count++ {
 		leaves := make([][]byte, count)
 		for i := range count {
-			lf := ComputeLeafV2(Fragment{
+			lf := ComputeLeaf(Fragment{
 				Data:       []byte{byte(i), byte(count)},
 				Provenance: Provenance{Source: "s", Time: int64(i), ModelID: "m"},
 			})

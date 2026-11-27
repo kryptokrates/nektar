@@ -130,7 +130,7 @@ func cmdRepoList(args []string) error {
 			return err
 		}
 		if *jsonOut {
-			return printRepoJSON(out)
+			return printJSON(out)
 		}
 		return printLiveRepoList(out)
 	}
@@ -148,7 +148,7 @@ func cmdRepoList(args []string) error {
 		return err
 	}
 	if *jsonOut {
-		return printRepoJSON(repos)
+		return printJSON(repos)
 	}
 	if len(repos) == 0 {
 		fmt.Println("No Memory Repos yet. Run `nektar repo commit my-repo -text \"...\"` to create one.")
@@ -171,7 +171,7 @@ func printLiveRepoList(raw any) error {
 		Repos []memory.RepoSummary `json:"repos"`
 	}
 	if json.Unmarshal(b, &wrapped) != nil {
-		return printRepoJSON(raw)
+		return printJSON(raw)
 	}
 	if len(wrapped.Repos) == 0 {
 		fmt.Println("No Memory Repos yet. Run `nektar repo commit my-repo -text \"...\"` to create one.")
@@ -215,7 +215,7 @@ func cmdRepoLog(args []string) error {
 			return err
 		}
 		if *jsonOut {
-			return printRepoJSON(out)
+			return printJSON(out)
 		}
 		b, _ := json.Marshal(out)
 		var wrapped struct {
@@ -232,7 +232,7 @@ func cmdRepoLog(args []string) error {
 			}
 			return nil
 		}
-		return printRepoJSON(out)
+		return printJSON(out)
 	}
 
 	dir := resolveRepoDataDir(*dataDir, *netName)
@@ -248,7 +248,7 @@ func cmdRepoLog(args []string) error {
 		return err
 	}
 	if *jsonOut {
-		return printRepoJSON(commits)
+		return printJSON(commits)
 	}
 	for _, c := range commits {
 		anchor := "unanchored"
@@ -288,7 +288,7 @@ func cmdRepoTree(args []string) error {
 			return err
 		}
 		if *jsonOut {
-			return printRepoJSON(out)
+			return printJSON(out)
 		}
 		b, _ := json.Marshal(out)
 		var wrapped struct {
@@ -304,7 +304,7 @@ func cmdRepoTree(args []string) error {
 			}
 			return nil
 		}
-		return printRepoJSON(out)
+		return printJSON(out)
 	}
 
 	dir := resolveRepoDataDir(*dataDir, *netName)
@@ -320,7 +320,7 @@ func cmdRepoTree(args []string) error {
 		return err
 	}
 	if *jsonOut {
-		return printRepoJSON(map[string]any{"commit": c, "tree": tr})
+		return printJSON(map[string]any{"commit": c, "tree": tr})
 	}
 	for _, e := range tr.Entries {
 		ref := ""
@@ -357,7 +357,7 @@ func cmdRepoDiff(args []string) error {
 		if err != nil {
 			return err
 		}
-		return printRepoJSON(out)
+		return printJSON(out)
 	}
 
 	dir := resolveRepoDataDir(*dataDir, *netName)
@@ -372,7 +372,7 @@ func cmdRepoDiff(args []string) error {
 	if err != nil {
 		return err
 	}
-	return printRepoJSON(changes)
+	return printJSON(changes)
 }
 
 func openNode(ctx context.Context, netName, dataDir string, _ bool) (*memory.Service, any, func(), error) {
@@ -381,15 +381,6 @@ func openNode(ctx context.Context, netName, dataDir string, _ bool) (*memory.Ser
 		return nil, nil, nil, err
 	}
 	return rt.mem, rt, rt.closeFn, nil
-}
-
-func printRepoJSON(v any) error {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(b))
-	return nil
 }
 
 func shortRepoStr(s string, n int) string {

@@ -52,18 +52,18 @@ type DealReceipt struct {
 
 // DealReceiptVerification reports offline cryptographic validation of a triple-entry DealReceipt.
 type DealReceiptVerification struct {
-	OK               bool   `json:"ok"`
-	Bilateral        bool   `json:"bilateral"` // true iff BOTH SellerSig and BuyerSig verified
-	SellerVerified   bool   `json:"sellerVerified"`
-	BuyerVerified    bool   `json:"buyerVerified"`
-	FieldsRootValid  bool   `json:"fieldsRootValid"`
-	CedarVerified    bool   `json:"cedarVerified,omitempty"`
-	DealID           string `json:"dealId,omitempty"`
-	OfferID          string `json:"offerId,omitempty"`
-	PriceSats        uint64 `json:"priceSats,omitempty"`
-	PaymentTxID      string `json:"paymentTxid,omitempty"`
-	Error            string `json:"error,omitempty"`
-	AdvisoryNote     string `json:"advisoryNote,omitempty"`
+	OK              bool   `json:"ok"`
+	Bilateral       bool   `json:"bilateral"` // true iff BOTH SellerSig and BuyerSig verified
+	SellerVerified  bool   `json:"sellerVerified"`
+	BuyerVerified   bool   `json:"buyerVerified"`
+	FieldsRootValid bool   `json:"fieldsRootValid"`
+	CedarVerified   bool   `json:"cedarVerified,omitempty"`
+	DealID          string `json:"dealId,omitempty"`
+	OfferID         string `json:"offerId,omitempty"`
+	PriceSats       uint64 `json:"priceSats,omitempty"`
+	PaymentTxID     string `json:"paymentTxid,omitempty"`
+	Error           string `json:"error,omitempty"`
+	AdvisoryNote    string `json:"advisoryNote,omitempty"`
 }
 
 // CanonicalFields returns the deterministic named-field map committed into FieldsRoot (MPE).

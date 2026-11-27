@@ -367,10 +367,30 @@ func (s *Service) MergeBranch(ctx context.Context, repo, sourceBranch, targetBra
 }
 
 // CheckoutGitWorkspace materializes repo/branch into a real standard `.git` working tree on disk.
+// Authorized CLKA-encrypted blobs are ephemerally decrypted into the local checkout copy while
+// keeping SQLite, CHIRP, and exported capsules 100% encrypted at rest.
 func (s *Service) CheckoutGitWorkspace(ctx context.Context, repo, branch, destDir string) (*memrepo.GitExportResult, error) {
 	_, cap, _, err := s.ExportCapsule(ctx, repo, branch, "")
 	if err != nil {
 		return nil, err
+	}
+	if cap != nil && len(cap.Blobs) > 0 {
+		decBlobs := make(map[string]memrepo.BlobObject, len(cap.Blobs))
+		for bh, b := range cap.Blobs {
+			if b.Encrypted && b.BorgGroup == "" && b.LatticeEpoch > 0 && len(b.KeyedMeta) > 0 {
+				if pt, ok := s.openBlobPlaintext(ctx, b, ownerPrincipal(), "", nil, false, false); ok {
+					cp := b
+					cp.Encrypted = false
+					cp.Inline = pt
+					decBlobs[bh] = cp
+					continue
+				}
+			}
+			decBlobs[bh] = b
+		}
+		capCopy := *cap
+		capCopy.Blobs = decBlobs
+		cap = &capCopy
 	}
 	return memrepo.ExportGitWorkspace(destDir, cap, s.objects)
 }

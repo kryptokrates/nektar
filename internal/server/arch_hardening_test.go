@@ -93,7 +93,7 @@ func TestToolAuthBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mem.Remember(ctx, memory.RememberInput{Shard: "mixed", Text: "public level 0 fact", Level: 0}); err != nil {
+	if _, err := mem.Remember(ctx, memory.RememberInput{Shard: "mixed", Text: "public level 0 fact", Level: 0, Public: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := mem.Remember(ctx, memory.RememberInput{Shard: "mixed", Text: "classified level 5 secret", Level: 5}); err != nil {

@@ -12,11 +12,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/policy"
+	"github.com/kryptokrates/nektar/internal/reasoning"
+	"github.com/kryptokrates/nektar/internal/store"
 )
 
-var proxyReceiptRe = regexp.MustCompile(`nektarr1\.[a-zA-Z0-9_-]{20,}`)
+var (
+	proxyReceiptRe = regexp.MustCompile(`nektarr1\.[a-zA-Z0-9_-]{20,}`)
+	proxyCiteRe    = regexp.MustCompile(`\[([a-zA-Z0-9_./-]+):(\d+)\]`)
+)
 
 func (a *App) registerProxyRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/proxy/health", func(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +135,8 @@ func (a *App) handleLLMProxy(w http.ResponseWriter, r *http.Request, provider, s
 	shard := strings.TrimSpace(r.Header.Get("X-Nektar-Shard"))
 	skipRecall := strings.TrimSpace(r.Header.Get("X-Nektar-Recall")) == "0"
 	captureOn := strings.TrimSpace(r.Header.Get("X-Nektar-Capture")) == "1"
+	groundingMode := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Nektar-Grounding"))) // strict | flag | off (default)
+	requireSPV := strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Nektar-SPV")), "required")
 	var userPrompt string
 	memoryHits := 0
 
@@ -140,6 +148,9 @@ func (a *App) handleLLMProxy(w http.ResponseWriter, r *http.Request, provider, s
 				memCtx, hits := a.buildPromptMemoryContext(r.Context(), shard, userPrompt)
 				memoryHits = hits
 				if memCtx != "" {
+					if groundingMode == "strict" || groundingMode == "flag" {
+						memCtx += "\nCite [shard:seq] on every factual assertion so Nektar can verify and attach a nektarr1.* receipt.\n"
+					}
 					injectProxyMemory(provider, subPath, payload, memCtx)
 					if updated, mErr := json.Marshal(payload); mErr == nil {
 						rawBody = updated
@@ -214,6 +225,33 @@ func (a *App) handleLLMProxy(w http.ResponseWriter, r *http.Request, provider, s
 	if isStream {
 		w.Header().Set("Cache-Control", "no-cache")
 	}
+
+	// Opt-in Automaton Language Gate L'(A') (Paper §8): when X-Nektar-Grounding is strict|flag
+	// on non-streaming responses, buffer JSON, verify every claim via GroundedAnswer (stripping
+	// hallucinations), attach real nektarr1.* receipt footer + X-Nektar-Receipt header (or honest ungrounded notice).
+	if (groundingMode == "strict" || groundingMode == "flag") && isInferencePost && !isStream && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		bodyBytes, rErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		if rErr != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": rErr.Error()})
+			return
+		}
+		rewritten, rcpTok, grounded := a.applyProxyGroundingGate(r.Context(), provider, bodyBytes, groundingMode, requireSPV)
+		w.Header().Set("X-Nektar-Grounded", strconv.FormatBool(grounded))
+		if rcpTok != "" {
+			w.Header().Set("X-Nektar-Receipt", rcpTok)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(rewritten)
+		if captureOn {
+			rawResp := string(rewritten)
+			a.goBackground(func(bgCtx context.Context) {
+				a.postProxyTurn(bgCtx, provider, shard, userPrompt, rawResp, false, captureOn)
+			})
+		}
+		return
+	}
+
 	w.WriteHeader(resp.StatusCode)
 
 	flusher, _ := w.(http.Flusher)
@@ -456,4 +494,125 @@ func extractAssistantText(provider, raw string, isStream bool) string {
 		return txt
 	}
 	return ""
+}
+
+// applyProxyGroundingGate implements the Automaton Language Gate L'(A') for the L0 LLM proxy:
+// extracts claims citing [shard:seq] (or explicit JSON claims), runs GroundedAnswer with optional
+// RequireSettledSPV, strips ungrounded hallucinations (or flags them), and appends a real nektarr1.*
+// receipt footer (or honest ungrounded notice — never fabricating a receipt).
+func (a *App) applyProxyGroundingGate(
+	ctx context.Context,
+	provider string,
+	rawBody []byte,
+	groundingMode string,
+	requireSPV bool,
+) ([]byte, string, bool) {
+	assistantText := extractAssistantText(provider, string(rawBody), false)
+	claims := extractProxyClaims(assistantText)
+	mode := "remove"
+	if groundingMode == "flag" {
+		mode = "flag"
+	}
+	proxyPrincipal := policy.Principal{Type: "Agent", ID: "llm-proxy", Level: 0}
+	ga, err := a.mem.GroundedAnswer(ctx, memory.GroundedAnswerInput{
+		Claims:            claims,
+		Mode:              mode,
+		Principal:         proxyPrincipal,
+		DisallowBorg:      true,
+		RequireSettledSPV: requireSPV,
+	})
+	if err != nil || ga == nil || ga.Ungrounded {
+		ungroundedMsg := "[ungrounded: no assertions could be verified against committed memory]"
+		if mode == "flag" && strings.TrimSpace(assistantText) != "" {
+			ungroundedMsg = "[ungrounded] " + strings.TrimSpace(assistantText)
+		}
+		return rewriteProxyAssistantText(provider, rawBody, ungroundedMsg), "", false
+	}
+	finalText := ga.Answer
+	if mode == "flag" && ga.Report != nil && len(ga.Report.Flagged) > 0 {
+		var flagged []string
+		for _, fc := range ga.Report.Flagged {
+			flagged = append(flagged, "[ungrounded: "+fc.Text+"]")
+		}
+		finalText = strings.TrimSpace(finalText + "\n" + strings.Join(flagged, " "))
+	}
+	if ga.Footer != "" {
+		finalText = finalText + "\n\n" + ga.Footer
+	}
+	return rewriteProxyAssistantText(provider, rawBody, finalText), ga.ReceiptToken, true
+}
+
+func extractProxyClaims(text string) []reasoning.Claim {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil
+	}
+	// Support explicit structured JSON {"claims": [...]} payloads.
+	if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
+		var structured struct {
+			Claims []reasoning.Claim `json:"claims"`
+		}
+		if json.Unmarshal([]byte(trimmed), &structured) == nil && len(structured.Claims) > 0 {
+			return structured.Claims
+		}
+	}
+	var claims []reasoning.Claim
+	for _, rawLine := range strings.Split(trimmed, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		matches := proxyCiteRe.FindAllStringSubmatch(line, -1)
+		var cites []reasoning.FragmentRef
+		seen := make(map[reasoning.FragmentRef]bool)
+		for _, m := range matches {
+			if len(m) != 3 {
+				continue
+			}
+			seq, err := strconv.ParseInt(m[2], 10, 64)
+			if err != nil || seq <= 0 {
+				continue
+			}
+			ref := reasoning.FragmentRef{Shard: m[1], Seq: seq}
+			if !seen[ref] {
+				seen[ref] = true
+				cites = append(cites, ref)
+			}
+		}
+		clean := strings.TrimSpace(proxyCiteRe.ReplaceAllString(line, ""))
+		if clean == "" {
+			continue
+		}
+		claims = append(claims, reasoning.Claim{
+			Text:  clean,
+			Cites: cites,
+		})
+	}
+	return claims
+}
+
+func rewriteProxyAssistantText(provider string, rawBody []byte, newText string) []byte {
+	var obj map[string]any
+	if json.Unmarshal(rawBody, &obj) != nil {
+		return rawBody
+	}
+	if provider == "anthropic" {
+		obj["content"] = []map[string]any{{"type": "text", "text": newText}}
+	} else if choices, ok := obj["choices"].([]any); ok && len(choices) > 0 {
+		if c0, ok := choices[0].(map[string]any); ok {
+			if msg, ok := c0["message"].(map[string]any); ok {
+				msg["content"] = newText
+				c0["message"] = msg
+				choices[0] = c0
+				obj["choices"] = choices
+			}
+		}
+	} else if _, ok := obj["output_text"]; ok {
+		obj["output_text"] = newText
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return rawBody
+	}
+	return out
 }

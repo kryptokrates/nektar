@@ -224,9 +224,14 @@ func TestSystemShardsDealsAndPoliciesSingletonAnchoringE2E(t *testing.T) {
 	}
 
 	// 4. Both system shards pass full VerifyShardChain integrity AND SPV Prove, and stay hidden from UserShards!
+	// __policies__ includes 1 bootstrap Cedar policy commitment (Memory as Law) + 2 OperatorPolicyRecords = 3 fragments.
+	expectedCounts := map[string]int{
+		memory.DealsShard:    2,
+		memory.PoliciesShard: 3,
+	}
 	for _, sys := range []string{memory.DealsShard, memory.PoliciesShard} {
 		rep, err := mem.VerifyShardChain(sys)
-		if err != nil || !rep.OK || rep.FragmentCount != 2 || rep.AnchorCount != 2 {
+		if err != nil || !rep.OK || rep.FragmentCount != expectedCounts[sys] || rep.AnchorCount != 2 {
 			t.Fatalf("VerifyShardChain(%s) failed: rep=%+v err=%v", sys, rep, err)
 		}
 	}

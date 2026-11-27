@@ -15,33 +15,39 @@ import (
 
 // FragmentRecord is one persisted append-only row in a memory repo / shard.
 type FragmentRecord struct {
-	Shard         string `json:"shard"`
-	Seq           int64  `json:"seq"`
-	HDP           string `json:"hdp"`
-	Leaf          string `json:"leaf"`
-	PrevLeaf      string `json:"prevLeaf,omitempty"`
-	ChainHash     string `json:"chainHash,omitempty"`
-	Data          []byte `json:"data,omitempty"`
-	Ciphertext    []byte `json:"ciphertext,omitempty"`
-	KeyedMeta     []byte `json:"keyedMeta,omitempty"` // BRC-369 keyed envelope metadata
-	Provenance    []byte `json:"provenance"`
-	Level         int    `json:"level"`
-	Class         string `json:"class"`
-	BorgGroup     string `json:"borgGroup,omitempty"`
-	BorgEpoch     int64  `json:"borgEpoch,omitempty"`
-	BatchN        int64  `json:"batchN"`
-	LeafIndex     int    `json:"leafIndex"`
-	AnchorTxID    string `json:"anchorTxid,omitempty"`
-	Supersedes    int64  `json:"supersedes,omitempty"`
-	Forgotten     bool   `json:"forgotten,omitempty"`
-	Tainted       bool   `json:"tainted,omitempty"`
-	CreatedAt     int64  `json:"createdAt"`
-	Path          string `json:"path,omitempty"`
-	MediaType     string `json:"mediaType,omitempty"`
-	ChirpURL      string `json:"chirpUrl,omitempty"`
-	ContentSHA256 string `json:"contentSha256,omitempty"`
-	MPERoot       string `json:"mpeRoot,omitempty"`
-	CommitHash    string `json:"commitHash,omitempty"`
+	Shard          string `json:"shard"`
+	Seq            int64  `json:"seq"`
+	HDP            string `json:"hdp"`
+	Leaf           string `json:"leaf"`
+	PrevLeaf       string `json:"prevLeaf,omitempty"`
+	ChainHash      string `json:"chainHash,omitempty"`
+	Data           []byte `json:"data,omitempty"`
+	Ciphertext     []byte `json:"ciphertext,omitempty"`
+	KeyedMeta      []byte `json:"keyedMeta,omitempty"` // BRC-369 Borg or CLKA sealed envelope metadata
+	Provenance     []byte `json:"provenance"`
+	Level          int    `json:"level"`
+	Class          string `json:"class"`
+	BorgGroup      string `json:"borgGroup,omitempty"`
+	BorgEpoch      int64  `json:"borgEpoch,omitempty"`
+	LatticeEpoch   uint64 `json:"latticeEpoch,omitempty"`
+	Public         bool   `json:"public,omitempty"`
+	BatchN         int64  `json:"batchN"`
+	LeafIndex      int    `json:"leafIndex"`
+	AnchorTxID     string `json:"anchorTxid,omitempty"`
+	Supersedes     int64  `json:"supersedes,omitempty"`
+	Forgotten      bool   `json:"forgotten,omitempty"`
+	Tainted        bool   `json:"tainted,omitempty"`
+	CreatedAt      int64  `json:"createdAt"`
+	Path           string `json:"path,omitempty"`
+	MediaType      string `json:"mediaType,omitempty"`
+	ChirpURL       string `json:"chirpUrl,omitempty"`
+	ContentSHA256  string `json:"contentSha256,omitempty"`
+	MPERoot        string `json:"mpeRoot,omitempty"`
+	CommitHash     string `json:"commitHash,omitempty"`
+	TransitionHash string `json:"transitionHash,omitempty"`
+	Distilled      bool   `json:"distilled,omitempty"`
+	OntologyID     string `json:"ontologyId,omitempty"`
+	TriplesJSON    []byte `json:"triplesJson,omitempty"`
 }
 
 // BatchAnchor tracks one closed & anchored batch for a shard.
@@ -52,6 +58,8 @@ type BatchAnchor struct {
 	Size        int    `json:"size"`
 	RootHex     string `json:"R"`
 	ChainedHex  string `json:"Rp"`
+	StateHash   string `json:"stateHash,omitempty"`
+	MmrRoot     string `json:"mmrRoot,omitempty"`
 	TxID        string `json:"txid"`
 	Beef        []byte `json:"beef,omitempty"`
 	Settled     bool   `json:"settled"`
@@ -68,6 +76,8 @@ type PendingAnchor struct {
 	Seqs       []int64 `json:"seqs"`
 	RootHex    string  `json:"R"`
 	ChainedHex string  `json:"Rp"`
+	StateHash  string  `json:"stateHash,omitempty"`
+	MmrRoot    string  `json:"mmrRoot,omitempty"`
 	TxID       string  `json:"txid,omitempty"`
 	Beef       []byte  `json:"beef,omitempty"`
 	CreatedAt  int64   `json:"createdAt"`
@@ -237,6 +247,12 @@ CREATE TABLE IF NOT EXISTS kv (
 			WHERE f.shard = fragments_fts.shard AND f.seq = fragments_fts.seq AND f.forgotten = 1
 		)`); err != nil {
 		return fmt.Errorf("store: clean forgotten fts: %w", err)
+	}
+	if err := d.migrateEpistemic(); err != nil {
+		return err
+	}
+	if err := d.migrateGraph(); err != nil {
+		return err
 	}
 	if err := d.migrateMemRepo(); err != nil {
 		return err

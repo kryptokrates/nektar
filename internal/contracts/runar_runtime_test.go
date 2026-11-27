@@ -46,26 +46,31 @@ func TestNektarAnchorChronicleVM(t *testing.T) {
 	changePKH := core.Hash160(fuelKey.PubKey().Compressed())
 	changeLock, _ := P2PKHLockingScript(changePKH)
 
-	// Genesis anchor (n=0).
+	// Genesis anchor (n=0) with consensus-enforced StateHash Q_0 and MMR root.
 	r0 := core.SHA256([]byte("batch-0-root"))
 	rp0 := core.ChainRp(core.Zero32Bytes(), r0, 3)
+	mmr, _ := core.NewMMR([][]byte{r0})
+	meta0 := core.ComputeBatchMetaHash(core.SHA256([]byte("tree-0")), core.SHA256([]byte("pol-0")), core.SHA256([]byte("ont-0")))
+	q0 := core.ChainStateQ(core.Zero32Bytes(), r0, meta0, mmr.Root())
 	st0 := AnchorState{
-		Shard:    core.ShardIDFromPubkey(pub1),
-		OwnerPub: hex.EncodeToString(pub1),
-		OwnerPKH: pkh1,
-		N:        0,
-		Size:     3,
-		R:        r0,
-		Rp:       rp0,
-		Tag:      core.TagRPrime,
-		Metanet:  true,
+		Shard:     core.ShardIDFromPubkey(pub1),
+		OwnerPub:  hex.EncodeToString(pub1),
+		OwnerPKH:  pkh1,
+		N:         0,
+		Size:      3,
+		R:         r0,
+		Rp:        rp0,
+		StateHash: q0,
+		MmrRoot:   mmr.Root(),
+		Tag:       core.TagRPrime,
+		Metanet:   true,
 	}
 	lock0, err := EncodeAnchorLockingScript(st0)
 	if err != nil {
 		t.Fatalf("EncodeAnchorLockingScript(0): %v", err)
 	}
 	if !IsSpendableNektarAnchorScript(*lock0) {
-		t.Fatal("expected newly encoded NektarAnchor to be spendable patched v4")
+		t.Fatal("expected newly encoded NektarAnchor to be spendable")
 	}
 	tx0 := transaction.NewTransaction()
 	tx0.AddOutput(&transaction.TransactionOutput{Satoshis: 1, LockingScript: lock0})
@@ -74,8 +79,8 @@ func TestNektarAnchorChronicleVM(t *testing.T) {
 	fuelTx := transaction.NewTransaction()
 	fuelTx.AddOutput(&transaction.TransactionOutput{Satoshis: 100_000, LockingScript: changeLock})
 
-	buildAppend := func(prevTx *transaction.Transaction, prevSt AnchorState, newR []byte, newSize uint64, signerKey *ec.PrivateKey) (*transaction.Transaction, AnchorState, error) {
-		nextSt, err := NextAnchorState(prevSt, newR, newSize)
+	buildAppend := func(prevTx *transaction.Transaction, prevSt AnchorState, newR []byte, newSize uint64, batchMeta, newMmrRoot []byte, signerKey *ec.PrivateKey) (*transaction.Transaction, AnchorState, error) {
+		nextSt, err := NextAnchorState(prevSt, newR, newSize, batchMeta, newMmrRoot)
 		if err != nil {
 			return nil, AnchorState{}, err
 		}
@@ -98,7 +103,7 @@ func TestNektarAnchorChronicleVM(t *testing.T) {
 		})
 		tx.AddOutput(&transaction.TransactionOutput{Satoshis: 1, LockingScript: nextLock})
 		tx.AddOutput(&transaction.TransactionOutput{Satoshis: 99_000, LockingScript: changeLock})
-		unlock, err := BuildAnchorAppendUnlock(ctx, tx, 0, prevTx.Outputs[0], newR, newSize, changePKH, 99_000, privKeySigner(signerKey))
+		unlock, err := BuildAnchorAppendUnlock(ctx, tx, 0, prevTx.Outputs[0], newR, newSize, batchMeta, newMmrRoot, changePKH, 99_000, privKeySigner(signerKey))
 		if err != nil {
 			return nil, AnchorState{}, err
 		}
@@ -108,14 +113,18 @@ func TestNektarAnchorChronicleVM(t *testing.T) {
 
 	// 1. Append batch 0 -> batch 1 under real Chronicle Script VM!
 	r1 := core.SHA256([]byte("batch-1-root"))
-	tx1, st1, err := buildAppend(tx0, st0, r1, 5, owner1)
+	_, _ = mmr.Append(r1)
+	meta1 := core.ComputeBatchMetaHash(core.SHA256([]byte("tree-1")), core.SHA256([]byte("pol-0")), core.SHA256([]byte("ont-0")))
+	tx1, st1, err := buildAppend(tx0, st0, r1, 5, meta1, mmr.Root(), owner1)
 	if err != nil {
 		t.Fatalf("NektarAnchor.Append (0->1) failed Chronicle VM: %v", err)
 	}
 
 	// 2. Append batch 1 -> batch 2!
 	r2 := core.SHA256([]byte("batch-2-root"))
-	tx2, st2, err := buildAppend(tx1, st1, r2, 7, owner1)
+	_, _ = mmr.Append(r2)
+	meta2 := core.ComputeBatchMetaHash(core.SHA256([]byte("tree-2")), core.SHA256([]byte("pol-1")), core.SHA256([]byte("ont-1")))
+	tx2, st2, err := buildAppend(tx1, st1, r2, 7, meta2, mmr.Root(), owner1)
 	if err != nil {
 		t.Fatalf("NektarAnchor.Append (1->2) failed Chronicle VM: %v", err)
 	}
@@ -123,14 +132,16 @@ func TestNektarAnchorChronicleVM(t *testing.T) {
 	// 3. Adversarial negative: forged R' in Output 0 MUST be rejected by Chronicle Script VM!
 	{
 		rBad := core.SHA256([]byte("batch-3-root"))
-		badSt, _ := NextAnchorState(st2, rBad, 2)
+		metaBad := core.ComputeBatchMetaHash(core.Zero32Bytes(), core.Zero32Bytes(), core.Zero32Bytes())
+		badMmr := core.SHA256([]byte("mmr-bad"))
+		badSt, _ := NextAnchorState(st2, rBad, 2, metaBad, badMmr)
 		badSt.Rp = core.SHA256([]byte("forged-rp"))
 		badLock, _ := EncodeAnchorLockingScript(badSt)
 		badTx := transaction.NewTransaction()
 		badTx.AddInput(&transaction.TransactionInput{SourceTXID: tx2.TxID(), SourceTxOutIndex: 0, SourceTransaction: tx2, SequenceNumber: 0xffffffff})
 		badTx.AddOutput(&transaction.TransactionOutput{Satoshis: 1, LockingScript: badLock})
 		badTx.AddOutput(&transaction.TransactionOutput{Satoshis: 99_000, LockingScript: changeLock})
-		unlock, err := BuildAnchorAppendUnlock(ctx, badTx, 0, tx2.Outputs[0], rBad, 2, changePKH, 99_000, privKeySigner(owner1))
+		unlock, err := BuildAnchorAppendUnlock(ctx, badTx, 0, tx2.Outputs[0], rBad, 2, metaBad, badMmr, changePKH, 99_000, privKeySigner(owner1))
 		if err != nil {
 			t.Fatalf("unlock build: %v", err)
 		}
@@ -140,16 +151,39 @@ func TestNektarAnchorChronicleVM(t *testing.T) {
 		}
 	}
 
+	// 3b. Adversarial negative: forged StateHash Q_n in Output 0 MUST be rejected by Chronicle Script VM!
+	{
+		rBad := core.SHA256([]byte("batch-3-state-bad"))
+		metaBad := core.ComputeBatchMetaHash(core.Zero32Bytes(), core.Zero32Bytes(), core.Zero32Bytes())
+		mmrBad := core.SHA256([]byte("mmr-state-bad"))
+		badSt, _ := NextAnchorState(st2, rBad, 2, metaBad, mmrBad)
+		badSt.StateHash = core.SHA256([]byte("forged-state-q"))
+		badLock, _ := EncodeAnchorLockingScript(badSt)
+		badTx := transaction.NewTransaction()
+		badTx.AddInput(&transaction.TransactionInput{SourceTXID: tx2.TxID(), SourceTxOutIndex: 0, SourceTransaction: tx2, SequenceNumber: 0xffffffff})
+		badTx.AddOutput(&transaction.TransactionOutput{Satoshis: 1, LockingScript: badLock})
+		unlock, err := BuildAnchorAppendUnlock(ctx, badTx, 0, tx2.Outputs[0], rBad, 2, metaBad, mmrBad, make([]byte, 20), 0, privKeySigner(owner1))
+		if err != nil {
+			t.Fatalf("unlock build: %v", err)
+		}
+		badTx.Inputs[0].UnlockingScript = unlock
+		if vmErr := VerifyInputScriptChronicle(badTx, 0, tx2.Outputs[0]); vmErr == nil {
+			t.Fatal("CRITICAL: Chronicle Script VM accepted forged StateHash Q_n on NektarAnchor.Append!")
+		}
+	}
+
 	// 4. Adversarial negative: skipped n (n=4 instead of 3) MUST be rejected by Chronicle Script VM!
 	{
 		rSkip := core.SHA256([]byte("batch-skip"))
-		badSt, _ := NextAnchorState(st2, rSkip, 2)
+		metaSkip := core.ComputeBatchMetaHash(core.Zero32Bytes(), core.Zero32Bytes(), core.Zero32Bytes())
+		mmrSkip := core.SHA256([]byte("mmr-skip"))
+		badSt, _ := NextAnchorState(st2, rSkip, 2, metaSkip, mmrSkip)
 		badSt.N = 4
 		badLock, _ := EncodeAnchorLockingScript(badSt)
 		badTx := transaction.NewTransaction()
 		badTx.AddInput(&transaction.TransactionInput{SourceTXID: tx2.TxID(), SourceTxOutIndex: 0, SourceTransaction: tx2, SequenceNumber: 0xffffffff})
 		badTx.AddOutput(&transaction.TransactionOutput{Satoshis: 1, LockingScript: badLock})
-		unlock, err := BuildAnchorAppendUnlock(ctx, badTx, 0, tx2.Outputs[0], rSkip, 2, make([]byte, 20), 0, privKeySigner(owner1))
+		unlock, err := BuildAnchorAppendUnlock(ctx, badTx, 0, tx2.Outputs[0], rSkip, 2, metaSkip, mmrSkip, make([]byte, 20), 0, privKeySigner(owner1))
 		if err != nil {
 			t.Fatalf("unlock build: %v", err)
 		}
@@ -162,7 +196,9 @@ func TestNektarAnchorChronicleVM(t *testing.T) {
 	// 5. Adversarial negative: wrong key signing NektarAnchor.Append MUST be rejected by Chronicle Script VM!
 	{
 		rAtk := core.SHA256([]byte("attacker-root"))
-		nextSt, _ := NextAnchorState(st2, rAtk, 1)
+		metaAtk := core.ComputeBatchMetaHash(core.Zero32Bytes(), core.Zero32Bytes(), core.Zero32Bytes())
+		mmrAtk := core.SHA256([]byte("mmr-atk"))
+		nextSt, _ := NextAnchorState(st2, rAtk, 1, metaAtk, mmrAtk)
 		nextLock, _ := EncodeAnchorLockingScript(nextSt)
 		badTx := transaction.NewTransaction()
 		badTx.AddInput(&transaction.TransactionInput{SourceTXID: tx2.TxID(), SourceTxOutIndex: 0, SourceTransaction: tx2, SequenceNumber: 0xffffffff})
@@ -172,7 +208,7 @@ func TestNektarAnchorChronicleVM(t *testing.T) {
 		prevScript := []byte(*tx2.Outputs[0].LockingScript)
 		pre, _ := ComputeOpPushTxPreimage(badTx, 0, prevScript, 1, ResolveMethodCodeSepOffset(art, prevScript, 0), sighash.AllForkID)
 		badSig, _ := SignDigestLowS(attacker, core.DSHA256(pre), sighash.AllForkID)
-		unlock, _ := BuildMethodUnlockingScript(art, "append", codePart, []any{badSig, attacker.PubKey().Compressed(), rAtk, uint64(1), make([]byte, 20), uint64(0), pre})
+		unlock, _ := BuildMethodUnlockingScript(art, "append", codePart, []any{badSig, attacker.PubKey().Compressed(), rAtk, uint64(1), metaAtk, mmrAtk, make([]byte, 20), uint64(0), pre})
 		badTx.Inputs[0].UnlockingScript = unlock
 		if vmErr := VerifyInputScriptChronicle(badTx, 0, tx2.Outputs[0]); vmErr == nil {
 			t.Fatal("CRITICAL: Chronicle Script VM accepted attacker signature on NektarAnchor.Append!")
@@ -203,10 +239,12 @@ func TestNektarAnchorChronicleVM(t *testing.T) {
 
 	// 7. Old owner1 MUST be rejected after Rotate; new owner2 MUST succeed!
 	r3 := core.SHA256([]byte("batch-3-after-rotate"))
-	if _, _, err := buildAppend(rotTx, rotSt, r3, 9, owner1); err == nil {
+	_, _ = mmr.Append(r3)
+	meta3 := core.ComputeBatchMetaHash(core.SHA256([]byte("tree-3")), core.SHA256([]byte("pol-1")), core.SHA256([]byte("ont-1")))
+	if _, _, err := buildAppend(rotTx, rotSt, r3, 9, meta3, mmr.Root(), owner1); err == nil {
 		t.Fatal("expected old owner1 to fail after NektarAnchor.Rotate")
 	}
-	if _, _, err := buildAppend(rotTx, rotSt, r3, 9, owner2); err != nil {
+	if _, _, err := buildAppend(rotTx, rotSt, r3, 9, meta3, mmr.Root(), owner2); err != nil {
 		t.Fatalf("new owner2 Append after Rotate failed Chronicle VM: %v", err)
 	}
 }

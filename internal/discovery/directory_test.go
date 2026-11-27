@@ -48,8 +48,9 @@ func TestThreeLayerDiscoveryFederationAndRemoteChirpSeed(t *testing.T) {
 	// 2. Seed Seller Agent B with a domain shard & serve its CHIRP objects over HTTP!
 	sellerMem := newNodeMem(t)
 	if _, err := sellerMem.Remember(ctx, memory.RememberInput{
-		Shard: "ops",
-		Text:  "Teranode UTXO fan-out keeps 16 parallel spend slots hot.",
+		Shard:  "ops",
+		Text:   "Teranode UTXO fan-out keeps 16 parallel spend slots hot.",
+		Public: true,
 	}); err != nil {
 		t.Fatal(err)
 	}

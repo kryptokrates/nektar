@@ -25,14 +25,14 @@ type ShardPackResult struct {
 // (Git/Metanet Commit DAG + volumetric blobs + NektarAnchor UTXO lineage BEEF proofs).
 // Legacy flat JSON ShardPack v1 has been removed; .nkt Capsules are the sole portable format.
 func (s *Service) ExportShardPack(ctx context.Context, shard string) (*ShardPackResult, error) {
-	res, _, err := s.exportCapsuleAuthorized(ctx, shard, policy.Principal{Type: "Agent", ID: "owner", Level: 100}, "read", false, false)
+	res, _, err := s.exportCapsuleAuthorized(ctx, shard, policy.Principal{Type: "Agent", ID: "owner", Level: 100}, "read", false, false, false)
 	return res, err
 }
 
-// ExportPublicShardPack exports only active, Level-0, non-Borg, Cedar-"disclose" fragments as a
-// self-verifying .nkt CHIRP Capsule and registers its DAG object hashes for unauthenticated reads.
+// ExportPublicShardPack exports only active, Public (unencrypted), Level-0, non-Borg, Cedar-"disclose"
+// fragments as a self-verifying .nkt CHIRP Capsule and registers its DAG object hashes for unauthenticated reads.
 func (s *Service) ExportPublicShardPack(ctx context.Context, shard string) (*ShardPackResult, error) {
-	res, hashes, err := s.exportCapsuleAuthorized(ctx, shard, policy.Principal{Type: "Agent", ID: "public", Level: 0}, "disclose", true, true)
+	res, hashes, err := s.exportCapsuleAuthorized(ctx, shard, policy.Principal{Type: "Agent", ID: "public", Level: 0}, "disclose", true, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -43,11 +43,11 @@ func (s *Service) ExportPublicShardPack(ctx context.Context, shard string) (*Sha
 // ExportShardPackAuthorized exports only active, Cedar-authorized fragments from shard as a
 // self-verifying .nkt CHIRP Memory Capsule.
 func (s *Service) ExportShardPackAuthorized(ctx context.Context, shard string, principal policy.Principal, action string, disallowBorg bool) (*ShardPackResult, error) {
-	res, _, err := s.exportCapsuleAuthorized(ctx, shard, principal, action, disallowBorg, true)
+	res, _, err := s.exportCapsuleAuthorized(ctx, shard, principal, action, disallowBorg, false, true)
 	return res, err
 }
 
-func (s *Service) exportCapsuleAuthorized(ctx context.Context, shard string, principal policy.Principal, action string, disallowBorg, excludeSuperseded bool) (*ShardPackResult, [][32]byte, error) {
+func (s *Service) exportCapsuleAuthorized(ctx context.Context, shard string, principal policy.Principal, action string, disallowBorg, disallowPrivate, excludeSuperseded bool) (*ShardPackResult, [][32]byte, error) {
 	if err := ValidateShardName(shard, false); err != nil {
 		return nil, nil, err
 	}
@@ -62,22 +62,20 @@ func (s *Service) exportCapsuleAuthorized(ctx context.Context, shard string, pri
 	if err != nil {
 		return nil, nil, err
 	}
-	superseded := make(map[int64]bool)
-	for _, r := range allFrags {
-		if r.Supersedes > 0 {
-			superseded[r.Supersedes] = true
-		}
-	}
+	superseded := s.CollectSupersededSeqs(shard)
 	s.mu.RLock()
 	polText := s.policyText
 	s.mu.RUnlock()
 
 	frags := make([]store.FragmentRecord, 0, len(allFrags))
 	for _, r := range allFrags {
-		if r.Forgotten || (excludeSuperseded && superseded[r.Seq]) {
+		if r.Forgotten || (excludeSuperseded && superseded[r.Seq] > 0) {
 			continue
 		}
 		if disallowBorg && r.BorgGroup != "" {
+			continue
+		}
+		if disallowPrivate && r.LatticeEpoch > 0 && !r.Public {
 			continue
 		}
 		dec, aErr := policy.Authorize(polText, principal, action, policy.Resource{
@@ -115,15 +113,15 @@ func (s *Service) exportCapsuleAuthorized(ctx context.Context, shard string, pri
 			if relPath == "" {
 				relPath = fmt.Sprintf("facts/%04d.md", r.Seq)
 			}
-			b, hs, bErr := memrepo.BuildBlob(s.objects, relPath, r.MediaType, r.Data, false)
+			b, bErr := s.buildFragmentBlob(relPath, r.MediaType, r.Data, nil, r.ChirpURL, r.ContentSHA256, r.BorgGroup, r.BorgEpoch, r.LatticeEpoch, r.KeyedMeta, r.Level, r.Class)
 			if bErr != nil || b == nil {
 				continue
 			}
-			if r.ChirpURL != "" && b.ChirpURL == "" {
-				b.ChirpURL = r.ChirpURL
-				b.BlobHash, _ = memrepo.ComputeBlobHash(*b)
+			if b.ChirpURL != "" && !b.Encrypted {
+				if hs, cErr := bstack.CollectChirpHashes(s.objects, b.ChirpURL); cErr == nil {
+					chirpHashes = append(chirpHashes, hs...)
+				}
 			}
-			chirpHashes = append(chirpHashes, hs...)
 			blobs[b.BlobHash] = *b
 			entries = append(entries, memrepo.TreeEntry{
 				Mode:          "100644",
@@ -133,21 +131,25 @@ func (s *Service) exportCapsuleAuthorized(ctx context.Context, shard string, pri
 				Size:          b.Size,
 				ContentSHA256: b.ContentSHA256,
 				ChirpURL:      b.ChirpURL,
+				Encrypted:     b.Encrypted,
+				Level:         b.Level,
+				Class:         b.Class,
 			})
 		}
 		if tr, tErr := memrepo.BuildTree(entries); tErr == nil && tr != nil {
 			trees[tr.TreeHash] = *tr
 			if c, cErr := memrepo.FinalizeCommit(memrepo.CommitObject{
-				Version:      1,
-				Repo:         shard,
-				Branch:       memrepo.DefaultBranch,
-				TreeHash:     tr.TreeHash,
-				AuthorPub:    s.commitAuthorPubHex(ctx),
-				ModelID:      s.modelID.Provider + "/" + s.modelID.Release,
-				PolicyCommit: s.PolicyCommit().Hash,
-				Message:      fmt.Sprintf("Authorized capsule export (%d entries)", len(entries)),
-				Timestamp:    time.Now().Unix(),
-				AnchorN:      -1,
+				Version:        1,
+				Repo:           shard,
+				Branch:         memrepo.DefaultBranch,
+				TreeHash:       tr.TreeHash,
+				AuthorPub:      s.commitAuthorPubHex(ctx),
+				ModelID:        s.modelID.Provider + "/" + s.modelID.Release,
+				PolicyCommit:   s.PolicyCommit().Hash,
+				OntologyCommit: s.OntologyHead(),
+				Message:        fmt.Sprintf("Authorized capsule export (%d entries)", len(entries)),
+				Timestamp:      time.Now().Unix(),
+				AnchorN:        -1,
 			}, func(digest []byte) ([]byte, error) {
 				return s.port.SignDigest(ctx, digest)
 			}); cErr == nil {

@@ -81,10 +81,16 @@ func (a *App) buildMux() http.Handler {
 	})))
 	mux.Handle("POST /v1/tools/{name}", a.withAuth(http.HandlerFunc(a.handleToolCall)))
 
-	// 5. Memory, Grounding & Receipts REST API.
+	// 5. Memory, Grounding, Ontology, CLKA Lattice & Receipts REST API.
 	mux.Handle("POST /v1/remember", a.withAuth(a.withPaywall("remember", http.HandlerFunc(a.handleRemember))))
 	mux.Handle("POST /v1/recall", a.withAuth(a.withPaywall("recall", http.HandlerFunc(a.handleRecall))))
 	mux.Handle("POST /v1/answer", a.withAuth(a.withPaywall("groundedAnswer", http.HandlerFunc(a.handleAnswer))))
+	mux.Handle("POST /v1/ontology/commit", a.withOperatorAuth(http.HandlerFunc(a.handleCommitOntology)))
+	mux.Handle("GET /v1/lineage/{shard}/{seq}", a.withAuth(http.HandlerFunc(a.handleLineage)))
+	mux.Handle("POST /v1/lattice/clearance", a.withOperatorAuth(http.HandlerFunc(a.handleProvisionClearance)))
+	mux.Handle("POST /v1/lattice/rotate", a.withOperatorAuth(http.HandlerFunc(a.handleRotateLattice)))
+	mux.Handle("GET /v1/prove/compact/{shard}/{seq}", a.withAuth(http.HandlerFunc(a.handleCompactProve)))
+	mux.Handle("GET /v1/prove/consistency/{shard}", a.withAuth(http.HandlerFunc(a.handleConsistencyProof)))
 	mux.HandleFunc("GET /v1/verify", a.handleVerifyReceipt)
 	mux.HandleFunc("GET /v1/verify/{token}", a.handleVerifyReceipt)
 	mux.Handle("GET /v1/pack/{shard}", a.withOperatorAuth(http.HandlerFunc(a.handleShardPack)))
@@ -194,6 +200,7 @@ func (a *App) buildMux() http.Handler {
 	a.registerMetricsRoutes(mux)
 	a.registerDockAndLaunchRoutes(mux)
 	a.registerColdStartRoutes(mux)
+	a.registerAutonomousRoutes(mux)
 
 	// 8. Embedded Overlay Hub (Restate services are NEVER exposed on the public :18420 mux — dedicated internal h2c port only!).
 	if a.cfg.Hub != nil {

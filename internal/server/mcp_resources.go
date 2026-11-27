@@ -201,7 +201,7 @@ func registerMCPResourcesAndPrompts(srv *mcp.Server, tb *Toolbox) {
 			Messages: []*mcp.PromptMessage{{
 				Role: mcp.Role("user"),
 				Content: &mcp.TextContent{
-					Text: fmt.Sprintf("Audit Memory Repo %q:\n1. Call repo {action:\"verify\", repo:%q} to verify strict NektarAnchor UTXO spend lineage (tx_{n-1}:0 -> tx_n:0) and TagLeafV2 commitments.\n2. Call repo {action:\"log\", repo:%q} to review commit ancestry and any external Market Forks.%s", repo, repo, repo, extra),
+					Text: fmt.Sprintf("Audit Memory Repo %q:\n1. Call repo {action:\"verify\", repo:%q} to verify strict NektarAnchor UTXO spend lineage (tx_{n-1}:0 -> tx_n:0), Merkle Automaton StateHash Q_n, MMR accumulator, and unified TagLeaf commitments.\n2. Call repo {action:\"log\", repo:%q} to review commit ancestry and any external Market Forks.%s", repo, repo, repo, extra),
 				},
 			}},
 		}, nil

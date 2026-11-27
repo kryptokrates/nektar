@@ -49,9 +49,10 @@ var (
 type ArtifactKind string
 
 const (
-	KindWant     ArtifactKind = "want"
-	KindOffer    ArtifactKind = "offer"
-	KindAnnounce ArtifactKind = "announce"
+	KindWant        ArtifactKind = "want"
+	KindOffer       ArtifactKind = "offer"
+	KindAnnounce    ArtifactKind = "announce"
+	KindAttestation ArtifactKind = "attestation"
 )
 
 // MarketPayload is the canonical nkt1 CBOR envelope riding on tm_nektar_<net>_<nibble> lanes.
@@ -67,14 +68,15 @@ type SignedWant struct {
 }
 
 type WantAd struct {
-	WantID   string   `json:"wantId"`
-	Pub      string   `json:"pub"`
-	Net      string   `json:"net"`
-	Domains  []string `json:"domains"`
-	Query    string   `json:"query"`
-	MaxSats  uint64   `json:"maxSats"`
-	Revision int      `json:"revision"`
-	Exp      int64    `json:"exp"` // unix ms
+	WantID     string   `json:"wantId"`
+	Pub        string   `json:"pub"`
+	Net        string   `json:"net"`
+	Domains    []string `json:"domains"`
+	Query      string   `json:"query"`
+	OntologyID string   `json:"ontologyId,omitempty"` // optional 32-byte hex committed TBox OntologyID
+	MaxSats    uint64   `json:"maxSats"`
+	Revision   int      `json:"revision"`
+	Exp        int64    `json:"exp"` // unix ms
 }
 
 // SignedOffer advertises a seller's signed quote answering a WantAd.
@@ -84,39 +86,43 @@ type SignedOffer struct {
 }
 
 type OfferAd struct {
-	OfferID      string          `json:"offerId"`
-	WantID       string          `json:"wantId"`
-	Pub          string          `json:"pub"`
-	BuyerPub     string          `json:"buyerPub"`
-	Net          string          `json:"net"`
-	Domains      []string        `json:"domains"`
-	PriceSats    uint64          `json:"priceSats"`
-	Shard        string          `json:"shard,omitempty"`
-	Leaf         string          `json:"leaf,omitempty"`
-	ChirpURL     string          `json:"chirpUrl,omitempty"`
+	OfferID        string          `json:"offerId"`
+	WantID         string          `json:"wantId"`
+	Pub            string          `json:"pub"`
+	BuyerPub       string          `json:"buyerPub"`
+	Net            string          `json:"net"`
+	Domains        []string        `json:"domains"`
+	PriceSats      uint64          `json:"priceSats"`
+	Shard          string          `json:"shard,omitempty"`
+	Leaf           string          `json:"leaf,omitempty"`
+	OntologyID     string          `json:"ontologyId,omitempty"` // optional 32-byte hex TBox OntologyID
+	EdgesRoot      string          `json:"edgesRoot,omitempty"`  // optional 32-byte hex accepted-edge Merkle root
+	ChirpURL       string          `json:"chirpUrl,omitempty"`
 	KeyCommitHex   string          `json:"keyCommitHex,omitempty"`
 	PayAddress     string          `json:"payAddress,omitempty"`
 	PayIdentityKey string          `json:"payIdentityKey,omitempty"`
 	SellerURL      string          `json:"sellerUrl,omitempty"`
-	BboxOffice   string          `json:"bboxOffice,omitempty"`
+	BboxOffice     string          `json:"bboxOffice,omitempty"`
 	SaleOffer      json.RawMessage `json:"saleOffer,omitempty"`
 	Description    string          `json:"description,omitempty"`
 	Tags           []string        `json:"tags,omitempty"`
 	BondOutpoint   string          `json:"bondOutpoint,omitempty"`
 	BondBEEFHex    string          `json:"bondBeefHex,omitempty"`
 	IsHub          bool            `json:"isHub,omitempty"`
-	Direct       bool            `json:"direct,omitempty"`
-	Revision     int             `json:"revision"`
-	Exp          int64           `json:"exp"`
+	Direct         bool            `json:"direct,omitempty"`
+	Revision       int             `json:"revision"`
+	Exp            int64           `json:"exp"`
 }
 
-// PackRef advertises a content-addressed CHIRP shard pack in a signed AnnounceAd.
+// PackRef advertises a content-addressed CHIRP shard pack (or ontology/bridge repo) in a signed AnnounceAd.
 type PackRef struct {
-	Shard    string   `json:"shard"`
-	Domains  []string `json:"domains,omitempty"`
-	ChirpURL string   `json:"chirpUrl"`
-	RootHex  string   `json:"rootHex,omitempty"`
-	Count    int      `json:"count,omitempty"`
+	Shard            string   `json:"shard"`
+	Domains          []string `json:"domains,omitempty"`
+	ChirpURL         string   `json:"chirpUrl"`
+	RootHex          string   `json:"rootHex,omitempty"`
+	OntologyID       string   `json:"ontologyId,omitempty"`
+	TargetOntologyID string   `json:"targetOntologyId,omitempty"` // populated for cross-ontology Bridge Shards
+	Count            int      `json:"count,omitempty"`
 }
 
 // SignedAnnounce advertises an operator/hub node on the enumerable dir lane.
@@ -156,6 +162,28 @@ type AnnounceAd struct {
 	Exp               int64         `json:"exp"`
 }
 
+// SignedAttestation advertises a signed bilateral reputation attestation (`nektarrep1.*`) on the overlay.
+type SignedAttestation struct {
+	Attestation AttestationAd `json:"attestation"`
+	Sig         string        `json:"sig"`
+}
+
+// AttestationAd wraps a signed canonical CBOR `nektarrep1.*` token for overlay gossip & ls_nektar lookup.
+type AttestationAd struct {
+	AttestHash      string   `json:"attestHash"`
+	Role            string   `json:"role"` // buyer_rates_seller | seller_rates_buyer
+	Pub             string   `json:"pub"`  // issuer compressed pubkey (33-byte hex)
+	SubjectPub      string   `json:"subjectPub"`
+	Net             string   `json:"net"`
+	Domains         []string `json:"domains,omitempty"`
+	OntologyID      string   `json:"ontologyId,omitempty"`
+	DealID          string   `json:"dealId"`
+	DealReceiptHash string   `json:"dealReceiptHash"`
+	Token           string   `json:"token"` // nektarrep1.<base64url>
+	CompositeBP     int64    `json:"compositeBp"`
+	Exp             int64    `json:"exp"` // unix ms
+}
+
 // EncodePayload encodes a MarketPayload as a stock Lightweb canonical CBOR nkt1 record.
 func EncodePayload(p MarketPayload) ([]byte, error) {
 	var kindNum uint64
@@ -166,6 +194,8 @@ func EncodePayload(p MarketPayload) ([]byte, error) {
 		kindNum = 2
 	case KindAnnounce:
 		kindNum = 3
+	case KindAttestation:
+		kindNum = 4
 	default:
 		return nil, fmt.Errorf("bstack: unknown artifact kind %q", p.Kind)
 	}
@@ -186,7 +216,7 @@ func DecodePayload(b []byte) (MarketPayload, error) {
 	if err != nil {
 		return MarketPayload{}, fmt.Errorf("bstack: decode nkt1 record: %w", err)
 	}
-	kindNum, err := f.Uint(1, 1, 3)
+	kindNum, err := f.Uint(1, 1, 4)
 	if err != nil {
 		return MarketPayload{}, fmt.Errorf("bstack: kind field: %w", err)
 	}
@@ -202,6 +232,8 @@ func DecodePayload(b []byte) (MarketPayload, error) {
 		kind = KindOffer
 	case 3:
 		kind = KindAnnounce
+	case 4:
+		kind = KindAttestation
 	}
 	if !json.Valid([]byte(bodyStr)) {
 		return MarketPayload{}, errors.New("bstack: nkt1 body is not valid JSON")
@@ -228,6 +260,8 @@ func artifactDomainTag(artifact any) []byte {
 		return []byte("nektar:artifact:offer:v2")
 	case AnnounceAd, *AnnounceAd:
 		return []byte("nektar:artifact:announce:v2")
+	case AttestationAd, *AttestationAd:
+		return []byte("nektar:artifact:attestation:v2")
 	default:
 		return []byte("nektar:artifact:generic:v2")
 	}

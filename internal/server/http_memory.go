@@ -7,6 +7,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/kryptokrates/nektar/internal/memory"
@@ -157,6 +158,99 @@ func (a *App) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 	a.recordTTFV()
 	a.BroadcastDashboardEvent("receipt")
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (a *App) handleCommitOntology(w http.ResponseWriter, r *http.Request) {
+	var in CommitOntologyInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, 2<<20)).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	res, err := a.toolbox.ExecCommitOntology(r.Context(), in)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	a.BroadcastDashboardEvent("ontology")
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (a *App) handleLineage(w http.ResponseWriter, r *http.Request) {
+	shard := strings.TrimSpace(r.PathValue("shard"))
+	seq, err := strconv.ParseInt(strings.TrimSpace(r.PathValue("seq")), 10, 64)
+	if err != nil || seq <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid seq"})
+		return
+	}
+	res, err := a.toolbox.ExecLineage(r.Context(), LineageToolInput{Shard: shard, Seq: seq})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (a *App) handleProvisionClearance(w http.ResponseWriter, r *http.Request) {
+	var in ProvisionClearanceInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	res, err := a.toolbox.ExecProvisionClearance(r.Context(), in)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (a *App) handleRotateLattice(w http.ResponseWriter, r *http.Request) {
+	var in RotateLatticeInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	res, err := a.toolbox.ExecRotateLattice(r.Context(), in)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (a *App) handleCompactProve(w http.ResponseWriter, r *http.Request) {
+	shard := strings.TrimSpace(r.PathValue("shard"))
+	seq, err := strconv.ParseInt(strings.TrimSpace(r.PathValue("seq")), 10, 64)
+	if err != nil || seq <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid seq"})
+		return
+	}
+	res, err := a.toolbox.ExecCompactProve(r.Context(), CompactProveInput{Shard: shard, Seq: seq})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (a *App) handleConsistencyProof(w http.ResponseWriter, r *http.Request) {
+	shard := strings.TrimSpace(r.PathValue("shard"))
+	fromN, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("fromN")), 10, 64)
+	if err != nil || fromN < 0 {
+		fromN = 0
+	}
+	toN := int64(-1)
+	if raw := strings.TrimSpace(r.URL.Query().Get("toN")); raw != "" {
+		if v, pErr := strconv.ParseInt(raw, 10, 64); pErr == nil {
+			toN = v
+		}
+	}
+	res, err := a.toolbox.ExecConsistencyProof(r.Context(), ConsistencyProofInput{Shard: shard, FromN: fromN, ToN: toN})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, res)
 }
 

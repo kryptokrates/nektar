@@ -18,29 +18,36 @@ import (
 // Keeps all raw private keys strictly inside wallet custody boundaries.
 type CovenantSighashSigner func(ctx context.Context, targetPKH []byte, sighash32 []byte) (sigWithFlag []byte, pubCompressed []byte, err error)
 
-// NextAnchorState computes the deterministic successor AnchorState for NektarAnchor.Append().
-func NextAnchorState(prev AnchorState, newR []byte, newSize uint64) (AnchorState, error) {
+// NextAnchorState computes the deterministic successor AnchorState for NektarAnchor.Append(),
+// advancing R', StateHash (Q_n), and MmrRoot identically to the on-chain Rúnar script.
+func NextAnchorState(prev AnchorState, newR []byte, newSize uint64, batchMetaHash, newMmrRoot []byte) (AnchorState, error) {
 	if len(newR) != 32 {
 		return AnchorState{}, errors.New("contracts: NextAnchorState requires 32-byte newR")
 	}
-	if len(prev.Rp) != 32 {
-		return AnchorState{}, errors.New("contracts: NextAnchorState requires 32-byte prev.Rp")
+	if len(prev.Rp) != 32 || len(prev.StateHash) != 32 {
+		return AnchorState{}, errors.New("contracts: NextAnchorState requires 32-byte prev Rp and StateHash")
+	}
+	if len(batchMetaHash) != 32 || len(newMmrRoot) != 32 {
+		return AnchorState{}, errors.New("contracts: NextAnchorState requires 32-byte batchMetaHash and newMmrRoot")
 	}
 	tag := prev.Tag
 	if len(tag) == 0 {
 		tag = core.TagRPrime
 	}
 	nextRp := core.ChainRpWithTag(tag, prev.Rp, newR, newSize)
+	nextState := core.ChainStateQ(prev.StateHash, newR, batchMetaHash, newMmrRoot)
 	return AnchorState{
-		Shard:    prev.Shard,
-		OwnerPub: prev.OwnerPub,
-		OwnerPKH: append([]byte(nil), prev.OwnerPKH...),
-		N:        prev.N + 1,
-		Size:     newSize,
-		R:        append([]byte(nil), newR...),
-		Rp:       nextRp,
-		Tag:      append([]byte(nil), tag...),
-		Metanet:  prev.Metanet,
+		Shard:     prev.Shard,
+		OwnerPub:  prev.OwnerPub,
+		OwnerPKH:  append([]byte(nil), prev.OwnerPKH...),
+		N:         prev.N + 1,
+		Size:      newSize,
+		R:         append([]byte(nil), newR...),
+		Rp:        nextRp,
+		StateHash: nextState,
+		MmrRoot:   append([]byte(nil), newMmrRoot...),
+		Tag:       append([]byte(nil), tag...),
+		Metanet:   prev.Metanet,
 	}, nil
 }
 
@@ -53,6 +60,8 @@ func RotatedAnchorState(prev AnchorState, newOwnerPKH []byte) (AnchorState, erro
 	next.OwnerPKH = append([]byte(nil), newOwnerPKH...)
 	next.R = append([]byte(nil), prev.R...)
 	next.Rp = append([]byte(nil), prev.Rp...)
+	next.StateHash = append([]byte(nil), prev.StateHash...)
+	next.MmrRoot = append([]byte(nil), prev.MmrRoot...)
 	next.Tag = append([]byte(nil), prev.Tag...)
 	return next, nil
 }
@@ -67,6 +76,8 @@ func BuildAnchorAppendUnlock(
 	prevOut *transaction.TransactionOutput,
 	newR []byte,
 	newSize uint64,
+	batchMetaHash []byte,
+	newMmrRoot []byte,
 	changePKH []byte,
 	changeAmount uint64,
 	signer CovenantSighashSigner,
@@ -74,15 +85,15 @@ func BuildAnchorAppendUnlock(
 	if prevOut == nil || prevOut.LockingScript == nil {
 		return nil, errors.New("contracts: Append requires prevOut locking script")
 	}
-	if len(newR) != 32 {
-		return nil, errors.New("contracts: Append requires 32-byte newR")
+	if len(newR) != 32 || len(batchMetaHash) != 32 || len(newMmrRoot) != 32 {
+		return nil, errors.New("contracts: Append requires 32-byte newR, batchMetaHash, and newMmrRoot")
 	}
 	if signer == nil {
 		return nil, errors.New("contracts: Append requires signer")
 	}
 	prevScript := []byte(*prevOut.LockingScript)
 	if !IsSpendableNektarAnchorScript(prevScript) {
-		return nil, errors.New("contracts: previous anchor locking script is not spendable patched NektarAnchor v4")
+		return nil, errors.New("contracts: previous anchor locking script is not spendable NektarAnchor")
 	}
 	prevState, err := DecodeNektarAnchor(prevScript)
 	if err != nil {
@@ -120,6 +131,8 @@ func BuildAnchorAppendUnlock(
 		pubCompressed,
 		newR,
 		newSize,
+		batchMetaHash,
+		newMmrRoot,
 		changePKH,
 		changeAmount,
 		preimage,
@@ -149,7 +162,7 @@ func BuildAnchorRotateUnlock(
 	}
 	prevScript := []byte(*prevOut.LockingScript)
 	if !IsSpendableNektarAnchorScript(prevScript) {
-		return nil, errors.New("contracts: previous anchor locking script is not spendable patched NektarAnchor v4")
+		return nil, errors.New("contracts: previous anchor locking script is not spendable NektarAnchor")
 	}
 	prevState, err := DecodeNektarAnchor(prevScript)
 	if err != nil {
@@ -193,8 +206,9 @@ func BuildAnchorRotateUnlock(
 }
 
 // VerifyAnchorUTXOLineage checks that nextTx spends prevTx:0 via input 0, preserves shard identity,
-// advances NktarAnchor state monotonically (Append: n+1 and R' hash chain, OR Rotate: same n/R/Rp
-// with rotated OwnerPKH), AND passes full post-Chronicle Bitcoin Script VM execution on input 0.
+// advances NektarAnchor state monotonically (Append: n+1, R' hash chain, StateHash Q_n, and MmrRoot,
+// OR Rotate: same n/R/Rp/StateHash/MmrRoot/size with rotated OwnerPKH), AND passes full post-Chronicle
+// Bitcoin Script VM execution on input 0.
 func VerifyAnchorUTXOLineage(prevTx, nextTx *transaction.Transaction) error {
 	if prevTx == nil || nextTx == nil {
 		return errors.New("contracts: VerifyAnchorUTXOLineage requires non-nil prevTx and nextTx")
@@ -232,8 +246,10 @@ func VerifyAnchorUTXOLineage(prevTx, nextTx *transaction.Transaction) error {
 			return errors.New("contracts: anchor Append mutated ownerPkh")
 		}
 	} else if nextSt.N == prevSt.N {
-		if !bytes.Equal(prevSt.R, nextSt.R) || !bytes.Equal(prevSt.Rp, nextSt.Rp) || prevSt.Size != nextSt.Size {
-			return errors.New("contracts: anchor Rotate mutated R/Rp/size")
+		if !bytes.Equal(prevSt.R, nextSt.R) || !bytes.Equal(prevSt.Rp, nextSt.Rp) ||
+			!bytes.Equal(prevSt.StateHash, nextSt.StateHash) || !bytes.Equal(prevSt.MmrRoot, nextSt.MmrRoot) ||
+			prevSt.Size != nextSt.Size {
+			return errors.New("contracts: anchor Rotate mutated R/Rp/StateHash/MmrRoot/size")
 		}
 	} else {
 		return fmt.Errorf("contracts: anchor lineage non-monotonic n: prev=%d next=%d", prevSt.N, nextSt.N)

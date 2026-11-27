@@ -96,6 +96,9 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		if len(sw.Want.Query) > 1024 {
 			return errors.New("want query exceeds 1024 bytes")
 		}
+		if err := validateOptionalHash32("want ontologyId", sw.Want.OntologyID); err != nil {
+			return err
+		}
 		if sw.Want.Exp <= 0 || sw.Want.Exp < nowMs || sw.Want.Exp > maxExp {
 			return errors.New("want missing exp, expired, or lifetime too long")
 		}
@@ -118,6 +121,12 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		leafRaw, lErr := hex.DecodeString(strings.TrimSpace(so.Offer.Leaf))
 		if lErr != nil || len(leafRaw) != 32 {
 			return errors.New("offer missing or invalid 32-byte hex leaf")
+		}
+		if err := validateOptionalHash32("offer ontologyId", so.Offer.OntologyID); err != nil {
+			return err
+		}
+		if err := validateOptionalHash32("offer edgesRoot", so.Offer.EdgesRoot); err != nil {
+			return err
 		}
 		if expectedNet != "" && so.Offer.Net != expectedNet {
 			return fmt.Errorf("offer net %q != %q", so.Offer.Net, expectedNet)
@@ -161,6 +170,14 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		if sa.Announce.Exp <= 0 || sa.Announce.Exp < nowMs || sa.Announce.Exp > maxExp {
 			return errors.New("announce missing exp, expired, or lifetime too long")
 		}
+		for _, pk := range sa.Announce.Packs {
+			if err := validateOptionalHash32("pack ontologyId", pk.OntologyID); err != nil {
+				return err
+			}
+			if err := validateOptionalHash32("pack targetOntologyId", pk.TargetOntologyID); err != nil {
+				return err
+			}
+		}
 		if err := VerifyArtifact(sa.Announce.Pub, sa.Sig, sa.Announce); err != nil {
 			return err
 		}
@@ -169,9 +186,79 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		}
 		return nil
 
+	case KindAttestation:
+		var sat SignedAttestation
+		if err := json.Unmarshal(p.Body, &sat); err != nil {
+			return fmt.Errorf("invalid attestation JSON: %w", err)
+		}
+		att := sat.Attestation
+		if att.AttestHash == "" || att.Pub == "" || att.SubjectPub == "" || att.DealID == "" || att.DealReceiptHash == "" {
+			return errors.New("attestation missing required fields")
+		}
+		if strings.EqualFold(att.Pub, att.SubjectPub) {
+			return errors.New("attestation self-rating is forbidden")
+		}
+		if att.Role != "buyer_rates_seller" && att.Role != "seller_rates_buyer" {
+			return fmt.Errorf("attestation invalid role %q", att.Role)
+		}
+		if !strings.HasPrefix(strings.TrimSpace(att.Token), "nektarrep1.") {
+			return errors.New("attestation token must start with nektarrep1.")
+		}
+		if len(att.Token) > 12288 {
+			return errors.New("attestation token exceeds size cap")
+		}
+		if err := validateOptionalHash32("attestation attestHash", att.AttestHash); err != nil {
+			return err
+		}
+		if err := validateOptionalHash32("attestation dealReceiptHash", att.DealReceiptHash); err != nil {
+			return err
+		}
+		if att.OntologyID != "" && !strings.EqualFold(att.OntologyID, "global") {
+			if err := validateOptionalHash32("attestation ontologyId", att.OntologyID); err != nil {
+				return err
+			}
+		}
+		if att.CompositeBP < 0 || att.CompositeBP > 10000 {
+			return errors.New("attestation compositeBp out of range [0, 10000]")
+		}
+		if expectedNet != "" && att.Net != expectedNet {
+			return fmt.Errorf("attestation net %q != %q", att.Net, expectedNet)
+		}
+		if len(att.Domains) > MaxDomains {
+			return errors.New("attestation domains out of range")
+		}
+		if att.Exp <= 0 || att.Exp < nowMs || att.Exp > maxExp {
+			return errors.New("attestation missing exp, expired, or lifetime too long")
+		}
+		if err := VerifyArtifact(att.Pub, sat.Sig, att); err != nil {
+			return err
+		}
+		if expectedTopic != "" {
+			doms := att.Domains
+			if len(doms) == 0 {
+				doms = []string{DirDomain}
+			}
+			if !topicMatchesDomains(expectedNet, expectedTopic, doms) && expectedTopic != LaneOf(expectedNet, DirDomain) {
+				return errors.New("attestation domain does not match topic lane")
+			}
+		}
+		return nil
+
 	default:
 		return fmt.Errorf("unsupported market kind %q", p.Kind)
 	}
+}
+
+func validateOptionalHash32(label, val string) error {
+	s := strings.TrimSpace(val)
+	if s == "" {
+		return nil
+	}
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != 32 {
+		return fmt.Errorf("%s must be 32-byte hex", label)
+	}
+	return nil
 }
 
 func topicMatchesDomains(net, topic string, domains []string) bool {
@@ -216,6 +303,12 @@ func ExtractPayloadIdentity(p MarketPayload) ([]byte, error) {
 			return nil, fmt.Errorf("invalid announce JSON: %w", err)
 		}
 		pubHex = sa.Announce.Pub
+	case KindAttestation:
+		var sat SignedAttestation
+		if err := json.Unmarshal(p.Body, &sat); err != nil {
+			return nil, fmt.Errorf("invalid attestation JSON: %w", err)
+		}
+		pubHex = sat.Attestation.Pub
 	default:
 		return nil, fmt.Errorf("unsupported market kind %q", p.Kind)
 	}

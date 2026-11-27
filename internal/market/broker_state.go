@@ -37,7 +37,9 @@ type WantRequest struct {
 	Domains            []string      `json:"domains"`
 	Question           string        `json:"question"`
 	MaxSats            uint64        `json:"maxSats"`
+	EstTokensSaved     uint64        `json:"estTokensSaved,omitempty"` // optional token-arbitrage hint when MaxSats == 0
 	TargetShard        string        `json:"targetShard,omitempty"`
+	OntologyID         string        `json:"ontologyId,omitempty"` // optional 64-hex OntologyID filter
 	CollectTimeout     time.Duration `json:"collectTimeout,omitempty"`
 	StandingTTLSeconds int64         `json:"standingTtlSeconds,omitempty"`
 	ApprovedOverrideID string        `json:"approvedOverrideId,omitempty"`
@@ -45,10 +47,15 @@ type WantRequest struct {
 
 // SellInput arms a local memory shard for autonomous quoting & selling on the market.
 type SellInput struct {
-	Shard       string   `json:"shard"`
-	Domains     []string `json:"domains"`
-	PriceSats   uint64   `json:"priceSats"`
-	Description string   `json:"description,omitempty"`
+	Shard          string   `json:"shard"`
+	Domains        []string `json:"domains"`
+	PriceSats      uint64   `json:"priceSats"`
+	Description    string   `json:"description,omitempty"`
+	OntologyID     string   `json:"ontologyId,omitempty"`
+	AllowRaw       bool     `json:"allowRaw,omitempty"` // explicit operator bypass for non-distilled raw shards
+	DynamicPricing bool     `json:"dynamicPricing,omitempty"`
+	FloorSats      uint64   `json:"floorSats,omitempty"`
+	CeilingSats    uint64   `json:"ceilingSats,omitempty"`
 }
 
 // PurchaseRequest is sent from Buyer to Seller (via direct HTTP POST /v1/market/purchase OR Hub NAT /bbox/send).

@@ -19,14 +19,16 @@ type BountyClaim struct {
 
 // Bounty describes a domain knowledge bounty the Hub will pay agents to fulfill.
 type Bounty struct {
-	ID         string `json:"id"`
-	Domain     string `json:"domain"`
-	Question   string `json:"question"`
-	RewardSats uint64 `json:"rewardSats"`
-	MaxFills   int    `json:"maxFills"`
-	Filled     int    `json:"filled"`
-	Active     bool   `json:"active"`
-	CreatedAt  int64  `json:"createdAt"`
+	ID                   string `json:"id"`
+	Domain               string `json:"domain"`
+	Question             string `json:"question"`
+	RewardSats           uint64 `json:"rewardSats"`
+	MaxFills             int    `json:"maxFills"`
+	Filled               int    `json:"filled"`
+	Sponsored            bool   `json:"sponsored,omitempty"`
+	AnchorFeeReserveSats uint64 `json:"anchorFeeReserveSats,omitempty"`
+	Active               bool   `json:"active"`
+	CreatedAt            int64  `json:"createdAt"`
 }
 
 // UpsertBounty creates or updates a Hub knowledge bounty.
@@ -43,10 +45,14 @@ func (s *Store) UpsertBounty(b Bounty) error {
 	if b.Active {
 		active = 1
 	}
+	sponsored := 0
+	if b.Sponsored {
+		sponsored = 1
+	}
 	_, err := s.sql.Exec(`
-		INSERT OR REPLACE INTO hub_bounties (id, domain, question, reward_sats, max_fills, filled, active, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		b.ID, strings.ToLower(strings.TrimSpace(b.Domain)), b.Question, b.RewardSats, b.MaxFills, b.Filled, active, b.CreatedAt)
+		INSERT OR REPLACE INTO hub_bounties (id, domain, question, reward_sats, max_fills, filled, sponsored, anchor_fee_reserve_sats, active, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		b.ID, strings.ToLower(strings.TrimSpace(b.Domain)), b.Question, b.RewardSats, b.MaxFills, b.Filled, sponsored, b.AnchorFeeReserveSats, active, b.CreatedAt)
 	return err
 }
 
@@ -54,7 +60,7 @@ func (s *Store) UpsertBounty(b Bounty) error {
 func (s *Store) ListBounties(onlyActive bool) ([]Bounty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	q := `SELECT id, domain, question, reward_sats, max_fills, filled, active, created_at FROM hub_bounties`
+	q := `SELECT id, domain, question, reward_sats, max_fills, filled, COALESCE(sponsored, 0), COALESCE(anchor_fee_reserve_sats, 0), active, created_at FROM hub_bounties`
 	if onlyActive {
 		q += ` WHERE active = 1 AND filled < max_fills`
 	}
@@ -67,10 +73,11 @@ func (s *Store) ListBounties(onlyActive bool) ([]Bounty, error) {
 	var out []Bounty
 	for rows.Next() {
 		var b Bounty
-		var active int
-		if err := rows.Scan(&b.ID, &b.Domain, &b.Question, &b.RewardSats, &b.MaxFills, &b.Filled, &active, &b.CreatedAt); err != nil {
+		var sponsored, active int
+		if err := rows.Scan(&b.ID, &b.Domain, &b.Question, &b.RewardSats, &b.MaxFills, &b.Filled, &sponsored, &b.AnchorFeeReserveSats, &active, &b.CreatedAt); err != nil {
 			return nil, err
 		}
+		b.Sponsored = sponsored != 0
 		b.Active = active != 0
 		out = append(out, b)
 	}
@@ -82,9 +89,10 @@ func (s *Store) GetBounty(id string) (Bounty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var b Bounty
-	var active int
-	err := s.sql.QueryRow(`SELECT id, domain, question, reward_sats, max_fills, filled, active, created_at FROM hub_bounties WHERE id = ?`, id).
-		Scan(&b.ID, &b.Domain, &b.Question, &b.RewardSats, &b.MaxFills, &b.Filled, &active, &b.CreatedAt)
+	var sponsored, active int
+	err := s.sql.QueryRow(`SELECT id, domain, question, reward_sats, max_fills, filled, COALESCE(sponsored, 0), COALESCE(anchor_fee_reserve_sats, 0), active, created_at FROM hub_bounties WHERE id = ?`, id).
+		Scan(&b.ID, &b.Domain, &b.Question, &b.RewardSats, &b.MaxFills, &b.Filled, &sponsored, &b.AnchorFeeReserveSats, &active, &b.CreatedAt)
+	b.Sponsored = sponsored != 0
 	b.Active = active != 0
 	return b, err
 }

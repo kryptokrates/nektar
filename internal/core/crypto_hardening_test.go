@@ -146,18 +146,15 @@ func TestMerkleHardening(t *testing.T) {
 	}
 }
 
-// FuzzParseFragment exercises binary fragment & provenance decoding against malformed/overflow lengths (F-35).
-func FuzzParseFragment(f *testing.F) {
-	valid := SerializeFragment(Fragment{
-		Data: []byte("hello"),
-		Provenance: Provenance{
-			Source:  "agent",
-			Time:    1700000000,
-			ModelID: "test",
-			Modality: &Modality{
-				Kind:      "epistemic",
-				Qualifier: "x < y & z",
-			},
+// FuzzParseProvenance exercises binary provenance decoding against malformed/overflow lengths (F-35).
+func FuzzParseProvenance(f *testing.F) {
+	valid := SerializeProvenance(Provenance{
+		Source:  "agent",
+		Time:    1700000000,
+		ModelID: "test",
+		Modality: &Modality{
+			Kind:      "epistemic",
+			Qualifier: "x < y & z",
 		},
 	})
 	f.Add(valid)
@@ -165,11 +162,11 @@ func FuzzParseFragment(f *testing.F) {
 	f.Add([]byte{0x00, 0x00, 0x00, 0x80})
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, data []byte) {
-		frag, err := ParseFragment(data)
+		p, err := ParseProvenance(data)
 		if err != nil {
 			return
 		}
 		// Round-trip must never panic.
-		_ = SerializeFragment(frag)
+		_ = SerializeProvenance(p)
 	})
 }

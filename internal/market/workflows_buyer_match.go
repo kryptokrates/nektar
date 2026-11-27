@@ -13,6 +13,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/contracts"
+	"github.com/kryptokrates/nektar/internal/reputation"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -103,6 +104,9 @@ func (e *Engine) buyerCollectOffers(rctx context.Context, dealID string, want bs
 				continue
 			}
 			if off.KeyCommitHex != "" && !strings.EqualFold(so.KeyCommitment, off.KeyCommitHex) {
+				continue
+			}
+			if want.OntologyID != "" && !standingOrderOntologyMatches(rctx, e.mem, want.OntologyID, true, off.OntologyID) {
 				continue
 			}
 			verified = append(verified, off)
@@ -207,7 +211,12 @@ func (e *Engine) buyerRankAndMatch(rctx context.Context, dealID string, want bst
 			}
 		}
 	}
-	ranked := RankOffersWithRepAndBonds(want, collectRes.Offers, rankPol, reps, verifiedBonds)
+	var rep6D map[string]reputation.Vector6D
+	if e.mem != nil && e.mem.DB() != nil {
+		_, vecs, _ := EvaluateTrustForOntology(e.mem.DB(), e.salePubHex(), want.OntologyID, e.policy, nil, nil)
+		rep6D = vecs
+	}
+	ranked := RankOffersWith6DReputation(want, collectRes.Offers, rankPol, reps, rep6D, verifiedBonds)
 	if len(ranked) == 0 {
 		msg := "no eligible offers under policy"
 		e.persistDealRecord(store.DealRecord{

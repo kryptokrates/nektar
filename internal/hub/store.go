@@ -174,6 +174,18 @@ CREATE TABLE IF NOT EXISTS hub_carrier_outpoints (
 	admitted_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_hub_carrier_outpoints_txid ON hub_carrier_outpoints(carrier_txid);
+
+CREATE TABLE IF NOT EXISTS hub_work_claims (
+	task_id     TEXT PRIMARY KEY,
+	kind        TEXT NOT NULL,
+	worker_pub  TEXT NOT NULL,
+	txid        TEXT NOT NULL DEFAULT '',
+	reward_sats INTEGER NOT NULL,
+	status      TEXT NOT NULL DEFAULT 'pending',
+	created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hub_work_claims_pub_time ON hub_work_claims(worker_pub, created_at);
+CREATE INDEX IF NOT EXISTS idx_hub_work_claims_time ON hub_work_claims(created_at);
 `
 	tx, err := s.sql.Begin()
 	if err != nil {
@@ -187,6 +199,10 @@ CREATE INDEX IF NOT EXISTS idx_hub_carrier_outpoints_txid ON hub_carrier_outpoin
 		table string
 		cols  []columnSpec
 	}{
+		{"hub_bounties", []columnSpec{
+			{name: "sponsored", def: "INTEGER NOT NULL DEFAULT 0"},
+			{name: "anchor_fee_reserve_sats", def: "INTEGER NOT NULL DEFAULT 0"},
+		}},
 		{"hub_bounty_claims", []columnSpec{
 			{name: "status", def: "TEXT NOT NULL DEFAULT 'paid'"},
 		}},

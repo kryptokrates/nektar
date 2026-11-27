@@ -83,6 +83,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 				OrderID:         orderID,
 				Domains:         want.Domains,
 				Query:           want.Query,
+				OntologyID:      want.OntologyID,
 				MaxSats:         want.MaxSats,
 				TargetShard:     in.TargetShard,
 				TTL:             in.StandingTTL,

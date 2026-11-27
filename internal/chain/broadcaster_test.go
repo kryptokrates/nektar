@@ -297,3 +297,45 @@ func TestZeroConfWatchConflictEvictionAndCap(t *testing.T) {
 		t.Fatal("expected expired conflict entry to be evicted")
 	}
 }
+
+func TestBSVBroadcasterAcceptsSeenMultipleNodesViaStatusLookup(t *testing.T) {
+	ctx := context.Background()
+	tx := makeDummyTx(t)
+	txid := tx.TxID().String()
+
+	var postHits, getHits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/tx" {
+			postHits.Add(1)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"txid":     txid,
+				"txStatus": "SEEN_MULTIPLE_NODES",
+			})
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/tx/"+txid {
+			getHits.Add(1)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"txid":     txid,
+				"txStatus": "SEEN_MULTIPLE_NODES",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	bcast, _, err := ParseBroadcaster("broadcaster:"+srv.URL, BroadcasterOptions{Client: srv.Client()})
+	if err != nil {
+		t.Fatalf("ParseBroadcaster: %v", err)
+	}
+	if err := bcast.Broadcast(ctx, tx); err != nil {
+		t.Fatalf("expected SEEN_MULTIPLE_NODES to be accepted as broadcast success, got %v", err)
+	}
+	if postHits.Load() != 1 || getHits.Load() != 1 {
+		t.Fatalf("expected 1 POST + 1 GET fallback status lookup, got post=%d get=%d", postHits.Load(), getHits.Load())
+	}
+}

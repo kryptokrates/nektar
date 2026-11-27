@@ -515,7 +515,7 @@ func (tb *Toolbox) ExecRecall(ctx context.Context, in memory.RecallInput) (map[s
 	var marketFallback map[string]any
 	if len(items) == 0 && strings.TrimSpace(in.Query) != "" {
 		if tb.broker != nil {
-			fbRes, _ := tb.broker.QueryFallbackOnRecallMiss(ctx, market.FallbackRecallRequest{
+			fbRes, fbErr := tb.broker.QueryFallbackOnRecallMiss(ctx, market.FallbackRecallRequest{
 				Shard:       in.Shard,
 				Query:       in.Query,
 				MaxSats:     in.MaxFallbackSats,
@@ -562,6 +562,11 @@ func (tb *Toolbox) ExecRecall(ctx context.Context, in memory.RecallInput) (map[s
 					"paymentTxid":      fbRes.PaymentTxID,
 					"dealReceiptToken": fbRes.DealReceiptToken,
 					"spvVerifiedCount": fbRes.SPVVerifiedCount,
+				}
+			} else if fbErr != nil {
+				marketFallback = map[string]any{
+					"used":  false,
+					"error": fbErr.Error(),
 				}
 			}
 		}

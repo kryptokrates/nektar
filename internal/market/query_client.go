@@ -267,10 +267,16 @@ func (b *Broker) QueryPeer402(ctx context.Context, req PeerQueryRequest) (*PeerQ
 			}
 			if item.ProofBundle != nil {
 				vr := contracts.VerifyFragment(*item.ProofBundle, tracker)
-				if !vr.OK {
+				switch {
+				case vr.OK:
+					spvCount++
+				case vr.Reason == "Unsettled" || vr.Reason == "InsufficientDepth":
+					// Cryptographic commitments (leaf -> R_n -> NektarAnchor state -> ChainTail UTXO lineage)
+					// already verified in VerifyFragment before returning Unsettled/InsufficientDepth; accept
+					// into tainted cache without counting as mined SPV-settled.
+				default:
 					continue
 				}
-				spvCount++
 			}
 			rights := string(nmu.RightsInferenceOnly)
 			if item.NMU != nil && item.NMU.UsageRights != "" {

@@ -202,6 +202,25 @@ func (b *BSVBroadcaster) Broadcast(ctx context.Context, tx *transaction.Transact
 		if nwallet.IsAlreadyKnownBroadcastError(errors.New(failure.Description)) {
 			return nil
 		}
+		// Teranode/BSV Association Arcade emits newer statuses (notably SEEN_MULTIPLE_NODES)
+		// that go-sdk's ArcStatus switch maps to ERR_INVALID_RESPONSE ("unknown transaction status").
+		// Resolve the authoritative status directly from GET /tx/{txid} on the same endpoint so
+		// propagated transactions (especially incoming BRC-29 re-broadcasts) never stall in "sending".
+		if strings.TrimSpace(failure.Code) == "ERR_INVALID_RESPONSE" {
+			if st, extra, ok := b.queryEndpointStatus(ctx, ep, tx.TxID().String()); ok {
+				switch strings.ToUpper(st) {
+				case "SEEN_MULTIPLE_NODES", "SEEN_ON_NETWORK", "ACCEPTED_BY_NETWORK",
+					"MINED", "CONFIRMED", "IMMUTABLE", "SUCCESS",
+					"RECEIVED", "STORED", "QUEUED", "ANNOUNCED_TO_NETWORK", "REQUESTED_BY_NETWORK", "SENT_TO_NETWORK":
+					return nil
+				case "REJECTED", "DOUBLE_SPEND_ATTEMPTED", "INVALID", "MALFORMED":
+					if extra == "" {
+						extra = failure.Description
+					}
+					return fmt.Errorf("broadcaster %s refused tx %s [%s]: %s", ep.ApiUrl, tx.TxID().String(), st, extra)
+				}
+			}
+		}
 		if isRetryableBroadcasterFailure(failure) {
 			lastTransportErr = fmt.Errorf("%s [%s]: %s", ep.ApiUrl, failure.Code, failure.Description)
 			continue
@@ -217,9 +236,51 @@ func (b *BSVBroadcaster) Broadcast(ctx context.Context, tx *transaction.Transact
 }
 
 type arcStatusPayload struct {
+	TxID        string `json:"txid"`
 	MerklePath  string `json:"merklePath"`
 	BlockHeight uint32 `json:"blockHeight"`
 	TxStatus    string `json:"txStatus"`
+	ExtraInfo   string `json:"extraInfo"`
+}
+
+func (b *BSVBroadcaster) queryEndpointStatus(ctx context.Context, ep *broadcaster.Arc, txid string) (string, string, bool) {
+	if ep == nil || txid == "" || ctx.Err() != nil {
+		return "", "", false
+	}
+	reqURL := strings.TrimRight(ep.ApiUrl, "/") + "/tx/" + url.PathEscape(txid)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return "", "", false
+	}
+	req.Header.Set("Accept", "application/json")
+	if ep.ApiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+ep.ApiKey)
+	}
+	cli := ep.Client
+	if cli == nil {
+		cli = http.DefaultClient
+	}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return "", "", false
+	}
+	body, rErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	_ = resp.Body.Close()
+	if rErr != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", false
+	}
+	var st arcStatusPayload
+	if json.Unmarshal(body, &st) != nil {
+		return "", "", false
+	}
+	if st.TxID != "" && !strings.EqualFold(strings.TrimSpace(st.TxID), txid) {
+		return "", "", false
+	}
+	status := strings.TrimSpace(st.TxStatus)
+	if status == "" {
+		return "", "", false
+	}
+	return status, strings.TrimSpace(st.ExtraInfo), true
 }
 
 // Proof queries configured BSV Broadcaster endpoints (ctx-aware GET /tx/{txid}) for a mined

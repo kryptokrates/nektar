@@ -76,7 +76,7 @@ func DefaultHeaderSources(network string) string {
 	case "main", "mainnet":
 		return "woc:main,chaintracks:https://mainnet-chaintracks.babbage.systems/v2"
 	case "testnet", "test":
-		return "woc:test,chaintracks:" + DefaultBroadcasterTestnet + "/chaintracks/v2"
+		return "woc:test,arcade:" + DefaultBroadcasterTestnet
 	case "regtest":
 		return "native:http://127.0.0.1:8080"
 	default:

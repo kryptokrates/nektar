@@ -229,35 +229,51 @@ func TestFeedAuthReplayWindowAndBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := int64(1750000000)
-	pubHex, sigHex, err := SignFeedAuth(priv, "market-ops", "sub-123", now)
+	nonce := "aabbccddeeff001122334455"
+	aud := "node.example:18420"
+	pubHex, sigHex, err := SignFeedAuth(priv, "market-ops", "sub-123", now, nonce, aud)
 	if err != nil {
 		t.Fatalf("SignFeedAuth: %v", err)
 	}
 
 	// Exact time and +/-60s boundaries pass.
-	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-123", now, now); err != nil {
+	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-123", now, now, nonce, aud); err != nil {
 		t.Fatalf("VerifyFeedAuth exact time: %v", err)
 	}
-	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-123", now, now+60); err != nil {
+	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-123", now, now+60, nonce, aud); err != nil {
 		t.Fatalf("VerifyFeedAuth +60s boundary: %v", err)
 	}
-	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-123", now, now-60); err != nil {
+	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-123", now, now-60, nonce, aud); err != nil {
 		t.Fatalf("VerifyFeedAuth -60s boundary: %v", err)
 	}
 
 	// Outside +/-60s MUST fail with ErrFeedAuthExpired (blocks captured-header replay).
-	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-123", now, now+61); !errors.Is(err, ErrFeedAuthExpired) {
+	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-123", now, now+61, nonce, aud); !errors.Is(err, ErrFeedAuthExpired) {
 		t.Fatalf("expected ErrFeedAuthExpired at +61s, got %v", err)
 	}
-	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-123", now, now-61); !errors.Is(err, ErrFeedAuthExpired) {
+	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-123", now, now-61, nonce, aud); !errors.Is(err, ErrFeedAuthExpired) {
 		t.Fatalf("expected ErrFeedAuthExpired at -61s, got %v", err)
 	}
 
-	// Cross-shard or cross-subscription replay MUST fail.
-	if err := VerifyFeedAuth(pubHex, sigHex, "market-other", "sub-123", now, now); !errors.Is(err, ErrFeedAuthInvalid) {
+	// Cross-shard, cross-subscription, cross-nonce, or cross-host replay MUST fail.
+	if err := VerifyFeedAuth(pubHex, sigHex, "market-other", "sub-123", now, now, nonce, aud); !errors.Is(err, ErrFeedAuthInvalid) {
 		t.Fatalf("expected ErrFeedAuthInvalid on cross-shard replay, got %v", err)
 	}
-	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-999", now, now); !errors.Is(err, ErrFeedAuthInvalid) {
+	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-999", now, now, nonce, aud); !errors.Is(err, ErrFeedAuthInvalid) {
 		t.Fatalf("expected ErrFeedAuthInvalid on cross-subId replay, got %v", err)
+	}
+	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-123", now, now, "other-nonce", aud); !errors.Is(err, ErrFeedAuthInvalid) {
+		t.Fatalf("expected ErrFeedAuthInvalid on nonce mismatch, got %v", err)
+	}
+	if err := VerifyFeedAuth(pubHex, sigHex, "market-ops", "sub-123", now, now, nonce, "evil.example:18420"); !errors.Is(err, ErrFeedAuthInvalid) {
+		t.Fatalf("expected ErrFeedAuthInvalid on cross-host replay, got %v", err)
+	}
+
+	var cache FeedNonceCache
+	if !cache.Claim(pubHex, nonce, now) {
+		t.Fatal("first nonce claim should succeed")
+	}
+	if cache.Claim(pubHex, nonce, now+10) {
+		t.Fatal("duplicate nonce claim within replay window must fail")
 	}
 }

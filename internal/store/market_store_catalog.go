@@ -10,12 +10,12 @@ import (
 
 // ListReceipts returns committed receipts newest first.
 func (d *DB) ListReceipts(limit int) ([]ReceiptRecord, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := d.sql.Query(`SELECT receipt_hash, shard_seq, body_json, anchor_txid, created_at FROM receipts ORDER BY created_at DESC, shard_seq DESC LIMIT ?`, limit)
+	rows, err := rdb.Query(`SELECT receipt_hash, shard_seq, body_json, anchor_txid, created_at FROM receipts ORDER BY created_at DESC, shard_seq DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -33,18 +33,18 @@ func (d *DB) ListReceipts(limit int) ([]ReceiptRecord, error) {
 
 // CountReceipts returns total persisted receipts in O(1) without loading body_json BLOBs.
 func (d *DB) CountReceipts() (int64, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var n int64
-	err := d.sql.QueryRow(`SELECT COUNT(1) FROM receipts`).Scan(&n)
+	err := rdb.QueryRow(`SELECT COUNT(1) FROM receipts`).Scan(&n)
 	return n, err
 }
 
 // CountFragments returns total fragments and settled-anchored (mined BUMP) fragments across non-system shards.
 func (d *DB) CountFragments() (total int, anchored int, err error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	err = d.sql.QueryRow(`
+	rdb, release := d.rdb()
+	defer release()
+	err = rdb.QueryRow(`
 		SELECT
 			COUNT(*),
 			COALESCE(SUM(CASE WHEN EXISTS (
@@ -95,9 +95,9 @@ func (d *DB) BlockHost(url string) error {
 
 // ListHosts returns all persisted hosts ordered by URL.
 func (d *DB) ListHosts() ([]HostRecord, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`SELECT url, state, source, blocked, last_seen FROM hosts ORDER BY url ASC`)
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`SELECT url, state, source, blocked, last_seen FROM hosts ORDER BY url ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -165,9 +165,9 @@ const sellListingSelectCols = `shard, domains_json, price_sats, COALESCE(price_p
 
 // GetSellListing returns the SellListing for shard, or (nil, nil) if not listed.
 func (d *DB) GetSellListing(shard string) (*SellListing, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	l, err := scanSellListing(d.sql.QueryRow(`SELECT `+sellListingSelectCols+` FROM sell_listings WHERE shard = ?`, shard))
+	rdb, release := d.rdb()
+	defer release()
+	l, err := scanSellListing(rdb.QueryRow(`SELECT `+sellListingSelectCols+` FROM sell_listings WHERE shard = ?`, shard))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -179,9 +179,9 @@ func (d *DB) GetSellListing(shard string) (*SellListing, error) {
 
 // ListSellListings returns all persisted sell listings.
 func (d *DB) ListSellListings() ([]SellListing, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`SELECT ` + sellListingSelectCols + ` FROM sell_listings ORDER BY created_at DESC`)
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`SELECT ` + sellListingSelectCols + ` FROM sell_listings ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -223,10 +223,10 @@ func (d *DB) SetSellListingActive(shard string, active bool) error {
 
 // SellerShardStats computes settled deal count and earned sats for a sold shard.
 func (d *DB) SellerShardStats(shard string) (works int64, earned uint64, err error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var total int64
-	err = d.sql.QueryRow(`SELECT COUNT(*), COALESCE(SUM(price_sats), 0) FROM deals WHERE role = 'seller' AND status = 'settled' AND shard = ?`, shard).
+	err = rdb.QueryRow(`SELECT COUNT(*), COALESCE(SUM(price_sats), 0) FROM deals WHERE role = 'seller' AND status = 'settled' AND shard = ?`, shard).
 		Scan(&works, &total)
 	if total > 0 {
 		earned = uint64(total)
@@ -249,6 +249,9 @@ func (d *DB) SaveOperatorPolicy(p OperatorPolicyRecord) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.PolicyID, p.PolicyHash, string(roles), string(doms), p.MaxPerDeal, p.MaxPerDay, p.ZeroConfMax, p.AIPolicyJSON,
 		p.OperatorPub, p.OperatorSig, boolToInt(p.Active), p.ApprovedBy, p.ApprovedAt, p.RevokedAt)
+	if err == nil {
+		d.policyEpoch.Add(1)
+	}
 	return err
 }
 
@@ -257,14 +260,17 @@ func (d *DB) RevokeOperatorPolicy(policyID string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	_, err := d.sql.Exec(`UPDATE operator_policies SET active = 0, revoked_at = ? WHERE policy_id = ?`, time.Now().Unix(), policyID)
+	if err == nil {
+		d.policyEpoch.Add(1)
+	}
 	return err
 }
 
 // ListOperatorPolicies returns all persisted policies newest first.
 func (d *DB) ListOperatorPolicies() ([]OperatorPolicyRecord, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`
 		SELECT policy_id, policy_hash, roles_json, domains_json, max_per_deal, max_per_day, zero_conf_max, COALESCE(ai_policy_json, ''), COALESCE(operator_pub, ''), COALESCE(operator_sig, ''), active, approved_by, approved_at, revoked_at
 		FROM operator_policies ORDER BY approved_at DESC, rowid DESC`)
 	if err != nil {
@@ -304,9 +310,9 @@ func (d *DB) SaveBorgGroup(g BorgGroupRecord) error {
 
 // ListBorgGroups returns all persisted Borg groups.
 func (d *DB) ListBorgGroups() ([]BorgGroupRecord, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`
 		SELECT group_id, name, current_epoch, members_json, revoked_json, epochs_json, epoch_members_json, updated_at
 		FROM borg_groups ORDER BY group_id ASC`)
 	if err != nil {
@@ -339,12 +345,12 @@ func (d *DB) RecordUnmatchedWant(rec UnmatchedWantRecord) error {
 
 // ListUnmatchedWants returns recent zero-offer wants newest first.
 func (d *DB) ListUnmatchedWants(limit int) ([]UnmatchedWantRecord, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	if limit <= 0 {
 		limit = 25
 	}
-	rows, err := d.sql.Query(`SELECT want_id, domain, query, max_sats, seen_at FROM unmatched_wants ORDER BY seen_at DESC LIMIT ?`, limit)
+	rows, err := rdb.Query(`SELECT want_id, domain, query, max_sats, seen_at FROM unmatched_wants ORDER BY seen_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}

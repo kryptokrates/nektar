@@ -4,6 +4,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
+	"errors"
 	"math/rand/v2"
 	"net/http"
 	"strings"
@@ -19,12 +20,12 @@ import (
 )
 
 const (
-	maxPendingSalesTotal    = 128
-	maxPendingSalesPerBuyer = 16
-	maxSeenBboxNonces       = 8192
-	maxBboxExpected         = 512
+	maxPendingSalesTotal    = 65536
+	maxPendingSalesPerBuyer = 4096
+	maxSeenBboxNonces       = 65536
+	maxBboxExpected         = 16384
 	bboxExpectedTTLSeconds  = 1800
-	maxConcurrentQuotes     = 16
+	maxConcurrentQuotes     = 128
 	maxMarketTapeEvents     = 64
 )
 
@@ -60,7 +61,14 @@ type Broker struct {
 	marketTape           []MarketTapeEvent
 	tapeListeners        []func(event string, ev MarketTapeEvent)
 
-	cursorMu sync.Mutex
+	cursorMu     sync.Mutex
+	hubCursors   map[string]int64
+	dirtyCursors map[string]int64
+	cursorDirtyN int
+
+	repMu        sync.Mutex
+	dirtyRepOnts map[string]struct{}
+	repWakeCh    chan struct{}
 
 	startMu    sync.Mutex
 	started    bool
@@ -69,6 +77,8 @@ type Broker struct {
 	wg         sync.WaitGroup
 
 	sseConnected atomic.Int64
+	sseConnCh    chan struct{}
+	bboxWakeCh   chan struct{}
 	sseWakes     atomic.Int64
 	pollWakes    atomic.Int64
 	bboxWakes    atomic.Int64
@@ -93,7 +103,7 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 		if cfg.Matcher != nil && cfg.Matcher.DefaultMode() != AIModeOff {
 			cfg.GraceTimeout = 500 * time.Millisecond
 		} else {
-			cfg.GraceTimeout = 200 * time.Millisecond
+			cfg.GraceTimeout = 50 * time.Millisecond
 		}
 	}
 	netName := ""
@@ -114,7 +124,7 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 		httpClient:           hc,
 		sseClient:            sseHC,
 		quoteSem:             make(chan struct{}, maxConcurrentQuotes),
-		bgSem:                make(chan struct{}, 32),
+		bgSem:                make(chan struct{}, 256),
 		restate:              cfg.RestateClient,
 		matcher:              cfg.Matcher,
 		watchdog:             cfg.Watchdog,
@@ -128,6 +138,12 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 		activeLoops:          make(map[string]context.CancelFunc),
 		seenWants:            make(map[string]int64),
 		seenBboxNonces:       make(map[string]int64),
+		hubCursors:           make(map[string]int64),
+		dirtyCursors:         make(map[string]int64),
+		dirtyRepOnts:         make(map[string]struct{}),
+		repWakeCh:            make(chan struct{}, 1),
+		sseConnCh:            make(chan struct{}, 1),
+		bboxWakeCh:           make(chan struct{}, 1),
 	}
 	if engine != nil {
 		engine.SetBroker(b)
@@ -151,24 +167,50 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 	return b
 }
 
+// WakeBbox triggers an immediate non-blocking drain of pending NAT bbox inbox messages (zero polling).
+func (b *Broker) WakeBbox() {
+	if b == nil || b.bboxWakeCh == nil {
+		return
+	}
+	select {
+	case b.bboxWakeCh <- struct{}{}:
+	default:
+	}
+}
+
+func (b *Broker) signalSSEConnected() {
+	if b == nil || b.sseConnCh == nil {
+		return
+	}
+	select {
+	case b.sseConnCh <- struct{}{}:
+	default:
+	}
+}
+
 // WaitConnected blocks until at least minHosts SSE hub streams have completed HTTP 200 handshake
-// (or timeout/ctx expires), eliminating brittle sleep races in tests and rapid startups.
+// (or timeout/ctx expires), waking immediately via sseConnCh without sleep-polling (RCA-5).
 func (b *Broker) WaitConnected(ctx context.Context, minHosts int64, timeout time.Duration) bool {
 	if minHosts <= 0 {
 		return true
 	}
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	if b.sseConnected.Load() >= minHosts {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
 		if b.sseConnected.Load() >= minHosts {
 			return true
 		}
 		select {
 		case <-ctx.Done():
 			return false
-		case <-time.After(15 * time.Millisecond):
+		case <-timer.C:
+			return b.sseConnected.Load() >= minHosts
+		case <-b.sseConnCh:
 		}
 	}
-	return b.sseConnected.Load() >= minHosts
 }
 
 func (b *Broker) Engine() *Engine               { return b.engine }
@@ -199,19 +241,38 @@ func (b *Broker) SetWatchdog(w *autonomy.Watchdog) {
 		b.subSup.SetWatchdog(w)
 	}
 }
-func (b *Broker) PubHex() string                { return hex.EncodeToString(b.engine.saleKey.PubKey().Compressed()) }
-func (b *Broker) PublicURL() string             { return strings.TrimRight(b.cfg.PublicURL, "/") }
-func (b *Broker) SetRestateClient(rc *RestateClient) {
+func (b *Broker) PubHex() string    { return b.engine.salePubHex() }
+func (b *Broker) PublicURL() string { return strings.TrimRight(b.cfg.PublicURL, "/") }
+func (b *Broker) SetWorkflowClient(wc *WorkflowClient) {
 	b.mu.Lock()
-	b.restate = rc
+	b.restate = wc
 	b.mu.Unlock()
 }
-func (b *Broker) RestateClient() *RestateClient {
+func (b *Broker) WorkflowClient() *WorkflowClient {
 	b.mu.RLock()
-	rc := b.restate
+	wc := b.restate
 	b.mu.RUnlock()
-	return rc
+	if wc == nil && b.engine != nil {
+		wc = b.engine.WorkflowClient()
+	}
+	return wc
 }
+func (b *Broker) EnsureWorkflowClient() (*WorkflowClient, error) {
+	if wc := b.WorkflowClient(); wc != nil && wc.IsRunning() {
+		return wc, nil
+	}
+	if b.engine == nil {
+		return nil, errors.New("market: engine unavailable")
+	}
+	wc, err := b.engine.EnsureWorkflows()
+	if err != nil {
+		return nil, err
+	}
+	b.SetWorkflowClient(wc)
+	return wc, nil
+}
+func (b *Broker) SetRestateClient(rc *RestateClient) { b.SetWorkflowClient(rc) }
+func (b *Broker) RestateClient() *RestateClient      { return b.WorkflowClient() }
 func (b *Broker) SetMatcher(m Matcher) {
 	b.mu.Lock()
 	b.matcher = m
@@ -298,7 +359,11 @@ func (b *Broker) Start(ctx context.Context) {
 	if b.subSup != nil {
 		_ = b.subSup.Start(runCtx)
 	}
-	b.wg.Add(4)
+	b.wg.Add(5)
+	go func() {
+		defer b.wg.Done()
+		b.runStateFlusher(runCtx)
+	}()
 	go func() {
 		defer b.wg.Done()
 		ticker := time.NewTicker(2 * time.Second)
@@ -312,11 +377,11 @@ func (b *Broker) Start(ctx context.Context) {
 			}
 		}
 	}()
-	// Jittered low-frequency poll floor catching any events dropped across SSE reconnects (event-arch skill).
+	// Jittered low-frequency reconciliation floor catching any events dropped across SSE reconnects.
 	go func() {
 		defer b.wg.Done()
 		for {
-			wait := time.Duration(float64(8*time.Second) * (0.6 + 0.8*rand.Float64()))
+			wait := time.Duration(float64(45*time.Second) * (0.7 + 0.6*rand.Float64()))
 			select {
 			case <-runCtx.Done():
 				return
@@ -382,6 +447,8 @@ func (b *Broker) Stop() {
 	}
 	b.mu.Unlock()
 	b.wg.Wait()
+	b.flushDirtyCursors()
+	b.flushDirtyReputation()
 }
 
 func (b *Broker) backgroundCtx() context.Context {
@@ -429,6 +496,27 @@ func lanesForDomains(net string, domains []string) []string {
 	}
 	if len(out) == 0 {
 		out = append(out, bstack.LaneOf(net, "general"))
+	}
+	return out
+}
+
+func topicsForMarketAd(net string, domains []string, ontologyID string) []string {
+	base := lanesForDomains(net, domains)
+	seen := make(map[string]bool, len(base)+len(domains)+1)
+	out := make([]string, 0, len(base)+len(domains)+1)
+	for _, t := range base {
+		seen[t] = true
+		out = append(out, t)
+	}
+	doms := domains
+	if len(doms) == 0 {
+		doms = []string{"general"}
+	}
+	for _, dt := range bstack.TopicsForMarketAd(net, doms, ontologyID) {
+		if !seen[dt] {
+			seen[dt] = true
+			out = append(out, dt)
+		}
 	}
 	return out
 }

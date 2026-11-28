@@ -210,15 +210,17 @@ func TestNMUShardSubscriptionReplayWindowAndGradeSSupersessionPush(t *testing.T)
 
 	// 1. Captured-header replay outside +/-60s MUST fail with 401 Unauthorized!
 	staleTS := time.Now().Unix() - 120
-	pubH, sigH, err := nmu.SignFeedAuth(buyerPriv, "market-ops", subOut.SubID, staleTS)
+	staleReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/market/feeds/market-ops", nil)
+	staleNonce := "nonce-stale-0001"
+	pubH, sigH, err := nmu.SignFeedAuth(buyerPriv, "market-ops", subOut.SubID, staleTS, staleNonce, staleReq.Host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	staleReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/market/feeds/market-ops", nil)
 	staleReq.Header.Set(nmu.HeaderSubID, subOut.SubID)
 	staleReq.Header.Set(nmu.HeaderPub, pubH)
 	staleReq.Header.Set(nmu.HeaderSig, sigH)
 	staleReq.Header.Set(nmu.HeaderTS, strconv.FormatInt(staleTS, 10))
+	staleReq.Header.Set(nmu.HeaderNonce, staleNonce)
 	staleResp, err := http.DefaultClient.Do(staleReq)
 	if err != nil {
 		t.Fatal(err)
@@ -232,12 +234,14 @@ func TestNMUShardSubscriptionReplayWindowAndGradeSSupersessionPush(t *testing.T)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	nowTS := time.Now().Unix()
-	pubH2, sigH2, _ := nmu.SignFeedAuth(buyerPriv, "market-ops", subOut.SubID, nowTS)
 	sseReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/v1/market/feeds/market-ops", nil)
+	liveNonce := "nonce-live-0001"
+	pubH2, sigH2, _ := nmu.SignFeedAuth(buyerPriv, "market-ops", subOut.SubID, nowTS, liveNonce, sseReq.Host)
 	sseReq.Header.Set(nmu.HeaderSubID, subOut.SubID)
 	sseReq.Header.Set(nmu.HeaderPub, pubH2)
 	sseReq.Header.Set(nmu.HeaderSig, sigH2)
 	sseReq.Header.Set(nmu.HeaderTS, strconv.FormatInt(nowTS, 10))
+	sseReq.Header.Set(nmu.HeaderNonce, liveNonce)
 	sseResp, err := http.DefaultClient.Do(sseReq)
 	if err != nil {
 		t.Fatal(err)

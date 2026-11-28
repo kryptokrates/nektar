@@ -122,21 +122,25 @@ td{color:#dcd5ce}
   <a class="qpill" href="#verify">6. Verify &amp; Report</a>
 </div>
 
-<h2 id="deploy">1. Deploy a Hub (60 Seconds)</h2>
-<p>A Nektar Hub runs as a single zero-CGO Go binary paired with a pinned <code>restate:1.8.1</code> durable execution sidecar. You can run it as a <strong>Leaf</strong> (edge hub for local/regional agents peering upstream to a Spine) or as a <strong>Spine</strong> (backbone hub peering bilaterally with other independent Spines).</p>
+<h2 id="deploy">1. Deploy a Hub (30 Seconds, Zero Sidecars)</h2>
+<p>A Nektar Hub runs directly from the single static zero-CGO Go binary (zero Docker or sidecar processes required). Every Leaf Hub automatically peers upstream with <code>https://nektar.run/hub</code> via BRC-223 topic interest + BRC-149 Object Plane (zero flood gossip), serves a LightBSV BRC-180 <code>/manifest.json</code> + <code>bfinger</code> handles, and announces itself in the global directory so users can inspect and join via <code>nektar peers join &lt;your-domain&gt;</code>.</p>
 
-<h3>Option A — Docker Compose + Automatic HTTPS (Recommended)</h3>
-<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar hub up \
+<h3>Option A — Zero-Docker Native Binary (Recommended)</h3>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code># Custom domain (pair with `caddy reverse-proxy --from hub.example.com --to 127.0.0.1:18421`):
+nektar hub up \
   --domain hub.example.com \
-  --network main \
+  --mainnet \
   --confirm I_UNDERSTAND \
   --hub-role leaf \
-  --fee-preset hybrid</code></pre></div>
-<p>For a full production Spine deployment using <code>deploy/hub/compose.yaml</code>, see the reference config <a href="https://github.com/kryptokrates/nektar/blob/master/deploy/hetzner/nektar-mainnet.env" target="_blank" rel="noopener">deploy/hetzner/nektar-mainnet.env ↗</a>.</p>
+  --fee-preset hybrid
 
-<h3>Option B — Native Linux VPS (Zero Docker)</h3>
-<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar restate-up   # downloads &amp; SHA-256 verifies pinned restate-server v1.8.1
-nektar hub up --native --auto-ip --network main --confirm I_UNDERSTAND --fee-preset hybrid</code></pre></div>
+# Or zero-domain / behind-NAT quick start:
+nektar hub up --auto-ip --mainnet --confirm I_UNDERSTAND
+nektar hub up --tunnel</code></pre></div>
+<p>Host sovereign <code>&lt;handle&gt;@hub.example.com</code> identities on your Hub with <code>nektar domain-docs --domain hub.example.com --handle operator</code>.</p>
+
+<h3>Option B — Docker Compose + Caddy Auto-TLS (Opt-In)</h3>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>nektar hub up --docker --domain hub.example.com --mainnet --confirm I_UNDERSTAND --fee-preset hybrid</code></pre></div>
 
 <h2 id="operator-reqs">2. Independent Operator Requirements (Version, Uptime &amp; Soak)</h2>
 <p>Mainnet decentralization relies on independent operators running on their own hardware, keys, and PoW header witnesses (Gates <strong>X1</strong> and <strong>X2</strong> in <a href="https://github.com/kryptokrates/nektar/blob/master/docs/JOIN-MAINNET.md" target="_blank" rel="noopener">JOIN-MAINNET.md ↗</a>).</p>
@@ -152,7 +156,7 @@ nektar hub up --native --auto-ip --network main --confirm I_UNDERSTAND --fee-pre
     <tbody>
       <tr>
         <td><strong>Version</strong></td>
-        <td>Latest <code>v0.1</code> Pure-Go release binary (static <code>CGO_ENABLED=0</code>) or <code>ghcr.io/kryptokrates/nektar:edge</code> pinned by SHA-256 digest, paired with pinned <code>docker.restate.dev/restatedev/restate:1.8.1</code> and <code>NEKTAR_RESTATE_REQUIRED=1</code>.</td>
+        <td>Latest <code>v0.1</code> Pure-Go release binary (static <code>CGO_ENABLED=0</code>, zero external sidecars) or <code>ghcr.io/kryptokrates/nektar:edge</code> pinned by SHA-256 digest.</td>
       </tr>
       <tr>
         <td><strong>PoW Header Witnesses</strong></td>
@@ -160,7 +164,7 @@ nektar hub up --native --auto-ip --network main --confirm I_UNDERSTAND --fee-pre
       </tr>
       <tr>
         <td><strong>Uptime &amp; Soak</strong></td>
-        <td>Best-effort 24/7 over a <strong>5-day continuous soak (&ge; 120 hours)</strong> on your own server and key — verifying TLS health, Restate staying attached (<code>nektar_restate_attached 1</code>), bilateral hub sync across real latency and clock skew, NAT <code>bbox</code> relay, and zero wedged workflows or crash loops.</td>
+        <td>Best-effort 24/7 over a <strong>5-day continuous soak (&ge; 120 hours)</strong> on your own server and key — verifying TLS health, embedded <code>workflows.sqlite</code> durability, bilateral Spine-and-Leaf sync across real latency and clock skew, NAT <code>bbox</code> relay, and zero crash loops.</td>
       </tr>
       <tr>
         <td><strong>Hardware</strong></td>
@@ -251,7 +255,7 @@ nektar hub up --native --auto-ip --network main --confirm I_UNDERSTAND --fee-pre
 <div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code># 1. Confirm all Mainnet safety gates pass (exits 0)
 nektar check-mainnet
 
-# 2. Confirm Restate v1.8.1, PoW witnesses, SpendGuard, and wallet health
+# 2. Confirm embedded durable workflows, PoW witnesses, SpendGuard, and wallet health
 nektar doctor --network main
 
 # 3. Verify public TLS health, fee terms, and HTTP 402 anti-freerider enforcement
@@ -263,7 +267,7 @@ curl -i https://hub.example.com/hub/sync?cursor=0   # expect HTTP 402 when fees 
 <ol>
   <li>Your public Hub URL (<code>https://&lt;your-domain&gt;/hub</code>) and Hub <code>identityPub</code> (if requesting bilateral Spine peering).</li>
   <li><code>nektar check-mainnet</code> and <code>nektar doctor --network main</code> output at Day 0 and Day 5.</li>
-  <li>A <code>/v1/metrics</code> snapshot (uptime, <code>nektar_restate_attached</code>, admitted events, bbox relays, BRC-105 fee claims) plus any bugs or friction encountered.</li>
+  <li>A <code>/v1/metrics</code> snapshot (uptime, workflow durability, admitted events, bbox relays, BRC-105 fee claims) plus any bugs or friction encountered.</li>
 </ol>
 
 <h2>Related Manuals</h2>

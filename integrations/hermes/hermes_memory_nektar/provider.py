@@ -327,6 +327,57 @@ class NektarMemoryProvider(_BaseMemoryProvider):
             {
                 "type": "function",
                 "function": {
+                    "name": "nektar_buy_capsule",
+                    "description": "1-call capsule purchase across active Hubs (SPV-verifies and imports into local Memory Repo; automatically posts a bounded StandingOrder satoshi bounty if 0 offers match yet).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "question": {"type": "string", "description": "Knowledge or runbook capsule to buy"},
+                            "domains": {"type": "array", "items": {"type": "string"}, "description": "Topic domains (e.g. ops, debugging, mcp, api-quirks, bsv)"},
+                            "maxSats": {"type": "integer", "description": "Maximum satoshis to spend (default: 100)"},
+                            "targetShard": {"type": "string", "description": "Optional target local repo/shard"},
+                            "postBounty": {"type": "boolean", "description": "Auto-post a live StandingOrder bounty if 0 offers match immediately (default: true)"},
+                        },
+                        "required": ["question"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "nektar_sell_capsule",
+                    "description": "1-call capsule publish & sell: scrubs PII/secrets fail-closed, commits & anchors to Memory Repo, arms seller listing, broadcasts OfferAd on Hubs, and optionally exports a shareable .nkt capsule file.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string", "description": "Inline knowledge/runbook text to scrub, commit, anchor, and sell"},
+                            "shard": {"type": "string", "description": "Target or existing Memory Repo / shard name (e.g. ops/fix)"},
+                            "domains": {"type": "array", "items": {"type": "string"}, "description": "Topic domains (e.g. ops, debugging, mcp, api-quirks, bsv)"},
+                            "priceSats": {"type": "integer", "description": "Spot price in satoshis (default: 50)"},
+                            "description": {"type": "string", "description": "Short public preview summary"},
+                            "exportPath": {"type": "string", "description": "Optional file path to export a portable .nkt capsule"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "nektar_import_capsule",
+                    "description": "1-call SPV-verified import of a portable .nkt capsule from a local file path, https:// URL, or chirp:// URI, auto-discovering the creator's LightBSV handle & Hub.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "source": {"type": "string", "description": "Local .nkt path, https:// URL, or chirp:// URI"},
+                            "repo": {"type": "string", "description": "Optional target local Memory Repo name"},
+                        },
+                        "required": ["source"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "nektar_want",
                     "description": "Publish a policy-bounded knowledge buy want on the nektar BSV market.",
                     "parameters": {
@@ -413,6 +464,9 @@ class NektarMemoryProvider(_BaseMemoryProvider):
             "nektar_grounded_answer": "groundedAnswer",
             "nektar_verify_receipt": "verifyReceipt",
             "nektar_repo": "repo",
+            "nektar_buy_capsule": "buyCapsule",
+            "nektar_sell_capsule": "sellCapsule",
+            "nektar_import_capsule": "importCapsule",
             "nektar_want": "want",
             "nektar_sell": "sell",
             "nektar_deals": "deals",
@@ -424,7 +478,7 @@ class NektarMemoryProvider(_BaseMemoryProvider):
         payload = dict(args or {})
         if tool == "remember" and not payload.get("shard") and not payload.get("repo"):
             payload["shard"] = str(self.config.get("default_shard") or "hermes")
-        timeout = 45.0 if tool in ("want", "sell", "remember", "groundedAnswer", "repo") else 15.0
+        timeout = 45.0 if tool in ("buyCapsule", "sellCapsule", "importCapsule", "want", "sell", "remember", "groundedAnswer", "repo") else 15.0
         try:
             res = self.client.call_tool(tool, payload, timeout_s=timeout)
             return json.dumps(res)

@@ -135,6 +135,16 @@ func (s *Service) ResolveOntology(ctx context.Context, key string) (*LoadedOntol
 	if repo == "" {
 		repo = OntologyRepoPrefix + reasoning.NormalizeOntologyDomain(k)
 	}
+	if br, bErr := s.db.GetMemBranch(repo, memrepo.DefaultBranch); bErr == nil && br.HeadCommit != "" {
+		cacheKey := repo + "@" + br.HeadCommit + "|" + ref.AnchorTxID
+		s.ontCacheMu.RLock()
+		cached := s.manifestCache[cacheKey]
+		s.ontCacheMu.RUnlock()
+		if cached != nil && cached.loaded != nil {
+			cp := *cached.loaded
+			return &cp, nil
+		}
+	}
 	c, tr, blobs, err := s.RepoTree(ctx, repo, "", "")
 	if err != nil || tr == nil {
 		if err == nil {
@@ -169,7 +179,7 @@ func (s *Service) ResolveOntology(ctx context.Context, key string) (*LoadedOntol
 		}
 	}
 	if anchorTx == "" {
-		if anchors, aErr := s.db.ListAnchors(repo); aErr == nil && len(anchors) > 0 {
+		if anchors, aErr := s.db.ListAnchorSummaries(repo); aErr == nil && len(anchors) > 0 {
 			anchorTx = anchors[len(anchors)-1].TxID
 		}
 	}
@@ -177,7 +187,7 @@ func (s *Service) ResolveOntology(ctx context.Context, key string) (*LoadedOntol
 	if !found || ontID == "" {
 		ontID = reasoning.CanonicalOntologyID(fin.Domain, anchorTx, fin.Hash)
 	}
-	return &LoadedOntology{
+	loaded := &LoadedOntology{
 		Ref: OntologyRepoRef{
 			OntologyID:   ontID,
 			Domain:       fin.Domain,
@@ -188,5 +198,15 @@ func (s *Service) ResolveOntology(ctx context.Context, key string) (*LoadedOntol
 		},
 		Manifest: *fin,
 		Rules:    rules,
-	}, nil
+	}
+	if commitHash != "" {
+		s.ontCacheMu.Lock()
+		if s.manifestCache == nil || len(s.manifestCache) >= 64 {
+			s.manifestCache = make(map[string]*cachedManifestEntry, 16)
+		}
+		cp := *loaded
+		s.manifestCache[repo+"@"+commitHash+"|"+ref.AnchorTxID] = &cachedManifestEntry{loaded: &cp}
+		s.ontCacheMu.Unlock()
+	}
+	return loaded, nil
 }

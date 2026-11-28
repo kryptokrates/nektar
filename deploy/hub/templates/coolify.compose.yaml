@@ -1,29 +1,12 @@
-# Coolify 1-Click Nektar v0.1 Hub Template (Pure-Go single binary + active Restate durable executor)
+# Coolify 1-Click Nektar v0.1 Hub Template (Pure-Go single binary + embedded go-workflows SQLite WAL)
 # In Coolify: New Resource -> Docker Compose -> Paste this file (or raw GitHub URL).
 # Coolify automatically provisions HTTPS for SERVICE_FQDN_HUB and generates every
 # SERVICE_PASSWORD_* secret with zero manual editing.
 services:
-  restate:
-    image: docker.restate.dev/restatedev/restate:1.8.1
-    restart: unless-stopped
-    environment:
-      - RESTATE_NODE_NAME=nektar-hub
-      - RESTATE_BASE_DIR=/restate-data
-    healthcheck:
-      test: ['CMD', 'bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/9070 && printf "GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && grep -q "200" <&3']
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    volumes:
-      - restate-data:/restate-data
-
   hub:
     image: ghcr.io/kryptokrates/nektar:latest
     restart: unless-stopped
-    command: ['serve', '-listen', ':18420', '-restate-listen', ':9080', '-hub']
-    depends_on:
-      restate:
-        condition: service_healthy
+    command: ['serve', '-listen', ':18420', '-hub']
     environment:
       - SERVICE_FQDN_HUB_18420
       - NEKTAR_NETWORK=${NEKTAR_NETWORK:-testnet}
@@ -37,10 +20,6 @@ services:
       - NEKTAR_PUBLIC_URL=${SERVICE_URL_HUB}
       - NEKTAR_VERIFY_BASE=${SERVICE_URL_HUB}
       - NEKTAR_MARKET_HOSTS=${NEKTAR_MARKET_HOSTS:-https://testnet.nektar.run/hub}
-      - NEKTAR_RESTATE_URL=http://restate:8080
-      - NEKTAR_RESTATE_ADMIN=http://restate:9070
-      - NEKTAR_RESTATE_ENDPOINT_URI=http://hub:9080
-      - NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT=1
     volumes:
       - hub-data:/data
     healthcheck:
@@ -50,4 +29,3 @@ services:
       retries: 10
 volumes:
   hub-data: {}
-  restate-data: {}

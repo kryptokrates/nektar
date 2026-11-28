@@ -113,6 +113,27 @@ func (b *Broker) verifyPurchasePaymentOutput(
 		}
 		paidSats = sale.SaleOffer.Config.Price
 	} else if isBRC29 {
+		if uint64(req.OutputIndex) >= uint64(len(tx.Outputs)) {
+			return false, false, 0, escrowParams, fmt.Errorf("market: BRC-29 outputIndex %d out of range", req.OutputIndex)
+		}
+		out := tx.Outputs[req.OutputIndex]
+		if out == nil || out.LockingScript == nil {
+			return false, false, 0, escrowParams, errors.New("market: BRC-29 payment output missing locking script")
+		}
+		if fl := b.mem.Chain().FastLane(); fl != nil {
+			expectedBytes, fErr := fl.DeriveBRC29ReceiveScriptFast(req.SenderIdentityKey, req.DerivationPrefix, req.DerivationSuffix)
+			if fErr != nil {
+				return false, false, 0, escrowParams, fmt.Errorf("market: verify BRC-29 payment script: %w", fErr)
+			}
+			if !bytes.Equal(*out.LockingScript, expectedBytes) {
+				return false, false, 0, escrowParams, errors.New("market: BRC-29 payment output locking script does not match derived seller key")
+			}
+			if out.Satoshis < sale.SaleOffer.Config.Price {
+				return false, false, 0, escrowParams, fmt.Errorf("market: BRC-29 payment %d sats < required %d sats", out.Satoshis, sale.SaleOffer.Config.Price)
+			}
+			paidSats = out.Satoshis
+			return isEscrow, isBRC29, paidSats, escrowParams, nil
+		}
 		d := &bwallet.Derivation{
 			SecurityLevel:   int(bwallet.PaymentProtocol.SecurityLevel),
 			Protocol:        bwallet.PaymentProtocol.Protocol,
@@ -124,11 +145,7 @@ func (b *Broker) verifyPurchasePaymentOutput(
 		if dErr != nil {
 			return false, false, 0, escrowParams, fmt.Errorf("market: derive BRC-29 script: %w", dErr)
 		}
-		if uint64(req.OutputIndex) >= uint64(len(tx.Outputs)) {
-			return false, false, 0, escrowParams, fmt.Errorf("market: BRC-29 outputIndex %d out of range", req.OutputIndex)
-		}
-		out := tx.Outputs[req.OutputIndex]
-		if out.LockingScript == nil || !bytes.Equal(*out.LockingScript, *wantScript) {
+		if !bytes.Equal(*out.LockingScript, *wantScript) {
 			return false, false, 0, escrowParams, errors.New("market: payment output does not match BRC-29 derivation")
 		}
 		paidSats = out.Satoshis

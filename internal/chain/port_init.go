@@ -32,6 +32,9 @@ func (p *Port) initNetwork(cfg Config) error {
 			p.testChain = tc
 			p.tracker = tc
 		}
+		if cfg.TestTracker != nil {
+			p.tracker = cfg.TestTracker
+		}
 		return nil
 	default:
 		spec := strings.TrimSpace(cfg.HeaderSource)
@@ -198,6 +201,12 @@ func (p *Port) openEmbeddedWallet(cfg Config, dir, walletDir string) error {
 		SpendGuardRemainingInterval: p.guard.RemainingInterval,
 		OnTxMined:                   p.dispatchTxMined,
 		SettleDepth:                 p.settleDepth,
+		FastStore:                   cfg.FastStore,
+		EnableFastLane:              cfg.EnableFastLane,
+	}
+	if cfg.FastBroadcaster != nil {
+		p.broadcaster = cfg.FastBroadcaster
+		wCfg.Broadcaster = cfg.FastBroadcaster
 	}
 	if p.nodeChain != nil {
 		wCfg.Chain = p.nodeChain
@@ -206,7 +215,7 @@ func (p *Port) openEmbeddedWallet(cfg Config, dir, walletDir string) error {
 		wCfg.HeaderBytes = p.witnessed.HeaderBytes
 		wCfg.MedianTimePast = p.witnessed.MedianTimePast
 	}
-	if p.testChain != nil {
+	if p.testChain != nil && cfg.FastBroadcaster == nil {
 		wCfg.Broadcast = func(_ context.Context, tx *transaction.Transaction) error {
 			p.tcMu.Lock()
 			defer p.tcMu.Unlock()

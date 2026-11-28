@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/lightwebinc/bcommon/cbor"
+
 	"github.com/kryptokrates/nektar/internal/core"
 )
 
@@ -14,7 +16,7 @@ import (
 // so any single field (author, modelId, policyCommit, treeHash, parents, message, timestamp) can be
 // selectively disclosed and verified directly against the L1-anchored commit leaf.
 func BuildCommitMPE(c CommitObject) (*core.MPE, error) {
-	parentBytes, err := core.CanonicalJSON(c.Parents)
+	parentBytes, err := core.EncodeCBOR(parentsToCBOR(c.Parents))
 	if err != nil {
 		return nil, err
 	}
@@ -30,64 +32,25 @@ func BuildCommitMPE(c CommitObject) (*core.MPE, error) {
 		"message":        []byte(c.Message),
 		"timestamp":      []byte(strconv.FormatInt(c.Timestamp, 10)),
 	}
+	if c.CommitKind != 0 {
+		fields["commitKind"] = []byte(strconv.Itoa(c.CommitKind))
+	}
 	return core.BuildMPE(fields)
 }
 
-type commitSignable struct {
-	Version        int         `json:"v"`
-	Repo           string      `json:"repo"`
-	Branch         string      `json:"branch"`
-	Parents        []ParentRef `json:"parents,omitempty"`
-	TreeHash       string      `json:"treeHash"`
-	MPERoot        string      `json:"mpeRoot"`
-	AuthorPub      string      `json:"authorPub"`
-	ModelID        string      `json:"modelId"`
-	PolicyCommit   string      `json:"policyCommit,omitempty"`
-	OntologyCommit string      `json:"ontologyCommit,omitempty"`
-	Message        string      `json:"message"`
-	Timestamp      int64       `json:"timestamp"`
-}
-
-func toCommitSignable(c CommitObject) commitSignable {
-	return commitSignable{
-		Version:        c.Version,
-		Repo:           c.Repo,
-		Branch:         c.Branch,
-		Parents:        c.Parents,
-		TreeHash:       c.TreeHash,
-		MPERoot:        c.MPERoot,
-		AuthorPub:      c.AuthorPub,
-		ModelID:        c.ModelID,
-		PolicyCommit:   c.PolicyCommit,
-		OntologyCommit: c.OntologyCommit,
-		Message:        c.Message,
-		Timestamp:      c.Timestamp,
-	}
-}
-
-// ComputeCommitDigest returns the 32-byte double-SHA-256 digest signed by AuthorPub.
+// ComputeCommitDigest returns the 32-byte double-SHA-256 CBOR digest signed by AuthorPub.
 func ComputeCommitDigest(c CommitObject) ([]byte, error) {
-	raw, err := core.CanonicalJSON(toCommitSignable(c))
-	if err != nil {
-		return nil, err
-	}
-	return core.DSHA256(core.Concat(core.TagCommitV1, raw)), nil
+	return core.HashCBOR(core.TagCommitV1, commitSignableCBOR(c))
 }
 
-// ComputeCommitHash returns the canonical 32-byte hex CommitHash covering the signed commit envelope.
+// ComputeCommitHash returns the canonical 32-byte hex DSHA-256 CommitHash covering the signed CBOR commit envelope.
 func ComputeCommitHash(c CommitObject) (string, error) {
-	type hashedCommit struct {
-		commitSignable
-		Signature string `json:"signature"`
-	}
-	raw, err := core.CanonicalJSON(hashedCommit{
-		commitSignable: toCommitSignable(c),
-		Signature:      c.Signature,
-	})
+	m := append(commitSignableCBOR(c), cbor.Pair{Key: uint64(14), Val: c.Signature})
+	h, err := core.HashCBOR(core.TagCommitV1, m)
 	if err != nil {
 		return "", err
 	}
-	return core.ToHex(core.SHA256(core.Concat(core.TagCommitV1, raw))), nil
+	return core.ToHex(h), nil
 }
 
 // FinalizeCommit computes MPERoot, calls signFn over the commit digest, and computes CommitHash.
@@ -151,20 +114,12 @@ func VerifyCommitObject(c CommitObject) error {
 	if !strings.EqualFold(wantHash, c.CommitHash) {
 		return fmt.Errorf("memrepo: commit hash mismatch (got %s want %s)", c.CommitHash, wantHash)
 	}
-	pub, _, err := core.ParseStrictCompressedPubKey(c.AuthorPub)
-	if err != nil {
-		return fmt.Errorf("memrepo: invalid authorPub: %w", err)
-	}
-	sig, err := core.ParseStrictLowSDER(c.Signature)
-	if err != nil {
-		return fmt.Errorf("memrepo: invalid DER signature: %w", err)
-	}
 	digest, err := ComputeCommitDigest(c)
 	if err != nil {
 		return err
 	}
-	if !sig.Verify(digest, pub) {
-		return errors.New("memrepo: commit signature verification failed")
+	if err := core.FastVerifyStrictHex(c.AuthorPub, c.Signature, digest); err != nil {
+		return fmt.Errorf("memrepo: commit signature verification failed: %w", err)
 	}
 	return nil
 }

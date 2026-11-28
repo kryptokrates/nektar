@@ -119,7 +119,7 @@ func openPureGoGORM(dbPath string, inMemory bool) (*sql.DB, *sql.DB, *gorm.DB, e
 			return nil, nil, nil, fmt.Errorf("wallet: mkdir db dir: %w", err)
 		}
 		dsn = fmt.Sprintf(
-			"file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=synchronous(NORMAL)&_pragma=wal_autocheckpoint(256)&_pragma=journal_size_limit(16777216)",
+			"file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-64000)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(134217728)&_pragma=wal_autocheckpoint(4000)&_pragma=journal_size_limit(67108864)",
 			filepath.ToSlash(dbPath),
 		)
 	}
@@ -164,12 +164,12 @@ func openPureGoGORM(dbPath string, inMemory bool) (*sql.DB, *sql.DB, *gorm.DB, e
 	readDB := sqlDB
 	if !isMem {
 		roDSN := fmt.Sprintf(
-			"file:%s?mode=ro&_pragma=query_only(ON)&_pragma=busy_timeout(5000)",
+			"file:%s?mode=ro&_pragma=query_only(ON)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)&_pragma=cache_size(-32000)&_pragma=mmap_size(134217728)",
 			filepath.ToSlash(dbPath),
 		)
 		if rdb, rErr := sql.Open("sqlite", roDSN); rErr == nil {
-			rdb.SetMaxOpenConns(4)
-			rdb.SetMaxIdleConns(4)
+			rdb.SetMaxOpenConns(16)
+			rdb.SetMaxIdleConns(16)
 			if rdb.Ping() == nil {
 				readDB = rdb
 			} else {
@@ -180,12 +180,18 @@ func openPureGoGORM(dbPath string, inMemory bool) (*sql.DB, *sql.DB, *gorm.DB, e
 	return sqlDB, readDB, gormDB, nil
 }
 
-// txLRU is a thread-safe bounded LRU cache for parsed transactions.
-type txLRU struct {
+const numTxLRUShards = 64
+
+type txLRUShard struct {
 	mu    sync.Mutex
 	cap   int
 	ll    *list.List
 	items map[string]*list.Element
+}
+
+// txLRU is a 64-shard thread-safe bounded LRU cache for parsed transactions.
+type txLRU struct {
+	shards [numTxLRUShards]txLRUShard
 }
 
 type txLRUEntry struct {
@@ -193,22 +199,40 @@ type txLRUEntry struct {
 	tx  *transaction.Transaction
 }
 
+func txShardIdx(txid string) uint64 {
+	var h uint64 = 14695981039346656037
+	for i := 0; i < len(txid); i++ {
+		h ^= uint64(txid[i])
+		h *= 1099511628211
+	}
+	return h & (numTxLRUShards - 1)
+}
+
 func newTxLRU(capacity int) *txLRU {
 	if capacity <= 0 {
 		capacity = DefaultTxCacheSize
 	}
-	return &txLRU{
-		cap:   capacity,
-		ll:    list.New(),
-		items: make(map[string]*list.Element, capacity),
+	shardCap := (capacity + numTxLRUShards - 1) / numTxLRUShards
+	if shardCap < 1 {
+		shardCap = 1
 	}
+	c := &txLRU{}
+	for i := range c.shards {
+		c.shards[i] = txLRUShard{
+			cap:   shardCap,
+			ll:    list.New(),
+			items: make(map[string]*list.Element, min(shardCap, 256)),
+		}
+	}
+	return c
 }
 
 func (c *txLRU) Get(txid string) (*transaction.Transaction, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if el, ok := c.items[txid]; ok {
-		c.ll.MoveToFront(el)
+	sh := &c.shards[txShardIdx(txid)]
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if el, ok := sh.items[txid]; ok {
+		sh.ll.MoveToFront(el)
 		return el.Value.(*txLRUEntry).tx, true
 	}
 	return nil, false
@@ -218,47 +242,52 @@ func (c *txLRU) Put(txid string, tx *transaction.Transaction) {
 	if tx == nil || txid == "" {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if el, ok := c.items[txid]; ok {
+	sh := &c.shards[txShardIdx(txid)]
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if el, ok := sh.items[txid]; ok {
 		el.Value.(*txLRUEntry).tx = tx
-		c.ll.MoveToFront(el)
+		sh.ll.MoveToFront(el)
 		return
 	}
-	el := c.ll.PushFront(&txLRUEntry{key: txid, tx: tx})
-	c.items[txid] = el
-	for c.ll.Len() > c.cap {
-		back := c.ll.Back()
+	el := sh.ll.PushFront(&txLRUEntry{key: txid, tx: tx})
+	sh.items[txid] = el
+	for sh.ll.Len() > sh.cap {
+		back := sh.ll.Back()
 		if back == nil {
 			break
 		}
-		c.ll.Remove(back)
-		delete(c.items, back.Value.(*txLRUEntry).key)
+		sh.ll.Remove(back)
+		delete(sh.items, back.Value.(*txLRUEntry).key)
 	}
 }
 
 func (c *txLRU) Delete(txid string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if el, ok := c.items[txid]; ok {
-		c.ll.Remove(el)
-		delete(c.items, txid)
+	sh := &c.shards[txShardIdx(txid)]
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if el, ok := sh.items[txid]; ok {
+		sh.ll.Remove(el)
+		delete(sh.items, txid)
 	}
 }
 
 // EvictFromHeight removes any cached transactions claiming a MerklePath at or above forkHeight
 // so reorged proofs are never served stale from memory.
 func (c *txLRU) EvictFromHeight(forkHeight uint32) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	evicted := 0
-	for txid, el := range c.items {
-		entry := el.Value.(*txLRUEntry)
-		if entry != nil && entry.tx != nil && entry.tx.MerklePath != nil && entry.tx.MerklePath.BlockHeight >= forkHeight {
-			c.ll.Remove(el)
-			delete(c.items, txid)
-			evicted++
+	for i := range c.shards {
+		sh := &c.shards[i]
+		sh.mu.Lock()
+		for txid, el := range sh.items {
+			entry := el.Value.(*txLRUEntry)
+			if entry != nil && entry.tx != nil && entry.tx.MerklePath != nil && entry.tx.MerklePath.BlockHeight >= forkHeight {
+				sh.ll.Remove(el)
+				delete(sh.items, txid)
+				evicted++
+			}
 		}
+		sh.mu.Unlock()
 	}
 	return evicted
 }

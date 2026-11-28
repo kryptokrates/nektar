@@ -45,6 +45,44 @@ func (rt *RepoTx) PutMemObject(hash, kind string, body []byte, createdAt int64) 
 	return err
 }
 
+// ReplaceMemObjectBody replaces a blob's stored payload with its hash-preserving BlobStub during Forget().
+func (rt *RepoTx) ReplaceMemObjectBody(hash string, body []byte) error {
+	_, err := rt.tx.Exec(`UPDATE mem_objects SET body_json = ? WHERE hash = ? AND kind = 'blob'`, body, hash)
+	return err
+}
+
+// MarkBlobRedacted records a content-addressed blob hash as cryptographically erased inside rtx.
+func (rt *RepoTx) MarkBlobRedacted(blobHash, reason, tombstoneCommit string, redactedAt int64) error {
+	if blobHash == "" {
+		return nil
+	}
+	_, err := rt.tx.Exec(`
+		INSERT OR REPLACE INTO redacted_blobs (blob_hash, reason, tombstone_commit, redacted_at)
+		VALUES (?, ?, ?, ?)`, blobHash, reason, tombstoneCommit, redactedAt)
+	return err
+}
+
+// ForgetFragmentRow shreds local plaintext/ciphertext/keyed_meta/FTS5/graph/NMU metadata for (shard, seq)
+// WITHOUT mutating any committed mem_commits row (append-only cryptographic erasure).
+func (rt *RepoTx) ForgetFragmentRow(shard string, seq int64) error {
+	if _, err := rt.tx.Exec(`UPDATE fragments SET data = NULL, ciphertext = NULL, keyed_meta = NULL, chirp_url = '', forgotten = 1 WHERE shard = ? AND seq = ?`, shard, seq); err != nil {
+		return err
+	}
+	if _, err := rt.tx.Exec(`DELETE FROM fragments_fts WHERE shard = ? AND seq = ?`, shard, seq); err != nil {
+		return fmt.Errorf("store: shred fts: %w", err)
+	}
+	if _, err := rt.tx.Exec(`DELETE FROM knowledge_edges WHERE shard = ? AND seq = ?`, shard, seq); err != nil {
+		return fmt.Errorf("store: shred knowledge_edges: %w", err)
+	}
+	if _, err := rt.tx.Exec(`DELETE FROM fragment_graph_meta WHERE shard = ? AND seq = ?`, shard, seq); err != nil {
+		return fmt.Errorf("store: shred fragment_graph_meta: %w", err)
+	}
+	if _, err := rt.tx.Exec(`DELETE FROM fragment_nmu_meta WHERE shard = ? AND seq = ?`, shard, seq); err != nil {
+		return fmt.Errorf("store: shred fragment_nmu_meta: %w", err)
+	}
+	return nil
+}
+
 func (rt *RepoTx) GetMemObject(hash string) (string, []byte, error) {
 	var kind string
 	var body []byte
@@ -61,11 +99,11 @@ func (rt *RepoTx) SaveMemCommit(r MemCommitRow) error {
 	}
 	_, err := rt.tx.Exec(`
 		INSERT OR IGNORE INTO mem_commits (
-			commit_hash, repo, branch, origin_repo, origin_branch, seq, tree_hash, mpe_root, parents_json,
+			commit_hash, repo, branch, origin_repo, origin_branch, origin_seq, seq, commit_kind, tree_hash, mpe_root, parents_json,
 			author_pub, model_id, policy_commit, ontology_commit, message, timestamp, signature,
 			anchor_txid, anchor_n, fragment_leaf, git_meta_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.CommitHash, r.Repo, r.Branch, r.OriginRepo, r.OriginBranch, r.Seq, r.TreeHash, r.MPERoot, r.ParentsJSON,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.CommitHash, r.Repo, r.Branch, r.OriginRepo, r.OriginBranch, r.OriginSeq, r.Seq, r.CommitKind, r.TreeHash, r.MPERoot, r.ParentsJSON,
 		r.AuthorPub, r.ModelID, r.PolicyCommit, r.OntologyCommit, r.Message, r.Timestamp, r.Signature,
 		r.AnchorTxID, r.AnchorN, r.FragmentLeaf, r.GitMetaJSON,
 	)
@@ -247,10 +285,10 @@ func (d *DB) CreateMemBranchStrict(r MemBranchRow) error {
 
 // GetMemBranch returns the branch record for (repo, branch).
 func (d *DB) GetMemBranch(repo, branch string) (MemBranchRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var r MemBranchRow
-	err := d.sql.QueryRow(`
+	err := rdb.QueryRow(`
 		SELECT repo, branch, head_commit, genesis_pub, genesis_shard_id, updated_at
 		FROM mem_branches WHERE repo = ? AND branch = ?`, repo, branch).
 		Scan(&r.Repo, &r.Branch, &r.HeadCommit, &r.GenesisPub, &r.GenesisShardID, &r.UpdatedAt)
@@ -259,9 +297,9 @@ func (d *DB) GetMemBranch(repo, branch string) (MemBranchRow, error) {
 
 // ListMemBranches returns all branches of repo ordered with main first.
 func (d *DB) ListMemBranches(repo string) ([]MemBranchRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`
 		SELECT repo, branch, head_commit, genesis_pub, genesis_shard_id, updated_at
 		FROM mem_branches WHERE repo = ?
 		ORDER BY CASE WHEN branch = 'main' THEN 0 ELSE 1 END, branch ASC`, repo)
@@ -282,9 +320,9 @@ func (d *DB) ListMemBranches(repo string) ([]MemBranchRow, error) {
 
 // ListAllMemRepos returns the union of all repo names from fragments and mem_branches.
 func (d *DB) ListAllMemRepos() ([]string, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`
 		SELECT DISTINCT name FROM (
 			SELECT shard AS name FROM fragments
 			UNION
@@ -322,10 +360,10 @@ func (d *DB) SaveMemTag(t MemTagRow) error {
 
 // GetMemTag fetches one tag record by (repo, tag).
 func (d *DB) GetMemTag(repo, tag string) (MemTagRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var r MemTagRow
-	err := d.sql.QueryRow(`
+	err := rdb.QueryRow(`
 		SELECT repo, tag, commit_hash, anchor_txid, anchor_n, message, author_pub, signature, created_at
 		FROM mem_tags WHERE repo = ? AND tag = ?`, repo, tag).
 		Scan(&r.Repo, &r.Tag, &r.CommitHash, &r.AnchorTxID, &r.AnchorN, &r.Message, &r.AuthorPub, &r.Signature, &r.CreatedAt)
@@ -334,9 +372,9 @@ func (d *DB) GetMemTag(repo, tag string) (MemTagRow, error) {
 
 // ListMemTags returns all tags in repo ordered newest first.
 func (d *DB) ListMemTags(repo string) ([]MemTagRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`
 		SELECT repo, tag, commit_hash, anchor_txid, anchor_n, message, author_pub, signature, created_at
 		FROM mem_tags WHERE repo = ? ORDER BY created_at DESC, tag ASC`, repo)
 	if err != nil {

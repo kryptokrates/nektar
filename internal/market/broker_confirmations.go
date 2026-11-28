@@ -10,6 +10,7 @@ import (
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/transaction"
+	"github.com/lightwebinc/bbox/boxrec"
 	"github.com/lightwebinc/bcommon/guard"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
@@ -193,12 +194,39 @@ func (b *Broker) OnPaymentTxMined(ctx context.Context, txid string, blockHeight 
 		log.Printf("market: seal confirmed claim key for offer %s failed: %v", sale.OfferID, sealErr)
 		return
 	}
+	// STATE-4 fix: construct & sign seller's third-entry DealReceipt on confirmed settlement (matching HandlePurchase)!
+	var sellerReceipt *DealReceipt
+	var sellerReceiptJSON []byte
+	if sellerSignPub := b.engine.salePubHex(); sellerSignPub != "" {
+		dr := DealReceipt{
+			Version:         1,
+			DealID:          sale.WantID,
+			OfferID:         sale.OfferID,
+			BuyerPub:        entry.BuyerPub,
+			SellerPub:       sellerSignPub,
+			PriceSats:       sale.SaleOffer.Config.Price,
+			OfferDigestHash: sha256CanonicalHex(sale.SaleOffer),
+			PaymentTxID:     txid,
+			KeyCommitment:   sale.SaleOffer.KeyCommitment,
+			NMU:             sale.OfferNMU,
+			SettledAt:       time.Now().Unix(),
+		}
+		if sale.ProofBundle != nil {
+			dr.FragmentLeaf = sale.ProofBundle.Leaf
+		}
+		if sErr := SignDealReceiptSeller(ctx, sellerSignPub, b.engine.signSaleDigest, &dr); sErr == nil {
+			sellerReceipt = &dr
+			sellerReceiptJSON, _ = json.Marshal(dr)
+		}
+	}
+
 	_ = b.mem.DB().MarkPendingSaleSettled(sale.OfferID)
 	b.engine.persistDealRecord(store.DealRecord{
 		DealID:          "sell-" + sale.OfferID,
 		Role:            "seller",
 		Status:          "settled",
 		Shard:           sale.Shard,
+		DealReceiptJSON: sellerReceiptJSON,
 		PaymentTxID:     txid,
 		ClaimKeyHex:     sealedClaimKey,
 		ChirpURL:        sale.ChirpURL,
@@ -207,6 +235,12 @@ func (b *Broker) OnPaymentTxMined(ctx context.Context, txid string, blockHeight 
 		IsHubSeller:     b.cfg.IsHub,
 		ConfirmHeight:   int64(blockHeight),
 	})
+	if len(sellerReceiptJSON) > 0 {
+		_ = RecordCountersigOwed(b.mem.DB(), "sell-"+sale.OfferID, entry.BuyerPub, txid, sale.SaleOffer.Config.Price, sellerReceiptJSON)
+		if sellerReceipt != nil {
+			_, _, _ = CommitDealAudit(ctx, b.mem, *sellerReceipt, false)
+		}
+	}
 	b.notify("deal_settled", map[string]any{"role": "seller", "offerId": sale.OfferID, "txid": txid, "claimTxid": claimTxID, "sats": sale.SaleOffer.Config.Price, "confirmHeight": blockHeight})
 
 	if rc := b.RestateClient(); rc != nil {
@@ -230,6 +264,10 @@ func (b *Broker) OnPaymentTxMined(ctx context.Context, txid string, blockHeight 
 
 	// Push encrypted reveal_key via Hub bbox so BuyerDeal wakes immediately upon confirmation!
 	if b.disc != nil && entry.BuyerPub != "" {
+		wireCT := sale.SaleOffer.CiphertextHex
+		if len(wireCT) > bstack.InlineDirectMaxHexLen && sale.ChirpURL != "" && b.PublicURL() != "" {
+			wireCT = ""
+		}
 		respPayload := &PurchaseResponse{
 			OK:             true,
 			Status:         "settled",
@@ -238,17 +276,25 @@ func (b *Broker) OnPaymentTxMined(ctx context.Context, txid string, blockHeight 
 			ContentKeyHex:  hex.EncodeToString(sale.RevealKey[:]),
 			ClaimTxID:      claimTxID,
 			ClaimTxBEEFHex: claimTxBEEFHex,
-			CiphertextHex:  sale.SaleOffer.CiphertextHex,
+			CiphertextHex:  wireCT,
 			ChirpURL:       sale.ChirpURL,
 			ProofBundle:    sale.ProofBundle,
+			DealReceipt:    sellerReceipt,
 		}
+		replyTS := time.Now().Unix()
 		bodyRaw, _ := json.Marshal(respPayload)
 		office := entry.BboxOffice
 		if office == "" {
 			office = "default"
 		}
+		var sealWallet boxrec.Sealer
+		if b.engine != nil && b.engine.signer != nil {
+			if w, wErr := b.engine.signer.ProtoWallet(); wErr == nil {
+				sealWallet = w
+			}
+		}
 		replyAAD := bstack.BboxAAD(office, b.PubHex(), entry.BuyerPub, entry.WantID, "reveal_key")
-		if sealedReply, encErr := bstack.SealBboxBody(entry.BuyerPub, replyAAD, bodyRaw); encErr == nil {
+		if sealedReply, encErr := bstack.SealBboxMessageBody(ctx, sealWallet, office, "reveal_key", b.PubHex(), entry.BuyerPub, replyTS, replyAAD, bodyRaw); encErr == nil {
 			for _, h := range b.disc.ActiveHosts() {
 				replyMsg := hub.BboxMessage{
 					Office:       office,
@@ -256,12 +302,12 @@ func (b *Broker) OnPaymentTxMined(ctx context.Context, txid string, blockHeight 
 					SenderPub:    b.PubHex(),
 					DealID:       entry.WantID,
 					Kind:         "reveal_key",
-					TS:           time.Now().Unix(),
+					TS:           replyTS,
 					Nonce:        randNonceHex(),
 					Aud:          hubAudience(h),
 					Body:         sealedReply,
 				}
-				if sig, sErr := bstack.SignArtifact(b.engine.saleKey, replyMsg.Signable()); sErr == nil {
+				if sig, sErr := bstack.SignArtifactWithSigner(b.engine.signer, replyMsg.Signable()); sErr == nil {
 					replyMsg.Sig = sig
 				}
 				env, _ := json.Marshal(replyMsg)

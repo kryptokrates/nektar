@@ -84,8 +84,7 @@ nektar dock                      # detects & wires Hermes, OpenClaw, Claude Code
 
 - **One brain, many mouths:** If a second AI app launches `nektar` over stdio
   while the local daemon is already running, `nektar` transparently bridges
-  stdio ↔ Streamable HTTP instead of colliding on `instance.lock` or
-  cold-starting Restate.
+  stdio ↔ Streamable HTTP instead of colliding on `instance.lock`.
 - **Portable hooks (no checkout required):** `nektar hook session-start`,
   `nektar hook prefetch`, and `nektar hook verify-receipt [--codex]` ship inside
   the `nektar` binary itself.

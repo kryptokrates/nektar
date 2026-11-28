@@ -2,6 +2,7 @@ package chain
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
@@ -21,6 +23,7 @@ import (
 	"github.com/lightwebinc/bcommon/testchain"
 
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/faststore"
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
@@ -61,6 +64,12 @@ type Config struct {
 	SpendGuard               core.SpendGuardOpts
 	// TestTracker optionally overrides the ChainTracker strictly for offline unit tests.
 	TestTracker chaintracker.ChainTracker
+	// FastBroadcaster optionally overrides the broadcaster (e.g. parallel non-blocking mock ARC in scale benchmarks).
+	FastBroadcaster nwallet.Broadcaster
+	// FastStore optionally supplies a shared Pebble WAL store for the embedded wallet's 64-shard FastLanePool.
+	FastStore *faststore.DB
+	// EnableFastLane enables the zero-GORM 64-shard BRC-29 FastLanePool inside internal/wallet.
+	EnableFastLane bool
 	// SharedMemoryChain optionally shares one in-process testchain across multiple memory-network nodes
 	// so cross-node BRC-29 SPV verification runs against a single synchronized consensus chain.
 	SharedMemoryChain *SharedMemoryChain
@@ -88,6 +97,70 @@ func (s *SharedMemoryChain) CurrentHeight(ctx context.Context) (uint32, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.chain.CurrentHeight(ctx)
+}
+
+// pebbleSpendJournal persists SpendGuard NDJSON entries inside Pebble WAL (zero NTFS per-tx Open/Close).
+type pebbleSpendJournal struct {
+	db  *faststore.DB
+	seq atomic.Uint64
+}
+
+func newPebbleSpendJournal(db *faststore.DB) *pebbleSpendJournal {
+	return &pebbleSpendJournal{db: db}
+}
+
+func (j *pebbleSpendJournal) Load() ([][]byte, error) {
+	var lines [][]byte
+	var maxSeq uint64
+	err := j.db.ScanPrefix([]byte("sg:j:"), func(k, v []byte) bool {
+		if len(k) == 5+8 {
+			s := binary.BigEndian.Uint64(k[5:])
+			if s > maxSeq {
+				maxSeq = s
+			}
+		}
+		lines = append(lines, append([]byte(nil), v...))
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	j.seq.Store(maxSeq)
+	return lines, nil
+}
+
+func (j *pebbleSpendJournal) Append(line []byte) error {
+	s := j.seq.Add(1)
+	var k [5 + 8]byte
+	copy(k[:5], "sg:j:")
+	binary.BigEndian.PutUint64(k[5:], s)
+	return j.db.Set(k[:], line)
+}
+
+func (j *pebbleSpendJournal) Compact(lines [][]byte) error {
+	var oldKeys [][]byte
+	_ = j.db.ScanPrefix([]byte("sg:j:"), func(k, _ []byte) bool {
+		oldKeys = append(oldKeys, append([]byte(nil), k...))
+		return true
+	})
+	batch := j.db.NewBatch()
+	for _, k := range oldKeys {
+		_ = batch.Delete(k, nil)
+	}
+	var maxSeq uint64
+	for i, ln := range lines {
+		s := uint64(i + 1)
+		maxSeq = s
+		var k [5 + 8]byte
+		copy(k[:5], "sg:j:")
+		binary.BigEndian.PutUint64(k[5:], s)
+		_ = batch.Set(k[:], ln, nil)
+	}
+	if err := j.db.CommitBatch(batch); err != nil {
+		return err
+	}
+	j.seq.Store(maxSeq)
+	return nil
 }
 
 // Port is the single chain + BRC-100 custody abstraction consumed by the entire Nektar Go runtime.
@@ -127,11 +200,12 @@ type Port struct {
 	txMinedMu    sync.RWMutex
 	txMinedHooks []nwallet.TxMinedHook
 
-	proofCacheMu sync.RWMutex
-	proofCache   map[string]*transaction.MerklePath // reorg-evicting cache of verified BUMPs (bounded)
+	proofCacheMu   sync.RWMutex
+	proofCache     map[string]*transaction.MerklePath // reorg-evicting cache of verified BUMPs (bounded 64k FIFO)
+	proofCacheKeys []string
+	proofCacheHead int
 
-	// Lightweight bookkeeping for BuildFundedTx -> Broadcast split callers & client-mode txs.
-	pendingNoSend    map[string]string                   // txid -> action reference (embedded BuildFundedTx)
+	// Lightweight bookkeeping for client-mode txs & memory-mode locktime-final covenant txs.
 	clientBuilt      map[string]*transaction.Transaction // hot cache backed durably by clientTxDir
 	memCovenantTxs   map[string]*transaction.Transaction // memory-mode locktime-final covenant txs (real IsFinalTx + Chronicle VM)
 	memCovenantSpent map[string]string                   // memory-mode "txid:vout" -> spending txid double-spend guard
@@ -174,7 +248,10 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 	}
 
 	guardOpts := cfg.SpendGuard
-	if guardOpts.StatePath == "" && cfg.DataDir != "" {
+	if cfg.FastStore != nil && guardOpts.Journal == nil {
+		guardOpts.Journal = newPebbleSpendJournal(cfg.FastStore)
+	}
+	if guardOpts.StatePath == "" && cfg.DataDir != "" && guardOpts.Journal == nil {
 		guardOpts.StatePath = filepath.Join(cfg.DataDir, "spend-guard.json")
 	}
 	guardInst := core.NewSpendGuard(guardOpts)
@@ -189,10 +266,13 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 	}
 	clientTxDir := filepath.Join(dir, "client-txs")
 
-	httpCli := &http.Client{Timeout: 20 * time.Second}
+	var wrap func(http.RoundTripper) http.RoundTripper
 	if strings.TrimSpace(cfg.WoCKey) == "" && netName != "memory" && netName != "regtest" {
-		httpCli.Transport = newWoCPacingTransport(http.DefaultTransport, 400*time.Millisecond)
+		wrap = func(base http.RoundTripper) http.RoundTripper {
+			return newWoCPacingTransport(base, 400*time.Millisecond)
+		}
 	}
+	httpCli := core.SafeHTTPClientForNetworkWithWrapper(netName, 20*time.Second, wrap)
 	p := &Port{
 		tcMu:             &sync.Mutex{},
 		network:          netName,
@@ -208,7 +288,6 @@ func Open(ctx context.Context, cfg Config) (*Port, error) {
 		guard:            guardInst,
 		httpClient:       httpCli,
 		zeroConfWatch:    NewZeroConfWatch(),
-		pendingNoSend:    make(map[string]string),
 		clientBuilt:      make(map[string]*transaction.Transaction),
 		memCovenantTxs:   make(map[string]*transaction.Transaction),
 		memCovenantSpent: make(map[string]string),
@@ -249,12 +328,18 @@ func (p *Port) StartBackground(ctx context.Context) {
 	}
 }
 
-// Close stops background workers cleanly and closes wallet.sqlite.
+// Close stops background workers cleanly and closes wallet.sqlite and SpendGuard journal handle.
 func (p *Port) Close() error {
+	var firstErr error
 	if p.engine != nil {
-		return p.engine.Close()
+		firstErr = p.engine.Close()
 	}
-	return nil
+	if p.guard != nil {
+		if err := p.guard.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (p *Port) Network() string                      { return p.network }

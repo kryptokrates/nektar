@@ -20,6 +20,7 @@ import (
 
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/market"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 func resolvePaywallZeroConfLimits(chainMax, chainAgg uint64, chainAnc int, pol *market.Policy) (uint64, uint64, int) {
@@ -300,6 +301,10 @@ func (a *App) verifyBRC105Payment(
 		writeJSON(w, http.StatusPaymentRequired, body)
 		return "", 0, "", false
 	}
+	if len(hdr) > 64<<10 {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "X-BSV-Payment header exceeds 64 KiB cap"})
+		return "", 0, "", false
+	}
 	var pay BRC105PaymentHeader
 	if err := json.Unmarshal([]byte(hdr), &pay); err != nil {
 		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "invalid X-BSV-Payment header"})
@@ -434,8 +439,12 @@ func (a *App) verifyBRC105Payment(
 		}
 	}
 
+	intCtx := r.Context()
+	if tx != nil {
+		intCtx = nwallet.WithPreverifiedTx(intCtx, tx)
+	}
 	paid, err = a.mem.Chain().InternalizeBRC29(
-		r.Context(), rawBeef, pay.OutputIndex,
+		intCtx, rawBeef, pay.OutputIndex,
 		pay.DerivationPrefix, pay.DerivationSuffix, pay.SenderIdentityKey,
 		"BRC-105 payment for "+label, []string{"brc105", label},
 	)

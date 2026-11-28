@@ -204,19 +204,15 @@ func main() {
 			commonEnv = append(commonEnv, "NEKTAR_HEADERS_SOURCE=chaintracks:http://127.0.0.1:18809/v2")
 		}
 	}
-	hubEnv := append(append([]string(nil), commonEnv...), "NEKTAR_RESTATE_DISABLE=1")
+	hubEnv := append([]string(nil), commonEnv...)
 	agentEnv := append([]string(nil), commonEnv...)
-	if *useRestate {
-		agentEnv = append(agentEnv, "NEKTAR_RESTATE_REQUIRED=1")
-	} else {
-		agentEnv = append(agentEnv, "NEKTAR_RESTATE_DISABLE=1")
-	}
+	_ = useRestate
 
 	specs := map[string]nodeSpec{
 		"spine": {
 			Key: "spine", Port: 18810, URL: spineURL, Dir: filepath.Join(*workDir, "spine"),
 			Args: []string{"serve", "--hub", "--hub-role", "spine", "--fee-preset", "hybrid",
-				"--listen", "127.0.0.1:18810", "--restate-listen", "127.0.0.1:19810",
+				"--listen", "127.0.0.1:18810",
 				"--public-url", spineURL, "--data-dir", filepath.Join(*workDir, "spine"), "--network", *network},
 			Env: hubEnv,
 		},
@@ -224,7 +220,7 @@ func main() {
 			Key: "leaf-a", Port: 18811, URL: leafAURL, Dir: filepath.Join(*workDir, "leaf-a"),
 			Args: []string{"serve", "--hub", "--hub-role", "leaf", "--fee-preset", "lightbsv_egress",
 				"--upstream-spines", spineHub,
-				"--listen", "127.0.0.1:18811", "--restate-listen", "127.0.0.1:19811",
+				"--listen", "127.0.0.1:18811",
 				"--public-url", leafAURL, "--data-dir", filepath.Join(*workDir, "leaf-a"), "--network", *network},
 			Env: hubEnv,
 		},
@@ -232,48 +228,48 @@ func main() {
 			Key: "leaf-b", Port: 18812, URL: leafBURL, Dir: filepath.Join(*workDir, "leaf-b"),
 			Args: []string{"serve", "--hub", "--hub-role", "leaf", "--fee-preset", "hybrid",
 				"--upstream-spines", spineHub,
-				"--listen", "127.0.0.1:18812", "--restate-listen", "127.0.0.1:19812",
+				"--listen", "127.0.0.1:18812",
 				"--public-url", leafBURL, "--data-dir", filepath.Join(*workDir, "leaf-b"), "--network", *network},
 			Env: hubEnv,
 		},
 		"alpha": {
-			Key: "alpha", Port: 18820, RestatePort: 19820, URL: "http://127.0.0.1:18820", Dir: filepath.Join(*workDir, "alpha"),
-			Args: []string{"serve", "--listen", "127.0.0.1:18820", "--restate-listen", "127.0.0.1:19820",
+			Key: "alpha", Port: 18820, URL: "http://127.0.0.1:18820", Dir: filepath.Join(*workDir, "alpha"),
+			Args: []string{"serve", "--listen", "127.0.0.1:18820",
 				"--public-url", "http://127.0.0.1:18820", "--hosts", leafAHub,
 				"--data-dir", filepath.Join(*workDir, "alpha"), "--network", *network},
 			Env: agentEnv,
 		},
 		"beta": {
-			Key: "beta", Port: 18821, RestatePort: 19821, URL: "http://127.0.0.1:18821", Dir: filepath.Join(*workDir, "beta"),
-			Args: []string{"serve", "--listen", "127.0.0.1:18821", "--restate-listen", "127.0.0.1:19821",
+			Key: "beta", Port: 18821, URL: "http://127.0.0.1:18821", Dir: filepath.Join(*workDir, "beta"),
+			Args: []string{"serve", "--listen", "127.0.0.1:18821",
 				"--public-url", "http://127.0.0.1:18821", "--hosts", leafAHub,
 				"--data-dir", filepath.Join(*workDir, "beta"), "--network", *network},
 			Env: agentEnv,
 		},
 		"gamma": {
-			Key: "gamma", Port: 18822, RestatePort: 19822, URL: "http://127.0.0.1:18822", Dir: filepath.Join(*workDir, "gamma"),
-			Args: []string{"serve", "--listen", "127.0.0.1:18822", "--restate-listen", "127.0.0.1:19822",
+			Key: "gamma", Port: 18822, URL: "http://127.0.0.1:18822", Dir: filepath.Join(*workDir, "gamma"),
+			Args: []string{"serve", "--listen", "127.0.0.1:18822",
 				"--public-url", "http://127.0.0.1:18822", "--hosts", leafBHub,
 				"--data-dir", filepath.Join(*workDir, "gamma"), "--network", *network},
 			Env: agentEnv,
 		},
 		"delta-nat": {
-			Key: "delta-nat", Port: 18823, RestatePort: 19823, URL: "http://127.0.0.1:18823", Dir: filepath.Join(*workDir, "delta-nat"),
-			Args: []string{"serve", "--listen", "127.0.0.1:18823", "--restate-listen", "127.0.0.1:19823",
+			Key: "delta-nat", Port: 18823, URL: "http://127.0.0.1:18823", Dir: filepath.Join(*workDir, "delta-nat"),
+			Args: []string{"serve", "--listen", "127.0.0.1:18823",
 				"--hosts", leafBHub,
 				"--data-dir", filepath.Join(*workDir, "delta-nat"), "--network", *network},
 			Env: agentEnv,
 		},
 		"epsilon": {
-			Key: "epsilon", Port: 18824, RestatePort: 19824, URL: "http://127.0.0.1:18824", Dir: filepath.Join(*workDir, "epsilon"),
-			Args: []string{"serve", "--listen", "127.0.0.1:18824", "--restate-listen", "127.0.0.1:19824",
+			Key: "epsilon", Port: 18824, URL: "http://127.0.0.1:18824", Dir: filepath.Join(*workDir, "epsilon"),
+			Args: []string{"serve", "--listen", "127.0.0.1:18824",
 				"--public-url", "http://127.0.0.1:18824", "--hosts", leafAHub,
 				"--data-dir", filepath.Join(*workDir, "epsilon"), "--network", *network},
 			Env: agentEnv,
 		},
 		"zeta-nat": {
-			Key: "zeta-nat", Port: 18825, RestatePort: 19825, URL: "http://127.0.0.1:18825", Dir: filepath.Join(*workDir, "zeta-nat"),
-			Args: []string{"serve", "--listen", "127.0.0.1:18825", "--restate-listen", "127.0.0.1:19825",
+			Key: "zeta-nat", Port: 18825, URL: "http://127.0.0.1:18825", Dir: filepath.Join(*workDir, "zeta-nat"),
+			Args: []string{"serve", "--listen", "127.0.0.1:18825",
 				"--hosts", spineHub,
 				"--data-dir", filepath.Join(*workDir, "zeta-nat"), "--network", *network},
 			Env: agentEnv,

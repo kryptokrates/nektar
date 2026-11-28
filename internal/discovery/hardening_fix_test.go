@@ -16,6 +16,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 func TestHubTermsCacheEnforcesHardCap(t *testing.T) {
@@ -90,8 +91,11 @@ func TestBuildAndSubmitMarketAdCumulativeFeeCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(bstack.SignedWant{Want: want, Sig: sig})
-	submitted, err := svc.BuildAndSubmitMarketAd(ctx, priv, bstack.MarketPayload{Kind: bstack.KindWant, Body: body}, []string{h1.URL, h2.URL, h3.URL}, []string{bstack.LaneOf("memory", "ops")})
+	wantPayload, err := bstack.NewWantPayload(bstack.SignedWant{Want: want, Sig: sig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	submitted, err := svc.BuildAndSubmitMarketAd(ctx, nwallet.NewMarketSigner(priv), wantPayload, []string{h1.URL, h2.URL, h3.URL}, []string{bstack.LaneOf("memory", "ops")})
 	if err != nil {
 		t.Fatalf("BuildAndSubmitMarketAd: %v", err)
 	}

@@ -11,12 +11,64 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/kryptokrates/nektar/internal/faststore"
 )
 
-// Store persists Hub market events, NAT bbox relay messages, and bounty pools in pure-Go SQLite.
+// Store persists Hub market events, NAT bbox relay messages, and bounty pools in pure-Go SQLite,
+// offloading hot-path event logs + BEEF blobs onto Pebble LSM (fastEventStore) when enabled.
 type Store struct {
-	mu  sync.Mutex
-	sql *sql.DB
+	mu      sync.Mutex
+	sql     *sql.DB
+	readSQL *sql.DB
+	blobs   BlobStore
+	fast    *fastEventStore
+}
+
+// SetFastStore binds a pure-Go Pebble LSM store for lock-free high-throughput event admission & BEEF storage.
+func (s *Store) SetFastStore(db *faststore.DB, owns bool) {
+	if s == nil || db == nil {
+		return
+	}
+	s.mu.Lock()
+	s.fast = newFastEventStore(db, owns)
+	s.mu.Unlock()
+}
+
+func (s *Store) fastStore() *fastEventStore {
+	if s == nil {
+		return nil
+	}
+	return s.fast
+}
+
+func (s *Store) rdb() (*sql.DB, func()) {
+	if s.readSQL != nil {
+		return s.readSQL, func() {}
+	}
+	s.mu.Lock()
+	return s.sql, s.mu.Unlock
+}
+
+// SetBlobStore binds the content-addressed file-backed BEEF blob store so hub_events keeps
+// SQLite pages compact without inline multi-MB BEEF duplication (PERF-5).
+func (s *Store) SetBlobStore(b BlobStore) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.blobs = b
+	s.mu.Unlock()
+}
+
+// BlobStore returns the attached file-backed BEEF blob store (nil in pure ":memory:" mode).
+func (s *Store) BlobStore() BlobStore {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.blobs
 }
 
 // OpenStore initializes the Hub's standalone SQLite store (path == "" or ":memory:" for in-memory).
@@ -29,13 +81,14 @@ func OpenStore(path string) (*Store, error) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, fmt.Errorf("hub store: mkdir: %w", err)
 		}
-		path = path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
+		path = filepath.ToSlash(path) + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-64000)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(134217728)&_pragma=wal_autocheckpoint(4000)&_pragma=journal_size_limit(67108864)"
 	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("hub store: open: %w", err)
 	}
 	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	s := &Store{sql: db}
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
@@ -45,11 +98,29 @@ func OpenStore(path string) (*Store, error) {
 		_ = os.Chmod(origPath, 0o600)
 		_ = os.Chmod(origPath+"-wal", 0o600)
 		_ = os.Chmod(origPath+"-shm", 0o600)
+		roDSN := "file:" + filepath.ToSlash(origPath) + "?mode=ro&_pragma=query_only(ON)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)&_pragma=cache_size(-32000)&_pragma=mmap_size(134217728)"
+		if rdb, rErr := sql.Open("sqlite", roDSN); rErr == nil {
+			rdb.SetMaxOpenConns(16)
+			rdb.SetMaxIdleConns(16)
+			if rdb.Ping() == nil {
+				s.readSQL = rdb
+			} else {
+				_ = rdb.Close()
+			}
+		}
 	}
 	return s, nil
 }
 
-func (s *Store) Close() error { return s.sql.Close() }
+func (s *Store) Close() error {
+	if s.fast != nil {
+		_ = s.fast.Close()
+	}
+	if s.readSQL != nil && s.readSQL != s.sql {
+		_ = s.readSQL.Close()
+	}
+	return s.sql.Close()
+}
 
 func (s *Store) migrate() error {
 	const schema = `
@@ -222,8 +293,12 @@ CREATE INDEX IF NOT EXISTS idx_hub_work_claims_time ON hub_work_claims(created_a
 			return err
 		}
 	}
-	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_hub_events_height ON hub_events(block_height)`); err != nil {
-		return fmt.Errorf("hub store: idx_hub_events_height: %w", err)
+	if _, err := tx.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_hub_events_height ON hub_events(block_height);
+		CREATE INDEX IF NOT EXISTS idx_hub_events_active_kind ON hub_events(spent, kind, exp);
+		CREATE INDEX IF NOT EXISTS idx_hub_fee_ledger_exposure ON hub_fee_ledger(decision, status, created_at);
+	`); err != nil {
+		return fmt.Errorf("hub store: secondary indexes: %w", err)
 	}
 	return tx.Commit()
 }

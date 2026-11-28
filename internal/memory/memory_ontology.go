@@ -142,11 +142,14 @@ func (s *Service) CommitDomainOntology(ctx context.Context, repoName string, raw
 	}
 
 	s.ontCacheMu.Lock()
-	if s.ontCache == nil {
-		s.ontCache = make(map[string]*jevgraph.CompiledOntology)
+	if s.ontCache == nil || len(s.ontCache) >= 128 {
+		s.ontCache = make(map[string]*cachedOntologyEntry, 32)
 	}
-	s.ontCache[repo] = compiled
-	s.ontCache[compiled.ID] = compiled
+	ent := &cachedOntologyEntry{compiled: compiled, info: info}
+	if res.CommitHash != "" {
+		s.ontCache[repo+"@"+res.CommitHash] = ent
+	}
+	s.ontCache["id:"+compiled.ID] = ent
 	s.ontCacheMu.Unlock()
 
 	reg := s.loadOntologyRegistry()
@@ -172,6 +175,16 @@ func (s *Service) loadBridgeRegistry() map[string]BridgeInfo {
 }
 
 func (s *Service) readOntologyFromRepo(ctx context.Context, repo string) (*jevgraph.CompiledOntology, *DomainOntologyInfo, error) {
+	if br, bErr := s.db.GetMemBranch(repo, memrepo.DefaultBranch); bErr == nil && br.HeadCommit != "" {
+		cacheKey := repo + "@" + br.HeadCommit
+		s.ontCacheMu.RLock()
+		cached := s.ontCache[cacheKey]
+		s.ontCacheMu.RUnlock()
+		if cached != nil && cached.compiled != nil && cached.info != nil {
+			cpInfo := *cached.info
+			return cached.compiled, &cpInfo, nil
+		}
+	}
 	c, tr, blobs, err := s.RepoTree(ctx, repo, "", "")
 	if err != nil || tr == nil {
 		if err == nil {
@@ -216,13 +229,17 @@ func (s *Service) readOntologyFromRepo(ctx context.Context, repo string) (*jevgr
 		info.UpdatedAt = c.Timestamp
 	}
 	s.ontCacheMu.Lock()
-	if s.ontCache == nil {
-		s.ontCache = make(map[string]*jevgraph.CompiledOntology)
+	if s.ontCache == nil || len(s.ontCache) >= 128 {
+		s.ontCache = make(map[string]*cachedOntologyEntry, 32)
 	}
-	s.ontCache[repo] = compiled
-	s.ontCache[compiled.ID] = compiled
+	ent := &cachedOntologyEntry{compiled: compiled, info: info}
+	if info.CommitHash != "" {
+		s.ontCache[repo+"@"+info.CommitHash] = ent
+	}
+	s.ontCache["id:"+compiled.ID] = ent
 	s.ontCacheMu.Unlock()
-	return compiled, info, nil
+	cpInfo := *info
+	return compiled, &cpInfo, nil
 }
 
 // LoadDomainOntology resolves a committed domain ontology by repo name (`ont-<domain>`), bare domain name, or 64-hex OntologyID.
@@ -429,6 +446,17 @@ func (s *Service) AlignAndCommitBridge(ctx context.Context, srcNameOrID, dstName
 }
 
 func (s *Service) readBridgeFromRepo(ctx context.Context, repo string) (*jevgraph.BridgeManifest, *BridgeInfo, error) {
+	if br, bErr := s.db.GetMemBranch(repo, memrepo.DefaultBranch); bErr == nil && br.HeadCommit != "" {
+		cacheKey := repo + "@" + br.HeadCommit
+		s.ontCacheMu.RLock()
+		cached := s.bridgeCache[cacheKey]
+		s.ontCacheMu.RUnlock()
+		if cached != nil && cached.manifest != nil && cached.info != nil {
+			cpM := *cached.manifest
+			cpI := *cached.info
+			return &cpM, &cpI, nil
+		}
+	}
 	c, tr, blobs, err := s.RepoTree(ctx, repo, "", "")
 	if err != nil || tr == nil {
 		if err == nil {
@@ -468,6 +496,14 @@ func (s *Service) readBridgeFromRepo(ctx context.Context, repo string) (*jevgrap
 		info.CommitHash = c.CommitHash
 		info.AnchorTxID = c.AnchorTxID
 		info.UpdatedAt = c.Timestamp
+		s.ontCacheMu.Lock()
+		if s.bridgeCache == nil || len(s.bridgeCache) >= 64 {
+			s.bridgeCache = make(map[string]*cachedBridgeEntry, 16)
+		}
+		cpM := m
+		cpI := *info
+		s.bridgeCache[repo+"@"+c.CommitHash] = &cachedBridgeEntry{manifest: &cpM, info: &cpI}
+		s.ontCacheMu.Unlock()
 	}
 	return &m, info, nil
 }

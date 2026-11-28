@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -57,8 +58,9 @@ func TestSubscriptionSupervisorSurvivesRestartAndSlashesDeadFeed(t *testing.T) {
 		subID := r.Header.Get(nmu.HeaderSubID)
 		pub := r.Header.Get(nmu.HeaderPub)
 		sig := r.Header.Get(nmu.HeaderSig)
+		nonce := r.Header.Get(nmu.HeaderNonce)
 		ts, _ := strconv.ParseInt(r.Header.Get(nmu.HeaderTS), 10, 64)
-		if err := nmu.VerifyFeedAuth(pub, sig, "market-ops", subID, ts, time.Now().Unix()); err != nil {
+		if err := nmu.VerifyFeedAuth(pub, sig, "market-ops", subID, ts, time.Now().Unix(), nonce, strings.ToLower(r.Host)); err != nil {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}

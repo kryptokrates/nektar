@@ -34,7 +34,8 @@ type KeyedSaleOffer struct {
 	OfferSig         string     `json:"offerSig"`
 	Artifact         CovenantID `json:"artifact"`
 	Direct           bool       `json:"direct,omitempty"`
-	Version          int        `json:"version,omitempty"` // must be >= 2 (framed OfferDigestV2)
+	Version          int        `json:"version,omitempty"`       // must be >= 2 (framed OfferDigestV2)
+	PayloadFormat    string     `json:"payloadFormat,omitempty"` // "nkt" when sealed payload is a self-verifying .nkt capsule
 	// Seller-only secret material (never placed on public wire offer).
 	contentKey [32]byte
 }
@@ -70,8 +71,8 @@ func OfferDigestV2(cfg SaleConfig, buyerPub, leafHex string, expiresAt uint64, k
 			return nil, err
 		}
 	}
-	return core.SHA256(core.Concat(
-		[]byte("nektar:sale-offer:v2"),
+	return core.DSHA256(core.Concat(
+		core.TagSaleOfferV2,
 		core.Field(sellerPKH),
 		core.Field(hWrapped),
 		core.U64LE(cfg.Price),
@@ -95,6 +96,40 @@ func CreateKeyedSaleOffer(
 	buyerPub, leafHex string,
 	direct bool,
 ) (*KeyedSaleOffer, error) {
+	if sellerKey == nil {
+		return nil, errors.New("sale: sellerKey is nil")
+	}
+	pubHex := hex.EncodeToString(sellerKey.PubKey().Compressed())
+	return CreateKeyedSaleOfferWithSigner(
+		pubHex,
+		func(digest []byte) ([]byte, error) {
+			sig, err := sellerKey.Sign(digest)
+			if err != nil {
+				return nil, err
+			}
+			return sig.Serialize(), nil
+		},
+		plaintext, price, refundAfter, maxFee, expiresAt, buyerPub, leafHex, direct,
+	)
+}
+
+// CreateKeyedSaleOfferWithSigner seals plaintext under a fresh BRC-369 content key and signs the
+// DisclosureSale offer via an abstract digest signer so callers outside internal/wallet never hold *ec.PrivateKey.
+func CreateKeyedSaleOfferWithSigner(
+	sellerPubHex string,
+	signDigest func([]byte) ([]byte, error),
+	plaintext []byte,
+	price, refundAfter, maxFee, expiresAt uint64,
+	buyerPub, leafHex string,
+	direct bool,
+) (*KeyedSaleOffer, error) {
+	if signDigest == nil {
+		return nil, errors.New("sale: signDigest is nil")
+	}
+	_, sellerPubBytes, err := core.ParseStrictCompressedPubKey(sellerPubHex)
+	if err != nil {
+		return nil, fmt.Errorf("sale: invalid sellerPub: %w", err)
+	}
 	k, err := keyed.SampleKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("sale: sample BRC-369 key: %w", err)
@@ -112,7 +147,6 @@ func CreateKeyedSaleOffer(
 	// directly under Bitcoin Script consensus, so hWrapped MUST equal keyed.Commitment(k) (KeyCommitment).
 	hWrapped := commit[:]
 
-	sellerPubBytes := sellerKey.PubKey().Compressed()
 	sellerPKH := hex.EncodeToString(core.Hash160(sellerPubBytes))
 	cfg := SaleConfig{
 		SellerPKH:   sellerPKH,
@@ -126,7 +160,7 @@ func CreateKeyedSaleOffer(
 	if err != nil {
 		return nil, err
 	}
-	sig, err := sellerKey.Sign(digest)
+	sigDER, err := signDigest(digest)
 	if err != nil {
 		return nil, fmt.Errorf("sale: sign offer: %w", err)
 	}
@@ -142,7 +176,7 @@ func CreateKeyedSaleOffer(
 		CiphertextHex:    hex.EncodeToString(ct),
 		CiphertextSHA256: hex.EncodeToString(ctHash),
 		ExpiresAt:        expiresAt,
-		OfferSig:         hex.EncodeToString(sig.Serialize()),
+		OfferSig:         hex.EncodeToString(sigDER),
 		Artifact:         art.ID(),
 		Direct:           direct,
 		Version:          2,
@@ -166,11 +200,11 @@ func VerifySaleOffer(offer *KeyedSaleOffer, buyerPub, leafHex string) error {
 	if offer.Artifact.ScriptHash != art.ID().ScriptHash {
 		return errors.New("sale: DisclosureSale covenant artifact hash mismatch")
 	}
-	pub, pubBytes, err := core.ParseStrictCompressedPubKey(offer.SellerPub)
+	_, pubBytes, err := core.ParseFastStrictPubKey(offer.SellerPub)
 	if err != nil {
 		return fmt.Errorf("sale: invalid sellerPub: %w", err)
 	}
-	if len(offer.Config.SellerPKH) != 40 || hex.EncodeToString(core.Hash160(pubBytes)) != offer.Config.SellerPKH {
+	if len(offer.Config.SellerPKH) != 40 || hex.EncodeToString(core.Hash160(pubBytes[:])) != offer.Config.SellerPKH {
 		return errors.New("sale: sellerPkh does not match sellerPub")
 	}
 	if hwBytes, hwErr := hex.DecodeString(offer.Config.HWrapped); hwErr != nil || len(hwBytes) != 32 {
@@ -182,7 +216,7 @@ func VerifySaleOffer(offer *KeyedSaleOffer, buyerPub, leafHex string) error {
 		return errors.New("sale: hWrapped does not match BRC-369 keyCommitment")
 	}
 	if buyerPub != "" {
-		if _, _, bErr := core.ParseStrictCompressedPubKey(buyerPub); bErr != nil {
+		if _, _, bErr := core.ParseFastStrictPubKey(buyerPub); bErr != nil {
 			return fmt.Errorf("sale: invalid buyerPub: %w", bErr)
 		}
 	}
@@ -190,10 +224,6 @@ func VerifySaleOffer(offer *KeyedSaleOffer, buyerPub, leafHex string) error {
 	// bypass mandatory buyer SPV ProofBundle verification.
 	if lb, lErr := hex.DecodeString(leafHex); lErr != nil || len(lb) != 32 {
 		return errors.New("sale: leafHex must be non-empty 32-byte hex")
-	}
-	sig, err := core.ParseStrictLowSDER(offer.OfferSig)
-	if err != nil {
-		return fmt.Errorf("sale: invalid offerSig: %w", err)
 	}
 	commitBytes, err := hex.DecodeString(offer.KeyCommitment)
 	if err != nil || len(commitBytes) != 32 {
@@ -229,7 +259,10 @@ func VerifySaleOffer(offer *KeyedSaleOffer, buyerPub, leafHex string) error {
 	if err != nil {
 		return err
 	}
-	if !sig.Verify(digest, pub) {
+	if err := core.FastVerifyStrictHex(offer.SellerPub, offer.OfferSig, digest); err != nil {
+		if errors.Is(err, core.ErrNonCanonicalDER) || errors.Is(err, core.ErrHighSSignature) {
+			return fmt.Errorf("sale: invalid offerSig: %w", err)
+		}
 		return errors.New("sale: invalid offer signature")
 	}
 	return nil

@@ -23,6 +23,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 func openMemoryPort(t *testing.T, shared *chain.SharedMemoryChain) *chain.Port {
@@ -55,8 +56,11 @@ func makeWantPayload(t *testing.T, key *ec.PrivateKey, wantID, domain string) bs
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(bstack.SignedWant{Want: w, Sig: sig})
-	return bstack.MarketPayload{Kind: bstack.KindWant, Body: body}
+	p, err := bstack.NewWantPayload(bstack.SignedWant{Want: w, Sig: sig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 func makeWantBEEF(t *testing.T, key *ec.PrivateKey, wantID, domain string) []byte {
@@ -311,7 +315,7 @@ func TestHubFeeValve1SubmitValidateBeforeChargeReplayConflictAndPiggyback(t *tes
 	terms := fetchTermsHTTP(t, ts.URL, "/v1/terms")
 	piggyPayload := makeWantPayload(t, key, "want-piggy", "ops")
 	carrierBEEF, perHubHdrs, piggySats, err := discovery.BuildFundedMarketCarrierWithHubFees(
-		ctx, payerPort, key, piggyPayload,
+		ctx, payerPort, nwallet.NewMarketSigner(key), piggyPayload,
 		[]discovery.HubPiggybackTarget{{
 			HubURL:           ts.URL,
 			PayeeIdentityKey: terms.PayeeIdentityKey,
@@ -455,7 +459,7 @@ func TestHubFeeValve2MeteredEgressSSEAndSyncAndSpineGuard(t *testing.T) {
 	subKey, _ := ec.NewPrivateKey()
 	subPub := hex.EncodeToString(subKey.PubKey().Compressed())
 	doSignedGET := func(path, action string, cursor int64, doms string, key *ec.PrivateKey) *http.Response {
-		pub, tsStr, nonce, sig, sErr := discovery.SignEgressAuthHeaders(key, action, spineTS.URL, cursor, doms)
+		pub, tsStr, nonce, sig, sErr := discovery.SignEgressAuthHeaders(nwallet.NewMarketSigner(key), action, spineTS.URL, cursor, doms)
 		if sErr != nil {
 			t.Fatal(sErr)
 		}
@@ -804,7 +808,7 @@ func TestHubPlanePublishValve1AndPlaneNACKValve2Enforcement(t *testing.T) {
 			req.Header.Set("X-BSV-Payment", payHdr)
 		}
 		if signKey != nil {
-			pub, tsStr, nonce, sig, sErr := discovery.SignEgressAuthHeaders(signKey, "hub_plane_publish", ts.URL, 0, lane)
+			pub, tsStr, nonce, sig, sErr := discovery.SignEgressAuthHeaders(nwallet.NewMarketSigner(signKey), "hub_plane_publish", ts.URL, 0, lane)
 			if sErr != nil {
 				t.Fatal(sErr)
 			}
@@ -869,7 +873,7 @@ func TestHubPlanePublishValve1AndPlaneNACKValve2Enforcement(t *testing.T) {
 		if topicsCSV != "" {
 			u += "&topics=" + url.QueryEscape(topicsCSV)
 		}
-		pub, tsStr, nonce, sig, sErr := discovery.SignEgressAuthHeaders(key, "hub_plane_nack", ts.URL, from, topicsCSV)
+		pub, tsStr, nonce, sig, sErr := discovery.SignEgressAuthHeaders(nwallet.NewMarketSigner(key), "hub_plane_nack", ts.URL, from, topicsCSV)
 		if sErr != nil {
 			t.Fatal(sErr)
 		}

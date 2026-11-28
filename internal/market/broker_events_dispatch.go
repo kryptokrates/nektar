@@ -3,7 +3,7 @@ package market
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
+	"os"
 	"strings"
 	"time"
 
@@ -27,11 +27,12 @@ func (b *Broker) verifyMarketEventBEEF(ctx context.Context, ev bstack.MarketEven
 	if len(ev.BEEF) == 0 {
 		return ev.Payload, true, false
 	}
+	offchainAds := os.Getenv("NEKTAR_OFFCHAIN_ADS") == "1"
 	var tx *transaction.Transaction
 	_, parsedTx, _, pErr := guard.ParseBEEF(ev.BEEF, guard.DefaultBound)
 	if pErr == nil && parsedTx != nil {
 		tx = parsedTx
-	} else if !isLive && pErr != nil && strings.Contains(pErr.Error(), "no inputs") && len(ev.BEEF) <= 64<<10 {
+	} else if (!isLive || offchainAds) && pErr != nil && strings.Contains(pErr.Error(), "no inputs") && len(ev.BEEF) <= 64<<10 {
 		if t0, tErr := transaction.NewTransactionFromBEEF(ev.BEEF); tErr == nil && t0 != nil && len(t0.Inputs) == 0 {
 			tx = t0
 		}
@@ -39,7 +40,7 @@ func (b *Broker) verifyMarketEventBEEF(ctx context.Context, ev bstack.MarketEven
 	if tx == nil || (ev.TxID != "" && !strings.EqualFold(tx.TxID().String(), ev.TxID)) || int(ev.Vout) >= len(tx.Outputs) {
 		return bstack.MarketPayload{}, false, false
 	}
-	if isLive {
+	if isLive && (len(tx.Inputs) > 0 || !offchainAds) {
 		vout, p, cErr := bstack.VerifyMarketCarrier(tx, myNet, ev.Topic, time.Now())
 		if cErr != nil || vout != ev.Vout {
 			return bstack.MarketPayload{}, false, false
@@ -60,6 +61,11 @@ func (b *Broker) verifyMarketEventBEEF(ctx context.Context, ev bstack.MarketEven
 	p, ok, _ := bstack.ExtractNkt1Payload(tx.Outputs[ev.Vout].LockingScript)
 	if !ok {
 		return bstack.MarketPayload{}, false, false
+	}
+	if isLive {
+		if vErr := bstack.ValidateMarketPayload(p, myNet, ev.Topic, time.Now()); vErr != nil {
+			return bstack.MarketPayload{}, false, false
+		}
 	}
 	return p, true, false
 }
@@ -84,18 +90,53 @@ func (b *Broker) dispatchVerifiedMarketEvent(ctx context.Context, payload bstack
 	myNet := b.mem.Chain().Network()
 	switch payload.Kind {
 	case bstack.KindWant:
-		var sw bstack.SignedWant
-		if err := json.Unmarshal(payload.Body, &sw); err != nil {
+		sw, err := bstack.DecodeWantPayload(payload.Body)
+		if err != nil {
 			return
 		}
 		if sw.Want.Net != myNet || sw.Want.Exp <= nowMs || sw.Want.Exp > maxExpMs {
 			return
 		}
-		if err := bstack.VerifyArtifact(sw.Want.Pub, sw.Sig, sw.Want); err != nil {
-			return
-		}
 		if sw.Want.Pub == b.PubHex() {
-			return // ignore our own want
+			return // ignore our own want before paying ECDSA verify cost
+		}
+		// Fast relevance pre-filter BEFORE ECDSA verification: skip WantAds if this node has no
+		// active sell listing matching any requested domain (cuts Buyer & non-matching Seller CPU by ~10x!).
+		if fj := b.engine.FastJournal(); fj != nil {
+			listings, _ := fj.CachedListings(b.mem.DB())
+			if len(listings) == 0 {
+				return
+			}
+			domMatch := false
+			for i := range listings {
+				if !listings[i].Active {
+					continue
+				}
+				for _, ld := range listings[i].Domains {
+					if ld == "*" {
+						domMatch = true
+						break
+					}
+					for _, wd := range sw.Want.Domains {
+						if strings.EqualFold(ld, wd) {
+							domMatch = true
+							break
+						}
+					}
+					if domMatch {
+						break
+					}
+				}
+				if domMatch {
+					break
+				}
+			}
+			if !domMatch {
+				return
+			}
+		}
+		if err := bstack.VerifyArtifactRaw(sw.Want.Pub, sw.Sig, sw.Want.DomainTag(), sw.RawCBOR); err != nil {
+			return
 		}
 		b.mu.Lock()
 		if _, dup := b.seenWants[sw.Want.WantID]; dup {
@@ -113,17 +154,19 @@ func (b *Broker) dispatchVerifiedMarketEvent(ctx context.Context, payload bstack
 		}
 		b.seenWants[sw.Want.WantID] = nowUnix
 		b.mu.Unlock()
-		b.RecordMarketTape("market_want", MarketTapeEvent{
-			ID:      sw.Want.WantID,
-			Kind:    "want",
-			Side:    "buy",
-			Domains: append([]string(nil), sw.Want.Domains...),
-			Summary: sw.Want.Query,
-			Sats:    sw.Want.MaxSats,
-			Pub:     shortPub(sw.Want.Pub),
-			Status:  "open",
-			At:      nowMs,
-		})
+		if b.engine.FastJournal() == nil {
+			b.RecordMarketTape("market_want", MarketTapeEvent{
+				ID:      sw.Want.WantID,
+				Kind:    "want",
+				Side:    "buy",
+				Domains: append([]string(nil), sw.Want.Domains...),
+				Summary: sw.Want.Query,
+				Sats:    sw.Want.MaxSats,
+				Pub:     shortPub(sw.Want.Pub),
+				Status:  "open",
+				At:      nowMs,
+			})
+		}
 		b.wg.Add(1)
 		go func(w bstack.WantAd) {
 			defer b.wg.Done()
@@ -139,17 +182,30 @@ func (b *Broker) dispatchVerifiedMarketEvent(ctx context.Context, payload bstack
 		}(sw.Want)
 
 	case bstack.KindOffer:
-		var so bstack.SignedOffer
-		if err := json.Unmarshal(payload.Body, &so); err != nil {
+		so, err := bstack.DecodeOfferPayload(payload.Body)
+		if err != nil {
 			return
 		}
 		if so.Offer.Net != myNet || so.Offer.Exp <= nowMs || so.Offer.Exp > maxExpMs {
 			return
 		}
+		// Fast relevance pre-filter BEFORE ECDSA verification: in fast-journal mode, only verify OfferAds
+		// addressed to this Buyer's active offerInbox (eliminates 11x redundant ECDSA verifications on Sellers/other Buyers!).
+		if b.engine.FastJournal() != nil {
+			if so.Offer.BuyerPub != "" && !strings.EqualFold(so.Offer.BuyerPub, b.PubHex()) {
+				return
+			}
+			b.mu.RLock()
+			_, hasInbox := b.offerInbox[so.Offer.WantID]
+			b.mu.RUnlock()
+			if !hasInbox {
+				return
+			}
+		}
 		if leafRaw, lErr := hex.DecodeString(strings.TrimSpace(so.Offer.Leaf)); lErr != nil || len(leafRaw) != 32 {
 			return
 		}
-		if err := bstack.VerifyArtifact(so.Offer.Pub, so.Sig, so.Offer); err != nil {
+		if err := bstack.VerifyArtifactRaw(so.Offer.Pub, so.Sig, so.Offer.DomainTag(), so.RawCBOR); err != nil {
 			return
 		}
 		if so.Offer.BuyerPub != "" && so.Offer.BuyerPub != b.PubHex() {
@@ -183,8 +239,8 @@ func (b *Broker) dispatchVerifiedMarketEvent(ctx context.Context, payload bstack
 		b.dispatchOfferToStandingOrders(so.Offer)
 
 	case bstack.KindAnnounce:
-		var sa bstack.SignedAnnounce
-		if err := json.Unmarshal(payload.Body, &sa); err != nil {
+		sa, err := bstack.DecodeAnnouncePayload(payload.Body)
+		if err != nil {
 			return
 		}
 		if sa.Announce.Net != myNet || sa.Announce.Exp <= nowMs || sa.Announce.Exp > maxExpMs {
@@ -193,21 +249,21 @@ func (b *Broker) dispatchVerifiedMarketEvent(ctx context.Context, payload bstack
 		if sa.Announce.Pub == "" || sa.Announce.Pub == b.PubHex() {
 			return
 		}
-		if err := bstack.VerifyArtifact(sa.Announce.Pub, sa.Sig, sa.Announce); err != nil {
+		if err := bstack.VerifyArtifactRaw(sa.Announce.Pub, sa.Sig, sa.Announce.DomainTag(), sa.RawCBOR); err != nil {
 			return
 		}
 		b.dispatchAnnounceToStandingOrders(sa.Announce)
 
 	case bstack.KindAttestation:
-		var sat bstack.SignedAttestation
-		if err := json.Unmarshal(payload.Body, &sat); err != nil {
+		sat, err := bstack.DecodeAttestationPayload(payload.Body)
+		if err != nil {
 			return
 		}
 		ad := sat.Attestation
 		if ad.Net != myNet || ad.Exp <= nowMs || ad.Exp > maxExpMs {
 			return
 		}
-		if err := bstack.VerifyArtifact(ad.Pub, sat.Sig, ad); err != nil {
+		if err := bstack.VerifyArtifactRaw(ad.Pub, sat.Sig, ad.DomainTag(), sat.RawCBOR); err != nil {
 			return
 		}
 		att, decErr := reputation.DecodeAttestationToken(ad.Token)
@@ -217,20 +273,9 @@ func (b *Broker) dispatchVerifiedMarketEvent(ctx context.Context, payload bstack
 		if !strings.EqualFold(att.IssuerPub, ad.Pub) || !strings.EqualFold(att.SubjectPub, ad.SubjectPub) {
 			return
 		}
-		var pinned map[string]bool
-		if b.engine != nil && b.engine.Policy() != nil {
-			pol := b.engine.Policy()
-			pol.mu.RLock()
-			pinned = make(map[string]bool, len(pol.PreferredSellers))
-			for p, ok := range pol.PreferredSellers {
-				if ok {
-					pinned[strings.ToLower(strings.TrimSpace(p))] = true
-				}
-			}
-			pol.mu.RUnlock()
-		}
 		if b.mem != nil && b.mem.DB() != nil {
-			if rErr := RecordAndRecomputeAttestation(b.mem.DB(), b.PubHex(), att, nil, pinned); rErr == nil {
+			if ont, rErr := SaveVerifiedAttestation(b.mem.DB(), att, nil); rErr == nil {
+				b.scheduleReputationRecompute(ont)
 				b.notify("reputation_attestation", map[string]any{
 					"attestHash":  att.AttestHash,
 					"role":        att.Role,

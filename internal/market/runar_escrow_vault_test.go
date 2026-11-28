@@ -19,6 +19,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/memory"
+	"github.com/kryptokrates/nektar/internal/memrepo"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -207,8 +208,12 @@ func TestVaultComposedDisclosureSaleEscrowBuyAndGhostExtractE2E(t *testing.T) {
 		t.Fatalf("ExtractRevealedKeyFromBuyTx: %v", err)
 	}
 	plain, err := contracts.ClaimKeyedSale(saleOffer, extracted)
-	if err != nil || string(plain) != secretText {
-		t.Fatalf("ClaimKeyedSale with extracted key failed: got %q err=%v", plain, err)
+	if err != nil {
+		t.Fatalf("ClaimKeyedSale with extracted key failed: err=%v", err)
+	}
+	decCap, err := memrepo.DecodeCapsule(plain)
+	if err != nil || len(decCap.Fragments) == 0 || string(decCap.Fragments[0].Data) != secretText {
+		t.Fatalf("ClaimKeyedSale extracted .nkt capsule mismatch: cap=%+v err=%v", decCap, err)
 	}
 
 	// 4. Ghost-HTTP recovery drill: pretend Buyer NEVER received Seller's HTTP response!
@@ -226,8 +231,12 @@ func TestVaultComposedDisclosureSaleEscrowBuyAndGhostExtractE2E(t *testing.T) {
 	}
 	kBytes, _ := hex.DecodeString(dealAfter.ClaimKeyHex)
 	plain2, err := contracts.ClaimKeyedSale(saleOffer, kBytes)
-	if err != nil || string(plain2) != secretText {
-		t.Fatalf("decrypted mismatch after ReconcileEscrowObligations: %q err=%v", plain2, err)
+	if err != nil {
+		t.Fatalf("ClaimKeyedSale after ReconcileEscrowObligations failed: err=%v", err)
+	}
+	decCap2, err := memrepo.DecodeCapsule(plain2)
+	if err != nil || len(decCap2.Fragments) == 0 || string(decCap2.Fragments[0].Data) != secretText {
+		t.Fatalf("decrypted .nkt capsule mismatch after ReconcileEscrowObligations: cap=%+v err=%v", decCap2, err)
 	}
 }
 

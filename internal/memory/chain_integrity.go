@@ -156,7 +156,7 @@ func (s *Service) VerifyShardChainAuthorized(shard string, principal policy.Prin
 	rep.HeadChainHash = prevChain
 
 	// Verify Merkle Automaton transitions chain if present.
-	if transitions, tErr := s.db.ListTransitions(shard, len(frags)+16); tErr == nil && len(transitions) > 0 {
+	if transitions, tErr := s.db.ListAllTransitions(shard); tErr == nil && len(transitions) > 0 {
 		rep.TransitionCount = len(transitions)
 		expectedPrevQ := core.ToHex(core.Zero32Bytes())
 		for _, tr := range transitions {

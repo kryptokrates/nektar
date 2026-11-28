@@ -16,9 +16,8 @@ import (
 	"sync"
 	"time"
 
-	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
-
 	"github.com/kryptokrates/nektar/internal/bstack"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 // HubFeeApprover checks whether paying sats for a Hub action is allowed by operator policy (fail-closed).
@@ -292,11 +291,11 @@ func (s *Service) PostJSONWithHub402(ctx context.Context, targetURL, action stri
 
 // SignEgressAuthHeaders produces signed X-Nektar-Pub / X-Nektar-Ts / X-Nektar-Nonce / X-Nektar-Sig
 // headers matching hub.Node.authenticateEgressCaller for metered GET /events and GET /sync streams.
-func SignEgressAuthHeaders(priv *ec.PrivateKey, action, hubURL string, cursor int64, domainsCSV string) (pub, tsStr, nonce, sig string, err error) {
-	if priv == nil {
+func SignEgressAuthHeaders(signer *nwallet.MarketSigner, action, hubURL string, cursor int64, domainsCSV string) (pub, tsStr, nonce, sig string, err error) {
+	if signer == nil || signer.PubHex() == "" {
 		return "", "", "", "", errors.New("discovery: signing key required for hub egress auth")
 	}
-	pub = hex.EncodeToString(priv.PubKey().Compressed())
+	pub = signer.PubHex()
 	ts := time.Now().Unix()
 	tsStr = strconv.FormatInt(ts, 10)
 	var nRaw [12]byte
@@ -308,16 +307,16 @@ func SignEgressAuthHeaders(priv *ec.PrivateKey, action, hubURL string, cursor in
 	if u, uErr := url.Parse(strings.TrimSpace(hubURL)); uErr == nil && u.Host != "" {
 		aud = strings.ToLower(u.Host)
 	}
-	payload := map[string]any{
-		"action":  action,
-		"pub":     pub,
-		"ts":      ts,
-		"nonce":   nonce,
-		"aud":     aud,
-		"cursor":  cursor,
-		"domains": strings.ToLower(strings.TrimSpace(domainsCSV)),
+	payload := bstack.HubEgressAuth{
+		Action:  action,
+		Pub:     pub,
+		TS:      ts,
+		Nonce:   nonce,
+		Aud:     aud,
+		Cursor:  cursor,
+		Domains: strings.ToLower(strings.TrimSpace(domainsCSV)),
 	}
-	sig, err = bstack.SignArtifact(priv, payload)
+	sig, err = bstack.SignArtifactWithSigner(signer, payload)
 	if err != nil {
 		return "", "", "", "", err
 	}

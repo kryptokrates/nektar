@@ -6,12 +6,28 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/reputation"
 	"github.com/kryptokrates/nektar/internal/store"
+)
+
+type cachedTrustEvalEntry struct {
+	eval      *reputation.TrustEvaluation
+	vecs      map[string]reputation.Vector6D
+	epoch     uint64
+	expiresAt time.Time
+}
+
+var (
+	trustCacheMu    sync.RWMutex
+	trustCacheEpoch atomic.Uint64
+	trustEvalCache  = make(map[string]cachedTrustEvalEntry, 64)
 )
 
 // VerifyDealReceiptForReputation bridges market.VerifyDealReceipt into internal/reputation
@@ -77,8 +93,9 @@ func RecomputeReputationForOntology(db *store.DB, selfPub, ontologyID string, pi
 	}
 	now := time.Now().Unix()
 	vecs := reputation.ComputeOntologyVectors(selfPub, ont, atts, pinnedPeers, now, reputation.DefaultHalfLifeSeconds)
+	batch := make([]store.Reputation6DRow, 0, len(vecs))
 	for _, v := range vecs {
-		_ = db.UpsertReputation6D(store.Reputation6DRow{
+		batch = append(batch, store.Reputation6DRow{
 			SubjectPub:   v.SubjectPub,
 			OntologyID:   ont,
 			AccBP:        v.AccBP,
@@ -94,7 +111,128 @@ func RecomputeReputationForOntology(db *store.DB, selfPub, ontologyID string, pi
 			UpdatedAt:    now,
 		})
 	}
+	_ = db.UpsertReputation6DBatch(batch)
+	trustCacheEpoch.Add(1)
 	return vecs, nil
+}
+
+// SaveVerifiedAttestation verifies and persists a signed nektarrep1.* attestation without running
+// synchronous EigenTrust recomputation (used by high-TPS SSE intake paired with coalesced recompute).
+func SaveVerifiedAttestation(
+	db *store.DB,
+	att *reputation.Attestation,
+	knownBinding *reputation.DealReceiptBinding,
+) (string, error) {
+	if db == nil || att == nil {
+		return "", errors.New("market: db and attestation required")
+	}
+	if _, err := reputation.VerifyAttestation(att, VerifyDealReceiptForReputation, knownBinding); err != nil {
+		return "", err
+	}
+	tok, err := reputation.EncodeAttestationToken(*att)
+	if err != nil {
+		return "", err
+	}
+	ont := reputation.NormalizeOntologyID(att.OntologyID)
+	row := store.ReputationAttestationRow{
+		AttestHash:      att.AttestHash,
+		Role:            att.Role,
+		IssuerPub:       att.IssuerPub,
+		SubjectPub:      att.SubjectPub,
+		OntologyID:      ont,
+		DealID:          att.DealID,
+		DealReceiptHash: att.DealReceiptHash,
+		Token:           tok,
+		EvidenceHash:    att.EvidenceHash,
+		AccBP:           att.Scores.AccBP,
+		ConsBP:          att.Scores.ConsBP,
+		DispBP:          att.Scores.DispBP,
+		PredBP:          att.Scores.PredBP,
+		CollabBP:        att.Scores.CollabBP,
+		ProvBP:          att.Scores.ProvBP,
+		CompositeBP:     att.Scores.CompositeBP,
+		CreatedAt:       att.Timestamp,
+	}
+	if err := db.SaveReputationAttestation(row); err != nil {
+		return "", err
+	}
+	return ont, nil
+}
+
+func (b *Broker) scheduleReputationRecompute(ontologyID string) {
+	if b == nil {
+		return
+	}
+	ont := reputation.NormalizeOntologyID(ontologyID)
+	b.repMu.Lock()
+	if b.dirtyRepOnts == nil {
+		b.dirtyRepOnts = make(map[string]struct{})
+	}
+	b.dirtyRepOnts[ont] = struct{}{}
+	if ont != reputation.GlobalOntologyID {
+		b.dirtyRepOnts[reputation.GlobalOntologyID] = struct{}{}
+	}
+	b.repMu.Unlock()
+
+	b.startMu.Lock()
+	running := b.started
+	b.startMu.Unlock()
+	if !running {
+		b.flushDirtyReputation()
+		return
+	}
+	if b.repWakeCh != nil {
+		select {
+		case b.repWakeCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (b *Broker) flushDirtyReputation() {
+	if b == nil || b.mem == nil || b.mem.DB() == nil {
+		return
+	}
+	b.repMu.Lock()
+	if len(b.dirtyRepOnts) == 0 {
+		b.repMu.Unlock()
+		return
+	}
+	onts := make([]string, 0, len(b.dirtyRepOnts))
+	for ont := range b.dirtyRepOnts {
+		onts = append(onts, ont)
+	}
+	clear(b.dirtyRepOnts)
+	b.repMu.Unlock()
+
+	var pinned map[string]bool
+	if b.engine != nil && b.engine.Policy() != nil {
+		pinned = b.engine.Policy().PreferredSellersMap()
+	}
+	for _, ont := range onts {
+		_, _ = RecomputeReputationForOntology(b.mem.DB(), b.PubHex(), ont, pinned)
+	}
+}
+
+func (b *Broker) runStateFlusher(ctx context.Context) {
+	cursorTick := time.NewTicker(1 * time.Second)
+	defer cursorTick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cursorTick.C:
+			b.flushDirtyCursors()
+			b.flushDirtyReputation()
+		case <-b.repWakeCh:
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+			b.flushDirtyReputation()
+		}
+	}
 }
 
 // RecordAndRecomputeAttestation verifies a signed nektarrep1.* attestation against its bilateral
@@ -159,23 +297,30 @@ func EvaluateTrustForOntology(
 	contradictions []reputation.ContradictionRecord,
 ) (*reputation.TrustEvaluation, map[string]reputation.Vector6D, error) {
 	ont := reputation.NormalizeOntologyID(ontologyID)
-	var preferred, blocked []string
-	pinnedMap := make(map[string]bool)
-	if pol != nil {
-		pol.mu.RLock()
-		for p, ok := range pol.PreferredSellers {
-			if ok {
-				lp := strings.ToLower(strings.TrimSpace(p))
-				preferred = append(preferred, lp)
-				pinnedMap[lp] = true
+	preferred, blocked, pinnedMap := pol.SellerLists()
+
+	// Fast-path cache when bonds & contradictions are empty (common quote/rank case) and reputation epoch is unchanged.
+	canCache := db != nil && len(bonds) == 0 && len(contradictions) == 0
+	var cacheKey string
+	curEpoch := trustCacheEpoch.Load()
+	if canCache {
+		pSorted := append([]string(nil), preferred...)
+		bSorted := append([]string(nil), blocked...)
+		sort.Strings(pSorted)
+		sort.Strings(bSorted)
+		cacheKey = fmt.Sprintf("%p|%s|%s|%s|%s", db, selfPub, ont, strings.Join(pSorted, ","), strings.Join(bSorted, ","))
+		now := time.Now()
+		trustCacheMu.RLock()
+		if hit, ok := trustEvalCache[cacheKey]; ok && hit.epoch == curEpoch && now.Before(hit.expiresAt) {
+			vecsCopy := make(map[string]reputation.Vector6D, len(hit.vecs))
+			for k, v := range hit.vecs {
+				vecsCopy[k] = v
 			}
+			evalCopy := hit.eval
+			trustCacheMu.RUnlock()
+			return evalCopy, vecsCopy, nil
 		}
-		for p, ok := range pol.BlockedSellers {
-			if ok {
-				blocked = append(blocked, strings.ToLower(strings.TrimSpace(p)))
-			}
-		}
-		pol.mu.RUnlock()
+		trustCacheMu.RUnlock()
 	}
 
 	vecs := make(map[string]reputation.Vector6D)
@@ -184,6 +329,7 @@ func EvaluateTrustForOntology(
 		if err == nil && len(rows) == 0 {
 			// Hydrate on demand from stored attestations if 6D table is not yet populated.
 			vecs, _ = RecomputeReputationForOntology(db, selfPub, ont, pinnedMap)
+			curEpoch = trustCacheEpoch.Load()
 		} else if err == nil {
 			for _, r := range rows {
 				vecs[r.SubjectPub] = reputation.Vector6D{
@@ -213,12 +359,29 @@ func EvaluateTrustForOntology(
 	if err != nil {
 		return nil, vecs, err
 	}
+	if canCache && eval != nil {
+		vecsSnap := make(map[string]reputation.Vector6D, len(vecs))
+		for k, v := range vecs {
+			vecsSnap[k] = v
+		}
+		trustCacheMu.Lock()
+		if len(trustEvalCache) >= 512 {
+			clear(trustEvalCache)
+		}
+		trustEvalCache[cacheKey] = cachedTrustEvalEntry{
+			eval:      eval,
+			vecs:      vecsSnap,
+			epoch:     curEpoch,
+			expiresAt: time.Now().Add(10 * time.Second),
+		}
+		trustCacheMu.Unlock()
+	}
 	return eval, vecs, nil
 }
 
 // PublishAttestation broadcasts a signed `nektarrep1.*` attestation onto the 16-lane overlay (`nkt1` kind=4).
 func (b *Broker) PublishAttestation(ctx context.Context, att reputation.Attestation, domains []string) error {
-	if b == nil || b.disc == nil || b.engine == nil || b.engine.saleKey == nil {
+	if b == nil || b.disc == nil || b.engine == nil || b.engine.signer == nil {
 		return nil
 	}
 	tok, err := reputation.EncodeAttestationToken(att)
@@ -248,15 +411,14 @@ func (b *Broker) PublishAttestation(ctx context.Context, att reputation.Attestat
 		CompositeBP:     att.Scores.CompositeBP,
 		Exp:             time.Now().Add(bstack.MaxLifetime).UnixMilli(),
 	}
-	sig, err := bstack.SignArtifact(b.engine.saleKey, ad)
+	sig, err := bstack.SignArtifactWithSigner(b.engine.signer, ad)
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(bstack.SignedAttestation{Attestation: ad, Sig: sig})
+	payload, err := bstack.NewAttestationPayload(bstack.SignedAttestation{Attestation: ad, Sig: sig})
 	if err != nil {
 		return err
 	}
-	payload := bstack.MarketPayload{Kind: bstack.KindAttestation, Body: body}
 	topics := []string{bstack.LaneOf(ad.Net, bstack.DirDomain)}
 	if len(cleanDoms) > 0 {
 		topics = lanesForDomains(ad.Net, cleanDoms)
@@ -265,7 +427,7 @@ func (b *Broker) PublishAttestation(ctx context.Context, att reputation.Attestat
 	if len(hosts) == 0 {
 		return nil
 	}
-	_, err = b.disc.BuildAndSubmitMarketAd(ctx, b.engine.saleKey, payload, hosts, topics)
+	_, err = b.disc.BuildAndSubmitMarketAd(ctx, b.engine.signer, payload, hosts, topics)
 	return err
 }
 
@@ -327,14 +489,7 @@ func (e *Engine) EmitPostDealAttestation(
 	}
 	var pinned map[string]bool
 	if e.policy != nil {
-		e.policy.mu.RLock()
-		pinned = make(map[string]bool, len(e.policy.PreferredSellers))
-		for p, ok := range e.policy.PreferredSellers {
-			if ok {
-				pinned[strings.ToLower(strings.TrimSpace(p))] = true
-			}
-		}
-		e.policy.mu.RUnlock()
+		pinned = e.policy.PreferredSellersMap()
 	}
 	if err := RecordAndRecomputeAttestation(e.mem.DB(), issuerPub, &att, binding, pinned); err != nil {
 		return "", err

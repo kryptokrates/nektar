@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -168,7 +169,7 @@ func (e *Engine) Sweep(ctx context.Context, args SweepArgs) (*SweepResult, error
 			}
 		}
 		if sErr != nil {
-			if pendingID > 0 && !IsUncertainBroadcastError(sErr) {
+			if pendingID > 0 && isDefinitePreBroadcastSweepErr(sErr) {
 				_ = e.DeletePendingBRC29(ctx, pendingID)
 			}
 			return out, sErr
@@ -227,7 +228,7 @@ func (e *Engine) Sweep(ctx context.Context, args SweepArgs) (*SweepResult, error
 			},
 		}, e.cfg.Originator)
 		if cErr != nil {
-			if pendingID > 0 && !IsUncertainBroadcastError(cErr) {
+			if pendingID > 0 && isDefinitePreBroadcastSweepErr(cErr) {
 				_ = e.DeletePendingBRC29(ctx, pendingID)
 			}
 			return out, fmt.Errorf("wallet: sweep default basket: %w", cErr)
@@ -262,6 +263,10 @@ func (e *Engine) Sweep(ctx context.Context, args SweepArgs) (*SweepResult, error
 	}
 
 	return out, nil
+}
+
+func isDefinitePreBroadcastSweepErr(err error) bool {
+	return errors.Is(err, ErrSpendRejected) || errors.Is(err, ErrInsufficient) || errors.Is(err, ErrInvalidArgs) || errors.Is(err, ErrDepthExceeded)
 }
 
 func (e *Engine) sweepExplicitChunk(ctx context.Context, chunk []*entity.Output, includeDefault bool, destLock *script.Script, desc string) (

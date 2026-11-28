@@ -144,11 +144,14 @@ func ArmHubLiquidity(ctx context.Context, node *Node, mem *memory.Service, cfg L
 		}
 	}
 
-	// 2. Register default domain bounties (including a Hub-sponsored 0-sat starter bounty) & arm handlers!
+	// 2. Register default Coding-Agent Atomic Network domain bounties (including a Hub-sponsored 0-sat starter bounty) & arm handlers!
 	if cfg.ArmBounties {
 		defaultBounties := []Bounty{
 			{ID: "bounty-ops", Domain: "ops", Question: "Verified DevOps, deployment, or infrastructure runbook facts", RewardSats: cfg.BountyRewardSats, MaxFills: 50, Active: true},
-			{ID: "bounty-bsv", Domain: "bsv", Question: "Verified BSV protocol, SPV, Rúnar, or overlay engineering facts", RewardSats: cfg.BountyRewardSats, MaxFills: 50, Active: true},
+			{ID: "bounty-debugging", Domain: "debugging", Question: "Verified root-cause debugging fixes, compiler/runtime traps, and repro notes", RewardSats: cfg.BountyRewardSats, MaxFills: 50, Active: true},
+			{ID: "bounty-mcp", Domain: "mcp", Question: "Verified MCP server, Claude Code, Hermes Agent, Codex, and tool-wiring patterns", RewardSats: cfg.BountyRewardSats, MaxFills: 50, Active: true},
+			{ID: "bounty-api-quirks", Domain: "api-quirks", Question: "Verified third-party SDK/API edge cases, rate limits, and payload gotchas", RewardSats: cfg.BountyRewardSats, MaxFills: 50, Active: true},
+			{ID: "bounty-bsv", Domain: "bsv", Question: "Verified BSV protocol, LightBSV, SPV, Rúnar, or overlay engineering facts", RewardSats: cfg.BountyRewardSats, MaxFills: 50, Active: true},
 			{ID: "bounty-agents", Domain: "agents", Question: "Verified MCP, A2A, tool-use, or agent orchestration knowledge", RewardSats: cfg.BountyRewardSats, MaxFills: 50, Active: true},
 			{ID: "bounty-starter-sponsored", Domain: "ops", Question: "Zero-sat cold-start sponsored bounty: PII-clean distilled engineering fact (Hub anchors and pays net of anchor fee)", RewardSats: cfg.BountyRewardSats, MaxFills: 50, Sponsored: true, AnchorFeeReserveSats: 5, Active: true},
 		}
@@ -398,11 +401,11 @@ func verifyBountyAuthorship(sub BountySubmission) error {
 	if err != nil {
 		return fmt.Errorf("invalid ownerSig: %w", err)
 	}
-	signableRaw, err := core.CanonicalJSON(sub.Signable(canonicalHDP))
+	ownerDigest, err := sub.Signable(canonicalHDP).OwnerSigDigest()
 	if err != nil {
 		return err
 	}
-	if !ownerSig.Verify(core.SHA256(signableRaw), provPub) {
+	if !ownerSig.Verify(ownerDigest, provPub) {
 		return errors.New("ownerSig does not verify against provenancePub")
 	}
 	return nil
@@ -457,11 +460,11 @@ func verifyBountyProofBundle(ctx context.Context, mem *memory.Service, pb contra
 	if err != nil {
 		return fmt.Errorf("invalid ownerSig: %w", err)
 	}
-	signableRaw, err := core.CanonicalJSON(sub.Signable(canonicalHDP))
+	ownerDigest, err := sub.Signable(canonicalHDP).OwnerSigDigest()
 	if err != nil {
 		return err
 	}
-	if !ownerSig.Verify(core.SHA256(signableRaw), provPub) {
+	if !ownerSig.Verify(ownerDigest, provPub) {
 		return errors.New("ownerSig does not verify against provenancePub")
 	}
 

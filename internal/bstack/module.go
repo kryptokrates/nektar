@@ -3,9 +3,9 @@ package bstack
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -32,6 +32,9 @@ type MarketEvent struct {
 	AdmittedAt int64         `json:"admittedAt"`
 	Payload    MarketPayload `json:"payload"`
 	BEEF       []byte        `json:"beef,omitempty"`
+	RawJSON    []byte        `json:"-"` // optional pre-marshaled JSON shared across Hub SSE fanout
+	SlimJSON   []byte        `json:"-"` // optional pre-marshaled JSON omitting raw BEEF for ?format=slim SSE clients
+	BuyerPub   string        `json:"-"` // optional OfferAd recipient pubkey for targeted Hub SSE delivery
 }
 
 // MarketTopicManager implements lightwebinc/bcommon/module.TopicManager for one `tm_nektar_<net>_<nibble>` lane.
@@ -82,9 +85,9 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 	maxExp := now.Add(MaxLifetime + 5*time.Minute).UnixMilli()
 	switch p.Kind {
 	case KindWant:
-		var sw SignedWant
-		if err := json.Unmarshal(p.Body, &sw); err != nil {
-			return fmt.Errorf("invalid want JSON: %w", err)
+		sw, err := DecodeWantPayload(p.Body)
+		if err != nil {
+			return fmt.Errorf("invalid want CBOR: %w", err)
 		}
 		if sw.Want.WantID == "" || sw.Want.Pub == "" {
 			return errors.New("want missing wantId or pub")
@@ -107,18 +110,18 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		if sw.Want.Exp <= 0 || sw.Want.Exp < nowMs || sw.Want.Exp > maxExp {
 			return errors.New("want missing exp, expired, or lifetime too long")
 		}
-		if err := VerifyArtifact(sw.Want.Pub, sw.Sig, sw.Want); err != nil {
+		if err := VerifyArtifactRaw(sw.Want.Pub, sw.Sig, sw.Want.DomainTag(), sw.RawCBOR); err != nil {
 			return err
 		}
-		if expectedTopic != "" && !topicMatchesDomains(expectedNet, expectedTopic, sw.Want.Domains) {
-			return errors.New("want domain does not match topic lane")
+		if expectedTopic != "" && !topicMatchesAd(expectedNet, expectedTopic, sw.Want.Domains, sw.Want.OntologyID) {
+			return errors.New("want domain or ontology does not match topic lane")
 		}
 		return nil
 
 	case KindOffer:
-		var so SignedOffer
-		if err := json.Unmarshal(p.Body, &so); err != nil {
-			return fmt.Errorf("invalid offer JSON: %w", err)
+		so, err := DecodeOfferPayload(p.Body)
+		if err != nil {
+			return fmt.Errorf("invalid offer CBOR: %w", err)
 		}
 		if so.Offer.OfferID == "" || so.Offer.WantID == "" || so.Offer.Pub == "" {
 			return errors.New("offer missing required ids or pub")
@@ -167,18 +170,18 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		if so.Offer.Exp <= 0 || so.Offer.Exp < nowMs || so.Offer.Exp > maxExp {
 			return errors.New("offer missing exp, expired, or lifetime too long")
 		}
-		if err := VerifyArtifact(so.Offer.Pub, so.Sig, so.Offer); err != nil {
+		if err := VerifyArtifactRaw(so.Offer.Pub, so.Sig, so.Offer.DomainTag(), so.RawCBOR); err != nil {
 			return err
 		}
-		if expectedTopic != "" && !topicMatchesDomains(expectedNet, expectedTopic, so.Offer.Domains) {
-			return errors.New("offer domain does not match topic lane")
+		if expectedTopic != "" && !topicMatchesAd(expectedNet, expectedTopic, so.Offer.Domains, so.Offer.OntologyID) {
+			return errors.New("offer domain or ontology does not match topic lane")
 		}
 		return nil
 
 	case KindAnnounce:
-		var sa SignedAnnounce
-		if err := json.Unmarshal(p.Body, &sa); err != nil {
-			return fmt.Errorf("invalid announce JSON: %w", err)
+		sa, err := DecodeAnnouncePayload(p.Body)
+		if err != nil {
+			return fmt.Errorf("invalid announce CBOR: %w", err)
 		}
 		if sa.Announce.Pub == "" || len(sa.Announce.Hosts) == 0 {
 			return errors.New("announce missing pub or hosts")
@@ -189,6 +192,7 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		if sa.Announce.Exp <= 0 || sa.Announce.Exp < nowMs || sa.Announce.Exp > maxExp {
 			return errors.New("announce missing exp, expired, or lifetime too long")
 		}
+		var packOnts []string
 		for _, pk := range sa.Announce.Packs {
 			if err := validateOptionalHash32("pack ontologyId", pk.OntologyID); err != nil {
 				return err
@@ -199,19 +203,36 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 			if err := validatePackRefNMU(pk); err != nil {
 				return err
 			}
+			if pk.OntologyID != "" {
+				packOnts = append(packOnts, pk.OntologyID)
+			}
 		}
-		if err := VerifyArtifact(sa.Announce.Pub, sa.Sig, sa.Announce); err != nil {
+		if err := VerifyArtifactRaw(sa.Announce.Pub, sa.Sig, sa.Announce.DomainTag(), sa.RawCBOR); err != nil {
 			return err
 		}
-		if expectedTopic != "" && expectedTopic != LaneOf(expectedNet, DirDomain) {
-			return errors.New("announce only allowed on dir lane")
+		if expectedTopic != "" {
+			allowed := expectedTopic == LaneOf(expectedNet, DirDomain) ||
+				expectedTopic == DomainTopic(expectedNet, DirDomain) ||
+				topicMatchesAd(expectedNet, expectedTopic, sa.Announce.Domains, "") ||
+				topicMatchesAd(expectedNet, expectedTopic, sa.Announce.SellDomains, "")
+			if !allowed {
+				for _, oid := range packOnts {
+					if OntologyTopic(expectedNet, oid) == expectedTopic {
+						allowed = true
+						break
+					}
+				}
+			}
+			if !allowed {
+				return errors.New("announce only allowed on dir or matching semantic/ontology lane")
+			}
 		}
 		return nil
 
 	case KindAttestation:
-		var sat SignedAttestation
-		if err := json.Unmarshal(p.Body, &sat); err != nil {
-			return fmt.Errorf("invalid attestation JSON: %w", err)
+		sat, err := DecodeAttestationPayload(p.Body)
+		if err != nil {
+			return fmt.Errorf("invalid attestation CBOR: %w", err)
 		}
 		att := sat.Attestation
 		if att.AttestHash == "" || att.Pub == "" || att.SubjectPub == "" || att.DealID == "" || att.DealReceiptHash == "" {
@@ -252,7 +273,7 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 		if att.Exp <= 0 || att.Exp < nowMs || att.Exp > maxExp {
 			return errors.New("attestation missing exp, expired, or lifetime too long")
 		}
-		if err := VerifyArtifact(att.Pub, sat.Sig, att); err != nil {
+		if err := VerifyArtifactRaw(att.Pub, sat.Sig, att.DomainTag(), sat.RawCBOR); err != nil {
 			return err
 		}
 		if expectedTopic != "" {
@@ -260,7 +281,9 @@ func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, n
 			if len(doms) == 0 {
 				doms = []string{DirDomain}
 			}
-			if !topicMatchesDomains(expectedNet, expectedTopic, doms) && expectedTopic != LaneOf(expectedNet, DirDomain) {
+			if !topicMatchesAd(expectedNet, expectedTopic, doms, att.OntologyID) &&
+				expectedTopic != LaneOf(expectedNet, DirDomain) &&
+				expectedTopic != DomainTopic(expectedNet, DirDomain) {
 				return errors.New("attestation domain does not match topic lane")
 			}
 		}
@@ -329,13 +352,28 @@ func validatePackRefNMU(pk PackRef) error {
 	return nil
 }
 
-func topicMatchesDomains(net, topic string, domains []string) bool {
+func topicMatchesAd(net, topic string, domains []string, ontologyID string) bool {
+	if ot := OntologyTopic(net, ontologyID); ot != "" && ot == topic {
+		return true
+	}
 	for _, d := range domains {
-		if LaneOf(net, d) == topic {
+		if DomainTopic(net, d) == topic || LaneOf(net, d) == topic {
 			return true
 		}
 	}
 	return false
+}
+
+// DynamicTopicForMarket returns an on-demand MarketTopicManager when topic is a valid
+// `tm_nektar_<net>_dom_<slug>` or `tm_nektar_<net>_ont_<id16>` topic for net.
+func DynamicTopicForMarket(net, topic string) *MarketTopicManager {
+	if !IsValidDynamicMarketTopic(net, topic) {
+		return nil
+	}
+	return &MarketTopicManager{
+		Net:   net,
+		Topic: topic,
+	}
 }
 
 // ClassifyNkt1 implements bcommon/carrier.Classify for canonical CBOR nkt1 PushDrop records.
@@ -354,27 +392,27 @@ func ExtractPayloadIdentity(p MarketPayload) ([]byte, error) {
 	var pubHex string
 	switch p.Kind {
 	case KindWant:
-		var sw SignedWant
-		if err := json.Unmarshal(p.Body, &sw); err != nil {
-			return nil, fmt.Errorf("invalid want JSON: %w", err)
+		sw, err := DecodeWantPayload(p.Body)
+		if err != nil {
+			return nil, fmt.Errorf("invalid want CBOR: %w", err)
 		}
 		pubHex = sw.Want.Pub
 	case KindOffer:
-		var so SignedOffer
-		if err := json.Unmarshal(p.Body, &so); err != nil {
-			return nil, fmt.Errorf("invalid offer JSON: %w", err)
+		so, err := DecodeOfferPayload(p.Body)
+		if err != nil {
+			return nil, fmt.Errorf("invalid offer CBOR: %w", err)
 		}
 		pubHex = so.Offer.Pub
 	case KindAnnounce:
-		var sa SignedAnnounce
-		if err := json.Unmarshal(p.Body, &sa); err != nil {
-			return nil, fmt.Errorf("invalid announce JSON: %w", err)
+		sa, err := DecodeAnnouncePayload(p.Body)
+		if err != nil {
+			return nil, fmt.Errorf("invalid announce CBOR: %w", err)
 		}
 		pubHex = sa.Announce.Pub
 	case KindAttestation:
-		var sat SignedAttestation
-		if err := json.Unmarshal(p.Body, &sat); err != nil {
-			return nil, fmt.Errorf("invalid attestation JSON: %w", err)
+		sat, err := DecodeAttestationPayload(p.Body)
+		if err != nil {
+			return nil, fmt.Errorf("invalid attestation CBOR: %w", err)
 		}
 		pubHex = sat.Attestation.Pub
 	default:
@@ -424,7 +462,7 @@ func (m *MarketTopicManager) IdentifyAdmissibleOutputs(_ context.Context, beef *
 	}
 	now := m.now()
 	isLive := m.Net == "main" || m.Net == "testnet"
-	if isLive {
+	if isLive && (len(tx.Inputs) > 0 || os.Getenv("NEKTAR_OFFCHAIN_ADS") != "1") {
 		vout, _, err := VerifyMarketCarrier(tx, m.Net, m.Topic, now)
 		if err != nil {
 			return out, fmt.Errorf("market carrier refused: %w", err)
@@ -468,13 +506,45 @@ func (m *MarketTopicManager) GetMetaData() *overlay.MetaData {
 	}
 }
 
+// ParseLaneNibbles normalizes an optional slice or comma-separated list of hex nibbles ("0".."f")
+// into a deduplicated ordered slice. Empty input returns all 16 nibble lanes ("0".."f").
+func ParseLaneNibbles(raw []string) []string {
+	seen := make(map[string]bool, 16)
+	var out []string
+	for _, item := range raw {
+		for _, tok := range strings.Split(item, ",") {
+			tok = strings.ToLower(strings.TrimSpace(tok))
+			if idx := strings.LastIndex(tok, "_"); idx >= 0 && idx+1 < len(tok) {
+				tok = tok[idx+1:]
+			}
+			if len(tok) == 1 && ((tok[0] >= '0' && tok[0] <= '9') || (tok[0] >= 'a' && tok[0] <= 'f')) && !seen[tok] {
+				seen[tok] = true
+				out = append(out, tok)
+			}
+		}
+	}
+	if len(out) == 0 {
+		out = make([]string, 16)
+		for i := range 16 {
+			out[i] = fmt.Sprintf("%x", i)
+		}
+	}
+	return out
+}
+
 // NewMarketModule returns a Lightweb-compatible module.Factory registering all 16 nibble topics
 // (`tm_nektar_<net>_0..f`) and `ls_nektar`.
 func NewMarketModule(net string, onAdmit func(MarketEvent)) module.Factory {
+	return NewMarketModuleWithLanes(net, nil, onAdmit)
+}
+
+// NewMarketModuleWithLanes registers only the configured subset of nibble lanes (or all 0..f when lanes is empty),
+// enabling horizontal Hub sharding across independent nodes.
+func NewMarketModuleWithLanes(net string, lanes []string, onAdmit func(MarketEvent)) module.Factory {
+	nibbles := ParseLaneNibbles(lanes)
 	return func(h module.Host) (module.Module, error) {
-		topics := make(map[string]module.TopicManager, 16)
-		for i := range 16 {
-			nibble := fmt.Sprintf("%x", i)
+		topics := make(map[string]module.TopicManager, len(nibbles))
+		for _, nibble := range nibbles {
 			name := fmt.Sprintf("tm_nektar_%s_%s", net, nibble)
 			topics[name] = &MarketTopicManager{
 				Net:    net,

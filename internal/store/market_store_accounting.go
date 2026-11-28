@@ -100,16 +100,16 @@ func (d *DB) ReleasePaymentClaim(txid string) error {
 // ListPaymentClaims loads persisted payment claims for replay protection across restarts
 // and deterministic book reconciliation (optional limit caps rows returned).
 func (d *DB) ListPaymentClaims(limits ...int) ([]PaymentClaimRecord, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var (
 		rows *sql.Rows
 		err  error
 	)
 	if len(limits) > 0 && limits[0] > 0 {
-		rows, err = d.sql.Query(`SELECT txid, inputs_json, claimed_at FROM payment_claims ORDER BY claimed_at DESC LIMIT ?`, limits[0])
+		rows, err = rdb.Query(`SELECT txid, inputs_json, claimed_at FROM payment_claims ORDER BY claimed_at DESC LIMIT ?`, limits[0])
 	} else {
-		rows, err = d.sql.Query(`SELECT txid, inputs_json, claimed_at FROM payment_claims ORDER BY claimed_at ASC`)
+		rows, err = rdb.Query(`SELECT txid, inputs_json, claimed_at FROM payment_claims ORDER BY claimed_at ASC`)
 	}
 	if err != nil {
 		return nil, err
@@ -276,7 +276,11 @@ func (d *DB) ReserveSpendAtomic(opID string, attempt int, amountSats, maxPerDeal
 		VALUES (?, ?, ?, 'reserved', ?)`, opID, attempt, amountSats, time.Now().Unix()); err != nil {
 		return false, err
 	}
-	return false, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	d.policyEpoch.Add(1)
+	return false, nil
 }
 
 // ReleaseSpendReservation refunds a previously reserved (opID, attempt) on pre-broadcast failure.
@@ -328,7 +332,11 @@ func (d *DB) ReleaseSpendReservation(opID string, attempt int) error {
 	if _, err := tx.Exec(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`, dayKey, nb); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	d.policyEpoch.Add(1)
+	return nil
 }
 
 // DailySpend returns a UTC-day accumulator stored in KV under prefix:YYYY-MM-DD.
@@ -364,7 +372,11 @@ func (d *DB) AddDailySpend(prefix string, delta uint64) (uint64, error) {
 	if _, err := tx.Exec(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`, key, nb); err != nil {
 		return 0, err
 	}
-	return next, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	d.policyEpoch.Add(1)
+	return next, nil
 }
 
 // LoadOrCreateStableKey loads or generates a persistent 32-byte hex private key in KV

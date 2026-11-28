@@ -2,7 +2,7 @@
 
 > **Honesty Rule:** Nektar proofs establish **recorded + unaltered + derivable by block time** — never that a memory's content is true, and model identity is *declared*, not zkML-proven.
 
-This runbook takes a v0.1 Pure-Go Nektar node or Spine-and-Leaf Hub from Testnet verification to a controlled **5,000–10,000 satoshi** live BSV Mainnet canary with strict fail-closed custody, multi-witness PoW header validation, and Restate v1.8.1 durable execution.
+This runbook takes a v0.1 Pure-Go Nektar node or Spine-and-Leaf Hub from Testnet verification to a controlled **5,000–10,000 satoshi** live BSV Mainnet canary with strict fail-closed custody, multi-witness PoW header validation, and embedded pure-Go `go-workflows` SQLite WAL durable execution (zero sidecars).
 
 ---
 
@@ -57,37 +57,20 @@ nektar check-mainnet
 
 ---
 
-## 3. Production Restate v1.8.1 Durable Execution
+## 3. Embedded Pure-Go Durable Execution (Zero Sidecars)
 
-Live-network trades (`testnet` and `main`) **require** an active Restate v1.8.1 durable execution plane (`BuyerDeal`, `SellerDeal`, `Custody`, `Tx`, `AnchorCadence`, `NektarRuntime`). There is no local-broker bypass on live networks.
-
-- **Bare-metal Linux / macOS (auto-supervised loopback):**
-  ```bash
-  nektar restate-up        # downloads & SHA-256 verifies pinned restate-server v1.8.1 -> ~/.nektar/bin/
-  export NEKTAR_RESTATE_REQUIRED=1
-  ```
-- **Docker Compose / Kubernetes sidecar:**
-  Use `deploy/hub/compose.yaml` (runs `docker.io/restatedev/restate:1.8.1` on an internal bridge network) and set:
-  ```bash
-  export NEKTAR_RESTATE_URL="http://restate:8080"
-  export NEKTAR_RESTATE_ADMIN="http://restate:9070"
-  export NEKTAR_RESTATE_ENDPOINT_URI="http://agent:9080"
-  export NEKTAR_RESTATE_REQUIRED=1
-  # Recommended for multi-host networks:
-  # export NEKTAR_RESTATE_IDENTITY_KEY="publickeyv1_..."
-  ```
+Live-network trades (`testnet` and `main`) run durably inside the single Go binary via embedded `cschleiden/go-workflows` backed by `<NEKTAR_DATA_DIR>/workflows.sqlite` (SQLite WAL). Zero external sidecar processes or ports are needed — `nektar doctor` verifies `workflows` health automatically.
 
 ---
 
 ## 4. Spine-and-Leaf Hub Launch (Optional Hub Canary)
 
-To deploy a Mainnet Leaf or Spine Hub with BRC-105 fee enforcement:
+To deploy a Mainnet Leaf or Spine Hub with BRC-105 fee enforcement (zero-Docker native binary mode by default):
 
 ```bash
-# 1-command Docker Compose + Caddy Auto-TLS deployment
 nektar hub up \
   --domain hub.example.com \
-  --network main \
+  --mainnet \
   --confirm I_UNDERSTAND \
   --hub-role leaf \
   --fee-preset hybrid
@@ -113,12 +96,13 @@ curl -i https://hub.example.com/hub/sync?cursor=0
 nektar serve \
   --listen 127.0.0.1:18420 \
   --network main \
+  --confirm I_UNDERSTAND \
   --hosts https://hub.example.com/hub
 
 nektar wallet address        # send 5,000–10,000 real BSV sats to this address
 nektar wallet sync           # verify confirmed balance & UTXOs
 nektar wallet fuel           # split into parallel fuel UTXOs (optional for >1 concurrent tx)
-nektar doctor                # confirm all green (Restate, PoW witnesses, SpendGuard, wallet)
+nektar doctor                # confirm all green (workflows, PoW witnesses, SpendGuard, wallet)
 ```
 
 ### Step B — Anchor & Offline SPV Verification (1 Real Block)
@@ -148,7 +132,7 @@ On **Node A (Buyer)** funded with 5,000 sats:
 
 ```bash
 nektar policy approve --preset buyer --domains canary --confirm I_UNDERSTAND
-nektar want -domains canary -question "Mainnet canary fragment verified BSV anchor" -max 100 -shard bought/canary
+nektar buy -domains canary -question "Mainnet canary fragment verified BSV anchor" -max 100 -shard bought/canary
 ```
 
 Verify all four artifacts after settlement:
@@ -181,9 +165,9 @@ nektar wallet sweep -to <cold-bsv-address> -confirm I_UNDERSTAND
 
 ## 6. Go / No-Go Mainnet Checklist
 
-- [ ] `go test -count=1 ./...` 16/16 packages green
+- [ ] `go test -count=1 ./...` all packages green
 - [ ] `nektar check-mainnet` exits `0` with `>=2` distinct-origin PoW witnesses
-- [ ] `restate-server v1.8.1` connected and registered (`NEKTAR_RESTATE_REQUIRED=1`)
+- [ ] Embedded `workflows.sqlite` durable runtime active (`nektar doctor` shows `workflows` GREEN)
 - [ ] `NEKTAR_OPERATOR_PUBKEY` pinned to off-box cold key
 - [ ] SpendGuard caps conservative (`NEKTAR_MAX_FEE_SATS_PER_TX <= 2000`, `NEKTAR_MAX_SPEND_SATS_PER_DAY <= 10000`)
 - [ ] Canary anchor mined & `nektar recall -spv` green

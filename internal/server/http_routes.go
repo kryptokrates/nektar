@@ -98,8 +98,9 @@ func (a *App) buildMux() http.Handler {
 	a.registerRepoRoutes(mux)
 	a.registerWalletRoutes(mux)
 
-	// 6. Live A2A Market Purchase, NMU-1 Metered Recall / Subscriptions / Grade S Feeds / Ticker, Host Discovery, Onboarding, Faucet & Approvals!
+	// 6. Live A2A Market Purchase, Direct-Quote, NMU-1 Metered Recall / Subscriptions / Grade S Feeds / Ticker, Host Discovery, Onboarding, Faucet & Approvals!
 	mux.HandleFunc("POST /v1/market/purchase", a.handleMarketPurchase)
+	mux.HandleFunc("POST /v1/market/direct-quote", a.handleMarketDirectQuote)
 	mux.HandleFunc("POST /v1/market/query", a.handleMarketQuery)
 	mux.HandleFunc("POST /v1/market/subscriptions", a.handleMarketSubscribe)
 	mux.HandleFunc("GET /v1/market/feeds/{shard}", a.handleMarketFeedSSE)

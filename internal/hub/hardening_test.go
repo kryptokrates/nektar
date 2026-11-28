@@ -15,7 +15,6 @@ import (
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
-	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
 )
@@ -110,8 +109,8 @@ func TestBountyProofEnforcementAndSustainableResale(t *testing.T) {
 		s.TS = time.Now().Unix()
 		signable := s.Signable(s.HDP)
 		s.Sig, _ = bstack.SignArtifact(sellerKey, signable)
-		if canon, cErr := core.CanonicalJSON(signable); cErr == nil {
-			if osig, oErr := port.SignDigest(ctx, core.SHA256(canon)); oErr == nil {
+		if dig, cErr := signable.OwnerSigDigest(); cErr == nil {
+			if osig, oErr := port.SignDigest(ctx, dig); oErr == nil {
 				s.OwnerSig = hex.EncodeToString(osig)
 			}
 		}

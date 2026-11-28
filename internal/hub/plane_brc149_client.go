@@ -152,6 +152,18 @@ func (n *Node) consumePlaneOnce(ctx context.Context, spine string, cursor uint64
 		}
 	}
 	cursorKey := "plane:" + spine
+	persistedCursor := cursor
+	unflushed := 0
+	lastFlush := time.Now()
+	flushCursor := func() {
+		if cursor > persistedCursor {
+			_ = n.store.SetFedCursor(cursorKey, int64(cursor))
+			persistedCursor = cursor
+			unflushed = 0
+			lastFlush = time.Now()
+		}
+	}
+	defer flushCursor()
 	for {
 		frame, err := DecodePlaneFrame(resp.Body, MaxPlaneObjectLen)
 		if err != nil {
@@ -166,13 +178,23 @@ func (n *Node) consumePlaneOnce(ctx context.Context, spine string, cursor uint64
 		if topic, ok := topicByID[frame.TopicID]; ok {
 			if !n.loopGuard.Seen(frame.BEEF, topic) {
 				if _, sErr := n.submitInternal(ctx, frame.BEEF, []string{topic}, true); sErr != nil {
-					return cursor
+					// ARCH-F5: permanently refused poison frames are counted & skipped so one bad frame
+					// cannot stall the entire BRC-149 stream; transient errors hold the cursor for retry.
+					if errors.Is(sErr, ErrHubRefused) {
+						n.poisonSkipped.Add(1)
+						n.loopGuard.MarkIfUnseen(frame.BEEF, topic)
+					} else {
+						return cursor
+					}
 				}
 			}
 		}
 		if frame.FlowSeq > cursor {
 			cursor = frame.FlowSeq
-			_ = n.store.SetFedCursor(cursorKey, int64(cursor))
+			unflushed++
+			if unflushed >= 100 || time.Since(lastFlush) >= 500*time.Millisecond {
+				flushCursor()
+			}
 		}
 	}
 }
@@ -230,7 +252,12 @@ func (n *Node) repairPlaneGap(ctx context.Context, spine string, fromSeq, toSeq 
 				if topic, ok := topicByID[frame.TopicID]; ok {
 					if !n.loopGuard.Seen(frame.BEEF, topic) {
 						if _, sErr := n.submitInternal(ctx, frame.BEEF, []string{topic}, true); sErr != nil {
-							return fmt.Errorf("plane nack admit seq=%d topic=%s: %w", frame.FlowSeq, topic, sErr)
+							if errors.Is(sErr, ErrHubRefused) {
+								n.poisonSkipped.Add(1)
+								n.loopGuard.MarkIfUnseen(frame.BEEF, topic)
+							} else {
+								return fmt.Errorf("plane nack admit seq=%d topic=%s: %w", frame.FlowSeq, topic, sErr)
+							}
 						}
 					}
 				}

@@ -21,18 +21,25 @@ import (
 
 func (n *Node) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	bounties, _ := n.store.ListBounties(true)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":               true,
-		"network":          n.net,
-		"hubRole":          n.fees.Role,
-		"transportMode":    n.transportMode,
-		"propagationOff":   n.propagationOff,
-		"payeeIdentityKey": n.PayeeIdentityKey(),
-		"fees":             n.fees.AdvertSummary(),
-		"topics":           n.Topics(),
-		"lookups":          n.Lookups(),
-		"activeBounties":   len(bounties),
-	})
+	resp := map[string]any{
+		"ok":                  true,
+		"network":             n.net,
+		"hubRole":             n.fees.Role,
+		"transportMode":       n.transportMode,
+		"propagationOff":      n.propagationOff,
+		"payeeIdentityKey":    n.PayeeIdentityKey(),
+		"fees":                n.fees.AdvertSummary(),
+		"topics":              n.Topics(),
+		"lookups":             n.Lookups(),
+		"activeBounties":      len(bounties),
+		"defaultBboxOffice":   n.DefaultBboxOffice(),
+		"defaultBstoreBucket": n.DefaultBstoreBucket(),
+		"poisonFramesSkipped": n.PoisonFramesSkipped(),
+	}
+	if n.fabricSrv != nil {
+		resp["brc223UDPAddr"] = n.fabricSrv.UDPAddr().String()
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func formatOverlayMeta(name, defaultDesc string, md *overlay.MetaData) map[string]any {
@@ -151,7 +158,7 @@ func (n *Node) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		code := http.StatusBadRequest
 		if strings.Contains(err.Error(), "rate limit") {
 			code = http.StatusTooManyRequests
-		} else if strings.Contains(err.Error(), "tracker unavailable") {
+		} else if errors.Is(err, ErrHubTransient) || strings.Contains(err.Error(), "tracker unavailable") {
 			code = http.StatusServiceUnavailable
 		}
 		writeJSON(w, code, map[string]string{"error": err.Error()})
@@ -250,6 +257,10 @@ func (n *Node) handleBboxSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	if bus := n.EventBus(); bus != nil {
+		bus.Publish("hub:bbox:"+strings.ToLower(strings.TrimSpace(msg.RecipientPub)), "bbox", seq)
+	}
+	n.broadcastBboxWake(msg.RecipientPub)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "seq": seq})
 }
 
@@ -275,13 +286,12 @@ func (n *Node) handleBboxInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 	aud := strings.ToLower(strings.TrimSpace(r.Host))
-	authPayload := map[string]any{
-		"action": "bbox_inbox",
-		"pub":    pub,
-		"ts":     ts,
-		"nonce":  hdrNonce,
-		"aud":    aud,
-		"since":  since,
+	authPayload := bstack.BboxInboxAuth{
+		Pub:   pub,
+		TS:    ts,
+		Nonce: hdrNonce,
+		Aud:   aud,
+		Since: since,
 	}
 	if err := bstack.VerifyArtifact(pub, hdrSig, authPayload); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid bbox inbox signature"})
@@ -295,7 +305,7 @@ func (n *Node) handleBboxInbox(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "replayed bbox inbox nonce"})
 		return
 	}
-	msgs, err := n.store.ListBboxMessages(pub, since, 50)
+	msgs, err := n.store.ListBboxMessages(pub, since, 200)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

@@ -423,10 +423,8 @@ func (b *Broker) QueryFallbackOnRecallMiss(ctx context.Context, req FallbackReca
 		if wd != nil && wd.AllowPeerQuery(pub) != nil {
 			continue
 		}
-		pol.mu.RLock()
-		blocked := pol.BlockedSellers[pub]
-		preferred := pol.PreferredSellers[pub]
-		pol.mu.RUnlock()
+		blocked := pol.IsBlockedSeller(pub)
+		preferred := pol.IsPreferredSeller(pub)
 		if blocked {
 			continue
 		}

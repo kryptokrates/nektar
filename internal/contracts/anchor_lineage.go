@@ -4,13 +4,69 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/lightwebinc/bcommon/guard"
 )
 
-const maxAnchorRotateHops = 16
+const (
+	maxAnchorRotateHops       = 16
+	maxVerifiedAnchorHopCache = 65536
+)
+
+var (
+	anchorHopCacheMu   sync.RWMutex
+	anchorHopCache     = make(map[[64]byte]struct{}, 1024)
+	anchorHopCacheKeys [][64]byte
+	anchorHopCacheHead int
+)
+
+func makeAnchorHopKey(prevID, nextID *chainhash.Hash) ([64]byte, bool) {
+	var k [64]byte
+	if prevID == nil || nextID == nil {
+		return k, false
+	}
+	copy(k[0:32], prevID[:])
+	copy(k[32:64], nextID[:])
+	return k, true
+}
+
+func isAnchorHopVerified(prevID, nextID *chainhash.Hash) bool {
+	k, ok := makeAnchorHopKey(prevID, nextID)
+	if !ok {
+		return false
+	}
+	anchorHopCacheMu.RLock()
+	_, hit := anchorHopCache[k]
+	anchorHopCacheMu.RUnlock()
+	return hit
+}
+
+func recordAnchorHopVerified(prevID, nextID *chainhash.Hash) {
+	k, ok := makeAnchorHopKey(prevID, nextID)
+	if !ok {
+		return
+	}
+	anchorHopCacheMu.Lock()
+	if _, exists := anchorHopCache[k]; !exists {
+		for len(anchorHopCache) >= maxVerifiedAnchorHopCache && anchorHopCacheHead < len(anchorHopCacheKeys) {
+			old := anchorHopCacheKeys[anchorHopCacheHead]
+			anchorHopCacheKeys[anchorHopCacheHead] = [64]byte{}
+			anchorHopCacheHead++
+			delete(anchorHopCache, old)
+		}
+		if anchorHopCacheHead > 0 && anchorHopCacheHead*2 >= len(anchorHopCacheKeys) {
+			rem := copy(anchorHopCacheKeys, anchorHopCacheKeys[anchorHopCacheHead:])
+			anchorHopCacheKeys = anchorHopCacheKeys[:rem]
+			anchorHopCacheHead = 0
+		}
+		anchorHopCache[k] = struct{}{}
+		anchorHopCacheKeys = append(anchorHopCacheKeys, k)
+	}
+	anchorHopCacheMu.Unlock()
+}
 
 // VerifyAnchorUTXOLineageWithBEEF verifies strict singleton UTXO spend lineage from prevTx:0 to nextTx:0,
 // executing the full post-Chronicle Bitcoin Script VM on every hop.
@@ -44,8 +100,16 @@ func VerifyAnchorUTXOLineageWithBEEF(prevTx, nextTx *transaction.Transaction, ne
 		return errors.New("contracts: nextTx missing input 0")
 	}
 	prevID := prevTx.TxID()
+	nextID := nextTx.TxID()
+	if isAnchorHopVerified(prevID, nextID) {
+		return nil
+	}
 	if nextTx.Inputs[0].SourceTXID.IsEqual(prevID) && nextTx.Inputs[0].SourceTxOutIndex == 0 {
-		return VerifyAnchorUTXOLineage(prevTx, nextTx)
+		if err := VerifyAnchorUTXOLineage(prevTx, nextTx); err != nil {
+			return err
+		}
+		recordAnchorHopVerified(prevID, nextID)
+		return nil
 	}
 
 	// Walk backward across intermediate NektarAnchor.Rotate() hops carried inside nextBeef.
@@ -81,6 +145,7 @@ func VerifyAnchorUTXOLineageWithBEEF(prevTx, nextTx *transaction.Transaction, ne
 			return err
 		}
 		if parentTx.TxID().IsEqual(prevID) {
+			recordAnchorHopVerified(prevID, nextID)
 			return nil
 		}
 		cur = parentTx

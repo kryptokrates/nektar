@@ -70,76 +70,98 @@ func (a *App) handleRepoRotate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
+const capsuleContentType = "application/vnd.nektar.capsule+cbor"
+
 func (a *App) handleRepoExportCapsule(w http.ResponseWriter, r *http.Request) {
 	repo := strings.TrimSpace(r.PathValue("repo"))
 	branch := strings.TrimSpace(r.URL.Query().Get("branch"))
 	since := strings.TrimSpace(r.URL.Query().Get("since"))
 	cc := CallerContextFor(r.Context(), policy.Principal{})
-	res, _, raw, err := a.mem.ExportCapsuleAuthorized(r.Context(), repo, branch, since, cc.Principal, cc.DisallowBorg)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	accept := strings.ToLower(strings.TrimSpace(r.Header.Get("Accept")))
+	if r.URL.Query().Get("download") == "1" || strings.Contains(accept, capsuleContentType) {
+		selfContained := r.URL.Query().Get("selfContained") != "0"
+		safeRepo := strings.ReplaceAll(repo, "/", "_")
+		w.Header().Set("Content-Type", capsuleContentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.nkt"`, safeRepo))
+		w.WriteHeader(http.StatusOK)
+		p := cc.Principal
+		_, _ = a.mem.ExportCapsuleStream(r.Context(), w, repo, branch, since, &memory.CapsuleExportOpts{
+			SelfContained: selfContained,
+			SignExport:    true,
+			Principal:     &p,
+			DisallowBorg:  cc.DisallowBorg,
+		})
 		return
 	}
-	if r.URL.Query().Get("download") == "1" {
-		shortHead := "empty"
-		if len(res.HeadCommit) >= 8 {
-			shortHead = res.HeadCommit[:8]
-		}
-		safeRepo := strings.ReplaceAll(repo, "/", "_")
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s.nkt"`, safeRepo, shortHead))
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(raw)
+	res, _, _, err := a.mem.ExportCapsuleAuthorized(r.Context(), repo, branch, since, cc.Principal, cc.DisallowBorg)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
 }
 
+func isBinaryCapsuleContentType(ct string) bool {
+	return strings.Contains(ct, capsuleContentType) || strings.Contains(ct, "application/octet-stream")
+}
+
 func (a *App) handleRepoInspectCapsule(w http.ResponseWriter, r *http.Request) {
 	ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
-	var raw []byte
 	targetRepo := strings.TrimSpace(r.URL.Query().Get("repo"))
-	if strings.Contains(ct, "application/octet-stream") {
-		var err error
-		raw, err = io.ReadAll(io.LimitReader(r.Body, memrepo.MaxCapsuleDecodedBytes))
+	cc := CallerContextFor(r.Context(), policy.Principal{})
+	if isBinaryCapsuleContentType(ct) {
+		r.Body = http.MaxBytesReader(w, r.Body, memrepo.MaxCapsuleDecodedBytes)
+		res, err := a.mem.InspectCapsuleStream(r.Context(), r.Body, targetRepo, cc.Principal, cc.DisallowBorg, nil)
 		if err != nil {
+			var maxErr *http.MaxBytesError
+			if strings.Contains(err.Error(), "http: request body too large") || errorAs(err, &maxErr) {
+				writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "capsule payload exceeds maximum allowed size"})
+				return
+			}
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-	} else {
-		var in struct {
-			CapsuleBase64 string `json:"capsuleBase64,omitempty"`
-			ChirpURL      string `json:"chirpUrl,omitempty"`
-			TargetRepo    string `json:"targetRepo,omitempty"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, memrepo.MaxCapsuleDecodedBytes)).Decode(&in); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, memrepo.MaxCapsuleDecodedBytes)
+	var in struct {
+		CapsuleBase64 string `json:"capsuleBase64,omitempty"`
+		ChirpURL      string `json:"chirpUrl,omitempty"`
+		TargetRepo    string `json:"targetRepo,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		var maxErr *http.MaxBytesError
+		if strings.Contains(err.Error(), "http: request body too large") || errorAs(err, &maxErr) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "capsule payload exceeds maximum allowed size"})
 			return
 		}
-		if in.TargetRepo != "" {
-			targetRepo = in.TargetRepo
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if in.TargetRepo != "" {
+		targetRepo = in.TargetRepo
+	}
+	var raw []byte
+	if strings.TrimSpace(in.CapsuleBase64) != "" {
+		dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(in.CapsuleBase64))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid capsuleBase64: " + err.Error()})
+			return
 		}
-		if strings.TrimSpace(in.CapsuleBase64) != "" {
-			dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(in.CapsuleBase64))
-			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid capsuleBase64: " + err.Error()})
-				return
-			}
-			raw = dec
-		} else if strings.TrimSpace(in.ChirpURL) != "" {
-			resolved, err := bstack.ResolveChirp(a.mem.Objects(), strings.TrimSpace(in.ChirpURL))
-			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "resolve chirp: " + err.Error()})
-				return
-			}
-			raw = resolved
+		raw = dec
+	} else if strings.TrimSpace(in.ChirpURL) != "" {
+		resolved, err := bstack.ResolveChirp(a.mem.Objects(), strings.TrimSpace(in.ChirpURL))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "resolve chirp: " + err.Error()})
+			return
 		}
+		raw = resolved
 	}
 	if len(raw) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty capsule payload"})
 		return
 	}
-	cc := CallerContextFor(r.Context(), policy.Principal{})
 	res, err := a.mem.InspectCapsuleAuthorized(r.Context(), raw, targetRepo, cc.Principal, cc.DisallowBorg)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -156,17 +178,18 @@ func (a *App) handleRepoImportCapsule(w http.ResponseWriter, r *http.Request) {
 		principalPtr = &p
 	}
 	ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
-	if strings.Contains(ct, "application/octet-stream") {
-		raw, err := io.ReadAll(io.LimitReader(r.Body, memrepo.MaxCapsuleDecodedBytes))
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
+	if isBinaryCapsuleContentType(ct) {
+		r.Body = http.MaxBytesReader(w, r.Body, memrepo.MaxCapsuleDecodedBytes)
 		targetRepo := strings.TrimSpace(r.URL.Query().Get("repo"))
 		targetBranch := strings.TrimSpace(r.URL.Query().Get("branch"))
 		merge := r.URL.Query().Get("merge") != "0"
-		res, err := a.mem.ImportCapsuleAuthorized(r.Context(), raw, "", targetRepo, targetBranch, merge, principalPtr)
+		res, err := a.mem.ImportCapsuleStream(r.Context(), r.Body, targetRepo, targetBranch, merge, principalPtr, nil)
 		if err != nil {
+			var maxErr *http.MaxBytesError
+			if strings.Contains(err.Error(), "http: request body too large") || errorAs(err, &maxErr) {
+				writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "capsule payload exceeds maximum allowed size"})
+				return
+			}
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
@@ -174,6 +197,7 @@ func (a *App) handleRepoImportCapsule(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, res)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, memrepo.MaxCapsuleDecodedBytes)
 	var in struct {
 		ChirpURL      string `json:"chirpUrl,omitempty"`
 		CapsuleBase64 string `json:"capsuleBase64,omitempty"`
@@ -181,7 +205,12 @@ func (a *App) handleRepoImportCapsule(w http.ResponseWriter, r *http.Request) {
 		TargetBranch  string `json:"targetBranch,omitempty"`
 		MergeIntoMain *bool  `json:"mergeIntoMain,omitempty"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, memrepo.MaxCapsuleDecodedBytes)).Decode(&in); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		var maxErr *http.MaxBytesError
+		if strings.Contains(err.Error(), "http: request body too large") || errorAs(err, &maxErr) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "capsule payload exceeds maximum allowed size"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -205,6 +234,25 @@ func (a *App) handleRepoImportCapsule(w http.ResponseWriter, r *http.Request) {
 	}
 	a.BroadcastDashboardEvent("repo_import")
 	writeJSON(w, http.StatusOK, res)
+}
+
+func errorAs[T any](err error, target *T) bool {
+	if err == nil {
+		return false
+	}
+	type unwrapper interface{ Unwrap() error }
+	for cur := err; cur != nil; {
+		if v, ok := cur.(T); ok {
+			*target = v
+			return true
+		}
+		u, ok := cur.(unwrapper)
+		if !ok {
+			return false
+		}
+		cur = u.Unwrap()
+	}
+	return false
 }
 
 func (a *App) handleRepoCheckout(w http.ResponseWriter, r *http.Request) {

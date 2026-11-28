@@ -53,9 +53,11 @@ func (p *Port) Height(ctx context.Context) (uint32, error) {
 func (p *Port) ProofChecked(ctx context.Context, txid string) (*transaction.MerklePath, uint32, bool, error) {
 	if p.testChain != nil {
 		p.tcMu.Lock()
-		defer p.tcMu.Unlock()
 		mp, h, ok := p.testChain.Proof(txid)
-		return mp, h, ok, nil
+		p.tcMu.Unlock()
+		if ok || p.broadcaster == nil {
+			return mp, h, ok, nil
+		}
 	}
 	if p.tracker == nil {
 		return nil, 0, false, fmt.Errorf("%w: no chain tracker configured", ErrTrackerUnavailable)
@@ -157,16 +159,29 @@ func (p *Port) getProofCache(txid string) *transaction.MerklePath {
 	return mp
 }
 
+const maxPortProofCacheEntries = 65536
+
 func (p *Port) putProofCache(txid string, mp *transaction.MerklePath) {
 	if txid == "" || mp == nil {
 		return
 	}
 	p.proofCacheMu.Lock()
 	if p.proofCache == nil {
-		p.proofCache = make(map[string]*transaction.MerklePath, 64)
+		p.proofCache = make(map[string]*transaction.MerklePath, 1024)
 	}
-	if len(p.proofCache) >= 2048 {
-		clear(p.proofCache)
+	if _, exists := p.proofCache[txid]; !exists {
+		for len(p.proofCache) >= maxPortProofCacheEntries && p.proofCacheHead < len(p.proofCacheKeys) {
+			old := p.proofCacheKeys[p.proofCacheHead]
+			p.proofCacheKeys[p.proofCacheHead] = ""
+			p.proofCacheHead++
+			delete(p.proofCache, old)
+		}
+		if p.proofCacheHead > 0 && p.proofCacheHead*2 >= len(p.proofCacheKeys) {
+			rem := copy(p.proofCacheKeys, p.proofCacheKeys[p.proofCacheHead:])
+			p.proofCacheKeys = p.proofCacheKeys[:rem]
+			p.proofCacheHead = 0
+		}
+		p.proofCacheKeys = append(p.proofCacheKeys, txid)
 	}
 	p.proofCache[txid] = mp
 	p.proofCacheMu.Unlock()

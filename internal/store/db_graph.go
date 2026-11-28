@@ -107,10 +107,10 @@ func (rt *RepoTx) SaveFragmentGraphMeta(shard string, seq int64, ontologyID, edg
 
 // GetFragmentGraphMeta returns the committed (ontologyID, edgesRoot) for (shard, seq), if any.
 func (d *DB) GetFragmentGraphMeta(shard string, seq int64) (string, string, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, unlock := d.rdb()
+	defer unlock()
 	var ontID, edgesRoot string
-	err := d.sql.QueryRow(
+	err := rdb.QueryRow(
 		`SELECT ontology_id, edges_root FROM fragment_graph_meta WHERE shard = ? AND seq = ?`,
 		shard, seq,
 	).Scan(&ontID, &edgesRoot)
@@ -164,9 +164,6 @@ func (d *DB) SaveKnowledgeEdges(edges []KnowledgeEdgeRow) error {
 // ListKnowledgeEdges queries indexed JevGraph edges with optional filtering,
 // excluding forgotten and superseded fragments by default.
 func (d *DB) ListKnowledgeEdges(f KnowledgeEdgeFilter) ([]KnowledgeEdgeRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	var where []string
 	var args []any
 
@@ -218,7 +215,9 @@ func (d *DB) ListKnowledgeEdges(f KnowledgeEdgeFilter) ([]KnowledgeEdgeRow, erro
 	q += " ORDER BY ke.created_at ASC, ke.seq ASC, ke.triple_hash ASC LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := d.sql.Query(q, args...)
+	rdb, unlock := d.rdb()
+	defer unlock()
+	rows, err := rdb.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -241,10 +240,10 @@ func (d *DB) ListKnowledgeEdges(f KnowledgeEdgeFilter) ([]KnowledgeEdgeRow, erro
 
 // GetKnowledgeEdge fetches one persisted edge row by (shard, seq, tripleHash).
 func (d *DB) GetKnowledgeEdge(shard string, seq int64, tripleHash string) (KnowledgeEdgeRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, unlock := d.rdb()
+	defer unlock()
 	var r KnowledgeEdgeRow
-	err := d.sql.QueryRow(`
+	err := rdb.QueryRow(`
 		SELECT shard, seq, triple_hash, ontology_id, subject, predicate, object,
 			subject_type, object_type, status, evidence_quote, start_offset, end_offset,
 			confidence_bp, margin_bp, support_bp, model_id, reason, created_at
@@ -276,10 +275,10 @@ func (d *DB) UpdateKnowledgeEdgeStatus(shard string, seq int64, tripleHash, stat
 
 // FragmentOntologyID returns the distinct ontology_id associated with (shard, seq), if any.
 func (d *DB) FragmentOntologyID(shard string, seq int64) (string, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, unlock := d.rdb()
+	defer unlock()
 	var ontID string
-	err := d.sql.QueryRow(
+	err := rdb.QueryRow(
 		`SELECT ontology_id FROM fragment_graph_meta WHERE shard = ? AND seq = ? AND ontology_id != '' LIMIT 1`,
 		shard, seq,
 	).Scan(&ontID)
@@ -289,7 +288,7 @@ func (d *DB) FragmentOntologyID(shard string, seq int64) (string, error) {
 	if err != nil && err != sql.ErrNoRows {
 		return "", err
 	}
-	err = d.sql.QueryRow(
+	err = rdb.QueryRow(
 		`SELECT ontology_id FROM knowledge_edges WHERE shard = ? AND seq = ? AND status = 'accepted' LIMIT 1`,
 		shard, seq,
 	).Scan(&ontID)

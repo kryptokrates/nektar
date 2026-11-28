@@ -209,6 +209,9 @@ func (e *Engine) SeedCoinbaseOutput(tx *transaction.Transaction, vout uint32, mp
 
 func (e *Engine) importTxToFundingBasket(ctx context.Context, tx *transaction.Transaction, atomicBeef []byte, desc string) (*ImportResult, error) {
 	txid := tx.TxID().String()
+	stripe := &e.importStripes[txShardIdx(txid)]
+	stripe.Lock()
+	defer stripe.Unlock()
 	fundBytes := []byte(*e.fundScript)
 	var outputs []sdkwallet.InternalizeOutput
 	var totalSats uint64

@@ -49,21 +49,37 @@ func (p *Port) InternalizeBRC29(ctx context.Context, beef []byte, outputIndex ui
 	if err != nil {
 		return 0, fmt.Errorf("chain: invalid senderIdentityKey: %w", err)
 	}
-	tracker := p.tracker
-	if tracker == nil && p.engine != nil {
-		tracker = p.engine.Tracker()
+	var tx *transaction.Transaction
+	if preTx := nwallet.PreverifiedTxFromCtx(ctx); preTx != nil {
+		tx = preTx
+	} else {
+		tracker := p.tracker
+		if tracker == nil && p.engine != nil {
+			tracker = p.engine.Tracker()
+		}
+		ver, err := VerifyCounterpartyPaymentBEEF(ctx, beef, tracker, PaymentVerifyOpts{
+			MaxUnconfirmedAncestors: p.maxUnconfAnc,
+			SettleDepth:             p.settleDepth,
+			AllowZeroConf:           true, // caller enforces deal/paywall 0-conf value cap before goods release
+		})
+		if err != nil {
+			return 0, fmt.Errorf("chain: BRC-29 SPV verification failed: %w", err)
+		}
+		tx = ver.Tx
+		ctx = nwallet.WithPreverifiedTx(ctx, tx)
 	}
-	ver, err := VerifyCounterpartyPaymentBEEF(ctx, beef, tracker, PaymentVerifyOpts{
-		MaxUnconfirmedAncestors: p.maxUnconfAnc,
-		SettleDepth:             p.settleDepth,
-		AllowZeroConf:           true, // caller enforces deal/paywall 0-conf value cap before goods release
-	})
-	if err != nil {
-		return 0, fmt.Errorf("chain: BRC-29 SPV verification failed: %w", err)
-	}
-	tx := ver.Tx
 	if uint64(outputIndex) >= uint64(len(tx.Outputs)) {
 		return 0, fmt.Errorf("chain: BRC-29 outputIndex %d out of range", outputIndex)
+	}
+	// Fast-lane zero-GORM internalization: SPV already verified above; commit incoming BRC-29 UTXO + BEEF
+	// atomically into Pebble WAL in ~50us without blocking Seller's HandlePurchase on wallet.sqlite GORM!
+	if p.engine != nil {
+		if fl := p.engine.FastLane(); fl != nil {
+			if err := fl.RecordIncomingBRC29(tx, outputIndex, prefixB64, suffixB64, senderPubHex, beef); err != nil {
+				return 0, fmt.Errorf("chain: fast-lane internalize BRC-29: %w", err)
+			}
+			return tx.Outputs[outputIndex].Satoshis, nil
+		}
 	}
 	// Mark incoming internalization so go-wallet-toolbox's BackgroundBroadcast never charges the
 	// buyer's change output against the seller's SpendGuard budget.

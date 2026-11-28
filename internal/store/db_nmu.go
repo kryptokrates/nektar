@@ -154,11 +154,11 @@ func (d *DB) SaveFragmentNMUMeta(m FragmentNMUMeta) error {
 
 // GetFragmentNMUMeta retrieves NMU-1 metadata for (shard, seq), returning (nil, nil) if absent.
 func (d *DB) GetFragmentNMUMeta(shard string, seq int64) (*FragmentNMUMeta, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var m FragmentNMUMeta
 	var mismatch int
-	err := d.sql.QueryRow(`
+	err := rdb.QueryRow(`
 		SELECT shard, seq, grade, unit_count, freshness_class, valid_until, subject_version, usage_rights, grade_mismatch, updated_at
 		FROM fragment_nmu_meta WHERE shard = ? AND seq = ?`, shard, seq).Scan(
 		&m.Shard, &m.Seq, &m.Grade, &m.UnitCount, &m.FreshnessClass, &m.ValidUntilUnix,
@@ -176,9 +176,9 @@ func (d *DB) GetFragmentNMUMeta(shard string, seq int64) (*FragmentNMUMeta, erro
 
 // ListFragmentNMUMeta returns all NMU-1 metadata rows for shard keyed by seq.
 func (d *DB) ListFragmentNMUMeta(shard string) (map[int64]FragmentNMUMeta, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`
 		SELECT shard, seq, grade, unit_count, freshness_class, valid_until, subject_version, usage_rights, grade_mismatch, updated_at
 		FROM fragment_nmu_meta WHERE shard = ?`, shard)
 	if err != nil {
@@ -234,9 +234,9 @@ func (d *DB) CreateShardSubscription(sub ShardSubscription) error {
 
 // GetShardSubscription fetches one subscription by subId.
 func (d *DB) GetShardSubscription(subID string) (*ShardSubscription, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	sub, err := scanShardSubscriptionFull(d.sql.QueryRow(`
+	rdb, release := d.rdb()
+	defer release()
+	sub, err := scanShardSubscriptionFull(rdb.QueryRow(`
 		SELECT `+shardSubSelectCols+`
 		FROM shard_subscriptions WHERE sub_id = ?`, subID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -250,9 +250,9 @@ func (d *DB) GetShardSubscription(subID string) (*ShardSubscription, error) {
 
 // GetShardSubscriptionByPaymentTx fetches a subscription by its unique BRC-29 payment txid.
 func (d *DB) GetShardSubscriptionByPaymentTx(txid string) (*ShardSubscription, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	sub, err := scanShardSubscriptionFull(d.sql.QueryRow(`
+	rdb, release := d.rdb()
+	defer release()
+	sub, err := scanShardSubscriptionFull(rdb.QueryRow(`
 		SELECT `+shardSubSelectCols+`
 		FROM shard_subscriptions WHERE payment_txid = ?`, strings.ToLower(strings.TrimSpace(txid))))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -266,19 +266,19 @@ func (d *DB) GetShardSubscriptionByPaymentTx(txid string) (*ShardSubscription, e
 
 // ListActiveSubscriptions returns active, non-expired subscriptions (optionally filtered by shard).
 func (d *DB) ListActiveSubscriptions(shard string, nowUnix int64) ([]ShardSubscription, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	if nowUnix <= 0 {
 		nowUnix = time.Now().Unix()
 	}
 	var rows *sql.Rows
 	var err error
 	if strings.TrimSpace(shard) != "" {
-		rows, err = d.sql.Query(`
+		rows, err = rdb.Query(`
 			SELECT `+shardSubSelectCols+`
 			FROM shard_subscriptions WHERE shard = ? AND active = 1 AND expires_at > ? ORDER BY started_at DESC`, shard, nowUnix)
 	} else {
-		rows, err = d.sql.Query(`
+		rows, err = rdb.Query(`
 			SELECT `+shardSubSelectCols+`
 			FROM shard_subscriptions WHERE active = 1 AND expires_at > ? ORDER BY started_at DESC`, nowUnix)
 	}

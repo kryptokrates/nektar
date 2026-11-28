@@ -125,8 +125,9 @@ func TestEncryptedBackupRoundTripTamperAndRetention(t *testing.T) {
 	if err != nil || totalFrags < 1 {
 		t.Fatalf("expected >= 1 restored fragment, got %d err=%v", totalFrags, err)
 	}
-	if ver, _ := restoredDB.UserVersion(); ver != 10 {
-		t.Fatalf("expected restored user_version=10, got %d", ver)
+	expectedVer, _ := db.UserVersion()
+	if ver, _ := restoredDB.UserVersion(); ver != expectedVer {
+		t.Fatalf("expected restored user_version=%d, got %d", expectedVer, ver)
 	}
 
 	// 5. Retention pruning: create 3 more distinct timestamped files and verify Keep=2 retains only 2 newest.
@@ -251,5 +252,51 @@ func TestS3SigV4SinkPutGetListAndPrune(t *testing.T) {
 	}
 	if sawSigV4 < 6 {
 		t.Fatalf("expected SigV4 auth on all S3 requests, got %d", sawSigV4)
+	}
+}
+
+func TestBackupRestoreIncludesChirp(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	db, err := store.Open(filepath.Join(dataDir, "nektar.sqlite"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer db.Close()
+	port, err := chain.Open(ctx, chain.Config{Network: "memory", DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("chain.Open: %v", err)
+	}
+	defer port.Close()
+
+	// Seed a CHIRP volumetric blob file under <dataDir>/chirp/ab/cd/testblob.
+	chirpRel := filepath.Join("chirp", "ab", "cd", "deadbeef.obj")
+	chirpAbs := filepath.Join(dataDir, chirpRel)
+	if err := os.MkdirAll(filepath.Dir(chirpAbs), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wantPayload := []byte("volumetric-chirp-blob-bytes-for-backup-parity")
+	if err := os.WriteFile(chirpAbs, wantPayload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	archiveBytes, manifest, err := CreateEncryptedArchive(ctx, db, port, dataDir)
+	if err != nil {
+		t.Fatalf("CreateEncryptedArchive: %v", err)
+	}
+	if _, ok := manifest.Files["chirp/ab/cd/deadbeef.obj"]; !ok {
+		t.Fatalf("expected chirp/ab/cd/deadbeef.obj in backup manifest, got %+v", manifest.Files)
+	}
+
+	restoreDir := t.TempDir()
+	if _, err := RestoreArchive(ctx, port.WalletInterface(), archiveBytes, restoreDir); err != nil {
+		t.Fatalf("RestoreArchive: %v", err)
+	}
+	gotPayload, err := os.ReadFile(filepath.Join(restoreDir, chirpRel))
+	if err != nil {
+		t.Fatalf("read restored chirp blob: %v", err)
+	}
+	if string(gotPayload) != string(wantPayload) {
+		t.Fatalf("restored chirp blob mismatch: got %q want %q", string(gotPayload), string(wantPayload))
 	}
 }

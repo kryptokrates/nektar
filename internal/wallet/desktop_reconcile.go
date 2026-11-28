@@ -16,53 +16,41 @@ import (
 	sdkwallet "github.com/bsv-blockchain/go-sdk/wallet"
 	"github.com/lightwebinc/bcommon/guard"
 	"github.com/lightwebinc/bcommon/wirewallet"
+
+	"github.com/kryptokrates/nektar/internal/core"
 )
 
 const maxPendingBRC29PerPass = 10
+
+func (e *Engine) ensureBRC29Backoff() *core.KeyBackoff[int64] {
+	e.closeMu.Lock()
+	if e.brc29Backoff == nil {
+		e.brc29Backoff = core.NewKeyBackoff[int64](512, 30*time.Second, 15*time.Minute)
+	}
+	kb := e.brc29Backoff
+	e.closeMu.Unlock()
+	return kb
+}
 
 func (e *Engine) shouldAttemptBRC29(id int64, now time.Time) bool {
 	if e == nil {
 		return false
 	}
-	e.brc29BackoffMu.Lock()
-	defer e.brc29BackoffMu.Unlock()
-	ent, ok := e.brc29Backoff[id]
-	if !ok {
-		return true
-	}
-	return !now.Before(ent.nextTry)
+	return e.ensureBRC29Backoff().ShouldAttempt(id, now)
 }
 
 func (e *Engine) recordBRC29Backoff(id int64, now time.Time) {
 	if e == nil {
 		return
 	}
-	e.brc29BackoffMu.Lock()
-	defer e.brc29BackoffMu.Unlock()
-	if e.brc29Backoff == nil {
-		e.brc29Backoff = make(map[int64]unfailBackoffEntry)
-	}
-	if len(e.brc29Backoff) > 512 {
-		clear(e.brc29Backoff)
-	}
-	ent := e.brc29Backoff[id]
-	ent.attempts++
-	shift := min(ent.attempts-1, 5)
-	wait := time.Duration(30<<shift) * time.Second
-	if wait > 15*time.Minute {
-		wait = 15 * time.Minute
-	}
-	ent.nextTry = now.Add(wait)
-	e.brc29Backoff[id] = ent
+	e.ensureBRC29Backoff().RecordFailure(id, now)
 }
 
 func (e *Engine) clearBRC29Backoff(id int64) {
 	if e == nil {
 		return
 	}
-	e.brc29BackoffMu.Lock()
-	delete(e.brc29Backoff, id)
-	e.brc29BackoffMu.Unlock()
+	e.ensureBRC29Backoff().Clear(id)
 }
 
 // findFundTxOnWoCByScript queries WhatsOnChain /script/{scriptHash}/unspent/all using the
@@ -98,7 +86,13 @@ func (e *Engine) findFundTxOnWoCByScript(ctx context.Context, lockScriptHex stri
 	}
 	cli := e.cfg.WoC.Client
 	if cli == nil {
-		cli = &http.Client{Timeout: 10 * time.Second}
+		netName := "testnet"
+		if e.cfg.Mainnet {
+			netName = "main"
+		} else if e.cfg.InMemoryStore {
+			netName = "memory"
+		}
+		cli = core.SafeHTTPClientForNetwork(netName, 10*time.Second)
 	}
 	resp, err := cli.Do(req)
 	if err != nil {

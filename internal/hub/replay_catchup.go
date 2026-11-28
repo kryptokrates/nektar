@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -85,14 +86,18 @@ func (n *Node) CatchUpFromPeer(ctx context.Context, peerURL string, maxPages int
 				res.Skipped++
 				continue
 			}
-			if !n.loopGuard.MarkIfUnseen(ev.BEEF, ev.Topic) {
+			if n.loopGuard.Seen(ev.BEEF, ev.Topic) {
 				res.Skipped++
 				continue
 			}
 			if _, sErr := n.submitInternal(ctx, ev.BEEF, []string{ev.Topic}, true); sErr == nil {
 				res.Admitted++
-			} else {
+			} else if errors.Is(sErr, ErrHubRefused) {
+				n.poisonSkipped.Add(1)
+				n.loopGuard.MarkIfUnseen(ev.BEEF, ev.Topic)
 				res.Skipped++
+			} else {
+				return res, fmt.Errorf("catchup %s seq=%d: %w", peer, ev.Seq, sErr)
 			}
 		}
 		if maxSeq <= cursor {

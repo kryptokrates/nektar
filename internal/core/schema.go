@@ -146,13 +146,16 @@ func EncodeTransitionCBOR(tr TransitionRecord) ([]byte, error) {
 	return EncodeCBOR(m)
 }
 
-// DecodeTransitionCBOR strictly decodes and verifies a canonical CBOR TransitionRecord.
+var transitionKnownKeys = KnownKeyRange(0, 11)
+
+// DecodeTransitionCBOR strictly decodes and verifies a canonical CBOR TransitionRecord,
+// enforcing Nektar's critical (even) / non-critical (odd) unknown-key evolution rule.
 func DecodeTransitionCBOR(raw []byte) (TransitionRecord, error) {
 	v, err := DecodeCBOR(raw)
 	if err != nil {
 		return TransitionRecord{}, fmt.Errorf("transition: decode cbor: %w", err)
 	}
-	m, err := CBORMapToUintMap(v)
+	m, _, err := SplitCBORMap(v, transitionKnownKeys)
 	if err != nil {
 		return TransitionRecord{}, fmt.Errorf("transition: %w", err)
 	}
@@ -201,6 +204,34 @@ func DecodeTransitionCBOR(raw []byte) (TransitionRecord, error) {
 		return TransitionRecord{}, errors.New("transition: hash mismatch")
 	}
 	return tr, nil
+}
+
+// VerifyTransitionChain replays an ordered slice of TransitionRecords starting from baseQ
+// (Zero32Bytes() when baseQ is empty), verifying each record's CBOR commitment hash, PrevStateQ
+// continuity, and deterministic NextStepStateQ transition (Paper §2-§3 Merkle Automaton).
+func VerifyTransitionChain(baseQ []byte, records []TransitionRecord) ([]byte, error) {
+	curQ := pad32(baseQ)
+	for i, tr := range records {
+		if len(tr.PrevStateQ) != 32 || !EqualBytes(tr.PrevStateQ, curQ) {
+			return nil, fmt.Errorf("transition[%d] seq=%d: prevStateQ link broken", i, tr.Seq)
+		}
+		wantNextQ, err := NextStepStateQ(tr.PrevStateQ, tr.InputDigest, tr.CommitHash, tr.TreeHash, tr.PolicyHash, tr.OntologyHash, tr.Timestamp)
+		if err != nil {
+			return nil, fmt.Errorf("transition[%d] seq=%d: compute nextQ: %w", i, tr.Seq, err)
+		}
+		if len(tr.NextStateQ) != 32 || !EqualBytes(tr.NextStateQ, wantNextQ) {
+			return nil, fmt.Errorf("transition[%d] seq=%d: nextStateQ mismatch", i, tr.Seq)
+		}
+		wantHash, err := ComputeTransitionHash(tr)
+		if err != nil {
+			return nil, fmt.Errorf("transition[%d] seq=%d: compute hash: %w", i, tr.Seq, err)
+		}
+		if len(tr.Hash) != 32 || !EqualBytes(tr.Hash, wantHash) {
+			return nil, fmt.Errorf("transition[%d] seq=%d: hash mismatch", i, tr.Seq)
+		}
+		curQ = wantNextQ
+	}
+	return curQ, nil
 }
 
 // Fragment is the canonical unit of Nektar verifiable memory: (d, p, H(d|p), E(d)),

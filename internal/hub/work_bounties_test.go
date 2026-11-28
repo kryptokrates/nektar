@@ -149,8 +149,8 @@ func TestHubZeroSatWorkBountiesAndSponsoredBounties(t *testing.T) {
 		TS:            time.Now().Unix(),
 	}
 	bSub.Sig, _ = bstack.SignArtifact(workerKey, bSub.Signable(hdpHex))
-	canon, _ := core.CanonicalJSON(bSub.Signable(hdpHex))
-	oSig, _ := workerKey.Sign(core.SHA256(canon))
+	dig, _ := bSub.Signable(hdpHex).OwnerSigDigest()
+	oSig, _ := workerKey.Sign(dig)
 	bSub.OwnerSig = hex.EncodeToString(oSig.Serialize())
 
 	bBody, _ := json.Marshal(bSub)
@@ -191,8 +191,8 @@ func TestHubZeroSatWorkBountiesAndSponsoredBounties(t *testing.T) {
 		TS:            time.Now().Unix(),
 	}
 	badSub.Sig, _ = bstack.SignArtifact(workerKey, badSub.Signable(badHDP))
-	badCanon, _ := core.CanonicalJSON(badSub.Signable(badHDP))
-	badOSig, _ := workerKey.Sign(core.SHA256(badCanon))
+	badDig, _ := badSub.Signable(badHDP).OwnerSigDigest()
+	badOSig, _ := workerKey.Sign(badDig)
 	badSub.OwnerSig = hex.EncodeToString(badOSig.Serialize())
 	badBody, _ := json.Marshal(badSub)
 	badResp, _ := http.Post(srv.URL+"/bounties/submit", "application/json", bytes.NewReader(badBody))

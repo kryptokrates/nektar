@@ -2,53 +2,75 @@ package market
 
 import (
 	"context"
-	"crypto/sha256"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/transaction"
-	restate "github.com/restatedev/sdk-go"
+	"github.com/cschleiden/go-workflows/workflow"
 )
 
-// restateCustodyReserve serializes ALL spend reservations on key "global" with a sub-ms SQLite transaction
-// inside restate.Run (zero network I/O, idempotent on (OperationID, Attempt) — eliminates rt/key-collision & rt/double-effect).
-func (e *Engine) restateCustodyReserve(ctx restate.ObjectContext, in CustodyReserveInput) (CustodyReserveResult, error) {
+const (
+	txStateKVPrefix       = "tx_state_v1:"
+	anchorCadenceKVPrefix = "anchor_cadence_v1:"
+)
+
+// CustodyReserve serializes spend reservations atomically inside SQLite BEGIN IMMEDIATE (`ReserveSpendAtomic`),
+// enforcing bounded ApprovedCapSats on operator overrides instead of infinite caps (STATE-7).
+func (a *workflowActivities) CustodyReserve(ctx context.Context, in CustodyReserveInput) (CustodyReserveResult, error) {
+	e := a.eng
 	attempt := in.Attempt
 	if attempt <= 0 {
 		attempt = 1
 	}
-	res, err := restate.Run(ctx, func(rctx restate.RunContext) (CustodyReserveResult, error) {
-		if e.mem != nil && e.mem.DB() != nil {
-			_ = SyncPolicyFromDB(e.mem.DB(), e.policy)
+	fj := e.FastJournal()
+	if e.policy != nil {
+		if fj != nil {
+			fj.CachedPolicySync(e.mem.DB(), e.policy)
+		} else if err := e.policy.Refresh(); err != nil {
+			return CustodyReserveResult{}, err
 		}
-		kill, maxDeal, maxDay, _, _, _, _ := e.policy.Snapshot()
-		if kill {
-			return CustodyReserveResult{Approved: false, Reason: "market: operator kill switch is engaged"}, nil
+	}
+	kill, maxDeal, maxDay, _, _, _, _ := e.policy.Snapshot()
+	if kill {
+		return CustodyReserveResult{Approved: false, Reason: "market: operator kill switch is engaged"}, nil
+	}
+	if !in.BypassPolicy {
+		if err := e.policy.CanSpendForDomains(in.SellerPub, in.Domains, 0); err != nil {
+			return CustodyReserveResult{Approved: false, Reason: err.Error()}, nil
 		}
-		if !in.BypassPolicy {
-			if err := e.policy.CanSpendForDomains(in.SellerPub, in.Domains, 0); err != nil {
-				return CustodyReserveResult{Approved: false, Reason: err.Error()}, nil
-			}
-		} else {
-			// Even on operator override, explicitly blocked sellers stay blocked!
-			if err := e.policy.CanSpend(in.SellerPub, 0); err != nil && strings.Contains(err.Error(), "blocked") {
-				return CustodyReserveResult{Approved: false, Reason: err.Error()}, nil
-			}
-			// Explicit operator override bypasses automated deal/day caps while keeping 0 fail-closed otherwise.
-			maxDeal = ^uint64(0)
-			maxDay = ^uint64(0)
+	} else {
+		// Even on operator override, explicitly blocked sellers stay blocked!
+		if err := e.policy.CanSpend(in.SellerPub, 0); err != nil && strings.Contains(err.Error(), "blocked") {
+			return CustodyReserveResult{Approved: false, Reason: err.Error()}, nil
 		}
-		bal, balErr := e.mem.Chain().BalanceChecked(rctx)
+		// STATE-7 fix: bind override ceiling strictly to ApprovedCapSats (never ^uint64(0) infinite!).
+		capBound := in.ApprovedCapSats
+		if capBound == 0 {
+			capBound = in.AmountSats
+		}
+		if capBound > maxDeal {
+			maxDeal = capBound
+		}
+		maxDay += capBound
+	}
+	var bal uint64
+	if fl := e.mem.Chain().FastLane(); fl != nil && fl.AvailableSats() >= in.AmountSats {
+		bal = fl.AvailableSats()
+	} else {
+		var balErr error
+		bal, balErr = e.mem.Chain().BalanceChecked(ctx)
 		if balErr != nil {
-			// Propagate wallet DB/RPC errors retryably rather than masking them as "insufficient balance"!
 			return CustodyReserveResult{}, fmt.Errorf("custody balance check failed: %w", balErr)
 		}
 		if bal < in.AmountSats {
 			return CustodyReserveResult{Approved: false, BalanceSats: bal, Reason: "insufficient balance"}, nil
 		}
-		already, rErr := e.mem.DB().ReserveSpendAtomic(in.OperationID, attempt, in.AmountSats, maxDeal, maxDay)
+	}
+	if fj != nil {
+		already, rErr := fj.ReserveSpendAtomic(in.OperationID, attempt, in.AmountSats, maxDeal, maxDay)
 		if rErr != nil {
 			return CustodyReserveResult{Approved: false, BalanceSats: bal, Reason: rErr.Error()}, nil
 		}
@@ -57,36 +79,34 @@ func (e *Engine) restateCustodyReserve(ctx restate.ObjectContext, in CustodyRese
 			AlreadyReserved: already,
 			BalanceSats:     bal - in.AmountSats,
 		}, nil
-	}, restate.WithName("custody_reserve_atomic"))
-	if err != nil {
-		return CustodyReserveResult{}, err
 	}
-	if res.Approved {
-		restate.Set(ctx, "last_op", fmt.Sprintf("%s#%d", in.OperationID, attempt))
+	already, rErr := e.mem.DB().ReserveSpendAtomic(in.OperationID, attempt, in.AmountSats, maxDeal, maxDay)
+	if rErr != nil {
+		return CustodyReserveResult{Approved: false, BalanceSats: bal, Reason: rErr.Error()}, nil
 	}
-	return res, nil
+	return CustodyReserveResult{
+		Approved:        true,
+		AlreadyReserved: already,
+		BalanceSats:     bal - in.AmountSats,
+	}, nil
 }
 
-func (e *Engine) restateCustodyRelease(ctx restate.ObjectContext, in CustodyReleaseInput) (bool, error) {
+func (a *workflowActivities) CustodyRelease(_ context.Context, in CustodyReleaseInput) (bool, error) {
 	attempt := in.Attempt
 	if attempt <= 0 {
 		attempt = 1
 	}
-	return restate.Run(ctx, func(_ restate.RunContext) (bool, error) {
-		if e.mem == nil || e.mem.DB() == nil {
-			return true, nil
-		}
-		if err := e.mem.DB().ReleaseSpendReservation(in.OperationID, attempt); err != nil {
-			return false, err
-		}
+	if fj := a.eng.FastJournal(); fj != nil {
+		fj.ReleaseSpendReservation(in.OperationID, attempt)
 		return true, nil
-	}, restate.WithName("custody_release_atomic"))
-}
-
-func (e *Engine) restateCustodyBalance(ctx restate.ObjectSharedContext, _ restate.Void) (uint64, error) {
-	return restate.Run(ctx, func(rctx restate.RunContext) (uint64, error) {
-		return e.mem.Chain().BalanceChecked(rctx)
-	}, restate.WithName("custody_balance"))
+	}
+	if a.eng.mem == nil || a.eng.mem.DB() == nil {
+		return true, nil
+	}
+	if err := a.eng.mem.DB().ReleaseSpendReservation(in.OperationID, attempt); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (e *Engine) verifyMerklePathProof(ctx context.Context, txid, mpHex string, enforceDepth bool) (uint32, error) {
@@ -94,19 +114,19 @@ func (e *Engine) verifyMerklePathProof(ctx context.Context, txid, mpHex string, 
 		return 0, nil
 	}
 	if strings.TrimSpace(mpHex) == "" {
-		return 0, restate.TerminalErrorf("nektar: merklePathHex proof is required to confirm/mine tx %s on live networks", txid)
+		return 0, workflow.NewPermanentError(fmt.Errorf("nektar: merklePathHex proof is required to confirm/mine tx %s on live networks", txid))
 	}
 	mp, err := transaction.NewMerklePathFromHex(strings.TrimSpace(mpHex))
 	if err != nil || mp == nil {
-		return 0, restate.TerminalErrorf("nektar: invalid merklePathHex for tx %s: %v", txid, err)
+		return 0, workflow.NewPermanentError(fmt.Errorf("nektar: invalid merklePathHex for tx %s: %v", txid, err))
 	}
 	txHash, err := chainhash.NewHashFromHex(strings.TrimSpace(txid))
 	if err != nil || txHash == nil {
-		return 0, restate.TerminalErrorf("nektar: invalid txid %q: %v", txid, err)
+		return 0, workflow.NewPermanentError(fmt.Errorf("nektar: invalid txid %q: %v", txid, err))
 	}
 	root, err := mp.ComputeRoot(txHash)
 	if err != nil || root == nil {
-		return 0, restate.TerminalErrorf("nektar: BUMP ComputeRoot failed for %s: %v", txid, err)
+		return 0, workflow.NewPermanentError(fmt.Errorf("nektar: BUMP ComputeRoot failed for %s: %v", txid, err))
 	}
 	tracker := e.mem.Chain().Tracker()
 	if tracker == nil {
@@ -117,7 +137,7 @@ func (e *Engine) verifyMerklePathProof(ctx context.Context, txid, mpHex string, 
 		return 0, fmt.Errorf("nektar: header tracker error verifying tx %s: %w", txid, vErr)
 	}
 	if !valid {
-		return 0, restate.TerminalErrorf("nektar: REFUSED-BUMP merkle root invalid at height %d for tx %s", mp.BlockHeight, txid)
+		return 0, workflow.NewPermanentError(fmt.Errorf("nektar: REFUSED-BUMP merkle root invalid at height %d for tx %s", mp.BlockHeight, txid))
 	}
 	if enforceDepth {
 		tip, tErr := tracker.CurrentHeight(ctx)
@@ -155,19 +175,15 @@ func shouldAdvanceTxStatus(cur, next string) bool {
 	if cur == "" {
 		return true
 	}
-	// Revival edge: a previously failed/aborted/reorged tx that actually mined on-chain ALWAYS advances to mined!
 	if next == "mined" {
 		return true
 	}
-	// Reorg edge: a mined tx orphaned by a verified chain reorg rolls back to "reorged" (never stuck permanently mined!).
 	if cur == "mined" && next == "reorged" {
 		return true
 	}
-	// Never regress a mined tx to pre-mined broadcast/mempool!
 	if cur == "mined" {
 		return false
 	}
-	// Terminal failure/abort can overwrite any pre-mined status.
 	if next == "failed" || next == "aborted" {
 		return cur != "failed" && cur != "aborted"
 	}
@@ -189,39 +205,35 @@ func txEventExists(events []TxEventInput, ev TxEventInput) bool {
 	return false
 }
 
-// restateTxEmit enforces content deduplication, verified BUMP proofs on live "mined" transitions,
-// reorg rollback edges, monotonic lifecycle progression, revival-on-mine, and deterministic timestamping.
-func (e *Engine) restateTxEmit(ctx restate.ObjectContext, ev TxEventInput) (TxState, error) {
-	txid := restate.Key(ctx)
-	st, err := restate.Get[TxState](ctx, "tx")
-	if err != nil {
-		return TxState{}, err
+// EmitTxEventLocal records a deduplicated, BUMP-verified monotonic tx lifecycle transition in SQLite KV.
+func (e *Engine) EmitTxEventLocal(ctx context.Context, txid string, ev TxEventInput) (*TxState, error) {
+	txid = strings.TrimSpace(txid)
+	if txid == "" || strings.TrimSpace(ev.Kind) == "" {
+		return nil, errors.New("nektar: txid and event.kind are required")
 	}
-	st.TxID = txid
-	if txEventExists(st.Events, ev) {
-		return st, nil
-	}
-	// On live networks, refuse unverified bare "mined" status strings without a header-verified BUMP!
 	if ev.Kind == "mined" && e.mem != nil && e.mem.Chain() != nil && e.mem.Chain().Network() != "memory" {
-		verifiedHeight, vErr := restate.Run(ctx, func(rctx restate.RunContext) (uint32, error) {
-			return e.verifyMerklePathProof(rctx, txid, ev.MerklePathHex, false)
-		}, restate.WithName("tx_emit_verify_bump"))
+		verifiedHeight, vErr := e.verifyMerklePathProof(ctx, txid, ev.MerklePathHex, false)
 		if vErr != nil {
-			return st, vErr
+			return nil, vErr
 		}
 		if verifiedHeight > 0 {
 			ev.BlockHeight = verifiedHeight
 		}
 	}
-	obsAt := ev.ObservedAt
-	if obsAt == 0 {
-		obsAt, err = restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
-			return time.Now().Unix(), nil
-		}, restate.WithName("tx_emit_timestamp"))
-		if err != nil {
-			return TxState{}, err
-		}
-		ev.ObservedAt = obsAt
+	if ev.ObservedAt == 0 {
+		ev.ObservedAt = time.Now().Unix()
+	}
+
+	e.txStateMu.Lock()
+	defer e.txStateMu.Unlock()
+
+	st := TxState{TxID: txid}
+	if e.mem != nil && e.mem.DB() != nil {
+		_, _ = e.mem.DB().GetJSON(txStateKVPrefix+txid, &st)
+		st.TxID = txid
+	}
+	if txEventExists(st.Events, ev) {
+		return &st, nil
 	}
 	if shouldAdvanceTxStatus(st.Status, ev.Kind) {
 		st.Status = ev.Kind
@@ -233,165 +245,131 @@ func (e *Engine) restateTxEmit(ctx restate.ObjectContext, ev TxEventInput) (TxSt
 		st.BlockHeight = ev.BlockHeight
 	}
 	st.Events = append(st.Events, ev)
-	// Bound event list length to prevent unbounded Restate KV growth on noisy retries.
 	if len(st.Events) > 128 {
 		st.Events = st.Events[len(st.Events)-128:]
 	}
-	st.UpdatedAt = obsAt
-	restate.Set(ctx, "tx", st)
-	return st, nil
-}
-
-func (e *Engine) restateTxState(ctx restate.ObjectSharedContext, _ restate.Void) (TxState, error) {
-	return restate.Get[TxState](ctx, "tx")
-}
-
-type cadenceStepResult struct {
-	NowUnix        int64  `json:"nowUnix"`
-	TxID           string `json:"txid,omitempty"`
-	HasMore        bool   `json:"hasMore"`
-	NextSlot       int64  `json:"nextSlot,omitempty"`
-	DelaySec       int64  `json:"delaySec,omitempty"`
-	DeferredReason string `json:"deferredReason,omitempty"`
-}
-
-// restateAnchorCadenceTrigger checks SQLite unanchored fragments inside restate.Run, anchors at most
-// one batch, emits a content-idempotent Tx/emit event, and self-arms ONLY when work remains using a
-// quantized slot idempotency key (eliminates rt/arm-multiplication & rt/poll-as-mechanism!).
-func (e *Engine) restateAnchorCadenceTrigger(ctx restate.ObjectContext, in AnchorCadenceInput) (AnchorCadenceState, error) {
-	shard := restate.Key(ctx)
-	st, err := restate.Get[AnchorCadenceState](ctx, "cadence")
-	if err != nil {
-		return AnchorCadenceState{}, err
+	st.UpdatedAt = ev.ObservedAt
+	if e.mem != nil && e.mem.DB() != nil {
+		if err := e.mem.DB().SetJSON(txStateKVPrefix+txid, st); err != nil {
+			return nil, err
+		}
 	}
+	return &st, nil
+}
+
+// GetTxStateLocal reads the persisted TxState for txid from SQLite KV.
+func (e *Engine) GetTxStateLocal(txid string) (*TxState, error) {
+	txid = strings.TrimSpace(txid)
+	st := TxState{TxID: txid}
+	if e != nil && e.mem != nil && e.mem.DB() != nil && txid != "" {
+		e.txStateMu.Lock()
+		_, _ = e.mem.DB().GetJSON(txStateKVPrefix+txid, &st)
+		e.txStateMu.Unlock()
+	}
+	return &st, nil
+}
+
+// TriggerAnchorCadenceLocal runs a serialized per-shard unanchored check & batch anchor,
+// persisting status in SQLite KV without external HTTP RPCs.
+func (e *Engine) TriggerAnchorCadenceLocal(ctx context.Context, shard string, intervalSec int64) (*AnchorCadenceState, error) {
+	shard = strings.TrimSpace(shard)
+	if shard == "" {
+		return nil, errors.New("nektar: shard is required")
+	}
+	if e.mem == nil || e.mem.DB() == nil {
+		return &AnchorCadenceState{Shard: shard}, nil
+	}
+
+	e.cadenceMu.Lock()
+	var st AnchorCadenceState
+	_, _ = e.mem.DB().GetJSON(anchorCadenceKVPrefix+shard, &st)
 	st.Shard = shard
+	e.cadenceMu.Unlock()
 
-	step, runErr := restate.Run(ctx, func(rctx restate.RunContext) (cadenceStepResult, error) {
-		now := time.Now().Unix()
-		unanchored, uErr := e.mem.DB().ListUnanchored(shard)
-		if uErr != nil {
-			return cadenceStepResult{}, uErr
+	now := time.Now().Unix()
+	unanchored, uErr := e.mem.DB().ListUnanchored(shard)
+	if uErr != nil {
+		return nil, uErr
+	}
+	if len(unanchored) == 0 {
+		st.LastRunAt = now
+		st.DeferredReason = ""
+		st.NextSlot = 0
+		e.saveAnchorCadenceState(st)
+		return &st, nil
+	}
+	// Enforce real cadence batching after the initial anchor run so high-TPS purchases/writes
+	// never trigger synchronous per-fragment AnchorShard broadcasts inside intervalSec!
+	if intervalSec > 0 && st.LastRunAt > 0 && now < st.LastRunAt+intervalSec {
+		nextSlot := st.LastRunAt + intervalSec
+		if st.NextSlot != nextSlot {
+			st.NextSlot = nextSlot
+			st.DeferredReason = "cadence_window"
+			e.saveAnchorCadenceState(st)
 		}
-		if len(unanchored) == 0 {
-			return cadenceStepResult{NowUnix: now, HasMore: false}, nil
-		}
-		a, aErr := e.mem.AnchorShard(rctx, shard)
-		if aErr != nil {
-			msg := aErr.Error()
-			// Classify deterministic / wallet-empty errors so we don't burn retries on a dry wallet;
-			// transient broadcast/network errors bubble out to Restate's 5-attempt PauseOnMaxAttempts policy.
-			if strings.Contains(msg, "insufficient") || strings.Contains(msg, "spendguard") || strings.Contains(msg, "no spendable") {
-				out := cadenceStepResult{NowUnix: now, HasMore: true, DeferredReason: msg}
-				if in.IntervalSeconds > 0 {
-					out.NextSlot = (now/in.IntervalSeconds + 1) * in.IntervalSeconds
-					out.DelaySec = out.NextSlot - now
-					if out.DelaySec < 1 {
-						out.DelaySec = in.IntervalSeconds
-					}
-				}
-				return out, nil
-			}
-			return cadenceStepResult{}, aErr
-		}
-		txid := ""
-		if a != nil {
-			txid = a.TxID
-		}
-		rem, _ := e.mem.DB().ListUnanchored(shard)
-		out := cadenceStepResult{
-			NowUnix: now,
-			TxID:    txid,
-			HasMore: len(rem) > 0,
-		}
-		if in.IntervalSeconds > 0 && out.HasMore {
-			out.NextSlot = (now/in.IntervalSeconds + 1) * in.IntervalSeconds
-			out.DelaySec = out.NextSlot - now
-			if out.DelaySec < 1 {
-				out.DelaySec = in.IntervalSeconds
-			}
-		}
-		return out, nil
-	}, restate.WithName("anchor_cadence_step"))
-	if runErr != nil {
-		return st, runErr
+		return &st, nil
 	}
 
-	if step.TxID != "" {
-		st.LastTxID = step.TxID
+	a, aErr := e.mem.AnchorShard(ctx, shard)
+	if aErr != nil {
+		msg := aErr.Error()
+		if strings.Contains(msg, "insufficient") || strings.Contains(msg, "spendguard") || strings.Contains(msg, "no spendable") {
+			st.LastRunAt = now
+			st.DeferredReason = msg
+			if intervalSec > 0 {
+				st.NextSlot = (now/intervalSec + 1) * intervalSec
+			}
+			e.saveAnchorCadenceState(st)
+			return &st, nil
+		}
+		return nil, aErr
+	}
+
+	e.cadenceMu.Lock()
+	_, _ = e.mem.DB().GetJSON(anchorCadenceKVPrefix+shard, &st)
+	st.Shard = shard
+	st.LastRunAt = now
+	st.DeferredReason = ""
+	if a != nil && a.TxID != "" {
+		st.LastTxID = a.TxID
 		st.AnchorRuns++
-		restate.ObjectSend(ctx, "Tx", step.TxID, "emit").Send(
-			TxEventInput{Kind: "broadcast", Shard: shard, ObservedAt: step.NowUnix},
-			restate.WithIdempotencyKey("tx:"+step.TxID+":broadcast:0"),
-		)
 	}
-	st.LastRunAt = step.NowUnix
-	st.NextSlot = step.NextSlot
-	st.DeferredReason = step.DeferredReason
-	restate.Set(ctx, "cadence", st)
+	if intervalSec > 0 {
+		if rem, _ := e.mem.DB().ListUnanchored(shard); len(rem) > 0 {
+			st.NextSlot = (now/intervalSec + 1) * intervalSec
+		} else {
+			st.NextSlot = 0
+		}
+	}
+	_ = e.mem.DB().SetJSON(anchorCadenceKVPrefix+shard, st)
+	e.cadenceMu.Unlock()
 
-	if in.IntervalSeconds > 0 && step.HasMore && step.NextSlot > 0 {
-		restate.ObjectSend(ctx, "AnchorCadence", shard, "trigger").Send(
-			in,
-			restate.WithDelay(time.Duration(step.DelaySec)*time.Second),
-			restate.WithIdempotencyKey(fmt.Sprintf("anchor:%s:%d", shard, step.NextSlot)),
-		)
+	if a != nil && a.TxID != "" {
+		_, _ = e.EmitTxEventLocal(ctx, a.TxID, TxEventInput{
+			Kind:       "broadcast",
+			Shard:      shard,
+			ObservedAt: now,
+		})
 	}
-	return st, nil
+	return &st, nil
 }
 
-func (e *Engine) restateAnchorCadenceStatus(ctx restate.ObjectSharedContext, _ restate.Void) (AnchorCadenceState, error) {
-	return restate.Get[AnchorCadenceState](ctx, "cadence")
+func (e *Engine) saveAnchorCadenceState(st AnchorCadenceState) {
+	if e == nil || e.mem == nil || e.mem.DB() == nil || st.Shard == "" {
+		return
+	}
+	e.cadenceMu.Lock()
+	_ = e.mem.DB().SetJSON(anchorCadenceKVPrefix+st.Shard, st)
+	e.cadenceMu.Unlock()
 }
 
-// --- NektarRuntime authenticated ingress gateway to private Tx & AnchorCadence objects ---
-
-func txEventIdemKey(txid string, ev TxEventInput) string {
-	h := sha256.Sum256([]byte(ev.Shard + "|" + ev.Detail))
-	return fmt.Sprintf("tx:%s:%s:%d:%x", txid, ev.Kind, ev.BlockHeight, h[:6])
-}
-
-func (e *Engine) restateRuntimeEmitTx(ctx restate.Context, in RuntimeTxEmitInput) (bool, error) {
-	if err := e.checkInternalAuth(ctx); err != nil {
-		return false, err
+func (e *Engine) GetAnchorCadenceStatusLocal(shard string) (*AnchorCadenceState, error) {
+	shard = strings.TrimSpace(shard)
+	st := AnchorCadenceState{Shard: shard}
+	if e != nil && e.mem != nil && e.mem.DB() != nil && shard != "" {
+		e.cadenceMu.Lock()
+		_, _ = e.mem.DB().GetJSON(anchorCadenceKVPrefix+shard, &st)
+		e.cadenceMu.Unlock()
 	}
-	if strings.TrimSpace(in.TxID) == "" || strings.TrimSpace(in.Event.Kind) == "" {
-		return false, restate.TerminalErrorf("txid and event.kind are required")
-	}
-	restate.ObjectSend(ctx, "Tx", in.TxID, "emit").Send(
-		in.Event,
-		restate.WithIdempotencyKey(txEventIdemKey(in.TxID, in.Event)),
-	)
-	return true, nil
-}
-
-func (e *Engine) restateRuntimeTxState(ctx restate.Context, txid string) (TxState, error) {
-	if err := e.checkInternalAuth(ctx); err != nil {
-		return TxState{}, err
-	}
-	return restate.Object[TxState](ctx, "Tx", txid, "state").Request(restate.Void{})
-}
-
-func (e *Engine) restateRuntimeTriggerAnchor(ctx restate.Context, in RuntimeAnchorTriggerInput) (bool, error) {
-	if err := e.checkInternalAuth(ctx); err != nil {
-		return false, err
-	}
-	if strings.TrimSpace(in.Shard) == "" {
-		return false, restate.TerminalErrorf("shard is required")
-	}
-	var opts []restate.SendOption
-	if in.Slot > 0 {
-		opts = append(opts, restate.WithIdempotencyKey(fmt.Sprintf("anchor:%s:%d", in.Shard, in.Slot)))
-	}
-	restate.ObjectSend(ctx, "AnchorCadence", in.Shard, "trigger").Send(
-		AnchorCadenceInput{IntervalSeconds: in.IntervalSeconds},
-		opts...,
-	)
-	return true, nil
-}
-
-func (e *Engine) restateRuntimeAnchorStatus(ctx restate.Context, shard string) (AnchorCadenceState, error) {
-	if err := e.checkInternalAuth(ctx); err != nil {
-		return AnchorCadenceState{}, err
-	}
-	return restate.Object[AnchorCadenceState](ctx, "AnchorCadence", shard, "status").Request(restate.Void{})
+	return &st, nil
 }

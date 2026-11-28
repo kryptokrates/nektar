@@ -414,3 +414,84 @@ func dockOpenClaw(ocDir, liveURL string, dry, uninstall bool) ApplyResult {
 	}
 	return res
 }
+
+func dockOpenAI(home, exePath, liveURL, tok string, dry, uninstall bool) ApplyResult {
+	envPath := filepath.Join(home, ".nektar", "openai.env")
+	mcpCfgPath := filepath.Join(home, ".nektar", "openai-mcp.json")
+	res := ApplyResult{
+		Client: "openai",
+		Label:  "OpenAI SDK / Responses",
+		Level:  "L1",
+		Files:  []string{envPath, mcpCfgPath},
+	}
+	if uninstall {
+		removedAny := false
+		for _, p := range []string{envPath, mcpCfgPath} {
+			if fileExists(p) {
+				removedAny = true
+				if !dry {
+					if err := os.Remove(p); err != nil {
+						res.Error = err.Error()
+						return res
+					}
+				}
+			}
+		}
+		res.Changed = removedAny
+		if removedAny {
+			res.Notes = append(res.Notes, "removed "+envPath)
+		}
+		return res
+	}
+
+	proxyURL := strings.TrimRight(liveURL, "/") + "/v1/proxy/openai/v1"
+	mcpURL := strings.TrimRight(liveURL, "/") + "/mcp"
+	envBody := fmt.Sprintf("# Source in bash/zsh (`source ~/.nektar/openai.env`) or load via dotenv in Python/TS OpenAI SDKs\nOPENAI_BASE_URL=%q\nNEKTAR_MCP_URL=%q\n", proxyURL, mcpURL)
+	mcpDoc := map[string]any{
+		"mcpServers": map[string]any{
+			"nektar": map[string]any{
+				"command": exePath,
+				"args":    []string{"mcp"},
+			},
+		},
+		"openaiAgentsSDK": map[string]any{
+			"stdio": map[string]any{
+				"command": exePath,
+				"args":    []string{"mcp"},
+			},
+			"streamableHttp": map[string]any{
+				"url": mcpURL,
+			},
+			"l0ProxyBaseUrl": proxyURL,
+		},
+	}
+	if tok != "" && !isLoopbackURL(liveURL) {
+		if sh, ok := mcpDoc["openaiAgentsSDK"].(map[string]any)["streamableHttp"].(map[string]any); ok {
+			sh["headers"] = map[string]string{"Authorization": "Bearer " + tok}
+		}
+	}
+	mcpBytes, _ := json.MarshalIndent(mcpDoc, "", "  ")
+	mcpBytes = append(mcpBytes, '\n')
+
+	oldEnv, errEnv := os.ReadFile(envPath)
+	oldMCP, errMCP := os.ReadFile(mcpCfgPath)
+	envChanged := errEnv != nil || !bytes.Equal(oldEnv, []byte(envBody))
+	mcpChanged := errMCP != nil || !bytes.Equal(oldMCP, mcpBytes)
+	res.Changed = envChanged || mcpChanged
+	if !dry && res.Changed {
+		if envChanged {
+			if err := writeFileAtomic(envPath, []byte(envBody), 0o600); err != nil {
+				res.Error = err.Error()
+				return res
+			}
+		}
+		if mcpChanged {
+			if err := writeFileAtomic(mcpCfgPath, mcpBytes, 0o600); err != nil {
+				res.Error = err.Error()
+				return res
+			}
+		}
+	}
+	res.Notes = append(res.Notes, "proxy env -> "+envPath, "MCP/SDK config -> "+mcpCfgPath)
+	return res
+}

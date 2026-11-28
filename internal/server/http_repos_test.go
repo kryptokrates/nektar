@@ -184,19 +184,23 @@ func TestHTTPReposAuthIsolationAndSecurityRegressions(t *testing.T) {
 		t.Fatalf("create tag failed: %d %s", respTag.StatusCode, bodyTag)
 	}
 
-	// 7. CRIT-02: Forget shreds fragment, mem_objects, mem_commits.message, and CHIRP backing object!
+	// 7. CRIT-02: Append-only Forget shreds fragment, mem_objects (BlobStub), CHIRP backing object,
+	//    appends a signed Tombstone commit, and redacts RepoLog while preserving immutable mem_commits!
 	if err := mem.Forget(ctx, "private-bin", privRem.Seq); err != nil {
 		t.Fatalf("Forget(private-bin): %v", err)
 	}
 	if _, err := bstack.ResolveChirp(objs, privRem.ChirpURL); err == nil {
 		t.Fatal("CRIT-02 REGRESSION: CHIRP backing object was NOT deleted on Forget")
 	}
-	shredCommits, err := db.ListAllMemCommits("private-bin")
-	if err != nil || len(shredCommits) == 0 {
-		t.Fatalf("ListAllMemCommits(private-bin): %v len=%d", err, len(shredCommits))
+	shredCommits, err := mem.RepoLog(ctx, "private-bin", "main", 10)
+	if err != nil || len(shredCommits) < 2 {
+		t.Fatalf("RepoLog(private-bin): %v len=%d", err, len(shredCommits))
 	}
-	if shredCommits[0].Message != "[shredded]" {
-		t.Fatalf("CRIT-02 REGRESSION: commit message was not redacted on Forget, got %q", shredCommits[0].Message)
+	if shredCommits[0].CommitKind != memrepo.CommitKindTombstone {
+		t.Fatalf("expected HEAD commit to be Tombstone after Forget, got kind=%d", shredCommits[0].CommitKind)
+	}
+	if shredCommits[1].Message != "[shredded]" {
+		t.Fatalf("CRIT-02 REGRESSION: RepoLog commit message was not redacted on Forget, got %q", shredCommits[1].Message)
 	}
 
 	// 8. CRIT-08: Seller exports anchored capsule -> Buyer imports into own repo -> imported commits verify AND Buyer can still AnchorShard!

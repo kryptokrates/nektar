@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/memrepo"
 	"github.com/kryptokrates/nektar/internal/policy"
+	"github.com/kryptokrates/nektar/internal/store"
 )
 
 func (s *Service) buildFragmentBlob(
@@ -35,15 +37,9 @@ func (s *Service) buildFragmentBlob(
 			sum := sha256.Sum256(payload)
 			shaHex = hex.EncodeToString(sum[:])
 		}
-		b, err := memrepo.BuildEncryptedBlobWithLattice(relPath, mediaType, int64(len(payload)), shaHex, chirpURL, borgGroup, borgEpoch, latticeEpoch, keyedMeta)
-		if err != nil {
-			return nil, err
-		}
-		b.Level = level
-		b.Class = class
-		return b, nil
+		return memrepo.BuildEncryptedBlobWithMeta(relPath, mediaType, int64(len(payload)), shaHex, chirpURL, borgGroup, borgEpoch, latticeEpoch, keyedMeta, level, class)
 	}
-	b, _, err := memrepo.BuildBlob(s.objects, relPath, mediaType, payload, len(rawBlob) > 0)
+	b, _, err := memrepo.BuildBlobWithMeta(s.objects, relPath, mediaType, payload, len(rawBlob) > 0, level, class)
 	if err != nil {
 		return nil, err
 	}
@@ -55,8 +51,6 @@ func (s *Service) buildFragmentBlob(
 		}
 		b.BlobHash = h
 	}
-	b.Level = level
-	b.Class = class
 	return b, nil
 }
 
@@ -88,14 +82,15 @@ func buildCommittedFragmentMPEWithGraph(shard, hdpHex string, prov core.Provenan
 	return core.BuildMPE(fields)
 }
 
-// Forget shreds local plaintext/ciphertext of (shard, seq) while keeping the anchored commitment.
+// Forget performs append-only cryptographic erasure of (shard, seq): shreds local plaintext/ciphertext/FTS5/CHIRP,
+// replaces the content-addressed blob payload with its hash-preserving BlobStub, and appends a signed tombstone
+// CommitObject + TransitionRecord removing the path from HEAD without mutating any historical commit.
 func (s *Service) Forget(ctx context.Context, shard string, seq int64) error {
 	return s.ForgetAuthorized(ctx, shard, seq, policy.Principal{Type: "Agent", ID: "owner", Level: 100})
 }
 
-// ForgetAuthorized checks shard validity and Cedar write authorization before shredding (shard, seq),
-// including its SQLite fragment/FTS/mem_objects/commit message AND any stored CHIRP objects/public allowlist.
-func (s *Service) ForgetAuthorized(_ context.Context, shard string, seq int64, principal policy.Principal) error {
+// ForgetAuthorized enforces Cedar write authorization and performs strict append-only cryptographic erasure.
+func (s *Service) ForgetAuthorized(ctx context.Context, shard string, seq int64, principal policy.Principal) error {
 	if err := ValidateShardName(shard, false); err != nil {
 		return err
 	}
@@ -126,7 +121,226 @@ func (s *Service) ForgetAuthorized(_ context.Context, shard string, seq int64, p
 			s.RevokePublicChirpHashes(hashes...)
 		}
 	}
-	if err := s.db.ForgetFragment(shard, seq); err != nil {
+
+	now := time.Now().Unix()
+	authorPubHex := s.commitAuthorPubHex(ctx)
+	policyHashHex := ""
+	if pc := s.PolicyCommit(); pc != nil {
+		policyHashHex = pc.Hash
+	}
+	ontologyHashHex := s.OntologyHead()
+
+	err = s.db.RunRepoTx(func(rtx *store.RepoTx) error {
+		// 1. Shred fragment row, FTS5, graph edges, and NMU metadata (never mutating mem_commits!).
+		if err := rtx.ForgetFragmentRow(shard, seq); err != nil {
+			return err
+		}
+
+		// 2. Identify target blob hashes & paths to redact.
+		targetPaths := make(map[string]bool)
+		if rec.Path != "" {
+			targetPaths[rec.Path] = true
+			targetPaths["graph/"+rec.Path+".edges.json"] = true
+		}
+		defaultMD := fmt.Sprintf("facts/%04d.md", seq)
+		defaultTxt := fmt.Sprintf("facts/%d.txt", seq)
+		targetPaths[defaultMD] = true
+		targetPaths[defaultTxt] = true
+		targetPaths["graph/"+defaultMD+".edges.json"] = true
+		targetPaths["graph/"+defaultTxt+".edges.json"] = true
+
+		blobHashes := make(map[string]bool)
+		if rec.BlobHash != "" {
+			blobHashes[rec.BlobHash] = true
+		}
+
+		// Inspect the fragment's original commit tree to catch any sidecar blobs or legacy rows without blob_hash.
+		if rec.CommitHash != "" {
+			if cRow, cErr := rtx.GetMemCommit(rec.CommitHash); cErr == nil && cRow.TreeHash != "" {
+				if origEntries, tErr := loadTreeEntriesTx(rtx, cRow.TreeHash); tErr == nil {
+					for _, e := range origEntries {
+						if targetPaths[e.Path] && e.BlobHash != "" {
+							blobHashes[e.BlobHash] = true
+						}
+					}
+				}
+			}
+		}
+
+		// 3. Replace each affected blob in mem_objects with its hash-preserving BlobStub.
+		for bh := range blobHashes {
+			b, bErr := loadBlobObjectTx(rtx, bh)
+			if bErr != nil || b == nil {
+				continue
+			}
+			stub := b.ToRedactedStub()
+			stub.Forgotten = true
+			stubRaw, eErr := memrepo.EncodeBlobObjectCBOR(stub)
+			if eErr != nil {
+				return fmt.Errorf("memory: encode redacted blob stub %s: %w", bh, eErr)
+			}
+			if err := rtx.ReplaceMemObjectBody(bh, stubRaw); err != nil {
+				return fmt.Errorf("memory: replace redacted blob %s: %w", bh, err)
+			}
+		}
+
+		// 4. Append a signed Tombstone CommitObject + TransitionRecord removing targetPaths from HEAD.
+		var tombstoneCommitHash string
+		if !IsSystemShard(shard) {
+			br, bErr := rtx.GetMemBranch(shard, memrepo.DefaultBranch)
+			if bErr == nil && br.HeadCommit != "" {
+				headRow, hErr := rtx.GetMemCommit(br.HeadCommit)
+				if hErr == nil {
+					headCommit := commitFromRow(headRow)
+					headEntries, tErr := loadTreeEntriesTx(rtx, headCommit.TreeHash)
+					if tErr == nil {
+						kept := make([]memrepo.TreeEntry, 0, len(headEntries))
+						for _, e := range headEntries {
+							if targetPaths[e.Path] || blobHashes[e.BlobHash] {
+								continue
+							}
+							kept = append(kept, e)
+						}
+						newRootTree, bucketTrees, trErr := memrepo.BuildShardedTree(kept)
+						if trErr != nil {
+							return fmt.Errorf("memory: build tombstone tree: %w", trErr)
+						}
+						for _, bt := range bucketTrees {
+							btRaw, eErr := memrepo.EncodeTreeObjectCBOR(bt)
+							if eErr != nil {
+								return eErr
+							}
+							if err := rtx.PutMemObject(bt.TreeHash, "tree", btRaw, now); err != nil {
+								return err
+							}
+						}
+						rootRaw, eErr := memrepo.EncodeTreeObjectCBOR(*newRootTree)
+						if eErr != nil {
+							return eErr
+						}
+						if err := rtx.PutMemObject(newRootTree.TreeHash, "tree", rootRaw, now); err != nil {
+							return err
+						}
+
+						tombstone, finErr := memrepo.FinalizeCommit(memrepo.CommitObject{
+							Version:        1,
+							Repo:           shard,
+							Branch:         memrepo.DefaultBranch,
+							CommitKind:     memrepo.CommitKindTombstone,
+							Parents:        []memrepo.ParentRef{{CommitHash: headCommit.CommitHash, AnchorTxID: headCommit.AnchorTxID}},
+							TreeHash:       newRootTree.TreeHash,
+							AuthorPub:      authorPubHex,
+							ModelID:        s.modelID.Provider + "/" + s.modelID.Release,
+							PolicyCommit:   policyHashHex,
+							OntologyCommit: ontologyHashHex,
+							Message:        fmt.Sprintf("Tombstone forget %s#%d", shard, seq),
+							Timestamp:      now,
+							AnchorN:        -1,
+						}, func(digest []byte) ([]byte, error) {
+							return s.port.SignDigest(ctx, digest)
+						})
+						if finErr != nil {
+							return fmt.Errorf("memory: sign tombstone commit: %w", finErr)
+						}
+						tombstoneCommitHash = tombstone.CommitHash
+						if err := rtx.SaveMemCommit(rowFromCommit(tombstone)); err != nil {
+							return err
+						}
+						if err := rtx.CompareAndSwapMemBranch(store.MemBranchRow{
+							Repo:           shard,
+							Branch:         memrepo.DefaultBranch,
+							HeadCommit:     tombstone.CommitHash,
+							GenesisPub:     br.GenesisPub,
+							GenesisShardID: br.GenesisShardID,
+							UpdatedAt:      now,
+						}, br.HeadCommit); err != nil {
+							return err
+						}
+
+						// Advance Merkle Automaton TransitionRecord (q_i -> q_{i+1}) for the tombstone.
+						nextTrSeq, sErr := rtx.NextTransitionSeq(shard)
+						if sErr != nil {
+							return sErr
+						}
+						prevQHex, qErr := rtx.LatestStateQ(shard)
+						if qErr != nil {
+							return qErr
+						}
+						prevQBytes := core.Zero32Bytes()
+						if prevQHex != "" {
+							if qb, dErr := hex.DecodeString(prevQHex); dErr == nil && len(qb) == 32 {
+								prevQBytes = qb
+							}
+						}
+						tombInput := core.DSHA256(core.Concat(
+							core.TagTombstoneV1,
+							core.Field([]byte(shard)),
+							core.Field([]byte(strconv.FormatInt(seq, 10))),
+							core.Field([]byte(rec.HDP)),
+						))
+						commitHashBytes, _ := hex.DecodeString(tombstone.CommitHash)
+						treeHashBytes, _ := hex.DecodeString(newRootTree.TreeHash)
+						var polBytes, ontBytes []byte
+						if policyHashHex != "" {
+							polBytes, _ = hex.DecodeString(policyHashHex)
+						}
+						if ontologyHashHex != "" {
+							ontBytes, _ = hex.DecodeString(ontologyHashHex)
+						}
+						nextQBytes, qnErr := core.NextStepStateQ(prevQBytes, tombInput, commitHashBytes, treeHashBytes, polBytes, ontBytes, now)
+						if qnErr != nil {
+							return fmt.Errorf("memory: compute tombstone stateQ: %w", qnErr)
+						}
+						trRec := core.TransitionRecord{
+							Version:      1,
+							Shard:        shard,
+							Seq:          nextTrSeq,
+							PrevStateQ:   prevQBytes,
+							InputDigest:  tombInput,
+							NextStateQ:   nextQBytes,
+							CommitHash:   commitHashBytes,
+							TreeHash:     treeHashBytes,
+							PolicyHash:   polBytes,
+							OntologyHash: ontBytes,
+							Timestamp:    now,
+						}
+						trHashBytes, trErr := core.ComputeTransitionHash(trRec)
+						if trErr != nil {
+							return fmt.Errorf("memory: compute tombstone transition hash: %w", trErr)
+						}
+						trRec.Hash = trHashBytes
+						trCBOR, trErr := core.EncodeTransitionCBOR(trRec)
+						if trErr != nil {
+							return fmt.Errorf("memory: encode tombstone transition CBOR: %w", trErr)
+						}
+						if err := rtx.SaveTransition(store.TransitionRow{
+							Shard:        shard,
+							Seq:          nextTrSeq,
+							Hash:         core.ToHex(trHashBytes),
+							PrevQ:        core.ToHex(prevQBytes),
+							NextQ:        core.ToHex(nextQBytes),
+							CommitHash:   tombstone.CommitHash,
+							TreeHash:     newRootTree.TreeHash,
+							PolicyHash:   policyHashHex,
+							OntologyHash: ontologyHashHex,
+							BodyCBOR:     trCBOR,
+							CreatedAt:    now,
+						}); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+
+		for bh := range blobHashes {
+			if err := rtx.MarkBlobRedacted(bh, "forgotten", tombstoneCommitHash, now); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	s.projCacheMu.Lock()

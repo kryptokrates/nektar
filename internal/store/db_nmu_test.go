@@ -40,7 +40,7 @@ func TestStoreNMUStorageAndMultiModeSellListing(t *testing.T) {
 		t.Fatalf("SellListing NMU fields round-trip mismatch: %+v", got)
 	}
 	for _, mode := range []nmu.PricingMode{nmu.ModeSpot, nmu.ModePerQuery, nmu.ModeSubscription} {
-		if !got.SupportsMode(mode) {
+		if !got.SupportsMode(string(mode)) {
 			t.Fatalf("expected multi-mode listing to support %s", mode)
 		}
 	}

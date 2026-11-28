@@ -91,10 +91,25 @@ func TestWatchdogUDPBlockedFallsBackToHTTPDate(t *testing.T) {
 	}))
 	defer ts.Close()
 
+	// Default HTTPClient on "main" must block loopback SSRF (127.0.0.1).
+	wSSRF := NewWatchdog(Config{
+		Network:      "main",
+		NTPServers:   []string{"udp-blocked-1"},
+		HTTPDateURLs: []string{ts.URL},
+		Now:          func() time.Time { return now },
+		NTPProbe: func(_ context.Context, _ string) (time.Duration, error) {
+			return 0, errors.New("i/o timeout")
+		},
+	})
+	if _, err := wSSRF.CheckClockNow(context.Background()); err == nil {
+		t.Fatal("expected default mainnet HTTPClient to block 127.0.0.1 loopback SSRF")
+	}
+
 	w := NewWatchdog(Config{
 		Network:      "main",
 		NTPServers:   []string{"udp-blocked-1", "udp-blocked-2"},
 		HTTPDateURLs: []string{ts.URL},
+		HTTPClient:   ts.Client(),
 		Now:          func() time.Time { return now },
 		NTPProbe: func(_ context.Context, _ string) (time.Duration, error) {
 			return 0, errors.New("i/o timeout")

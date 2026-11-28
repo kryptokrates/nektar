@@ -79,6 +79,126 @@ func (s *Service) BuildRepoGoGitProjection(ctx context.Context, repo string) (
 	return s.BuildRepoGoGitProjectionAuthorized(ctx, repo, ownerPrincipal(), false)
 }
 
+// collectCapsuleDAGObjects loads all trees and blobs referenced by commits while STRICTLY PRESERVING
+// every TreeObject's cryptographic TreeHash (never mutating a committed TreeObject). Any blob that is
+// forgotten, redacted, Borg-disallowed, or Cedar-denied for principal is emitted as a hash-preserving
+// BlobStub (Redacted=true, Inline=nil, KeyedMeta=nil) so VerifyCapsule passes 100% offline.
+func (s *Service) collectCapsuleDAGObjects(
+	repo string,
+	commits []memrepo.CommitObject,
+	principal policy.Principal,
+	disallowBorg bool,
+	collectChirpHashes bool,
+) (map[string]memrepo.TreeObject, map[string]memrepo.BlobObject, [][32]byte) {
+	if principal.ID == "" {
+		principal = ownerPrincipal()
+	}
+	s.mu.RLock()
+	polText := s.policyText
+	s.mu.RUnlock()
+	redactedMap, _ := s.db.ListRedactedBlobs()
+
+	trees := make(map[string]memrepo.TreeObject)
+	blobs := make(map[string]memrepo.BlobObject)
+	var chirpHashes [][32]byte
+
+	for _, c := range commits {
+		if _, seen := trees[c.TreeHash]; seen {
+			continue
+		}
+		rawTr, rawErr := s.loadRawTreeObject(c.TreeHash)
+		if rawErr != nil || rawTr == nil {
+			continue
+		}
+		tr, tErr := s.loadTreeObject(c.TreeHash)
+		if tErr != nil || tr == nil {
+			continue
+		}
+		// Preserve exact committed tree structure (sharded root + bucket subtrees OR flat tree).
+		if len(rawTr.Subtrees) > 0 {
+			allBucketsOK := true
+			loadedBuckets := make(map[string]memrepo.TreeObject, len(rawTr.Subtrees))
+			for _, bh := range rawTr.Subtrees {
+				if _, exists := trees[bh]; exists {
+					continue
+				}
+				bt, bErr := s.loadRawTreeObject(bh)
+				if bErr != nil || bt == nil {
+					allBucketsOK = false
+					break
+				}
+				loadedBuckets[bh] = *bt
+			}
+			if allBucketsOK {
+				for bh, bt := range loadedBuckets {
+					trees[bh] = bt
+				}
+				trees[rawTr.TreeHash] = memrepo.TreeObject{
+					TreeHash: rawTr.TreeHash,
+					Subtrees: rawTr.Subtrees,
+				}
+			} else {
+				trees[tr.TreeHash] = *tr
+			}
+		} else {
+			trees[rawTr.TreeHash] = *rawTr
+		}
+
+		short := c.CommitHash
+		if len(short) > 7 {
+			short = short[:7]
+		}
+		for _, e := range tr.Entries {
+			if _, bSeen := blobs[e.BlobHash]; bSeen {
+				continue
+			}
+			b, bErr := s.loadBlobObject(e.BlobHash)
+			if bErr != nil || b == nil {
+				continue
+			}
+			redact := b.Forgotten || b.Redacted || redactedMap[b.BlobHash]
+			if !redact && disallowBorg && b.BorgGroup != "" {
+				redact = true
+			}
+			if !redact {
+				lvl := e.Level
+				if b.Level > lvl {
+					lvl = b.Level
+				}
+				cls := e.Class
+				if cls == "" {
+					cls = b.Class
+				}
+				if cls == "" {
+					cls = "repo"
+				}
+				dec, err := policy.Authorize(polText, principal, "read", policy.Resource{
+					Type:  "Fragment",
+					ID:    fmt.Sprintf("%s@%s:%s", repo, short, e.Path),
+					Level: int64(lvl),
+					Shard: repo,
+					Class: cls,
+				})
+				if err != nil || !dec.Allow {
+					redact = true
+				}
+			}
+			if redact {
+				stub := b.ToRedactedStub()
+				blobs[b.BlobHash] = stub
+			} else {
+				blobs[b.BlobHash] = *b
+				if collectChirpHashes && b.ChirpURL != "" && !b.Encrypted && !b.Forgotten && !b.Redacted {
+					if hs, cErr := bstack.CollectChirpHashes(s.objects, b.ChirpURL); cErr == nil {
+						chirpHashes = append(chirpHashes, hs...)
+					}
+				}
+			}
+		}
+	}
+	return trees, blobs, chirpHashes
+}
+
 // collectCommitDAGObjects loads and Cedar-filters all trees and blobs referenced by commits,
 // optionally collecting CHIRP object hashes for plaintext blobs.
 func (s *Service) collectCommitDAGObjects(
@@ -95,6 +215,10 @@ func (s *Service) collectCommitDAGObjects(
 		if _, seen := trees[c.TreeHash]; seen {
 			continue
 		}
+		rawTr, rawErr := s.loadRawTreeObject(c.TreeHash)
+		if rawErr != nil || rawTr == nil {
+			continue
+		}
 		tr, tErr := s.loadTreeObject(c.TreeHash)
 		if tErr != nil || tr == nil {
 			continue
@@ -106,7 +230,35 @@ func (s *Service) collectCommitDAGObjects(
 			}
 		}
 		filteredTree, filteredBlobs := s.filterTreeForPrincipal(repo, c.CommitHash, tr, rawBlobs, principal, disallowBorg)
-		trees[tr.TreeHash] = *filteredTree
+		if len(rawTr.Subtrees) > 0 && len(filteredTree.Entries) == len(tr.Entries) {
+			// Unredacted sharded root: emit canonical v2 root + deduplicated bucket subtrees so capsules stay 50x smaller!
+			allBucketsOK := true
+			loadedBuckets := make(map[string]memrepo.TreeObject, len(rawTr.Subtrees))
+			for _, bh := range rawTr.Subtrees {
+				if _, exists := trees[bh]; exists {
+					continue
+				}
+				bt, bErr := s.loadRawTreeObject(bh)
+				if bErr != nil || bt == nil {
+					allBucketsOK = false
+					break
+				}
+				loadedBuckets[bh] = *bt
+			}
+			if allBucketsOK {
+				for bh, bt := range loadedBuckets {
+					trees[bh] = bt
+				}
+				trees[rawTr.TreeHash] = memrepo.TreeObject{
+					TreeHash: rawTr.TreeHash,
+					Subtrees: rawTr.Subtrees,
+				}
+			} else {
+				trees[tr.TreeHash] = *filteredTree
+			}
+		} else {
+			trees[tr.TreeHash] = *filteredTree
+		}
 		for bh, b := range filteredBlobs {
 			if _, bSeen := blobs[bh]; !bSeen {
 				blobs[bh] = b
@@ -190,11 +342,15 @@ func (s *Service) BuildRepoGoGitProjectionAuthorized(ctx context.Context, repo s
 		projBlobs[bh] = b
 	}
 	for th, tr := range trees {
+		flatEntries := tr.Entries
+		if len(tr.Subtrees) > 0 && len(flatEntries) == 0 {
+			flatEntries, _ = memrepo.FlattenTreeFromMap(th, trees)
+		}
 		cp := memrepo.TreeObject{
 			TreeHash: tr.TreeHash,
-			Entries:  make([]memrepo.TreeEntry, len(tr.Entries)),
+			Entries:  make([]memrepo.TreeEntry, len(flatEntries)),
 		}
-		for i, e := range tr.Entries {
+		for i, e := range flatEntries {
 			if decryptedHashes[e.BlobHash] {
 				e.Encrypted = false
 			}
@@ -225,17 +381,20 @@ func (s *Service) BuildRepoGoGitProjectionAuthorized(ctx context.Context, repo s
 		return nil, nil, nil, nil, err
 	}
 
-	s.projCacheMu.Lock()
-	if s.projCache == nil || len(s.projCache) >= 16 {
-		s.projCache = make(map[string]*cachedGoGitProjection, 8)
+	// Never cache projections that hold ephemerally decrypted CLKA plaintext in heap RAM across requests.
+	if len(decryptedHashes) == 0 {
+		s.projCacheMu.Lock()
+		if s.projCache == nil || len(s.projCache) >= 16 {
+			s.projCache = make(map[string]*cachedGoGitProjection, 8)
+		}
+		s.projCache[cacheKey] = &cachedGoGitProjection{
+			proj:    proj,
+			commits: commits,
+			trees:   projTrees,
+			blobs:   projBlobs,
+		}
+		s.projCacheMu.Unlock()
 	}
-	s.projCache[cacheKey] = &cachedGoGitProjection{
-		proj:    proj,
-		commits: commits,
-		trees:   projTrees,
-		blobs:   projBlobs,
-	}
-	s.projCacheMu.Unlock()
 
 	return proj, commits, projTrees, projBlobs, nil
 }

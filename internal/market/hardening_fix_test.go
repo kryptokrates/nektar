@@ -51,26 +51,44 @@ func TestBilateralDealReceiptSaleKeyMatchAndMismatchRejected(t *testing.T) {
 }
 
 func TestStandingOrderInboxPreservesControlEvents(t *testing.T) {
+	ctx := context.Background()
 	_, eng, _ := newTestNodeForEscrow(t, nil)
-	orderID := "so-preserve-ctrl-1"
+	wc, err := eng.StartWorkflows(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("StartWorkflows: %v", err)
+	}
+	defer func() { _ = eng.CloseWorkflows() }()
 
-	eng.enqueueStandingOrderEvent(orderID, standingOrderEvent{Kind: "cancel", Reason: "operator cancel"})
+	orderID := "so-preserve-ctrl-1"
+	if _, err := wc.StartStandingOrderAsync(ctx, orderID, StandingOrderInput{
+		OrderID: orderID,
+		Domains: []string{"ops"},
+		MaxSats: 100,
+		TTL:     time.Hour,
+	}); err != nil {
+		t.Fatalf("StartStandingOrderAsync: %v", err)
+	}
 	for i := 0; i < 70; i++ {
-		eng.enqueueStandingOrderEvent(orderID, standingOrderEvent{
-			Kind:  "offer",
-			Offer: &bstack.OfferAd{OfferID: "off-" + string(rune('a'+i%26)) + "-" + time.Now().Format("150405") + string(rune('0'+i/26))},
+		_, _ = wc.SignalStandingOrderOffer(ctx, orderID, bstack.OfferAd{
+			OfferID:   "off-" + string(rune('a'+i%26)) + "-" + string(rune('0'+i/26)),
+			Domains:   []string{"ops"},
+			PriceSats: 9999,
 		})
 	}
-	drained := eng.drainStandingOrderEvents(orderID)
-	foundCancel := false
-	for _, ev := range drained {
-		if ev.Kind == "cancel" {
-			foundCancel = true
+	if ok, err := wc.CancelStandingOrder(ctx, orderID, "operator cancel"); err != nil || !ok {
+		t.Fatalf("CancelStandingOrder: ok=%v err=%v", ok, err)
+	}
+	var cancelled bool
+	for i := 0; i < 80; i++ {
+		if st, gErr := wc.StandingOrderStatus(ctx, orderID); gErr == nil && st.Status == "cancelled" {
+			cancelled = true
 			break
 		}
+		time.Sleep(25 * time.Millisecond)
 	}
-	if !foundCancel {
-		t.Fatalf("expected cancel control event preserved under 70-offer flood (len=%d)", len(drained))
+	if !cancelled {
+		st, _ := wc.StandingOrderStatus(ctx, orderID)
+		t.Fatalf("expected cancel control signal preserved under 70-offer flood, got %+v", st)
 	}
 }
 
@@ -110,7 +128,7 @@ func TestBboxMessageRejectsMismatchedAudience(t *testing.T) {
 		Aud:          "hub-a.example",
 		Body:         sealed,
 	}
-	sig, err := bstack.SignArtifact(sellerBroker.engine.saleKey, msg.Signable())
+	sig, err := bstack.SignArtifactWithSigner(sellerBroker.engine.signer, msg.Signable())
 	if err != nil {
 		t.Fatalf("SignArtifact: %v", err)
 	}

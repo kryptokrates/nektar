@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/netip"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
@@ -15,27 +18,39 @@ import (
 	"github.com/lightwebinc/bcommon/carrier"
 	"github.com/lightwebinc/bcommon/guard"
 	"github.com/lightwebinc/bcommon/module"
-	"github.com/lightwebinc/bcommon/verify"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 )
 
 // Submit processes a BRC-22 Atomic BEEF submission against requested topics, persists durably with a monotonic seq,
-// notifies lookup services, and pushes numbered SSE events.
+// notifies lookup services, pushes numbered SSE events, and fans out over BRC-223 topic interest lanes.
 func (n *Node) Submit(ctx context.Context, rawBEEF []byte, topics []string) (overlay.Steak, error) {
 	return n.submitInternal(ctx, rawBEEF, topics, false)
 }
 
+func (n *Node) laneLock(topic string) *sync.Mutex {
+	if len(topic) > 0 {
+		last := topic[len(topic)-1]
+		if last >= '0' && last <= '9' {
+			return &n.laneAdmitMu[last-'0']
+		}
+		if last >= 'a' && last <= 'f' {
+			return &n.laneAdmitMu[10+(last-'a')]
+		}
+	}
+	return &n.admitMu
+}
+
 func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []string, isFederation bool) (overlay.Steak, error) {
 	if len(rawBEEF) == 0 {
-		return nil, errors.New("hub: empty BEEF body")
+		return nil, fmt.Errorf("%w: empty BEEF body", ErrHubRefused)
 	}
 	if len(rawBEEF) > 4<<20 {
-		return nil, errors.New("hub: BEEF exceeds 4 MiB limit")
+		return nil, fmt.Errorf("%w: BEEF exceeds 4 MiB limit", ErrHubRefused)
 	}
 	isLive := n.net == "main" || n.net == "testnet"
 	if isLive && n.tracker == nil {
-		return nil, errors.New("hub: witnessed ChainTracker is required on live networks")
+		return nil, fmt.Errorf("%w: witnessed ChainTracker is required on live networks", ErrHubTransient)
 	}
 	allMarketTopics := len(topics) > 0
 	for _, t := range topics {
@@ -48,35 +63,36 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 	_, parsedTx, _, err := guard.ParseBEEF(rawBEEF, guard.DefaultBound)
 	if err == nil && parsedTx != nil {
 		tx = parsedTx
-	} else if !isLive && allMarketTopics && err != nil && strings.Contains(err.Error(), "no inputs") && len(rawBEEF) <= 64<<10 {
-		// Unfunded 0-input OP_FALSE OP_RETURN market carrier transactions allowed ONLY on memory/regtest.
+	} else if (!isLive || os.Getenv("NEKTAR_OFFCHAIN_ADS") == "1") && allMarketTopics && err != nil && strings.Contains(err.Error(), "no inputs") && len(rawBEEF) <= 64<<10 {
+		// Unfunded 0-input OP_FALSE OP_RETURN signed market envelopes (memory/regtest or NEKTAR_OFFCHAIN_ADS=1).
 		t0, tErr := transaction.NewTransactionFromBEEF(rawBEEF)
 		if tErr != nil || t0 == nil || len(t0.Inputs) != 0 || len(t0.Outputs) == 0 || len(t0.Outputs) > 16 {
-			return nil, fmt.Errorf("hub: parse carrier BEEF: %w", err)
+			return nil, fmt.Errorf("%w: parse carrier BEEF: %w", ErrHubRefused, err)
 		}
 		tx = t0
 	} else {
 		if err == nil {
 			err = errors.New("empty BEEF transaction")
 		}
-		return nil, fmt.Errorf("hub: parse BEEF: %w", err)
+		return nil, fmt.Errorf("%w: parse BEEF: %w", ErrHubRefused, err)
 	}
-	// Run overlay SPV verification against witnessed headers BEFORE admitting to any topic manager
-	// (including all 6 mounted Lightweb modules which assume host-engine SPV already ran).
-	if len(tx.Inputs) > 0 && n.tracker != nil {
-		verdict, vErr := verify.Check(ctx, tx, n.tracker)
-		if verdict != verify.Passed {
-			if verdict == verify.Transport {
-				return nil, fmt.Errorf("hub: tracker unavailable: %w", vErr)
-			}
-			return nil, fmt.Errorf("hub: SPV verification refused (%v): %w", verdict, vErr)
-		}
+	// Run overlay-bridge SPV verification against witnessed headers BEFORE admitting to any topic manager
+	// (including all mounted Lightweb modules which assume host-engine SPV already ran).
+	if err := n.verifyBEEFWithSPV(ctx, rawBEEF, tx); err != nil {
+		return nil, err
 	}
 	txid := tx.TxID()
 	beef := transaction.NewBeef()
 	if _, err := beef.MergeTransaction(tx); err != nil {
-		return nil, fmt.Errorf("hub: merge tx into BEEF: %w", err)
+		return nil, fmt.Errorf("%w: merge tx into BEEF: %w", ErrHubRefused, err)
 	}
+
+	n.mu.RLock()
+	lookupsSnap := make([]module.LookupService, 0, len(n.lookups))
+	for _, ls := range n.lookups {
+		lookupsSnap = append(lookupsSnap, ls)
+	}
+	n.mu.RUnlock()
 
 	// Detect mineable kill-switch sweeps (1BSV Paper 011 §3.2 Fig. 9):
 	// A final/mineable transaction spending a carrier's funding outpoint permanently retracts that
@@ -84,7 +100,7 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 	subCtx := module.WithSubmission(ctx, rawBEEF)
 	isMineableTx := isMineableTransaction(tx)
 	if isMineableTx && len(tx.Inputs) > 0 {
-		for _, inp := range tx.Inputs {
+		for vin, inp := range tx.Inputs {
 			if inp == nil || inp.SourceTXID == nil {
 				continue
 			}
@@ -92,13 +108,21 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 			retractedOP, retractedTopic, hadCarrier, sErr := n.store.MarkCarrierFundingSwept(fop, txid.String())
 			if sErr == nil && hadCarrier && retractedOP != "" {
 				if parsedOP, pErr := parseOutpointString(retractedOP); pErr == nil {
-					for _, ls := range n.lookups {
+					for _, ls := range lookupsSnap {
 						if sl, ok := ls.(module.SpendListener); ok {
+							mode := ls.SpendNotificationMode()
+							if mode == "" {
+								mode = module.SpendTxid
+							}
 							_ = sl.OutputSpent(subCtx, &module.OutputSpent{
-								Mode:         module.SpendTxid,
-								Outpoint:     parsedOP,
-								Topic:        retractedTopic,
-								SpendingTxid: txid,
+								Mode:               mode,
+								Outpoint:           parsedOP,
+								Topic:              retractedTopic,
+								SpendingTxid:       txid,
+								InputIndex:         uint32(vin),
+								UnlockingScript:    inp.UnlockingScript,
+								SequenceNumber:     inp.SequenceNumber,
+								SpendingAtomicBEEF: rawBEEF,
 							})
 						}
 					}
@@ -113,11 +137,14 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 		outpointKey string
 		outpoint    transaction.Outpoint
 		topic       string
+		inputIndex  uint32
+		inp         *transaction.TransactionInput
+		isMod       bool
 	}
 	spentByTopic := make(map[string][]uint32)
 	var spentList []spentPrev
 	for idx, inp := range tx.Inputs {
-		if inp.SourceTXID == nil {
+		if inp == nil || inp.SourceTXID == nil {
 			continue
 		}
 		op := transaction.Outpoint{Txid: *inp.SourceTXID, Index: inp.SourceTxOutIndex}
@@ -128,6 +155,20 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 				outpointKey: op.String(),
 				outpoint:    op,
 				topic:       prevTopic,
+				inputIndex:  uint32(idx),
+				inp:         inp,
+			})
+			continue
+		}
+		if modTopic, modSpent, modFound := n.findModuleOutpointTopic(ctx, op); modFound && !modSpent {
+			spentByTopic[modTopic] = append(spentByTopic[modTopic], uint32(idx))
+			spentList = append(spentList, spentPrev{
+				outpointKey: op.String(),
+				outpoint:    op,
+				topic:       modTopic,
+				inputIndex:  uint32(idx),
+				inp:         inp,
+				isMod:       true,
 			})
 		}
 	}
@@ -136,9 +177,6 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 	if tx.MerklePath != nil {
 		blockHeight = int64(tx.MerklePath.BlockHeight)
 	}
-	// Unmineable market carriers carry their funding tree's mined BUMP in ancestor transactions.
-	// Record the maximum mined height across tx and its carried ancestors so HandleReorg evicts
-	// carriers whose funding tree is reorged out.
 	for _, btx := range beef.Transactions {
 		if btx != nil && btx.Transaction != nil && btx.Transaction.MerklePath != nil {
 			if h := int64(btx.Transaction.MerklePath.BlockHeight); h > blockHeight {
@@ -149,25 +187,30 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 	steak := make(overlay.Steak)
 	shouldForwardUp := false
 	var forwardTopics []string
+	var fanoutTopics []string
 	var carrierFundingOP string
 	if !isMineableTx && len(tx.Inputs) == 1 && tx.Inputs[0] != nil && tx.Inputs[0].SourceTXID != nil {
 		carrierFundingOP = transaction.Outpoint{Txid: *tx.Inputs[0].SourceTXID, Index: tx.Inputs[0].SourceTxOutIndex}.String()
 	}
 
 	for _, topic := range topics {
-		tm, ok := n.topics[topic]
+		tm, ok := n.resolveTopicManager(topic)
 		if !ok {
 			continue
 		}
-		inst, err := tm.IdentifyAdmissibleOutputs(subCtx, beef, txid, spentByTopic[topic])
+		tCtx := subCtx
+		if pc, ok := tm.(interface {
+			Precheck(context.Context) context.Context
+		}); ok {
+			tCtx = pc.Precheck(subCtx)
+		}
+		inst, err := tm.IdentifyAdmissibleOutputs(tCtx, beef, txid, spentByTopic[topic])
 		if err != nil {
-			// A pure kill-switch sweep tx has no carrier output to admit; treat ErrNotCarrier cleanly
-			// when it already swept a funding outpoint.
 			if isMineableTx && errors.Is(err, carrier.ErrNotCarrier) {
 				steak[topic] = &overlay.AdmittanceInstructions{}
 				continue
 			}
-			return nil, fmt.Errorf("hub: topic %s: %w", topic, err)
+			return nil, fmt.Errorf("%w: hub: topic %s: %w", ErrHubRefused, topic, err)
 		}
 		var admitted []uint32
 		for _, vout := range inst.OutputsToAdmit {
@@ -186,20 +229,22 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 				}
 			}
 			op := transaction.Outpoint{Txid: *txid, Index: vout}
-			// Paper 011 §6 outpoint journal: one funding output admits at most one carrier forever,
-			// and a swept funding output permanently rejects late/replayed carriers.
-			if isNkt && carrierFundingOP != "" {
-				if cErr := n.store.ClaimCarrierFundingOutpoint(carrierFundingOP, txid.String(), op.String(), topic); cErr != nil {
-					return nil, fmt.Errorf("hub: topic %s: %w", topic, cErr)
-				}
-			}
 			admitted = append(admitted, vout)
 			var seq int64
 			isNew := true
 			nowMs := time.Now().UnixMilli()
 			if isNkt {
-				n.admitMu.Lock()
-				seq, isNew, err = n.store.AppendEvent(StoredEvent{
+				// When Pebble fastEventStore is enabled, AppendEventWithCarrierClaim uses 64-shard
+				// outpoint stripe locking + atomic seq, marketLS has its own lock, and SSE deduplicates
+				// against backlogWatermark — so no per-lane mutex is needed (zero cross-request stall!).
+				var laneMu *sync.Mutex
+				if n.store.fastStore() == nil {
+					laneMu = n.laneLock(topic)
+					laneMu.Lock()
+				}
+				// ARCH-F11 + PERF-5: claim carrier funding outpoint AND append event inside ONE SQLite tx
+				// (or lock-free Pebble WAL group-commit batch when fastStore is enabled)!
+				seq, isNew, err = n.store.AppendEventWithCarrierClaim(StoredEvent{
 					Outpoint:    op.String(),
 					Topic:       topic,
 					TxID:        txid.String(),
@@ -212,32 +257,50 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 					BlockHeight: blockHeight,
 					Exp:         exp,
 					AdmittedAt:  nowMs,
-				})
+				}, carrierFundingOP)
 				if err != nil {
-					n.admitMu.Unlock()
+					if laneMu != nil {
+						laneMu.Unlock()
+					}
+					if errors.Is(err, ErrCarrierRetracted) || errors.Is(err, ErrCarrierFundingReused) {
+						return nil, fmt.Errorf("%w: hub: topic %s: %w", ErrHubRefused, topic, err)
+					}
 					return nil, err
 				}
-				for _, ls := range n.lookups {
-					_ = ls.OutputAdmittedByTopic(subCtx, &module.OutputAdmittedByTopic{
-						Mode:          ls.AdmissionMode(),
+				if n.marketLS != nil {
+					_ = n.marketLS.OutputAdmittedByTopic(subCtx, &module.OutputAdmittedByTopic{
+						Mode:          n.marketLS.AdmissionMode(),
 						Outpoint:      op,
 						Topic:         topic,
 						Satoshis:      out.Satoshis,
 						LockingScript: out.LockingScript,
 						AtomicBEEF:    rawBEEF,
 					})
-				}
-				if n.marketLS != nil {
 					n.marketLS.SetSeq(op.String(), seq)
+				} else {
+					for _, ls := range lookupsSnap {
+						_ = ls.OutputAdmittedByTopic(subCtx, &module.OutputAdmittedByTopic{
+							Mode:          ls.AdmissionMode(),
+							Outpoint:      op,
+							Topic:         topic,
+							Satoshis:      out.Satoshis,
+							LockingScript: out.LockingScript,
+							AtomicBEEF:    rawBEEF,
+						})
+					}
 				}
-				// Paper 008 §5 Loop Guard: track exact (rawBEEF, topic) bytes. A proof-refreshed
-				// BEEF carrying a newly mined BUMP has distinct bytes and passes cleanly to SSE,
-				// Leaf->Spine upstream forwarding, and plane frames.
 				unseenBytes := n.loopGuard.MarkIfUnseen(rawBEEF, topic)
 				if isNew || unseenBytes {
+					fanoutTopics = append(fanoutTopics, topic)
 					if p.Kind == bstack.KindWant || p.Kind == bstack.KindOffer || p.Kind == bstack.KindAnnounce {
 						shouldForwardUp = true
 						forwardTopics = append(forwardTopics, topic)
+					}
+					var buyerPub string
+					if p.Kind == bstack.KindOffer {
+						if so, dErr := bstack.DecodeOfferPayload(p.Body); dErr == nil {
+							buyerPub = so.Offer.BuyerPub
+						}
 					}
 					n.broadcastEvent(bstack.MarketEvent{
 						Seq:        seq,
@@ -247,6 +310,7 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 						AdmittedAt: nowMs,
 						Payload:    p,
 						BEEF:       append([]byte(nil), rawBEEF...),
+						BuyerPub:   buyerPub,
 					}, domains)
 					n.broadcastPlaneFrame(PlaneFrame{
 						FlowSeq: uint64(seq),
@@ -255,9 +319,12 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 						BEEF:    append([]byte(nil), rawBEEF...),
 					})
 				}
-				n.admitMu.Unlock()
+				if laneMu != nil {
+					laneMu.Unlock()
+				}
 			} else {
-				for _, ls := range n.lookups {
+				n.recordModuleOutput(ctx, topic, txid, vout, beef, rawBEEF, inst.AncillaryTxids)
+				for _, ls := range lookupsSnap {
 					_ = ls.OutputAdmittedByTopic(subCtx, &module.OutputAdmittedByTopic{
 						Mode:          ls.AdmissionMode(),
 						Outpoint:      op,
@@ -267,10 +334,21 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 						AtomicBEEF:    rawBEEF,
 					})
 				}
+				if n.loopGuard.MarkIfUnseen(rawBEEF, topic) {
+					fanoutTopics = append(fanoutTopics, topic)
+				}
+			}
+			if bus := n.EventBus(); bus != nil {
+				bus.Publish("hub:admit:"+topic, "admit", op.String())
 			}
 		}
 		inst.OutputsToAdmit = admitted
 		steak[topic] = &inst
+	}
+
+	// Fan out admitted BEEFs over BRC-223 topic interest distributor (O(1) non-blocking copy per interested subscriber).
+	if n.fabricSrv != nil && len(fanoutTopics) > 0 {
+		n.fabricSrv.Fanout(fanoutTopics, rawBEEF, netip.Addr{})
 	}
 
 	// Spine-and-Leaf upstream push: when a Leaf Hub admits a new local market artifact (and
@@ -282,19 +360,25 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 		subFn := n.upstreamSubmitter
 		n.mu.RUnlock()
 		if len(spines) > 0 && subFn != nil {
-			beefCopy := append([]byte(nil), rawBEEF...)
-			topicsCopy := append([]string(nil), forwardTopics...)
-			n.wg.Add(1)
-			go func() {
-				defer n.wg.Done()
-				if n.upstreamSem != nil {
-					select {
-					case n.upstreamSem <- struct{}{}:
-						defer func() { <-n.upstreamSem }()
-					case <-n.stopCh:
-						return
-					}
+			acquired := true
+			if n.upstreamSem != nil {
+				select {
+				case n.upstreamSem <- struct{}{}:
+				case <-n.stopCh:
+					acquired = false
+				case <-time.After(250 * time.Millisecond):
+					acquired = false
 				}
+			}
+			if acquired {
+				beefCopy := append([]byte(nil), rawBEEF...)
+				topicsCopy := append([]string(nil), forwardTopics...)
+				n.wg.Add(1)
+				go func() {
+					defer n.wg.Done()
+					if n.upstreamSem != nil {
+						defer func() { <-n.upstreamSem }()
+					}
 				for _, sp := range spines {
 					for attempt := 0; attempt < 2; attempt++ {
 						upCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -325,20 +409,36 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 						break
 					}
 				}
-			}()
+				}()
+			}
 		}
 	}
 
 	// Mark any previously admitted outpoints spent by this verified transaction and notify SpendListeners.
 	for _, sp := range spentList {
-		if _, found, mErr := n.store.MarkOutpointSpent(sp.outpointKey); mErr == nil && found {
-			for _, ls := range n.lookups {
+		notifySpend := false
+		if sp.isMod {
+			n.markModuleOutpointSpent(ctx, sp.outpoint, sp.topic)
+			notifySpend = true
+		} else if _, found, mErr := n.store.MarkOutpointSpent(sp.outpointKey); mErr == nil && found {
+			notifySpend = true
+		}
+		if notifySpend {
+			for _, ls := range lookupsSnap {
 				if sl, ok := ls.(module.SpendListener); ok {
+					mode := ls.SpendNotificationMode()
+					if mode == "" || mode == module.SpendNone {
+						continue
+					}
 					_ = sl.OutputSpent(subCtx, &module.OutputSpent{
-						Mode:         module.SpendTxid,
-						Outpoint:     sp.outpoint,
-						Topic:        sp.topic,
-						SpendingTxid: txid,
+						Mode:               mode,
+						Outpoint:           sp.outpoint,
+						Topic:              sp.topic,
+						SpendingTxid:       txid,
+						InputIndex:         sp.inputIndex,
+						UnlockingScript:    sp.inp.UnlockingScript,
+						SequenceNumber:     sp.inp.SequenceNumber,
+						SpendingAtomicBEEF: rawBEEF,
 					})
 				}
 			}
@@ -347,16 +447,23 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 	return steak, nil
 }
 
-// Lookup executes a BRC-24 lookup query against a mounted lookup service.
+// Lookup executes a BRC-24 lookup query against a mounted lookup service, hydrating formula answers
+// into AtomicBEEF output-lists when needed.
 func (n *Node) Lookup(ctx context.Context, q *lookup.LookupQuestion) (*lookup.LookupAnswer, error) {
 	if q == nil || q.Service == "" {
 		return nil, errors.New("hub: lookup service name required")
 	}
+	n.mu.RLock()
 	ls, ok := n.lookups[q.Service]
+	n.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("hub: unknown lookup service %q", q.Service)
 	}
-	return ls.Lookup(ctx, q)
+	ans, err := ls.Lookup(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	return n.hydrateLookupFormulas(ctx, ans), nil
 }
 
 // isMineableTransaction reports whether tx could be included in a block before 2100-01-01

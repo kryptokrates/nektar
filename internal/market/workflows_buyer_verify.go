@@ -1,9 +1,11 @@
 package market
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +19,53 @@ import (
 	"github.com/kryptokrates/nektar/internal/reputation"
 	"github.com/kryptokrates/nektar/internal/store"
 )
+
+func (a *workflowActivities) BuyerVerifyAndCommit(
+	ctx context.Context,
+	dealID string,
+	want bstack.WantAd,
+	targetShard string,
+	chosen bstack.OfferAd,
+	paymentTxID string,
+	matchAudit *MatchAudit,
+	sig ClaimSignal,
+) (buyerVerifyResult, error) {
+	return a.eng.buyerVerifyAndCommit(ctx, dealID, want, targetShard, chosen, paymentTxID, matchAudit, sig)
+}
+
+// recoverLateBuyerClaim settles an expired-wait buyer deal whose funds are live on-chain (`PaymentTxID != ""`)
+// when a late seller `reveal_key` or `EscrowGuardian` on-chain key extraction arrives (STATE-3).
+func (e *Engine) recoverLateBuyerClaim(ctx context.Context, existing store.DealRecord, sig ClaimSignal) (bool, error) {
+	if existing.Status == "settled" {
+		return true, nil
+	}
+	var want bstack.WantAd
+	if len(existing.WantJSON) > 0 {
+		_ = json.Unmarshal(existing.WantJSON, &want)
+	}
+	var chosen bstack.OfferAd
+	if len(existing.ChosenOfferJSON) > 0 {
+		_ = json.Unmarshal(existing.ChosenOfferJSON, &chosen)
+	}
+	if chosen.OfferID == "" && len(chosen.SaleOffer) == 0 {
+		return false, fmt.Errorf("market: late claim for deal %s missing persisted ChosenOfferJSON", existing.DealID)
+	}
+	var matchAudit *MatchAudit
+	if len(existing.MatchAuditJSON) > 0 {
+		var ma MatchAudit
+		if json.Unmarshal(existing.MatchAuditJSON, &ma) == nil {
+			matchAudit = &ma
+		}
+	}
+	res, err := e.buyerVerifyAndCommit(ctx, existing.DealID, want, existing.Shard, chosen, existing.PaymentTxID, matchAudit, sig)
+	if err != nil {
+		return false, err
+	}
+	if res.FailedReason != "" {
+		return false, fmt.Errorf("market: late claim verification failed for %s: %s", existing.DealID, res.FailedReason)
+	}
+	return true, nil
+}
 
 func (e *Engine) buyerVerifyAndCommit(
 	rctx context.Context,
@@ -51,11 +100,40 @@ func (e *Engine) buyerVerifyAndCommit(
 		return buyerVerifyResult{NowUnix: now, FailedReason: failReason}, nil
 	}
 	sig.ContentKeyHex = resolvedKeyHex
-	deliveredText = string(plaintext)
+	isCapsuleDelivery := memrepo.IsCapsuleBytes(plaintext) || strings.EqualFold(strings.TrimSpace(chosen.PayloadFormat), "nkt")
+	var verifiedCap *memrepo.MemoryCapsule
+	var verifiedCapRes *memrepo.CapsuleVerifyReport
+	if isCapsuleDelivery {
+		decCap, capVer, cErr := memrepo.VerifyCapsuleStream(rctx, bytes.NewReader(plaintext), memrepo.CapsuleVerifyOpts{
+			Objects:    e.mem.Objects(),
+			Tracker:    e.mem.Chain().Tracker(),
+			MemoryMode: e.mem.Chain().Network() == "memory",
+		})
+		if cErr != nil || capVer == nil || !capVer.OK {
+			reason := "invalid .nkt capsule payload"
+			if cErr != nil {
+				reason = cErr.Error()
+			} else if capVer != nil && capVer.Reason != "" {
+				reason = capVer.Reason
+			}
+			return buyerVerifyResult{NowUnix: now, FailedReason: "delivered .nkt capsule verification failed: " + reason}, nil
+		}
+		verifiedCap = decCap
+		verifiedCapRes = capVer
+		if len(decCap.Fragments) > 0 {
+			deliveredText = string(decCap.Fragments[0].Data)
+		} else {
+			for _, b := range decCap.Blobs {
+				if !b.Redacted && !b.Encrypted && len(b.Inline) > 0 {
+					deliveredText = string(b.Inline)
+					break
+				}
+			}
+		}
+	} else {
+		deliveredText = string(plaintext)
+	}
 
-	// NMU-1 Post-Reveal Grade Verification (anti-stuffing, ontology predicate scoping, bond & expiry check).
-	// On any grade or unit-count mismatch: store plaintext tagged with AchievedGrade + GradeMismatch=true
-	// for auditability, quarantine untrusted edges out of knowledge_edges by default, and slash nektarrep1.*!
 	claimedNMU := offerNMUSpec(chosen)
 	claimedOntID := strings.ToLower(strings.TrimSpace(chosen.OntologyID))
 	if claimedOntID == "" {
@@ -80,13 +158,10 @@ func (e *Engine) buyerVerifyAndCommit(
 			}
 		}
 	}
+	// ARCH-F12 fix: NEVER assume bondVerified=true when BondBEEFHex is missing!
 	bondVerified := false
-	if chosen.BondOutpoint != "" {
-		if chosen.BondBEEFHex != "" && e.mem != nil && e.mem.Chain() != nil {
-			bondVerified = VerifyOfferBondSats(rctx, chosen, e.mem.Chain()) > 0
-		} else {
-			bondVerified = true
-		}
+	if chosen.BondOutpoint != "" && chosen.BondBEEFHex != "" && e.mem != nil && e.mem.Chain() != nil {
+		bondVerified = VerifyOfferBondSats(rctx, chosen, e.mem.Chain()) > 0
 	}
 	ontMismatch := want.OntologyID != "" && chosen.OntologyID != "" && !strings.EqualFold(want.OntologyID, chosen.OntologyID)
 	gradeVer := nmu.VerifyDeliveredGrade(claimedNMU, nmu.DeliveryObservation{
@@ -104,7 +179,8 @@ func (e *Engine) buyerVerifyAndCommit(
 		NowUnix:                now,
 	})
 
-	{
+	fj := e.FastJournal()
+	if fj == nil {
 		dom := "ops"
 		if len(want.Domains) > 0 {
 			dom = want.Domains[0]
@@ -141,27 +217,62 @@ func (e *Engine) buyerVerifyAndCommit(
 			FeedURL:        claimedNMU.FeedURL,
 			AdvisoryNote:   nmu.AdvisoryNMUNote,
 		}
-		if _, rErr := e.mem.Remember(rctx, memory.RememberInput{
-			Shard:           targetShard,
-			Path:            fmt.Sprintf("market/%s-%s-%d.md", dom, shortPub(chosen.Pub), now),
-			MediaType:       "text/markdown",
-			Text:            deliveredText,
-			CommitMessage:   fmt.Sprintf("Market import (%s, %d sats from %s, grade %s)", dom, chosen.PriceSats, shortPub(chosen.Pub), gradeVer.AchievedGrade),
-			ExtraParents:    extraParents,
-			Source:          "market:" + shortPub(chosen.Pub),
-			Class:           "market:" + dom,
-			Ontology:        targetOntology,
-			NMU:             storedNMU,
-			GradeMismatch:   gradeVer.GradeMismatch,
-			QuarantineEdges: gradeVer.QuarantineEdges,
-			Tainted:         true, // F10: purchased external knowledge is ALWAYS marked tainted!
-			AutoAnchor:      e.mem.Chain().Network() == "memory" && e.mem.Chain().BalanceSats() > 1000,
-		}); rErr != nil {
-			return buyerVerifyResult{}, rErr
+		if isCapsuleDelivery {
+			var (
+				impRes *memory.CapsuleImportResult
+				impErr error
+			)
+			if verifiedCap != nil && verifiedCapRes != nil && verifiedCapRes.OK {
+				impRes, impErr = e.mem.ImportVerifiedCapsule(rctx, verifiedCap, verifiedCapRes, targetShard, memrepo.DefaultBranch, true, nil)
+			} else {
+				impRes, impErr = e.mem.ImportCapsuleStream(rctx, bytes.NewReader(plaintext), targetShard, memrepo.DefaultBranch, true, nil, nil)
+			}
+			if impErr != nil {
+				return buyerVerifyResult{}, fmt.Errorf("market: import delivered .nkt capsule into %s: %w", targetShard, impErr)
+			}
+			// Persist NMU-1 post-reveal grade/quarantine metadata on every imported fragment row.
+			if e.mem.DB() != nil && storedNMU != nil {
+				for _, sq := range impRes.ImportedSeqs {
+					_ = e.mem.DB().SaveFragmentNMUMeta(store.FragmentNMUMeta{
+						Shard:          targetShard,
+						Seq:            sq,
+						Grade:          string(storedNMU.Grade),
+						UnitCount:      storedNMU.UnitCount,
+						FreshnessClass: string(storedNMU.FreshnessClass),
+						ValidUntilUnix: storedNMU.ValidUntilUnix,
+						SubjectVersion: storedNMU.SubjectVersion,
+						UsageRights:    string(nmu.EffectiveRights(storedNMU.UsageRights)),
+						GradeMismatch:  gradeVer.GradeMismatch,
+						UpdatedAt:      now,
+					})
+				}
+			}
+			if e.mem.Chain().Network() == "memory" && os.Getenv("NEKTAR_FAST_DEALS") != "1" && e.mem.Chain().BalanceSats() > 1000 && impRes.ImportedFrags > 0 {
+				_, _ = e.mem.AnchorShard(rctx, targetShard)
+			}
+		} else {
+			if _, rErr := e.mem.Remember(rctx, memory.RememberInput{
+				Shard:           targetShard,
+				Path:            fmt.Sprintf("market/%s-%s-%d.md", dom, shortPub(chosen.Pub), now),
+				MediaType:       "text/markdown",
+				Text:            deliveredText,
+				CommitMessage:   fmt.Sprintf("Market import (%s, %d sats from %s, grade %s)", dom, chosen.PriceSats, shortPub(chosen.Pub), gradeVer.AchievedGrade),
+				ExtraParents:    extraParents,
+				Source:          "market:" + shortPub(chosen.Pub),
+				Class:           "market:" + dom,
+				Ontology:        targetOntology,
+				NMU:             storedNMU,
+				GradeMismatch:   gradeVer.GradeMismatch,
+				QuarantineEdges: gradeVer.QuarantineEdges,
+				Tainted:         true, // F10: purchased external knowledge is ALWAYS marked tainted!
+				AutoAnchor:      e.mem.Chain().Network() == "memory" && os.Getenv("NEKTAR_FAST_DEALS") != "1" && e.mem.Chain().BalanceSats() > 1000,
+			}); rErr != nil {
+				return buyerVerifyResult{}, rErr
+			}
 		}
 	}
 
-	if e.mem != nil && e.mem.DB() != nil && chosen.Pub != "" {
+	if fj == nil && e.mem != nil && e.mem.DB() != nil && chosen.Pub != "" {
 		_ = e.mem.DB().RecordReputation(chosen.Pub, true, chosen.PriceSats)
 	}
 	var dealReceipt *DealReceipt
@@ -222,24 +333,66 @@ func (e *Engine) buyerVerifyAndCommit(
 				return buyerVerifyResult{NowUnix: now, FailedReason: "countersign bilateral deal receipt failed: " + sErr.Error()}, nil
 			}
 		} else {
-			if hasSellerReceipt {
+			if hasSellerReceipt && fj == nil {
 				if bvr := VerifyDealReceipt(dr, true); !bvr.OK || !bvr.Bilateral {
 					return buyerVerifyResult{NowUnix: now, FailedReason: "bilateral deal receipt verification failed: " + bvr.Error}, nil
 				}
 			}
 			dealReceipt = &dr
 			dealReceiptJSON, _ = json.Marshal(dr)
-			_, _, _ = CommitDealAudit(rctx, e.mem, dr, false)
+			if fj == nil {
+				_, _, _ = CommitDealAudit(rctx, e.mem, dr, false)
+			}
 		}
 	}
-	if e.mem != nil && e.mem.DB() != nil {
-		_ = FulfillRevealOwed(e.mem.DB(), dealID)
-		// Record token-arbitrage buy economics event (conservative saved-token estimate).
+
+	settledRec := store.DealRecord{
+		DealID:          dealID,
+		Role:            "buyer",
+		Status:          "settled",
+		Shard:           targetShard,
+		DealReceiptJSON: dealReceiptJSON,
+		PaymentTxID:     paymentTxID,
+		ClaimKeyHex:     sig.ContentKeyHex,
+		DeliveredText:   deliveredText,
+		CounterpartyPub: chosen.Pub,
+		PriceSats:       chosen.PriceSats,
+		Error:           "",
+		UpdatedAt:       now,
+	}
+	if fj != nil {
+		// Synchronous group-committed Pebble WAL commit for verified .nkt capsule + settled deal (<1ms, crash-safe);
+		// go-git / SQLite / reputation projection runs on the async background worker.
+		if err := fj.CommitBuyerSettledWAL(asyncBuyerCommitJob{
+			dealID:      dealID,
+			targetShard: targetShard,
+			verifiedCap: verifiedCap,
+			capReport:   verifiedCapRes,
+			plaintext:   plaintext,
+			dealRec:     settledRec,
+			sellerPub:   chosen.Pub,
+			priceSats:   chosen.PriceSats,
+		}); err != nil {
+			return buyerVerifyResult{}, err
+		}
+		e.publishDealEvent(dealID, "settled")
+	} else if e.mem != nil && e.mem.DB() != nil {
+		db := e.mem.DB()
+		// RCA-2 fix: atomically commit settled deal + fulfill reveal_owed/refund_claimable obligations and return any DB error!
+		if err := db.SettleDealAndFulfillObligations(
+			mergeDealOrNew(db, settledRec),
+			[]string{ObligationID(dealID, ObligationRevealOwed), ObligationID(dealID, ObligationRefundClaimable)},
+			nil,
+		); err != nil {
+			return buyerVerifyResult{}, err
+		}
+		e.publishDealEvent(dealID, "settled")
+
 		estSaved := int64(DefaultTokenCounter().CountTokens(deliveredText)) * 8
 		if estSaved < 500 {
 			estSaved = 500
 		}
-		_ = e.mem.DB().RecordEconomicsEvent(store.EconomicsEventRow{
+		_ = db.RecordEconomicsEvent(store.EconomicsEventRow{
 			Kind:        "deal_buy",
 			TokensSaved: estSaved,
 			SatsDelta:   -int64(chosen.PriceSats),
@@ -248,7 +401,6 @@ func (e *Engine) buyerVerifyAndCommit(
 			DealID:      dealID,
 			CreatedAt:   now,
 		})
-		// Automated post-purchase 6D evaluation & bilateral nektarrep1.* attestation emission.
 		if dealReceipt != nil && chosen.Pub != "" {
 			ontID := chosen.OntologyID
 			if ontID == "" {
@@ -272,17 +424,6 @@ func (e *Engine) buyerVerifyAndCommit(
 			_, _ = e.EmitPostDealAttestation(rctx, reputation.RoleBuyerRatesSeller, *dealReceipt, ontID, scores, want.Domains)
 		}
 	}
-	e.persistDealRecord(store.DealRecord{
-		DealID:          dealID,
-		Role:            "buyer",
-		Status:          "settled",
-		Shard:           targetShard,
-		DealReceiptJSON: dealReceiptJSON,
-		PaymentTxID:     paymentTxID,
-		ClaimKeyHex:     sig.ContentKeyHex,
-		DeliveredText:   deliveredText,
-		Error:           "",
-	})
 	if br := e.getBroker(); br != nil {
 		br.notify("deal_settled", map[string]any{"role": "buyer", "dealId": dealID, "txid": paymentTxID, "sats": chosen.PriceSats, "shard": targetShard})
 	}
@@ -305,8 +446,6 @@ func offerNMUSpec(o bstack.OfferAd) nmu.Spec {
 	}
 }
 
-// extractTriplesFromDeliveredText deterministically extracts canonical ground Mangle `triple("s","p","o")`
-// atoms and N-Triples lines embedded in a purchased fragment payload for post-reveal NMU-1 unit auditing.
 func extractTriplesFromDeliveredText(text string) []reasoning.Triple {
 	var out []reasoning.Triple
 	for _, rawLine := range strings.Split(text, "\n") {

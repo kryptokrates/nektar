@@ -14,6 +14,8 @@ import (
 
 	"github.com/beevik/ntp"
 	"github.com/sony/gobreaker/v2"
+
+	"github.com/kryptokrates/nektar/internal/core"
 )
 
 const (
@@ -186,7 +188,7 @@ func NewWatchdog(cfg Config) *Watchdog {
 		cfg.Now = time.Now
 	}
 	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{Timeout: 4 * time.Second}
+		cfg.HTTPClient = core.SafeHTTPClientForNetwork(cfg.Network, 4*time.Second)
 	}
 	if cfg.NTPProbe == nil && strings.ToLower(strings.TrimSpace(cfg.Network)) != "memory" {
 		cfg.NTPProbe = defaultNTPProbe

@@ -13,9 +13,10 @@ import (
 // FuelKeeper maintains go-wallet-toolbox's two-tier StrategyThroughput UTXO hierarchy
 // (default -> reserve -> fuel) completely off the critical path using toolboxwallet.FanOutFuel.
 type FuelKeeper struct {
-	engine *Engine
-	wakeCh chan struct{}
-	mu     sync.Mutex
+	engine    *Engine
+	wakeCh    chan struct{}
+	mu        sync.Mutex
+	lastCheck time.Time
 }
 
 func newFuelKeeper(e *Engine) *FuelKeeper {
@@ -45,13 +46,29 @@ func (f *FuelKeeper) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-f.wakeCh:
+			f.mu.Lock()
+			since := time.Since(f.lastCheck)
+			f.mu.Unlock()
+			if since < 250*time.Millisecond {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(250*time.Millisecond - since):
+				}
+			}
 			if _, err := f.RunOnce(ctx); err != nil && ctx.Err() == nil {
 				f.engine.logf("wallet fuelkeeper: wake refill warning: %v", err)
 			}
+			f.mu.Lock()
+			f.lastCheck = time.Now()
+			f.mu.Unlock()
 		case <-ticker.C:
 			if _, err := f.RunOnce(ctx); err != nil && ctx.Err() == nil {
 				f.engine.logf("wallet fuelkeeper: periodic refill warning: %v", err)
 			}
+			f.mu.Lock()
+			f.lastCheck = time.Now()
+			f.mu.Unlock()
 		}
 	}
 }

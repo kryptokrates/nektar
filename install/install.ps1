@@ -94,10 +94,10 @@ if ($Up) {
 } elseif ($Dock) {
   & $exe dock auto
 } else {
-  Write-Output "`nNext (25 seconds to live docked agents — zero Docker):"
-  Write-Output "  nektar up              # start background daemon + Restate (WSL2) + auto-dock Claude/Codex/Hermes/OpenClaw/Cursor"
-  Write-Output "  nektar up --network main --confirm I_UNDERSTAND   # go live on BSV Mainnet"
-  Write-Output "  nektar earn            # view Hub knowledge bounties & earn BSV sats"
-  Write-Output "  nektar open            # open Dashboard (1-click recall, faucet, policy presets & peers)"
-  Write-Output "  nektar doctor          # check wallet, Restate, policies, peers & cohort health`n"
+  Write-Output "`nNext (25 seconds to live docked agents — zero Docker, zero sidecars):"
+  Write-Output "  nektar up              # start background daemon + auto-dock Claude/Hermes/Codex/Antigravity/Cursor"
+  Write-Output "  nektar up --mainnet --confirm I_UNDERSTAND   # go live on BSV Mainnet"
+  Write-Output "  nektar hub up --auto-ip                      # launch a zero-Docker LightBSV Hub"
+  Write-Output "  nektar open            # open Dashboard (1-click recall, capsules, wallet & Hubs)"
+  Write-Output "  nektar doctor          # check wallet, durable workflows, policies, Hubs & cohort health`n"
 }

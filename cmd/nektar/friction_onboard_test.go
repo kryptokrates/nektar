@@ -189,4 +189,89 @@ func TestOnboardingInstallAndDocsFrictionRatchets(t *testing.T) {
 	if !strings.Contains(string(canary), "~/.nektar/main/KILL") {
 		t.Fatal("docs/MAINNET-CANARY.md must document ~/.nektar/main/KILL for mainnet kill-switch drill")
 	}
+
+	// F-13: Zero-sidecar ratchet — web, installers, AGENTS.md, SKILL.md, README.md, and docs must NEVER
+	// tell users to install or supervise a deleted external `restate-server` sidecar or WSL2 for Restate.
+	deadSidecarMarkers := []string{
+		"restate-server",
+		"restate-up",
+		"NEKTAR_RESTATE_",
+		"WSL2 for Restate",
+		"Restate (WSL2)",
+		"restate:1.8.1",
+	}
+	zeroSidecarDocs := []string{
+		"README.md",
+		"AGENTS.md",
+		"skills/nektar-memory/SKILL.md",
+		"install/install.sh",
+		"install/install.ps1",
+		"site/index.html",
+		"site/llm.txt",
+		"site/llms.txt",
+		"site/docs/index.html",
+		"site/docs/buy-and-sell.html",
+		"site/docs/run-an-agent.html",
+		"site/docs/run-a-hub.html",
+		"docs/DOCKING-AND-HUBS.md",
+		"docs/MANUAL-CLAUDE-CODE.md",
+		"docs/MANUAL-CODEX.md",
+		"docs/JOIN-AGENT.md",
+		"docs/JOIN-MAINNET.md",
+		"docs/MAINNET-CANARY.md",
+		"docs/OPERATIONS.md",
+		"docs/ENVIRONMENT.md",
+		"docs/ADAPTERS.md",
+		"docs/INTEGRATION.md",
+	}
+	for _, rel := range zeroSidecarDocs {
+		raw, rErr := os.ReadFile(filepath.Join(root, rel))
+		if rErr != nil {
+			t.Fatalf("read %s: %v", rel, rErr)
+		}
+		text := string(raw)
+		for _, bad := range deadSidecarMarkers {
+			if strings.Contains(text, bad) {
+				t.Fatalf("%s still contains stale Restate/WSL2 sidecar marker %q", rel, bad)
+			}
+		}
+	}
+
+	// F-14: Dual human + agent onboarding ratchet on site/index.html & site/llm.txt.
+	indexHTML, err := os.ReadFile(filepath.Join(root, "site/index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(indexHTML), "Paste to Agent") || !strings.Contains(string(indexHTML), "https://nektar.run/llm.txt") {
+		t.Fatal("site/index.html must expose the 1-click 'Paste to Agent' setup prompt pointing to llm.txt")
+	}
+	llmTxt, err := os.ReadFile(filepath.Join(root, "site/llm.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"buyCapsule", "sellCapsule", "importCapsule", "nektar hub up", "nektar peers join"} {
+		if !strings.Contains(string(llmTxt), want) {
+			t.Fatalf("site/llm.txt missing zero-friction onboarding verb %q", want)
+		}
+	}
+}
+
+func TestHubUpDefaultsToZeroDockerNativeMode(t *testing.T) {
+	hubDir := t.TempDir()
+	if err := cmdHubUp([]string{"--dir", hubDir, "--network", "testnet", "--dry"}); err != nil {
+		t.Fatalf("cmdHubUp --dry failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(hubDir, "nektar-hub.service")); err != nil {
+		t.Fatalf("expected zero-Docker nektar-hub.service in %s: %v", hubDir, err)
+	}
+	if _, err := os.Stat(filepath.Join(hubDir, "compose.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("expected zero-Docker default NOT to write compose.yaml unless --docker is passed")
+	}
+	envRaw, err := os.ReadFile(filepath.Join(hubDir, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(envRaw), "NEKTAR_UPSTREAM_SPINES=https://testnet.nektar.run/hub") {
+		t.Fatalf("expected automatic upstream Spine peering in .env, got:\n%s", string(envRaw))
+	}
 }

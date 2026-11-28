@@ -44,8 +44,11 @@ func buildSignedWantBEEF(t *testing.T, priv *ec.PrivateKey, wantID string, expMs
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(bstack.SignedWant{Want: want, Sig: sig})
-	recBytes, err := bstack.EncodePayload(bstack.MarketPayload{Kind: bstack.KindWant, Body: body})
+	pWant, err := bstack.NewWantPayload(bstack.SignedWant{Want: want, Sig: sig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recBytes, err := bstack.EncodePayload(pWant)
 	if err != nil {
 		t.Fatal(err)
 	}

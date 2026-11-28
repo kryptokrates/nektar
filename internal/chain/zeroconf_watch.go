@@ -32,7 +32,17 @@ type watchedZeroConf struct {
 	conflict    bool
 }
 
-const maxZeroConfConflicts = 4096
+type watchedExpiry struct {
+	txid    string
+	addedAt time.Time
+}
+
+type conflictExpiry struct {
+	txid       string
+	recordedAt time.Time
+}
+
+const maxZeroConfConflicts = 65536
 
 type zeroConfConflict struct {
 	competingTxID string
@@ -41,20 +51,28 @@ type zeroConfConflict struct {
 
 // ZeroConfWatch tracks aggregate unconfirmed counterparty payment exposure and detects
 // competing input spends (conflict watch) until each tx settles at settleDepth.
+// Uses chronological FIFO queues + height buckets so expiry and block-settlement sweeps run in amortized O(1).
 type ZeroConfWatch struct {
-	mu         sync.Mutex
-	byTxID     map[string]*watchedZeroConf
-	byOutpoint map[string]string           // "txid:vout" -> watching txid
-	conflicts  map[string]zeroConfConflict // conflicted txid -> competing txid + timestamp (TTL-evicted & capped)
-	exposure   uint64
-	defaultTTL time.Duration
+	mu            sync.Mutex
+	byTxID        map[string]*watchedZeroConf
+	byOutpoint    map[string]string           // "txid:vout" -> watching txid
+	byHeight      map[uint32][]string         // minedHeight -> watched txids
+	minMinedH     uint32                      // lowest non-empty key in byHeight (0 if empty)
+	order         []watchedExpiry             // chronological FIFO for O(1) TTL pruning
+	orderHead     int
+	conflicts     map[string]zeroConfConflict // conflicted txid -> competing txid + timestamp
+	conflictOrder []conflictExpiry
+	conflictHead  int
+	exposure      uint64
+	defaultTTL    time.Duration
 }
 
-// NewZeroConfWatch creates a thread-safe 0-conf exposure and conflict tracker.
+// NewZeroConfWatch creates a thread-safe O(1) 0-conf exposure and conflict tracker.
 func NewZeroConfWatch() *ZeroConfWatch {
 	return &ZeroConfWatch{
-		byTxID:     make(map[string]*watchedZeroConf),
-		byOutpoint: make(map[string]string),
+		byTxID:     make(map[string]*watchedZeroConf, 256),
+		byOutpoint: make(map[string]string, 512),
+		byHeight:   make(map[uint32][]string),
 		conflicts:  make(map[string]zeroConfConflict),
 		defaultTTL: 2 * time.Hour,
 	}
@@ -72,7 +90,10 @@ func (w *ZeroConfWatch) CheckAndTrack(txid string, amountSats uint64, inputs []s
 	w.pruneExpiredLocked(now)
 
 	if comp, conflicted := w.conflicts[txid]; conflicted {
-		return fmt.Errorf("%w: tx %s conflicts with %s", ErrConflictDetected, txid, comp.competingTxID)
+		if now.Sub(comp.recordedAt) <= w.defaultTTL {
+			return fmt.Errorf("%w: tx %s conflicts with %s", ErrConflictDetected, txid, comp.competingTxID)
+		}
+		delete(w.conflicts, txid)
 	}
 	if _, already := w.byTxID[txid]; already {
 		return nil
@@ -101,6 +122,7 @@ func (w *ZeroConfWatch) CheckAndTrack(txid string, amountSats uint64, inputs []s
 		addedAt:    now,
 	}
 	w.byTxID[txid] = rec
+	w.order = append(w.order, watchedExpiry{txid: txid, addedAt: now})
 	w.exposure += amountSats
 	for _, op := range inputs {
 		if op != "" {
@@ -130,6 +152,10 @@ func (w *ZeroConfWatch) MarkMined(txid string, height uint32) {
 	defer w.mu.Unlock()
 	if rec := w.byTxID[txid]; rec != nil {
 		rec.minedHeight = height
+		w.byHeight[height] = append(w.byHeight[height], txid)
+		if w.minMinedH == 0 || height < w.minMinedH {
+			w.minMinedH = height
+		}
 	}
 }
 
@@ -140,14 +166,20 @@ func (w *ZeroConfWatch) ClearMinedFrom(forkHeight uint32) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for _, rec := range w.byTxID {
-		if rec.minedHeight >= forkHeight {
-			rec.minedHeight = 0
+	for h, txids := range w.byHeight {
+		if h >= forkHeight {
+			for _, id := range txids {
+				if rec := w.byTxID[id]; rec != nil && rec.minedHeight >= forkHeight {
+					rec.minedHeight = 0
+				}
+			}
+			delete(w.byHeight, h)
 		}
 	}
+	w.recomputeMinMinedLocked()
 }
 
-// SweepSettled evicts any watched tx whose recorded minedHeight has reached settleDepth at tip.
+// SweepSettled evicts any watched tx whose recorded minedHeight has reached settleDepth at tip in amortized O(1).
 func (w *ZeroConfWatch) SweepSettled(tip uint32, settleDepth int) int {
 	if w == nil || tip == 0 {
 		return 0
@@ -157,14 +189,39 @@ func (w *ZeroConfWatch) SweepSettled(tip uint32, settleDepth int) int {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if len(w.byHeight) == 0 || w.minMinedH == 0 {
+		return 0
+	}
+	if tip < uint32(settleDepth-1) {
+		return 0
+	}
+	maxSettledH := tip - uint32(settleDepth-1)
+	if w.minMinedH > maxSettledH {
+		return 0
+	}
 	var evicted int
-	for txid, rec := range w.byTxID {
-		if rec.minedHeight > 0 && tip >= rec.minedHeight && int(tip-rec.minedHeight)+1 >= settleDepth {
-			w.removeLocked(txid)
-			evicted++
+	for h, txids := range w.byHeight {
+		if h <= maxSettledH {
+			for _, id := range txids {
+				if rec := w.byTxID[id]; rec != nil && rec.minedHeight == h {
+					w.removeLocked(id)
+					evicted++
+				}
+			}
+			delete(w.byHeight, h)
 		}
 	}
+	w.recomputeMinMinedLocked()
 	return evicted
+}
+
+func (w *ZeroConfWatch) recomputeMinMinedLocked() {
+	w.minMinedH = 0
+	for h := range w.byHeight {
+		if w.minMinedH == 0 || h < w.minMinedH {
+			w.minMinedH = h
+		}
+	}
 }
 
 // HasConflict reports whether txid has any observed competing spend within TTL.
@@ -172,11 +229,19 @@ func (w *ZeroConfWatch) HasConflict(txid string) bool {
 	if w == nil || txid == "" {
 		return false
 	}
+	now := time.Now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.pruneExpiredLocked(time.Now())
-	_, ok := w.conflicts[txid]
-	return ok
+	w.pruneExpiredLocked(now)
+	c, ok := w.conflicts[txid]
+	if !ok {
+		return false
+	}
+	if now.Sub(c.recordedAt) > w.defaultTTL {
+		delete(w.conflicts, txid)
+		return false
+	}
+	return true
 }
 
 // Exposure returns current aggregate unconfirmed sats and active watched tx count.
@@ -194,31 +259,33 @@ func (w *ZeroConfWatch) recordConflictLocked(txid, competingTxID string, now tim
 	if txid == "" {
 		return
 	}
-	if _, exists := w.conflicts[txid]; !exists && len(w.conflicts) >= maxZeroConfConflicts {
-		w.pruneExpiredConflictsLocked(now)
-		for len(w.conflicts) >= maxZeroConfConflicts {
-			var oldestKey string
-			var oldestTime time.Time
-			for k, v := range w.conflicts {
-				if oldestKey == "" || v.recordedAt.Before(oldestTime) {
-					oldestKey = k
-					oldestTime = v.recordedAt
-				}
-			}
-			if oldestKey == "" {
-				break
-			}
-			delete(w.conflicts, oldestKey)
-		}
+	w.pruneExpiredConflictsLocked(now)
+	for len(w.conflicts) >= maxZeroConfConflicts && w.conflictHead < len(w.conflictOrder) {
+		old := w.conflictOrder[w.conflictHead]
+		w.conflictOrder[w.conflictHead] = conflictExpiry{}
+		w.conflictHead++
+		delete(w.conflicts, old.txid)
 	}
 	w.conflicts[txid] = zeroConfConflict{competingTxID: competingTxID, recordedAt: now}
+	w.conflictOrder = append(w.conflictOrder, conflictExpiry{txid: txid, recordedAt: now})
 }
 
 func (w *ZeroConfWatch) pruneExpiredConflictsLocked(now time.Time) {
-	for txid, c := range w.conflicts {
-		if now.Sub(c.recordedAt) > w.defaultTTL {
-			delete(w.conflicts, txid)
+	for w.conflictHead < len(w.conflictOrder) {
+		head := w.conflictOrder[w.conflictHead]
+		if now.Sub(head.recordedAt) <= w.defaultTTL {
+			break
 		}
+		w.conflictOrder[w.conflictHead] = conflictExpiry{}
+		w.conflictHead++
+		if c, ok := w.conflicts[head.txid]; ok && now.Sub(c.recordedAt) > w.defaultTTL {
+			delete(w.conflicts, head.txid)
+		}
+	}
+	if w.conflictHead > 0 && w.conflictHead*2 >= len(w.conflictOrder) {
+		rem := copy(w.conflictOrder, w.conflictOrder[w.conflictHead:])
+		w.conflictOrder = w.conflictOrder[:rem]
+		w.conflictHead = 0
 	}
 }
 
@@ -248,10 +315,21 @@ func (w *ZeroConfWatch) removeLocked(txid string) {
 }
 
 func (w *ZeroConfWatch) pruneExpiredLocked(now time.Time) {
-	for txid, rec := range w.byTxID {
-		if now.Sub(rec.addedAt) > w.defaultTTL {
-			w.removeLocked(txid)
+	for w.orderHead < len(w.order) {
+		head := w.order[w.orderHead]
+		if now.Sub(head.addedAt) <= w.defaultTTL {
+			break
 		}
+		w.order[w.orderHead] = watchedExpiry{}
+		w.orderHead++
+		if rec, ok := w.byTxID[head.txid]; ok && now.Sub(rec.addedAt) > w.defaultTTL {
+			w.removeLocked(head.txid)
+		}
+	}
+	if w.orderHead > 0 && w.orderHead*2 >= len(w.order) {
+		rem := copy(w.order, w.order[w.orderHead:])
+		w.order = w.order[:rem]
+		w.orderHead = 0
 	}
 	w.pruneExpiredConflictsLocked(now)
 }

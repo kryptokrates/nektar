@@ -15,6 +15,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/store"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 // HandlePurchase validates a buyer's AtomicBEEF payment + BRC-105 replay claim and reveals the BRC-369 content key k + SPV ProofBundle.
@@ -37,9 +38,11 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 			if restored := b.pendingSaleFromRecord(ctx, rec); restored != nil && (restored.ExpiresAt == 0 || restored.ExpiresAt >= nowUnix) {
 				sale = restored
 				ok = true
-				b.mu.Lock()
-				b.pendingSales[req.OfferID] = sale
-				b.mu.Unlock()
+				if !restored.Settled {
+					b.mu.Lock()
+					b.pendingSales[req.OfferID] = sale
+					b.mu.Unlock()
+				}
 			}
 		}
 	}
@@ -64,7 +67,7 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 	if err != nil {
 		return nil, fmt.Errorf("market: decode paymentBeefHex: %w", err)
 	}
-	_, tx, txHash, err := guard.ParseBEEF(beefBytes, guard.DefaultBound)
+	parsedBeef, tx, txHash, err := guard.ParseBEEF(beefBytes, guard.DefaultBound)
 	if err != nil || tx == nil || txHash == nil {
 		if err == nil {
 			err = errors.New("empty payment transaction")
@@ -77,35 +80,66 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 	}
 
 	// Idempotent key re-reveal on buyer retry for the EXACT same payment txid!
-	if existing, gErr := b.mem.DB().GetDeal("sell-" + sale.OfferID); gErr == nil && existing.Status == "settled" {
-		if existing.PaymentTxID == txid {
-			keyHex := b.openKeyAtRest(ctx, existing.ClaimKeyHex)
-			if keyHex == "" {
-				keyHex = hex.EncodeToString(sale.RevealKey[:])
+	fj := b.engine.FastJournal()
+	if fj != nil {
+		if existing, ok := fj.GetDealWAL("sell-" + sale.OfferID); ok {
+			if existing.Status == "settled" {
+				if existing.PaymentTxID == txid {
+					return &PurchaseResponse{
+						OK:            true,
+						Status:        "settled",
+						OfferID:       sale.OfferID,
+						SellerPub:     b.PubHex(),
+						ContentKeyHex: hex.EncodeToString(sale.RevealKey[:]),
+						CiphertextHex: sale.SaleOffer.CiphertextHex,
+						ChirpURL:      sale.ChirpURL,
+						ProofBundle:   sale.ProofBundle,
+					}, nil
+				}
+				return nil, errors.New("market: offer already settled with a different payment txid")
 			}
+			if existing.Status == "payment_pending" && existing.PaymentTxID == txid {
+				return &PurchaseResponse{
+					OK:            true,
+					Status:        "awaiting_confirmation",
+					RequiredDepth: b.mem.Chain().SettleDepth(),
+					OfferID:       sale.OfferID,
+					SellerPub:     b.PubHex(),
+					ChirpURL:      sale.ChirpURL,
+				}, nil
+			}
+		}
+	} else {
+		if existing, gErr := b.mem.DB().GetDeal("sell-" + sale.OfferID); gErr == nil && existing.Status == "settled" {
+			if existing.PaymentTxID == txid {
+				keyHex := b.openKeyAtRest(ctx, existing.ClaimKeyHex)
+				if keyHex == "" {
+					keyHex = hex.EncodeToString(sale.RevealKey[:])
+				}
+				return &PurchaseResponse{
+					OK:            true,
+					Status:        "settled",
+					OfferID:       sale.OfferID,
+					SellerPub:     b.PubHex(),
+					ContentKeyHex: keyHex,
+					CiphertextHex: sale.SaleOffer.CiphertextHex,
+					ChirpURL:      sale.ChirpURL,
+					ProofBundle:   b.refreshPendingSaleProof(ctx, sale),
+				}, nil
+			}
+			return nil, errors.New("market: offer already settled with a different payment txid")
+		}
+		// Idempotent awaiting_confirmation response if buyer retries while payment is pending settleDepth!
+		if existing, gErr := b.mem.DB().GetDeal("sell-" + sale.OfferID); gErr == nil && existing.Status == "payment_pending" && existing.PaymentTxID == txid {
 			return &PurchaseResponse{
 				OK:            true,
-				Status:        "settled",
+				Status:        "awaiting_confirmation",
+				RequiredDepth: b.mem.Chain().SettleDepth(),
 				OfferID:       sale.OfferID,
 				SellerPub:     b.PubHex(),
-				ContentKeyHex: keyHex,
-				CiphertextHex: sale.SaleOffer.CiphertextHex,
 				ChirpURL:      sale.ChirpURL,
-				ProofBundle:   b.refreshPendingSaleProof(ctx, sale),
 			}, nil
 		}
-		return nil, errors.New("market: offer already settled with a different payment txid")
-	}
-	// Idempotent awaiting_confirmation response if buyer retries while payment is pending settleDepth!
-	if existing, gErr := b.mem.DB().GetDeal("sell-" + sale.OfferID); gErr == nil && existing.Status == "payment_pending" && existing.PaymentTxID == txid {
-		return &PurchaseResponse{
-			OK:            true,
-			Status:        "awaiting_confirmation",
-			RequiredDepth: b.mem.Chain().SettleDepth(),
-			OfferID:       sale.OfferID,
-			SellerPub:     b.PubHex(),
-			ChirpURL:      sale.ChirpURL,
-		}, nil
 	}
 
 	isEscrow, isBRC29, paidSats, escrowParams, err := b.verifyPurchasePaymentOutput(ctx, req, sale, tx, nowUnix)
@@ -121,7 +155,7 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 	needsConfirm := false
 	var confirmHeight uint32
 	if b.mem.Chain().Network() != "memory" {
-		ver, vErr := chain.VerifyCounterpartyPaymentBEEF(ctx, beefBytes, b.mem.Chain().Tracker(), chain.PaymentVerifyOpts{
+		ver, vErr := chain.VerifyCounterpartyPaymentParsed(ctx, parsedBeef, tx, b.mem.Chain().Tracker(), chain.PaymentVerifyOpts{
 			ExpectedAmountSats:       sale.SaleOffer.Config.Price,
 			MaxUnconfirmedAncestors:  maxAncestors,
 			ZeroConfMaxSats:          zeroConfMax,
@@ -138,6 +172,7 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		confirmed = ver.SettledAtDepth
 		needsConfirm = ver.NeedsConfirmation
 		confirmHeight = ver.BlockHeight
+		ctx = nwallet.WithPreverifiedTx(ctx, ver.Tx)
 	} else {
 		if tx.MerklePath != nil {
 			confirmed = true
@@ -145,17 +180,31 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		} else if zeroConfMax == 0 || sale.SaleOffer.Config.Price > zeroConfMax {
 			needsConfirm = true
 		}
+		ctx = nwallet.WithPreverifiedTx(ctx, tx)
 	}
 
-	// Atomic cross-interface SQLite payment claim registry (shared with HTTP 402 paywall)!
+	// Atomic cross-interface payment claim registry (64-shard Pebble WAL in fast mode, SQLite otherwise)!
 	inputs := make([]string, 0, len(tx.Inputs))
 	for _, in := range tx.Inputs {
 		if in.SourceTXID != nil {
 			inputs = append(inputs, fmt.Sprintf("%s:%d", in.SourceTXID.String(), in.SourceTxOutIndex))
 		}
 	}
-	if err := b.mem.DB().ClaimPaymentAtomic(txid, inputs); err != nil {
-		return nil, fmt.Errorf("market: payment claim rejected (%w)", err)
+	releaseClaim := func() {
+		if fj != nil {
+			fj.ReleasePaymentClaim(txid, inputs)
+		} else {
+			_ = b.mem.DB().ReleasePaymentClaim(txid)
+		}
+	}
+	if fj != nil {
+		if err := fj.ClaimPaymentAtomic(txid, inputs); err != nil {
+			return nil, fmt.Errorf("market: payment claim rejected (%w)", err)
+		}
+	} else {
+		if err := b.mem.DB().ClaimPaymentAtomic(txid, inputs); err != nil {
+			return nil, fmt.Errorf("market: payment claim rejected (%w)", err)
+		}
 	}
 
 	// On live networks, credit Seller's wallet immediately without double-broadcasting or poisoning SpendGuard:
@@ -165,7 +214,7 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		needRelay := !confirmed && (isEscrow || !isBRC29 || b.mem.Chain().WalletMode() != "embedded")
 		if needRelay {
 			if rErr := b.mem.Chain().RelayExternalTx(ctx, tx); rErr != nil {
-				_ = b.mem.DB().ReleasePaymentClaim(txid)
+				releaseClaim()
 				return nil, fmt.Errorf("market: broadcast buyer payment failed: %w", rErr)
 			}
 		}
@@ -175,7 +224,7 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 				req.DerivationPrefix, req.DerivationSuffix, req.SenderIdentityKey,
 				"market sale "+sale.OfferID, []string{"market", "sale"},
 			); iErr != nil {
-				_ = b.mem.DB().ReleasePaymentClaim(txid)
+				releaseClaim()
 				return nil, fmt.Errorf("market: internalize BRC-29 payment: %w", iErr)
 			}
 		}
@@ -189,7 +238,7 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		buyFee := min(escrowParams.MaxFee, uint64(300))
 		buyTx, bErr := contracts.BuildDisclosureSaleBuyTx(tx, req.OutputIndex, escrowParams, sale.RevealKey[:], buyFee)
 		if bErr != nil {
-			_ = b.mem.DB().ReleasePaymentClaim(txid)
+			releaseClaim()
 			return nil, fmt.Errorf("market: build DisclosureSale.Buy tx: %w", bErr)
 		}
 		// On live networks, ALWAYS broadcast Buy(k) to chain (fail-closed).
@@ -199,7 +248,7 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		if shouldSubmit {
 			cTxID, sErr := b.mem.Chain().SubmitCovenantTx(ctx, buyTx)
 			if sErr != nil {
-				_ = b.mem.DB().ReleasePaymentClaim(txid)
+				releaseClaim()
 				return nil, fmt.Errorf("market: broadcast DisclosureSale.Buy tx: %w", sErr)
 			}
 			claimTxID = cTxID
@@ -272,10 +321,18 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		}, nil
 	}
 
-	freshPB := b.refreshPendingSaleProof(ctx, sale)
-	// Mark settled & persist durable Seller DealRecord!
+	var freshPB *contracts.ProofBundle
+	if fj != nil && sale.ProofBundle != nil {
+		freshPB = sale.ProofBundle
+	} else {
+		freshPB = b.refreshPendingSaleProof(ctx, sale)
+	}
+	// Capture reveal key, mark settled, and evict from pendingSales immediately so RAM and per-buyer
+	// quote slots never saturate across 1,000+ TPS sustained trading.
 	b.mu.Lock()
+	revealKeyHex := hex.EncodeToString(sale.RevealKey[:])
 	sale.Settled = true
+	delete(b.pendingSales, sale.OfferID)
 	b.mu.Unlock()
 	// Build seller-signed third-entry DealReceipt using market saleKey (matching OfferAd.Pub and req.BuyerPub)
 	// so Buyer can countersign bilaterally without mutating BuyerPub or invalidating SellerSig!
@@ -305,48 +362,64 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		}
 	}
 
-	sealedClaimKey, sealErr := b.sealKeyAtRest(ctx, hex.EncodeToString(sale.RevealKey[:]))
-	if sealErr != nil {
-		return nil, sealErr
-	}
-	_ = b.mem.DB().MarkPendingSaleSettled(sale.OfferID)
-	b.engine.persistDealRecord(store.DealRecord{
-		DealID:          "sell-" + sale.OfferID,
-		Role:            "seller",
-		Status:          "settled",
-		Shard:           sale.Shard,
-		DealReceiptJSON: sellerReceiptJSON,
-		PaymentTxID:     txid,
-		PaymentBEEF:     beefBytes,
-		ClaimKeyHex:     sealedClaimKey,
-		ChirpURL:        sale.ChirpURL,
-		CounterpartyPub: req.BuyerPub,
-		PriceSats:       sale.SaleOffer.Config.Price,
-		IsHubSeller:     b.cfg.IsHub,
-		ConfirmHeight:   int64(confirmHeight),
-	})
-	if len(sellerReceiptJSON) > 0 {
-		_ = RecordCountersigOwed(b.mem.DB(), "sell-"+sale.OfferID, req.BuyerPub, txid, sale.SaleOffer.Config.Price, sellerReceiptJSON)
-		if sellerReceipt != nil {
-			_, _, _ = CommitDealAudit(ctx, b.mem, *sellerReceipt, false)
-		}
-	}
-	if !confirmed && txid != "" {
-		_ = RecordProofUpgradeOwed(b.mem.DB(), "sell-"+sale.OfferID, "seller", req.BuyerPub, txid, sale.SaleOffer.Config.Price)
-	}
-	b.notify("deal_settled", map[string]any{"role": "seller", "offerId": sale.OfferID, "txid": txid, "sats": sale.SaleOffer.Config.Price})
-
-	// Notify active Restate SellerDeal workflow + Tx lifecycle journal asynchronously!
-	var mpHex string
-	if tx.MerklePath != nil {
-		mpHex = tx.MerklePath.Hex()
-	}
-	if rc := b.RestateClient(); rc != nil {
-		oid, tid, sh, mp, sats, conf, bh := sale.OfferID, txid, sale.Shard, mpHex, paidSats, confirmed, confirmHeight
-		b.spawnTracked(10*time.Second, func(sCtx context.Context) {
-			_, _ = rc.DeliverSellerPaymentAsync(sCtx, oid, PaymentSignal{TxID: tid, AmountSats: sats, Confirmed: conf, BlockHeight: bh, MerklePathHex: mp})
-			_, _ = rc.EmitTxEvent(sCtx, tid, TxEventInput{Kind: "broadcast", Shard: sh, Detail: "seller-sale:" + oid})
+	if fj != nil {
+		_ = fj.SaveDealWAL(store.DealRecord{
+			DealID:          "sell-" + sale.OfferID,
+			Role:            "seller",
+			Status:          "settled",
+			Shard:           sale.Shard,
+			DealReceiptJSON: sellerReceiptJSON,
+			PaymentTxID:     txid,
+			ChirpURL:        sale.ChirpURL,
+			CounterpartyPub: req.BuyerPub,
+			PriceSats:       sale.SaleOffer.Config.Price,
+			IsHubSeller:     b.cfg.IsHub,
+			ConfirmHeight:   int64(confirmHeight),
+			UpdatedAt:       time.Now().Unix(),
 		})
+	} else {
+		sealedClaimKey, sealErr := b.sealKeyAtRest(ctx, revealKeyHex)
+		if sealErr != nil {
+			return nil, sealErr
+		}
+		_ = b.mem.DB().MarkPendingSaleSettled(sale.OfferID)
+		b.engine.persistDealRecord(store.DealRecord{
+			DealID:          "sell-" + sale.OfferID,
+			Role:            "seller",
+			Status:          "settled",
+			Shard:           sale.Shard,
+			DealReceiptJSON: sellerReceiptJSON,
+			PaymentTxID:     txid,
+			PaymentBEEF:     beefBytes,
+			ClaimKeyHex:     sealedClaimKey,
+			ChirpURL:        sale.ChirpURL,
+			CounterpartyPub: req.BuyerPub,
+			PriceSats:       sale.SaleOffer.Config.Price,
+			IsHubSeller:     b.cfg.IsHub,
+			ConfirmHeight:   int64(confirmHeight),
+		})
+		if len(sellerReceiptJSON) > 0 {
+			_ = RecordCountersigOwed(b.mem.DB(), "sell-"+sale.OfferID, req.BuyerPub, txid, sale.SaleOffer.Config.Price, sellerReceiptJSON)
+			if sellerReceipt != nil {
+				_, _, _ = CommitDealAudit(ctx, b.mem, *sellerReceipt, false)
+			}
+		}
+		if !confirmed && txid != "" {
+			_ = RecordProofUpgradeOwed(b.mem.DB(), "sell-"+sale.OfferID, "seller", req.BuyerPub, txid, sale.SaleOffer.Config.Price)
+		}
+		b.notify("deal_settled", map[string]any{"role": "seller", "offerId": sale.OfferID, "txid": txid, "sats": sale.SaleOffer.Config.Price})
+
+		var mpHex string
+		if tx.MerklePath != nil {
+			mpHex = tx.MerklePath.Hex()
+		}
+		if rc := b.RestateClient(); rc != nil {
+			oid, tid, sh, mp, sats, conf, bh := sale.OfferID, txid, sale.Shard, mpHex, paidSats, confirmed, confirmHeight
+			b.spawnTracked(10*time.Second, func(sCtx context.Context) {
+				_, _ = rc.DeliverSellerPaymentAsync(sCtx, oid, PaymentSignal{TxID: tid, AmountSats: sats, Confirmed: conf, BlockHeight: bh, MerklePathHex: mp})
+				_, _ = rc.EmitTxEvent(sCtx, tid, TxEventInput{Kind: "broadcast", Shard: sh, Detail: "seller-sale:" + oid})
+			})
+		}
 	}
 
 	return &PurchaseResponse{
@@ -354,7 +427,7 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 		Status:         "settled",
 		OfferID:        sale.OfferID,
 		SellerPub:      b.PubHex(),
-		ContentKeyHex:  hex.EncodeToString(sale.RevealKey[:]),
+		ContentKeyHex:  revealKeyHex,
 		ClaimTxID:      claimTxID,
 		ClaimTxBEEFHex: claimTxBEEFHex,
 		CiphertextHex:  sale.SaleOffer.CiphertextHex,

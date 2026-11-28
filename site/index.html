@@ -434,6 +434,7 @@
             <h3>Install Nektar</h3>
             <span class="ccta" id="inst-cta">Copy install command ›</span>
             <div class="os-switch" onclick="event.stopPropagation()">
+              <button id="os-agent" type="button" title="Paste into Claude Code, Hermes, Codex, or Antigravity">Paste to Agent</button>
               <button id="os-unix" type="button">Mac / Linux</button>
               <button id="os-win" type="button">Windows</button>
             </div>
@@ -451,7 +452,7 @@
           </div>
           <div class="cbody">
             <h3>Connect Your AI</h3>
-            <span class="ccta">Claude · Cursor · Codex · OpenClaw ›</span>
+            <span class="ccta">Claude · Hermes · Codex · OpenAI · Antigravity ›</span>
           </div>
         </a>
       </section>
@@ -478,16 +479,21 @@
 
     <script>
       const CMDS = {
+        agent: 'Read https://nektar.run/llm.txt, install Nektar in zero-Docker mode, dock my AI tools, and verify my first receipt and memory capsule.',
         unix: 'curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up',
         win: '& ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up'
       }
       let os = /Win/i.test(navigator.platform || navigator.userAgent) ? 'win' : 'unix'
+      const btnAgent = document.getElementById('os-agent')
       const btnUnix = document.getElementById('os-unix')
       const btnWin = document.getElementById('os-win')
       const instCta = document.getElementById('inst-cta')
       const toastEl = document.getElementById('toast')
       let toastT = null
 
+      function defaultCtaLabel() {
+        return os === 'agent' ? 'Copy prompt for Claude / Hermes / Codex ›' : 'Copy install command ›'
+      }
       function showToast(msg) {
         toastEl.textContent = msg
         toastEl.classList.add('show')
@@ -495,20 +501,23 @@
         toastT = setTimeout(() => toastEl.classList.remove('show'), 2200)
       }
       function syncOs() {
+        btnAgent.classList.toggle('on', os === 'agent')
         btnUnix.classList.toggle('on', os === 'unix')
         btnWin.classList.toggle('on', os === 'win')
+        instCta.textContent = defaultCtaLabel()
       }
+      btnAgent.onclick = () => { os = 'agent'; syncOs(); copyInstall() }
       btnUnix.onclick = () => { os = 'unix'; syncOs(); copyInstall() }
       btnWin.onclick = () => { os = 'win'; syncOs(); copyInstall() }
       syncOs()
 
       async function copyInstall() {
         await navigator.clipboard.writeText(CMDS[os]).catch(() => {})
-        instCta.textContent = 'Copied! Paste in terminal ✓'
+        instCta.textContent = os === 'agent' ? 'Copied! Paste into your AI agent ✓' : 'Copied! Paste in terminal ✓'
         instCta.classList.add('ok')
-        showToast(os === 'win' ? 'Copied PowerShell install command ✓' : 'Copied install command ✓')
+        showToast(os === 'agent' ? 'Copied zero-touch agent setup prompt ✓' : (os === 'win' ? 'Copied PowerShell install command ✓' : 'Copied install command ✓'))
         setTimeout(() => {
-          instCta.textContent = 'Copy install command ›'
+          instCta.textContent = defaultCtaLabel()
           instCta.classList.remove('ok')
         }, 2000)
       }

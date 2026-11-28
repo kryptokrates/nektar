@@ -3,7 +3,6 @@ package e2e
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -17,6 +16,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/store"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 // TestSixHubBRC149RelayReplayAndFundingTreeE2E verifies the full 1BSV / Lightweb Hub-to-Hub
@@ -85,7 +85,7 @@ func TestSixHubBRC149RelayReplayAndFundingTreeE2E(t *testing.T) {
 
 	priv, _ := ec.NewPrivateKey()
 	pubHex := hex.EncodeToString(priv.PubKey().Compressed())
-	treeMgr := discovery.NewCarrierTreeManager(pubPort, pubDB, priv)
+	treeMgr := discovery.NewCarrierTreeManager(pubPort, pubDB, nwallet.NewMarketSigner(priv))
 
 	topic := bstack.LaneOf("memory", "travel")
 	var firstFundingTreeTxID string
@@ -102,8 +102,11 @@ func TestSixHubBRC149RelayReplayAndFundingTreeE2E(t *testing.T) {
 			Exp:      time.Now().Add(time.Hour).UnixMilli(),
 		}
 		sig, _ := bstack.SignArtifact(priv, w)
-		body, _ := json.Marshal(bstack.SignedWant{Want: w, Sig: sig})
-		beef, fop, _, mErr := treeMgr.MintCarrier(ctx, bstack.MarketPayload{Kind: bstack.KindWant, Body: body})
+		payload, pErr := bstack.NewWantPayload(bstack.SignedWant{Want: w, Sig: sig})
+		if pErr != nil {
+			t.Fatalf("NewWantPayload #%d: %v", i, pErr)
+		}
+		beef, fop, _, mErr := treeMgr.MintCarrier(ctx, payload)
 		if mErr != nil {
 			t.Fatalf("MintCarrier #%d: %v", i, mErr)
 		}

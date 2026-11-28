@@ -19,7 +19,7 @@ Every gate below is either **executable** (verified by a command you run and rec
 | **E5** | Dual-witness & SPV hardening | `go test -race -v ./internal/chain/... ./internal/contracts/...` | REFUSED-BUMP foreign-chain rejection, tracker-outage 503 separation, and offline SPV verification pass |
 | **E6** | Kill-switch drill | `POST /v1/automation/kill {"enabled":true}` or `touch ~/.nektar/main/KILL` (or global `touch ~/.nektar/KILL`) | New market trades refused immediately; SpendGuard caps remain enforced |
 | **E7** | Backup & restore drill | Copy `~/.nektar/main` (`nektar.sqlite`, `wallet/`, tokens) to a fresh host and boot `nektar serve --network main --confirm I_UNDERSTAND` | Node resumes with identical `identityPub`, balance, shards, and re-announces |
-| **E8** | Restate v1.8.1 durable plane | `nektar restate-up` (or Compose/Helm `restate:1.8.1` sidecar) + `NEKTAR_RESTATE_REQUIRED=1` | `nektar doctor` shows `restate` **GREEN** (`nektar_restate_attached 1`) |
+| **E8** | Embedded durable workflows | `nektar up --mainnet --confirm I_UNDERSTAND` | `nektar doctor` shows `workflows` **GREEN** (`embedded pure-Go go-workflows SQLite WAL active`) |
 | **E9** | Custody separation | Personal machine: `nektar up --network main --confirm I_UNDERSTAND --wallet client` (BSV Desktop on `:3321`, zero spending keys in Nektar). Headless 24/7 node: `--wallet embedded` with small SpendGuard hot float funded via `nektar wallet fund --from-desktop --sats 25000` and swept via `nektar wallet sweep --to-desktop --network main --confirm I_UNDERSTAND` | Confirmed custody mode in `nektar doctor` (`walletMode`) and `wallet-mode.json` |
 | **E10** | Hub BRC-105 fee & replay gate | `go test -race ./internal/hub/...` + live `curl -i https://<hub>/hub/sync?cursor=0` | Returns HTTP `402 Payment Required` when fees enabled; double-spend / replay rejected |
 
@@ -29,10 +29,10 @@ Every gate below is either **executable** (verified by a command you run and rec
 
 | # | Gate | Requirement | Why It Cannot Be Skipped |
 |---|---|---|---|
-| **X1** | **5-day testnet soak** | >= 120h continuous operation with live anchoring & deals; no wedged Restate workflows, no UTXO fuel exhaustion, no silent stalls | TTL edges, keep-alive intervals, proof compaction, and rate limits only surface on wall-clock time |
-| **X2** | **>= 1 independent external Hub operator** | A second team deploys `deploy/hub/` (or `nektar hub up --native`) on their own box with their own keys and PoW header witnesses | Proves real latency, clock skew, NAT bbox relay, and independent SPV verification |
+| **X1** | **5-day testnet soak** | >= 120h continuous operation with live anchoring & deals; no wedged durable workflows, no UTXO fuel exhaustion, no silent stalls | TTL edges, keep-alive intervals, proof compaction, and rate limits only surface on wall-clock time |
+| **X2** | **>= 1 independent external Hub operator** | A second team deploys `nektar hub up` on their own box with their own keys and PoW header witnesses | Proves real latency, clock skew, NAT bbox relay, and independent SPV verification |
 | **X3** | **Real Mainnet canary anchor + SPV** | Anchor 1 fragment on Mainnet (`nektar remember -shard canary -text "..." -anchor`), wait 1 block, verify `nektar recall -shard canary -spv` (`spvVerified: true`) | Exercises live US/EU BSV Broadcaster + dual-witness Chaintracks/WoC BUMP proof end-to-end |
-| **X4** | **One real Mainnet trade watched to settlement** | Small-sats `want -> quote -> AtomicBEEF/BRC-29 -> BRC-369 key reveal -> DealReceipt` verified via `nektar verify -token <nektardr1...>` | Exercises live payment settlement, replay registry, and bilateral receipt verification |
+| **X4** | **One real Mainnet trade watched to settlement** | Small-sats `buyCapsule -> quote -> AtomicBEEF/BRC-29 -> BRC-369 key reveal -> DealReceipt` verified via `nektar verify -token <nektardr1...>` | Exercises live payment settlement, replay registry, and bilateral receipt verification |
 
 ---
 
@@ -55,9 +55,6 @@ export NEKTAR_MAX_FEE_SATS_PER_TX=2000
 export NEKTAR_MAX_SPEND_SATS_PER_DAY=10000
 export NEKTAR_SETTLE_DEPTH=6
 
-# Require Restate v1.8.1 durable workflows on live networks
-export NEKTAR_RESTATE_REQUIRED=1
-
 # Optional: pin off-box cold operator pubkey so hot agent cannot weaken spending policies
 # export NEKTAR_OPERATOR_PUBKEY="02<66-hex-compressed-pubkey>"
 ```
@@ -65,7 +62,7 @@ export NEKTAR_RESTATE_REQUIRED=1
 Start in 1 command:
 
 ```sh
-nektar up --network main --confirm I_UNDERSTAND
+nektar up --mainnet --confirm I_UNDERSTAND
 nektar doctor --network main
 ```
 
@@ -73,5 +70,5 @@ nektar doctor --network main
 
 ## 4. What Mainnet Guarantees — and Does Not
 
-- **Guaranteed:** fail-closed `NEKTAR_MAINNET_CONFIRM` gate; SpendGuard per-tx and daily satoshi caps; dual-witness non-circular PoW header validation (no single-origin circular header trust); atomic SQLite payment replay protection; Restate v1.8.1 durable deal recovery across crashes; isolated `~/.nektar/main` data directory.
+- **Guaranteed:** fail-closed `NEKTAR_MAINNET_CONFIRM` gate; SpendGuard per-tx and daily satoshi caps; dual-witness non-circular PoW header validation (no single-origin circular header trust); atomic SQLite payment replay protection; embedded SQLite WAL durable deal recovery across crashes; isolated `~/.nektar/main` data directory.
 - **Not guaranteed:** counterparty uptime, BSV block cadence, external indexer availability, or objective truth of stored memory text (`TruthNote` always applies).

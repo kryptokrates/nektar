@@ -1,6 +1,6 @@
-# Nektar v0.1 Agent — Deployable Anywhere (Pure-Go + Restate v1.8.1)
+# Nektar v0.1 Agent — Deployable Anywhere (Single Pure-Go Binary)
 
-Runs the published zero-CGO single binary image `ghcr.io/kryptokrates/nektar:latest` alongside the Restate v1.8.1 durable execution sidecar on port `:18420` (MCP Streamable HTTP, REST API, A2A, L0 LLM Proxy, and embedded Svelte 5 Dashboard).
+Runs the published zero-CGO single binary image `ghcr.io/kryptokrates/nektar:latest` with embedded pure-Go `go-workflows` (`workflows.sqlite` WAL) on port `:18420` (MCP Streamable HTTP, REST API, A2A, L0 LLM Proxy, and embedded Svelte 5 Dashboard — zero external sidecars).
 
 > **Note:** On a personal laptop or workstation, you don't need Docker at all — install the static Go binary directly with `curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up`. Use this `deploy/agent/` directory for VPS, Docker Compose, or Kubernetes deployments.
 
@@ -10,9 +10,8 @@ Runs the published zero-CGO single binary image `ghcr.io/kryptokrates/nektar:lat
 
 | Piece | What It Is | Hosted Where | Image |
 |---|---|---|---|
-| **Your agent** | Identity, BRC-100 embedded wallet, SQLite FTS5 memory, Cedar, Mangle, HTTP/MCP/Proxy/Dashboard | Your VPS / cluster | `ghcr.io/kryptokrates/nektar:latest` |
-| **Durable executor** | Restate v1.8.1 (`BuyerDeal`, `SellerDeal`, `Custody`, `AnchorCadence`) | Same Compose project / Kubernetes pod | `docker.restate.dev/restatedev/restate:1.8.1` |
-| **Agent state** | SQLite DB, BRC-100 `wallet/`, CHIRP objects, auth tokens | `agent-data` volume / PVC (`/data`) | Your backups |
+| **Your agent** | Identity, BRC-100 embedded wallet, SQLite FTS5 memory, Cedar, Mangle, embedded `go-workflows` (`BuyerDeal`, `SellerDeal`, `StandingOrder`, `EscrowGuardian`), HTTP/MCP/Proxy/Dashboard | Your VPS / cluster | `ghcr.io/kryptokrates/nektar:latest` |
+| **Agent state** | SQLite DB, `workflows.sqlite` WAL, BRC-100 `wallet/`, CHIRP objects, auth tokens | `agent-data` volume / PVC (`/data`) | Your backups |
 | **Market Hubs** | Untrusted overlay relays (signature & SPV verified client-side) | Public Hubs or your own (`deploy/hub/`) | `ghcr.io/kryptokrates/nektar:latest` (`-hub`) |
 | **Chain truth** | Dual-witness PoW headers (WoC + Chaintracks) & official US/EU BSV Broadcaster | Public internet (SPV-verified, never trusted) | — |
 
@@ -67,7 +66,7 @@ helm install my-agent ./helm \
   --set secrets.operatorToken="$(openssl rand -hex 32)"
 ```
 
-The chart runs `agent` + `restate` sidecar in one pod (loopback `127.0.0.1` between containers, separate PVCs for `/data` and `/restate-data`, non-root UID `10001`, readiness/liveness probes on `/v1/health`).
+The chart runs the single `agent` container in one pod (with `/data` PVC holding `nektar.sqlite`, `wallet.sqlite`, and `workflows.sqlite`, non-root UID `10001`, readiness/liveness probes on `/v1/health`).
 
 ---
 

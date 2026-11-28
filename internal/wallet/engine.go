@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -25,6 +26,9 @@ import (
 	"github.com/lightwebinc/bcommon/bwallet"
 	"github.com/lightwebinc/bcommon/feepolicy"
 	"gorm.io/gorm"
+
+	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/faststore"
 )
 
 type toolboxTables struct {
@@ -88,17 +92,18 @@ type Engine struct {
 	tb       *toolboxwallet.Wallet
 	userID   int
 
-	fuel    *FuelKeeper
-	monitor *Monitor
+	fuel     *FuelKeeper
+	monitor  *Monitor
+	fastLane *FastLanePool
 
-	absorbMu       sync.Mutex
-	actionMu       sync.Mutex
-	brc29BackoffMu sync.Mutex
-	brc29Backoff   map[int64]unfailBackoffEntry
-	bgCancel       context.CancelFunc
-	bgWG           sync.WaitGroup
-	closeMu        sync.Mutex
-	closed         bool
+	absorbMu      sync.Mutex
+	actionMu      sync.Mutex
+	importStripes [64]sync.Mutex
+	brc29Backoff  *core.KeyBackoff[int64]
+	bgCancel     context.CancelFunc
+	bgWG         sync.WaitGroup
+	closeMu      sync.Mutex
+	closed       bool
 }
 
 var _ sdkwallet.Interface = (*Engine)(nil)
@@ -209,9 +214,9 @@ func Open(cfg Config) (*Engine, error) {
 		storage.WithFeeModel(defs.FeeModel{Type: defs.SatPerKB, Value: int64(feeSatPerKB)}),
 		storage.WithUTXOManagement(utxoCfg),
 		storage.WithChangeBasket(defs.ChangeBasket{
-			NumberOfDesiredUTXOs:    8,
+			NumberOfDesiredUTXOs:    32,
 			MinimumDesiredUTXOValue: 1000,
-			MaxChangeOutputsPerTx:   1,
+			MaxChangeOutputsPerTx:   4,
 		}),
 		storage.WithFailAbandoned(defs.FailAbandoned{
 			MinTransactionAgeSeconds: uint(minAgeSec),
@@ -278,7 +283,7 @@ func Open(cfg Config) (*Engine, error) {
 		provider:     provider,
 		tb:           tbWallet,
 		userID:       userResp.User.UserID,
-		brc29Backoff: make(map[int64]unfailBackoffEntry),
+		brc29Backoff: core.NewKeyBackoff[int64](16384, 30*time.Second, 15*time.Minute),
 	}
 	e.signer = &bwallet.Signer{
 		Interface:  e,
@@ -293,11 +298,37 @@ func Open(cfg Config) (*Engine, error) {
 	svc.isIncomingTx = e.isIncomingTx
 	svc.loadTxFromDB = e.loadTxFromKnownTxs
 	svc.loadBeefFromDB = e.loadBeefFromStorage
+	svc.onAsyncBroadcastFailure = func(txid string) {
+		_ = e.MarkSubmissionUnknown(context.Background(), txid)
+	}
 
 	// Reclaim any orphaned NoSend transactions left behind by a previous process crash.
 	if !cfg.InMemoryStore {
 		if n, rErr := e.ReconcileOrphanedNoSend(initCtx); rErr == nil && n > 0 {
 			e.logf("wallet: reclaimed %d orphaned NoSend transaction(s) on boot", n)
+		}
+	}
+
+	// Initialize pure-Go Pebble WAL 64-shard FastLanePool when requested or in throughput profile.
+	if cfg.FastStore != nil || cfg.EnableFastLane || os.Getenv("NEKTAR_FAST_WALLET") == "1" || prof.Name == "throughput" {
+		fs := cfg.FastStore
+		ownsFS := false
+		if fs == nil {
+			var fsDir string
+			if cfg.Dir != "" && !cfg.InMemoryStore {
+				fsDir = filepath.Join(cfg.Dir, "fastlane.pebble")
+			}
+			if opened, fErr := faststore.Open(faststore.Options{
+				Dir:        fsDir,
+				InMemory:   cfg.InMemoryStore || fsDir == "",
+				SyncWrites: !cfg.InMemoryStore,
+			}); fErr == nil {
+				fs = opened
+				ownsFS = true
+			}
+		}
+		if fs != nil {
+			e.fastLane = newFastLanePool(e, fs, ownsFS)
 		}
 	}
 
@@ -338,7 +369,11 @@ func buildUTXOManagementConfig(prof FuelProfile, feeSatPerKB uint64) defs.UTXOMa
 		denom = minFloor + 1000
 	}
 	cfg.Throughput.DenominationSatoshis = denom
-	cfg.Throughput.TargetTPS = 10
+	if prof.Name == "throughput" {
+		cfg.Throughput.TargetTPS = 100
+	} else {
+		cfg.Throughput.TargetTPS = 25
+	}
 	target := uint64(prof.FuelTarget)
 	if target == 0 {
 		target = 24
@@ -359,7 +394,7 @@ func buildUTXOManagementConfig(prof FuelProfile, feeSatPerKB uint64) defs.UTXOMa
 		maxOut = 64
 	}
 	cfg.Throughput.FanoutOutputsPerTx = maxOut
-	cfg.Throughput.FanoutMaxTxsPerRound = 16
+	cfg.Throughput.FanoutMaxTxsPerRound = 32
 	cfg.Throughput.FanoutTreeDepth = 2
 	cfg.Throughput.ConsolidationInputsPerTx = 256
 	cfg.Throughput.TopUp.Enabled = false // Nektar FuelKeeper drives FanOutFuel cleanly
@@ -411,6 +446,9 @@ func (e *Engine) Close() error {
 	}
 	if e.provider != nil {
 		e.provider.Stop(stopCtx)
+	}
+	if e.fastLane != nil {
+		_ = e.fastLane.Close()
 	}
 	if e.readDB != nil && e.readDB != e.sqlDB {
 		_ = e.readDB.Close()

@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/kryptokrates/nektar/internal/nmu"
+	"strings"
 )
 
 // DefaultSubscriptionDurationSec is the default 7-day Shard Feed subscription window.
@@ -44,26 +43,29 @@ type SellListing struct {
 }
 
 // EnabledModes returns all independently enabled NMU-1 pricing modes on this SellListing.
-func (l SellListing) EnabledModes() []nmu.PricingMode {
-	var modes []nmu.PricingMode
+func (l SellListing) EnabledModes() []string {
+	var modes []string
 	if l.PriceSats > 0 {
-		modes = append(modes, nmu.ModeSpot)
+		modes = append(modes, "spot")
 	}
 	if l.QueryPriceSats > 0 {
-		modes = append(modes, nmu.ModePerQuery)
+		modes = append(modes, "per_query")
 	}
 	if l.SubscriptionPriceSats > 0 {
-		modes = append(modes, nmu.ModeSubscription)
+		modes = append(modes, "subscription")
 	}
 	if len(modes) == 0 {
-		modes = []nmu.PricingMode{nmu.ModeSpot}
+		modes = []string{"spot"}
 	}
 	return modes
 }
 
 // SupportsMode reports whether this SellListing serves the requested NMU-1 contract mode.
-func (l SellListing) SupportsMode(mode nmu.PricingMode) bool {
-	target := nmu.EffectivePricingMode(mode)
+func (l SellListing) SupportsMode(mode string) bool {
+	target := strings.ToLower(strings.TrimSpace(mode))
+	if target == "" {
+		target = "spot"
+	}
 	for _, m := range l.EnabledModes() {
 		if m == target {
 			return true
@@ -104,6 +106,7 @@ type DealRecord struct {
 	Role               string `json:"role"`   // buyer | seller
 	Status             string `json:"status"` // open | collecting | offered | approval_pending | paid | settled | failed | expired
 	Shard              string `json:"shard,omitempty"`
+	ChosenOfferID      string `json:"chosenOfferId,omitempty"`
 	WantJSON           []byte `json:"wantJson,omitempty"`
 	ChosenOfferJSON    []byte `json:"chosenOfferJson,omitempty"`
 	MatchAuditJSON     []byte `json:"matchAuditJson,omitempty"`
@@ -508,5 +511,140 @@ CREATE INDEX IF NOT EXISTS idx_obligations_status ON obligations(status, deadlin
 			return err
 		}
 	}
+	if userVer < 11 {
+		if err := runVersionStep(11, func(tx *sql.Tx) error {
+			if err := ensureColumnTx(tx, "deals", "chosen_offer_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+			// Backfill chosen_offer_id from existing chosen_offer_json rows once on upgrade.
+			rows, qErr := tx.Query(`SELECT deal_id, chosen_offer_json FROM deals WHERE chosen_offer_id = '' AND chosen_offer_json IS NOT NULL AND length(chosen_offer_json) > 2`)
+			if qErr == nil {
+				type pair struct{ id, off string }
+				var pairs []pair
+				for rows.Next() {
+					var did string
+					var raw []byte
+					if rows.Scan(&did, &raw) == nil && len(raw) > 0 {
+						if oid := extractOfferIDJSON(raw); oid != "" {
+							pairs = append(pairs, pair{id: did, off: oid})
+						}
+					}
+				}
+				_ = rows.Close()
+				for _, p := range pairs {
+					_, _ = tx.Exec(`UPDATE deals SET chosen_offer_id = ? WHERE deal_id = ?`, p.off, p.id)
+				}
+			}
+			const scaleDDL = `
+CREATE TABLE IF NOT EXISTS public_chirp_hashes (
+	hash       TEXT PRIMARY KEY,
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deals_status_updated ON deals(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deals_role_status_shard ON deals(role, status, shard);
+CREATE INDEX IF NOT EXISTS idx_deals_chosen_offer ON deals(chosen_offer_id);
+CREATE INDEX IF NOT EXISTS idx_deals_confirm_height ON deals(confirm_height);
+CREATE INDEX IF NOT EXISTS idx_pending_sales_settled_exp ON pending_sales(settled, expires_at);
+CREATE INDEX IF NOT EXISTS idx_approvals_status_exp ON approvals(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_payment_claims_at ON payment_claims(claimed_at);
+CREATE INDEX IF NOT EXISTS idx_obligations_status_updated ON obligations(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fragments_leaf ON fragments(shard, leaf);
+CREATE INDEX IF NOT EXISTS idx_fragments_distilled ON fragments(distilled);
+CREATE INDEX IF NOT EXISTS idx_anchors_settled ON anchors(settled, block_height);
+CREATE INDEX IF NOT EXISTS idx_receipts_seq ON receipts(shard_seq);
+CREATE INDEX IF NOT EXISTS idx_receipts_created ON receipts(created_at DESC);
+`
+			_, err := tx.Exec(scaleDDL)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func extractOfferIDJSON(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var minimal struct {
+		OfferID string `json:"offerId"`
+	}
+	if json.Unmarshal(raw, &minimal) == nil {
+		return strings.TrimSpace(minimal.OfferID)
+	}
+	return ""
+}
+
+// AllowPublicChirpHashes inserts hex-encoded 32-byte CHIRP hashes into public_chirp_hashes in O(k).
+func (d *DB) AllowPublicChirpHashes(hexHashes []string, nowUnix int64) error {
+	if len(hexHashes) == 0 {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO public_chirp_hashes (hash, created_at) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, h := range hexHashes {
+		if h = strings.ToLower(strings.TrimSpace(h)); len(h) == 64 {
+			if _, eErr := stmt.Exec(h, nowUnix); eErr != nil {
+				return eErr
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// RevokePublicChirpHashes deletes hex-encoded 32-byte CHIRP hashes from public_chirp_hashes in O(k).
+func (d *DB) RevokePublicChirpHashes(hexHashes []string) error {
+	if len(hexHashes) == 0 {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.Prepare(`DELETE FROM public_chirp_hashes WHERE hash = ?`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, h := range hexHashes {
+		if h = strings.ToLower(strings.TrimSpace(h)); len(h) == 64 {
+			if _, eErr := stmt.Exec(h); eErr != nil {
+				return eErr
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// ListPublicChirpHashes loads all persisted public CHIRP hashes on startup.
+func (d *DB) ListPublicChirpHashes() ([]string, error) {
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`SELECT hash FROM public_chirp_hashes`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var h string
+		if rows.Scan(&h) == nil && len(h) == 64 {
+			out = append(out, h)
+		}
+	}
+	return out, rows.Err()
 }

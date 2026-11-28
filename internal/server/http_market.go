@@ -21,10 +21,37 @@ func (a *App) handleMarketPurchase(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, market.PurchaseResponse{OK: false, Error: "market broker not attached"})
 		return
 	}
+	useCBOR := strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), market.ContentTypeCBOR) ||
+		strings.Contains(strings.ToLower(r.Header.Get("Accept")), market.ContentTypeCBOR)
+	writeResp := func(status int, resp market.PurchaseResponse) {
+		if useCBOR {
+			if raw, cErr := market.EncodePurchaseResponseCBOR(&resp); cErr == nil {
+				w.Header().Set("Content-Type", market.ContentTypeCBOR)
+				w.WriteHeader(status)
+				_, _ = w.Write(raw)
+				return
+			}
+		}
+		writeJSON(w, status, resp)
+	}
 	var req market.PurchaseRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, market.PurchaseResponse{OK: false, Error: err.Error()})
-		return
+	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), market.ContentTypeCBOR) {
+		raw, rErr := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+		if rErr != nil {
+			writeResp(http.StatusBadRequest, market.PurchaseResponse{OK: false, Error: rErr.Error()})
+			return
+		}
+		decoded, dErr := market.DecodePurchaseRequestCBOR(raw)
+		if dErr != nil {
+			writeResp(http.StatusBadRequest, market.PurchaseResponse{OK: false, Error: dErr.Error()})
+			return
+		}
+		req = decoded
+	} else {
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&req); err != nil {
+			writeResp(http.StatusBadRequest, market.PurchaseResponse{OK: false, Error: err.Error()})
+			return
+		}
 	}
 	resp, err := a.broker.HandlePurchase(r.Context(), req)
 	if err != nil {
@@ -34,16 +61,34 @@ func (a *App) handleMarketPurchase(w http.ResponseWriter, r *http.Request) {
 		} else if errors.Is(err, chain.ErrConflictDetected) {
 			code = http.StatusConflict
 		}
-		writeJSON(w, code, market.PurchaseResponse{OK: false, OfferID: req.OfferID, Error: err.Error()})
+		writeResp(code, market.PurchaseResponse{OK: false, OfferID: req.OfferID, Error: err.Error()})
 		return
 	}
 	if resp != nil && resp.Status == "awaiting_confirmation" {
 		a.BroadcastDashboardEvent("payment_pending")
-		writeJSON(w, http.StatusAccepted, resp)
+		writeResp(http.StatusAccepted, *resp)
 		return
 	}
 	a.BroadcastDashboardEvent("deal_settled")
-	writeJSON(w, http.StatusOK, resp)
+	writeResp(http.StatusOK, *resp)
+}
+
+func (a *App) handleMarketDirectQuote(w http.ResponseWriter, r *http.Request) {
+	if a.broker == nil {
+		writeJSON(w, http.StatusServiceUnavailable, market.DirectQuoteResponse{OK: false, Error: "market broker not attached"})
+		return
+	}
+	var req market.DirectQuoteRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, market.DirectQuoteResponse{OK: false, Error: err.Error()})
+		return
+	}
+	offer, err := a.broker.HandleDirectQuote(r.Context(), req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, market.DirectQuoteResponse{OK: false, Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, market.DirectQuoteResponse{OK: true, Offer: offer})
 }
 
 func (a *App) handleJoinHost(w http.ResponseWriter, r *http.Request) {

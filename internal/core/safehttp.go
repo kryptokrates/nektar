@@ -10,8 +10,60 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
+
+type cachedDNSResult struct {
+	ips       []netip.Addr
+	expiresAt time.Time
+}
+
+var (
+	safeDNSMu    sync.RWMutex
+	safeDNSCache = make(map[string]cachedDNSResult, 256)
+)
+
+const (
+	safeDNSCacheTTL = 30 * time.Second
+	safeDNSCacheCap = 4096
+)
+
+func lookupSafeHostIPs(ctx context.Context, host string) ([]netip.Addr, error) {
+	now := time.Now()
+	safeDNSMu.RLock()
+	if hit, ok := safeDNSCache[host]; ok && now.Before(hit.expiresAt) && len(hit.ips) > 0 {
+		ips := hit.ips
+		safeDNSMu.RUnlock()
+		return ips, nil
+	}
+	safeDNSMu.RUnlock()
+
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil || len(ips) == 0 {
+		return nil, fmt.Errorf("safehttp: resolve %q: %w", host, err)
+	}
+	for _, ip := range ips {
+		if IsBlockedOutboundIP(ip) {
+			return nil, fmt.Errorf("safehttp: resolved blocked IP %s for host %q", ip.String(), host)
+		}
+	}
+	copied := append([]netip.Addr(nil), ips...)
+	safeDNSMu.Lock()
+	if len(safeDNSCache) >= safeDNSCacheCap {
+		for k, v := range safeDNSCache {
+			if now.After(v.expiresAt) {
+				delete(safeDNSCache, k)
+			}
+		}
+		if len(safeDNSCache) >= safeDNSCacheCap {
+			clear(safeDNSCache)
+		}
+	}
+	safeDNSCache[host] = cachedDNSResult{ips: copied, expiresAt: now.Add(safeDNSCacheTTL)}
+	safeDNSMu.Unlock()
+	return copied, nil
+}
 
 // SafeHTTPOpts configures SSRF-hardened outbound HTTP clients for peer, hub, CHIRP, and federation calls.
 type SafeHTTPOpts struct {
@@ -94,14 +146,22 @@ func (s *safeRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 // blocks private/loopback/metadata IPs (pinning the validated IP to prevent DNS-rebinding TOCTOU),
 // and whose CheckRedirect re-validates every redirect hop.
 func SafeHTTPClient(opts SafeHTTPOpts) *http.Client {
+	return SafeHTTPClientWithWrapper(opts, nil)
+}
+
+// SafeHTTPClientWithWrapper returns an SSRF-hardened *http.Client and optionally wraps the validated
+// RoundTripper (e.g. with rate-limit pacing) without bypassing DNS-rebinding or URL validation.
+func SafeHTTPClientWithWrapper(opts SafeHTTPOpts, wrap func(http.RoundTripper) http.RoundTripper) *http.Client {
 	dialer := &net.Dialer{
 		Timeout:   10 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}
 	tr := &http.Transport{
 		Proxy:                 nil, // never inherit untrusted HTTP_PROXY for peer dials
-		MaxIdleConns:          64,
-		IdleConnTimeout:       60 * time.Second,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          1024,
+		MaxIdleConnsPerHost:   256,
+		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -116,13 +176,16 @@ func SafeHTTPClient(opts SafeHTTPOpts) *http.Client {
 			if low == "localhost" || strings.HasSuffix(low, ".localhost") {
 				return nil, fmt.Errorf("safehttp: loopback host %q blocked", host)
 			}
-			ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", low)
-			if err != nil || len(ips) == 0 {
-				return nil, fmt.Errorf("safehttp: resolve %q: %w", host, err)
-			}
-			for _, ip := range ips {
-				if IsBlockedOutboundIP(ip) {
-					return nil, fmt.Errorf("safehttp: resolved blocked IP %s for host %q", ip.String(), host)
+			var ips []netip.Addr
+			if parsedIP, pErr := netip.ParseAddr(low); pErr == nil {
+				if IsBlockedOutboundIP(parsedIP) {
+					return nil, fmt.Errorf("safehttp: resolved blocked IP %s for host %q", parsedIP.String(), host)
+				}
+				ips = []netip.Addr{parsedIP}
+			} else {
+				ips, err = lookupSafeHostIPs(ctx, low)
+				if err != nil {
+					return nil, err
 				}
 			}
 			// Dial validated IPs directly (trying each on failure for dual-stack resilience)
@@ -145,9 +208,13 @@ func SafeHTTPClient(opts SafeHTTPOpts) *http.Client {
 	if maxRedir == 0 {
 		maxRedir = 3
 	}
+	var rt http.RoundTripper = &safeRoundTripper{base: tr, opts: opts}
+	if wrap != nil {
+		rt = wrap(rt)
+	}
 	return &http.Client{
 		Timeout:   opts.Timeout,
-		Transport: &safeRoundTripper{base: tr, opts: opts},
+		Transport: rt,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if opts.MaxRedirects < 0 {
 				return errors.New("safehttp: redirects disabled")
@@ -187,11 +254,16 @@ func AllowPrivateOutboundForNetwork(network string) bool {
 // and enforces HTTPS by default; testnet/main only permit local/private peers when
 // NEKTAR_ALLOW_LOCAL_PEERS=1 is explicitly opted in by the operator.
 func SafeHTTPClientForNetwork(network string, timeout time.Duration) *http.Client {
+	return SafeHTTPClientForNetworkWithWrapper(network, timeout, nil)
+}
+
+// SafeHTTPClientForNetworkWithWrapper returns a network-calibrated SSRF-hardened *http.Client with an optional RoundTripper wrapper.
+func SafeHTTPClientForNetworkWithWrapper(network string, timeout time.Duration, wrap func(http.RoundTripper) http.RoundTripper) *http.Client {
 	n := strings.ToLower(strings.TrimSpace(network))
 	allowPriv := AllowPrivateOutboundForNetwork(n)
-	return SafeHTTPClient(SafeHTTPOpts{
+	return SafeHTTPClientWithWrapper(SafeHTTPOpts{
 		Timeout:      timeout,
 		AllowPrivate: allowPriv,
 		RequireHTTPS: n == "main" && !allowPriv,
-	})
+	}, wrap)
 }

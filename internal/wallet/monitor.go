@@ -9,12 +9,9 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-wallet-toolbox/pkg/wdk"
-)
 
-type unfailBackoffEntry struct {
-	attempts int
-	nextTry  time.Time
-}
+	"github.com/kryptokrates/nektar/internal/core"
+)
 
 // Monitor runs go-wallet-toolbox's official storage lifecycle tasks (AbortAbandoned,
 // SendWaitingTransactions, SynchronizeTransactionStatuses, UnFail) alongside Nektar's
@@ -24,22 +21,30 @@ type Monitor struct {
 	httpCli  *http.Client
 	mu       sync.Mutex
 	lastScan time.Time
-	backoff  map[string]unfailBackoffEntry
+	backoff  *core.KeyBackoff[string]
 }
 
 func newMonitor(e *Engine) *Monitor {
+	netName := "testnet"
+	if e != nil {
+		if e.cfg.Mainnet {
+			netName = "main"
+		} else if e.cfg.InMemoryStore {
+			netName = "memory"
+		}
+	}
 	return &Monitor{
 		engine:  e,
-		httpCli: &http.Client{Timeout: 15 * time.Second},
-		backoff: make(map[string]unfailBackoffEntry),
+		httpCli: core.SafeHTTPClientForNetwork(netName, 15*time.Second),
+		backoff: core.NewKeyBackoff[string](16384, 30*time.Second, 30*time.Minute),
 	}
 }
 
 func (m *Monitor) run(ctx context.Context) {
-	// Decouple slow external scans (Desktop BRC-29 dial + WoC address sync) onto a dedicated
-	// goroutine so 15s network I/O never head-of-line blocks fast SendWaiting/CheckForProofs.
+	// Decouple slow external scans (Desktop BRC-29 dial + WoC address sync) AND SendWaiting
+	// onto dedicated goroutines so CheckForProofs / network I/O never head-of-line blocks SendWaiting.
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		abortTick := time.NewTicker(60 * time.Second)
@@ -58,7 +63,7 @@ func (m *Monitor) run(ctx context.Context) {
 					m.engine.logf("wallet monitor: ReconcilePendingBRC29 warning: %v", err)
 				}
 				if m.engine.sqlDB != nil {
-					_, _ = m.engine.sqlDB.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
+					_, _ = m.engine.sqlDB.ExecContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`)
 				}
 			case <-fundTick.C:
 				if _, _, err := m.SyncFundAddress(ctx); err != nil && !errors.Is(err, ErrThrottled) && ctx.Err() == nil {
@@ -67,21 +72,30 @@ func (m *Monitor) run(ctx context.Context) {
 			}
 		}
 	}()
+	go func() {
+		defer wg.Done()
+		sendTick := time.NewTicker(5 * time.Second)
+		defer sendTick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-sendTick.C:
+				if _, err := m.SendWaiting(ctx); err != nil && ctx.Err() == nil {
+					m.engine.logf("wallet monitor: SendWaiting warning: %v", err)
+				}
+			}
+		}
+	}()
 	defer wg.Wait()
 
-	sendTick := time.NewTicker(10 * time.Second)
 	proofTick := time.NewTicker(30 * time.Second)
-	defer sendTick.Stop()
 	defer proofTick.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-sendTick.C:
-			if _, err := m.SendWaiting(ctx); err != nil && ctx.Err() == nil {
-				m.engine.logf("wallet monitor: SendWaiting warning: %v", err)
-			}
 		case <-proofTick.C:
 			if _, err := m.CheckForProofs(ctx); err != nil && ctx.Err() == nil {
 				m.engine.logf("wallet monitor: CheckForProofs warning: %v", err)
@@ -215,10 +229,10 @@ func (m *Monitor) CheckForProofs(ctx context.Context) (int, error) {
 	if proved > 0 {
 		m.engine.fuel.Wake()
 	}
-	// Clear go-wallet-toolbox's synchronize_tx_statuses_last_block watermark whenever an error occurred
-	// or unproven transactions remain pending, preventing a transient indexer error or same-block race
-	// from stalling background proof attachment until the next block mines.
-	if err != nil || (proved == 0 && m.hasUnprovenTxs(ctx)) {
+	// Clear go-wallet-toolbox's synchronize_tx_statuses_last_block watermark ONLY when an error occurred
+	// during status synchronization (never unconditionally on every 30s tick when unproven txs exist,
+	// which previously caused an O(N_unproven) status stampede every 30s).
+	if err != nil {
 		if m.engine.sqlDB != nil {
 			_, _ = m.engine.sqlDB.ExecContext(ctx, `DELETE FROM bsv_key_values WHERE key = 'synchronize_tx_statuses_last_block'`)
 		}

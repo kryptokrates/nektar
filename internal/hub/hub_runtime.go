@@ -8,7 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lightwebinc/bcommon/cbor"
 	"github.com/lightwebinc/bcommon/module"
+
+	"github.com/kryptokrates/nektar/internal/core"
 )
 
 // BountySubmission is a signed agent submission selling verified knowledge to the Hub bounty pool.
@@ -19,13 +22,13 @@ type BountySubmission struct {
 	SellerAddress string          `json:"sellerAddress"`
 	Shard         string          `json:"shard"`
 	Seq           int64           `json:"seq"`
-	HDP            string          `json:"hdp"`
-	MPERoot        string          `json:"mpeRoot,omitempty"`
-	ContentSHA256  string          `json:"contentSha256,omitempty"`
-	CommitHash     string          `json:"commitHash,omitempty"`
-	TransitionHash string          `json:"transitionHash,omitempty"`
-	CiphertextHex  string          `json:"ciphertextHex,omitempty"`
-	Text           string          `json:"text"`
+	HDP           string          `json:"hdp"`
+	MPERoot       string          `json:"mpeRoot,omitempty"`
+	ContentSHA256 string          `json:"contentSha256,omitempty"`
+	CommitHash    string          `json:"commitHash,omitempty"`
+	TransitionHash string         `json:"transitionHash,omitempty"`
+	CiphertextHex string          `json:"ciphertextHex,omitempty"`
+	Text          string          `json:"text"`
 	ProvenanceHex string          `json:"provenanceHex,omitempty"`
 	ProofBundle   json.RawMessage `json:"proofBundle,omitempty"`
 	TS            int64           `json:"ts,omitempty"`
@@ -33,16 +36,47 @@ type BountySubmission struct {
 	OwnerSig      string          `json:"ownerSig,omitempty"`
 }
 
+// BountySignable is the canonical CBOR-signed payload for BountySubmission.
+type BountySignable struct {
+	BountyID      string `json:"bountyId"`
+	HDP           string `json:"hdp"`
+	SellerPub     string `json:"sellerPub"`
+	ProvenancePub string `json:"provenancePub"`
+	SellerAddress string `json:"sellerAddress"`
+	TS            int64  `json:"ts"`
+}
+
+func (b BountySignable) DomainTag() []byte { return core.TagBountySubmitV1 }
+
+func (b BountySignable) EncodeCanonicalCBOR() ([]byte, error) {
+	return core.EncodeCBOR(cbor.Map{
+		{Key: uint64(1), Val: b.BountyID},
+		{Key: uint64(2), Val: b.HDP},
+		{Key: uint64(3), Val: b.SellerPub},
+		{Key: uint64(4), Val: b.ProvenancePub},
+		{Key: uint64(5), Val: b.SellerAddress},
+		{Key: uint64(6), Val: b.TS},
+	})
+}
+
+// OwnerSigDigest returns the domain-separated DSHA256 digest signed by ProvenancePub for OwnerSig.
+func (b BountySignable) OwnerSigDigest() ([]byte, error) {
+	raw, err := b.EncodeCanonicalCBOR()
+	if err != nil {
+		return nil, err
+	}
+	return core.DSHA256(core.Concat(core.TagBountySubmitV1, raw)), nil
+}
+
 // Signable returns the canonical signable payload for BountySubmission (using canonical lowercase HDP).
-func (s BountySubmission) Signable(canonicalHDP string) map[string]any {
-	return map[string]any{
-		"action":        "bounty_submit",
-		"bountyId":      s.BountyID,
-		"hdp":           canonicalHDP,
-		"sellerPub":     s.SellerPub,
-		"provenancePub": s.ProvenancePub,
-		"sellerAddress": s.SellerAddress,
-		"ts":            s.TS,
+func (s BountySubmission) Signable(canonicalHDP string) BountySignable {
+	return BountySignable{
+		BountyID:      s.BountyID,
+		HDP:           canonicalHDP,
+		SellerPub:     s.SellerPub,
+		ProvenancePub: s.ProvenancePub,
+		SellerAddress: s.SellerAddress,
+		TS:            s.TS,
 	}
 }
 
@@ -102,11 +136,34 @@ type rateBucket struct {
 }
 
 const (
-	maxHubSSESubs   = 256
-	maxRateBuckets  = 4096
-	maxBboxNonces   = 16384
-	bboxSkewSeconds = 300
+	maxHubSSESubs       = 4096
+	maxRateBucketsShard = 64
+	maxRateBuckets      = 64 * maxRateBucketsShard
+	maxNoncesPerShard   = 32768 // 64 shards * 32,768 = 2,097,152 active nonces (~3,495 req/s over 600s window)
+	bboxSkewSeconds     = 300
 )
+
+type hubNonceEntry struct {
+	key string
+	ts  int64
+}
+
+type hubRateNonceShard struct {
+	mu         sync.Mutex
+	rates      map[string]*rateBucket
+	nonces     map[string]int64
+	nonceOrder []hubNonceEntry
+	nonceHead  int
+}
+
+func hubShardIdx(s string) uint32 {
+	var h uint32 = 2166136261
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= 16777619
+	}
+	return h & 63
+}
 
 func (n *Node) maintenanceLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
@@ -118,19 +175,28 @@ func (n *Node) maintenanceLoop() {
 		case <-ticker.C:
 			nowMs := time.Now().UnixMilli()
 			_, _ = n.store.PruneExpired(nowMs)
-			_, _ = n.store.PruneBbox(nowMs-int64(7*24*time.Hour/time.Millisecond), 10_000)
+			_, _ = n.store.PruneBbox(nowMs-int64(7*24*time.Hour/time.Millisecond), 100_000)
 			if n.marketLS != nil {
 				_ = n.marketLS.PruneExpired(nowMs)
 			}
-			// Evict stale per-pubkey rate-limit buckets.
-			n.mu.Lock()
-			now := time.Now()
-			for pub, b := range n.rates {
-				if now.Sub(b.windowStart) >= 2*time.Minute {
-					delete(n.rates, pub)
-				}
+			// STATE-9: sweep unmined fast-accepted fee payments that exceeded 2x AcceptWindow without mining.
+			winSec := int64(2 * n.fees.AcceptWindow.Seconds())
+			if winSec <= 0 {
+				winSec = 7200
 			}
-			n.mu.Unlock()
+			_, _ = n.SweepUnsettleableFees(winSec)
+			// Evict stale per-pubkey rate-limit buckets per shard without touching Node.mu.
+			now := time.Now()
+			for i := range n.rateShards {
+				sh := &n.rateShards[i]
+				sh.mu.Lock()
+				for pub, b := range sh.rates {
+					if now.Sub(b.windowStart) >= 2*time.Minute {
+						delete(sh.rates, pub)
+					}
+				}
+				sh.mu.Unlock()
+			}
 		}
 	}
 }
@@ -185,17 +251,42 @@ func (n *Node) AddSpinePeerPub(pubHex string) {
 	}
 }
 
-// OnBountyPayoutMined promotes a broadcast bounty claim to 'paid' once its payout tx mines at settleDepth.
+// OnBountyPayoutMined promotes a broadcast bounty or work claim to 'paid' once its payout tx mines at settleDepth (STATE-10).
 func (n *Node) OnBountyPayoutMined(txid string) error {
-	return n.store.FinalizeBountyClaimByTxID(txid)
+	err1 := n.store.FinalizeBountyClaimByTxID(txid)
+	err2 := n.store.FinalizeWorkClaimByTxID(txid)
+	if err1 != nil {
+		return err1
+	}
+	return err2
+}
+
+// SweepUnsettleableFees marks expired unmined fast fee payments as 'lost' and flags their payers (STATE-9).
+func (n *Node) SweepUnsettleableFees(maxAgeSec int64) (int, error) {
+	stale, err := n.store.SweepExpiredFastFees(maxAgeSec)
+	if err != nil {
+		return 0, err
+	}
+	for _, e := range stale {
+		if e.PayerPub != "" {
+			_ = n.store.FlagPayer(e.PayerPub, e.TxID, "fast fee payment failed to mine within acceptance window")
+		}
+	}
+	return len(stale), nil
 }
 
 func (n *Node) mountModule(m module.Module) {
 	for k, tm := range m.Topics {
 		n.topics[k] = tm
+		if n.oeEngine != nil {
+			n.oeEngine.RegisterTopicManager(k, n.wrapEngineTopicManager(tm))
+		}
 	}
 	for k, ls := range m.Lookups {
 		n.lookups[k] = ls
+		if n.oeEngine != nil {
+			n.oeEngine.RegisterLookupService(k, n.wrapEngineLookupService(ls))
+		}
 	}
 }
 
@@ -225,38 +316,46 @@ func (n *Node) allowPubRate(pub string) bool {
 	if pub == "" {
 		return true
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	limit := n.maxPerMin
+	if limit <= 0 {
+		return true
+	}
+	sh := &n.rateShards[hubShardIdx(pub)]
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if sh.rates == nil {
+		sh.rates = make(map[string]*rateBucket, 32)
+	}
 	now := time.Now()
-	b, ok := n.rates[pub]
+	b, ok := sh.rates[pub]
 	if ok && now.Sub(b.windowStart) < time.Minute {
-		if b.count >= n.maxPerMin {
+		if b.count >= limit {
 			return false
 		}
 		b.count++
 		return true
 	}
-	if !ok && len(n.rates) >= maxRateBuckets {
-		for k, v := range n.rates {
+	if !ok && len(sh.rates) >= maxRateBucketsShard {
+		for k, v := range sh.rates {
 			if now.Sub(v.windowStart) >= time.Minute {
-				delete(n.rates, k)
+				delete(sh.rates, k)
 			}
 		}
-		if len(n.rates) >= maxRateBuckets {
+		if len(sh.rates) >= maxRateBucketsShard {
 			var oldestKey string
 			var oldestStart time.Time
-			for k, v := range n.rates {
+			for k, v := range sh.rates {
 				if oldestKey == "" || v.windowStart.Before(oldestStart) {
 					oldestKey = k
 					oldestStart = v.windowStart
 				}
 			}
 			if oldestKey != "" {
-				delete(n.rates, oldestKey)
+				delete(sh.rates, oldestKey)
 			}
 		}
 	}
-	n.rates[pub] = &rateBucket{windowStart: now, count: 1}
+	sh.rates[pub] = &rateBucket{windowStart: now, count: 1}
 	return true
 }
 
@@ -265,9 +364,10 @@ func (n *Node) hasBboxNonce(scope, nonce string) bool {
 		return true
 	}
 	key := scope + ":" + nonce
-	n.mu.RLock()
-	_, exists := n.bboxNonces[key]
-	n.mu.RUnlock()
+	sh := &n.rateShards[hubShardIdx(key)]
+	sh.mu.Lock()
+	_, exists := sh.nonces[key]
+	sh.mu.Unlock()
 	return exists
 }
 
@@ -276,22 +376,36 @@ func (n *Node) claimBboxNonce(scope, nonce string, now int64) bool {
 		return false
 	}
 	key := scope + ":" + nonce
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if len(n.bboxNonces) >= maxBboxNonces {
-		cutoff := now - bboxSkewSeconds*2
-		for k, ts := range n.bboxNonces {
-			if ts < cutoff {
-				delete(n.bboxNonces, k)
-			}
-		}
-		if len(n.bboxNonces) >= maxBboxNonces {
-			return false
+	sh := &n.rateShards[hubShardIdx(key)]
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if sh.nonces == nil {
+		sh.nonces = make(map[string]int64, 128)
+	}
+	cutoff := now - bboxSkewSeconds*2
+	for sh.nonceHead < len(sh.nonceOrder) && sh.nonceOrder[sh.nonceHead].ts < cutoff {
+		old := sh.nonceOrder[sh.nonceHead]
+		sh.nonceOrder[sh.nonceHead] = hubNonceEntry{}
+		sh.nonceHead++
+		if curTS, ok := sh.nonces[old.key]; ok && curTS < cutoff {
+			delete(sh.nonces, old.key)
 		}
 	}
-	if _, exists := n.bboxNonces[key]; exists {
+	for len(sh.nonces) >= maxNoncesPerShard && sh.nonceHead < len(sh.nonceOrder) {
+		old := sh.nonceOrder[sh.nonceHead]
+		sh.nonceOrder[sh.nonceHead] = hubNonceEntry{}
+		sh.nonceHead++
+		delete(sh.nonces, old.key)
+	}
+	if sh.nonceHead > 0 && sh.nonceHead*2 >= len(sh.nonceOrder) {
+		rem := copy(sh.nonceOrder, sh.nonceOrder[sh.nonceHead:])
+		sh.nonceOrder = sh.nonceOrder[:rem]
+		sh.nonceHead = 0
+	}
+	if ts, exists := sh.nonces[key]; exists && ts >= cutoff {
 		return false
 	}
-	n.bboxNonces[key] = now
+	sh.nonces[key] = now
+	sh.nonceOrder = append(sh.nonceOrder, hubNonceEntry{key: key, ts: now})
 	return true
 }

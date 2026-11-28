@@ -30,11 +30,12 @@ func TestEpistemicShardConcurrentTransitionsZeroUTXOContention(t *testing.T) {
 	}
 	eng := NewEngine(mem, DefaultPolicy())
 
-	// 1. Verify Restate server binds EpistemicShard + updated NektarRuntime cleanly.
-	srv := eng.NewRestateServer()
-	if srv == nil {
-		t.Fatal("expected non-nil Restate server")
+	// 1. Verify embedded pure-Go go-workflows runtime starts cleanly alongside EpistemicShard coordinator.
+	wc, err := eng.StartWorkflows(ctx, t.TempDir())
+	if err != nil || wc == nil {
+		t.Fatalf("expected non-nil WorkflowClient, got err=%v", err)
 	}
+	defer func() { _ = eng.CloseWorkflows() }()
 
 	// 2. Fire 8 concurrent transitions with Anchor:true against one shard — MUST serialize cleanly
 	//    with zero UTXO contention and produce contiguous N = 0..7 anchors + verified chain!

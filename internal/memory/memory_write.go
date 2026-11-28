@@ -585,9 +585,13 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 		genID        string
 	)
 	if !IsSystemShard(in.Shard) {
-		anchors, _ := s.db.ListAnchors(in.Shard)
-		if gp, gid, gErr := s.resolveRepoGenesis(ctx, in.Shard, anchors); gErr == nil {
-			genPub, genID = gp, gid
+		if br, bErr := s.db.GetMemBranch(in.Shard, "main"); bErr == nil && br.GenesisPub != "" && br.GenesisShardID != "" {
+			genPub, genID = br.GenesisPub, br.GenesisShardID
+		} else {
+			anchors, _ := s.db.ListAnchors(in.Shard)
+			if gp, gid, gErr := s.resolveRepoGenesis(ctx, in.Shard, anchors); gErr == nil {
+				genPub, genID = gp, gid
+			}
 		}
 		commitMsg = strings.TrimSpace(in.CommitMessage)
 		if normPath != "" {
@@ -703,15 +707,14 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 				return fmt.Errorf("memory: marshal graph sidecar: %w", scErr)
 			}
 			sidecarPath := "graph/" + relPath + ".edges.json"
-			sb, _, sbErr := memrepo.BuildBlob(s.objects, sidecarPath, "application/json", sidecarBytes, false)
+			sb, _, sbErr := memrepo.BuildBlobWithMeta(s.objects, sidecarPath, "application/json", sidecarBytes, false, rec.Level, rec.Class)
 			if sbErr != nil {
 				return fmt.Errorf("memory: build graph sidecar blob: %w", sbErr)
 			}
-			sb.Level = rec.Level
-			sb.Class = rec.Class
 			extraBlobs = append(extraBlobs, sb)
 		}
 
+		rec.BlobHash = blobObj.BlobHash
 		cObj, expectedHead, cErr := s.prepareFragmentCommitWithExtrasTx(ctx, rtx, in.Shard, nextSeq, now, blobObj, extraBlobs, branch, msg, in.ExtraParents, authorPubHex, policyHashHex, ontologyHashHex)
 		if cErr != nil {
 			return cErr
@@ -720,6 +723,10 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 		treeHash = cObj.TreeHash
 
 		// 3. Build deterministic CBOR Merkle Automaton TransitionRecord (q_i -> q_{i+1}).
+		nextTrSeq, trSeqErr := rtx.NextTransitionSeq(in.Shard)
+		if trSeqErr != nil {
+			return trSeqErr
+		}
 		commitHashBytes, _ := hex.DecodeString(commitHash)
 		treeHashBytes, _ := hex.DecodeString(treeHash)
 		var polBytes, ontBytes []byte
@@ -736,7 +743,7 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 		trRec := core.TransitionRecord{
 			Version:      1,
 			Shard:        in.Shard,
-			Seq:          nextSeq,
+			Seq:          nextTrSeq,
 			PrevStateQ:   prevQBytes,
 			InputDigest:  hdp,
 			NextStateQ:   nextQBytes,
@@ -793,7 +800,7 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 		}
 		if err := rtx.SaveTransition(store.TransitionRow{
 			Shard:        in.Shard,
-			Seq:          nextSeq,
+			Seq:          nextTrSeq,
 			Hash:         transitionHash,
 			PrevQ:        core.ToHex(prevQBytes),
 			NextQ:        stateQHex,
@@ -851,12 +858,22 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 
 	var impacted []string
 	if !dedup {
-		// Notify OnRevision AND Grade S live SSE OnSupersede hooks for legacy Supersedes & RefinementSupersedes edges.
+		// Notify OnRevision, EventBus, AND Grade S live SSE OnSupersede hooks for legacy Supersedes & RefinementSupersedes edges.
 		s.mu.RLock()
 		supHook := s.onSupersede
+		bus := s.bus
 		s.mu.RUnlock()
+		if bus != nil && !IsSystemShard(in.Shard) {
+			bus.Publish("shard:"+in.Shard, "fragment_committed", map[string]any{
+				"shard":     stored.Shard,
+				"seq":       stored.Seq,
+				"leaf":      stored.Leaf,
+				"hdp":       stored.HDP,
+				"distilled": stored.Distilled,
+			})
+		}
 		fireSup := func(targetShard string, targetSeq int64, reason string) {
-			if supHook == nil || IsSystemShard(targetShard) {
+			if IsSystemShard(targetShard) || (supHook == nil && bus == nil) {
 				return
 			}
 			ev := SupersessionEvent{
@@ -870,11 +887,16 @@ func (s *Service) Remember(ctx context.Context, in RememberInput) (*RememberResu
 				Reason:        reason,
 				Timestamp:     now,
 			}
-			s.hookWG.Add(1)
-			go func(e SupersessionEvent) {
-				defer s.hookWG.Done()
-				supHook(e)
-			}(ev)
+			if bus != nil {
+				bus.Publish("shard:"+targetShard, "fragment_superseded", ev)
+			}
+			if supHook != nil {
+				s.hookWG.Add(1)
+				go func(e SupersessionEvent) {
+					defer s.hookWG.Done()
+					supHook(e)
+				}(ev)
+			}
 		}
 		seenSup := make(map[string]bool)
 		if in.Supersedes > 0 {

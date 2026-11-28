@@ -5,9 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/kryptokrates/nektar/internal/lattice"
 )
+
+// LatticeDomainEdge persists one ontological dominance edge (Parent >= Child) without upward package imports.
+type LatticeDomainEdge struct {
+	Parent string `json:"parent"`
+	Child  string `json:"child"`
+}
+
+// LatticeShardState persists per-shard CLKA epoch & domain DAG topology (zero raw keys stored).
+type LatticeShardState struct {
+	Shard       string              `json:"shard"`
+	Epoch       uint64              `json:"epoch"`
+	DomainEdges []LatticeDomainEdge `json:"domainEdges,omitempty"`
+}
 
 // TransitionRow stores one canonical CBOR Merkle Automaton state transition (q_i, sigma, q_j, t, h_i).
 type TransitionRow struct {
@@ -75,13 +86,25 @@ CREATE TABLE IF NOT EXISTS lattice_states (
 
 // GetFragmentByHDP looks up a fragment by (shard, hdp) inside an active RepoTx.
 func (rt *RepoTx) GetFragmentByHDP(shard, hdp string) (FragmentRecord, error) {
-	return scanFragment(rt.tx.QueryRow(`SELECT `+fragmentSelectCols+` FROM fragments WHERE shard = ? AND hdp = ?`, shard, hdp))
+	r, err := scanFragment(rt.tx.QueryRow(`SELECT `+fragmentSelectCols+` FROM fragments WHERE shard = ? AND hdp = ?`, shard, hdp))
+	if err != nil {
+		return r, err
+	}
+	hydrateFragment(rt.tx, &r)
+	return r, nil
 }
 
 // NextFragmentSeq returns the next sequential fragment number for shard inside an active RepoTx.
 func (rt *RepoTx) NextFragmentSeq(shard string) (int64, error) {
 	var nextSeq int64
 	err := rt.tx.QueryRow(`SELECT COALESCE(MAX(seq), 0) + 1 FROM fragments WHERE shard = ?`, shard).Scan(&nextSeq)
+	return nextSeq, err
+}
+
+// NextTransitionSeq returns the next monotonic transition sequence number for shard inside an active RepoTx.
+func (rt *RepoTx) NextTransitionSeq(shard string) (int64, error) {
+	var nextSeq int64
+	err := rt.tx.QueryRow(`SELECT COALESCE(MAX(seq), 0) + 1 FROM transitions WHERE shard = ?`, shard).Scan(&nextSeq)
 	return nextSeq, err
 }
 
@@ -105,12 +128,22 @@ func (rt *RepoTx) SaveTransition(r TransitionRow) error {
 	return err
 }
 
+// SaveTransitionIgnore inserts an immutable automaton transition row idempotently (ignoring duplicate (shard, seq)).
+func (rt *RepoTx) SaveTransitionIgnore(r TransitionRow) error {
+	_, err := rt.tx.Exec(`
+		INSERT OR IGNORE INTO transitions (shard, seq, hash, prev_q, next_q, commit_hash, tree_hash, policy_hash, ontology_hash, body_cbor, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.Shard, r.Seq, r.Hash, r.PrevQ, r.NextQ, r.CommitHash, r.TreeHash, r.PolicyHash, r.OntologyHash, r.BodyCBOR, r.CreatedAt,
+	)
+	return err
+}
+
 // GetLatestTransition returns the latest TransitionRow for shard (or sql.ErrNoRows if none).
 func (d *DB) GetLatestTransition(shard string) (TransitionRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var r TransitionRow
-	err := d.sql.QueryRow(`
+	err := rdb.QueryRow(`
 		SELECT shard, seq, hash, prev_q, next_q, commit_hash, tree_hash, policy_hash, ontology_hash, body_cbor, created_at
 		FROM transitions WHERE shard = ? ORDER BY seq DESC LIMIT 1`, shard).
 		Scan(&r.Shard, &r.Seq, &r.Hash, &r.PrevQ, &r.NextQ, &r.CommitHash, &r.TreeHash, &r.PolicyHash, &r.OntologyHash, &r.BodyCBOR, &r.CreatedAt)
@@ -119,12 +152,12 @@ func (d *DB) GetLatestTransition(shard string) (TransitionRow, error) {
 
 // ListTransitions returns transition records for shard in ascending seq order.
 func (d *DB) ListTransitions(shard string, limit int) ([]TransitionRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	if limit <= 0 {
 		limit = 500
 	}
-	rows, err := d.sql.Query(`
+	rows, err := rdb.Query(`
 		SELECT shard, seq, hash, prev_q, next_q, commit_hash, tree_hash, policy_hash, ontology_hash, body_cbor, created_at
 		FROM transitions WHERE shard = ? ORDER BY seq ASC LIMIT ?`, shard, limit)
 	if err != nil {
@@ -142,32 +175,64 @@ func (d *DB) ListTransitions(shard string, limit int) ([]TransitionRow, error) {
 	return out, rows.Err()
 }
 
-// GetFragmentByHDP looks up a fragment by (shard, hdp).
-func (d *DB) GetFragmentByHDP(shard, hdp string) (FragmentRecord, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return scanFragment(d.sql.QueryRow(`SELECT `+fragmentSelectCols+` FROM fragments WHERE shard = ? AND hdp = ?`, shard, hdp))
-}
-
-// GetFragmentByLeaf looks up a fragment by (shard, leaf).
-func (d *DB) GetFragmentByLeaf(shard, leaf string) (FragmentRecord, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return scanFragment(d.sql.QueryRow(`SELECT `+fragmentSelectCols+` FROM fragments WHERE shard = ? AND leaf = ?`, shard, leaf))
-}
-
-// LoadLatticeStates loads all persisted per-shard CLKA epoch and domain hierarchy states.
-func (d *DB) LoadLatticeStates() ([]lattice.ShardState, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`SELECT shard, epoch, edges_json FROM lattice_states ORDER BY shard ASC`)
+// ListAllTransitions returns every transition record for shard in ascending seq order.
+func (d *DB) ListAllTransitions(shard string) ([]TransitionRow, error) {
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`
+		SELECT shard, seq, hash, prev_q, next_q, commit_hash, tree_hash, policy_hash, ontology_hash, body_cbor, created_at
+		FROM transitions WHERE shard = ? ORDER BY seq ASC`, shard)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []lattice.ShardState
+	var out []TransitionRow
 	for rows.Next() {
-		var st lattice.ShardState
+		var r TransitionRow
+		if err := rows.Scan(&r.Shard, &r.Seq, &r.Hash, &r.PrevQ, &r.NextQ, &r.CommitHash, &r.TreeHash, &r.PolicyHash, &r.OntologyHash, &r.BodyCBOR, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// GetFragmentByHDP looks up a fragment by (shard, hdp).
+func (d *DB) GetFragmentByHDP(shard, hdp string) (FragmentRecord, error) {
+	rdb, release := d.rdb()
+	defer release()
+	r, err := scanFragment(rdb.QueryRow(`SELECT `+fragmentSelectCols+` FROM fragments WHERE shard = ? AND hdp = ?`, shard, hdp))
+	if err != nil {
+		return r, err
+	}
+	hydrateFragment(rdb, &r)
+	return r, nil
+}
+
+// GetFragmentByLeaf looks up a fragment by (shard, leaf).
+func (d *DB) GetFragmentByLeaf(shard, leaf string) (FragmentRecord, error) {
+	rdb, release := d.rdb()
+	defer release()
+	r, err := scanFragment(rdb.QueryRow(`SELECT `+fragmentSelectCols+` FROM fragments WHERE shard = ? AND leaf = ?`, shard, leaf))
+	if err != nil {
+		return r, err
+	}
+	hydrateFragment(rdb, &r)
+	return r, nil
+}
+
+// LoadLatticeStates loads all persisted per-shard CLKA epoch and domain hierarchy states.
+func (d *DB) LoadLatticeStates() ([]LatticeShardState, error) {
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`SELECT shard, epoch, edges_json FROM lattice_states ORDER BY shard ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LatticeShardState
+	for rows.Next() {
+		var st LatticeShardState
 		var edgesRaw []byte
 		if err := rows.Scan(&st.Shard, &st.Epoch, &edgesRaw); err != nil {
 			return nil, err
@@ -181,7 +246,7 @@ func (d *DB) LoadLatticeStates() ([]lattice.ShardState, error) {
 }
 
 // SaveLatticeState persists a shard's CLKA epoch and domain DAG edges (zero raw keys stored!).
-func (d *DB) SaveLatticeState(st lattice.ShardState) error {
+func (d *DB) SaveLatticeState(st LatticeShardState) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	raw, err := json.Marshal(st.DomainEdges)

@@ -6,9 +6,15 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-wallet-toolbox/pkg/wdk"
+)
+
+var (
+	incomingRelaySem     = make(chan struct{}, 64)
+	outgoingBroadcastSem = make(chan struct{}, 128)
 )
 
 func (s *bcommonServices) PostFromBEEF(ctx context.Context, beef *transaction.Beef, txids []string) (wdk.PostFromBeefResult, error) {
@@ -95,6 +101,59 @@ func (s *bcommonServices) PostFromBEEF(ctx context.Context, beef *transaction.Be
 				}
 				return nil, rejErr
 			}
+		}
+
+		// When internalizing an already-SPV-verified incoming BRC-29 payment on a live network,
+		// relay asynchronously in the background so Seller's HTTP HandlePurchase response returns
+		// the BRC-369 content key in <20ms instead of blocking on an extra 200ms ARC HTTP RTT!
+		if incoming && s.cfg.Broadcast == nil && s.cfg.Broadcaster != nil {
+			txCopy := tx
+			txIDCopy := id
+			s.txCache.Put(id, tx)
+			go func() {
+				select {
+				case incomingRelaySem <- struct{}{}:
+					defer func() { <-incomingRelaySem }()
+				default:
+					return
+				}
+				rCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = s.cfg.Broadcaster.Broadcast(rCtx, txCopy)
+				_ = txIDCopy
+			}()
+			posted.TxIDResults = append(posted.TxIDResults, wdk.PostedTxID{
+				TxID:   id,
+				Result: wdk.PostedTxIDResultSuccess,
+			})
+			continue
+		}
+
+		// Zero-conf P2P fast path: SpendGuard has ALREADY enforced and recorded the spend synchronously
+		// above, and the caller persisted the signed AtomicBEEF + obligations before Broadcast. Dispatch
+		// live ARC HTTP submission asynchronously so Buyer delivers AtomicBEEF to Seller immediately;
+		// if background ARC fails, mark submission_unknown so Monitor.UnFail reconciles it cleanly.
+		if !incoming && isAsyncBroadcast(ctx) && s.cfg.Broadcast == nil && s.cfg.Broadcaster != nil {
+			txCopy := tx
+			txIDCopy := id
+			s.txCache.Put(id, tx)
+			go func() {
+				outgoingBroadcastSem <- struct{}{}
+				defer func() { <-outgoingBroadcastSem }()
+				bCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				if bErr := s.cfg.Broadcaster.Broadcast(bCtx, txCopy); bErr != nil && !IsAlreadyKnownBroadcastError(bErr) {
+					s.setLastErr(txIDCopy, bErr)
+					if s.onAsyncBroadcastFailure != nil {
+						s.onAsyncBroadcastFailure(txIDCopy)
+					}
+				}
+			}()
+			posted.TxIDResults = append(posted.TxIDResults, wdk.PostedTxID{
+				TxID:   id,
+				Result: wdk.PostedTxIDResultSuccess,
+			})
+			continue
 		}
 
 		var bErr error

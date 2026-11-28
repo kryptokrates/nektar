@@ -107,9 +107,13 @@ func TestRestateClientConcurrencyAndLivenessCheck(t *testing.T) {
 
 	var alive atomic.Bool
 	alive.Store(true)
-	rc := market.NewRestateClient("http://127.0.0.1:1", "http://127.0.0.1:1")
+	rc, err := mkt.StartWorkflows(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("StartWorkflows: %v", err)
+	}
+	defer func() { _ = mkt.CloseWorkflows() }()
 	broker.SetRestateClient(rc)
-	app.SetRestateClient(rc, "http://127.0.0.1:9070")
+	app.SetRestateClient(rc, "embedded://workflows.sqlite")
 	app.SetRestateLiveness(alive.Load)
 
 	// Concurrent SetRestateClient + BuildDashboardState + metrics must be race-free.
@@ -118,7 +122,7 @@ func TestRestateClientConcurrencyAndLivenessCheck(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 10; i++ {
-			app.SetRestateClient(rc, "http://127.0.0.1:9070")
+			app.SetRestateClient(rc, "embedded://workflows.sqlite")
 		}
 	}()
 	go func() {

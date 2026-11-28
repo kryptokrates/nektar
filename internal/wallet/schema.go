@@ -12,6 +12,8 @@ import (
 	"github.com/lightwebinc/bcommon/feepolicy"
 	"github.com/lightwebinc/bcommon/mint"
 	"github.com/lightwebinc/bcommon/nodeapi"
+
+	"github.com/kryptokrates/nektar/internal/faststore"
 )
 
 // Transaction lifecycle statuses aligned with BRC-100 / go-wallet-toolbox.
@@ -52,8 +54,8 @@ const (
 	DefaultSweepChunkInputs = 300
 	// DefaultReservationTTL is how long an unsigned two-phase action lives before AbortAbandoned reclaims it.
 	DefaultReservationTTL = 5 * time.Minute
-	// DefaultTxCacheSize bounds the in-memory parsed transaction LRU cache.
-	DefaultTxCacheSize = 512
+	// DefaultTxCacheSize bounds the in-memory parsed transaction LRU cache (sharded across 64 buckets).
+	DefaultTxCacheSize = 65536
 	// WalletVersion is returned by BRC-100 GetVersion.
 	WalletVersion = "nektar-toolbox-0.1.0"
 )
@@ -169,6 +171,42 @@ func isIncomingInternalize(ctx context.Context) bool {
 	return v
 }
 
+type ctxKeyPreverifiedTx struct{}
+type ctxKeyAsyncBroadcast struct{}
+
+// WithPreverifiedTx attaches a consensus-SPV-verified *transaction.Transaction to ctx so downstream
+// InternalizeBRC29 and Engine.InternalizeAction skip redundant BEEF parsing and spv.Verify passes.
+func WithPreverifiedTx(ctx context.Context, tx *transaction.Transaction) context.Context {
+	if tx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyPreverifiedTx{}, tx)
+}
+
+// PreverifiedTxFromCtx returns a previously SPV-verified transaction attached to ctx, if any.
+func PreverifiedTxFromCtx(ctx context.Context) *transaction.Transaction {
+	if ctx == nil {
+		return nil
+	}
+	tx, _ := ctx.Value(ctxKeyPreverifiedTx{}).(*transaction.Transaction)
+	return tx
+}
+
+// WithAsyncBroadcast enables zero-conf P2P fast-path broadcast on live networks: PostFromBEEF runs
+// SpendGuard synchronously and then dispatches ARC HTTP submission on a bounded background pool so
+// Buyer delivers AtomicBEEF to Seller immediately without blocking on ARC network RTT.
+func WithAsyncBroadcast(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyAsyncBroadcast{}, true)
+}
+
+func isAsyncBroadcast(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(ctxKeyAsyncBroadcast{}).(bool)
+	return v
+}
+
 func withExternalSpend(ctx context.Context, sats uint64) context.Context {
 	return context.WithValue(ctx, ctxKeyExternalSpend{}, externalSpendHint{set: true, sats: sats})
 }
@@ -223,18 +261,18 @@ func StandardFuelProfile() FuelProfile {
 	}
 }
 
-// ThroughputFuelProfile is tuned for busy Hub or market-maker nodes (high concurrency burst).
+// ThroughputFuelProfile is tuned for busy Hub or market-maker nodes (high concurrency burst, 100+ TPS/node).
 func ThroughputFuelProfile() FuelProfile {
 	return FuelProfile{
 		Name:                   "throughput",
-		FuelTarget:             128,
+		FuelTarget:             1024,
 		FuelSats:               1500,
 		LowWaterPct:            40,
-		ReserveTarget:          8,
-		ReserveSats:            100_000,
-		MaxFanOutOutputs:       256,
+		ReserveTarget:          32,
+		ReserveSats:            500_000,
+		MaxFanOutOutputs:       512,
 		DustThresholdSats:      500,
-		DustConsolidateTrigger: 32,
+		DustConsolidateTrigger: 64,
 		DefaultAcceptDelayed:   false,
 	}
 }
@@ -292,6 +330,8 @@ type Config struct {
 	ProofLookup                 ProofLookupFunc                       // optional custom proof lookup (used for testchain)
 	SpendGuard                  SpendGuardCheck                       // optional fail-closed spend guard hook (enforced post-signing in PostFromBEEF)
 	SpendGuardCheck             func(feeSats, spendSats uint64) error // optional read-only pre-build cap check
+	FastStore                   *faststore.DB                         // optional Pebble WAL store for 64-shard FastLanePool
+	EnableFastLane              bool                                  // enable zero-GORM 64-shard BRC-29 FastLanePool
 	SpendGuardRemainingInterval func() time.Duration                  // optional min-interval remaining time for FuelKeeper pacing
 	OnTxMined                   TxMinedHook                           // optional callback invoked when Monitor verifies a mined BUMP
 	SettleDepth                 int                                   // confirmations before finalizing proofs / BlocksDelay (>=1 on live)

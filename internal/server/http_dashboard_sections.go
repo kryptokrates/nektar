@@ -58,9 +58,7 @@ func (a *App) buildDashboardReceipts(
 		}
 		verdict := "amber"
 		if idx < 20 && tok != "" {
-			if vr, vErr := a.mem.VerifyReceipt(ctx, tok); vErr == nil && vr != nil && vr.Verdict != "" {
-				verdict = vr.Verdict
-			}
+			verdict = a.cachedVerifyReceiptVerdict(ctx, tok, r.AnchorTxID != "")
 		}
 		sec.list = append(sec.list, map[string]any{
 			"seq":      r.ShardSeq,
@@ -92,6 +90,39 @@ func (a *App) buildDashboardReceipts(
 		}
 	}
 	return sec
+}
+
+func (a *App) cachedVerifyReceiptVerdict(ctx context.Context, tok string, hasAnchor bool) string {
+	_, anchoredRecs, _ := a.mem.DB().CountFragments()
+	now := time.Now().Unix()
+	cacheKey := fmt.Sprintf("%s:%t", tok, hasAnchor)
+	a.rcpVerdictMu.RLock()
+	entry, ok := a.rcpVerdictCache[cacheKey]
+	a.rcpVerdictMu.RUnlock()
+	if ok && now < entry.expiresAt && entry.anchoredRecs == anchoredRecs {
+		return entry.verdict
+	}
+	verdict := "amber"
+	if vr, vErr := a.mem.VerifyReceipt(ctx, tok); vErr == nil && vr != nil && vr.Verdict != "" {
+		verdict = vr.Verdict
+	}
+	ttl := int64(5)
+	if verdict == "green" {
+		ttl = 300
+	}
+	a.rcpVerdictMu.Lock()
+	if len(a.rcpVerdictCache) >= 512 {
+		clear(a.rcpVerdictCache)
+	}
+	if a.rcpVerdictCache != nil {
+		a.rcpVerdictCache[cacheKey] = cachedReceiptVerdict{
+			verdict:      verdict,
+			anchoredRecs: anchoredRecs,
+			expiresAt:    now + ttl,
+		}
+	}
+	a.rcpVerdictMu.Unlock()
+	return verdict
 }
 
 type dashboardPoliciesSection struct {
@@ -171,7 +202,7 @@ func (a *App) buildDashboardMarketAndNet(ctx context.Context, listings []store.S
 		frags, _ := a.mem.DB().ListFragments(l.Shard)
 		works, shardEarned, _ := a.mem.DB().SellerShardStats(l.Shard)
 		feedEP := ""
-		if baseURL != "" && l.SupportsMode(nmu.ModeSubscription) {
+		if baseURL != "" && l.SupportsMode(string(nmu.ModeSubscription)) {
 			feedEP = baseURL + "/v1/market/feeds/" + l.Shard
 		}
 		bestGrade, totalUnits, _, _ := a.summarizeLocalListing(ctx, l, hasActiveBond, feedEP)
@@ -179,8 +210,8 @@ func (a *App) buildDashboardMarketAndNet(ctx context.Context, listings []store.S
 		modeStrs := make([]string, 0, len(enabled))
 		offerParts := make([]string, 0, len(enabled))
 		for _, m := range enabled {
-			modeStrs = append(modeStrs, string(m))
-			switch m {
+			modeStrs = append(modeStrs, m)
+			switch nmu.PricingMode(m) {
 			case nmu.ModeSpot:
 				if l.PricePerUnit {
 					offerParts = append(offerParts, fmt.Sprintf("%d sats/u", l.PriceSats))
@@ -407,7 +438,7 @@ func (a *App) buildDashboardAutomation(
 	var rtNextAt any = nil
 	if rc := a.restateClient(); rc != nil {
 		if invs, qErr := rc.QueryInvocations(ctx, 25); qErr == nil {
-			rtExecutor = "restate"
+			rtExecutor = "go-workflows"
 			var earliestNext int64
 			for _, inv := range invs {
 				stLower := strings.ToLower(inv.Status)
@@ -444,7 +475,7 @@ func (a *App) buildDashboardAutomation(
 				rtNextAt = earliestNext
 			}
 		} else {
-			rtExecutor = "restate-unavailable"
+			rtExecutor = "workflows-unavailable"
 		}
 	}
 

@@ -78,9 +78,9 @@ func (d *DB) DeletePendingAnchor(shard string, n int64) error {
 
 // ListPendingAnchors returns all incomplete in-flight anchor batches ordered oldest first.
 func (d *DB) ListPendingAnchors() ([]PendingAnchor, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`SELECT shard, n, COALESCE(kind, 'append'), seqs_json, root_hex, chained_hex, COALESCE(state_hash, ''), COALESCE(mmr_root, ''), txid, beef, created_at FROM pending_anchors ORDER BY created_at ASC`)
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`SELECT shard, n, COALESCE(kind, 'append'), seqs_json, root_hex, chained_hex, COALESCE(state_hash, ''), COALESCE(mmr_root, ''), txid, beef, created_at FROM pending_anchors ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -107,19 +107,19 @@ func (d *DB) ListPendingAnchors() ([]PendingAnchor, error) {
 
 // CountUnsettledAnchors returns the number of broadcast batch anchors without a mined BUMP proof.
 func (d *DB) CountUnsettledAnchors() (int, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var n int
-	err := d.sql.QueryRow(`SELECT COUNT(*) FROM anchors WHERE settled = 0`).Scan(&n)
+	err := rdb.QueryRow(`SELECT COUNT(*) FROM anchors WHERE settled = 0`).Scan(&n)
 	return n, err
 }
 
 // CountPendingAnchors returns the number of in-flight anchor batches awaiting broadcast completion.
 func (d *DB) CountPendingAnchors() (int, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var n int
-	err := d.sql.QueryRow(`SELECT COUNT(*) FROM pending_anchors`).Scan(&n)
+	err := rdb.QueryRow(`SELECT COUNT(*) FROM pending_anchors`).Scan(&n)
 	return n, err
 }
 
@@ -211,9 +211,9 @@ func (d *DB) UpdateAnchorHead(shard string, n int64, newTxID string, newBeef []b
 
 // ListAnchors returns all batch anchors for shard ordered by n ascending.
 func (d *DB) ListAnchors(shard string) ([]BatchAnchor, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`
 		SELECT shard, shard_id, n, size, root_hex, chained_hex, COALESCE(state_hash, ''), COALESCE(mmr_root, ''), txid, beef, settled, block_height, created_at
 		FROM anchors WHERE shard = ? ORDER BY n ASC`, shard)
 	if err != nil {
@@ -235,9 +235,9 @@ func (d *DB) ListAnchors(shard string) ([]BatchAnchor, error) {
 
 // ListAnchorSummaries returns anchor metadata for shard ordered by n ascending WITHOUT loading BEEF blobs.
 func (d *DB) ListAnchorSummaries(shard string) ([]BatchAnchor, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`
 		SELECT shard, shard_id, n, size, root_hex, chained_hex, COALESCE(state_hash, ''), COALESCE(mmr_root, ''), txid, settled, block_height, created_at
 		FROM anchors WHERE shard = ? ORDER BY n ASC`, shard)
 	if err != nil {
@@ -259,9 +259,9 @@ func (d *DB) ListAnchorSummaries(shard string) ([]BatchAnchor, error) {
 
 // ListUnsettledAnchors returns all anchors with settled=0 across every shard (for live proof refresh).
 func (d *DB) ListUnsettledAnchors() ([]BatchAnchor, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`
 		SELECT shard, shard_id, n, size, root_hex, chained_hex, COALESCE(state_hash, ''), COALESCE(mmr_root, ''), txid, beef, settled, block_height, created_at
 		FROM anchors WHERE settled = 0 ORDER BY created_at ASC`)
 	if err != nil {
@@ -363,11 +363,25 @@ func (d *DB) IsAnchorSettled(txid string) (bool, error) {
 	if txid == "" {
 		return false, nil
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var n int
-	err := d.sql.QueryRow(`SELECT COUNT(1) FROM anchors WHERE txid = ? AND settled = 1 AND length(beef) > 0`, txid).Scan(&n)
+	err := rdb.QueryRow(`SELECT COUNT(1) FROM anchors WHERE txid = ? AND settled = 1 AND length(beef) > 0`, txid).Scan(&n)
 	return n > 0, err
+}
+
+// GetAnchor fetches a single batch anchor by (shard, n).
+func (d *DB) GetAnchor(shard string, n int64) (BatchAnchor, error) {
+	rdb, release := d.rdb()
+	defer release()
+	var a BatchAnchor
+	var settled int
+	err := rdb.QueryRow(`
+		SELECT shard, shard_id, n, size, root_hex, chained_hex, COALESCE(state_hash, ''), COALESCE(mmr_root, ''), txid, beef, settled, block_height, created_at
+		FROM anchors WHERE shard = ? AND n = ?`, shard, n).
+		Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.StateHash, &a.MmrRoot, &a.TxID, &a.Beef, &settled, &a.BlockHeight, &a.CreatedAt)
+	a.Settled = settled != 0
+	return a, err
 }
 
 // GetAnchorByTxID fetches a batch anchor matching txid, if any.
@@ -375,11 +389,11 @@ func (d *DB) GetAnchorByTxID(txid string) (BatchAnchor, bool, error) {
 	if txid == "" {
 		return BatchAnchor{}, false, nil
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var a BatchAnchor
 	var settled int
-	err := d.sql.QueryRow(`
+	err := rdb.QueryRow(`
 		SELECT shard, shard_id, n, size, root_hex, chained_hex, COALESCE(state_hash, ''), COALESCE(mmr_root, ''), txid, beef, settled, block_height, created_at
 		FROM anchors WHERE txid = ? LIMIT 1`, txid).
 		Scan(&a.Shard, &a.ShardID, &a.N, &a.Size, &a.RootHex, &a.ChainedHex, &a.StateHash, &a.MmrRoot, &a.TxID, &a.Beef, &settled, &a.BlockHeight, &a.CreatedAt)
@@ -443,19 +457,19 @@ func (d *DB) UpdateReceiptAnchor(shardSeq int64, anchorTxID string) error {
 
 // GetReceipt looks up a receipt by its 64-hex hash.
 func (d *DB) GetReceipt(hash string) (ReceiptRecord, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var r ReceiptRecord
-	err := d.sql.QueryRow(`SELECT receipt_hash, shard_seq, body_json, anchor_txid, created_at FROM receipts WHERE receipt_hash = ?`, hash).
+	err := rdb.QueryRow(`SELECT receipt_hash, shard_seq, body_json, anchor_txid, created_at FROM receipts WHERE receipt_hash = ?`, hash).
 		Scan(&r.ReceiptHash, &r.ShardSeq, &r.BodyJSON, &r.AnchorTxID, &r.CreatedAt)
 	return r, err
 }
 
 // CitingReceipts returns all receipt hashes citing (shard, seq).
 func (d *DB) CitingReceipts(shard string, seq int64) ([]string, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`SELECT receipt_hash FROM citations WHERE shard = ? AND seq = ?`, shard, seq)
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`SELECT receipt_hash FROM citations WHERE shard = ? AND seq = ?`, shard, seq)
 	if err != nil {
 		return nil, err
 	}

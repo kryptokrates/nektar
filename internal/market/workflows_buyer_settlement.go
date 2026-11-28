@@ -31,21 +31,65 @@ func offerMatchesDealRecord(existing store.DealRecord, offerID string) bool {
 	return prevOffer.OfferID == offerID
 }
 
-func (e *Engine) buyerPayAndDeliver(rctx context.Context, dealID string, chosen bstack.OfferAd) (buyerPayResult, error) {
+func (a *workflowActivities) BuyerBroadcastPayment(ctx context.Context, dealID string, chosen bstack.OfferAd) (buyerPayResult, error) {
+	return a.eng.buyerBroadcastPayment(ctx, dealID, chosen)
+}
+
+func (a *workflowActivities) BuyerDeliverPurchase(ctx context.Context, dealID string, chosen bstack.OfferAd, payRes buyerPayResult) (buyerDeliverResult, error) {
+	return a.eng.buyerDeliverPurchase(ctx, dealID, chosen, payRes)
+}
+
+func buildRevealObligationRecord(dealID, sellerPub, txid string, amountSats uint64, nowUnix int64, escrow *EscrowObligationPayload) store.ObligationRecord {
+	dl := nowUnix + 7200
+	if escrow != nil && escrow.RefundAfter >= 500_000_000 {
+		dl = int64(escrow.RefundAfter)
+	}
+	var payloadJSON []byte
+	if escrow != nil {
+		payloadJSON, _ = json.Marshal(escrow)
+	}
+	return store.ObligationRecord{
+		ID:           ObligationID(dealID, ObligationRevealOwed),
+		DealID:       dealID,
+		Role:         "buyer",
+		Kind:         ObligationRevealOwed,
+		Counterparty: sellerPub,
+		AmountSats:   amountSats,
+		TxID:         txid,
+		DeadlineUnix: dl,
+		Status:       "open",
+		PayloadJSON:  payloadJSON,
+	}
+}
+
+// buyerBroadcastPayment builds, pre-journals (including EscrowObligationPayload BEFORE Broadcast per STATE-2),
+// and broadcasts the buyer's on-chain payment without coupling HTTP/bbox delivery retries into payment state (RT-3).
+func (e *Engine) buyerBroadcastPayment(rctx context.Context, dealID string, chosen bstack.OfferAd) (buyerPayResult, error) {
 	now := time.Now().Unix()
-	br := e.getBroker()
-	if br == nil {
-		// Fail retryably if Broker is not yet initialized so Restate never pays without delivering!
+	if e.getBroker() == nil {
 		return buyerPayResult{}, errors.New("market: broker not initialized yet for purchase delivery")
 	}
-	// Check if we already built/persisted PaymentTxID + BRC-29 remittance for THIS exact seller & offer
-	// before a crash or ErrBroadcastUnknown retry! Never reuse a previous seller's tx across failover.
+	db := e.mem.DB()
+
 	var payTxID string
 	var payBEEF []byte
 	var outIdx uint32
 	var derivPrefix, derivSuffix, senderKey string
 	var escrowPayload *EscrowObligationPayload
-	if existing, gErr := e.mem.DB().GetDeal(dealID); gErr == nil && existing.PaymentTxID != "" &&
+
+	fj := e.FastJournal()
+	var existing store.DealRecord
+	var gErr error
+	if fj != nil {
+		if rec, ok := fj.GetDealWAL(dealID); ok {
+			existing = rec
+		} else {
+			gErr = errors.New("not found")
+		}
+	} else {
+		existing, gErr = db.GetDeal(dealID)
+	}
+	if gErr == nil && existing.PaymentTxID != "" &&
 		strings.EqualFold(existing.CounterpartyPub, chosen.Pub) &&
 		offerMatchesDealRecord(existing, chosen.OfferID) {
 		payTxID = existing.PaymentTxID
@@ -54,13 +98,14 @@ func (e *Engine) buyerPayAndDeliver(rctx context.Context, dealID string, chosen 
 		derivPrefix = existing.PaymentDerivPrefix
 		derivSuffix = existing.PaymentDerivSuffix
 		senderKey = existing.PaymentSenderKey
-		if ob, obErr := e.mem.DB().GetObligation(ObligationID(dealID, ObligationRevealOwed)); obErr == nil && len(ob.PayloadJSON) > 0 {
-			var ep EscrowObligationPayload
-			if json.Unmarshal(ob.PayloadJSON, &ep) == nil && ep.EscrowTxID != "" {
-				escrowPayload = &ep
+		if fj == nil {
+			if ob, obErr := db.GetObligation(ObligationID(dealID, ObligationRevealOwed)); obErr == nil && len(ob.PayloadJSON) > 0 {
+				var ep EscrowObligationPayload
+				if json.Unmarshal(ob.PayloadJSON, &ep) == nil && ep.EscrowTxID != "" {
+					escrowPayload = &ep
+				}
 			}
 		}
-		// Ensure previously built/uncertain tx is actually broadcast idempotently without constructing a second tx!
 		mined, wStatus, _, _, _ := e.mem.Chain().TxBroadcastStatus(rctx, payTxID)
 		if !mined && len(payBEEF) > 0 {
 			if _, parsedTx, _, pErr := guard.ParseBEEF(payBEEF, guard.DefaultBound); pErr == nil && parsedTx != nil {
@@ -71,29 +116,28 @@ func (e *Engine) buyerPayAndDeliver(rctx context.Context, dealID string, chosen 
 							e.clearPendingPayment(dealID)
 							return buyerPayResult{NowUnix: now, PreBroadcastErr: bErr.Error()}, nil
 						}
-						// Non-ErrSpendRejected broadcast errors are ambiguous post-submit: keep PaymentTxID
-						// persisted and fail/retry reconciliation rather than double-paying another seller!
 						return buyerPayResult{}, bErr
 					}
 				case "submission_unknown", "sending", "unproven":
-					// Re-air unproven/uncertain payment idempotently so mempool/peers receive full BEEF ancestry.
 					_ = e.mem.Chain().RelayExternalTx(rctx, parsedTx)
 				}
 			}
 		}
 	} else {
 		chosenJSON, _ := json.Marshal(chosen)
-		e.persistDealRecord(store.DealRecord{
-			DealID:          dealID,
-			Role:            "buyer",
-			Status:          "payment_pending",
-			ChosenOfferJSON: chosenJSON,
-			CounterpartyPub: chosen.Pub,
-		})
+		if fj == nil {
+			if err := e.persistDealRecordChecked(store.DealRecord{
+				DealID:          dealID,
+				Role:            "buyer",
+				Status:          "payment_pending",
+				ChosenOfferJSON: chosenJSON,
+				CounterpartyPub: chosen.Pub,
+				PriceSats:       chosen.PriceSats,
+			}); err != nil {
+				return buyerPayResult{}, err
+			}
+		}
 
-		// Wave 1 Rúnar Escrow Path: when policy selects DisclosureSale escrow (default auto >= 500 sats
-		// or > ZeroConfMaxSats) and Seller supplied a signed KeyedSaleOffer, fund an atomic DisclosureSale
-		// UTXO (from an active NektarAgentVault in 1 tx when deployed, else from BRC-100 wallet!).
 		useEscrow := e.policy != nil && e.policy.ShouldUseEscrow(chosen.PriceSats) && len(chosen.SaleOffer) > 0
 		if useEscrow {
 			var so contracts.KeyedSaleOffer
@@ -142,30 +186,41 @@ func (e *Engine) buyerPayAndDeliver(rctx context.Context, dealID string, chosen 
 			}
 			escrowSats := escrowParams.RequiredEscrowSatoshis() + 100
 
-			// Atomic 1-tx composition: if an active unpaused NektarAgentVault is deployed, fund the
-			// DisclosureSale escrow DIRECTLY from the vault via AgentSpend (Output 0 = vault, Output 1 = escrow).
-			// Fail closed if vault loading or vault spend fails — NEVER silently bypass vault caps into hot wallet.
 			fundedFromVault := false
-			vRec, _, vErr := LoadActiveVault(e.mem.DB())
+			vRec, _, vErr := LoadActiveVault(db)
 			if vErr != nil {
 				return buyerPayResult{NowUnix: now, PreBroadcastErr: "load active vault: " + vErr.Error()}, nil
 			}
 			if vRec != nil && !vRec.State.Paused {
-				vTx, vBEEF, vOutIdx, _, _, svErr := SpendActiveVault(rctx, e.mem.DB(), e.mem.Chain(), escrowLock, escrowSats)
+				vTx, vBEEF, vOutIdx, _, _, svErr := SpendActiveVault(rctx, db, e.mem.Chain(), escrowLock, escrowSats)
 				if svErr != nil {
 					if vTx != nil {
 						payTxID = vTx.TxID().String()
 						payBEEF = vBEEF
 						outIdx = vOutIdx
-						e.persistDealRecord(store.DealRecord{
+						ep := &EscrowObligationPayload{
+							OfferID:      chosen.OfferID,
+							EscrowTxID:   payTxID,
+							EscrowVout:   outIdx,
+							EscrowBEEF:   hex.EncodeToString(payBEEF),
+							SellerPKH:    hex.EncodeToString(sellerPKH),
+							DepositorPKH: hex.EncodeToString(depPKH),
+							Price:        chosen.PriceSats,
+							HWrapped:     so.Config.HWrapped,
+							RefundAfter:  refundAfter,
+							MaxFee:       maxFee,
+						}
+						_ = db.SaveDealWithObligations(mergeDealOrNew(db, store.DealRecord{
 							DealID:             dealID,
 							Role:               "buyer",
 							Status:             "payment_pending",
+							ChosenOfferJSON:    chosenJSON,
 							CounterpartyPub:    chosen.Pub,
+							PriceSats:          chosen.PriceSats,
 							PaymentTxID:        payTxID,
 							PaymentBEEF:        payBEEF,
 							PaymentOutputIndex: outIdx,
-						})
+						}), buildRevealObligationRecord(dealID, chosen.Pub, payTxID, chosen.PriceSats, now, ep))
 						return buyerPayResult{}, svErr
 					}
 					if errors.Is(svErr, nwallet.ErrBroadcastUnknown) {
@@ -206,52 +261,73 @@ func (e *Engine) buyerPayAndDeliver(rctx context.Context, dealID string, chosen 
 					}
 				}
 				outIdx = 0
-				e.persistDealRecord(store.DealRecord{
+				escrowPayload = &EscrowObligationPayload{
+					OfferID:      chosen.OfferID,
+					EscrowTxID:   payTxID,
+					EscrowVout:   outIdx,
+					EscrowBEEF:   hex.EncodeToString(payBEEF),
+					SellerPKH:    hex.EncodeToString(sellerPKH),
+					DepositorPKH: hex.EncodeToString(depPKH),
+					Price:        chosen.PriceSats,
+					HWrapped:     so.Config.HWrapped,
+					RefundAfter:  refundAfter,
+					MaxFee:       maxFee,
+				}
+				// STATE-2 + RCA-2: Atomically commit BOTH deal PaymentTxID AND EscrowObligationPayload BEFORE Broadcast!
+				if err := db.SaveDealWithObligations(mergeDealOrNew(db, store.DealRecord{
 					DealID:             dealID,
 					Role:               "buyer",
 					Status:             "payment_pending",
+					ChosenOfferJSON:    chosenJSON,
 					CounterpartyPub:    chosen.Pub,
+					PriceSats:          chosen.PriceSats,
 					PaymentTxID:        payTxID,
 					PaymentBEEF:        payBEEF,
 					PaymentOutputIndex: outIdx,
-				})
+				}), buildRevealObligationRecord(dealID, chosen.Pub, payTxID, chosen.PriceSats, now, escrowPayload)); err != nil {
+					return buyerPayResult{}, err
+				}
 				if _, brErr := e.mem.Chain().Broadcast(rctx, builtTx, fee, spend); brErr != nil {
 					if errors.Is(brErr, nwallet.ErrSpendRejected) {
 						e.clearPendingPayment(dealID)
+						_ = db.FulfillObligation(ObligationID(dealID, ObligationRevealOwed))
 						return buyerPayResult{NowUnix: now, PreBroadcastErr: brErr.Error()}, nil
 					}
-					// Any non-ErrSpendRejected broadcast error is ambiguous post-submit: keep PaymentTxID
-					// persisted so retries reconcile the SAME txid instead of double-paying Seller #2!
 					return buyerPayResult{}, brErr
 				}
 				if freshBEEF, fErr := chain.SafeAtomicBEEF(builtTx); fErr == nil && len(freshBEEF) > 0 {
 					payBEEF = freshBEEF
+					escrowPayload.EscrowBEEF = hex.EncodeToString(payBEEF)
+				}
+			} else {
+				escrowPayload = &EscrowObligationPayload{
+					OfferID:      chosen.OfferID,
+					EscrowTxID:   payTxID,
+					EscrowVout:   outIdx,
+					EscrowBEEF:   hex.EncodeToString(payBEEF),
+					SellerPKH:    hex.EncodeToString(sellerPKH),
+					DepositorPKH: hex.EncodeToString(depPKH),
+					Price:        chosen.PriceSats,
+					HWrapped:     so.Config.HWrapped,
+					RefundAfter:  refundAfter,
+					MaxFee:       maxFee,
 				}
 			}
-			escrowPayload = &EscrowObligationPayload{
-				OfferID:      chosen.OfferID,
-				EscrowTxID:   payTxID,
-				EscrowVout:   outIdx,
-				EscrowBEEF:   hex.EncodeToString(payBEEF),
-				SellerPKH:    hex.EncodeToString(sellerPKH),
-				DepositorPKH: hex.EncodeToString(depPKH),
-				Price:        chosen.PriceSats,
-				HWrapped:     so.Config.HWrapped,
-				RefundAfter:  refundAfter,
-				MaxFee:       maxFee,
-			}
-			e.persistDealRecord(store.DealRecord{
+			if err := db.SaveDealWithObligations(mergeDealOrNew(db, store.DealRecord{
 				DealID:             dealID,
 				Role:               "buyer",
 				Status:             "paid_awaiting_reveal",
+				ChosenOfferJSON:    chosenJSON,
 				CounterpartyPub:    chosen.Pub,
+				PriceSats:          chosen.PriceSats,
 				PaymentTxID:        payTxID,
 				PaymentBEEF:        payBEEF,
 				PaymentOutputIndex: outIdx,
-			})
+			}), buildRevealObligationRecord(dealID, chosen.Pub, payTxID, chosen.PriceSats, now, escrowPayload)); err != nil {
+				return buyerPayResult{}, err
+			}
+			e.publishDealEvent(dealID, "paid_awaiting_reveal")
 		} else if chosen.PayIdentityKey != "" {
-			// Pre-build signed NoSend BRC-29 tx and persist txid + BEEF + remittance metadata BEFORE broadcast
-			// so neither crashes nor ErrBroadcastUnknown retries can ever double-pay or lose BRC-29 nonces!
 			buyMeta := nwallet.ActionBuyKnowledge(chosen.OfferID, chosen.PriceSats)
 			builtTx, fee, spend, sendRes, alreadyBroadcast, bErr := e.mem.Chain().BuildBRC29Tx(rctx, chosen.PayIdentityKey, chosen.PriceSats, buyMeta.Description)
 			if bErr != nil {
@@ -266,91 +342,148 @@ func (e *Engine) buyerPayAndDeliver(rctx context.Context, dealID string, chosen 
 			derivPrefix = sendRes.DerivationPrefix
 			derivSuffix = sendRes.DerivationSuffix
 			senderKey = sendRes.SenderIdentityKey
-			e.persistDealRecord(store.DealRecord{
+			preRec := store.DealRecord{
 				DealID:             dealID,
 				Role:               "buyer",
 				Status:             "payment_pending",
+				ChosenOfferJSON:    chosenJSON,
 				CounterpartyPub:    chosen.Pub,
+				PriceSats:          chosen.PriceSats,
 				PaymentTxID:        payTxID,
 				PaymentBEEF:        payBEEF,
 				PaymentOutputIndex: outIdx,
 				PaymentDerivPrefix: derivPrefix,
 				PaymentDerivSuffix: derivSuffix,
 				PaymentSenderKey:   senderKey,
-			})
+				UpdatedAt:          now,
+			}
+			if fj != nil {
+				if err := fj.SaveDealWAL(preRec); err != nil {
+					return buyerPayResult{}, err
+				}
+			} else {
+				if err := db.SaveDealWithObligations(mergeDealOrNew(db, preRec), buildRevealObligationRecord(dealID, chosen.Pub, payTxID, chosen.PriceSats, now, nil)); err != nil {
+					return buyerPayResult{}, err
+				}
+			}
 			if !alreadyBroadcast {
-				if _, brErr := e.mem.Chain().Broadcast(rctx, builtTx, fee, spend); brErr != nil {
+				bcastCtx := rctx
+				if netName := e.mem.Chain().Network(); netName != "memory" && netName != "regtest" &&
+					chosen.PriceSats <= e.mem.Chain().ZeroConfMaxSats() {
+					bcastCtx = nwallet.WithAsyncBroadcast(rctx)
+				}
+				if _, brErr := e.mem.Chain().Broadcast(bcastCtx, builtTx, fee, spend); brErr != nil {
 					if errors.Is(brErr, nwallet.ErrSpendRejected) {
 						e.clearPendingPayment(dealID)
+						if fj == nil {
+							_ = db.FulfillObligation(ObligationID(dealID, ObligationRevealOwed))
+						}
 						return buyerPayResult{NowUnix: now, PreBroadcastErr: brErr.Error()}, nil
 					}
-					// Persisted PaymentTxID ensures retry reconciles the SAME txid instead of double-paying!
 					return buyerPayResult{}, brErr
 				}
 			}
-			if freshBEEF, fErr := chain.SafeAtomicBEEF(builtTx); fErr == nil && len(freshBEEF) > 0 {
-				payBEEF = freshBEEF
+			if fj == nil {
+				if freshBEEF, fErr := chain.SafeAtomicBEEF(builtTx); fErr == nil && len(freshBEEF) > 0 {
+					payBEEF = freshBEEF
+				}
+				if err := e.persistDealRecordChecked(store.DealRecord{
+					DealID:             dealID,
+					Role:               "buyer",
+					Status:             "paid_awaiting_reveal",
+					ChosenOfferJSON:    chosenJSON,
+					CounterpartyPub:    chosen.Pub,
+					PriceSats:          chosen.PriceSats,
+					PaymentTxID:        payTxID,
+					PaymentBEEF:        payBEEF,
+					PaymentOutputIndex: outIdx,
+					PaymentDerivPrefix: derivPrefix,
+					PaymentDerivSuffix: derivSuffix,
+					PaymentSenderKey:   senderKey,
+				}); err != nil {
+					return buyerPayResult{}, err
+				}
 			}
-			e.persistDealRecord(store.DealRecord{
-				DealID:             dealID,
-				Role:               "buyer",
-				Status:             "paid_awaiting_reveal",
-				CounterpartyPub:    chosen.Pub,
-				PaymentTxID:        payTxID,
-				PaymentBEEF:        payBEEF,
-				PaymentOutputIndex: outIdx,
-				PaymentDerivPrefix: derivPrefix,
-				PaymentDerivSuffix: derivSuffix,
-				PaymentSenderKey:   senderKey,
-			})
 		} else {
 			return buyerPayResult{NowUnix: now, PreBroadcastErr: "seller payIdentityKey (BRC-29) is required"}, nil
 		}
 	}
 
-	if payTxID != "" && e.mem != nil && e.mem.DB() != nil {
-		dl := now + 7200
-		if escrowPayload != nil && escrowPayload.RefundAfter >= 500_000_000 {
-			dl = int64(escrowPayload.RefundAfter)
-		}
-		_ = RecordRevealOwedWithEscrow(e.mem.DB(), dealID, chosen.Pub, payTxID, chosen.PriceSats, dl, escrowPayload)
+	if payTxID != "" && fj == nil {
+		_, _ = e.EmitTxEventLocal(rctx, payTxID, TxEventInput{
+			Kind:       "broadcast",
+			Detail:     "buyer-deal:" + dealID,
+			ObservedAt: now,
+		})
 	}
-
-	res := buyerPayResult{NowUnix: now, TxID: payTxID}
+	res := buyerPayResult{
+		NowUnix:       now,
+		TxID:          payTxID,
+		PayBEEFHex:    hex.EncodeToString(payBEEF),
+		OutputIndex:   outIdx,
+		DerivPrefix:   derivPrefix,
+		DerivSuffix:   derivSuffix,
+		SenderKey:     senderKey,
+		EscrowPayload: escrowPayload,
+	}
 	if escrowPayload != nil {
 		res.EscrowTxID = escrowPayload.EscrowTxID
 		res.EscrowRefundAfter = escrowPayload.RefundAfter
+	}
+	return res, nil
+}
+
+// buyerDeliverPurchase delivers the signed PurchaseRequest to Seller (direct HTTP or NAT bbox fallback)
+// in its own retried activity (RT-3) and explicitly handles Status == "awaiting_confirmation" (STATE-1).
+func (e *Engine) buyerDeliverPurchase(rctx context.Context, dealID string, chosen bstack.OfferAd, payRes buyerPayResult) (buyerDeliverResult, error) {
+	now := time.Now().Unix()
+	br := e.getBroker()
+	if br == nil {
+		return buyerDeliverResult{}, errors.New("market: broker not initialized yet for purchase delivery")
 	}
 	pReq := PurchaseRequest{
 		OfferID:           chosen.OfferID,
 		WantID:            dealID,
 		BuyerPub:          br.PubHex(),
-		TxID:              payTxID,
-		PaymentBEEFHex:    hex.EncodeToString(payBEEF),
-		OutputIndex:       outIdx,
-		DerivationPrefix:  derivPrefix,
-		DerivationSuffix:  derivSuffix,
-		SenderIdentityKey: senderKey,
+		TxID:              payRes.TxID,
+		PaymentBEEFHex:    payRes.PayBEEFHex,
+		OutputIndex:       payRes.OutputIndex,
+		DerivationPrefix:  payRes.DerivPrefix,
+		DerivationSuffix:  payRes.DerivSuffix,
+		SenderIdentityKey: payRes.SenderKey,
 	}
-	if escrowPayload != nil {
+	if payRes.EscrowPayload != nil {
 		pReq.EscrowMode = true
-		pReq.DepositorPKH = escrowPayload.DepositorPKH
-		pReq.EscrowSellerPKH = escrowPayload.SellerPKH
-		pReq.EscrowRefundAfter = escrowPayload.RefundAfter
-		pReq.EscrowMaxFee = escrowPayload.MaxFee
+		pReq.DepositorPKH = payRes.EscrowPayload.DepositorPKH
+		pReq.EscrowSellerPKH = payRes.EscrowPayload.SellerPKH
+		pReq.EscrowRefundAfter = payRes.EscrowPayload.RefundAfter
+		pReq.EscrowMaxFee = payRes.EscrowPayload.MaxFee
 	}
 	br.signPurchaseRequest(&pReq)
-	// Try direct HTTP first; if Seller is NAT-ed, fire bbox purchase_beef asynchronously
-	// and return nil so BuyerDeal suspends durably on Restate Promise("claim")!
+
 	pResp, dErr := br.DeliverPurchaseAsync(rctx, chosen, dealID, pReq)
 	if dErr != nil {
-		res.DeliveryErr = dErr.Error()
-	} else if pResp != nil && pResp.OK {
-		claimTID := payTxID
+		// Propagate error so go-workflows retries transient HTTP/hub delivery hiccups cleanly (RT-3)!
+		return buyerDeliverResult{NowUnix: now, DeliveryErr: dErr.Error()}, dErr
+	}
+	out := buyerDeliverResult{NowUnix: now}
+	if pResp == nil {
+		// NAT bbox async path: BuyerDeal suspends on SignalChannel("claim").
+		return out, nil
+	}
+	// STATE-1 fix: when Seller accepts over-cap / unmined payment into payment_pending, it returns
+	// Status == "awaiting_confirmation" with NO ContentKeyHex yet — suspend on SignalChannel("claim")!
+	if pResp.Status == "awaiting_confirmation" {
+		out.AwaitingConfirmation = true
+		out.RequiredDepth = pResp.RequiredDepth
+		return out, nil
+	}
+	if pResp.OK && (strings.TrimSpace(pResp.ContentKeyHex) != "" || strings.TrimSpace(pResp.ClaimTxBEEFHex) != "") {
+		claimTID := payRes.TxID
 		if pResp.ClaimTxID != "" {
 			claimTID = pResp.ClaimTxID
 		}
-		res.ImmediateClaim = &ClaimSignal{
+		out.ImmediateClaim = &ClaimSignal{
 			ClaimTxID:      claimTID,
 			ClaimTxBEEFHex: pResp.ClaimTxBEEFHex,
 			ContentKeyHex:  pResp.ContentKeyHex,
@@ -360,5 +493,15 @@ func (e *Engine) buyerPayAndDeliver(rctx context.Context, dealID string, chosen 
 			DealReceipt:    pResp.DealReceipt,
 		}
 	}
-	return res, nil
+	return out, nil
+}
+
+func mergeDealOrNew(db *store.DB, rec store.DealRecord) store.DealRecord {
+	if db == nil {
+		return rec
+	}
+	if existing, err := db.GetDeal(rec.DealID); err == nil {
+		return mergeExistingDealFields(rec, existing)
+	}
+	return rec
 }

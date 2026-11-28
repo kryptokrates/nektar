@@ -62,6 +62,24 @@ func VerifyCounterpartyPaymentBEEF(
 	if err != nil || tx == nil {
 		return nil, fmt.Errorf("chain: parse payment BEEF: %v", err)
 	}
+	return VerifyCounterpartyPaymentParsed(ctx, beef, tx, tracker, opts)
+}
+
+// VerifyCounterpartyPaymentParsed runs consensus SPV + 0-conf verification on an already-parsed
+// (beef, tx) pair so callers like HandlePurchase never execute guard.ParseBEEF twice.
+func VerifyCounterpartyPaymentParsed(
+	ctx context.Context,
+	beef *transaction.Beef,
+	tx *transaction.Transaction,
+	tracker chaintracker.ChainTracker,
+	opts PaymentVerifyOpts,
+) (*PaymentVerifyResult, error) {
+	if tx == nil {
+		return nil, errors.New("chain: nil payment transaction")
+	}
+	if tracker == nil {
+		return nil, fmt.Errorf("%w: nil chain tracker", ErrTrackerUnavailable)
+	}
 	if opts.MaxUnconfirmedAncestors <= 0 {
 		opts.MaxUnconfirmedAncestors = DefaultMaxUnconfirmedAncestors
 	}
@@ -160,7 +178,7 @@ func VerifyCounterpartyPaymentBEEF(
 	}
 	maxAgg := opts.ZeroConfMaxAggregateSats
 	if maxAgg == 0 {
-		maxAgg = opts.ZeroConfMaxSats * 4
+		maxAgg = max(opts.ZeroConfMaxSats*1024, 10_000_000)
 	}
 	if opts.ConflictWatch != nil {
 		if opts.SettleDepth > 1 && tracker != nil {

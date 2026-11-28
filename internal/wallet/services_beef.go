@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/transaction"
@@ -307,89 +308,115 @@ func (s *bcommonServices) GetStatusForTxIDs(ctx context.Context, txIDs []string)
 		return nil, fmt.Errorf("%w: no chain source configured for tx status", ErrNoChain)
 	}
 
-	results := make([]wdk.TxStatusDetail, 0, len(txIDs))
-	var firstErr error
-	for _, id := range txIDs {
+	type slotResult struct {
+		detail wdk.TxStatusDetail
+		hasDet bool
+		err    error
+	}
+	slots := make([]slotResult, len(txIDs))
+	workers := min(16, max(1, len(txIDs)))
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	for idx, id := range txIDs {
 		if ctx.Err() != nil {
-			if firstErr == nil {
-				firstErr = ctx.Err()
-			}
+			slots[idx] = slotResult{err: ctx.Err()}
 			break
 		}
-		mp, h, ok, pErr := s.lookupProof(ctx, id)
-		if pErr != nil {
-			if firstErr == nil {
-				firstErr = pErr
+		wg.Add(1)
+		go func(i int, txID string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				slots[i] = slotResult{err: ctx.Err()}
+				return
 			}
-			continue
-		}
-		if ok && mp != nil {
-			if h == 0 {
-				h = mp.BlockHeight
+			mp, h, ok, pErr := s.lookupProof(ctx, txID)
+			if pErr != nil {
+				slots[i] = slotResult{err: pErr}
+				return
 			}
-			if tip < h {
-				// Witnessed tip lags BUMP height; fail closed for this tx rather than fabricating depth = 1.
-				if firstErr == nil {
-					firstErr = fmt.Errorf("wallet services: witnessed tip %d trails proof height %d for %s", tip, h, id)
+			if ok && mp != nil {
+				if h == 0 {
+					h = mp.BlockHeight
 				}
-				continue
+				if tip < h {
+					slots[i] = slotResult{err: fmt.Errorf("wallet services: witnessed tip %d trails proof height %d for %s", tip, h, txID)}
+					return
+				}
+				depth := int(tip-h) + 1
+				slots[i] = slotResult{
+					hasDet: true,
+					detail: wdk.TxStatusDetail{
+						TxID:   txID,
+						Depth:  &depth,
+						Status: wdk.ResultStatusForTxIDMined.String(),
+					},
+				}
+				return
 			}
-			depth := int(tip-h) + 1
-			results = append(results, wdk.TxStatusDetail{
-				TxID:   id,
-				Depth:  &depth,
-				Status: wdk.ResultStatusForTxIDMined.String(),
-			})
-			continue
-		}
-
-		// Never trust local RAM txCache or byte-less indexer Known JSON: fetch raw tx bytes and
-		// verify sha256d(raw) == id before declaring ResultStatusForTxIDKnown.
-		if s.cfg.Chain == nil {
+			// Never trust local RAM txCache or byte-less indexer Known JSON: fetch raw tx bytes and
+			// verify sha256d(raw) == id before declaring ResultStatusForTxIDKnown.
+			if s.cfg.Chain == nil {
+				if s.cfg.InMemoryStore {
+					slots[i] = slotResult{
+						hasDet: true,
+						detail: wdk.TxStatusDetail{
+							TxID:   txID,
+							Status: wdk.ResultStatusForTxIDNotFound.String(),
+						},
+					}
+					return
+				}
+				slots[i] = slotResult{err: fmt.Errorf("%w: cannot check mempool presence for %s without chain client", ErrNoChain, txID)}
+				return
+			}
+			raw, rErr := s.cfg.Chain.TxRaw(ctx, txID)
+			if rErr == nil && len(raw) > 0 {
+				parsed, parseErr := transaction.NewTransactionFromBytes(raw)
+				if parseErr != nil || parsed.TxID().String() != txID {
+					slots[i] = slotResult{err: fmt.Errorf("wallet services: raw tx hash mismatch for %s", txID)}
+					return
+				}
+				zero := 0
+				slots[i] = slotResult{
+					hasDet: true,
+					detail: wdk.TxStatusDetail{
+						TxID:   txID,
+						Depth:  &zero,
+						Status: wdk.ResultStatusForTxIDKnown.String(),
+					},
+				}
+				return
+			}
+			// Never treat single-host silence, 404, or empty raw bytes as proof of non-existence on live networks.
 			if s.cfg.InMemoryStore {
-				results = append(results, wdk.TxStatusDetail{
-					TxID:   id,
-					Status: wdk.ResultStatusForTxIDNotFound.String(),
-				})
-				continue
-			}
-			if firstErr == nil {
-				firstErr = fmt.Errorf("%w: cannot check mempool presence for %s without chain client", ErrNoChain, id)
-			}
-			continue
-		}
-		raw, rErr := s.cfg.Chain.TxRaw(ctx, id)
-		if rErr == nil && len(raw) > 0 {
-			parsed, parseErr := transaction.NewTransactionFromBytes(raw)
-			if parseErr != nil || parsed.TxID().String() != id {
-				if firstErr == nil {
-					firstErr = fmt.Errorf("wallet services: raw tx hash mismatch for %s", id)
+				slots[i] = slotResult{
+					hasDet: true,
+					detail: wdk.TxStatusDetail{
+						TxID:   txID,
+						Status: wdk.ResultStatusForTxIDNotFound.String(),
+					},
 				}
-				continue
+				return
 			}
-			zero := 0
-			results = append(results, wdk.TxStatusDetail{
-				TxID:   id,
-				Depth:  &zero,
-				Status: wdk.ResultStatusForTxIDKnown.String(),
-			})
-			continue
-		}
-		// Never treat single-host silence, 404, or empty raw bytes as proof of non-existence on live networks
-		// (spv/absence-as-proof): record error/omit so callers retry rather than aborting a live transaction.
-		if s.cfg.InMemoryStore {
-			results = append(results, wdk.TxStatusDetail{
-				TxID:   id,
-				Status: wdk.ResultStatusForTxIDNotFound.String(),
-			})
-			continue
-		}
-		if firstErr == nil {
 			if rErr != nil {
-				firstErr = fmt.Errorf("wallet services: status lookup %s unconfirmed by single host: %w", id, rErr)
+				slots[i] = slotResult{err: fmt.Errorf("wallet services: status lookup %s unconfirmed by single host: %w", txID, rErr)}
 			} else {
-				firstErr = fmt.Errorf("wallet services: status lookup %s returned empty raw tx", id)
+				slots[i] = slotResult{err: fmt.Errorf("wallet services: status lookup %s returned empty raw tx", txID)}
 			}
+		}(idx, id)
+	}
+	wg.Wait()
+
+	results := make([]wdk.TxStatusDetail, 0, len(txIDs))
+	var firstErr error
+	for _, sl := range slots {
+		if sl.hasDet {
+			results = append(results, sl.detail)
+		} else if sl.err != nil && firstErr == nil {
+			firstErr = sl.err
 		}
 	}
 	if len(results) == 0 && firstErr != nil {

@@ -62,10 +62,10 @@ CREATE INDEX IF NOT EXISTS idx_distill_quarantine_created ON distill_quarantine(
 
 // GetDistillCursor returns the last distilled fragment seq for shard (0 if never scanned).
 func (d *DB) GetDistillCursor(shard string) (int64, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, unlock := d.rdb()
+	defer unlock()
 	var seq int64
-	err := d.sql.QueryRow(`SELECT last_seq FROM distill_cursors WHERE shard = ?`, shard).Scan(&seq)
+	err := rdb.QueryRow(`SELECT last_seq FROM distill_cursors WHERE shard = ?`, shard).Scan(&seq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -102,12 +102,12 @@ func (d *DB) RecordDistillQuarantine(rec DistillQuarantineRecord) error {
 
 // ListDistillQuarantine returns recent quarantined block records newest first.
 func (d *DB) ListDistillQuarantine(limit int) ([]DistillQuarantineRecord, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, unlock := d.rdb()
+	defer unlock()
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := d.sql.Query(`
+	rows, err := rdb.Query(`
 		SELECT id, shard, seq, rule_id, content_hash, created_at
 		FROM distill_quarantine ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
@@ -127,18 +127,18 @@ func (d *DB) ListDistillQuarantine(limit int) ([]DistillQuarantineRecord, error)
 
 // CountDistillQuarantine returns the total count of quarantined secret/PII blocks.
 func (d *DB) CountDistillQuarantine() (int64, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, unlock := d.rdb()
+	defer unlock()
 	var n int64
-	err := d.sql.QueryRow(`SELECT COUNT(1) FROM distill_quarantine`).Scan(&n)
+	err := rdb.QueryRow(`SELECT COUNT(1) FROM distill_quarantine`).Scan(&n)
 	return n, err
 }
 
 // CountDistilledFragments returns the number of active distilled fragments.
 func (d *DB) CountDistilledFragments() (int64, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, unlock := d.rdb()
+	defer unlock()
 	var n int64
-	err := d.sql.QueryRow(`SELECT COUNT(1) FROM fragments WHERE distilled = 1 AND forgotten = 0`).Scan(&n)
+	err := rdb.QueryRow(`SELECT COUNT(1) FROM fragments WHERE distilled = 1 AND forgotten = 0`).Scan(&n)
 	return n, err
 }

@@ -8,13 +8,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 
-	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 // BuildMarketBEEF encodes a MarketPayload into an OP_FALSE OP_RETURN AtomicBEEF transaction for Hub /submit
@@ -37,13 +40,16 @@ func BuildMarketBEEF(p bstack.MarketPayload) ([]byte, error) {
 // (zero extra miner fee!) and enforcing HubFeeApprover fail-closed against fee-gouging hubs.
 func (s *Service) BuildAndSubmitMarketAd(
 	ctx context.Context,
-	priv *ec.PrivateKey,
+	signer *nwallet.MarketSigner,
 	p bstack.MarketPayload,
 	hosts []string,
 	topics []string,
 ) (int, error) {
 	if len(hosts) == 0 {
 		return 0, nil
+	}
+	if s.laneRouter != nil && len(hosts) > 1 && len(topics) > 0 {
+		hosts = s.laneRouter.FilterHostsForTopics(ctx, s.httpClient, hosts, topics)
 	}
 	action := "submit:" + string(p.Kind)
 	s.mu.RLock()
@@ -88,21 +94,22 @@ func (s *Service) BuildAndSubmitMarketAd(
 	var beef []byte
 	var perHubPay map[string]string
 	var err error
-	if isLive {
+	offchainAds := os.Getenv("NEKTAR_OFFCHAIN_ADS") == "1"
+	if isLive && (!offchainAds || len(piggyTargets) > 0) {
 		if s.mem == nil || s.mem.Chain() == nil {
 			return 0, errors.New("discovery: chain port required to mint funded PushDrop carrier on live network")
 		}
 		if len(piggyTargets) == 0 {
-			// Paper 011 §3.2 / bcommon/producer.Trees: reuse persistent M=16 mined funding tree
-			// (16x lower miner fees, instant mined-parent BUMP, kill-switch retractable).
-			tree := s.CarrierTree(priv)
+			// Paper 011 §3.2 / bcommon/producer.Trees: reuse persistent mined funding tree
+			// (16-256x lower miner fees, instant mined-parent BUMP, kill-switch retractable).
+			tree := s.CarrierTree(signer)
 			beef, _, _, err = tree.MintCarrier(ctx, p)
 			if err != nil {
 				return 0, err
 			}
 		} else {
 			var piggySats uint64
-			beef, perHubPay, piggySats, err = BuildFundedMarketCarrierWithHubFees(ctx, s.mem.Chain(), priv, p, piggyTargets)
+			beef, perHubPay, piggySats, err = BuildFundedMarketCarrierWithHubFees(ctx, s.mem.Chain(), signer, p, piggyTargets)
 			if err != nil {
 				return 0, err
 			}
@@ -117,16 +124,43 @@ func (s *Service) BuildAndSubmitMarketAd(
 		}
 	}
 
-	submitted := 0
-	var lastErr error
-	for _, hu := range eligibleHosts {
-		if sErr := s.SubmitBEEFWithPayment(ctx, hu, beef, topics, perHubPay[hu]); sErr == nil {
-			submitted++
-		} else {
-			lastErr = sErr
+	if len(eligibleHosts) == 1 {
+		hu := eligibleHosts[0]
+		if sErr := s.SubmitBEEFWithPayment(ctx, hu, beef, topics, perHubPay[hu]); sErr != nil {
+			return 0, sErr
 		}
+		return 1, nil
 	}
-	return submitted, lastErr
+
+	var submitted atomic.Int32
+	var errMu sync.Mutex
+	var lastErr error
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 16)
+	for _, hu := range eligibleHosts {
+		wg.Add(1)
+		go func(hostURL, payHdr string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				errMu.Lock()
+				lastErr = ctx.Err()
+				errMu.Unlock()
+				return
+			}
+			if sErr := s.SubmitBEEFWithPayment(ctx, hostURL, beef, topics, payHdr); sErr == nil {
+				submitted.Add(1)
+			} else {
+				errMu.Lock()
+				lastErr = sErr
+				errMu.Unlock()
+			}
+		}(hu, perHubPay[hu])
+	}
+	wg.Wait()
+	return int(submitted.Load()), lastErr
 }
 
 // SubmitBEEF posts an AtomicBEEF to a Hub's /submit endpoint for topics, handling BRC-105 HTTP 402

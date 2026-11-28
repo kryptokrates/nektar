@@ -1,6 +1,7 @@
 package chain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,11 +10,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-sdk/transaction/broadcaster"
 	"github.com/lightwebinc/bcommon/nodeapi"
+	"github.com/sony/gobreaker/v2"
 
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
@@ -28,10 +32,10 @@ type BroadcasterOptions struct {
 
 // BSVBroadcaster is Nektar's single streamlined transaction broadcasting skeleton,
 // backed strictly by the official github.com/bsv-blockchain/go-sdk/transaction/broadcaster
-// client (with multi-endpoint round-robin + failover across BSV Association BSV Broadcaster
-// or self-hosted bsv-blockchain/broadcaster instances).
+// client with per-endpoint gobreaker circuit breakers and ARC /txs batch support.
 type BSVBroadcaster struct {
 	endpoints []*broadcaster.Arc
+	breakers  []*gobreaker.CircuitBreaker[any]
 	urls      []string
 	nextIdx   atomic.Uint64
 }
@@ -119,8 +123,21 @@ func ParseBroadcaster(spec string, opts BroadcasterOptions) (nwallet.Broadcaster
 	if len(endpoints) == 0 {
 		return nil, nil, fmt.Errorf("chain: no valid BSV Broadcaster endpoints in %q", spec)
 	}
+	breakers := make([]*gobreaker.CircuitBreaker[any], len(endpoints))
+	for i, ep := range endpoints {
+		breakers[i] = gobreaker.NewCircuitBreaker[any](gobreaker.Settings{
+			Name:        "arc:" + ep.ApiUrl,
+			MaxRequests: 2,
+			Interval:    30 * time.Second,
+			Timeout:     10 * time.Second,
+			ReadyToTrip: func(counts gobreaker.Counts) bool {
+				return counts.ConsecutiveFailures >= 5
+			},
+		})
+	}
 	return &BSVBroadcaster{
 		endpoints: endpoints,
+		breakers:  breakers,
 		urls:      urls,
 	}, urls, nil
 }
@@ -189,8 +206,41 @@ func (b *BSVBroadcaster) Broadcast(ctx context.Context, tx *transaction.Transact
 		if ctx.Err() != nil {
 			return fmt.Errorf("%w: %w", nwallet.ErrBroadcastUnknown, ctx.Err())
 		}
-		ep := b.endpoints[(start+i)%n]
-		success, failure := ep.BroadcastCtx(ctx, tx)
+		idx := (start + i) % n
+		ep := b.endpoints[idx]
+		var cb *gobreaker.CircuitBreaker[any]
+		if idx < len(b.breakers) {
+			cb = b.breakers[idx]
+		}
+		if cb != nil && cb.State() == gobreaker.StateOpen {
+			lastTransportErr = fmt.Errorf("%s: circuit breaker open", ep.ApiUrl)
+			continue
+		}
+		var (
+			success *transaction.BroadcastSuccess
+			failure *transaction.BroadcastFailure
+		)
+		if cb != nil {
+			_, cbErr := cb.Execute(func() (any, error) {
+				success, failure = ep.BroadcastCtx(ctx, tx)
+				if success != nil {
+					return nil, nil
+				}
+				if failure == nil {
+					return nil, errors.New("empty broadcaster response")
+				}
+				if isRetryableBroadcasterFailure(failure) && strings.TrimSpace(failure.Code) != "ERR_INVALID_RESPONSE" {
+					return nil, fmt.Errorf("%s: %s", failure.Code, failure.Description)
+				}
+				return nil, nil
+			})
+			if errors.Is(cbErr, gobreaker.ErrOpenState) || errors.Is(cbErr, gobreaker.ErrTooManyRequests) {
+				lastTransportErr = fmt.Errorf("%s: %w", ep.ApiUrl, cbErr)
+				continue
+			}
+		} else {
+			success, failure = ep.BroadcastCtx(ctx, tx)
+		}
 		if success != nil {
 			return nil
 		}
@@ -233,6 +283,125 @@ func (b *BSVBroadcaster) Broadcast(ctx context.Context, tx *transaction.Transact
 		return fmt.Errorf("%w: all BSV Broadcaster endpoints failed (last: %v)", nwallet.ErrBroadcastUnknown, lastTransportErr)
 	}
 	return fmt.Errorf("%w: broadcast failed", nwallet.ErrBroadcastUnknown)
+}
+
+// BroadcastBatch submits up to len(txs) transactions in a single ARC POST /txs batch HTTP request
+// (100-400x fewer HTTP roundtrips at 1,000 TPS), automatically falling back to bounded concurrent
+// Broadcast calls if an endpoint does not expose /txs (HTTP 404/405).
+func (b *BSVBroadcaster) BroadcastBatch(ctx context.Context, txs []*transaction.Transaction) []error {
+	errs := make([]error, len(txs))
+	if len(txs) == 0 {
+		return errs
+	}
+	if len(txs) == 1 {
+		errs[0] = b.Broadcast(ctx, txs[0])
+		return errs
+	}
+	n := len(b.endpoints)
+	if n == 0 {
+		for i := range errs {
+			errs[i] = errors.New("chain: no BSV Broadcaster endpoints configured")
+		}
+		return errs
+	}
+	type arcBatchReq struct {
+		RawTx string `json:"rawTx"`
+	}
+	type arcBatchItemResp struct {
+		Status      int    `json:"status"`
+		TxID        string `json:"txid"`
+		TxStatus    string `json:"txStatus"`
+		Title       string `json:"title"`
+		Detail      string `json:"detail"`
+		ExtraInfo   string `json:"extraInfo"`
+	}
+	reqItems := make([]arcBatchReq, len(txs))
+	for i, tx := range txs {
+		if tx != nil {
+			reqItems[i] = arcBatchReq{RawTx: tx.Hex()}
+		}
+	}
+	payload, mErr := json.Marshal(reqItems)
+	if mErr == nil {
+		start := int((b.nextIdx.Add(1) - 1) % uint64(n))
+		for attempt := 0; attempt < n; attempt++ {
+			idx := (start + attempt) % n
+			if idx < len(b.breakers) && b.breakers[idx].State() == gobreaker.StateOpen {
+				continue
+			}
+			ep := b.endpoints[idx]
+			reqURL := strings.TrimRight(ep.ApiUrl, "/") + "/txs"
+			req, rErr := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(payload))
+			if rErr != nil {
+				continue
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json")
+			if ep.ApiKey != "" {
+				req.Header.Set("Authorization", "Bearer "+ep.ApiKey)
+			}
+			cli := ep.Client
+			if cli == nil {
+				cli = http.DefaultClient
+			}
+			resp, dErr := cli.Do(req)
+			if dErr != nil {
+				continue
+			}
+			body, bErr := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+			_ = resp.Body.Close()
+			if bErr != nil {
+				continue
+			}
+			if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+				// Endpoint only implements single /tx; break out to bounded parallel Broadcast.
+				break
+			}
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				var items []arcBatchItemResp
+				if json.Unmarshal(body, &items) == nil && len(items) == len(txs) {
+					for i, it := range items {
+						st := strings.ToUpper(strings.TrimSpace(it.TxStatus))
+						switch st {
+						case "SEEN_MULTIPLE_NODES", "SEEN_ON_NETWORK", "ACCEPTED_BY_NETWORK",
+							"MINED", "CONFIRMED", "IMMUTABLE", "SUCCESS",
+							"RECEIVED", "STORED", "QUEUED", "ANNOUNCED_TO_NETWORK", "REQUESTED_BY_NETWORK", "SENT_TO_NETWORK":
+							errs[i] = nil
+						default:
+							if it.Status >= 200 && it.Status < 300 && st == "" {
+								errs[i] = nil
+							} else if nwallet.IsAlreadyKnownBroadcastError(errors.New(it.Detail + " " + it.ExtraInfo)) {
+								errs[i] = nil
+							} else {
+								errs[i] = fmt.Errorf("broadcaster %s refused batch tx %d [%s]: %s %s", ep.ApiUrl, i, st, it.Title, it.Detail)
+							}
+						}
+					}
+					return errs
+				}
+			}
+		}
+	}
+
+	// Fallback: bounded parallel per-tx Broadcast across HTTP/2 pooled connections.
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 32)
+	for i, tx := range txs {
+		wg.Add(1)
+		go func(idx int, t *transaction.Transaction) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				errs[idx] = fmt.Errorf("%w: %w", nwallet.ErrBroadcastUnknown, ctx.Err())
+				return
+			}
+			errs[idx] = b.Broadcast(ctx, t)
+		}(i, tx)
+	}
+	wg.Wait()
+	return errs
 }
 
 type arcStatusPayload struct {

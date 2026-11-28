@@ -106,9 +106,6 @@ func (p *Port) BuildFundedTxWithBasket(ctx context.Context, outputs []*transacti
 		}
 	}
 	feeSats := p.engine.TxFeeSats(ctx, txid)
-	p.mu.Lock()
-	p.pendingNoSend[txid] = txid
-	p.mu.Unlock()
 
 	return tx, beef, feeSats, outTotal + feeSats, nil
 }
@@ -130,6 +127,13 @@ func (p *Port) BuildBRC29Tx(ctx context.Context, toIdentityKey string, sats uint
 			return nil, 0, 0, nil, false, sErr
 		}
 		return sr.Tx, sr.FeeSats, sr.Satoshis + sr.FeeSats, sr, true, nil
+	}
+	if fl := p.engine.FastLane(); fl != nil && fl.AvailableUTXOs() > 0 {
+		if sr, fErr := fl.PrepareFastBRC29(ctx, toIdentityKey, sats); fErr == nil && sr != nil {
+			return sr.Tx, sr.FeeSats, sr.Satoshis + sr.FeeSats, sr, false, nil
+		} else if !errors.Is(fErr, nwallet.ErrFastLaneUnavailable) {
+			return nil, 0, 0, nil, false, fErr
+		}
 	}
 	preB64, sufB64 := randomBRC29Nonce()
 	lockScript, err := p.signer.PaymentDestination(ctx, strings.TrimSpace(toIdentityKey), preB64, sufB64)
@@ -190,15 +194,20 @@ func (p *Port) Broadcast(ctx context.Context, tx *transaction.Transaction, feeSa
 		return txid, nil
 	}
 
-	p.mu.Lock()
-	_, hadNoSend := p.pendingNoSend[txid]
-	if hadNoSend {
-		delete(p.pendingNoSend, txid)
+	// FastLanePool prepared BRC-29 payment: enforce SpendGuard + commit WAL + broadcast in <50us (zero GORM/SQLite).
+	if p.engine != nil {
+		if fl := p.engine.FastLane(); fl != nil && fl.HasPrepared(txid) {
+			if err := fl.BroadcastPrepared(ctx, txid); err != nil {
+				return "", err
+			}
+			return txid, nil
+		}
 	}
-	p.mu.Unlock()
-	// Consult durable wallet.sqlite status in addition to RAM pendingNoSend so a restart/retry
-	// between BuildFundedTx and Broadcast NEVER bypasses SendNoSendTx into raw settler.Submit.
-	if p.engine != nil && !hadNoSend {
+
+	// Consult durable wallet.sqlite status (sole source of truth; no RAM shadow) so restarts/retries
+	// between BuildFundedTx and Broadcast NEVER bypass SendNoSendTx into raw settler.Submit (RCA-8).
+	var hadNoSend bool
+	if p.engine != nil {
 		if st, ok := p.engine.TxStatus(ctx, txid); ok && st == "nosend" {
 			hadNoSend = true
 		}

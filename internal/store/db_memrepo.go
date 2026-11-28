@@ -9,15 +9,17 @@ import (
 
 // MemCommitRow persists one signed content-addressed Git/Metanet commit node in SQLite.
 type MemCommitRow struct {
-	CommitHash   string
-	Repo         string
-	Branch       string
-	OriginRepo   string
-	OriginBranch string
-	Seq          int64
-	TreeHash     string
-	MPERoot      string
-	ParentsJSON  []byte
+	CommitHash     string
+	Repo           string
+	Branch         string
+	OriginRepo     string
+	OriginBranch   string
+	OriginSeq      int64
+	Seq            int64
+	CommitKind     int
+	TreeHash       string
+	MPERoot        string
+	ParentsJSON    []byte
 	AuthorPub      string
 	ModelID        string
 	PolicyCommit   string
@@ -91,13 +93,22 @@ CREATE TABLE IF NOT EXISTS mem_commits (
 	fragment_leaf   TEXT NOT NULL DEFAULT '',
 	git_meta_json   BLOB,
 	origin_repo     TEXT NOT NULL DEFAULT '',
-	origin_branch   TEXT NOT NULL DEFAULT ''
+	origin_branch   TEXT NOT NULL DEFAULT '',
+	origin_seq      INTEGER NOT NULL DEFAULT 0,
+	commit_kind     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_mem_commits_repo_branch ON mem_commits(repo, branch, timestamp DESC, seq DESC);
 CREATE INDEX IF NOT EXISTS idx_mem_commits_repo_ts ON mem_commits(repo, timestamp DESC, seq DESC);
 CREATE INDEX IF NOT EXISTS idx_mem_commits_repo_seq ON mem_commits(repo, seq);
 CREATE INDEX IF NOT EXISTS idx_anchors_txid ON anchors(txid);
 CREATE INDEX IF NOT EXISTS idx_fragments_forgotten_created ON fragments(forgotten, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS redacted_blobs (
+	blob_hash        TEXT PRIMARY KEY,
+	reason           TEXT NOT NULL DEFAULT '',
+	tombstone_commit TEXT NOT NULL DEFAULT '',
+	redacted_at      INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS mem_branches (
 	repo             TEXT NOT NULL,
@@ -140,6 +151,12 @@ CREATE TABLE IF NOT EXISTS mem_tags (
 	if err := ensureColumnTx(tx, "mem_commits", "origin_branch", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("store: migrate mem_commits.origin_branch: %w", err)
 	}
+	if err := ensureColumnTx(tx, "mem_commits", "origin_seq", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("store: migrate mem_commits.origin_seq: %w", err)
+	}
+	if err := ensureColumnTx(tx, "mem_commits", "commit_kind", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("store: migrate mem_commits.commit_kind: %w", err)
+	}
 	if err := ensureColumnTx(tx, "mem_commits", "ontology_commit", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("store: migrate mem_commits.ontology_commit: %w", err)
 	}
@@ -152,11 +169,11 @@ CREATE TABLE IF NOT EXISTS mem_tags (
 	return tx.Commit()
 }
 
-const memCommitSelectCols = `commit_hash, repo, branch, origin_repo, origin_branch, seq, tree_hash, mpe_root, parents_json,
+const memCommitSelectCols = `commit_hash, repo, branch, origin_repo, origin_branch, COALESCE(origin_seq, 0), seq, COALESCE(commit_kind, 0), tree_hash, mpe_root, parents_json,
 		       author_pub, model_id, policy_commit, COALESCE(ontology_commit, ''), message, timestamp, signature,
 		       anchor_txid, anchor_n, fragment_leaf, git_meta_json`
 
-// PutMemObject stores an immutable content-addressed TreeObject or BlobObject JSON record.
+// PutMemObject stores an immutable content-addressed TreeObject or BlobObject record (CBOR or JSON).
 func (d *DB) PutMemObject(hash, kind string, body []byte, createdAt int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -166,12 +183,60 @@ func (d *DB) PutMemObject(hash, kind string, body []byte, createdAt int64) error
 
 // GetMemObject retrieves a content-addressed object by hash.
 func (d *DB) GetMemObject(hash string) (string, []byte, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var kind string
 	var body []byte
-	err := d.sql.QueryRow(`SELECT kind, body_json FROM mem_objects WHERE hash = ?`, hash).Scan(&kind, &body)
+	err := rdb.QueryRow(`SELECT kind, body_json FROM mem_objects WHERE hash = ?`, hash).Scan(&kind, &body)
 	return kind, body, err
+}
+
+// MarkBlobRedacted records a content-addressed blob hash as cryptographically erased (tombstoned).
+func (d *DB) MarkBlobRedacted(blobHash, reason, tombstoneCommit string, redactedAt int64) error {
+	if blobHash == "" {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.sql.Exec(`
+		INSERT OR REPLACE INTO redacted_blobs (blob_hash, reason, tombstone_commit, redacted_at)
+		VALUES (?, ?, ?, ?)`, blobHash, reason, tombstoneCommit, redactedAt)
+	return err
+}
+
+// IsBlobRedacted reports whether blobHash has been cryptographically erased.
+func (d *DB) IsBlobRedacted(blobHash string) (bool, error) {
+	if blobHash == "" {
+		return false, nil
+	}
+	rdb, release := d.rdb()
+	defer release()
+	var one int
+	err := rdb.QueryRow(`SELECT 1 FROM redacted_blobs WHERE blob_hash = ?`, blobHash).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// ListRedactedBlobs returns the set of all cryptographically erased blob hashes.
+func (d *DB) ListRedactedBlobs() (map[string]bool, error) {
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`SELECT blob_hash FROM redacted_blobs`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]bool)
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out[h] = true
+	}
+	return out, rows.Err()
 }
 
 // SaveMemCommit inserts a commit row (idempotent on commit_hash).
@@ -186,11 +251,11 @@ func (d *DB) SaveMemCommit(r MemCommitRow) error {
 	}
 	_, err := d.sql.Exec(`
 		INSERT OR IGNORE INTO mem_commits (
-			commit_hash, repo, branch, origin_repo, origin_branch, seq, tree_hash, mpe_root, parents_json,
+			commit_hash, repo, branch, origin_repo, origin_branch, origin_seq, seq, commit_kind, tree_hash, mpe_root, parents_json,
 			author_pub, model_id, policy_commit, ontology_commit, message, timestamp, signature,
 			anchor_txid, anchor_n, fragment_leaf, git_meta_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.CommitHash, r.Repo, r.Branch, r.OriginRepo, r.OriginBranch, r.Seq, r.TreeHash, r.MPERoot, r.ParentsJSON,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.CommitHash, r.Repo, r.Branch, r.OriginRepo, r.OriginBranch, r.OriginSeq, r.Seq, r.CommitKind, r.TreeHash, r.MPERoot, r.ParentsJSON,
 		r.AuthorPub, r.ModelID, r.PolicyCommit, r.OntologyCommit, r.Message, r.Timestamp, r.Signature,
 		r.AnchorTxID, r.AnchorN, r.FragmentLeaf, r.GitMetaJSON,
 	)
@@ -199,28 +264,28 @@ func (d *DB) SaveMemCommit(r MemCommitRow) error {
 
 // GetMemCommit fetches a single commit by hash.
 func (d *DB) GetMemCommit(commitHash string) (MemCommitRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	row := d.sql.QueryRow(`SELECT `+memCommitSelectCols+` FROM mem_commits WHERE commit_hash = ?`, commitHash)
+	rdb, release := d.rdb()
+	defer release()
+	row := rdb.QueryRow(`SELECT `+memCommitSelectCols+` FROM mem_commits WHERE commit_hash = ?`, commitHash)
 	return scanMemCommit(row)
 }
 
 // ListMemCommits returns commits for repo (and optional branch) ordered newest-first.
 func (d *DB) ListMemCommits(repo, branch string, limit int) ([]MemCommitRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	if limit <= 0 {
 		limit = 100
 	}
 	var rows *sql.Rows
 	var err error
 	if branch != "" {
-		rows, err = d.sql.Query(`
+		rows, err = rdb.Query(`
 			SELECT `+memCommitSelectCols+`
 			FROM mem_commits WHERE repo = ? AND branch = ?
 			ORDER BY timestamp DESC, rowid DESC LIMIT ?`, repo, branch, limit)
 	} else {
-		rows, err = d.sql.Query(`
+		rows, err = rdb.Query(`
 			SELECT `+memCommitSelectCols+`
 			FROM mem_commits WHERE repo = ?
 			ORDER BY timestamp DESC, rowid DESC LIMIT ?`, repo, limit)
@@ -242,9 +307,9 @@ func (d *DB) ListMemCommits(repo, branch string, limit int) ([]MemCommitRow, err
 
 // ListAllMemCommits returns every commit for repo without a row limit (for full Git DAG projections).
 func (d *DB) ListAllMemCommits(repo string) ([]MemCommitRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`
 		SELECT `+memCommitSelectCols+`
 		FROM mem_commits WHERE repo = ?
 		ORDER BY timestamp ASC, rowid ASC`, repo)
@@ -265,10 +330,10 @@ func (d *DB) ListAllMemCommits(repo string) ([]MemCommitRow, error) {
 
 // CountMemCommits returns the exact commit count for repo.
 func (d *DB) CountMemCommits(repo string) (int, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var n int
-	err := d.sql.QueryRow(`SELECT COUNT(*) FROM mem_commits WHERE repo = ?`, repo).Scan(&n)
+	err := rdb.QueryRow(`SELECT COUNT(*) FROM mem_commits WHERE repo = ?`, repo).Scan(&n)
 	return n, err
 }
 
@@ -295,8 +360,8 @@ func (d *DB) BindMemCommitsAnchor(repo string, seqs []int64, anchorN int64, txid
 // GetMemCommitByPrefix resolves a short or full hex commit hash prefix (>= 6 hex chars) inside repo
 // using a PK index range scan (never LIKE, avoiding wildcard injection and full table scans).
 func (d *DB) GetMemCommitByPrefix(repo, prefix string) (MemCommitRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	p := strings.ToLower(strings.TrimSpace(prefix))
 	if len(p) < 6 || len(p) > 64 {
 		return MemCommitRow{}, sql.ErrNoRows
@@ -311,11 +376,11 @@ func (d *DB) GetMemCommitByPrefix(repo, prefix string) (MemCommitRow, error) {
 	var rows *sql.Rows
 	var err error
 	if repo != "" {
-		rows, err = d.sql.Query(`
+		rows, err = rdb.Query(`
 			SELECT `+memCommitSelectCols+`
 			FROM mem_commits WHERE commit_hash >= ? AND commit_hash < ? AND repo = ? LIMIT 2`, p, upper, repo)
 	} else {
-		rows, err = d.sql.Query(`
+		rows, err = rdb.Query(`
 			SELECT `+memCommitSelectCols+`
 			FROM mem_commits WHERE commit_hash >= ? AND commit_hash < ? LIMIT 2`, p, upper)
 	}
@@ -343,7 +408,7 @@ func (d *DB) GetMemCommitByPrefix(repo, prefix string) (MemCommitRow, error) {
 func scanMemCommit(s scanner) (MemCommitRow, error) {
 	var r MemCommitRow
 	err := s.Scan(
-		&r.CommitHash, &r.Repo, &r.Branch, &r.OriginRepo, &r.OriginBranch, &r.Seq, &r.TreeHash, &r.MPERoot, &r.ParentsJSON,
+		&r.CommitHash, &r.Repo, &r.Branch, &r.OriginRepo, &r.OriginBranch, &r.OriginSeq, &r.Seq, &r.CommitKind, &r.TreeHash, &r.MPERoot, &r.ParentsJSON,
 		&r.AuthorPub, &r.ModelID, &r.PolicyCommit, &r.OntologyCommit, &r.Message, &r.Timestamp, &r.Signature,
 		&r.AnchorTxID, &r.AnchorN, &r.FragmentLeaf, &r.GitMetaJSON,
 	)

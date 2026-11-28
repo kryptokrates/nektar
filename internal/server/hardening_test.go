@@ -254,9 +254,13 @@ func TestServerSecurityOAuthProxyAdaptersMetricsAndBadge(t *testing.T) {
 	}
 	stResp.Body.Close()
 
-	// 5. OpenAPI, Adapters, Prometheus /v1/metrics & SVG /v1/badge/{token}!
+	// 5. OpenAPI, Adapters, authenticated Prometheus /v1/metrics (ARCH-F9) & SVG /v1/badge/{token}!
 	for _, ep := range []string{"/v1/openapi.json", "/v1/adapters/manifest", "/v1/metrics"} {
-		r, err := http.Get(ts.URL + ep)
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+ep, nil)
+		if ep == "/v1/metrics" {
+			req.Header.Set("Authorization", "Bearer "+tokOut.AccessToken)
+		}
+		r, err := http.DefaultClient.Do(req)
 		if err != nil || r.StatusCode != 200 {
 			t.Fatalf("GET %s failed: %+v %v", ep, r, err)
 		}

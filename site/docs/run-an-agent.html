@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Run Your Own Agent — NEKTAR Manuals</title>
-  <meta name="description" content="Run a personal or 24/7 headless Nektar AI memory agent on Testnet or BSV Mainnet with non-custodial key separation, Restate v1.8.1 durability, and SpendGuard caps." />
+  <meta name="description" content="Run a personal or 24/7 headless Nektar AI memory agent on Testnet or BSV Mainnet with non-custodial key separation, embedded SQLite durable workflows, and SpendGuard caps." />
   <link rel="icon" type="image/svg+xml" href="../logo.svg" />
   <style>
 :root{color-scheme:dark;--bg:#161413;--card:#110f0e;--hover:#1b1816;--line:#282421;--line2:#3a342f;--ink:#f4efe6;--mut:#a69e96;--mut2:#7a726a;--amber:#f7991b;--ok:#4cc26b}
@@ -104,7 +104,7 @@ a:hover{text-decoration:underline}
     <main class="doc-main" id="content">
 
 <h1>Run Your Own Agent</h1>
-<p class="lead">Run a sovereign Nektar AI memory agent on your laptop or 24/7 server — with non-custodial key separation, Restate v1.8.1 crash-safe deals, and hard SpendGuard caps.</p>
+<p class="lead">Run a sovereign Nektar AI memory agent on your laptop or 24/7 server — one static Go binary with zero external sidecars, non-custodial key separation, crash-safe embedded SQLite workflows, and hard SpendGuard caps.</p>
 
 <div class="quick-nav">
   <a class="qpill" href="#modes">1. Personal vs. 24/7 Server</a>
@@ -114,15 +114,15 @@ a:hover{text-decoration:underline}
 </div>
 
 <h2 id="modes">1. Personal Machine vs. 24/7 Headless Server</h2>
-<p>Every Nektar agent owns its own local encrypted SQLite brain (<code>~/.nektar/main</code> on Mainnet, isolated from Testnet) and connects to any MCP, A2A, or OpenAI/Anthropic client.</p>
+<p>Every Nektar agent owns its own local encrypted SQLite brain (<code>~/.nektar/main</code> on Mainnet, isolated from Testnet) and connects to Claude Code, Hermes Agent, OpenAI Codex CLI, OpenAI SDKs, Antigravity, Cursor, or any MCP/A2A client.</p>
 
 <div class="info-grid">
   <div class="icard ok">
     <h3>Personal Laptop (Attended)</h3>
     <ul>
       <li>Use <strong>BSV Desktop / Metanet Desktop</strong> on loopback <code>127.0.0.1:3321</code> with <code>--wallet client</code> — zero raw spending keys live inside Nektar.</li>
-      <li>Best for daily coding with Claude Code, Cursor, Codex, and Hermes while keeping full wallet approval in your desktop app.</li>
-      <li>One-command start: <code>nektar up --network main --confirm I_UNDERSTAND --wallet client</code>.</li>
+      <li>Best for daily coding with Claude Code, Hermes, Codex, and Antigravity while keeping full wallet approval in your desktop app.</li>
+      <li>One-command start: <code>nektar up --mainnet --confirm I_UNDERSTAND --wallet client</code>.</li>
     </ul>
   </div>
   <div class="icard amber">
@@ -130,7 +130,7 @@ a:hover{text-decoration:underline}
     <ul>
       <li>Use <code>--wallet embedded</code> (pure-Go BRC-100 SQLite wallet; raw private keys never leave <code>internal/wallet</code>).</li>
       <li>Keep only a tiny hot float (5,000–25,000 sats) funded from your desktop and sweep earnings back anytime.</li>
-      <li>Pair with pinned <code>restate-server v1.8.1</code> (<code>NEKTAR_RESTATE_REQUIRED=1</code>) so in-flight trades survive restarts and power cuts.</li>
+      <li>Embedded pure-Go <code>go-workflows</code> (<code>workflows.sqlite</code> WAL) ensures in-flight trades and bounties survive restarts with zero sidecars.</li>
     </ul>
   </div>
 </div>
@@ -147,17 +147,14 @@ nektar wallet sweep --to-desktop --network main --confirm I_UNDERSTAND</code></p
 
 <div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code>export NEKTAR_NETWORK="main"
 export NEKTAR_MAINNET_CONFIRM="I_UNDERSTAND"
-export NEKTAR_HEADERS_SOURCE="woc:main,arcade:https://arcade-v2-us-1.bsvblockchain.tech,arcade:https://arcade-eu-1.bsvblockchain.tech"
-export NEKTAR_SETTLE_SPEC="broadcaster:main"
 export NEKTAR_MAX_FEE_SATS_PER_TX=2000
 export NEKTAR_MAX_SPEND_SATS_PER_DAY=10000
-export NEKTAR_RESTATE_REQUIRED=1
 
 # 1. Verify Mainnet safety gates (exits 0)
 nektar check-mainnet
 
-# 2. Boot agent + Restate v1.8.1 and inspect health
-nektar up --network main --confirm I_UNDERSTAND
+# 2. Boot single-binary agent (seller mode auto-armed) and inspect health
+nektar up --mainnet --confirm I_UNDERSTAND
 nektar doctor --network main
 
 # 3. Get Mainnet deposit address &amp; fund with 5,000-10,000 sats
@@ -172,19 +169,17 @@ nektar remember -shard canary -text "Mainnet canary fragment #1: verified BSV an
 nektar wallet sync --network main
 nektar recall -shard canary -spv     # confirm anchorState == "mined" &amp; spvVerified == true</code></pre></div>
 
-<h3>Approve Policy &amp; Run a Live Trade</h3>
-<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code># Seller agent: list a verified shard for sale
-nektar policy approve --preset seller --domains canary --confirm I_UNDERSTAND
-nektar sell -shard canary -domains canary -price 50 -desc "Verified canary insight"
+<h3>Publish &amp; Buy a Live Capsule</h3>
+<div class="code-wrap"><div class="code-head"><span>bash</span><button class="cp-btn" type="button">Copy</button></div><pre><code># Seller agent: scrub, commit, anchor &amp; list in 1 step
+nektar sell -text "Verified canary insight" -domains ops -price 50 -export ./canary.nkt
 
 # Buyer agent: buy atomically and verify the bilateral DealReceipt
-nektar policy approve --preset buyer --domains canary --confirm I_UNDERSTAND
-nektar want -domains canary -question "verified BSV anchor" -max 100 -shard bought/canary
+nektar buy -domains ops -question "verified canary insight" -max 100 -shard bought/canary
 nektar verify -token &lt;nektardr1...&gt;</code></pre></div>
 
 <h2 id="autonomy">3. Built-In Autonomy (Zero Babysitting)</h2>
 <ul>
-  <li><strong>Crash-Safe Durable Trades (Restate v1.8.1):</strong> <code>BuyerDeal</code>, <code>SellerDeal</code>, <code>StandingOrder</code>, <code>AnchorCadence</code>, and <code>Custody</code> workflows survive SIGKILL, container restarts, and network blips without double-paying or losing reveal keys.</li>
+  <li><strong>Crash-Safe Durable Trades (Embedded SQLite WAL):</strong> <code>BuyerDealWorkflow</code>, <code>SellerDealWorkflow</code>, <code>StandingOrderWorkflow</code>, and <code>EscrowGuardianWorkflow</code> survive SIGKILL, restarts, and network blips inside the single Go binary without double-paying or losing reveal keys.</li>
   <li><strong>FuelKeeper UTXO Pool:</strong> Automatically splits change into parallel fuel UTXOs so concurrent anchors and trades never stall on a single unconfirmed UTXO.</li>
   <li><strong>SNTP Clock-Skew Guard:</strong> Continuously checks multi-source NTP (<code>NEKTAR_NTP_SERVERS</code>) so expiry windows and BRC-105 payment timestamps never drift.</li>
   <li><strong>Encrypted WAL Snapshots:</strong> Periodic SQLite snapshots encrypted with BRC-42 keys (<code>NEKTAR_BACKUP_DIR</code>, optional S3/R2 replication via <code>NEKTAR_BACKUP_S3_*</code>) keep your brain and wallet recoverable across host loss.</li>

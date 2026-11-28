@@ -218,3 +218,27 @@ func (p *Port) SweepToDesktop(ctx context.Context, wireURL string, overrideGuard
 	}
 	return nwallet.SweepToWireWallet(ctx, wireURL, p.engine, overrideGuard)
 }
+
+// FastLane returns the embedded wallet's 64-shard Pebble WAL FastLanePool if enabled.
+func (p *Port) FastLane() *nwallet.FastLanePool {
+	if p == nil || p.engine == nil {
+		return nil
+	}
+	return p.engine.FastLane()
+}
+
+// ProvisionFastLane splits embedded wallet funds into numLanes independent UTXOs for parallel 1,000+ TPS payments.
+func (p *Port) ProvisionFastLane(ctx context.Context, numLanes int, satsPerLane uint64) (int, error) {
+	if p == nil || p.engine == nil {
+		return 0, errors.New("chain: ProvisionFastLane requires embedded wallet mode")
+	}
+	return p.engine.ProvisionFastLane(ctx, numLanes, satsPerLane)
+}
+
+// SeedFastLaneUTXOs directly loads spendable UTXOs into the embedded wallet's FastLanePool.
+func (p *Port) SeedFastLaneUTXOs(utxos []nwallet.FastLaneUTXO) error {
+	if p == nil || p.engine == nil {
+		return errors.New("chain: SeedFastLaneUTXOs requires embedded wallet mode")
+	}
+	return p.engine.SeedFastLaneUTXOs(utxos)
+}

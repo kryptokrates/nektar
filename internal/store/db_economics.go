@@ -76,11 +76,11 @@ func (d *DB) RecordEconomicsEvent(ev EconomicsEventRow) error {
 
 // SummarizeEconomics aggregates operational economics metrics since sinceUnix (0 = all time).
 func (d *DB) SummarizeEconomics(sinceUnix int64) (EconomicsSummary, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, unlock := d.rdb()
+	defer unlock()
 	var s EconomicsSummary
 	var earned, spent int64
-	err := d.sql.QueryRow(`
+	err := rdb.QueryRow(`
 		SELECT
 			COALESCE(SUM(tokens_in), 0),
 			COALESCE(SUM(tokens_out), 0),

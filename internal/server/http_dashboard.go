@@ -12,6 +12,8 @@ import (
 	"github.com/kryptokrates/nektar/internal/memory"
 )
 
+const maxDashboardSSESubscribers = 64
+
 // BuildDashboardState returns the exact typed `State` JSON expected by `ui/App.svelte`.
 func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[string]any {
 	if baseURL == "" {
@@ -20,6 +22,19 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 	if baseURL == "" {
 		baseURL = "http://127.0.0.1:18420"
 	}
+	var busSeq int64
+	if a.mem != nil && a.mem.EventBus() != nil {
+		busSeq = a.mem.EventBus().Seq()
+	}
+	hasWF := a.restateClient() != nil
+	nowTime := time.Now()
+	a.stateCacheMu.Lock()
+	if a.stateCacheVal != nil && a.stateCacheURL == baseURL && a.stateCacheSeq == busSeq && a.stateCacheHasWF == hasWF && nowTime.Before(a.stateCacheExp) {
+		cached := a.stateCacheVal
+		a.stateCacheMu.Unlock()
+		return cached
+	}
+	a.stateCacheMu.Unlock()
 	addr, _ := a.mem.Chain().FundAddress()
 	balBreakdown, _ := a.mem.Chain().Balance(ctx)
 	bal := balBreakdown.SpendableSats
@@ -140,7 +155,7 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 		basketItems += b.Count
 	}
 
-	return map[string]any{
+	out := map[string]any{
 		"network":   a.mem.Chain().Network(),
 		"model":     "nektar/v0.1-go",
 		"pub":       shortStr(a.mem.Chain().IdentityPubHex(), 20),
@@ -242,6 +257,14 @@ func (a *App) BuildDashboardState(ctx context.Context, baseURL string) map[strin
 			},
 		},
 	}
+	a.stateCacheMu.Lock()
+	a.stateCacheURL = baseURL
+	a.stateCacheSeq = busSeq
+	a.stateCacheHasWF = hasWF
+	a.stateCacheExp = time.Now().Add(200 * time.Millisecond)
+	a.stateCacheVal = out
+	a.stateCacheMu.Unlock()
+	return out
 }
 
 // buildDashboardAutonomy exposes live Watchdog (NTP clock-skew + circuit breaker) and Grade S subscription supervision status.
@@ -312,6 +335,11 @@ func (a *App) handleDashboardSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	ch := make(chan []byte, 32)
 	a.evMu.Lock()
+	if len(a.evSubs) >= maxDashboardSSESubscribers {
+		a.evMu.Unlock()
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "dashboard SSE subscriber limit reached"})
+		return
+	}
 	a.evSubs[ch] = struct{}{}
 	a.evMu.Unlock()
 	defer func() {

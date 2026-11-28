@@ -5,7 +5,7 @@ services:
     runtime: image
     image:
       url: ghcr.io/kryptokrates/nektar:latest
-    dockerCommand: serve -listen :18420 -restate-listen 127.0.0.1:9080 -hub
+    dockerCommand: serve -listen :18420 -hub
     healthCheckPath: /v1/health
     disk:
       name: nektar-data

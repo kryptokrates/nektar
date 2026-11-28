@@ -88,11 +88,12 @@ func (p *Port) clientCreateActionWithLabels(ctx context.Context, outputs []*tran
 	return p.clientCreateActionWithSpec(ctx, outputs, desc, labels, nil, overrideGuard)
 }
 
-func (p *Port) reserveClientSpend(ctx context.Context, outTotal uint64, numOutputs int, overrideGuard bool) (string, uint64, error) {
-	estFee := uint64(200)
+func (p *Port) reserveClientSpend(ctx context.Context, outTotal uint64, numOutputs int, extraInputBytes int, overrideGuard bool) (string, uint64, error) {
+	estBytes := 250 + numOutputs*34 + max(0, extraInputBytes)
+	estFee := uint64(max(200, (estBytes+9)/10))
 	if p.feeSource != nil {
 		if f, fErr := p.feeSource.Fees(ctx); fErr == nil {
-			if ef, eErr := f.For(250 + numOutputs*34); eErr == nil {
+			if ef, eErr := f.For(estBytes); eErr == nil {
 				estFee = ef
 			}
 		}
@@ -128,7 +129,7 @@ func (p *Port) clientCreateActionWithSpec(ctx context.Context, outputs []*transa
 		outTotal += o.Satoshis
 	}
 	// Atomically reserve daily SpendGuard budget BEFORE asking remote BRC-100 wallet to broadcast.
-	resID, estFee, rErr := p.reserveClientSpend(ctx, outTotal, len(outputs), overrideGuard)
+	resID, estFee, rErr := p.reserveClientSpend(ctx, outTotal, len(outputs), 0, overrideGuard)
 	if rErr != nil {
 		return nil, rErr
 	}

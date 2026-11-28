@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	restate "github.com/restatedev/sdk-go"
+	"github.com/cschleiden/go-workflows/workflow"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
@@ -17,33 +17,68 @@ import (
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
+func (a *workflowActivities) BuyerEvalPolicy(_ context.Context, dealID string, want bstack.WantAd, approvedOverrideID string) (buyerPolicyEval, error) {
+	return a.eng.buyerEvalPolicy(dealID, want, approvedOverrideID)
+}
+
+func (a *workflowActivities) BuyerCollectOffers(ctx context.Context, dealID string, want bstack.WantAd, in BuyerDealInput) (buyerCollectResult, error) {
+	return a.eng.buyerCollectOffers(ctx, dealID, want, in)
+}
+
+func (a *workflowActivities) BuyerRankAndMatch(ctx context.Context, dealID string, want bstack.WantAd, collectRes buyerCollectResult, bypassPolicy bool, approvedCapSats uint64) (buyerRankResult, error) {
+	return a.eng.buyerRankAndMatch(ctx, dealID, want, collectRes, bypassPolicy, approvedCapSats)
+}
+
 func (e *Engine) buyerEvalPolicy(dealID string, want bstack.WantAd, approvedOverrideID string) (buyerPolicyEval, error) {
 	now := time.Now().Unix()
-	if e.mem != nil && e.mem.DB() != nil {
-		_ = SyncPolicyFromDB(e.mem.DB(), e.policy)
+	fj := e.FastJournal()
+	if e.policy != nil {
+		if fj != nil {
+			fj.CachedPolicySync(e.mem.DB(), e.policy)
+		} else if err := e.policy.Refresh(); err != nil {
+			return buyerPolicyEval{}, err
+		}
 	}
 	kill, maxDeal, maxDay, _, spent, buyerOK, _ := e.policy.Snapshot()
 	if kill {
 		wantJSON, _ := json.Marshal(want)
-		e.persistDealRecord(store.DealRecord{
+		if err := e.persistDealRecordChecked(store.DealRecord{
 			DealID:   dealID,
 			Role:     "buyer",
 			Status:   "failed",
 			WantJSON: wantJSON,
 			Error:    "market: operator kill switch is engaged",
-		})
+		}); err != nil {
+			return buyerPolicyEval{}, err
+		}
 		return buyerPolicyEval{NowUnix: now, KillSwitch: true}, nil
 	}
 	bypass := false
+	var approvedCap uint64
 	if approvedOverrideID != "" {
 		if e.mem != nil && e.mem.DB() != nil {
-			if cErr := e.mem.DB().ConsumeApprovalOverride(approvedOverrideID); cErr != nil {
-				return buyerPolicyEval{}, restate.ToTerminalError(fmt.Errorf("market: invalid or already consumed approval override %q: %w", approvedOverrideID, cErr))
+			// STATE-7 fix: bind override consumption strictly to (dealID, MaxExtraSats) instead of infinite cap!
+			appr, err := e.mem.DB().GetApproval(approvedOverrideID)
+			if err != nil {
+				return buyerPolicyEval{}, workflow.NewPermanentError(fmt.Errorf("market: invalid approval override %q: %w", approvedOverrideID, err))
 			}
+			boundDealID := appr.DealID
+			if boundDealID == "" {
+				boundDealID = dealID
+			}
+			if cErr := e.mem.DB().ConsumeApprovalOverrideBounded(approvedOverrideID, boundDealID, want.MaxSats, 0); cErr != nil {
+				return buyerPolicyEval{}, workflow.NewPermanentError(fmt.Errorf("market: invalid or already consumed approval override %q: %w", approvedOverrideID, cErr))
+			}
+			approvedCap = appr.MaxExtraSats
+			if approvedCap == 0 {
+				approvedCap = want.MaxSats
+			}
+		} else {
+			approvedCap = want.MaxSats
 		}
 		bypass = true
 	}
-	// Always enforce operator buyer approval & caps regardless of whether in.Offers were pre-supplied.
+
 	needsApproval := false
 	reason := ""
 	if !bypass {
@@ -67,10 +102,11 @@ func (e *Engine) buyerEvalPolicy(dealID string, want bstack.WantAd, approvedOver
 		}
 	}
 	return buyerPolicyEval{
-		NowUnix:        now,
-		NeedsApproval:  needsApproval,
-		ApprovalReason: reason,
-		BypassPolicy:   bypass,
+		NowUnix:         now,
+		NeedsApproval:   needsApproval,
+		ApprovalReason:  reason,
+		BypassPolicy:    bypass,
+		ApprovedCapSats: approvedCap,
 	}, nil
 }
 
@@ -80,7 +116,6 @@ func (e *Engine) buyerCollectOffers(rctx context.Context, dealID string, want bs
 	var firstOfferMs int64
 	wantJSON, _ := json.Marshal(want)
 	if len(offers) > 0 {
-		// Strictly require and verify signed SaleOffer bound to want.Pub, sellerPub, price, and keyCommitment.
 		verified := make([]bstack.OfferAd, 0, len(offers))
 		for _, off := range offers {
 			if len(off.SaleOffer) == 0 {
@@ -117,28 +152,34 @@ func (e *Engine) buyerCollectOffers(rctx context.Context, dealID string, want bs
 	if len(offers) == 0 {
 		br := e.getBroker()
 		if br == nil {
-			e.persistDealRecord(store.DealRecord{
+			if err := e.persistDealRecordChecked(store.DealRecord{
 				DealID:   dealID,
 				Role:     "buyer",
 				Status:   "failed",
 				WantJSON: wantJSON,
 				Error:    "no eligible offers under policy",
-			})
+			}); err != nil {
+				return buyerCollectResult{}, err
+			}
 			return buyerCollectResult{NowUnix: now, PolicyRejected: true, Error: "no eligible offers under policy"}, nil
 		}
 		if br.Discovery() != nil {
 			activeHosts = append([]string(nil), br.Discovery().ActiveHosts()...)
 			sort.Strings(activeHosts)
 		}
-		e.persistDealRecord(store.DealRecord{
-			DealID:   dealID,
-			Role:     "buyer",
-			Status:   "collecting",
-			WantJSON: wantJSON,
-		})
+		if e.FastJournal() == nil {
+			if err := e.persistDealRecordChecked(store.DealRecord{
+				DealID:   dealID,
+				Role:     "buyer",
+				Status:   "collecting",
+				WantJSON: wantJSON,
+			}); err != nil {
+				return buyerCollectResult{}, err
+			}
+		}
 		collected, fms, cErr := br.CollectOffersForWant(rctx, want, in.CollectTimeout)
 		if cErr != nil {
-			e.persistDealRecord(store.DealRecord{
+			_ = e.persistDealRecordChecked(store.DealRecord{
 				DealID:   dealID,
 				Role:     "buyer",
 				Status:   "failed",
@@ -163,13 +204,15 @@ func (e *Engine) buyerCollectOffers(rctx context.Context, dealID string, want bs
 				})
 			}
 			msg := fmt.Sprintf("no valid offers received for domain %q", dom)
-			e.persistDealRecord(store.DealRecord{
+			if err := e.persistDealRecordChecked(store.DealRecord{
 				DealID:   dealID,
 				Role:     "buyer",
 				Status:   "expired",
 				WantJSON: wantJSON,
 				Error:    msg,
-			})
+			}); err != nil {
+				return buyerCollectResult{}, err
+			}
 			return buyerCollectResult{NowUnix: now, NoOffers: true, ActiveHosts: activeHosts, Error: msg}, nil
 		}
 	}
@@ -181,14 +224,19 @@ func (e *Engine) buyerCollectOffers(rctx context.Context, dealID string, want bs
 	}, nil
 }
 
-func (e *Engine) buyerRankAndMatch(rctx context.Context, dealID string, want bstack.WantAd, collectRes buyerCollectResult, bypassPolicy bool) (buyerRankResult, error) {
+func (e *Engine) buyerRankAndMatch(rctx context.Context, dealID string, want bstack.WantAd, collectRes buyerCollectResult, bypassPolicy bool, approvedCapSats uint64) (buyerRankResult, error) {
 	now := time.Now().Unix()
 	wantJSON, _ := json.Marshal(want)
-	if e.mem != nil && e.mem.DB() != nil {
-		_ = SyncPolicyFromDB(e.mem.DB(), e.policy)
+	fj := e.FastJournal()
+	if e.policy != nil {
+		if fj != nil {
+			fj.CachedPolicySync(e.mem.DB(), e.policy)
+		} else if err := e.policy.Refresh(); err != nil {
+			return buyerRankResult{}, err
+		}
 	}
 	reps := make(map[string]store.SellerReputation)
-	if e.mem != nil && e.mem.DB() != nil {
+	if fj == nil && e.mem != nil && e.mem.DB() != nil {
 		if list, lErr := e.mem.DB().ListReputations(); lErr == nil {
 			for _, r := range list {
 				reps[r.SellerPub] = r
@@ -199,12 +247,23 @@ func (e *Engine) buyerRankAndMatch(rctx context.Context, dealID string, want bst
 	if !bypassPolicy {
 		rankPol = e.policy
 	}
+	// Enforce bounded approved cap even when domain/role policy was bypassed via operator approval (STATE-7).
+	eligibleOffers := collectRes.Offers
+	if bypassPolicy && approvedCapSats > 0 {
+		filtered := make([]bstack.OfferAd, 0, len(eligibleOffers))
+		for _, off := range eligibleOffers {
+			if off.PriceSats <= approvedCapSats {
+				filtered = append(filtered, off)
+			}
+		}
+		eligibleOffers = filtered
+	}
 	verifiedBonds := make(map[string]uint64)
 	var port *chain.Port
 	if e.mem != nil {
 		port = e.mem.Chain()
 	}
-	for _, off := range collectRes.Offers {
+	for _, off := range eligibleOffers {
 		if off.BondOutpoint != "" && off.BondBEEFHex != "" {
 			if sats := VerifyOfferBondSats(rctx, off, port); sats > 0 {
 				verifiedBonds[off.OfferID] = sats
@@ -212,20 +271,24 @@ func (e *Engine) buyerRankAndMatch(rctx context.Context, dealID string, want bst
 		}
 	}
 	var rep6D map[string]reputation.Vector6D
-	if e.mem != nil && e.mem.DB() != nil {
+	if fj == nil && e.mem != nil && e.mem.DB() != nil {
 		_, vecs, _ := EvaluateTrustForOntology(e.mem.DB(), e.salePubHex(), want.OntologyID, e.policy, nil, nil)
 		rep6D = vecs
 	}
-	ranked := RankOffersWith6DReputation(want, collectRes.Offers, rankPol, reps, rep6D, verifiedBonds)
+	ranked := RankOffersWith6DReputation(want, eligibleOffers, rankPol, reps, rep6D, verifiedBonds)
 	if len(ranked) == 0 {
 		msg := "no eligible offers under policy"
-		e.persistDealRecord(store.DealRecord{
-			DealID:   dealID,
-			Role:     "buyer",
-			Status:   "failed",
-			WantJSON: wantJSON,
-			Error:    msg,
-		})
+		if fj == nil {
+			if err := e.persistDealRecordChecked(store.DealRecord{
+				DealID:   dealID,
+				Role:     "buyer",
+				Status:   "failed",
+				WantJSON: wantJSON,
+				Error:    msg,
+			}); err != nil {
+				return buyerRankResult{}, err
+			}
+		}
 		return buyerRankResult{NowUnix: now, PolicyRejected: true, Error: msg}, nil
 	}
 
@@ -242,20 +305,24 @@ func (e *Engine) buyerRankAndMatch(rctx context.Context, dealID string, want bst
 			if msg == "" {
 				msg = "no offers passed semantic matching policy"
 			}
-			e.persistDealRecord(store.DealRecord{
-				DealID:         dealID,
-				Role:           "buyer",
-				Status:         "failed",
-				WantJSON:       wantJSON,
-				MatchAuditJSON: matchAuditJSON,
-				Error:          msg,
-			})
+			if fj == nil {
+				if err := e.persistDealRecordChecked(store.DealRecord{
+					DealID:         dealID,
+					Role:           "buyer",
+					Status:         "failed",
+					WantJSON:       wantJSON,
+					MatchAuditJSON: matchAuditJSON,
+					Error:          msg,
+				}); err != nil {
+					return buyerRankResult{}, err
+				}
+			}
 			return buyerRankResult{NowUnix: now, PolicyRejected: true, Error: msg, MatchAudit: matchAudit}, nil
 		}
 		chosen = *mDec.Chosen
 		if mDec.Verdict == "escalate" {
 			chosenJSON, _ := json.Marshal(chosen)
-			e.persistDealRecord(store.DealRecord{
+			if err := e.persistDealRecordChecked(store.DealRecord{
 				DealID:          dealID,
 				Role:            "buyer",
 				Status:          "approval_pending",
@@ -268,7 +335,9 @@ func (e *Engine) buyerRankAndMatch(rctx context.Context, dealID string, want bst
 				IsHubSeller:     chosen.IsHub,
 				FirstOfferMs:    collectRes.FirstOfferMs,
 				Error:           mDec.Reason,
-			})
+			}); err != nil {
+				return buyerRankResult{}, err
+			}
 			return buyerRankResult{
 				NowUnix:          now,
 				NeedsEscalation:  true,
@@ -282,20 +351,24 @@ func (e *Engine) buyerRankAndMatch(rctx context.Context, dealID string, want bst
 	}
 
 	candidates := buildTopKCandidates(chosen, ranked, 3)
-	chosenJSON, _ := json.Marshal(chosen)
-	e.persistDealRecord(store.DealRecord{
-		DealID:          dealID,
-		Role:            "buyer",
-		Status:          "offered",
-		WantJSON:        wantJSON,
-		ChosenOfferJSON: chosenJSON,
-		MatchAuditJSON:  matchAuditJSON,
-		CounterpartyPub: chosen.Pub,
-		PriceSats:       chosen.PriceSats,
-		ChirpURL:        chosen.ChirpURL,
-		IsHubSeller:     chosen.IsHub,
-		FirstOfferMs:    collectRes.FirstOfferMs,
-	})
+	if fj == nil {
+		chosenJSON, _ := json.Marshal(chosen)
+		if err := e.persistDealRecordChecked(store.DealRecord{
+			DealID:          dealID,
+			Role:            "buyer",
+			Status:          "offered",
+			WantJSON:        wantJSON,
+			ChosenOfferJSON: chosenJSON,
+			MatchAuditJSON:  matchAuditJSON,
+			CounterpartyPub: chosen.Pub,
+			PriceSats:       chosen.PriceSats,
+			ChirpURL:        chosen.ChirpURL,
+			IsHubSeller:     chosen.IsHub,
+			FirstOfferMs:    collectRes.FirstOfferMs,
+		}); err != nil {
+			return buyerRankResult{}, err
+		}
+	}
 	return buyerRankResult{
 		NowUnix:      now,
 		Chosen:       &chosen,
@@ -305,8 +378,6 @@ func (e *Engine) buyerRankAndMatch(rctx context.Context, dealID string, want bst
 	}, nil
 }
 
-// buildTopKCandidates returns up to k distinct offers starting with chosen so BuyerDeal
-// can fail over deterministically to Seller #2/#3 on pre-broadcast failure without re-running Jev.
 func buildTopKCandidates(chosen bstack.OfferAd, ranked []ScoredOffer, k int) []bstack.OfferAd {
 	if k <= 0 {
 		k = 3
@@ -333,110 +404,4 @@ func buildTopKCandidates(chosen bstack.OfferAd, ranked []ScoredOffer, k int) []b
 		out = append(out, ro.Offer)
 	}
 	return out
-}
-
-func (e *Engine) buyerAwaitMatchEscalation(ctx restate.WorkflowContext, dealID string, chosen bstack.OfferAd, escalationReason string, approvalTimeout time.Duration, st *DealState) (bool, error) {
-	escTimeout := approvalTimeout
-	if escTimeout <= 0 {
-		escTimeout = 15 * time.Minute
-	}
-	escAwk := restate.Awakeable[ApprovalDecision](ctx)
-	escID := "appr-" + strings.ReplaceAll(restate.UUID(ctx).String(), "-", "")[:16]
-	escAwkID := escAwk.Id()
-
-	escNow, eErr := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
-		now := time.Now().Unix()
-		if e.mem != nil && e.mem.DB() != nil {
-			_ = e.mem.DB().SaveApproval(store.ApprovalRecord{
-				ID:           escID,
-				DealID:       dealID,
-				Reason:       escalationReason,
-				MaxExtraSats: chosen.PriceSats,
-				Status:       "pending",
-				AwakeableID:  escAwkID,
-				ExpiresAt:    now + int64(escTimeout.Seconds()),
-			})
-		}
-		e.persistDealRecord(store.DealRecord{
-			DealID:    dealID,
-			Role:      "buyer",
-			Status:    "approval_pending",
-			PriceSats: chosen.PriceSats,
-			Error:     escalationReason + " [approvalId=" + escID + "]",
-		})
-		if br := e.getBroker(); br != nil {
-			br.notify("approval_pending", map[string]any{"approvalId": escID, "dealId": dealID, "reason": escalationReason, "awakeableId": escAwkID})
-		}
-		return now, nil
-	}, restate.WithName("buyer_persist_match_escalation"))
-	if eErr != nil {
-		return false, eErr
-	}
-
-	st.Status = "approval_pending"
-	st.ApprovalID = escID
-	st.AwakeableID = escAwkID
-	st.Error = escalationReason + " [approvalId=" + escID + "]"
-	st.UpdatedAt = escNow
-	restate.Set(ctx, "state", *st)
-
-	escTimer := restate.After(ctx, escTimeout)
-	winner, waitErr := restate.WaitFirst(ctx, escAwk, escTimer)
-	if waitErr != nil {
-		return false, waitErr
-	}
-	if winner == escTimer {
-		expNow, _ := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
-			now := time.Now().Unix()
-			e.persistDealRecord(store.DealRecord{
-				DealID: dealID,
-				Role:   "buyer",
-				Status: "expired",
-				Error:  "semantic match escalation timed out",
-			})
-			return now, nil
-		}, restate.WithName("buyer_match_escalation_expired"))
-		st.Status = "expired"
-		st.Error = "semantic match escalation timed out"
-		st.UpdatedAt = expNow
-		restate.Set(ctx, "state", *st)
-		return false, nil
-	}
-	dec, dErr := escAwk.Result()
-	if dErr != nil || !dec.Approved {
-		reason := "semantic match denied by operator"
-		if dErr != nil {
-			reason = dErr.Error()
-		} else if dec.Reason != "" {
-			reason = dec.Reason
-		}
-		denyNow, _ := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
-			now := time.Now().Unix()
-			e.persistDealRecord(store.DealRecord{
-				DealID: dealID,
-				Role:   "buyer",
-				Status: "failed",
-				Error:  reason,
-			})
-			return now, nil
-		}, restate.WithName("buyer_match_escalation_denied"))
-		st.Status = "failed"
-		st.Error = reason
-		st.UpdatedAt = denyNow
-		restate.Set(ctx, "state", *st)
-		return false, nil
-	}
-	_, _ = restate.Run(ctx, func(_ restate.RunContext) (bool, error) {
-		if e.mem != nil && e.mem.DB() != nil && st.ApprovalID != "" {
-			_, _ = e.mem.DB().MarkApprovalResolvedAwakeable(st.ApprovalID, true)
-		}
-		e.persistDealRecord(store.DealRecord{
-			DealID: dealID,
-			Role:   "buyer",
-			Status: "offered",
-			Error:  "",
-		})
-		return true, nil
-	}, restate.WithName("buyer_match_escalation_consume"))
-	return true, nil
 }

@@ -27,7 +27,7 @@ func (m *Monitor) UnFail(ctx context.Context) (int, error) {
 	if m.engine.cfg.Tracker == nil {
 		return 0, ErrNoChain
 	}
-	// Bound scan to submission_unknown plus recent (<=24h) failed/aborted txs (max 20 per pass).
+	// Bound scan to submission_unknown plus recent (<=24h) failed/aborted txs (max 250 per pass).
 	cutoff := time.Now().Add(-24 * time.Hour)
 	q := fmt.Sprintf(`
 		SELECT id, tx_id, status
@@ -38,7 +38,7 @@ func (m *Monitor) UnFail(ctx context.Context) (int, error) {
 		  AND tx_id != ''
 		  AND (status = 'submission_unknown' OR (status IN ('failed','aborted') AND updated_at >= ?))
 		ORDER BY updated_at DESC
-		LIMIT 20`, m.engine.tables.transactions)
+		LIMIT 250`, m.engine.tables.transactions)
 	rows, err := m.engine.readDB.QueryContext(ctx, q, m.engine.userID, cutoff)
 	if err != nil {
 		return 0, err
@@ -122,7 +122,9 @@ func (m *Monitor) UnFail(ctx context.Context) (int, error) {
 		}
 
 		// Not mined yet: for submission_unknown, verify actual raw tx bytes on chain (never bare WoC JSON)
-		// without re-calling lookupProof.
+		// without re-calling lookupProof. If not on chain, check whether any input was consensus-proven
+		// spent by a DIFFERENT mined transaction (double-spend conflict) to transition cleanly to 'failed'
+		// and release non-conflicting reserved inputs instead of stranding forever (STATE-6).
 		if c.status == StatusSubmissionUnknown && m.engine.cfg.Chain != nil {
 			raw, rErr := m.engine.cfg.Chain.TxRaw(ctx, c.txid)
 			if rErr == nil && len(raw) > 0 {
@@ -133,43 +135,100 @@ func (m *Monitor) UnFail(ctx context.Context) (int, error) {
 					}
 				}
 			}
+			if m.failConflictingSubmissionUnknown(ctx, c.id, c.txid) {
+				m.clearUnfailBackoff(c.txid)
+				continue
+			}
 		}
 		m.recordUnfailBackoff(c.txid, now)
 	}
 	return revived, nil
 }
 
+// failConflictingSubmissionUnknown checks whether an input of a submission_unknown transaction has
+// been mined in a competing header-verified transaction (spenderTxID != txid). Only when a competing
+// mined BUMP proves the tx can never confirm does it mark the tx failed and release non-conflicting inputs.
+func (m *Monitor) failConflictingSubmissionUnknown(ctx context.Context, dbTxID int64, txid string) bool {
+	if m.engine == nil || m.engine.cfg.Chain == nil || m.engine.svc == nil || m.engine.cfg.Tracker == nil {
+		return false
+	}
+	txObj, err := m.engine.LoadParsedTx(ctx, txid)
+	if err != nil || txObj == nil || len(txObj.Inputs) == 0 {
+		return false
+	}
+	type conflictInput struct {
+		txid string
+		vout uint32
+	}
+	var conflicted []conflictInput
+	for _, in := range txObj.Inputs {
+		if in == nil || in.SourceTXID == nil {
+			continue
+		}
+		srcID := in.SourceTXID.String()
+		spenderID, sErr := m.engine.cfg.Chain.Spender(ctx, srcID, in.SourceTxOutIndex)
+		if sErr != nil || spenderID == "" || strings.EqualFold(spenderID, txid) {
+			continue
+		}
+		raw, rErr := m.engine.cfg.Chain.TxRaw(ctx, spenderID)
+		if rErr != nil || len(raw) == 0 {
+			continue
+		}
+		spendTx, pErr := transaction.NewTransactionFromBytes(raw)
+		if pErr != nil || !strings.EqualFold(spendTx.TxID().String(), spenderID) {
+			continue
+		}
+		spendsSame := false
+		for _, sin := range spendTx.Inputs {
+			if sin != nil && sin.SourceTXID != nil && strings.EqualFold(sin.SourceTXID.String(), srcID) && sin.SourceTxOutIndex == in.SourceTxOutIndex {
+				spendsSame = true
+				break
+			}
+		}
+		if !spendsSame {
+			continue
+		}
+		if mp, _, ok, pErr := m.engine.svc.lookupProof(ctx, spenderID); pErr == nil && ok && mp != nil {
+			conflicted = append(conflicted, conflictInput{txid: srcID, vout: in.SourceTxOutIndex})
+		}
+	}
+	if len(conflicted) == 0 {
+		return false
+	}
+	_ = m.engine.AbortNoSendByTxID(ctx, txid)
+	if m.engine.sqlDB != nil {
+		_, _ = m.engine.sqlDB.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE "%s" SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND status != 'completed'`, m.engine.tables.transactions),
+			dbTxID, m.engine.userID,
+		)
+		for _, ci := range conflicted {
+			_, _ = m.engine.sqlDB.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE "%s" SET spendable = 0 WHERE user_id = ? AND vout = ? AND transaction_id IN (SELECT id FROM "%s" WHERE user_id = ? AND tx_id = ?)`,
+					m.engine.tables.outputs, m.engine.tables.transactions),
+				m.engine.userID, ci.vout, m.engine.userID, ci.txid,
+			)
+		}
+	}
+	return true
+}
+
 func (m *Monitor) shouldAttemptUnfail(txid string, now time.Time) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ent, ok := m.backoff[txid]
-	if !ok {
+	if m.backoff == nil {
 		return true
 	}
-	return !now.Before(ent.nextTry)
+	return m.backoff.ShouldAttempt(txid, now)
 }
 
 func (m *Monitor) recordUnfailBackoff(txid string, now time.Time) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.backoff) > 512 {
-		clear(m.backoff)
+	if m.backoff != nil {
+		m.backoff.RecordFailure(txid, now)
 	}
-	ent := m.backoff[txid]
-	ent.attempts++
-	shift := min(ent.attempts-1, 6)
-	wait := time.Duration(30<<shift) * time.Second
-	if wait > 30*time.Minute {
-		wait = 30 * time.Minute
-	}
-	ent.nextTry = now.Add(wait)
-	m.backoff[txid] = ent
 }
 
 func (m *Monitor) clearUnfailBackoff(txid string) {
-	m.mu.Lock()
-	delete(m.backoff, txid)
-	m.mu.Unlock()
+	if m.backoff != nil {
+		m.backoff.Clear(txid)
+	}
 }
 
 type wocUnspentResp struct {

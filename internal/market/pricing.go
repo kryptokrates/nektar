@@ -2,6 +2,7 @@ package market
 
 import (
 	"encoding/json"
+	"log"
 	"strings"
 	"unicode"
 
@@ -307,7 +308,9 @@ func ParseDynamicPriceState(raw []byte, basePrice uint64) DynamicPriceState {
 	if len(raw) == 0 {
 		return st
 	}
-	_ = json.Unmarshal(raw, &st)
+	if err := json.Unmarshal(raw, &st); err != nil {
+		log.Printf("market: corrupt dynamic_pricing_json (using defaults): %v", err)
+	}
 	st.normalize(basePrice)
 	return st
 }

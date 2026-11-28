@@ -26,8 +26,8 @@ const (
 	MaxChirpTotalBytes = 16 << 20
 	// MaxChirpReferences caps total DAG references followed during CHIRP verification.
 	MaxChirpReferences = 512
-	// DefaultChirpStoreQuotaBytes caps total disk usage of FileObjectStore (512 MiB).
-	DefaultChirpStoreQuotaBytes int64 = 512 << 20
+	// DefaultChirpStoreQuotaBytes caps total disk usage of FileObjectStore (16 GiB default, overridable via NEKTAR_CHIRP_QUOTA_MB).
+	DefaultChirpStoreQuotaBytes int64 = 16 << 30
 )
 
 // DefaultChirpLimits returns bounded bcommon/chirp verification limits against DAG amplification.
@@ -38,9 +38,10 @@ func DefaultChirpLimits() chirp.Limits {
 	}
 }
 
-// FileObjectStore stores CHIRP objects on disk under <dir>/chirp/<sha256hex>.
+// FileObjectStore stores CHIRP objects on disk under <dir>/chirp/<ab>/<cd>/<sha256hex>
+// (falling back transparently to legacy flat <dir>/chirp/<sha256hex> on reads/deletes).
 type FileObjectStore struct {
-	mu        sync.RWMutex
+	mu        sync.Mutex
 	dir       string
 	maxBytes  int64
 	usedBytes int64
@@ -52,17 +53,33 @@ func NewFileObjectStore(dir string) (*FileObjectStore, error) {
 		return nil, err
 	}
 	var used int64
-	if entries, err := os.ReadDir(cdir); err == nil {
-		for _, ent := range entries {
-			if strings.HasSuffix(ent.Name(), ".tmp") {
-				continue
-			}
-			if info, iErr := ent.Info(); iErr == nil && info.Mode().IsRegular() {
-				used += info.Size()
-			}
+	_ = filepath.WalkDir(cdir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d == nil || d.IsDir() || strings.HasSuffix(d.Name(), ".tmp") {
+			return nil
+		}
+		if info, iErr := d.Info(); iErr == nil && info.Mode().IsRegular() {
+			used += info.Size()
+		}
+		return nil
+	})
+	quota := DefaultChirpStoreQuotaBytes
+	if v := strings.TrimSpace(os.Getenv("NEKTAR_CHIRP_QUOTA_MB")); v != "" {
+		var mb int64
+		if _, sErr := fmt.Sscanf(v, "%d", &mb); sErr == nil && mb > 0 {
+			quota = mb << 20
 		}
 	}
-	return &FileObjectStore{dir: cdir, maxBytes: DefaultChirpStoreQuotaBytes, usedBytes: used}, nil
+	return &FileObjectStore{dir: cdir, maxBytes: quota, usedBytes: used}, nil
+}
+
+func (s *FileObjectStore) shardedPath(hx string) (subDir, sharded, flat string) {
+	flat = filepath.Join(s.dir, hx)
+	if len(hx) >= 4 {
+		subDir = filepath.Join(s.dir, hx[:2], hx[2:4])
+		sharded = filepath.Join(subDir, hx)
+		return subDir, sharded, flat
+	}
+	return s.dir, flat, flat
 }
 
 func (s *FileObjectStore) PutObject(hash [32]byte, data []byte) error {
@@ -72,32 +89,64 @@ func (s *FileObjectStore) PutObject(hash [32]byte, data []byte) error {
 	if sha256.Sum256(data) != hash {
 		return errors.New("chirp: object data sha256 mismatch")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p := filepath.Join(s.dir, hex.EncodeToString(hash[:]))
+	hx := hex.EncodeToString(hash[:])
+	subDir, p, flat := s.shardedPath(hx)
 	if _, err := os.Stat(p); err == nil {
 		return nil
 	}
+	if flat != p {
+		if _, err := os.Stat(flat); err == nil {
+			return nil
+		}
+	}
+
+	s.mu.Lock()
 	if s.maxBytes > 0 && s.usedBytes+int64(len(data)) > s.maxBytes {
-		return fmt.Errorf("chirp: object store quota exceeded (%d + %d > %d)", s.usedBytes, len(data), s.maxBytes)
+		used := s.usedBytes
+		maxB := s.maxBytes
+		s.mu.Unlock()
+		return fmt.Errorf("chirp: object store quota exceeded (%d + %d > %d)", used, len(data), maxB)
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o640); err != nil {
+	s.mu.Unlock()
+
+	if err := os.MkdirAll(subDir, 0o750); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, p); err != nil {
-		_ = os.Remove(tmp)
+	tmp, err := os.CreateTemp(subDir, hx[:min(8, len(hx))]+".*.tmp")
+	if err != nil {
 		return err
 	}
+	tmpName := tmp.Name()
+	if _, wErr := tmp.Write(data); wErr != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return wErr
+	}
+	if cErr := tmp.Close(); cErr != nil {
+		_ = os.Remove(tmpName)
+		return cErr
+	}
+	if err := os.Rename(tmpName, p); err != nil {
+		_ = os.Remove(tmpName)
+		if _, stErr := os.Stat(p); stErr == nil {
+			return nil
+		}
+		return err
+	}
+	s.mu.Lock()
 	s.usedBytes += int64(len(data))
+	s.mu.Unlock()
 	return nil
 }
 
 func (s *FileObjectStore) GetObject(hash [32]byte) ([]byte, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	p := filepath.Join(s.dir, hex.EncodeToString(hash[:]))
+	hx := hex.EncodeToString(hash[:])
+	_, p, flat := s.shardedPath(hx)
 	info, err := os.Stat(p)
+	if err != nil && flat != p && os.IsNotExist(err) {
+		p = flat
+		info, err = os.Stat(p)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -109,21 +158,26 @@ func (s *FileObjectStore) GetObject(hash [32]byte) ([]byte, error) {
 
 // DeleteObject removes hash from disk and updates quota accounting (used by Forget() shredding).
 func (s *FileObjectStore) DeleteObject(hash [32]byte) error {
+	hx := hex.EncodeToString(hash[:])
+	_, p, flat := s.shardedPath(hx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p := filepath.Join(s.dir, hex.EncodeToString(hash[:]))
-	info, err := os.Stat(p)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+	var freed int64
+	for _, cand := range []string{p, flat} {
+		if info, err := os.Stat(cand); err == nil {
+			if rErr := os.Remove(cand); rErr != nil && !os.IsNotExist(rErr) {
+				return rErr
+			}
+			freed += info.Size()
+		} else if !os.IsNotExist(err) {
+			return err
 		}
-		return err
+		if cand == flat {
+			break
+		}
 	}
-	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if s.usedBytes >= info.Size() {
-		s.usedBytes -= info.Size()
+	if s.usedBytes >= freed {
+		s.usedBytes -= freed
 	} else {
 		s.usedBytes = 0
 	}

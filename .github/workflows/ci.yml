@@ -32,13 +32,25 @@ jobs:
               diff -u "contracts/artifacts/$base" "$f"
             fi
           done
-          # 2. Verify no raw ec.PrivateKey references leak into server/hub/memory/store/chain/policy/core/cmd.
+          # 2. Verify no raw ec.PrivateKey references leak outside internal/wallet, contracts, bstack, lattice, nmu, reasoning (ARCH-S1: discovery & market forbidden!).
           bad="$(grep -rn 'ec\.PrivateKey' internal/ cmd/ --include='*.go' --exclude='*_test.go' \
-            | grep -vE '^internal/(wallet|bstack|contracts|discovery|market|lattice|nmu)/' \
+            | grep -vE '^internal/(wallet|bstack|contracts|lattice|nmu)/' \
             | grep -v '^internal/reasoning/grounding\.go:' || true)"
           if [ -n "$bad" ]; then
             echo "ERROR: raw ec.PrivateKey found outside allowed signing/custody packages:"
             echo "$bad"
+            exit 1
+          fi
+          # 3. Verify zero external Restate sidecar SDK imports remain anywhere in Go sources or go.mod (RT-9).
+          if grep -rn 'restatedev/sdk-go' go.mod cmd/ internal/ --include='*.go' --include='go.mod'; then
+            echo "ERROR: restatedev/sdk-go reference found — Nektar uses pure-Go embedded cschleiden/go-workflows"
+            exit 1
+          fi
+          # 4. Verify outbound HTTP in discovery, hub, market, and backup uses SSRF-safe core.SafeHTTPClient* (never http.DefaultClient).
+          bad_http="$(grep -rn 'http\.DefaultClient' internal/discovery/ internal/hub/ internal/market/ internal/backup/ --include='*.go' --exclude='*_test.go' || true)"
+          if [ -n "$bad_http" ]; then
+            echo "ERROR: http.DefaultClient found in network-facing package (use core.SafeHTTPClientForNetwork):"
+            echo "$bad_http"
             exit 1
           fi
       - name: unit & integration tests (race detector)
@@ -80,9 +92,13 @@ jobs:
           go test -v ./internal/memory -run 'TestHardeningEncryptedLeaf|TestShardPackRejects'
       - name: Fuzz smoke (3s each)
         run: |
-          go test ./internal/core -fuzz=FuzzParseFragment -fuzztime=3s
+          go test ./internal/core -fuzz=FuzzParseProvenance -fuzztime=3s
           go test ./internal/bstack -fuzz=FuzzOpenBboxBody -fuzztime=3s
+          go test ./internal/bstack -fuzz=FuzzDecodeNkt1Payload -fuzztime=3s
           go test ./internal/contracts -fuzz=FuzzVerifyFragment -fuzztime=3s
+          go test ./internal/memrepo -fuzz=FuzzVerifyCapsuleStream -fuzztime=3s
+          go test ./internal/market -fuzz=FuzzDecodeDealReceiptToken -fuzztime=3s
+          go test ./internal/reputation -fuzz=FuzzDecodeAttestationToken -fuzztime=3s
       - name: Static crypto pre-scanner & unit tests
         run: |
           node --test .devin/skills/crypto-audit/scripts/crypto-scan.test.mjs

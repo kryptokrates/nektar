@@ -2,15 +2,16 @@ package market
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
-	restate "github.com/restatedev/sdk-go"
-
+	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/distill"
+	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/store"
 )
@@ -253,10 +254,14 @@ func (e *Engine) processRecallMissAutoWants(ctx context.Context, nowUnix int64) 
 		if err := e.policy.CanSpendForDomains("", []string{dom}, budget); err != nil {
 			continue
 		}
-		wantID := fmt.Sprintf("autowant-%d-%s", nowUnix, randIDHex()[:8])
+		// RT-7 fix: deterministic wantID derived from (topicKey, UTC dayBucket) so retries on the same day are idempotent!
+		dayBucket := nowUnix / 86400
+		topicHash := hex.EncodeToString(core.SHA256([]byte(m.TopicKey)))[:12]
+		wantID := fmt.Sprintf("autowant-%s-%d", topicHash, dayBucket)
 		if br != nil {
-			if br.RestateClient() != nil {
+			if wc := br.WorkflowClient(); wc != nil && wc.IsRunning() {
 				st, sErr := br.StartStandingOrder(ctx, StandingOrderInput{
+					OrderID:     wantID,
 					Domains:     []string{dom},
 					Query:       m.Query,
 					MaxSats:     budget,
@@ -311,44 +316,15 @@ func (e *Engine) applyDynamicPriceIdleDecay(nowUnix int64) int {
 	return decayed
 }
 
-// SleepCycle is registered WithIngressPrivate(true) and invoked only via the authenticated NektarRuntime gateway
-// (Restate strips caller HTTP headers on internal service-to-service Object calls, matching AnchorCadence/Tx/EpistemicShard).
-func (e *Engine) restateSleepCycleRun(ctx restate.ObjectContext, in SleepCycleInput) (SleepCycleState, error) {
-	prev, _ := restate.Get[SleepCycleState](ctx, "state")
-	res, err := restate.Run(ctx, func(rctx restate.RunContext) (SleepCycleState, error) {
-		out, rErr := e.RunSleepCycle(rctx, in)
-		if out == nil {
-			return SleepCycleState{Status: "error"}, rErr
-		}
-		return *out, rErr
-	}, restate.WithName("sleep_cycle_distill"))
-	if err != nil {
-		prev.Status = "error"
-		prev.LastError = err.Error()
-		restate.Set(ctx, "state", prev)
-		return prev, err
+// LoadSleepCycleState reads the latest persisted SleepCycleState from SQLite KV.
+func LoadSleepCycleState(mem *memory.Service) SleepCycleState {
+	var st SleepCycleState
+	if mem != nil && mem.DB() != nil {
+		_, _ = mem.DB().GetJSON("sleep_cycle_last_state_v1", &st)
 	}
-	if res.Status == "completed" {
-		prev.TotalRuns++
-		prev.TotalDistilled += res.TotalDistilled
-		prev.TotalQuarantined += res.TotalQuarantined
-		prev.TotalDropped += res.TotalDropped
-		prev.TotalSuperseded += res.TotalSuperseded
-		prev.PriceDecayed = res.PriceDecayed
-		prev.LastSummary = res.LastSummary
-		prev.LastError = ""
+	if st.Status == "" {
+		st.Status = "idle"
 	}
-	prev.Status = res.Status
-	prev.LastRunAt = res.LastRunAt
-	restate.Set(ctx, "state", prev)
-	return prev, nil
+	return st
 }
 
-func (e *Engine) restateSleepCycleTriggerNow(ctx restate.ObjectContext, in SleepCycleInput) (SleepCycleState, error) {
-	in.Force = true
-	return e.restateSleepCycleRun(ctx, in)
-}
-
-func (e *Engine) restateSleepCycleStatus(ctx restate.ObjectSharedContext, _ restate.Void) (SleepCycleState, error) {
-	return restate.Get[SleepCycleState](ctx, "state")
-}

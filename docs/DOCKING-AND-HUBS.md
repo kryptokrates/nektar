@@ -49,7 +49,7 @@ flowchart LR
   ```sh
   nektar up --network main --confirm I_UNDERSTAND --wallet client
   ```
-  BSV Desktop / Metanet Desktop (`http://127.0.0.1:3321`) holds 100% of custody and enforces interactive spend consent over standard BRC-100 wire; Nektar owns memory, Cedar, Mangle, Restate, and independent SPV verification.
+  BSV Desktop / Metanet Desktop (`http://127.0.0.1:3321`) holds 100% of custody and enforces interactive spend consent over standard BRC-100 wire; Nektar owns memory, Cedar, Mangle, embedded SQLite workflows, and independent SPV verification.
 - **24/7 autonomous trading or public Hub (Treasury + Hot-Float separation):**
   ```sh
   # 1. Boot isolated Mainnet node (~/.nektar/main) with embedded BRC-100 hot float

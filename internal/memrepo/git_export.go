@@ -152,8 +152,8 @@ func ExportGitWorkspace(dir string, cap *MemoryCapsule, objects bstack.ObjectSto
 	var headFiles map[string][]byte
 
 	for _, c := range cap.Commits {
-		tr := cap.Trees[c.TreeHash]
-		files := make(map[string][]byte, len(tr.Entries)+2)
+		entries, _ := FlattenTreeFromMap(c.TreeHash, cap.Trees)
+		files := make(map[string][]byte, len(entries)+2)
 		var indexLines []string
 		indexLines = append(indexLines, fmt.Sprintf("# %s (%s)\n", cap.Repo, branch))
 		indexLines = append(indexLines, fmt.Sprintf("- **Nektar Commit:** `%s`\n", c.CommitHash))
@@ -165,7 +165,7 @@ func ExportGitWorkspace(dir string, cap *MemoryCapsule, objects bstack.ObjectSto
 		}
 		indexLines = append(indexLines, "\n## Files & Memory Facts\n")
 
-		for _, e := range tr.Entries {
+		for _, e := range entries {
 			b, ok := cap.Blobs[e.BlobHash]
 			if ok && b.Forgotten {
 				continue
@@ -425,11 +425,9 @@ func buildLineageSummary(cap *MemoryCapsule, c CommitObject) lineageSummary {
 	}
 }
 
+// toLineageAnchor emits lightweight on-chain anchor pointers into .nektar/lineage.json
+// without duplicating full AtomicBEEF blobs across every commit tree (avoiding O(N^2) bloat).
 func toLineageAnchor(a store.BatchAnchor) lineageAnchorRecord {
-	var beefHex string
-	if len(a.Beef) > 0 {
-		beefHex = hex.EncodeToString(a.Beef)
-	}
 	return lineageAnchorRecord{
 		N:           a.N,
 		Size:        a.Size,
@@ -438,7 +436,6 @@ func toLineageAnchor(a store.BatchAnchor) lineageAnchorRecord {
 		ChainedHex:  a.ChainedHex,
 		Settled:     a.Settled,
 		BlockHeight: a.BlockHeight,
-		BEEFHex:     beefHex,
 	}
 }
 

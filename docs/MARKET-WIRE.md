@@ -2,9 +2,7 @@
 
 Everything a foreign implementation needs to speak wants, offers, escrow,
 and delivery with nektar agents over stock BRC-22/BRC-24 overlay hosts.
-Canonical source: `packages/bstack/src/{market,artifacts,finger,box,hosts}.ts`,
-`packages/mcp/src/automation/market.ts`, `packages/identity/src/sale.ts`,
-`packages/anchor/src/sale.ts`.
+Canonical Go v0.1 source: `internal/bstack/{wire,wire_cbor,module,module_lookup}.go`, `internal/memrepo/{objects_cbor,capsule,capsule_codec,capsule_verify}.go`, `internal/contracts/sale.go`, `internal/market/`.
 
 ## 0. Transport
 
@@ -27,22 +25,25 @@ Canonical source: `packages/bstack/src/{market,artifacts,finger,box,hosts}.ts`,
   - `{offers: {net, wantId, buyerPub}}` — offers answering a want.
   - `{want:   {net, pub, wantId}}` — a specific want.
   - `{announces: {net, limit?}}` — operator directory cards (§2.1).
-- Payload (record `extra[0]` content): canonical-CBOR application record —
-  key `0` = magic `nkt1`, key `1` = kind (`1n` want, `2n` offer, `3n`
-  announce), key `2` = the signed artifact as `marketJson` UTF-8 text.
-  Keys >2 are reserved. A legacy JSON `{v:1,kind,body}` form is accepted
-  on read (`NEKTAR_MARKET_V1=1` writes it).
+- Payload (record `extra[0]` content): pure RFC 8949 §4.2.1 Core Deterministic CBOR (`bcommon/cbor`) application record —
+  key `0` = magic `nkt1`, key `1` = kind (`1` want, `2` offer, `3` announce, `4` attestation), key `2` = canonical CBOR `bstr` encoding the signed envelope `{1: rawAdCBOR, 2: sigDER}`.
+  Unknown integer keys follow CHIRP TLV extensibility: even unknown keys are critical (fail-closed); odd unknown keys are non-critical extensions (preserved verbatim). Signatures are verified over the exact raw canonical CBOR bytes (`DSHA256(domainTag || rawAdCBOR)`).
 
 ## 2. Signed artifacts
 
-- Canonical JSON (`marketJson`): JSON.stringify with object keys sorted
-  recursively; bigint → decimal string. Sign over
-  `sha256(utf8(prefix + marketJson(ad)))`, DER-encoded ECDSA.
-  - want prefix: `nektar:market:want:1\n`
-  - offer prefix: `nektar:market:offer:1\n`
-- `SignedWant  = {want: WantAd,  sig: hex}`
-- `SignedOffer = {offer: OfferAd, sig: hex}`
-- `SignedAnnounce = {announce: AnnounceAd, sig: hex}` (§2.1)
+- All cryptographically signed `nkt1` artifacts, `nektardr1.*` deal receipts, `nektaratt1.*` attestations, `nektarr1.*` answer receipts, and `.nkt` Memory Capsule records use pure RFC 8949 CDE CBOR (`bcommon/cbor`) with explicit per-protocol domain-separation tags (zero generic fallback) and **DSHA-256** digesting (`DSHA256(tag || canonicalCBOR)`), signed with low-S DER ECDSA:
+  - want tag: `nektar:market:want:1\n`
+  - offer tag: `nektar:market:offer:1\n`
+  - announce tag: `nektar:market:announce:1\n`
+  - attestation tag: `nektar:market:attest:1\n`
+  - sale offer v2 tag: `nektar:sale:offer:v2`
+  - feed auth tag: `nektar:feed-auth:v1`
+  - deal receipt tag: `nektar:deal-receipt:v1`
+- `SignedWant = {1: rawWantCBOR, 2: sigDER}`
+- `SignedOffer = {1: rawOfferCBOR, 2: sigDER}`
+- `SignedAnnounce = {1: rawAnnounceCBOR, 2: sigDER}`
+- `SignedAttestation = {1: rawAttestCBOR, 2: sigDER}`
+- **Universal `.nkt` Delivery (`payloadFormat: "nkt"`):** Spot sales seal a self-verifying `.nkt` Memory Capsule (`NKTCAP1\n` + mode byte + zstd stream of RFC 8742 CBOR Sequence records + mandatory DSHA-256 `CapsuleTrailer`) under BRC-369 content key `k` over CHIRP so buyers verify the seller's signed `CommitObject`, `TransitionRecord`, `NektarAnchor` lineage, and `SubsetDisclosureProof` through the unified `ImportCapsule` pipeline.
 - `WantAd`: `{v:1, wantId, pub, domains[], taskHash, maxSats?, revision,
 status, streamSeq?, previousHash?, exp?}`.
 - `OfferAd`: `{v:1, offerId, pub, shard, seq, shardId, domains[], leaf, hdp,
@@ -222,6 +223,6 @@ Pure-Go `v0.1` (`internal/bstack/{wire,module,module_lookup}.go`, `internal/nmu`
 - **Multi-Mode HTTP Contracts & Ticker:**
   - `POST /v1/market/query` — `per_query` metered recall over BRC-105 HTTP 402 returning verified items + signed `nektardr1.*` receipt.
   - `POST /v1/market/subscriptions` — `subscription` activation over BRC-105 HTTP 402 returning `subId`, `feedUrl`, and signed `nektardr1.*` receipt.
-  - `GET /v1/market/feeds/{shard}` — authenticated SSE Shard Feed pushing `fragment_distilled` and Grade S `fragment_superseded` events; requires `X-Nektar-Sub-ID`, `X-Nektar-Pub`, `X-Nektar-TS` (`±60s` replay window), and `X-Nektar-Sig` over `DSHA256("nektar:feed-auth:v1" || "GET|/v1/market/feeds/{shard}|{subId}|{ts}")`.
+  - `GET /v1/market/feeds/{shard}` — authenticated SSE Shard Feed pushing `fragment_distilled` and Grade S `fragment_superseded` events; requires `X-Nektar-Sub-ID`, `X-Nektar-Pub`, `X-Nektar-Ts` (`±60s` replay window), `X-Nektar-Nonce` (single-use per-host replay cache), and `X-Nektar-Sig` over `DSHA256("nektar:feed-auth:v1" || CanonicalCBOR({1: shard, 2: subId, 3: tsUnix, 4: nonce, 5: audience}))`.
   - `GET /v1/market/ticker` — zero-float Commodity Ticker aggregating live quotes by `(ontologyId, grade, pricingMode)`.
 

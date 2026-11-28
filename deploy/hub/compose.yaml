@@ -1,6 +1,6 @@
-# Nektar v0.1 Hub — Single static Pure-Go binary + active Restate durable executor hosting:
-#   - Nektar Agent (MCP + HTTP + A2A + L0 LLM Proxy + Svelte 5 Dashboard + Restate services)
-#   - Embedded Go Overlay Hub (tm_nektar_<net>_0..f, ls_nektar, bfinger, bbox, blogs, borg, bsecret, bstore)
+# Nektar v0.1 Hub — Single static Pure-Go binary hosting:
+#   - Nektar Agent (MCP + HTTP + A2A + L0 LLM Proxy + Svelte 5 Dashboard + embedded go-workflows SQLite WAL)
+#   - Embedded Go Overlay Hub (BRC-223 topics, ls_nektar, bfinger, bbox, blogs, borg, bsecret, bstore)
 #   - Native SSE /hub/events push, curated starter liquidity, verified bounties & testnet faucet
 #
 #   docker compose -f deploy/hub/compose.yaml up -d
@@ -8,29 +8,10 @@
 #   docker compose -f deploy/hub/compose.yaml --profile tls --profile tunnel up -d
 name: nektar-hub
 services:
-  restate:
-    image: docker.restate.dev/restatedev/restate:1.8.1
-    restart: unless-stopped
-    environment:
-      RESTATE_NODE_NAME: nektar-hub
-      RESTATE_BASE_DIR: /restate-data
-      # Only set RESTATE_WORKER__INVOKER__REQUEST_IDENTITY_PRIVATE_KEY_PEM_FILE when mounting a real PEM file
-      # (Restate 1.8.1 treats an empty string "" as an invalid path and exits 1).
-    healthcheck:
-      test: ['CMD', 'bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/9070 && printf "GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && grep -q "200" <&3']
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    volumes:
-      - restate-data:/restate-data
-
   hub:
     image: ghcr.io/kryptokrates/nektar:${NEKTAR_IMAGE_TAG:-latest}${NEKTAR_IMAGE_DIGEST:+@${NEKTAR_IMAGE_DIGEST}}
     restart: unless-stopped
-    command: ['serve', '-listen', ':18420', '-restate-listen', ':9080', '-hub']
-    depends_on:
-      restate:
-        condition: service_healthy
+    command: ['serve', '-listen', ':18420', '-hub']
     ports:
       - '${NEKTAR_HTTP_BIND:-127.0.0.1}:${NEKTAR_HTTP_PORT:-18420}:18420'
     environment:
@@ -65,13 +46,6 @@ services:
       NEKTAR_SETTLE_SPEC: ${NEKTAR_SETTLE_SPEC:-}
       NEKTAR_ARCADE_KEY: ${NEKTAR_ARCADE_KEY:-}
       NEKTAR_WOC_KEY: ${NEKTAR_WOC_KEY:-}
-      NEKTAR_RESTATE_URL: ${NEKTAR_RESTATE_URL:-http://restate:8080}
-      NEKTAR_RESTATE_ADMIN: ${NEKTAR_RESTATE_ADMIN:-http://restate:9070}
-      NEKTAR_RESTATE_ENDPOINT_URI: ${NEKTAR_RESTATE_ENDPOINT_URI:-http://hub:9080}
-      NEKTAR_RESTATE_IDENTITY_KEY: ${NEKTAR_RESTATE_IDENTITY_KEY:-}
-      NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT: ${NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT:-1}
-      NEKTAR_RESTATE_INTERNAL_TOKEN: ${NEKTAR_RESTATE_INTERNAL_TOKEN:-}
-      NEKTAR_RESTATE_REQUIRED: ${NEKTAR_RESTATE_REQUIRED:-0}
       NEKTAR_SETTLE_DEPTH: ${NEKTAR_SETTLE_DEPTH:-}
       NEKTAR_WALLET_PROFILE: ${NEKTAR_WALLET_PROFILE:-standard}
       NEKTAR_OPERATOR_PUBKEY: ${NEKTAR_OPERATOR_PUBKEY:-}
@@ -145,6 +119,5 @@ configs:
 volumes:
   hub-data: {}
   hub-backups: {}
-  restate-data: {}
   caddy-data: {}
   caddy-config: {}

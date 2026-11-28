@@ -3,6 +3,10 @@ package hub
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/lightwebinc/bcommon/cbor"
+
+	"github.com/kryptokrates/nektar/internal/core"
 )
 
 // BboxMessage is a signed, E2E-encrypted store-and-forward message relayed for counterparties behind NAT.
@@ -34,6 +38,24 @@ type BboxSignablePayload struct {
 	Body         json.RawMessage `json:"body"`
 }
 
+// DomainTag returns the explicit bbox relay send domain-separation tag.
+func (p BboxSignablePayload) DomainTag() []byte { return core.TagBboxSendV1 }
+
+// EncodeCanonicalCBOR encodes p into canonical RFC 8949 CDE CBOR for signing.
+func (p BboxSignablePayload) EncodeCanonicalCBOR() ([]byte, error) {
+	return core.EncodeCBOR(cbor.Map{
+		{Key: uint64(1), Val: p.Office},
+		{Key: uint64(2), Val: p.RecipientPub},
+		{Key: uint64(3), Val: p.SenderPub},
+		{Key: uint64(4), Val: p.DealID},
+		{Key: uint64(5), Val: p.Kind},
+		{Key: uint64(6), Val: p.TS},
+		{Key: uint64(7), Val: p.Nonce},
+		{Key: uint64(8), Val: p.Aud},
+		{Key: uint64(9), Val: []byte(p.Body)},
+	})
+}
+
 // Signable returns the canonical signable struct for BboxMessage.
 func (m BboxMessage) Signable() BboxSignablePayload {
 	return BboxSignablePayload{
@@ -61,9 +83,12 @@ func (s *Store) PruneBbox(cutoffMs int64, maxRows int) (int64, error) {
 		}
 	}
 	if maxRows > 0 {
-		if res, err := s.sql.Exec(`DELETE FROM hub_bbox WHERE seq NOT IN (SELECT seq FROM hub_bbox ORDER BY seq DESC LIMIT ?)`, maxRows); err == nil {
-			n, _ := res.RowsAffected()
-			total += n
+		var boundarySeq int64
+		if err := s.sql.QueryRow(`SELECT seq FROM hub_bbox ORDER BY seq DESC LIMIT 1 OFFSET ?`, maxRows).Scan(&boundarySeq); err == nil && boundarySeq > 0 {
+			if res, dErr := s.sql.Exec(`DELETE FROM hub_bbox WHERE seq <= ?`, boundarySeq); dErr == nil {
+				n, _ := res.RowsAffected()
+				total += n
+			}
 		}
 	}
 	return total, nil
@@ -91,12 +116,12 @@ func (s *Store) SaveBboxMessage(msg BboxMessage) (int64, error) {
 
 // ListBboxMessages fetches messages addressed to recipientPub with seq > sinceSeq.
 func (s *Store) ListBboxMessages(recipientPub string, sinceSeq int64, limit int) ([]BboxMessage, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if limit <= 0 || limit > 200 {
-		limit = 50
+	rdb, release := s.rdb()
+	defer release()
+	if limit <= 0 || limit > 500 {
+		limit = 200
 	}
-	rows, err := s.sql.Query(`
+	rows, err := rdb.Query(`
 		SELECT seq, office, recipient_pub, sender_pub, deal_id, kind, body_json, COALESCE(sig, ''), COALESCE(ts, 0), COALESCE(nonce, ''), COALESCE(aud, ''), created_at
 		FROM hub_bbox WHERE recipient_pub = ? AND seq > ? ORDER BY seq ASC LIMIT ?`,
 		recipientPub, sinceSeq, limit)

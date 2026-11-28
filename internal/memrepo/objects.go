@@ -34,21 +34,23 @@ type ParentRef struct {
 
 // BlobObject is a content-addressed memory item or volumetric file attachment.
 type BlobObject struct {
-	BlobHash      string `json:"blobHash"`
-	Path          string `json:"path"`
-	MediaType     string `json:"mediaType"`
-	Size          int64  `json:"size"`
-	ContentSHA256 string `json:"contentSha256"`
-	Inline        []byte `json:"inline,omitempty"`
-	ChirpURL      string `json:"chirpUrl,omitempty"`
-	Encrypted     bool   `json:"encrypted,omitempty"`
-	BorgGroup     string `json:"borgGroup,omitempty"`
-	BorgEpoch     int64  `json:"borgEpoch,omitempty"`
-	LatticeEpoch  uint64 `json:"latticeEpoch,omitempty"`
-	KeyedMeta     []byte `json:"keyedMeta,omitempty"`
-	Level         int    `json:"level,omitempty"`
-	Class         string `json:"class,omitempty"`
-	Forgotten     bool   `json:"forgotten,omitempty"`
+	BlobHash        string `json:"blobHash"`
+	Path            string `json:"path"`
+	MediaType       string `json:"mediaType"`
+	Size            int64  `json:"size"`
+	ContentSHA256   string `json:"contentSha256"`
+	Inline          []byte `json:"inline,omitempty"`
+	ChirpURL        string `json:"chirpUrl,omitempty"`
+	Encrypted       bool   `json:"encrypted,omitempty"`
+	BorgGroup       string `json:"borgGroup,omitempty"`
+	BorgEpoch       int64  `json:"borgEpoch,omitempty"`
+	LatticeEpoch    uint64 `json:"latticeEpoch,omitempty"`
+	KeyedMeta       []byte `json:"keyedMeta,omitempty"`
+	KeyedMetaSHA256 string `json:"keyedMetaSha256,omitempty"`
+	Level           int    `json:"level,omitempty"`
+	Class           string `json:"class,omitempty"`
+	Redacted        bool   `json:"redacted,omitempty"`
+	Forgotten       bool   `json:"forgotten,omitempty"`
 }
 
 // TreeEntry is one deterministically ordered file or memory fact inside a TreeObject.
@@ -66,9 +68,12 @@ type TreeEntry struct {
 }
 
 // TreeObject is an immutable Merkle directory snapshot of all active paths in a Memory Repo.
+// Legacy/bucket trees store sorted Entries directly (TagTreeV1); sharded root trees store up to
+// 256 deterministic 2-hex-char bucket hashes in Subtrees (TagTreeV2) for O(1) sub-millisecond writes.
 type TreeObject struct {
-	TreeHash string      `json:"treeHash"`
-	Entries  []TreeEntry `json:"entries"`
+	TreeHash string            `json:"treeHash"`
+	Entries  []TreeEntry       `json:"entries,omitempty"`
+	Subtrees map[string]string `json:"subtrees,omitempty"`
 }
 
 // GitCommitMeta preserves the exact Git commit header fields for commits pushed from a real
@@ -89,25 +94,26 @@ type GitCommitMeta struct {
 
 // CommitObject is a signed, content-addressed Git/Metanet commit node in a Memory Repo DAG.
 type CommitObject struct {
-	Version      int            `json:"v"`
-	CommitHash   string         `json:"commitHash"`
-	Repo         string         `json:"repo"`
-	Branch       string         `json:"branch"`
-	Seq          int64          `json:"seq,omitempty"`
-	Parents      []ParentRef    `json:"parents,omitempty"`
-	TreeHash     string         `json:"treeHash"`
-	MPERoot      string         `json:"mpeRoot"`
+	Version        int            `json:"v"`
+	CommitKind     int            `json:"commitKind,omitempty"` // 0 = normal, 1 = tombstone (append-only Forget)
+	CommitHash     string         `json:"commitHash"`
+	Repo           string         `json:"repo"`
+	Branch         string         `json:"branch"`
+	Seq            int64          `json:"seq,omitempty"`
+	Parents        []ParentRef    `json:"parents,omitempty"`
+	TreeHash       string         `json:"treeHash"`
+	MPERoot        string         `json:"mpeRoot"`
 	AuthorPub      string         `json:"authorPub"`
 	ModelID        string         `json:"modelId"`
 	PolicyCommit   string         `json:"policyCommit,omitempty"`
 	OntologyCommit string         `json:"ontologyCommit,omitempty"`
 	Message        string         `json:"message"`
-	Timestamp    int64          `json:"timestamp"`
-	Signature    string         `json:"signature"`
-	AnchorTxID   string         `json:"anchorTxid,omitempty"`
-	AnchorN      int64          `json:"anchorN"`
-	FragmentLeaf string         `json:"fragmentLeaf,omitempty"`
-	GitMeta      *GitCommitMeta `json:"gitMeta,omitempty"`
+	Timestamp      int64          `json:"timestamp"`
+	Signature      string         `json:"signature"`
+	AnchorTxID     string         `json:"anchorTxid,omitempty"`
+	AnchorN        int64          `json:"anchorN"`
+	FragmentLeaf   string         `json:"fragmentLeaf,omitempty"`
+	GitMeta        *GitCommitMeta `json:"gitMeta,omitempty"`
 }
 
 // BranchRef tracks the current head commit and on-chain NektarAnchor GenesisOwner of a branch.
@@ -201,10 +207,14 @@ func NormalizeBranch(branch string) (string, error) {
 	return b, nil
 }
 
-// BuildBlob constructs a canonical content-addressed BlobObject.
-// When raw bytes exceed InlineBlobMaxBytes (or forceChirp is true) and objects != nil,
-// it stores the volumetric payload in BRC-167 CHIRP and references it by chirp://<sha256>.
+// BuildBlob constructs a canonical content-addressed BlobObject with default policy metadata.
 func BuildBlob(objects bstack.ObjectStore, relPath, mediaType string, raw []byte, forceChirp bool) (*BlobObject, [][32]byte, error) {
+	return BuildBlobWithMeta(objects, relPath, mediaType, raw, forceChirp, 0, "")
+}
+
+// BuildBlobWithMeta constructs a canonical content-addressed BlobObject with Level and Class committed
+// directly into BlobHash (preventing post-hash policy metadata tampering).
+func BuildBlobWithMeta(objects bstack.ObjectStore, relPath, mediaType string, raw []byte, forceChirp bool, level int, class string) (*BlobObject, [][32]byte, error) {
 	normPath, err := NormalizePath(relPath)
 	if err != nil {
 		return nil, nil, err
@@ -218,6 +228,8 @@ func BuildBlob(objects bstack.ObjectStore, relPath, mediaType string, raw []byte
 		MediaType:     mediaType,
 		Size:          int64(len(raw)),
 		ContentSHA256: hex.EncodeToString(sum[:]),
+		Level:         level,
+		Class:         class,
 	}
 	var chirpHashes [][32]byte
 	if (len(raw) > InlineBlobMaxBytes || forceChirp) && objects != nil {
@@ -243,12 +255,17 @@ func BuildBlob(objects bstack.ObjectStore, relPath, mediaType string, raw []byte
 // BuildEncryptedBlob constructs a canonical content-addressed BlobObject for a Borg- or CLKA-encrypted
 // fragment WITHOUT ever storing plaintext inline or writing plaintext bytes to CHIRP.
 func BuildEncryptedBlob(relPath, mediaType string, size int64, contentSHA256Hex, borgGroup string, borgEpoch int64, keyedMeta []byte) (*BlobObject, error) {
-	return BuildEncryptedBlobWithLattice(relPath, mediaType, size, contentSHA256Hex, "", borgGroup, borgEpoch, 0, keyedMeta)
+	return BuildEncryptedBlobWithMeta(relPath, mediaType, size, contentSHA256Hex, "", borgGroup, borgEpoch, 0, keyedMeta, 0, "")
 }
 
 // BuildEncryptedBlobWithLattice constructs a canonical content-addressed BlobObject for an encrypted
 // fragment (BorgGroup or CLKA lattice epoch), optionally referencing encrypted volumetric ciphertext via chirpURL.
 func BuildEncryptedBlobWithLattice(relPath, mediaType string, size int64, contentSHA256Hex, chirpURL, borgGroup string, borgEpoch int64, latticeEpoch uint64, keyedMeta []byte) (*BlobObject, error) {
+	return BuildEncryptedBlobWithMeta(relPath, mediaType, size, contentSHA256Hex, chirpURL, borgGroup, borgEpoch, latticeEpoch, keyedMeta, 0, "")
+}
+
+// BuildEncryptedBlobWithMeta constructs an encrypted BlobObject with Level and Class bound into BlobHash.
+func BuildEncryptedBlobWithMeta(relPath, mediaType string, size int64, contentSHA256Hex, chirpURL, borgGroup string, borgEpoch int64, latticeEpoch uint64, keyedMeta []byte, level int, class string) (*BlobObject, error) {
 	normPath, err := NormalizePath(relPath)
 	if err != nil {
 		return nil, err
@@ -257,21 +274,27 @@ func BuildEncryptedBlobWithLattice(relPath, mediaType string, size int64, conten
 		mediaType = guessMediaType(normPath, nil)
 	}
 	var kmCopy []byte
+	var kmSHA string
 	if len(keyedMeta) > 0 {
 		kmCopy = make([]byte, len(keyedMeta))
 		copy(kmCopy, keyedMeta)
+		sum := sha256.Sum256(kmCopy)
+		kmSHA = hex.EncodeToString(sum[:])
 	}
 	b := &BlobObject{
-		Path:          normPath,
-		MediaType:     mediaType,
-		Size:          size,
-		ContentSHA256: contentSHA256Hex,
-		ChirpURL:      strings.TrimSpace(chirpURL),
-		Encrypted:     true,
-		BorgGroup:     borgGroup,
-		BorgEpoch:     borgEpoch,
-		LatticeEpoch:  latticeEpoch,
-		KeyedMeta:     kmCopy,
+		Path:            normPath,
+		MediaType:       mediaType,
+		Size:            size,
+		ContentSHA256:   contentSHA256Hex,
+		ChirpURL:        strings.TrimSpace(chirpURL),
+		Encrypted:       true,
+		BorgGroup:       borgGroup,
+		BorgEpoch:       borgEpoch,
+		LatticeEpoch:    latticeEpoch,
+		KeyedMeta:       kmCopy,
+		KeyedMetaSHA256: kmSHA,
+		Level:           level,
+		Class:           class,
 	}
 	h, err := ComputeBlobHash(*b)
 	if err != nil {
@@ -281,44 +304,17 @@ func BuildEncryptedBlobWithLattice(relPath, mediaType string, size int64, conten
 	return b, nil
 }
 
-// ComputeBlobHash computes the canonical SHA-256 content ID of a BlobObject.
+// ComputeBlobHash computes the canonical DSHA-256 content ID of a BlobObject over RFC 8949 CDE CBOR
+// (including Level, Class, and KeyedMetaSHA256, while remaining invariant under Redacted/Forgotten stubbing).
 func ComputeBlobHash(b BlobObject) (string, error) {
-	var keyedMetaSHA string
-	if len(b.KeyedMeta) > 0 {
-		sum := sha256.Sum256(b.KeyedMeta)
-		keyedMetaSHA = hex.EncodeToString(sum[:])
-	}
-	canon := struct {
-		Path            string `json:"path"`
-		MediaType       string `json:"mediaType"`
-		Size            int64  `json:"size"`
-		ContentSHA256   string `json:"contentSha256"`
-		ChirpURL        string `json:"chirpUrl,omitempty"`
-		Encrypted       bool   `json:"encrypted,omitempty"`
-		BorgGroup       string `json:"borgGroup,omitempty"`
-		BorgEpoch       int64  `json:"borgEpoch,omitempty"`
-		LatticeEpoch    uint64 `json:"latticeEpoch,omitempty"`
-		KeyedMetaSHA256 string `json:"keyedMetaSha256,omitempty"`
-	}{
-		Path:            b.Path,
-		MediaType:       b.MediaType,
-		Size:            b.Size,
-		ContentSHA256:   b.ContentSHA256,
-		ChirpURL:        b.ChirpURL,
-		Encrypted:       b.Encrypted,
-		BorgGroup:       b.BorgGroup,
-		BorgEpoch:       b.BorgEpoch,
-		LatticeEpoch:    b.LatticeEpoch,
-		KeyedMetaSHA256: keyedMetaSHA,
-	}
-	raw, err := core.CanonicalJSON(canon)
+	h, err := core.HashCBOR(core.TagBlobV1, blobCommitmentCBOR(b))
 	if err != nil {
 		return "", err
 	}
-	return core.ToHex(core.SHA256(core.Concat(core.TagBlobV1, raw))), nil
+	return core.ToHex(h), nil
 }
 
-// BuildTree constructs a deterministically sorted TreeObject from entries.
+// BuildTree constructs a deterministically sorted TreeObject hashed via DSHA-256 over RFC 8949 CDE CBOR.
 func BuildTree(entries []TreeEntry) (*TreeObject, error) {
 	byPath := make(map[string]TreeEntry, len(entries))
 	for _, e := range entries {
@@ -337,14 +333,181 @@ func BuildTree(entries []TreeEntry) (*TreeObject, error) {
 		sorted = append(sorted, e)
 	}
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
-	raw, err := core.CanonicalJSON(sorted)
+	h, err := core.HashCBOR(core.TagTreeV1, treeEntriesCBOR(sorted))
 	if err != nil {
 		return nil, err
 	}
 	return &TreeObject{
-		TreeHash: core.ToHex(core.SHA256(core.Concat(core.TagTreeV1, raw))),
+		TreeHash: core.ToHex(h),
 		Entries:  sorted,
 	}, nil
+}
+
+// TreeBucketKey maps a normalized repo path deterministically to one of 256 uniform hex buckets ("00".."ff").
+func TreeBucketKey(normPath string) string {
+	sum := sha256.Sum256([]byte(normPath))
+	return hex.EncodeToString(sum[:1])
+}
+
+func isValidBucketKey(k string) bool {
+	if len(k) != 2 {
+		return false
+	}
+	for i := 0; i < 2; i++ {
+		c := k[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+// BuildShardedRootTree constructs a v2 radix root TreeObject over up to 256 non-empty bucket TreeHashes.
+func BuildShardedRootTree(subtrees map[string]string) (*TreeObject, error) {
+	if len(subtrees) == 0 {
+		return BuildTree(nil)
+	}
+	clean := make(map[string]string, len(subtrees))
+	keys := make([]string, 0, len(subtrees))
+	for k, h := range subtrees {
+		key := strings.ToLower(strings.TrimSpace(k))
+		val := strings.ToLower(strings.TrimSpace(h))
+		if val == "" {
+			continue
+		}
+		if !isValidBucketKey(key) || len(val) != 64 {
+			return nil, fmt.Errorf("memrepo: invalid subtree bucket %q -> %q", k, h)
+		}
+		if _, dup := clean[key]; !dup {
+			keys = append(keys, key)
+		}
+		clean[key] = val
+	}
+	if len(clean) == 0 {
+		return BuildTree(nil)
+	}
+	h, err := core.HashCBOR(core.TagTreeV2, core.CBORStringMapVal(clean))
+	if err != nil {
+		return nil, err
+	}
+	return &TreeObject{
+		TreeHash: core.ToHex(h),
+		Subtrees: clean,
+	}, nil
+}
+
+// BuildShardedTree partitions entries across 256 deterministic prefix buckets and returns the
+// v2 root TreeObject alongside a map[bucketTreeHash]TreeObject of all bucket leaf trees.
+func BuildShardedTree(entries []TreeEntry) (*TreeObject, map[string]TreeObject, error) {
+	if len(entries) == 0 {
+		empty, err := BuildTree(nil)
+		return empty, nil, err
+	}
+	byBucket := make(map[string][]TreeEntry)
+	seen := make(map[string]TreeEntry, len(entries))
+	for _, e := range entries {
+		p, err := NormalizePath(e.Path)
+		if err != nil {
+			return nil, nil, err
+		}
+		e.Path = p
+		if e.Mode == "" {
+			e.Mode = "100644"
+		}
+		seen[p] = e
+	}
+	for p, e := range seen {
+		bk := TreeBucketKey(p)
+		byBucket[bk] = append(byBucket[bk], e)
+	}
+	subtrees := make(map[string]string, len(byBucket))
+	bucketObjs := make(map[string]TreeObject, len(byBucket))
+	for bk, list := range byBucket {
+		bt, err := BuildTree(list)
+		if err != nil {
+			return nil, nil, err
+		}
+		subtrees[bk] = bt.TreeHash
+		bucketObjs[bt.TreeHash] = *bt
+	}
+	root, err := BuildShardedRootTree(subtrees)
+	if err != nil {
+		return nil, nil, err
+	}
+	return root, bucketObjs, nil
+}
+
+// VerifyTreeObject verifies the canonical TreeHash of either a v1 leaf/flat TreeObject or a v2 sharded root TreeObject.
+func VerifyTreeObject(tr TreeObject) error {
+	if len(tr.Subtrees) > 0 {
+		if len(tr.Entries) > 0 {
+			return errors.New("memrepo: sharded root tree must not carry inline entries")
+		}
+		rebuilt, err := BuildShardedRootTree(tr.Subtrees)
+		if err != nil {
+			return err
+		}
+		if !strings.EqualFold(rebuilt.TreeHash, tr.TreeHash) {
+			return fmt.Errorf("memrepo: sharded tree hash mismatch (want %s got %s)", rebuilt.TreeHash, tr.TreeHash)
+		}
+		return nil
+	}
+	rebuilt, err := BuildTree(tr.Entries)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(rebuilt.TreeHash, tr.TreeHash) {
+		return fmt.Errorf("memrepo: tree hash mismatch (want %s got %s)", rebuilt.TreeHash, tr.TreeHash)
+	}
+	return nil
+}
+
+// ResolveTreeEntries expands a sharded root TreeObject (or returns a flat TreeObject's entries)
+// in deterministic sorted path order using lookup(bucketHash).
+func ResolveTreeEntries(tr TreeObject, lookup func(hash string) (TreeObject, bool)) ([]TreeEntry, error) {
+	if len(tr.Subtrees) == 0 {
+		return tr.Entries, nil
+	}
+	if lookup == nil {
+		return nil, errors.New("memrepo: subtree lookup required for sharded tree")
+	}
+	keys := make([]string, 0, len(tr.Subtrees))
+	for k := range tr.Subtrees {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var all []TreeEntry
+	for _, k := range keys {
+		bh := tr.Subtrees[k]
+		if bh == "" {
+			continue
+		}
+		bTr, ok := lookup(bh)
+		if !ok {
+			return nil, fmt.Errorf("memrepo: missing subtree %s (bucket %s)", bh, k)
+		}
+		if len(bTr.Subtrees) > 0 {
+			return nil, fmt.Errorf("memrepo: nested subtrees forbidden in bucket %s", k)
+		}
+		all = append(all, bTr.Entries...)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Path < all[j].Path })
+	return all, nil
+}
+
+// FlattenTreeFromMap resolves any TreeObject (v1 flat or v2 sharded root) from an in-memory map[hash]TreeObject.
+func FlattenTreeFromMap(hash string, trees map[string]TreeObject) ([]TreeEntry, error) {
+	if hash == "" {
+		return nil, nil
+	}
+	tr, ok := trees[hash]
+	if !ok {
+		return nil, fmt.Errorf("memrepo: tree %s not found", hash)
+	}
+	return ResolveTreeEntries(tr, func(bh string) (TreeObject, bool) {
+		sub, exists := trees[bh]
+		return sub, exists
+	})
 }
 
 func guessMediaType(p string, raw []byte) string {

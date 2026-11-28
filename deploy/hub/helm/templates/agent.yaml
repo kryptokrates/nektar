@@ -27,7 +27,7 @@ spec:
         - name: hub
           image: {{ include "nektar-hub.image" (dict "root" . "component" "agent") }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
-          args: ["serve", "-listen", ":18420", "-restate-listen", "127.0.0.1:9080", "-hub"]
+          args: ["serve", "-listen", ":18420", "-hub"]
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001
@@ -67,14 +67,6 @@ spec:
               value: {{ .Values.agent.maxSpendSatsPerDay | quote }}
             - name: NEKTAR_MAINNET_CONFIRM
               value: {{ .Values.agent.mainnetConfirm | quote }}
-            - name: NEKTAR_RESTATE_URL
-              value: "http://127.0.0.1:8111"
-            - name: NEKTAR_RESTATE_ADMIN
-              value: "http://127.0.0.1:9070"
-            - name: NEKTAR_RESTATE_ENDPOINT_URI
-              value: "http://127.0.0.1:9080"
-            - name: NEKTAR_RESTATE_IDENTITY_KEY
-              value: {{ .Values.restate.identityPublicKey | default "" | quote }}
             - name: NEKTAR_HTTP_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -113,67 +105,10 @@ spec:
               mountPath: /data
             - name: tmp
               mountPath: /tmp
-        - name: restate
-          image: "{{ .Values.restate.image.repository | default "docker.restate.dev/restatedev/restate" }}:{{ .Values.restate.image.tag | default "1.8.1" }}"
-          imagePullPolicy: {{ .Values.restate.image.pullPolicy | default "IfNotPresent" }}
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 10001
-            runAsGroup: 10001
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          env:
-            - name: RESTATE_INGRESS__BIND_PORT
-              value: "8111"
-            - name: RESTATE_NODE_NAME
-              value: "nektar-hub"
-            - name: RESTATE_BASE_DIR
-              value: "/restate-data"
-          startupProbe:
-            httpGet:
-              path: /health
-              port: 9070
-            failureThreshold: 30
-            periodSeconds: 5
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 9070
-            periodSeconds: 30
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: 9070
-            periodSeconds: 10
-            failureThreshold: 2
-          resources:
-            {{- toYaml .Values.restate.resources | nindent 12 }}
-          volumeMounts:
-            - name: restate-data
-              mountPath: /restate-data
-            - name: restate-tmp
-              mountPath: /tmp
       volumes:
         - name: tmp
           emptyDir: {}
-        - name: restate-tmp
-          emptyDir: {}
   volumeClaimTemplates:
-    - metadata:
-        name: restate-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        {{- if .Values.restate.persistence.storageClass }}
-        storageClassName: {{ .Values.restate.persistence.storageClass | quote }}
-        {{- else if .Values.persistence.storageClass }}
-        storageClassName: {{ .Values.persistence.storageClass | quote }}
-        {{- end }}
-        resources:
-          requests:
-            storage: {{ .Values.restate.persistence.size | default "1Gi" }}
     - metadata:
         name: data
       spec:

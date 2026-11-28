@@ -11,7 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lightwebinc/bbox/boxrec"
+
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/eventbus"
 	"github.com/kryptokrates/nektar/internal/hub"
 )
 
@@ -32,82 +35,106 @@ func (b *Broker) saveBboxCursor(hubURL string, seq int64) {
 
 func (b *Broker) bboxLoop(ctx context.Context) {
 	cursors := make(map[string]int64)
-	for {
+	var busSub *eventbus.Subscription
+	var busCh <-chan eventbus.Event
+	if b.mem != nil && b.mem.EventBus() != nil {
+		topics := []string{
+			"hub:bbox:" + strings.ToLower(b.PubHex()),
+			"hub:admit:tm_bbox_*",
+			"fabric:tm_bbox_*",
+		}
+		if sub := b.mem.EventBus().Subscribe(topics, 32); sub != nil {
+			busSub = sub
+			busCh = sub.Events()
+			defer busSub.Close()
+		}
+	}
+
+	drainOnce := func() bool {
 		now := time.Now().Unix()
 		b.mu.Lock()
 		b.pruneBboxExpectedLocked(now)
-		waitingReply := len(b.bboxWantByOffer) > 0
 		b.mu.Unlock()
-		interval := 3 * time.Second
-		if waitingReply {
-			interval = 500 * time.Millisecond
+
+		gotAny := false
+		for _, h := range b.disc.ActiveHosts() {
+			since, loaded := cursors[h]
+			if !loaded {
+				since = b.loadBboxCursor(h)
+				cursors[h] = since
+			}
+			u := fmt.Sprintf("%s/bbox/inbox?pub=%s&since=%d", strings.TrimRight(h, "/"), b.PubHex(), since)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+			if err != nil {
+				continue
+			}
+			tsNow := time.Now().Unix()
+			nonce := randNonceHex()
+			aud := hubAudience(h)
+			authPayload := bstack.BboxInboxAuth{
+				Pub:   b.PubHex(),
+				TS:    tsNow,
+				Nonce: nonce,
+				Aud:   aud,
+				Since: since,
+			}
+			if inSig, sErr := bstack.SignArtifactWithSigner(b.engine.signer, authPayload); sErr == nil {
+				req.Header.Set("X-Nektar-Pub", b.PubHex())
+				req.Header.Set("X-Nektar-Ts", strconv.FormatInt(tsNow, 10))
+				req.Header.Set("X-Nektar-Nonce", nonce)
+				req.Header.Set("X-Nektar-Sig", inSig)
+			}
+			resp, err := b.httpClient.Do(req)
+			if err != nil || resp.StatusCode != http.StatusOK {
+				if resp != nil {
+					resp.Body.Close()
+				}
+				continue
+			}
+			var parsed struct {
+				Messages []hub.BboxMessage `json:"messages"`
+			}
+			_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&parsed)
+			resp.Body.Close()
+			advanced := false
+			for _, m := range parsed.Messages {
+				gotAny = true
+				b.bboxWakes.Add(1)
+				// Only advance bbox_cursor when delivery succeeds; retry transient HTTP/workflow failures cleanly!
+				if hErr := b.handleBboxMessage(ctx, h, m); hErr != nil {
+					break
+				}
+				if m.Seq > cursors[h] {
+					cursors[h] = m.Seq
+					advanced = true
+				}
+			}
+			if advanced {
+				b.saveBboxCursor(h, cursors[h])
+			}
 		}
+		return gotAny
+	}
+
+	// Initial catch-up drain on boot, then strictly event-driven wakes (EventBus + SSE bbox_wake + 30s safety net).
+	_ = drainOnce()
+	reconcileTicker := time.NewTicker(30 * time.Second)
+	defer reconcileTicker.Stop()
+
+	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(interval):
-			gotAny := false
-			for _, h := range b.disc.ActiveHosts() {
-				since, loaded := cursors[h]
-				if !loaded {
-					since = b.loadBboxCursor(h)
-					cursors[h] = since
-				}
-				u := fmt.Sprintf("%s/bbox/inbox?pub=%s&since=%d", strings.TrimRight(h, "/"), b.PubHex(), since)
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-				if err != nil {
-					continue
-				}
-				tsNow := time.Now().Unix()
-				nonce := randNonceHex()
-				aud := hubAudience(h)
-				authPayload := map[string]any{
-					"action": "bbox_inbox",
-					"pub":    b.PubHex(),
-					"ts":     tsNow,
-					"nonce":  nonce,
-					"aud":    aud,
-					"since":  since,
-				}
-				if inSig, sErr := bstack.SignArtifact(b.engine.saleKey, authPayload); sErr == nil {
-					req.Header.Set("X-Nektar-Pub", b.PubHex())
-					req.Header.Set("X-Nektar-Ts", strconv.FormatInt(tsNow, 10))
-					req.Header.Set("X-Nektar-Nonce", nonce)
-					req.Header.Set("X-Nektar-Sig", inSig)
-				}
-				resp, err := b.httpClient.Do(req)
-				if err != nil || resp.StatusCode != http.StatusOK {
-					if resp != nil {
-						resp.Body.Close()
-					}
-					continue
-				}
-				var parsed struct {
-					Messages []hub.BboxMessage `json:"messages"`
-				}
-				_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&parsed)
-				resp.Body.Close()
-				for _, m := range parsed.Messages {
-					gotAny = true
-					b.bboxWakes.Add(1)
-					// Only advance bbox_cursor when delivery succeeds; retry transient HTTP/Restate failures cleanly!
-					if hErr := b.handleBboxMessage(ctx, h, m); hErr != nil {
-						break
-					}
-					if m.Seq > cursors[h] {
-						cursors[h] = m.Seq
-						b.saveBboxCursor(h, m.Seq)
-					}
-				}
+		case <-b.bboxWakeCh:
+			if drainOnce() {
+				b.WakeBbox()
 			}
-			if gotAny {
-				// Immediate quick follow-up when a trade message just arrived.
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(250 * time.Millisecond):
-				}
+		case <-busCh:
+			if drainOnce() {
+				b.WakeBbox()
 			}
+		case <-reconcileTicker.C:
+			_ = drainOnce()
 		}
 	}
 }
@@ -132,25 +159,24 @@ func (b *Broker) markSeenBboxNonce(sender, nonce string, now int64) {
 	defer b.mu.Unlock()
 	if len(b.seenBboxNonces) >= maxSeenBboxNonces {
 		cutoff := now - 600
+		removed := 0
 		for k, ts := range b.seenBboxNonces {
 			if ts < cutoff {
 				delete(b.seenBboxNonces, k)
+				removed++
 			}
 		}
-		for len(b.seenBboxNonces) >= maxSeenBboxNonces {
-			var oldestKey string
-			var oldestTS int64
-			for k, ts := range b.seenBboxNonces {
-				if oldestKey == "" || ts < oldestTS {
-					oldestKey = k
-					oldestTS = ts
+		if len(b.seenBboxNonces) >= maxSeenBboxNonces {
+			// Drop 25% arbitrary entries in a single pass so subsequent inserts run in O(1) without quadratic scans.
+			target := maxSeenBboxNonces * 3 / 4
+			for k := range b.seenBboxNonces {
+				delete(b.seenBboxNonces, k)
+				if len(b.seenBboxNonces) <= target {
+					break
 				}
 			}
-			if oldestKey == "" {
-				break
-			}
-			delete(b.seenBboxNonces, oldestKey)
 		}
+		_ = removed
 	}
 	b.seenBboxNonces[key] = now
 }
@@ -175,7 +201,15 @@ func (b *Broker) handleBboxMessage(ctx context.Context, hubURL string, m hub.Bbo
 		return nil
 	}
 	aad := bstack.BboxAAD(m.Office, m.SenderPub, m.RecipientPub, m.DealID, m.Kind)
-	plainBody, decErr := bstack.OpenBboxBody(b.engine.saleKey, aad, m.Body)
+	var decWallet boxrec.Decrypter
+	var sealWallet boxrec.Sealer
+	if b.engine != nil && b.engine.signer != nil {
+		if w, wErr := b.engine.signer.ProtoWallet(); wErr == nil {
+			decWallet = w
+			sealWallet = w
+		}
+	}
+	plainBody, decErr := bstack.OpenBboxMessageBody(ctx, decWallet, b.engine.signer, m.Office, m.Kind, m.SenderPub, m.RecipientPub, m.TS, aad, m.Body)
 	if decErr != nil {
 		return nil
 	}
@@ -189,9 +223,15 @@ func (b *Broker) handleBboxMessage(ctx context.Context, hubURL string, m hub.Bbo
 		if err != nil {
 			pResp = &PurchaseResponse{OK: false, OfferID: pReq.OfferID, SellerPub: b.PubHex(), Error: err.Error()}
 		}
+		if pResp != nil && len(pResp.CiphertextHex) > bstack.InlineDirectMaxHexLen && pResp.ChirpURL != "" && b.PublicURL() != "" {
+			cp := *pResp
+			cp.CiphertextHex = ""
+			pResp = &cp
+		}
+		replyTS := time.Now().Unix()
 		bodyRaw, _ := json.Marshal(pResp)
 		replyAAD := bstack.BboxAAD(m.Office, b.PubHex(), m.SenderPub, m.DealID, "reveal_key")
-		sealedReply, encErr := bstack.SealBboxBody(m.SenderPub, replyAAD, bodyRaw)
+		sealedReply, encErr := bstack.SealBboxMessageBody(ctx, sealWallet, m.Office, "reveal_key", b.PubHex(), m.SenderPub, replyTS, replyAAD, bodyRaw)
 		if encErr != nil {
 			return encErr
 		}
@@ -205,12 +245,12 @@ func (b *Broker) handleBboxMessage(ctx context.Context, hubURL string, m hub.Bbo
 				SenderPub:    b.PubHex(),
 				DealID:       m.DealID,
 				Kind:         "reveal_key",
-				TS:           time.Now().Unix(),
+				TS:           replyTS,
 				Nonce:        randNonceHex(),
 				Aud:          hubAudience(rh),
 				Body:         sealedReply,
 			}
-			if sig, sErr := bstack.SignArtifact(b.engine.saleKey, replyMsg.Signable()); sErr == nil {
+			if sig, sErr := bstack.SignArtifactWithSigner(b.engine.signer, replyMsg.Signable()); sErr == nil {
 				replyMsg.Sig = sig
 			}
 			env, _ := json.Marshal(replyMsg)

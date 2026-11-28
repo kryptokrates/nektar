@@ -140,14 +140,14 @@
       <b>Durable Deals</b>
       <span
         class="val"
-        class:ok={s.automation?.rt.executor === 'restate'}
-        class:warn={s.automation?.rt.executor !== 'restate' && s.network !== 'memory'}
+        class:ok={s.automation?.rt.executor === 'go-workflows' || s.automation?.rt.executor === 'restate'}
+        class:warn={s.automation?.rt.executor !== 'go-workflows' && s.automation?.rt.executor !== 'restate' && s.network !== 'memory'}
       >
-        {s.automation?.rt.executor === 'restate'
-          ? 'Restate Active'
+        {s.automation?.rt.executor === 'go-workflows' || s.automation?.rt.executor === 'restate'
+          ? 'Embedded SQLite WAL Active'
           : s.network === 'memory'
             ? 'Memory Mode'
-            : 'Restate required for live trades (run nektar restate-up)'}
+            : 'Workflow runtime starting…'}
       </span>
     </div>
     <div class="grow"><b>Memories</b><span class="val">{s.memory.anchored} / {s.memory.records} anchored</span></div>

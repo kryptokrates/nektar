@@ -40,7 +40,7 @@ func main() {
 	var err error
 	switch cmd {
 	case "version", "-v", "--version":
-		fmt.Printf("nektar v%s (pure-Go single binary — Lightweb bcommon + Rúnar + Cedar + Mangle + Restate + MCP)\n", Version)
+		fmt.Printf("nektar v%s (pure-Go single binary — LightBSV + Rúnar + Cedar + Mangle + go-workflows + MCP)\n", Version)
 	case "up", "start":
 		err = cmdUp(args)
 	case "stop":
@@ -71,6 +71,12 @@ func main() {
 		err = cmdDoctor(args)
 	case "peers":
 		err = cmdPeers(args)
+	case "domain-docs":
+		err = cmdDomainDocs(args)
+	case "buy":
+		err = cmdBuy(args)
+	case "import":
+		err = cmdImport(args)
 	case "want":
 		err = cmdWant(args)
 	case "sell":
@@ -93,8 +99,6 @@ func main() {
 		err = cmdHook(args)
 	case "open":
 		err = cmdOpen(args)
-	case "restate-up":
-		err = cmdRestateUp(args)
 	case "backup":
 		err = cmdBackup(args)
 	case "service":
@@ -137,18 +141,18 @@ Memory & Knowledge Market:
   nektar earn           Guided seller fast-path: inspect open Hub bounties & earn sats from anchored shards
   nektar policy         Manage operator trading policies (approve --preset buyer|seller|both | list | revoke)
   nektar peers          Discover verified peers, bfinger handles, CHIRP packs & Hub bounties
+  nektar domain-docs    Print LightBSV custom-domain bdns TXT + BRC-169 handle resolver setup instructions
 
 Hub & Operations:
   nektar hub            Deploy/manage a public Hub (up [--auto-ip|--domain|--tunnel|--native] | status | logs | down | run)
   nektar mcp            Stdio MCP bridge (auto-connects & auto-starts shared daemon; zero lock contention)
   nektar hook           Native zero-Node Claude Code / Codex hooks (session-start | prefetch | verify-receipt)
-  nektar doctor         Run full node health diagnosis (wallet, Restate, peers, cohort density & next steps)
+  nektar doctor         Run full node health diagnosis (wallet, durable workflows, peers, cohort density & next steps)
   nektar check-mainnet  Verify Mainnet confirmation, dual-witness PoW headers, broadcaster & SpendGuard
   nektar status         Print node identity, wallet balance, shards, policy hash & SpendGuard state
   nektar vault / bond   Manage on-chain NektarAgentVault & NektarCheckpointBond covenants
   nektar backup         BRC-42 encrypted WAL-safe SQLite backups (now | verify | restore | status)
   nektar service        Cross-platform OS daemon supervision (install | start | stop | restart | status | uninstall)
-  nektar restate-up     Download SHA-256 verified restate-server v1.8.1 (macOS, Linux, or Windows WSL2)
   nektar version        Print build version`)
 }
 

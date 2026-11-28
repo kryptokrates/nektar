@@ -86,12 +86,12 @@ func TestRestateNotMountedOnPublicPortAndHonestTelemetry(t *testing.T) {
 		t.Fatalf("expected honest executor=unattached when no RestateClient, got %v", rt["executor"])
 	}
 
-	// With unreachable RestateClient, /state reports executor="restate-unavailable"!
-	app.cfg.RestateClient = market.NewRestateClient("http://127.0.0.1:1", "http://127.0.0.1:1")
+	// With stopped WorkflowClient, /state reports executor="workflows-unavailable"!
+	app.cfg.RestateClient = market.NewWorkflowClient(nil, nil)
 	st2 := app.BuildDashboardState(context.Background(), ts.URL)
 	rt2 := st2["automation"].(map[string]any)["rt"].(map[string]any)
-	if rt2["executor"] != "restate-unavailable" {
-		t.Fatalf("expected honest executor=restate-unavailable on unreachable Restate, got %v", rt2["executor"])
+	if rt2["executor"] != "workflows-unavailable" {
+		t.Fatalf("expected honest executor=workflows-unavailable on stopped runtime, got %v", rt2["executor"])
 	}
 }
 

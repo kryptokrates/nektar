@@ -31,14 +31,14 @@ type DealState struct {
 	UpdatedAt       int64                     `json:"updatedAt"`
 }
 
-// ApprovalDecision resolves a suspended BuyerDeal approval awakeable.
+// ApprovalDecision resolves a suspended BuyerDealWorkflow approval signal channel.
 type ApprovalDecision struct {
 	Approved  bool   `json:"approved"`
 	DecidedBy string `json:"decidedBy,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 }
 
-// BuyerDealInput starts a Restate BuyerDeal workflow keyed by WantID.
+// BuyerDealInput starts a durable BuyerDealWorkflow keyed by WantID.
 type BuyerDealInput struct {
 	Want               bstack.WantAd    `json:"want"`
 	Offers             []bstack.OfferAd `json:"offers,omitempty"`
@@ -50,7 +50,7 @@ type BuyerDealInput struct {
 	ApprovedOverrideID string           `json:"approvedOverrideId,omitempty"`
 }
 
-// SellerDealInput starts a Restate SellerDeal workflow keyed by OfferID.
+// SellerDealInput starts a durable SellerDealWorkflow keyed by "sell-"+OfferID.
 type SellerDealInput struct {
 	Want            bstack.WantAd             `json:"want"`
 	Shard           string                    `json:"shard"`
@@ -65,7 +65,7 @@ type SellerDealInput struct {
 	ProofBundle     *contracts.ProofBundle    `json:"proofBundle,omitempty"`
 }
 
-// PaymentSignal delivers a buyer's payment txid + optional verified BUMP proof to a waiting SellerDeal workflow.
+// PaymentSignal delivers a buyer's payment txid + optional verified BUMP proof to SellerDealWorkflow.
 type PaymentSignal struct {
 	TxID          string `json:"txid"`
 	AmountSats    uint64 `json:"amountSats"`
@@ -74,7 +74,7 @@ type PaymentSignal struct {
 	MerklePathHex string `json:"merklePathHex,omitempty"`
 }
 
-// ClaimSignal delivers the seller's BRC-369 revealed content key k to a waiting BuyerDeal workflow.
+// ClaimSignal delivers the seller's BRC-369 revealed content key k to BuyerDealWorkflow.
 type ClaimSignal struct {
 	ClaimTxID      string                 `json:"claimTxid"`
 	ClaimTxBEEFHex string                 `json:"claimTxBeefHex,omitempty"`
@@ -85,14 +85,15 @@ type ClaimSignal struct {
 	DealReceipt    *DealReceipt           `json:"dealReceipt,omitempty"`
 }
 
-// CustodyReserveInput serializes global spend reservation through the private Restate Custody Virtual Object.
+// CustodyReserveInput serializes global spend reservation atomically in SQLite.
 type CustodyReserveInput struct {
-	OperationID  string   `json:"operationId"`
-	Attempt      int      `json:"attempt"`
-	SellerPub    string   `json:"sellerPub,omitempty"`
-	Domains      []string `json:"domains,omitempty"`
-	AmountSats   uint64   `json:"amountSats"`
-	BypassPolicy bool     `json:"bypassPolicy,omitempty"`
+	OperationID     string   `json:"operationId"`
+	Attempt         int      `json:"attempt"`
+	SellerPub       string   `json:"sellerPub,omitempty"`
+	Domains         []string `json:"domains,omitempty"`
+	AmountSats      uint64   `json:"amountSats"`
+	BypassPolicy    bool     `json:"bypassPolicy,omitempty"`
+	ApprovedCapSats uint64   `json:"approvedCapSats,omitempty"`
 }
 
 // CustodyReleaseInput releases a reserved (OperationID, Attempt) on definitive pre-broadcast failure.
@@ -109,7 +110,7 @@ type CustodyReserveResult struct {
 	Reason          string `json:"reason,omitempty"`
 }
 
-// TxEventInput records a durable transaction lifecycle transition on the private Restate Tx Virtual Object.
+// TxEventInput records a durable transaction lifecycle transition.
 type TxEventInput struct {
 	Kind          string `json:"kind"` // prepared | submission_unknown | broadcast | mempool | mined | reorged | failed | aborted
 	Shard         string `json:"shard,omitempty"`
@@ -119,7 +120,7 @@ type TxEventInput struct {
 	ObservedAt    int64  `json:"observedAt,omitempty"`
 }
 
-// TxState is the durable state stored per txid inside the Restate Tx Virtual Object.
+// TxState is the durable state stored per txid.
 type TxState struct {
 	TxID        string         `json:"txid"`
 	Status      string         `json:"status"`
@@ -128,7 +129,7 @@ type TxState struct {
 	UpdatedAt   int64          `json:"updatedAt"`
 }
 
-// AnchorCadenceInput triggers a durable shard anchor check on the private AnchorCadence Virtual Object.
+// AnchorCadenceInput triggers a durable shard anchor check.
 type AnchorCadenceInput struct {
 	IntervalSeconds int64 `json:"intervalSeconds,omitempty"`
 }
@@ -143,13 +144,13 @@ type AnchorCadenceState struct {
 	DeferredReason string `json:"deferredReason,omitempty"`
 }
 
-// RuntimeTxEmitInput dispatches a Tx event from the authenticated NektarRuntime gateway to the private Tx VO.
+// RuntimeTxEmitInput dispatches a Tx event.
 type RuntimeTxEmitInput struct {
 	TxID  string       `json:"txid"`
 	Event TxEventInput `json:"event"`
 }
 
-// RuntimeAnchorTriggerInput dispatches an AnchorCadence poke from NektarRuntime to the private AnchorCadence VO.
+// RuntimeAnchorTriggerInput dispatches an AnchorCadence poke.
 type RuntimeAnchorTriggerInput struct {
 	Shard           string `json:"shard"`
 	IntervalSeconds int64  `json:"intervalSeconds,omitempty"`

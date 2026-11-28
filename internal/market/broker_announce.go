@@ -217,17 +217,13 @@ func (b *Broker) AnnounceSelf(ctx context.Context) (int, error) {
 		if !l.Active {
 			continue
 		}
-		modes := l.EnabledModes()
-		modeStrs := make([]string, len(modes))
-		for i, m := range modes {
-			modeStrs[i] = string(m)
-		}
+		modeStrs := l.EnabledModes()
 		var queryEP, feedEP string
 		if baseURL != "" {
-			if l.SupportsMode(nmu.ModePerQuery) {
+			if l.SupportsMode(string(nmu.ModePerQuery)) {
 				queryEP = baseURL + "/v1/market/query"
 			}
-			if l.SupportsMode(nmu.ModeSubscription) {
+			if l.SupportsMode(string(nmu.ModeSubscription)) {
 				feedEP = baseURL + "/v1/market/feeds/" + l.Shard
 			}
 		}
@@ -322,24 +318,31 @@ func (b *Broker) summarizeListingNMU(ctx context.Context, l store.SellListing, h
 	if b == nil || b.mem == nil || b.mem.DB() == nil {
 		return "", 1, 0, ""
 	}
-	frags, err := b.mem.DB().ListFragments(l.Shard)
+	recalled, err := b.mem.Recall(ctx, memory.RecallInput{
+		Shard:        l.Shard,
+		Principal:    policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
+		Action:       "disclose",
+		DisallowBorg: true,
+		VerifySPV:    false,
+	})
 	if err != nil {
 		return "", 1, 0, ""
 	}
+	nowUnix := time.Now().Unix()
 	var totalUnits uint64
-	for _, f := range frags {
-		if f.Forgotten {
+	for _, f := range recalled {
+		eval := b.mem.EvaluateSellableFragment(ctx, f, &l, hasActiveBond, feedEP, nowUnix)
+		if !eval.Allowed {
 			continue
 		}
 		count++
-		cls, fOnt, _ := b.classifyFragmentForMarket(ctx, f.Shard, f.Seq, f.Distilled, f.OntologyID, hasActiveBond, feedEP)
-		if ontID == "" && len(fOnt) == 64 {
-			ontID = fOnt
+		if ontID == "" && len(eval.OntologyID) == 64 {
+			ontID = eval.OntologyID
 		}
-		if nmu.GradeRank(cls.Grade) > nmu.GradeRank(bestGrade) {
-			bestGrade = cls.Grade
+		if nmu.GradeRank(eval.Classification.Grade) > nmu.GradeRank(bestGrade) {
+			bestGrade = eval.Classification.Grade
 		}
-		u := cls.UnitCount
+		u := eval.Classification.UnitCount
 		if u == 0 {
 			u = 1
 		}

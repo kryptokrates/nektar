@@ -2,6 +2,7 @@ package market
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/store"
@@ -82,26 +83,15 @@ func dealStateFromRecord(r store.DealRecord) DealState {
 	return st
 }
 
-// persistDealRecord performs CAS-protected update on existing SQLite deals or inserts if new,
-// enforcing monotonic terminal protection so a 'settled' deal never regresses to 'offered'/'expired'.
-func (e *Engine) persistDealRecord(rec store.DealRecord) {
-	if e.mem == nil || e.mem.DB() == nil || rec.DealID == "" {
-		return
-	}
-	existing, err := e.mem.DB().GetDeal(rec.DealID)
-	if err != nil {
-		_ = e.mem.DB().SaveDeal(rec)
-		return
-	}
-	// Monotonicity guard: once a deal is settled, never regress status back to pre-settlement states
-	// EXCEPT on explicit verified chain reorg rollback ("reorged").
-	if existing.Status == "settled" && rec.Status != "settled" && rec.Status != "reorged" {
+// mergeExistingDealFields preserves already-committed fields on CAS updates and enforces monotonic
+// terminal protection so a 'settled' deal never regresses except on verified chain reorg ('payment_pending'/'reorged').
+func mergeExistingDealFields(rec, existing store.DealRecord) store.DealRecord {
+	if existing.Status == "settled" && rec.Status != "settled" && rec.Status != "reorged" && rec.Status != "payment_pending" {
 		rec.Status = "settled"
 		if rec.Error != "" && existing.Error == "" {
 			rec.Error = ""
 		}
 	}
-	// Preserve fields already committed in earlier stages if not overwritten.
 	if len(rec.WantJSON) == 0 {
 		rec.WantJSON = existing.WantJSON
 	}
@@ -146,15 +136,56 @@ func (e *Engine) persistDealRecord(rec store.DealRecord) {
 	}
 	rec.CreatedAt = existing.CreatedAt
 	rec.Revision = existing.Revision
-	if ok, casErr := e.mem.DB().UpdateDealCAS(rec); casErr != nil || !ok {
-		// Re-read once on concurrent modification and retry CAS cleanly.
-		if latest, gErr := e.mem.DB().GetDeal(rec.DealID); gErr == nil {
-			if latest.Status == "settled" && rec.Status != "settled" && rec.Status != "reorged" {
-				rec.Status = "settled"
-			}
-			rec.Revision = latest.Revision
-			rec.CreatedAt = latest.CreatedAt
-			_, _ = e.mem.DB().UpdateDealCAS(rec)
+	return rec
+}
+
+// persistDealRecordChecked performs CAS-protected SQLite persistence, returning any SQLite error
+// instead of swallowing it (RCA-2), and notifies EventBus subscribers immediately for zero-poll wakes.
+func (e *Engine) persistDealRecordChecked(rec store.DealRecord) error {
+	if e == nil || e.mem == nil || e.mem.DB() == nil || rec.DealID == "" {
+		return nil
+	}
+	db := e.mem.DB()
+	existing, err := db.GetDeal(rec.DealID)
+	if err != nil {
+		if sErr := db.SaveDeal(rec); sErr != nil {
+			return sErr
 		}
+		e.publishDealEvent(rec.DealID, rec.Status)
+		return nil
+	}
+	rec = mergeExistingDealFields(rec, existing)
+	ok, casErr := db.UpdateDealCAS(rec)
+	if casErr != nil {
+		return casErr
+	}
+	if !ok {
+		latest, gErr := db.GetDeal(rec.DealID)
+		if gErr != nil {
+			return gErr
+		}
+		rec = mergeExistingDealFields(rec, latest)
+		ok2, casErr2 := db.UpdateDealCAS(rec)
+		if casErr2 != nil {
+			return casErr2
+		}
+		if !ok2 {
+			return errors.New("market: concurrent deal CAS conflict")
+		}
+	}
+	e.publishDealEvent(rec.DealID, rec.Status)
+	return nil
+}
+
+func (e *Engine) persistDealRecord(rec store.DealRecord) {
+	_ = e.persistDealRecordChecked(rec)
+}
+
+func (e *Engine) publishDealEvent(dealID, status string) {
+	if e != nil && e.mem != nil && e.mem.EventBus() != nil && dealID != "" {
+		e.mem.EventBus().Publish("deal:"+dealID, "deal_updated", map[string]string{
+			"dealId": dealID,
+			"status": status,
+		})
 	}
 }

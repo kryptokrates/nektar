@@ -199,7 +199,7 @@ func TestRCA_S1_ClientModeCovenantSpendGuardAndUnknown(t *testing.T) {
 		signableTx: spend3,
 		signErr:    errors.New("write tcp 127.0.0.1:3321: broken pipe"),
 	}
-	p3, _ := newPort(2000, mock3)
+	p3, _ := newPort(2200, mock3)
 	_, err = p3.BuildCovenantSpendTx(ctx, CovenantSpendRequest{
 		InputTx:        parent3,
 		InputVout:      0,
@@ -214,7 +214,7 @@ func TestRCA_S1_ClientModeCovenantSpendGuardAndUnknown(t *testing.T) {
 	if mock3.abortCalls != 0 {
 		t.Fatalf("expected 0 AbortAction calls on uncertain client broadcast, got %d", mock3.abortCalls)
 	}
-	// Budget of 2000 minus reserved >=1700 leaves <1000, so a second 1000-sat spend MUST be rejected by SpendGuard!
+	// Budget of 2200 minus reserved >=2041 (1500 + 5120B covenant fee) leaves <1000, so a second 1000-sat spend MUST be rejected by SpendGuard!
 	parent3b, spend3b, _ := buildTrivialCovenantFixture(t, 1000)
 	mock3.signableTx = spend3b
 	mock3.signErr = nil
@@ -235,7 +235,7 @@ func TestRCA_S1_ClientModeCovenantSpendGuardAndUnknown(t *testing.T) {
 		signableTx: spend4,
 		signErr:    errors.New("HTTP 400: deterministic script failure"),
 	}
-	p4, _ := newPort(2000, mock4)
+	p4, _ := newPort(2200, mock4)
 	_, err = p4.BuildCovenantSpendTx(ctx, CovenantSpendRequest{
 		InputTx:        parent4,
 		InputVout:      0,

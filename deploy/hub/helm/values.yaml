@@ -52,19 +52,3 @@ resources:
     memory: 128Mi
   limits:
     memory: 512Mi
-
-restate:
-  image:
-    repository: docker.restate.dev/restatedev/restate
-    tag: '1.8.1'
-    pullPolicy: IfNotPresent
-  identityPublicKey: ''
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      memory: 512Mi
-  persistence:
-    size: 1Gi
-    storageClass: ''

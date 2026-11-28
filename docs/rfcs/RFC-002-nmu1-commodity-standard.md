@@ -98,14 +98,14 @@ A single shard listing (`sell_listings`) MAY enable any combination of the three
 
 - **Activation Endpoint:** `POST /v1/market/subscriptions` (`{shard, buyerPub, durationSec?}`) gated by BRC-105 HTTP 402 (`listing.SubscriptionPriceSats`), creating a durable `shard_subscriptions` row (unique `payment_txid`) and returning `{subId, feedUrl, startedAt, expiresAt, dealReceipt, dealReceiptToken}`.
 - **Live SSE Stream:** `GET /v1/market/feeds/{shard}?sinceSeq=<n>`
-- **Replay-Protected Subscriber Authentication (`±60s` Window):**
-  - Required HTTP headers: `X-Nektar-Sub-ID`, `X-Nektar-Pub` (33-byte compressed hex), `X-Nektar-TS` (Unix seconds), `X-Nektar-Sig` (strict low-S DER ECDSA hex).
-  - Canonical signed digest:
+- **Replay-Protected Subscriber Authentication (`±60s` Window + Single-Use Nonce + Audience Binding):**
+  - Required HTTP headers: `X-Nektar-Sub-ID`, `X-Nektar-Pub` (33-byte compressed hex), `X-Nektar-Ts` (Unix seconds), `X-Nektar-Nonce` (unique per-request nonce), `X-Nektar-Sig` (strict low-S DER ECDSA hex).
+  - Canonical signed digest (RFC 8949 CDE CBOR):
     ```text
-    msg    = "GET|/v1/market/feeds/" + shard + "|" + subId + "|" + tsUnix
-    digest = DSHA256("nektar:feed-auth:v1" || msg)
+    body   = CanonicalCBOR({1: shard, 2: subId, 3: tsUnix, 4: nonce, 5: audience})
+    digest = DSHA256("nektar:feed-auth:v1" || body)
     ```
-  - Server MUST reject any request where `|nowUnix - tsUnix| > 60` (`FeedAuthMaxClockSkewSec = 60`, `ErrFeedAuthExpired`).
+  - Server MUST reject any request where `|nowUnix - tsUnix| > 60` (`FeedAuthMaxClockSkewSec = 60`, `ErrFeedAuthExpired`), where `audience` does not match `r.Host`, or where `(pub, nonce)` has already been seen within the replay window.
 - **Stream Events:** `connected`, `fragment_distilled` (replayed for `seq > sinceSeq`), `fragment_superseded` (real-time push wired from `memory.Service.SetOnSupersede`), and `subscription_expired`.
 
 ---

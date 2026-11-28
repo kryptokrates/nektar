@@ -191,9 +191,18 @@ func EncodeAttestationToken(a Attestation) (string, error) {
 	return TokenPrefix + base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
-// DecodeAttestationToken strictly decodes a `nektarrep1.<base64url>` canonical CBOR token.
+// MaxAttestationTokenBytes caps incoming nektarrep1.* token length before base64/CBOR decoding.
+const MaxAttestationTokenBytes = 16 << 10
+
+var attestationTokenKnownKeys = core.KnownKeyRange(1, 18)
+
+// DecodeAttestationToken strictly decodes a `nektarrep1.<base64url>` canonical CBOR token,
+// enforcing an upfront size cap and Nektar's critical (even) / non-critical (odd) unknown-key rule.
 func DecodeAttestationToken(token string) (*Attestation, error) {
 	tok := strings.TrimSpace(token)
+	if len(tok) > MaxAttestationTokenBytes {
+		return nil, fmt.Errorf("reputation: token exceeds max %d bytes", MaxAttestationTokenBytes)
+	}
 	if !strings.HasPrefix(tok, TokenPrefix) {
 		return nil, fmt.Errorf("reputation: token missing %q prefix", TokenPrefix)
 	}
@@ -205,14 +214,9 @@ func DecodeAttestationToken(token string) (*Attestation, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reputation: decode canonical cbor: %w", err)
 	}
-	um, err := core.CBORMapToUintMap(val)
+	um, _, err := core.SplitCBORMap(val, attestationTokenKnownKeys)
 	if err != nil {
 		return nil, fmt.Errorf("reputation: attestation map: %w", err)
-	}
-	for k := range um {
-		if k < 1 || k > 18 {
-			return nil, fmt.Errorf("reputation: unexpected cbor key %d", k)
-		}
 	}
 	getStr := func(k uint64) (string, error) {
 		v, ok := um[k]

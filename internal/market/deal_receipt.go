@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -95,6 +94,9 @@ func (r DealReceipt) CanonicalFields() map[string][]byte {
 		m["cedarDecision"] = []byte(r.CedarDecision.Decision)
 	}
 	if r.NMU != nil && !r.NMU.IsEmpty() {
+		if r.NMU.Version != "" {
+			m["nmuVersion"] = []byte(r.NMU.Version)
+		}
 		if r.NMU.Grade != "" {
 			m["nmuGrade"] = []byte(nmu.NormalizeGrade(string(r.NMU.Grade)))
 		}
@@ -118,6 +120,9 @@ func (r DealReceipt) CanonicalFields() map[string][]byte {
 		}
 		if r.NMU.PricingMode != "" {
 			m["nmuPricingMode"] = []byte(nmu.EffectivePricingMode(r.NMU.PricingMode))
+		}
+		if r.NMU.SubscriptionSec > 0 {
+			m["nmuSubscriptionSec"] = []byte(strconv.FormatInt(r.NMU.SubscriptionSec, 10))
 		}
 		if r.NMU.FeedURL != "" {
 			m["nmuFeedUrl"] = []byte(r.NMU.FeedURL)
@@ -225,9 +230,18 @@ func SignDealReceiptBuyer(ctx context.Context, buyerPub string, signDigest func(
 	}
 	if r.BuyerPub == "" {
 		r.BuyerPub = buyerPub
+		r.FieldsRoot = ""
 	}
-	if err := r.FinalizeFieldsRoot(); err != nil {
-		return err
+	if r.Version == 0 {
+		r.Version = 1
+	}
+	if r.AdvisoryNote == "" {
+		r.AdvisoryNote = DealReceiptAdvisoryNote
+	}
+	if r.SellerSig == "" || r.FieldsRoot == "" {
+		if err := r.FinalizeFieldsRoot(); err != nil {
+			return err
+		}
 	}
 	digest, err := DealReceiptDigest(*r)
 	if err != nil {
@@ -251,21 +265,24 @@ func (r DealReceipt) SelectiveDisclose(fields []string) (*core.SelectiveDisclosu
 	return mpe.ProveFields(fields)
 }
 
-// EncodeDealReceiptToken serializes r into a portable `nektardr1.<base64url>` token.
+// EncodeDealReceiptToken serializes r into a portable `nektardr1.<base64url>` canonical CBOR token.
 func EncodeDealReceiptToken(r DealReceipt) (string, error) {
 	if err := r.FinalizeFieldsRoot(); err != nil {
 		return "", err
 	}
-	raw, err := core.CanonicalJSON(r)
+	raw, err := EncodeDealReceiptCBOR(r)
 	if err != nil {
 		return "", err
 	}
 	return DealReceiptTokenPrefix + base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
-// DecodeDealReceiptToken parses a `nektardr1.<base64url>` token back into a DealReceipt.
+// DecodeDealReceiptToken parses a bounded `nektardr1.<base64url>` canonical CBOR token back into a DealReceipt.
 func DecodeDealReceiptToken(token string) (*DealReceipt, error) {
 	tok := strings.TrimSpace(token)
+	if len(tok) > MaxDealReceiptTokenBytes {
+		return nil, fmt.Errorf("deal-receipt: token exceeds max %d bytes", MaxDealReceiptTokenBytes)
+	}
 	if !strings.HasPrefix(tok, DealReceiptTokenPrefix) {
 		return nil, errors.New("deal-receipt: token must start with nektardr1.")
 	}
@@ -273,11 +290,7 @@ func DecodeDealReceiptToken(token string) (*DealReceipt, error) {
 	if err != nil {
 		return nil, fmt.Errorf("deal-receipt: base64 decode: %w", err)
 	}
-	var r DealReceipt
-	if err := json.Unmarshal(raw, &r); err != nil {
-		return nil, fmt.Errorf("deal-receipt: json decode: %w", err)
-	}
-	return &r, nil
+	return DecodeDealReceiptCBOR(raw)
 }
 
 // VerifyDealReceipt verifies r's MPE FieldsRoot, optional signed CedarDecision, and Seller/Buyer low-S DER signatures.
@@ -320,35 +333,27 @@ func VerifyDealReceipt(r DealReceipt, requireBilateral bool) DealReceiptVerifica
 	}
 
 	if r.SellerSig != "" {
-		pub, _, err := core.ParseStrictCompressedPubKey(r.SellerPub)
-		if err != nil {
-			res.Error = "invalid sellerPub: " + err.Error()
-			return res
-		}
-		sig, err := core.ParseStrictLowSDER(r.SellerSig)
-		if err != nil {
-			res.Error = "invalid sellerSig: " + err.Error()
-			return res
-		}
-		if !sig.Verify(digest, pub) {
-			res.Error = "sellerSig verification failed"
+		if err := core.FastVerifyStrictHex(r.SellerPub, r.SellerSig, digest); err != nil {
+			if errors.Is(err, core.ErrNonCanonicalPubKey) {
+				res.Error = "invalid sellerPub: " + err.Error()
+			} else if errors.Is(err, core.ErrNonCanonicalDER) || errors.Is(err, core.ErrHighSSignature) {
+				res.Error = "invalid sellerSig: " + err.Error()
+			} else {
+				res.Error = "sellerSig verification failed"
+			}
 			return res
 		}
 		res.SellerVerified = true
 	}
 	if r.BuyerSig != "" {
-		pub, _, err := core.ParseStrictCompressedPubKey(r.BuyerPub)
-		if err != nil {
-			res.Error = "invalid buyerPub: " + err.Error()
-			return res
-		}
-		sig, err := core.ParseStrictLowSDER(r.BuyerSig)
-		if err != nil {
-			res.Error = "invalid buyerSig: " + err.Error()
-			return res
-		}
-		if !sig.Verify(digest, pub) {
-			res.Error = "buyerSig verification failed"
+		if err := core.FastVerifyStrictHex(r.BuyerPub, r.BuyerSig, digest); err != nil {
+			if errors.Is(err, core.ErrNonCanonicalPubKey) {
+				res.Error = "invalid buyerPub: " + err.Error()
+			} else if errors.Is(err, core.ErrNonCanonicalDER) || errors.Is(err, core.ErrHighSSignature) {
+				res.Error = "invalid buyerSig: " + err.Error()
+			} else {
+				res.Error = "buyerSig verification failed"
+			}
 			return res
 		}
 		res.BuyerVerified = true

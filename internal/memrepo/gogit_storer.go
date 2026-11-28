@@ -119,9 +119,9 @@ func BuildGoGitRepo(
 	for _, c := range ordered {
 		rootTreeOID, cachedTree := treeOIDCache[c.TreeHash]
 		if !cachedTree {
-			tr := trees[c.TreeHash]
-			fileOIDs := make(map[string]plumbing.Hash, len(tr.Entries))
-			for _, e := range tr.Entries {
+			entries, _ := FlattenTreeFromMap(c.TreeHash, trees)
+			fileOIDs := make(map[string]plumbing.Hash, len(entries))
+			for _, e := range entries {
 				b, ok := blobs[e.BlobHash]
 				if ok && b.Forgotten {
 					continue

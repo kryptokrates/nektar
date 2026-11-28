@@ -23,7 +23,7 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		Name:    "nektar",
 		Version: "0.1.0",
 	}, &mcp.ServerOptions{
-		Instructions: "When answering factual questions from memory: (1) call recall first (omit shard/repo to discover repos including 'welcome'; pass branch or atCommit for time-travel); (2) use the unified 'repo' tool (list|log|show|tree|read|diff|blame|verify|commit|rm|branch|fork|merge|cherryPick|revert|tag|export|import|prove|rotate) or nektar://repo/... resources for Git-native UTXO-anchored memory repos; (3) route verifiable answers through groundedAnswer citing verified fragments and preserve the returned receipt: and verify: footer verbatim; (4) never fabricate receipts — proofs show recorded + unaltered + derivable with unbroken NektarAnchor UTXO lineage, never truth.",
+		Instructions: "Nektar v0.1 Golden Path: (1) Factual recall: call `recall` first, then route answers through `groundedAnswer` and preserve the `receipt: nektarr1.*` + `verify:` footer verbatim (never fake receipts; proofs show recorded + unaltered + derivable, never objective truth). (2) 1-call Capsule Market: call `buyCapsule` to buy & SPV-import verified capsules (auto-posts a live satoshi bounty if none exists yet), `sellCapsule` to scrub PII + commit + anchor + list & export a `.nkt` capsule in one step, and `importCapsule` to SPV-verify & import shared `.nkt` files/URLs. (3) Discover LightBSV Hubs & handles via `peers`.",
 	})
 
 	registerMCPResourcesAndPrompts(srv, tb)
@@ -114,8 +114,41 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "buyCapsule",
+		Description: "1-call capsule purchase across active Hubs: SPV-verifies and imports into your local Memory Repo, or automatically posts a bounded 0%-CPU StandingOrder satoshi bounty if 0 offers match immediately.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in BuyCapsuleInput) (*mcp.CallToolResult, any, error) {
+		res, err := tb.ExecBuyCapsule(ctx, in)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonToolResult(res)
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "sellCapsule",
+		Description: "1-call capsule publish & sell: scrubs PII/secrets fail-closed, commits & anchors to Memory Repo, auto-arms seller policy, broadcasts OfferAd to active Hubs, and optionally exports a portable .nkt file.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in SellCapsuleInput) (*mcp.CallToolResult, any, error) {
+		res, err := tb.ExecSellCapsule(ctx, in)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonToolResult(res)
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "importCapsule",
+		Description: "1-call SPV-verified import of a portable .nkt Memory Capsule from a local file path, https:// URL, or chirp:// URI, discovering the creator's LightBSV handle & Hub.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ImportCapsuleInput) (*mcp.CallToolResult, any, error) {
+		res, err := tb.ExecImportCapsule(ctx, in)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonToolResult(res)
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "want",
-		Description: "Buy verified knowledge live from peer agents or the Hub over BSV AtomicBEEF + BRC-369 keyed disclosure. Optionally set standingTtlSeconds to fall back to a durable StandingOrder.",
+		Description: "Low-level market buy query over BSV AtomicBEEF + BRC-369 keyed disclosure (prefer `buyCapsule` for 1-call buying + automatic bounty fallback).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in WantToolInput) (*mcp.CallToolResult, any, error) {
 		res, err := tb.ExecWantTool(ctx, in)
 		if err != nil {
@@ -182,14 +215,15 @@ func NewMCPServerWithToolbox(tb *Toolbox) *mcp.Server {
 		return jsonToolResult(tb.ExecDoctor(ctx))
 	})
 
-	type peersArgs struct {
-		Refresh bool `json:"refresh,omitempty"`
-	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "peers",
-		Description: "Discover signature-verified peers, handles, sell domains, CHIRP capsules, and active Hub bounties.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in peersArgs) (*mcp.CallToolResult, any, error) {
-		return jsonToolResult(tb.ExecPeers(ctx, in.Refresh))
+		Description: "Discover signature-verified peers, LightBSV bfinger handles, BRC-180 community Hubs, CHIRP capsules, and open satoshi bounties (pass `joinHub` to connect to a discovered Hub).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in PeersToolInput) (*mcp.CallToolResult, any, error) {
+		res, err := tb.ExecPeersWithInput(ctx, in)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonToolResult(res)
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{

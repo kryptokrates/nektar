@@ -2,6 +2,7 @@ package hub
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -79,7 +80,7 @@ func (n *Node) handlePlanePublish(w http.ResponseWriter, r *http.Request) {
 		code := http.StatusBadRequest
 		if strings.Contains(err.Error(), "rate limit") {
 			code = http.StatusTooManyRequests
-		} else if strings.Contains(err.Error(), "tracker unavailable") {
+		} else if errors.Is(err, ErrHubTransient) || strings.Contains(err.Error(), "tracker unavailable") {
 			code = http.StatusServiceUnavailable
 		}
 		writeJSON(w, code, map[string]string{"error": err.Error()})
@@ -172,12 +173,28 @@ func (n *Node) handlePlaneStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	var prepaid int64
+	if metered && !isSpinePeer {
+		defer func() {
+			if prepaid > 0 {
+				n.store.RefundUnusedEgress(callerPub, prepaid, msatsPerEvent)
+			}
+		}()
+	}
 	chargeOne := func() bool {
 		if !metered || isSpinePeer {
 			return true
 		}
-		_, ok, cErr := n.store.ChargeEgressEvents(callerPub, 1, msatsPerEvent)
-		return cErr == nil && ok
+		if prepaid > 0 {
+			prepaid--
+			return true
+		}
+		granted, _, cErr := n.store.ReserveEgressBatch(callerPub, 20, msatsPerEvent)
+		if cErr != nil || granted <= 0 {
+			return false
+		}
+		prepaid = granted - 1
+		return true
 	}
 
 	sentSeq := uint64(0)

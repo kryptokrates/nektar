@@ -1,30 +1,12 @@
-# Nektar v0.1 Agent — Single static Pure-Go binary + active Restate durable executor & optional Caddy Auto-TLS.
+# Nektar v0.1 Agent — Single static Pure-Go binary (embedded go-workflows SQLite WAL, zero sidecars) & optional Caddy Auto-TLS.
 #   docker compose -f deploy/agent/compose.yaml up -d
 # Pass `--profile tls` with NEKTAR_DOMAIN for Let's Encrypt HTTPS.
 name: nektar-agent
 services:
-  restate:
-    image: docker.restate.dev/restatedev/restate:1.8.1
-    restart: unless-stopped
-    environment:
-      RESTATE_NODE_NAME: nektar
-      RESTATE_BASE_DIR: /restate-data
-      # Only set RESTATE_WORKER__INVOKER__REQUEST_IDENTITY_PRIVATE_KEY_PEM_FILE when mounting a real PEM file.
-    healthcheck:
-      test: ['CMD', 'bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/9070 && printf "GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && grep -q "200" <&3']
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    volumes:
-      - restate-data:/restate-data
-
   agent:
     image: ghcr.io/kryptokrates/nektar:${NEKTAR_IMAGE_TAG:-latest}${NEKTAR_IMAGE_DIGEST:+@${NEKTAR_IMAGE_DIGEST}}
     restart: unless-stopped
-    command: ['serve', '-listen', ':18420', '-restate-listen', ':9080']
-    depends_on:
-      restate:
-        condition: service_healthy
+    command: ['serve', '-listen', ':18420']
     ports:
       - '${NEKTAR_HTTP_BIND:-127.0.0.1}:${NEKTAR_HTTP_PORT:-18420}:18420'
     environment:
@@ -47,12 +29,6 @@ services:
       NEKTAR_SETTLE_SPEC: ${NEKTAR_SETTLE_SPEC:-}
       NEKTAR_ARCADE_KEY: ${NEKTAR_ARCADE_KEY:-}
       NEKTAR_WOC_KEY: ${NEKTAR_WOC_KEY:-}
-      NEKTAR_RESTATE_URL: ${NEKTAR_RESTATE_URL:-http://restate:8080}
-      NEKTAR_RESTATE_ADMIN: ${NEKTAR_RESTATE_ADMIN:-http://restate:9070}
-      NEKTAR_RESTATE_ENDPOINT_URI: ${NEKTAR_RESTATE_ENDPOINT_URI:-http://agent:9080}
-      NEKTAR_RESTATE_IDENTITY_KEY: ${NEKTAR_RESTATE_IDENTITY_KEY:-}
-      NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT: ${NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT:-1}
-      NEKTAR_RESTATE_INTERNAL_TOKEN: ${NEKTAR_RESTATE_INTERNAL_TOKEN:-}
       NEKTAR_OPENAI_UPSTREAM: ${NEKTAR_OPENAI_UPSTREAM:-https://api.openai.com}
       NEKTAR_ANTHROPIC_UPSTREAM: ${NEKTAR_ANTHROPIC_UPSTREAM:-https://api.anthropic.com}
       NEKTAR_MAX_FEE_PER_TX: ${NEKTAR_MAX_FEE_PER_TX:-10000}
@@ -90,6 +66,5 @@ configs:
 
 volumes:
   agent-data:
-  restate-data:
   caddy-data:
   caddy-config:

@@ -33,9 +33,9 @@ const (
 	ActionLookupPrefix   = "lookup:"
 
 	defaultPrefixTTL        = 10 * time.Minute
-	defaultAcceptThreshold  = uint64(500)
-	defaultAcceptPayerLimit = uint64(500)
-	defaultAcceptTotalLimit = uint64(5000)
+	defaultAcceptThreshold  = uint64(5000)
+	defaultAcceptPayerLimit = uint64(500_000)
+	defaultAcceptTotalLimit = uint64(50_000_000)
 	defaultAcceptWindow     = time.Hour
 	defaultMinTopupSats     = uint64(20)
 )

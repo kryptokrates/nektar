@@ -40,8 +40,10 @@ func TestOntologyIDWireValidationAndLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wBody, _ := json.Marshal(SignedWant{Want: want, Sig: wSig})
-	wPayload := MarketPayload{Kind: KindWant, Body: wBody}
+	wPayload, err := NewWantPayload(SignedWant{Want: want, Sig: wSig})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := ValidateMarketPayload(wPayload, "testnet", LaneOf("testnet", "ops"), now); err != nil {
 		t.Fatalf("ValidateMarketPayload valid want: %v", err)
 	}
@@ -50,8 +52,8 @@ func TestOntologyIDWireValidationAndLookup(t *testing.T) {
 	badWant := want
 	badWant.OntologyID = "not-a-hex-hash"
 	bwSig, _ := SignArtifact(priv, badWant)
-	bwBody, _ := json.Marshal(SignedWant{Want: badWant, Sig: bwSig})
-	if err := ValidateMarketPayload(MarketPayload{Kind: KindWant, Body: bwBody}, "testnet", LaneOf("testnet", "ops"), now); err == nil {
+	bwPayload, _ := NewWantPayload(SignedWant{Want: badWant, Sig: bwSig})
+	if err := ValidateMarketPayload(bwPayload, "testnet", LaneOf("testnet", "ops"), now); err == nil {
 		t.Fatal("expected invalid want ontologyId to fail validation")
 	}
 
@@ -72,8 +74,8 @@ func TestOntologyIDWireValidationAndLookup(t *testing.T) {
 		Exp:        now.Add(time.Hour).UnixMilli(),
 	}
 	oSig, _ := SignArtifact(priv, offer)
-	oBody, _ := json.Marshal(SignedOffer{Offer: offer, Sig: oSig})
-	oWire, err := EncodePayload(MarketPayload{Kind: KindOffer, Body: oBody})
+	oPayload, _ := NewOfferPayload(SignedOffer{Offer: offer, Sig: oSig})
+	oWire, err := EncodePayload(oPayload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,8 +95,8 @@ func TestOntologyIDWireValidationAndLookup(t *testing.T) {
 		Exp: now.Add(time.Hour).UnixMilli(),
 	}
 	aSig, _ := SignArtifact(priv, ann)
-	aBody, _ := json.Marshal(SignedAnnounce{Announce: ann, Sig: aSig})
-	aWire, err := EncodePayload(MarketPayload{Kind: KindAnnounce, Body: aBody})
+	aPayload, _ := NewAnnouncePayload(SignedAnnounce{Announce: ann, Sig: aSig})
+	aWire, err := EncodePayload(aPayload)
 	if err != nil {
 		t.Fatal(err)
 	}

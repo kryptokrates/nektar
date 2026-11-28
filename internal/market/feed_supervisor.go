@@ -506,8 +506,17 @@ func (w *gradeSFeedWorker) Serve(ctx context.Context) error {
 		MaxRetries:      w.parent.cfg.MaxRetries,
 		RetryBackoff:    w.parent.cfg.RetryBackoff,
 		MaxRetryBackoff: w.parent.cfg.MaxRetryBackoff,
+		OnEventCommit: func(evName string, raw []byte) bool {
+			return w.handleEvent(ctx, sub, targetShard, evName, raw)
+		},
 		OnSeqAdvance: func(seq int64) {
 			_ = db.UpdateSubscriptionCursor(sub.SubID, seq, time.Now().Unix())
+		},
+		CanSlash: func() bool {
+			if wd := w.parent.watchdog(); wd != nil && wd.AllowAutonomousSpend() != nil {
+				return false
+			}
+			return true
 		},
 		OnSlash: func(sellerPub, reason string) {
 			w.parent.slashesTotal.Add(1)
@@ -521,9 +530,7 @@ func (w *gradeSFeedWorker) Serve(ctx context.Context) error {
 		},
 	}
 
-	runErr := w.parent.engine.StreamShardSubscription(ctx, streamCfg, func(evName string, raw []byte) {
-		w.handleEvent(ctx, sub, targetShard, evName, raw)
-	})
+	runErr := w.parent.engine.StreamShardSubscription(ctx, streamCfg, nil)
 
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -545,7 +552,7 @@ func (w *gradeSFeedWorker) seqMapKey(subID string, sourceSeq int64) string {
 	return fmt.Sprintf("sub_seq_map:%s:%d", subID, sourceSeq)
 }
 
-func (w *gradeSFeedWorker) handleEvent(ctx context.Context, sub store.ShardSubscription, targetShard, evName string, raw []byte) {
+func (w *gradeSFeedWorker) handleEvent(ctx context.Context, sub store.ShardSubscription, targetShard, evName string, raw []byte) bool {
 	db := w.parent.mem.DB()
 	switch evName {
 	case "fragment_distilled":
@@ -562,17 +569,17 @@ func (w *gradeSFeedWorker) handleEvent(ctx context.Context, sub store.ShardSubsc
 			CreatedAt   int64     `json:"createdAt"`
 		}
 		if json.Unmarshal(raw, &ev) != nil || strings.TrimSpace(ev.Text) == "" || ev.Seq <= 0 {
-			return
+			return false
 		}
 		// Deduplicate across reconnect/restart via persisted sourceSeq -> localSeq mapping.
 		var existingLocalSeq int64
 		if found, _ := db.GetJSON(w.seqMapKey(sub.SubID, ev.Seq), &existingLocalSeq); found && existingLocalSeq > 0 {
 			_ = db.UpdateSubscriptionCursor(sub.SubID, ev.Seq, time.Now().Unix())
-			return
+			return true
 		}
 		if sr := distill.Scrub(ev.Text); sr.Verdict == distill.ScrubBlocked {
 			_ = db.UpdateSubscriptionCursor(sub.SubID, ev.Seq, time.Now().Unix())
-			return
+			return true
 		}
 		rights := strings.TrimSpace(ev.UsageRights)
 		if rights == "" {
@@ -598,7 +605,7 @@ func (w *gradeSFeedWorker) handleEvent(ctx context.Context, sub store.ShardSubsc
 			},
 		})
 		if err != nil {
-			return
+			return false
 		}
 		_ = db.SetJSON(w.seqMapKey(sub.SubID, ev.Seq), res.Seq)
 		_ = db.UpdateSubscriptionCursor(sub.SubID, ev.Seq, time.Now().Unix())
@@ -606,11 +613,12 @@ func (w *gradeSFeedWorker) handleEvent(ctx context.Context, sub store.ShardSubsc
 		if w.parent.cfg.OnUpdate != nil {
 			w.parent.cfg.OnUpdate("subscription_fragment", sub.SubID)
 		}
+		return true
 
 	case "fragment_superseded":
 		var ev memory.SupersessionEvent
 		if json.Unmarshal(raw, &ev) != nil || ev.SupersededSeq <= 0 {
-			return
+			return false
 		}
 		var targetLocalSeq int64
 		if found, _ := db.GetJSON(w.seqMapKey(sub.SubID, ev.SupersededSeq), &targetLocalSeq); found && targetLocalSeq > 0 {
@@ -618,7 +626,7 @@ func (w *gradeSFeedWorker) handleEvent(ctx context.Context, sub store.ShardSubsc
 			if reason == "" {
 				reason = fmt.Sprintf("superseded by seller seq #%d", ev.NewSeq)
 			}
-			_, _ = w.parent.mem.Remember(ctx, memory.RememberInput{
+			if _, err := w.parent.mem.Remember(ctx, memory.RememberInput{
 				Shard:       targetShard,
 				Text:        fmt.Sprintf("[Grade S supersession notice] source %s#%d superseded (%s)", ev.Shard, ev.SupersededSeq, reason),
 				Source:      "grade-s-supersession:" + sub.SubID,
@@ -631,7 +639,9 @@ func (w *gradeSFeedWorker) handleEvent(ctx context.Context, sub store.ShardSubsc
 					"superseded_seq": strconv.FormatInt(ev.SupersededSeq, 10),
 					"new_seq":        strconv.FormatInt(ev.NewSeq, 10),
 				},
-			})
+			}); err != nil {
+				return false
+			}
 		}
 		if ev.NewSeq > 0 {
 			_ = db.UpdateSubscriptionCursor(sub.SubID, ev.NewSeq, time.Now().Unix())
@@ -640,7 +650,9 @@ func (w *gradeSFeedWorker) handleEvent(ctx context.Context, sub store.ShardSubsc
 		if w.parent.cfg.OnUpdate != nil {
 			w.parent.cfg.OnUpdate("subscription_superseded", sub.SubID)
 		}
+		return true
 	}
+	return true
 }
 
 func parseBRC105Challenge(resp *http.Response) (amountSats uint64, payeePub, derivPrefix, sellerPub string, err error) {

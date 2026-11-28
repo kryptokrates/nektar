@@ -66,8 +66,8 @@ func TestEmbeddedHubWithLightwebFingerAndSSE(t *testing.T) {
 		Exp:      time.Now().Add(time.Hour).UnixMilli(),
 	}
 	sig, _ := bstack.SignArtifact(buyerKey, want)
-	body, _ := json.Marshal(bstack.SignedWant{Want: want, Sig: sig})
-	cborBytes, _ := bstack.EncodePayload(bstack.MarketPayload{Kind: bstack.KindWant, Body: body})
+	wPayload, _ := bstack.NewWantPayload(bstack.SignedWant{Want: want, Sig: sig})
+	cborBytes, _ := bstack.EncodePayload(wPayload)
 
 	ls := &script.Script{}
 	_ = ls.AppendOpcodes(script.OpFALSE, script.OpRETURN)
@@ -93,9 +93,14 @@ func TestEmbeddedHubWithLightwebFingerAndSSE(t *testing.T) {
 	gotSSE := false
 	for sc.Scan() {
 		line := sc.Text()
-		if strings.HasPrefix(line, "data: ") && strings.Contains(line, "hub-want-1") {
-			gotSSE = true
-			break
+		if strings.HasPrefix(line, "data: ") {
+			var ev bstack.MarketEvent
+			if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev) == nil {
+				if sw, err := bstack.DecodeWantPayload(ev.Payload.Body); err == nil && sw.Want.WantID == "hub-want-1" {
+					gotSSE = true
+					break
+				}
+			}
 		}
 	}
 	if !gotSSE {
@@ -140,8 +145,8 @@ func TestHubSQLiteRestartFederationBboxAndBounties(t *testing.T) {
 		Exp:      time.Now().Add(time.Hour).UnixMilli(),
 	}
 	sig, _ := bstack.SignArtifact(buyerKey, want)
-	body, _ := json.Marshal(bstack.SignedWant{Want: want, Sig: sig})
-	cborBytes, _ := bstack.EncodePayload(bstack.MarketPayload{Kind: bstack.KindWant, Body: body})
+	wPayload, _ := bstack.NewWantPayload(bstack.SignedWant{Want: want, Sig: sig})
+	cborBytes, _ := bstack.EncodePayload(wPayload)
 	ls := &script.Script{}
 	_ = ls.AppendOpcodes(script.OpFALSE, script.OpRETURN)
 	_ = ls.AppendPushData(cborBytes)
@@ -175,9 +180,15 @@ func TestHubSQLiteRestartFederationBboxAndBounties(t *testing.T) {
 	sc := bufio.NewScanner(resp.Body)
 	replayed := false
 	for sc.Scan() {
-		if strings.Contains(sc.Text(), "persist-want-1") {
-			replayed = true
-			break
+		line := sc.Text()
+		if strings.HasPrefix(line, "data: ") {
+			var ev bstack.MarketEvent
+			if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev) == nil {
+				if sw, err := bstack.DecodeWantPayload(ev.Payload.Body); err == nil && sw.Want.WantID == "persist-want-1" {
+					replayed = true
+					break
+				}
+			}
 		}
 	}
 	resp.Body.Close()
@@ -271,13 +282,12 @@ func TestHubSQLiteRestartFederationBboxAndBounties(t *testing.T) {
 
 	tsNow := time.Now().Unix()
 	inNonce := "nonce-inbox-1"
-	inSig, err := bstack.SignArtifact(recipientKey, map[string]any{
-		"action": "bbox_inbox",
-		"pub":    recipientPub,
-		"ts":     tsNow,
-		"nonce":  inNonce,
-		"aud":    hubAud,
-		"since":  int64(0),
+	inSig, err := bstack.SignArtifact(recipientKey, bstack.BboxInboxAuth{
+		Pub:   recipientPub,
+		TS:    tsNow,
+		Nonce: inNonce,
+		Aud:   hubAud,
+		Since: 0,
 	})
 	if err != nil {
 		t.Fatalf("SignArtifact bbox inbox: %v", err)

@@ -1,8 +1,10 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"io"
 	"strings"
 
 	"github.com/kryptokrates/nektar/internal/memrepo"
@@ -16,20 +18,44 @@ func (s *Service) InspectCapsule(ctx context.Context, raw []byte, targetRepo str
 	return s.InspectCapsuleAuthorized(ctx, raw, targetRepo, ownerPrincipal(), false)
 }
 
+// InspectCapsuleStream streams, decodes, and verifies a .nkt Memory Capsule read-only from r.
+func (s *Service) InspectCapsuleStream(ctx context.Context, r io.Reader, targetRepo string, principal policy.Principal, disallowBorg bool, unwrapDEK func(memrepo.CapsuleEnvelopeHeader) ([]byte, error)) (*CapsuleInspectResult, error) {
+	capObj, err := memrepo.ReadCapsuleStream(r, memrepo.CapsuleVerifyOpts{
+		Objects:   s.objects,
+		UnwrapDEK: unwrapDEK,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.inspectDecodedCapsule(ctx, capObj, targetRepo, principal, disallowBorg)
+}
+
 // InspectCapsuleAuthorized verifies a .nkt Memory Capsule read-only and computes DiffVsLocal
 // strictly through Cedar-authorized RepoTreeAuthorized (never owner-level RepoTree).
 func (s *Service) InspectCapsuleAuthorized(ctx context.Context, raw []byte, targetRepo string, principal policy.Principal, disallowBorg bool) (*CapsuleInspectResult, error) {
-	capObj, err := memrepo.DecodeCapsule(raw)
-	if err != nil {
-		return nil, err
-	}
-	ver, err := memrepo.VerifyCapsule(ctx, capObj, s.objects, s.port.Tracker(), s.port.Network() == "memory")
-	if err != nil {
-		return nil, err
-	}
+	return s.InspectCapsuleStream(ctx, bytes.NewReader(raw), targetRepo, principal, disallowBorg, nil)
+}
+
+func (s *Service) inspectDecodedCapsule(
+	ctx context.Context,
+	capObj *memrepo.MemoryCapsule,
+	targetRepo string,
+	principal policy.Principal,
+	disallowBorg bool,
+) (*CapsuleInspectResult, error) {
 	repoName := strings.TrimSpace(targetRepo)
 	if repoName == "" {
 		repoName = capObj.Repo
+	}
+	localBase := s.resolveLocalBaseAnchor(repoName, capObj, false)
+	ver, err := memrepo.VerifyCapsuleWithOpts(ctx, capObj, memrepo.CapsuleVerifyOpts{
+		Objects:         s.objects,
+		Tracker:         s.port.Tracker(),
+		MemoryMode:      s.port.Network() == "memory",
+		LocalBaseAnchor: localBase,
+	})
+	if err != nil {
+		return nil, err
 	}
 	var headTree *memrepo.TreeObject
 	if capObj.HeadCommit != "" {
@@ -48,6 +74,11 @@ func (s *Service) InspectCapsuleAuthorized(ctx context.Context, raw []byte, targ
 		if tr, ok := capObj.Trees[lastC.TreeHash]; ok {
 			cp := tr
 			headTree = &cp
+		}
+	}
+	if headTree != nil && len(headTree.Subtrees) > 0 && len(headTree.Entries) == 0 {
+		if flat, fErr := memrepo.FlattenTreeFromMap(headTree.TreeHash, capObj.Trees); fErr == nil {
+			headTree.Entries = flat
 		}
 	}
 
@@ -141,21 +172,21 @@ func (s *Service) buildCapsuleBatchProofs(
 		if len(wantFragIdx) == anc.Size && len(wantCommitLeaves) == 0 {
 			continue
 		}
-		batchFrags, err := s.db.ListBatchFragments(repo, anc.N)
-		if err != nil || len(batchFrags) != anc.Size || len(batchFrags) == 0 {
+		leafHashes, err := s.db.ListBatchLeafHashes(repo, anc.N)
+		if err != nil || len(leafHashes) != anc.Size || len(leafHashes) == 0 {
 			continue
 		}
-		leaves := make([][]byte, len(batchFrags))
+		leaves := make([][]byte, len(leafHashes))
 		indices := make([]int, 0, len(wantFragIdx)+len(wantCommitLeaves))
 		valid := true
-		for i, bf := range batchFrags {
-			lb, dErr := hex.DecodeString(strings.TrimSpace(bf.Leaf))
+		for i, leafHex := range leafHashes {
+			lb, dErr := hex.DecodeString(strings.TrimSpace(leafHex))
 			if dErr != nil || len(lb) != 32 {
 				valid = false
 				break
 			}
 			leaves[i] = lb
-			if wantFragIdx[i] || wantCommitLeaves[strings.ToLower(strings.TrimSpace(bf.Leaf))] {
+			if wantFragIdx[i] || wantCommitLeaves[strings.ToLower(strings.TrimSpace(leafHex))] {
 				indices = append(indices, i)
 			}
 		}

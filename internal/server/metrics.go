@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"net/http"
@@ -9,8 +10,13 @@ import (
 	"time"
 )
 
+const (
+	metricsCacheTTL     = 1 * time.Second
+	maxMetricDomainsCap = 64
+)
+
 func (a *App) registerMetricsRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /v1/metrics", a.handleMetrics)
+	mux.Handle("GET /v1/metrics", a.withAuth(http.HandlerFunc(a.handleMetrics)))
 	mux.HandleFunc("GET /v1/badge/{token}", a.handleVerifyBadge)
 }
 
@@ -26,6 +32,48 @@ func (a *App) recordTTFV() {
 }
 
 func (a *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	restateAlive := a.restateClient() != nil && a.isRestateAlive()
+	wantRestateLine := "nektar_restate_attached 0\n"
+	if restateAlive {
+		wantRestateLine = "nektar_restate_attached 1\n"
+	}
+	a.metricsCacheMu.RLock()
+	if len(a.metricsCacheVal) > 0 && now.Before(a.metricsCacheExp) && strings.Contains(string(a.metricsCacheVal), wantRestateLine) {
+		cached := a.metricsCacheVal
+		a.metricsCacheMu.RUnlock()
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(cached)
+		return
+	}
+	a.metricsCacheMu.RUnlock()
+
+	val, _, _ := a.metricsSF.Do(wantRestateLine, func() (any, error) {
+		a.metricsCacheMu.RLock()
+		if len(a.metricsCacheVal) > 0 && time.Now().Before(a.metricsCacheExp) && strings.Contains(string(a.metricsCacheVal), wantRestateLine) {
+			cached := a.metricsCacheVal
+			a.metricsCacheMu.RUnlock()
+			return cached, nil
+		}
+		a.metricsCacheMu.RUnlock()
+
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		defer cancel()
+		built := a.buildMetricsPayload(ctx)
+		a.metricsCacheMu.Lock()
+		a.metricsCacheVal = built
+		a.metricsCacheExp = time.Now().Add(metricsCacheTTL)
+		a.metricsCacheMu.Unlock()
+		return built, nil
+	})
+	payload, _ := val.([]byte)
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(payload)
+}
+
+func (a *App) buildMetricsPayload(ctx context.Context) []byte {
 	var b strings.Builder
 	writeGauge := func(name, help string, val float64) {
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s gauge\n%s %g\n", name, help, name, name, val)
@@ -63,7 +111,7 @@ func (a *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	var feeBalanceSats, confirmedSats, unprovenSats, spentTodaySats, dailyCapSats, zeroConfExposure uint64
 	var utxoCount, provenFuel, unprovenFuel, maxUnprovenDepth, spendTxCount, settleDepth int
 	if a.mem != nil && a.mem.Chain() != nil {
-		if bal, bErr := a.mem.Chain().Balance(r.Context()); bErr == nil {
+		if bal, bErr := a.mem.Chain().Balance(ctx); bErr == nil {
 			feeBalanceSats = bal.SpendableSats
 			confirmedSats = bal.ConfirmedSats
 			unprovenSats = bal.UnprovenSats
@@ -173,15 +221,36 @@ func (a *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	if a.cfg.Hub != nil && a.cfg.Hub.Store() != nil {
 		if stats, err := a.cfg.Hub.Store().DomainDensityStats(); err == nil && len(stats) > 0 {
-			sort.Slice(stats, func(i, j int) bool { return stats[i].Domain < stats[j].Domain })
+			// Bound Prometheus label cardinality to top-64 active domains + "_other" aggregate bucket.
+			sort.Slice(stats, func(i, j int) bool {
+				ti := stats[i].Wants + stats[i].Offers
+				tj := stats[j].Wants + stats[j].Offers
+				if ti != tj {
+					return ti > tj
+				}
+				return stats[i].Domain < stats[j].Domain
+			})
+			top := stats
+			var otherWants, otherOffers int64
+			if len(top) > maxMetricDomainsCap {
+				for _, extra := range top[maxMetricDomainsCap:] {
+					otherWants += extra.Wants
+					otherOffers += extra.Offers
+				}
+				top = append(stats[:maxMetricDomainsCap:maxMetricDomainsCap], stats[0])
+				top[maxMetricDomainsCap].Domain = "_other"
+				top[maxMetricDomainsCap].Wants = otherWants
+				top[maxMetricDomainsCap].Offers = otherOffers
+			}
+			sort.Slice(top, func(i, j int) bool { return top[i].Domain < top[j].Domain })
 			fmt.Fprintln(&b, "# HELP nektar_hub_wants_total Hub wants observed per domain.")
 			fmt.Fprintln(&b, "# TYPE nektar_hub_wants_total counter")
-			for _, st := range stats {
+			for _, st := range top {
 				fmt.Fprintf(&b, "nektar_hub_wants_total{domain=%q} %d\n", st.Domain, st.Wants)
 			}
 			fmt.Fprintln(&b, "# HELP nektar_hub_offers_total Hub offers observed per domain.")
 			fmt.Fprintln(&b, "# TYPE nektar_hub_offers_total counter")
-			for _, st := range stats {
+			for _, st := range top {
 				fmt.Fprintf(&b, "nektar_hub_offers_total{domain=%q} %d\n", st.Domain, st.Offers)
 			}
 		}
@@ -222,9 +291,7 @@ func (a *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
+	return []byte(b.String())
 }
 
 func (a *App) handleVerifyBadge(w http.ResponseWriter, r *http.Request) {

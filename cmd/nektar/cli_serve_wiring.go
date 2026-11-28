@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,14 @@ func initEmbeddedHub(
 			upstreamSpines = append(upstreamSpines, s)
 		}
 	}
+	if len(upstreamSpines) == 0 && feeSched.Role == hub.RoleLeaf && os.Getenv("NEKTAR_UPSTREAM_SPINES") == "" {
+		switch rt.mem.Chain().Network() {
+		case "main":
+			upstreamSpines = []string{"https://nektar.run/hub"}
+		case "testnet":
+			upstreamSpines = []string{"https://testnet.nektar.run/hub"}
+		}
+	}
 	hubNode, err := hub.NewNode(hub.Config{
 		Network:        rt.mem.Chain().Network(),
 		DBPath:         hubDBPath,
@@ -52,6 +61,7 @@ func initEmbeddedHub(
 		EnableBorg:     true,
 		EnableBsecret:  true,
 		EnableBstore:   true,
+		EnableFabric:   true,
 		Getenv:         os.Getenv,
 		ChainTracker:   rt.mem.Chain().Tracker(),
 		HeaderHandler:  rt.mem.Chain().HeaderStoreHandler(),
@@ -74,11 +84,14 @@ func initEmbeddedHub(
 	return hubNode, liqState, upstreamSpines, nil
 }
 
-func wireEmbeddedHub(ctx context.Context, rt *runtimeBundle, hubNode *hub.Node, upstreamSpines []string) func() {
+func wireEmbeddedHub(ctx context.Context, rt *runtimeBundle, hubNode *hub.Node, upstreamSpines []string, pubURL string) func() {
 	cleanup := func() {}
+	hubNode.SetEventBus(rt.mem.EventBus())
 	// Exempt this node's own local discovery & market keys from paying BRC-105 fees to its own embedded Hub.
 	if rt.disc != nil {
 		hubNode.AddSpinePeerPub(rt.disc.AnnouncePubHex())
+		rt.disc.SetLocalHandle(os.Getenv("NEKTAR_HANDLE"), pubURL, hubNode.DefaultBboxOffice())
+		hubNode.SetHandleResolver(rt.disc.WellKnownHandleHandler("", hubNode.DefaultBboxOffice()))
 	}
 	if rt.mkt != nil {
 		hubNode.AddSpinePeerPub(rt.mkt.SalePubHex())
@@ -205,7 +218,7 @@ func attachRestateClient(
 	}
 	broker.SetRestateClient(restateClient)
 	if restateAdminDisplay == "" {
-		restateAdminDisplay = restateClient.AdminURL
+		restateAdminDisplay = "embedded://workflows.sqlite"
 	}
 	app.SetRestateClient(restateClient, restateAdminDisplay)
 	if restateAliveFn != nil {
@@ -231,24 +244,82 @@ func attachRestateClient(
 	}
 
 	anchorCadenceSec := envInt64("NEKTAR_ANCHOR_CADENCE_SEC", 300)
-	// Poke durable Restate AnchorCadence on Remember (short 5s dedup bucket) + re-arm any unanchored shards on boot (RT0011)!
-	rt.mem.SetOnRemember(func(shard string) {
-		spawnHook(func(hCtx context.Context) {
-			pCtx, cancel := context.WithTimeout(hCtx, 5*time.Second)
-			defer cancel()
-			_, _ = restateClient.TriggerAnchorCadence(pCtx, shard, anchorCadenceSec)
-		})
-	})
+	// Coalesce Remember notifications into an O(1) dirty-shard set drained on a bounded background ticker
+	// (eliminating unbounded goroutine storms + per-purchase AnchorShard lock contention at 100+ TPS!).
+	var dirtyMu sync.Mutex
+	dirtyShards := make(map[string]struct{}, 16)
+	dirtyWake := make(chan struct{}, 1)
+	markShardDirty := func(shard string) {
+		shard = strings.TrimSpace(shard)
+		if shard == "" {
+			return
+		}
+		dirtyMu.Lock()
+		dirtyShards[shard] = struct{}{}
+		dirtyMu.Unlock()
+		select {
+		case dirtyWake <- struct{}{}:
+		default:
+		}
+	}
+	rt.mem.SetOnRemember(markShardDirty)
 	spawnHook(func(hCtx context.Context) {
-		shards, _ := rt.mem.DB().ListShards()
-		for _, sh := range shards {
-			if hCtx.Err() != nil {
+		if shards, err := rt.mem.DB().ListShards(); err == nil {
+			for _, sh := range shards {
+				if hCtx.Err() != nil {
+					return
+				}
+				if un, uErr := rt.mem.DB().ListUnanchored(sh); uErr == nil && len(un) > 0 {
+					markShardDirty(sh)
+				}
+			}
+		}
+		tickDur := 5 * time.Second
+		if anchorCadenceSec > 0 && anchorCadenceSec < 5 {
+			tickDur = time.Duration(anchorCadenceSec) * time.Second
+		}
+		cadenceTick := time.NewTicker(tickDur)
+		defer cadenceTick.Stop()
+		flushDirty := func() {
+			dirtyMu.Lock()
+			if len(dirtyShards) == 0 {
+				dirtyMu.Unlock()
 				return
 			}
-			if un, uErr := rt.mem.DB().ListUnanchored(sh); uErr == nil && len(un) > 0 {
-				pCtx, cancel := context.WithTimeout(hCtx, 5*time.Second)
-				_, _ = restateClient.TriggerAnchorCadence(pCtx, sh, anchorCadenceSec)
+			batch := make([]string, 0, len(dirtyShards))
+			for sh := range dirtyShards {
+				batch = append(batch, sh)
+			}
+			clear(dirtyShards)
+			dirtyMu.Unlock()
+			for _, sh := range batch {
+				if hCtx.Err() != nil {
+					return
+				}
+				pCtx, cancel := context.WithTimeout(hCtx, 15*time.Second)
+				_, err := restateClient.TriggerAnchorCadence(pCtx, sh, anchorCadenceSec)
+				st, _ := restateClient.GetAnchorCadenceStatus(pCtx, sh)
 				cancel()
+				if err != nil || (st != nil && st.NextSlot > 0) {
+					dirtyMu.Lock()
+					dirtyShards[sh] = struct{}{}
+					dirtyMu.Unlock()
+				}
+			}
+		}
+		for {
+			select {
+			case <-hCtx.Done():
+				return
+			case <-dirtyWake:
+				select {
+				case <-hCtx.Done():
+					return
+				case <-time.After(250 * time.Millisecond):
+				}
+				flushDirty()
+			case <-cadenceTick.C:
+				flushDirty()
 			}
 		}
 	})
@@ -348,4 +419,60 @@ func startAnchorProofRefresher(ctx context.Context, mem *memory.Service) func() 
 		cancel()
 		wg.Wait()
 	}
+}
+
+// startPeriodicReconciliationFloor runs a low-frequency 2-minute safety reconciliation floor on live networks
+// for pending anchors, commercial obligations, settled 0-conf exposure, and aged unsettleable Hub fees (STATE-9).
+func startPeriodicReconciliationFloor(
+	ctx context.Context,
+	rt *runtimeBundle,
+	hubNode *hub.Node,
+	isTxSettled func(txid string) bool,
+) func() {
+	if rt == nil || rt.mem == nil || rt.mem.Chain() == nil || rt.mem.Chain().Network() == "memory" {
+		return func() {}
+	}
+	rCtx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-rCtx.Done():
+				return
+			case <-ticker.C:
+				_, _ = rt.mem.ReconcilePendingAnchors(rCtx)
+				_, _ = market.ReconcileObligations(rCtx, rt.mem.DB(), isTxSettled, time.Now().Unix())
+				if tip, err := rt.mem.Chain().Height(rCtx); err == nil {
+					rt.mem.Chain().ZeroConfWatch().SweepSettled(tip, rt.mem.Chain().SettleDepth())
+				}
+				if hubNode != nil && hubNode.Store() != nil {
+					if stale, sErr := hubNode.Store().SweepExpiredFastFees(7200); sErr == nil {
+						for _, e := range stale {
+							_ = hubNode.Store().FlagPayer(e.PayerPub, e.TxID, "fast fee payment failed to mine within 2h")
+						}
+					}
+				}
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		wg.Wait()
+	}
+}
+
+func envInt64(key string, def int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return def
+	}
+	return v
 }

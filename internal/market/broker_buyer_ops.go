@@ -145,17 +145,17 @@ func (b *Broker) CollectOffersForWant(ctx context.Context, want bstack.WantAd, c
 		b.mu.Unlock()
 	}()
 
-	sig, err := bstack.SignArtifact(b.engine.saleKey, want)
+	sig, err := bstack.SignArtifactWithSigner(b.engine.signer, want)
 	if err != nil {
 		return nil, 0, err
 	}
-	body, err := json.Marshal(bstack.SignedWant{Want: want, Sig: sig})
+	wantPayload, err := bstack.NewWantPayload(bstack.SignedWant{Want: want, Sig: sig})
 	if err != nil {
 		return nil, 0, err
 	}
 	startTime := time.Now()
-	topics := lanesForDomains(want.Net, want.Domains)
-	submitted, subErr := b.disc.BuildAndSubmitMarketAd(ctx, b.engine.saleKey, bstack.MarketPayload{Kind: bstack.KindWant, Body: body}, hosts, topics)
+	topics := topicsForMarketAd(want.Net, want.Domains, want.OntologyID)
+	submitted, subErr := b.disc.BuildAndSubmitMarketAd(ctx, b.engine.signer, wantPayload, hosts, topics)
 	if submitted == 0 {
 		if subErr != nil {
 			return nil, 0, fmt.Errorf("failed to submit WantAd to any active hub: %w", subErr)
@@ -210,6 +210,9 @@ collectLoop:
 		case o := <-inbox:
 			collectOffers(o)
 			if len(seenOffers) > 0 && graceTimer == nil {
+				if b.cfg.GraceTimeout <= 0 || (b.engine != nil && b.engine.FastJournal() != nil && b.cfg.GraceTimeout <= 5*time.Millisecond) {
+					break collectLoop
+				}
 				graceTimer = time.NewTimer(b.cfg.GraceTimeout)
 				graceCh = graceTimer.C
 			}
@@ -241,16 +244,13 @@ collectLoop:
 	return offers, firstOfferMs, nil
 }
 
-// ApproveAndExecute settles a pending operator approval with atomic SQLite CAS.
-// When the paused BuyerDeal is suspended on a Restate Awakeable (active Restate mode),
-// it resolves that EXACT awakeable first, then atomically marks the approval consumed/denied
-// so transient Restate errors remain retryable and approved awakeable IDs cannot be replayed.
+// ApproveAndExecute settles a pending operator approval with atomic SQLite CAS and signals the
+// suspended BuyerDealWorkflow on its durable go-workflows SignalChannel.
 func (b *Broker) ApproveAndExecute(ctx context.Context, approvalID string, approve bool) (store.ApprovalRecord, *store.DealRecord, error) {
 	existing, err := b.mem.DB().GetApproval(approvalID)
 	if err != nil {
 		return store.ApprovalRecord{}, nil, err
 	}
-	// Active Restate Awakeable resume path (resumes the exact suspended BuyerDeal workflow!).
 	if existing.AwakeableID != "" {
 		if existing.Status != "pending" && existing.Status != "approved" {
 			return existing, nil, store.ErrApprovalNotPending
@@ -258,20 +258,19 @@ func (b *Broker) ApproveAndExecute(ctx context.Context, approvalID string, appro
 		if existing.ExpiresAt <= time.Now().Unix() {
 			return existing, nil, store.ErrApprovalNotPending
 		}
-		rc := b.RestateClient()
-		if rc == nil {
-			return existing, nil, errors.New("market: Restate runtime unavailable to resolve awakeable approval")
+		wc, wErr := b.EnsureWorkflowClient()
+		if wErr != nil {
+			return existing, nil, wErr
 		}
 		dec := ApprovalDecision{Approved: approve, DecidedBy: "operator"}
 		if !approve {
 			dec.Reason = "denied by operator"
 		}
-		if rErr := rc.ResolveAwakeable(ctx, existing.AwakeableID, dec); rErr != nil {
+		if rErr := wc.ResolveApproval(ctx, existing.AwakeableID, dec); rErr != nil {
 			return existing, nil, rErr
 		}
 		appr, mErr := b.mem.DB().MarkApprovalResolvedAwakeable(approvalID, approve)
 		if mErr != nil {
-			// Awakeable was already delivered to Restate; tolerate concurrent state update.
 			appr = existing
 			if approve {
 				appr.Status = "consumed"
@@ -281,7 +280,7 @@ func (b *Broker) ApproveAndExecute(ctx context.Context, approvalID string, appro
 		}
 		aCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
-		if st, aErr := rc.AttachBuyerDeal(aCtx, appr.DealID); aErr == nil && st != nil {
+		if st, aErr := wc.AttachBuyerDeal(aCtx, appr.DealID); aErr == nil && st != nil {
 			if deal, dErr := b.mem.DB().GetDeal(appr.DealID); dErr == nil {
 				return appr, &deal, nil
 			}
@@ -300,33 +299,28 @@ func (b *Broker) ApproveAndExecute(ctx context.Context, approvalID string, appro
 		}
 		return appr, nil, nil
 	}
-	// Memory-only local test path when Want() suspended without a live Restate server.
-	// Live networks (testnet/mainnet) strictly require Restate durable execution above.
-	if b.mem.Chain().Network() == "memory" {
-		appr, dErr := b.mem.DB().DecideApproval(approvalID, approve)
-		if dErr != nil {
-			return store.ApprovalRecord{}, nil, dErr
-		}
-		if !approve {
-			return appr, nil, nil
-		}
-		origDeal, gErr := b.mem.DB().GetDeal(appr.DealID)
-		if gErr != nil {
-			return appr, nil, fmt.Errorf("market: load approval deal %s: %w", appr.DealID, gErr)
-		}
-		var want bstack.WantAd
-		if err := json.Unmarshal(origDeal.WantJSON, &want); err != nil {
-			return appr, nil, fmt.Errorf("market: decode approval want payload: %w", err)
-		}
-		deal, wErr := b.Want(ctx, WantRequest{
-			Domains:            want.Domains,
-			Question:           want.Query,
-			MaxSats:            want.MaxSats,
-			ApprovedOverrideID: appr.ID,
-		})
-		return appr, deal, wErr
+	appr, dErr := b.mem.DB().DecideApproval(approvalID, approve)
+	if dErr != nil {
+		return store.ApprovalRecord{}, nil, dErr
 	}
-	return store.ApprovalRecord{}, nil, errors.New("market: Restate durable executor is required for approval resolution")
+	if !approve {
+		return appr, nil, nil
+	}
+	origDeal, gErr := b.mem.DB().GetDeal(appr.DealID)
+	if gErr != nil {
+		return appr, nil, fmt.Errorf("market: load approval deal %s: %w", appr.DealID, gErr)
+	}
+	var want bstack.WantAd
+	if err := json.Unmarshal(origDeal.WantJSON, &want); err != nil {
+		return appr, nil, fmt.Errorf("market: decode approval want payload: %w", err)
+	}
+	deal, wErr := b.Want(ctx, WantRequest{
+		Domains:            want.Domains,
+		Question:           want.Query,
+		MaxSats:            want.MaxSats,
+		ApprovedOverrideID: appr.ID,
+	})
+	return appr, deal, wErr
 }
 
 func (b *Broker) lookupOffers(ctx context.Context, hosts []string, wantID string) []bstack.OfferAd {
@@ -361,8 +355,8 @@ func (b *Broker) lookupOffers(ctx context.Context, hosts []string, wantID string
 			if !ok || payload.Kind != bstack.KindOffer {
 				continue
 			}
-			var so bstack.SignedOffer
-			if json.Unmarshal(payload.Body, &so) != nil {
+			so, decErr := bstack.DecodeOfferPayload(payload.Body)
+			if decErr != nil {
 				continue
 			}
 			if so.Offer.Net != myNet || so.Offer.Exp <= nowMs || so.Offer.Exp > maxExpMs {
@@ -374,7 +368,7 @@ func (b *Broker) lookupOffers(ctx context.Context, hosts []string, wantID string
 			if so.Offer.BuyerPub != "" && so.Offer.BuyerPub != b.PubHex() {
 				continue
 			}
-			if bstack.VerifyArtifact(so.Offer.Pub, so.Sig, so.Offer) == nil {
+			if bstack.VerifyArtifactRaw(so.Offer.Pub, so.Sig, so.Offer.DomainTag(), so.RawCBOR) == nil {
 				out = append(out, so.Offer)
 			}
 		}

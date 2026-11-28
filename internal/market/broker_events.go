@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
@@ -58,11 +59,20 @@ func (b *Broker) ensureHostLoops(ctx context.Context) {
 func (b *Broker) loadCursor(hubURL string) int64 {
 	b.cursorMu.Lock()
 	defer b.cursorMu.Unlock()
-	var v int64
-	ok, _ := b.mem.DB().GetJSON("hub_cursor:"+hubURL, &v)
-	if !ok {
-		return 0
+	if b.hubCursors == nil {
+		b.hubCursors = make(map[string]int64)
 	}
+	if v, ok := b.hubCursors[hubURL]; ok {
+		return v
+	}
+	var v int64
+	if b.mem != nil && b.mem.DB() != nil {
+		ok, _ := b.mem.DB().GetJSON("hub_cursor:"+hubURL, &v)
+		if !ok {
+			v = 0
+		}
+	}
+	b.hubCursors[hubURL] = v
 	return v
 }
 
@@ -70,26 +80,81 @@ func (b *Broker) saveCursor(hubURL string, seq int64) {
 	if seq <= 0 {
 		return
 	}
+	var flushBatch map[string]int64
 	b.cursorMu.Lock()
-	defer b.cursorMu.Unlock()
-	var cur int64
-	_, _ = b.mem.DB().GetJSON("hub_cursor:"+hubURL, &cur)
+	if b.hubCursors == nil {
+		b.hubCursors = make(map[string]int64)
+	}
+	if b.dirtyCursors == nil {
+		b.dirtyCursors = make(map[string]int64)
+	}
+	cur, loaded := b.hubCursors[hubURL]
+	if !loaded && b.mem != nil && b.mem.DB() != nil {
+		_, _ = b.mem.DB().GetJSON("hub_cursor:"+hubURL, &cur)
+		b.hubCursors[hubURL] = cur
+	}
 	if seq > cur {
-		_ = b.mem.DB().SetJSON("hub_cursor:"+hubURL, seq)
+		b.hubCursors[hubURL] = seq
+		b.dirtyCursors[hubURL] = seq
+		b.cursorDirtyN++
+		if b.cursorDirtyN >= 250 {
+			flushBatch = make(map[string]int64, len(b.dirtyCursors))
+			for k, v := range b.dirtyCursors {
+				flushBatch[k] = v
+			}
+			clear(b.dirtyCursors)
+			b.cursorDirtyN = 0
+		}
+	}
+	b.cursorMu.Unlock()
+	if len(flushBatch) > 0 && b.mem != nil && b.mem.DB() != nil {
+		for k, v := range flushBatch {
+			_ = b.mem.DB().SetJSON("hub_cursor:"+k, v)
+		}
+	}
+}
+
+func (b *Broker) flushDirtyCursors() {
+	if b == nil || b.mem == nil || b.mem.DB() == nil {
+		return
+	}
+	b.cursorMu.Lock()
+	if len(b.dirtyCursors) == 0 {
+		b.cursorMu.Unlock()
+		return
+	}
+	batch := make(map[string]int64, len(b.dirtyCursors))
+	for k, v := range b.dirtyCursors {
+		batch[k] = v
+	}
+	clear(b.dirtyCursors)
+	b.cursorDirtyN = 0
+	b.cursorMu.Unlock()
+	for k, v := range batch {
+		_ = b.mem.DB().SetJSON("hub_cursor:"+k, v)
 	}
 }
 
 func (b *Broker) resetCursor(hubURL string, seq int64) {
 	b.cursorMu.Lock()
-	defer b.cursorMu.Unlock()
-	_ = b.mem.DB().SetJSON("hub_cursor:"+hubURL, seq)
+	if b.hubCursors == nil {
+		b.hubCursors = make(map[string]int64)
+	}
+	b.hubCursors[hubURL] = seq
+	if b.dirtyCursors != nil {
+		delete(b.dirtyCursors, hubURL)
+	}
+	b.cursorMu.Unlock()
+	if b.mem != nil && b.mem.DB() != nil {
+		_ = b.mem.DB().SetJSON("hub_cursor:"+hubURL, seq)
+	}
 }
 
 func (b *Broker) attachHubEgressAuth(req *http.Request, action, hubURL string, cursor int64, domainsCSV string) {
-	if b == nil || b.engine == nil || b.engine.saleKey == nil {
+	if b == nil || b.engine == nil || b.engine.signer == nil {
 		return
 	}
-	if pub, ts, nonce, sig, err := discovery.SignEgressAuthHeaders(b.engine.saleKey, action, hubURL, cursor, domainsCSV); err == nil {
+	if pub, ts, nonce, sig, err := discovery.SignEgressAuthHeaders(b.engine.signer, action, hubURL, cursor, domainsCSV); err == nil {
 		req.Header.Set("X-Nektar-Pub", pub)
 		req.Header.Set("X-Nektar-Ts", ts)
 		req.Header.Set("X-Nektar-Nonce", nonce)
@@ -104,13 +169,21 @@ func (b *Broker) sseHostLoop(ctx context.Context, hubURL string) {
 			return
 		}
 		cursor := b.loadCursor(hubURL)
-		urlStr := fmt.Sprintf("%s/events?cursor=%d", strings.TrimRight(hubURL, "/"), cursor)
+		urlStr := fmt.Sprintf("%s/events?cursor=%d&format=slim", strings.TrimRight(hubURL, "/"), cursor)
+		if fj := b.engine.FastJournal(); fj != nil {
+			if listings, lErr := fj.CachedListings(b.mem.DB()); lErr == nil && len(listings) == 0 {
+				urlStr += "&kinds=offer"
+			}
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 		if err != nil {
 			return
 		}
 		if cursor > 0 {
 			req.Header.Set("Last-Event-ID", strconv.FormatInt(cursor, 10))
+		}
+		if pub := b.PubHex(); pub != "" {
+			req.Header.Set("X-Nektar-Pub", pub)
 		}
 		b.attachHubEgressAuth(req, "hub_events", hubURL, cursor, "")
 		// Streaming SSRF-hardened client with no total timeout (context cancels cleanly on shutdown).
@@ -152,8 +225,28 @@ func (b *Broker) sseHostLoop(ctx context.Context, hubURL string) {
 			}
 		}
 		b.sseConnected.Add(1)
+		b.signalSSEConnected()
 		sc := bufio.NewScanner(resp.Body)
 		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+		fastDispatch := b.engine.FastJournal() != nil
+		var (
+			dispatchCh chan bstack.MarketEvent
+			dispatchWG sync.WaitGroup
+		)
+		if fastDispatch {
+			dispatchCh = make(chan bstack.MarketEvent, 512)
+			for i := 0; i < 8; i++ {
+				dispatchWG.Add(1)
+				go func() {
+					defer dispatchWG.Done()
+					for ev := range dispatchCh {
+						if !b.handleMarketEvent(ctx, ev) {
+							b.saveCursor(hubURL, ev.Seq)
+						}
+					}
+				}()
+			}
+		}
 		var pendingEvent string
 		for sc.Scan() {
 			line := sc.Text()
@@ -168,6 +261,16 @@ func (b *Broker) sseHostLoop(ctx context.Context, hubURL string) {
 			if pendingEvent == "cursor_reset" {
 				pendingEvent = ""
 				b.resetCursor(hubURL, 0)
+				continue
+			}
+			if pendingEvent == "bbox_wake" {
+				pendingEvent = ""
+				var bw struct {
+					Pub string `json:"pub"`
+				}
+				if json.Unmarshal([]byte(raw), &bw) == nil && (bw.Pub == "" || strings.EqualFold(bw.Pub, b.PubHex())) {
+					b.WakeBbox()
+				}
 				continue
 			}
 			if pendingEvent == "payment_required" {
@@ -185,13 +288,23 @@ func (b *Broker) sseHostLoop(ctx context.Context, hubURL string) {
 				continue
 			}
 			b.sseWakes.Add(1)
-			// Gap detection: if an SSE event jumped ahead of our persisted cursor, repair via /sync first!
+			if fastDispatch {
+				select {
+				case dispatchCh <- ev:
+				case <-ctx.Done():
+				}
+				continue
+			}
 			if prev := b.loadCursor(hubURL); prev > 0 && ev.Seq > prev+1 {
 				b.pollHostOnce(ctx, hubURL)
 			}
 			if !b.handleMarketEvent(ctx, ev) {
 				b.saveCursor(hubURL, ev.Seq)
 			}
+		}
+		if dispatchCh != nil {
+			close(dispatchCh)
+			dispatchWG.Wait()
 		}
 		b.sseConnected.Add(-1)
 		resp.Body.Close()

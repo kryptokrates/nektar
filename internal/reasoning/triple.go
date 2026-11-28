@@ -93,13 +93,16 @@ func EncodeTripleCBOR(t Triple) ([]byte, error) {
 	return core.EncodeCBOR(m)
 }
 
-// DecodeTripleCBOR decodes and cryptographically verifies a canonical CBOR Triple.
+var tripleKnownKeys = core.KnownKeyRange(0, 5)
+
+// DecodeTripleCBOR decodes and cryptographically verifies a canonical CBOR Triple,
+// rejecting unknown critical (even) keys while tolerating non-critical (odd) extensions.
 func DecodeTripleCBOR(raw []byte) (Triple, error) {
 	v, err := core.DecodeCBOR(raw)
 	if err != nil {
 		return Triple{}, fmt.Errorf("triple: decode cbor: %w", err)
 	}
-	m, err := core.CBORMapToUintMap(v)
+	m, _, err := core.SplitCBORMap(v, tripleKnownKeys)
 	if err != nil {
 		return Triple{}, fmt.Errorf("triple: %w", err)
 	}

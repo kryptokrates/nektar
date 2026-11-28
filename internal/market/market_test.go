@@ -2,11 +2,6 @@ package market
 
 import (
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
@@ -34,7 +29,7 @@ func newTestMemory(t *testing.T) *memory.Service {
 	return svc
 }
 
-func TestRestateGoSDKServicesClientAndAtomicKnowledgeTrade(t *testing.T) {
+func TestEmbeddedWorkflowsClientAndAtomicKnowledgeTrade(t *testing.T) {
 	ctx := context.Background()
 	buyerMem := newTestMemory(t)
 	sellerMem := newTestMemory(t)
@@ -42,55 +37,24 @@ func TestRestateGoSDKServicesClientAndAtomicKnowledgeTrade(t *testing.T) {
 	buyer := NewEngine(buyerMem, DefaultPolicy())
 	seller := NewEngine(sellerMem, DefaultPolicy())
 
-	// 1. Verify ALL 6 Restate Go SDK services (BuyerDeal, SellerDeal, Custody, Tx, AnchorCadence, NektarRuntime)
-	//    bind and serve Restate's service discovery protocol, with ingressPrivate on Custody/Tx/AnchorCadence!
-	rSrv := buyer.NewRestateServer()
-	h, err := rSrv.Handler()
-	if err != nil || h == nil {
-		t.Fatalf("Restate Bind/Handler failed: %v", err)
+	// 1. Verify embedded pure-Go go-workflows runtime starts cleanly over SQLite WAL (zero external sidecars).
+	wc, err := buyer.StartWorkflows(ctx, t.TempDir())
+	if err != nil || wc == nil || !wc.IsRunning() {
+		t.Fatalf("StartWorkflows failed: wc=%v err=%v", wc, err)
 	}
-	rec := httptest.NewRecorder()
-	discReq := httptest.NewRequest(http.MethodGet, "/discover", nil)
-	discReq.Header.Set("Accept", "application/vnd.restate.endpointmanifest.v4+json")
-	h.ServeHTTP(rec, discReq)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("Restate /discover expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	manifest := rec.Body.String()
-	for _, svcName := range []string{"BuyerDeal", "SellerDeal", "Custody", "Tx", "AnchorCadence", "NektarRuntime"} {
-		if !strings.Contains(manifest, `"`+svcName+`"`) {
-			t.Fatalf("Restate Go manifest missing %s: %s", svcName, manifest)
-		}
-	}
+	defer func() { _ = buyer.CloseWorkflows() }()
 
-	// 2. Verify pure-Go RestateClient Admin registration + sdk-go/ingress async NektarRuntime/emitTx send!
-	var regURI, calledPath string
-	mockRestate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		if r.URL.Path == "/deployments" {
-			var p map[string]any
-			_ = json.Unmarshal(body, &p)
-			regURI, _ = p["uri"].(string)
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"id":"dp_1"}`))
-			return
-		}
-		calledPath = r.URL.Path
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"invocationId":"inv_tx123","status":"Accepted"}`))
-	}))
-	defer mockRestate.Close()
-
-	rc := NewRestateClient(mockRestate.URL, mockRestate.URL)
-	if err := rc.RegisterDeployment(ctx, "http://127.0.0.1:9080", true); err != nil {
-		t.Fatalf("RegisterDeployment: %v", err)
+	// 2. Verify in-process Tx coordinator & real workflows.sqlite QueryInvocations!
+	invID, err := wc.EmitTxEvent(ctx, "tx123", TxEventInput{Kind: "mined", BlockHeight: 900001})
+	if err != nil || invID != "tx123" {
+		t.Fatalf("EmitTxEvent failed: invID=%q err=%v", invID, err)
 	}
-	if regURI != "http://127.0.0.1:9080" {
-		t.Fatalf("unexpected registered URI: %q", regURI)
+	txSt, err := wc.GetTxState(ctx, "tx123")
+	if err != nil || txSt.Status != "mined" || txSt.BlockHeight != 900001 {
+		t.Fatalf("GetTxState mismatch: %+v err=%v", txSt, err)
 	}
-	invID, err := rc.EmitTxEvent(ctx, "tx123", TxEventInput{Kind: "mined", BlockHeight: 900001})
-	if err != nil || calledPath != "/NektarRuntime/emitTx/send" || invID != "inv_tx123" {
-		t.Fatalf("EmitTxEvent failed: path=%q invID=%q err=%v", calledPath, invID, err)
+	if _, err := wc.QueryInvocations(ctx, 10); err != nil {
+		t.Fatalf("QueryInvocations failed: %v", err)
 	}
 
 	// 3. Deterministic bps ranking & kill-switch refusal.

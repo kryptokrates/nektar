@@ -174,14 +174,243 @@ func printDoctorHuman(daemon *server.DaemonInfo, raw any) {
 }
 
 func cmdPeers(args []string) error {
+	if len(args) > 0 && (args[0] == "join" || args[0] == "leave") {
+		sub := args[0]
+		fs := flag.NewFlagSet("peers "+sub, flag.ExitOnError)
+		dataDir := fs.String("data-dir", "", "Data directory override")
+		asJSON := fs.Bool("json", false, "Machine-readable JSON output")
+		_ = fs.Parse(args[1:])
+		if fs.NArg() == 0 {
+			return fmt.Errorf("usage: nektar peers %s <domain-or-hub-url>", sub)
+		}
+		target := strings.TrimSpace(fs.Arg(0))
+		payload := map[string]any{"refresh": true}
+		if sub == "join" {
+			payload["joinHub"] = target
+		} else {
+			payload["leaveHub"] = target
+		}
+		if info, ok := detectDaemon(*dataDir, ""); ok {
+			out, err := callLiveTool(info, "peers", payload)
+			if err != nil {
+				return err
+			}
+			if *asJSON {
+				return printJSON(out)
+			}
+			if sub == "join" {
+				if m, ok := out.(map[string]any); ok {
+					fmt.Printf("✓ Joined LightBSV Hub: %v\n", m["joinedHub"])
+				}
+			} else {
+				fmt.Printf("✓ Disconnected Hub: %s\n", target)
+			}
+			return nil
+		}
+		ctx := context.Background()
+		rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
+		if err != nil {
+			return err
+		}
+		defer rt.closeFn()
+		tb := server.NewToolbox(rt.mem, rt.mkt, nil, rt.disc, nil, "operator")
+		var in server.PeersToolInput
+		in.Refresh = true
+		if sub == "join" {
+			in.JoinHub = target
+		} else {
+			in.LeaveHub = target
+		}
+		out, err := tb.ExecPeersWithInput(ctx, in)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return printJSON(out)
+		}
+		fmt.Printf("✓ Updated Hub list (%s %s)\n", sub, target)
+		return nil
+	}
+
 	fs := flag.NewFlagSet("peers", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "Data directory override")
+	asJSON := fs.Bool("json", false, "Machine-readable JSON output")
 	_ = fs.Parse(args)
+	var raw any
 	if info, ok := detectDaemon(*dataDir, ""); ok {
 		out, err := callLiveTool(info, "peers", map[string]any{"refresh": true})
 		if err == nil {
-			return printJSON(out)
+			raw = out
 		}
+	}
+	if raw == nil {
+		ctx := context.Background()
+		rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
+		if err != nil {
+			return err
+		}
+		defer rt.closeFn()
+		tb := server.NewToolbox(rt.mem, rt.mkt, nil, rt.disc, nil, "operator")
+		raw = tb.ExecPeers(ctx, true)
+	}
+	if *asJSON {
+		return printJSON(raw)
+	}
+	printPeersHuman(raw)
+	return nil
+}
+
+func printPeersHuman(raw any) {
+	b, err := json.Marshal(raw)
+	if err != nil {
+		_ = printJSON(raw)
+		return
+	}
+	var doc struct {
+		Hosts []string `json:"hosts"`
+		Hubs  []struct {
+			URL       string   `json:"url"`
+			Name      string   `json:"name"`
+			Source    string   `json:"source"`
+			Connected bool     `json:"connected"`
+			Reachable bool     `json:"reachable"`
+			LatencyMs int64    `json:"latencyMs"`
+			Role      string   `json:"role"`
+			FeePreset string   `json:"feePreset"`
+			Topics    []string `json:"topics"`
+		} `json:"hubs"`
+		Peers []struct {
+			Pub         string   `json:"pub"`
+			Handle      string   `json:"handle"`
+			IsHub       bool     `json:"isHub"`
+			SellDomains []string `json:"sellDomains"`
+		} `json:"peers"`
+		Bounties []struct {
+			ID         string `json:"id"`
+			Domain     string `json:"domain"`
+			Question   string `json:"question"`
+			RewardSats uint64 `json:"rewardSats"`
+		} `json:"bounties"`
+	}
+	if json.Unmarshal(b, &doc) != nil {
+		_ = printJSON(raw)
+		return
+	}
+	var out strings.Builder
+	out.WriteString("LIGHTBSV HUBS & DIRECTORY (opt-in via `nektar peers join <domain-or-url>`)\n")
+	if len(doc.Hubs) == 0 && len(doc.Hosts) == 0 {
+		out.WriteString("  (no Hubs configured — run `nektar hub up` or `nektar peers join https://nektar.run/hub`)\n")
+	} else {
+		for _, h := range doc.Hubs {
+			state := "discovered"
+			if h.Connected {
+				state = "CONNECTED"
+			} else if !h.Reachable {
+				state = "offline"
+			}
+			role := h.Role
+			if role == "" {
+				role = "leaf"
+			}
+			fee := h.FeePreset
+			if fee == "" {
+				fee = "free"
+			}
+			fmt.Fprintf(&out, "  [%-10s] %-26s role=%-5s fees=%-7s rtt=%dms  (%s)\n",
+				state, h.Name, role, fee, h.LatencyMs, h.URL)
+		}
+	}
+	out.WriteString("\nVERIFIED PEERS & HANDLES\n")
+	if len(doc.Peers) == 0 {
+		out.WriteString("  (0 peers cached yet — publish a capsule with `nektar sell` to announce your handle)\n")
+	} else {
+		for _, p := range doc.Peers {
+			label := p.Handle
+			if label == "" && len(p.Pub) >= 12 {
+				label = p.Pub[:12] + "…"
+			}
+			fmt.Fprintf(&out, "  • %-28s sell=%v hub=%v\n", label, p.SellDomains, p.IsHub)
+		}
+	}
+	out.WriteString("\nOPEN SATOSHI BOUNTIES (`nektar earn`)\n")
+	if len(doc.Bounties) == 0 {
+		out.WriteString("  (no open Hub bounties right now)\n")
+	} else {
+		for _, bo := range doc.Bounties {
+			fmt.Fprintf(&out, "  • [%d sats] #%-11s %s (id=%s)\n", bo.RewardSats, bo.Domain, bo.Question, bo.ID)
+		}
+	}
+	fmt.Print(formatConsoleText(out.String()))
+}
+
+func cmdBuy(args []string) error {
+	fs := flag.NewFlagSet("buy", flag.ExitOnError)
+	domains := fs.String("domains", "ops", "Comma-separated capsule domains (e.g. ops,debugging,mcp,api-quirks,bsv)")
+	question := fs.String("question", "", "Capsule or runbook question to buy")
+	maxSats := fs.Uint64("max", 100, "Max satoshis to pay")
+	minGrade := fs.String("min-grade", "", "Minimum NMU-1 grade (S|A|B|C)")
+	targetShard := fs.String("shard", "", "Target local repo/shard to import into")
+	noBounty := fs.Bool("no-bounty", false, "Do not auto-post a StandingOrder bounty if 0 immediate offers match")
+	bountyTTL := fs.Int64("bounty-ttl", 86400, "StandingOrder bounty TTL in seconds when 0 offers match")
+	dataDir := fs.String("data-dir", "", "Data directory override")
+	_ = fs.Parse(args)
+
+	q := strings.TrimSpace(*question)
+	if q == "" && fs.NArg() > 0 {
+		q = strings.TrimSpace(strings.Join(fs.Args(), " "))
+	}
+	if q == "" {
+		return errors.New("provide a question: `nektar buy -domains ops -question \"...\"` (or `nektar buy \"...\"`)")
+	}
+	postBounty := !*noBounty
+	info, ok := detectDaemon(*dataDir, "")
+	if !ok {
+		return errors.New("no live nektar daemon found — start one with `nektar up` first")
+	}
+	out, err := callLiveTool(info, "buyCapsule", map[string]any{
+		"domains":          strings.Split(*domains, ","),
+		"question":         q,
+		"maxSats":          *maxSats,
+		"minGrade":         strings.TrimSpace(*minGrade),
+		"targetShard":      strings.TrimSpace(*targetShard),
+		"postBounty":       postBounty,
+		"bountyTtlSeconds": *bountyTTL,
+	})
+	if err != nil {
+		return err
+	}
+	return printJSON(out)
+}
+
+func cmdImport(args []string) error {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
+	source := fs.String("source", "", "Path to .nkt file, https:// URL, or chirp:// URI")
+	repo := fs.String("repo", "", "Optional target local Memory Repo name")
+	branch := fs.String("branch", "", "Optional target branch (default: main)")
+	creator := fs.String("from", "", "Optional creator LightBSV handle (<handle>@domain)")
+	joinHub := fs.Bool("join-hub", false, "Automatically join the creator's Hub if reachable")
+	dataDir := fs.String("data-dir", "", "Data directory override")
+	_ = fs.Parse(args)
+
+	src := strings.TrimSpace(*source)
+	if src == "" && fs.NArg() > 0 {
+		src = strings.TrimSpace(fs.Arg(0))
+	}
+	if src == "" {
+		return errors.New("usage: nektar import <path-or-https-url.nkt> [--repo <name>] [--join-hub]")
+	}
+	if info, ok := detectDaemon(*dataDir, ""); ok {
+		out, err := callLiveTool(info, "importCapsule", map[string]any{
+			"source":         src,
+			"repo":           strings.TrimSpace(*repo),
+			"branch":         strings.TrimSpace(*branch),
+			"creatorHandle":  strings.TrimSpace(*creator),
+			"joinCreatorHub": *joinHub,
+		})
+		if err != nil {
+			return err
+		}
+		return printJSON(out)
 	}
 	ctx := context.Background()
 	rt, err := openRuntime(ctx, "", *dataDir, DefaultLocalPort)
@@ -190,7 +419,17 @@ func cmdPeers(args []string) error {
 	}
 	defer rt.closeFn()
 	tb := server.NewToolbox(rt.mem, rt.mkt, nil, rt.disc, nil, "operator")
-	return printJSON(tb.ExecPeers(ctx, true))
+	out, err := tb.ExecImportCapsule(ctx, server.ImportCapsuleInput{
+		Source:         src,
+		Repo:           strings.TrimSpace(*repo),
+		Branch:         strings.TrimSpace(*branch),
+		CreatorHandle:  strings.TrimSpace(*creator),
+		JoinCreatorHub: joinHub,
+	})
+	if err != nil {
+		return err
+	}
+	return printJSON(out)
 }
 
 func cmdWant(args []string) error {
@@ -240,9 +479,12 @@ func cmdWant(args []string) error {
 
 func cmdSell(args []string) error {
 	fs := flag.NewFlagSet("sell", flag.ExitOnError)
-	shard := fs.String("shard", "default", "Local shard to sell")
+	textFlag := fs.String("text", "", "Inline capsule text to PII-scrub, commit, anchor, and list in 1 step")
+	fileFlag := fs.String("file", "", "Optional .md/.txt/.nkt file to scrub, commit/import, anchor, and list in 1 step")
+	exportFlag := fs.String("export", "", "Optional output path to write a shareable .nkt capsule file")
+	shard := fs.String("shard", "default", "Local shard/repo to sell")
 	domains := fs.String("domains", "ops", "Comma-separated market domains")
-	price := fs.Uint64("price", 100, "Spot price in satoshis (0 disables spot when -query-price or -sub-price is set)")
+	price := fs.Uint64("price", 50, "Spot price in satoshis (0 disables spot when -query-price or -sub-price is set)")
 	perUnit := fs.Bool("per-unit", false, "Interpret -price as sats per verified triple (unit pricing)")
 	queryPrice := fs.Uint64("query-price", 0, "Enable NMU-1 per_query BRC-105 HTTP 402 recall at this satoshi price")
 	subPrice := fs.Uint64("sub-price", 0, "Enable NMU-1 subscription SSE feed (Grade S SLA) at this satoshi price")
@@ -262,11 +504,45 @@ func cmdSell(args []string) error {
 	dataDir := fs.String("data-dir", "", "Data directory override")
 	_ = fs.Parse(args)
 
+	visitedShard := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "shard" {
+			visitedShard = true
+		}
+	})
+
 	domList := []string{}
 	for _, d := range strings.Split(*domains, ",") {
 		if d = strings.TrimSpace(d); d != "" {
 			domList = append(domList, d)
 		}
+	}
+	if strings.TrimSpace(*textFlag) != "" || strings.TrimSpace(*fileFlag) != "" || strings.TrimSpace(*exportFlag) != "" {
+		info, ok := detectDaemon(*dataDir, "")
+		if !ok {
+			return errors.New("no live nektar daemon found — start one with `nektar up` first")
+		}
+		targetShard := *shard
+		if !visitedShard {
+			targetShard = ""
+		}
+		out, err := callLiveTool(info, "sellCapsule", map[string]any{
+			"text":        *textFlag,
+			"file":        *fileFlag,
+			"shard":       targetShard,
+			"domains":     domList,
+			"priceSats":   *price,
+			"description": *desc,
+			"ontologyId":  strings.TrimSpace(*ontologyID),
+			"exportPath":  strings.TrimSpace(*exportFlag),
+			"bountyId":    *bountyID,
+			"hubUrl":      *hubURL,
+			"seq":         *seq,
+		})
+		if err != nil {
+			return err
+		}
+		return printJSON(out)
 	}
 	var subDurSec int64
 	if *subPrice > 0 && *subDays > 0 {

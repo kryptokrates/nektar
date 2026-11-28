@@ -12,6 +12,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
+	"github.com/kryptokrates/nektar/internal/policy"
 	"github.com/kryptokrates/nektar/internal/reasoning"
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
@@ -106,15 +107,14 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 		})
 	}
 
-	// 2b. Restate durable execution readiness (required for live BSV market trades)
-	restateAttached := tb.broker != nil && tb.broker.RestateClient() != nil && tb.isRestateAlive()
+	// 2b. Embedded pure-Go go-workflows durable execution readiness
+	restateAttached := tb.broker != nil && tb.broker.RestateClient() != nil && tb.broker.RestateClient().IsRunning() && tb.isRestateAlive()
 	if tb.mem.Chain().Network() == "memory" {
-		checks = append(checks, DoctorCheck{Name: "restate", Status: "green", Detail: "memory network — local workflow execution active"})
+		checks = append(checks, DoctorCheck{Name: "workflows", Status: "green", Detail: "memory network — embedded go-workflows SQLite execution active"})
 	} else if restateAttached {
-		checks = append(checks, DoctorCheck{Name: "restate", Status: "green", Detail: "Restate durable execution attached (live BSV trades armed)"})
+		checks = append(checks, DoctorCheck{Name: "workflows", Status: "green", Detail: "embedded pure-Go go-workflows SQLite WAL active (zero sidecar)"})
 	} else {
-		checks = append(checks, DoctorCheck{Name: "restate", Status: "amber", Detail: "Restate durable executor not attached — memory & receipts work locally, live BSV trades require Restate"})
-		nextSteps = append(nextSteps, "Run `nektar restate-up` (macOS/Linux/Windows WSL2) then `nektar stop && nektar up` to arm live BSV trading")
+		checks = append(checks, DoctorCheck{Name: "workflows", Status: "amber", Detail: "embedded go-workflows worker not started yet"})
 	}
 
 	// 3. Operator policy check
@@ -327,12 +327,59 @@ func (tb *Toolbox) ExecDoctor(ctx context.Context) map[string]any {
 	}
 }
 
+// PeersToolInput drives the `peers` discovery & LightBSV Hub join tool across MCP, REST, and CLI.
+type PeersToolInput struct {
+	Refresh  bool   `json:"refresh,omitempty"`
+	JoinHub  string `json:"joinHub,omitempty"`
+	LeaveHub string `json:"leaveHub,omitempty"`
+}
+
 func (tb *Toolbox) ExecPeers(ctx context.Context, refresh bool) map[string]any {
+	res, _ := tb.ExecPeersWithInput(ctx, PeersToolInput{Refresh: refresh})
+	return res
+}
+
+func (tb *Toolbox) ExecPeersWithInput(ctx context.Context, in PeersToolInput) (map[string]any, error) {
+	cc := CallerContextFor(ctx, policy.Principal{})
+	var joinedURL string
+	var joinedDiscovered []string
+	if strings.TrimSpace(in.JoinHub) != "" {
+		if cc.FromHTTP && !cc.IsOperator {
+			return nil, fmt.Errorf("operator token required to join a Hub over HTTP")
+		}
+		if tb.disc == nil {
+			return nil, fmt.Errorf("discovery service unavailable")
+		}
+		u, disc, err := tb.disc.JoinHost(ctx, strings.TrimSpace(in.JoinHub))
+		if err != nil {
+			return nil, err
+		}
+		joinedURL = u
+		joinedDiscovered = disc
+		if tb.broker != nil {
+			_, _ = tb.broker.AnnounceSelf(ctx)
+		}
+		in.Refresh = true
+	}
+	if strings.TrimSpace(in.LeaveHub) != "" {
+		if cc.FromHTTP && !cc.IsOperator {
+			return nil, fmt.Errorf("operator token required to leave a Hub over HTTP")
+		}
+		if tb.disc == nil {
+			return nil, fmt.Errorf("discovery service unavailable")
+		}
+		if err := tb.disc.LeaveHost(strings.TrimSpace(in.LeaveHub)); err != nil {
+			return nil, err
+		}
+		in.Refresh = true
+	}
+
 	var peers []discovery.PeerInfo
 	var hosts []string
+	var hubs []discovery.HubCatalogEntry
 	if tb.disc != nil {
 		hosts = tb.disc.ActiveHosts()
-		if refresh {
+		if in.Refresh {
 			peers, _ = tb.disc.DiscoverPeers(ctx, hosts)
 		} else {
 			peers = tb.disc.Peers()
@@ -340,13 +387,20 @@ func (tb *Toolbox) ExecPeers(ctx context.Context, refresh bool) map[string]any {
 				peers, _ = tb.disc.DiscoverPeers(ctx, hosts)
 			}
 		}
+		hubs = tb.disc.ProbeHubCatalog(ctx, in.Refresh)
 	}
 	bounties := tb.fetchHubBounties(ctx, hosts)
-	return map[string]any{
+	out := map[string]any{
 		"hosts":    hosts,
+		"hubs":     hubs,
 		"peers":    peers,
 		"bounties": bounties,
 	}
+	if joinedURL != "" {
+		out["joinedHub"] = joinedURL
+		out["discoveredHubs"] = joinedDiscovered
+	}
+	return out, nil
 }
 
 func (tb *Toolbox) fetchHubBounties(ctx context.Context, hosts []string) []hub.Bounty {

@@ -118,10 +118,6 @@ func cmdServeWithContext(parentCtx context.Context, args []string) error {
 			return hErr == nil && tip >= bh && int(tip-bh)+1 >= depth
 		}
 	}
-	if obRep, oErr := market.ReconcileObligations(ctx, rt.mem.DB(), isTxSettled, time.Now().Unix()); oErr == nil && obRep.Checked > 0 {
-		log.Printf("reconciled %d surviving commercial obligation(s): fulfilled=%d overdue=%d refundClaimable=%d open=%d",
-			obRep.Checked, obRep.Fulfilled, obRep.MarkedOverdue, obRep.RefundClaimable, obRep.StillOpen)
-	}
 
 	// Cold-start zero-empty-room welcome shard + live UTXO sync & fan-out!
 	if _, err := rt.mem.EnsureWelcome(ctx); err != nil {
@@ -137,6 +133,23 @@ func cmdServeWithContext(parentCtx context.Context, args []string) error {
 		cancelBG()
 		postBootWG.Wait()
 	}()
+	// Reconcile surviving commercial obligations asynchronously post-bind on live networks so 500x10s
+	// proof HTTP checks never block net.Listen/readiness probes after a high-TPS restart.
+	if rt.mem != nil && rt.mem.Chain() != nil && rt.mem.Chain().Network() == "memory" {
+		if obRep, oErr := market.ReconcileObligations(ctx, rt.mem.DB(), isTxSettled, time.Now().Unix()); oErr == nil && obRep.Checked > 0 {
+			log.Printf("reconciled %d surviving commercial obligation(s): fulfilled=%d overdue=%d refundClaimable=%d open=%d",
+				obRep.Checked, obRep.Fulfilled, obRep.MarkedOverdue, obRep.RefundClaimable, obRep.StillOpen)
+		}
+	} else {
+		postBootWG.Add(1)
+		go func() {
+			defer postBootWG.Done()
+			if obRep, oErr := market.ReconcileObligations(bgCtx, rt.mem.DB(), isTxSettled, time.Now().Unix()); oErr == nil && obRep.Checked > 0 {
+				log.Printf("reconciled %d surviving commercial obligation(s): fulfilled=%d overdue=%d refundClaimable=%d open=%d",
+					obRep.Checked, obRep.Fulfilled, obRep.MarkedOverdue, obRep.RefundClaimable, obRep.StillOpen)
+			}
+		}()
+	}
 	if rt.mem.Chain().Network() != "memory" && rt.mem.Chain().BalanceSats() == 0 {
 		// Run initial wallet sync asynchronously so zero-env cold boot opens HTTP/MCP in <100ms
 		// instead of silently blocking up to 8s on empty fresh wallets.
@@ -236,6 +249,23 @@ func cmdServeWithContext(parentCtx context.Context, args []string) error {
 		defer backupMgr.Stop()
 	}
 
+	_ = *restateAddr // deprecated flag retained as no-op for legacy unit-file compatibility
+	rawAPITok := os.Getenv("NEKTAR_API_TOKEN")
+	rawOpTok := os.Getenv("NEKTAR_OPERATOR_TOKEN")
+	requireAuth := server.IsContainerEnv() || server.IsNonLoopbackListen(*addr)
+	apiTok, opTok, genTokens := server.ResolveOrGenerateTokens(rt.dataDir, rawAPITok, rawOpTok, requireAuth)
+	wfDataDir := rt.dataDir
+	if *ephemeral {
+		wfDataDir = ""
+	}
+	// Start durable workflows BEFORE registering broker.Stop() defer so LIFO shutdown drains Broker
+	// goroutines strictly BEFORE closing workflows.sqlite!
+	wfClient, err := rt.mkt.StartWorkflows(ctx, wfDataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rt.mkt.CloseWorkflows() }()
+
 	jevMatcher := buildJevMatcherFromEnv(rt.mem.Chain().Network())
 	broker := market.NewBroker(rt.mem, rt.mkt, rt.disc, market.BrokerConfig{
 		PublicURL:  pubURL,
@@ -256,22 +286,19 @@ func cmdServeWithContext(parentCtx context.Context, args []string) error {
 		broker.SetAdvertisedPacks(liqState.Packs, liqState.BountyDomains)
 	}
 	if hubNode != nil {
-		stopEngineSrv := wireEmbeddedHub(ctx, rt, hubNode, upstreamSpines)
+		stopEngineSrv := wireEmbeddedHub(ctx, rt, hubNode, upstreamSpines, pubURL)
 		defer stopEngineSrv()
 	}
+	stopReconcileFloor := startPeriodicReconciliationFloor(ctx, rt, hubNode, isTxSettled)
+	defer stopReconcileFloor()
 
-	rawAPITok := os.Getenv("NEKTAR_API_TOKEN")
-	rawOpTok := os.Getenv("NEKTAR_OPERATOR_TOKEN")
-	requireAuth := server.IsContainerEnv() || server.IsNonLoopbackListen(*addr)
-	apiTok, opTok, genTokens := server.ResolveOrGenerateTokens(rt.dataDir, rawAPITok, rawOpTok, requireAuth)
-	restateAdminDisplay := strings.TrimSpace(os.Getenv("NEKTAR_RESTATE_ADMIN"))
 	app, err := server.NewApp(rt.mem, rt.mkt, server.Config{
 		ListenAddr:        *addr,
 		PublicURL:         pubURL,
 		DataDir:           rt.dataDir,
 		APIToken:          apiTok,
 		OperatorToken:     opTok,
-		ToolProfile:       envOr("NEKTAR_TOOL_PROFILE", "operator"),
+		ToolProfile:       envOr("NEKTAR_TOOL_PROFILE", "agent"),
 		ToolPrices:        parseToolPricesEnv(os.Getenv("NEKTAR_TOOL_PRICES")),
 		OpenAIUpstream:    os.Getenv("NEKTAR_OPENAI_UPSTREAM"),
 		AnthropicUpstream: os.Getenv("NEKTAR_ANTHROPIC_UPSTREAM"),
@@ -280,7 +307,8 @@ func cmdServeWithContext(parentCtx context.Context, args []string) error {
 		Broker:            broker,
 		Watchdog:          watchdog,
 		Backup:            backupMgr,
-		RestateAdminURL:   restateAdminDisplay,
+		RestateClient:     wfClient,
+		RestateAdminURL:   "embedded://workflows.sqlite",
 		ExposeWalletWire:  os.Getenv("NEKTAR_EXPOSE_WALLET_WIRE") == "1",
 	})
 	if err != nil {
@@ -288,6 +316,11 @@ func cmdServeWithContext(parentCtx context.Context, args []string) error {
 	}
 	appRef.Store(app)
 	defer app.Close()
+
+	// Phase-order (ARCH-F2): arm durable go-workflows hooks & chain callbacks BEFORE accepting TCP/SSE traffic!
+	stopWorkflowHooks := attachRestateClient(ctx, rt, broker, app, wfClient, "embedded://workflows.sqlite", wfClient.IsRunning)
+	defer stopWorkflowHooks()
+	wireChainCallbacks(ctx, rt, broker, hubNode, liqState)
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -304,6 +337,8 @@ func cmdServeWithContext(parentCtx context.Context, args []string) error {
 	httpSrv := &http.Server{
 		Handler:           app.Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 		BaseContext: func(net.Listener) context.Context {
 			return drainCtx
 		},
@@ -320,47 +355,16 @@ func cmdServeWithContext(parentCtx context.Context, args []string) error {
 		if hubNode != nil {
 			hubNode.CloseSSE()
 		}
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(shutCtx)
 		cancelDrain()
 	}()
 
-	// Listener is already accepting TCP connections: self-join embedded Hub and start Broker loops before Restate.
 	if *withHub {
 		_, _, _ = rt.disc.JoinHost(ctx, actualURL+"/hub")
 	}
-	wireChainCallbacks(ctx, rt, broker, hubNode, liqState)
 	broker.Start(ctx)
-
-	// Start active Restate durable execution plane (dedicated h2c endpoint + auto-supervised or external restate-server).
-	var restateAlive atomic.Bool
-	restateAlive.Store(true)
-	restateClient, stopRestate, err := StartRestatePlane(ctx, rt.mkt, RestateRuntimeConfig{
-		ListenAddr:            *restateAddr,
-		DataDir:               rt.dataDir,
-		ExternalIngressURL:    os.Getenv("NEKTAR_RESTATE_URL"),
-		ExternalAdminURL:      os.Getenv("NEKTAR_RESTATE_ADMIN"),
-		EndpointURI:           os.Getenv("NEKTAR_RESTATE_ENDPOINT_URI"),
-		IdentityPublicKey:     os.Getenv("NEKTAR_RESTATE_IDENTITY_KEY"),
-		AllowInsecureEndpoint: os.Getenv("NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT") == "1",
-		InternalToken:         os.Getenv("NEKTAR_RESTATE_INTERNAL_TOKEN"),
-		DisableAutoStart:      os.Getenv("NEKTAR_RESTATE_DISABLE") == "1",
-		Required:              os.Getenv("NEKTAR_RESTATE_REQUIRED") == "1",
-		OnUnexpectedExit: func(error) {
-			restateAlive.Store(false)
-			app.BroadcastDashboardEvent("restate_exited")
-		},
-	})
-	if err != nil {
-		stop()
-		<-shutdownDone
-		return err
-	}
-	defer stopRestate()
-
-	stopRestateHooks := attachRestateClient(ctx, rt, broker, app, restateClient, restateAdminDisplay, restateAlive.Load)
-	defer stopRestateHooks()
 
 	// Write daemon.json + active-daemon.json so `nektar mcp`, `nektar open`, `nektar hook`, `nektar dock`,
 	// Hermes, and OpenClaw auto-discover us across both Mainnet and Testnet!

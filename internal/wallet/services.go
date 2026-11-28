@@ -20,26 +20,36 @@ import (
 // directly lets Nektar use go-wallet-toolbox/pkg/wallet + pkg/storage WITHOUT importing
 // go-wallet-toolbox/pkg/services (eliminating all Kubernetes, Teranode, libp2p, and AWS deps).
 type bcommonServices struct {
-	cfg            Config
-	txCache        *txLRU
-	ownedOutputSum func(txid string) (uint64, bool)
-	isIncomingTx   func(txid string) bool
-	loadTxFromDB   func(ctx context.Context, txid string) *transaction.Transaction
-	loadBeefFromDB func(ctx context.Context, txid string) (*transaction.Beef, error)
+	cfg                     Config
+	txCache                 *txLRU
+	ownedOutputSum          func(txid string) (uint64, bool)
+	isIncomingTx            func(txid string) bool
+	loadTxFromDB            func(ctx context.Context, txid string) *transaction.Transaction
+	loadBeefFromDB          func(ctx context.Context, txid string) (*transaction.Beef, error)
+	onAsyncBroadcastFailure func(txid string)
 
-	errMu        sync.Mutex
-	lastErr      map[string]error
-	plannedSpend map[string]uint64
+	errMu            sync.Mutex
+	lastErr          map[string]error
+	lastErrKeys      []string
+	lastErrHead      int
+	plannedSpend     map[string]uint64
+	plannedSpendKeys []string
+	plannedSpendHead int
 }
 
 var _ wdk.Services = (*bcommonServices)(nil)
+
+const (
+	maxPlannedSpendEntries = 65536
+	maxLastErrEntries      = 16384
+)
 
 func newBcommonServices(cfg Config, cache *txLRU) *bcommonServices {
 	return &bcommonServices{
 		cfg:          cfg,
 		txCache:      cache,
-		lastErr:      make(map[string]error),
-		plannedSpend: make(map[string]uint64),
+		lastErr:      make(map[string]error, 256),
+		plannedSpend: make(map[string]uint64, 1024),
 	}
 }
 
@@ -48,8 +58,19 @@ func (s *bcommonServices) setPlannedSpend(txid string, externalSats uint64) {
 		return
 	}
 	s.errMu.Lock()
-	if len(s.plannedSpend) > 512 {
-		clear(s.plannedSpend)
+	if _, exists := s.plannedSpend[txid]; !exists {
+		for len(s.plannedSpend) >= maxPlannedSpendEntries && s.plannedSpendHead < len(s.plannedSpendKeys) {
+			old := s.plannedSpendKeys[s.plannedSpendHead]
+			s.plannedSpendKeys[s.plannedSpendHead] = ""
+			s.plannedSpendHead++
+			delete(s.plannedSpend, old)
+		}
+		if s.plannedSpendHead > 0 && s.plannedSpendHead*2 >= len(s.plannedSpendKeys) {
+			rem := copy(s.plannedSpendKeys, s.plannedSpendKeys[s.plannedSpendHead:])
+			s.plannedSpendKeys = s.plannedSpendKeys[:rem]
+			s.plannedSpendHead = 0
+		}
+		s.plannedSpendKeys = append(s.plannedSpendKeys, txid)
 	}
 	s.plannedSpend[txid] = externalSats
 	s.errMu.Unlock()
@@ -67,8 +88,19 @@ func (s *bcommonServices) setLastErr(txid string, err error) {
 		return
 	}
 	s.errMu.Lock()
-	if len(s.lastErr) > 256 {
-		clear(s.lastErr)
+	if _, exists := s.lastErr[txid]; !exists {
+		for len(s.lastErr) >= maxLastErrEntries && s.lastErrHead < len(s.lastErrKeys) {
+			old := s.lastErrKeys[s.lastErrHead]
+			s.lastErrKeys[s.lastErrHead] = ""
+			s.lastErrHead++
+			delete(s.lastErr, old)
+		}
+		if s.lastErrHead > 0 && s.lastErrHead*2 >= len(s.lastErrKeys) {
+			rem := copy(s.lastErrKeys, s.lastErrKeys[s.lastErrHead:])
+			s.lastErrKeys = s.lastErrKeys[:rem]
+			s.lastErrHead = 0
+		}
+		s.lastErrKeys = append(s.lastErrKeys, txid)
 	}
 	s.lastErr[txid] = err
 	s.errMu.Unlock()

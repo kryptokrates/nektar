@@ -92,6 +92,7 @@ func jsonTargets(home string) []jsonTarget {
 		{ID: "continue", Label: "Continue", Tier: "L1", TierLabel: "MCP Tools", Summary: "Adds Nektar MCP server to Continue.", Path: filepath.Join(home, ".continue", "mcpServers", "nektar.json"), RootKey: "mcpServers", Mode: "stdio"},
 		{ID: "opencode", Label: "OpenCode", Tier: "L1", TierLabel: "MCP Tools", Summary: "Connects OpenCode via nektar stdio bridge (auto-discovers live daemon).", Path: filepath.Join(home, ".config", "opencode", "opencode.json"), RootKey: "mcp", Mode: "opencode"},
 		{ID: "gemini", Label: "Gemini CLI", Tier: "L1", TierLabel: "MCP Tools", Summary: "Connects Gemini CLI via nektar stdio bridge (auto-discovers live daemon).", Path: filepath.Join(home, ".gemini", "settings.json"), RootKey: "mcpServers", Mode: "stdio"},
+		{ID: "antigravity", Label: "Antigravity", Tier: "L2", TierLabel: "MCP + Skill", Summary: "Wires Nektar stdio MCP server and installs nektar-memory SKILL.md into Antigravity.", Path: filepath.Join(home, ".gemini", "antigravity", "mcp_config.json"), RootKey: "mcpServers", Mode: "stdio"},
 	}
 }
 
@@ -127,6 +128,8 @@ func DetectAll(home string) []ClientStatus {
 		if t.ID == "claude" {
 			// Home directory always exists; detect Claude Code via ~/.claude dir or existing ~/.claude.json
 			detected = dirExists(filepath.Join(home, ".claude")) || fileExists(t.Path)
+		} else if t.ID == "antigravity" {
+			detected = dirExists(filepath.Join(home, ".gemini", "antigravity")) || fileExists(t.Path)
 		}
 		docked := IsJSONEntryDocked(t.Path, t.RootKey, "nektar")
 		out = append(out, ClientStatus{
@@ -199,6 +202,19 @@ func DetectAll(home string) []ClientStatus {
 		Docked:     strings.Contains(string(gooseRaw), "# BEGIN NEKTAR MCP"),
 		OneClick:   true,
 	})
+
+	openaiEnvPath := filepath.Join(home, ".nektar", "openai.env")
+	out = append(out, ClientStatus{
+		ID:         "openai",
+		Label:      "OpenAI SDK / Responses",
+		Tier:       "L1",
+		TierLabel:  "L0 Proxy + Agents SDK MCP",
+		Summary:    "Writes ready-to-source OPENAI_BASE_URL memory proxy env and OpenAI Agents/Responses MCP config.",
+		ConfigPath: openaiEnvPath,
+		Detected:   dirExists(filepath.Join(home, ".openai")) || fileExists(openaiEnvPath),
+		Docked:     fileExists(openaiEnvPath),
+		OneClick:   true,
+	})
 	return out
 }
 
@@ -263,6 +279,8 @@ func Apply(opts Options, targets []string) []ApplyResult {
 		detected := dirExists(filepath.Dir(t.Path))
 		if t.ID == "claude" {
 			detected = dirExists(filepath.Join(home, ".claude")) || fileExists(t.Path)
+		} else if t.ID == "antigravity" {
+			detected = dirExists(filepath.Join(home, ".gemini", "antigravity")) || fileExists(t.Path)
 		}
 		if explicit && !selected[t.ID] {
 			continue
@@ -295,6 +313,14 @@ func Apply(opts Options, targets []string) []ApplyResult {
 				res.Files = append(res.Files, skillDst)
 				res.Notes = append(res.Notes, "skill -> "+skillDst)
 			}
+		} else if t.ID == "antigravity" {
+			agySkill := filepath.Join(home, ".gemini", "antigravity", "skills", "nektar-memory", "SKILL.md")
+			if sChanged, sErr := installEmbeddedSkill(agySkill, opts.Dry, opts.Uninstall); sErr == nil && sChanged {
+				res.Changed = true
+				res.Files = append(res.Files, agySkill)
+				res.Notes = append(res.Notes, "skill -> "+agySkill)
+			}
+			wantUniversalSkill = true
 		} else if t.ID == "cursor" || t.ID == "windsurf" || t.ID == "gemini" || t.ID == "opencode" || t.ID == "cline" {
 			wantUniversalSkill = true
 		}
@@ -357,6 +383,11 @@ func Apply(opts Options, targets []string) []ApplyResult {
 	if wantUniversalSkill {
 		agentSkill := filepath.Join(home, ".agents", "skills", "nektar-memory", "SKILL.md")
 		_, _ = installEmbeddedSkill(agentSkill, opts.Dry, opts.Uninstall)
+	}
+
+	openaiEnvPath := filepath.Join(home, ".nektar", "openai.env")
+	if (explicit && selected["openai"]) || (!explicit && (dirExists(filepath.Join(home, ".openai")) || fileExists(openaiEnvPath))) {
+		results = append(results, dockOpenAI(home, exePath, liveURL, opts.Token, opts.Dry, opts.Uninstall))
 	}
 
 	if selected["proxy"] {

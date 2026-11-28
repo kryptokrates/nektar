@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/go-sdk/spv"
 	"github.com/bsv-blockchain/go-sdk/transaction/chaintracker"
 	"github.com/lightwebinc/bcommon/headers"
+	"golang.org/x/sync/singleflight"
 )
 
 // Default settle depths (confirmations required before irreversible value-final settlement).
@@ -88,6 +90,9 @@ type WitnessedTracker struct {
 	cache       map[uint32]cachedHeader
 	cachedTip   uint32
 	cachedTipAt time.Time
+
+	tipSF singleflight.Group
+	hdrSF singleflight.Group
 
 	reorgMu    sync.RWMutex
 	reorgHooks []ReorgHandler
@@ -222,6 +227,34 @@ func (t *WitnessedTracker) ActivationHeights() scriptflag.ActivationHeights {
 	}
 }
 
+func (t *WitnessedTracker) fetchAndLinkHeaderShared(ctx context.Context, height uint32) (cachedHeader, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return cachedHeader{}, err
+	}
+	key := strconv.FormatUint(uint64(height), 10)
+	ch := t.hdrSF.DoChan(key, func() (any, error) {
+		if hit, ok := t.getCachedHeader(height); ok {
+			return hit, nil
+		}
+		sfCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancel()
+		entry, _, err := t.fetchAndLinkHeader(sfCtx, height, true)
+		return entry, err
+	})
+	select {
+	case <-ctx.Done():
+		return cachedHeader{}, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return cachedHeader{}, res.Err
+		}
+		return res.Val.(cachedHeader), nil
+	}
+}
+
 // HeaderAt returns a verified, PoW-checked, Prev-hash-linked, multi-witness-agreed header at height.
 func (t *WitnessedTracker) HeaderAt(ctx context.Context, height uint32) (*headers.Header, error) {
 	if t.isNativeOnly() {
@@ -231,7 +264,7 @@ func (t *WitnessedTracker) HeaderAt(ctx context.Context, height uint32) (*header
 		hdr := hit.hdr
 		return &hdr, nil
 	}
-	entry, _, err := t.fetchAndLinkHeader(ctx, height, true)
+	entry, err := t.fetchAndLinkHeaderShared(ctx, height)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +279,7 @@ func (t *WitnessedTracker) HeaderBytes(ctx context.Context, height uint32) ([]by
 		copy(out, hit.raw[:])
 		return out, nil
 	}
-	entry, _, err := t.fetchAndLinkHeader(ctx, height, true)
+	entry, err := t.fetchAndLinkHeaderShared(ctx, height)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +321,7 @@ func (t *WitnessedTracker) IsValidRootForHeight(ctx context.Context, root *chain
 		return false, nil
 	}
 
-	entry, _, err := t.fetchAndLinkHeader(ctx, height, true)
+	entry, err := t.fetchAndLinkHeaderShared(ctx, height)
 	if err != nil {
 		if errors.Is(err, headers.ErrUnknownHeight) {
 			return false, nil
@@ -333,6 +366,34 @@ func (t *WitnessedTracker) CurrentHeight(ctx context.Context) (uint32, error) {
 		return h, nil
 	}
 
+	t.mu.RLock()
+	if t.cachedTip > 0 && time.Since(t.cachedTipAt) < t.tipCacheTTL {
+		tip := t.cachedTip
+		t.mu.RUnlock()
+		return tip, nil
+	}
+	t.mu.RUnlock()
+
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	ch := t.tipSF.DoChan("tip", func() (any, error) {
+		sfCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancel()
+		return t.fetchCurrentHeightUncached(sfCtx)
+	})
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return 0, res.Err
+		}
+		return res.Val.(uint32), nil
+	}
+}
+
+func (t *WitnessedTracker) fetchCurrentHeightUncached(ctx context.Context) (uint32, error) {
 	t.mu.RLock()
 	if t.cachedTip > 0 && time.Since(t.cachedTipAt) < t.tipCacheTTL {
 		tip := t.cachedTip

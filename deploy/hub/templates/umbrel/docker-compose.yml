@@ -7,27 +7,10 @@ services:
       APP_PORT: 18420
       PROXY_AUTH_ADD: 'false'
 
-  restate:
-    image: docker.restate.dev/restatedev/restate:1.8.1
-    restart: on-failure
-    environment:
-      RESTATE_NODE_NAME: nektar-hub
-      RESTATE_BASE_DIR: /restate-data
-    healthcheck:
-      test: ['CMD', 'bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/9070 && printf "GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && grep -q "200" <&3']
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    volumes:
-      - ${APP_DATA_DIR}/restate-data:/restate-data
-
   agent:
     image: ghcr.io/kryptokrates/nektar:latest
     restart: on-failure
-    command: ['serve', '-listen', ':18420', '-restate-listen', ':9080', '-hub']
-    depends_on:
-      restate:
-        condition: service_healthy
+    command: ['serve', '-listen', ':18420', '-hub']
     environment:
       NEKTAR_NETWORK: testnet
       NEKTAR_DATA_DIR: /data
@@ -36,10 +19,6 @@ services:
       NEKTAR_TRUST_PROXY: '1'
       NEKTAR_PUBLIC_URL: ${NEKTAR_PUBLIC_URL:-}
       NEKTAR_SEED_DOMAINS: '*'
-      NEKTAR_RESTATE_URL: http://restate:8080
-      NEKTAR_RESTATE_ADMIN: http://restate:9070
-      NEKTAR_RESTATE_ENDPOINT_URI: http://agent:9080
-      NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT: '1'
     volumes:
       - ${APP_DATA_DIR}/data:/data
     healthcheck:

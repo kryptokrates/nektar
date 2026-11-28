@@ -150,8 +150,8 @@ func (d *DB) SaveReputationAttestation(r ReputationAttestationRow) error {
 
 // ListReputationAttestations returns verified attestations filtered by ontologyID (empty = all).
 func (d *DB) ListReputationAttestations(ontologyID string, limit int) ([]ReputationAttestationRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, unlock := d.rdb()
+	defer unlock()
 	if limit <= 0 || limit > 5000 {
 		limit = 2000
 	}
@@ -159,12 +159,12 @@ func (d *DB) ListReputationAttestations(ontologyID string, limit int) ([]Reputat
 	var err error
 	ont := strings.ToLower(strings.TrimSpace(ontologyID))
 	if ont != "" && ont != "global" {
-		rows, err = d.sql.Query(`
+		rows, err = rdb.Query(`
 			SELECT attest_hash, role, issuer_pub, subject_pub, ontology_id, deal_id, deal_receipt_hash,
 				token, evidence_hash, acc_bp, cons_bp, disp_bp, pred_bp, collab_bp, prov_bp, composite_bp, created_at
 			FROM reputation_attestations WHERE ontology_id = ? ORDER BY created_at DESC LIMIT ?`, ont, limit)
 	} else {
-		rows, err = d.sql.Query(`
+		rows, err = rdb.Query(`
 			SELECT attest_hash, role, issuer_pub, subject_pub, ontology_id, deal_id, deal_receipt_hash,
 				token, evidence_hash, acc_bp, cons_bp, disp_bp, pred_bp, collab_bp, prov_bp, composite_bp, created_at
 			FROM reputation_attestations ORDER BY created_at DESC LIMIT ?`, limit)
@@ -189,37 +189,61 @@ func (d *DB) ListReputationAttestations(ontologyID string, limit int) ([]Reputat
 
 // UpsertReputation6D saves or replaces a computed 6D reputation vector for (subject_pub, ontology_id).
 func (d *DB) UpsertReputation6D(r Reputation6DRow) error {
+	return d.UpsertReputation6DBatch([]Reputation6DRow{r})
+}
+
+// UpsertReputation6DBatch atomically upserts a slice of 6D reputation vectors inside ONE SQLite transaction.
+func (d *DB) UpsertReputation6DBatch(rows []Reputation6DRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if r.UpdatedAt == 0 {
-		r.UpdatedAt = time.Now().Unix()
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
 	}
-	ont := strings.ToLower(strings.TrimSpace(r.OntologyID))
-	if ont == "" {
-		ont = "global"
-	}
-	_, err := d.sql.Exec(`
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.Prepare(`
 		INSERT OR REPLACE INTO reputation_6d (
 			subject_pub, ontology_id, acc_bp, cons_bp, disp_bp, pred_bp, collab_bp, prov_bp,
 			eigentrust_bp, composite_bp, direct_deals, attest_count, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		strings.ToLower(strings.TrimSpace(r.SubjectPub)), ont,
-		r.AccBP, r.ConsBP, r.DispBP, r.PredBP, r.CollabBP, r.ProvBP,
-		r.EigenTrustBP, r.CompositeBP, r.DirectDeals, r.AttestCount, r.UpdatedAt,
-	)
-	return err
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	now := time.Now().Unix()
+	for _, r := range rows {
+		upd := r.UpdatedAt
+		if upd == 0 {
+			upd = now
+		}
+		ont := strings.ToLower(strings.TrimSpace(r.OntologyID))
+		if ont == "" {
+			ont = "global"
+		}
+		if _, err := stmt.Exec(
+			strings.ToLower(strings.TrimSpace(r.SubjectPub)), ont,
+			r.AccBP, r.ConsBP, r.DispBP, r.PredBP, r.CollabBP, r.ProvBP,
+			r.EigenTrustBP, r.CompositeBP, r.DirectDeals, r.AttestCount, upd,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // GetReputation6D fetches the 6D reputation vector for (subjectPub, ontologyID).
 func (d *DB) GetReputation6D(subjectPub, ontologyID string) (Reputation6DRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, unlock := d.rdb()
+	defer unlock()
 	ont := strings.ToLower(strings.TrimSpace(ontologyID))
 	if ont == "" {
 		ont = "global"
 	}
 	var r Reputation6DRow
-	err := d.sql.QueryRow(`
+	err := rdb.QueryRow(`
 		SELECT subject_pub, ontology_id, acc_bp, cons_bp, disp_bp, pred_bp, collab_bp, prov_bp,
 			eigentrust_bp, composite_bp, direct_deals, attest_count, updated_at
 		FROM reputation_6d WHERE subject_pub = ? AND ontology_id = ?`,
@@ -232,8 +256,8 @@ func (d *DB) GetReputation6D(subjectPub, ontologyID string) (Reputation6DRow, er
 
 // ListReputation6D lists computed 6D vectors filtered by ontologyID (empty = all), highest composite first.
 func (d *DB) ListReputation6D(ontologyID string, limit int) ([]Reputation6DRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, unlock := d.rdb()
+	defer unlock()
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
@@ -241,12 +265,12 @@ func (d *DB) ListReputation6D(ontologyID string, limit int) ([]Reputation6DRow, 
 	var err error
 	ont := strings.ToLower(strings.TrimSpace(ontologyID))
 	if ont != "" {
-		rows, err = d.sql.Query(`
+		rows, err = rdb.Query(`
 			SELECT subject_pub, ontology_id, acc_bp, cons_bp, disp_bp, pred_bp, collab_bp, prov_bp,
 				eigentrust_bp, composite_bp, direct_deals, attest_count, updated_at
 			FROM reputation_6d WHERE ontology_id = ? ORDER BY composite_bp DESC, eigentrust_bp DESC LIMIT ?`, ont, limit)
 	} else {
-		rows, err = d.sql.Query(`
+		rows, err = rdb.Query(`
 			SELECT subject_pub, ontology_id, acc_bp, cons_bp, disp_bp, pred_bp, collab_bp, prov_bp,
 				eigentrust_bp, composite_bp, direct_deals, attest_count, updated_at
 			FROM reputation_6d ORDER BY composite_bp DESC, eigentrust_bp DESC LIMIT ?`, limit)
@@ -287,12 +311,12 @@ func (d *DB) RecordDealOutcome(row DealOutcomeRow) error {
 
 // ListDealOutcomes returns recent deal outcome records newest first.
 func (d *DB) ListDealOutcomes(limit int) ([]DealOutcomeRow, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, unlock := d.rdb()
+	defer unlock()
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := d.sql.Query(`
+	rows, err := rdb.Query(`
 		SELECT deal_id, subject_pub, ontology_id, exit_code, note, recorded_at
 		FROM deal_outcomes ORDER BY recorded_at DESC LIMIT ?`, limit)
 	if err != nil {

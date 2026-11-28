@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -11,8 +12,8 @@ import (
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
-	"github.com/kryptokrates/nektar/internal/distill"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/policy"
@@ -21,20 +22,75 @@ import (
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
+// HandleDirectQuote verifies a Buyer's signed DirectQuoteRequest and returns a signed OfferAd
+// directly over HTTP, skipping Hub WantAd/OfferAd round-trips while enforcing identical Cedar/NMU/SPV rules.
+func (b *Broker) HandleDirectQuote(ctx context.Context, req DirectQuoteRequest) (*bstack.OfferAd, error) {
+	if strings.TrimSpace(req.BuyerPub) == "" || strings.TrimSpace(req.BuyerSig) == "" {
+		return nil, errors.New("market: signed direct quote request (buyerPub + buyerSig) is required")
+	}
+	nowUnix := time.Now().Unix()
+	if req.TS < nowUnix-300 || req.TS > nowUnix+300 {
+		return nil, errors.New("market: expired or missing direct quote timestamp")
+	}
+	if err := bstack.VerifyArtifact(req.BuyerPub, req.BuyerSig, req); err != nil {
+		return nil, fmt.Errorf("market: invalid direct quote signature: %w", err)
+	}
+	wantID := strings.TrimSpace(req.WantID)
+	if wantID == "" {
+		wantID = "dq-" + randIDHex()
+	}
+	want := bstack.WantAd{
+		WantID:  wantID,
+		Pub:     req.BuyerPub,
+		Net:     b.mem.Chain().Network(),
+		Domains: req.Domains,
+		Query:   req.Query,
+		MaxSats: req.MaxSats,
+		Exp:     time.Now().Add(5 * time.Minute).UnixMilli(),
+	}
+	offer, _, ok := b.buildOfferForWant(ctx, want, true)
+	if !ok || offer == nil {
+		return nil, errors.New("market: no matching sellable fragment for direct quote")
+	}
+	return offer, nil
+}
+
 // autoQuoteWant inspects an incoming verified WantAd and automatically quotes our best matching anchored fragment.
 func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
-	_ = SyncPolicyFromDB(b.mem.DB(), b.engine.Policy())
+	offer, offerPayload, ok := b.buildOfferForWant(ctx, want, false)
+	if !ok || offer == nil {
+		return
+	}
+	topics := topicsForMarketAd(offer.Net, offer.Domains, offer.OntologyID)
+	if subN, subErr := b.disc.BuildAndSubmitMarketAd(ctx, b.engine.signer, offerPayload, b.disc.ActiveHosts(), topics); subN == 0 && subErr != nil {
+		log.Printf("market: submit OfferAd %s (want=%s) failed: %v", offer.OfferID, want.WantID, subErr)
+	}
+}
+
+func (b *Broker) buildOfferForWant(ctx context.Context, want bstack.WantAd, directOnly bool) (*bstack.OfferAd, bstack.MarketPayload, bool) {
+	fj := b.engine.FastJournal()
+	if fj != nil {
+		fj.CachedPolicySync(b.mem.DB(), b.engine.Policy())
+	} else {
+		_ = SyncPolicyFromDB(b.mem.DB(), b.engine.Policy())
+	}
 	kill, _, _, _, _, _, sellerOK := b.engine.Policy().Snapshot()
 	if kill {
-		return
+		return nil, bstack.MarketPayload{}, false
 	}
 	// Hub makers or explicitly approved sellers quote automatically.
 	if !b.cfg.IsHub && !sellerOK {
-		return
+		return nil, bstack.MarketPayload{}, false
 	}
-	listings, err := b.mem.DB().ListSellListings()
+	var listings []store.SellListing
+	var err error
+	if fj != nil {
+		listings, err = fj.CachedListings(b.mem.DB())
+	} else {
+		listings, err = b.mem.DB().ListSellListings()
+	}
 	if err != nil || len(listings) == 0 {
-		return
+		return nil, bstack.MarketPayload{}, false
 	}
 	wantDoms := make(map[string]bool, len(want.Domains))
 	for _, d := range want.Domains {
@@ -53,7 +109,7 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		if !l.Active {
 			continue
 		}
-		if !l.SupportsMode(wantMode) {
+		if !l.SupportsMode(string(wantMode)) {
 			continue
 		}
 		if !l.PricePerUnit && wantMode == nmu.ModeSpot && want.MaxSats > 0 && l.PriceSats > want.MaxSats {
@@ -67,7 +123,7 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		}
 	}
 	if len(eligibleListings) == 0 {
-		return
+		return nil, bstack.MarketPayload{}, false
 	}
 
 	b.mu.RLock()
@@ -78,7 +134,9 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 
 	var offerBondOutpoint, offerBondBEEF string
 	hasActiveBond := false
-	if bRec, _, bErr := LoadActiveBond(b.mem.DB()); bErr == nil && bRec != nil && !bRec.State.Seized {
+	if fj != nil {
+		hasActiveBond, offerBondOutpoint, offerBondBEEF = fj.CachedActiveBond(b.mem.DB())
+	} else if bRec, _, bErr := LoadActiveBond(b.mem.DB()); bErr == nil && bRec != nil && !bRec.State.Seized {
 		hasActiveBond = true
 		offerBondOutpoint = bRec.Outpoint()
 		if len(bRec.BEEFHex) <= 8192 {
@@ -86,23 +144,36 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		}
 	}
 
-	// Cap active pendingSales (total + per-buyer) to prevent WantAd flood RAM/CHIRP/workflow exhaustion.
+	// Cap active unsettled pendingSales (total + per-buyer) without O(N) map scans on fast paths.
 	nowCheck := time.Now().Unix()
-	b.mu.Lock()
-	buyerActive := 0
-	for id, old := range b.pendingSales {
-		if old.ExpiresAt > 0 && old.ExpiresAt < nowCheck {
-			delete(b.pendingSales, id)
-			continue
+	if fj != nil {
+		b.mu.RLock()
+		overCap := len(b.pendingSales) >= maxPendingSalesTotal
+		b.mu.RUnlock()
+		if overCap {
+			return nil, bstack.MarketPayload{}, false
 		}
-		if old.BuyerPub == want.Pub {
-			buyerActive++
+	} else {
+		b.mu.Lock()
+		buyerActive := 0
+		for id, old := range b.pendingSales {
+			if old.Settled || (old.ExpiresAt > 0 && old.ExpiresAt < nowCheck) {
+				core.Zero32Array(&old.RevealKey)
+				if old.SaleOffer != nil {
+					old.SaleOffer.ClearContentKey()
+				}
+				delete(b.pendingSales, id)
+				continue
+			}
+			if old.BuyerPub == want.Pub {
+				buyerActive++
+			}
 		}
-	}
-	overCap := len(b.pendingSales) >= maxPendingSalesTotal || buyerActive >= maxPendingSalesPerBuyer
-	b.mu.Unlock()
-	if overCap {
-		return
+		overCap := len(b.pendingSales) >= maxPendingSalesTotal || buyerActive >= maxPendingSalesPerBuyer
+		b.mu.Unlock()
+		if overCap {
+			return nil, bstack.MarketPayload{}, false
+		}
 	}
 
 	// Stage 1 (Deterministic Cedar Pre-Gate): ONLY Level 0, non-Borg, Cedar-"disclose" fragments
@@ -120,69 +191,40 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 
 	var sellerCands []SellerCandidate
 	for _, listing := range eligibleListings {
-		frags, rErr := b.mem.Recall(ctx, memory.RecallInput{
-			Shard:        listing.Shard,
-			Principal:    policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
-			Action:       "disclose",
-			DisallowBorg: true,
-		})
+		var frags []memory.RecalledFragment
+		var rErr error
+		if fj != nil {
+			frags, rErr = fj.CachedSellableFragments(ctx, b.mem, listing.Shard)
+		} else {
+			// PERF-2: skip per-candidate SPV verification during shard candidate scan; Prove() runs strictly ONCE on the winner!
+			frags, rErr = b.mem.Recall(ctx, memory.RecallInput{
+				Shard:        listing.Shard,
+				Principal:    policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
+				Action:       "disclose",
+				DisallowBorg: true,
+				VerifySPV:    false,
+			})
+		}
 		if rErr != nil || len(frags) == 0 {
 			continue
 		}
+		candFeedURL := ""
+		if strings.TrimSpace(pubURL) != "" && listing.SupportsMode(string(nmu.ModeSubscription)) {
+			candFeedURL = strings.TrimRight(strings.TrimSpace(pubURL), "/") + "/v1/market/feeds/" + listing.Shard
+		}
 		for _, f := range frags {
-			// Fail-closed Cedar Action::"sell" distillation gate (resource.distilled == true unless listing.AllowRaw).
-			if dec, aErr := b.mem.AuthorizeSell(
-				policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
-				policy.Resource{
-					Type:      "Fragment",
-					ID:        fmt.Sprintf("%s#%d", f.Shard, f.Seq),
-					Level:     int64(f.Level),
-					Shard:     f.Shard,
-					Class:     f.Class,
-					Distilled: f.Distilled,
-				},
-				listing.AllowRaw,
-			); aErr != nil || !dec.Allow {
+			// RCA-1: single authoritative fail-closed sell egress gate (Cedar Action::"sell", PII Scrub, Tainted resale, NMU TTL, MinGrade).
+			eval := b.mem.EvaluateSellableFragment(ctx, f, &listing, hasActiveBond, candFeedURL, nowCheck)
+			if !eval.Allowed {
 				continue
 			}
-			// Fail-closed PII & secret scrubber before ANY fragment can be quoted externally.
-			if sr := distill.Scrub(f.Text); sr.Verdict == distill.ScrubBlocked {
+			if wantMinGrade != "" && !nmu.MeetsMinGrade(eval.Classification.Grade, wantMinGrade) {
 				continue
 			}
-			// Fail-closed NMU-1 UsageRights resale block: never resell Tainted inference_only or grade-mismatched memory!
-			if f.Tainted {
-				if f.GradeMismatch || f.NMU == nil || nmu.EffectiveRights(f.NMU.UsageRights) != nmu.RightsDistillResellable {
-					continue
-				}
-			}
-			// Fail-closed NMU-1 expiry check: never quote expired ephemeral units.
-			if f.NMU != nil && nmu.IsExpired(f.NMU.FreshnessClass, f.NMU.ValidUntilUnix, nowCheck) {
+			if wantReqRights != "" && !nmu.MeetsRequiredRights(eval.UsageRights, wantReqRights) {
 				continue
 			}
-			// Check NMU-1 provable grade, rights, and freshness filters before candidate selection.
-			candFeedURL := ""
-			if strings.TrimSpace(pubURL) != "" && listing.SupportsMode(nmu.ModeSubscription) {
-				candFeedURL = strings.TrimRight(strings.TrimSpace(pubURL), "/") + "/v1/market/feeds/" + listing.Shard
-			}
-			candCls, _, _ := b.classifyFragmentForMarket(ctx, f.Shard, f.Seq, f.Distilled, f.OntologyID, hasActiveBond, candFeedURL)
-			if listing.MinAdvertisedGrade != "" && !nmu.MeetsMinGrade(candCls.Grade, nmu.Grade(listing.MinAdvertisedGrade)) {
-				continue
-			}
-			if wantMinGrade != "" && !nmu.MeetsMinGrade(candCls.Grade, wantMinGrade) {
-				continue
-			}
-			effRights := nmu.EffectiveRights(nmu.UsageRights(listing.UsageRights))
-			if f.NMU != nil && f.NMU.UsageRights != "" {
-				effRights = nmu.EffectiveRights(f.NMU.UsageRights)
-			}
-			if wantReqRights != "" && !nmu.MeetsRequiredRights(effRights, wantReqRights) {
-				continue
-			}
-			effFresh := nmu.NormalizeFreshness(listing.FreshnessClass)
-			if f.NMU != nil && f.NMU.FreshnessClass != "" {
-				effFresh = nmu.NormalizeFreshness(string(f.NMU.FreshnessClass))
-			}
-			if wantFresh != "" && effFresh != wantFresh {
+			if wantFresh != "" && eval.FreshnessClass != wantFresh {
 				continue
 			}
 			// On live networks, require an anchor tx (mined or 0-conf carried first-party BEEF);
@@ -195,11 +237,7 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 			// Ontology pin filtering: when the buyer pinned want.OntologyID, quote ONLY fragments conforming
 			// to that exact ontology (or bridged to it via a locally committed Bridge Shard).
 			if want.OntologyID != "" {
-				fragOntID, _, _ := b.mem.DB().GetFragmentGraphMeta(f.Shard, f.Seq)
-				if fragOntID == "" {
-					fragOntID, _ = b.mem.DB().FragmentOntologyID(f.Shard, f.Seq)
-				}
-				if !standingOrderOntologyMatches(ctx, b.mem, want.OntologyID, true, fragOntID) {
+				if !standingOrderOntologyMatches(ctx, b.mem, want.OntologyID, true, eval.OntologyID) {
 					continue
 				}
 			}
@@ -230,7 +268,7 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		}
 	}
 	if len(sellerCands) == 0 {
-		return
+		return nil, bstack.MarketPayload{}, false
 	}
 
 	var matched *store.SellListing
@@ -245,7 +283,7 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		})
 		dec := matcher.MatchWantForSeller(ctx, want, sellerCands, b.engine.Policy())
 		if !dec.Approved || dec.Chosen == nil {
-			return
+			return nil, bstack.MarketPayload{}, false
 		}
 		lCopy := dec.Chosen.Listing
 		fCopy := dec.Chosen.Fragment
@@ -254,7 +292,7 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	} else {
 		dec := deterministicSellerDecision(want.Query, sellerCands, "deterministic")
 		if !dec.Approved || dec.Chosen == nil {
-			return
+			return nil, bstack.MarketPayload{}, false
 		}
 		lCopy := dec.Chosen.Listing
 		fCopy := dec.Chosen.Fragment
@@ -262,29 +300,55 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		best = &fCopy
 	}
 	if matched == nil || best == nil {
-		return
+		return nil, bstack.MarketPayload{}, false
 	}
-	// Ensure fragment has a verified SPV ProofBundle before quoting (on live networks require mined & settled)!
-	if best.AnchorTxID == "" && b.mem.Chain().Network() == "memory" && b.mem.Chain().BalanceSats() > 1000 {
-		_, _ = b.mem.AnchorShard(ctx, matched.Shard)
+	// Ensure fragment has a verified SPV ProofBundle before quoting (cached for immutable anchored fragments!).
+	pbKey := fmt.Sprintf("pb:%s:%d:%s:%s", matched.Shard, best.Seq, best.Leaf, best.AnchorTxID)
+	var pb *contracts.ProofBundle
+	if fj != nil {
+		if _, _, cachedPB, ok := fj.GetCachedCapsule(pbKey); ok && cachedPB != nil {
+			pb = cachedPB
+		}
 	}
-	pb, vr, pErr := b.mem.Prove(ctx, matched.Shard, best.Seq)
-	if b.mem.Chain().Network() != "memory" {
-		if pErr != nil || pb == nil || !vr.OK || !vr.Settled {
-			var reason, detail string
-			if vr != nil {
-				reason, detail = vr.Reason, vr.Detail
+	if pb == nil {
+		if best.AnchorTxID == "" && b.mem.Chain().Network() == "memory" && b.mem.Chain().BalanceSats() > 1000 {
+			_, _ = b.mem.AnchorShard(ctx, matched.Shard)
+		}
+		var vr *contracts.VerifyResult
+		var pErr error
+		pb, vr, pErr = b.mem.Prove(ctx, matched.Shard, best.Seq)
+		if b.mem.Chain().Network() != "memory" {
+			if pErr != nil || pb == nil || !vr.OK || !vr.Settled {
+				var reason, detail string
+				if vr != nil {
+					reason, detail = vr.Reason, vr.Detail
+				}
+				log.Printf("market: skip quote want=%s shard=%s#%d: prove err=%v ok=%v settled=%v reason=%q detail=%q", want.WantID, matched.Shard, best.Seq, pErr, vr != nil && vr.OK, vr != nil && vr.Settled, reason, detail)
+				return nil, bstack.MarketPayload{}, false
 			}
-			log.Printf("market: skip quote want=%s shard=%s#%d: prove err=%v ok=%v settled=%v reason=%q detail=%q", want.WantID, matched.Shard, best.Seq, pErr, vr != nil && vr.OK, vr != nil && vr.Settled, reason, detail)
-			return // never quote an unmined/unsettled fragment on live networks
+		}
+		if fj != nil && pb != nil {
+			fj.PutCachedCapsule(pbKey, []byte{1}, "pb", pb)
 		}
 	}
 
 	bestFeedURL := ""
-	if strings.TrimSpace(pubURL) != "" && matched.SupportsMode(nmu.ModeSubscription) {
+	if strings.TrimSpace(pubURL) != "" && matched.SupportsMode(string(nmu.ModeSubscription)) {
 		bestFeedURL = strings.TrimRight(strings.TrimSpace(pubURL), "/") + "/v1/market/feeds/" + matched.Shard
 	}
-	bestCls, bestOntID, bestEdgesRoot := b.classifyFragmentForMarket(ctx, matched.Shard, best.Seq, best.Distilled, best.OntologyID, hasActiveBond, bestFeedURL)
+	clsKey := fmt.Sprintf("cls:%s:%d:%s:%v:%s", matched.Shard, best.Seq, best.Leaf, hasActiveBond, bestFeedURL)
+	var bestCls nmu.GradeClassification
+	var bestOntID, bestEdgesRoot string
+	if fj != nil {
+		if c, oid, er, ok := fj.GetCachedClassification(clsKey); ok {
+			bestCls, bestOntID, bestEdgesRoot = c, oid, er
+		} else {
+			bestCls, bestOntID, bestEdgesRoot = b.classifyFragmentForMarket(ctx, matched.Shard, best.Seq, best.Distilled, best.OntologyID, hasActiveBond, bestFeedURL)
+			fj.PutCachedClassification(clsKey, bestCls, bestOntID, bestEdgesRoot)
+		}
+	} else {
+		bestCls, bestOntID, bestEdgesRoot = b.classifyFragmentForMarket(ctx, matched.Shard, best.Seq, best.Distilled, best.OntologyID, hasActiveBond, bestFeedURL)
+	}
 	if len(bestOntID) != 64 {
 		bestOntID = ""
 	}
@@ -315,7 +379,7 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	}
 	buyerPriority := false
 	var buyerCollabBP int64
-	if b.mem != nil && b.mem.DB() != nil && want.Pub != "" {
+	if fj == nil && b.mem != nil && b.mem.DB() != nil && want.Pub != "" {
 		evalOnt := reputation.NormalizeOntologyID(want.OntologyID)
 		if tEval, vecs, tErr := EvaluateTrustForOntology(b.mem.DB(), b.PubHex(), evalOnt, b.engine.Policy(), nil, nil); tErr == nil && tEval != nil {
 			bPub := strings.ToLower(strings.TrimSpace(want.Pub))
@@ -327,10 +391,10 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	}
 	quotePrice, quoteSatsPer1k := dp.QuoteForFactPack(baseQuoteAsk, bestUnits, buyerPriority, buyerCollabBP)
 	if want.MaxSats > 0 && quotePrice > want.MaxSats {
-		return
+		return nil, bstack.MarketPayload{}, false
 	}
 	if want.MaxSatsPer1kUnits > 0 && quoteSatsPer1k > want.MaxSatsPer1kUnits {
-		return
+		return nil, bstack.MarketPayload{}, false
 	}
 
 	effFresh := nmu.NormalizeFreshness(matched.FreshnessClass)
@@ -348,14 +412,15 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		effSubjVer = best.NMU.SubjectVersion
 	}
 
-	saleOffer, revealKey, chirpURL, err := b.engine.PrepareDirectSale(ctx, matched.Shard, best.Seq, quotePrice, want.Pub)
+	saleOffer, revealKey, chirpURL, err := b.engine.PrepareDirectSaleWithFragment(ctx, *best, matched, quotePrice, want.Pub)
 	if err != nil {
 		log.Printf("market: PrepareDirectSale want=%s shard=%s#%d failed: %v", want.WantID, matched.Shard, best.Seq, err)
-		return
+		return nil, bstack.MarketPayload{}, false
 	}
-	// Keep OfferAd wire payload compact under MaxPayload (16KB): strip ciphertext if > 4KB (buyer fetches via CHIRP).
+	// Two-tier payload delivery: inline <= 12 KiB ciphertexts directly inside OfferAd (zero CHIRP fetch!);
+	// offload > 12 KiB capsules/blobs to bstore + CHIRP.
 	wireSale := *saleOffer
-	if len(wireSale.CiphertextHex) > 8192 {
+	if len(wireSale.CiphertextHex) > bstack.InlineOfferMaxHexLen {
 		wireSale.CiphertextHex = ""
 	}
 	saleJSON, _ := json.Marshal(wireSale)
@@ -372,8 +437,6 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	if bestCls.Grade != "" {
 		offerTags = append(offerTags, "grade:"+string(bestCls.Grade))
 	}
-	// Include both matched listing domains and want domains (capped at bstack.MaxDomains) so
-	// OfferAd topics ALWAYS satisfy Hub topicMatchesDomains() and reach the buyer's want lanes!
 	domSeen := make(map[string]bool)
 	offerDomains := make([]string, 0, len(want.Domains)+len(matched.Domains))
 	for _, d := range append(append([]string(nil), want.Domains...), matched.Domains...) {
@@ -418,6 +481,7 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		SubscriptionSec: subSec,
 		FeedURL:         bestFeedURL,
 		Shard:           matched.Shard,
+		PayloadFormat:   saleOffer.PayloadFormat,
 		Leaf:            best.Leaf,
 		OntologyID:      bestOntID,
 		EdgesRoot:       bestEdgesRoot,
@@ -438,37 +502,37 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 		Exp:             time.Now().Add(30 * time.Minute).UnixMilli(),
 	}
 	var offerPayload bstack.MarketPayload
-	payloadReady := false
-	for attempt := 0; attempt < 3; attempt++ {
-		sig, sErr := bstack.SignArtifact(b.engine.saleKey, offer)
-		if sErr != nil {
-			return
+	if !directOnly {
+		payloadReady := false
+		for attempt := 0; attempt < 3; attempt++ {
+			sig, sErr := bstack.SignArtifactWithSigner(b.engine.signer, offer)
+			if sErr != nil {
+				return nil, bstack.MarketPayload{}, false
+			}
+			payload, mErr := bstack.NewOfferPayload(bstack.SignedOffer{Offer: offer, Sig: sig})
+			if mErr != nil {
+				return nil, bstack.MarketPayload{}, false
+			}
+			if encoded, eErr := bstack.EncodePayload(payload); eErr == nil && len(encoded) <= bstack.MaxPayload {
+				offerPayload = payload
+				payloadReady = true
+				break
+			}
+			if attempt == 0 && wireSale.CiphertextHex != "" {
+				wireSale.CiphertextHex = ""
+				saleJSON, _ = json.Marshal(wireSale)
+				offer.SaleOffer = saleJSON
+				continue
+			}
+			if offer.BondBEEFHex != "" {
+				offer.BondBEEFHex = ""
+				continue
+			}
+			return nil, bstack.MarketPayload{}, false
 		}
-		body, mErr := json.Marshal(bstack.SignedOffer{Offer: offer, Sig: sig})
-		if mErr != nil {
-			return
+		if !payloadReady {
+			return nil, bstack.MarketPayload{}, false
 		}
-		payload := bstack.MarketPayload{Kind: bstack.KindOffer, Body: body}
-		if encoded, eErr := bstack.EncodePayload(payload); eErr == nil && len(encoded) <= bstack.MaxPayload {
-			offerPayload = payload
-			payloadReady = true
-			break
-		}
-		// Strip inline ciphertext first, then BondBEEFHex if still > MaxPayload.
-		if attempt == 0 && wireSale.CiphertextHex != "" {
-			wireSale.CiphertextHex = ""
-			saleJSON, _ = json.Marshal(wireSale)
-			offer.SaleOffer = saleJSON
-			continue
-		}
-		if offer.BondBEEFHex != "" {
-			offer.BondBEEFHex = ""
-			continue
-		}
-		return
-	}
-	if !payloadReady {
-		return
 	}
 
 	ps := &pendingSale{
@@ -486,61 +550,61 @@ func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	}
 	b.mu.Lock()
 	b.pendingSales[offerID] = ps
-	nowUnix := time.Now().Unix()
-	for id, old := range b.pendingSales {
-		if old.ExpiresAt > 0 && old.ExpiresAt < nowUnix {
-			core.Zero32Array(&old.RevealKey)
-			if old.SaleOffer != nil {
-				old.SaleOffer.ClearContentKey()
+	if fj == nil || len(b.pendingSales) > 8192 {
+		nowUnix := time.Now().Unix()
+		for id, old := range b.pendingSales {
+			if id != offerID && (old.Settled || (old.ExpiresAt > 0 && old.ExpiresAt < nowUnix)) {
+				core.Zero32Array(&old.RevealKey)
+				if old.SaleOffer != nil {
+					old.SaleOffer.ClearContentKey()
+				}
+				delete(b.pendingSales, id)
 			}
-			delete(b.pendingSales, id)
 		}
 	}
 	b.mu.Unlock()
-	fullSaleJSON, _ := json.Marshal(saleOffer)
-	var pbJSON []byte
-	if pb != nil {
-		pbJSON, _ = json.Marshal(pb)
-	}
-	sealedRevealKey, sealErr := b.sealKeyAtRest(ctx, hex.EncodeToString(revealKey[:]))
-	if sealErr != nil {
-		log.Printf("market: seal pending sale key for offer %s failed: %v", offerID, sealErr)
-		return
-	}
-	_ = b.mem.DB().SavePendingSale(store.PendingSaleRecord{
-		OfferID:         offerID,
-		WantID:          want.WantID,
-		BuyerPub:        want.Pub,
-		Shard:           matched.Shard,
-		Seq:             best.Seq,
-		SaleOfferJSON:   fullSaleJSON,
-		RevealKeyHex:    sealedRevealKey,
-		ChirpURL:        chirpURL,
-		ProofBundleJSON: pbJSON,
-		ExpiresAt:       int64(saleOffer.ExpiresAt),
-	})
 
-	topics := lanesForDomains(offer.Net, offer.Domains)
-	if subN, subErr := b.disc.BuildAndSubmitMarketAd(ctx, b.engine.saleKey, offerPayload, b.disc.ActiveHosts(), topics); subN == 0 && subErr != nil {
-		log.Printf("market: submit OfferAd %s (want=%s) failed: %v", offerID, want.WantID, subErr)
-	}
-	// Start durable Restate SellerDeal workflow asynchronously (/send — never blocks SSE consumer!).
-	if rc := b.RestateClient(); rc != nil {
-		oid, w, sh, sq, price, bpub, so, rk, cu, bundle := offerID, want, matched.Shard, best.Seq, quotePrice, want.Pub, saleOffer, revealKey, chirpURL, pb
-		b.spawnTracked(10*time.Second, func(sCtx context.Context) {
-			_, _ = rc.StartSellerDealAsync(sCtx, oid, SellerDealInput{
-				Want:            w,
-				Shard:           sh,
-				Seq:             sq,
-				PriceSats:       price,
-				BuyerPub:        bpub,
-				PreCreatedOffer: so,
-				RevealKeyHex:    hex.EncodeToString(rk[:]),
-				ChirpURL:        cu,
-				ProofBundle:     bundle,
-			})
+	if fj == nil {
+		fullSaleJSON, _ := json.Marshal(saleOffer)
+		var pbJSON []byte
+		if pb != nil {
+			pbJSON, _ = json.Marshal(pb)
+		}
+		sealedRevealKey, sealErr := b.sealKeyAtRest(ctx, hex.EncodeToString(revealKey[:]))
+		if sealErr != nil {
+			log.Printf("market: seal pending sale key for offer %s failed: %v", offerID, sealErr)
+			return nil, bstack.MarketPayload{}, false
+		}
+		_ = b.mem.DB().SavePendingSale(store.PendingSaleRecord{
+			OfferID:         offerID,
+			WantID:          want.WantID,
+			BuyerPub:        want.Pub,
+			Shard:           matched.Shard,
+			Seq:             best.Seq,
+			SaleOfferJSON:   fullSaleJSON,
+			RevealKeyHex:    sealedRevealKey,
+			ChirpURL:        chirpURL,
+			ProofBundleJSON: pbJSON,
+			ExpiresAt:       int64(saleOffer.ExpiresAt),
 		})
+		if rc := b.RestateClient(); rc != nil {
+			oid, w, sh, sq, price, bpub, so, rk, cu, bundle := offerID, want, matched.Shard, best.Seq, quotePrice, want.Pub, saleOffer, revealKey, chirpURL, pb
+			b.spawnTracked(10*time.Second, func(sCtx context.Context) {
+				_, _ = rc.StartSellerDealAsync(sCtx, oid, SellerDealInput{
+					Want:            w,
+					Shard:           sh,
+					Seq:             sq,
+					PriceSats:       price,
+					BuyerPub:        bpub,
+					PreCreatedOffer: so,
+					RevealKeyHex:    hex.EncodeToString(rk[:]),
+					ChirpURL:        cu,
+					ProofBundle:     bundle,
+				})
+			})
+		}
 	}
+	return &offer, offerPayload, true
 }
 
 func pickBestFragment(frags []memory.RecalledFragment, query string) *memory.RecalledFragment {

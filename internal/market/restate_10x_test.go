@@ -4,13 +4,8 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -28,61 +23,19 @@ import (
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
-func TestRestateManifestIncludesStandingOrderAndEscrowGuardian(t *testing.T) {
+func TestEmbeddedWorkflowsRegistersStandingOrderAndEscrowGuardian(t *testing.T) {
+	ctx := context.Background()
 	mem := newTestMemory(t)
 	eng := NewEngine(mem, DefaultPolicy())
 
-	h, err := eng.NewRestateServer().Handler()
-	if err != nil {
-		t.Fatalf("NewRestateServer().Handler: %v", err)
+	wc, err := eng.StartWorkflows(ctx, t.TempDir())
+	if err != nil || wc == nil || !wc.IsRunning() {
+		t.Fatalf("StartWorkflows: wc=%v err=%v", wc, err)
 	}
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/discover", nil)
-	req.Header.Set("Accept", "application/vnd.restate.endpointmanifest.v4+json")
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("/discover HTTP %d: %s", rec.Code, rec.Body.String())
-	}
+	defer func() { _ = eng.CloseWorkflows() }()
 
-	var manifest struct {
-		Services []struct {
-			Name                     string `json:"name"`
-			Ty                       string `json:"ty"`
-			RetryPolicyMaxAttempts   int    `json:"retryPolicyMaxAttempts"`
-			RetryPolicyOnMaxAttempts string `json:"retryPolicyOnMaxAttempts"`
-			Handlers                 []struct {
-				Name string `json:"name"`
-			} `json:"handlers"`
-		} `json:"services"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &manifest); err != nil {
-		t.Fatalf("unmarshal v4 manifest: %v", err)
-	}
-
-	got := make(map[string]map[string]bool)
-	onMax := make(map[string]string)
-	for _, s := range manifest.Services {
-		hmap := make(map[string]bool, len(s.Handlers))
-		for _, hh := range s.Handlers {
-			hmap[hh.Name] = true
-		}
-		got[s.Name] = hmap
-		onMax[s.Name] = strings.ToUpper(s.RetryPolicyOnMaxAttempts)
-	}
-
-	for svc, wantHandlers := range expectedManifest {
-		hmap, ok := got[svc]
-		if !ok {
-			t.Fatalf("missing expected Restate service %q in /discover manifest", svc)
-		}
-		for _, wh := range wantHandlers {
-			if !hmap[wh] {
-				t.Fatalf("service %q missing handler %q (got %v)", svc, wh, hmap)
-			}
-		}
-		if onMax[svc] != "PAUSE" {
-			t.Fatalf("expected service %q to have PauseOnMaxAttempts (PAUSE), got %q", svc, onMax[svc])
-		}
+	if err := wc.HealthCheck(ctx); err != nil {
+		t.Fatalf("HealthCheck: %v", err)
 	}
 }
 
@@ -173,82 +126,68 @@ func TestBuildTopKCandidatesForMultiSellerFailover(t *testing.T) {
 	}
 }
 
-func TestRestateClientAdminInvocationControls(t *testing.T) {
-	var calls []string
-	adm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls = append(calls, r.Method+" "+r.URL.Path)
-		switch r.URL.Path {
-		case "/invocations/inv_abc/resume":
-			w.WriteHeader(http.StatusAccepted)
-		case "/invocations/inv_abc/restart-as-new":
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"new_invocation_id":"inv_new_123"}`))
-		case "/invocations/inv_abc/kill":
-			w.WriteHeader(http.StatusAccepted)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer adm.Close()
-
-	rc := NewRestateClient(adm.URL, adm.URL)
+func TestWorkflowClientInvocationControls(t *testing.T) {
 	ctx := context.Background()
+	mem := newTestMemory(t)
+	eng := NewEngine(mem, DefaultPolicy())
+	rc, err := eng.StartWorkflows(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("StartWorkflows: %v", err)
+	}
+	defer func() { _ = eng.CloseWorkflows() }()
 
-	if err := rc.ResumeInvocation(ctx, "inv_abc"); err != nil {
+	execID, err := rc.StartStandingOrderAsync(ctx, "so-ctrl-1", StandingOrderInput{
+		OrderID: "so-ctrl-1",
+		Domains: []string{"ops"},
+		MaxSats: 100,
+		TTL:     time.Hour,
+	})
+	if err != nil || execID == "" {
+		t.Fatalf("StartStandingOrderAsync: execID=%q err=%v", execID, err)
+	}
+	for i := 0; i < 40; i++ {
+		if st, gErr := rc.StandingOrderStatus(ctx, "so-ctrl-1"); gErr == nil && st.Status == "watching" {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if err := rc.ResumeInvocation(ctx, execID); err != nil {
 		t.Fatalf("ResumeInvocation: %v", err)
 	}
-	newID, err := rc.RestartInvocationAsNew(ctx, "inv_abc")
-	if err != nil {
-		t.Fatalf("RestartInvocationAsNew: %v", err)
+	if _, err := rc.RestartInvocationAsNew(ctx, execID); err == nil {
+		t.Fatal("expected RestartInvocationAsNew to return unsupported error")
 	}
-	if newID != "inv_new_123" {
-		t.Fatalf("expected new_invocation_id=inv_new_123, got %q", newID)
-	}
-	if err := rc.KillInvocation(ctx, "inv_abc"); err != nil {
+	if err := rc.KillInvocation(ctx, execID); err != nil {
 		t.Fatalf("KillInvocation: %v", err)
-	}
-
-	want := []string{
-		"PATCH /invocations/inv_abc/resume",
-		"PATCH /invocations/inv_abc/restart-as-new",
-		"PATCH /invocations/inv_abc/kill",
-	}
-	if len(calls) != len(want) {
-		t.Fatalf("expected %d calls, got %v", len(want), calls)
-	}
-	for i := range want {
-		if calls[i] != want[i] {
-			t.Fatalf("call[%d] = %q, want %q", i, calls[i], want[i])
-		}
 	}
 }
 
 func TestStandingOrderBrokerDispatchFiltersMatchingOrders(t *testing.T) {
+	ctx := context.Background()
 	mem := newTestMemory(t)
 	eng := NewEngine(mem, DefaultPolicy())
+	wc, err := eng.StartWorkflows(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("StartWorkflows: %v", err)
+	}
+	defer func() { _ = eng.CloseWorkflows() }()
 
-	var sigMu sync.Mutex
-	var signaledPaths []string
-	ingSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sigMu.Lock()
-		signaledPaths = append(signaledPaths, r.URL.Path)
-		sigMu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"id":"inv-test-1","status":"Accepted"}`))
-	}))
-	defer ingSrv.Close()
+	if _, err := wc.StartStandingOrderAsync(ctx, "so-match", StandingOrderInput{
+		OrderID: "so-match",
+		Domains: []string{"bsv"},
+		MaxSats: 500,
+		TTL:     time.Hour,
+	}); err != nil {
+		t.Fatalf("StartStandingOrderAsync: %v", err)
+	}
+	for i := 0; i < 40; i++ {
+		if st, gErr := wc.StandingOrderStatus(ctx, "so-match"); gErr == nil && st.Status == "watching" {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 
 	now := time.Now().Unix()
-	eng.upsertStandingOrderIndex(StandingOrderState{
-		OrderID:       "so-match",
-		Status:        "watching",
-		Domains:       []string{"bsv"},
-		MaxSats:       500,
-		ExpiresAtUnix: now + 3600,
-		UpdatedAt:     now,
-	})
 	eng.upsertStandingOrderIndex(StandingOrderState{
 		OrderID:       "so-too-expensive",
 		Status:        "watching",
@@ -277,7 +216,7 @@ func TestStandingOrderBrokerDispatchFiltersMatchingOrders(t *testing.T) {
 	br := &Broker{
 		mem:     mem,
 		engine:  eng,
-		restate: NewRestateClient(ingSrv.URL, ingSrv.URL),
+		restate: wc,
 	}
 	br.dispatchOfferToStandingOrders(bstack.OfferAd{
 		OfferID:   "off-live-1",
@@ -285,164 +224,31 @@ func TestStandingOrderBrokerDispatchFiltersMatchingOrders(t *testing.T) {
 		PriceSats: 200,
 	})
 
-	// Wait briefly for async goroutine dispatch.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		sigMu.Lock()
-		n := len(signaledPaths)
-		sigMu.Unlock()
-		if n > 0 {
+	var matched *StandingOrderState
+	for i := 0; i < 60; i++ {
+		if st, gErr := wc.StandingOrderStatus(ctx, "so-match"); gErr == nil && st.OffersSeen == 1 {
+			matched = st
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
-	sigMu.Lock()
-	gotPaths := append([]string(nil), signaledPaths...)
-	sigMu.Unlock()
-	if len(gotPaths) != 1 || !strings.Contains(gotPaths[0], "/StandingOrder/so-match/onOffer") {
-		t.Fatalf("expected only so-match to be signaled, got %v", gotPaths)
+	if matched == nil || matched.OffersSeen != 1 {
+		st, _ := wc.StandingOrderStatus(ctx, "so-match")
+		t.Fatalf("expected only so-match to receive offer (OffersSeen=1), got %+v", st)
 	}
 
 	// Ensure deal persistence helper isn't broken by new DealState fields.
 	_ = mem.DB().SaveDeal(store.DealRecord{DealID: "d1", Role: "buyer", Status: "settled"})
 }
 
-func startLiveRestateForTest(t *testing.T, ctx context.Context, eng *Engine, internalTok string) (rc *RestateClient, epURI string, cleanup func()) {
+func startLiveRestateForTest(t *testing.T, ctx context.Context, eng *Engine) (rc *WorkflowClient, epURI string, cleanup func()) {
 	t.Helper()
-	bin := locateRestateServerBinary()
-	useWSL := false
-	if bin == "" && runtime.GOOS == "windows" {
-		if _, err := exec.LookPath("wsl"); err == nil {
-			out, wErr := exec.CommandContext(ctx, "wsl", "-e", "sh", "-c", `test -x "$HOME/.nektar/bin/restate-server" && printf "%s/.nektar/bin/restate-server" "$HOME"`).Output()
-			if wErr == nil && strings.HasPrefix(strings.TrimSpace(string(out)), "/") {
-				bin = strings.TrimSpace(string(out))
-				useWSL = true
-			}
-		}
+	wc, err := eng.StartWorkflows(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("StartWorkflows: %v", err)
 	}
-	if bin == "" {
-		t.Skip("restate-server binary not available locally or in WSL2")
-	}
-
-	epPort := freeLoopbackPort(t)
-	bindHost := "127.0.0.1"
-	if useWSL {
-		if out, err := exec.CommandContext(ctx, "wsl", "-e", "sh", "-c", `ip route show default 2>/dev/null | awk '{print $3; exit}'`).Output(); err == nil {
-			if ip := net.ParseIP(strings.TrimSpace(string(out))); ip != nil && ip.To4() != nil && !ip.IsLoopback() {
-				if addrs, aErr := net.InterfaceAddrs(); aErr == nil {
-					for _, a := range addrs {
-						var lip net.IP
-						switch v := a.(type) {
-						case *net.IPNet:
-							lip = v.IP
-						case *net.IPAddr:
-							lip = v.IP
-						}
-						if lip != nil && lip.Equal(ip) {
-							bindHost = ip.String()
-							break
-						}
-					}
-				}
-			}
-		}
-	}
-	epAddr := net.JoinHostPort(bindHost, fmt.Sprintf("%d", epPort))
-	epURI = "http://" + epAddr
-
-	epCtx, epCancel := context.WithCancel(ctx)
-	go func() {
-		_ = eng.NewRestateServer().Start(epCtx, epAddr)
-	}()
-	ready := false
-	for i := 0; i < 60; i++ {
-		if c, err := net.DialTimeout("tcp", epAddr, 100*time.Millisecond); err == nil {
-			_ = c.Close()
-			ready = true
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if !ready {
-		epCancel()
-		t.Fatalf("h2c endpoint %s never became ready", epAddr)
-	}
-	if useWSL {
-		probe := exec.CommandContext(ctx, "wsl", "-e", "bash", "-c",
-			fmt.Sprintf("timeout 2 bash -c 'exec 3<>/dev/tcp/%s/%d' 2>/dev/null", bindHost, epPort))
-		if err := probe.Run(); err != nil {
-			epCancel()
-			t.Skipf("WSL2 cannot reach Windows host test port %s (Windows Firewall likely blocking ephemeral test binary on vEthernet (WSL)): %v", epAddr, err)
-		}
-	}
-
-	ingPort := freeLoopbackPort(t)
-	admPort := freeLoopbackPort(t)
-	nodePort := freeLoopbackPort(t)
-	var cmd *exec.Cmd
-	var wslDir string
-	if useWSL {
-		wslDir = fmt.Sprintf("/tmp/nektar-test-restate-%d", time.Now().UnixNano())
-		shCmd := fmt.Sprintf(
-			`mkdir -p %s && exec env RESTATE_NODE_NAME=nektar-10x-e2e RESTATE_BIND_ADDRESS=127.0.0.1:%d RESTATE_INGRESS__BIND_ADDRESS=127.0.0.1:%d RESTATE_ADMIN__BIND_ADDRESS=127.0.0.1:%d RESTATE_WORKER__INVOKER__INACTIVITY_TIMEOUT=2s RUST_LOG=warn %q --base-dir %s`,
-			wslDir, nodePort, ingPort, admPort, bin, wslDir,
-		)
-		cmd = exec.CommandContext(ctx, "wsl", "-e", "sh", "-c", shCmd)
-	} else {
-		restateData := t.TempDir()
-		cmd = exec.CommandContext(ctx, bin, "--base-dir", restateData)
-		cmd.Env = append(os.Environ(),
-			"RESTATE_NODE_NAME=nektar-10x-e2e",
-			fmt.Sprintf("RESTATE_BIND_ADDRESS=127.0.0.1:%d", nodePort),
-			fmt.Sprintf("RESTATE_INGRESS__BIND_ADDRESS=127.0.0.1:%d", ingPort),
-			fmt.Sprintf("RESTATE_ADMIN__BIND_ADDRESS=127.0.0.1:%d", admPort),
-			"RESTATE_WORKER__INVOKER__INACTIVITY_TIMEOUT=2s",
-			"RUST_LOG=warn",
-		)
-	}
-	var rsLogs strings.Builder
-	cmd.Stdout = &rsLogs
-	cmd.Stderr = &rsLogs
-	if err := cmd.Start(); err != nil {
-		epCancel()
-		t.Fatalf("start restate-server: %v", err)
-	}
-
-	ingURL := fmt.Sprintf("http://127.0.0.1:%d", ingPort)
-	admURL := fmt.Sprintf("http://127.0.0.1:%d", admPort)
-	rc = NewRestateClientWithToken(ingURL, admURL, internalTok)
-
-	healthy := false
-	for i := 0; i < 100; i++ {
-		if rc.HealthCheck(ctx) == nil {
-			healthy = true
-			break
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	if !healthy {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		epCancel()
-		t.Fatalf("restate-server never became healthy; logs:\n%s", rsLogs.String())
-	}
-	if _, err := rc.EnsureDeployment(ctx, epURI, false); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		epCancel()
-		t.Fatalf("EnsureDeployment(%s): %v\nlogs:\n%s", epURI, err, rsLogs.String())
-	}
-
-	return rc, epURI, func() {
-		if t.Failed() {
-			t.Logf("restate-server logs:\n%s", rsLogs.String())
-		}
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		epCancel()
-		if useWSL && wslDir != "" {
-			_ = exec.Command("wsl", "-e", "rm", "-rf", wslDir).Run()
-		}
+	return wc, "embedded://workflows.sqlite", func() {
+		_ = eng.CloseWorkflows()
 	}
 }
 
@@ -460,8 +266,6 @@ func TestLiveRestate10xFeaturesE2E(t *testing.T) {
 	sellerMem := newTestMemory(t)
 	buyerEng := NewEngine(buyerMem, DefaultPolicy())
 	sellerEng := NewEngine(sellerMem, DefaultPolicy())
-	const internalTok = "e2e-10x-secret"
-	buyerEng.SetInternalToken(internalTok)
 
 	// Attach a minimal broker to buyerEng so BuyerDeal Step 5 executes buyerPayAndDeliver (for Failover test!).
 	buyerBroker := NewBroker(buyerMem, buyerEng, nil, BrokerConfig{})
@@ -472,7 +276,7 @@ func TestLiveRestate10xFeaturesE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rc, _, cleanup := startLiveRestateForTest(t, ctx, buyerEng, internalTok)
+	rc, _, cleanup := startLiveRestateForTest(t, ctx, buyerEng)
 	defer cleanup()
 
 	buyerPub := buyerMem.Chain().IdentityPubHex()
@@ -786,8 +590,6 @@ func TestLiveAuditFixesE2E(t *testing.T) {
 	sellerMem := newTestMemory(t)
 	buyerEng := NewEngine(buyerMem, DefaultPolicy())
 	sellerEng := NewEngine(sellerMem, DefaultPolicy())
-	const internalTok = "e2e-audit-fixes-tok"
-	buyerEng.SetInternalToken(internalTok)
 
 	buyerBroker := NewBroker(buyerMem, buyerEng, nil, BrokerConfig{})
 	buyerEng.SetBroker(buyerBroker)
@@ -800,7 +602,7 @@ func TestLiveAuditFixesE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rc, _, cleanup := startLiveRestateForTest(t, ctx, buyerEng, internalTok)
+	rc, _, cleanup := startLiveRestateForTest(t, ctx, buyerEng)
 	defer cleanup()
 
 	buyerPub := buyerMem.Chain().IdentityPubHex()

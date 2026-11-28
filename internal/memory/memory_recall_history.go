@@ -42,7 +42,7 @@ func (s *Service) recallAtCommit(ctx context.Context, in RecallInput) ([]Recalle
 	anchorState := "unanchored"
 	if c.AnchorTxID != "" {
 		anchorState = "broadcast"
-		if anchors, aErr := s.db.ListAnchors(in.Shard); aErr == nil {
+		if anchors, aErr := s.db.ListAnchorSummaries(in.Shard); aErr == nil {
 			for _, a := range anchors {
 				if a.TxID == c.AnchorTxID && a.Settled {
 					anchorState = "mined"

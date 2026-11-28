@@ -55,23 +55,15 @@ Every variable below is read directly by the single zero-CGO Go binary (`cmd/nek
 | `NEKTAR_MAX_SPEND_SATS_PER_DAY` / `NEKTAR_MAX_SPEND_PER_DAY` | `100000` | SpendGuard rolling 24h max spend cap (sats) | `cmd/nektar/main.go` |
 | `NEKTAR_MIN_BROADCAST_INTERVAL_MS` | `0` | Minimum milliseconds between broadcasts | `cmd/nektar/main.go` |
 | `NEKTAR_ARCADE_KEY` / `NEKTAR_WOC_KEY` / `NEKTAR_RPC_USER` / `NEKTAR_RPC_PASS` | *(empty)* | Optional API/RPC credentials for broadcaster, WoC, or regtest node | `cmd/nektar/main.go` |
-| `NEKTAR_ANCHOR_CADENCE_SEC` | `300` | Restate `AnchorCadence` batch interval in seconds | `cmd/nektar/cli_serve_wiring.go` |
+| `NEKTAR_ANCHOR_CADENCE_SEC` | `300` | Periodic `AnchorCadence` batch interval in seconds | `cmd/nektar/cli_serve_wiring.go` |
 
-## Restate v1.8.1 Durable Execution
+## Embedded Durable Execution (`go-workflows` SQLite WAL)
+
+Durable deals (`BuyerDealWorkflow`, `SellerDealWorkflow`, `StandingOrderWorkflow`, `EscrowGuardianWorkflow`) run inside the single Go binary backed by `<NEKTAR_DATA_DIR>/workflows.sqlite` (SQLite WAL, zero external sidecars or ports required).
 
 | Variable | Default | Purpose | Readers |
 |---|---|---|---|
-| `NEKTAR_RESTATE_LISTEN` | `127.0.0.1:9080` | Dedicated h2c listen address for Nektar's Restate Go SDK endpoint | `cmd/nektar/cli_serve.go` |
-| `NEKTAR_RESTATE_URL` | Auto-supervised loopback | External Restate Ingress URL (e.g. `http://restate:8080`) | `cmd/nektar/{cli_serve,restate_runner}.go` |
-| `NEKTAR_RESTATE_ADMIN` | Auto-supervised loopback | External Restate Admin URL (e.g. `http://restate:9070`) | `cmd/nektar/{cli_serve,restate_runner}.go`, `internal/market/broker_buyer.go` |
-| `NEKTAR_RESTATE_ENDPOINT_URI` | Derived from `-restate-listen` | URI Restate Admin calls back to reach Nektar's h2c endpoint | `cmd/nektar/{cli_serve,restate_runner}.go` |
-| `NEKTAR_RESTATE_IDENTITY_KEY` | *(empty)* | Restate Request Identity v1 public key (`publickeyv1_...`) | `cmd/nektar/{cli_serve,restate_runner}.go` |
-| `NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT` | `0` | Allow non-loopback `-restate-listen` on a private bridge network without JWT identity key | `cmd/nektar/{cli_serve,restate_runner}.go` |
-| `NEKTAR_RESTATE_INTERNAL_TOKEN` | Auto-persisted mode-0600 file | Shared secret for internal Restate workflow callbacks | `cmd/nektar/{cli_serve,restate_runner}.go` |
-| `NEKTAR_RESTATE_BIN` | Auto-detected | Explicit path to `restate-server` binary | `cmd/nektar/restate_install.go` |
-| `NEKTAR_RESTATE_DISABLE` | `0` | Set `1` to disable auto-supervised `restate-server` | `cmd/nektar/{cli_serve,cli_up,restate_runner}.go` |
-| `NEKTAR_RESTATE_REQUIRED` | `0` | Set `1` to fail closed at startup if Restate registration fails | `cmd/nektar/{cli_serve,restate_runner}.go` |
-| `NEKTAR_RESTATE_NO_WSL` | `0` | Set `1` on Windows to skip WSL2 `restate-server` detection | `cmd/nektar/restate_install.go` |
+| `NEKTAR_FAST_DEALS` | `0` | Optional `1` to run un-suspended 0-conf P2P deals on the synchronous fast path while preserving SQLite obligations | `internal/market/broker_buyer.go` |
 
 ## Market, Discovery, Jev Matcher & Embedded Hub
 

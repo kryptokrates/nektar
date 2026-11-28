@@ -3,7 +3,6 @@ package bstack
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -31,8 +30,11 @@ func TestMarketWireBorgVaultAndChirp(t *testing.T) {
 	if err := VerifyArtifact(pubHex, sig, want); err != nil {
 		t.Fatalf("VerifyArtifact: %v", err)
 	}
-	bodyBytes, _ := json.Marshal(SignedWant{Want: want, Sig: sig})
-	wire, err := EncodePayload(MarketPayload{Kind: KindWant, Body: bodyBytes})
+	payloadWant, err := NewWantPayload(SignedWant{Want: want, Sig: sig})
+	if err != nil {
+		t.Fatalf("NewWantPayload: %v", err)
+	}
+	wire, err := EncodePayload(payloadWant)
 	if err != nil {
 		t.Fatalf("EncodePayload: %v", err)
 	}

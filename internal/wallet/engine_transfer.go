@@ -28,6 +28,13 @@ func (e *Engine) Send(ctx context.Context, args SendArgs) (*SendResult, error) {
 	if (args.ToAddress == "" && args.ToIdentityKey == "") || (args.ToAddress != "" && args.ToIdentityKey != "") {
 		return nil, fmt.Errorf("%w: specify exactly one of toAddress or toIdentityKey", ErrInvalidArgs)
 	}
+	if e.fastLane != nil && !args.NoSend {
+		if res, err := e.fastLane.SendFast(ctx, args); err == nil {
+			return res, nil
+		} else if err != errFastLaneUnavailable {
+			return nil, err
+		}
+	}
 
 	var lockScript *script.Script
 	var prefixB64, suffixB64, senderHex string

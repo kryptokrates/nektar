@@ -156,12 +156,8 @@ func RankOffersWith6DReputationAt(
 		if HasExactUserDomainOverlap(want.Domains, o.Domains) {
 			score += 250
 		}
-		if pol != nil {
-			pol.mu.RLock()
-			if pol.PreferredSellers[o.Pub] {
-				score += 1000
-			}
-			pol.mu.RUnlock()
+		if pol != nil && pol.IsPreferredSeller(o.Pub) {
+			score += 1000
 		}
 		if reps != nil {
 			if r, ok := reps[o.Pub]; ok {

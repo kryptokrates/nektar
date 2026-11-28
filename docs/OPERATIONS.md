@@ -44,7 +44,7 @@ go test -race -v ./internal/wallet/...
 # Memory, Cedar isolation, Mangle grounding, MemRepo & SQLite store
 go test -race -v ./internal/store/... ./internal/memrepo/... ./internal/memory/... ./internal/policy/... ./internal/reasoning/...
 
-# Market broker, Restate durable workflows, Hub BRC-105 fees & Server auth/MCP
+# Market broker, embedded SQLite durable workflows, Hub BRC-105 fees & Server auth/MCP
 go test -race -v ./internal/market/... ./internal/hub/... ./internal/server/... ./cmd/nektar/...
 
 # Mainnet safety gate preflight (exits 0 only when confirm + >=2 non-circular PoW witnesses + settle spec are valid)
@@ -61,9 +61,9 @@ NEKTAR_SETTLE_SPEC="broadcaster:main" \
 ### Foreground vs. Background Daemon
 
 ```sh
-# Flagship 1-command background start + Restate + auto-dock + live receipt check:
+# Flagship 1-command background start + auto-dock + live receipt check (zero external sidecars):
 nektar up                                              # testnet (~/.nektar, :18420)
-nektar up --network main --confirm I_UNDERSTAND        # mainnet (~/.nektar/main, :18420)
+nektar up --mainnet --confirm I_UNDERSTAND             # mainnet (~/.nektar/main, :18420)
 nektar up --install-service                            # install per-user login autostart
 
 # Stop cleanly (add --uninstall-service to remove login autostart):
@@ -101,7 +101,7 @@ nektar open                   # open paired Dashboard in browser (pass --start t
 HTTP observability endpoints (port `18420`):
 
 - `GET /v1/health` (`/health`, `/healthz`) — public liveness probe
-- `GET /v1/metrics` — Prometheus 0.0.4 metrics (`nektar_uptime_seconds`, `nektar_ttfv_ms`, `nektar_fragments_total`, `nektar_unsettled_anchors`, `nektar_fee_balance_sats`, `nektar_spend_guard_*`, `nektar_restate_attached`, `nektar_hub_*`)
+- `GET /v1/metrics` — Prometheus 0.0.4 metrics (`nektar_uptime_seconds`, `nektar_ttfv_ms`, `nektar_fragments_total`, `nektar_unsettled_anchors`, `nektar_fee_balance_sats`, `nektar_spend_guard_*`, `nektar_hub_*`)
 - `GET /v1/coldstart/health` — domain density, fill rate, organic sellers, and bounty taper state
 - `GET /v1/verify/{token}` & `GET /v1/badge/{token}` — public receipt verifier (JSON/HTML + SVG badge)
 
@@ -126,12 +126,12 @@ touch ~/.nektar/main/KILL     # mainnet-only sentinel
 
 ### Backup & Restore
 
-Back up the entire data directory (`~/.nektar` on testnet, `~/.nektar/main` on mainnet, or `/data` in Docker/Helm):
+Use `nektar backup now` (streamed chunked AES-256-GCM + BRC-42 WAL-safe backups) or back up the data directory (`~/.nektar` on testnet, `~/.nektar/main` on mainnet, or `/data` in Docker/Helm):
 - `nektar.sqlite` (fragments, FTS5 index, anchors, receipts, deals, policies, MemRepo commits)
+- `workflows.sqlite` (embedded pure-Go `go-workflows` durable workflow journals)
 - `wallet/` (BRC-100 embedded wallet identity & UTXO state — absent in `client` mode)
-- `objects/` (content-addressed CHIRP blobs & capsules)
-- `http-token`, `operator-token`, `restate-internal-token`, `wallet-mode.json`
-- `restate-data/` (Restate v1.8.1 durable workflow journals)
+- `chirp/` & `objects/` (content-addressed CHIRP blobs & `.nkt` capsules)
+- `http-token`, `operator-token`, `wallet-mode.json`, `spend-guard.json`
 
 Stop the daemon (`nektar stop`) before taking a cold filesystem snapshot, or use SQLite online backup. On restore, start `nektar serve` / `nektar up` — pending anchor crash journals and surviving commercial obligations reconcile automatically on boot.
 

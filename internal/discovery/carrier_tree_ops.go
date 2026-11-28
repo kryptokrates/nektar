@@ -26,54 +26,59 @@ import (
 // Returns the AtomicBEEF, the consumed funding outpoint ("<txid>.<vout>") so the caller can
 // later invoke RetractCarrier(fundingOutpoint), and the carrier txid.
 func (m *CarrierTreeManager) MintCarrier(ctx context.Context, p bstack.MarketPayload) (beef []byte, fundingOutpoint string, carrierTxID string, err error) {
-	if m.port == nil || m.priv == nil {
+	if m.port == nil || m.signer == nil {
 		return nil, "", "", errors.New("discovery: carrier tree requires chain port and signing key")
 	}
 	cborBytes, err := bstack.EncodePayload(p)
 	if err != nil {
 		return nil, "", "", err
 	}
-	protoWallet, err := sdkwallet.NewCompletedProtoWallet(m.priv)
+	protoWallet, err := m.signer.ProtoWallet()
 	if err != nil {
 		return nil, "", "", fmt.Errorf("discovery: init carrier wallet: %w", err)
 	}
 
-	m.mu.Lock()
-	// Adopt pre-minted Ahead tree if Active is empty/exhausted, preserving the old Active in Retired.
-	if m.state.Active == nil || m.state.Active.NextIndex >= len(m.state.Active.Vouts) {
-		if m.state.Ahead != nil && m.state.Ahead.NextIndex < len(m.state.Ahead.Vouts) {
-			m.retireActiveLocked()
-			m.state.Active = m.state.Ahead
-			m.state.Ahead = nil
-			m.saveLocked()
+	var (
+		vout          uint32
+		beefHex       string
+		treeTxID      string
+		shouldPreMint bool
+	)
+	for attempt := 0; attempt < 4; attempt++ {
+		m.mu.Lock()
+		// Adopt pre-minted Ahead tree if Active is empty/exhausted, preserving the old Active in Retired.
+		if m.state.Active == nil || m.state.Active.NextIndex >= len(m.state.Active.Vouts) {
+			if m.state.Ahead != nil && m.state.Ahead.NextIndex < len(m.state.Ahead.Vouts) {
+				m.retireActiveLocked()
+				m.state.Active = m.state.Ahead
+				m.state.Ahead = nil
+				m.saveLocked()
+			}
 		}
-	}
-	needMint := m.state.Active == nil || m.state.Active.NextIndex >= len(m.state.Active.Vouts)
-	m.mu.Unlock()
+		if m.state.Active != nil && m.state.Active.NextIndex < len(m.state.Active.Vouts) {
+			active := m.state.Active
+			vout = active.Vouts[active.NextIndex]
+			active.NextIndex++
+			remaining := len(active.Vouts) - active.NextIndex
+			beefHex = active.BEEFHex
+			treeTxID = active.TxID
+			shouldPreMint = remaining <= m.aheadAt && m.state.Ahead == nil && !m.minting
+			if shouldPreMint {
+				m.minting = true
+			}
+			m.saveLocked()
+			m.mu.Unlock()
+			break
+		}
+		m.mu.Unlock()
 
-	if needMint {
 		if mErr := m.ensureActiveTree(ctx, protoWallet); mErr != nil {
 			return nil, "", "", mErr
 		}
 	}
-
-	m.mu.Lock()
-	active := m.state.Active
-	if active == nil || active.NextIndex >= len(active.Vouts) {
-		m.mu.Unlock()
+	if treeTxID == "" {
 		return nil, "", "", errors.New("discovery: funding tree exhausted")
 	}
-	vout := active.Vouts[active.NextIndex]
-	active.NextIndex++
-	remaining := len(active.Vouts) - active.NextIndex
-	beefHex := active.BEEFHex
-	treeTxID := active.TxID
-	shouldPreMint := remaining <= m.aheadAt && m.state.Ahead == nil && !m.minting
-	if shouldPreMint {
-		m.minting = true
-	}
-	m.saveLocked()
-	m.mu.Unlock()
 
 	if shouldPreMint {
 		m.wg.Add(1)
@@ -88,7 +93,7 @@ func (m *CarrierTreeManager) MintCarrier(ctx context.Context, p bstack.MarketPay
 				case <-bgCtx.Done():
 				}
 			}()
-			pw, pErr := sdkwallet.NewCompletedProtoWallet(m.priv)
+			pw, pErr := m.signer.ProtoWallet()
 			if pErr != nil {
 				log.Printf("discovery: carrier tree ahead wallet init failed: %v", pErr)
 			} else if mErr := m.ensureAheadTree(bgCtx, pw); mErr != nil {
@@ -122,10 +127,10 @@ func (m *CarrierTreeManager) MintCarrier(ctx context.Context, p bstack.MarketPay
 // mineable transaction spending the carrier's funding output (fundingTxID:vout) back to a final
 // tombstone output so every conforming Hub evicts the retracted carrier permanently.
 func (m *CarrierTreeManager) RetractCarrier(ctx context.Context, treeTxID string, vout uint32) (sweepTxID string, sweepBEEF []byte, err error) {
-	if m.port == nil || m.priv == nil {
+	if m.port == nil || m.signer == nil {
 		return "", nil, errors.New("discovery: carrier tree requires chain port and signing key")
 	}
-	protoWallet, err := sdkwallet.NewCompletedProtoWallet(m.priv)
+	protoWallet, err := m.signer.ProtoWallet()
 	if err != nil {
 		return "", nil, err
 	}

@@ -5,13 +5,12 @@ import (
 	"sync"
 )
 
-// LoopGuard is a bounded FIFO seen-set keyed on SHA-256(rawBEEF || 0x00 || SHA-256(topic)),
-// matching lightwebinc/overlay-bridge/guard and 1BSV Paper 008 §5.
-//
-// Keying on raw BEEF bytes (rather than subject txid) is deliberate: a byte-identical echo
-// arriving back from the object plane or a second facade is suppressed, while a proof-refreshed
-// republish of the same txid carrying a newly mined BUMP has distinct bytes and passes cleanly.
-type LoopGuard struct {
+const (
+	DefaultLoopGuardCap = 524288
+	numLoopGuardShards  = 16
+)
+
+type loopGuardShard struct {
 	mu    sync.Mutex
 	cap   int
 	seen  map[[32]byte]struct{}
@@ -19,18 +18,34 @@ type LoopGuard struct {
 	head  int
 }
 
-const DefaultLoopGuardCap = 65536
+// LoopGuard is a 16-shard bounded FIFO seen-set keyed on SHA-256(SHA-256(rawBEEF) || SHA-256(topic)),
+// matching lightwebinc/overlay-bridge/guard and 1BSV Paper 008 §5.
+//
+// Keying on raw BEEF bytes (rather than subject txid) is deliberate: a byte-identical echo
+// arriving back from the object plane or a second facade is suppressed, while a proof-refreshed
+// republish of the same txid carrying a newly mined BUMP has distinct bytes and passes cleanly.
+type LoopGuard struct {
+	shards [numLoopGuardShards]loopGuardShard
+}
 
 // NewLoopGuard creates a bounded LoopGuard holding up to capacity distinct (BEEF, topic) pairs.
 func NewLoopGuard(capacity int) *LoopGuard {
 	if capacity <= 0 {
 		capacity = DefaultLoopGuardCap
 	}
-	return &LoopGuard{
-		cap:   capacity,
-		seen:  make(map[[32]byte]struct{}, min(capacity, 4096)),
-		order: make([][32]byte, 0, min(capacity, 4096)),
+	shardCap := (capacity + numLoopGuardShards - 1) / numLoopGuardShards
+	if shardCap < 1 {
+		shardCap = 1
 	}
+	g := &LoopGuard{}
+	for i := range g.shards {
+		g.shards[i] = loopGuardShard{
+			cap:   shardCap,
+			seen:  make(map[[32]byte]struct{}, min(shardCap, 512)),
+			order: make([][32]byte, 0, min(shardCap, 512)),
+		}
+	}
+	return g
 }
 
 // ObjectKey computes SHA-256(SHA-256(rawBEEF) || SHA-256(topic)) — the exact composite
@@ -50,9 +65,10 @@ func (g *LoopGuard) Seen(rawBEEF []byte, topic string) bool {
 		return false
 	}
 	k := ObjectKey(rawBEEF, topic)
-	g.mu.Lock()
-	_, ok := g.seen[k]
-	g.mu.Unlock()
+	sh := &g.shards[k[0]&(numLoopGuardShards-1)]
+	sh.mu.Lock()
+	_, ok := sh.seen[k]
+	sh.mu.Unlock()
 	return ok
 }
 
@@ -63,24 +79,25 @@ func (g *LoopGuard) MarkIfUnseen(rawBEEF []byte, topic string) bool {
 		return true
 	}
 	k := ObjectKey(rawBEEF, topic)
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if _, ok := g.seen[k]; ok {
+	sh := &g.shards[k[0]&(numLoopGuardShards-1)]
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if _, ok := sh.seen[k]; ok {
 		return false
 	}
-	g.insertLocked(k)
+	sh.insertLocked(k)
 	return true
 }
 
-func (g *LoopGuard) insertLocked(k [32]byte) {
-	if len(g.order) < g.cap {
-		g.order = append(g.order, k)
-		g.seen[k] = struct{}{}
+func (sh *loopGuardShard) insertLocked(k [32]byte) {
+	if len(sh.order) < sh.cap {
+		sh.order = append(sh.order, k)
+		sh.seen[k] = struct{}{}
 		return
 	}
-	old := g.order[g.head]
-	delete(g.seen, old)
-	g.order[g.head] = k
-	g.seen[k] = struct{}{}
-	g.head = (g.head + 1) % g.cap
+	old := sh.order[sh.head]
+	delete(sh.seen, old)
+	sh.order[sh.head] = k
+	sh.seen[k] = struct{}{}
+	sh.head = (sh.head + 1) % sh.cap
 }

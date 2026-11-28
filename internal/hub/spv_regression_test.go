@@ -58,8 +58,8 @@ func TestHubLiveNodeRefusesNilTrackerUnfundedOpReturnAndEmptyLeaf(t *testing.T) 
 		Exp:      time.Now().Add(time.Hour).UnixMilli(),
 	}
 	sig, _ := bstack.SignArtifact(key, want)
-	body, _ := json.Marshal(bstack.SignedWant{Want: want, Sig: sig})
-	cborBytes, _ := bstack.EncodePayload(bstack.MarketPayload{Kind: bstack.KindWant, Body: body})
+	pWant, _ := bstack.NewWantPayload(bstack.SignedWant{Want: want, Sig: sig})
+	cborBytes, _ := bstack.EncodePayload(pWant)
 	ls := &script.Script{}
 	_ = ls.AppendOpcodes(script.OpFALSE, script.OpRETURN)
 	_ = ls.AppendPushData(cborBytes)
@@ -111,8 +111,8 @@ func TestHubMarketEventsCarryBEEFBountyPending202AndDripFaucetBEEF(t *testing.T)
 		Exp:      time.Now().Add(time.Hour).UnixMilli(),
 	}
 	sig, _ := bstack.SignArtifact(key, want)
-	body, _ := json.Marshal(bstack.SignedWant{Want: want, Sig: sig})
-	cborBytes, _ := bstack.EncodePayload(bstack.MarketPayload{Kind: bstack.KindWant, Body: body})
+	pWant, _ := bstack.NewWantPayload(bstack.SignedWant{Want: want, Sig: sig})
+	cborBytes, _ := bstack.EncodePayload(pWant)
 	ls := &script.Script{}
 	_ = ls.AppendOpcodes(script.OpFALSE, script.OpRETURN)
 	_ = ls.AppendPushData(cborBytes)

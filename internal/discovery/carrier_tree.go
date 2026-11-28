@@ -10,13 +10,12 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
-	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/transaction"
-	sdkwallet "github.com/bsv-blockchain/go-sdk/wallet"
 	"github.com/lightwebinc/bcommon/guard"
 
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/store"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 const (
@@ -58,7 +57,7 @@ type CarrierTreeManager struct {
 	mintMu    sync.Mutex
 	port      *chain.Port
 	db        *store.DB
-	priv      *ec.PrivateKey
+	signer    *nwallet.MarketSigner
 	width     int
 	aheadAt   int
 	state     FundingTreeState
@@ -69,11 +68,11 @@ type CarrierTreeManager struct {
 }
 
 // NewCarrierTreeManager opens or initializes a persistent M=16 carrier funding tree manager.
-func NewCarrierTreeManager(port *chain.Port, db *store.DB, priv *ec.PrivateKey) *CarrierTreeManager {
+func NewCarrierTreeManager(port *chain.Port, db *store.DB, signer *nwallet.MarketSigner) *CarrierTreeManager {
 	m := &CarrierTreeManager{
 		port:    port,
 		db:      db,
-		priv:    priv,
+		signer:  signer,
 		width:   DefaultFundingTreeWidth,
 		aheadAt: DefaultFundingTreeAheadThreshold,
 		stopCh:  make(chan struct{}),
@@ -145,10 +144,10 @@ func (m *CarrierTreeManager) allTreesLocked() []*FundingTreeRecord {
 // WarmStock pre-mints Active (and Ahead) carrier funding trees on boot so the first MintCarrier
 // does not stall waiting for funding-tree construction or mining.
 func (m *CarrierTreeManager) WarmStock(ctx context.Context) error {
-	if m.port == nil || m.priv == nil {
+	if m.port == nil || m.signer == nil {
 		return errors.New("discovery: carrier tree requires chain port and signing key")
 	}
-	protoWallet, err := sdkwallet.NewCompletedProtoWallet(m.priv)
+	protoWallet, err := m.signer.ProtoWallet()
 	if err != nil {
 		return fmt.Errorf("discovery: init carrier wallet: %w", err)
 	}
@@ -246,9 +245,9 @@ func (m *CarrierTreeManager) HandleReorg(forkHeight uint32) {
 }
 
 // CarrierTree returns (lazily initializing) the Service's persistent M=16 funding tree manager.
-func (s *Service) CarrierTree(priv *ec.PrivateKey) *CarrierTreeManager {
-	if priv == nil {
-		priv = s.announceKey
+func (s *Service) CarrierTree(signer *nwallet.MarketSigner) *CarrierTreeManager {
+	if signer == nil {
+		signer = s.signer
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -259,7 +258,7 @@ func (s *Service) CarrierTree(priv *ec.PrivateKey) *CarrierTreeManager {
 			port = s.mem.Chain()
 			db = s.mem.DB()
 		}
-		s.carrierTree = NewCarrierTreeManager(port, db, priv)
+		s.carrierTree = NewCarrierTreeManager(port, db, signer)
 	}
 	return s.carrierTree
 }

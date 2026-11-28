@@ -526,18 +526,101 @@ func OpenSealedClearance(recipientKey *ec.PrivateKey, shard string, epoch uint64
 
 // Manager coordinates per-shard CLKA epochs, domain privilege DAGs, sealing/opening, and clearance provisioning.
 type Manager struct {
-	mu      sync.RWMutex
-	rootFn  RootProvider
-	persist Persistence
-	states  map[string]*ShardState
+	mu       sync.RWMutex
+	rootFn   RootProvider
+	persist  Persistence
+	states   map[string]*ShardState
+	lvlCache map[string][32]byte
+	domCache map[string][32]byte
 }
 
 // NewManager creates a CLKA Manager backed by a BRC-43 RootProvider.
 func NewManager(rootFn RootProvider) *Manager {
 	return &Manager{
-		rootFn: rootFn,
-		states: make(map[string]*ShardState),
+		rootFn:   rootFn,
+		states:   make(map[string]*ShardState),
+		lvlCache: make(map[string][32]byte),
+		domCache: make(map[string][32]byte),
 	}
+}
+
+func (m *Manager) clearShardKeyCacheLocked(shard string) {
+	prefix := shard + "\x00"
+	for k, v := range m.lvlCache {
+		if strings.HasPrefix(k, prefix) {
+			core.Zero32Array(&v)
+			delete(m.lvlCache, k)
+		}
+	}
+	for k, v := range m.domCache {
+		if strings.HasPrefix(k, prefix) {
+			core.Zero32Array(&v)
+			delete(m.domCache, k)
+		}
+	}
+}
+
+func (m *Manager) cachedShardKeys(ctx context.Context, shard string, epoch uint64, level int, domain string) ([32]byte, [32]byte, error) {
+	dom := normDomain(domain)
+	lkKey := fmt.Sprintf("%s\x00%d\x00%d", shard, epoch, level)
+	dkKey := fmt.Sprintf("%s\x00%d\x00%s", shard, epoch, dom)
+
+	m.mu.RLock()
+	lk, hasLK := m.lvlCache[lkKey]
+	dk, hasDK := m.domCache[dkKey]
+	m.mu.RUnlock()
+	if hasLK && hasDK {
+		return lk, dk, nil
+	}
+
+	root, err := m.rootFn(ctx, shard, epoch)
+	if err != nil {
+		return [32]byte{}, [32]byte{}, err
+	}
+	defer core.Zero32Array(&root)
+
+	if !hasLK {
+		topKey, tErr := deriveTopLevelKey(root, shard, epoch)
+		if tErr != nil {
+			return [32]byte{}, [32]byte{}, tErr
+		}
+		lk, err = DeriveLevelKey(topKey, MaxLevel, level, shard, epoch)
+		core.Zero32Array(&topKey)
+		if err != nil {
+			return [32]byte{}, [32]byte{}, err
+		}
+	}
+	if !hasDK {
+		dk, err = deriveDomainSecret(root, shard, epoch, dom)
+		if err != nil {
+			core.Zero32Array(&lk)
+			return [32]byte{}, [32]byte{}, err
+		}
+	}
+
+	m.mu.Lock()
+	if m.lvlCache == nil {
+		m.lvlCache = make(map[string][32]byte)
+	}
+	if m.domCache == nil {
+		m.domCache = make(map[string][32]byte)
+	}
+	if len(m.lvlCache) >= 256 {
+		for k, v := range m.lvlCache {
+			core.Zero32Array(&v)
+			delete(m.lvlCache, k)
+		}
+	}
+	if len(m.domCache) >= 256 {
+		for k, v := range m.domCache {
+			core.Zero32Array(&v)
+			delete(m.domCache, k)
+		}
+	}
+	m.lvlCache[lkKey] = lk
+	m.domCache[dkKey] = dk
+	m.mu.Unlock()
+	return lk, dk, nil
 }
 
 // SetPersistence attaches durable epoch/DAG persistence and loads existing shard states.
@@ -673,6 +756,7 @@ func (m *Manager) RotateEpoch(shard string) (uint64, error) {
 		}
 	}
 	m.states[shard] = &next
+	m.clearShardKeyCacheLocked(shard)
 	return next.Epoch, nil
 }
 
@@ -749,30 +833,10 @@ func (m *Manager) SealFragment(ctx context.Context, shard string, level int, dom
 		return nil, [32]byte{}, err
 	}
 	epoch := m.CurrentEpoch(shard)
-	root, err := m.rootFn(ctx, shard, epoch)
+	lvlKey, domKey, err := m.cachedShardKeys(ctx, shard, epoch, level, domain)
 	if err != nil {
 		return nil, [32]byte{}, err
 	}
-	defer core.Zero32Array(&root)
-
-	topKey, err := deriveTopLevelKey(root, shard, epoch)
-	if err != nil {
-		return nil, [32]byte{}, err
-	}
-	defer core.Zero32Array(&topKey)
-
-	lvlKey, err := DeriveLevelKey(topKey, MaxLevel, level, shard, epoch)
-	if err != nil {
-		return nil, [32]byte{}, err
-	}
-	defer core.Zero32Array(&lvlKey)
-
-	domKey, err := deriveDomainSecret(root, shard, epoch, domain)
-	if err != nil {
-		return nil, [32]byte{}, err
-	}
-	defer core.Zero32Array(&domKey)
-
 	return SealWithKeys(shard, epoch, level, domain, contentID, lvlKey, domKey, plaintext)
 }
 

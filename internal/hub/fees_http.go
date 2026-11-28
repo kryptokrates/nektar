@@ -98,14 +98,14 @@ func (n *Node) authenticateEgressCaller(r *http.Request, action string, cursor i
 		return "", false, errors.New("expired or invalid X-Nektar-Ts")
 	}
 	aud := strings.ToLower(strings.TrimSpace(r.Host))
-	authPayload := map[string]any{
-		"action":  action,
-		"pub":     hdrPub,
-		"ts":      ts,
-		"nonce":   hdrNonce,
-		"aud":     aud,
-		"cursor":  cursor,
-		"domains": strings.ToLower(strings.TrimSpace(domainsCSV)),
+	authPayload := bstack.HubEgressAuth{
+		Action:  action,
+		Pub:     hdrPub,
+		TS:      ts,
+		Nonce:   hdrNonce,
+		Aud:     aud,
+		Cursor:  cursor,
+		Domains: strings.ToLower(strings.TrimSpace(domainsCSV)),
 	}
 	if vErr := bstack.VerifyArtifact(hdrPub, hdrSig, authPayload); vErr != nil {
 		return "", false, errors.New("invalid hub egress signature")

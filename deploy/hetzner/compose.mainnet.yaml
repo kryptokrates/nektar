@@ -1,7 +1,7 @@
 # Nektar v0.1 — Dedicated Hetzner MAINNET Spine Hub Stack (side-by-side with Testnet)
 #
-# Runs with strictly isolated Docker volumes (hub-mainnet-data, hub-mainnet-backups, restate-mainnet-data)
-# and binds loopback 127.0.0.1:18422 so existing Testnet Hub on 127.0.0.1:18420 stays untouched.
+# Runs with strictly isolated Docker volumes (hub-mainnet-data, hub-mainnet-backups)
+# and binds loopback 127.0.0.1:18430 so existing Testnet Hub on 127.0.0.1:18420 stays untouched.
 #
 # Usage (from /opt/nektar):
 #   docker compose \
@@ -12,27 +12,10 @@
 name: nektar-mainnet
 
 services:
-  restate:
-    image: docker.restate.dev/restatedev/restate:1.8.1
-    restart: unless-stopped
-    environment:
-      RESTATE_NODE_NAME: nektar-mainnet-spine
-      RESTATE_BASE_DIR: /restate-data
-    healthcheck:
-      test: ['CMD', 'bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/9070 && printf "GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && grep -q "200" <&3']
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    volumes:
-      - restate-mainnet-data:/restate-data
-
   hub:
     image: ghcr.io/kryptokrates/nektar:${NEKTAR_IMAGE_TAG:-latest}${NEKTAR_IMAGE_DIGEST:+@${NEKTAR_IMAGE_DIGEST}}
     restart: unless-stopped
-    command: ['serve', '-listen', ':18420', '-restate-listen', ':9080', '-hub']
-    depends_on:
-      restate:
-        condition: service_healthy
+    command: ['serve', '-listen', ':18420', '-hub']
     ports:
       - '${NEKTAR_HTTP_BIND:-127.0.0.1}:${NEKTAR_HTTP_PORT:-18430}:18420'
     environment:
@@ -65,13 +48,6 @@ services:
       NEKTAR_WALLET_PROFILE: ${NEKTAR_WALLET_PROFILE:-standard}
       NEKTAR_ARCADE_KEY: ${NEKTAR_ARCADE_KEY:-}
       NEKTAR_WOC_KEY: ${NEKTAR_WOC_KEY:-}
-      NEKTAR_RESTATE_URL: http://restate:8080
-      NEKTAR_RESTATE_ADMIN: http://restate:9070
-      NEKTAR_RESTATE_ENDPOINT_URI: http://hub:9080
-      NEKTAR_RESTATE_IDENTITY_KEY: ${NEKTAR_RESTATE_IDENTITY_KEY:-}
-      NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT: ${NEKTAR_RESTATE_ALLOW_INSECURE_ENDPOINT:-1}
-      NEKTAR_RESTATE_INTERNAL_TOKEN: ${NEKTAR_RESTATE_INTERNAL_TOKEN:-}
-      NEKTAR_RESTATE_REQUIRED: ${NEKTAR_RESTATE_REQUIRED:-1}
       NEKTAR_MAX_FEE_PER_TX: ${NEKTAR_MAX_FEE_PER_TX:-2000}
       NEKTAR_MAX_SPEND_PER_DAY: ${NEKTAR_MAX_SPEND_PER_DAY:-10000}
       NEKTAR_FAUCET_DAILY_CAP: '0'
@@ -92,4 +68,3 @@ services:
 volumes:
   hub-mainnet-data: {}
   hub-mainnet-backups: {}
-  restate-mainnet-data: {}

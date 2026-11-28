@@ -2,9 +2,9 @@ package hub
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -12,7 +12,6 @@ import (
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/lightwebinc/bcommon/guard"
 	"github.com/lightwebinc/bcommon/module"
-	"github.com/lightwebinc/bcommon/verify"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 )
@@ -45,7 +44,7 @@ func (n *Node) restoreFromStore(ctx context.Context) error {
 					continue
 				}
 				if n.tracker != nil {
-					if verdict, _ := verify.Check(ctx, parsed, n.tracker); verdict != verify.Passed {
+					if vErr := n.verifyBEEFWithSPV(ctx, ev.BEEF, parsed); vErr != nil {
 						continue
 					}
 				}
@@ -102,19 +101,20 @@ func (n *Node) HandleReorg(ctx context.Context, forkHeight uint32) error {
 func extractMeta(p bstack.MarketPayload) (pub string, domains []string, exp int64) {
 	switch p.Kind {
 	case bstack.KindWant:
-		var sw bstack.SignedWant
-		if json.Unmarshal(p.Body, &sw) == nil {
+		if sw, err := bstack.DecodeWantPayload(p.Body); err == nil {
 			return sw.Want.Pub, sw.Want.Domains, sw.Want.Exp
 		}
 	case bstack.KindOffer:
-		var so bstack.SignedOffer
-		if json.Unmarshal(p.Body, &so) == nil {
+		if so, err := bstack.DecodeOfferPayload(p.Body); err == nil {
 			return so.Offer.Pub, so.Offer.Domains, so.Offer.Exp
 		}
 	case bstack.KindAnnounce:
-		var sa bstack.SignedAnnounce
-		if json.Unmarshal(p.Body, &sa) == nil {
+		if sa, err := bstack.DecodeAnnouncePayload(p.Body); err == nil {
 			return sa.Announce.Pub, append([]string{bstack.DirDomain}, sa.Announce.Domains...), sa.Announce.Exp
+		}
+	case bstack.KindAttestation:
+		if sat, err := bstack.DecodeAttestationPayload(p.Body); err == nil {
+			return sat.Attestation.Pub, append([]string{bstack.DirDomain}, sat.Attestation.Domains...), sat.Attestation.Exp
 		}
 	}
 	return "", nil, 0
@@ -145,7 +145,7 @@ func (n *Node) classifySubmitPayload(rawBEEF []byte, topics []string) (bstack.Ar
 	_, parsedTx, _, err := guard.ParseBEEF(rawBEEF, guard.DefaultBound)
 	if err == nil && parsedTx != nil {
 		tx = parsedTx
-	} else if !isLive && allMarketTopics && err != nil && strings.Contains(err.Error(), "no inputs") && len(rawBEEF) <= 64<<10 {
+	} else if (!isLive || os.Getenv("NEKTAR_OFFCHAIN_ADS") == "1") && allMarketTopics && err != nil && strings.Contains(err.Error(), "no inputs") && len(rawBEEF) <= 64<<10 {
 		t0, tErr := transaction.NewTransactionFromBEEF(rawBEEF)
 		if tErr != nil || t0 == nil || len(t0.Inputs) != 0 || len(t0.Outputs) == 0 || len(t0.Outputs) > 16 {
 			return "", fmt.Errorf("hub: parse carrier BEEF: %w", err)
@@ -177,7 +177,7 @@ func (n *Node) classifySubmitPayload(rawBEEF []byte, topics []string) (bstack.Ar
 		if !strings.HasPrefix(topic, "tm_nektar_") {
 			continue
 		}
-		if isLive {
+		if isLive && (len(tx.Inputs) > 0 || os.Getenv("NEKTAR_OFFCHAIN_ADS") != "1") {
 			_, p, vErr := bstack.VerifyMarketCarrier(tx, n.net, topic, now)
 			if vErr == nil {
 				return p.Kind, nil

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
-	restate "github.com/restatedev/sdk-go"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
@@ -45,15 +44,14 @@ func TestMarketSecurityPolicyCapsOfferIntegrityAndInternalAuth(t *testing.T) {
 		t.Fatal("expected SQLite ReserveSpendAtomic with 0 maxPerDeal/maxPerDay to fail closed")
 	}
 
-	// 2. Engine checkInternalAuthReq must fail CLOSED when no internal token is configured,
-	// and reject missing headers when configured!
+	// 2. Unstarted WorkflowClient must fail CLOSED (zero sidecar/HTTP ports exposed; must start embedded runtime first)!
 	eng := NewEngine(mem, DefaultPolicy())
-	if err := eng.checkInternalAuthReq(nil); err == nil {
-		t.Fatal("expected checkInternalAuthReq to fail closed when internalToken is empty")
+	stoppedWC := NewWorkflowClient(eng, nil)
+	if err := stoppedWC.HealthCheck(ctx); err == nil {
+		t.Fatal("expected unstarted WorkflowClient HealthCheck to fail closed")
 	}
-	eng.SetInternalToken("super-secret-internal-token")
-	if err := eng.checkInternalAuthReq(&restate.Request{}); err == nil {
-		t.Fatal("expected checkInternalAuthReq to reject missing internal token header")
+	if _, err := stoppedWC.StartBuyerDealAsync(ctx, "w-unstarted", BuyerDealInput{}); err == nil {
+		t.Fatal("expected unstarted WorkflowClient StartBuyerDealAsync to fail closed")
 	}
 
 	// 3. KeyedSaleOffer integrity: expired offer, missing leaf, and tampered KeyCommitment/Ciphertext must be rejected!

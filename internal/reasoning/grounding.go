@@ -332,13 +332,13 @@ type Receipt struct {
 	IssuerSig           string           `json:"issuerSig,omitempty"`
 }
 
-// ReceiptSignDigest computes the domain-separated digest signed by the issuing agent (TagReceiptSig).
+// ReceiptSignDigest computes the domain-separated CBOR digest signed by the issuing agent (TagReceiptSig).
 func ReceiptSignDigest(r Receipt) ([]byte, error) {
 	if r.TruthNote == "" {
 		r.TruthNote = TruthNote
 	}
 	r.IssuerSig = ""
-	canon, err := core.CanonicalJSON(r)
+	canon, err := EncodeReceiptCBOR(r)
 	if err != nil {
 		return nil, err
 	}
@@ -368,12 +368,16 @@ func VerifyReceiptSignature(r Receipt) error {
 	return nil
 }
 
-// ReceiptHash computes the canonical hash of r.
+// ReceiptHash computes the canonical DSHA-256 hash of r's RFC 8949 CDE CBOR representation.
 func ReceiptHash(r Receipt) (string, error) {
 	if r.TruthNote == "" {
 		r.TruthNote = TruthNote
 	}
-	return core.HashOf(r)
+	canon, err := EncodeReceiptCBOR(r)
+	if err != nil {
+		return "", err
+	}
+	return core.ToHex(core.DSHA256(canon)), nil
 }
 
 // ReceiptToken encodes a 32-byte hex receipt hash into `nektarr1.<base64url>`.

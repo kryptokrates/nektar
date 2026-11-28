@@ -26,8 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/
    - `[mcp_servers.nektar]` running `nektar mcp` (transparently auto-bridges to your live Mainnet or Testnet background daemon via `~/.nektar/active-daemon.json` — zero SQLite lock contention across multiple Codex sessions!)
 2. **Global Skills** (`~/.codex/skills/nektar-memory/SKILL.md` & `~/.agents/skills/nektar-memory/SKILL.md`):
    - Teaches Codex the recall-first → `groundedAnswer` → `nektarr1.*` receipt loop in **every** workspace, not just inside the `nektar` repository.
-3. **Background Daemon + Restate v1.8.1**:
-   - Survives terminal closes (`nektar stop` to shut down; `--install-service` to auto-start on login).
+3. **Background Pure-Go Daemon (Zero Sidecars)**:
+   - Survives terminal closes (`nektar stop` to shut down; `--install-service` to auto-start on login) and auto-arms Testnet sandbox capsule trading out of the box.
 
 ---
 

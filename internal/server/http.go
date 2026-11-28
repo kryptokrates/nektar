@@ -13,14 +13,17 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/kryptokrates/nektar/internal/autonomy"
 	"github.com/kryptokrates/nektar/internal/backup"
 	"github.com/kryptokrates/nektar/internal/contracts"
+	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
+	"github.com/kryptokrates/nektar/internal/nmu"
 	"github.com/kryptokrates/nektar/internal/reasoning"
 )
 
@@ -54,6 +57,17 @@ type pairTicket struct {
 	expires time.Time
 }
 
+type cachedReceiptVerdict struct {
+	verdict      string
+	anchoredRecs int
+	expiresAt    int64
+}
+
+type cachedTickerEntry struct {
+	resp      CommodityTickerResponse
+	expiresAt time.Time
+}
+
 // App bundles all Nektar v0.1 HTTP interfaces into one net/http Handler.
 type App struct {
 	mem            *memory.Service
@@ -73,8 +87,29 @@ type App struct {
 	evMu   sync.Mutex
 	evSubs map[chan []byte]struct{}
 
-	feedMu   sync.Mutex
-	feedSubs map[string]map[chan shardFeedFrame]struct{}
+	feedMu       sync.Mutex
+	feedSubs     map[string]map[chan shardFeedFrame]struct{}
+	feedSubCount int
+	feedNonces   nmu.FeedNonceCache
+
+	rcpVerdictMu    sync.RWMutex
+	rcpVerdictCache map[string]cachedReceiptVerdict
+
+	stateCacheMu    sync.Mutex
+	stateCacheURL   string
+	stateCacheSeq   int64
+	stateCacheHasWF bool
+	stateCacheExp   time.Time
+	stateCacheVal   map[string]any
+
+	metricsSF       singleflight.Group
+	metricsCacheMu  sync.RWMutex
+	metricsCacheExp time.Time
+	metricsCacheVal []byte
+
+	tickerSF       singleflight.Group
+	tickerCacheMu  sync.RWMutex
+	tickerCacheMap map[string]cachedTickerEntry
 
 	pairMu    sync.Mutex
 	pairCodes map[string]pairTicket
@@ -118,7 +153,11 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 	}
 	hc := cfg.HTTPClient
 	if hc == nil {
-		hc = &http.Client{Timeout: 60 * time.Second}
+		netName := "memory"
+		if mem != nil && mem.Chain() != nil && mem.Chain().Network() != "" {
+			netName = mem.Chain().Network()
+		}
+		hc = core.SafeHTTPClientForNetwork(netName, 60*time.Second)
 	}
 	disc := cfg.Discovery
 	if disc == nil && cfg.Broker != nil {
@@ -152,13 +191,17 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 		startedAt:  time.Now(),
 		httpClient: hc,
 		proxyTransport: &http.Transport{
+			ForceAttemptHTTP2:     true,
 			ResponseHeaderTimeout: 30 * time.Second,
-			MaxIdleConns:          64,
+			MaxIdleConns:          512,
+			MaxIdleConnsPerHost:   128,
 			IdleConnTimeout:       90 * time.Second,
 		},
-		evSubs:       make(map[chan []byte]struct{}),
-		feedSubs:     make(map[string]map[chan shardFeedFrame]struct{}),
-		pairCodes:    make(map[string]pairTicket),
+		evSubs:          make(map[chan []byte]struct{}),
+		feedSubs:        make(map[string]map[chan shardFeedFrame]struct{}),
+		rcpVerdictCache: make(map[string]cachedReceiptVerdict),
+		tickerCacheMap:  make(map[string]cachedTickerEntry),
+		pairCodes:       make(map[string]pairTicket),
 		faucetIPs:    make(map[string][]int64),
 		oauthRegIPs:  make(map[string][]int64),
 		oauthClients: make(map[string]oauthClient),
@@ -178,6 +221,34 @@ func NewApp(mem *memory.Service, mkt *market.Engine, cfg Config) (*App, error) {
 		mem.SetOnSupersede(func(ev memory.SupersessionEvent) {
 			app.BroadcastShardFeedEvent(ev.Shard, "fragment_superseded", ev)
 		})
+		if bus := mem.EventBus(); bus != nil {
+			app.goBackground(func(bCtx context.Context) {
+				sub := bus.Subscribe([]string{"shard:*", "deal:*"}, 64)
+				defer sub.Close()
+				for {
+					select {
+					case <-bCtx.Done():
+						return
+					case ev, ok := <-sub.Events():
+						if !ok {
+							return
+						}
+						kind := ev.Kind
+						if kind == "" {
+							kind = "memory_updated"
+						}
+						app.BroadcastDashboardEvent(kind)
+					case _, ok := <-sub.Wake():
+						if !ok {
+							return
+						}
+						if sub.TakeGap() {
+							app.BroadcastDashboardEvent("memory_updated")
+						}
+					}
+				}
+			})
+		}
 	}
 	app.handler = app.buildMux()
 	return app, nil
@@ -273,6 +344,12 @@ func (a *App) BroadcastDashboardEvent(kind string) {
 
 // BroadcastDashboardPayload pushes a typed live SSE frame (with optional market tape event) to dashboard subscribers.
 func (a *App) BroadcastDashboardPayload(kind string, tape *market.MarketTapeEvent) {
+	a.evMu.Lock()
+	if len(a.evSubs) == 0 {
+		a.evMu.Unlock()
+		return
+	}
+	a.evMu.Unlock()
 	raw, err := json.Marshal(dashboardSSEFrame{
 		Event: kind,
 		Ts:    time.Now().UnixMilli(),

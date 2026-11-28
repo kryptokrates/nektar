@@ -104,7 +104,7 @@ func (s *Service) exportCapsuleAuthorized(ctx context.Context, shard string, pri
 
 	if !filtered {
 		commits = s.collectReachableCommitsTopo(headCommitHash, "")
-		trees, blobs, chirpHashes = s.collectCommitDAGObjects(shard, commits, principal, disallowBorg, true)
+		trees, blobs, chirpHashes = s.collectCapsuleDAGObjects(shard, commits, principal, disallowBorg, true)
 	} else {
 		// Policy-filtered export: assemble a clean authorized snapshot tree so restricted fragments never leak via parent trees.
 		entries := make([]memrepo.TreeEntry, 0, len(frags))
@@ -175,6 +175,7 @@ func (s *Service) exportCapsuleAuthorized(ctx context.Context, shard string, pri
 		GenesisShardID: genID,
 		OwnerPub:       s.port.IdentityPubHex(),
 		HeadCommit:     headCommitHash,
+		BaseAnchorN:    -1,
 		ExportedAt:     time.Now().Unix(),
 		Commits:        commits,
 		Trees:          trees,
@@ -183,7 +184,12 @@ func (s *Service) exportCapsuleAuthorized(ctx context.Context, shard string, pri
 		Fragments:      frags,
 		BatchProofs:    s.buildCapsuleBatchProofs(shard, anchors, frags, commits),
 	}
-	raw, err := memrepo.EncodeCapsule(cap)
+	raw, err := memrepo.EncodeCapsuleWithOpts(cap, s.capsuleEncodeOpts(ctx, &CapsuleExportOpts{
+		SelfContained: true,
+		SignExport:    true,
+		Principal:     &principal,
+		DisallowBorg:  disallowBorg,
+	}))
 	if err != nil {
 		return nil, nil, err
 	}

@@ -55,16 +55,18 @@ const (
 	KindAttestation ArtifactKind = "attestation"
 )
 
-// MarketPayload is the canonical nkt1 CBOR envelope riding on tm_nektar_<net>_<nibble> lanes.
+// MarketPayload is the canonical nkt1 pure RFC 8949 CDE CBOR envelope riding on tm_nektar_<net>_<nibble> lanes.
 type MarketPayload struct {
-	Kind ArtifactKind    `json:"kind"`
-	Body json.RawMessage `json:"body"`
+	Kind  ArtifactKind `json:"kind"`
+	Body  []byte       `json:"body"`            // exact canonical RFC 8949 CDE CBOR bytes of Signed* envelope
+	Extra []cbor.Pair  `json:"extra,omitempty"` // preserved non-critical odd extension keys
 }
 
 // SignedWant advertises a buyer's knowledge request on the market lanes.
 type SignedWant struct {
-	Want WantAd `json:"want"`
-	Sig  string `json:"sig"`
+	Want    WantAd `json:"want"`
+	Sig     string `json:"sig"`
+	RawCBOR []byte `json:"-"`
 }
 
 type WantAd struct {
@@ -86,8 +88,9 @@ type WantAd struct {
 
 // SignedOffer advertises a seller's signed quote answering a WantAd.
 type SignedOffer struct {
-	Offer OfferAd `json:"offer"`
-	Sig   string  `json:"sig"`
+	Offer   OfferAd `json:"offer"`
+	Sig     string  `json:"sig"`
+	RawCBOR []byte  `json:"-"`
 }
 
 type OfferAd struct {
@@ -127,6 +130,7 @@ type OfferAd struct {
 	Direct          bool            `json:"direct,omitempty"`
 	Revision        int             `json:"revision"`
 	Exp             int64           `json:"exp"`
+	PayloadFormat   string          `json:"payloadFormat,omitempty"` // "nkt" for self-verifying .nkt capsule delivery
 }
 
 // PackRef advertises a content-addressed CHIRP shard pack (or ontology/bridge repo) in a signed AnnounceAd.
@@ -157,6 +161,7 @@ type PackRef struct {
 type SignedAnnounce struct {
 	Announce AnnounceAd `json:"announce"`
 	Sig      string     `json:"sig"`
+	RawCBOR  []byte     `json:"-"`
 }
 
 // HubFeeAdvert summarizes a Hub operator's advertised fee schedule on the directory lane.
@@ -194,6 +199,7 @@ type AnnounceAd struct {
 type SignedAttestation struct {
 	Attestation AttestationAd `json:"attestation"`
 	Sig         string        `json:"sig"`
+	RawCBOR     []byte        `json:"-"`
 }
 
 // AttestationAd wraps a signed canonical CBOR `nektarrep1.*` token for overlay gossip & ls_nektar lookup.
@@ -212,7 +218,8 @@ type AttestationAd struct {
 	Exp             int64    `json:"exp"` // unix ms
 }
 
-// EncodePayload encodes a MarketPayload as a stock Lightweb canonical CBOR nkt1 record.
+// EncodePayload encodes a MarketPayload as a pure RFC 8949 CDE CBOR nkt1 record via bcommon/record.
+// Key 0 = b"nkt1", Key 1 = uint(kind), Key 2 = bstr(canonical CBOR signed envelope), plus any preserved odd Extra keys.
 func EncodePayload(p MarketPayload) ([]byte, error) {
 	var kindNum uint64
 	switch p.Kind {
@@ -227,15 +234,33 @@ func EncodePayload(p MarketPayload) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("bstack: unknown artifact kind %q", p.Kind)
 	}
+	if len(p.Body) == 0 {
+		return nil, errors.New("bstack: empty nkt1 body")
+	}
+	if _, err := core.DecodeCBOR(p.Body); err != nil {
+		return nil, fmt.Errorf("bstack: nkt1 body must be canonical CBOR: %w", err)
+	}
 	m := cbor.Map{
 		{Key: uint64(0), Val: MarketMagic},
 		{Key: uint64(1), Val: kindNum},
-		{Key: uint64(2), Val: string(p.Body)},
+		{Key: uint64(2), Val: p.Body},
 	}
-	return record.Encode(m, nil, MaxPayload)
+	var extra cbor.Map
+	if len(p.Extra) > 0 {
+		extra = make(cbor.Map, 0, len(p.Extra))
+		for _, pair := range p.Extra {
+			k, ok := pair.Key.(uint64)
+			if !ok || k <= 2 {
+				return nil, fmt.Errorf("bstack: invalid nkt1 extension key %v", pair.Key)
+			}
+			extra = append(extra, pair)
+		}
+	}
+	return record.Encode(m, extra, MaxPayload)
 }
 
-// DecodePayload decodes a canonical CBOR nkt1 record via bcommon/record.
+// DecodePayload decodes a pure RFC 8949 CDE CBOR nkt1 record via bcommon/record,
+// enforcing critical (even) unknown-key rejection and preserving non-critical (odd) extension keys.
 func DecodePayload(b []byte) (MarketPayload, error) {
 	if !record.Claims(b, MarketMagic) {
 		return MarketPayload{}, errors.New("bstack: payload does not carry nkt1 magic")
@@ -248,9 +273,26 @@ func DecodePayload(b []byte) (MarketPayload, error) {
 	if err != nil {
 		return MarketPayload{}, fmt.Errorf("bstack: kind field: %w", err)
 	}
-	bodyStr, err := f.Text(2)
+	bodyBytes, err := f.Bytes(2)
 	if err != nil {
 		return MarketPayload{}, fmt.Errorf("bstack: body field: %w", err)
+	}
+	if len(bodyBytes) == 0 {
+		return MarketPayload{}, errors.New("bstack: empty nkt1 body")
+	}
+	if _, err := core.DecodeCBOR(bodyBytes); err != nil {
+		return MarketPayload{}, fmt.Errorf("bstack: nkt1 body is not canonical CBOR: %w", err)
+	}
+	var extra []cbor.Pair
+	for _, p := range f.Extra {
+		k, ok := p.Key.(uint64)
+		if !ok {
+			return MarketPayload{}, fmt.Errorf("bstack: non-uint extension key %T", p.Key)
+		}
+		if k%2 == 0 {
+			return MarketPayload{}, fmt.Errorf("bstack: %w: %d", core.ErrUnknownCriticalKey, k)
+		}
+		extra = append(extra, p)
 	}
 	var kind ArtifactKind
 	switch kindNum {
@@ -263,10 +305,9 @@ func DecodePayload(b []byte) (MarketPayload, error) {
 	case 4:
 		kind = KindAttestation
 	}
-	if !json.Valid([]byte(bodyStr)) {
-		return MarketPayload{}, errors.New("bstack: nkt1 body is not valid JSON")
-	}
-	return MarketPayload{Kind: kind, Body: json.RawMessage(bodyStr)}, nil
+	cp := make([]byte, len(bodyBytes))
+	copy(cp, bodyBytes)
+	return MarketPayload{Kind: kind, Body: cp, Extra: extra}, nil
 }
 
 // LaneNibble hashes domain to one hex nibble [0-9a-f].
@@ -275,34 +316,157 @@ func LaneNibble(domain string) string {
 	return fmt.Sprintf("%x", sum[0]>>4)
 }
 
-// LaneOf returns the overlay topic name `tm_nektar_<net>_<nibble>`.
+// LaneOf returns the legacy nibble overlay topic name `tm_nektar_<net>_<nibble>`.
 func LaneOf(net, domain string) string {
 	return fmt.Sprintf("tm_nektar_%s_%s", net, LaneNibble(domain))
 }
 
-func artifactDomainTag(artifact any) []byte {
-	switch artifact.(type) {
-	case WantAd, *WantAd:
-		return []byte("nektar:artifact:want:v2")
-	case OfferAd, *OfferAd:
-		return []byte("nektar:artifact:offer:v2")
-	case AnnounceAd, *AnnounceAd:
-		return []byte("nektar:artifact:announce:v2")
-	case AttestationAd, *AttestationAd:
-		return []byte("nektar:artifact:attestation:v2")
-	default:
-		return []byte("nektar:artifact:generic:v2")
+// DomainSlug canonicalizes a free-form domain label into a safe ASCII topic slug ([a-z0-9_-]{1,32}).
+func DomainSlug(domain string) string {
+	s := strings.ToLower(strings.TrimSpace(domain))
+	var b strings.Builder
+	prevUnderscore := false
+	for i := 0; i < len(s) && b.Len() < 32; i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+			b.WriteByte(c)
+			prevUnderscore = false
+		} else if !prevUnderscore && b.Len() > 0 {
+			b.WriteByte('_')
+			prevUnderscore = true
+		}
 	}
+	out := strings.Trim(b.String(), "_-")
+	if out == "" {
+		return "general"
+	}
+	return out
 }
 
-// SignArtifact canonically signs any WantAd / OfferAd / AnnounceAd with priv under a type-specific
-// domain-separation tag (preventing cross-artifact signature replay across market wire types).
-func SignArtifact(priv *ec.PrivateKey, artifact any) (string, error) {
-	canon, err := core.CanonicalJSON(artifact)
+// DomainTopic returns the dynamic BRC-223 semantic domain topic `tm_nektar_<net>_dom_<slug>`.
+func DomainTopic(net, domain string) string {
+	if strings.TrimSpace(net) == "" {
+		net = "regtest"
+	}
+	return fmt.Sprintf("tm_nektar_%s_dom_%s", strings.ToLower(strings.TrimSpace(net)), DomainSlug(domain))
+}
+
+// OntologyTopic returns the dynamic BRC-223 ontology topic `tm_nektar_<net>_ont_<id16>` (empty if invalid).
+func OntologyTopic(net, ontologyID string) string {
+	oid := strings.ToLower(strings.TrimSpace(ontologyID))
+	if len(oid) < 16 || strings.EqualFold(oid, "global") {
+		return ""
+	}
+	prefix := oid[:16]
+	if _, err := hex.DecodeString(prefix); err != nil {
+		return ""
+	}
+	if strings.TrimSpace(net) == "" {
+		net = "regtest"
+	}
+	return fmt.Sprintf("tm_nektar_%s_ont_%s", strings.ToLower(strings.TrimSpace(net)), prefix)
+}
+
+// TopicsForMarketAd returns deduplicated dynamic semantic & ontology topics for a market artifact.
+func TopicsForMarketAd(net string, domains []string, ontologyID string) []string {
+	seen := make(map[string]bool, len(domains)+1)
+	out := make([]string, 0, len(domains)+1)
+	for _, d := range domains {
+		t := DomainTopic(net, d)
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	if ot := OntologyTopic(net, ontologyID); ot != "" && !seen[ot] {
+		seen[ot] = true
+		out = append(out, ot)
+	}
+	return out
+}
+
+// IsValidDynamicMarketTopic validates whether topic is a well-formed `tm_nektar_<net>_dom_<slug>`
+// or `tm_nektar_<net>_ont_<id16>` topic for net.
+func IsValidDynamicMarketTopic(net, topic string) bool {
+	net = strings.ToLower(strings.TrimSpace(net))
+	if net == "" {
+		return false
+	}
+	domPfx := "tm_nektar_" + net + "_dom_"
+	if strings.HasPrefix(topic, domPfx) {
+		slug := strings.TrimPrefix(topic, domPfx)
+		if len(slug) == 0 || len(slug) > 32 {
+			return false
+		}
+		for i := 0; i < len(slug); i++ {
+			c := slug[i]
+			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+				return false
+			}
+		}
+		return true
+	}
+	ontPfx := "tm_nektar_" + net + "_ont_"
+	if strings.HasPrefix(topic, ontPfx) {
+		id16 := strings.TrimPrefix(topic, ontPfx)
+		if len(id16) != 16 {
+			return false
+		}
+		for i := 0; i < len(id16); i++ {
+			c := id16[i]
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// DigestSigner signs 32-byte digests without exposing raw *ec.PrivateKey across package boundaries (ARCH-S1).
+type DigestSigner interface {
+	PubHex() string
+	SignDigest(digest32 []byte) ([]byte, error)
+}
+
+// SignArtifactRawWithSigner signs exact canonical CBOR bytes under an explicit domain tag via DigestSigner.
+func SignArtifactRawWithSigner(signer DigestSigner, tag, canonCBOR []byte) (string, error) {
+	if signer == nil || signer.PubHex() == "" {
+		return "", errors.New("bstack: nil signing key")
+	}
+	if len(tag) == 0 || len(canonCBOR) == 0 {
+		return "", errors.New("bstack: domain tag and canonical CBOR required")
+	}
+	digest := core.DSHA256(core.Concat(tag, canonCBOR))
+	der, err := signer.SignDigest(digest)
 	if err != nil {
 		return "", err
 	}
-	digest := core.DSHA256(core.Concat(artifactDomainTag(artifact), canon))
+	return hex.EncodeToString(der), nil
+}
+
+// SignArtifactWithSigner canonically signs any registered SignedCBORArtifact via DigestSigner.
+func SignArtifactWithSigner(signer DigestSigner, artifact any) (string, error) {
+	a, ok := artifact.(SignedCBORArtifact)
+	if !ok {
+		return "", fmt.Errorf("bstack: unregistered artifact type %T (must implement SignedCBORArtifact)", artifact)
+	}
+	canon, err := a.EncodeCanonicalCBOR()
+	if err != nil {
+		return "", err
+	}
+	return SignArtifactRawWithSigner(signer, a.DomainTag(), canon)
+}
+
+// SignArtifactRaw signs exact canonical CBOR bytes under an explicit domain tag.
+func SignArtifactRaw(priv *ec.PrivateKey, tag, canonCBOR []byte) (string, error) {
+	if priv == nil {
+		return "", errors.New("bstack: nil signing key")
+	}
+	if len(tag) == 0 || len(canonCBOR) == 0 {
+		return "", errors.New("bstack: domain tag and canonical CBOR required")
+	}
+	digest := core.DSHA256(core.Concat(tag, canonCBOR))
 	sig, err := priv.Sign(digest)
 	if err != nil {
 		return "", err
@@ -310,25 +474,46 @@ func SignArtifact(priv *ec.PrivateKey, artifact any) (string, error) {
 	return hex.EncodeToString(sig.Serialize()), nil
 }
 
-// VerifyArtifact verifies a domain-separated signature produced by SignArtifact against canonical
-// compressed pubHex, rejecting uncompressed/hybrid pubkeys, non-canonical DER trailing bytes,
-// malleable high-S signatures, and cross-type artifact replays.
-func VerifyArtifact(pubHex, sigHex string, artifact any) error {
-	pub, _, err := core.ParseStrictCompressedPubKey(pubHex)
-	if err != nil {
-		return err
+// VerifyArtifactRaw verifies a domain-separated signature over exact canonical CBOR bytes.
+func VerifyArtifactRaw(pubHex, sigHex string, tag, canonCBOR []byte) error {
+	if len(tag) == 0 || len(canonCBOR) == 0 {
+		return errors.New("bstack: domain tag and canonical CBOR required")
 	}
-	sig, err := core.ParseStrictLowSDER(sigHex)
-	if err != nil {
-		return err
-	}
-	canon, err := core.CanonicalJSON(artifact)
-	if err != nil {
-		return err
-	}
-	digest := core.DSHA256(core.Concat(artifactDomainTag(artifact), canon))
-	if !sig.Verify(digest, pub) {
+	digest := core.DSHA256(core.Concat(tag, canonCBOR))
+	if err := core.FastVerifyStrictHex(pubHex, sigHex, digest); err != nil {
+		if errors.Is(err, core.ErrNonCanonicalPubKey) || errors.Is(err, core.ErrNonCanonicalDER) || errors.Is(err, core.ErrHighSSignature) {
+			return err
+		}
 		return errors.New("bstack: artifact signature invalid")
 	}
 	return nil
+}
+
+// SignArtifact canonically signs any registered SignedCBORArtifact under its explicit domain-separation tag.
+// Unregistered types fail closed (zero generic fallback tag).
+func SignArtifact(priv *ec.PrivateKey, artifact any) (string, error) {
+	a, ok := artifact.(SignedCBORArtifact)
+	if !ok {
+		return "", fmt.Errorf("bstack: unregistered artifact type %T (must implement SignedCBORArtifact)", artifact)
+	}
+	canon, err := a.EncodeCanonicalCBOR()
+	if err != nil {
+		return "", err
+	}
+	return SignArtifactRaw(priv, a.DomainTag(), canon)
+}
+
+// VerifyArtifact verifies a domain-separated CBOR signature produced by SignArtifact against canonical
+// compressed pubHex, rejecting unregistered types, uncompressed/hybrid pubkeys, non-canonical DER
+// trailing bytes, malleable high-S signatures, and cross-type artifact replays.
+func VerifyArtifact(pubHex, sigHex string, artifact any) error {
+	a, ok := artifact.(SignedCBORArtifact)
+	if !ok {
+		return fmt.Errorf("bstack: unregistered artifact type %T (must implement SignedCBORArtifact)", artifact)
+	}
+	canon, err := a.EncodeCanonicalCBOR()
+	if err != nil {
+		return err
+	}
+	return VerifyArtifactRaw(pubHex, sigHex, a.DomainTag(), canon)
 }

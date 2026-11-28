@@ -10,14 +10,13 @@ import (
 	"testing"
 	"time"
 
-	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
-
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 type paidHubHarness struct {
@@ -305,8 +304,8 @@ func TestSpineAndLeafHubFeesMultiHubEndToEnd(t *testing.T) {
 	}
 
 	// 8. Free-riding Leaf Hub C (0 credits) attempts to pull Spine S market feed -> MUST be blocked with HTTP 402!
-	freeriderKey, _ := ec.NewPrivateKey()
-	pub, tsStr, nonce, sig, err := discovery.SignEgressAuthHeaders(freeriderKey, "hub_sync", spine.ts.URL, 0, "")
+	freeriderSigner, _ := nwallet.NewEphemeralMarketSigner()
+	pub, tsStr, nonce, sig, err := discovery.SignEgressAuthHeaders(freeriderSigner, "hub_sync", spine.ts.URL, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}

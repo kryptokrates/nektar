@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lightwebinc/bcommon/cbor"
+
 	"github.com/kryptokrates/nektar/internal/autonomy"
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/contracts"
@@ -93,15 +95,35 @@ type PurchaseRequest struct {
 	BuyerSig          string `json:"buyerSig,omitempty"`
 }
 
+// PurchaseRequestSignable is the canonical CBOR-signed payload proving buyer ownership on purchase & key re-reveal.
+type PurchaseRequestSignable struct {
+	OfferID  string `json:"offerId"`
+	WantID   string `json:"wantId"`
+	BuyerPub string `json:"buyerPub"`
+	TxID     string `json:"txid"`
+	TS       int64  `json:"ts"`
+}
+
+func (p PurchaseRequestSignable) DomainTag() []byte { return core.TagMarketPurchaseV1 }
+
+func (p PurchaseRequestSignable) EncodeCanonicalCBOR() ([]byte, error) {
+	return core.EncodeCBOR(cbor.Map{
+		{Key: uint64(1), Val: p.OfferID},
+		{Key: uint64(2), Val: p.WantID},
+		{Key: uint64(3), Val: p.BuyerPub},
+		{Key: uint64(4), Val: p.TxID},
+		{Key: uint64(5), Val: p.TS},
+	})
+}
+
 // Signable returns the canonical payload signed by BuyerPub to prove buyer ownership on purchase & key re-reveal.
-func (r PurchaseRequest) Signable() map[string]any {
-	return map[string]any{
-		"action":   "market_purchase",
-		"offerId":  r.OfferID,
-		"wantId":   r.WantID,
-		"buyerPub": r.BuyerPub,
-		"txid":     r.TxID,
-		"ts":       r.TS,
+func (r PurchaseRequest) Signable() PurchaseRequestSignable {
+	return PurchaseRequestSignable{
+		OfferID:  r.OfferID,
+		WantID:   r.WantID,
+		BuyerPub: r.BuyerPub,
+		TxID:     r.TxID,
+		TS:       r.TS,
 	}
 }
 

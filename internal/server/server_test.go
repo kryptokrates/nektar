@@ -176,7 +176,7 @@ func TestUnifiedServerRESTA2AProxyPaywallAndDashboard(t *testing.T) {
 	}
 	hResp.Body.Close()
 
-	// 8. Public :18420 server MUST NOT expose /restate/ (returns 404); dedicated Restate handler exposes all services!
+	// 8. Public :18420 server MUST NOT expose /restate/ (returns 404); embedded go-workflows runs in-process!
 	pubRsResp, err := http.Get(ts.URL + "/restate/discover")
 	if err != nil {
 		t.Fatalf("GET /restate/discover failed: %v", err)
@@ -185,23 +185,11 @@ func TestUnifiedServerRESTA2AProxyPaywallAndDashboard(t *testing.T) {
 	if pubRsResp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected /restate/discover on public server to return 404, got %d", pubRsResp.StatusCode)
 	}
-	rh, err := mkt.NewRestateServer().Handler()
-	if err != nil {
-		t.Fatalf("NewRestateServer().Handler(): %v", err)
+	wc, err := mkt.StartWorkflows(ctx, t.TempDir())
+	if err != nil || wc == nil || !wc.IsRunning() {
+		t.Fatalf("StartWorkflows failed: %v", err)
 	}
-	rsRec := httptest.NewRecorder()
-	rsReq := httptest.NewRequest(http.MethodGet, "/discover", nil)
-	rsReq.Header.Set("Accept", "application/vnd.restate.endpointmanifest.v4+json")
-	rh.ServeHTTP(rsRec, rsReq)
-	if rsRec.Code != http.StatusOK {
-		t.Fatalf("dedicated Restate /discover failed: code=%d body=%s", rsRec.Code, rsRec.Body.String())
-	}
-	rsBody := rsRec.Body.String()
-	for _, svc := range []string{"BuyerDeal", "SellerDeal", "Custody", "Tx", "AnchorCadence", "NektarRuntime"} {
-		if !strings.Contains(rsBody, `"`+svc+`"`) {
-			t.Fatalf("Restate /discover missing %s: %s", svc, rsBody)
-		}
-	}
+	defer func() { _ = mkt.CloseWorkflows() }()
 
 	// 9. New Wallet REST API: GET /v1/wallet, /v1/wallet/utxos, /v1/wallet/actions, POST /v1/wallet/fuel, /v1/wallet/send, /v1/wallet/sweep!
 	wResp, err := http.Get(ts.URL + "/v1/wallet")

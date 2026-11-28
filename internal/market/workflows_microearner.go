@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	restate "github.com/restatedev/sdk-go"
-
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/distill"
@@ -172,7 +170,7 @@ func (e *Engine) RunMicroEarnerCycle(ctx context.Context, in MicroEarnerInput) (
 					VerifiedCount: count,
 					TS:            time.Now().Unix(),
 				}
-				sig, sErr := bstack.SignArtifact(e.saleKey, wSub.Signable())
+				sig, sErr := bstack.SignArtifactWithSigner(e.signer, wSub.Signable())
 				if sErr != nil {
 					continue
 				}
@@ -313,16 +311,16 @@ func (e *Engine) submitSponsoredDistilledBounty(
 				TS:             time.Now().Unix(),
 			}
 			signable := sub.Signable(hdp)
-			sig, sErr := bstack.SignArtifact(e.saleKey, signable)
+			sig, sErr := bstack.SignArtifactWithSigner(e.signer, signable)
 			if sErr != nil {
 				continue
 			}
 			sub.Sig = sig
-			canon, cErr := core.CanonicalJSON(signable)
+			ownerDigest, cErr := signable.OwnerSigDigest()
 			if cErr != nil {
 				continue
 			}
-			oSig, oErr := e.mem.Chain().SignDigest(ctx, core.SHA256(canon))
+			oSig, oErr := e.mem.Chain().SignDigest(ctx, ownerDigest)
 			if oErr != nil {
 				continue
 			}
@@ -465,42 +463,3 @@ func SetMicroEarnerEnabled(mem *memory.Service, enabled bool, targetFloatSats ui
 	return st
 }
 
-// MicroEarner is registered WithIngressPrivate(true) and invoked only via the authenticated NektarRuntime gateway
-// (Restate strips caller HTTP headers on internal service-to-service Object calls, matching AnchorCadence/Tx/EpistemicShard).
-func (e *Engine) restateMicroEarnerRun(ctx restate.ObjectContext, in MicroEarnerInput) (MicroEarnerState, error) {
-	prev, _ := restate.Get[MicroEarnerState](ctx, "state")
-	if prev.LastRunAt > 0 && !prev.Enabled {
-		prev.Status = "disabled"
-		return prev, nil
-	}
-	res, err := restate.Run(ctx, func(rctx restate.RunContext) (MicroEarnerState, error) {
-		out, rErr := e.RunMicroEarnerCycle(rctx, in)
-		if out == nil {
-			return MicroEarnerState{Status: "error"}, rErr
-		}
-		return *out, rErr
-	}, restate.WithName("microearner_cycle"))
-	if err != nil {
-		prev.Status = "error"
-		prev.LastError = err.Error()
-		restate.Set(ctx, "state", prev)
-		return prev, err
-	}
-	restate.Set(ctx, "state", res)
-	return res, nil
-}
-
-func (e *Engine) restateMicroEarnerToggle(ctx restate.ObjectContext, in MicroEarnerToggleInput) (MicroEarnerState, error) {
-	st, err := restate.Run(ctx, func(_ restate.RunContext) (MicroEarnerState, error) {
-		return SetMicroEarnerEnabled(e.mem, in.Enabled, in.TargetFloatSats), nil
-	}, restate.WithName("microearner_toggle"))
-	if err != nil {
-		return MicroEarnerState{}, err
-	}
-	restate.Set(ctx, "state", st)
-	return st, nil
-}
-
-func (e *Engine) restateMicroEarnerStatus(ctx restate.ObjectSharedContext, _ restate.Void) (MicroEarnerState, error) {
-	return restate.Get[MicroEarnerState](ctx, "state")
-}

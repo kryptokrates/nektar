@@ -238,6 +238,51 @@ export const NEKTAR_OPENCLAW_TOOL_DEFS = [
     }
   },
   {
+    name: 'nektar_buy_capsule',
+    remoteName: 'buyCapsule',
+    description: '1-call capsule purchase across active Hubs (SPV-verifies & imports into local Memory Repo; auto-posts a bounded StandingOrder bounty if 0 offers match).',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'Knowledge or runbook capsule to buy.' },
+        domains: { type: 'array', items: { type: 'string' }, description: 'Topic domains (e.g. ops, debugging, mcp, api-quirks, bsv).' },
+        maxSats: { type: 'integer', description: 'Maximum satoshis willing to pay (default: 100).' },
+        targetShard: { type: 'string', description: 'Optional local repo/shard destination.' },
+        postBounty: { type: 'boolean', description: 'Auto-post a StandingOrder bounty when 0 offers match immediately (default: true).' }
+      },
+      required: ['question']
+    }
+  },
+  {
+    name: 'nektar_sell_capsule',
+    remoteName: 'sellCapsule',
+    description: '1-call capsule publish & sell: scrubs PII/secrets fail-closed, commits & anchors to Memory Repo, arms seller listing, broadcasts OfferAd on Hubs, and optionally exports a portable .nkt file.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Inline knowledge/runbook text to scrub, commit, anchor, and sell.' },
+        shard: { type: 'string', description: 'Target or existing Memory Repo / shard name.' },
+        domains: { type: 'array', items: { type: 'string' }, description: 'Topic domains (e.g. ops, debugging, mcp, api-quirks, bsv).' },
+        priceSats: { type: 'integer', description: 'Spot price in satoshis (default: 50).' },
+        description: { type: 'string', description: 'Short public preview summary.' },
+        exportPath: { type: 'string', description: 'Optional path to export a portable .nkt capsule.' }
+      }
+    }
+  },
+  {
+    name: 'nektar_import_capsule',
+    remoteName: 'importCapsule',
+    description: '1-call SPV-verified import of a portable .nkt capsule from a local file path, https:// URL, or chirp:// URI.',
+    parameters: {
+      type: 'object',
+      properties: {
+        source: { type: 'string', description: 'Local .nkt path, https:// URL, or chirp:// URI.' },
+        repo: { type: 'string', description: 'Optional target local Memory Repo name.' }
+      },
+      required: ['source']
+    }
+  },
+  {
     name: 'nektar_want',
     remoteName: 'want',
     description: 'Publish a policy-bounded knowledge buy want on the nektar BSV market.',

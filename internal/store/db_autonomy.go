@@ -137,12 +137,12 @@ func (d *DB) UpsertBuyerSubscription(sub ShardSubscription) error {
 
 // ListActiveBuyerSubscriptions returns all active, unexpired, non-slashed buyer subscriptions for startup recovery.
 func (d *DB) ListActiveBuyerSubscriptions(nowUnix int64) ([]ShardSubscription, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	if nowUnix <= 0 {
 		nowUnix = time.Now().Unix()
 	}
-	rows, err := d.sql.Query(`
+	rows, err := rdb.Query(`
 		SELECT `+shardSubSelectCols+`
 		FROM shard_subscriptions
 		WHERE role = 'buyer' AND active = 1 AND slashed = 0 AND expires_at > ?
@@ -249,9 +249,9 @@ func (d *DB) ListEligibleRecallMisses(minCount int, lookbackCutoff, cooldownCuto
 	if limit <= 0 {
 		limit = 10
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	rows, err := d.sql.Query(`
+	rdb, release := d.rdb()
+	defer release()
+	rows, err := rdb.Query(`
 		SELECT topic_key, shard, query, miss_count, first_seen, last_seen, last_want_at, want_id
 		FROM recall_misses
 		WHERE miss_count >= ? AND last_seen >= ? AND (last_want_at = 0 OR last_want_at <= ?)
@@ -288,10 +288,10 @@ func (d *DB) MarkRecallMissWanted(topicKey, wantID string, nowUnix int64) error 
 
 // CountAutoWantsSince counts how many recall_misses triggered auto-WantAds since sinceUnix.
 func (d *DB) CountAutoWantsSince(sinceUnix int64) (int, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var n int
-	err := d.sql.QueryRow(`SELECT COUNT(*) FROM recall_misses WHERE last_want_at >= ? AND want_id != ''`, sinceUnix).Scan(&n)
+	err := rdb.QueryRow(`SELECT COUNT(*) FROM recall_misses WHERE last_want_at >= ? AND want_id != ''`, sinceUnix).Scan(&n)
 	return n, err
 }
 
@@ -300,10 +300,10 @@ func (d *DB) Path() string { return d.path }
 
 // UserVersion returns SQLite's current PRAGMA user_version schema number.
 func (d *DB) UserVersion() (int, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var ver int
-	err := d.sql.QueryRow(`PRAGMA user_version`).Scan(&ver)
+	err := rdb.QueryRow(`PRAGMA user_version`).Scan(&ver)
 	return ver, err
 }
 
@@ -313,6 +313,15 @@ func (d *DB) VacuumInto(ctx context.Context, dstPath string) error {
 		return errors.New("store: vacuum destination path required")
 	}
 	clean := filepath.Clean(dstPath)
+	if d.path != "" && d.path != ":memory:" {
+		vacDSN := "file:" + filepath.ToSlash(d.path) + "?_pragma=busy_timeout(10000)&_pragma=temp_store(MEMORY)"
+		if vdb, err := sql.Open("sqlite", vacDSN); err == nil {
+			defer vdb.Close()
+			vdb.SetMaxOpenConns(1)
+			_, execErr := vdb.ExecContext(ctx, `VACUUM INTO ?`, clean)
+			return execErr
+		}
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	_, err := d.sql.ExecContext(ctx, `VACUUM INTO ?`, clean)

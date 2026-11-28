@@ -281,22 +281,12 @@ func TestFiveNodeFullStackSmokeMeshSecurityAndChaos(t *testing.T) {
 		if pubRsResp.StatusCode != http.StatusNotFound {
 			t.Fatalf("expected public /restate/discover to return 404, got %d", pubRsResp.StatusCode)
 		}
-		rh, err := alpha.mkt.NewRestateServer().Handler()
-		if err != nil {
-			t.Fatalf("NewRestateServer().Handler: %v", err)
-		}
-		rsRec := httptest.NewRecorder()
-		rsReq := httptest.NewRequest(http.MethodGet, "/discover", nil)
-		rsReq.Header.Set("Accept", "application/vnd.restate.endpointmanifest.v4+json")
-		rh.ServeHTTP(rsRec, rsReq)
-		if rsRec.Code != http.StatusOK {
-			t.Fatalf("dedicated Restate /discover failed: code=%d body=%s", rsRec.Code, rsRec.Body.String())
-		}
-		rsBody := rsRec.Body.String()
-		for _, svc := range []string{"BuyerDeal", "SellerDeal", "Custody", "Tx", "AnchorCadence", "NektarRuntime"} {
-			if !strings.Contains(rsBody, `"`+svc+`"`) {
-				t.Fatalf("missing Restate service %s", svc)
+		if wc := alpha.mkt.WorkflowClient(); wc == nil || !wc.IsRunning() {
+			wc2, wErr := alpha.mkt.StartWorkflows(ctx, t.TempDir())
+			if wErr != nil || wc2 == nil || !wc2.IsRunning() {
+				t.Fatalf("expected embedded go-workflows runtime on alpha, got err=%v", wErr)
 			}
+			t.Cleanup(func() { _ = alpha.mkt.CloseWorkflows() })
 		}
 
 		// 3. L0 OpenAI & Anthropic Memory Proxy injection!

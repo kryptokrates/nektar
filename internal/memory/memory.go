@@ -7,14 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/eventbus"
 	"github.com/kryptokrates/nektar/internal/jev"
 	"github.com/kryptokrates/nektar/internal/jevgraph"
 	"github.com/kryptokrates/nektar/internal/lattice"
@@ -23,6 +24,20 @@ import (
 	"github.com/kryptokrates/nektar/internal/reasoning"
 	"github.com/kryptokrates/nektar/internal/store"
 )
+
+type cachedOntologyEntry struct {
+	compiled *jevgraph.CompiledOntology
+	info     *DomainOntologyInfo
+}
+
+type cachedBridgeEntry struct {
+	manifest *jevgraph.BridgeManifest
+	info     *BridgeInfo
+}
+
+type cachedManifestEntry struct {
+	loaded *LoadedOntology
+}
 
 type cachedGoGitProjection struct {
 	proj    *memrepo.GoGitProjection
@@ -90,6 +105,7 @@ type Config struct {
 	VerifyBaseURL string // e.g. http://127.0.0.1:8080/v1/verify
 	ModelID       reasoning.ModelIdentity
 	JevEvaluator  jev.Evaluator
+	EventBus      *eventbus.Bus
 }
 
 // OntologyCommitResult summarizes a batch of DL-Lite / OWL 2 RL / deontic axioms committed to __ontology__.
@@ -128,13 +144,16 @@ type Service struct {
 	rules          []string
 	committedRules []reasoning.CommittedRule
 	ontologyHead   string
-	verifyBaseURL  string
-	modelID        reasoning.ModelIdentity
+	verifyBaseURL    string
+	modelID          reasoning.ModelIdentity
+	bus              *eventbus.Bus
 	onRemember       func(shard string)
 	onSupersede      func(ev SupersessionEvent)
 	jevEval          jev.Evaluator
 	ontCacheMu       sync.RWMutex
-	ontCache         map[string]*jevgraph.CompiledOntology
+	ontCache         map[string]*cachedOntologyEntry
+	bridgeCache      map[string]*cachedBridgeEntry
+	manifestCache    map[string]*cachedManifestEntry
 	lastActivityUnix atomic.Int64
 }
 
@@ -188,19 +207,38 @@ func New(db *store.DB, port *chain.Port, groups *bstack.GroupRegistry, objects b
 		return nil, fmt.Errorf("memory: load borg groups: %w", err)
 	}
 	latMgr := lattice.NewManager(port.DeriveLatticeRoot)
-	if err := latMgr.SetPersistence(db); err != nil {
+	if err := latMgr.SetPersistence(&dbLatticeStore{db: db}); err != nil {
 		return nil, fmt.Errorf("memory: load lattice states: %w", err)
 	}
 	pubChirps := make(map[[32]byte]struct{})
-	var savedPub []string
-	if ok, _ := db.GetJSON("public_chirp_hashes_v1", &savedPub); ok {
-		for _, hx := range savedPub {
+	if dbHashes, hErr := db.ListPublicChirpHashes(); hErr == nil {
+		for _, hx := range dbHashes {
 			if b, err := hex.DecodeString(strings.TrimSpace(hx)); err == nil && len(b) == 32 {
 				var arr [32]byte
 				copy(arr[:], b)
 				pubChirps[arr] = struct{}{}
 			}
 		}
+	}
+	var savedPub []string
+	if ok, _ := db.GetJSON("public_chirp_hashes_v1", &savedPub); ok {
+		var migrateHex []string
+		for _, hx := range savedPub {
+			if b, err := hex.DecodeString(strings.TrimSpace(hx)); err == nil && len(b) == 32 {
+				var arr [32]byte
+				copy(arr[:], b)
+				pubChirps[arr] = struct{}{}
+				migrateHex = append(migrateHex, hex.EncodeToString(b))
+			}
+		}
+		if len(migrateHex) > 0 {
+			_ = db.AllowPublicChirpHashes(migrateHex, time.Now().Unix())
+			_ = db.DeleteKV("public_chirp_hashes_v1")
+		}
+	}
+	bus := cfg.EventBus
+	if bus == nil {
+		bus = eventbus.New()
 	}
 	svc := &Service{
 		publicChirps:  pubChirps,
@@ -214,8 +252,11 @@ func New(db *store.DB, port *chain.Port, groups *bstack.GroupRegistry, objects b
 		rules:         rules,
 		verifyBaseURL: baseURL,
 		modelID:       mid,
+		bus:           bus,
 		jevEval:       cfg.JevEvaluator,
-		ontCache:      make(map[string]*jevgraph.CompiledOntology),
+		ontCache:      make(map[string]*cachedOntologyEntry),
+		bridgeCache:   make(map[string]*cachedBridgeEntry),
+		manifestCache: make(map[string]*cachedManifestEntry),
 	}
 	if err := svc.hydrateLawShards(context.Background(), polName, pol, pc, rules); err != nil {
 		return nil, fmt.Errorf("memory: hydrate law shards: %w", err)
@@ -350,58 +391,42 @@ func (s *Service) syncRulesFromCommittedLocked() {
 }
 
 // AllowPublicChirpHashes registers CHIRP DAG object hashes that may be fetched unauthenticated via /v1/chirp/{hash}
-// and persists the allowlist in SQLite so intentionally published packs survive daemon restarts.
+// and persists the allowlist incrementally in SQLite in O(k) so intentionally published packs survive daemon restarts.
 func (s *Service) AllowPublicChirpHashes(hashes ...[32]byte) {
 	if len(hashes) == 0 {
 		return
 	}
+	var newHex []string
 	s.publicChirpMu.Lock()
-	added := false
 	for _, h := range hashes {
 		if _, exists := s.publicChirps[h]; !exists {
 			s.publicChirps[h] = struct{}{}
-			added = true
+			newHex = append(newHex, hex.EncodeToString(h[:]))
 		}
-	}
-	var persist []string
-	if added && s.db != nil {
-		persist = make([]string, 0, len(s.publicChirps))
-		for h := range s.publicChirps {
-			persist = append(persist, hex.EncodeToString(h[:]))
-		}
-		sort.Strings(persist)
 	}
 	s.publicChirpMu.Unlock()
-	if added && s.db != nil {
-		_ = s.db.SetJSON("public_chirp_hashes_v1", persist)
+	if len(newHex) > 0 && s.db != nil {
+		_ = s.db.AllowPublicChirpHashes(newHex, time.Now().Unix())
 	}
 }
 
 // RevokePublicChirpHashes removes CHIRP DAG object hashes from the public unauthenticated allowlist
-// and updates SQLite persistence (called when shredding forgotten fragments).
+// and deletes them incrementally in SQLite in O(k) (called when shredding forgotten fragments).
 func (s *Service) RevokePublicChirpHashes(hashes ...[32]byte) {
 	if len(hashes) == 0 {
 		return
 	}
+	var delHex []string
 	s.publicChirpMu.Lock()
-	removed := false
 	for _, h := range hashes {
 		if _, exists := s.publicChirps[h]; exists {
 			delete(s.publicChirps, h)
-			removed = true
+			delHex = append(delHex, hex.EncodeToString(h[:]))
 		}
-	}
-	var persist []string
-	if removed && s.db != nil {
-		persist = make([]string, 0, len(s.publicChirps))
-		for h := range s.publicChirps {
-			persist = append(persist, hex.EncodeToString(h[:]))
-		}
-		sort.Strings(persist)
 	}
 	s.publicChirpMu.Unlock()
-	if removed && s.db != nil {
-		_ = s.db.SetJSON("public_chirp_hashes_v1", persist)
+	if len(delHex) > 0 && s.db != nil {
+		_ = s.db.RevokePublicChirpHashes(delHex)
 	}
 }
 
@@ -437,15 +462,38 @@ func (s *Service) SetOnSupersede(fn func(ev SupersessionEvent)) {
 	s.mu.Unlock()
 }
 
+// SetEventBus attaches the process-wide zero-polling EventBus for instant shard & Grade S notifications.
+func (s *Service) SetEventBus(b *eventbus.Bus) {
+	s.mu.Lock()
+	s.bus = b
+	s.mu.Unlock()
+}
+
+// EventBus returns the attached EventBus, if any.
+func (s *Service) EventBus() *eventbus.Bus {
+	s.mu.RLock()
+	b := s.bus
+	s.mu.RUnlock()
+	return b
+}
+
 func (s *Service) notifyRemember(shard string) {
 	if IsSystemShard(shard) {
 		return
 	}
 	s.mu.RLock()
 	hook := s.onRemember
+	bus := s.bus
 	s.mu.RUnlock()
+	if bus != nil {
+		bus.Publish("shard:"+shard, "fragment_committed", map[string]any{"shard": shard})
+	}
 	if hook != nil {
-		go hook(shard)
+		s.hookWG.Add(1)
+		go func(sh string) {
+			defer s.hookWG.Done()
+			hook(sh)
+		}(shard)
 	}
 }
 

@@ -22,7 +22,7 @@ import (
 // (MCP, hooks, embedded SKILL.md, embedded Hermes/OpenClaw plugins, or L0 Proxy env), and runs a live receipt probe.
 func cmdDock(args []string) error {
 	fs := flag.NewFlagSet("dock", flag.ExitOnError)
-	target := fs.String("client", "auto", "Target client(s): auto|claude|claude-desktop|cursor|windsurf|vscode|zed|cline|continue|opencode|gemini|goose|codex|hermes|openclaw|proxy")
+	target := fs.String("client", "auto", "Target client(s): auto|claude|claude-desktop|antigravity|openai|cursor|windsurf|vscode|zed|cline|continue|opencode|gemini|goose|codex|hermes|openclaw|proxy")
 	dry := fs.Bool("dry", false, "Preview changes without writing files")
 	uninstall := fs.Bool("uninstall", false, "Remove Nektar entries cleanly while leaving sibling configs untouched")
 	urlFlag := fs.String("url", "", "Override daemon HTTP base URL")
@@ -76,7 +76,7 @@ func cmdDock(args []string) error {
 
 	showProxy := false
 	for _, t := range targets {
-		if t == "proxy" {
+		if t == "proxy" || t == "openai" {
 			showProxy = true
 		}
 	}
@@ -174,7 +174,7 @@ func tierDisplayName(lvl string) string {
 func printDockResults(results []dock.ApplyResult, home string, dry, uninstall bool) {
 	if len(results) == 0 {
 		fmt.Printf("  No AI clients auto-detected in %s.\n", home)
-		fmt.Println("  Pass an explicit app name: `nektar dock claude codex hermes openclaw cursor claude-desktop vscode proxy`")
+		fmt.Println("  Pass an explicit app name: `nektar dock claude codex hermes antigravity openai openclaw cursor claude-desktop vscode proxy`")
 		return
 	}
 	for _, r := range results {

@@ -163,17 +163,18 @@ func readTailText(path string, maxBytes int) string {
 	return strings.TrimSpace(string(b))
 }
 
-// cmdUp is the flagship 1-command onboarding path (`nektar up`):
-//  1. Ensures pinned restate-server v1.8.1 is available (non-fatal if offline)
-//  2. Starts (or attaches to) the detached background Nektar daemon
-//  3. Auto-docks all detected AI apps (Claude, Codex, Hermes, OpenClaw, Cursor, VS Code…)
+// cmdUp is the flagship 1-command zero-config onboarding path (`nektar up`):
+//  1. Starts (or attaches to) the detached background pure-Go Nektar daemon
+//  2. Auto-funds Testnet faucet (on 0 sats) and auto-arms safe bounded trading policy
+//  3. Auto-docks all detected AI apps (Claude, Codex, Hermes, OpenClaw, Antigravity, Cursor, VS Code…)
 //  4. Runs a live remember/recall/groundedAnswer/verifyReceipt probe (Magic Moment #1)
 //  5. Prints Mainnet funding QR if needed and opens the paired Dashboard
 func cmdUp(args []string) error {
 	t0 := time.Now()
 	fs := flag.NewFlagSet("up", flag.ExitOnError)
 	netName := fs.String("network", "", "Network: testnet (default) | main | memory")
-	confirmFlag := fs.String("confirm", os.Getenv("NEKTAR_MAINNET_CONFIRM"), "Required I_UNDERSTAND when using --network main")
+	mainnetShort := fs.Bool("mainnet", false, "Shorthand for --network main (requires --confirm I_UNDERSTAND)")
+	confirmFlag := fs.String("confirm", os.Getenv("NEKTAR_MAINNET_CONFIRM"), "Required I_UNDERSTAND when using --network main / --mainnet")
 	walletMode := fs.String("wallet", os.Getenv("NEKTAR_WALLET"), "Wallet custody mode: auto (default: BSV Desktop if running on :3321, else embedded) | client | embedded")
 	walletWireURL := fs.String("wallet-wire-url", os.Getenv("NEKTAR_WALLET_WIRE_URL"), "BSV Desktop / BRC-100 wire URL (default http://127.0.0.1:3321)")
 	listenAddr := fs.String("listen", "", "HTTP listen address override (default 127.0.0.1:18420)")
@@ -181,33 +182,22 @@ func cmdUp(args []string) error {
 	withHub := fs.Bool("hub", false, "Also mount embedded Overlay Hub at /hub/")
 	hubRole := fs.String("hub-role", "", "Embedded Hub role (leaf|spine)")
 	feePreset := fs.String("fee-preset", "", "Embedded Hub fee preset (free|lightbsv_egress|hybrid)")
-	dockTarget := fs.String("dock", "auto", "Clients to dock (auto or comma-separated IDs: claude,codex,hermes,openclaw,cursor,vscode)")
+	dockTarget := fs.String("dock", "auto", "Clients to dock (auto or comma-separated IDs: claude,codex,hermes,openclaw,antigravity,openai,cursor,vscode)")
 	noDock := fs.Bool("no-dock", false, "Skip auto-docking AI clients")
 	noOpen := fs.Bool("no-open", false, "Do not auto-open the Dashboard in your browser")
-	noRestate := fs.Bool("no-restate", false, "Skip automatic pinned restate-server bootstrap")
+	noRestate := fs.Bool("no-restate", false, "Deprecated no-op (durable workflows are embedded in pure Go)")
 	installSvc := fs.Bool("install-service", false, "Install per-user login autostart service (launchd / systemd --user / Startup)")
 	asJSON := fs.Bool("json", false, "Machine-readable JSON output")
 	_ = fs.Parse(args)
+	if *mainnetShort && strings.TrimSpace(*netName) == "" {
+		*netName = "main"
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// 1. Optional non-fatal Restate durable executor bootstrap BEFORE spawning the daemon so trading works on Run #1!
-	restateStatus := "skipped"
-	if !*noRestate && *netName != "memory" && os.Getenv("NEKTAR_RESTATE_DISABLE") != "1" {
-		if bin := findRestateBinary(); bin != "" {
-			restateStatus = "ready (" + bin + ")"
-		} else {
-			if !*asJSON {
-				fmt.Fprintln(os.Stderr, "• Checking Restate v"+RestatePinnedVersion+" durable executor for live BSV trades…")
-			}
-			if bin, err := ensureRestateInstalled(false); err == nil && bin != "" {
-				restateStatus = "installed (" + bin + ")"
-			} else if err != nil {
-				restateStatus = "unavailable (" + err.Error() + ")"
-			}
-		}
-	}
+	// 1. Pure-Go embedded go-workflows SQLite runtime (zero external sidecars needed).
+	runtimeDesc := "pure-Go single binary (SQLite WAL · zero sidecars)"
 
 	// 2. Start or attach to the detached background daemon (or hand off to OS service manager if --install-service).
 	opts := backgroundDaemonOpts{
@@ -311,15 +301,35 @@ func cmdUp(args []string) error {
 	// Fetch wallet summary & live BSV Desktop presence for custody/funding guidance.
 	var fundAddr, activeWalletMode string
 	var balanceSats uint64
-	if wOut, wErr := callLiveWallet(info, http.MethodGet, "/v1/wallet", nil); wErr == nil {
-		if wm, ok := wOut.(map[string]any); ok {
-			fundAddr, _ = wm["fundAddress"].(string)
-			activeWalletMode, _ = wm["walletMode"].(string)
-			if b, ok := wm["balanceSats"].(float64); ok {
-				balanceSats = uint64(b)
+	refreshWallet := func() {
+		if wOut, wErr := callLiveWallet(info, http.MethodGet, "/v1/wallet", nil); wErr == nil {
+			if wm, ok := wOut.(map[string]any); ok {
+				fundAddr, _ = wm["fundAddress"].(string)
+				activeWalletMode, _ = wm["walletMode"].(string)
+				if b, ok := wm["balanceSats"].(float64); ok {
+					balanceSats = uint64(b)
+				}
 			}
 		}
 	}
+	refreshWallet()
+
+	// Zero-config trade readiness:
+	//  - Testnet: auto-drip faucet when balance == 0 + auto-arm bounded `both` (buyer+seller) policy
+	//  - Mainnet: auto-arm `seller` policy (0 treasury spend risk) or `both` when funded / BSV Desktop client mode
+	var faucetDripSats uint64
+	if info.Network == "testnet" && balanceSats == 0 && activeWalletMode != "client" {
+		if fOut, fErr := callLiveAPI(info, http.MethodPost, "/v1/onboard/faucet", map[string]any{}); fErr == nil {
+			if fm, ok := fOut.(map[string]any); ok {
+				if s, ok := fm["sats"].(float64); ok && s > 0 {
+					faucetDripSats = uint64(s)
+				}
+			}
+			refreshWallet()
+		}
+	}
+	tradingPosture := ensureZeroConfigTradingPolicy(info, activeWalletMode, balanceSats, *confirmFlag)
+
 	var desktopProbe nwallet.DesktopProbeStatus
 	if info.Network != "memory" {
 		desktopProbe = nwallet.ProbeDesktopWallet(ctx, *walletWireURL)
@@ -338,19 +348,21 @@ func cmdUp(args []string) error {
 	elapsedMs := time.Since(t0).Milliseconds()
 	if *asJSON {
 		return printJSON(map[string]any{
-			"ok":          true,
-			"elapsedMs":   elapsedMs,
-			"daemon":      map[string]any{"pid": info.PID, "url": info.URL, "network": info.Network, "dataDir": info.DataDir},
-			"dashboard":   dashURL,
-			"restate":     restateStatus,
-			"fundAddress": fundAddr,
-			"balanceSats": balanceSats,
-			"walletMode":  activeWalletMode,
-			"desktop":     desktopProbe,
-			"dock":        dockResults,
-			"probe":       probe,
-			"servicePath": svcPath,
-			"serviceErr":  svcErr,
+			"ok":             true,
+			"elapsedMs":      elapsedMs,
+			"daemon":         map[string]any{"pid": info.PID, "url": info.URL, "network": info.Network, "dataDir": info.DataDir},
+			"dashboard":      dashURL,
+			"runtime":        runtimeDesc,
+			"tradingPosture": tradingPosture,
+			"faucetDripSats": faucetDripSats,
+			"fundAddress":    fundAddr,
+			"balanceSats":    balanceSats,
+			"walletMode":     activeWalletMode,
+			"desktop":        desktopProbe,
+			"dock":           dockResults,
+			"probe":          probe,
+			"servicePath":    svcPath,
+			"serviceErr":     svcErr,
 		})
 	}
 
@@ -358,7 +370,8 @@ func cmdUp(args []string) error {
 	fmt.Fprintf(&card, "\n╭─ nektar v%s UP (%s · pid %d · ready in %dms)\n", Version, info.Network, info.PID, elapsedMs)
 	fmt.Fprintf(&card, "│ Dashboard : %s\n", dashURL)
 	fmt.Fprintf(&card, "│ Daemon    : %s  (background · logs: %s)\n", info.URL, filepath.Join(info.DataDir, "daemon.log"))
-	fmt.Fprintf(&card, "│ Restate   : %s\n", restateStatus)
+	fmt.Fprintf(&card, "│ Runtime   : %s\n", runtimeDesc)
+	fmt.Fprintf(&card, "│ Trading   : %s\n", tradingPosture)
 	if fundAddr != "" {
 		custodyTag := "embedded BRC-100"
 		if activeWalletMode == "client" {
@@ -391,14 +404,99 @@ func cmdUp(args []string) error {
 	}
 
 	fmt.Println("\nNext:")
-	fmt.Println("  1. Restart your docked AI app (Claude Code / Codex / Hermes / OpenClaw / Cursor / VS Code).")
-	fmt.Println(`  2. Ask it: "Remember our production API runs on port 8080, then recall it with a verified receipt."`)
-	fmt.Println(formatConsoleText("  3. Stop anytime with `nektar stop` · Check health with `nektar doctor` · Earn sats with `nektar earn`"))
+	fmt.Println("  1. Restart your docked AI app (Claude Code / Codex / Hermes / Antigravity / OpenClaw / Cursor).")
+	fmt.Println(`  2. Ask it: "Sell what we just debugged as an #ops capsule for 50 sats" or "Buy a verified #ops capsule."`)
+	fmt.Println(formatConsoleText("  3. Discover Hubs with `nektar peers` · Deploy your own Hub with `nektar hub up` · Stop with `nektar stop`"))
 
 	if !*noOpen && os.Getenv("CI") == "" && os.Getenv("NO_BROWSER") == "" && os.Getenv("SSH_CONNECTION") == "" {
 		_ = openBrowserURL(dashURL)
 	}
 	return nil
+}
+
+func ensureZeroConfigTradingPolicy(info *server.DaemonInfo, walletMode string, balanceSats uint64, confirmFlag string) string {
+	if info == nil {
+		return "uninitialized"
+	}
+	hasActive := false
+	hasBuyer := false
+	hasSeller := false
+	if out, err := callLiveAPI(info, http.MethodGet, "/v1/policies", nil); err == nil {
+		if list, ok := out.([]any); ok {
+			for _, item := range list {
+				pm, _ := item.(map[string]any)
+				if active, _ := pm["active"].(bool); active {
+					hasActive = true
+					role := strings.ToLower(fmt.Sprint(pm["role"]))
+					if role == "both" || role == "buyer" {
+						hasBuyer = true
+					}
+					if role == "both" || role == "seller" {
+						hasSeller = true
+					}
+				}
+			}
+		}
+	}
+	if hasActive {
+		// Upgrade Mainnet seller-only policy to bounded `both` automatically once funded or paired with BSV Desktop.
+		if info.Network == "main" && hasSeller && !hasBuyer && (walletMode == "client" || balanceSats > 0) {
+			confirm := strings.TrimSpace(confirmFlag)
+			if confirm == "" {
+				confirm = strings.TrimSpace(os.Getenv("NEKTAR_MAINNET_CONFIRM"))
+			}
+			if confirm == "I_UNDERSTAND" {
+				if _, err := callLiveAPI(info, http.MethodPost, "/v1/onboard/policy-preset", map[string]any{
+					"profile": "standard",
+					"preset":  "both",
+					"confirm": confirm,
+				}); err == nil {
+					return "ready (Mainnet bounded buyer + seller policy armed)"
+				}
+			}
+		}
+		if hasBuyer && hasSeller {
+			return "ready (buyer + seller policy active)"
+		}
+		if hasSeller {
+			return "seller ready (0-risk earning active · fund wallet to unlock buying)"
+		}
+		return "buyer policy active"
+	}
+
+	switch info.Network {
+	case "main":
+		confirm := strings.TrimSpace(confirmFlag)
+		if confirm == "" {
+			confirm = strings.TrimSpace(os.Getenv("NEKTAR_MAINNET_CONFIRM"))
+		}
+		if confirm != "I_UNDERSTAND" {
+			return "unarmed (pass --confirm I_UNDERSTAND on Mainnet)"
+		}
+		preset := "seller"
+		if walletMode == "client" || balanceSats > 0 {
+			preset = "both"
+		}
+		if _, err := callLiveAPI(info, http.MethodPost, "/v1/onboard/policy-preset", map[string]any{
+			"profile": "standard",
+			"preset":  preset,
+			"confirm": confirm,
+		}); err == nil {
+			if preset == "both" {
+				return "ready (Mainnet bounded buyer + seller policy auto-armed)"
+			}
+			return "seller ready (Mainnet seller auto-armed · fund QR below to unlock buying)"
+		}
+		return "manual approval (`nektar policy approve --preset seller --confirm I_UNDERSTAND`)"
+	default:
+		if _, err := callLiveAPI(info, http.MethodPost, "/v1/onboard/policy-preset", map[string]any{
+			"profile": "easy",
+			"preset":  "both",
+		}); err == nil {
+			return "ready (Testnet sandbox buyer + seller policy auto-armed)"
+		}
+		return "manual approval (`nektar policy approve --preset both`)"
+	}
 }
 
 // cmdStop gracefully terminates the running background Nektar daemon and optionally removes login autostart.

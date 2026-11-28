@@ -23,26 +23,29 @@ import (
 	"github.com/kryptokrates/nektar/internal/hub"
 )
 
-const hubUsage = `nektar hub — 1-command Hub Node deployment, graduation & standalone overlay server
+const hubUsage = `nektar hub — 1-command zero-Docker LightBSV Hub deployment & standalone overlay server
 
-  nektar hub up [options]               pull GHCR v0.1 Hub stack, auto-configure TLS & start
-  nektar hub status [--dir <path>]      inspect hub containers, health & announced card
-  nektar hub logs [--dir <path>]        follow hub logs
-  nektar hub down [--dir <path>]        stop hub containers (volumes & keys preserved)
+  nektar hub up [options]               start native single-binary Hub, peer with Spine & announce on dir
+  nektar hub status [--dir <path>]      inspect hub process/service, health, fees & earnings
+  nektar hub logs [--dir <path>]        show hub logs
+  nektar hub down [--dir <path>]        stop hub cleanly (keys & SQLite preserved)
   nektar hub template <kind> [options]  print a 1-click template (coolify|dokploy|cloud-init|railway|render|fly|umbrel|casaos)
-  nektar hub run [flags]                run standalone Go overlay hub directly in this process
+  nektar hub run [flags]                run foreground Go overlay hub directly in this process
 
 Options for 'up':
-  --domain <fqdn>          Public domain with automatic Let's Encrypt TLS via Caddy
-  --auto-ip                Zero-domain HTTPS via <public-ip>.sslip.io + Caddy Auto-TLS
+  --domain <fqdn>          Public domain (serves BRC-180 /manifest.json + bfinger handles)
+  --auto-ip                Zero-domain HTTPS host (<public-ip>.sslip.io)
   --tunnel                 Zero-port HTTPS via Cloudflare Quick Tunnel (works behind NAT)
-  --native                 Zero-Docker mode: write .env + systemd service unit using this static nektar binary
+  --port <port>            Hub HTTP listen port in native mode (default: 18421)
+  --docker                 Use Docker Compose stack instead of zero-Docker native binary mode
+  --native                 Explicit alias for default zero-Docker native binary mode
   --network <testnet|main> Network (default: testnet; main requires --confirm I_UNDERSTAND)
+  --mainnet                Shorthand for --network main (requires --confirm I_UNDERSTAND)
   --confirm I_UNDERSTAND   Required acknowledgement for mainnet
   --hub-role <leaf|spine>  Spine-and-Leaf topology role (default: leaf)
   --fee-preset <preset>    Monetization preset (free|lightbsv_egress|hybrid; default: hybrid on main, free on testnet)
   --dir <path>             Hub directory (default: ~/.nektar-hub)
-  --dry                    Write config files without starting Docker
+  --dry                    Write .env + systemd unit without starting the Hub process
   --no-join                Skip auto-joining local running agent to this new hub
 `
 
@@ -81,6 +84,7 @@ func cmdHubRun(args []string) error {
 	egressFeeFlag := fs.Uint64("egress-sats-per-100", 0, "Metered egress fee in satoshis per 100 market events")
 	lookupPricesFlag := fs.String("lookup-prices", os.Getenv("NEKTAR_HUB_LOOKUP_PRICES"), "Priced lookup classes (e.g. history=5,export=20)")
 	spinePeersFlag := fs.String("spine-peer-pubs", os.Getenv("NEKTAR_SPINE_PEER_PUBS"), "Comma-separated bilateral Spine peer pubkeys (settlement-free peering)")
+	lanesFlag := fs.String("lanes", os.Getenv("NEKTAR_HUB_LANES"), "Optional comma-separated hex nibble lanes to mount (e.g. 0,1,2,3; default all 0..f)")
 	_ = fs.Parse(args)
 
 	visited := make(map[string]bool)
@@ -139,15 +143,16 @@ func cmdHubRun(args []string) error {
 		dbPath = ":memory:"
 	}
 
+	if *netName != "memory" {
+		releaseLock, lockErr := acquireInstanceLock(dir, *addr)
+		if lockErr != nil {
+			return lockErr
+		}
+		defer releaseLock()
+	}
+
 	var rt *runtimeBundle
 	if *withLiquidity || feeSched.HasAnyFees() {
-		if *netName != "memory" {
-			releaseLock, lockErr := acquireInstanceLock(dir, *addr)
-			if lockErr != nil {
-				return lockErr
-			}
-			defer releaseLock()
-		}
 		var rErr error
 		rt, rErr = openRuntime(ctx, *netName, *dataDir, envOr("NEKTAR_HUB_PORT", "18421"))
 		if rErr != nil {
@@ -174,12 +179,14 @@ func cmdHubRun(args []string) error {
 	hCfg := hub.Config{
 		Network:        *netName,
 		DBPath:         dbPath,
+		Lanes:          []string{*lanesFlag},
 		EnableFinger:   true,
 		EnableBbox:     true,
 		EnableBlogs:    true,
 		EnableBorg:     true,
 		EnableBsecret:  true,
 		EnableBstore:   true,
+		EnableFabric:   true,
 		Getenv:         os.Getenv,
 		Fees:           feeSched,
 		UpstreamSpines: upstreamSpines,
@@ -214,10 +221,12 @@ func cmdHubRun(args []string) error {
 	defer node.Close()
 
 	if rt != nil {
+		node.SetEventBus(rt.mem.EventBus())
 		if rt.disc != nil && rt.mkt != nil && rt.mkt.Policy() != nil {
 			rt.disc.SetHubFeePolicy(rt.mkt.Policy().CanPayHubFee, rt.mkt.Policy().RecordHubFeeSpend)
 		}
 		if rt.disc != nil {
+			node.SetHandleResolver(rt.disc.WellKnownHandleHandler("", node.DefaultBboxOffice()))
 			node.SetUpstreamSubmitter(rt.disc.SubmitBEEF)
 			node.SetEgressAuth(
 				func(action, aud string, cursor int64, domainsCSV string) (string, string, string, string, error) {
@@ -271,6 +280,26 @@ func cmdHubRun(args []string) error {
 		cancelCatchup()
 		catchupWG.Wait()
 	}()
+	if *netName != "memory" && node.Store() != nil {
+		catchupWG.Add(1)
+		go func() {
+			defer catchupWG.Done()
+			sweepTicker := time.NewTicker(2 * time.Minute)
+			defer sweepTicker.Stop()
+			for {
+				select {
+				case <-catchupCtx.Done():
+					return
+				case <-sweepTicker.C:
+					if stale, sErr := node.Store().SweepExpiredFastFees(7200); sErr == nil {
+						for _, e := range stale {
+							_ = node.Store().FlagPayer(e.PayerPub, e.TxID, "fast fee payment failed to mine within 2h")
+						}
+					}
+				}
+			}
+		}()
+	}
 	if catchupPeers := parseCSVEnv("NEKTAR_CATCHUP_PEERS"); len(catchupPeers) > 0 {
 		catchupWG.Add(1)
 		go func(peers []string) {
@@ -291,6 +320,8 @@ func cmdHubRun(args []string) error {
 		Addr:              *addr,
 		Handler:           node.Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 		BaseContext: func(net.Listener) context.Context {
 			return drainCtx
 		},
@@ -300,7 +331,7 @@ func cmdHubRun(args []string) error {
 		defer close(shutdownDone)
 		<-ctx.Done()
 		node.CloseSSE()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(shutCtx)
 		cancelDrain()

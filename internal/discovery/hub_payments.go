@@ -14,9 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/transaction"
-	sdkwallet "github.com/bsv-blockchain/go-sdk/wallet"
 	"github.com/lightwebinc/bcommon/carrier"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
@@ -30,21 +28,21 @@ import (
 func BuildFundedMarketCarrierWithHubFees(
 	ctx context.Context,
 	port *chain.Port,
-	priv *ec.PrivateKey,
+	signer *nwallet.MarketSigner,
 	p bstack.MarketPayload,
 	targets []HubPiggybackTarget,
 ) (carrierBEEF []byte, perHubHeaders map[string]string, totalFeeSats uint64, err error) {
 	if port == nil {
 		return nil, nil, 0, errors.New("discovery: chain port required for funded market carrier")
 	}
-	if priv == nil {
+	if signer == nil {
 		return nil, nil, 0, errors.New("discovery: signing key required for funded market carrier")
 	}
 	cborBytes, err := bstack.EncodePayload(p)
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	protoWallet, err := sdkwallet.NewCompletedProtoWallet(priv)
+	protoWallet, err := signer.ProtoWallet()
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("discovery: init carrier signer wallet: %w", err)
 	}

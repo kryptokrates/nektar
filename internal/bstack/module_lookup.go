@@ -19,15 +19,22 @@ import (
 )
 
 // MarketLookupService implements lightwebinc/bcommon/module.LookupService + SpendListener + Restorer
-// for `ls_nektar`.
+// for `ls_nektar` with O(1) FIFO eviction and secondary inverted indexes for O(matches) queries.
 type MarketLookupService struct {
-	mu      sync.RWMutex
-	records map[string]indexedRecord // outpoint string -> record
-	onAdmit func(MarketEvent)
-	host    module.Host
+	mu        sync.RWMutex
+	records   map[string]indexedRecord // outpoint string -> record
+	order     []string
+	orderHead int
+	byWantID  map[string]map[string]struct{}
+	byOfferID map[string]map[string]struct{}
+	byDomain  map[string]map[string]struct{}
+	byPub     map[string]map[string]struct{}
+	byKind    map[ArtifactKind]map[string]struct{}
+	onAdmit   func(MarketEvent)
+	host      module.Host
 }
 
-const maxIndexedMarketRecords = 10000
+const maxIndexedMarketRecords = 262144
 
 type indexedRecord struct {
 	seq               int64
@@ -55,9 +62,85 @@ type indexedRecord struct {
 // NewMarketLookupService creates an ls_nektar lookup service with an optional live admission callback (for Hub SSE).
 func NewMarketLookupService(host module.Host, onAdmit func(MarketEvent)) *MarketLookupService {
 	return &MarketLookupService{
-		records: make(map[string]indexedRecord),
-		onAdmit: onAdmit,
-		host:    host,
+		records:   make(map[string]indexedRecord, 1024),
+		byWantID:  make(map[string]map[string]struct{}),
+		byOfferID: make(map[string]map[string]struct{}),
+		byDomain:  make(map[string]map[string]struct{}),
+		byPub:     make(map[string]map[string]struct{}),
+		byKind:    make(map[ArtifactKind]map[string]struct{}),
+		onAdmit:   onAdmit,
+		host:      host,
+	}
+}
+
+func addStrSet(idx map[string]map[string]struct{}, k, opKey string) {
+	if k == "" {
+		return
+	}
+	m := idx[k]
+	if m == nil {
+		m = make(map[string]struct{}, 4)
+		idx[k] = m
+	}
+	m[opKey] = struct{}{}
+}
+
+func delStrSet(idx map[string]map[string]struct{}, k, opKey string) {
+	if k == "" {
+		return
+	}
+	if m := idx[k]; m != nil {
+		delete(m, opKey)
+		if len(m) == 0 {
+			delete(idx, k)
+		}
+	}
+}
+
+func (s *MarketLookupService) addSecondaryLocked(opKey string, rec *indexedRecord) {
+	if rec.wantID != "" {
+		addStrSet(s.byWantID, rec.wantID, opKey)
+	}
+	if rec.offerID != "" {
+		addStrSet(s.byOfferID, rec.offerID, opKey)
+	}
+	if rec.pub != "" {
+		addStrSet(s.byPub, rec.pub, opKey)
+	}
+	for _, d := range rec.domains {
+		if dl := strings.ToLower(strings.TrimSpace(d)); dl != "" {
+			addStrSet(s.byDomain, dl, opKey)
+		}
+	}
+	if rec.payload.Kind != "" {
+		m := s.byKind[rec.payload.Kind]
+		if m == nil {
+			m = make(map[string]struct{}, 64)
+			s.byKind[rec.payload.Kind] = m
+		}
+		m[opKey] = struct{}{}
+	}
+}
+
+func (s *MarketLookupService) removeRecordLocked(opKey string) {
+	rec, ok := s.records[opKey]
+	if !ok {
+		return
+	}
+	delete(s.records, opKey)
+	delStrSet(s.byWantID, rec.wantID, opKey)
+	delStrSet(s.byOfferID, rec.offerID, opKey)
+	delStrSet(s.byPub, rec.pub, opKey)
+	for _, d := range rec.domains {
+		if dl := strings.ToLower(strings.TrimSpace(d)); dl != "" {
+			delStrSet(s.byDomain, dl, opKey)
+		}
+	}
+	if m := s.byKind[rec.payload.Kind]; m != nil {
+		delete(m, opKey)
+		if len(m) == 0 {
+			delete(s.byKind, rec.payload.Kind)
+		}
 	}
 }
 
@@ -83,8 +166,8 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 	}
 	switch p.Kind {
 	case KindWant:
-		var sw SignedWant
-		if err := json.Unmarshal(p.Body, &sw); err != nil {
+		sw, err := DecodeWantPayload(p.Body)
+		if err != nil {
 			return err
 		}
 		rec.wantID = sw.Want.WantID
@@ -104,8 +187,8 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		rec.minSatsPer1kUnits = sw.Want.MaxSatsPer1kUnits
 		rec.exp = sw.Want.Exp
 	case KindOffer:
-		var so SignedOffer
-		if err := json.Unmarshal(p.Body, &so); err != nil {
+		so, err := DecodeOfferPayload(p.Body)
+		if err != nil {
 			return err
 		}
 		rec.offerID = so.Offer.OfferID
@@ -131,8 +214,8 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		}
 		rec.exp = so.Offer.Exp
 	case KindAnnounce:
-		var sa SignedAnnounce
-		if err := json.Unmarshal(p.Body, &sa); err != nil {
+		sa, err := DecodeAnnouncePayload(p.Body)
+		if err != nil {
 			return err
 		}
 		rec.pub = sa.Announce.Pub
@@ -172,8 +255,8 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		}
 		rec.exp = sa.Announce.Exp
 	case KindAttestation:
-		var sat SignedAttestation
-		if err := json.Unmarshal(p.Body, &sat); err != nil {
+		sat, err := DecodeAttestationPayload(p.Body)
+		if err != nil {
 			return err
 		}
 		rec.pub = sat.Attestation.Pub
@@ -185,32 +268,26 @@ func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string,
 		rec.exp = sat.Attestation.Exp
 	}
 	key := op.String()
-	nowMs := time.Now().UnixMilli()
 	s.mu.Lock()
 	if existing, ok := s.records[key]; ok {
 		rec.seq = existing.seq
-	} else if len(s.records) >= maxIndexedMarketRecords {
-		// Evict expired first, then oldest admitted record to keep RAM strictly bounded.
-		for k, r := range s.records {
-			if r.exp <= 0 || r.exp < nowMs {
-				delete(s.records, k)
-			}
+		s.removeRecordLocked(key)
+	} else {
+		for len(s.records) >= maxIndexedMarketRecords && s.orderHead < len(s.order) {
+			oldKey := s.order[s.orderHead]
+			s.order[s.orderHead] = ""
+			s.orderHead++
+			s.removeRecordLocked(oldKey)
 		}
-		if len(s.records) >= maxIndexedMarketRecords {
-			var oldestKey string
-			var oldestAt int64
-			for k, r := range s.records {
-				if oldestKey == "" || r.admittedAt < oldestAt {
-					oldestKey = k
-					oldestAt = r.admittedAt
-				}
-			}
-			if oldestKey != "" {
-				delete(s.records, oldestKey)
-			}
+		if s.orderHead > 0 && s.orderHead*2 >= len(s.order) {
+			rem := copy(s.order, s.order[s.orderHead:])
+			s.order = s.order[:rem]
+			s.orderHead = 0
 		}
+		s.order = append(s.order, key)
 	}
 	s.records[key] = rec
+	s.addSecondaryLocked(key, &rec)
 	cb := s.onAdmit
 	s.mu.Unlock()
 
@@ -248,7 +325,7 @@ func (s *MarketLookupService) PruneExpired(nowMs int64) int {
 	pruned := 0
 	for k, rec := range s.records {
 		if rec.exp > 0 && rec.exp < nowMs {
-			delete(s.records, k)
+			s.removeRecordLocked(k)
 			pruned++
 		}
 	}
@@ -267,7 +344,7 @@ func (s *MarketLookupService) OutputSpent(_ context.Context, payload *module.Out
 		return nil
 	}
 	s.mu.Lock()
-	delete(s.records, payload.Outpoint.String())
+	s.removeRecordLocked(payload.Outpoint.String())
 	s.mu.Unlock()
 	return nil
 }
@@ -277,7 +354,7 @@ func (s *MarketLookupService) OutputEvicted(_ context.Context, outpoint *transac
 		return nil
 	}
 	s.mu.Lock()
-	delete(s.records, outpoint.String())
+	s.removeRecordLocked(outpoint.String())
 	s.mu.Unlock()
 	return nil
 }
@@ -323,8 +400,10 @@ func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQ
 			return nil, fmt.Errorf("ls_nektar: invalid query: %w", err)
 		}
 	}
-	if q.Limit <= 0 || q.Limit > 500 {
+	if q.Limit <= 0 {
 		q.Limit = 100
+	} else if q.Limit > 2000 {
+		q.Limit = 2000
 	}
 	nowMs := time.Now().UnixMilli()
 	domLower := strings.ToLower(strings.TrimSpace(q.Domain))
@@ -335,63 +414,110 @@ func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQ
 	wantRights := nmu.NormalizeRights(q.UsageRights)
 	wantFresh := nmu.NormalizeFreshness(q.FreshnessClass)
 
+	needSort := q.SinceSeq > 0 || q.Kind == KindAnnounce
+
 	s.mu.RLock()
-	var matched []indexedRecord
-	for _, rec := range s.records {
+	// Pick the smallest selective secondary index set when available (O(matches) vs O(N_records)!).
+	var candidateSet map[string]struct{}
+	hasCandidateFilter := false
+	considerSet := func(m map[string]struct{}) {
+		if !hasCandidateFilter || len(m) < len(candidateSet) {
+			candidateSet = m
+			hasCandidateFilter = true
+		}
+	}
+	if q.OfferID != "" {
+		considerSet(s.byOfferID[q.OfferID])
+	}
+	if q.WantID != "" {
+		considerSet(s.byWantID[q.WantID])
+	}
+	if q.Pub != "" {
+		considerSet(s.byPub[q.Pub])
+	}
+	if domLower != "" {
+		considerSet(s.byDomain[domLower])
+	}
+	if q.Kind != "" {
+		considerSet(s.byKind[q.Kind])
+	}
+
+	matchRec := func(rec indexedRecord) bool {
 		if rec.exp > 0 && rec.exp < nowMs {
-			continue
+			return false
 		}
 		if q.Kind != "" && rec.payload.Kind != q.Kind {
-			continue
+			return false
 		}
 		if q.WantID != "" && rec.wantID != q.WantID {
-			continue
+			return false
 		}
 		if q.OfferID != "" && rec.offerID != q.OfferID {
-			continue
+			return false
 		}
 		if q.Pub != "" && rec.pub != q.Pub {
-			continue
+			return false
 		}
 		if q.BuyerPub != "" && rec.buyerPub != q.BuyerPub {
-			continue
+			return false
 		}
 		if q.SubjectPub != "" && !strings.EqualFold(rec.subjectPub, q.SubjectPub) {
-			continue
+			return false
 		}
 		if q.SinceMs > 0 && rec.admittedAt < q.SinceMs {
-			continue
+			return false
 		}
 		if q.SinceSeq > 0 && rec.seq <= q.SinceSeq {
-			continue
+			return false
 		}
 		if domLower != "" && !hasDomain(rec.domains, domLower) {
-			continue
+			return false
 		}
 		if ontLower != "" && !hasDomain(rec.ontologyIDs, ontLower) {
-			continue
+			return false
 		}
 		if tgtOntLower != "" && !hasDomain(rec.targetOntologyIDs, tgtOntLower) {
-			continue
+			return false
 		}
 		if minGrade != "" && !matchesMinGrade(rec.grades, minGrade) {
-			continue
+			return false
 		}
 		if wantMode != "" && !matchesPricingMode(rec.pricingModes, wantMode) {
-			continue
+			return false
 		}
 		if wantRights != "" && !matchesUsageRights(rec.usageRights, wantRights) {
-			continue
+			return false
 		}
 		if wantFresh != "" && !matchesFreshness(rec.freshnessClasses, wantFresh) {
-			continue
+			return false
 		}
 		if q.MaxSatsPer1kUnits > 0 && (rec.minSatsPer1kUnits == 0 || rec.minSatsPer1kUnits > q.MaxSatsPer1kUnits) {
-			continue
+			return false
 		}
-		matched = append(matched, rec)
-		if q.SinceSeq <= 0 && len(matched) >= q.Limit {
-			break
+		return true
+	}
+
+	var matched []indexedRecord
+	if hasCandidateFilter {
+		for k := range candidateSet {
+			rec, ok := s.records[k]
+			if !ok || !matchRec(rec) {
+				continue
+			}
+			matched = append(matched, rec)
+			if !needSort && len(matched) >= q.Limit {
+				break
+			}
+		}
+	} else {
+		for _, rec := range s.records {
+			if !matchRec(rec) {
+				continue
+			}
+			matched = append(matched, rec)
+			if !needSort && len(matched) >= q.Limit {
+				break
+			}
 		}
 	}
 	s.mu.RUnlock()
@@ -400,6 +526,18 @@ func (s *MarketLookupService) Lookup(_ context.Context, question *lookup.LookupQ
 		sort.Slice(matched, func(i, j int) bool {
 			if matched[i].seq != matched[j].seq {
 				return matched[i].seq < matched[j].seq
+			}
+			return matched[i].outpoint.String() < matched[j].outpoint.String()
+		})
+	} else if q.Kind == KindAnnounce && len(matched) > 1 {
+		// Deterministic ordering across sibling Hubs prevents non-deterministic map-iteration truncation
+		// from causing false multi-host WithholdingWarning quarantines when >Limit peers exist.
+		sort.Slice(matched, func(i, j int) bool {
+			if matched[i].pub != matched[j].pub {
+				return matched[i].pub < matched[j].pub
+			}
+			if matched[i].exp != matched[j].exp {
+				return matched[i].exp > matched[j].exp
 			}
 			return matched[i].outpoint.String() < matched[j].outpoint.String()
 		})

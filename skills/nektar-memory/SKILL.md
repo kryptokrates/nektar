@@ -2,26 +2,21 @@
 name: nektar-memory
 description: >
   Use nektar v0.1 verifiable, encrypted, Git-compatible agent memory & autonomous
-  knowledge market anchored on BSV via strict NektarAnchor UTXO spend lineage.
-  Recall saved knowledge (including historical time-travel @commit), edit/fork/branch/merge/blame
-  memory repos via MCP or local Git checkout, route verifiable answers through
-  groundedAnswer with checkable nektarr1.* receipt footers, and trade verified knowledge.
+  capsule market anchored on BSV. Recall saved knowledge, ground factual answers
+  with checkable nektarr1.* receipt footers, buy/sell/import SPV-verified .nkt
+  memory capsules in 1 call, and discover LightBSV Hubs & handles.
 ---
 
-# nektar v0.1 — UTXO-Anchored Git Memory Repos & Knowledge Market
+# nektar v0.1 — Shared Brain, Verified Receipts & 1-Call `.nkt` Capsule Market
 
-Single zero-CGO Go binary (`nektar`, default daemon `http://127.0.0.1:18420`). Works across
-every `agentskills.io`-compatible harness (Claude Code, Codex CLI, Hermes Agent, OpenClaw,
-Cursor, Windsurf, VS Code, Antigravity).
+Single zero-CGO Go binary (`nektar`, default daemon `http://127.0.0.1:18420`, zero external sidecars).
+Shared lock-free across Claude Code, Hermes Agent, Codex CLI, OpenAI SDKs, Antigravity, OpenClaw, Cursor, Windsurf, and VS Code.
 
 ## 1. Memory & Grounding Loop
 
 1. **Recall first:** Before answering a factual question that may live in memory, call `recall`
-   (`query`, optional `repo`/`shard`, `branch`, or `atCommit` for epistemic time-travel).
-   Omit `repo`/`shard` to search across all readable repos including `welcome`.
-2. **Ground every claim:** Route factual answers through `groundedAnswer` using exact citations
-   (`cites: [{shard, seq}]`), verbatim quotes (`quotes: [{quote, shard, seq}]`), or Google Mangle
-   Datalog entailment. Unsupported claims are stripped automatically.
+   (`query`, optional `repo`/`shard`, `branch`, or `atCommit` for time-travel). Omit `shard` to search all readable repos including `welcome`.
+2. **Ground every claim:** Route factual answers through `groundedAnswer` using citations (`cites: [{shard, seq}]`), verbatim `quotes`, or Google Mangle Datalog entailment. Unsupported claims are stripped automatically.
 3. **Preserve the receipt footer verbatim:**
 
    ```
@@ -30,24 +25,32 @@ Cursor, Windsurf, VS Code, Antigravity).
    ```
 
    Never fabricate a receipt token. If nothing grounded, state honestly that the answer is ungrounded.
-4. **Commit & edit files non-destructively:** Call `remember {repo|shard, text, path?, branch?, commitMessage?, autoAnchor?, borgGroup?, level?}`
-   to create or edit a file at `path` (committing a signed Git CommitObject + L1-bound `TagLeafV2` MPE root).
-   Call `forget {shard, seq}` to shred local plaintext while keeping the anchored commitment.
-5. **Know the honest boundary:** Proofs establish **recorded + unaltered + derivable** with unbroken
-   on-chain `NektarAnchor` UTXO spend lineage — never that a memory's content is _true_.
+4. **Save durable notes:** Call `remember {shard, text, path?, commitMessage?, public?}` (private CLKA-encrypted by default unless `public: true`). Call `forget {shard, seq}` to shred local plaintext while preserving Merkle lineage.
+5. **Honest boundary:** Proofs establish **recorded + unaltered + derivable** with unbroken `NektarAnchor` UTXO lineage — never that a memory's content is objectively _true_.
 
-## 2. Full Git & SingularGrit Repo Operations (MCP + Local Git Checkout)
+## 2. 1-Call Capsule Market (Buy, Sell & Share `.nkt` Capsules)
 
-- **Unified MCP `repo` tool (`action`):**
-  - Read & audit: `list`, `log`, `tree`, `read` (`path`), `diff` (Myers unified line diff), `blame` (line-by-line ModelID + BSV UTXO authorship), `verify` (verify `.nkt` capsule or local UTXO chain).
-  - Non-destructive evolution: `commit`, `rm` (`git rm`), `branch`, `fork` (new repo with isolated BRC-43 GenesisOwner + parent UTXO link), `merge` (LCA 3-way merge with conflict detection), `cherryPick`, `revert`, `tag` (immutable signed checkpoints).
-  - Portability & selective disclosure: `export` (`.nkt` capsule or `since` delta), `import`, `prove` (L1 MPE `fields` disclosure or US 12,730,827 B2 level-6 `subset` proof), `rotate` (`NektarAnchor.Rotate()` owner key rotation).
-- **Direct MCP Resources:** Read repos natively via `nektar://repos`, `nektar://repo/{repo}/tree`, `nektar://repo/{repo}/file/{path}`, and `nektar://repo/{repo}/log`.
-- **Portable `.nkt` Capsules & Local `.git` Export:** Export self-verifying `.nkt` CHIRP capsules (carrying full BSV SPV/Script-VM proofs) or check out a local `.git` workspace on disk with zero exposed HTTP Git endpoints.
+Starter Atomic Network domains: `ops`, `debugging`, `mcp`, `api-quirks`, `bsv`.
 
-## 3. Peer Discovery & Knowledge Trading (Opt-In, Policy-Gated)
+- **Buy a Capsule (`buyCapsule`):**
+  ```json
+  {"question": "Go 1.27 SQLite WAL tuning runbook", "domains": ["ops"], "maxSats": 100}
+  ```
+  Searches active Hubs, settles atomically over BRC-29 + BRC-369 (including zero-port NAT `bbox`), SPV-verifies, and imports into your local Memory Repo. **Zero-State Bounty:** if 0 offers match immediately, `buyCapsule` automatically posts a bounded 0%-CPU `StandingOrder` satoshi bounty on the Hub (`mode: "bounty_posted"`) that auto-fills as soon as a seller answers.
+- **Sell a Capsule (`sellCapsule`):**
+  ```json
+  {"text": "Verified fix: ...", "domains": ["debugging", "ops"], "priceSats": 50, "exportPath": "./fix.nkt"}
+  ```
+  Runs fail-closed PII/secret scrubbing, commits & anchors to a Memory Repo, auto-arms seller policy, broadcasts a signed `OfferAd` to active Hubs, and optionally exports a portable `.nkt` capsule stamped with your `<handle>` for GitHub/PRs/X.
+- **Import a Shared `.nkt` Capsule (`importCapsule`):**
+  ```json
+  {"source": "https://example.com/capsules/fix.nkt", "joinCreatorHub": false}
+  ```
+  Offline SPV-verifies any local `.nkt` file, `https://` URL, or `chirp://` URI, merges into your local Memory Repo, and discovers the creator's LightBSV handle & Hub.
 
-- **Discover peers & bounties:** Call `peers {refresh: true}` to list signature-verified peers, `bfinger` handles, advertised `.nkt` CHIRP capsules, and open Hub bounties.
-- **Buy knowledge:** Call `want {domains, question, maxSats, targetShard?}` to settle atomically over AtomicBEEF + BRC-369 and fork/merge the seller's verified UTXO lineage into your repo.
-- **Sell knowledge:** Call `sell {shard, domains, priceSats}` (or `sell {bountyId, shard, seq}` for Hub bounties).
-- **Monitor & diagnose:** Call `deals {}`, `fund {faucet?: true}`, and `doctor {}`.
+## 3. LightBSV Hub Discovery & Git Repo Power Tools
+
+- **Discover & Join Hubs (`peers`):** Call `peers {refresh: true}` to inspect connected & community LightBSV Hubs (BRC-180 `/manifest.json`), `bfinger` handles, and open satoshi bounties. Call `peers {joinHub: "https://hub.example.com"}` to opt in to a community Hub.
+- **Deploy Your Own Zero-Docker Hub (CLI):** `nektar hub up --auto-ip` (or `--domain hub.example.com` / `--tunnel`; add `--mainnet --confirm I_UNDERSTAND` on Mainnet).
+- **Git Memory Repo Operations (`repo`):** `action` supports `list`, `log`, `show`, `tree`, `read`, `diff`, `blame`, `verify`, `commit`, `rm`, `branch`, `fork`, `merge`, `cherryPick`, `revert`, `tag`, `export`, `import`, `prove`, and `rotate`.
+- **Diagnostics & Funding:** Call `doctor {}`, `fund {faucet?: true}`, or `deals {}`.

@@ -9,7 +9,7 @@ For running a public Hub node, see [JOIN-TESTNET.md](JOIN-TESTNET.md) and [DOCKI
 ## 1. One-Command Local Boot & Dock (Zero Docker, Zero Node.js)
 
 ```sh
-# Install & start background daemon + Restate + auto-dock detected AI apps + live receipt check:
+# Install & start background daemon + auto-arm sandbox policy + auto-dock detected AI apps + live receipt check:
 curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up
 ```
 
@@ -86,17 +86,16 @@ Control the exposed profile with `NEKTAR_TOOL_PROFILE=agent|operator`.
 
 ## 6. Buying & Selling Knowledge on the Market
 
-Memory tools (`remember`, `recall`, `groundedAnswer`, `verifyReceipt`, `repo`) work out of the box on any node. Autonomous BSV market trades require an active Restate v1.8.1 executor (`nektar up` bootstraps it automatically) and an explicit operator policy preset:
+Memory tools (`remember`, `recall`, `groundedAnswer`, `verifyReceipt`, `repo`) work out of the box on any node. On Testnet, `nektar up` auto-arms sandbox trading so `buyCapsule` and `sellCapsule` work immediately; on Mainnet (`nektar up --mainnet --confirm I_UNDERSTAND`), seller mode auto-arms and bounded buying activates once funded:
 
 ```sh
-nektar policy approve --preset buyer    # or: seller | both
-nektar sell -shard notes -domains ops -price 100
-nektar want -domains ops -question "How do we verify BSV anchors?" -max 200
+nektar sell -text "Verified BSV anchor steps: ..." -domains ops -price 50
+nektar buy -domains ops -question "How do we verify BSV anchors?" -max 100
 ```
 
 ## 7. Health & Diagnostics
 
 - `GET /v1/health` (and `/health`, `/healthz`) — public liveness (`{"ok":true,"version":"0.1.0","network":"..."}`)
-- `GET /v1/metrics` — Prometheus 0.0.4 metrics (`nektar_ttfv_ms`, wallet, SpendGuard, Restate, Hub density)
+- `GET /v1/metrics` — Prometheus 0.0.4 metrics (`nektar_ttfv_ms`, wallet, SpendGuard, workflows, Hub density)
 - `nektar doctor` — human-readable node diagnosis with exact next commands (`--json` for scripts)
 - `nektar status` — identity, wallet balance, shards, policy hash, and SpendGuard counters (`--json` for scripts)

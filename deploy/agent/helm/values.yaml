@@ -52,31 +52,11 @@ ingress:
 maxFeeSatsPerTx: ''
 maxSpendSatsPerDay: ''
 
-# node runtime + sqlite — sized for a single-agent pod; raise for heavy
-# memory shards. Requests without limits keep OOM semantics predictable.
+# node runtime + sqlite (including embedded workflows.sqlite WAL) — sized for a single-agent pod;
+# raise for heavy memory shards. Requests without limits keep OOM semantics predictable.
 resources:
   requests:
     cpu: 250m
     memory: 256Mi
   limits:
     memory: 1Gi
-
-# the Restate executor sidecar — required, runs in the same pod so loopback
-# URLs are correct. Journals get their own claim.
-restate:
-  image:
-    repository: docker.restate.dev/restatedev/restate
-    # pinned — the executor is required infrastructure; a silent major bump
-    # on 'latest' is not a deployable risk
-    tag: '1.8.1'
-    pullPolicy: IfNotPresent
-  identityPublicKey: ''
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      memory: 512Mi
-  persistence:
-    size: 1Gi
-    storageClass: '' # falls back to persistence.storageClass when empty

@@ -326,7 +326,97 @@ func (s *Store) GetEgressCredit(payerPub string) (EgressCredit, error) {
 	return out, err
 }
 
-// FeeEarningsSummary returns aggregate Hub operator earnings and egress telemetry.
+// ReserveEgressBatch atomically reserves up to maxEvents prepaid egress events from payerPub's balance
+// in a single SQLite write (PERF-11: reduces SSE SQLite write frequency by 20x while keeping exact cutoff).
+func (s *Store) ReserveEgressBatch(payerPub string, maxEvents, msatsPerEvent int64) (granted int64, remMilliSats int64, err error) {
+	payerPub = strings.ToLower(strings.TrimSpace(payerPub))
+	if maxEvents <= 0 || msatsPerEvent <= 0 {
+		return maxEvents, 0, nil
+	}
+	if payerPub == "" {
+		return 0, 0, nil
+	}
+	now := time.Now().Unix()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var bal int64
+	qErr := s.sql.QueryRow(`SELECT COALESCE(balance_msats, 0) FROM hub_egress_credits WHERE payer_pub = ?`, payerPub).Scan(&bal)
+	if errors.Is(qErr, sql.ErrNoRows) {
+		return 0, 0, nil
+	}
+	if qErr != nil {
+		return 0, 0, qErr
+	}
+	avail := bal / msatsPerEvent
+	if avail <= 0 {
+		return 0, bal, nil
+	}
+	if avail > maxEvents {
+		avail = maxEvents
+	}
+	cost := avail * msatsPerEvent
+	if _, err := s.sql.Exec(`
+		UPDATE hub_egress_credits
+		SET balance_msats = balance_msats - ?,
+		    total_events_delivered = total_events_delivered + ?,
+		    updated_at = ?
+		WHERE payer_pub = ?`, cost, avail, now, payerPub); err != nil {
+		return 0, bal, err
+	}
+	return avail, bal - cost, nil
+}
+
+// RefundUnusedEgress credits back unused prepaid batch events when an SSE/plane subscriber disconnects early.
+func (s *Store) RefundUnusedEgress(payerPub string, unusedEvents, msatsPerEvent int64) {
+	payerPub = strings.ToLower(strings.TrimSpace(payerPub))
+	if payerPub == "" || unusedEvents <= 0 || msatsPerEvent <= 0 {
+		return
+	}
+	refund := unusedEvents * msatsPerEvent
+	now := time.Now().Unix()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, _ = s.sql.Exec(`
+		UPDATE hub_egress_credits
+		SET balance_msats = balance_msats + ?,
+		    total_events_delivered = CASE WHEN total_events_delivered >= ? THEN total_events_delivered - ? ELSE 0 END,
+		    updated_at = ?
+		WHERE payer_pub = ?`, refund, unusedEvents, unusedEvents, now, payerPub)
+}
+
+// SweepExpiredFastFees transitions unmined fast-accepted fee payments older than maxAgeSec to 'lost'
+// and returns them so the Hub flags unsettleable payers (STATE-9).
+func (s *Store) SweepExpiredFastFees(maxAgeSec int64) ([]FeeLedgerEntry, error) {
+	if maxAgeSec <= 0 {
+		maxAgeSec = 7200
+	}
+	cutoff := time.Now().Unix() - maxAgeSec
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.sql.Query(`
+		SELECT txid, action, payer_pub, sats, created_at
+		FROM hub_fee_ledger
+		WHERE decision = 'fast' AND status = 'unmined' AND created_at > 0 AND created_at <= ?`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	var stale []FeeLedgerEntry
+	for rows.Next() {
+		var e FeeLedgerEntry
+		if sErr := rows.Scan(&e.TxID, &e.Action, &e.PayerPub, &e.Sats, &e.CreatedAt); sErr != nil {
+			rows.Close()
+			return nil, sErr
+		}
+		stale = append(stale, e)
+	}
+	rows.Close()
+	for _, e := range stale {
+		_, _ = s.sql.Exec(`UPDATE hub_fee_ledger SET status = 'lost' WHERE txid = ? AND status = 'unmined'`, e.TxID)
+	}
+	return stale, nil
+}
+
+// FeeEarningsSummary returns aggregate Hub operator earnings and egress telemetry via O(actions) SQL GROUP BY (PERF-10).
 func (s *Store) FeeEarningsSummary(sinceUnix int64) (FeeEarningsSummary, error) {
 	out := FeeEarningsSummary{
 		ByActionSats:  make(map[string]uint64),
@@ -339,32 +429,33 @@ func (s *Store) FeeEarningsSummary(sinceUnix int64) (FeeEarningsSummary, error) 
 	defer s.mu.Unlock()
 
 	rows, err := s.sql.Query(`
-		SELECT action, status, decision, sats, created_at
+		SELECT action,
+		       COALESCE(SUM(sats), 0),
+		       COUNT(*),
+		       COALESCE(SUM(CASE WHEN created_at >= ? THEN sats ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN status = 'mined' THEN sats ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN status != 'mined' AND decision = 'fast' THEN sats ELSE 0 END), 0)
 		FROM hub_fee_ledger
-		WHERE status NOT IN ('lost', 'held')`)
+		WHERE status NOT IN ('lost', 'held')
+		GROUP BY action`, sinceUnix)
 	if err != nil {
 		return out, err
 	}
 	for rows.Next() {
-		var action, status, decision string
-		var sats uint64
-		var createdAt int64
-		if err := rows.Scan(&action, &status, &decision, &sats, &createdAt); err != nil {
+		var action string
+		var totalSats, earned24h, minedSats, fastUnmined uint64
+		var count int64
+		if err := rows.Scan(&action, &totalSats, &count, &earned24h, &minedSats, &fastUnmined); err != nil {
 			rows.Close()
 			return out, err
 		}
-		out.TotalEarnedSats += sats
-		out.TotalPayments++
-		if createdAt >= sinceUnix {
-			out.Earned24hSats += sats
-		}
-		if status == "mined" {
-			out.MinedEarnedSats += sats
-		} else if decision == "fast" {
-			out.UnminedFastSats += sats
-		}
-		out.ByActionSats[action] += sats
-		out.ByActionCount[action]++
+		out.TotalEarnedSats += totalSats
+		out.TotalPayments += count
+		out.Earned24hSats += earned24h
+		out.MinedEarnedSats += minedSats
+		out.UnminedFastSats += fastUnmined
+		out.ByActionSats[action] = totalSats
+		out.ByActionCount[action] = count
 	}
 	rows.Close()
 

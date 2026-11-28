@@ -10,8 +10,45 @@ import (
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/core"
+	"github.com/kryptokrates/nektar/internal/lattice"
 	"github.com/kryptokrates/nektar/internal/store"
 )
+
+type dbLatticeStore struct {
+	db *store.DB
+}
+
+func (l *dbLatticeStore) LoadLatticeStates() ([]lattice.ShardState, error) {
+	rows, err := l.db.LoadLatticeStates()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]lattice.ShardState, len(rows))
+	for i, r := range rows {
+		edges := make([]lattice.DomainEdge, len(r.DomainEdges))
+		for j, e := range r.DomainEdges {
+			edges[j] = lattice.DomainEdge{Parent: e.Parent, Child: e.Child}
+		}
+		out[i] = lattice.ShardState{
+			Shard:       r.Shard,
+			Epoch:       r.Epoch,
+			DomainEdges: edges,
+		}
+	}
+	return out, nil
+}
+
+func (l *dbLatticeStore) SaveLatticeState(st lattice.ShardState) error {
+	edges := make([]store.LatticeDomainEdge, len(st.DomainEdges))
+	for i, e := range st.DomainEdges {
+		edges[i] = store.LatticeDomainEdge{Parent: e.Parent, Child: e.Child}
+	}
+	return l.db.SaveLatticeState(store.LatticeShardState{
+		Shard:       st.Shard,
+		Epoch:       st.Epoch,
+		DomainEdges: edges,
+	})
+}
 
 // LoadOrCreateProtectedKey loads or creates a 32-byte key in SQLite wrapped at rest via BRC-43
 // wallet EncryptAtRest/DecryptAtRest (transparently migrating any legacy plaintext key, failing closed

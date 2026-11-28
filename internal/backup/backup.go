@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,8 +33,13 @@ import (
 )
 
 const (
-	archiveMagic          = "NKTBAK01"
-	archiveVersion        = 1
+	archiveMagicV1        = "NKTBAK01"
+	archiveMagic          = "NKTBAK02"
+	archiveVersionV1      = 1
+	archiveVersion        = 2
+	aeadChunkSize         = 1 << 20 // 1 MiB constant-RAM streaming AEAD frame size (ARCH-F10)
+	cipherMonolithicGCM   = "aes-256-gcm"
+	cipherChunkedGCM1M    = "aes-256-gcm-chunked-1m"
 	DefaultBackupInterval = 6 * time.Hour
 	DefaultBackupKeep     = 14
 	backupStatusKVKey     = "backup_last_status_v1"
@@ -268,7 +274,7 @@ func (m *Manager) Status() Status {
 	return m.status
 }
 
-// BackupNow takes an atomic WAL-safe snapshot, compresses with zstd, envelope-encrypts via BRC-42 + AES-256-GCM,
+// BackupNow takes an atomic WAL-safe snapshot, streams tar -> zstd -> chunked AES-256-GCM in O(1 MiB) RAM,
 // writes to the configured Sink, and enforces retention pruning.
 func (m *Manager) BackupNow(ctx context.Context) (*Result, error) {
 	if m == nil || m.cfg.Sink == nil {
@@ -298,7 +304,7 @@ func (m *Manager) BackupNow(ctx context.Context) (*Result, error) {
 	return res, err
 }
 
-// BackupToSink creates an encrypted snapshot and uploads it to an explicit Sink (used by CLI `nektar backup now`).
+// BackupToSink creates a streamed encrypted snapshot and uploads it to sink (using O(1) disk move/copy for LocalDirSink).
 func (m *Manager) BackupToSink(ctx context.Context, sink Sink, keep int) (*Result, error) {
 	if m == nil || m.cfg.DB == nil || m.cfg.Port == nil {
 		return nil, errors.New("backup: DB and chain Port are required")
@@ -306,7 +312,15 @@ func (m *Manager) BackupToSink(ctx context.Context, sink Sink, keep int) (*Resul
 	if sink == nil {
 		return nil, errors.New("backup: sink is required")
 	}
-	archiveBytes, manifest, err := CreateEncryptedArchive(ctx, m.cfg.DB, m.cfg.Port, m.cfg.DataDir)
+	tmpOut, err := os.CreateTemp("", "nektar-bak-out-*.nktbak")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmpOut.Name()
+	_ = tmpOut.Close()
+	defer os.Remove(tmpPath)
+
+	manifest, sizeBytes, shaHex, err := CreateEncryptedArchiveToFile(ctx, m.cfg.DB, m.cfg.Port, m.cfg.DataDir, tmpPath)
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +330,17 @@ func (m *Manager) BackupToSink(ctx context.Context, sink Sink, keep int) (*Resul
 		idShort = idShort[:10]
 	}
 	name := fmt.Sprintf("nektar-%s-%s-%s.nktbak", manifest.Network, idShort, ts)
-	loc, err := sink.Put(ctx, name, archiveBytes)
+
+	var loc string
+	if localSink, ok := sink.(*LocalDirSink); ok {
+		loc, err = localSink.PutFile(ctx, name, tmpPath)
+	} else {
+		raw, rErr := os.ReadFile(tmpPath)
+		if rErr != nil {
+			return nil, rErr
+		}
+		loc, err = sink.Put(ctx, name, raw)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -324,27 +348,60 @@ func (m *Manager) BackupToSink(ctx context.Context, sink Sink, keep int) (*Resul
 	if keep > 0 {
 		pruned, _ = sink.Prune(ctx, keep)
 	}
-	sum := sha256.Sum256(archiveBytes)
 	return &Result{
 		ArchiveName: name,
 		Location:    loc,
-		SizeBytes:   int64(len(archiveBytes)),
-		SHA256:      hex.EncodeToString(sum[:]),
+		SizeBytes:   sizeBytes,
+		SHA256:      shaHex,
 		CreatedAt:   manifest.CreatedAt,
 		Pruned:      pruned,
 		Manifest:    *manifest,
 	}, nil
 }
 
-// CreateEncryptedArchive snapshots live SQLite state via VACUUM INTO, packs a deterministic zstd tar,
-// and encrypts it with a fresh random 32-byte AES-256-GCM DEK wrapped via BRC-100 wallet.Encrypt (BRC-42 self).
+type stagedMember struct {
+	name string
+	path string
+	size int64
+}
+
+// CreateEncryptedArchive snapshots live SQLite state via VACUUM INTO, streams tar -> zstd -> 1 MiB chunked AES-256-GCM
+// into a temporary file on disk, and returns the resulting archive bytes and Manifest.
 func CreateEncryptedArchive(ctx context.Context, db *store.DB, port *chain.Port, dataDir string) ([]byte, *Manifest, error) {
+	tmpOut, err := os.CreateTemp("", "nektar-bak-mem-*.nktbak")
+	if err != nil {
+		return nil, nil, err
+	}
+	tmpPath := tmpOut.Name()
+	_ = tmpOut.Close()
+	defer os.Remove(tmpPath)
+
+	manifest, _, _, err := CreateEncryptedArchiveToFile(ctx, db, port, dataDir, tmpPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	raw, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return raw, manifest, nil
+}
+
+// CreateEncryptedArchiveToFile snapshots nektar.sqlite, wallet/wallet.sqlite, workflows.sqlite, hub.sqlite,
+// spend-guard.json, chirp/*, and client-txs/* using O(1 MiB) constant memory via streamed tar -> zstd -> chunked AES-256-GCM.
+func CreateEncryptedArchiveToFile(
+	ctx context.Context,
+	db *store.DB,
+	port *chain.Port,
+	dataDir string,
+	dstPath string,
+) (*Manifest, int64, string, error) {
 	if db == nil || port == nil || port.WalletInterface() == nil {
-		return nil, nil, errors.New("backup: db, chain port, and wallet interface are required")
+		return nil, 0, "", errors.New("backup: db, chain port, and wallet interface are required")
 	}
 	tmpDir, err := os.MkdirTemp("", "nektar-bak-stage-*")
 	if err != nil {
-		return nil, nil, fmt.Errorf("backup: create temp dir: %w", err)
+		return nil, 0, "", fmt.Errorf("backup: create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -360,100 +417,114 @@ func CreateEncryptedArchive(ctx context.Context, db *store.DB, port *chain.Port,
 		Files:         make(map[string]FileChecksum),
 	}
 
-	type archivedFile struct {
-		name string
-		data []byte
+	var members []stagedMember
+	addStaged := func(arcName, diskPath string) error {
+		cs, cErr := hashFileStream(diskPath)
+		if cErr != nil {
+			return cErr
+		}
+		manifest.Files[arcName] = cs
+		members = append(members, stagedMember{name: arcName, path: diskPath, size: cs.Size})
+		return nil
 	}
-	var members []archivedFile
 
-	// 1. Atomic WAL-safe snapshot of nektar.sqlite (includes all fragments, anchors, receipts, memrepo Git objects, market deals, subscriptions).
+	// 1. Atomic WAL-safe snapshot of nektar.sqlite.
 	nektarSnap := filepath.Join(tmpDir, "nektar.sqlite")
 	if err := db.VacuumInto(ctx, nektarSnap); err != nil {
-		return nil, nil, fmt.Errorf("backup: snapshot nektar.sqlite: %w", err)
+		return nil, 0, "", fmt.Errorf("backup: snapshot nektar.sqlite: %w", err)
 	}
-	nektarBytes, err := os.ReadFile(nektarSnap)
-	if err != nil {
-		return nil, nil, err
+	if err := addStaged("nektar.sqlite", nektarSnap); err != nil {
+		return nil, 0, "", err
 	}
-	members = append(members, archivedFile{name: "nektar.sqlite", data: nektarBytes})
 
-	// 2. Atomic WAL-safe snapshot of embedded wallet/wallet.sqlite (UTXOs, baskets, tx BEEFs; NEVER raw identity.json).
+	// 2. Atomic WAL-safe snapshot of embedded wallet/wallet.sqlite (NEVER raw identity.json).
 	if eng := port.Engine(); eng != nil {
 		walletSnap := filepath.Join(tmpDir, "wallet.sqlite")
 		if err := eng.SnapshotTo(ctx, walletSnap); err != nil {
-			return nil, nil, fmt.Errorf("backup: snapshot wallet.sqlite: %w", err)
+			return nil, 0, "", fmt.Errorf("backup: snapshot wallet.sqlite: %w", err)
 		}
-		walletBytes, err := os.ReadFile(walletSnap)
-		if err != nil {
-			return nil, nil, err
+		if err := addStaged("wallet/wallet.sqlite", walletSnap); err != nil {
+			return nil, 0, "", err
 		}
-		members = append(members, archivedFile{name: "wallet/wallet.sqlite", data: walletBytes})
 	}
 
-	// 3. Optional spend-guard.json daily spend ledger.
+	// 3. Optional workflows.sqlite, hub.sqlite, spend-guard.json, chirp/*, and client-txs/* in dataDir.
 	if strings.TrimSpace(dataDir) != "" {
+		for _, auxDB := range []string{"workflows.sqlite", "hub.sqlite"} {
+			srcDB := filepath.Join(dataDir, auxDB)
+			if fi, sErr := os.Stat(srcDB); sErr == nil && !fi.IsDir() && fi.Size() > 0 {
+				snapPath := filepath.Join(tmpDir, auxDB)
+				if vErr := vacuumSQLiteFileInto(ctx, srcDB, snapPath); vErr != nil {
+					return nil, 0, "", fmt.Errorf("backup: snapshot %s: %w", auxDB, vErr)
+				}
+				if err := addStaged(auxDB, snapPath); err != nil {
+					return nil, 0, "", err
+				}
+			}
+		}
+
 		sgPath := filepath.Join(dataDir, "spend-guard.json")
-		if sgBytes, rErr := os.ReadFile(sgPath); rErr == nil && len(sgBytes) > 0 {
-			members = append(members, archivedFile{name: "spend-guard.json", data: sgBytes})
+		if fi, sErr := os.Stat(sgPath); sErr == nil && !fi.IsDir() && fi.Size() > 0 {
+			sgCopy := filepath.Join(tmpDir, "spend-guard.json")
+			if err := copyFileStream(sgPath, sgCopy); err == nil {
+				if err := addStaged("spend-guard.json", sgCopy); err != nil {
+					return nil, 0, "", err
+				}
+			}
+		}
+
+		for _, dirPrefix := range []string{"chirp", "client-txs"} {
+			subRoot := filepath.Join(dataDir, dirPrefix)
+			if info, statErr := os.Stat(subRoot); statErr == nil && info.IsDir() {
+				var relPaths []string
+				if wErr := filepath.WalkDir(subRoot, func(p string, d os.DirEntry, err error) error {
+					if err != nil || d.IsDir() {
+						return err
+					}
+					rel, rErr := filepath.Rel(dataDir, p)
+					if rErr != nil {
+						return rErr
+					}
+					relSlash := filepath.ToSlash(rel)
+					if !strings.HasPrefix(relSlash, dirPrefix+"/") || strings.Contains(relSlash, "..") {
+						return nil
+					}
+					relPaths = append(relPaths, relSlash)
+					return nil
+				}); wErr != nil {
+					return nil, 0, "", fmt.Errorf("backup: walk %s dir: %w", dirPrefix, wErr)
+				}
+				sort.Strings(relPaths)
+				for _, relSlash := range relPaths {
+					srcFile := filepath.Join(dataDir, filepath.FromSlash(relSlash))
+					if err := addStaged(relSlash, srcFile); err != nil {
+						return nil, 0, "", err
+					}
+				}
+			}
 		}
 	}
 
-	for _, m := range members {
-		sum := sha256.Sum256(m.data)
-		manifest.Files[m.name] = FileChecksum{
-			Size:   int64(len(m.data)),
-			SHA256: hex.EncodeToString(sum[:]),
-		}
-	}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, "", err
 	}
-	members = append(members, archivedFile{name: "manifest.json", data: manifestBytes})
-
-	// Pack tar and compress with pure-Go zstd.
-	var compressed bytes.Buffer
-	zw, err := zstd.NewWriter(&compressed, zstd.WithEncoderLevel(zstd.SpeedDefault))
-	if err != nil {
-		return nil, nil, fmt.Errorf("backup: zstd writer: %w", err)
+	manifestPath := filepath.Join(tmpDir, "manifest.json")
+	if err := os.WriteFile(manifestPath, manifestBytes, 0o600); err != nil {
+		return nil, 0, "", err
 	}
-	tw := tar.NewWriter(zw)
-	for _, m := range members {
-		hdr := &tar.Header{
-			Name:    m.name,
-			Mode:    0o600,
-			Size:    int64(len(m.data)),
-			ModTime: time.Unix(now, 0).UTC(),
-		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			_ = tw.Close()
-			_ = zw.Close()
-			return nil, nil, err
-		}
-		if _, err := tw.Write(m.data); err != nil {
-			_ = tw.Close()
-			_ = zw.Close()
-			return nil, nil, err
-		}
-	}
-	if err := tw.Close(); err != nil {
-		_ = zw.Close()
-		return nil, nil, err
-	}
-	if err := zw.Close(); err != nil {
-		return nil, nil, err
-	}
+	members = append(members, stagedMember{name: "manifest.json", path: manifestPath, size: int64(len(manifestBytes))})
 
 	// Envelope encryption: random 32-byte AES-256-GCM DEK wrapped with BRC-42 wallet.Encrypt (self).
 	dek := make([]byte, 32)
 	if _, err := crand.Read(dek); err != nil {
-		return nil, nil, fmt.Errorf("backup: generate DEK: %w", err)
+		return nil, 0, "", fmt.Errorf("backup: generate DEK: %w", err)
 	}
 	defer clear(dek)
 
-	nonce := make([]byte, 12)
-	if _, err := crand.Read(nonce); err != nil {
-		return nil, nil, fmt.Errorf("backup: generate nonce: %w", err)
+	baseNonce := make([]byte, 12)
+	if _, err := crand.Read(baseNonce); err != nil {
+		return nil, 0, "", fmt.Errorf("backup: generate nonce: %w", err)
 	}
 
 	wrapRes, err := port.WalletInterface().Encrypt(ctx, sdkwallet.EncryptArgs{
@@ -465,7 +536,7 @@ func CreateEncryptedArchive(ctx context.Context, db *store.DB, port *chain.Port,
 		Plaintext: dek,
 	}, chain.Originator)
 	if err != nil || wrapRes == nil || len(wrapRes.Ciphertext) == 0 {
-		return nil, nil, fmt.Errorf("backup: wallet BRC-42 wrap DEK: %w", err)
+		return nil, 0, "", fmt.Errorf("backup: wallet BRC-42 wrap DEK: %w", err)
 	}
 
 	envHdr := EnvelopeHeader{
@@ -476,61 +547,307 @@ func CreateEncryptedArchive(ctx context.Context, db *store.DB, port *chain.Port,
 		SchemaVersion: manifest.SchemaVersion,
 		CreatedAt:     manifest.CreatedAt,
 		KDF:           "brc42-self-v1",
-		Cipher:        "aes-256-gcm",
+		Cipher:        cipherChunkedGCM1M,
 		Compression:   "zstd",
 		WrappedDEKB64: base64.StdEncoding.EncodeToString(wrapRes.Ciphertext),
-		NonceB64:      base64.StdEncoding.EncodeToString(nonce),
+		NonceB64:      base64.StdEncoding.EncodeToString(baseNonce),
 	}
 	hdrJSON, err := json.Marshal(envHdr)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, "", err
 	}
 
 	blk, err := aes.NewCipher(dek)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, "", err
 	}
 	gcm, err := cipher.NewGCM(blk)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, "", err
 	}
-	ciphertext := gcm.Seal(nil, nonce, compressed.Bytes(), hdrJSON)
 
-	var out bytes.Buffer
-	out.Grow(len(archiveMagic) + 4 + len(hdrJSON) + len(ciphertext))
-	out.WriteString(archiveMagic)
+	outFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	outHasher := sha256.New()
+	var outSize int64
+	outWriter := io.MultiWriter(outFile, outHasher, &byteCounter{n: &outSize})
+
+	if _, err := outWriter.Write([]byte(archiveMagic)); err != nil {
+		_ = outFile.Close()
+		return nil, 0, "", err
+	}
 	var lenBuf [4]byte
 	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(hdrJSON)))
-	out.Write(lenBuf[:])
-	out.Write(hdrJSON)
-	out.Write(ciphertext)
+	if _, err := outWriter.Write(lenBuf[:]); err != nil {
+		_ = outFile.Close()
+		return nil, 0, "", err
+	}
+	if _, err := outWriter.Write(hdrJSON); err != nil {
+		_ = outFile.Close()
+		return nil, 0, "", err
+	}
 
-	return out.Bytes(), manifest, nil
+	encWriter := newChunkedGCMWriter(outWriter, gcm, baseNonce, hdrJSON)
+	zw, err := zstd.NewWriter(encWriter, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	if err != nil {
+		_ = outFile.Close()
+		return nil, 0, "", fmt.Errorf("backup: zstd writer: %w", err)
+	}
+	tw := tar.NewWriter(zw)
+	copyBuf := make([]byte, 64<<10)
+	for _, m := range members {
+		hdr := &tar.Header{
+			Name:    m.name,
+			Mode:    0o600,
+			Size:    m.size,
+			ModTime: time.Unix(now, 0).UTC(),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			_ = tw.Close()
+			_ = zw.Close()
+			_ = outFile.Close()
+			return nil, 0, "", err
+		}
+		f, oErr := os.Open(m.path)
+		if oErr != nil {
+			_ = tw.Close()
+			_ = zw.Close()
+			_ = outFile.Close()
+			return nil, 0, "", oErr
+		}
+		_, cErr := io.CopyBuffer(tw, io.LimitReader(f, m.size), copyBuf)
+		_ = f.Close()
+		if cErr != nil {
+			_ = tw.Close()
+			_ = zw.Close()
+			_ = outFile.Close()
+			return nil, 0, "", cErr
+		}
+	}
+	if err := tw.Close(); err != nil {
+		_ = zw.Close()
+		_ = outFile.Close()
+		return nil, 0, "", err
+	}
+	if err := zw.Close(); err != nil {
+		_ = outFile.Close()
+		return nil, 0, "", err
+	}
+	if err := encWriter.Close(); err != nil {
+		_ = outFile.Close()
+		return nil, 0, "", err
+	}
+	if err := outFile.Sync(); err != nil {
+		_ = outFile.Close()
+		return nil, 0, "", err
+	}
+	if err := outFile.Close(); err != nil {
+		return nil, 0, "", err
+	}
+	return manifest, outSize, hex.EncodeToString(outHasher.Sum(nil)), nil
 }
 
-// decryptAndUnpack decrypts, decompresses, verifies manifest SHA-256 checksums, and returns extracted files.
-func decryptAndUnpack(ctx context.Context, wallet sdkwallet.Interface, archiveBytes []byte) (*EnvelopeHeader, *Manifest, map[string][]byte, error) {
+type byteCounter struct {
+	n *int64
+}
+
+func (c *byteCounter) Write(p []byte) (int, error) {
+	*c.n += int64(len(p))
+	return len(p), nil
+}
+
+func deriveChunkNonce(baseNonce []byte, chunkIdx uint64) [12]byte {
+	var n [12]byte
+	copy(n[:], baseNonce)
+	tail := binary.BigEndian.Uint64(n[4:12]) ^ chunkIdx
+	binary.BigEndian.PutUint64(n[4:12], tail)
+	return n
+}
+
+func buildChunkAAD(hdrJSON []byte, chunkIdx uint64, final bool) []byte {
+	aad := make([]byte, len(hdrJSON)+9)
+	copy(aad, hdrJSON)
+	binary.BigEndian.PutUint64(aad[len(hdrJSON):len(hdrJSON)+8], chunkIdx)
+	if final {
+		aad[len(hdrJSON)+8] = 1
+	}
+	return aad
+}
+
+type chunkedGCMWriter struct {
+	dst       io.Writer
+	gcm       cipher.AEAD
+	baseNonce []byte
+	hdrJSON   []byte
+	buf       []byte
+	chunkIdx  uint64
+	closed    bool
+}
+
+func newChunkedGCMWriter(dst io.Writer, gcm cipher.AEAD, baseNonce, hdrJSON []byte) *chunkedGCMWriter {
+	return &chunkedGCMWriter{
+		dst:       dst,
+		gcm:       gcm,
+		baseNonce: append([]byte(nil), baseNonce...),
+		hdrJSON:   hdrJSON,
+		buf:       make([]byte, 0, aeadChunkSize),
+	}
+}
+
+func (w *chunkedGCMWriter) Write(p []byte) (int, error) {
+	if w.closed {
+		return 0, errors.New("backup: write to closed chunked AEAD writer")
+	}
+	total := len(p)
+	for len(p) > 0 {
+		space := aeadChunkSize - len(w.buf)
+		if len(p) < space {
+			w.buf = append(w.buf, p...)
+			break
+		}
+		// Keep at least 1 byte or emit non-final full frame when more bytes follow; if exact fit, wait until next Write or Close so Close marks final=true!
+		if len(p) == space {
+			w.buf = append(w.buf, p...)
+			break
+		}
+		w.buf = append(w.buf, p[:space]...)
+		p = p[space:]
+		if err := w.flushChunk(false); err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
+}
+
+func (w *chunkedGCMWriter) flushChunk(final bool) error {
+	nonce := deriveChunkNonce(w.baseNonce, w.chunkIdx)
+	aad := buildChunkAAD(w.hdrJSON, w.chunkIdx, final)
+	ct := w.gcm.Seal(nil, nonce[:], w.buf, aad)
+	var lenBuf [4]byte
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(ct)))
+	if _, err := w.dst.Write(lenBuf[:]); err != nil {
+		return err
+	}
+	if _, err := w.dst.Write(ct); err != nil {
+		return err
+	}
+	w.buf = w.buf[:0]
+	w.chunkIdx++
+	return nil
+}
+
+func (w *chunkedGCMWriter) Close() error {
+	if w.closed {
+		return nil
+	}
+	w.closed = true
+	return w.flushChunk(true)
+}
+
+type chunkedGCMReader struct {
+	src       io.Reader
+	gcm       cipher.AEAD
+	baseNonce []byte
+	hdrJSON   []byte
+	plainBuf  []byte
+	chunkIdx  uint64
+	sawFinal  bool
+}
+
+func newChunkedGCMReader(src io.Reader, gcm cipher.AEAD, baseNonce, hdrJSON []byte) *chunkedGCMReader {
+	return &chunkedGCMReader{
+		src:       src,
+		gcm:       gcm,
+		baseNonce: append([]byte(nil), baseNonce...),
+		hdrJSON:   hdrJSON,
+	}
+}
+
+func (r *chunkedGCMReader) Read(p []byte) (int, error) {
+	for len(r.plainBuf) == 0 {
+		if r.sawFinal {
+			return 0, io.EOF
+		}
+		var lenBuf [4]byte
+		if _, err := io.ReadFull(r.src, lenBuf[:]); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return 0, errors.New("backup: truncated archive (missing final AEAD chunk)")
+			}
+			return 0, err
+		}
+		frameLen := binary.BigEndian.Uint32(lenBuf[:])
+		if frameLen < uint32(r.gcm.Overhead()) || frameLen > uint32(aeadChunkSize+r.gcm.Overhead()+64) {
+			return 0, fmt.Errorf("backup: invalid AEAD frame length %d", frameLen)
+		}
+		ct := make([]byte, frameLen)
+		if _, err := io.ReadFull(r.src, ct); err != nil {
+			return 0, fmt.Errorf("backup: truncated AEAD frame: %w", err)
+		}
+		nonce := deriveChunkNonce(r.baseNonce, r.chunkIdx)
+		// Try non-final AAD first, or final AAD if this is the final chunk.
+		pt, err := r.gcm.Open(nil, nonce[:], ct, buildChunkAAD(r.hdrJSON, r.chunkIdx, false))
+		if err != nil {
+			ptFinal, fErr := r.gcm.Open(nil, nonce[:], ct, buildChunkAAD(r.hdrJSON, r.chunkIdx, true))
+			if fErr != nil {
+				return 0, fmt.Errorf("backup: AES-256-GCM authentication failed on chunk %d (tampered or wrong key): %w", r.chunkIdx, fErr)
+			}
+			var extra [1]byte
+			if nExtra, _ := r.src.Read(extra[:]); nExtra > 0 {
+				return 0, errors.New("backup: unexpected trailing data after final AEAD chunk")
+			}
+			pt = ptFinal
+			r.sawFinal = true
+		}
+		r.chunkIdx++
+		r.plainBuf = pt
+	}
+	n := copy(p, r.plainBuf)
+	r.plainBuf = r.plainBuf[n:]
+	return n, nil
+}
+
+// unpackToDir streams decryption + zstd decompression + tar extraction directly onto disk inside outDir
+// in O(1 MiB) constant memory while verifying every manifest SHA-256 checksum (supports both NKTBAK02 and legacy NKTBAK01).
+func unpackToDir(ctx context.Context, wallet sdkwallet.Interface, r io.Reader, outDir string) (*EnvelopeHeader, *Manifest, map[string]string, error) {
 	if wallet == nil {
 		return nil, nil, nil, errors.New("backup: wallet interface required to decrypt archive")
 	}
-	if len(archiveBytes) < len(archiveMagic)+4 || string(archiveBytes[:len(archiveMagic)]) != archiveMagic {
+	var magicBuf [8]byte
+	if _, err := io.ReadFull(r, magicBuf[:]); err != nil {
 		return nil, nil, nil, errors.New("backup: invalid archive magic header")
 	}
-	hdrLen := binary.BigEndian.Uint32(archiveBytes[len(archiveMagic) : len(archiveMagic)+4])
-	hdrStart := len(archiveMagic) + 4
-	if hdrLen == 0 || int(hdrLen) > 1<<20 || hdrStart+int(hdrLen) >= len(archiveBytes) {
+	magic := string(magicBuf[:])
+	if magic != archiveMagic && magic != archiveMagicV1 {
+		return nil, nil, nil, errors.New("backup: invalid archive magic header")
+	}
+	var lenBuf [4]byte
+	if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
 		return nil, nil, nil, errors.New("backup: malformed envelope header length")
 	}
-	hdrJSON := archiveBytes[hdrStart : hdrStart+int(hdrLen)]
-	ciphertext := archiveBytes[hdrStart+int(hdrLen):]
+	hdrLen := binary.BigEndian.Uint32(lenBuf[:])
+	if hdrLen == 0 || hdrLen > 1<<20 {
+		return nil, nil, nil, errors.New("backup: malformed envelope header length")
+	}
+	hdrJSON := make([]byte, hdrLen)
+	if _, err := io.ReadFull(r, hdrJSON); err != nil {
+		return nil, nil, nil, errors.New("backup: truncated envelope header")
+	}
 
 	var hdr EnvelopeHeader
 	if err := json.Unmarshal(hdrJSON, &hdr); err != nil {
 		return nil, nil, nil, fmt.Errorf("backup: parse envelope header: %w", err)
 	}
-	if hdr.Version != archiveVersion || hdr.Cipher != "aes-256-gcm" || hdr.Compression != "zstd" {
+	if hdr.Compression != "zstd" {
+		return nil, nil, nil, fmt.Errorf("backup: unsupported compression %q", hdr.Compression)
+	}
+	isV2 := magic == archiveMagic && hdr.Version == archiveVersion && hdr.Cipher == cipherChunkedGCM1M
+	isV1 := magic == archiveMagicV1 && hdr.Version == archiveVersionV1 && hdr.Cipher == cipherMonolithicGCM
+	if !isV2 && !isV1 {
 		return nil, nil, nil, fmt.Errorf("backup: unsupported archive format v%d (%s/%s)", hdr.Version, hdr.Cipher, hdr.Compression)
 	}
+
 	wrappedDEK, err := base64.StdEncoding.DecodeString(hdr.WrappedDEKB64)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("backup: decode wrapped DEK: %w", err)
@@ -562,19 +879,35 @@ func decryptAndUnpack(ctx context.Context, wallet sdkwallet.Interface, archiveBy
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	compressed, err := gcm.Open(nil, nonce, ciphertext, hdrJSON)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("backup: AES-256-GCM authentication failed (tampered or wrong key): %w", err)
+
+	var plainStream io.Reader
+	var v2Reader *chunkedGCMReader
+	if isV2 {
+		v2Reader = newChunkedGCMReader(r, gcm, nonce, hdrJSON)
+		plainStream = v2Reader
+	} else {
+		ct, rErr := io.ReadAll(r)
+		if rErr != nil {
+			return nil, nil, nil, rErr
+		}
+		compressed, oErr := gcm.Open(nil, nonce, ct, hdrJSON)
+		if oErr != nil {
+			return nil, nil, nil, fmt.Errorf("backup: AES-256-GCM authentication failed (tampered or wrong key): %w", oErr)
+		}
+		plainStream = bytes.NewReader(compressed)
 	}
 
-	zr, err := zstd.NewReader(bytes.NewReader(compressed))
+	zr, err := zstd.NewReader(plainStream)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("backup: zstd reader: %w", err)
 	}
 	defer zr.Close()
 
 	tr := tar.NewReader(zr)
-	files := make(map[string][]byte)
+	actualSums := make(map[string]FileChecksum)
+	extractedPaths := make(map[string]string)
+	copyBuf := make([]byte, 64<<10)
+
 	for {
 		th, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -584,63 +917,97 @@ func decryptAndUnpack(ctx context.Context, wallet sdkwallet.Interface, archiveBy
 			return nil, nil, nil, fmt.Errorf("backup: read tar entry: %w", err)
 		}
 		cleanName := filepath.ToSlash(filepath.Clean(th.Name))
-		if strings.HasPrefix(cleanName, "..") || strings.HasPrefix(cleanName, "/") {
+		if cleanName == "" || cleanName == "." || strings.HasPrefix(cleanName, "..") || strings.HasPrefix(cleanName, "/") || strings.Contains(cleanName, "../") {
 			return nil, nil, nil, fmt.Errorf("backup: illegal archive entry path %q", th.Name)
 		}
-		data, err := io.ReadAll(tr)
-		if err != nil {
+		dst := filepath.Join(outDir, filepath.FromSlash(cleanName))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return nil, nil, nil, err
 		}
-		files[cleanName] = data
+		f, cErr := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if cErr != nil {
+			return nil, nil, nil, cErr
+		}
+		h := sha256.New()
+		n, wErr := io.CopyBuffer(io.MultiWriter(f, h), tr, copyBuf)
+		closeErr := f.Close()
+		if wErr != nil {
+			return nil, nil, nil, wErr
+		}
+		if closeErr != nil {
+			return nil, nil, nil, closeErr
+		}
+		actualSums[cleanName] = FileChecksum{
+			Size:   n,
+			SHA256: hex.EncodeToString(h.Sum(nil)),
+		}
+		extractedPaths[cleanName] = dst
+	}
+	// Drain v2Reader to EOF so final-chunk authentication & trailing-byte rejection always execute!
+	if v2Reader != nil {
+		if _, err := io.CopyBuffer(io.Discard, v2Reader, copyBuf); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 
-	manifestRaw, ok := files["manifest.json"]
+	manifestPath, ok := extractedPaths["manifest.json"]
 	if !ok {
 		return nil, nil, nil, errors.New("backup: archive missing manifest.json")
+	}
+	manifestRaw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	var manifest Manifest
 	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
 		return nil, nil, nil, fmt.Errorf("backup: parse manifest.json: %w", err)
 	}
 	for name, expected := range manifest.Files {
-		data, exists := files[name]
+		got, exists := actualSums[name]
 		if !exists {
 			return nil, nil, nil, fmt.Errorf("backup: archive missing expected file %q", name)
 		}
-		if int64(len(data)) != expected.Size {
-			return nil, nil, nil, fmt.Errorf("backup: size mismatch for %q (%d != %d)", name, len(data), expected.Size)
+		if got.Size != expected.Size {
+			return nil, nil, nil, fmt.Errorf("backup: size mismatch for %q (%d != %d)", name, got.Size, expected.Size)
 		}
-		sum := sha256.Sum256(data)
-		if hex.EncodeToString(sum[:]) != expected.SHA256 {
+		if got.SHA256 != expected.SHA256 {
 			return nil, nil, nil, fmt.Errorf("backup: SHA-256 checksum mismatch for %q", name)
 		}
 	}
-	return &hdr, &manifest, files, nil
+	return &hdr, &manifest, extractedPaths, nil
 }
 
-// VerifyArchive decrypts, checks GCM authentication & SHA-256 checksums, and runs SQLite PRAGMA integrity_check
-// on every archived database inside a temporary sandbox directory.
+var archivedSQLiteDBNames = []string{
+	"nektar.sqlite",
+	"wallet/wallet.sqlite",
+	"workflows.sqlite",
+	"hub.sqlite",
+}
+
+// VerifyArchive stream-decrypts, checks chunked GCM authentication & SHA-256 checksums, and runs SQLite
+// PRAGMA integrity_check on every archived database inside a temporary sandbox directory.
 func VerifyArchive(ctx context.Context, wallet sdkwallet.Interface, archiveBytes []byte) (*Manifest, error) {
-	_, manifest, files, err := decryptAndUnpack(ctx, wallet, archiveBytes)
-	if err != nil {
-		return nil, err
-	}
+	return VerifyArchiveReader(ctx, wallet, bytes.NewReader(archiveBytes))
+}
+
+// VerifyArchiveReader verifies an encrypted .nktbak stream in O(1 MiB) RAM.
+func VerifyArchiveReader(ctx context.Context, wallet sdkwallet.Interface, r io.Reader) (*Manifest, error) {
 	tmpDir, err := os.MkdirTemp("", "nektar-bak-verify-*")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(tmpDir)
 
-	for _, dbName := range []string{"nektar.sqlite", "wallet/wallet.sqlite"} {
-		data, ok := files[dbName]
+	_, manifest, extracted, err := unpackToDir(ctx, wallet, r, tmpDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, dbName := range archivedSQLiteDBNames {
+		staged, ok := extracted[dbName]
 		if !ok {
 			continue
 		}
-		dst := filepath.Join(tmpDir, filepath.Base(dbName))
-		if err := os.WriteFile(dst, data, 0o600); err != nil {
-			return nil, err
-		}
-		if err := sqliteIntegrityCheck(ctx, dst); err != nil {
+		if err := sqliteIntegrityCheck(ctx, staged); err != nil {
 			return nil, fmt.Errorf("backup: integrity_check failed for %s: %w", dbName, err)
 		}
 	}
@@ -648,14 +1015,15 @@ func VerifyArchive(ctx context.Context, wallet sdkwallet.Interface, archiveBytes
 }
 
 // RestoreArchive verifies an encrypted .nktbak archive end-to-end and atomically restores its SQLite
-// databases and spend-guard state into targetDataDir. Caller must ensure targetDataDir is not locked by a live daemon.
+// databases, spend-guard state, CHIRP objects, and client-txs into targetDataDir.
 func RestoreArchive(ctx context.Context, wallet sdkwallet.Interface, archiveBytes []byte, targetDataDir string) (*Manifest, error) {
+	return RestoreArchiveReader(ctx, wallet, bytes.NewReader(archiveBytes), targetDataDir)
+}
+
+// RestoreArchiveReader stream-restores an encrypted .nktbak archive in O(1 MiB) constant memory.
+func RestoreArchiveReader(ctx context.Context, wallet sdkwallet.Interface, r io.Reader, targetDataDir string) (*Manifest, error) {
 	if strings.TrimSpace(targetDataDir) == "" {
 		return nil, errors.New("backup: target data directory is required")
-	}
-	_, manifest, files, err := decryptAndUnpack(ctx, wallet, archiveBytes)
-	if err != nil {
-		return nil, err
 	}
 	tmpDir, err := os.MkdirTemp("", "nektar-bak-restore-*")
 	if err != nil {
@@ -663,15 +1031,14 @@ func RestoreArchive(ctx context.Context, wallet sdkwallet.Interface, archiveByte
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Stage and verify every SQLite DB before modifying targetDataDir (fail-closed!).
-	for _, dbName := range []string{"nektar.sqlite", "wallet/wallet.sqlite"} {
-		data, ok := files[dbName]
+	_, manifest, extracted, err := unpackToDir(ctx, wallet, r, tmpDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, dbName := range archivedSQLiteDBNames {
+		staged, ok := extracted[dbName]
 		if !ok {
 			continue
-		}
-		staged := filepath.Join(tmpDir, filepath.Base(dbName))
-		if err := os.WriteFile(staged, data, 0o600); err != nil {
-			return nil, err
 		}
 		if err := sqliteIntegrityCheck(ctx, staged); err != nil {
 			return nil, fmt.Errorf("backup: integrity_check failed for %s: %w", dbName, err)
@@ -681,9 +1048,25 @@ func RestoreArchive(ctx context.Context, wallet sdkwallet.Interface, archiveByte
 	if err := os.MkdirAll(targetDataDir, 0o700); err != nil {
 		return nil, err
 	}
-	allowedTargets := []string{"nektar.sqlite", "wallet/wallet.sqlite", "spend-guard.json"}
+	allowedTargets := []string{
+		"nektar.sqlite",
+		"wallet/wallet.sqlite",
+		"workflows.sqlite",
+		"hub.sqlite",
+		"spend-guard.json",
+	}
+	var dynamicTargets []string
+	for rel := range extracted {
+		if (strings.HasPrefix(rel, "chirp/") || strings.HasPrefix(rel, "client-txs/")) &&
+			!strings.Contains(rel, "..") && !strings.HasPrefix(rel, "/") {
+			dynamicTargets = append(dynamicTargets, rel)
+		}
+	}
+	sort.Strings(dynamicTargets)
+	allowedTargets = append(allowedTargets, dynamicTargets...)
+
 	for _, rel := range allowedTargets {
-		data, ok := files[rel]
+		staged, ok := extracted[rel]
 		if !ok {
 			continue
 		}
@@ -691,16 +1074,64 @@ func RestoreArchive(ctx context.Context, wallet sdkwallet.Interface, archiveByte
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return nil, err
 		}
-		if err := atomicWriteFile(dst, data, 0o600); err != nil {
+		if err := atomicCopyFromStaged(staged, dst, 0o600); err != nil {
 			return nil, fmt.Errorf("backup: write %s: %w", rel, err)
 		}
-		// Remove stale WAL/SHM sidecars for restored SQLite files so SQLite opens cleanly.
 		if strings.HasSuffix(rel, ".sqlite") {
 			_ = os.Remove(dst + "-wal")
 			_ = os.Remove(dst + "-shm")
 		}
 	}
 	return manifest, nil
+}
+
+func vacuumSQLiteFileInto(ctx context.Context, srcPath, dstPath string) error {
+	_ = os.Remove(dstPath)
+	db, err := sql.Open("sqlite", srcPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	escaped := strings.ReplaceAll(dstPath, "'", "''")
+	_, err = db.ExecContext(ctx, fmt.Sprintf("VACUUM INTO '%s'", escaped))
+	return err
+}
+
+func hashFileStream(path string) (FileChecksum, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return FileChecksum{}, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	buf := make([]byte, 64<<10)
+	n, err := io.CopyBuffer(h, f, buf)
+	if err != nil {
+		return FileChecksum{}, err
+	}
+	return FileChecksum{
+		Size:   n,
+		SHA256: hex.EncodeToString(h.Sum(nil)),
+	}, nil
+}
+
+func copyFileStream(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	buf := make([]byte, 64<<10)
+	_, cErr := io.CopyBuffer(out, in, buf)
+	clErr := out.Close()
+	if cErr != nil {
+		return cErr
+	}
+	return clErr
 }
 
 func sqliteIntegrityCheck(ctx context.Context, path string) error {
@@ -719,14 +1150,22 @@ func sqliteIntegrityCheck(ctx context.Context, path string) error {
 	return nil
 }
 
-func atomicWriteFile(dst string, data []byte, perm os.FileMode) error {
+func atomicCopyFromStaged(stagedPath, dst string, perm os.FileMode) error {
 	dir := filepath.Dir(dst)
 	f, err := os.CreateTemp(dir, ".restore-*.tmp")
 	if err != nil {
 		return err
 	}
 	tmp := f.Name()
-	_, wErr := f.Write(data)
+	in, oErr := os.Open(stagedPath)
+	if oErr != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return oErr
+	}
+	buf := make([]byte, 64<<10)
+	_, wErr := io.CopyBuffer(f, in, buf)
+	_ = in.Close()
 	sErr := f.Sync()
 	cErr := f.Close()
 	if wErr != nil || sErr != nil || cErr != nil {

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lightwebinc/bcommon/cbor"
+
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/memory"
@@ -60,16 +62,38 @@ type WorkSubmission struct {
 	Sig           string `json:"sig"`
 }
 
+// WorkSignable is the canonical CBOR-signed payload for WorkSubmission.
+type WorkSignable struct {
+	TaskID        string `json:"taskId"`
+	WorkerPub     string `json:"workerPub"`
+	WorkerAddress string `json:"workerAddress"`
+	AuditDigest   string `json:"auditDigest"`
+	VerifiedCount int    `json:"verifiedCount"`
+	TS            int64  `json:"ts"`
+}
+
+func (w WorkSignable) DomainTag() []byte { return core.TagWorkSubmitV1 }
+
+func (w WorkSignable) EncodeCanonicalCBOR() ([]byte, error) {
+	return core.EncodeCBOR(cbor.Map{
+		{Key: uint64(1), Val: w.TaskID},
+		{Key: uint64(2), Val: w.WorkerPub},
+		{Key: uint64(3), Val: w.WorkerAddress},
+		{Key: uint64(4), Val: w.AuditDigest},
+		{Key: uint64(5), Val: int64(w.VerifiedCount)},
+		{Key: uint64(6), Val: w.TS},
+	})
+}
+
 // Signable returns the canonical signable fields for WorkSubmission.
-func (w WorkSubmission) Signable() map[string]any {
-	return map[string]any{
-		"action":        "work_bounty_submit",
-		"taskId":        w.TaskID,
-		"workerPub":     w.WorkerPub,
-		"workerAddress": w.WorkerAddress,
-		"auditDigest":   strings.ToLower(strings.TrimSpace(w.AuditDigest)),
-		"verifiedCount": w.VerifiedCount,
-		"ts":            w.TS,
+func (w WorkSubmission) Signable() WorkSignable {
+	return WorkSignable{
+		TaskID:        w.TaskID,
+		WorkerPub:     w.WorkerPub,
+		WorkerAddress: w.WorkerAddress,
+		AuditDigest:   strings.ToLower(strings.TrimSpace(w.AuditDigest)),
+		VerifiedCount: w.VerifiedCount,
+		TS:            w.TS,
 	}
 }
 
@@ -297,14 +321,19 @@ func (n *Node) handleWorkBountiesSubmit(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "work bounty payout declined"})
 		return
 	}
-	_ = n.store.FinalizeWorkClaim(task.TaskID, res.TxID)
+	if n.net == "main" || n.net == "testnet" {
+		_ = n.store.MarkWorkClaimBroadcast(task.TaskID, res.TxID)
+		res.Status = "broadcast"
+	} else {
+		_ = n.store.FinalizeWorkClaim(task.TaskID, res.TxID)
+		res.Status = "paid"
+	}
 	n.mu.Lock()
 	if t, ok := n.workTasks[task.TaskID]; ok {
 		t.Claimed = true
 		n.workTasks[task.TaskID] = t
 	}
 	n.mu.Unlock()
-	res.Status = "paid"
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -345,11 +374,31 @@ func (s *Store) ReserveWorkClaim(taskID, kind, workerPub string, rewardSats, per
 	return tx.Commit()
 }
 
+// MarkWorkClaimBroadcast records a broadcast work payout txid while keeping status='broadcast'
+// until confirmed at settleDepth on live networks (STATE-10).
+func (s *Store) MarkWorkClaimBroadcast(taskID, txid string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.sql.Exec(`UPDATE hub_work_claims SET txid = ?, status = 'broadcast' WHERE task_id = ? AND status IN ('pending', 'broadcast')`, txid, taskID)
+	return err
+}
+
 // FinalizeWorkClaim marks a work claim paid with its broadcast txid.
 func (s *Store) FinalizeWorkClaim(taskID, txid string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.sql.Exec(`UPDATE hub_work_claims SET txid = ?, status = 'paid' WHERE task_id = ?`, txid, taskID)
+	return err
+}
+
+// FinalizeWorkClaimByTxID promotes a 'broadcast' work claim to 'paid' once its payout tx mines at settleDepth (STATE-10).
+func (s *Store) FinalizeWorkClaimByTxID(txid string) error {
+	if txid == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.sql.Exec(`UPDATE hub_work_claims SET status = 'paid' WHERE txid = ? AND status = 'broadcast'`, txid)
 	return err
 }
 

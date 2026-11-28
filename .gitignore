@@ -33,5 +33,8 @@ __pycache__/
 /nektar
 /nektar.exe
 /nektar-*.exe
+*.test.exe
+*.prof
+.lint-*.json
 ui/dist/
 ui/node_modules/

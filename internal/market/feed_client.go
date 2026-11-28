@@ -27,18 +27,18 @@ func (e *Engine) SalePubHex() string {
 
 // SignSellerDealReceipt signs r with this node's persistent market sale key (matching OfferAd.Pub).
 func (e *Engine) SignSellerDealReceipt(ctx context.Context, r *DealReceipt) error {
-	if e == nil || e.saleKey == nil {
+	if e == nil || e.signer == nil {
 		return errors.New("market: sale signing key unavailable")
 	}
 	return SignDealReceiptSeller(ctx, e.salePubHex(), e.signSaleDigest, r)
 }
 
-// SignFeedAuthHeaders produces replay-protected GET|/v1/market/feeds/{shard}|{subId}|{ts} auth headers.
-func (e *Engine) SignFeedAuthHeaders(shard, subID string, tsUnix int64) (pubHex, sigHex string, err error) {
-	if e == nil || e.saleKey == nil {
+// SignFeedAuthHeaders produces replay-protected CBOR feed auth headers bound to (shard, subID, tsUnix, nonce, aud).
+func (e *Engine) SignFeedAuthHeaders(shard, subID string, tsUnix int64, nonce, aud string) (pubHex, sigHex string, err error) {
+	if e == nil || e.signer == nil {
 		return "", "", errors.New("market: sale signing key unavailable")
 	}
-	return nmu.SignFeedAuth(e.saleKey, shard, subID, tsUnix)
+	return nmu.SignFeedAuthWithSigner(e.salePubHex(), e.signer.SignDigest, shard, subID, tsUnix, nonce, aud)
 }
 
 // SubscriptionStreamConfig configures a buyer's authenticated SSE subscription stream to a Grade S seller feed.
@@ -56,7 +56,9 @@ type SubscriptionStreamConfig struct {
 	MaxRetries      int           // default 1 reconnect retry before penalizing dead feed
 	RetryBackoff    time.Duration // initial jittered backoff interval (default 100ms)
 	MaxRetryBackoff time.Duration // max jittered backoff cap (default 60s)
+	OnEventCommit   func(eventType string, data []byte) bool
 	OnSeqAdvance    func(seq int64)
+	CanSlash        func() bool
 	OnSlash         func(sellerPub, reason string)
 }
 
@@ -133,7 +135,15 @@ func (e *Engine) StreamShardSubscription(
 				reqURL = u.String()
 			}
 		}
-		pubHex, sigHex, err := e.SignFeedAuthHeaders(cfg.Shard, cfg.SubID, now)
+		nonce, nErr := nmu.NewFeedNonce()
+		if nErr != nil {
+			return nErr
+		}
+		aud := ""
+		if u, pErr := url.Parse(reqURL); pErr == nil && u.Host != "" {
+			aud = strings.ToLower(u.Host)
+		}
+		pubHex, sigHex, err := e.SignFeedAuthHeaders(cfg.Shard, cfg.SubID, now, nonce, aud)
 		if err != nil {
 			return err
 		}
@@ -141,6 +151,7 @@ func (e *Engine) StreamShardSubscription(
 		if err != nil {
 			return err
 		}
+		req.Header.Set(nmu.HeaderNonce, nonce)
 		req.Header.Set("Accept", "text/event-stream")
 		req.Header.Set(nmu.HeaderSubID, cfg.SubID)
 		req.Header.Set(nmu.HeaderPub, pubHex)
@@ -211,20 +222,27 @@ func (e *Engine) StreamShardSubscription(
 				Seq    int64 `json:"seq"`
 				NewSeq int64 `json:"newSeq"`
 			}
-			prevSeq := lastSeq
+			candSeq := lastSeq
 			if json.Unmarshal(raw, &seqPeek) == nil {
-				if seqPeek.Seq > lastSeq {
-					lastSeq = seqPeek.Seq
+				if seqPeek.Seq > candSeq {
+					candSeq = seqPeek.Seq
 				}
-				if seqPeek.NewSeq > lastSeq {
-					lastSeq = seqPeek.NewSeq
+				if seqPeek.NewSeq > candSeq {
+					candSeq = seqPeek.NewSeq
 				}
+			}
+			committed := true
+			if cfg.OnEventCommit != nil {
+				committed = cfg.OnEventCommit(evName, raw)
 			}
 			if onEvent != nil {
 				onEvent(evName, raw)
 			}
-			if lastSeq > prevSeq && cfg.OnSeqAdvance != nil {
-				cfg.OnSeqAdvance(lastSeq)
+			if committed && candSeq > lastSeq {
+				lastSeq = candSeq
+				if cfg.OnSeqAdvance != nil {
+					cfg.OnSeqAdvance(lastSeq)
+				}
 			}
 			curEvent = ""
 			dataLines = dataLines[:0]
@@ -273,10 +291,13 @@ func (e *Engine) slashDeadSubscriptionFeed(ctx context.Context, cfg Subscription
 	if e == nil || e.mem == nil || e.mem.DB() == nil {
 		return
 	}
+	if cfg.CanSlash != nil && !cfg.CanSlash() {
+		return
+	}
 	sellerPub := strings.TrimSpace(cfg.SellerPub)
 	if cfg.DealReceipt != nil {
 		dr := *cfg.DealReceipt
-		if dr.BuyerSig == "" && e.saleKey != nil {
+		if dr.BuyerSig == "" && e.signer != nil {
 			_ = SignDealReceiptBuyer(ctx, e.salePubHex(), e.signSaleDigest, &dr)
 		}
 		if sellerPub == "" {

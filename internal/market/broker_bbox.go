@@ -14,20 +14,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lightwebinc/bbox/boxrec"
+
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
 )
 
+type bstackBoxSealer = boxrec.Sealer
+
 func (b *Broker) signPurchaseRequest(req *PurchaseRequest) {
-	if req == nil || b.engine == nil || b.engine.saleKey == nil {
+	if req == nil || b.engine == nil || b.engine.signer == nil {
 		return
 	}
 	if req.BuyerPub == "" {
 		req.BuyerPub = b.PubHex()
 	}
 	req.TS = time.Now().Unix()
-	if sig, err := bstack.SignArtifact(b.engine.saleKey, req.Signable()); err == nil {
+	if sig, err := bstack.SignArtifactWithSigner(b.engine.signer, req.Signable()); err == nil {
 		req.BuyerSig = sig
 	}
 }
@@ -160,12 +164,19 @@ func (b *Broker) DeliverPurchaseAsync(ctx context.Context, chosen bstack.OfferAd
 	}
 	if chosen.BboxOffice != "" {
 		hosts := b.peerBboxHosts(ctx, chosen.Pub, b.disc.ActiveHosts())
+		nowTS := time.Now().Unix()
 		b.mu.Lock()
-		b.registerBboxExpectationLocked(pReq.OfferID, chosen.Pub, dealID, time.Now().Unix())
+		b.registerBboxExpectationLocked(pReq.OfferID, chosen.Pub, dealID, nowTS)
 		b.mu.Unlock()
 		bodyRaw, _ := json.Marshal(pReq)
 		aad := bstack.BboxAAD(chosen.BboxOffice, b.PubHex(), chosen.Pub, dealID, "purchase_beef")
-		sealedBody, encErr := bstack.SealBboxBody(chosen.Pub, aad, bodyRaw)
+		var pw bstackBoxSealer
+		if b.engine != nil && b.engine.signer != nil {
+			if w, wErr := b.engine.signer.ProtoWallet(); wErr == nil {
+				pw = w
+			}
+		}
+		sealedBody, encErr := bstack.SealBboxMessageBody(ctx, pw, chosen.BboxOffice, "purchase_beef", b.PubHex(), chosen.Pub, nowTS, aad, bodyRaw)
 		if encErr != nil {
 			return nil, encErr
 		}
@@ -177,12 +188,12 @@ func (b *Broker) DeliverPurchaseAsync(ctx context.Context, chosen bstack.OfferAd
 				SenderPub:    b.PubHex(),
 				DealID:       dealID,
 				Kind:         "purchase_beef",
-				TS:           time.Now().Unix(),
+				TS:           nowTS,
 				Nonce:        randNonceHex(),
 				Aud:          hubAudience(h),
 				Body:         sealedBody,
 			}
-			sig, sErr := bstack.SignArtifact(b.engine.saleKey, msg.Signable())
+			sig, sErr := bstack.SignArtifactWithSigner(b.engine.signer, msg.Signable())
 			if sErr != nil {
 				return nil, sErr
 			}
@@ -198,6 +209,7 @@ func (b *Broker) DeliverPurchaseAsync(ctx context.Context, chosen bstack.OfferAd
 			}
 		}
 		if sent {
+			b.WakeBbox()
 			return nil, nil
 		}
 		if directErr != nil {
@@ -212,20 +224,49 @@ func (b *Broker) DeliverPurchaseAsync(ctx context.Context, chosen bstack.OfferAd
 }
 
 func (b *Broker) sendDirectPurchase(ctx context.Context, sellerURL string, req PurchaseRequest) (*PurchaseResponse, error) {
-	raw, _ := json.Marshal(req)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(sellerURL, "/")+"/v1/market/purchase", bytes.NewReader(raw))
+	target := strings.TrimRight(sellerURL, "/") + "/v1/market/purchase"
+	useCBOR := b.engine != nil && b.engine.FastJournal() != nil
+	var raw []byte
+	var err error
+	if useCBOR {
+		raw, err = EncodePurchaseRequestCBOR(req)
+		if err != nil {
+			useCBOR = false
+		}
+	}
+	if !useCBOR {
+		raw, _ = json.Marshal(req)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(raw))
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	if useCBOR {
+		httpReq.Header.Set("Content-Type", ContentTypeCBOR)
+		httpReq.Header.Set("Accept", ContentTypeCBOR)
+	} else {
+		httpReq.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := b.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	var out PurchaseResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&out); err != nil {
-		return nil, err
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), ContentTypeCBOR) {
+		bodyBytes, rErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		if rErr != nil {
+			return nil, rErr
+		}
+		dec, dErr := DecodePurchaseResponseCBOR(bodyBytes)
+		if dErr != nil {
+			return nil, dErr
+		}
+		out = *dec
+	} else {
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&out); err != nil {
+			return nil, err
+		}
 	}
 	if resp.StatusCode >= 300 || !out.OK {
 		if out.Error == "" {
@@ -249,9 +290,16 @@ func (b *Broker) sendBboxPurchase(ctx context.Context, hubURL, sellerPub, office
 		b.mu.Unlock()
 	}()
 
+	nowTS := time.Now().Unix()
 	bodyRaw, _ := json.Marshal(pReq)
 	aad := bstack.BboxAAD(office, b.PubHex(), sellerPub, dealID, "purchase_beef")
-	sealedBody, encErr := bstack.SealBboxBody(sellerPub, aad, bodyRaw)
+	var pw bstackBoxSealer
+	if b.engine != nil && b.engine.signer != nil {
+		if w, wErr := b.engine.signer.ProtoWallet(); wErr == nil {
+			pw = w
+		}
+	}
+	sealedBody, encErr := bstack.SealBboxMessageBody(ctx, pw, office, "purchase_beef", b.PubHex(), sellerPub, nowTS, aad, bodyRaw)
 	if encErr != nil {
 		return nil, encErr
 	}
@@ -261,12 +309,12 @@ func (b *Broker) sendBboxPurchase(ctx context.Context, hubURL, sellerPub, office
 		SenderPub:    b.PubHex(),
 		DealID:       dealID,
 		Kind:         "purchase_beef",
-		TS:           time.Now().Unix(),
+		TS:           nowTS,
 		Nonce:        randNonceHex(),
 		Aud:          hubAudience(hubURL),
 		Body:         sealedBody,
 	}
-	sig, sErr := bstack.SignArtifact(b.engine.saleKey, msg.Signable())
+	sig, sErr := bstack.SignArtifactWithSigner(b.engine.signer, msg.Signable())
 	if sErr != nil {
 		return nil, sErr
 	}
@@ -280,6 +328,7 @@ func (b *Broker) sendBboxPurchase(ctx context.Context, hubURL, sellerPub, office
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("bbox send HTTP %d", resp.StatusCode)
 	}
+	b.WakeBbox()
 
 	select {
 	case <-ctx.Done():

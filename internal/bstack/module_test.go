@@ -44,8 +44,11 @@ func TestMarketOverlayModuleAdmitAndLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(SignedWant{Want: want, Sig: sig})
-	cborBytes, err := EncodePayload(MarketPayload{Kind: KindWant, Body: body})
+	payloadWant, err := NewWantPayload(SignedWant{Want: want, Sig: sig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cborBytes, err := EncodePayload(payloadWant)
 	if err != nil {
 		t.Fatalf("EncodePayload: %v", err)
 	}

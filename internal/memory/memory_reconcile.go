@@ -79,10 +79,10 @@ func (s *Service) reconcilePendingAnchorLocked(ctx context.Context, p store.Pend
 	}
 	mined, walletStatus, mp, height, statusErr := s.port.TxBroadcastStatus(ctx, p.TxID)
 	wStatus = walletStatus
-	// Local embedded wallet confirms tx is strictly pre-broadcast 'nosend' (never sent on wire):
-	// clean up cleanly even if proof lookup errored on an unbroadcast txid.
-	if !mined && walletStatus == "nosend" {
-		if s.port.Engine() != nil {
+	// Local embedded wallet confirms tx is strictly pre-broadcast 'nosend' or terminal 'failed'/'aborted':
+	// clean up cleanly without ever re-broadcasting via RelayExternalTx!
+	if !mined && (walletStatus == "nosend" || walletStatus == "failed" || walletStatus == "aborted") {
+		if walletStatus == "nosend" && s.port.Engine() != nil {
 			_ = s.port.Engine().AbortNoSendByTxID(ctx, p.TxID)
 		}
 		_ = s.db.DeletePendingAnchor(p.Shard, p.N)
@@ -106,8 +106,8 @@ func (s *Service) reconcilePendingAnchorLocked(ctx context.Context, p store.Pend
 	// Promote pending_anchors ONLY via cryptographic evidence:
 	// (1) header-verified mined BUMP (mined && mp != nil), OR
 	// (2) carried first-party AtomicBEEF whose input ancestry passes VerifyTransactionSPV (on live networks)
-	//     and is either already confirmed in local wallet state or successfully relayed via RelayExternalTx.
-	// Never promote from broadcaster error strings ("already in mempool") or bare status strings alone.
+	//     and is already confirmed in local wallet state ('completed'/'unproven'/'unmined') or recorded in client-mode journal.
+	// Never call RelayExternalTx on first-party anchors or promote 'submission_unknown'/'failed'/'aborted'/'nosend'.
 	confirmedBroadcast := mined && mp != nil
 	if !confirmedBroadcast && len(beef) > 0 {
 		parsedBeef, parsedTx, _, pErr := guard.ParseBEEF(beef, guard.DefaultBound)
@@ -123,10 +123,8 @@ func (s *Service) reconcilePendingAnchorLocked(ctx context.Context, p store.Pend
 			if ancestryOK {
 				if walletStatus == "completed" || walletStatus == "unproven" || walletStatus == "unmined" {
 					confirmedBroadcast = true
-				} else if s.port.Network() != "memory" {
-					if rErr := s.port.RelayExternalTx(ctx, parsedTx); rErr == nil {
-						confirmedBroadcast = true
-					}
+				} else if s.port.Engine() == nil && walletStatus == "" && s.port.Tx(p.TxID) != nil {
+					confirmedBroadcast = true
 				}
 			}
 		}

@@ -16,6 +16,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
+	"github.com/kryptokrates/nektar/internal/policy"
 )
 
 // ToolSpec describes one unified tool exposed across MCP, POST /v1/tools/{name}, GET /v1/tools, and A2A.
@@ -118,9 +119,12 @@ func (tb *Toolbox) ListTools() []ToolSpec {
 		{Name: "forget", Profile: "agent", Description: "Shred local plaintext/ciphertext of a fragment while preserving its on-chain Merkle commitment."},
 		{Name: "groundedAnswer", Profile: "agent", Description: "Verify claims against cited memory fragments (quote + Google Mangle Datalog), strip hallucinations, commit a receipt, and return the nektarr1.* verification footer."},
 		{Name: "verifyReceipt", Profile: "agent", Description: "Verify a nektarr1.* receipt token, its §16 delegations, and the SPV settlement status of every cited fragment."},
-		{Name: "want", Profile: "agent", Description: "Buy verified knowledge live from peer agents or the Hub over BSV AtomicBEEF + BRC-369 keyed disclosure with NMU-1 grade, maxSatsPer1kUnits, freshness, rights, and mode filters. Set standingTtlSeconds to auto-create a durable StandingOrder."},
-		{Name: "watchKnowledge", Profile: "agent", Description: "Create, list, live-steer, or cancel durable 0%-CPU Restate StandingOrders (Limit-Orders for Knowledge) with NMU-1 commodity filters that auto-buy when a matching seller arrives."},
-		{Name: "sell", Profile: "agent", Description: "Arm a local memory shard for multi-mode NMU-1 selling (spot, per_query 402, subscription SSE feed), or submit a verified anchored fragment to a Hub knowledge bounty."},
+		{Name: "buyCapsule", Profile: "agent", Description: "1-call capsule purchase across active Hubs: SPV-verifies and imports into your local Memory Repo, or automatically posts a bounded 0%-CPU StandingOrder satoshi bounty if 0 offers match yet."},
+		{Name: "sellCapsule", Profile: "agent", Description: "1-call capsule publish & sell: scrubs PII/secrets fail-closed, commits & anchors to Memory Repo, auto-arms seller policy, broadcasts OfferAd to Hubs, and optionally exports a shareable .nkt capsule."},
+		{Name: "importCapsule", Profile: "agent", Description: "1-call SPV-verified import of a portable .nkt Memory Capsule from a local file path, https:// URL, or chirp:// URI, discovering the creator's LightBSV handle & Hub."},
+		{Name: "want", Profile: "agent", Description: "Low-level market buy query over BSV AtomicBEEF + BRC-369 keyed disclosure (prefer `buyCapsule` for 1-call capsule buying + automatic bounty fallback)."},
+		{Name: "watchKnowledge", Profile: "agent", Description: "Create, list, live-steer, or cancel durable 0%-CPU StandingOrders (Limit-Orders for Knowledge) that auto-buy when a matching seller arrives."},
+		{Name: "sell", Profile: "agent", Description: "Arm an already-committed local memory shard for multi-mode NMU-1 selling (prefer `sellCapsule` for 1-call scrub + commit + anchor + list + .nkt export)."},
 		{Name: "marketContract", Profile: "agent", Description: "Inspect the live NMU-1 Commodity Ticker (sats/triple by ontology, grade, and pricing mode) or manage paid shard feed subscriptions (action: ticker|subscriptions|revokeSubscription)."},
 		{Name: "deals", Profile: "agent", Description: "List persisted market deals, pending operator approvals, verified seller reputation, and network liquidity metrics."},
 		{Name: "fund", Profile: "agent", Description: "Show wallet funding address, satoshi balance, UTXO count, SpendGuard caps, and optionally request a testnet faucet drip."},
@@ -167,7 +171,8 @@ func (tb *Toolbox) IsAllowedTool(name string) bool {
 
 // Call executes any tool by name from raw JSON args (used identically by HTTP /v1/tools/{name}, A2A, and CLI).
 func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessage) (any, error) {
-	if !tb.IsAllowedTool(name) {
+	cc := CallerContextFor(ctx, policy.Principal{})
+	if !tb.IsAllowedTool(name) && !cc.IsOperator {
 		return nil, fmt.Errorf("tool %q is disabled under profile %q (set NEKTAR_TOOL_PROFILE=operator to enable)", name, tb.profile)
 	}
 	if len(rawArgs) == 0 {
@@ -184,6 +189,24 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 		return tb.callGroundedAnswerTool(ctx, rawArgs)
 	case "verifyReceipt":
 		return tb.callVerifyReceiptTool(ctx, rawArgs)
+	case "buyCapsule":
+		var in BuyCapsuleInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
+		}
+		return tb.ExecBuyCapsule(ctx, in)
+	case "sellCapsule":
+		var in SellCapsuleInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
+		}
+		return tb.ExecSellCapsule(ctx, in)
+	case "importCapsule":
+		var in ImportCapsuleInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
+		}
+		return tb.ExecImportCapsule(ctx, in)
 	case "want":
 		return tb.callWantTool(ctx, rawArgs)
 	case "watchKnowledge":
@@ -215,11 +238,11 @@ func (tb *Toolbox) Call(ctx context.Context, name string, rawArgs json.RawMessag
 	case "doctor":
 		return tb.ExecDoctor(ctx), nil
 	case "peers":
-		var in struct {
-			Refresh bool `json:"refresh,omitempty"`
+		var in PeersToolInput
+		if err := json.Unmarshal(rawArgs, &in); err != nil {
+			return nil, err
 		}
-		_ = json.Unmarshal(rawArgs, &in)
-		return tb.ExecPeers(ctx, in.Refresh), nil
+		return tb.ExecPeersWithInput(ctx, in)
 	case "anchor":
 		return tb.callAnchorTool(ctx, rawArgs)
 	case "prove":

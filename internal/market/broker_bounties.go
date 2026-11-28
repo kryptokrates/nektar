@@ -18,7 +18,6 @@ import (
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/core"
-	"github.com/kryptokrates/nektar/internal/distill"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/policy"
@@ -56,9 +55,15 @@ func (b *Broker) SellToHub(ctx context.Context, hubURL, bountyID, shard string, 
 		Principal:    policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
 		Action:       "disclose",
 		DisallowBorg: true,
+		VerifySPV:    false,
 	})
 	if err != nil {
 		return nil, err
+	}
+	listing, _ := b.mem.DB().GetSellListing(shard)
+	if listing == nil {
+		// Direct operator-initiated bounty submission allows un-armed raw Level-0 facts unless Scrub/Tainted/Cedar blocks.
+		listing = &store.SellListing{Shard: shard, AllowRaw: true, Active: true}
 	}
 	var target *memory.RecalledFragment
 	for i := range frags {
@@ -79,12 +84,8 @@ func (b *Broker) SellToHub(ctx context.Context, hubURL, bountyID, shard string, 
 	if target == nil {
 		return nil, fmt.Errorf("market: fragment %s#%d not found or unauthorized for external disclosure", shard, seq)
 	}
-	if sr := distill.Scrub(target.Text); sr.Verdict == distill.ScrubBlocked {
-		ruleID := "secret-detected"
-		if len(sr.BlockedRules) > 0 {
-			ruleID = sr.BlockedRules[0]
-		}
-		return nil, fmt.Errorf("market: fragment %s#%d blocked from Hub bounty by fail-closed secret/PII scrubber (%s)", shard, target.Seq, ruleID)
+	if eval := b.mem.EvaluateSellableFragment(ctx, *target, listing, false, "", time.Now().Unix()); !eval.Allowed {
+		return nil, fmt.Errorf("market: fragment %s#%d blocked from Hub bounty by unified sell gate (%s)", shard, target.Seq, eval.Reason)
 	}
 	if target.AnchorTxID == "" && netName == "memory" && b.mem.Chain().BalanceSats() > 1000 {
 		_, _ = b.mem.AnchorShard(ctx, shard)
@@ -141,11 +142,11 @@ func (b *Broker) SellToHub(ctx context.Context, hubURL, bountyID, shard string, 
 		TS:             time.Now().Unix(),
 	}
 	signable := sub.Signable(canonicalHDP)
-	if sig, sErr := bstack.SignArtifact(b.engine.saleKey, signable); sErr == nil {
+	if sig, sErr := bstack.SignArtifactWithSigner(b.engine.signer, signable); sErr == nil {
 		sub.Sig = sig
 	}
-	if canon, cErr := core.CanonicalJSON(signable); cErr == nil {
-		if ownerSig, oErr := b.mem.Chain().SignDigest(ctx, core.SHA256(canon)); oErr == nil {
+	if ownerDigest, cErr := signable.OwnerSigDigest(); cErr == nil {
+		if ownerSig, oErr := b.mem.Chain().SignDigest(ctx, ownerDigest); oErr == nil {
 			sub.OwnerSig = hex.EncodeToString(ownerSig)
 		}
 	}

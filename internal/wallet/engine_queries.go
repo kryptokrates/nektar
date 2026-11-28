@@ -126,6 +126,33 @@ func (e *Engine) Balance(ctx context.Context) (BalanceBreakdown, error) {
 	return b, nil
 }
 
+// HasConfirmedSpendableOutput checks in O(1) via partial index idx_nektar_outputs_unspent whether
+// the wallet holds at least one unreserved confirmed spendable output (allowing CreateAction to skip
+// full Balance() + unproven ancestor DFS on the hot path).
+func (e *Engine) HasConfirmedSpendableOutput(ctx context.Context) bool {
+	if e == nil || e.readDB == nil || e.tables.outputs == "" {
+		return false
+	}
+	q := fmt.Sprintf(`
+		SELECT 1
+		FROM "%s" o
+		INNER JOIN "%s" owner ON owner.id = o.transaction_id
+		LEFT JOIN "%s" u ON u.output_id = o.id AND u.user_id = o.user_id
+		WHERE o.user_id = ?
+		  AND o.deleted_at IS NULL
+		  AND o.spent_by IS NULL
+		  AND o.spendable = 1
+		  AND o.satoshis > 0
+		  AND u.reserved_by_id IS NULL
+		  AND (owner.status = 'completed' OR u.utxo_status = 'mined')
+		  AND o.basket_name IN ('default', 'reserve', 'fuel', 'nektar funding')
+		LIMIT 1`,
+		e.tables.outputs, e.tables.transactions, e.tables.userUTXOs,
+	)
+	var one int
+	return e.readDB.QueryRowContext(ctx, q, e.userID).Scan(&one) == nil && one == 1
+}
+
 func (e *Engine) computeUnprovenDepthBounds(ctx context.Context) (maxDepth int, minDepth int, err error) {
 	if e.readDB == nil {
 		return 0, 0, nil

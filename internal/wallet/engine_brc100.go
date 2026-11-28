@@ -2,6 +2,8 @@ package wallet
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -73,8 +75,8 @@ func (e *Engine) createActionGuarded(ctx context.Context, args sdkwallet.CreateA
 	}
 
 	// Enforce MaxUnprovenDepth as a real spend cap on live networks when ONLY deep unproven UTXOs exist
-	// (check minDepth so one stale deep dust UTXO never bricks a wallet holding fresh shallow UTXOs).
-	if !e.cfg.InMemoryStore && !isSignLater && !isPureSendWith && e.cfg.MaxUnprovenDepth > 0 {
+	// (fast-path O(1) index probe skips Balance + unproven DFS whenever any confirmed UTXO is spendable!).
+	if !e.cfg.InMemoryStore && !isSignLater && !isPureSendWith && e.cfg.MaxUnprovenDepth > 0 && !e.HasConfirmedSpendableOutput(ctx) {
 		if bal, bErr := e.Balance(ctx); bErr == nil && bal.ConfirmedSats == 0 && bal.MaxUnprovenDepth >= e.cfg.MaxUnprovenDepth {
 			if _, minDepth, dErr := e.computeUnprovenDepthBounds(ctx); dErr == nil && minDepth >= e.cfg.MaxUnprovenDepth {
 				return nil, fmt.Errorf("%w: active unproven chain depth %d reached policy cap %d (wait for a block confirmation)",
@@ -144,14 +146,78 @@ func (e *Engine) createActionGuarded(ctx context.Context, args sdkwallet.CreateA
 }
 
 // callTBCreateAction is the single serialized chokepoint around e.tb.CreateAction.
-// It serializes UTXO reservation under e.actionMu, attaches a postErrSink, and fail-closes
-// uncertain broadcasts via MarkSubmissionUnknown.
+// For live auto-funded sends (SignAndProcess=true, NoSend=false, no explicit inputs/SweepMax),
+// it reserves UTXOs under e.actionMu in <1ms with SignAndProcess=false and then runs SignAction
+// + live HTTP PostFromBEEF OUTSIDE e.actionMu so all fuel UTXOs broadcast in parallel (PERF-4).
 func (e *Engine) callTBCreateAction(ctx context.Context, args sdkwallet.CreateActionArgs, originator string) (*sdkwallet.CreateActionResult, error) {
 	orig := e.normalizeOrig(originator)
+	isNoSend := args.Options != nil && args.Options.NoSend != nil && *args.Options.NoSend
+	isSignLater := args.Options != nil && args.Options.SignAndProcess != nil && !*args.Options.SignAndProcess
+	isPureSendWith := len(args.Inputs) == 0 && len(args.Outputs) == 0 && args.Options != nil && len(args.Options.SendWith) > 0
+	hasSweepAll := false
+	for _, o := range args.Outputs {
+		if o.Satoshis == primitives.SweepMaxSatoshis {
+			hasSweepAll = true
+			break
+		}
+	}
+
+	if !isNoSend && !isSignLater && !isPureSendWith && !hasSweepAll && len(args.Inputs) == 0 && len(args.Outputs) > 0 {
+		phase1Args := args
+		optsCopy := sdkwallet.CreateActionOptions{}
+		if args.Options != nil {
+			optsCopy = *args.Options
+		}
+		signFalse := false
+		optsCopy.SignAndProcess = &signFalse
+		phase1Args.Options = &optsCopy
+
+		e.actionMu.Lock()
+		created, cErr := e.tb.CreateAction(ctx, phase1Args, orig)
+		e.actionMu.Unlock()
+		if cErr != nil {
+			return nil, cErr
+		}
+		if created == nil || created.SignableTransaction == nil {
+			return nil, errors.New("wallet: two-phase CreateAction did not return SignableTransaction")
+		}
+		signOpts := &sdkwallet.SignActionOptions{}
+		if args.Options != nil {
+			signOpts.AcceptDelayedBroadcast = args.Options.AcceptDelayedBroadcast
+			signOpts.ReturnTXIDOnly = args.Options.ReturnTXIDOnly
+			signOpts.SendWith = args.Options.SendWith
+		}
+		signed, preBroadcast, sErr := e.signActionGuardedWithOrigin(ctx, sdkwallet.SignActionArgs{
+			Reference: created.SignableTransaction.Reference,
+			Options:   signOpts,
+		}, orig, false)
+		if sErr != nil {
+			if preBroadcast && !IsUncertainBroadcastError(sErr) {
+				_, _ = e.tb.AbortAction(ctx, sdkwallet.AbortActionArgs{Reference: created.SignableTransaction.Reference}, orig)
+			}
+			return nil, sErr
+		}
+		return &sdkwallet.CreateActionResult{
+			Txid:            signed.Txid,
+			Tx:              signed.Tx,
+			SendWithResults: signed.SendWithResults,
+		}, nil
+	}
+
 	callCtx, errSink := withPostErrSink(ctx)
-	e.actionMu.Lock()
-	res, err := e.tb.CreateAction(callCtx, args, orig)
-	e.actionMu.Unlock()
+	var (
+		res *sdkwallet.CreateActionResult
+		err error
+	)
+	if isPureSendWith {
+		// Pure SendWith broadcasts an ALREADY-reserved NoSend tx over live HTTP ARC:
+		// NEVER hold e.actionMu across network RTT so concurrent buyer broadcasts run in parallel!
+		res, err = e.tb.CreateAction(callCtx, args, orig)
+	} else {
+		e.actionMu.Lock()
+		res, err = e.tb.CreateAction(callCtx, args, orig)
+		e.actionMu.Unlock()
+	}
 	if sinkTxID, sinkErr := errSink.get(); sinkErr != nil {
 		if errors.Is(sinkErr, ErrBroadcastUnknown) && sinkTxID != "" {
 			_ = e.MarkSubmissionUnknown(ctx, sinkTxID)
@@ -271,26 +337,34 @@ func (e *Engine) ListActions(ctx context.Context, args sdkwallet.ListActionsArgs
 
 func (e *Engine) InternalizeAction(ctx context.Context, args sdkwallet.InternalizeActionArgs, originator string) (*sdkwallet.InternalizeActionResult, error) {
 	args.Description = ensureDesc(args.Description, "nektar internalize action")
-	// Run full consensus go-sdk/spv.Verify (coinbase maturity 100, confiscation maturity 1000,
-	// finality with 11-block MTP, out<=in overspend, duplicate inputs, era scripts, BUMP verification)
-	// before accepting any incoming BEEF into wallet storage.
-	parsedBeef, parsed, _, pErr := guard.ParseBEEF(args.Tx, guard.DefaultBound)
-	if pErr != nil || parsed == nil {
-		return nil, fmt.Errorf("wallet: InternalizeAction invalid BEEF: %v", pErr)
-	}
-	if e.cfg.Tracker == nil {
-		return nil, ErrNoChain
-	}
-	if parsed.MerklePath == nil {
-		hydrateInputs(parsed, parsedBeef, e.txCache, e.svc.dbLoader(ctx), 0, e.cfg.MaxUnprovenDepth)
-		if !e.cfg.InMemoryStore && e.cfg.MaxUnprovenDepth > 0 {
-			if depth := CountUnminedAncestors(parsed, e.cfg.MaxUnprovenDepth+2); depth > e.cfg.MaxUnprovenDepth {
-				return nil, fmt.Errorf("%w: incoming tx %s has %d unconfirmed ancestors (max %d)", ErrDepthExceeded, parsed.TxID().String(), depth, e.cfg.MaxUnprovenDepth)
+	var parsed *transaction.Transaction
+	if preTx := PreverifiedTxFromCtx(ctx); preTx != nil {
+		// Upstream caller (e.g. HandlePurchase / verifyBRC105Payment) ALREADY ran full consensus
+		// VerifyCounterpartyPaymentBEEF against the witnessed ChainTracker — skip duplicate ParseBEEF + spv.Verify!
+		parsed = preTx
+	} else {
+		// Run full consensus go-sdk/spv.Verify (coinbase maturity 100, confiscation maturity 1000,
+		// finality with 11-block MTP, out<=in overspend, duplicate inputs, era scripts, BUMP verification)
+		// before accepting any incoming BEEF into wallet storage.
+		parsedBeef, pTx, _, pErr := guard.ParseBEEF(args.Tx, guard.DefaultBound)
+		if pErr != nil || pTx == nil {
+			return nil, fmt.Errorf("wallet: InternalizeAction invalid BEEF: %v", pErr)
+		}
+		parsed = pTx
+		if e.cfg.Tracker == nil {
+			return nil, ErrNoChain
+		}
+		if parsed.MerklePath == nil {
+			hydrateInputs(parsed, parsedBeef, e.txCache, e.svc.dbLoader(ctx), 0, e.cfg.MaxUnprovenDepth)
+			if !e.cfg.InMemoryStore && e.cfg.MaxUnprovenDepth > 0 {
+				if depth := CountUnminedAncestors(parsed, e.cfg.MaxUnprovenDepth+2); depth > e.cfg.MaxUnprovenDepth {
+					return nil, fmt.Errorf("%w: incoming tx %s has %d unconfirmed ancestors (max %d)", ErrDepthExceeded, parsed.TxID().String(), depth, e.cfg.MaxUnprovenDepth)
+				}
 			}
 		}
-	}
-	if ok, sErr := spv.Verify(ctx, parsed, e.cfg.Tracker, nil); sErr != nil || !ok {
-		return nil, fmt.Errorf("wallet: InternalizeAction SPV verify failed for %s: %v", parsed.TxID().String(), sErr)
+		if ok, sErr := spv.Verify(ctx, parsed, e.cfg.Tracker, nil); sErr != nil || !ok {
+			return nil, fmt.Errorf("wallet: InternalizeAction SPV verify failed for %s: %v", parsed.TxID().String(), sErr)
+		}
 	}
 
 	// Mark incoming internalization so go-wallet-toolbox BackgroundBroadcast never debits buyer
@@ -361,7 +435,38 @@ func (e *Engine) RelinquishOutput(ctx context.Context, args sdkwallet.Relinquish
 	return e.tb.RelinquishOutput(ctx, args, e.normalizeOrig(originator))
 }
 
+func isFastPathBRC43(p sdkwallet.Protocol, keyID string) bool {
+	if p.SecurityLevel < 0 || p.SecurityLevel > 2 {
+		return false
+	}
+	if len(p.Protocol) < 5 || len(p.Protocol) > 400 || strings.TrimSpace(p.Protocol) != p.Protocol || strings.Contains(p.Protocol, "  ") {
+		return false
+	}
+	for i := 0; i < len(p.Protocol); i++ {
+		c := p.Protocol[i]
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == ' ') {
+			return false
+		}
+	}
+	return len(keyID) >= 1 && len(keyID) <= 800
+}
+
 func (e *Engine) GetPublicKey(ctx context.Context, args sdkwallet.GetPublicKeyArgs, originator string) (*sdkwallet.GetPublicKeyResult, error) {
+	if e.keyDeriver != nil {
+		if args.IdentityKey {
+			return &sdkwallet.GetPublicKeyResult{PublicKey: e.rootKey.PubKey()}, nil
+		}
+		if !args.Privileged && isFastPathBRC43(args.ProtocolID, args.KeyID) {
+			cp := args.Counterparty
+			if cp.Type == sdkwallet.CounterpartyUninitialized {
+				cp = sdkwallet.Counterparty{Type: sdkwallet.CounterpartyTypeSelf}
+			}
+			forSelf := args.ForSelf != nil && *args.ForSelf
+			if pub, err := e.keyDeriver.DerivePublicKey(args.ProtocolID, args.KeyID, cp, forSelf); err == nil {
+				return &sdkwallet.GetPublicKeyResult{PublicKey: pub}, nil
+			}
+		}
+	}
 	return e.tb.GetPublicKey(ctx, args, e.normalizeOrig(originator))
 }
 
@@ -382,6 +487,19 @@ func (e *Engine) Decrypt(ctx context.Context, args sdkwallet.DecryptArgs, origin
 }
 
 func (e *Engine) CreateHMAC(ctx context.Context, args sdkwallet.CreateHMACArgs, originator string) (*sdkwallet.CreateHMACResult, error) {
+	if e.keyDeriver != nil && !args.Privileged && isFastPathBRC43(args.ProtocolID, args.KeyID) {
+		cp := args.Counterparty
+		if cp.Type == sdkwallet.CounterpartyUninitialized {
+			cp = sdkwallet.Counterparty{Type: sdkwallet.CounterpartyTypeSelf}
+		}
+		if sym, err := e.keyDeriver.DeriveSymmetricKey(args.ProtocolID, args.KeyID, cp); err == nil {
+			mac := hmac.New(sha256.New, sym.ToBytes())
+			mac.Write(args.Data)
+			res := &sdkwallet.CreateHMACResult{}
+			copy(res.HMAC[:], mac.Sum(nil))
+			return res, nil
+		}
+	}
 	return e.tb.CreateHMAC(ctx, args, e.normalizeOrig(originator))
 }
 
@@ -390,6 +508,24 @@ func (e *Engine) VerifyHMAC(ctx context.Context, args sdkwallet.VerifyHMACArgs, 
 }
 
 func (e *Engine) CreateSignature(ctx context.Context, args sdkwallet.CreateSignatureArgs, originator string) (*sdkwallet.CreateSignatureResult, error) {
+	if e.keyDeriver != nil && !args.Privileged && isFastPathBRC43(args.ProtocolID, args.KeyID) && (len(args.HashToDirectlySign) == 32 || len(args.Data) > 0) {
+		cp := args.Counterparty
+		if cp.Type == sdkwallet.CounterpartyUninitialized {
+			cp = sdkwallet.Counterparty{Type: sdkwallet.CounterpartyTypeAnyone}
+		}
+		if priv, err := e.keyDeriver.DerivePrivateKey(args.ProtocolID, args.KeyID, cp); err == nil {
+			var digest []byte
+			if len(args.HashToDirectlySign) > 0 {
+				digest = args.HashToDirectlySign
+			} else {
+				sum := sha256.Sum256(args.Data)
+				digest = sum[:]
+			}
+			if sig, sErr := priv.Sign(digest); sErr == nil {
+				return &sdkwallet.CreateSignatureResult{Signature: sig}, nil
+			}
+		}
+	}
 	return e.tb.CreateSignature(ctx, args, e.normalizeOrig(originator))
 }
 

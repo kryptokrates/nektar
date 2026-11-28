@@ -109,6 +109,63 @@ func SealBboxBody(recipientPubHex string, aad, plaintext []byte) (json.RawMessag
 	return json.RawMessage(raw), nil
 }
 
+// BboxOpener abstracts ECDH shared-point derivation so callers outside internal/wallet never hold *ec.PrivateKey.
+type BboxOpener interface {
+	PubCompressed() []byte
+	ECDHSharedCompressed(peerPub *ec.PublicKey) ([]byte, error)
+}
+
+// OpenBboxBodyWithSigner decrypts an E2E-encrypted v2 BboxSealedBody via BboxOpener and verifies AAD binding.
+func OpenBboxBodyWithSigner(opener BboxOpener, aad []byte, raw json.RawMessage) ([]byte, error) {
+	if opener == nil || len(opener.PubCompressed()) != 33 {
+		return nil, errors.New("bbox e2e: recipient opener is nil")
+	}
+	var env BboxSealedBody
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, fmt.Errorf("bbox e2e: parse envelope: %w", err)
+	}
+	if env.V != 2 || env.EphPub == "" || env.Nonce == "" || env.CT == "" {
+		return nil, errors.New("bbox e2e: non-v2, plaintext, or malformed bbox envelope rejected")
+	}
+	ephPub, ephCompressed, err := core.ParseStrictCompressedPubKey(env.EphPub)
+	if err != nil {
+		return nil, fmt.Errorf("bbox e2e: invalid ephPub: %w", err)
+	}
+	nonce, err := hex.DecodeString(env.Nonce)
+	if err != nil || len(nonce) != 12 {
+		return nil, errors.New("bbox e2e: invalid nonce")
+	}
+	ct, err := hex.DecodeString(env.CT)
+	if err != nil {
+		return nil, fmt.Errorf("bbox e2e: decode ct: %w", err)
+	}
+	sharedBytes, err := opener.ECDHSharedCompressed(ephPub)
+	if err != nil {
+		return nil, fmt.Errorf("bbox e2e: ecdh: %w", err)
+	}
+	defer core.ZeroBytes(sharedBytes)
+
+	key, err := deriveBboxAEADKeyV2(sharedBytes, ephCompressed, opener.PubCompressed(), aad)
+	if err != nil {
+		return nil, fmt.Errorf("bbox e2e: hkdf: %w", err)
+	}
+	defer core.Zero32Array(&key)
+
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	pt, err := gcm.Open(nil, nonce, ct, aad)
+	if err != nil {
+		return nil, fmt.Errorf("bbox e2e: decrypt/authenticate failed: %w", err)
+	}
+	return pt, nil
+}
+
 // OpenBboxBody decrypts an E2E-encrypted v2 BboxSealedBody (HKDF-SHA256 + length-framed AAD)
 // using recipientKey and verifies AAD binding, zeroizing intermediate ECDH/AEAD secrets.
 func OpenBboxBody(recipientKey *ec.PrivateKey, aad []byte, raw json.RawMessage) ([]byte, error) {

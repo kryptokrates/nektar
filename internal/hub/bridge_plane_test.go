@@ -225,8 +225,11 @@ func TestCarrierOutpointJournalAndKillSwitchSweep(t *testing.T) {
 		if sErr != nil {
 			t.Fatalf("SignArtifact: %v", sErr)
 		}
-		body, _ := json.Marshal(bstack.SignedWant{Want: w, Sig: sig})
-		cborBytes, eErr := bstack.EncodePayload(bstack.MarketPayload{Kind: bstack.KindWant, Body: body})
+		pWant, pErr := bstack.NewWantPayload(bstack.SignedWant{Want: w, Sig: sig})
+		if pErr != nil {
+			t.Fatalf("NewWantPayload: %v", pErr)
+		}
+		cborBytes, eErr := bstack.EncodePayload(pWant)
 		if eErr != nil {
 			t.Fatalf("EncodePayload: %v", eErr)
 		}

@@ -304,7 +304,7 @@ func (a *App) withBrowserOriginGuard(next http.Handler) http.Handler {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
 			p := r.URL.Path
 			// Public signed peer/hub/faucet endpoints are designed for server-to-server calls.
-			isPublicServerRoute := p == "/v1/market/purchase" || p == "/v1/faucet" || strings.HasPrefix(p, "/hub/")
+			isPublicServerRoute := p == "/v1/market/purchase" || p == "/v1/market/direct-quote" || p == "/v1/faucet" || strings.HasPrefix(p, "/hub/")
 			if !isPublicServerRoute {
 				sfs := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")))
 				if sfs == "cross-site" {

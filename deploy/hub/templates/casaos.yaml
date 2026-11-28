@@ -5,7 +5,7 @@ services:
     image: ghcr.io/kryptokrates/nektar:latest
     container_name: nektar
     restart: unless-stopped
-    command: ['serve', '-listen', ':18420', '-restate-listen', '127.0.0.1:9080', '-hub']
+    command: ['serve', '-listen', ':18420', '-hub']
     ports:
       - target: 18420
         published: '18420'

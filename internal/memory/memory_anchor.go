@@ -349,13 +349,13 @@ func (s *Service) ProveCompactAuthorized(ctx context.Context, shard string, seq 
 	if rec.BatchN < 0 {
 		return nil, &contracts.VerifyResult{OK: false, AnchorState: "unanchored", Reason: "fragment not yet anchored"}, nil
 	}
-	batchFrags, err := s.db.ListBatchFragments(shard, rec.BatchN)
+	leafHashes, err := s.db.ListBatchLeafHashes(shard, rec.BatchN)
 	if err != nil {
 		return nil, nil, err
 	}
-	leaves := make([][]byte, len(batchFrags))
-	for i, f := range batchFrags {
-		lb, dErr := hex.DecodeString(f.Leaf)
+	leaves := make([][]byte, len(leafHashes))
+	for i, lh := range leafHashes {
+		lb, dErr := hex.DecodeString(lh)
 		if dErr != nil {
 			return nil, nil, dErr
 		}
@@ -435,7 +435,7 @@ func (s *Service) ConsistencyProof(shard string, fromN, toN int64) (*core.MMRCon
 	if err := ValidateShardName(shard, true); err != nil {
 		return nil, err
 	}
-	anchors, err := s.db.ListAnchors(shard)
+	anchors, err := s.db.ListAnchorSummaries(shard)
 	if err != nil {
 		return nil, err
 	}

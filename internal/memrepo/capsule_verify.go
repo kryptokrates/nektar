@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/bsv-blockchain/go-sdk/transaction"
-	"github.com/bsv-blockchain/go-sdk/transaction/chaintracker"
 	"github.com/lightwebinc/bcommon/guard"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
@@ -22,14 +21,20 @@ import (
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
-func verifyCapsuleObjects(cap *MemoryCapsule, objects bstack.ObjectStore, rep *CapsuleVerifyReport) bool {
-	// 1. Verify every BlobObject hash & payload commitment.
+func verifyCapsuleObjects(cap *MemoryCapsule, opts CapsuleVerifyOpts, rep *CapsuleVerifyReport) bool {
+	objects := opts.Objects
+	// 1. Verify every BlobObject hash & payload commitment (fail-closed on missing CHIRP unless AllowMissingExternal).
 	for k, b := range cap.Blobs {
 		wantH, err := ComputeBlobHash(b)
 		if err != nil || !strings.EqualFold(wantH, b.BlobHash) || !strings.EqualFold(k, b.BlobHash) {
 			rep.OK = false
 			rep.Reason = fmt.Sprintf("blob hash mismatch for %q", b.Path)
 			return false
+		}
+		if b.Redacted {
+			// Hash-preserving erased/Cedar-redacted stub: verified by ComputeBlobHash above, tracked separately.
+			rep.BlobsRedacted++
+			continue
 		}
 		if !b.Encrypted {
 			if len(b.Inline) > 0 {
@@ -39,13 +44,20 @@ func verifyCapsuleObjects(cap *MemoryCapsule, objects bstack.ObjectStore, rep *C
 					rep.Reason = fmt.Sprintf("inline blob content sha256 mismatch for %q", b.Path)
 					return false
 				}
-			} else if b.ChirpURL != "" && objects != nil {
+			} else if b.ChirpURL != "" {
+				if objects == nil {
+					if !opts.AllowMissingExternal {
+						rep.OK = false
+						rep.Reason = fmt.Sprintf("external CHIRP blob %q (%s) missing (no ObjectStore)", b.Path, b.ChirpURL)
+						return false
+					}
+					rep.BlobsMissingExternal++
+					continue
+				}
 				resolved, err := bstack.ResolveChirp(objects, b.ChirpURL)
 				if err != nil {
-					// Remote volumetric CHIRP payloads may not be mirrored into the local ObjectStore yet
-					// during cross-node .nkt import; fail closed on corruption, allow absent objects.
-					if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "not available") || strings.Contains(err.Error(), "does not exist") {
-						rep.BlobsVerified++
+					if opts.AllowMissingExternal && (errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "not available") || strings.Contains(err.Error(), "does not exist")) {
+						rep.BlobsMissingExternal++
 						continue
 					}
 					rep.OK = false
@@ -63,17 +75,66 @@ func verifyCapsuleObjects(cap *MemoryCapsule, objects bstack.ObjectStore, rep *C
 		rep.BlobsVerified++
 	}
 
-	// 2. Verify every TreeObject hash, blob references, and any JevGraph edge sidecars offline.
+	// 2. Verify every TreeObject hash (both v1 leaf/flat trees and v2 sharded root trees),
+	//    blob references, and any JevGraph edge sidecars offline.
 	verifiedSidecars := make(map[string]bool)
 	for k, tr := range cap.Trees {
-		rebuilt, err := BuildTree(tr.Entries)
-		if err != nil || !strings.EqualFold(rebuilt.TreeHash, tr.TreeHash) || !strings.EqualFold(k, tr.TreeHash) {
+		if !strings.EqualFold(k, tr.TreeHash) {
 			rep.OK = false
-			rep.Reason = fmt.Sprintf("tree hash mismatch for %s", k)
+			rep.Reason = fmt.Sprintf("tree hash key mismatch for %s", k)
 			return false
 		}
-		entryByPath := make(map[string]TreeEntry, len(tr.Entries))
-		for _, e := range tr.Entries {
+		if err := VerifyTreeObject(tr); err != nil {
+			rep.OK = false
+			rep.Reason = fmt.Sprintf("tree hash mismatch for %s: %v", k, err)
+			return false
+		}
+		for bk, subHash := range tr.Subtrees {
+			sub, ok := cap.Trees[subHash]
+			if !ok {
+				rep.OK = false
+				rep.Reason = fmt.Sprintf("sharded tree %s missing bucket %s (%s)", k, bk, subHash)
+				return false
+			}
+			if len(sub.Subtrees) > 0 {
+				rep.OK = false
+				rep.Reason = fmt.Sprintf("sharded tree %s bucket %s has nested subtrees", k, bk)
+				return false
+			}
+			for _, se := range sub.Entries {
+				if TreeBucketKey(se.Path) != bk {
+					rep.OK = false
+					rep.Reason = fmt.Sprintf("sharded tree %s entry %q placed in wrong bucket %s", k, se.Path, bk)
+					return false
+				}
+			}
+		}
+		rep.TreesVerified++
+	}
+	// Verify blob ContentSHA256 bindings and JevGraph sidecars against each commit's flattened root tree.
+	checkedRoots := make(map[string]bool, len(cap.Commits))
+	rootHashes := make([]string, 0, len(cap.Commits)+len(cap.Trees))
+	for _, c := range cap.Commits {
+		if c.TreeHash != "" && !checkedRoots[c.TreeHash] {
+			checkedRoots[c.TreeHash] = true
+			rootHashes = append(rootHashes, c.TreeHash)
+		}
+	}
+	for k, tr := range cap.Trees {
+		if len(tr.Subtrees) == 0 && !checkedRoots[k] {
+			// Also check standalone v1 trees if not part of a sharded root.
+			rootHashes = append(rootHashes, k)
+		}
+	}
+	for _, rootH := range rootHashes {
+		entries, fErr := FlattenTreeFromMap(rootH, cap.Trees)
+		if fErr != nil {
+			rep.OK = false
+			rep.Reason = fmt.Sprintf("flatten tree %s failed: %v", rootH, fErr)
+			return false
+		}
+		entryByPath := make(map[string]TreeEntry, len(entries))
+		for _, e := range entries {
 			entryByPath[e.Path] = e
 			if b, ok := cap.Blobs[e.BlobHash]; ok {
 				if !strings.EqualFold(b.ContentSHA256, e.ContentSHA256) {
@@ -83,7 +144,7 @@ func verifyCapsuleObjects(cap *MemoryCapsule, objects bstack.ObjectStore, rep *C
 				}
 			}
 		}
-		for _, e := range tr.Entries {
+		for _, e := range entries {
 			if !strings.HasPrefix(e.Path, "graph/") || !strings.HasSuffix(e.Path, ".edges.json") {
 				continue
 			}
@@ -91,7 +152,7 @@ func verifyCapsuleObjects(cap *MemoryCapsule, objects bstack.ObjectStore, rep *C
 				continue
 			}
 			sb, ok := cap.Blobs[e.BlobHash]
-			if !ok || sb.Encrypted || sb.Forgotten {
+			if !ok || sb.Encrypted || sb.Forgotten || sb.Redacted {
 				continue
 			}
 			rawSidecar := ResolveBlobBytes(sb, objects)
@@ -106,12 +167,16 @@ func verifyCapsuleObjects(cap *MemoryCapsule, objects bstack.ObjectStore, rep *C
 			}
 			srcEntry, hasSrc := entryByPath[sidecar.SourcePath]
 			if !hasSrc {
-				rep.OK = false
-				rep.Reason = fmt.Sprintf("graph sidecar %q references missing source %q", e.Path, sidecar.SourcePath)
-				return false
+				// Standalone bucket tree might not hold source if source is in another bucket; only fail on commit roots!
+				if checkedRoots[rootH] {
+					rep.OK = false
+					rep.Reason = fmt.Sprintf("graph sidecar %q references missing source %q", e.Path, sidecar.SourcePath)
+					return false
+				}
+				continue
 			}
 			srcBlob, hasBlob := cap.Blobs[srcEntry.BlobHash]
-			if !hasBlob || srcBlob.Encrypted || srcBlob.Forgotten {
+			if !hasBlob || srcBlob.Encrypted || srcBlob.Forgotten || srcBlob.Redacted {
 				verifiedSidecars[e.BlobHash] = true
 				continue
 			}
@@ -129,7 +194,6 @@ func verifyCapsuleObjects(cap *MemoryCapsule, objects bstack.ObjectStore, rep *C
 			rep.EdgesVerified += nEdges
 			verifiedSidecars[e.BlobHash] = true
 		}
-		rep.TreesVerified++
 	}
 
 	// 3. Verify every CommitObject hash, MPE root, signature, tree presence, and intra-capsule parent DAG.
@@ -168,20 +232,60 @@ func verifyCapsuleObjects(cap *MemoryCapsule, objects bstack.ObjectStore, rep *C
 	return true
 }
 
+func verifyCapsuleTransitions(cap *MemoryCapsule, rep *CapsuleVerifyReport) bool {
+	if len(cap.Transitions) == 0 {
+		return true
+	}
+	baseQ := cap.BaseStateQ
+	if len(baseQ) == 0 {
+		baseQ = core.Zero32Bytes()
+	}
+	if _, err := core.VerifyTransitionChain(baseQ, cap.Transitions); err != nil {
+		rep.OK = false
+		rep.Reason = fmt.Sprintf("merkle automaton transition replay failed: %v", err)
+		return false
+	}
+	rep.TransitionsVerified = len(cap.Transitions)
+	return true
+}
+
 func verifyCapsuleAnchors(
 	ctx context.Context,
 	cap *MemoryCapsule,
-	tracker chaintracker.ChainTracker,
-	memoryMode bool,
+	opts CapsuleVerifyOpts,
 	rep *CapsuleVerifyReport,
 ) error {
+	tracker := opts.Tracker
+	memoryMode := opts.MemoryMode
+
 	// 4. Verify contiguous BSV NektarAnchor AtomicBEEF + Rúnar state + STRICT UTXO SPEND LINEAGE
-	//    (every successor n >= 1 MUST spend prevTx:0 via NektarAnchor.Append() & pass post-Chronicle Script VM)
+	//    (every successor spends prevTx:0 via NektarAnchor.Append() & passes post-Chronicle Script VM)
 	//    + ChainRp + BUMP/SPV header proofs.
+	//    For incremental delta capsules (BaseAnchorN >= 0), anchors start at BaseAnchorN+1 and anchor
+	//    against either opts.LocalBaseAnchor (UTXO spend lineage + ChainRp) or cap.AnchorConsistency (MMR).
 	prevRp := core.Zero32Bytes()
 	var prevAnchorTx *transaction.Transaction
 	var expectedN int64
-	for _, a := range cap.Anchors {
+	isIncremental := cap.BaseAnchorN >= 0 && len(cap.Anchors) > 0 && cap.Anchors[0].N == cap.BaseAnchorN+1
+	if isIncremental {
+		expectedN = cap.BaseAnchorN + 1
+		if opts.LocalBaseAnchor != nil && opts.LocalBaseAnchor.N == cap.BaseAnchorN {
+			if rpBytes, err := hex.DecodeString(strings.TrimSpace(opts.LocalBaseAnchor.ChainedHex)); err == nil && len(rpBytes) == 32 {
+				prevRp = rpBytes
+			}
+			if len(opts.LocalBaseAnchor.Beef) > 0 {
+				if _, baseTx, _, err := guard.ParseBEEF(opts.LocalBaseAnchor.Beef, guard.DefaultBound); err == nil && baseTx != nil {
+					prevAnchorTx = baseTx
+				}
+			}
+		} else if cap.AnchorConsistency == nil || len(cap.BaseMmrRoot) != 32 {
+			rep.OK = false
+			rep.Reason = fmt.Sprintf("incremental capsule starting at anchor n=%d requires LocalBaseAnchor(%d) or MMRConsistencyProof", expectedN, cap.BaseAnchorN)
+			return nil
+		}
+	}
+
+	for idx, a := range cap.Anchors {
 		if len(a.Beef) == 0 {
 			rep.OK = false
 			rep.Reason = fmt.Sprintf("anchor n=%d missing BEEF", a.N)
@@ -221,17 +325,26 @@ func verifyCapsuleAnchors(
 			rep.Reason = fmt.Sprintf("anchor n=%d state mismatch vs NektarAnchor output", a.N)
 			return nil
 		}
-		wantRp := core.ChainRpWithTag(st.Tag, prevRp, st.R, st.Size)
-		if !core.EqualBytes(wantRp, st.Rp) {
-			rep.OK = false
-			rep.Reason = fmt.Sprintf("anchor n=%d R' chain link broken", a.N)
-			return nil
-		}
-		if prevAnchorTx != nil {
-			if lErr := contracts.VerifyAnchorUTXOLineageWithBEEF(prevAnchorTx, tx, parsedBeef); lErr != nil {
+		if idx == 0 && isIncremental && prevAnchorTx == nil {
+			// Standalone incremental checkpoint: verify MMR append-only consistency from BaseMmrRoot -> st.MmrRoot.
+			if err := core.VerifyMMRConsistency(cap.BaseMmrRoot, st.MmrRoot, cap.AnchorConsistency); err != nil {
 				rep.OK = false
-				rep.Reason = fmt.Sprintf("anchor n=%d UTXO lineage broken: %v", a.N, lErr)
+				rep.Reason = fmt.Sprintf("anchor n=%d MMR consistency proof invalid: %v", a.N, err)
 				return nil
+			}
+		} else {
+			wantRp := core.ChainRpWithTag(st.Tag, prevRp, st.R, st.Size)
+			if !core.EqualBytes(wantRp, st.Rp) {
+				rep.OK = false
+				rep.Reason = fmt.Sprintf("anchor n=%d R' chain link broken", a.N)
+				return nil
+			}
+			if prevAnchorTx != nil {
+				if lErr := contracts.VerifyAnchorUTXOLineageWithBEEF(prevAnchorTx, tx, parsedBeef); lErr != nil {
+					rep.OK = false
+					rep.Reason = fmt.Sprintf("anchor n=%d UTXO lineage broken: %v", a.N, lErr)
+					return nil
+				}
 			}
 		}
 		if tx.MerklePath != nil {

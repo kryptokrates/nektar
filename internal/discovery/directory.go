@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,12 +12,13 @@ import (
 	"sync"
 	"time"
 
-	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	"github.com/lightwebinc/bcommon/resolve"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/memory"
 	"github.com/kryptokrates/nektar/internal/store"
+	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
 // SeedHubSpec describes one curated Layer-0 bootstrap hub in the nektar.run fleet.
@@ -94,21 +94,26 @@ type WithholdingWarning struct {
 // Service manages Layer 0 (seeds/hosts), Layer 1 (dir lane AnnounceAd + bfinger handles),
 // and Layer 2 (market-discovered CHIRP pack auto-seeding).
 type Service struct {
-	mu           sync.RWMutex
-	mem          *memory.Service
-	network      string
-	envHosts     []string
-	announceKey  *ec.PrivateKey
-	httpClient   *http.Client
-	termsCache   *HubTermsCache
-	catalogCache hubCatalogCache
-	topupMu      sync.Mutex
-	topupLocks   map[string]*sync.Mutex
-	feeApprover  HubFeeApprover
-	feeRecorder  HubFeeRecorder
-	carrierTree  *CarrierTreeManager
-	peers        map[string]PeerInfo
-	withholdings []WithholdingWarning
+	mu              sync.RWMutex
+	mem             *memory.Service
+	network         string
+	envHosts        []string
+	signer          *nwallet.MarketSigner
+	keyInitErr      error
+	httpClient      *http.Client
+	termsCache      *HubTermsCache
+	laneRouter      *hubLaneRouter
+	catalogCache    hubCatalogCache
+	topupMu         sync.Mutex
+	topupLocks      map[string]*sync.Mutex
+	feeApprover     HubFeeApprover
+	feeRecorder     HubFeeRecorder
+	carrierTree     *CarrierTreeManager
+	peers           map[string]PeerInfo
+	withholdings    []WithholdingWarning
+	localHandle     string
+	localPublicURL  string
+	localBboxOffice string
 }
 
 // New constructs a discovery Service bound to mem's SQLite store & network.
@@ -120,33 +125,50 @@ func New(mem *memory.Service, envHosts []string, hc *http.Client) *Service {
 	if hc == nil {
 		hc = core.SafeHTTPClientForNetwork(netName, 30*time.Second)
 	}
-	var ak *ec.PrivateKey
+	var signer *nwallet.MarketSigner
+	var keyErr error
 	if mem != nil {
-		if raw, err := mem.LoadOrCreateProtectedKey("node_market_key_v1", func() ([]byte, error) {
-			k, err := ec.NewPrivateKey()
-			if err != nil {
-				return nil, err
-			}
-			return k.Serialize(), nil
-		}); err == nil && len(raw) == 32 {
-			ak, _ = ec.PrivateKeyFromBytes(raw)
-			clear(raw)
+		raw, err := mem.LoadOrCreateProtectedKey("node_market_key_v1", nwallet.GenerateProtectedKeyBytes)
+		if err != nil {
+			keyErr = err
+		} else {
+			signer, keyErr = nwallet.NewMarketSignerFromBytes(raw)
 		}
-	}
-	if ak == nil {
-		ak, _ = ec.NewPrivateKey()
+	} else {
+		signer, keyErr = nwallet.NewEphemeralMarketSigner()
 	}
 	cleanEnv := normalizeHosts(envHosts)
 	return &Service{
-		mem:         mem,
-		network:     netName,
-		envHosts:    cleanEnv,
-		announceKey: ak,
-		httpClient:  hc,
-		termsCache:  NewHubTermsCache(),
-		topupLocks:  make(map[string]*sync.Mutex),
-		peers:       make(map[string]PeerInfo),
+		mem:        mem,
+		network:    netName,
+		envHosts:   cleanEnv,
+		signer:     signer,
+		keyInitErr: keyErr,
+		httpClient: hc,
+		termsCache: NewHubTermsCache(),
+		laneRouter: newHubLaneRouter(),
+		topupLocks: make(map[string]*sync.Mutex),
+		peers:      make(map[string]PeerInfo),
 	}
+}
+
+// SetHubTopics pre-populates the lane router's mounted-topic map for hostURL (avoids initial /health probe).
+func (s *Service) SetHubTopics(hostURL string, topics []string) {
+	if s != nil && s.laneRouter != nil {
+		s.laneRouter.SetHostTopics(hostURL, topics)
+	}
+}
+
+// SetLocalHandle configures this node's own BRC-169 handle metadata served by WellKnownHandleHandler.
+func (s *Service) SetLocalHandle(handle, publicURL, bboxOffice string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.localHandle = strings.ToLower(strings.TrimSpace(handle))
+	s.localPublicURL = strings.TrimRight(strings.TrimSpace(publicURL), "/")
+	s.localBboxOffice = strings.TrimSpace(bboxOffice)
+	s.mu.Unlock()
 }
 
 // SetHubFeePolicy wires operator hub-fee caps and daily spend recording into discovery's BRC-105 client.
@@ -160,14 +182,20 @@ func (s *Service) SetHubFeePolicy(approver HubFeeApprover, recorder HubFeeRecord
 	s.mu.Unlock()
 }
 
-// AnnounceKey returns this node's announce/directory signing key (also used for hub egress auth).
-func (s *Service) AnnounceKey() *ec.PrivateKey {
-	return s.announceKey
+// AnnounceKey returns this node's encapsulated market/directory signer (also used for hub egress auth).
+func (s *Service) AnnounceKey() *nwallet.MarketSigner {
+	if s == nil {
+		return nil
+	}
+	return s.signer
 }
 
 // AnnouncePubHex returns the compressed pubkey signing this node's AnnounceAd records.
 func (s *Service) AnnouncePubHex() string {
-	return hex.EncodeToString(s.announceKey.PubKey().Compressed())
+	if s == nil || s.signer == nil {
+		return ""
+	}
+	return s.signer.PubHex()
 }
 
 // Withholdings returns any multi-host directory withholding warnings detected during quorum reads.
@@ -237,27 +265,44 @@ func (s *Service) JoinHost(ctx context.Context, rawURL string) (hubURL string, d
 	if base == "" {
 		return "", nil, errors.New("discovery: invalid host URL")
 	}
-	// Try probing as direct Hub (/v1/health) OR as Nektar node (/.well-known/nektar -> /hub).
 	probeURL := base
-	var wellKnown struct {
-		Hosts []string `json:"hosts"`
-		Hub   string   `json:"hub"`
-	}
-	if resp, rErr := s.getJSON(ctx, base+"/.well-known/nektar", &wellKnown); rErr == nil && resp == http.StatusOK {
-		if wellKnown.Hub != "" {
-			if strings.HasPrefix(wellKnown.Hub, "/") {
-				probeURL = base + strings.TrimRight(wellKnown.Hub, "/")
-			} else if candidate := normalizeHostURL(wellKnown.Hub); candidate != "" && sameOriginURL(base, candidate) {
-				probeURL = candidate
-			}
-		} else {
-			// Check if /hub/v1/health answers on this node.
-			var hCheck map[string]any
-			if code, _ := s.getJSON(ctx, base+"/hub/v1/health", &hCheck); code == http.StatusOK {
-				probeURL = base + "/hub"
+	// Try probing BRC-180 /manifest.json first so pasting any LightBSV sovereign domain or Hub origin works seamlessly!
+	if mf, mErr := s.fetchManifestFromBaseURL(ctx, base); mErr == nil && mf != nil {
+		if lsURL, ok := mf.Overlay(bstack.LookupService); ok {
+			if cand := normalizeHostURL(lsURL); cand != "" {
+				probeURL = cand
 			}
 		}
-		discovered = append(discovered, normalizeHosts(wellKnown.Hosts)...)
+		for _, ovURL := range mf.Overlays {
+			if cand := normalizeHostURL(ovURL); cand != "" {
+				discovered = appendUnique(discovered, cand)
+			}
+		}
+	}
+	// Also probe as direct Hub (/v1/health) OR as Nektar node (/.well-known/nektar -> /hub) on both base and probeURL.
+	for _, wkOrigin := range appendUnique([]string{base}, probeURL) {
+		var wellKnown struct {
+			Hosts []string `json:"hosts"`
+			Hub   string   `json:"hub"`
+		}
+		if resp, rErr := s.getJSON(ctx, wkOrigin+"/.well-known/nektar", &wellKnown); rErr == nil && resp == http.StatusOK {
+			if wellKnown.Hub != "" {
+				if strings.HasPrefix(wellKnown.Hub, "/") {
+					probeURL = wkOrigin + strings.TrimRight(wellKnown.Hub, "/")
+				} else if candidate := normalizeHostURL(wellKnown.Hub); candidate != "" && sameOriginURL(wkOrigin, candidate) {
+					probeURL = candidate
+				}
+			} else {
+				var hCheck map[string]any
+				if code, _ := s.getJSON(ctx, wkOrigin+"/hub/v1/health", &hCheck); code == http.StatusOK {
+					probeURL = wkOrigin + "/hub"
+				}
+			}
+			for _, h := range normalizeHosts(wellKnown.Hosts) {
+				discovered = appendUnique(discovered, h)
+			}
+			break
+		}
 	}
 
 	var health struct {
@@ -303,6 +348,26 @@ func (s *Service) LeaveHost(rawURL string) error {
 		return errors.New("discovery: invalid host URL")
 	}
 	return s.mem.DB().BlockHost(u)
+}
+
+func (s *Service) fetchManifestFromBaseURL(ctx context.Context, base string) (*resolve.Manifest, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/manifest.json", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("manifest HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+	if err != nil {
+		return nil, err
+	}
+	return resolve.ParseManifest(body)
 }
 
 func (s *Service) getJSON(ctx context.Context, u string, out any) (int, error) {

@@ -159,9 +159,10 @@ func (p *Port) BuildCovenantSpendTx(ctx context.Context, req CovenantSpendReques
 	var resID string
 	var estFee uint64
 	if p.engine == nil {
-		// Client mode broadcasts directly inside SignAction: atomically reserve SpendGuard budget BEFORE CreateAction.
+		// Client mode broadcasts directly inside SignAction: atomically reserve SpendGuard budget BEFORE CreateAction,
+		// sizing fee reservation for the full Rúnar covenant unlocking script (ARCH-F1 / STATE-8).
 		var rErr error
-		resID, estFee, rErr = p.reserveClientSpend(ctx, outTotal, len(wOuts), false)
+		resID, estFee, rErr = p.reserveClientSpend(ctx, outTotal, len(wOuts), int(unlockLen), false)
 		if rErr != nil {
 			return nil, rErr
 		}
@@ -346,9 +347,6 @@ func (p *Port) BuildCovenantSpendTx(ctx context.Context, req CovenantSpendReques
 	if feeSats == 0 {
 		feeSats = p.engine.TxFeeSats(ctx, txid)
 	}
-	p.mu.Lock()
-	p.pendingNoSend[txid] = txid
-	p.mu.Unlock()
 
 	return &CovenantSpendResult{
 		Tx:               finalTx,

@@ -158,7 +158,7 @@ func (s *Service) prepareFragmentCommitWithExtrasTx(
 		}
 	}
 	for _, b := range allBlobs {
-		blobRaw, mErr := json.Marshal(b)
+		blobRaw, mErr := memrepo.EncodeBlobObjectCBOR(*b)
 		if mErr != nil {
 			return memrepo.CommitObject{}, "", mErr
 		}
@@ -167,21 +167,16 @@ func (s *Service) prepareFragmentCommitWithExtrasTx(
 		}
 	}
 
-	entriesByPath := make(map[string]memrepo.TreeEntry)
 	var parents []memrepo.ParentRef
 	var expectedHead string
+	var prevTree *memrepo.TreeObject
 
 	if br, bErr := rtx.GetMemBranch(shard, brName); bErr == nil && br.HeadCommit != "" {
 		expectedHead = br.HeadCommit
 		if prevRow, rErr := rtx.GetMemCommit(br.HeadCommit); rErr == nil {
 			prevC := commitFromRow(prevRow)
-			if _, treeRaw, tErr := rtx.GetMemObject(prevC.TreeHash); tErr == nil {
-				var prevTree memrepo.TreeObject
-				if json.Unmarshal(treeRaw, &prevTree) == nil {
-					for _, e := range prevTree.Entries {
-						entriesByPath[e.Path] = e
-					}
-				}
+			if pt, tErr := loadRawTreeObjectTx(rtx, prevC.TreeHash); tErr == nil && pt != nil {
+				prevTree = pt
 			}
 			parents = append(parents, memrepo.ParentRef{
 				CommitHash: prevC.CommitHash,
@@ -191,29 +186,104 @@ func (s *Service) prepareFragmentCommitWithExtrasTx(
 	}
 	parents = append(parents, extraParents...)
 
-	for _, b := range allBlobs {
-		entriesByPath[b.Path] = memrepo.TreeEntry{
-			Mode:          "100644",
-			Path:          b.Path,
-			BlobHash:      b.BlobHash,
-			MediaType:     b.MediaType,
-			Size:          b.Size,
-			ContentSHA256: b.ContentSHA256,
-			ChirpURL:      b.ChirpURL,
-			Encrypted:     b.Encrypted,
-			Level:         b.Level,
-			Class:         b.Class,
+	var tr *memrepo.TreeObject
+	if prevTree != nil && len(prevTree.Subtrees) > 0 {
+		// Fast O(1) incremental 256-bucket subtree update: only read & rewrite touched bucket(s) + root map!
+		subtrees := make(map[string]string, len(prevTree.Subtrees)+len(allBlobs))
+		for k, v := range prevTree.Subtrees {
+			subtrees[k] = v
+		}
+		dirtyByBucket := make(map[string][]memrepo.TreeEntry, len(allBlobs))
+		for _, b := range allBlobs {
+			bk := memrepo.TreeBucketKey(b.Path)
+			dirtyByBucket[bk] = append(dirtyByBucket[bk], memrepo.TreeEntry{
+				Mode:          "100644",
+				Path:          b.Path,
+				BlobHash:      b.BlobHash,
+				MediaType:     b.MediaType,
+				Size:          b.Size,
+				ContentSHA256: b.ContentSHA256,
+				ChirpURL:      b.ChirpURL,
+				Encrypted:     b.Encrypted,
+				Level:         b.Level,
+				Class:         b.Class,
+			})
+		}
+		for bk, updates := range dirtyByBucket {
+			bucketEntriesByPath := make(map[string]memrepo.TreeEntry)
+			if oldHash := subtrees[bk]; oldHash != "" {
+				if oldBucket, bErr := loadRawTreeObjectTx(rtx, oldHash); bErr == nil && oldBucket != nil {
+					for _, e := range oldBucket.Entries {
+						bucketEntriesByPath[e.Path] = e
+					}
+				}
+			}
+			for _, u := range updates {
+				bucketEntriesByPath[u.Path] = u
+			}
+			bList := make([]memrepo.TreeEntry, 0, len(bucketEntriesByPath))
+			for _, e := range bucketEntriesByPath {
+				bList = append(bList, e)
+			}
+			bTree, bErr := memrepo.BuildTree(bList)
+			if bErr != nil {
+				return memrepo.CommitObject{}, "", bErr
+			}
+			bRaw, mErr := memrepo.EncodeTreeObjectCBOR(*bTree)
+			if mErr != nil {
+				return memrepo.CommitObject{}, "", mErr
+			}
+			if err := rtx.PutMemObject(bTree.TreeHash, "tree", bRaw, now); err != nil {
+				return memrepo.CommitObject{}, "", err
+			}
+			subtrees[bk] = bTree.TreeHash
+		}
+		tr, err = memrepo.BuildShardedRootTree(subtrees)
+		if err != nil {
+			return memrepo.CommitObject{}, "", err
+		}
+	} else {
+		// Fresh repo or automatic in-place upgrade of a legacy v1 flat TreeObject into 256-bucket subtrees.
+		entriesByPath := make(map[string]memrepo.TreeEntry)
+		if prevTree != nil {
+			for _, e := range prevTree.Entries {
+				entriesByPath[e.Path] = e
+			}
+		}
+		for _, b := range allBlobs {
+			entriesByPath[b.Path] = memrepo.TreeEntry{
+				Mode:          "100644",
+				Path:          b.Path,
+				BlobHash:      b.BlobHash,
+				MediaType:     b.MediaType,
+				Size:          b.Size,
+				ContentSHA256: b.ContentSHA256,
+				ChirpURL:      b.ChirpURL,
+				Encrypted:     b.Encrypted,
+				Level:         b.Level,
+				Class:         b.Class,
+			}
+		}
+		entries := make([]memrepo.TreeEntry, 0, len(entriesByPath))
+		for _, e := range entriesByPath {
+			entries = append(entries, e)
+		}
+		var buckets map[string]memrepo.TreeObject
+		tr, buckets, err = memrepo.BuildShardedTree(entries)
+		if err != nil {
+			return memrepo.CommitObject{}, "", err
+		}
+		for _, bt := range buckets {
+			bRaw, mErr := memrepo.EncodeTreeObjectCBOR(bt)
+			if mErr != nil {
+				return memrepo.CommitObject{}, "", mErr
+			}
+			if err := rtx.PutMemObject(bt.TreeHash, "tree", bRaw, now); err != nil {
+				return memrepo.CommitObject{}, "", err
+			}
 		}
 	}
-	entries := make([]memrepo.TreeEntry, 0, len(entriesByPath))
-	for _, e := range entriesByPath {
-		entries = append(entries, e)
-	}
-	tr, err := memrepo.BuildTree(entries)
-	if err != nil {
-		return memrepo.CommitObject{}, "", err
-	}
-	treeRaw, err := json.Marshal(tr)
+	treeRaw, err := memrepo.EncodeTreeObjectCBOR(*tr)
 	if err != nil {
 		return memrepo.CommitObject{}, "", err
 	}
@@ -353,16 +423,96 @@ func (s *Service) commitAuthorPubHex(ctx context.Context) string {
 	return s.port.IdentityPubHex()
 }
 
-func (s *Service) loadTreeObject(hash string) (*memrepo.TreeObject, error) {
+func decodeStoredTreeObject(raw []byte) (*memrepo.TreeObject, error) {
+	if len(raw) > 0 && raw[0] == '{' {
+		var tr memrepo.TreeObject
+		if err := json.Unmarshal(raw, &tr); err != nil {
+			return nil, err
+		}
+		return &tr, nil
+	}
+	tr, err := memrepo.DecodeTreeObjectCBOR(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &tr, nil
+}
+
+func decodeStoredBlobObject(raw []byte) (*memrepo.BlobObject, error) {
+	if len(raw) > 0 && raw[0] == '{' {
+		var b memrepo.BlobObject
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, err
+		}
+		return &b, nil
+	}
+	b, err := memrepo.DecodeBlobObjectCBOR(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+func loadRawTreeObjectTx(rtx *store.RepoTx, hash string) (*memrepo.TreeObject, error) {
+	_, raw, err := rtx.GetMemObject(hash)
+	if err != nil {
+		return nil, err
+	}
+	return decodeStoredTreeObject(raw)
+}
+
+func loadTreeEntriesTx(rtx *store.RepoTx, hash string) ([]memrepo.TreeEntry, error) {
+	tr, err := loadRawTreeObjectTx(rtx, hash)
+	if err != nil || tr == nil {
+		return nil, err
+	}
+	if len(tr.Subtrees) > 0 && len(tr.Entries) == 0 {
+		return memrepo.ResolveTreeEntries(*tr, func(bh string) (memrepo.TreeObject, bool) {
+			bt, bErr := loadRawTreeObjectTx(rtx, bh)
+			if bErr != nil || bt == nil {
+				return memrepo.TreeObject{}, false
+			}
+			return *bt, true
+		})
+	}
+	return tr.Entries, nil
+}
+
+func loadBlobObjectTx(rtx *store.RepoTx, hash string) (*memrepo.BlobObject, error) {
+	_, raw, err := rtx.GetMemObject(hash)
+	if err != nil {
+		return nil, err
+	}
+	return decodeStoredBlobObject(raw)
+}
+
+func (s *Service) loadRawTreeObject(hash string) (*memrepo.TreeObject, error) {
 	_, raw, err := s.db.GetMemObject(hash)
 	if err != nil {
 		return nil, err
 	}
-	var tr memrepo.TreeObject
-	if err := json.Unmarshal(raw, &tr); err != nil {
+	return decodeStoredTreeObject(raw)
+}
+
+func (s *Service) loadTreeObject(hash string) (*memrepo.TreeObject, error) {
+	tr, err := s.loadRawTreeObject(hash)
+	if err != nil || tr == nil {
 		return nil, err
 	}
-	return &tr, nil
+	if len(tr.Subtrees) > 0 && len(tr.Entries) == 0 {
+		entries, rErr := memrepo.ResolveTreeEntries(*tr, func(bh string) (memrepo.TreeObject, bool) {
+			bt, bErr := s.loadRawTreeObject(bh)
+			if bErr != nil || bt == nil {
+				return memrepo.TreeObject{}, false
+			}
+			return *bt, true
+		})
+		if rErr != nil {
+			return nil, rErr
+		}
+		tr.Entries = entries
+	}
+	return tr, nil
 }
 
 func (s *Service) loadBlobObject(hash string) (*memrepo.BlobObject, error) {
@@ -370,11 +520,7 @@ func (s *Service) loadBlobObject(hash string) (*memrepo.BlobObject, error) {
 	if err != nil {
 		return nil, err
 	}
-	var b memrepo.BlobObject
-	if err := json.Unmarshal(raw, &b); err != nil {
-		return nil, err
-	}
-	return &b, nil
+	return decodeStoredBlobObject(raw)
 }
 
 func rowFromCommit(c memrepo.CommitObject) store.MemCommitRow {
@@ -388,6 +534,7 @@ func rowFromCommit(c memrepo.CommitObject) store.MemCommitRow {
 		Repo:           c.Repo,
 		Branch:         c.Branch,
 		Seq:            c.Seq,
+		CommitKind:     c.CommitKind,
 		TreeHash:       c.TreeHash,
 		MPERoot:        c.MPERoot,
 		ParentsJSON:    pJSON,
@@ -425,12 +572,17 @@ func commitFromRow(r store.MemCommitRow) memrepo.CommitObject {
 	if r.OriginBranch != "" {
 		signedBranch = r.OriginBranch
 	}
+	signedSeq := r.Seq
+	if r.OriginSeq > 0 {
+		signedSeq = r.OriginSeq
+	}
 	return memrepo.CommitObject{
 		Version:        1,
 		CommitHash:     r.CommitHash,
 		Repo:           signedRepo,
 		Branch:         signedBranch,
-		Seq:            r.Seq,
+		Seq:            signedSeq,
+		CommitKind:     r.CommitKind,
 		Parents:        parents,
 		TreeHash:       r.TreeHash,
 		MPERoot:        r.MPERoot,

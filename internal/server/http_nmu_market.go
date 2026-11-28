@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/overlay/lookup"
@@ -19,7 +21,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
-	"github.com/kryptokrates/nektar/internal/distill"
+	"github.com/kryptokrates/nektar/internal/eventbus"
 	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/market"
 	"github.com/kryptokrates/nektar/internal/memory"
@@ -57,9 +59,15 @@ func (a *App) BroadcastShardFeedEvent(shard, eventType string, payload any) {
 	a.feedMu.Unlock()
 }
 
-func (a *App) subscribeShardFeed(shard string) (chan shardFeedFrame, func()) {
+const maxShardFeedSubscribers = 256
+
+func (a *App) subscribeShardFeed(shard string) (chan shardFeedFrame, func(), bool) {
 	ch := make(chan shardFeedFrame, 32)
 	a.feedMu.Lock()
+	if a.feedSubCount >= maxShardFeedSubscribers {
+		a.feedMu.Unlock()
+		return nil, nil, false
+	}
 	if a.feedSubs == nil {
 		a.feedSubs = make(map[string]map[chan shardFeedFrame]struct{})
 	}
@@ -67,18 +75,27 @@ func (a *App) subscribeShardFeed(shard string) (chan shardFeedFrame, func()) {
 		a.feedSubs[shard] = make(map[chan shardFeedFrame]struct{})
 	}
 	a.feedSubs[shard][ch] = struct{}{}
+	a.feedSubCount++
 	a.feedMu.Unlock()
+	var once sync.Once
 	unsub := func() {
-		a.feedMu.Lock()
-		if m := a.feedSubs[shard]; m != nil {
-			delete(m, ch)
-			if len(m) == 0 {
-				delete(a.feedSubs, shard)
+		once.Do(func() {
+			a.feedMu.Lock()
+			if m := a.feedSubs[shard]; m != nil {
+				if _, ok := m[ch]; ok {
+					delete(m, ch)
+					if a.feedSubCount > 0 {
+						a.feedSubCount--
+					}
+				}
+				if len(m) == 0 {
+					delete(a.feedSubs, shard)
+				}
 			}
-		}
-		a.feedMu.Unlock()
+			a.feedMu.Unlock()
+		})
 	}
-	return ch, unsub
+	return ch, unsub, true
 }
 
 // MarketQueryItem is one verified FactPack item returned by POST /v1/market/query (per_query mode).
@@ -124,7 +141,7 @@ func (a *App) handleMarketQuery(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if listing == nil || !listing.Active || !listing.SupportsMode(nmu.ModePerQuery) || listing.QueryPriceSats == 0 {
+	if listing == nil || !listing.Active || !listing.SupportsMode(string(nmu.ModePerQuery)) || listing.QueryPriceSats == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("shard %q does not have per_query metered recall enabled", shard)})
 		return
 	}
@@ -154,6 +171,7 @@ func (a *App) handleMarketQuery(w http.ResponseWriter, r *http.Request) {
 		Principal:    policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
 		Action:       "disclose",
 		DisallowBorg: true,
+		VerifySPV:    false,
 		Limit:        limit * 3,
 	})
 	if rErr != nil {
@@ -166,7 +184,7 @@ func (a *App) handleMarketQuery(w http.ResponseWriter, r *http.Request) {
 		hasActiveBond = true
 	}
 	feedURL := ""
-	if base := strings.TrimRight(strings.TrimSpace(a.cfg.PublicURL), "/"); base != "" && listing.SupportsMode(nmu.ModeSubscription) {
+	if base := strings.TrimRight(strings.TrimSpace(a.cfg.PublicURL), "/"); base != "" && listing.SupportsMode(string(nmu.ModeSubscription)) {
 		feedURL = base + "/v1/market/feeds/" + shard
 	}
 	wantMinGrade := nmu.NormalizeGrade(in.MinGrade)
@@ -179,30 +197,11 @@ func (a *App) handleMarketQuery(w http.ResponseWriter, r *http.Request) {
 		if len(items) >= limit {
 			break
 		}
-		if dec, aErr := a.mem.AuthorizeSell(
-			policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
-			policy.Resource{
-				Type:      "Fragment",
-				ID:        fmt.Sprintf("%s#%d", f.Shard, f.Seq),
-				Level:     int64(f.Level),
-				Shard:     f.Shard,
-				Class:     f.Class,
-				Distilled: f.Distilled,
-			},
-			listing.AllowRaw,
-		); aErr != nil || !dec.Allow {
+		eval := a.mem.EvaluateSellableFragment(r.Context(), f, listing, hasActiveBond, feedURL, now)
+		if !eval.Allowed {
 			continue
 		}
-		if sr := distill.Scrub(f.Text); sr.Verdict == distill.ScrubBlocked {
-			continue
-		}
-		if f.Tainted && (f.GradeMismatch || f.NMU == nil || nmu.EffectiveRights(f.NMU.UsageRights) != nmu.RightsDistillResellable) {
-			continue
-		}
-		if f.NMU != nil && nmu.IsExpired(f.NMU.FreshnessClass, f.NMU.ValidUntilUnix, now) {
-			continue
-		}
-		cls, fOnt, fEdges := a.classifyLocalFragment(r.Context(), f, hasActiveBond, feedURL)
+		cls, fOnt, fEdges := eval.Classification, eval.OntologyID, eval.EdgesRoot
 		if wantOnt != "" && !strings.EqualFold(fOnt, wantOnt) {
 			continue
 		}
@@ -213,20 +212,10 @@ func (a *App) handleMarketQuery(w http.ResponseWriter, r *http.Request) {
 			bestGrade = cls.Grade
 		}
 		totalUnits += cls.UnitCount
-		effRights := nmu.EffectiveRights(nmu.UsageRights(listing.UsageRights))
-		effFresh := nmu.NormalizeFreshness(listing.FreshnessClass)
-		var validUntil int64
-		var subjVer string
-		if f.NMU != nil {
-			if f.NMU.UsageRights != "" {
-				effRights = nmu.EffectiveRights(f.NMU.UsageRights)
-			}
-			if f.NMU.FreshnessClass != "" {
-				effFresh = nmu.NormalizeFreshness(string(f.NMU.FreshnessClass))
-			}
-			validUntil = f.NMU.ValidUntilUnix
-			subjVer = f.NMU.SubjectVersion
-		}
+		effRights := eval.UsageRights
+		effFresh := eval.FreshnessClass
+		validUntil := eval.ValidUntilUnix
+		subjVer := eval.SubjectVersion
 		pb, _, _ := a.mem.Prove(r.Context(), f.Shard, f.Seq)
 		items = append(items, MarketQueryItem{
 			Shard:      f.Shard,
@@ -339,7 +328,7 @@ func (a *App) handleMarketSubscribe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if listing == nil || !listing.Active || !listing.SupportsMode(nmu.ModeSubscription) || listing.SubscriptionPriceSats == 0 {
+	if listing == nil || !listing.Active || !listing.SupportsMode(string(nmu.ModeSubscription)) || listing.SubscriptionPriceSats == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("shard %q does not have subscription feeds enabled", shard)})
 		return
 	}
@@ -450,16 +439,22 @@ func (a *App) handleMarketFeedSSE(w http.ResponseWriter, r *http.Request) {
 	pubHex := strings.ToLower(strings.TrimSpace(r.Header.Get(nmu.HeaderPub)))
 	sigHex := strings.TrimSpace(r.Header.Get(nmu.HeaderSig))
 	tsStr := strings.TrimSpace(r.Header.Get(nmu.HeaderTS))
+	nonce := strings.TrimSpace(r.Header.Get(nmu.HeaderNonce))
 	tsUnix, tsErr := strconv.ParseInt(tsStr, 10, 64)
 	now := time.Now().Unix()
-	if shard == "" || subID == "" || pubHex == "" || sigHex == "" || tsErr != nil {
+	if shard == "" || subID == "" || pubHex == "" || sigHex == "" || nonce == "" || tsErr != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{
-			"error": "missing subscriber auth headers (X-Nektar-Sub-ID, X-Nektar-Pub, X-Nektar-Sig, X-Nektar-TS)",
+			"error": "missing subscriber auth headers (X-Nektar-Sub-ID, X-Nektar-Pub, X-Nektar-Sig, X-Nektar-Ts, X-Nektar-Nonce)",
 		})
 		return
 	}
-	if err := nmu.VerifyFeedAuth(pubHex, sigHex, shard, subID, tsUnix, now); err != nil {
+	aud := strings.ToLower(strings.TrimSpace(r.Host))
+	if err := nmu.VerifyFeedAuth(pubHex, sigHex, shard, subID, tsUnix, now, nonce, aud); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	if !a.feedNonces.Claim(pubHex, nonce, now) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": nmu.ErrFeedAuthReplay.Error()})
 		return
 	}
 
@@ -492,8 +487,22 @@ func (a *App) handleMarketFeedSSE(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ch, unsub := a.subscribeShardFeed(shard)
+	ch, unsub, subOK := a.subscribeShardFeed(shard)
+	if !subOK {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "shard feed subscriber limit reached"})
+		return
+	}
 	defer unsub()
+
+	var busSub *eventbus.Subscription
+	var busEvents <-chan eventbus.Event
+	var busWake <-chan struct{}
+	if a.mem != nil && a.mem.EventBus() != nil {
+		busSub = a.mem.EventBus().Subscribe([]string{"shard:" + shard}, 32)
+		defer busSub.Close()
+		busEvents = busSub.Events()
+		busWake = busSub.Wake()
+	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -516,42 +525,34 @@ func (a *App) handleMarketFeedSSE(w http.ResponseWriter, r *http.Request) {
 		"usageRights": sub.UsageRights,
 	})
 
-	// Helper to replay active distilled/sellable fragments with seq > sinceSeq.
+	effListing := listing
+	if effListing == nil {
+		effListing = &store.SellListing{Shard: shard, AllowRaw: allowRaw, Active: true}
+	}
+
+	// Helper to replay active distilled/sellable fragments with seq > sinceSeq (zero polling — driven by EventBus!).
 	replayNew := func() {
 		frags, rErr := a.mem.Recall(r.Context(), memory.RecallInput{
 			Shard:        shard,
 			Principal:    policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
 			Action:       "disclose",
 			DisallowBorg: true,
+			VerifySPV:    false,
 		})
 		if rErr != nil {
 			return
 		}
+		evalNow := time.Now().Unix()
 		for _, f := range frags {
 			if f.Seq <= sinceSeq {
 				continue
 			}
-			if dec, aErr := a.mem.AuthorizeSell(
-				policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
-				policy.Resource{
-					Type:      "Fragment",
-					ID:        fmt.Sprintf("%s#%d", f.Shard, f.Seq),
-					Level:     int64(f.Level),
-					Shard:     f.Shard,
-					Class:     f.Class,
-					Distilled: f.Distilled,
-				},
-				allowRaw,
-			); aErr != nil || !dec.Allow {
+			eval := a.mem.EvaluateSellableFragment(r.Context(), f, effListing, false, "", evalNow)
+			if !eval.Allowed {
 				continue
 			}
-			if sr := distill.Scrub(f.Text); sr.Verdict == distill.ScrubBlocked {
-				continue
-			}
-			ontID, edgesRoot, _ := a.mem.DB().GetFragmentGraphMeta(f.Shard, f.Seq)
-			if ontID == "" {
-				ontID = f.OntologyID
-			}
+			ontID := eval.OntologyID
+			edgesRoot := eval.EdgesRoot
 			writeSSE("fragment_distilled", map[string]any{
 				"shard":       f.Shard,
 				"seq":         f.Seq,
@@ -577,8 +578,6 @@ func (a *App) handleMarketFeedSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	expiryTimer := time.NewTimer(remaining)
 	defer expiryTimer.Stop()
-	pollTicker := time.NewTicker(2 * time.Second)
-	defer pollTicker.Stop()
 	keepalive := time.NewTicker(15 * time.Second)
 	defer keepalive.Stop()
 
@@ -594,8 +593,18 @@ func (a *App) handleMarketFeedSSE(w http.ResponseWriter, r *http.Request) {
 		case frame := <-ch:
 			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", frame.Event, frame.Data)
 			flusher.Flush()
-		case <-pollTicker.C:
+		case _, ok := <-busEvents:
+			if !ok {
+				return
+			}
 			replayNew()
+		case _, ok := <-busWake:
+			if !ok {
+				return
+			}
+			if busSub != nil && busSub.TakeGap() {
+				replayNew()
+			}
 		case <-keepalive.C:
 			_, _ = fmt.Fprint(w, ": ping\n\n")
 			flusher.Flush()
@@ -636,14 +645,57 @@ type CommodityTickerResponse struct {
 	AdvisoryNote string               `json:"advisoryNote"`
 }
 
+const tickerCacheTTL = 2 * time.Second
+
 func (a *App) handleMarketTicker(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	resp := a.BuildCommodityTicker(r.Context(), TickerFilter{
+	filter := TickerFilter{
 		OntologyID:  strings.TrimSpace(q.Get("ontologyId")),
 		Grade:       strings.TrimSpace(q.Get("grade")),
 		PricingMode: strings.TrimSpace(q.Get("pricingMode")),
 		Domain:      strings.TrimSpace(q.Get("domain")),
+	}
+	cacheKey := strings.ToLower(filter.OntologyID + "|" + filter.Grade + "|" + filter.PricingMode + "|" + filter.Domain)
+	now := time.Now()
+	a.tickerCacheMu.RLock()
+	if hit, ok := a.tickerCacheMap[cacheKey]; ok && now.Before(hit.expiresAt) {
+		a.tickerCacheMu.RUnlock()
+		writeJSON(w, http.StatusOK, hit.resp)
+		return
+	}
+	a.tickerCacheMu.RUnlock()
+
+	val, _, _ := a.tickerSF.Do(cacheKey, func() (any, error) {
+		a.tickerCacheMu.RLock()
+		if hit, ok := a.tickerCacheMap[cacheKey]; ok && time.Now().Before(hit.expiresAt) {
+			a.tickerCacheMu.RUnlock()
+			return hit.resp, nil
+		}
+		a.tickerCacheMu.RUnlock()
+
+		tCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		defer cancel()
+		built := a.BuildCommodityTicker(tCtx, filter)
+		a.tickerCacheMu.Lock()
+		if a.tickerCacheMap == nil {
+			a.tickerCacheMap = make(map[string]cachedTickerEntry, 16)
+		}
+		if len(a.tickerCacheMap) >= 256 {
+			nowPrune := time.Now()
+			for k, v := range a.tickerCacheMap {
+				if nowPrune.After(v.expiresAt) {
+					delete(a.tickerCacheMap, k)
+				}
+			}
+			if len(a.tickerCacheMap) >= 256 {
+				clear(a.tickerCacheMap)
+			}
+		}
+		a.tickerCacheMap[cacheKey] = cachedTickerEntry{resp: built, expiresAt: time.Now().Add(tickerCacheTTL)}
+		a.tickerCacheMu.Unlock()
+		return built, nil
 	})
+	resp, _ := val.(CommodityTickerResponse)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -694,7 +746,7 @@ func BuildCommodityTickerFrom(
 					continue
 				}
 				feedEP := ""
-				if baseURL != "" && l.SupportsMode(nmu.ModeSubscription) {
+				if baseURL != "" && l.SupportsMode(string(nmu.ModeSubscription)) {
 					feedEP = baseURL + "/v1/market/feeds/" + l.Shard
 				}
 				bestGrade, totalUnits, avgUnits, fragOnt := summarizeLocalListingFrom(ctx, mem, l, selfBonded, feedEP)
@@ -711,7 +763,7 @@ func BuildCommodityTickerFrom(
 				}
 				for _, mode := range l.EnabledModes() {
 					var ask, rate uint64
-					switch mode {
+					switch nmu.PricingMode(mode) {
 					case nmu.ModeSpot:
 						dp := market.ParseDynamicPriceState(l.DynamicPricingJSON, l.PriceSats)
 						dp.PerUnitMode = l.PricePerUnit || dp.PerUnitMode
@@ -726,13 +778,13 @@ func BuildCommodityTickerFrom(
 					samples = append(samples, tickerSample{
 						ontologyID:  ontID,
 						grade:       gradeStr,
-						pricingMode: string(mode),
+						pricingMode: mode,
 						ratePer1k:   rate,
 						askSats:     ask,
 						units:       maxU64(1, totalUnits),
 						sellerPub:   selfPub,
 						bonded:      selfBonded,
-						hasLiveFeed: feedEP != "" || l.SupportsMode(nmu.ModeSubscription),
+						hasLiveFeed: feedEP != "" || l.SupportsMode(string(nmu.ModeSubscription)),
 						domains:     l.Domains,
 						shard:       l.Shard,
 					})
@@ -813,8 +865,8 @@ func BuildCommodityTickerFrom(
 			if ans, lErr := ls.Lookup(ctx, &lookup.LookupQuestion{Service: bstack.LookupService, Query: qBytes}); lErr == nil && ans != nil {
 				if evs, ok := ans.Result.([]bstack.MarketEvent); ok {
 					for _, ev := range evs {
-						var so bstack.SignedOffer
-						if json.Unmarshal(ev.Payload.Body, &so) != nil {
+						so, decErr := bstack.DecodeOfferPayload(ev.Payload.Body)
+						if decErr != nil {
 							continue
 						}
 						off := so.Offer
@@ -1002,7 +1054,9 @@ func (a *App) classifyLocalFragment(ctx context.Context, f memory.RecalledFragme
 	}
 	var triples []reasoning.Triple
 	if rawRec, err := a.mem.DB().GetFragment(f.Shard, f.Seq); err == nil && len(rawRec.TriplesJSON) > 0 {
-		_ = json.Unmarshal(rawRec.TriplesJSON, &triples)
+		if uErr := json.Unmarshal(rawRec.TriplesJSON, &triples); uErr != nil {
+			log.Printf("server: corrupt triples_json on %s#%d: %v", f.Shard, f.Seq, uErr)
+		}
 	}
 	if edges, err := a.mem.DB().ListKnowledgeEdges(store.KnowledgeEdgeFilter{Shard: f.Shard, Seq: f.Seq, Status: "accepted", Limit: 512}); err == nil {
 		for _, ke := range edges {
@@ -1055,7 +1109,9 @@ func summarizeLocalListingFrom(ctx context.Context, mem *memory.Service, l store
 		}
 		var triples []reasoning.Triple
 		if len(f.TriplesJSON) > 0 {
-			_ = json.Unmarshal(f.TriplesJSON, &triples)
+			if uErr := json.Unmarshal(f.TriplesJSON, &triples); uErr != nil {
+				log.Printf("server: corrupt triples_json on %s#%d: %v", f.Shard, f.Seq, uErr)
+			}
 		}
 		if edges, eErr := mem.DB().ListKnowledgeEdges(store.KnowledgeEdgeFilter{Shard: f.Shard, Seq: f.Seq, Status: "accepted", Limit: 512}); eErr == nil {
 			for _, ke := range edges {

@@ -137,8 +137,11 @@ func TestPlaneGapRepairDoesNotAdvanceCursorOnFailure(t *testing.T) {
 		if sErr != nil {
 			t.Fatal(sErr)
 		}
-		body, _ := json.Marshal(bstack.SignedWant{Want: w, Sig: sig})
-		cborBytes, err := bstack.EncodePayload(bstack.MarketPayload{Kind: bstack.KindWant, Body: body})
+		pWant, pErr := bstack.NewWantPayload(bstack.SignedWant{Want: w, Sig: sig})
+		if pErr != nil {
+			t.Fatal(pErr)
+		}
+		cborBytes, err := bstack.EncodePayload(pWant)
 		if err != nil {
 			t.Fatal(err)
 		}

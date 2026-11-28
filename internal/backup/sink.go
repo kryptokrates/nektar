@@ -91,6 +91,49 @@ func (s *LocalDirSink) Put(_ context.Context, key string, data []byte) (string, 
 	return dst, nil
 }
 
+// PutFile streams srcPath into s.Dir atomically in O(1) RAM without loading the entire archive into memory.
+func (s *LocalDirSink) PutFile(_ context.Context, key, srcPath string) (string, error) {
+	base := filepath.Base(strings.TrimSpace(key))
+	if base == "" || base == "." || base == ".." {
+		return "", errors.New("backup: invalid backup key")
+	}
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		return "", err
+	}
+	in, err := os.Open(srcPath)
+	if err != nil {
+		return "", err
+	}
+	defer in.Close()
+
+	dst := filepath.Join(s.Dir, base)
+	tmpFile, err := os.CreateTemp(s.Dir, ".nktbak-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("backup: create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	buf := make([]byte, 64<<10)
+	_, cpyErr := io.CopyBuffer(tmpFile, in, buf)
+	sErr := tmpFile.Sync()
+	cErr := tmpFile.Close()
+	if cpyErr != nil || sErr != nil || cErr != nil {
+		_ = os.Remove(tmpPath)
+		if cpyErr != nil {
+			return "", cpyErr
+		}
+		if sErr != nil {
+			return "", sErr
+		}
+		return "", cErr
+	}
+	_ = os.Chmod(tmpPath, 0o600)
+	if err := os.Rename(tmpPath, dst); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("backup: atomic rename: %w", err)
+	}
+	return dst, nil
+}
+
 func (s *LocalDirSink) Get(_ context.Context, key string) ([]byte, error) {
 	base := filepath.Base(strings.TrimSpace(key))
 	if base == "" || base == "." || base == ".." {

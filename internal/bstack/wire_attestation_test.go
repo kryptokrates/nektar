@@ -45,8 +45,10 @@ func TestKindAttestationWireAndLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignArtifact: %v", err)
 	}
-	body, _ := json.Marshal(SignedAttestation{Attestation: ad, Sig: sig})
-	payload := MarketPayload{Kind: KindAttestation, Body: body}
+	payload, err := NewAttestationPayload(SignedAttestation{Attestation: ad, Sig: sig})
+	if err != nil {
+		t.Fatalf("NewAttestationPayload: %v", err)
+	}
 
 	// 1. Canonical CBOR nkt1 kind=4 round-trip.
 	enc, err := EncodePayload(payload)
@@ -71,8 +73,8 @@ func TestKindAttestationWireAndLookup(t *testing.T) {
 	selfAd := ad
 	selfAd.SubjectPub = issuerPub
 	selfSig, _ := SignArtifact(issuerKey, selfAd)
-	selfBody, _ := json.Marshal(SignedAttestation{Attestation: selfAd, Sig: selfSig})
-	if err := ValidateMarketPayload(MarketPayload{Kind: KindAttestation, Body: selfBody}, "memory", topic, now); err == nil {
+	selfPayload, _ := NewAttestationPayload(SignedAttestation{Attestation: selfAd, Sig: selfSig})
+	if err := ValidateMarketPayload(selfPayload, "memory", topic, now); err == nil {
 		t.Fatal("expected self-rating attestation to be rejected")
 	}
 

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	_ "modernc.org/sqlite"
 )
@@ -45,6 +46,7 @@ type FragmentRecord struct {
 	MPERoot        string `json:"mpeRoot,omitempty"`
 	CommitHash     string `json:"commitHash,omitempty"`
 	TransitionHash string `json:"transitionHash,omitempty"`
+	BlobHash       string `json:"blobHash,omitempty"`
 	Distilled      bool   `json:"distilled,omitempty"`
 	OntologyID     string `json:"ontologyId,omitempty"`
 	TriplesJSON    []byte `json:"triplesJson,omitempty"`
@@ -101,12 +103,40 @@ type CitationEdge struct {
 
 // DB wraps pure-Go SQLite (modernc.org/sqlite, zero CGO) for all Nektar v0.1 local state.
 type DB struct {
-	mu   sync.Mutex
-	sql  *sql.DB
-	path string
+	mu          sync.Mutex
+	sql         *sql.DB
+	readSQL     *sql.DB
+	path        string
+	policyEpoch atomic.Uint64
+	closed      atomic.Bool
 }
 
-// Open initializes (or opens in-memory if path == ":memory:") the Nektar SQLite store.
+// PolicyEpoch returns a monotonically increasing epoch bumped whenever operator_policies,
+// market_kill_switch, or daily market spend mutates in SQLite (enabling 0-SQLite-read Policy.Refresh fast paths).
+func (d *DB) PolicyEpoch() uint64 {
+	if d == nil {
+		return 0
+	}
+	return d.policyEpoch.Load()
+}
+
+// BumpPolicyEpoch increments the policy epoch counter.
+func (d *DB) BumpPolicyEpoch() {
+	if d != nil {
+		d.policyEpoch.Add(1)
+	}
+}
+
+// CheckOpen fails closed if the underlying SQLite handle has been closed.
+func (d *DB) CheckOpen() error {
+	if d == nil || d.sql == nil || d.closed.Load() {
+		return errors.New("store: database is closed")
+	}
+	return nil
+}
+
+// Open initializes (or opens in-memory if path == ":memory:") the Nektar SQLite store
+// with a single serialized WAL writer connection plus a 4-connection read-only WAL reader pool.
 func Open(path string) (*DB, error) {
 	if path == "" {
 		path = ":memory:"
@@ -116,15 +146,19 @@ func Open(path string) (*DB, error) {
 			return nil, fmt.Errorf("store: mkdir: %w", err)
 		}
 	}
-	dsn := path
+	dsn := ":memory:?_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)&_pragma=cache_size(-32000)"
 	if path != ":memory:" {
-		dsn = path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
+		dsn = fmt.Sprintf(
+			"file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=cache_size(-64000)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(268435456)&_pragma=wal_autocheckpoint(4000)&_pragma=journal_size_limit(67108864)",
+			filepath.ToSlash(path),
+		)
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open: %w", err)
 	}
 	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	_, _ = db.Exec(`PRAGMA busy_timeout = 5000`)
 	d := &DB{sql: db, path: path}
 	if err := d.migrate(); err != nil {
@@ -135,11 +169,42 @@ func Open(path string) (*DB, error) {
 		_ = os.Chmod(path, 0o600)
 		_ = os.Chmod(path+"-wal", 0o600)
 		_ = os.Chmod(path+"-shm", 0o600)
+		roDSN := fmt.Sprintf(
+			"file:%s?mode=ro&_pragma=query_only(ON)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)&_pragma=cache_size(-32000)&_pragma=mmap_size(268435456)",
+			filepath.ToSlash(path),
+		)
+		if rdb, rErr := sql.Open("sqlite", roDSN); rErr == nil {
+			rdb.SetMaxOpenConns(16)
+			rdb.SetMaxIdleConns(16)
+			if rdb.Ping() == nil {
+				d.readSQL = rdb
+			} else {
+				_ = rdb.Close()
+			}
+		}
 	}
 	return d, nil
 }
 
-func (d *DB) Close() error { return d.sql.Close() }
+func (d *DB) Close() error {
+	d.closed.Store(true)
+	if d.readSQL != nil && d.readSQL != d.sql {
+		_ = d.readSQL.Close()
+	}
+	if d.path != ":memory:" && d.sql != nil {
+		_, _ = d.sql.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	}
+	return d.sql.Close()
+}
+
+// rdb returns a lock-free WAL reader pool handle on disk DBs, or falls back to d.sql under d.mu for :memory:.
+func (d *DB) rdb() (*sql.DB, func()) {
+	if d.readSQL != nil {
+		return d.readSQL, func() {}
+	}
+	d.mu.Lock()
+	return d.sql, d.mu.Unlock
+}
 
 // Conn returns the underlying *sql.DB handle (for diagnostics and tamper-detection tests).
 func (d *DB) Conn() *sql.DB { return d.sql }
@@ -173,6 +238,7 @@ CREATE TABLE IF NOT EXISTS fragments (
 	content_sha256 TEXT NOT NULL DEFAULT '',
 	mpe_root       TEXT NOT NULL DEFAULT '',
 	commit_hash    TEXT NOT NULL DEFAULT '',
+	blob_hash      TEXT NOT NULL DEFAULT '',
 	created_at     INTEGER NOT NULL,
 	PRIMARY KEY (shard, seq),
 	UNIQUE (shard, hdp)
@@ -242,6 +308,9 @@ CREATE TABLE IF NOT EXISTS kv (
 	if err := d.ensureCoreColumns(); err != nil {
 		return err
 	}
+	if _, err := d.sql.Exec(`CREATE INDEX IF NOT EXISTS idx_fragments_blob_hash ON fragments(blob_hash)`); err != nil {
+		return fmt.Errorf("store: ensure idx_fragments_blob_hash: %w", err)
+	}
 	// Clean up any orphaned FTS5 rows belonging to forgotten fragments (crash recovery for shredded records).
 	if _, err := d.sql.Exec(`
 		DELETE FROM fragments_fts
@@ -288,6 +357,7 @@ func (d *DB) ensureCoreColumns() error {
 		{"fragments", "content_sha256", "TEXT NOT NULL DEFAULT ''"},
 		{"fragments", "mpe_root", "TEXT NOT NULL DEFAULT ''"},
 		{"fragments", "commit_hash", "TEXT NOT NULL DEFAULT ''"},
+		{"fragments", "blob_hash", "TEXT NOT NULL DEFAULT ''"},
 		{"anchors", "beef", "BLOB"},
 		{"anchors", "settled", "INTEGER NOT NULL DEFAULT 0"},
 		{"anchors", "block_height", "INTEGER NOT NULL DEFAULT 0"},
@@ -349,15 +419,18 @@ func (d *DB) SetJSON(key string, v any) error {
 		return err
 	}
 	_, err = d.sql.Exec(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`, key, b)
+	if err == nil && (key == "market_kill_switch" || strings.HasPrefix(key, "market_daily_spend:") || strings.HasPrefix(key, "hub_fee_daily_spend:")) {
+		d.policyEpoch.Add(1)
+	}
 	return err
 }
 
 // GetJSON loads JSON state stored under key.
 func (d *DB) GetJSON(key string, out any) (bool, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	rdb, release := d.rdb()
+	defer release()
 	var raw []byte
-	err := d.sql.QueryRow(`SELECT value FROM kv WHERE key = ?`, key).Scan(&raw)
+	err := rdb.QueryRow(`SELECT value FROM kv WHERE key = ?`, key).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -365,6 +438,17 @@ func (d *DB) GetJSON(key string, out any) (bool, error) {
 		return false, err
 	}
 	return true, json.Unmarshal(raw, out)
+}
+
+// DeleteKV removes a key from the kv table.
+func (d *DB) DeleteKV(key string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.sql.Exec(`DELETE FROM kv WHERE key = ?`, key)
+	if err == nil && (key == "market_kill_switch" || strings.HasPrefix(key, "market_daily_spend:") || strings.HasPrefix(key, "hub_fee_daily_spend:")) {
+		d.policyEpoch.Add(1)
+	}
+	return err
 }
 
 type scanner interface{ Scan(dest ...any) error }

@@ -43,16 +43,16 @@ func TestNMUWireValidationAndLookup(t *testing.T) {
 		Exp:               now.Add(time.Hour).UnixMilli(),
 	}
 	wSig, _ := SignArtifact(priv, want)
-	wBody, _ := json.Marshal(SignedWant{Want: want, Sig: wSig})
-	if err := ValidateMarketPayload(MarketPayload{Kind: KindWant, Body: wBody}, "testnet", LaneOf("testnet", "ops"), now); err != nil {
+	wPayload, _ := NewWantPayload(SignedWant{Want: want, Sig: wSig})
+	if err := ValidateMarketPayload(wPayload, "testnet", LaneOf("testnet", "ops"), now); err != nil {
 		t.Fatalf("valid NMU want rejected: %v", err)
 	}
 
 	badWant := want
 	badWant.MinGrade = "Z"
 	bwSig, _ := SignArtifact(priv, badWant)
-	bwBody, _ := json.Marshal(SignedWant{Want: badWant, Sig: bwSig})
-	if err := ValidateMarketPayload(MarketPayload{Kind: KindWant, Body: bwBody}, "testnet", LaneOf("testnet", "ops"), now); err == nil {
+	bwPayload, _ := NewWantPayload(SignedWant{Want: badWant, Sig: bwSig})
+	if err := ValidateMarketPayload(bwPayload, "testnet", LaneOf("testnet", "ops"), now); err == nil {
 		t.Fatal("expected invalid minGrade to fail validation")
 	}
 
@@ -80,16 +80,16 @@ func TestNMUWireValidationAndLookup(t *testing.T) {
 		Exp:            now.Add(time.Hour).UnixMilli(),
 	}
 	oSig, _ := SignArtifact(priv, offerA)
-	oBody, _ := json.Marshal(SignedOffer{Offer: offerA, Sig: oSig})
-	if err := ValidateMarketPayload(MarketPayload{Kind: KindOffer, Body: oBody}, "testnet", LaneOf("testnet", "ops"), now); err != nil {
+	oPayload, _ := NewOfferPayload(SignedOffer{Offer: offerA, Sig: oSig})
+	if err := ValidateMarketPayload(oPayload, "testnet", LaneOf("testnet", "ops"), now); err != nil {
 		t.Fatalf("valid Grade A offer rejected: %v", err)
 	}
 
 	tamperedOffer := offerA
 	tamperedOffer.SatsPer1kUnits = 100 // spoofed
 	tSig, _ := SignArtifact(priv, tamperedOffer)
-	tBody, _ := json.Marshal(SignedOffer{Offer: tamperedOffer, Sig: tSig})
-	if err := ValidateMarketPayload(MarketPayload{Kind: KindOffer, Body: tBody}, "testnet", LaneOf("testnet", "ops"), now); err == nil {
+	tPayload, _ := NewOfferPayload(SignedOffer{Offer: tamperedOffer, Sig: tSig})
+	if err := ValidateMarketPayload(tPayload, "testnet", LaneOf("testnet", "ops"), now); err == nil {
 		t.Fatal("expected spoofed satsPer1kUnits offer to fail validation")
 	}
 
@@ -97,8 +97,8 @@ func TestNMUWireValidationAndLookup(t *testing.T) {
 	deadGradeS.Grade = "S"
 	deadGradeS.FeedURL = ""
 	dsSig, _ := SignArtifact(priv, deadGradeS)
-	dsBody, _ := json.Marshal(SignedOffer{Offer: deadGradeS, Sig: dsSig})
-	if err := ValidateMarketPayload(MarketPayload{Kind: KindOffer, Body: dsBody}, "testnet", LaneOf("testnet", "ops"), now); err == nil {
+	dsPayload, _ := NewOfferPayload(SignedOffer{Offer: deadGradeS, Sig: dsSig})
+	if err := ValidateMarketPayload(dsPayload, "testnet", LaneOf("testnet", "ops"), now); err == nil {
 		t.Fatal("expected Grade S without feedUrl to fail validation")
 	}
 
@@ -111,7 +111,7 @@ func TestNMUWireValidationAndLookup(t *testing.T) {
 	offerC.SatsPer1kUnits = nmu.ComputeSatsPer1kUnits(40, 1) // 40000
 	offerC.UsageRights = "inference_only"
 	ocSig, _ := SignArtifact(priv, offerC)
-	ocBody, _ := json.Marshal(SignedOffer{Offer: offerC, Sig: ocSig})
+	ocPayload, _ := NewOfferPayload(SignedOffer{Offer: offerC, Sig: ocSig})
 
 	ann := AnnounceAd{
 		Pub:   pubHex,
@@ -138,14 +138,14 @@ func TestNMUWireValidationAndLookup(t *testing.T) {
 		Exp: now.Add(time.Hour).UnixMilli(),
 	}
 	aSig, _ := SignArtifact(priv, ann)
-	aBody, _ := json.Marshal(SignedAnnounce{Announce: ann, Sig: aSig})
-	if err := ValidateMarketPayload(MarketPayload{Kind: KindAnnounce, Body: aBody}, "testnet", LaneOf("testnet", DirDomain), now); err != nil {
+	aPayload, _ := NewAnnouncePayload(SignedAnnounce{Announce: ann, Sig: aSig})
+	if err := ValidateMarketPayload(aPayload, "testnet", LaneOf("testnet", DirDomain), now); err != nil {
 		t.Fatalf("valid multi-mode Grade S announce rejected: %v", err)
 	}
 
-	oWireA, _ := EncodePayload(MarketPayload{Kind: KindOffer, Body: oBody})
-	oWireC, _ := EncodePayload(MarketPayload{Kind: KindOffer, Body: ocBody})
-	aWire, _ := EncodePayload(MarketPayload{Kind: KindAnnounce, Body: aBody})
+	oWireA, _ := EncodePayload(oPayload)
+	oWireC, _ := EncodePayload(ocPayload)
+	aWire, _ := EncodePayload(aPayload)
 
 	ls := NewMarketLookupService(nil, nil)
 	makeLock := func(payload []byte) *script.Script {

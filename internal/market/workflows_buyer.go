@@ -1,30 +1,34 @@
 package market
 
 import (
-	"fmt"
+	"encoding/json"
 	"strings"
 	"time"
 
-	restate "github.com/restatedev/sdk-go"
+	"github.com/cschleiden/go-workflows/workflow"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
-func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput) (DealState, error) {
-	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
-		return DealState{}, err
-	}
-	dealID := restate.Key(ctx)
+// BuyerDealWorkflow orchestrates a complete buyer knowledge acquisition saga on pure-Go go-workflows:
+//  1. DB-authoritative operator policy & bounded approval override check (RCA-3 / STATE-7)
+//  2. Durable signal-based operator approval gate (zero HTTP awakeables)
+//  3. Offer collection + deterministic multi-hub fan-out + optional StandingOrder handoff
+//  4. 6D reputation ranking + optional Jev semantic match & escalation gate
+//  5. Atomic SQLite Custody spend reservation with Top-K pre-broadcast seller failover
+//  6. Separated on-chain payment broadcast (STATE-2 pre-broadcast obligation) & idempotent purchase delivery (RT-3 / STATE-1)
+//  7. Bounded claim signal wait -> zero-trust BRC-369 + SPV verification -> atomic settlement (RCA-2 / ARCH-F12)
+func BuyerDealWorkflow(ctx workflow.Context, in BuyerDealInput) (DealState, error) {
+	var acts *workflowActivities
+	dealID := workflow.WorkflowInstance(ctx).InstanceID
 	want := in.Want
 	if want.WantID == "" {
 		want.WantID = dealID
 	}
 
-	// Step 1: Journal policy & kill-switch evaluation inside restate.Run (zero non-determinism on replay).
-	eval, err := restate.Run(ctx, func(_ restate.RunContext) (buyerPolicyEval, error) {
-		return e.buyerEvalPolicy(dealID, want, in.ApprovedOverrideID)
-	}, restate.WithName("buyer_policy_eval"))
+	// Step 1: Evaluate DB-authoritative policy & bounded override.
+	eval, err := workflow.ExecuteActivity[buyerPolicyEval](ctx, dealActivityOpts(), acts.BuyerEvalPolicy, dealID, want, in.ApprovedOverrideID).Get(ctx)
 	if err != nil {
 		return DealState{}, err
 	}
@@ -33,53 +37,41 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 	if eval.KillSwitch {
 		st.Status = "failed"
 		st.Error = "market: operator kill switch is engaged"
-		restate.Set(ctx, "state", st)
 		return st, nil
 	}
-	restate.Set(ctx, "state", st)
 
-	bypassPolicy := eval.BypassPolicy
+	approvedCapSats := eval.ApprovedCapSats
+	bypassDomainRole := eval.BypassPolicy
 
-	// Step 2: Real Restate Awakeable Approval Gate — resumes THIS exact wantID on operator approve/deny!
+	// Step 2: Durable SignalChannel Policy Approval Gate.
 	if eval.NeedsApproval {
-		approved, aErr := e.buyerAwaitPolicyApproval(ctx, dealID, want, eval.ApprovalReason, in.ApprovalTimeout, &st)
+		approved, aErr := buyerAwaitApprovalSignal(ctx, dealID, "pol", want, nil, eval.ApprovalReason, want.MaxSats, in.ApprovalTimeout, &st)
 		if aErr != nil {
 			return st, aErr
 		}
 		if !approved {
 			return st, nil
 		}
-		bypassPolicy = true
+		bypassDomainRole = true
+		approvedCapSats = want.MaxSats
 	}
 
-	// Step 3a: Collect & cryptographically verify offers inside restate.Run (isolated from AI retries).
-	collectRes, err := restate.Run(ctx, func(rctx restate.RunContext) (buyerCollectResult, error) {
-		return e.buyerCollectOffers(rctx, dealID, want, in)
-	}, restate.WithName("buyer_collect_offers"))
+	// Step 3a: Collect & cryptographically verify offers.
+	collectRes, err := workflow.ExecuteActivity[buyerCollectResult](ctx, dealActivityOpts(), acts.BuyerCollectOffers, dealID, want, in).Get(ctx)
 	if err != nil {
 		return st, err
 	}
-	// Parallel Multi-Hub Fan-Out (restate.RunAsync + restate.WaitIter): if initial collect found no offers
-	// and multiple active hubs were journaled inside buyer_collect_offers, query every hub in parallel deterministically!
 	if collectRes.NoOffers && len(in.Offers) == 0 && len(collectRes.ActiveHosts) > 1 {
-		if br := e.getBroker(); br != nil {
-			if extra := e.buyerLookupMultiHubParallel(ctx, br, collectRes.ActiveHosts, dealID, want); len(extra) > 0 {
-				collectRes.Offers = extra
-				collectRes.NoOffers = false
-				collectRes.Error = ""
-			}
+		if extra := buyerLookupMultiHubParallelWF(ctx, collectRes.ActiveHosts, dealID, want); len(extra) > 0 {
+			collectRes.Offers = extra
+			collectRes.NoOffers = false
+			collectRes.Error = ""
 		}
 	}
 	if collectRes.NoOffers {
-		// Optional durable StandingOrder fallback: if caller requested StandingTTL > 0, hand off to a
-		// 0%-CPU StandingOrder workflow that wakes via restate.Signal whenever a matching OfferAd arrives!
 		if in.StandingTTL > 0 {
 			orderID := "so-" + dealID
-			var sendOpts []restate.SendOption
-			if hdrs := e.internalCallHeaders(); hdrs != nil {
-				sendOpts = append(sendOpts, restate.WithHeaders(hdrs))
-			}
-			restate.WorkflowSend(ctx, "StandingOrder", orderID, "run").Send(StandingOrderInput{
+			soIn := StandingOrderInput{
 				OrderID:           orderID,
 				Domains:           want.Domains,
 				Query:             want.Query,
@@ -94,33 +86,28 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 				TTL:               in.StandingTTL,
 				WaitTimeout:       in.WaitTimeout,
 				ApprovalTimeout:   in.ApprovalTimeout,
-			}, sendOpts...)
+			}
+			_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.BuyerSpawnStandingOrder, orderID, soIn).Get(ctx)
 			st.Status = "watching"
 			st.StandingOrderID = orderID
 			st.Error = ""
-			st.UpdatedAt = collectRes.NowUnix
-			restate.Set(ctx, "state", st)
+			st.UpdatedAt = workflow.Now(ctx).Unix()
 			return st, nil
 		}
 		st.Status = "expired"
 		st.Error = collectRes.Error
 		st.UpdatedAt = collectRes.NowUnix
-		restate.Set(ctx, "state", st)
 		return st, nil
 	}
 	if collectRes.PolicyRejected || len(collectRes.Offers) == 0 {
 		st.Status = "failed"
 		st.Error = collectRes.Error
 		st.UpdatedAt = collectRes.NowUnix
-		restate.Set(ctx, "state", st)
 		return st, nil
 	}
 
-	// Step 3b: Deterministic base ranking + optional Jev System One semantic match inside its own
-	// restate.Run step so journal replays never re-call Jev (0x RT0016) and retries never re-broadcast WantAd.
-	rankedRes, err := restate.Run(ctx, func(rctx restate.RunContext) (buyerRankResult, error) {
-		return e.buyerRankAndMatch(rctx, dealID, want, collectRes, bypassPolicy)
-	}, restate.WithName("buyer_jev_match"))
+	// Step 3b: Deterministic 6D ranking + optional Jev semantic match.
+	rankedRes, err := workflow.ExecuteActivity[buyerRankResult](ctx, dealActivityOpts(), acts.BuyerRankAndMatch, dealID, want, collectRes, bypassDomainRole, approvedCapSats).Get(ctx)
 	if err != nil {
 		return st, err
 	}
@@ -128,7 +115,6 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 		st.Status = "expired"
 		st.Error = rankedRes.Error
 		st.UpdatedAt = rankedRes.NowUnix
-		restate.Set(ctx, "state", st)
 		return st, nil
 	}
 	if rankedRes.PolicyRejected || rankedRes.Chosen == nil {
@@ -136,7 +122,6 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 		st.MatchAudit = rankedRes.MatchAudit
 		st.Error = rankedRes.Error
 		st.UpdatedAt = rankedRes.NowUnix
-		restate.Set(ctx, "state", st)
 		return st, nil
 	}
 
@@ -144,16 +129,14 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 	if len(candidates) == 0 {
 		candidates = []bstack.OfferAd{*rankedRes.Chosen}
 	}
-
 	chosen := candidates[0]
 	st.ChosenOffer = &chosen
 	st.MatchAudit = rankedRes.MatchAudit
 	st.ChirpURL = chosen.ChirpURL
 
-	// Step 3c: Post-match Restate Awakeable Escalation when Jev flags borderline confidence or semantic risk.
-	// Note: Approving this semantic escalation does NOT set bypassPolicy=true; Custody/global still enforces hard caps!
+	// Step 3c: Post-match semantic escalation gate (does NOT grant cap bypass!).
 	if rankedRes.NeedsEscalation {
-		approved, eErr := e.buyerAwaitMatchEscalation(ctx, dealID, chosen, rankedRes.EscalationReason, in.ApprovalTimeout, &st)
+		approved, eErr := buyerAwaitApprovalSignal(ctx, dealID, "esc", want, &chosen, rankedRes.EscalationReason, chosen.PriceSats, in.ApprovalTimeout, &st)
 		if eErr != nil {
 			return st, eErr
 		}
@@ -165,12 +148,12 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 	st.Status = "offered"
 	st.Error = ""
 	st.UpdatedAt = rankedRes.NowUnix
-	restate.Set(ctx, "state", st)
 
-	// Steps 4-7 with deterministic Top-K Multi-Seller Failover:
-	// If Seller #1 fails pre-broadcast (e.g., invalid offer, unreachable, blocked seller, or unpaid verify),
-	// Custody is released cleanly and BuyerDeal automatically fails over to Seller #2/#3 without re-calling
-	// buyer_collect_offers or buyer_jev_match. Once an on-chain tx is broadcast, NEVER double-pay a second seller!
+	// Open durable "claim" signal channel BEFORE broadcasting payment so fast/in-process seller reveals
+	// arriving immediately after delivery are buffered cleanly with zero race window.
+	claimCh := workflow.NewSignalChannel[ClaimSignal](ctx, "claim")
+
+	// Steps 4-7 with deterministic Top-K Multi-Seller Failover (pre-broadcast only).
 	for idx, cand := range candidates {
 		attempt := idx + 1
 		hasNext := idx+1 < len(candidates)
@@ -178,24 +161,34 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 		chosenCopy := cand
 		st.ChosenOffer = &chosenCopy
 		st.ChirpURL = chosen.ChirpURL
-		st.ClaimPromise = claimPromiseName(attempt)
+		st.ClaimPromise = "claim"
 		if attempt > 1 {
 			st.Status = "offered"
 			st.Error = ""
-			restate.Set(ctx, "state", st)
+		}
+		if chosenRaw, mErr := json.Marshal(chosenCopy); mErr == nil {
+			_, _ = workflow.ExecuteActivity[int64](ctx, dealActivityOpts(), acts.PersistDealState, store.DealRecord{
+				DealID:          dealID,
+				Role:            "buyer",
+				Status:          "offered",
+				ChosenOfferJSON: chosenRaw,
+				CounterpartyPub: chosen.Pub,
+				PriceSats:       chosen.PriceSats,
+				ChirpURL:        chosen.ChirpURL,
+			}).Get(ctx)
 		}
 
-		// Step 4: Reserve spend atomically through the private global Custody Virtual Object!
+		// Step 4: Atomic SQLite Custody reservation (bounded by approvedCapSats per STATE-7).
 		if chosen.PriceSats > 0 {
-			res, cErr := restate.Object[CustodyReserveResult](ctx, "Custody", "global", "reserve").
-				Request(CustodyReserveInput{
-					OperationID:  dealID,
-					Attempt:      attempt,
-					SellerPub:    chosen.Pub,
-					Domains:      want.Domains,
-					AmountSats:   chosen.PriceSats,
-					BypassPolicy: bypassPolicy,
-				})
+			res, cErr := workflow.ExecuteActivity[CustodyReserveResult](ctx, dealActivityOpts(), acts.CustodyReserve, CustodyReserveInput{
+				OperationID:     dealID,
+				Attempt:         attempt,
+				SellerPub:       chosen.Pub,
+				Domains:         want.Domains,
+				AmountSats:      chosen.PriceSats,
+				BypassPolicy:    bypassDomainRole,
+				ApprovedCapSats: approvedCapSats,
+			}).Get(ctx)
 			if cErr != nil {
 				return st, cErr
 			}
@@ -203,129 +196,110 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 				if hasNext && !strings.Contains(strings.ToLower(res.Reason), "kill switch") {
 					continue
 				}
-				stepName := "buyer_custody_denied"
-				if attempt > 1 {
-					stepName = fmt.Sprintf("buyer_custody_denied_%d", attempt)
-				}
-				failNow, _ := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
-					now := time.Now().Unix()
-					e.persistDealRecord(store.DealRecord{
-						DealID: dealID,
-						Role:   "buyer",
-						Status: "failed",
-						Error:  "custody reservation denied: " + res.Reason,
-					})
-					return now, nil
-				}, restate.WithName(stepName))
+				failNow, _ := workflow.ExecuteActivity[int64](ctx, dealActivityOpts(), acts.PersistDealState, store.DealRecord{
+					DealID: dealID,
+					Role:   "buyer",
+					Status: "failed",
+					Error:  "custody reservation denied: " + res.Reason,
+				}).Get(ctx)
 				st.Status = "failed"
 				st.Error = "custody reservation denied: " + res.Reason
 				st.UpdatedAt = failNow
-				restate.Set(ctx, "state", st)
 				return st, nil
 			}
 		}
 
-		// Step 5: Live on-chain payment + purchase delivery (when Seller advertised a pay target).
+		// Step 5a & 5b: Separated Payment Broadcast (STATE-2) & Idempotent Purchase Delivery (RT-3 / STATE-1).
 		var immediateClaim *ClaimSignal
 		var awaitingConfirm bool
 		var requiredDepth int
 		if chosen.PayAddress != "" || chosen.PayIdentityKey != "" {
-			payStep := "buyer_pay_and_deliver"
-			if attempt > 1 {
-				payStep = fmt.Sprintf("buyer_pay_and_deliver_%d", attempt)
-			}
-			payRes, pErr := restate.Run(ctx, func(rctx restate.RunContext) (buyerPayResult, error) {
-				return e.buyerPayAndDeliver(rctx, dealID, chosen)
-			}, restate.WithName(payStep))
+			payRes, pErr := workflow.ExecuteActivity[buyerPayResult](ctx, dealActivityOpts(), acts.BuyerBroadcastPayment, dealID, chosen).Get(ctx)
 			if pErr != nil {
 				return st, pErr
 			}
 			if payRes.PreBroadcastErr != "" {
 				if chosen.PriceSats > 0 {
-					_, _ = restate.Object[bool](ctx, "Custody", "global", "release").
-						Request(CustodyReleaseInput{OperationID: dealID, Attempt: attempt})
+					_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.CustodyRelease, CustodyReleaseInput{
+						OperationID: dealID,
+						Attempt:     attempt,
+					}).Get(ctx)
 				}
 				if hasNext {
 					continue
 				}
-				failStep := "buyer_payment_failed"
-				if attempt > 1 {
-					failStep = fmt.Sprintf("buyer_payment_failed_%d", attempt)
-				}
-				failNow, _ := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
-					now := time.Now().Unix()
-					e.persistDealRecord(store.DealRecord{
-						DealID: dealID,
-						Role:   "buyer",
-						Status: "failed",
-						Error:  "payment failed: " + payRes.PreBroadcastErr,
-					})
-					return now, nil
-				}, restate.WithName(failStep))
+				failNow, _ := workflow.ExecuteActivity[int64](ctx, dealActivityOpts(), acts.PersistDealState, store.DealRecord{
+					DealID: dealID,
+					Role:   "buyer",
+					Status: "failed",
+					Error:  "payment failed: " + payRes.PreBroadcastErr,
+				}).Get(ctx)
 				st.Status = "failed"
 				st.Error = "payment failed: " + payRes.PreBroadcastErr
 				st.UpdatedAt = failNow
-				restate.Set(ctx, "state", st)
 				return st, nil
 			}
+
 			if payRes.TxID != "" {
 				st.PaymentTxID = payRes.TxID
 				st.Status = "paid_awaiting_reveal"
 				st.UpdatedAt = payRes.NowUnix
 				if payRes.EscrowTxID != "" {
 					st.EscrowTxID = payRes.EscrowTxID
-				}
-				restate.Set(ctx, "state", st)
-				restate.ObjectSend(ctx, "Tx", payRes.TxID, "emit").Send(
-					TxEventInput{Kind: "broadcast", Detail: "buyer-deal:" + dealID, ObservedAt: payRes.NowUnix},
-					restate.WithIdempotencyKey("tx:"+payRes.TxID+":broadcast:0"),
-				)
-				// Automatically arm durable EscrowGuardian so funds are guaranteed to auto-refund after RefundAfter!
-				if payRes.EscrowTxID != "" {
-					var gOpts []restate.SendOption
-					if hdrs := e.internalCallHeaders(); hdrs != nil {
-						gOpts = append(gOpts, restate.WithHeaders(hdrs))
-					}
-					restate.WorkflowSend(ctx, "EscrowGuardian", payRes.EscrowTxID, "run").Send(
-						EscrowGuardianInput{
-							DealID:      dealID,
-							EscrowTxID:  payRes.EscrowTxID,
-							RefundAfter: payRes.EscrowRefundAfter,
-						},
-						gOpts...,
-					)
+					_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.ArmEscrowGuardian, EscrowGuardianInput{
+						DealID:      dealID,
+						EscrowTxID:  payRes.EscrowTxID,
+						RefundAfter: payRes.EscrowRefundAfter,
+					}).Get(ctx)
 				}
 			}
-			if payRes.DeliveryErr != "" && payRes.ImmediateClaim == nil {
-				failNow, _ := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
-					now := time.Now().Unix()
-					if e.mem != nil && e.mem.DB() != nil {
-						_ = e.mem.DB().RecordReputation(chosen.Pub, false, 0)
-					}
-					e.persistDealRecord(store.DealRecord{
-						DealID: dealID,
-						Role:   "buyer",
-						Status: "failed",
-						Error:  "purchase delivery failed: " + payRes.DeliveryErr,
-					})
-					return now, nil
-				}, restate.WithName("buyer_delivery_failed"))
-				st.Status = "failed"
-				st.Error = "purchase delivery failed: " + payRes.DeliveryErr
-				st.UpdatedAt = failNow
-				restate.Set(ctx, "state", st)
-				return st, nil
+
+			// Step 5b: Deliver signed PurchaseRequest in its own retried activity (RT-3: never double-pays,
+			// and transient seller HTTP glitches retry cleanly without killing a broadcast payment!).
+			delivRes, dErr := workflow.ExecuteActivity[buyerDeliverResult](ctx, dealActivityOpts(), acts.BuyerDeliverPurchase, dealID, chosen, payRes).Get(ctx)
+			if dErr != nil || delivRes.DeliveryErr != "" {
+				errMsg := delivRes.DeliveryErr
+				if dErr != nil && errMsg == "" {
+					errMsg = dErr.Error()
+				}
+				// Even if direct HTTP delivery failed after retries, when an on-chain escrow was funded,
+				// EscrowGuardian is ALREADY armed to refund after RefundAfter — wait for claim or refund!
+				if st.EscrowTxID == "" {
+					failNow, _ := workflow.ExecuteActivity[int64](ctx, dealActivityOpts(), acts.BuyerRecordDeliveryFailure, dealID, chosen.Pub, errMsg).Get(ctx)
+					st.Status = "failed"
+					st.Error = "purchase delivery failed: " + errMsg
+					st.UpdatedAt = failNow
+					return st, nil
+				}
+			} else {
+				immediateClaim = delivRes.ImmediateClaim
+				awaitingConfirm = delivRes.AwaitingConfirmation
+				requiredDepth = delivRes.RequiredDepth
 			}
-			immediateClaim = payRes.ImmediateClaim
-			awaitingConfirm = payRes.AwaitingConfirmation
-			requiredDepth = payRes.RequiredDepth
 		}
 
-		// Step 6: Obtain ClaimSignal (either synchronously returned or via Restate durable Promise("claim")).
+		// Step 6: Obtain ClaimSignal (either synchronously returned or via durable SignalChannel("claim")).
 		var sig ClaimSignal
 		if immediateClaim != nil {
 			sig = *immediateClaim
 		} else {
+			if st.PaymentTxID == "" {
+				wantJSON, _ := workflow.ExecuteActivity[[]byte](ctx, singleAttemptActivityOpts(), acts.MarshalJSONValue, want).Get(ctx)
+				chosenJSON, _ := workflow.ExecuteActivity[[]byte](ctx, singleAttemptActivityOpts(), acts.MarshalJSONValue, chosen).Get(ctx)
+				offNow, _ := workflow.ExecuteActivity[int64](ctx, dealActivityOpts(), acts.PersistDealState, store.DealRecord{
+					DealID:          dealID,
+					Role:            "buyer",
+					Status:          "offered",
+					WantJSON:        wantJSON,
+					ChosenOfferJSON: chosenJSON,
+					CounterpartyPub: chosen.Pub,
+					ChirpURL:        chosen.ChirpURL,
+					PriceSats:       chosen.PriceSats,
+					Error:           "",
+				}).Get(ctx)
+				st.Status = "offered"
+				st.UpdatedAt = offNow
+			}
 			timeout := in.WaitTimeout
 			if timeout <= 0 {
 				timeout = 5 * time.Minute
@@ -341,91 +315,54 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 					timeout = minConfirmWait
 				}
 			}
-			claimName := claimPromiseName(attempt)
-			if st.ClaimPromise != claimName {
-				st.ClaimPromise = claimName
-				restate.Set(ctx, "state", st)
-			}
-			claimFut := restate.Promise[ClaimSignal](ctx, claimName)
-			sleepFut := restate.After(ctx, timeout)
-			winner, cancelErr := restate.WaitFirst(ctx, claimFut, sleepFut)
-			if cancelErr != nil {
-				return st, cancelErr
-			}
-			if winner == sleepFut {
-				// R13: explicitly reject promise on expiry so late deliverKey calls fail honestly!
-				_ = restate.Promise[ClaimSignal](ctx, claimName).Reject(restate.TerminalErrorf("deal %s expired waiting for seller key reveal", dealID))
-				expNow, _ := restate.Run(ctx, func(_ restate.RunContext) (int64, error) {
-					now := time.Now().Unix()
-					if st.PaymentTxID != "" && e.mem != nil && e.mem.DB() != nil {
-						_ = e.mem.DB().RecordReputation(chosen.Pub, false, 0)
+			tCtx, cancelTimer := workflow.WithCancel(ctx)
+			timerFut := workflow.ScheduleTimer(tCtx, timeout)
+			gotClaim := false
+			workflow.Select(ctx,
+				workflow.Receive(claimCh, func(_ workflow.Context, v ClaimSignal, ok bool) {
+					cancelTimer()
+					if ok {
+						sig = v
+						gotClaim = true
 					}
-					e.persistDealRecord(store.DealRecord{
-						DealID: dealID,
-						Role:   "buyer",
-						Status: "expired",
-						Error:  "timed out waiting for seller claim reveal",
-					})
-					return now, nil
-				}, restate.WithName("buyer_claim_expired"))
+				}),
+				workflow.Await(timerFut, func(_ workflow.Context, _ workflow.Future[any]) {
+				}),
+			)
+			cancelTimer()
+			if !gotClaim {
+				expNow, _ := workflow.ExecuteActivity[int64](ctx, dealActivityOpts(), acts.BuyerRecordClaimExpired, dealID, chosen.Pub, st.PaymentTxID != "").Get(ctx)
 				st.Status = "expired"
 				st.Error = "timed out waiting for seller claim reveal"
 				st.UpdatedAt = expNow
-				restate.Set(ctx, "state", st)
 				return st, nil
-			}
-			var cErr error
-			sig, cErr = claimFut.Result()
-			if cErr != nil {
-				return st, cErr
 			}
 		}
 
-		// Step 7: Zero-trust BRC-369 + CHIRP + offline SPV verification & tainted memory commit inside restate.Run.
-		verStep := "buyer_verify_and_commit"
-		if attempt > 1 {
-			verStep = fmt.Sprintf("buyer_verify_and_commit_%d", attempt)
-		}
-		verRes, err := restate.Run(ctx, func(rctx restate.RunContext) (buyerVerifyResult, error) {
-			return e.buyerVerifyAndCommit(rctx, dealID, want, in.TargetShard, chosen, st.PaymentTxID, st.MatchAudit, sig)
-		}, restate.WithName(verStep))
+		// Step 7: Zero-trust BRC-369 + CHIRP + offline SPV verification & tainted memory commit.
+		verRes, err := workflow.ExecuteActivity[buyerVerifyResult](ctx, dealActivityOpts(), acts.BuyerVerifyAndCommit, dealID, want, in.TargetShard, chosen, st.PaymentTxID, st.MatchAudit, sig).Get(ctx)
 		if err != nil {
 			return st, err
 		}
 		if verRes.FailedReason != "" {
 			if st.PaymentTxID == "" && hasNext {
 				if chosen.PriceSats > 0 {
-					_, _ = restate.Object[bool](ctx, "Custody", "global", "release").
-						Request(CustodyReleaseInput{OperationID: dealID, Attempt: attempt})
+					_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.CustodyRelease, CustodyReleaseInput{
+						OperationID: dealID,
+						Attempt:     attempt,
+					}).Get(ctx)
 				}
 				continue
 			}
-			_, _ = restate.Run(ctx, func(_ restate.RunContext) (bool, error) {
-				if e.mem != nil && e.mem.DB() != nil && chosen.Pub != "" {
-					_ = e.mem.DB().RecordReputation(chosen.Pub, false, 0)
-				}
-				e.persistDealRecord(store.DealRecord{
-					DealID: dealID,
-					Role:   "buyer",
-					Status: "failed",
-					Error:  verRes.FailedReason,
-				})
-				return true, nil
-			}, restate.WithName("buyer_record_verify_failure"))
+			_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.BuyerRecordVerifyFailure, dealID, chosen.Pub, verRes.FailedReason).Get(ctx)
 			st.Status = "failed"
 			st.Error = verRes.FailedReason
 			st.UpdatedAt = verRes.NowUnix
-			restate.Set(ctx, "state", st)
 			return st, nil
 		}
 
-		// Disarm EscrowGuardian cleanly once the deal settles!
 		if st.EscrowTxID != "" {
-			var gOpts []restate.SendOption
-			if hdrs := e.internalCallHeaders(); hdrs != nil {
-				gOpts = append(gOpts, restate.WithHeaders(hdrs))
-			}
-			restate.WorkflowSend(ctx, "EscrowGuardian", st.EscrowTxID, "markClaimed").Send(restate.Void{}, gOpts...)
+			_, _ = workflow.ExecuteActivity[bool](ctx, singleAttemptActivityOpts(), acts.DisarmEscrowGuardian, st.EscrowTxID).Get(ctx)
 		}
 
 		st.ClaimTxID = sig.ClaimTxID
@@ -435,29 +372,7 @@ func (e *Engine) restateBuyerRun(ctx restate.WorkflowContext, in BuyerDealInput)
 		st.Status = "settled"
 		st.Error = ""
 		st.UpdatedAt = verRes.NowUnix
-		restate.Set(ctx, "state", st)
 		return st, nil
 	}
 	return st, nil
-}
-
-func claimPromiseName(attempt int) string {
-	if attempt <= 1 {
-		return "claim"
-	}
-	return fmt.Sprintf("claim_%d", attempt)
-}
-
-func (e *Engine) restateBuyerDeliverKey(ctx restate.WorkflowSharedContext, sig ClaimSignal) (bool, error) {
-	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
-		return false, err
-	}
-	claimName := "claim"
-	if st, err := restate.Get[DealState](ctx, "state"); err == nil && st.ClaimPromise != "" {
-		claimName = st.ClaimPromise
-	}
-	if err := restate.Promise[ClaimSignal](ctx, claimName).Resolve(sig); err != nil {
-		return false, err
-	}
-	return true, nil
 }

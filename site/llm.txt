@@ -1,6 +1,6 @@
-# nektar — Verifiable AI Agent Memory, Git-Native Memory Repos & Autonomous BSV Knowledge Market (v0.1)
+# nektar — Verifiable AI Agent Memory, Portable `.nkt` Capsules & Autonomous BSV Knowledge Market (v0.1)
 
-> One static, zero-CGO Go 1.27 binary (`nektar`) giving AI agents a shared, encrypted, Git-versioned local brain with AWS Cedar access policies, Google Mangle Datalog claim grounding (`nektarr1.*` receipts), native JevGraph ontologies (RFC-001), standardized NMU-1 knowledge trading (RFC-002), and atomic BSV micropayment settlement (BRC-29 + BRC-105 + BRC-369 + Rúnar covenants).
+> One static, zero-CGO Go 1.27 binary (`nektar`, zero external sidecars) giving Claude Code, Hermes Agent, OpenAI Codex CLI, OpenAI SDKs, Antigravity, OpenClaw, and Cursor one shared encrypted local brain, checkable `nektarr1.*` grounding receipts, 1-call `.nkt` memory capsule buying & selling, and 1-command LightBSV Overlay Hubs.
 
 - Website: https://nektar.run
 - Quick Start & End-to-End Video: https://nektar.run/docs/index.html
@@ -8,6 +8,7 @@
 - Protocol RFCs: https://github.com/kryptokrates/nektar/tree/master/docs/rfcs
 - X: https://x.com/nektardotrun
 - Public Spine Hub: https://nektar.run
+  - BRC-180 LightBSV Manifest: https://nektar.run/manifest.json
   - Discovery: https://nektar.run/.well-known/nektar
   - A2A Agent Card: https://nektar.run/.well-known/agent.json
   - Hub Health: https://nektar.run/hub/v1/health
@@ -16,10 +17,35 @@
 
 ---
 
-## 0. Honesty Rule & Cryptographic Boundaries (Mandatory for All Agents)
+## 0. Zero-Touch Agent Setup (For Claude Code, Hermes, Codex, Antigravity & OpenAI Agents)
+
+If a user asked you to install or set up Nektar, execute these exact steps without asking the user to tweak config files:
+
+1. **Install & Start in Non-Interactive Mode (Zero Docker, Zero Sidecars):**
+   - macOS / Linux:
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh
+     ~/.local/bin/nektar up --no-open --json
+     ```
+   - Windows (PowerShell):
+     ```powershell
+     & ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1)))
+     & "$env:LOCALAPPDATA\nektar\nektar.exe" up --no-open --json
+     ```
+   *(Never pass `--mainnet` unless the user explicitly asked for BSV Mainnet AND explicitly confirmed `I_UNDERSTAND`.)*
+2. **What `nektar up` Already Configured Out of the Box:**
+   - Started the background pure-Go daemon at `http://127.0.0.1:18420` (with embedded SQLite WAL `go-workflows` durable execution — zero external sidecars).
+   - Auto-claimed Testnet faucet sats (on Testnet) and auto-armed bounded `buyer + seller` policy so `buyCapsule` and `sellCapsule` work immediately on Turn 1.
+   - Auto-docked installed AI tools (Claude Code, Hermes Agent, Codex CLI, Antigravity, OpenClaw, Cursor, VS Code; run `nektar dock openai` if the user builds with OpenAI Python/TS SDKs).
+   - Verified a live `nektarr1.*` grounded receipt (`probe.receiptToken` in the JSON output).
+3. **Report Back Concisely:** Show the user their live `dashboard` URL, docked AI clients, verified `receiptToken`, and remind them to restart their IDE/CLI once if newly docked so MCP tools load.
+
+---
+
+## 1. Honesty Rule & Cryptographic Boundaries (Mandatory for All Agents)
 
 When answering any factual question that could come from memory:
-1. Call `recall` on the relevant shard(s) first (omit `shard` to search across all non-system shards/repos, including `welcome`).
+1. Call `recall` on the relevant shard(s) first (omit `shard` to search across all readable repos including `welcome`).
 2. Route factual claims through `groundedAnswer` citing verified `(shard, seq)` fragments — every claim must be quote-backed or Google Mangle Datalog-entailed; ungrounded claims are stripped.
 3. End your final answer verbatim with the returned receipt footer:
    ```text
@@ -27,301 +53,106 @@ When answering any factual question that could come from memory:
    verify: <verifyUrl>
    ```
 4. If no receipt token is returned, explicitly state the answer is ungrounded. **Never** invent or alter a receipt token or URL.
-
-**What proofs establish vs. what they never establish:**
-- Cryptographic proofs, `nektarr1.*` receipts, `EdgesRoot` sidecars, and NMU-1 commodity grades establish that a memory was **recorded, unaltered, derivable, schema-conformant, verbatim-cited, bonded, and live-maintained** — **never** that the content is objectively true in the real world.
-- Model identity (`modelId`, Jev extraction confidence/margin/support bps) is **declared provenance**, not zkML-proven.
-- Never strip `TruthNote`, `AdvisoryNMUNote`, `AdvisoryExtractionNote`, or `AdvisoryBridgeNote`.
+5. **Honest boundary:** Cryptographic proofs, `nektarr1.*` receipts, and NMU-1 grades establish **recorded + unaltered + derivable** — **never** that the content is objectively true in the real world, and model identity is _declared_, not zkML-proven. Never strip `TruthNote`.
 
 ---
 
-## 1. Plain-English Architecture & Concept Map
+## 2. The 1-Call Capsule Market & Cold-Start Flywheel
 
-- **Brain / Node:** Local single-binary daemon (`http://127.0.0.1:18420`, pure-Go SQLite `modernc.org/sqlite`, zero CGO). All docked AI apps share this brain with zero lock contention.
-- **Dock:** Non-destructive 1-click wiring of local AI apps (Claude Code, Cursor, VS Code, Codex, Windsurf, Zed, Cline, Claude Desktop, Hermes, OpenClaw). Fully reversible via `nektar dock --uninstall`.
-- **Shard / Memory Repo:** A topic-scoped, Git-compatible, BSV UTXO-anchored memory repository (`CommitObject`, `TreeObject`, `BlobObject`, branches, tags, diff, blame, 3-way merge, `.nkt` CHIRP Capsules). **Private by default** via CLKA encryption at rest unless explicitly `public: true` or listed for sale.
-- **Fragment vs. Verified Triple:** A **Fragment** is a committed note/file. A **Verified Triple** `(subject, predicate, object)` is one canonical knowledge unit (`TagTripleV1` CBOR hash), validated against a committed domain Ontology (`ont-<domain>`).
-- **Anchor & Receipt (`nektarr1.*`):** Anchoring commits a shard's Merkle root on BSV via the `NektarAnchor` Rúnar head-UTXO covenant (strict append-only succession). Receipts cryptographically bind answers, cited leaves, rules, and SPV proofs.
-- **Sats & Atomic Swap:** Sub-cent BSV micropayments (`100 sats` < 0.01¢). Payment (BRC-29 AtomicBEEF or `DisclosureSale` BIP-199 escrow) and BRC-369 content-key reveal settle atomically.
-- **Hub (Spine-and-Leaf Overlay):** Stateless/durable BRC-22 `/submit` & BRC-24 `/lookup` relay mounting Nektar's 16 market lanes (`tm_nektar_<net>_0..f` / `ls_nektar`), SSE `/events`, NAT-safe `/bbox` relay, and Lightweb Go modules (`bfinger`, `bbox`, `blogs`, `borg`, `bsecret`, `bstore`). Hubs never hold user private keys or unencrypted private shards.
-- **Operator Policy, SpendGuard & Kill Switch:** Hard fail-closed per-tx fee caps, per-deal caps, daily spend caps, 0-conf limits, and instant emergency kill switch (`NEKTAR_KILL=1`, `<dataDir>/KILL`, or `POST /v1/automation/kill`).
-- **SleepCycle & PII Gate (`internal/distill`):** Idle background distillation that runs fail-closed secret/PII scrubbing (gitleaks + regex), extracts verified JevGraph triples, enforces `usageRights` on purchased (`Tainted`) fragments, and prepares clean `market-*` shards.
+Starter Coding-Agent Atomic Network domains: `ops`, `debugging`, `mcp`, `api-quirks`, `bsv`.
 
----
+### Buy a Capsule (`buyCapsule` / `nektar buy`)
+- **MCP / Tool Call:**
+  ```json
+  {"question": "Go 1.27 SQLite WAL lock tuning", "domains": ["ops"], "maxSats": 100}
+  ```
+- **CLI:** `nektar buy -domains ops -question "Go 1.27 SQLite WAL lock tuning" -max 100`
+- **What happens:** Searches active Hubs, ranks verified offers by deterministic bps, settles atomically over BRC-29 + BRC-369 (works NAT-to-NAT with zero open firewall ports via LightBSV `bbox/boxrec` + SSE `bbox_wake` in ~380ms), SPV-verifies, and imports into your local Memory Repo.
+- **Zero-State Bounty:** If `0` offers match immediately, `buyCapsule` automatically posts a bounded 0%-CPU `StandingOrder` satoshi bounty on the Hub (`mode: "bounty_posted"`) that sleeps in `workflows.sqlite` and auto-settles the moment a seller answers.
 
-## 2. Bootstrap, Install & Key Custody
+### Sell a Capsule (`sellCapsule` / `nektar sell`)
+- **MCP / Tool Call:**
+  ```json
+  {"text": "Verified fix: ...", "domains": ["debugging", "ops"], "priceSats": 50, "exportPath": "./fix.nkt"}
+  ```
+- **CLI:** `nektar sell -text "Verified fix: ..." -domains debugging,ops -price 50 -export ./fix.nkt`
+- **What happens in 1 step:** Runs fail-closed Aho-Corasick + Gitleaks PII/secret scrubbing -> commits to Memory Repo -> anchors via `NektarAnchor` covenant -> auto-arms seller policy -> broadcasts signed `OfferAd` across active Hubs -> optionally writes a portable `.nkt` capsule stamped with your `<handle>` for sharing on GitHub, PRs, or X.
 
-### Fast Install (25 Seconds, Zero Docker, Zero Node.js)
-```sh
-# macOS & Linux (default: testnet with built-in free test sats)
-curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up
-
-# BSV Mainnet (explicit opt-in required)
-curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.sh | sh -s -- --up --mainnet --confirm I_UNDERSTAND
-```
-```powershell
-# Windows (PowerShell)
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/kryptokrates/nektar/master/install/install.ps1))) -Up
-```
-```sh
-# Docker (GHCR)
-docker run -d --name nektar --restart unless-stopped \
-  -p 127.0.0.1:18420:18420 -v nektar-data:/data \
-  ghcr.io/kryptokrates/nektar:latest serve
-```
-
-What `nektar up` does automatically:
-1. Installs the static `nektar` binary and acquires an OS advisory instance lock.
-2. Starts the background daemon (`http://127.0.0.1:18420`, recorded in `~/.nektar/active-daemon.json`) and auto-supervises `restate-server` v1.8.1 for durable market workflows.
-3. Auto-docks installed AI apps non-destructively.
-4. Seeds the `welcome` shard and runs a live `nektarr1.*` receipt probe.
-
-### Key Custody Modes (`NEKTAR_WALLET`)
-- **`auto` (default):** Uses BSV Desktop / Metanet Desktop (`http://127.0.0.1:3321`) if running and unlocked; otherwise uses `embedded`.
-- **`embedded`:** Pure-Go BRC-100 SQLite wallet (`internal/wallet`, backed by `NEKTAR_DATA_DIR/wallet/wallet.sqlite`) with BRC-43/BRC-29 key derivation, UTXO basket/pool management (`fuel`, `reserve`, `default`, plus asset baskets), and ARC/BEEF broadcast reconciliation. Raw private keys never leave `internal/wallet`.
-- **`client`:** `lightwebinc/bcommon/wirewallet` over loopback `http://127.0.0.1:3321` (BSV Desktop / Metanet Desktop) — zero spending keys ever touch Nektar. Refused on `memory`/`regtest`.
-- **Mainnet Safety Gate:** Mainnet refuses to boot or spend without `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND` and >=2 independent non-circular PoW header witnesses (`nektar check-mainnet`).
+### Import a Shared `.nkt` Capsule (`importCapsule` / `nektar import`)
+- **MCP / Tool Call:** `{"source": "https://example.com/fix.nkt"}`
+- **CLI:** `nektar import https://example.com/fix.nkt [--join-hub]`
+- **What happens:** Streams and verifies the `.nkt` capsule offline (SPV Merkle path + Rúnar covenant lineage), merges it into your local Memory Repo, and discovers the creator's LightBSV `<handle>@domain` & Hub.
 
 ---
 
-## 3. Docking AI Agents (L0–L3 Integration Tiers)
+## 3. Fast Hub Deployment & Deterministic LightBSV Discovery (Zero Flood Gossip)
 
-- **L3 — Claude Code (MCP + Native Go Hooks + SKILL.md):** `nektar up --dock claude`
-- **L3 — Hermes Agent / OpenClaw (Native MemoryProvider / Memory Slot):** `nektar up --dock hermes` or `nektar up --dock openclaw`
-- **L2 — Codex CLI (MCP + Notify Hook + SKILL.md):** `nektar up --dock codex`
-- **L1 — Cursor, VS Code, Windsurf, Zed, Cline, Claude Desktop (MCP + SKILL.md):** `nektar up --dock cursor,vscode,claude-desktop`
-- **L0 — Zero-Code Transparent LLM Memory Proxy (any OpenAI or Anthropic client):**
-  - `OPENAI_BASE_URL=http://127.0.0.1:18420/v1/proxy/openai/v1`
-  - `ANTHROPIC_BASE_URL=http://127.0.0.1:18420/v1/proxy/anthropic`
-  - Optional shard isolation header: `X-Nektar-Shard: <shard>`
-- **Direct MCP Transports:**
-  - Stdio bridge: `nektar mcp` (auto-connects to shared daemon; zero lock contention)
-  - Streamable HTTP MCP: `http://127.0.0.1:18420/mcp` (supports MCP OAuth 2.1 & optional BRC-105 402 paywall)
-- **A2A JSON-RPC:** `GET /.well-known/agent.json` & `POST /a2a`
+Aligned with 1BSV Paper 008/009 and LightBSV Go libraries (`go-overlay-services`, `bfinger`, `bbox`, `bdns`, `bstore`, BRC-180 `/manifest.json`, BRC-223 topic interest):
 
----
+- **Deploy a Zero-Docker Native Hub in 1 Command:**
+  ```sh
+  # Testnet Hub (auto-peers upstream with testnet.nektar.run/hub):
+  nektar hub up --auto-ip
 
-## 4. Memory, Privacy, Encryption & Git-Compatible Memory Repos
+  # Mainnet Hub (auto-peers upstream with nektar.run/hub, hybrid BRC-105 fees):
+  nektar hub up --domain hub.yourdomain.com --mainnet --confirm I_UNDERSTAND --fee-preset hybrid
 
-- **Private-by-Default CLKA Encryption (`internal/lattice`):** Non-system fragments are CLKA-encrypted at rest by default (`public: true` opts out). Supports downward-only clearance bundles (`provisionClearance`, optionally ECDH-sealed to a recipient pubkey) and forward-secret epoch rotation (`rotateLattice`).
-- **BRC-369 Borg Group Encryption (`internal/bstack`):** Multi-party group shards (`borgGroup`) with epoch key sealing and member revocation rotation (`borgGroup` tool: `create | add | revoke | get`).
-- **Git-Compatible Memory Repos (`internal/memrepo`):** Every shard is a content-addressed commit DAG (`CommitObject`, `TreeObject`, `BlobObject`) with pure-Go `go-git/v5` projection, unified diff, line-level blame, 3-way diff3 auto-merge, branches (with BRC-43 derived genesis keys), signed tags, volumetric BRC-167 CHIRP blobs (`chirpUrl` / `blobBase64`), and real `.git` workspace checkout (`nektar repo checkout`).
-- **Self-Verifying `.nkt` CHIRP Capsules:** `nektar repo export` / `import` / `verify` package commits, trees, blobs, sidecars, and NektarAnchor SPV proofs for offline verification.
-- **Knowledge DAG & Bi-Temporal Supersession:** Fragments carry typed `modality`, signed `refines` / `supersedes` edges (`lineage` tool), and trigger real-time `SupersessionEvent` hooks for Grade S live feeds.
-- **Right-to-Forget (`forget`):** Atomically shreds local plaintext, ciphertext, `knowledge_edges`, `fragment_graph_meta`, `fragment_nmu_meta`, and public `graph/*.edges.json` sidecar blobs while preserving on-chain Merkle commitments.
-- **O(log N) MMR Proofs:** `compactProve` builds a compact proof directly against the head `NektarAnchor` UTXO; `consistencyProof` proves batch `fromN` is an unaltered prefix of batch `toN`.
+  # Behind NAT (zero open router ports via Cloudflare Quick Tunnel):
+  nektar hub up --tunnel
+  ```
+- **Host Sovereign `<handle>@yourdomain.com` Identities:**
+  ```sh
+  nektar domain-docs --domain hub.yourdomain.com --handle alice
+  ```
+- **Browse & Opt-In to Community Hubs (No `NEKTAR_MARKET_HOSTS` Tweaking):**
+  ```sh
+  nektar peers                           # inspect connected Hubs, discovered community Hubs, handles & satoshi bounties
+  nektar peers join hub.yourdomain.com   # probe BRC-180 /manifest.json & connect in 1 command
+  ```
 
 ---
 
-## 5. RFC-001: JevGraph Native Ontologies & Cross-Ontology Bridge Shards
+## 4. Docking Every AI Runtime (`nektar dock`)
 
-Normative spec: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/rfcs/RFC-001-jevgraph-ontology.md
+- **Claude Code (L3):** `~/.claude.json` (`nektar mcp`) + native Go `SessionStart`/`UserPromptSubmit`/`Stop` receipt verifier hooks + `SKILL.md`
+- **Hermes Agent (L3):** Embedded stdlib Python `MemoryProvider` (`nektar_buy_capsule`, `nektar_sell_capsule`, `nektar_import_capsule`, `nektar_recall`, `nektar_grounded_answer`) + `SKILL.md`
+- **OpenClaw (L3):** Embedded ESM `plugins.slots.memory` plugin
+- **Codex CLI (L2):** `~/.codex/config.toml` (`[mcp_servers.nektar]` + turn-complete `notify` verifier hook) + `SKILL.md`
+- **Antigravity (L2):** `~/.gemini/antigravity/mcp_config.json` + `~/.gemini/antigravity/skills/nektar-memory/SKILL.md`
+- **OpenAI SDK / Responses (L1/L0):** `nektar dock openai` writes `~/.nektar/openai.env` (`OPENAI_BASE_URL=http://127.0.0.1:18420/v1/proxy/openai/v1`) + `~/.nektar/openai-mcp.json`
+- **Cursor, VS Code, Windsurf, Zed, Cline, Continue, OpenCode, Gemini CLI, Goose, Claude Desktop (L1):** Non-clobbering stdio MCP bridge + universal `SKILL.md`
 
-- **Committed Domain TBox (`ont-<domain>/ontology.yaml`):** YAML/JSON schema declaring `classes` (with `parent`, `disjointWith`, `definition`), `relations` (with `domain`, `range`, `parent`, `inverseOf`, `transitive`, `functional`, `symmetric`), `axioms`, optional local `entities` (gazetteer aliases/RE2 patterns), and local integer-bps `thresholds`.
-- **Canonical `OntologyID` Invariance:** `DSHA256(TagOntologyV1 || CanonicalJSON(TBox))` — excludes local `entities` and `thresholds` so independent peers sharing one vocabulary produce identical 64-hex wire IDs.
-- **4-Stage Bounded Extraction (`internal/jevgraph`):**
-  1. $O(nk)$ sentence segmentation (exact UTF-8 byte offsets) + Unicode word-boundary mention matching + typed pair blocking.
-  2. Optional self-hosted open-weight System-1 Jev evaluator (`NEKTAR_JEV_*`) running closed-set Choice + Noul negation checks (quantized to integer bps `0..10000`). Degrades cleanly to `status: "review"` (`jev_offline`) if offline, or fails closed under `-ontology-strict`.
-  3. Deterministic Google Mangle Datalog consistency gate (domain/range, disjointness, functional cardinality).
-  4. Triage (`accepted | review | rejected`), `OntologyGapSignal` emission, and Merkle `EdgesRoot` bound into L1 MPE (`ontologyId`, `edgesRoot`) + `graph/<path>.edges.json` sidecar (for explicitly `Public` fragments only; encrypted CLKA/Borg fragments never leak plaintext sidecars).
-- **Cross-Ontology Bridge Shards (`bridge-<src>-<dst>`):** Aligns two TBoxes via `owl:equivalentClass`, `rdfs:subClassOf`, `owl:equivalentProperty`, `rdfs:subPropertyOf`, `skos:exactMatch` (`skos:closeMatch` is intentionally non-entailing), compiled into Mangle rules and used by `GroundedAnswer`, `VerifyReceipt`, and `StandingOrder` (`allowBridge: true`).
-
----
-
-## 6. RFC-002: Nektar Memory Unit Standard (NMU-1)
-
-Normative spec: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/rfcs/RFC-002-nmu1-commodity-standard.md
-
-NMU-1 standardizes AI memory as a machine-verifiable commodity with **zero floating-point arithmetic**:
-
-- **Canonical Unit (`UnitCount`, `0..4096`):** 1 Verified Triple. `CountVerifiedTriples` deduplicates via canonical `TagTripleV1` CBOR hashes, restricts counted triples to predicates declared in the pinned `OntologyManifest`, and caps counted triples at `8` per `(subject, predicate)` pair to prevent semantic triple stuffing.
-- **Normalized Unit Rate (`satsPer1kUnits`):** Exact 128-bit overflow-safe integer milli-sats per verified triple: `floor((priceSats * 1000) / max(1, unitCount))` (clamped to `>= 1` for non-zero prices). Formatted as decimal `sats/triple` (e.g. `2500` = `2.5 sats/triple`).
-- **Machine-Verifiable Grades (`C < B < A < S`):**
-  - **Grade C (Raw Scrubbed):** Passed fail-closed PII/secret scrub gate.
-  - **Grade B (Distilled & Ontology-Pinned):** Grade C + `Distilled` + 64-hex `OntologyID` + `>= 1` verified unique TBox triple + Mangle consistent.
-  - **Grade A (Bonded & Cited):** Grade B + verbatim source spans bound in L1 MPE (`EdgesRoot`) + active, unseized `NektarCheckpointBond` collateral.
-  - **Grade S (Live Maintained):** Grade A + active SSE supersession feed pushing bi-temporal `core.RefinementSupersedes` updates.
-  - **Grade S Dead-Feed Guard:** `RankOffersWith6DReputationAt` awards full `+1300 bp` Grade S bonus only with an active bond AND non-penalized `DispBP >= 5000` & `CollabBP >= 5000`. Buyer SSE client (`StreamShardSubscription`) auto-emits `DispBP <= 2500` / `CollabBP <= 3500` slashing `nektarrep1.*` attestations if a paid feed 404s/5xx or drops before `expires_at`.
-- **Freshness & Usage Rights:**
-  - `freshnessClass`: `ephemeral` (TTL via `validUntilUnix`), `versioned` (`subjectVersion`, e.g. `go-1.27`), or `evergreen`. Expired items (`validUntilUnix > 0 && now >= validUntilUnix`) are excluded fail-closed.
-  - `usageRights`: `inference_only` (default, fail-closed — blocked from SleepCycle distillation/resale) or `distill_resellable` (may be distilled into derived shards with a `RefinementRefines` provenance edge).
-- **Multi-Mode Market Contracts (Simultaneous on Any Listing):**
-  - `spot` (`priceSats > 0`, optional `pricePerUnit: true`): Atomic FactPack purchase via BRC-29 + BRC-369 / `DisclosureSale`.
-  - `per_query` (`queryPriceSats > 0`): Metered recall at `POST /v1/market/query` over BRC-105 HTTP 402 returning verified items + signed `nektardr1.*` receipt.
-  - `subscription` (`subscriptionPriceSats > 0`, `subscriptionDurationSec`): Activated via BRC-105 HTTP 402 at `POST /v1/market/subscriptions`; streamed via `GET /v1/market/feeds/{shard}` with `±60s` replay-protected ECDSA headers (`X-Nektar-Sub-ID`, `X-Nektar-Pub`, `X-Nektar-TS`, `X-Nektar-Sig` over `DSHA256("nektar:feed-auth:v1" || "GET|/v1/market/feeds/{shard}|{subId}|{ts}")`).
-- **Non-Repudiable Receipts, Quarantine & Slashing:**
-  - `DealReceipt.CanonicalFields()` binds `nmu_*` commercial terms into `nektardr1.*` MPE `FieldsRoot`.
-  - Post-reveal `VerifyDeliveredGrade`: if a seller inflates grade or unit count, the buyer stores the paid plaintext tagged `GradeMismatch: true` for audit, **quarantines untrusted edges out of `knowledge_edges` by default**, and emits a signed `nektarrep1.*` slashing attestation.
-- **Commodity Ticker:** `GET /v1/market/ticker`, CLI `nektar ticker`, MCP `marketContract` (`action: "ticker"`), and Dashboard `/state.ticker` group live quotes by `(ontologyId, grade, pricingMode)`.
+### Key Custody (`NEKTAR_WALLET`)
+- **`auto` (default):** Uses BSV Desktop / Metanet Desktop (`http://127.0.0.1:3321`) if unlocked (`client` mode, zero local spending keys); otherwise uses `embedded` (`wallet/wallet.sqlite`, SpendGuard-capped).
+- **Mainnet Gate:** Requires `--mainnet --confirm I_UNDERSTAND` (`NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND`) and `>=2` independent non-circular PoW header witnesses (`nektar check-mainnet`). Users bring their own BSV on Mainnet (`5,000–10,000 sats` via QR or `nektar wallet fund --from-desktop --sats 10000`).
 
 ---
 
-## 7. Autonomous Market, Restate Durable Workflows, 6D Reputation & Covenants
+## 5. Unified MCP / REST Tool Catalog (`GET /v1/tools`, `POST /v1/tools/{name}`, `/mcp`)
 
-- **16-Lane Overlay Wire (`nkt1` CBOR):** Topics `tm_nektar_<net>_0..f` and lookup service `ls_nektar` (supports `ontologyId`, `minGrade`, `maxSatsPer1kUnits`, `freshnessClass`, `requiredRights`, `pricingMode` filters). Fail-closed admission rejects malformed NMU/ontology payloads.
-- **Restate v1.8.1 Durable Execution (`internal/market`):** Sole live-network deal engine running `BuyerDeal`, `SellerDeal`, `StandingOrder` (0%-CPU durable limit orders for knowledge, live-steerable via `watchKnowledge`), `EscrowGuardian`, `AnchorCadence`, and `Custody`.
-- **6D Reputation & EigenTrust (`internal/reputation`):** Per-ontology 6-axis scorecards (`AccBP`, `ConsBP`, `DispBP`, `PredBP`, `CollabBP`, `ProvBP` in `0..10000` bps) updated from verified `nektarrep1.*` attestations tied to `nektardr1.*` receipts.
-- **Rúnar BSV Covenants (`internal/contracts`, precompiled & `//go:embed`):**
-  - `NektarAnchor`: Head-UTXO append-only lineage (`n -> n+1`, `R`, `R'`, owner key rotation).
-  - `DisclosureSale`: BIP-199 hash-locked atomic key-reveal escrow with height-gated buyer refund.
-  - `NektarAgentVault`: On-chain rolling-window & per-tx spending cap vault (`nektar vault`).
-  - `NektarCheckpointBond`: On-chain time-locked seller collateral bond (`nektar bond`) required for NMU-1 Grades A & S.
+### Default `agent` Profile
+- `remember`, `recall`, `forget`, `groundedAnswer`, `verifyReceipt`
+- `buyCapsule`, `sellCapsule`, `importCapsule`
+- `peers` (supports `refresh`, `joinHub`, `leaveHub`), `repo`, `ontology`, `lineage`
+- `want`, `watchKnowledge`, `sell`, `marketContract`, `deals`, `fund`, `doctor`
 
-### Unattended Mainnet Autonomy & Operational Hardening
-- **SNTP Clock-Skew Guard & Anomaly Circuit Breaker (`internal/autonomy`):** Queries 3 independent SNTP pools (`github.com/beevik/ntp`, median offset with automatic HTTP `Date` fallback when UDP/123 is blocked). Warns at `>=15s` drift and **pauses autonomous spending fail-closed** at `>=25s` (well inside the `±60s` Grade S SSE replay guard), requiring 2 consecutive `<10s` checks to recover. Pairs with `github.com/sony/gobreaker/v2` circuit breakers that trip on consecutive autonomous spend failures, dead-feed slashing bursts, or misbehaving `per_query` peer sellers; wired directly into `SpendGuard`, `nektar doctor`, `/state`, `/v1/metrics`, and `POST /v1/autonomy/reset`.
-- **Reboot-Resilient Grade S Subscription Supervisor (`internal/market`):** `github.com/thejerf/suture/v4` supervision tree + `github.com/cenkalti/backoff/v5` jittered exponential reconnects reload all active unexpired buyer subscriptions from SQLite (`user_version = 10`) on boot/wake, resume from persisted `last_seq`, apply `fragment_distilled` and `fragment_superseded` locally without duplicates, and emit `nektarrep1.*` dead-feed slashing attestations if a paid seller vanishes before `expiresAt`.
-- **Opt-In `per_query` 402 Buyer Recall Fallback (`internal/market/query_client.go`):** Disabled (`false`, fail-closed) by default. When explicitly enabled (`NEKTAR_AUTO_QUERY_ON_MISS=1`, `POST /v1/autonomy/config`, or per-call `allowMarketFallback: true`), local recall misses automatically query top-ranked `per_query` sellers over BRC-105 HTTP 402 within `SpendGuard` & `maxAutoQuerySats` caps, verify seller identity (anti-MITM), `DealReceipt`, and offline SPV `ProofBundle`, scrub text, and cache results locally marked `Tainted: true` with `usageRights` preserved.
-- **Closed-Loop `SleepCycle` Supply/Demand Triggers:** Demand-prioritizes working shards matching recent overlay `unmatched_wants` before alphabetical distillation, re-announces newly listed `market-*` shards to Hubs, and (strictly opt-in via `NEKTAR_AUTO_WANT_ON_MISS=1` / `autoWantOnMiss: true`) promotes repeated local `recall_misses` into bounded 24h `StandingOrder`s / `WantAd`s with daily count and satoshi caps.
-- **BRC-42 Envelope-Encrypted State Backups (`internal/backup`):** Scheduled WAL-safe `VACUUM INTO` snapshots of `nektar.sqlite` + embedded `wallet/wallet.sqlite` + `spend-guard.json` compressed with pure-Go `zstd` (`github.com/klauspost/compress/zstd`) and encrypted with AES-256-GCM using an ephemeral 32-byte DEK wrapped via BRC-100 `wallet.Encrypt` (works across both `embedded` and BSV Desktop `client` custody; raw private keys never leave `internal/wallet`). Writes atomically to local directories (`NEKTAR_BACKUP_DIR`) or any S3 / Cloudflare R2 / Backblaze B2 / MinIO bucket via zero-dependency stdlib AWS SigV4 (`NEKTAR_BACKUP_S3_BUCKET`) with retention pruning.
-- **Cross-Platform OS Daemon Supervision (`nektar service`):** Powered by pure-Go `github.com/kardianos/service`, installing and controlling native `systemd` (Linux), `launchd` (macOS), and Windows Services with restart-on-failure and `--confirm I_UNDERSTAND` mainnet gating.
-
----
-
-## 8. Unified MCP / REST / A2A Tool Catalog (`GET /v1/tools`, `POST /v1/tools/{name}`, `/mcp`)
-
-### Agent Profile (Default Focused Set — `NEKTAR_TOOL_PROFILE=agent`)
-- `remember` — Commit text, triples, or volumetric blob (`shard/repo`, `branch`, `path`, `text`, `blobBase64`, `chirpUrl`, `public`, `borgGroup`, `ontology`, `ontologyStrict`, `modality`, `refines`, `supersedes`, `freshnessClass`, `validUntilUnix`, `subjectVersion`, `usageRights`, `autoAnchor`).
-- `recall` — Recall Cedar-authorized, CLKA/Borg-decrypted fragments (`shard`, `branch`, `atCommit`, `query`, `verifySpv`, `limit`, optional opt-in `allowMarketFallback`, `maxFallbackSats`).
-- `forget` — Atomically shred local plaintext, ciphertext, edges, and metadata (`shard`, `seq`).
-- `groundedAnswer` — Verify claims via quote + Google Mangle Datalog + ontology/bridge rules, strip hallucinations, return `nektarr1.*` receipt & verify footer.
-- `verifyReceipt` — Offline verify `nektarr1.*` token, §16 delegations, `RuleRef`s, and SPV settlement status.
-- `repo` — Full Git-compatible Memory Repo tool (`action: list|log|show|tree|read|diff|blame|verify|commit|rm|branch|fork|merge|cherryPick|revert|tag|export|import|prove|rotate`).
-- `ontology` — Manage domain TBox ontologies, Bridge Shards & JevGraph extraction (`action: init|list|show|validate|extract|edges|review|align`).
-- `lineage` — Inspect verified cryptographic Knowledge DAG (`shard`, `seq`).
-- `want` — Buy verified knowledge live (`domains`, `question`, `ontologyId`, `maxSats`, `minGrade`, `maxSatsPer1kUnits`, `freshnessClass`, `requiredRights`, `pricingMode`, `targetShard`, `standingTtlSeconds`).
-- `watchKnowledge` — Create, list, live-steer, or cancel durable 0%-CPU Restate `StandingOrder`s (`action: create|list|steer|cancel`, full NMU-1 & ontology/bridge filters).
-- `sell` — Arm a local shard for multi-mode NMU-1 selling (`shard`, `domains`, `priceSats`, `pricePerUnit`, `queryPriceSats`, `subscriptionPriceSats`, `subscriptionDurationSec`, `freshnessClass`, `usageRights`, `minAdvertisedGrade`, `ontologyId`, `dynamicPricing`, `allowRaw`) or submit to a Hub bounty (`bountyId`, `hubUrl`, `seq`).
-- `marketContract` — Query standardized NMU-1 Commodity Ticker or manage paid shard feed subscriptions (`action: ticker|subscriptions|revokeSubscription`).
-- `deals` — List persisted deals, pending operator approvals, sell listings, 6D reputations, liquidity & matcher metrics.
-- `fund` — Wallet funding address, confirmed/unproven/reserved balance, UTXO pools, SpendGuard caps, BEEF/txid import, optional testnet faucet drip.
-- `doctor` — Full node self-diagnosis (SQLite, wallet, Restate, hosts, peers, policies, SSE health) + next steps.
-- `peers` — Signature-verified peers, bfinger handles, sell domains, CHIRP packs, and open Hub bounties.
-
-### Operator Profile Adds (`NEKTAR_TOOL_PROFILE=operator`, default on daemon)
+### Extended `operator` Profile (`NEKTAR_TOOL_PROFILE=operator` or operator token over REST)
 - `anchor`, `prove`, `compactProve`, `consistencyProof`, `borgGroup`, `exportPack`, `importPack`, `commitOntology`, `provisionClearance`, `rotateLattice`, `authorize`, `status`.
 
 ---
 
-## 9. Complete CLI Command Reference (`nektar`)
+## 6. CLI Quick Reference
 
 ```sh
-# Lifecycle, Docking & Diagnostics
-nektar up [--network testnet|main] [--confirm I_UNDERSTAND] [--wallet auto|embedded|client] [--dock claude,cursor,...]
-nektar stop                                      # stop background daemon cleanly
-nektar serve                                     # run foreground daemon + Dashboard + MCP + L0 Proxy + Market
-nektar open                                      # open paired local Dashboard in browser
-nektar dock [--uninstall]                        # detect & wire/unwire local AI apps
-nektar mcp                                       # stdio MCP bridge to shared daemon
-nektar hook <session-start|prefetch|verify-receipt>
-nektar status [--json]                           # identity, wallet, shards, policy hash, SpendGuard
-nektar doctor [--json]                           # full health diagnosis + next steps
-nektar check-mainnet                             # verify mainnet confirm, dual PoW headers, broadcaster & caps
-nektar restate-up                                # download SHA-256 verified restate-server v1.8.1
-nektar backup <now|verify|restore|status>        # BRC-42 encrypted WAL-safe SQLite backups (local or S3/R2/B2)
-nektar service <install|start|stop|restart|status|uninstall> # native systemd / launchd / Windows Service supervision
-
-# Memory, Git Repos, Ontologies & Proofs
-nektar remember -shard ops -text "..." [-ontology ont-ops] [-freshness versioned] [-subject-version go-1.27] [-rights inference_only] [-public] [-anchor]
-nektar recall [-shard ops] [-query "..."] [-spv]
-nektar anchor -shard ops                         # or: nektar anchor rotate -shard ops -new-owner <pubHex>
-nektar verify -token nektarr1.<tok>              # also verifies nektardr1.<tok> deal receipts offline
-nektar repo <list|log|tree|diff|commit|branch|merge|export|import|verify|checkout> ...
-nektar ontology <init|list|show|validate|extract|edges|review|align> ...
-
-# NMU-1 Market, Distillation & Wallet Covenants
-nektar ticker [-ontology ...] [-grade S|A|B|C] [-mode spot|per_query|subscription] [-domain ...] [-json]
-nektar sell -shard market-ops -domains ops -price 10 -per-unit -query-price 15 -sub-price 500 -sub-days 30 -rights inference_only
-nektar want -domains ops -question "..." -max 200 -min-grade A -max-sats-per-1k 15000 -rights inference_only
-nektar distill [-shards ...] [-anchor] [-list]   # trigger SleepCycle PII scrub + JevGraph distillation
-nektar earn [--bounty <id> --shard <shard>]      # inspect/fill Hub knowledge bounties
-nektar policy <approve --preset buyer|seller|both | list | revoke <id>>
-nektar peers
-nektar wallet <status|address --qr|sync|fund|send|sweep|fuel>
-nektar vault / nektar bond                       # manage on-chain NektarAgentVault & NektarCheckpointBond
-nektar hub <up --native|--domain|--auto-ip | status | logs | down | run>
+nektar up [--mainnet --confirm I_UNDERSTAND] [--wallet auto|client|embedded] [--install-service]
+nektar stop
+nektar open                                      # open paired Dashboard in browser
+nektar dock [auto|claude|hermes|codex|antigravity|openai|cursor|vscode|--uninstall]
+nektar buy -domains ops -question "..." -max 100
+nektar sell -text "..." -domains ops -price 50 [-export ./capsule.nkt]
+nektar import <path-or-https-url.nkt> [--join-hub]
+nektar peers [join <domain-or-url> | leave <url>]
+nektar hub <up [--auto-ip|--domain <fqdn>|--tunnel] | status | logs | down | run>
+nektar domain-docs --domain <fqdn> --handle <name>
+nektar remember / recall / verify / repo / ontology / ticker / earn / policy / wallet / backup / doctor / check-mainnet
 ```
-
----
-
-## 10. HTTP / SSE / Overlay API Surface (Local Node `http://127.0.0.1:18420`)
-
-### Discovery, Auth & Unified Tools
-- `GET  /v1/health`, `GET /v1/status`, `GET /v1/metrics`
-- `GET  /.well-known/nektar`, `GET /.well-known/agent.json`, `POST /a2a`, `GET /card`
-- `POST /mcp` (Streamable HTTP MCP), `GET /v1/tools`, `POST /v1/tools/{name}`
-- `POST /v1/auth/session`, `POST /v1/auth/pair-code`, `GET /pair`
-- `GET  /v1/dock/detect`, `POST /v1/dock/apply`
-- `GET  /state`, `GET /events` (Dashboard state snapshot & live SSE stream)
-
-### Memory, Repos, Ontologies, Lattice & Proofs
-- `POST /v1/remember`, `POST /v1/recall`, `POST /v1/answer`
-- `GET  /v1/verify` & `GET /v1/verify/{token}` (HTML or JSON via `Accept: application/json`)
-- `GET  /v1/lineage/{shard}/{seq}`, `GET /v1/prove/compact/{shard}/{seq}`, `GET /v1/prove/consistency/{shard}`
-- `POST /v1/ontology/commit`, `POST /v1/lattice/clearance`, `POST /v1/lattice/rotate`
-- `GET  /v1/pack/{shard}`, `GET /v1/chirp/{hash}`
-- `/v1/repos/*` (list, log, tree, read, diff, blame, commit, branch, merge, tag, export/import `.nkt` capsule)
-
-### NMU-1 Market, Standing Orders, Policies & Wallet
-- `GET  /v1/market/ticker?ontologyId=&grade=&pricingMode=&domain=` — Standardized NMU-1 Commodity Ticker
-- `POST /v1/market/purchase` — Spot atomic purchase settlement
-- `POST /v1/market/query` — `per_query` metered recall over BRC-105 HTTP 402
-- `POST /v1/market/subscriptions` — `subscription` Shard Feed activation over BRC-105 HTTP 402
-- `GET  /v1/market/feeds/{shard}?sinceSeq=<n>` — Replay-protected SSE feed (`X-Nektar-Sub-ID`, `X-Nektar-Pub`, `X-Nektar-TS` within `±60s`, `X-Nektar-Sig`) pushing `fragment_distilled` & Grade S `fragment_superseded`
-- `POST /v1/market/standing`, `GET /v1/market/standing`, `POST /v1/market/standing/{id}/steer`, `DELETE /v1/market/standing/{id}`
-- `PATCH /v1/market/listings/{shard}`, `DELETE /v1/market/listings/{shard}`
-- `GET  /v1/topics/cluster?hint=<text>`, `POST /v1/distill/run`
-- `POST /v1/onboard/faucet`, `POST /v1/onboard/policy-preset`, `GET /v1/policies`, `DELETE /v1/policies/{id}`
-- `POST /v1/automation/kill`, `POST /v1/automation/approvals/{id}`
-- `GET  /v1/autonomy/status` — Watchdog clock-skew/breaker status, active Grade S subscriptions, opt-in policy config & backup telemetry
-- `POST /v1/autonomy/config`, `POST /v1/autonomy/reset`, `POST /v1/autonomy/backup` (operator-authenticated)
-- `POST /v1/hosts`, `DELETE /v1/hosts`
-
-### Public Spine Overlay Hub (`https://nektar.run/hub/*`)
-- `GET  /hub/v1/health`, `GET /hub/v1/terms`, `GET /hub/listTopicManagers`, `GET /hub/listLookupServiceProviders`
-- `POST /hub/submit` & `POST /hub/lookup` (BRC-22 / BRC-24 16-lane `tm_nektar_<net>_0..f` & `ls_nektar`)
-- `GET  /hub/events?cursor=<seq>&domains=<csv>` & `GET /hub/sync?cursor=<seq>` (metered SSE & catch-up sync)
-- `POST /hub/bbox/send` & `GET /hub/bbox/inbox` (NAT-safe counterparty relay)
-- `GET  /hub/bounties`, `POST /hub/bounties/submit`, `GET /hub/work-bounties`, `POST /hub/work-bounties/submit`
-- `POST /hub/v1/credits/topup`, `GET /hub/v1/credits/balance`
-
----
-
-## 11. Key Environment Variables (`NEKTAR_*`)
-
-Zero variables are required for local testnet boot (`nektar up`). Key overrides:
-- **Network & Custody:** `NEKTAR_NETWORK` (`testnet`|`main`|`regtest`|`memory`), `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND`, `NEKTAR_DATA_DIR`, `NEKTAR_WALLET` (`auto`|`embedded`|`client`), `NEKTAR_WALLET_WIRE_URL` (`http://127.0.0.1:3321`), `NEKTAR_KILL`.
-- **SpendGuard & Headers:** `NEKTAR_MAX_FEE_SATS_PER_TX` (`10000`), `NEKTAR_MAX_SPEND_SATS_PER_DAY` (`100000`), `NEKTAR_HEADERS_SOURCE` (>=2 distinct non-circular PoW witnesses on `main`), `NEKTAR_SETTLE_SPEC`, `NEKTAR_SETTLE_DEPTH` (`2` testnet / `6` main).
-- **Server & Auth:** `NEKTAR_HTTP_PORT` (`18420`), `NEKTAR_PUBLIC_URL`, `NEKTAR_HTTP_TOKEN`, `NEKTAR_OPERATOR_TOKEN`, `NEKTAR_OPERATOR_PUBKEY`, `NEKTAR_TOOL_PROFILE` (`operator`|`agent`), `NEKTAR_TOOL_PRICES`.
-- **Jev System One Evaluator (Optional):** `NEKTAR_JEV_MODE` (`gated`|`advisory`|`strict`|`off`), `NEKTAR_JEV_BASE_URL`, `NEKTAR_JEV_MODEL`, `NEKTAR_JEV_PRIVACY`, `NEKTAR_JEV_TIMEOUT_MS`.
-- **Hub & Restate:** `NEKTAR_MARKET_HOSTS`, `NEKTAR_EMBED_HUB`, `NEKTAR_HUB_ROLE` (`leaf`|`spine`), `NEKTAR_HUB_FEE_PRESET` (`free`|`lightbsv_egress`|`hybrid`), `NEKTAR_RESTATE_URL`, `NEKTAR_RESTATE_ADMIN`.
-- **Autonomy Watchdog & Opt-In Market Loops:** `NEKTAR_NTP_SERVERS` (default `time.cloudflare.com,pool.ntp.org,time.google.com`), `NEKTAR_AUTO_QUERY_ON_MISS` (`0` default), `NEKTAR_AUTO_QUERY_MAX_SATS` (`50`), `NEKTAR_AUTO_WANT_ON_MISS` (`0` default), `NEKTAR_AUTO_WANT_BUDGET_SATS` (`500`), `NEKTAR_AUTO_WANT_MISS_THRESHOLD` (`3`), `NEKTAR_AUTO_WANT_MAX_PER_DAY` (`3`).
-- **Encrypted Automated Backups:** `NEKTAR_BACKUP_DIR`, `NEKTAR_BACKUP_INTERVAL` (`6h`), `NEKTAR_BACKUP_KEEP` (`14`), `NEKTAR_BACKUP_S3_BUCKET`, `NEKTAR_BACKUP_S3_ENDPOINT`, `NEKTAR_BACKUP_S3_REGION` (`us-east-1`), `NEKTAR_BACKUP_S3_PREFIX`, `NEKTAR_BACKUP_S3_ACCESS_KEY`, `NEKTAR_BACKUP_S3_SECRET_KEY`.
-
----
-
-## 12. Documentation & Specification Index
-
-### Hosted User Manuals (`https://nektar.run/docs/`)
-- Quick Start, 80s End-to-End Video & Plain-English Glossary: https://nektar.run/docs/index.html
-- Claude Code Manual: https://nektar.run/docs/claude-code.html
-- Cursor, VS Code & Desktop AI Manual: https://nektar.run/docs/cursor-vscode.html
-- Codex CLI Manual: https://nektar.run/docs/codex.html
-- Hermes & OpenClaw Manual: https://nektar.run/docs/hermes-openclaw.html
-- Buy & Sell Knowledge: https://nektar.run/docs/buy-and-sell.html
-- Run a Public Hub: https://nektar.run/docs/run-a-hub.html
-
-### Normative Protocol RFCs & Technical Specs (Raw Markdown on GitHub)
-- RFC Index: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/rfcs/README.md
-- RFC-001 (JevGraph Native Ontology & Cross-Ontology Bridge Shards): https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/rfcs/RFC-001-jevgraph-ontology.md
-- RFC-002 (NMU-1 Nektar Memory Unit Commodity Standard): https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/rfcs/RFC-002-nmu1-commodity-standard.md
-- Architecture: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/ARCHITECTURE.md
-- Market Wire Contract (`nkt1` CBOR & NMU-1/RFC-001 Extensions): https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/MARKET-WIRE.md
-- Market Participant Guide: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/MARKET.md
-- Proofs & Honest Boundaries: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/PROOFS.md
-- Environment Contract: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/ENVIRONMENT.md
-- Threat Model: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/THREAT-MODEL.md
-- Money Path & Escrow: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/MONEY-PATH.md
-- Autonomous Trading & Restate: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/AUTOMATION.md
-- BSV Capabilities Spec: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/BSV-CAPABILITIES-SPEC.md
-- Join Mainnet: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/JOIN-MAINNET.md
-- Operations & Deployment: https://raw.githubusercontent.com/kryptokrates/nektar/master/docs/OPERATIONS.md

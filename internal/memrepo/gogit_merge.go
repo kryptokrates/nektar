@@ -94,11 +94,11 @@ func ThreeWayMergeWithBase(
 				}
 			}
 		}
-		tr, ok := trees[treeHash]
-		if !ok {
+		entries, err := FlattenTreeFromMap(treeHash, trees)
+		if err != nil {
 			return bytesMap, entryMap
 		}
-		for _, e := range tr.Entries {
+		for _, e := range entries {
 			entryMap[e.Path] = e
 			if b, bOK := blobs[e.BlobHash]; bOK {
 				if b.Forgotten {

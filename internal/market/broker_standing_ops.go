@@ -2,8 +2,6 @@ package market
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,11 +10,11 @@ import (
 	"github.com/kryptokrates/nektar/internal/nmu"
 )
 
-// StartStandingOrder launches a durable 0%-CPU Restate StandingOrder workflow ("Limit-Order for Knowledge").
+// StartStandingOrder launches a durable 0%-CPU go-workflows StandingOrderWorkflow ("Limit-Order for Knowledge").
 func (b *Broker) StartStandingOrder(ctx context.Context, in StandingOrderInput) (*StandingOrderState, error) {
-	rc := b.RestateClient()
-	if rc == nil {
-		return nil, errors.New("market: Restate durable executor is required for StandingOrders (start without --no-restate)")
+	wc, err := b.EnsureWorkflowClient()
+	if err != nil {
+		return nil, err
 	}
 	if len(in.Domains) == 0 {
 		in.Domains = []string{"ops"}
@@ -33,11 +31,7 @@ func (b *Broker) StartStandingOrder(ctx context.Context, in StandingOrderInput) 
 	if in.TTL <= 0 && in.TTLSeconds <= 0 {
 		in.TTLSeconds = 86400
 	}
-	invID, err := rc.StartStandingOrderAsync(ctx, in.OrderID, in)
-	if err != nil {
-		return nil, err
-	}
-	// Persist initial index entry immediately so fast SSE offers don't race the first restate.Run step.
+	// Persist initial state & index entry BEFORE starting workflow so fast offers never race initialization.
 	now := time.Now().Unix()
 	ttlSec := in.TTLSeconds
 	if in.TTL > 0 {
@@ -48,7 +42,6 @@ func (b *Broker) StartStandingOrder(ctx context.Context, in StandingOrderInput) 
 	}
 	st := StandingOrderState{
 		OrderID:           in.OrderID,
-		InvocationID:      invID,
 		WaitingSeq:        1,
 		Status:            "watching",
 		Domains:           in.Domains,
@@ -67,25 +60,29 @@ func (b *Broker) StartStandingOrder(ctx context.Context, in StandingOrderInput) 
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
+	b.engine.saveStandingOrderState(st)
 	b.engine.upsertStandingOrderIndex(st)
+	invID, err := wc.StartStandingOrderAsync(ctx, in.OrderID, in)
+	if err != nil {
+		return nil, err
+	}
+	st.InvocationID = invID
+	b.engine.saveStandingOrderState(st)
 	b.notify("standing_order_created", map[string]any{"orderId": st.OrderID, "domains": st.Domains, "maxSats": st.MaxSats})
 	return &st, nil
 }
 
-// ListStandingOrders returns all indexed StandingOrders, enriched with live Restate workflow state when available.
+// ListStandingOrders returns all indexed StandingOrders, enriched with live persisted StandingOrderState.
 func (b *Broker) ListStandingOrders(ctx context.Context) []StandingOrderState {
 	if b.mem == nil || b.mem.DB() == nil {
 		return nil
 	}
 	entries := LoadStandingOrderIndex(b.mem.DB())
-	rc := b.RestateClient()
+	wc := b.WorkflowClient()
 	out := make([]StandingOrderState, 0, len(entries))
 	for _, e := range entries {
-		if rc != nil {
-			qCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			st, err := rc.StandingOrderStatus(qCtx, e.OrderID)
-			cancel()
-			if err == nil && st != nil && st.OrderID != "" {
+		if wc != nil {
+			if st, err := wc.StandingOrderStatus(ctx, e.OrderID); err == nil && st != nil && st.OrderID != "" {
 				out = append(out, *st)
 				continue
 			}
@@ -112,26 +109,26 @@ func (b *Broker) ListStandingOrders(ctx context.Context) []StandingOrderState {
 	return out
 }
 
-// SteerStandingOrder live-updates maxSats, pause state, or TTL on a running StandingOrder via restate.Signal.
+// SteerStandingOrder live-updates maxSats, pause state, or TTL on a running StandingOrderWorkflow.
 func (b *Broker) SteerStandingOrder(ctx context.Context, orderID string, steer SteerStandingOrderInput) (bool, error) {
-	rc := b.RestateClient()
-	if rc == nil {
-		return false, errors.New("market: Restate durable executor is unavailable")
+	wc, err := b.EnsureWorkflowClient()
+	if err != nil {
+		return false, err
 	}
-	ok, err := rc.SteerStandingOrder(ctx, orderID, steer)
+	ok, err := wc.SteerStandingOrder(ctx, orderID, steer)
 	if err == nil && ok {
 		b.notify("standing_order_steered", map[string]any{"orderId": orderID})
 	}
 	return ok, err
 }
 
-// CancelStandingOrder terminates a watching/paused StandingOrder cleanly via restate.Signal.
+// CancelStandingOrder terminates a watching/paused StandingOrderWorkflow cleanly.
 func (b *Broker) CancelStandingOrder(ctx context.Context, orderID, reason string) (bool, error) {
-	rc := b.RestateClient()
-	if rc == nil {
-		return false, errors.New("market: Restate durable executor is unavailable")
+	wc, err := b.EnsureWorkflowClient()
+	if err != nil {
+		return false, err
 	}
-	ok, err := rc.CancelStandingOrder(ctx, orderID, reason)
+	ok, err := wc.CancelStandingOrder(ctx, orderID, reason)
 	if err == nil && ok {
 		b.notify("standing_order_cancelled", map[string]any{"orderId": orderID})
 	}
@@ -152,7 +149,7 @@ func (b *Broker) PublishWantForStandingOrder(ctx context.Context, orderID string
 
 // PublishWantForStandingOrderNMU broadcasts a StandingOrder WantAd carrying all NMU-1 commodity filters.
 func (b *Broker) PublishWantForStandingOrderNMU(ctx context.Context, st StandingOrderState) error {
-	if b == nil || b.disc == nil || b.mem == nil || b.mem.Chain() == nil || b.engine == nil || b.engine.saleKey == nil {
+	if b == nil || b.disc == nil || b.mem == nil || b.mem.Chain() == nil || b.engine == nil || b.engine.signer == nil {
 		return nil
 	}
 	hosts := b.disc.ActiveHosts()
@@ -183,16 +180,16 @@ func (b *Broker) PublishWantForStandingOrderNMU(ctx context.Context, st Standing
 		Revision:          1,
 		Exp:               time.Now().Add(30 * time.Minute).UnixMilli(),
 	}
-	sig, err := bstack.SignArtifact(b.engine.saleKey, want)
+	sig, err := bstack.SignArtifactWithSigner(b.engine.signer, want)
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(bstack.SignedWant{Want: want, Sig: sig})
+	wantPayload, err := bstack.NewWantPayload(bstack.SignedWant{Want: want, Sig: sig})
 	if err != nil {
 		return err
 	}
-	topics := lanesForDomains(want.Net, want.Domains)
-	_, err = b.disc.BuildAndSubmitMarketAd(ctx, b.engine.saleKey, bstack.MarketPayload{Kind: bstack.KindWant, Body: body}, hosts, topics)
+	topics := topicsForMarketAd(want.Net, want.Domains, want.OntologyID)
+	_, err = b.disc.BuildAndSubmitMarketAd(ctx, b.engine.signer, wantPayload, hosts, topics)
 	return err
 }
 

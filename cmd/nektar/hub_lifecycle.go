@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/hub"
+	"github.com/kryptokrates/nektar/internal/server"
 )
 
 func defaultHubDir() string {
@@ -79,17 +80,59 @@ func cmdHubLifecycle(sub string, args []string) error {
 		return fmt.Errorf("no hub found in %s — start one with `nektar hub up`", dir)
 	}
 	isNative := composeErr != nil && nativeErr == nil
-	var cmd *exec.Cmd
+	hubDataDir := filepath.Join(dir, "data")
+	hubLogPath := filepath.Join(dir, "hub.log")
 	if isNative {
 		switch sub {
 		case "down":
-			cmd = exec.Command("systemctl", "stop", "nektar-hub")
+			stopped := false
+			if info, ok := server.DetectLiveDaemon(hubDataDir); ok && info != nil && info.PID > 0 {
+				terminatePIDGracefully(info.PID)
+				stopped = true
+			}
+			for _, pidFile := range []string{"hub.pid", "tunnel.pid"} {
+				pPath := filepath.Join(dir, pidFile)
+				if raw, rErr := os.ReadFile(pPath); rErr == nil {
+					if pid, pErr := strconv.Atoi(strings.TrimSpace(string(raw))); pErr == nil && pid > 0 {
+						terminatePIDGracefully(pid)
+						stopped = true
+					}
+					_ = os.Remove(pPath)
+				}
+			}
+			if _, sErr := exec.LookPath("systemctl"); sErr == nil {
+				_ = exec.Command("systemctl", "stop", "nektar-hub").Run()
+			}
+			if stopped {
+				fmt.Printf("Stopped native nektar hub in %s\n", dir)
+			} else {
+				fmt.Printf("No running native hub process found in %s\n", dir)
+			}
+			return nil
 		case "logs":
-			cmd = exec.Command("journalctl", "-u", "nektar-hub", "-f")
+			if raw, rErr := os.ReadFile(hubLogPath); rErr == nil && len(raw) > 0 {
+				if len(raw) > 16384 {
+					raw = raw[len(raw)-16384:]
+				}
+				fmt.Print(string(raw))
+				return nil
+			}
+			if _, sErr := exec.LookPath("journalctl"); sErr == nil {
+				cmd := exec.Command("journalctl", "-u", "nektar-hub", "-f")
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				return cmd.Run()
+			}
+			return fmt.Errorf("no hub log found at %s", hubLogPath)
 		case "status":
-			cmd = exec.Command("systemctl", "status", "nektar-hub", "--no-pager")
+			if info, ok := server.DetectLiveDaemon(hubDataDir); ok && info != nil {
+				fmt.Printf("native hub : UP (pid=%d · %s · url=%s)\n", info.PID, info.Network, info.URL)
+			} else {
+				fmt.Printf("native hub : STOPPED (start with `nektar hub up --dir %q`)\n", dir)
+			}
 		}
 	} else {
+		var cmd *exec.Cmd
 		switch sub {
 		case "down":
 			cmd = exec.Command("docker", "compose", "-f", compose, "down")
@@ -98,14 +141,10 @@ func cmdHubLifecycle(sub string, args []string) error {
 		case "status":
 			cmd = exec.Command("docker", "compose", "-f", compose, "ps")
 		}
-	}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
-		if isNative && sub == "status" {
-			fmt.Printf("note: systemd unit `nektar-hub` not active (install via: sudo cp %q /etc/systemd/system/ && sudo systemctl enable --now nektar-hub)\n", nativeUnit)
-		} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		if err := cmd.Run(); err != nil {
 			return err
 		}
 	}

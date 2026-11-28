@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/install/
 
 ### What `nektar up` Does Automatically (L3 Integration)
 1. **Starts a detached background daemon** on `http://127.0.0.1:18420` (survives closing your terminal; add `--install-service` to auto-start on login).
-2. **Pre-arms Restate v1.8.1** (macOS/Linux native, Windows WSL2) so live BSV knowledge trades work on Run #1.
+2. **Auto-arms Testnet sandbox trading** (claims free Testnet sats + approves bounded buyer/seller policy) so `buyCapsule` and `sellCapsule` work on Run #1 with zero external sidecars.
 3. **Docks Claude Code at full L3** (non-clobbering & reversible via `nektar dock --uninstall`):
    - `~/.claude.json` → `mcpServers.nektar` (`nektar mcp`, auto-bridges stdio to your shared Mainnet or Testnet daemon with zero SQLite lock contention across multiple Claude windows)
    - `~/.claude/settings.json` → native zero-Node Go hooks:
@@ -83,5 +83,5 @@ Open the `verify:` link in any browser to inspect the Merkle commitment, citatio
 |---|---|
 | `nektar up` / `nektar stop` | Start or cleanly stop the shared background daemon |
 | `nektar open` | Open the Svelte 5 Dashboard with 1-click pairing |
-| `nektar doctor` | Verify memory, wallet, Restate, policy, peers & cohort density |
+| `nektar doctor` | Verify memory, wallet, workflows, policy, Hubs & cohort density |
 | `nektar dock claude --uninstall` | Cleanly remove Nektar from `~/.claude.json`, hooks & skill |

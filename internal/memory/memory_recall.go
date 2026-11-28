@@ -301,11 +301,12 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 	}
 	var out []RecalledFragment
 	anchorSettled := make(map[int64]bool)
-	if shardAnchors, aErr := s.db.ListAnchors(in.Shard); aErr == nil {
+	if shardAnchors, aErr := s.db.ListAnchorSummaries(in.Shard); aErr == nil {
 		for _, a := range shardAnchors {
 			anchorSettled[a.N] = a.Settled
 		}
 	}
+	nmuMap, _ := s.db.ListFragmentNMUMeta(in.Shard)
 	type batchKey struct {
 		shard string
 		n     int64
@@ -377,7 +378,7 @@ func (s *Service) Recall(ctx context.Context, in RecallInput) ([]RecalledFragmen
 			OntologyID:     r.OntologyID,
 			CreatedAt:      r.CreatedAt,
 		}
-		if nm, nmErr := s.db.GetFragmentNMUMeta(r.Shard, r.Seq); nmErr == nil && nm != nil {
+		if nm, hasNMU := nmuMap[r.Seq]; hasNMU {
 			item.NMU = &nmu.Spec{
 				Version:        nmu.SpecVersion,
 				Grade:          nmu.Grade(nm.Grade),
@@ -455,13 +456,13 @@ func (s *Service) proveWithMemo(ctx context.Context, shard string, seq int64, pr
 	if rec.BatchN < 0 {
 		return nil, &contracts.VerifyResult{OK: false, AnchorState: "unanchored", Reason: "fragment not yet anchored"}, memo, nil
 	}
-	batchFrags, err := s.db.ListBatchFragments(shard, rec.BatchN)
+	leafHashes, err := s.db.ListBatchLeafHashes(shard, rec.BatchN)
 	if err != nil {
 		return nil, nil, memo, err
 	}
-	leaves := make([][]byte, len(batchFrags))
-	for i, f := range batchFrags {
-		lb, err := hex.DecodeString(f.Leaf)
+	leaves := make([][]byte, len(leafHashes))
+	for i, lh := range leafHashes {
+		lb, err := hex.DecodeString(lh)
 		if err != nil {
 			return nil, nil, memo, err
 		}

@@ -40,8 +40,8 @@ while [ "$#" -gt 0 ]; do
     --install-service) INSTALL_SERVICE=1 ;;
     -h|--help)
       printf 'Usage: install.sh [--up] [--mainnet --confirm I_UNDERSTAND] [--install-service] [--dock] [--docker]\n'
-      printf '  default:           downloads the single zero-CGO static Go binary (~27 MB, zero Docker)\n'
-      printf '  --up:              start background daemon + Restate + auto-dock Claude/Codex/Hermes/OpenClaw/Cursor + live receipt check\n'
+      printf '  default:           downloads the single zero-CGO static Go binary (~27 MB, zero Docker, zero sidecars)\n'
+      printf '  --up:              start background daemon + auto-arm sandbox policy + auto-dock AI apps + live receipt check\n'
       printf '  --mainnet:         boot on BSV Mainnet (isolated ~/.nektar/main; requires --confirm I_UNDERSTAND)\n'
       printf '  --install-service: also install login autostart service (launchd / systemd --user)\n'
       printf '  --dock:            auto-detect & wire AI apps without starting the daemon\n'
@@ -164,10 +164,10 @@ if [ "$DO_UP" = "1" ]; then
 elif [ "$DO_DOCK" = "1" ]; then
   "$BIN_DIR/nektar" dock auto
 else
-  printf '\nNext (25 seconds to live docked agents — zero Docker):\n'
-  printf '  nektar up              # start background daemon + Restate + auto-dock Claude/Codex/Hermes/OpenClaw/Cursor\n'
-  printf '  nektar up --network main --confirm I_UNDERSTAND   # go live on BSV Mainnet\n'
-  printf '  nektar earn            # view Hub knowledge bounties & earn BSV sats\n'
+  printf '\nNext (25 seconds to live docked agents — zero Docker, zero sidecars):\n'
+  printf '  nektar up              # start background daemon + auto-dock Claude/Hermes/Codex/Antigravity/Cursor\n'
+  printf '  nektar up --mainnet --confirm I_UNDERSTAND   # go live on BSV Mainnet\n'
+  printf '  nektar hub up --auto-ip                      # launch a zero-Docker LightBSV Hub\n'
   printf '  nektar open            # open Dashboard with 1-click pairing\n'
-  printf '  nektar doctor          # check wallet, Restate, policies, peers & cohort health\n\n'
+  printf '  nektar doctor          # check wallet, durable workflows, policies, Hubs & cohort health\n\n'
 fi

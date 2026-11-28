@@ -211,7 +211,7 @@ func TestRCA_S6_BboxDuplicateNonceRejected(t *testing.T) {
 		Nonce:        "fixed-replay-nonce-1",
 		Body:         sealed,
 	}
-	sig, err := bstack.SignArtifact(sellerBroker.engine.saleKey, msg.Signable())
+	sig, err := bstack.SignArtifactWithSigner(sellerBroker.engine.signer, msg.Signable())
 	if err != nil {
 		t.Fatalf("SignArtifact: %v", err)
 	}

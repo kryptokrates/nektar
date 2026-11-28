@@ -41,7 +41,7 @@ groups:
         expr: nektar_restate_attached == 0
         for: 5m
         labels: { severity: critical }
-        annotations: { summary: 'Restate durable execution plane is detached — live market trades will refuse to execute' }
+        annotations: { summary: 'Embedded go-workflows durable execution plane is detached — live market trades will refuse to execute' }
       - alert: NektarRestartLoop
         expr: resets(nektar_uptime_seconds[15m]) >= 2
         for: 1m

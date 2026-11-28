@@ -96,7 +96,7 @@ func (s *Service) GetRepoSummaryAuthorized(ctx context.Context, repo string, pri
 	commitCount, _ := s.db.CountMemCommits(repo)
 	latestCommits, _ := s.db.ListMemCommits(repo, "", 1)
 	fragCount, _ := s.db.CountShardFragments(repo)
-	anchors, _ := s.db.ListAnchors(repo)
+	anchors, _ := s.db.ListAnchorSummaries(repo)
 
 	branchNames := make([]string, 0, len(branches))
 	var mainBranch *store.MemBranchRow
@@ -111,7 +111,15 @@ func (s *Service) GetRepoSummaryAuthorized(ctx context.Context, repo string, pri
 		branchNames = []string{memrepo.DefaultBranch}
 	}
 
-	genPub, genID, _ := s.resolveRepoGenesis(ctx, repo, anchors)
+	var genPub, genID string
+	if mainBranch != nil && mainBranch.GenesisPub != "" && mainBranch.GenesisShardID != "" {
+		genPub, genID = mainBranch.GenesisPub, mainBranch.GenesisShardID
+	} else if len(anchors) > 0 {
+		fullAnchors, _ := s.db.ListAnchors(repo)
+		genPub, genID, _ = s.resolveRepoGenesis(ctx, repo, fullAnchors)
+	} else {
+		genPub, genID, _ = s.resolveRepoGenesis(ctx, repo, nil)
+	}
 	sum := &RepoSummary{
 		Repo:           repo,
 		Branch:         memrepo.DefaultBranch,
@@ -196,18 +204,22 @@ func (s *Service) RepoLogAuthorized(ctx context.Context, repo, branch string, li
 	out := make([]memrepo.CommitObject, 0, len(rows))
 	for _, r := range rows {
 		c := commitFromRow(r)
-		if !isOp && c.Seq > 0 {
+		if c.Seq > 0 {
 			if frag, fErr := s.db.GetFragment(repo, c.Seq); fErr == nil {
-				if frag.Forgotten || frag.BorgGroup != "" {
+				if frag.Forgotten {
+					c.Message = "[shredded]"
+				} else if !isOp && frag.BorgGroup != "" {
 					c.Message = "[redacted]"
-				} else if dec, aErr := s.AuthorizeAction(principal, "read", policy.Resource{
-					Type:  "Fragment",
-					ID:    fmt.Sprintf("%s#%d", frag.Shard, frag.Seq),
-					Level: int64(frag.Level),
-					Shard: frag.Shard,
-					Class: frag.Class,
-				}); aErr != nil || !dec.Allow {
-					continue
+				} else if !isOp {
+					if dec, aErr := s.AuthorizeAction(principal, "read", policy.Resource{
+						Type:  "Fragment",
+						ID:    fmt.Sprintf("%s#%d", frag.Shard, frag.Seq),
+						Level: int64(frag.Level),
+						Shard: frag.Shard,
+						Class: frag.Class,
+					}); aErr != nil || !dec.Allow {
+						continue
+					}
 				}
 			}
 		}

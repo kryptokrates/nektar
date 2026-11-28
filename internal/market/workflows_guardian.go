@@ -1,15 +1,19 @@
 package market
 
 import (
-	"fmt"
+	"context"
+	"errors"
+	"strings"
 	"time"
 
-	restate "github.com/restatedev/sdk-go"
+	"github.com/cschleiden/go-workflows/workflow"
 )
 
-// EscrowGuardianInput starts a durable Restate EscrowGuardian workflow (keyed by escrowTxID)
-// that guarantees DisclosureSale buyer refunds automatically once RefundAfter elapses,
-// even across multi-day laptop sleeps or process restarts.
+const escrowGuardianStatePrefix = "escrow_guardian_state_v1:"
+
+// EscrowGuardianInput starts a durable EscrowGuardianWorkflow (keyed by "escrow-"+escrowTxID)
+// that guarantees DisclosureSale buyer key extraction or Refund() automatically once RefundAfter elapses,
+// even across multi-week locktimes, laptop sleeps, or process restarts (RT-8: zero artificial loop cap).
 type EscrowGuardianInput struct {
 	DealID       string `json:"dealId"`
 	EscrowTxID   string `json:"escrowTxid"`
@@ -17,7 +21,7 @@ type EscrowGuardianInput struct {
 	CheckEveryMs int64  `json:"checkEveryMs"` // optional override for tests (default 60s)
 }
 
-// EscrowGuardianState tracks the durable lifecycle of an EscrowGuardian protection workflow.
+// EscrowGuardianState tracks the durable lifecycle of an EscrowGuardianWorkflow.
 type EscrowGuardianState struct {
 	DealID      string `json:"dealId"`
 	EscrowTxID  string `json:"escrowTxid"`
@@ -39,11 +43,10 @@ type escrowCheckResult struct {
 	Error              string `json:"error,omitempty"`
 }
 
-func (e *Engine) restateEscrowGuardianRun(ctx restate.WorkflowContext, in EscrowGuardianInput) (EscrowGuardianState, error) {
-	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
-		return EscrowGuardianState{}, err
-	}
-	escTxID := restate.Key(ctx)
+func EscrowGuardianWorkflow(ctx workflow.Context, in EscrowGuardianInput) (EscrowGuardianState, error) {
+	var acts *workflowActivities
+	instID := workflow.WorkflowInstance(ctx).InstanceID
+	escTxID := strings.TrimPrefix(instID, escrowWorkflowPrefix)
 	if escTxID == "" {
 		escTxID = in.EscrowTxID
 	}
@@ -52,95 +55,20 @@ func (e *Engine) restateEscrowGuardianRun(ctx restate.WorkflowContext, in Escrow
 		checkEvery = time.Duration(in.CheckEveryMs) * time.Millisecond
 	}
 
+	claimedCh := workflow.NewSignalChannel[bool](ctx, "claimed")
+
 	st := EscrowGuardianState{
 		DealID:      in.DealID,
 		EscrowTxID:  escTxID,
 		RefundAfter: in.RefundAfter,
 		Status:      "watching",
+		UpdatedAt:   workflow.Now(ctx).Unix(),
 	}
-	restate.Set(ctx, "state", st)
+	_, _ = workflow.ExecuteActivity[bool](ctx, singleAttemptActivityOpts(), acts.EscrowGuardianSaveState, st).Get(ctx)
 
-	claimedFut := restate.Promise[bool](ctx, "claimed")
-
-	// Loop durably across sleeps until either Seller claims (markClaimed) or ReconcileEscrowObligations
-	// extracts the on-chain revealed key / broadcasts DisclosureSale.Refund() back to BSV Desktop.
-	for attempt := 0; attempt < 2048; attempt++ {
-		chk, err := restate.Run(ctx, func(rctx restate.RunContext) (escrowCheckResult, error) {
-			now := time.Now().Unix()
-			if e.mem == nil || e.mem.DB() == nil || e.mem.Chain() == nil {
-				return escrowCheckResult{NowUnix: now, Done: true, Status: "failed", Error: "memory/chain unavailable"}, nil
-			}
-			// Check if deal already reached a terminal or externally-reconciled state (prevents 34h zombie loop).
-			if in.DealID != "" {
-				if d, dErr := e.mem.DB().GetDeal(in.DealID); dErr == nil {
-					switch d.Status {
-					case "settled":
-						return escrowCheckResult{NowUnix: now, Done: true, Status: "claimed"}, nil
-					case "refunded":
-						return escrowCheckResult{NowUnix: now, Done: true, Status: "refunded"}, nil
-					case "key_extracted_onchain":
-						return escrowCheckResult{NowUnix: now, Done: true, Status: "key_extracted", ExtractedKeyHex: d.ClaimKeyHex}, nil
-					}
-				}
-			}
-			// Reconcile STRICTLY this escrowTxID (never cross-contaminate with other open escrows!).
-			rep, rErr := ReconcileSingleEscrowObligation(rctx, e.mem.DB(), e.mem.Chain(), in.DealID, escTxID, now)
-			if rErr != nil {
-				return escrowCheckResult{NowUnix: now, NextWaitSec: int64(checkEvery.Seconds()), Error: rErr.Error()}, nil
-			}
-			if rep.KeysExtractedOnChain > 0 {
-				return escrowCheckResult{
-					NowUnix:            now,
-					Done:               true,
-					Status:             "key_extracted",
-					ExtractedKeyHex:    rep.ExtractedKeyHex,
-					ExtractedClaimTxID: rep.ExtractedClaimTxID,
-				}, nil
-			}
-			if rep.RefundsSettled > 0 {
-				refTx := ""
-				if len(rep.RefundTxIDs) > 0 {
-					refTx = rep.RefundTxIDs[0]
-				}
-				return escrowCheckResult{NowUnix: now, Done: true, Status: "refunded", RefundTxID: refTx}, nil
-			}
-			if rep.RefundsBroadcast > 0 || rep.RefundPendingTxID != "" {
-				refTx := rep.RefundPendingTxID
-				if refTx == "" && len(rep.RefundTxIDs) > 0 {
-					refTx = rep.RefundTxIDs[0]
-				}
-				waitSec := int64(checkEvery.Seconds())
-				if waitSec <= 0 {
-					waitSec = 1
-				}
-				return escrowCheckResult{NowUnix: now, Done: false, Status: "refund_broadcast", RefundTxID: refTx, NextWaitSec: waitSec}, nil
-			}
-			// Compute smart sleep duration for BOTH Bitcoin locktime domains:
-			//  - Unix timestamp (>= 500M): sleep directly until RefundAfter
-			//  - Block height (< 500M): estimate blocks remaining * 60s clamped to [60s, 600s]
-			//    so multi-day/multi-week block-height locktimes never exhaust the loop cap.
-			waitSec := int64(checkEvery.Seconds())
-			if waitSec <= 0 {
-				waitSec = 1
-			}
-			if in.RefundAfter >= 500_000_000 && int64(in.RefundAfter) > now {
-				rem := int64(in.RefundAfter) - now
-				if rem > waitSec {
-					waitSec = rem
-				}
-			} else if in.RefundAfter > 0 && in.RefundAfter < 500_000_000 {
-				if curHeight, hErr := e.mem.Chain().Height(rctx); hErr == nil && uint64(curHeight) < in.RefundAfter {
-					est := int64(in.RefundAfter-uint64(curHeight)) * 60
-					if est > 600 {
-						est = 600
-					}
-					if est > waitSec {
-						waitSec = est
-					}
-				}
-			}
-			return escrowCheckResult{NowUnix: now, Done: false, Status: "watching", NextWaitSec: waitSec}, nil
-		}, restate.WithName(fmt.Sprintf("escrow_guardian_check_%d", attempt)))
+	// Loop durably without any artificial 2048-iteration ceiling (RT-8) until claimed, extracted, or refunded.
+	for {
+		chk, err := workflow.ExecuteActivity[escrowCheckResult](ctx, dealActivityOpts(), acts.EscrowGuardianCheck, in.DealID, escTxID, in.RefundAfter, int64(checkEvery.Seconds())).Get(ctx)
 		if err != nil {
 			return st, err
 		}
@@ -148,60 +76,153 @@ func (e *Engine) restateEscrowGuardianRun(ctx restate.WorkflowContext, in Escrow
 		st.UpdatedAt = chk.NowUnix
 		st.Error = chk.Error
 		if chk.Done {
-			// If seller's revealed content key k was extracted on-chain, durably wake the waiting
-			// BuyerDeal workflow via deliverKey so the buyer completes decryption & settlement!
 			if chk.Status == "key_extracted" && chk.ExtractedKeyHex != "" && in.DealID != "" {
-				var dOpts []restate.SendOption
-				if hdrs := e.internalCallHeaders(); hdrs != nil {
-					dOpts = append(dOpts, restate.WithHeaders(hdrs))
-				}
-				restate.WorkflowSend(ctx, "BuyerDeal", in.DealID, "deliverKey").Send(ClaimSignal{
+				_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.EscrowGuardianDeliverExtractedKey, in.DealID, ClaimSignal{
 					ClaimTxID:     chk.ExtractedClaimTxID,
 					ContentKeyHex: chk.ExtractedKeyHex,
-				}, dOpts...)
+				}).Get(ctx)
 			}
 			st.Status = chk.Status
 			st.RefundTxID = chk.RefundTxID
-			restate.Set(ctx, "state", st)
+			_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.EscrowGuardianSaveState, st).Get(ctx)
 			return st, nil
 		}
-		restate.Set(ctx, "state", st)
+		_, _ = workflow.ExecuteActivity[bool](ctx, singleAttemptActivityOpts(), acts.EscrowGuardianSaveState, st).Get(ctx)
 
 		waitDur := time.Duration(chk.NextWaitSec) * time.Second
+		if waitDur <= 0 {
+			waitDur = time.Second
+		}
 		if in.CheckEveryMs > 0 && time.Duration(in.CheckEveryMs)*time.Millisecond < waitDur {
 			waitDur = time.Duration(in.CheckEveryMs) * time.Millisecond
 		}
-		timer := restate.After(ctx, waitDur)
-		winner, wErr := restate.WaitFirst(ctx, claimedFut, timer)
-		if wErr != nil {
-			return st, wErr
-		}
-		if winner == claimedFut {
+
+		tCtx, cancelTimer := workflow.WithCancel(ctx)
+		timerFut := workflow.ScheduleTimer(tCtx, waitDur)
+		claimed := false
+		workflow.Select(ctx,
+			workflow.Receive(claimedCh, func(_ workflow.Context, v bool, ok bool) {
+				cancelTimer()
+				if ok && v {
+					claimed = true
+				}
+			}),
+			workflow.Await(timerFut, func(_ workflow.Context, _ workflow.Future[any]) {
+			}),
+		)
+		cancelTimer()
+		if claimed {
 			st.Status = "claimed"
-			restate.Set(ctx, "state", st)
+			st.UpdatedAt = workflow.Now(ctx).Unix()
+			_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.EscrowGuardianSaveState, st).Get(ctx)
 			return st, nil
 		}
 	}
-
-	st.Status = "failed"
-	st.Error = "escrow guardian max checks exceeded"
-	restate.Set(ctx, "state", st)
-	return st, nil
 }
 
-func (e *Engine) restateEscrowGuardianMarkClaimed(ctx restate.WorkflowSharedContext, _ restate.Void) (bool, error) {
-	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
-		return false, err
-	}
-	if err := restate.Promise[bool](ctx, "claimed").Resolve(true); err != nil {
-		return false, nil
-	}
+func (a *workflowActivities) EscrowGuardianSaveState(_ context.Context, st EscrowGuardianState) (bool, error) {
+	a.eng.saveEscrowGuardianState(st)
 	return true, nil
 }
 
-func (e *Engine) restateEscrowGuardianStatus(ctx restate.WorkflowSharedContext, _ restate.Void) (EscrowGuardianState, error) {
-	if err := e.checkInternalAuthReq(ctx.Request()); err != nil {
-		return EscrowGuardianState{}, err
+func (a *workflowActivities) EscrowGuardianDeliverExtractedKey(ctx context.Context, dealID string, sig ClaimSignal) (bool, error) {
+	if wc := a.eng.WorkflowClient(); wc != nil {
+		return wc.DeliverBuyerKey(ctx, dealID, sig)
 	}
-	return restate.Get[EscrowGuardianState](ctx, "state")
+	if a.eng.mem != nil && a.eng.mem.DB() != nil {
+		if rec, err := a.eng.mem.DB().GetDeal(dealID); err == nil {
+			return a.eng.recoverLateBuyerClaim(ctx, rec, sig)
+		}
+	}
+	return false, nil
+}
+
+func (a *workflowActivities) EscrowGuardianCheck(ctx context.Context, dealID, escTxID string, refundAfter uint64, defaultWaitSec int64) (escrowCheckResult, error) {
+	e := a.eng
+	now := time.Now().Unix()
+	if e.mem == nil || e.mem.DB() == nil || e.mem.Chain() == nil {
+		return escrowCheckResult{NowUnix: now, Done: true, Status: "failed", Error: "memory/chain unavailable"}, nil
+	}
+	if dealID != "" {
+		if d, dErr := e.mem.DB().GetDeal(dealID); dErr == nil {
+			switch d.Status {
+			case "settled":
+				return escrowCheckResult{NowUnix: now, Done: true, Status: "claimed"}, nil
+			case "refunded":
+				return escrowCheckResult{NowUnix: now, Done: true, Status: "refunded"}, nil
+			case "key_extracted_onchain":
+				return escrowCheckResult{NowUnix: now, Done: true, Status: "key_extracted", ExtractedKeyHex: d.ClaimKeyHex}, nil
+			}
+		}
+	}
+	waitSec := defaultWaitSec
+	if waitSec <= 0 {
+		waitSec = 60
+	}
+	rep, rErr := ReconcileSingleEscrowObligation(ctx, e.mem.DB(), e.mem.Chain(), dealID, escTxID, now)
+	if rErr != nil {
+		return escrowCheckResult{NowUnix: now, NextWaitSec: waitSec, Error: rErr.Error()}, nil
+	}
+	if rep.KeysExtractedOnChain > 0 {
+		return escrowCheckResult{
+			NowUnix:            now,
+			Done:               true,
+			Status:             "key_extracted",
+			ExtractedKeyHex:    rep.ExtractedKeyHex,
+			ExtractedClaimTxID: rep.ExtractedClaimTxID,
+		}, nil
+	}
+	if rep.RefundsSettled > 0 {
+		refTx := ""
+		if len(rep.RefundTxIDs) > 0 {
+			refTx = rep.RefundTxIDs[0]
+		}
+		return escrowCheckResult{NowUnix: now, Done: true, Status: "refunded", RefundTxID: refTx}, nil
+	}
+	if rep.RefundsBroadcast > 0 || rep.RefundPendingTxID != "" {
+		refTx := rep.RefundPendingTxID
+		if refTx == "" && len(rep.RefundTxIDs) > 0 {
+			refTx = rep.RefundTxIDs[0]
+		}
+		return escrowCheckResult{NowUnix: now, Done: false, Status: "refund_broadcast", RefundTxID: refTx, NextWaitSec: waitSec}, nil
+	}
+	if refundAfter >= 500_000_000 && int64(refundAfter) > now {
+		rem := int64(refundAfter) - now
+		if rem > waitSec {
+			waitSec = rem
+		}
+	} else if refundAfter > 0 && refundAfter < 500_000_000 {
+		if curHeight, hErr := e.mem.Chain().Height(ctx); hErr == nil && uint64(curHeight) < refundAfter {
+			est := int64(refundAfter-uint64(curHeight)) * 60
+			if est > 600 {
+				est = 600
+			}
+			if est > waitSec {
+				waitSec = est
+			}
+		}
+	}
+	return escrowCheckResult{NowUnix: now, Done: false, Status: "watching", NextWaitSec: waitSec}, nil
+}
+
+func (e *Engine) saveEscrowGuardianState(st EscrowGuardianState) {
+	if e == nil || e.mem == nil || e.mem.DB() == nil || st.EscrowTxID == "" {
+		return
+	}
+	_ = e.mem.DB().SetJSON(escrowGuardianStatePrefix+st.EscrowTxID, st)
+}
+
+func (e *Engine) GetEscrowGuardianState(escrowTxID string) (*EscrowGuardianState, error) {
+	if e == nil || e.mem == nil || e.mem.DB() == nil || strings.TrimSpace(escrowTxID) == "" {
+		return nil, errors.New("market: escrow guardian state unavailable")
+	}
+	var st EscrowGuardianState
+	ok, err := e.mem.DB().GetJSON(escrowGuardianStatePrefix+strings.TrimSpace(escrowTxID), &st)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || st.EscrowTxID == "" {
+		return nil, errors.New("market: escrow guardian not found")
+	}
+	return &st, nil
 }

@@ -54,10 +54,56 @@ func (n *Node) planeRelayLoop(ctx context.Context, spine string) {
 		if relCtx.Err() != nil {
 			return
 		}
-		next := n.consumePlaneOnce(relCtx, spine, cursor)
+		if n.demandDrivenUpstream {
+			// BRC-223 / 1BSV Union Rule: idle Leaf Hubs with 0 downstream listeners park at 0% CPU and 0 egress sats.
+			if len(n.ActiveDownstreamTopics()) == 0 {
+				select {
+				case <-relCtx.Done():
+					return
+				case <-n.stopCh:
+					return
+				case <-n.downInterestWake:
+					continue
+				}
+			}
+		}
+		// Run stream in a child context that cancels immediately when downstream topic union changes!
+		connCtx, connCancel := context.WithCancel(relCtx)
+		initialCSV := strings.Join(n.desiredUpstreamTopics(), ",")
+		reconnectedOnInterest := make(chan struct{})
+		if n.demandDrivenUpstream && n.downInterestWake != nil {
+			go func() {
+				for {
+					select {
+					case <-connCtx.Done():
+						return
+					case <-n.downInterestWake:
+						// Short 50ms debounce coalesces simultaneous agent topic registrations.
+						select {
+						case <-connCtx.Done():
+							return
+						case <-time.After(50 * time.Millisecond):
+						}
+						if nowCSV := strings.Join(n.desiredUpstreamTopics(), ","); nowCSV != initialCSV {
+							close(reconnectedOnInterest)
+							connCancel()
+							return
+						}
+					}
+				}
+			}()
+		}
+		next := n.consumePlaneOnce(connCtx, spine, cursor)
+		connCancel()
 		if next > cursor {
 			cursor = next
 			_ = n.store.SetFedCursor(cursorKey, int64(cursor))
+		}
+		select {
+		case <-reconnectedOnInterest:
+			// Immediate seamless reconnect on new downstream topic union (no 2s backoff!).
+			continue
+		default:
 		}
 		backoff := time.Duration(float64(2*time.Second) * (0.5 + rand.Float64()))
 		select {
@@ -68,6 +114,54 @@ func (n *Node) planeRelayLoop(ctx context.Context, spine string) {
 		case <-time.After(backoff):
 		}
 	}
+}
+
+func (n *Node) desiredUpstreamTopics() []string {
+	if !n.demandDrivenUpstream {
+		return n.Topics()
+	}
+	active := n.ActiveDownstreamTopics()
+	if len(active) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(active)+4)
+	out := make([]string, 0, len(active)+4)
+	add := func(t string) {
+		if t = strings.TrimSpace(t); t != "" && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	for _, t := range active {
+		add(t)
+	}
+	// Always include core control/handshake topics while any local agent is connected.
+	add("tm_finger")
+	if off := n.DefaultBboxOffice(); off != "" {
+		add("tm_bbox_" + off)
+		add(BboxPlaneTopic(off))
+	}
+	if bkt := n.DefaultBstoreBucket(); bkt != "" {
+		add("tm_bstore_" + bkt)
+	}
+	return out
+}
+
+func (n *Node) buildUpstreamTopicMap(elected []string) map[[32]byte]string {
+	m := make(map[[32]byte]string, len(elected)+len(n.Topics())+2)
+	for _, t := range n.Topics() {
+		m[TopicIDOf(t)] = t
+	}
+	if off := n.DefaultBboxOffice(); off != "" {
+		bt := BboxPlaneTopic(off)
+		m[TopicIDOf(bt)] = bt
+	}
+	for _, t := range elected {
+		m[TopicIDOf(t)] = t
+		// Pre-instantiate dynamic market topic managers (`dom_*` / `ont_*`) on the Leaf Hub.
+		_, _ = n.resolveTopicManager(t)
+	}
+	return m
 }
 
 func (n *Node) signPlaneEgressReq(req *http.Request, action, spineURL string, cursor int64, topicsCSV string) {
@@ -106,11 +200,14 @@ func (n *Node) tryPlaneTopup(ctx context.Context, spine string, minTopup uint64)
 }
 
 func (n *Node) consumePlaneOnce(ctx context.Context, spine string, cursor uint64) uint64 {
-	elected := n.Topics()
-	topicByID := make(map[[32]byte]string, len(elected))
-	for _, t := range elected {
-		topicByID[TopicIDOf(t)] = t
+	elected := n.desiredUpstreamTopics()
+	if len(elected) == 0 && !n.demandDrivenUpstream {
+		elected = n.Topics()
 	}
+	if len(elected) == 0 {
+		return cursor
+	}
+	topicByID := n.buildUpstreamTopicMap(elected)
 	topicsCSV := strings.Join(elected, ",")
 	u := fmt.Sprintf("%s/plane/stream?from=%d", spine, cursor)
 	if topicsCSV != "" {
@@ -177,7 +274,13 @@ func (n *Node) consumePlaneOnce(ctx context.Context, spine string, cursor uint64
 		}
 		if topic, ok := topicByID[frame.TopicID]; ok {
 			if !n.loopGuard.Seen(frame.BEEF, topic) {
-				if _, sErr := n.submitInternal(ctx, frame.BEEF, []string{topic}, true); sErr != nil {
+				var sErr error
+				if strings.HasPrefix(topic, "tm_nektar_bbox_") {
+					sErr = n.admitRelayedBboxPlaneFrame(frame.BEEF)
+				} else {
+					_, sErr = n.submitInternal(ctx, frame.BEEF, []string{topic}, true)
+				}
+				if sErr != nil {
 					// ARCH-F5: permanently refused poison frames are counted & skipped so one bad frame
 					// cannot stall the entire BRC-149 stream; transient errors hold the cursor for retry.
 					if errors.Is(sErr, ErrHubRefused) {
@@ -251,7 +354,13 @@ func (n *Node) repairPlaneGap(ctx context.Context, spine string, fromSeq, toSeq 
 				}
 				if topic, ok := topicByID[frame.TopicID]; ok {
 					if !n.loopGuard.Seen(frame.BEEF, topic) {
-						if _, sErr := n.submitInternal(ctx, frame.BEEF, []string{topic}, true); sErr != nil {
+						var sErr error
+						if strings.HasPrefix(topic, "tm_nektar_bbox_") {
+							sErr = n.admitRelayedBboxPlaneFrame(frame.BEEF)
+						} else {
+							_, sErr = n.submitInternal(ctx, frame.BEEF, []string{topic}, true)
+						}
+						if sErr != nil {
 							if errors.Is(sErr, ErrHubRefused) {
 								n.poisonSkipped.Add(1)
 								n.loopGuard.MarkIfUnseen(frame.BEEF, topic)

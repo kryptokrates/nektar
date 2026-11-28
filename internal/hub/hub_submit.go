@@ -193,32 +193,82 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 		carrierFundingOP = transaction.Outpoint{Txid: *tx.Inputs[0].SourceTXID, Index: tx.Inputs[0].SourceTxOutIndex}.String()
 	}
 
+	// Within a single HTTP /submit call carrying multiple co-located topics (e.g. [laneTopic, domTopic]),
+	// track already-verified and already-admitted nkt1 vouts so we verify ECDSA once, persist once,
+	// and broadcast SSE once while still populating overlay.Steak, BRC-223 fabric, BRC-149 plane, and
+	// upstream Spine forwarding for every co-located topic!
+	verifiedNktVouts := make(map[uint32]bstack.MarketPayload, 2)
+	admittedNktVouts := make(map[uint32]bool, 2)
+	admittedNktSeq := make(map[uint32]int64, 2)
+
 	for _, topic := range topics {
 		tm, ok := n.resolveTopicManager(topic)
 		if !ok {
 			continue
 		}
-		tCtx := subCtx
-		if pc, ok := tm.(interface {
-			Precheck(context.Context) context.Context
-		}); ok {
-			tCtx = pc.Precheck(subCtx)
-		}
-		inst, err := tm.IdentifyAdmissibleOutputs(tCtx, beef, txid, spentByTopic[topic])
-		if err != nil {
-			if isMineableTx && errors.Is(err, carrier.ErrNotCarrier) {
-				steak[topic] = &overlay.AdmittanceInstructions{}
-				continue
+		var inst overlay.AdmittanceInstructions
+		if len(verifiedNktVouts) > 0 && strings.HasPrefix(topic, "tm_nektar_") {
+			for vout, vp := range verifiedNktVouts {
+				if bstack.TopicMatchesPayload(n.net, topic, vp) {
+					inst.OutputsToAdmit = append(inst.OutputsToAdmit, vout)
+				}
 			}
-			return nil, fmt.Errorf("%w: hub: topic %s: %w", ErrHubRefused, topic, err)
+		} else {
+			tCtx := subCtx
+			if pc, ok := tm.(interface {
+				Precheck(context.Context) context.Context
+			}); ok {
+				tCtx = pc.Precheck(subCtx)
+			}
+			var tmErr error
+			inst, tmErr = tm.IdentifyAdmissibleOutputs(tCtx, beef, txid, spentByTopic[topic])
+			if tmErr != nil {
+				if isMineableTx && errors.Is(tmErr, carrier.ErrNotCarrier) {
+					steak[topic] = &overlay.AdmittanceInstructions{}
+					continue
+				}
+				return nil, fmt.Errorf("%w: hub: topic %s: %w", ErrHubRefused, topic, tmErr)
+			}
 		}
 		var admitted []uint32
 		for _, vout := range inst.OutputsToAdmit {
 			if int(vout) >= len(tx.Outputs) {
 				continue
 			}
+			if admittedNktVouts[vout] {
+				admitted = append(admitted, vout)
+				if n.loopGuard.MarkIfUnseen(rawBEEF, topic) {
+					fanoutTopics = append(fanoutTopics, topic)
+					vp := verifiedNktVouts[vout]
+					if vp.Kind == bstack.KindWant || vp.Kind == bstack.KindOffer || vp.Kind == bstack.KindAnnounce {
+						shouldForwardUp = true
+						forwardTopics = append(forwardTopics, topic)
+					}
+					if prevSeq := admittedNktSeq[vout]; prevSeq > 0 {
+						n.mu.RLock()
+						hasPlane := len(n.planeSubs) > 0
+						n.mu.RUnlock()
+						if hasPlane {
+							n.broadcastPlaneFrame(PlaneFrame{
+								FlowSeq: uint64(prevSeq),
+								TopicID: TopicIDOf(topic),
+								Topic:   topic,
+								BEEF:    append([]byte(nil), rawBEEF...),
+							})
+						}
+					}
+				}
+				if bus := n.EventBus(); bus != nil {
+					op := transaction.Outpoint{Txid: *txid, Index: vout}
+					bus.Publish("hub:admit:"+topic, "admit", op.String())
+				}
+				continue
+			}
 			out := tx.Outputs[vout]
 			p, isNkt, _ := bstack.ExtractNkt1Payload(out.LockingScript)
+			if isNkt {
+				verifiedNktVouts[vout] = p
+			}
 			var pub string
 			var domains []string
 			var exp int64
@@ -234,6 +284,7 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 			isNew := true
 			nowMs := time.Now().UnixMilli()
 			if isNkt {
+				admittedNktVouts[vout] = true
 				// When Pebble fastEventStore is enabled, AppendEventWithCarrierClaim uses 64-shard
 				// outpoint stripe locking + atomic seq, marketLS has its own lock, and SSE deduplicates
 				// against backlogWatermark — so no per-lane mutex is needed (zero cross-request stall!).
@@ -266,6 +317,10 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 						return nil, fmt.Errorf("%w: hub: topic %s: %w", ErrHubRefused, topic, err)
 					}
 					return nil, err
+				}
+				admittedNktSeq[vout] = seq
+				if n.oeStore != nil {
+					n.recordModuleOutput(ctx, topic, txid, vout, beef, rawBEEF, inst.AncillaryTxids)
 				}
 				if n.marketLS != nil {
 					_ = n.marketLS.OutputAdmittedByTopic(subCtx, &module.OutputAdmittedByTopic{
@@ -309,21 +364,36 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 						Vout:       vout,
 						AdmittedAt: nowMs,
 						Payload:    p,
-						BEEF:       append([]byte(nil), rawBEEF...),
+						BEEF:       rawBEEF,
 						BuyerPub:   buyerPub,
 					}, domains)
-					n.broadcastPlaneFrame(PlaneFrame{
-						FlowSeq: uint64(seq),
-						TopicID: TopicIDOf(topic),
-						Topic:   topic,
-						BEEF:    append([]byte(nil), rawBEEF...),
-					})
+					n.mu.RLock()
+					hasPlane := len(n.planeSubs) > 0
+					n.mu.RUnlock()
+					if hasPlane {
+						n.broadcastPlaneFrame(PlaneFrame{
+							FlowSeq: uint64(seq),
+							TopicID: TopicIDOf(topic),
+							Topic:   topic,
+							BEEF:    append([]byte(nil), rawBEEF...),
+						})
+					}
 				}
 				if laneMu != nil {
 					laneMu.Unlock()
 				}
 			} else {
 				n.recordModuleOutput(ctx, topic, txid, vout, beef, rawBEEF, inst.AncillaryTxids)
+				modSeq, modNew, _ := n.store.AppendEvent(StoredEvent{
+					Outpoint:    op.String(),
+					Topic:       topic,
+					TxID:        txid.String(),
+					Vout:        vout,
+					Kind:        bstack.ArtifactKind("module"),
+					BEEF:        rawBEEF,
+					BlockHeight: blockHeight,
+					AdmittedAt:  nowMs,
+				})
 				for _, ls := range lookupsSnap {
 					_ = ls.OutputAdmittedByTopic(subCtx, &module.OutputAdmittedByTopic{
 						Mode:          ls.AdmissionMode(),
@@ -334,8 +404,24 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 						AtomicBEEF:    rawBEEF,
 					})
 				}
-				if n.loopGuard.MarkIfUnseen(rawBEEF, topic) {
+				unseenMod := n.loopGuard.MarkIfUnseen(rawBEEF, topic)
+				if modNew || unseenMod {
 					fanoutTopics = append(fanoutTopics, topic)
+					shouldForwardUp = true
+					forwardTopics = append(forwardTopics, topic)
+					if modSeq > 0 {
+						n.mu.RLock()
+						hasPlane := len(n.planeSubs) > 0
+						n.mu.RUnlock()
+						if hasPlane {
+							n.broadcastPlaneFrame(PlaneFrame{
+								FlowSeq: uint64(modSeq),
+								TopicID: TopicIDOf(topic),
+								Topic:   topic,
+								BEEF:    append([]byte(nil), rawBEEF...),
+							})
+						}
+					}
 				}
 			}
 			if bus := n.EventBus(); bus != nil {

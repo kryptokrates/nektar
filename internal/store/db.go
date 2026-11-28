@@ -451,6 +451,50 @@ func (d *DB) DeleteKV(key string) error {
 	return err
 }
 
+// HasKV reports whether key exists in the kv table.
+func (d *DB) HasKV(key string) (bool, error) {
+	rdb, release := d.rdb()
+	defer release()
+	var one int
+	err := rdb.QueryRow(`SELECT 1 FROM kv WHERE key = ? LIMIT 1`, key).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ListKVPrefixRaw returns raw JSON/blob values whose key starts with prefix (ordered by key, up to limit if > 0).
+func (d *DB) ListKVPrefixRaw(prefix string, limit int) ([][]byte, error) {
+	rdb, release := d.rdb()
+	defer release()
+	hi := prefix + "\xff"
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if limit > 0 {
+		rows, err = rdb.Query(`SELECT value FROM kv WHERE key >= ? AND key < ? ORDER BY key ASC LIMIT ?`, prefix, hi, limit)
+	} else {
+		rows, err = rdb.Query(`SELECT value FROM kv WHERE key >= ? AND key < ? ORDER BY key ASC`, prefix, hi)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out [][]byte
+	for rows.Next() {
+		var raw []byte
+		if sErr := rows.Scan(&raw); sErr != nil {
+			return nil, sErr
+		}
+		out = append(out, append([]byte(nil), raw...))
+	}
+	return out, rows.Err()
+}
+
 type scanner interface{ Scan(dest ...any) error }
 
 func boolToInt(b bool) int {

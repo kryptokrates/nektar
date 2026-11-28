@@ -104,34 +104,47 @@ func (r *hubLaneRouter) fetchHostTopics(ctx context.Context, client *http.Client
 	if client == nil {
 		return nil
 	}
-	fCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	req, err := http.NewRequestWithContext(fCtx, http.MethodGet, strings.TrimRight(hostURL, "/")+"/health", nil)
-	if err != nil {
-		return nil
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
-	var payload struct {
-		MountedTopics []string `json:"mountedTopics"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&payload); err != nil {
-		return nil
-	}
-	if len(payload.MountedTopics) == 0 {
-		return nil
-	}
-	m := make(map[string]bool, len(payload.MountedTopics))
-	for _, t := range payload.MountedTopics {
-		if t = strings.TrimSpace(t); t != "" {
-			m[t] = true
+	base := strings.TrimRight(hostURL, "/")
+	for _, path := range []string{"/v1/health", "/health"} {
+		fCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		req, err := http.NewRequestWithContext(fCtx, http.MethodGet, base+path, nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			cancel()
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			cancel()
+			continue
+		}
+		var payload struct {
+			Topics        []string `json:"topics"`
+			MountedTopics []string `json:"mountedTopics"`
+		}
+		decErr := json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&payload)
+		resp.Body.Close()
+		cancel()
+		if decErr != nil {
+			continue
+		}
+		all := append(payload.Topics, payload.MountedTopics...)
+		if len(all) == 0 {
+			continue
+		}
+		m := make(map[string]bool, len(all))
+		for _, t := range all {
+			if t = strings.TrimSpace(t); t != "" {
+				m[t] = true
+			}
+		}
+		if len(m) > 0 {
+			return m
 		}
 	}
-	return m
+	return nil
 }

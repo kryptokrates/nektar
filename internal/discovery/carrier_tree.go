@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
@@ -19,18 +20,19 @@ import (
 )
 
 const (
-	// DefaultFundingTreeWidth matches 1BSV Paper 011 §9 (16 equal-valued outputs per mined tree:
-	// 1 miner fee funds 16 carriers, and every carrier inherits the tree's mined BUMP).
-	DefaultFundingTreeWidth = 16
-	// DefaultFundingTreeAheadThreshold pre-mints the next 16-output tree when <=8 outputs remain
-	// so the Ahead tree has ample time to mine before Active exhausts.
-	DefaultFundingTreeAheadThreshold = DefaultFundingTreeWidth / 2
+	// DefaultFundingTreeWidth pre-mints 64 equal-valued 1-sat outputs per tree (1BSV Paper 011 §9 scaled
+	// 4x across 4 stripes = 256 pre-minted PushDrop carrier slots with 1 miner fee per 64 carriers).
+	DefaultFundingTreeWidth = 64
+	// DefaultFundingTreeAheadThreshold pre-mints the next tree at <=25% remaining slots (16 outputs)
+	// so Ahead trees warm asynchronously off the critical path before Active exhausts.
+	DefaultFundingTreeAheadThreshold = DefaultFundingTreeWidth / 4
+	carrierTreeStripeCount           = 4
 	maxRetiredFundingTrees           = 8
 	retiredFundingTreeMaxAgeSec      = 72 * 3600
 	carrierTreeKVKey                 = "carrier_funding_tree_v1"
 )
 
-// FundingTreeRecord persists one 16-output mined carrier funding tree and its allocation cursor
+// FundingTreeRecord persists one mined carrier funding tree and its allocation cursor
 // (aligned with 1BSV Paper 011 §3.2 & bcommon/producer.Trees).
 type FundingTreeRecord struct {
 	TxID      string   `json:"txid"`
@@ -50,24 +52,30 @@ type FundingTreeState struct {
 	Retired []*FundingTreeRecord `json:"retired,omitempty"`
 }
 
-// CarrierTreeManager manages M=16 carrier funding trees with background Ahead pre-minting and
-// mined kill-switch sweeps (carrier.Sweep) for cryptographic ad retraction.
+type carrierTreeStripe struct {
+	mu      sync.Mutex
+	mintMu  sync.Mutex
+	kvKey   string
+	state   FundingTreeState
+	minting bool
+}
+
+// CarrierTreeManager manages 4 striped M=64 carrier funding trees (256 slots total; adaptive M=16
+// on tiny <500-sat balances) with background Ahead pre-minting and mined kill-switch sweeps (carrier.Sweep).
 type CarrierTreeManager struct {
-	mu        sync.Mutex
-	mintMu    sync.Mutex
+	stripes   [carrierTreeStripeCount]carrierTreeStripe
+	stripeRR  atomic.Uint64
 	port      *chain.Port
 	db        *store.DB
 	signer    *nwallet.MarketSigner
 	width     int
 	aheadAt   int
-	state     FundingTreeState
-	minting   bool
 	stopCh    chan struct{}
 	closeOnce sync.Once
 	wg        sync.WaitGroup
 }
 
-// NewCarrierTreeManager opens or initializes a persistent M=16 carrier funding tree manager.
+// NewCarrierTreeManager opens or initializes a persistent 4x64 striped carrier funding tree manager.
 func NewCarrierTreeManager(port *chain.Port, db *store.DB, signer *nwallet.MarketSigner) *CarrierTreeManager {
 	m := &CarrierTreeManager{
 		port:    port,
@@ -77,8 +85,15 @@ func NewCarrierTreeManager(port *chain.Port, db *store.DB, signer *nwallet.Marke
 		aheadAt: DefaultFundingTreeAheadThreshold,
 		stopCh:  make(chan struct{}),
 	}
-	if db != nil {
-		_, _ = db.GetJSON(carrierTreeKVKey, &m.state)
+	for i := 0; i < carrierTreeStripeCount; i++ {
+		kvKey := carrierTreeKVKey
+		if i > 0 {
+			kvKey = fmt.Sprintf("%s:%d", carrierTreeKVKey, i)
+		}
+		m.stripes[i].kvKey = kvKey
+		if db != nil {
+			_, _ = db.GetJSON(kvKey, &m.stripes[i].state)
+		}
 	}
 	return m
 }
@@ -96,21 +111,21 @@ func (m *CarrierTreeManager) Close() {
 	m.wg.Wait()
 }
 
-func (m *CarrierTreeManager) saveLocked() {
-	if m.db == nil {
+func (m *CarrierTreeManager) saveStripeLocked(st *carrierTreeStripe) {
+	if m.db == nil || st == nil {
 		return
 	}
-	_ = m.db.SetJSON(carrierTreeKVKey, m.state)
+	_ = m.db.SetJSON(st.kvKey, st.state)
 }
 
-func (m *CarrierTreeManager) retireActiveLocked() {
-	if m.state.Active == nil {
+func retireStripeActiveLocked(st *carrierTreeStripe) {
+	if st == nil || st.state.Active == nil {
 		return
 	}
-	old := m.state.Active
+	old := st.state.Active
 	now := time.Now().Unix()
-	filtered := make([]*FundingTreeRecord, 0, len(m.state.Retired)+1)
-	for _, r := range m.state.Retired {
+	filtered := make([]*FundingTreeRecord, 0, len(st.state.Retired)+1)
+	for _, r := range st.state.Retired {
 		if r == nil || r.TxID == "" || r.TxID == old.TxID {
 			continue
 		}
@@ -123,26 +138,29 @@ func (m *CarrierTreeManager) retireActiveLocked() {
 	if len(filtered) > maxRetiredFundingTrees {
 		filtered = filtered[len(filtered)-maxRetiredFundingTrees:]
 	}
-	m.state.Retired = filtered
+	st.state.Retired = filtered
 }
 
-func (m *CarrierTreeManager) allTreesLocked() []*FundingTreeRecord {
-	out := make([]*FundingTreeRecord, 0, 3+len(m.state.Retired))
-	if m.state.Active != nil {
-		out = append(out, m.state.Active)
+func allStripeTreesLocked(st *carrierTreeStripe) []*FundingTreeRecord {
+	if st == nil {
+		return nil
 	}
-	if m.state.Ahead != nil {
-		out = append(out, m.state.Ahead)
+	out := make([]*FundingTreeRecord, 0, 3+len(st.state.Retired))
+	if st.state.Active != nil {
+		out = append(out, st.state.Active)
 	}
-	if m.state.Pending != nil {
-		out = append(out, m.state.Pending)
+	if st.state.Ahead != nil {
+		out = append(out, st.state.Ahead)
 	}
-	out = append(out, m.state.Retired...)
+	if st.state.Pending != nil {
+		out = append(out, st.state.Pending)
+	}
+	out = append(out, st.state.Retired...)
 	return out
 }
 
-// WarmStock pre-mints Active (and Ahead) carrier funding trees on boot so the first MintCarrier
-// does not stall waiting for funding-tree construction or mining.
+// WarmStock pre-mints Active (and Ahead) carrier funding trees on stripe 0 on boot so the first
+// MintCarrier does not stall waiting for funding-tree construction or mining.
 func (m *CarrierTreeManager) WarmStock(ctx context.Context) error {
 	if m.port == nil || m.signer == nil {
 		return errors.New("discovery: carrier tree requires chain port and signing key")
@@ -151,17 +169,17 @@ func (m *CarrierTreeManager) WarmStock(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("discovery: init carrier wallet: %w", err)
 	}
-	if err := m.ensureActiveTree(ctx, protoWallet); err != nil {
+	if err := m.ensureActiveTree(ctx, &m.stripes[0], protoWallet); err != nil {
 		return err
 	}
-	if err := m.ensureAheadTree(ctx, protoWallet); err != nil {
+	if err := m.ensureAheadTree(ctx, &m.stripes[0], protoWallet); err != nil {
 		log.Printf("discovery: carrier tree WarmStock ahead pre-mint failed: %v", err)
 	}
 	return nil
 }
 
 // OnTxMined asynchronously attaches a verified BUMP to any locally held Active, Ahead, or Retired
-// funding tree matching txid, so MintCarrier never hits the network on the hot path.
+// funding tree matching txid across all stripes, so MintCarrier never hits the network on the hot path.
 func (m *CarrierTreeManager) OnTxMined(txid string, height uint32, mp *transaction.MerklePath) {
 	if m == nil || txid == "" || mp == nil {
 		return
@@ -180,71 +198,77 @@ func (m *CarrierTreeManager) OnTxMined(txid string, height uint32, mp *transacti
 			return
 		}
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	changed := false
-	for _, rec := range m.allTreesLocked() {
-		if rec == nil || rec.TxID != txid {
-			continue
+	for i := 0; i < carrierTreeStripeCount; i++ {
+		st := &m.stripes[i]
+		st.mu.Lock()
+		changed := false
+		for _, rec := range allStripeTreesLocked(st) {
+			if rec == nil || rec.TxID != txid {
+				continue
+			}
+			raw, err := hex.DecodeString(rec.BEEFHex)
+			if err != nil {
+				continue
+			}
+			_, tx, _, err := guard.ParseBEEF(raw, guard.DefaultBound)
+			if err != nil || tx == nil {
+				continue
+			}
+			tx.MerklePath = mp
+			upgraded, err := tx.AtomicBEEF(false)
+			if err != nil {
+				continue
+			}
+			rec.BEEFHex = hex.EncodeToString(upgraded)
+			rec.Mined = true
+			changed = true
 		}
-		raw, err := hex.DecodeString(rec.BEEFHex)
-		if err != nil {
-			continue
+		if changed {
+			m.saveStripeLocked(st)
 		}
-		_, tx, _, err := guard.ParseBEEF(raw, guard.DefaultBound)
-		if err != nil || tx == nil {
-			continue
-		}
-		tx.MerklePath = mp
-		upgraded, err := tx.AtomicBEEF(false)
-		if err != nil {
-			continue
-		}
-		rec.BEEFHex = hex.EncodeToString(upgraded)
-		rec.Mined = true
-		changed = true
-	}
-	if changed {
-		m.saveLocked()
+		st.mu.Unlock()
 	}
 }
 
 // HandleReorg strips any cached BUMP at block height >= forkHeight from Active, Ahead, and Retired
-// funding trees so orphaned proofs are never re-emitted on subsequent carriers.
+// funding trees across all stripes so orphaned proofs are never re-emitted on subsequent carriers.
 func (m *CarrierTreeManager) HandleReorg(forkHeight uint32) {
 	if m == nil || forkHeight == 0 {
 		return
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	changed := false
-	for _, rec := range m.allTreesLocked() {
-		if rec == nil || rec.BEEFHex == "" {
-			continue
-		}
-		raw, err := hex.DecodeString(rec.BEEFHex)
-		if err != nil {
-			continue
-		}
-		_, tx, _, err := guard.ParseBEEF(raw, guard.DefaultBound)
-		if err != nil || tx == nil || tx.MerklePath == nil {
-			continue
-		}
-		if tx.MerklePath.BlockHeight >= forkHeight {
-			tx.MerklePath = nil
-			if downgraded, dErr := tx.AtomicBEEF(false); dErr == nil {
-				rec.BEEFHex = hex.EncodeToString(downgraded)
+	for i := 0; i < carrierTreeStripeCount; i++ {
+		st := &m.stripes[i]
+		st.mu.Lock()
+		changed := false
+		for _, rec := range allStripeTreesLocked(st) {
+			if rec == nil || rec.BEEFHex == "" {
+				continue
 			}
-			rec.Mined = false
-			changed = true
+			raw, err := hex.DecodeString(rec.BEEFHex)
+			if err != nil {
+				continue
+			}
+			_, tx, _, err := guard.ParseBEEF(raw, guard.DefaultBound)
+			if err != nil || tx == nil || tx.MerklePath == nil {
+				continue
+			}
+			if tx.MerklePath.BlockHeight >= forkHeight {
+				tx.MerklePath = nil
+				if downgraded, dErr := tx.AtomicBEEF(false); dErr == nil {
+					rec.BEEFHex = hex.EncodeToString(downgraded)
+				}
+				rec.Mined = false
+				changed = true
+			}
 		}
-	}
-	if changed {
-		m.saveLocked()
+		if changed {
+			m.saveStripeLocked(st)
+		}
+		st.mu.Unlock()
 	}
 }
 
-// CarrierTree returns (lazily initializing) the Service's persistent M=16 funding tree manager.
+// CarrierTree returns (lazily initializing) the Service's persistent 4x64 funding tree manager.
 func (s *Service) CarrierTree(signer *nwallet.MarketSigner) *CarrierTreeManager {
 	if signer == nil {
 		signer = s.signer
@@ -263,9 +287,9 @@ func (s *Service) CarrierTree(signer *nwallet.MarketSigner) *CarrierTreeManager 
 	return s.carrierTree
 }
 
-// State returns a snapshot of the active & ahead M=16 funding trees (for diagnostics & tests).
+// State returns a snapshot of stripe 0's active & ahead funding trees (for diagnostics & tests).
 func (m *CarrierTreeManager) State() FundingTreeState {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.state
+	m.stripes[0].mu.Lock()
+	defer m.stripes[0].mu.Unlock()
+	return m.stripes[0].state
 }

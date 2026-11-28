@@ -387,7 +387,7 @@ func (e *Engine) PrepareDirectSaleWithFragment(ctx context.Context, target memor
 			return nil, [32]byte{}, "", fmt.Errorf("market: export fragment .nkt capsule %s#%d: %w", shard, seq, err)
 		}
 		capBytes = capBuf.Bytes()
-		if fj != nil {
+		if fj != nil && (target.AnchorState == "mined" || (e.mem != nil && e.mem.Chain() != nil && e.mem.Chain().Network() == "memory")) {
 			fj.PutCachedCapsule(capKey, capBytes, "nkt", nil)
 		}
 	}
@@ -398,7 +398,7 @@ func (e *Engine) PrepareDirectSaleWithFragment(ctx context.Context, target memor
 		capBytes,
 		priceSats,
 		expiresAt+3600,
-		2000,
+		150,
 		expiresAt,
 		buyerPub,
 		target.Leaf,
@@ -408,9 +408,11 @@ func (e *Engine) PrepareDirectSaleWithFragment(ctx context.Context, target memor
 		return nil, [32]byte{}, "", err
 	}
 	offer.PayloadFormat = "nkt"
-	// Skip CHIRP disk file creation + SQLite allowlist write when ciphertext fits inline inside OfferAd
-	// in high-throughput fast-journal mode (zero NTFS temp+rename, zero SQLite lock).
-	if fj != nil && len(offer.CiphertextHex) > 0 && len(offer.CiphertextHex) <= bstack.InlineOfferMaxHexLen {
+	br := e.getBroker()
+	isNATSeller := br != nil && br.PublicURL() == ""
+	// Skip CHIRP disk file creation + SQLite allowlist write ONLY when ciphertext fits inline inside OfferAd
+	// AND Seller does not need Hub CHIRP staging.
+	if fj != nil && !isNATSeller && len(offer.CiphertextHex) > 0 && len(offer.CiphertextHex) <= bstack.InlineOfferMaxHexLen {
 		return offer, offer.ContentKey(), "", nil
 	}
 	ctBytes, _ := hex.DecodeString(offer.CiphertextHex)
@@ -433,6 +435,11 @@ func (e *Engine) PrepareDirectSaleWithFragment(ctx context.Context, target memor
 		return nil, [32]byte{}, "", err
 	}
 	e.mem.AllowPublicChirpHashes(hashes...)
+	// Stage offloaded (>12 KiB) or NAT-Seller CHIRP closures onto Seller's active Hub(s) (`PUT /chirp/v1/objects/{hash}`)
+	// so Buyers on any Leaf Hub fetch & verify `bcommon/chirp.Verify` closures with zero direct NAT connection!
+	if br != nil && br.disc != nil && (len(ctBytes) > bstack.InlineOfferMaxBytes || isNATSeller) {
+		br.disc.PushChirpClosureToHosts(ctx, br.disc.ActiveHosts(), e.mem.Objects(), hashes)
+	}
 	return offer, offer.ContentKey(), chirpURL, nil
 }
 

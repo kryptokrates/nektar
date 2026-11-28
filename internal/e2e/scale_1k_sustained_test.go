@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -369,20 +370,44 @@ func openFastScaleNode(
 			writeResp(http.StatusOK, *resp)
 		})
 		mux.HandleFunc("POST /v1/market/direct-quote", func(w http.ResponseWriter, r *http.Request) {
+			useCBOR := strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), market.ContentTypeCBOR) ||
+				strings.Contains(strings.ToLower(r.Header.Get("Accept")), market.ContentTypeCBOR)
+			writeQuoteResp := func(status int, resp market.DirectQuoteResponse) {
+				if useCBOR {
+					if raw, cErr := market.EncodeDirectQuoteResponseCBOR(resp); cErr == nil {
+						w.Header().Set("Content-Type", market.ContentTypeCBOR)
+						w.WriteHeader(status)
+						_, _ = w.Write(raw)
+						return
+					}
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_ = json.NewEncoder(w).Encode(resp)
+			}
 			var req market.DirectQuoteRequest
-			if dErr := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&req); dErr != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(market.DirectQuoteResponse{OK: false, Error: dErr.Error()})
+			if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), market.ContentTypeCBOR) {
+				raw, rErr := io.ReadAll(io.LimitReader(r.Body, 256<<10))
+				if rErr != nil {
+					writeQuoteResp(http.StatusBadRequest, market.DirectQuoteResponse{OK: false, Error: rErr.Error()})
+					return
+				}
+				dec, dErr := market.DecodeDirectQuoteRequestCBOR(raw)
+				if dErr != nil {
+					writeQuoteResp(http.StatusBadRequest, market.DirectQuoteResponse{OK: false, Error: dErr.Error()})
+					return
+				}
+				req = dec
+			} else if dErr := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&req); dErr != nil {
+				writeQuoteResp(http.StatusBadRequest, market.DirectQuoteResponse{OK: false, Error: dErr.Error()})
 				return
 			}
 			offer, hErr := broker.HandleDirectQuote(r.Context(), req)
 			if hErr != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(market.DirectQuoteResponse{OK: false, Error: hErr.Error()})
+				writeQuoteResp(http.StatusBadRequest, market.DirectQuoteResponse{OK: false, Error: hErr.Error()})
 				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(market.DirectQuoteResponse{OK: true, Offer: offer})
+			writeQuoteResp(http.StatusOK, market.DirectQuoteResponse{OK: true, Offer: offer})
 		})
 		ts := httptest.NewServer(mux)
 		tb.Cleanup(ts.Close)
@@ -403,6 +428,10 @@ type sustainedCluster struct {
 
 func setupSustained1kCluster(t *testing.T, ctx context.Context, numSellers, numBuyers, utxosPerBuyer int) *sustainedCluster {
 	t.Helper()
+	// 16 full nodes (4 Hubs + 4 Sellers + 8 Buyers) share one Go heap inside this localhost harness;
+	// GOGC=300 prevents 16x single-process GC scan amplification while keeping memory bounded.
+	oldGC := debug.SetGCPercent(300)
+	t.Cleanup(func() { debug.SetGCPercent(oldGC) })
 	t.Setenv("NEKTAR_FAST_DEALS", "1")
 	t.Setenv("NEKTAR_FAST_WALLET", "1")
 	t.Setenv("NEKTAR_FAST_HUB", "1")
@@ -577,8 +606,8 @@ func TestMeasured1kTPS_ColdDiscovery_Sustained10s(t *testing.T) {
 	}
 
 	const (
-		runDuration    = 10 * time.Second
-		workersPerBuy  = 8 // 8 buyers * 8 workers = 64 concurrent in-flight cold deals
+		runDuration   = 10 * time.Second
+		workersPerBuy = 8 // 8 buyers * 8 workers = 64 concurrent in-flight cold deals
 	)
 	baseBroadcasts := cluster.mockARC.broadcasts.Load()
 

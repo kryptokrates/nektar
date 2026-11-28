@@ -296,6 +296,48 @@ func verifyCapsuleAnchors(
 			rep.Reason = fmt.Sprintf("anchor batch gap: expected n=%d got %d", expectedN, a.N)
 			return nil
 		}
+		// Fast path: when the caller just verified the exact same single anchor BEEF bytes via
+		// contracts.VerifyFragmentWithMemo in the same deal, match by SHA-256(a.Beef) + TxID
+		// and still verify every NektarAnchor field + R' chain commitment without re-parsing BEEF/BUMP.
+		if len(cap.Anchors) == 1 && !isIncremental && opts.PreverifiedAnchor != nil &&
+			opts.PreverifiedAnchor.State != nil && a.TxID == opts.PreverifiedAnchor.TxID &&
+			sha256.Sum256(a.Beef) == opts.PreverifiedAnchor.BeefSHA256 {
+			st := *opts.PreverifiedAnchor.State
+			if rep.GenesisShardID == "" {
+				rep.GenesisShardID = st.Shard
+			} else if !strings.EqualFold(rep.GenesisShardID, st.Shard) {
+				rep.OK = false
+				rep.Reason = fmt.Sprintf("anchor n=%d shardId %s != genesis %s", a.N, st.Shard, rep.GenesisShardID)
+				return nil
+			}
+			if st.N != uint64(a.N) || st.Size != uint64(a.Size) ||
+				!strings.EqualFold(hex.EncodeToString(st.R), a.RootHex) ||
+				!strings.EqualFold(hex.EncodeToString(st.Rp), a.ChainedHex) ||
+				(a.StateHash != "" && !strings.EqualFold(hex.EncodeToString(st.StateHash), a.StateHash)) ||
+				(a.MmrRoot != "" && !strings.EqualFold(hex.EncodeToString(st.MmrRoot), a.MmrRoot)) {
+				rep.OK = false
+				rep.Reason = fmt.Sprintf("anchor n=%d state mismatch vs NektarAnchor output", a.N)
+				return nil
+			}
+			wantRp := core.ChainRpWithTag(st.Tag, prevRp, st.R, st.Size)
+			if !core.EqualBytes(wantRp, st.Rp) {
+				rep.OK = false
+				rep.Reason = fmt.Sprintf("anchor n=%d R' chain link broken", a.N)
+				return nil
+			}
+			if opts.PreverifiedAnchor.Settled {
+				rep.SettledAnchors++
+				rep.SettledByN[a.N] = true
+				if rep.BlockHeightByN == nil {
+					rep.BlockHeightByN = make(map[int64]int64)
+				}
+				rep.BlockHeightByN[a.N] = int64(opts.PreverifiedAnchor.BlockHeight)
+			}
+			prevRp = st.Rp
+			expectedN++
+			rep.AnchorsVerified++
+			continue
+		}
 		parsedBeef, tx, txHash, err := guard.ParseBEEF(a.Beef, guard.DefaultBound)
 		if err != nil || tx == nil || txHash == nil || len(tx.Outputs) == 0 || tx.Outputs[0].LockingScript == nil {
 			rep.OK = false

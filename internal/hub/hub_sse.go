@@ -7,10 +7,33 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 )
+
+type sseSubscriber struct {
+	ch       chan bstack.MarketEvent
+	wake     chan struct{}
+	overflow atomic.Bool
+}
+
+func (s *sseSubscriber) trySend(ev bstack.MarketEvent) {
+	select {
+	case s.ch <- ev:
+	default:
+		s.overflow.Store(true)
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (s *sseSubscriber) takeOverflow() bool {
+	return s.overflow.Swap(false)
+}
 
 func matchesSubFilter(ev bstack.MarketEvent, domains []string, filter map[string]bool) bool {
 	if len(filter) == 0 {
@@ -49,9 +72,7 @@ func (n *Node) broadcastEvent(ev bstack.MarketEvent, domains []string) {
 	if !hasSubs {
 		return
 	}
-	if len(ev.RawJSON) == 0 {
-		ev.RawJSON, _ = json.Marshal(ev)
-	}
+	// Pre-marshal only SlimJSON (omitting base64 BEEF); legacy non-slim subscribers marshal lazily in handleEvents.
 	if len(ev.SlimJSON) == 0 {
 		slim := ev
 		slim.BEEF = nil
@@ -63,38 +84,27 @@ func (n *Node) broadcastEvent(ev bstack.MarketEvent, domains []string) {
 	if ev.Payload.Kind == bstack.KindOffer && ev.BuyerPub != "" {
 		bPub := strings.ToLower(strings.TrimSpace(ev.BuyerPub))
 		if set := n.subsByPub[bPub]; len(set) > 0 {
-			for ch := range set {
-				if filter := n.subs[ch]; !matchesSubFilter(ev, domains, filter) {
-					continue
-				}
-				select {
-				case ch <- ev:
-				default:
-				}
+			for sub := range set {
+				// Deliver directly to the addressed Buyer even if they also sell different domains!
+				sub.trySend(ev)
 			}
 		}
 		if anonSet := n.subsByPub[""]; len(anonSet) > 0 {
-			for ch := range anonSet {
-				if filter := n.subs[ch]; !matchesSubFilter(ev, domains, filter) {
+			for sub := range anonSet {
+				if filter := n.subs[sub]; !matchesSubFilter(ev, domains, filter) {
 					continue
 				}
-				select {
-				case ch <- ev:
-				default:
-				}
+				sub.trySend(ev)
 			}
 		}
 		n.mu.RUnlock()
 		return
 	}
-	for ch, filter := range n.subs {
+	for sub, filter := range n.subs {
 		if !matchesSubFilter(ev, domains, filter) {
 			continue
 		}
-		select {
-		case ch <- ev:
-		default:
-		}
+		sub.trySend(ev)
 	}
 	n.mu.RUnlock()
 }
@@ -107,17 +117,17 @@ func (n *Node) broadcastBboxWake(recipientPub string) {
 	wakeEv := bstack.MarketEvent{Seq: -1, Topic: "bbox:" + pub}
 	n.mu.RLock()
 	if set := n.subsByPub[pub]; len(set) > 0 {
-		for ch := range set {
+		for sub := range set {
 			select {
-			case ch <- wakeEv:
+			case sub.ch <- wakeEv:
 			default:
 			}
 		}
 	}
 	if anonSet := n.subsByPub[""]; len(anonSet) > 0 {
-		for ch := range anonSet {
+		for sub := range anonSet {
 			select {
-			case ch <- wakeEv:
+			case sub.ch <- wakeEv:
 			default:
 			}
 		}
@@ -132,7 +142,24 @@ func (n *Node) TrySubscribe(domains ...string) (<-chan bstack.MarketEvent, func(
 
 // TrySubscribeForPub registers an SSE subscriber indexed by callerPub (for targeted O(1) bbox_wake delivery).
 func (n *Node) TrySubscribeForPub(callerPub string, domains ...string) (<-chan bstack.MarketEvent, func(), bool) {
-	ch := make(chan bstack.MarketEvent, 2048)
+	sub, unsub, ok := n.trySubscribeInternal(callerPub, domains...)
+	if !ok {
+		return nil, func() {}, false
+	}
+	return sub.ch, unsub, true
+}
+
+func (n *Node) trySubscribeInternal(callerPub string, domains ...string) (*sseSubscriber, func(), bool) {
+	bufSize := 2048
+	n.mu.RLock()
+	if n.sseBufSize > 0 {
+		bufSize = n.sseBufSize
+	}
+	n.mu.RUnlock()
+	sub := &sseSubscriber{
+		ch:   make(chan bstack.MarketEvent, bufSize),
+		wake: make(chan struct{}, 1),
+	}
 	pubKey := strings.ToLower(strings.TrimSpace(callerPub))
 	filter := make(map[string]bool)
 	for _, d := range domains {
@@ -145,27 +172,27 @@ func (n *Node) TrySubscribeForPub(callerPub string, domains ...string) (<-chan b
 		n.mu.Unlock()
 		return nil, func() {}, false
 	}
-	n.subs[ch] = filter
+	n.subs[sub] = filter
 	if n.subsByPub == nil {
-		n.subsByPub = make(map[string]map[chan bstack.MarketEvent]struct{})
+		n.subsByPub = make(map[string]map[*sseSubscriber]struct{})
 	}
 	pset := n.subsByPub[pubKey]
 	if pset == nil {
-		pset = make(map[chan bstack.MarketEvent]struct{}, 2)
+		pset = make(map[*sseSubscriber]struct{}, 2)
 		n.subsByPub[pubKey] = pset
 	}
-	pset[ch] = struct{}{}
+	pset[sub] = struct{}{}
 	n.mu.Unlock()
-	return ch, func() {
+	return sub, func() {
 		n.mu.Lock()
-		delete(n.subs, ch)
+		delete(n.subs, sub)
 		if ps := n.subsByPub[pubKey]; ps != nil {
-			delete(ps, ch)
+			delete(ps, sub)
 			if len(ps) == 0 {
 				delete(n.subsByPub, pubKey)
 			}
 		}
-		close(ch)
+		close(sub.ch)
 		n.mu.Unlock()
 	}, true
 }
@@ -343,12 +370,28 @@ func (n *Node) handleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	ch, unsub, subOK := n.TrySubscribeForPub(subPub, subFilters...)
+	sub, unsub, subOK := n.trySubscribeInternal(subPub, subFilters...)
 	if !subOK {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "hub SSE subscriber limit reached"})
 		return
 	}
 	defer unsub()
+	ch := sub.ch
+	var sseDownTopics []string
+	if len(doms) == 0 {
+		sseDownTopics = n.Topics()
+	} else {
+		for _, d := range doms {
+			if d = strings.TrimSpace(d); d != "" {
+				sseDownTopics = append(sseDownTopics, bstack.LaneOf(n.net, d))
+				if dt := bstack.DomainTopic(n.net, d); dt != "" {
+					sseDownTopics = append(sseDownTopics, dt)
+				}
+			}
+		}
+	}
+	releaseDown := n.AcquireDownstreamTopics(sseDownTopics)
+	defer releaseDown()
 
 	latestSeq := n.store.LatestSeq()
 	cursorReset := cursor > latestSeq
@@ -472,6 +515,19 @@ func (n *Node) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	backlogWatermark := lastSent
+	emitGapAndClose := func() {
+		msg, _ := json.Marshal(map[string]any{
+			"reason":    "slow_consumer",
+			"latestSeq": n.store.LatestSeq(),
+			"lastSent":  lastSent,
+		})
+		_, _ = fmt.Fprintf(w, "event: gap\ndata: %s\n\n", msg)
+		flusher.Flush()
+	}
+	if sub.takeOverflow() {
+		emitGapAndClose()
+		return
+	}
 	keepalive := time.NewTicker(15 * time.Second)
 	defer keepalive.Stop()
 	for {
@@ -482,6 +538,11 @@ func (n *Node) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-n.stopCh:
 			return
+		case <-sub.wake:
+			if sub.takeOverflow() {
+				emitGapAndClose()
+				return
+			}
 		case ev, ok := <-ch:
 			if !ok {
 				return

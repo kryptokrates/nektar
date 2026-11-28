@@ -48,6 +48,7 @@ type buyerPayResult struct {
 	NowUnix           int64                    `json:"nowUnix"`
 	TxID              string                   `json:"txid,omitempty"`
 	PayBEEFHex        string                   `json:"payBeefHex,omitempty"`
+	PayBEEFRaw        []byte                   `json:"-"`
 	OutputIndex       uint32                   `json:"outputIndex,omitempty"`
 	DerivPrefix       string                   `json:"derivPrefix,omitempty"`
 	DerivSuffix       string                   `json:"derivSuffix,omitempty"`

@@ -55,42 +55,54 @@ const (
 	KindAttestation ArtifactKind = "attestation"
 )
 
+// ErrUnknownCriticalKind is returned when an nkt1 payload carries an unknown EVEN kind >= 6 (RFC 6709 / RFC-003).
+var ErrUnknownCriticalKind = errors.New("bstack: unknown critical (even) artifact kind")
+
 // MarketPayload is the canonical nkt1 pure RFC 8949 CDE CBOR envelope riding on tm_nektar_<net>_<nibble> lanes.
 type MarketPayload struct {
-	Kind  ArtifactKind `json:"kind"`
-	Body  []byte       `json:"body"`            // exact canonical RFC 8949 CDE CBOR bytes of Signed* envelope
-	Extra []cbor.Pair  `json:"extra,omitempty"` // preserved non-critical odd extension keys
+	Kind    ArtifactKind `json:"kind"`
+	KindNum uint64       `json:"kindNum,omitempty"` // numeric kind (1..4 core, odd 5..255 non-critical extension)
+	Body    []byte       `json:"body"`              // exact canonical RFC 8949 CDE CBOR bytes of Signed* envelope
+	Extra   []cbor.Pair  `json:"extra,omitempty"`   // preserved non-critical odd extension keys
+}
+
+// IsUnknownExtensionKind reports whether p carries a forward-compatible non-critical odd extension kind (>= 5).
+func (p MarketPayload) IsUnknownExtensionKind() bool {
+	return (p.KindNum >= 5 && p.KindNum%2 == 1) || strings.HasPrefix(string(p.Kind), "ext:")
 }
 
 // SignedWant advertises a buyer's knowledge request on the market lanes.
 type SignedWant struct {
-	Want    WantAd `json:"want"`
-	Sig     string `json:"sig"`
-	RawCBOR []byte `json:"-"`
+	Want    WantAd      `json:"want"`
+	Sig     string      `json:"sig"`
+	RawCBOR []byte      `json:"-"`
+	Extra   []cbor.Pair `json:"-"` // preserved non-critical odd envelope extension keys
 }
 
 type WantAd struct {
-	WantID            string   `json:"wantId"`
-	Pub               string   `json:"pub"`
-	Net               string   `json:"net"`
-	Domains           []string `json:"domains"`
-	Query             string   `json:"query"`
-	OntologyID        string   `json:"ontologyId,omitempty"`        // optional 32-byte hex committed TBox OntologyID
-	MaxSats           uint64   `json:"maxSats"`
-	MinGrade          string   `json:"minGrade,omitempty"`          // NMU-1 minimum grade: C | B | A | S
-	MaxSatsPer1kUnits uint64   `json:"maxSatsPer1kUnits,omitempty"` // NMU-1 max normalized unit price (milli-sats/triple)
-	FreshnessClass    string   `json:"freshnessClass,omitempty"`    // NMU-1: ephemeral | versioned | evergreen
-	RequiredRights    string   `json:"requiredRights,omitempty"`    // NMU-1: inference_only | distill_resellable
-	PricingMode       string   `json:"pricingMode,omitempty"`       // NMU-1: spot | per_query | subscription
-	Revision          int      `json:"revision"`
-	Exp               int64    `json:"exp"` // unix ms
+	WantID            string      `json:"wantId"`
+	Pub               string      `json:"pub"`
+	Net               string      `json:"net"`
+	Domains           []string    `json:"domains"`
+	Query             string      `json:"query"`
+	OntologyID        string      `json:"ontologyId,omitempty"`        // optional 32-byte hex committed TBox OntologyID
+	MaxSats           uint64      `json:"maxSats"`
+	MinGrade          string      `json:"minGrade,omitempty"`          // NMU-1 minimum grade: C | B | A | S
+	MaxSatsPer1kUnits uint64      `json:"maxSatsPer1kUnits,omitempty"` // NMU-1 max normalized unit price (milli-sats/triple)
+	FreshnessClass    string      `json:"freshnessClass,omitempty"`    // NMU-1: ephemeral | versioned | evergreen
+	RequiredRights    string      `json:"requiredRights,omitempty"`    // NMU-1: inference_only | distill_resellable
+	PricingMode       string      `json:"pricingMode,omitempty"`       // NMU-1: spot | per_query | subscription
+	Revision          int         `json:"revision"`
+	Exp               int64       `json:"exp"` // unix ms
+	Extra             []cbor.Pair `json:"-"`   // preserved non-critical odd CBOR extension keys
 }
 
 // SignedOffer advertises a seller's signed quote answering a WantAd.
 type SignedOffer struct {
-	Offer   OfferAd `json:"offer"`
-	Sig     string  `json:"sig"`
-	RawCBOR []byte  `json:"-"`
+	Offer   OfferAd     `json:"offer"`
+	Sig     string      `json:"sig"`
+	RawCBOR []byte      `json:"-"`
+	Extra   []cbor.Pair `json:"-"` // preserved non-critical odd envelope extension keys
 }
 
 type OfferAd struct {
@@ -131,47 +143,51 @@ type OfferAd struct {
 	Revision        int             `json:"revision"`
 	Exp             int64           `json:"exp"`
 	PayloadFormat   string          `json:"payloadFormat,omitempty"` // "nkt" for self-verifying .nkt capsule delivery
+	Extra           []cbor.Pair     `json:"-"`                       // preserved non-critical odd CBOR extension keys
 }
 
 // PackRef advertises a content-addressed CHIRP shard pack (or ontology/bridge repo) in a signed AnnounceAd.
 type PackRef struct {
-	Shard                 string   `json:"shard"`
-	Domains               []string `json:"domains,omitempty"`
-	ChirpURL              string   `json:"chirpUrl"`
-	RootHex               string   `json:"rootHex,omitempty"`
-	OntologyID            string   `json:"ontologyId,omitempty"`
-	TargetOntologyID      string   `json:"targetOntologyId,omitempty"` // populated for cross-ontology Bridge Shards
-	Count                 int      `json:"count,omitempty"`
-	Grade                 string   `json:"grade,omitempty"`                 // NMU-1 highest provable grade in shard
-	UnitCount             uint32   `json:"unitCount,omitempty"`             // NMU-1 verified units per pack/average
-	PricingMode           string   `json:"pricingMode,omitempty"`           // primary pricing mode (spot | per_query | subscription)
-	EnabledModes          []string `json:"enabledModes,omitempty"`          // independent enabled modes for multi-mode listings
-	PriceSats             uint64   `json:"priceSats,omitempty"`             // spot ask in sats
-	SatsPer1kUnits        uint64   `json:"satsPer1kUnits,omitempty"`        // normalized spot unit price (milli-sats/triple)
-	QueryPriceSats        uint64   `json:"queryPriceSats,omitempty"`        // per_query metered recall ask (BRC-105 402)
-	SubscriptionPriceSats uint64   `json:"subscriptionPriceSats,omitempty"` // subscription feed ask
-	SubscriptionSec       int64    `json:"subscriptionSec,omitempty"`       // subscription window duration in seconds
-	FreshnessClass        string   `json:"freshnessClass,omitempty"`
-	UsageRights           string   `json:"usageRights,omitempty"`
-	QueryEndpoint         string   `json:"queryEndpoint,omitempty"` // POST /v1/market/query URL
-	FeedEndpoint          string   `json:"feedEndpoint,omitempty"`  // GET /v1/market/feeds/{shard} SSE URL
+	Shard                 string      `json:"shard"`
+	Domains               []string    `json:"domains,omitempty"`
+	ChirpURL              string      `json:"chirpUrl"`
+	RootHex               string      `json:"rootHex,omitempty"`
+	OntologyID            string      `json:"ontologyId,omitempty"`
+	TargetOntologyID      string      `json:"targetOntologyId,omitempty"` // populated for cross-ontology Bridge Shards
+	Count                 int         `json:"count,omitempty"`
+	Grade                 string      `json:"grade,omitempty"`                 // NMU-1 highest provable grade in shard
+	UnitCount             uint32      `json:"unitCount,omitempty"`             // NMU-1 verified units per pack/average
+	PricingMode           string      `json:"pricingMode,omitempty"`           // primary pricing mode (spot | per_query | subscription)
+	EnabledModes          []string    `json:"enabledModes,omitempty"`          // independent enabled modes for multi-mode listings
+	PriceSats             uint64      `json:"priceSats,omitempty"`             // spot ask in sats
+	SatsPer1kUnits        uint64      `json:"satsPer1kUnits,omitempty"`        // normalized spot unit price (milli-sats/triple)
+	QueryPriceSats        uint64      `json:"queryPriceSats,omitempty"`        // per_query metered recall ask (BRC-105 402)
+	SubscriptionPriceSats uint64      `json:"subscriptionPriceSats,omitempty"` // subscription feed ask
+	SubscriptionSec       int64       `json:"subscriptionSec,omitempty"`       // subscription window duration in seconds
+	FreshnessClass        string      `json:"freshnessClass,omitempty"`
+	UsageRights           string      `json:"usageRights,omitempty"`
+	QueryEndpoint         string      `json:"queryEndpoint,omitempty"` // POST /v1/market/query URL
+	FeedEndpoint          string      `json:"feedEndpoint,omitempty"`  // GET /v1/market/feeds/{shard} SSE URL
+	Extra                 []cbor.Pair `json:"-"`                       // preserved non-critical odd CBOR extension keys
 }
 
 // SignedAnnounce advertises an operator/hub node on the enumerable dir lane.
 type SignedAnnounce struct {
-	Announce AnnounceAd `json:"announce"`
-	Sig      string     `json:"sig"`
-	RawCBOR  []byte     `json:"-"`
+	Announce AnnounceAd  `json:"announce"`
+	Sig      string      `json:"sig"`
+	RawCBOR  []byte      `json:"-"`
+	Extra    []cbor.Pair `json:"-"` // preserved non-critical odd envelope extension keys
 }
 
 // HubFeeAdvert summarizes a Hub operator's advertised fee schedule on the directory lane.
 type HubFeeAdvert struct {
-	SubmitWantSats         uint64 `json:"submitWantSats,omitempty"`
-	SubmitOfferSats        uint64 `json:"submitOfferSats,omitempty"`
-	SubmitAnnounceSats     uint64 `json:"submitAnnounceSats,omitempty"`
-	BboxSendSats           uint64 `json:"bboxSendSats,omitempty"`
-	EgressSatsPer100Events uint64 `json:"egressSatsPer100Events,omitempty"`
-	EgressMinTopupSats     uint64 `json:"egressMinTopupSats,omitempty"`
+	SubmitWantSats         uint64      `json:"submitWantSats,omitempty"`
+	SubmitOfferSats        uint64      `json:"submitOfferSats,omitempty"`
+	SubmitAnnounceSats     uint64      `json:"submitAnnounceSats,omitempty"`
+	BboxSendSats           uint64      `json:"bboxSendSats,omitempty"`
+	EgressSatsPer100Events uint64      `json:"egressSatsPer100Events,omitempty"`
+	EgressMinTopupSats     uint64      `json:"egressMinTopupSats,omitempty"`
+	Extra                  []cbor.Pair `json:"-"` // preserved non-critical odd CBOR extension keys
 }
 
 type AnnounceAd struct {
@@ -193,6 +209,7 @@ type AnnounceAd struct {
 	HubTermsURL       string        `json:"hubTermsUrl,omitempty"`
 	HubFees           *HubFeeAdvert `json:"hubFees,omitempty"`
 	Exp               int64         `json:"exp"`
+	Extra             []cbor.Pair   `json:"-"` // preserved non-critical odd CBOR extension keys
 }
 
 // SignedAttestation advertises a signed bilateral reputation attestation (`nektarrep1.*`) on the overlay.
@@ -200,22 +217,24 @@ type SignedAttestation struct {
 	Attestation AttestationAd `json:"attestation"`
 	Sig         string        `json:"sig"`
 	RawCBOR     []byte        `json:"-"`
+	Extra       []cbor.Pair   `json:"-"` // preserved non-critical odd envelope extension keys
 }
 
 // AttestationAd wraps a signed canonical CBOR `nektarrep1.*` token for overlay gossip & ls_nektar lookup.
 type AttestationAd struct {
-	AttestHash      string   `json:"attestHash"`
-	Role            string   `json:"role"` // buyer_rates_seller | seller_rates_buyer
-	Pub             string   `json:"pub"`  // issuer compressed pubkey (33-byte hex)
-	SubjectPub      string   `json:"subjectPub"`
-	Net             string   `json:"net"`
-	Domains         []string `json:"domains,omitempty"`
-	OntologyID      string   `json:"ontologyId,omitempty"`
-	DealID          string   `json:"dealId"`
-	DealReceiptHash string   `json:"dealReceiptHash"`
-	Token           string   `json:"token"` // nektarrep1.<base64url>
-	CompositeBP     int64    `json:"compositeBp"`
-	Exp             int64    `json:"exp"` // unix ms
+	AttestHash      string      `json:"attestHash"`
+	Role            string      `json:"role"` // buyer_rates_seller | seller_rates_buyer
+	Pub             string      `json:"pub"`  // issuer compressed pubkey (33-byte hex)
+	SubjectPub      string      `json:"subjectPub"`
+	Net             string      `json:"net"`
+	Domains         []string    `json:"domains,omitempty"`
+	OntologyID      string      `json:"ontologyId,omitempty"`
+	DealID          string      `json:"dealId"`
+	DealReceiptHash string      `json:"dealReceiptHash"`
+	Token           string      `json:"token"` // nektarrep1.<base64url>
+	CompositeBP     int64       `json:"compositeBp"`
+	Exp             int64       `json:"exp"` // unix ms
+	Extra           []cbor.Pair `json:"-"`   // preserved non-critical odd CBOR extension keys
 }
 
 // EncodePayload encodes a MarketPayload as a pure RFC 8949 CDE CBOR nkt1 record via bcommon/record.
@@ -232,7 +251,20 @@ func EncodePayload(p MarketPayload) ([]byte, error) {
 	case KindAttestation:
 		kindNum = 4
 	default:
-		return nil, fmt.Errorf("bstack: unknown artifact kind %q", p.Kind)
+		if p.KindNum >= 5 && p.KindNum <= 255 {
+			kindNum = p.KindNum
+		} else if strings.HasPrefix(string(p.Kind), "ext:") {
+			var parsed uint64
+			if _, err := fmt.Sscanf(strings.TrimPrefix(string(p.Kind), "ext:"), "%d", &parsed); err == nil && parsed >= 5 && parsed <= 255 {
+				kindNum = parsed
+			}
+		}
+		if kindNum == 0 {
+			return nil, fmt.Errorf("bstack: unknown artifact kind %q", p.Kind)
+		}
+		if kindNum%2 == 0 {
+			return nil, fmt.Errorf("%w: %d", ErrUnknownCriticalKind, kindNum)
+		}
 	}
 	if len(p.Body) == 0 {
 		return nil, errors.New("bstack: empty nkt1 body")
@@ -247,20 +279,27 @@ func EncodePayload(p MarketPayload) ([]byte, error) {
 	}
 	var extra cbor.Map
 	if len(p.Extra) > 0 {
-		extra = make(cbor.Map, 0, len(p.Extra))
+		extra = make(cbor.Map, 0, len(p.Extra)+1)
 		for _, pair := range p.Extra {
 			k, ok := pair.Key.(uint64)
 			if !ok || k <= 2 {
 				return nil, fmt.Errorf("bstack: invalid nkt1 extension key %v", pair.Key)
 			}
+			if k%2 == 0 {
+				return nil, fmt.Errorf("bstack: %w: %d", core.ErrUnknownCriticalKey, k)
+			}
 			extra = append(extra, pair)
 		}
+	}
+	if core.WireGreaseEnabled() {
+		extra = core.MaybeAppendGrease(extra, true)
 	}
 	return record.Encode(m, extra, MaxPayload)
 }
 
 // DecodePayload decodes a pure RFC 8949 CDE CBOR nkt1 record via bcommon/record,
-// enforcing critical (even) unknown-key rejection and preserving non-critical (odd) extension keys.
+// enforcing critical (even) unknown-key and unknown-kind rejection while preserving
+// non-critical (odd) extension keys and odd extension kinds (RFC 9413 / RFC 6709 / RFC-003).
 func DecodePayload(b []byte) (MarketPayload, error) {
 	if !record.Claims(b, MarketMagic) {
 		return MarketPayload{}, errors.New("bstack: payload does not carry nkt1 magic")
@@ -269,7 +308,7 @@ func DecodePayload(b []byte) (MarketPayload, error) {
 	if err != nil {
 		return MarketPayload{}, fmt.Errorf("bstack: decode nkt1 record: %w", err)
 	}
-	kindNum, err := f.Uint(1, 1, 4)
+	kindNum, err := f.Uint(1, 1, 255)
 	if err != nil {
 		return MarketPayload{}, fmt.Errorf("bstack: kind field: %w", err)
 	}
@@ -304,10 +343,15 @@ func DecodePayload(b []byte) (MarketPayload, error) {
 		kind = KindAnnounce
 	case 4:
 		kind = KindAttestation
+	default:
+		if kindNum%2 == 0 {
+			return MarketPayload{}, fmt.Errorf("%w: %d", ErrUnknownCriticalKind, kindNum)
+		}
+		kind = ArtifactKind(fmt.Sprintf("ext:%d", kindNum))
 	}
 	cp := make([]byte, len(bodyBytes))
 	copy(cp, bodyBytes)
-	return MarketPayload{Kind: kind, Body: cp, Extra: extra}, nil
+	return MarketPayload{Kind: kind, KindNum: kindNum, Body: cp, Extra: extra}, nil
 }
 
 // LaneNibble hashes domain to one hex nibble [0-9a-f].

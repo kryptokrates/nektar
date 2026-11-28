@@ -131,16 +131,20 @@ func (e *Engine) ExecuteBuyerDealDirect(ctx context.Context, dealID string, in B
 		chosenCopy := cand
 		st.ChosenOffer = &chosenCopy
 		st.ChirpURL = chosen.ChirpURL
-		if chosenRaw, mErr := json.Marshal(chosenCopy); mErr == nil && e.FastJournal() == nil {
-			_, _ = acts.PersistDealState(ctx, store.DealRecord{
-				DealID:          dealID,
-				Role:            "buyer",
-				Status:          "offered",
-				ChosenOfferJSON: chosenRaw,
-				CounterpartyPub: chosen.Pub,
-				PriceSats:       chosen.PriceSats,
-				ChirpURL:        chosen.ChirpURL,
-			})
+		if e.FastJournal() == nil || strings.TrimSpace(chosen.SellerURL) == "" {
+			wantRaw, _ := json.Marshal(want)
+			if chosenRaw, mErr := json.Marshal(chosenCopy); mErr == nil {
+				_, _ = acts.PersistDealState(ctx, store.DealRecord{
+					DealID:          dealID,
+					Role:            "buyer",
+					Status:          "offered",
+					WantJSON:        wantRaw,
+					ChosenOfferJSON: chosenRaw,
+					CounterpartyPub: chosen.Pub,
+					PriceSats:       chosen.PriceSats,
+					ChirpURL:        chosen.ChirpURL,
+				})
+			}
 		}
 		if chosen.PriceSats > 0 {
 			res, cErr := acts.CustodyReserve(ctx, CustodyReserveInput{
@@ -246,6 +250,14 @@ func (e *Engine) ExecuteBuyerDealDirect(ctx context.Context, dealID string, in B
 			poll := time.NewTicker(25 * time.Millisecond)
 			settled := false
 			for !settled {
+				if fj := e.FastJournal(); fj != nil {
+					if rec, ok := fj.GetDealWAL(dealID); ok && rec.Status == "settled" {
+						ds := dealStateFromRecord(rec)
+						deadline.Stop()
+						poll.Stop()
+						return &ds, true, nil
+					}
+				}
 				if e.mem != nil && e.mem.DB() != nil {
 					if rec, gErr := e.mem.DB().GetDeal(dealID); gErr == nil && rec.Status == "settled" {
 						ds := dealStateFromRecord(rec)

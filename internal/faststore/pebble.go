@@ -1,15 +1,100 @@
 package faststore
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/vfs"
 )
+
+// bufferedWALFS wraps vfs.Default to bypass DiskHealthCheckingFS pprof overhead and coalesce
+// small non-synced Pebble WAL appends into 64 KiB OS writes (preventing Windows Defender NTFS
+// WriteFile stall on every 200-byte commit while still flushing to real disk on Sync/Close/fill).
+type bufferedWALFS struct {
+	vfs.FS
+}
+
+func (fs bufferedWALFS) Create(name string) (vfs.File, error) {
+	f, err := fs.FS.Create(name)
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasSuffix(name, ".log") || strings.HasSuffix(name, ".sst") {
+		return &bufferedWALFile{File: f, bw: bufio.NewWriterSize(f, 128<<10)}, nil
+	}
+	return f, nil
+}
+
+func (fs bufferedWALFS) ReuseForWrite(oldname, newname string) (vfs.File, error) {
+	f, err := fs.FS.ReuseForWrite(oldname, newname)
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasSuffix(newname, ".log") || strings.HasSuffix(newname, ".sst") {
+		return &bufferedWALFile{File: f, bw: bufio.NewWriterSize(f, 128<<10)}, nil
+	}
+	return f, nil
+}
+
+type bufferedWALFile struct {
+	vfs.File
+	mu sync.Mutex
+	bw *bufio.Writer
+}
+
+func (bf *bufferedWALFile) Write(p []byte) (int, error) {
+	bf.mu.Lock()
+	n, err := bf.bw.Write(p)
+	bf.mu.Unlock()
+	return n, err
+}
+
+func (bf *bufferedWALFile) Sync() error {
+	bf.mu.Lock()
+	if err := bf.bw.Flush(); err != nil {
+		bf.mu.Unlock()
+		return err
+	}
+	bf.mu.Unlock()
+	return bf.File.Sync()
+}
+
+func (bf *bufferedWALFile) SyncData() error {
+	bf.mu.Lock()
+	if err := bf.bw.Flush(); err != nil {
+		bf.mu.Unlock()
+		return err
+	}
+	bf.mu.Unlock()
+	return bf.File.SyncData()
+}
+
+func (bf *bufferedWALFile) SyncTo(length int64) (bool, error) {
+	bf.mu.Lock()
+	if err := bf.bw.Flush(); err != nil {
+		bf.mu.Unlock()
+		return false, err
+	}
+	bf.mu.Unlock()
+	return bf.File.SyncTo(length)
+}
+
+func (bf *bufferedWALFile) Close() error {
+	bf.mu.Lock()
+	flushErr := bf.bw.Flush()
+	bf.mu.Unlock()
+	closeErr := bf.File.Close()
+	if flushErr != nil {
+		return flushErr
+	}
+	return closeErr
+}
 
 var (
 	ErrNotFound = errors.New("faststore: key not found")
@@ -47,9 +132,9 @@ type DB struct {
 func Open(opts Options) (*DB, error) {
 	memMB := opts.MemTableMB
 	if memMB <= 0 {
-		memMB = 32
+		memMB = 16
 	}
-	cache := pebble.NewCache(64 << 20)
+	cache := pebble.NewCache(16 << 20)
 	defer cache.Unref()
 
 	pOpts := &pebble.Options{
@@ -57,8 +142,8 @@ func Open(opts Options) (*DB, error) {
 		Logger:                      silentLogger{},
 		MemTableSize:                uint64(memMB) << 20,
 		MemTableStopWritesThreshold: 4,
-		L0CompactionThreshold:       8,
-		L0StopWritesThreshold:       24,
+		L0CompactionThreshold:       16,
+		L0StopWritesThreshold:       32,
 		MaxOpenFiles:                256,
 		BytesPerSync:                512 << 10,
 		WALBytesPerSync:             512 << 10,
@@ -70,6 +155,12 @@ func Open(opts Options) (*DB, error) {
 	} else {
 		if err := os.MkdirAll(filepath.Clean(dir), 0o700); err != nil {
 			return nil, fmt.Errorf("faststore: mkdir %s: %w", dir, err)
+		}
+		if opts.SyncWrites {
+			pOpts.FS = vfs.Default
+		} else {
+			pOpts.FS = bufferedWALFS{FS: vfs.Default}
+			pOpts.WALBytesPerSync = 0
 		}
 	}
 	pdb, err := pebble.Open(dir, pOpts)

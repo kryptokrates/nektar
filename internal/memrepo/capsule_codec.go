@@ -289,7 +289,7 @@ func NewCapsuleWriter(w io.Writer, opts CapsuleEncodeOpts) (*StreamCapsuleWriter
 		}
 	}
 
-	zenc, err := zstd.NewWriter(zDst, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	zenc, err := zstd.NewWriter(zDst, zstd.WithEncoderLevel(zstd.SpeedFastest))
 	if err != nil {
 		return nil, err
 	}
@@ -358,6 +358,11 @@ func (cw *StreamCapsuleWriter) WriteHeader(h CapsuleHeader) error {
 	}
 	if h.SelfContained {
 		m = append(m, cbor.Pair{Key: uint64(14), Val: true})
+	}
+	var err error
+	m, err = core.AppendExtraPairs(m, capHeaderKnownKeys, h.Extra)
+	if err != nil {
+		return err
 	}
 	cw.hdrDone = true
 	return cw.writeRecord(capRecHeader, m)
@@ -642,6 +647,7 @@ func WriteCapsuleStream(w io.Writer, cap *MemoryCapsule, opts CapsuleEncodeOpts)
 		BaseMmrRoot:    cap.BaseMmrRoot,
 		ExportedAt:     cap.ExportedAt,
 		SelfContained:  cap.SelfContained || opts.SelfContained,
+		Extra:          cap.HeaderExtra,
 	}
 	if err := cw.WriteHeader(hdr); err != nil {
 		return err
@@ -881,6 +887,13 @@ func readCapsuleStreamInternal(r io.Reader, opts CapsuleVerifyOpts) (*MemoryCaps
 		if !gotHeader && recType != capRecHeader {
 			return nil, encrypted, errors.New("memrepo: first capsule record must be Header")
 		}
+		var recExtra []cbor.Pair
+		if known := capsuleRecordKnownKeys(recType); known != nil {
+			m, recExtra, err = core.SplitCBORMap(val, known)
+			if err != nil {
+				return nil, encrypted, fmt.Errorf("memrepo: capsule record type %d: %w", recType, err)
+			}
+		}
 		if recType != capRecTrailer {
 			_, _ = hasher.Write(rawItem)
 			counts[recType]++
@@ -895,6 +908,7 @@ func readCapsuleStreamInternal(r io.Reader, opts CapsuleVerifyOpts) (*MemoryCaps
 			if hErr != nil {
 				return nil, encrypted, hErr
 			}
+			h.Extra = recExtra
 			if h.Format != CapsuleFormatVersion {
 				return nil, encrypted, fmt.Errorf("memrepo: unexpected capsule format %q", h.Format)
 			}
@@ -912,6 +926,7 @@ func readCapsuleStreamInternal(r io.Reader, opts CapsuleVerifyOpts) (*MemoryCaps
 			cap.BaseMmrRoot = h.BaseMmrRoot
 			cap.ExportedAt = h.ExportedAt
 			cap.SelfContained = h.SelfContained
+			cap.HeaderExtra = recExtra
 			gotHeader = true
 
 		case capRecBlobMeta:
@@ -1018,6 +1033,7 @@ func readCapsuleStreamInternal(r io.Reader, opts CapsuleVerifyOpts) (*MemoryCaps
 			if err != nil {
 				return nil, encrypted, err
 			}
+			tr.Extra = recExtra
 			wantDigest := core.SHA256(hasher.Sum(nil))
 			if !core.EqualBytes(wantDigest, tr.StreamDigest) {
 				return nil, encrypted, errors.New("memrepo: capsule trailer streamDigest mismatch (corrupted or tampered)")
@@ -1095,6 +1111,40 @@ func readCapsuleStreamInternal(r io.Reader, opts CapsuleVerifyOpts) (*MemoryCaps
 
 // --- Internal CBOR Struct Codecs for Capsule Records ---
 
+var (
+	capHeaderKnownKeys           = core.KnownKeyRange(0, 14)
+	capBlobMetaKnownKeys         = core.KnownKeyRange(0, 1)
+	capBlobChunkKnownKeys        = core.KnownKeyRange(0, 3)
+	capSinglePayloadRecKnownKeys = core.KnownKeyRange(0, 1)
+	capAnchorKnownKeys           = core.KnownKeyRange(0, 14)
+	capFragmentMetaKnownKeys     = core.KnownKeyRange(0, 34)
+	capBatchProofKnownKeys       = core.KnownKeyRange(0, 2)
+	capTrailerKnownKeys          = core.KnownKeyRange(0, 4)
+)
+
+func capsuleRecordKnownKeys(recType uint64) map[uint64]struct{} {
+	switch recType {
+	case capRecHeader:
+		return capHeaderKnownKeys
+	case capRecBlobMeta:
+		return capBlobMetaKnownKeys
+	case capRecBlobChunk:
+		return capBlobChunkKnownKeys
+	case capRecTree, capRecCommit, capRecTransition:
+		return capSinglePayloadRecKnownKeys
+	case capRecAnchor:
+		return capAnchorKnownKeys
+	case capRecFragmentMeta:
+		return capFragmentMetaKnownKeys
+	case capRecBatchProof:
+		return capBatchProofKnownKeys
+	case capRecTrailer:
+		return capTrailerKnownKeys
+	default:
+		return nil
+	}
+}
+
 func encodeEnvelopeHeaderCBOR(h CapsuleEnvelopeHeader) ([]byte, error) {
 	m := cbor.Map{
 		{Key: uint64(1), Val: h.Version},
@@ -1107,6 +1157,11 @@ func encodeEnvelopeHeaderCBOR(h CapsuleEnvelopeHeader) ([]byte, error) {
 	if h.RecipientPub != "" {
 		m = append(m, cbor.Pair{Key: uint64(7), Val: h.RecipientPub})
 	}
+	var err error
+	m, err = core.AppendExtraPairs(m, envelopeHdrKnownKeys, h.Extra)
+	if err != nil {
+		return nil, err
+	}
 	return core.EncodeCBOR(m)
 }
 
@@ -1117,11 +1172,12 @@ func decodeEnvelopeHeaderCBOR(raw []byte) (CapsuleEnvelopeHeader, error) {
 	if err != nil {
 		return CapsuleEnvelopeHeader{}, fmt.Errorf("memrepo: decode envelope header: %w", err)
 	}
-	m, _, err := core.SplitCBORMap(v, envelopeHdrKnownKeys)
+	m, extra, err := core.SplitCBORMap(v, envelopeHdrKnownKeys)
 	if err != nil {
 		return CapsuleEnvelopeHeader{}, err
 	}
 	var h CapsuleEnvelopeHeader
+	h.Extra = extra
 	if h.Version, err = core.CBORUint(m, 1); err != nil {
 		return CapsuleEnvelopeHeader{}, err
 	}
@@ -1212,6 +1268,11 @@ func encodeCommitObjectCBOR(c CommitObject) ([]byte, error) {
 	if c.FragmentLeaf != "" {
 		m = append(m, cbor.Pair{Key: uint64(19), Val: c.FragmentLeaf})
 	}
+	var err error
+	m, err = core.AppendExtraPairs(m, commitObjKnownKeys, c.Extra)
+	if err != nil {
+		return nil, err
+	}
 	return core.EncodeCBOR(m)
 }
 
@@ -1222,11 +1283,12 @@ func decodeCommitObjectCBOR(raw []byte) (CommitObject, error) {
 	if err != nil {
 		return CommitObject{}, err
 	}
-	m, _, err := core.SplitCBORMap(v, commitObjKnownKeys)
+	m, extra, err := core.SplitCBORMap(v, commitObjKnownKeys)
 	if err != nil {
 		return CommitObject{}, err
 	}
 	var c CommitObject
+	c.Extra = extra
 	ver, err := core.CBORInt(m, 1)
 	if err != nil {
 		return CommitObject{}, err

@@ -78,17 +78,42 @@ func (a *App) handleMarketDirectQuote(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, market.DirectQuoteResponse{OK: false, Error: "market broker not attached"})
 		return
 	}
+	useCBOR := strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), market.ContentTypeCBOR) ||
+		strings.Contains(strings.ToLower(r.Header.Get("Accept")), market.ContentTypeCBOR)
+	writeQuoteResp := func(status int, resp market.DirectQuoteResponse) {
+		if useCBOR {
+			if raw, cErr := market.EncodeDirectQuoteResponseCBOR(resp); cErr == nil {
+				w.Header().Set("Content-Type", market.ContentTypeCBOR)
+				w.WriteHeader(status)
+				_, _ = w.Write(raw)
+				return
+			}
+		}
+		writeJSON(w, status, resp)
+	}
 	var req market.DirectQuoteRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, market.DirectQuoteResponse{OK: false, Error: err.Error()})
+	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), market.ContentTypeCBOR) {
+		raw, rErr := io.ReadAll(io.LimitReader(r.Body, 256<<10))
+		if rErr != nil {
+			writeQuoteResp(http.StatusBadRequest, market.DirectQuoteResponse{OK: false, Error: rErr.Error()})
+			return
+		}
+		dec, dErr := market.DecodeDirectQuoteRequestCBOR(raw)
+		if dErr != nil {
+			writeQuoteResp(http.StatusBadRequest, market.DirectQuoteResponse{OK: false, Error: dErr.Error()})
+			return
+		}
+		req = dec
+	} else if err := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&req); err != nil {
+		writeQuoteResp(http.StatusBadRequest, market.DirectQuoteResponse{OK: false, Error: err.Error()})
 		return
 	}
 	offer, err := a.broker.HandleDirectQuote(r.Context(), req)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, market.DirectQuoteResponse{OK: false, Error: err.Error()})
+		writeQuoteResp(http.StatusBadRequest, market.DirectQuoteResponse{OK: false, Error: err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, market.DirectQuoteResponse{OK: true, Offer: offer})
+	writeQuoteResp(http.StatusOK, market.DirectQuoteResponse{OK: true, Offer: offer})
 }
 
 func (a *App) handleJoinHost(w http.ResponseWriter, r *http.Request) {

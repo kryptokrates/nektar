@@ -105,21 +105,56 @@ func deriveCapsuleRepoName(primaryDomain, text string) string {
 	return fmt.Sprintf("capsules/%s-%s", slug, hex.EncodeToString(sum[:])[:8])
 }
 
-func (tb *Toolbox) ensureAutoTradingPolicy(allowMainnetSeller bool) {
+func (tb *Toolbox) ensureAutoTradingPolicy(allowMainnetSeller bool, wantBuyer ...bool) {
 	if tb == nil || tb.mem == nil || tb.mkt == nil || tb.mem.DB() == nil {
 		return
 	}
+	needBuyer := len(wantBuyer) > 0 && wantBuyer[0]
+	hasActive := false
+	hasBuyer := false
 	pols, err := tb.mem.DB().ListOperatorPolicies()
 	if err == nil {
 		for _, p := range pols {
 			if p.Active {
-				return
+				hasActive = true
+				for _, r := range p.Roles {
+					if strings.EqualFold(r, "buyer") {
+						hasBuyer = true
+					}
+				}
 			}
 		}
 	}
 	net := ""
 	if tb.mem.Chain() != nil {
 		net = tb.mem.Chain().Network()
+	}
+	enableBoundedAutonomy := func() {
+		if pol := tb.mkt.Policy(); pol != nil {
+			_ = pol.SetAutonomyConfig(market.AutonomyConfig{
+				AutoWantOnMiss:        true,
+				AutoWantMissThreshold: 3,
+				AutoWantMaxPerDay:     3,
+				AutoWantBudgetSats:    250,
+			})
+		}
+	}
+	if hasActive {
+		// On Mainnet, auto-upgrade seller-only nodes to bounded "both" once funded and explicitly invoking buyCapsule.
+		if net == "main" && needBuyer && !hasBuyer && tb.mem.Chain() != nil &&
+			(tb.mem.Chain().BalanceSats() > 0 || tb.mem.Chain().WalletMode() == "client") {
+			if prof, ok := market.PolicyProfileDefaults("standard"); ok {
+				ai := prof.AIMatching
+				zc := prof.ZeroConfMax
+				_, _ = market.ApprovePolicyCustom(tb.mem.DB(), tb.mkt.Policy(), "both", nil, &market.PolicyLimitsOverride{
+					MaxPerDeal:  prof.MaxPerDeal,
+					MaxPerDay:   prof.MaxPerDay,
+					ZeroConfMax: &zc,
+				}, "auto-funded-buyer", &ai)
+				enableBoundedAutonomy()
+			}
+		}
+		return
 	}
 	switch net {
 	case "testnet", "memory", "regtest":
@@ -131,18 +166,28 @@ func (tb *Toolbox) ensureAutoTradingPolicy(allowMainnetSeller bool) {
 				MaxPerDay:   prof.MaxPerDay,
 				ZeroConfMax: &zc,
 			}, "auto-onboard", &ai)
+			enableBoundedAutonomy()
 		}
 	case "main":
-		if allowMainnetSeller {
+		canBuyMain := needBuyer && tb.mem.Chain() != nil && (tb.mem.Chain().BalanceSats() > 0 || tb.mem.Chain().WalletMode() == "client")
+		if canBuyMain || allowMainnetSeller {
 			if prof, ok := market.PolicyProfileDefaults("standard"); ok {
 				ai := prof.AIMatching
 				zc := prof.ZeroConfMax
-				// Seller-only policy carries zero outbound treasury spend risk.
-				_, _ = market.ApprovePolicyCustom(tb.mem.DB(), tb.mkt.Policy(), "seller", nil, &market.PolicyLimitsOverride{
+				preset := "seller"
+				by := "auto-seller"
+				if canBuyMain {
+					preset = "both"
+					by = "auto-funded-buyer"
+				}
+				_, _ = market.ApprovePolicyCustom(tb.mem.DB(), tb.mkt.Policy(), preset, nil, &market.PolicyLimitsOverride{
 					MaxPerDeal:  prof.MaxPerDeal,
 					MaxPerDay:   prof.MaxPerDay,
 					ZeroConfMax: &zc,
-				}, "auto-seller", &ai)
+				}, by, &ai)
+				if canBuyMain {
+					enableBoundedAutonomy()
+				}
 			}
 		}
 	}
@@ -190,7 +235,7 @@ func (tb *Toolbox) ExecBuyCapsule(ctx context.Context, in BuyCapsuleInput) (any,
 		ttlSec = 86400
 	}
 
-	tb.ensureAutoTradingPolicy(false)
+	tb.ensureAutoTradingPolicy(false, true)
 
 	collectTimeout := time.Duration(0)
 	if postBounty && tb.mem != nil && tb.mem.Chain() != nil && (tb.mem.Chain().Network() == "main" || tb.mem.Chain().Network() == "testnet") {

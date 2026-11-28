@@ -36,7 +36,8 @@ func cmdHubUp(args []string) error {
 	mainnetShort := fs.Bool("mainnet", false, "Shorthand for --network main (requires --confirm I_UNDERSTAND)")
 	confirm := fs.String("confirm", os.Getenv("NEKTAR_MAINNET_CONFIRM"), "Required I_UNDERSTAND for mainnet")
 	hubRoleFlag := fs.String("hub-role", envOr("NEKTAR_HUB_ROLE", string(hub.RoleLeaf)), "Spine-and-Leaf topology role (leaf|spine)")
-	feePresetFlag := fs.String("fee-preset", os.Getenv("NEKTAR_HUB_FEE_PRESET"), "Monetization preset (free|lightbsv_egress|hybrid)")
+	feePresetFlag := fs.String("fee-preset", os.Getenv("NEKTAR_HUB_FEE_PRESET"), "Monetization preset (free|spine_wholesale|lightbsv_egress|hybrid)")
+	seedBountiesFlag := fs.Bool("seed-bounties", os.Getenv("NEKTAR_HUB_SEED_BOUNTIES") == "1", "Explicitly fund Hub-sponsored cold-start bounties out of Hub wallet (default: false)")
 	hubDir := fs.String("dir", defaultHubDir(), "Hub directory")
 	dry := fs.Bool("dry", false, "Write .env + systemd unit / compose.yaml without starting Hub")
 	noJoin := fs.Bool("no-join", false, "Skip auto-joining local agent to this new hub")
@@ -130,13 +131,24 @@ func cmdHubUp(args []string) error {
 	presetNorm := strings.ToLower(strings.TrimSpace(*feePresetFlag))
 	if presetNorm == "" {
 		if net == "main" {
-			presetNorm = hub.PresetHybrid
+			// 1BSV Alignment ("Sending is Free, Receiving Pays"):
+			// Spine meters wholesale /plane/stream (5 sats/100); Leaf meters retail egress (12 sats/100); 0-sat ingress everywhere!
+			if roleNorm == string(hub.RoleSpine) {
+				presetNorm = hub.PresetSpineWholesale
+			} else {
+				presetNorm = hub.PresetLightBSVEgress
+			}
 		} else {
 			presetNorm = hub.PresetFree
 		}
 	}
 	envText = upsertEnvKV(envText, "NEKTAR_HUB_ROLE", roleNorm)
 	envText = upsertEnvKV(envText, "NEKTAR_HUB_FEE_PRESET", presetNorm)
+	if *seedBountiesFlag {
+		envText = upsertEnvKV(envText, "NEKTAR_HUB_SEED_BOUNTIES", "1")
+	} else {
+		envText = upsertEnvKV(envText, "NEKTAR_HUB_SEED_BOUNTIES", "0")
+	}
 	seedHub := "https://testnet.nektar.run/hub"
 	if net == "main" {
 		seedHub = "https://nektar.run/hub"
@@ -254,6 +266,9 @@ WantedBy=multi-user.target
 		}
 		if domain != "" {
 			serveArgs = append(serveArgs, "--public-url", "https://"+domain)
+		}
+		if *seedBountiesFlag {
+			serveArgs = append(serveArgs, "--seed-bounties")
 		}
 		if roleNorm == string(hub.RoleLeaf) {
 			serveArgs = append(serveArgs, "--upstream-spines", extractEnvVal(envText, "NEKTAR_UPSTREAM_SPINES"))

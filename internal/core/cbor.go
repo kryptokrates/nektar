@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 
 	"github.com/lightwebinc/bcommon/cbor"
 )
@@ -14,8 +15,12 @@ import (
 const (
 	// MaxCBORSeqDepth matches bcommon/cbor's MaxDepth (16) for nested containers.
 	MaxCBORSeqDepth = 16
+	// MaxCBORMapKeys matches bcommon/record.MaxKeys (64) to bound uint-keyed CBOR maps before indexing.
+	MaxCBORMapKeys = 64
 	// DefaultMaxCBORSeqItemBytes caps any single RFC 8742 CBOR sequence record (16 MiB).
 	DefaultMaxCBORSeqItemBytes = 16 << 20
+	// GreaseKey is the canonical RFC 9170 non-critical odd CBOR extension key reserved for protocol greasing (65501..65535 odd).
+	GreaseKey uint64 = 65535
 )
 
 var (
@@ -23,6 +28,9 @@ var (
 	// Following BRC-167 CHIRP's TLV convention: unknown even keys are critical (fail-closed);
 	// unknown odd keys are non-critical extensions (preserved verbatim).
 	ErrUnknownCriticalKey = errors.New("cbor: unknown critical (even) key")
+
+	// ErrCBORTooManyKeys is returned when a uint-keyed CBOR map exceeds MaxCBORMapKeys entries.
+	ErrCBORTooManyKeys = errors.New("cbor: map exceeds max keys")
 
 	// ErrCBORSeqItemTooLarge is returned when a streaming RFC 8742 item exceeds its configured cap.
 	ErrCBORSeqItemTooLarge = errors.New("cbor-seq: item exceeds max size")
@@ -48,11 +56,14 @@ func HashCBOR(tag []byte, v cbor.Value) ([]byte, error) {
 	return DSHA256(Concat(tag, enc)), nil
 }
 
-// CBORMapToUintMap indexes a decoded cbor.Map by uint64 keys, rejecting non-uint or duplicate keys.
+// CBORMapToUintMap indexes a decoded cbor.Map by uint64 keys, rejecting oversized maps, non-uint, or duplicate keys.
 func CBORMapToUintMap(v cbor.Value) (map[uint64]cbor.Value, error) {
 	m, ok := v.(cbor.Map)
 	if !ok {
 		return nil, errors.New("cbor: expected map")
+	}
+	if len(m) > MaxCBORMapKeys {
+		return nil, fmt.Errorf("%w: %d > %d", ErrCBORTooManyKeys, len(m), MaxCBORMapKeys)
 	}
 	out := make(map[uint64]cbor.Value, len(m))
 	for _, p := range m {
@@ -69,7 +80,8 @@ func CBORMapToUintMap(v cbor.Value) (map[uint64]cbor.Value, error) {
 }
 
 // SplitCBORMap indexes a decoded uint-keyed CBOR map against knownKeys and enforces Nektar's
-// forward-compatible schema evolution policy:
+// forward-compatible schema evolution policy (RFC 9413 / RFC-003):
+//   - Maps exceeding MaxCBORMapKeys fail closed (ErrCBORTooManyKeys).
 //   - Unknown EVEN keys are critical and rejected fail-closed (ErrUnknownCriticalKey).
 //   - Unknown ODD keys are non-critical extensions and returned verbatim in extra.
 func SplitCBORMap(v cbor.Value, knownKeys map[uint64]struct{}) (map[uint64]cbor.Value, []cbor.Pair, error) {
@@ -77,8 +89,12 @@ func SplitCBORMap(v cbor.Value, knownKeys map[uint64]struct{}) (map[uint64]cbor.
 	if !ok {
 		return nil, nil, errors.New("cbor: expected map")
 	}
+	if len(m) > MaxCBORMapKeys {
+		return nil, nil, fmt.Errorf("%w: %d > %d", ErrCBORTooManyKeys, len(m), MaxCBORMapKeys)
+	}
 	vals := make(map[uint64]cbor.Value, len(m))
 	var extra []cbor.Pair
+	seenExtra := make(map[uint64]struct{})
 	for _, p := range m {
 		k, ok := p.Key.(uint64)
 		if !ok {
@@ -87,11 +103,15 @@ func SplitCBORMap(v cbor.Value, knownKeys map[uint64]struct{}) (map[uint64]cbor.
 		if _, dup := vals[k]; dup {
 			return nil, nil, fmt.Errorf("cbor: duplicate key %d", k)
 		}
+		if _, dup := seenExtra[k]; dup {
+			return nil, nil, fmt.Errorf("cbor: duplicate key %d", k)
+		}
 		if knownKeys != nil {
 			if _, known := knownKeys[k]; !known {
 				if k%2 == 0 {
 					return nil, nil, fmt.Errorf("%w: %d", ErrUnknownCriticalKey, k)
 				}
+				seenExtra[k] = struct{}{}
 				extra = append(extra, p)
 				continue
 			}
@@ -99,6 +119,62 @@ func SplitCBORMap(v cbor.Value, knownKeys map[uint64]struct{}) (map[uint64]cbor.
 		vals[k] = p.Val
 	}
 	return vals, extra, nil
+}
+
+// AppendExtraPairs validates and appends preserved non-critical odd extension pairs to m
+// so decode->re-encode round-trips never lose unknown fields written by newer peers (DDIA Ch. 4 Fig. 4-7).
+func AppendExtraPairs(m cbor.Map, knownKeys map[uint64]struct{}, extra []cbor.Pair) (cbor.Map, error) {
+	if len(extra) == 0 {
+		return m, nil
+	}
+	present := make(map[uint64]struct{}, len(m)+len(extra))
+	for _, p := range m {
+		if k, ok := p.Key.(uint64); ok {
+			present[k] = struct{}{}
+		}
+	}
+	for _, p := range extra {
+		k, ok := p.Key.(uint64)
+		if !ok {
+			return nil, fmt.Errorf("cbor: extra key must be uint64, got %T", p.Key)
+		}
+		if knownKeys != nil {
+			if _, known := knownKeys[k]; known {
+				return nil, fmt.Errorf("cbor: extra key %d collides with known field", k)
+			}
+		}
+		if k%2 == 0 {
+			return nil, fmt.Errorf("%w: %d", ErrUnknownCriticalKey, k)
+		}
+		if _, dup := present[k]; dup {
+			return nil, fmt.Errorf("cbor: duplicate extra key %d", k)
+		}
+		present[k] = struct{}{}
+		m = append(m, p)
+	}
+	if len(m) > MaxCBORMapKeys {
+		return nil, fmt.Errorf("%w: %d > %d", ErrCBORTooManyKeys, len(m), MaxCBORMapKeys)
+	}
+	return m, nil
+}
+
+// WireGreaseEnabled reports whether opt-in RFC 9170 wire greasing (NEKTAR_WIRE_GREASE=1) is enabled.
+func WireGreaseEnabled() bool {
+	return os.Getenv("NEKTAR_WIRE_GREASE") == "1"
+}
+
+// MaybeAppendGrease attaches the canonical non-critical odd RFC 9170 grease key (65535) to m
+// when enabled and not already present.
+func MaybeAppendGrease(m cbor.Map, enabled bool) cbor.Map {
+	if !enabled || len(m) >= MaxCBORMapKeys {
+		return m
+	}
+	for _, p := range m {
+		if k, ok := p.Key.(uint64); ok && k == GreaseKey {
+			return m
+		}
+	}
+	return append(m, cbor.Pair{Key: GreaseKey, Val: []byte("gr")})
 }
 
 // KnownKeySet builds a uint64 key lookup set for SplitCBORMap.

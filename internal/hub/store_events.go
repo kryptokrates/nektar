@@ -321,6 +321,9 @@ func (s *Store) EventsSinceScanned(cursor int64, domainFilter []string, limit in
 			nextCursor = e.Seq
 		}
 		e.Kind = bstack.ArtifactKind(kindStr)
+		if e.Kind == "module" {
+			continue
+		}
 		_ = json.Unmarshal([]byte(domJSON), &e.Domains)
 		_ = json.Unmarshal(pJSON, &e.Payload)
 		if len(wantDom) > 0 && !matchesAnyDomain(e.Domains, wantDom) {
@@ -330,6 +333,29 @@ func (s *Store) EventsSinceScanned(cursor int64, domainFilter []string, limit in
 		out = append(out, e)
 	}
 	return out, nextCursor, rawCount, rows.Err()
+}
+
+func storedEventMatchesTopicFilter(e StoredEvent, wantTopic map[string]bool) string {
+	if len(wantTopic) == 0 {
+		return e.Topic
+	}
+	if wantTopic[e.Topic] {
+		return e.Topic
+	}
+	if strings.HasPrefix(e.Topic, "tm_nektar_") && e.Payload.Kind != "" {
+		// Derive network prefix from stored topic ("tm_nektar_<net>_...") so dynamic dom_/ont_
+		// subscribers match co-submitted market events without duplicate SQLite rows.
+		rest := strings.TrimPrefix(e.Topic, "tm_nektar_")
+		netName, _, ok := strings.Cut(rest, "_")
+		if ok && netName != "" {
+			for wt := range wantTopic {
+				if strings.HasPrefix(wt, "tm_nektar_"+netName+"_") && bstack.TopicMatchesPayload(netName, wt, e.Payload) {
+					return wt
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func matchesAnyDomain(doms []string, want map[string]bool) bool {
@@ -472,6 +498,9 @@ func (s *Store) EventsInRange(fromSeq, toSeq int64, topics []string, limit int) 
 // topic filtering, and returns the matched events PLUS the highest raw SQLite seq scanned and raw row count
 // so BRC-149 plane backfill can paginate past 500 frames and non-matching topics without truncation.
 func (s *Store) EventsInRangeScanned(fromSeq, toSeq int64, topics []string, limit int) (events []StoredEvent, nextSeq int64, rawCount int, err error) {
+	if fs := s.fastStore(); fs != nil {
+		return fs.EventsInRangeScanned(fromSeq, toSeq, topics, limit)
+	}
 	blobs := s.BlobStore()
 	rdb, release := s.rdb()
 	defer release()
@@ -513,12 +542,16 @@ func (s *Store) EventsInRangeScanned(fromSeq, toSeq int64, topics []string, limi
 		if e.Seq > nextSeq {
 			nextSeq = e.Seq
 		}
-		if len(wantTopic) > 0 && !wantTopic[e.Topic] {
-			continue
-		}
 		e.Kind = bstack.ArtifactKind(kindStr)
 		_ = json.Unmarshal([]byte(domJSON), &e.Domains)
 		_ = json.Unmarshal(pJSON, &e.Payload)
+		matchedTopic := storedEventMatchesTopicFilter(e, wantTopic)
+		if len(wantTopic) > 0 && matchedTopic == "" {
+			continue
+		}
+		if matchedTopic != "" {
+			e.Topic = matchedTopic
+		}
 		hydrateEventBEEF(blobs, &e)
 		out = append(out, e)
 	}

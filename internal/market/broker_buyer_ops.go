@@ -36,18 +36,18 @@ func verifySaleDelivery(
 	chosen bstack.OfferAd,
 	contentKeyHex, claimTxBEEFHex, ciphertextHex string,
 	proofBundle *contracts.ProofBundle,
-) ([]byte, string, string) {
+) ([]byte, string, *contracts.AnchorBatchMemo, string) {
 	contentKeyHex = strings.TrimSpace(contentKeyHex)
 	claimTxBEEFHex = strings.TrimSpace(claimTxBEEFHex)
 	if contentKeyHex == "" && claimTxBEEFHex == "" {
-		return nil, "", "missing contentKeyHex and claimTxBeefHex in seller claim signal"
+		return nil, "", nil, "missing contentKeyHex and claimTxBeefHex in seller claim signal"
 	}
 	if len(chosen.SaleOffer) == 0 {
-		return nil, "", "missing signed BRC-369 SaleOffer in chosen offer"
+		return nil, "", nil, "missing signed BRC-369 SaleOffer in chosen offer"
 	}
 	var saleOffer contracts.KeyedSaleOffer
 	if err := json.Unmarshal(chosen.SaleOffer, &saleOffer); err != nil {
-		return nil, "", "decode saleOffer: " + err.Error()
+		return nil, "", nil, "decode saleOffer: " + err.Error()
 	}
 	// Trustless L1 fallback: if ContentKeyHex was omitted/dropped off HTTP, extract `k` directly
 	// from the on-chain DisclosureSale.Buy(k) transaction's unlocking script!
@@ -61,16 +61,29 @@ func verifySaleDelivery(
 		}
 	}
 	if contentKeyHex == "" {
-		return nil, "", "missing contentKeyHex in seller claim signal (and on-chain extraction failed)"
+		return nil, "", nil, "missing contentKeyHex in seller claim signal (and on-chain extraction failed)"
 	}
 	// Prefer inline CiphertextHex from signed SaleOffer or seller ClaimSignal before remote CHIRP HTTP fetch.
+	// When offloaded (>12 KiB), resolve across SellerURL (if public), Seller's advertised Hubs, and Buyer's
+	// own local Leaf Hubs (with Spine pull-through) so NAT Sellers deliver capsules of any size!
 	if saleOffer.CiphertextHex == "" {
 		if ciphertextHex != "" {
 			saleOffer.CiphertextHex = ciphertextHex
-		} else if chosen.SellerURL != "" && chosen.ChirpURL != "" && disc != nil {
-			ct, cErr := disc.FetchRemoteChirp(ctx, chosen.SellerURL, chosen.ChirpURL)
+		} else if chosen.ChirpURL != "" && disc != nil {
+			var candidates []string
+			if chosen.SellerURL != "" {
+				candidates = append(candidates, chosen.SellerURL)
+			}
+			for _, p := range disc.Peers() {
+				if strings.EqualFold(p.Pub, chosen.Pub) {
+					candidates = append(candidates, p.Hosts...)
+					break
+				}
+			}
+			candidates = append(candidates, disc.ActiveHosts()...)
+			ct, cErr := disc.FetchRemoteChirpMulti(ctx, candidates, chosen.ChirpURL)
 			if cErr != nil {
-				return nil, "", "remote CHIRP verification failed: " + cErr.Error()
+				return nil, "", nil, "remote CHIRP verification failed: " + cErr.Error()
 			}
 			saleOffer.CiphertextHex = hex.EncodeToString(ct)
 		}
@@ -78,31 +91,33 @@ func verifySaleDelivery(
 	keyBytes, kErr := hex.DecodeString(contentKeyHex)
 	if kErr != nil || len(keyBytes) != 32 {
 		core.ZeroBytes(keyBytes)
-		return nil, "", "seller returned invalid 32-byte content key"
+		return nil, "", nil, "seller returned invalid 32-byte content key"
 	}
 	defer core.ZeroBytes(keyBytes)
 	plaintext, pErr := contracts.ClaimKeyedSale(&saleOffer, keyBytes)
 	if pErr != nil {
-		return nil, "", "BRC-369 key verification failed: " + pErr.Error()
+		return nil, "", nil, "BRC-369 key verification failed: " + pErr.Error()
 	}
 	// Unconditional SPV ProofBundle verification on live networks (zero Leaf=="" bypass — Finding #3!).
 	// Accepts mined BUMP at SettleDepth OR verified 0-conf carried ancestry within buyer zeroconf policy
 	// (recording a durable proof_upgrade_owed obligation until mined BUMP lands).
 	isLive := mem != nil && mem.Chain() != nil && mem.Chain().Network() != "memory"
 	if proofBundle == nil && isLive {
-		return nil, "", "missing SPV ProofBundle from seller"
+		return nil, "", nil, "missing SPV ProofBundle from seller"
 	}
+	var anchorMemo *contracts.AnchorBatchMemo
 	if proofBundle != nil {
 		if !strings.EqualFold(proofBundle.Leaf, chosen.Leaf) {
-			return nil, "", "seller SPV ProofBundle leaf mismatches signed offer leaf"
+			return nil, "", nil, "seller SPV ProofBundle leaf mismatches signed offer leaf"
 		}
 		var vr contracts.VerifyResult
 		if isLive {
-			vr = contracts.VerifyFragmentWithDepth(ctx, *proofBundle, mem.Chain().Tracker(), mem.Chain().SettleDepth())
+			vr, anchorMemo = contracts.VerifyFragmentWithMemo(ctx, *proofBundle, mem.Chain().Tracker(), mem.Chain().SettleDepth(), nil)
 		} else {
-			vr = contracts.VerifyFragmentCtx(ctx, *proofBundle, mem.Chain().Tracker())
+			vr, anchorMemo = contracts.VerifyFragmentWithMemo(ctx, *proofBundle, mem.Chain().Tracker(), 1, nil)
 			if !vr.OK && vr.Reason == "BEEFInvalid" && strings.Contains(vr.Detail, "BUMP root not valid in header chain") {
 				vr = contracts.VerifyFragmentStructural(*proofBundle)
+				anchorMemo = nil
 			}
 		}
 		zeroConfAnchorOK := false
@@ -113,18 +128,18 @@ func verifySaleDelivery(
 			}
 		}
 		if !vr.OK && !zeroConfAnchorOK {
-			return nil, "", fmt.Sprintf("seller SPV ProofBundle invalid (%s: %s)", vr.Reason, vr.Detail)
+			return nil, "", nil, fmt.Sprintf("seller SPV ProofBundle invalid (%s: %s)", vr.Reason, vr.Detail)
 		}
 		if isLive && !vr.Settled {
 			if !zeroConfAnchorOK {
-				return nil, "", "seller SPV ProofBundle is not settled in a mined block"
+				return nil, "", nil, "seller SPV ProofBundle is not settled in a mined block"
 			}
 			if mem != nil && mem.DB() != nil {
 				_ = RecordProofUpgradeOwed(mem.DB(), dealID, "buyer", chosen.Pub, proofBundle.Anchor.TxID, chosen.PriceSats)
 			}
 		}
 	}
-	return plaintext, contentKeyHex, ""
+	return plaintext, contentKeyHex, anchorMemo, ""
 }
 
 // CollectOffersForWant publishes a signed WantAd across active hubs and collects cryptographically verified OfferAds.

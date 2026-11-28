@@ -7,6 +7,8 @@ import (
 	"errors"
 	"math/rand/v2"
 	"net/http"
+	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +18,9 @@ import (
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
+	"github.com/kryptokrates/nektar/internal/eventbus"
+	"github.com/kryptokrates/nektar/internal/fabric"
+	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/memory"
 )
 
@@ -27,9 +32,16 @@ const (
 	bboxExpectedTTLSeconds  = 1800
 	maxConcurrentQuotes     = 128
 	maxMarketTapeEvents     = 64
+	bboxWorkerPoolSize      = 16
 )
 
-// Broker drives real autonomous agent-to-agent and agent-to-Hub knowledge trading over live HTTP/SSE + NAT bbox.
+type bboxWorkItem struct {
+	hubURL string
+	msg    hub.BboxMessage
+	done   chan error
+}
+
+// Broker drives real autonomous agent-to-agent and agent-to-Hub knowledge trading over live BRC-149/BRC-223 + NAT bbox.
 type Broker struct {
 	mem        *memory.Service
 	engine     *Engine
@@ -39,12 +51,15 @@ type Broker struct {
 	sseClient  *http.Client
 	quoteSem   chan struct{}
 	bgSem      chan struct{}
+	bboxWorkCh chan bboxWorkItem
 
 	mu                   sync.RWMutex
 	restate              *RestateClient
 	matcher              Matcher
 	watchdog             *autonomy.Watchdog
 	subSup               *SubscriptionSupervisor
+	fabricSub            *fabric.Subscriber
+	planeHosts           map[string]bool
 	pendingSales         map[string]*pendingSale
 	pendingConfirmations map[string]*pendingConfirmEntry // txid -> over-cap payment waiting for settleDepth
 	offerInbox           map[string]chan bstack.OfferAd
@@ -86,8 +101,10 @@ type Broker struct {
 
 // NewBroker constructs a live Broker attached to mem, engine, and disc, syncing persisted operator policies.
 func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg BrokerConfig) *Broker {
-	if cfg.BboxOffice == "" {
-		cfg.BboxOffice = "default"
+	if cfg.BboxOffice == "" || strings.EqualFold(cfg.BboxOffice, "default") {
+		cfg.BboxOffice = bstack.NormalizeBboxOffice("nektar")
+	} else {
+		cfg.BboxOffice = bstack.NormalizeBboxOffice(cfg.BboxOffice)
 	}
 	if cfg.CollectTimeout <= 0 {
 		if mem != nil && mem.Chain() != nil && (mem.Chain().Network() == "main" || mem.Chain().Network() == "testnet") {
@@ -125,9 +142,11 @@ func NewBroker(mem *memory.Service, engine *Engine, disc *discovery.Service, cfg
 		sseClient:            sseHC,
 		quoteSem:             make(chan struct{}, maxConcurrentQuotes),
 		bgSem:                make(chan struct{}, 256),
+		bboxWorkCh:           make(chan bboxWorkItem, 256),
 		restate:              cfg.RestateClient,
 		matcher:              cfg.Matcher,
 		watchdog:             cfg.Watchdog,
+		planeHosts:           make(map[string]bool),
 		pendingSales:         make(map[string]*pendingSale),
 		pendingConfirmations: make(map[string]*pendingConfirmEntry),
 		offerInbox:           make(map[string]chan bstack.OfferAd),
@@ -312,7 +331,15 @@ func (b *Broker) ActiveNetworkTopics() []string {
 		}
 	}
 	if b.mem != nil && b.mem.DB() != nil {
-		if listings, err := b.mem.DB().ListSellListings(); err == nil {
+		if fj := b.engine.FastJournal(); fj != nil {
+			if listings, err := fj.CachedListings(b.mem.DB()); err == nil {
+				for _, l := range listings {
+					if l.Active {
+						raw = append(raw, l.Domains...)
+					}
+				}
+			}
+		} else if listings, err := b.mem.DB().ListSellListings(); err == nil {
 			for _, l := range listings {
 				if l.Active {
 					raw = append(raw, l.Domains...)
@@ -359,6 +386,40 @@ func (b *Broker) Start(ctx context.Context) {
 	if b.subSup != nil {
 		_ = b.subSup.Start(runCtx)
 	}
+	if rawFab := strings.TrimSpace(os.Getenv("NEKTAR_FABRIC_UPSTREAM")); rawFab != "" {
+		var upstreams []netip.AddrPort
+		for _, part := range strings.Split(rawFab, ",") {
+			if ap, pErr := netip.ParseAddrPort(strings.TrimSpace(part)); pErr == nil {
+				upstreams = append(upstreams, ap)
+			}
+		}
+		if len(upstreams) > 0 {
+			var bus *eventbus.Bus
+			if b.mem != nil {
+				bus = b.mem.EventBus()
+			}
+			if sub, fErr := fabric.StartSubscriber(runCtx, fabric.SubscriberConfig{
+				Label:     "agent-" + shortPub(b.PubHex()),
+				Upstreams: upstreams,
+				Bus:       bus,
+				OnObject: func(oCtx context.Context, ev fabric.DeliveryEvent) {
+					_ = b.handlePlaneDelivery(oCtx, "", 0, ev.Topic, ev.BEEF)
+				},
+			}); fErr == nil {
+				sub.SetTopics(b.electedPlaneTopics())
+				b.mu.Lock()
+				b.fabricSub = sub
+				b.mu.Unlock()
+			}
+		}
+	}
+	for i := 0; i < bboxWorkerPoolSize; i++ {
+		b.wg.Add(1)
+		go func() {
+			defer b.wg.Done()
+			b.runBboxWorker(runCtx)
+		}()
+	}
 	b.wg.Add(5)
 	go func() {
 		defer b.wg.Done()
@@ -377,7 +438,7 @@ func (b *Broker) Start(ctx context.Context) {
 			}
 		}
 	}()
-	// Jittered low-frequency reconciliation floor catching any events dropped across SSE reconnects.
+	// Jittered low-frequency reconciliation floor catching any events on legacy SSE-only mocks + confirmations.
 	go func() {
 		defer b.wg.Done()
 		for {
@@ -387,7 +448,9 @@ func (b *Broker) Start(ctx context.Context) {
 				return
 			case <-time.After(wait):
 				for _, h := range b.disc.ActiveHosts() {
-					b.pollHostOnce(runCtx, h)
+					if !b.isPlaneConnected(h) {
+						b.pollHostOnce(runCtx, h)
+					}
 				}
 				b.PollPendingConfirmations(runCtx)
 			}
@@ -426,7 +489,7 @@ func (b *Broker) Start(ctx context.Context) {
 	}()
 }
 
-// Stop cancels all background Broker SSE, poll, bbox, and crawl loops and waits for them to exit cleanly.
+// Stop cancels all background Broker plane/SSE, poll, bbox, and crawl loops and waits for them to exit cleanly.
 func (b *Broker) Stop() {
 	b.startMu.Lock()
 	cancel := b.stopCancel
@@ -441,11 +504,16 @@ func (b *Broker) Stop() {
 		b.subSup.Stop()
 	}
 	b.mu.Lock()
+	fSub := b.fabricSub
+	b.fabricSub = nil
 	for h, c := range b.activeLoops {
 		c()
 		delete(b.activeLoops, h)
 	}
 	b.mu.Unlock()
+	if fSub != nil {
+		_ = fSub.Close()
+	}
 	b.wg.Wait()
 	b.flushDirtyCursors()
 	b.flushDirtyReputation()

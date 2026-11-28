@@ -94,17 +94,23 @@ func treeEntryToCBOR(e TreeEntry) cbor.Map {
 	if e.Class != "" {
 		m = append(m, cbor.Pair{Key: uint64(10), Val: e.Class})
 	}
+	if len(e.Extra) > 0 {
+		if m2, err := core.AppendExtraPairs(m, treeEntryKnownKeys, e.Extra); err == nil {
+			m = m2
+		}
+	}
 	return m
 }
 
 var treeEntryKnownKeys = core.KnownKeyRange(1, 10)
 
 func decodeTreeEntryCBOR(v cbor.Value) (TreeEntry, error) {
-	m, _, err := core.SplitCBORMap(v, treeEntryKnownKeys)
+	m, extra, err := core.SplitCBORMap(v, treeEntryKnownKeys)
 	if err != nil {
 		return TreeEntry{}, err
 	}
 	var e TreeEntry
+	e.Extra = extra
 	if e.Mode, err = core.CBORText(m, 1); err != nil {
 		return TreeEntry{}, err
 	}
@@ -163,6 +169,11 @@ func parentsToCBOR(parents []ParentRef) []cbor.Value {
 		if p.RepoGenesis != "" {
 			pm = append(pm, cbor.Pair{Key: uint64(4), Val: p.RepoGenesis})
 		}
+		if len(p.Extra) > 0 {
+			if pm2, err := core.AppendExtraPairs(pm, parentRefKnownKeys, p.Extra); err == nil {
+				pm = pm2
+			}
+		}
 		arr[i] = pm
 	}
 	return arr
@@ -176,11 +187,12 @@ func decodeParentsCBOR(arr []cbor.Value) ([]ParentRef, error) {
 	}
 	out := make([]ParentRef, len(arr))
 	for i, item := range arr {
-		m, _, err := core.SplitCBORMap(item, parentRefKnownKeys)
+		m, extra, err := core.SplitCBORMap(item, parentRefKnownKeys)
 		if err != nil {
 			return nil, fmt.Errorf("memrepo: parent[%d]: %w", i, err)
 		}
 		var p ParentRef
+		p.Extra = extra
 		if p.CommitHash, err = core.CBORText(m, 1); err != nil {
 			return nil, err
 		}
@@ -243,6 +255,11 @@ func EncodeBlobObjectCBOR(b BlobObject) ([]byte, error) {
 	if b.Forgotten {
 		m = append(m, cbor.Pair{Key: uint64(17), Val: true})
 	}
+	var err error
+	m, err = core.AppendExtraPairs(m, blobObjectKnownKeys, b.Extra)
+	if err != nil {
+		return nil, err
+	}
 	return core.EncodeCBOR(m)
 }
 
@@ -258,11 +275,12 @@ func DecodeBlobObjectCBOR(raw []byte) (BlobObject, error) {
 }
 
 func decodeBlobObjectValue(v cbor.Value) (BlobObject, error) {
-	m, _, err := core.SplitCBORMap(v, blobObjectKnownKeys)
+	m, extra, err := core.SplitCBORMap(v, blobObjectKnownKeys)
 	if err != nil {
 		return BlobObject{}, err
 	}
 	var b BlobObject
+	b.Extra = extra
 	if b.Path, err = core.CBORText(m, 1); err != nil {
 		return BlobObject{}, err
 	}
@@ -332,6 +350,11 @@ func EncodeTreeObjectCBOR(tr TreeObject) ([]byte, error) {
 	if len(tr.Subtrees) > 0 {
 		m = append(m, cbor.Pair{Key: uint64(3), Val: core.CBORStringMapVal(tr.Subtrees)})
 	}
+	var err error
+	m, err = core.AppendExtraPairs(m, treeObjectKnownKeys, tr.Extra)
+	if err != nil {
+		return nil, err
+	}
 	return core.EncodeCBOR(m)
 }
 
@@ -347,11 +370,12 @@ func DecodeTreeObjectCBOR(raw []byte) (TreeObject, error) {
 }
 
 func decodeTreeObjectValue(v cbor.Value) (TreeObject, error) {
-	m, _, err := core.SplitCBORMap(v, treeObjectKnownKeys)
+	m, extra, err := core.SplitCBORMap(v, treeObjectKnownKeys)
 	if err != nil {
 		return TreeObject{}, err
 	}
 	var tr TreeObject
+	tr.Extra = extra
 	if tr.TreeHash, err = core.CBORText(m, 1); err != nil {
 		return TreeObject{}, err
 	}

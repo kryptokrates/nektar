@@ -111,9 +111,11 @@ type Service struct {
 	carrierTree     *CarrierTreeManager
 	peers           map[string]PeerInfo
 	withholdings    []WithholdingWarning
-	localHandle     string
-	localPublicURL  string
-	localBboxOffice string
+	localHandle        string
+	localPublicURL     string
+	localBboxOffice    string
+	activeHostsCache   []string
+	activeHostsCacheAt time.Time
 }
 
 // New constructs a discovery Service bound to mem's SQLite store & network.
@@ -128,11 +130,19 @@ func New(mem *memory.Service, envHosts []string, hc *http.Client) *Service {
 	var signer *nwallet.MarketSigner
 	var keyErr error
 	if mem != nil {
-		raw, err := mem.LoadOrCreateProtectedKey("node_market_key_v1", nwallet.GenerateProtectedKeyBytes)
-		if err != nil {
-			keyErr = err
+		hasLegacyKey := false
+		if mem.DB() != nil {
+			hasLegacyKey, _ = mem.DB().HasKV("node_market_key_v1")
+		}
+		if !hasLegacyKey && mem.Chain() != nil && mem.Chain().MarketSigner() != nil {
+			signer = mem.Chain().MarketSigner()
 		} else {
-			signer, keyErr = nwallet.NewMarketSignerFromBytes(raw)
+			raw, err := mem.LoadOrCreateProtectedKey("node_market_key_v1", nwallet.GenerateProtectedKeyBytes)
+			if err != nil {
+				keyErr = err
+			} else {
+				signer, keyErr = nwallet.NewMarketSignerFromBytes(raw)
+			}
 		}
 	} else {
 		signer, keyErr = nwallet.NewEphemeralMarketSigner()
@@ -207,6 +217,14 @@ func (s *Service) Withholdings() []WithholdingWarning {
 
 // ActiveHosts merges env/seed hosts + persisted joined hosts minus explicitly blocked hosts.
 func (s *Service) ActiveHosts() []string {
+	s.mu.RLock()
+	if !s.activeHostsCacheAt.IsZero() && time.Since(s.activeHostsCacheAt) < 2*time.Second {
+		cp := append([]string(nil), s.activeHostsCache...)
+		s.mu.RUnlock()
+		return cp
+	}
+	s.mu.RUnlock()
+
 	persisted, _ := s.mem.DB().ListHosts()
 	blocked := make(map[string]bool)
 	seen := make(map[string]bool)
@@ -237,7 +255,17 @@ func (s *Service) ActiveHosts() []string {
 			add(h.URL)
 		}
 	}
+	s.mu.Lock()
+	s.activeHostsCache = append([]string(nil), out...)
+	s.activeHostsCacheAt = time.Now()
+	s.mu.Unlock()
 	return out
+}
+
+func (s *Service) invalidateActiveHostsCache() {
+	s.mu.Lock()
+	s.activeHostsCacheAt = time.Time{}
+	s.mu.Unlock()
 }
 
 // HostLists returns the env/seeds, saved joined, and blocked host lists for the Dashboard Settings tab.
@@ -321,6 +349,7 @@ func (s *Service) JoinHost(ctx context.Context, rawURL string) (hubURL string, d
 	}); err != nil {
 		return "", nil, err
 	}
+	s.invalidateActiveHostsCache()
 
 	// Crawl dir lane on the newly joined hub to discover additional peer hosts!
 	if peers, _ := s.DiscoverPeers(ctx, []string{probeURL}); len(peers) > 0 {
@@ -347,7 +376,9 @@ func (s *Service) LeaveHost(rawURL string) error {
 	if u == "" {
 		return errors.New("discovery: invalid host URL")
 	}
-	return s.mem.DB().BlockHost(u)
+	err := s.mem.DB().BlockHost(u)
+	s.invalidateActiveHostsCache()
+	return err
 }
 
 func (s *Service) fetchManifestFromBaseURL(ctx context.Context, base string) (*resolve.Manifest, error) {

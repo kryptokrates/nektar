@@ -227,6 +227,15 @@ func (p *Port) FastLane() *nwallet.FastLanePool {
 	return p.engine.FastLane()
 }
 
+// MarketSigner returns a unified BRC-100 MarketSigner backed by the embedded wallet's identity key
+// (or nil in client mode where raw identity signing is delegated or falls back to protected local key).
+func (p *Port) MarketSigner() *nwallet.MarketSigner {
+	if p == nil || p.engine == nil {
+		return nil
+	}
+	return p.engine.MarketSigner()
+}
+
 // ProvisionFastLane splits embedded wallet funds into numLanes independent UTXOs for parallel 1,000+ TPS payments.
 func (p *Port) ProvisionFastLane(ctx context.Context, numLanes int, satsPerLane uint64) (int, error) {
 	if p == nil || p.engine == nil {

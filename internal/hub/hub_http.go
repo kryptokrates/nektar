@@ -1,6 +1,8 @@
 package hub
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -164,6 +166,10 @@ func (n *Node) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, code, map[string]string{"error": err.Error()})
 		return
 	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-BSV-Engine-Format")), "steak") {
+		writeJSON(w, http.StatusOK, map[string]overlay.Steak{"STEAK": steak})
+		return
+	}
 	writeJSON(w, http.StatusOK, steak)
 }
 
@@ -193,6 +199,76 @@ func (n *Node) handleLookup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ans)
 }
 
+// BboxPlaneTopic returns the deterministic BRC-149 plane relay topic for a normalized bbox office.
+func BboxPlaneTopic(office string) string {
+	return "tm_nektar_bbox_" + bstack.NormalizeBboxOffice(office)
+}
+
+func bboxAudMatchesHubOrOffice(aud, hostHeader, office string) bool {
+	aud = strings.ToLower(strings.TrimSpace(aud))
+	if aud == "" {
+		return false
+	}
+	if strings.EqualFold(aud, "office:"+bstack.NormalizeBboxOffice(office)) {
+		return true
+	}
+	if hostHeader == "" {
+		return true
+	}
+	return strings.EqualFold(aud, strings.TrimSpace(hostHeader))
+}
+
+func (n *Node) admitRelayedBboxPlaneFrame(raw []byte) error {
+	var msg BboxMessage
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return ErrHubRefused
+	}
+	if msg.RecipientPub == "" || msg.SenderPub == "" || msg.DealID == "" || msg.Kind == "" || strings.TrimSpace(msg.Nonce) == "" || msg.Sig == "" {
+		return ErrHubRefused
+	}
+	now := time.Now().Unix()
+	if msg.TS < now-bboxSkewSeconds || msg.TS > now+bboxSkewSeconds {
+		return nil // expired frame; skip cleanly withoutpoison-stalling
+	}
+	if !strings.EqualFold(msg.Aud, "office:"+bstack.NormalizeBboxOffice(msg.Office)) {
+		return ErrHubRefused
+	}
+	if err := bstack.VerifyArtifact(msg.SenderPub, msg.Sig, msg.Signable()); err != nil {
+		return ErrHubRefused
+	}
+	if !n.claimBboxNonce("send:"+msg.SenderPub, msg.Nonce, now) {
+		return nil // idempotent duplicate
+	}
+	seq, err := n.store.SaveBboxMessage(msg)
+	if err != nil {
+		return err
+	}
+	planeTopic := BboxPlaneTopic(msg.Office)
+	rawCopy := append([]byte(nil), raw...)
+	modSeq, _, _ := n.store.AppendEvent(StoredEvent{
+		Outpoint:   "bbox:" + strings.ToLower(msg.SenderPub) + ":" + msg.Nonce,
+		Topic:      planeTopic,
+		Kind:       bstack.ArtifactKind("module"),
+		Pub:        msg.RecipientPub,
+		BEEF:       rawCopy,
+		Exp:        (now + 600) * 1000,
+		AdmittedAt: time.Now().UnixMilli(),
+	})
+	if modSeq > 0 {
+		n.broadcastPlaneFrame(PlaneFrame{
+			FlowSeq: uint64(modSeq),
+			TopicID: TopicIDOf(planeTopic),
+			Topic:   planeTopic,
+			BEEF:    rawCopy,
+		})
+	}
+	if bus := n.EventBus(); bus != nil {
+		bus.Publish("hub:bbox:"+strings.ToLower(strings.TrimSpace(msg.RecipientPub)), "bbox", seq)
+	}
+	n.broadcastBboxWake(msg.RecipientPub)
+	return nil
+}
+
 func (n *Node) handleBboxSend(w http.ResponseWriter, r *http.Request) {
 	var msg BboxMessage
 	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&msg); err != nil {
@@ -212,7 +288,7 @@ func (n *Node) handleBboxSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "bbox nonce required"})
 		return
 	}
-	if msg.Aud == "" || (r.Host != "" && !strings.EqualFold(msg.Aud, r.Host)) {
+	if !bboxAudMatchesHubOrOffice(msg.Aud, r.Host, msg.Office) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "bbox aud does not match hub host"})
 		return
 	}
@@ -256,6 +332,55 @@ func (n *Node) handleBboxSend(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	isOfficeBound := strings.EqualFold(strings.TrimSpace(msg.Aud), "office:"+bstack.NormalizeBboxOffice(msg.Office))
+	if isOfficeBound {
+		if rawMsg, mErr := json.Marshal(msg); mErr == nil {
+			planeTopic := BboxPlaneTopic(msg.Office)
+			n.loopGuard.MarkIfUnseen(rawMsg, planeTopic)
+			modSeq, _, _ := n.store.AppendEvent(StoredEvent{
+				Outpoint:   "bbox:" + strings.ToLower(msg.SenderPub) + ":" + msg.Nonce,
+				Topic:      planeTopic,
+				Kind:       bstack.ArtifactKind("module"),
+				Pub:        msg.RecipientPub,
+				BEEF:       rawMsg,
+				Exp:        (now + 600) * 1000,
+				AdmittedAt: time.Now().UnixMilli(),
+			})
+			if modSeq > 0 {
+				n.broadcastPlaneFrame(PlaneFrame{
+					FlowSeq: uint64(modSeq),
+					TopicID: TopicIDOf(planeTopic),
+					Topic:   planeTopic,
+					BEEF:    rawMsg,
+				})
+			}
+			// Leaf -> Spine free upstream push for office-bound NAT settlement envelopes.
+			if r.Header.Get("X-Nektar-Bbox-Relayed") == "" && !n.propagationOff && n.fees.Role != RoleSpine {
+				n.mu.RLock()
+				spines := append([]string(nil), n.upstreamSpines...)
+				n.mu.RUnlock()
+				if len(spines) > 0 {
+					msgCopy := append([]byte(nil), rawMsg...)
+					n.wg.Add(1)
+					go func() {
+						defer n.wg.Done()
+						for _, sp := range spines {
+							uCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+							uReq, rErr := http.NewRequestWithContext(uCtx, http.MethodPost, strings.TrimRight(sp, "/")+"/bbox/send", bytes.NewReader(msgCopy))
+							if rErr == nil {
+								uReq.Header.Set("Content-Type", "application/json")
+								uReq.Header.Set("X-Nektar-Bbox-Relayed", "1")
+								if uResp, dErr := n.httpClient.Do(uReq); dErr == nil && uResp != nil {
+									uResp.Body.Close()
+								}
+							}
+							cancel()
+						}
+					}()
+				}
+			}
+		}
 	}
 	if bus := n.EventBus(); bus != nil {
 		bus.Publish("hub:bbox:"+strings.ToLower(strings.TrimSpace(msg.RecipientPub)), "bbox", seq)
@@ -313,13 +438,43 @@ func (n *Node) handleBboxInbox(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"messages": msgs})
 }
 
-func (n *Node) handleBountiesList(w http.ResponseWriter, _ *http.Request) {
+func (n *Node) handleBountiesList(w http.ResponseWriter, r *http.Request) {
 	bounties, err := n.store.ListBounties(true)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"bounties": bounties})
+	for i := range bounties {
+		bounties[i].RewardSats = EffectiveBountyReward(bounties[i])
+	}
+	var standingBounties []bstack.WantAd
+	if n.marketLS != nil {
+		qRaw, _ := json.Marshal(bstack.MarketQuery{Kind: bstack.KindWant, Limit: 100})
+		if ans, lErr := n.marketLS.Lookup(r.Context(), &lookup.LookupQuestion{Service: bstack.LookupService, Query: qRaw}); lErr == nil && ans != nil {
+			if evs, ok := ans.Result.([]bstack.MarketEvent); ok {
+				nowMs := time.Now().UnixMilli()
+				seenWant := make(map[string]bool, len(evs))
+				for _, ev := range evs {
+					sw, dErr := bstack.DecodeWantPayload(ev.Payload.Body)
+					if dErr != nil || sw.Want.WantID == "" || sw.Want.MaxSats == 0 {
+						continue
+					}
+					if sw.Want.Exp > 0 && sw.Want.Exp <= nowMs {
+						continue
+					}
+					if seenWant[sw.Want.WantID] {
+						continue
+					}
+					seenWant[sw.Want.WantID] = true
+					standingBounties = append(standingBounties, sw.Want)
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"bounties":         bounties,
+		"standingBounties": standingBounties,
+	})
 }
 
 func (n *Node) handleBountiesSubmit(w http.ResponseWriter, r *http.Request) {
@@ -367,8 +522,14 @@ func (n *Node) handleBountiesSubmit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "hub bounty buyer is not armed"})
 		return
 	}
+	effReward := EffectiveBountyReward(b)
+	if effReward == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "bounty reward tapered to zero"})
+		return
+	}
+	b.RewardSats = effReward
 	// Atomically reserve bounty slot + unique canonical HDP claim BEFORE executing payout!
-	if err := n.store.ReserveBountyClaim(b.ID, sub.HDP, sub.SellerPub, b.RewardSats); err != nil {
+	if err := n.store.ReserveBountyClaim(b.ID, sub.HDP, sub.SellerPub, effReward); err != nil {
 		if errors.Is(err, ErrBountyDuplicate) {
 			if claim, cErr := n.store.GetBountyClaim(sub.HDP); cErr == nil && (claim.Status == "pending" || claim.Status == "broadcast") {
 				writeJSON(w, http.StatusAccepted, BountyPayoutResult{

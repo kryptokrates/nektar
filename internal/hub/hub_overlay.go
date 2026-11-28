@@ -472,6 +472,11 @@ func (n *Node) handleWellKnownResolve(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "handle resolver not configured on this hub"})
 }
 
+func isLoopbackHostHeader(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	return strings.HasPrefix(h, "127.0.0.1") || strings.HasPrefix(h, "localhost") || strings.HasPrefix(h, "[::1]")
+}
+
 // handleManifestJSON serves a strict BRC-180 + BRC-68 + BRC-169 `/manifest.json` document compatible
 // with Lightweb's `bcommon/resolve.ParseManifest` and `FetchManifest`.
 func (n *Node) handleManifestJSON(w http.ResponseWriter, r *http.Request) {
@@ -483,10 +488,12 @@ func (n *Node) handleManifestJSON(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	baseURL := scheme + "://" + host
-	if strings.HasSuffix(r.URL.Path, "/hub/manifest.json") {
-		baseURL += "/hub"
+	rootBaseURL := scheme + "://" + host
+	hubPrefix := strings.TrimRight(strings.TrimSpace(r.Header.Get("X-Nektar-Hub-Prefix")), "/")
+	if hubPrefix == "" && strings.HasSuffix(r.URL.Path, "/hub/manifest.json") {
+		hubPrefix = "/hub"
 	}
+	baseURL := rootBaseURL + hubPrefix
 
 	n.mu.RLock()
 	overlays := make(map[string]string, len(n.topics)+len(n.lookups))
@@ -514,7 +521,7 @@ func (n *Node) handleManifestJSON(w http.ResponseWriter, r *http.Request) {
 	if hasFinger || hasResolver || bboxOffice != "" {
 		handles := map[string]any{
 			"version": "1.0",
-			"resolve": baseURL + "/.well-known/metanet-handles/resolve",
+			"resolve": rootBaseURL + "/.well-known/metanet-handles/resolve",
 		}
 		if bboxOffice != "" {
 			handles["messagebox"] = bboxOffice
@@ -527,9 +534,19 @@ func (n *Node) handleManifestJSON(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if n.fabricSrv != nil {
-		metanet["brc223"] = map[string]any{
-			"udpAddr": n.fabricSrv.UDPAddr().String(),
+		udpAP := n.fabricSrv.UDPAddr()
+		if !udpAP.Addr().IsLoopback() || isLoopbackHostHeader(host) {
+			metanet["brc223"] = map[string]any{
+				"udpAddr": udpAP.String(),
+			}
 		}
+	}
+	// RFC 9170 / RFC 6709 capability advertisement (ignored cleanly by stock BRC-180 clients).
+	metanet["nektar"] = map[string]any{
+		"wireVersion":       "nkt1",
+		"supportedKinds":    []int{1, 2, 3, 4},
+		"cborExtensionRule": "even-critical-odd-optional",
+		"planeMediaTypes":   []string{"application/vnd.nektar.brc149-stream"},
 	}
 
 	writeJSONWithETag(w, r, map[string]any{
@@ -561,7 +578,24 @@ func (n *Node) handleRequestForeignGASP(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, node)
 }
 
-func (n *Node) handleProvideForeignGASP(w http.ResponseWriter, _ *http.Request) {
+func (n *Node) handleProvideForeignGASP(w http.ResponseWriter, r *http.Request) {
+	topic := strings.TrimSpace(r.Header.Get("X-BSV-Topic"))
+	raw, _ := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	if len(raw) > 0 && topic != "" {
+		var node gasp.Node
+		if json.Unmarshal(raw, &node) == nil && len(node.RawTx) > 0 {
+			if tx, tErr := transaction.NewTransactionFromBytes(node.RawTx); tErr == nil && tx != nil {
+				if len(node.Proof) > 0 {
+					if mp, mErr := transaction.NewMerklePathFromBinary(node.Proof); mErr == nil {
+						tx.MerklePath = mp
+					}
+				}
+				if beefBytes, bErr := tx.AtomicBEEF(false); bErr == nil && len(beefBytes) > 0 {
+					_, _ = n.submitInternal(r.Context(), beefBytes, []string{topic}, true)
+				}
+			}
+		}
+	}
 	var ack gasp.InitialResponse
 	writeJSON(w, http.StatusOK, ack)
 }

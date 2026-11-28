@@ -59,6 +59,15 @@ func (b *Broker) HandleDirectQuote(ctx context.Context, req DirectQuoteRequest) 
 func (b *Broker) autoQuoteWant(ctx context.Context, want bstack.WantAd) {
 	offer, offerPayload, ok := b.buildOfferForWant(ctx, want, false)
 	if !ok || offer == nil {
+		if b.mem != nil && b.mem.DB() != nil && want.WantID != "" && len(want.Domains) > 0 && b.engine != nil && b.engine.FastJournal() == nil {
+			_ = b.mem.DB().RecordUnmatchedWant(store.UnmatchedWantRecord{
+				WantID:  want.WantID,
+				Domain:  strings.ToLower(strings.TrimSpace(want.Domains[0])),
+				Query:   want.Query,
+				MaxSats: want.MaxSats,
+				SeenAt:  time.Now().Unix(),
+			})
+		}
 		return
 	}
 	topics := topicsForMarketAd(offer.Net, offer.Domains, offer.OntologyID)
@@ -311,14 +320,22 @@ func (b *Broker) buildOfferForWant(ctx context.Context, want bstack.WantAd, dire
 		}
 	}
 	if pb == nil {
-		if best.AnchorTxID == "" && b.mem.Chain().Network() == "memory" && b.mem.Chain().BalanceSats() > 1000 {
+		if best.AnchorTxID == "" && b.mem.Chain().BalanceSats() >= 250 {
 			_, _ = b.mem.AnchorShard(ctx, matched.Shard)
 		}
 		var vr *contracts.VerifyResult
 		var pErr error
 		pb, vr, pErr = b.mem.Prove(ctx, matched.Shard, best.Seq)
+		allowZeroConfQuote := false
+		if b.mem.Chain().Network() != "memory" && pErr == nil && pb != nil && vr != nil && !vr.Settled && vr.AncestryVerified &&
+			(vr.Reason == "" || vr.Reason == "Unsettled" || vr.Reason == "InsufficientDepth") {
+			zcMax, _, _ := b.engine.Policy().ZeroConfLimits()
+			if zcMax > 0 && (matched.PriceSats == 0 || matched.PriceSats <= zcMax) {
+				allowZeroConfQuote = true
+			}
+		}
 		if b.mem.Chain().Network() != "memory" {
-			if pErr != nil || pb == nil || !vr.OK || !vr.Settled {
+			if pErr != nil || pb == nil || (!vr.Settled && !allowZeroConfQuote) || (!vr.OK && !allowZeroConfQuote) {
 				var reason, detail string
 				if vr != nil {
 					reason, detail = vr.Reason, vr.Detail
@@ -327,7 +344,7 @@ func (b *Broker) buildOfferForWant(ctx context.Context, want bstack.WantAd, dire
 				return nil, bstack.MarketPayload{}, false
 			}
 		}
-		if fj != nil && pb != nil {
+		if fj != nil && pb != nil && (vr == nil || vr.Settled || b.mem.Chain().Network() == "memory") {
 			fj.PutCachedCapsule(pbKey, []byte{1}, "pb", pb)
 		}
 	}
@@ -417,10 +434,11 @@ func (b *Broker) buildOfferForWant(ctx context.Context, want bstack.WantAd, dire
 		log.Printf("market: PrepareDirectSale want=%s shard=%s#%d failed: %v", want.WantID, matched.Shard, best.Seq, err)
 		return nil, bstack.MarketPayload{}, false
 	}
-	// Two-tier payload delivery: inline <= 12 KiB ciphertexts directly inside OfferAd (zero CHIRP fetch!);
-	// offload > 12 KiB capsules/blobs to bstore + CHIRP.
+	// Two-tier payload delivery: strip redundant CiphertextHex from wire OfferAd whenever it exceeds
+	// InlineOfferMaxHexLen OR on direct HTTP fast-journal endpoints (PurchaseResponse delivers CiphertextHex
+	// directly and Buyer verifies SHA256(ct) == CiphertextSHA256 committed inside OfferSig!).
 	wireSale := *saleOffer
-	if len(wireSale.CiphertextHex) > bstack.InlineOfferMaxHexLen {
+	if len(wireSale.CiphertextHex) > bstack.InlineOfferMaxHexLen || (pubURL != "" && fj != nil && wireSale.CiphertextSHA256 != "") {
 		wireSale.CiphertextHex = ""
 	}
 	saleJSON, _ := json.Marshal(wireSale)

@@ -7,8 +7,10 @@ import (
 	"io"
 
 	"github.com/bsv-blockchain/go-sdk/transaction/chaintracker"
+	"github.com/lightwebinc/bcommon/cbor"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
+	"github.com/kryptokrates/nektar/internal/contracts"
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/store"
 )
@@ -34,13 +36,14 @@ const (
 
 // CapsuleEnvelopeHeader is the authenticated plaintext CBOR header (AAD) of an encrypted (mode 0x01) .nkt capsule.
 type CapsuleEnvelopeHeader struct {
-	Version      uint64 `json:"version"`
-	KDF          string `json:"kdf"`
-	Cipher       string `json:"cipher"`
-	Compression  string `json:"compression"`
-	Salt         []byte `json:"salt"`       // 4-byte nonce salt for chunked AES-256-GCM
-	WrappedDEK   []byte `json:"wrappedDek"` // ephemeral 32-byte DEK wrapped via BRC-42 / ECDH
-	RecipientPub string `json:"recipientPub,omitempty"`
+	Version      uint64      `json:"version"`
+	KDF          string      `json:"kdf"`
+	Cipher       string      `json:"cipher"`
+	Compression  string      `json:"compression"`
+	Salt         []byte      `json:"salt"`       // 4-byte nonce salt for chunked AES-256-GCM
+	WrappedDEK   []byte      `json:"wrappedDek"` // ephemeral 32-byte DEK wrapped via BRC-42 / ECDH
+	RecipientPub string      `json:"recipientPub,omitempty"`
+	Extra        []cbor.Pair `json:"-"` // preserved non-critical odd CBOR extension keys
 }
 
 // CapsuleTrailer is the mandatory final record of every .nkt capsule authenticating stream completeness.
@@ -49,24 +52,26 @@ type CapsuleTrailer struct {
 	RecordCounts map[uint64]uint64 `json:"recordCounts"`
 	SignerPub    string            `json:"signerPub,omitempty"`
 	Signature    []byte            `json:"signature,omitempty"` // low-S DER over DSHA256(TagCapsuleTrailerV1 || signableCBOR)
+	Extra        []cbor.Pair       `json:"-"`                   // preserved non-critical odd CBOR extension keys
 }
 
 // CapsuleHeader holds the top-level metadata record (first item in every .nkt CBOR sequence).
 type CapsuleHeader struct {
-	Format         string `json:"format"`
-	Repo           string `json:"repo"`
-	Branch         string `json:"branch"`
-	GenesisPub     string `json:"genesisPub,omitempty"`
-	GenesisShardID string `json:"genesisShardId,omitempty"`
-	OwnerPub       string `json:"ownerPub"`
-	BaseCommit     string `json:"baseCommit,omitempty"`
-	HeadCommit     string `json:"headCommit,omitempty"`
-	BaseAnchorN    int64  `json:"baseAnchorN"` // -1 for full capsule starting at n=0; >=0 for incremental delta
-	BaseAnchorTxID string `json:"baseAnchorTxid,omitempty"`
-	BaseStateQ     []byte `json:"baseStateQ,omitempty"`  // 32B q_base for incremental automaton replay
-	BaseMmrRoot    []byte `json:"baseMmrRoot,omitempty"` // 32B MMR root at BaseAnchorN for MMRConsistencyProof
-	ExportedAt     int64  `json:"exportedAt"`
-	SelfContained  bool   `json:"selfContained,omitempty"`
+	Format         string      `json:"format"`
+	Repo           string      `json:"repo"`
+	Branch         string      `json:"branch"`
+	GenesisPub     string      `json:"genesisPub,omitempty"`
+	GenesisShardID string      `json:"genesisShardId,omitempty"`
+	OwnerPub       string      `json:"ownerPub"`
+	BaseCommit     string      `json:"baseCommit,omitempty"`
+	HeadCommit     string      `json:"headCommit,omitempty"`
+	BaseAnchorN    int64       `json:"baseAnchorN"` // -1 for full capsule starting at n=0; >=0 for incremental delta
+	BaseAnchorTxID string      `json:"baseAnchorTxid,omitempty"`
+	BaseStateQ     []byte      `json:"baseStateQ,omitempty"`  // 32B q_base for incremental automaton replay
+	BaseMmrRoot    []byte      `json:"baseMmrRoot,omitempty"` // 32B MMR root at BaseAnchorN for MMRConsistencyProof
+	ExportedAt     int64       `json:"exportedAt"`
+	SelfContained  bool        `json:"selfContained,omitempty"`
+	Extra          []cbor.Pair `json:"-"` // preserved non-critical odd CBOR extension keys
 }
 
 // MemoryCapsule is the in-memory view of a portable, self-verifying .nkt Memory Capsule.
@@ -85,6 +90,7 @@ type MemoryCapsule struct {
 	BaseMmrRoot       []byte                           `json:"baseMmrRoot,omitempty"`
 	SelfContained     bool                             `json:"selfContained,omitempty"`
 	ExportedAt        int64                            `json:"exportedAt"`
+	HeaderExtra       []cbor.Pair                      `json:"-"` // preserved non-critical odd Header extension keys
 	Commits           []CommitObject                   `json:"commits"`
 	Trees             map[string]TreeObject            `json:"trees"`
 	Blobs             map[string]BlobObject            `json:"blobs"`
@@ -110,6 +116,16 @@ type CapsuleEncodeOpts struct {
 	RecipientPub string
 }
 
+// PreverifiedAnchorHint carries a single anchor's already-verified SPV state + exact BEEF SHA-256
+// from an immediately preceding contracts.VerifyFragmentWithMemo call in the same deal.
+type PreverifiedAnchorHint struct {
+	TxID        string
+	BeefSHA256  [32]byte
+	State       *contracts.AnchorState
+	Settled     bool
+	BlockHeight uint32
+}
+
 // CapsuleVerifyOpts configures streaming/offline .nkt verification.
 type CapsuleVerifyOpts struct {
 	Objects              bstack.ObjectStore
@@ -118,6 +134,9 @@ type CapsuleVerifyOpts struct {
 	AllowMissingExternal bool               // false = fail closed on missing external CHIRP blobs
 	RequireSignedTrailer bool               // true = reject capsules without a verified exporter Trailer signature
 	LocalBaseAnchor      *store.BatchAnchor // receiver's verified anchor at BaseAnchorN for incremental deltas
+	// PreverifiedAnchor avoids duplicate guard.ParseBEEF + NektarAnchor decode + BUMP verification
+	// when the exact same anchor BEEF bytes were already verified in the same deal.
+	PreverifiedAnchor *PreverifiedAnchorHint
 	// UnwrapDEK decrypts the ephemeral 32-byte DEK when reading an encrypted (mode 0x01) .nkt capsule.
 	UnwrapDEK func(hdr CapsuleEnvelopeHeader) (dek []byte, err error)
 }

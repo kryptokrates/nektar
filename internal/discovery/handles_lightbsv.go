@@ -416,31 +416,74 @@ func (s *Service) resolveHandleViaWellKnown(ctx context.Context, acctStr, handle
 
 func (s *Service) lookupFingerOrCachedPeer(ctx context.Context, acctStr string) (PeerInfo, bool) {
 	if p, ok := s.ResolveHandle(acctStr); ok {
+		s.enrichPeerFromFingerOverlay(ctx, &p)
 		return p, true
-	}
-	// Query `ls_finger` across active hubs when mounted.
-	qBytes, _ := json.Marshal(map[string]any{
-		"service": fingermod.LookupName,
-		"query":   map[string]string{"acct": acctStr},
-	})
-	for _, h := range s.ActiveHosts() {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h, "/")+"/lookup", bytes.NewReader(qBytes))
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := s.httpClient.Do(req)
-		if err != nil {
-			continue
-		}
-		resp.Body.Close()
 	}
 	if _, err := s.DiscoverPeers(ctx, nil); err == nil {
 		if p, ok := s.ResolveHandle(acctStr); ok {
+			s.enrichPeerFromFingerOverlay(ctx, &p)
+			return p, true
+		}
+	}
+	// If handle was previously TOFU-pinned, verify live `ls_finger` chain state by identityKey across active Hubs.
+	if pin, ok := s.GetHandlePin(acctStr); ok && pin.IdentityPubHex != "" {
+		p := PeerInfo{
+			Pub:        pin.IdentityPubHex,
+			Handle:     acctStr,
+			BboxOffice: pin.Messagebox,
+			Hosts:      s.ActiveHosts(),
+			Exp:        time.Now().Add(5 * time.Minute).UnixMilli(),
+		}
+		if s.enrichPeerFromFingerOverlay(ctx, &p) {
+			s.UpsertPeer(p)
 			return p, true
 		}
 	}
 	return PeerInfo{}, false
+}
+
+// enrichPeerFromFingerOverlay queries Lightweb's `ls_finger` (`{ identityKey: "<66-hex>" }`) across active Hubs
+// and decodes any returned `OutputList` BEEF outputs to confirm live unkilled `bfinger` state.
+func (s *Service) enrichPeerFromFingerOverlay(ctx context.Context, p *PeerInfo) bool {
+	if s == nil || p == nil || len(strings.TrimSpace(p.Pub)) != 66 {
+		return false
+	}
+	qBytes, err := json.Marshal(map[string]any{
+		"service": fingermod.LookupName,
+		"query":   map[string]string{"identityKey": strings.ToLower(strings.TrimSpace(p.Pub))},
+	})
+	if err != nil {
+		return false
+	}
+	for _, h := range s.ActiveHosts() {
+		fCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		req, rErr := http.NewRequestWithContext(fCtx, http.MethodPost, strings.TrimRight(h, "/")+"/lookup", bytes.NewReader(qBytes))
+		if rErr != nil {
+			cancel()
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, dErr := s.httpClient.Do(req)
+		if dErr != nil {
+			cancel()
+			continue
+		}
+		var ans struct {
+			Type    string `json:"type"`
+			Outputs []struct {
+				Beef        []byte `json:"beef"`
+				OutputIndex uint32 `json:"outputIndex"`
+			} `json:"outputs"`
+		}
+		decErr := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&ans)
+		resp.Body.Close()
+		cancel()
+		if decErr == nil && len(ans.Outputs) > 0 {
+			p.Hosts = appendUnique(p.Hosts, h)
+			return true
+		}
+	}
+	return false
 }
 
 // WellKnownHandleHandler returns a standards-compliant BRC-169 `/.well-known/metanet-handles/resolve`

@@ -160,7 +160,13 @@ func (n *Node) handlePlaneStream(w http.ResponseWriter, r *http.Request) {
 	}
 	n.planeSubs[ch] = tidFilter
 	n.mu.Unlock()
+	downTopics := topicFilter
+	if len(downTopics) == 0 {
+		downTopics = n.Topics()
+	}
+	releaseDownTopics := n.AcquireDownstreamTopics(downTopics)
 	defer func() {
+		releaseDownTopics()
 		n.mu.Lock()
 		delete(n.planeSubs, ch)
 		n.mu.Unlock()

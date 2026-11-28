@@ -91,6 +91,7 @@ type spendState struct {
 
 // spendLogEntry is an O(1) append-only NDJSON journal record eliminating O(N^2) full-day JSON rewrites.
 type spendLogEntry struct {
+	Version   int    `json:"v,omitempty"`
 	Op        string `json:"op"` // "res" | "cancel" | "commit" | "rec" | "refund" | "roll"
 	Day       string `json:"day"`
 	ResID     string `json:"resId,omitempty"`
@@ -121,6 +122,7 @@ type SpendGuard struct {
 	reservations  map[string]spendReservation
 	resSeq        uint64
 	needsCompact  bool
+	usesWallClock bool
 	corruptErr    error
 	preCheck      atomic.Pointer[func() error]
 }
@@ -165,19 +167,22 @@ func NewSpendGuard(opts SpendGuardOpts) *SpendGuard {
 		}
 	}
 	nowFn := opts.Now
+	usesWall := false
 	if nowFn == nil {
 		nowFn = time.Now
+		usesWall = true
 	}
 	g := &SpendGuard{
-		maxFeePerTx:  maxFee,
-		maxSpendDay:  maxDay,
-		minInterval:  opts.MinInterval,
-		statePath:    opts.StatePath,
-		journal:      opts.Journal,
-		now:          nowFn,
-		dayKey:       nowFn().UTC().Format("2006-01-02"),
-		txSpend:      make(map[string]uint64, 256),
-		reservations: make(map[string]spendReservation, 64),
+		maxFeePerTx:   maxFee,
+		maxSpendDay:   maxDay,
+		minInterval:   opts.MinInterval,
+		statePath:     opts.StatePath,
+		journal:       opts.Journal,
+		now:           nowFn,
+		usesWallClock: usesWall,
+		dayKey:        nowFn().UTC().Format("2006-01-02"),
+		txSpend:       make(map[string]uint64, 256),
+		reservations:  make(map[string]spendReservation, 64),
 	}
 	g.load()
 	return g
@@ -522,7 +527,9 @@ func (g *SpendGuard) compactLocked(_ spendLogEntry) error {
 
 func (g *SpendGuard) rollDayLocked(now time.Time) {
 	today := now.UTC().Format("2006-01-02")
-	if today != g.dayKey {
+	// DDIA Ch. 8 monotonic UTC day floor: ISO-8601 dates sort lexicographically, so a backward
+	// NTP clock step across UTC midnight MUST NOT reset spentToday or reservedToday.
+	if today > g.dayKey {
 		g.dayKey = today
 		g.spentToday = 0
 		g.txCount = 0
@@ -571,13 +578,37 @@ func (g *SpendGuard) checkLocked(now time.Time, feeSats, spendSats uint64) (uint
 	if g.minInterval > 0 {
 		lastActivity := g.effectiveLastBroadcastLocked()
 		if !lastActivity.IsZero() {
-			if elapsed := now.Sub(lastActivity); elapsed < g.minInterval {
+			// Guard against backward wall-clock steps (e.g. NTP adjustment after restoring a disk timestamp):
+			// negative elapsed duration MUST NOT deadlock broadcasts indefinitely (DDIA Ch. 8).
+			if elapsed := now.Sub(lastActivity); elapsed >= 0 && elapsed < g.minInterval {
 				rem := (g.minInterval - elapsed).Round(time.Millisecond)
 				return 0, fmt.Errorf("%w (retry after %s)", ErrMinInterval, rem)
 			}
 		}
 	}
 	return totalSpend, nil
+}
+
+func (g *SpendGuard) paceMinIntervalLocked(now *time.Time) {
+	if !g.usesWallClock || g.minInterval <= 0 || g.minInterval > 250*time.Millisecond {
+		return
+	}
+	for attempt := 0; attempt < 4; attempt++ {
+		lastActivity := g.effectiveLastBroadcastLocked()
+		if lastActivity.IsZero() {
+			return
+		}
+		elapsed := now.Sub(lastActivity)
+		if elapsed < 0 || elapsed >= g.minInterval {
+			return
+		}
+		wait := g.minInterval - elapsed
+		g.mu.Unlock()
+		time.Sleep(wait)
+		g.mu.Lock()
+		*now = g.now()
+		g.rollDayLocked(*now)
+	}
 }
 
 // Reserve atomically reserves daily spend budget before a remote client-wallet CreateAction RPC,
@@ -590,6 +621,7 @@ func (g *SpendGuard) Reserve(feeSats, spendSats uint64) (string, error) {
 	defer g.mu.Unlock()
 	now := g.now()
 	g.rollDayLocked(now)
+	g.paceMinIntervalLocked(&now)
 	totalSpend, err := g.checkLocked(now, feeSats, spendSats)
 	if err != nil {
 		return "", err
@@ -709,6 +741,7 @@ func (g *SpendGuard) CheckAndRecord(txid string, feeSats, spendSats uint64) erro
 		}
 	}
 
+	g.paceMinIntervalLocked(&now)
 	totalSpend, err := g.checkLocked(now, feeSats, spendSats)
 	if err != nil {
 		return err

@@ -324,12 +324,10 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 		}
 	}
 
-	// Detect withholding across healthy multi-host quorums and quarantine disputed peers
-	// seen on fewer than strict majority (>50%) of responding hosts.
+	// Record telemetry warnings when a peer appears on a subset of queried Hubs without quarantining
+	// legitimate community Sellers peered with a single Leaf Hub.
 	var warnings []WithholdingWarning
-	quorum := 1
 	if len(perHostSeen) >= 2 {
-		quorum = len(perHostSeen)/2 + 1
 		for pub := range byPub {
 			for h, seen := range perHostSeen {
 				if !seen[pub] {
@@ -350,11 +348,6 @@ func (s *Service) DiscoverPeers(ctx context.Context, hosts []string) ([]PeerInfo
 	}
 	for pub, p := range byPub {
 		if p.Exp > 0 && p.Exp < nowMs {
-			continue
-		}
-		if len(p.SeenOnHosts) < quorum {
-			// Disputed peer omitted by a quorum of sibling hosts: quarantine rather than blindly unioning.
-			delete(s.peers, pub)
 			continue
 		}
 		s.peers[pub] = *p
@@ -488,54 +481,145 @@ func (s *Service) SeedFromNetwork(ctx context.Context, seedDomains []string) (in
 	return totalImported, nil
 }
 
-// FetchRemoteChirp resolves a chirp:// URL from a remote Nektar node's GET /v1/chirp/{hash},
-// verifying every node & blob cryptographically via lightwebinc/bcommon/chirp.Verify!
-func (s *Service) FetchRemoteChirp(ctx context.Context, peerBaseURL, chirpURL string) ([]byte, error) {
+// PushChirpClosureToHosts stages content-addressed BRC-167 CHIRP objects (`hashes`) from `store`
+// onto active Hub `bstore` HTTP endpoints (`PUT /chirp/v1/objects/{hash}`) so NAT Sellers with
+// `PublicURL == ""` can deliver >12 KiB encrypted capsules and multi-ancestor ProofBundles across any Hub.
+func (s *Service) PushChirpClosureToHosts(ctx context.Context, hosts []string, store bstack.ObjectStore, hashes [][32]byte) int {
+	if s == nil || store == nil || len(hashes) == 0 {
+		return 0
+	}
+	if len(hosts) == 0 {
+		hosts = s.ActiveHosts()
+	}
+	if len(hosts) == 0 {
+		return 0
+	}
+	uploaded := 0
+	for _, rawHost := range hosts {
+		base := normalizeHostURL(rawHost)
+		if base == "" {
+			continue
+		}
+		if _, vErr := core.ValidateOutboundURL(base, core.SafeHTTPOpts{
+			AllowPrivate: core.AllowPrivateOutboundForNetwork(s.network),
+			RequireHTTPS: s.network == "main",
+		}); vErr != nil {
+			continue
+		}
+		hostOK := true
+		for _, h := range hashes {
+			data, gErr := store.GetObject(h)
+			if gErr != nil {
+				hostOK = false
+				break
+			}
+			hx := hex.EncodeToString(h[:])
+			pCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			req, rErr := http.NewRequestWithContext(pCtx, http.MethodPut, base+"/chirp/v1/objects/"+hx, bytes.NewReader(data))
+			if rErr != nil {
+				cancel()
+				hostOK = false
+				break
+			}
+			req.Header.Set("Content-Type", "application/octet-stream")
+			if pub := s.AnnouncePubHex(); pub != "" {
+				req.Header.Set("X-Nektar-Pub", pub)
+			}
+			resp, dErr := s.httpClient.Do(req)
+			if dErr != nil {
+				cancel()
+				hostOK = false
+				break
+			}
+			resp.Body.Close()
+			cancel()
+			if resp.StatusCode >= 300 {
+				hostOK = false
+				break
+			}
+		}
+		if hostOK {
+			uploaded++
+		}
+	}
+	return uploaded
+}
+
+// FetchRemoteChirpMulti resolves a `chirp://` URL across multiple candidate base URLs (e.g. SellerURL,
+// Seller's advertised Hubs, and Buyer's own local Leaf Hubs with Spine pull-through), verifying every
+// object & DAG closure cryptographically via `lightwebinc/bcommon/chirp.Verify`.
+func (s *Service) FetchRemoteChirpMulti(ctx context.Context, candidateBases []string, chirpURL string) ([]byte, error) {
+	var validBases []string
+	seen := make(map[string]bool, len(candidateBases)+2)
+	for _, raw := range candidateBases {
+		base := normalizeHostURL(raw)
+		if base == "" || seen[base] {
+			continue
+		}
+		if _, err := core.ValidateOutboundURL(base, core.SafeHTTPOpts{
+			AllowPrivate: core.AllowPrivateOutboundForNetwork(s.network),
+			RequireHTTPS: s.network == "main",
+		}); err != nil {
+			continue
+		}
+		seen[base] = true
+		validBases = append(validBases, base)
+	}
+	if len(validBases) == 0 {
+		return nil, errors.New("discovery: no valid candidate CHIRP hosts")
+	}
 	rootHash, err := chirp.ParseURL(chirpURL)
 	if err != nil {
 		return nil, err
 	}
-	base := normalizeHostURL(peerBaseURL)
-	if base == "" {
-		return nil, errors.New("discovery: invalid peerBaseURL")
-	}
-	if _, err := core.ValidateOutboundURL(base, core.SafeHTTPOpts{
-		AllowPrivate: core.AllowPrivateOutboundForNetwork(s.network),
-		RequireHTTPS: s.network == "main",
-	}); err != nil {
-		return nil, fmt.Errorf("discovery: blocked remote chirp host: %w", err)
-	}
 	held := make(map[[32]byte][]byte)
 	closure, err := chirp.Verify(rootHash, func(h [32]byte) ([]byte, error) {
-		if b, err := s.mem.Objects().GetObject(h); err == nil {
+		if b, gErr := s.mem.Objects().GetObject(h); gErr == nil {
 			held[h] = b
 			return b, nil
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/chirp/"+hex.EncodeToString(h[:]), nil)
-		if err != nil {
-			return nil, err
+		hx := hex.EncodeToString(h[:])
+		var lastErr error
+		for _, base := range validBases {
+			for _, route := range []string{"/v1/chirp/", "/chirp/v1/objects/"} {
+				req, rErr := http.NewRequestWithContext(ctx, http.MethodGet, base+route+hx, nil)
+				if rErr != nil {
+					lastErr = rErr
+					continue
+				}
+				resp, dErr := s.httpClient.Do(req)
+				if dErr != nil {
+					lastErr = dErr
+					continue
+				}
+				if resp.StatusCode != http.StatusOK {
+					resp.Body.Close()
+					lastErr = fmt.Errorf("discovery: remote chirp HTTP %d at %s", resp.StatusCode, base)
+					continue
+				}
+				b, ioErr := io.ReadAll(io.LimitReader(resp.Body, bstack.MaxChirpObjectBytes+1))
+				resp.Body.Close()
+				if ioErr != nil {
+					lastErr = ioErr
+					continue
+				}
+				if len(b) > bstack.MaxChirpObjectBytes {
+					lastErr = fmt.Errorf("discovery: remote chirp object exceeds max %d bytes", bstack.MaxChirpObjectBytes)
+					continue
+				}
+				if sha256.Sum256(b) != h {
+					lastErr = errors.New("discovery: remote chirp object hash mismatch")
+					continue
+				}
+				_ = s.mem.Objects().PutObject(h, b)
+				held[h] = b
+				return b, nil
+			}
 		}
-		resp, err := s.httpClient.Do(req)
-		if err != nil {
-			return nil, err
+		if lastErr != nil {
+			return nil, lastErr
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("discovery: remote chirp HTTP %d", resp.StatusCode)
-		}
-		b, err := io.ReadAll(io.LimitReader(resp.Body, bstack.MaxChirpObjectBytes+1))
-		if err != nil {
-			return nil, err
-		}
-		if len(b) > bstack.MaxChirpObjectBytes {
-			return nil, fmt.Errorf("discovery: remote chirp object exceeds max %d bytes", bstack.MaxChirpObjectBytes)
-		}
-		if sha256.Sum256(b) != h {
-			return nil, errors.New("discovery: remote chirp object hash mismatch")
-		}
-		_ = s.mem.Objects().PutObject(h, b)
-		held[h] = b
-		return b, nil
+		return nil, errors.New("discovery: chirp object not found on any candidate host")
 	}, bstack.DefaultChirpLimits())
 	if err != nil {
 		return nil, fmt.Errorf("discovery: verify remote chirp closure: %w", err)
@@ -552,4 +636,10 @@ func (s *Service) FetchRemoteChirp(ctx context.Context, peerBaseURL, chirpURL st
 		out = append(out, b...)
 	}
 	return out, nil
+}
+
+// FetchRemoteChirp resolves a chirp:// URL from a remote Nektar node's GET /v1/chirp/{hash},
+// verifying every node & blob cryptographically via lightwebinc/bcommon/chirp.Verify!
+func (s *Service) FetchRemoteChirp(ctx context.Context, peerBaseURL, chirpURL string) ([]byte, error) {
+	return s.FetchRemoteChirpMulti(ctx, []string{peerBaseURL}, chirpURL)
 }

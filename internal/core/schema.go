@@ -47,6 +47,7 @@ type RefinementEdge struct {
 	TargetLeaf  string         `json:"targetLeaf"` // 32-byte lowercase hex Leaf_i
 	Kind        RefinementKind `json:"kind"`
 	Reason      string         `json:"reason,omitempty"`
+	Extra       []cbor.Pair    `json:"-"` // preserved non-critical odd CBOR extension keys
 }
 
 // Validate checks canonical formatting of a RefinementEdge before signing/committing.
@@ -80,26 +81,27 @@ type Provenance struct {
 // TransitionRecord encodes one deterministic step (q_i, sigma, q_j, t, h_i) of the extended
 // Merkle Automaton A' = (Q, Sigma, delta, q_0, F, T) in canonical RFC 8949 CBOR (Paper §2–§3).
 type TransitionRecord struct {
-	Version      uint64 `json:"v"`
-	Shard        string `json:"shard"`
-	Seq          int64  `json:"seq"`
-	PrevStateQ   []byte `json:"prevQ"`                  // 32B q_i
-	InputDigest  []byte `json:"inputDigest"`            // 32B H(sigma)
-	NextStateQ   []byte `json:"nextQ"`                  // 32B q_j
-	CommitHash   []byte `json:"commitHash,omitempty"`   // 32B Git CommitObject hash
-	TreeHash     []byte `json:"treeHash,omitempty"`     // 32B Git TreeObject hash
-	PolicyHash   []byte `json:"policyHash,omitempty"`   // 32B active Cedar PolicyCommitment hash
-	OntologyHash []byte `json:"ontologyHash,omitempty"` // 32B active __ontology__ head chain hash
-	Timestamp    int64  `json:"t"`
-	Hash         []byte `json:"h,omitempty"` // 32B DSHA256(TagTransitionV1 || CBOR(body))
+	Version      uint64      `json:"v"`
+	Shard        string      `json:"shard"`
+	Seq          int64       `json:"seq"`
+	PrevStateQ   []byte      `json:"prevQ"`                  // 32B q_i
+	InputDigest  []byte      `json:"inputDigest"`            // 32B H(sigma)
+	NextStateQ   []byte      `json:"nextQ"`                  // 32B q_j
+	CommitHash   []byte      `json:"commitHash,omitempty"`   // 32B Git CommitObject hash
+	TreeHash     []byte      `json:"treeHash,omitempty"`     // 32B Git TreeObject hash
+	PolicyHash   []byte      `json:"policyHash,omitempty"`   // 32B active Cedar PolicyCommitment hash
+	OntologyHash []byte      `json:"ontologyHash,omitempty"` // 32B active __ontology__ head chain hash
+	Timestamp    int64       `json:"t"`
+	Hash         []byte      `json:"h,omitempty"` // 32B DSHA256(TagTransitionV1 || CBOR(body))
+	Extra        []cbor.Pair `json:"-"`           // preserved non-critical odd CBOR extension keys
 }
 
-func (tr TransitionRecord) cborBody() cbor.Map {
+func (tr TransitionRecord) cborBody() (cbor.Map, error) {
 	v := tr.Version
 	if v == 0 {
 		v = 1
 	}
-	return cbor.Map{
+	m := cbor.Map{
 		{Key: uint64(0), Val: v},
 		{Key: uint64(1), Val: tr.Shard},
 		{Key: uint64(2), Val: tr.Seq},
@@ -112,11 +114,16 @@ func (tr TransitionRecord) cborBody() cbor.Map {
 		{Key: uint64(9), Val: pad32(tr.OntologyHash)},
 		{Key: uint64(10), Val: tr.Timestamp},
 	}
+	return AppendExtraPairs(m, transitionKnownKeys, tr.Extra)
 }
 
 // ComputeTransitionHash deterministically hashes tr using canonical RFC 8949 CBOR.
 func ComputeTransitionHash(tr TransitionRecord) ([]byte, error) {
-	return HashCBOR(TagTransitionV1, tr.cborBody())
+	body, err := tr.cborBody()
+	if err != nil {
+		return nil, err
+	}
+	return HashCBOR(TagTransitionV1, body)
 }
 
 // NextStepStateQ computes the deterministic per-transition automaton state q_j from q_i and inputs.
@@ -132,17 +139,20 @@ func NextStepStateQ(prevQ, inputDigest, commitHash, treeHash, policyHash, ontolo
 	})
 }
 
-// EncodeTransitionCBOR serializes tr (including its Hash) into canonical RFC 8949 CBOR.
+// EncodeTransitionCBOR serializes tr (including its Hash and preserved odd Extra keys) into canonical RFC 8949 CBOR.
 func EncodeTransitionCBOR(tr TransitionRecord) ([]byte, error) {
+	body, err := tr.cborBody()
+	if err != nil {
+		return nil, err
+	}
 	h := tr.Hash
 	if len(h) != 32 {
-		var err error
-		h, err = ComputeTransitionHash(tr)
+		h, err = HashCBOR(TagTransitionV1, body)
 		if err != nil {
 			return nil, err
 		}
 	}
-	m := append(tr.cborBody(), cbor.Pair{Key: uint64(11), Val: h})
+	m := append(body, cbor.Pair{Key: uint64(11), Val: h})
 	return EncodeCBOR(m)
 }
 
@@ -155,11 +165,12 @@ func DecodeTransitionCBOR(raw []byte) (TransitionRecord, error) {
 	if err != nil {
 		return TransitionRecord{}, fmt.Errorf("transition: decode cbor: %w", err)
 	}
-	m, _, err := SplitCBORMap(v, transitionKnownKeys)
+	m, extra, err := SplitCBORMap(v, transitionKnownKeys)
 	if err != nil {
 		return TransitionRecord{}, fmt.Errorf("transition: %w", err)
 	}
 	var tr TransitionRecord
+	tr.Extra = extra
 	if tr.Version, err = cborUint(m, 0); err != nil {
 		return TransitionRecord{}, err
 	}
@@ -270,10 +281,12 @@ func takeField(b []byte, off int) ([]byte, int, error) {
 	return v, off + 4 + n, nil
 }
 
+var refinementEdgeKnownKeys = KnownKeyRange(0, 5)
+
 func encodeRefinesCBOR(edges []RefinementEdge) ([]byte, error) {
 	arr := make([]cbor.Value, len(edges))
 	for i, e := range edges {
-		arr[i] = cbor.Map{
+		m := cbor.Map{
 			{Key: uint64(0), Val: e.TargetShard},
 			{Key: uint64(1), Val: e.TargetSeq},
 			{Key: uint64(2), Val: strings.ToLower(strings.TrimSpace(e.TargetHDP))},
@@ -281,6 +294,12 @@ func encodeRefinesCBOR(edges []RefinementEdge) ([]byte, error) {
 			{Key: uint64(4), Val: string(e.Kind)},
 			{Key: uint64(5), Val: e.Reason},
 		}
+		var err error
+		m, err = AppendExtraPairs(m, refinementEdgeKnownKeys, e.Extra)
+		if err != nil {
+			return nil, err
+		}
+		arr[i] = m
 	}
 	return EncodeCBOR(arr)
 }
@@ -296,11 +315,12 @@ func decodeRefinesCBOR(raw []byte) ([]RefinementEdge, error) {
 	}
 	out := make([]RefinementEdge, len(arr))
 	for i, item := range arr {
-		m, err := CBORMapToUintMap(item)
+		m, extra, err := SplitCBORMap(item, refinementEdgeKnownKeys)
 		if err != nil {
 			return nil, err
 		}
 		var e RefinementEdge
+		e.Extra = extra
 		if e.TargetShard, err = cborText(m, 0); err != nil {
 			return nil, err
 		}

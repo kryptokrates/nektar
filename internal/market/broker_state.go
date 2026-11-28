@@ -82,6 +82,7 @@ type PurchaseRequest struct {
 	BuyerPub          string `json:"buyerPub"`
 	TxID              string `json:"txid"`
 	PaymentBEEFHex    string `json:"paymentBeefHex"`
+	PaymentBEEFRaw    []byte `json:"-"` // optional raw AtomicBEEF bytes (zero hex encode/decode on CBOR fast path)
 	OutputIndex       uint32 `json:"outputIndex,omitempty"`
 	DerivationPrefix  string `json:"derivationPrefix,omitempty"`
 	DerivationSuffix  string `json:"derivationSuffix,omitempty"`

@@ -338,7 +338,7 @@ func (d *Distiller) RunCycle(ctx context.Context, opts RunOpts) (*CycleSummary, 
 	// Stage 5: Optional anchoring & auto-listing of updated market-<domain> shards (strictly AllowRaw: false).
 	for marketShard, ontID := range touchedMarkets {
 		sum.MarketShards = append(sum.MarketShards, marketShard)
-		if autoAnchor && d.mem.Chain().BalanceSats() > 1000 {
+		if autoAnchor && d.mem.Chain().BalanceSats() >= 250 {
 			if _, aErr := d.mem.AnchorShard(ctx, marketShard); aErr != nil {
 				sum.Errors = append(sum.Errors, fmt.Sprintf("%s: anchor: %v", marketShard, aErr))
 			}

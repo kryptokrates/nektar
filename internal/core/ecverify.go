@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/big"
 	"runtime"
-	"strings"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 )
@@ -23,21 +22,13 @@ var (
 // secp256k1 public key (0x02/0x03 prefix), rejecting 65-byte uncompressed/hybrid keys and
 // case-variant bypasses of string-keyed maps and rate limiters.
 func ParseStrictCompressedPubKey(pubHex string) (*ec.PublicKey, []byte, error) {
-	if len(pubHex) != 66 || pubHex != strings.ToLower(pubHex) {
-		return nil, nil, ErrNonCanonicalPubKey
+	pub, arr, err := ParseFastStrictPubKey(pubHex)
+	if err != nil {
+		return nil, nil, err
 	}
-	pubBytes, err := hex.DecodeString(pubHex)
-	if err != nil || len(pubBytes) != 33 || (pubBytes[0] != 0x02 && pubBytes[0] != 0x03) {
-		return nil, nil, ErrNonCanonicalPubKey
-	}
-	pub, err := ec.ParsePubKey(pubBytes)
-	if err != nil || pub == nil || pub.X == nil || pub.Y == nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrNonCanonicalPubKey, err)
-	}
-	if !ec.S256().IsOnCurve(pub.X, pub.Y) {
-		return nil, nil, ErrNonCanonicalPubKey
-	}
-	return pub, pubBytes, nil
+	outBytes := make([]byte, 33)
+	copy(outBytes, arr[:])
+	return &ec.PublicKey{Curve: ec.S256(), X: pub.X(), Y: pub.Y()}, outBytes, nil
 }
 
 // ParseStrictLowSDER parses a DER-encoded ECDSA signature while enforcing:

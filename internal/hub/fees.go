@@ -22,6 +22,7 @@ const (
 	RoleSpine HubRole = "spine"
 
 	PresetFree           = "free"
+	PresetSpineWholesale = "spine_wholesale"
 	PresetLightBSVEgress = "lightbsv_egress"
 	PresetHybrid         = "hybrid"
 
@@ -59,9 +60,25 @@ type FeeSchedule struct {
 	AcceptWindow           time.Duration     `json:"-"`
 }
 
-// DefaultFeeSchedule returns canonical fee presets ("free" | "lightbsv_egress" | "hybrid").
+// DefaultFeeSchedule returns canonical fee presets ("free" | "spine_wholesale" | "lightbsv_egress" | "hybrid").
 func DefaultFeeSchedule(preset string) FeeSchedule {
 	switch strings.ToLower(strings.TrimSpace(preset)) {
+	case PresetSpineWholesale:
+		return FeeSchedule{
+			Role:                   RoleSpine,
+			Preset:                 PresetSpineWholesale,
+			SubmitWantSats:         0,
+			SubmitOfferSats:        0,
+			SubmitAnnounceSats:     0,
+			BboxSendSats:           0,
+			EgressSatsPer100Events: 5,
+			EgressMinTopupSats:     defaultMinTopupSats,
+			LookupPrices:           map[string]uint64{"history": 5, "export": 20},
+			AcceptThresholdSats:    defaultAcceptThreshold,
+			AcceptPayerLimitSats:   defaultAcceptPayerLimit,
+			AcceptTotalLimitSats:   defaultAcceptTotalLimit,
+			AcceptWindow:           defaultAcceptWindow,
+		}
 	case PresetLightBSVEgress:
 		return FeeSchedule{
 			Role:                   RoleLeaf,
@@ -69,8 +86,8 @@ func DefaultFeeSchedule(preset string) FeeSchedule {
 			SubmitWantSats:         0,
 			SubmitOfferSats:        0,
 			SubmitAnnounceSats:     0,
-			BboxSendSats:           2,
-			EgressSatsPer100Events: 10,
+			BboxSendSats:           0,
+			EgressSatsPer100Events: 12,
 			EgressMinTopupSats:     defaultMinTopupSats,
 			LookupPrices:           map[string]uint64{"history": 5, "export": 20},
 			AcceptThresholdSats:    defaultAcceptThreshold,

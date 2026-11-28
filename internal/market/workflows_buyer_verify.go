@@ -3,6 +3,7 @@ package market
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -92,7 +93,7 @@ func (e *Engine) buyerVerifyAndCommit(
 	if br := e.getBroker(); br != nil {
 		disc = br.disc
 	}
-	plaintext, resolvedKeyHex, failReason := verifySaleDelivery(
+	plaintext, resolvedKeyHex, anchorMemo, failReason := verifySaleDelivery(
 		rctx, e.mem, disc, e.policy, dealID, chosen,
 		sig.ContentKeyHex, sig.ClaimTxBEEFHex, sig.CiphertextHex, sig.ProofBundle,
 	)
@@ -104,11 +105,21 @@ func (e *Engine) buyerVerifyAndCommit(
 	var verifiedCap *memrepo.MemoryCapsule
 	var verifiedCapRes *memrepo.CapsuleVerifyReport
 	if isCapsuleDelivery {
-		decCap, capVer, cErr := memrepo.VerifyCapsuleStream(rctx, bytes.NewReader(plaintext), memrepo.CapsuleVerifyOpts{
+		capOpts := memrepo.CapsuleVerifyOpts{
 			Objects:    e.mem.Objects(),
 			Tracker:    e.mem.Chain().Tracker(),
 			MemoryMode: e.mem.Chain().Network() == "memory",
-		})
+		}
+		if anchorMemo != nil && anchorMemo.State != nil && sig.ProofBundle != nil && len(sig.ProofBundle.AnchorBEEF) > 0 {
+			capOpts.PreverifiedAnchor = &memrepo.PreverifiedAnchorHint{
+				TxID:        anchorMemo.AnchorTxID,
+				BeefSHA256:  sha256.Sum256(sig.ProofBundle.AnchorBEEF),
+				State:       anchorMemo.State,
+				Settled:     anchorMemo.Result.Settled,
+				BlockHeight: anchorMemo.Result.BlockHeight,
+			}
+		}
+		decCap, capVer, cErr := memrepo.VerifyCapsuleStream(rctx, bytes.NewReader(plaintext), capOpts)
 		if cErr != nil || capVer == nil || !capVer.OK {
 			reason := "invalid .nkt capsule payload"
 			if cErr != nil {
@@ -180,7 +191,7 @@ func (e *Engine) buyerVerifyAndCommit(
 	})
 
 	fj := e.FastJournal()
-	if fj == nil {
+	{
 		dom := "ops"
 		if len(want.Domains) > 0 {
 			dom = want.Domains[0]
@@ -231,7 +242,7 @@ func (e *Engine) buyerVerifyAndCommit(
 				return buyerVerifyResult{}, fmt.Errorf("market: import delivered .nkt capsule into %s: %w", targetShard, impErr)
 			}
 			// Persist NMU-1 post-reveal grade/quarantine metadata on every imported fragment row.
-			if e.mem.DB() != nil && storedNMU != nil {
+			if fj == nil && e.mem.DB() != nil && storedNMU != nil {
 				for _, sq := range impRes.ImportedSeqs {
 					_ = e.mem.DB().SaveFragmentNMUMeta(store.FragmentNMUMeta{
 						Shard:          targetShard,
@@ -247,7 +258,7 @@ func (e *Engine) buyerVerifyAndCommit(
 					})
 				}
 			}
-			if e.mem.Chain().Network() == "memory" && os.Getenv("NEKTAR_FAST_DEALS") != "1" && e.mem.Chain().BalanceSats() > 1000 && impRes.ImportedFrags > 0 {
+			if fj == nil && e.mem.Chain().Network() == "memory" && os.Getenv("NEKTAR_FAST_DEALS") != "1" && e.mem.Chain().BalanceSats() >= 250 && impRes.ImportedFrags > 0 {
 				_, _ = e.mem.AnchorShard(rctx, targetShard)
 			}
 		} else {
@@ -265,7 +276,7 @@ func (e *Engine) buyerVerifyAndCommit(
 				GradeMismatch:   gradeVer.GradeMismatch,
 				QuarantineEdges: gradeVer.QuarantineEdges,
 				Tainted:         true, // F10: purchased external knowledge is ALWAYS marked tainted!
-				AutoAnchor:      e.mem.Chain().Network() == "memory" && os.Getenv("NEKTAR_FAST_DEALS") != "1" && e.mem.Chain().BalanceSats() > 1000,
+				AutoAnchor:      fj == nil && e.mem.Chain().Network() == "memory" && os.Getenv("NEKTAR_FAST_DEALS") != "1" && e.mem.Chain().BalanceSats() >= 250,
 			}); rErr != nil {
 				return buyerVerifyResult{}, rErr
 			}
@@ -293,7 +304,7 @@ func (e *Engine) buyerVerifyAndCommit(
 			if vr := VerifyDealReceipt(dr, false); !vr.OK || !vr.SellerVerified {
 				return buyerVerifyResult{NowUnix: now, FailedReason: "seller triple-entry deal receipt signature invalid: " + vr.Error}, nil
 			}
-			if dr.DealID != dealID ||
+			if (dr.DealID != dealID && (chosen.WantID == "" || dr.DealID != chosen.WantID)) ||
 				dr.OfferID != chosen.OfferID ||
 				!strings.EqualFold(dr.SellerPub, chosen.Pub) ||
 				dr.PriceSats != chosen.PriceSats ||

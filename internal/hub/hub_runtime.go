@@ -166,7 +166,7 @@ func hubShardIdx(s string) uint32 {
 }
 
 func (n *Node) maintenanceLoop() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
@@ -198,6 +198,89 @@ func (n *Node) maintenanceLoop() {
 				sh.mu.Unlock()
 			}
 		}
+	}
+}
+
+// AcquireDownstreamTopics increments reference counts for topics requested by a downstream Leaf Hub or Agent
+// and returns an idempotent release closure. When the union of active topics changes, it wakes upstream
+// Spine plane relays so Leaf Hubs subscribe strictly to wanted slices (1BSV / BRC-223 union rule).
+func (n *Node) AcquireDownstreamTopics(topics []string) func() {
+	if n == nil || len(topics) == 0 {
+		return func() {}
+	}
+	seen := make(map[string]bool, len(topics))
+	clean := make([]string, 0, len(topics))
+	for _, t := range topics {
+		if t = strings.TrimSpace(t); t != "" && !seen[t] {
+			seen[t] = true
+			clean = append(clean, t)
+		}
+	}
+	if len(clean) == 0 {
+		return func() {}
+	}
+	changed := false
+	n.downInterestMu.Lock()
+	if n.downTopicRefs == nil {
+		n.downTopicRefs = make(map[string]int, 16)
+	}
+	for _, t := range clean {
+		if n.downTopicRefs[t] == 0 {
+			changed = true
+		}
+		n.downTopicRefs[t]++
+	}
+	n.downInterestMu.Unlock()
+	if changed {
+		n.notifyDownstreamInterestChanged()
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			dropped := false
+			n.downInterestMu.Lock()
+			for _, t := range clean {
+				if cur := n.downTopicRefs[t]; cur <= 1 {
+					if cur == 1 {
+						dropped = true
+					}
+					delete(n.downTopicRefs, t)
+				} else {
+					n.downTopicRefs[t] = cur - 1
+				}
+			}
+			n.downInterestMu.Unlock()
+			if dropped {
+				n.notifyDownstreamInterestChanged()
+			}
+		})
+	}
+}
+
+// ActiveDownstreamTopics returns the sorted union of topics currently requested by active downstream subscribers.
+func (n *Node) ActiveDownstreamTopics() []string {
+	if n == nil {
+		return nil
+	}
+	n.downInterestMu.Lock()
+	out := make([]string, 0, len(n.downTopicRefs))
+	for t, c := range n.downTopicRefs {
+		if c > 0 {
+			out = append(out, t)
+		}
+	}
+	n.downInterestMu.Unlock()
+	sort.Strings(out)
+	return out
+}
+
+func (n *Node) notifyDownstreamInterestChanged() {
+	if n == nil || n.downInterestWake == nil {
+		return
+	}
+	select {
+	case n.downInterestWake <- struct{}{}:
+	default:
 	}
 }
 

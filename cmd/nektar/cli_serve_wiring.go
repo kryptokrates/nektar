@@ -25,6 +25,7 @@ func initEmbeddedHub(
 	ctx context.Context,
 	rt *runtimeBundle,
 	dataDirFlag, hubRoleFlag, feePresetFlag, upstreamSpinesFlag string,
+	seedBounties bool,
 ) (*hub.Node, *hub.LiquidityState, []string, error) {
 	hubDBPath := filepath.Join(rt.dataDir, "hub.sqlite")
 	if rt.mem.Chain().Network() == "memory" && dataDirFlag == "" && os.Getenv("NEKTAR_DATA_DIR") == "" {
@@ -52,29 +53,54 @@ func initEmbeddedHub(
 			upstreamSpines = []string{"https://testnet.nektar.run/hub"}
 		}
 	}
+	isLiveNet := rt.mem.Chain().Network() == "main" || rt.mem.Chain().Network() == "testnet"
 	hubNode, err := hub.NewNode(hub.Config{
-		Network:        rt.mem.Chain().Network(),
-		DBPath:         hubDBPath,
-		EnableFinger:   true,
-		EnableBbox:     true,
-		EnableBlogs:    true,
-		EnableBorg:     true,
-		EnableBsecret:  true,
-		EnableBstore:   true,
-		EnableFabric:   true,
-		Getenv:         os.Getenv,
-		ChainTracker:   rt.mem.Chain().Tracker(),
-		HeaderHandler:  rt.mem.Chain().HeaderStoreHandler(),
-		Fees:           feeSched,
-		FeeCollector:   hub.NewPortFeeCollector(rt.mem.Chain()),
-		UpstreamSpines: upstreamSpines,
+		Network:              rt.mem.Chain().Network(),
+		DBPath:               hubDBPath,
+		EnableFinger:         true,
+		EnableBbox:           true,
+		EnableBlogs:          true,
+		EnableBorg:           true,
+		EnableBsecret:        true,
+		EnableBstore:         true,
+		EnableFabric:         true,
+		DemandDrivenUpstream: isLiveNet && feeSched.Role == hub.RoleLeaf,
+		Getenv:               os.Getenv,
+		ChainTracker:         rt.mem.Chain().Tracker(),
+		HeaderHandler:        rt.mem.Chain().HeaderStoreHandler(),
+		Fees:                 feeSched,
+		FeeCollector:         hub.NewPortFeeCollector(rt.mem.Chain()),
+		UpstreamSpines:       upstreamSpines,
 	})
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// Ensure Hub has an active zero-risk "seller" policy so curated/starter shards can be quoted and resold!
+	if rt.mem.DB() != nil && rt.mkt != nil && rt.mkt.Policy() != nil {
+		hasActivePol := false
+		if pols, pErr := rt.mem.DB().ListOperatorPolicies(); pErr == nil {
+			for _, p := range pols {
+				if p.Active {
+					hasActivePol = true
+					break
+				}
+			}
+		}
+		if !hasActivePol {
+			if prof, ok := market.PolicyProfileDefaults("standard"); ok {
+				ai := prof.AIMatching
+				zc := prof.ZeroConfMax
+				_, _ = market.ApprovePolicyCustom(rt.mem.DB(), rt.mkt.Policy(), "seller", nil, &market.PolicyLimitsOverride{
+					MaxPerDeal:  prof.MaxPerDeal,
+					MaxPerDay:   prof.MaxPerDay,
+					ZeroConfMax: &zc,
+				}, "hub-seller", &ai)
+			}
+		}
+	}
 	liqState, lErr := hub.ArmHubLiquidity(ctx, hubNode, rt.mem, hub.LiquidityConfig{
 		SeedStarterShards: true,
-		ArmBounties:       true,
+		ArmBounties:       seedBounties,
 		StarterPriceSats:  90,
 		BountyRewardSats:  100,
 	})

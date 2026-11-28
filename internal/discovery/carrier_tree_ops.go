@@ -18,13 +18,26 @@ import (
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
 
-// MintCarrier allocates the next unused funding output from the active M=16 funding tree
-// (minting a fresh 16-output tree when empty, adopting Ahead when available, and kicking off
-// background Ahead pre-minting once remaining outputs <= aheadAt), then mints an unmineable
-// bcommon/carrier AtomicBEEF spending that output.
-//
-// Returns the AtomicBEEF, the consumed funding outpoint ("<txid>.<vout>") so the caller can
-// later invoke RetractCarrier(fundingOutpoint), and the carrier txid.
+func (m *CarrierTreeManager) pickStripe() *carrierTreeStripe {
+	// Prefer any stripe that already has ready slots before minting a new stripe tree.
+	start := int((m.stripeRR.Add(1) - 1) % carrierTreeStripeCount)
+	for step := 0; step < carrierTreeStripeCount; step++ {
+		st := &m.stripes[(start+step)%carrierTreeStripeCount]
+		st.mu.Lock()
+		hasReady := (st.state.Active != nil && st.state.Active.NextIndex < len(st.state.Active.Vouts)) ||
+			(st.state.Ahead != nil && st.state.Ahead.NextIndex < len(st.state.Ahead.Vouts))
+		st.mu.Unlock()
+		if hasReady {
+			return st
+		}
+	}
+	return &m.stripes[start]
+}
+
+// MintCarrier allocates the next unused funding output from a striped M=64 funding tree
+// (minting a fresh tree when empty, adopting Ahead when available, and kicking off background
+// Ahead pre-minting once remaining outputs <= aheadAt), then mints an unmineable bcommon/carrier
+// AtomicBEEF spending that output.
 func (m *CarrierTreeManager) MintCarrier(ctx context.Context, p bstack.MarketPayload) (beef []byte, fundingOutpoint string, carrierTxID string, err error) {
 	if m.port == nil || m.signer == nil {
 		return nil, "", "", errors.New("discovery: carrier tree requires chain port and signing key")
@@ -38,6 +51,7 @@ func (m *CarrierTreeManager) MintCarrier(ctx context.Context, p bstack.MarketPay
 		return nil, "", "", fmt.Errorf("discovery: init carrier wallet: %w", err)
 	}
 
+	st := m.pickStripe()
 	var (
 		vout          uint32
 		beefHex       string
@@ -45,34 +59,37 @@ func (m *CarrierTreeManager) MintCarrier(ctx context.Context, p bstack.MarketPay
 		shouldPreMint bool
 	)
 	for attempt := 0; attempt < 4; attempt++ {
-		m.mu.Lock()
-		// Adopt pre-minted Ahead tree if Active is empty/exhausted, preserving the old Active in Retired.
-		if m.state.Active == nil || m.state.Active.NextIndex >= len(m.state.Active.Vouts) {
-			if m.state.Ahead != nil && m.state.Ahead.NextIndex < len(m.state.Ahead.Vouts) {
-				m.retireActiveLocked()
-				m.state.Active = m.state.Ahead
-				m.state.Ahead = nil
-				m.saveLocked()
+		st.mu.Lock()
+		if st.state.Active == nil || st.state.Active.NextIndex >= len(st.state.Active.Vouts) {
+			if st.state.Ahead != nil && st.state.Ahead.NextIndex < len(st.state.Ahead.Vouts) {
+				retireStripeActiveLocked(st)
+				st.state.Active = st.state.Ahead
+				st.state.Ahead = nil
+				m.saveStripeLocked(st)
 			}
 		}
-		if m.state.Active != nil && m.state.Active.NextIndex < len(m.state.Active.Vouts) {
-			active := m.state.Active
+		if st.state.Active != nil && st.state.Active.NextIndex < len(st.state.Active.Vouts) {
+			active := st.state.Active
 			vout = active.Vouts[active.NextIndex]
 			active.NextIndex++
 			remaining := len(active.Vouts) - active.NextIndex
 			beefHex = active.BEEFHex
 			treeTxID = active.TxID
-			shouldPreMint = remaining <= m.aheadAt && m.state.Ahead == nil && !m.minting
-			if shouldPreMint {
-				m.minting = true
+			aheadThresh := max(2, len(active.Vouts)/4)
+			if m.aheadAt > 0 && m.aheadAt < len(active.Vouts) {
+				aheadThresh = m.aheadAt
 			}
-			m.saveLocked()
-			m.mu.Unlock()
+			shouldPreMint = remaining <= aheadThresh && st.state.Ahead == nil && !st.minting
+			if shouldPreMint {
+				st.minting = true
+			}
+			m.saveStripeLocked(st)
+			st.mu.Unlock()
 			break
 		}
-		m.mu.Unlock()
+		st.mu.Unlock()
 
-		if mErr := m.ensureActiveTree(ctx, protoWallet); mErr != nil {
+		if mErr := m.ensureActiveTree(ctx, st, protoWallet); mErr != nil {
 			return nil, "", "", mErr
 		}
 	}
@@ -81,6 +98,7 @@ func (m *CarrierTreeManager) MintCarrier(ctx context.Context, p bstack.MarketPay
 	}
 
 	if shouldPreMint {
+		stripeRef := st
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
@@ -96,12 +114,12 @@ func (m *CarrierTreeManager) MintCarrier(ctx context.Context, p bstack.MarketPay
 			pw, pErr := m.signer.ProtoWallet()
 			if pErr != nil {
 				log.Printf("discovery: carrier tree ahead wallet init failed: %v", pErr)
-			} else if mErr := m.ensureAheadTree(bgCtx, pw); mErr != nil {
+			} else if mErr := m.ensureAheadTree(bgCtx, stripeRef, pw); mErr != nil {
 				log.Printf("discovery: carrier tree ahead pre-mint failed: %v", mErr)
 			}
-			m.mu.Lock()
-			m.minting = false
-			m.mu.Unlock()
+			stripeRef.mu.Lock()
+			stripeRef.minting = false
+			stripeRef.mu.Unlock()
 		}()
 	}
 
@@ -123,9 +141,7 @@ func (m *CarrierTreeManager) MintCarrier(ctx context.Context, p bstack.MarketPay
 	return beef, fmt.Sprintf("%s.%d", treeTxID, vout), carrierTx.TxID().String(), nil
 }
 
-// RetractCarrier executes the 1BSV Paper 011 §3.2 kill switch: builds, signs, and broadcasts a
-// mineable transaction spending the carrier's funding output (fundingTxID:vout) back to a final
-// tombstone output so every conforming Hub evicts the retracted carrier permanently.
+// RetractCarrier executes the 1BSV Paper 011 §3.2 kill switch across any stripe holding treeTxID.
 func (m *CarrierTreeManager) RetractCarrier(ctx context.Context, treeTxID string, vout uint32) (sweepTxID string, sweepBEEF []byte, err error) {
 	if m.port == nil || m.signer == nil {
 		return "", nil, errors.New("discovery: carrier tree requires chain port and signing key")
@@ -134,15 +150,18 @@ func (m *CarrierTreeManager) RetractCarrier(ctx context.Context, treeTxID string
 	if err != nil {
 		return "", nil, err
 	}
-	m.mu.Lock()
 	var beefHex string
-	for _, rec := range m.allTreesLocked() {
-		if rec != nil && rec.TxID == treeTxID {
-			beefHex = rec.BEEFHex
-			break
+	for i := 0; i < carrierTreeStripeCount && beefHex == ""; i++ {
+		st := &m.stripes[i]
+		st.mu.Lock()
+		for _, rec := range allStripeTreesLocked(st) {
+			if rec != nil && rec.TxID == treeTxID {
+				beefHex = rec.BEEFHex
+				break
+			}
 		}
+		st.mu.Unlock()
 	}
-	m.mu.Unlock()
 	if beefHex == "" {
 		return "", nil, fmt.Errorf("discovery: funding tree %s not held locally", treeTxID)
 	}
@@ -153,7 +172,6 @@ func (m *CarrierTreeManager) RetractCarrier(ctx context.Context, treeTxID string
 	if int(vout) >= len(fundTx.Outputs) {
 		return "", nil, fmt.Errorf("discovery: funding vout %d out of range", vout)
 	}
-	// Build a mineable (LockTime=0, Sequence=0xFFFFFFFF) kill-switch sweep spending fundTx:vout.
 	fundLock, err := carrier.FundingLock(ctx, protoWallet, bstack.Originator, bstack.MarketCarrierParams)
 	if err != nil {
 		return "", nil, err
@@ -174,76 +192,76 @@ func (m *CarrierTreeManager) RetractCarrier(ctx context.Context, treeTxID string
 	return sweepTx.TxID().String(), sweepBEEF, nil
 }
 
-func (m *CarrierTreeManager) ensureActiveTree(ctx context.Context, protoWallet sdkwallet.Interface) error {
-	m.mintMu.Lock()
-	defer m.mintMu.Unlock()
+func (m *CarrierTreeManager) ensureActiveTree(ctx context.Context, st *carrierTreeStripe, protoWallet sdkwallet.Interface) error {
+	st.mintMu.Lock()
+	defer st.mintMu.Unlock()
 
-	m.mu.Lock()
-	if m.state.Active != nil && m.state.Active.NextIndex < len(m.state.Active.Vouts) {
-		m.mu.Unlock()
+	st.mu.Lock()
+	if st.state.Active != nil && st.state.Active.NextIndex < len(st.state.Active.Vouts) {
+		st.mu.Unlock()
 		return nil
 	}
-	if m.state.Ahead != nil && m.state.Ahead.NextIndex < len(m.state.Ahead.Vouts) {
-		m.retireActiveLocked()
-		m.state.Active = m.state.Ahead
-		m.state.Ahead = nil
-		m.saveLocked()
-		m.mu.Unlock()
+	if st.state.Ahead != nil && st.state.Ahead.NextIndex < len(st.state.Ahead.Vouts) {
+		retireStripeActiveLocked(st)
+		st.state.Active = st.state.Ahead
+		st.state.Ahead = nil
+		m.saveStripeLocked(st)
+		st.mu.Unlock()
 		return nil
 	}
-	pending := m.state.Pending
-	m.mu.Unlock()
+	pending := st.state.Pending
+	st.mu.Unlock()
 
 	if pending != nil {
-		if err := m.reconcilePendingTree(ctx, pending, false); err == nil {
+		if err := m.reconcilePendingTree(ctx, st, pending, false); err == nil {
 			return nil
 		}
 	}
-	rec, err := m.mintNewTree(ctx, protoWallet)
+	rec, err := m.mintNewTree(ctx, st, protoWallet)
 	if err != nil {
 		return err
 	}
-	m.mu.Lock()
-	m.retireActiveLocked()
-	m.state.Active = rec
-	m.state.Pending = nil
-	m.saveLocked()
-	m.mu.Unlock()
+	st.mu.Lock()
+	retireStripeActiveLocked(st)
+	st.state.Active = rec
+	st.state.Pending = nil
+	m.saveStripeLocked(st)
+	st.mu.Unlock()
 	return nil
 }
 
-func (m *CarrierTreeManager) ensureAheadTree(ctx context.Context, protoWallet sdkwallet.Interface) error {
-	m.mintMu.Lock()
-	defer m.mintMu.Unlock()
+func (m *CarrierTreeManager) ensureAheadTree(ctx context.Context, st *carrierTreeStripe, protoWallet sdkwallet.Interface) error {
+	st.mintMu.Lock()
+	defer st.mintMu.Unlock()
 
-	m.mu.Lock()
-	if m.state.Ahead != nil {
-		m.mu.Unlock()
+	st.mu.Lock()
+	if st.state.Ahead != nil {
+		st.mu.Unlock()
 		return nil
 	}
-	pending := m.state.Pending
-	m.mu.Unlock()
+	pending := st.state.Pending
+	st.mu.Unlock()
 
 	if pending != nil {
-		if err := m.reconcilePendingTree(ctx, pending, true); err == nil {
+		if err := m.reconcilePendingTree(ctx, st, pending, true); err == nil {
 			return nil
 		}
 	}
-	rec, err := m.mintNewTree(ctx, protoWallet)
+	rec, err := m.mintNewTree(ctx, st, protoWallet)
 	if err != nil {
 		return err
 	}
-	m.mu.Lock()
-	if m.state.Ahead == nil {
-		m.state.Ahead = rec
+	st.mu.Lock()
+	if st.state.Ahead == nil {
+		st.state.Ahead = rec
 	}
-	m.state.Pending = nil
-	m.saveLocked()
-	m.mu.Unlock()
+	st.state.Pending = nil
+	m.saveStripeLocked(st)
+	st.mu.Unlock()
 	return nil
 }
 
-func (m *CarrierTreeManager) reconcilePendingTree(ctx context.Context, pending *FundingTreeRecord, forAhead bool) error {
+func (m *CarrierTreeManager) reconcilePendingTree(ctx context.Context, st *carrierTreeStripe, pending *FundingTreeRecord, forAhead bool) error {
 	if pending == nil || pending.TxID == "" {
 		return errors.New("empty pending tree")
 	}
@@ -257,12 +275,12 @@ func (m *CarrierTreeManager) reconcilePendingTree(ctx context.Context, pending *
 			case "nosend":
 				if _, bErr := m.port.Broadcast(ctx, fundTx, 0, uint64(len(pending.Vouts))); bErr != nil {
 					if !errors.Is(bErr, nwallet.ErrBroadcastUnknown) {
-						m.mu.Lock()
-						if m.state.Pending != nil && m.state.Pending.TxID == pending.TxID {
-							m.state.Pending = nil
-							m.saveLocked()
+						st.mu.Lock()
+						if st.state.Pending != nil && st.state.Pending.TxID == pending.TxID {
+							st.state.Pending = nil
+							m.saveStripeLocked(st)
 						}
-						m.mu.Unlock()
+						st.mu.Unlock()
 					}
 					return bErr
 				}
@@ -273,40 +291,47 @@ func (m *CarrierTreeManager) reconcilePendingTree(ctx context.Context, pending *
 	} else {
 		pending.Mined = true
 	}
-	m.mu.Lock()
+	st.mu.Lock()
 	if forAhead {
-		if m.state.Ahead == nil {
-			m.state.Ahead = pending
+		if st.state.Ahead == nil {
+			st.state.Ahead = pending
 		}
 	} else {
-		m.retireActiveLocked()
-		m.state.Active = pending
+		retireStripeActiveLocked(st)
+		st.state.Active = pending
 	}
-	m.state.Pending = nil
-	m.saveLocked()
-	m.mu.Unlock()
+	st.state.Pending = nil
+	m.saveStripeLocked(st)
+	st.mu.Unlock()
 	return nil
 }
 
-func (m *CarrierTreeManager) mintNewTree(ctx context.Context, protoWallet sdkwallet.Interface) (*FundingTreeRecord, error) {
+func (m *CarrierTreeManager) mintNewTree(ctx context.Context, st *carrierTreeStripe, protoWallet sdkwallet.Interface) (*FundingTreeRecord, error) {
 	fundLock, err := carrier.FundingLock(ctx, protoWallet, bstack.Originator, bstack.MarketCarrierParams)
 	if err != nil {
 		return nil, fmt.Errorf("discovery: derive carrier funding lock: %w", err)
 	}
-	outputs := make([]*transaction.TransactionOutput, m.width)
+	effWidth := m.width
+	if effWidth <= 0 {
+		effWidth = DefaultFundingTreeWidth
+	}
+	if bal := m.port.BalanceSats(); bal > 0 && bal < 500 && effWidth > 16 {
+		effWidth = 16
+	}
+	outputs := make([]*transaction.TransactionOutput, effWidth)
 	for i := range outputs {
 		outputs[i] = &transaction.TransactionOutput{Satoshis: 1, LockingScript: fundLock}
 	}
-	treeMeta := nwallet.ActionFundCarrierTree(m.width)
+	treeMeta := nwallet.ActionFundCarrierTree(effWidth)
 	treeSpec := &nwallet.OutputTagSpec{
 		Basket:             nwallet.BasketCarriers,
 		Tags:               []string{"carrier", "slot"},
-		CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"carrier-slot","width":%d}`, m.width),
+		CustomInstructions: fmt.Sprintf(`{"v":1,"kind":"carrier-slot","width":%d}`, effWidth),
 		ApplyToAll:         true,
 	}
 	fundTx, fundBEEF, feeSats, spendSats, err := m.port.BuildFundedTxWithBasket(ctx, outputs, treeMeta.Description, treeMeta.Labels, treeSpec)
 	if err != nil {
-		return nil, fmt.Errorf("discovery: build M=%d funding tree: %w", m.width, err)
+		return nil, fmt.Errorf("discovery: build M=%d funding tree: %w", effWidth, err)
 	}
 	if len(fundBEEF) == 0 {
 		fundBEEF, err = fundTx.AtomicBEEF(false)
@@ -330,22 +355,22 @@ func (m *CarrierTreeManager) mintNewTree(ctx context.Context, protoWallet sdkwal
 		NextIndex: 0,
 		CreatedAt: time.Now().Unix(),
 	}
-	// Persist Pending BEFORE broadcast so a crash or ErrBroadcastUnknown never strands a funded 16-output tree.
-	m.mu.Lock()
-	m.state.Pending = rec
-	m.saveLocked()
-	m.mu.Unlock()
+	// Persist Pending BEFORE broadcast so a crash or ErrBroadcastUnknown never strands a funded tree.
+	st.mu.Lock()
+	st.state.Pending = rec
+	m.saveStripeLocked(st)
+	st.mu.Unlock()
 
 	if _, bErr := m.port.Broadcast(ctx, fundTx, feeSats, spendSats); bErr != nil {
 		if !errors.Is(bErr, nwallet.ErrBroadcastUnknown) {
-			m.mu.Lock()
-			if m.state.Pending != nil && m.state.Pending.TxID == rec.TxID {
-				m.state.Pending = nil
-				m.saveLocked()
+			st.mu.Lock()
+			if st.state.Pending != nil && st.state.Pending.TxID == rec.TxID {
+				st.state.Pending = nil
+				m.saveStripeLocked(st)
 			}
-			m.mu.Unlock()
+			st.mu.Unlock()
 		}
-		return nil, fmt.Errorf("discovery: broadcast M=%d funding tree: %w", m.width, bErr)
+		return nil, fmt.Errorf("discovery: broadcast M=%d funding tree: %w", effWidth, bErr)
 	}
 	if freshBEEF, fErr := fundTx.AtomicBEEF(false); fErr == nil && len(freshBEEF) > 0 {
 		rec.BEEFHex = hex.EncodeToString(freshBEEF)

@@ -344,6 +344,16 @@ func Open(cfg Config) (*Engine, error) {
 	return e, nil
 }
 
+// MarketSigner returns a MarketSigner backed by this Engine's BRC-100 root identity key
+// without exposing raw *ec.PrivateKey outside internal/wallet, unifying market signing,
+// bfinger handles, bbox ECDH, and BRC-29 payment identity on a single keypair.
+func (e *Engine) MarketSigner() *MarketSigner {
+	if e == nil || e.rootKey == nil {
+		return nil
+	}
+	return NewMarketSigner(e.rootKey)
+}
+
 func initialFeeRateSatPerKB(src feepolicy.Source) uint64 {
 	if src == nil {
 		return 100

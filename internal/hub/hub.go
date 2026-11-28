@@ -26,6 +26,7 @@ import (
 	bstoremod "github.com/lightwebinc/bstore/module"
 	"github.com/lightwebinc/bstore/storerec"
 	oespv "github.com/lightwebinc/overlay-bridge/pkg/spv"
+	"github.com/lightwebinc/shard-common/interest"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/core"
@@ -73,28 +74,34 @@ type Config struct {
 	Getenv            func(string) string
 	ChainTracker      chaintracker.ChainTracker
 	HeaderHandler     http.Handler // optional sovereign Header Store serving /v1/tip, /v1/root/{height}, /v1/header/{hash}
-	TransportMode     TransportMode
-	PropagationOff    bool
-	Fees              FeeSchedule
-	FeeCollector      FeeCollector
-	PrefixSecret      []byte
-	UpstreamSpines    []string
-	UpstreamSubmitter func(ctx context.Context, spineURL string, beef []byte, topics []string) error
-	EgressAuthSigner  func(action, aud string, cursor int64, domainsCSV string) (pub, ts, nonce, sig string, err error)
-	OnEgressTopup     func(ctx context.Context, spineURL string, minTopupSats uint64) error
+	TransportMode        TransportMode
+	PropagationOff       bool
+	DemandDrivenUpstream bool // Leaf subscribes to Spine strictly for the union of active downstream topics
+	Fees                 FeeSchedule
+	FeeCollector         FeeCollector
+	PrefixSecret         []byte
+	UpstreamSpines       []string
+	UpstreamSubmitter    func(ctx context.Context, spineURL string, beef []byte, topics []string) error
+	EgressAuthSigner     func(action, aud string, cursor int64, domainsCSV string) (pub, ts, nonce, sig string, err error)
+	OnEgressTopup        func(ctx context.Context, spineURL string, minTopupSats uint64) error
 }
 
 // Node is a durable, self-contained Go overlay hub serving BRC-22 /submit, BRC-24 /lookup,
 // BRC-180 /manifest.json, BRC-223 topic interest fabric, numbered/cursored SSE /events,
 // native Lightweb bbox / bfinger / bstore modules, /bounties, and Hub-to-Hub federation.
 type Node struct {
-	mu                  sync.RWMutex
-	admitMu             sync.Mutex      // legacy fallback lock for non-lane topics
-	laneAdmitMu         [16]sync.Mutex  // 16 per-lane admit locks so all 16 nibble lanes admit in parallel
-	feeCollectMu        sync.Mutex      // serializes UnminedFastExposure checks with ClaimFeePaymentAtomic + RecordFeeLedger
-	net                 string
+	mu                   sync.RWMutex
+	admitMu              sync.Mutex     // legacy fallback lock for non-lane topics
+	laneAdmitMu          [16]sync.Mutex // 16 per-lane admit locks so all 16 nibble lanes admit in parallel
+	feeCollectMu         sync.Mutex     // serializes UnminedFastExposure checks with ClaimFeePaymentAtomic + RecordFeeLedger
+	downInterestMu       sync.Mutex
+	downTopicRefs        map[string]int
+	downInterestWake     chan struct{}
+	demandDrivenUpstream bool
+	net                  string
 	host                *simpleHost
 	store               *Store
+	objects             bstack.ObjectStore
 	oeStore             *OverlayStore
 	oeEngine            *engine.Engine
 	spvVerifier         *oespv.Verifier
@@ -110,8 +117,9 @@ type Node struct {
 	marketLS            *bstack.MarketLookupService
 	topics              map[string]module.TopicManager
 	lookups             map[string]module.LookupService
-	subs                map[chan bstack.MarketEvent]map[string]bool
-	subsByPub           map[string]map[chan bstack.MarketEvent]struct{}
+	subs                map[*sseSubscriber]map[string]bool
+	subsByPub           map[string]map[*sseSubscriber]struct{}
+	sseBufSize          int
 	rates               map[string]*rateBucket
 	bboxNonces          map[string]int64
 	rateShards          [64]hubRateNonceShard
@@ -233,41 +241,46 @@ func NewNode(cfg Config) (*Node, error) {
 	}
 	propOff := cfg.PropagationOff || strings.EqualFold(strings.TrimSpace(getenv("NEKTAR_HUB_PROPAGATION")), "off") || tMode == TransportPlane || tMode == TransportUnicast
 
+	demandUp := cfg.DemandDrivenUpstream || strings.EqualFold(strings.TrimSpace(getenv("NEKTAR_HUB_DEMAND_UPSTREAM")), "1")
+
 	n := &Node{
-		net:               net,
-		host:              newSimpleHost(),
-		store:             st,
-		eventBus:          cfg.EventBus,
-		handleResolver:    cfg.HandleResolver,
-		modOutputs:        make(map[string]modOutputEntry),
-		topics:            make(map[string]module.TopicManager),
-		lookups:           make(map[string]module.LookupService),
-		subs:              make(map[chan bstack.MarketEvent]map[string]bool),
-		subsByPub:         make(map[string]map[chan bstack.MarketEvent]struct{}),
-		planeSubs:         make(map[chan PlaneFrame]map[[32]byte]bool),
-		rates:             make(map[string]*rateBucket),
-		bboxNonces:        make(map[string]int64),
-		maxPerMin:         maxPerMin,
-		tracker:           cfg.ChainTracker,
-		headerHandler:     cfg.HeaderHandler,
-		transportMode:     tMode,
-		propagationOff:    propOff,
-		loopGuard:         NewLoopGuard(DefaultLoopGuardCap),
-		bountyHandler:     cfg.OnBountySubmit,
-		fees:              fees,
-		feeCollector:      cfg.FeeCollector,
-		prefixSecret:      prefixSecret,
-		spinePeers:        spinePeers,
-		upstreamSpines:    upSpines,
-		upstreamSubmitter: cfg.UpstreamSubmitter,
-		upstreamSem:       make(chan struct{}, 64),
-		egressAuthSigner:  cfg.EgressAuthSigner,
-		onEgressTopup:     cfg.OnEgressTopup,
-		fedStarted:        make(map[string]bool),
-		httpClient:        core.SafeHTTPClientForNetwork(net, 20*time.Second),
-		sseClient:         core.SafeHTTPClientForNetwork(net, 0),
-		stopCh:            make(chan struct{}),
-		sseStopCh:         make(chan struct{}),
+		net:                  net,
+		host:                 newSimpleHost(),
+		store:                st,
+		eventBus:             cfg.EventBus,
+		handleResolver:       cfg.HandleResolver,
+		downTopicRefs:        make(map[string]int),
+		downInterestWake:     make(chan struct{}, 1),
+		demandDrivenUpstream: demandUp,
+		modOutputs:           make(map[string]modOutputEntry),
+		topics:               make(map[string]module.TopicManager),
+		lookups:              make(map[string]module.LookupService),
+		subs:                 make(map[*sseSubscriber]map[string]bool),
+		subsByPub:            make(map[string]map[*sseSubscriber]struct{}),
+		planeSubs:            make(map[chan PlaneFrame]map[[32]byte]bool),
+		rates:                make(map[string]*rateBucket),
+		bboxNonces:           make(map[string]int64),
+		maxPerMin:            maxPerMin,
+		tracker:              cfg.ChainTracker,
+		headerHandler:        cfg.HeaderHandler,
+		transportMode:        tMode,
+		propagationOff:       propOff,
+		loopGuard:            NewLoopGuard(DefaultLoopGuardCap),
+		bountyHandler:        cfg.OnBountySubmit,
+		fees:                 fees,
+		feeCollector:         cfg.FeeCollector,
+		prefixSecret:         prefixSecret,
+		spinePeers:           spinePeers,
+		upstreamSpines:       upSpines,
+		upstreamSubmitter:    cfg.UpstreamSubmitter,
+		upstreamSem:          make(chan struct{}, 64),
+		egressAuthSigner:     cfg.EgressAuthSigner,
+		onEgressTopup:        cfg.OnEgressTopup,
+		fedStarted:           make(map[string]bool),
+		httpClient:           core.SafeHTTPClientForNetwork(net, 20*time.Second),
+		sseClient:            core.SafeHTTPClientForNetwork(net, 0),
+		stopCh:               make(chan struct{}),
+		sseStopCh:            make(chan struct{}),
 	}
 
 	cleanupFail := func(err error) (*Node, error) {
@@ -298,6 +311,17 @@ func NewNode(cfg Config) (*Node, error) {
 		stateBaseDir = filepath.Join(filepath.Dir(absDB), strings.TrimSuffix(filepath.Base(absDB), filepath.Ext(absDB))+"_modules")
 	}
 
+	var objStore bstack.ObjectStore
+	if isDisk {
+		if fos, oErr := bstack.NewFileObjectStore(stateBaseDir); oErr == nil {
+			objStore = fos
+		}
+	}
+	if objStore == nil {
+		objStore = bstack.NewMemoryObjectStore()
+	}
+	n.objects = objStore
+
 	// 1. Mount Nektar v0.1 market module (tm_nektar_<net>_0..f or configured lane subset + ls_nektar) with durable SSE callback!
 	lanes := append([]string(nil), cfg.Lanes...)
 	if len(lanes) == 0 {
@@ -323,7 +347,7 @@ func NewNode(cfg Config) (*Node, error) {
 		n.mountModule(fm.Module)
 	}
 
-	// 3. Mount Lightweb bbox (explicit BBOX_OFFICES or zero-config deterministic default office).
+	// 3. Mount Lightweb bbox (explicit BBOX_OFFICES or deterministic network-wide office `nektar_nektarbbox`).
 	if cfg.EnableBbox {
 		if rawOffices := strings.TrimSpace(getenv("BBOX_OFFICES")); rawOffices != "" {
 			m, err := bboxmod.New(n.host, getenv)
@@ -336,7 +360,7 @@ func NewNode(cfg Config) (*Node, error) {
 				n.defaultBboxOffice = offices[0]
 			}
 		} else {
-			office := "nektar_" + DefaultAlphaSuffix10(prefixSecret, "bbox")
+			office := bstack.NormalizeBboxOffice("nektar")
 			bCfg := &bboxmod.Config{
 				Offices:       []string{office},
 				RetentionDays: bboxmod.FloorDays,
@@ -382,7 +406,7 @@ func NewNode(cfg Config) (*Node, error) {
 		n.mountModule(m.Module)
 	}
 
-	// 5. Mount Lightweb bstore (explicit BSTORE_BUCKETS or zero-config deterministic default bucket).
+	// 5. Mount Lightweb bstore (explicit BSTORE_BUCKETS or deterministic network-wide bucket `nektar_nektarstor`).
 	if cfg.EnableBstore {
 		if rawBuckets := strings.TrimSpace(getenv("BSTORE_BUCKETS")); rawBuckets != "" {
 			m, err := bstoremod.New(n.host, getenv)
@@ -395,7 +419,7 @@ func NewNode(cfg Config) (*Node, error) {
 				n.defaultBstoreBucket = buckets[0]
 			}
 		} else {
-			bucket := "nektar_" + DefaultAlphaSuffix10(prefixSecret, "bstore")
+			bucket := bstack.NormalizeBstoreBucket("nektar")
 			bsCfg := &bstoremod.Config{
 				Buckets:        []string{bucket},
 				KeepDays:       bstoremod.FloorKeepDays,
@@ -448,8 +472,29 @@ func NewNode(cfg Config) (*Node, error) {
 		udpListen = strings.TrimSpace(getenv("NEKTAR_HUB_BRC223_UDP"))
 	}
 	if cfg.EnableFabric || udpListen != "" {
+		var fabMu sync.Mutex
+		fabReleases := make(map[[32]byte]func())
 		fSrv, fErr := fabric.StartHubInterestServer(context.Background(), fabric.HubConfig{
 			UDPListen: udpListen,
+			OnTopicInterest: func(topic interest.TopicID, live bool) {
+				tid := [32]byte(topic)
+				tName := n.topicNameForID(tid)
+				if tName == "" {
+					return
+				}
+				fabMu.Lock()
+				if live {
+					if _, exists := fabReleases[tid]; !exists {
+						fabReleases[tid] = n.AcquireDownstreamTopics([]string{tName})
+					}
+				} else if rel, exists := fabReleases[tid]; exists {
+					delete(fabReleases, tid)
+					fabMu.Unlock()
+					rel()
+					return
+				}
+				fabMu.Unlock()
+			},
 		})
 		if fErr != nil {
 			return cleanupFail(fmt.Errorf("hub: start BRC-223 fabric: %w", fErr))
@@ -537,6 +582,13 @@ func (n *Node) Handler() http.Handler {
 	// Authenticated NAT-safe counterparty store-and-forward relay (/bbox/send & /bbox/inbox) (Valve 3: unbypassable toll).
 	mux.HandleFunc("POST /bbox/send", n.handleBboxSend)
 	mux.HandleFunc("GET /bbox/inbox", n.handleBboxInbox)
+	// Content-addressed BRC-167 CHIRP / bstore object staging for >12 KiB encrypted capsules & NAT Sellers.
+	mux.HandleFunc("PUT /chirp/v1/objects/{hash}", n.handleChirpPut)
+	mux.HandleFunc("GET /chirp/v1/objects/{hash}", n.handleChirpGet)
+	mux.HandleFunc("HEAD /chirp/v1/objects/{hash}", n.handleChirpGet)
+	mux.HandleFunc("PUT /v1/chirp/{hash}", n.handleChirpPut)
+	mux.HandleFunc("GET /v1/chirp/{hash}", n.handleChirpGet)
+	mux.HandleFunc("HEAD /v1/chirp/{hash}", n.handleChirpGet)
 	// Hub knowledge bounties — lets organic agents sell verified domain facts directly TO the Hub!
 	mux.HandleFunc("GET /bounties", n.handleBountiesList)
 	mux.HandleFunc("POST /bounties/submit", n.handleBountiesSubmit)

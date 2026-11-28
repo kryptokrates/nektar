@@ -2,6 +2,7 @@ package market
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 
 const (
 	standingOrdersKVKey      = "standing_orders_v1"
+	standingOrderIdxPrefix   = "standing_order_idx_v1:"
 	standingOrderStatePrefix = "standing_order_state_v1:"
 	standingOrderInboxPrefix = "standing_order_inbox_v1:"
 )
@@ -147,17 +149,27 @@ func MarkStandingOrderKilled(db *store.DB, orderID string) {
 		st.UpdatedAt = now
 		_ = db.SetJSON(standingOrderStatePrefix+orderID, st)
 	}
-	list := LoadStandingOrderIndex(db)
-	changed := false
-	for i := range list {
-		if list[i].OrderID == orderID && (list[i].Status == "watching" || list[i].Status == "paused" || list[i].Status == "matching") {
-			list[i].Status = "killed"
-			list[i].UpdatedAt = now
-			changed = true
+	var idx StandingOrderIndexEntry
+	if ok, err := db.GetJSON(standingOrderIdxPrefix+orderID, &idx); err == nil && ok {
+		if idx.Status == "watching" || idx.Status == "paused" || idx.Status == "matching" {
+			idx.Status = "killed"
+			idx.UpdatedAt = now
+			_ = db.SetJSON(standingOrderIdxPrefix+orderID, idx)
 		}
 	}
-	if changed {
-		_ = db.SetJSON(standingOrdersKVKey, list)
+	var list []StandingOrderIndexEntry
+	if ok, err := db.GetJSON(standingOrdersKVKey, &list); err == nil && ok {
+		changed := false
+		for i := range list {
+			if list[i].OrderID == orderID && (list[i].Status == "watching" || list[i].Status == "paused" || list[i].Status == "matching") {
+				list[i].Status = "killed"
+				list[i].UpdatedAt = now
+				changed = true
+			}
+		}
+		if changed {
+			_ = db.SetJSON(standingOrdersKVKey, list)
+		}
 	}
 }
 
@@ -214,7 +226,6 @@ func (e *Engine) upsertStandingOrderIndex(st StandingOrderState) {
 	}
 	e.standingIndexMu.Lock()
 	defer e.standingIndexMu.Unlock()
-	list := LoadStandingOrderIndex(e.mem.DB())
 	entry := StandingOrderIndexEntry{
 		OrderID:           st.OrderID,
 		Domains:           st.Domains,
@@ -233,32 +244,40 @@ func (e *Engine) upsertStandingOrderIndex(st StandingOrderState) {
 		ExpiresAtUnix:     st.ExpiresAtUnix,
 		UpdatedAt:         st.UpdatedAt,
 	}
-	found := false
-	for i := range list {
-		if list[i].OrderID == st.OrderID {
-			list[i] = entry
-			found = true
-			break
-		}
-	}
-	if !found {
-		list = append(list, entry)
-	}
-	if len(list) > 128 {
-		list = list[len(list)-128:]
-	}
-	_ = e.mem.DB().SetJSON(standingOrdersKVKey, list)
+	_ = e.mem.DB().SetJSON(standingOrderIdxPrefix+st.OrderID, entry)
 }
 
-// LoadStandingOrderIndex returns persisted StandingOrder index entries from SQLite KV.
+// LoadStandingOrderIndex returns all persisted StandingOrder index entries without 128-entry slice truncation.
 func LoadStandingOrderIndex(db *store.DB) []StandingOrderIndexEntry {
 	if db == nil {
 		return nil
 	}
-	var list []StandingOrderIndexEntry
-	ok, err := db.GetJSON(standingOrdersKVKey, &list)
-	if err != nil || !ok {
-		return nil
+	seen := make(map[string]int)
+	var out []StandingOrderIndexEntry
+	if rows, err := db.ListKVPrefixRaw(standingOrderIdxPrefix, 0); err == nil {
+		for _, raw := range rows {
+			var entry StandingOrderIndexEntry
+			if json.Unmarshal(raw, &entry) == nil && entry.OrderID != "" {
+				seen[entry.OrderID] = len(out)
+				out = append(out, entry)
+			}
+		}
 	}
-	return list
+	var legacy []StandingOrderIndexEntry
+	if ok, err := db.GetJSON(standingOrdersKVKey, &legacy); err == nil && ok {
+		for _, entry := range legacy {
+			if entry.OrderID == "" {
+				continue
+			}
+			if idx, exists := seen[entry.OrderID]; exists {
+				if entry.UpdatedAt > out[idx].UpdatedAt {
+					out[idx] = entry
+				}
+				continue
+			}
+			seen[entry.OrderID] = len(out)
+			out = append(out, entry)
+		}
+	}
+	return out
 }

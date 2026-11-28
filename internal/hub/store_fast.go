@@ -286,6 +286,9 @@ func (f *fastEventStore) ListEventsSince(afterSeq int64, domains []string, limit
 		if json.Unmarshal(iter.Value(), &ev) != nil {
 			continue
 		}
+		if ev.Kind == "module" {
+			continue
+		}
 		if ev.Exp > 0 && ev.Exp < nowMs {
 			continue
 		}
@@ -311,4 +314,73 @@ func (f *fastEventStore) ListEventsSince(afterSeq int64, domains []string, limit
 		}
 	}
 	return out, iter.Error()
+}
+
+func (f *fastEventStore) EventsInRangeScanned(fromSeq, toSeq int64, topics []string, limit int) ([]StoredEvent, int64, int, error) {
+	if fromSeq < 1 {
+		fromSeq = 1
+	}
+	if toSeq < fromSeq {
+		return nil, fromSeq - 1, 0, nil
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	wantTopic := make(map[string]bool, len(topics))
+	for _, t := range topics {
+		if t = strings.TrimSpace(t); t != "" {
+			wantTopic[t] = true
+		}
+	}
+	nowMs := time.Now().UnixMilli()
+	nextSeq := fromSeq - 1
+	rawCount := 0
+	out := make([]StoredEvent, 0, min(limit, 64))
+	startKey := fastEventKey(fromSeq)
+	endKey := fastEventKey(toSeq)
+	iter, err := f.db.Raw().NewIter(nil)
+	if err != nil {
+		return nil, nextSeq, 0, err
+	}
+	defer iter.Close()
+	for iter.SeekGE(startKey); iter.Valid(); iter.Next() {
+		k := iter.Key()
+		if len(k) != 14 || string(k[:6]) != "hb:ev:" || string(k) > string(endKey) {
+			break
+		}
+		var ev StoredEvent
+		if json.Unmarshal(iter.Value(), &ev) != nil {
+			continue
+		}
+		rawCount++
+		if ev.Seq > nextSeq {
+			nextSeq = ev.Seq
+		}
+		if ev.Exp > 0 && ev.Exp < nowMs {
+			continue
+		}
+		if opRaw, oErr := f.db.Get([]byte("hb:op:" + ev.Outpoint)); oErr == nil && len(opRaw) > 0 {
+			var orec fastHubOutpointRec
+			if json.Unmarshal(opRaw, &orec) == nil && orec.Spent {
+				continue
+			}
+		}
+		matchedTopic := storedEventMatchesTopicFilter(ev, wantTopic)
+		if len(wantTopic) > 0 && matchedTopic == "" {
+			continue
+		}
+		if matchedTopic != "" {
+			ev.Topic = matchedTopic
+		}
+		if ev.TxID != "" {
+			if raw, gErr := f.db.Get([]byte("hb:beef:" + ev.TxID)); gErr == nil && len(raw) > 0 {
+				ev.BEEF = raw
+			}
+		}
+		out = append(out, ev)
+		if rawCount >= limit || len(out) >= limit {
+			break
+		}
+	}
+	return out, nextSeq, rawCount, iter.Error()
 }

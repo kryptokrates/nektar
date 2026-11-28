@@ -14,6 +14,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/contracts"
+	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/store"
 	nwallet "github.com/kryptokrates/nektar/internal/wallet"
 )
@@ -21,7 +22,7 @@ import (
 // HandlePurchase validates a buyer's AtomicBEEF payment + BRC-105 replay claim and reveals the BRC-369 content key k + SPV ProofBundle.
 // Called by BOTH direct HTTP POST /v1/market/purchase AND NAT bbox inbox delivery!
 func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseResponse, error) {
-	if req.OfferID == "" || req.PaymentBEEFHex == "" {
+	if req.OfferID == "" || (len(req.PaymentBEEFRaw) == 0 && req.PaymentBEEFHex == "") {
 		return nil, errors.New("market: offerId and paymentBeefHex are required")
 	}
 	nowUnix := time.Now().Unix()
@@ -63,9 +64,13 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 	if err := bstack.VerifyArtifact(req.BuyerPub, req.BuyerSig, req.Signable()); err != nil {
 		return nil, fmt.Errorf("market: invalid buyer purchase signature: %w", err)
 	}
-	beefBytes, err := hex.DecodeString(strings.TrimSpace(req.PaymentBEEFHex))
-	if err != nil {
-		return nil, fmt.Errorf("market: decode paymentBeefHex: %w", err)
+	beefBytes := req.PaymentBEEFRaw
+	var err error
+	if len(beefBytes) == 0 {
+		beefBytes, err = hex.DecodeString(strings.TrimSpace(req.PaymentBEEFHex))
+		if err != nil {
+			return nil, fmt.Errorf("market: decode paymentBeefHex: %w", err)
+		}
 	}
 	parsedBeef, tx, txHash, err := guard.ParseBEEF(beefBytes, guard.DefaultBound)
 	if err != nil || tx == nil || txHash == nil {
@@ -235,7 +240,7 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 	var claimTxID string
 	var claimTxBEEFHex string
 	if isEscrow && !needsConfirm {
-		buyFee := min(escrowParams.MaxFee, uint64(300))
+		buyFee := min(escrowParams.MaxFee, uint64(150))
 		buyTx, bErr := contracts.BuildDisclosureSaleBuyTx(tx, req.OutputIndex, escrowParams, sale.RevealKey[:], buyFee)
 		if bErr != nil {
 			releaseClaim()
@@ -264,9 +269,13 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 	// Over-cap / below-settleDepth escalation seam (Finding #24): valid SPV payment is internalized,
 	// ContentKeyHex is withheld, SellerDeal enters payment_pending, and OnPaymentTxMined completes reveal at settleDepth!
 	if needsConfirm {
+		confirmWantID := strings.TrimSpace(req.WantID)
+		if confirmWantID == "" {
+			confirmWantID = sale.WantID
+		}
 		entry := &pendingConfirmEntry{
 			OfferID:       sale.OfferID,
-			WantID:        sale.WantID,
+			WantID:        confirmWantID,
 			BuyerPub:      req.BuyerPub,
 			TxID:          txid,
 			AmountSats:    paidSats,
@@ -278,6 +287,9 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 			entry.IsEscrow = true
 			entry.EscrowVout = req.OutputIndex
 			entry.EscrowBEEFHex = strings.TrimSpace(req.PaymentBEEFHex)
+			if entry.EscrowBEEFHex == "" && len(beefBytes) > 0 {
+				entry.EscrowBEEFHex = hex.EncodeToString(beefBytes)
+			}
 			entry.EscrowSellerPKH = hex.EncodeToString(escrowParams.SellerPKH)
 			entry.DepositorPKH = hex.EncodeToString(escrowParams.DepositorPKH)
 			entry.EscrowRefundAfter = escrowParams.RefundAfter
@@ -339,14 +351,25 @@ func (b *Broker) HandlePurchase(ctx context.Context, req PurchaseRequest) (*Purc
 	var sellerReceipt *DealReceipt
 	var sellerReceiptJSON []byte
 	if sellerSignPub := b.engine.salePubHex(); sellerSignPub != "" {
+		offerDigestHex := hex.EncodeToString(core.DSHA256(core.Concat(
+			[]byte("nektar:offer-digest:v1"),
+			core.Field([]byte(sale.OfferID)),
+			core.Field([]byte(sale.SaleOffer.KeyCommitment)),
+			core.Field([]byte(sale.SaleOffer.OfferSig)),
+			core.U64LE(sale.SaleOffer.Config.Price),
+		)))
+		receiptDealID := strings.TrimSpace(req.WantID)
+		if receiptDealID == "" {
+			receiptDealID = sale.WantID
+		}
 		dr := DealReceipt{
 			Version:            1,
-			DealID:             sale.WantID,
+			DealID:             receiptDealID,
 			OfferID:            sale.OfferID,
 			BuyerPub:           req.BuyerPub,
 			SellerPub:          sellerSignPub,
 			PriceSats:          sale.SaleOffer.Config.Price,
-			OfferDigestHash:    sha256CanonicalHex(sale.SaleOffer),
+			OfferDigestHash:    offerDigestHex,
 			PaymentTxID:        txid,
 			PaymentOutputIndex: req.OutputIndex,
 			KeyCommitment:      sale.SaleOffer.KeyCommitment,

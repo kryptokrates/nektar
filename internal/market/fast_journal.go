@@ -3,6 +3,7 @@ package market
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -31,8 +32,8 @@ const ContentTypeCBOR = "application/cbor"
 // EncodePurchaseRequestCBOR encodes PurchaseRequest into compact binary CBOR with raw PaymentBEEF bytes
 // (zero 2x hex overhead across the wire).
 func EncodePurchaseRequestCBOR(req PurchaseRequest) ([]byte, error) {
-	var beefBytes []byte
-	if req.PaymentBEEFHex != "" {
+	beefBytes := req.PaymentBEEFRaw
+	if len(beefBytes) == 0 && req.PaymentBEEFHex != "" {
 		b, err := hex.DecodeString(strings.TrimSpace(req.PaymentBEEFHex))
 		if err != nil {
 			return nil, fmt.Errorf("market: encode purchase cbor beef: %w", err)
@@ -66,7 +67,7 @@ func EncodePurchaseRequestCBOR(req PurchaseRequest) ([]byte, error) {
 
 var purchaseReqKnownKeys = core.KnownKeyRange(1, 16)
 
-// DecodePurchaseRequestCBOR decodes a binary CBOR PurchaseRequest.
+// DecodePurchaseRequestCBOR decodes a binary CBOR PurchaseRequest fail-closed on type errors or critical unknown keys.
 func DecodePurchaseRequestCBOR(raw []byte) (PurchaseRequest, error) {
 	v, err := core.DecodeCBOR(raw)
 	if err != nil {
@@ -77,30 +78,205 @@ func DecodePurchaseRequestCBOR(raw []byte) (PurchaseRequest, error) {
 		return PurchaseRequest{}, err
 	}
 	var req PurchaseRequest
-	req.OfferID, _ = core.CBORText(m, 1)
-	req.WantID, _ = core.CBORText(m, 2)
-	req.BuyerPub, _ = core.CBORText(m, 3)
-	req.BuyerSig, _ = core.CBORText(m, 4)
-	req.TS, _ = core.CBORInt(m, 5)
-	req.TxID, _ = core.CBORText(m, 6)
-	if beef, bErr := core.CBORBytes(m, 7); bErr == nil && len(beef) > 0 {
-		req.PaymentBEEFHex = hex.EncodeToString(beef)
+	if req.OfferID, err = core.CBORText(m, 1); err != nil {
+		return PurchaseRequest{}, err
 	}
-	if idx, uErr := core.CBORUint(m, 8); uErr == nil {
-		req.OutputIndex = uint32(idx)
+	if req.WantID, err = core.CBORText(m, 2); err != nil {
+		return PurchaseRequest{}, err
 	}
-	req.DerivationPrefix, _ = core.CBORText(m, 9)
-	req.DerivationSuffix, _ = core.CBORText(m, 10)
-	req.SenderIdentityKey, _ = core.CBORText(m, 11)
-	req.EscrowMode, _ = core.CBORBool(m, 12)
-	req.DepositorPKH, _ = core.CBORText(m, 13)
-	req.EscrowSellerPKH, _ = core.CBORText(m, 14)
-	req.EscrowRefundAfter, _ = core.CBORUint(m, 15)
-	req.EscrowMaxFee, _ = core.CBORUint(m, 16)
+	if req.BuyerPub, err = core.CBORText(m, 3); err != nil {
+		return PurchaseRequest{}, err
+	}
+	if req.BuyerSig, err = core.CBORText(m, 4); err != nil {
+		return PurchaseRequest{}, err
+	}
+	if req.TS, err = core.CBORInt(m, 5); err != nil {
+		return PurchaseRequest{}, err
+	}
+	if req.TxID, err = core.CBORText(m, 6); err != nil {
+		return PurchaseRequest{}, err
+	}
+	if beef, bErr := core.CBORBytes(m, 7); bErr != nil {
+		return PurchaseRequest{}, bErr
+	} else if len(beef) > 0 {
+		req.PaymentBEEFRaw = beef
+	}
+	idx, err := core.CBORUint(m, 8)
+	if err != nil {
+		return PurchaseRequest{}, err
+	}
+	req.OutputIndex = uint32(idx)
+	if req.DerivationPrefix, err = core.CBORText(m, 9); err != nil {
+		return PurchaseRequest{}, err
+	}
+	if req.DerivationSuffix, err = core.CBORText(m, 10); err != nil {
+		return PurchaseRequest{}, err
+	}
+	if req.SenderIdentityKey, err = core.CBORText(m, 11); err != nil {
+		return PurchaseRequest{}, err
+	}
+	if req.EscrowMode, err = core.CBORBool(m, 12); err != nil {
+		return PurchaseRequest{}, err
+	}
+	if req.DepositorPKH, err = core.CBORText(m, 13); err != nil {
+		return PurchaseRequest{}, err
+	}
+	if req.EscrowSellerPKH, err = core.CBORText(m, 14); err != nil {
+		return PurchaseRequest{}, err
+	}
+	if req.EscrowRefundAfter, err = core.CBORUint(m, 15); err != nil {
+		return PurchaseRequest{}, err
+	}
+	if req.EscrowMaxFee, err = core.CBORUint(m, 16); err != nil {
+		return PurchaseRequest{}, err
+	}
 	return req, nil
 }
 
-// EncodePurchaseResponseCBOR encodes PurchaseResponse in binary CBOR (raw key & ciphertext bytes).
+func encodeAnchorLinkCBOR(a contracts.AnchorLink) cbor.Map {
+	m := cbor.Map{
+		{Key: uint64(1), Val: a.N},
+		{Key: uint64(2), Val: a.Size},
+		{Key: uint64(3), Val: a.R},
+		{Key: uint64(4), Val: a.Rp},
+		{Key: uint64(5), Val: a.TxID},
+		{Key: uint64(6), Val: uint64(a.OutputIndex)},
+	}
+	if a.StateHash != "" {
+		m = append(m, cbor.Pair{Key: uint64(7), Val: a.StateHash})
+	}
+	if a.MmrRoot != "" {
+		m = append(m, cbor.Pair{Key: uint64(8), Val: a.MmrRoot})
+	}
+	if len(a.AnchorBEEF) > 0 {
+		m = append(m, cbor.Pair{Key: uint64(9), Val: a.AnchorBEEF})
+	}
+	return m
+}
+
+var anchorLinkKnownKeys = core.KnownKeyRange(1, 9)
+
+func decodeAnchorLinkCBOR(v cbor.Value) (contracts.AnchorLink, error) {
+	m, _, err := core.SplitCBORMap(v, anchorLinkKnownKeys)
+	if err != nil {
+		return contracts.AnchorLink{}, err
+	}
+	var a contracts.AnchorLink
+	if a.N, err = core.CBORUint(m, 1); err != nil {
+		return contracts.AnchorLink{}, err
+	}
+	if a.Size, err = core.CBORUint(m, 2); err != nil {
+		return contracts.AnchorLink{}, err
+	}
+	if a.R, err = core.CBORText(m, 3); err != nil {
+		return contracts.AnchorLink{}, err
+	}
+	if a.Rp, err = core.CBORText(m, 4); err != nil {
+		return contracts.AnchorLink{}, err
+	}
+	if a.TxID, err = core.CBORText(m, 5); err != nil {
+		return contracts.AnchorLink{}, err
+	}
+	idx, err := core.CBORUint(m, 6)
+	if err != nil {
+		return contracts.AnchorLink{}, err
+	}
+	a.OutputIndex = uint32(idx)
+	if a.StateHash, err = core.CBORText(m, 7); err != nil {
+		return contracts.AnchorLink{}, err
+	}
+	if a.MmrRoot, err = core.CBORText(m, 8); err != nil {
+		return contracts.AnchorLink{}, err
+	}
+	if a.AnchorBEEF, err = core.CBORBytes(m, 9); err != nil {
+		return contracts.AnchorLink{}, err
+	}
+	return a, nil
+}
+
+func encodeProofBundleCBOR(pb *contracts.ProofBundle) ([]byte, error) {
+	m := cbor.Map{
+		{Key: uint64(1), Val: int64(pb.Version)},
+		{Key: uint64(2), Val: pb.Shard},
+		{Key: uint64(3), Val: pb.N},
+		{Key: uint64(4), Val: pb.Size},
+		{Key: uint64(5), Val: pb.Leaf},
+		{Key: uint64(6), Val: int64(pb.LeafIndex)},
+		{Key: uint64(7), Val: core.CBORStringsVal(pb.Path)},
+		{Key: uint64(8), Val: encodeAnchorLinkCBOR(pb.Anchor)},
+		{Key: uint64(10), Val: pb.AnchorBEEF},
+	}
+	if len(pb.ChainTail) > 0 {
+		arr := make([]cbor.Value, len(pb.ChainTail))
+		for i, cl := range pb.ChainTail {
+			arr[i] = encodeAnchorLinkCBOR(cl)
+		}
+		m = append(m, cbor.Pair{Key: uint64(9), Val: arr})
+	}
+	return core.EncodeCBOR(m)
+}
+
+var proofBundleKnownKeys = core.KnownKeyRange(1, 10)
+
+func decodeProofBundleCBOR(raw []byte) (*contracts.ProofBundle, error) {
+	v, err := core.DecodeCBOR(raw)
+	if err != nil {
+		return nil, err
+	}
+	m, _, err := core.SplitCBORMap(v, proofBundleKnownKeys)
+	if err != nil {
+		return nil, err
+	}
+	pb := &contracts.ProofBundle{}
+	ver, err := core.CBORInt(m, 1)
+	if err != nil {
+		return nil, err
+	}
+	pb.Version = int(ver)
+	if pb.Shard, err = core.CBORText(m, 2); err != nil {
+		return nil, err
+	}
+	if pb.N, err = core.CBORUint(m, 3); err != nil {
+		return nil, err
+	}
+	if pb.Size, err = core.CBORUint(m, 4); err != nil {
+		return nil, err
+	}
+	if pb.Leaf, err = core.CBORText(m, 5); err != nil {
+		return nil, err
+	}
+	li, err := core.CBORInt(m, 6)
+	if err != nil {
+		return nil, err
+	}
+	pb.LeafIndex = int(li)
+	if pb.Path, err = core.CBORStrings(m, 7); err != nil {
+		return nil, err
+	}
+	if av, ok := m[8]; ok {
+		if pb.Anchor, err = decodeAnchorLinkCBOR(av); err != nil {
+			return nil, err
+		}
+	}
+	arr, err := core.CBORArray(m, 9)
+	if err != nil {
+		return nil, err
+	}
+	if len(arr) > 0 {
+		pb.ChainTail = make([]contracts.AnchorLink, len(arr))
+		for i, item := range arr {
+			if pb.ChainTail[i], err = decodeAnchorLinkCBOR(item); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if pb.AnchorBEEF, err = core.CBORBytes(m, 10); err != nil {
+		return nil, err
+	}
+	return pb, nil
+}
+
+// EncodePurchaseResponseCBOR encodes PurchaseResponse in binary CBOR (raw key, ciphertext & ProofBundle bytes).
 func EncodePurchaseResponseCBOR(resp *PurchaseResponse) ([]byte, error) {
 	if resp == nil {
 		return nil, errors.New("market: nil purchase response")
@@ -133,13 +309,13 @@ func EncodePurchaseResponseCBOR(resp *PurchaseResponse) ([]byte, error) {
 		}
 	}
 	if resp.ProofBundle != nil {
-		if pbJSON, err := json.Marshal(resp.ProofBundle); err == nil {
-			m = append(m, cbor.Pair{Key: uint64(12), Val: pbJSON})
+		if pbCBOR, err := encodeProofBundleCBOR(resp.ProofBundle); err == nil {
+			m = append(m, cbor.Pair{Key: uint64(12), Val: pbCBOR})
 		}
 	}
 	if resp.DealReceipt != nil {
-		if drJSON, err := json.Marshal(resp.DealReceipt); err == nil {
-			m = append(m, cbor.Pair{Key: uint64(13), Val: drJSON})
+		if drCBOR, err := EncodeDealReceiptCBOR(*resp.DealReceipt); err == nil {
+			m = append(m, cbor.Pair{Key: uint64(13), Val: drCBOR})
 		}
 	}
 	return core.EncodeCBOR(m)
@@ -147,7 +323,7 @@ func EncodePurchaseResponseCBOR(resp *PurchaseResponse) ([]byte, error) {
 
 var purchaseRespKnownKeys = core.KnownKeyRange(1, 13)
 
-// DecodePurchaseResponseCBOR decodes a binary CBOR PurchaseResponse.
+// DecodePurchaseResponseCBOR decodes a binary CBOR PurchaseResponse fail-closed on type errors or critical unknown keys.
 func DecodePurchaseResponseCBOR(raw []byte) (*PurchaseResponse, error) {
 	v, err := core.DecodeCBOR(raw)
 	if err != nil {
@@ -158,35 +334,79 @@ func DecodePurchaseResponseCBOR(raw []byte) (*PurchaseResponse, error) {
 		return nil, err
 	}
 	resp := &PurchaseResponse{}
-	resp.OK, _ = core.CBORBool(m, 1)
-	resp.Status, _ = core.CBORText(m, 2)
-	if rd, iErr := core.CBORInt(m, 3); iErr == nil {
-		resp.RequiredDepth = int(rd)
+	if resp.OK, err = core.CBORBool(m, 1); err != nil {
+		return nil, err
 	}
-	resp.OfferID, _ = core.CBORText(m, 4)
-	resp.SellerPub, _ = core.CBORText(m, 5)
-	resp.Error, _ = core.CBORText(m, 6)
-	resp.ChirpURL, _ = core.CBORText(m, 7)
-	if b, bErr := core.CBORBytes(m, 8); bErr == nil && len(b) > 0 {
+	if resp.Status, err = core.CBORText(m, 2); err != nil {
+		return nil, err
+	}
+	rd, err := core.CBORInt(m, 3)
+	if err != nil {
+		return nil, err
+	}
+	resp.RequiredDepth = int(rd)
+	if resp.OfferID, err = core.CBORText(m, 4); err != nil {
+		return nil, err
+	}
+	if resp.SellerPub, err = core.CBORText(m, 5); err != nil {
+		return nil, err
+	}
+	if resp.Error, err = core.CBORText(m, 6); err != nil {
+		return nil, err
+	}
+	if resp.ChirpURL, err = core.CBORText(m, 7); err != nil {
+		return nil, err
+	}
+	if b, bErr := core.CBORBytes(m, 8); bErr != nil {
+		return nil, bErr
+	} else if len(b) > 0 {
 		resp.ContentKeyHex = hex.EncodeToString(b)
 	}
-	if b, bErr := core.CBORBytes(m, 9); bErr == nil && len(b) > 0 {
+	if b, bErr := core.CBORBytes(m, 9); bErr != nil {
+		return nil, bErr
+	} else if len(b) > 0 {
 		resp.CiphertextHex = hex.EncodeToString(b)
 	}
-	resp.ClaimTxID, _ = core.CBORText(m, 10)
-	if b, bErr := core.CBORBytes(m, 11); bErr == nil && len(b) > 0 {
+	if resp.ClaimTxID, err = core.CBORText(m, 10); err != nil {
+		return nil, err
+	}
+	if b, bErr := core.CBORBytes(m, 11); bErr != nil {
+		return nil, bErr
+	} else if len(b) > 0 {
 		resp.ClaimTxBEEFHex = hex.EncodeToString(b)
 	}
-	if pbJSON, bErr := core.CBORBytes(m, 12); bErr == nil && len(pbJSON) > 0 {
-		var pb contracts.ProofBundle
-		if json.Unmarshal(pbJSON, &pb) == nil {
+	if pbRaw, bErr := core.CBORBytes(m, 12); bErr != nil {
+		return nil, bErr
+	} else if len(pbRaw) > 0 {
+		if pbRaw[0] == '{' {
+			var pb contracts.ProofBundle
+			if uErr := json.Unmarshal(pbRaw, &pb); uErr != nil {
+				return nil, fmt.Errorf("market: decode purchase response json proofBundle: %w", uErr)
+			}
 			resp.ProofBundle = &pb
+		} else {
+			pb, pErr := decodeProofBundleCBOR(pbRaw)
+			if pErr != nil {
+				return nil, fmt.Errorf("market: decode purchase response cbor proofBundle: %w", pErr)
+			}
+			resp.ProofBundle = pb
 		}
 	}
-	if drJSON, bErr := core.CBORBytes(m, 13); bErr == nil && len(drJSON) > 0 {
-		var dr DealReceipt
-		if json.Unmarshal(drJSON, &dr) == nil {
+	if drRaw, bErr := core.CBORBytes(m, 13); bErr != nil {
+		return nil, bErr
+	} else if len(drRaw) > 0 {
+		if drRaw[0] == '{' {
+			var dr DealReceipt
+			if uErr := json.Unmarshal(drRaw, &dr); uErr != nil {
+				return nil, fmt.Errorf("market: decode purchase response json dealReceipt: %w", uErr)
+			}
 			resp.DealReceipt = &dr
+		} else {
+			dr, dErr := DecodeDealReceiptCBOR(drRaw)
+			if dErr != nil {
+				return nil, fmt.Errorf("market: decode purchase response cbor dealReceipt: %w", dErr)
+			}
+			resp.DealReceipt = dr
 		}
 	}
 	return resp, nil
@@ -239,6 +459,10 @@ type FastMarketJournal struct {
 	bondBEEFHex   string
 	bondActive    bool
 
+	soMu        sync.RWMutex
+	soCheckedAt time.Time
+	soActive    bool
+
 	fragMu    sync.RWMutex
 	fragCache map[string]cachedFragEntry
 
@@ -249,6 +473,7 @@ type FastMarketJournal struct {
 	spendDay      string
 	spendToday    uint64
 	spendReserved map[string]uint64
+	nowFn         func() time.Time
 
 	commitCh   chan asyncBuyerCommitJob
 	stopCh     chan struct{}
@@ -299,7 +524,8 @@ func (j *FastMarketJournal) PutCachedClassification(key string, cls nmu.GradeCla
 	j.clsMu.Unlock()
 }
 
-// NewFastMarketJournal initializes a Pebble WAL journal and async commit worker for market deals.
+// NewFastMarketJournal initializes a Pebble WAL journal and async commit worker for market deals,
+// hydrating persisted same-day spend reservations from Pebble WAL for crash-safe daily cap enforcement.
 func NewFastMarketJournal(db *faststore.DB, ownsDB bool, mem *memory.Service) *FastMarketJournal {
 	if db == nil {
 		return nil
@@ -310,26 +536,65 @@ func NewFastMarketJournal(db *faststore.DB, ownsDB bool, mem *memory.Service) *F
 		capCache:      make(map[string]cachedCapsuleEntry, 256),
 		fragCache:     make(map[string]cachedFragEntry, 64),
 		spendReserved: make(map[string]uint64, 1024),
+		nowFn:         time.Now,
 		commitCh:      make(chan asyncBuyerCommitJob, 8192),
 		stopCh:        make(chan struct{}),
 		mem:           mem,
 	}
+	j.hydrateSpendWAL()
 	j.wg.Add(1)
 	go j.runAsyncCommitWorker()
 	return j
 }
 
+func (j *FastMarketJournal) now() time.Time {
+	if j != nil && j.nowFn != nil {
+		return j.nowFn()
+	}
+	return time.Now()
+}
+
+func spendWALPrefix(day string) []byte {
+	return []byte("mk:spend:" + day + ":")
+}
+
+func (j *FastMarketJournal) hydrateSpendWAL() {
+	if j == nil || j.db == nil {
+		return
+	}
+	today := j.now().UTC().Format("2006-01-02")
+	j.spendMu.Lock()
+	defer j.spendMu.Unlock()
+	j.spendDay = today
+	j.spendToday = 0
+	clear(j.spendReserved)
+	pfx := spendWALPrefix(today)
+	_ = j.db.ScanPrefix(pfx, func(k, v []byte) bool {
+		if len(v) != 8 {
+			return true
+		}
+		amt := binary.BigEndian.Uint64(v)
+		opKey := string(k[len(pfx):])
+		j.spendReserved[opKey] = amt
+		j.spendToday += amt
+		return true
+	})
+}
+
 // ReserveSpendAtomic enforces per-deal & daily spend caps atomically in memory + Pebble WAL
-// without hitting nektar.sqlite BEGIN IMMEDIATE on every deal.
+// without hitting nektar.sqlite BEGIN IMMEDIATE on every deal, surviving crashes and backward clock steps.
 func (j *FastMarketJournal) ReserveSpendAtomic(opID string, attempt int, amountSats, maxPerDeal, maxPerDay uint64) (bool, error) {
 	if j == nil {
 		return false, nil
 	}
 	key := fmt.Sprintf("%s:%d", opID, attempt)
-	today := time.Now().UTC().Format("2006-01-02")
+	today := j.now().UTC().Format("2006-01-02")
 	j.spendMu.Lock()
 	defer j.spendMu.Unlock()
-	if j.spendDay != today {
+	if j.spendDay == "" {
+		j.spendDay = today
+	} else if today > j.spendDay {
+		// Monotonic UTC day floor (DDIA Ch. 8): backward clock steps NEVER clear spendToday.
 		j.spendDay = today
 		j.spendToday = 0
 		clear(j.spendReserved)
@@ -343,6 +608,14 @@ func (j *FastMarketJournal) ReserveSpendAtomic(opID string, attempt int, amountS
 	if maxPerDay > 0 && j.spendToday+amountSats > maxPerDay {
 		return false, fmt.Errorf("daily spend %d + %d exceeds maxPerDay %d", j.spendToday, amountSats, maxPerDay)
 	}
+	if j.db != nil {
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], amountSats)
+		walKey := append(spendWALPrefix(j.spendDay), []byte(key)...)
+		if err := j.db.Set(walKey, buf[:]); err != nil {
+			return false, fmt.Errorf("fastjournal: persist spend reservation: %w", err)
+		}
+	}
 	j.spendToday += amountSats
 	j.spendReserved[key] = amountSats
 	return false, nil
@@ -355,12 +628,17 @@ func (j *FastMarketJournal) ReleaseSpendReservation(opID string, attempt int) {
 	}
 	key := fmt.Sprintf("%s:%d", opID, attempt)
 	j.spendMu.Lock()
+	day := j.spendDay
 	if amt, ok := j.spendReserved[key]; ok {
 		delete(j.spendReserved, key)
 		if j.spendToday >= amt {
 			j.spendToday -= amt
 		} else {
 			j.spendToday = 0
+		}
+		if j.db != nil && day != "" {
+			walKey := append(spendWALPrefix(day), []byte(key)...)
+			_ = j.db.Delete(walKey)
 		}
 	}
 	j.spendMu.Unlock()
@@ -399,9 +677,9 @@ func (j *FastMarketJournal) DrainAsyncCommits(timeout time.Duration) bool {
 
 func (j *FastMarketJournal) runAsyncCommitWorker() {
 	defer j.wg.Done()
-	// Coalesce SQLite projection work on a gentle 500ms background cadence so SQLite never
-	// steals CPU cores from 1,000+ TPS hot-path Pebble WAL commits (WAL is already crash-safe!).
-	ticker := time.NewTicker(500 * time.Millisecond)
+	// Coalesce SQLite projection work into ONE single SQLite transaction on a 2s background cadence
+	// so SQLite never steals CPU/NTFS I/O from 1,000+ TPS Pebble WAL commits (WAL is already crash-safe!).
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	var pending []asyncBuyerCommitJob
 	flushBatch := func(limit int) {
@@ -413,8 +691,19 @@ func (j *FastMarketJournal) runAsyncCommitWorker() {
 		if limit > 0 && n > limit {
 			n = limit
 		}
+		recs := make([]store.DealRecord, 0, n)
 		for i := 0; i < n; i++ {
-			j.applyCommitJob(pending[i])
+			if pending[i].dealRec.DealID != "" {
+				recs = append(recs, pending[i].dealRec)
+			}
+		}
+		if len(recs) > 0 {
+			_ = j.mem.DB().ProjectSettledDealsBatch(recs)
+		}
+		for i := 0; i < n; i++ {
+			if pending[i].sellerPub != "" && pending[i].priceSats > 0 {
+				_ = j.mem.DB().RecordReputation(pending[i].sellerPub, true, pending[i].priceSats)
+			}
 		}
 		pending = append(pending[:0], pending[n:]...)
 	}
@@ -426,7 +715,7 @@ func (j *FastMarketJournal) runAsyncCommitWorker() {
 				case job := <-j.commitCh:
 					pending = append(pending, job)
 				default:
-					flushBatch(64)
+					flushBatch(256)
 					return
 				}
 			}
@@ -435,8 +724,7 @@ func (j *FastMarketJournal) runAsyncCommitWorker() {
 				pending = append(pending, job)
 			}
 		case <-ticker.C:
-			// Project bounded slice per tick so SQLite stays <1% CPU during sustained bursts.
-			flushBatch(16)
+			flushBatch(256)
 		}
 	}
 }
@@ -525,12 +813,106 @@ func (j *FastMarketJournal) ReleasePaymentClaim(txid string, inputs []string) {
 	_ = j.db.CommitBatch(batch)
 }
 
+func encodeDealWALCBOR(rec store.DealRecord) ([]byte, error) {
+	m := cbor.Map{
+		{Key: uint64(1), Val: rec.DealID},
+		{Key: uint64(2), Val: rec.Role},
+		{Key: uint64(3), Val: rec.Status},
+		{Key: uint64(4), Val: rec.Shard},
+		{Key: uint64(5), Val: rec.PaymentTxID},
+		{Key: uint64(6), Val: uint64(rec.PaymentOutputIndex)},
+		{Key: uint64(7), Val: rec.CounterpartyPub},
+		{Key: uint64(8), Val: rec.PriceSats},
+		{Key: uint64(9), Val: rec.UpdatedAt},
+	}
+	if len(rec.PaymentBEEF) > 0 {
+		m = append(m, cbor.Pair{Key: uint64(10), Val: rec.PaymentBEEF})
+	}
+	if rec.PaymentDerivPrefix != "" {
+		m = append(m, cbor.Pair{Key: uint64(11), Val: rec.PaymentDerivPrefix})
+	}
+	if rec.PaymentDerivSuffix != "" {
+		m = append(m, cbor.Pair{Key: uint64(12), Val: rec.PaymentDerivSuffix})
+	}
+	if rec.PaymentSenderKey != "" {
+		m = append(m, cbor.Pair{Key: uint64(13), Val: rec.PaymentSenderKey})
+	}
+	if rec.ClaimKeyHex != "" {
+		m = append(m, cbor.Pair{Key: uint64(14), Val: rec.ClaimKeyHex})
+	}
+	if rec.ChirpURL != "" {
+		m = append(m, cbor.Pair{Key: uint64(15), Val: rec.ChirpURL})
+	}
+	if rec.DeliveredText != "" {
+		m = append(m, cbor.Pair{Key: uint64(16), Val: rec.DeliveredText})
+	}
+	if len(rec.DealReceiptJSON) > 0 {
+		m = append(m, cbor.Pair{Key: uint64(17), Val: rec.DealReceiptJSON})
+	}
+	if len(rec.ChosenOfferJSON) > 0 {
+		m = append(m, cbor.Pair{Key: uint64(18), Val: rec.ChosenOfferJSON})
+	}
+	if rec.IsHubSeller {
+		m = append(m, cbor.Pair{Key: uint64(19), Val: true})
+	}
+	if rec.ConfirmHeight != 0 {
+		m = append(m, cbor.Pair{Key: uint64(20), Val: rec.ConfirmHeight})
+	}
+	if rec.Error != "" {
+		m = append(m, cbor.Pair{Key: uint64(21), Val: rec.Error})
+	}
+	return core.EncodeCBOR(m)
+}
+
+var dealWALKnownKeys = core.KnownKeyRange(1, 21)
+
+func decodeDealWAL(raw []byte) (store.DealRecord, error) {
+	if len(raw) > 0 && raw[0] == '{' {
+		var rec store.DealRecord
+		err := json.Unmarshal(raw, &rec)
+		return rec, err
+	}
+	v, err := core.DecodeCBOR(raw)
+	if err != nil {
+		return store.DealRecord{}, err
+	}
+	m, _, err := core.SplitCBORMap(v, dealWALKnownKeys)
+	if err != nil {
+		return store.DealRecord{}, err
+	}
+	var rec store.DealRecord
+	rec.DealID, _ = core.CBORText(m, 1)
+	rec.Role, _ = core.CBORText(m, 2)
+	rec.Status, _ = core.CBORText(m, 3)
+	rec.Shard, _ = core.CBORText(m, 4)
+	rec.PaymentTxID, _ = core.CBORText(m, 5)
+	if idx, uErr := core.CBORUint(m, 6); uErr == nil {
+		rec.PaymentOutputIndex = uint32(idx)
+	}
+	rec.CounterpartyPub, _ = core.CBORText(m, 7)
+	rec.PriceSats, _ = core.CBORUint(m, 8)
+	rec.UpdatedAt, _ = core.CBORInt(m, 9)
+	rec.PaymentBEEF, _ = core.CBORBytes(m, 10)
+	rec.PaymentDerivPrefix, _ = core.CBORText(m, 11)
+	rec.PaymentDerivSuffix, _ = core.CBORText(m, 12)
+	rec.PaymentSenderKey, _ = core.CBORText(m, 13)
+	rec.ClaimKeyHex, _ = core.CBORText(m, 14)
+	rec.ChirpURL, _ = core.CBORText(m, 15)
+	rec.DeliveredText, _ = core.CBORText(m, 16)
+	rec.DealReceiptJSON, _ = core.CBORBytes(m, 17)
+	rec.ChosenOfferJSON, _ = core.CBORBytes(m, 18)
+	rec.IsHubSeller, _ = core.CBORBool(m, 19)
+	rec.ConfirmHeight, _ = core.CBORInt(m, 20)
+	rec.Error, _ = core.CBORText(m, 21)
+	return rec, nil
+}
+
 // SaveDealWAL durably commits a Buyer or Seller DealRecord into Pebble WAL (group-committed).
 func (j *FastMarketJournal) SaveDealWAL(rec store.DealRecord) error {
 	if j == nil || j.db == nil {
 		return nil
 	}
-	raw, err := json.Marshal(rec)
+	raw, err := encodeDealWALCBOR(rec)
 	if err != nil {
 		return err
 	}
@@ -546,8 +928,8 @@ func (j *FastMarketJournal) GetDealWAL(dealID string) (store.DealRecord, bool) {
 	if err != nil || len(raw) == 0 {
 		return store.DealRecord{}, false
 	}
-	var rec store.DealRecord
-	if json.Unmarshal(raw, &rec) != nil {
+	rec, err := decodeDealWAL(raw)
+	if err != nil {
 		return store.DealRecord{}, false
 	}
 	return rec, true
@@ -559,7 +941,7 @@ func (j *FastMarketJournal) CommitBuyerSettledWAL(job asyncBuyerCommitJob) error
 	if j == nil || j.db == nil {
 		return nil
 	}
-	dealBytes, err := json.Marshal(job.dealRec)
+	dealBytes, err := encodeDealWALCBOR(job.dealRec)
 	if err != nil {
 		return err
 	}
@@ -586,8 +968,7 @@ func (j *FastMarketJournal) CountSettledDealsWAL(role string) int {
 	}
 	n := 0
 	_ = j.db.ScanPrefix([]byte("mk:deal:"), func(_, val []byte) bool {
-		var rec store.DealRecord
-		if json.Unmarshal(val, &rec) == nil && rec.Status == "settled" && (role == "" || rec.Role == role) {
+		if rec, err := decodeDealWAL(val); err == nil && rec.Status == "settled" && (role == "" || rec.Role == role) {
 			n++
 		}
 		return true
@@ -716,6 +1097,30 @@ func (j *FastMarketJournal) CachedActiveBond(db *store.DB) (hasActive bool, outp
 	return hasActive, outpoint, beefHex
 }
 
+// HasStandingOrders caches whether any StandingOrders are registered (2s TTL) to avoid SQLite hits on OfferAd dispatch.
+func (j *FastMarketJournal) HasStandingOrders(db *store.DB) bool {
+	if db == nil {
+		return false
+	}
+	if j != nil {
+		j.soMu.RLock()
+		if time.Since(j.soCheckedAt) < 2*time.Second {
+			v := j.soActive
+			j.soMu.RUnlock()
+			return v
+		}
+		j.soMu.RUnlock()
+	}
+	has := len(LoadStandingOrderIndex(db)) > 0
+	if j != nil {
+		j.soMu.Lock()
+		j.soActive = has
+		j.soCheckedAt = time.Now()
+		j.soMu.Unlock()
+	}
+	return has
+}
+
 // CachedSellableFragments caches per-shard recall results for 2s to avoid SQLite + Cedar on every WantAd.
 func (j *FastMarketJournal) CachedSellableFragments(ctx context.Context, mem *memory.Service, shard string) ([]memory.RecalledFragment, error) {
 	if j != nil {
@@ -782,7 +1187,85 @@ type DirectQuoteResponse struct {
 	Error string          `json:"error,omitempty"`
 }
 
-// PostDirectQuote sends a signed DirectQuoteRequest to sellerURL/v1/market/direct-quote and verifies the returned OfferAd.
+// EncodeDirectQuoteRequestCBOR encodes DirectQuoteRequest into compact binary CBOR.
+func EncodeDirectQuoteRequestCBOR(req DirectQuoteRequest) ([]byte, error) {
+	return core.EncodeCBOR(cbor.Map{
+		{Key: uint64(1), Val: req.WantID},
+		{Key: uint64(2), Val: req.BuyerPub},
+		{Key: uint64(3), Val: req.BuyerSig},
+		{Key: uint64(4), Val: req.TS},
+		{Key: uint64(5), Val: core.CBORStringsVal(req.Domains)},
+		{Key: uint64(6), Val: req.Query},
+		{Key: uint64(7), Val: req.MaxSats},
+	})
+}
+
+var directQuoteReqKnownKeys = core.KnownKeyRange(1, 7)
+
+// DecodeDirectQuoteRequestCBOR decodes a binary CBOR DirectQuoteRequest.
+func DecodeDirectQuoteRequestCBOR(raw []byte) (DirectQuoteRequest, error) {
+	v, err := core.DecodeCBOR(raw)
+	if err != nil {
+		return DirectQuoteRequest{}, err
+	}
+	m, _, err := core.SplitCBORMap(v, directQuoteReqKnownKeys)
+	if err != nil {
+		return DirectQuoteRequest{}, err
+	}
+	var req DirectQuoteRequest
+	req.WantID, _ = core.CBORText(m, 1)
+	req.BuyerPub, _ = core.CBORText(m, 2)
+	req.BuyerSig, _ = core.CBORText(m, 3)
+	req.TS, _ = core.CBORInt(m, 4)
+	req.Domains, _ = core.CBORStrings(m, 5)
+	req.Query, _ = core.CBORText(m, 6)
+	req.MaxSats, _ = core.CBORUint(m, 7)
+	return req, nil
+}
+
+// EncodeDirectQuoteResponseCBOR encodes DirectQuoteResponse in compact binary CBOR using OfferAd's canonical CBOR codec.
+func EncodeDirectQuoteResponseCBOR(resp DirectQuoteResponse) ([]byte, error) {
+	m := cbor.Map{
+		{Key: uint64(1), Val: resp.OK},
+		{Key: uint64(2), Val: resp.Error},
+	}
+	if resp.Offer != nil {
+		offBytes, err := resp.Offer.EncodeCanonicalCBOR()
+		if err != nil {
+			return nil, err
+		}
+		m = append(m, cbor.Pair{Key: uint64(3), Val: offBytes})
+	}
+	return core.EncodeCBOR(m)
+}
+
+var directQuoteRespKnownKeys = core.KnownKeyRange(1, 3)
+
+// DecodeDirectQuoteResponseCBOR decodes a binary CBOR DirectQuoteResponse.
+func DecodeDirectQuoteResponseCBOR(raw []byte) (DirectQuoteResponse, error) {
+	v, err := core.DecodeCBOR(raw)
+	if err != nil {
+		return DirectQuoteResponse{}, err
+	}
+	m, _, err := core.SplitCBORMap(v, directQuoteRespKnownKeys)
+	if err != nil {
+		return DirectQuoteResponse{}, err
+	}
+	var resp DirectQuoteResponse
+	resp.OK, _ = core.CBORBool(m, 1)
+	resp.Error, _ = core.CBORText(m, 2)
+	if offBytes, bErr := core.CBORBytes(m, 3); bErr == nil && len(offBytes) > 0 {
+		off, oErr := bstack.DecodeOfferAdCBOR(offBytes)
+		if oErr != nil {
+			return DirectQuoteResponse{}, oErr
+		}
+		resp.Offer = &off
+	}
+	return resp, nil
+}
+
+// PostDirectQuote sends a signed DirectQuoteRequest to sellerURL/v1/market/direct-quote (using binary CBOR
+// with automatic JSON fallback) and returns the Seller's OfferAd.
 func (b *Broker) PostDirectQuote(ctx context.Context, sellerURL string, req DirectQuoteRequest) (*bstack.OfferAd, error) {
 	if req.WantID == "" {
 		req.WantID = "dq-" + randIDHex()
@@ -798,7 +1281,7 @@ func (b *Broker) PostDirectQuote(ctx context.Context, sellerURL string, req Dire
 		return nil, err
 	}
 	req.BuyerSig = sig
-	body, err := json.Marshal(req)
+	body, err := EncodeDirectQuoteRequestCBOR(req)
 	if err != nil {
 		return nil, err
 	}
@@ -807,7 +1290,8 @@ func (b *Broker) PostDirectQuote(ctx context.Context, sellerURL string, req Dire
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Content-Type", ContentTypeCBOR)
+	httpReq.Header.Set("Accept", ContentTypeCBOR)
 	resp, err := b.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -818,7 +1302,18 @@ func (b *Broker) PostDirectQuote(ctx context.Context, sellerURL string, req Dire
 		return nil, err
 	}
 	var qResp DirectQuoteResponse
-	if err := json.Unmarshal(raw, &qResp); err != nil {
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), ContentTypeCBOR) {
+		if dErr := func() error {
+			dec, e := DecodeDirectQuoteResponseCBOR(raw)
+			if e != nil {
+				return e
+			}
+			qResp = dec
+			return nil
+		}(); dErr != nil {
+			return nil, fmt.Errorf("market: decode CBOR direct-quote response (HTTP %d): %w", resp.StatusCode, dErr)
+		}
+	} else if err := json.Unmarshal(raw, &qResp); err != nil {
 		return nil, fmt.Errorf("market: decode direct-quote response (HTTP %d): %w", resp.StatusCode, err)
 	}
 	if !qResp.OK || qResp.Offer == nil {
@@ -864,16 +1359,8 @@ func (b *Broker) BuyDirect(ctx context.Context, req DirectBuyRequest) (*store.De
 	if err != nil {
 		return nil, err
 	}
-	var so contracts.KeyedSaleOffer
-	if err := json.Unmarshal(offer.SaleOffer, &so); err != nil {
-		return nil, fmt.Errorf("market: decode direct offer saleOffer: %w", err)
-	}
-	if err := contracts.VerifySaleOffer(&so, b.PubHex(), offer.Leaf); err != nil {
-		return nil, fmt.Errorf("market: verify direct offer: %w", err)
-	}
-	if !strings.EqualFold(so.SellerPub, offer.Pub) || so.Config.Price != offer.PriceSats || !strings.EqualFold(so.KeyCommitment, offer.KeyCommitHex) {
-		return nil, errors.New("market: direct offer metadata mismatch vs signed SaleOffer")
-	}
+	// Note: ExecuteBuyerDealDirect -> buyerCollectOffers performs full contracts.VerifySaleOffer +
+	// SellerPub/Price/KeyCommitment validation on in.Offers, avoiding duplicate ECDSA verification here.
 	want := bstack.WantAd{
 		WantID:   wantID,
 		Pub:      b.PubHex(),
@@ -904,21 +1391,18 @@ func (b *Broker) BuyDirect(ctx context.Context, req DirectBuyRequest) (*store.De
 			Error:         st.Error,
 		}, dErr
 	}
-	if fj := b.engine.FastJournal(); fj != nil {
-		if rec, ok := fj.GetDealWAL(wantID); ok && rec.Status == "settled" {
-			return &rec, dErr
-		}
-	}
 	if dErr != nil {
 		return nil, dErr
 	}
 	return &store.DealRecord{
-		DealID:        wantID,
-		Role:          "buyer",
-		Status:        st.Status,
-		Shard:         st.Shard,
-		PaymentTxID:   st.PaymentTxID,
-		DeliveredText: st.DeliveredTxt,
-		Error:         st.Error,
+		DealID:          wantID,
+		Role:            "buyer",
+		Status:          st.Status,
+		Shard:           st.Shard,
+		PaymentTxID:     st.PaymentTxID,
+		DeliveredText:   st.DeliveredTxt,
+		CounterpartyPub: offer.Pub,
+		PriceSats:       offer.PriceSats,
+		Error:           st.Error,
 	}, nil
 }

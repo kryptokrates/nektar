@@ -139,17 +139,98 @@ func (b *Broker) peerBboxHosts(ctx context.Context, peerPub string, fallbackHost
 	return out
 }
 
+type bboxChirpEnvelope struct {
+	EnvelopeChirpURL string `json:"envelopeChirpUrl"`
+}
+
+func (b *Broker) sealBboxPayloadUnderLimit(
+	ctx context.Context,
+	office, kind, fromPub, toPub string,
+	nowTS int64,
+	aad, bodyRaw []byte,
+) (json.RawMessage, error) {
+	toSeal := bodyRaw
+	// Keep plaintext well below Lightweb's 16 KiB `boxrec.MaxContent` ceiling by staging oversized
+	// payloads (e.g. multi-ancestor ProofBundles or large PurchaseRequests) onto Hub CHIRP!
+	if len(toSeal) > 10<<10 && b.mem != nil && b.mem.Objects() != nil && b.disc != nil {
+		if chirpURL, _, hashes, cErr := bstack.StoreChirpWithHashes(b.mem.Objects(), toSeal); cErr == nil && chirpURL != "" {
+			b.mem.AllowPublicChirpHashes(hashes...)
+			b.disc.PushChirpClosureToHosts(ctx, b.disc.ActiveHosts(), b.mem.Objects(), hashes)
+			if wrapped, mErr := json.Marshal(bboxChirpEnvelope{EnvelopeChirpURL: chirpURL}); mErr == nil {
+				toSeal = wrapped
+			}
+		}
+	}
+	var pw bstackBoxSealer
+	if b.engine != nil && b.engine.signer != nil {
+		if w, wErr := b.engine.signer.ProtoWallet(); wErr == nil {
+			pw = w
+		}
+	}
+	return bstack.SealBboxMessageBody(ctx, pw, office, kind, fromPub, toPub, nowTS, aad, toSeal)
+}
+
+func (b *Broker) postOfficeBboxMessage(
+	ctx context.Context,
+	hosts []string,
+	office, recipientPub, dealID, kind string,
+	nowTS int64,
+	sealedBody json.RawMessage,
+) error {
+	normOffice := bstack.NormalizeBboxOffice(office)
+	nonce := randNonceHex()
+	officeAud := "office:" + normOffice
+	var lastErr error
+	delivered := 0
+	for _, h := range hosts {
+		msg := hub.BboxMessage{
+			Office:       normOffice,
+			RecipientPub: recipientPub,
+			SenderPub:    b.PubHex(),
+			DealID:       dealID,
+			Kind:         kind,
+			TS:           nowTS,
+			Nonce:        nonce,
+			Aud:          officeAud,
+			Body:         sealedBody,
+		}
+		sig, sErr := bstack.SignArtifactWithSigner(b.engine.signer, msg.Signable())
+		if sErr != nil {
+			return sErr
+		}
+		msg.Sig = sig
+		env, _ := json.Marshal(msg)
+		resp, err := b.disc.PostJSONWithHub402(ctx, strings.TrimRight(h, "/")+"/bbox/send", "bbox:send", env)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode < 300 || resp.StatusCode == http.StatusConflict {
+			delivered++
+			break
+		}
+		lastErr = fmt.Errorf("bbox %s send HTTP %d", kind, resp.StatusCode)
+	}
+	if delivered > 0 {
+		return nil
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("bbox %s send failed: no reachable hubs", kind)
+}
+
 // DeliverPurchaseAsync delivers a buyer's AtomicBEEF payment to Seller.
 // Direct HTTP returns the seller's immediate PurchaseResponse; NAT bbox sends purchase_beef
-// and returns (nil, nil) immediately so Restate BuyerDeal suspends durably on Promise("claim")!
+// (office-bound so Leaf-Spine BRC-149 planes route it without direct cross-Hub HTTP) and returns (nil, nil)
+// immediately so BuyerDeal suspends durably on its claim signal!
 func (b *Broker) DeliverPurchaseAsync(ctx context.Context, chosen bstack.OfferAd, dealID string, pReq PurchaseRequest) (*PurchaseResponse, error) {
 	var directErr error
 	if chosen.SellerURL != "" {
 		pResp, err := b.sendDirectPurchase(ctx, chosen.SellerURL, pReq)
 		if err == nil && pResp != nil && pResp.OK {
 			if pResp.Status == "awaiting_confirmation" || pResp.ContentKeyHex == "" {
-				// Register bbox correlation so Seller's post-confirmation reveal_key wakes BuyerDeal,
-				// and return pResp so BuyerDeal extends its claim wait window to match RequiredDepth!
 				b.mu.Lock()
 				b.registerBboxExpectationLocked(pReq.OfferID, chosen.Pub, dealID, time.Now().Unix())
 				b.mu.Unlock()
@@ -163,52 +244,34 @@ func (b *Broker) DeliverPurchaseAsync(ctx context.Context, chosen bstack.OfferAd
 		}
 	}
 	if chosen.BboxOffice != "" {
-		hosts := b.peerBboxHosts(ctx, chosen.Pub, b.disc.ActiveHosts())
+		normOffice := bstack.NormalizeBboxOffice(chosen.BboxOffice)
+		hosts := b.peerBboxHosts(ctx, "", b.disc.ActiveHosts())
+		for _, ph := range b.peerBboxHosts(ctx, chosen.Pub, nil) {
+			found := false
+			for _, eh := range hosts {
+				if eh == ph {
+					found = true
+					break
+				}
+			}
+			if !found {
+				hosts = append(hosts, ph)
+			}
+		}
 		nowTS := time.Now().Unix()
 		b.mu.Lock()
 		b.registerBboxExpectationLocked(pReq.OfferID, chosen.Pub, dealID, nowTS)
 		b.mu.Unlock()
-		bodyRaw, _ := json.Marshal(pReq)
-		aad := bstack.BboxAAD(chosen.BboxOffice, b.PubHex(), chosen.Pub, dealID, "purchase_beef")
-		var pw bstackBoxSealer
-		if b.engine != nil && b.engine.signer != nil {
-			if w, wErr := b.engine.signer.ProtoWallet(); wErr == nil {
-				pw = w
-			}
+		if pReq.PaymentBEEFHex == "" && len(pReq.PaymentBEEFRaw) > 0 {
+			pReq.PaymentBEEFHex = hex.EncodeToString(pReq.PaymentBEEFRaw)
 		}
-		sealedBody, encErr := bstack.SealBboxMessageBody(ctx, pw, chosen.BboxOffice, "purchase_beef", b.PubHex(), chosen.Pub, nowTS, aad, bodyRaw)
+		bodyRaw, _ := json.Marshal(pReq)
+		aad := bstack.BboxAAD(normOffice, b.PubHex(), chosen.Pub, dealID, "purchase_beef")
+		sealedBody, encErr := b.sealBboxPayloadUnderLimit(ctx, normOffice, "purchase_beef", b.PubHex(), chosen.Pub, nowTS, aad, bodyRaw)
 		if encErr != nil {
 			return nil, encErr
 		}
-		sent := false
-		for _, h := range hosts {
-			msg := hub.BboxMessage{
-				Office:       chosen.BboxOffice,
-				RecipientPub: chosen.Pub,
-				SenderPub:    b.PubHex(),
-				DealID:       dealID,
-				Kind:         "purchase_beef",
-				TS:           nowTS,
-				Nonce:        randNonceHex(),
-				Aud:          hubAudience(h),
-				Body:         sealedBody,
-			}
-			sig, sErr := bstack.SignArtifactWithSigner(b.engine.signer, msg.Signable())
-			if sErr != nil {
-				return nil, sErr
-			}
-			msg.Sig = sig
-			env, _ := json.Marshal(msg)
-			resp, err := b.disc.PostJSONWithHub402(ctx, strings.TrimRight(h, "/")+"/bbox/send", "bbox:send", env)
-			if err == nil {
-				resp.Body.Close()
-				if resp.StatusCode < 300 {
-					sent = true
-					break
-				}
-			}
-		}
-		if sent {
+		if err := b.postOfficeBboxMessage(ctx, hosts, normOffice, chosen.Pub, dealID, "purchase_beef", nowTS, sealedBody); err == nil {
 			b.WakeBbox()
 			return nil, nil
 		}
@@ -235,6 +298,9 @@ func (b *Broker) sendDirectPurchase(ctx context.Context, sellerURL string, req P
 		}
 	}
 	if !useCBOR {
+		if req.PaymentBEEFHex == "" && len(req.PaymentBEEFRaw) > 0 {
+			req.PaymentBEEFHex = hex.EncodeToString(req.PaymentBEEFRaw)
+		}
 		raw, _ = json.Marshal(req)
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(raw))

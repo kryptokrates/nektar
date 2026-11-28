@@ -114,7 +114,7 @@ func (s *bcommonServices) PostFromBEEF(ctx context.Context, beef *transaction.Be
 				select {
 				case incomingRelaySem <- struct{}{}:
 					defer func() { <-incomingRelaySem }()
-				default:
+				case <-time.After(2 * time.Second):
 					return
 				}
 				rCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

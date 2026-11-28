@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lightwebinc/bcommon/cbor"
+
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/core"
 )
@@ -26,45 +28,48 @@ const (
 // ParentRef links a commit to a parent commit and (when anchored) its BSV NektarAnchor UTXO outpoint,
 // forming a Metanet/Git Merkle DAG across branches, forks, and purchased market repositories.
 type ParentRef struct {
-	CommitHash  string `json:"commitHash"`
-	AnchorTxID  string `json:"anchorTxid,omitempty"`
-	AnchorVout  uint32 `json:"anchorVout,omitempty"`
-	RepoGenesis string `json:"repoGenesis,omitempty"` // populated on cross-repo Market forks/merges
+	CommitHash  string      `json:"commitHash"`
+	AnchorTxID  string      `json:"anchorTxid,omitempty"`
+	AnchorVout  uint32      `json:"anchorVout,omitempty"`
+	RepoGenesis string      `json:"repoGenesis,omitempty"` // populated on cross-repo Market forks/merges
+	Extra       []cbor.Pair `json:"-"`                     // preserved non-critical odd CBOR extension keys
 }
 
 // BlobObject is a content-addressed memory item or volumetric file attachment.
 type BlobObject struct {
-	BlobHash        string `json:"blobHash"`
-	Path            string `json:"path"`
-	MediaType       string `json:"mediaType"`
-	Size            int64  `json:"size"`
-	ContentSHA256   string `json:"contentSha256"`
-	Inline          []byte `json:"inline,omitempty"`
-	ChirpURL        string `json:"chirpUrl,omitempty"`
-	Encrypted       bool   `json:"encrypted,omitempty"`
-	BorgGroup       string `json:"borgGroup,omitempty"`
-	BorgEpoch       int64  `json:"borgEpoch,omitempty"`
-	LatticeEpoch    uint64 `json:"latticeEpoch,omitempty"`
-	KeyedMeta       []byte `json:"keyedMeta,omitempty"`
-	KeyedMetaSHA256 string `json:"keyedMetaSha256,omitempty"`
-	Level           int    `json:"level,omitempty"`
-	Class           string `json:"class,omitempty"`
-	Redacted        bool   `json:"redacted,omitempty"`
-	Forgotten       bool   `json:"forgotten,omitempty"`
+	BlobHash        string      `json:"blobHash"`
+	Path            string      `json:"path"`
+	MediaType       string      `json:"mediaType"`
+	Size            int64       `json:"size"`
+	ContentSHA256   string      `json:"contentSha256"`
+	Inline          []byte      `json:"inline,omitempty"`
+	ChirpURL        string      `json:"chirpUrl,omitempty"`
+	Encrypted       bool        `json:"encrypted,omitempty"`
+	BorgGroup       string      `json:"borgGroup,omitempty"`
+	BorgEpoch       int64       `json:"borgEpoch,omitempty"`
+	LatticeEpoch    uint64      `json:"latticeEpoch,omitempty"`
+	KeyedMeta       []byte      `json:"keyedMeta,omitempty"`
+	KeyedMetaSHA256 string      `json:"keyedMetaSha256,omitempty"`
+	Level           int         `json:"level,omitempty"`
+	Class           string      `json:"class,omitempty"`
+	Redacted        bool        `json:"redacted,omitempty"`
+	Forgotten       bool        `json:"forgotten,omitempty"`
+	Extra           []cbor.Pair `json:"-"` // preserved non-critical odd CBOR extension keys
 }
 
 // TreeEntry is one deterministically ordered file or memory fact inside a TreeObject.
 type TreeEntry struct {
-	Mode          string `json:"mode"` // "100644" regular file/fact
-	Path          string `json:"path"`
-	BlobHash      string `json:"blobHash"`
-	MediaType     string `json:"mediaType"`
-	Size          int64  `json:"size"`
-	ContentSHA256 string `json:"contentSha256"`
-	ChirpURL      string `json:"chirpUrl,omitempty"`
-	Encrypted     bool   `json:"encrypted,omitempty"`
-	Level         int    `json:"level,omitempty"`
-	Class         string `json:"class,omitempty"`
+	Mode          string      `json:"mode"` // "100644" regular file/fact
+	Path          string      `json:"path"`
+	BlobHash      string      `json:"blobHash"`
+	MediaType     string      `json:"mediaType"`
+	Size          int64       `json:"size"`
+	ContentSHA256 string      `json:"contentSha256"`
+	ChirpURL      string      `json:"chirpUrl,omitempty"`
+	Encrypted     bool        `json:"encrypted,omitempty"`
+	Level         int         `json:"level,omitempty"`
+	Class         string      `json:"class,omitempty"`
+	Extra         []cbor.Pair `json:"-"` // preserved non-critical odd CBOR extension keys
 }
 
 // TreeObject is an immutable Merkle directory snapshot of all active paths in a Memory Repo.
@@ -74,6 +79,7 @@ type TreeObject struct {
 	TreeHash string            `json:"treeHash"`
 	Entries  []TreeEntry       `json:"entries,omitempty"`
 	Subtrees map[string]string `json:"subtrees,omitempty"`
+	Extra    []cbor.Pair       `json:"-"` // preserved non-critical odd CBOR extension keys
 }
 
 // GitCommitMeta preserves the exact Git commit header fields for commits pushed from a real
@@ -114,6 +120,7 @@ type CommitObject struct {
 	AnchorN        int64          `json:"anchorN"`
 	FragmentLeaf   string         `json:"fragmentLeaf,omitempty"`
 	GitMeta        *GitCommitMeta `json:"gitMeta,omitempty"`
+	Extra          []cbor.Pair    `json:"-"` // preserved non-critical odd CBOR extension keys
 }
 
 // BranchRef tracks the current head commit and on-chain NektarAnchor GenesisOwner of a branch.

@@ -10,6 +10,7 @@ import (
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-wallet-toolbox/pkg/brc29"
 	dsecp "github.com/decred/dcrd/dcrec/secp256k1/v4"
+	decdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 )
 
 func TestFastSecp256k1_CrossCompatibilityWithGoSDKAndBRC29(t *testing.T) {
@@ -107,4 +108,44 @@ func TestFastSecp256k1_CrossCompatibilityWithGoSDKAndBRC29(t *testing.T) {
 			t.Fatalf("BRC-29 derived recipient privkey lock script mismatch:\nexpect=%x\n   got=%x", fastLock, derivedLock)
 		}
 	}
+}
+
+func BenchmarkFastCrypto(b *testing.B) {
+	priv, _ := dsecp.GeneratePrivateKey()
+	peer, _ := dsecp.GeneratePrivateKey()
+	pubHex := hex.EncodeToString(priv.PubKey().SerializeCompressed())
+	peerHex := hex.EncodeToString(peer.PubKey().SerializeCompressed())
+	digest := DSHA256([]byte("bench-digest"))
+	sigBytes, _ := FastSignWithPriv(priv, digest)
+	sigHex := hex.EncodeToString(sigBytes)
+	sigParsed, _ := decdsa.ParseDERSignature(sigBytes)
+	// Warm up fixed table
+	_ = FastVerifyStrictHex(pubHex, sigHex, digest)
+	_ = FastVerifyStrictHex(pubHex, sigHex, digest)
+
+	b.Run("dcrd_Sign", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = decdsa.Sign(priv, digest).Serialize()
+		}
+	})
+	b.Run("FastSignWithPriv", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_, _ = FastSignWithPriv(priv, digest)
+		}
+	})
+	b.Run("dcrd_Verify", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = sigParsed.Verify(digest, priv.PubKey())
+		}
+	})
+	b.Run("FastVerifyStrictHex_Hot", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = FastVerifyStrictHex(pubHex, sigHex, digest)
+		}
+	})
+	b.Run("FastDeriveBRC29", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_, _ = FastDeriveBRC29LockingScript(priv, peerHex, "pre", "suf")
+		}
+	})
 }

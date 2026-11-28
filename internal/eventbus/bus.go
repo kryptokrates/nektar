@@ -12,6 +12,9 @@ import (
 // ErrSubscriberCapReached is returned when SubscribeWithCap exceeds the configured subscriber ceiling.
 var ErrSubscriberCapReached = errors.New("eventbus: subscriber limit reached")
 
+// ErrEventGap is returned by WaitFor when a burst overflows the subscription buffer and events may have been missed.
+var ErrEventGap = errors.New("eventbus: slow consumer missed events (gap detected)")
+
 // Event is a monotonically sequenced, topic-keyed in-process notification.
 type Event struct {
 	Seq       int64  `json:"seq"`
@@ -204,7 +207,8 @@ func (b *Bus) Publish(topic, kind string, payload any) Event {
 	return ev
 }
 
-// WaitFor blocks without polling until an event on topic satisfies pred or ctx is canceled.
+// WaitFor blocks without polling until an event on topic satisfies pred, a slow-consumer buffer
+// overflow occurs (returning ErrEventGap so callers can reconcile durable state), or ctx is canceled.
 func (b *Bus) WaitFor(ctx context.Context, topic string, pred func(Event) bool) (Event, error) {
 	if b == nil {
 		return Event{}, errors.New("eventbus: nil bus")
@@ -212,9 +216,16 @@ func (b *Bus) WaitFor(ctx context.Context, topic string, pred func(Event) bool) 
 	sub := b.Subscribe([]string{topic}, 64)
 	defer sub.Close()
 	for {
+		if sub.TakeGap() {
+			return Event{}, ErrEventGap
+		}
 		select {
 		case <-ctx.Done():
 			return Event{}, ctx.Err()
+		case <-sub.Wake():
+			if sub.TakeGap() {
+				return Event{}, ErrEventGap
+			}
 		case ev, ok := <-sub.Events():
 			if !ok {
 				return Event{}, context.Canceled

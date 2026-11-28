@@ -6,7 +6,46 @@ import (
 	"time"
 )
 
-// SaveDeal persists a DealRecord.
+// ErrStaleDealRevision is returned when a fenced deal write loses a race against a higher-revision
+// or terminal ('settled') persisted deal row (DDIA Ch. 9 fencing token).
+var ErrStaleDealRevision = errors.New("store: stale deal revision or terminal status regression")
+
+const upsertDealFencedSQL = `
+	INSERT INTO deals
+	(deal_id, role, status, shard, chosen_offer_id, want_json, chosen_offer_json, match_audit_json, deal_receipt_json, payment_txid, payment_beef,
+	 payment_output_index, payment_deriv_prefix, payment_deriv_suffix, payment_sender_key,
+	 claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, confirm_height, error, revision, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(deal_id) DO UPDATE SET
+		role = excluded.role,
+		status = excluded.status,
+		shard = excluded.shard,
+		chosen_offer_id = excluded.chosen_offer_id,
+		want_json = excluded.want_json,
+		chosen_offer_json = excluded.chosen_offer_json,
+		match_audit_json = excluded.match_audit_json,
+		deal_receipt_json = excluded.deal_receipt_json,
+		payment_txid = excluded.payment_txid,
+		payment_beef = excluded.payment_beef,
+		payment_output_index = excluded.payment_output_index,
+		payment_deriv_prefix = excluded.payment_deriv_prefix,
+		payment_deriv_suffix = excluded.payment_deriv_suffix,
+		payment_sender_key = excluded.payment_sender_key,
+		claim_key_hex = excluded.claim_key_hex,
+		chirp_url = excluded.chirp_url,
+		delivered_text = excluded.delivered_text,
+		counterparty_pub = excluded.counterparty_pub,
+		price_sats = excluded.price_sats,
+		is_hub_seller = excluded.is_hub_seller,
+		first_offer_ms = excluded.first_offer_ms,
+		confirm_height = excluded.confirm_height,
+		error = excluded.error,
+		revision = MAX(deals.revision, excluded.revision) + 1,
+		updated_at = excluded.updated_at
+	WHERE (? = 0 OR excluded.revision >= deals.revision)
+	  AND NOT (deals.status = 'settled' AND excluded.status NOT IN ('settled', 'reorged', 'payment_pending'))`
+
+// SaveDeal persists a DealRecord with monotonic revision fencing and terminal 'settled' protection.
 func (d *DB) SaveDeal(rec DealRecord) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -15,23 +54,27 @@ func (d *DB) SaveDeal(rec DealRecord) error {
 		rec.CreatedAt = now
 	}
 	rec.UpdatedAt = now
-	if rec.Revision == 0 {
+	fenced := 0
+	if rec.Revision > 0 {
+		fenced = 1
+	} else {
 		rec.Revision = 1
 	}
 	if rec.ChosenOfferID == "" && len(rec.ChosenOfferJSON) > 0 {
 		rec.ChosenOfferID = extractOfferIDJSON(rec.ChosenOfferJSON)
 	}
-	_, err := d.sql.Exec(`
-		INSERT OR REPLACE INTO deals
-		(deal_id, role, status, shard, chosen_offer_id, want_json, chosen_offer_json, match_audit_json, deal_receipt_json, payment_txid, payment_beef,
-		 payment_output_index, payment_deriv_prefix, payment_deriv_suffix, payment_sender_key,
-		 claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, confirm_height, error, revision, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	res, err := d.sql.Exec(upsertDealFencedSQL,
 		rec.DealID, rec.Role, rec.Status, rec.Shard, rec.ChosenOfferID, rec.WantJSON, rec.ChosenOfferJSON, rec.MatchAuditJSON, rec.DealReceiptJSON, rec.PaymentTxID, rec.PaymentBEEF,
 		rec.PaymentOutputIndex, rec.PaymentDerivPrefix, rec.PaymentDerivSuffix, rec.PaymentSenderKey,
 		rec.ClaimKeyHex, rec.ChirpURL, rec.DeliveredText, rec.CounterpartyPub, rec.PriceSats,
-		boolToInt(rec.IsHubSeller), rec.FirstOfferMs, rec.ConfirmHeight, rec.Error, rec.Revision, rec.CreatedAt, rec.UpdatedAt)
-	return err
+		boolToInt(rec.IsHubSeller), rec.FirstOfferMs, rec.ConfirmHeight, rec.Error, rec.Revision, rec.CreatedAt, rec.UpdatedAt, fenced)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrStaleDealRevision
+	}
+	return nil
 }
 
 // UpdateDealCAS performs an optimistic compare-and-swap update on a DealRecord,
@@ -66,7 +109,8 @@ func (d *DB) UpdateDealCAS(rec DealRecord) (bool, error) {
 }
 
 // SaveDealWithObligations atomically persists a DealRecord alongside zero or more commercial
-// obligations inside a single SQLite transaction so crashes cannot strand unrecorded obligations.
+// obligations inside a single SQLite transaction with monotonic revision fencing so crashes or
+// stale retries cannot strand unrecorded obligations or regress higher-revision deals.
 func (d *DB) SaveDealWithObligations(rec DealRecord, obs ...ObligationRecord) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -80,23 +124,25 @@ func (d *DB) SaveDealWithObligations(rec DealRecord, obs ...ObligationRecord) er
 		rec.CreatedAt = now
 	}
 	rec.UpdatedAt = now
-	if rec.Revision == 0 {
+	fenced := 0
+	if rec.Revision > 0 {
+		fenced = 1
+	} else {
 		rec.Revision = 1
 	}
 	if rec.ChosenOfferID == "" && len(rec.ChosenOfferJSON) > 0 {
 		rec.ChosenOfferID = extractOfferIDJSON(rec.ChosenOfferJSON)
 	}
-	if _, err := tx.Exec(`
-		INSERT OR REPLACE INTO deals
-		(deal_id, role, status, shard, chosen_offer_id, want_json, chosen_offer_json, match_audit_json, deal_receipt_json, payment_txid, payment_beef,
-		 payment_output_index, payment_deriv_prefix, payment_deriv_suffix, payment_sender_key,
-		 claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, confirm_height, error, revision, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	res, err := tx.Exec(upsertDealFencedSQL,
 		rec.DealID, rec.Role, rec.Status, rec.Shard, rec.ChosenOfferID, rec.WantJSON, rec.ChosenOfferJSON, rec.MatchAuditJSON, rec.DealReceiptJSON, rec.PaymentTxID, rec.PaymentBEEF,
 		rec.PaymentOutputIndex, rec.PaymentDerivPrefix, rec.PaymentDerivSuffix, rec.PaymentSenderKey,
 		rec.ClaimKeyHex, rec.ChirpURL, rec.DeliveredText, rec.CounterpartyPub, rec.PriceSats,
-		boolToInt(rec.IsHubSeller), rec.FirstOfferMs, rec.ConfirmHeight, rec.Error, rec.Revision, rec.CreatedAt, rec.UpdatedAt); err != nil {
+		boolToInt(rec.IsHubSeller), rec.FirstOfferMs, rec.ConfirmHeight, rec.Error, rec.Revision, rec.CreatedAt, rec.UpdatedAt, fenced)
+	if err != nil {
 		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrStaleDealRevision
 	}
 	for _, ob := range obs {
 		if err := upsertObligationTx(tx, ob, now); err != nil {
@@ -107,7 +153,7 @@ func (d *DB) SaveDealWithObligations(rec DealRecord, obs ...ObligationRecord) er
 }
 
 // SettleDealAndFulfillObligations atomically updates a settled DealRecord, fulfills completed obligations,
-// and upserts any follow-up obligations in ONE SQLite transaction.
+// and upserts any follow-up obligations in ONE SQLite transaction with monotonic revision fencing.
 func (d *DB) SettleDealAndFulfillObligations(rec DealRecord, fulfillIDs []string, upsertObs []ObligationRecord) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -121,23 +167,25 @@ func (d *DB) SettleDealAndFulfillObligations(rec DealRecord, fulfillIDs []string
 		rec.CreatedAt = now
 	}
 	rec.UpdatedAt = now
-	if rec.Revision == 0 {
+	fenced := 0
+	if rec.Revision > 0 {
+		fenced = 1
+	} else {
 		rec.Revision = 1
 	}
 	if rec.ChosenOfferID == "" && len(rec.ChosenOfferJSON) > 0 {
 		rec.ChosenOfferID = extractOfferIDJSON(rec.ChosenOfferJSON)
 	}
-	if _, err := tx.Exec(`
-		INSERT OR REPLACE INTO deals
-		(deal_id, role, status, shard, chosen_offer_id, want_json, chosen_offer_json, match_audit_json, deal_receipt_json, payment_txid, payment_beef,
-		 payment_output_index, payment_deriv_prefix, payment_deriv_suffix, payment_sender_key,
-		 claim_key_hex, chirp_url, delivered_text, counterparty_pub, price_sats, is_hub_seller, first_offer_ms, confirm_height, error, revision, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	res, err := tx.Exec(upsertDealFencedSQL,
 		rec.DealID, rec.Role, rec.Status, rec.Shard, rec.ChosenOfferID, rec.WantJSON, rec.ChosenOfferJSON, rec.MatchAuditJSON, rec.DealReceiptJSON, rec.PaymentTxID, rec.PaymentBEEF,
 		rec.PaymentOutputIndex, rec.PaymentDerivPrefix, rec.PaymentDerivSuffix, rec.PaymentSenderKey,
 		rec.ClaimKeyHex, rec.ChirpURL, rec.DeliveredText, rec.CounterpartyPub, rec.PriceSats,
-		boolToInt(rec.IsHubSeller), rec.FirstOfferMs, rec.ConfirmHeight, rec.Error, rec.Revision, rec.CreatedAt, rec.UpdatedAt); err != nil {
+		boolToInt(rec.IsHubSeller), rec.FirstOfferMs, rec.ConfirmHeight, rec.Error, rec.Revision, rec.CreatedAt, rec.UpdatedAt, fenced)
+	if err != nil {
 		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrStaleDealRevision
 	}
 	for _, id := range fulfillIDs {
 		if id == "" {
@@ -533,4 +581,97 @@ func (d *DB) RecordReputation(sellerPub string, settled bool, sats uint64) error
 			last_settled_at = CASE WHEN excluded.settled_deals > 0 THEN excluded.last_settled_at ELSE last_settled_at END`,
 		sellerPub, sInc, fInc, sats, now)
 	return err
+}
+
+// ProjectSettledDealsBatch persists a batch of settled deals and their aggregated seller reputation
+// counters inside ONE single SQLite transaction (eliminating per-deal autocommit NTFS WAL stalls).
+func (d *DB) ProjectSettledDealsBatch(recs []DealRecord) error {
+	if d == nil || len(recs) == 0 {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	dealStmt, err := tx.Prepare(upsertDealFencedSQL)
+	if err != nil {
+		return err
+	}
+	defer dealStmt.Close()
+	checkSettledStmt, err := tx.Prepare(`SELECT status FROM deals WHERE deal_id = ?`)
+	if err != nil {
+		return err
+	}
+	defer checkSettledStmt.Close()
+
+	now := time.Now().Unix()
+	type repAgg struct {
+		count int64
+		sats  uint64
+	}
+	reps := make(map[string]repAgg, 8)
+	for _, rec := range recs {
+		if rec.DealID == "" {
+			continue
+		}
+		var prevStatus string
+		alreadySettled := checkSettledStmt.QueryRow(rec.DealID).Scan(&prevStatus) == nil && prevStatus == "settled"
+		if rec.CreatedAt == 0 {
+			rec.CreatedAt = now
+		}
+		rec.UpdatedAt = now
+		fenced := 0
+		if rec.Revision > 0 {
+			fenced = 1
+		} else {
+			rec.Revision = 1
+		}
+		if rec.ChosenOfferID == "" && len(rec.ChosenOfferJSON) > 0 {
+			rec.ChosenOfferID = extractOfferIDJSON(rec.ChosenOfferJSON)
+		}
+		res, err := dealStmt.Exec(
+			rec.DealID, rec.Role, rec.Status, rec.Shard, rec.ChosenOfferID, rec.WantJSON, rec.ChosenOfferJSON, rec.MatchAuditJSON, rec.DealReceiptJSON, rec.PaymentTxID, rec.PaymentBEEF,
+			rec.PaymentOutputIndex, rec.PaymentDerivPrefix, rec.PaymentDerivSuffix, rec.PaymentSenderKey,
+			rec.ClaimKeyHex, rec.ChirpURL, rec.DeliveredText, rec.CounterpartyPub, rec.PriceSats,
+			boolToInt(rec.IsHubSeller), rec.FirstOfferMs, rec.ConfirmHeight, rec.Error, rec.Revision, rec.CreatedAt, rec.UpdatedAt, fenced)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n > 0 && !alreadySettled && rec.CounterpartyPub != "" && rec.PriceSats > 0 {
+			a := reps[rec.CounterpartyPub]
+			a.count++
+			a.sats += rec.PriceSats
+			reps[rec.CounterpartyPub] = a
+		}
+	}
+	if len(reps) > 0 {
+		repStmt, err := tx.Prepare(`
+			INSERT INTO reputation (seller_pub, settled_deals, failed_deals, total_sats, last_settled_at)
+			VALUES (?, ?, 0, ?, ?)
+			ON CONFLICT(seller_pub) DO UPDATE SET
+				settled_deals = settled_deals + excluded.settled_deals,
+				total_sats    = total_sats    + excluded.total_sats,
+				last_settled_at = excluded.last_settled_at`)
+		if err != nil {
+			return err
+		}
+		defer repStmt.Close()
+		for pub, a := range reps {
+			if _, err := repStmt.Exec(pub, a.count, a.sats, now); err != nil {
+				return err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	tx = nil
+	return nil
 }

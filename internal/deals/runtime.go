@@ -228,7 +228,8 @@ func (r *Runtime) Close() error {
 	return nil
 }
 
-// CreateOrAttach starts a workflow keyed by instanceID, or returns the active running instance if already active.
+// CreateOrAttach starts a workflow keyed by instanceID, or attaches to the existing instance ONLY
+// when instanceID already exists (propagating real SQLite/storage errors fail-closed).
 func (r *Runtime) CreateOrAttach(ctx context.Context, instanceID string, wf workflow.Workflow, args ...any) (*workflow.Instance, error) {
 	if r == nil || !r.IsRunning() {
 		return nil, errors.New("deals: durable workflow runtime is not running")
@@ -237,8 +238,13 @@ func (r *Runtime) CreateOrAttach(ctx context.Context, instanceID string, wf work
 		InstanceID: instanceID,
 	}, wf, args...)
 	if err != nil {
-		if existing, fErr := r.findLatestInstance(ctx, instanceID); fErr == nil && existing != nil {
-			return existing, nil
+		isAlready := errors.Is(err, backend.ErrInstanceAlreadyExists) ||
+			strings.Contains(strings.ToLower(err.Error()), "already exists") ||
+			strings.Contains(strings.ToLower(err.Error()), "unique constraint")
+		if isAlready {
+			if existing, fErr := r.findLatestInstance(ctx, instanceID); fErr == nil && existing != nil {
+				return existing, nil
+			}
 		}
 		return nil, err
 	}

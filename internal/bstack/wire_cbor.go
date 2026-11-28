@@ -107,6 +107,12 @@ func (w WantAd) EncodeCanonicalCBOR() ([]byte, error) {
 	if w.PricingMode != "" {
 		m = append(m, cbor.Pair{Key: uint64(12), Val: w.PricingMode})
 	}
+	var err error
+	m, err = core.AppendExtraPairs(m, wantKnownKeys, w.Extra)
+	if err != nil {
+		return nil, err
+	}
+	m = core.MaybeAppendGrease(m, core.WireGreaseEnabled())
 	return core.EncodeCBOR(m)
 }
 
@@ -120,6 +126,7 @@ func decodeWantCBOR(raw []byte) (WantAd, []cbor.Pair, error) {
 		return WantAd{}, nil, fmt.Errorf("bstack: want map: %w", err)
 	}
 	var w WantAd
+	w.Extra = extra
 	if w.WantID, err = core.CBORText(m, 1); err != nil {
 		return WantAd{}, nil, err
 	}
@@ -237,7 +244,19 @@ func (o OfferAd) EncodeCanonicalCBOR() ([]byte, error) {
 	addBool(33, o.IsHub)
 	addBool(34, o.Direct)
 	addStr(37, o.PayloadFormat)
+	var err error
+	m, err = core.AppendExtraPairs(m, offerKnownKeys, o.Extra)
+	if err != nil {
+		return nil, err
+	}
+	m = core.MaybeAppendGrease(m, core.WireGreaseEnabled())
 	return core.EncodeCBOR(m)
+}
+
+// DecodeOfferAdCBOR decodes an OfferAd from its canonical CBOR representation.
+func DecodeOfferAdCBOR(raw []byte) (OfferAd, error) {
+	off, _, err := decodeOfferCBOR(raw)
+	return off, err
 }
 
 func decodeOfferCBOR(raw []byte) (OfferAd, []cbor.Pair, error) {
@@ -250,6 +269,7 @@ func decodeOfferCBOR(raw []byte) (OfferAd, []cbor.Pair, error) {
 		return OfferAd{}, nil, fmt.Errorf("bstack: offer map: %w", err)
 	}
 	var o OfferAd
+	o.Extra = extra
 	if o.OfferID, err = core.CBORText(m, 1); err != nil {
 		return OfferAd{}, nil, err
 	}
@@ -437,15 +457,21 @@ func packRefToCBOR(pk PackRef) cbor.Map {
 	if pk.FeedEndpoint != "" {
 		m = append(m, cbor.Pair{Key: uint64(20), Val: pk.FeedEndpoint})
 	}
+	if len(pk.Extra) > 0 {
+		if m2, err := core.AppendExtraPairs(m, packRefKnownKeys, pk.Extra); err == nil {
+			m = m2
+		}
+	}
 	return m
 }
 
 func decodePackRefCBOR(v cbor.Value) (PackRef, error) {
-	m, _, err := core.SplitCBORMap(v, packRefKnownKeys)
+	m, extra, err := core.SplitCBORMap(v, packRefKnownKeys)
 	if err != nil {
 		return PackRef{}, err
 	}
 	var pk PackRef
+	pk.Extra = extra
 	if pk.Shard, err = core.CBORText(m, 1); err != nil {
 		return PackRef{}, err
 	}
@@ -585,8 +611,21 @@ func (a AnnounceAd) EncodeCanonicalCBOR() ([]byte, error) {
 		if a.HubFees.EgressMinTopupSats > 0 {
 			fm = append(fm, cbor.Pair{Key: uint64(6), Val: a.HubFees.EgressMinTopupSats})
 		}
+		if len(a.HubFees.Extra) > 0 {
+			var fErr error
+			fm, fErr = core.AppendExtraPairs(fm, hubFeesKnownKeys, a.HubFees.Extra)
+			if fErr != nil {
+				return nil, fErr
+			}
+		}
 		m = append(m, cbor.Pair{Key: uint64(17), Val: fm})
 	}
+	var err error
+	m, err = core.AppendExtraPairs(m, announceKnownKeys, a.Extra)
+	if err != nil {
+		return nil, err
+	}
+	m = core.MaybeAppendGrease(m, core.WireGreaseEnabled())
 	return core.EncodeCBOR(m)
 }
 
@@ -600,6 +639,7 @@ func decodeAnnounceCBOR(raw []byte) (AnnounceAd, []cbor.Pair, error) {
 		return AnnounceAd{}, nil, fmt.Errorf("bstack: announce map: %w", err)
 	}
 	var a AnnounceAd
+	a.Extra = extra
 	if a.Pub, err = core.CBORText(m, 1); err != nil {
 		return AnnounceAd{}, nil, err
 	}
@@ -658,11 +698,11 @@ func decodeAnnounceCBOR(raw []byte) (AnnounceAd, []cbor.Pair, error) {
 		return AnnounceAd{}, nil, err
 	}
 	if fv, ok := m[17]; ok {
-		fm, _, fErr := core.SplitCBORMap(fv, hubFeesKnownKeys)
+		fm, fExtra, fErr := core.SplitCBORMap(fv, hubFeesKnownKeys)
 		if fErr != nil {
 			return AnnounceAd{}, nil, fmt.Errorf("bstack: hubFees: %w", fErr)
 		}
-		hf := &HubFeeAdvert{}
+		hf := &HubFeeAdvert{Extra: fExtra}
 		if hf.SubmitWantSats, err = core.CBORUint(fm, 1); err != nil {
 			return AnnounceAd{}, nil, err
 		}
@@ -714,6 +754,12 @@ func (a AttestationAd) EncodeCanonicalCBOR() ([]byte, error) {
 	if a.OntologyID != "" {
 		m = append(m, cbor.Pair{Key: uint64(7), Val: a.OntologyID})
 	}
+	var err error
+	m, err = core.AppendExtraPairs(m, attestationKnownKeys, a.Extra)
+	if err != nil {
+		return nil, err
+	}
+	m = core.MaybeAppendGrease(m, core.WireGreaseEnabled())
 	return core.EncodeCBOR(m)
 }
 
@@ -727,6 +773,7 @@ func decodeAttestationCBOR(raw []byte) (AttestationAd, []cbor.Pair, error) {
 		return AttestationAd{}, nil, fmt.Errorf("bstack: attestation map: %w", err)
 	}
 	var a AttestationAd
+	a.Extra = extra
 	if a.AttestHash, err = core.CBORText(m, 1); err != nil {
 		return AttestationAd{}, nil, err
 	}
@@ -770,38 +817,43 @@ func decodeAttestationCBOR(raw []byte) (AttestationAd, []cbor.Pair, error) {
 
 var signedEnvelopeKnownKeys = core.KnownKeyRange(1, 2)
 
-func encodeSignedEnvelope(rawAd []byte, sigHex string) ([]byte, error) {
+func encodeSignedEnvelope(rawAd []byte, sigHex string, extra []cbor.Pair) ([]byte, error) {
 	sigBytes, err := hex.DecodeString(strings.TrimSpace(sigHex))
 	if err != nil {
 		return nil, fmt.Errorf("bstack: invalid signature hex: %w", err)
 	}
-	return core.EncodeCBOR(cbor.Map{
+	m := cbor.Map{
 		{Key: uint64(1), Val: rawAd},
 		{Key: uint64(2), Val: sigBytes},
-	})
+	}
+	m, err = core.AppendExtraPairs(m, signedEnvelopeKnownKeys, extra)
+	if err != nil {
+		return nil, err
+	}
+	return core.EncodeCBOR(m)
 }
 
-func decodeSignedEnvelope(body []byte) (rawAd []byte, sigHex string, err error) {
+func decodeSignedEnvelope(body []byte) (rawAd []byte, sigHex string, extra []cbor.Pair, err error) {
 	v, err := core.DecodeCBOR(body)
 	if err != nil {
-		return nil, "", fmt.Errorf("bstack: decode signed envelope: %w", err)
+		return nil, "", nil, fmt.Errorf("bstack: decode signed envelope: %w", err)
 	}
-	m, _, err := core.SplitCBORMap(v, signedEnvelopeKnownKeys)
+	m, extra, err := core.SplitCBORMap(v, signedEnvelopeKnownKeys)
 	if err != nil {
-		return nil, "", fmt.Errorf("bstack: signed envelope map: %w", err)
+		return nil, "", nil, fmt.Errorf("bstack: signed envelope map: %w", err)
 	}
 	rawAd, err = core.CBORBytes(m, 1)
 	if err != nil || len(rawAd) == 0 {
 		if err == nil {
 			err = errors.New("bstack: signed envelope missing payload bytes")
 		}
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	sigBytes, err := core.CBORBytes(m, 2)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
-	return rawAd, hex.EncodeToString(sigBytes), nil
+	return rawAd, hex.EncodeToString(sigBytes), extra, nil
 }
 
 // NewWantPayload encodes a SignedWant into a pure RFC 8949 CDE CBOR MarketPayload.
@@ -814,16 +866,16 @@ func NewWantPayload(sw SignedWant) (MarketPayload, error) {
 			return MarketPayload{}, err
 		}
 	}
-	body, err := encodeSignedEnvelope(raw, sw.Sig)
+	body, err := encodeSignedEnvelope(raw, sw.Sig, sw.Extra)
 	if err != nil {
 		return MarketPayload{}, err
 	}
-	return MarketPayload{Kind: KindWant, Body: body}, nil
+	return MarketPayload{Kind: KindWant, KindNum: 1, Body: body}, nil
 }
 
-// DecodeWantPayload decodes a pure CBOR SignedWant body (preserving RawCBOR for exact signature verification).
+// DecodeWantPayload decodes a pure CBOR SignedWant body (preserving RawCBOR & odd Extra keys).
 func DecodeWantPayload(body []byte) (SignedWant, error) {
-	rawAd, sigHex, err := decodeSignedEnvelope(body)
+	rawAd, sigHex, envExtra, err := decodeSignedEnvelope(body)
 	if err != nil {
 		return SignedWant{}, err
 	}
@@ -831,7 +883,7 @@ func DecodeWantPayload(body []byte) (SignedWant, error) {
 	if err != nil {
 		return SignedWant{}, err
 	}
-	return SignedWant{Want: w, Sig: sigHex, RawCBOR: rawAd}, nil
+	return SignedWant{Want: w, Sig: sigHex, RawCBOR: rawAd, Extra: envExtra}, nil
 }
 
 // NewOfferPayload encodes a SignedOffer into a pure RFC 8949 CDE CBOR MarketPayload.
@@ -844,16 +896,16 @@ func NewOfferPayload(so SignedOffer) (MarketPayload, error) {
 			return MarketPayload{}, err
 		}
 	}
-	body, err := encodeSignedEnvelope(raw, so.Sig)
+	body, err := encodeSignedEnvelope(raw, so.Sig, so.Extra)
 	if err != nil {
 		return MarketPayload{}, err
 	}
-	return MarketPayload{Kind: KindOffer, Body: body}, nil
+	return MarketPayload{Kind: KindOffer, KindNum: 2, Body: body}, nil
 }
 
-// DecodeOfferPayload decodes a pure CBOR SignedOffer body.
+// DecodeOfferPayload decodes a pure CBOR SignedOffer body (preserving RawCBOR & odd Extra keys).
 func DecodeOfferPayload(body []byte) (SignedOffer, error) {
-	rawAd, sigHex, err := decodeSignedEnvelope(body)
+	rawAd, sigHex, envExtra, err := decodeSignedEnvelope(body)
 	if err != nil {
 		return SignedOffer{}, err
 	}
@@ -861,7 +913,7 @@ func DecodeOfferPayload(body []byte) (SignedOffer, error) {
 	if err != nil {
 		return SignedOffer{}, err
 	}
-	return SignedOffer{Offer: o, Sig: sigHex, RawCBOR: rawAd}, nil
+	return SignedOffer{Offer: o, Sig: sigHex, RawCBOR: rawAd, Extra: envExtra}, nil
 }
 
 // NewAnnouncePayload encodes a SignedAnnounce into a pure RFC 8949 CDE CBOR MarketPayload.
@@ -874,16 +926,16 @@ func NewAnnouncePayload(sa SignedAnnounce) (MarketPayload, error) {
 			return MarketPayload{}, err
 		}
 	}
-	body, err := encodeSignedEnvelope(raw, sa.Sig)
+	body, err := encodeSignedEnvelope(raw, sa.Sig, sa.Extra)
 	if err != nil {
 		return MarketPayload{}, err
 	}
-	return MarketPayload{Kind: KindAnnounce, Body: body}, nil
+	return MarketPayload{Kind: KindAnnounce, KindNum: 3, Body: body}, nil
 }
 
-// DecodeAnnouncePayload decodes a pure CBOR SignedAnnounce body.
+// DecodeAnnouncePayload decodes a pure CBOR SignedAnnounce body (preserving RawCBOR & odd Extra keys).
 func DecodeAnnouncePayload(body []byte) (SignedAnnounce, error) {
-	rawAd, sigHex, err := decodeSignedEnvelope(body)
+	rawAd, sigHex, envExtra, err := decodeSignedEnvelope(body)
 	if err != nil {
 		return SignedAnnounce{}, err
 	}
@@ -891,7 +943,7 @@ func DecodeAnnouncePayload(body []byte) (SignedAnnounce, error) {
 	if err != nil {
 		return SignedAnnounce{}, err
 	}
-	return SignedAnnounce{Announce: a, Sig: sigHex, RawCBOR: rawAd}, nil
+	return SignedAnnounce{Announce: a, Sig: sigHex, RawCBOR: rawAd, Extra: envExtra}, nil
 }
 
 // NewAttestationPayload encodes a SignedAttestation into a pure RFC 8949 CDE CBOR MarketPayload.
@@ -904,16 +956,16 @@ func NewAttestationPayload(sat SignedAttestation) (MarketPayload, error) {
 			return MarketPayload{}, err
 		}
 	}
-	body, err := encodeSignedEnvelope(raw, sat.Sig)
+	body, err := encodeSignedEnvelope(raw, sat.Sig, sat.Extra)
 	if err != nil {
 		return MarketPayload{}, err
 	}
-	return MarketPayload{Kind: KindAttestation, Body: body}, nil
+	return MarketPayload{Kind: KindAttestation, KindNum: 4, Body: body}, nil
 }
 
-// DecodeAttestationPayload decodes a pure CBOR SignedAttestation body.
+// DecodeAttestationPayload decodes a pure CBOR SignedAttestation body (preserving RawCBOR & odd Extra keys).
 func DecodeAttestationPayload(body []byte) (SignedAttestation, error) {
-	rawAd, sigHex, err := decodeSignedEnvelope(body)
+	rawAd, sigHex, envExtra, err := decodeSignedEnvelope(body)
 	if err != nil {
 		return SignedAttestation{}, err
 	}
@@ -921,5 +973,5 @@ func DecodeAttestationPayload(body []byte) (SignedAttestation, error) {
 	if err != nil {
 		return SignedAttestation{}, err
 	}
-	return SignedAttestation{Attestation: att, Sig: sigHex, RawCBOR: rawAd}, nil
+	return SignedAttestation{Attestation: att, Sig: sigHex, RawCBOR: rawAd, Extra: envExtra}, nil
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/kryptokrates/nektar/internal/core"
 	"github.com/kryptokrates/nektar/internal/discovery"
 	"github.com/kryptokrates/nektar/internal/hub"
+	"github.com/kryptokrates/nektar/internal/market"
 )
 
 const hubUsage = `nektar hub — 1-command zero-Docker LightBSV Hub deployment & standalone overlay server
@@ -43,7 +44,8 @@ Options for 'up':
   --mainnet                Shorthand for --network main (requires --confirm I_UNDERSTAND)
   --confirm I_UNDERSTAND   Required acknowledgement for mainnet
   --hub-role <leaf|spine>  Spine-and-Leaf topology role (default: leaf)
-  --fee-preset <preset>    Monetization preset (free|lightbsv_egress|hybrid; default: hybrid on main, free on testnet)
+  --fee-preset <preset>    Monetization preset (free|spine_wholesale|lightbsv_egress|hybrid)
+  --seed-bounties          Explicitly fund Hub-sponsored bounties out of Hub wallet (default: false)
   --dir <path>             Hub directory (default: ~/.nektar-hub)
   --dry                    Write .env + systemd unit without starting the Hub process
   --no-join                Skip auto-joining local running agent to this new hub
@@ -74,9 +76,10 @@ func cmdHubRun(args []string) error {
 	netName := fs.String("network", envOr("NEKTAR_NETWORK", "testnet"), "Network name (memory|regtest|testnet|main)")
 	dataDir := fs.String("data-dir", "", "Data directory for hub.sqlite")
 	upstreamFlag := fs.String("upstream-spines", os.Getenv("NEKTAR_UPSTREAM_SPINES"), "Comma-separated Spine Hub URLs for Leaf BRC-149 Object Plane relay & upstream submission")
-	withLiquidity := fs.Bool("liquidity", true, "Arm Hub starter liquidity, curated shards & verified bounties")
+	withLiquidity := fs.Bool("liquidity", true, "Seed curated Hub starter shards & packs")
+	seedBounties := fs.Bool("seed-bounties", os.Getenv("NEKTAR_HUB_SEED_BOUNTIES") == "1", "Explicitly fund Hub-sponsored bounties out of Hub wallet (default: false)")
 	hubRoleFlag := fs.String("hub-role", os.Getenv("NEKTAR_HUB_ROLE"), "Hub topology role (leaf|spine)")
-	feePresetFlag := fs.String("fee-preset", os.Getenv("NEKTAR_HUB_FEE_PRESET"), "Hub fee preset (free|lightbsv_egress|hybrid)")
+	feePresetFlag := fs.String("fee-preset", os.Getenv("NEKTAR_HUB_FEE_PRESET"), "Hub fee preset (free|spine_wholesale|lightbsv_egress|hybrid)")
 	wantFeeFlag := fs.Uint64("want-fee-sats", 0, "BRC-105 fee in satoshis for WantAd POST /submit")
 	offerFeeFlag := fs.Uint64("offer-fee-sats", 0, "BRC-105 fee in satoshis for OfferAd POST /submit")
 	announceFeeFlag := fs.Uint64("announce-fee-sats", 0, "BRC-105 fee in satoshis for AnnounceAd POST /submit")
@@ -85,6 +88,7 @@ func cmdHubRun(args []string) error {
 	lookupPricesFlag := fs.String("lookup-prices", os.Getenv("NEKTAR_HUB_LOOKUP_PRICES"), "Priced lookup classes (e.g. history=5,export=20)")
 	spinePeersFlag := fs.String("spine-peer-pubs", os.Getenv("NEKTAR_SPINE_PEER_PUBS"), "Comma-separated bilateral Spine peer pubkeys (settlement-free peering)")
 	lanesFlag := fs.String("lanes", os.Getenv("NEKTAR_HUB_LANES"), "Optional comma-separated hex nibble lanes to mount (e.g. 0,1,2,3; default all 0..f)")
+	fabricUDPFlag := fs.String("brc223-udp", os.Getenv("NEKTAR_HUB_BRC223_UDP"), "UDP listen address for BRC-223 topic interest datagrams (e.g. :18423)")
 	_ = fs.Parse(args)
 
 	visited := make(map[string]bool)
@@ -151,8 +155,15 @@ func cmdHubRun(args []string) error {
 		defer releaseLock()
 	}
 
+	var upstreamSpines []string
+	for _, s := range strings.Split(*upstreamFlag, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			upstreamSpines = append(upstreamSpines, s)
+		}
+	}
+
 	var rt *runtimeBundle
-	if *withLiquidity || feeSched.HasAnyFees() {
+	if *withLiquidity || *seedBounties || feeSched.HasAnyFees() || len(upstreamSpines) > 0 {
 		var rErr error
 		rt, rErr = openRuntime(ctx, *netName, *dataDir, envOr("NEKTAR_HUB_PORT", "18421"))
 		if rErr != nil {
@@ -166,30 +177,48 @@ func cmdHubRun(args []string) error {
 			rt.mem.Chain().StartBackground(ctx)
 			stopRefresher := startAnchorProofRefresher(ctx, rt.mem)
 			defer stopRefresher()
+			if (*withLiquidity || *seedBounties) && rt.mem.DB() != nil && rt.mkt != nil && rt.mkt.Policy() != nil {
+				hasPol := false
+				if pols, pErr := rt.mem.DB().ListOperatorPolicies(); pErr == nil {
+					for _, p := range pols {
+						if p.Active {
+							hasPol = true
+							break
+						}
+					}
+				}
+				if !hasPol {
+					if prof, ok := market.PolicyProfileDefaults("standard"); ok {
+						ai := prof.AIMatching
+						zc := prof.ZeroConfMax
+						_, _ = market.ApprovePolicyCustom(rt.mem.DB(), rt.mkt.Policy(), "seller", nil, &market.PolicyLimitsOverride{
+							MaxPerDeal:  prof.MaxPerDeal,
+							MaxPerDay:   prof.MaxPerDay,
+							ZeroConfMax: &zc,
+						}, "hub-seller", &ai)
+					}
+				}
+			}
 		}
 	}
 
-	var upstreamSpines []string
-	for _, s := range strings.Split(*upstreamFlag, ",") {
-		if s = strings.TrimSpace(s); s != "" {
-			upstreamSpines = append(upstreamSpines, s)
-		}
-	}
-
+	isLiveNet := *netName == "main" || *netName == "testnet"
 	hCfg := hub.Config{
-		Network:        *netName,
-		DBPath:         dbPath,
-		Lanes:          []string{*lanesFlag},
-		EnableFinger:   true,
-		EnableBbox:     true,
-		EnableBlogs:    true,
-		EnableBorg:     true,
-		EnableBsecret:  true,
-		EnableBstore:   true,
-		EnableFabric:   true,
-		Getenv:         os.Getenv,
-		Fees:           feeSched,
-		UpstreamSpines: upstreamSpines,
+		Network:              *netName,
+		DBPath:               dbPath,
+		Lanes:                []string{*lanesFlag},
+		EnableFinger:         true,
+		EnableBbox:           true,
+		EnableBlogs:          true,
+		EnableBorg:           true,
+		EnableBsecret:        true,
+		EnableBstore:         true,
+		EnableFabric:         true,
+		FabricUDPListen:      strings.TrimSpace(*fabricUDPFlag),
+		DemandDrivenUpstream: isLiveNet && feeSched.Role == hub.RoleLeaf,
+		Getenv:               os.Getenv,
+		Fees:                 feeSched,
+		UpstreamSpines:       upstreamSpines,
 	}
 	if rt != nil {
 		hCfg.ChainTracker = rt.mem.Chain().Tracker()
@@ -256,7 +285,7 @@ func cmdHubRun(args []string) error {
 		if *withLiquidity {
 			if _, lErr := hub.ArmHubLiquidity(ctx, node, rt.mem, hub.LiquidityConfig{
 				SeedStarterShards: true,
-				ArmBounties:       true,
+				ArmBounties:       *seedBounties,
 				StarterPriceSats:  90,
 				BountyRewardSats:  100,
 			}); lErr != nil {
@@ -280,26 +309,6 @@ func cmdHubRun(args []string) error {
 		cancelCatchup()
 		catchupWG.Wait()
 	}()
-	if *netName != "memory" && node.Store() != nil {
-		catchupWG.Add(1)
-		go func() {
-			defer catchupWG.Done()
-			sweepTicker := time.NewTicker(2 * time.Minute)
-			defer sweepTicker.Stop()
-			for {
-				select {
-				case <-catchupCtx.Done():
-					return
-				case <-sweepTicker.C:
-					if stale, sErr := node.Store().SweepExpiredFastFees(7200); sErr == nil {
-						for _, e := range stale {
-							_ = node.Store().FlagPayer(e.PayerPub, e.TxID, "fast fee payment failed to mine within 2h")
-						}
-					}
-				}
-			}
-		}()
-	}
 	if catchupPeers := parseCSVEnv("NEKTAR_CATCHUP_PEERS"); len(catchupPeers) > 0 {
 		catchupWG.Add(1)
 		go func(peers []string) {

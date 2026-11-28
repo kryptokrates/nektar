@@ -3,7 +3,6 @@ package market
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,6 +30,57 @@ func (b *Broker) saveBboxCursor(hubURL string, seq int64) {
 		return
 	}
 	_ = b.mem.DB().SetJSON("bbox_cursor:"+hubURL, seq)
+}
+
+func (b *Broker) runBboxWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case item, ok := <-b.bboxWorkCh:
+			if !ok {
+				return
+			}
+			wCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			err := b.handleBboxMessage(wCtx, item.hubURL, item.msg)
+			cancel()
+			if item.done != nil {
+				item.done <- err
+			}
+		}
+	}
+}
+
+func (b *Broker) enqueueBboxWork(ctx context.Context, hubURL string, msg hub.BboxMessage, wait bool) error {
+	if b.bboxWorkCh == nil {
+		return b.handleBboxMessage(ctx, hubURL, msg)
+	}
+	var done chan error
+	if wait {
+		done = make(chan error, 1)
+	}
+	select {
+	case b.bboxWorkCh <- bboxWorkItem{hubURL: hubURL, msg: msg, done: done}:
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		if !wait {
+			b.spawnTracked(20*time.Second, func(wCtx context.Context) {
+				_ = b.handleBboxMessage(wCtx, hubURL, msg)
+			})
+			return nil
+		}
+		return b.handleBboxMessage(ctx, hubURL, msg)
+	}
+	if !wait {
+		return nil
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (b *Broker) bboxLoop(ctx context.Context) {
@@ -96,12 +146,34 @@ func (b *Broker) bboxLoop(ctx context.Context) {
 			}
 			_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&parsed)
 			resp.Body.Close()
-			advanced := false
-			for _, m := range parsed.Messages {
-				gotAny = true
+			if len(parsed.Messages) == 0 {
+				continue
+			}
+			gotAny = true
+			errs := make([]chan error, len(parsed.Messages))
+			for i, m := range parsed.Messages {
 				b.bboxWakes.Add(1)
-				// Only advance bbox_cursor when delivery succeeds; retry transient HTTP/workflow failures cleanly!
-				if hErr := b.handleBboxMessage(ctx, h, m); hErr != nil {
+				done := make(chan error, 1)
+				errs[i] = done
+				select {
+				case b.bboxWorkCh <- bboxWorkItem{hubURL: h, msg: m, done: done}:
+				default:
+					go func(msg hub.BboxMessage, d chan error) {
+						wCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+						d <- b.handleBboxMessage(wCtx, h, msg)
+						cancel()
+					}(m, done)
+				}
+			}
+			advanced := false
+			for i, m := range parsed.Messages {
+				var hErr error
+				select {
+				case hErr = <-errs[i]:
+				case <-ctx.Done():
+					return gotAny
+				}
+				if hErr != nil {
 					break
 				}
 				if m.Seq > cursors[h] {
@@ -190,8 +262,10 @@ func (b *Broker) handleBboxMessage(ctx context.Context, hubURL string, m hub.Bbo
 	if m.TS < now-300 || m.TS > now+300 || strings.TrimSpace(m.Nonce) == "" {
 		return nil
 	}
+	normOffice := bstack.NormalizeBboxOffice(m.Office)
+	isOfficeAud := strings.EqualFold(strings.TrimSpace(m.Aud), "office:"+normOffice)
 	isLive := b.mem != nil && b.mem.Chain() != nil && b.mem.Chain().Network() != "memory"
-	if hubURL != "" && (m.Aud != "" || isLive) && !strings.EqualFold(m.Aud, hubAudience(hubURL)) {
+	if !isOfficeAud && hubURL != "" && (m.Aud != "" || isLive) && !strings.EqualFold(m.Aud, hubAudience(hubURL)) {
 		return nil
 	}
 	if m.Sig == "" || bstack.VerifyArtifact(m.SenderPub, m.Sig, m.Signable()) != nil {
@@ -202,17 +276,30 @@ func (b *Broker) handleBboxMessage(ctx context.Context, hubURL string, m hub.Bbo
 	}
 	aad := bstack.BboxAAD(m.Office, m.SenderPub, m.RecipientPub, m.DealID, m.Kind)
 	var decWallet boxrec.Decrypter
-	var sealWallet boxrec.Sealer
 	if b.engine != nil && b.engine.signer != nil {
 		if w, wErr := b.engine.signer.ProtoWallet(); wErr == nil {
 			decWallet = w
-			sealWallet = w
 		}
 	}
 	plainBody, decErr := bstack.OpenBboxMessageBody(ctx, decWallet, b.engine.signer, m.Office, m.Kind, m.SenderPub, m.RecipientPub, m.TS, aad, m.Body)
 	if decErr != nil {
 		return nil
 	}
+	// Transparently unwrap CHIRP-offloaded oversized bbox payloads (authenticated via AEAD over EnvelopeChirpURL!).
+	var envWrap bboxChirpEnvelope
+	if len(plainBody) < 512 && json.Unmarshal(plainBody, &envWrap) == nil && envWrap.EnvelopeChirpURL != "" && b.disc != nil {
+		var candidates []string
+		if hubURL != "" {
+			candidates = append(candidates, hubURL)
+		}
+		candidates = append(candidates, b.peerBboxHosts(ctx, m.SenderPub, b.disc.ActiveHosts())...)
+		unwrapped, fErr := b.disc.FetchRemoteChirpMulti(ctx, candidates, envWrap.EnvelopeChirpURL)
+		if fErr != nil {
+			return fErr // transient fetch error: retry on next wake without losing message
+		}
+		plainBody = unwrapped
+	}
+
 	switch m.Kind {
 	case "purchase_beef":
 		var pReq PurchaseRequest
@@ -223,54 +310,36 @@ func (b *Broker) handleBboxMessage(ctx context.Context, hubURL string, m hub.Bbo
 		if err != nil {
 			pResp = &PurchaseResponse{OK: false, OfferID: pReq.OfferID, SellerPub: b.PubHex(), Error: err.Error()}
 		}
-		if pResp != nil && len(pResp.CiphertextHex) > bstack.InlineDirectMaxHexLen && pResp.ChirpURL != "" && b.PublicURL() != "" {
+		if pResp != nil && len(pResp.CiphertextHex) > bstack.InlineOfferMaxHexLen && pResp.ChirpURL != "" {
 			cp := *pResp
 			cp.CiphertextHex = ""
 			pResp = &cp
 		}
 		replyTS := time.Now().Unix()
 		bodyRaw, _ := json.Marshal(pResp)
-		replyAAD := bstack.BboxAAD(m.Office, b.PubHex(), m.SenderPub, m.DealID, "reveal_key")
-		sealedReply, encErr := bstack.SealBboxMessageBody(ctx, sealWallet, m.Office, "reveal_key", b.PubHex(), m.SenderPub, replyTS, replyAAD, bodyRaw)
+		replyAAD := bstack.BboxAAD(normOffice, b.PubHex(), m.SenderPub, m.DealID, "reveal_key")
+		sealedReply, encErr := b.sealBboxPayloadUnderLimit(ctx, normOffice, "reveal_key", b.PubHex(), m.SenderPub, replyTS, replyAAD, bodyRaw)
 		if encErr != nil {
 			return encErr
 		}
-		replyHosts := b.peerBboxHosts(ctx, m.SenderPub, []string{hubURL})
-		var lastReplyErr error
-		delivered := false
-		for _, rh := range replyHosts {
-			replyMsg := hub.BboxMessage{
-				Office:       m.Office,
-				RecipientPub: m.SenderPub,
-				SenderPub:    b.PubHex(),
-				DealID:       m.DealID,
-				Kind:         "reveal_key",
-				TS:           replyTS,
-				Nonce:        randNonceHex(),
-				Aud:          hubAudience(rh),
-				Body:         sealedReply,
-			}
-			if sig, sErr := bstack.SignArtifactWithSigner(b.engine.signer, replyMsg.Signable()); sErr == nil {
-				replyMsg.Sig = sig
-			}
-			env, _ := json.Marshal(replyMsg)
-			resp, dErr := b.disc.PostJSONWithHub402(ctx, strings.TrimRight(rh, "/")+"/bbox/send", "bbox:send", env)
-			if dErr != nil {
-				lastReplyErr = dErr
-				continue
-			}
-			resp.Body.Close()
-			if resp.StatusCode < 300 {
-				delivered = true
-				break
-			}
-			lastReplyErr = fmt.Errorf("bbox reveal_key send HTTP %d", resp.StatusCode)
+		replyHosts := b.peerBboxHosts(ctx, "", b.disc.ActiveHosts())
+		if hubURL != "" {
+			replyHosts = append([]string{hubURL}, replyHosts...)
 		}
-		if !delivered {
-			if lastReplyErr != nil {
-				return lastReplyErr
+		for _, ph := range b.peerBboxHosts(ctx, m.SenderPub, nil) {
+			found := false
+			for _, eh := range replyHosts {
+				if eh == ph {
+					found = true
+					break
+				}
 			}
-			return errors.New("bbox reveal_key send failed on all candidate hubs")
+			if !found {
+				replyHosts = append(replyHosts, ph)
+			}
+		}
+		if err := b.postOfficeBboxMessage(ctx, replyHosts, normOffice, m.SenderPub, m.DealID, "reveal_key", replyTS, sealedReply); err != nil {
+			return err
 		}
 		b.markSeenBboxNonce(m.SenderPub, m.Nonce, now)
 	case "reveal_key":
@@ -282,8 +351,8 @@ func (b *Broker) handleBboxMessage(ctx context.Context, hubURL string, m hub.Bbo
 		ch := b.bboxReplies[pResp.OfferID]
 		expSeller := b.bboxExpected[pResp.OfferID]
 		wantID := b.bboxWantByOffer[pResp.OfferID]
-		rc := b.restate
 		b.mu.RUnlock()
+		rc := b.RestateClient()
 		if wantID == "" {
 			wantID = m.DealID
 		}

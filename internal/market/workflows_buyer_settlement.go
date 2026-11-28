@@ -124,8 +124,9 @@ func (e *Engine) buyerBroadcastPayment(rctx context.Context, dealID string, chos
 			}
 		}
 	} else {
-		chosenJSON, _ := json.Marshal(chosen)
+		var chosenJSON []byte
 		if fj == nil {
+			chosenJSON, _ = json.Marshal(chosen)
 			if err := e.persistDealRecordChecked(store.DealRecord{
 				DealID:          dealID,
 				Role:            "buyer",
@@ -138,8 +139,12 @@ func (e *Engine) buyerBroadcastPayment(rctx context.Context, dealID string, chos
 			}
 		}
 
-		useEscrow := e.policy != nil && e.policy.ShouldUseEscrow(chosen.PriceSats) && len(chosen.SaleOffer) > 0
+		useEscrow := e.policy != nil && e.policy.ShouldUseEscrow(chosen.PriceSats) && len(chosen.SaleOffer) > 0 &&
+			e.mem != nil && e.mem.Chain() != nil && e.mem.Chain().WalletMode() == "embedded"
 		if useEscrow {
+			if len(chosenJSON) == 0 {
+				chosenJSON, _ = json.Marshal(chosen)
+			}
 			var so contracts.KeyedSaleOffer
 			if uErr := json.Unmarshal(chosen.SaleOffer, &so); uErr != nil {
 				return buyerPayResult{NowUnix: now, PreBroadcastErr: "decode saleOffer for escrow: " + uErr.Error()}, nil
@@ -157,16 +162,19 @@ func (e *Engine) buyerBroadcastPayment(rctx context.Context, dealID string, chos
 			if len(sellerPKH) != 20 {
 				sellerPKH, _ = hex.DecodeString(so.Config.SellerPKH)
 			}
+			if len(sellerPKH) != 20 {
+				return buyerPayResult{NowUnix: now, PreBroadcastErr: "saleOffer missing valid 20-byte sellerPKH for escrow"}, nil
+			}
 			depPKH, fErr := e.mem.Chain().FundPKH(rctx)
 			if fErr != nil || len(depPKH) != 20 {
 				return buyerPayResult{NowUnix: now, PreBroadcastErr: fmt.Sprintf("derive depositor PKH: %v", fErr)}, nil
 			}
 			maxFee := so.Config.MaxFee
-			if maxFee < 300 {
-				maxFee = 500
+			if maxFee < 100 {
+				maxFee = 150
 			}
-			if maxFee > 2000 {
-				maxFee = 2000
+			if maxFee > 300 {
+				maxFee = 300
 			}
 			refundAfter := so.Config.RefundAfter
 			if refundAfter == 0 || (refundAfter >= 500_000_000 && int64(refundAfter) <= now+120) {
@@ -184,7 +192,7 @@ func (e *Engine) buyerBroadcastPayment(rctx context.Context, dealID string, chos
 			if lErr != nil {
 				return buyerPayResult{NowUnix: now, PreBroadcastErr: "encode DisclosureSale escrow: " + lErr.Error()}, nil
 			}
-			escrowSats := escrowParams.RequiredEscrowSatoshis() + 100
+			escrowSats := escrowParams.RequiredEscrowSatoshis() + 50
 
 			fundedFromVault := false
 			vRec, _, vErr := LoadActiveVault(db)
@@ -383,7 +391,7 @@ func (e *Engine) buyerBroadcastPayment(rctx context.Context, dealID string, chos
 					return buyerPayResult{}, brErr
 				}
 			}
-			if fj == nil {
+			if fj == nil || strings.TrimSpace(chosen.SellerURL) == "" {
 				if freshBEEF, fErr := chain.SafeAtomicBEEF(builtTx); fErr == nil && len(freshBEEF) > 0 {
 					payBEEF = freshBEEF
 				}
@@ -419,12 +427,15 @@ func (e *Engine) buyerBroadcastPayment(rctx context.Context, dealID string, chos
 	res := buyerPayResult{
 		NowUnix:       now,
 		TxID:          payTxID,
-		PayBEEFHex:    hex.EncodeToString(payBEEF),
+		PayBEEFRaw:    payBEEF,
 		OutputIndex:   outIdx,
 		DerivPrefix:   derivPrefix,
 		DerivSuffix:   derivSuffix,
 		SenderKey:     senderKey,
 		EscrowPayload: escrowPayload,
+	}
+	if fj == nil {
+		res.PayBEEFHex = hex.EncodeToString(payBEEF)
 	}
 	if escrowPayload != nil {
 		res.EscrowTxID = escrowPayload.EscrowTxID
@@ -447,6 +458,7 @@ func (e *Engine) buyerDeliverPurchase(rctx context.Context, dealID string, chose
 		BuyerPub:          br.PubHex(),
 		TxID:              payRes.TxID,
 		PaymentBEEFHex:    payRes.PayBEEFHex,
+		PaymentBEEFRaw:    payRes.PayBEEFRaw,
 		OutputIndex:       payRes.OutputIndex,
 		DerivationPrefix:  payRes.DerivPrefix,
 		DerivationSuffix:  payRes.DerivSuffix,

@@ -222,10 +222,19 @@ func OpenNativeBboxContent(
 	return base64.StdEncoding.DecodeString(wrapped.PayloadB64)
 }
 
-// IsNativeBboxContent reports whether raw JSON carries a Lightweb BRC-169 `metanetHandles` bbox content envelope.
+// IsNativeBboxContent reports whether raw JSON is a top-level object carrying Lightweb's BRC-169 `metanetHandles` key.
 func IsNativeBboxContent(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
-	return len(trimmed) > 2 && trimmed[0] == '{' && bytes.Contains(trimmed, []byte(`"metanetHandles"`))
+	if len(trimmed) < 2 || trimmed[0] != '{' {
+		return false
+	}
+	var probe struct {
+		MetanetHandles json.RawMessage `json:"metanetHandles"`
+	}
+	if err := json.Unmarshal(trimmed, &probe); err != nil {
+		return false
+	}
+	return len(bytes.TrimSpace(probe.MetanetHandles)) > 0
 }
 
 // SealBboxMessageBody seals a counterparty message using Lightweb's native BRC-169 + BRC-78 `boxrec.SealEnvelope`
@@ -258,12 +267,29 @@ func OpenBboxMessageBody(
 	aad []byte,
 	raw json.RawMessage,
 ) ([]byte, error) {
+	return OpenBboxMessageBodyWithExpiry(ctx, w, opener, office, kind, fromPubHex, toPubHex, createdUnix, 0, aad, raw)
+}
+
+// OpenBboxMessageBodyWithExpiry verifies and opens a native BRC-169 or v2 BboxSealedBody envelope
+// preserving explicit sender-chosen expiresUnix (0 = no expiry override).
+func OpenBboxMessageBodyWithExpiry(
+	ctx context.Context,
+	w boxrec.Decrypter,
+	opener BboxOpener,
+	office, kind, fromPubHex, toPubHex string,
+	createdUnix, expiresUnix int64,
+	aad []byte,
+	raw json.RawMessage,
+) ([]byte, error) {
 	if IsNativeBboxContent(raw) {
 		if createdUnix <= 0 {
 			return nil, errors.New("bbox native: positive message timestamp required")
 		}
-		created := uint64(createdUnix)
-		return OpenNativeBboxContent(ctx, w, office, kind, fromPubHex, toPubHex, created, created+3600, aad, raw)
+		var expires uint64
+		if expiresUnix > 0 {
+			expires = uint64(expiresUnix)
+		}
+		return OpenNativeBboxContent(ctx, w, office, kind, fromPubHex, toPubHex, uint64(createdUnix), expires, aad, raw)
 	}
 	return OpenBboxBodyWithSigner(opener, aad, raw)
 }

@@ -90,6 +90,7 @@ func StandingOrderWorkflow(ctx workflow.Context, in StandingOrderInput) (Standin
 	_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.StandingOrderRegisterAndAnnounce, st).Get(ctx)
 
 	seenOffers := make(map[string]bool)
+	stateDirty := false
 
 	for st.Status == "watching" || st.Status == "paused" {
 		nowUnix := workflow.Now(ctx).Unix()
@@ -99,15 +100,26 @@ func StandingOrderWorkflow(ctx workflow.Context, in StandingOrderInput) (Standin
 			break
 		}
 
-		// Drain any immediately ready signal without scheduling a timer; otherwise sleep until signal or TTL.
+		// Drain any immediately ready signal without scheduling a timer; otherwise flush coalesced state
+		// and sleep until signal, 20-minute WantAd refresh, or TTL expiry.
 		ev, got := eventsCh.ReceiveNonBlocking()
 		if !got {
+			if stateDirty {
+				_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.StandingOrderSaveState, st, false).Get(ctx)
+				stateDirty = false
+			}
 			remaining := time.Duration(st.ExpiresAtUnix-nowUnix) * time.Second
 			if remaining <= 0 {
 				remaining = time.Second
 			}
+			waitSlice := remaining
+			isRefreshWake := false
+			if st.Status == "watching" && waitSlice > 20*time.Minute {
+				waitSlice = 20 * time.Minute
+				isRefreshWake = true
+			}
 			tCtx, cancelTimer := workflow.WithCancel(ctx)
-			expTimer := workflow.ScheduleTimer(tCtx, remaining)
+			expTimer := workflow.ScheduleTimer(tCtx, waitSlice)
 			workflow.Select(ctx,
 				workflow.Receive(eventsCh, func(_ workflow.Context, v standingOrderEvent, ok bool) {
 					cancelTimer()
@@ -121,8 +133,14 @@ func StandingOrderWorkflow(ctx workflow.Context, in StandingOrderInput) (Standin
 			)
 			cancelTimer()
 			if !got {
+				nowAfter := workflow.Now(ctx).Unix()
+				if isRefreshWake && nowAfter < st.ExpiresAtUnix && st.Status == "watching" {
+					st.UpdatedAt = nowAfter
+					_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.StandingOrderRegisterAndAnnounce, st).Get(ctx)
+					continue
+				}
 				st.Status = "expired"
-				st.UpdatedAt = workflow.Now(ctx).Unix()
+				st.UpdatedAt = nowAfter
 				break
 			}
 		}
@@ -160,7 +178,7 @@ func StandingOrderWorkflow(ctx workflow.Context, in StandingOrderInput) (Standin
 		case "offer":
 			if ev.Offer == nil || st.Status != "watching" {
 				st.UpdatedAt = nowUnix
-				_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.StandingOrderSaveState, st, false).Get(ctx)
+				stateDirty = true
 				continue
 			}
 			off := *ev.Offer
@@ -173,25 +191,26 @@ func StandingOrderWorkflow(ctx workflow.Context, in StandingOrderInput) (Standin
 			st.OffersSeen++
 			if st.MaxSats > 0 && off.PriceSats > st.MaxSats {
 				st.UpdatedAt = nowUnix
-				_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.StandingOrderSaveState, st, false).Get(ctx)
+				stateDirty = true
 				continue
 			}
 			if !standingOrderDomainMatches(st.Domains, off.Domains) {
 				st.UpdatedAt = nowUnix
-				_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.StandingOrderSaveState, st, false).Get(ctx)
+				stateDirty = true
 				continue
 			}
 			if !standingOrderNMUMatches(st.MinGrade, st.MaxSatsPer1kUnits, st.FreshnessClass, st.RequiredRights, st.PricingMode, off, nowUnix) {
 				st.UpdatedAt = nowUnix
-				_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.StandingOrderSaveState, st, false).Get(ctx)
+				stateDirty = true
 				continue
 			}
 			evalOK, eErr := workflow.ExecuteActivity[standingOfferEvalResult](ctx, dealActivityOpts(), acts.StandingOrderEvalOffer, st, off).Get(ctx)
 			if eErr != nil || !evalOK.Accepted {
 				st.UpdatedAt = nowUnix
-				_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.StandingOrderSaveState, st, false).Get(ctx)
+				stateDirty = true
 				continue
 			}
+			stateDirty = false
 			if st.Attempts >= maxAttempts {
 				st.Status = "expired"
 				st.Error = fmt.Sprintf("standing order reached max attempts (%d)", maxAttempts)
@@ -272,14 +291,11 @@ type standingOfferEvalResult struct {
 
 func (a *workflowActivities) StandingOrderInit(_ context.Context, in StandingOrderInput) (standingInitConfig, error) {
 	e := a.eng
-	reqTrust := in.RequireTrustedOrBonded
-	if !in.AllowUntrusted && e.mem != nil && e.mem.Chain() != nil {
-		net := e.mem.Chain().Network()
-		if net == "main" || net == "testnet" {
-			reqTrust = true
-		}
-	}
 	maxSats := in.MaxSats
+	var zcMax uint64
+	if e.policy != nil {
+		zcMax, _, _ = e.policy.ZeroConfLimits()
+	}
 	if maxSats == 0 {
 		var maxPolicyDeal uint64 = 500
 		if e.policy != nil {
@@ -295,6 +311,15 @@ func (a *workflowActivities) StandingOrderInit(_ context.Context, in StandingOrd
 			SellerBonded:      true,
 		})
 		maxSats = bid.MaxBidSats
+	}
+	reqTrust := in.RequireTrustedOrBonded
+	if !in.AllowUntrusted && !in.RequireTrustedOrBonded && e.mem != nil && e.mem.Chain() != nil {
+		net := e.mem.Chain().Network()
+		// Accept SPV-verified unbonded organic Sellers on micro-bounties <= ZeroConfMax;
+		// require bond/reputation automatically when ZeroConfMax == 0 or bounty exceeds ZeroConfMax.
+		if (net == "main" || net == "testnet") && (zcMax == 0 || maxSats > zcMax) {
+			reqTrust = true
+		}
 	}
 	return standingInitConfig{RequireTrust: reqTrust, MaxSats: maxSats}, nil
 }

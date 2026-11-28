@@ -105,8 +105,8 @@ func ArmHubLiquidity(ctx context.Context, node *Node, mem *memory.Service, cfg L
 					})
 				}
 			}
-			// Anchor starter shard if wallet has spendable balance.
-			if mem.Chain().BalanceSats() > 1000 {
+			// Anchor starter shard if wallet has spendable balance (>= 250 sats covers a 1-in 2-out anchor tx).
+			if mem.Chain().BalanceSats() >= 250 {
 				_, _ = mem.AnchorShard(ctx, st.Shard)
 			}
 			isLive := mem.Chain().Network() != "memory"
@@ -248,6 +248,22 @@ func RefreshHubLiquidityStock(ctx context.Context, mem *memory.Service) ([]bstac
 	return packs, nil
 }
 
+// EffectiveBountyReward computes the active tapered satoshi reward for a Hub bounty based on
+// its current fill count (matching TermsDocument.BountyTaper: full reward < 25 fills, 50% step-down at >= 25 fills).
+func EffectiveBountyReward(b Bounty) uint64 {
+	if !b.Active || b.Filled >= b.MaxFills || b.RewardSats == 0 {
+		return 0
+	}
+	if b.Filled >= 25 {
+		stepped := b.RewardSats / 2
+		if stepped == 0 {
+			stepped = 1
+		}
+		return stepped
+	}
+	return b.RewardSats
+}
+
 // handleVerifiedBounty verifies a contributing agent's ProofBundle + Merkle inclusion at settleDepth
 // (or verifies cryptographic authorship + fail-closed PII scrub on Hub-sponsored 0-sat bounties),
 // pays their BSV address via SpendGuard-enforced Port.Send returning full AtomicBEEF, and commits
@@ -273,7 +289,10 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 	}
 
 	commitText := sub.Text
-	payoutSats := b.RewardSats
+	payoutSats := EffectiveBountyReward(b)
+	if payoutSats == 0 {
+		return nil, errors.New("bounty: exhausted or inactive")
+	}
 	autoAnchor := false
 
 	if b.Sponsored && len(sub.ProofBundle) == 0 {
@@ -291,7 +310,7 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 		} else if b.AnchorFeeReserveSats > 0 {
 			payoutSats = 1
 		}
-		autoAnchor = mem.Chain().BalanceSats() > 1000
+		autoAnchor = mem.Chain().BalanceSats() >= 250
 	} else {
 		// Mandatory SPV / Merkle ProofBundle — never pay unverified text submissions.
 		if len(sub.ProofBundle) == 0 {
@@ -335,15 +354,20 @@ func handleVerifiedBounty(ctx context.Context, mem *memory.Service, b Bounty, su
 		return nil, fmt.Errorf("bounty: payout failed: %w", err)
 	}
 
+	// Anchor curated/<domain> asynchronously/best-effort after payout so standard bounty acquisitions become resellable!
+	if !autoAnchor && mem.Chain().BalanceSats() >= 250 {
+		_, _ = mem.AnchorShard(ctx, curatedShard)
+	}
+
 	// Sustainable Hub market-maker pricing: default 120% of bounty reward (or NEKTAR_HUB_RESALE_SATS override).
-	resalePrice := maxUint64((b.RewardSats*12)/10, 120)
+	resalePrice := maxUint64((payoutSats*12)/10, 120)
 	if raw := strings.TrimSpace(os.Getenv("NEKTAR_HUB_RESALE_SATS")); raw != "" {
 		if v, pErr := strconv.ParseUint(raw, 10, 64); pErr == nil && v > 0 {
 			resalePrice = v
 		}
 	}
-	// On live networks, keep curated/<domain> listing inactive until its shard anchor is mined (RefreshHubLiquidityStock activates it).
-	listingActive := mem.Chain().Network() == "memory" || shardHasMinedAnchor(mem, curatedShard)
+	// Activate curated/<domain> listing once an anchor BEEF or mined proof exists.
+	listingActive := mem.Chain().Network() == "memory" || shardHasMinedAnchor(mem, curatedShard) || shardHasAnchorBEEF(mem, curatedShard)
 	_ = mem.DB().SaveSellListing(store.SellListing{
 		Shard:       curatedShard,
 		Domains:     []string{b.Domain},

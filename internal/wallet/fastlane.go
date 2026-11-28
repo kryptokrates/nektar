@@ -285,8 +285,10 @@ func (e *Engine) ProvisionFastLane(ctx context.Context, numLanes int, satsPerLan
 	if numLanes > 512 {
 		numLanes = 512
 	}
-	if satsPerLane < 1000 {
+	if satsPerLane == 0 {
 		satsPerLane = 10_000
+	} else if satsPerLane < 200 {
+		satsPerLane = 200
 	}
 	outs := make([]sdkwallet.CreateActionOutput, numLanes)
 	for i := 0; i < numLanes; i++ {

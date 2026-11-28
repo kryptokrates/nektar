@@ -1,10 +1,13 @@
 package market
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -120,7 +123,11 @@ func (b *Broker) ArmSell(ctx context.Context, in SellInput) (ArmSellResult, erro
 	if err := b.mem.DB().SaveSellListing(listing); err != nil {
 		return ArmSellResult{}, err
 	}
-	if b.mem.Chain().BalanceSats() > 1000 {
+	if b.engine != nil && b.engine.FastJournal() != nil {
+		b.engine.FastJournal().InvalidateListings()
+	}
+	b.ReconnectStreams()
+	if b.mem.Chain().BalanceSats() >= 250 {
 		_, _ = b.mem.AnchorShard(ctx, listing.Shard)
 	}
 	_, _ = b.AnnounceSelf(ctx)
@@ -129,9 +136,11 @@ func (b *Broker) ArmSell(ctx context.Context, in SellInput) (ArmSellResult, erro
 	if hasAnyFrag && hasUndistilled && !in.AllowRaw {
 		blocked = append(blocked, "raw_shard_requires_distill_or_allow_raw")
 	}
+	var zcMax uint64
 	if b.engine != nil && b.engine.Policy() != nil {
 		_ = SyncPolicyFromDB(b.mem.DB(), b.engine.Policy())
 		kill, _, _, _, _, _, sellerOK := b.engine.Policy().Snapshot()
+		zcMax, _, _ = b.engine.Policy().ZeroConfLimits()
 		if kill {
 			blocked = append(blocked, "kill_switch_engaged")
 		}
@@ -143,7 +152,7 @@ func (b *Broker) ArmSell(ctx context.Context, in SellInput) (ArmSellResult, erro
 		if b.mem.Chain().BalanceSats() == 0 {
 			blocked = append(blocked, "wallet_unfunded")
 		}
-		hasMined := false
+		hasUsableAnchor := false
 		if frags, rErr := b.mem.Recall(ctx, memory.RecallInput{
 			Shard:        listing.Shard,
 			Principal:    policy.Principal{Type: "Agent", ID: "market-seller", Level: 0},
@@ -151,13 +160,13 @@ func (b *Broker) ArmSell(ctx context.Context, in SellInput) (ArmSellResult, erro
 			DisallowBorg: true,
 		}); rErr == nil {
 			for _, f := range frags {
-				if f.AnchorState == "mined" {
-					hasMined = true
+				if f.AnchorState == "mined" || (f.AnchorTxID != "" && zcMax > 0 && listing.PriceSats <= zcMax) {
+					hasUsableAnchor = true
 					break
 				}
 			}
 		}
-		if !hasMined {
+		if !hasUsableAnchor {
 			blocked = append(blocked, "anchor_pending_mine")
 		}
 	}
@@ -168,7 +177,85 @@ func (b *Broker) ArmSell(ctx context.Context, in SellInput) (ArmSellResult, erro
 		BlockedReasons: blocked,
 	}
 	b.notify("sell_armed", res)
+	if res.QuotingReady && b.disc != nil {
+		lCopy := listing
+		b.spawnTracked(15*time.Second, func(sCtx context.Context) {
+			b.sweepOpenWantsForListing(sCtx, lCopy)
+		})
+	}
 	return res, nil
+}
+
+// sweepOpenWantsForListing queries active Hubs' ls_nektar index for live WantAds matching listing.Domains
+// so StandingOrder bounties posted BEFORE Seller came online are quoted and settled immediately!
+func (b *Broker) sweepOpenWantsForListing(ctx context.Context, listing store.SellListing) {
+	if b == nil || b.disc == nil || b.mem == nil || b.mem.Chain() == nil {
+		return
+	}
+	hosts := b.disc.ActiveHosts()
+	if len(hosts) == 0 {
+		return
+	}
+	myNet := b.mem.Chain().Network()
+	myPub := b.PubHex()
+	nowMs := time.Now().UnixMilli()
+	maxExpMs := nowMs + bstack.MaxLifetime.Milliseconds() + 60_000
+	doms := listing.Domains
+	if len(doms) == 0 {
+		doms = []string{""}
+	}
+	for _, dom := range doms {
+		q := bstack.MarketQuery{Kind: bstack.KindWant, Domain: strings.ToLower(strings.TrimSpace(dom)), Limit: 50}
+		if q.Domain == "*" {
+			q.Domain = ""
+		}
+		qBytes, _ := json.Marshal(map[string]any{
+			"service": bstack.LookupService,
+			"query":   q,
+		})
+		for _, h := range hosts {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h, "/")+"/lookup", bytes.NewReader(qBytes))
+			if err != nil {
+				continue
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := b.httpClient.Do(req)
+			if err != nil || resp.StatusCode != http.StatusOK {
+				if resp != nil {
+					resp.Body.Close()
+				}
+				continue
+			}
+			var ans struct {
+				Result []bstack.MarketEvent `json:"result"`
+			}
+			_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&ans)
+			resp.Body.Close()
+			for _, ev := range ans.Result {
+				payload, ok, _ := b.verifyMarketEventBEEF(ctx, ev)
+				if !ok || payload.Kind != bstack.KindWant {
+					continue
+				}
+				sw, decErr := bstack.DecodeWantPayload(payload.Body)
+				if decErr != nil || sw.Want.Net != myNet || sw.Want.Exp <= nowMs || sw.Want.Exp > maxExpMs {
+					continue
+				}
+				if sw.Want.Pub == "" || strings.EqualFold(sw.Want.Pub, myPub) {
+					continue
+				}
+				if bstack.VerifyArtifactRaw(sw.Want.Pub, sw.Sig, sw.Want.DomainTag(), sw.RawCBOR) != nil {
+					continue
+				}
+				b.mu.Lock()
+				_, seen := b.seenWants[sw.Want.WantID]
+				if !seen {
+					b.seenWants[sw.Want.WantID] = time.Now().Unix()
+				}
+				b.mu.Unlock()
+				b.autoQuoteWant(ctx, sw.Want)
+			}
+		}
+	}
 }
 
 // AnnounceSelf publishes this node's signed AnnounceAd to the enumerable `dir` lane across active hubs.

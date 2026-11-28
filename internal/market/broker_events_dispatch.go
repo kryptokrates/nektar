@@ -135,6 +135,13 @@ func (b *Broker) dispatchVerifiedMarketEvent(ctx context.Context, payload bstack
 				return
 			}
 		}
+		// Fast duplicate check BEFORE ECDSA verification to avoid re-verifying already-seen WantAds.
+		b.mu.RLock()
+		_, dupPre := b.seenWants[sw.Want.WantID]
+		b.mu.RUnlock()
+		if dupPre {
+			return
+		}
 		if err := bstack.VerifyArtifactRaw(sw.Want.Pub, sw.Sig, sw.Want.DomainTag(), sw.RawCBOR); err != nil {
 			return
 		}
@@ -190,15 +197,15 @@ func (b *Broker) dispatchVerifiedMarketEvent(ctx context.Context, payload bstack
 			return
 		}
 		// Fast relevance pre-filter BEFORE ECDSA verification: in fast-journal mode, only verify OfferAds
-		// addressed to this Buyer's active offerInbox (eliminates 11x redundant ECDSA verifications on Sellers/other Buyers!).
-		if b.engine.FastJournal() != nil {
+		// addressed to this Buyer's active offerInbox OR watching StandingOrders.
+		if fj := b.engine.FastJournal(); fj != nil {
 			if so.Offer.BuyerPub != "" && !strings.EqualFold(so.Offer.BuyerPub, b.PubHex()) {
 				return
 			}
 			b.mu.RLock()
 			_, hasInbox := b.offerInbox[so.Offer.WantID]
 			b.mu.RUnlock()
-			if !hasInbox {
+			if !hasInbox && !fj.HasStandingOrders(b.mem.DB()) {
 				return
 			}
 		}
@@ -211,22 +218,24 @@ func (b *Broker) dispatchVerifiedMarketEvent(ctx context.Context, payload bstack
 		if so.Offer.BuyerPub != "" && so.Offer.BuyerPub != b.PubHex() {
 			return
 		}
-		summary := strings.TrimSpace(so.Offer.Description)
-		if summary == "" {
-			summary = so.Offer.Shard
+		if b.engine.FastJournal() == nil {
+			summary := strings.TrimSpace(so.Offer.Description)
+			if summary == "" {
+				summary = so.Offer.Shard
+			}
+			b.RecordMarketTape("market_offer", MarketTapeEvent{
+				ID:      so.Offer.OfferID,
+				Kind:    "offer",
+				Side:    "sell",
+				Domains: append([]string(nil), so.Offer.Domains...),
+				Summary: summary,
+				Sats:    so.Offer.PriceSats,
+				Pub:     shortPub(so.Offer.Pub),
+				Shard:   so.Offer.Shard,
+				Status:  "quoted",
+				At:      nowMs,
+			})
 		}
-		b.RecordMarketTape("market_offer", MarketTapeEvent{
-			ID:      so.Offer.OfferID,
-			Kind:    "offer",
-			Side:    "sell",
-			Domains: append([]string(nil), so.Offer.Domains...),
-			Summary: summary,
-			Sats:    so.Offer.PriceSats,
-			Pub:     shortPub(so.Offer.Pub),
-			Shard:   so.Offer.Shard,
-			Status:  "quoted",
-			At:      nowMs,
-		})
 		b.mu.RLock()
 		ch := b.offerInbox[so.Offer.WantID]
 		b.mu.RUnlock()

@@ -202,7 +202,7 @@ func DefaultPolicy() *Policy {
 		MaxHubEgressTopupSats:    100,
 		MaxHubFeeSatsPerDay:      500,
 		EscrowMode:               EscrowModeAuto,
-		EscrowMinSats:            DefaultEscrowMinSat,
+		EscrowMinSats:            0,
 		BlockedSellers:           make(map[string]bool),
 		PreferredSellers:         make(map[string]bool),
 	}
@@ -605,22 +605,19 @@ func (p *Policy) ShouldUseEscrow(priceSats uint64) bool {
 	if mode == "" {
 		mode = EscrowModeAuto
 	}
-	if minSats == 0 {
-		minSats = DefaultEscrowMinSat
-	}
 	switch mode {
 	case EscrowModeAlways:
 		return true
 	case EscrowModeOff:
 		return false
 	default:
-		if priceSats >= minSats {
-			return true
+		if minSats > 0 {
+			return priceSats >= minSats
 		}
-		if zeroConfMax > 0 && priceSats > zeroConfMax {
-			return true
+		if zeroConfMax > 0 {
+			return priceSats > zeroConfMax
 		}
-		return false
+		return priceSats >= DefaultEscrowMinSat
 	}
 }
 

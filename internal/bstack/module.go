@@ -79,6 +79,59 @@ func ExtractNkt1Payload(s *script.Script) (MarketPayload, bool, error) {
 	return MarketPayload{}, false, nil
 }
 
+// TopicMatchesPayload checks whether an already-signature-verified MarketPayload matches expectedTopic
+// on expectedNet (avoiding redundant ECDSA verification when one submission targets multiple topics on the same Hub).
+func TopicMatchesPayload(expectedNet, expectedTopic string, p MarketPayload) bool {
+	if expectedTopic == "" {
+		return true
+	}
+	switch p.Kind {
+	case KindWant:
+		sw, err := DecodeWantPayload(p.Body)
+		if err != nil {
+			return false
+		}
+		return topicMatchesAd(expectedNet, expectedTopic, sw.Want.Domains, sw.Want.OntologyID)
+	case KindOffer:
+		so, err := DecodeOfferPayload(p.Body)
+		if err != nil {
+			return false
+		}
+		return topicMatchesAd(expectedNet, expectedTopic, so.Offer.Domains, so.Offer.OntologyID)
+	case KindAnnounce:
+		sa, err := DecodeAnnouncePayload(p.Body)
+		if err != nil {
+			return false
+		}
+		if expectedTopic == LaneOf(expectedNet, DirDomain) ||
+			expectedTopic == DomainTopic(expectedNet, DirDomain) ||
+			topicMatchesAd(expectedNet, expectedTopic, sa.Announce.Domains, "") ||
+			topicMatchesAd(expectedNet, expectedTopic, sa.Announce.SellDomains, "") {
+			return true
+		}
+		for _, pk := range sa.Announce.Packs {
+			if pk.OntologyID != "" && OntologyTopic(expectedNet, pk.OntologyID) == expectedTopic {
+				return true
+			}
+		}
+		return false
+	case KindAttestation:
+		sat, err := DecodeAttestationPayload(p.Body)
+		if err != nil {
+			return false
+		}
+		doms := sat.Attestation.Domains
+		if len(doms) == 0 {
+			doms = []string{DirDomain}
+		}
+		return topicMatchesAd(expectedNet, expectedTopic, doms, sat.Attestation.OntologyID) ||
+			expectedTopic == LaneOf(expectedNet, DirDomain) ||
+			expectedTopic == DomainTopic(expectedNet, DirDomain)
+	default:
+		return false
+	}
+}
+
 // ValidateMarketPayload verifies the signed body, network tag, domain bounds, lane routing, and expiry.
 func ValidateMarketPayload(p MarketPayload, expectedNet, expectedTopic string, now time.Time) error {
 	nowMs := now.UnixMilli()
@@ -504,6 +557,15 @@ func (m *MarketTopicManager) GetMetaData() *overlay.MetaData {
 		Description: "Nektar v0.1 signed market lane",
 		Version:     "0.1.0",
 	}
+}
+
+// MarketTopics returns all 16 canonical nibble market lane topic names (`tm_nektar_<net>_0..f`).
+func MarketTopics(net string) []string {
+	out := make([]string, 16)
+	for i := range 16 {
+		out[i] = fmt.Sprintf("tm_nektar_%s_%x", net, i)
+	}
+	return out
 }
 
 // ParseLaneNibbles normalizes an optional slice or comma-separated list of hex nibbles ("0".."f")

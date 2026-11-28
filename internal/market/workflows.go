@@ -78,13 +78,21 @@ func NewEngine(mem *memory.Service, pol *Policy) *Engine {
 	var signer *nwallet.MarketSigner
 	var keyErr error
 	if mem != nil {
-		raw, err := mem.LoadOrCreateProtectedKey("node_market_key_v1", nwallet.GenerateProtectedKeyBytes)
-		if err != nil {
-			keyErr = fmt.Errorf("market: load protected node_market_key_v1 failed (fail-closed): %w", err)
+		hasLegacyKey := false
+		if mem.DB() != nil {
+			hasLegacyKey, _ = mem.DB().HasKV("node_market_key_v1")
+		}
+		if !hasLegacyKey && mem.Chain() != nil && mem.Chain().MarketSigner() != nil {
+			signer = mem.Chain().MarketSigner()
 		} else {
-			signer, keyErr = nwallet.NewMarketSignerFromBytes(raw)
-			if keyErr != nil {
-				keyErr = fmt.Errorf("market: invalid protected node_market_key_v1: %w", keyErr)
+			raw, err := mem.LoadOrCreateProtectedKey("node_market_key_v1", nwallet.GenerateProtectedKeyBytes)
+			if err != nil {
+				keyErr = fmt.Errorf("market: load protected node_market_key_v1 failed (fail-closed): %w", err)
+			} else {
+				signer, keyErr = nwallet.NewMarketSignerFromBytes(raw)
+				if keyErr != nil {
+					keyErr = fmt.Errorf("market: invalid protected node_market_key_v1: %w", keyErr)
+				}
 			}
 		}
 	} else {

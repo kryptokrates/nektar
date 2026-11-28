@@ -10,13 +10,11 @@ import (
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/transaction"
-	"github.com/lightwebinc/bbox/boxrec"
 	"github.com/lightwebinc/bcommon/guard"
 
 	"github.com/kryptokrates/nektar/internal/bstack"
 	"github.com/kryptokrates/nektar/internal/chain"
 	"github.com/kryptokrates/nektar/internal/contracts"
-	"github.com/kryptokrates/nektar/internal/hub"
 	"github.com/kryptokrates/nektar/internal/store"
 )
 
@@ -160,7 +158,7 @@ func (b *Broker) OnPaymentTxMined(ctx context.Context, txid string, blockHeight 
 			MaxFee:       entry.EscrowMaxFee,
 			DepositorPKH: depPKH,
 		}
-		buyFee := min(escrowParams.MaxFee, uint64(300))
+		buyFee := min(escrowParams.MaxFee, uint64(150))
 		buyTx, bErr := contracts.BuildDisclosureSaleBuyTx(escrowTx, entry.EscrowVout, escrowParams, sale.RevealKey[:], buyFee)
 		if bErr != nil {
 			return // Fail closed: never mark settled or reveal ContentKeyHex without a valid Buy(k) claim
@@ -262,10 +260,10 @@ func (b *Broker) OnPaymentTxMined(ctx context.Context, txid string, blockHeight 
 		})
 	}
 
-	// Push encrypted reveal_key via Hub bbox so BuyerDeal wakes immediately upon confirmation!
+	// Push encrypted reveal_key via Hub bbox (office-bound across Leaf-Spine BRC-149 plane) so BuyerDeal wakes immediately upon confirmation!
 	if b.disc != nil && entry.BuyerPub != "" {
 		wireCT := sale.SaleOffer.CiphertextHex
-		if len(wireCT) > bstack.InlineDirectMaxHexLen && sale.ChirpURL != "" && b.PublicURL() != "" {
+		if len(wireCT) > bstack.InlineOfferMaxHexLen && sale.ChirpURL != "" {
 			wireCT = ""
 		}
 		respPayload := &PurchaseResponse{
@@ -283,41 +281,23 @@ func (b *Broker) OnPaymentTxMined(ctx context.Context, txid string, blockHeight 
 		}
 		replyTS := time.Now().Unix()
 		bodyRaw, _ := json.Marshal(respPayload)
-		office := entry.BboxOffice
-		if office == "" {
-			office = "default"
-		}
-		var sealWallet boxrec.Sealer
-		if b.engine != nil && b.engine.signer != nil {
-			if w, wErr := b.engine.signer.ProtoWallet(); wErr == nil {
-				sealWallet = w
-			}
-		}
-		replyAAD := bstack.BboxAAD(office, b.PubHex(), entry.BuyerPub, entry.WantID, "reveal_key")
-		if sealedReply, encErr := bstack.SealBboxMessageBody(ctx, sealWallet, office, "reveal_key", b.PubHex(), entry.BuyerPub, replyTS, replyAAD, bodyRaw); encErr == nil {
-			for _, h := range b.disc.ActiveHosts() {
-				replyMsg := hub.BboxMessage{
-					Office:       office,
-					RecipientPub: entry.BuyerPub,
-					SenderPub:    b.PubHex(),
-					DealID:       entry.WantID,
-					Kind:         "reveal_key",
-					TS:           replyTS,
-					Nonce:        randNonceHex(),
-					Aud:          hubAudience(h),
-					Body:         sealedReply,
-				}
-				if sig, sErr := bstack.SignArtifactWithSigner(b.engine.signer, replyMsg.Signable()); sErr == nil {
-					replyMsg.Sig = sig
-				}
-				env, _ := json.Marshal(replyMsg)
-				if resp, dErr := b.disc.PostJSONWithHub402(ctx, strings.TrimRight(h, "/")+"/bbox/send", "bbox:send", env); dErr == nil {
-					resp.Body.Close()
-					if resp.StatusCode < 300 {
+		normOffice := bstack.NormalizeBboxOffice(entry.BboxOffice)
+		replyAAD := bstack.BboxAAD(normOffice, b.PubHex(), entry.BuyerPub, entry.WantID, "reveal_key")
+		if sealedReply, encErr := b.sealBboxPayloadUnderLimit(ctx, normOffice, "reveal_key", b.PubHex(), entry.BuyerPub, replyTS, replyAAD, bodyRaw); encErr == nil {
+			hosts := b.peerBboxHosts(ctx, "", b.disc.ActiveHosts())
+			for _, ph := range b.peerBboxHosts(ctx, entry.BuyerPub, nil) {
+				found := false
+				for _, eh := range hosts {
+					if eh == ph {
+						found = true
 						break
 					}
 				}
+				if !found {
+					hosts = append(hosts, ph)
+				}
 			}
+			_ = b.postOfficeBboxMessage(ctx, hosts, normOffice, entry.BuyerPub, entry.WantID, "reveal_key", replyTS, sealedReply)
 		}
 	}
 }

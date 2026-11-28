@@ -42,9 +42,10 @@ func cmdServeWithContext(parentCtx context.Context, args []string) error {
 	defaultRestateListen := "127.0.0.1:9080"
 	addr := fs.String("listen", defaultListen, "HTTP listen address")
 	restateAddr := fs.String("restate-listen", envOr("NEKTAR_RESTATE_LISTEN", defaultRestateListen), "Dedicated Restate HTTP/2 (h2c) endpoint address (default 127.0.0.1:9080)")
-	withHub := fs.Bool("hub", os.Getenv("NEKTAR_EMBED_HUB") == "1", "Mount embedded durable SQLite Go Overlay Hub at /hub/ with starter liquidity & bounties")
+	withHub := fs.Bool("hub", os.Getenv("NEKTAR_EMBED_HUB") == "1", "Mount embedded durable SQLite Go Overlay Hub at /hub/")
+	seedBountiesFlag := fs.Bool("seed-bounties", os.Getenv("NEKTAR_HUB_SEED_BOUNTIES") == "1", "Explicitly fund Hub-sponsored bounties out of Hub wallet (default: false)")
 	hubRoleFlag := fs.String("hub-role", os.Getenv("NEKTAR_HUB_ROLE"), "Embedded Hub topology role (leaf|spine)")
-	feePresetFlag := fs.String("fee-preset", os.Getenv("NEKTAR_HUB_FEE_PRESET"), "Embedded Hub fee preset (free|lightbsv_egress|hybrid)")
+	feePresetFlag := fs.String("fee-preset", os.Getenv("NEKTAR_HUB_FEE_PRESET"), "Embedded Hub fee preset (free|spine_wholesale|lightbsv_egress|hybrid)")
 	upstreamSpinesFlag := fs.String("upstream-spines", os.Getenv("NEKTAR_UPSTREAM_SPINES"), "Comma-separated Spine Hub URLs for Leaf upstream forwarding")
 	netName := fs.String("network", "", "Network override (memory|regtest|testnet|main)")
 	confirmFlag := fs.String("confirm", "", "Mainnet acknowledgement (pass I_UNDERSTAND with --network main)")
@@ -171,7 +172,7 @@ func cmdServeWithContext(parentCtx context.Context, args []string) error {
 	var liqState *hub.LiquidityState
 	var upstreamSpines []string
 	if *withHub {
-		hubNode, liqState, upstreamSpines, err = initEmbeddedHub(ctx, rt, *dataDir, *hubRoleFlag, *feePresetFlag, *upstreamSpinesFlag)
+		hubNode, liqState, upstreamSpines, err = initEmbeddedHub(ctx, rt, *dataDir, *hubRoleFlag, *feePresetFlag, *upstreamSpinesFlag, *seedBountiesFlag)
 		if err != nil {
 			return err
 		}

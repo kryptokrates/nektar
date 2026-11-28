@@ -154,7 +154,7 @@ func (s *MarketLookupService) SpendNotificationMode() module.SpendNotificationMo
 
 func (s *MarketLookupService) indexOutput(op transaction.Outpoint, topic string, lock *script.Script, beef []byte) error {
 	p, ok, _ := ExtractNkt1Payload(lock)
-	if !ok {
+	if !ok || p.IsUnknownExtensionKind() {
 		return nil
 	}
 	rec := indexedRecord{

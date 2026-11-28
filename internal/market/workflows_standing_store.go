@@ -42,6 +42,10 @@ type StandingOrderInput struct {
 	MaxAttempts            int           `json:"maxAttempts,omitempty"`
 	WaitTimeout            time.Duration `json:"waitTimeout,omitempty"`
 	ApprovalTimeout        time.Duration `json:"approvalTimeout,omitempty"`
+	// ContinueAsNew carry-over fields bounding workflows.sqlite history growth (DDIA Ch. 9 / RFC-003).
+	ResumeState                 *StandingOrderState `json:"resumeState,omitempty"`
+	SeenOfferIDs                []string            `json:"seenOfferIds,omitempty"`
+	MaxIterationsBeforeRollover int                 `json:"maxIterationsBeforeRollover,omitempty"`
 }
 
 // SteerStandingOrderInput live-steers a running StandingOrderWorkflow without restarting it.

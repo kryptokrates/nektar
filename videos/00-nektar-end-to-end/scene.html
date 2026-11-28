@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Nektar — End-to-End Explainer</title>
+  <link rel="stylesheet" href="../shared/theme.css" />
+  <style>
+    .scene { padding: 72px 96px 136px; }
+    .scene-head { margin-bottom: 28px; }
+    .headline { font-size: 56px; }
+    .subhead { font-size: 22px; margin-top: 10px; }
+
+    /* Shared layout helpers */
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; width: 100%; max-width: 1620px; margin: 0 auto; align-items: stretch; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; width: 100%; max-width: 1620px; margin: 0 auto; align-items: stretch; }
+    .center-col { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 26px; }
+
+    /* Scene 1: Problem */
+    .app-card { display: flex; flex-direction: column; justify-content: space-between; gap: 18px; min-height: 360px; padding: 32px; }
+    .app-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+    .app-id { display: flex; align-items: center; gap: 16px; }
+    .app-badge { width: 56px; height: 56px; border-radius: 15px; display: grid; place-items: center; font-size: 24px; font-weight: 900; border: 1px solid rgba(255,255,255,.14); }
+    .app-badge.claude { background: linear-gradient(135deg,#d97757,#a84e30); color: #fff; }
+    .app-badge.cursor { background: linear-gradient(135deg,#2e2c2a,#141210); color: #f4efe6; }
+    .app-badge.codex  { background: linear-gradient(135deg,#2d825c,#194d36); color: #d8ffea; }
+    .app-badge.claw   { background: linear-gradient(135deg,#f7991b,#c85808); color: #161413; }
+    .app-name { font-size: 28px; font-weight: 800; }
+    .app-time { font-family: var(--font-mono); font-size: 15px; color: var(--mut); }
+    .bubble { background: rgba(255,255,255,.04); border: 1px solid var(--line2); border-radius: 16px; padding: 20px 22px; font-size: 23px; font-weight: 600; line-height: 1.38; color: var(--ink); }
+    .bubble.bad { background: rgba(229,83,75,.09); border-color: rgba(229,83,75,.4); color: #ffd0cd; }
+    .bubble.ok  { background: rgba(76,194,107,.09); border-color: rgba(76,194,107,.4); color: #d7fbe0; }
+
+    /* Scene 2: Brain + Dock + Shards */
+    .brain-layout { display: grid; grid-template-columns: 440px 1fr 440px; gap: 36px; align-items: center; width: 100%; max-width: 1660px; margin: 0 auto; flex: 1; }
+    .dock-list { display: flex; flex-direction: column; gap: 16px; }
+    .dock-row { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-radius: 16px; background: #141210; border: 1.5px solid var(--line); }
+    .dock-row.on { border-color: rgba(76,194,107,.55); background: rgba(76,194,107,.07); }
+    .dock-left { display: flex; align-items: center; gap: 14px; font-size: 22px; font-weight: 800; }
+    .brain-center { display: flex; flex-direction: column; align-items: center; gap: 22px; }
+    .hex-vault { width: 290px; height: 290px; display: grid; place-items: center; position: relative; }
+    .shard-stack { display: flex; flex-direction: column; gap: 16px; }
+    .shard-box { padding: 22px 24px; border-radius: 16px; background: #141210; border: 1.5px solid var(--line2); display: flex; flex-direction: column; gap: 8px; }
+    .shard-box.amber { border-color: rgba(247,153,27,.6); background: rgba(247,153,27,.07); }
+    .shard-title { display: flex; align-items: center; justify-content: space-between; font-family: var(--font-mono); font-size: 21px; font-weight: 800; }
+    .shard-desc { font-size: 17px; color: var(--mut); }
+
+    /* Scene 3: Proof & Receipt */
+    .proof-flow { display: grid; grid-template-columns: 1fr 70px 1.2fr 70px 1fr; align-items: center; width: 100%; max-width: 1660px; margin: 0 auto; flex: 1; }
+    .flow-arrow { text-align: center; font-size: 42px; font-weight: 900; color: var(--amber); }
+    .triple-row { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 18px 0; }
+    .t-chip { padding: 14px 20px; border-radius: 12px; font-family: var(--font-mono); font-size: 22px; font-weight: 800; background: #1e1a17; border: 1.5px solid var(--line2); }
+    .t-chip.pred { background: rgba(247,153,27,.16); border-color: rgba(247,153,27,.55); color: var(--amber-hi); }
+    .t-chip.obj  { background: rgba(76,194,107,.14); border-color: rgba(76,194,107,.5); color: var(--ok); }
+    .chain-mini { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 14px 0 18px; }
+    .blk { width: 84px; height: 56px; border-radius: 10px; background: #1a1715; border: 1.5px solid var(--line2); display: grid; place-items: center; font-family: var(--font-mono); font-size: 13px; color: var(--mut); }
+    .blk.hot { background: rgba(247,153,27,.16); border-color: var(--amber); color: var(--amber-hi); font-weight: 800; }
+    .rcp-pill { display: flex; align-items: center; gap: 14px; padding: 16px 20px; border-radius: 14px; background: rgba(76,194,107,.11); border: 1.5px solid rgba(76,194,107,.5); }
+    .rcp-check { width: 38px; height: 38px; border-radius: 999px; background: var(--ok); color: #0a140c; display: grid; place-items: center; font-size: 22px; font-weight: 900; flex-shrink: 0; }
+
+    /* Scene 4: Atomic Market */
+    .swap-grid { display: grid; grid-template-columns: 1fr 400px 1fr; gap: 28px; align-items: center; width: 100%; max-width: 1640px; margin: 0 auto; flex: 1; }
+    .swap-center { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+    .swap-pipe { width: 100%; padding: 18px 22px; border-radius: 14px; display: flex; align-items: center; justify-content: space-between; font-family: var(--font-mono); font-size: 20px; font-weight: 800; }
+    .swap-pipe.sats { background: rgba(76,194,107,.12); border: 1.5px solid rgba(76,194,107,.5); color: var(--ok); }
+    .swap-pipe.key  { background: rgba(247,153,27,.12); border: 1.5px solid rgba(247,153,27,.5); color: var(--amber-hi); }
+    .hub-strip { max-width: 1060px; margin: 0 auto; width: 100%; padding: 16px 26px; border-radius: 14px; background: #141210; border: 1px solid var(--line2); display: flex; align-items: center; justify-content: space-between; font-size: 20px; color: var(--mut); }
+
+    /* Scene 5: Grades & Ticker */
+    .grades-ladder { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; align-items: end; height: 340px; padding-top: 16px; }
+    .g-col { border-radius: 16px; padding: 20px 16px; display: flex; flex-direction: column; justify-content: space-between; align-items: center; text-align: center; border: 1.5px solid var(--line2); background: #141210; }
+    .g-col.c { height: 175px; }
+    .g-col.b { height: 225px; border-color: rgba(120,180,255,.55); background: rgba(120,180,255,.08); }
+    .g-col.a { height: 275px; border-color: rgba(76,194,107,.55); background: rgba(76,194,107,.09); }
+    .g-col.s { height: 325px; border-color: var(--amber); background: rgba(247,153,27,.13); box-shadow: 0 0 36px rgba(247,153,27,.18); }
+    .g-ltr { font-family: var(--font-mono); font-size: 46px; font-weight: 900; line-height: 1; }
+    .g-desc { font-size: 16px; font-weight: 700; line-height: 1.28; color: var(--ink); }
+    .ticker-row { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-radius: 14px; background: #151210; border: 1.5px solid var(--line); }
+    .ticker-row.win { border-color: var(--ok); background: rgba(76,194,107,.09); }
+    .modes-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+    .mode-box { padding: 16px; border-radius: 14px; background: #141210; border: 1.5px solid var(--line2); text-align: center; }
+    .mode-box b { display: block; font-family: var(--font-mono); font-size: 17px; margin-bottom: 4px; }
+    .mode-box span { font-size: 15px; color: var(--mut); }
+
+    /* Scene 6: Safety */
+    .safe-card { display: flex; flex-direction: column; justify-content: space-between; gap: 18px; min-height: 410px; padding: 30px; }
+    .red-btn { width: 112px; height: 112px; border-radius: 999px; background: #e5534b; color: #140d0d; display: grid; place-items: center; font-family: var(--font-mono); font-size: 24px; font-weight: 900; margin: 12px auto; box-shadow: 0 0 0 12px rgba(229,83,75,.18); }
+    .cap-track { height: 12px; border-radius: 6px; background: #26211d; overflow: hidden; margin-top: 8px; }
+    .cap-fill { height: 100%; border-radius: 6px; background: var(--ok); }
+
+    /* Scene 7: Outro */
+    .outro { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; text-align: center; padding: 72px; }
+    .outro-emblem { width: 128px; height: 128px; border-radius: 30px; overflow: hidden; border: 2px solid rgba(247,153,27,.6); background: #221e1d; }
+    .outro-emblem img { width: 100%; height: 100%; display: block; }
+    .outro-wordmark { font-size: 72px; font-weight: 900; letter-spacing: 0.16em; color: var(--ink); margin: 0; }
+    .outro-tagline { font-size: 32px; font-weight: 700; color: var(--mut); margin: 0; }
+    .outro-pills { display: flex; gap: 16px; margin-top: 8px; }
+    .truth-note { position: absolute; bottom: 44px; font-size: 16px; color: var(--mut2); max-width: 1080px; }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="stage-grid"></div>
+    <div class="corner-brand" id="corner-brand">
+      <img src="../shared/logo.svg" alt="nektar" />
+      <span>NEKTAR.RUN</span>
+    </div>
+    <div class="corner-scene-tag" id="corner-tag">01 / THE PROBLEM</div>
+
+    <!-- SCENE 1: THE PROBLEM -->
+    <section class="scene" id="scene-0">
+      <div class="scene-head" id="s0-head">
+        <span class="kicker bad">THE PROBLEM</span>
+        <h1 class="headline">Your AI tools have <span class="headline-grad">total amnesia</span></h1>
+        <p class="subhead">Switch apps and start explaining everything from zero — again.</p>
+      </div>
+      <div class="center-col">
+        <div class="grid-3">
+          <div class="card app-card" id="s0-c0">
+            <div class="app-top">
+              <div class="app-id"><span class="app-badge claude">C</span><div><div class="app-name">Claude Code</div><div class="app-time">9:00 AM</div></div></div>
+              <span class="pill pill-ok">EXPLAINED</span>
+            </div>
+            <div class="bubble ok">"Our production API runs on port 8080 and always uses Stripe webhooks."</div>
+            <div style="font-size:18px;color:var(--mut)">You spend 10 minutes teaching Claude your rules.</div>
+          </div>
+
+          <div class="card app-card" id="s0-c1">
+            <div class="app-top">
+              <div class="app-id"><span class="app-badge cursor">Cu</span><div><div class="app-name">Cursor</div><div class="app-time">10:00 AM</div></div></div>
+              <span class="pill pill-bad">AMNESIA</span>
+            </div>
+            <div class="bubble bad">"Wait — what port does your API use? Should I write polling code?"</div>
+            <div style="font-size:18px;color:#ff9b95">Cursor has zero idea what you just told Claude.</div>
+          </div>
+
+          <div class="card app-card" id="s0-c2">
+            <div class="app-top">
+              <div class="app-id"><span class="app-badge codex">Cx</span><div><div class="app-name">Codex CLI</div><div class="app-time">11:00 AM</div></div></div>
+              <span class="pill pill-bad">GUESSING</span>
+            </div>
+            <div class="bubble bad">"I guessed port 3000 and overwrote your webhook handler."</div>
+            <div style="font-size:18px;color:#ff9b95">Every AI app lives in its own isolated silo.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCENE 2: ONE SHARED LOCKED BRAIN -->
+    <section class="scene" id="scene-1">
+      <div class="scene-head" id="s1-head">
+        <span class="kicker">STEP 1 · YOUR LOCAL BRAIN</span>
+        <h1 class="headline">One command. <span class="headline-amber-green">One shared, encrypted brain.</span></h1>
+        <p class="subhead">Runs on your own PC. Private by default. Zero Docker, zero cloud lock-in.</p>
+      </div>
+      <div class="brain-layout">
+        <div class="dock-list">
+          <div class="terminal" id="s1-term" style="padding:16px 20px;font-size:21px;margin-bottom:4px">
+            <span class="prompt">$</span><span class="cmd" id="s1-cmd"></span><span class="cursor"></span>
+          </div>
+          <div class="dock-row" id="s1-a0"><div class="dock-left"><span class="app-badge claude" style="width:42px;height:42px;font-size:18px">C</span>Claude Code</div><span class="pill" id="s1-p0">WAITING</span></div>
+          <div class="dock-row" id="s1-a1"><div class="dock-left"><span class="app-badge cursor" style="width:42px;height:42px;font-size:18px">Cu</span>Cursor</div><span class="pill" id="s1-p1">WAITING</span></div>
+          <div class="dock-row" id="s1-a2"><div class="dock-left"><span class="app-badge codex" style="width:42px;height:42px;font-size:18px">Cx</span>Codex CLI</div><span class="pill" id="s1-p2">WAITING</span></div>
+          <div class="dock-row" id="s1-a3"><div class="dock-left"><span class="app-badge claw" style="width:42px;height:42px;font-size:18px">OC</span>OpenClaw</div><span class="pill" id="s1-p3">WAITING</span></div>
+        </div>
+
+        <div class="brain-center" id="s1-vault">
+          <div class="hex-vault">
+            <svg viewBox="0 0 260 260" width="280" height="280">
+              <polygon points="130,14 232,72 232,188 130,246 28,188 28,72" fill="#181411" stroke="#f7991b" stroke-width="5"/>
+              <path d="M104 126 v-16 a26 26 0 0 1 52 0 v16" fill="none" stroke="#f7991b" stroke-width="8" stroke-linecap="round"/>
+              <rect x="92" y="126" width="76" height="58" rx="12" fill="#f7991b"/>
+              <circle cx="130" cy="155" r="9" fill="#161413"/>
+            </svg>
+          </div>
+          <span class="pill pill-amber" style="font-size:17px;padding:8px 20px">YOUR LOCAL NEKTAR BRAIN</span>
+          <div style="font-size:19px;color:var(--mut);text-align:center">Tell Claude once → Cursor &amp; Codex know instantly</div>
+        </div>
+
+        <div class="shard-stack" id="s1-shards">
+          <div class="shard-box">
+            <div class="shard-title"><span>#work-private</span><span class="pill" style="font-size:12px">LOCKED</span></div>
+            <div class="shard-desc">Encrypted Shard folder. Never leaves your laptop.</div>
+          </div>
+          <div class="shard-box">
+            <div class="shard-title"><span>#my-codebase</span><span class="pill" style="font-size:12px">LOCKED</span></div>
+            <div class="shard-desc">Git-versioned history with branches &amp; time-travel.</div>
+          </div>
+          <div class="shard-box amber">
+            <div class="shard-title"><span style="color:var(--amber-hi)">#ops-fixes</span><span class="pill pill-amber" style="font-size:12px">OPT-IN SELL</span></div>
+            <div class="shard-desc" style="color:#dfd7cf">Only folders you click Sell on ever enter the market.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCENE 3: CLEAN FACTS & TAMPER-PROOF RECEIPTS -->
+    <section class="scene" id="scene-2">
+      <div class="scene-head" id="s2-head">
+        <span class="kicker ok">STEP 2 · VERIFIABLE PROOF</span>
+        <h1 class="headline">Clean facts + <span class="headline-green-amber">tamper-proof receipts</span></h1>
+        <p class="subhead">Know exactly when a note was saved and prove nobody edited it.</p>
+      </div>
+      <div class="proof-flow">
+        <div class="card" id="s2-note" style="padding:30px">
+          <div class="card-label">1. RAW NOTE (FRAGMENT)</div>
+          <div class="bubble" style="margin-top:16px;font-size:21px">"After upgrading Redis to 7.4, enabling TCP keepalive fixed the 30-second connection timeouts."</div>
+          <div style="margin-top:16px;font-size:17px;color:var(--mut)">Saved inside your encrypted Shard</div>
+        </div>
+
+        <div class="flow-arrow" id="s2-arr1">→</div>
+
+        <div class="card card-amber" id="s2-triple" style="padding:30px">
+          <div class="card-label amber">2. CLEAN FACT (1 VERIFIED TRIPLE)</div>
+          <div class="triple-row">
+            <span class="t-chip">Redis-7.4</span>
+            <span class="t-chip pred">fixes</span>
+            <span class="t-chip obj">timeout</span>
+          </div>
+          <div style="text-align:center;font-size:18px;color:#dfd7cf;margin-bottom:14px">Checked against a shared dictionary (<strong>Ontology</strong>)</div>
+          <div class="chain-mini">
+            <div class="blk">Block</div>
+            <div style="color:var(--mut)">—</div>
+            <div class="blk hot">ANCHOR</div>
+            <div style="color:var(--mut)">—</div>
+            <div class="blk">Block</div>
+          </div>
+          <div style="text-align:center;font-size:16px;color:var(--mut)">Only a tiny fingerprint goes on Bitcoin (BSV) — never your secret text</div>
+        </div>
+
+        <div class="flow-arrow" id="s2-arr2">→</div>
+
+        <div class="card card-ok" id="s2-rcp" style="padding:30px">
+          <div class="card-label ok">3. CLICKABLE RECEIPT</div>
+          <div class="rcp-pill" style="margin-top:18px">
+            <span class="rcp-check">✓</span>
+            <div>
+              <div class="mono" style="font-size:21px;font-weight:800;color:var(--ink)">nektarr1.verified</div>
+              <div style="font-size:16px;color:var(--ok)">Saved &amp; unaltered ✓</div>
+            </div>
+          </div>
+          <div style="margin-top:18px;font-size:16px;line-height:1.45;color:var(--mut)">
+            <strong style="color:var(--ink)">Honest Rule:</strong> Proves a note existed and was never changed — <em>never</em> that the author told the truth.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCENE 4: BUY & SELL FOR PENNIES (ATOMIC SWAP) -->
+    <section class="scene" id="scene-3">
+      <div class="scene-head" id="s3-head">
+        <span class="kicker">STEP 3 · THE KNOWLEDGE MARKET</span>
+        <h1 class="headline">Buy &amp; sell clean facts <span class="headline-grad">for digital pennies</span></h1>
+        <p class="subhead">Atomic swaps work like a no-scam vending machine — zero subscriptions.</p>
+      </div>
+      <div class="center-col">
+        <div class="swap-grid">
+          <div class="card card-ok" id="s3-buy" style="padding:30px">
+            <span class="pill pill-ok">BUYER · WANT</span>
+            <h2 style="font-size:30px;margin:16px 0 10px">"Need Redis 7.4 timeout fix"</h2>
+            <div class="mono" style="font-size:24px;color:var(--ok);font-weight:800">Max budget: 100 sats</div>
+            <div style="font-size:18px;color:var(--mut);margin-top:8px">100 sats = less than 1/100th of a cent.<br/>No seller online? Leave a <strong>Standing Order</strong>.</div>
+          </div>
+
+          <div class="swap-center" id="s3-mid">
+            <div class="swap-pipe sats" id="s3-pipe1"><span>60 SATS</span><span>───────▶</span></div>
+            <div style="padding:14px 24px;border-radius:999px;background:#1e1a16;border:2px solid var(--amber);font-family:var(--font-mono);font-size:18px;font-weight:900;color:var(--amber-hi)" id="s3-lock">ATOMIC SWAP · SAME INSTANT</div>
+            <div class="swap-pipe key" id="s3-pipe2"><span>◀───────</span><span>UNLOCK KEY</span></div>
+          </div>
+
+          <div class="card card-amber" id="s3-sell" style="padding:30px">
+            <span class="pill pill-amber">SELLER · OFFER</span>
+            <h2 style="font-size:30px;margin:16px 0 10px">"#ops-fixes · Verified Fix"</h2>
+            <div class="mono" style="font-size:24px;color:var(--amber-hi);font-weight:800">Ask: 60 sats</div>
+            <div style="font-size:18px;color:var(--mut);margin-top:8px">Auto-quoted while you sleep.<br/>Seller gets paid the instant the key unlocks.</div>
+          </div>
+        </div>
+
+        <div class="hub-strip" id="s3-hub">
+          <span><strong style="color:var(--amber-hi)">Public Hub:</strong> Just a bulletin board so agents find each other behind home Wi-Fi.</span>
+          <span class="pill" style="font-size:14px">Zero custody · Never sees your keys</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCENE 5: GRADES & COMMODITY TICKER -->
+    <section class="scene" id="scene-4">
+      <div class="scene-head" id="s4-head">
+        <span class="kicker">STEP 4 · QUALITY &amp; FAIR PRICES</span>
+        <h1 class="headline">Quality stickers + <span class="headline-amber-green">price per real fact</span></h1>
+        <p class="subhead">Compare every offer apples-to-apples — never overpay for wordy fluff.</p>
+      </div>
+      <div class="center-col">
+        <div class="grid-2">
+          <div class="card" id="s4-left" style="padding:28px 30px">
+            <div class="card-label amber">NMU-1 QUALITY GRADES (MACHINE-VERIFIED)</div>
+            <div class="grades-ladder">
+              <div class="g-col c" id="s4-gc"><div class="g-ltr" style="color:var(--mut)">C</div><div class="g-desc">Clean text<br/><span style="font-size:14px;color:var(--mut)">Secrets scrubbed</span></div></div>
+              <div class="g-col b" id="s4-gb"><div class="g-ltr" style="color:#78b4ff">B</div><div class="g-desc">Structured facts<br/><span style="font-size:14px;color:#9cc6ff">Shared dictionary</span></div></div>
+              <div class="g-col a" id="s4-ga"><div class="g-ltr" style="color:var(--ok)">A</div><div class="g-desc">Quoted + Bond<br/><span style="font-size:14px;color:#9ae0ab">Cash deposit</span></div></div>
+              <div class="g-col s" id="s4-gs"><div class="g-ltr" style="color:var(--amber-hi)">S</div><div class="g-desc">Live Maintained<br/><span style="font-size:14px;color:var(--amber)">Real-time alerts</span></div></div>
+            </div>
+          </div>
+
+          <div class="card" id="s4-right" style="padding:28px 30px;display:flex;flex-direction:column;justify-content:space-between">
+            <div>
+              <div class="card-label ok" style="margin-bottom:16px">COMMODITY TICKER · GROCERY UNIT PRICING</div>
+              <div style="display:flex;flex-direction:column;gap:14px">
+                <div class="ticker-row win" id="s4-t1">
+                  <div>
+                    <div style="font-size:21px;font-weight:800"><span class="pill pill-ok" style="margin-right:10px">GRADE A</span>100 sats ÷ 20 facts</div>
+                    <div style="font-size:16px;color:var(--ok);margin-top:4px">Best unit value · Bonded seller ✓</div>
+                  </div>
+                  <div class="mono" style="font-size:28px;font-weight:900;color:var(--ok)">5 sat/fact</div>
+                </div>
+                <div class="ticker-row" id="s4-t2">
+                  <div>
+                    <div style="font-size:21px;font-weight:800;color:var(--mut)"><span class="pill" style="margin-right:10px">GRADE C</span>80 sats ÷ 2 facts</div>
+                    <div style="font-size:16px;color:var(--mut);margin-top:4px">Looks cheaper — actually costs 8× more</div>
+                  </div>
+                  <div class="mono" style="font-size:26px;font-weight:800;color:var(--mut)">40 sat/fact</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="modes-bar" id="s4-modes">
+              <div class="mode-box"><b style="color:var(--ok)">SPOT</b><span>Buy pack once</span></div>
+              <div class="mode-box"><b style="color:#78b4ff">PER-QUERY</b><span>Pay per search</span></div>
+              <div class="mode-box"><b style="color:var(--amber-hi)">LIVE FEED</b><span>Subscribe to updates</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCENE 6: SAFETY & CONTROL -->
+    <section class="scene" id="scene-5">
+      <div class="scene-head" id="s5-head">
+        <span class="kicker ok">STEP 5 · BUILT-IN SAFETY</span>
+        <h1 class="headline">You stay in <span class="headline-green-amber">100% control</span></h1>
+        <p class="subhead">Secrets never leak, budgets never run away, and bad sellers get punished automatically.</p>
+      </div>
+      <div class="center-col">
+        <div class="grid-3">
+          <div class="card card-bad safe-card" id="s5-c0">
+            <span class="pill pill-bad">PII GATE &amp; SLEEP CYCLE</span>
+            <h3 style="font-size:28px;margin:0">Blocks passwords &amp; keys</h3>
+            <div class="bubble bad mono" style="font-size:19px">API_KEY=sk-live-••••<br/>→ BLOCKED BEFORE SALE ✕</div>
+            <div style="font-size:18px;color:var(--mut)">Automatic secret scanner checks every note before it can ever be listed.</div>
+          </div>
+
+          <div class="card card-ok safe-card" id="s5-c1">
+            <span class="pill pill-ok">SPENDING POLICY</span>
+            <h3 style="font-size:28px;margin:0">Wallet seatbelt + Kill Switch</h3>
+            <div>
+              <div style="display:flex;justify-content:space-between;font-size:18px"><span>Daily limit</span><strong class="mono" style="color:var(--ok)">2,000 sats</strong></div>
+              <div class="cap-track"><div class="cap-fill" style="width:35%"></div></div>
+              <div class="red-btn" id="s5-stop">STOP</div>
+            </div>
+            <div style="font-size:18px;color:var(--mut)">Hard caps per deal &amp; per day. One click freezes all autonomous trading.</div>
+          </div>
+
+          <div class="card card-amber safe-card" id="s5-c2">
+            <span class="pill pill-amber">BOND &amp; 6D REPUTATION</span>
+            <h3 style="font-size:28px;margin:0">Fake grades get auto-slashed</h3>
+            <div class="bubble" style="font-size:19px;border-color:rgba(247,153,27,.45)">
+              Claimed <strong style="color:var(--amber-hi)">Grade A</strong>, delivered <strong style="color:var(--bad)">Grade C</strong><br/>
+              → <strong style="color:var(--bad)">Slashed score + Quarantined</strong>
+            </div>
+            <div style="font-size:18px;color:var(--mut)">Bad triples are quarantined out of your brain and the seller's score drops immediately.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCENE 7: CINEMA OUTRO -->
+    <section class="scene" id="scene-6">
+      <div class="outro">
+        <div id="outro-brand" style="display:flex;flex-direction:column;align-items:center;gap:20px">
+          <div class="outro-emblem" id="outro-emblem"><img src="../shared/logo.svg" alt="nektar" /></div>
+          <h1 class="outro-wordmark">NEKTAR.RUN</h1>
+        </div>
+        <p class="outro-tagline" id="outro-tag">One shared, verifiable brain for all your AI agents.</p>
+        <div class="outro-pills" id="outro-pills">
+          <span class="pill pill-solid-amber" style="font-size:20px;padding:10px 24px">$ nektar up</span>
+          <span class="pill pill-ok" style="font-size:19px;padding:10px 22px">100% Local &amp; Encrypted</span>
+          <span class="pill" style="font-size:19px;padding:10px 22px">Free to Start</span>
+        </div>
+        <div class="truth-note" id="outro-truth">
+          Proofs &amp; grades verify recorded + unaltered + schema-checked + bonded status — never real-world factual truth. Model identity is declared.
+        </div>
+      </div>
+    </section>
+
+    <!-- Subtitles & Progress -->
+    <div class="subtitle-wrap"><div class="subtitle-bar" id="subtitle-bar"></div></div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+
+  <script>
+    const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
+    const easeOut = (x) => 1 - Math.pow(1 - clamp(x), 3);
+    const lerp = (a, b, x) => a + (b - a) * clamp(x);
+
+    const TAGS = [
+      '01 / THE PROBLEM',
+      '02 / ONE SHARED BRAIN',
+      '03 / CLEAN FACTS & RECEIPTS',
+      '04 / ATOMIC MARKET',
+      '05 / GRADES & TICKER',
+      '06 / SAFETY & CONTROL',
+      ''
+    ];
+
+    function reveal(id, progress, dy = 22, scale0 = 0.97) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const p = easeOut(progress);
+      el.style.opacity = p.toFixed(4);
+      el.style.transform = `translateY(${((1 - p) * dy).toFixed(1)}px) scale(${lerp(scale0, 1, p).toFixed(4)})`;
+    }
+
+    window.renderFrame = function (t, frame, totalFrames, timings) {
+      const scenes = timings.scenes;
+      const fadeDur = 0.35;
+
+      // Determine active scene
+      let activeIdx = scenes.length - 1;
+      for (let i = 0; i < scenes.length; i++) {
+        if (t >= scenes[i].start && t < scenes[i].end) {
+          activeIdx = i;
+          break;
+        }
+      }
+
+      // Scene crossfade opacity
+      for (let i = 0; i < scenes.length; i++) {
+        const el = document.getElementById(`scene-${i}`);
+        if (!el) continue;
+        const sc = scenes[i];
+        let op = 0;
+        if (t >= sc.start - fadeDur * 0.4 && t <= sc.end + fadeDur * 0.4) {
+          const fin = i === 0 ? easeOut(t / 0.3) : easeOut((t - sc.start + fadeDur * 0.3) / fadeDur);
+          const fout = i === scenes.length - 1 ? 1 : 1 - easeOut((t - sc.end + fadeDur * 0.5) / fadeDur);
+          op = Math.min(fin, fout);
+        }
+        el.style.opacity = clamp(op).toFixed(4);
+      }
+
+      // Persistent chrome
+      const isOutro = activeIdx === scenes.length - 1;
+      document.getElementById('corner-brand').style.opacity = isOutro ? '0' : '1';
+      const tagEl = document.getElementById('corner-tag');
+      tagEl.textContent = TAGS[activeIdx] || '';
+      tagEl.style.opacity = isOutro ? '0' : '1';
+
+      const subEl = document.getElementById('subtitle-bar');
+      const subText = (scenes[activeIdx] && scenes[activeIdx].subtitle) || '';
+      subEl.textContent = subText;
+      subEl.style.opacity = subText ? '1' : '0';
+      document.getElementById('progress-fill').style.width = `${clamp(t / timings.totalDuration) * 100}%`;
+
+      // Scene 0: Problem
+      {
+        const u = t - scenes[0].start;
+        reveal('s0-head', u / 0.45);
+        reveal('s0-c0', (u - 0.35) / 0.5);
+        reveal('s0-c1', (u - 2.9) / 0.5);
+        reveal('s0-c2', (u - 5.3) / 0.5);
+      }
+
+      // Scene 1: Brain & Dock
+      {
+        const u = t - scenes[1].start;
+        reveal('s1-head', u / 0.45);
+        reveal('s1-term', (u - 0.25) / 0.45);
+        const cmdStr = 'nektar up';
+        const typed = Math.floor(clamp((u - 0.9) / 1.1) * cmdStr.length);
+        document.getElementById('s1-cmd').textContent = cmdStr.slice(0, typed);
+        for (let i = 0; i < 4; i++) {
+          reveal(`s1-a${i}`, (u - (1.8 + i * 0.35)) / 0.4, 14, 0.98);
+          const on = u >= 2.5 + i * 0.45;
+          const row = document.getElementById(`s1-a${i}`);
+          const pill = document.getElementById(`s1-p${i}`);
+          row.classList.toggle('on', on);
+          pill.className = on ? 'pill pill-ok' : 'pill';
+          pill.textContent = on ? 'DOCKED ✓' : 'WAITING';
+        }
+        reveal('s1-vault', (u - 2.1) / 0.6, 16, 0.92);
+        reveal('s1-shards', (u - 4.6) / 0.6, 20, 0.96);
+      }
+
+      // Scene 2: Proof & Receipt
+      {
+        const u = t - scenes[2].start;
+        reveal('s2-head', u / 0.45);
+        reveal('s2-note', (u - 0.3) / 0.5);
+        reveal('s2-arr1', (u - 1.5) / 0.35, 0, 0.9);
+        reveal('s2-triple', (u - 1.8) / 0.55);
+        reveal('s2-arr2', (u - 5.4) / 0.35, 0, 0.9);
+        reveal('s2-rcp', (u - 5.8) / 0.55);
+      }
+
+      // Scene 3: Market Atomic Swap
+      {
+        const u = t - scenes[3].start;
+        reveal('s3-head', u / 0.45);
+        reveal('s3-buy', (u - 0.35) / 0.5);
+        reveal('s3-sell', (u - 2.4) / 0.5);
+        reveal('s3-mid', (u - 4.8) / 0.55);
+        const pulse = 1 + 0.03 * Math.sin(Math.max(0, u - 5.8) * 5);
+        document.getElementById('s3-lock').style.transform = u > 5.8 ? `scale(${pulse.toFixed(4)})` : 'scale(1)';
+        reveal('s3-hub', (u - 7.4) / 0.5);
+      }
+
+      // Scene 4: Grades & Ticker
+      {
+        const u = t - scenes[4].start;
+        reveal('s4-head', u / 0.45);
+        reveal('s4-left', (u - 0.3) / 0.45);
+        reveal('s4-gc', (u - 1.0) / 0.4, 30, 0.95);
+        reveal('s4-gb', (u - 1.7) / 0.4, 30, 0.95);
+        reveal('s4-ga', (u - 2.4) / 0.4, 30, 0.95);
+        reveal('s4-gs', (u - 3.1) / 0.45, 30, 0.95);
+        reveal('s4-right', (u - 4.4) / 0.5);
+        reveal('s4-t1', (u - 4.9) / 0.45, 16, 0.97);
+        reveal('s4-t2', (u - 5.6) / 0.45, 16, 0.97);
+        reveal('s4-modes', (u - 6.8) / 0.5, 18, 0.97);
+      }
+
+      // Scene 5: Safety
+      {
+        const u = t - scenes[5].start;
+        reveal('s5-head', u / 0.45);
+        reveal('s5-c0', (u - 0.45) / 0.5);
+        reveal('s5-c1', (u - 2.9) / 0.5);
+        reveal('s5-c2', (u - 5.3) / 0.5);
+        const stopPulse = 1 + 0.04 * Math.sin(Math.max(0, u - 7.4) * 6);
+        document.getElementById('s5-stop').style.transform = u > 7.4 ? `scale(${stopPulse.toFixed(4)})` : 'scale(1)';
+      }
+
+      // Scene 6: Outro
+      {
+        const u = Math.max(0, t - scenes[6].start);
+        reveal('outro-brand', u / 0.6, 16, 0.92);
+        const glow = 48 + 18 * Math.sin(u * 2.5);
+        document.getElementById('outro-emblem').style.boxShadow =
+          `0 0 0 12px rgba(247,153,27,0.12), 0 0 ${glow.toFixed(1)}px rgba(247,153,27,0.48)`;
+        reveal('outro-tag', (u - 0.35) / 0.5);
+        reveal('outro-pills', (u - 0.7) / 0.5);
+        document.getElementById('outro-truth').style.opacity = easeOut((u - 1.0) / 0.55).toFixed(4);
+      }
+    };
+  </script>
+</body>
+</html>

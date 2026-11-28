@@ -1,0 +1,32 @@
+{
+  "title": "Nektar Engine Smoke Test",
+  "voice": "en-US-AndrewNeural",
+  "rate": "+8%",
+  "fps": 30,
+  "bedVolume": 0.055,
+  "scenes": [
+    {
+      "id": "proof",
+      "padBefore": 0.15,
+      "padAfter": 0.20,
+      "minDuration": 1.6,
+      "vo": "One binary. Cryptographic receipts.",
+      "subtitle": "One static Go binary — cryptographic receipts verified offline.",
+      "sfx": [
+        { "at": 0.1, "type": "slam" },
+        { "at": 1.0, "type": "chime" }
+      ]
+    },
+    {
+      "id": "outro",
+      "padBefore": 0.15,
+      "padAfter": 0.35,
+      "minDuration": 1.4,
+      "vo": "Start at nektar dot run.",
+      "subtitle": "",
+      "sfx": [
+        { "at": 0.2, "type": "unlock" }
+      ]
+    }
+  ]
+}

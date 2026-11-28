@@ -1,0 +1,184 @@
+{
+  "title": "Nektar — Git & Time Machine for Your AI's Brain",
+  "fps": 30,
+  "totalDuration": 55.4,
+  "totalFrames": 1662,
+  "ttsEngine": "edge-tts",
+  "voice": "en-US-AndrewNeural",
+  "rate": "+3%",
+  "scenes": [
+    {
+      "index": 0,
+      "id": "hook",
+      "start": 0,
+      "end": 8.6,
+      "duration": 8.6,
+      "voStart": 0.35,
+      "voEnd": 7.2767,
+      "vo": "Where does your AI's memory actually live? Trapped in someone else's cloud — you can't inspect it, back it up, or take it with you.",
+      "subtitle": "Where does your AI's memory live? Trapped in a cloud black box you can't inspect or export.",
+      "sfx": [
+        {
+          "at": 0.25,
+          "type": "slam",
+          "gain": 0.75
+        },
+        {
+          "at": 3.4,
+          "type": "error",
+          "gain": 0.65
+        },
+        {
+          "at": 5.3,
+          "type": "tick",
+          "gain": 0.7
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "id": "timeline",
+      "start": 8.6,
+      "end": 18.8,
+      "duration": 10.2,
+      "voStart": 8.9,
+      "voEnd": 17.5102,
+      "vo": "Meet Nektar: Git and Time Machine for your AI's brain. Every lesson saves like a commit — inspect diffs, branch experiments, and keep history tamper-proof.",
+      "subtitle": "Git + Time Machine for your AI's brain — inspect diffs, branch experiments, tamper-proof history.",
+      "sfx": [
+        {
+          "at": 0.6,
+          "type": "pop",
+          "gain": 0.8
+        },
+        {
+          "at": 1.6,
+          "type": "pop",
+          "gain": 0.8
+        },
+        {
+          "at": 2.6,
+          "type": "pop",
+          "gain": 0.8
+        },
+        {
+          "at": 5.4,
+          "type": "unlock",
+          "gain": 0.85
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "id": "pack",
+      "start": 18.8,
+      "end": 29,
+      "duration": 10.2,
+      "voStart": 19.1,
+      "voEnd": 26.3852,
+      "vo": "Click Export to pack your project's AI brain into one portable file. Move it to a new laptop or a teammate — their AI wakes up ready.",
+      "subtitle": "Click Export -> one portable project-brain.nkt file. Drop it on any laptop and AI wakes up ready.",
+      "sfx": [
+        {
+          "at": 1.1,
+          "type": "tick",
+          "gain": 0.85
+        },
+        {
+          "at": 2.4,
+          "type": "whoosh",
+          "gain": 0.9
+        },
+        {
+          "at": 5,
+          "type": "chime",
+          "gain": 0.95
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "id": "forget",
+      "start": 29,
+      "end": 39,
+      "duration": 10,
+      "voStart": 29.3,
+      "voEnd": 36.4322,
+      "vo": "Saved a secret by mistake? Hit Forget. It shreds into harmless static right on your disk, while the rest of your history stays intact.",
+      "subtitle": "Click Forget — sensitive notes shred into static on disk while the rest of your history stays verified.",
+      "sfx": [
+        {
+          "at": 2.3,
+          "type": "tick",
+          "gain": 0.9
+        },
+        {
+          "at": 2.8,
+          "type": "slam",
+          "gain": 0.75
+        },
+        {
+          "at": 5.8,
+          "type": "chime",
+          "gain": 0.85
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "id": "workflow",
+      "start": 39,
+      "end": 48.8,
+      "duration": 9.8,
+      "voStart": 39.3,
+      "voEnd": 47.161,
+      "vo": "One lightweight local app for solo builders and real teams. Push and pull AI knowledge with Git, work completely offline, with zero lock-in.",
+      "subtitle": "One lightweight local app · Standard Git workflow · Works offline · Zero vendor lock-in.",
+      "sfx": [
+        {
+          "at": 0.8,
+          "type": "pop",
+          "gain": 0.7
+        },
+        {
+          "at": 2.7,
+          "type": "pop",
+          "gain": 0.7
+        },
+        {
+          "at": 4.6,
+          "type": "pop",
+          "gain": 0.7
+        },
+        {
+          "at": 6.5,
+          "type": "unlock",
+          "gain": 0.8
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "id": "outro",
+      "start": 48.8,
+      "end": 55.4,
+      "duration": 6.6,
+      "voStart": 49.25,
+      "voEnd": 52.9035,
+      "vo": "Own your AI's memory forever. Run nektar up, at nektar dot run.",
+      "subtitle": "",
+      "sfx": [
+        {
+          "at": 0.25,
+          "type": "unlock",
+          "gain": 0.95
+        },
+        {
+          "at": 2.9,
+          "type": "chime",
+          "gain": 0.75
+        }
+      ]
+    }
+  ]
+}

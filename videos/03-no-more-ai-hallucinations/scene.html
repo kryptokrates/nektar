@@ -1,0 +1,1746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Nektar — Make Your AI Prove Every Claim — Or Delete It</title>
+  <link rel="stylesheet" href="../shared/theme.css" />
+  <style>
+    /* === Video #3 Custom Motion Layout & Clean Product Mockups === */
+    .stage-vignette {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: radial-gradient(125% 115% at 50% 50%, transparent 56%, rgba(4, 3, 3, 0.58) 100%);
+      z-index: 2;
+    }
+
+    .scene {
+      z-index: 10;
+      padding: 68px 96px 124px;
+    }
+
+    .scene-head {
+      margin-bottom: 28px;
+    }
+
+    .headline {
+      font-size: 60px;
+    }
+
+    .subhead {
+      font-size: 23px;
+      margin-top: 10px;
+    }
+
+    /* === Scene 1: Confident Nonsense === */
+    .s1-wrap {
+      width: 1220px;
+      margin: 6px auto 0;
+    }
+
+    .s1-body {
+      padding: 28px 36px 30px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    .chat-user-row {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .chat-user-bubble {
+      background: rgba(247, 153, 27, 0.12);
+      border: 1.5px solid rgba(247, 153, 27, 0.36);
+      border-radius: 18px 18px 4px 18px;
+      padding: 15px 24px;
+      font-size: 24px;
+      font-weight: 600;
+      color: var(--ink);
+      letter-spacing: -0.01em;
+    }
+
+    .chat-ai-block {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+    }
+
+    .ai-avatar {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #25201d 0%, #191614 100%);
+      border: 1.5px solid var(--line2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--amber);
+      flex-shrink: 0;
+      margin-top: 4px;
+    }
+
+    .s1-bullets {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .bullet-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      background: #161311;
+      border: 1.5px solid var(--line);
+      border-radius: 16px;
+      padding: 18px 24px;
+      position: relative;
+    }
+
+    .bullet-left {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      min-width: 0;
+    }
+
+    .bullet-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: var(--mut);
+      flex-shrink: 0;
+    }
+
+    .bullet-text {
+      font-size: 24px;
+      font-weight: 600;
+      color: var(--ink);
+      letter-spacing: -0.01em;
+      line-height: 1.3;
+    }
+
+    .bullet-text strong {
+      color: #fff8ee;
+      font-weight: 800;
+    }
+
+    .s1-alert-strip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 13px 22px;
+      border-radius: 14px;
+      background: rgba(229, 83, 75, 0.11);
+      border: 1px solid rgba(229, 83, 75, 0.36);
+      color: #ff9c96;
+      font-size: 20px;
+      font-weight: 600;
+      margin-top: 2px;
+    }
+
+    /* === Scene 2: The Auto-Strip Gate === */
+    .s2-grid {
+      width: 1600px;
+      margin: 12px auto 0;
+      display: grid;
+      grid-template-columns: 1.24fr 0.84fr;
+      gap: 72px;
+      align-items: start;
+      position: relative;
+    }
+
+    .s2-draft-win {
+      position: relative;
+    }
+
+    .s2-draft-body {
+      padding: 26px 28px 24px;
+      position: relative;
+      overflow: hidden;
+      min-height: 444px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .s2-laser {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 4px;
+      background: linear-gradient(90deg, rgba(247, 153, 27, 0.2), #ffbe55 25%, #ffac33 50%, #ffbe55 75%, rgba(247, 153, 27, 0.2));
+      box-shadow: 0 0 24px 6px rgba(247, 153, 27, 0.55), 0 0 64px 18px rgba(247, 153, 27, 0.22);
+      z-index: 25;
+      pointer-events: none;
+    }
+
+    .s2-laser-tag {
+      position: absolute;
+      right: 16px;
+      top: -15px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: var(--amber);
+      color: #090807;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      box-shadow: 0 4px 16px rgba(247, 153, 27, 0.5);
+    }
+
+    .s2-row-wrap {
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+
+    .s2-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      background: #171412;
+      border: 1.5px solid var(--line);
+      border-radius: 16px;
+      padding: 20px 22px;
+      position: relative;
+    }
+
+    .s2-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: #231f1d;
+      border: 1px solid var(--line2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-mono);
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--mut);
+      flex-shrink: 0;
+    }
+
+    .s2-text {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--ink);
+      line-height: 1.3;
+    }
+
+    .s2-slice-beam {
+      position: absolute;
+      left: 66px;
+      right: 248px;
+      top: 50%;
+      height: 4px;
+      transform: translateY(-50%);
+      background: linear-gradient(90deg, #ff5f56, #ffac33);
+      box-shadow: 0 0 18px rgba(229, 83, 75, 0.85);
+      border-radius: 99px;
+      transform-origin: left center;
+      pointer-events: none;
+    }
+
+    .s2-clean-bar {
+      margin-top: auto;
+      padding: 15px 22px;
+      border-radius: 14px;
+      background: rgba(76, 194, 107, 0.12);
+      border: 1.5px solid rgba(76, 194, 107, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 19px;
+      font-weight: 700;
+      color: var(--ok);
+    }
+
+    .s2-notes-col {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .note-card {
+      background: linear-gradient(180deg, #151311 0%, #100e0d 100%);
+      border: 1.5px solid var(--line2);
+      border-radius: 18px;
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.48);
+    }
+
+    .note-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--mut);
+    }
+
+    .note-quote {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--ink);
+      line-height: 1.35;
+    }
+
+    .note-missing {
+      border: 1.5px dashed var(--line2);
+      background: rgba(20, 17, 16, 0.6);
+      border-radius: 18px;
+      padding: 20px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      font-size: 19px;
+      font-weight: 600;
+      color: var(--mut);
+    }
+
+    /* === Scene 3: Clickable Proof Receipts === */
+    .s3-grid {
+      width: 1600px;
+      margin: 14px auto 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 84px;
+      align-items: stretch;
+      position: relative;
+    }
+
+    .s3-card {
+      padding: 28px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      min-height: 492px;
+    }
+
+    .s3-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .s3-claim {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 20px 22px;
+      border-radius: 16px;
+      background: #171412;
+      border: 1.5px solid var(--line);
+    }
+
+    .cite-num {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 800;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .cite-num.ok {
+      background: rgba(76, 194, 107, 0.16);
+      border: 1.5px solid rgba(76, 194, 107, 0.55);
+      color: var(--ok);
+    }
+
+    .cite-num.amber {
+      background: rgba(247, 153, 27, 0.16);
+      border: 1.5px solid rgba(247, 153, 27, 0.55);
+      color: var(--amber-hi);
+    }
+
+    .s3-claim-text {
+      font-size: 24px;
+      font-weight: 600;
+      color: var(--ink);
+      line-height: 1.4;
+    }
+
+    .s3-receipt-bar {
+      margin-top: auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 20px;
+      border-radius: 16px;
+      background: rgba(76, 194, 107, 0.08);
+      border: 1.5px solid rgba(76, 194, 107, 0.42);
+      position: relative;
+    }
+
+    .s3-receipt-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 20px;
+      border-radius: 999px;
+      background: var(--ok);
+      color: #090807;
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      box-shadow: 0 0 24px rgba(76, 194, 107, 0.42);
+      position: relative;
+    }
+
+    .s3-link {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--mut);
+    }
+
+    .s3-source-box {
+      padding: 20px 24px;
+      border-radius: 16px;
+      background: #171412;
+      border: 1.5px solid var(--line2);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .hl-ok {
+      background: rgba(76, 194, 107, 0.22);
+      border-bottom: 2px solid var(--ok);
+      color: #d8ffdf;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-weight: 700;
+    }
+
+    .hl-amber {
+      background: rgba(247, 153, 27, 0.22);
+      border-bottom: 2px solid var(--amber);
+      color: #ffebd0;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-weight: 700;
+    }
+
+    .s3-trust-bar {
+      margin-top: auto;
+      padding: 14px 20px;
+      border-radius: 14px;
+      background: rgba(244, 239, 230, 0.04);
+      border: 1px solid var(--line2);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 17px;
+      font-weight: 600;
+      color: var(--mut);
+    }
+
+    .cursor-svg {
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      z-index: 40;
+      pointer-events: none;
+      filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.65));
+    }
+
+    /* === Scene 4: Live Freshness === */
+    .s4-grid {
+      width: 1620px;
+      margin: 22px auto 0;
+      display: grid;
+      grid-template-columns: 0.92fr 230px 1.15fr;
+      align-items: center;
+      position: relative;
+    }
+
+    .s4-note-card {
+      padding: 30px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .s4-diff-box {
+      background: #0d0b0a;
+      border: 1.5px solid var(--line2);
+      border-radius: 16px;
+      padding: 24px 26px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .s4-val-row {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      font-family: var(--font-mono);
+    }
+
+    .s4-old {
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--mut);
+      position: relative;
+    }
+
+    .s4-old-strike {
+      position: absolute;
+      left: -4px;
+      right: -4px;
+      top: 52%;
+      height: 3.5px;
+      background: var(--bad);
+      transform-origin: left center;
+    }
+
+    .s4-arrow {
+      font-size: 30px;
+      font-weight: 800;
+      color: var(--amber);
+    }
+
+    .s4-new {
+      font-size: 40px;
+      font-weight: 800;
+      color: var(--amber-hi);
+      text-shadow: 0 0 24px rgba(247, 153, 27, 0.35);
+    }
+
+    .s4-ripple-zone {
+      height: 360px;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .s4-answers {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .s4-ans-card {
+      padding: 24px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .s4-ans-quote {
+      font-size: 24px;
+      font-weight: 600;
+      color: var(--ink);
+      line-height: 1.35;
+    }
+
+    .s4-ans-sub {
+      font-size: 17px;
+      font-weight: 600;
+      color: var(--mut);
+    }
+
+    .stale-mark {
+      padding: 2px 8px;
+      border-radius: 7px;
+      background: rgba(229, 83, 75, 0.18);
+      border: 1px solid rgba(229, 83, 75, 0.5);
+      color: #ff9c96;
+      font-family: var(--font-mono);
+      font-weight: 800;
+    }
+
+    /* === Scene 5: Works Inside Your Workflow === */
+    .s5-wrap {
+      width: 1600px;
+      margin: 8px auto 0;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .s5-split {
+      display: grid;
+      grid-template-columns: 1.22fr 0.86fr;
+      gap: 34px;
+      align-items: stretch;
+    }
+
+    .s5-claude-body {
+      padding: 26px 30px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .s5-prompt-line {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 18px;
+      border-radius: 14px;
+      background: #171412;
+      border: 1px solid var(--line);
+      font-size: 21px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    .s5-reply-box {
+      padding: 22px 24px;
+      border-radius: 16px;
+      background: #151311;
+      border: 1.5px solid rgba(76, 194, 107, 0.35);
+      border-left: 5px solid var(--ok);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .s5-reply-text {
+      font-size: 23px;
+      font-weight: 600;
+      color: var(--ink);
+      line-height: 1.45;
+    }
+
+    .s5-reply-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    .s5-guard-card {
+      padding: 26px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .s5-check-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 16px 20px;
+      border-radius: 14px;
+      background: #151210;
+      border: 1.5px solid var(--line);
+    }
+
+    .s5-check-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 21px;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .s5-check-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 800;
+      background: #231f1d;
+      color: var(--mut);
+    }
+
+    .s5-tools-strip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+
+    .s5-tools-strip .pill {
+      font-size: 16px;
+      padding: 8px 20px;
+    }
+
+    /* === Scene 6: Outro spacing === */
+    #scene-outro .outro {
+      padding-bottom: 42px;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="stage-grid"></div>
+    <div class="stage-vignette"></div>
+
+    <!-- Persistent subtle brand chrome (hidden on Cinema Outro) -->
+    <div id="corner-brand" class="corner-brand">
+      <img src="../shared/logo.svg" alt="Nektar" />
+      <span>NEKTAR</span>
+    </div>
+    <div id="corner-tag" class="corner-scene-tag">01 / 06 · THE TRAP</div>
+
+    <!-- ============================================================
+         SCENE 1: HOOK — CONFIDENT NONSENSE
+         ============================================================ -->
+    <section id="scene-hook" class="scene">
+      <div class="scene-head" id="s1-head">
+        <div class="kicker bad">THE HALLUCINATION TRAP</div>
+        <h1 class="headline">Confident AI. <span class="headline-grad">Made-Up Answers.</span></h1>
+        <p class="subhead">One invented policy hidden inside a helpful reply.</p>
+      </div>
+
+      <div class="s1-wrap" id="s1-win-wrap">
+        <div class="mac-window" id="s1-window">
+          <div class="mac-bar">
+            <div class="mac-dots color"><span></span><span></span><span></span></div>
+            <div class="mac-title">AI Assistant · Policy &amp; Limits Q&amp;A</div>
+            <div class="pill" id="s1-status-pill">100% Confident</div>
+          </div>
+
+          <div class="s1-body">
+            <div class="chat-user-row" id="s1-user">
+              <div class="chat-user-bubble">"What's our refund policy and API rate limit?"</div>
+            </div>
+
+            <div class="chat-ai-block">
+              <div class="ai-avatar">AI</div>
+              <div class="s1-bullets">
+                <div class="bullet-row" id="s1-b1">
+                  <div class="bullet-left">
+                    <span class="bullet-dot"></span>
+                    <span class="bullet-text">Starter plan includes <strong>500 API requests per minute</strong>.</span>
+                  </div>
+                  <span class="pill" style="opacity:0.65;">Real policy</span>
+                </div>
+
+                <div class="bullet-row" id="s1-b2">
+                  <div class="bullet-left">
+                    <span class="bullet-dot" id="s1-b2-dot"></span>
+                    <span class="bullet-text">Customers get a <strong>90-day full refund</strong>, no questions asked.</span>
+                  </div>
+                  <span class="pill pill-bad" id="s1-b2-badge" style="opacity:0;">⚠ Made up by the AI</span>
+                </div>
+
+                <div class="bullet-row" id="s1-b3">
+                  <div class="bullet-left">
+                    <span class="bullet-dot"></span>
+                    <span class="bullet-text">Enterprise invoices are due within <strong>30 days</strong>.</span>
+                  </div>
+                  <span class="pill" style="opacity:0.65;">Real policy</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="s1-alert-strip" id="s1-alert" style="opacity:0;">
+              <span>⚠</span>
+              <span>Zero source in your notes — yet the AI stated it with complete confidence.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         SCENE 2: THE AUTO-STRIP GATE
+         ============================================================ -->
+    <section id="scene-auto-strip" class="scene">
+      <div class="scene-head" id="s2-head">
+        <div class="kicker">AUTO-STRIP GATE</div>
+        <h1 class="headline">Prove Every Claim — <span class="headline-amber-green">Or Delete It</span></h1>
+        <p class="subhead">Unbacked sentences get sliced out before the reply ever reaches you.</p>
+      </div>
+
+      <div class="s2-grid">
+        <!-- Left: AI Draft being scanned -->
+        <div class="mac-window s2-draft-win" id="s2-draft-win">
+          <div class="mac-bar">
+            <div class="mac-dots color"><span></span><span></span><span></span></div>
+            <div class="mac-title">AI Draft · Nektar Gate</div>
+            <div class="pill pill-amber" id="s2-gate-pill">Scanning Draft...</div>
+          </div>
+
+          <div class="s2-draft-body">
+            <!-- Sweeping Amber Laser Gate -->
+            <div class="s2-laser" id="s2-laser" style="opacity:0;">
+              <div class="s2-laser-tag">NEKTAR GATE</div>
+            </div>
+
+            <!-- Bullet 1 -->
+            <div class="s2-row-wrap" id="s2-b1-wrap">
+              <div class="s2-row" id="s2-b1">
+                <div class="bullet-left">
+                  <div class="s2-icon" id="s2-i1">1</div>
+                  <div class="s2-text">Starter plan includes <strong>500 API requests/min</strong>.</div>
+                </div>
+                <span class="pill" id="s2-p1">Pending</span>
+              </div>
+            </div>
+
+            <!-- Bullet 2 (Hallucination — Sliced Out!) -->
+            <div class="s2-row-wrap" id="s2-b2-wrap" style="max-height: 112px;">
+              <div class="s2-row" id="s2-b2">
+                <div class="bullet-left">
+                  <div class="s2-icon" id="s2-i2">2</div>
+                  <div class="s2-text">Customers get a <strong>90-day full refund</strong>.</div>
+                </div>
+                <span class="pill" id="s2-p2">Pending</span>
+                <div class="s2-slice-beam" id="s2-slice-beam" style="transform: translateY(-50%) scaleX(0); opacity:0;"></div>
+              </div>
+            </div>
+
+            <!-- Bullet 3 -->
+            <div class="s2-row-wrap" id="s2-b3-wrap">
+              <div class="s2-row" id="s2-b3">
+                <div class="bullet-left">
+                  <div class="s2-icon" id="s2-i3">3</div>
+                  <div class="s2-text">Enterprise invoices are due within <strong>30 days</strong>.</div>
+                </div>
+                <span class="pill" id="s2-p3">Pending</span>
+              </div>
+            </div>
+
+            <!-- Clean Delivered Bar -->
+            <div class="s2-clean-bar" id="s2-clean-bar" style="opacity:0;">
+              <span>✓ Clean answer ready for your screen</span>
+              <span class="mono" style="font-size:15px;">2 Verified · 1 Sliced Out</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Saved Notes -->
+        <div class="s2-notes-col" id="s2-notes-col">
+          <div class="card-label amber" style="padding-left:4px;">YOUR SAVED NOTES</div>
+
+          <div class="note-card" id="s2-n1">
+            <div class="note-meta">
+              <span>NOTE · API LIMITS</span>
+              <span id="s2-n1-tag" style="color:var(--mut);">Saved Mar 4</span>
+            </div>
+            <div class="note-quote">"Starter tier: <strong>500 requests / minute</strong>"</div>
+          </div>
+
+          <div class="note-missing" id="s2-n-miss">
+            <span>No saved note for "90-day refund"</span>
+            <span class="pill pill-bad" id="s2-miss-pill" style="opacity:0.4;">No Match</span>
+          </div>
+
+          <div class="note-card" id="s2-n2">
+            <div class="note-meta">
+              <span>NOTE · BILLING POLICY</span>
+              <span id="s2-n2-tag" style="color:var(--mut);">Saved Mar 11</span>
+            </div>
+            <div class="note-quote">"Enterprise invoices: <strong>Net 30 days</strong>"</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SVG Connector Layer for Scene 2 -->
+      <svg class="svg-layer" id="s2-svg" viewBox="0 0 1920 1080">
+        <path id="s2-arc1" d="M 1030 432 C 1100 432, 1110 418, 1185 418"
+              fill="none" stroke="#4cc26b" stroke-width="3.5" stroke-linecap="round"
+              stroke-dasharray="220" stroke-dashoffset="220" class="glow-ok" />
+        <circle id="s2-dot1" cx="1030" cy="432" r="6" fill="#4cc26b" opacity="0" class="glow-ok" />
+
+        <path id="s2-arc3" d="M 1030 618 C 1100 618, 1110 698, 1185 698"
+              fill="none" stroke="#4cc26b" stroke-width="3.5" stroke-linecap="round"
+              stroke-dasharray="260" stroke-dashoffset="260" class="glow-ok" />
+        <circle id="s2-dot3" cx="1030" cy="618" r="6" fill="#4cc26b" opacity="0" class="glow-ok" />
+      </svg>
+    </section>
+
+    <!-- ============================================================
+         SCENE 3: CLICKABLE PROOF RECEIPTS
+         ============================================================ -->
+    <section id="scene-receipts" class="scene">
+      <div class="scene-head" id="s3-head">
+        <div class="kicker ok">CLICKABLE PROOF RECEIPTS</div>
+        <h1 class="headline">Click Any Answer. <span class="headline-green-amber">See the Source.</span></h1>
+        <p class="subhead">Every grounded reply attaches a receipt linking straight to your saved notes.</p>
+      </div>
+
+      <div class="s3-grid">
+        <!-- Left: Verified AI Answer -->
+        <div class="card card-ok s3-card" id="s3-answer">
+          <div class="s3-header">
+            <div class="card-label ok">GROUNDED AI ANSWER</div>
+            <span class="pill pill-ok">2 Claims Backed</span>
+          </div>
+
+          <div class="s3-claim" id="s3-c1">
+            <div class="cite-num ok">1</div>
+            <div class="s3-claim-text">Starter plan includes <strong>500 API requests per minute</strong>.</div>
+          </div>
+
+          <div class="s3-claim" id="s3-c2">
+            <div class="cite-num amber">2</div>
+            <div class="s3-claim-text">Enterprise invoices are due within <strong>30 days</strong>.</div>
+          </div>
+
+          <div class="s3-receipt-bar" id="s3-rcpt-bar">
+            <div class="s3-receipt-btn" id="s3-rcpt-btn">
+              <span>✓</span>
+              <span>Verified Receipt</span>
+            </div>
+            <span class="s3-link">nektar.run/verify/rcpt-482</span>
+          </div>
+        </div>
+
+        <!-- Right: Receipt Inspector -->
+        <div class="card card-glass s3-card" id="s3-inspector">
+          <div class="s3-header">
+            <div class="card-label amber">RECEIPT INSPECTOR</div>
+            <span class="pill pill-ok" id="s3-verified-pill">Verified Offline</span>
+          </div>
+
+          <div class="s3-source-box" id="s3-src1">
+            <div class="note-meta">
+              <span style="display:inline-flex;align-items:center;gap:10px;">
+                <span class="cite-num ok" style="width:26px;height:26px;font-size:13px;margin:0;">1</span>
+                <span>API LIMITS · SAVED MAR 4</span>
+              </span>
+              <span style="color:var(--ok);">✓ Exact Source</span>
+            </div>
+            <div class="note-quote" style="font-size:22px;">
+              "Starter tier includes <span class="hl-ok">500 requests per minute</span> across all endpoints."
+            </div>
+          </div>
+
+          <div class="s3-source-box" id="s3-src2">
+            <div class="note-meta">
+              <span style="display:inline-flex;align-items:center;gap:10px;">
+                <span class="cite-num amber" style="width:26px;height:26px;font-size:13px;margin:0;">2</span>
+                <span>BILLING POLICY · SAVED MAR 11</span>
+              </span>
+              <span style="color:var(--amber-hi);">✓ Exact Source</span>
+            </div>
+            <div class="note-quote" style="font-size:22px;">
+              "All Enterprise customer invoices follow <span class="hl-amber">Net 30 days</span> payment terms."
+            </div>
+          </div>
+
+          <div class="s3-trust-bar">
+            <span>Every sentence verified against unaltered notes</span>
+            <span class="mono" style="color:var(--ok);">2 / 2 MATCHED</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- SVG Connectors + Animated Click Cursor -->
+      <svg class="svg-layer" id="s3-svg" viewBox="0 0 1920 1080">
+        <!-- Connection 1 (emerald) -->
+        <path id="s3-line1" d="M 918 448 C 960 448, 962 456, 1004 456"
+              fill="none" stroke="#4cc26b" stroke-width="4" stroke-linecap="round"
+              stroke-dasharray="140" stroke-dashoffset="140" class="glow-ok" />
+        <circle id="s3-dot1" cx="918" cy="448" r="6.5" fill="#4cc26b" opacity="0" class="glow-ok" />
+
+        <!-- Connection 2 (amber) -->
+        <path id="s3-line2" d="M 918 588 C 960 588, 962 618, 1004 618"
+              fill="none" stroke="#f7991b" stroke-width="4" stroke-linecap="round"
+              stroke-dasharray="150" stroke-dashoffset="150" class="glow-amber" />
+        <circle id="s3-dot2" cx="918" cy="588" r="6.5" fill="#f7991b" opacity="0" class="glow-amber" />
+
+        <!-- Click ripple around Verified Receipt button -->
+        <circle id="s3-click-ring" cx="315" cy="762" r="14" fill="none" stroke="#4cc26b" stroke-width="3.5" opacity="0" />
+      </svg>
+
+      <!-- Crisp Vector Pointer Cursor -->
+      <svg class="cursor-svg" id="s3-cursor" viewBox="0 0 32 32" style="left:460px; top:840px; opacity:0;">
+        <path d="M5 3 L5 25 L11.5 19.5 L16 29 L19.8 27.2 L15.2 17.8 L24 17.8 Z"
+              fill="#f4efe6" stroke="#090807" stroke-width="2" stroke-linejoin="round" />
+      </svg>
+    </section>
+
+    <!-- ============================================================
+         SCENE 4: NEVER QUOTES OUTDATED INFO
+         ============================================================ -->
+    <section id="scene-freshness" class="scene">
+      <div class="scene-head" id="s4-head">
+        <div class="kicker">LIVE FRESHNESS</div>
+        <h1 class="headline">Never Quote <span class="headline-grad">Outdated Info</span> Again</h1>
+        <p class="subhead">Update one note — past answers automatically mark themselves outdated.</p>
+      </div>
+
+      <div class="s4-grid">
+        <!-- Left: Updated Note -->
+        <div class="card card-amber s4-note-card" id="s4-note">
+          <div class="s3-header">
+            <div class="card-label amber">NOTE · API LIMITS</div>
+            <span class="pill pill-amber" id="s4-ver-pill">v1 · Saved</span>
+          </div>
+
+          <div class="s4-diff-box">
+            <div class="card-label" style="font-size:13px;">STARTER RATE LIMIT</div>
+            <div class="s4-val-row">
+              <span class="s4-old" id="s4-old">
+                500/min
+                <span class="s4-old-strike" id="s4-strike" style="transform:scaleX(0);"></span>
+              </span>
+              <span class="s4-arrow" id="s4-arrow" style="opacity:0;">→</span>
+              <span class="s4-new" id="s4-new" style="opacity:0;">1,000/min</span>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;justify-content:space-between;font-size:17px;color:var(--mut);font-weight:600;">
+            <span id="s4-edit-status">Editing your saved note...</span>
+            <span class="mono" style="color:var(--amber);">AUTO-SYNC</span>
+          </div>
+        </div>
+
+        <!-- Center: Ripple Conduit -->
+        <div class="s4-ripple-zone">
+          <svg width="230" height="360" viewBox="0 0 230 360" style="overflow:visible;">
+            <circle id="s4-ring1" cx="12" cy="180" r="24" fill="none" stroke="#f7991b" stroke-width="3" opacity="0" />
+            <circle id="s4-ring2" cx="12" cy="180" r="24" fill="none" stroke="#f7991b" stroke-width="2.5" opacity="0" />
+            <circle id="s4-ring3" cx="12" cy="180" r="24" fill="none" stroke="#ffac33" stroke-width="2" opacity="0" />
+
+            <!-- Path to outdated answer (top right) -->
+            <path id="s4-path-stale" d="M 8 174 C 95 174, 130 92, 224 92"
+                  fill="none" stroke="#f7991b" stroke-width="4" stroke-linecap="round"
+                  stroke-dasharray="280" stroke-dashoffset="280" class="glow-amber" />
+            <circle id="s4-pulse-dot" cx="8" cy="174" r="7" fill="#ffac33" opacity="0" class="glow-amber" />
+
+            <!-- Subtle calm dotted path to still-valid answer (bottom right) -->
+            <path id="s4-path-valid" d="M 8 188 C 95 188, 130 274, 224 274"
+                  fill="none" stroke="#3a342f" stroke-width="2.5" stroke-dasharray="7 8" opacity="0.55" />
+          </svg>
+        </div>
+
+        <!-- Right: Past Answers -->
+        <div class="s4-answers">
+          <!-- Affected Answer -->
+          <div class="card s4-ans-card" id="s4-past1">
+            <div class="s3-header">
+              <div class="card-label" id="s4-p1-label">PAST ANSWER · YESTERDAY</div>
+              <span class="pill pill-ok" id="s4-p1-badge">✓ Verified</span>
+            </div>
+            <div class="s4-ans-quote">
+              "Starter plan includes <span id="s4-stale-span">500 API requests/min</span>."
+            </div>
+            <div class="s4-ans-sub" id="s4-p1-sub">Backed by Note: API Limits (v1)</div>
+          </div>
+
+          <!-- Unaffected Answer -->
+          <div class="card card-ok s4-ans-card" id="s4-past2">
+            <div class="s3-header">
+              <div class="card-label ok">PAST ANSWER · LAST WEEK</div>
+              <span class="pill pill-ok">✓ Still Valid</span>
+            </div>
+            <div class="s4-ans-quote">
+              "Enterprise invoices are due within <strong>30 days</strong>."
+            </div>
+            <div class="s4-ans-sub" style="color:var(--ok);">Source note unchanged — safe for agents to cite</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         SCENE 5: WORKS INSIDE YOUR WORKFLOW
+         ============================================================ -->
+    <section id="scene-workflow" class="scene">
+      <div class="scene-head" id="s5-head">
+        <div class="kicker ok">WORKS INSIDE YOUR WORKFLOW</div>
+        <h1 class="headline">Automatic Checks. <span class="headline-amber-green">Zero Friction.</span></h1>
+        <p class="subhead">Claude Code checks every receipt automatically before finishing a reply.</p>
+      </div>
+
+      <div class="s5-wrap">
+        <div class="s5-split">
+          <!-- Left: Claude Code Window -->
+          <div class="mac-window" id="s5-claude">
+            <div class="mac-bar">
+              <div class="mac-dots color"><span></span><span></span><span></span></div>
+              <div class="mac-title">Claude Code · Workspace</div>
+              <div class="pill pill-ok" id="s5-guard-pill">● Nektar Guard Active</div>
+            </div>
+
+            <div class="s5-claude-body">
+              <div class="s5-prompt-line">
+                <span class="pill pill-amber" style="padding:4px 12px;font-size:13px;">YOU</span>
+                <span>"Draft the launch FAQ on our API limits and billing."</span>
+              </div>
+
+              <div class="s5-reply-box" id="s5-reply-box">
+                <div class="card-label ok">CLAUDE CODE · VERIFIED REPLY</div>
+                <div class="s5-reply-text">
+                  Starter tier now supports <strong>1,000 API requests/min</strong>, and Enterprise invoices are due within <strong>30 days</strong>.
+                </div>
+                <div class="s5-reply-foot" id="s5-reply-foot" style="opacity:0;">
+                  <span class="pill pill-solid-ok">✓ Verified Receipt</span>
+                  <span class="mono" style="font-size:15px;color:var(--mut);">2 / 2 claims backed · nektar.run/verify/rcpt-519</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Pre-Reply Automatic Check Card -->
+          <div class="card card-glass s5-guard-card" id="s5-guard-card">
+            <div class="s3-header">
+              <div style="display:inline-flex;align-items:center;gap:12px;">
+                <img src="../shared/logo.svg" alt="Nektar" style="width:30px;height:30px;border-radius:8px;border:1px solid rgba(247,153,27,0.4);" />
+                <span class="card-label amber">BEFORE EVERY REPLY</span>
+              </div>
+              <span class="pill pill-amber">AUTO</span>
+            </div>
+
+            <div class="s5-check-row" id="s5-chk1">
+              <div class="s5-check-left">
+                <div class="s5-check-icon" id="s5-ci1">1</div>
+                <span>Match claims to notes</span>
+              </div>
+              <span class="pill" id="s5-cp1">Checking</span>
+            </div>
+
+            <div class="s5-check-row" id="s5-chk2">
+              <div class="s5-check-left">
+                <div class="s5-check-icon" id="s5-ci2">2</div>
+                <span>Verify real receipt</span>
+              </div>
+              <span class="pill" id="s5-cp2">Waiting</span>
+            </div>
+
+            <div class="s5-check-row" id="s5-chk3">
+              <div class="s5-check-left">
+                <div class="s5-check-icon" id="s5-ci3">3</div>
+                <span>Block fake citations</span>
+              </div>
+              <span class="pill" id="s5-cp3">Waiting</span>
+            </div>
+
+            <div class="s2-clean-bar" id="s5-done-bar" style="opacity:0;margin-top:auto;">
+              <span>✓ Reply cleared — zero guesswork</span>
+              <span class="mono" style="font-size:14px;">100% GROUNDED</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="s5-tools-strip" id="s5-tools">
+          <span class="pill pill-ok">✓ Claude Code</span>
+          <span class="pill pill-amber">Cursor</span>
+          <span class="pill pill-amber">Codex</span>
+          <span class="pill pill-amber">OpenClaw</span>
+          <span class="pill">No fake receipts · No silent guesses</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         SCENE 6: CINEMA OUTRO
+         ============================================================ -->
+    <section id="scene-outro" class="scene">
+      <div class="outro">
+        <div class="outro-brand" id="s6-brand">
+          <div class="outro-emblem" id="s6-emblem">
+            <img src="../shared/logo.svg" alt="Nektar logo" />
+          </div>
+          <div class="outro-wordmark">nektar</div>
+        </div>
+
+        <div class="outro-tagline" id="s6-tagline">Don't trust AI memory. Verify it.</div>
+
+        <div class="outro-pills" id="s6-pills">
+          <span class="pill pill-solid-amber mono">$ nektar up</span>
+          <span class="pill pill-amber">nektar.run</span>
+          <span class="pill">@nektardotrun</span>
+        </div>
+
+        <div class="truth-note" id="s6-truth">
+          Receipts prove an answer came from your unaltered notes — not that the note itself is true.
+        </div>
+      </div>
+    </section>
+
+    <!-- X Muted-Autoplay Subtitle Bar & Progress Bar -->
+    <div class="subtitle-wrap">
+      <div id="subtitle-bar" class="subtitle-bar empty"></div>
+    </div>
+    <div class="progress-track">
+      <div id="progress-fill" class="progress-fill"></div>
+    </div>
+  </div>
+
+  <script>
+    // ---------- Deterministic Easing & Math Helpers ----------
+    const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
+    const lerp = (a, b, t) => a + (b - a) * clamp(t);
+    const invLerp = (a, b, v) => clamp((v - a) / Math.max(1e-6, b - a));
+    const easeOut = (t) => 1 - Math.pow(1 - clamp(t), 3);
+    const easeInOut = (t) => {
+      const x = clamp(t);
+      return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+    };
+    const easeOutBack = (t) => {
+      const c1 = 1.70158;
+      const c3 = c1 + 1;
+      const x = clamp(t);
+      return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+    };
+
+    function cubicPt(p0, p1, p2, p3, t) {
+      const u = 1 - t;
+      const tt = t * t;
+      const uu = u * u;
+      return {
+        x: uu * u * p0.x + 3 * uu * t * p1.x + 3 * u * tt * p2.x + tt * t * p3.x,
+        y: uu * u * p0.y + 3 * uu * t * p1.y + 3 * u * tt * p2.y + tt * t * p3.y
+      };
+    }
+
+    const $ = (id) => document.getElementById(id);
+
+    const SCENE_TAGS = [
+      '01 / 06 · THE TRAP',
+      '02 / 06 · AUTO-STRIP GATE',
+      '03 / 06 · PROOF RECEIPTS',
+      '04 / 06 · LIVE FRESHNESS',
+      '05 / 06 · YOUR WORKFLOW',
+      '06 / 06 · NEKTAR'
+    ];
+
+    function sceneEnvelope(t, sc, isFirst, isLast) {
+      const fadeIn = isFirst ? 0.30 : 0.36;
+      const fadeOut = isLast ? 0.01 : 0.30;
+      const inA = invLerp(sc.start, sc.start + fadeIn, t);
+      const outA = isLast ? 1 : 1 - invLerp(sc.end - fadeOut, sc.end, t);
+      return Math.min(easeOut(inA), easeOut(outA));
+    }
+
+    function setEnter(el, p, dy = 24) {
+      const e = easeOut(p);
+      el.style.opacity = String(e);
+      el.style.transform = `translateY(${((1 - e) * dy).toFixed(2)}px)`;
+    }
+
+    function edgeLink(fromEl, toEl, fromBorderEl) {
+      const a = fromEl.getBoundingClientRect();
+      const ab = (fromBorderEl || fromEl).getBoundingClientRect();
+      const b = toEl.getBoundingClientRect();
+      const x1 = ab.right + 4;
+      const y1 = a.top + a.height * 0.5;
+      const x2 = b.left - 4;
+      const y2 = b.top + b.height * 0.5;
+      const dx = Math.max(24, (x2 - x1) * 0.48);
+      return {
+        p0: { x: x1, y: y1 },
+        p1: { x: x1 + dx, y: y1 },
+        p2: { x: x2 - dx, y: y2 },
+        p3: { x: x2, y: y2 },
+        d: `M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${(x1 + dx).toFixed(1)} ${y1.toFixed(1)}, ${(x2 - dx).toFixed(1)} ${y2.toFixed(1)}, ${x2.toFixed(1)} ${y2.toFixed(1)}`
+      };
+    }
+
+    function setConnector(pathEl, dotEl, link, progress, dotPhase) {
+      pathEl.setAttribute('d', link.d);
+      const len = Math.max(10, pathEl.getTotalLength());
+      pathEl.setAttribute('stroke-dasharray', len.toFixed(1));
+      pathEl.style.strokeDashoffset = (len * (1 - clamp(progress))).toFixed(1);
+      pathEl.style.opacity = progress > 0.01 ? '1' : '0';
+      if (progress > 0.08) {
+        const pt = cubicPt(link.p0, link.p1, link.p2, link.p3, dotPhase % 1);
+        dotEl.setAttribute('cx', pt.x.toFixed(1));
+        dotEl.setAttribute('cy', pt.y.toFixed(1));
+        dotEl.setAttribute('opacity', clamp(progress).toFixed(2));
+      } else {
+        dotEl.setAttribute('opacity', '0');
+      }
+    }
+
+    // ---------- Scene 1: Hook — Confident Nonsense ----------
+    function renderScene1(p, localT) {
+      setEnter($('s1-head'), invLerp(0.0, 0.14, p), 20);
+      setEnter($('s1-win-wrap'), invLerp(0.05, 0.22, p), 28);
+      setEnter($('s1-user'), invLerp(0.08, 0.20, p), 14);
+      setEnter($('s1-b1'), invLerp(0.14, 0.26, p), 14);
+      setEnter($('s1-b2'), invLerp(0.20, 0.32, p), 14);
+      setEnter($('s1-b3'), invLerp(0.26, 0.38, p), 14);
+
+      const alertP = invLerp(0.38, 0.50, p);
+      const b2 = $('s1-b2');
+      const b2Dot = $('s1-b2-dot');
+      const b2Badge = $('s1-b2-badge');
+      const statusPill = $('s1-status-pill');
+      const alertStrip = $('s1-alert');
+
+      if (alertP > 0) {
+        const pulse = 0.5 + 0.5 * Math.sin((localT - 2.9) * 8.5);
+        const shake = alertP < 0.7 ? Math.sin(alertP * Math.PI * 6) * (1 - alertP / 0.7) * 8 : 0;
+        const glow = 0.22 + 0.24 * pulse;
+
+        b2.style.borderColor = `rgba(229, 83, 75, ${lerp(0.25, 0.92, alertP).toFixed(3)})`;
+        b2.style.background = `rgba(229, 83, 75, ${(0.08 + 0.08 * pulse * alertP).toFixed(3)})`;
+        b2.style.boxShadow = `0 0 ${Math.round(24 + 22 * pulse)}px rgba(229, 83, 75, ${(glow * alertP).toFixed(3)})`;
+        b2.style.transform = `translateX(${shake.toFixed(2)}px) scale(${lerp(1, 1.012, easeOut(alertP)).toFixed(4)})`;
+        b2Dot.style.background = '#e5534b';
+        b2Dot.style.boxShadow = '0 0 12px rgba(229, 83, 75, 0.85)';
+
+        const badgeE = easeOutBack(invLerp(0.40, 0.54, p));
+        b2Badge.style.opacity = String(clamp(invLerp(0.40, 0.49, p)));
+        b2Badge.style.transform = `scale(${lerp(0.76, 1, badgeE).toFixed(3)})`;
+
+        statusPill.className = 'pill pill-bad';
+        statusPill.textContent = '⚠ 1 Invented Claim';
+
+        setEnter(alertStrip, invLerp(0.44, 0.58, p), 14);
+      } else {
+        b2.style.borderColor = '';
+        b2.style.background = '';
+        b2.style.boxShadow = '';
+        b2Dot.style.background = '';
+        b2Dot.style.boxShadow = '';
+        b2Badge.style.opacity = '0';
+        statusPill.className = 'pill';
+        statusPill.textContent = '100% Confident';
+        alertStrip.style.opacity = '0';
+      }
+    }
+
+    // ---------- Scene 2: The Auto-Strip Gate ----------
+    function renderScene2(p) {
+      setEnter($('s2-head'), invLerp(0.0, 0.12, p), 20);
+      setEnter($('s2-draft-win'), invLerp(0.04, 0.18, p), 24);
+      setEnter($('s2-notes-col'), invLerp(0.08, 0.22, p), 24);
+
+      // Laser sweeps vertically from y=14px to y=365px during p=0.14..0.72
+      const laserIn = invLerp(0.12, 0.17, p);
+      const laserOut = 1 - invLerp(0.71, 0.78, p);
+      const laserOp = Math.min(laserIn, laserOut);
+      const sweepT = easeInOut(invLerp(0.14, 0.72, p));
+      const laserY = lerp(18, 365, sweepT);
+      const laser = $('s2-laser');
+      laser.style.opacity = String(laserOp.toFixed(3));
+      laser.style.transform = `translateY(${laserY.toFixed(1)}px)`;
+
+      // Bullet 1 verified at p >= 0.25
+      const b1Ok = invLerp(0.24, 0.33, p);
+      const b1 = $('s2-b1'), i1 = $('s2-i1'), p1 = $('s2-p1'), n1 = $('s2-n1'), n1Tag = $('s2-n1-tag');
+      if (b1Ok > 0) {
+        b1.style.borderColor = `rgba(76, 194, 107, ${lerp(0.25, 0.78, b1Ok).toFixed(3)})`;
+        b1.style.background = `rgba(76, 194, 107, ${(0.08 * b1Ok).toFixed(3)})`;
+        i1.style.background = 'rgba(76, 194, 107, 0.2)';
+        i1.style.borderColor = 'rgba(76, 194, 107, 0.65)';
+        i1.style.color = '#4cc26b';
+        i1.textContent = '✓';
+        p1.className = 'pill pill-ok';
+        p1.textContent = '✓ Verified';
+        n1.className = 'note-card card-ok';
+        n1Tag.style.color = '#4cc26b';
+        n1Tag.textContent = '✓ MATCHED';
+      } else {
+        b1.style.borderColor = '';
+        b1.style.background = '';
+        i1.style.background = '';
+        i1.style.borderColor = '';
+        i1.style.color = '';
+        i1.textContent = '1';
+        p1.className = 'pill';
+        p1.textContent = 'Pending';
+        n1.className = 'note-card';
+        n1Tag.style.color = 'var(--mut)';
+        n1Tag.textContent = 'Saved Mar 4';
+      }
+
+      // Arc 1 (Bullet 1 -> Note 1) — dynamically measured from draft border to Note 1
+      const arc1P = easeOut(invLerp(0.24, 0.36, p));
+      setConnector($('s2-arc1'), $('s2-dot1'), edgeLink($('s2-b1'), $('s2-n1'), $('s2-draft-win')), arc1P, p * 2.4);
+
+      // Bullet 2 caught (p=0.42), sliced (p=0.45..0.55), and physically removed (p=0.58..0.72)
+      const b2Hit = invLerp(0.41, 0.48, p);
+      const sliceP = easeOut(invLerp(0.44, 0.54, p));
+      const ejectP = easeInOut(invLerp(0.58, 0.72, p));
+      const b2Wrap = $('s2-b2-wrap');
+      const b2 = $('s2-b2'), i2 = $('s2-i2'), p2 = $('s2-p2'), beam = $('s2-slice-beam');
+      const nMiss = $('s2-n-miss'), missPill = $('s2-miss-pill');
+
+      if (b2Hit > 0) {
+        b2.style.borderColor = `rgba(229, 83, 75, ${lerp(0.3, 0.9, b2Hit).toFixed(3)})`;
+        b2.style.background = `rgba(229, 83, 75, ${(0.14 * b2Hit).toFixed(3)})`;
+        i2.style.background = 'rgba(229, 83, 75, 0.22)';
+        i2.style.borderColor = 'rgba(229, 83, 75, 0.7)';
+        i2.style.color = '#ff7b74';
+        i2.textContent = '✕';
+        p2.className = 'pill pill-bad';
+        p2.textContent = '✕ No Source — Sliced';
+
+        beam.style.opacity = String(clamp(sliceP * 1.4));
+        beam.style.transform = `translateY(-50%) scaleX(${sliceP.toFixed(3)})`;
+
+        nMiss.style.borderColor = 'rgba(229, 83, 75, 0.65)';
+        nMiss.style.background = 'rgba(229, 83, 75, 0.08)';
+        nMiss.style.color = '#ff9c96';
+        missPill.style.opacity = '1';
+      } else {
+        b2.style.borderColor = '';
+        b2.style.background = '';
+        i2.style.background = '';
+        i2.style.borderColor = '';
+        i2.style.color = '';
+        i2.textContent = '2';
+        p2.className = 'pill';
+        p2.textContent = 'Pending';
+        beam.style.opacity = '0';
+        beam.style.transform = 'translateY(-50%) scaleX(0)';
+        nMiss.style.borderColor = '';
+        nMiss.style.background = '';
+        nMiss.style.color = '';
+        missPill.style.opacity = '0.4';
+      }
+
+      // Physical ejection + collapse of Bullet 2
+      b2.style.transform = `translateX(${(ejectP * 160).toFixed(1)}px) rotate(${(ejectP * 2.2).toFixed(2)}deg)`;
+      b2.style.opacity = String((1 - clamp(ejectP * 1.35)).toFixed(3));
+      const collapseP = easeInOut(invLerp(0.62, 0.75, p));
+      b2Wrap.style.maxHeight = `${lerp(112, 0, collapseP).toFixed(1)}px`;
+      b2Wrap.style.marginBottom = `${lerp(16, 0, collapseP).toFixed(1)}px`;
+
+      // Bullet 3 verified at p >= 0.64
+      const b3Ok = invLerp(0.64, 0.74, p);
+      const b3 = $('s2-b3'), i3 = $('s2-i3'), p3 = $('s2-p3'), n2 = $('s2-n2'), n2Tag = $('s2-n2-tag');
+      if (b3Ok > 0) {
+        b3.style.borderColor = `rgba(76, 194, 107, ${lerp(0.25, 0.78, b3Ok).toFixed(3)})`;
+        b3.style.background = `rgba(76, 194, 107, ${(0.08 * b3Ok).toFixed(3)})`;
+        i3.style.background = 'rgba(76, 194, 107, 0.2)';
+        i3.style.borderColor = 'rgba(76, 194, 107, 0.65)';
+        i3.style.color = '#4cc26b';
+        i3.textContent = '✓';
+        p3.className = 'pill pill-ok';
+        p3.textContent = '✓ Verified';
+        n2.className = 'note-card card-ok';
+        n2Tag.style.color = '#4cc26b';
+        n2Tag.textContent = '✓ MATCHED';
+      } else {
+        b3.style.borderColor = '';
+        b3.style.background = '';
+        i3.style.background = '';
+        i3.style.borderColor = '';
+        i3.style.color = '';
+        i3.textContent = '3';
+        p3.className = 'pill';
+        p3.textContent = 'Pending';
+        n2.className = 'note-card';
+        n2Tag.style.color = 'var(--mut)';
+        n2Tag.textContent = 'Saved Mar 11';
+      }
+
+      // Arc 3 (Bullet 3 -> Note 2) — dynamically measured from draft border to Note 2
+      const arc3P = easeOut(invLerp(0.66, 0.78, p));
+      setConnector($('s2-arc3'), $('s2-dot3'), edgeLink($('s2-b3'), $('s2-n2'), $('s2-draft-win')), arc3P, p * 2.4 + 0.5);
+
+      // Gate header status + bottom clean banner
+      const gatePill = $('s2-gate-pill');
+      if (p >= 0.74) {
+        gatePill.className = 'pill pill-ok';
+        gatePill.textContent = '2 Verified · 1 Removed';
+      } else if (p >= 0.44) {
+        gatePill.className = 'pill pill-bad';
+        gatePill.textContent = 'Stripping Unbacked Claim';
+      } else {
+        gatePill.className = 'pill pill-amber';
+        gatePill.textContent = 'Scanning Draft...';
+      }
+
+      setEnter($('s2-clean-bar'), invLerp(0.75, 0.86, p), 14);
+    }
+
+    // ---------- Scene 3: Clickable Proof Receipts ----------
+    function renderScene3(p) {
+      setEnter($('s3-head'), invLerp(0.0, 0.12, p), 20);
+      setEnter($('s3-answer'), invLerp(0.04, 0.18, p), 24);
+
+      // Cursor glides right onto Verified Receipt button (measured dynamically)
+      const btnRect = $('s3-rcpt-btn').getBoundingClientRect();
+      const targetX = btnRect.left + btnRect.width * 0.62;
+      const targetY = btnRect.top + btnRect.height * 0.54;
+
+      const curAppear = invLerp(0.10, 0.16, p);
+      const curMove = easeInOut(invLerp(0.12, 0.28, p));
+      const curFade = 1 - invLerp(0.72, 0.84, p);
+      const cursor = $('s3-cursor');
+      cursor.style.opacity = String((Math.min(curAppear, curFade)).toFixed(3));
+      const cx = lerp(targetX + 210, targetX, curMove);
+      const cy = lerp(targetY + 110, targetY, curMove);
+      const clickDip = (p >= 0.27 && p <= 0.34) ? Math.sin(invLerp(0.27, 0.34, p) * Math.PI) : 0;
+      cursor.style.left = `${cx.toFixed(1)}px`;
+      cursor.style.top = `${cy.toFixed(1)}px`;
+      cursor.style.transform = `scale(${(1 - 0.15 * clickDip).toFixed(3)})`;
+
+      const rcptBtn = $('s3-rcpt-btn');
+      rcptBtn.style.transform = `scale(${(1 - 0.06 * clickDip).toFixed(3)})`;
+
+      // Expanding click ripple centered on the button
+      const ringP = invLerp(0.29, 0.42, p);
+      const ring = $('s3-click-ring');
+      ring.setAttribute('cx', targetX.toFixed(1));
+      ring.setAttribute('cy', targetY.toFixed(1));
+      ring.setAttribute('r', String(lerp(16, 74, easeOut(ringP)).toFixed(1)));
+      ring.setAttribute('opacity', String((ringP > 0 && ringP < 1 ? (1 - ringP) * 0.85 : 0).toFixed(3)));
+
+      // Receipt inspector wakes up after click (p=0.31..0.46)
+      const inspP = easeOut(invLerp(0.30, 0.46, p));
+      const insp = $('s3-inspector');
+      insp.style.opacity = String(lerp(0.22, 1, inspP).toFixed(3));
+      insp.style.transform = `translateX(${lerp(36, 0, inspP).toFixed(1)}px)`;
+      insp.style.borderColor = inspP > 0.5 ? 'rgba(76, 194, 107, 0.55)' : '';
+
+      // Highlight claims & matched source cards
+      const m1 = easeOut(invLerp(0.36, 0.48, p));
+      const m2 = easeOut(invLerp(0.44, 0.58, p));
+
+      $('s3-c1').style.borderColor = m1 > 0.2 ? `rgba(76, 194, 107, ${(0.25 + 0.5 * m1).toFixed(2)})` : '';
+      $('s3-src1').style.borderColor = m1 > 0.2 ? `rgba(76, 194, 107, ${(0.25 + 0.55 * m1).toFixed(2)})` : '';
+      $('s3-src1').style.boxShadow = m1 > 0.2 ? `0 0 28px rgba(76, 194, 107, ${(0.14 * m1).toFixed(3)})` : '';
+
+      $('s3-c2').style.borderColor = m2 > 0.2 ? `rgba(247, 153, 27, ${(0.25 + 0.5 * m2).toFixed(2)})` : '';
+      $('s3-src2').style.borderColor = m2 > 0.2 ? `rgba(247, 153, 27, ${(0.25 + 0.55 * m2).toFixed(2)})` : '';
+      $('s3-src2').style.boxShadow = m2 > 0.2 ? `0 0 28px rgba(247, 153, 27, ${(0.14 * m2).toFixed(3)})` : '';
+
+      // Connector lines & traveling dots (dynamically aligned to exact card borders)
+      setConnector($('s3-line1'), $('s3-dot1'), edgeLink($('s3-c1'), $('s3-src1'), $('s3-answer')), m1, p * 2.2);
+      setConnector($('s3-line2'), $('s3-dot2'), edgeLink($('s3-c2'), $('s3-src2'), $('s3-answer')), m2, p * 2.2 + 0.45);
+    }
+
+    // ---------- Scene 4: Live Freshness ----------
+    function renderScene4(p, localT) {
+      setEnter($('s4-head'), invLerp(0.0, 0.12, p), 20);
+      setEnter($('s4-note'), invLerp(0.04, 0.18, p), 24);
+      setEnter($('s4-past1'), invLerp(0.08, 0.22, p), 24);
+      setEnter($('s4-past2'), invLerp(0.12, 0.26, p), 24);
+
+      // Note edited: 500/min -> 1,000/min during p=0.16..0.30
+      const editP = easeOut(invLerp(0.16, 0.28, p));
+      $('s4-strike').style.transform = `scaleX(${editP.toFixed(3)})`;
+      $('s4-old').style.opacity = String(lerp(1, 0.45, editP).toFixed(3));
+      $('s4-arrow').style.opacity = String(editP.toFixed(3));
+      const newP = easeOutBack(invLerp(0.20, 0.32, p));
+      $('s4-new').style.opacity = String(clamp(invLerp(0.20, 0.28, p)).toFixed(3));
+      $('s4-new').style.transform = `scale(${lerp(0.82, 1, newP).toFixed(3)})`;
+
+      const verPill = $('s4-ver-pill');
+      const editStatus = $('s4-edit-status');
+      if (p >= 0.24) {
+        verPill.className = 'pill pill-solid-amber';
+        verPill.textContent = 'Updated · v2';
+        editStatus.textContent = 'Note updated — rippling to receipts';
+        editStatus.style.color = '#ffac33';
+      } else {
+        verPill.className = 'pill pill-amber';
+        verPill.textContent = 'v1 · Saved';
+        editStatus.textContent = 'Editing your saved note...';
+        editStatus.style.color = 'var(--mut)';
+      }
+
+      // Concentric amber ripple waves from p >= 0.27
+      const ripStart = invLerp(0.27, 0.34, p);
+      const rings = [$('s4-ring1'), $('s4-ring2'), $('s4-ring3')];
+      rings.forEach((rg, idx) => {
+        if (ripStart <= 0) {
+          rg.setAttribute('opacity', '0');
+          return;
+        }
+        const phase = ((localT * 0.72) + idx * 0.33) % 1;
+        const r = lerp(22, 175, easeOut(phase));
+        const op = (1 - phase) * 0.78 * ripStart;
+        rg.setAttribute('r', r.toFixed(1));
+        rg.setAttribute('opacity', op.toFixed(3));
+      });
+
+      // Ripple conduit path to Past Answer #1
+      const pathP = easeOut(invLerp(0.29, 0.43, p));
+      $('s4-path-stale').style.strokeDashoffset = String((280 * (1 - pathP)).toFixed(1));
+      const pDot = $('s4-pulse-dot');
+      if (pathP > 0.05) {
+        const dt = (p * 2.5) % 1;
+        const pt = cubicPt({x:8,y:174},{x:95,y:174},{x:130,y:92},{x:224,y:92}, dt);
+        pDot.setAttribute('cx', pt.x.toFixed(1));
+        pDot.setAttribute('cy', pt.y.toFixed(1));
+        pDot.setAttribute('opacity', String(pathP.toFixed(2)));
+      } else {
+        pDot.setAttribute('opacity', '0');
+      }
+
+      // Past Answer #1 flips to "Outdated — source updated" at p >= 0.41
+      const staleP = easeOut(invLerp(0.40, 0.50, p));
+      const past1 = $('s4-past1');
+      const p1Label = $('s4-p1-label');
+      const p1Badge = $('s4-p1-badge');
+      const p1Sub = $('s4-p1-sub');
+      const staleSpan = $('s4-stale-span');
+
+      if (staleP > 0.15) {
+        past1.className = 'card s4-ans-card card-bad';
+        past1.style.borderColor = 'rgba(247, 153, 27, 0.78)';
+        past1.style.boxShadow = '0 0 0 1px rgba(247, 153, 27, 0.18), 0 0 40px rgba(229, 83, 75, 0.18), 0 20px 50px rgba(0,0,0,0.55)';
+        p1Label.className = 'card-label bad';
+        p1Badge.className = 'pill pill-bad';
+        p1Badge.textContent = '⚠ Outdated — source updated';
+        staleSpan.className = 'stale-mark';
+        p1Sub.textContent = 'Source note changed to 1,000/min · Agents stop repeating this';
+        p1Sub.style.color = '#ffac33';
+      } else {
+        past1.className = 'card s4-ans-card';
+        past1.style.borderColor = '';
+        past1.style.boxShadow = '';
+        p1Label.className = 'card-label';
+        p1Badge.className = 'pill pill-ok';
+        p1Badge.textContent = '✓ Verified';
+        staleSpan.className = '';
+        p1Sub.textContent = 'Backed by Note: API Limits (v1)';
+        p1Sub.style.color = 'var(--mut)';
+      }
+    }
+
+    // ---------- Scene 5: Works Inside Your Workflow ----------
+    function renderScene5(p) {
+      setEnter($('s5-head'), invLerp(0.0, 0.12, p), 20);
+      setEnter($('s5-claude'), invLerp(0.04, 0.18, p), 24);
+      setEnter($('s5-guard-card'), invLerp(0.08, 0.22, p), 24);
+      setEnter($('s5-tools'), invLerp(0.16, 0.30, p), 18);
+
+      const checks = [
+        { row: $('s5-chk1'), ic: $('s5-ci1'), pill: $('s5-cp1'), at: 0.17, label: '✓ Passed' },
+        { row: $('s5-chk2'), ic: $('s5-ci2'), pill: $('s5-cp2'), at: 0.28, label: '✓ Passed' },
+        { row: $('s5-chk3'), ic: $('s5-ci3'), pill: $('s5-cp3'), at: 0.39, label: '✓ Enforced' }
+      ];
+
+      checks.forEach((c, idx) => {
+        const cp = easeOut(invLerp(c.at, c.at + 0.09, p));
+        if (cp > 0.1) {
+          c.row.style.borderColor = `rgba(76, 194, 107, ${(0.25 + 0.5 * cp).toFixed(2)})`;
+          c.row.style.background = `rgba(76, 194, 107, ${(0.08 * cp).toFixed(3)})`;
+          c.ic.style.background = 'var(--ok)';
+          c.ic.style.color = '#090807';
+          c.ic.textContent = '✓';
+          c.pill.className = 'pill pill-ok';
+          c.pill.textContent = c.label;
+        } else {
+          c.row.style.borderColor = '';
+          c.row.style.background = '';
+          c.ic.style.background = '';
+          c.ic.style.color = '';
+          c.ic.textContent = String(idx + 1);
+          c.pill.className = 'pill';
+          c.pill.textContent = idx === 0 ? 'Checking' : 'Waiting';
+        }
+      });
+
+      const doneP = invLerp(0.45, 0.54, p);
+      setEnter($('s5-done-bar'), doneP, 12);
+      setEnter($('s5-reply-foot'), invLerp(0.44, 0.53, p), 10);
+    }
+
+    // ---------- Scene 6: Cinema Outro ----------
+    function renderScene6(p, localT) {
+      const brandP = easeOutBack(invLerp(0.0, 0.26, p));
+      const brand = $('s6-brand');
+      brand.style.opacity = String(clamp(invLerp(0.0, 0.18, p)).toFixed(3));
+      brand.style.transform = `scale(${lerp(0.86, 1, brandP).toFixed(4)})`;
+
+      const glowPulse = 0.5 + 0.5 * Math.sin(localT * 2.6);
+      $('s6-emblem').style.boxShadow = `0 0 0 12px rgba(247, 153, 27, ${(0.11 + 0.05 * glowPulse).toFixed(3)}), 0 0 ${Math.round(68 + 26 * glowPulse)}px rgba(247, 153, 27, ${(0.40 + 0.16 * glowPulse).toFixed(3)})`;
+
+      setEnter($('s6-tagline'), invLerp(0.14, 0.34, p), 22);
+      setEnter($('s6-pills'), invLerp(0.28, 0.48, p), 18);
+      setEnter($('s6-truth'), invLerp(0.42, 0.60, p), 12);
+    }
+
+    // ---------- Main Deterministic Frame Renderer ----------
+    window.renderFrame = function renderFrame(t, frame, totalFrames, timings) {
+      const scenes = timings.scenes;
+      const total = timings.totalDuration || 60;
+
+      // Update global progress bar
+      const pct = clamp(t / Math.max(0.01, total)) * 100;
+      $('progress-fill').style.width = `${pct.toFixed(3)}%`;
+
+      // Determine active scene
+      let activeIdx = scenes.length - 1;
+      for (let i = 0; i < scenes.length; i++) {
+        if (t >= scenes[i].start && t < scenes[i].end) {
+          activeIdx = i;
+          break;
+        }
+      }
+
+      const activeSc = scenes[activeIdx];
+      const isOutro = activeSc.id === 'outro';
+
+      // Corner chrome fades out smoothly on Cinema Outro
+      const chromeAlpha = isOutro ? 1 - easeOut(invLerp(activeSc.start, activeSc.start + 0.35, t)) : 1;
+      $('corner-brand').style.opacity = String(chromeAlpha.toFixed(3));
+      $('corner-tag').style.opacity = String(chromeAlpha.toFixed(3));
+      $('corner-tag').textContent = SCENE_TAGS[activeIdx] || '';
+
+      // Subtitle bar
+      const subBar = $('subtitle-bar');
+      const subText = (activeSc.subtitle || '').trim();
+      if (subText.length > 0 && !isOutro) {
+        const subIn = invLerp(activeSc.start + 0.10, activeSc.start + 0.35, t);
+        const subOut = 1 - invLerp(activeSc.end - 0.28, activeSc.end - 0.04, t);
+        subBar.textContent = subText;
+        subBar.classList.remove('empty');
+        subBar.style.opacity = String(Math.min(easeOut(subIn), easeOut(subOut)).toFixed(3));
+      } else {
+        subBar.textContent = '';
+        subBar.classList.add('empty');
+        subBar.style.opacity = '0';
+      }
+
+      // Render each scene with clean deterministic envelope
+      scenes.forEach((sc, idx) => {
+        const el = $('scene-' + sc.id);
+        if (!el) return;
+        const inRange = t >= sc.start - 0.05 && t <= sc.end + 0.05;
+        if (!inRange) {
+          el.style.opacity = '0';
+          return;
+        }
+        const env = sceneEnvelope(t, sc, idx === 0, idx === scenes.length - 1);
+        el.style.opacity = String(env.toFixed(3));
+
+        const localT = Math.max(0, t - sc.start);
+        const p = clamp(localT / Math.max(0.01, sc.duration));
+
+        if (sc.id === 'hook') renderScene1(p, localT);
+        else if (sc.id === 'auto-strip') renderScene2(p, localT);
+        else if (sc.id === 'receipts') renderScene3(p, localT);
+        else if (sc.id === 'freshness') renderScene4(p, localT);
+        else if (sc.id === 'workflow') renderScene5(p, localT);
+        else if (sc.id === 'outro') renderScene6(p, localT);
+      });
+    };
+  </script>
+</body>
+</html>

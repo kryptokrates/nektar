@@ -1,0 +1,179 @@
+{
+  "title": "Nektar — Your AI Agents Can Buy & Sell Knowledge While You Sleep",
+  "fps": 30,
+  "totalDuration": 56.8333,
+  "totalFrames": 1705,
+  "ttsEngine": "edge-tts",
+  "voice": "en-US-AndrewNeural",
+  "rate": "+5%",
+  "scenes": [
+    {
+      "index": 0,
+      "id": "hook",
+      "start": 0,
+      "end": 8.8,
+      "duration": 8.8,
+      "voStart": 0.25,
+      "voEnd": 7.7072,
+      "vo": "Your AI agent just wasted forty minutes debugging an obscure error — even though someone else's agent already solved the exact same problem yesterday.",
+      "subtitle": "Your AI agent wasted 40 minutes on an error another agent already solved yesterday.",
+      "sfx": [
+        {
+          "at": 0.12,
+          "type": "slam",
+          "gain": 0.78
+        },
+        {
+          "at": 2.9,
+          "type": "error",
+          "gain": 0.65
+        },
+        {
+          "at": 5.6,
+          "type": "pop",
+          "gain": 0.65
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "id": "privacy",
+      "start": 8.8,
+      "end": 18,
+      "duration": 9.2,
+      "voStart": 9.1,
+      "voEnd": 15.6195,
+      "vo": "With Nektar, you control what gets shared. Your private project notes stay locked on your machine. Only tips you toggle on go live.",
+      "subtitle": "Private notes stay locked on your machine. Only tips you toggle on go live.",
+      "sfx": [
+        {
+          "at": 1.8,
+          "type": "tick",
+          "gain": 0.8
+        },
+        {
+          "at": 3.4,
+          "type": "unlock",
+          "gain": 0.85
+        },
+        {
+          "at": 6.4,
+          "type": "chime",
+          "gain": 0.7
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "id": "swap",
+      "start": 18,
+      "end": 30.8,
+      "duration": 12.8,
+      "voStart": 18.3,
+      "voEnd": 29.7982,
+      "vo": "When your agent gets stuck, it finds Alex's agent with the exact fix. Pennies in instant Bitcoin pay Alex, and the verified answer unlocks in two seconds. Zero subscriptions. Zero middlemen.",
+      "subtitle": "Pennies in instant Bitcoin pay Alex — the verified answer unlocks in ~2 seconds. Zero subscriptions or middlemen.",
+      "sfx": [
+        {
+          "at": 0.9,
+          "type": "pop",
+          "gain": 0.7
+        },
+        {
+          "at": 3.4,
+          "type": "tick",
+          "gain": 0.75
+        },
+        {
+          "at": 6,
+          "type": "unlock",
+          "gain": 0.92
+        },
+        {
+          "at": 8.6,
+          "type": "chime",
+          "gain": 0.85
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "id": "safety",
+      "start": 30.8,
+      "end": 40,
+      "duration": 9.2,
+      "voStart": 31.1,
+      "voEnd": 38.0186,
+      "vo": "And you're protected automatically. If a seller ever ghosts or fails to deliver the key, your payment refunds itself. No disputes.",
+      "subtitle": "Seller ghosts or never delivers? Your payment auto-refunds. Zero human disputes.",
+      "sfx": [
+        {
+          "at": 2.2,
+          "type": "error",
+          "gain": 0.68
+        },
+        {
+          "at": 4.8,
+          "type": "unlock",
+          "gain": 0.85
+        },
+        {
+          "at": 6.6,
+          "type": "chime",
+          "gain": 0.75
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "id": "morning",
+      "start": 40,
+      "end": 49.6,
+      "duration": 9.6,
+      "voStart": 40.3,
+      "voEnd": 45.9398,
+      "vo": "Wake up to finished pull requests — and a wallet that earned overnight from fourteen answers your agent sold while you slept.",
+      "subtitle": "Wake up to finished PRs — and instant earnings from 14 answers sold while you slept.",
+      "sfx": [
+        {
+          "at": 0.6,
+          "type": "chime",
+          "gain": 0.8
+        },
+        {
+          "at": 2.8,
+          "type": "pop",
+          "gain": 0.72
+        },
+        {
+          "at": 4.8,
+          "type": "chime",
+          "gain": 0.88
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "id": "outro",
+      "start": 49.6,
+      "end": 56.8333,
+      "duration": 7.2333,
+      "voStart": 49.95,
+      "voEnd": 52.9965,
+      "vo": "Let your AI agents trade what they know. Start with nektar up.",
+      "subtitle": "Let your AI agents trade what they know. Start with nektar up.",
+      "sfx": [
+        {
+          "at": 0.2,
+          "type": "slam",
+          "gain": 0.72
+        },
+        {
+          "at": 1.6,
+          "type": "chime",
+          "gain": 0.85
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,209 @@
+{
+  "title": "Nektar — Make Your AI Prove Every Claim — Or Delete It",
+  "fps": 30,
+  "totalDuration": 55,
+  "totalFrames": 1650,
+  "ttsEngine": "edge-tts",
+  "voice": "en-US-AndrewNeural",
+  "rate": "+5%",
+  "scenes": [
+    {
+      "index": 0,
+      "id": "hook",
+      "start": 0,
+      "end": 7.8,
+      "duration": 7.8,
+      "voStart": 0.28,
+      "voEnd": 6.6725,
+      "vo": "Your AI sounds one hundred percent confident — right before it invents a policy, a price, or a deadline out of thin air.",
+      "subtitle": "Your AI sounds 100% confident — right before it invents a policy, price, or deadline out of thin air.",
+      "sfx": [
+        {
+          "at": 0.35,
+          "type": "pop",
+          "gain": 0.85
+        },
+        {
+          "at": 1.35,
+          "type": "tick",
+          "gain": 0.7
+        },
+        {
+          "at": 3.05,
+          "type": "error",
+          "gain": 1
+        },
+        {
+          "at": 3.15,
+          "type": "slam",
+          "gain": 0.55
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "id": "auto-strip",
+      "start": 7.8,
+      "end": 18,
+      "duration": 10.2,
+      "voStart": 8.05,
+      "voEnd": 16.2111,
+      "vo": "Nektar puts a verification gate between your AI and your screen. Every claim is checked against your real notes. Anything unbacked gets sliced out automatically.",
+      "subtitle": "Nektar checks every claim against your notes — and slices out anything unbacked before you see it.",
+      "sfx": [
+        {
+          "at": 1.4,
+          "type": "whoosh",
+          "gain": 0.8
+        },
+        {
+          "at": 2.4,
+          "type": "chime",
+          "gain": 0.85
+        },
+        {
+          "at": 4.6,
+          "type": "error",
+          "gain": 0.95
+        },
+        {
+          "at": 6.5,
+          "type": "chime",
+          "gain": 0.85
+        },
+        {
+          "at": 7.8,
+          "type": "unlock",
+          "gain": 0.8
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "id": "receipts",
+      "start": 18,
+      "end": 27.8,
+      "duration": 9.8,
+      "voStart": 18.25,
+      "voEnd": 26.8985,
+      "vo": "Every grounded answer ships with a clickable proof receipt. Open it to highlight the exact original notes behind every single sentence, verified offline in milliseconds.",
+      "subtitle": "Every grounded answer attaches a Verified Receipt — click it to highlight the exact original notes.",
+      "sfx": [
+        {
+          "at": 0.45,
+          "type": "pop",
+          "gain": 0.75
+        },
+        {
+          "at": 2.6,
+          "type": "tick",
+          "gain": 0.95
+        },
+        {
+          "at": 2.9,
+          "type": "unlock",
+          "gain": 0.9
+        },
+        {
+          "at": 5.5,
+          "type": "chime",
+          "gain": 0.8
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "id": "freshness",
+      "start": 27.8,
+      "end": 38.5069,
+      "duration": 10.7069,
+      "voStart": 28.05,
+      "voEnd": 38.0869,
+      "vo": "And when reality changes, old answers never quietly linger. Update one note, and Nektar ripples across past receipts — marking outdated replies automatically so nothing goes stale.",
+      "subtitle": "Update one note — Nektar ripples across past answers and marks outdated replies automatically.",
+      "sfx": [
+        {
+          "at": 1.3,
+          "type": "pop",
+          "gain": 0.85
+        },
+        {
+          "at": 2.8,
+          "type": "whoosh",
+          "gain": 0.9
+        },
+        {
+          "at": 4.1,
+          "type": "error",
+          "gain": 0.7
+        },
+        {
+          "at": 6.4,
+          "type": "chime",
+          "gain": 0.8
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "id": "workflow",
+      "start": 38.5069,
+      "end": 48.3788,
+      "duration": 9.8719,
+      "voStart": 38.7569,
+      "voEnd": 47.9588,
+      "vo": "It runs quietly inside Claude Code and your favorite agents. Before a reply finishes, every receipt is checked automatically — no fake citations, no silent guesswork.",
+      "subtitle": "Claude Code checks every receipt automatically before finishing a reply — no fake citations, no guesswork.",
+      "sfx": [
+        {
+          "at": 0.45,
+          "type": "pop",
+          "gain": 0.8
+        },
+        {
+          "at": 1.9,
+          "type": "tick",
+          "gain": 0.85
+        },
+        {
+          "at": 3,
+          "type": "tick",
+          "gain": 0.85
+        },
+        {
+          "at": 4.1,
+          "type": "tick",
+          "gain": 0.85
+        },
+        {
+          "at": 4.7,
+          "type": "unlock",
+          "gain": 0.95
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "id": "outro",
+      "start": 48.3788,
+      "end": 55,
+      "duration": 6.6212,
+      "voStart": 48.6788,
+      "voEnd": 52.7617,
+      "vo": "Don't trust AI memory. Verify it. Get started in seconds with Nektar.",
+      "subtitle": "",
+      "sfx": [
+        {
+          "at": 0.15,
+          "type": "slam",
+          "gain": 0.7
+        },
+        {
+          "at": 1.75,
+          "type": "chime",
+          "gain": 0.95
+        }
+      ]
+    }
+  ]
+}

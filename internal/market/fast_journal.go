@@ -881,29 +881,71 @@ func decodeDealWAL(raw []byte) (store.DealRecord, error) {
 		return store.DealRecord{}, err
 	}
 	var rec store.DealRecord
-	rec.DealID, _ = core.CBORText(m, 1)
-	rec.Role, _ = core.CBORText(m, 2)
-	rec.Status, _ = core.CBORText(m, 3)
-	rec.Shard, _ = core.CBORText(m, 4)
-	rec.PaymentTxID, _ = core.CBORText(m, 5)
-	if idx, uErr := core.CBORUint(m, 6); uErr == nil {
-		rec.PaymentOutputIndex = uint32(idx)
+	if rec.DealID, err = core.CBORText(m, 1); err != nil {
+		return store.DealRecord{}, err
 	}
-	rec.CounterpartyPub, _ = core.CBORText(m, 7)
-	rec.PriceSats, _ = core.CBORUint(m, 8)
-	rec.UpdatedAt, _ = core.CBORInt(m, 9)
-	rec.PaymentBEEF, _ = core.CBORBytes(m, 10)
-	rec.PaymentDerivPrefix, _ = core.CBORText(m, 11)
-	rec.PaymentDerivSuffix, _ = core.CBORText(m, 12)
-	rec.PaymentSenderKey, _ = core.CBORText(m, 13)
-	rec.ClaimKeyHex, _ = core.CBORText(m, 14)
-	rec.ChirpURL, _ = core.CBORText(m, 15)
-	rec.DeliveredText, _ = core.CBORText(m, 16)
-	rec.DealReceiptJSON, _ = core.CBORBytes(m, 17)
-	rec.ChosenOfferJSON, _ = core.CBORBytes(m, 18)
-	rec.IsHubSeller, _ = core.CBORBool(m, 19)
-	rec.ConfirmHeight, _ = core.CBORInt(m, 20)
-	rec.Error, _ = core.CBORText(m, 21)
+	if rec.Role, err = core.CBORText(m, 2); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.Status, err = core.CBORText(m, 3); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.Shard, err = core.CBORText(m, 4); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.PaymentTxID, err = core.CBORText(m, 5); err != nil {
+		return store.DealRecord{}, err
+	}
+	idx, err := core.CBORUint(m, 6)
+	if err != nil {
+		return store.DealRecord{}, err
+	}
+	rec.PaymentOutputIndex = uint32(idx)
+	if rec.CounterpartyPub, err = core.CBORText(m, 7); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.PriceSats, err = core.CBORUint(m, 8); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.UpdatedAt, err = core.CBORInt(m, 9); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.PaymentBEEF, err = core.CBORBytes(m, 10); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.PaymentDerivPrefix, err = core.CBORText(m, 11); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.PaymentDerivSuffix, err = core.CBORText(m, 12); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.PaymentSenderKey, err = core.CBORText(m, 13); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.ClaimKeyHex, err = core.CBORText(m, 14); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.ChirpURL, err = core.CBORText(m, 15); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.DeliveredText, err = core.CBORText(m, 16); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.DealReceiptJSON, err = core.CBORBytes(m, 17); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.ChosenOfferJSON, err = core.CBORBytes(m, 18); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.IsHubSeller, err = core.CBORBool(m, 19); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.ConfirmHeight, err = core.CBORInt(m, 20); err != nil {
+		return store.DealRecord{}, err
+	}
+	if rec.Error, err = core.CBORText(m, 21); err != nil {
+		return store.DealRecord{}, err
+	}
 	return rec, nil
 }
 

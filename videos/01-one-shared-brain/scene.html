@@ -1,0 +1,1606 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Nektar — Stop Repeating Yourself to Every AI Tool</title>
+  <link rel="stylesheet" href="../shared/theme.css" />
+  <style>
+    /* Safe area: keep all primary content comfortably above bottom subtitle bar (bottom >= 132px) */
+    .scene {
+      padding: 72px 96px 138px;
+    }
+
+    .scene-head {
+      margin-bottom: 30px;
+    }
+
+    .headline {
+      font-size: 60px;
+    }
+
+    /* Ambient floating glows behind stage */
+    .ambient-orb {
+      position: absolute;
+      border-radius: 999px;
+      pointer-events: none;
+      filter: blur(80px);
+      opacity: 0.24;
+    }
+
+    /* === Tool Avatar Badges === */
+    .tool-icon {
+      width: 52px;
+      height: 52px;
+      border-radius: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 22px;
+      flex-shrink: 0;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .tool-icon.claude   { background: linear-gradient(135deg, #d97757, #b85636); color: #fff; }
+    .tool-icon.cursor   { background: linear-gradient(135deg, #2b2927, #161413); color: #f4efe6; border-color: rgba(244,239,230,0.28); }
+    .tool-icon.codex    { background: linear-gradient(135deg, #2b7a57, #1b4d38); color: #d8ffea; }
+    .tool-icon.openclaw { background: linear-gradient(135deg, #e86a0c, #b54708); color: #fff; }
+    .tool-icon.vscode   { background: linear-gradient(135deg, #2f75b5, #1b4c7a); color: #e8f4ff; }
+    .tool-icon.windsurf { background: linear-gradient(135deg, #1d8f7e, #125c51); color: #dcfff9; }
+
+    /* ============================================================
+       SCENE 1: HOOK — THE AMNESIA PROBLEM
+       ============================================================ */
+    .hook-stage {
+      position: relative;
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 64px 190px;
+      align-items: center;
+      max-width: 1580px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 8px 0;
+    }
+
+    .amnesia-card {
+      padding: 28px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      height: 236px;
+      justify-content: space-between;
+      z-index: 2;
+    }
+
+    .amnesia-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .amnesia-who {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .amnesia-name {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+    }
+
+    .amnesia-time {
+      font-family: var(--font-mono);
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--mut);
+      margin-top: 2px;
+    }
+
+    .chat-bubble {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--line2);
+      border-radius: 14px;
+      padding: 16px 20px;
+      font-size: 23px;
+      font-weight: 600;
+      line-height: 1.32;
+      color: var(--ink);
+    }
+
+    .chat-bubble.ok-bubble {
+      background: rgba(76, 194, 107, 0.08);
+      border-color: rgba(76, 194, 107, 0.35);
+      color: #dffae6;
+    }
+
+    .chat-bubble.bad-bubble {
+      background: rgba(229, 83, 75, 0.09);
+      border-color: rgba(229, 83, 75, 0.36);
+      color: #ffd7d4;
+    }
+
+    .hook-center-badge {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 5;
+      background: #170e0e;
+      border: 2px solid rgba(229, 83, 75, 0.72);
+      border-radius: 20px;
+      padding: 16px 26px;
+      text-align: center;
+      box-shadow: 0 0 0 10px rgba(229, 83, 75, 0.1), 0 0 42px rgba(229, 83, 75, 0.32), 0 20px 50px rgba(0, 0, 0, 0.75);
+    }
+
+    .hook-center-x {
+      font-size: 26px;
+      font-weight: 900;
+      color: #ff6b63;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+
+    .hook-center-txt {
+      font-family: var(--font-mono);
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      color: #ffb8b3;
+      white-space: nowrap;
+    }
+
+    /* ============================================================
+       SCENE 2: 25-SECOND SETUP
+       ============================================================ */
+    .setup-stage {
+      position: relative;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      max-width: 1520px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 4px 0 8px;
+    }
+
+    .setup-term {
+      width: 940px;
+      z-index: 2;
+      border-color: rgba(247, 153, 27, 0.5);
+      box-shadow: 0 0 48px rgba(247, 153, 27, 0.14), 0 24px 60px rgba(0, 0, 0, 0.6);
+    }
+
+    .setup-term-body {
+      background: #0c0b0a;
+      padding: 26px 34px;
+      font-family: var(--font-mono);
+    }
+
+    .setup-cmd-line {
+      font-size: 38px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .setup-status-lines {
+      margin-top: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 21px;
+      font-weight: 600;
+    }
+
+    .setup-benefits {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 32px;
+      z-index: 2;
+    }
+
+    .benefit-card {
+      padding: 26px 30px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .benefit-icon {
+      width: 58px;
+      height: 58px;
+      border-radius: 16px;
+      background: rgba(247, 153, 27, 0.12);
+      border: 1.5px solid rgba(247, 153, 27, 0.38);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: var(--amber);
+    }
+
+    .benefit-title {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+    }
+
+    .benefit-sub {
+      font-size: 19px;
+      color: var(--mut);
+      margin-top: 4px;
+      font-weight: 500;
+    }
+
+    .setup-tools-strip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      flex-wrap: nowrap;
+      z-index: 2;
+      background: rgba(20, 18, 16, 0.86);
+      border: 1.5px solid rgba(76, 194, 107, 0.38);
+      border-radius: 999px;
+      padding: 14px 28px;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+    }
+
+    .strip-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      border-radius: 999px;
+      background: rgba(76, 194, 107, 0.12);
+      border: 1px solid rgba(76, 194, 107, 0.4);
+      font-size: 17px;
+      font-weight: 700;
+      color: #dffae6;
+      white-space: nowrap;
+    }
+
+    .strip-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: var(--ok);
+      box-shadow: 0 0 10px var(--ok);
+    }
+
+    /* ============================================================
+       SCENE 3: LIVE MAGIC MOMENT
+       ============================================================ */
+    .magic-stage {
+      position: relative;
+      flex: 1;
+      display: grid;
+      grid-template-columns: 510px 330px 540px;
+      justify-content: space-between;
+      align-items: center;
+      max-width: 1620px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .magic-win {
+      z-index: 2;
+      height: 450px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .magic-win-body {
+      padding: 26px 28px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .prompt-tag {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--mut);
+      margin-bottom: 8px;
+    }
+
+    .magic-msg {
+      background: #181513;
+      border: 1px solid var(--line2);
+      border-radius: 16px;
+      padding: 20px 22px;
+      font-size: 24px;
+      font-weight: 600;
+      line-height: 1.38;
+      color: var(--ink);
+    }
+
+    .magic-msg.highlight-amber {
+      border-color: rgba(247, 153, 27, 0.55);
+      background: rgba(247, 153, 27, 0.08);
+    }
+
+    .magic-saved-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 20px;
+      border-radius: 14px;
+      background: rgba(76, 194, 107, 0.11);
+      border: 1px solid rgba(76, 194, 107, 0.45);
+      color: var(--ok);
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .brain-core {
+      z-index: 3;
+      padding: 32px 26px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      border-radius: 28px;
+      background: radial-gradient(circle at 50% 24%, rgba(247, 153, 27, 0.18), #12100e 72%);
+      border: 2px solid rgba(247, 153, 27, 0.68);
+      box-shadow: 0 0 0 10px rgba(247, 153, 27, 0.08), 0 0 64px rgba(247, 153, 27, 0.24), 0 24px 60px rgba(0, 0, 0, 0.65);
+    }
+
+    .brain-logo-wrap {
+      width: 96px;
+      height: 96px;
+      border-radius: 24px;
+      overflow: hidden;
+      border: 2px solid rgba(247, 153, 27, 0.65);
+      box-shadow: 0 0 32px rgba(247, 153, 27, 0.45);
+    }
+
+    .brain-logo-wrap img {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .brain-title {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+    }
+
+    .brain-sub {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: var(--amber);
+      margin-top: -10px;
+    }
+
+    .brain-rule-chip {
+      width: 100%;
+      background: rgba(12, 11, 10, 0.9);
+      border: 1.5px solid rgba(76, 194, 107, 0.55);
+      border-radius: 14px;
+      padding: 14px 16px;
+      text-align: left;
+    }
+
+    .brain-rule-label {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      color: var(--ok);
+      margin-bottom: 5px;
+    }
+
+    .brain-rule-text {
+      font-size: 19px;
+      font-weight: 700;
+      color: var(--ink);
+      line-height: 1.28;
+    }
+
+    .mini-code {
+      background: #0c0b0a;
+      border: 1px solid rgba(76, 194, 107, 0.4);
+      border-radius: 14px;
+      padding: 18px 20px;
+      font-family: var(--font-mono);
+      font-size: 18px;
+      line-height: 1.55;
+      color: var(--ink);
+    }
+    .mini-code .c-com { color: var(--ok); }
+    .mini-code .c-kw  { color: var(--amber-hi); }
+    .mini-code .c-str { color: #8ad6ff; }
+
+    /* ============================================================
+       SCENE 4: WORKS WITH EVERY AGENT
+       ============================================================ */
+    .agents-stage {
+      position: relative;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      max-width: 1620px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .agents-hub-grid {
+      width: 100%;
+      flex: 1;
+      display: grid;
+      grid-template-columns: 450px 360px 450px;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+    }
+
+    .agent-col {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      z-index: 2;
+    }
+
+    .agent-switch-card {
+      padding: 20px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      border-radius: 18px;
+    }
+
+    .agent-left {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .agent-title {
+      font-size: 25px;
+      font-weight: 800;
+      letter-spacing: -0.015em;
+      color: var(--ink);
+    }
+
+    .agent-role {
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--mut);
+      margin-top: 2px;
+    }
+
+    .agents-center-hub {
+      z-index: 3;
+      padding: 36px 28px;
+      border-radius: 30px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      background: radial-gradient(circle at 50% 25%, rgba(247, 153, 27, 0.2), #12100e 74%);
+      border: 2px solid rgba(247, 153, 27, 0.72);
+      box-shadow: 0 0 0 12px rgba(247, 153, 27, 0.08), 0 0 68px rgba(247, 153, 27, 0.28), 0 24px 60px rgba(0, 0, 0, 0.65);
+    }
+
+    .agents-any-banner {
+      z-index: 2;
+      display: inline-flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 30px;
+      border-radius: 999px;
+      background: rgba(247, 153, 27, 0.11);
+      border: 1.5px solid rgba(247, 153, 27, 0.45);
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--ink);
+      margin-top: 10px;
+    }
+
+    /* ============================================================
+       SCENE 5: YOU STAY IN CONTROL
+       ============================================================ */
+    .control-stage {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 900px 1fr;
+      gap: 44px;
+      align-items: center;
+      max-width: 1620px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .ctrl-panel {
+      border-color: rgba(76, 194, 107, 0.45);
+      box-shadow: 0 0 42px rgba(76, 194, 107, 0.1), 0 24px 60px rgba(0, 0, 0, 0.6);
+    }
+
+    .ctrl-rows {
+      padding: 14px 28px 22px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .ctrl-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 22px 16px;
+      border-bottom: 1px solid var(--line);
+      border-radius: 14px;
+    }
+
+    .ctrl-row:last-child { border-bottom: 0; }
+
+    .ctrl-row-left {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+
+    .ctrl-row-name {
+      font-size: 24px;
+      font-weight: 800;
+      color: var(--ink);
+    }
+
+    .ctrl-row-meta {
+      font-size: 16px;
+      color: var(--mut);
+      margin-top: 3px;
+    }
+
+    .ctrl-row-right {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+
+    .ctrl-pillars {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .pillar-card {
+      padding: 26px 30px;
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+    }
+
+    .pillar-icon {
+      width: 54px;
+      height: 54px;
+      border-radius: 15px;
+      background: rgba(76, 194, 107, 0.12);
+      border: 1.5px solid rgba(76, 194, 107, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: var(--ok);
+    }
+
+    .pillar-icon.amber {
+      background: rgba(247, 153, 27, 0.12);
+      border-color: rgba(247, 153, 27, 0.4);
+      color: var(--amber);
+    }
+
+    .pillar-title {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -0.015em;
+      color: var(--ink);
+    }
+
+    .pillar-desc {
+      font-size: 19px;
+      line-height: 1.38;
+      color: var(--mut);
+      margin-top: 6px;
+    }
+
+    /* Custom larger toggle for clarity on mobile */
+    .toggle-lg {
+      width: 58px;
+      height: 32px;
+      border-radius: 999px;
+      background: #272320;
+      border: 1.5px solid var(--line2);
+      position: relative;
+      flex-shrink: 0;
+    }
+    .toggle-lg .knob {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 23px;
+      height: 23px;
+      border-radius: 999px;
+      background: var(--ink);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+    }
+    .toggle-lg.is-on {
+      background: var(--ok);
+      border-color: var(--ok);
+      box-shadow: 0 0 18px rgba(76, 194, 107, 0.4);
+    }
+    .toggle-lg.is-on .knob {
+      left: 29px;
+    }
+    .toggle-lg.is-bad {
+      background: rgba(229, 83, 75, 0.25);
+      border-color: rgba(229, 83, 75, 0.7);
+    }
+    .toggle-lg.is-bad .knob {
+      left: 3px;
+      background: #ff8b85;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage" id="stage">
+    <div class="stage-grid"></div>
+
+    <!-- Subtle persistent corner brand -->
+    <div class="corner-brand" id="corner-brand">
+      <img src="../shared/logo.svg" alt="Nektar" />
+      <span>NEKTAR</span>
+    </div>
+    <div class="corner-scene-tag" id="scene-tag">01 / 06</div>
+
+    <!-- ============================================================
+         SCENE 1: HOOK — THE AMNESIA PROBLEM
+         ============================================================ -->
+    <section class="scene" id="sc-hook">
+      <svg class="svg-layer" id="svg-hook"></svg>
+      <div class="scene-head" id="hook-head">
+        <div class="kicker bad">THE AI AMNESIA PROBLEM</div>
+        <h1 class="headline">Every AI tool starts from <span class="headline-grad">zero.</span></h1>
+      </div>
+      <div class="hook-stage">
+        <div class="card card-ok amnesia-card" id="hk-claude">
+          <div class="amnesia-top">
+            <div class="amnesia-who">
+              <div class="tool-icon claude">C</div>
+              <div>
+                <div class="amnesia-name">Claude</div>
+                <div class="amnesia-time">9:00 AM</div>
+              </div>
+            </div>
+            <span class="pill pill-ok">EXPLAINED STACK</span>
+          </div>
+          <div class="chat-bubble ok-bubble">“Got it — Next.js app, always use Stripe webhooks.”</div>
+        </div>
+
+        <div class="card card-bad amnesia-card" id="hk-cursor">
+          <div class="amnesia-top">
+            <div class="amnesia-who">
+              <div class="tool-icon cursor">⌘</div>
+              <div>
+                <div class="amnesia-name">Cursor</div>
+                <div class="amnesia-time">10:00 AM</div>
+              </div>
+            </div>
+            <span class="pill pill-bad">TOTAL AMNESIA</span>
+          </div>
+          <div class="chat-bubble bad-bubble">“Wait, what stack are we using again?”</div>
+        </div>
+
+        <div class="card card-bad amnesia-card" id="hk-codex">
+          <div class="amnesia-top">
+            <div class="amnesia-who">
+              <div class="tool-icon codex">◆</div>
+              <div>
+                <div class="amnesia-name">Codex</div>
+                <div class="amnesia-time">10:15 AM</div>
+              </div>
+            </div>
+            <span class="pill pill-bad">BROKE THE FIX</span>
+          </div>
+          <div class="chat-bubble bad-bubble">“Switched billing back to polling loops.”</div>
+        </div>
+
+        <div class="card card-bad amnesia-card" id="hk-openclaw">
+          <div class="amnesia-top">
+            <div class="amnesia-who">
+              <div class="tool-icon openclaw">✦</div>
+              <div>
+                <div class="amnesia-name">OpenClaw</div>
+                <div class="amnesia-time">10:30 AM</div>
+              </div>
+            </div>
+            <span class="pill pill-bad">ZERO CONTEXT</span>
+          </div>
+          <div class="chat-bubble bad-bubble">“Can you paste your project rules again?”</div>
+        </div>
+
+        <div class="hook-center-badge" id="hk-center">
+          <div class="hook-center-x">✕</div>
+          <div class="hook-center-txt">0 SHARED MEMORY</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         SCENE 2: 25-SECOND SETUP
+         ============================================================ -->
+    <section class="scene" id="sc-setup">
+      <svg class="svg-layer" id="svg-setup"></svg>
+      <div class="scene-head" id="setup-head">
+        <div class="kicker">25-SECOND SETUP</div>
+        <h1 class="headline">One command. <span class="headline-amber-green">Everything connected.</span></h1>
+      </div>
+
+      <div class="setup-stage">
+        <div class="mac-window setup-term" id="setup-term">
+          <div class="mac-bar">
+            <div class="mac-dots color"><span></span><span></span><span></span></div>
+            <div class="mac-title">Terminal · Local Setup</div>
+            <span class="pill pill-ok" id="setup-ready-pill">READY IN 25s</span>
+          </div>
+          <div class="setup-term-body">
+            <div class="setup-cmd-line">
+              <span style="color:var(--ok);">$</span>
+              <span id="setup-typed" style="color:var(--ink);"></span>
+              <span id="setup-cursor" style="display:inline-block;width:16px;height:36px;background:var(--amber);border-radius:3px;"></span>
+            </div>
+            <div class="setup-status-lines">
+              <div id="setup-line-1" style="color:var(--ok);">✓  One lightweight local app running on your laptop</div>
+              <div id="setup-line-2" style="color:var(--amber-hi);">✓  13+ AI tools discovered &amp; linked automatically</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="setup-benefits">
+          <div class="card card-amber benefit-card" id="ben-1">
+            <div class="benefit-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><line x1="4" y1="4" x2="20" y2="20"/></svg>
+            </div>
+            <div>
+              <div class="benefit-title">No Docker</div>
+              <div class="benefit-sub">One lightweight local app</div>
+            </div>
+          </div>
+
+          <div class="card card-amber benefit-card" id="ben-2">
+            <div class="benefit-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+            </div>
+            <div>
+              <div class="benefit-title">No Cloud Account</div>
+              <div class="benefit-sub">Zero sign-ups or uploads</div>
+            </div>
+          </div>
+
+          <div class="card card-amber benefit-card" id="ben-3">
+            <div class="benefit-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="4" y1="3" x2="20" y2="21"/></svg>
+            </div>
+            <div>
+              <div class="benefit-title">No Subscription</div>
+              <div class="benefit-sub">No monthly bill ever</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="setup-tools-strip" id="setup-strip">
+          <span class="strip-pill"><span class="strip-dot"></span>Claude Code</span>
+          <span class="strip-pill"><span class="strip-dot"></span>Cursor</span>
+          <span class="strip-pill"><span class="strip-dot"></span>Codex</span>
+          <span class="strip-pill"><span class="strip-dot"></span>VS Code</span>
+          <span class="strip-pill"><span class="strip-dot"></span>Windsurf</span>
+          <span class="strip-pill"><span class="strip-dot"></span>OpenClaw</span>
+          <span class="pill pill-amber" style="font-size:16px;padding:8px 16px;">+ 7 MORE AUTO-LINKED</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         SCENE 3: LIVE MAGIC MOMENT
+         ============================================================ -->
+    <section class="scene" id="sc-magic">
+      <svg class="svg-layer" id="svg-magic"></svg>
+      <div class="scene-head" id="magic-head">
+        <div class="kicker ok">LIVE MAGIC MOMENT</div>
+        <h1 class="headline">Tell Claude once. <span class="headline-amber-green">Cursor already knows.</span></h1>
+      </div>
+
+      <div class="magic-stage">
+        <!-- Left: Claude -->
+        <div class="mac-window magic-win card-amber" id="mg-claude">
+          <div class="mac-bar">
+            <div class="mac-dots color"><span></span><span></span><span></span></div>
+            <div class="mac-title">Claude</div>
+            <span class="pill pill-amber">JUST NOW</span>
+          </div>
+          <div class="magic-win-body">
+            <div>
+              <div class="prompt-tag">YOU TELL CLAUDE</div>
+              <div class="magic-msg highlight-amber">“Always use Stripe webhooks, never polling.”</div>
+            </div>
+            <div>
+              <div class="prompt-tag">CLAUDE REPLIES</div>
+              <div class="magic-msg" style="padding:15px 20px;font-size:20px;color:var(--mut);">“Got it — saved to your project rules.”</div>
+            </div>
+            <div class="magic-saved-bar" id="mg-saved-bar">
+              <span>✓</span>
+              <span>Saved straight into your local brain</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Center: One Local Brain -->
+        <div class="brain-core" id="mg-brain">
+          <div class="brain-logo-wrap">
+            <img src="../shared/logo.svg" alt="Nektar Brain" />
+          </div>
+          <div class="brain-title">One Local Brain</div>
+          <div class="brain-sub">ON YOUR LAPTOP</div>
+          <div class="brain-rule-chip" id="mg-brain-chip">
+            <div class="brain-rule-label">● MEMORY STORED</div>
+            <div class="brain-rule-text">Stripe → webhooks only (never polling)</div>
+          </div>
+        </div>
+
+        <!-- Right: Cursor -->
+        <div class="mac-window magic-win card-ok" id="mg-cursor">
+          <div class="mac-bar">
+            <div class="mac-dots color"><span></span><span></span><span></span></div>
+            <div class="mac-title">Cursor</div>
+            <span class="pill pill-ok">2 SECONDS LATER</span>
+          </div>
+          <div class="magic-win-body">
+            <div>
+              <div class="prompt-tag">YOU ASK CURSOR</div>
+              <div class="magic-msg" style="padding:14px 18px;font-size:21px;">“Add the Stripe payment handler.”</div>
+            </div>
+            <div class="mini-code" id="mg-code">
+              <div class="c-com">// Recalled from your local brain ✓</div>
+              <div><span class="c-kw">app.post</span>(<span class="c-str">'/webhooks/stripe'</span>, (req) =&gt; {</div>
+              <div>&nbsp;&nbsp;<span class="c-kw">handleStripeWebhook</span>(req);</div>
+              <div>});</div>
+            </div>
+            <div class="magic-saved-bar" id="mg-cursor-ok" style="padding:12px 16px;font-size:18px;">
+              <span>✓</span>
+              <span>Right on the first try — zero repeating</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         SCENE 4: WORKS WITH EVERY AGENT
+         ============================================================ -->
+    <section class="scene" id="sc-agents">
+      <svg class="svg-layer" id="svg-agents"></svg>
+      <div class="scene-head" id="agents-head">
+        <div class="kicker">WORKS WITH EVERY AGENT</div>
+        <h1 class="headline">Every tool plugged into <span class="headline-grad">one private brain.</span></h1>
+      </div>
+
+      <div class="agents-stage">
+        <div class="agents-hub-grid">
+          <!-- Left 3 agents -->
+          <div class="agent-col">
+            <div class="card agent-switch-card" id="ag-0">
+              <div class="agent-left">
+                <div class="tool-icon claude">C</div>
+                <div>
+                  <div class="agent-title">Claude Code</div>
+                  <div class="agent-role">Terminal &amp; Chat</div>
+                </div>
+              </div>
+              <div class="toggle-lg" id="ag-tog-0"><div class="knob"></div></div>
+            </div>
+
+            <div class="card agent-switch-card" id="ag-1">
+              <div class="agent-left">
+                <div class="tool-icon cursor">⌘</div>
+                <div>
+                  <div class="agent-title">Cursor</div>
+                  <div class="agent-role">AI Code Editor</div>
+                </div>
+              </div>
+              <div class="toggle-lg" id="ag-tog-1"><div class="knob"></div></div>
+            </div>
+
+            <div class="card agent-switch-card" id="ag-2">
+              <div class="agent-left">
+                <div class="tool-icon codex">◆</div>
+                <div>
+                  <div class="agent-title">Codex</div>
+                  <div class="agent-role">Coding Agent</div>
+                </div>
+              </div>
+              <div class="toggle-lg" id="ag-tog-2"><div class="knob"></div></div>
+            </div>
+          </div>
+
+          <!-- Center Brain Hub -->
+          <div class="agents-center-hub" id="ag-hub">
+            <div class="brain-logo-wrap" style="width:108px;height:108px;">
+              <img src="../shared/logo.svg" alt="Nektar" />
+            </div>
+            <div class="brain-title" style="font-size:32px;">Nektar Brain</div>
+            <div class="brain-sub" style="font-size:14px;">LOCAL · PRIVATE · INSTANT</div>
+            <span class="pill pill-solid-ok" id="ag-hub-pill" style="font-size:15px;padding:8px 18px;">ALL TOOLS SYNCED</span>
+          </div>
+
+          <!-- Right 3 agents -->
+          <div class="agent-col">
+            <div class="card agent-switch-card" id="ag-3">
+              <div class="agent-left">
+                <div class="tool-icon vscode">V</div>
+                <div>
+                  <div class="agent-title">VS Code</div>
+                  <div class="agent-role">Editor Assistant</div>
+                </div>
+              </div>
+              <div class="toggle-lg" id="ag-tog-3"><div class="knob"></div></div>
+            </div>
+
+            <div class="card agent-switch-card" id="ag-4">
+              <div class="agent-left">
+                <div class="tool-icon windsurf">W</div>
+                <div>
+                  <div class="agent-title">Windsurf</div>
+                  <div class="agent-role">Agentic IDE</div>
+                </div>
+              </div>
+              <div class="toggle-lg" id="ag-tog-4"><div class="knob"></div></div>
+            </div>
+
+            <div class="card agent-switch-card" id="ag-5">
+              <div class="agent-left">
+                <div class="tool-icon openclaw">✦</div>
+                <div>
+                  <div class="agent-title">OpenClaw</div>
+                  <div class="agent-role">Autonomous Agent</div>
+                </div>
+              </div>
+              <div class="toggle-lg" id="ag-tog-5"><div class="knob"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="agents-any-banner" id="ag-banner">
+          <span class="strip-dot" style="background:var(--amber);box-shadow:0 0 12px var(--amber);"></span>
+          <span>Plus any OpenAI or Anthropic agent — ready out of the box</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         SCENE 5: YOU STAY IN CONTROL
+         ============================================================ -->
+    <section class="scene" id="sc-control">
+      <div class="scene-head" id="control-head">
+        <div class="kicker ok">YOU STAY IN CONTROL</div>
+        <h1 class="headline">Private on your laptop. <span class="headline-green-amber">Lock any agent in one click.</span></h1>
+      </div>
+
+      <div class="control-stage">
+        <div class="mac-window ctrl-panel" id="ctrl-panel">
+          <div class="mac-bar">
+            <div class="mac-dots color"><span></span><span></span><span></span></div>
+            <div class="mac-title">Nektar · Local Access Control</div>
+            <span class="pill pill-ok">PRIVATE BY DEFAULT</span>
+          </div>
+          <div class="ctrl-rows">
+            <div class="ctrl-row" id="crow-0">
+              <div class="ctrl-row-left">
+                <div class="tool-icon claude">C</div>
+                <div>
+                  <div class="ctrl-row-name">Claude Code</div>
+                  <div class="ctrl-row-meta">Read &amp; Save · Work Project</div>
+                </div>
+              </div>
+              <div class="ctrl-row-right">
+                <span class="pill pill-ok">ALLOWED</span>
+                <div class="toggle-lg is-on"><div class="knob"></div></div>
+              </div>
+            </div>
+
+            <div class="ctrl-row" id="crow-1">
+              <div class="ctrl-row-left">
+                <div class="tool-icon cursor">⌘</div>
+                <div>
+                  <div class="ctrl-row-name">Cursor</div>
+                  <div class="ctrl-row-meta">Read &amp; Save · Work Project</div>
+                </div>
+              </div>
+              <div class="ctrl-row-right">
+                <span class="pill pill-ok">ALLOWED</span>
+                <div class="toggle-lg is-on"><div class="knob"></div></div>
+              </div>
+            </div>
+
+            <div class="ctrl-row" id="crow-2">
+              <div class="ctrl-row-left">
+                <div class="tool-icon windsurf">W</div>
+                <div>
+                  <div class="ctrl-row-name">Windsurf</div>
+                  <div class="ctrl-row-meta">Read Only · Frontend Folder</div>
+                </div>
+              </div>
+              <div class="ctrl-row-right">
+                <span class="pill pill-amber">READ ONLY</span>
+                <div class="toggle-lg is-on"><div class="knob"></div></div>
+              </div>
+            </div>
+
+            <div class="ctrl-row" id="crow-3" style="border:1.5px solid transparent;">
+              <div class="ctrl-row-left">
+                <div class="tool-icon openclaw">✦</div>
+                <div>
+                  <div class="ctrl-row-name">New Plugin Agent</div>
+                  <div class="ctrl-row-meta" id="crow-3-meta">Requested access to all notes</div>
+                </div>
+              </div>
+              <div class="ctrl-row-right">
+                <span class="pill pill-ok" id="crow-3-pill">ACTIVE</span>
+                <div class="toggle-lg is-on" id="crow-3-tog"><div class="knob" id="crow-3-knob"></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ctrl-pillars">
+          <div class="card card-ok pillar-card" id="pil-0">
+            <div class="pillar-icon">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </div>
+            <div>
+              <div class="pillar-title">Private by Default</div>
+              <div class="pillar-desc">Memories stay encrypted on your laptop — never in a cloud.</div>
+            </div>
+          </div>
+
+          <div class="card card-amber pillar-card" id="pil-1">
+            <div class="pillar-icon amber">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+            </div>
+            <div>
+              <div class="pillar-title">One-Click Lock &amp; Remove</div>
+              <div class="pillar-desc">Cut off any AI tool instantly with a single switch.</div>
+            </div>
+          </div>
+
+          <div class="card pillar-card" id="pil-2" style="border-color:rgba(244,239,230,0.22);">
+            <div class="pillar-icon">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+            </div>
+            <div>
+              <div class="pillar-title">Instant Local Permissions</div>
+              <div class="pillar-desc">Choose which tools can read, save, or stay out of a project.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         SCENE 6: CINEMA OUTRO
+         ============================================================ -->
+    <section class="scene" id="sc-outro">
+      <div class="outro">
+        <div class="outro-brand" id="outro-brand">
+          <div class="outro-emblem" id="outro-emblem">
+            <img src="../shared/logo.svg" alt="Nektar" />
+          </div>
+          <div class="outro-wordmark">NEKTAR</div>
+        </div>
+        <div class="outro-tagline" id="outro-tag">One brain for all your AI agents.</div>
+        <div class="outro-pills" id="outro-pills">
+          <span class="pill pill-solid-amber mono">$ nektar up</span>
+          <span class="pill pill-solid-ink">nektar.run</span>
+          <span class="pill">@nektardotrun</span>
+        </div>
+        <div class="truth-note" id="outro-truth" style="color:#8a827a;">Private on your machine. Nektar proves what your AI saved — never that a note is true.</div>
+      </div>
+    </section>
+
+    <!-- Persistent X Muted-Autoplay Subtitle Bar & Progress Bar -->
+    <div class="subtitle-wrap">
+      <div class="subtitle-bar" id="subtitle-bar"></div>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="progress-fill"></div>
+    </div>
+  </div>
+
+  <script>
+    const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
+    const easeOut = (x) => { x = clamp(x); return 1 - Math.pow(1 - x, 3); };
+    const easeInOut = (x) => { x = clamp(x); return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+    const lerp = (a, b, t) => a + (b - a) * clamp(t);
+
+    const NS = 'http://www.w3.org/2000/svg';
+    function svgEl(tag, attrs = {}) {
+      const el = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
+      return el;
+    }
+
+    function rectRel(el) {
+      const st = document.getElementById('stage').getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      return {
+        x: r.left - st.left,
+        y: r.top - st.top,
+        w: r.width,
+        h: r.height,
+        cx: r.left - st.left + r.width / 2,
+        cy: r.top - st.top + r.height / 2,
+        right: r.right - st.left,
+        bottom: r.bottom - st.top
+      };
+    }
+
+    const geom = {
+      hookLines: [],
+      setupPaths: [],
+      magicLeft: null,
+      magicRight: null,
+      agentSpokes: []
+    };
+
+    window.initScene = function () {
+      // Measure all scenes cleanly by temporarily displaying them at opacity 0
+      const scenes = document.querySelectorAll('.scene');
+      scenes.forEach((s) => { s.style.display = 'flex'; });
+
+      // 1. Scene 1 (hook): broken dashed links between 4 cards through center
+      {
+        const svg = document.getElementById('svg-hook');
+        const c1 = rectRel(document.getElementById('hk-claude'));
+        const c2 = rectRel(document.getElementById('hk-cursor'));
+        const c3 = rectRel(document.getElementById('hk-codex'));
+        const c4 = rectRel(document.getElementById('hk-openclaw'));
+        const midX = (c1.right + c2.x) / 2;
+        const midY = (c1.bottom + c3.y) / 2;
+
+        const pairs = [
+          // Horizontal top & bottom
+          `M ${c1.right} ${c1.cy} L ${c2.x} ${c2.cy}`,
+          `M ${c3.right} ${c3.cy} L ${c4.x} ${c4.cy}`,
+          // Vertical left & right
+          `M ${c1.cx} ${c1.bottom} L ${c3.cx} ${c3.y}`,
+          `M ${c2.cx} ${c2.bottom} L ${c4.cx} ${c4.y}`,
+          // Diagonals through center
+          `M ${c1.right - 20} ${c1.bottom - 10} Q ${midX} ${midY} ${c4.x + 20} ${c4.y + 10}`,
+          `M ${c2.x + 20} ${c2.bottom - 10} Q ${midX} ${midY} ${c3.right - 20} ${c3.y + 10}`
+        ];
+
+        geom.hookLines = pairs.map((d) => {
+          const p = svgEl('path', {
+            d,
+            fill: 'none',
+            stroke: 'rgba(229, 83, 75, 0.55)',
+            'stroke-width': 3,
+            'stroke-dasharray': '12 12',
+            'stroke-linecap': 'round'
+          });
+          svg.appendChild(p);
+          return p;
+        });
+      }
+
+      // 2. Scene 2 (setup): glowing fan-out curves from terminal down to 3 benefit cards
+      {
+        const svg = document.getElementById('svg-setup');
+        const term = rectRel(document.getElementById('setup-term'));
+        const bens = ['ben-1', 'ben-2', 'ben-3'].map((id) => rectRel(document.getElementById(id)));
+
+        geom.setupPaths = bens.map((b, idx) => {
+          const sx = term.cx + (idx - 1) * 140;
+          const sy = term.bottom;
+          const ex = b.cx;
+          const ey = b.y;
+          const cy = (sy + ey) / 2;
+          const d = `M ${sx} ${sy} C ${sx} ${cy}, ${ex} ${cy}, ${ex} ${ey}`;
+          const base = svgEl('path', {
+            d, fill: 'none', stroke: 'rgba(247, 153, 27, 0.22)', 'stroke-width': 3
+          });
+          const glow = svgEl('path', {
+            d, fill: 'none', stroke: '#f7991b', 'stroke-width': 3.5, 'stroke-linecap': 'round', class: 'glow-amber'
+          });
+          const dot = svgEl('circle', {
+            r: 7, fill: '#ffac33', class: 'glow-amber', opacity: 0
+          });
+          svg.appendChild(base);
+          svg.appendChild(glow);
+          svg.appendChild(dot);
+          const len = glow.getTotalLength();
+          glow.setAttribute('stroke-dasharray', `${len} ${len}`);
+          glow.setAttribute('stroke-dashoffset', String(len));
+          return { glow, dot, len };
+        });
+      }
+
+      // 3. Scene 3 (magic): glowing curved beams Claude -> Brain -> Cursor
+      {
+        const svg = document.getElementById('svg-magic');
+        const cl = rectRel(document.getElementById('mg-claude'));
+        const br = rectRel(document.getElementById('mg-brain'));
+        const cu = rectRel(document.getElementById('mg-cursor'));
+
+        function makeBeam(x1, y1, x2, y2, color, glowClass) {
+          const mx = (x1 + x2) / 2;
+          const d = `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
+          const track = svgEl('path', {
+            d, fill: 'none', stroke: color, 'stroke-opacity': 0.2, 'stroke-width': 5, 'stroke-linecap': 'round'
+          });
+          const line = svgEl('path', {
+            d, fill: 'none', stroke: color, 'stroke-width': 5, 'stroke-linecap': 'round', class: glowClass
+          });
+          const orb1 = svgEl('circle', { r: 10, fill: color, class: glowClass, opacity: 0 });
+          const orb2 = svgEl('circle', { r: 6, fill: '#ffffff', opacity: 0 });
+          svg.appendChild(track);
+          svg.appendChild(line);
+          svg.appendChild(orb1);
+          svg.appendChild(orb2);
+          const len = line.getTotalLength();
+          line.setAttribute('stroke-dasharray', `${len} ${len}`);
+          line.setAttribute('stroke-dashoffset', String(len));
+          return { line, orb1, orb2, len };
+        }
+
+        geom.magicLeft = makeBeam(cl.right, cl.cy, br.x, br.cy, '#f7991b', 'glow-amber');
+        geom.magicRight = makeBeam(br.right, br.cy, cu.x, cu.cy, '#4cc26b', 'glow-ok');
+      }
+
+      // 4. Scene 4 (agents): 6 hub-and-spoke bezier curves to center Nektar Brain
+      {
+        const svg = document.getElementById('svg-agents');
+        const hub = rectRel(document.getElementById('ag-hub'));
+
+        geom.agentSpokes = [];
+        for (let i = 0; i < 6; i++) {
+          const card = rectRel(document.getElementById(`ag-${i}`));
+          const isLeft = i < 3;
+          const sx = isLeft ? card.right : card.x;
+          const sy = card.cy;
+          const ex = isLeft ? hub.x : hub.right;
+          const ey = hub.cy + ((i % 3) - 1) * 58;
+          const cx1 = lerp(sx, ex, 0.45);
+          const cx2 = lerp(sx, ex, 0.55);
+          const d = `M ${sx} ${sy} C ${cx1} ${sy}, ${cx2} ${ey}, ${ex} ${ey}`;
+          const color = isLeft ? '#f7991b' : '#4cc26b';
+          const glowClass = isLeft ? 'glow-amber' : 'glow-ok';
+
+          const track = svgEl('path', {
+            d, fill: 'none', stroke: 'rgba(244, 239, 230, 0.1)', 'stroke-width': 3
+          });
+          const line = svgEl('path', {
+            d, fill: 'none', stroke: color, 'stroke-width': 3.5, 'stroke-linecap': 'round', class: glowClass
+          });
+          const dot = svgEl('circle', { r: 7, fill: color, class: glowClass, opacity: 0 });
+          svg.appendChild(track);
+          svg.appendChild(line);
+          svg.appendChild(dot);
+
+          const len = line.getTotalLength();
+          line.setAttribute('stroke-dasharray', `${len} ${len}`);
+          line.setAttribute('stroke-dashoffset', String(len));
+          geom.agentSpokes.push({ line, dot, len, isLeft });
+        }
+      }
+    };
+
+    function setCardMotion(id, prog, dy = 24, scaleFrom = 0.96) {
+      const el = document.getElementById(id);
+      const e = easeOut(prog);
+      el.style.opacity = e.toFixed(4);
+      const y = (1 - e) * dy;
+      const sc = lerp(scaleFrom, 1, e);
+      el.style.transform = `translateY(${y.toFixed(2)}px) scale(${sc.toFixed(4)})`;
+    }
+
+    function placeOrb(pathEl, len, frac, ...dots) {
+      const pt = pathEl.getPointAtLength(clamp(frac) * len);
+      for (const d of dots) {
+        d.setAttribute('cx', pt.x.toFixed(1));
+        d.setAttribute('cy', pt.y.toFixed(1));
+      }
+    }
+
+    window.renderFrame = function (t, frame, totalFrames, timings) {
+      const scenes = timings.scenes;
+      const pct = clamp(t / timings.totalDuration) * 100;
+      document.getElementById('progress-fill').style.width = pct.toFixed(3) + '%';
+
+      const sceneIds = ['sc-hook', 'sc-setup', 'sc-magic', 'sc-agents', 'sc-control', 'sc-outro'];
+      const fade = 0.24;
+      let activeIdx = 0;
+
+      for (let i = 0; i < scenes.length; i++) {
+        const sc = scenes[i];
+        const inOp = i === 0 ? clamp((t - sc.start) / 0.18) : clamp((t - sc.start) / fade);
+        const outOp = i === scenes.length - 1 ? 1 : clamp((sc.end - t) / fade);
+        const op = inOp * outOp;
+        const el = document.getElementById(sceneIds[i]);
+        el.style.opacity = op.toFixed(4);
+        if (t >= sc.start && t < sc.end) activeIdx = i;
+      }
+      if (t >= scenes[scenes.length - 1].start) activeIdx = scenes.length - 1;
+
+      // Corner chrome (hide cleanly on outro)
+      const outroOp = clamp((t - scenes[5].start) / fade);
+      const chromeOp = clamp(1 - outroOp * 1.5);
+      document.getElementById('corner-brand').style.opacity = chromeOp.toFixed(4);
+      const tagEl = document.getElementById('scene-tag');
+      tagEl.style.opacity = chromeOp.toFixed(4);
+      tagEl.textContent = `0${activeIdx + 1} / 06`;
+
+      // Subtitle bar
+      const activeScene = scenes[activeIdx];
+      const subEl = document.getElementById('subtitle-bar');
+      if (activeScene.subtitle && activeScene.subtitle.trim()) {
+        subEl.textContent = activeScene.subtitle;
+        subEl.classList.remove('empty');
+      } else {
+        subEl.textContent = '';
+        subEl.classList.add('empty');
+      }
+
+      // ========================================================
+      // SCENE 1: HOOK (0.00 - 8.32s)
+      // ========================================================
+      {
+        const u = t - scenes[0].start;
+        setCardMotion('hook-head', u / 0.45, 18, 0.98);
+        setCardMotion('hk-claude', (u - 0.15) / 0.5, 24, 0.95);
+        setCardMotion('hk-cursor', (u - 1.15) / 0.5, 24, 0.95);
+        setCardMotion('hk-codex', (u - 2.05) / 0.5, 24, 0.95);
+        setCardMotion('hk-openclaw', (u - 2.75) / 0.5, 24, 0.95);
+
+        // Animated marching dashed red links
+        const linkOp = easeOut((u - 1.1) / 0.6);
+        const dashOff = -(u * 36);
+        for (const p of geom.hookLines) {
+          p.setAttribute('opacity', linkOp.toFixed(3));
+          p.setAttribute('stroke-dashoffset', dashOff.toFixed(1));
+        }
+
+        // Center disconnect badge with gentle pulse
+        const cProg = easeOut((u - 3.15) / 0.45);
+        const pulse = 1 + 0.03 * Math.sin(u * 5.2);
+        const cEl = document.getElementById('hk-center');
+        cEl.style.opacity = cProg.toFixed(4);
+        cEl.style.transform = `translate(-50%, -50%) scale(${(lerp(0.75, 1, cProg) * pulse).toFixed(4)})`;
+      }
+
+      // ========================================================
+      // SCENE 2: 25-SECOND SETUP (8.32 - 19.84s)
+      // ========================================================
+      {
+        const u = t - scenes[1].start;
+        setCardMotion('setup-head', u / 0.45, 18, 0.98);
+        setCardMotion('setup-term', (u - 0.15) / 0.5, 24, 0.97);
+
+        const cmd = 'nektar up';
+        const typedCount = Math.round(cmd.length * clamp((u - 0.55) / 0.85));
+        document.getElementById('setup-typed').textContent = cmd.slice(0, typedCount);
+        const cursorBlink = Math.floor(u * 2.6) % 2 === 0 ? 1 : 0.25;
+        document.getElementById('setup-cursor').style.opacity = (u < 2.2 ? cursorBlink : 0).toFixed(2);
+
+        const l1 = easeOut((u - 1.75) / 0.4);
+        const l2 = easeOut((u - 2.35) / 0.4);
+        document.getElementById('setup-line-1').style.opacity = l1.toFixed(4);
+        document.getElementById('setup-line-2').style.opacity = l2.toFixed(4);
+        document.getElementById('setup-ready-pill').style.opacity = easeOut((u - 2.3) / 0.35).toFixed(4);
+
+        // Fan-out paths + traveling light dots
+        geom.setupPaths.forEach((sp, i) => {
+          const drawP = easeOut((u - (2.4 + i * 0.18)) / 0.55);
+          sp.glow.setAttribute('stroke-dashoffset', (sp.len * (1 - drawP)).toFixed(1));
+          if (drawP > 0.8) {
+            const loop = ((u - 2.9 - i * 0.25) % 1.7 + 1.7) % 1.7;
+            const frac = clamp(loop / 1.2);
+            const dotOp = Math.sin(frac * Math.PI);
+            sp.dot.setAttribute('opacity', dotOp.toFixed(3));
+            placeOrb(sp.glow, sp.len, easeInOut(frac), sp.dot);
+          } else {
+            sp.dot.setAttribute('opacity', '0');
+          }
+        });
+
+        setCardMotion('ben-1', (u - 2.8) / 0.45, 22, 0.95);
+        setCardMotion('ben-2', (u - 3.25) / 0.45, 22, 0.95);
+        setCardMotion('ben-3', (u - 3.7) / 0.45, 22, 0.95);
+        setCardMotion('setup-strip', (u - 4.25) / 0.5, 18, 0.97);
+      }
+
+      // ========================================================
+      // SCENE 3: LIVE MAGIC MOMENT (19.84 - 30.44s)
+      // ========================================================
+      {
+        const u = t - scenes[2].start;
+        setCardMotion('magic-head', u / 0.45, 18, 0.98);
+        setCardMotion('mg-claude', (u - 0.15) / 0.5, 26, 0.96);
+        setCardMotion('mg-brain', (u - 0.45) / 0.55, 20, 0.94);
+        setCardMotion('mg-cursor', (u - 0.75) / 0.55, 26, 0.96);
+
+        // Claude saved bar appears
+        document.getElementById('mg-saved-bar').style.opacity = easeOut((u - 1.25) / 0.4).toFixed(4);
+
+        // Left beam draws & launches orb Claude -> Brain
+        const ml = geom.magicLeft;
+        const lp = easeOut((u - 1.55) / 0.85);
+        ml.line.setAttribute('stroke-dashoffset', (ml.len * (1 - lp)).toFixed(1));
+        if (u > 1.55) {
+          const cycle = ((u - 1.55) % 2.2) / 1.5;
+          const frac = clamp(cycle);
+          const op = cycle <= 1 ? Math.sin(frac * Math.PI) : 0;
+          ml.orb1.setAttribute('opacity', op.toFixed(3));
+          ml.orb2.setAttribute('opacity', op.toFixed(3));
+          placeOrb(ml.line, ml.len, easeInOut(frac), ml.orb1, ml.orb2);
+        } else {
+          ml.orb1.setAttribute('opacity', '0');
+          ml.orb2.setAttribute('opacity', '0');
+        }
+
+        // Brain rule chip lights up when first beam lands
+        const chipP = easeOut((u - 2.35) / 0.45);
+        const chipEl = document.getElementById('mg-brain-chip');
+        chipEl.style.opacity = chipP.toFixed(4);
+        chipEl.style.transform = `scale(${lerp(0.9, 1, chipP).toFixed(4)})`;
+
+        // Right beam draws & launches orb Brain -> Cursor
+        const mr = geom.magicRight;
+        const rp = easeOut((u - 2.85) / 0.85);
+        mr.line.setAttribute('stroke-dashoffset', (mr.len * (1 - rp)).toFixed(1));
+        if (u > 2.85) {
+          const cycle = ((u - 2.85) % 2.2) / 1.5;
+          const frac = clamp(cycle);
+          const op = cycle <= 1 ? Math.sin(frac * Math.PI) : 0;
+          mr.orb1.setAttribute('opacity', op.toFixed(3));
+          mr.orb2.setAttribute('opacity', op.toFixed(3));
+          placeOrb(mr.line, mr.len, easeInOut(frac), mr.orb1, mr.orb2);
+        } else {
+          mr.orb1.setAttribute('opacity', '0');
+          mr.orb2.setAttribute('opacity', '0');
+        }
+
+        // Cursor code & green check appear right as beam lands
+        const codeP = easeOut((u - 3.65) / 0.5);
+        document.getElementById('mg-code').style.opacity = codeP.toFixed(4);
+        document.getElementById('mg-code').style.transform = `translateY(${((1 - codeP) * 14).toFixed(1)}px)`;
+        document.getElementById('mg-cursor-ok').style.opacity = easeOut((u - 4.15) / 0.45).toFixed(4);
+      }
+
+      // ========================================================
+      // SCENE 4: WORKS WITH EVERY AGENT (30.44 - 41.41s)
+      // ========================================================
+      {
+        const u = t - scenes[3].start;
+        setCardMotion('agents-head', u / 0.45, 18, 0.98);
+        setCardMotion('ag-hub', (u - 0.1) / 0.5, 16, 0.92);
+
+        for (let i = 0; i < 6; i++) {
+          const delay = 0.35 + i * 0.42;
+          setCardMotion(`ag-${i}`, (u - delay + 0.15) / 0.42, 18, 0.96);
+
+          const isOn = u >= delay + 0.25;
+          const cardEl = document.getElementById(`ag-${i}`);
+          const togEl = document.getElementById(`ag-tog-${i}`);
+          togEl.classList.toggle('is-on', isOn);
+          cardEl.classList.toggle('card-amber', isOn && i < 3);
+          cardEl.classList.toggle('card-ok', isOn && i >= 3);
+
+          const sp = geom.agentSpokes[i];
+          const drawP = easeOut((u - (delay + 0.25)) / 0.55);
+          sp.line.setAttribute('stroke-dashoffset', (sp.len * (1 - drawP)).toFixed(1));
+          if (drawP > 0.7) {
+            const period = 1.9;
+            const phase = ((u - delay + i * 0.31) % period) / 1.35;
+            const frac = clamp(phase);
+            const dotOp = phase <= 1 ? Math.sin(frac * Math.PI) : 0;
+            sp.dot.setAttribute('opacity', dotOp.toFixed(3));
+            placeOrb(sp.line, sp.len, easeInOut(frac), sp.dot);
+          } else {
+            sp.dot.setAttribute('opacity', '0');
+          }
+        }
+
+        const hubPulse = 1 + 0.018 * Math.sin(u * 3.8);
+        if (u > 0.65) {
+          document.getElementById('ag-hub').style.transform = `scale(${hubPulse.toFixed(4)})`;
+        }
+        setCardMotion('ag-banner', (u - 3.35) / 0.5, 16, 0.96);
+      }
+
+      // ========================================================
+      // SCENE 5: YOU STAY IN CONTROL (41.41 - 50.21s)
+      // ========================================================
+      {
+        const u = t - scenes[4].start;
+        setCardMotion('control-head', u / 0.45, 18, 0.98);
+        setCardMotion('ctrl-panel', (u - 0.15) / 0.5, 22, 0.97);
+        setCardMotion('pil-0', (u - 0.45) / 0.45, 20, 0.96);
+        setCardMotion('pil-1', (u - 1.05) / 0.45, 20, 0.96);
+        setCardMotion('pil-2', (u - 1.65) / 0.45, 20, 0.96);
+
+        // One-click revoke animation on Row 3 (New Plugin Agent) at u = 2.6s
+        const revoked = u >= 2.6;
+        const r3 = document.getElementById('crow-3');
+        const r3Pill = document.getElementById('crow-3-pill');
+        const r3Tog = document.getElementById('crow-3-tog');
+        const r3Meta = document.getElementById('crow-3-meta');
+
+        if (revoked) {
+          r3.style.background = 'rgba(229, 83, 75, 0.1)';
+          r3.style.borderColor = 'rgba(229, 83, 75, 0.45)';
+          r3Pill.className = 'pill pill-bad';
+          r3Pill.textContent = 'LOCKED · REMOVED';
+          r3Tog.className = 'toggle-lg is-bad';
+          r3Meta.textContent = 'Blocked immediately in one click';
+          r3Meta.style.color = '#ff9a94';
+        } else {
+          r3.style.background = 'rgba(247, 153, 27, 0.06)';
+          r3.style.borderColor = 'rgba(247, 153, 27, 0.3)';
+          r3Pill.className = 'pill pill-amber';
+          r3Pill.textContent = 'ACTIVE';
+          r3Tog.className = 'toggle-lg is-on';
+          r3Meta.textContent = 'Requested access to all notes';
+          r3Meta.style.color = 'var(--mut)';
+        }
+      }
+
+      // ========================================================
+      // SCENE 6: CINEMA OUTRO (50.21 - 57.43s)
+      // ========================================================
+      {
+        const u = Math.max(0, t - scenes[5].start);
+        const brandP = easeOut(u / 0.65);
+        const brandEl = document.getElementById('outro-brand');
+        brandEl.style.opacity = brandP.toFixed(4);
+        brandEl.style.transform = `scale(${lerp(0.9, 1, brandP).toFixed(4)})`;
+
+        // Gentle breathing amber glow on logo
+        const glowAmt = 52 + 20 * Math.sin(u * 2.4);
+        document.getElementById('outro-emblem').style.boxShadow =
+          `0 0 0 12px rgba(247, 153, 27, 0.12), 0 0 ${glowAmt.toFixed(1)}px rgba(247, 153, 27, 0.5)`;
+
+        setCardMotion('outro-tag', (u - 0.35) / 0.55, 18, 0.98);
+        setCardMotion('outro-pills', (u - 0.7) / 0.55, 18, 0.97);
+        document.getElementById('outro-truth').style.opacity = easeOut((u - 1.1) / 0.6).toFixed(4);
+      }
+    };
+  </script>
+</body>
+</html>

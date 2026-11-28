@@ -109,7 +109,10 @@ func NewRuntime(dataDir string) (*Runtime, error) {
 	sb := sqlite.NewSqliteBackendWithDB(
 		sqlDB,
 		sqlite.WithApplyMigrations(false),
-		sqlite.WithBackendOptions(backend.WithLogger(quietLogger)),
+		sqlite.WithBackendOptions(
+			backend.WithLogger(quietLogger),
+			backend.WithRemoveContinuedAsNewInstances(),
+		),
 	)
 	if err := sb.Migrate(); err != nil {
 		if memConn != nil {
@@ -277,7 +280,7 @@ func (r *Runtime) Cancel(ctx context.Context, idOrInstanceID string) error {
 func (r *Runtime) findLatestInstance(ctx context.Context, instanceID string) (*workflow.Instance, error) {
 	var execID string
 	err := r.sqlDB.QueryRowContext(ctx,
-		`SELECT execution_id FROM instances WHERE id = ? ORDER BY created_at DESC LIMIT 1`,
+		`SELECT execution_id FROM instances WHERE id = ? ORDER BY (state = 0) DESC, rowid DESC LIMIT 1`,
 		instanceID,
 	).Scan(&execID)
 	if err != nil {
@@ -289,7 +292,7 @@ func (r *Runtime) findLatestInstance(ctx context.Context, instanceID string) (*w
 func (r *Runtime) findInstanceByIDOrExec(ctx context.Context, id string) (*workflow.Instance, error) {
 	var instID, execID string
 	err := r.sqlDB.QueryRowContext(ctx,
-		`SELECT id, execution_id FROM instances WHERE id = ? OR execution_id = ? ORDER BY created_at DESC LIMIT 1`,
+		`SELECT id, execution_id FROM instances WHERE id = ? OR execution_id = ? ORDER BY (state = 0) DESC, rowid DESC LIMIT 1`,
 		id, id,
 	).Scan(&instID, &execID)
 	if err != nil {

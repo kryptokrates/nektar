@@ -1,0 +1,204 @@
+{
+  "title": "Nektar — Give Your AI a Budget It Literally Cannot Break",
+  "fps": 30,
+  "totalDuration": 56.6667,
+  "totalFrames": 1700,
+  "ttsEngine": "edge-tts",
+  "voice": "en-US-AndrewNeural",
+  "rate": "+0%",
+  "scenes": [
+    {
+      "index": 0,
+      "id": "hook",
+      "start": 0,
+      "end": 9.2,
+      "duration": 9.2,
+      "voStart": 0.35,
+      "voEnd": 8.3357,
+      "vo": "Handing your AI agent a credit card is one bad prompt away from a five-hundred-dollar surprise bill. One sneaky injection—and charges spiral.",
+      "subtitle": "Handing your AI agent a credit card is one bad prompt away from a $500 surprise bill.",
+      "sfx": [
+        {
+          "at": 0.15,
+          "type": "pop",
+          "gain": 0.8
+        },
+        {
+          "at": 2.4,
+          "type": "tick",
+          "gain": 0.9
+        },
+        {
+          "at": 3.5,
+          "type": "tick",
+          "gain": 1
+        },
+        {
+          "at": 4.6,
+          "type": "error",
+          "gain": 0.95
+        },
+        {
+          "at": 6,
+          "type": "slam",
+          "gain": 0.9
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "id": "allowance",
+      "start": 9.2,
+      "end": 18.7,
+      "duration": 9.5,
+      "voStart": 9.55,
+      "voEnd": 17.4296,
+      "vo": "Instead, give your agent a Nektar allowance vault. Set a five-cent max per purchase, a one-dollar daily cap, and a pause switch only you hold.",
+      "subtitle": "Give your agent its own Nektar Vault: $0.05 per purchase, $1.00 daily cap, and your pause switch.",
+      "sfx": [
+        {
+          "at": 0.4,
+          "type": "unlock",
+          "gain": 0.85
+        },
+        {
+          "at": 3,
+          "type": "tick",
+          "gain": 0.9
+        },
+        {
+          "at": 5,
+          "type": "tick",
+          "gain": 0.9
+        },
+        {
+          "at": 7,
+          "type": "chime",
+          "gain": 0.85
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "id": "blocked",
+      "start": 18.7,
+      "end": 29.2052,
+      "duration": 10.5052,
+      "voStart": 19.05,
+      "voEnd": 28.5053,
+      "vo": "Watch a prompt injection try to spend fifty dollars. Hard blocked—not a polite app warning, but enforced by the Bitcoin network itself. Hacked agents cannot bypass it.",
+      "subtitle": "Prompt injection tries to spend $50? Hard blocked by the Bitcoin network—impossible to bypass.",
+      "sfx": [
+        {
+          "at": 0.6,
+          "type": "pop",
+          "gain": 0.8
+        },
+        {
+          "at": 2.9,
+          "type": "slam",
+          "gain": 1
+        },
+        {
+          "at": 3.05,
+          "type": "error",
+          "gain": 0.9
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "id": "pennies",
+      "start": 29.2052,
+      "end": 39.6422,
+      "duration": 10.437,
+      "voStart": 29.5553,
+      "voEnd": 38.9922,
+      "vo": "Meanwhile, everyday one-cent requests fly right through. Pay pennies per request for live data or tools—no logins, no API keys, no subscriptions.",
+      "subtitle": "Everyday $0.01 requests fly right through—pay pennies per request, no logins or API keys.",
+      "sfx": [
+        {
+          "at": 1,
+          "type": "pop",
+          "gain": 0.75
+        },
+        {
+          "at": 2.4,
+          "type": "chime",
+          "gain": 0.95
+        },
+        {
+          "at": 4.8,
+          "type": "tick",
+          "gain": 0.8
+        },
+        {
+          "at": 5.8,
+          "type": "tick",
+          "gain": 0.8
+        },
+        {
+          "at": 6.8,
+          "type": "chime",
+          "gain": 0.8
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "id": "controls",
+      "start": 39.6422,
+      "end": 49.1422,
+      "duration": 9.5,
+      "voStart": 39.9922,
+      "voEnd": 47.3939,
+      "vo": "Tap Pause for an instant freeze, or Sweep to pull funds back to your wallet anytime. If a seller vanishes, funds refund automatically.",
+      "subtitle": "One tap to Pause. One tap to Sweep funds home. Automatic refunds if a seller vanishes.",
+      "sfx": [
+        {
+          "at": 0.9,
+          "type": "tick",
+          "gain": 1
+        },
+        {
+          "at": 1.1,
+          "type": "slam",
+          "gain": 0.7
+        },
+        {
+          "at": 3.4,
+          "type": "unlock",
+          "gain": 0.9
+        },
+        {
+          "at": 6.8,
+          "type": "chime",
+          "gain": 0.95
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "id": "outro",
+      "start": 49.1422,
+      "end": 56.6667,
+      "duration": 7.5245,
+      "voStart": 49.5422,
+      "voEnd": 54.3715,
+      "vo": "Nektar. Autonomous agents. Hard spending limits. Try nektar up today.",
+      "subtitle": "Autonomous agents. Hard spending limits. Start with: nektar up",
+      "sfx": [
+        {
+          "at": 0.2,
+          "type": "chime",
+          "gain": 0.95
+        },
+        {
+          "at": 2.6,
+          "type": "unlock",
+          "gain": 0.8
+        }
+      ]
+    }
+  ]
+}

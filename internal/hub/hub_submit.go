@@ -52,13 +52,16 @@ func (n *Node) submitInternal(ctx context.Context, rawBEEF []byte, topics []stri
 	if isLive && n.tracker == nil {
 		return nil, fmt.Errorf("%w: witnessed ChainTracker is required on live networks", ErrHubTransient)
 	}
-	allMarketTopics := len(topics) > 0
+	hasMarketTopic := false
+	hasNonMarketKnownTopic := false
 	for _, t := range topics {
-		if !strings.HasPrefix(t, "tm_nektar_") {
-			allMarketTopics = false
-			break
+		if strings.HasPrefix(t, "tm_nektar_") {
+			hasMarketTopic = true
+		} else if _, known := n.resolveTopicManager(t); known {
+			hasNonMarketKnownTopic = true
 		}
 	}
+	allMarketTopics := hasMarketTopic && !hasNonMarketKnownTopic
 	var tx *transaction.Transaction
 	_, parsedTx, _, err := guard.ParseBEEF(rawBEEF, guard.DefaultBound)
 	if err == nil && parsedTx != nil {

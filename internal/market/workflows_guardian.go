@@ -15,10 +15,12 @@ const escrowGuardianStatePrefix = "escrow_guardian_state_v1:"
 // that guarantees DisclosureSale buyer key extraction or Refund() automatically once RefundAfter elapses,
 // even across multi-week locktimes, laptop sleeps, or process restarts (RT-8: zero artificial loop cap).
 type EscrowGuardianInput struct {
-	DealID       string `json:"dealId"`
-	EscrowTxID   string `json:"escrowTxid"`
-	RefundAfter  uint64 `json:"refundAfter"`  // block height (<500M) or unix timestamp (>=500M)
-	CheckEveryMs int64  `json:"checkEveryMs"` // optional override for tests (default 60s)
+	DealID                      string               `json:"dealId"`
+	EscrowTxID                  string               `json:"escrowTxid"`
+	RefundAfter                 uint64               `json:"refundAfter"`  // block height (<500M) or unix timestamp (>=500M)
+	CheckEveryMs                int64                `json:"checkEveryMs"` // optional override for tests (default 60s)
+	ResumeState                 *EscrowGuardianState `json:"resumeState,omitempty"`
+	MaxIterationsBeforeRollover int                  `json:"maxIterationsBeforeRollover,omitempty"`
 }
 
 // EscrowGuardianState tracks the durable lifecycle of an EscrowGuardianWorkflow.
@@ -57,17 +59,42 @@ func EscrowGuardianWorkflow(ctx workflow.Context, in EscrowGuardianInput) (Escro
 
 	claimedCh := workflow.NewSignalChannel[bool](ctx, "claimed")
 
-	st := EscrowGuardianState{
-		DealID:      in.DealID,
-		EscrowTxID:  escTxID,
-		RefundAfter: in.RefundAfter,
-		Status:      "watching",
-		UpdatedAt:   workflow.Now(ctx).Unix(),
+	const defaultGuardianRolloverIterations = 256
+	maxRollover := in.MaxIterationsBeforeRollover
+	if maxRollover <= 0 {
+		maxRollover = defaultGuardianRolloverIterations
 	}
-	_, _ = workflow.ExecuteActivity[bool](ctx, singleAttemptActivityOpts(), acts.EscrowGuardianSaveState, st).Get(ctx)
 
-	// Loop durably without any artificial 2048-iteration ceiling (RT-8) until claimed, extracted, or refunded.
-	for {
+	var st EscrowGuardianState
+	if in.ResumeState != nil {
+		st = *in.ResumeState
+		st.EscrowTxID = escTxID
+	} else {
+		st = EscrowGuardianState{
+			DealID:      in.DealID,
+			EscrowTxID:  escTxID,
+			RefundAfter: in.RefundAfter,
+			Status:      "watching",
+			UpdatedAt:   workflow.Now(ctx).Unix(),
+		}
+		_, _ = workflow.ExecuteActivity[bool](ctx, singleAttemptActivityOpts(), acts.EscrowGuardianSaveState, st).Get(ctx)
+	}
+
+	// Loop durably without any artificial ceiling (RT-8), compacting workflows.sqlite history via ContinueAsNew (RFC-003).
+	for loopIter := 0; ; loopIter++ {
+		if loopIter >= maxRollover {
+			// Drain claimedCh before ContinueAsNew so a queued claimed signal is never lost across rollover.
+			if v, ok := claimedCh.ReceiveNonBlocking(); ok && v {
+				st.Status = "claimed"
+				st.UpdatedAt = workflow.Now(ctx).Unix()
+				_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.EscrowGuardianSaveState, st).Get(ctx)
+				return st, nil
+			}
+			stCopy := st
+			nextIn := in
+			nextIn.ResumeState = &stCopy
+			return st, workflow.ContinueAsNew(ctx, nextIn)
+		}
 		chk, err := workflow.ExecuteActivity[escrowCheckResult](ctx, dealActivityOpts(), acts.EscrowGuardianCheck, in.DealID, escTxID, in.RefundAfter, int64(checkEvery.Seconds())).Get(ctx)
 		if err != nil {
 			return st, err

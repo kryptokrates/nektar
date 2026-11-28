@@ -1,0 +1,49 @@
+{
+  "title": "Nektar Engine Smoke Test",
+  "fps": 30,
+  "totalDuration": 3.9667,
+  "totalFrames": 119,
+  "ttsEngine": "edge-tts",
+  "voice": "en-US-AndrewNeural",
+  "rate": "+8%",
+  "scenes": [
+    {
+      "index": 0,
+      "id": "proof",
+      "start": 0,
+      "end": 2.509,
+      "duration": 2.509,
+      "voStart": 0.15,
+      "voEnd": 2.309,
+      "vo": "One binary. Cryptographic receipts.",
+      "subtitle": "One static Go binary — cryptographic receipts verified offline.",
+      "sfx": [
+        {
+          "at": 0.1,
+          "type": "slam"
+        },
+        {
+          "at": 1,
+          "type": "chime"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "id": "outro",
+      "start": 2.509,
+      "end": 3.9667,
+      "duration": 1.4577,
+      "voStart": 2.659,
+      "voEnd": 3.6004,
+      "vo": "Start at nektar dot run.",
+      "subtitle": "",
+      "sfx": [
+        {
+          "at": 0.2,
+          "type": "unlock"
+        }
+      ]
+    }
+  ]
+}

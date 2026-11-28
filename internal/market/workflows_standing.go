@@ -48,49 +48,74 @@ func StandingOrderWorkflow(ctx workflow.Context, in StandingOrderInput) (Standin
 		maxAttempts = maxFills * 4
 	}
 
-	initNow := workflow.Now(ctx).Unix()
-	doms := make([]string, 0, len(in.Domains))
-	for _, d := range in.Domains {
-		if s := strings.ToLower(strings.TrimSpace(d)); s != "" {
-			doms = append(doms, s)
+	const defaultStandingRolloverIterations = 256
+	const maxCarriedSeenOffers = 512
+	maxRollover := in.MaxIterationsBeforeRollover
+	if maxRollover <= 0 {
+		maxRollover = defaultStandingRolloverIterations
+	}
+
+	var st StandingOrderState
+	seenOffers := make(map[string]bool, len(in.SeenOfferIDs))
+	var seenOrder []string
+	if in.ResumeState != nil {
+		st = *in.ResumeState
+		st.OrderID = orderID
+		st.InvocationID = inst.ExecutionID
+		for _, id := range in.SeenOfferIDs {
+			if id != "" && !seenOffers[id] {
+				seenOffers[id] = true
+				seenOrder = append(seenOrder, id)
+			}
 		}
-	}
-	if len(doms) == 0 {
-		doms = []string{"ops"}
+	} else {
+		initNow := workflow.Now(ctx).Unix()
+		doms := make([]string, 0, len(in.Domains))
+		for _, d := range in.Domains {
+			if s := strings.ToLower(strings.TrimSpace(d)); s != "" {
+				doms = append(doms, s)
+			}
+		}
+		if len(doms) == 0 {
+			doms = []string{"ops"}
+		}
+
+		initCfg, err := workflow.ExecuteActivity[standingInitConfig](ctx, dealActivityOpts(), acts.StandingOrderInit, in).Get(ctx)
+		if err != nil {
+			return StandingOrderState{}, err
+		}
+
+		st = StandingOrderState{
+			OrderID:                orderID,
+			InvocationID:           inst.ExecutionID,
+			WaitingSeq:             1,
+			Status:                 "watching",
+			Domains:                doms,
+			Query:                  strings.TrimSpace(in.Query),
+			OntologyID:             strings.ToLower(strings.TrimSpace(in.OntologyID)),
+			AllowBridge:            in.AllowBridge,
+			RequireTrustedOrBonded: initCfg.RequireTrust,
+			MaxSats:                initCfg.MaxSats,
+			MinGrade:               string(nmu.NormalizeGrade(in.MinGrade)),
+			MaxSatsPer1kUnits:      in.MaxSatsPer1kUnits,
+			FreshnessClass:         string(nmu.NormalizeFreshness(in.FreshnessClass)),
+			RequiredRights:         string(nmu.NormalizeRights(in.RequiredRights)),
+			PricingMode:            string(nmu.NormalizePricingMode(in.PricingMode)),
+			TargetShard:            strings.TrimSpace(in.TargetShard),
+			AgentID:                strings.TrimSpace(in.AgentID),
+			ExpiresAtUnix:          initNow + int64(ttl.Seconds()),
+			MaxFills:               maxFills,
+			CreatedAt:              initNow,
+			UpdatedAt:              initNow,
+		}
+		_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.StandingOrderRegisterAndAnnounce, st).Get(ctx)
 	}
 
-	initCfg, err := workflow.ExecuteActivity[standingInitConfig](ctx, dealActivityOpts(), acts.StandingOrderInit, in).Get(ctx)
-	if err != nil {
-		return StandingOrderState{}, err
-	}
-
-	st := StandingOrderState{
-		OrderID:                orderID,
-		InvocationID:           inst.ExecutionID,
-		WaitingSeq:             1,
-		Status:                 "watching",
-		Domains:                doms,
-		Query:                  strings.TrimSpace(in.Query),
-		OntologyID:             strings.ToLower(strings.TrimSpace(in.OntologyID)),
-		AllowBridge:            in.AllowBridge,
-		RequireTrustedOrBonded: initCfg.RequireTrust,
-		MaxSats:                initCfg.MaxSats,
-		MinGrade:               string(nmu.NormalizeGrade(in.MinGrade)),
-		MaxSatsPer1kUnits:      in.MaxSatsPer1kUnits,
-		FreshnessClass:         string(nmu.NormalizeFreshness(in.FreshnessClass)),
-		RequiredRights:         string(nmu.NormalizeRights(in.RequiredRights)),
-		PricingMode:            string(nmu.NormalizePricingMode(in.PricingMode)),
-		TargetShard:            strings.TrimSpace(in.TargetShard),
-		AgentID:                strings.TrimSpace(in.AgentID),
-		ExpiresAtUnix:          initNow + int64(ttl.Seconds()),
-		MaxFills:               maxFills,
-		CreatedAt:              initNow,
-		UpdatedAt:              initNow,
-	}
-	_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.StandingOrderRegisterAndAnnounce, st).Get(ctx)
-
-	seenOffers := make(map[string]bool)
 	stateDirty := false
+	if in.ResumeState != nil {
+		stateDirty = true
+	}
+	loopIter := 0
 
 	for st.Status == "watching" || st.Status == "paused" {
 		nowUnix := workflow.Now(ctx).Unix()
@@ -100,13 +125,25 @@ func StandingOrderWorkflow(ctx workflow.Context, in StandingOrderInput) (Standin
 			break
 		}
 
-		// Drain any immediately ready signal without scheduling a timer; otherwise flush coalesced state
+		// Drain any immediately ready signal without scheduling a timer; otherwise flush coalesced state,
+		// compact history via ContinueAsNew once the iteration threshold is reached (never dropping queued signals),
 		// and sleep until signal, 20-minute WantAd refresh, or TTL expiry.
 		ev, got := eventsCh.ReceiveNonBlocking()
 		if !got {
 			if stateDirty {
 				_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.StandingOrderSaveState, st, false).Get(ctx)
 				stateDirty = false
+			}
+			if loopIter >= maxRollover {
+				carry := seenOrder
+				if len(carry) > maxCarriedSeenOffers {
+					carry = carry[len(carry)-maxCarriedSeenOffers:]
+				}
+				stCopy := st
+				nextIn := in
+				nextIn.ResumeState = &stCopy
+				nextIn.SeenOfferIDs = append([]string(nil), carry...)
+				return st, workflow.ContinueAsNew(ctx, nextIn)
 			}
 			remaining := time.Duration(st.ExpiresAtUnix-nowUnix) * time.Second
 			if remaining <= 0 {
@@ -135,6 +172,7 @@ func StandingOrderWorkflow(ctx workflow.Context, in StandingOrderInput) (Standin
 			if !got {
 				nowAfter := workflow.Now(ctx).Unix()
 				if isRefreshWake && nowAfter < st.ExpiresAtUnix && st.Status == "watching" {
+					loopIter++
 					st.UpdatedAt = nowAfter
 					_, _ = workflow.ExecuteActivity[bool](ctx, dealActivityOpts(), acts.StandingOrderRegisterAndAnnounce, st).Get(ctx)
 					continue
@@ -146,6 +184,7 @@ func StandingOrderWorkflow(ctx workflow.Context, in StandingOrderInput) (Standin
 		}
 
 		nowUnix = workflow.Now(ctx).Unix()
+		loopIter++
 		st.LastProcessedSeq++
 		st.WaitingSeq = int(st.LastProcessedSeq + 1)
 		switch ev.Kind {
@@ -187,6 +226,7 @@ func StandingOrderWorkflow(ctx workflow.Context, in StandingOrderInput) (Standin
 			}
 			if off.OfferID != "" {
 				seenOffers[off.OfferID] = true
+				seenOrder = append(seenOrder, off.OfferID)
 			}
 			st.OffersSeen++
 			if st.MaxSats > 0 && off.PriceSats > st.MaxSats {

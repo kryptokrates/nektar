@@ -1,0 +1,179 @@
+{
+  "title": "Nektar — Stop Repeating Yourself to Every AI Tool",
+  "fps": 30,
+  "totalDuration": 57.4333,
+  "totalFrames": 1723,
+  "ttsEngine": "edge-tts",
+  "voice": "en-US-AndrewNeural",
+  "rate": "+5%",
+  "scenes": [
+    {
+      "index": 0,
+      "id": "hook",
+      "start": 0,
+      "end": 8.3174,
+      "duration": 8.3174,
+      "voStart": 0.28,
+      "voEnd": 7.9174,
+      "vo": "You explain your whole project to Claude at 9 a.m. By 10, you open Cursor—total amnesia. Then Codex breaks what Claude just fixed.",
+      "subtitle": "Explain your stack to Claude at 9 AM. Open Cursor at 10 — total amnesia.",
+      "sfx": [
+        {
+          "at": 0.14,
+          "type": "slam",
+          "gain": 0.85
+        },
+        {
+          "at": 3.5,
+          "type": "error",
+          "gain": 0.72
+        },
+        {
+          "at": 6.2,
+          "type": "error",
+          "gain": 0.85
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "id": "setup",
+      "start": 8.3174,
+      "end": 19.838,
+      "duration": 11.5207,
+      "voStart": 8.5674,
+      "voEnd": 19.388,
+      "vo": "Stop repeating yourself. Run nektar up. In twenty-five seconds, one tiny local app links over thirteen AI tools automatically—no Docker, no cloud account, no monthly subscription.",
+      "subtitle": "Run nektar up — one local app connects 13+ AI tools in 25 seconds. No Docker. No cloud.",
+      "sfx": [
+        {
+          "at": 1.35,
+          "type": "tick",
+          "gain": 0.7
+        },
+        {
+          "at": 1.75,
+          "type": "tick",
+          "gain": 0.7
+        },
+        {
+          "at": 2.35,
+          "type": "unlock",
+          "gain": 0.9
+        },
+        {
+          "at": 5.6,
+          "type": "chime",
+          "gain": 0.8
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "id": "magic",
+      "start": 19.838,
+      "end": 30.438,
+      "duration": 10.6,
+      "voStart": 20.088,
+      "voEnd": 29.3375,
+      "vo": "Tell Claude once: always use Stripe webhooks, never polling. That rule drops straight into your local brain. Switch to Cursor two seconds later—it already writes webhook code.",
+      "subtitle": "Tell Claude once: \"Always use Stripe webhooks.\" Switch to Cursor — it already knows.",
+      "sfx": [
+        {
+          "at": 1.1,
+          "type": "pop",
+          "gain": 0.8
+        },
+        {
+          "at": 4.2,
+          "type": "chime",
+          "gain": 0.92
+        },
+        {
+          "at": 7.6,
+          "type": "unlock",
+          "gain": 0.92
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "id": "agents",
+      "start": 30.438,
+      "end": 41.41,
+      "duration": 10.972,
+      "voStart": 30.688,
+      "voEnd": 40.96,
+      "vo": "Claude Code, Cursor, Codex, VS Code, Windsurf, OpenClaw, and any OpenAI or Anthropic agent—every tool you use shares one fast, private brain.",
+      "subtitle": "Claude Code, Cursor, Codex, VS Code, Windsurf, OpenClaw — all on one private brain.",
+      "sfx": [
+        {
+          "at": 0.9,
+          "type": "pop",
+          "gain": 0.6
+        },
+        {
+          "at": 2.1,
+          "type": "pop",
+          "gain": 0.6
+        },
+        {
+          "at": 3.3,
+          "type": "pop",
+          "gain": 0.6
+        },
+        {
+          "at": 5.2,
+          "type": "chime",
+          "gain": 0.85
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "id": "control",
+      "start": 41.41,
+      "end": 50.21,
+      "duration": 8.8,
+      "voStart": 41.66,
+      "voEnd": 48.1745,
+      "vo": "And you stay in charge. Everything stays private on your laptop by default. Lock down or remove any agent in one click.",
+      "subtitle": "Private on your laptop by default. Lock or remove any AI tool in one click.",
+      "sfx": [
+        {
+          "at": 1.6,
+          "type": "tick",
+          "gain": 0.78
+        },
+        {
+          "at": 4.6,
+          "type": "pop",
+          "gain": 0.85
+        },
+        {
+          "at": 6,
+          "type": "unlock",
+          "gain": 0.85
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "id": "outro",
+      "start": 50.21,
+      "end": 57.4333,
+      "duration": 7.2233,
+      "voStart": 50.56,
+      "voEnd": 54.3023,
+      "vo": "Nektar. One brain for all your AI agents. Run nektar up.",
+      "subtitle": "",
+      "sfx": [
+        {
+          "at": 0.25,
+          "type": "chime",
+          "gain": 0.95
+        }
+      ]
+    }
+  ]
+}

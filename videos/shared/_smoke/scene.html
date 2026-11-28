@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Nektar Smoke Test</title>
+  <link rel="stylesheet" href="../theme.css" />
+  <style>
+    .smoke-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 36px;
+      align-items: center;
+      flex: 1;
+    }
+    .receipt-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 21px;
+    }
+    .receipt-row:last-child { border-bottom: 0; }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="stage-grid"></div>
+
+    <div class="corner-brand" id="corner-brand">
+      <img src="../logo.svg" alt="nektar" />
+      <span>NEKTAR.RUN</span>
+    </div>
+    <div class="corner-scene-tag" id="scene-tag">01 / 02</div>
+
+    <!-- Scene 1: Proof card + terminal -->
+    <section class="scene" id="sc-proof">
+      <div class="scene-head">
+        <div class="kicker">BSV L1 SPV · ZERO CGO</div>
+        <h1 class="headline">Every AI claim backed by a <span class="headline-amber-green">verifiable receipt.</span></h1>
+      </div>
+      <div class="smoke-grid">
+        <div class="mac-window" id="term-box">
+          <div class="mac-bar">
+            <div class="mac-dots color"><span></span><span></span><span></span></div>
+            <div class="mac-title">nektar v0.1 · single binary</div>
+            <span class="pill pill-ok">LIVE ✓</span>
+          </div>
+          <div class="terminal" style="border:0; border-radius:0; box-shadow:none;">
+            <div><span class="prompt">$</span><span class="cmd" id="typed-cmd"></span><span class="cursor"></span></div>
+            <div class="dim" style="margin-top:14px;">→ checking merkle branch (24,374 ops/s)</div>
+            <div class="ok" id="term-ok" style="margin-top:8px; opacity:0;">✓ VALID · recorded + unaltered + derivable</div>
+          </div>
+        </div>
+        <div class="card card-amber" id="receipt-card">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;">
+            <span class="card-label amber">GROUNDED RECEIPT</span>
+            <span class="pill pill-solid-ok" id="verified-badge">VERIFIED ✓</span>
+          </div>
+          <div class="receipt-row"><span class="dim">Token</span><span class="mono" style="color:var(--amber);">nektarr1.example…</span></div>
+          <div class="receipt-row"><span class="dim">Offline SPV</span><span class="mono" style="color:var(--ok);">0.041 ms/op</span></div>
+          <div class="receipt-row"><span class="dim">Policy Gate</span><span class="mono">AWS Cedar · 573k op/s</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Scene 2: Cinema Outro -->
+    <section class="scene" id="sc-outro">
+      <div class="outro">
+        <div class="outro-brand" id="outro-brand">
+          <div class="outro-emblem"><img src="../logo.svg" alt="nektar" /></div>
+          <div class="outro-wordmark">NEKTAR</div>
+        </div>
+        <div class="outro-tagline">The AI Knowledge Market</div>
+        <div class="outro-pills">
+          <span class="pill pill-solid-ink">nektar.run</span>
+          <span class="pill">@nektardotrun</span>
+          <span class="pill pill-amber">github.com/kryptokrates/nektar</span>
+        </div>
+        <div class="truth-note">Proofs verify recorded + unaltered + derivable — never truth. Model identity is declared.</div>
+      </div>
+    </section>
+
+    <div class="subtitle-wrap">
+      <div class="subtitle-bar" id="subtitle-bar"></div>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="progress-fill"></div>
+    </div>
+  </div>
+
+  <script>
+    const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
+    const easeOut = (x) => { x = clamp(x); return 1 - Math.pow(1 - x, 3); };
+
+    window.renderFrame = function (t, frame, totalFrames, timings) {
+      const s0 = timings.scenes[0];
+      const s1 = timings.scenes[1];
+      const pct = clamp(t / timings.totalDuration) * 100;
+      document.getElementById('progress-fill').style.width = pct.toFixed(3) + '%';
+
+      // Crossfade helper
+      const fade = 0.22;
+      const op0 = clamp((t - s0.start) / fade) * clamp((s0.end - t) / fade);
+      const op1 = clamp((t - s1.start) / fade);
+
+      const el0 = document.getElementById('sc-proof');
+      const el1 = document.getElementById('sc-outro');
+      el0.style.opacity = op0.toFixed(4);
+      el1.style.opacity = op1.toFixed(4);
+
+      // Hide corner chrome on outro
+      const chromeOp = clamp(1 - op1 * 1.4);
+      document.getElementById('corner-brand').style.opacity = chromeOp.toFixed(4);
+      document.getElementById('scene-tag').style.opacity = chromeOp.toFixed(4);
+
+      // Scene 1 micro-motion
+      const u0 = t - s0.start;
+      const cmdFull = 'nektar verify nektarr1.example';
+      const typedN = Math.round(cmdFull.length * easeOut(u0 / 0.75));
+      document.getElementById('typed-cmd').textContent = cmdFull.slice(0, typedN);
+      document.getElementById('term-ok').style.opacity = easeOut((u0 - 0.8) / 0.3).toFixed(4);
+
+      const cardSlide = (1 - easeOut(u0 / 0.55)) * 28;
+      document.getElementById('receipt-card').style.transform = `translateY(${cardSlide.toFixed(2)}px)`;
+      const badgeScale = 0.86 + 0.14 * easeOut((u0 - 0.85) / 0.25);
+      document.getElementById('verified-badge').style.transform = `scale(${badgeScale.toFixed(4)})`;
+
+      // Scene 2 outro zoom-in
+      const u1 = Math.max(0, t - s1.start);
+      const outroScale = 0.94 + 0.06 * easeOut(u1 / 0.55);
+      document.getElementById('outro-brand').style.transform = `scale(${outroScale.toFixed(4)})`;
+
+      // Subtitle bar
+      const active = t < s1.start ? s0 : s1;
+      const subEl = document.getElementById('subtitle-bar');
+      if (active.subtitle && active.subtitle.trim()) {
+        subEl.textContent = active.subtitle;
+        subEl.classList.remove('empty');
+      } else {
+        subEl.textContent = '';
+        subEl.classList.add('empty');
+      }
+    };
+  </script>
+</body>
+</html>
